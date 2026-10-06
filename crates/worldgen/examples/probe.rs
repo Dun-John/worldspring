@@ -1,6 +1,7 @@
 //! Dev tool: height profile across a line at a given level, with road and water context.
 //! `cargo run --release -p worldgen --example probe -- <seed> <fx> <fy> <dx-ft> <dy-ft> [level] [steps]`
-//! Samples from (fx, fy) - (dx, dy) to (fx, fy) + (dx, dy).
+//! Samples from (fx, fy) - (dx, dy) to (fx, fy) + (dx, dy). An 8th argument `river` or `road`
+//! centres it on the nearest river or road point instead, across it.
 use worldgen::core::tile::{HALO, PADDED, TileKey};
 use worldgen::pipeline::Executor;
 use worldgen::{World, WorldFile};
@@ -34,6 +35,25 @@ fn main() {
         let half = (dx * dx + dy * dy).sqrt();
         (cx, cy, dx, dy) = (best.1[0], best.1[1], -best.2[1] / l * half, best.2[0] / l * half);
         println!("river point {:.0} ft away at fx {:.6} fy {:.6}: surface z {:.1} ft, width {:.0} ft", best.0, cx / g.map_w_ft, cy / g.map_h_ft, best.3, best.4);
+    }
+    // `road`: the same across the nearest road.
+    if a.get(8).is_some_and(|s| s == "road") {
+        let mut best = (f64::MAX, [0.0; 2], [0.0; 2], 0.0, 0usize);
+        for (ri, k) in ex.t0.roads.segments_near([cx - 4000.0, cy - 4000.0, cx + 4000.0, cy + 4000.0], 0.0) {
+            let r = &ex.t0.roads.roads[ri as usize];
+            for j in 0..64 {
+                let p = r.eval(k as usize, j as f64 / 64.0, 2.5, ex.t0.cell_ft);
+                let q = r.eval(k as usize, (j + 1) as f64 / 64.0, 2.5, ex.t0.cell_ft);
+                let d = ((p.p[0] - cx).powi(2) + (p.p[1] - cy).powi(2)).sqrt();
+                if d < best.0 {
+                    best = (d, p.p, [q.p[0] - p.p[0], q.p[1] - p.p[1]], p.z, ri as usize);
+                }
+            }
+        }
+        let l = (best.2[0].powi(2) + best.2[1].powi(2)).sqrt().max(1e-9);
+        let half = (dx * dx + dy * dy).sqrt();
+        (cx, cy, dx, dy) = (best.1[0], best.1[1], -best.2[1] / l * half, best.2[0] / l * half);
+        println!("road {} point {:.0} ft away at fx {:.6} fy {:.6}: surface z {:.1} ft", best.4, best.0, cx / g.map_w_ft, cy / g.map_h_ft, best.3);
     }
     let s = g.spacing_ft(level);
     let size = g.tile_size_ft(level);

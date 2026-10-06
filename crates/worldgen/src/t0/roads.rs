@@ -20,7 +20,7 @@ use super::hydro::{Hydro, NO_LAKE};
 use super::settle::{Poi, PoiKind, Settlement, Tier};
 use crate::World;
 use crate::core::grid::Grid;
-use crate::core::noise::{fbm, smoothstep};
+use crate::core::noise::{fbm, gradient2, smoothstep};
 use crate::core::rng::Pcg32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -188,6 +188,9 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
                 }
             }
         }
+        // Bend with the land instead of running ruler-straight across it.
+        let seed = crate::core::rng::hash2(inp.world.stream("t0.road.bends"), seg[0] as i64, seg[seg.len() - 1] as i64);
+        follow_terrain(&mut pts, &mut wander, &hgrid, *class, cell, seed, &|x, y| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && passable_fn(inp)(y as usize * w + x as usize));
         // Less wander near water so bends never push the road into a lake or the sea.
         for (p, wt) in pts.iter().zip(wander.iter_mut()) {
             let mut clear = 2.5f64;
@@ -473,6 +476,122 @@ fn passable_fn<'a>(inp: &'a Inputs) -> impl Fn(usize) -> bool + 'a {
     move |k| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE
 }
 
+/// Gives a road (points in cells, with their wander weights) the bends of a real one, baked
+/// into its points so its profile and bed follow them: resampled every `STEP` cells, each
+/// point is first offset sideways by gentle noise bends (wavelengths of about 3,700 and
+/// 1,400 ft, straighter for a king's road, more winding for a track), then slides (up to
+/// `REACH` cells) to ease the grades either side of it, kept smooth and near its bend: on a
+/// hillside the road curves along the slope. Switchback legs (wander 0), the ends and water
+/// stay as they are; wander is then 0 where the road bends here (the noise wander added
+/// when it is drawn would ignore its profile and cut the hillside).
+fn follow_terrain(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, hgrid: &Grid<f32>, class: RoadClass, cell: f64, seed: u64, dry: &dyn Fn(i64, i64) -> bool) {
+    const STEP: f64 = 0.05;
+    const REACH: f64 = 0.35;
+    if pts.len() < 2 || wander.iter().all(|w| *w < 0.5) {
+        return;
+    }
+    let gmax = class.max_grade();
+    // Resample (keeping switchback legs' points as they are).
+    let (mut rp, mut rw): (Vec<[f64; 2]>, Vec<f32>) = (vec![pts[0]], vec![wander[0]]);
+    for k in 1..pts.len() {
+        let (a, b) = (pts[k - 1], pts[k]);
+        let n = if wander[k - 1] < 0.5 || wander[k] < 0.5 { 1 } else { (dist(a, b) / STEP).ceil().max(1.0) as usize };
+        for j in 1..=n {
+            let t = j as f64 / n as f64;
+            rp.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+            rw.push(wander[k - 1] + (wander[k] - wander[k - 1]) * t as f32);
+        }
+    }
+    let n = rp.len();
+    if n < 3 {
+        return;
+    }
+    let mut s = vec![0.0; n];
+    for i in 1..n {
+        s[i] = s[i - 1] + dist(rp[i - 1], rp[i]);
+    }
+    // Distance along the road to the nearest point that stays (an end or a switchback leg):
+    // bends and sliding fade in over the first `EASE` cells from it.
+    const EASE: f64 = 0.3;
+    let stays = |i: usize| i == 0 || i == n - 1 || rw[i] < 0.5;
+    let mut fixed = vec![f64::MAX; n];
+    let mut last = f64::MIN;
+    for i in 0..n {
+        if stays(i) {
+            last = s[i];
+        }
+        fixed[i] = s[i] - last;
+    }
+    let mut next = f64::MAX;
+    for i in (0..n).rev() {
+        if stays(i) {
+            next = s[i];
+        }
+        fixed[i] = fixed[i].min(next - s[i]);
+    }
+    let ease: Vec<f64> = fixed.iter().map(|f| smoothstep(0.0, EASE, *f)).collect();
+    // Bends: noise offsets along the line's normal.
+    let amp = [0.75, 1.0, 1.3][class as usize];
+    let normal = |i: usize| {
+        let (a, b) = (rp[i.saturating_sub(1)], rp[(i + 1).min(n - 1)]);
+        let (tx, ty) = (b[0] - a[0], b[1] - a[1]);
+        let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-9);
+        [-ty / tl, tx / tl]
+    };
+    let mut orig = rp.clone();
+    for i in 1..n - 1 {
+        if ease[i] <= 0.0 {
+            continue;
+        }
+        let off = ease[i] * amp * (0.045 * gradient2(seed, s[i] / 0.6, 0.31) + 0.012 * gradient2(seed ^ 0xb3, s[i] / 0.22, 0.77));
+        let nrm = normal(i);
+        for f in [1.0, 0.5] {
+            let q = [rp[i][0] + nrm[0] * off * f, rp[i][1] + nrm[1] * off * f];
+            if dry(crate::core::round(q[0]) as i64, crate::core::round(q[1]) as i64) {
+                orig[i] = q;
+                break;
+            }
+        }
+    }
+    let mut rp = orig.clone();
+    let room: Vec<f64> = ease.iter().map(|e| REACH * e).collect();
+    let hz = |p: [f64; 2]| hgrid.sample_cubic(p[0], p[1]);
+    let mut z: Vec<f64> = rp.iter().map(|p| hz(*p)).collect();
+    let grade = |za: f64, zb: f64, a: [f64; 2], b: [f64; 2]| (zb - za) / (dist(a, b) * cell).max(1.0);
+    let cost = |g: f64| 100.0 * g * g + if g.abs() > gmax { 1_000.0 * (g.abs() - gmax) * (g.abs() - gmax) } else { 0.0 };
+    for d in [0.08, 0.08, 0.05, 0.05, 0.03, 0.03, 0.02, 0.02, 0.01, 0.01] {
+        for i in 1..n - 1 {
+            if room[i] <= 0.0 {
+                continue;
+            }
+            let (a, b) = (rp[i - 1], rp[i + 1]);
+            let (tx, ty) = (b[0] - a[0], b[1] - a[1]);
+            let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-9);
+            let nrm = [-ty / tl, tx / tl];
+            let energy = |q: [f64; 2], zq: f64| {
+                let bend = [a[0] - 2.0 * q[0] + b[0], a[1] - 2.0 * q[1] + b[1]];
+                let off = dist(q, orig[i]) / REACH;
+                cost(grade(z[i - 1], zq, a, q)) + cost(grade(zq, z[i + 1], q, b)) + (bend[0] * bend[0] + bend[1] * bend[1]) / (STEP * STEP) + 0.2 * off * off
+            };
+            let mut best = (energy(rp[i], z[i]), rp[i], z[i]);
+            for sign in [-1.0, 1.0] {
+                let q = [rp[i][0] + nrm[0] * d * sign, rp[i][1] + nrm[1] * d * sign];
+                if dist(q, orig[i]) > room[i] || !dry(crate::core::round(q[0]) as i64, crate::core::round(q[1]) as i64) {
+                    continue;
+                }
+                let zq = hz(q);
+                let e = energy(q, zq);
+                if e < best.0 {
+                    best = (e, q, zq);
+                }
+            }
+            (rp[i], z[i]) = (best.1, best.2);
+        }
+    }
+    *pts = rp;
+    *wander = rw.iter().zip(&ease).map(|(w, e)| if *e > 0.0 { 0.0 } else { *w }).collect();
+}
+
 /// Drop the part of a path inside radius `r` of `c` at its start (cut exactly at the circle).
 fn trim_start(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, c: [f64; 2], r: f64) {
     let Some(k) = pts.iter().position(|p| dist(*p, c) >= r) else { return };
@@ -724,6 +843,28 @@ pub fn fit_profile(pts: &[[f64; 2]], terrain: &[f64], gmax: f64) -> Vec<f32> {
     for i in 1..z.len() {
         let l = (lim[i] * 0.999) as f32;
         z[i] = z[i].clamp(z[i - 1] - l, z[i - 1] + l);
+    }
+    z
+}
+
+/// `fit_profile`, but never below `floor` (a bridge deck's level at a river crossing, else
+/// `f64::MIN`): ramps fall away from each floor at the grade limit, and the profile is the
+/// higher of those and the fit (both grade-limited, so it is too).
+pub fn fit_profile_over(pts: &[[f64; 2]], terrain: &[f64], floor: &[f64], gmax: f64) -> Vec<f32> {
+    let mut z = fit_profile(pts, terrain, gmax);
+    if floor.iter().all(|f| *f == f64::MIN) {
+        return z;
+    }
+    let lim: Vec<f64> = (0..pts.len()).map(|i| if i == 0 { 0.0 } else { 0.999 * gmax * dist(pts[i], pts[i - 1]) }).collect();
+    let mut ramp = floor.to_vec();
+    for i in 1..ramp.len() {
+        ramp[i] = ramp[i].max(ramp[i - 1] - lim[i]);
+    }
+    for i in (1..ramp.len()).rev() {
+        ramp[i - 1] = ramp[i - 1].max(ramp[i] - lim[i]);
+    }
+    for (v, r) in z.iter_mut().zip(&ramp) {
+        *v = v.max(*r as f32);
     }
     z
 }

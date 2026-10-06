@@ -295,18 +295,17 @@ struct Site<'a> {
     /// Pieces by grid cell (`RIVER_CELL` ft), each listed in every cell its bbox touches.
     river_grid: FastMap<(i64, i64), Vec<u32>>,
     river_max_hw: f64,
-    /// The rivers again in ~100-ft chords for the town valley (`height`): (a, b, half width,
-    /// water surface at a and b), by `VALLEY_CELL`-ft cell.
-    valley: Vec<(P, P, f64, f64, f64)>,
-    valley_grid: FastMap<(i64, i64), Vec<u32>>,
+    /// How far the river valleys lower the ground (`RiverNet::valley`, ≤ 0), at the nodes of
+    /// a `VALLEY_CELL`-ft lattice (local coords), filled as `height` asks.
+    valley: RefCell<FastMap<(i64, i64), f32>>,
 }
 
-const VALLEY_CELL: f64 = 600.0;
+const VALLEY_CELL: f64 = 50.0;
 
 const RIVER_CELL: f64 = 250.0;
 
 impl<'a> Site<'a> {
-    fn new(t0: &'a T0, center: P, lattice_ft: f64, (river, valley): (Vec<(P, P, f64)>, Vec<(P, P, f64, f64, f64)>)) -> Site<'a> {
+    fn new(t0: &'a T0, center: P, lattice_ft: f64, river: Vec<(P, P, f64)>) -> Site<'a> {
         let mut river_grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
         let mut river_max_hw = 0.0f64;
         for (i, &(a, b, hw)) in river.iter().enumerate() {
@@ -329,17 +328,7 @@ impl<'a> Site<'a> {
         let (nx1, ny1) = (crate::core::floor((center[0] + reach) / lattice_ft) as i64 + 3, crate::core::floor((center[1] + reach) / lattice_ft) as i64 + 3);
         let nw = (nx1 - nx0 + 1) as usize;
         let values: Vec<f64> = (ny0..=ny1).flat_map(|j| (nx0..=nx1).map(move |i| (i, j))).map(|(i, j)| t0.ground_node(i, j, lattice_ft)).collect();
-        let mut valley_grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
-        for (i, &(a, b, ..)) in valley.iter().enumerate() {
-            let (x0, x1) = (crate::core::floor(a[0].min(b[0]) / VALLEY_CELL) as i64, crate::core::floor(a[0].max(b[0]) / VALLEY_CELL) as i64);
-            let (y0, y1) = (crate::core::floor(a[1].min(b[1]) / VALLEY_CELL) as i64, crate::core::floor(a[1].max(b[1]) / VALLEY_CELL) as i64);
-            for cy in y0..=y1 {
-                for cx in x0..=x1 {
-                    valley_grid.entry((cx, cy)).or_default().push(i as u32);
-                }
-            }
-        }
-        Site { t0, center, lattice_ft, nodes: (nx0, ny0, nw, values), lakeside, river, river_grid, river_max_hw, valley, valley_grid }
+        Site { t0, center, lattice_ft, nodes: (nx0, ny0, nw, values), lakeside, river, river_grid, river_max_hw, valley: RefCell::new(FastMap::default()) }
     }
 }
 
@@ -364,40 +353,39 @@ impl Site<'_> {
         }
         t
     }
-    /// The ground the settlement is planned on: the T0 surface, in the rivers' town valley
-    /// (as the terrain carves it inside settlements, `lod::rivers::town_valley`).
+    /// The ground the settlement is planned on: the T0 surface in its river valleys (as the
+    /// terrain carves them; settlement pads only take the fine detail away).
     fn height(&self, p: P) -> f64 {
+        let g = self.ground(p);
+        // The valleys' depth is smooth: interpolated between lattice nodes.
+        let (u, v) = (p[0] / VALLEY_CELL, p[1] / VALLEY_CELL);
+        let (i0, j0) = (crate::core::floor(u), crate::core::floor(v));
+        let (fu, fv) = (u - i0, v - j0);
+        let mut cache = self.valley.borrow_mut();
+        let mut at = |i: i64, j: i64| {
+            *cache.entry((i, j)).or_insert_with(|| {
+                let q = [i as f64 * VALLEY_CELL, j as f64 * VALLEY_CELL];
+                let (w, h) = (self.world(q), self.ground(q));
+                (self.t0.rivers.valley(h, w[0], w[1]) - h) as f32
+            }) as f64
+        };
+        let (i, j) = (i0 as i64, j0 as i64);
+        let top = at(i, j) + (at(i + 1, j) - at(i, j)) * fu;
+        let bottom = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * fu;
+        g + top + (bottom - top) * fv
+    }
+    /// The T0 surface (with shore banks), as the coarsest terrain level holds it.
+    fn ground(&self, p: P) -> f64 {
         let w = self.world(p);
         let (x0, y0, nw, values) = &self.nodes;
-        let g = self.t0.ground_with(w[0], w[1], self.lattice_ft, self.lakeside, &mut |i, j| {
+        self.t0.ground_with(w[0], w[1], self.lattice_ft, self.lakeside, &mut |i, j| {
             let (a, b) = (i - x0, j - y0);
             if a >= 0 && b >= 0 && (a as usize) < *nw && ((b as usize) * nw + a as usize) < values.len() {
                 values[b as usize * nw + a as usize]
             } else {
                 self.t0.ground_node(i, j, self.lattice_ft)
             }
-        });
-        if self.valley.is_empty() {
-            return g;
-        }
-        let r = crate::lod::rivers::TOWN_VALLEY_FT;
-        let (x0, x1) = (crate::core::floor((p[0] - r) / VALLEY_CELL) as i64, crate::core::floor((p[0] + r) / VALLEY_CELL) as i64);
-        let (y0, y1) = (crate::core::floor((p[1] - r) / VALLEY_CELL) as i64, crate::core::floor((p[1] + r) / VALLEY_CELL) as i64);
-        let mut v = g;
-        for cy in y0..=y1 {
-            for cx in x0..=x1 {
-                for &i in self.valley_grid.get(&(cx, cy)).into_iter().flatten() {
-                    let (a, b, hw, za, zb) = self.valley[i as usize];
-                    let ab = sub(b, a);
-                    let t = (dot(sub(p, a), ab) / dot(ab, ab).max(1e-12)).clamp(0.0, 1.0);
-                    let d = dist(p, add(a, mul(ab, t)));
-                    if d < r {
-                        v = v.min(crate::lod::rivers::town_valley(g, d, hw, za + (zb - za) * t));
-                    }
-                }
-            }
-        }
-        v
+        })
     }
     /// Sea or lake (not the river channel): inside the drawn shoreline (the same water mask
     /// the terrain renders), so buildings, quays and piers agree with the visible shore.
@@ -606,19 +594,14 @@ fn river_samples(site: &Site, every: f64, within: f64) -> Vec<(P, P, f64)> {
     out
 }
 
-/// River channel pieces (the finest curve, ~20-ft chords) within `r` of the centre, in local
-/// coords: (a, b, half width); and every fifth point joined for the town valley (with the
-/// water surface at each end).
-fn river_pieces(t0: &T0, center: P, r: f64) -> (Vec<(P, P, f64)>, Vec<(P, P, f64, f64, f64)>) {
+fn river_pieces(t0: &T0, center: P, r: f64) -> Vec<(P, P, f64)> {
     let mut out = Vec::new();
-    let mut valley = Vec::new();
     for (ri, k) in t0.rivers.segments_near(center[0] - r, center[1] - r, center[0] + r, center[1] + r, 0.0) {
         let rc = &t0.rivers.rivers[ri as usize];
         let len = rc.s[k as usize + 1] - rc.s[k as usize];
         // Fine enough to follow meanders and wiggles to a few feet (banks, quays, piers).
         let n = (len / 20.0).ceil().clamp(2.0, 1200.0) as usize;
         let mut prev: Option<(P, f64)> = None;
-        let mut coarse: Option<(P, f64, f64)> = None;
         for j in 0..=n {
             let cp = rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft);
             let p = sub(cp.p, center);
@@ -626,15 +609,9 @@ fn river_pieces(t0: &T0, center: P, r: f64) -> (Vec<(P, P, f64)>, Vec<(P, P, f64
                 out.push((q, p, 0.5 * w.max(cp.w)));
             }
             prev = Some((p, cp.w));
-            if j % 5 == 0 || j == n {
-                if let Some((q, w, z)) = coarse {
-                    valley.push((q, p, 0.5 * w.max(cp.w), z, cp.z));
-                }
-                coarse = Some((p, cp.w, cp.z));
-            }
         }
     }
-    (out, valley)
+    out
 }
 
 // ---------------------------------------------------------------------------------------
@@ -644,7 +621,7 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
     let center = [s.x, s.y];
     let r = urban_radius(s.tier, s.population);
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-    let site = Site::new(t0, center, lattice, river_pieces(t0, center, reach(s) + 500.0 + crate::lod::rivers::TOWN_VALLEY_FT));
+    let site = Site::new(t0, center, lattice, river_pieces(t0, center, reach(s) + 500.0));
     let mut rng = Pcg32::new(hash2(world.stream("town"), index as i64, s.seed as i64), 31);
     let mut l = Layout {
         index: index as u32,

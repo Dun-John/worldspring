@@ -91,7 +91,7 @@ const TOWER_FT: f32 = 30.0;
 const STOREY_FT: f32 = 10.0;
 
 /// Bridge decks sit this far above the water they span.
-const DECK_CLEARANCE_FT: f32 = 4.0;
+pub const DECK_CLEARANCE_FT: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[repr(u8)]
@@ -556,6 +556,28 @@ fn relief_value(f: &Relief, x: f64, y: f64) -> f64 {
     f.h * (dome + (mesa - dome) * f.steep)
 }
 
+/// The road surface (ft) at a point on a road: the nearest road piece within its width.
+fn road_level(roads: &[crate::lod::roads::RoadPiece], p: [f64; 2]) -> Option<f32> {
+    let mut best: Option<(f64, f64)> = None;
+    for piece in roads {
+        let reach = 0.5 * piece.class.width_ft() + SQUARE_FT;
+        for seg in piece.pts.windows(2) {
+            let (a, b) = (seg[0].p, seg[1].p);
+            if p[0] < a[0].min(b[0]) - reach || p[0] > a[0].max(b[0]) + reach || p[1] < a[1].min(b[1]) - reach || p[1] > a[1].max(b[1]) + reach {
+                continue;
+            }
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+            let (ex, ey) = (a[0] + dx * t - p[0], a[1] + dy * t - p[1]);
+            let d = crate::core::sqrt(ex * ex + ey * ey);
+            if d < reach && best.is_none_or(|b| d < b.0) {
+                best = Some((d, seg[0].z + (seg[1].z - seg[0].z) * t));
+            }
+        }
+    }
+    best.map(|b| b.1 as f32)
+}
+
 pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chunk {
     let g = &world.geom;
     let sea = world.params().sea_level_ft;
@@ -581,8 +603,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             hw[h] = t0.sample_water(x, y).max(tile.river_water[c]);
             road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);
             if road_h[h] != 0 && hw[h] > hh[h] {
-                lift[h] = hw[h] + DECK_CLEARANCE_FT - hh[h];
-                hh[h] = hw[h] + DECK_CLEARANCE_FT;
+                // The deck carries the road at its own level (its embankments reach the
+                // banks), at least clear of the water.
+                let top = (hw[h] + DECK_CLEARANCE_FT).max(road_level(&tile.roads, [x, y]).unwrap_or(f32::MIN));
+                lift[h] = top - hh[h];
+                hh[h] = top;
                 road_h[h] |= 0x80;
             }
         }

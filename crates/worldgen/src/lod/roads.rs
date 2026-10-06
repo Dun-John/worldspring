@@ -100,8 +100,8 @@ pub struct RoadNet {
     cell_ft: f64,
 }
 
-/// Embankment / cutting side slope (rise per run).
-const SIDE_SLOPE: f64 = 0.8;
+/// Embankment / cutting side slope (rise per run): a grassed bank, not a wall.
+const SIDE_SLOPE: f64 = 0.5;
 /// Road beds only matter where samples are this fine.
 pub const CARVE_MAX_SPACING_FT: f64 = 160.0;
 
@@ -217,7 +217,7 @@ pub fn pieces(net: &RoadNet, rect: [f64; 4], pad: f64, spacing: f64) -> Vec<Road
 /// bed, widening with the side slope away from it). Bands are combined order-independently:
 /// lower bounds by max, upper bounds by min; if roads disagree (junctions) the midpoint wins.
 /// Returns a per-sample road mask (class + 1, 0 = none) for surface shading.
-pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], dim: usize, origin: [f64; 2], spacing: f64) -> Vec<u8> {
+pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], water: &[f32], dim: usize, origin: [f64; 2], spacing: f64) -> Vec<u8> {
     let n = dim * dim;
     let mut lo = vec![f32::NEG_INFINITY; n];
     let mut hi = vec![f32::INFINITY; n];
@@ -270,7 +270,8 @@ pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], dim: usize, origin: [f64
         }
     }
     for k in 0..n {
-        if lo[k] == f32::NEG_INFINITY {
+        // River water (its channel) stays as the river carved it: the road crosses on a bridge.
+        if lo[k] == f32::NEG_INFINITY || water[k] > crate::t0::hydro::DRY {
             continue;
         }
         heights[k] = if bed_n[k] > 0 {

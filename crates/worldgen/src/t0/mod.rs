@@ -240,7 +240,18 @@ impl T0 {
         let dist_land = climate::distance_to(w, h, &land);
         let coast: Vec<f32> = (0..n).map(|k| if land[k] { 0.0 } else { (dist_land[k] * cell) as f32 }).collect();
 
-        let rivers = build_river_net(world, w, cell, &height, &land, &hydro);
+        let mut rivers = build_river_net(world, w, cell, &height, &land, &hydro);
+        {
+            // Levels that agree with the ground the terrain is built on (before anything is
+            // placed against the curves, whose meanders follow the levels).
+            let hgrid = Grid::from_vec(w, h, height.iter().map(|&v| v as f32).collect());
+            let base = Self::from_grids(hgrid, Grid::from_vec(w, h, hydro.water.clone()), Grid::from_vec(w, h, coast.clone()), Grid::from_vec(w, h, biome.clone()), cell, world.stream("t0.biome.warp"), RiverNet::default(), RoadNet::new(Vec::new(), (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell));
+            let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+            let ground = base.ground_sampler(lattice);
+            // Standing water: the lookup gives a level near any wet cell; it is water only
+            // where that level is above the ground.
+            rivers.settle_levels(&ground, &|x, y| base.sample_lake(x, y).0 as f64 > ground(x, y), cell);
+        }
         progress("settlements", 0.0);
         // Staged, so later tiers grow on the roads the earlier ones made: cities, then king's
         // roads between them; towns (favouring those roads and their junctions), then roads;
@@ -360,15 +371,31 @@ impl T0 {
         // Road beds follow the ground the terrain actually builds along them (road corridors
         // keep refinement detail off it), so they cut and fill a few feet, not trenches.
         let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-        let curves: Vec<RoadCurve> = t0
+        let curves: Vec<RoadCurve> = {
+            let ground = t0.ground_sampler(lattice);
+            let crossings = crate::lod::rivers::CrossingCache::default();
+            t0
             .roads
             .roads
             .iter()
             .map(|r| {
-                let terrain: Vec<f64> = r.pts.iter().map(|p| t0.ground_at(p[0], p[1], lattice)).collect();
-                RoadCurve::new(r.class, r.pts.clone(), roads::fit_profile(&r.pts, &terrain, r.class.max_grade()), r.wander.clone(), r.seed)
+                // In the river valleys the terrain carves (a road along a valley side runs on
+                // it, not on a dike above it), and over every river it crosses: clear of the
+                // water by a bridge's clearance at both ends of the crossing (the profile ramps
+                // up to it).
+                let terrain: Vec<f64> = r.pts.iter().map(|p| t0.rivers.valley(ground(p[0], p[1]), p[0], p[1])).collect();
+                let mut floor = vec![f64::MIN; r.pts.len()];
+                for k in 0..r.pts.len().saturating_sub(1) {
+                    if let Some(z) = t0.rivers.crossing_level(r.pts[k], r.pts[k + 1], 0.5 * r.class.width_ft() + 2.0, cell, &crossings) {
+                        let deck = z + crate::battlemap::DECK_CLEARANCE_FT as f64;
+                        floor[k] = floor[k].max(deck);
+                        floor[k + 1] = floor[k + 1].max(deck);
+                    }
+                }
+                RoadCurve::new(r.class, r.pts.clone(), roads::fit_profile_over(&r.pts, &terrain, &floor, r.class.max_grade()), r.wander.clone(), r.seed)
             })
-            .collect();
+            .collect()
+        };
         t0.roads = RoadNet::new(curves, map_w, map_h, cell);
         for (s, &c) in settlements.iter_mut().zip(&overlay.settlement_cultures) {
             s.culture = c;
@@ -387,7 +414,18 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        T0 { height, water, coast, biome, cell_ft, rivers, roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), biome_seed, mips, extra: None }
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), biome_seed, mips, extra: None };
+        // Water surfaces follow the ground the terrain is built on along each curve
+        // (generated and loaded alike). That ground's lattice is the coarsest spacing
+        // (2.5 · 2^n ft) at least a T0 cell.
+        let mut lattice = 2.5;
+        while lattice < cell_ft {
+            lattice *= 2.0;
+        }
+        let mut rivers = rivers;
+        rivers.settle(&t0.ground_sampler(lattice), cell_ft);
+        t0.rivers = rivers;
+        t0
     }
 
     fn with_settlements(mut self, settlements: Vec<settle::Settlement>, pois: Vec<settle::Poi>) -> T0 {
@@ -468,6 +506,19 @@ impl T0 {
     /// banked again at the point.
     pub fn ground_at(&self, x_ft: f64, y_ft: f64, lattice_ft: f64) -> f64 {
         self.ground_with(x_ft, y_ft, lattice_ft, true, &mut |i, j| self.ground_node(i, j, lattice_ft))
+    }
+
+    /// `ground_at` over the whole map with its lattice nodes computed once (for callers that
+    /// ask many thousands of times).
+    pub fn ground_sampler(&self, lattice_ft: f64) -> impl Fn(f64, f64) -> f64 + '_ {
+        let (nw, nh) = ((self.height.w as f64 * self.cell_ft / lattice_ft) as i64 + 4, (self.height.h as f64 * self.cell_ft / lattice_ft) as i64 + 4);
+        let nodes: Vec<f64> = (-1..nh).flat_map(|j| (-1..nw).map(move |i| (i, j))).map(|(i, j)| self.ground_node(i, j, lattice_ft)).collect();
+        let stride = (nw + 1) as usize;
+        move |x, y| {
+            self.ground_with(x, y, lattice_ft, true, &mut |i, j| {
+                if i >= -1 && j >= -1 && i < nw && j < nh { nodes[(j + 1) as usize * stride + (i + 1) as usize] } else { self.ground_node(i, j, lattice_ft) }
+            })
+        }
     }
 
     /// Banked T0 sample at lattice node (i, j) of `ground_at`'s lattice.
@@ -883,52 +934,8 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
             }
             RiverCurve::new(pts, z, q, tapers[ri].clone(), river_seed(world.seed, ri))
         })
-        .collect::<Vec<_>>();
-    // The curve wanders off its cells (and the ground between two cells is not a straight
-    // line): where it runs over lower ground than the line between its cells' levels, the
-    // water would stand above the land, held by a dike. From the mouth up, each land point's
-    // level is lowered just enough that the line to the next point downstream stays a foot
-    // under the ground along the curve (sampled at eighths), never below that next level;
-    // a tributary ends no higher than its river there.
-    let h = height.len() / w;
-    let hgrid = Grid::from_vec(w, h, height.iter().map(|&v| v as f32).collect());
-    let settle = |rc: &RiverCurve, r: &hydro::River, mut z: Vec<f64>| -> Vec<f64> {
-        for k in (0..z.len().saturating_sub(1)).rev() {
-            let c = r.cells[k] as usize;
-            if !land[c] || hydro.lake_of[c] != hydro::NO_LAKE {
-                continue;
-            }
-            let next = z[k + 1];
-            let bound = (0..8)
-                .map(|j| {
-                    let t = j as f64 / 8.0;
-                    let p = rc.eval(k, t, 2.5, cell).p;
-                    (hgrid.sample_cubic(p[0] / cell, p[1] / cell) - 1.0 - t * next) / (1.0 - t)
-                })
-                .fold(f64::MAX, f64::min);
-            z[k] = z[k].min(bound).max(next);
-        }
-        z
-    };
-    let mut levels: Vec<Vec<f64>> = curves.iter().zip(chains).map(|(rc, r)| settle(rc, r, rc.z.iter().map(|&v| v as f64).collect())).collect();
-    // Tributaries (of tributaries…) end at their river's level, then settle again above it.
-    for _ in 0..3 {
-        for (ri, r) in chains.iter().enumerate() {
-            if let Some(p) = r.into
-                && let Some(m) = chains[p].cells.iter().position(|&c| Some(&c) == r.cells.last())
-                && levels[p][m] < *levels[ri].last().unwrap()
-            {
-                let mut z = levels[ri].clone();
-                *z.last_mut().unwrap() = levels[p][m];
-                levels[ri] = settle(&curves[ri], r, z);
-            }
-        }
-    }
-    let curves = curves
-        .into_iter()
-        .zip(levels)
-        .map(|(rc, z)| RiverCurve::new(rc.pts, z.into_iter().map(|v| v as f32).collect(), rc.q, rc.taper, rc.seed))
         .collect();
+    let h = height.len() / w;
     // Bin extents from the grid (not the world file) so loaded copies index identically.
     RiverNet::new(curves, (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell)
 }

@@ -62,10 +62,10 @@ pub fn terrain_tile(world: &World, t0: &T0, key: &TileKey, parent: Option<&[f32]
     let size = g.tile_size_ft(key.level);
     let refined = key.level >= g.first_refine_level;
     let road_pieces = roads::pieces(&t0.roads, [ox, oy, ox + size, oy + size], (HALO as f64 + CORRIDOR_OUT_SAMPLES) * s + 200.0, s.max(20.0));
-    // Road corridors: at levels too coarse to carve a road bed, refinement detail fades out
-    // near roads, so the ground stays close to the road's profile and the fine levels only
-    // cut and fill a few feet (instead of trenching through coarse-level relief).
-    let corridor = (refined && s > roads::CARVE_MAX_SPACING_FT).then(|| road_corridor(&road_pieces, key, s));
+    // Road corridors: refinement detail fades out near roads at every level, so the ground
+    // stays close to the road's profile and the bed only cuts and fills where the grade
+    // demands it (instead of a dike or a trench as deep as the detail beside it).
+    let corridor = refined.then(|| road_corridor(&road_pieces, key, s));
     let mut padded = if refined {
         refine(world, t0, parent.expect("refined levels need the parent tile"), key, corridor.as_deref())
     } else {
@@ -84,72 +84,22 @@ pub fn terrain_tile(world: &World, t0: &T0, key: &TileKey, parent: Option<&[f32]
         }
     }
     let mut river_water = vec![DRY; PADDED * PADDED];
-    // Settlement pads (weights per padded sample) where rivers are carved: they get the town
-    // valley (`rivers::carve`).
-    let carving = refined && s <= CARVE_MAX_SPACING_FT;
-    let town = if carving { town_weights(t0, key, s) } else { None };
     // Each river is sampled as far out as it carves (plus the halo and a sample of slack).
-    let reach_of = |w: f64| {
-        let r = rivers::carve_reach(w, s, CARVE_REACH_SAMPLES);
-        if town.is_some() { r.max(rivers::TOWN_VALLEY_FT) } else { r }
-    };
-    let pieces = rivers::pieces(&t0.rivers, [ox, oy, ox + size, oy + size], &|w| reach_of(w) + (HALO as f64 + 1.0) * s, s, t0.cell_ft);
-    let mut road_mask = Vec::new();
-    // Road beds first so rivers cut through them (bridges span the channel).
-    if refined && s <= roads::CARVE_MAX_SPACING_FT {
-        let origin = [
-            (key.x as i64 * TILE_N as i64 - HALO as i64) as f64 * s,
-            (key.y as i64 * TILE_N as i64 - HALO as i64) as f64 * s,
-        ];
-        road_mask = roads::carve(&road_pieces, &mut padded, PADDED, origin, s);
-    }
+    let pieces = rivers::pieces(&t0.rivers, [ox, oy, ox + size, oy + size], &|w| rivers::carve_reach(w, s, CARVE_REACH_SAMPLES) + (HALO as f64 + 1.0) * s, s, t0.cell_ft);
+    // Padded sample (0, 0) is lattice index -HALO: position = global index * spacing.
+    let origin = [(key.x as i64 * TILE_N as i64 - HALO as i64) as f64 * s, (key.y as i64 * TILE_N as i64 - HALO as i64) as f64 * s];
     // Coarse levels already have the T0 valleys and cannot resolve a channel; carving
     // starts where samples get fine enough to matter (children carve for themselves).
     if refined && s <= CARVE_MAX_SPACING_FT {
-        // Padded sample (0, 0) is lattice index -HALO: position = global index * spacing.
-        let origin = [
-            (key.x as i64 * TILE_N as i64 - HALO as i64) as f64 * s,
-            (key.y as i64 * TILE_N as i64 - HALO as i64) as f64 * s,
-        ];
-        rivers::carve(&pieces, &mut padded, &mut river_water, PADDED, origin, s, CARVE_REACH_SAMPLES, &|x, y| t0.sample_water(x, y), town.as_deref());
+        rivers::carve(&pieces, &mut padded, &mut river_water, PADDED, origin, s, CARVE_REACH_SAMPLES, &|x, y| t0.sample_water(x, y));
+    }
+    // Road beds after the rivers: a road keeps its bed (an embankment to the bank where it
+    // crosses a valley) and leaves the water to the river, which its bridge spans.
+    let mut road_mask = Vec::new();
+    if refined && s <= roads::CARVE_MAX_SPACING_FT {
+        road_mask = roads::carve(&road_pieces, &mut padded, &river_water, PADDED, origin, s);
     }
     TerrainOut { padded, river_water, pieces, roads: road_pieces, road_mask }
-}
-
-/// Each padded sample's settlement-pad weight (`town::pad_weight`, as `refine` blends the
-/// ground to what the layouts were planned on), or None where no settlement reaches the tile.
-fn town_weights(t0: &T0, key: &TileKey, s: f64) -> Option<Vec<f32>> {
-    let (n, h) = (TILE_N as i64, HALO as i64);
-    let (gx0, gy0) = (key.x as i64 * n, key.y as i64 * n);
-    let (tx0, ty0, tx1, ty1) = ((gx0 - h) as f64 * s, (gy0 - h) as f64 * s, (gx0 + n + h) as f64 * s, (gy0 + n + h) as f64 * s);
-    let pads: Vec<(f64, f64, f64)> = t0
-        .settlements
-        .iter()
-        .map(|st| (st.x, st.y, crate::town::reach(st)))
-        .filter(|&(x, y, r)| {
-            let e = crate::town::pad_extent(r);
-            x + e >= tx0 && x - e <= tx1 && y + e >= ty0 && y - e <= ty1
-        })
-        .collect();
-    if pads.is_empty() {
-        return None;
-    }
-    let mut out = vec![0f32; PADDED * PADDED];
-    for cj in -h..=n + h {
-        let y = (gy0 + cj) as f64 * s;
-        for ci in -h..=n + h {
-            let x = (gx0 + ci) as f64 * s;
-            out[padded_index(ci, cj)] = pads.iter().fold(0.0f64, |m, &(px, py, r)| {
-                let e = crate::town::pad_extent(r);
-                if (x - px).abs() >= e || (y - py).abs() >= e {
-                    return m;
-                }
-                let d = crate::core::sqrt((x - px) * (x - px) + (y - py) * (y - py));
-                m.max(crate::town::pad_weight(d, r))
-            }) as f32;
-        }
-    }
-    out.iter().any(|w| *w > 0.0).then_some(out)
 }
 
 fn sample_t0(world: &World, t0: &T0, key: &TileKey) -> Padded {
@@ -165,12 +115,6 @@ fn sample_t0(world: &World, t0: &T0, key: &TileKey) -> Padded {
         }
     }
     out
-}
-
-/// Catmull-Rom weights for the four nodes around fraction `t` (as in `T0::ground_with`).
-fn catmull_rom_weights(t: f64) -> [f64; 4] {
-    let (t2, t3) = (t * t, t * t * t);
-    [0.5 * (-t3 + 2.0 * t2 - t), 0.5 * (3.0 * t3 - 5.0 * t2 + 2.0), 0.5 * (-3.0 * t3 + 4.0 * t2 + t), 0.5 * (t3 - t2)]
 }
 
 /// Catmull-Rom at t = 0.5.
@@ -259,7 +203,8 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
     let (gx0, gy0) = (key.x as i64 * n, key.y as i64 * n);
     let inv_2s = 1.0 / (2.0 * s);
     // Settlement pads: towns and their fields stand on the smooth ground their layout was
-    // planned on (the T0 surface), so fine detail fades out over each pad (`town::pad_weight`).
+    // planned on (the T0 surface in its river valleys, `town::Site::height`), so fine detail
+    // fades out over each pad (`town::pad_weight`); the valleys come from carving.
     let (tx0, ty0, tx1, ty1) = ((gx0 - h) as f64 * s, (gy0 - h) as f64 * s, (gx0 + n + h) as f64 * s, (gy0 + n + h) as f64 * s);
     let pads: Vec<(f64, f64, f64)> = t0
         .settlements
@@ -270,18 +215,6 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
             x + e >= tx0 && x - e <= tx1 && y + e >= ty0 && y - e <= ty1
         })
         .collect();
-    // Inside a settlement the ground is exactly T0::ground_at (what its layout was planned
-    // on: shorelines, piers and pads agree with the drawn terrain). Lattice nodes cached.
-    let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-    // The lattice nodes this tile's samples can touch (Catmull-Rom reaches one node out).
-    let (nx0, ny0) = (crate::core::floor(tx0 / lattice) as i64 - 1, crate::core::floor(ty0 / lattice) as i64 - 1);
-    let (nx1, ny1) = (crate::core::floor(tx1 / lattice) as i64 + 2, crate::core::floor(ty1 / lattice) as i64 + 2);
-    let nw = (nx1 - nx0 + 1) as usize;
-    let nodes: Vec<f64> = if pads.is_empty() {
-        Vec::new()
-    } else {
-        (ny0..=ny1).flat_map(|j| (nx0..=nx1).map(move |i| (i, j))).map(|(i, j)| t0.ground_node(i, j, lattice)).collect()
-    };
 
     let mut out = vec![0f32; PADDED * PADDED];
     for cj in -h..=n + h {
@@ -292,18 +225,6 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
         // Pads this row can touch.
         let y = (gy0 + cj) as f64 * s;
         let row_pads: Vec<(f64, f64, f64)> = pads.iter().copied().filter(|&(_, py, r)| (y - py).abs() < crate::town::pad_extent(r)).collect();
-        // This row's ground: the lattice nodes interpolated down each column once
-        // (Catmull-Rom in y), leaving a 4-tap interpolation in x per sample.
-        let col: Vec<f64> = if row_pads.is_empty() {
-            Vec::new()
-        } else {
-            let v = y / lattice;
-            let j0 = crate::core::floor(v);
-            let wv = catmull_rom_weights(v - j0);
-            (0..nw)
-                .map(|c| (0..4).map(|b| wv[b] * nodes[((j0 as i64 + b as i64 - 1 - ny0) as usize) * nw + c]).sum())
-                .collect()
-        };
         for ci in -h..=n + h {
             let base = if odd {
                 HALF[0] * row(pv - 1, ci) + HALF[1] * row(pv, ci) + HALF[2] * row(pv + 1, ci) + HALF[3] * row(pv + 2, ci)
@@ -351,10 +272,9 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
             if let Some(c) = corridor {
                 detail *= c[padded_index(ci, cj)] as f64;
             }
-            let mut pad = 0.0;
             if !row_pads.is_empty() {
                 let x = (gx0 + ci) as f64 * s;
-                pad = row_pads.iter().fold(0.0f64, |m, &(px, py, r)| {
+                let pad = row_pads.iter().fold(0.0f64, |m, &(px, py, r)| {
                     if (x - px).abs() >= crate::town::pad_extent(r) {
                         return m;
                     }
@@ -369,16 +289,6 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
                 let band = 3.0 + 2.5 * amp * rough;
                 h = base + detail * smoothstep(0.0, band, crate::core::fabs(base - w as f64));
                 h = T0::shore_bank(h, w, mask);
-            }
-            if pad > 0.0 {
-                let x = (gx0 + ci) as f64 * s;
-                let u = x / lattice;
-                let i0 = crate::core::floor(u);
-                let wu = catmull_rom_weights(u - i0);
-                let g: f64 = (0..4).map(|a| wu[a] * col[(i0 as i64 + a as i64 - 1 - nx0) as usize]).sum();
-                // The shore bank at this point, from the lookup above (same as ground_at's).
-                let g = if w > DRY { T0::shore_bank(g, w, mask) } else { g };
-                h += (g - h) * pad;
             }
             out[padded_index(ci, cj)] = h as f32;
         }
