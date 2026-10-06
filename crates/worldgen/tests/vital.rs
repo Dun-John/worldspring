@@ -273,12 +273,66 @@ fn towns_meet_roads_and_water() {
             })
         })
     };
-    let (mut roads_checked, mut piers_checked) = (0, 0);
+    // The river channels round a box (the fine curve every ~20 ft), by 100-ft grid cell.
+    type Channel = (Vec<([f64; 2], [f64; 2], f64)>, std::collections::HashMap<(i64, i64), Vec<usize>>);
+    let channel = |bb: [f64; 4]| -> Channel {
+        let mut segs = Vec::new();
+        for (ri, k) in t0.rivers.segments_near(bb[0] - 400.0, bb[1] - 400.0, bb[2] + 400.0, bb[3] + 400.0, 0.0) {
+            let r = &t0.rivers.rivers[ri as usize];
+            let n = ((r.s[k as usize + 1] - r.s[k as usize]) / 20.0).ceil().max(8.0) as usize;
+            let pts: Vec<_> = (0..=n).map(|j| r.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft)).collect();
+            segs.extend(pts.windows(2).map(|w| (w[0].p, w[1].p, 0.5 * w[0].w.min(w[1].w))));
+        }
+        let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
+        for (i, &(a, b, hw)) in segs.iter().enumerate() {
+            for cy in ((a[1].min(b[1]) - hw) / 100.0).floor() as i64..=((a[1].max(b[1]) + hw) / 100.0).floor() as i64 {
+                for cx in ((a[0].min(b[0]) - hw) / 100.0).floor() as i64..=((a[0].max(b[0]) + hw) / 100.0).floor() as i64 {
+                    grid.entry((cx, cy)).or_default().push(i);
+                }
+            }
+        }
+        (segs, grid)
+    };
+    // More than `inset` ft inside a channel.
+    let in_channel = |ch: &Channel, p: [f64; 2], inset: f64| {
+        ch.1.get(&((p[0] / 100.0).floor() as i64, (p[1] / 100.0).floor() as i64)).into_iter().flatten().any(|&i| {
+            let (a, b, hw) = ch.0[i];
+            geom::seg_dist(p, a, b) < hw - inset
+        })
+    };
+    let (mut roads_checked, mut piers_checked, mut walls_checked) = (0, 0, 0);
     for (i, s) in t0.settlements.iter().enumerate() {
         if s.tier < Tier::Town {
             continue;
         }
         let l = town::layout(&world, &t0, i);
+        // Walls end at the banks (water guards the gap), towers stand on land, and every street
+        // over a river runs on a bridge.
+        let ch = channel(l.bbox);
+        if !ch.0.is_empty() {
+            for w in &l.walls {
+                for seg in w.windows(2) {
+                    let n = (geom::dist(seg[0], seg[1]) / 10.0).ceil().max(1.0) as usize;
+                    for j in 0..=n {
+                        let p = geom::lerp(seg[0], seg[1], j as f64 / n as f64);
+                        assert!(!in_channel(&ch, p, 2.0), "settlement {i}: wall in the river at {p:?}");
+                    }
+                }
+                walls_checked += 1;
+            }
+            for t in l.towers.iter().chain(&l.gate_towers) {
+                assert!(!in_channel(&ch, *t, 2.0), "settlement {i}: tower in the river at {t:?}");
+            }
+            for (pts, class, _) in &l.roads {
+                for seg in pts.windows(2) {
+                    let n = (geom::dist(seg[0], seg[1]) / 10.0).ceil().max(1.0) as usize;
+                    for j in 0..=n {
+                        let p = geom::lerp(seg[0], seg[1], j as f64 / n as f64);
+                        assert!(!in_channel(&ch, p, 2.0) || l.bridges.iter().any(|b| geom::contains(b, p)), "settlement {i}: a class {class} street over the river with no bridge at {p:?}");
+                    }
+                }
+            }
+        }
         for (ri, rc) in t0.roads.roads.iter().enumerate() {
             let n = rc.pts.len();
             for (k, t) in [(0usize, 0.0), (n - 2, 1.0)] {
@@ -286,9 +340,13 @@ fn towns_meet_roads_and_water() {
                 if geom::dist(e, [s.x, s.y]) > 1.05 * worldgen::town::road_trim_radius(s.tier, s.population) + 50.0 {
                     continue;
                 }
+                // A street from the road's end to a gate (in two pieces where it turns into a
+                // town street on the way).
+                let to_gate = |p: [f64; 2]| l.gates.iter().any(|g| geom::dist(*g, p) < 1.0);
                 let joined = l.roads.iter().any(|(pts, _, _)| {
-                    geom::dist(pts[0], e) < 1.0 && l.gates.iter().any(|g| geom::dist(*g, *pts.last().unwrap()) < 1.0)
-                }) || l.gates.iter().any(|g| geom::dist(*g, e) < 1.0);
+                    let end = *pts.last().unwrap();
+                    geom::dist(pts[0], e) < 1.0 && (to_gate(end) || l.roads.iter().any(|(q, _, _)| geom::dist(q[0], end) < 1e-6 && to_gate(*q.last().unwrap())))
+                }) || to_gate(e);
                 assert!(joined, "settlement {i}: road {ri} ends {:.0} ft from a gate with no street to it", l.gates.iter().map(|g| geom::dist(*g, e)).fold(f64::MAX, f64::min));
                 roads_checked += 1;
             }
@@ -308,7 +366,7 @@ fn towns_meet_roads_and_water() {
             piers_checked += 1;
         }
     }
-    assert!(roads_checked > 20 && piers_checked > 10, "too little checked: {roads_checked} road ends, {piers_checked} piers");
+    assert!(roads_checked > 20 && piers_checked > 10 && walls_checked > 10, "too little checked: {roads_checked} road ends, {piers_checked} piers, {walls_checked} walls by rivers");
 }
 
 /// Settlements: every one gets its guaranteed buildings — an inn in every village, the full

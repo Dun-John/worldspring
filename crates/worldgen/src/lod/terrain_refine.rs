@@ -84,8 +84,8 @@ pub fn terrain_tile(world: &World, t0: &T0, key: &TileKey, parent: Option<&[f32]
         }
     }
     let mut river_water = vec![DRY; PADDED * PADDED];
-    let reach = CARVE_REACH_SAMPLES * s + HALO as f64 * s;
-    let pieces = rivers::pieces(&t0.rivers, [ox, oy, ox + size, oy + size], reach + 4_000.0, s, t0.cell_ft);
+    // Each river is sampled as far out as it carves (plus the halo and a sample of slack).
+    let pieces = rivers::pieces(&t0.rivers, [ox, oy, ox + size, oy + size], &|w| rivers::carve_reach(w, s, CARVE_REACH_SAMPLES) + (HALO as f64 + 1.0) * s, s, t0.cell_ft);
     let mut road_mask = Vec::new();
     // Road beds first so rivers cut through them (bridges span the channel).
     if refined && s <= roads::CARVE_MAX_SPACING_FT {

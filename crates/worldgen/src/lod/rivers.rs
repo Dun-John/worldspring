@@ -29,6 +29,10 @@ fn wavelength_ft(width: f64) -> f64 {
 
 /// Valley-side slope beyond the banks (rise/run).
 const BANK_SLOPE: f64 = 0.1;
+/// Levee crest slope away from the bank, and where across the levee band (in band widths)
+/// it starts and finishes easing back down to the ground.
+const LEVEE_SLOPE: f64 = 0.04;
+const LEVEE_FADE: (f64, f64) = (0.3, 1.5);
 
 #[derive(Clone, Debug, Default)]
 pub struct RiverCurve {
@@ -62,6 +66,7 @@ pub struct RiverNet {
     max_offset_ft: f64,
 }
 
+#[derive(Clone, Copy)]
 pub struct CurvePoint {
     pub p: [f64; 2],
     pub z: f64,
@@ -229,10 +234,24 @@ pub struct Piece {
 }
 
 /// Sample every river curve near the rectangle at a resolution suited to `spacing`.
-pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: f64, spacing: f64, cell_ft: f64) -> Vec<Piece> {
+/// `pad(w)`: how far beyond the rectangle (ft) a river `w` ft wide still matters (its
+/// carving reach), so wide rivers are sampled from farther out than creeks.
+pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing: f64, cell_ft: f64) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::new();
-    let near = net.segments_near(rect[0], rect[1], rect[2], rect[3], pad);
-    let inside = |p: [f64; 2]| p[0] >= rect[0] - pad && p[0] <= rect[2] + pad && p[1] >= rect[1] - pad && p[1] <= rect[3] + pad;
+    let seg_w = |r: &RiverCurve, k: usize| width_ft(r.q[k].max(r.q[k + 1]) as f64);
+    // Bins with the widest river's pad, then each segment by its own.
+    let near: Vec<(u32, u32)> = net
+        .segments_near(rect[0], rect[1], rect[2], rect[3], pad(width_ft(1e9)))
+        .into_iter()
+        .filter(|&(ri, k)| {
+            let r = &net.rivers[ri as usize];
+            let (a, b) = (r.pts[k as usize], r.pts[k as usize + 1]);
+            // How far this segment's curve can stray from its chord (see `max_offset_ft`).
+            let w = seg_w(r, k as usize);
+            let m = pad(w) + 1.52 * cell_ft + 1.2 * w;
+            a[0].max(b[0]) + m >= rect[0] && a[0].min(b[0]) - m <= rect[2] && a[1].max(b[1]) + m >= rect[1] && a[1].min(b[1]) - m <= rect[3]
+        })
+        .collect();
     let mut i = 0;
     while i < near.len() {
         // Consecutive segments of one river are sampled as one piece (shared endpoints).
@@ -245,26 +264,36 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: f64, spacing: f64, cell_ft: f
         i += 1;
         let r = &net.rivers[ri as usize];
         let mut cur: Vec<CurvePoint> = Vec::new();
+        let mut last_out: Option<CurvePoint> = None;
         for k in k0..=k1 {
             let k = k as usize;
             let seg_len = (r.s[k + 1] - r.s[k]).max(1.0);
-            let w = width_ft(r.q[k].max(r.q[k + 1]) as f64);
+            let w = seg_w(r, k);
             let step = (wavelength_ft(w) / 16.0).max(spacing).min(seg_len);
+            // Within a step of the padded rectangle: a chord that cuts its corner keeps both ends.
+            let pad = pad(w) + step;
+            let inside = |p: [f64; 2]| p[0] >= rect[0] - pad && p[0] <= rect[2] + pad && p[1] >= rect[1] - pad && p[1] <= rect[3] + pad;
             let n = (seg_len / step).ceil().max(1.0) as usize;
             for j in 0..=n {
-                if j == 0 && !cur.is_empty() {
+                // A joint is the previous segment's last point.
+                if j == 0 && k > k0 as usize {
                     continue;
                 }
                 let cp = r.eval(k, j as f64 / n as f64, spacing, cell_ft);
                 if inside(cp.p) {
+                    // A piece starts and ends one point outside, so the line reaches the edge.
+                    if cur.is_empty()
+                        && let Some(o) = last_out
+                    {
+                        cur.push(o);
+                    }
                     cur.push(cp);
                 } else if !cur.is_empty() {
-                    // Keep one point outside so the line reaches the tile edge.
                     cur.push(cp);
                     out.push(Piece { pts: std::mem::take(&mut cur) });
-                } else {
-                    cur.push(cp);
-                    cur.drain(..cur.len() - 1);
+                }
+                if !inside(cp.p) {
+                    last_out = Some(cp);
                 }
             }
         }
@@ -279,10 +308,16 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: f64, spacing: f64, cell_ft: f
 /// Carve channels and valleys into a padded height grid and write river water levels.
 /// `origin` is the world position of padded sample (0, 0); `water` has the same layout.
 ///
-/// Three order-independent accumulators keep the result the same whatever order rivers
-/// are visited in: `cut` (min of channel/valley targets), `bank` (max of bank floors just
-/// above the water, so the river is contained even where the floodplain dips below its
-/// surface), and `channel` (any channel covers the sample; channels beat banks).
+/// Every accumulator is a `min` over the segments near a sample, so the result is the same
+/// whatever order rivers are visited in, and each follows the distance to the nearest point
+/// of the curve (a `max` of a value growing with distance would pick the farthest segment
+/// in reach, leaving a ring round every joint):
+/// - `cut`: the ground carved to the channel and valley floor, fading back to the ground as
+///   it was over the outer quarter of the carving reach (no cliff where the ground stands
+///   above the valley side);
+/// - `lev`, `ulev`: the levee floor just above the water and the position across the levee
+///   band in band widths (0 at the bank), by which the levee eases out (`LEVEE_FADE`);
+/// - `channel`: any channel covers the sample (channels beat banks).
 ///
 /// `standing(x, y)` is the lake or sea surface at a world position (`DRY` on land). Banks
 /// are levees: they exist only on land, never on the lake or sea floor a river runs out
@@ -291,24 +326,32 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: f64, spacing: f64, cell_ft: f
 pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usize, origin: [f64; 2], spacing: f64, reach_samples: f64, standing: &dyn Fn(f64, f64) -> f32) {
     let n = dim * dim;
     let mut cut = vec![f32::INFINITY; n];
-    let mut bank = vec![f32::NEG_INFINITY; n];
+    let mut lev = vec![f32::INFINITY; n];
+    let mut ulev = vec![f32::INFINITY; n];
     let mut channel = vec![false; n];
     for piece in pieces {
         for seg in piece.pts.windows(2) {
             let (a, b) = (&seg[0], &seg[1]);
             let wmax = a.w.max(b.w);
-            let reach = wmax * 0.5 + (reach_samples * spacing).max(3.0 * wmax);
+            let reach = carve_reach(wmax, spacing, reach_samples);
             let (sx0, sx1) = ((a.p[0].min(b.p[0]) - reach - origin[0]) / spacing, (a.p[0].max(b.p[0]) + reach - origin[0]) / spacing);
             let (sy0, sy1) = ((a.p[1].min(b.p[1]) - reach - origin[1]) / spacing, (a.p[1].max(b.p[1]) + reach - origin[1]) / spacing);
             if sx1 < 0.0 || sy1 < 0.0 || sx0 > (dim - 1) as f64 || sy0 > (dim - 1) as f64 {
                 continue;
             }
-            let (ix0, ix1) = (sx0.ceil().max(0.0) as usize, (sx1.floor() as usize).min(dim - 1));
             let (iy0, iy1) = (sy0.ceil().max(0.0) as usize, (sy1.floor() as usize).min(dim - 1));
             let (dx, dy) = (b.p[0] - a.p[0], b.p[1] - a.p[1]);
             let len2 = (dx * dx + dy * dy).max(1e-9);
             for iy in iy0..=iy1 {
                 let py = origin[1] + iy as f64 * spacing;
+                // Only the samples of this row inside the segment's capsule (the box round
+                // it is mostly corners).
+                let Some((x0, x1)) = capsule_row(a.p, b.p, reach, py) else { continue };
+                let (sx0, sx1) = ((x0 - origin[0]) / spacing, (x1 - origin[0]) / spacing);
+                if sx1 < 0.0 || sx0 > (dim - 1) as f64 {
+                    continue;
+                }
+                let (ix0, ix1) = (sx0.ceil().max(0.0) as usize, (sx1.floor() as usize).min(dim - 1));
                 for ix in ix0..=ix1 {
                     let px = origin[0] + ix as f64 * spacing;
                     let t = (((px - a.p[0]) * dx + (py - a.p[1]) * dy) / len2).clamp(0.0, 1.0);
@@ -327,12 +370,22 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
                         z + (d - half) * BANK_SLOPE
                     };
                     let k = iy * dim + ix;
-                    cut[k] = cut[k].min(target as f32);
+                    let h = heights[k] as f64;
+                    let mut v = h.min(target);
+                    if d > 0.75 * reach {
+                        v += (h - v) * smoothstep(0.75 * reach, reach, d);
+                    }
+                    cut[k] = cut[k].min(v as f32);
                     if d < half {
                         channel[k] = true;
-                    } else if d < half + (0.35 * w).max(12.0) {
-                        // Natural levee a few feet high, sized to the river (not the level).
-                        bank[k] = bank[k].max((z + 0.5 + (d - half) * BANK_SLOPE) as f32);
+                    } else {
+                        // Natural levee a foot or two high, sized to the river (not the level),
+                        // its back slope eased out over half its width again.
+                        let band = (0.35 * w).max(12.0);
+                        if d < half + LEVEE_FADE.1 * band {
+                            lev[k] = lev[k].min((z + 0.5 + (d - half) * LEVEE_SLOPE) as f32);
+                            ulev[k] = ulev[k].min(((d - half) / band) as f32);
+                        }
                     }
                     if d < half + spacing && (z as f32) > water[k] {
                         water[k] = z as f32;
@@ -342,14 +395,63 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
         }
     }
     for k in 0..n {
-        let carved = heights[k].min(cut[k]);
-        heights[k] = if channel[k] || bank[k] == f32::NEG_INFINITY {
-            carved
-        } else {
+        if cut[k] == f32::INFINITY {
+            continue;
+        }
+        let mut v = cut[k] as f64;
+        if !channel[k] && lev[k] < f32::INFINITY && (lev[k] as f64) > v {
             let (x, y) = (origin[0] + (k % dim) as f64 * spacing, origin[1] + (k / dim) as f64 * spacing);
-            if standing(x, y) > crate::t0::hydro::DRY { carved } else { carved.max(bank[k]) }
-        };
+            if standing(x, y) <= crate::t0::hydro::DRY {
+                v += (1.0 - smoothstep(LEVEE_FADE.0, LEVEE_FADE.1, ulev[k] as f64)) * (lev[k] as f64 - v);
+            }
+        }
+        heights[k] = v as f32;
     }
+}
+
+/// The x range (slightly widened) of the points on the row `y` within `r` of the segment
+/// a–b: the union of its two end discs and the strip between them.
+fn capsule_row(a: [f64; 2], b: [f64; 2], r: f64, y: f64) -> Option<(f64, f64)> {
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for c in [a, b] {
+        let dy = y - c[1];
+        if dy.abs() <= r {
+            let h = crate::core::sqrt(r * r - dy * dy);
+            (lo, hi) = (lo.min(c[0] - h), hi.max(c[0] + h));
+        }
+    }
+    // The strip: 0 ≤ projection ≤ len and |offset| ≤ r, each a slab in x on this row.
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len = crate::core::sqrt(dx * dx + dy * dy);
+    if len > 1e-9 {
+        let (ux, uy) = (dx / len, dy / len);
+        let ry = y - a[1];
+        let (mut s0, mut s1) = (f64::NEG_INFINITY, f64::INFINITY);
+        // Projection (x − ax)·ux + ry·uy in [0, len].
+        if ux.abs() > 1e-12 {
+            let (p, q) = ((0.0 - ry * uy) / ux, (len - ry * uy) / ux);
+            (s0, s1) = (s0.max(p.min(q)), s1.min(p.max(q)));
+        } else if !(0.0..=len).contains(&(ry * uy)) {
+            s1 = s0;
+        }
+        // Offset −(x − ax)·uy + ry·ux in [−r, r].
+        if uy.abs() > 1e-12 {
+            let (p, q) = ((ry * ux - r) / uy, (ry * ux + r) / uy);
+            (s0, s1) = (s0.max(p.min(q)), s1.min(p.max(q)));
+        } else if (ry * ux).abs() > r {
+            s1 = s0;
+        }
+        if s0 < s1 {
+            (lo, hi) = (lo.min(a[0] + s0), hi.max(a[0] + s1));
+        }
+    }
+    let pad = 1e-6 * (1.0 + r);
+    (lo <= hi).then_some((lo - pad, hi + pad))
+}
+
+/// How far (ft) from its centre line a river `w` ft wide carves at a level of `spacing`.
+pub fn carve_reach(w: f64, spacing: f64, reach_samples: f64) -> f64 {
+    w * 0.5 + (reach_samples * spacing).max(3.0 * w)
 }
 
 #[inline]

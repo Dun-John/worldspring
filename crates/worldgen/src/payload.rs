@@ -139,7 +139,44 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     out.extend_from_slice(&biome);
     out.extend_from_slice(&rivers);
     out.extend_from_slice(&roads);
-    out.extend_from_slice(&pack_sites(world, t0, key));
+    out.extend_from_slice(&pack_sites(world, t0, key, tile));
+    out
+}
+
+/// Decks (world ft polygons) where network roads cross rivers: along the road, over the
+/// channel at the crossing's angle with a landing each side, as wide as the road plus 4 ft.
+fn road_bridges(tile: &TerrainOut) -> Vec<Vec<[f64; 2]>> {
+    let mut out = Vec::new();
+    for piece in &tile.roads {
+        for rs in piece.pts.windows(2) {
+            let (a, b) = (rs[0].p, rs[1].p);
+            let (rx, ry) = (b[0] - a[0], b[1] - a[1]);
+            let rl = crate::core::sqrt(rx * rx + ry * ry);
+            if rl < 1e-6 {
+                continue;
+            }
+            for river in &tile.pieces {
+                for vs in river.pts.windows(2) {
+                    let (c, d) = (vs[0].p, vs[1].p);
+                    let (sx, sy) = (d[0] - c[0], d[1] - c[1]);
+                    let den = rx * sy - ry * sx;
+                    if den.abs() < 1e-9 {
+                        continue;
+                    }
+                    let t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den;
+                    let v = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / den;
+                    if !(0.0..1.0).contains(&t) || !(0.0..1.0).contains(&v) {
+                        continue;
+                    }
+                    let sl = crate::core::sqrt(sx * sx + sy * sy).max(1e-9);
+                    let sin = (den / (rl * sl)).abs().max(0.35);
+                    let w = vs[0].w + (vs[1].w - vs[0].w) * v;
+                    let x = [a[0] + rx * t, a[1] + ry * t];
+                    out.push(crate::town::rect(x, [rx / rl, ry / rl], w / sin + 24.0, piece.class.width_ft() + 4.0));
+                }
+            }
+        }
+    }
     out
 }
 
@@ -147,7 +184,7 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
 pub const SITE_MIN_LEVEL: u8 = 9;
 pub const BUILDING_MIN_LEVEL: u8 = 11;
 
-fn pack_sites(world: &World, t0: &T0, key: &TileKey) -> Vec<u8> {
+fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u8> {
     let (ox, oy) = world.geom.tile_origin_ft(key);
     let size = world.geom.tile_size_ft(key.level);
     let mut starts: Vec<u32> = vec![0];
@@ -166,6 +203,13 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey) -> Vec<u8> {
             starts.push((verts.len() / 2) as u32);
             attrs.push(attr);
         };
+        // Network roads over rivers: a deck where each road crosses a river (the battlemap
+        // draws the full bridge).
+        if key.level >= BUILDING_MIN_LEVEL {
+            for d in road_bridges(tile) {
+                push(&d, 6);
+            }
+        }
         for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
             for f in &l.fields {
                 push(f, 2);

@@ -728,6 +728,29 @@ pub fn fit_profile(pts: &[[f64; 2]], terrain: &[f64], gmax: f64) -> Vec<f32> {
     z
 }
 
+/// Drops control points (ft) that only make the road jog: closer than 40 ft to the point
+/// before or after, or where it doubles back (turns over 100°) within 250 ft; never an end,
+/// and only where the chord left keeps the road's grade.
+pub fn tidy(r: &mut RoadPath) {
+    let gmax = r.class.max_grade();
+    let mut k = 1;
+    while k + 1 < r.pts.len() {
+        let (a, b, c) = (r.pts[k - 1], r.pts[k], r.pts[k + 1]);
+        let (ab, bc) = (dist(a, b), dist(b, c));
+        let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
+        let back = u[0] * v[0] + u[1] * v[1] < -0.17 * ab * bc;
+        let jog = ab.min(bc) < 40.0 || (back && ab.min(bc) < 250.0);
+        if jog && ((r.z[k + 1] - r.z[k - 1]).abs() as f64) <= gmax * dist(a, c) {
+            r.pts.remove(k);
+            r.z.remove(k);
+            r.wander.remove(k);
+            k = k.saturating_sub(1).max(1);
+        } else {
+            k += 1;
+        }
+    }
+}
+
 #[inline]
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     crate::core::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]))

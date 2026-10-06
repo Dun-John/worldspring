@@ -617,7 +617,7 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, bi: usize) -> In
         let prog = program(arch, z.min(ROOF), top, key);
         let mut lvl = match (&ground_pre, z) {
             (Some(g), 0) => g.clone(),
-            (_, TOWER_TOP) => tower_tops(nx, ny, keep_tower_squares(nx, ny), stairs, &mut rng),
+            (_, TOWER_TOP) => tower_tops(&inside, nx, ny, keep_tower_squares(nx, ny), stairs, &mut rng),
             _ => layout_level(&inside, nx, ny, &prog, stairs, front, z == 0, arch, &ext_free, &mut rng),
         };
         // The roof is one storey above the top floor, the tower tops one above that.
@@ -724,16 +724,22 @@ fn pub_stairs(lvl: &Level, nx: usize, ny: usize) -> Option<[usize; 4]> {
     best.map(|b| b.1)
 }
 
-/// The tops of a keep's four corner towers: a battlemented square each (no main stairs).
-fn tower_tops(nx: usize, ny: usize, t: usize, st: [usize; 4], rng: &mut Pcg32) -> Level {
+/// The tops of a keep's four corner towers: a battlemented square each (no main stairs), on
+/// the footprint (a corner the footprint cuts off has no tower, nor its spiral stair).
+fn tower_tops(inside: &[bool], nx: usize, ny: usize, t: usize, st: [usize; 4], rng: &mut Pcg32) -> Level {
     let mut cells = vec![-1i16; nx * ny];
     let mut rooms = Vec::new();
-    for (cx, cy) in [(0, 0), (nx - t, 0), (0, ny - t), (nx - t, ny - t)] {
+    for ((cx, cy), (ki, kj)) in [(0, 0), (nx - t, 0), (0, ny - t), (nx - t, ny - t)].into_iter().zip([(0, 0), (nx - 1, 0), (0, ny - 1), (nx - 1, ny - 1)]) {
+        if !inside[kj * nx + ki] {
+            continue;
+        }
         let id = rooms.len() as i16;
         rooms.push(Room { kind: "tower top", squares: 0, raise_ft: 0.0, center: [0.0; 2] });
         for j in cy..cy + t {
             for i in cx..cx + t {
-                cells[j * nx + i] = id;
+                if inside[j * nx + i] {
+                    cells[j * nx + i] = id;
+                }
             }
         }
     }
@@ -854,6 +860,38 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
                     let in_pit = i >= pit.x && i < pit.x + pit.w && j >= pit.y && j < pit.y + pit.h;
                     let on_stairs = i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3];
                     cells[j * nx + i] = if in_pit && !on_stairs { 1 } else { 0 };
+                }
+            }
+        }
+        // On an odd footprint the pit can cut the stands in two (or the stands the pit): each
+        // smaller piece joins the other room, so both stay one room each.
+        for _ in 0..2 {
+            let mut comp = vec![usize::MAX; nx * ny];
+            let mut sizes: Vec<(i16, usize)> = Vec::new();
+            for k0 in 0..nx * ny {
+                if cells[k0] < 0 || comp[k0] != usize::MAX {
+                    continue;
+                }
+                let (id, room) = (sizes.len(), cells[k0]);
+                let (mut stack, mut n) = (vec![k0], 0);
+                comp[k0] = id;
+                while let Some(k) = stack.pop() {
+                    n += 1;
+                    let (i, j) = (k % nx, k / nx);
+                    for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                        if a < nx && b < ny && cells[b * nx + a] == room && comp[b * nx + a] == usize::MAX {
+                            comp[b * nx + a] = id;
+                            stack.push(b * nx + a);
+                        }
+                    }
+                }
+                sizes.push((room, n));
+            }
+            let main = |room: i16| (0..sizes.len()).filter(|&c| sizes[c].0 == room).max_by_key(|&c| (sizes[c].1, std::cmp::Reverse(c)));
+            let keep = [main(0), main(1)];
+            for k in 0..nx * ny {
+                if cells[k] >= 0 && Some(comp[k]) != keep[cells[k] as usize] {
+                    cells[k] = 1 - cells[k];
                 }
             }
         }

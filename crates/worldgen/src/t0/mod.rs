@@ -308,6 +308,7 @@ impl T0 {
             if let Some((pts, z, wander)) = crate::lod::roads::unweave(&curve, &rivers, cell, &|x, y| wet(x, y), &belts) {
                 (r.pts, r.z, r.wander) = (pts, z, wander);
             }
+            roads::tidy(r);
         }
         let (map_w, map_h) = ((w - 1) as f64 * cell, (h - 1) as f64 * cell);
         let road_net = RoadNet::new(

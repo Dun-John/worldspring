@@ -431,7 +431,17 @@ impl Site<'_> {
             return false;
         }
         let (lo, hi) = self.relief(poly);
-        hi - lo < 6.0 && poly.iter().all(|p| !self.wet(*p))
+        hi - lo < 6.0 && self.dry_outline(poly, 10.0)
+    }
+    /// No point of the outline (every `step` ft or less) on water: a channel at least `step`
+    /// wide cannot cross the polygon unseen.
+    fn dry_outline(&self, poly: &[P], step: f64) -> bool {
+        let m = poly.len();
+        (0..m).all(|k| {
+            let (a, b) = (poly[k], poly[(k + 1) % m]);
+            let n = (dist(a, b) / step).ceil().max(1.0) as usize;
+            (0..n).all(|j| !self.wet(lerp(a, b, j as f64 / n as f64)))
+        })
     }
     /// Lowest and highest ground over a polygon (corners, edge midpoints, centre).
     fn relief(&self, poly: &[P]) -> (f64, f64) {
@@ -606,6 +616,7 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
         village(&site, s, r, &road_ends, &mut rng, &mut l);
     } else {
         town(&site, s, r, &road_ends, &mut rng, &mut l);
+        walls_off_river(&site, &mut l);
     }
     drop_walled_in(&mut l);
     let on_water = s.coastal || s.river || !site.river.is_empty();
@@ -966,23 +977,64 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
             }
         }
     }
-    // Gates: the wall corner nearest each incoming road, never right next to another gate.
-    // Each road gets its own gate: the wall corner nearest its end, never next to another
-    // gate. `gate_of[i]` is the gate for road end i (roads that find none share the nearest).
+    // Gates: each road gets its own, never next to another gate: the wall corner (or, for a
+    // road that comes in where the wall leaves the waterfront open, a corner of the built
+    // edge, from which a main street runs) its approach reaches most cheaply: short, little
+    // over water, and not through the town. `gate_of[i]` is the gate for road end i (roads
+    // that find none share the nearest).
+    let heading_of: Vec<Option<P>> = ends.iter().map(|(e, _)| site.road_heading(*e)).collect();
+    let town_faces: Vec<([f64; 4], Vec<P>)> = (0..n_inner)
+        .filter(|&i| usable(i))
+        .map(|i| {
+            let pts = mesh.face_pts(i);
+            let bb = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            (bb, pts)
+        })
+        .collect();
+    let in_town = |p: P| town_faces.iter().any(|(bb, poly)| p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && contains(poly, p));
+    // What the approach from road end k to a gate costs: its length, plus 4× the stretch over
+    // water (a bridge), plus 20× the stretch through the town on land (not counting its last
+    // 40 ft).
+    let way_cost = |k: usize, g: P| {
+        let curve = approach_curve(ends[k].0, g, heading_of[k]);
+        let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
+        let n = (total / 15.0).ceil().max(1.0) as usize;
+        let step = total / n as f64;
+        let samples: Vec<P> = (0..=n).map(|j| point_along(&curve, step * j as f64).0).collect();
+        let (mut wet, mut through) = (0.0, 0.0);
+        for p in &samples {
+            if site.wet(*p) {
+                wet += step;
+            } else if dist(*p, g) >= 40.0 && in_town(*p) {
+                through += step;
+            }
+        }
+        total + 4.0 * wet + 20.0 * through
+    };
+    // Corners of the built edge: town corners next to the outskirts, the water, or a corner in
+    // the river (town patches reach the channel's centre line).
+    let edge_vertices: Vec<usize> = (0..mesh.pos.len())
+        .filter(|&v| {
+            !site.near_river(mesh.pos[v], 0.0)
+                && vf[v].iter().any(|&f| usable(f))
+                && (vf[v].iter().any(|&f| !usable(f)) || adj_vertices(&mesh, v).iter().any(|&u| site.near_river(mesh.pos[u], 0.0)))
+        })
+        .collect();
     let mut gates: Vec<usize> = Vec::new();
     let mut gate_of: Vec<Option<usize>> = Vec::new();
-    for (e, _) in &ends {
+    for (k, (e, _)) in ends.iter().enumerate() {
         let mut cands: Vec<usize> = ring.iter().copied().filter(|v| !pinned[*v]).collect();
-        // Nearest first, but a gate the road would have to cross water to reach comes last.
-        let dry_way = |v: usize| {
-            let g = mesh.pos[v];
-            let n = (dist(*e, g) / 20.0).ceil().max(1.0) as usize;
-            (0..=n).all(|k| !site.wet(lerp(*e, g, k as f64 / n as f64)))
-        };
-        cands.sort_by(|&p, &q| dry_way(q).cmp(&dry_way(p)).then(dist(mesh.pos[p], *e).total_cmp(&dist(mesh.pos[q], *e))).then(p.cmp(&q)));
+        cands.sort_by(|&p, &q| dist(mesh.pos[p], *e).total_cmp(&dist(mesh.pos[q], *e)).then(p.cmp(&q)));
         let next_to_gate = |v: usize, gates: &[usize]| ring_nb.get(&v).is_some_and(|nb| nb.iter().any(|x| gates.contains(x)));
-        match cands.iter().take(6).find(|&&v| !gates.contains(&v) && !next_to_gate(v, &gates)) {
-            Some(&g) => {
+        // The nearest few wall corners, and (costing 150 ft more: a wall gate is preferred) the
+        // nearest corners of the built edge; the cheapest way in wins.
+        let mut options: Vec<(f64, usize)> = cands.iter().copied().filter(|&v| !gates.contains(&v) && !next_to_gate(v, &gates)).take(8).map(|v| (way_cost(k, mesh.pos[v]), v)).collect();
+        let mut edge: Vec<usize> = edge_vertices.iter().copied().filter(|v| !gates.contains(v) && !ring.contains(v)).collect();
+        edge.sort_by(|&p, &q| dist(mesh.pos[p], *e).total_cmp(&dist(mesh.pos[q], *e)).then(p.cmp(&q)));
+        options.extend(edge.into_iter().take(12).map(|v| (way_cost(k, mesh.pos[v]) + 150.0, v)));
+        let pick = options.iter().min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|o| o.1);
+        match pick {
+            Some(g) => {
                 gates.push(g);
                 gate_of.push(Some(g));
             }
@@ -1186,32 +1238,27 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
         }
         l.roads.push((drawn, 4, 18.0));
     }
-    // Each road continues from where it ends to its gate: a curve that carries on the way the
-    // road was heading and arrives square to the town edge.
+    // Each road continues from where it ends to its gate (`approach_curve`).
     for (k, (e, class)) in ends.iter().enumerate() {
         if let Some(Some(g)) = gate_of.get(k) {
             let gp = mesh.pos[*g];
             let span = dist(*e, gp);
             if span > 1.0 {
-                let heading = site.road_heading(*e).unwrap_or_else(|| mul(sub(gp, *e), 1.0 / span));
-                let outward = mul(gp, 1.0 / len(gp).max(1e-9));
-                let (c1, c2) = (add(*e, mul(heading, 0.4 * span)), add(gp, mul(outward, 0.35 * span)));
-                let n = (span / 40.0).ceil().clamp(2.0, 24.0) as usize;
-                let curve: Vec<P> = (0..=n)
-                    .map(|j| {
-                        let t = j as f64 / n as f64;
-                        let u = 1.0 - t;
-                        add(add(mul(*e, u * u * u), mul(c1, 3.0 * u * u * t)), add(mul(c2, 3.0 * u * t * t), mul(gp, t * t * t)))
-                    })
-                    .collect();
+                let curve = approach_curve(*e, gp, heading_of[k]);
                 let width = [24.0, 16.0, 10.0][(*class as usize).min(2)];
-                // Where the approach crosses the river it goes over a bridge.
+                // Where the approach crosses the river it goes straight over a bridge: the
+                // wet stretch of the curve becomes the deck's line, bank to bank.
                 let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
                 let steps = (total / 5.0).ceil().max(1.0) as usize;
                 let samples: Vec<P> = (0..=steps).map(|j| point_along(&curve, total * j as f64 / steps as f64).0).collect();
+                let mut straight: Vec<P> = Vec::new();
                 let mut j = 0;
                 while j < samples.len() {
                     if !site.near_river(samples[j], 0.0) {
+                        // One point in eight (40 ft) where it runs on land, and its ends.
+                        if j % 8 == 0 || j + 1 == samples.len() || site.near_river(samples[(j + 1).min(samples.len() - 1)], 0.0) {
+                            straight.push(samples[j]);
+                        }
                         j += 1;
                         continue;
                     }
@@ -1220,6 +1267,10 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                         j += 1;
                     }
                     let (a, b) = (samples[start.saturating_sub(1)], samples[(j + 1).min(samples.len() - 1)]);
+                    if straight.last().is_none_or(|p| dist(*p, a) > 1e-9) {
+                        straight.push(a);
+                    }
+                    straight.push(b);
                     let span = dist(a, b);
                     if span > 1.0 {
                         let u = mul(sub(b, a), 1.0 / span);
@@ -1229,9 +1280,29 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                         let (fwd, back) = (site.dry_reach(m, u, deck, 1.0, 0.5 * span) + 8.0, site.dry_reach(m, u, deck, -1.0, 0.5 * span) + 8.0);
                         l.bridges.push(rect(add(m, mul(u, 0.5 * (fwd - back))), u, fwd + back, deck));
                     }
-                    j += 1;
+                    j += 2;
                 }
-                l.roads.push((curve, *class, width));
+                straight.dedup_by(|a, b| dist(*a, *b) < 1e-9);
+                let curve = if straight.len() >= 2 { straight } else { curve };
+                let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
+                let samples: Vec<P> = (0..=steps).map(|j| point_along(&curve, total * j as f64 / steps as f64).0).collect();
+                // Once it is in the town (on land, short of the gate itself) the road is a
+                // town street, paved like the main streets.
+                match samples.iter().position(|p| dist(*p, gp) >= 40.0 && !site.wet(*p) && in_town(*p)) {
+                    Some(entry) if entry > 0 => {
+                        let at = total * entry as f64 / steps as f64;
+                        let mut acc = 0.0;
+                        let (mut outside, mut inside) = (vec![curve[0]], vec![samples[entry]]);
+                        for w in curve.windows(2) {
+                            acc += dist(w[0], w[1]);
+                            if acc < at { outside.push(w[1]) } else { inside.push(w[1]) }
+                        }
+                        outside.push(samples[entry]);
+                        l.roads.push((outside, *class, width));
+                        l.roads.push((inside, 4, width));
+                    }
+                    _ => l.roads.push((curve, *class, width)),
+                }
             }
         }
     }
@@ -1510,7 +1581,13 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                 let ev = mul(sub(b, a), 1.0 / el);
                 let inward = if ccw { [-ev[1], ev[0]] } else { [ev[1], -ev[0]] };
                 let o = mul(inward, 0.5 * d[e]);
-                l.roads.push((vec![add(a, o), add(b, o)], 3, d[e] + 1.0));
+                // Not where the river cuts across the strip.
+                let (p, q) = (add(a, o), add(b, o));
+                let n = (el / 5.0).ceil() as usize;
+                if (0..=n).any(|j| site.near_river(lerp(p, q, j as f64 / n as f64), 0.5 * d[e])) {
+                    continue;
+                }
+                l.roads.push((vec![p, q], 3, d[e] + 1.0));
             }
         }
         let block = inset(&c.pts, &d);
@@ -2409,7 +2486,7 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
     split_field(block, 67_600.0 * (1.0 + spread), rng, &mut plots, 0);
     for plot in plots {
         let f = clean(&chamfer(&plot, 17.0));
-        if f.len() < 3 || area(&f).abs() < 2_000.0 || site.wet(centroid(&f)) || f.iter().any(|p| site.wet(*p)) || site.grade(&f) > 0.08 {
+        if f.len() < 3 || area(&f).abs() < 2_000.0 || site.wet(centroid(&f)) || !site.dry_outline(&f, 8.0) || site.grade(&f) > 0.08 {
             continue;
         }
         if rng.next_f64() < 0.2 {
@@ -2657,7 +2734,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
         split_field(&cell, 20_000.0 * (1.0 + spread), rng, &mut plots, 0);
         for plot in plots {
             let f = clean(&chamfer(&plot, 10.0));
-            if f.len() >= 3 && area(&f).abs() > 1_500.0 && !site.wet(centroid(&f)) && f.iter().all(|p| !site.wet(*p)) {
+            if f.len() >= 3 && area(&f).abs() > 1_500.0 && !site.wet(centroid(&f)) && site.dry_outline(&f, 8.0) {
                 have += area(&f).abs();
                 l.fields.push(f);
             }
@@ -2788,6 +2865,83 @@ fn polar_pt(d: f64, a: f64) -> P {
     [d * libm::cos(a), d * libm::sin(a)]
 }
 
+/// The street from a road's end `e` to its gate `g` (local coords): a cubic that carries on
+/// the way the road was heading and arrives square to the town edge, each only where that
+/// leads towards the other end (else it heads straight there: no loops or doubling back).
+fn approach_curve(e: P, g: P, heading: Option<P>) -> Vec<P> {
+    let span = dist(e, g);
+    let into = mul(sub(g, e), 1.0 / span.max(1e-9));
+    let start = heading.filter(|h| dot(*h, into) > 0.3).unwrap_or(into);
+    let inward = mul(g, -1.0 / len(g).max(1e-9));
+    let end = if dot(inward, into) > 0.3 { inward } else { into };
+    let (c1, c2) = (add(e, mul(start, 0.4 * span)), sub(g, mul(end, 0.35 * span)));
+    let n = (span / 40.0).ceil().clamp(2.0, 24.0) as usize;
+    (0..=n)
+        .map(|j| {
+            let t = j as f64 / n as f64;
+            let u = 1.0 - t;
+            add(add(mul(e, u * u * u), mul(c1, 3.0 * u * u * t)), add(mul(c2, 3.0 * u * t * t), mul(g, t * t * t)))
+        })
+        .collect()
+}
+
+/// Walls end at the bank: wall runs are cut where they cross a river channel (the water is
+/// the defence there), each cut end gets a tower on the bank, and towers standing in the
+/// channel go.
+fn walls_off_river(site: &Site, l: &mut Layout) {
+    if site.river.is_empty() {
+        return;
+    }
+    let wet = |p: P| site.near_river(p, 3.0);
+    let mut walls: Vec<Vec<P>> = Vec::new();
+    for w in std::mem::take(&mut l.walls) {
+        let mut cur: Vec<P> = Vec::new();
+        for (k, seg) in w.windows(2).enumerate() {
+            let (a, b) = (seg[0], seg[1]);
+            if k == 0 && !wet(a) {
+                cur.push(a);
+            }
+            let n = (dist(a, b) / 5.0).ceil().max(1.0) as usize;
+            let mut prev = a;
+            for j in 1..=n {
+                let p = lerp(a, b, j as f64 / n as f64);
+                let (was, is) = (wet(prev), wet(p));
+                if was != is {
+                    // The bank between the two samples, by bisection.
+                    let (mut lo, mut hi) = (prev, p);
+                    for _ in 0..6 {
+                        let m = lerp(lo, hi, 0.5);
+                        if wet(m) == was { lo = m } else { hi = m }
+                    }
+                    let edge = if was { hi } else { lo };
+                    if is {
+                        cur.push(edge);
+                        if cur.len() >= 2 {
+                            l.towers.push(edge);
+                            walls.push(std::mem::take(&mut cur));
+                        }
+                        cur.clear();
+                    } else {
+                        l.towers.push(edge);
+                        cur.push(edge);
+                    }
+                }
+                if j == n && !is {
+                    cur.push(b);
+                }
+                prev = p;
+            }
+        }
+        if cur.len() >= 2 {
+            walls.push(cur);
+        }
+    }
+    walls.retain(|w| w.windows(2).map(|s| dist(s[0], s[1])).sum::<f64>() > 10.0);
+    l.walls = walls;
+    l.towers.retain(|t| !site.near_river(*t, 2.0));
+    l.gate_towers.retain(|t| !site.near_river(*t, 2.0));
+}
+
 /// Point and unit direction `at` ft along a polyline.
 fn point_along(pts: &[P], at: f64) -> (P, P) {
     let mut acc = 0.0;
@@ -2872,7 +3026,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         let c = [rad * libm::cos(a), rad * libm::sin(a)];
         let house = rect(c, [-libm::sin(a), libm::cos(a)], 30.0, 20.0);
         let clear = l.buildings.iter().all(|b| dist(centroid(&b.poly), c) > 28.0);
-        if clear && (site.buildable(&house) || k > 300) {
+        if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
             l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None });

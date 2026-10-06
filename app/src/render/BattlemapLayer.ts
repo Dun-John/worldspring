@@ -56,6 +56,8 @@ interface ChunkView {
   roofGeometry: Geometry | null;
   /** The grid over bridge and pier decks, shown and hidden with the ground's. */
   deckGrid: Graphics;
+  /** Bridge and pier decks (and their grid): opaque whenever the ground is drawn. */
+  decks: Container;
   atmo: Mesh<Geometry, Shader> | null;
   atmoUniforms: UniformGroup | null;
   atmosphere: number;
@@ -494,7 +496,7 @@ export class BattlemapLayer {
       for (const p of c.parts) {
         p.position.set(sx, sy);
         p.scale.set(pxPerSq / PX);
-        p.alpha = alpha;
+        p.alpha = p === c.decks ? 1 : alpha;
       }
       const u = c.uniforms.uniforms;
       u.uAlpha = 1;
@@ -674,7 +676,7 @@ export class BattlemapLayer {
       for (const [key, pc] of customs) if ((i === 1 && key.endsWith('/0')) || (i === 3 && key.endsWith('/1'))) holder.addChild(pc);
       if (i === 0) holder.addChild(daisG);
       if (i === 2) {
-        holder.addChild(bridgeG, gridG, structG);
+        holder.addChild(structG);
         if (roofMesh) holder.addChild(roofMesh);
         holder.addChild(battleG);
       }
@@ -682,6 +684,12 @@ export class BattlemapLayer {
       this.layers[i].addChild(holder);
       return holder;
     });
+    // Bridge and pier decks carry the road drawn on the ground: they show as soon as the
+    // ground does (the rest fades in), under the shadows and walls.
+    const decks = new Container();
+    decks.addChild(bridgeG, gridG);
+    this.layers[2].addChildAt(decks, this.layers[2].getChildIndex(parts[2]));
+    parts.push(decks);
     let atmo: Mesh<Geometry, Shader> | null = null;
     let atmoUniforms: UniformGroup | null = null;
     if (atmosphere > 0) {
@@ -715,6 +723,7 @@ export class BattlemapLayer {
       textures,
       roofGeometry,
       deckGrid: gridG,
+      decks,
       atmo,
       atmoUniforms,
       atmosphere,

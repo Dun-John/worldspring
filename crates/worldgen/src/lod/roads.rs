@@ -40,18 +40,29 @@ impl RoadCurve {
         RoadCurve { class, pts, z, wander, seed, s }
     }
 
-    /// Point on segment `k` at parameter `t`: Catmull-Rom through the control points, offset
-    /// along the normal by the wander (tapered to zero at both ends so junctions meet).
+    /// Point on segment `k` at parameter `t`: centripetal Catmull-Rom through the control
+    /// points (no loops or cusps where a short segment follows a long one), offset along the
+    /// normal by the wander (tapered to zero at both ends so junctions meet).
     pub fn eval(&self, k: usize, t: f64, spacing: f64, cell_ft: f64) -> RoadPoint {
         let n = self.pts.len();
         let p = |i: isize| self.pts[i.clamp(0, n as isize - 1) as usize];
         let ki = k as isize;
         let (p0, p1, p2, p3) = (p(ki - 1), p(ki), p(ki + 1), p(ki + 2));
+        // Knot intervals: the square roots of the chord lengths (zero past either end).
+        let chord = |i: usize| if i >= 1 && i < n { crate::core::sqrt(self.s[i] - self.s[i - 1]) } else { 0.0 };
+        let (d0, d1, d2) = (chord(k), chord(k + 1).max(1e-9), chord(k + 2));
+        // Hermite tangents (per unit t) at p1 and p2, through a–b–c with knot intervals da, db;
+        // at an end (a repeated point) the uniform one.
+        let tangent = |a: f64, b: f64, c: f64, da: f64, db: f64| {
+            if da < 1e-9 || db < 1e-9 { 0.5 * (c - a) } else { d1 * ((b - a) / da - (c - a) / (da + db) + (c - b) / db) }
+        };
+        let m1 = [tangent(p0[0], p1[0], p2[0], d0, d1), tangent(p0[1], p1[1], p2[1], d0, d1)];
+        let m2 = [tangent(p1[0], p2[0], p3[0], d1, d2), tangent(p1[1], p2[1], p3[1], d1, d2)];
         let (t2, t3) = (t * t, t * t * t);
-        let cr = |a: f64, b: f64, c: f64, d: f64| 0.5 * (2.0 * b + (c - a) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (3.0 * b - a - 3.0 * c + d) * t3);
-        let dcr = |a: f64, b: f64, c: f64, d: f64| 0.5 * ((c - a) + 2.0 * (2.0 * a - 5.0 * b + 4.0 * c - d) * t + 3.0 * (3.0 * b - a - 3.0 * c + d) * t2);
-        let base = [cr(p0[0], p1[0], p2[0], p3[0]), cr(p0[1], p1[1], p2[1], p3[1])];
-        let (tx, ty) = (dcr(p0[0], p1[0], p2[0], p3[0]), dcr(p0[1], p1[1], p2[1], p3[1]));
+        let (h00, h10, h01, h11) = (2.0 * t3 - 3.0 * t2 + 1.0, t3 - 2.0 * t2 + t, 3.0 * t2 - 2.0 * t3, t3 - t2);
+        let (g00, g10, g01, g11) = (6.0 * t2 - 6.0 * t, 3.0 * t2 - 4.0 * t + 1.0, 6.0 * t - 6.0 * t2, 3.0 * t2 - 2.0 * t);
+        let base = [h00 * p1[0] + h10 * m1[0] + h01 * p2[0] + h11 * m2[0], h00 * p1[1] + h10 * m1[1] + h01 * p2[1] + h11 * m2[1]];
+        let (tx, ty) = (g00 * p1[0] + g10 * m1[0] + g01 * p2[0] + g11 * m2[0], g00 * p1[1] + g10 * m1[1] + g01 * p2[1] + g11 * m2[1]);
         let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-9);
         let nrm = [-ty / tl, tx / tl];
         let s = self.s[k] + (self.s[k + 1] - self.s[k]) * t;

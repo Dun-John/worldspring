@@ -84,6 +84,9 @@ read it at the start of a session) and the original plan (milestones M0–M9, al
   height change between consecutive levels at fixed points (shoreline zoom consistency).
 - `cargo run --release -p worldgen --example town -- <seed> <out-prefix> [index...]` — settlement layouts as
   SVG + stats/timings (default: metropolis, largest city, a town, a village).
+- `cargo run --release -p worldgen --example roadcheck -- [seed...]` — roads, rivers and settlements QA (default seeds
+  1 2 3): walls, towers, buildings, fields and streets over water, approaches through towns or turning sharply, sharp
+  turns on network roads; counts plus the worst places (world ft). `TOP=n` lists more, `ROAD=i` prints a road's points.
 - `cargo run --release -p worldgen --example placecheck` — settlement placement stats for seed 1 (distance of ports
   to the real shoreline, roads at settlements, capital's road ends vs gates, fishing villages and their piers).
 - `cargo run --release -p worldgen --example interior -- <seed> <settlement> <building-index|function>...` —
