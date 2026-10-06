@@ -1648,13 +1648,15 @@ fn connect(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [usize; 
         let (p, q) = edge_seg(x, y, vert);
         doors.push(Door { a: p, b: q, kind: "door", rooms: [a, b] });
     }
-    // A room still more than one room from the circulation gets a door to its neighbour
+    // A room still more than one room from the circulation (here a great or mess hall, and a
+    // guardroom, the guards' way through a keep, count too) gets a door to its neighbour
     // nearest it (rooms between two others, corner towers).
-    if (0..n).any(circ) {
+    let hub = |r: usize| circ(r) || matches!(rooms[r].kind, "great hall" | "mess hall" | "guardroom");
+    if (0..n).any(hub) {
         for _ in 0..n {
             let mut hops = vec![usize::MAX; n];
             let mut q = std::collections::VecDeque::new();
-            for r in (0..n).filter(|&r| circ(r)) {
+            for r in (0..n).filter(|&r| hub(r)) {
                 hops[r] = 0;
                 q.push_back(r);
             }

@@ -211,6 +211,15 @@ fn main() {
         let layout_s = t.elapsed().as_secs_f64();
         // Network roads: turns sharper than 75° between 40-ft chords; and the join with each approach.
         let mut kinks = Tally::default();
+        if let Some(near) = std::env::var("NEAR").ok() {
+            let v: Vec<f64> = near.split(',').filter_map(|x| x.parse().ok()).collect();
+            for (ri, rc) in t0.roads.roads.iter().enumerate() {
+                let (a, b) = (rc.pts[0], *rc.pts.last().unwrap());
+                if [a, b].iter().any(|p| dist(*p, [v[0], v[1]]) < v[2]) {
+                    println!("  road {ri} {:?} ({:.0}, {:.0}) -> ({:.0}, {:.0}) {:.0} ft", rc.class, a[0], a[1], b[0], b[1], rc.s.last().unwrap());
+                }
+            }
+        }
         if let Some(ri) = std::env::var("ROAD").ok().and_then(|v| v.parse::<usize>().ok()) {
             let rc = &t0.roads.roads[ri];
             for (k, p) in rc.pts.iter().enumerate() {

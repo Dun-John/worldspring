@@ -677,8 +677,9 @@ fn interiors_guarantee() {
                     let reached = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && seen[k]);
                     assert!(!open || reached, "{tag} {}: the {} is unreachable", lv.name, room.kind);
                 }
-                // Floors with corridors: no room is reached through more than one other room.
-                let circ = |r: usize| matches!(lv.rooms[r].kind, "hall" | "corridor" | "landing" | "great hall" | "mess hall");
+                // Floors with corridors: no room is reached through more than one other room (a
+                // guardroom is a way through, as for cells).
+                let circ = |r: usize| matches!(lv.rooms[r].kind, "hall" | "corridor" | "landing" | "great hall" | "mess hall" | "guardroom");
                 if lv.rooms.len() >= 8 && (0..lv.rooms.len()).any(circ) {
                     let mut hops = vec![usize::MAX; lv.rooms.len()];
                     let mut q = std::collections::VecDeque::new();
