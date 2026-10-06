@@ -130,7 +130,8 @@ export function drawFord(g: Graphics, s: Shape) {
 
 /**
  * A ferry (`ShapeKind::Ferry`): its line runs between the ends of a timber jetty out from each
- * bank; a rope on posts across, and the raft (`size` wide) on it a quarter of the way over.
+ * bank (24 ft long, as `battlemap::JETTY_FT`); a rope on posts across, and the raft (`size`
+ * wide) at the third point.
  */
 export function drawFerry(g: Graphics, s: Shape) {
   const [x0, y0, x1, y1] = s.pts;
@@ -160,11 +161,10 @@ export function drawFerry(g: Graphics, s: Shape) {
   g.stroke({ width: FT * 1.1, color: INK });
   rope(0, 0);
   g.stroke({ width: FT * 0.5, color: 0xc9a66b });
-  // The raft: logs lashed under a plank deck, a quarter of the way across.
-  const t = 0.25 + rnd() * 0.1;
+  // The raft (where the battlemap puts its planks: the shape's third point, on the rope).
   const rw = Math.max(s.size * 1.2, FT * 14);
   const rl = rw * 1.6;
-  const [cx, cy] = [x0 + ux * len * t - uy * sag * 4 * t * (1 - t), y0 + uy * len * t + ux * sag * 4 * t * (1 - t)];
+  const [cx, cy] = s.pts.length >= 6 ? [s.pts[4], s.pts[5]] : [x0 + ux * len * 0.3, y0 + uy * len * 0.3];
   const f = frameFrom(cx - ux * rl * 0.5, cy - uy * rl * 0.5, ux, uy, rl, rw);
   const corners = [atF(f, 0, 0), atF(f, rl, 0), atF(f, rl, rw), atF(f, 0, rw)].flat();
   g.poly(corners.map((v, i) => v + FT * (i % 2 ? 1.6 : 1.6))).fill({ color: 0x000000, alpha: 0.28 });

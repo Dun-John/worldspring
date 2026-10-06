@@ -113,8 +113,13 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     // Network roads are sampled finely for carving; the renderer only needs about one vertex
     // per half sample of this level (far fewer capsules at continent zoom).
     let cell = 0.5 * size / TILE_N as f64;
-    // Over a ferry's river the road is the ferry's line (class 5, drawn dashed).
-    let ferries: Vec<_> = crate::lod::roads::river_crossings(&tile.roads, &tile.pieces).into_iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Ferry).collect();
+    // Over a ferry's river the road is the ferry's line (class 5, drawn dashed), from the level
+    // where a crossing is a few samples across.
+    let ferries: Vec<_> = if key.level >= FERRY_MIN_LEVEL {
+        crate::lod::roads::river_crossings(&tile.roads, &tile.pieces).into_iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Ferry).collect()
+    } else {
+        Vec::new()
+    };
     let class_at = |r: &crate::lod::roads::RoadPiece, p: [f64; 2]| {
         if ferries.iter().any(|f| f.class == r.class && {
             let (a, x) = f.local(p);
@@ -164,6 +169,9 @@ fn road_bridges(tile: &TerrainOut) -> Vec<Vec<[f64; 2]>> {
         .map(|c| crate::town::rect(c.at, c.u, c.w / c.sin + 24.0, c.class.width_ft() + 4.0))
         .collect()
 }
+
+/// Ferry lines are drawn from this level (40-ft samples).
+const FERRY_MIN_LEVEL: u8 = 10;
 
 /// Settlements appear from this level (blocks), buildings from `BUILDING_MIN_LEVEL`.
 pub const SITE_MIN_LEVEL: u8 = 9;

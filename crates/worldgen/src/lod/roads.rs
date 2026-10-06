@@ -208,8 +208,16 @@ impl RiverCrossing {
 
 /// Every intersection of a road piece with a river piece's centre line.
 pub fn river_crossings(roads: &[RoadPiece], rivers: &[crate::lod::rivers::Piece]) -> Vec<RiverCrossing> {
+    let bbox = |pts: &mut dyn Iterator<Item = [f64; 2]>| pts.fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let apart = |a: &[f64; 4], b: &[f64; 4]| a[0] > b[2] || b[0] > a[2] || a[1] > b[3] || b[1] > a[3];
+    let river_boxes: Vec<[f64; 4]> = rivers.iter().map(|r| bbox(&mut r.pts.iter().map(|c| c.p))).collect();
     let mut out = Vec::new();
     for piece in roads {
+        let road_box = bbox(&mut piece.pts.iter().map(|c| c.p));
+        let near: Vec<&crate::lod::rivers::Piece> = rivers.iter().zip(&river_boxes).filter(|(_, b)| !apart(&road_box, b)).map(|(r, _)| r).collect();
+        if near.is_empty() {
+            continue;
+        }
         for rs in piece.pts.windows(2) {
             let (a, b) = (rs[0].p, rs[1].p);
             let (rx, ry) = (b[0] - a[0], b[1] - a[1]);
@@ -217,9 +225,13 @@ pub fn river_crossings(roads: &[RoadPiece], rivers: &[crate::lod::rivers::Piece]
             if rl < 1e-6 {
                 continue;
             }
-            for river in rivers {
+            let seg_box = [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])];
+            for river in &near {
                 for vs in river.pts.windows(2) {
                     let (c, d) = (vs[0].p, vs[1].p);
+                    if apart(&seg_box, &[c[0].min(d[0]), c[1].min(d[1]), c[0].max(d[0]), c[1].max(d[1])]) {
+                        continue;
+                    }
                     let (sx, sy) = (d[0] - c[0], d[1] - c[1]);
                     let den = rx * sy - ry * sx;
                     if den.abs() < 1e-9 {
@@ -263,20 +275,28 @@ pub fn pieces(net: &RoadNet, rect: [f64; 4], pad: f64, spacing: f64) -> Vec<Road
         }
         i += 1;
         let r = &net.roads[ri as usize];
-        let mut pts: Vec<RoadPoint> = Vec::new();
-        for k in k0 as usize..=k1 as usize {
-            let len = r.s[k + 1] - r.s[k];
-            // Enough points to follow the curve (bends, kinks) without over-sampling; levels
-            // too coarse to carve only need half their sample spacing.
-            let step = if spacing > CARVE_MAX_SPACING_FT { 0.5 * spacing } else { spacing.max(KINK_WAVELENGTH_FT / 12.0).min(net.cell_ft / 6.0) };
-            let n = (len / step).ceil().clamp(1.0, 512.0) as usize;
-            for j in 0..=n {
-                if j == 0 && !pts.is_empty() {
-                    continue;
-                }
-                pts.push(r.eval(k, j as f64 / n as f64, spacing, net.cell_ft));
+        // Enough points to follow the curve (bends, kinks) without over-sampling; levels too
+        // coarse to carve only need half their sample spacing. Samples sit at multiples of
+        // the step along the whole road (the same in every tile), plus the run's ends.
+        let step = if spacing > CARVE_MAX_SPACING_FT { 0.5 * spacing } else { spacing.max(KINK_WAVELENGTH_FT / 12.0).min(net.cell_ft / 6.0) };
+        let (k0, k1) = (k0 as usize, k1 as usize);
+        let (s0, s1) = (r.s[k0], r.s[k1 + 1]);
+        let mut pts: Vec<RoadPoint> = vec![r.eval(k0, 0.0, spacing, net.cell_ft)];
+        let mut k = k0;
+        let mut m = crate::core::floor(s0 / step) as i64 + 1;
+        loop {
+            let d = m as f64 * step;
+            if d >= s1 {
+                break;
             }
+            while k < k1 && r.s[k + 1] <= d {
+                k += 1;
+            }
+            let t = (d - r.s[k]) / (r.s[k + 1] - r.s[k]).max(1e-9);
+            pts.push(r.eval(k, t.clamp(0.0, 1.0), spacing, net.cell_ft));
+            m += 1;
         }
+        pts.push(r.eval(k1, 1.0, spacing, net.cell_ft));
         if pts.len() >= 2 {
             out.push(RoadPiece { class: r.class, pts });
         }
