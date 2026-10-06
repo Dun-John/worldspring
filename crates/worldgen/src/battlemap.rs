@@ -1293,10 +1293,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         if depth <= 0.0 {
             // The ground's own kind, under any keep-clear mark.
             match urb_h[(k / SQ + 1) * HS + k % SQ + 1] {
-                URBAN_PLAZA => chunk.surface[k] = if village { Surface::Grass } else { Surface::Cobble },
+                // A village green and a graveyard keep the ground round them (no odd patch
+                // in a forest); a town's plaza is paved.
+                URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
                 URBAN_STREET => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_FIELD => chunk.surface[k] = Surface::Field,
-                URBAN_GRAVEYARD => chunk.surface[k] = Surface::Grass,
                 URBAN_DECK => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_RUIN | URBAN_YARD => chunk.surface[k] = Surface::Dirt,
                 URBAN_WALL | URBAN_TOWER => chunk.surface[k] = Surface::Rock,
@@ -1317,7 +1318,16 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
     }
 
-    place_objects(&mut chunk, &biome, &slope, seed, gsx, gsy);
+    // Road squares (bridges and fords too) two squares round the chunk, and the chunk's
+    // streets: scatter keeps its footprint off them, across chunk edges too.
+    let road_near: Vec<bool> = (0..RN * RN)
+        .map(|h| {
+            let (i, j) = ((h % RN) as i64 - 2, (h / RN) as i64 - 2);
+            let inside = i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64;
+            tile.road_mask.get(sidx(i, j)).is_some_and(|&r| r != 0) || (inside && chunk.urban[j as usize * SQ + i as usize] == URBAN_STREET)
+        })
+        .collect();
+    place_objects(&mut chunk, &biome, &slope, &road_near, seed, gsx, gsy);
     place_town_props(&mut chunk, seed, gsx, gsy);
     // Ruins: broken wall segments along the old outlines, rubble inside. Keyed by world
     // position so a ruin across a chunk border breaks the same way in both chunks.
@@ -1563,7 +1573,10 @@ fn retier(c: &mut Chunk, sea: f64) {
     }
 }
 
-fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], seed: u64, gsx: i64, gsy: i64) {
+/// Side of `place_objects`' road grid: the chunk and two squares round it.
+const RN: usize = SQ + 4;
+
+fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[bool], seed: u64, gsx: i64, gsy: i64) {
     let grove_seed = hash2(seed, 0x6007, 2);
     // Each (biome, kind) pair has its own jittered global lattice; objects belong to the
     // chunk that contains them, so placement is identical whichever chunk is asked.
@@ -1602,15 +1615,26 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], seed: u64, gsx: 
                 if biome[k] != b || c.surface[k].is_road() || c.building[k] != 0 || c.urban[k] != 0 {
                     continue;
                 }
-                // Canopies and boulders keep clear of buildings (roofs stay visible).
-                let reach = crate::core::ceil(info(kind as u16).radius as f64 * 1.25) as i64;
-                let near_building = (-reach..=reach).any(|dy| {
+                // Canopies and boulders keep clear of buildings (roofs stay visible), and
+                // nothing overhangs a road or street: no square of one within the footprint.
+                let r = info(kind as u16).radius as f64;
+                let reach = crate::core::ceil(r * 1.25) as i64;
+                let (ox, oy) = (px - gsx as f64, py - gsy as f64);
+                let blocked = (-reach..=reach).any(|dy| {
                     (-reach..=reach).any(|dx| {
                         let (x, y) = (ix + dx, iy + dy);
-                        x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && c.building[y as usize * SQ + x as usize] != 0
+                        if x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && c.building[y as usize * SQ + x as usize] != 0 {
+                            return true;
+                        }
+                        if x < -2 || y < -2 || x >= SQ as i64 + 2 || y >= SQ as i64 + 2 || !road_near[(y + 2) as usize * RN + (x + 2) as usize] {
+                            return false;
+                        }
+                        let ex = (x as f64 - ox).max(ox - (x + 1) as f64).max(0.0);
+                        let ey = (y as f64 - oy).max(oy - (y + 1) as f64).max(0.0);
+                        ex * ex + ey * ey < 1.21 * r * r
                     })
                 });
-                if near_building {
+                if blocked {
                     continue;
                 }
                 // Groves and glades for trees (one shared field, so species mix in a grove);
@@ -1652,6 +1676,29 @@ fn dry(c: &Chunk, k: usize) -> bool {
 /// Where props may go: dry ground that is not a building, road bed or bridge.
 fn placeable(c: &Chunk, k: usize) -> bool {
     dry(c, k) && c.building[k] == 0 && c.urban[k] != URBAN_ENTRANCE && c.road_halo[(k / SQ + 1) * HS + k % SQ + 1] == 0
+}
+
+/// No road bed on this square or round it, nor a street round open ground (a rock or a bush
+/// here doesn't overhang the way; a town's props still stand by its streets).
+fn clear_of_roads(c: &Chunk, k: usize) -> bool {
+    let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+    (-1..=1).all(|dy| {
+        (-1..=1).all(|dx| {
+            let (nx, ny) = (x + dx, y + dy);
+            let inside = nx >= 0 && ny >= 0 && nx < SQ as i64 && ny < SQ as i64;
+            c.road_halo[(ny + 1) as usize * HS + (nx + 1) as usize] == 0 && !(inside && c.urban[k] == 0 && c.urban[ny as usize * SQ + nx as usize] == URBAN_STREET)
+        })
+    })
+}
+
+/// The squares of `all` clear of roads, else those off the road bed, else all of them.
+fn off_road_first(c: &Chunk, all: Vec<usize>) -> Vec<usize> {
+    let clear: Vec<usize> = all.iter().copied().filter(|&k| placeable(c, k) && clear_of_roads(c, k)).collect();
+    if !clear.is_empty() {
+        return clear;
+    }
+    let off_road: Vec<usize> = all.iter().copied().filter(|&k| placeable(c, k)).collect();
+    if off_road.is_empty() { all } else { off_road }
 }
 
 /// The 32x32 windows (top-left squares) whose dry ground is all one tier, leaving out mostly-water
@@ -1737,8 +1784,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 continue;
             }
             let all: Vec<usize> = (0..COVER_CELL * COVER_CELL).map(square).filter(|&k| dry(c, k)).collect();
-            let off_road: Vec<usize> = all.iter().copied().filter(|&k| placeable(c, k)).collect();
-            let cells = if off_road.is_empty() { all } else { off_road };
+            let cells = off_road_first(c, all);
             if cells.is_empty() {
                 continue;
             }
@@ -1776,8 +1822,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 }
                 let all: Vec<usize> =
                     (0..TIER_CELL * TIER_CELL).map(|q| (cy * TIER_CELL + q / TIER_CELL) * SQ + cx * TIER_CELL + q % TIER_CELL).filter(|&k| dry(c, k)).collect();
-                let off_road: Vec<usize> = all.iter().copied().filter(|&k| placeable(c, k)).collect();
-                let cells = if off_road.is_empty() { all } else { off_road };
+                let cells = off_road_first(c, all);
                 if cells.is_empty() {
                     continue;
                 }
@@ -2216,6 +2261,8 @@ fn plaza_features(
 /// Nearest dry, non-road square within a few squares (by ring), for roadside placements.
 fn nearest_verge(c: &Chunk, k: usize) -> Option<usize> {
     let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+    // The nearest square clear of the road, else the nearest one just off it.
+    let mut verge = None;
     for r in 1..=4i64 {
         for dy in -r..=r {
             for dx in -r..=r {
@@ -2229,12 +2276,15 @@ fn nearest_verge(c: &Chunk, k: usize) -> Option<usize> {
                 let nk = ny as usize * SQ + nx as usize;
                 let road_bed = c.road_halo[(nk / SQ + 1) * HS + nk % SQ + 1] != 0;
                 if !road_bed && c.building[nk] == 0 && c.water_level[nk] <= c.height[nk] {
-                    return Some(nk);
+                    if clear_of_roads(c, nk) {
+                        return Some(nk);
+                    }
+                    verge = verge.or(Some(nk));
                 }
             }
         }
     }
-    None
+    verge
 }
 
 /// Cover in town (streets, plazas) or on fields.

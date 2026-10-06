@@ -207,7 +207,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             for f in &l.fields {
                 push(f, 2);
             }
-            for p in &l.plazas {
+            // A village green is the ground round it, as on the battlemap; a town's plaza is paved.
+            for p in l.plazas.iter().filter(|_| l.tier != crate::t0::settle::Tier::Village) {
                 push(p, 1);
             }
             // A camp: its clearing, and its tents (as the battlemap's sprites lie).
