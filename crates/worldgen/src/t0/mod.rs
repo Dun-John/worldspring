@@ -333,6 +333,10 @@ impl T0 {
             let z = roads::round_corners(&r.pts, &r.z, 0.06 * cell, 0.05 * cell).1;
             (r.pts, r.wander) = roads::round_corners(&r.pts, &r.wander, 0.06 * cell, 0.05 * cell);
             r.z = z;
+            // The bends are in the points (`roads::follow_terrain`): no wander on top, which
+            // would ignore the rivers and the profile (and, where two roads were joined into one,
+            // swing at full strength round the joint).
+            r.wander.iter_mut().for_each(|w| *w = 0.0);
         }
         let (map_w, map_h) = ((w - 1) as f64 * cell, (h - 1) as f64 * cell);
         let road_net = RoadNet::new(

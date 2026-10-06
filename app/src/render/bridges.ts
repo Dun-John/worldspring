@@ -86,45 +86,32 @@ function frameFrom(x: number, y: number, ux: number, uy: number, len: number, wi
   return { ox: x - vx * wid * 0.5, oy: y - vy * wid * 0.5, ux, uy, vx, vy, len, wid };
 }
 
+/** River stones: wet, dark and mossy, as the bed shows through shallow water. */
+const WET_STONE = [0x5d5a4f, 0x77735f, 0x8d8a72];
+
 /**
- * A ford (`ShapeKind::Ford`): from bank to bank, flat stepping stones in a loose band as wide
- * as the road (`size`) across the shallows, a ripple of white water on their downstream sides.
+ * A ford (`ShapeKind::Ford`): its points are stepping stones (only where there is water, laid
+ * by the generator), flat and wet, some half under the water, a faint ripple round each.
  */
 export function drawFord(g: Graphics, s: Shape) {
-  const [x0, y0, x1, y1] = s.pts;
-  const len = Math.hypot(x1 - x0, y1 - y0) || 1;
-  const f = frameFrom(x0, y0, (x1 - x0) / len, (y1 - y0) / len, len, Math.max(s.size, FT * 4));
-  const rnd = rngAt(x0 + x1, y0 + y1);
-  const rows = Math.max(2, Math.round(len / (FT * 3.2)));
-  const per = Math.max(2, Math.round(f.wid / (FT * 3.0)));
-  const stones: [number, number, number, number][] = [];
-  for (let i = 0; i < rows; i++) {
-    for (let k = 0; k < per; k++) {
-      if (rnd() < 0.18) continue;
-      const a = ((i + 0.5) / rows) * len + (rnd() - 0.5) * FT * 0.9;
-      const b = ((k + 0.5) / per) * f.wid + (rnd() - 0.5) * FT * 0.9;
-      stones.push([a, b, FT * (1.2 + rnd() * 0.5), rnd() * Math.PI]);
-    }
-  }
-  // Wakes, then shadows, then the stones (lit from the north-west, ink outlined).
-  for (const [a, b, r] of stones) {
-    const [x, y] = atF(f, a, b);
-    g.ellipse(x + FT * 0.5, y + FT * 0.6, r * 1.25, r * 0.95).fill({ color: 0xffffff, alpha: 0.28 });
-  }
-  for (const [a, b, r] of stones) {
-    const [x, y] = atF(f, a, b);
-    g.ellipse(x + FT * 0.35, y + FT * 0.35, r, r * 0.8).fill({ color: 0x000000, alpha: 0.25 });
-  }
-  for (const [a, b, r, turn] of stones) {
-    const [x, y] = atF(f, a, b);
+  const n = s.pts.length / 2;
+  const rnd = rngAt(s.pts[0] + s.pts[n * 2 - 2], s.pts[1] + s.pts[n * 2 - 1]);
+  const stones: [number, number, number, number, boolean][] = [];
+  for (let i = 0; i < n; i++) stones.push([s.pts[i * 2], s.pts[i * 2 + 1], FT * (1.35 + rnd() * 0.5), rnd() * Math.PI, rnd() < 0.3]);
+  // Ripples, then the stones; one in three sits low, the water over its edges.
+  for (const [x, y, r] of stones) g.ellipse(x + FT * 0.25, y + FT * 0.35, r * 1.3, r * 1.05).stroke({ width: 1.5, color: 0xffffff, alpha: 0.28 });
+  for (const [x, y, r, turn, low] of stones) {
     const pts: number[] = [];
-    for (let j = 0; j < 7; j++) {
-      const t = turn + (j / 7) * Math.PI * 2;
-      const rr = r * (0.85 + 0.15 * Math.sin(j * 2.3 + turn * 3));
-      pts.push(x + Math.cos(t) * rr, y + Math.sin(t) * rr * 0.82);
+    for (let j = 0; j < 8; j++) {
+      const t = turn + (j / 8) * Math.PI * 2;
+      const rr = r * (0.82 + 0.18 * Math.sin(j * 2.1 + turn * 3));
+      pts.push(x + Math.cos(t) * rr, y + Math.sin(t) * rr * 0.8);
     }
-    g.poly(pts).fill(STONE[1]).stroke({ width: 1.8, color: INK });
-    g.ellipse(x + LX * r * 0.25, y + LY * r * 0.25, r * 0.55, r * 0.4).fill({ color: STONE[3], alpha: 0.7 });
+    const a = low ? 0.7 : 1.0;
+    g.poly(pts.map((v, i) => v + FT * (i % 2 ? 0.25 : 0.2))).fill({ color: 0x000000, alpha: 0.15 * a });
+    g.poly(pts).fill({ color: WET_STONE[1], alpha: a }).stroke({ width: 1.8, color: 0x2b2a24, alpha: 0.75 * a });
+    g.ellipse(x + LX * r * 0.25, y + LY * r * 0.25, r * 0.5, r * 0.35).fill({ color: WET_STONE[2], alpha: 0.6 * a });
+    if (rnd() < 0.4) g.ellipse(x - LX * r * 0.3, y - LY * r * 0.3, r * 0.35, r * 0.25).fill({ color: 0x5e6b3a, alpha: 0.45 * a });
   }
 }
 

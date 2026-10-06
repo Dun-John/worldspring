@@ -143,6 +143,8 @@ fn main() {
         let mut through = Tally::default();
         let mut over = Tally::default();
         let mut turns = Tally::default();
+        let mut bridge_x = Tally::default();
+        let mut pier_x = Tally::default();
         for i in 0..n_layouts {
             let l = worldgen::town::layout(&world, &t0, i);
             let name = if i < t0.settlements.len() { format!("{:?} {i}", l.tier) } else { format!("site {i}") };
@@ -177,6 +179,32 @@ fn main() {
                 if n > 0 {
                     let c = centroid(f);
                     fields.add(n as f64, format!("{name}: field over the river ({n} points) at ({:.0}, {:.0})", c[0], c[1]));
+                }
+            }
+            // Decks overlapping: bridges with bridges, piers with bridges or network roads.
+            let overlap = |a: &[P], b: &[P]| a.iter().any(|p| contains(b, *p)) || b.iter().any(|p| contains(a, *p)) || outline(a).iter().any(|p| contains(b, *p));
+            for (i, a) in l.bridges.iter().enumerate() {
+                for b in &l.bridges[i + 1..] {
+                    if overlap(a, b) {
+                        let c = centroid(a);
+                        bridge_x.add(1.0, format!("{name}: bridges overlap at ({:.0}, {:.0})", c[0], c[1]));
+                    }
+                }
+            }
+            for pier in &l.piers {
+                let c = centroid(pier);
+                if l.bridges.iter().any(|b| overlap(pier, b)) {
+                    pier_x.add(1.0, format!("{name}: pier on a bridge at ({:.0}, {:.0})", c[0], c[1]));
+                }
+                let on_road = t0.roads.segments_near([c[0] - 100.0, c[1] - 100.0, c[0] + 100.0, c[1] + 100.0], 0.0).iter().any(|&(ri, k)| {
+                    let rc = &t0.roads.roads[ri as usize];
+                    (0..=8).any(|j| {
+                        let q = rc.eval(k as usize, j as f64 / 8.0, 5.0, t0.cell_ft).p;
+                        outline(pier).iter().any(|p| dist(*p, q) < 0.5 * rc.class.width_ft() + 2.0)
+                    })
+                });
+                if on_road {
+                    pier_x.add(1.0, format!("{name}: pier on a network road at ({:.0}, {:.0})", c[0], c[1]));
                 }
             }
             // Streets and approaches over the river with no bridge deck under them.
@@ -252,6 +280,8 @@ fn main() {
                 }
             }
         }
+        bridge_x.print("town bridges overlapping each other");
+        pier_x.print("piers on bridges or network roads");
         walls.print("wall runs in a river");
         towers.print("towers in a river");
         buildings.print("buildings over water");

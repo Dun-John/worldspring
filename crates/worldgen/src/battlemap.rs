@@ -580,7 +580,12 @@ struct CrossingShape {
     /// Width (ft): the deck's, the road's, the raft's.
     size: f64,
     raft: Option<([f64; 2], f64, f64)>,
+    /// Merged into another, or given way to it (`merge_bridges`).
+    dropped: bool,
 }
+
+/// Stepping stones along a ford, this far apart (ft).
+const FORD_STEP_FT: f64 = 3.5;
 
 fn unit2(v: [f64; 2]) -> [f64; 2] {
     let l = crate::core::sqrt(v[0] * v[0] + v[1] * v[1]).max(1e-9);
@@ -624,7 +629,60 @@ fn crossing_shape(x: &crate::lod::roads::RiverCrossing, tile: &TerrainOut) -> Cr
         let w = (1.2 * size).max(14.0);
         (at, 1.6 * w, w)
     });
-    CrossingShape { kind, a, b, size, raft }
+    CrossingShape { kind, a, b, size, raft, dropped: false }
+}
+
+/// Bridge decks that overlap (a road crossing a meander twice, two roads at a confluence)
+/// become one: along the same line, one bridge from end to end; else the greater road's
+/// (then the longer) stays and the other is dropped. In a stable order (by crossing point),
+/// so every chunk decides alike.
+fn merge_bridges(crossings: &[crate::lod::roads::RiverCrossing], shapes: &mut [CrossingShape]) {
+    let mut order: Vec<usize> = (0..shapes.len()).filter(|&i| shapes[i].kind == ShapeKind::RoadBridge).collect();
+    order.sort_by(|&p, &q| crossings[p].at[0].total_cmp(&crossings[q].at[0]).then(crossings[p].at[1].total_cmp(&crossings[q].at[1])));
+    let seg_dist = |p: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+        let (ex, ey) = (a[0] + dx * t - p[0], a[1] + dy * t - p[1]);
+        crate::core::sqrt(ex * ex + ey * ey)
+    };
+    let len = |c: &CrossingShape| crate::core::sqrt((c.b[0] - c.a[0]) * (c.b[0] - c.a[0]) + (c.b[1] - c.a[1]) * (c.b[1] - c.a[1]));
+    for (n, &i) in order.iter().enumerate() {
+        for &j in &order[n + 1..] {
+            if shapes[i].dropped || shapes[j].dropped {
+                continue;
+            }
+            let (a, b) = (&shapes[i], &shapes[j]);
+            let near = 0.5 * (a.size + b.size);
+            let d = seg_dist(a.a, b.a, b.b).min(seg_dist(a.b, b.a, b.b)).min(seg_dist(b.a, a.a, a.b)).min(seg_dist(b.b, a.a, a.b));
+            let crosses = {
+                let (r, q) = ([a.b[0] - a.a[0], a.b[1] - a.a[1]], [b.b[0] - b.a[0], b.b[1] - b.a[1]]);
+                let den = r[0] * q[1] - r[1] * q[0];
+                den.abs() > 1e-9 && {
+                    let t = ((b.a[0] - a.a[0]) * q[1] - (b.a[1] - a.a[1]) * q[0]) / den;
+                    let v = ((b.a[0] - a.a[0]) * r[1] - (b.a[1] - a.a[1]) * r[0]) / den;
+                    (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&v)
+                }
+            };
+            if d >= near && !crosses {
+                continue;
+            }
+            let u = unit2([a.b[0] - a.a[0], a.b[1] - a.a[1]]);
+            let ub = unit2([b.b[0] - b.a[0], b.b[1] - b.a[1]]);
+            if (u[0] * ub[0] + u[1] * ub[1]).abs() > 0.95 && d < 0.5 * near {
+                // One bridge over both: from the earliest end to the latest along the first.
+                let ts = [a.a, a.b, b.a, b.b].map(|p| (p[0] - a.a[0]) * u[0] + (p[1] - a.a[1]) * u[1]);
+                let (lo, hi) = (ts.iter().cloned().fold(f64::MAX, f64::min), ts.iter().cloned().fold(f64::MIN, f64::max));
+                let o = a.a;
+                let size = a.size.max(b.size);
+                let s = &mut shapes[i];
+                (s.a, s.b, s.size) = ([o[0] + u[0] * lo, o[1] + u[1] * lo], [o[0] + u[0] * hi, o[1] + u[1] * hi], size);
+                shapes[j].dropped = true;
+            } else {
+                let keep_i = (crossings[i].class, -len(&shapes[i])) <= (crossings[j].class, -len(&shapes[j]));
+                shapes[if keep_i { j } else { i }].dropped = true;
+            }
+        }
+    }
 }
 
 /// The road surface (ft) at a point on a road: the nearest road piece within its width.
@@ -667,7 +725,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut lift = vec![0f32; HS * HS];
     // Where roads cross rivers, and how (see `RiverCrossing`).
     let crossings = crate::lod::roads::river_crossings(&tile.roads, &tile.pieces);
-    let crossing_shapes: Vec<CrossingShape> = crossings.iter().map(|x| crossing_shape(x, tile)).collect();
+    let mut crossing_shapes: Vec<CrossingShape> = crossings.iter().map(|x| crossing_shape(x, tile)).collect();
+    merge_bridges(&crossings, &mut crossing_shapes);
     let x_ft = |i: i64| ox + (i as f64 + 0.5) * SQUARE_FT;
     let y_ft = |j: i64| oy + (j as f64 + 0.5) * SQUARE_FT;
     for j in -1..=SQ as i64 {
@@ -1055,9 +1114,40 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             road_h[h] = 0x80 | 3;
         }
     }
-    // Road crossings as vectors (`CrossingShape`); the chunk owning each draws it.
+    // Road crossings as vectors (`CrossingShape`); the chunk owning each draws it, except a
+    // ford, whose stepping stones each chunk lays where they fall in it: every ~3.5 ft along
+    // the road's centre line, a little to either side in turn, only on water.
     for (x, c) in crossings.iter().zip(&crossing_shapes) {
-        if !owns(x.at) {
+        if c.kind == ShapeKind::Ford {
+            let u = unit2([c.b[0] - c.a[0], c.b[1] - c.a[1]]);
+            let len = crate::core::sqrt((c.b[0] - c.a[0]) * (c.b[0] - c.a[0]) + (c.b[1] - c.a[1]) * (c.b[1] - c.a[1]));
+            let mut stones = Vec::new();
+            // Only across the channel at the crossing (a slanting road would lay a long line).
+            let mid = (x.at[0] - c.a[0]) * u[0] + (x.at[1] - c.a[1]) * u[1];
+            for m in 0..(len / FORD_STEP_FT) as usize {
+                let t = (m as f64 + 0.5) * FORD_STEP_FT;
+                if (t - mid).abs() > x.half_span() + 4.0 {
+                    continue;
+                }
+                let jit = |salt: i64| unit(hash3(seed, m as i64, salt, (x.at[0] * 0.5) as i64 ^ (x.at[1] * 0.5) as i64)) - 0.5;
+                let side = if m % 2 == 0 { 0.7 } else { -0.7 } + 0.6 * jit(1);
+                let along = t + 0.8 * jit(2);
+                let p = [c.a[0] + u[0] * along - u[1] * side, c.a[1] + u[1] * along + u[0] * side];
+                if !owns(p) {
+                    continue;
+                }
+                let (i, j) = (((p[0] - hx0) / SQUARE_FT) as usize, ((p[1] - hy0) / SQUARE_FT) as usize);
+                let h = j.min(HS - 1) * HS + i.min(HS - 1);
+                if hw[h] > hh[h] {
+                    stones.push(local(&p));
+                }
+            }
+            if !stones.is_empty() {
+                shapes.push(VectorShape { kind: ShapeKind::Ford, size: (c.size / SQUARE_FT) as f32, pts: stones });
+            }
+            continue;
+        }
+        if !owns(x.at) || c.dropped {
             continue;
         }
         let mut pts = vec![local(&c.a), local(&c.b)];

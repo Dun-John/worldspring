@@ -298,14 +298,22 @@ struct Site<'a> {
     /// How far the river valleys lower the ground (`RiverNet::valley`, ≤ 0), at the nodes of
     /// a `VALLEY_CELL`-ft lattice (local coords), filled as `height` asks.
     valley: RefCell<FastMap<(i64, i64), f32>>,
+    /// Network roads near the settlement as ~20-ft chords (a, b, half width; local), sampled
+    /// on first use.
+    roads: std::cell::OnceCell<(Vec<(P, P, f64)>, FastMap<(i64, i64), Vec<u32>>)>,
+    /// How far from the centre (ft) the settlement's layout can reach.
+    reach: f64,
 }
 
 const VALLEY_CELL: f64 = 50.0;
 
 const RIVER_CELL: f64 = 250.0;
+/// Network road chords near a settlement are binned by this (`Site::near_network_road`, margins
+/// up to 10 ft).
+const ROAD_CELL: f64 = 100.0;
 
 impl<'a> Site<'a> {
-    fn new(t0: &'a T0, center: P, lattice_ft: f64, river: Vec<(P, P, f64)>) -> Site<'a> {
+    fn new(t0: &'a T0, center: P, lattice_ft: f64, layout_reach: f64, river: Vec<(P, P, f64)>) -> Site<'a> {
         let mut river_grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
         let mut river_max_hw = 0.0f64;
         for (i, &(a, b, hw)) in river.iter().enumerate() {
@@ -328,7 +336,7 @@ impl<'a> Site<'a> {
         let (nx1, ny1) = (crate::core::floor((center[0] + reach) / lattice_ft) as i64 + 3, crate::core::floor((center[1] + reach) / lattice_ft) as i64 + 3);
         let nw = (nx1 - nx0 + 1) as usize;
         let values: Vec<f64> = (ny0..=ny1).flat_map(|j| (nx0..=nx1).map(move |i| (i, j))).map(|(i, j)| t0.ground_node(i, j, lattice_ft)).collect();
-        Site { t0, center, lattice_ft, nodes: (nx0, ny0, nw, values), lakeside, river, river_grid, river_max_hw, valley: RefCell::new(FastMap::default()) }
+        Site { t0, center, lattice_ft, nodes: (nx0, ny0, nw, values), lakeside, river, river_grid, river_max_hw, valley: RefCell::new(FastMap::default()), roads: std::cell::OnceCell::new(), reach: layout_reach }
     }
 }
 
@@ -419,6 +427,44 @@ impl Site<'_> {
             }
         }
         false
+    }
+    /// A deck (pier) within 6 ft of a network road anywhere round its outline (every 5 ft).
+    fn deck_on_road(&self, poly: &[P]) -> bool {
+        let m = poly.len();
+        (0..m).any(|k| {
+            let (a, b) = (poly[k], poly[(k + 1) % m]);
+            let n = (dist(a, b) / 5.0).ceil().max(1.0) as usize;
+            (0..n).any(|j| self.near_network_road(lerp(a, b, j as f64 / n as f64), 6.0))
+        }) || self.near_network_road(centroid(poly), 6.0)
+    }
+    /// Within `margin` ft of a network road's edge (`p` local; the curve every ~20 ft).
+    fn near_network_road(&self, p: P, margin: f64) -> bool {
+        let roads = self.roads.get_or_init(|| {
+            let (c, r) = (self.center, self.reach);
+            let mut out = Vec::new();
+            for (ri, k) in self.t0.roads.segments_near([c[0] - r, c[1] - r, c[0] + r, c[1] + r], 0.0) {
+                let rc = &self.t0.roads.roads[ri as usize];
+                let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 20.0).ceil().clamp(1.0, 64.0) as usize;
+                let pts: Vec<P> = (0..=n).map(|j| sub(rc.eval(k as usize, j as f64 / n as f64, 5.0, self.t0.cell_ft).p, c)).collect();
+                out.extend(pts.windows(2).map(|q| (q[0], q[1], 0.5 * rc.class.width_ft())));
+            }
+            // By `ROAD_CELL`-ft cell, padded by the widest road's half width and a deck's margin.
+            let mut grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
+            for (i, &(a, b, hw)) in out.iter().enumerate() {
+                let m = hw + 10.0;
+                for cy in crate::core::floor((a[1].min(b[1]) - m) / ROAD_CELL) as i64..=crate::core::floor((a[1].max(b[1]) + m) / ROAD_CELL) as i64 {
+                    for cx in crate::core::floor((a[0].min(b[0]) - m) / ROAD_CELL) as i64..=crate::core::floor((a[0].max(b[0]) + m) / ROAD_CELL) as i64 {
+                        grid.entry((cx, cy)).or_default().push(i as u32);
+                    }
+                }
+            }
+            (out, grid)
+        });
+        let cell = (crate::core::floor(p[0] / ROAD_CELL) as i64, crate::core::floor(p[1] / ROAD_CELL) as i64);
+        roads.1.get(&cell).into_iter().flatten().any(|&i| {
+            let (a, b, hw) = roads.0[i as usize];
+            seg_dist(p, a, b) < hw + margin
+        })
     }
     /// Direction (unit, local) a network road travels as it arrives at its end `e` (local).
     fn road_heading(&self, e: P) -> Option<P> {
@@ -621,7 +667,7 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
     let center = [s.x, s.y];
     let r = urban_radius(s.tier, s.population);
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-    let site = Site::new(t0, center, lattice, river_pieces(t0, center, reach(s) + 500.0));
+    let site = Site::new(t0, center, lattice, reach(s) + 500.0, river_pieces(t0, center, reach(s) + 500.0));
     let mut rng = Pcg32::new(hash2(world.stream("town"), index as i64, s.seed as i64), 31);
     let mut l = Layout {
         index: index as u32,
@@ -1562,8 +1608,10 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                     let pc = centroid(pp);
                     seg_dist(pc, base, tip) > 16.0
                 });
-                if over_water && clear {
-                    l.piers.push(rect(add(base, mul(out, 52.5)), out, 105.0, 10.0));
+                let pier = rect(add(base, mul(out, 52.5)), out, 105.0, 10.0);
+                let free = !site.deck_on_road(&pier) && !l.bridges.iter().any(|d| overlaps(d, &pier));
+                if over_water && clear && free {
+                    l.piers.push(pier);
                 }
             }
         }
@@ -2882,8 +2930,11 @@ fn piers_along(site: &Site, wharf: &[P], rng: &mut Pcg32, l: &mut Layout) {
             // The pier starts 6 ft on land and runs out over the water.
             let (base, end) = (lo - 6.0, hi + length);
             let over_water = (0..=8).all(|k| wet_at(hi + 2.0 + (length - 2.0) * k as f64 / 8.0));
-            if length >= 12.0 && over_water && !wet_at(base) {
-                l.piers.push(rect(add(p, mul(out, 0.5 * (base + end))), out, end - base, 8.0));
+            let pier = rect(add(p, mul(out, 0.5 * (base + end))), out, end - base, 8.0);
+            // Never on a road (or its bridge) or another deck.
+            let clear = !site.deck_on_road(&pier) && !l.bridges.iter().chain(&l.piers).any(|d| overlaps(d, &pier));
+            if length >= 12.0 && over_water && !wet_at(base) && clear {
+                l.piers.push(pier);
             }
         }
         at += rng.range(70.0, 120.0);

@@ -467,8 +467,16 @@ pub fn unweave(curve: &RoadCurve, rivers: &crate::lod::rivers::RiverNet, cell_ft
             let side = |j: usize| if inside[j].unwrap().1 >= 0.0 { 1.0 } else { -1.0 };
             let (entry, exit) = (side(i0), side(i1));
             let half = (i0..=i1).map(|j| inside[j].unwrap().2).fold(0.0, f64::max);
-            // A short run from one side to the other is already a clean crossing.
-            if entry != exit && sv[i1] - sv[i0] < 2.5 * (half + margin) {
+            // A short run from one side to the other is already a clean crossing, if it is
+            // square enough (within 45° of square to the belt): a slanting one runs a long way
+            // over the channel (a long bridge, or a ford along the stream bed).
+            let square = {
+                let (a, b) = (pts[i0.saturating_sub(1)], pts[(i1 + 1).min(n - 1)]);
+                let l = dist(a, b).max(1e-9);
+                let nrm = inside[(i0 + i1) / 2].unwrap().3;
+                ((b[0] - a[0]) * nrm[0] + (b[1] - a[1]) * nrm[1]).abs() / l > std::f64::consts::FRAC_1_SQRT_2
+            };
+            if entry != exit && sv[i1] - sv[i0] < 2.5 * (half + margin) && square {
                 continue;
             }
             let mid = (i0 + i1) / 2;
