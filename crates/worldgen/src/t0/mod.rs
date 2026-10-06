@@ -885,59 +885,49 @@ fn build_river_net(world: &World, w: usize, cell: f64, height: &[f64], land: &[b
         })
         .collect::<Vec<_>>();
     // The curve wanders off its cells (and the ground between two cells is not a straight
-    // line): where it runs over lower ground than the cells' levels, the water would stand
-    // above the land, held by a dike. Each land point's level is kept at least a foot under
-    // the ground along the curve on either side of it (never below the lake or sea it runs
-    // into), still falling downstream; a tributary ends at its river's level.
+    // line): where it runs over lower ground than the line between its cells' levels, the
+    // water would stand above the land, held by a dike. From the mouth up, each land point's
+    // level is lowered just enough that the line to the next point downstream stays a foot
+    // under the ground along the curve (sampled at eighths), never below that next level;
+    // a tributary ends no higher than its river there.
     let h = height.len() / w;
     let hgrid = Grid::from_vec(w, h, height.iter().map(|&v| v as f32).collect());
-    let mut levels: Vec<Vec<f32>> = curves
-        .iter()
-        .zip(chains)
-        .map(|(rc, r)| {
-            let n = rc.pts.len();
-            let ground: Vec<f64> = (0..rc.segments())
-                .map(|k| (0..=8).map(|j| rc.eval(k, j as f64 / 8.0, 2.5, cell).p).map(|p| hgrid.sample_cubic(p[0] / cell, p[1] / cell)).fold(f64::MAX, f64::min))
-                .collect();
-            let fixed = |k: usize| {
-                let c = r.cells[k] as usize;
-                !land[c] || hydro.lake_of[c] != hydro::NO_LAKE
-            };
-            let mut z = rc.z.clone();
-            // The level of the first lake or sea downstream: nothing above it is lowered past it.
-            let mut floor = vec![f32::MIN; n];
-            for k in (0..n).rev() {
-                floor[k] = if fixed(k) { z[k] } else if k + 1 < n { floor[k + 1] } else { f32::MIN };
+    let settle = |rc: &RiverCurve, r: &hydro::River, mut z: Vec<f64>| -> Vec<f64> {
+        for k in (0..z.len().saturating_sub(1)).rev() {
+            let c = r.cells[k] as usize;
+            if !land[c] || hydro.lake_of[c] != hydro::NO_LAKE {
+                continue;
             }
-            for k in 0..n {
-                if fixed(k) {
-                    continue;
-                }
-                let g = [k.checked_sub(1).map(|i| ground[i]), ground.get(k).copied()].into_iter().flatten().fold(f64::MAX, f64::min);
-                z[k] = z[k].min((g - 1.0) as f32).max(floor[k]);
+            let next = z[k + 1];
+            let bound = (0..8)
+                .map(|j| {
+                    let t = j as f64 / 8.0;
+                    let p = rc.eval(k, t, 2.5, cell).p;
+                    (hgrid.sample_cubic(p[0] / cell, p[1] / cell) - 1.0 - t * next) / (1.0 - t)
+                })
+                .fold(f64::MAX, f64::min);
+            z[k] = z[k].min(bound).max(next);
+        }
+        z
+    };
+    let mut levels: Vec<Vec<f64>> = curves.iter().zip(chains).map(|(rc, r)| settle(rc, r, rc.z.iter().map(|&v| v as f64).collect())).collect();
+    // Tributaries (of tributaries…) end at their river's level, then settle again above it.
+    for _ in 0..3 {
+        for (ri, r) in chains.iter().enumerate() {
+            if let Some(p) = r.into
+                && let Some(m) = chains[p].cells.iter().position(|&c| Some(&c) == r.cells.last())
+                && levels[p][m] < *levels[ri].last().unwrap()
+            {
+                let mut z = levels[ri].clone();
+                *z.last_mut().unwrap() = levels[p][m];
+                levels[ri] = settle(&curves[ri], r, z);
             }
-            z
-        })
-        .collect();
-    for (ri, r) in chains.iter().enumerate() {
-        if let Some(p) = r.into
-            && let Some(m) = chains[p].cells.iter().position(|&c| Some(&c) == r.cells.last())
-        {
-            let end = levels[p][m];
-            let last = levels[ri].len() - 1;
-            levels[ri][last] = levels[ri][last].min(end);
         }
     }
     let curves = curves
         .into_iter()
         .zip(levels)
-        .map(|(rc, z)| {
-            let mut z = z;
-            for k in 1..z.len() {
-                z[k] = z[k].min(z[k - 1]);
-            }
-            RiverCurve::new(rc.pts, z, rc.q, rc.taper, rc.seed)
-        })
+        .map(|(rc, z)| RiverCurve::new(rc.pts, z.into_iter().map(|v| v as f32).collect(), rc.q, rc.taper, rc.seed))
         .collect();
     // Bin extents from the grid (not the world file) so loaded copies index identically.
     RiverNet::new(curves, (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell)

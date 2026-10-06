@@ -116,9 +116,8 @@ pub fn terrain_tile(world: &World, t0: &T0, key: &TileKey, parent: Option<&[f32]
     TerrainOut { padded, river_water, pieces, roads: road_pieces, road_mask }
 }
 
-/// Each padded sample's settlement-pad weight (as `refine` blends the ground to what the
-/// layouts were planned on: 1 within 0.9 of a settlement's reach, easing to 0 at 1.2), or
-/// None where no settlement reaches the tile.
+/// Each padded sample's settlement-pad weight (`town::pad_weight`, as `refine` blends the
+/// ground to what the layouts were planned on), or None where no settlement reaches the tile.
 fn town_weights(t0: &T0, key: &TileKey, s: f64) -> Option<Vec<f32>> {
     let (n, h) = (TILE_N as i64, HALO as i64);
     let (gx0, gy0) = (key.x as i64 * n, key.y as i64 * n);
@@ -127,7 +126,10 @@ fn town_weights(t0: &T0, key: &TileKey, s: f64) -> Option<Vec<f32>> {
         .settlements
         .iter()
         .map(|st| (st.x, st.y, crate::town::reach(st)))
-        .filter(|&(x, y, r)| x + 1.2 * r >= tx0 && x - 1.2 * r <= tx1 && y + 1.2 * r >= ty0 && y - 1.2 * r <= ty1)
+        .filter(|&(x, y, r)| {
+            let e = crate::town::pad_extent(r);
+            x + e >= tx0 && x - e <= tx1 && y + e >= ty0 && y - e <= ty1
+        })
         .collect();
     if pads.is_empty() {
         return None;
@@ -138,11 +140,12 @@ fn town_weights(t0: &T0, key: &TileKey, s: f64) -> Option<Vec<f32>> {
         for ci in -h..=n + h {
             let x = (gx0 + ci) as f64 * s;
             out[padded_index(ci, cj)] = pads.iter().fold(0.0f64, |m, &(px, py, r)| {
-                if (x - px).abs() >= 1.2 * r || (y - py).abs() >= 1.2 * r {
+                let e = crate::town::pad_extent(r);
+                if (x - px).abs() >= e || (y - py).abs() >= e {
                     return m;
                 }
                 let d = crate::core::sqrt((x - px) * (x - px) + (y - py) * (y - py));
-                m.max(1.0 - smoothstep(0.9 * r, 1.2 * r, d))
+                m.max(crate::town::pad_weight(d, r))
             }) as f32;
         }
     }
@@ -256,13 +259,16 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
     let (gx0, gy0) = (key.x as i64 * n, key.y as i64 * n);
     let inv_2s = 1.0 / (2.0 * s);
     // Settlement pads: towns and their fields stand on the smooth ground their layout was
-    // planned on (the T0 surface), so fine detail fades out over each settlement's reach.
+    // planned on (the T0 surface), so fine detail fades out over each pad (`town::pad_weight`).
     let (tx0, ty0, tx1, ty1) = ((gx0 - h) as f64 * s, (gy0 - h) as f64 * s, (gx0 + n + h) as f64 * s, (gy0 + n + h) as f64 * s);
     let pads: Vec<(f64, f64, f64)> = t0
         .settlements
         .iter()
         .map(|st| (st.x, st.y, crate::town::reach(st)))
-        .filter(|&(x, y, r)| x + 1.1 * r >= tx0 && x - 1.1 * r <= tx1 && y + 1.1 * r >= ty0 && y - 1.1 * r <= ty1)
+        .filter(|&(x, y, r)| {
+            let e = crate::town::pad_extent(r);
+            x + e >= tx0 && x - e <= tx1 && y + e >= ty0 && y - e <= ty1
+        })
         .collect();
     // Inside a settlement the ground is exactly T0::ground_at (what its layout was planned
     // on: shorelines, piers and pads agree with the drawn terrain). Lattice nodes cached.
@@ -285,7 +291,7 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
         let ny = (gy0 + cj) as f64 / DETAIL_WAVELENGTH;
         // Pads this row can touch.
         let y = (gy0 + cj) as f64 * s;
-        let row_pads: Vec<(f64, f64, f64)> = pads.iter().copied().filter(|&(_, py, r)| (y - py).abs() < 1.2 * r).collect();
+        let row_pads: Vec<(f64, f64, f64)> = pads.iter().copied().filter(|&(_, py, r)| (y - py).abs() < crate::town::pad_extent(r)).collect();
         // This row's ground: the lattice nodes interpolated down each column once
         // (Catmull-Rom in y), leaving a 4-tap interpolation in x per sample.
         let col: Vec<f64> = if row_pads.is_empty() {
@@ -349,11 +355,11 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
             if !row_pads.is_empty() {
                 let x = (gx0 + ci) as f64 * s;
                 pad = row_pads.iter().fold(0.0f64, |m, &(px, py, r)| {
-                    if (x - px).abs() >= 1.2 * r {
+                    if (x - px).abs() >= crate::town::pad_extent(r) {
                         return m;
                     }
                     let d = crate::core::sqrt((x - px) * (x - px) + (y - py) * (y - py));
-                    m.max(1.0 - smoothstep(0.9 * r, 1.2 * r, d))
+                    m.max(crate::town::pad_weight(d, r))
                 });
                 detail *= 1.0 - pad;
             }

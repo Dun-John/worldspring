@@ -29,10 +29,10 @@ fn wavelength_ft(width: f64) -> f64 {
 
 /// Valley-side slope beyond the banks (rise/run).
 const BANK_SLOPE: f64 = 0.1;
-/// Levee crest slope away from the bank, and where across the levee band (in band widths)
-/// it starts and finishes easing back down to the ground.
+/// Levee crest slope away from the bank (across the levee band), and its back slope beyond
+/// (down to the ground: a broad embankment where the river crosses lower ground).
 const LEVEE_SLOPE: f64 = 0.04;
-const LEVEE_FADE: (f64, f64) = (0.3, 1.5);
+const LEVEE_BACK: f64 = 0.15;
 /// Where across its reach (a fraction) the valley starts easing back up to the ground, so
 /// where the ground stands high above an incised river its sides steepen gradually.
 const VALLEY_EASE: f64 = 0.4;
@@ -318,8 +318,10 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
 /// - `cut`: the ground carved to the channel and valley floor, fading back to the ground as
 ///   it was over the outer part of the carving reach (`VALLEY_EASE`; no cliff where the
 ///   ground stands above the valley side);
-/// - `lev`, `ulev`: the levee floor just above the water and the position across the levee
-///   band in band widths (0 at the bank), by which the levee eases out (`LEVEE_FADE`);
+/// - `near`: the nearest point of any centre line (distance, then level, width), from which
+///   the levee is built: a crest just above the water across the levee band, then a back
+///   slope (`LEVEE_BACK`) down to the ground, so the river is held where the land beside it
+///   lies lower than its surface;
 /// - `channel`: any channel covers the sample (channels beat banks).
 ///
 /// Inside settlements (`town`: each padded sample's settlement-pad weight, 0 outside) the
@@ -337,8 +339,7 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
 pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usize, origin: [f64; 2], spacing: f64, reach_samples: f64, standing: &dyn Fn(f64, f64) -> f32, town: Option<&[f32]>) {
     let n = dim * dim;
     let mut cut = vec![f32::INFINITY; n];
-    let mut lev = vec![f32::INFINITY; n];
-    let mut ulev = vec![f32::INFINITY; n];
+    let mut near = vec![(f32::INFINITY, 0f32, 0f32); n];
     let mut channel = vec![false; n];
     for piece in pieces {
         for seg in piece.pts.windows(2) {
@@ -389,14 +390,10 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
                     cut[k] = cut[k].min(v as f32);
                     if d < half {
                         channel[k] = true;
-                    } else {
-                        // Natural levee a foot or two high, sized to the river (not the level),
-                        // its back slope eased out over half its width again.
-                        let band = (0.35 * w).max(12.0);
-                        if d < half + LEVEE_FADE.1 * band {
-                            lev[k] = lev[k].min((z + 0.5 + (d - half) * LEVEE_SLOPE) as f32);
-                            ulev[k] = ulev[k].min(((d - half) / band) as f32);
-                        }
+                    }
+                    let here = (d as f32, z as f32, w as f32);
+                    if here.0 < near[k].0 || (here.0 == near[k].0 && (here.1, here.2) < (near[k].1, near[k].2)) {
+                        near[k] = here;
                     }
                     if d < half + spacing && (z as f32) > water[k] {
                         water[k] = z as f32;
@@ -432,10 +429,17 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
             let valley = t + (h - t) * smoothstep(0.75 * TOWN_VALLEY_FT, TOWN_VALLEY_FT, d);
             v += pad * (v.min(valley) - v);
         }
-        if !channel[k] && lev[k] < f32::INFINITY && (lev[k] as f64) > v {
-            let (x, y) = (origin[0] + (k % dim) as f64 * spacing, origin[1] + (k / dim) as f64 * spacing);
-            if standing(x, y) <= crate::t0::hydro::DRY {
-                v += (1.0 - smoothstep(LEVEE_FADE.0, LEVEE_FADE.1, ulev[k] as f64)) * (lev[k] as f64 - v);
+        if !channel[k] && near[k].0 < f32::INFINITY {
+            // Natural levee a foot or two high, sized to the river (not the level).
+            let (d, z, w) = (near[k].0 as f64, near[k].1 as f64, near[k].2 as f64);
+            let (half, band) = (0.5 * w, (0.35 * w).max(12.0));
+            let floor = z + 0.5 + (d - half).clamp(0.0, band) * LEVEE_SLOPE - (d - half - band).max(0.0) * LEVEE_BACK;
+            if floor > v {
+                let (x, y) = (origin[0] + (k % dim) as f64 * spacing, origin[1] + (k / dim) as f64 * spacing);
+                if standing(x, y) <= crate::t0::hydro::DRY {
+                    let reach = carve_reach(w, spacing, reach_samples);
+                    v += (1.0 - smoothstep(VALLEY_EASE * reach, reach, d)) * (floor - v);
+                }
             }
         }
         heights[k] = v as f32;
@@ -482,11 +486,11 @@ fn capsule_row(a: [f64; 2], b: [f64; 2], r: f64, y: f64) -> Option<(f64, f64)> {
     (lo <= hi).then_some((lo - pad, hi + pad))
 }
 
-/// Inside settlements a river runs in a gentle valley (sides `TOWN_SLOPE`, gentle enough to
-/// build on) out to `TOWN_VALLEY_FT` from its centre line, easing back into the ground over
-/// the last quarter.
+/// Inside settlements a river runs in the valley coarser levels carve elsewhere (sides
+/// `TOWN_SLOPE`, the same as theirs, so a town is no deeper than the land round it) out to
+/// `TOWN_VALLEY_FT` from its centre line, easing back into the ground over the last quarter.
 pub const TOWN_VALLEY_FT: f64 = 1_200.0;
-pub const TOWN_SLOPE: f64 = 0.05;
+pub const TOWN_SLOPE: f64 = BANK_SLOPE;
 const TOWN_STEP: usize = 8;
 
 /// The town valley's floor (`town_valley` before the ground) and the distance to the nearest
