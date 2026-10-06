@@ -113,11 +113,23 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     // Network roads are sampled finely for carving; the renderer only needs about one vertex
     // per half sample of this level (far fewer capsules at continent zoom).
     let cell = 0.5 * size / TILE_N as f64;
+    // Over a ferry's river the road is the ferry's line (class 5, drawn dashed).
+    let ferries: Vec<_> = crate::lod::roads::river_crossings(&tile.roads, &tile.pieces).into_iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Ferry).collect();
+    let class_at = |r: &crate::lod::roads::RoadPiece, p: [f64; 2]| {
+        if ferries.iter().any(|f| f.class == r.class && {
+            let (a, x) = f.local(p);
+            a.abs() <= f.half_span() && x.abs() <= 1.0
+        }) {
+            5.0
+        } else {
+            r.class as u8 as f64
+        }
+    };
     let roads = pack_lines(
         ox,
         oy,
         size,
-        tile.roads.iter().map(|r| decimate(r.pts.iter().map(|c| [c.p[0], c.p[1], r.class.width_ft(), r.class as u8 as f64]).collect(), cell)).chain(town_roads),
+        tile.roads.iter().map(|r| decimate(r.pts.iter().map(|c| [c.p[0], c.p[1], r.class.width_ft(), class_at(r, c.p)]).collect(), cell)).chain(town_roads),
     );
 
     let mut out = Vec::with_capacity(HEADER_BYTES + padded.len() * 4 + tex.len() * 2 + biome.len());
@@ -143,41 +155,14 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     out
 }
 
-/// Decks (world ft polygons) where network roads cross rivers: along the road, over the
+/// Decks (world ft polygons) where network roads bridge rivers: along the road, over the
 /// channel at the crossing's angle with a landing each side, as wide as the road plus 4 ft.
 fn road_bridges(tile: &TerrainOut) -> Vec<Vec<[f64; 2]>> {
-    let mut out = Vec::new();
-    for piece in &tile.roads {
-        for rs in piece.pts.windows(2) {
-            let (a, b) = (rs[0].p, rs[1].p);
-            let (rx, ry) = (b[0] - a[0], b[1] - a[1]);
-            let rl = crate::core::sqrt(rx * rx + ry * ry);
-            if rl < 1e-6 {
-                continue;
-            }
-            for river in &tile.pieces {
-                for vs in river.pts.windows(2) {
-                    let (c, d) = (vs[0].p, vs[1].p);
-                    let (sx, sy) = (d[0] - c[0], d[1] - c[1]);
-                    let den = rx * sy - ry * sx;
-                    if den.abs() < 1e-9 {
-                        continue;
-                    }
-                    let t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den;
-                    let v = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / den;
-                    if !(0.0..1.0).contains(&t) || !(0.0..1.0).contains(&v) {
-                        continue;
-                    }
-                    let sl = crate::core::sqrt(sx * sx + sy * sy).max(1e-9);
-                    let sin = (den / (rl * sl)).abs().max(0.35);
-                    let w = vs[0].w + (vs[1].w - vs[0].w) * v;
-                    let x = [a[0] + rx * t, a[1] + ry * t];
-                    out.push(crate::town::rect(x, [rx / rl, ry / rl], w / sin + 24.0, piece.class.width_ft() + 4.0));
-                }
-            }
-        }
-    }
-    out
+    crate::lod::roads::river_crossings(&tile.roads, &tile.pieces)
+        .iter()
+        .filter(|c| c.kind == crate::t0::roads::CrossingKind::Bridge)
+        .map(|c| crate::town::rect(c.at, c.u, c.w / c.sin + 24.0, c.class.width_ft() + 4.0))
+        .collect()
 }
 
 /// Settlements appear from this level (blocks), buildings from `BUILDING_MIN_LEVEL`.
@@ -306,7 +291,8 @@ fn decimate(line: Vec<[f64; 4]>, cell: f64) -> Vec<[f64; 4]> {
     }
     let key = |p: &[f64; 4]| (crate::core::floor(p[0] / cell) as i64, crate::core::floor(p[1] / cell) as i64);
     let last = line.len() - 1;
-    line.iter().enumerate().filter(|&(i, p)| i == 0 || i == last || key(p) != key(&line[i - 1])).map(|(_, p)| *p).collect()
+    // (Where the class changes, a ferry's line, the point stays.)
+    line.iter().enumerate().filter(|&(i, p)| i == 0 || i == last || key(p) != key(&line[i - 1]) || p[3] != line[i - 1][3] || p[3] != line[i + 1][3]).map(|(_, p)| *p).collect()
 }
 
 /// Polylines of (x ft, y ft, a, b) as the segments this tile owns (by segment midpoint).

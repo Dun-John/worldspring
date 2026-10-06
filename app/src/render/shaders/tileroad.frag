@@ -47,6 +47,13 @@ void main() {
     vec3 bed = mix(surface, INK, edge * 0.8);
     vec3 col = mix(line, bed, vBed);
     float a = cover * vFade * uAlpha * mix(0.9, 1.0, vBed);
+    // A ferry's line: dashes of track ink across the water.
+    if (vClass > 4.5) {
+        float s = dot(pa, ba) / max(length(ba), 1e-6);
+        float dash = step(0.45, fract(s / max(6.0, 4.0 * vHalf)));
+        col = INK_TRACK;
+        a = cover * vFade * uAlpha * 0.95 * dash;
+    }
     if (a <= 0.001) discard;
     finalColor = vec4(col * a, a);
 }

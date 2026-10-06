@@ -22,6 +22,7 @@ use crate::core::tile::{HALO, PADDED, TILE_N, TileKey};
 use crate::lod::terrain_refine::TerrainOut;
 use crate::t0::T0;
 use crate::t0::biome::Biome;
+use crate::t0::roads::CrossingKind;
 
 pub const SQ: usize = TILE_N / 2;
 /// Squares per edge including a one-square halo ring (for seamless rendering gradients).
@@ -380,6 +381,12 @@ pub enum ShapeKind {
     /// A round feature raised a tier on paved ground: its centre and a point on its rim in the
     /// direction its steps come down (squares); size is the `PlazaFeature`.
     Dais = 5,
+    /// A ford: stepping stones across shallow water, its line from bank to bank; size is the
+    /// road's width (squares).
+    Ford = 6,
+    /// A ferry: a rope from landing to landing, a jetty at each end and the raft; size is the
+    /// raft's width (squares).
+    Ferry = 7,
 }
 
 /// Object mix per biome: (kind, count per 100 squares, allowed in shallow water).
@@ -594,6 +601,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Road class + 1 per halo square (0 = none); bridges where a road meets water.
     let mut road_h = vec![0u8; HS * HS];
     let mut lift = vec![0f32; HS * HS];
+    // Where roads cross rivers, and how (see `RiverCrossing`).
+    let crossings = crate::lod::roads::river_crossings(&tile.roads, &tile.pieces);
+    let x_ft = |i: i64| ox + (i as f64 + 0.5) * SQUARE_FT;
+    let y_ft = |j: i64| oy + (j as f64 + 0.5) * SQUARE_FT;
     for j in -1..=SQ as i64 {
         for i in -1..=SQ as i64 {
             let (x, y) = (ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT);
@@ -602,6 +613,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             hh[h] = tile.padded[c];
             hw[h] = t0.sample_water(x, y).max(tile.river_water[c]);
             road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);
+            // A ford or a ferry leaves the water as it is (wading, or the raft).
+            if road_h[h] != 0 && hw[h] > hh[h] && crossings.iter().any(|x| x.kind != CrossingKind::Bridge && x.covers([x_ft(i), y_ft(j)])) {
+                road_h[h] = 0;
+            }
             if road_h[h] != 0 && hw[h] > hh[h] {
                 // The deck carries the road at its own level (its embankments reach the
                 // banks), at least clear of the water.
@@ -943,67 +958,45 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             road_h[h] = 0x80 | 3;
         }
     }
-    // Road bridges as vectors: wherever a road bed crosses a river's centre line, a deck along
-    // the road spanning the channel (its width over the crossing angle, plus a landing each
-    // side). Both lines are pure functions of the world, so every chunk finds the same
-    // crossing; the chunk owning it draws the bridge.
-    for piece in &tile.roads {
-        for rs in piece.pts.windows(2) {
-            let (a, b) = (rs[0].p, rs[1].p);
-            let (rx, ry) = (b[0] - a[0], b[1] - a[1]);
-            let rl = crate::core::sqrt(rx * rx + ry * ry);
-            if rl < 1e-6 {
-                continue;
-            }
-            let u = [rx / rl, ry / rl];
-            for river in &tile.pieces {
-                for vs in river.pts.windows(2) {
-                    let (c, d) = (vs[0].p, vs[1].p);
-                    let (sx, sy) = (d[0] - c[0], d[1] - c[1]);
-                    let den = rx * sy - ry * sx;
-                    if den.abs() < 1e-9 {
-                        continue;
-                    }
-                    let t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den;
-                    let v = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / den;
-                    if !(0.0..1.0).contains(&t) || !(0.0..1.0).contains(&v) {
-                        continue;
-                    }
-                    let x = [a[0] + rx * t, a[1] + ry * t];
-                    if !owns(x) {
-                        continue;
-                    }
-                    let sl = crate::core::sqrt(sx * sx + sy * sy).max(1e-9);
-                    let sin = (den / (rl * sl)).abs().max(0.35);
-                    let w = vs[0].w + (vs[1].w - vs[0].w) * v;
-                    let deck = piece.class.width_ft() + 4.0;
-                    // Each end reaches past the river (its width there plus 4 ft of bank) at both
-                    // corners, which matters when the road crosses at a slant; then 8 ft of landing.
-                    let clear = |p: [f64; 2]| {
-                        tile.pieces.iter().all(|r| {
-                            r.pts.windows(2).all(|q| {
-                                let (a, b) = (q[0].p, q[1].p);
-                                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                                let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
-                                let (ex, ey) = (p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
-                                crate::core::sqrt(ex * ex + ey * ey) >= 0.5 * (q[0].w + (q[1].w - q[0].w) * t) + 4.0
-                            })
-                        })
-                    };
-                    let reach = |sign: f64| {
-                        let mut t = 0.5 * w / sin;
-                        let corner = |t: f64, side: f64| [x[0] + u[0] * sign * t - u[1] * side * 0.5 * deck, x[1] + u[1] * sign * t + u[0] * side * 0.5 * deck];
-                        while t < 600.0 && !(clear(corner(t, 1.0)) && clear(corner(t, -1.0))) {
-                            t += 2.0;
-                        }
-                        t + 8.0
-                    };
-                    let (fwd, back) = (reach(1.0), reach(-1.0));
-                    let (p0, p1) = ([x[0] - u[0] * back, x[1] - u[1] * back], [x[0] + u[0] * fwd, x[1] + u[1] * fwd]);
-                    shapes.push(VectorShape { kind: ShapeKind::RoadBridge, size: (deck / SQUARE_FT) as f32, pts: vec![local(&p0), local(&p1)] });
-                }
-            }
+    // Road crossings as vectors: wherever a road crosses a river's centre line, along the
+    // road from bank to bank (the run over the channel at the crossing angle, extended until
+    // both corners are 4 ft clear of every river piece): a bridge deck with an 8-ft landing
+    // each side, a ford's stepping stones, or a ferry's rope and jetties. Both lines are pure
+    // functions of the world, so every chunk finds the same crossing; the chunk owning it
+    // draws it.
+    for x in &crossings {
+        if !owns(x.at) {
+            continue;
         }
+        let (u, deck) = (x.u, x.class.width_ft() + 4.0);
+        let clear = |p: [f64; 2]| {
+            tile.pieces.iter().all(|r| {
+                r.pts.windows(2).all(|q| {
+                    let (a, b) = (q[0].p, q[1].p);
+                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+                    let (ex, ey) = (p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
+                    crate::core::sqrt(ex * ex + ey * ey) >= 0.5 * (q[0].w + (q[1].w - q[0].w) * t) + 4.0
+                })
+            })
+        };
+        let reach = |sign: f64| {
+            let mut t = x.half_span();
+            let corner = |t: f64, side: f64| [x.at[0] + u[0] * sign * t - u[1] * side * 0.5 * deck, x.at[1] + u[1] * sign * t + u[0] * side * 0.5 * deck];
+            while t < 600.0 && !(clear(corner(t, 1.0)) && clear(corner(t, -1.0))) {
+                t += 2.0;
+            }
+            t
+        };
+        let (fwd, back) = (reach(1.0), reach(-1.0));
+        let (kind, size, extra) = match x.kind {
+            CrossingKind::Bridge => (ShapeKind::RoadBridge, deck, 8.0),
+            CrossingKind::Ford => (ShapeKind::Ford, x.class.width_ft(), 0.0),
+            // The line runs between the jetties' ends, 14 ft out into the water.
+            CrossingKind::Ferry => (ShapeKind::Ferry, x.class.width_ft().max(12.0), -18.0),
+        };
+        let (p0, p1) = ([x.at[0] - u[0] * (back + extra), x.at[1] - u[1] * (back + extra)], [x.at[0] + u[0] * (fwd + extra), x.at[1] + u[1] * (fwd + extra)]);
+        shapes.push(VectorShape { kind, size: (size / SQUARE_FT) as f32, pts: vec![local(&p0), local(&p1)] });
     }
     let road_bed = hh.clone();
     let mut biome = vec![Biome::Grassland; n];

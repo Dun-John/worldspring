@@ -241,7 +241,7 @@ impl T0 {
         let coast: Vec<f32> = (0..n).map(|k| if land[k] { 0.0 } else { (dist_land[k] * cell) as f32 }).collect();
 
         let mut rivers = build_river_net(world, w, cell, &height, &land, &hydro);
-        {
+        let plan = {
             // Levels that agree with the ground the terrain is built on (before anything is
             // placed against the curves, whose meanders follow the levels).
             let hgrid = Grid::from_vec(w, h, height.iter().map(|&v| v as f32).collect());
@@ -251,13 +251,21 @@ impl T0 {
             // Standing water: the lookup gives a level near any wet cell; it is water only
             // where that level is above the ground.
             rivers.settle_levels(&ground, &|x, y| base.sample_lake(x, y).0 as f64 > ground(x, y), cell);
-        }
+            rivers.settle(&ground, cell);
+            // The ground roads are planned on: that ground, in the river valleys, every half cell.
+            let s = roads::Plan::SCALE;
+            let (pw, ph) = (((w - 1) as f64 * s) as usize + 1, ((h - 1) as f64 * s) as usize + 1);
+            let mut z: Vec<f32> = (0..pw * ph).map(|k| ground((k % pw) as f64 * cell / s, (k / pw) as f64 * cell / s) as f32).collect();
+            rivers.valley_grid(&mut z, pw, [0.0, 0.0], cell / s);
+            Grid::from_vec(pw, ph, z)
+        };
+        let plan = roads::Plan { grid: plan, cw: w, ch: h };
         progress("settlements", 0.0);
         // Staged, so later tiers grow on the roads the earlier ones made: cities, then king's
         // roads between them; towns (favouring those roads and their junctions), then roads;
         // villages (favouring any road).
         let sinp = settle::Inputs { world, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, pins: &pins };
-        let rinp = roads::Inputs { world, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro };
+        let rinp = roads::Inputs { world, plan: &plan, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None);
         let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
@@ -320,6 +328,11 @@ impl T0 {
                 (r.pts, r.z, r.wander) = (pts, z, wander);
             }
             roads::tidy(r);
+            // Corners left by pushing runs out of meander belts turn on arcs too (the profile
+            // is fitted again below).
+            let z = roads::round_corners(&r.pts, &r.z, 0.06 * cell, 0.05 * cell).1;
+            (r.pts, r.wander) = roads::round_corners(&r.pts, &r.wander, 0.06 * cell, 0.05 * cell);
+            r.z = z;
         }
         let (map_w, map_h) = ((w - 1) as f64 * cell, (h - 1) as f64 * cell);
         let road_net = RoadNet::new(
@@ -386,7 +399,10 @@ impl T0 {
                 let terrain: Vec<f64> = r.pts.iter().map(|p| t0.rivers.valley(ground(p[0], p[1]), p[0], p[1])).collect();
                 let mut floor = vec![f64::MIN; r.pts.len()];
                 for k in 0..r.pts.len().saturating_sub(1) {
-                    if let Some(z) = t0.rivers.crossing_level(r.pts[k], r.pts[k + 1], 0.5 * r.class.width_ft() + 2.0, cell, &crossings) {
+                    // (A ford wades through and a ferry lands at the water: no clearance.)
+                    if let Some((z, w)) = t0.rivers.crossing_level(r.pts[k], r.pts[k + 1], 0.5 * r.class.width_ft() + 2.0, cell, &crossings)
+                        && roads::crossing_kind(r.class, w) == roads::CrossingKind::Bridge
+                    {
                         let deck = z + crate::battlemap::DECK_CLEARANCE_FT as f64;
                         floor[k] = floor[k].max(deck);
                         floor[k + 1] = floor[k + 1].max(deck);

@@ -53,7 +53,9 @@ fn main() {
         let l = (best.2[0].powi(2) + best.2[1].powi(2)).sqrt().max(1e-9);
         let half = (dx * dx + dy * dy).sqrt();
         (cx, cy, dx, dy) = (best.1[0], best.1[1], -best.2[1] / l * half, best.2[0] / l * half);
-        println!("road {} point {:.0} ft away at fx {:.6} fy {:.6}: surface z {:.1} ft", best.4, best.0, cx / g.map_w_ft, cy / g.map_h_ft, best.3);
+        let lattice = g.spacing_ft(g.first_refine_level - 1);
+        let ga = ex.t0.ground_at(best.1[0], best.1[1], lattice);
+        println!("road {} point {:.0} ft away at fx {:.6} fy {:.6}: surface z {:.1} ft (planned on {:.1}, ground_at {ga:.1})", best.4, best.0, cx / g.map_w_ft, cy / g.map_h_ft, best.3, ex.t0.rivers.valley(ga, best.1[0], best.1[1]));
     }
     let s = g.spacing_ft(level);
     let size = g.tile_size_ft(level);

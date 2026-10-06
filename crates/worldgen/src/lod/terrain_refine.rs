@@ -39,6 +39,8 @@ const GULLY_CELL: f64 = 8.0;
 /// Rivers re-carve a band this many samples wide at each level (coarser levels carved the
 /// broad valley already; finer levels sharpen the channel).
 const CARVE_REACH_SAMPLES: f64 = 8.0;
+/// Water over a ford's bed (ft): wading depth.
+const FORD_DEPTH_FT: f32 = 0.8;
 /// Levels with coarser sample spacing than this skip carving.
 const CARVE_MAX_SPACING_FT: f64 = 2_500.0;
 
@@ -98,6 +100,22 @@ pub fn terrain_tile(world: &World, t0: &T0, key: &TileKey, parent: Option<&[f32]
     let mut road_mask = Vec::new();
     if refined && s <= roads::CARVE_MAX_SPACING_FT {
         road_mask = roads::carve(&road_pieces, &mut padded, &river_water, PADDED, origin, s);
+        // Fords: the bed under the road comes up to a wading depth.
+        for c in roads::river_crossings(&road_pieces, &pieces).iter().filter(|c| c.kind == crate::t0::roads::CrossingKind::Ford) {
+            let (along, across) = (c.half_span() + 3.0, 0.5 * c.class.width_ft() + 3.0);
+            let r = along.max(across) + s;
+            let (i0, i1) = (((c.at[0] - r - origin[0]) / s).ceil().max(0.0) as usize, (((c.at[0] + r - origin[0]) / s).floor().max(0.0) as usize).min(PADDED - 1));
+            let (j0, j1) = (((c.at[1] - r - origin[1]) / s).ceil().max(0.0) as usize, (((c.at[1] + r - origin[1]) / s).floor().max(0.0) as usize).min(PADDED - 1));
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    let k = j * PADDED + i;
+                    let (a, x) = c.local([origin[0] + i as f64 * s, origin[1] + j as f64 * s]);
+                    if river_water[k] > DRY && a.abs() <= along && x.abs() <= across {
+                        padded[k] = padded[k].max(river_water[k] - FORD_DEPTH_FT);
+                    }
+                }
+            }
+        }
     }
     TerrainOut { padded, river_water, pieces, roads: road_pieces, road_mask }
 }

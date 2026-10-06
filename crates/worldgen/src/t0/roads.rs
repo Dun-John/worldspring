@@ -62,6 +62,18 @@ pub struct RoadPath {
     pub wander: Vec<f32>,
 }
 
+/// How a road of `class` crosses a river `width_ft` wide: a track wades a creek under 30 ft, a
+/// river over 250 ft wide is crossed by ferry (a king's road always has its bridge), else a bridge.
+pub fn crossing_kind(class: RoadClass, width_ft: f64) -> CrossingKind {
+    if class == RoadClass::Track && width_ft < 30.0 {
+        CrossingKind::Ford
+    } else if width_ft > 250.0 && class != RoadClass::KingsRoad {
+        CrossingKind::Ferry
+    } else {
+        CrossingKind::Bridge
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Crossing {
     pub kind: CrossingKind,
@@ -77,8 +89,27 @@ pub struct Network {
     pub waystations: Vec<Poi>,
 }
 
+/// The ground roads are planned on (T0 cell units in, ft out): the T0 surface as the
+/// terrain's coarsest refined level holds it, cut by the river valleys (`RiverNet::valley`),
+/// sampled every half cell. Switchbacks, bends and profiles follow it, so a road planned on
+/// it lies on the ground the terrain is built from (not in a trench or on a dike).
+pub struct Plan {
+    pub grid: Grid<f32>,
+    /// Size in T0 cells.
+    pub cw: usize,
+    pub ch: usize,
+}
+
+impl Plan {
+    pub const SCALE: f64 = 2.0;
+    pub fn z(&self, p: [f64; 2]) -> f64 {
+        self.grid.sample_cubic(p[0] * Self::SCALE, p[1] * Self::SCALE)
+    }
+}
+
 pub struct Inputs<'a> {
     pub world: &'a World,
+    pub plan: &'a Plan,
     pub w: usize,
     pub h: usize,
     pub cell_ft: f64,
@@ -160,7 +191,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     }
 
     // --- Switchbacks and profile.
-    let hgrid = Grid::from_vec(w, h, inp.height.iter().map(|&v| v as f32).collect());
+    let hgrid = inp.plan;
     let mut roads: Vec<RoadPath> = Vec::new();
     for (class, seg) in &segments {
         let mut cells: Vec<[f64; 2]> = seg.iter().map(|&c| [(c as usize % w) as f64, (c as usize / w) as f64]).collect();
@@ -170,8 +201,8 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
                 cells[end] = [s.x / cell, s.y / cell];
             }
         }
-        let chords = simplify(&cells, w, h, &hgrid, class.max_grade(), cell, passable_fn(inp));
-        let (mut pts, mut wander) = switchbacks(&hgrid, &chords, class.max_grade(), cell, passable_fn(inp));
+        let chords = simplify(&cells, w, h, hgrid, class.max_grade(), cell, passable_fn(inp));
+        let (mut pts, mut wander) = switchbacks(hgrid, &chords, class.max_grade(), cell, passable_fn(inp));
         // Towns and cities are entered at their urban edge (gates); the streets take over.
         for at_start in [true, false] {
             let c = if at_start { seg[0] } else { seg[seg.len() - 1] };
@@ -190,7 +221,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
         }
         // Bend with the land instead of running ruler-straight across it.
         let seed = crate::core::rng::hash2(inp.world.stream("t0.road.bends"), seg[0] as i64, seg[seg.len() - 1] as i64);
-        follow_terrain(&mut pts, &mut wander, &hgrid, *class, cell, seed, &|x, y| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && passable_fn(inp)(y as usize * w + x as usize));
+        follow_terrain(&mut pts, &mut wander, hgrid, *class, cell, seed, &|x, y| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && passable_fn(inp)(y as usize * w + x as usize));
         // Less wander near water so bends never push the road into a lake or the sea.
         for (p, wt) in pts.iter().zip(wander.iter_mut()) {
             let mut clear = 2.5f64;
@@ -203,11 +234,11 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
                 }
             }
             // Wandering across a slope means cut and fill; keep hillside roads on their line.
-            let (gx, gy) = (hgrid.sample_cubic(p[0] + 0.5, p[1]) - hgrid.sample_cubic(p[0] - 0.5, p[1]), hgrid.sample_cubic(p[0], p[1] + 0.5) - hgrid.sample_cubic(p[0], p[1] - 0.5));
+            let (gx, gy) = (hgrid.z([p[0] + 0.5, p[1]]) - hgrid.z([p[0] - 0.5, p[1]]), hgrid.z([p[0], p[1] + 0.5]) - hgrid.z([p[0], p[1] - 0.5]));
             let slope = crate::core::sqrt(gx * gx + gy * gy) / cell;
             *wt *= (smoothstep(0.6, 2.2, clear) * (1.0 - 0.85 * smoothstep(0.01, 0.05, slope))) as f32;
         }
-        let z = profile(&hgrid, &pts, class.max_grade(), cell);
+        let z = profile(hgrid, &pts, class.max_grade(), cell);
         roads.push(RoadPath { class: *class, pts: pts.iter().map(|p| [p[0] * cell, p[1] * cell]).collect(), z, wander });
     }
 
@@ -234,13 +265,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
             let q = inp.hydro.discharge[b] as f64;
             if q >= river_q && (inp.hydro.discharge[a] as f64) < q * 0.999 {
                 let width = crate::lod::rivers::width_ft(q);
-                let kind = if *class == RoadClass::Track && width < 30.0 {
-                    CrossingKind::Ford
-                } else if width > 350.0 && *class != RoadClass::KingsRoad {
-                    CrossingKind::Ferry
-                } else {
-                    CrossingKind::Bridge
-                };
+                let kind = crossing_kind(*class, width);
                 let (x, y) = ((b % w) as f64 * cell, (b / w) as f64 * cell);
                 if !crossings.iter().any(|c| (c.x - x).abs() < cell * 0.5 && (c.y - y).abs() < cell * 0.5) {
                     crossings.push(Crossing { kind, x, y, class: *class, river_width_ft: width });
@@ -498,18 +523,19 @@ fn passable_fn<'a>(inp: &'a Inputs) -> impl Fn(usize) -> bool + 'a {
 /// hillside the road curves along the slope. Switchback legs (wander 0), the ends and water
 /// stay as they are; wander is then 0 where the road bends here (the noise wander added
 /// when it is drawn would ignore its profile and cut the hillside).
-fn follow_terrain(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, hgrid: &Grid<f32>, class: RoadClass, cell: f64, seed: u64, dry: &dyn Fn(i64, i64) -> bool) {
+fn follow_terrain(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, hgrid: &Plan, class: RoadClass, cell: f64, seed: u64, dry: &dyn Fn(i64, i64) -> bool) {
     const STEP: f64 = 0.05;
     const REACH: f64 = 0.35;
-    if pts.len() < 2 || wander.iter().all(|w| *w < 0.5) {
+    if pts.len() < 2 {
         return;
     }
     let gmax = class.max_grade();
-    // Resample (keeping switchback legs' points as they are).
+    // Resample every `STEP` (switchback legs too: they stay where they are, but the profile
+    // needs points along them to follow the ground).
     let (mut rp, mut rw): (Vec<[f64; 2]>, Vec<f32>) = (vec![pts[0]], vec![wander[0]]);
     for k in 1..pts.len() {
         let (a, b) = (pts[k - 1], pts[k]);
-        let n = if wander[k - 1] < 0.5 || wander[k] < 0.5 { 1 } else { (dist(a, b) / STEP).ceil().max(1.0) as usize };
+        let n = (dist(a, b) / STEP).ceil().max(1.0) as usize;
         for j in 1..=n {
             let t = j as f64 / n as f64;
             rp.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
@@ -569,7 +595,7 @@ fn follow_terrain(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, hgrid: &Grid<f
     }
     let mut rp = orig.clone();
     let room: Vec<f64> = ease.iter().map(|e| REACH * e).collect();
-    let hz = |p: [f64; 2]| hgrid.sample_cubic(p[0], p[1]);
+    let hz = |p: [f64; 2]| hgrid.z(p);
     let mut z: Vec<f64> = rp.iter().map(|p| hz(*p)).collect();
     let grade = |za: f64, zb: f64, a: [f64; 2], b: [f64; 2]| (zb - za) / (dist(a, b) * cell).max(1.0);
     let cost = |g: f64| 100.0 * g * g + if g.abs() > gmax { 1_000.0 * (g.abs() - gmax) * (g.abs() - gmax) } else { 0.0 };
@@ -627,13 +653,13 @@ fn trim_start(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, c: [f64; 2], r: f6
 /// when it stays near the grid path, crosses only passable ground and is no steeper than the
 /// class allows (or than the path itself was); chords are then resampled to at most one cell
 /// per step so the grade check below sees the terrain between vertices.
-fn simplify(cells: &[[f64; 2]], w: usize, h: usize, hg: &Grid<f32>, gmax: f64, cell: f64, passable: impl Fn(usize) -> bool) -> Vec<[f64; 2]> {
+fn simplify(cells: &[[f64; 2]], w: usize, h: usize, hg: &Plan, gmax: f64, cell: f64, passable: impl Fn(usize) -> bool) -> Vec<[f64; 2]> {
     const TOL: f64 = 2.5;
     let steepest = |pts: &mut dyn Iterator<Item = [f64; 2]>| {
         let mut prev: Option<([f64; 2], f64)> = None;
         let mut worst = 0.0f64;
         for p in pts {
-            let z = hg.sample_cubic(p[0], p[1]);
+            let z = hg.z(p);
             if let Some((q, zq)) = prev {
                 worst = worst.max((z - zq).abs() / (dist(p, q) * cell).max(1.0));
             }
@@ -695,9 +721,9 @@ fn simplify(cells: &[[f64; 2]], w: usize, h: usize, hg: &Grid<f32>, gmax: f64, c
 
 /// Replace too-steep stretches with grade-limited paths on a 4× grid (T0 cell units in/out).
 /// Also returns the wander weight per point (0 on switchback legs, which must stay put).
-fn switchbacks(hg: &Grid<f32>, cells: &[[f64; 2]], gmax: f64, cell: f64, passable: impl Fn(usize) -> bool) -> (Vec<[f64; 2]>, Vec<f32>) {
+fn switchbacks(hg: &Plan, cells: &[[f64; 2]], gmax: f64, cell: f64, passable: impl Fn(usize) -> bool) -> (Vec<[f64; 2]>, Vec<f32>) {
     const F: f64 = 4.0;
-    let at = |p: [f64; 2]| hg.sample_cubic(p[0], p[1]);
+    let at = |p: [f64; 2]| hg.z(p);
     let mut out: Vec<[f64; 2]> = vec![cells[0]];
     let mut wander: Vec<f32> = vec![1.0];
     let mut i = 0;
@@ -745,22 +771,99 @@ fn switchbacks(hg: &Grid<f32>, cells: &[[f64; 2]], gmax: f64, cell: f64, passabl
         }
         i = j;
     }
-    (out, wander)
+    // Corners (hairpins, and where a switchback stretch meets the road) turn on arcs.
+    round_corners(&out, &wander, 0.06, 0.05)
+}
+
+/// A polyline (cells) with each corner turning more than 30° rounded by a circular arc
+/// tangent to both sides (radius up to `r_max`, smaller where the sides are short or meet at
+/// a narrow angle: a hairpin becomes a tight U-turn), and points at most `step` apart; `vals`
+/// (one per point) are carried along (interpolated on lines, the corner's on its arc).
+pub fn round_corners(pts: &[[f64; 2]], vals: &[f32], r_max: f64, step: f64) -> (Vec<[f64; 2]>, Vec<f32>) {
+    let n = pts.len();
+    if n < 3 {
+        return (pts.to_vec(), vals.to_vec());
+    }
+    // Per corner: (distance cut back along each side, arc centre, radius); None: kept sharp.
+    let fillet: Vec<Option<(f64, [f64; 2], f64)>> = (0..n)
+        .map(|k| {
+            if k == 0 || k == n - 1 {
+                return None;
+            }
+            let (a, b) = (unit2([pts[k - 1][0] - pts[k][0], pts[k - 1][1] - pts[k][1]]), unit2([pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]]));
+            // Interior angle between the sides; a turn under 30° stays.
+            let alpha = libm::acos(dot2(a, b).clamp(-1.0, 1.0));
+            if alpha > 150f64.to_radians() || alpha < 1e-3 {
+                return None;
+            }
+            let tan_half = libm::tan(0.5 * alpha);
+            let t_max = 0.45 * dist(pts[k - 1], pts[k]).min(dist(pts[k], pts[k + 1]));
+            let r = r_max.min(t_max * tan_half);
+            let t = r / tan_half;
+            let bis = unit2([a[0] + b[0], a[1] + b[1]]);
+            let c = r / libm::sin(0.5 * alpha);
+            Some((t, [pts[k][0] + bis[0] * c, pts[k][1] + bis[1] * c], r))
+        })
+        .collect();
+    let mut out: Vec<[f64; 2]> = vec![pts[0]];
+    let mut ov: Vec<f32> = vec![vals[0]];
+    let line = |out: &mut Vec<[f64; 2]>, ov: &mut Vec<f32>, b: [f64; 2], vb: f32| {
+        let (a, va) = (*out.last().unwrap(), *ov.last().unwrap());
+        let m = (dist(a, b) / step).ceil().max(1.0) as usize;
+        out.extend((1..=m).map(|i| [a[0] + (b[0] - a[0]) * i as f64 / m as f64, a[1] + (b[1] - a[1]) * i as f64 / m as f64]));
+        ov.extend((1..=m).map(|i| va + (vb - va) * i as f32 / m as f32));
+    };
+    // Points closer than this to the last are left out (no slivers of segments).
+    let min_gap = 0.05 * step;
+    let toward = |from: [f64; 2], to: [f64; 2], d: f64| {
+        let u = unit2([to[0] - from[0], to[1] - from[1]]);
+        [from[0] + u[0] * d, from[1] + u[1] * d]
+    };
+    for k in 1..n {
+        let Some((t, c, r)) = fillet[k] else {
+            line(&mut out, &mut ov, pts[k], vals[k]);
+            continue;
+        };
+        let (p0, p3) = (toward(pts[k], pts[k - 1], t), toward(pts[k], pts[k + 1], t));
+        if dist(p0, *out.last().unwrap()) >= min_gap {
+            line(&mut out, &mut ov, p0, vals[k]);
+        }
+        // Round the arc from p0 to p3 about c, the short way.
+        let (a0, a1) = (libm::atan2(p0[1] - c[1], p0[0] - c[0]), libm::atan2(p3[1] - c[1], p3[0] - c[0]));
+        let mut sweep = a1 - a0;
+        while sweep > std::f64::consts::PI {
+            sweep -= std::f64::consts::TAU;
+        }
+        while sweep < -std::f64::consts::PI {
+            sweep += std::f64::consts::TAU;
+        }
+        // At least a point every 15° (a tight hairpin is still round) and every `step`.
+        let m = ((sweep.abs() * r) / step).max(sweep.abs() / 15f64.to_radians()).ceil().clamp(2.0, 60.0) as usize;
+        for i in 1..=m {
+            let a = a0 + sweep * i as f64 / m as f64;
+            let q = [c[0] + r * libm::cos(a), c[1] + r * libm::sin(a)];
+            if dist(q, *out.last().unwrap()) >= min_gap {
+                out.push(q);
+                ov.push(vals[k]);
+            }
+        }
+    }
+    (out, ov)
 }
 
 /// A* on a grid `f` times finer than T0 inside a corridor; each step's grade must be ≤ gmax
 /// (then ≤ 1.8 gmax as a fallback). Returns points in T0 cell units.
-fn fine_route(hg: &Grid<f32>, a: [f64; 2], b: [f64; 2], gmax: f64, cell: f64, f: f64, passable: &impl Fn(usize) -> bool) -> Option<Vec<[f64; 2]>> {
+fn fine_route(hg: &Plan, a: [f64; 2], b: [f64; 2], gmax: f64, cell: f64, f: f64, passable: &impl Fn(usize) -> bool) -> Option<Vec<[f64; 2]>> {
     let pad = 4.0;
     let (x0, y0) = ((a[0].min(b[0]) - pad).max(0.0), (a[1].min(b[1]) - pad).max(0.0));
-    let (x1, y1) = ((a[0].max(b[0]) + pad).min((hg.w - 1) as f64), (a[1].max(b[1]) + pad).min((hg.h - 1) as f64));
+    let (x1, y1) = ((a[0].max(b[0]) + pad).min((hg.cw - 1) as f64), (a[1].max(b[1]) + pad).min((hg.ch - 1) as f64));
     let (fw, fh) = (((x1 - x0) * f) as usize + 1, ((y1 - y0) * f) as usize + 1);
     let to_world = |i: usize| [x0 + (i % fw) as f64 / f, y0 + (i / fw) as f64 / f];
-    let hts: Vec<f64> = (0..fw * fh).map(|i| hg.sample_cubic(to_world(i)[0], to_world(i)[1])).collect();
+    let hts: Vec<f64> = (0..fw * fh).map(|i| hg.z(to_world(i))).collect();
     let ok: Vec<bool> = (0..fw * fh)
         .map(|i| {
             let p = to_world(i);
-            passable((p[1].round() as usize).min(hg.h - 1) * hg.w + (p[0].round() as usize).min(hg.w - 1))
+            passable((p[1].round() as usize).min(hg.ch - 1) * hg.cw + (p[0].round() as usize).min(hg.cw - 1))
         })
         .collect();
     let idx = |p: [f64; 2]| (((p[1] - y0) * f).round() as usize).min(fh - 1) * fw + (((p[0] - x0) * f).round() as usize).min(fw - 1);
@@ -828,8 +931,8 @@ fn fine_route(hg: &Grid<f32>, a: [f64; 2], b: [f64; 2], gmax: f64, cell: f64, f:
 /// cut-only envelope (largest grade-limited profile below the terrain) and the fill-only
 /// one (smallest above it). Both are exactly grade-limited, so their average is too, and it
 /// balances cuttings through bumps against embankments over dips.
-fn profile(hg: &Grid<f32>, pts: &[[f64; 2]], gmax: f64, cell: f64) -> Vec<f32> {
-    let terrain: Vec<f64> = pts.iter().map(|p| hg.sample_cubic(p[0], p[1])).collect();
+fn profile(hg: &Plan, pts: &[[f64; 2]], gmax: f64, cell: f64) -> Vec<f32> {
+    let terrain: Vec<f64> = pts.iter().map(|p| hg.z(*p)).collect();
     let ft: Vec<[f64; 2]> = pts.iter().map(|p| [p[0] * cell, p[1] * cell]).collect();
     fit_profile(&ft, &terrain, gmax)
 }
@@ -879,6 +982,11 @@ pub fn fit_profile_over(pts: &[[f64; 2]], terrain: &[f64], floor: &[f64], gmax: 
     }
     for (v, r) in z.iter_mut().zip(&ramp) {
         *v = v.max(*r as f32);
+    }
+    // f32 rounding must not push a step over the limit.
+    for i in 1..z.len() {
+        let l = (lim[i] * 0.999) as f32;
+        z[i] = z[i].clamp(z[i - 1] - l, z[i - 1] + l);
     }
     z
 }

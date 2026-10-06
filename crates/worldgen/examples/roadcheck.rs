@@ -223,7 +223,9 @@ fn main() {
         if let Some(ri) = std::env::var("ROAD").ok().and_then(|v| v.parse::<usize>().ok()) {
             let rc = &t0.roads.roads[ri];
             for (k, p) in rc.pts.iter().enumerate() {
-                println!("  road {ri} pt {k}: ({:.0}, {:.0}) z {:.0} wander {:.2} s {:.0}", p[0], p[1], rc.z[k], rc.wander[k], rc.s[k]);
+                let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
+                let plan = t0.rivers.valley(t0.ground_at(p[0], p[1], lattice), p[0], p[1]);
+                println!("  road {ri} pt {k}: ({:.0}, {:.0}) z {:.0} (ground {plan:.0}) wander {:.2} s {:.0}", p[0], p[1], rc.z[k], rc.wander[k], rc.s[k]);
             }
             for (si, st) in t0.settlements.iter().enumerate().filter(|(_, st)| rc.pts.iter().any(|p| dist(*p, [st.x, st.y]) < 3.0 * t0.cell_ft)) {
                 println!("  settlement {si} {:?} at ({:.0}, {:.0}), trim {:.0}", st.tier, st.x, st.y, worldgen::town::road_trim_radius(st.tier, st.population));

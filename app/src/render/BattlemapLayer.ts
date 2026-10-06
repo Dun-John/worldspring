@@ -23,7 +23,7 @@ import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, PX, VARIANTS, type Atlas } from './atlas';
-import { deckGrid, drawDeck, drawRoadBridge } from './bridges';
+import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
 import type { Camera } from './camera';
@@ -659,11 +659,17 @@ export class BattlemapLayer {
     for (const s of c.shapes) {
       if (s.kind === 2) drawDeck(bridgeG, s);
       else if (s.kind === 3) drawRoadBridge(bridgeG, s);
-      else continue;
+      else if (s.kind === 6) {
+        drawFord(bridgeG, s);
+        continue;
+      } else if (s.kind === 7) {
+        drawFerry(bridgeG, s);
+        continue;
+      } else continue;
       deckGrid(gridG, s);
     }
     gridG.visible = this.frame.uniforms.uGrid > 0;
-    const structG = drawStructures(c.shapes.filter((s) => s.kind !== 1 && s.kind !== 2 && s.kind !== 3 && s.kind !== 5));
+    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4));
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1));
     for (const part of [roofMesh, daisG, battleG, bridgeG, gridG, structG, towerG]) {
       if (!part) continue;

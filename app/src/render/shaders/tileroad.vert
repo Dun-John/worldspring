@@ -1,7 +1,7 @@
 #version 300 es
 // Road segment owned by a tile, expanded into a screen-space capsule (same transform as the
 // terrain tile). Classes: 0 king's road, 1 road, 2 track, 3 paved street (the strip beside a
-// block; no symbol line), 4 paved main street.
+// block; no symbol line), 4 paved main street, 5 a ferry's line across a river (dashed).
 
 in vec2 aA;
 in vec2 aB;
@@ -31,9 +31,10 @@ void main() {
     float cls = aQ.x;
     float w = aW.x;
     // Symbolic half width (px) by class, or the real bed once it is wider on screen.
-    float symbolic = cls < 0.5 ? 1.25 : (cls < 1.5 ? 0.9 : (cls < 2.5 ? 0.6 : (cls < 3.5 ? 0.0 : 0.9)));
+    float symbolic = cls < 0.5 ? 1.25 : (cls < 1.5 ? 0.9 : (cls < 2.5 ? 0.6 : (cls < 3.5 ? 0.0 : (cls < 4.5 ? 0.9 : 0.7))));
     float bedPx = 0.5 * w * uPpf;
-    float hw = max(symbolic, bedPx);
+    // A ferry's line stays a line (its rope), however close.
+    float hw = cls > 4.5 ? max(symbolic, min(bedPx * 0.15, 2.0)) : max(symbolic, bedPx);
     vec2 dir = sb - sa;
     float len = length(dir);
     dir = len > 1e-4 ? dir / len : vec2(1.0, 0.0);

@@ -80,6 +80,105 @@ export function drawRoadBridge(g: Graphics, s: Shape) {
   timber(g, f, rngAt(x0 + x1, y0 + y1), true);
 }
 
+/** A frame `len` long and `wid` wide whose first end's middle is (x, y), along unit (ux, uy). */
+function frameFrom(x: number, y: number, ux: number, uy: number, len: number, wid: number): Frame {
+  const [vx, vy] = [-uy, ux];
+  return { ox: x - vx * wid * 0.5, oy: y - vy * wid * 0.5, ux, uy, vx, vy, len, wid };
+}
+
+/**
+ * A ford (`ShapeKind::Ford`): from bank to bank, flat stepping stones in a loose band as wide
+ * as the road (`size`) across the shallows, a ripple of white water on their downstream sides.
+ */
+export function drawFord(g: Graphics, s: Shape) {
+  const [x0, y0, x1, y1] = s.pts;
+  const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+  const f = frameFrom(x0, y0, (x1 - x0) / len, (y1 - y0) / len, len, Math.max(s.size, FT * 4));
+  const rnd = rngAt(x0 + x1, y0 + y1);
+  const rows = Math.max(2, Math.round(len / (FT * 3.2)));
+  const per = Math.max(2, Math.round(f.wid / (FT * 3.0)));
+  const stones: [number, number, number, number][] = [];
+  for (let i = 0; i < rows; i++) {
+    for (let k = 0; k < per; k++) {
+      if (rnd() < 0.18) continue;
+      const a = ((i + 0.5) / rows) * len + (rnd() - 0.5) * FT * 0.9;
+      const b = ((k + 0.5) / per) * f.wid + (rnd() - 0.5) * FT * 0.9;
+      stones.push([a, b, FT * (1.2 + rnd() * 0.5), rnd() * Math.PI]);
+    }
+  }
+  // Wakes, then shadows, then the stones (lit from the north-west, ink outlined).
+  for (const [a, b, r] of stones) {
+    const [x, y] = atF(f, a, b);
+    g.ellipse(x + FT * 0.5, y + FT * 0.6, r * 1.25, r * 0.95).fill({ color: 0xffffff, alpha: 0.28 });
+  }
+  for (const [a, b, r] of stones) {
+    const [x, y] = atF(f, a, b);
+    g.ellipse(x + FT * 0.35, y + FT * 0.35, r, r * 0.8).fill({ color: 0x000000, alpha: 0.25 });
+  }
+  for (const [a, b, r, turn] of stones) {
+    const [x, y] = atF(f, a, b);
+    const pts: number[] = [];
+    for (let j = 0; j < 7; j++) {
+      const t = turn + (j / 7) * Math.PI * 2;
+      const rr = r * (0.85 + 0.15 * Math.sin(j * 2.3 + turn * 3));
+      pts.push(x + Math.cos(t) * rr, y + Math.sin(t) * rr * 0.82);
+    }
+    g.poly(pts).fill(STONE[1]).stroke({ width: 1.8, color: INK });
+    g.ellipse(x + LX * r * 0.25, y + LY * r * 0.25, r * 0.55, r * 0.4).fill({ color: STONE[3], alpha: 0.7 });
+  }
+}
+
+/**
+ * A ferry (`ShapeKind::Ferry`): its line runs between the ends of a timber jetty out from each
+ * bank; a rope on posts across, and the raft (`size` wide) on it a quarter of the way over.
+ */
+export function drawFerry(g: Graphics, s: Shape) {
+  const [x0, y0, x1, y1] = s.pts;
+  const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+  const [ux, uy] = [(x1 - x0) / len, (y1 - y0) / len];
+  const rnd = rngAt(x0 + x1, y0 + y1);
+  const jetty = FT * 24;
+  const jw = FT * 9;
+  // Jetties: from each line end back towards its bank.
+  timber(g, frameFrom(x0 - ux * jetty, y0 - uy * jetty, ux, uy, jetty, jw), rnd, false);
+  timber(g, frameFrom(x1, y1, ux, uy, jetty, jw), rnd, false);
+  for (const [x, y] of [
+    [x0, y0],
+    [x1, y1],
+  ]) {
+    for (const side of [-1, 1]) logEnd(g, x - uy * side * jw * 0.5, y + ux * side * jw * 0.5, FT * 0.85);
+  }
+  // The rope, sagging a little downstream of the line, with its shadow.
+  const sag = len * 0.04;
+  const rope = (dx: number, dy: number) => {
+    g.moveTo(x0 + dx, y0 + dy);
+    g.quadraticCurveTo((x0 + x1) * 0.5 - uy * sag + dx, (y0 + y1) * 0.5 + ux * sag + dy, x1 + dx, y1 + dy);
+  };
+  rope(FT * 1.2, FT * 1.2);
+  g.stroke({ width: FT * 0.7, color: 0x000000, alpha: 0.2 });
+  rope(0, 0);
+  g.stroke({ width: FT * 1.1, color: INK });
+  rope(0, 0);
+  g.stroke({ width: FT * 0.5, color: 0xc9a66b });
+  // The raft: logs lashed under a plank deck, a quarter of the way across.
+  const t = 0.25 + rnd() * 0.1;
+  const rw = Math.max(s.size * 1.2, FT * 14);
+  const rl = rw * 1.6;
+  const [cx, cy] = [x0 + ux * len * t - uy * sag * 4 * t * (1 - t), y0 + uy * len * t + ux * sag * 4 * t * (1 - t)];
+  const f = frameFrom(cx - ux * rl * 0.5, cy - uy * rl * 0.5, ux, uy, rl, rw);
+  const corners = [atF(f, 0, 0), atF(f, rl, 0), atF(f, rl, rw), atF(f, 0, rw)].flat();
+  g.poly(corners.map((v, i) => v + FT * (i % 2 ? 1.6 : 1.6))).fill({ color: 0x000000, alpha: 0.28 });
+  timber(g, f, rnd, false);
+  for (const [a, b] of [
+    [FT, FT * 0.2],
+    [rl - FT, FT * 0.2],
+    [FT, rw - FT * 0.2],
+    [rl - FT, rw - FT * 0.2],
+  ]) {
+    logEnd(g, ...atF(f, a, b), FT * 0.7);
+  }
+}
+
 /**
  * Worn timber in the props' manner (the fallen log, crates): a few broad planks across the span,
  * each a little skewed and ragged at the ends, two flat tones with a dark far edge, one bold grain

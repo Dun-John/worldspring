@@ -370,8 +370,8 @@ impl RiverNet {
 
     /// The highest water surface (ft) of any river channel the straight line a–b crosses or
     /// comes within `margin` ft of (its finest curve in ~150-ft chords, sampled once per river
-    /// segment into `cache`).
-    pub fn crossing_level(&self, a: [f64; 2], b: [f64; 2], margin: f64, cell_ft: f64, cache: &CrossingCache) -> Option<f64> {
+    /// segment into `cache`), and that river's width there.
+    pub fn crossing_level(&self, a: [f64; 2], b: [f64; 2], margin: f64, cell_ft: f64, cache: &CrossingCache) -> Option<(f64, f64)> {
         let seg_dist = |p: [f64; 2], u: [f64; 2], v: [f64; 2]| {
             let (dx, dy) = (v[0] - u[0], v[1] - u[1]);
             let t = (((p[0] - u[0]) * dx + (p[1] - u[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
@@ -380,7 +380,7 @@ impl RiverNet {
         let (rx, ry) = (b[0] - a[0], b[1] - a[1]);
         let pad = margin + 0.5 * width_ft(1e9);
         let (x0, y0, x1, y1) = (a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1]));
-        let mut level: Option<f64> = None;
+        let mut level: Option<(f64, f64)> = None;
         for (ri, k) in self.segments_near(x0, y0, x1, y1, pad) {
             let seg = cache.get(self, ri, k, cell_ft);
             let (bb, pts) = (&seg.0, &seg.1);
@@ -413,8 +413,10 @@ impl RiverNet {
                     }
                 }
                 if let Some(v) = at {
-                    let z = p[2] + (q[2] - p[2]) * v;
-                    level = Some(level.map_or(z, |l: f64| l.max(z)));
+                    let (z, w) = (p[2] + (q[2] - p[2]) * v, p[3] + (q[3] - p[3]) * v);
+                    if level.is_none_or(|l| z > l.0) {
+                        level = Some((z, w));
+                    }
                 }
             }
         }
@@ -433,28 +435,38 @@ impl RiverNet {
         let far = carve_reach(width_ft(1e9), VALLEY_SPACING_FT, 8.0);
         let mut v = h;
         for (ri, k) in self.segments_near(x, y, x, y, far) {
-            let pts = &self.coarse[ri as usize][k as usize];
-            for c in pts.windows(2) {
-                let (a, b) = (c[0], c[1]);
-                let (ax, ay, bx, by) = (a[0] as f64, a[1] as f64, b[0] as f64, b[1] as f64);
-                let (dx, dy) = (bx - ax, by - ay);
-                let t = (((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
-                let (ex, ey) = (ax + dx * t - x, ay + dy * t - y);
-                let d = crate::core::sqrt(ex * ex + ey * ey);
-                let w = a[3] as f64 + (b[3] - a[3]) as f64 * t;
-                let reach = carve_reach(w, VALLEY_SPACING_FT, 8.0);
-                if d >= reach {
-                    continue;
-                }
-                let z = a[2] as f64 + (b[2] - a[2]) as f64 * t;
-                let mut c = h.min(z + (d - 0.5 * w).max(0.0) * BANK_SLOPE);
-                if d > VALLEY_EASE * reach {
-                    c += (h - c) * smoothstep(VALLEY_EASE * reach, reach, d);
-                }
-                v = v.min(c);
+            for c in self.coarse[ri as usize][k as usize].windows(2) {
+                v = v.min(valley_cut(c[0], c[1], h, x, y));
             }
         }
         v
+    }
+
+    /// `valley` over a grid of heights (row-major, `w` wide, point (i, j) at `origin` +
+    /// (i, j) · `spacing` ft), in place: each chord cuts the points within its reach.
+    pub fn valley_grid(&self, heights: &mut [f32], w: usize, origin: [f64; 2], spacing: f64) {
+        let h = heights.len() / w.max(1);
+        let ground = heights.to_vec();
+        for chords in self.coarse.iter().flatten() {
+            for c in chords.windows(2) {
+                let (a, b) = (c[0], c[1]);
+                let reach = carve_reach(a[3].max(b[3]) as f64, VALLEY_SPACING_FT, 8.0);
+                let (x0, x1) = (a[0].min(b[0]) as f64 - reach, a[0].max(b[0]) as f64 + reach);
+                let (y0, y1) = (a[1].min(b[1]) as f64 - reach, a[1].max(b[1]) as f64 + reach);
+                let (i0, i1) = (((x0 - origin[0]) / spacing).ceil().max(0.0) as usize, (((x1 - origin[0]) / spacing).floor().max(-1.0) as i64).min(w as i64 - 1));
+                let (j0, j1) = (((y0 - origin[1]) / spacing).ceil().max(0.0) as usize, (((y1 - origin[1]) / spacing).floor().max(-1.0) as i64).min(h as i64 - 1));
+                if i1 < 0 || j1 < 0 {
+                    continue;
+                }
+                for j in j0..=j1 as usize {
+                    for i in i0..=i1 as usize {
+                        let k = j * w + i;
+                        let (x, y) = (origin[0] + i as f64 * spacing, origin[1] + j as f64 * spacing);
+                        heights[k] = heights[k].min(valley_cut(a, b, ground[k] as f64, x, y) as f32);
+                    }
+                }
+            }
+        }
     }
 
     /// (river, segment) pairs whose curves may pass within `pad` ft of the rectangle.
@@ -474,6 +486,27 @@ impl RiverNet {
         out.dedup();
         out
     }
+}
+
+/// The ground `h` at (x, y) as one coarse chord a–b (x, y, water level, width) of a river
+/// cuts it (`RiverNet::valley`).
+fn valley_cut(a: [f32; 4], b: [f32; 4], h: f64, x: f64, y: f64) -> f64 {
+    let (ax, ay, bx, by) = (a[0] as f64, a[1] as f64, b[0] as f64, b[1] as f64);
+    let (dx, dy) = (bx - ax, by - ay);
+    let t = (((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+    let (ex, ey) = (ax + dx * t - x, ay + dy * t - y);
+    let d = crate::core::sqrt(ex * ex + ey * ey);
+    let w = a[3] as f64 + (b[3] - a[3]) as f64 * t;
+    let reach = carve_reach(w, VALLEY_SPACING_FT, 8.0);
+    if d >= reach {
+        return h;
+    }
+    let z = a[2] as f64 + (b[2] - a[2]) as f64 * t;
+    let mut c = h.min(z + (d - 0.5 * w).max(0.0) * BANK_SLOPE);
+    if d > VALLEY_EASE * reach {
+        c += (h - c) * smoothstep(VALLEY_EASE * reach, reach, d);
+    }
+    c
 }
 
 /// River segments' finest curves sampled for `RiverNet::crossing_level` (bounding box and

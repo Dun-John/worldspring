@@ -175,6 +175,79 @@ pub struct RoadPiece {
     pub pts: Vec<RoadPoint>,
 }
 
+/// Where a road crosses a river (both as sampled for a tile): the point, the road's unit
+/// direction, the river's width there, the sine of the crossing angle (≥ 0.35), the water
+/// level, the road's class and how it crosses.
+#[derive(Clone, Copy, Debug)]
+pub struct RiverCrossing {
+    pub at: [f64; 2],
+    pub u: [f64; 2],
+    pub w: f64,
+    pub sin: f64,
+    pub z: f64,
+    pub class: RoadClass,
+    pub kind: crate::t0::roads::CrossingKind,
+}
+
+impl RiverCrossing {
+    /// Half the road's run over the channel.
+    pub fn half_span(&self) -> f64 {
+        0.5 * self.w / self.sin
+    }
+    /// Whether `p` lies on the road where it crosses the channel (a few feet beyond either way).
+    pub fn covers(&self, p: [f64; 2]) -> bool {
+        let (a, x) = self.local(p);
+        a.abs() <= self.half_span() + 8.0 && x.abs() <= 0.5 * self.class.width_ft() + 5.0
+    }
+    /// (along the road, across it) from the crossing point to `p`.
+    pub fn local(&self, p: [f64; 2]) -> (f64, f64) {
+        let (dx, dy) = (p[0] - self.at[0], p[1] - self.at[1]);
+        (dx * self.u[0] + dy * self.u[1], -dx * self.u[1] + dy * self.u[0])
+    }
+}
+
+/// Every intersection of a road piece with a river piece's centre line.
+pub fn river_crossings(roads: &[RoadPiece], rivers: &[crate::lod::rivers::Piece]) -> Vec<RiverCrossing> {
+    let mut out = Vec::new();
+    for piece in roads {
+        for rs in piece.pts.windows(2) {
+            let (a, b) = (rs[0].p, rs[1].p);
+            let (rx, ry) = (b[0] - a[0], b[1] - a[1]);
+            let rl = crate::core::sqrt(rx * rx + ry * ry);
+            if rl < 1e-6 {
+                continue;
+            }
+            for river in rivers {
+                for vs in river.pts.windows(2) {
+                    let (c, d) = (vs[0].p, vs[1].p);
+                    let (sx, sy) = (d[0] - c[0], d[1] - c[1]);
+                    let den = rx * sy - ry * sx;
+                    if den.abs() < 1e-9 {
+                        continue;
+                    }
+                    let t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den;
+                    let v = ((c[0] - a[0]) * ry - (c[1] - a[1]) * rx) / den;
+                    if !(0.0..1.0).contains(&t) || !(0.0..1.0).contains(&v) {
+                        continue;
+                    }
+                    let sl = crate::core::sqrt(sx * sx + sy * sy).max(1e-9);
+                    let w = vs[0].w + (vs[1].w - vs[0].w) * v;
+                    out.push(RiverCrossing {
+                        at: [a[0] + rx * t, a[1] + ry * t],
+                        u: [rx / rl, ry / rl],
+                        w,
+                        sin: (den / (rl * sl)).abs().max(0.35),
+                        z: vs[0].z + (vs[1].z - vs[0].z) * v,
+                        class: piece.class,
+                        kind: crate::t0::roads::crossing_kind(piece.class, w),
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Road polylines near a rectangle, resampled at about `spacing` (never coarser than the
 /// stored points), consecutive segments of one road joined into one piece.
 pub fn pieces(net: &RoadNet, rect: [f64; 4], pad: f64, spacing: f64) -> Vec<RoadPiece> {
