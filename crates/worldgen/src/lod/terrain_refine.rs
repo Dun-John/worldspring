@@ -84,8 +84,16 @@ pub fn terrain_tile(world: &World, t0: &T0, key: &TileKey, parent: Option<&[f32]
         }
     }
     let mut river_water = vec![DRY; PADDED * PADDED];
+    // Settlement pads (weights per padded sample) where rivers are carved: they get the town
+    // valley (`rivers::carve`).
+    let carving = refined && s <= CARVE_MAX_SPACING_FT;
+    let town = if carving { town_weights(t0, key, s) } else { None };
     // Each river is sampled as far out as it carves (plus the halo and a sample of slack).
-    let pieces = rivers::pieces(&t0.rivers, [ox, oy, ox + size, oy + size], &|w| rivers::carve_reach(w, s, CARVE_REACH_SAMPLES) + (HALO as f64 + 1.0) * s, s, t0.cell_ft);
+    let reach_of = |w: f64| {
+        let r = rivers::carve_reach(w, s, CARVE_REACH_SAMPLES);
+        if town.is_some() { r.max(rivers::TOWN_VALLEY_FT) } else { r }
+    };
+    let pieces = rivers::pieces(&t0.rivers, [ox, oy, ox + size, oy + size], &|w| reach_of(w) + (HALO as f64 + 1.0) * s, s, t0.cell_ft);
     let mut road_mask = Vec::new();
     // Road beds first so rivers cut through them (bridges span the channel).
     if refined && s <= roads::CARVE_MAX_SPACING_FT {
@@ -103,9 +111,42 @@ pub fn terrain_tile(world: &World, t0: &T0, key: &TileKey, parent: Option<&[f32]
             (key.x as i64 * TILE_N as i64 - HALO as i64) as f64 * s,
             (key.y as i64 * TILE_N as i64 - HALO as i64) as f64 * s,
         ];
-        rivers::carve(&pieces, &mut padded, &mut river_water, PADDED, origin, s, CARVE_REACH_SAMPLES, &|x, y| t0.sample_water(x, y));
+        rivers::carve(&pieces, &mut padded, &mut river_water, PADDED, origin, s, CARVE_REACH_SAMPLES, &|x, y| t0.sample_water(x, y), town.as_deref());
     }
     TerrainOut { padded, river_water, pieces, roads: road_pieces, road_mask }
+}
+
+/// Each padded sample's settlement-pad weight (as `refine` blends the ground to what the
+/// layouts were planned on: 1 within 0.9 of a settlement's reach, easing to 0 at 1.2), or
+/// None where no settlement reaches the tile.
+fn town_weights(t0: &T0, key: &TileKey, s: f64) -> Option<Vec<f32>> {
+    let (n, h) = (TILE_N as i64, HALO as i64);
+    let (gx0, gy0) = (key.x as i64 * n, key.y as i64 * n);
+    let (tx0, ty0, tx1, ty1) = ((gx0 - h) as f64 * s, (gy0 - h) as f64 * s, (gx0 + n + h) as f64 * s, (gy0 + n + h) as f64 * s);
+    let pads: Vec<(f64, f64, f64)> = t0
+        .settlements
+        .iter()
+        .map(|st| (st.x, st.y, crate::town::reach(st)))
+        .filter(|&(x, y, r)| x + 1.2 * r >= tx0 && x - 1.2 * r <= tx1 && y + 1.2 * r >= ty0 && y - 1.2 * r <= ty1)
+        .collect();
+    if pads.is_empty() {
+        return None;
+    }
+    let mut out = vec![0f32; PADDED * PADDED];
+    for cj in -h..=n + h {
+        let y = (gy0 + cj) as f64 * s;
+        for ci in -h..=n + h {
+            let x = (gx0 + ci) as f64 * s;
+            out[padded_index(ci, cj)] = pads.iter().fold(0.0f64, |m, &(px, py, r)| {
+                if (x - px).abs() >= 1.2 * r || (y - py).abs() >= 1.2 * r {
+                    return m;
+                }
+                let d = crate::core::sqrt((x - px) * (x - px) + (y - py) * (y - py));
+                m.max(1.0 - smoothstep(0.9 * r, 1.2 * r, d))
+            }) as f32;
+        }
+    }
+    out.iter().any(|w| *w > 0.0).then_some(out)
 }
 
 fn sample_t0(world: &World, t0: &T0, key: &TileKey) -> Padded {

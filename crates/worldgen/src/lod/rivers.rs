@@ -33,6 +33,9 @@ const BANK_SLOPE: f64 = 0.1;
 /// it starts and finishes easing back down to the ground.
 const LEVEE_SLOPE: f64 = 0.04;
 const LEVEE_FADE: (f64, f64) = (0.3, 1.5);
+/// Where across its reach (a fraction) the valley starts easing back up to the ground, so
+/// where the ground stands high above an incised river its sides steepen gradually.
+const VALLEY_EASE: f64 = 0.4;
 
 #[derive(Clone, Debug, Default)]
 pub struct RiverCurve {
@@ -313,17 +316,25 @@ pub fn pieces(net: &RiverNet, rect: [f64; 4], pad: &dyn Fn(f64) -> f64, spacing:
 /// of the curve (a `max` of a value growing with distance would pick the farthest segment
 /// in reach, leaving a ring round every joint):
 /// - `cut`: the ground carved to the channel and valley floor, fading back to the ground as
-///   it was over the outer quarter of the carving reach (no cliff where the ground stands
-///   above the valley side);
+///   it was over the outer part of the carving reach (`VALLEY_EASE`; no cliff where the
+///   ground stands above the valley side);
 /// - `lev`, `ulev`: the levee floor just above the water and the position across the levee
 ///   band in band widths (0 at the bank), by which the levee eases out (`LEVEE_FADE`);
 /// - `channel`: any channel covers the sample (channels beat banks).
+///
+/// Inside settlements (`town`: each padded sample's settlement-pad weight, 0 outside) the
+/// gentler, wider valley of `town_valley` is mixed in by that weight. Settlement pads reset
+/// the ground to what their layouts were planned on, which drops the broad valley coarser
+/// levels carved; this puts one back (and `town::Site::height` plans on it). Its floor and
+/// the distance to the nearest centre line are found on every `TOWN_STEP`th sample (a
+/// lattice neighbouring tiles share) and interpolated: they are smooth, and the valley
+/// reaches far.
 ///
 /// `standing(x, y)` is the lake or sea surface at a world position (`DRY` on land). Banks
 /// are levees: they exist only on land, never on the lake or sea floor a river runs out
 /// into (there they would build a walled canal across the water).
 #[allow(clippy::too_many_arguments)]
-pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usize, origin: [f64; 2], spacing: f64, reach_samples: f64, standing: &dyn Fn(f64, f64) -> f32) {
+pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usize, origin: [f64; 2], spacing: f64, reach_samples: f64, standing: &dyn Fn(f64, f64) -> f32, town: Option<&[f32]>) {
     let n = dim * dim;
     let mut cut = vec![f32::INFINITY; n];
     let mut lev = vec![f32::INFINITY; n];
@@ -372,8 +383,8 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
                     let k = iy * dim + ix;
                     let h = heights[k] as f64;
                     let mut v = h.min(target);
-                    if d > 0.75 * reach {
-                        v += (h - v) * smoothstep(0.75 * reach, reach, d);
+                    if d > VALLEY_EASE * reach {
+                        v += (h - v) * smoothstep(VALLEY_EASE * reach, reach, d);
                     }
                     cut[k] = cut[k].min(v as f32);
                     if d < half {
@@ -394,11 +405,33 @@ pub fn carve(pieces: &[Piece], heights: &mut [f32], water: &mut [f32], dim: usiz
             }
         }
     }
+    let town_field = town.map(|_| town_lattice(pieces, dim, origin, spacing));
+    let m = (dim - 1).div_ceil(TOWN_STEP) + 1;
     for k in 0..n {
-        if cut[k] == f32::INFINITY {
+        let pad = town.map_or(0.0, |tw| tw[k]) as f64;
+        if cut[k] == f32::INFINITY && pad <= 0.0 {
             continue;
         }
-        let mut v = cut[k] as f64;
+        let mut v = if cut[k] < f32::INFINITY { cut[k] as f64 } else { heights[k] as f64 };
+        if pad > 0.0
+            && let Some(f) = &town_field
+        {
+            // Bilinear between the lattice nodes round the sample.
+            let (i, j) = (k % dim, k / dim);
+            let (i0, j0) = ((i / TOWN_STEP).min(m - 2), (j / TOWN_STEP).min(m - 2));
+            let (fx, fy) = ((i - i0 * TOWN_STEP) as f64 / TOWN_STEP as f64, (j - j0 * TOWN_STEP) as f64 / TOWN_STEP as f64);
+            let at = |di: usize, dj: usize| f[(j0 + dj) * m + i0 + di];
+            let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+            let mix = |c: usize| {
+                let g = |di, dj| if c == 0 { at(di, dj).0 } else { at(di, dj).1 };
+                lerp(lerp(g(0, 0), g(1, 0), fx), lerp(g(0, 1), g(1, 1), fx), fy)
+            };
+            let (floor, d) = (mix(0), mix(1));
+            let h = heights[k] as f64;
+            let t = h.min(floor);
+            let valley = t + (h - t) * smoothstep(0.75 * TOWN_VALLEY_FT, TOWN_VALLEY_FT, d);
+            v += pad * (v.min(valley) - v);
+        }
         if !channel[k] && lev[k] < f32::INFINITY && (lev[k] as f64) > v {
             let (x, y) = (origin[0] + (k % dim) as f64 * spacing, origin[1] + (k / dim) as f64 * spacing);
             if standing(x, y) <= crate::t0::hydro::DRY {
@@ -447,6 +480,49 @@ fn capsule_row(a: [f64; 2], b: [f64; 2], r: f64, y: f64) -> Option<(f64, f64)> {
     }
     let pad = 1e-6 * (1.0 + r);
     (lo <= hi).then_some((lo - pad, hi + pad))
+}
+
+/// Inside settlements a river runs in a gentle valley (sides `TOWN_SLOPE`, gentle enough to
+/// build on) out to `TOWN_VALLEY_FT` from its centre line, easing back into the ground over
+/// the last quarter.
+pub const TOWN_VALLEY_FT: f64 = 1_200.0;
+pub const TOWN_SLOPE: f64 = 0.05;
+const TOWN_STEP: usize = 8;
+
+/// The town valley's floor (`town_valley` before the ground) and the distance to the nearest
+/// centre line at every `TOWN_STEP`th padded sample (row-major, `(dim - 1) / TOWN_STEP + 1` a
+/// side); far from any river, a floor high above any ground and twice the valley's reach.
+fn town_lattice(pieces: &[Piece], dim: usize, origin: [f64; 2], spacing: f64) -> Vec<(f64, f64)> {
+    let m = (dim - 1).div_ceil(TOWN_STEP) + 1;
+    let mut out: Vec<(f64, f64)> = vec![(1e6, 2.0 * TOWN_VALLEY_FT); m * m];
+    for (k, f) in out.iter_mut().enumerate() {
+        let p = [origin[0] + ((k % m) * TOWN_STEP) as f64 * spacing, origin[1] + ((k / m) * TOWN_STEP) as f64 * spacing];
+        for piece in pieces {
+            for seg in piece.pts.windows(2) {
+                let (a, b) = (&seg[0], &seg[1]);
+                if (p[0] - a.p[0]).abs().min((p[0] - b.p[0]).abs()) > TOWN_VALLEY_FT + 400.0 || (p[1] - a.p[1]).abs().min((p[1] - b.p[1]).abs()) > TOWN_VALLEY_FT + 400.0 {
+                    continue;
+                }
+                let (dx, dy) = (b.p[0] - a.p[0], b.p[1] - a.p[1]);
+                let t = (((p[0] - a.p[0]) * dx + (p[1] - a.p[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+                let (cx, cy) = (a.p[0] + dx * t - p[0], a.p[1] + dy * t - p[1]);
+                let d = crate::core::sqrt(cx * cx + cy * cy);
+                if d < TOWN_VALLEY_FT {
+                    let (w, z) = (a.w + (b.w - a.w) * t, a.z + (b.z - a.z) * t);
+                    f.0 = f.0.min(z + (d - 0.5 * w).max(0.0) * TOWN_SLOPE);
+                }
+                f.1 = f.1.min(d);
+            }
+        }
+    }
+    out
+}
+
+/// The ground `h` at `d` ft from a river's centre line (half width `half`, surface `z`) in a
+/// settlement's valley. Also what the settlement's layout is planned on (`town::Site`).
+pub fn town_valley(h: f64, d: f64, half: f64, z: f64) -> f64 {
+    let v = h.min(z + (d - half).max(0.0) * TOWN_SLOPE);
+    v + (h - v) * smoothstep(0.75 * TOWN_VALLEY_FT, TOWN_VALLEY_FT, d)
 }
 
 /// How far (ft) from its centre line a river `w` ft wide carves at a level of `spacing`.
