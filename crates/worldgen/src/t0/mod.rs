@@ -392,30 +392,36 @@ impl T0 {
         let curves: Vec<RoadCurve> = {
             let ground = t0.ground_sampler(lattice);
             let crossings = crate::lod::rivers::CrossingCache::default();
-            t0
-            .roads
-            .roads
-            .iter()
-            .map(|r| {
-                // In the river valleys the terrain carves (a road along a valley side runs on
-                // it, not on a dike above it), and over every river it crosses: clear of the
-                // water by a bridge's clearance at both ends of the crossing (the profile ramps
-                // up to it).
-                let terrain: Vec<f64> = r.pts.iter().map(|p| t0.rivers.valley(ground(p[0], p[1]), p[0], p[1])).collect();
-                let mut floor = vec![f64::MIN; r.pts.len()];
-                for k in 0..r.pts.len().saturating_sub(1) {
-                    // (A ford wades through and a ferry lands at the water: no clearance.)
-                    if let Some((z, w)) = t0.rivers.crossing_level(r.pts[k], r.pts[k + 1], 0.5 * r.class.width_ft() + 2.0, cell, &crossings)
-                        && roads::crossing_kind(r.class, w) == roads::CrossingKind::Bridge
-                    {
-                        let deck = z + crate::battlemap::DECK_CLEARANCE_FT as f64;
-                        floor[k] = floor[k].max(deck);
-                        floor[k + 1] = floor[k + 1].max(deck);
+            let rs = &t0.roads.roads;
+            // Where roads meet or cross, a point on each (their beds meet at one level there).
+            let mut pts: Vec<Vec<[f64; 2]>> = rs.iter().map(|r| r.pts.clone()).collect();
+            let mut wander: Vec<Vec<f32>> = rs.iter().map(|r| r.wander.clone()).collect();
+            let meets = roads::meeting_points(&mut pts, &mut wander);
+            let class: Vec<roads::RoadClass> = rs.iter().map(|r| r.class).collect();
+            // In the river valleys the terrain carves (a road along a valley side runs on it, not
+            // on a dike above it), and over every river it crosses: clear of the water by a
+            // bridge's clearance at both ends of the crossing (the profile ramps up to it).
+            let terrain: Vec<Vec<f64>> = pts.iter().map(|q| q.iter().map(|p| t0.rivers.valley(ground(p[0], p[1]), p[0], p[1])).collect()).collect();
+            let floor: Vec<Vec<f64>> = pts
+                .iter()
+                .zip(&class)
+                .map(|(q, &c)| {
+                    let mut floor = vec![f64::MIN; q.len()];
+                    for k in 0..q.len().saturating_sub(1) {
+                        // (A ford wades through and a ferry lands at the water: no clearance.)
+                        if let Some((z, w)) = t0.rivers.crossing_level(q[k], q[k + 1], 0.5 * c.width_ft() + 2.0, cell, &crossings)
+                            && roads::crossing_kind(c, w) == roads::CrossingKind::Bridge
+                        {
+                            let deck = z + crate::battlemap::DECK_CLEARANCE_FT as f64;
+                            floor[k] = floor[k].max(deck);
+                            floor[k + 1] = floor[k + 1].max(deck);
+                        }
                     }
-                }
-                RoadCurve::new(r.class, r.pts.clone(), roads::fit_profile_over(&r.pts, &terrain, &floor, r.class.max_grade()), r.wander.clone(), r.seed)
-            })
-            .collect()
+                    floor
+                })
+                .collect();
+            let z = roads::level_profiles(&pts, &class, &terrain, &floor, &meets);
+            rs.iter().zip(pts).zip(z).zip(wander).map(|(((r, p), z), w)| RoadCurve::new(r.class, p, z, w, r.seed)).collect()
         };
         t0.roads = RoadNet::new(curves, map_w, map_h, cell);
         for (s, &c) in settlements.iter_mut().zip(&overlay.settlement_cultures) {
