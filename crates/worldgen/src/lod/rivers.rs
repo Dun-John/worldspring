@@ -73,6 +73,9 @@ pub struct RiverNet {
     /// Each segment's curve as the coarsest carving level sees it (`VALLEY_CHORDS` chords:
     /// points with water level and width), for `valley`; filled by `settle`.
     coarse: Vec<Vec<[[f32; 4]; VALLEY_CHORDS + 1]>>,
+    /// The lattice (ft) of the T0 ground the profiles were last settled on (`T0` settles
+    /// once per ground: settling again on the same ground changes nothing).
+    pub settled_on: Option<f64>,
 }
 
 /// Spacing (ft) of the coarsest level that carves valleys (2.5 · 2^n ≤ 2,500), whose wide,
@@ -227,7 +230,7 @@ impl RiverNet {
                 }
             }
         }
-        RiverNet { rivers, bin_ft, bins_w, bins_h, bins, max_offset_ft, coarse: Vec::new() }
+        RiverNet { rivers, bin_ft, bins_w, bins_h, bins, max_offset_ft, coarse: Vec::new(), settled_on: None }
     }
 
     /// Water surfaces that follow the ground: the curve wanders off its cells, and the
@@ -434,10 +437,61 @@ impl RiverNet {
         }
         let far = carve_reach(width_ft(1e9), VALLEY_SPACING_FT, 8.0);
         let mut v = h;
-        for (ri, k) in self.segments_near(x, y, x, y, far) {
-            for c in self.coarse[ri as usize][k as usize].windows(2) {
-                v = v.min(valley_cut(c[0], c[1], h, x, y));
+        // The bins round the point (a segment met in two bins cuts alike: the min stays); a
+        // chord whose box, grown by its reach (and a foot), misses the point leaves it as it is.
+        let reach = far + self.max_offset_ft;
+        let bin = |c: f64, n: usize| ((c / self.bin_ft).floor().max(0.0) as usize).min(n - 1);
+        for by in bin(y - reach, self.bins_h)..=bin(y + reach, self.bins_h) {
+            for bx in bin(x - reach, self.bins_w)..=bin(x + reach, self.bins_w) {
+                for &(ri, k) in &self.bins[by * self.bins_w + bx] {
+                    for c in self.coarse[ri as usize][k as usize].windows(2) {
+                        let (a, b) = (c[0], c[1]);
+                        let r = carve_reach(a[3].max(b[3]) as f64, VALLEY_SPACING_FT, 8.0) + 1.0;
+                        if x < a[0].min(b[0]) as f64 - r || x > a[0].max(b[0]) as f64 + r || y < a[1].min(b[1]) as f64 - r || y > a[1].max(b[1]) as f64 + r {
+                            continue;
+                        }
+                        v = v.min(valley_cut(a, b, h, x, y));
+                    }
+                }
             }
+        }
+        v
+    }
+
+    /// The coarse chords that can cut the ground anywhere in `rect` (x0, y0, x1, y1 ft), for
+    /// `valley_with`: many points in one area ask the same few.
+    pub fn valley_chords(&self, rect: [f64; 4]) -> Vec<([f32; 4], [f32; 4])> {
+        let mut out = Vec::new();
+        if self.coarse.is_empty() {
+            return out;
+        }
+        let far = carve_reach(width_ft(1e9), VALLEY_SPACING_FT, 8.0);
+        let mut seen = crate::core::hash::FastSet::default();
+        for (ri, k) in self.segments_near(rect[0], rect[1], rect[2], rect[3], far) {
+            if !seen.insert((ri, k)) {
+                continue;
+            }
+            for c in self.coarse[ri as usize][k as usize].windows(2) {
+                let (a, b) = (c[0], c[1]);
+                let r = carve_reach(a[3].max(b[3]) as f64, VALLEY_SPACING_FT, 8.0) + 1.0;
+                if a[0].max(b[0]) as f64 + r >= rect[0] && (a[0].min(b[0]) as f64) - r <= rect[2] && a[1].max(b[1]) as f64 + r >= rect[1] && (a[1].min(b[1]) as f64) - r <= rect[3] {
+                    out.push((a, b));
+                }
+            }
+        }
+        out
+    }
+
+    /// `valley` at a point inside the rectangle `chords` were gathered for (`valley_chords`):
+    /// the same cut (the least over the chords that reach the point).
+    pub fn valley_with(chords: &[([f32; 4], [f32; 4])], h: f64, x: f64, y: f64) -> f64 {
+        let mut v = h;
+        for &(a, b) in chords {
+            let r = carve_reach(a[3].max(b[3]) as f64, VALLEY_SPACING_FT, 8.0) + 1.0;
+            if x < a[0].min(b[0]) as f64 - r || x > a[0].max(b[0]) as f64 + r || y < a[1].min(b[1]) as f64 - r || y > a[1].max(b[1]) as f64 + r {
+                continue;
+            }
+            v = v.min(valley_cut(a, b, h, x, y));
         }
         v
     }
@@ -512,7 +566,7 @@ fn valley_cut(a: [f32; 4], b: [f32; 4], h: f64, x: f64, y: f64) -> f64 {
 /// River segments' finest curves sampled for `RiverNet::crossing_level` (bounding box and
 /// points: x, y, water level, width), each once, as asked for.
 #[derive(Default)]
-pub struct CrossingCache(std::cell::RefCell<std::collections::HashMap<(u32, u32), std::rc::Rc<([f64; 4], Vec<[f64; 4]>)>>>);
+pub struct CrossingCache(std::cell::RefCell<crate::core::hash::FastMap<(u32, u32), std::rc::Rc<([f64; 4], Vec<[f64; 4]>)>>>);
 
 impl CrossingCache {
     fn get(&self, net: &RiverNet, ri: u32, k: u32, cell_ft: f64) -> std::rc::Rc<([f64; 4], Vec<[f64; 4]>)> {

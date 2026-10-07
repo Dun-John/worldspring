@@ -296,8 +296,12 @@ struct Site<'a> {
     river_grid: FastMap<(i64, i64), Vec<u32>>,
     river_max_hw: f64,
     /// How far the river valleys lower the ground (`RiverNet::valley`, ≤ 0), at the nodes of
-    /// a `VALLEY_CELL`-ft lattice (local coords), filled as `height` asks.
-    valley: RefCell<FastMap<(i64, i64), f32>>,
+    /// a `VALLEY_CELL`-ft lattice (local coords), filled as `height` asks: a square of nodes
+    /// round the centre (NaN until asked; its first node index on both axes and its side),
+    /// and any beyond it.
+    valley: RefCell<(i64, usize, Vec<f32>, FastMap<(i64, i64), f32>)>,
+    /// The river chords that can cut that square of nodes (`RiverNet::valley_chords`).
+    valley_chords: Vec<([f32; 4], [f32; 4])>,
     /// Network roads near the settlement as ~20-ft chords (a, b, half width; local), sampled
     /// on first use.
     roads: std::cell::OnceCell<(Vec<(P, P, f64)>, FastMap<(i64, i64), Vec<u32>>)>,
@@ -336,7 +340,13 @@ impl<'a> Site<'a> {
         let (nx1, ny1) = (crate::core::floor((center[0] + reach) / lattice_ft) as i64 + 3, crate::core::floor((center[1] + reach) / lattice_ft) as i64 + 3);
         let nw = (nx1 - nx0 + 1) as usize;
         let values: Vec<f64> = (ny0..=ny1).flat_map(|j| (nx0..=nx1).map(move |i| (i, j))).map(|(i, j)| t0.ground_node(i, j, lattice_ft)).collect();
-        Site { t0, center, lattice_ft, nodes: (nx0, ny0, nw, values), lakeside, river, river_grid, river_max_hw, valley: RefCell::new(FastMap::default()), roads: std::cell::OnceCell::new(), reach: layout_reach }
+        // The valley lattice over the layout's reach and a little past it.
+        let half = crate::core::ceil((layout_reach + 1_000.0) / VALLEY_CELL) as i64;
+        let side = (2 * half + 1) as usize;
+        let valley = RefCell::new((-half, side, vec![f32::NAN; side * side], FastMap::default()));
+        let e = half as f64 * VALLEY_CELL;
+        let valley_chords = t0.rivers.valley_chords([center[0] - e, center[1] - e, center[0] + e, center[1] + e]);
+        Site { t0, center, lattice_ft, nodes: (nx0, ny0, nw, values), lakeside, river, river_grid, river_max_hw, valley, valley_chords, roads: std::cell::OnceCell::new(), reach: layout_reach }
     }
 }
 
@@ -370,12 +380,24 @@ impl Site<'_> {
         let (i0, j0) = (crate::core::floor(u), crate::core::floor(v));
         let (fu, fv) = (u - i0, v - j0);
         let mut cache = self.valley.borrow_mut();
+        let (o, side) = (cache.0, cache.1);
         let mut at = |i: i64, j: i64| {
-            *cache.entry((i, j)).or_insert_with(|| {
+            let depth = |inside: bool| {
                 let q = [i as f64 * VALLEY_CELL, j as f64 * VALLEY_CELL];
                 let (w, h) = (self.world(q), self.ground(q));
-                (self.t0.rivers.valley(h, w[0], w[1]) - h) as f32
-            }) as f64
+                let v = if inside { crate::lod::rivers::RiverNet::valley_with(&self.valley_chords, h, w[0], w[1]) } else { self.t0.rivers.valley(h, w[0], w[1]) };
+                (v - h) as f32
+            };
+            let (a, b) = (i - o, j - o);
+            if a >= 0 && b >= 0 && (a as usize) < side && (b as usize) < side {
+                let k = b as usize * side + a as usize;
+                if cache.2[k].is_nan() {
+                    cache.2[k] = depth(true);
+                }
+                cache.2[k] as f64
+            } else {
+                *cache.3.entry((i, j)).or_insert_with(|| depth(false)) as f64
+            }
         };
         let (i, j) = (i0 as i64, j0 as i64);
         let top = at(i, j) + (at(i + 1, j) - at(i, j)) * fu;
@@ -386,7 +408,7 @@ impl Site<'_> {
     fn ground(&self, p: P) -> f64 {
         let w = self.world(p);
         let (x0, y0, nw, values) = &self.nodes;
-        self.t0.ground_with(w[0], w[1], self.lattice_ft, self.lakeside, &mut |i, j| {
+        self.t0.ground_with_nodes(w[0], w[1], self.lattice_ft, self.lakeside, |i, j| {
             let (a, b) = (i - x0, j - y0);
             if a >= 0 && b >= 0 && (a as usize) < *nw && ((b as usize) * nw + a as usize) < values.len() {
                 values[b as usize * nw + a as usize]

@@ -252,10 +252,11 @@ impl T0 {
             // where that level is above the ground.
             rivers.settle_levels(&ground, &|x, y| base.sample_lake(x, y).0 as f64 > ground(x, y), cell);
             rivers.settle(&ground, cell);
+            rivers.settled_on = Some(lattice);
             // The ground roads are planned on: that ground, in the river valleys, every half cell.
             let s = roads::Plan::SCALE;
             let (pw, ph) = (((w - 1) as f64 * s) as usize + 1, ((h - 1) as f64 * s) as usize + 1);
-            let mut z: Vec<f32> = (0..pw * ph).map(|k| ground((k % pw) as f64 * cell / s, (k / pw) as f64 * cell / s) as f32).collect();
+            let mut z = base.ground_grid(lattice, pw, ph, &|i| i as f64 * cell / s);
             rivers.valley_grid(&mut z, pw, [0.0, 0.0], cell / s);
             Grid::from_vec(pw, ph, z)
         };
@@ -443,7 +444,11 @@ impl T0 {
             lattice *= 2.0;
         }
         let mut rivers = rivers;
-        rivers.settle(&t0.ground_sampler(lattice), cell_ft);
+        // (Generating, they were settled on this ground already: the same grids, lattice.)
+        if rivers.settled_on != Some(lattice) {
+            rivers.settle(&t0.ground_sampler(lattice), cell_ft);
+            rivers.settled_on = Some(lattice);
+        }
         t0.rivers = rivers;
         t0
     }
@@ -531,14 +536,55 @@ impl T0 {
     /// `ground_at` over the whole map with its lattice nodes computed once (for callers that
     /// ask many thousands of times).
     pub fn ground_sampler(&self, lattice_ft: f64) -> impl Fn(f64, f64) -> f64 + '_ {
-        let (nw, nh) = ((self.height.w as f64 * self.cell_ft / lattice_ft) as i64 + 4, (self.height.h as f64 * self.cell_ft / lattice_ft) as i64 + 4);
-        let nodes: Vec<f64> = (-1..nh).flat_map(|j| (-1..nw).map(move |i| (i, j))).map(|(i, j)| self.ground_node(i, j, lattice_ft)).collect();
+        let (nodes, nw, nh) = self.ground_nodes(lattice_ft);
         let stride = (nw + 1) as usize;
         move |x, y| {
-            self.ground_with(x, y, lattice_ft, true, &mut |i, j| {
+            self.ground_with_nodes(x, y, lattice_ft, true, |i, j| {
                 if i >= -1 && j >= -1 && i < nw && j < nh { nodes[(j + 1) as usize * stride + (i + 1) as usize] } else { self.ground_node(i, j, lattice_ft) }
             })
         }
+    }
+
+    /// The lattice nodes `ground_sampler` caches (row-major from node (-1, -1), `nw + 1` a
+    /// row), and the node counts (nw, nh) past which it computes them as asked.
+    fn ground_nodes(&self, lattice_ft: f64) -> (Vec<f64>, i64, i64) {
+        let (nw, nh) = ((self.height.w as f64 * self.cell_ft / lattice_ft) as i64 + 4, (self.height.h as f64 * self.cell_ft / lattice_ft) as i64 + 4);
+        let nodes: Vec<f64> = (-1..nh).flat_map(|j| (-1..nw).map(move |i| (i, j))).map(|(i, j)| self.ground_node(i, j, lattice_ft)).collect();
+        (nodes, nw, nh)
+    }
+
+    /// `ground_sampler` over a `w` × `h` grid whose point (i, j) is at (`pos(i)`, `pos(j)`) ft,
+    /// row-major: the same values (the same sums in the same order), with each column's and
+    /// row's interpolation weights worked out once instead of per point.
+    pub fn ground_grid(&self, lattice_ft: f64, w: usize, h: usize, pos: &dyn Fn(usize) -> f64) -> Vec<f32> {
+        let (nodes, nw, nh) = self.ground_nodes(lattice_ft);
+        let stride = (nw + 1) as usize;
+        let node = |i: i64, j: i64| if i >= -1 && j >= -1 && i < nw && j < nh { nodes[(j + 1) as usize * stride + (i + 1) as usize] } else { self.ground_node(i, j, lattice_ft) };
+        let axis = |n: usize| -> Vec<(f64, i64, [f64; 4])> {
+            (0..n)
+                .map(|i| {
+                    let x = pos(i);
+                    let u = x / lattice_ft;
+                    let i0 = crate::core::floor(u);
+                    (x, i0 as i64, catmull_rom(u - i0))
+                })
+                .collect()
+        };
+        let (cols, rows) = (axis(w), axis(h));
+        let mut out = Vec::with_capacity(w * h);
+        for &(y, j0, wv) in &rows {
+            for &(x, i0, wu) in &cols {
+                let mut g = 0.0;
+                for (b, wy) in wv.iter().enumerate() {
+                    for (a, wx) in wu.iter().enumerate() {
+                        g += wx * wy * node(i0 + a as i64 - 1, j0 + b as i64 - 1);
+                    }
+                }
+                let (lw, m) = self.sample_lake(x, y);
+                out.push(Self::shore_bank(g, lw, m) as f32);
+            }
+        }
+        out
     }
 
     /// Banked T0 sample at lattice node (i, j) of `ground_at`'s lattice.
@@ -551,13 +597,15 @@ impl T0 {
     /// `ground_at` with the lattice nodes supplied by `node` (so callers can cache them);
     /// `bank` false skips the shore bank at the point (callers that know no water is near).
     pub fn ground_with(&self, x_ft: f64, y_ft: f64, lattice_ft: f64, bank: bool, node: &mut dyn FnMut(i64, i64) -> f64) -> f64 {
+        self.ground_with_nodes(x_ft, y_ft, lattice_ft, bank, node)
+    }
+
+    /// `ground_with` for a node source known at compile time (no call through a pointer per
+    /// node: the callers that ask most).
+    pub fn ground_with_nodes(&self, x_ft: f64, y_ft: f64, lattice_ft: f64, bank: bool, mut node: impl FnMut(i64, i64) -> f64) -> f64 {
         let (u, v) = (x_ft / lattice_ft, y_ft / lattice_ft);
         let (i0, j0) = (crate::core::floor(u), crate::core::floor(v));
-        let weights = |t: f64| {
-            let (t2, t3) = (t * t, t * t * t);
-            [0.5 * (-t3 + 2.0 * t2 - t), 0.5 * (3.0 * t3 - 5.0 * t2 + 2.0), 0.5 * (-3.0 * t3 + 4.0 * t2 + t), 0.5 * (t3 - t2)]
-        };
-        let (wu, wv) = (weights(u - i0), weights(v - j0));
+        let (wu, wv) = (catmull_rom(u - i0), catmull_rom(v - j0));
         let mut h = 0.0;
         for (b, wy) in wv.iter().enumerate() {
             for (a, wx) in wu.iter().enumerate() {
@@ -856,6 +904,12 @@ impl T0 {
 
 /// (water level or `DRY`, wet fraction 0..1) at a world position, with the shoreline wobble
 /// (see `T0::sample_lake`); usable before the T0 exists.
+/// Catmull-Rom weights for the four nodes round fraction `t` (`T0::ground_with`).
+fn catmull_rom(t: f64) -> [f64; 4] {
+    let (t2, t3) = (t * t, t * t * t);
+    [0.5 * (-t3 + 2.0 * t2 - t), 0.5 * (3.0 * t3 - 5.0 * t2 + 2.0), 0.5 * (-3.0 * t3 + 4.0 * t2 + t), 0.5 * (t3 - t2)]
+}
+
 pub fn lake_at(g: &Grid<f32>, cell_ft: f64, biome_seed: u64, x_ft: f64, y_ft: f64) -> (f32, f64) {
     let x = (x_ft / cell_ft).clamp(0.0, (g.w - 1) as f64);
     let y = (y_ft / cell_ft).clamp(0.0, (g.h - 1) as f64);

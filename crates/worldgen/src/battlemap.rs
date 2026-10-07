@@ -898,15 +898,20 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 if l.tier >= crate::t0::settle::Tier::Town && overlaps(bbox(p)) {
                     let first = stalls.len();
                     // Lanes the features keep off: the town's streets and roads, and the
-                    // world's roads across the square.
+                    // world's roads across the square. Only those near it (features stand in
+                    // the square and are far smaller than 200 ft: farther lanes never stop one).
+                    let b = bbox(p);
+                    let near = |q: &[[f64; 2]], w: f64| {
+                        let m = w + 200.0;
+                        q[0][0].min(q[1][0]) <= b.2 + m && q[0][0].max(q[1][0]) >= b.0 - m && q[0][1].min(q[1][1]) <= b.3 + m && q[0][1].max(q[1][1]) >= b.1 - m
+                    };
                     let mut lanes: Vec<([f64; 2], [f64; 2], f64)> = Vec::new();
                     for (pts, _, w) in &l.roads {
-                        lanes.extend(pts.windows(2).map(|q| (q[0], q[1], 0.5 * w)));
+                        lanes.extend(pts.windows(2).filter(|q| near(q, 0.5 * w)).map(|q| (q[0], q[1], 0.5 * w)));
                     }
                     for st in &l.streets {
-                        lanes.extend(st.windows(2).map(|q| (q[0], q[1], 5.0)));
+                        lanes.extend(st.windows(2).filter(|q| near(q, 5.0)).map(|q| (q[0], q[1], 5.0)));
                     }
-                    let b = bbox(p);
                     for (ri, k) in t0.roads.segments_near([b.0 - 50.0, b.1 - 50.0, b.2 + 50.0, b.3 + 50.0], 0.0) {
                         let rc = &t0.roads.roads[ri as usize];
                         for j in 0..16 {
@@ -2234,18 +2239,21 @@ fn plaza_features(
     let c = centroid(poly);
     let mut rng = Pcg32::new(hash2(seed ^ 0xf0a7, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64), 13);
     let first = out.len();
+    // (All must hold: most candidates fail at the rim, the lanes cost most.)
+    let rim: [[f64; 2]; 12] = std::array::from_fn(|k| {
+        let t = TAU * k as f64 / 12.0;
+        [libm::cos(t), libm::sin(t)]
+    });
     let fits = |out: &[([f64; 2], f64, PlazaFeature, f64)], p: [f64; 2], r: f64| {
-        (0..12).all(|k| {
-            let t = TAU * k as f64 / 12.0;
-            contains(poly, add(p, [(r + 6.0) * libm::cos(t), (r + 6.0) * libm::sin(t)]))
-        }) && dist(p, c) > r + 22.0
+        rim.iter().all(|u| contains(poly, add(p, [(r + 6.0) * u[0], (r + 6.0) * u[1]])))
+            && dist(p, c) > r + 22.0
+            && out[first..].iter().all(|f| dist(p, f.0) > r + f.1 + 14.0)
+            && stalls.iter().all(|s| dist(p, s.0) > r + 10.0)
             && monuments.iter().all(|m| {
                 let mc = centroid(m);
                 dist(p, mc) > r + 8.0 + m.iter().map(|q| dist(*q, mc)).fold(0.0, f64::max)
             })
-            && stalls.iter().all(|s| dist(p, s.0) > r + 10.0)
             && lanes.iter().all(|&(a, b, w)| seg_dist(p, a, b) > r + w + 4.0)
-            && out[first..].iter().all(|f| dist(p, f.0) > r + f.1 + 14.0)
     };
     if !patterned {
         let want = ((area(poly).abs() / 7000.0) as usize).min(6);
