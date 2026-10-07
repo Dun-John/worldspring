@@ -1,6 +1,6 @@
 <script lang="ts">
   // The ☰ menu: the world, its library and files, the players' window while playing, the
-  // keyboard shortcuts and the performance stats. Everything else lives in the sections.
+  // keyboard shortcuts, the Discord and the performance stats. Everything else lives in the sections.
   import type { WorldFile } from '../../gen/protocol';
   import { download } from '../../world/world';
   import Icon from '../Icon.svelte';
@@ -36,6 +36,7 @@
   <button role="menuitem" onclick={() => act(() => download(world, `world-${world.seed}`))}><Icon name="download" /> Download this world</button>
   {#if playing}<button role="menuitem" onclick={() => act(onPlayers)}><Icon name="monitor" /> Players' window</button>{/if}
   <hr />
+  <a role="menuitem" href="https://discord.gg/8ZS4nHWWVv" target="_blank" rel="noopener" onclick={onClose}><Icon name="chat" /> Discord community<span class="sub">help, ideas, bugs</span></a>
   {#if !touchOnly}<button role="menuitem" onclick={() => act(() => (shell.help = true))}><Icon name="keyboard" /> Keyboard shortcuts<kbd class="ws-kbd">?</kbd></button>{/if}
   <label class="row">
     <Icon name="activity" /> Performance stats
@@ -73,6 +74,7 @@
     letter-spacing: 0.04em;
   }
   button,
+  a,
   .row {
     all: unset;
     box-sizing: border-box;
@@ -86,8 +88,10 @@
     color: var(--ink);
   }
   button:hover,
+  a:hover,
   .row:hover,
-  button:focus-visible {
+  button:focus-visible,
+  a:focus-visible {
     background: var(--btn-hover);
   }
   .sub {

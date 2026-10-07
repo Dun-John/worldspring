@@ -2,7 +2,7 @@
 
 **A whole fantasy world for your tabletop game, from the continent down to the battlemap, in your browser.**
 
-**[Open Worldspring →](https://dun-john.github.io/worldspring/)**
+**[Open Worldspring →](https://dun-john.github.io/worldspring/)** · **[Join the Discord](https://discord.gg/8ZS4nHWWVv)**
 
 ![Zooming from the whole continent down into an inn](docs/media/zoom.gif)
 
@@ -55,6 +55,11 @@ Worldspring keeps improving its generator, and a newer generator may put rivers,
 So that your worlds never change under you, every version of the generator stays on the site. When you open a world
 made with an older one, you choose: **open it as it was made** (exactly as before), or **upgrade** it to the newest
 (and check that your changes still sit where they should).
+
+## Community
+
+Come to the **[Worldspring Discord](https://discord.gg/8ZS4nHWWVv)** to show the worlds you've made, ask for help,
+suggest ideas and report bugs (the seed and where it happened help a lot). The ☰ menu in the app links there too.
 
 ## Notes
 
