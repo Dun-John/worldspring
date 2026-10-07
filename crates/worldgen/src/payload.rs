@@ -202,6 +202,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             for d in road_bridges(tile) {
                 push(&d, 6);
             }
+            // Crossings put down by hand: a bridge's deck; a ferry's jetties, raft and rope.
+            for c in world.file.edits.crossings.values().filter(|c| c.problem(world.geom.map_w_ft, world.geom.map_h_ft).is_none()) {
+                for d in crate::battlemap::hand_decks(c) {
+                    push(&d, 6);
+                }
+            }
         }
         for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
             for f in &l.fields {

@@ -162,7 +162,25 @@ export interface Edits {
   sprites?: Record<string, SpriteMeta>;
   /** `u:<layout>:<k>` → an underground site designed by hand, built instead of generated. */
   designs?: Record<string, SiteDesign>;
+  /** `v:<id>` → a bridge, ford or ferry put down by hand. */
+  crossings?: Record<string, Crossing>;
 }
+
+export type CrossingKind = 'bridge' | 'ford' | 'ferry';
+
+/** A crossing put down by hand (`worldgen::world::Crossing`): from `a` to `b` (world ft, bank to
+ * bank), `width` ft across. */
+export interface Crossing {
+  kind: CrossingKind;
+  a: [number, number];
+  b: [number, number];
+  width: number;
+}
+
+/** Limits on a crossing (`Crossing::WIDTH`, `LENGTH`; a ferry needs room for two 24-ft jetties). */
+export const CROSSING_WIDTH: [number, number] = [5, 40];
+export const CROSSING_LENGTH: [number, number] = [10, 2000];
+export const FERRY_MIN_FT = 68;
 
 /** An underground site designed by hand (`worldgen::under::design::SiteDesign`): a copy of the
  * generated site, changed. Walls are derived; levels run bottom to top, as `Interior`'s. */

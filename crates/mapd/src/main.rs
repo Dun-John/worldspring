@@ -6,6 +6,7 @@
 //! Claude Code: `claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp`
 
 mod build;
+mod crossings;
 mod design;
 mod mcp;
 mod notebook;

@@ -71,6 +71,7 @@ pub fn list() -> Value {
         a.extend(crate::notebook::list());
         a.extend(crate::scatter::list());
         a.extend(crate::build::list());
+        a.extend(crate::crossings::list());
         a.extend(crate::design::list());
     }
     v
@@ -101,6 +102,9 @@ pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::scatter::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::crossings::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::design::call(app, name, &a).await {

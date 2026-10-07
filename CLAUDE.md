@@ -29,6 +29,8 @@ read it at the start of a session) and the original plan (milestones M0–M9, al
   doors not yet found, hazards whose rules start "hidden" (traps, sinkholes), NPC markers, notes and plots.
   `src/editor/build.ts` + `ui/BuildPanel.svelte` draw buildings (`Created` kind `building`: one layout each,
   `town/sites.rs` `drawn`; placement check `agent::building_spot`; MCP in `crates/mapd/src/build.rs`).
+  The same panel's Crossing mode (`src/editor/crossing.ts`) puts bridges, fords and ferries down bank to bank
+  (`Edits.crossings`, `v:<id>`; drawn by `battlemap::hand_crossing` / `hand_decks`; MCP in `crates/mapd/src/crossings.rs`).
   `src/editor/site/` + `ui/DesignPanel.svelte` is the dungeon designer: an underground site (`u:`) copied into
   `Edits.designs` and built from there (`crates/worldgen/src/under/design.rs`: build, `check` with the vital
   rules, auto doors, text plans; MCP in `crates/mapd/src/design.rs`).

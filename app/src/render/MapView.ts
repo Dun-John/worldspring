@@ -752,6 +752,20 @@ export class MapView {
       if (JSON.stringify(ps[asset]) === JSON.stringify(ns[asset])) continue;
       for (const o of Object.values(no)) if (o.kind === `s:${asset}`) battleRects.push([o.x - 1, o.y - 1, o.x + 1, o.y + 1]);
     }
+    // Crossings put down by hand: the battlemaps and site tiles along them (decks are drawn on
+    // both; a ferry's jetties reach past its ends).
+    const pv = prev.crossings ?? {};
+    const nv = next.crossings ?? {};
+    if (pv !== nv) for (const id of keys('crossings', pv, nv)) {
+      const [a, b] = [pv[id], nv[id]];
+      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
+      for (const c of [a, b]) {
+        if (!c) continue;
+        const r = c.width / 2 + 40;
+        const box: Rect = [Math.min(c.a[0], c.b[0]) - r, Math.min(c.a[1], c.b[1]) - r, Math.max(c.a[0], c.b[0]) + r, Math.max(c.a[1], c.b[1]) + r];
+        rects.push(box);
+      }
+    }
     if (!send) return;
     if (rects.length || battleRects.length) {
       const epoch = ++this.editEpoch;

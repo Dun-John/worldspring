@@ -258,6 +258,73 @@ pub struct Edits {
     /// generated (`under::design`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub designs: BTreeMap<String, crate::under::design::SiteDesign>,
+    /// Crossings put down by hand (`v:<id>`): a bridge, a ford or a ferry from one point to
+    /// another, drawn on the battlemap over what is there.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub crossings: BTreeMap<String, Crossing>,
+}
+
+/// A crossing put down by hand: from `a` to `b` (world ft, bank to bank), `width` ft across.
+/// A bridge's deck spans the water (planks clear of it); a ford brings the bed up to wading
+/// depth under stepping stones; a ferry runs a raft on a rope between two jetties.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Crossing {
+    pub kind: CrossingKind,
+    pub a: [f64; 2],
+    pub b: [f64; 2],
+    #[serde(default = "crossing_width")]
+    pub width: f64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CrossingKind {
+    Bridge,
+    Ford,
+    Ferry,
+}
+
+fn crossing_width() -> f64 {
+    12.0
+}
+
+impl Crossing {
+    /// Widths (ft) a crossing may have, and its length.
+    pub const WIDTH: std::ops::RangeInclusive<f64> = 5.0..=40.0;
+    pub const LENGTH: std::ops::RangeInclusive<f64> = 10.0..=2000.0;
+
+    /// Length (ft), from a to b.
+    pub fn length(&self) -> f64 {
+        crate::core::sqrt((self.b[0] - self.a[0]) * (self.b[0] - self.a[0]) + (self.b[1] - self.a[1]) * (self.b[1] - self.a[1]))
+    }
+
+    /// Why it can't be put down, if so: its ends off the map or not finite, too short or long
+    /// (a ferry needs room for its two jetties), too narrow or wide.
+    pub fn problem(&self, map_w_ft: f64, map_h_ft: f64) -> Option<String> {
+        let on = |p: [f64; 2]| p[0].is_finite() && p[1].is_finite() && (0.0..map_w_ft).contains(&p[0]) && (0.0..map_h_ft).contains(&p[1]);
+        if !on(self.a) || !on(self.b) {
+            return Some("both ends must be on the map".into());
+        }
+        let min = if self.kind == CrossingKind::Ferry { 2.0 * crate::battlemap::JETTY_FT + 20.0 } else { *Self::LENGTH.start() };
+        let len = self.length();
+        if len < min || len > *Self::LENGTH.end() {
+            return Some(format!("a {} is {min:.0} to {:.0} ft long (this one is {len:.0})", self.kind.name(), Self::LENGTH.end()));
+        }
+        if !self.width.is_finite() || !Self::WIDTH.contains(&self.width) {
+            return Some(format!("width: {:.0} to {:.0} ft", Self::WIDTH.start(), Self::WIDTH.end()));
+        }
+        None
+    }
+}
+
+impl CrossingKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            CrossingKind::Bridge => "bridge",
+            CrossingKind::Ford => "ford",
+            CrossingKind::Ferry => "ferry",
+        }
+    }
 }
 
 /// A battlemap object put down by hand, at a world position (ft).
@@ -626,6 +693,7 @@ impl Edits {
                 "cleared" => self.cleared = std::mem::take(&mut part.cleared),
                 "sprites" => self.sprites = std::mem::take(&mut part.sprites),
                 "designs" => self.designs = std::mem::take(&mut part.designs),
+                "crossings" => self.crossings = std::mem::take(&mut part.crossings),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -655,6 +723,7 @@ impl Edits {
                 "cleared" => patch(&mut self.cleared, p)?,
                 "sprites" => patch(&mut self.sprites, p)?,
                 "designs" => patch(&mut self.designs, p)?,
+                "crossings" => patch(&mut self.crossings, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -663,7 +732,7 @@ impl Edits {
 
     pub fn is_empty(&self) -> bool {
         self.renames.is_empty() && self.notes.is_empty() && self.hidden.is_empty() && self.created.is_empty() && self.npcs.is_empty() && self.plots.is_empty()
-            && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty()
+            && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -774,6 +843,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("cleared", Shape::Map),
     ("sprites", Shape::Map),
     ("designs", Shape::Map),
+    ("crossings", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

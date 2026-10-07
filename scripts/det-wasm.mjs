@@ -39,6 +39,12 @@ const built = JSON.parse(wasm.default_world_json(424242));
       { id: 'c:0', kind: 'building', x: x + 20, y: y + 18, name: '', poly: ell, func: 'inn', floors: 2, roof: 'battlements', tint: 'slate' },
       { id: 'c:1', kind: 'building', x: x + 90, y: y + 20, name: 'The Needle', poly: tower, func: 'wizard_tower', floors: 4, roof: 'cone' },
     ],
+    // Crossings put down by hand, across the sampled tile.
+    crossings: {
+      'v:bridge': { kind: 'bridge', a: [x - 120, y + 70], b: [x + 160.5, y + 130], width: 12 },
+      'v:ford': { kind: 'ford', a: [x - 100, y + 160], b: [x + 140, y + 200.25], width: 9 },
+      'v:ferry': { kind: 'ferry', a: [x - 200, y - 60], b: [x + 210, y - 20], width: 14 },
+    },
   };
 }
 
@@ -61,4 +67,4 @@ for (const worldJson of [wasm.default_world_json(424242), JSON.stringify(sketche
   }
   total += a.length;
 }
-console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings and a site redesigned`);
+console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings, crossings and a site redesigned`);

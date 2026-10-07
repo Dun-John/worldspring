@@ -77,6 +77,12 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
       }
       case 'restore_objects':
         return 'brought objects back';
+      case 'place_crossing':
+        return `${change.changed ? 'changed' : 'put down'} a ${String(change.kind ?? 'crossing')}`;
+      case 'remove_crossings': {
+        const n = Array.isArray(change.ids) ? change.ids.length : 1;
+        return n === 1 ? `took away a ${String(change.kind ?? 'crossing')}` : `took away ${n} crossings`;
+      }
       case 'upload_sprite':
         return `sprite “${String(change.name ?? id)}”`;
       case 'remove_sprite':

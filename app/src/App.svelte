@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Edits, Npc, Overlay, Placed, Plot, SpriteMeta, Stroke, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Npc, Overlay, Placed, Plot, SpriteMeta, Stroke, WorldFile, WorldParams } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { Sketcher, drawsLand, scaleStrokes, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
@@ -35,7 +35,8 @@
   import DesignPanel from './ui/DesignPanel.svelte';
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
-  import { defaultScatter, ScatterTool, type ScatterSettings } from './editor/scatter';
+  import { CrossingTool, crossingProblem, defaultCross, type CrossSettings } from './editor/crossing';
+  import { defaultScatter, newObjectId, ScatterTool, type ScatterSettings } from './editor/scatter';
   import { shrink } from './render/customAtlas';
   import Notebook, { blankNpc, blankPlot, newNoteId, type Here } from './ui/Notebook.svelte';
   import { assetIds, assetUrl, getAsset, putAsset, shareAssets } from './world/assets';
@@ -551,7 +552,8 @@
   /** The map's pointer goes to the first of: a place being picked, a site being placed, the
    * designer, the Build or Scatter tool, play's tools while a session runs. */
   function syncTool() {
-    view.tool = pickTool ?? placeTool ?? designer ?? buildArmed?.tool ?? scatterArmed?.tool ?? (playOn ? play : null);
+    const buildTool = buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildArmed.tool);
+    view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -662,7 +664,12 @@
   let buildFuncs = $state<BuildingFuncs | null>(null);
   /** The building drawn by hand being changed (its created id). */
   let buildEditing = $state<string | null>(null);
-  let buildArmed: { tool: BuildTool } | null = null;
+  let buildArmed: { tool: BuildTool; cross: CrossingTool } | null = null;
+  /** The Build tab draws buildings, or puts crossings down. */
+  let buildMode = $state<'building' | 'crossing'>('building');
+  let cross = $state<CrossSettings>(defaultCross());
+  /** The crossing put down by hand being changed (its id). */
+  let crossEditing = $state<string | null>(null);
 
   /** The building drawn by hand behind an id: its created id, or its building id (`b:<layout>:0`). */
   function drawnBuilding(id: string): Created | null {
@@ -680,12 +687,66 @@
       drawn: (poly) => void buildDrawn(poly),
       hint: (t) => toast(t),
     });
-    buildArmed = { tool };
+    const crossTool = new CrossingTool({
+      settings: () => cross,
+      edits: () => edits,
+      picked: () => crossEditing,
+      placed: crossPlaced,
+      pick: pickCrossing,
+      hint: (t) => toast(t),
+    });
+    buildArmed = { tool, cross: crossTool };
   }
 
   function disarmBuild() {
     buildArmed = null;
     buildEditing = null;
+    crossEditing = null;
+  }
+
+  function setBuildMode(m: 'building' | 'crossing') {
+    buildMode = m;
+    buildEditing = null;
+    crossEditing = null;
+    buildArmed?.cross.reset();
+    syncTool();
+  }
+
+  /** Both banks clicked: a new crossing there, or the one being changed moved there. */
+  function crossPlaced(a: Pt, b: Pt) {
+    const c: Crossing = { kind: cross.kind, a, b, width: cross.width };
+    const problem = crossingProblem(c);
+    if (problem) return toast(problem);
+    const editing = crossEditing && edits.crossings?.[crossEditing] ? crossEditing : null;
+    const id = editing ?? newObjectId('v');
+    applyEdits({ ...edits, crossings: { ...(edits.crossings ?? {}), [id]: c } }, { tool: 'place_crossing', id, kind: c.kind, changed: !!editing }, 'user');
+  }
+
+  /** A crossing put down earlier was clicked: the menu shows it, to change or take away. */
+  function pickCrossing(id: string) {
+    const c = edits.crossings?.[id];
+    if (!c) return;
+    crossEditing = id;
+    cross = { kind: c.kind, width: c.width };
+  }
+
+  /** The crossing being changed gets the menu's kind and width (its ends stay). */
+  function saveCrossing() {
+    const c = crossEditing ? edits.crossings?.[crossEditing] : null;
+    if (!c || !crossEditing) return;
+    const next: Crossing = { ...c, kind: cross.kind, width: cross.width };
+    const problem = crossingProblem(next);
+    if (problem) return toast(problem);
+    applyEdits({ ...edits, crossings: { ...(edits.crossings ?? {}), [crossEditing]: next } }, { tool: 'place_crossing', id: crossEditing, kind: next.kind, changed: true }, 'user');
+  }
+
+  function removeCrossing() {
+    const id = crossEditing;
+    const c = id ? edits.crossings?.[id] : null;
+    if (!id || !c) return;
+    const { [id]: _gone, ...rest } = edits.crossings ?? {};
+    crossEditing = null;
+    applyEdits({ ...edits, crossings: rest }, { tool: 'remove_crossings', ids: [id], kind: c.kind }, 'user');
   }
 
   /** A footprint drawn: a new building there, or the one being changed moved there. */
@@ -1329,7 +1390,14 @@
       scatter.mode = m;
       if (m === 'stamp' && scatter.kinds.length > 1) scatter.kinds = [scatter.kinds[0]];
     },
+    buildCross: () => {
+      if (buildMode !== 'crossing') return setBuildMode('crossing');
+      const order = ['bridge', 'ford', 'ferry'] as const;
+      const kind = order[(order.indexOf(cross.kind) + 1) % order.length];
+      cross = { kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
+    },
     buildShape: (k) => {
+      if (buildMode !== 'building') setBuildMode('building');
       // A round tower is a wizard's tower unless it was something else already.
       build = k === 'tower' && build.func === 'house' ? { ...build, shape: k, func: 'wizard_tower', floors: Math.max(build.floors, 4) } : { ...build, shape: k };
     },
@@ -1349,6 +1417,8 @@
         return true;
       },
       () => !!buildArmed?.tool.reset(),
+      () => !!buildArmed?.cross.reset(),
+      () => (crossEditing ? ((crossEditing = null), true) : false),
       () => (placeArmed ? (disarmPlace(), true) : false),
       () => (pickTool ? ((pickTool = null), syncTool(), true) : false),
       () => (designer ? (go('edit', 'names'), true) : false),
@@ -1610,10 +1680,16 @@
             bind:settings={build}
             funcs={buildFuncs}
             editing={buildEditing ? (drawnBuilding(buildEditing)?.name ?? null) : null}
+            mode={buildMode}
+            bind:cross
+            crossEditing={crossEditing ? (edits.crossings?.[crossEditing]?.kind ?? null) : null}
             {near}
             {peek}
             onSave={saveBuilding}
-            onDone={() => (buildEditing = null)}
+            onDone={() => ((buildEditing = null), (crossEditing = null))}
+            onMode={setBuildMode}
+            onCrossSave={saveCrossing}
+            onCrossRemove={removeCrossing}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 0.5)) })}
           />
         {:else if scatterOn}

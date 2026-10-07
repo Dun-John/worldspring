@@ -45,6 +45,7 @@ pace.
 | `c:<n>` | A created site (a building drawn by hand too; its building is `b:<layout>:0`). |
 | `n:<id>`, `p:<id>` | An NPC, a plot point (the DM's notebook). |
 | `o:<id>`, `x:<id>`, `s:<asset>` | A battlemap object put down by hand; a clear (generated objects taken away); an uploaded sprite (an object kind). |
+| `v:<id>` | A crossing put down by hand: a bridge, ford or ferry. |
 
 A tool that takes a place accepts either an `id` or `x_ft` and `y_ft`.
 
@@ -80,6 +81,8 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | `remove_objects`, `restore_objects` | Take objects away (placed ones by id, generated ones by kind and place, or all in a circle); bring cleared ones back. |
 | `create_building` | Draw a building: a footprint (`poly` corners, a `rect` or a round tower `circle`, snapped to the 5-ft grid) on dry land clear of buildings, roads and walls; what it is (`func`: a business such as inn, blacksmith, temple, castle, or a home), `floors`, `roof` (hip, battlements, cone), `tint`, `structure` (ruin). It gets an interior, a roof and walls on the battlemap. Returns its `c:` id and building id. |
 | `update_building` | Change a drawn building's options, or move or reshape it with a new footprint. |
+| `place_crossing` | Put a bridge, ford or ferry down `from` one bank `to` the other (`[x_ft, y_ft]` each; 10 to 2000 ft, a ferry at least 68; `width_ft` 5 to 40, default 12): a bridge's plank deck clear of the water, a ford's bed at wading depth under stepping stones, a ferry's jetties with a raft on a rope between. With `id`, changes that one. Returns its `v:` id. |
+| `list_crossings`, `remove_crossings` | The crossings put down by hand; take some away by id. |
 | `get_site_design` | An underground site (`u:`) as a text plan: rooms by symbol, one character per 5-ft square, doors, items and the ways between levels. |
 | `set_site_design` | Change a site from a plan (any part of it; `doors: auto`; `furnish`; levels added below). Refused when it breaks a rule play mode needs (one way in, ways down over ways up, every square reachable). |
 | `reset_site_design` | The site as generated again. |
@@ -103,9 +106,10 @@ Edits are layered over the generated world. The world file is seed + parameters 
 | `cleared` | Generated objects taken away, by `x:<id>`: one by kind and place, or all within `r` ft. |
 | `sprites` | Uploaded sprites by asset id: name, size, cover, blocks_move, blocks_sight, difficult, height_ft. |
 | `designs` | Underground sites designed by hand, by site id: the grid's place, and per level its squares (run-length encoded), rooms, doors and items. Built instead of the generated site. |
+| `crossings` | Crossings put down by hand, by `v:<id>`: kind (bridge, ford, ferry), ends `a` and `b` (ft), width. |
 
 Edits don't change the world's hash, and created sites use the same generators as the world's own. Objects
-and clears change only the battlemap chunks holding them.
+and clears change only the battlemap chunks holding them; crossings, the battlemaps and town-zoom tiles along them.
 
 How edits are stored and shared:
 

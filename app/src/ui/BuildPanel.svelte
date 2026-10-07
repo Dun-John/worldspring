@@ -2,10 +2,12 @@
   // Edit › Build: draw a building on the map (a rectangle, any polygon, a round tower), snapped
   // to the 5-ft grid, and say what it is, its storeys, roof and roof colour. While the tab is
   // open the map's pointer draws; each footprint drawn becomes a building. Editing one: change
-  // its options, or draw again to move or reshape it.
-  import { MAX_FLOORS, ROOFS, TINTS, type BuildingFuncs } from '../gen/protocol';
+  // its options, or draw again to move or reshape it. Or put a crossing down (a bridge, ford
+  // or ferry) by clicking one bank, then the other; clicking one picks it to change or take away.
+  import { CROSSING_WIDTH, MAX_FLOORS, ROOFS, TINTS, type BuildingFuncs, type CrossingKind } from '../gen/protocol';
   import { ROOF_TINTS } from '../gen/battlePrep';
   import type { BuildSettings, BuildShape } from '../editor/build';
+  import type { CrossSettings } from '../editor/crossing';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -14,17 +16,49 @@
     funcs: BuildingFuncs | null;
     /** The building being changed (its name), else drawing new ones. */
     editing: string | null;
+    /** Buildings, or crossings. */
+    mode: 'building' | 'crossing';
+    cross: CrossSettings;
+    /** The crossing picked (what it is), else putting new ones down. */
+    crossEditing: string | null;
     /** Whether the map is close enough to draw on. */
     near: boolean;
     /** Only the shapes (the panel is folded down). */
     peek?: boolean;
     onSave: () => void;
     onDone: () => void;
+    onMode: (m: 'building' | 'crossing') => void;
+    onCrossSave: () => void;
+    onCrossRemove: () => void;
     /** Fly in close enough to draw. */
     onZoomIn: () => void;
   }
 
-  let { settings = $bindable(), funcs, editing, near, peek = false, onSave, onDone, onZoomIn }: Props = $props();
+  let {
+    settings = $bindable(),
+    funcs,
+    editing,
+    mode,
+    cross = $bindable(),
+    crossEditing,
+    near,
+    peek = false,
+    onSave,
+    onDone,
+    onMode,
+    onCrossSave,
+    onCrossRemove,
+    onZoomIn,
+  }: Props = $props();
+
+  const KINDS: { key: CrossingKind; label: string; icon: IconName; kbd: string; look: string; width: number }[] = [
+    { key: 'bridge', label: 'Bridge', icon: 'bridge', kbd: '1', look: 'A timber deck clear of the water, walked like a road.', width: 12 },
+    { key: 'ford', label: 'Ford', icon: 'ford', kbd: '2', look: 'The bed brought up to wading depth, stepping stones across.', width: 10 },
+    { key: 'ferry', label: 'Ferry', icon: 'ferry', kbd: '3', look: 'A jetty out from each bank, a raft on a rope between. At least 68 ft.', width: 12 },
+  ];
+  const kindLook = $derived(KINDS.find((k) => k.key === cross.kind)?.look ?? '');
+  const widthMin = CROSSING_WIDTH[0];
+  const widthMax = CROSSING_WIDTH[1];
 
   const SHAPES: { key: BuildShape; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'rect', label: 'Rectangle', icon: 'square', kbd: 'R', hint: 'Drag from corner to corner.' },
@@ -45,6 +79,51 @@
 </script>
 
 <div class="build">
+  {#if !peek}
+    <div class="ws-seg" role="radiogroup" aria-label="What to build">
+      <button class:on={mode === 'building'} aria-pressed={mode === 'building'} onclick={() => onMode('building')}><Icon name="building" size={16} />Building</button>
+      <button class:on={mode === 'crossing'} aria-pressed={mode === 'crossing'} onclick={() => onMode('crossing')} title="A bridge, ford or ferry (X)"><Icon name="bridge" size={16} />Crossing</button>
+    </div>
+  {/if}
+  {#if mode === 'crossing'}
+    {#if crossEditing}
+      <div class="editing">
+        <span class="grow">Changing the <b>{crossEditing}</b></span>
+        <button class="ws-btn" onclick={onCrossRemove} title="Take it away"><Icon name="trash" size={16} /> Remove</button>
+        <button class="ws-btn" onclick={onDone}>Done</button>
+      </div>
+    {/if}
+    <div class="ws-seg" role="radiogroup" aria-label="Crossing">
+      {#each KINDS as k (k.key)}
+        <button
+          class:on={cross.kind === k.key}
+          aria-pressed={cross.kind === k.key}
+          onclick={() => (cross = { kind: k.key, width: crossEditing ? cross.width : k.width })}
+          title="{k.label} ({k.kbd})"><Icon name={k.icon} size={16} />{k.label}</button
+        >
+      {/each}
+    </div>
+    {#if !near}
+      <div class="zoom">
+        <span class="grow">Zoom in to put one down.</span>
+        <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
+      </div>
+    {/if}
+    {#if !peek}
+      <div class="ws-hint">
+        {crossEditing ? 'Click both banks again to move it. ' : 'Click one bank, then the other; click one put down earlier to change it. '}{kindLook}
+      </div>
+      <div class="ws-field">
+        Width (ft)
+        <div class="stepper">
+          <button class="ws-icon-btn" onclick={() => (cross.width = Math.max(widthMin, cross.width - 1))} disabled={cross.width <= widthMin} aria-label="Narrower"><Icon name="minus" size={16} /></button>
+          <span>{cross.width}</span>
+          <button class="ws-icon-btn" onclick={() => (cross.width = Math.min(widthMax, cross.width + 1))} disabled={cross.width >= widthMax} aria-label="Wider"><Icon name="plus" size={16} /></button>
+        </div>
+      </div>
+      {#if crossEditing}<button class="ws-btn primary block" onclick={onCrossSave}>Save changes</button>{/if}
+    {/if}
+  {:else}
   {#if editing}
     <div class="editing">
       <span class="grow">Editing <b>{editing}</b></span>
@@ -114,6 +193,7 @@
       <input class="ws-input" bind:value={settings.name} placeholder={editing ? '' : 'Named for its trade if left empty'} />
     </label>
     {#if editing}<button class="ws-btn primary block" onclick={onSave}>Save changes</button>{/if}
+  {/if}
   {/if}
 </div>
 

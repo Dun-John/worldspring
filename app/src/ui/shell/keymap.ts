@@ -37,6 +37,8 @@ export interface KeyContext {
   sketchTool(t: EditTool): void;
   scatterMode(m: ScatterMode): void;
   buildShape(s: BuildShape): void;
+  /** Crossings (again: the next kind). */
+  buildCross(): void;
   buildFinish(): void;
   buildBack(): void;
   designMode(m: DesignMode): void;
@@ -111,6 +113,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['T', 'tower', 'Round tower'],
   ];
   for (const [key, s, label] of shapes) out.push({ keys: [key], label, group: 'Build', when: edit('build'), run: () => k.buildShape(s) });
+  out.push({ keys: ['X'], label: 'Crossing (again: bridge, ford, ferry)', group: 'Build', when: edit('build'), run: () => k.buildCross() });
   out.push(
     { keys: ['Enter'], label: 'Finish the polygon', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
     { keys: ['Backspace'], label: 'Take a corner back', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildBack() },

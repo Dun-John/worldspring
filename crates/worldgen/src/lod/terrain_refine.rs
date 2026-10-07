@@ -40,7 +40,7 @@ const GULLY_CELL: f64 = 8.0;
 /// broad valley already; finer levels sharpen the channel).
 const CARVE_REACH_SAMPLES: f64 = 8.0;
 /// Water over a ford's bed (ft): wading depth.
-const FORD_DEPTH_FT: f32 = 0.8;
+pub(crate) const FORD_DEPTH_FT: f32 = 0.8;
 /// Levels with coarser sample spacing than this skip carving.
 const CARVE_MAX_SPACING_FT: f64 = 2_500.0;
 
