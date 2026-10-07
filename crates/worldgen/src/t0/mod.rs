@@ -241,13 +241,13 @@ impl T0 {
         let coast: Vec<f32> = (0..n).map(|k| if land[k] { 0.0 } else { (dist_land[k] * cell) as f32 }).collect();
 
         let mut rivers = build_river_net(world, w, cell, &height, &land, &hydro);
+        let hgrid = Grid::from_vec(w, h, height.iter().map(|&v| v as f32).collect());
+        let base = Self::from_grids(hgrid, Grid::from_vec(w, h, hydro.water.clone()), Grid::from_vec(w, h, coast.clone()), Grid::from_vec(w, h, biome.clone()), cell, world.stream("t0.biome.warp"), RiverNet::default(), RoadNet::new(Vec::new(), (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell));
+        let ground = base.ground_sampler(world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1)));
         let plan = {
             // Levels that agree with the ground the terrain is built on (before anything is
             // placed against the curves, whose meanders follow the levels).
-            let hgrid = Grid::from_vec(w, h, height.iter().map(|&v| v as f32).collect());
-            let base = Self::from_grids(hgrid, Grid::from_vec(w, h, hydro.water.clone()), Grid::from_vec(w, h, coast.clone()), Grid::from_vec(w, h, biome.clone()), cell, world.stream("t0.biome.warp"), RiverNet::default(), RoadNet::new(Vec::new(), (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell));
             let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-            let ground = base.ground_sampler(lattice);
             // Standing water: the lookup gives a level near any wet cell; it is water only
             // where that level is above the ground.
             rivers.settle_levels(&ground, &|x, y| base.sample_lake(x, y).0 as f64 > ground(x, y), cell);
@@ -266,7 +266,10 @@ impl T0 {
         // roads between them; towns (favouring those roads and their junctions), then roads;
         // villages (favouring any road).
         let sinp = settle::Inputs { world, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, pins: &pins };
-        let rinp = roads::Inputs { world, plan: &plan, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro };
+        // The ground roads are planned on, at any point (the plan's grid every half cell is
+        // too coarse for switchbacks to see a narrow valley).
+        let planned = |x: f64, y: f64| rivers.valley(ground(x, y), x, y);
+        let rinp = roads::Inputs { world, plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None);
         let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);

@@ -110,6 +110,8 @@ impl Plan {
 pub struct Inputs<'a> {
     pub world: &'a World,
     pub plan: &'a Plan,
+    /// The plan's ground at any point (ft): what the plan's grid samples every half cell.
+    pub ground: &'a dyn Fn(f64, f64) -> f64,
     pub w: usize,
     pub h: usize,
     pub cell_ft: f64,
@@ -192,6 +194,15 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
 
     // --- Switchbacks and profile.
     let hgrid = inp.plan;
+    // For switchbacks the plan's grid cannot route: the ground at any point (a narrow valley
+    // between its nodes), and dry land finer than whole cells (a cell counted as sea still
+    // has land on its shore side, where a coastal settlement's road comes down).
+    let fine_ground = |p: [f64; 2]| (inp.ground)(p[0] * cell, p[1] * cell);
+    let sea = inp.world.params().sea_level_ft;
+    let fine_dry = |p: [f64; 2]| {
+        let k = (crate::core::round(p[1]) as usize).min(h - 1) * w + (crate::core::round(p[0]) as usize).min(w - 1);
+        passable_fn(inp)(k) || (inp.hydro.lake_of[k] == NO_LAKE && fine_ground(p) > sea + 3.0)
+    };
     let mut roads: Vec<RoadPath> = Vec::new();
     for (class, seg) in &segments {
         let mut cells: Vec<[f64; 2]> = seg.iter().map(|&c| [(c as usize % w) as f64, (c as usize / w) as f64]).collect();
@@ -202,7 +213,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
             }
         }
         let chords = simplify(&cells, w, h, hgrid, class.max_grade(), cell, passable_fn(inp));
-        let (mut pts, mut wander) = switchbacks(hgrid, &chords, class.max_grade(), cell, passable_fn(inp));
+        let (mut pts, mut wander) = switchbacks(hgrid, &chords, class.max_grade(), cell, passable_fn(inp), &fine_ground, &fine_dry);
         // Towns and cities are entered at their urban edge (gates); the streets take over.
         for at_start in [true, false] {
             let c = if at_start { seg[0] } else { seg[seg.len() - 1] };
@@ -719,15 +730,32 @@ fn simplify(cells: &[[f64; 2]], w: usize, h: usize, hg: &Plan, gmax: f64, cell: 
     out
 }
 
-/// Replace too-steep stretches with grade-limited paths on a 4× grid (T0 cell units in/out).
+/// Replace too-steep stretches (on the plan between points, or on `ground` over any quarter
+/// of one) with grade-limited paths on a 4× grid (T0 cell units in/out), or where that finds
+/// none, an 8× grid on `ground` within `dry` (both at a point, in cells).
 /// Also returns the wander weight per point (0 on switchback legs, which must stay put).
-fn switchbacks(hg: &Plan, cells: &[[f64; 2]], gmax: f64, cell: f64, passable: impl Fn(usize) -> bool) -> (Vec<[f64; 2]>, Vec<f32>) {
+fn switchbacks(
+    hg: &Plan,
+    cells: &[[f64; 2]],
+    gmax: f64,
+    cell: f64,
+    passable: impl Fn(usize) -> bool,
+    ground: &impl Fn([f64; 2]) -> f64,
+    dry: &impl Fn([f64; 2]) -> bool,
+) -> (Vec<[f64; 2]>, Vec<f32>) {
     const F: f64 = 4.0;
+    const F_FINE: f64 = 8.0;
     // Legs are planned this far under the limit: the ground the profile meets is rougher than
     // the plan, and a route at the limit leaves no room (the profile would cut and fill by
     // a hundred feet).
     const SLACK: f64 = 0.85;
     let at = |p: [f64; 2]| hg.z(p);
+    // Steeper than the limit over any quarter of the stretch on the ground itself.
+    let steep = |a: [f64; 2], b: [f64; 2]| {
+        let q: Vec<f64> = (0..=4).map(|k| ground([a[0] + (b[0] - a[0]) * k as f64 / 4.0, a[1] + (b[1] - a[1]) * k as f64 / 4.0])).collect();
+        let run = 0.25 * dist(a, b) * cell;
+        q.windows(2).any(|w| (w[1] - w[0]).abs() > gmax * run)
+    };
     let mut out: Vec<[f64; 2]> = vec![cells[0]];
     let mut wander: Vec<f32> = vec![1.0];
     let mut i = 0;
@@ -735,7 +763,7 @@ fn switchbacks(hg: &Plan, cells: &[[f64; 2]], gmax: f64, cell: f64, passable: im
         let (a, b) = (cells[i], cells[i + 1]);
         let run = crate::core::sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1])) * cell;
         let grade = (at(b) - at(a)).abs() / run;
-        if grade <= gmax {
+        if grade <= gmax && !steep(a, b) {
             out.push(b);
             wander.push(1.0);
             i += 1;
@@ -746,12 +774,16 @@ fn switchbacks(hg: &Plan, cells: &[[f64; 2]], gmax: f64, cell: f64, passable: im
         while j + 1 < cells.len() && j - i < 12 {
             let (c, e) = (cells[j], cells[j + 1]);
             let r = crate::core::sqrt((e[0] - c[0]) * (e[0] - c[0]) + (e[1] - c[1]) * (e[1] - c[1])) * cell;
-            if (at(e) - at(c)).abs() / r <= gmax {
+            if (at(e) - at(c)).abs() / r <= gmax && !steep(c, e) {
                 break;
             }
             j += 1;
         }
-        match fine_route(hg, cells[i], cells[j], SLACK * gmax, cell, F, &passable) {
+        let on_plan = |p: [f64; 2]| hg.z(p);
+        let on_cells = |p: [f64; 2]| passable((p[1].round() as usize).min(hg.ch - 1) * hg.cw + (p[0].round() as usize).min(hg.cw - 1));
+        let route = fine_route(hg, &on_plan, &on_cells, cells[i], cells[j], SLACK * gmax, cell, F)
+            .or_else(|| fine_route(hg, ground, dry, cells[i], cells[j], SLACK * gmax, cell, F_FINE));
+        match route {
             Some(route) => {
                 // Drop collinear fine-grid points; keep the legs and hairpins.
                 let mut legs: Vec<[f64; 2]> = vec![route[0]];
@@ -855,21 +887,18 @@ pub fn round_corners(pts: &[[f64; 2]], vals: &[f32], r_max: f64, step: f64) -> (
     (out, ov)
 }
 
-/// A* on a grid `f` times finer than T0 inside a corridor; each step's grade must be ≤ gmax
-/// (then ≤ 1.8 gmax as a fallback). Returns points in T0 cell units.
-fn fine_route(hg: &Plan, a: [f64; 2], b: [f64; 2], gmax: f64, cell: f64, f: f64, passable: &impl Fn(usize) -> bool) -> Option<Vec<[f64; 2]>> {
+/// A* on a grid `f` times finer than T0 inside a corridor, over the `ground` heights at its
+/// nodes where `ok` (both at a point in cells); each step's grade must be ≤ gmax (then
+/// ≤ 1.8 gmax as a fallback). Returns points in T0 cell units.
+#[allow(clippy::too_many_arguments)]
+fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2]) -> bool, a: [f64; 2], b: [f64; 2], gmax: f64, cell: f64, f: f64) -> Option<Vec<[f64; 2]>> {
     let pad = 4.0;
     let (x0, y0) = ((a[0].min(b[0]) - pad).max(0.0), (a[1].min(b[1]) - pad).max(0.0));
     let (x1, y1) = ((a[0].max(b[0]) + pad).min((hg.cw - 1) as f64), (a[1].max(b[1]) + pad).min((hg.ch - 1) as f64));
     let (fw, fh) = (((x1 - x0) * f) as usize + 1, ((y1 - y0) * f) as usize + 1);
     let to_world = |i: usize| [x0 + (i % fw) as f64 / f, y0 + (i / fw) as f64 / f];
-    let hts: Vec<f64> = (0..fw * fh).map(|i| hg.z(to_world(i))).collect();
-    let ok: Vec<bool> = (0..fw * fh)
-        .map(|i| {
-            let p = to_world(i);
-            passable((p[1].round() as usize).min(hg.ch - 1) * hg.cw + (p[0].round() as usize).min(hg.cw - 1))
-        })
-        .collect();
+    let hts: Vec<f64> = (0..fw * fh).map(|i| ground(to_world(i))).collect();
+    let ok: Vec<bool> = (0..fw * fh).map(|i| ok(to_world(i))).collect();
     let idx = |p: [f64; 2]| (((p[1] - y0) * f).round() as usize).min(fh - 1) * fw + (((p[0] - x0) * f).round() as usize).min(fw - 1);
     let (s, t) = (idx(a), idx(b));
     let step = cell / f;
