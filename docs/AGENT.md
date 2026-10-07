@@ -1,6 +1,6 @@
 # Agents: mapd and its MCP tools
 
-`mapd` is the map's local server. It lets an agent such as Claude Code read the open world, look at it, and
+`mapd` is the map's local server. It lets an agent (any MCP client) read the open world, look at it, and
 edit it while you watch. Every change shows up live in the map app.
 
 It listens on **127.0.0.1 only**. Never put it behind the reverse proxy. Pages from other hosts are refused:
@@ -19,7 +19,7 @@ It listens on **127.0.0.1 only**. Never put it behind the reverse proxy. Pages f
    - `?mapd=PORT` points at another port; `?mapd=0` turns the link off.
    - Pages not served from this machine never connect.
    - A notice says "Connected to mapd" when the link is up.
-3. Connect Claude Code (once):
+3. Connect your MCP client (once) to `http://127.0.0.1:7777/mcp`, for example:
    `claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp`
 
 The app tells mapd which world it has open (seed and parameters).

@@ -6,6 +6,6 @@ node_modules/
 *.log
 /worlds
 
-# The authoring handoff is local only (it names the user's own hosts).
+# Local notes.
 /docs/authoring-handoff.md
 /assets/masters

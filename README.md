@@ -82,8 +82,17 @@ npm run wasm     # build the generator into app/src/gen/pkg
 npm run dev      # http://localhost:5173 (?seed=N picks a world)
 ```
 
-`npm run mapd` starts the local agent server; `cargo test --release -p worldgen` runs the checks. More commands and
-the project's rules are in [CLAUDE.md](CLAUDE.md).
+`npm run mapd` starts the local agent server, `cargo test --release -p worldgen` runs the checks and `npm run check`
+type-checks the app.
+
+## Inspiration
+
+Worldspring stands on the shoulders of two wonderful map makers. Go and try them:
+
+- **[Watabou's Procgen Arcana](https://watabou.github.io/)**: cities, villages, dungeons and more, each made from a
+  seed in the browser, in a lovely ink-on-parchment style. The towns here owe a lot to them.
+- **[Canvas of Kings](https://store.steampowered.com/app/2498570/Canvas_of_Kings/)** by Hannes Breuer: hand-drawn
+  maps where you draw the paths and plots and the details fill themselves in.
 
 ## License
 

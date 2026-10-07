@@ -1,6 +1,6 @@
 # Worldspring MCP: full reference
 
-`mapd` exposes the open world to agents (Claude Code or any MCP client) through 34 tools. With them an agent can:
+`mapd` exposes the open world to agents (any MCP client) through 34 tools. With them an agent can:
 - read and search the world: features, buildings, districts, underground sites, routes, battlemaps;
 - look at the map as you see it, or move your view;
 - edit the world: rename anything (down to a dungeon's levels and rooms), write notes, hide features, and create
@@ -19,10 +19,10 @@ For setup details, storage and undo, see [AGENT.md](AGENT.md).
 npm run wasm          # once
 npm run mapd          # the server, on 127.0.0.1:7777
 npm run dev           # the map app, on http://localhost:5173 (it connects to mapd by itself)
-claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp   # once
+claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp   # once: connect your MCP client, e.g. this
 ```
 
-Then ask Claude Code in plain language, for example: *"What's the biggest city on the map?"*
+Then ask your agent in plain language, for example: *"What's the biggest city on the map?"*
 
 mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 
@@ -516,7 +516,7 @@ No parameters. Returns `{built_in: [{kind, name, rules}], uploaded: [{kind, name
 | Parameter | Type | | |
 |---|---|---|---|
 | `data_base64` | string | one of these | The picture (png, jpeg, webp, gif or svg), base64 (a data URL works too). |
-| `path` | string | | A picture file on the machine mapd runs on (for art made with `codex exec`). |
+| `path` | string | | A picture file on the machine mapd runs on. |
 | `asset` | string | | A picture already uploaded: change its name or rules. |
 | `name` | string | optional | |
 | `size` | number | optional | Squares across at scale 1 (default 1; 0.2–40). |
@@ -696,7 +696,7 @@ level 2: Level 2 · the deep
 
 ---
 
-## Recipes (prompts for Claude Code)
+## Recipes (prompts for an agent)
 
 **Session prep**
 > *"The party is heading from Agentholm to Gatewatch. Plan the route, tell me how many days it takes at a normal
@@ -725,7 +725,7 @@ level 2: Level 2 · the deep
 **Renaming a region**
 > *"Rename the Katsei Mountains to the Ashen Teeth and rename every village inside them to fit."*
 
-## Calling it without Claude Code
+## Calling it without an MCP client
 
 mapd speaks MCP over streamable HTTP with JSON responses (JSON-RPC 2.0, protocol versions 2025-06-18,
 2025-03-26 and 2024-11-05). With curl:

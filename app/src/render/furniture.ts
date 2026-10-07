@@ -2040,7 +2040,7 @@ function caveBoulder(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
   rock(g, cx, cy, s, CAVE_ROCK, light, rnd, 9);
 }
 
-/** Crystal cluster (after the user's reference): long faceted shards of uneven length radiating outward from a shared
+/** Crystal cluster (after a reference picture): long faceted shards of uneven length radiating outward from a shared
  * heart in different directions, each split into flat facets in light and dark tones with a highlight streak, and a
  * few stubby upright prisms standing in the middle, seen from a high angle with their flat six-sided tops showing. */
 function crystal(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
@@ -3510,7 +3510,7 @@ function oreCart(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) 
   g.rect(cx - iw, cy - ih, iw * 2, ih * 2).stroke({ width: 0.012, color: INK });
 }
 
-/** Ore vein (after the user's reference): a pale grey lump of rock against the wall, speckled, with chunky rounded
+/** Ore vein (after a reference picture): a pale grey lump of rock against the wall, speckled, with chunky rounded
  * nuggets of ore bursting out of it — glowing orange gold, copper green or silver — each shaded dark at its root
  * and bright at its tip, a few chips knocked off onto the floor. */
 function oreVein(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, wall: [number, number]) {

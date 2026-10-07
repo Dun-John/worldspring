@@ -2,8 +2,7 @@
 
 Rules for battlemap art: the objects scattered on outdoor maps (`battlemap::CATALOG`, drawn by `DRAW` in
 `app/src/render/atlas.ts`), building furniture (`drawFurniture`) and underground props (`drawUnderProp`, both in
-`app/src/render/furniture.ts`). All of it is drawn in code, so it looks like one set; images from `codex exec`
-are a fallback (see the end).
+`app/src/render/furniture.ts`). All of it is drawn in code, so it looks like one set.
 
 The target is the **cozy** look of hand-drawn VTT terrain (Nimblehold-like): a sunny afternoon,
 warm and inviting even in a ruin, drawn with simple broad strokes and generous colour. The world can be dangerous; the
@@ -40,7 +39,7 @@ battlemap zoom.
    `BattlemapLayer` `SPARSE`); furniture and props cast their own (`castShadow`), away from the light, longer for
    taller things. Never dark enough to read as a hole.
 
-## What the user has asked for (Phase 6 approvals)
+## Settled so far
 
 - **Size against the 5-ft square.** Life-sized: a body about 5.5 ft (1.1 squares) inside its 1x2 spot, a pail
   about 1.5 ft across, a lantern small, weapons on a rack no longer than real ones. Oversized props get sent back.
@@ -63,7 +62,7 @@ battlemap zoom.
 - **Trees:** the leafy trees (deciduous, jungle, acacia, willow), bushes and thickets keep the soft overlapping
   round canopy (`canopy()`); conifers, palms and dead trees in the detailed style. Brambles sit between the tall
   grass and the trees. Some old drawings stay by choice (the ruined wall, the outdoor rubble).
-- **References:** when the user gives a reference image (the forge, the crystal, the ore vein), match its shapes,
+- **References:** when there is a reference image (the forge, the crystal, the ore vein), match its shapes,
   proportions and colour, translated into these rules.
 
 ## Colour
@@ -163,67 +162,14 @@ seed 1's forests, a town and a desert; the ground may need a warmer pass to matc
 - **Hazards (bog, quicksand, thin ice, sinkholes, vents):** soft-edged patches that fade to transparent, readable
   as danger by colour, not by a hard border.
 
-## Images from `codex exec`
-
-Code first: everything in Phase 6 was drawn in code; the simple shapes this guide asks for are easier to get
-that way. Five rounds of a generated deciduous tree never landed: the crowns
-came out either as separate round clumps set evenly round a centre (a flower, not a tree) or as one soft blob,
-and always with busy, painterly fine texture that turned to noise at 64 px a square, where the game wants a few
-broad flat tones, bold strokes and one connected, irregular silhouette. Use generated images where drawing in code
-is impractical.
-
-**Specs**
-- Transparent PNG. If the model can't give transparency: a flat `#FF00FF` background, keyed out
-  afterwards (so never use magenta in the art).
-- Square image, the object centred with a clear margin of about 10% on every side.
-  The model mostly ignores the margin (tests came back with 0–3%), so processing trims every image and
-  pads it itself; the prompt still asks, to keep edges from being cut off.
-- `codex exec` keeps every generated image in `~/.codex/generated_images/<session>/`. What works: ask it
-  only to generate the image (read-only sandbox, no files written), then take the PNG that appeared in that
-  folder during the run. Asking Codex to save the file itself failed twice (a broken re-encode, a missed copy).
-- Run one `codex exec` image job at a time. Parallel runs share that folder and copied each other's
-  images (or a stray, unrelated picture); check every result by eye before keeping it.
-- Master size: 256 px per 5-ft square of footprint (a 1-square barrel is 256 px; a 3-square tree 768 px).
-  The game uses 64 px per square plus mipmaps; masters stay out of git.
-- 4 variants per kind, same object with a different arrangement (lobes, planks, stones), same size and
-  palette.
-- Rotation: the object should look right turned any way (the game rotates it), except where the kind has
-  a front (tents, carts, bedrolls: the front faces +x, the right of the image).
-
-**Base prompt** (fill in the braces; no studio or artist names, which models copy loosely or refuse):
-
-> A single {object}, seen from directly above in a top-down orthographic view, for a fantasy tabletop
-> battlemap. Cozy hand-drawn illustration with simple, broad strokes: flat areas of colour shaded with
-> two or three clear tones, a few bold confident strokes, large simple shapes that stay easy to read
-> from far away, no fine texture or tiny details, not a detailed painting. Irregular, organic, asymmetric
-> forms, no radial symmetry. A slightly uneven warm dark-brown ink outline (#2b2118) around the silhouette. Warm afternoon
-> sunlight from the upper left: cream-yellow highlights on the upper-left edges, deeper plum-brown shade
-> on the lower right, so the object stands out against grass. Palette: {material tones from this
-> guide}. {Shape notes}. Centred with a clear margin of about 10% on every side, on a fully transparent
-> background. No cast shadow, no ground, no grid, no text, no perspective, no side view.
-
-Variant line, appended: *Variant {n} of 4: {what changes}.* For a front-facing kind: *The {front} faces
-right.*
-
-**Example:** the last deciduous tree prompt tried (it never landed; the round `canopy()` drawing stayed).
-
-> A single leafy deciduous tree canopy, seen from directly above … Palette: deep green `#2f5a2c`, mid
-> green `#4f8a38`, light green `#8fbf4a`, sunlit yellow-green `#c8dd6a`. An irregular, lopsided crown
-> made of 3–5 large foliage masses of different sizes that overlap heavily into one connected crown, like
-> a real tree seen from above, with a few deep notches in its outline; the ink outline runs only round the
-> outside of the crown, and inside the masses are separated by darker shade, not by outlines or gaps;
-> no central clump with others arranged around it. Each mass is one
-> flat shape with one shade tone and one highlight tone and a few bold leafy strokes along its edge, no
-> small scallops or leaf texture; no trunk visible …
-
 ## Checking new art
 
-Work in small themed batches the user approves item by item:
+Work in small themed batches, approved item by item:
 - Look at each piece alone in `?gallery=1&items=...&sq=192` (or `&kinds=...`) and on a battlemap with `shot.mjs`:
   it reads at 64 px per square and at half that, the light comes from the upper left like its neighbours, it
   separates from its usual ground, its colours sit within the ramps above.
-- **Blind critique:** give a fresh subagent unlabelled crops in shuffled order, told only the theme and that the
-  view is top-down (a few things from a high angle); it guesses each with a confidence from 1 to 5. Tell it the
-  answers for the weak ones and ask for a ranked list of fixes. Show the user the set and the ranked fixes, let
-  them choose per item, and re-test changed items with a new agent when useful.
+- **Blind critique:** show a fresh pair of eyes unlabelled crops in shuffled order, told only the theme and that
+  the view is top-down (a few things from a high angle); they guess each with a confidence from 1 to 5. Tell them
+  the answers for the weak ones and ask for a ranked list of fixes, choose per item, and re-test changed items with
+  someone new when useful.
 - Review screenshots are scratch: delete them once a batch is approved.

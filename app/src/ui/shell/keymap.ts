@@ -1,6 +1,6 @@
 // Every keyboard shortcut of the map's window, built from what App knows and can do. Letters
 // belong to the panel that is open (play's tools while a session runs with no other panel), so
-// none is live twice: see the table in CLAUDE.md.
+// none is live twice.
 import type { EditTool } from '../../editor/sketcher';
 import type { ScatterMode } from '../../editor/scatter';
 import type { BuildShape } from '../../editor/build';

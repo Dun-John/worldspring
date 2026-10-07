@@ -1352,7 +1352,7 @@
     view.fitWorld();
   }
 
-  // Every keyboard shortcut (the table in CLAUDE.md), and what Escape steps back from.
+  // Every keyboard shortcut (the table in keymap.ts), and what Escape steps back from.
   const keymap = buildKeymap({
     section: () => shell.section,
     editTab: () => shell.tabs.edit,

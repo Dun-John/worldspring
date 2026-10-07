@@ -3,7 +3,7 @@
 //! change pushed live to the open app (`/ws`). Listens on 127.0.0.1 only.
 //!
 //! `cargo run --release -p mapd -- [--port 7777] [--dir worlds] [--app app/dist]`
-//! Claude Code: `claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp`
+//! Any MCP client, e.g. `claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp`
 
 mod build;
 mod crossings;
