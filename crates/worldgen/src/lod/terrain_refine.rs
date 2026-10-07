@@ -12,7 +12,7 @@ use super::rivers::{self, Piece};
 use super::roads::{self, RoadPiece};
 use crate::World;
 use crate::core::{
-    noise::{gradient2, smoothstep},
+    noise::{Gradient, smoothstep},
     rng,
     tile::{HALO, PADDED, TILE_N, TileKey},
 };
@@ -244,6 +244,8 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
     let cols = plan.as_ref().map(|p| p.columns(&(-h..=n + h).map(|ci| (gx0 + ci) as f64 * s).collect::<Vec<_>>()));
 
     let mut out = vec![0f32; PADDED * PADDED];
+    // (Along a row the samples ask about the same noise cell several times running.)
+    let (mut detail_noise, mut along_noise) = (Gradient::new(seed), Gradient::new(gseed ^ 0x77));
     for cj in -h..=n + h {
         let t = 2 * off_y + cj;
         let pv = t.div_euclid(2);
@@ -277,7 +279,7 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
                 rough *= 0.25;
             }
             let nx = (gx0 + ci) as f64 / DETAIL_WAVELENGTH;
-            let mut detail = amp * rough * gradient2(seed, nx, ny);
+            let mut detail = amp * rough * detail_noise.at(nx, ny);
 
             // Gullies: ridges and furrows running down the fall line on steep ground, blended
             // over local cells so the direction stays stable at any world coordinate.
@@ -295,7 +297,7 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
                     let u = (rx * px + ry * py) / GULLY_SPACING + phase;
                     v += wt * (1.0 - 2.0 * crate::core::fabs(u - crate::core::floor(u) - 0.5));
                 }
-                let along = 0.6 + 0.4 * gradient2(gseed ^ 0x77, nx * 0.4, ny * 0.4);
+                let along = 0.6 + 0.4 * along_noise.at(nx * 0.4, ny * 0.4);
                 detail += amp * 1.6 * steep * along * (v - 0.5);
             }
             // Shorelines stay where the parent put them: near a lake or sea surface the
