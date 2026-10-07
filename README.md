@@ -17,7 +17,7 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 | | |
 |---|---|
 | ![The whole continent](docs/media/continent.png) | ![A city with its districts](docs/media/city.png) |
-| **The continent**: biomes, ranges, rivers, seas and the roads between towns. | **Cities** with walls, wards, markets, docks and named districts. |
+| **The continent**: biomes, ranges, rivers, seas, and the roads between towns, over bridges, fords and ferries. | **Cities** with walls, wards, markets, docks and named districts. |
 | ![A street battlemap](docs/media/battlemap.png) | ![Inside an inn](docs/media/interior.png) |
 | **Battlemaps** everywhere, on a 5-ft grid. | **Inside every building**, floor by floor. |
 
@@ -33,8 +33,8 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 - The four sections at the top right:
   - **World**: start a new world from a seed, change its size and climate, or *sketch* the continent you want
     (draw coasts, mountains and rivers, and the generator follows); save worlds and open them again.
-  - **Edit**: rename anything, place your own towns and sites, draw buildings, design dungeons room by room, and put
-    down or clear objects on battlemaps (your own pictures too).
+  - **Edit**: rename anything, place your own towns and sites, draw buildings, put down bridges, fords and ferries,
+    design dungeons room by room, and put down or clear objects on battlemaps (your own pictures too).
   - **Notes**: your notebook for the people and plots of your campaign, pinned to places on the map.
   - **Play**: run a session at the table. Tokens, fog of war, line of sight, lights, doors and secret doors, and a
     second **players' window** to put on a TV or another screen. It shows only what the players have seen.
