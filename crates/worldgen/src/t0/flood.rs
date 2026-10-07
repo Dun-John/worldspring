@@ -68,6 +68,12 @@ pub fn priority_flood(w: usize, h: usize, height: &[f64], outlet: &[bool], eps: 
     let mut closed = vec![false; n];
     let mut heap = BinaryHeap::new();
     let mut any = false;
+    // Cells off the grid's edge have all eight neighbours, at fixed offsets (in D8 order).
+    let mut inner = vec![false; n];
+    for y in 1..h.saturating_sub(1) {
+        inner[y * w + 1..y * w + w - 1].iter_mut().for_each(|v| *v = true);
+    }
+    let offsets: [isize; 8] = std::array::from_fn(|k| D8[k].1 as isize * w as isize + D8[k].0 as isize);
     for i in 0..n {
         if outlet[i] {
             closed[i] = true;
@@ -75,7 +81,8 @@ pub fn priority_flood(w: usize, h: usize, height: &[f64], outlet: &[bool], eps: 
             // Outlets with no open neighbour would pop without effect: only the ones on the
             // edge of the land enter the heap (the pop order is a total order on (height,
             // index), so the result is the same).
-            if neighbors(w, h, i).any(|(nb, _)| !outlet[nb]) {
+            let open = if inner[i] { offsets.iter().any(|&o| !outlet[(i as isize + o) as usize]) } else { neighbors(w, h, i).any(|(nb, _)| !outlet[nb]) };
+            if open {
                 heap.push(Node::new(height[i], i as u32));
             }
         }
@@ -95,13 +102,22 @@ pub fn priority_flood(w: usize, h: usize, height: &[f64], outlet: &[bool], eps: 
         if !outlet[i] && any {
             order.push(i as u32);
         }
-        for (nb, _) in neighbors(w, h, i) {
+        let mut visit = |nb: usize| {
             if closed[nb] {
-                continue;
+                return;
             }
             closed[nb] = true;
             filled[nb] = filled[nb].max(filled[i] + eps);
             heap.push(Node::new(filled[nb], nb as u32));
+        };
+        if inner[i] {
+            for o in offsets {
+                visit((i as isize + o) as usize);
+            }
+        } else {
+            for (nb, _) in neighbors(w, h, i) {
+                visit(nb);
+            }
         }
     }
     Flooded { filled, order }

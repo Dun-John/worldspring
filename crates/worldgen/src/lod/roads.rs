@@ -384,17 +384,67 @@ pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], water: &[f32], dim: usiz
 /// came from; if it leaves on the other side it crosses once, square to the belt, midway.
 /// Returns the road resampled every ~200 ft (wander baked in, so 0) if anything moved.
 /// `blocked(x, y)`: standing water, where a road must not be pushed.
-/// Belt samples per river segment (33 along it: centre, normal, half width), shared by every
-/// road's `unweave` (roads beside a river ask for the same segments over and over).
+/// Belt samples per river segment (33 along it: centre, normal, half width) and how far the
+/// farthest centre strays from the segment's chord, shared by every road's `unweave` (roads
+/// beside a river ask for the same segments over and over).
+type Belt = ([([f64; 2], [f64; 2], f64); 33], f64);
+
 #[derive(Default)]
-pub struct BeltCache(std::cell::RefCell<std::collections::HashMap<(u32, u32), std::rc::Rc<[([f64; 2], [f64; 2], f64); 33]>>>);
+pub struct BeltCache(std::cell::RefCell<crate::core::hash::FastMap<(u32, u32), std::rc::Rc<Belt>>>, std::cell::OnceCell<BeltIndex>);
+
+/// River segments by `cell`-ft grid cell, each listed (in (river, segment) order) in every
+/// cell within `unweave`'s search distance of its chord (for the widest road's margin).
+struct BeltIndex {
+    cell: f64,
+    w: i64,
+    h: i64,
+    cells: Vec<Vec<(u32, u32)>>,
+}
 
 impl BeltCache {
-    fn get(&self, rivers: &crate::lod::rivers::RiverNet, ri: u32, k: u32, cell_ft: f64) -> std::rc::Rc<[([f64; 2], [f64; 2], f64); 33]> {
+    fn index(&self, rivers: &crate::lod::rivers::RiverNet, cell_ft: f64) -> &BeltIndex {
+        self.1.get_or_init(|| {
+            let pad_of = |r: &crate::lod::rivers::RiverCurve, k: usize| 0.6 * cell_ft + 2.5 * crate::lod::rivers::width_ft(r.q[k].max(r.q[k + 1]) as f64) + 0.5 * RoadClass::KingsRoad.width_ft() + 40.0 + 1.0;
+            let (mut x1, mut y1) = (0.0f64, 0.0f64);
+            for r in &rivers.rivers {
+                for k in 0..r.pts.len().saturating_sub(1) {
+                    let pad = pad_of(r, k);
+                    for p in [r.pts[k], r.pts[k + 1]] {
+                        (x1, y1) = (x1.max(p[0] + pad), y1.max(p[1] + pad));
+                    }
+                }
+            }
+            let cell = cell_ft;
+            let (w, h) = ((x1 / cell) as i64 + 1, (y1 / cell) as i64 + 1);
+            let mut cells: Vec<Vec<(u32, u32)>> = vec![Vec::new(); (w * h) as usize];
+            for (ri, r) in rivers.rivers.iter().enumerate() {
+                for k in 0..r.pts.len().saturating_sub(1) {
+                    let (a, b) = (r.pts[k], r.pts[k + 1]);
+                    let pad = pad_of(r, k);
+                    let span = |lo: f64, hi: f64, n: i64| (((lo - pad) / cell).floor().max(0.0) as i64, (((hi + pad) / cell).floor() as i64).min(n - 1));
+                    let ((cx0, cx1), (cy0, cy1)) = (span(a[0].min(b[0]), a[0].max(b[0]), w), span(a[1].min(b[1]), a[1].max(b[1]), h));
+                    for cy in cy0..=cy1 {
+                        for cx in cx0..=cx1 {
+                            cells[(cy * w + cx) as usize].push((ri as u32, k as u32));
+                        }
+                    }
+                }
+            }
+            BeltIndex { cell, w, h, cells }
+        })
+    }
+
+    fn get(&self, rivers: &crate::lod::rivers::RiverNet, ri: u32, k: u32, cell_ft: f64) -> std::rc::Rc<Belt> {
         self.0
             .borrow_mut()
             .entry((ri, k))
-            .or_insert_with(|| std::rc::Rc::new(std::array::from_fn(|j| rivers.rivers[ri as usize].belt(k as usize, j as f64 / 32.0, cell_ft))))
+            .or_insert_with(|| {
+                let r = &rivers.rivers[ri as usize];
+                let samples: [([f64; 2], [f64; 2], f64); 33] = std::array::from_fn(|j| r.belt(k as usize, j as f64 / 32.0, cell_ft));
+                let (a, b) = (r.pts[k as usize], r.pts[k as usize + 1]);
+                let stray = samples.iter().map(|s| seg_dist(s.0, a, b)).fold(0.0, f64::max);
+                std::rc::Rc::new((samples, stray))
+            })
             .clone()
     }
 }
@@ -429,17 +479,26 @@ pub fn unweave(curve: &RoadCurve, rivers: &crate::lod::rivers::RiverNet, cell_ft
     }
     // Nearest belt: (river, signed offset from its centre line, half width, unit normal).
     let belt_near = |p: [f64; 2]| -> Option<(u32, f64, f64, [f64; 2])> {
-        let reach = 0.6 * cell_ft;
         let mut best: Option<(f64, (u32, f64, f64, [f64; 2]))> = None;
-        for (ri, k) in rivers.segments_near(p[0] - reach, p[1] - reach, p[0] + reach, p[1] + reach, 0.0) {
+        // Every segment within its pad of `p` (the only ones that count) is listed in p's cell.
+        let ix = cache.index(rivers, cell_ft);
+        let (cx, cy) = ((p[0] / ix.cell).floor() as i64, (p[1] / ix.cell).floor() as i64);
+        let segs: &[(u32, u32)] = if cx >= 0 && cy >= 0 && cx < ix.w && cy < ix.h { &ix.cells[(cy * ix.w + cx) as usize] } else { &[] };
+        for &(ri, k) in segs {
             let r = &rivers.rivers[ri as usize];
             let k = k as usize;
             let (a, b) = (r.pts[k], r.pts[k + 1]);
             let pad = 0.6 * cell_ft + 2.5 * crate::lod::rivers::width_ft(r.q[k].max(r.q[k + 1]) as f64) + margin;
-            if seg_dist(p, a, b) > pad {
+            let to_chord = seg_dist(p, a, b);
+            if to_chord > pad {
                 continue;
             }
-            for &(c, nrm, half) in cache.get(rivers, ri, k as u32, cell_ft).iter() {
+            let belt = cache.get(rivers, ri, k as u32, cell_ft);
+            // No centre here can be nearer than the best so far (a foot to spare for rounding).
+            if best.is_some_and(|x| to_chord - belt.1 - 1.0 > x.0) {
+                continue;
+            }
+            for &(c, nrm, half) in belt.0.iter() {
                 let dd = dist(c, p);
                 if best.is_none_or(|x| dd < x.0) {
                     let d = (p[0] - c[0]) * nrm[0] + (p[1] - c[1]) * nrm[1];
@@ -522,3 +581,4 @@ fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     crate::core::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]))
 }
+

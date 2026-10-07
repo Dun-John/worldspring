@@ -6,7 +6,7 @@
 //! Coordinates are "unit" coordinates: x in [0, 1] across the map, y in [0, aspect].
 
 use crate::World;
-use crate::core::noise::{fbm, ridged, smoothstep};
+use crate::core::noise::{Fbm, Ridged, smoothstep};
 use crate::core::rng::Pcg32;
 
 pub struct Tectonics {
@@ -72,13 +72,14 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
     let mut near = vec![(0u16, 0u16, 0.0f64); n];
     let mut warped = vec![[0.0f64; 2]; n];
     let mut area = vec![0usize; n_plates];
+    let (mut warp_x, mut warp_y) = (Fbm::new(s_wx, 5, 2.0, 0.55), Fbm::new(s_wy, 5, 2.0, 0.55));
     for j in 0..h {
         let y = j as f64 / (h - 1) as f64 * aspect;
         for i in 0..w {
             let x = i as f64 / (w - 1) as f64;
             let q = [
-                x + 0.16 * fbm(s_wx, x * 2.5, y * 2.5, 5, 2.0, 0.55),
-                y + 0.16 * fbm(s_wy, x * 2.5 + 7.1, y * 2.5 + 2.3, 5, 2.0, 0.55),
+                x + 0.16 * warp_x.at(x * 2.5, y * 2.5),
+                y + 0.16 * warp_y.at(x * 2.5 + 7.1, y * 2.5 + 2.3),
             ];
             let (mut a, mut b) = ((usize::MAX, f64::INFINITY), (usize::MAX, f64::INFINITY));
             for (k, pl) in plates.iter().enumerate() {
@@ -125,6 +126,8 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
         hotspots,
     };
 
+    let (mut base, mut old_r, mut age) = (Fbm::new(s_base, 4, 2.0, 0.5), Ridged::new(s_old, 4), Fbm::new(s_age, 3, 2.0, 0.5));
+    let (mut coast, mut coast_fine) = (Fbm::new(s_crust, 7, 2.0, 0.55), Fbm::new(s_crust ^ 0x51, 5, 2.0, 0.55));
     for idx in 0..n {
         let (ka, kb, bd) = near[idx];
         let (pa, pb) = (&plates[ka as usize], &plates[kb as usize]);
@@ -173,9 +176,9 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
         }
 
         // Interior: gentle hills everywhere plus a few ancient, worn ranges.
-        up += 0.01 + 0.04 * (0.5 + 0.5 * fbm(s_base, q[0] * 3.0, q[1] * 3.0, 4, 2.0, 0.5));
-        let old = ridged(s_old, q[0] * 2.5, q[1] * 2.5, 4);
-        up += 0.35 * old * old * smoothstep(0.15, 0.5, fbm(s_age, q[0] * 1.5, q[1] * 1.5, 3, 2.0, 0.5));
+        up += 0.01 + 0.04 * (0.5 + 0.5 * base.at(q[0] * 3.0, q[1] * 3.0));
+        let old = old_r.at(q[0] * 2.5, q[1] * 2.5);
+        up += 0.35 * old * old * smoothstep(0.15, 0.5, age.at(q[0] * 1.5, q[1] * 1.5));
 
         for hs in &t.hotspots {
             let d = dist(*hs, [x, y]);
@@ -187,8 +190,8 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
         // Fractal coast and islands; keep the map border at sea.
         // Plates bias where land is; noise decides the actual coastline (peninsulas, gulfs,
         // islands). The map edge only takes over in the outer margin.
-        crust = 0.55 * crust + 1.0 * fbm(s_crust, q[0] * 2.6, q[1] * 2.6, 7, 2.0, 0.55);
-        crust += 0.3 * fbm(s_crust ^ 0x51, q[0] * 9.0, q[1] * 9.0, 5, 2.0, 0.55);
+        crust = 0.55 * crust + 1.0 * coast.at(q[0] * 2.6, q[1] * 2.6);
+        crust += 0.3 * coast_fine.at(q[0] * 9.0, q[1] * 9.0);
         let (ex, ey) = ((x - 0.5) / 0.5, (y - 0.5 * aspect) / (0.5 * aspect));
         crust -= 1.5 * smoothstep(0.8, 1.1, crate::core::sqrt(ex * ex + ey * ey));
 

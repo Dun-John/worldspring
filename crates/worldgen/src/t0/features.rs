@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::biome::Biome;
 use super::climate::{Climate, distance_to};
-use super::flood::neighbors;
+use super::flood::{D8, neighbors};
 use super::hydro::{Hydro, LakeKind, Mouth};
 use super::names::{NameKind, Namer};
 use super::settle::{Poi, PoiKind, Settlement, Tier};
@@ -202,7 +202,11 @@ impl Builder<'_> {
                     continue;
                 }
                 let mut hits = 0;
-                for &(dx, dy) in &rays {
+                for (r, &(dx, dy)) in rays.iter().enumerate() {
+                    // Decided either way: 11 hits, or too few rays left to reach 11.
+                    if hits >= 11 || hits + (rays.len() - r) < 11 {
+                        break;
+                    }
                     for s in 1..50 {
                         let (x, y) = (i as f64 + dx * s as f64, j as f64 + dy * s as f64);
                         if x < 0.0 || y < 0.0 || x >= w as f64 || y >= h as f64 {
@@ -259,15 +263,18 @@ impl Builder<'_> {
         }
         let mut peaks: Vec<(f64, usize, usize)> = Vec::new(); // (prominence, summit, col)
         for &c in &order {
-            let mut roots: Vec<usize> = Vec::new();
+            // The distinct sets among the (at most eight) neighbours.
+            let (mut found, mut nr) = ([0usize; 8], 0);
             for (nb, _) in neighbors(w, h, c) {
                 if parent[nb] != u32::MAX {
                     let r = find(&mut parent, nb);
-                    if !roots.contains(&r) {
-                        roots.push(r);
+                    if !found[..nr].contains(&r) {
+                        found[nr] = r;
+                        nr += 1;
                     }
                 }
             }
+            let roots = &mut found[..nr];
             parent[c] = c as u32;
             if roots.is_empty() {
                 summit[c] = c as u32;
@@ -487,12 +494,14 @@ impl Builder<'_> {
             ("glacier", NameKind::Glacier, &[Biome::Ice], 40),
         ];
         for (kind, nk, members, min_cells) in groups {
-            let mask: Vec<bool> = inp.biome.iter().map(|&b| members.contains(&Biome::from_u8((b & 0xff) as u8))).collect();
+            let member: [bool; 256] = std::array::from_fn(|b| members.contains(&Biome::from_u8(b as u8)));
+            let mask: Vec<bool> = inp.biome.iter().map(|&b| member[(b & 0xff) as usize]).collect();
+            let comps: Vec<Vec<u32>> = components(inp.w, inp.h, |k| mask[k], false).into_iter().filter(|c| c.len() >= min_cells).collect();
+            if comps.is_empty() {
+                continue;
+            }
             let inside = distance_to(inp.w, inp.h, &mask.iter().map(|m| !m).collect::<Vec<_>>());
-            for comp in components(inp.w, inp.h, |k| mask[k], false) {
-                if comp.len() < min_cells {
-                    continue;
-                }
+            for comp in comps {
                 let (ax, ay) = pole(inp.w, &comp, &inside);
                 let (angle, _) = principal_axis(inp.w, &comp, 0.35);
                 let extent = (comp.len() as f64).sqrt() * inp.cell_ft;
@@ -516,10 +525,21 @@ pub fn components(w: usize, h: usize, mask: impl Fn(usize) -> bool, eight: bool)
         while k < comp.len() {
             let c = comp[k] as usize;
             k += 1;
-            for (nb, d) in neighbors(w, h, c) {
+            let mut visit = |nb: usize, d: f64| {
                 if (eight || d == 1.0) && !seen[nb] && mask(nb) {
                     seen[nb] = true;
                     comp.push(nb as u32);
+                }
+            };
+            // Off the grid's edge every neighbour is there, at fixed offsets (in D8 order).
+            let (x, y) = (c % w, c / w);
+            if x > 0 && y > 0 && x + 1 < w && y + 1 < h {
+                for &(dx, dy, d) in &D8 {
+                    visit((c as isize + dy as isize * w as isize + dx as isize) as usize, d);
+                }
+            } else {
+                for (nb, d) in neighbors(w, h, c) {
+                    visit(nb, d);
                 }
             }
         }

@@ -6,7 +6,7 @@
 use super::climate::Climate;
 use super::hydro::{Hydro, LakeKind, NO_LAKE};
 use crate::World;
-use crate::core::noise::{fbm, smoothstep};
+use crate::core::noise::smoothstep;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -128,6 +128,7 @@ pub fn classify(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64],
         }
     }
 
+    let mut niche_noise = crate::core::noise::Fbm::new(noise, 3, 2.0, 0.5);
     for k in 0..n {
         let (i, j) = (k % w, k / w);
         if !land[k] {
@@ -141,7 +142,7 @@ pub fn classify(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64],
         }
         let t = clim.temp[k] as f64;
         let pr = clim.precip[k] as f64;
-        let nz = fbm(noise, i as f64 / 7.0, j as f64 / 7.0, 3, 2.0, 0.5);
+        let nz = niche_noise.at(i as f64 / 7.0, j as f64 / 7.0);
 
         // Climate niches: best two by weighted score.
         let mut score = [0.0f64; ALL.len()];

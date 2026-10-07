@@ -73,6 +73,9 @@ pub struct RiverNet {
     /// Each segment's curve as the coarsest carving level sees it (`VALLEY_CHORDS` chords:
     /// points with water level and width), for `valley`; filled by `settle`.
     coarse: Vec<Vec<[[f32; 4]; VALLEY_CHORDS + 1]>>,
+    /// Those chords by `VALLEY_INDEX_FT` cell, each listed in every cell its box grown by its
+    /// reach touches (cells across, down, lists), for `valley`.
+    valley_index: (usize, usize, Vec<Vec<[[f32; 4]; 2]>>),
     /// The lattice (ft) of the T0 ground the profiles were last settled on (`T0` settles
     /// once per ground: settling again on the same ground changes nothing).
     pub settled_on: Option<f64>,
@@ -81,6 +84,8 @@ pub struct RiverNet {
 /// Spacing (ft) of the coarsest level that carves valleys (2.5 · 2^n ≤ 2,500), whose wide,
 /// eased valley sides `valley` reproduces.
 const VALLEY_SPACING_FT: f64 = 1_280.0;
+/// Cell (ft) of `RiverNet`'s chord index for `valley`.
+const VALLEY_INDEX_FT: f64 = 8_000.0;
 const VALLEY_CHORDS: usize = 5;
 
 #[derive(Clone, Copy)]
@@ -230,7 +235,7 @@ impl RiverNet {
                 }
             }
         }
-        RiverNet { rivers, bin_ft, bins_w, bins_h, bins, max_offset_ft, coarse: Vec::new(), settled_on: None }
+        RiverNet { rivers, bin_ft, bins_w, bins_h, bins, max_offset_ft, coarse: Vec::new(), valley_index: (0, 0, Vec::new()), settled_on: None }
     }
 
     /// Water surfaces that follow the ground: the curve wanders off its cells, and the
@@ -369,6 +374,29 @@ impl RiverNet {
                     .collect()
             })
             .collect();
+        // The chords by cell, for `valley` (a point asks only its own cell's).
+        let (mut x1, mut y1) = (0.0f64, 0.0f64);
+        let grown = |a: [f32; 4], b: [f32; 4]| {
+            let r = carve_reach(a[3].max(b[3]) as f64, VALLEY_SPACING_FT, 8.0) + 1.0;
+            [a[0].min(b[0]) as f64 - r, a[1].min(b[1]) as f64 - r, a[0].max(b[0]) as f64 + r, a[1].max(b[1]) as f64 + r]
+        };
+        for c in self.coarse.iter().flatten().flat_map(|s| s.windows(2)) {
+            let g = grown(c[0], c[1]);
+            (x1, y1) = (x1.max(g[2]), y1.max(g[3]));
+        }
+        let (w, h) = ((x1 / VALLEY_INDEX_FT) as usize + 1, (y1 / VALLEY_INDEX_FT) as usize + 1);
+        let mut cells: Vec<Vec<[[f32; 4]; 2]>> = vec![Vec::new(); w * h];
+        for c in self.coarse.iter().flatten().flat_map(|s| s.windows(2)) {
+            let g = grown(c[0], c[1]);
+            let span = |lo: f64, hi: f64, n: usize| ((lo / VALLEY_INDEX_FT).floor().max(0.0) as usize, ((hi / VALLEY_INDEX_FT).floor().max(0.0) as usize).min(n - 1));
+            let ((cx0, cx1), (cy0, cy1)) = (span(g[0], g[2], w), span(g[1], g[3], h));
+            for cy in cy0..=cy1 {
+                for cx in cx0..=cx1 {
+                    cells[cy * w + cx].push([c[0], c[1]]);
+                }
+            }
+        }
+        self.valley_index = (w, h, cells);
     }
 
     /// The highest water surface (ft) of any river channel the straight line a–b crosses or
@@ -435,25 +463,24 @@ impl RiverNet {
         if self.coarse.is_empty() {
             return h;
         }
-        let far = carve_reach(width_ft(1e9), VALLEY_SPACING_FT, 8.0);
         let mut v = h;
-        // The bins round the point (a segment met in two bins cuts alike: the min stays); a
-        // chord whose box, grown by its reach (and a foot), misses the point leaves it as it is.
-        let reach = far + self.max_offset_ft;
-        let bin = |c: f64, n: usize| ((c / self.bin_ft).floor().max(0.0) as usize).min(n - 1);
-        for by in bin(y - reach, self.bins_h)..=bin(y + reach, self.bins_h) {
-            for bx in bin(x - reach, self.bins_w)..=bin(x + reach, self.bins_w) {
-                for &(ri, k) in &self.bins[by * self.bins_w + bx] {
-                    for c in self.coarse[ri as usize][k as usize].windows(2) {
-                        let (a, b) = (c[0], c[1]);
-                        let r = carve_reach(a[3].max(b[3]) as f64, VALLEY_SPACING_FT, 8.0) + 1.0;
-                        if x < a[0].min(b[0]) as f64 - r || x > a[0].max(b[0]) as f64 + r || y < a[1].min(b[1]) as f64 - r || y > a[1].max(b[1]) as f64 + r {
-                            continue;
-                        }
-                        v = v.min(valley_cut(a, b, h, x, y));
-                    }
-                }
+        // The chords listed in the point's cell (the only ones whose reach can touch it; the
+        // least cut wins whatever the order); a chord whose box, grown by its reach (and a
+        // foot), misses the point leaves it as it is.
+        let (w, hh, cells) = &self.valley_index;
+        if x < 0.0 || y < 0.0 {
+            return v;
+        }
+        let (cx, cy) = ((x / VALLEY_INDEX_FT) as usize, (y / VALLEY_INDEX_FT) as usize);
+        if cx >= *w || cy >= *hh {
+            return v;
+        }
+        for &[a, b] in &cells[cy * w + cx] {
+            let r = carve_reach(a[3].max(b[3]) as f64, VALLEY_SPACING_FT, 8.0) + 1.0;
+            if x < a[0].min(b[0]) as f64 - r || x > a[0].max(b[0]) as f64 + r || y < a[1].min(b[1]) as f64 - r || y > a[1].max(b[1]) as f64 + r {
+                continue;
             }
+            v = v.min(valley_cut(a, b, h, x, y));
         }
         v
     }
@@ -827,6 +854,16 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
 /// Move a point (ft) out of any river channel and off its banks: pushed away from the
 /// nearest point of the finest river curve until it is `margin` ft beyond the bank.
 pub fn clear_of_rivers(net: &RiverNet, x: f64, y: f64, margin: f64, cell_ft: f64) -> (f64, f64) {
+    clear_of_rivers_with(net, x, y, margin, cell_ft, &ClearCache::default())
+}
+
+/// Each river segment's finest curve every ~20 ft (point, width) for `clear_of_rivers_with`,
+/// and how far those points stray from the segment's chord at most.
+#[derive(Default)]
+pub struct ClearCache(std::cell::RefCell<crate::core::hash::FastMap<(u32, u32), std::rc::Rc<(Vec<([f64; 2], f64)>, f64)>>>);
+
+/// `clear_of_rivers` sharing the curve samples in `cache` (many points near the same rivers).
+pub fn clear_of_rivers_with(net: &RiverNet, x: f64, y: f64, margin: f64, cell_ft: f64, cache: &ClearCache) -> (f64, f64) {
     let (mut px, mut py) = (x, y);
     for _ in 0..3 {
         let reach = 2_000.0 + margin;
@@ -843,12 +880,29 @@ pub fn clear_of_rivers(net: &RiverNet, x: f64, y: f64, margin: f64, cell_ft: f64
                 continue;
             }
             // Every ~20 ft: the finest curve meanders well away from sparse samples.
-            let n = ((r.s[k as usize + 1] - r.s[k as usize]) / 20.0).ceil().clamp(24.0, 2000.0) as usize;
-            for s in 0..=n {
-                let cp = r.eval(k as usize, s as f64 / n as f64, 2.5, cell_ft);
-                let d = dist(cp.p, [px, py]);
+            let samples = cache
+                .0
+                .borrow_mut()
+                .entry((ri, k))
+                .or_insert_with(|| {
+                    let n = ((r.s[k as usize + 1] - r.s[k as usize]) / 20.0).ceil().clamp(24.0, 2000.0) as usize;
+                    let pts: Vec<([f64; 2], f64)> = (0..=n).map(|s| r.eval(k as usize, s as f64 / n as f64, 2.5, cell_ft)).map(|c| (c.p, c.w)).collect();
+                    let stray = pts.iter().map(|&(q, _)| {
+                        let t = (((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+                        dist([a[0] + dx * t, a[1] + dy * t], q)
+                    });
+                    let stray = stray.fold(0.0, f64::max);
+                    std::rc::Rc::new((pts, stray))
+                })
+                .clone();
+            // None of this curve's points can beat the best so far (a foot to spare).
+            if best.is_some_and(|b| chord - samples.1 - 1.0 > b.0) {
+                continue;
+            }
+            for &(p, w) in &samples.0 {
+                let d = dist(p, [px, py]);
                 if best.is_none_or(|b| d < b.0) {
-                    best = Some((d, cp.p, cp.w));
+                    best = Some((d, p, w));
                 }
             }
         }
@@ -868,3 +922,4 @@ pub fn clear_of_rivers(net: &RiverNet, x: f64, y: f64, margin: f64, cell_ft: f64
 pub fn river_seed(world_seed: u64, index: usize) -> u64 {
     hash2(world_seed, index as i64, 0x5157)
 }
+

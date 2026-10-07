@@ -21,7 +21,7 @@ use crate::World;
 use crate::core::grid::Grid;
 use crate::lod::rivers::{RiverCurve, RiverNet, river_seed};
 use crate::lod::roads::{RoadCurve, RoadNet, road_seed};
-use crate::core::noise::{fbm, smoothstep};
+use crate::core::noise::{Fbm, fbm, smoothstep};
 use features::Overlay;
 use volcano::Activity;
 
@@ -56,6 +56,9 @@ pub struct T0 {
     biome_seed: u64,
     /// mips[0] is `height`; each next level is a 2x2 box downsample.
     mips: Vec<Grid<f32>>,
+    /// `ground_nodes` kept for one lattice while generating (they depend on `height` and
+    /// `water` only, which never change after `from_grids`); empty otherwise.
+    ground_cache: std::sync::OnceLock<(f64, std::sync::Arc<(Vec<f64>, i64, i64)>)>,
     /// Generation-time products; `None` when loaded from bytes in another worker.
     pub extra: Option<T0Extra>,
 }
@@ -162,6 +165,7 @@ impl T0 {
         let dist_land = climate::distance_to(w, h, &land);
         let (s_detail, s_kettle, s_bathy) = (world.stream("t0.detail"), world.stream("t0.kettle"), world.stream("t0.bathy"));
         let cap = 0.9 * p.max_elev_ft;
+        let (mut detail, mut kettle, mut bathy) = (Fbm::new(s_detail, 3, 2.0, 0.5), Fbm::new(s_kettle, 2, 2.0, 0.5), Fbm::new(s_bathy, 4, 2.0, 0.5));
         let mut height = vec![0.0f64; n];
         for j in 0..h {
             let lat = climate::latitude(world, j, h);
@@ -170,7 +174,7 @@ impl T0 {
                 let (fi, fj) = (i as f64, j as f64);
                 if land[k] {
                     let base = zg.sample_cubic((fi - 0.5) / 2.0, (fj - 0.5) / 2.0).max(0.0);
-                    let mut v = base * (1.0 + 0.12 * fbm(s_detail, fi / 3.0, fj / 3.0, 3, 2.0, 0.5));
+                    let mut v = base * (1.0 + 0.12 * detail.at(fi / 3.0, fj / 3.0));
                     if v > cap {
                         // Soft ceiling: approach max elevation, never exceed it.
                         let room = p.max_elev_ft - cap;
@@ -179,13 +183,13 @@ impl T0 {
                     // Rift valleys subside (rift lakes); glaciated lowlands get kettle hollows.
                     v -= tect.rift[k] * 2_200.0;
                     if crate::core::fabs(lat) > 50.0 {
-                        v -= 160.0 * smoothstep(0.85, 0.95, fbm(s_kettle, fi / 5.0, fj / 5.0, 2, 2.0, 0.5) + 0.5);
+                        v -= 160.0 * smoothstep(0.85, 0.95, kettle.at(fi / 5.0, fj / 5.0) + 0.5);
                     }
                     height[k] = sea + 5.0 + v;
                 } else {
                     let d_mi = dist_land[k] * cell / 5280.0;
                     let depth = 60.0 + 540.0 * smoothstep(0.0, 50.0, d_mi) + 11_000.0 * smoothstep(40.0, 220.0, d_mi)
-                        + 600.0 * fbm(s_bathy, fi / 10.0, fj / 10.0, 4, 2.0, 0.5)
+                        + 600.0 * bathy.at(fi / 10.0, fj / 10.0)
                         - 6_500.0 * tect.ridge[k];
                     height[k] = sea - depth.max(20.0);
                 }
@@ -243,7 +247,10 @@ impl T0 {
         let mut rivers = build_river_net(world, w, cell, &height, &land, &hydro);
         let hgrid = Grid::from_vec(w, h, height.iter().map(|&v| v as f32).collect());
         let base = Self::from_grids(hgrid, Grid::from_vec(w, h, hydro.water.clone()), Grid::from_vec(w, h, coast.clone()), Grid::from_vec(w, h, biome.clone()), cell, world.stream("t0.biome.warp"), RiverNet::default(), RoadNet::new(Vec::new(), (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell));
-        let ground = base.ground_sampler(world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1)));
+        let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+        // The ground's lattice nodes, computed once for every sampler and grid below.
+        let _ = base.ground_cache.set((lattice, std::sync::Arc::new(base.ground_nodes_uncached(lattice))));
+        let ground = base.ground_sampler(lattice);
         let plan = {
             // Levels that agree with the ground the terrain is built on (before anything is
             // placed against the curves, whose meanders follow the levels).
@@ -269,7 +276,7 @@ impl T0 {
         // The ground roads are planned on, at any point (the plan's grid every half cell is
         // too coarse for switchbacks to see a narrow valley).
         let planned = |x: f64, y: f64| rivers.valley(ground(x, y), x, y);
-        let rinp = roads::Inputs { world, plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro };
+        let rinp = roads::Inputs { world, plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, routes: Default::default() };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None);
         let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
@@ -292,9 +299,14 @@ impl T0 {
             RoadNet::new(Vec::new(), (w - 1) as f64 * cell, (h - 1) as f64 * cell, cell),
         );
         let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+        // (Its ground nodes are base's: the same height and water grids.)
+        if let Some(c) = base.ground_cache.get() {
+            let _ = ground_t0.ground_cache.set(c.clone());
+        }
+        let ground_wet = ground_t0.ground_sampler(lattice);
         let wet = |x: f64, y: f64| {
             let level = ground_t0.sample_water(x, y);
-            level > hydro::DRY && level as f64 > ground_t0.ground_at(x, y, lattice)
+            level > hydro::DRY && level as f64 > ground_wet(x, y)
         };
         let nearest_river = |x: f64, y: f64| {
             let mut best: Option<(f64, [f64; 2], f64)> = None;
@@ -314,13 +326,14 @@ impl T0 {
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
         let mut pois = settle::place_pois(&sinp, &settlements, &vents_at);
         // Towns sit beside rivers, not in them (the fine channel meanders through T0 cells).
+        let clear = crate::lod::rivers::ClearCache::default();
         for s in &mut settlements {
             // Villages sit on the bank (fishing villages work the water); towns stand back.
             let margin = if s.tier == settle::Tier::Village { 40.0 } else { 300.0 };
-            (s.x, s.y) = crate::lod::rivers::clear_of_rivers(&rivers, s.x, s.y, margin, cell);
+            (s.x, s.y) = crate::lod::rivers::clear_of_rivers_with(&rivers, s.x, s.y, margin, cell, &clear);
         }
         for p in &mut pois {
-            (p.x, p.y) = crate::lod::rivers::clear_of_rivers(&rivers, p.x, p.y, 150.0, cell);
+            (p.x, p.y) = crate::lod::rivers::clear_of_rivers_with(&rivers, p.x, p.y, 150.0, cell, &clear);
         }
         progress("roads", 0.0);
         let mut network = roads::build(&rinp, &settlements);
@@ -389,6 +402,10 @@ impl T0 {
             rivers,
             road_net,
         );
+        // Its ground nodes are base's (the same height and water grids).
+        if let Some(c) = base.ground_cache.get() {
+            let _ = t0.ground_cache.set(c.clone());
+        }
         // Road beds follow the ground the terrain actually builds along them (road corridors
         // keep refinement detail off it), so they cut and fill a few feet, not trenches.
         let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
@@ -427,6 +444,7 @@ impl T0 {
             rs.iter().zip(pts).zip(z).zip(wander).map(|(((r, p), z), w)| RoadCurve::new(r.class, p, z, w, r.seed)).collect()
         };
         t0.roads = RoadNet::new(curves, map_w, map_h, cell);
+        t0.ground_cache = Default::default();
         for (s, &c) in settlements.iter_mut().zip(&overlay.settlement_cultures) {
             s.culture = c;
         }
@@ -444,7 +462,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), biome_seed, mips, extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -545,18 +563,26 @@ impl T0 {
     /// `ground_at` over the whole map with its lattice nodes computed once (for callers that
     /// ask many thousands of times).
     pub fn ground_sampler(&self, lattice_ft: f64) -> impl Fn(f64, f64) -> f64 + '_ {
-        let (nodes, nw, nh) = self.ground_nodes(lattice_ft);
+        let cached = self.ground_nodes(lattice_ft);
+        let (nw, nh) = (cached.1, cached.2);
         let stride = (nw + 1) as usize;
         move |x, y| {
             self.ground_with_nodes(x, y, lattice_ft, true, |i, j| {
-                if i >= -1 && j >= -1 && i < nw && j < nh { nodes[(j + 1) as usize * stride + (i + 1) as usize] } else { self.ground_node(i, j, lattice_ft) }
+                if i >= -1 && j >= -1 && i < nw && j < nh { cached.0[(j + 1) as usize * stride + (i + 1) as usize] } else { self.ground_node(i, j, lattice_ft) }
             })
         }
     }
 
     /// The lattice nodes `ground_sampler` caches (row-major from node (-1, -1), `nw + 1` a
     /// row), and the node counts (nw, nh) past which it computes them as asked.
-    fn ground_nodes(&self, lattice_ft: f64) -> (Vec<f64>, i64, i64) {
+    fn ground_nodes(&self, lattice_ft: f64) -> std::sync::Arc<(Vec<f64>, i64, i64)> {
+        match self.ground_cache.get() {
+            Some((l, nodes)) if *l == lattice_ft => nodes.clone(),
+            _ => std::sync::Arc::new(self.ground_nodes_uncached(lattice_ft)),
+        }
+    }
+
+    fn ground_nodes_uncached(&self, lattice_ft: f64) -> (Vec<f64>, i64, i64) {
         let (nw, nh) = ((self.height.w as f64 * self.cell_ft / lattice_ft) as i64 + 4, (self.height.h as f64 * self.cell_ft / lattice_ft) as i64 + 4);
         let nodes: Vec<f64> = (-1..nh).flat_map(|j| (-1..nw).map(move |i| (i, j))).map(|(i, j)| self.ground_node(i, j, lattice_ft)).collect();
         (nodes, nw, nh)
@@ -566,7 +592,8 @@ impl T0 {
     /// row-major: the same values (the same sums in the same order), with each column's and
     /// row's interpolation weights worked out once instead of per point.
     pub fn ground_grid(&self, lattice_ft: f64, w: usize, h: usize, pos: &dyn Fn(usize) -> f64) -> Vec<f32> {
-        let (nodes, nw, nh) = self.ground_nodes(lattice_ft);
+        let cached = self.ground_nodes(lattice_ft);
+        let (nodes, nw, nh) = (&cached.0, cached.1, cached.2);
         let stride = (nw + 1) as usize;
         let node = |i: i64, j: i64| if i >= -1 && j >= -1 && i < nw && j < nh { nodes[(j + 1) as usize * stride + (i + 1) as usize] } else { self.ground_node(i, j, lattice_ft) };
         let axis = |n: usize| -> Vec<(f64, i64, [f64; 4])> {
@@ -584,9 +611,20 @@ impl T0 {
         for &(y, j0, wv) in &rows {
             for &(x, i0, wu) in &cols {
                 let mut g = 0.0;
-                for (b, wy) in wv.iter().enumerate() {
-                    for (a, wx) in wu.iter().enumerate() {
-                        g += wx * wy * node(i0 + a as i64 - 1, j0 + b as i64 - 1);
+                if i0 >= 0 && j0 >= 0 && i0 + 2 < nw && j0 + 2 < nh {
+                    // All 16 nodes cached: straight from the rows (the same sum, in the same order).
+                    let base = j0 as usize * stride + i0 as usize;
+                    for (b, wy) in wv.iter().enumerate() {
+                        let row = &nodes[base + b * stride..base + b * stride + 4];
+                        for (a, wx) in wu.iter().enumerate() {
+                            g += wx * wy * row[a];
+                        }
+                    }
+                } else {
+                    for (b, wy) in wv.iter().enumerate() {
+                        for (a, wx) in wu.iter().enumerate() {
+                            g += wx * wy * node(i0 + a as i64 - 1, j0 + b as i64 - 1);
+                        }
                     }
                 }
                 let (lw, m) = self.sample_lake(x, y);

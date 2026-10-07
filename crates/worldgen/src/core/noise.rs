@@ -43,15 +43,15 @@ fn dfade(t: f64) -> f64 {
 pub fn gradient2(seed: u64, x: f64, y: f64) -> f64 {
     let xf = crate::core::floor(x);
     let yf = crate::core::floor(y);
-    let fx = x - xf;
-    let fy = y - yf;
     let (ix, iy) = (xf as i64, yf as i64);
+    let g = [grad(seed, ix, iy), grad(seed, ix + 1, iy), grad(seed, ix, iy + 1), grad(seed, ix + 1, iy + 1)];
+    blend(g, x - xf, y - yf)
+}
 
-    let g00 = grad(seed, ix, iy);
-    let g10 = grad(seed, ix + 1, iy);
-    let g01 = grad(seed, ix, iy + 1);
-    let g11 = grad(seed, ix + 1, iy + 1);
-
+/// `gradient2` from the cell's corner gradients (g00, g10, g01, g11) and the point's
+/// fraction across it.
+#[inline]
+fn blend([g00, g10, g01, g11]: [(f64, f64); 4], fx: f64, fy: f64) -> f64 {
     let n00 = g00.0 * fx + g00.1 * fy;
     let n10 = g10.0 * (fx - 1.0) + g10.1 * fy;
     let n01 = g01.0 * fx + g01.1 * (fy - 1.0);
@@ -100,6 +100,78 @@ pub fn gradient2_d(seed: u64, x: f64, y: f64) -> (f64, f64, f64) {
         + u * v * (g00.1 - g10.1 - g01.1 + g11.1)
         + dv * ((n01 - n00) + u * k);
     (value * SCALE, dx * SCALE, dy * SCALE)
+}
+
+/// `gradient2` for one seed, keeping the corner gradients of the last cell asked about: a
+/// scan along a row asks about the same cell many times running (the same values).
+#[derive(Clone)]
+pub struct Gradient {
+    seed: u64,
+    cell: (i64, i64),
+    g: [(f64, f64); 4],
+}
+
+impl Gradient {
+    pub fn new(seed: u64) -> Gradient {
+        Gradient { seed, cell: (i64::MIN, i64::MIN), g: [(0.0, 0.0); 4] }
+    }
+    #[inline]
+    pub fn at(&mut self, x: f64, y: f64) -> f64 {
+        let xf = crate::core::floor(x);
+        let yf = crate::core::floor(y);
+        let (ix, iy) = (xf as i64, yf as i64);
+        if self.cell != (ix, iy) {
+            let s = self.seed;
+            self.g = [grad(s, ix, iy), grad(s, ix + 1, iy), grad(s, ix, iy + 1), grad(s, ix + 1, iy + 1)];
+            self.cell = (ix, iy);
+        }
+        blend(self.g, x - xf, y - yf)
+    }
+}
+
+/// `fbm` with one `Gradient` per octave (for scans over a grid: the same values).
+pub struct Fbm {
+    octaves: Vec<Gradient>,
+    lacunarity: f64,
+    gain: f64,
+}
+
+impl Fbm {
+    pub fn new(seed: u64, octaves: u32, lacunarity: f64, gain: f64) -> Fbm {
+        Fbm { octaves: (0..octaves).map(|o| Gradient::new(seed.wrapping_add((o as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)))).collect(), lacunarity, gain }
+    }
+    pub fn at(&mut self, x: f64, y: f64) -> f64 {
+        let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0, 0.0);
+        for g in &mut self.octaves {
+            sum += amp * g.at(x * freq, y * freq);
+            norm += amp;
+            amp *= self.gain;
+            freq *= self.lacunarity;
+        }
+        sum / norm
+    }
+}
+
+/// `ridged` with one `Gradient` per octave (for scans over a grid: the same values).
+pub struct Ridged(Vec<Gradient>);
+
+impl Ridged {
+    pub fn new(seed: u64, octaves: u32) -> Ridged {
+        Ridged((0..octaves).map(|o| Gradient::new(seed.wrapping_add((o as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)))).collect())
+    }
+    pub fn at(&mut self, x: f64, y: f64) -> f64 {
+        let (mut sum, mut amp, mut freq, mut norm, mut weight) = (0.0, 1.0, 1.0, 0.0, 1.0);
+        for g in &mut self.0 {
+            let mut r = 1.0 - crate::core::fabs(g.at(x * freq, y * freq));
+            r *= r;
+            sum += r * amp * weight;
+            norm += amp;
+            weight = (r * 2.0).clamp(0.0, 1.0);
+            amp *= 0.5;
+            freq *= 2.0;
+        }
+        sum / norm
+    }
 }
 
 /// Fractal Brownian motion, normalized to roughly [-1, 1].

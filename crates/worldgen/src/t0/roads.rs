@@ -20,7 +20,7 @@ use super::hydro::{Hydro, NO_LAKE};
 use super::settle::{Poi, PoiKind, Settlement, Tier};
 use crate::World;
 use crate::core::grid::Grid;
-use crate::core::noise::{fbm, gradient2, smoothstep};
+use crate::core::noise::{gradient2, smoothstep};
 use crate::core::rng::Pcg32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,7 +119,15 @@ pub struct Inputs<'a> {
     pub land: &'a [bool],
     pub biome: &'a [u32],
     pub hydro: &'a Hydro,
+    /// The routes `route` found last time (see `RouteKey`), for the next call to reuse.
+    pub routes: std::cell::RefCell<Vec<(RouteKey, Option<Vec<u32>>)>>,
 }
+
+/// What a route depends on besides the routes before it: its end cells, class and the towns
+/// at its ends (centre cell, radius bits). Calls whose links begin alike (the king's roads,
+/// placed before the towns and villages) find those routes alike.
+#[derive(Clone, PartialEq)]
+pub struct RouteKey(usize, usize, RoadClass, Vec<(u64, u64, u64)>);
 
 #[derive(PartialEq)]
 struct Node {
@@ -379,19 +387,24 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], edges: &[(usize, usize, R
         Biome::HotDesert | Biome::ColdDesert => 0.3,
         _ => 0.0,
     };
-    let passable = |k: usize| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE;
+    let open: Vec<bool> = (0..n).map(|k| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE).collect();
+    let passable = |k: usize| open[k];
+    let pen: Vec<f64> = (0..n).map(biome_pen).collect();
     // Smooth cost noise: equal-cost ties on open ground resolve into gentle meanders instead
     // of grid-aligned runs.
-    let noise_seed = inp.world.stream("t0.road.cost");
-    let wobble: Vec<f32> = (0..n).map(|k| (1.0 + 0.25 * fbm(noise_seed, (k % w) as f64 / 6.0, (k / w) as f64 / 6.0, 2, 2.0, 0.5)) as f32).collect();
+    let mut noise = crate::core::noise::Fbm::new(inp.world.stream("t0.road.cost"), 2, 2.0, 0.5);
+    let wobble: Vec<f32> = (0..n).map(|k| (1.0 + 0.25 * noise.at((k % w) as f64 / 6.0, (k / w) as f64 / 6.0)) as f32).collect();
     // 16 directions (knight moves too) so paths are not limited to 45° headings.
     const DIRS: [(i64, i64); 16] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1), (2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2)];
+    let step: [f64; 16] = std::array::from_fn(|d| crate::core::sqrt((DIRS[d].0 * DIRS[d].0 + DIRS[d].1 * DIRS[d].1) as f64));
     let mut road_class: Vec<u8> = vec![u8::MAX; n];
     let mut paths: Vec<(RoadClass, Vec<u32>)> = Vec::new();
     let mut g = vec![f64::INFINITY; n];
     let mut came = vec![u32::MAX; n];
     let mut touched: Vec<usize> = Vec::new();
-    for &(a, b, class) in edges {
+    let mut memo = inp.routes.borrow_mut();
+    let mut same = true;
+    for (e, &(a, b, class)) in edges.iter().enumerate() {
         let (start, goal) = (settlements[a].cell, settlements[b].cell);
         // Near a town or city at either end, roads keep to themselves (no shared trunk), so
         // each arrives at its own gate instead of merging outside the walls.
@@ -403,92 +416,107 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], edges: &[(usize, usize, R
                 ((settlements[i].cell % w) as f64, (settlements[i].cell / w) as f64, r + 1.5)
             })
             .collect();
-        let (gx, gy) = ((goal % w) as f64, (goal / w) as f64);
-        // Search box: endpoints' bounding box grown by 40% + margin.
-        let (sx, sy) = ((start % w) as f64, (start / w) as f64);
-        let pad = 0.4 * (sx - gx).abs().max((sy - gy).abs()) + 25.0;
-        let (bx0, bx1) = ((sx.min(gx) - pad).max(0.0), (sx.max(gx) + pad).min((w - 1) as f64));
-        let (by0, by1) = ((sy.min(gy) - pad).max(0.0), (sy.max(gy) + pad).min((h - 1) as f64));
-        for &k in &touched {
-            g[k] = f64::INFINITY;
-            came[k] = u32::MAX;
-        }
-        touched.clear();
-        let mut heap = BinaryHeap::new();
-        g[start] = 0.0;
-        touched.push(start);
-        heap.push(Node { f: 0.0, i: start as u32 });
-        let mut found = false;
-        let mut expanded = 0;
-        while let Some(Node { i, .. }) = heap.pop() {
-            let i = i as usize;
-            if i == goal {
-                found = true;
-                break;
+        let key = RouteKey(start, goal, class, town_ends.iter().map(|t| (t.0.to_bits(), t.1.to_bits(), t.2.to_bits())).collect());
+        // The same links so far as the last call: the same routes.
+        same = same && memo.get(e).is_some_and(|m| m.0 == key);
+        let found = if same {
+            memo[e].1.clone()
+        } else {
+            let (gx, gy) = ((goal % w) as f64, (goal / w) as f64);
+            // Search box: endpoints' bounding box grown by 40% + margin.
+            let (sx, sy) = ((start % w) as f64, (start / w) as f64);
+            let pad = 0.4 * (sx - gx).abs().max((sy - gy).abs()) + 25.0;
+            let (bx0, bx1) = ((sx.min(gx) - pad).max(0.0), (sx.max(gx) + pad).min((w - 1) as f64));
+            let (by0, by1) = ((sy.min(gy) - pad).max(0.0), (sy.max(gy) + pad).min((h - 1) as f64));
+            // The box in whole cells (a cell index is inside exactly when it is between these).
+            let (bx0, bx1, by0, by1) = (crate::core::ceil(bx0) as i64, crate::core::floor(bx1) as i64, crate::core::ceil(by0) as i64, crate::core::floor(by1) as i64);
+            for &k in &touched {
+                g[k] = f64::INFINITY;
+                came[k] = u32::MAX;
             }
-            expanded += 1;
-            if expanded > 400_000 {
-                break;
-            }
-            let (ix, iy) = ((i % w) as i64, (i / w) as i64);
-            for (dx, dy) in DIRS {
-                let (nx, ny) = (ix + dx, iy + dy);
-                if (nx as f64) < bx0 || (nx as f64) > bx1 || (ny as f64) < by0 || (ny as f64) > by1 {
-                    continue;
+            touched.clear();
+            let mut heap = BinaryHeap::new();
+            g[start] = 0.0;
+            touched.push(start);
+            heap.push(Node { f: 0.0, i: start as u32 });
+            let mut found = false;
+            let mut expanded = 0;
+            while let Some(Node { i, .. }) = heap.pop() {
+                let i = i as usize;
+                if i == goal {
+                    found = true;
+                    break;
                 }
-                let nb = ny as usize * w + nx as usize;
-                // Knight moves pass between two cells; both must be passable, and a river in
-                // either still has to be crossed.
-                let mids: &[usize] = &if dx.abs() == 2 || dy.abs() == 2 {
-                    let (sx, sy) = (dx.signum(), dy.signum());
-                    let (ax, ay) = if dx.abs() == 2 { (ix + sx, iy) } else { (ix, iy + sy) };
-                    [ay as usize * w + ax as usize, (ay + if dx.abs() == 2 { sy } else { 0 }) as usize * w + (ax + if dy.abs() == 2 { sx } else { 0 }) as usize]
-                } else {
-                    [nb, nb]
-                };
-                if !passable(nb) || !mids.iter().all(|&m| passable(m)) {
-                    continue;
+                expanded += 1;
+                if expanded > 400_000 {
+                    break;
                 }
-                let dist = crate::core::sqrt((dx * dx + dy * dy) as f64);
-                let grade = (inp.height[nb] - inp.height[i]).abs() / (dist * cell);
-                let mut c = (1.0 + 25.0 * grade * grade + 40.0 * (grade - 0.15).max(0.0) + biome_pen(nb)) * wobble[nb] as f64;
-                let q = mids.iter().chain(std::iter::once(&nb)).map(|&m| inp.hydro.discharge[m]).fold(0f32, f32::max) as f64;
-                if q >= river_q && (inp.hydro.discharge[i] as f64) < q {
-                    c += 1.0 + 3.0 * (q / (river_q * 20.0)).min(1.0);
-                }
-                let by_town = town_ends.iter().any(|&(tx, ty, tr)| (nx as f64 - tx) * (nx as f64 - tx) + (ny as f64 - ty) * (ny as f64 - ty) <= tr * tr);
-                if road_class[nb] != u8::MAX && !by_town {
-                    c *= 0.2;
-                }
-                let ng = g[i] + dist * c;
-                if ng < g[nb] {
-                    if g[nb] == f64::INFINITY {
-                        touched.push(nb);
+                let (ix, iy) = ((i % w) as i64, (i / w) as i64);
+                for (d, (dx, dy)) in DIRS.into_iter().enumerate() {
+                    let (nx, ny) = (ix + dx, iy + dy);
+                    if nx < bx0 || nx > bx1 || ny < by0 || ny > by1 {
+                        continue;
                     }
-                    g[nb] = ng;
-                    came[nb] = i as u32;
-                    let hdist = crate::core::sqrt((nx as f64 - gx) * (nx as f64 - gx) + (ny as f64 - gy) * (ny as f64 - gy));
-                    heap.push(Node { f: ng + 0.35 * hdist, i: nb as u32 });
+                    let nb = ny as usize * w + nx as usize;
+                    if !passable(nb) {
+                        continue;
+                    }
+                    // Knight moves pass between two cells; both must be passable, and a river in
+                    // either still has to be crossed.
+                    let mids: &[usize] = &if dx.abs() == 2 || dy.abs() == 2 {
+                        let (sx, sy) = (dx.signum(), dy.signum());
+                        let (ax, ay) = if dx.abs() == 2 { (ix + sx, iy) } else { (ix, iy + sy) };
+                        [ay as usize * w + ax as usize, (ay + if dx.abs() == 2 { sy } else { 0 }) as usize * w + (ax + if dy.abs() == 2 { sx } else { 0 }) as usize]
+                    } else {
+                        [nb, nb]
+                    };
+                    if !mids.iter().all(|&m| passable(m)) {
+                        continue;
+                    }
+                    let dist = step[d];
+                    let grade = (inp.height[nb] - inp.height[i]).abs() / (dist * cell);
+                    let mut c = (1.0 + 25.0 * grade * grade + 40.0 * (grade - 0.15).max(0.0) + pen[nb]) * wobble[nb] as f64;
+                    let q = mids.iter().chain(std::iter::once(&nb)).map(|&m| inp.hydro.discharge[m]).fold(0f32, f32::max) as f64;
+                    if q >= river_q && (inp.hydro.discharge[i] as f64) < q {
+                        c += 1.0 + 3.0 * (q / (river_q * 20.0)).min(1.0);
+                    }
+                    let by_town = || town_ends.iter().any(|&(tx, ty, tr)| (nx as f64 - tx) * (nx as f64 - tx) + (ny as f64 - ty) * (ny as f64 - ty) <= tr * tr);
+                    if road_class[nb] != u8::MAX && !by_town() {
+                        c *= 0.2;
+                    }
+                    let ng = g[i] + dist * c;
+                    if ng < g[nb] {
+                        if g[nb] == f64::INFINITY {
+                            touched.push(nb);
+                        }
+                        g[nb] = ng;
+                        came[nb] = i as u32;
+                        let hdist = crate::core::sqrt((nx as f64 - gx) * (nx as f64 - gx) + (ny as f64 - gy) * (ny as f64 - gy));
+                        heap.push(Node { f: ng + 0.35 * hdist, i: nb as u32 });
+                    }
                 }
             }
-        }
-        if !found {
-            continue;
-        }
-        let mut path = vec![goal as u32];
-        let mut cur = goal;
-        while cur != start {
-            cur = came[cur] as usize;
-            path.push(cur as u32);
-        }
-        path.reverse();
+            let path = found.then(|| {
+                let mut path = vec![goal as u32];
+                let mut cur = goal;
+                while cur != start {
+                    cur = came[cur] as usize;
+                    path.push(cur as u32);
+                }
+                path.reverse();
+                path
+            });
+            memo.truncate(e);
+            memo.push((key, path.clone()));
+            path
+        };
+        let Some(path) = found else { continue };
         for &c in &path {
             let c = c as usize;
             road_class[c] = road_class[c].min(class as u8);
         }
         paths.push((class, path));
     }
-
     (road_class, paths)
 }
 

@@ -6,8 +6,7 @@
 //! Flow directions are stochastic (steepest descent with per-iteration jitter), which removes
 //! the parallel, grid-aligned valleys plain D8 produces on a regular grid.
 
-use super::flood::{neighbors, priority_flood};
-use crate::core::noise::fbm;
+use super::flood::{D8, neighbors, priority_flood};
 use crate::core::rng::{mix64, unit};
 
 /// Stream-power erodibility.
@@ -24,13 +23,14 @@ pub fn erode(w: usize, h: usize, land: &[bool], uplift: &[f64], iterations: usiz
     let n = w * h;
     let outlet: Vec<bool> = land.iter().map(|l| !l).collect();
     // Start from gentle multi-scale relief so early drainage is irregular, not grid-aligned.
+    let mut relief = crate::core::noise::Fbm::new(seed, 5, 2.0, 0.55);
     let mut z: Vec<f64> = (0..n)
         .map(|i| {
             if !land[i] {
                 return 0.0;
             }
             let (x, y) = ((i % w) as f64, (i / w) as f64);
-            0.5 * (1.0 + fbm(seed, x / 18.0, y / 18.0, 5, 2.0, 0.55))
+            0.5 * (1.0 + relief.at(x / 18.0, y / 18.0))
         })
         .collect();
     let mut area = vec![0.0f64; n];
@@ -51,21 +51,38 @@ pub fn erode(w: usize, h: usize, land: &[bool], uplift: &[f64], iterations: usiz
         // hash3(seed, i, it, k) = mix64(seed ^ mix64(i ^ inner[k])): the inner mixes depend
         // only on the iteration and neighbour slot, so they are computed once per iteration.
         let inner: [u64; 8] = std::array::from_fn(|k| mix64((it as u64) ^ mix64((k as u64) ^ 0x632b_e59b_d9b4_e019)));
-        for i in 0..n {
-            let (mut best, mut best_s, mut best_d) = (i, 0.0, 1.0);
-            for (k, (nb, d)) in neighbors(w, h, i).enumerate() {
-                let drop = fl.filled[i] - fl.filled[nb];
-                if drop <= 0.0 {
+        // (Only land cells: the solve and the drainage areas read no outlet's receiver.)
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                if outlet[i] {
                     continue;
                 }
-                let jitter = 1.0 + JITTER * (2.0 * unit(mix64(seed ^ mix64((i as u64) ^ inner[k]))) - 1.0);
-                let s = drop / d * jitter;
-                if s > best_s {
-                    (best, best_s, best_d) = (nb, s, d);
+                let (mut best, mut best_s, mut best_d) = (i, 0.0, 1.0);
+                let mut take = |k: usize, nb: usize, d: f64| {
+                    let drop = fl.filled[i] - fl.filled[nb];
+                    if drop <= 0.0 {
+                        return;
+                    }
+                    let jitter = 1.0 + JITTER * (2.0 * unit(mix64(seed ^ mix64((i as u64) ^ inner[k]))) - 1.0);
+                    let s = drop / d * jitter;
+                    if s > best_s {
+                        (best, best_s, best_d) = (nb, s, d);
+                    }
+                };
+                if x > 0 && y > 0 && x + 1 < w && y + 1 < h {
+                    // Inside the grid every neighbour is there: slot k is the D8 slot.
+                    for (k, &(dx, dy, d)) in D8.iter().enumerate() {
+                        take(k, (i as isize + dy as isize * w as isize + dx as isize) as usize, d);
+                    }
+                } else {
+                    for (k, (nb, d)) in neighbors(w, h, i).enumerate() {
+                        take(k, nb, d);
+                    }
                 }
+                rec[i] = best as u32;
+                dist[i] = best_d;
             }
-            rec[i] = best as u32;
-            dist[i] = best_d;
         }
 
         area.iter_mut().for_each(|a| *a = 1.0);

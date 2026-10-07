@@ -4,7 +4,7 @@
 //! shadow. Latitude belts add the wet tropics and dry subtropics.
 
 use crate::World;
-use crate::core::noise::{fbm, smoothstep};
+use crate::core::noise::smoothstep;
 use crate::world::Wind;
 
 pub struct Climate {
@@ -44,7 +44,7 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
 
     let mut temp = vec![0f32; n];
     let mut precip = vec![0f64; n];
-    let belt_seed = world.stream("t0.climate.belt");
+    let mut belt_noise = crate::core::noise::Fbm::new(world.stream("t0.climate.belt"), 3, 2.0, 0.5);
     for j in 0..h {
         let lat = latitude(world, j, h);
         let t_sea = sea_level_temp(lat) + p.temp_offset_c;
@@ -84,7 +84,7 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
                 let rain = m * frac;
                 m -= 0.6 * rain;
                 // Wavy belt edges: the belt factor sees a latitude perturbed by a few degrees.
-            let wl = crate::core::fabs(lat + 5.0 * fbm(belt_seed, i as f64 / 90.0, j as f64 / 90.0, 3, 2.0, 0.5));
+            let wl = crate::core::fabs(lat + 5.0 * belt_noise.at(i as f64 / 90.0, j as f64 / 90.0));
             let wavy = belt_factor(wl) / belt;
             precip[k] += share * rain * mm_scale * belt * wavy * p.moisture;
             }
@@ -95,12 +95,13 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
     for _ in 0..3 {
         precip = box_blur(w, h, &precip, land);
     }
+    let mut noise = crate::core::noise::Fbm::new(noise_seed, 3, 2.0, 0.5);
     let precip = precip
         .iter()
         .enumerate()
         .map(|(k, &v)| {
             let (i, j) = ((k % w) as f64, (k / w) as f64);
-            (v * (1.0 + 0.15 * fbm(noise_seed, i / 60.0, j / 60.0, 3, 2.0, 0.5))).max(0.0) as f32
+            (v * (1.0 + 0.15 * noise.at(i / 60.0, j / 60.0))).max(0.0) as f32
         })
         .collect();
     Climate { temp, precip }
