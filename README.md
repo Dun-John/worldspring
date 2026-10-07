@@ -44,9 +44,14 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 Everything you make (worlds, edits, notes, pictures) is kept in this browser on this device, nowhere else.
 
 - **Back it up**: in **World › Library**, *Download file* saves the world with all its changes and pictures as one
-  file. *Open a file…* brings it back, here or on another device.
-- **Share** a world by copying the address bar: the link holds the world and small edits. For bigger worlds, send the
-  file.
+  file. *Open a file…* brings it back, here or on another device. *Back up all* saves every world this browser
+  keeps, with their changes and pictures, as one file; *Restore…* brings them all back. The app reminds you to
+  download a world once you've changed a lot in it.
+- **Share** a world with *Copy link* (World › Library): the link holds the world and its changes while they are few.
+  For more changes, or pictures, send the file. (The address bar holds a big sketched world only by a short name
+  that works in this browser.)
+- Opening a world that brings its own changes (a file, a link, a saved world) over the ones you've made asks which
+  to keep: yours, its own, or none. Nothing is mixed.
 - Clearing this site's data in your browser settings deletes your worlds, so download the ones you care about.
 
 ## Versions
@@ -83,7 +88,9 @@ npm run dev      # http://localhost:5173 (?seed=N picks a world)
 ```
 
 `npm run mapd` starts the local agent server, `cargo test --release -p worldgen` runs the checks and `npm run check`
-type-checks the app.
+type-checks the app. On a network share (a UNC path, or a drive mapped to one) the dev server polls for changed
+files instead of watching them, which fails there; `WS_POLL=1` turns polling on anywhere (a share mounted on Linux
+or macOS, say).
 
 ## Inspiration
 

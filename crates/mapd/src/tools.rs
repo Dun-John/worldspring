@@ -348,10 +348,21 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
     let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
     c.id = format!("c:{n}");
     let (id, under) = (c.id.clone(), c.under.clone());
+    // The same site again (a script run twice): that one, nothing added (checked again below,
+    // at the spot the site would take).
+    let at = p;
+    (c.x, c.y) = (p[0], p[1]);
+    let existing = app.with_edits(|e| e.existing_site(&c, at).map(|o| o.id.clone())).flatten();
+    if let Some(id) = existing {
+        return found(app, id).await;
+    }
     let (p, name) = app.worker.with(move |ex| agent::creation_spot(&ex.world, &ex.t0, &kind, under.as_deref(), &id, p)).await?;
     (c.x, c.y, c.name) = (p[0], p[1], asked.unwrap_or(name));
     let change = app
         .edit("agent", 0, move |e| {
+            if let Some(o) = e.existing_site(&c, at) {
+                return Ok(json!({ "existing": o.id }));
+            }
             // (Another client may have created a site meanwhile: take the next id.)
             c.id = format!("c:{}", e.created.len());
             let reply = json!({ "tool": "create_feature", "id": c.id, "kind": c.kind, "name": c.name, "x_ft": p[0].round(), "y_ft": p[1].round() });
@@ -359,6 +370,29 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
             Ok(reply)
         })
         .await?;
+    if let Some(id) = change["existing"].as_str() {
+        return found(app, id.to_string()).await;
+    }
     let id = change["id"].as_str().unwrap_or_default().to_string();
     app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())).await
+}
+
+/// A site asked to be created that was already there (`Created::same_site`), as `get_feature`
+/// has it (a building with its building id), marked `existing`.
+pub(crate) async fn found(app: &Shared, id: String) -> Result<Value, String> {
+    let mut v = app
+        .worker
+        .with(move |ex| {
+            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "it could not be read back".to_string())?;
+            if ex.world.file.edits.created.iter().any(|c| c.id == id && c.kind == "building")
+                && let Some(li) = agent::layout_of(&ex.world, &ex.t0, &id)
+            {
+                v["building"] = json!(format!("b:{li}:0"));
+            }
+            Ok::<_, String>(v)
+        })
+        .await?;
+    v["existing"] = json!(true);
+    v["note"] = json!("this was already here: its id is returned and nothing was added");
+    Ok(v)
 }

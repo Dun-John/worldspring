@@ -315,6 +315,9 @@ async fn on_app_message(app: &Shared, me: u64, m: Value) -> Option<Value> {
             let world = World::new(file.clone()).ok()?;
             let hash = world.hash;
             let take = m["take"].as_bool().unwrap_or(false);
+            // The user chose this world's edits as the app has them (a file's, or none, over the
+            // ones kept here): they replace mapd's copy.
+            let replace = m["replace"].as_bool().unwrap_or(false);
             let _one = app.gate.lock().await;
             let cur = app.current();
             let others = app.followers().into_iter().any(|id| id != me);
@@ -332,6 +335,7 @@ async fn on_app_message(app: &Shared, me: u64, m: Value) -> Option<Value> {
             }
             let mine = app.world.lock().unwrap().as_ref().filter(|(h, _)| *h == hash).map(|(_, f)| f.clone());
             let switched = mine.is_none();
+            let theirs = replace.then(|| file.edits.clone());
             let open = mine.or_else(|| app.store.load(hash)).unwrap_or(file);
             let saved = if switched { app.store.save(hash, &open) } else { Ok(()) };
             *app.world.lock().unwrap() = Some((hash, open.clone()));
@@ -345,6 +349,19 @@ async fn on_app_message(app: &Shared, me: u64, m: Value) -> Option<Value> {
                 eprintln!("mapd: could not save: {e}");
                 app.unsaved.store(true, Ordering::Relaxed);
                 app.send(json!({ "type": "error", "message": format!("could not save to disk: {e}"), "to": me }));
+            }
+            if let Some(edits) = theirs.filter(|e| *e != open.edits) {
+                // (Saved, logged and sent to the other tabs showing it, as any change; a failed
+                // save is kept in memory and told, as there.)
+                let change = json!({ "tool": "replace_edits", "label": "Changes replaced by those opened in another tab" });
+                let _ = app
+                    .edit_now("user", me, move |e| {
+                        *e = e.keeping_places(edits);
+                        Ok(change)
+                    })
+                    .await;
+                let now = app.world.lock().unwrap().as_ref().map(|(_, f)| f.clone());
+                return Some(json!({ "type": "world", "world": now.unwrap_or(open) }));
             }
             Some(json!({ "type": "world", "world": open }))
         }

@@ -5,7 +5,8 @@
   import { onMount } from 'svelte';
   import type { WorldFile } from '../gen/protocol';
   import { MapView } from '../render/MapView';
-  import { fromLocation, GEN_VERSION, sameWorld } from '../world/world';
+  import { linked } from '../world/library';
+  import { GEN_VERSION, readLink, sameWorld } from '../world/world';
   import { PlayController } from './controller';
 
   const view = new MapView('player');
@@ -66,8 +67,8 @@
       view.setPlaces(false);
       play.connect();
       // No DM window answering: show the world from the link.
-      setTimeout(() => {
-        const w = fromLocation(location);
+      setTimeout(async () => {
+        const w = (await readLink(location, linked)).world;
         // (A link from another generator is shown on this one.)
         if (!shown && w) void play.onWorld({ ...w, gen_version: GEN_VERSION });
       }, 1500);

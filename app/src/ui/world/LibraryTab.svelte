@@ -1,25 +1,42 @@
 <script lang="ts">
   // World › Library: this world (save it, download it), the worlds saved in this browser,
-  // opening a world file, and, folded away, starting this world over.
+  // opening a world file, backing the whole library up (and restoring it), and, folded away,
+  // starting this world over.
   import { onMount } from 'svelte';
   import type { WorldFile } from '../../gen/protocol';
   import { unbundleAssets } from '../../world/assets';
-  import { deleteWorld, listWorlds, saveWorld, type SavedWorld } from '../../world/library';
+  import { changeList } from '../../world/changes';
+  import { deleteWorld, isBackup, listWorlds, saveWorld, type Backup, type SavedWorld } from '../../world/library';
   import { download, sameWorld, validate } from '../../world/world';
   import Icon from '../Icon.svelte';
 
   /** Largest world file read (the heaviest test world is about 6 MB, plus its pictures). */
   const MAX_IMPORT_BYTES = 200 * 1024 * 1024;
+  /** Largest backup read (every world and picture this browser keeps): read whole, it must stay
+   * under the longest string a browser holds (~512 MB). */
+  const MAX_BACKUP_BYTES = 480 * 1024 * 1024;
 
   interface Props {
     world: WorldFile;
     busy: boolean;
+    /** Changes to this world since it was last downloaded. */
+    unexported: number;
+    /** Live sync keeps this world's changes on disk too. */
+    keeps: boolean;
     /** Open a world (saved, or from a file). */
-    onOpen: (w: WorldFile) => void;
+    onOpen: (w: WorldFile, from: 'file' | 'library') => void;
+    /** Download this world's file. */
+    onDownload: () => void;
+    /** Copy a link that opens this world anywhere. */
+    onCopyLink: () => void;
+    /** Download a backup of everything this browser keeps. */
+    onBackup: () => Promise<void>;
+    /** Restore a backup (asked about first); false if cancelled. */
+    onRestore: (b: Backup) => Promise<boolean>;
     /** Clear every change made to this world: back to the world as generated. */
     onStartOver: () => void;
   }
-  let { world, busy, onOpen, onStartOver }: Props = $props();
+  let { world, busy, unexported, keeps, onOpen, onDownload, onCopyLink, onBackup, onRestore, onStartOver }: Props = $props();
 
   let saved = $state<SavedWorld[]>([]);
   let naming = $state(false);
@@ -28,6 +45,9 @@
   let confirmDelete = $state<string | null>(null);
   let importError = $state('');
   let fileInput: HTMLInputElement | undefined = $state();
+  let backupInput: HTMLInputElement | undefined = $state();
+  let backingUp = $state(false);
+  let backupError = $state('');
 
   onMount(async () => (saved = await listWorlds()));
 
@@ -37,25 +57,7 @@
   let confirmText = $state('');
   const confirmed = $derived(confirmText.trim().toLowerCase() === CONFIRM_WORD);
   /** What starting over would clear, counted. */
-  const changes = $derived.by(() => {
-    const e = world.edits ?? {};
-    const n = (v: object | undefined) => (v ? Object.keys(v).length : 0);
-    const created = (e.created ?? []).filter((c) => !c.removed);
-    return [
-      [n(e.renames), 'name', 'names'],
-      [n(e.notes), 'note', 'notes'],
-      [e.hidden?.length ?? 0, 'hidden place', 'hidden places'],
-      [created.filter((c) => c.kind === 'building').length, 'building drawn', 'buildings drawn'],
-      [created.filter((c) => c.kind !== 'building').length, 'site placed', 'sites placed'],
-      [n(e.designs), 'site designed', 'sites designed'],
-      [n(e.npcs), 'NPC', 'NPCs'],
-      [n(e.plots), 'plot point', 'plot points'],
-      [n(e.objects) + n(e.cleared), 'object put down or cleared', 'objects put down or cleared'],
-      [n(e.sprites), 'uploaded sprite', 'uploaded sprites'],
-    ]
-      .filter(([k]) => (k as number) > 0)
-      .map(([k, one, many]) => `${k} ${k === 1 ? one : many}`);
-  });
+  const changes = $derived(changeList(world.edits));
 
   async function save() {
     await saveWorld(saveName.trim() || `World ${world.seed}`, $state.snapshot(world));
@@ -80,13 +82,47 @@
       importError = '';
       if (file.size > MAX_IMPORT_BYTES) throw new Error(`That file is too big for a world (${MAX_IMPORT_BYTES / 1048576} MB at most)`);
       const json = JSON.parse(await file.text());
+      // (A backup of the library opened here is restored.)
+      if (isBackup(json)) return void (await restoreFrom(json));
       const w = validate(json);
       // Pictures it carries (NPC portraits) are kept in this browser first.
       await unbundleAssets(json.assets);
-      onOpen(w);
+      onOpen(w, 'file');
     } catch (err) {
       importError = String((err as Error).message ?? err);
     }
+  }
+
+  async function makeBackup() {
+    backingUp = true;
+    backupError = '';
+    try {
+      await onBackup();
+    } catch (err) {
+      backupError = `The backup could not be made: ${String((err as Error).message ?? err)}`;
+    } finally {
+      backingUp = false;
+    }
+  }
+
+  async function readBackup(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    try {
+      backupError = '';
+      if (file.size > MAX_BACKUP_BYTES) throw new Error(`That file is too big (${MAX_BACKUP_BYTES / 1048576} MB at most)`);
+      const json = JSON.parse(await file.text());
+      if (!isBackup(json)) throw new Error('That is not a backup of the library (a world file opens with “Open a file”)');
+      await restoreFrom(json);
+    } catch (err) {
+      backupError = String((err as Error).message ?? err);
+    }
+  }
+
+  async function restoreFrom(b: Backup) {
+    if (await onRestore(b)) saved = await listWorlds();
   }
 
   function startOver() {
@@ -105,6 +141,9 @@
     <div class="ws-label">This world</div>
     <div class="title">Seed {world.seed} <span class="ws-muted">· {size}</span></div>
     <div class="ws-muted">{changes.length ? `Your changes: ${changes.join(', ')}.` : 'No changes yet.'}</div>
+    {#if unexported > 0 && !keeps}
+      <div class="unexported">Kept only in this browser: {unexported} {unexported === 1 ? 'change' : 'changes'} since you last downloaded this world.</div>
+    {/if}
     {#if naming}
       <div class="ws-row">
         <!-- svelte-ignore a11y_autofocus -->
@@ -114,8 +153,9 @@
     {:else}
       <div class="ws-row">
         <button class="ws-btn grow" onclick={() => (naming = true)}><Icon name="save" size={16} /> Save to library</button>
-        <button class="ws-btn grow" onclick={() => download(world, `world-${world.seed}`)} title="A .world.json file with your changes and pictures"><Icon name="download" size={16} /> Download file</button>
+        <button class="ws-btn grow" class:primary={unexported > 0 && !keeps} onclick={onDownload} title="A .world.json file with your changes and pictures"><Icon name="download" size={16} /> Download file</button>
       </div>
+      <button class="ws-btn quiet block" onclick={onCopyLink} title="A link that opens this world in any browser, with your changes while they are few"><Icon name="link" size={16} /> Copy link</button>
     {/if}
   </section>
 
@@ -125,7 +165,7 @@
       {#each saved as w (w.id)}
         {@const open = sameWorld(w.file, world)}
         <li class:open>
-          <button class="item" onclick={() => onOpen(w.file)} disabled={busy} title="Open {w.name}">
+          <button class="item" onclick={() => onOpen(w.file, 'library')} disabled={busy} title="Open {w.name}">
             <span class="name">{w.name}</span>
             <span class="ws-muted">{open ? 'open now' : date(w.savedAt)}</span>
           </button>
@@ -148,6 +188,17 @@
     <button class="ws-btn block" onclick={() => fileInput?.click()} disabled={busy}><Icon name="folder" size={16} /> Open a file…</button>
     <input bind:this={fileInput} type="file" accept=".json,application/json" hidden onchange={importFile} />
     {#if importError}<div class="error">{importError}</div>{/if}
+  </section>
+
+  <section>
+    <div class="ws-label">Everything in this browser</div>
+    <div class="ws-muted">Worlds, changes and pictures live only in this browser: clearing its site data loses them. A backup keeps them all in one file.</div>
+    <div class="ws-row">
+      <button class="ws-btn grow" onclick={makeBackup} disabled={busy || backingUp} title="Every world, its changes and pictures, in one file"><Icon name="download" size={16} /> {backingUp ? 'Backing up…' : 'Back up all'}</button>
+      <button class="ws-btn grow" onclick={() => backupInput?.click()} disabled={busy} title="Bring back the worlds, changes and pictures of a backup"><Icon name="upload" size={16} /> Restore…</button>
+    </div>
+    <input bind:this={backupInput} type="file" accept=".json,application/json" hidden onchange={readBackup} />
+    {#if backupError}<div class="error">{backupError}</div>{/if}
   </section>
 
   <details class="ws-group danger-zone">
@@ -263,6 +314,10 @@
   }
   .error {
     color: #8a2a1a;
+    font-size: 12px;
+  }
+  .unexported {
+    color: #8a5a1a;
     font-size: 12px;
   }
   .danger-zone > summary {

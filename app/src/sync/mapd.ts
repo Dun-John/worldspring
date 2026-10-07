@@ -59,6 +59,8 @@ export class MapdSync {
   private pending: EditOp[] = [];
   /** mapd's copy, if it came when the app couldn't take it. */
   private untaken: WorldFile | null = null;
+  /** The open world's edits replace mapd's copy (`open`), until mapd has answered with it. */
+  private replace = false;
   private retryMs = 1000;
   private closed = false;
   private readonly url = socketUrl();
@@ -67,19 +69,39 @@ export class MapdSync {
     if (this.url) this.connect();
   }
 
-  /** The world now open in the app (sent on connect and whenever it changes). */
-  open(world: WorldFile) {
+  /** Whether mapd keeps the changes made here (on its disk): it is connected and follows this tab. */
+  get keeps(): boolean {
+    return this.connected && this.following;
+  }
+
+  /**
+   * The world now open in the app (sent on connect and whenever it changes). `replace`: the
+   * user chose its edits as they are here (a file's, or none, over those kept): they replace
+   * mapd's copy, where mapd's otherwise wins.
+   */
+  open(world: WorldFile, replace = false) {
     this.world = world;
+    this.replace = replace;
     // (Changes kept for the world before belong to it: the browser has them.)
     this.pending = [];
     this.untaken = null;
     this.following = false;
-    this.send({ type: 'hello', world });
+    this.hello();
   }
 
   /** Make mapd follow this tab's world, though another tab shows mapd's. */
   follow() {
-    if (this.world) this.send({ type: 'hello', world: this.world, take: true });
+    this.hello(true);
+  }
+
+  /** Ask mapd for its copy of the world open here again (changes from it were missed). */
+  resync() {
+    this.hello();
+  }
+
+  /** Say which world is open here (with `replace` until mapd has taken it). */
+  private hello(take = false) {
+    if (this.world) this.send({ type: 'hello', world: this.world, ...(take ? { take } : {}), ...(this.replace ? { replace: true } : {}) });
   }
 
   /** The user changed the edits here. */
@@ -114,7 +136,7 @@ export class MapdSync {
       this.retryMs = 1000;
       this.connected = true;
       this.onStatus(true);
-      if (this.world) this.send({ type: 'hello', world: this.world });
+      this.hello();
     };
     ws.onmessage = (e) => {
       try {
@@ -139,6 +161,7 @@ export class MapdSync {
     if (m.type === 'world') {
       // (mapd answers a hello with its copy only when it follows this tab.)
       this.following = true;
+      this.replace = false;
       this.take(m.world);
     }
     else if (m.type === 'ops') this.onOps(m.ops ?? [], m.change ?? {}, m.author ?? 'agent');
@@ -147,11 +170,15 @@ export class MapdSync {
       this.following = m.following;
       // Changes sent just as mapd turned to another world come back: kept for later.
       if (m.refused) this.pending.push(...m.refused);
+      // Followed now (mapd turned to this world for another tab): what is kept for it goes, by a
+      // hello (mapd answers with its copy; the edits chosen here replace it, the changes kept
+      // go on top).
+      if (m.following && (this.replace || this.pending.length)) this.hello();
       this.onFollow(m.following);
     }
     else if (m.type === 'resync') {
       // The tab mapd followed closed: say again which world is open here.
-      if (this.world) this.send({ type: 'hello', world: this.world });
+      this.hello();
     } else if (m.type === 'saved') this.onSaveError(null);
     else if (m.type === 'render') {
       try {

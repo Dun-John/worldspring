@@ -71,6 +71,21 @@ export function diffEdits(a: Edits, b: Edits): EditOp[] {
   return ops;
 }
 
+/** `next` replacing `before` whole, keeping listed entries' places (later ids are indices):
+ * the entries `next` lacks stay, marked removed, as the ops that make it leave them wherever
+ * they are applied (so the edits here and elsewhere stay alike; `world.rs` `keeping_places`). */
+export function keepPlaces(before: Edits, next: Edits): Edits {
+  let out = next;
+  for (const field of Object.keys(EDIT_FIELDS)) {
+    if (EDIT_FIELDS[field] !== 'list') continue;
+    const was = (before as Record<string, unknown>)[field] as { removed?: boolean }[] | undefined;
+    const now = ((next as Record<string, unknown>)[field] ?? []) as { removed?: boolean }[];
+    if (!was || was.length <= now.length) continue;
+    out = { ...out, [field]: [...now, ...was.slice(now.length).map((x) => (x.removed ? x : { ...x, removed: true }))] };
+  }
+  return out;
+}
+
 /** `e` with `op` applied, and the op that undoes it. */
 export function applyOp(e: Edits, op: EditOp): { edits: Edits; inverse: EditOp } {
   const shape = EDIT_FIELDS[op.field];

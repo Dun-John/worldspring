@@ -364,6 +364,10 @@ and a full multi-level site underground (a ruin's dungeon, crypt or catacombs; a
 `entrance`, a bare way down with nothing built above it). The result includes the new `c:<n>` id and its
 underground ids.
 
+Creating the same site again adds nothing: if a live site of the same `kind` (and the same `under`) stands within
+300 ft of the place asked for, or of the spot the new one would take, the result is that site, with
+`"existing": true`. A script that creates sites can be run again safely.
+
 | Parameter | Type | | |
 |---|---|---|---|
 | `kind` | string | required | `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube`, `entrance` |
@@ -636,6 +640,9 @@ other edits, buildings are saved, logged, shown live and leave the world hash al
   its building id.
 
 ### `create_building`
+A building with the same footprint as one already drawn (every corner within 2 ft) is not drawn twice: the
+result is that building, with `"existing": true`.
+
 | Parameter | Type | | |
 |---|---|---|---|
 | `poly` | `[[x_ft, y_ft], …]` | one of these | The footprint's corners in order. |

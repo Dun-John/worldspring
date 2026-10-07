@@ -27,6 +27,10 @@ The app tells mapd which world it has open (seed and parameters).
 - **A world mapd has seen:** mapd keeps its edits, including any agents made while the app was closed, and the
   app takes them.
 - **A world mapd hasn't seen:** mapd takes it as the app has it.
+- **Changes replaced by the user:** opening a world file, a saved world or a link that brings its own changes, the
+  user chooses between the changes kept and the ones it brings (or none). Chosen over the kept ones, or restored
+  from a backup of the app's library, they replace mapd's copy whole: sites created before stay in their places
+  (their ids don't move) marked removed, and other changes not among them are gone. The log shows `replace_edits`.
 
 mapd generates the world natively (a few seconds) and reopens the last one when it restarts.
 
@@ -80,7 +84,7 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | `focus_view` | Fly the user's view to a place. |
 | `rename_feature` | Rename anything `list_names` lists, down to a dungeon's levels and rooms. An empty name restores the original. |
 | `annotate_feature` | Notes (lore, hooks, DM secrets) with tags. The app shows them in the info panel. |
-| `create_feature` | A new site, generated like the world's own (map, battlemap, interiors, underground). Kinds: ruin (over a `dungeon`, `crypt` or `catacombs`), tower, camp (tents round a fire), waystation (an inn by the road), cave, mine, lava_tube, entrance (a bare way down to any of those). Sites underground take `size` (small–huge), `levels` (1–6) and a `theme` of their kind (prison, temple, wizard_lair, dwarven_hall, tomb, ossuary, fungal, ice, beast_den…). It must be on dry land; it is stepped out of river channels. |
+| `create_feature` | A new site, generated like the world's own (map, battlemap, interiors, underground). Kinds: ruin (over a `dungeon`, `crypt` or `catacombs`), tower, camp (tents round a fire), waystation (an inn by the road), cave, mine, lava_tube, entrance (a bare way down to any of those). Sites underground take `size` (small–huge), `levels` (1–6) and a `theme` of their kind (prison, temple, wizard_lair, dwarven_hall, tomb, ossuary, fungal, ice, beast_den…). It must be on dry land; it is stepped out of river channels. The same kind again within 300 ft returns the site already there (`existing: true`), so it can be run twice. |
 | `update_feature` | Name and notes in one go. |
 | `hide_feature` | Hide a feature from labels and search, or show it again. |
 | `delete_feature` | Remove a created site. Generated features can only be hidden. |
@@ -92,7 +96,7 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | `upload_sprite` | A picture (base64, or a file on this machine) as a new kind of object, with its size and rules (cover, blocks movement or sight, difficult, height). |
 | `place_objects` | Put objects on the battlemap at world positions (up to 500 at once). |
 | `remove_objects`, `restore_objects` | Take objects away (placed ones by id, generated ones by kind and place, or all in a circle); bring cleared ones back. |
-| `create_building` | Draw a building: a footprint (`poly` corners, a `rect` or a round tower `circle`, snapped to the 5-ft grid) on dry land clear of buildings, roads and walls; what it is (`func`: a business such as inn, blacksmith, temple, castle, or a home), `floors`, `roof` (hip, battlements, cone), `tint`, `structure` (ruin). It gets an interior, a roof and walls on the battlemap. Returns its `c:` id and building id. |
+| `create_building` | Draw a building: a footprint (`poly` corners, a `rect` or a round tower `circle`, snapped to the 5-ft grid) on dry land clear of buildings, roads and walls; what it is (`func`: a business such as inn, blacksmith, temple, castle, or a home), `floors`, `roof` (hip, battlements, cone), `tint`, `structure` (ruin). It gets an interior, a roof and walls on the battlemap. Returns its `c:` id and building id (the same footprint again returns the building already there). |
 | `update_building` | Change a drawn building's options, or move or reshape it with a new footprint. |
 | `place_crossing` | Put a bridge, ford or ferry down `from` one bank `to` the other (`[x_ft, y_ft]` each; 10 to 2000 ft, a ferry at least 68; `width_ft` 5 to 40, default 12): a bridge's plank deck clear of the water, a ford's bed at wading depth under stepping stones, a ferry's jetties with a raft on a rope between. With `id`, changes that one. Returns its `v:` id. |
 | `list_crossings`, `remove_crossings` | The crossings put down by hand; take some away by id. |

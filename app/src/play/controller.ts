@@ -6,7 +6,6 @@ import type { Feature, Interior, WorldFile } from '../gen/protocol';
 import type { InteriorLayer } from '../render/InteriorLayer';
 import type { MapView, PointerTool } from '../render/MapView';
 import { SECTION_N, type Sewers } from '../render/Sewers';
-import { toHash } from '../world/world';
 import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scene, type Vision } from './channel';
 import { PlayLayer } from './PlayLayer';
 import { loadSession, putImage, saveSession } from './session';
@@ -663,7 +662,9 @@ export class PlayController implements PointerTool {
 
   openPlayerWindow() {
     if (!this.world) return;
-    const url = `${import.meta.env.BASE_URL}player.html${toHash(this.world)}`;
+    // (The DM's window keeps its world's link in its address: the players' window opens on it
+    // if no DM window answers.)
+    const url = `${import.meta.env.BASE_URL}player.html${location.hash}`;
     window.open(url, 'fantasy-map-player', 'popup=yes,width=1280,height=800');
   }
 

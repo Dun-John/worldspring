@@ -48,6 +48,13 @@ export class UndoHistory {
     return step!;
   }
 
+  /** Forget every step (another world opened: its edits are not these). */
+  clear() {
+    this.done.length = 0;
+    this.undone.length = 0;
+    this.version++;
+  }
+
   takeRedo(): Step | null {
     const step = this.undone.pop();
     if (!step) return null;

@@ -9,10 +9,15 @@ const DB = 'fantasy-map-play'; // pre-Worldspring name, kept so play sessions su
 let db: Promise<IDBDatabase> | null = null;
 
 function open(): Promise<IDBDatabase> {
-  return (db ??= openDb(DB, 1, (d) => {
-    d.createObjectStore('sessions');
-    d.createObjectStore('images');
-  }));
+  return (db ??= openDb(
+    DB,
+    1,
+    (d) => {
+      d.createObjectStore('sessions');
+      d.createObjectStore('images');
+    },
+    () => (db = null),
+  ));
 }
 
 async function run<T>(store: string, mode: IDBTransactionMode, f: (s: IDBObjectStore) => IDBRequest): Promise<T> {

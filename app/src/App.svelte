@@ -39,7 +39,7 @@
   import { defaultScatter, newObjectId, ScatterTool, type ScatterSettings } from './editor/scatter';
   import { shrink } from './render/customAtlas';
   import Notebook, { blankNpc, blankPlot, newNoteId, type Here } from './ui/Notebook.svelte';
-  import { assetIds, assetUrl, getAsset, putAsset, shareAssets } from './world/assets';
+  import { assetIds, assetUrl, getAsset, putAsset, shareAssets, unbundleAssets } from './world/assets';
   import Search from './ui/Search.svelte';
   import Toasts, { type Toast } from './ui/Toasts.svelte';
   import { lowMemory } from './ui/support';
@@ -47,12 +47,15 @@
   import { PlayController } from './play/controller';
   import PlayPanel from './play/PlayPanel.svelte';
   import { describe, tidy, type Step } from './sync/history';
-  import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, type EditOp } from './sync/ops';
+  import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, type EditOp } from './sync/ops';
   import { breadcrumbs, frameSize, hitName, settlementAt, SETTLEMENT_KINDS, zoomFor, type Crumb, type Selection } from './ui/gazetteer';
-  import { DEFAULT_PARAMS, download, editsKey, fromLocation, GEN_VERSION, newWorld, sameWorld, toHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
+  import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, PINNED } from './world/versions';
   import VersionAsk, { type VersionChoice } from './ui/shell/VersionAsk.svelte';
-  import { loadEdits, saveEdits } from './world/library';
+  import Choice, { type ChoiceButton } from './ui/shell/Choice.svelte';
+  import { backup, keepLinked, linked, loadEdits, restore, restorePlan, saveEdits, takeRestored, type Backup, type RestorePlan } from './world/library';
+  import { changeList } from './world/changes';
+  import { noteChanges, noteExported, unexported } from './world/exported';
 
   const params = new URLSearchParams(location.search);
   // (Its keys come from the shortcuts below.)
@@ -73,7 +76,8 @@
   let busy = $state(false);
   // Raw: the world file is never changed in place (every edit makes new objects), so a big world's
   // edits are passed about by reference, never copied whole.
-  let world = $state.raw<WorldFile>(fromLocation(location) ?? newWorld(1));
+  // (The world the address names is read once the page is up: `start`.)
+  let world = $state.raw<WorldFile>(newWorld(1));
   // Raw: features are renamed in place (by the labels), and read fresh on every render.
   let overlay = $state.raw<Overlay | null>(null);
   let selection = $state.raw<Selection | null>(null);
@@ -179,6 +183,7 @@
     const sel = selection;
     if (sel?.kind === 'feature' && sel.feature.id.startsWith('c:') && !overlay?.features.some((f) => f.id === sel.feature.id)) selection = null;
     saveUrl();
+    changed();
     if (opts.send !== false) sync.ops(ops, change);
     const label = describe(change, author, nameOf);
     if (opts.record === false) {
@@ -224,13 +229,20 @@
     if (s) applyEdits(withOps(s.ops), { tool: 'redo', label: `Redid: ${s.label}` }, 'user', { record: false });
   }
 
+  /** mapd keeps this tab's changes on its disk (`sync.keeps`), as last heard. */
+  let syncKeeps = $state(false);
   sync.onWorld = (w, mine) => {
+    syncKeeps = sync.keeps;
     if (!sameWorld(w, world)) return true;
     if (busy) return false;
     // mapd's copy of this world keeps the edits made while the app was away; what was changed
     // here meanwhile goes on top (and to mapd).
     applyEdits(w.edits ?? {}, { tool: 'sync', label: 'Synced changes made elsewhere' }, 'mapd', { record: false, send: false });
     if (mine.length) applyEdits(withOps(mine), { tool: 'sync', label: 'Kept the changes made here meanwhile' }, 'user', { record: false });
+    // A world opened with its own edits, none kept here: mapd's copy, if other, is asked about.
+    const c = openCheck;
+    openCheck = null;
+    if (c && diffEdits(edits, keepPlaces(edits, c.theirs)).length) void offerOpened(c);
     return true;
   };
   sync.onOps = (ops, change, author) => {
@@ -241,6 +253,7 @@
   // Another tab may have its own world open: live sync follows one world at a time.
   let followNotice = 0;
   sync.onFollow = (following) => {
+    syncKeeps = sync.keeps;
     if (followNotice) dismiss(followNotice);
     followNotice = following
       ? 0
@@ -259,25 +272,150 @@
     else if (had) toast('Live sync saved the changes it was keeping');
   };
   sync.onStatus = (on) => {
+    syncKeeps = sync.keeps;
     if (!on) toast('Live sync off: changes stay in this browser');
     // Agents see the portraits this browser keeps.
     else void shareAssets(assetIds(edits));
   };
 
-  /** Keep the world in the address bar (its edits too while they are short) and its edits in
-   * this browser: once a burst of changes settles (a big world's edits take a while to store),
-   * at once when the page is hidden or closed. */
+  /** Keep the world in the address bar (its edits too while they are short; a big sketch only
+   * by name, the world kept in this browser) and its edits in this browser: once a burst of
+   * changes settles (a big world's edits take a while to store), at once when the page is hidden
+   * or closed. */
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   function saveUrl() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(flushSave, 300);
   }
-  function flushSave() {
+  /** What the address keeps of the page's query when it is rewritten: a bench run, and which
+   * mapd to reach (`?mapd=0` none: a reload must not reach the default one). */
+  const keptSearch = (() => {
+    const q = new URLSearchParams();
+    if (params.has('bench')) q.set('bench', params.get('bench') || '1');
+    if (params.has('mapd')) q.set('mapd', params.get('mapd') ?? '');
+    const t = q.toString();
+    return t ? `?${t}` : '';
+  })();
+  /** The address bar's newest link (an older one finishing later is dropped). */
+  let linkSeq = 0;
+  function flushSave(): Promise<void> {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = null;
     const w = world;
-    history.replaceState(null, '', location.pathname + (params.has('bench') ? `?bench=${params.get('bench') || 1}` : '') + toHash(w));
-    void saveEdits(editsKey(w), w.edits ?? {});
+    const seq = ++linkSeq;
+    void linkFor(w, keepLinked)
+      .then((link) => {
+        if (seq !== linkSeq) return;
+        if (link.edits) ownLink(editsStamp(w.edits));
+        history.replaceState(null, '', location.pathname + keptSearch + link.hash);
+      })
+      .catch((e) => console.warn('[link]', e));
+    return saveEdits(editsKey(w), w.edits ?? {});
+  }
+
+  // The edits this tab's own address carried (by `editsStamp`), kept for the tab's life: a link
+  // made a moment before the page went may not have caught up with the edits stored, and a
+  // reload must not take it for a link bringing edits of its own.
+  const OWN_LINKS = 'ws-own-links';
+  function ownLinks(): string[] {
+    try {
+      const v = JSON.parse(sessionStorage.getItem(OWN_LINKS) ?? '[]');
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  }
+  function ownLink(stamp: string) {
+    try {
+      sessionStorage.setItem(OWN_LINKS, JSON.stringify([...ownLinks().filter((s) => s !== stamp), stamp].slice(-30)));
+    } catch {
+      // (No storage: a reload may ask.)
+    }
+  }
+
+  // Everything made lives in this browser only (unless mapd keeps it on disk): once enough has
+  // changed since the world was last downloaded, the user is reminded to download it, once a
+  // page and world.
+  const REMIND_CHANGES = 30;
+  const REMIND_AFTER_MS = 30 * 60 * 1000;
+  const reminded = new Set<string>();
+  /** Changes to this world since it was last downloaded (the Library shows them). */
+  let unexportedCount = $state(0);
+  function changed(count = 1) {
+    const key = editsKey(world);
+    const u = noteChanges(key, count);
+    unexportedCount = u.n;
+    if (sync.keeps || benchRunning || reminded.has(key) || (u.n < REMIND_CHANGES && Date.now() - u.since < REMIND_AFTER_MS)) return;
+    reminded.add(key);
+    toast('Your changes to this world are kept only in this browser: download the world file to keep a copy', undefined, { sticky: true, action: { label: 'Download', run: () => void downloadWorld() } });
+  }
+
+  /** Download the open world (with its pictures): its changes are then kept outside the browser. */
+  async function downloadWorld() {
+    const w = world;
+    await download(w, `world-${w.seed}`);
+    noteExported(editsKey(w));
+    reminded.delete(editsKey(w));
+    if (w === world) unexportedCount = 0;
+  }
+
+  /** Copy a link that opens this world in any browser (the address bar may only name it). */
+  async function copyLink() {
+    const w = world;
+    const link = shareHash(w);
+    const url = link.then(({ hash }) => `${location.origin}${location.pathname}${hash}`);
+    try {
+      // (Handed the link to come while the click still counts: some browsers refuse a copy made later.)
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard.write) await navigator.clipboard.write([new ClipboardItem({ 'text/plain': url.then((u) => new Blob([u], { type: 'text/plain' })) })]);
+      else await navigator.clipboard.writeText(await url);
+    } catch {
+      return void toast('The link could not be copied');
+    }
+    const { edits: carried } = await link;
+    const edited = !!w.edits && Object.keys(w.edits).length > 0;
+    toast(
+      !edited
+        ? 'Link copied'
+        : carried
+          ? `Link copied, with your changes${assetIds(w.edits).length ? ' (pictures go only in the world file)' : ''}`
+          : 'Link copied, without your changes (too many for a link): send the world file for those',
+    );
+  }
+
+  /** Download a backup of everything this browser keeps (every world, its changes and pictures). */
+  async function backupLibrary() {
+    await flushSave();
+    const blob = await backup({ id: `open-${Date.now().toString(36)}`, name: `Seed ${world.seed} (open at backup)`, file: $state.snapshot(world) as WorldFile, savedAt: Date.now() });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `worldspring-library-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    if (blob.size > 480 * 1024 * 1024) return void toast('This backup is too big to restore in one go: download the worlds you care about one by one too', undefined, { sticky: true });
+    noteExported(null);
+    reminded.clear();
+    unexportedCount = 0;
+  }
+
+  /** A backup being restored, asked about first (its edits for worlds this browser has others for). */
+  let restoreAsk = $state<{ plan: RestorePlan; choose: (c: 'keep' | 'replace' | 'cancel') => void } | null>(null);
+
+  /** Restore a backup (from Library); false if cancelled. */
+  async function restoreLibrary(b: Backup): Promise<boolean> {
+    if (busy) return false;
+    await flushSave();
+    const plan = await restorePlan(b);
+    const c = await new Promise<'keep' | 'replace' | 'cancel'>((choose) => (restoreAsk = { plan, choose }));
+    restoreAsk = null;
+    if (c === 'cancel') return false;
+    const taken = await restore(b, c === 'replace', unbundleAssets);
+    // The world open now, if its changes came from the backup: shown (Undo brings back those it had).
+    if (taken.includes(editsKey(world))) {
+      const e = (await loadEdits(editsKey(world))) ?? {};
+      applyEdits(keepPlaces(edits, e), { tool: 'restore', label: 'Restored this world’s changes from the backup' }, 'user');
+    }
+    toast(`Restored the backup: ${plan.worlds} saved ${plan.worlds === 1 ? 'world' : 'worlds'} added, changes to ${taken.length} ${taken.length === 1 ? 'world' : 'worlds'} taken`);
+    return true;
   }
 
   /** The edits this browser keeps for `w` (by generator version; see `editsKey`). */
@@ -299,11 +437,19 @@
    * (the newer one, or the one it was made with if the user asks), or upgraded to this one. Null
    * when the page is going elsewhere or the user cancelled.
    */
-  async function settleVersion(w: WorldFile): Promise<WorldFile | null> {
-    // (Its edits are kept where that build looks for them.)
+  async function settleVersion(w: WorldFile, from: Source | null): Promise<WorldFile | null> {
+    // (Its edits are kept where that build looks for them: what an opened world brings is asked
+    // about here, over those this browser keeps for that version.)
     const goTo = async (gen: number | null, search = '') => {
-      if (w.edits && Object.keys(w.edits).length) await saveEdits(editsKey(w), w.edits);
-      location.href = buildUrl(w, gen, search);
+      let e = w.edits ?? {};
+      if (from) {
+        const pick = await pickEdits(from, w, e, (await storedEdits(w)) ?? {});
+        if (!pick) return null;
+        e = pick.edits;
+        if (pick.replaced || Object.keys(e).length) await saveEdits(editsKey(w), e);
+      } else if (Object.keys(e).length) await saveEdits(editsKey(w), e);
+      const { edits: _, ...bare } = w;
+      location.href = await buildUrl(Object.keys(e).length ? { ...bare, edits: e } : bare, gen, search);
       return null;
     };
     if (w.gen_version > GEN_VERSION) return goTo(null);
@@ -323,8 +469,15 @@
         await download({ ...w, ...(edits ? { edits } : {}) }, `world-${w.seed}-v${w.gen_version}`);
       }
     }
-    // Upgraded: edits it brings, else those already made on this generator, else its own.
+    // Upgraded: edits it brings, else those already made on this generator, else its own. (An
+    // opened world brings its own, or none: asked about once it is upgraded.)
     const up = { ...w, gen_version: GEN_VERSION };
+    if (from) {
+      if (edited) toast(`Upgraded from version ${w.gen_version}: check that your changes still sit where they should`);
+      // (Those this browser kept on that version are offered as its own, if none here.)
+      upgradedMine = w.edits ? null : edits;
+      return up;
+    }
     const already = w.edits ? null : await storedEdits(up);
     const kept = w.edits ?? already ?? edits;
     if (already && Object.keys(already).length) toast(`Opened the changes already made to this world on version ${GEN_VERSION} (version ${w.gen_version} keeps its own)`);
@@ -337,18 +490,73 @@
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = null;
     await saveEdits(editsKey(world), world.edits ?? {});
-    location.href = buildUrl(world, null, '?upgrade=1');
+    location.href = await buildUrl(world, null, '?upgrade=1');
   }
+
+  /** Where a world being opened came from: it brings its own edits, or none, and the user is
+   * asked before they replace those this browser has for it. */
+  type Source = 'file' | 'library' | 'link';
+  type OpenChoice = 'mine' | 'theirs' | 'clean' | 'download' | 'cancel';
+  /** The question `pickEdits` asks, until answered (`sync`: mine are mapd's copy). */
+  let openAsk = $state<{ from: Source; sync: boolean; mine: string[]; theirs: string[]; canCancel: boolean; choose: (c: OpenChoice) => void } | null>(null);
+  /** An older version's edits this browser kept for a world opened and upgraded (`settleVersion`). */
+  let upgradedMine: Edits | null = null;
+  /** A world opened with its own edits where this browser had none: mapd's copy, when it comes,
+   * is checked against them (`offerOpened`). */
+  let openCheck: { from: Source; theirs: Edits } | null = null;
+
+  /** mapd's copy of a world just opened differs from the edits it brought: asked which to keep. */
+  async function offerOpened(c: { from: Source; theirs: Edits }) {
+    const pick = await pickEdits(c.from, world, c.theirs, edits, true);
+    if (!pick?.replaced) return;
+    const what = c.from === 'link' ? 'link' : c.from === 'library' ? 'saved world' : 'file';
+    applyEdits(keepPlaces(edits, pick.edits), { tool: 'open_edits', label: changeList(pick.edits).length ? `Opened the changes the ${what} brought` : 'Opened the world without changes' }, 'user');
+  }
+
+  /**
+   * The edits an opened world `w` brings (`theirs`) against those this browser has for it
+   * (`mine`): taken if they are the same or there are none here, else the user picks (never
+   * merged). `replaced`: mine gave way. Null if cancelled.
+   */
+  async function pickEdits(from: Source, w: WorldFile, theirs: Edits, mine: Edits, sync = false): Promise<{ edits: Edits; replaced: boolean } | null> {
+    if (!Object.keys(mine).length) return { edits: theirs, replaced: false };
+    // (The same, but for sites removed here keeping their places.)
+    if (!diffEdits(mine, keepPlaces(mine, theirs)).length) return { edits: mine, replaced: false };
+    for (;;) {
+      const c = await new Promise<OpenChoice>((choose) => (openAsk = { from, sync, mine: changeList(mine), theirs: changeList(theirs), canCancel: worldShown, choose }));
+      openAsk = null;
+      if (c === 'cancel') return null;
+      if (c === 'mine') return { edits: mine, replaced: false };
+      if (c === 'theirs') return { edits: theirs, replaced: true };
+      if (c === 'clean') return { edits: {}, replaced: true };
+      // (Mine kept as a file first; then asked again.)
+      const base = worldShown && sameWorld(w, world) ? world : w;
+      const { edits: _, ...bare } = base;
+      await download({ ...bare, edits: mine }, `world-${w.seed}-mine`);
+    }
+  }
+
+  const openButtons = $derived.by((): ChoiceButton<OpenChoice>[] => {
+    const a = openAsk;
+    if (!a) return [];
+    return [
+      ...(a.canCancel ? [{ label: 'Cancel', value: 'cancel', kind: 'quiet' } as const] : []),
+      { label: 'Download mine', value: 'download', icon: 'download' } as const,
+      { label: 'Start clean', value: 'clean', kind: 'danger' } as const,
+      ...(a.theirs.length ? [{ label: a.from === 'link' ? 'Use the link’s' : a.from === 'library' ? 'Use the saved ones' : 'Use the file’s', value: 'theirs' } as const] : []),
+      { label: 'Keep mine', value: 'mine', kind: 'primary' } as const,
+    ];
+  });
 
   /**
    * Generate `w`. `keepSketch`: with the sketch being drawn (or else the world's), stretched
    * from the map size it was drawn at to `w`'s (a file opened or imported brings its own).
    */
-  async function generate(w: WorldFile, keepSketch = false) {
+  async function generate(w: WorldFile, keepSketch = false, from: Source | null = null) {
     if (busy) return;
     if (w.gen_version !== GEN_VERSION) {
       busy = true;
-      const settled = await settleVersion(w).finally(() => (busy = false));
+      const settled = await settleVersion(w, from).finally(() => (busy = false));
       if (!settled) return;
       w = settled;
     }
@@ -364,20 +572,48 @@
     // (The world being left keeps its last changes.)
     if (saveTimer) flushSave();
     busy = true;
-    // Same world regenerated (or redrawn) keeps its edits; a different one brings its own, or
-    // has those this browser kept for it.
-    const same = sameWorld(w, world);
-    const redrawn = same && JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null);
+    // The world shown regenerated (or redrawn) keeps its edits; another has those this browser
+    // kept for it. A world opened (a file, a saved world, a link) brings its own edits, or none:
+    // where they differ from those, the user picks.
+    const shown = worldShown && sameWorld(w, world) && world.gen_version === w.gen_version;
+    const redrawn = shown && JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null);
     const before = overlay?.features ?? [];
-    const kept = same && world.edits && world.gen_version === w.gen_version ? world.edits : (w.edits ?? (await storedEdits(w)));
-    world = kept && Object.keys(kept).length ? { ...w, edits: kept } : w;
+    // (Not opened: the edits an upgrade carried over, else those kept.)
+    let mine = shown ? (world.edits ?? {}) : from ? ((await storedEdits(w)) ?? {}) : (w.edits ?? (await storedEdits(w)) ?? {});
+    if (from && !Object.keys(mine).length && upgradedMine) mine = upgradedMine;
+    upgradedMine = null;
+    let kept = mine;
+    let replaced = false;
+    openCheck = null;
+    if (from) {
+      const pick = await pickEdits(from, w, w.edits ?? {}, mine);
+      if (!pick) {
+        // (Kept as it was; agents' changes that came meanwhile were set aside: asked for again.)
+        busy = false;
+        sync.retake();
+        sync.resync();
+        return;
+      }
+      ({ edits: kept, replaced } = pick);
+      // (Sites made here keep their places, removed: the ids after them are indices.)
+      if (replaced) kept = keepPlaces(mine, kept);
+      if (!Object.keys(mine).length && Object.keys(kept).length) openCheck = { from, theirs: kept };
+    }
+    // Edits restored from a backup replace mapd's copy of the world too (asked for then).
+    const restored = !shown && takeRestored(editsKey(w)) && kept === mine;
+    // (Another world's history can't be undone here.)
+    if (!shown) undoHistory.clear();
+    const { edits: _, ...bare } = w;
+    world = Object.keys(kept).length ? { ...bare, edits: kept } : bare;
+    unexportedCount = unexported(editsKey(world))?.n ?? 0;
     selection = null;
     saveUrl();
     try {
       // (The view applies the world's edits: names, created sites, hidden labels.)
       await view.loadWorld(world);
       overlay = view.overlay;
-      sync.open(world);
+      // (Edits the user chose over those kept replace mapd's copy too.)
+      sync.open(world, replaced || restored);
       await play.setWorld(world, view.geom!.world_hash);
       worldShown = true;
     } finally {
@@ -385,8 +621,17 @@
     }
     // (mapd's copy may have come while the world was loading.)
     sync.retake();
-    // Redrawn: names and notes follow features that moved.
-    const moved = redrawn && overlay ? reanchor(edits, before, overlay.features) : null;
+    if (replaced) {
+      // One step, so Undo brings back the changes this browser had.
+      const label = changeList(kept).length ? `Opened the changes the ${from === 'link' ? 'link' : from === 'library' ? 'saved world' : 'file'} brought` : 'Opened the world without changes';
+      const step: Step = { label, author: 'user', ops: diffEdits(mine, kept), inverse: diffEdits(kept, mine) };
+      undoHistory.push(step);
+      toast(label, () => undo(step));
+    }
+    if (redrawn) changed();
+    // Redrawn: names and notes follow features that moved (when the edits kept are the ones
+    // made on the world shown).
+    const moved = redrawn && kept === mine && overlay ? reanchor(edits, before, overlay.features) : null;
     if (moved) applyEdits(moved.edits, { tool: 'reanchor', label: `Kept ${moved.moved.length} edited ${moved.moved.length === 1 ? 'place' : 'places'} with the redrawn world` }, 'user', { record: false });
     const n = overlay?.conflicts?.length ?? 0;
     if (w.sketch && n) toast(`The world follows your sketch, with ${n} ${n === 1 ? 'exception' : 'exceptions'}: see Sketch`);
@@ -648,7 +893,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: 'npcs' | 'plots' | 'places', id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), state: () => ({ playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: 'npcs' | 'plots' | 'places', id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -658,9 +903,9 @@
   }
 
   /** Open a world (saved or from a file); new sketch strokes are asked about first. */
-  function openWorld(w: WorldFile) {
-    if (sketchDirty()) return ask('sketch', () => void generate(w), false);
-    void generate(w);
+  function openWorld(w: WorldFile, from: Source) {
+    if (sketchDirty()) return ask('sketch', () => void generate(w, false, from), false);
+    void generate(w, false, from);
   }
 
   /** Phones: the sheet shows the selected place's card (no panel open, or asked for). */
@@ -783,6 +1028,13 @@
     const editing = buildEditing ? drawnBuilding(buildEditing) : null;
     const id = editing?.id ?? `c:${(edits.created ?? []).length}`;
     const opts = buildOptions(build);
+    // The same building again: that one.
+    const old = editing ? null : existingSite(edits, { id, kind: 'building', x: 0, y: 0, name: '', poly }, [0, 0]);
+    if (old) {
+      if (tool) tool.pending = null;
+      toast(`${old.name} is already here`);
+      return;
+    }
     const spot = await view.gen.buildingSpot(poly, opts.func, id);
     if (tool) tool.pending = null;
     if (!spot) return toast('The map could not answer: try again');
@@ -894,7 +1146,8 @@
     if (designer) closeDesigner();
     view.exitBuilding();
     selection = null;
-    applyEdits({}, { tool: 'start_over' }, 'user');
+    // (Sites made keep their places, removed: the ids after them are indices, here and in mapd.)
+    applyEdits(keepPlaces(edits, {}), { tool: 'start_over' }, 'user');
   }
 
   /** Show a problem's square (on its level). */
@@ -1009,13 +1262,24 @@
   /** Create a site near (x, y), where the generator allows (dry land, out of rivers), named
    * locally unless a name was given; then select it. */
   async function createSite(c: SiteChoice, x: number, y: number) {
+    const { name, ...opts } = c;
+    // The same site again: that one (as mapd does).
+    const again = (at: Created) => {
+      const old = existingSite(edits, at, [x, y]);
+      if (!old) return false;
+      toast(`${old.name} is already here`);
+      const f = overlay?.features.find((g) => g.id === old.id);
+      if (f) selection = { kind: 'feature', feature: f };
+      return true;
+    };
+    if (again({ id: '', ...opts, x, y, name: '' })) return;
     const spot = await view.gen.spot(c.kind, c.under, `c:${(edits.created ?? []).length}`, x, y);
     if (!spot) return toast('The map could not answer: try again');
     if ('error' in spot) return toast(spot.error.charAt(0).toUpperCase() + spot.error.slice(1));
     // (Numbered as it is added: another site may have come in meanwhile.)
     const id = `c:${(edits.created ?? []).length}`;
-    const { name, ...opts } = c;
     const site: Created = { id, ...opts, x: spot.x, y: spot.y, name: name ?? spot.name };
+    if (again(site)) return;
     applyEdits({ ...edits, created: [...(edits.created ?? []), site] }, { tool: 'create_feature', id, kind: c.kind === 'entrance' ? (c.under ?? 'dungeon').replace(/_/g, ' ') : c.kind.replace(/_/g, ' '), name: site.name }, 'user');
     const f = overlay?.features.find((g) => g.id === id);
     if (f) selection = { kind: 'feature', feature: f };
@@ -1481,7 +1745,7 @@
     view.onPlaces = (on) => setPlaces(on);
     view.setPlaces(places);
     view.onMoves = (list, x, y) => (moves = list.length ? { list, x, y } : null);
-    const onKey = createKeyHandler(() => keymap, () => shell.help || !!shell.ask || !!versionAsk);
+    const onKey = createKeyHandler(() => keymap, () => shell.help || !!shell.ask || !!versionAsk || !!openAsk || !!restoreAsk);
     window.addEventListener('keydown', onKey);
     // Changes not yet stored are stored before the page goes.
     const flush = () => saveTimer && flushSave();
@@ -1491,7 +1755,14 @@
     if (lowMemory()) toast('This device has little memory: big cities may close the tab');
     (async () => {
       await view.mount(container);
-      await generate(world);
+      // The world the address names (a link may name one kept in another browser).
+      const link = await readLink(location, linked);
+      if (link.missing) toast('This link names a world kept in another browser’s library: download it there and open the file here', undefined, { sticky: true });
+      let w = link.world ?? newWorld(1);
+      // (This tab's own address, made before the edits stored caught up: those are taken.)
+      const own = !!w.edits && ownLinks().includes(editsStamp(w.edits));
+      if (own) w = { gen_version: w.gen_version, seed: w.seed, params: w.params, ...(w.sketch ? { sketch: w.sketch } : {}) };
+      await generate(w, false, w.edits ? 'link' : null);
       if (params.get('bench') === 'play') {
         go('play');
         benchRunning = true;
@@ -1667,7 +1938,7 @@
               </div>
             {/if}
           {:else}
-            <LibraryTab {world} {busy} onOpen={openWorld} onStartOver={startOver} />
+            <LibraryTab {world} {busy} unexported={unexportedCount} keeps={syncKeeps} onOpen={openWorld} onDownload={() => void downloadWorld()} onCopyLink={() => void copyLink()} onBackup={backupLibrary} onRestore={restoreLibrary} onStartOver={startOver} />
           {/if}
         {/if}
       {/snippet}
@@ -1861,6 +2132,41 @@
   <Toasts {toasts} onDismiss={dismiss} />
   {#if shell.help}<ShortcutsHelp list={keymap} onClose={() => (shell.help = false)} />{/if}
   {#if versionAsk}<VersionAsk from={versionAsk.from} to={GEN_VERSION} kept={versionAsk.kept} edited={versionAsk.edited} canCancel={versionAsk.canCancel} onChoose={versionAsk.choose} />{/if}
+  {#if openAsk}
+    {@const what = openAsk.from === 'link' ? 'link' : openAsk.from === 'library' ? 'saved world' : 'file'}
+    <Choice title="This world has changes here already" icon="globe" buttons={openButtons} onChoose={openAsk.choose}>
+      <p>{openAsk.sync ? 'Live sync keeps other changes to this world' : 'This browser has changes to this world'}: {openAsk.mine.join(', ')}.</p>
+      <p>
+        {#if openAsk.theirs.length}The {what} brings changes of its own: {openAsk.theirs.join(', ')}.{:else}The {what} brings no changes.{/if}
+        Keep yours, take the {what}’s, or start clean; nothing is mixed.
+      </p>
+      <p class="ws-muted">If yours give way, Undo brings them back while this page is open. Download them to keep a copy.</p>
+    </Choice>
+  {/if}
+  {#if restoreAsk}
+    {@const p = restoreAsk.plan}
+    {@const choose = restoreAsk.choose}
+    <Choice
+      title="Restore this backup?"
+      icon="upload"
+      buttons={[
+        { label: 'Cancel', value: 'cancel', kind: 'quiet' },
+        ...(p.differ.length ? [{ label: 'Take the backup’s', value: 'replace', kind: 'danger' } as const, { label: 'Keep mine', value: 'keep', kind: 'primary' } as const] : [{ label: 'Restore', value: 'keep', kind: 'primary' } as const]),
+      ]}
+      onChoose={choose}
+    >
+      <p>
+        It holds changes to {p.edited} {p.edited === 1 ? 'world' : 'worlds'} and {p.pictures} {p.pictures === 1 ? 'picture' : 'pictures'}, and adds
+        {p.worlds} saved {p.worlds === 1 ? 'world' : 'worlds'} to the library. Nothing this browser has is deleted.
+      </p>
+      {#if p.differ.length}
+        <p>
+          {p.differ.length} {p.differ.length === 1 ? 'world has' : 'worlds have'} other changes here than in the backup: keep this browser’s, or
+          take the backup’s for {p.differ.length === 1 ? 'it' : 'them'}?
+        </p>
+      {/if}
+    </Choice>
+  {/if}
   {#if PINNED && !pinnedClosed}
     <div class="pinned ws-panel" role="status">
       <span>Worldspring as it was at generator version {GEN_VERSION}, kept for the worlds made with it.</span>

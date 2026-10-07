@@ -554,6 +554,24 @@ pub const MAX_FLOORS: u8 = 8;
 pub const BUILDING_REACH_FT: f64 = 200.0;
 
 impl Created {
+    /// A site created again within this of one of its kind (with the same beneath) is that one.
+    pub const SAME_SPOT_FT: f64 = 300.0;
+
+    /// Whether `self`, being created (asked for at `asked`, put at its own point), is `other`, a
+    /// live site already there: the same kind and beneath, within `SAME_SPOT_FT` of either point;
+    /// a building, the same footprint (each corner within 2 ft). Creating a site again (a script
+    /// run twice, a world file opened again) then adds nothing.
+    pub fn same_site(&self, other: &Created, asked: [f64; 2]) -> bool {
+        if other.removed || other.kind != self.kind {
+            return false;
+        }
+        if self.kind == "building" {
+            return other.poly.len() == self.poly.len() && other.poly.iter().zip(&self.poly).all(|(a, b)| (a[0] - b[0]).abs() <= 2.0 && (a[1] - b[1]).abs() <= 2.0);
+        }
+        let near = |p: [f64; 2]| (other.x - p[0]).hypot(other.y - p[1]) <= Self::SAME_SPOT_FT;
+        other.under_kind() == self.under_kind() && (near([self.x, self.y]) || near(asked))
+    }
+
     /// The kind of site underground (none for towers, camps and inns).
     pub fn under_kind(&self) -> Option<crate::under::UnderKind> {
         use crate::under::UnderKind;
@@ -674,6 +692,23 @@ fn simple(p: &[[f64; 2]]) -> bool {
 }
 
 impl Edits {
+    /// `next` replacing these edits whole, keeping listed entries' places (`created`: later ids
+    /// are indices): the entries `next` lacks stay, marked removed, as the ops that make it leave
+    /// them wherever they are applied (the app's `keepPlaces`).
+    pub fn keeping_places(&self, mut next: Edits) -> Edits {
+        let n = next.created.len();
+        if self.created.len() > n {
+            next.created.extend(self.created[n..].iter().map(|c| Created { removed: true, ..c.clone() }));
+        }
+        next
+    }
+
+    /// The live site `c` (being created, asked for at `asked`) would duplicate, if any
+    /// (`Created::same_site`).
+    pub fn existing_site(&self, c: &Created, asked: [f64; 2]) -> Option<&Created> {
+        self.created.iter().find(|o| c.same_site(o, asked))
+    }
+
     /// Replace the fields given (a JSON object of some of the edits' fields, each whole), the
     /// rest staying: a big world's live edits arrive field by field. Returns whether `created`
     /// was among them (only then is generation touched).

@@ -6,7 +6,7 @@ use worldgen::agent;
 use worldgen::world::{BUILDING_HOMES, Created, MAX_FLOORS, ROOFS, STRUCTURES, TINTS};
 
 use crate::Shared;
-use crate::tools::{schema, text};
+use crate::tools::{found, schema, text};
 
 const SQUARE_FT: f64 = 5.0;
 
@@ -124,6 +124,12 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
         v => c.floors = Some(v.as_u64().filter(|f| *f <= 255).ok_or("floors: a whole number")? as u8),
     }
     c.check()?;
+    // The same building again (a script run twice): that one, nothing added (checked again
+    // when it is added).
+    let at = [c.x, c.y];
+    if creating && let Some(id) = app.with_edits(|e| e.existing_site(&c, at).map(|o| o.id.clone())).flatten() {
+        return found(app, id).await;
+    }
     let asked = opt("name").filter(|s| !s.is_empty());
     // On dry land, clear of buildings, roads and walls; its point is the footprint's middle.
     if reshaped || creating {
@@ -149,6 +155,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     let mut reply = reply;
     let change = app.edit("agent", 0, move |e| {
         if creating {
+            if let Some(o) = e.existing_site(&c, at) {
+                return Ok(json!({ "existing": o.id }));
+            }
             // (Another client may have created a site meanwhile: take the next id.)
             c.id = format!("c:{}", e.created.len());
             reply["id"] = json!(c.id);
@@ -160,6 +169,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
         Ok(reply)
     })
     .await?;
+    if let Some(id) = change["existing"].as_str() {
+        return found(app, id.to_string()).await;
+    }
     let id = if creating { change["id"].as_str().unwrap_or_default().to_string() } else { cid };
     app.worker
         .with(move |ex| {

@@ -2,7 +2,8 @@
 // (`<root>v<N>/`, listed in `<root>versions.json` by scripts/publish.mjs), so a world made with an
 // older one can still be opened as it was made. The newest build is at the root.
 import type { WorldFile } from '../gen/protocol';
-import { toHash } from './world';
+import { keepLinked } from './library';
+import { plainHash, toHash } from './world';
 
 /** Where the newest build is (set by the publish script; else this build's own base). */
 export const SITE_ROOT: string = import.meta.env.VITE_SITE_ROOT || import.meta.env.BASE_URL;
@@ -19,7 +20,12 @@ export function keptVersions(): Promise<number[]> {
     .catch(() => []));
 }
 
+/** The first generator whose build reads deflated links and links to worlds kept in the
+ * library (`#z=`, `#lib=`); older builds are sent plain ones. */
+const SHORT_LINKS_GEN = 53;
+
 /** The address of `w` in the build for generator `gen` (null: the newest), with `search` (`?…`). */
-export function buildUrl(w: WorldFile, gen: number | null, search = ''): string {
-  return `${SITE_ROOT}${gen === null ? '' : `v${gen}/`}${search}${toHash(w)}`;
+export async function buildUrl(w: WorldFile, gen: number | null, search = ''): Promise<string> {
+  const hash = gen !== null && gen < SHORT_LINKS_GEN ? plainHash(w) : await toHash(w, keepLinked);
+  return `${SITE_ROOT}${gen === null ? '' : `v${gen}/`}${search}${hash}`;
 }
