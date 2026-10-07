@@ -12,7 +12,7 @@ use crate::core::{
 };
 
 /// Bump whenever generator output changes for an unchanged world file.
-pub const GEN_VERSION: u32 = 52;
+pub const GEN_VERSION: u32 = 53;
 
 /// Prevailing winds: latitude belts (trades, westerlies, polar easterlies) or one direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

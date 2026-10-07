@@ -283,10 +283,8 @@ pub fn layout_count(t0: &T0) -> usize {
 struct Site<'a> {
     t0: &'a T0,
     center: P,
-    /// Spacing (ft) of the last coarse terrain level, for `T0::ground_at`, and its nodes
-    /// near the settlement (a town asks for the ground many thousands of times).
-    lattice_ft: f64,
-    nodes: (i64, i64, usize, Vec<f64>),
+    /// The ground it is planned on (a town asks for it many thousands of times).
+    plan: PlanGround<'a>,
     /// Standing water (sea or lake) within the settlement's T0 neighbourhood: shore banks
     /// only matter then.
     lakeside: bool,
@@ -295,13 +293,6 @@ struct Site<'a> {
     /// Pieces by grid cell (`RIVER_CELL` ft), each listed in every cell its bbox touches.
     river_grid: FastMap<(i64, i64), Vec<u32>>,
     river_max_hw: f64,
-    /// How far the river valleys lower the ground (`RiverNet::valley`, ≤ 0), at the nodes of
-    /// a `VALLEY_CELL`-ft lattice (local coords), filled as `height` asks: a square of nodes
-    /// round the centre (NaN until asked; its first node index on both axes and its side),
-    /// and any beyond it.
-    valley: RefCell<(i64, usize, Vec<f32>, FastMap<(i64, i64), f32>)>,
-    /// The river chords that can cut that square of nodes (`RiverNet::valley_chords`).
-    valley_chords: Vec<([f32; 4], [f32; 4])>,
     /// Network roads near the settlement as ~20-ft chords (a, b, half width; local), sampled
     /// on first use.
     roads: std::cell::OnceCell<(Vec<(P, P, f64)>, FastMap<(i64, i64), Vec<u32>>)>,
@@ -309,7 +300,146 @@ struct Site<'a> {
     reach: f64,
 }
 
-const VALLEY_CELL: f64 = 50.0;
+/// The ground settlements are planned on (`Site::height`), which the terrain is also reset
+/// to under their pads (`lod::terrain_refine`): `T0::ground_at` cut by the river valleys
+/// (`RiverNet::valley`), the valleys' depth interpolated over a world lattice. Subdividing
+/// the coarse levels alone drifts from it by tens of feet on coasts, enough to move the
+/// shore under piers and buildings.
+pub struct PlanGround<'a> {
+    t0: &'a T0,
+    /// Spacing (ft) of the last coarse terrain level (`T0::ground_at`'s lattice) and its
+    /// nodes over the area (first node index on each axis, row width, values).
+    lattice_ft: f64,
+    nodes: (i64, i64, usize, Vec<f64>),
+    /// The valley lattice's spacing (ft); its nodes' depth (≤ 0) over the area, filled as
+    /// asked (NaN until then; first node index on each axis, row width, values), and any
+    /// beyond it.
+    cell: f64,
+    depth: RefCell<(i64, i64, usize, Vec<f32>, FastMap<(i64, i64), f32>)>,
+    /// The river chords that can cut the area's valley nodes (`RiverNet::valley_chords`).
+    chords: Vec<([f32; 4], [f32; 4])>,
+}
+
+/// The valley lattice's spacing (ft) under settlements: layouts and the finest terrain
+/// levels interpolate the same nodes.
+pub const VALLEY_CELL: f64 = 50.0;
+
+impl<'a> PlanGround<'a> {
+    /// Ground nodes over `ground_rect` and valley nodes every `cell` ft over `valley_rect`
+    /// (x0, y0, x1, y1 world ft).
+    pub fn new(t0: &'a T0, ground_rect: [f64; 4], valley_rect: [f64; 4], lattice_ft: f64, cell: f64) -> PlanGround<'a> {
+        let r = ground_rect;
+        let (nx0, ny0) = (crate::core::floor(r[0] / lattice_ft) as i64 - 2, crate::core::floor(r[1] / lattice_ft) as i64 - 2);
+        let (nx1, ny1) = (crate::core::floor(r[2] / lattice_ft) as i64 + 3, crate::core::floor(r[3] / lattice_ft) as i64 + 3);
+        let nw = (nx1 - nx0 + 1) as usize;
+        let values: Vec<f64> = (ny0..=ny1).flat_map(|j| (nx0..=nx1).map(move |i| (i, j))).map(|(i, j)| t0.ground_node(i, j, lattice_ft)).collect();
+        let r = valley_rect;
+        let (ci0, cj0) = (crate::core::floor(r[0] / cell) as i64 - 1, crate::core::floor(r[1] / cell) as i64 - 1);
+        let (ci1, cj1) = (crate::core::floor(r[2] / cell) as i64 + 2, crate::core::floor(r[3] / cell) as i64 + 2);
+        let (cw, n) = ((ci1 - ci0 + 1) as usize, ((ci1 - ci0 + 1) * (cj1 - cj0 + 1)) as usize);
+        let chords = t0.rivers.valley_chords([ci0 as f64 * cell, cj0 as f64 * cell, ci1 as f64 * cell, cj1 as f64 * cell]);
+        // Where no chord reaches the area its nodes have no depth.
+        let depth = vec![if chords.is_empty() { 0.0 } else { f32::NAN }; n];
+        PlanGround { t0, lattice_ft, nodes: (nx0, ny0, nw, values), cell, depth: RefCell::new((ci0, cj0, cw, depth, FastMap::default())), chords }
+    }
+
+    /// The T0 surface (`T0::ground_at`; `bank` false leaves out the shore bank at the point,
+    /// for callers that know no water is near or bank it themselves).
+    pub fn ground(&self, x: f64, y: f64, bank: bool) -> f64 {
+        self.t0.ground_with_nodes(x, y, self.lattice_ft, bank, |i, j| self.node(i, j))
+    }
+
+    /// Ground lattice node (i, j).
+    fn node(&self, i: i64, j: i64) -> f64 {
+        let (x0, y0, nw, values) = &self.nodes;
+        let (a, b) = (i - x0, j - y0);
+        if a >= 0 && b >= 0 && (a as usize) < *nw && ((b as usize) * nw + a as usize) < values.len() {
+            values[b as usize * nw + a as usize]
+        } else {
+            self.t0.ground_node(i, j, self.lattice_ft)
+        }
+    }
+
+    /// How far the river valleys lower the ground at (x, y) (≤ 0): smooth, interpolated
+    /// between lattice nodes.
+    pub fn depth(&self, x: f64, y: f64) -> f64 {
+        let (u, v) = (x / self.cell, y / self.cell);
+        let (i0, j0) = (crate::core::floor(u), crate::core::floor(v));
+        let (fu, fv) = (u - i0, v - j0);
+        let (i, j) = (i0 as i64, j0 as i64);
+        let (a, b, c, d) = (self.depth_node(i, j), self.depth_node(i + 1, j), self.depth_node(i, j + 1), self.depth_node(i + 1, j + 1));
+        let top = a + (b - a) * fu;
+        let bottom = c + (d - c) * fu;
+        top + (bottom - top) * fv
+    }
+
+    /// The valleys' depth at valley node (i, j), worked out once.
+    fn depth_node(&self, i: i64, j: i64) -> f64 {
+        let mut cache = self.depth.borrow_mut();
+        let (ci0, cj0, cw) = (cache.0, cache.1, cache.2);
+        let node = |inside: bool| {
+            let (qx, qy) = (i as f64 * self.cell, j as f64 * self.cell);
+            let h = self.ground(qx, qy, true);
+            let v = if inside { crate::lod::rivers::RiverNet::valley_with(&self.chords, h, qx, qy) } else { self.t0.rivers.valley(h, qx, qy) };
+            (v - h) as f32
+        };
+        let (a, b) = (i - ci0, j - cj0);
+        if a >= 0 && b >= 0 && (a as usize) < cw && (b as usize) * cw + (a as usize) < cache.3.len() {
+            let k = b as usize * cw + a as usize;
+            if cache.3[k].is_nan() {
+                cache.3[k] = node(true);
+            }
+            cache.3[k] as f64
+        } else {
+            *cache.4.entry((i, j)).or_insert_with(|| node(false)) as f64
+        }
+    }
+
+    /// What `row` needs of each of `xs` (ascending), worked out once for every row.
+    pub fn columns(&self, xs: &[f64]) -> PlanColumns {
+        let (Some(&lo), Some(&hi)) = (xs.first(), xs.last()) else { return PlanColumns::default() };
+        let (l, c) = (self.lattice_ft, self.cell);
+        let (a0, c0) = (crate::core::floor(lo / l) as i64 - 1, crate::core::floor(lo / c) as i64);
+        let at = xs
+            .iter()
+            .map(|&x| {
+                let (u, w) = (x / l, x / c);
+                let (i0, k0) = (crate::core::floor(u), crate::core::floor(w));
+                ((i0 as i64 - 1 - a0) as usize, crate::t0::catmull_rom(u - i0), (k0 as i64 - c0) as usize, w - k0)
+            })
+            .collect();
+        PlanColumns { nodes: (a0, crate::core::floor(hi / l) as i64 + 2), cells: (c0, crate::core::floor(hi / c) as i64 + 1), at }
+    }
+
+    /// (`ground(x, y, false)`, `depth(x, y)`) at each of the columns' xs along the row at `y`:
+    /// the same interpolation, down each node column once for the whole row.
+    pub fn row(&self, y: f64, cols: &PlanColumns) -> Vec<(f64, f64)> {
+        let v = y / self.lattice_ft;
+        let j0 = crate::core::floor(v);
+        let wv = crate::t0::catmull_rom(v - j0);
+        let col: Vec<f64> = (cols.nodes.0..=cols.nodes.1).map(|i| (0..4).map(|b| wv[b] * self.node(i, j0 as i64 + b as i64 - 1)).sum()).collect();
+        let v = y / self.cell;
+        let cj = crate::core::floor(v);
+        let fv = v - cj;
+        let dcol: Vec<f64> = (cols.cells.0..=cols.cells.1)
+            .map(|i| {
+                let (a, b) = (self.depth_node(i, cj as i64), self.depth_node(i, cj as i64 + 1));
+                a + (b - a) * fv
+            })
+            .collect();
+        cols.at.iter().map(|&(k, wu, d, fu)| (wu[0] * col[k] + wu[1] * col[k + 1] + wu[2] * col[k + 2] + wu[3] * col[k + 3], dcol[d] + (dcol[d + 1] - dcol[d]) * fu)).collect()
+    }
+}
+
+/// `PlanGround::columns`: the ground node and valley cell column ranges, and per x its first
+/// node column (from the range's start) and Catmull-Rom weights, its valley cell column and
+/// fraction across it.
+#[derive(Default)]
+pub struct PlanColumns {
+    nodes: (i64, i64),
+    cells: (i64, i64),
+    at: Vec<(usize, [f64; 4], usize, f64)>,
+}
 
 const RIVER_CELL: f64 = 250.0;
 /// Network road chords near a settlement are binned by this (`Site::near_network_road`, margins
@@ -335,18 +465,17 @@ impl<'a> Site<'a> {
         let step = 0.25 * t0.cell_ft;
         let n = (2.0 * reach / step).ceil() as i64;
         let lakeside = (0..=n).any(|j| (0..=n).any(|i| t0.sample_lake(center[0] - reach + i as f64 * step, center[1] - reach + j as f64 * step).0 > crate::t0::hydro::DRY));
-        // The lattice nodes around the settlement, precomputed (x0, y0, width, values).
-        let (nx0, ny0) = (crate::core::floor((center[0] - reach) / lattice_ft) as i64 - 2, crate::core::floor((center[1] - reach) / lattice_ft) as i64 - 2);
-        let (nx1, ny1) = (crate::core::floor((center[0] + reach) / lattice_ft) as i64 + 3, crate::core::floor((center[1] + reach) / lattice_ft) as i64 + 3);
-        let nw = (nx1 - nx0 + 1) as usize;
-        let values: Vec<f64> = (ny0..=ny1).flat_map(|j| (nx0..=nx1).map(move |i| (i, j))).map(|(i, j)| t0.ground_node(i, j, lattice_ft)).collect();
-        // The valley lattice over the layout's reach and a little past it.
-        let half = crate::core::ceil((layout_reach + 1_000.0) / VALLEY_CELL) as i64;
-        let side = (2 * half + 1) as usize;
-        let valley = RefCell::new((-half, side, vec![f32::NAN; side * side], FastMap::default()));
-        let e = half as f64 * VALLEY_CELL;
-        let valley_chords = t0.rivers.valley_chords([center[0] - e, center[1] - e, center[0] + e, center[1] + e]);
-        Site { t0, center, lattice_ft, nodes: (nx0, ny0, nw, values), lakeside, river, river_grid, river_max_hw, valley, valley_chords, roads: std::cell::OnceCell::new(), reach: layout_reach }
+        // Ground nodes out to where shore banks matter; the valley over the layout's reach and
+        // a little past it.
+        let e = layout_reach + 1_000.0;
+        let plan = PlanGround::new(
+            t0,
+            [center[0] - reach, center[1] - reach, center[0] + reach, center[1] + reach],
+            [center[0] - e, center[1] - e, center[0] + e, center[1] + e],
+            lattice_ft,
+            VALLEY_CELL,
+        );
+        Site { t0, center, plan, lakeside, river, river_grid, river_max_hw, roads: std::cell::OnceCell::new(), reach: layout_reach }
     }
 }
 
@@ -371,51 +500,11 @@ impl Site<'_> {
         }
         t
     }
-    /// The ground the settlement is planned on: the T0 surface in its river valleys (as the
-    /// terrain carves them; settlement pads only take the fine detail away).
+    /// The ground the settlement is planned on: the T0 surface in its river valleys, as the
+    /// terrain under its pad is reset to (`PlanGround`).
     fn height(&self, p: P) -> f64 {
-        let g = self.ground(p);
-        // The valleys' depth is smooth: interpolated between lattice nodes.
-        let (u, v) = (p[0] / VALLEY_CELL, p[1] / VALLEY_CELL);
-        let (i0, j0) = (crate::core::floor(u), crate::core::floor(v));
-        let (fu, fv) = (u - i0, v - j0);
-        let mut cache = self.valley.borrow_mut();
-        let (o, side) = (cache.0, cache.1);
-        let mut at = |i: i64, j: i64| {
-            let depth = |inside: bool| {
-                let q = [i as f64 * VALLEY_CELL, j as f64 * VALLEY_CELL];
-                let (w, h) = (self.world(q), self.ground(q));
-                let v = if inside { crate::lod::rivers::RiverNet::valley_with(&self.valley_chords, h, w[0], w[1]) } else { self.t0.rivers.valley(h, w[0], w[1]) };
-                (v - h) as f32
-            };
-            let (a, b) = (i - o, j - o);
-            if a >= 0 && b >= 0 && (a as usize) < side && (b as usize) < side {
-                let k = b as usize * side + a as usize;
-                if cache.2[k].is_nan() {
-                    cache.2[k] = depth(true);
-                }
-                cache.2[k] as f64
-            } else {
-                *cache.3.entry((i, j)).or_insert_with(|| depth(false)) as f64
-            }
-        };
-        let (i, j) = (i0 as i64, j0 as i64);
-        let top = at(i, j) + (at(i + 1, j) - at(i, j)) * fu;
-        let bottom = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * fu;
-        g + top + (bottom - top) * fv
-    }
-    /// The T0 surface (with shore banks), as the coarsest terrain level holds it.
-    fn ground(&self, p: P) -> f64 {
         let w = self.world(p);
-        let (x0, y0, nw, values) = &self.nodes;
-        self.t0.ground_with_nodes(w[0], w[1], self.lattice_ft, self.lakeside, |i, j| {
-            let (a, b) = (i - x0, j - y0);
-            if a >= 0 && b >= 0 && (a as usize) < *nw && ((b as usize) * nw + a as usize) < values.len() {
-                values[b as usize * nw + a as usize]
-            } else {
-                self.t0.ground_node(i, j, self.lattice_ft)
-            }
-        })
+        self.plan.ground(w[0], w[1], self.lakeside) + self.plan.depth(w[0], w[1])
     }
     /// Sea or lake (not the river channel): inside the drawn shoreline (the same water mask
     /// the terrain renders), so buildings, quays and piers agree with the visible shore.

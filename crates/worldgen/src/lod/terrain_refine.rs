@@ -221,8 +221,9 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
     let (gx0, gy0) = (key.x as i64 * n, key.y as i64 * n);
     let inv_2s = 1.0 / (2.0 * s);
     // Settlement pads: towns and their fields stand on the smooth ground their layout was
-    // planned on (the T0 surface in its river valleys, `town::Site::height`), so fine detail
-    // fades out over each pad (`town::pad_weight`); the valleys come from carving.
+    // planned on (the T0 surface in its river valleys, `town::PlanGround`): over each pad
+    // (`town::pad_weight`) the ground is reset to it, fine detail and all, so shorelines,
+    // piers and buildings agree with the drawn terrain.
     let (tx0, ty0, tx1, ty1) = ((gx0 - h) as f64 * s, (gy0 - h) as f64 * s, (gx0 + n + h) as f64 * s, (gy0 + n + h) as f64 * s);
     let pads: Vec<(f64, f64, f64)> = t0
         .settlements
@@ -233,6 +234,14 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
             x + e >= tx0 && x - e <= tx1 && y + e >= ty0 && y - e <= ty1
         })
         .collect();
+    // The layouts' valley lattice from the levels that show buildings down; coarser levels
+    // (reset again by their children) take the valley on a lattice of their own.
+    let plan = (!pads.is_empty()).then(|| {
+        let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+        let cell = if 2.0 * s <= crate::town::VALLEY_CELL { crate::town::VALLEY_CELL } else { 4.0 * s };
+        crate::town::PlanGround::new(t0, [tx0, ty0, tx1, ty1], [tx0, ty0, tx1, ty1], lattice, cell)
+    });
+    let cols = plan.as_ref().map(|p| p.columns(&(-h..=n + h).map(|ci| (gx0 + ci) as f64 * s).collect::<Vec<_>>()));
 
     let mut out = vec![0f32; PADDED * PADDED];
     for cj in -h..=n + h {
@@ -243,6 +252,11 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
         // Pads this row can touch.
         let y = (gy0 + cj) as f64 * s;
         let row_pads: Vec<(f64, f64, f64)> = pads.iter().copied().filter(|&(_, py, r)| (y - py).abs() < crate::town::pad_extent(r)).collect();
+        // The planned ground along the row (ground, valley depth), where pads reach it.
+        let planned = match (&plan, &cols) {
+            (Some(plan), Some(cols)) if !row_pads.is_empty() => plan.row(y, cols),
+            _ => Vec::new(),
+        };
         for ci in -h..=n + h {
             let base = if odd {
                 HALF[0] * row(pv - 1, ci) + HALF[1] * row(pv, ci) + HALF[2] * row(pv + 1, ci) + HALF[3] * row(pv + 2, ci)
@@ -290,9 +304,10 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
             if let Some(c) = corridor {
                 detail *= c[padded_index(ci, cj)] as f64;
             }
+            let mut pad = 0.0;
             if !row_pads.is_empty() {
                 let x = (gx0 + ci) as f64 * s;
-                let pad = row_pads.iter().fold(0.0f64, |m, &(px, py, r)| {
+                pad = row_pads.iter().fold(0.0f64, |m, &(px, py, r)| {
                     if (x - px).abs() >= crate::town::pad_extent(r) {
                         return m;
                     }
@@ -307,6 +322,11 @@ fn refine(world: &World, t0: &T0, parent: &[f32], key: &TileKey, corridor: Optio
                 let band = 3.0 + 2.5 * amp * rough;
                 h = base + detail * smoothstep(0.0, band, crate::core::fabs(base - w as f64));
                 h = T0::shore_bank(h, w, mask);
+            }
+            if pad > 0.0 {
+                // Banked from the lookup above (as `T0::ground_at` banks it).
+                let (g, depth) = planned[(ci + HALO as i64) as usize];
+                h += (T0::shore_bank(g, w, mask) + depth - h) * pad;
             }
             out[padded_index(ci, cj)] = h as f32;
         }

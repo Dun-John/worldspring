@@ -257,8 +257,8 @@ fn settlements_on_their_water() {
 fn towns_meet_roads_and_water() {
     use worldgen::t0::settle::Tier;
     use worldgen::town::{self, geom};
-    let world = World::from_json(&world_json(1)).unwrap();
-    let t0 = worldgen::t0::T0::generate(&world);
+    let mut ex = Executor::new(World::from_json(&world_json(1)).unwrap());
+    let (world, t0) = (&ex.world, &ex.t0);
     let wet = |p: [f64; 2]| {
         if t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], world.geom.spacing_ft(world.geom.first_refine_level - 1)) {
             return true;
@@ -301,11 +301,21 @@ fn towns_meet_roads_and_water() {
         })
     };
     let (mut roads_checked, mut piers_checked, mut walls_checked) = (0, 0, 0);
+    // A pier is a rectangle; its ends are the midpoints of its two short sides.
+    let ends = |pier: &[[f64; 2]]| {
+        let m = pier.len();
+        let mut sides: Vec<(f64, [f64; 2])> = (0..m).map(|k| (geom::dist(pier[k], pier[(k + 1) % m]), geom::lerp(pier[k], pier[(k + 1) % m], 0.5))).collect();
+        sides.sort_by(|a, b| a.0.total_cmp(&b.0));
+        (sides[0].1, sides[1].1)
+    };
+    // Every pier's ends (villages' too), for the drawn shore below.
+    let mut all_piers: Vec<(usize, [f64; 2], [f64; 2])> = Vec::new();
     for (i, s) in t0.settlements.iter().enumerate() {
+        let l = town::layout(world, t0, i);
+        all_piers.extend(l.piers.iter().map(|p| (i, ends(p).0, ends(p).1)));
         if s.tier < Tier::Town {
             continue;
         }
-        let l = town::layout(&world, &t0, i);
         // Walls end at the banks (water guards the gap), towers stand on land, and every street
         // over a river runs on a bridge.
         let ch = channel(l.bbox);
@@ -352,11 +362,7 @@ fn towns_meet_roads_and_water() {
             }
         }
         for pier in &l.piers {
-            // A pier is a rectangle; its ends are the midpoints of its two short sides.
-            let m = pier.len();
-            let mut sides: Vec<(f64, [f64; 2])> = (0..m).map(|k| (geom::dist(pier[k], pier[(k + 1) % m]), geom::lerp(pier[k], pier[(k + 1) % m], 0.5))).collect();
-            sides.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let (e1, e2) = (sides[0].1, sides[1].1);
+            let (e1, e2) = ends(pier);
             let near_land = |e: [f64; 2]| (0..16).any(|a| {
                 let ang = std::f64::consts::TAU * a as f64 / 16.0;
                 (0..=4).any(|d| !wet([e[0] + ang.cos() * 5.0 * d as f64, e[1] + ang.sin() * 5.0 * d as f64]))
@@ -367,6 +373,21 @@ fn towns_meet_roads_and_water() {
         }
     }
     assert!(roads_checked > 20 && piers_checked > 10 && walls_checked > 10, "too little checked: {roads_checked} road ends, {piers_checked} piers, {walls_checked} walls by rivers");
+    // Piers reach the water the battlemap draws, not just the water their layout was planned
+    // by: under a settlement the terrain is the ground it was planned on.
+    let g = ex.world.geom.clone();
+    let (s, size) = (g.spacing_ft(g.max_level), g.tile_size_ft(g.max_level));
+    let mut over_water = |p: [f64; 2]| {
+        let key = TileKey::surface(g.max_level, (p[0] / size) as u32, (p[1] / size) as u32);
+        let (ox, oy) = g.tile_origin_ft(&key);
+        let k = padded_index(((p[0] - ox) / s).round() as i64, ((p[1] - oy) / s).round() as i64);
+        let tile = ex.terrain(key);
+        ex.t0.sample_water(p[0], p[1]).max(tile.river_water[k]) > tile.padded[k]
+    };
+    assert!(all_piers.len() > 200, "too few piers: {}", all_piers.len());
+    for (i, e1, e2) in all_piers {
+        assert!(over_water(e1) || over_water(e2), "settlement {i}: the pier at {:?} ends on drawn land", geom::lerp(e1, e2, 0.5));
+    }
 }
 
 /// Settlements: every one gets its guaranteed buildings — an inn in every village, the full

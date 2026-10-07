@@ -911,7 +911,7 @@ impl T0 {
 /// (water level or `DRY`, wet fraction 0..1) at a world position, with the shoreline wobble
 /// (see `T0::sample_lake`); usable before the T0 exists.
 /// Catmull-Rom weights for the four nodes round fraction `t` (`T0::ground_with`).
-fn catmull_rom(t: f64) -> [f64; 4] {
+pub(crate) fn catmull_rom(t: f64) -> [f64; 4] {
     let (t2, t3) = (t * t, t * t * t);
     [0.5 * (-t3 + 2.0 * t2 - t), 0.5 * (3.0 * t3 - 5.0 * t2 + 2.0), 0.5 * (-3.0 * t3 + 4.0 * t2 + t), 0.5 * (t3 - t2)]
 }
