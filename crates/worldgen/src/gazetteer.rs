@@ -163,14 +163,17 @@ pub fn query_json(world: &World, t0: &T0, x: f64, y: f64) -> String {
 }
 
 /// Districts whose name contains `q`, then named buildings whose name or function does
-/// (case-insensitive), name matches first. With `rect` (world ft x0, y0, x1, y1) only
-/// settlements reaching into it are searched and only hits inside it kept; without, every
-/// settlement layout is generated on first use.
-pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Option<[f64; 4]>) -> Vec<Hit> {
+/// (case-insensitive), name matches first. Names are matched as they are now (renamed or
+/// generated); hidden places are left out unless `include_hidden`. Hits carry the generated
+/// names (callers show the renames). With `rect` (world ft x0, y0, x1, y1) only settlements
+/// reaching into it are searched and only hits inside it kept; without, every settlement
+/// layout is generated on first use.
+pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Option<[f64; 4]>, include_hidden: bool) -> Vec<Hit> {
     let q = q.trim().to_lowercase();
     if q.len() < 2 {
         return Vec::new();
     }
+    let edits = &world.file.edits;
     let mut districts = Vec::new();
     let mut by_name = Vec::new();
     let mut by_function = Vec::new();
@@ -179,24 +182,35 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
         None => (0..town::layout_count(t0)).map(|i| town::layout(world, t0, i)).collect(),
     };
     let inside = |x: f64, y: f64| rect.is_none_or(|r| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]);
+    // A place's name as it is now (None if hidden and not wanted).
+    let current = |id: &str, generated: Option<&str>| -> Option<Option<String>> {
+        if !include_hidden && edits.hidden.contains(id) {
+            return None;
+        }
+        Some(edits.renames.get(id).map(String::as_str).or(generated).map(str::to_lowercase))
+    };
     for l in layouts {
         for qi in 0..l.quarters.len() {
             let at = l.quarters[qi].label[l.quarters[qi].label.len() / 2];
-            if l.quarters[qi].name.to_lowercase().contains(&q) && districts.len() < limit && inside(at[0], at[1]) {
+            let name = current(&format!("d:{}:{qi}", l.index), Some(&l.quarters[qi].name)).flatten();
+            if name.is_some_and(|n| n.contains(&q)) && districts.len() < limit && inside(at[0], at[1]) {
                 districts.push(district_hit(&l, qi));
             }
         }
         for (bi, b) in l.buildings.iter().enumerate() {
-            if b.func.is_none() {
+            let id = format!("b:{}:{bi}", l.index);
+            let renamed = edits.renames.contains_key(&id);
+            if b.func.is_none() && !renamed {
                 continue;
             }
             let c = geom::centroid(&b.poly);
             if !inside(c[0], c[1]) {
                 continue;
             }
-            if b.name.as_ref().is_some_and(|n| n.to_lowercase().contains(&q)) {
+            let Some(name) = current(&id, b.name.as_deref()) else { continue };
+            if name.is_some_and(|n| n.contains(&q)) {
                 by_name.push(building_hit(&l, bi));
-            } else if b.label().to_lowercase().contains(&q) && by_function.len() < limit {
+            } else if b.func.is_some() && b.label().to_lowercase().contains(&q) && by_function.len() < limit {
                 by_function.push(building_hit(&l, bi));
             }
         }
@@ -231,7 +245,7 @@ pub fn districts_json(world: &World, t0: &T0, settlement: usize) -> String {
 }
 
 pub fn search_json(world: &World, t0: &T0, q: &str, rect: Option<[f64; 4]>) -> String {
-    serde_json::to_string(&search_buildings(world, t0, q, 30, rect)).expect("serializable")
+    serde_json::to_string(&search_buildings(world, t0, q, 30, rect, false)).expect("serializable")
 }
 
 /// Everything named inside a rectangle (world ft): districts, then businesses (buildings

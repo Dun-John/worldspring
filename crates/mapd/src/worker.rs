@@ -6,7 +6,7 @@
 use std::sync::mpsc;
 
 use worldgen::pipeline::Executor;
-use worldgen::world::Edits;
+use worldgen::world::{EditOp, Edits};
 use worldgen::{World, WorldFile, town};
 
 pub struct Gen {
@@ -36,6 +36,15 @@ impl Gen {
         if let Some(ex) = &mut self.ex {
             set_edits(ex, edits);
         }
+    }
+
+    /// Apply edit ops to the open world's edits (a batch's step).
+    pub fn apply_ops(&mut self, ops: &[EditOp]) -> Result<(), String> {
+        let Some(ex) = &mut self.ex else { return Ok(()) };
+        let mut edits = std::mem::take(&mut ex.world.file.edits);
+        let done = ops.iter().try_for_each(|op| edits.apply(op).map(|_| ()));
+        set_edits(ex, edits);
+        done
     }
 
     fn warm_one(&mut self) -> bool {

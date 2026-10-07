@@ -37,9 +37,7 @@ fn describe(id: &str, c: &Crossing) -> Value {
 }
 
 fn list_crossings(app: &Shared) -> Result<Value, String> {
-    let w = app.world.lock().unwrap();
-    let e = w.as_ref().map(|(_, f)| f.edits.clone()).unwrap_or_default();
-    Ok(json!(e.crossings.iter().map(|(id, c)| describe(id, c)).collect::<Vec<_>>()))
+    Ok(json!(app.with_edits(|e| e.crossings.iter().map(|(id, c)| describe(id, c)).collect::<Vec<_>>()).unwrap_or_default()))
 }
 
 fn point(v: &Value, k: &str) -> Result<Option<[f64; 2]>, String> {

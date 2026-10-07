@@ -31,7 +31,13 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 - **Coordinates** are in feet from the map's top-left corner: `x_ft` runs east and `y_ft` runs south. One mile is
   5,280 ft; one battlemap square is 5 ft.
 - **Places:** any tool that needs a place takes either an `id` or both `x_ft` and `y_ft`.
-- **Names** in results already include renames. Hidden features are left out of search unless you ask for them.
+- **Names** in results already include renames, and search matches them. Hidden features are left out of search
+  unless you ask for them.
+- **Extents:** search results, `get_feature` and `features_near` give each place's `extent`: `bbox_ft` (`[x0, y0,
+  x1, y1]`) with `area_sq_mi`, or a river's `length_mi`. Settlements' and sites' areas are their built-up circle.
+- **Which world:** every tool takes an optional `world`, the hash `world_overview` returns. If mapd has another
+  world open (the user opened a different one in the app), the call is refused and nothing happens. Pass it in
+  long scripted sessions.
 
 ### Ids
 
@@ -76,7 +82,8 @@ A summary of the world:
 - its land masses;
 - how many features of each kind it has;
 - its largest settlements, with population and position;
-- how many sites have been created.
+- how many sites have been created;
+- `world`: its hash, for the `world` parameter of other tools.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -88,7 +95,8 @@ A summary of the world:
 > *"Give me an overview of this world."* · *"Which are the five biggest cities?"*
 
 ### `search_features`
-Searches by name. From three letters, it also finds districts and named businesses (inns, temples, smithies…).
+Searches by name, as the places are named now (renames included). From three letters, it also finds districts and
+named businesses (inns, temples, smithies…). Each result has its `extent`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -169,9 +177,10 @@ and created sites.
 ### `describe_location`
 What is at a point:
 - elevation and biome;
-- the regions it lies in;
+- `in`: the areas it lies in, largest first (continent or island, sea, range, forest, lake…);
 - the building, district or site there;
-- named features nearby;
+- `nearby`: named features within a tenth of their size (2 to 10 miles), nearest first, measured to their nearest
+  edge or course, with `distance_mi` and `direction`;
 - the nearest settlements.
 
 | Parameter | Type | | |
@@ -182,6 +191,24 @@ What is at a point:
 { "name": "describe_location", "arguments": { "x_ft": 2310194, "y_ft": 4127619 } }
 ```
 > *"What's at 437 miles east, 781 miles south?"* · *"What's right around the Ruins of Neling?"*
+
+### `features_near`
+Everything named within a radius of a place, nearest first. Distances are to each feature's nearest edge or
+course (0, direction `here`, inside an area). Each result has `distance_mi`, `direction` and `extent`.
+
+| Parameter | Type | Default | |
+|---|---|---|---|
+| `id` or `x_ft` + `y_ft` | | required | |
+| `radius_mi` | number | 5 | |
+| `kinds` | string array | all | Only these kinds. Districts and businesses come when `kinds` names `district` or `building`, or with no `kinds` within a mile. |
+| `limit` | integer | 50 | 1–500; `found` says how many there were. |
+| `include_hidden` | boolean | false | |
+
+```json
+{ "name": "features_near", "arguments": { "x_ft": 2310194, "y_ft": 4127619, "radius_mi": 15, "kinds": ["river", "lake"] } }
+{ "name": "features_near", "arguments": { "id": "city:bab44567", "radius_mi": 0.5, "kinds": ["building"] } }
+```
+> *"Which rivers and lakes are within 15 miles of here?"* · *"What's the lake just north of the capital called?"*
 
 ### `route`
 The distance between two places:
@@ -276,6 +303,26 @@ Each edit is:
 
 Edits are layered over the generated world; the generated world itself never changes. Tools that take an `id`
 check that it exists first, so a typo can't leave a stray edit.
+
+If saving fails (the file is held open elsewhere), the tool reports it, but the change stands: mapd keeps it in
+memory and saves it again every few seconds.
+
+### `batch`
+Many edits as one change: `steps` is a list of `{ "tool": …, "arguments": { … } }`, run in order (up to 5,000). Any
+edit tool can be a step (and read tools too); `batch`, `render_view` and `focus_view` can't. Each step sees what
+the steps before it did: a site created in one step can be renamed or annotated in the next (`c:<n>` ids count
+up from `world_overview`'s `created_sites`). The whole batch is saved once, logged as one entry and shown in the
+app as one notice. If a step fails, nothing is changed, and the error names the step. Returns each step's result.
+
+```json
+{ "name": "batch", "arguments": { "world": "b3a8412f4fa3a3b1", "steps": [
+  { "tool": "rename_feature", "arguments": { "id": "d:4:2", "name": "Tri-Spire Ward" } },
+  { "tool": "annotate_feature", "arguments": { "id": "d:4:2", "text": "Three wizard towers lean over its lanes." } },
+  { "tool": "create_feature", "arguments": { "kind": "ruin", "under": "crypt", "x_ft": 2325000, "y_ft": 4127000 } },
+  { "tool": "rename_feature", "arguments": { "id": "c:0", "name": "The Evening Nip" } }
+] } }
+```
+> *"Name every district in the capital and give each a line of lore, all in one go."*
 
 ### `rename_feature`
 Renames anything with a name: a feature, building, district, tower, underground site, or a site's level (`l:`) or
@@ -744,6 +791,10 @@ It also answers `initialize`, `ping` and `tools/list`.
 |---|---|
 | `no world is open: open the map app first` | mapd hasn't seen a world yet. Open the app once; after that mapd remembers it. |
 | `the map app is not open` / `did not answer in time` | `render_view` and `focus_view` need the app open and connected. |
+| `no open map app shows mapd's world` | The open tabs show other worlds: open mapd's world in a tab, or choose **Follow this tab** in one. |
+| `mapd has another world open (…), not …: nothing was done` | The `world` given isn't the one open: the user switched worlds. |
+| `the change was made, but could not be saved to disk: …` | The change stands in memory and is saved again every few seconds. |
+| `step N (tool) failed: … Nothing was changed.` | A `batch` step failed; the batch was not applied. |
 | `no such feature: …` | A bad id: check it with `search_features`. |
 | `that place is under water: pick dry land` / `off the map` | `create_feature` refused the position. |
 | `… is not a created site` | `delete_feature` only removes `c:` sites. Use `hide_feature` for generated ones. |

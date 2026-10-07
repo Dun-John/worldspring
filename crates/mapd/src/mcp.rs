@@ -65,7 +65,10 @@ async fn one(app: &Shared, req: Value, session: &mut Option<String>) -> Option<V
             let name = req["params"]["name"].as_str().unwrap_or("").to_string();
             let args = req["params"].get("arguments").cloned().unwrap_or(json!({}));
             println!("mapd: tool {name} {args}");
-            Ok(match crate::tools::call(app, &name, args).await {
+            // (In its own task: a client that hangs up can't stop an edit halfway.)
+            let app = app.clone();
+            let done = tokio::spawn(async move { crate::tools::call(&app, &name, args).await }).await;
+            Ok(match done.unwrap_or_else(|e| Err(format!("the tool stopped: {e}"))) {
                 Ok(content) => json!({ "content": content, "isError": false }),
                 Err(e) => json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
             })

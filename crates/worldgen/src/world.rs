@@ -751,7 +751,15 @@ impl Edits {
         let mut ops = Vec::new();
         for &(field, shape) in EDIT_FIELDS {
             let (ea, eb) = (entries(&a, field, shape), entries(&b, field, shape));
-            let keys: BTreeSet<&String> = ea.iter().chain(&eb).map(|(k, _)| k).collect();
+            // (A list's entries in list order: an entry appended can only follow the one before it.)
+            let keys: Vec<&String> = match shape {
+                Shape::List => {
+                    let mut k: Vec<&String> = eb.iter().map(|(k, _)| k).collect();
+                    k.extend(ea.iter().map(|(k, _)| k).filter(|k| !eb.iter().any(|(j, _)| j == *k)));
+                    k
+                }
+                _ => ea.iter().chain(&eb).map(|(k, _)| k).collect::<BTreeSet<_>>().into_iter().collect(),
+            };
             for key in keys {
                 let (va, vb) = (ea.iter().find(|(k, _)| k == key).map(|e| &e.1), eb.iter().find(|(k, _)| k == key).map(|e| &e.1));
                 if va == vb {

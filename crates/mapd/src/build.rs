@@ -87,14 +87,12 @@ fn footprint(a: &Value) -> Result<Option<Vec<[f64; 2]>>, String> {
 async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, String> {
     let poly = footprint(a)?;
     let mut c = match &id {
-        Some(id) => {
-            let w = app.world.lock().unwrap();
-            let file = &w.as_ref().ok_or("no world is open: open the map app first")?.1;
-            file.edits.created.iter().find(|c| &c.id == id && !c.removed && c.kind == "building").cloned().ok_or_else(|| format!("{id} is not a building drawn by hand"))?
-        }
+        Some(id) => app
+            .with_edits(|e| e.created.iter().find(|c| &c.id == id && !c.removed && c.kind == "building").cloned())
+            .ok_or("no world is open: open the map app first")?
+            .ok_or_else(|| format!("{id} is not a building drawn by hand"))?,
         None => {
-            let w = app.world.lock().unwrap();
-            let n = w.as_ref().map(|(_, f)| f.edits.created.len()).unwrap_or(0);
+            let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
             Created { id: format!("c:{n}"), kind: "building".into(), ..Default::default() }
         }
     };
@@ -148,10 +146,12 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     let tool = if creating { "create_building" } else { "update_building" };
     let reply = json!({ "tool": tool, "id": c.id, "kind": "building", "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
     let cid = c.id.clone();
-    app.edit("agent", 0, move |e| {
+    let mut reply = reply;
+    let change = app.edit("agent", 0, move |e| {
         if creating {
             // (Another client may have created a site meanwhile: take the next id.)
             c.id = format!("c:{}", e.created.len());
+            reply["id"] = json!(c.id);
             e.created.push(c);
         } else {
             let slot = e.created.iter_mut().find(|x| x.id == c.id && !x.removed).ok_or_else(|| format!("{} was deleted meanwhile", c.id))?;
@@ -160,7 +160,7 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
         Ok(reply)
     })
     .await?;
-    let id = if creating { format!("c:{}", app.world.lock().unwrap().as_ref().map(|(_, f)| f.edits.created.len() - 1).unwrap_or(0)) } else { cid };
+    let id = if creating { change["id"].as_str().unwrap_or_default().to_string() } else { cid };
     app.worker
         .with(move |ex| {
             let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "built, but it could not be read back".to_string())?;

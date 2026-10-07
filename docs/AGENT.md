@@ -30,6 +30,18 @@ The app tells mapd which world it has open (seed and parameters).
 
 mapd generates the world natively (a few seconds) and reopens the last one when it restarts.
 
+**Several tabs:** mapd follows one world at a time. A tab opening another world while a tab shows mapd's world
+doesn't switch it: that tab says "Live sync is following another tab's world", keeps its changes in the browser,
+and offers **Follow this tab** to switch. When the last tab showing mapd's world closes and none comes back within
+20 seconds (a reload does), mapd follows another open tab. Once mapd follows a tab, the changes made there
+meanwhile (or while mapd was away) go on top of mapd's copy. Screenshots and view moves go to a tab showing mapd's world, and edits reach only those tabs. Every tool takes
+an optional `world` (the hash `world_overview` gives) and refuses to run if mapd has another world open.
+
+**Saving:** each change is written to a `.tmp` file and moved over `world.json`. If that fails (the file is held
+open elsewhere, a network share hiccups), mapd retries, keeps the change in memory, reports the error to the tool
+and the app, and saves again every few seconds until it works. A `world.json.tmp` newer than `world.json` (a save
+that never finished) is taken at startup.
+
 ## Places and ids
 
 Positions are feet from the map's top-left corner: x to the east, y to the south. 5-ft squares; D&D 5e travel
@@ -56,11 +68,12 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | Tool | Does |
 |---|---|
 | `world_overview` | Size, land masses, how many features of each kind, the largest settlements. |
-| `search_features` | Features by name or kind. From three letters it also finds districts and businesses (inns, temples, …). |
-| `get_feature` | Details and relations: what it is, regions it lies in, nearest settlements, roads, districts, notable buildings, ways underground, a site's levels and rooms. |
+| `search_features` | Features by current name or kind, each with its extent (bounding box and area, or a river's length). From three letters it also finds districts and businesses (inns, temples, …), renamed ones by their new names. |
+| `get_feature` | Details and relations: what it is, its extent, the areas it lies in, nearest settlements, roads, districts, notable buildings, ways underground, a site's levels and rooms. |
 | `list_children` | What a feature contains: districts and businesses, levels and rooms, a region's settlements and sites. |
 | `list_names` | Everything that can be renamed, with current and generated names: named features; a settlement's districts, businesses, towers and underground sites; a building's or site's levels (`l:`) and rooms (`r:`). |
-| `describe_location` | What is at a place: elevation, biome, regions, the building, district or site there, features nearby. |
+| `describe_location` | What is at a place: elevation, biome, the areas it lies in, the building, district or site there, named features nearby (measured to their nearest edge or course). |
+| `features_near` | Everything named within a radius of a place, nearest first, with distance, direction and extent; `kinds` filters (districts and businesses too). |
 | `route` | Road or overland distance between two places, with travel days at normal, fast and slow pace. |
 | `get_battlemap` | The 640-ft battlemap chunk at a place: surfaces, buildings, objects with their tactical rules, and what lies near the place by square. |
 | `render_view` | A screenshot (PNG, 1536×1024) from the open app. `size_ft` is the ground across the image. About 450 shows the painted battlemap; 3000 a village; 20000 a city; 200000 a region. |
@@ -86,6 +99,7 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | `get_site_design` | An underground site (`u:`) as a text plan: rooms by symbol, one character per 5-ft square, doors, items and the ways between levels. |
 | `set_site_design` | Change a site from a plan (any part of it; `doors: auto`; `furnish`; levels added below). Refused when it breaks a rule play mode needs (one way in, ways down over ways up, every square reachable). |
 | `reset_site_design` | The site as generated again. |
+| `batch` | Many edit tools as one change (`steps`: `{tool, arguments}` each): later steps see earlier ones (a site created in step 3 can be renamed in step 4), one save, one log entry, one notice in the app. If a step fails, nothing changes. |
 
 `render_view` and `focus_view` need the app open. The other tools work without it. `get_feature` and
 `describe_location` include the NPCs and plot points at a place.
@@ -114,7 +128,7 @@ and clears change only the battlemap chunks holding them; crossings, the battlem
 How edits are stored and shared:
 
 - **On disk:** `worlds/<hash>/world.json` holds the world with its edits. `edits.jsonl` logs every change: when,
-  who (`agent` or `user`), what, and the ops it made. Uploaded pictures (sprites, portraits) are kept by content
+  who (`agent` or `user`), what, and the ops it made (a batch is one entry). Uploaded pictures (sprites, portraits) are kept by content
   hash in `worlds/assets/<id>` (`GET`/`PUT /assets/<id>`; pictures only).
 - **Live:** changes travel as ops, each setting or removing one entry of one edits field (`{op: "set", field,
   key, value}` or `{op: "unset", field, key}`), so the app's changes and agents' changes made at the same time

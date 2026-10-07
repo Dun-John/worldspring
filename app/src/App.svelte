@@ -144,10 +144,12 @@
   let toasts = $state<Toast[]>([]);
   let nextToast = 1;
 
-  function toast(text: string, undo?: () => void) {
+  function toast(text: string, undo?: () => void, more: Pick<Toast, 'action' | 'sticky'> = {}): number {
     const id = nextToast++;
-    toasts = [...toasts.slice(-3), { id, text, undo }];
-    setTimeout(() => dismiss(id), undo ? 8000 : 4000);
+    // (Notices that stay are kept when the others are trimmed.)
+    toasts = [...toasts.filter((t) => t.sticky), ...toasts.filter((t) => !t.sticky).slice(-3), { id, text, undo, ...more }];
+    if (!more.sticky) setTimeout(() => dismiss(id), undo || more.action ? 8000 : 4000);
+    return id;
   }
 
   function dismiss(id: number) {
@@ -222,16 +224,40 @@
     if (s) applyEdits(withOps(s.ops), { tool: 'redo', label: `Redid: ${s.label}` }, 'user', { record: false });
   }
 
-  sync.onWorld = (w) => {
-    // mapd's copy of this world keeps the edits made while the app was away.
-    if (busy || !sameWorld(w, world)) return;
+  sync.onWorld = (w, mine) => {
+    if (!sameWorld(w, world)) return true;
+    if (busy) return false;
+    // mapd's copy of this world keeps the edits made while the app was away; what was changed
+    // here meanwhile goes on top (and to mapd).
     applyEdits(w.edits ?? {}, { tool: 'sync', label: 'Synced changes made elsewhere' }, 'mapd', { record: false, send: false });
+    if (mine.length) applyEdits(withOps(mine), { tool: 'sync', label: 'Kept the changes made here meanwhile' }, 'user', { record: false });
+    return true;
   };
   sync.onOps = (ops, change, author) => {
     if (!busy) applyEdits(withOps(ops), change, author, { send: false });
   };
   sync.onFocus = (x, y, size) => flyToSize(x, y, size);
   sync.onRender = (x, y, size) => view.capture(x, y, size);
+  // Another tab may have its own world open: live sync follows one world at a time.
+  let followNotice = 0;
+  sync.onFollow = (following) => {
+    if (followNotice) dismiss(followNotice);
+    followNotice = following
+      ? 0
+      : toast('Live sync is following another tab’s world: changes here stay in this browser', undefined, {
+          sticky: true,
+          action: { label: 'Follow this tab', run: () => sync.follow() },
+        });
+  };
+  let saveNotice = 0;
+  sync.onSaveError = (problem) => {
+    const had = saveNotice !== 0;
+    if (saveNotice) dismiss(saveNotice);
+    saveNotice = 0;
+    if (problem === 'save') saveNotice = toast('Live sync could not save to disk: it keeps the changes and tries again', undefined, { sticky: true });
+    else if (problem === 'switch') toast('Live sync can’t switch to this world until the open one is saved');
+    else if (had) toast('Live sync saved the changes it was keeping');
+  };
   sync.onStatus = (on) => {
     if (!on) toast('Live sync off: changes stay in this browser');
     // Agents see the portraits this browser keeps.
@@ -357,6 +383,8 @@
     } finally {
       busy = false;
     }
+    // (mapd's copy may have come while the world was loading.)
+    sync.retake();
     // Redrawn: names and notes follow features that moved.
     const moved = redrawn && overlay ? reanchor(edits, before, overlay.features) : null;
     if (moved) applyEdits(moved.edits, { tool: 'reanchor', label: `Kept ${moved.moved.length} edited ${moved.moved.length === 1 ? 'place' : 'places'} with the redrawn world` }, 'user', { record: false });
@@ -620,7 +648,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, select: (s: Selection) => select(s), openNotebook: (t: 'npcs' | 'plots' | 'places', id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), state: () => ({ playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: 'npcs' | 'plots' | 'places', id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), state: () => ({ playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {

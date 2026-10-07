@@ -42,7 +42,138 @@ pub struct Overlay {
     /// What the sketch asked for that the world could not follow exactly.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conflicts: Vec<super::sketch::Conflict>,
+    /// Where each feature lies (same order as the features), for agents' "what is near".
+    #[serde(skip)]
+    pub shapes: Vec<Shape>,
 }
+
+/// The ground a feature covers: an area's cells, a river's course, or a point and its radius.
+/// Kept beside the overlay (never serialized), so nothing generated depends on it.
+#[derive(Clone, Debug)]
+pub enum Shape {
+    Point { at: [f64; 2], radius_ft: f64 },
+    /// A course (ft).
+    Line(Vec<[f32; 2]>),
+    /// Cells of a grid `cell_ft` apart (cell (i, j) centred at (i, j)·cell_ft): a bit per cell of
+    /// the box `x0, y0, w, h` (cells), and the cells on its edge.
+    Area { cell_ft: f64, x0: u32, y0: u32, w: u32, h: u32, bits: Vec<u64>, edge: Vec<u32>, cells: u32 },
+}
+
+impl Shape {
+    fn area(gw: usize, cell_ft: f64, comp: &[u32]) -> Shape {
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        for &k in comp {
+            let (x, y) = (k % gw as u32, k / gw as u32);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+        let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+        let mut bits = vec![0u64; (w as usize * h as usize).div_ceil(64)];
+        for &k in comp {
+            let b = ((k / gw as u32 - y0) * w + k % gw as u32 - x0) as usize;
+            bits[b / 64] |= 1 << (b % 64);
+        }
+        let mut s = Shape::Area { cell_ft, x0, y0, w, h, bits, edge: Vec::new(), cells: comp.len() as u32 };
+        let edge: Vec<u32> = comp
+            .iter()
+            .map(|&k| (k / gw as u32 - y0) * w + k % gw as u32 - x0)
+            .filter(|&b| {
+                let (i, j) = ((b % w) as i64, (b / w) as i64);
+                [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| !s.has(i + dx, j + dy))
+            })
+            .collect();
+        if let Shape::Area { edge: e, .. } = &mut s {
+            *e = edge;
+        }
+        s
+    }
+
+    /// Whether box cell (i, j) is part of the area.
+    fn has(&self, i: i64, j: i64) -> bool {
+        match self {
+            Shape::Area { w, h, bits, .. } => {
+                if i < 0 || j < 0 || i >= *w as i64 || j >= *h as i64 {
+                    return false;
+                }
+                let b = (j * *w as i64 + i) as usize;
+                (bits[b / 64] >> (b % 64)) & 1 == 1
+            }
+            _ => false,
+        }
+    }
+
+    /// Bounding box (ft): x0, y0, x1, y1.
+    pub fn bbox(&self) -> [f64; 4] {
+        match self {
+            Shape::Point { at, radius_ft: r } => [at[0] - r, at[1] - r, at[0] + r, at[1] + r],
+            Shape::Line(pts) => pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| {
+                [b[0].min(p[0] as f64), b[1].min(p[1] as f64), b[2].max(p[0] as f64), b[3].max(p[1] as f64)]
+            }),
+            Shape::Area { cell_ft: c, x0, y0, w, h, .. } => {
+                [(*x0 as f64 - 0.5) * c, (*y0 as f64 - 0.5) * c, ((x0 + w) as f64 - 0.5) * c, ((y0 + h) as f64 - 0.5) * c]
+            }
+        }
+    }
+
+    /// Area (sq ft) of an area or a point's disc; 0 for a course.
+    pub fn area_sq_ft(&self) -> f64 {
+        match self {
+            Shape::Point { radius_ft: r, .. } => std::f64::consts::PI * r * r,
+            Shape::Line(_) => 0.0,
+            Shape::Area { cell_ft: c, cells, .. } => *cells as f64 * c * c,
+        }
+    }
+
+    /// A course's length (ft); 0 otherwise.
+    pub fn length_ft(&self) -> f64 {
+        match self {
+            Shape::Line(pts) => pts.windows(2).map(|s| f64::hypot((s[1][0] - s[0][0]) as f64, (s[1][1] - s[0][1]) as f64)).sum(),
+            _ => 0.0,
+        }
+    }
+
+    /// Distance (ft) from `p` to the shape (0 inside an area or a point's radius), and the
+    /// nearest point of it.
+    pub fn distance(&self, p: [f64; 2]) -> (f64, [f64; 2]) {
+        match self {
+            Shape::Point { at, radius_ft: r } => ((f64::hypot(p[0] - at[0], p[1] - at[1]) - r).max(0.0), *at),
+            Shape::Line(pts) => {
+                let mut best = (f64::MAX, p);
+                for s in pts.windows(2) {
+                    let (a, b) = ([s[0][0] as f64, s[0][1] as f64], [s[1][0] as f64, s[1][1] as f64]);
+                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    let len2 = dx * dx + dy * dy;
+                    let t = if len2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                    let q = [a[0] + t * dx, a[1] + t * dy];
+                    let d = f64::hypot(p[0] - q[0], p[1] - q[1]);
+                    if d < best.0 {
+                        best = (d, q);
+                    }
+                }
+                best
+            }
+            Shape::Area { cell_ft: c, x0, y0, w, edge, .. } => {
+                let (i, j) = ((p[0] / c).round() as i64 - *x0 as i64, (p[1] / c).round() as i64 - *y0 as i64);
+                if self.has(i, j) {
+                    return (0.0, p);
+                }
+                // To the nearest edge cell's square.
+                let mut best = (f64::MAX, p);
+                for &b in edge {
+                    let (cx, cy) = (((b % w + x0) as f64) * c, ((b / w + y0) as f64) * c);
+                    let q = [p[0].clamp(cx - 0.5 * c, cx + 0.5 * c), p[1].clamp(cy - 0.5 * c, cy + 0.5 * c)];
+                    let d = f64::hypot(p[0] - q[0], p[1] - q[1]);
+                    if d < best.0 {
+                        best = (d, [cx, cy]);
+                    }
+                }
+                best
+            }
+        }
+    }
+}
+
+/// How far round its point a site reaches (ft), for "what is near".
+pub const SITE_RADIUS_FT: f64 = 300.0;
 
 pub struct Inputs<'a> {
     pub world: &'a World,
@@ -136,7 +267,20 @@ impl Builder<'_> {
         }
         let c = self.inp.cell_ft;
         self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail });
+        self.out.shapes.push(Shape::Point { at: [cx * c, cy * c], radius_ft: 0.0 });
         id
+    }
+
+    /// The feature just pushed covers these cells (of a grid `gw` wide, `cell_ft` apart).
+    fn covers(&mut self, gw: usize, cell_ft: f64, comp: &[u32]) {
+        *self.out.shapes.last_mut().expect("just pushed") = Shape::area(gw, cell_ft, comp);
+    }
+
+    /// The feature just pushed is a point with this radius (ft).
+    fn radius(&mut self, r: f64) {
+        if let Some(Shape::Point { radius_ft, .. }) = self.out.shapes.last_mut() {
+            *radius_ft = r;
+        }
     }
 
     fn above_sea(&self, k: usize) -> f64 {
@@ -160,6 +304,7 @@ impl Builder<'_> {
             } else {
                 self.push("island", NameKind::Island, ax, ay, angle, extent, None, None);
             }
+            self.covers(inp.w, inp.cell_ft, comp);
         }
     }
 
@@ -183,6 +328,7 @@ impl Builder<'_> {
             let extent = (comp.len() as f64).sqrt() * inp.cell_ft;
             let (kind, nk) = if border { ("ocean", NameKind::Ocean) } else { ("sea", NameKind::Sea) };
             self.push(kind, nk, ax, ay, 0.0, extent, None, None);
+            self.covers(w, inp.cell_ft, comp);
         }
     }
 
@@ -229,6 +375,7 @@ impl Builder<'_> {
             let (cx, cy) = (sx / comp.len() as f64 * STEP as f64, sy / comp.len() as f64 * STEP as f64);
             let extent = (comp.len() as f64).sqrt() * STEP as f64 * inp.cell_ft;
             self.push("bay", NameKind::Bay, cx, cy, 0.0, extent, None, None);
+            self.covers(cw, STEP as f64 * inp.cell_ft, &comp);
         }
     }
 
@@ -246,6 +393,7 @@ impl Builder<'_> {
             let (ax, ay) = pole(w, &comp, &inside);
             let (angle, len) = principal_axis(w, &comp, 1.2);
             self.push("range", NameKind::Range, ax, ay, angle, len * inp.cell_ft, None, None);
+            self.covers(w, inp.cell_ft, &comp);
         }
 
         // Topographic prominence by union-find over land cells, highest first.
@@ -361,6 +509,7 @@ impl Builder<'_> {
             let culture = self.culture_at(cx, cy) as u8;
             self.out.settlement_cultures.push(culture);
             self.push(kind, NameKind::Settlement, cx, cy, 0.0, extent, Some(elev.round()), Some(detail));
+            self.radius(crate::town::urban_radius(s.tier, s.population));
             // A pinned settlement keeps the name drawn with it.
             let pinned = s.pin.and_then(|i| inp.world.file.sketch.strokes.get(i as usize)).and_then(|st| st.name.as_deref()).map(str::trim).filter(|n| !n.is_empty());
             if let Some(name) = pinned {
@@ -383,6 +532,7 @@ impl Builder<'_> {
             let k = (cy.round() as usize).min(inp.h - 1) * inp.w + (cx.round() as usize).min(inp.w - 1);
             let elev = self.above_sea(k);
             let id = self.push(kind, nk, cx, cy, 0.0, extent * 5280.0, Some(elev.round()), None);
+            self.radius(SITE_RADIUS_FT);
             if p.kind == PoiKind::Waystation {
                 let f = self.out.features.iter_mut().rev().find(|f| f.id == id).unwrap();
                 f.name = format!("{} Inn", f.name);
@@ -408,6 +558,7 @@ impl Builder<'_> {
             };
             let detail = format!("{act} {kind}, {} ft", fmt_thousands(elev));
             self.push("volcano", NameKind::Volcano, v.cx, v.cy, 0.0, v.radius_ft * 4.0, Some(elev.round()), Some(detail));
+            self.radius(v.radius_ft);
         }
     }
 
@@ -430,6 +581,7 @@ impl Builder<'_> {
             };
             let elev = lake.level_ft - inp.world.params().sea_level_ft;
             self.push(kind, nk, ax, ay, angle, extent, Some(elev.round()), None);
+            self.covers(inp.w, inp.cell_ft, &lake.cells);
         }
     }
 
@@ -452,6 +604,7 @@ impl Builder<'_> {
                 let angle = upright(libm::atan2(b[1] - a[1], b[0] - a[0]));
                 let len = r.cells.len() as f64 * inp.cell_ft;
                 self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, None);
+                *self.out.shapes.last_mut().expect("just pushed") = Shape::Line(pts.iter().map(|p| [(p[0] * inp.cell_ft) as f32, (p[1] * inp.cell_ft) as f32]).collect());
             }
             let _ = q;
 
@@ -506,6 +659,7 @@ impl Builder<'_> {
                 let (angle, _) = principal_axis(inp.w, &comp, 0.35);
                 let extent = (comp.len() as f64).sqrt() * inp.cell_ft;
                 self.push(kind, nk, ax, ay, angle, extent, None, None);
+                self.covers(inp.w, inp.cell_ft, &comp);
             }
         }
     }

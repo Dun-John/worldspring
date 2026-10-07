@@ -129,8 +129,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 }
 
 fn list_sprites(app: &Shared) -> Result<Value, String> {
-    let w = app.world.lock().unwrap();
-    let e = w.as_ref().map(|(_, f)| f.edits.clone()).unwrap_or_default();
+    let e = app.with_edits(Clone::clone).unwrap_or_default();
     let built: Vec<Value> = CATALOG.iter().map(|i| json!({ "kind": i.id, "name": i.name, "rules": rules(i) })).collect();
     let up: Vec<Value> = e
         .sprites

@@ -93,6 +93,11 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return 'started over: every change to this world cleared';
       case 'reset_site_design':
         return `${String(change.name ?? nameOf(id))} as generated again`;
+      case 'batch': {
+        const steps = Array.isArray(change.changes) ? (change.changes as Change[]) : [];
+        if (steps.length === 1) return describe(steps[0], 'user', nameOf);
+        return `${steps.length} changes`;
+      }
       case 'undo':
       case 'redo':
       case 'reanchor':

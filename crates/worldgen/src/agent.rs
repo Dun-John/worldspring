@@ -9,11 +9,13 @@
 //! `r:<site>:<level>:<room>`, levels counted from the bottom. NPCs (`n:<id>`) and plot points (`p:<id>`) are authored, never generated;
 //! they come with the places they are tied to.
 
+use std::borrow::Cow;
+
 use serde_json::{Value, json};
 
 use crate::World;
 use crate::t0::T0;
-use crate::t0::features::Feature;
+use crate::t0::features::{Feature, SITE_RADIUS_FT, Shape};
 use crate::town::{self, geom};
 
 type P = [f64; 2];
@@ -21,8 +23,6 @@ type P = [f64; 2];
 const MI: f64 = 5280.0;
 const SETTLEMENT_KINDS: [&str; 4] = ["metropolis", "city", "town", "village"];
 const SITE_KINDS: [&str; 9] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building"];
-/// Broad regions a place can lie in (with how far their label's extent reaches).
-const REGION_KINDS: [&str; 12] = ["continent", "island", "range", "forest", "jungle", "taiga", "desert", "swamp", "plains", "tundra", "glacier", "salt_flat"];
 
 fn mi(ft: f64) -> f64 {
     (ft / MI * 10.0).round() / 10.0
@@ -52,6 +52,62 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
         }
     }
     out
+}
+
+/// Each feature's shape, in `features` order: the overlay's own; a created site is a point (a
+/// building reaches to its footprint's farthest corner).
+fn shapes<'a>(world: &World, t0: &'a T0) -> Vec<Cow<'a, Shape>> {
+    let mut out: Vec<Cow<Shape>> = match t0.extra.as_ref().map(|e| &e.overlay) {
+        Some(o) => o.features.iter().enumerate().map(|(i, f)| o.shapes.get(i).map(Cow::Borrowed).unwrap_or(Cow::Owned(Shape::Point { at: [f.x, f.y], radius_ft: 0.0 }))).collect(),
+        None => Vec::new(),
+    };
+    for c in world.file.edits.created.iter().filter(|c| !c.removed) {
+        let r = if c.kind == "building" { c.poly.iter().map(|q| geom::dist(*q, [c.x, c.y])).fold(0.0, f64::max) } else { SITE_RADIUS_FT };
+        out.push(Cow::Owned(Shape::Point { at: [c.x, c.y], radius_ft: r }));
+    }
+    out
+}
+
+fn sq_mi(sq_ft: f64) -> f64 {
+    let a = sq_ft / (MI * MI);
+    if a < 100.0 { (a * 100.0).round() / 100.0 } else { a.round() }
+}
+
+/// How much ground a shape covers: its bounding box (ft), and its area or length.
+fn extent(s: &Shape) -> Value {
+    let mut v = json!({ "bbox_ft": s.bbox().map(f64::round) });
+    if let Shape::Line(_) = s {
+        v["length_mi"] = json!(mi(s.length_ft()));
+    } else {
+        v["area_sq_mi"] = json!(sq_mi(s.area_sq_ft()));
+    }
+    v
+}
+
+/// The extent of a polygon (or of several).
+fn poly_extent(polys: &[&[P]]) -> Value {
+    let b = polys.iter().flat_map(|p| p.iter()).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    json!({ "bbox_ft": b.map(f64::round), "area_sq_mi": sq_mi(polys.iter().map(|p| geom::area(p).abs()).sum()) })
+}
+
+/// The extent of anything with an id: a feature, a settlement, a building, a district.
+fn extent_of(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
+    match (id.split(':').next()?, nums.as_slice()) {
+        ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).buildings.get(*bi).map(|b| poly_extent(&[&b.poly])),
+        ("d", [li, qi]) if *li < town::layout_count(t0) => {
+            town::layout(world, t0, *li).quarters.get(*qi).map(|q| poly_extent(&q.patches.iter().map(Vec::as_slice).collect::<Vec<_>>()))
+        }
+        _ => {
+            let i = features(world, t0).iter().position(|f| f.id == id)?;
+            shapes(world, t0).get(i).map(|s| extent(s))
+        }
+    }
+}
+
+/// How near a feature must be to count as nearby: a tenth of its size, 2 to 10 miles.
+fn reach_ft(f: &Feature) -> f64 {
+    (0.1 * f.extent_ft).clamp(2.0 * MI, 10.0 * MI)
 }
 
 /// What a created site is: "created ruin over a crypt (tomb, large, 3 levels)".
@@ -446,19 +502,12 @@ fn compass(from: P, to: P) -> &'static str {
     ["E", "SE", "S", "SW", "W", "NW", "N", "NE"][((((a + 22.5) % 360.0) + 360.0) % 360.0 / 45.0) as usize % 8]
 }
 
-/// The broad regions a point lies in (continent or island first), as the breadcrumbs do.
-fn regions_at(fs: &[Feature], p: P) -> Vec<Value> {
-    let mut out: Vec<(f64, &Feature)> = fs
-        .iter()
-        .filter(|f| REGION_KINDS.contains(&f.kind))
-        .filter_map(|f| {
-            let reach = f.extent_ft * if matches!(f.kind, "continent" | "island") { 0.9 } else { 0.6 };
-            let d = geom::dist([f.x, f.y], p);
-            (d < reach).then_some((if matches!(f.kind, "continent" | "island") { -1.0 } else { d / reach }, f))
-        })
-        .collect();
-    out.sort_by(|a, b| a.0.total_cmp(&b.0));
-    out.into_iter().take(3).map(|(_, f)| json!({ "id": f.id, "kind": f.kind, "name": f.name })).collect()
+/// The areas a point lies in (land or sea, ranges, forests, lakes...), largest first.
+fn regions_at(fs: &[Feature], shapes: &[Cow<Shape>], p: P) -> Vec<Value> {
+    let mut out: Vec<(f64, &Feature)> =
+        fs.iter().zip(shapes).filter(|(_, s)| matches!(***s, Shape::Area { .. }) && s.distance(p).0 == 0.0).map(|(f, s)| (s.area_sq_ft(), f)).collect();
+    out.sort_by(|a, b| b.0.total_cmp(&a.0));
+    out.into_iter().map(|(_, f)| json!({ "id": f.id, "kind": f.kind, "name": f.name })).collect()
 }
 
 fn nearest_settlements(fs: &[Feature], p: P, skip: &str, n: usize) -> Vec<Value> {
@@ -499,26 +548,34 @@ pub fn overview(world: &World, t0: &T0) -> Value {
     })
 }
 
-/// Named features (and, from three letters, districts and businesses) matching a query.
+/// Named features (and, from three letters, districts and businesses) matching a query, by
+/// their current names, each with its extent.
 pub fn search(world: &World, t0: &T0, q: &str, kind: Option<&str>, limit: usize, include_hidden: bool) -> Value {
     let ql = q.trim().to_lowercase();
     let hidden = &world.file.edits.hidden;
+    let shapes = shapes(world, t0);
     let mut out: Vec<Value> = features(world, t0)
         .into_iter()
-        .filter(|f| (ql.is_empty() || f.name.to_lowercase().contains(&ql)) && kind.is_none_or(|k| f.kind == k) && (include_hidden || !hidden.contains(&f.id)))
+        .zip(&shapes)
+        .filter(|(f, _)| (ql.is_empty() || f.name.to_lowercase().contains(&ql)) && kind.is_none_or(|k| f.kind == k) && (include_hidden || !hidden.contains(&f.id)))
         .take(limit)
-        .map(|f| json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round() }))
+        .map(|(f, s)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) }))
         .collect();
     if ql.len() >= 3 && out.len() < limit && kind.is_none_or(|k| matches!(k, "building" | "district")) {
-        for h in crate::gazetteer::search_buildings(world, t0, &ql, limit - out.len(), None) {
-            let v = serde_json::to_value(&h).unwrap_or(Value::Null);
-            let id = v["id"].as_str().unwrap_or_default().to_string();
-            if include_hidden || !hidden.contains(&id) {
-                out.push(with_rename(world, v));
-            }
+        for h in crate::gazetteer::search_buildings(world, t0, &ql, limit - out.len(), None, include_hidden) {
+            out.push(hit_json(world, t0, &h));
         }
     }
     json!({ "results": out })
+}
+
+/// A district or building found in a layout, with its extent.
+fn hit_json(world: &World, t0: &T0, h: &crate::gazetteer::Hit) -> Value {
+    let mut v = with_rename(world, serde_json::to_value(h).unwrap_or(Value::Null));
+    if let Some(e) = v["id"].as_str().and_then(|id| extent_of(world, t0, id)) {
+        v["extent"] = e;
+    }
+    v
 }
 
 fn with_rename(world: &World, mut v: Value) -> Value {
@@ -528,6 +585,45 @@ fn with_rename(world: &World, mut v: Value) -> Value {
         v["name"] = json!(n);
     }
     v
+}
+
+/// Everything named within `radius` ft of a point (inside it, for an area), nearest first:
+/// features, and districts and businesses when `kinds` asks for them (or, with no kinds,
+/// within a mile). Each with its distance, direction and extent.
+pub fn near(world: &World, t0: &T0, p: P, radius: f64, kinds: &[String], limit: usize, include_hidden: bool) -> Value {
+    let hidden = &world.file.edits.hidden;
+    let wants = |k: &str| kinds.is_empty() || kinds.iter().any(|w| w == k);
+    let fs = features(world, t0);
+    let mut out: Vec<(f64, Value)> = fs
+        .iter()
+        .zip(&shapes(world, t0))
+        .filter(|(f, _)| wants(f.kind) && (include_hidden || !hidden.contains(&f.id)))
+        .filter_map(|(f, s)| {
+            let (d, at) = s.distance(p);
+            (d <= radius).then(|| {
+                let dir = if d > 0.0 { compass(p, at) } else { "here" };
+                (d, json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "distance_mi": mi(d), "direction": dir, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) }))
+            })
+        })
+        .collect();
+    let towns = if kinds.is_empty() { radius <= MI } else { wants("district") || wants("building") };
+    if towns {
+        let r = radius.min(5.0 * MI);
+        for h in crate::gazetteer::in_view(world, t0, [p[0] - r, p[1] - r, p[0] + r, p[1] + r], 2_000) {
+            let mut v = hit_json(world, t0, &h);
+            let (kind, id) = (v["kind"].as_str().unwrap_or("").to_string(), v["id"].as_str().unwrap_or("").to_string());
+            let at = [v["x"].as_f64().unwrap_or(0.0), v["y"].as_f64().unwrap_or(0.0)];
+            let d = geom::dist(at, p);
+            if d <= radius && wants(&kind) && (include_hidden || !hidden.contains(&id)) {
+                v["distance_mi"] = json!(mi(d));
+                v["direction"] = json!(if d > 0.0 { compass(p, at) } else { "here" });
+                out.push((d, v));
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let total = out.len();
+    json!({ "x_ft": p[0].round(), "y_ft": p[1].round(), "radius_mi": mi(radius), "found": total, "results": out.into_iter().take(limit).map(|(_, v)| v).collect::<Vec<_>>() })
 }
 
 /// A feature's details: what it is, where, its notes, and how it relates to the world around
@@ -544,9 +640,12 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         "elevation_ft": (ground - world.params().sea_level_ft).round(),
         "hidden": world.file.edits.hidden.contains(id),
         "notes": note_of(world, id),
-        "in": regions_at(&fs, p),
+        "in": regions_at(&fs, &shapes(world, t0), p),
         "nearest_settlements": nearest_settlements(&fs, p, id, 3),
     });
+    if let Some(e) = extent_of(world, t0, id) {
+        v["extent"] = e;
+    }
     if let Some(f) = fs.iter().find(|f| f.id == id) {
         v["kind"] = json!(f.kind);
         v["name"] = json!(f.name);
@@ -707,20 +806,32 @@ pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
 }
 
 /// What is at a point: the ground, the regions, the nearest settlements, the building or
-/// district or site there, and named features within two miles.
+/// district or site there, and named features nearby (a tenth of their size away, 2 to 10 mi).
 pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
     let fs = features(world, t0);
+    let shapes = shapes(world, t0);
     let p = [x, y];
     let sea = world.params().sea_level_ft;
     let ground = t0.sample(x, y, t0.cell_ft);
     let water = t0.sample_water(x, y) as f64;
     let biome = crate::t0::biome::Biome::from_u8(t0.sample_biome(x, y, t0.biome_warp(x, y))[0]).name();
     let here = crate::gazetteer::query(world, t0, x, y).map(|h| with_rename(world, serde_json::to_value(&h).unwrap_or(Value::Null)));
-    let near: Vec<Value> = fs
+    let hidden = &world.file.edits.hidden;
+    let mut near: Vec<(f64, P, &Feature)> = fs
         .iter()
-        .filter(|f| !REGION_KINDS.contains(&f.kind) && f.kind != "ocean" && f.kind != "sea" && geom::dist([f.x, f.y], p) < 2.0 * MI)
-        .take(20)
-        .map(|f| json!({ "id": f.id, "kind": f.kind, "name": f.name, "distance_mi": mi(geom::dist([f.x, f.y], p)), "direction": compass(p, [f.x, f.y]) }))
+        .zip(&shapes)
+        .filter(|(f, _)| !hidden.contains(&f.id))
+        .filter_map(|(f, s)| {
+            let (d, at) = s.distance(p);
+            // (What it lies in is listed under "in".)
+            (d <= reach_ft(f) && !(d == 0.0 && matches!(**s, Shape::Area { .. }))).then_some((d, at, f))
+        })
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let near: Vec<Value> = near
+        .into_iter()
+        .take(25)
+        .map(|(d, at, f)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "distance_mi": mi(d), "direction": if d > 0.0 { compass(p, at) } else { "here" } }))
         .collect();
     // The NPCs and plot points at what is here, or nearby.
     let mut ids: Vec<String> = near.iter().filter_map(|f| f["id"].as_str().map(str::to_string)).collect();
@@ -737,7 +848,7 @@ pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
         "npcs": npcs,
         "plots": plots,
         "biome": biome,
-        "in": regions_at(&fs, p),
+        "in": regions_at(&fs, &shapes, p),
         "here": here,
         "nearby": near,
         "nearest_settlements": nearest_settlements(&fs, p, "", 3),

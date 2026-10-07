@@ -4,6 +4,10 @@
     text: string;
     /** Undo what the toast reports. */
     undo?: () => void;
+    /** Another button (instead of Undo). */
+    action?: { label: string; run: () => void };
+    /** Stays until dismissed. */
+    sticky?: boolean;
   }
 </script>
 
@@ -26,6 +30,13 @@
             t.undo?.();
             onDismiss(t.id);
           }}>Undo</button
+        >
+      {:else if t.action}
+        <button
+          onclick={() => {
+            t.action?.run();
+            onDismiss(t.id);
+          }}>{t.action.label}</button
         >
       {/if}
       <button class="close" onclick={() => onDismiss(t.id)} aria-label="Dismiss">×</button>
@@ -67,6 +78,7 @@
     cursor: pointer;
     font: inherit;
     padding: 1px 8px;
+    white-space: nowrap;
   }
   button:hover {
     background: rgba(243, 236, 216, 0.15);

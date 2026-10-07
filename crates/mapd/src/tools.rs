@@ -17,9 +17,9 @@ fn theme_doc() -> String {
 use crate::Shared;
 
 pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from \
-the map's top-left corner, x east and y south. Find places with search_features or world_overview, inspect them with \
-get_feature and list_children, see them with render_view. Edits (rename, annotate, create, hide) are saved and appear live \
-in the open map app. Created sites are generated like the world's own: a ruin's dungeon or crypt is fully playable. Battlemaps take objects put down or taken away by hand (place_objects, remove_objects), including uploaded sprites (upload_sprite). The DM's notebook holds NPCs (list_npcs, create_npc, place_npc...) and plot points tied to places (list_plots, create_plot...); get_feature and describe_location show those at a place.";
+the map's top-left corner, x east and y south. Find places with search_features, features_near or world_overview, \
+inspect them with get_feature and list_children, see them with render_view. Edits (rename, annotate, create, hide) are saved and appear live \
+in the open map app. Created sites are generated like the world's own: a ruin's dungeon or crypt is fully playable. Battlemaps take objects put down or taken away by hand (place_objects, remove_objects), including uploaded sprites (upload_sprite). Many edits at once go in one batch. Every tool takes an optional world (the hash world_overview gives) and refuses to run if another world is open. The DM's notebook holds NPCs (list_npcs, create_npc, place_npc...) and plot points tied to places (list_plots, create_plot...); get_feature and describe_location show those at a place.";
 
 pub(crate) fn schema(props: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": props, "required": required })
@@ -44,11 +44,12 @@ fn merge(a: Value, b: Value) -> Value {
 pub fn list() -> Value {
     let mut v = json!([
         { "name": "world_overview", "title": "World overview", "description": "The world's size, land masses, counts of named features and its largest settlements.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "search_features", "title": "Search", "description": "Named features matching a query (towns, ranges, rivers, ruins...; from three letters also districts and businesses such as inns and temples). Empty query with a kind lists that kind.", "inputSchema": schema(json!({ "query": { "type": "string" }, "kind": { "type": "string", "description": "Only this kind (city, town, village, ruin, cave, range, forest, river, lake, building, district...)" }, "limit": { "type": "integer", "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &["query"]), "annotations": { "readOnlyHint": true } },
-        { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: what and where it is, its notes, the regions it lies in, nearest settlements, roads to other settlements, a settlement's districts, notable buildings and ways underground, a building's or site's levels and rooms.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
+        { "name": "search_features", "title": "Search", "description": "Named features matching a query, by their current names (towns, ranges, rivers, ruins...; from three letters also districts and businesses such as inns and temples). Empty query with a kind lists that kind. Each result has its extent: bounding box (ft) and area (sq mi), or a river's length (mi).", "inputSchema": schema(json!({ "query": { "type": "string" }, "kind": { "type": "string", "description": "Only this kind (city, town, village, ruin, cave, range, forest, river, lake, building, district...)" }, "limit": { "type": "integer", "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &["query"]), "annotations": { "readOnlyHint": true } },
+        { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: what and where it is, its extent (bounding box, area or length), its notes, the regions it lies in, nearest settlements, roads to other settlements, a settlement's districts, notable buildings and ways underground, a building's or site's levels and rooms.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
         { "name": "list_children", "title": "Children", "description": "What a feature contains: a settlement's districts and businesses, a district's businesses, a building's or underground site's levels and rooms, a region's settlements and sites.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
         { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, each with its id, kind, current and generated name: every named feature (oceans, rivers, ranges, settlements, sites...); with settlement (a settlement's or site's id) its districts, businesses, towers and underground sites; with within (a building or site id) its levels and rooms.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, range, city, district, building, tower, underground, level, room...)" }, "settlement": { "type": "string" }, "within": { "type": "string" } }), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, biome, regions, the building or district or site there, named features nearby, nearest settlements.", "inputSchema": schema(place_props(), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, biome, the areas it lies in (land, sea, range, forest, lake...), the building or district or site there, named features nearby (within a tenth of their size, 2 to 10 mi, measured to their nearest edge or course), nearest settlements.", "inputSchema": schema(place_props(), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "features_near", "title": "Near a place", "description": "Everything named within a radius of a place, nearest first, measured to each feature's nearest edge or course (0 inside an area), with its distance, direction and extent. kinds limits it to some kinds (e.g. [\"river\", \"lake\", \"forest\"]); districts and businesses come when kinds asks for district or building, or with no kinds within a mile.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "default": 5 }, "kinds": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "default": 50 }, "include_hidden": { "type": "boolean", "default": false } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "route", "title": "Route", "description": "Distance between two places by road (where roads join them) or overland, with D&D 5e travel days (normal, fast, slow pace).", "inputSchema": schema(json!({ "from": { "description": "An id, or {x_ft, y_ft}" }, "to": { "description": "An id, or {x_ft, y_ft}" } }), &["from", "to"]), "annotations": { "readOnlyHint": true } },
         { "name": "get_battlemap", "title": "Battlemap", "description": "The battlemap (a 640-ft square of 5-ft squares) at a place: elevation range, surfaces, buildings, and every kind of object with its tactical rules (cover, movement, sight, hazards); objects near the place listed by square.", "inputSchema": schema(merge(place_props(), json!({ "radius_squares": { "type": "number", "default": 12 } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (PNG, 1536x1024). size_ft is the ground across the image: up to about 450 shows the painted battlemap with its 5-ft grid, 3000 a village or a town's streets, 20000 a city and its fields, 200000 a region.", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "default": 3000 } })), &[]), "annotations": { "readOnlyHint": true } },
@@ -73,6 +74,11 @@ pub fn list() -> Value {
         a.extend(crate::build::list());
         a.extend(crate::crossings::list());
         a.extend(crate::design::list());
+        a.extend(crate::batch::list());
+        // Any tool can say which world it means.
+        for t in a.iter_mut() {
+            t["inputSchema"]["properties"]["world"] = json!({ "type": "string", "description": "The world meant (its hash, from world_overview): the call is refused if mapd has another world open" });
+        }
     }
     v
 }
@@ -94,7 +100,37 @@ async fn place(app: &Shared, a: &Value) -> Result<[f64; 2], String> {
     app.worker.with(move |ex| agent::position(&ex.world, &ex.t0, &id).ok_or_else(|| format!("no such feature: {id}"))).await
 }
 
+tokio::task_local! {
+    /// The world a call said it means (its `world`): edits check it again once they hold the gate.
+    static WANT: u64;
+}
+
+/// The world the running call means, if it said.
+pub fn wanted() -> Option<u64> {
+    WANT.try_with(|w| *w).ok()
+}
+
+/// Refused: the call means another world than the one open.
+pub fn other_world(open: Option<u64>, want: u64) -> String {
+    match open {
+        Some(o) => format!("mapd has another world open ({}), not {}: nothing was done", crate::hex(o), crate::hex(want)),
+        None => format!("no world is open (asked for {}): open it in the map app", crate::hex(want)),
+    }
+}
+
 pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, String> {
+    let Some(w) = a["world"].as_str() else { return Box::pin(dispatch(app, name, a)).await };
+    let want = u64::from_str_radix(w.trim(), 16).map_err(|_| format!("world: a hash as world_overview gives it, not {w}"))?;
+    if app.current() != Some(want) {
+        return Err(other_world(app.current(), want));
+    }
+    WANT.scope(want, Box::pin(dispatch(app, name, a))).await
+}
+
+async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, String> {
+    if let Some(r) = crate::batch::call(app, name, &a).await {
+        return r;
+    }
     if let Some(r) = crate::notebook::call(app, name, &a).await {
         return r;
     }
@@ -111,7 +147,11 @@ pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     match name {
-        "world_overview" => app.worker.with(|ex| Ok(agent::overview(&ex.world, &ex.t0))).await.map(text),
+        "world_overview" => {
+            let mut v = app.worker.with(|ex| Ok(agent::overview(&ex.world, &ex.t0))).await?;
+            v["world"] = json!(app.current().map(crate::hex));
+            Ok(text(v))
+        }
         "search_features" => {
             let q = a["query"].as_str().unwrap_or("").to_string();
             let kind = a["kind"].as_str().map(str::to_string);
@@ -134,6 +174,14 @@ pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         "describe_location" => {
             let p = place(app, &a).await?;
             app.worker.with(move |ex| Ok(agent::describe(&ex.world, &ex.t0, p[0], p[1]))).await.map(text)
+        }
+        "features_near" => {
+            let p = place(app, &a).await?;
+            let r = a["radius_mi"].as_f64().unwrap_or(5.0).clamp(0.01, 500.0) * 5280.0;
+            let kinds: Vec<String> = a["kinds"].as_array().map(|v| v.iter().filter_map(|k| k.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            let limit = a["limit"].as_u64().unwrap_or(50).clamp(1, 500) as usize;
+            let hidden = a["include_hidden"].as_bool().unwrap_or(false);
+            app.worker.with(move |ex| Ok(agent::near(&ex.world, &ex.t0, p, r, &kinds, limit, hidden))).await.map(text)
         }
         "route" => {
             let from = place(app, &a["from"]).await?;
@@ -170,10 +218,10 @@ pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         "focus_view" => {
             let p = place(app, &a).await?;
             let size = a["size_ft"].as_f64().unwrap_or(3000.0);
-            if app.to_apps.receiver_count() == 0 {
-                return Err("the map app is not open".into());
+            if app.followers().is_empty() {
+                return Err(app.no_app());
             }
-            let _ = app.to_apps.send(json!({ "type": "focus", "x": p[0], "y": p[1], "size": size }).to_string());
+            app.send(json!({ "type": "focus", "x": p[0], "y": p[1], "size": size, "world": app.current().map(crate::hex) }));
             Ok(text(json!({ "focused": [p[0].round(), p[1].round()], "size_ft": size })))
         }
         "rename_feature" => {
@@ -297,17 +345,20 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
     let p = place(app, &a).await?;
     let asked = a["name"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     // On dry land inside the map, named (the local naming culture's) if no name was given.
-    let n = app.world.lock().unwrap().as_ref().map(|(_, f)| f.edits.created.len()).unwrap_or(0);
+    let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
     c.id = format!("c:{n}");
     let (id, under) = (c.id.clone(), c.under.clone());
     let (p, name) = app.worker.with(move |ex| agent::creation_spot(&ex.world, &ex.t0, &kind, under.as_deref(), &id, p)).await?;
     (c.x, c.y, c.name) = (p[0], p[1], asked.unwrap_or(name));
-    let reply = json!({ "tool": "create_feature", "id": c.id, "kind": c.kind, "name": c.name, "x_ft": p[0].round(), "y_ft": p[1].round() });
-    app.edit("agent", 0, move |e| {
-        e.created.push(c);
-        Ok(reply)
-    })
-    .await?;
-    let id = format!("c:{}", app.world.lock().unwrap().as_ref().map(|(_, f)| f.edits.created.len() - 1).unwrap_or(0));
+    let change = app
+        .edit("agent", 0, move |e| {
+            // (Another client may have created a site meanwhile: take the next id.)
+            c.id = format!("c:{}", e.created.len());
+            let reply = json!({ "tool": "create_feature", "id": c.id, "kind": c.kind, "name": c.name, "x_ft": p[0].round(), "y_ft": p[1].round() });
+            e.created.push(c);
+            Ok(reply)
+        })
+        .await?;
+    let id = change["id"].as_str().unwrap_or_default().to_string();
     app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())).await
 }
