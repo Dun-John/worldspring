@@ -210,35 +210,38 @@ function palm(g: Graphics, r: number, rnd: () => number, v: number) {
   g.circle(-r * 0.04, -r * 0.05, r * 0.035).fill({ color: 0xc89a5a, alpha: 0.8 });
 }
 
-/** Dead tree: a few gnarled, tapering limbs forking out from the trunk, bark lit along the NW side. */
-function deadTree(g: Graphics, r: number, rnd: () => number, v: number) {
-  const bark = [
-    [0x4e3424, 0x7d5a3c, 0xa8825a],
-    [0x4a3a2c, 0x76604a, 0xa08a6c],
-    [0x523628, 0x84603e, 0xb08a5e],
-    [0x463830, 0x6e6052, 0x9a8c78],
-  ][v];
-  // Segments [x, y, x2, y2, width]; each limb bends once, halfway along.
+/** Bare limbs forking out from (0, 0): `n` limbs `len` long and `w` thick at the base, each bending
+ * at `bends` points by up to `twist` and forking `depth` times (a third, short spur now and then with
+ * `spurs`), lengths `spread` apart. Segments [x, y, x2, y2, width]. */
+function bareLimbs(rnd: () => number, n: number, len: number, w: number, depth: number, twist: number, bends = 1, spurs = 0, spread = 0.2): number[][] {
   const segs: number[][] = [];
   const limb = (x: number, y: number, a: number, len: number, w: number, depth: number) => {
-    const bend = (rnd() - 0.5) * 0.7;
-    const xm = x + Math.cos(a) * len * 0.5;
-    const ym = y + Math.sin(a) * len * 0.5;
-    const x2 = xm + Math.cos(a + bend) * len * 0.5;
-    const y2 = ym + Math.sin(a + bend) * len * 0.5;
-    segs.push([x, y, xm, ym, w], [xm, ym, x2, y2, w * 0.75]);
+    let [px, py, pa] = [x, y, a];
+    const parts = bends + 1;
+    for (let i = 0; i < parts; i++) {
+      if (i > 0) pa += (rnd() - 0.5) * twist;
+      const [qx, qy] = [px + (Math.cos(pa) * len) / parts, py + (Math.sin(pa) * len) / parts];
+      segs.push([px, py, qx, qy, w * (1 - (0.3 * i) / parts)]);
+      [px, py] = [qx, qy];
+    }
     if (depth > 0) {
-      limb(x2, y2, a + bend + 0.45 + rnd() * 0.3, len * 0.62, w * 0.6, depth - 1);
-      if (rnd() < 0.8) limb(x2, y2, a + bend - 0.45 - rnd() * 0.3, len * 0.55, w * 0.55, depth - 1);
+      limb(px, py, pa + 0.4 + rnd() * 0.35, len * 0.62, w * 0.6, depth - 1);
+      if (rnd() < 0.85) limb(px, py, pa - 0.4 - rnd() * 0.35, len * 0.56, w * 0.55, depth - 1);
+      if (rnd() < spurs) limb(px, py, pa + (rnd() - 0.5) * 0.4, len * 0.4, w * 0.45, depth - 1);
     }
   };
-  const n = 3 + Math.floor(rnd() * 2);
   const ph = rnd() * Math.PI * 2;
-  for (let i = 0; i < n; i++) limb(0, 0, ph + ((i + (rnd() - 0.5) * 0.5) / n) * Math.PI * 2, r * (0.5 + 0.08 * rnd()), r * 0.16, 2);
-  for (const [x, y, x2, y2, w] of segs) g.moveTo(x, y).lineTo(x2, y2).stroke({ width: w + 3, color: INK, cap: 'round' });
+  for (let i = 0; i < n; i++) limb(0, 0, ph + ((i + (rnd() - 0.5) * 0.5) / n) * Math.PI * 2, len * (1 - spread / 2 + spread * rnd()), w, depth);
+  return segs;
+}
+
+/** Limbs drawn in ink, then bark, then a thin lighter line along each one's NW side (`bark`: dark, mid,
+ * light; `ink` the outline's width beyond the limb). */
+function drawLimbs(g: Graphics, segs: number[][], bark: readonly number[], ink = 3) {
+  for (const [x, y, x2, y2, w] of segs) g.moveTo(x, y).lineTo(x2, y2).stroke({ width: w + ink, color: INK, cap: 'round' });
   for (const [x, y, x2, y2, w] of segs) g.moveTo(x, y).lineTo(x2, y2).stroke({ width: w, color: bark[1], cap: 'round' });
-  // Lit edge: a thin lighter line along each limb's NW side.
   for (const [x, y, x2, y2, w] of segs) {
+    if (w < 2.5) continue;
     const len = Math.hypot(x2 - x, y2 - y) || 1;
     let nx = -(y2 - y) / len;
     let ny = (x2 - x) / len;
@@ -246,9 +249,60 @@ function deadTree(g: Graphics, r: number, rnd: () => number, v: number) {
     const o = w * 0.22;
     g.moveTo(x + nx * o, y + ny * o).lineTo(x2 + nx * o, y2 + ny * o).stroke({ width: w * 0.3, color: bark[2], cap: 'round', alpha: 0.9 });
   }
-  g.poly(blob(0, 0, r * 0.2, 9, 0.25, rnd)).fill(bark[0]).stroke({ width: 2, color: INK });
-  g.circle(-r * 0.02, -r * 0.02, r * 0.13).fill(bark[2]);
-  g.circle(-r * 0.02, -r * 0.02, r * 0.07).stroke({ width: 1.5, color: bark[1] });
+}
+
+/** Roots spreading over the ground from a trunk `size` across (darker than the limbs above them, in
+ * shade), and the trunk's foot: a lobed base where they meet. */
+function rootsAndTrunk(g: Graphics, rnd: () => number, size: number, bark: readonly number[]) {
+  // Unforked and wavering, tapering to a point as they run into the ground.
+  const len = size * 2.5;
+  const roots = bareLimbs(rnd, 6 + Math.floor(rnd() * 2), len, size * 0.7, 0, 0.9, 2, 0, 0.5).map(([x, y, x2, y2, w]) => {
+    const d = Math.hypot((x + x2) / 2, (y + y2) / 2) / len;
+    return [x, y, x2, y2, w * Math.max(0.25, 1 - 0.85 * d)];
+  });
+  const dark = [shade(bark[0], 0.8), shade(bark[0], 1.15), shade(bark[1], 0.9)];
+  drawLimbs(g, roots, dark, 2.5);
+  g.poly(blob(0, 0, size, 10, 0.35, rnd)).fill(dark[1]).stroke({ width: 2, color: INK, join: 'round' });
+  g.poly(blob(-size * 0.12, -size * 0.12, size * 0.6, 8, 0.3, rnd)).fill({ color: dark[2], alpha: 0.8 });
+}
+
+/** Dead tree: a few gnarled, tapering limbs forking out from where the trunk splits, over the trunk's
+ * foot and its roots on the ground, bark lit along the NW side. */
+function deadTree(g: Graphics, r: number, rnd: () => number, v: number) {
+  const bark = [
+    [0x4e3424, 0x7d5a3c, 0xa8825a],
+    [0x4a3a2c, 0x76604a, 0xa08a6c],
+    [0x523628, 0x84603e, 0xb08a5e],
+    [0x463830, 0x6e6052, 0x9a8c78],
+  ][v];
+  if (v === 3) {
+    // The first dead tree's limbs, as drawn before the others were redrawn.
+    const segs: number[][] = [];
+    const limb = (x: number, y: number, a: number, len: number, w: number, depth: number) => {
+      const bend = (rnd() - 0.5) * 0.7;
+      const xm = x + Math.cos(a) * len * 0.5;
+      const ym = y + Math.sin(a) * len * 0.5;
+      const x2 = xm + Math.cos(a + bend) * len * 0.5;
+      const y2 = ym + Math.sin(a + bend) * len * 0.5;
+      segs.push([x, y, xm, ym, w], [xm, ym, x2, y2, w * 0.75]);
+      if (depth > 0) {
+        limb(x2, y2, a + bend + 0.45 + rnd() * 0.3, len * 0.62, w * 0.6, depth - 1);
+        if (rnd() < 0.8) limb(x2, y2, a + bend - 0.45 - rnd() * 0.3, len * 0.55, w * 0.55, depth - 1);
+      }
+    };
+    const n = 3 + Math.floor(rnd() * 2);
+    const ph = rnd() * Math.PI * 2;
+    for (let i = 0; i < n; i++) limb(0, 0, ph + ((i + (rnd() - 0.5) * 0.5) / n) * Math.PI * 2, r * (0.5 + 0.08 * rnd()), r * 0.16, 2);
+    rootsAndTrunk(g, rnd, r * 0.2, bark);
+    drawLimbs(g, segs, bark);
+    return;
+  }
+  rootsAndTrunk(g, rnd, r * 0.2, bark);
+  // (Drawn within its frame: limbs reaching past it are pulled in.)
+  const segs = bareLimbs(rnd, 3 + Math.floor(rnd() * 2), r * 0.54, r * 0.2, 2, 0.7);
+  const reach = Math.max(...segs.map(([, , x2, y2]) => Math.hypot(x2, y2)));
+  const k = Math.min(1, (r * 0.95) / reach);
+  drawLimbs(g, segs.map(([x, y, x2, y2, w]) => [x * k, y * k, x2 * k, y2 * k, w]), bark);
 }
 
 function strokes(g: Graphics, r: number, rnd: () => number, n: number, len: number, colors: number[], width: number) {

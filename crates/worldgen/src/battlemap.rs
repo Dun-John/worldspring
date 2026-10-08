@@ -408,8 +408,8 @@ fn profile(b: Biome) -> &'static [(Kind, f64, bool)] {
         Biome::Swamp => &[(TreeWillow, 2.5, false), (TreeDead, 1.5, false), (Reeds, 5.0, true), (Bog, 0.4, false), (Mushrooms, 0.4, false), (Bush, 1.0, false)],
         Biome::Volcanic => &[(BasaltPillar, 0.5, false), (Boulder, 1.0, false), (Obsidian, 0.4, false), (SteamVent, 0.15, false), (LavaPool, 0.06, false), (RockSmall, 1.5, false)],
         Biome::SaltFlat => &[(RockSmall, 0.3, false), (Bones, 0.08, false)],
-        Biome::Blight => &[(TreeDead, 7.0, false), (FallenLog, 1.2, false), (Stump, 1.0, false), (Mushrooms, 0.9, false), (Brambles, 0.3, false), (Bog, 0.2, false), (Bones, 0.12, false)],
-        Biome::Ashland => &[(TreeDead, 0.6, false), (Stump, 0.8, false), (Boulder, 0.6, false), (RockSmall, 1.5, false), (Obsidian, 0.15, false), (Bones, 0.08, false)],
+        Biome::Blight => &[(TreeDead, 7.0, false), (FallenLog, 1.0, false), (Stump, 0.6, false), (Mushrooms, 0.9, false), (Brambles, 0.3, false), (Bog, 0.2, false), (Bones, 0.12, false)],
+        Biome::Ashland => &[(TreeDead, 0.6, false), (Stump, 0.5, false), (Boulder, 0.6, false), (RockPile, 0.2, false), (Obsidian, 0.15, false), (Bones, 0.08, false)],
         Biome::Ocean | Biome::Lake => &[(Reeds, 3.0, true), (Boulder, 0.3, false)],
     }
 }
@@ -447,7 +447,7 @@ fn fallback_feature(b: Biome, rng: &mut Pcg32) -> Kind {
         Biome::Swamp => &[Bog, Mushrooms],
         Biome::Volcanic => &[SteamVent, Obsidian],
         Biome::Blight => &[Mushrooms, Bog, Bones],
-        Biome::Ashland => &[Bones, Obsidian, RockSmall],
+        Biome::Ashland => &[Bones, Obsidian],
         Biome::Ocean | Biome::Lake => &[Reeds, RockSmall],
     };
     opts[rng.below(opts.len() as u32) as usize]
