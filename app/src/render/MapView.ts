@@ -202,6 +202,9 @@ export class MapView {
   private cursor: { sx: number; sy: number } | null = null;
   private frameTimes: number[] = [];
   private lastFrame = performance.now();
+  /** The camera at the last frame, and when it last moved (or was dragged). */
+  private lastCam: [number, number, number] = [0, 0, 0];
+  private movedAt = performance.now();
   /** Per-frame CPU timings (ms) of the last frame, for the benchmark's slow-frame breakdown. */
   prof = { tiles: 0, labels: 0, play: 0, uploads: 0, render: 0, gpu: 0, frame: 0, ev: '' };
   /** CPU time (ms) of play mode in the last frame (part of `labels` in the profile). */
@@ -858,6 +861,19 @@ export class MapView {
     this.fly = { path, start: performance.now(), ms: Math.max(300, (path.duration * 1000) / speed) };
   }
 
+  /** How long (ms) the map has been still: no pan, zoom, fly or drag. Work that costs a frame
+   * (the address bar's link) waits for it, so the frame it drops is one nobody sees move. */
+  stillMs(): number {
+    return performance.now() - this.movedAt;
+  }
+
+  private noteMotion(now: number) {
+    const [x, y, z] = this.lastCam;
+    const c = this.cam;
+    if (this.drag || this.fly || c.cx !== x || c.cy !== y || c.zoom !== z) this.movedAt = now;
+    this.lastCam = [c.cx, c.cy, c.zoom];
+  }
+
   /** Fraction of target-level tiles in view that are loaded and faded in. */
   get readiness(): number {
     const s = this.tiles?.stats;
@@ -877,6 +893,7 @@ export class MapView {
     if (this.frameTimes.length > 120) this.frameTimes.shift();
     this.syncSize();
 
+    this.noteMotion(now);
     const driven = this.driver?.(now);
     if (driven) {
       this.cam.set(driven);

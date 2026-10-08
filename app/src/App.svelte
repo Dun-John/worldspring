@@ -278,15 +278,28 @@
     else void shareAssets(assetIds(edits));
   };
 
-  /** Keep the world in the address bar (its edits too while they are short; a big sketch only
-   * by name, the world kept in this browser) and its edits in this browser: once a burst of
-   * changes settles (a big world's edits take a while to store), at once when the page is hidden
-   * or closed. */
+  /** Keep the world's edits in this browser once a burst of changes settles (a big world's edits
+   * take a while to store), and the world in the address bar (its edits too while they are short;
+   * a big sketch only by name, the world kept in this browser) once changes pause and the map is
+   * still: a new address costs a frame (the browser updating the tab, ~12-20 ms late), which
+   * while panning took the edit bench's 1% lows from ~46 to ~35 fps. Both at once when the page
+   * is hidden or closed. */
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let linkTimer: ReturnType<typeof setTimeout> | null = null;
+  const LINK_IDLE_MS = 2000;
+  const LINK_STILL_MS = 300;
   function saveUrl() {
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(flushSave, 300);
+    saveTimer = setTimeout(saveNow, 300);
+    if (linkTimer) clearTimeout(linkTimer);
+    linkTimer = setTimeout(linkWhenStill, LINK_IDLE_MS);
   }
+  function linkWhenStill() {
+    if (view.stillMs() >= LINK_STILL_MS) writeLink();
+    else linkTimer = setTimeout(linkWhenStill, 250);
+  }
+  /** A store or a link still to be written. */
+  const savePending = () => saveTimer !== null || linkTimer !== null;
   /** What the address keeps of the page's query when it is rewritten: a bench run, and which
    * mapd to reach (`?mapd=0` none: a reload must not reach the default one). */
   const keptSearch = (() => {
@@ -298,9 +311,9 @@
   })();
   /** The address bar's newest link (an older one finishing later is dropped). */
   let linkSeq = 0;
-  function flushSave(): Promise<void> {
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = null;
+  function writeLink() {
+    if (linkTimer) clearTimeout(linkTimer);
+    linkTimer = null;
     const w = world;
     const seq = ++linkSeq;
     void linkFor(w, keepLinked)
@@ -310,7 +323,16 @@
         history.replaceState(null, '', location.pathname + keptSearch + link.hash);
       })
       .catch((e) => console.warn('[link]', e));
-    return saveEdits(editsKey(w), w.edits ?? {});
+  }
+  function saveNow(): Promise<void> {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    return saveEdits(editsKey(world), world.edits ?? {});
+  }
+  /** The link and the store now. */
+  function flushSave(): Promise<void> {
+    writeLink();
+    return saveNow();
   }
 
   // The edits this tab's own address carried (by `editsStamp`), kept for the tab's life: a link
@@ -487,9 +509,9 @@
 
   /** In an older generator's build: open this world in the newest, upgraded. */
   async function upgradeToNewest() {
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = null;
-    await saveEdits(editsKey(world), world.edits ?? {});
+    if (linkTimer) clearTimeout(linkTimer);
+    linkTimer = null;
+    await saveNow();
     location.href = await buildUrl(world, null, '?upgrade=1');
   }
 
@@ -570,7 +592,7 @@
     if (sketchOn) leaveSketch();
     shell.tabs.world = 'generate';
     // (The world being left keeps its last changes.)
-    if (saveTimer) flushSave();
+    if (savePending()) flushSave();
     busy = true;
     // The world shown regenerated (or redrawn) keeps its edits; another has those this browser
     // kept for it. A world opened (a file, a saved world, a link) brings its own edits, or none:
@@ -1748,7 +1770,7 @@
     const onKey = createKeyHandler(() => keymap, () => shell.help || !!shell.ask || !!versionAsk || !!openAsk || !!restoreAsk);
     window.addEventListener('keydown', onKey);
     // Changes not yet stored are stored before the page goes.
-    const flush = () => saveTimer && flushSave();
+    const flush = () => savePending() && flushSave();
     const hidden = () => document.visibilityState === 'hidden' && flush();
     window.addEventListener('pagehide', flush);
     document.addEventListener('visibilitychange', hidden);
