@@ -66,6 +66,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | Settlements | `metropolis`, `city`, `town`, `village` |
 | Sites | `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube`; created or drawn in the sketch only: `entrance`; created only: `building` |
 | Nature | `continent`, `island`, `ocean`, `sea`, `bay`, `range`, `peak`, `pass`, `volcano`, `river`, `lake`, `waterfall` |
+| Roads | drawn and named in the sketch only: `road` (its `detail` is its class: king's road, road or track) |
 | Regions | `forest`, `jungle`, `taiga`, `desert`, `swamp`, `plains`, `tundra`, `glacier`, `salt_flat`; painted in the sketch only: `blight` (blighted woods), `ashlands`; drawn in the sketch only: `region` |
 | Inside settlements | `district`, `building`, `tower`, `underground` (in `list_names`) |
 | Inside buildings and sites | `level`, `room` (in `list_names`) |
@@ -226,6 +227,31 @@ The distance between two places:
 { "name": "route", "arguments": { "from": "city:bab44567", "to": { "x_ft": 1200000, "y_ft": 2500000 } } }
 ```
 > *"How many days does it take to ride from Agentholm to Geirgai at a fast pace?"* · *"What's the route from Gatewatch to the capital, and which towns does it pass?"*
+
+### `list_roads`
+The road network:
+- `named`: the roads drawn and named in the world's sketch, each with its id, name, class, length and the
+  settlements along it, in order;
+- `roads`: the roads between settlements and junctions, longest first, each with its `class` (king's road, road,
+  track), `length_mi`, and its ends `from` and `to` (a settlement's `id` and `name`, or a junction's
+  `x_ft`/`y_ft`); a drawn road's pieces say which (`road`: its name, or `drawn: true`);
+- `count`: how many roads matched, `shown`: how many are listed.
+
+| Parameter | Type | Default | |
+|---|---|---|---|
+| `id` or `x_ft` + `y_ft` | | none | Only roads within `radius_mi` of this place. |
+| `radius_mi` | number | 25 | |
+| `settlement` | id string | none | Only roads ending at this settlement. |
+| `class` | `kings_road`, `road` or `track` | all | |
+| `drawn` | boolean | false | Only roads drawn in the sketch. |
+| `limit` | integer | 50 | 1–1000. |
+
+```json
+{ "name": "list_roads", "arguments": { "settlement": "city:bab44567" } }
+{ "name": "list_roads", "arguments": { "drawn": true } }
+{ "name": "list_roads", "arguments": { "x_ft": 2310194, "y_ft": 4127619, "radius_mi": 40, "class": "kings_road" } }
+```
+> *"Which roads leave Bladegarden, and where do they go?"* · *"Which towns does the Gilded Roadway pass through?"*
 
 ### `get_battlemap`
 The 640-ft battlemap chunk (128 × 128 five-foot squares) that contains a place, for running a fight there. It

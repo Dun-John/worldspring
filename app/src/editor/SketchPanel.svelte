@@ -1,7 +1,7 @@
 <script lang="ts">
   // World › Sketch: the tools in one strip (all that shows when the panel is folded down),
   // the chosen tool's options, the preview, what the world can't follow, and Generate.
-  import type { Conflict, PinKind, SiteKind, VolcanoActivity, VolcanoKind } from '../gen/protocol';
+  import type { Conflict, PinKind, RoadKind, SiteKind, VolcanoActivity, VolcanoKind } from '../gen/protocol';
   import { PAINT_BIOMES } from '../world/world';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
@@ -48,6 +48,7 @@
     ['pin', 'castle', 'Settlement', 'T', 'Click to place a settlement of the chosen size.'],
     ['site', 'ruin', 'Site', 'D', 'Click to place a ruin, tower, camp, inn, cave, mine or way underground.'],
     ['region', 'tag', 'Name', 'N', 'Type a name, then click what it names: a region, mountains, a lake, an island or a sea (names in one region share it out). Or draw round a region of your own.'],
+    ['road', 'road', 'Road', 'O', 'Draw a road along its way: it follows your line, round water, and joins the settlements at its ends and beside it. No road: draw across the planned roads you don’t want.'],
     ['erase', 'eraser', 'Erase', 'E', 'Click a stroke or settlement to remove it.'],
   ];
   const PIN_KINDS: [PinKind | '', string][] = [
@@ -105,6 +106,12 @@
     ['sea', 'Sea'],
     ['ocean', 'Ocean'],
   ];
+  const ROADS: [RoadKind, string][] = [
+    ['kings_road', "King's road"],
+    ['road', 'Road'],
+    ['track', 'Track'],
+    ['none', 'No road'],
+  ];
   const TIERS: [PinTier, string][] = [
     ['metropolis', 'Metropolis'],
     ['city', 'City'],
@@ -123,7 +130,7 @@
     ['extinct', 'Extinct'],
   ];
   const tool = $derived(TOOLS.find((t) => t[0] === settings.tool)!);
-  const brushKey = $derived(['coast', 'lake', 'volcano', 'pin', 'site', 'region', 'erase'].includes(settings.tool) ? null : settings.tool);
+  const brushKey = $derived(['coast', 'lake', 'volcano', 'pin', 'site', 'region', 'road', 'erase'].includes(settings.tool) ? null : settings.tool);
   const brushLabel = $derived(({ river: 'Valley', range: 'Width', massif: 'Foothills', elevation: 'Edge' } as Record<string, string>)[settings.tool] ?? 'Brush');
   const hasEdges = $derived(['coast', 'land', 'sea', 'biome', 'elevation'].includes(settings.tool));
   const hasStrength = $derived(['range', 'massif', 'river', 'volcano'].includes(settings.tool));
@@ -143,6 +150,7 @@
     river: 'River name',
     biome: 'Region name',
     site: 'Site name',
+    road: 'Road name',
   };
   const feet = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString()} ft`;
 
@@ -275,7 +283,12 @@
         </select>
       </label>
     {/if}
-    {#if NAMED[settings.tool]}
+    {#if settings.tool === 'road'}
+      <div class="ws-seg" role="radiogroup" aria-label="Kind of road">
+        {#each ROADS as [k, label] (k)}<button class:on={settings.road === k} onclick={() => (settings.road = k)}>{label}</button>{/each}
+      </div>
+    {/if}
+    {#if NAMED[settings.tool] && !(settings.tool === 'road' && settings.road === 'none')}
       <input class="ws-input" placeholder="Name (optional)" bind:value={settings.name} aria-label={NAMED[settings.tool]} />
     {/if}
 
@@ -316,7 +329,7 @@
   }
   .tools {
     display: grid;
-    grid-template-columns: repeat(7, 1fr);
+    grid-template-columns: repeat(8, 1fr);
     gap: 2px;
   }
   .tools .ws-icon-btn {

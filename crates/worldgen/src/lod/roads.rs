@@ -20,6 +20,8 @@ pub struct RoadCurve {
     pub seed: u64,
     /// Cumulative chord length (ft) at each control point.
     pub s: Vec<f64>,
+    /// The sketch's road stroke it follows, if drawn.
+    pub stroke: Option<u32>,
 }
 
 /// Broad sweeps and gentle bends (in T0 cells) and short kinks (ft).
@@ -37,7 +39,13 @@ impl RoadCurve {
             let (a, b) = (pts[k - 1], pts[k]);
             s[k] = s[k - 1] + crate::core::sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]));
         }
-        RoadCurve { class, pts, z, wander, seed, s }
+        RoadCurve { class, pts, z, wander, seed, s, stroke: None }
+    }
+
+    /// The same, following drawn road `stroke`.
+    pub fn drawn(mut self, stroke: Option<u32>) -> RoadCurve {
+        self.stroke = stroke;
+        self
     }
 
     /// Point on segment `k` at parameter `t`: centripetal Catmull-Rom through the control

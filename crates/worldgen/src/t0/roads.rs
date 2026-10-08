@@ -19,6 +19,7 @@ use super::biome::Biome;
 use super::hydro::{Hydro, NO_LAKE};
 use super::settle::{Poi, PoiKind, Settlement, Tier};
 use crate::World;
+use crate::world::SketchTool;
 use crate::core::grid::Grid;
 use crate::core::noise::{gradient2, smoothstep};
 use crate::core::rng::Pcg32;
@@ -60,6 +61,8 @@ pub struct RoadPath {
     pub z: Vec<f32>,
     /// 1 where the road may wander sideways at fine scale, 0 on switchback legs.
     pub wander: Vec<f32>,
+    /// The sketch's road stroke it follows, if drawn.
+    pub stroke: Option<u32>,
 }
 
 /// How a road of `class` crosses a river `width_ft` wide: a track wades a creek under 30 ft, a
@@ -109,6 +112,10 @@ impl Plan {
 
 pub struct Inputs<'a> {
     pub world: &'a World,
+    /// The sketch's roads (`drawn`).
+    pub drawn: Vec<Drawn>,
+    /// Their routes, found once (`Inputs::pre`).
+    pub pre: std::cell::OnceCell<DrawnRoutes>,
     pub plan: &'a Plan,
     /// The plan's ground at any point (ft): what the plan's grid samples every half cell.
     pub ground: &'a dyn Fn(f64, f64) -> f64,
@@ -122,6 +129,82 @@ pub struct Inputs<'a> {
     /// The routes `route` found last time (see `RouteKey`), for the next call to reuse.
     pub routes: std::cell::RefCell<Vec<(RouteKey, Option<Vec<u32>>)>>,
 }
+
+impl Inputs<'_> {
+    /// The drawn roads' routes (found on first use; they depend on no settlement).
+    pub fn pre(&self) -> &DrawnRoutes {
+        self.pre.get_or_init(|| drawn_routes(self))
+    }
+}
+
+/// A road drawn in the sketch (`SketchTool::Road`), in T0 cells: a road along its line, or
+/// (`class` None) a line no planned road crosses.
+#[derive(Clone, Debug)]
+pub struct Drawn {
+    pub stroke: u32,
+    pub class: Option<RoadClass>,
+    pub pts: Vec<[f64; 2]>,
+}
+
+/// The sketch's roads, in cells of `cell` ft on a `w` × `h` grid.
+pub fn drawn(world: &World, w: usize, h: usize, cell: f64) -> Vec<Drawn> {
+    let strokes = world.file.sketch.strokes.iter().enumerate().filter(|(_, s)| s.tool == SketchTool::Road && s.pts.len() >= 2);
+    strokes
+        .map(|(i, s)| Drawn {
+            stroke: i as u32,
+            class: match s.kind.as_deref() {
+                Some("kings_road") => Some(RoadClass::KingsRoad),
+                Some("track") => Some(RoadClass::Track),
+                Some("none") => None,
+                _ => Some(RoadClass::Road),
+            },
+            pts: s.pts.iter().map(|p| [(p[0] / cell).clamp(0.0, (w - 1) as f64), (p[1] / cell).clamp(0.0, (h - 1) as f64)]).collect(),
+        })
+        .collect()
+}
+
+/// Settlements this close to a drawn road (mi) join it: at its ends it runs on to them,
+/// beside it a side road leaves it for them; planned links between two of them are dropped.
+const SNAP_MI: f64 = 3.0;
+/// A drawn road is routed through waypoints this far apart along its line (cells), each leg
+/// within `CORRIDOR` cells of the line (else `CORRIDOR_WIDE`, else `CORRIDOR_ROUND`: round
+/// water in the way), its cost growing with the square of the distance from it (`DEVIATE` per
+/// cell², less in the wider corridors).
+const WAYPOINT: f64 = 6.0;
+const CORRIDOR: f64 = 2.5;
+const CORRIDOR_WIDE: f64 = 8.0;
+const CORRIDOR_ROUND: f64 = 40.0;
+const DEVIATE: f64 = 2.0;
+
+/// The drawn roads' routes on the T0 grid and the cells their barriers close.
+#[derive(Default)]
+pub struct DrawnRoutes {
+    /// Per drawn road, its cells (in pieces where it can't be followed): class, cells, stroke.
+    pub routes: Vec<(RoadClass, Vec<u32>, u32)>,
+    /// Cells planned roads may not enter (within about a cell of a `none` line); empty when
+    /// there is none.
+    pub blocked: Vec<bool>,
+    pub conflicts: Vec<super::sketch::Conflict>,
+}
+
+/// One road to route: between two settlements (`End::Town`) or a settlement and a cell.
+#[derive(Clone, Copy, Debug)]
+pub enum End {
+    Town(usize),
+    Cell(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Link {
+    pub a: End,
+    pub b: End,
+    pub class: RoadClass,
+    /// A drawn road's stroke (where it runs on to a settlement at its end).
+    pub stroke: Option<u32>,
+}
+
+/// A route found: its class, cells and drawn road's stroke.
+pub type Routed = (RoadClass, Vec<u32>, Option<u32>);
 
 /// What a route depends on besides the routes before it: its end cells, class and the towns
 /// at its ends (centre cell, radius bits). Calls whose links begin alike (the king's roads,
@@ -151,16 +234,18 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     let p = inp.world.params();
     let river_q = 90_000.0 / p.river_density;
 
-    let edges = link_edges(settlements, &[RoadClass::KingsRoad, RoadClass::Road, RoadClass::Track]);
+    let edges = links(inp, settlements, &[RoadClass::KingsRoad, RoadClass::Road, RoadClass::Track]);
     let (_, paths) = route(inp, settlements, &edges);
 
-    // --- 3. Segments between junctions (and settlements), from the union of routes.
-    let mut links: std::collections::BTreeMap<(u32, u32), u8> = Default::default();
-    for (class, path) in &paths {
+    // --- 3. Segments between junctions (and settlements), from the union of routes: per
+    // step, the best class over it and the drawn road it is part of (the first).
+    let mut links: std::collections::BTreeMap<(u32, u32), (u8, Option<u32>)> = Default::default();
+    for (class, path, stroke) in &paths {
         for pair in path.windows(2) {
             let key = (pair[0].min(pair[1]), pair[0].max(pair[1]));
-            let e = links.entry(key).or_insert(*class as u8);
-            *e = (*e).min(*class as u8);
+            let e = links.entry(key).or_insert((*class as u8, *stroke));
+            e.0 = e.0.min(*class as u8);
+            e.1 = e.1.or(*stroke);
         }
     }
     let mut adj: std::collections::BTreeMap<u32, Vec<u32>> = Default::default();
@@ -168,9 +253,11 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
         adj.entry(a).or_default().push(b);
         adj.entry(b).or_default().push(a);
     }
-    let is_node = |c: u32, adj: &std::collections::BTreeMap<u32, Vec<u32>>| adj[&c].len() != 2 || settlements.iter().any(|s| s.cell as u32 == c);
+    // (Where a drawn road begins or ends on another road is a node too.)
+    let step_stroke = |a: u32, b: u32| links[&(a.min(b), a.max(b))].1;
+    let is_node = |c: u32, adj: &std::collections::BTreeMap<u32, Vec<u32>>| adj[&c].len() != 2 || settlements.iter().any(|s| s.cell as u32 == c) || step_stroke(c, adj[&c][0]) != step_stroke(c, adj[&c][1]);
     let mut used: std::collections::BTreeSet<(u32, u32)> = Default::default();
-    let mut segments: Vec<(RoadClass, Vec<u32>)> = Vec::new();
+    let mut segments: Vec<(RoadClass, Vec<u32>, Option<u32>)> = Vec::new();
     for (&start, nbs) in &adj {
         if !is_node(start, &adj) {
             continue;
@@ -182,7 +269,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
             }
             let mut seg = vec![start, first];
             used.insert(key);
-            let mut class = links[&key];
+            let (mut class, stroke) = links[&key];
             let (mut prev, mut cur) = (start, first);
             while !is_node(cur, &adj) {
                 let next = *adj[&cur].iter().find(|&&x| x != prev).unwrap();
@@ -191,12 +278,12 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
                     break;
                 }
                 used.insert(k2);
-                class = class.min(links[&k2]);
+                class = class.min(links[&k2].0);
                 seg.push(next);
                 prev = cur;
                 cur = next;
             }
-            segments.push((RoadClass::from_u8(class), seg));
+            segments.push((RoadClass::from_u8(class), seg, stroke));
         }
     }
 
@@ -212,7 +299,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
         passable_fn(inp)(k) || (inp.hydro.lake_of[k] == NO_LAKE && fine_ground(p) > sea + 3.0)
     };
     let mut roads: Vec<RoadPath> = Vec::new();
-    for (class, seg) in &segments {
+    for (class, seg, stroke) in &segments {
         let mut cells: Vec<[f64; 2]> = seg.iter().map(|&c| [(c as usize % w) as f64, (c as usize / w) as f64]).collect();
         // Ends at a settlement meet it where it actually stands.
         for (end, c) in [(0, seg[0]), (cells.len() - 1, seg[seg.len() - 1])] {
@@ -220,7 +307,11 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
                 cells[end] = [s.x / cell, s.y / cell];
             }
         }
-        let chords = simplify(&cells, w, h, hgrid, class.max_grade(), cell, passable_fn(inp));
+        // A drawn road keeps to its line wherever that is dry (the cells only found its way).
+        let chords = match stroke.and_then(|st| inp.drawn.iter().find(|d| d.stroke == st)) {
+            Some(d) => along_drawn(&cells, &d.pts, &|p| fine_dry(p), &|run| simplify(run, 1.0, w, h, hgrid, class.max_grade(), cell, passable_fn(inp))),
+            None => simplify(&cells, 2.5, w, h, hgrid, class.max_grade(), cell, passable_fn(inp)),
+        };
         let (mut pts, mut wander) = switchbacks(hgrid, &chords, class.max_grade(), cell, passable_fn(inp), &fine_ground, &fine_dry);
         // Towns and cities are entered at their urban edge (gates); the streets take over.
         for at_start in [true, false] {
@@ -258,7 +349,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
             *wt *= (smoothstep(0.6, 2.2, clear) * (1.0 - 0.85 * smoothstep(0.01, 0.05, slope))) as f32;
         }
         let z = profile(hgrid, &pts, class.max_grade(), cell);
-        roads.push(RoadPath { class: *class, pts: pts.iter().map(|p| [p[0] * cell, p[1] * cell]).collect(), z, wander });
+        roads.push(RoadPath { class: *class, pts: pts.iter().map(|p| [p[0] * cell, p[1] * cell]).collect(), z, wander, stroke: *stroke });
     }
 
     // Junctions outside settlements become Ys.
@@ -277,7 +368,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
 
     // --- 4. Crossings and waystations.
     let mut crossings: Vec<Crossing> = Vec::new();
-    for (class, seg) in &segments {
+    for (class, seg, _) in &segments {
         for pair in seg.windows(2) {
             let (a, b) = (pair[0] as usize, pair[1] as usize);
             // The road steps onto a river cell from a cell that is not part of it.
@@ -370,48 +461,390 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass]) -> Vec<(usize, 
     edges
 }
 
-/// A* routes for the links, in order (later routes reuse earlier ones). Returns the best
-/// (lowest) class per cell (`u8::MAX` = none) and each route's cells.
-pub fn route(inp: &Inputs, settlements: &[Settlement], edges: &[(usize, usize, RoadClass)]) -> (Vec<u8>, Vec<(RoadClass, Vec<u32>)>) {
+/// The links to route for these classes: the planned ones (`link_edges`) less those a drawn
+/// road makes (both ends beside the same one) or a `none` line cuts, then a link from every
+/// settlement beside a drawn road to it (at the road's end it carries the road on).
+pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) -> Vec<Link> {
+    let cell = inp.cell_ft;
+    let pre = inp.pre();
+    let snap = SNAP_MI * 5280.0 / cell;
+    let at = |s: &Settlement| [s.x / cell, s.y / cell];
+    // The drawn roads each settlement lies beside.
+    let beside: Vec<Vec<usize>> = settlements.iter().map(|s| inp.drawn.iter().enumerate().filter(|(_, d)| d.class.is_some() && line_dist(at(s), &d.pts) <= snap).map(|(i, _)| i).collect()).collect();
+    let barriers: Vec<&Drawn> = inp.drawn.iter().filter(|d| d.class.is_none()).collect();
+    let mut out: Vec<Link> = link_edges(settlements, classes)
+        .into_iter()
+        .filter(|&(a, b, _)| !beside[a].iter().any(|d| beside[b].contains(d)) && !barriers.iter().any(|d| crosses(at(&settlements[a]), at(&settlements[b]), &d.pts)))
+        .map(|(a, b, class)| Link { a: End::Town(a), b: End::Town(b), class, stroke: None })
+        .collect();
+    let w = inp.w;
+    for (si, s) in settlements.iter().enumerate() {
+        for &di in &beside[si] {
+            let d = &inp.drawn[di];
+            let near = |k: u32| {
+                let (dx, dy) = ((k as usize % w) as f64 - (s.cell % w) as f64, (k as usize / w) as f64 - (s.cell / w) as f64);
+                dx * dx + dy * dy
+            };
+            let cells = pre.routes.iter().filter(|r| r.2 == d.stroke).flat_map(|r| r.1.iter().copied());
+            let Some(c) = cells.min_by(|&a, &b| near(a).total_cmp(&near(b)).then(a.cmp(&b))) else { continue };
+            if c as usize == s.cell {
+                continue;
+            }
+            let class = d.class.unwrap_or(RoadClass::Road);
+            // At its ends the drawn road runs on into the settlement; beside it, a side road of
+            // the settlement's own class (no better than the road it leaves) goes to it.
+            let end = [d.pts[0], d.pts[d.pts.len() - 1]].iter().any(|&p| dist(p, at(s)) <= snap);
+            let own = match s.tier {
+                Tier::Village => RoadClass::Track,
+                Tier::Town => RoadClass::Road,
+                _ => RoadClass::KingsRoad,
+            };
+            let (class, stroke) = if end { (class, Some(d.stroke)) } else { (class.max(own), None) };
+            out.push(Link { a: End::Town(si), b: End::Cell(c as usize), class, stroke });
+        }
+    }
+    out
+}
+
+/// Distance (cells) from a point to a polyline.
+fn line_dist(p: [f64; 2], line: &[[f64; 2]]) -> f64 {
+    line.windows(2).map(|w| seg_dist(p, w[0], w[1])).fold(f64::INFINITY, f64::min)
+}
+
+fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    dist(p, [a[0] + t * dx, a[1] + t * dy])
+}
+
+/// Whether segment a–b crosses the polyline.
+fn crosses(a: [f64; 2], b: [f64; 2], line: &[[f64; 2]]) -> bool {
+    let side = |p: [f64; 2], q: [f64; 2], r: [f64; 2]| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    line.windows(2).any(|w| side(a, b, w[0]) * side(a, b, w[1]) < 0.0 && side(w[0], w[1], a) * side(w[0], w[1], b) < 0.0)
+}
+
+/// 16 directions (knight moves too) so paths are not limited to 45° headings.
+const DIRS: [(i64, i64); 16] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1), (2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2)];
+
+/// A* on the T0 grid, its tables kept between searches.
+struct Search {
+    g: Vec<f64>,
+    came: Vec<u32>,
+    touched: Vec<usize>,
+}
+
+impl Search {
+    fn new(n: usize) -> Search {
+        Search { g: vec![f64::INFINITY; n], came: vec![u32::MAX; n], touched: Vec::new() }
+    }
+
+    /// The cheapest path from `start` to `goal` within the box `[x0, x1, y0, y1]` (cells), over
+    /// cells that are `open` (a knight move passes between two cells, which must be open too);
+    /// a step costs its length times `cost(from, to, the cells it passes, its length)`. Gives up
+    /// after 400,000 cells.
+    fn run(&mut self, w: usize, start: usize, goal: usize, b: [i64; 4], open: impl Fn(usize) -> bool, cost: impl Fn(usize, usize, &[usize; 2], f64) -> f64) -> Option<Vec<u32>> {
+        let step: [f64; 16] = std::array::from_fn(|d| crate::core::sqrt((DIRS[d].0 * DIRS[d].0 + DIRS[d].1 * DIRS[d].1) as f64));
+        let [bx0, bx1, by0, by1] = b;
+        let (g, came) = (&mut self.g, &mut self.came);
+        for &k in &self.touched {
+            g[k] = f64::INFINITY;
+            came[k] = u32::MAX;
+        }
+        self.touched.clear();
+        let (gx, gy) = ((goal % w) as f64, (goal / w) as f64);
+        let mut heap = BinaryHeap::new();
+        g[start] = 0.0;
+        self.touched.push(start);
+        heap.push(Node { f: 0.0, i: start as u32 });
+        let mut found = false;
+        let mut expanded = 0;
+        while let Some(Node { i, .. }) = heap.pop() {
+            let i = i as usize;
+            if i == goal {
+                found = true;
+                break;
+            }
+            expanded += 1;
+            if expanded > 400_000 {
+                break;
+            }
+            let (ix, iy) = ((i % w) as i64, (i / w) as i64);
+            for (d, (dx, dy)) in DIRS.into_iter().enumerate() {
+                let (nx, ny) = (ix + dx, iy + dy);
+                if nx < bx0 || nx > bx1 || ny < by0 || ny > by1 {
+                    continue;
+                }
+                let nb = ny as usize * w + nx as usize;
+                if !open(nb) {
+                    continue;
+                }
+                // Knight moves pass between two cells; both must be passable, and a river in
+                // either still has to be crossed.
+                let mids: [usize; 2] = if dx.abs() == 2 || dy.abs() == 2 {
+                    let (sx, sy) = (dx.signum(), dy.signum());
+                    let (ax, ay) = if dx.abs() == 2 { (ix + sx, iy) } else { (ix, iy + sy) };
+                    [ay as usize * w + ax as usize, (ay + if dx.abs() == 2 { sy } else { 0 }) as usize * w + (ax + if dy.abs() == 2 { sx } else { 0 }) as usize]
+                } else {
+                    [nb, nb]
+                };
+                if !mids.iter().all(|&m| open(m)) {
+                    continue;
+                }
+                let ng = g[i] + step[d] * cost(i, nb, &mids, step[d]);
+                if ng < g[nb] {
+                    if g[nb] == f64::INFINITY {
+                        self.touched.push(nb);
+                    }
+                    g[nb] = ng;
+                    came[nb] = i as u32;
+                    let hdist = crate::core::sqrt((nx as f64 - gx) * (nx as f64 - gx) + (ny as f64 - gy) * (ny as f64 - gy));
+                    heap.push(Node { f: ng + 0.35 * hdist, i: nb as u32 });
+                }
+            }
+        }
+        found.then(|| {
+            let mut path = vec![goal as u32];
+            let mut cur = goal;
+            while cur != start {
+                cur = came[cur] as usize;
+                path.push(cur as u32);
+            }
+            path.reverse();
+            path
+        })
+    }
+}
+
+/// What a step costs per cell of its length: the grade (steeply past 15%) and the ground's
+/// biome, and crossing a mapped river.
+struct Costs {
+    pen: Vec<f64>,
+    river_q: f64,
+}
+
+impl Costs {
+    fn new(inp: &Inputs) -> Costs {
+        let biome_pen = |k: usize| match Biome::from_u8((inp.biome[k] & 0xff) as u8) {
+            Biome::Swamp => 2.0,
+            Biome::Jungle | Biome::Blight => 1.0,
+            Biome::Alpine => 1.0,
+            Biome::Ice => 3.0,
+            Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga => 0.3,
+            Biome::HotDesert | Biome::ColdDesert => 0.3,
+            _ => 0.0,
+        };
+        Costs { pen: (0..inp.w * inp.h).map(biome_pen).collect(), river_q: 90_000.0 / inp.world.params().river_density }
+    }
+
+    fn ground(&self, inp: &Inputs, i: usize, nb: usize, dist: f64) -> f64 {
+        let grade = (inp.height[nb] - inp.height[i]).abs() / (dist * inp.cell_ft);
+        1.0 + 25.0 * grade * grade + 40.0 * (grade - 0.15).max(0.0) + self.pen[nb]
+    }
+
+    /// Stepping onto a mapped river from a cell that is not part of it (0 otherwise).
+    fn river(&self, inp: &Inputs, i: usize, nb: usize, mids: &[usize; 2]) -> f64 {
+        let q = mids.iter().chain(std::iter::once(&nb)).map(|&m| inp.hydro.discharge[m]).fold(0f32, f32::max) as f64;
+        if q >= self.river_q && (inp.hydro.discharge[i] as f64) < q { 1.0 + 3.0 * (q / (self.river_q * 20.0)).min(1.0) } else { 0.0 }
+    }
+}
+
+/// The drawn roads' routes: through waypoints along each line, each leg the cheapest way
+/// within `CORRIDOR` cells of its stretch of the line (costing more the farther from it); where
+/// water closes that, within `CORRIDOR_WIDE`, else round it (a conflict says so); else (no way
+/// by land) the road breaks there (a conflict). Then the cells the `none` lines close.
+fn drawn_routes(inp: &Inputs) -> DrawnRoutes {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
-    let p = inp.world.params();
-    let river_q = 90_000.0 / p.river_density;
-    let n = w * h;
-    // --- 2. Routing.
-    let biome_pen = |k: usize| match Biome::from_u8((inp.biome[k] & 0xff) as u8) {
-        Biome::Swamp => 2.0,
-        Biome::Jungle | Biome::Blight => 1.0,
-        Biome::Alpine => 1.0,
-        Biome::Ice => 3.0,
-        Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga => 0.3,
-        Biome::HotDesert | Biome::ColdDesert => 0.3,
-        _ => 0.0,
+    let mut out = DrawnRoutes::default();
+    if inp.drawn.is_empty() {
+        return out;
+    }
+    let open: Vec<bool> = (0..w * h).map(|k| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE).collect();
+    let costs = Costs::new(inp);
+    let mut search = Search::new(w * h);
+    // The open cell nearest a point within `r` cells.
+    let nearest_open = |p: [f64; 2], r: f64| {
+        let mut best: Option<(f64, usize)> = None;
+        let (i0, i1) = ((p[0] - r).floor().max(0.0) as usize, ((p[0] + r).ceil() as usize).min(w - 1));
+        let (j0, j1) = ((p[1] - r).floor().max(0.0) as usize, ((p[1] + r).ceil() as usize).min(h - 1));
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let (k, d) = (j * w + i, dist(p, [i as f64, j as f64]));
+                if open[k] && d <= r && best.is_none_or(|b| d < b.0) {
+                    best = Some((d, k));
+                }
+            }
+        }
+        best.map(|b| b.1)
     };
-    let open: Vec<bool> = (0..n).map(|k| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE).collect();
-    let passable = |k: usize| open[k];
-    let pen: Vec<f64> = (0..n).map(biome_pen).collect();
+    for d in &inp.drawn {
+        let Some(class) = d.class else { continue };
+        let s = arc(&d.pts);
+        let total = *s.last().unwrap();
+        let m = (total / WAYPOINT).ceil().max(1.0) as usize;
+        // Waypoints: (place along the line, cell); the ends may look farther for land.
+        let mut ways: Vec<(f64, usize)> = Vec::new();
+        for i in 0..=m {
+            let t = total * i as f64 / m as f64;
+            let r = if i == 0 || i == m { 4.0 } else { 2.0 };
+            if let Some(k) = nearest_open(point_at(&d.pts, &s, t), r)
+                && ways.last().is_none_or(|l| l.1 != k)
+            {
+                ways.push((t, k));
+            }
+        }
+        let mut piece: Vec<u32> = Vec::new();
+        for pair in ways.windows(2) {
+            let ((t0, a), (t1, b)) = (pair[0], pair[1]);
+            let line = sub_line(&d.pts, &s, t0 - 1.0, t1 + 1.0);
+            let mut leg = None;
+            for (attempt, (reach, deviate)) in [(CORRIDOR, DEVIATE), (CORRIDOR_WIDE, 0.25 * DEVIATE), (CORRIDOR_ROUND, 0.01 * DEVIATE)].into_iter().enumerate() {
+                let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                for p in &line {
+                    (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
+                }
+                let bx = [(x0 - reach).floor().max(0.0) as i64, ((x1 + reach).ceil() as i64).min(w as i64 - 1), (y0 - reach).floor().max(0.0) as i64, ((y1 + reach).ceil() as i64).min(h as i64 - 1)];
+                // Distance to the line over the box.
+                let bw = (bx[1] - bx[0] + 1) as usize;
+                let off: Vec<f64> = (0..bw * (bx[3] - bx[2] + 1) as usize).map(|q| line_dist([(bx[0] + (q % bw) as i64) as f64, (bx[2] + (q / bw) as i64) as f64], &line)).collect();
+                let off_at = |k: usize| off[((k / w) as i64 - bx[2]) as usize * bw + ((k % w) as i64 - bx[0]) as usize];
+                let ok = |k: usize| open[k] && off_at(k) <= reach;
+                leg = search.run(w, a, b, bx, ok, |i, nb, mids, run| costs.ground(inp, i, nb, run) + costs.river(inp, i, nb, mids) + deviate * off_at(nb) * off_at(nb));
+                if leg.is_some() {
+                    if attempt == 2 {
+                        let p = point_at(&d.pts, &s, 0.5 * (t0 + t1));
+                        out.conflicts.push(super::sketch::Conflict { stroke: d.stroke as usize, message: "This road crosses water here: it goes round".into(), x: p[0] * cell, y: p[1] * cell });
+                    }
+                    break;
+                }
+            }
+            match leg {
+                Some(leg) => piece.extend_from_slice(if piece.is_empty() { &leg } else { &leg[1..] }),
+                None => {
+                    let p = point_at(&d.pts, &s, 0.5 * (t0 + t1));
+                    out.conflicts.push(super::sketch::Conflict { stroke: d.stroke as usize, message: "No way by land along this road here: it stops and starts again".into(), x: p[0] * cell, y: p[1] * cell });
+                    if piece.len() >= 2 {
+                        out.routes.push((class, std::mem::take(&mut piece), d.stroke));
+                    }
+                    piece.clear();
+                }
+            }
+        }
+        if piece.len() >= 2 {
+            out.routes.push((class, piece, d.stroke));
+        }
+    }
+    // A `none` line closes the cells within about a cell of it: no step crosses that band.
+    if inp.drawn.iter().any(|d| d.class.is_none()) {
+        let mut blocked = vec![false; w * h];
+        for d in inp.drawn.iter().filter(|d| d.class.is_none()) {
+            for seg in d.pts.windows(2) {
+                let (i0, i1) = ((seg[0][0].min(seg[1][0]) - 2.0).floor().max(0.0) as usize, ((seg[0][0].max(seg[1][0]) + 2.0).ceil() as usize).min(w - 1));
+                let (j0, j1) = ((seg[0][1].min(seg[1][1]) - 2.0).floor().max(0.0) as usize, ((seg[0][1].max(seg[1][1]) + 2.0).ceil() as usize).min(h - 1));
+                for j in j0..=j1 {
+                    for i in i0..=i1 {
+                        if seg_dist([i as f64, j as f64], seg[0], seg[1]) <= 1.1 {
+                            blocked[j * w + i] = true;
+                        }
+                    }
+                }
+            }
+        }
+        out.blocked = blocked;
+    }
+    out
+}
+
+/// Distance along a polyline at each of its points.
+fn arc(pts: &[[f64; 2]]) -> Vec<f64> {
+    let mut s = vec![0.0; pts.len()];
+    for i in 1..pts.len() {
+        s[i] = s[i - 1] + dist(pts[i - 1], pts[i]);
+    }
+    s
+}
+
+/// The point `t` along a polyline (`s`: its `arc`), clamped to its ends.
+fn point_at(pts: &[[f64; 2]], s: &[f64], t: f64) -> [f64; 2] {
+    let k = s.partition_point(|&v| v < t).clamp(1, pts.len() - 1);
+    let (a, b) = (pts[k - 1], pts[k]);
+    let f = ((t - s[k - 1]) / (s[k] - s[k - 1]).max(1e-9)).clamp(0.0, 1.0);
+    [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]
+}
+
+/// The stretch of a polyline from `t0` to `t1` along it (clamped to its ends).
+fn sub_line(pts: &[[f64; 2]], s: &[f64], t0: f64, t1: f64) -> Vec<[f64; 2]> {
+    let mut out = vec![point_at(pts, s, t0)];
+    out.extend(pts.iter().zip(s).filter(|(_, v)| **v > t0 && **v < t1).map(|(p, _)| *p));
+    out.push(point_at(pts, s, t1));
+    out
+}
+
+/// Where a point falls on a polyline: the distance along it of the nearest point, and how far
+/// off it is.
+fn project(p: [f64; 2], pts: &[[f64; 2]], s: &[f64]) -> (f64, f64) {
+    let mut best = (0.0, f64::INFINITY);
+    for k in 1..pts.len() {
+        let (a, b) = (pts[k - 1], pts[k]);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        let d = dist(p, [a[0] + t * dx, a[1] + t * dy]);
+        if d < best.1 {
+            best = (s[k - 1] + t * (s[k] - s[k - 1]), d);
+        }
+    }
+    best
+}
+
+/// A* routes for the links, in order (later routes reuse earlier ones), after the drawn
+/// roads. Returns the best (lowest) class per cell (`u8::MAX` = none) and every route.
+pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u8>, Vec<Routed>) {
+    let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
+    let n = w * h;
+    let pre = inp.pre();
+    // --- 2. Routing.
+    let costs = Costs::new(inp);
+    // Open ground, and the same less what `none` lines close (a link's own end stays open).
+    let free: Vec<bool> = (0..n).map(|k| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE).collect();
+    let open: Vec<bool> = (0..n).map(|k| free[k] && !pre.blocked.get(k).copied().unwrap_or(false)).collect();
     // Smooth cost noise: equal-cost ties on open ground resolve into gentle meanders instead
     // of grid-aligned runs.
     let mut noise = crate::core::noise::Fbm::new(inp.world.stream("t0.road.cost"), 2, 2.0, 0.5);
     let wobble: Vec<f32> = (0..n).map(|k| (1.0 + 0.25 * noise.at((k % w) as f64 / 6.0, (k / w) as f64 / 6.0)) as f32).collect();
-    // 16 directions (knight moves too) so paths are not limited to 45° headings.
-    const DIRS: [(i64, i64); 16] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1), (2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2)];
-    let step: [f64; 16] = std::array::from_fn(|d| crate::core::sqrt((DIRS[d].0 * DIRS[d].0 + DIRS[d].1 * DIRS[d].1) as f64));
     let mut road_class: Vec<u8> = vec![u8::MAX; n];
-    let mut paths: Vec<(RoadClass, Vec<u32>)> = Vec::new();
-    let mut g = vec![f64::INFINITY; n];
-    let mut came = vec![u32::MAX; n];
-    let mut touched: Vec<usize> = Vec::new();
+    // Cells on a drawn road only (routes share them at half cost, not a fifth: a planned road
+    // takes a drawn one where it goes its way, but no long way round for it).
+    let mut drawn_only: Vec<bool> = vec![false; if pre.routes.is_empty() { 0 } else { n }];
+    let mut paths: Vec<Routed> = Vec::new();
+    for (class, cells, stroke) in &pre.routes {
+        for &c in cells {
+            drawn_only[c as usize] = true;
+        }
+        for &c in cells {
+            road_class[c as usize] = road_class[c as usize].min(*class as u8);
+        }
+        paths.push((*class, cells.clone(), Some(*stroke)));
+    }
+    let mut search = Search::new(n);
     let mut memo = inp.routes.borrow_mut();
     let mut same = true;
-    for (e, &(a, b, class)) in edges.iter().enumerate() {
-        let (start, goal) = (settlements[a].cell, settlements[b].cell);
+    for (e, link) in links.iter().enumerate() {
+        let class = link.class;
+        let cell_of = |end: End| match end {
+            End::Town(i) => settlements[i].cell,
+            End::Cell(k) => k,
+        };
+        let (start, goal) = (cell_of(link.a), cell_of(link.b));
         // Near a town or city at either end, roads keep to themselves (no shared trunk), so
         // each arrives at its own gate instead of merging outside the walls.
-        let town_ends: Vec<(f64, f64, f64)> = [a, b]
+        let town_ends: Vec<(f64, f64, f64)> = [link.a, link.b]
             .iter()
-            .filter(|&&i| settlements[i].tier >= Tier::Town)
-            .map(|&i| {
+            .filter_map(|&end| match end {
+                End::Town(i) if settlements[i].tier >= Tier::Town => Some(i),
+                _ => None,
+            })
+            .map(|i| {
                 let r = crate::town::urban_radius(settlements[i].tier, settlements[i].population) / cell;
                 ((settlements[i].cell % w) as f64, (settlements[i].cell / w) as f64, r + 1.5)
             })
@@ -429,82 +862,16 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], edges: &[(usize, usize, R
             let (bx0, bx1) = ((sx.min(gx) - pad).max(0.0), (sx.max(gx) + pad).min((w - 1) as f64));
             let (by0, by1) = ((sy.min(gy) - pad).max(0.0), (sy.max(gy) + pad).min((h - 1) as f64));
             // The box in whole cells (a cell index is inside exactly when it is between these).
-            let (bx0, bx1, by0, by1) = (crate::core::ceil(bx0) as i64, crate::core::floor(bx1) as i64, crate::core::ceil(by0) as i64, crate::core::floor(by1) as i64);
-            for &k in &touched {
-                g[k] = f64::INFINITY;
-                came[k] = u32::MAX;
-            }
-            touched.clear();
-            let mut heap = BinaryHeap::new();
-            g[start] = 0.0;
-            touched.push(start);
-            heap.push(Node { f: 0.0, i: start as u32 });
-            let mut found = false;
-            let mut expanded = 0;
-            while let Some(Node { i, .. }) = heap.pop() {
-                let i = i as usize;
-                if i == goal {
-                    found = true;
-                    break;
+            let b = [crate::core::ceil(bx0) as i64, crate::core::floor(bx1) as i64, crate::core::ceil(by0) as i64, crate::core::floor(by1) as i64];
+            let path = search.run(w, start, goal, b, |k| open[k] || (k == goal && free[k]), |i, nb, mids, run| {
+                let mut c = costs.ground(inp, i, nb, run) * wobble[nb] as f64;
+                c += costs.river(inp, i, nb, mids);
+                let (nx, ny) = ((nb % w) as f64, (nb / w) as f64);
+                let by_town = || town_ends.iter().any(|&(tx, ty, tr)| (nx - tx) * (nx - tx) + (ny - ty) * (ny - ty) <= tr * tr);
+                if road_class[nb] != u8::MAX && !by_town() {
+                    c *= if drawn_only.get(nb).copied().unwrap_or(false) { 0.5 } else { 0.2 };
                 }
-                expanded += 1;
-                if expanded > 400_000 {
-                    break;
-                }
-                let (ix, iy) = ((i % w) as i64, (i / w) as i64);
-                for (d, (dx, dy)) in DIRS.into_iter().enumerate() {
-                    let (nx, ny) = (ix + dx, iy + dy);
-                    if nx < bx0 || nx > bx1 || ny < by0 || ny > by1 {
-                        continue;
-                    }
-                    let nb = ny as usize * w + nx as usize;
-                    if !passable(nb) {
-                        continue;
-                    }
-                    // Knight moves pass between two cells; both must be passable, and a river in
-                    // either still has to be crossed.
-                    let mids: &[usize] = &if dx.abs() == 2 || dy.abs() == 2 {
-                        let (sx, sy) = (dx.signum(), dy.signum());
-                        let (ax, ay) = if dx.abs() == 2 { (ix + sx, iy) } else { (ix, iy + sy) };
-                        [ay as usize * w + ax as usize, (ay + if dx.abs() == 2 { sy } else { 0 }) as usize * w + (ax + if dy.abs() == 2 { sx } else { 0 }) as usize]
-                    } else {
-                        [nb, nb]
-                    };
-                    if !mids.iter().all(|&m| passable(m)) {
-                        continue;
-                    }
-                    let dist = step[d];
-                    let grade = (inp.height[nb] - inp.height[i]).abs() / (dist * cell);
-                    let mut c = (1.0 + 25.0 * grade * grade + 40.0 * (grade - 0.15).max(0.0) + pen[nb]) * wobble[nb] as f64;
-                    let q = mids.iter().chain(std::iter::once(&nb)).map(|&m| inp.hydro.discharge[m]).fold(0f32, f32::max) as f64;
-                    if q >= river_q && (inp.hydro.discharge[i] as f64) < q {
-                        c += 1.0 + 3.0 * (q / (river_q * 20.0)).min(1.0);
-                    }
-                    let by_town = || town_ends.iter().any(|&(tx, ty, tr)| (nx as f64 - tx) * (nx as f64 - tx) + (ny as f64 - ty) * (ny as f64 - ty) <= tr * tr);
-                    if road_class[nb] != u8::MAX && !by_town() {
-                        c *= 0.2;
-                    }
-                    let ng = g[i] + dist * c;
-                    if ng < g[nb] {
-                        if g[nb] == f64::INFINITY {
-                            touched.push(nb);
-                        }
-                        g[nb] = ng;
-                        came[nb] = i as u32;
-                        let hdist = crate::core::sqrt((nx as f64 - gx) * (nx as f64 - gx) + (ny as f64 - gy) * (ny as f64 - gy));
-                        heap.push(Node { f: ng + 0.35 * hdist, i: nb as u32 });
-                    }
-                }
-            }
-            let path = found.then(|| {
-                let mut path = vec![goal as u32];
-                let mut cur = goal;
-                while cur != start {
-                    cur = came[cur] as usize;
-                    path.push(cur as u32);
-                }
-                path.reverse();
-                path
+                c
             });
             memo.truncate(e);
             memo.push((key, path.clone()));
@@ -514,8 +881,11 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], edges: &[(usize, usize, R
         for &c in &path {
             let c = c as usize;
             road_class[c] = road_class[c].min(class as u8);
+            if let Some(d) = drawn_only.get_mut(c) {
+                *d = false;
+            }
         }
-        paths.push((class, path));
+        paths.push((class, path, link.stroke));
     }
     (road_class, paths)
 }
@@ -529,12 +899,12 @@ pub struct Preview {
 }
 
 pub fn preview(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) -> Preview {
-    let edges = link_edges(settlements, classes);
+    let edges = links(inp, settlements, classes);
     let (_, paths) = route(inp, settlements, &edges);
     let n = inp.w * inp.h;
     let mut usage = vec![0u8; n];
     let mut links: std::collections::BTreeSet<(u32, u32)> = Default::default();
-    for (_, path) in &paths {
+    for (_, path, _) in &paths {
         for &c in path {
             usage[c as usize] = usage[c as usize].saturating_add(1);
         }
@@ -689,11 +1059,10 @@ fn trim_start(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, c: [f64; 2], r: f6
 }
 
 /// Any-angle path from a grid path (string pulling): Douglas-Peucker that accepts a chord
-/// when it stays near the grid path, crosses only passable ground and is no steeper than the
+/// when it stays within `tol` cells of the grid path, crosses only passable ground and is no steeper than the
 /// class allows (or than the path itself was); chords are then resampled to at most one cell
 /// per step so the grade check below sees the terrain between vertices.
-fn simplify(cells: &[[f64; 2]], w: usize, h: usize, hg: &Plan, gmax: f64, cell: f64, passable: impl Fn(usize) -> bool) -> Vec<[f64; 2]> {
-    const TOL: f64 = 2.5;
+fn simplify(cells: &[[f64; 2]], tol: f64, w: usize, h: usize, hg: &Plan, gmax: f64, cell: f64, passable: impl Fn(usize) -> bool) -> Vec<[f64; 2]> {
     let steepest = |pts: &mut dyn Iterator<Item = [f64; 2]>| {
         let mut prev: Option<([f64; 2], f64)> = None;
         let mut worst = 0.0f64;
@@ -740,7 +1109,7 @@ fn simplify(cells: &[[f64; 2]], w: usize, h: usize, hg: &Plan, gmax: f64, cell: 
                 at = k;
             }
         }
-        if worst > TOL || !clear(a, b, &cells[i..=j]) {
+        if worst > tol || !clear(a, b, &cells[i..=j]) {
             keep[at] = true;
             stack.push((i, at));
             stack.push((at, j));
@@ -752,6 +1121,72 @@ fn simplify(cells: &[[f64; 2]], w: usize, h: usize, hg: &Plan, gmax: f64, cell: 
         let n = dist(pair[0], pair[1]).ceil().max(1.0) as usize;
         for s in 1..=n {
             let t = s as f64 / n as f64;
+            out.push([pair[0][0] + (pair[1][0] - pair[0][0]) * t, pair[0][1] + (pair[1][1] - pair[0][1]) * t]);
+        }
+    }
+    out
+}
+
+/// A drawn road's segment (its cells, the ends in place, in cells): along its drawn `line`
+/// between where the segment's ends fall on it, wherever that stretch is dry (`dry`, every
+/// quarter cell) and the cells keep near it (within 3 cells); else each half of the cells is
+/// tried the same way, down to single steps, and the cells left (round water) are `smooth`ed.
+/// The line within a cell of either end is left out, so the road eases onto it from a junction
+/// off it. Points at most a cell apart.
+fn along_drawn(cells: &[[f64; 2]], line: &[[f64; 2]], dry: &dyn Fn([f64; 2]) -> bool, smooth: &dyn Fn(&[[f64; 2]]) -> Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+    /// From cell `i` to cell `j`: the line drawn between them (its points), or the cells.
+    type Piece = (usize, usize, Option<Vec<[f64; 2]>>);
+    fn fit(cells: &[[f64; 2]], line: &[[f64; 2]], s: &[f64], dry: &dyn Fn([f64; 2]) -> bool, i: usize, j: usize, out: &mut Vec<Piece>) {
+        if j > i + 1 {
+            let ((ti, _), (tj, _)) = (project(cells[i], line, s), project(cells[j], line, s));
+            let near = cells[i..=j].iter().all(|c| project(*c, line, s).1 <= 3.0);
+            let (lo, hi) = (ti.min(tj), ti.max(tj));
+            if near && hi - lo > 2.5 {
+                let mut part = sub_line(line, s, lo + 1.0, hi - 1.0);
+                if ti > tj {
+                    part.reverse();
+                }
+                let mut path = vec![cells[i]];
+                path.extend_from_slice(&part);
+                path.push(cells[j]);
+                let wet = path.windows(2).any(|w| {
+                    let n = (dist(w[0], w[1]) * 4.0).ceil().max(1.0) as usize;
+                    (1..=n).any(|k| !dry([w[0][0] + (w[1][0] - w[0][0]) * k as f64 / n as f64, w[0][1] + (w[1][1] - w[0][1]) * k as f64 / n as f64]))
+                });
+                if !wet {
+                    out.push((i, j, Some(part)));
+                    return;
+                }
+            }
+            let m = (i + j) / 2;
+            fit(cells, line, s, dry, i, m, out);
+            fit(cells, line, s, dry, m, j, out);
+            return;
+        }
+        // (Runs of cells join up: `along_drawn` smooths them together.)
+        match out.last_mut() {
+            Some((_, end, None)) if *end == i => *end = j,
+            _ => out.push((i, j, None)),
+        }
+    }
+    let s = arc(line);
+    let mut pieces = Vec::new();
+    fit(cells, line, &s, dry, 0, cells.len() - 1, &mut pieces);
+    let mut kept = vec![cells[0]];
+    for (i, j, part) in pieces {
+        match part {
+            Some(part) => {
+                kept.extend_from_slice(&part);
+                kept.push(cells[j]);
+            }
+            None => kept.extend_from_slice(&smooth(&cells[i..=j])[1..]),
+        }
+    }
+    let mut out = vec![kept[0]];
+    for pair in kept.windows(2) {
+        let n = dist(pair[0], pair[1]).ceil().max(1.0) as usize;
+        for k in 1..=n {
+            let t = k as f64 / n as f64;
             out.push([pair[0][0] + (pair[1][0] - pair[0][0]) * t, pair[0][1] + (pair[1][1] - pair[0][1]) * t]);
         }
     }
@@ -1431,7 +1866,7 @@ fn drop_shortcuts(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
             .filter_map(|k| ends[k].and_then(|(p, q)| if p == x && !town(q) { Some((q, lens[k])) } else if q == x && !town(p) { Some((p, lens[k])) } else { None }))
             .map(|(y, xy)| xy + link(y, z, i))
             .fold(f64::MAX, f64::min);
-        if detour < 1.3 * lens[i] {
+        if detour < 1.3 * lens[i] && roads[i].stroke.is_none() {
             gone[i] = true;
         }
     }
@@ -1454,13 +1889,14 @@ fn join_through(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f64,
                 at.entry(end_key(*r.pts.last().unwrap(), towns)).or_default().push((i, false));
             }
         }
-        let Some((&(i, si), &(k, sk))) = at.iter().filter(|(key, v)| key.0 != i64::MIN && v.len() == 2 && v[0].0 != v[1].0).map(|(_, v)| (&v[0], &v[1])).next() else { break };
+        // (A drawn road and another keep their own names: they stay two.)
+        let Some((&(i, si), &(k, sk))) = at.iter().filter(|(key, v)| key.0 != i64::MIN && v.len() == 2 && v[0].0 != v[1].0 && roads[v[0].0].stroke == roads[v[1].0].stroke).map(|(_, v)| (&v[0], &v[1])).next() else { break };
         // Road i ends at the point, road k starts there.
-        let flip = |r: &RoadPath| RoadPath { class: r.class, pts: r.pts.iter().rev().copied().collect(), z: r.z.iter().rev().copied().collect(), wander: r.wander.iter().rev().copied().collect() };
+        let flip = |r: &RoadPath| RoadPath { class: r.class, pts: r.pts.iter().rev().copied().collect(), z: r.z.iter().rev().copied().collect(), wander: r.wander.iter().rev().copied().collect(), stroke: r.stroke };
         let a = if si { flip(&roads[i]) } else { roads[i].clone() };
         let b = if sk { roads[k].clone() } else { flip(&roads[k]) };
         let joint = a.pts.len() - 1;
-        let mut joined = RoadPath { class: a.class.min(b.class), pts: a.pts, z: a.z, wander: a.wander };
+        let mut joined = RoadPath { class: a.class.min(b.class), pts: a.pts, z: a.z, wander: a.wander, stroke: a.stroke };
         joined.pts.extend_from_slice(&b.pts[1..]);
         joined.z.extend_from_slice(&b.z[1..]);
         joined.wander.extend_from_slice(&b.wander[1..]);
@@ -1544,7 +1980,7 @@ fn drop_parallel(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
         }
         let e = best.entry((a.min(b), a.max(b))).or_insert(i);
         let o = &roads[*e];
-        if (r.class, len(r)) < (o.class, len(o)) {
+        if (r.stroke.is_none(), r.class, len(r)) < (o.stroke.is_none(), o.class, len(o)) {
             *e = i;
         }
     }
@@ -1553,7 +1989,7 @@ fn drop_parallel(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
     roads.retain(|r| {
         i += 1;
         let ends = r.pts.len() >= 2 && key(r.pts[0]) != key(*r.pts.last().unwrap());
-        !ends || keep.contains(&(i - 1))
+        !ends || keep.contains(&(i - 1)) || r.stroke.is_some()
     });
 }
 
@@ -1630,7 +2066,8 @@ fn merge_junctions(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f
                     reshape_end(&mut roads[l.0], &l, curve, z_j);
                 }
                 let class = roads[legs[b1].0].class.min(roads[legs[b2].0].class);
-                roads.push(RoadPath { class, z: vec![z_j; stem.len()], wander: vec![0.0; stem.len()], pts: stem });
+                let stroke = Some(roads[legs[b1].0].stroke).filter(|s| *s == roads[legs[b2].0].stroke).flatten();
+                roads.push(RoadPath { class, z: vec![z_j; stem.len()], wander: vec![0.0; stem.len()], pts: stem, stroke });
                 list.retain(|e| *e != (legs[b1].0, legs[b1].1) && *e != (legs[b2].0, legs[b2].1));
                 list.push((roads.len() - 1, true));
                 continue 'pairs;
@@ -1711,6 +2148,7 @@ fn merge_junctions(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f
 /// before or after, or where it doubles back (turns over 100°) within 250 ft; never an end,
 /// and only where the chord left keeps the road's grade.
 pub fn tidy(r: &mut RoadPath) {
+    cut_spikes(r);
     let gmax = r.class.max_grade();
     // The first and last stretch stay as shaped (a Y's merge curve, the way into a gate).
     let mut k = 2;
@@ -1728,6 +2166,110 @@ pub fn tidy(r: &mut RoadPath) {
         } else {
             k += 1;
         }
+    }
+}
+
+/// Eases turns still too sharp for a cart (ft): where the road's heading over 40 ft before a
+/// point and 40 ft after it differ by over 70°, the stretch from ~0.05 cell before to as far
+/// after becomes a cubic keeping the headings it arrives and leaves with (left as it is where
+/// that would cross water). Not where that stretch would reach the first or last two points.
+pub fn ease_turns(r: &mut RoadPath, cell: f64, dry: &dyn Fn(f64, f64) -> bool) {
+    const CHORD: f64 = 40.0;
+    let reach = 0.05 * cell;
+    let mut i = 2;
+    while i + 2 < r.pts.len() {
+        let n = r.pts.len();
+        // The point at least `d` ft along the road from `i` (dir ±1), within [1, n - 2].
+        let walk = |i: usize, dir: i64, d: f64| {
+            let (mut k, mut acc) = (i as i64, 0.0);
+            while acc < d && k + dir >= 1 && k + dir <= n as i64 - 2 {
+                acc += dist(r.pts[k as usize], r.pts[(k + dir) as usize]);
+                k += dir;
+            }
+            k as usize
+        };
+        let (a, b) = (walk(i, -1, CHORD), walk(i, 1, CHORD));
+        let (u, v) = (unit2([r.pts[i][0] - r.pts[a][0], r.pts[i][1] - r.pts[a][1]]), unit2([r.pts[b][0] - r.pts[i][0], r.pts[b][1] - r.pts[i][1]]));
+        if a == i || b == i || dot2(u, v) >= libm::cos(70f64.to_radians()) {
+            i += 1;
+            continue;
+        }
+        let (i0, i1) = (walk(i, -1, reach), walk(i, 1, reach));
+        // (Near an end the road keeps its way in: a junction's or a gate's.)
+        let room = |a: usize, b: usize| (a.min(b)..a.max(b)).map(|k| dist(r.pts[k], r.pts[k + 1])).sum::<f64>() >= reach;
+        if !room(i0, i) || !room(i, i1) {
+            i += 1;
+            continue;
+        }
+        let (p0, p3) = (r.pts[i0], r.pts[i1]);
+        let h0 = unit2([p0[0] - r.pts[i0 - 1][0], p0[1] - r.pts[i0 - 1][1]]);
+        let h1 = unit2([r.pts[i1 + 1][0] - p3[0], r.pts[i1 + 1][1] - p3[1]]);
+        let span = dist(p0, p3);
+        let (c1, c2) = ([p0[0] + h0[0] * 0.4 * span, p0[1] + h0[1] * 0.4 * span], [p3[0] - h1[0] * 0.4 * span, p3[1] - h1[1] * 0.4 * span]);
+        let m = (span / 30.0).ceil().clamp(3.0, 40.0) as usize;
+        let curve: Vec<[f64; 2]> = (1..m)
+            .map(|k| {
+                let t = k as f64 / m as f64;
+                let w = 1.0 - t;
+                let (a, b, c, d) = (w * w * w, 3.0 * w * w * t, 3.0 * w * t * t, t * t * t);
+                [a * p0[0] + b * c1[0] + c * c2[0] + d * p3[0], a * p0[1] + b * c1[1] + c * c2[1] + d * p3[1]]
+            })
+            .collect();
+        if i1 <= i0 + 1 || curve.iter().any(|p| !dry(p[0], p[1])) {
+            i += 1;
+            continue;
+        }
+        let (z0, z1) = (r.z[i0], r.z[i1]);
+        r.pts.splice(i0 + 1..i1, curve);
+        r.z.splice(i0 + 1..i1, (1..m).map(|k| z0 + (z1 - z0) * k as f32 / m as f32));
+        r.wander.splice(i0 + 1..i1, std::iter::repeat_n(0.0, m - 1));
+        i = i0 + m;
+    }
+}
+
+/// Cuts out-and-back spikes (ft): where a road turns back (over ~155°) and retraces its way
+/// within 60 ft (two roads that climbed the same switchbacks, joined into one), the stretch
+/// both ways is dropped (and `EASE` ft more each way) and the road goes on from where they
+/// part; never at an end. (The profile is fitted again afterwards.)
+fn cut_spikes(r: &mut RoadPath) {
+    const TOL: f64 = 60.0;
+    const EASE: f64 = 200.0;
+    let mut k = 1;
+    while k + 1 < r.pts.len() {
+        let (u, v) = (unit2([r.pts[k][0] - r.pts[k - 1][0], r.pts[k][1] - r.pts[k - 1][1]]), unit2([r.pts[k + 1][0] - r.pts[k][0], r.pts[k + 1][1] - r.pts[k][1]]));
+        // (A hairpin's two legs part at once: not a spike.)
+        if dot2(u, v) > -0.9 || dist(r.pts[k - 1], r.pts[k + 1]) >= TOL {
+            k += 1;
+            continue;
+        }
+        let (mut i, mut j) = (k - 1, k + 1);
+        loop {
+            if i >= 1 && j + 1 < r.pts.len() && seg_dist(r.pts[i - 1], r.pts[j], r.pts[j + 1]) < TOL {
+                i -= 1;
+            } else if i >= 1 && j + 1 < r.pts.len() && seg_dist(r.pts[j + 1], r.pts[i - 1], r.pts[i]) < TOL {
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        if i == 0 || j + 1 >= r.pts.len() {
+            k += 1;
+            continue;
+        }
+        // A little farther each way (the stubs left would turn too tightly to round).
+        let (mut back, mut on) = (0.0, 0.0);
+        while i > 1 && back < EASE {
+            back += dist(r.pts[i - 1], r.pts[i]);
+            i -= 1;
+        }
+        while j + 2 < r.pts.len() && on < EASE {
+            on += dist(r.pts[j], r.pts[j + 1]);
+            j += 1;
+        }
+        r.pts.drain(i + 1..j);
+        r.z.drain(i + 1..j);
+        r.wander.drain(i + 1..j);
+        k = i.max(1);
     }
 }
 

@@ -1021,6 +1021,86 @@ fn roads_from(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     out
 }
 
+/// The road network: named roads (drawn in the sketch) with the settlements along them, then
+/// the roads between settlements and junctions (each with its class, length and ends: a
+/// settlement's id and name, else the junction's point), filtered to those within `near` (a
+/// place and a radius, ft) of the place, ending at `settlement` (a layout), of `class` (king's
+/// road, road, track), or drawn only; at most `limit`, longest first.
+pub fn roads(world: &World, t0: &T0, near: Option<(P, f64)>, settlement: Option<usize>, class: Option<&str>, drawn_only: bool, limit: usize) -> Value {
+    use crate::t0::roads::RoadClass;
+    let class_name = |c: RoadClass| ["king's road", "road", "track"][c as usize];
+    let want = class.map(|c| c.to_lowercase().replace('_', " ").replace("kings", "king's"));
+    let fs = features(world, t0);
+    let road_feature = |stroke: u32| {
+        let name = world.file.sketch.strokes.get(stroke as usize)?.name.as_deref()?.trim().to_string();
+        fs.iter().find(|f| f.kind == "road" && f.name == name).or_else(|| {
+            // (Renamed: the feature made from the stroke, by its course.)
+            let first = t0.roads.roads.iter().find(|r| r.stroke == Some(stroke))?.pts[0];
+            let shapes = shapes(world, t0);
+            fs.iter().zip(shapes.iter()).filter(|(f, _)| f.kind == "road").min_by(|a, b| a.1.distance(first).0.total_cmp(&b.1.distance(first).0)).map(|(f, _)| f)
+        })
+    };
+    // A road's end: the settlement it reaches (as `road_graph` decides), else its point.
+    let town_at = |p: P| {
+        t0.settlements
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| geom::dist([s.x, s.y], p) < town::reach(s) + 3_000.0)
+            .min_by(|a, b| geom::dist([a.1.x, a.1.y], p).total_cmp(&geom::dist([b.1.x, b.1.y], p)))
+            .map(|(i, _)| i)
+    };
+    let end_json = |p: P| match town_at(p).and_then(|i| feature_of_layout(world, t0, i)) {
+        Some(id) => json!({ "id": id, "name": name_of(world, t0, &id) }),
+        None => json!({ "x_ft": p[0].round(), "y_ft": p[1].round() }),
+    };
+    let keep = |r: &crate::lod::roads::RoadCurve| {
+        r.pts.len() >= 2
+            && (!drawn_only || r.stroke.is_some())
+            && want.as_deref().is_none_or(|w| w == class_name(r.class))
+            && near.is_none_or(|(p, rad)| r.pts.iter().any(|q| geom::dist(*q, p) <= rad))
+            && settlement.is_none_or(|li| [r.pts[0], *r.pts.last().unwrap()].iter().any(|&e| town_at(e) == Some(li)))
+    };
+    // Named roads: their pieces' ends that reach settlements, in order along the line drawn.
+    let mut named = Vec::new();
+    let mut seen: Vec<u32> = Vec::new();
+    for r in t0.roads.roads.iter().filter(|r| keep(r)) {
+        let Some(st) = r.stroke.filter(|s| !seen.contains(s)) else { continue };
+        seen.push(st);
+        let Some(f) = road_feature(st) else { continue };
+        let line = &world.file.sketch.strokes[st as usize].pts;
+        let along = |p: P| (0..line.len()).min_by(|&a, &b| geom::dist(line[a], p).total_cmp(&geom::dist(line[b], p))).unwrap_or(0);
+        let pieces: Vec<&crate::lod::roads::RoadCurve> = t0.roads.roads.iter().filter(|q| q.stroke == Some(st)).collect();
+        let mut towns: Vec<(usize, usize)> = pieces.iter().flat_map(|q| [q.pts[0], *q.pts.last().unwrap()]).filter_map(|e| town_at(e).map(|t| (along(e), t))).collect();
+        towns.sort();
+        towns.dedup_by_key(|t| t.1);
+        let via: Vec<Value> = towns.iter().filter_map(|&(_, t)| feature_of_layout(world, t0, t)).map(|id| json!({ "id": id, "name": name_of(world, t0, &id) })).collect();
+        named.push(json!({
+            "id": f.id,
+            "name": name_of(world, t0, &f.id).unwrap_or_else(|| f.name.clone()),
+            "class": class_name(pieces.iter().map(|q| q.class).min().unwrap_or(r.class)),
+            "length_mi": mi(pieces.iter().map(|q| *q.s.last().unwrap_or(&0.0)).sum()),
+            "settlements": via,
+        }));
+    }
+    let mut list: Vec<&crate::lod::roads::RoadCurve> = t0.roads.roads.iter().filter(|r| keep(r)).collect();
+    list.sort_by(|a, b| b.s.last().unwrap_or(&0.0).total_cmp(a.s.last().unwrap_or(&0.0)));
+    let total = list.len();
+    let roads: Vec<Value> = list
+        .iter()
+        .take(limit)
+        .map(|r| {
+            let mut v = json!({ "class": class_name(r.class), "length_mi": mi(*r.s.last().unwrap_or(&0.0)), "from": end_json(r.pts[0]), "to": end_json(*r.pts.last().unwrap()) });
+            if let Some(f) = r.stroke.and_then(road_feature) {
+                v["road"] = json!(name_of(world, t0, &f.id).unwrap_or_else(|| f.name.clone()));
+            } else if r.stroke.is_some() {
+                v["drawn"] = json!(true);
+            }
+            v
+        })
+        .collect();
+    json!({ "named": named, "roads": roads, "count": total, "shown": roads.len() })
+}
+
 /// A route between two ids or points: by road where the road network joins them, else
 /// overland; distances and 5e travel days (normal 24 mi/day, fast 30, slow 18).
 pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {

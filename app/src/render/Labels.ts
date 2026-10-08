@@ -65,6 +65,7 @@ const STYLES: Record<string, KindStyle> = {
   pass: { size: 10, fill: INK, spacing: 0, symbol: ')(', minPx: 40, maxPx: 1e9, prio: 35 },
   waterfall: { size: 10, fill: WATER, spacing: 0, italic: true, symbol: '≋', minPx: 60, maxPx: 1e9, prio: 33 },
   river: { size: 11, fill: WATER, spacing: 1, italic: true, minPx: 220, maxPx: 1e9, prio: 30, rotate: true },
+  road: { size: 10, fill: '#6b3a24', spacing: 1, italic: true, minPx: 220, maxPx: 1e9, prio: 29, rotate: true },
   metropolis: { size: 16, fill: INK, spacing: 3, upper: true, bold: true, symbol: '◉', minPx: 16, maxPx: 1e9, prio: 98, pin: true },
   city: { size: 14, fill: INK, spacing: 2, upper: true, bold: true, symbol: '●', minPx: 18, maxPx: 1e9, prio: 90, pin: true },
   town: { size: 12, fill: INK, spacing: 1, symbol: '●', minPx: 24, maxPx: 1e9, prio: 72, pin: true },

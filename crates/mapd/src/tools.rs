@@ -51,6 +51,7 @@ pub fn list() -> Value {
         { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, biome, the areas it lies in (land, sea, range, forest, lake...), the building or district or site there, named features nearby (within a tenth of their size, 2 to 10 mi, measured to their nearest edge or course), nearest settlements.", "inputSchema": schema(place_props(), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "features_near", "title": "Near a place", "description": "Everything named within a radius of a place, nearest first, measured to each feature's nearest edge or course (0 inside an area), with its distance, direction and extent. kinds limits it to some kinds (e.g. [\"river\", \"lake\", \"forest\"]); districts and businesses come when kinds asks for district or building, or with no kinds within a mile.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "default": 5 }, "kinds": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "default": 50 }, "include_hidden": { "type": "boolean", "default": false } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "route", "title": "Route", "description": "Distance between two places by road (where roads join them) or overland, with D&D 5e travel days (normal, fast, slow pace).", "inputSchema": schema(json!({ "from": { "description": "An id, or {x_ft, y_ft}" }, "to": { "description": "An id, or {x_ft, y_ft}" } }), &["from", "to"]), "annotations": { "readOnlyHint": true } },
+        { "name": "list_roads", "title": "Roads", "description": "The road network: named roads (drawn in the world's sketch) with the settlements along them, then the roads between settlements and junctions, longest first, each with its class (king's road, road, track), length and ends (a settlement's id and name, or the junction's point). Filter by a place (id or x_ft/y_ft) and radius_mi, by settlement (roads ending there), by class, or drawn roads only.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "default": 25 }, "settlement": { "type": "string", "description": "A settlement's id: only roads ending there" }, "class": { "type": "string", "enum": ["kings_road", "road", "track"] }, "drawn": { "type": "boolean", "default": false, "description": "Only roads drawn in the sketch" }, "limit": { "type": "integer", "default": 50 } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "get_battlemap", "title": "Battlemap", "description": "The battlemap (a 640-ft square of 5-ft squares) at a place: elevation range, surfaces, buildings, and every kind of object with its tactical rules (cover, movement, sight, hazards); objects near the place listed by square.", "inputSchema": schema(merge(place_props(), json!({ "radius_squares": { "type": "number", "default": 12 } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (PNG, 1536x1024). size_ft is the ground across the image: up to about 450 shows the painted battlemap with its 5-ft grid, 3000 a village or a town's streets, 20000 a city and its fields, 200000 a region.", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "default": 3000 } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "focus_view", "title": "Show the user", "description": "Move the open map app's view to a place (the user sees it).", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "default": 3000 } })), &[]) },
@@ -187,6 +188,23 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             let from = place(app, &a["from"]).await?;
             let to = place(app, &a["to"]).await?;
             app.worker.with(move |ex| Ok(agent::route(&ex.world, &ex.t0, from, to))).await.map(text)
+        }
+        "list_roads" => {
+            let near = if a["id"].is_string() || a["x_ft"].is_number() { Some((place(app, &a).await?, a["radius_mi"].as_f64().unwrap_or(25.0).clamp(0.01, 3000.0) * 5280.0)) } else { None };
+            let settlement = a["settlement"].as_str().map(str::to_string);
+            let class = a["class"].as_str().map(str::to_string);
+            let drawn = a["drawn"].as_bool().unwrap_or(false);
+            let limit = a["limit"].as_u64().unwrap_or(50).clamp(1, 1000) as usize;
+            app.worker
+                .with(move |ex| {
+                    let li = match &settlement {
+                        Some(id) => Some(agent::layout_of(&ex.world, &ex.t0, id).filter(|&l| l < ex.t0.settlements.len()).ok_or_else(|| format!("{id} is not a settlement"))?),
+                        None => None,
+                    };
+                    Ok(agent::roads(&ex.world, &ex.t0, near, li, class.as_deref(), drawn, limit))
+                })
+                .await
+                .map(text)
         }
         "get_battlemap" => {
             let p = place(app, &a).await?;

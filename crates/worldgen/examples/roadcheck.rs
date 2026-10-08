@@ -3,7 +3,11 @@
 //! - walls, towers, buildings and fields over a river channel or standing water;
 //! - town streets and approaches over the river with no bridge under them;
 //! - approaches (road end to gate) running through built blocks, or turning sharply;
-//! - sharp turns on the network roads.
+//! - sharp turns on the network roads;
+//! - drawn roads (a sketch's road strokes): how closely the road follows each line drawn (share
+//!   of the line within a mile of it, mean, 95th percentile and worst offset), and planned roads
+//!   crossing a `none` line.
+//! `DUMP=file.json` writes every road and settlement (for drawing over a preview).
 //!
 //! Usage: cargo run --release -p worldgen --example roadcheck -- [seed|world.json...] [--json]   (default 1 2 3)
 //! `--json`: one JSON array on stdout, per world `{world, settlements, sites, counts: {class: n}, worst: {class: [[x, y, size]...]}}`
@@ -304,6 +308,14 @@ fn main() {
                 }
             }
         }
+        let drawn = drawn_roads(&world, &t0, &standing);
+        // `DUMP=file.json`: every road (class, drawn stroke, control points) and settlement, for
+        // drawing over a preview.
+        if let Ok(path) = std::env::var("DUMP") {
+            let roads: Vec<Value> = t0.roads.roads.iter().map(|rc| json!({ "class": rc.class as u8, "stroke": rc.stroke, "pts": rc.pts.iter().map(|p| [p[0].round(), p[1].round()]).collect::<Vec<_>>() })).collect();
+            let towns: Vec<Value> = t0.settlements.iter().map(|st| json!({ "tier": st.tier as u8, "x": st.x.round(), "y": st.y.round() })).collect();
+            std::fs::write(&path, json!({ "cell_ft": t0.cell_ft, "roads": roads, "settlements": towns }).to_string()).expect("DUMP file");
+        }
         let (mut counts, mut worst) = (Map::new(), Map::new());
         for (tally, label, key) in [
             (&mut bridge_x, "town bridges overlapping each other", "bridges_overlapping"),
@@ -321,9 +333,91 @@ fn main() {
             tally.print(label, key, &mut counts, &mut worst);
         }
         say!("  ({n_layouts} layouts in {layout_s:.1} s)");
-        report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst }));
+        report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst, "drawn_roads": drawn }));
     }
     if args.json {
         println!("{}", Value::Array(report));
     }
+}
+
+/// Drawn roads against the roads made from them: per road stroke, the line sampled every
+/// 500 ft (on land, and outside towns, where streets take over) and each sample's distance to the nearest
+/// point of a road following it; per `none` line, the roads crossing it.
+fn drawn_roads(world: &worldgen::World, t0: &T0, wet: &dyn Fn(P) -> bool) -> Vec<Value> {
+    const MI: f64 = 5280.0;
+    let mut out = Vec::new();
+    for (si, s) in world.file.sketch.strokes.iter().enumerate().filter(|(_, s)| s.tool == worldgen::world::SketchTool::Road) {
+        let name = s.name.clone().unwrap_or_else(|| format!("stroke {si}"));
+        let curve = |rc: &worldgen::lod::roads::RoadCurve| {
+            let mut pts: Vec<P> = Vec::new();
+            for k in 0..rc.pts.len() - 1 {
+                let n = ((rc.s[k + 1] - rc.s[k]) / 100.0).ceil().max(1.0) as usize;
+                for j in 0..n {
+                    pts.push(rc.eval(k, j as f64 / n as f64, 5.0, t0.cell_ft).p);
+                }
+            }
+            pts
+        };
+        if s.kind.as_deref() == Some("none") {
+            let mut crossings = 0;
+            for rc in &t0.roads.roads {
+                let pts = curve(rc);
+                for w in pts.windows(2) {
+                    if s.pts.windows(2).any(|l| seg_cross(w[0], w[1], l[0], l[1])) {
+                        crossings += 1;
+                    }
+                }
+            }
+            say!("  drawn {name} (no road): {crossings} road crossings");
+            out.push(json!({ "stroke": si, "name": name, "none": true, "crossings": crossings }));
+            continue;
+        }
+        // The roads following it, as points in 1-mi buckets.
+        let mut grid: HashMap<(i64, i64), Vec<P>> = HashMap::new();
+        let mut pieces = 0;
+        for rc in t0.roads.roads.iter().filter(|rc| rc.stroke == Some(si as u32)) {
+            pieces += 1;
+            for p in curve(rc) {
+                grid.entry(((p[0] / MI).floor() as i64, (p[1] / MI).floor() as i64)).or_default().push(p);
+            }
+        }
+        let nearest = |p: P| {
+            let (ci, cj) = ((p[0] / MI).floor() as i64, (p[1] / MI).floor() as i64);
+            let mut best = f64::INFINITY;
+            for r in 0..12i64 {
+                for j in cj - r..=cj + r {
+                    for i in ci - r..=ci + r {
+                        if (i - ci).abs() != r && (j - cj).abs() != r {
+                            continue;
+                        }
+                        for q in grid.get(&(i, j)).into_iter().flatten() {
+                            best = best.min(dist(p, *q));
+                        }
+                    }
+                }
+                if best < (r as f64) * MI {
+                    break;
+                }
+            }
+            best
+        };
+        // (Inside a town the streets take over: roads end at its edge.)
+        let in_town = |p: P| t0.settlements.iter().any(|st| dist([st.x, st.y], p) < worldgen::town::road_trim_radius(st.tier, st.population));
+        let samples: Vec<P> = along(&s.pts, 500.0).into_iter().filter(|p| !in_town(*p) && !wet(*p)).collect();
+        let mut off: Vec<f64> = samples.iter().map(|p| nearest(*p)).collect();
+        let len: f64 = s.pts.windows(2).map(|w| dist(w[0], w[1])).sum();
+        let covered = off.iter().filter(|d| **d <= MI).count() as f64 / off.len().max(1) as f64;
+        off.sort_by(|a, b| a.total_cmp(b));
+        let mean = off.iter().filter(|d| d.is_finite()).sum::<f64>() / off.iter().filter(|d| d.is_finite()).count().max(1) as f64;
+        let p95 = off[((off.len() as f64 * 0.95) as usize).min(off.len() - 1)];
+        let max = *off.last().unwrap();
+        say!("  drawn {name}: {:.0} mi in {pieces} pieces, {:.1}% within a mile, offset mean {:.2} p95 {:.2} max {:.2} mi", len / MI, covered * 100.0, mean / MI, p95 / MI, max / MI);
+        out.push(json!({ "stroke": si, "name": name, "length_mi": len / MI, "pieces": pieces, "within_mi": covered, "mean_mi": mean / MI, "p95_mi": p95 / MI, "max_mi": max / MI }));
+    }
+    out
+}
+
+fn seg_cross(a: P, b: P, c: P, d: P) -> bool {
+    let side = |p: P, q: P, r: P| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    side(a, b, c) * side(a, b, d) < 0.0 && side(c, d, a) * side(c, d, b) < 0.0
 }

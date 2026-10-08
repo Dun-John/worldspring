@@ -31,6 +31,9 @@ const RAISE = 0xa8822f;
 const LOWER = 0x6a62a0;
 const SALT = 0x7aaebf;
 const PIN_R: Record<string, number> = { metropolis: 8, city: 6.5, town: 5, village: 3.5 };
+/** Road strokes by kind: colour and width (px), as the map draws the roads; a no-road line. */
+const ROADS: Record<string, [number, number]> = { kings_road: [0x78201a, 4], road: [0x965028, 3], track: [0xaa825a, 2] };
+const NO_ROAD = 0xb02a1a;
 
 export class SketchLayer {
   readonly container = new Container();
@@ -181,6 +184,40 @@ export class SketchLayer {
     if (s.name && !live && pts.length >= 2) {
       const [mx, my] = pts[Math.floor(pts.length / 2)];
       this.label(s.name, true, mx, my - 14, true);
+    }
+    if (s.tool === 'road') {
+      if (s.kind === 'none') {
+        // A dashed red line, ticked across: no planned road crosses it.
+        let [on, left] = [true, 8];
+        for (let k = 1; k < pts.length; k++) {
+          let [ax, ay] = pts[k - 1];
+          const [bx, by] = pts[k];
+          let rest = Math.hypot(bx - ax, by - ay);
+          const [ux, uy] = rest > 0 ? [(bx - ax) / rest, (by - ay) / rest] : [0, 0];
+          while (rest > 0) {
+            const step = Math.min(left, rest);
+            if (on) g.moveTo(ax, ay).lineTo(ax + ux * step, ay + uy * step);
+            [ax, ay, rest, left] = [ax + ux * step, ay + uy * step, rest - step, left - step];
+            if (left <= 0) [on, left] = [!on, on ? 6 : 8];
+          }
+        }
+        g.stroke({ width: 2.5, color: NO_ROAD, alpha: 0.95, cap: 'round' });
+        for (const k of [0, pts.length - 1]) {
+          const [x, y] = pts[k];
+          g.moveTo(x - 4, y - 4).lineTo(x + 4, y + 4).moveTo(x - 4, y + 4).lineTo(x + 4, y - 4);
+        }
+        g.stroke({ width: 2, color: NO_ROAD });
+        return;
+      }
+      const [c, w] = ROADS[s.kind ?? 'road'] ?? ROADS.road;
+      const road = (width: number, col: number) => {
+        g.moveTo(pts[0][0], pts[0][1]);
+        for (let k = 1; k < pts.length; k++) g.lineTo(pts[k][0], pts[k][1]);
+        g.stroke({ width, color: col, alpha: 0.95, join: 'round', cap: 'round' });
+      };
+      road(w + 3, 0xf3ecd8);
+      road(w, c);
+      return;
     }
     const band = Math.max(3, 2 * (s.radius_ft ?? 0) * cam.ppf);
     const line = (width: number, alpha: number, c = color) => {

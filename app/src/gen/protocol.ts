@@ -38,7 +38,7 @@ export interface WorldFile {
   edits?: Edits;
 }
 
-export type SketchTool = 'land' | 'sea' | 'range' | 'river' | 'biome' | 'pin' | 'massif' | 'elevation' | 'lake' | 'volcano' | 'region' | 'site';
+export type SketchTool = 'land' | 'sea' | 'range' | 'river' | 'biome' | 'pin' | 'massif' | 'elevation' | 'lake' | 'volcano' | 'region' | 'site' | 'road';
 
 export type VolcanoKind = 'strato' | 'shield' | 'cinder' | 'caldera';
 export type VolcanoActivity = 'active' | 'dormant' | 'extinct';
@@ -46,6 +46,8 @@ export type VolcanoActivity = 'active' | 'dormant' | 'extinct';
 export type PinKind = 'port' | 'river' | 'mining' | 'fortress' | 'market' | 'farming' | 'fishing' | 'lumber' | 'herding' | 'oasis';
 /** A site stroke's kind (`world::SITE_KINDS`). */
 export type SiteKind = 'ruin' | 'tower' | 'camp' | 'waystation' | 'cave' | 'mine' | 'lava_tube' | 'entrance';
+/** Road strokes' kinds (`world::ROAD_KINDS`): the road's class, or `none` (no planned road crosses it). */
+export type RoadKind = 'kings_road' | 'road' | 'track' | 'none';
 
 /** A stroke of a sketch (`worldgen::world::Stroke`); points are world ft. */
 export interface Stroke {
@@ -61,7 +63,7 @@ export interface Stroke {
   biome?: string;
   tier?: 'metropolis' | 'city' | 'town' | 'village';
   /** The name of what it makes (pins, ranges, massifs, rivers, lakes, volcanoes, painted
-   * biomes, coasts, regions, sites). */
+   * biomes, coasts, regions, sites, roads). */
   name?: string;
   /** Massifs: the ridges' direction (degrees; else the outline's long axis). */
   trend?: number;
@@ -71,7 +73,7 @@ export interface Stroke {
   level_ft?: number;
   salt?: boolean;
   /** Volcanoes: VolcanoKind; pins: PinKind; sites: SiteKind; regions: what it names
-   * (`world::REGION_KINDS`). */
+   * (`world::REGION_KINDS`); roads: RoadKind. */
   kind?: string;
   activity?: VolcanoActivity;
   /** Pins: the realm's capital. */

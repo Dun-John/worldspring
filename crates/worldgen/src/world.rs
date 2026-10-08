@@ -12,7 +12,7 @@ use crate::core::{
 };
 
 /// Bump whenever generator output changes for an unchanged world file.
-pub const GEN_VERSION: u32 = 55;
+pub const GEN_VERSION: u32 = 56;
 
 /// Prevailing winds: latitude belts (trades, westerlies, polar easterlies) or one direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +181,10 @@ pub enum SketchTool {
     /// A site at the first point (`kind`: ruin, tower, camp, waystation, cave, mine, lava tube
     /// or entrance; `under` a ruin or entrance; optional `name`).
     Site,
+    /// A road along the line (`kind`: kings_road, road or track, default road; optional
+    /// `name`), joining the settlements at and beside it; or (`kind` none) a line no planned
+    /// road crosses.
+    Road,
 }
 
 /// Volcano strokes' kinds and activities.
@@ -191,6 +195,8 @@ pub const VOLCANO_ACTIVITY: [&str; 3] = ["active", "dormant", "extinct"];
 pub const PIN_KINDS: [&str; 10] = ["port", "river", "mining", "fortress", "market", "farming", "fishing", "lumber", "herding", "oasis"];
 /// Site strokes' kinds (as created sites').
 pub const SITE_KINDS: [&str; 8] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance"];
+/// Road strokes' kinds: the road's class, or `none` (a line no planned road crosses).
+pub const ROAD_KINDS: [&str; 4] = ["kings_road", "road", "track", "none"];
 /// What a region stroke names or makes: area features' kinds.
 pub const REGION_KINDS: [&str; 19] = [
     "region", "forest", "jungle", "taiga", "desert", "swamp", "plains", "tundra", "glacier", "blight", "ashlands", "range", "lake", "river", "island",
@@ -227,7 +233,7 @@ pub struct Stroke {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
     /// The name of what it makes (else generated): a settlement, range, massif, river, lake,
-    /// volcano, painted region, region or site.
+    /// volcano, painted region, region or site; a road's (else it has none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Massifs: the direction their ridges run (degrees, 0 = east, 90 = south), else along
@@ -245,7 +251,7 @@ pub struct Stroke {
     pub salt: bool,
     /// Volcanoes: `strato`, `shield`, `cinder` or `caldera` (default strato). Pins: what the
     /// settlement lives by (`PIN_KINDS`, else from its surroundings). Sites: `SITE_KINDS`.
-    /// Regions: `REGION_KINDS`.
+    /// Regions: `REGION_KINDS`. Roads: `ROAD_KINDS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Volcanoes: `active`, `dormant` or `extinct` (default dormant).
@@ -304,6 +310,8 @@ impl Sketch {
                 SketchTool::Region if !s.name.as_deref().is_some_and(|n| !n.trim().is_empty()) => return Err("a region stroke needs a name".into()),
                 SketchTool::Region if !s.kind.as_deref().is_none_or(|k| REGION_KINDS.contains(&k)) => return Err(format!("a region's kind is one of {}", REGION_KINDS.join(", "))),
                 SketchTool::Region if s.closed && s.pts.len() < 3 => return Err("a region's outline needs 3 or more points".into()),
+                SketchTool::Road if s.closed || s.pts.len() < 2 => return Err("a road is a line of 2 or more points".into()),
+                SketchTool::Road if !s.kind.as_deref().is_none_or(|k| ROAD_KINDS.contains(&k)) => return Err(format!("a road's kind is one of {}", ROAD_KINDS.join(", "))),
                 _ => {}
             }
             if let Some(u) = &s.under {

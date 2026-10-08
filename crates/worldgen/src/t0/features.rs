@@ -198,6 +198,8 @@ pub struct Inputs<'a> {
     pub pois: &'a [Poi],
     /// The drawn rivers' courses: (stroke, cells).
     pub courses: &'a [(usize, Vec<usize>)],
+    /// The road network (named drawn roads become features).
+    pub roads: &'a [super::roads::RoadPath],
 }
 
 /// Biome regions: (kind, how they are named, member biomes, fewest cells to be named).
@@ -299,6 +301,7 @@ pub fn extract(inp: &Inputs) -> Overlay {
     b.regions();
     b.sites();
     b.place_labels();
+    b.roads();
     b.out
 }
 
@@ -437,6 +440,71 @@ impl Builder<'_> {
         self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail });
         self.out.shapes.push(Shape::Point { at: [cx * c, cy * c], radius_ft: 0.0 });
         id
+    }
+
+    /// Named drawn roads: one feature each over all their pieces (in order along the line
+    /// drawn), labelled at the middle of the longest.
+    fn roads(&mut self) {
+        let strokes = &self.inp.world.file.sketch.strokes;
+        let mut done: Vec<u32> = Vec::new();
+        for r in self.inp.roads {
+            let Some(st) = r.stroke.filter(|st| !done.contains(st)) else { continue };
+            done.push(st);
+            let Some(name) = strokes.get(st as usize).and_then(|s| s.name.as_deref()).map(str::trim).filter(|n| !n.is_empty()) else { continue };
+            let line = &strokes[st as usize].pts;
+            let d2 = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
+            let len = |q: &super::roads::RoadPath| q.pts.windows(2).map(|w| crate::core::sqrt(d2(w[0], w[1]))).sum::<f64>();
+            // Where along the line drawn a point falls (ft along it).
+            let along = |m: [f64; 2]| {
+                let mut best = (f64::INFINITY, 0.0);
+                let mut acc = 0.0;
+                for w in line.windows(2) {
+                    let (dx, dy) = (w[1][0] - w[0][0], w[1][1] - w[0][1]);
+                    let l2 = (dx * dx + dy * dy).max(1e-9);
+                    let t = (((m[0] - w[0][0]) * dx + (m[1] - w[0][1]) * dy) / l2).clamp(0.0, 1.0);
+                    let d = d2(m, [w[0][0] + t * dx, w[0][1] + t * dy]);
+                    if d < best.0 {
+                        best = (d, acc + t * crate::core::sqrt(l2));
+                    }
+                    acc += crate::core::sqrt(l2);
+                }
+                best.1
+            };
+            // The pieces in order along it, each running its way.
+            let mut pieces: Vec<(f64, Vec<[f64; 2]>, &super::roads::RoadPath)> = self
+                .inp
+                .roads
+                .iter()
+                .filter(|q| q.stroke == Some(st) && q.pts.len() >= 2)
+                .map(|q| {
+                    let (a, b) = (along(q.pts[0]), along(q.pts[q.pts.len() - 1]));
+                    let pts = if a <= b { q.pts.clone() } else { q.pts.iter().rev().copied().collect() };
+                    (a.min(b), pts, q)
+                })
+                .collect();
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let course: Vec<[f32; 2]> = pieces.iter().flat_map(|q| q.1.iter().map(|p| [p[0] as f32, p[1] as f32])).collect();
+            let pieces: Vec<&super::roads::RoadPath> = pieces.iter().map(|q| q.2).collect();
+            let Some(longest) = pieces.iter().max_by(|a, b| len(a).total_cmp(&len(b))) else { continue };
+            // The middle of the longest piece, and its heading there.
+            let half = 0.5 * len(longest);
+            let (mut acc, mut k) = (0.0, 1);
+            while k + 1 < longest.pts.len() && acc + crate::core::sqrt(d2(longest.pts[k], longest.pts[k - 1])) < half {
+                acc += crate::core::sqrt(d2(longest.pts[k], longest.pts[k - 1]));
+                k += 1;
+            }
+            let (a, b) = (longest.pts[k.saturating_sub(3)], longest.pts[(k + 3).min(longest.pts.len() - 1)]);
+            let angle = upright(libm::atan2(b[1] - a[1], b[0] - a[0]));
+            let at = longest.pts[k];
+            let total: f64 = pieces.iter().map(|q| len(q)).sum();
+            let class = ["king's road", "road", "track"][longest.class as usize];
+            let mut id = format!("road:{:x}", hash2(self.inp.world.seed, (at[0] / 8.0 / self.inp.cell_ft) as i64, (at[1] / 8.0 / self.inp.cell_ft) as i64) & 0xffff_ffff);
+            while !self.ids.insert(id.clone()) {
+                id.push('b');
+            }
+            self.out.features.push(Feature { id, kind: "road", name: name.to_string(), x: at[0], y: at[1], angle, extent_ft: total, elev_ft: None, detail: Some(class.into()) });
+            self.out.shapes.push(Shape::Line(course));
+        }
     }
 
     /// The feature just pushed covers these cells (of a grid `gw` wide, `cell_ft` apart).

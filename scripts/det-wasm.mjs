@@ -34,6 +34,8 @@ sketched.sketch = {
     { tool: 'region', name: 'Det Fields', pts: [mi(450, 650)] },
     { tool: 'region', name: 'Det Vale', closed: true, pts: [mi(250, 300), mi(300, 300), mi(300, 350), mi(250, 350)] },
     { tool: 'site', kind: 'ruin', under: 'catacombs', name: 'Det Barrow', pts: [mi(600, 520)] },
+    { tool: 'road', kind: 'kings_road', name: 'Det Way', pts: [mi(300, 450), mi(400, 560), mi(540, 600)] },
+    { tool: 'road', kind: 'none', pts: [mi(450, 380), mi(470, 440)] },
   ],
 };
 

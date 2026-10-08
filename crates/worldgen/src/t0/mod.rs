@@ -25,7 +25,7 @@ use crate::core::noise::{Fbm, fbm, smoothstep};
 use features::Overlay;
 use volcano::Activity;
 
-const MAGIC: u32 = 0x5430_4735; // "T0G5"
+const MAGIC: u32 = 0x5430_4736; // "T0G6"
 /// Height of the bank at the dry edge of a shore cell above the water (ft).
 const SHORE_BANK_FT: f64 = 6.0;
 /// Ocean distance encoded in the biome texture saturates here (ft).
@@ -335,7 +335,8 @@ impl T0 {
         // The ground roads are planned on, at any point (the plan's grid every half cell is
         // too coarse for switchbacks to see a narrow valley).
         let planned = |x: f64, y: f64| rivers.valley(ground(x, y), x, y);
-        let rinp = roads::Inputs { world, plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, routes: Default::default() };
+        let drawn = roads::drawn(world, w, h, cell);
+        let rinp = roads::Inputs { world, drawn, pre: Default::default(), plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, routes: Default::default() };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None, &mut conflicts);
         let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
@@ -404,6 +405,7 @@ impl T0 {
         }
         progress("roads", 0.0);
         let mut network = roads::build(&rinp, &settlements);
+        conflicts.extend(rinp.pre().conflicts.iter().cloned());
         // Roads keep out of the belts the rivers meander in, crossing each one once.
         let belts = crate::lod::roads::BeltCache::default();
         for (i, r) in network.roads.iter_mut().enumerate() {
@@ -417,6 +419,7 @@ impl T0 {
             let z = roads::round_corners(&r.pts, &r.z, 0.06 * cell, 0.05 * cell).1;
             (r.pts, r.wander) = roads::round_corners(&r.pts, &r.wander, 0.06 * cell, 0.05 * cell);
             r.z = z;
+            roads::ease_turns(r, cell, &|x, y| !wet(x, y));
             // The bends are in the points (`roads::follow_terrain`): no wander on top, which
             // would ignore the rivers and the profile (and, where two roads were joined into one,
             // swing at full strength round the joint).
@@ -428,7 +431,7 @@ impl T0 {
                 .roads
                 .iter()
                 .enumerate()
-                .map(|(i, r)| RoadCurve::new(r.class, r.pts.clone(), r.z.clone(), r.wander.clone(), road_seed(world.seed, i)))
+                .map(|(i, r)| RoadCurve::new(r.class, r.pts.clone(), r.z.clone(), r.wander.clone(), road_seed(world.seed, i)).drawn(r.stroke))
                 .collect(),
             map_w,
             map_h,
@@ -459,6 +462,7 @@ impl T0 {
             settlements: &settlements,
             pois: &pois,
             courses: &courses,
+            roads: &network.roads,
         });
         conflicts.append(&mut overlay.conflicts);
         overlay.conflicts = conflicts;
@@ -513,7 +517,7 @@ impl T0 {
                 })
                 .collect();
             let z = roads::level_profiles(&pts, &class, &terrain, &floor, &meets);
-            rs.iter().zip(pts).zip(z).zip(wander).map(|(((r, p), z), w)| RoadCurve::new(r.class, p, z, w, r.seed)).collect()
+            rs.iter().zip(pts).zip(z).zip(wander).map(|(((r, p), z), w)| RoadCurve::new(r.class, p, z, w, r.seed).drawn(r.stroke)).collect()
         };
         t0.roads = RoadNet::new(curves, map_w, map_h, cell);
         t0.ground_cache = Default::default();
@@ -889,13 +893,14 @@ impl T0 {
                 out.extend_from_slice(&r.taper[k].to_le_bytes());
             }
         }
-        // Roads: count, then per road: class u8, point count u32, seed u64, then (x, y) f64 +
-        // (z, wander) f32.
+        // Roads: count, then per road: class u8, point count u32, seed u64, the drawn road's
+        // stroke u32 (`u32::MAX`: none), then (x, y) f64 + (z, wander) f32.
         out.extend_from_slice(&(self.roads.roads.len() as u32).to_le_bytes());
         for r in &self.roads.roads {
             out.push(r.class as u8);
             out.extend_from_slice(&(r.pts.len() as u32).to_le_bytes());
             out.extend_from_slice(&r.seed.to_le_bytes());
+            out.extend_from_slice(&r.stroke.unwrap_or(u32::MAX).to_le_bytes());
             for k in 0..r.pts.len() {
                 out.extend_from_slice(&r.pts[k][0].to_le_bytes());
                 out.extend_from_slice(&r.pts[k][1].to_le_bytes());
@@ -973,6 +978,7 @@ impl T0 {
             let class = roads::RoadClass::from_u8(take(1)?[0]);
             let npts = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
             let seed = u64::from_le_bytes(take(8)?.try_into().unwrap());
+            let stroke = Some(u32::from_le_bytes(take(4)?.try_into().unwrap())).filter(|&s| s != u32::MAX);
             let (mut pts, mut z, mut wander) = (Vec::with_capacity(npts), Vec::with_capacity(npts), Vec::with_capacity(npts));
             for _ in 0..npts {
                 let x = f64::from_le_bytes(take(8)?.try_into().unwrap());
@@ -981,7 +987,7 @@ impl T0 {
                 z.push(f32::from_le_bytes(take(4)?.try_into().unwrap()));
                 wander.push(f32::from_le_bytes(take(4)?.try_into().unwrap()));
             }
-            road_curves.push(RoadCurve::new(class, pts, z, wander, seed));
+            road_curves.push(RoadCurve::new(class, pts, z, wander, seed).drawn(stroke));
         }
         let count = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
         let mut settlements = Vec::with_capacity(count);

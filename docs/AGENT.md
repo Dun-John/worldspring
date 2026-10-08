@@ -79,6 +79,7 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | `describe_location` | What is at a place: elevation, biome, the areas it lies in, the building, district or site there, named features nearby (measured to their nearest edge or course). |
 | `features_near` | Everything named within a radius of a place, nearest first, with distance, direction and extent; `kinds` filters (districts and businesses too). |
 | `route` | Road or overland distance between two places, with travel days at normal, fast and slow pace. |
+| `list_roads` | The road network: named roads drawn in the sketch with the settlements along them, then roads between settlements and junctions (class, length, ends); filter by a place and radius, a settlement, a class, or drawn roads only. |
 | `get_battlemap` | The 640-ft battlemap chunk at a place: surfaces, buildings, objects with their tactical rules, and what lies near the place by square. |
 | `render_view` | A screenshot (PNG, 1536×1024) from the open app. `size_ft` is the ground across the image. About 450 shows the painted battlemap; 3000 a village; 20000 a city; 200000 a region. |
 | `focus_view` | Fly the user's view to a place. |

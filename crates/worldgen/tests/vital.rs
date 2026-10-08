@@ -1729,6 +1729,9 @@ fn sketch_names_and_sites() {
         serde_json::json!({ "tool": "site", "kind": "ruin", "under": "crypt", "name": "Barrow of Kings", "pts": [p(350.0, 300.0)] }),
         serde_json::json!({ "tool": "pin", "tier": "town", "capital": true, "name": "Rexxentrum", "pts": [p(200.0, 230.0)] }),
         serde_json::json!({ "tool": "pin", "tier": "city", "kind": "fortress", "name": "Bladegarden", "wards": wards, "pts": [p(380.0, 280.0)] }),
+        // A king's road bending south between the two pins, and a line no planned road crosses.
+        serde_json::json!({ "tool": "road", "kind": "kings_road", "name": "The Gilded Roadway", "pts": [p(201.0, 232.0), p(225.0, 275.0), p(270.0, 305.0), p(330.0, 305.0), p(378.0, 282.0)] }),
+        serde_json::json!({ "tool": "road", "kind": "none", "pts": [p(150.0, 150.0), p(150.0, 215.0), p(140.0, 260.0)] }),
     ];
     let params = serde_json::json!({ "width_mi": 600.0, "height_mi": 400.0, "volcanoes": 0 });
     let file = |strokes: &[serde_json::Value]| -> World {
@@ -1767,6 +1770,47 @@ fn sketch_names_and_sites() {
     let centre = layout.quarters.iter().find(|q| q.kind == worldgen::town::QuarterKind::Center).expect("a centre");
     assert_eq!(centre.name, wards[0], "the first ward doesn't name the central district");
     assert!(wards[1..].iter().all(|w| layout.quarters.iter().any(|q| q.name == *w)), "the wards don't name districts");
+
+    // The drawn road: followed (every half mile of its line within a mile of the road made from
+    // it), named, joining the pins at its ends; no planned road crosses the `none` line.
+    let seg = |q: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let t = (((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+        ((a[0] + t * dx - q[0]).powi(2) + (a[1] + t * dy - q[1]).powi(2)).sqrt()
+    };
+    let strokes_of = |tool_kind: Option<&str>| world.file.sketch.strokes.iter().position(|s| s.tool == worldgen::world::SketchTool::Road && s.kind.as_deref() == tool_kind).unwrap();
+    let (gilded, none) = (strokes_of(Some("kings_road")), strokes_of(Some("none")));
+    let made: Vec<&worldgen::lod::roads::RoadCurve> = t0.roads.roads.iter().filter(|r| r.stroke == Some(gilded as u32)).collect();
+    let line = &world.file.sketch.strokes[gilded].pts;
+    let (mut n, mut far) = (0, Vec::new());
+    for w in line.windows(2) {
+        let k = (((w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])) / (0.5 * MI)).ceil() as usize;
+        for j in 0..k {
+            let q = [w[0][0] + (w[1][0] - w[0][0]) * j as f64 / k as f64, w[0][1] + (w[1][1] - w[0][1]) * j as f64 / k as f64];
+            let d = made.iter().flat_map(|r| r.pts.windows(2).map(|v| seg(q, v[0], v[1]))).fold(f64::INFINITY, f64::min);
+            n += 1;
+            if d > MI {
+                far.push((q[0] / MI, q[1] / MI, d / MI));
+            }
+        }
+    }
+    assert!(far.len() * 20 <= n, "the drawn road strays over a mile from its line at {} of {n} points: {:?}", far.len(), &far[..far.len().min(6)]);
+    assert!(made.iter().all(|r| r.class == worldgen::t0::roads::RoadClass::KingsRoad), "the drawn king's road isn't one");
+    assert!(feats.iter().any(|f| f.kind == "road" && f.name == "The Gilded Roadway"), "the named road is not a feature");
+    let near_pin = |name: &str| {
+        let s = &t0.settlements[at(name)];
+        let r = worldgen::town::road_trim_radius(s.tier, s.population) + 3_000.0;
+        made.iter().any(|c| [c.pts[0], *c.pts.last().unwrap()].iter().any(|e| (e[0] - s.x).hypot(e[1] - s.y) < r))
+    };
+    assert!(near_pin("Rexxentrum") && near_pin("Bladegarden"), "the drawn road doesn't reach the pins at its ends");
+    let cut = &world.file.sketch.strokes[none].pts;
+    let crossing = t0.roads.roads.iter().filter(|r| r.stroke.is_none()).find_map(|r| {
+        r.pts.windows(2).find_map(|v| {
+            let side = |p: [f64; 2], q: [f64; 2], o: [f64; 2]| (q[0] - p[0]) * (o[1] - p[1]) - (q[1] - p[1]) * (o[0] - p[0]);
+            cut.windows(2).find(|c| side(v[0], v[1], c[0]) * side(v[0], v[1], c[1]) < 0.0 && side(c[0], c[1], v[0]) * side(c[0], c[1], v[1]) < 0.0).map(|_| (v[0][0] / MI, v[0][1] / MI))
+        })
+    });
+    assert!(crossing.is_none(), "a planned road crosses the no-road line at {crossing:?} mi");
 
     // The site: a named ruin over a crypt, where it was drawn; still there when the sketch changes
     // elsewhere.

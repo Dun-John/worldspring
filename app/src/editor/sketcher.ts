@@ -1,11 +1,11 @@
 // The sketch being drawn (before it is generated): tools and their settings, freehand strokes
 // from pointer input (thinned while drawing, simplified when done), erasing and undo.
-import type { PinKind, SiteKind, Stroke, VolcanoActivity, VolcanoKind } from '../gen/protocol';
+import type { PinKind, RoadKind, SiteKind, Stroke, VolcanoActivity, VolcanoKind } from '../gen/protocol';
 
 export const MI = 5280;
 
 /** Editor tools; each makes strokes of one kind (`erase` removes them). */
-export type EditTool = 'coast' | 'land' | 'sea' | 'range' | 'massif' | 'elevation' | 'river' | 'lake' | 'biome' | 'volcano' | 'pin' | 'site' | 'region' | 'erase';
+export type EditTool = 'coast' | 'land' | 'sea' | 'range' | 'massif' | 'elevation' | 'river' | 'lake' | 'biome' | 'volcano' | 'pin' | 'site' | 'region' | 'road' | 'erase';
 
 /** Tools that draw a closed outline (always filled). */
 const OUTLINES: EditTool[] = ['coast', 'massif', 'elevation', 'lake'];
@@ -40,6 +40,8 @@ export interface ToolSettings {
   /** Sites: the kind, and what lies beneath a ruin or an entrance ('' : the usual). */
   site: SiteKind;
   under: string;
+  /** Roads: the class drawn, or 'none' (a line no planned road crosses). */
+  road: RoadKind;
   /** Names: what a name names ('' : whatever is there), and drawn round a region of its own
    * instead of clicked. */
   regionKind: string;
@@ -66,13 +68,14 @@ export const DEFAULT_SETTINGS: ToolSettings = {
   wards: '',
   site: 'ruin',
   under: '',
+  road: 'road',
   regionKind: '',
   regionOutline: false,
   name: '',
 };
 
 /** Tools whose strokes can carry a name. */
-export const NAMED_TOOLS: EditTool[] = ['coast', 'land', 'sea', 'range', 'massif', 'river', 'lake', 'biome', 'volcano', 'pin', 'site', 'region'];
+export const NAMED_TOOLS: EditTool[] = ['coast', 'land', 'sea', 'range', 'massif', 'river', 'lake', 'biome', 'volcano', 'pin', 'site', 'region', 'road'];
 
 /** Pixels a pointer must move before a new point is added. */
 const STEP_PX = 4;
@@ -207,14 +210,14 @@ export class Sketcher {
       tool,
       pts: [[x, y]],
       ...(closed ? { closed } : {}),
-      radius_ft: (t.radiusMi[tool] ?? 10) * MI,
+      ...(tool === 'road' ? { kind: t.road } : { radius_ft: (t.radiusMi[tool] ?? 10) * MI }),
       ...(tool === 'range' || tool === 'river' || tool === 'massif' ? { strength: t.strength } : {}),
       ...(t.hard && ['land', 'sea', 'biome', 'elevation'].includes(tool) ? { hard: true } : {}),
       ...(tool === 'biome' ? { biome: t.biome } : {}),
       ...(tool === 'elevation' ? { delta_ft: t.delta } : {}),
       ...(tool === 'lake' ? { ...(t.level !== null ? { level_ft: t.level } : {}), ...(t.salt ? { salt: true } : {}) } : {}),
       ...(tool === 'region' && t.regionKind ? { kind: t.regionKind } : {}),
-      ...(name && NAMED_TOOLS.includes(t.tool) ? { name } : {}),
+      ...(name && NAMED_TOOLS.includes(t.tool) && !(tool === 'road' && t.road === 'none') ? { name } : {}),
     };
     this.onDraw();
   }
@@ -239,7 +242,14 @@ export class Sketcher {
       this.onDraw();
       return;
     }
-    if (pts.length === 1 && !d.closed) pts = [pts[0], [pts[0][0] + 10, pts[0][1]]];
+    if (pts.length === 1 && !d.closed) {
+      // (A road needs a line: a click makes none.)
+      if (d.tool === 'road') {
+        this.onDraw();
+        return;
+      }
+      pts = [pts[0], [pts[0][0] + 10, pts[0][1]]];
+    }
     this.commit([...this.strokes, { ...d, pts }]);
     if (d.name) this.settings.name = '';
   }
