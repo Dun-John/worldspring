@@ -1477,4 +1477,78 @@ fn sketch_guarantee() {
     }
     assert!(!t0.settlements.iter().any(|s| s.pin == Some(8)), "a settlement was placed far out at sea");
     assert!(extra.overlay.conflicts.iter().any(|c| c.stroke == 8), "the pin at sea was not reported");
+
+    sketch_rivers_and_ports();
+}
+
+/// Sketch guarantee (R2): drawn rivers stay rivers and coasts keep their ports. On a low plain
+/// with a hard coast, a long river drawn to stop a few miles short of the sea and a tributary
+/// drawn into it (drawn first: the order strokes are drawn in doesn't matter) both flow on to
+/// the sea, are mapped as rivers over at least 90% of their drawn courses with hardly any lake
+/// along them, no dry land lies below sea level, and a town pinned on the coast over barren
+/// ground is a port.
+fn sketch_rivers_and_ports() {
+    const MI: f64 = 5280.0;
+    let mi = |p: &(f64, f64)| serde_json::json!([(p.0 * MI).round(), (p.1 * MI).round()]);
+    let coast = [(30.0, 30.0), (390.0, 30.0), (390.0, 270.0), (30.0, 270.0)];
+    let main = [(60.0, 140.0), (140.0, 160.0), (220.0, 140.0), (300.0, 160.0), (384.0, 150.0)];
+    let tributary = [(150.0, 60.0), (190.0, 100.0), (220.0, 140.0)];
+    let port = (389.6, 220.0);
+    let barren = [(370.0, 205.0), (400.0, 205.0), (400.0, 235.0), (370.0, 235.0)];
+    let strokes = serde_json::json!([
+        { "tool": "land", "closed": true, "hard": true, "pts": coast.iter().map(mi).collect::<Vec<_>>() },
+        { "tool": "river", "radius_ft": 2.0 * MI, "strength": 0.5, "pts": tributary.iter().map(mi).collect::<Vec<_>>() },
+        { "tool": "river", "radius_ft": 3.0 * MI, "strength": 0.7, "pts": main.iter().map(mi).collect::<Vec<_>>() },
+        { "tool": "biome", "biome": "volcanic", "closed": true, "hard": true, "pts": barren.iter().map(mi).collect::<Vec<_>>() },
+        { "tool": "pin", "tier": "town", "name": "Saltmouth", "pts": [mi(&port)] },
+    ]);
+    let params = serde_json::json!({ "width_mi": 420.0, "height_mi": 300.0, "max_elev_ft": 1000.0, "ruggedness": 0.1, "settlement_density": 0.0 });
+    let file: WorldFile = serde_json::from_value(serde_json::json!({ "gen_version": worldgen::world::GEN_VERSION, "seed": 7, "params": params, "sketch": { "strokes": strokes } })).unwrap();
+    let world = World::new(file).unwrap();
+    let t0 = worldgen::t0::T0::generate(&world);
+    let extra = t0.extra.as_ref().unwrap();
+    let hydro = &extra.hydro;
+    let sea = world.params().sea_level_ft;
+    let (w, h, cell) = (t0.height.w, t0.height.h, t0.cell_ft);
+    let no_lake = worldgen::t0::hydro::NO_LAKE;
+
+    // Each drawn river: its cells on land, a mapped river within a cell of each.
+    let mut river_cell = vec![false; w * h];
+    for r in &hydro.rivers {
+        for &c in &r.cells {
+            river_cell[c as usize] = true;
+        }
+    }
+    for (name, pts) in [("long river", &main[..]), ("tributary", &tributary[..])] {
+        let (mut on, mut all, mut lake) = (0, 0, 0);
+        let mut last = usize::MAX;
+        for seg in pts.windows(2) {
+            for t in 0..=200 {
+                let f = t as f64 / 200.0;
+                let (x, y) = ((seg[0].0 + (seg[1].0 - seg[0].0) * f) * MI, (seg[0].1 + (seg[1].1 - seg[0].1) * f) * MI);
+                let (i, j) = (((x / cell).round() as usize).min(w - 1), ((y / cell).round() as usize).min(h - 1));
+                let k = j * w + i;
+                if k == last || (t0.height.data[k] as f64 <= sea && hydro.lake_of[k] == no_lake && t0.water.data[k] > worldgen::t0::hydro::DRY) {
+                    continue;
+                }
+                last = k;
+                all += 1;
+                lake += usize::from(hydro.lake_of[k] != no_lake);
+                on += usize::from((j.saturating_sub(1)..=(j + 1).min(h - 1)).any(|y| (i.saturating_sub(1)..=(i + 1).min(w - 1)).any(|x| river_cell[y * w + x])));
+            }
+        }
+        assert!(on * 10 >= all * 9, "the drawn {name} is mapped as a river over only {on}/{all} cells ({lake} in lakes)");
+        assert!(lake * 20 <= all, "the drawn {name} runs through lakes over {lake}/{all} cells");
+    }
+    // (Both reach the sea: neither is left ending inland.)
+    let stuck: Vec<&str> = extra.overlay.conflicts.iter().filter(|c| c.stroke <= 2 && c.message.contains("inland")).map(|c| c.message.as_str()).collect();
+    assert!(stuck.is_empty(), "a drawn river did not flow on to the sea: {stuck:?}");
+
+    // No dry land below sea level (a river or plain dug under the sea).
+    let low = (0..w * h).filter(|&k| (t0.height.data[k] as f64) < sea && t0.water.data[k] <= worldgen::t0::hydro::DRY && hydro.lake_of[k] == no_lake).count();
+    assert_eq!(low, 0, "{low} cells of dry land below sea level");
+
+    // The pin on the barren coast is a port.
+    let s = t0.settlements.iter().find(|s| s.pin == Some(4)).expect("the coastal pin placed no settlement");
+    assert!(s.coastal && s.kind == worldgen::t0::settle::SettleKind::Port, "the town pinned on the coast is not a port ({:?}, coastal {})", s.kind, s.coastal);
 }

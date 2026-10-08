@@ -395,9 +395,14 @@ export class TileLayer {
     const grain = new Float32Array(2);
     const pat0 = new Float32Array(4);
     const pat1 = new Float32Array(4);
+    // Where the map ends, in tile units: an edge tile's part past it is not drawn (its data
+    // there is the edge drawn out into streaks).
+    const ts = this.geom.domain_ft / 2 ** m.level;
+    const mapEnd = new Float32Array([this.geom.map_w_ft / ts - m.x, this.geom.map_h_ft / ts - m.y]);
     const uniforms = new UniformGroup({
       uBase: { value: m.base, type: 'f32' },
       uAlpha: { value: 0, type: 'f32' },
+      uMapEnd: { value: mapEnd, type: 'vec2<f32>' },
       uGrainOrigin: { value: grain, type: 'vec2<f32>' },
       uTilePx: { value: 256, type: 'f32' },
       uPat0: { value: pat0, type: 'vec4<f32>' },

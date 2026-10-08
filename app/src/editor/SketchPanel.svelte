@@ -36,7 +36,7 @@
     ['land', 'land', 'Land', 'L', 'Brush on land: islands, peninsulas, land bridges.'],
     ['sea', 'waves', 'Sea', 'S', 'Brush on sea: bays, straits, inland seas.'],
     ['range', 'mountain', 'Range', 'R', 'Draw along a mountain ridge.'],
-    ['river', 'river', 'River', 'W', 'Draw from the source down to the sea or a lake.'],
+    ['river', 'river', 'River', 'W', 'Draw from the source to the sea or into another river: it runs the way you draw it.'],
     ['biome', 'leaf', 'Biome', 'B', 'Paint a biome over the land.'],
     ['pin', 'castle', 'Settlement', 'T', 'Click to place a settlement of the chosen size.'],
     ['erase', 'eraser', 'Erase', 'E', 'Click a stroke or settlement to remove it.'],

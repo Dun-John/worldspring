@@ -1,24 +1,27 @@
 //! Dev tool: height profile across a line at a given level, with road and water context.
-//! `cargo run --release -p worldgen --example probe -- <seed> <fx> <fy> <dx-ft> <dy-ft> [level] [steps]`
+//! `cargo run --release -p worldgen --example probe -- <seed|world.json> <fx> <fy> <dx-ft> <dy-ft> [level] [steps] [river|road] [--json]`
 //! Samples from (fx, fy) - (dx, dy) to (fx, fy) + (dx, dy). An 8th argument `river` or `road`
 //! centres it on the nearest river or road point instead, across it.
+//! `--json`: one JSON object on stdout, `{centre: {...}, samples: [{t_ft, h, t0, road, water, mask, river}]}`.
+mod common;
+
+use serde_json::{json, Value};
 use worldgen::core::tile::{HALO, PADDED, TileKey};
 use worldgen::pipeline::Executor;
-use worldgen::{World, WorldFile};
 
 fn main() {
-    let a: Vec<String> = std::env::args().collect();
-    let f = |i: usize, d: f64| a.get(i).and_then(|s| s.parse().ok()).unwrap_or(d);
-    let world = World::new(WorldFile { seed: f(1, 1.0) as u32, ..Default::default() }).unwrap();
+    let a = common::args();
+    let world = common::world(a.get(0).unwrap_or("1"));
     let g = world.geom.clone();
-    let (cx, cy) = (f(2, 0.5) * g.map_w_ft, f(3, 0.5) * g.map_h_ft);
-    let (dx, dy) = (f(4, 0.0), f(5, 300.0));
-    let level = f(6, 12.0) as u8;
-    let steps = f(7, 24.0) as usize;
+    let (cx, cy) = (a.num(1, 0.5) * g.map_w_ft, a.num(2, 0.5) * g.map_h_ft);
+    let (dx, dy) = (a.num(3, 0.0), a.num(4, 300.0));
+    let level = a.num(5, 12.0) as u8;
+    let steps = a.num(6, 24.0) as usize;
     let mut ex = Executor::new(world);
     // `river` as the 8th argument: centre on the nearest river curve point, probe across it.
     let (mut cx, mut cy, mut dx, mut dy) = (cx, cy, dx, dy);
-    if a.get(8).is_some_and(|s| s == "river") {
+    let mut snap = Value::Null;
+    if a.get(7).is_some_and(|s| s == "river") {
         let mut best = (f64::MAX, [0.0; 2], [0.0; 2], 0.0, 0.0);
         for (ri, k) in ex.t0.rivers.segments_near(cx - 4000.0, cy - 4000.0, cx + 4000.0, cy + 4000.0, 0.0) {
             let r = &ex.t0.rivers.rivers[ri as usize];
@@ -33,11 +36,18 @@ fn main() {
         }
         let l = (best.2[0].powi(2) + best.2[1].powi(2)).sqrt().max(1e-9);
         let half = (dx * dx + dy * dy).sqrt();
-        (cx, cy, dx, dy) = (best.1[0], best.1[1], -best.2[1] / l * half, best.2[0] / l * half);
-        println!("river point {:.0} ft away at fx {:.6} fy {:.6}: surface z {:.1} ft, width {:.0} ft", best.0, cx / g.map_w_ft, cy / g.map_h_ft, best.3, best.4);
+        if best.0 == f64::MAX {
+            eprintln!("no river within 4000 ft; probing at the given point");
+        } else if a.json {
+            (cx, cy, dx, dy) = (best.1[0], best.1[1], -best.2[1] / l * half, best.2[0] / l * half);
+            snap = json!({ "kind": "river", "dist_ft": best.0, "z_ft": best.3, "width_ft": best.4 });
+        } else {
+            (cx, cy, dx, dy) = (best.1[0], best.1[1], -best.2[1] / l * half, best.2[0] / l * half);
+            println!("river point {:.0} ft away at fx {:.6} fy {:.6}: surface z {:.1} ft, width {:.0} ft", best.0, cx / g.map_w_ft, cy / g.map_h_ft, best.3, best.4);
+        }
     }
     // `road`: the same across the nearest road.
-    if a.get(8).is_some_and(|s| s == "road") {
+    if a.get(7).is_some_and(|s| s == "road") {
         let mut best = (f64::MAX, [0.0; 2], [0.0; 2], 0.0, 0usize);
         for (ri, k) in ex.t0.roads.segments_near([cx - 4000.0, cy - 4000.0, cx + 4000.0, cy + 4000.0], 0.0) {
             let r = &ex.t0.roads.roads[ri as usize];
@@ -52,13 +62,22 @@ fn main() {
         }
         let l = (best.2[0].powi(2) + best.2[1].powi(2)).sqrt().max(1e-9);
         let half = (dx * dx + dy * dy).sqrt();
-        (cx, cy, dx, dy) = (best.1[0], best.1[1], -best.2[1] / l * half, best.2[0] / l * half);
         let lattice = g.spacing_ft(g.first_refine_level - 1);
         let ga = ex.t0.ground_at(best.1[0], best.1[1], lattice);
-        println!("road {} point {:.0} ft away at fx {:.6} fy {:.6}: surface z {:.1} ft (planned on {:.1}, ground_at {ga:.1})", best.4, best.0, cx / g.map_w_ft, cy / g.map_h_ft, best.3, ex.t0.rivers.valley(ga, best.1[0], best.1[1]));
+        let planned = ex.t0.rivers.valley(ga, best.1[0], best.1[1]);
+        if best.0 == f64::MAX {
+            eprintln!("no road within 4000 ft; probing at the given point");
+        } else if a.json {
+            (cx, cy, dx, dy) = (best.1[0], best.1[1], -best.2[1] / l * half, best.2[0] / l * half);
+            snap = json!({ "kind": "road", "road": best.4, "dist_ft": best.0, "z_ft": best.3, "planned_ft": planned, "ground_at_ft": ga });
+        } else {
+            (cx, cy, dx, dy) = (best.1[0], best.1[1], -best.2[1] / l * half, best.2[0] / l * half);
+            println!("road {} point {:.0} ft away at fx {:.6} fy {:.6}: surface z {:.1} ft (planned on {planned:.1}, ground_at {ga:.1})", best.4, best.0, cx / g.map_w_ft, cy / g.map_h_ft, best.3);
+        }
     }
     let s = g.spacing_ft(level);
     let size = g.tile_size_ft(level);
+    let mut samples = Vec::new();
     for k in 0..=steps {
         let t = -1.0 + 2.0 * k as f64 / steps as f64;
         let (x, y) = (cx + dx * t, cy + dy * t);
@@ -71,6 +90,15 @@ fn main() {
         let road = tile.road_mask.get((j + HALO) * PADDED + i + HALO).copied().unwrap_or(0);
         let t0h = ex.t0.sample(x, y, s);
         let (lvl, mask) = ex.t0.sample_lake(x, y);
-        println!("{:+7.0} ft  h {h:8.1}  t0 {t0h:8.1}  road {road}  water {lvl:9.1} mask {mask:.2} river {rw:9.1}", t * (dx * dx + dy * dy).sqrt());
+        let t_ft = t * (dx * dx + dy * dy).sqrt();
+        if a.json {
+            samples.push(json!({ "t_ft": t_ft, "h": h, "t0": t0h, "road": road, "water": lvl, "mask": mask, "river": rw }));
+        } else {
+            println!("{t_ft:+7.0} ft  h {h:8.1}  t0 {t0h:8.1}  road {road}  water {lvl:9.1} mask {mask:.2} river {rw:9.1}");
+        }
+    }
+    if a.json {
+        let centre = json!({ "fx": cx / g.map_w_ft, "fy": cy / g.map_h_ft, "x_ft": cx, "y_ft": cy, "dx_ft": dx, "dy_ft": dy, "level": level, "steps": steps, "snap": snap });
+        println!("{}", json!({ "centre": centre, "samples": samples }));
     }
 }

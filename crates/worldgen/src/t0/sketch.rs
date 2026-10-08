@@ -18,6 +18,7 @@ use super::biome::{ALL as BIOMES, Biome};
 use super::hydro::NO_LAKE;
 use super::settle::Tier;
 use crate::World;
+use crate::core::hash::FastMap;
 use crate::core::noise::{fbm, ridged, smoothstep};
 use crate::world::{SketchTool, Stroke};
 
@@ -174,7 +175,8 @@ pub fn land_crust(world: &World, g: Raster, crust: &[f64], thr: f64) -> Option<V
     let n = g.w * g.h;
     let reach = 60.0 * MI;
     // A natural coast wanders off the drawn line: fractal, from bays and headlands tens of
-    // miles across down to coves; a hard one keeps within a mile or so.
+    // miles across down to coves; a hard one keeps within a few hundred yards (ragged, not
+    // ruled).
     let s_coast = world.stream("t0.sketch.coast");
     let wander: Vec<f64> = (0..n)
         .map(|k| {
@@ -188,7 +190,8 @@ pub fn land_crust(world: &World, g: Raster, crust: &[f64], thr: f64) -> Option<V
             MI * v
         })
         .collect();
-    let amount = |s: &Stroke| if s.hard { 0.06 } else { 1.0 };
+    // (The wander's amplitudes add up to ~35 mi: a hard coast's to ~0.3 mi.)
+    let amount = |s: &Stroke| if s.hard { 0.0085 } else { 1.0 };
     // Signals in miles: positive on drawn land (or sea), the coast where they cross zero.
     let mut land = vec![-reach / MI; n];
     for s in &lands {
@@ -204,15 +207,18 @@ pub fn land_crust(world: &World, g: Raster, crust: &[f64], thr: f64) -> Option<V
             sea[k] = sea[k].max((v - a * wander[k]) / MI);
         }
     }
-    // Settlements pinned near drawn land keep land under them (a coastal city stays coastal,
-    // wherever the natural coast wanders); one far out at sea is reported by `pins`.
+    // Settlements pinned on the coast keep the ground they stand on: only their own point
+    // (within about half a cell), so a pin on the coast stays on the coast. One farther out
+    // (more than a couple of miles into the sea, as drawn or as the natural coast wandered) is
+    // moved onto the nearest land by `pins`, which says so.
     if !lands.is_empty() {
-        let near: Vec<&Stroke> = strokes(world, SketchTool::Pin).map(|(_, s)| s).filter(|s| land[g.cell_of(s.pts[0])] >= -25.0).collect();
+        let near: Vec<&Stroke> = strokes(world, SketchTool::Pin).map(|(_, s)| s).filter(|s| land[g.cell_of(s.pts[0])] >= -2.0).collect();
         for s in near {
-            let reach = 4.0 * MI;
+            let reach = 0.75 * g.cell;
             for (k, d) in distance(g, &s.pts[..1], false, reach).into_iter().enumerate() {
-                if (d as f64) < reach {
-                    land[k] = land[k].max((3.0 * MI - d as f64) / MI);
+                // (Points out of reach hold `reach` as an f32.)
+                if d < reach as f32 {
+                    land[k] = land[k].max((reach - d as f64) / MI);
                 }
             }
         }
@@ -301,72 +307,245 @@ fn cells_along(g: Raster, pts: &[[f64; 2]]) -> Vec<usize> {
     out
 }
 
-/// Carve the drawn rivers into `height` (strictly downhill from source to mouth, in a valley
-/// with banks), and return the discharge (mm·cells) to add at each source so the hydrology
-/// maps them as rivers.
+/// How far (ft) past its drawn end a river is carried on to the sea or another river.
+const REACH_FT: f64 = 10.0 * MI;
+/// The least fall (ft per cell) of a drawn river, so it keeps flowing over a flat plain.
+const MIN_FALL: f64 = 0.05;
+/// A river's last cell above the sea it flows into (ft).
+const MOUTH_FT: f64 = 3.0;
+/// A valley's sides: how fast they climb away from the river (per ft across).
+const SIDE: f64 = 0.05;
+const NONE: u32 = u32::MAX;
+
+/// Where a drawn river's course ends.
+#[derive(Clone, Copy, PartialEq)]
+enum End {
+    Sea,
+    /// Joins another course at this cell (one of that course's cells).
+    Join(usize),
+    /// Nowhere to go: it ends on land.
+    Inland,
+}
+
+/// A drawn river on the grid: its cells from source to mouth (land only; a join's cell is the
+/// other river's).
+struct Course {
+    stroke: usize,
+    cells: Vec<usize>,
+    end: Option<End>,
+    /// The valley's half-width (cells) and the feed at the source.
+    base: f64,
+    feed: f64,
+}
+
+fn neighbours8(g: Raster, k: usize) -> impl Iterator<Item = usize> {
+    let (i, j) = ((k % g.w) as i64, (k / g.w) as i64);
+    (-1..=1i64).flat_map(move |dj| (-1..=1i64).map(move |di| (i + di, j + dj))).filter(move |&(x, y)| x >= 0 && y >= 0 && x < g.w as i64 && y < g.h as i64 && (x, y) != (i, j)).map(move |(x, y)| y as usize * g.w + x as usize)
+}
+
+/// Carve the drawn rivers into `height` and return the discharge (mm·cells) to add at each
+/// source so the hydrology maps them as rivers.
+///
+/// - A river runs the way it was drawn (unless drawn from the sea inland).
+/// - It ends at the sea, or joins the first other drawn river it meets (a tributary ends on
+///   that river's channel, at its level). One that stops short of the sea or another river
+///   within `REACH_FT` is carried on to it in a straight line.
+/// - Its profile never rises and falls at least `MIN_FALL` per cell (more on a high, short
+///   course, up to a foot), and stays above the water it ends in: where that needs the river
+///   above the ground, the ground along it is raised rather than the river dug under the sea.
+/// - Every course is set first, then the valleys: banks a little above the water (never over
+///   any river's channel), sides sloping up to the valley's edge.
 pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool], conflicts: &mut Vec<Conflict>) -> Vec<(usize, f64)> {
     let threshold = super::hydro::RIVER_Q / world.params().river_density;
-    let mut feed = Vec::new();
+    let sea = world.params().sea_level_ft;
+    let n = g.w * g.h;
+
+    // Courses: the drawn line's land cells, up to the sea.
+    let mut courses: Vec<Course> = Vec::new();
     for (si, s) in strokes(world, SketchTool::River) {
         let mut path = cells_along(g, &s.pts);
         if path.len() < 2 {
             continue;
         }
-        // Rivers run from their first point; drawn from the mouth (or uphill), turn them round.
-        let (first, last) = (path[0], *path.last().unwrap());
-        if (!land[first] && land[last]) || (land[first] && land[last] && height[first] < height[last]) {
+        // Rivers run from their first point; one drawn from the sea inland is turned round.
+        if !land[path[0]] && land[*path.last().unwrap()] {
             path.reverse();
         }
-        let start = path.iter().position(|&k| land[k]);
-        let Some(start) = start else {
+        let Some(start) = path.iter().position(|&k| land[k]) else {
             let p = s.pts[0];
             conflicts.push(Conflict { stroke: si, message: "This river is entirely at sea".into(), x: p[0], y: p[1] });
             continue;
         };
-        let mut course: Vec<usize> = Vec::new();
+        let mut cells: Vec<usize> = Vec::new();
+        let mut end = None;
         for (idx, &k) in path.iter().enumerate().skip(start) {
             if !land[k] {
                 if path[idx..].iter().filter(|&&c| land[c]).count() >= 6 {
                     let p = g.at(k);
                     conflicts.push(Conflict { stroke: si, message: "This river reaches the sea before its end; the rest is ignored".into(), x: p[0], y: p[1] });
                 }
+                end = Some(End::Sea);
                 break;
             }
-            course.push(k);
+            cells.push(k);
         }
-        if course.len() < 3 {
-            let p = g.at(course[0]);
+        if cells.len() < 3 {
+            let p = g.at(cells[0]);
             conflicts.push(Conflict { stroke: si, message: "This river is too short to map".into(), x: p[0], y: p[1] });
             continue;
         }
-        // Profile: never rising, at least a foot down per cell; deep cuts are reported.
-        let mut z = Vec::with_capacity(course.len());
-        let (mut worst, mut worst_at) = (0.0f64, course[0]);
-        for (idx, &k) in course.iter().enumerate() {
-            let v = if idx == 0 { height[k] } else { height[k].min(z[idx - 1] - 1.0) };
-            if height[k] - v > worst {
-                (worst, worst_at) = (height[k] - v, k);
+        let (base, feed) = ((s.radius_ft / g.cell).clamp(1.0, 5.0), threshold * (1.2 + 10.0 * s.strength * s.strength));
+        courses.push(Course { stroke: si, cells, end, base, feed });
+    }
+
+    // Where each one ends: those reaching the sea first; then each joins the first resolved
+    // course it touches (a course whose first touch is one not yet resolved waits for it), or is
+    // carried on to the sea or a resolved course within reach. When none can go on, the first
+    // waiting one is settled on its own.
+    let mut owner = vec![NONE; n];
+    let claim = |owner: &mut [u32], cells: &[usize], ci: usize| {
+        for &k in cells {
+            if owner[k] == NONE {
+                owner[k] = ci as u32;
+            }
+        }
+    };
+    for (ci, c) in courses.iter().enumerate() {
+        claim(&mut owner, &c.cells, ci);
+    }
+    let mut order: Vec<usize> = (0..courses.len()).filter(|&ci| courses[ci].end.is_some()).collect();
+    let mut resolved: Vec<bool> = courses.iter().map(|c| c.end.is_some()).collect();
+    // The first cell (past its source) where a course touches another: (index, the other's cell).
+    // Not where the other ends (it flows into this one there: a river doesn't wait for, or
+    // join, its own tributary).
+    let touch = |courses: &[Course], owner: &[u32], ci: usize, only: &dyn Fn(usize) -> bool| -> Option<(usize, usize)> {
+        let tail = |o: usize, c: usize| {
+            let cs = &courses[o].cells;
+            let last = *cs.last().unwrap();
+            cs[cs.len().saturating_sub(5)..].contains(&c) || neighbours8(g, last).any(|x| x == c)
+        };
+        for (idx, &k) in courses[ci].cells.iter().enumerate().skip(2) {
+            let own = |c: usize| owner[c] != NONE && owner[c] as usize != ci && only(owner[c] as usize) && !tail(owner[c] as usize, c);
+            if own(k) {
+                return Some((idx, k));
+            }
+            if let Some(nb) = neighbours8(g, k).find(|&c| own(c)) {
+                return Some((idx + 1, nb));
+            }
+        }
+        None
+    };
+    let join = |courses: &mut [Course], owner: &mut [u32], ci: usize, idx: usize, k: usize| {
+        for &c in &courses[ci].cells[idx..] {
+            if owner[c] == ci as u32 {
+                owner[c] = NONE;
+            }
+        }
+        courses[ci].cells.truncate(idx);
+        courses[ci].end = Some(End::Join(k));
+    };
+    while order.len() < courses.len() {
+        let mut progress = false;
+        for ci in 0..courses.len() {
+            if resolved[ci] {
+                continue;
+            }
+            match touch(&courses, &owner, ci, &|_| true) {
+                Some((idx, k)) if resolved[owner[k] as usize] => join(&mut courses, &mut owner, ci, idx, k),
+                // Flows into one not yet settled: wait for it.
+                Some(_) => continue,
+                None => {
+                    let had = courses[ci].cells.len();
+                    let Some(end) = carry_on(g, land, &owner, &resolved, &mut courses[ci], ci) else { continue };
+                    courses[ci].end = Some(end);
+                    claim(&mut owner, &courses[ci].cells[had..], ci);
+                }
+            }
+            resolved[ci] = true;
+            order.push(ci);
+            progress = true;
+        }
+        if !progress {
+            // Courses waiting on each other: the first goes on by itself, into the first settled
+            // course it touches, or on to the sea or one in reach.
+            let ci = (0..courses.len()).find(|&ci| !resolved[ci]).unwrap();
+            if let Some((idx, k)) = touch(&courses, &owner, ci, &|o| resolved[o]) {
+                join(&mut courses, &mut owner, ci, idx, k);
+            } else {
+                let had = courses[ci].cells.len();
+                let end = carry_on(g, land, &owner, &resolved, &mut courses[ci], ci).unwrap_or(End::Inland);
+                courses[ci].end = Some(end);
+                claim(&mut owner, &courses[ci].cells[had..], ci);
+            }
+            resolved[ci] = true;
+            order.push(ci);
+        }
+    }
+
+    // Profiles, in that order (a tributary after the river it joins): each on the ground as the
+    // valleys before it left it.
+    let mut zc = vec![f64::NAN; n];
+    // Valley cells: (side target, distance in cells, the river's level there, lifted).
+    let mut valley: FastMap<usize, (f64, f64, f64, bool)> = FastMap::default();
+    let mut feed = Vec::new();
+    for &ci in &order {
+        let c = &courses[ci];
+        let si = c.stroke;
+        let end = c.end.unwrap();
+        // (A channel already set is the ground there: a later course never raises it.)
+        let ground = |k: usize| {
+            let h = valley.get(&k).map_or(height[k], |v| height[k].min(v.0));
+            if zc[k].is_nan() { h } else { h.min(zc[k]) }
+        };
+        let m = c.cells.len();
+        // The level the course must stay above at its last cell.
+        let floor_end = match end {
+            End::Sea => Some(sea + MOUTH_FT),
+            End::Join(k) => Some(zc[k] + MIN_FALL),
+            End::Inland => None,
+        };
+        let h0 = ground(c.cells[0]);
+        let low = floor_end.unwrap_or_else(|| ground(c.cells[m - 1]));
+        let fall = ((h0 - low) / m as f64).clamp(MIN_FALL, 1.0);
+        let floor = |idx: usize| floor_end.map_or(f64::NEG_INFINITY, |f| f + (m - 1 - idx) as f64 * MIN_FALL);
+        let mut z = Vec::with_capacity(m);
+        let mut lifted = Vec::with_capacity(m);
+        let (mut cut, mut cut_at, mut lift, mut lift_at) = (0.0f64, c.cells[0], 0.0f64, c.cells[0]);
+        for (idx, &k) in c.cells.iter().enumerate() {
+            let h = ground(k);
+            let v = if idx == 0 { h } else { h.min(z[idx - 1] - fall) }.max(floor(idx));
+            if h - v > cut {
+                (cut, cut_at) = (h - v, k);
+            }
+            if v - h > lift {
+                (lift, lift_at) = (v - h, k);
             }
             z.push(v);
+            lifted.push(v > h);
         }
-        if worst > 800.0 {
-            let p = g.at(worst_at);
-            conflicts.push(Conflict {
-                stroke: si,
-                message: format!("To keep flowing downhill this river cuts a {:.0}-ft gorge", (worst / 100.0).round() * 100.0),
-                x: p[0],
-                y: p[1],
-            });
+        if cut > 800.0 {
+            let p = g.at(cut_at);
+            conflicts.push(Conflict { stroke: si, message: format!("To keep flowing downhill this river cuts a {:.0}-ft gorge", (cut / 100.0).round() * 100.0), x: p[0], y: p[1] });
         }
-        // The valley: banks beside the channel (raised where the ground falls away, so the
-        // water stays in it), sides sloping up to the valley's edge. A deep cut widens the
-        // valley until its sides meet the ground at a walkable slope (no canal-like walls).
-        let base = (s.radius_ft / g.cell).clamp(1.0, 5.0);
-        const SIDE: f64 = 0.05;
-        let mut floor: std::collections::HashMap<usize, (f64, f64)> = std::collections::HashMap::new();
-        for (idx, &k) in course.iter().enumerate() {
+        if lift > 20.0 {
+            let p = g.at(lift_at);
+            let into = if end == End::Sea { "the sea" } else { "the river it joins" };
+            conflicts.push(Conflict { stroke: si, message: format!("To flow into {into} this river runs up to {:.0} ft above the ground; the land along it is raised", lift.round()), x: p[0], y: p[1] });
+        }
+        if end == End::Inland {
+            let p = g.at(c.cells[m - 1]);
+            conflicts.push(Conflict { stroke: si, message: "This river ends inland, far from the sea or another river: its water may pool there".into(), x: p[0], y: p[1] });
+        }
+        for (idx, &k) in c.cells.iter().enumerate() {
+            zc[k] = if zc[k].is_nan() { z[idx] } else { zc[k].min(z[idx]) };
+        }
+        // The valley: banks beside the channel, sides sloping up to the valley's edge. A deep cut
+        // widens the valley until its sides meet the ground at a walkable slope (no canal-like
+        // walls).
+        for (idx, &k) in c.cells.iter().enumerate() {
             let (ci, cj) = ((k % g.w) as i64, (k / g.w) as i64);
-            let reach = ((height[k] - z[idx]) / (g.cell * SIDE)).clamp(base, 14.0);
+            let lifted = lifted[idx];
+            let reach = ((height[k] - z[idx]) / (g.cell * SIDE)).clamp(c.base, 14.0);
             let r = reach.ceil() as i64;
             for dj in -r..=r {
                 for di in -r..=r {
@@ -380,27 +559,89 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
                     }
                     let nb = j as usize * g.w + i as usize;
                     let target = z[idx] + 2.0 + d * g.cell * SIDE;
-                    let e = floor.entry(nb).or_insert((target, d));
+                    let e = valley.entry(nb).or_insert((target, d, z[idx], lifted));
                     if target < e.0 {
-                        *e = (target, d);
+                        *e = (target, d, z[idx], lifted);
                     }
                 }
             }
         }
-        let mut cells: Vec<(&usize, &(f64, f64))> = floor.iter().collect();
-        cells.sort_by_key(|(k, _)| **k);
-        for (&k, &(target, d)) in cells {
-            if !land[k] {
-                continue;
-            }
-            height[k] = if d < 1.5 { target } else { height[k].min(target) };
+        feed.push((c.cells[0], c.feed));
+    }
+
+    // The valleys, never over a channel: banks between 10 ft above the water and the side's
+    // height there (no levees standing over the plain, which would pond it); where the river
+    // was raised above the ground, the ground beside it rises with it.
+    let mut cells: Vec<(&usize, &(f64, f64, f64, bool))> = valley.iter().collect();
+    cells.sort_by_key(|(k, _)| **k);
+    for (&k, &(target, d, z, lifted)) in cells {
+        if !land[k] || !zc[k].is_nan() {
+            continue;
         }
-        for (idx, &k) in course.iter().enumerate() {
-            height[k] = z[idx];
+        height[k] = if d < 1.5 {
+            height[k].clamp(z + 10.0, target)
+        } else if lifted {
+            height[k].clamp(z + 2.0 + (d - 1.5) * g.cell * 0.002, target)
+        } else {
+            height[k].min(target)
+        };
+    }
+    for k in 0..n {
+        if !zc[k].is_nan() {
+            height[k] = zc[k];
         }
-        feed.push((course[0], threshold * (1.2 + 10.0 * s.strength * s.strength)));
     }
     feed
+}
+
+/// Carry a course that stops short on to the nearest sea cell or resolved course within
+/// `REACH_FT` of its end (straight there; it joins whatever course it meets on the way).
+/// `None` when there is nothing in reach yet but some course is still unresolved (one may come
+/// within reach); `Inland` when nothing can.
+fn carry_on(g: Raster, land: &[bool], owner: &[u32], resolved: &[bool], c: &mut Course, ci: usize) -> Option<End> {
+    let last = *c.cells.last().unwrap();
+    let (ei, ej) = ((last % g.w) as i64, (last / g.w) as i64);
+    let goal = |k: usize| !land[k] || (owner[k] != NONE && owner[k] as usize != ci && resolved[owner[k] as usize]);
+    let mut best: Option<(i64, usize)> = None;
+    let reach = (crate::core::ceil(REACH_FT / g.cell) as i64).max(2);
+    for dj in -reach..=reach {
+        for di in -reach..=reach {
+            let (i, j) = (ei + di, ej + dj);
+            let d2 = di * di + dj * dj;
+            if i < 0 || j < 0 || i >= g.w as i64 || j >= g.h as i64 || d2 > reach * reach {
+                continue;
+            }
+            let k = j as usize * g.w + i as usize;
+            if goal(k) && best.is_none_or(|b| d2 < b.0) {
+                best = Some((d2, k));
+            }
+        }
+    }
+    let Some((_, target)) = best else {
+        return if resolved.iter().enumerate().all(|(i, &r)| r || i == ci) { Some(End::Inland) } else { None };
+    };
+    // Its last cell is another course's: it joins there.
+    if target == last {
+        c.cells.pop();
+        return Some(End::Join(last));
+    }
+    let mut extra = Vec::new();
+    for k in cells_along(g, &[g.at(last), g.at(target)]).into_iter().skip(1) {
+        if !land[k] {
+            c.cells.extend(extra);
+            return Some(End::Sea);
+        }
+        if owner[k] != NONE && owner[k] as usize != ci && resolved[owner[k] as usize] {
+            c.cells.extend(extra);
+            return Some(End::Join(k));
+        }
+        if c.cells.contains(&k) {
+            break;
+        }
+        extra.push(k);
+    }
+    // (The line found its way blocked by the course itself.)
+    Some(End::Inland)
 }
 
 /// Paint drawn biomes over the classified ones (on land, not lakes): the painted biome inside,

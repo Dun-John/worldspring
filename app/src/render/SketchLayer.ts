@@ -139,8 +139,17 @@ export class SketchLayer {
     };
     if (s.tool === 'river') {
       line(Math.max(2, Math.min(band, 6)), 0.95);
-      // The source: rivers run from the first point.
+      // The source: rivers run from the first point, the way they were drawn (an arrow at the
+      // mouth says so).
       g.circle(pts[0][0], pts[0][1], 4).fill({ color: 0xf3ecd8 }).stroke({ width: 2, color });
+      const [ex, ey] = pts[pts.length - 1];
+      let back: number[] | undefined;
+      for (let k = pts.length - 2; k >= 0 && !back; k--) if (Math.hypot(ex - pts[k][0], ey - pts[k][1]) > 6) back = pts[k];
+      if (!live && back) {
+        const l = Math.hypot(ex - back[0], ey - back[1]);
+        const [ux, uy] = [(ex - back[0]) / l, (ey - back[1]) / l];
+        g.poly([ex + ux * 6, ey + uy * 6, ex - ux * 5 - uy * 6, ey - uy * 5 + ux * 6, ex - ux * 5 + uy * 6, ey - uy * 5 - ux * 6], true).fill({ color });
+      }
       return;
     }
     line(band, s.tool === 'range' ? 0.3 : 0.35);

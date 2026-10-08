@@ -5,12 +5,25 @@
 //! - approaches (road end to gate) running through built blocks, or turning sharply;
 //! - sharp turns on the network roads.
 //!
-//! Usage: cargo run --release -p worldgen --example roadcheck -- [seed...]   (default 1 2 3)
-use std::collections::HashMap;
+//! Usage: cargo run --release -p worldgen --example roadcheck -- [seed|world.json...] [--json]   (default 1 2 3)
+//! `--json`: one JSON array on stdout, per world `{world, settlements, sites, counts: {class: n}, worst: {class: [[x, y, size]...]}}`
+//! (the text report goes to stderr).
+mod common;
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use serde_json::{json, Map, Value};
 use worldgen::t0::T0;
 use worldgen::town::geom::{centroid, contains, dist, lerp, seg_dist, sub};
-use worldgen::{World, WorldFile};
+
+/// `--json`: the text report goes to stderr, stdout carries only the JSON.
+static JSON: AtomicBool = AtomicBool::new(false);
+macro_rules! say {
+    ($($t:tt)*) => {
+        if JSON.load(Ordering::Relaxed) { eprintln!($($t)*) } else { println!($($t)*) }
+    };
+}
 
 type P = [f64; 2];
 const CELL: f64 = 100.0;
@@ -106,34 +119,44 @@ fn sharpest(pts: &[P], chord: f64) -> (f64, P) {
 #[derive(Default)]
 struct Tally {
     n: usize,
-    worst: Vec<(f64, String)>,
+    worst: Vec<(f64, P, String)>,
 }
 
 impl Tally {
-    fn add(&mut self, size: f64, what: String) {
+    fn add(&mut self, size: f64, at: P, what: String) {
         self.n += 1;
-        self.worst.push((size, what));
+        self.worst.push((size, at, what));
     }
-    fn print(&mut self, label: &str) {
+    /// Prints the count and the worst few, and records them under `key` in `counts` and `worst`.
+    fn print(&mut self, label: &str, key: &str, counts: &mut Map<String, Value>, worst: &mut Map<String, Value>) {
         self.worst.sort_by(|a, b| b.0.total_cmp(&a.0));
-        println!("  {label}: {}", self.n);
-        for (_, w) in self.worst.iter().take(std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4)) {
-            println!("      {w}");
+        let top = std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+        say!("  {label}: {}", self.n);
+        for (_, _, w) in self.worst.iter().take(top) {
+            say!("      {w}");
         }
+        counts.insert(key.into(), json!(self.n));
+        worst.insert(key.into(), self.worst.iter().take(top).map(|(size, at, _)| json!([at[0].round(), at[1].round(), size])).collect());
     }
 }
 
 fn main() {
-    let seeds: Vec<u32> = std::env::args().skip(1).filter_map(|a| a.parse().ok()).collect();
-    let seeds = if seeds.is_empty() { vec![1, 2, 3] } else { seeds };
-    for seed in seeds {
+    let args = common::args();
+    JSON.store(args.json, Ordering::Relaxed);
+    for a in args.pos.iter().filter(|a| !common::is_world(a)) {
+        eprintln!("{a}: not a seed or a world file, ignored");
+    }
+    let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
+    let worlds = if worlds.is_empty() { vec!["1".into(), "2".into(), "3".into()] } else { worlds };
+    let mut report = Vec::new();
+    for arg in &worlds {
         let t = std::time::Instant::now();
-        let world = World::new(WorldFile { seed, ..Default::default() }).unwrap();
+        let world = common::world(arg);
         let t0 = T0::generate(&world);
         let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
         let standing = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
         let n_layouts = worldgen::town::layout_count(&t0);
-        println!("seed {seed}: {} settlements, {} sites, T0 {:.1} s", t0.settlements.len(), n_layouts - t0.settlements.len(), t.elapsed().as_secs_f64());
+        say!("{}: {} settlements, {} sites, T0 {:.1} s", common::label(arg), t0.settlements.len(), n_layouts - t0.settlements.len(), t.elapsed().as_secs_f64());
         let t = std::time::Instant::now();
         let mut walls = Tally::default();
         let mut towers = Tally::default();
@@ -157,12 +180,12 @@ fn main() {
                 let n = s.iter().filter(|p| ch.inside(**p, 2.0)).count();
                 if n > 0 {
                     let p = *s.iter().find(|p| ch.inside(**p, 2.0)).unwrap();
-                    walls.add(n as f64 * 5.0, format!("{name}: {:.0} ft of wall in the river near ({:.0}, {:.0})", n as f64 * 5.0, p[0], p[1]));
+                    walls.add(n as f64 * 5.0, p, format!("{name}: {:.0} ft of wall in the river near ({:.0}, {:.0})", n as f64 * 5.0, p[0], p[1]));
                 }
             }
             for &tw in l.towers.iter().chain(&l.gate_towers) {
                 if ch.inside(tw, 2.0) {
-                    towers.add(1.0, format!("{name}: tower in the river at ({:.0}, {:.0})", tw[0], tw[1]));
+                    towers.add(1.0, tw, format!("{name}: tower in the river at ({:.0}, {:.0})", tw[0], tw[1]));
                 }
             }
             for b in &l.buildings {
@@ -170,7 +193,7 @@ fn main() {
                 let n = o.iter().filter(|p| wet(**p, 2.0)).count();
                 if n > 0 {
                     let c = centroid(&b.poly);
-                    buildings.add(n as f64, format!("{name}: building {:?} ({}/{} points wet) at ({:.0}, {:.0})", b.func, n, o.len(), c[0], c[1]));
+                    buildings.add(n as f64, c, format!("{name}: building {:?} ({}/{} points wet) at ({:.0}, {:.0})", b.func, n, o.len(), c[0], c[1]));
                 }
             }
             for f in &l.fields {
@@ -178,7 +201,7 @@ fn main() {
                 let n = o.iter().filter(|p| ch.inside(**p, 2.0)).count();
                 if n > 0 {
                     let c = centroid(f);
-                    fields.add(n as f64, format!("{name}: field over the river ({n} points) at ({:.0}, {:.0})", c[0], c[1]));
+                    fields.add(n as f64, c, format!("{name}: field over the river ({n} points) at ({:.0}, {:.0})", c[0], c[1]));
                 }
             }
             // Decks overlapping: bridges with bridges, piers with bridges or network roads.
@@ -187,14 +210,14 @@ fn main() {
                 for b in &l.bridges[i + 1..] {
                     if overlap(a, b) {
                         let c = centroid(a);
-                        bridge_x.add(1.0, format!("{name}: bridges overlap at ({:.0}, {:.0})", c[0], c[1]));
+                        bridge_x.add(1.0, c, format!("{name}: bridges overlap at ({:.0}, {:.0})", c[0], c[1]));
                     }
                 }
             }
             for pier in &l.piers {
                 let c = centroid(pier);
                 if l.bridges.iter().any(|b| overlap(pier, b)) {
-                    pier_x.add(1.0, format!("{name}: pier on a bridge at ({:.0}, {:.0})", c[0], c[1]));
+                    pier_x.add(1.0, c, format!("{name}: pier on a bridge at ({:.0}, {:.0})", c[0], c[1]));
                 }
                 let on_road = t0.roads.segments_near([c[0] - 100.0, c[1] - 100.0, c[0] + 100.0, c[1] + 100.0], 0.0).iter().any(|&(ri, k)| {
                     let rc = &t0.roads.roads[ri as usize];
@@ -204,7 +227,7 @@ fn main() {
                     })
                 });
                 if on_road {
-                    pier_x.add(1.0, format!("{name}: pier on a network road at ({:.0}, {:.0})", c[0], c[1]));
+                    pier_x.add(1.0, c, format!("{name}: pier on a network road at ({:.0}, {:.0})", c[0], c[1]));
                 }
             }
             // Streets and approaches over the river with no bridge deck under them.
@@ -212,7 +235,7 @@ fn main() {
                 let s = along(pts, 5.0);
                 let bad: Vec<&P> = s.iter().filter(|p| ch.inside(**p, 2.0) && !l.bridges.iter().any(|b| contains(b, **p))).collect();
                 if !bad.is_empty() {
-                    streets.add(bad.len() as f64, format!("{name}: class {class} street, {} ft over the river unbridged near ({:.0}, {:.0})", bad.len() * 5, bad[0][0], bad[0][1]));
+                    streets.add(bad.len() as f64, *bad[0], format!("{name}: class {class} street, {} ft over the river unbridged near ({:.0}, {:.0})", bad.len() * 5, bad[0][0], bad[0][1]));
                 }
             }
             // Approaches (road classes 0–2): through built blocks or buildings, and their sharpest turn.
@@ -222,16 +245,16 @@ fn main() {
                 let keep = ((total - 40.0) / 10.0).max(0.0) as usize;
                 let inside = s.iter().take(keep).filter(|p| !wet(**p, 0.0) && l.districts.iter().any(|b| contains(b, **p))).count();
                 if inside > 0 {
-                    through.add(inside as f64, format!("{name}: class {class} approach crosses {} ft of the town, from ({:.0}, {:.0})", inside * 10, pts[0][0], pts[0][1]));
+                    through.add(inside as f64, pts[0], format!("{name}: class {class} approach crosses {} ft of the town, from ({:.0}, {:.0})", inside * 10, pts[0][0], pts[0][1]));
                 }
                 let on = s.iter().take(keep).filter(|p| l.buildings.iter().any(|b| contains(&b.poly, **p))).count();
                 if on > 0 {
-                    over.add(on as f64, format!("{name}: class {class} approach runs over {} ft of buildings, from ({:.0}, {:.0})", on * 10, pts[0][0], pts[0][1]));
+                    over.add(on as f64, pts[0], format!("{name}: class {class} approach runs over {} ft of buildings, from ({:.0}, {:.0})", on * 10, pts[0][0], pts[0][1]));
                 }
                 if pts.len() >= 3 {
                     let (deg, at) = sharpest(pts, 30.0);
                     if deg > 60.0 {
-                        turns.add(deg, format!("{name}: approach turns {deg:.0}° at ({:.0}, {:.0})", at[0], at[1]));
+                        turns.add(deg, at, format!("{name}: approach turns {deg:.0}° at ({:.0}, {:.0})", at[0], at[1]));
                     }
                 }
             }
@@ -244,7 +267,7 @@ fn main() {
             for (ri, rc) in t0.roads.roads.iter().enumerate() {
                 let (a, b) = (rc.pts[0], *rc.pts.last().unwrap());
                 if [a, b].iter().any(|p| dist(*p, [v[0], v[1]]) < v[2]) {
-                    println!("  road {ri} {:?} ({:.0}, {:.0}) -> ({:.0}, {:.0}) {:.0} ft", rc.class, a[0], a[1], b[0], b[1], rc.s.last().unwrap());
+                    say!("  road {ri} {:?} ({:.0}, {:.0}) -> ({:.0}, {:.0}) {:.0} ft", rc.class, a[0], a[1], b[0], b[1], rc.s.last().unwrap());
                 }
             }
         }
@@ -253,10 +276,10 @@ fn main() {
             for (k, p) in rc.pts.iter().enumerate() {
                 let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
                 let plan = t0.rivers.valley(t0.ground_at(p[0], p[1], lattice), p[0], p[1]);
-                println!("  road {ri} pt {k}: ({:.0}, {:.0}) z {:.0} (ground {plan:.0}) wander {:.2} s {:.0}", p[0], p[1], rc.z[k], rc.wander[k], rc.s[k]);
+                say!("  road {ri} pt {k}: ({:.0}, {:.0}) z {:.0} (ground {plan:.0}) wander {:.2} s {:.0}", p[0], p[1], rc.z[k], rc.wander[k], rc.s[k]);
             }
             for (si, st) in t0.settlements.iter().enumerate().filter(|(_, st)| rc.pts.iter().any(|p| dist(*p, [st.x, st.y]) < 3.0 * t0.cell_ft)) {
-                println!("  settlement {si} {:?} at ({:.0}, {:.0}), trim {:.0}", st.tier, st.x, st.y, worldgen::town::road_trim_radius(st.tier, st.population));
+                say!("  settlement {si} {:?} at ({:.0}, {:.0}), trim {:.0}", st.tier, st.x, st.y, worldgen::town::road_trim_radius(st.tier, st.population));
             }
         }
         for (ri, rc) in t0.roads.roads.iter().enumerate() {
@@ -274,23 +297,33 @@ fn main() {
                 let deg = angle(sub(pts[i], pts[i - k]), sub(pts[i + k], pts[i]));
                 if deg > 75.0 && last.is_none_or(|q| dist(q, pts[i]) > 300.0) {
                     last = Some(pts[i]);
-                    let near = t0.settlements.iter().map(|st| (dist([st.x, st.y], pts[i]) / worldgen::town::road_trim_radius(st.tier, st.population), st.tier)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+                    let near = t0.settlements.iter().map(|st| (dist([st.x, st.y], pts[i]) / worldgen::town::road_trim_radius(st.tier, st.population), st.tier)).min_by(|a, b| a.0.total_cmp(&b.0));
+                    let near = near.map(|(r, tier)| format!(", {r:.2} trim radii from a {tier:?}")).unwrap_or_default();
                     let from_end = (i as f64 * 10.0).min((pts.len() - 1 - i) as f64 * 10.0);
-                    kinks.add(deg, format!("road {ri} ({:?}) turns {deg:.0}° at ({:.0}, {:.0}), {from_end:.0} ft from its end, {:.2} trim radii from a {:?}", rc.class, pts[i][0], pts[i][1], near.0, near.1));
+                    kinks.add(deg, pts[i], format!("road {ri} ({:?}) turns {deg:.0}° at ({:.0}, {:.0}), {from_end:.0} ft from its end{near}", rc.class, pts[i][0], pts[i][1]));
                 }
             }
         }
-        bridge_x.print("town bridges overlapping each other");
-        pier_x.print("piers on bridges or network roads");
-        walls.print("wall runs in a river");
-        towers.print("towers in a river");
-        buildings.print("buildings over water");
-        fields.print("fields over a river");
-        streets.print("streets over a river with no bridge");
-        through.print("approaches through the town (its districts)");
-        over.print("approaches over buildings");
-        turns.print("approaches turning > 60° within 30 ft");
-        kinks.print("network road turns > 75° within 40 ft");
-        println!("  ({n_layouts} layouts in {layout_s:.1} s)");
+        let (mut counts, mut worst) = (Map::new(), Map::new());
+        for (tally, label, key) in [
+            (&mut bridge_x, "town bridges overlapping each other", "bridges_overlapping"),
+            (&mut pier_x, "piers on bridges or network roads", "piers_on_bridges_or_roads"),
+            (&mut walls, "wall runs in a river", "walls_in_river"),
+            (&mut towers, "towers in a river", "towers_in_river"),
+            (&mut buildings, "buildings over water", "buildings_over_water"),
+            (&mut fields, "fields over a river", "fields_over_river"),
+            (&mut streets, "streets over a river with no bridge", "streets_unbridged"),
+            (&mut through, "approaches through the town (its districts)", "approaches_through_town"),
+            (&mut over, "approaches over buildings", "approaches_over_buildings"),
+            (&mut turns, "approaches turning > 60° within 30 ft", "approach_turns"),
+            (&mut kinks, "network road turns > 75° within 40 ft", "network_road_turns"),
+        ] {
+            tally.print(label, key, &mut counts, &mut worst);
+        }
+        say!("  ({n_layouts} layouts in {layout_s:.1} s)");
+        report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst }));
+    }
+    if args.json {
+        println!("{}", Value::Array(report));
     }
 }

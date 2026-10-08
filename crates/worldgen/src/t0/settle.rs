@@ -194,14 +194,6 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         if !inp.land[k] || inp.hydro.lake_of[k] != NO_LAKE {
             continue;
         }
-        let b = biome_of(k);
-        let fert = fertility(b);
-        if fert <= 0.0 {
-            continue;
-        }
-        let above = inp.height[k] - sea;
-        let flat = 1.0 - smoothstep(0.02, 0.15, slope_of(k));
-        let mut water = 0.0f64;
         let (mut ocean_n, mut lake_n) = (0, 0);
         for (nb, _) in neighbors(w, h, k) {
             if !inp.land[nb] {
@@ -210,9 +202,19 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 lake_n += 1;
             }
         }
+        // A coast is a coast on barren ground too (a pinned port there is still a port); the
+        // ground only decides how good a site it is.
+        coastal[k] = ocean_n > 0;
+        let b = biome_of(k);
+        let fert = fertility(b);
+        if fert <= 0.0 {
+            continue;
+        }
+        let above = inp.height[k] - sea;
+        let flat = 1.0 - smoothstep(0.02, 0.15, slope_of(k));
+        let mut water = 0.0f64;
         let q = inp.hydro.discharge[k] as f64;
         if ocean_n > 0 {
-            coastal[k] = true;
             // Sheltered coasts (a few sea neighbours, not a headland) make better harbours.
             water += if (2..=4).contains(&ocean_n) { 1.0 } else { 0.6 };
         }
@@ -284,7 +286,20 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             let b = biome_of(k);
             let above = inp.height[k] - sea;
             let ore = fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5);
-            let is_coast = coastal[k] || harbour[k];
+            // A pin stands where it was drawn, not at its cell's centre: one drawn on the coast is
+            // coastal when the sea is within reach of that point (the shore it then moves to).
+            let pinned_coast = pin.is_some() && {
+                let r = 1.6f64;
+                let (pi, pj) = (crate::core::round(x / cell) as i64, crate::core::round(y / cell) as i64);
+                (-2..=2i64).any(|dj| {
+                    (-2..=2i64).any(|di| {
+                        let (i, j) = (pi + di, pj + dj);
+                        let (dx, dy) = (i as f64 - x / cell, j as f64 - y / cell);
+                        i >= 0 && j >= 0 && i < w as i64 && j < h as i64 && dx * dx + dy * dy <= r * r && !inp.land[j as usize * w + i as usize]
+                    })
+                })
+            };
+            let is_coast = coastal[k] || harbour[k] || pinned_coast;
             let kind = if is_coast {
                 if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }
             } else if above > 2_500.0 && ore > 0.1 {

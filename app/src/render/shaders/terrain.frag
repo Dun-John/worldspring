@@ -20,6 +20,7 @@ uniform sampler2D uBio;
 // Per tile.
 uniform float uBase;
 uniform float uAlpha;
+uniform vec2 uMapEnd;
 uniform vec2 uGrainOrigin;
 uniform float uTilePx;
 uniform vec4 uPat0;
@@ -147,6 +148,7 @@ vec2 symbol(vec2 p, int kind, float aa) {
 }
 
 void main() {
+    if (vLocal.x > uMapEnd.x || vLocal.y > uMapEnd.y) discard;
     vec4 t = texture(uTex, vUV);
     float h = uBase + t.r;
     float water = uBase + t.a;
@@ -233,8 +235,13 @@ void main() {
 
     // Shoreline ink (sea and lakes). Width comes from the terrain's own slope: the water
     // surface is flat, and its field has jumps where it ends that must not draw lines.
-    float fwh = max(fwidth(h), 1e-4);
+    // A shoal that never reaches the surface has no shore: on the sea side, only near a coast
+    // (lakes are land to the coast distance, so their shores stay). Out at sea, an island's
+    // line is all on its dry side, twice as wide.
+    float offshore = smoothstep(9000.0, 18000.0, coastFt);
+    float fwh = max(fwidth(h), 1e-4) * (wet ? 1.0 : 1.0 + offshore);
     float shore = (1.0 - smoothstep(0.6, 1.6, abs(depth) / fwh)) * (1.0 - smoothstep(1500.0, 3000.0, abs(depth)));
+    if (wet) shore *= 1.0 - offshore;
     col = mix(col, INK, shore * 0.9);
 
     // Paper grain (periodic over 512 px).

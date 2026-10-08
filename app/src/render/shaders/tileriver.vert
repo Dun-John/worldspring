@@ -26,6 +26,12 @@ float halfWidth(float q, float w) {
     return 0.5 * max(symbolic, w * uPpf);
 }
 
+// Small rivers appear as you zoom in; once the carved channel is wide enough to show as
+// terrain water (with its own ink banks), the vector line hands over completely.
+float fade(float q, float w) {
+    return smoothstep(uMinQ * 0.6, uMinQ, q) * (1.0 - smoothstep(3.0, 6.0, w * uPpf));
+}
+
 void main() {
     mat3 m = uWorldTransformMatrix * uTransformMatrix;
     vec2 sa = (m * vec3(aA, 1.0)).xy;
@@ -43,10 +49,9 @@ void main() {
     vSA = sa;
     vSB = sb;
     vHalf = halfWidth(q, w);
-    // Small rivers appear as you zoom in; once the carved channel is wide enough to show as
-    // terrain water (with its own ink banks), the vector line hands over completely.
-    vFade = smoothstep(uMinQ * 0.6, uMinQ, q) * (1.0 - smoothstep(3.0, 6.0, w * uPpf));
+    vFade = fade(q, w);
     gl_Position = vec4((uProjectionMatrix * vec3(p, 1.0)).xy, 0.0, 1.0);
-    // Rivers too small to show at this zoom: off screen, so they cost no fragments at all.
-    if (vFade <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    // Rivers too small to show at this zoom: off screen, so they cost no fragments at all. The
+    // whole segment or none of it (one corner moved alone stretches the quad into a streak).
+    if (max(fade(aQ.x, aW.x), fade(aQ.y, aW.y)) <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 }

@@ -1,24 +1,39 @@
-//! Dev tool: generate T0 for a seed and write a PNG preview plus stats.
-//! `cargo run --release -p worldgen --example preview -- <seed> <out.png> [params-json] [sketch.json]`
+//! Dev tool: generate T0 for a world and write a PNG preview plus stats.
+//! `cargo run --release -p worldgen --example preview -- <seed|world.json> <out.png> [params-json] [sketch.json] [--json]`
 //! With a sketch, also writes the quick sketch preview (`<out>-quick.png`) and lists conflicts.
+//! Water is drawn by kind: sea, fresh lakes, salt lakes, and standing water along a drawn river
+//! (a river the world maps as a lake). Writes `<out>.stats.json` beside the picture: conflicts, pins,
+//! per drawn river how much of it is mapped as river, lake, sea or dry land, the rivers
+//! (polylines with discharge) and the lakes (with area). `--json` prints the same on stdout.
+
+mod common;
 
 use std::time::Instant;
 
+use serde_json::json;
+use worldgen::World;
 use worldgen::t0::T0;
 use worldgen::t0::biome::{ALL, Biome};
-use worldgen::{World, WorldFile};
+use worldgen::t0::hydro::{LakeKind, NO_LAKE};
+use worldgen::world::SketchTool;
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let seed: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
-    let out = args.get(2).cloned().unwrap_or_else(|| "preview.png".into());
-    let mut file = WorldFile { seed, ..Default::default() };
-    if let Some(p) = args.get(3) {
+    let args = common::args();
+    let src = args.get(0).unwrap_or("1").to_string();
+    let out = args.get(1).unwrap_or("preview.png").to_string();
+    let mut file = common::world_file(&src);
+    if let Some(p) = args.get(2) {
         if !p.is_empty() && p != "{}" {
-            file.params = serde_json::from_str(p).expect("params json");
+            // Fields given override the world's (or the defaults, for a seed).
+            let mut params = serde_json::to_value(&file.params).unwrap();
+            let over: serde_json::Value = serde_json::from_str(p).expect("params json");
+            for (k, v) in over.as_object().expect("params json is an object") {
+                params[k] = v.clone();
+            }
+            file.params = serde_json::from_value(params).expect("params json");
         }
     }
-    if let Some(path) = args.get(4) {
+    if let Some(path) = args.get(3) {
         file.sketch = serde_json::from_str(&std::fs::read_to_string(path).expect("sketch file")).expect("sketch json");
     }
     let world = World::new(file).expect("valid world");
@@ -56,19 +71,32 @@ fn main() {
         eprintln!("conflict (stroke {}): {} at ({:.0}, {:.0})", c.stroke, c.message, c.x, c.y);
     }
     let towns: Vec<_> = extra.overlay.features.iter().filter(|f| ["metropolis", "city", "town", "village"].contains(&f.kind)).collect();
+    let mut pins = Vec::new();
     for (s, f) in t0.settlements.iter().zip(&towns) {
         if let Some(pin) = s.pin {
-            eprintln!("pinned (stroke {pin}): {} {} at ({:.0}, {:.0}), {}", f.kind, f.name, f.x, f.y, f.detail.as_deref().unwrap_or(""));
+            eprintln!("pinned (stroke {pin}): {} {} at ({:.0}, {:.0}), {}{}", f.kind, f.name, f.x, f.y, f.detail.as_deref().unwrap_or(""), if s.coastal { ", coastal" } else { "" });
+            pins.push(json!({ "stroke": pin, "name": f.name, "tier": f.kind, "kind": s.kind.name(), "coastal": s.coastal, "x": f.x, "y": f.y }));
         }
     }
+    let pinned_coastal = t0.settlements.iter().filter(|s| s.pin.is_some() && s.coastal).count();
+    eprintln!("pins: {} placed, {pinned_coastal} coastal", pins.len());
     let sea = world.params().sea_level_ft;
     let mut counts = [0usize; ALL.len()];
     for &b in &t0.biome.data {
         counts[(b & 0xff) as usize] += 1;
     }
     let land = t0.height.data.iter().filter(|&&v| v as f64 > sea).count();
-    let low_land = (0..w * h).filter(|&k| t0.water.data[k] <= -29_000.0 && (t0.height.data[k] as f64) < sea).count();
-    eprintln!("dry cells below sea level: {low_land}");
+    // Below sea level and dry: land (a fault: a river or plain dug under the sea), or a salt
+    // flat (a dry basin, as Death Valley).
+    let below = |k: usize| t0.water.data[k] <= -29_000.0 && (t0.height.data[k] as f64) < sea;
+    let low_land = (0..w * h).filter(|&k| below(k) && extra.hydro.lake_of[k] == NO_LAKE).count();
+    let low_flats = (0..w * h).filter(|&k| below(k) && extra.hydro.lake_of[k] != NO_LAKE).count();
+    eprintln!("dry cells below sea level: {low_land} (and {low_flats} of salt flats)");
+    for k in (0..w * h).filter(|&k| below(k) && extra.hydro.lake_of[k] == NO_LAKE).take(6) {
+        let lake = extra.hydro.lake_of[k];
+        let what = if lake == NO_LAKE { "dry land".to_string() } else { format!("{:?} lake", extra.hydro.lakes[lake as usize].kind) };
+        eprintln!("  at ({:.0}, {:.0}): {:.0} ft, {what}", (k % w) as f64 * t0.cell_ft, (k / w) as f64 * t0.cell_ft, t0.height.data[k]);
+    }
     eprintln!("land {:.1}%  max elev {:.0} ft", 100.0 * land as f64 / (w * h) as f64, t0.height.data.iter().fold(f32::MIN, |a, &b| a.max(b)));
     let named = |k: &str| extra.overlay.features.iter().filter(|f| f.kind == k).count();
     eprintln!(
@@ -186,9 +214,140 @@ fn main() {
         eprintln!("largest river mid: fx {:.4} fy {:.4}", p[0] / world.geom.map_w_ft, p[1] / world.geom.map_h_ft);
     }
 
-    // Render: biome color × hillshade, water, rivers, feature dots.
-    let mut img = vec![0u8; w * h * 3];
+    // Drawn rivers: how much of each the world maps as a river, a lake, the sea or dry land
+    // (cells along the stroke; a river within a cell of it counts).
     let cell = t0.cell_ft;
+    let hydro = &extra.hydro;
+    let at_cell = |p: [f64; 2]| ((p[0] / cell).round().clamp(0.0, (w - 1) as f64) as usize, (p[1] / cell).round().clamp(0.0, (h - 1) as f64) as usize);
+    let mut river_cell = vec![false; w * h];
+    for r in &t0.rivers.rivers {
+        for p in &r.pts {
+            let (i, j) = at_cell(*p);
+            river_cell[j * w + i] = true;
+        }
+    }
+    let near = |m: &[bool], i: usize, j: usize| (j.saturating_sub(1)..=(j + 1).min(h - 1)).any(|y| (i.saturating_sub(1)..=(i + 1).min(w - 1)).any(|x| m[y * w + x]));
+    let is_sea = |k: usize| hydro.lake_of[k] == NO_LAKE && t0.water.data[k] > -29_000.0;
+    let mut along = vec![false; w * h];
+    let mut strokes = Vec::new();
+    let mut total = [0usize; 4];
+    for (si, s) in world.file.sketch.strokes.iter().enumerate().filter(|(_, s)| s.tool == SketchTool::River) {
+        let mut cells: Vec<usize> = Vec::new();
+        for seg in s.pts.windows(2) {
+            let (a, b) = (seg[0], seg[1]);
+            let steps = (((b[0] - a[0]).hypot(b[1] - a[1])) / (0.4 * cell)).ceil().max(1.0) as usize;
+            for t in 0..=steps {
+                let f = t as f64 / steps as f64;
+                let (i, j) = at_cell([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+                if cells.last() != Some(&(j * w + i)) {
+                    cells.push(j * w + i);
+                }
+            }
+        }
+        // River, lake, sea, dry land.
+        let mut c = [0usize; 4];
+        let mut first_lake: Option<usize> = None;
+        for &k in &cells {
+            let (i, j) = (k % w, k / w);
+            for y in j.saturating_sub(1)..=(j + 1).min(h - 1) {
+                for x in i.saturating_sub(1)..=(i + 1).min(w - 1) {
+                    along[y * w + x] = true;
+                }
+            }
+            let class = if near(&river_cell, i, j) {
+                0
+            } else if hydro.lake_of[k] != NO_LAKE {
+                first_lake.get_or_insert(k);
+                1
+            } else if is_sea(k) {
+                2
+            } else {
+                3
+            };
+            c[class] += 1;
+        }
+        let mapped = c[0] + c[1] + c[3];
+        let share = if mapped > 0 { c[0] as f64 / mapped as f64 } else { 0.0 };
+        (0..4).for_each(|i| total[i] += c[i]);
+        let len_mi = s.pts.windows(2).map(|p| (p[1][0] - p[0][0]).hypot(p[1][1] - p[0][1])).sum::<f64>() / 5280.0;
+        let lake_at = first_lake.map(|k| [(k % w) as f64 * cell, (k / w) as f64 * cell]);
+        strokes.push(json!({ "stroke": si, "len_mi": len_mi.round(), "cells": cells.len(), "river": c[0], "lake": c[1], "sea": c[2], "dry": c[3], "river_share": share, "first_lake": lake_at }));
+    }
+    let cell_mi2 = (cell / 5280.0) * (cell / 5280.0);
+    let mapped = total[0] + total[1] + total[3];
+    let share = if mapped > 0 { total[0] as f64 / mapped as f64 } else { 0.0 };
+    let lake_along = (0..w * h).filter(|&k| along[k] && hydro.lake_of[k] != NO_LAKE).count();
+    let standing = (0..w * h).filter(|&k| hydro.lake_of[k] != NO_LAKE).count();
+    if !strokes.is_empty() {
+        let mut worst: Vec<&serde_json::Value> = strokes.iter().filter(|s| s["lake"].as_u64().unwrap_or(0) + s["dry"].as_u64().unwrap_or(0) > 4).collect();
+        worst.sort_by(|a, b| a["river_share"].as_f64().unwrap().total_cmp(&b["river_share"].as_f64().unwrap()));
+        for s in worst.iter().take(8) {
+            eprintln!(
+                "  drawn river (stroke {}, {} mi): river {} lake {} sea {} dry {}{}",
+                s["stroke"],
+                s["len_mi"],
+                s["river"],
+                s["lake"],
+                s["sea"],
+                s["dry"],
+                s["first_lake"].as_array().map(|p| format!(", first lake at ({:.0}, {:.0})", p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).unwrap_or_default()
+            );
+        }
+        eprintln!(
+            "drawn rivers {}: river share {:.1}% (river {} lake {} sea {} dry {} cells); standing water along them {:.0} sq mi",
+            strokes.len(),
+            100.0 * share,
+            total[0],
+            total[1],
+            total[2],
+            total[3],
+            lake_along as f64 * cell_mi2
+        );
+    }
+    eprintln!("standing water (lakes, salt flats) {:.0} sq mi", standing as f64 * cell_mi2);
+    let lakes: Vec<serde_json::Value> = hydro
+        .lakes
+        .iter()
+        .map(|l| {
+            let n = l.cells.len() as f64;
+            let (sx, sy) = l.cells.iter().fold((0.0, 0.0), |(x, y), &c| (x + (c as usize % w) as f64, y + (c as usize / w) as f64));
+            let kind = match l.kind {
+                LakeKind::Fresh => "fresh",
+                LakeKind::Salt => "salt",
+                LakeKind::SaltFlat => "salt_flat",
+            };
+            let on_river = l.cells.iter().filter(|&&c| along[c as usize]).count();
+            json!({ "level_ft": l.level_ft, "kind": kind, "cells": l.cells.len(), "area_sq_mi": n * cell_mi2, "along_drawn_river": on_river, "x": sx / n * cell, "y": sy / n * cell })
+        })
+        .collect();
+    let rivers: Vec<serde_json::Value> = t0
+        .rivers
+        .rivers
+        .iter()
+        .map(|r| json!({ "pts": r.pts.iter().map(|p| [p[0].round(), p[1].round()]).collect::<Vec<_>>(), "q": r.q.iter().map(|q| q.round()).collect::<Vec<_>>() }))
+        .collect();
+    let report = json!({
+        "world": common::label(&src),
+        "conflicts": extra.overlay.conflicts.iter().map(|c| json!({ "stroke": c.stroke, "message": c.message, "x": c.x, "y": c.y })).collect::<Vec<_>>(),
+        "pins": pins,
+        "stats": {
+            "dry_below_sea": low_land,
+            "salt_flat_below_sea": low_flats,
+            "land_pct": 100.0 * land as f64 / (w * h) as f64,
+            "standing_water_sq_mi": standing as f64 * cell_mi2,
+            "drawn_river_share": share,
+            "drawn_river_cells": { "river": total[0], "lake": total[1], "sea": total[2], "dry": total[3] },
+            "standing_water_along_drawn_rivers_sq_mi": lake_along as f64 * cell_mi2,
+            "pins_coastal": pinned_coastal,
+        },
+        "drawn_rivers": strokes,
+        "lakes": lakes,
+        "rivers": rivers,
+    });
+
+    // Render: biome color × hillshade, water by kind (sea, fresh lake, salt lake, standing water
+    // along a drawn river), rivers, feature dots.
+    let mut img = vec![0u8; w * h * 3];
     for j in 0..h {
         for i in 0..w {
             let k = j * w + i;
@@ -200,7 +359,12 @@ fn main() {
             let (nx, ny, nz) = (-gx * 12.0, -gy * 12.0, 1.0);
             let nl = (nx * nx + ny * ny + nz * nz).sqrt();
             let shade = ((nx * -0.6 + ny * -0.6 + nz * 0.53) / nl / 0.53).clamp(0.3, 1.4);
-            let c = if hgt < water {
+            let lake = hydro.lake_of[k];
+            let c = if lake != NO_LAKE && along[k] && hgt < water {
+                [150, 90, 215]
+            } else if lake != NO_LAKE && hgt < water {
+                if hydro.lakes[lake as usize].kind == LakeKind::Salt { [120, 175, 200] } else { [60, 135, 215] }
+            } else if hgt < water {
                 let d = ((water - hgt) / 8000.0).clamp(0.0, 1.0);
                 [(150.0 - 60.0 * d) as u8, (185.0 - 60.0 * d) as u8, (200.0 - 40.0 * d) as u8]
             } else {
@@ -219,7 +383,7 @@ fn main() {
         let maxq = r.q.iter().fold(0f32, |a, &b| a.max(b));
         let thick = maxq > 2_000_000.0;
         for p in &r.pts {
-            let (i, j) = ((p[0] as f64 / cell) as usize, (p[1] as f64 / cell) as usize);
+            let (i, j) = at_cell(*p);
             for (di, dj) in if thick { vec![(0, 0), (1, 0), (0, 1)] } else { vec![(0, 0)] } {
                 let (x, y) = ((i + di).min(w - 1), (j + dj).min(h - 1));
                 img[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&[40, 80, 170]);
@@ -261,6 +425,14 @@ fn main() {
     enc.set_color(png::ColorType::Rgb);
     enc.write_header().unwrap().write_image_data(&img).unwrap();
     eprintln!("wrote {out}");
+    let text = serde_json::to_string(&report).unwrap();
+    // (Its own name: never the world or sketch file it was given.)
+    let side = format!("{}.stats.json", out.strip_suffix(".png").unwrap_or(&out));
+    std::fs::write(&side, &text).unwrap();
+    eprintln!("wrote {side}");
+    if args.json {
+        println!("{text}");
+    }
 }
 
 fn color(b: Biome) -> [u8; 3] {
