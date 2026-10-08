@@ -1480,6 +1480,7 @@ fn sketch_guarantee() {
 
     sketch_rivers_and_ports();
     sketch_relief_and_lakes();
+    sketch_names_and_sites();
 }
 
 /// Sketch guarantee (R2): drawn rivers stay rivers and coasts keep their ports. On a low plain
@@ -1694,4 +1695,96 @@ fn sketch_relief_and_lakes() {
         assert!(d < 2.0 && f.detail.as_deref().is_some_and(|s| s.starts_with(what)), "{name}: {:?}, {d:.1} mi from where drawn", f.detail);
     }
     println!("relief and lakes: massif 80th pct {m80:.0} ft, plains 95th pct {p95:.0} ft, plateau +{:.0} ft ({dammed} dammed cells), lake {wet}/{ins} (+{}), river {on}/{all}", top - round, lk.cells.len() - wet);
+}
+
+/// Sketch guarantee (R3): what the sketch names keeps its name, and what it places stays put.
+/// Two named mountain strokes drawn into one range name its two parts; a named river, a region
+/// outline, two region names in one plain (each naming its own part), a named blighted wood and
+/// named ashlands (both making battlemaps) name what they were drawn on; a pinned capital is the capital, a pinned fortress a fortress,
+/// a pin's wards name its districts (the central one first); a site drawn as a ruin with a crypt
+/// is one, named, and stays where it was, with its crypt, when the sketch changes elsewhere.
+fn sketch_names_and_sites() {
+    const MI: f64 = 5280.0;
+    let p = |x: f64, y: f64| serde_json::json!([(x * MI).round(), (y * MI).round()]);
+    let ring = |cx: f64, cy: f64, rx: f64, ry: f64, n: usize| -> Vec<serde_json::Value> {
+        (0..n)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / n as f64;
+                p(cx + rx * a.cos(), cy + ry * a.sin())
+            })
+            .collect()
+    };
+    let wards = ["Old Market", "Crown Hill", "Tanner's Row"];
+    let mut strokes = vec![
+        serde_json::json!({ "tool": "land", "closed": true, "pts": ring(300.0, 200.0, 270.0, 175.0, 48) }),
+        serde_json::json!({ "tool": "massif", "closed": true, "radius_ft": 10.0 * MI, "strength": 0.9, "name": "Greyspine Massif", "pts": ring(150.0, 110.0, 70.0, 40.0, 20) }),
+        serde_json::json!({ "tool": "range", "radius_ft": 15.0 * MI, "strength": 0.9, "name": "Silberquel Ridge", "pts": [p(215.0, 110.0), p(280.0, 100.0), p(340.0, 90.0)] }),
+        serde_json::json!({ "tool": "river", "radius_ft": 3.0 * MI, "strength": 0.8, "name": "Glory Run", "pts": [p(330.0, 140.0), p(380.0, 200.0), p(450.0, 260.0), p(520.0, 330.0), p(560.0, 380.0)] }),
+        serde_json::json!({ "tool": "biome", "biome": "grassland", "closed": true, "hard": true, "pts": [p(60.0, 190.0), p(300.0, 190.0), p(300.0, 330.0), p(60.0, 330.0)] }),
+        serde_json::json!({ "tool": "region", "name": "Zemni Fields", "pts": [p(110.0, 250.0)] }),
+        serde_json::json!({ "tool": "region", "name": "Marrow Valley", "pts": [p(250.0, 260.0)] }),
+        serde_json::json!({ "tool": "region", "name": "Truscan Vale", "closed": true, "pts": [p(420.0, 160.0), p(470.0, 160.0), p(470.0, 200.0), p(420.0, 200.0)] }),
+        serde_json::json!({ "tool": "biome", "biome": "blighted_woods", "closed": true, "name": "The Pallid Grove", "pts": ring(470.0, 110.0, 30.0, 22.0, 16) }),
+        serde_json::json!({ "tool": "biome", "biome": "ashlands", "closed": true, "name": "The Cinderwaste", "pts": ring(150.0, 290.0, 30.0, 20.0, 16) }),
+        serde_json::json!({ "tool": "site", "kind": "ruin", "under": "crypt", "name": "Barrow of Kings", "pts": [p(350.0, 300.0)] }),
+        serde_json::json!({ "tool": "pin", "tier": "town", "capital": true, "name": "Rexxentrum", "pts": [p(200.0, 230.0)] }),
+        serde_json::json!({ "tool": "pin", "tier": "city", "kind": "fortress", "name": "Bladegarden", "wards": wards, "pts": [p(380.0, 280.0)] }),
+    ];
+    let params = serde_json::json!({ "width_mi": 600.0, "height_mi": 400.0, "volcanoes": 0 });
+    let file = |strokes: &[serde_json::Value]| -> World {
+        let f: WorldFile = serde_json::from_value(serde_json::json!({ "gen_version": worldgen::world::GEN_VERSION, "seed": 9, "params": params, "sketch": { "strokes": strokes } })).unwrap();
+        World::new(f).unwrap()
+    };
+    let mut ex = Executor::new(file(&strokes));
+    // The painted blighted woods and ashlands make battlemaps, with their objects.
+    for (x, y) in [(470.0, 110.0), (150.0, 290.0)] {
+        let size = ex.world.geom.tile_size_ft(ex.world.geom.max_level);
+        let key = TileKey::surface(ex.world.geom.max_level, (x * MI / size) as u32, (y * MI / size) as u32);
+        assert!(!ex.battlemap(key).objects.is_empty(), "no battlemap objects in the painted biome at ({x}, {y}) mi");
+    }
+    let (world, t0) = (&ex.world, &ex.t0);
+    let extra = t0.extra.as_ref().unwrap();
+    let feats = &extra.overlay.features;
+    let named = |name: &str| feats.iter().filter(|f| f.name == name).collect::<Vec<_>>();
+    let conflicts: Vec<&str> = extra.overlay.conflicts.iter().map(|c| c.message.as_str()).collect();
+
+    for (name, kind) in [("Greyspine Massif", "range"), ("Silberquel Ridge", "range"), ("Glory Run", "river"), ("Zemni Fields", "plains"), ("Marrow Valley", "plains"), ("The Pallid Grove", "blight"), ("The Cinderwaste", "ashlands")] {
+        let fs = named(name);
+        assert!(fs.iter().any(|f| f.kind == kind), "no {kind} named {name} (named so: {:?}; conflicts {conflicts:?})", fs.iter().map(|f| f.kind).collect::<Vec<_>>());
+    }
+    let vale = named("Truscan Vale");
+    assert_eq!(vale.len(), 1, "the region outline named {} features", vale.len());
+    // The two plains names name two parts of the plain, each holding its own name's point.
+    let part = |name: &str| extra.overlay.shapes[feats.iter().position(|f| f.name == name && f.kind == "plains").unwrap()].clone();
+    assert!(part("Zemni Fields").distance([110.0 * MI, 250.0 * MI]).0 == 0.0 && part("Marrow Valley").distance([250.0 * MI, 260.0 * MI]).0 == 0.0, "the plain is not split between its names");
+
+    // Pins: the capital, the fortress and its wards.
+    let at = |name: &str| t0.settlements.iter().position(|s| feats.iter().any(|f| f.name == name && (f.x - s.x).abs() < 1.0 && (f.y - s.y).abs() < 1.0)).unwrap_or_else(|| panic!("no settlement {name}"));
+    let (capital, fort) = (at("Rexxentrum"), at("Bladegarden"));
+    assert!(t0.settlements[capital].capital && t0.settlements.iter().filter(|s| s.capital).count() == 1, "the pinned capital is not the only capital");
+    assert_eq!(t0.settlements[fort].kind, worldgen::t0::settle::SettleKind::Fortress, "the pinned fortress is not a fortress");
+    let layout = worldgen::town::generate(&world, &t0, fort);
+    let centre = layout.quarters.iter().find(|q| q.kind == worldgen::town::QuarterKind::Center).expect("a centre");
+    assert_eq!(centre.name, wards[0], "the first ward doesn't name the central district");
+    assert!(wards[1..].iter().all(|w| layout.quarters.iter().any(|q| q.name == *w)), "the wards don't name districts");
+
+    // The site: a named ruin over a crypt, where it was drawn; still there when the sketch changes
+    // elsewhere.
+    let site = |t0: &worldgen::t0::T0| {
+        let i = (0..t0.base_pois).find(|&i| t0.pois[i].stroke.is_some()).expect("the site was not placed");
+        (i, t0.pois[i].kind, t0.pois[i].x, t0.pois[i].y, t0.created_site(i).and_then(|c| c.under), t0.pois[i].seed)
+    };
+    let (i, kind, x, y, under, seed) = site(&t0);
+    assert!(kind == worldgen::t0::settle::PoiKind::Ruin && under == Some(worldgen::under::UnderKind::Crypt), "the site is not a ruin over a crypt");
+    assert!(((x / MI - 350.0).powi(2) + (y / MI - 300.0).powi(2)).sqrt() < 2.0, "the site moved from where it was drawn");
+    let id = feats.iter().find(|f| f.name == "Barrow of Kings").expect("the site lost its name").id.clone();
+    strokes.push(serde_json::json!({ "tool": "pin", "tier": "village", "name": "Elsewhere", "pts": [p(520.0, 120.0)] }));
+    let world2 = file(&strokes);
+    let mut t2 = worldgen::t0::T0::generate(&world2);
+    t2.apply_edits(&world2);
+    let (_, kind2, x2, y2, under2, seed2) = site(&t2);
+    assert!(kind2 == kind && under2 == under && (x2 - x).abs() < 1.0 && (y2 - y).abs() < 1.0 && seed2 == seed, "the site changed with the sketch elsewhere");
+    let f2 = t2.extra.as_ref().unwrap().overlay.features.iter().find(|f| f.name == "Barrow of Kings").expect("the site lost its name");
+    assert_eq!(f2.id, id, "the site's id changed with the sketch elsewhere");
+    let _ = i;
 }

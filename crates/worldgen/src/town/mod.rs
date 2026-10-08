@@ -816,6 +816,16 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
         town(&site, s, r, &road_ends, &mut rng, &mut l);
         walls_off_river(&site, &mut l);
     }
+    // A pin's ward names go to its districts in order, the central one first.
+    if let Some(pin) = s.pin.and_then(|i| world.file.sketch.strokes.get(i as usize)) {
+        let mut order: Vec<usize> = (0..l.quarters.len()).collect();
+        order.sort_by_key(|&q| (l.quarters[q].kind != QuarterKind::Center, q));
+        for (&q, name) in order.iter().zip(&pin.wards) {
+            if !name.trim().is_empty() {
+                l.quarters[q].name = name.trim().to_string();
+            }
+        }
+    }
     drop_walled_in(&mut l);
     let on_water = s.coastal || s.river || !site.river.is_empty();
     l.on_water = on_water;
@@ -1720,7 +1730,7 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                     seg_dist(pc, base, tip) > 16.0
                 });
                 let pier = rect(add(base, mul(out, 52.5)), out, 105.0, 10.0);
-                let free = !site.deck_on_road(&pier) && !l.bridges.iter().any(|d| overlaps(d, &pier));
+                let free = !site.deck_on_road(&pier) && !l.bridges.iter().any(|d| overlaps_or_crosses(d, &pier));
                 if over_water && clear && free {
                     l.piers.push(pier);
                 }
@@ -2407,6 +2417,19 @@ fn overlaps(a: &[P], b: &[P]) -> bool {
     a.iter().any(|p| contains(b, *p)) || b.iter().any(|p| contains(a, *p))
 }
 
+/// `overlaps`, or their edges cross (two strips laid across each other, no corner in the other).
+fn overlaps_or_crosses(a: &[P], b: &[P]) -> bool {
+    let cross = |p: P, q: P, r: P| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    let edges = |v: &[P]| (0..v.len()).map(|i| (v[i], v[(i + 1) % v.len()])).collect::<Vec<_>>();
+    overlaps(a, b)
+        || edges(a).iter().any(|&(p, q)| {
+            edges(b).iter().any(|&(r, t)| {
+                let (d1, d2, d3, d4) = (cross(p, q, r), cross(p, q, t), cross(r, t, p), cross(r, t, q));
+                d1 * d2 < 0.0 && d3 * d4 < 0.0
+            })
+        })
+}
+
 fn rotate(v: P, ang: f64) -> P {
     let (c, s) = (libm::cos(ang), libm::sin(ang));
     [v[0] * c - v[1] * s, v[0] * s + v[1] * c]
@@ -3043,7 +3066,7 @@ fn piers_along(site: &Site, wharf: &[P], rng: &mut Pcg32, l: &mut Layout) {
             let over_water = (0..=8).all(|k| wet_at(hi + 2.0 + (length - 2.0) * k as f64 / 8.0));
             let pier = rect(add(p, mul(out, 0.5 * (base + end))), out, end - base, 8.0);
             // Never on a road (or its bridge) or another deck.
-            let clear = !site.deck_on_road(&pier) && !l.bridges.iter().chain(&l.piers).any(|d| overlaps(d, &pier));
+            let clear = !site.deck_on_road(&pier) && !l.bridges.iter().chain(&l.piers).any(|d| overlaps_or_crosses(d, &pier));
             if length >= 12.0 && over_water && !wet_at(base) && clear {
                 l.piers.push(pier);
             }

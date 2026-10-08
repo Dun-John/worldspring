@@ -24,7 +24,7 @@
   const SITE_KINDS = ['ruin', 'tower', 'camp', 'waystation', 'cave', 'mine', 'lava_tube', 'entrance', 'building'];
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
-    { key: 'land', label: 'Land', kinds: ['continent', 'island', 'range', 'peak', 'pass', 'volcano', 'forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'salt_flat'] },
+    { key: 'land', label: 'Land', kinds: ['continent', 'island', 'range', 'peak', 'pass', 'volcano', 'forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'blight', 'ashlands', 'region', 'salt_flat'] },
     { key: 'settlements', label: 'Settlements', kinds: SETTLEMENT_KINDS },
     { key: 'sites', label: 'Sites', kinds: SITE_KINDS },
   ];

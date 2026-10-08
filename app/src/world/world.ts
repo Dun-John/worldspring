@@ -6,7 +6,7 @@ import { assetIds, bundleAssets } from './assets';
 import { PINNED } from './versions';
 
 /** Must match `worldgen::world::GEN_VERSION`. */
-export const GEN_VERSION = 54;
+export const GEN_VERSION = 55;
 
 export const DEFAULT_PARAMS: WorldParams = {
   width_mi: 1200,
@@ -47,6 +47,9 @@ export const TUNABLE_BIOMES: [string, string][] = [
   ['ice', 'Ice / glacier'],
   ['volcanic', 'Volcanic waste'],
 ];
+
+/** Biomes the sketch can paint: the tunable ones and those only ever painted. */
+export const PAINT_BIOMES: [string, string][] = [...TUNABLE_BIOMES, ['salt_flat', 'Salt flat'], ['blighted_woods', 'Blighted woods'], ['ashlands', 'Ashlands']];
 
 export function newWorld(seed: number, params: Partial<WorldParams> = {}): WorldFile {
   return { gen_version: GEN_VERSION, seed: seed >>> 0, params: { ...DEFAULT_PARAMS, ...params } };

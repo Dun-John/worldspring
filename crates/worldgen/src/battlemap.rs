@@ -408,6 +408,8 @@ fn profile(b: Biome) -> &'static [(Kind, f64, bool)] {
         Biome::Swamp => &[(TreeWillow, 2.5, false), (TreeDead, 1.5, false), (Reeds, 5.0, true), (Bog, 0.4, false), (Mushrooms, 0.4, false), (Bush, 1.0, false)],
         Biome::Volcanic => &[(BasaltPillar, 0.5, false), (Boulder, 1.0, false), (Obsidian, 0.4, false), (SteamVent, 0.15, false), (LavaPool, 0.06, false), (RockSmall, 1.5, false)],
         Biome::SaltFlat => &[(RockSmall, 0.3, false), (Bones, 0.08, false)],
+        Biome::Blight => &[(TreeDead, 7.0, false), (FallenLog, 1.2, false), (Stump, 1.0, false), (Mushrooms, 0.9, false), (Brambles, 0.3, false), (Bog, 0.2, false), (Bones, 0.12, false)],
+        Biome::Ashland => &[(TreeDead, 0.6, false), (Stump, 0.8, false), (Boulder, 0.6, false), (RockSmall, 1.5, false), (Obsidian, 0.15, false), (Bones, 0.08, false)],
         Biome::Ocean | Biome::Lake => &[(Reeds, 3.0, true), (Boulder, 0.3, false)],
     }
 }
@@ -425,6 +427,8 @@ fn fallback_cover(b: Biome, rng: &mut Pcg32) -> Kind {
         Biome::Tundra | Biome::Ice => &[Snowdrift, Boulder],
         Biome::Swamp => &[TreeDead, Bush, Thicket],
         Biome::Volcanic => &[Boulder, BasaltPillar, Obsidian],
+        Biome::Blight => &[TreeDead, FallenLog, Boulder],
+        Biome::Ashland => &[Boulder, RockPile, TreeDead],
         Biome::SaltFlat | Biome::Ocean | Biome::Lake => &[Boulder, RockPile],
     };
     opts[rng.below(opts.len() as u32) as usize]
@@ -442,6 +446,8 @@ fn fallback_feature(b: Biome, rng: &mut Pcg32) -> Kind {
         Biome::Tundra | Biome::Ice => &[ThinIce, Bones],
         Biome::Swamp => &[Bog, Mushrooms],
         Biome::Volcanic => &[SteamVent, Obsidian],
+        Biome::Blight => &[Mushrooms, Bog, Bones],
+        Biome::Ashland => &[Bones, Obsidian, RockSmall],
         Biome::Ocean | Biome::Lake => &[Reeds, RockSmall],
     };
     opts[rng.below(opts.len() as u32) as usize]
@@ -457,6 +463,8 @@ fn atmosphere_for(b: Biome, h: u64) -> Atmosphere {
         Biome::Alpine => if r < 0.4 { Atmosphere::Snowfall } else if r < 0.6 { Atmosphere::Mist } else { Atmosphere::None },
         Biome::HotDesert => if r < 0.4 { Atmosphere::HeatHaze } else if r < 0.6 { Atmosphere::BlowingSand } else { Atmosphere::None },
         Biome::Volcanic => if r < 0.7 { Atmosphere::Embers } else { Atmosphere::HeatHaze },
+        Biome::Blight => if r < 0.6 { Atmosphere::Fog } else { Atmosphere::Mist },
+        Biome::Ashland => if r < 0.3 { Atmosphere::Embers } else { Atmosphere::None },
         _ => Atmosphere::None,
     }
 }
@@ -477,6 +485,8 @@ fn surface_for(b: Biome, slope: f64) -> Surface {
         Biome::Swamp => Surface::Mud,
         Biome::Volcanic => Surface::Ash,
         Biome::SaltFlat => Surface::Salt,
+        Biome::Blight => Surface::Mud,
+        Biome::Ashland => Surface::Ash,
         Biome::Ocean | Biome::Lake => Surface::Sand,
     }
 }
@@ -1674,13 +1684,14 @@ fn apply_edits(c: &mut Chunk, e: &crate::world::Edits, ox: f64, oy: f64) {
 }
 
 fn dominant_biome(biome: &[Biome], water: &[f32], height: &[f32]) -> Biome {
-    let mut counts = [0usize; 17];
+    const N: usize = crate::t0::biome::ALL.len();
+    let mut counts = [0usize; N];
     for k in 0..biome.len() {
         if water[k] <= height[k] {
             counts[biome[k] as usize] += 1;
         }
     }
-    let best = (0..17).max_by_key(|&b| (counts[b], 17 - b)).unwrap_or(8);
+    let best = (0..N).max_by_key(|&b| (counts[b], N - b)).unwrap_or(8);
     Biome::from_u8(best as u8)
 }
 
@@ -1716,7 +1727,7 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[boo
     // Each (biome, kind) pair has its own jittered global lattice; objects belong to the
     // chunk that contains them, so placement is identical whichever chunk is asked.
     let mut kinds: Vec<(Biome, Kind, f64, bool)> = Vec::new();
-    let mut seen = [false; 17];
+    let mut seen = [false; crate::t0::biome::ALL.len()];
     for &b in biome {
         if !seen[b as usize] {
             seen[b as usize] = true;

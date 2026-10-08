@@ -86,6 +86,10 @@ pub enum NameKind {
     Plains,
     Tundra,
     Glacier,
+    Blight,
+    Ashlands,
+    /// A region drawn and named in the sketch (always named, so rarely asked for).
+    Region,
     Settlement,
     Ruin,
     Tower,
@@ -97,12 +101,20 @@ pub enum NameKind {
 
 pub struct Namer {
     rng: Pcg32,
+    /// Settlements' and sites' own stream (when they have one), so the land's names (more or
+    /// fewer regions, say) don't change theirs.
+    sites: Option<Pcg32>,
     used: BTreeSet<String>,
 }
 
 impl Namer {
     pub fn new(seed: u64) -> Self {
-        Self { rng: Pcg32::new(seed, 11), used: BTreeSet::new() }
+        Self { rng: Pcg32::new(seed, 11), sites: None, used: BTreeSet::new() }
+    }
+
+    /// A namer whose settlements and sites draw from their own stream (`site_seed`).
+    pub fn with_sites(seed: u64, site_seed: u64) -> Self {
+        Self { rng: Pcg32::new(seed, 11), sites: Some(Pcg32::new(site_seed, 13)), used: BTreeSet::new() }
     }
 
     fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str {
@@ -128,6 +140,18 @@ impl Namer {
 
     /// Unique name for a feature of `kind` in the given culture region.
     pub fn name(&mut self, kind: NameKind, culture: usize) -> String {
+        use NameKind::*;
+        let site = matches!(kind, Settlement | Ruin | Tower | Camp | Cave | Mine | LavaTube);
+        if site && let Some(own) = &mut self.sites {
+            std::mem::swap(&mut self.rng, own);
+            let n = self.unique(kind, culture);
+            std::mem::swap(&mut self.rng, self.sites.as_mut().expect("there"));
+            return n;
+        }
+        self.unique(kind, culture)
+    }
+
+    fn unique(&mut self, kind: NameKind, culture: usize) -> String {
         for _ in 0..40 {
             let n = self.candidate(kind, culture);
             if self.used.insert(n.clone()) {
@@ -200,6 +224,13 @@ impl Namer {
             (Plains, 1) => format!("The {adj} Steppe"),
             (Plains, _) => format!("The {w} Downs"),
             (Tundra, _) => format!("The {adj} Barrens"),
+            (Blight, 0) => format!("The Blighted Wood of {w}"),
+            (Blight, 1) => format!("The {adj} Blight"),
+            (Blight, _) => format!("The Withered {}", ["Wood", "Weald", "Grove", "Holt"][r as usize % 4]),
+            (Ashlands, 0 | 1) => format!("The {w} Ashlands"),
+            (Ashlands, _) => format!("The {adj} Cinders"),
+            (Region, 0 | 1) => format!("The {w} Lands"),
+            (Region, _) => format!("{w}"),
             (Settlement, 0) => format!("{}{}", self.pick(&PLACE_ADJ), self.pick(&PLACE_NOUN)),
             (Settlement, _) => {
                 let stem = self.word(c, 1, 2);

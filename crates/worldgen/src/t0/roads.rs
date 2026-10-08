@@ -305,7 +305,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
                 let far_from_town = settlements.iter().all(|s| crate::core::sqrt((s.x - x) * (s.x - x) + (s.y - y) * (s.y - y)) > 10.0 * 5280.0);
                 let far_from_other = waystations.iter().all(|q| crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) > 15.0 * 5280.0);
                 if far_from_town && far_from_other {
-                    waystations.push(Poi { kind: PoiKind::Waystation, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32 });
+                    waystations.push(Poi { kind: PoiKind::Waystation, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });
                 }
             }
         }
@@ -380,7 +380,7 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], edges: &[(usize, usize, R
     // --- 2. Routing.
     let biome_pen = |k: usize| match Biome::from_u8((inp.biome[k] & 0xff) as u8) {
         Biome::Swamp => 2.0,
-        Biome::Jungle => 1.0,
+        Biome::Jungle | Biome::Blight => 1.0,
         Biome::Alpine => 1.0,
         Biome::Ice => 3.0,
         Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga => 0.3,

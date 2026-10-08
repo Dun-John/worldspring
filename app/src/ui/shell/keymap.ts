@@ -100,6 +100,8 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['B', 'biome', 'Biome'],
     ['V', 'volcano', 'Volcano'],
     ['T', 'pin', 'Settlement'],
+    ['D', 'site', 'Site'],
+    ['N', 'region', 'Name a place'],
     ['E', 'erase', 'Erase'],
   ];
   for (const [key, t, label] of sketch) out.push({ keys: [key], label, group: 'Sketch', when: sketching, run: () => k.sketchTool(t) });

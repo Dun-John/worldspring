@@ -12,7 +12,7 @@ use crate::core::{
 };
 
 /// Bump whenever generator output changes for an unchanged world file.
-pub const GEN_VERSION: u32 = 54;
+pub const GEN_VERSION: u32 = 55;
 
 /// Prevailing winds: latitude belts (trades, westerlies, polar easterlies) or one direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,11 +174,31 @@ pub enum SketchTool {
     Lake,
     /// A volcano at the first point (`kind`, `activity`, strength: its size; optional `name`).
     Volcano,
+    /// A named place (`name`): a closed outline is a region of its own (`kind`, else the land's
+    /// kind inside it); a point names what lies there (a region, range, lake, island or sea;
+    /// `kind` says which, else the most local), sharing it with other names in it.
+    Region,
+    /// A site at the first point (`kind`: ruin, tower, camp, waystation, cave, mine, lava tube
+    /// or entrance; `under` a ruin or entrance; optional `name`).
+    Site,
 }
 
 /// Volcano strokes' kinds and activities.
 pub const VOLCANO_KINDS: [&str; 4] = ["strato", "shield", "cinder", "caldera"];
 pub const VOLCANO_ACTIVITY: [&str; 3] = ["active", "dormant", "extinct"];
+
+/// Pin strokes' kinds (`t0::settle::SettleKind::key`).
+pub const PIN_KINDS: [&str; 10] = ["port", "river", "mining", "fortress", "market", "farming", "fishing", "lumber", "herding", "oasis"];
+/// Site strokes' kinds (as created sites').
+pub const SITE_KINDS: [&str; 8] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance"];
+/// What a region stroke names or makes: area features' kinds.
+pub const REGION_KINDS: [&str; 19] = [
+    "region", "forest", "jungle", "taiga", "desert", "swamp", "plains", "tundra", "glacier", "blight", "ashlands", "range", "lake", "river", "island",
+    "continent", "bay", "sea", "ocean",
+];
+/// The longest name a stroke may give (characters), and the most wards a pin names.
+pub const NAME_MAX: usize = 80;
+pub const WARDS_MAX: usize = 24;
 
 /// The most points a sketch may hold in all (the cost of applying it grows with them).
 pub const SKETCH_POINTS: usize = 200_000;
@@ -206,7 +226,8 @@ pub struct Stroke {
     /// Pins: `metropolis`, `city`, `town` or `village`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
-    /// Pins, lakes and volcanoes: the name (else generated).
+    /// The name of what it makes (else generated): a settlement, range, massif, river, lake,
+    /// volcano, painted region, region or site.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Massifs: the direction their ridges run (degrees, 0 = east, 90 = south), else along
@@ -222,12 +243,23 @@ pub struct Stroke {
     /// Lakes: a salt lake (no outflow).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub salt: bool,
-    /// Volcanoes: `strato`, `shield`, `cinder` or `caldera` (default strato).
+    /// Volcanoes: `strato`, `shield`, `cinder` or `caldera` (default strato). Pins: what the
+    /// settlement lives by (`PIN_KINDS`, else from its surroundings). Sites: `SITE_KINDS`.
+    /// Regions: `REGION_KINDS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Volcanoes: `active`, `dormant` or `extinct` (default dormant).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<String>,
+    /// Pins: the realm's capital (else the first metropolis is).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capital: bool,
+    /// Pins: names for the settlement's districts, in order (the central one first).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wards: Vec<String>,
+    /// Sites: what lies beneath a ruin (dungeon, crypt, catacombs) or an entrance (any site).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub under: Option<String>,
 }
 
 fn default_radius() -> f64 {
@@ -267,7 +299,27 @@ impl Sketch {
                 SketchTool::Elevation if !s.delta_ft.is_some_and(|d| d.is_finite() && d.abs() <= 20_000.0) => return Err("an elevation stroke needs delta_ft (±20,000 ft at most)".into()),
                 SketchTool::Volcano if !s.kind.as_deref().is_none_or(|k| VOLCANO_KINDS.contains(&k)) => return Err("a volcano's kind is strato, shield, cinder or caldera".into()),
                 SketchTool::Volcano if !s.activity.as_deref().is_none_or(|a| VOLCANO_ACTIVITY.contains(&a)) => return Err("a volcano's activity is active, dormant or extinct".into()),
+                SketchTool::Pin if !s.kind.as_deref().is_none_or(|k| PIN_KINDS.contains(&k)) => return Err(format!("a pin's kind is one of {}", PIN_KINDS.join(", "))),
+                SketchTool::Site if !s.kind.as_deref().is_some_and(|k| SITE_KINDS.contains(&k)) => return Err(format!("a site needs a kind: {}", SITE_KINDS.join(", "))),
+                SketchTool::Region if !s.name.as_deref().is_some_and(|n| !n.trim().is_empty()) => return Err("a region stroke needs a name".into()),
+                SketchTool::Region if !s.kind.as_deref().is_none_or(|k| REGION_KINDS.contains(&k)) => return Err(format!("a region's kind is one of {}", REGION_KINDS.join(", "))),
+                SketchTool::Region if s.closed && s.pts.len() < 3 => return Err("a region's outline needs 3 or more points".into()),
                 _ => {}
+            }
+            if let Some(u) = &s.under {
+                use crate::under::UnderKind;
+                let built = [UnderKind::Dungeon, UnderKind::Crypt, UnderKind::Catacombs];
+                match (s.tool, s.kind.as_deref(), UnderKind::parse(u)) {
+                    (SketchTool::Site, Some("ruin"), Some(k)) if built.contains(&k) => {}
+                    (SketchTool::Site, Some("entrance"), Some(_)) => {}
+                    _ => return Err("'under' is for ruin sites (dungeon, crypt, catacombs) and entrances (any site)".into()),
+                }
+            }
+            if (s.capital || !s.wards.is_empty()) && s.tool != SketchTool::Pin {
+                return Err("capital and wards are for pins".into());
+            }
+            if s.wards.len() > WARDS_MAX || s.name.iter().chain(&s.wards).any(|n| n.chars().count() > NAME_MAX) {
+                return Err(format!("names are at most {NAME_MAX} characters, and a pin names at most {WARDS_MAX} wards"));
             }
             if !s.trend.is_none_or(f64::is_finite) || !s.level_ft.is_none_or(|l| l.is_finite() && l.abs() <= 30_000.0) {
                 return Err("trend and level_ft must be finite (level_ft ±30,000 ft at most)".into());

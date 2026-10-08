@@ -25,7 +25,7 @@ use crate::core::noise::{Fbm, fbm, smoothstep};
 use features::Overlay;
 use volcano::Activity;
 
-const MAGIC: u32 = 0x5430_4734; // "T0G4"
+const MAGIC: u32 = 0x5430_4735; // "T0G5"
 /// Height of the bank at the dry edge of a shore cell above the water (ft).
 const SHORE_BANK_FT: f64 = 6.0;
 /// Ocean distance encoded in the biome texture saturates here (ft).
@@ -53,6 +53,8 @@ pub struct T0 {
     pub base_pois: usize,
     /// Per created site (index `poi - base_pois`): removed, and what lies beneath a ruin.
     pub created: Vec<CreatedSite>,
+    /// The sketch's sites (by point of interest) and their options.
+    pub sketched: Vec<(usize, CreatedSite)>,
     biome_seed: u64,
     /// mips[0] is `height`; each next level is a 2x2 box downsample.
     mips: Vec<Grid<f32>>,
@@ -90,6 +92,9 @@ struct Shaped {
     volcanoes: Vec<volcano::Volcano>,
     conflicts: Vec<sketch::Conflict>,
     pins: Vec<sketch::Pin>,
+    sites: Vec<sketch::Site>,
+    /// The drawn rivers' courses (stroke, cells).
+    courses: Vec<(usize, Vec<usize>)>,
 }
 
 pub struct T0Extra {
@@ -215,18 +220,16 @@ impl T0 {
         };
         let mut height = heights(&zg);
 
-        // A sketched world holds water where its land or its sketch puts it: hollows the lowlands'
-        // fill deepened (between drawn mountains, most of all) are filled to their brims, as
-        // basins fill with sediment. Then its plateaus and basins, which cut outlets for water
-        // they would pond.
-        let rough = (!world.file.sketch.strokes.is_empty()).then(|| sketch::depths(raster, &land, &heights(&blend(true))));
-        if let Some(rough) = &rough {
-            sketch::fill(raster, &land, &mut height, rough);
-            if world.file.sketch.strokes.iter().any(|s| s.tool == crate::world::SketchTool::Elevation) {
-                let before = sketch::depths(raster, &land, &height);
-                sketch::elevate(world, raster, &land, &mut height);
-                sketch::breach(raster, &land, &mut height, &before);
-            }
+        // The world holds water where its land (or its sketch) puts it: hollows the lowlands' fill
+        // deepened (sills across narrow valleys; between drawn mountains, most of all) are filled
+        // to their brims, as basins fill with sediment. Then a sketch's plateaus and basins, which
+        // cut outlets for water they would pond.
+        let rough = sketch::depths(raster, &land, &heights(&blend(true)));
+        sketch::fill(raster, &land, &mut height, &rough);
+        if world.file.sketch.strokes.iter().any(|s| s.tool == crate::world::SketchTool::Elevation) {
+            let before = sketch::depths(raster, &land, &height);
+            sketch::elevate(world, raster, &land, &mut height);
+            sketch::breach(raster, &land, &mut height, &before);
         }
 
         progress("volcanoes", 0.0);
@@ -256,7 +259,8 @@ impl T0 {
         sketch::carve_lakes(world, raster, &mut height, &land, &mut lakes, &courses, &mut conflicts);
         // (And, all drawn, no hollow holds water the land itself wouldn't but the drawn lakes and
         // volcanoes' craters: drawn mountains, plateaus and rivers together can still make some.)
-        if let Some(mut before) = rough {
+        if !world.file.sketch.strokes.is_empty() {
+            let mut before = rough;
             for k in (0..n).filter(|&k| lakes.of[k] != sketch::NONE) {
                 before[k] = f64::INFINITY;
             }
@@ -286,14 +290,16 @@ impl T0 {
         let mut biome = biome::classify(world, w, h, cell, &height, &land, &clim, &hydro, &biome::Volcanic { vents });
         sketch::paint_biomes(world, raster, &land, &hydro.lake_of, &mut biome);
         let pins = sketch::pins(world, raster, &land, &mut conflicts);
-        Shaped { height, land, clim, hydro, biome, volcanoes, conflicts, pins }
+        let sites = sketch::sites(world, raster, &land, &hydro.lake_of, &mut conflicts);
+        let courses = courses.strokes.iter().copied().zip(courses.cells).collect();
+        Shaped { height, land, clim, hydro, biome, volcanoes, conflicts, pins, sites, courses }
     }
 
     pub fn generate_with_progress(world: &World, progress: &mut dyn FnMut(&str, f64)) -> T0 {
         let g = &world.geom;
         let (w, h, cell) = (g.t0_w, g.t0_h, g.t0_cell_ft);
         let n = w * h;
-        let Shaped { height, land, clim, hydro, biome, volcanoes, conflicts, pins } = Self::shape(world, w, h, cell, progress);
+        let Shaped { height, land, clim, hydro, biome, volcanoes, mut conflicts, pins, sites, courses } = Self::shape(world, w, h, cell, progress);
         let dist_land = climate::distance_to(w, h, &land);
         let coast: Vec<f32> = (0..n).map(|k| if land[k] { 0.0 } else { (dist_land[k] * cell) as f32 }).collect();
 
@@ -331,11 +337,11 @@ impl T0 {
         let planned = |x: f64, y: f64| rivers.valley(ground(x, y), x, y);
         let rinp = roads::Inputs { world, plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, routes: Default::default() };
         use settle::Tier as T;
-        let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None);
+        let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None, &mut conflicts);
         let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
-        settlements = settle::place(&sinp, settlements, &[T::Town], Some(&usage));
+        settlements = settle::place(&sinp, settlements, &[T::Town], Some(&usage), &mut conflicts);
         let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad, roads::RoadClass::Road]);
-        settlements = settle::place(&sinp, settlements, &[T::Village], Some(&usage));
+        settlements = settle::place(&sinp, settlements, &[T::Village], Some(&usage), &mut conflicts);
         // Waterside settlements stand on their water, not at the centre of their map cell.
         let water_grid = Grid::from_vec(w, h, hydro.water.clone());
         let biome_seed = world.stream("t0.biome.warp");
@@ -378,6 +384,14 @@ impl T0 {
         settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river);
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
         let mut pois = settle::place_pois(&sinp, &settlements, &vents_at);
+        // The sketch's sites (after the generated ones, so drawing one moves none of them), seeded
+        // by where they were drawn.
+        let s_site = world.stream("t0.sketch.site");
+        let sketched_from = pois.len();
+        for s in &sites {
+            let seed = crate::core::rng::hash2(s_site, (s.x / 10.0) as i64, (s.y / 10.0) as i64);
+            pois.push(settle::Poi { kind: s.kind, x: s.x, y: s.y, seed, stroke: Some(s.stroke as u32) });
+        }
         // Towns sit beside rivers, not in them (the fine channel meanders through T0 cells).
         let clear = crate::lod::rivers::ClearCache::default();
         for s in &mut settlements {
@@ -420,12 +434,15 @@ impl T0 {
             map_h,
             cell,
         );
-        // Roadside inns stand on the road as drawn (the curve wanders off its control points).
+        // Roadside inns stand on the road as drawn (the curve wanders off its control points),
+        // before the sketch's sites.
+        let drawn: Vec<settle::Poi> = pois.split_off(sketched_from);
         for ws in &network.waystations {
             let mut ws = ws.clone();
             (ws.x, ws.y) = road_net.nearest_point(ws.x, ws.y, 1.5 * cell).unwrap_or((ws.x, ws.y));
             pois.push(ws);
         }
+        pois.extend(drawn);
 
         progress("names", 0.0);
         let mut overlay = features::extract(&features::Inputs {
@@ -441,7 +458,9 @@ impl T0 {
             volcanoes: &volcanoes,
             settlements: &settlements,
             pois: &pois,
+            courses: &courses,
         });
+        conflicts.append(&mut overlay.conflicts);
         overlay.conflicts = conflicts;
         progress("done", 1.0);
 
@@ -504,6 +523,7 @@ impl T0 {
         t0.settlements = settlements.clone();
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
+        t0.sketch_sites(world);
         t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings });
         t0
     }
@@ -515,7 +535,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -544,21 +564,11 @@ impl T0 {
     /// any put there before). Their seeds come from their ids, so a site is the same whenever
     /// and wherever it is applied.
     pub fn apply_edits(&mut self, world: &World) {
-        use settle::PoiKind;
         self.pois.truncate(self.base_pois);
         self.created.clear();
+        self.sketch_sites(world);
         for c in &world.file.edits.created {
-            let kind = match c.kind.as_str() {
-                "tower" => PoiKind::Tower,
-                "camp" => PoiKind::Camp,
-                "waystation" => PoiKind::Waystation,
-                "cave" => PoiKind::Cave,
-                "mine" => PoiKind::Mine,
-                "lava_tube" => PoiKind::LavaTube,
-                "entrance" => PoiKind::Entrance,
-                "building" => PoiKind::Building,
-                _ => PoiKind::Ruin,
-            };
+            let kind = settle::PoiKind::parse(&c.kind);
             let under = c.under.as_deref().and_then(crate::under::UnderKind::parse);
             let spec = crate::under::SiteSpec {
                 size: c.size.as_deref().and_then(crate::under::SiteSize::parse),
@@ -566,14 +576,29 @@ impl T0 {
                 theme: c.theme.as_deref().and_then(crate::under::theme).map(|i| i as u8),
             };
             let seed = crate::core::hash::fnv64(c.id.as_bytes()) ^ world.seed;
-            self.pois.push(settle::Poi { kind, x: c.x, y: c.y, seed });
+            self.pois.push(settle::Poi { kind, x: c.x, y: c.y, seed, stroke: None });
             self.created.push(CreatedSite { removed: c.removed, under, spec });
         }
     }
 
-    /// The created-site options for point of interest `poi`, if it is a created one.
+    /// The options of the sketch's sites (what lies beneath a ruin or an entrance), from the
+    /// world file's strokes.
+    fn sketch_sites(&mut self, world: &World) {
+        self.sketched = (0..self.base_pois)
+            .filter_map(|i| {
+                let s = world.file.sketch.strokes.get(self.pois[i].stroke? as usize)?;
+                Some((i, CreatedSite { removed: false, under: s.under.as_deref().and_then(crate::under::UnderKind::parse), spec: Default::default() }))
+            })
+            .collect();
+    }
+
+    /// The created-site options for point of interest `poi`, if it is a created one or the
+    /// sketch's.
     pub fn created_site(&self, poi: usize) -> Option<CreatedSite> {
-        poi.checked_sub(self.base_pois).and_then(|k| self.created.get(k).copied())
+        match poi.checked_sub(self.base_pois) {
+            Some(k) => self.created.get(k).copied(),
+            None => self.sketched.iter().find(|s| s.0 == poi).map(|s| s.1),
+        }
     }
 
     /// Height (ft) at a world position, prefiltered for sample spacing `spacing_ft`.
@@ -766,7 +791,7 @@ impl T0 {
         let h = ((g.map_h_ft / cell).floor() as usize + 1).max(2);
         let s = Self::shape(world, w, h, cell, &mut |_, _| {});
         let sea = world.params().sea_level_ft;
-        const PALETTE: [[f64; 3]; 17] = [
+        const PALETTE: [[f64; 3]; biome::ALL.len()] = [
             [0.54, 0.63, 0.66],
             [0.62, 0.72, 0.74],
             [0.95, 0.95, 0.93],
@@ -784,6 +809,8 @@ impl T0 {
             [0.66, 0.71, 0.60],
             [0.53, 0.48, 0.45],
             [0.93, 0.91, 0.86],
+            [0.60, 0.57, 0.58],
+            [0.60, 0.56, 0.51],
         ];
         let threshold = hydro::RIVER_Q / world.params().river_density;
         let mut river = vec![false; w * h];
@@ -877,7 +904,8 @@ impl T0 {
             }
         }
         // Settlements: count, then per settlement: tier, kind, flags (coastal | river << 1 |
-        // capital << 2), culture as u8; cell u32; x, y f64; population u32; seed u64.
+        // capital << 2), culture as u8; cell u32; x, y f64; population u32; seed u64; the pin's
+        // stroke u32 (`u32::MAX`: none).
         out.extend_from_slice(&(self.settlements.len() as u32).to_le_bytes());
         for s in &self.settlements {
             out.extend_from_slice(&[s.tier as u8, s.kind as u8, s.coastal as u8 | (s.river as u8) << 1 | (s.capital as u8) << 2, s.culture]);
@@ -886,14 +914,17 @@ impl T0 {
             out.extend_from_slice(&s.y.to_le_bytes());
             out.extend_from_slice(&s.population.to_le_bytes());
             out.extend_from_slice(&s.seed.to_le_bytes());
+            out.extend_from_slice(&s.pin.unwrap_or(u32::MAX).to_le_bytes());
         }
-        // POIs: count, then per POI: kind u8, x, y f64, seed u64.
+        // POIs: count, then per POI: kind u8, x, y f64, seed u64, the site stroke u32 (`u32::MAX`:
+        // none).
         out.extend_from_slice(&(self.pois.len() as u32).to_le_bytes());
         for p in &self.pois {
             out.push(p.kind as u8);
             out.extend_from_slice(&p.x.to_le_bytes());
             out.extend_from_slice(&p.y.to_le_bytes());
             out.extend_from_slice(&p.seed.to_le_bytes());
+            out.extend_from_slice(&p.stroke.unwrap_or(u32::MAX).to_le_bytes());
         }
         out
     }
@@ -962,6 +993,7 @@ impl T0 {
             let y = f64::from_le_bytes(take(8)?.try_into().unwrap());
             let population = u32::from_le_bytes(take(4)?.try_into().unwrap());
             let seed = u64::from_le_bytes(take(8)?.try_into().unwrap());
+            let pin = u32::from_le_bytes(take(4)?.try_into().unwrap());
             settlements.push(settle::Settlement {
                 tier: settle::Tier::from_u8(tier),
                 kind: settle::SettleKind::from_u8(kind),
@@ -974,7 +1006,7 @@ impl T0 {
                 capital: flags & 4 != 0,
                 seed,
                 culture,
-                pin: None,
+                pin: (pin != u32::MAX).then_some(pin),
             });
         }
         let count = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
@@ -984,7 +1016,8 @@ impl T0 {
             let x = f64::from_le_bytes(take(8)?.try_into().unwrap());
             let y = f64::from_le_bytes(take(8)?.try_into().unwrap());
             let seed = u64::from_le_bytes(take(8)?.try_into().unwrap());
-            pois.push(settle::Poi { kind, x, y, seed });
+            let stroke = u32::from_le_bytes(take(4)?.try_into().unwrap());
+            pois.push(settle::Poi { kind, x, y, seed, stroke: (stroke != u32::MAX).then_some(stroke) });
         }
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;

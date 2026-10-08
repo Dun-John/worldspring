@@ -56,6 +56,10 @@ impl SettleKind {
     pub fn name(self) -> &'static str {
         ["port", "river town", "mining town", "fortress", "market town", "farming", "fishing", "lumber", "herding", "oasis"][self as usize]
     }
+    /// A pin's `kind` (`world::PIN_KINDS`, in this order).
+    pub fn parse(key: &str) -> Option<SettleKind> {
+        crate::world::PIN_KINDS.iter().position(|&k| k == key).map(|i| SettleKind::from_u8(i as u8))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +101,21 @@ pub enum PoiKind {
 }
 
 impl PoiKind {
+    /// A created site's or site stroke's kind (a ruin when unknown).
+    pub fn parse(key: &str) -> PoiKind {
+        match key {
+            "tower" => PoiKind::Tower,
+            "camp" => PoiKind::Camp,
+            "waystation" => PoiKind::Waystation,
+            "cave" => PoiKind::Cave,
+            "mine" => PoiKind::Mine,
+            "lava_tube" => PoiKind::LavaTube,
+            "entrance" => PoiKind::Entrance,
+            "building" => PoiKind::Building,
+            _ => PoiKind::Ruin,
+        }
+    }
+
     pub fn from_u8(v: u8) -> PoiKind {
         const ALL: [PoiKind; 9] = [PoiKind::Ruin, PoiKind::Tower, PoiKind::Camp, PoiKind::Waystation, PoiKind::Cave, PoiKind::Mine, PoiKind::LavaTube, PoiKind::Entrance, PoiKind::Building];
         ALL[(v as usize).min(ALL.len() - 1)]
@@ -109,6 +128,8 @@ pub struct Poi {
     pub x: f64,
     pub y: f64,
     pub seed: u64,
+    /// The sketch stroke that placed it, if any (`world::SketchTool::Site`).
+    pub stroke: Option<u32>,
 }
 
 pub struct Inputs<'a> {
@@ -138,14 +159,17 @@ fn fertility(b: Biome) -> f64 {
         Biome::HotDesert => 0.12,
         Biome::Tundra => 0.15,
         Biome::Alpine => 0.1,
+        Biome::Blight => 0.12,
+        Biome::Ashland => 0.1,
         _ => 0.0,
     }
 }
 
 /// Place settlements of the given tiers, keeping `existing` ones. `roads` (from
 /// `roads::preview`) favours sites on roads and most of all at junctions, so later
-/// tiers grow at the crossroads the earlier tiers' roads made.
-pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Option<&super::roads::Preview>) -> Vec<Settlement> {
+/// tiers grow at the crossroads the earlier tiers' roads made. Pins asking for what their place
+/// can't give (a port away from water, a river town off any river) say so in `conflicts`.
+pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Option<&super::roads::Preview>, conflicts: &mut Vec<super::sketch::Conflict>) -> Vec<Settlement> {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let world = inp.world;
     let p = world.params();
@@ -160,6 +184,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
     let slope_of = |k: usize| super::biome::local_slope(w, h, inp.height, k % w, k / w, cell);
     let mut score = vec![0.0f64; n];
     let mut coastal = vec![false; n];
+    let mut lakeside = vec![false; n];
     let mut on_river = vec![false; n];
     // Where rivers meet the sea or a lake, and where they join: the best town sites.
     let mut mouth = vec![0.0f64; n];
@@ -205,6 +230,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         // A coast is a coast on barren ground too (a pinned port there is still a port); the
         // ground only decides how good a site it is.
         coastal[k] = ocean_n > 0;
+        lakeside[k] = lake_n > 0;
         let b = biome_of(k);
         let fert = fertility(b);
         if fert <= 0.0 {
@@ -265,6 +291,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
     };
 
     let mut out = existing;
+    // A pinned capital is the capital (else the first metropolis is).
+    let pinned_capital = inp.pins.iter().any(|p| p.capital);
     for (tier, count, spacing_mi) in quota {
         if !tiers.contains(&tier) {
             continue;
@@ -274,7 +302,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         cands.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         let spacing = spacing_mi * 5280.0 / cell;
         // A settlement of this tier at cell `k`, standing at (x, y) ft.
-        let make = |k: usize, rng: &mut Pcg32, x: f64, y: f64, capital: bool, pin: Option<u32>| {
+        let make = |k: usize, rng: &mut Pcg32, x: f64, y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
             let (lo, hi) = match tier {
                 Tier::Metropolis => (25_000.0, 80_000.0),
@@ -299,8 +327,9 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                     })
                 })
             };
-            let is_coast = coastal[k] || harbour[k] || pinned_coast;
-            let kind = if is_coast {
+            let mut is_coast = coastal[k] || harbour[k] || pinned_coast;
+            let river = on_river[k] || (pin.is_some() && neighbors(w, h, k).any(|(nb, _)| on_river[nb]));
+            let mut kind = if is_coast {
                 if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }
             } else if above > 2_500.0 && ore > 0.1 {
                 SettleKind::Mining
@@ -321,6 +350,24 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             } else {
                 SettleKind::Farming
             };
+            // What the pin says it lives by, where its place allows (a lakeside port stands on
+            // its lake's shore).
+            if let Some(want) = pin.and_then(|p| p.kind) {
+                let lake = lakeside[k] || neighbors(w, h, k).any(|(nb, _)| lakeside[nb]);
+                let ok = match want {
+                    SettleKind::Port | SettleKind::Fishing => is_coast || lake || (want == SettleKind::Fishing && river),
+                    SettleKind::River => river,
+                    _ => true,
+                };
+                if ok {
+                    kind = if want == SettleKind::Port && tier < Tier::Town { SettleKind::Fishing } else { want };
+                    is_coast |= matches!(want, SettleKind::Port | SettleKind::Fishing) && !river;
+                } else {
+                    let p = pin.expect("asked");
+                    let what = if want == SettleKind::River { "river town: no river runs here" } else { "port: no sea or lake shore here" };
+                    conflicts.push(super::sketch::Conflict { stroke: p.stroke, message: format!("This settlement can't be a {what}"), x, y });
+                }
+            }
             Settlement {
                 tier,
                 kind,
@@ -333,15 +380,15 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 capital,
                 seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32,
                 culture: 0,
-                pin,
+                pin: pin.map(|p| p.stroke as u32),
             }
         };
         // Pinned ones first (they count toward the tier's quota), with their own seeds.
         let mut placed = 0;
         for pin in inp.pins.iter().filter(|p| p.tier == tier) {
             let mut prng = Pcg32::new(crate::core::rng::hash2(world.stream("t0.pin"), pin.stroke as i64, 0), 7);
-            let capital = tier == Tier::Metropolis && !out.iter().any(|s| s.capital);
-            out.push(make(pin.cell, &mut prng, pin.x, pin.y, capital, Some(pin.stroke as u32)));
+            let capital = if pinned_capital { pin.capital } else { tier == Tier::Metropolis } && !out.iter().any(|s| s.capital);
+            out.push(make(pin.cell, &mut prng, pin.x, pin.y, capital, Some(pin), conflicts));
             placed += 1;
         }
         if count == 0 {
@@ -361,8 +408,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             if !ok {
                 continue;
             }
-            let capital = tier == Tier::Metropolis && !out.iter().any(|s| s.capital);
-            out.push(make(k, &mut rng, cx * cell, cy * cell, capital, None));
+            let capital = tier == Tier::Metropolis && !pinned_capital && !out.iter().any(|s| s.capital);
+            out.push(make(k, &mut rng, cx * cell, cy * cell, capital, None, conflicts));
             placed += 1;
         }
     }
@@ -452,7 +499,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
             if !away(x, y, &out, min_s_mi * 5280.0, 8.0 * 5280.0) {
                 continue;
             }
-            out.push(Poi { kind, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32 });
+            out.push(Poi { kind, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });
             placed += 1;
         }
     }
@@ -496,7 +543,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
             if !ok || !away(x, y, &out, 2.0 * 5280.0, 5.0 * 5280.0) {
                 continue;
             }
-            out.push(Poi { kind, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32 });
+            out.push(Poi { kind, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });
             placed += 1;
         }
     }
@@ -514,7 +561,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
             if !inp.land[k] || inp.hydro.lake_of[k] != NO_LAKE || inp.height[k] < sea + 20.0 || !away(x, y, &out, 1.0 * 5280.0, 2.0 * 5280.0) {
                 continue;
             }
-            out.push(Poi { kind: PoiKind::LavaTube, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32 });
+            out.push(Poi { kind: PoiKind::LavaTube, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });
             break;
         }
     }

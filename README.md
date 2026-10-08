@@ -32,8 +32,8 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 - **☰** (top left) has the menu; **?** shows every keyboard shortcut.
 - The four sections at the top right:
   - **World**: start a new world from a seed, change its size and climate, or *sketch* the continent you want
-    (draw coasts, mountain ranges and masses, plateaus, rivers, lakes and volcanoes, and the generator follows); save
-    worlds and open them again.
+    (draw coasts, mountain ranges and masses, plateaus, rivers, lakes, volcanoes, towns and sites, name regions,
+    and the generator follows); save worlds and open them again.
   - **Edit**: rename anything, place your own towns and sites, draw buildings, put down bridges, fords and ferries,
     design dungeons room by room, and put down or clear objects on battlemaps (your own pictures too).
   - **Notes**: your notebook for the people and plots of your campaign, pinned to places on the map.

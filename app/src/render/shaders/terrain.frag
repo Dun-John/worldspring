@@ -41,7 +41,7 @@ const vec3 SAND = vec3(0.90, 0.85, 0.68);
 const float SAMPLES = 257.0;
 const float COAST_ENCODE_FT = 250000.0;
 
-const vec3 PALETTE[17] = vec3[17](
+const vec3 PALETTE[19] = vec3[19](
     vec3(0.54, 0.63, 0.66), // ocean
     vec3(0.62, 0.72, 0.74), // lake
     vec3(0.95, 0.95, 0.93), // ice
@@ -58,11 +58,13 @@ const vec3 PALETTE[17] = vec3[17](
     vec3(0.52, 0.65, 0.45), // jungle
     vec3(0.66, 0.71, 0.60), // swamp
     vec3(0.53, 0.48, 0.45), // volcanic
-    vec3(0.93, 0.91, 0.86)  // salt flat
+    vec3(0.93, 0.91, 0.86), // salt flat
+    vec3(0.60, 0.57, 0.58), // blighted woods
+    vec3(0.60, 0.56, 0.51)  // ashlands
 );
 
 // Symbol per biome: 0 none, 1 canopy, 2 conifer, 3 dense canopy, 4 marsh, 5 sand, 6 sparse dots, 7 tufts, 8 scree.
-const int SYMBOL[17] = int[17](0, 0, 0, 6, 8, 2, 1, 1, 7, 7, 5, 5, 6, 3, 4, 5, 0);
+const int SYMBOL[19] = int[19](0, 0, 0, 6, 8, 2, 1, 1, 7, 7, 5, 5, 6, 3, 4, 5, 0, 2, 8);
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));

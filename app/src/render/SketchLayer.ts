@@ -21,9 +21,11 @@ const BIOME_COLORS: Record<string, number> = {
   swamp: 0xa8b599,
   volcanic: 0x877a73,
   salt_flat: 0xede8db,
+  blighted_woods: 0x8c8390,
+  ashlands: 0x998f82,
 };
 
-const COLORS: Record<string, number> = { land: 0x4f7a37, sea: 0x2f6390, range: 0x6b4423, massif: 0x6b4423, river: 0x2a6db5, lake: 0x2a6db5, pin: 0x8a2a1a, volcano: 0x8a3a1a };
+const COLORS: Record<string, number> = { land: 0x4f7a37, sea: 0x2f6390, range: 0x6b4423, massif: 0x6b4423, river: 0x2a6db5, lake: 0x2a6db5, pin: 0x8a2a1a, volcano: 0x8a3a1a, region: 0x6a4a8a, site: 0x3a322a };
 /** Elevation strokes: raised, lowered. */
 const RAISE = 0xa8822f;
 const LOWER = 0x6a62a0;
@@ -99,8 +101,8 @@ export class SketchLayer {
     const [x1, y1] = cam.worldToScreen(this.mapSize[0], this.mapSize[1]);
     g.rect(x0, y0, x1 - x0, y1 - y0).stroke({ width: 1.5, color: 0x3a322a, alpha: 0.7 });
     const all = this.sketcher.drawing ? [...this.sketcher.strokes, this.sketcher.drawing] : this.sketcher.strokes;
-    // Areas first, then lines, then pins and volcanoes on top.
-    const order = (s: Stroke) => (s.tool === 'pin' || s.tool === 'volcano' ? 2 : s.closed || s.tool === 'land' || s.tool === 'sea' || s.tool === 'biome' ? 0 : 1);
+    // Areas first, then lines, then pins, volcanoes, sites and names on top.
+    const order = (s: Stroke) => (s.pts.length === 1 && !s.closed ? 2 : s.closed || s.tool === 'land' || s.tool === 'sea' || s.tool === 'biome' ? 0 : 1);
     for (const s of [...all].sort((a, b) => order(a) - order(b))) this.draw(s, cam, s === this.sketcher.drawing);
     // Labels left over from before.
     for (const c of this.names.children.slice(this.nameCount)) c.destroy();
@@ -146,18 +148,39 @@ export class SketchLayer {
       this.label(s.name || `(${s.kind === 'caldera' ? 'caldera' : 'volcano'})`, !s.name, x + w + 4, y - 9);
       return;
     }
+    if (s.tool === 'site') {
+      // A small square stone: a site.
+      const [x, y] = pts[0];
+      g.rect(x - 6, y - 6, 12, 12).fill({ color: 0xf3ecd8 });
+      g.rect(x - 4.5, y - 4.5, 9, 9).fill({ color }).stroke({ width: 1.5, color: 0x2b241d });
+      this.label(s.name || `(${(s.kind ?? 'ruin').replace('_', ' ')})`, !s.name, x + 9, y - 9);
+      return;
+    }
+    if (s.tool === 'region' && !s.closed) {
+      // A name dropped on what it names: a small diamond and the name.
+      const [x, y] = pts[0];
+      g.poly([x, y - 6, x + 6, y, x, y + 6, x - 6, y], true).fill({ color: 0xf3ecd8 });
+      g.poly([x, y - 4, x + 4, y, x, y + 4, x - 4, y], true).fill({ color }).stroke({ width: 1, color: 0x2b241d });
+      this.label(s.name ?? '', true, x + 8, y - 9);
+      return;
+    }
     const flat = pts.flat();
     if (s.closed) {
-      const alpha = s.tool === 'biome' || s.tool === 'lake' ? 0.45 : s.tool === 'massif' ? 0.35 : 0.3;
+      const alpha = s.tool === 'biome' || s.tool === 'lake' ? 0.45 : s.tool === 'massif' ? 0.35 : s.tool === 'region' ? 0.12 : 0.3;
       if (pts.length >= 3) g.poly(flat, true).fill({ color, alpha });
       g.poly(flat, !live).stroke({ width: 2.5, color, alpha: 0.95, join: 'round', cap: 'round' });
-      // What it does, in its middle: a lake's name, an elevation's change.
-      const text = s.tool === 'lake' ? (s.name ?? '') : s.tool === 'elevation' ? `${(s.delta_ft ?? 0) < 0 ? '−' : '+'}${Math.abs(s.delta_ft ?? 0).toLocaleString()} ft` : '';
+      // What it does, in its middle: its name, an elevation's change.
+      const text = s.tool === 'elevation' ? `${(s.delta_ft ?? 0) < 0 ? '−' : '+'}${Math.abs(s.delta_ft ?? 0).toLocaleString()} ft` : (s.name ?? '');
       if (text && !live && pts.length >= 3) {
         const [cx, cy] = [pts.reduce((a, p) => a + p[0], 0) / pts.length, pts.reduce((a, p) => a + p[1], 0) / pts.length];
-        this.label(text, s.tool === 'lake', cx, cy, true);
+        this.label(text, s.tool !== 'elevation', cx, cy, true);
       }
       return;
+    }
+    // A line's name at its middle point.
+    if (s.name && !live && pts.length >= 2) {
+      const [mx, my] = pts[Math.floor(pts.length / 2)];
+      this.label(s.name, true, mx, my - 14, true);
     }
     const band = Math.max(3, 2 * (s.radius_ft ?? 0) * cam.ppf);
     const line = (width: number, alpha: number, c = color) => {

@@ -1,11 +1,11 @@
 // The sketch being drawn (before it is generated): tools and their settings, freehand strokes
 // from pointer input (thinned while drawing, simplified when done), erasing and undo.
-import type { Stroke, VolcanoActivity, VolcanoKind } from '../gen/protocol';
+import type { PinKind, SiteKind, Stroke, VolcanoActivity, VolcanoKind } from '../gen/protocol';
 
 export const MI = 5280;
 
 /** Editor tools; each makes strokes of one kind (`erase` removes them). */
-export type EditTool = 'coast' | 'land' | 'sea' | 'range' | 'massif' | 'elevation' | 'river' | 'lake' | 'biome' | 'volcano' | 'pin' | 'erase';
+export type EditTool = 'coast' | 'land' | 'sea' | 'range' | 'massif' | 'elevation' | 'river' | 'lake' | 'biome' | 'volcano' | 'pin' | 'site' | 'region' | 'erase';
 
 /** Tools that draw a closed outline (always filled). */
 const OUTLINES: EditTool[] = ['coast', 'massif', 'elevation', 'lake'];
@@ -32,7 +32,19 @@ export interface ToolSettings {
   /** Biome strokes: fill the drawn outline instead of brushing along the line. */
   fill: boolean;
   tier: PinTier;
-  /** The next settlement's, lake's or volcano's name (empty: generated). */
+  /** Settlements: what they live by ('' : from their surroundings), the realm's capital, and
+   * district names (comma-separated, the central one first). */
+  pinKind: PinKind | '';
+  capital: boolean;
+  wards: string;
+  /** Sites: the kind, and what lies beneath a ruin or an entrance ('' : the usual). */
+  site: SiteKind;
+  under: string;
+  /** Names: what a name names ('' : whatever is there), and drawn round a region of its own
+   * instead of clicked. */
+  regionKind: string;
+  regionOutline: boolean;
+  /** The next stroke's name (empty: generated). */
   name: string;
 }
 
@@ -49,8 +61,18 @@ export const DEFAULT_SETTINGS: ToolSettings = {
   biome: 'temperate_forest',
   fill: true,
   tier: 'town',
+  pinKind: '',
+  capital: false,
+  wards: '',
+  site: 'ruin',
+  under: '',
+  regionKind: '',
+  regionOutline: false,
   name: '',
 };
+
+/** Tools whose strokes can carry a name. */
+export const NAMED_TOOLS: EditTool[] = ['coast', 'land', 'sea', 'range', 'massif', 'river', 'lake', 'biome', 'volcano', 'pin', 'site', 'region'];
 
 /** Pixels a pointer must move before a new point is added. */
 const STEP_PX = 4;
@@ -158,15 +180,29 @@ export class Sketcher {
       return;
     }
     const name = t.name.trim();
-    if (t.tool === 'pin' || t.tool === 'volcano') {
+    // A name drawn as a point or an outline needs its name first.
+    if (t.tool === 'region' && !name) return;
+    if (t.tool === 'pin' || t.tool === 'volcano' || t.tool === 'site' || (t.tool === 'region' && !t.regionOutline)) {
       const at: [number, number] = [Math.round(x), Math.round(y)];
-      const s: Stroke = t.tool === 'pin' ? { tool: 'pin', pts: [at], tier: t.tier } : { tool: 'volcano', pts: [at], kind: t.volcano, activity: t.activity, strength: t.strength };
+      const wards = t.wards
+        .split(',')
+        .map((w) => w.trim())
+        .filter(Boolean);
+      const s: Stroke =
+        t.tool === 'pin'
+          ? { tool: 'pin', pts: [at], tier: t.tier, ...(t.pinKind ? { kind: t.pinKind } : {}), ...(t.capital ? { capital: true } : {}), ...(wards.length ? { wards } : {}) }
+          : t.tool === 'site'
+            ? { tool: 'site', pts: [at], kind: t.site, ...(t.under && (t.site === 'ruin' || t.site === 'entrance') ? { under: t.under } : {}) }
+            : t.tool === 'region'
+              ? { tool: 'region', pts: [at], ...(t.regionKind ? { kind: t.regionKind } : {}) }
+              : { tool: 'volcano', pts: [at], kind: t.volcano, activity: t.activity, strength: t.strength };
       this.commit([...this.strokes, { ...s, ...(name ? { name } : {}) }]);
       this.settings.name = '';
+      if (t.tool === 'pin') [this.settings.capital, this.settings.wards] = [false, ''];
       return;
     }
     const tool = t.tool === 'coast' ? 'land' : t.tool;
-    const closed = OUTLINES.includes(t.tool) || (t.tool === 'biome' && t.fill);
+    const closed = OUTLINES.includes(t.tool) || (t.tool === 'biome' && t.fill) || t.tool === 'region';
     this.drawing = {
       tool,
       pts: [[x, y]],
@@ -176,7 +212,9 @@ export class Sketcher {
       ...(t.hard && ['land', 'sea', 'biome', 'elevation'].includes(tool) ? { hard: true } : {}),
       ...(tool === 'biome' ? { biome: t.biome } : {}),
       ...(tool === 'elevation' ? { delta_ft: t.delta } : {}),
-      ...(tool === 'lake' ? { ...(t.level !== null ? { level_ft: t.level } : {}), ...(t.salt ? { salt: true } : {}), ...(name ? { name } : {}) } : {}),
+      ...(tool === 'lake' ? { ...(t.level !== null ? { level_ft: t.level } : {}), ...(t.salt ? { salt: true } : {}) } : {}),
+      ...(tool === 'region' && t.regionKind ? { kind: t.regionKind } : {}),
+      ...(name && NAMED_TOOLS.includes(t.tool) ? { name } : {}),
     };
     this.onDraw();
   }

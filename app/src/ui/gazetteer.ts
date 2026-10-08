@@ -7,7 +7,7 @@ export type DistrictHit = Extract<Hit, { kind: 'district' }>;
 export type Selection = { kind: 'feature'; feature: Feature } | { kind: 'building'; hit: BuildingHit } | { kind: 'district'; hit: DistrictHit };
 
 export const SETTLEMENT_KINDS = ['metropolis', 'city', 'town', 'village'];
-const REGION_KINDS = ['range', 'forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'volcano'];
+const REGION_KINDS = ['range', 'forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'blight', 'ashlands', 'region', 'volcano'];
 
 const KIND_LABEL: Record<string, string> = {
   range: 'mountain range',
@@ -16,6 +16,7 @@ const KIND_LABEL: Record<string, string> = {
   waystation: 'roadside inn',
   tower: "wizard's tower",
   entrance: 'way underground',
+  blight: 'blighted woods',
 };
 
 export function kindLabel(kind: string): string {

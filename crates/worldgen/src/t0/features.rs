@@ -2,6 +2,12 @@
 //! mountain ranges, peaks (by topographic prominence), passes (their key cols), volcanoes,
 //! lakes, rivers and biome regions. Each gets a stable id, a name, and label placement
 //! (anchor at the pole of inaccessibility, angle along the principal axis, size in feet).
+//!
+//! The sketch names what it makes (a named range, massif, river, lake, volcano, painted biome,
+//! land or sea stroke names the features made from it), and region strokes name what lies
+//! where they are drawn, or draw a region of their own. A range or region with several names in
+//! it is split between them (each part the ground nearest its name, borders following rivers);
+//! a region left very large is split into parts of a size a map names.
 
 use serde::Serialize;
 
@@ -11,9 +17,11 @@ use super::flood::{D8, neighbors};
 use super::hydro::{Hydro, LakeKind, Mouth};
 use super::names::{NameKind, Namer};
 use super::settle::{Poi, PoiKind, Settlement, Tier};
+use super::sketch::{Conflict, Raster, stroke_cells};
 use super::volcano::{Activity, Volcano, VolcanoKind};
 use crate::World;
 use crate::core::rng::{Pcg32, hash2};
+use crate::world::{REGION_KINDS, SketchTool};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Feature {
@@ -188,6 +196,65 @@ pub struct Inputs<'a> {
     pub volcanoes: &'a [Volcano],
     pub settlements: &'a [Settlement],
     pub pois: &'a [Poi],
+    /// The drawn rivers' courses: (stroke, cells).
+    pub courses: &'a [(usize, Vec<usize>)],
+}
+
+/// Biome regions: (kind, how they are named, member biomes, fewest cells to be named).
+const GROUPS: [(&str, NameKind, &[Biome], usize); 10] = [
+    ("forest", NameKind::Forest, &[Biome::TemperateForest, Biome::TemperateRainforest], 120),
+    ("jungle", NameKind::Jungle, &[Biome::Jungle], 120),
+    ("taiga", NameKind::Taiga, &[Biome::Taiga], 150),
+    ("desert", NameKind::Desert, &[Biome::HotDesert, Biome::ColdDesert], 150),
+    ("swamp", NameKind::Swamp, &[Biome::Swamp], 15),
+    ("plains", NameKind::Plains, &[Biome::Grassland, Biome::Steppe, Biome::Savanna], 250),
+    ("tundra", NameKind::Tundra, &[Biome::Tundra], 150),
+    ("glacier", NameKind::Glacier, &[Biome::Ice], 40),
+    ("blight", NameKind::Blight, &[Biome::Blight], 15),
+    ("ashlands", NameKind::Ashlands, &[Biome::Ashland], 15),
+];
+
+/// The region group of a packed biome (by its main biome).
+fn group_of(b: u32) -> Option<usize> {
+    let b = Biome::from_u8((b & 0xff) as u8);
+    GROUPS.iter().position(|g| g.2.contains(&b))
+}
+
+/// How far a name drawn as a point reaches through what it names (mi, by the steps between).
+const LABEL_REACH_MI: f64 = 60.0;
+/// A name asked for a kind of feature may name one this near (mi) when not drawn on it.
+const SNAP_MI: f64 = 15.0;
+/// Crossing a mapped river (or a mountain) costs this many steps: borders follow them.
+const BARRIER: u32 = 20;
+/// A region left larger than this (sq mi) is split into parts about this size.
+const REGION_CAP_SQ_MI: f64 = 12_000.0;
+
+/// What a name in the sketch names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Target {
+    /// A biome region (`GROUPS`).
+    Region(usize),
+    /// A region drawn as an outline: its own cells.
+    Outline,
+    Range,
+    Lake,
+    River,
+    Land,
+    Water,
+}
+
+/// A name the sketch gives.
+struct Label {
+    stroke: usize,
+    name: String,
+    target: Target,
+    /// The kind it asked for (a region stroke's `kind`): it may name one near, not only under it.
+    asked: Option<&'static str>,
+    /// Grid cells it stands on.
+    cells: Vec<u32>,
+    /// How far its name reaches (steps) through what it names.
+    reach: u32,
+    used: bool,
 }
 
 struct Builder<'a> {
@@ -196,16 +263,32 @@ struct Builder<'a> {
     cultures: Vec<(f64, f64, usize)>,
     out: Overlay,
     ids: std::collections::BTreeSet<String>,
+    /// Mountain ground (ranges are its components).
+    mountain: Vec<bool>,
+    labels: Vec<Label>,
+    /// Features named by the sketch: feature index → the stroke.
+    named: Vec<(usize, usize)>,
+    /// Grid-sized scratch for `Local` (all `u32::MAX` between uses).
+    scratch: Vec<u32>,
 }
 
 pub fn extract(inp: &Inputs) -> Overlay {
+    let p = inp.world.params();
+    let sea = p.sea_level_ft;
+    let mountain: Vec<bool> = (0..inp.w * inp.h).map(|k| inp.land[k] && inp.height[k] - sea >= (0.28 * p.max_elev_ft).max(2500.0)).collect();
+    let (labels, notes) = labels(inp, &mountain);
     let mut b = Builder {
         inp,
-        namer: Namer::new(inp.world.stream("t0.names")),
+        namer: Namer::with_sites(inp.world.stream("t0.names"), inp.world.stream("t0.names.sites")),
         cultures: culture_seeds(inp),
         out: Overlay::default(),
         ids: Default::default(),
+        mountain,
+        labels,
+        named: Vec::new(),
+        scratch: vec![u32::MAX; inp.w * inp.h],
     };
+    b.out.conflicts = notes;
     b.landmasses();
     b.oceans();
     b.bays();
@@ -215,7 +298,92 @@ pub fn extract(inp: &Inputs) -> Overlay {
     b.rivers();
     b.regions();
     b.sites();
+    b.place_labels();
     b.out
+}
+
+/// The sketch's names: what each names, and where; and notes on names asking for a kind of
+/// region or mountains none of which lies near (they name the region or mountains there).
+fn labels(inp: &Inputs, mountain: &[bool]) -> (Vec<Label>, Vec<Conflict>) {
+    let g = Raster { w: inp.w, h: inp.h, cell: inp.cell_ft };
+    let reach = (LABEL_REACH_MI * 5280.0 / inp.cell_ft).round() as u32;
+    let resolve = |k: usize| {
+        if inp.hydro.lake_of[k] != super::hydro::NO_LAKE {
+            Target::Lake
+        } else if !inp.land[k] {
+            Target::Water
+        } else if mountain[k] {
+            Target::Range
+        } else {
+            group_of(inp.biome[k]).map_or(Target::Land, Target::Region)
+        }
+    };
+    let target_of = |kind: &str, k: usize| match kind {
+        "range" => Target::Range,
+        "lake" => Target::Lake,
+        "river" => Target::River,
+        "island" | "continent" => Target::Land,
+        "bay" | "sea" | "ocean" => Target::Water,
+        g => GROUPS.iter().position(|x| x.0 == g).map_or_else(|| resolve(k), Target::Region),
+    };
+    let dry = |k: usize| inp.land[k] && inp.hydro.lake_of[k] == super::hydro::NO_LAKE;
+    // Whether a cell of `target` lies within `SNAP_MI` of `k`.
+    let snap = (SNAP_MI * 5280.0 / inp.cell_ft).ceil() as i64;
+    let near = |target: Target, k: usize| {
+        let (ci, cj) = ((k % inp.w) as i64, (k / inp.w) as i64);
+        let is = |c: usize| match target {
+            Target::Region(g) => dry(c) && group_of(inp.biome[c]) == Some(g),
+            Target::Range => mountain[c],
+            _ => true,
+        };
+        ((cj - snap).max(0)..=(cj + snap).min(inp.h as i64 - 1))
+            .any(|j| ((ci - snap).max(0)..=(ci + snap).min(inp.w as i64 - 1)).any(|i| (i - ci) * (i - ci) + (j - cj) * (j - cj) <= snap * snap && is(j as usize * inp.w + i as usize)))
+    };
+    let (mut out, mut notes) = (Vec::new(), Vec::new());
+    for (si, s) in inp.world.file.sketch.strokes.iter().enumerate() {
+        let Some(name) = s.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
+        let asked = s.kind.as_deref().and_then(|k| REGION_KINDS.iter().find(|&&x| x == k).copied()).filter(|_| s.tool == SketchTool::Region);
+        let (target, cells, reach) = match s.tool {
+            SketchTool::Region if s.closed && s.pts.len() >= 3 => {
+                let cells = stroke_cells(g, s, 0.0);
+                match asked {
+                    Some(k) if k != "region" && !GROUPS.iter().any(|x| x.0 == k) => (target_of(k, cells[0]), cells, reach),
+                    _ => (Target::Outline, cells.into_iter().filter(|&k| dry(k)).collect(), 0),
+                }
+            }
+            SketchTool::Region => {
+                let k = g.cell_of(s.pts[0]);
+                let mut target = asked.map_or_else(|| resolve(k), |a| target_of(a, k));
+                if asked.is_some() && matches!(target, Target::Region(_) | Target::Range) && !near(target, k) && matches!(resolve(k), Target::Region(_) | Target::Range) {
+                    let there = match resolve(k) {
+                        Target::Region(g) => GROUPS[g].0,
+                        _ => "mountains",
+                    };
+                    notes.push(Conflict { stroke: si, message: format!("No {} near this name: it names the {there} here", asked.unwrap_or_default()), x: s.pts[0][0], y: s.pts[0][1] });
+                    target = resolve(k);
+                }
+                (target, vec![k], reach)
+            }
+            SketchTool::Range => (Target::Range, stroke_cells(g, s, 0.5 * s.radius_ft), reach),
+            SketchTool::Massif => (Target::Range, stroke_cells(g, s, 0.0), reach),
+            SketchTool::River => (Target::River, inp.courses.iter().find(|c| c.0 == si).map(|c| c.1.clone()).unwrap_or_default(), 0),
+            SketchTool::Land => (Target::Land, stroke_cells(g, s, s.radius_ft), 0),
+            SketchTool::Sea => (Target::Water, stroke_cells(g, s, s.radius_ft), 0),
+            SketchTool::Biome => {
+                let Some(b) = s.biome.as_deref().and_then(|b| super::biome::ALL.iter().position(|x| x.name() == b)) else { continue };
+                // What the paint made of its own biome.
+                let cells: Vec<usize> = stroke_cells(g, s, s.radius_ft).into_iter().filter(|&k| dry(k) && (inp.biome[k] & 0xff) as usize == b).collect();
+                match GROUPS.iter().position(|x| x.2.contains(&Biome::from_u8(b as u8))) {
+                    Some(gi) => (Target::Region(gi), cells, 3),
+                    None => (Target::Outline, cells, 0),
+                }
+            }
+            // Settlements, lakes, volcanoes and sites are named where they are made.
+            _ => continue,
+        };
+        out.push(Label { stroke: si, name: name.to_string(), target, asked, cells: cells.into_iter().map(|k| k as u32).collect(), reach, used: false });
+    }
+    (out, notes)
 }
 
 fn culture_seeds(inp: &Inputs) -> Vec<(f64, f64, usize)> {
@@ -286,9 +454,141 @@ impl Builder<'_> {
     /// The feature just pushed keeps the name drawn with it (if its stroke has one).
     fn drawn_name(&mut self, stroke: Option<u32>) {
         let name = stroke.and_then(|i| self.inp.world.file.sketch.strokes.get(i as usize)).and_then(|s| s.name.as_deref()).map(str::trim).filter(|n| !n.is_empty());
-        if let Some(name) = name {
+        if let (Some(name), Some(si)) = (name, stroke) {
             self.out.features.last_mut().expect("just pushed").name = name.to_string();
+            self.named.push((self.out.features.len() - 1, si as usize));
         }
+    }
+
+    /// The feature just pushed takes label `l`'s name.
+    fn label_name(&mut self, l: usize) {
+        self.labels[l].used = true;
+        self.out.features.last_mut().expect("just pushed").name = self.labels[l].name.clone();
+        self.named.push((self.out.features.len() - 1, self.labels[l].stroke));
+    }
+
+    /// A conflict for label `l`'s stroke, at its first cell.
+    fn label_conflict(&mut self, l: usize, message: String) {
+        let c = self.labels[l].cells.first().copied().unwrap_or(0) as usize;
+        let (x, y) = ((c % self.inp.w) as f64 * self.inp.cell_ft, (c / self.inp.w) as f64 * self.inp.cell_ft);
+        self.out.conflicts.push(Conflict { stroke: self.labels[l].stroke, message, x, y });
+    }
+
+    /// Labels of `target` with the cells they claim in `mask`: their own cells there, else (a
+    /// point that asked for this kind) the nearest such cell within `SNAP_MI`.
+    fn claims(&self, target: Target, mask: &[bool]) -> Vec<(usize, Vec<u32>)> {
+        let (w, h) = (self.inp.w, self.inp.h);
+        let snap = (SNAP_MI * 5280.0 / self.inp.cell_ft).ceil() as i64;
+        let mut out = Vec::new();
+        for (li, l) in self.labels.iter().enumerate().filter(|(_, l)| l.target == target) {
+            let mut cells: Vec<u32> = l.cells.iter().copied().filter(|&k| mask[k as usize]).collect();
+            if cells.is_empty() && l.asked.is_some() && l.cells.len() == 1 {
+                let c = l.cells[0] as usize;
+                let (ci, cj) = ((c % w) as i64, (c / w) as i64);
+                let mut best: Option<(i64, usize)> = None;
+                for j in (cj - snap).max(0)..=(cj + snap).min(h as i64 - 1) {
+                    for i in (ci - snap).max(0)..=(ci + snap).min(w as i64 - 1) {
+                        let (d2, k) = ((i - ci) * (i - ci) + (j - cj) * (j - cj), j as usize * w + i as usize);
+                        if d2 <= snap * snap && mask[k] && best.is_none_or(|b| d2 < b.0) {
+                            best = Some((d2, k));
+                        }
+                    }
+                }
+                cells.extend(best.map(|b| b.1 as u32));
+            }
+            if !cells.is_empty() {
+                out.push((li, cells));
+            }
+        }
+        out
+    }
+
+    /// Push `kind` features over a component of `mask`, split between the names claiming it (each
+    /// part what is fewest steps from its name, within its reach; `cost` per cell entered), the
+    /// rest (in parts of `cap` cells at most, if it has at least `min` cells) named by the namer.
+    #[allow(clippy::too_many_arguments)]
+    fn split_push(&mut self, kind: &'static str, nk: NameKind, comp: &[u32], claims: &[(usize, Vec<u32>)], min: usize, cap: usize, cost: &dyn Fn(usize) -> u32) {
+        let w = self.inp.w;
+        let mut at = std::mem::take(&mut self.scratch);
+        let mut pieces: Vec<(Vec<u32>, Option<usize>)> = Vec::new();
+        if claims.is_empty() {
+            if comp.len() >= min {
+                pieces.extend(cap_split(w, comp, cap, cost, &mut at).into_iter().map(|p| (p, None)));
+            }
+        } else {
+            let mut far_parts: Vec<Vec<u32>> = Vec::new();
+            let mut own: Vec<Vec<u32>> = vec![Vec::new(); claims.len()];
+            {
+                let l = Local::new(w, comp, &mut at);
+                let (mut dist, mut owner) = (vec![u32::MAX; comp.len()], vec![u32::MAX; comp.len()]);
+                // (A cell several names stand on goes to the most particular: a name dropped on a
+                // drawn range names its own part of it.)
+                let mut first: Vec<(usize, u32)> = vec![(usize::MAX, u32::MAX); comp.len()];
+                for (ci, c) in claims.iter().enumerate() {
+                    for i in c.1.iter().filter_map(|&k| l.get(k as usize)) {
+                        if (c.1.len(), ci as u32) < first[i] {
+                            first[i] = (c.1.len(), ci as u32);
+                        }
+                    }
+                }
+                let seeds: Vec<(u32, usize)> = (0..comp.len()).filter(|&i| first[i].1 != u32::MAX).map(|i| (first[i].1, i)).collect();
+                grow(&l, &seeds, cost, &mut dist, &mut owner);
+                // Ground out of every name's reach, enough of it to name, is named on its own.
+                let far: Vec<bool> = (0..comp.len()).map(|i| owner[i] == u32::MAX || dist[i] > self.labels[claims[owner[i] as usize].0].reach).collect();
+                let mut seen = vec![false; comp.len()];
+                for s in 0..comp.len() {
+                    if seen[s] {
+                        continue;
+                    }
+                    if !far[s] {
+                        own[owner[s] as usize].push(comp[s]);
+                        continue;
+                    }
+                    let mut part = vec![s];
+                    seen[s] = true;
+                    let mut q = 0;
+                    while q < part.len() {
+                        let i = part[q];
+                        q += 1;
+                        for j in l.around(i) {
+                            if far[j] && !seen[j] {
+                                seen[j] = true;
+                                part.push(j);
+                            }
+                        }
+                    }
+                    if part.len() >= min || part.iter().any(|&i| owner[i] == u32::MAX) {
+                        far_parts.push(part.iter().map(|&i| comp[i]).collect());
+                    } else {
+                        for &i in &part {
+                            own[owner[i] as usize].push(comp[i]);
+                        }
+                    }
+                }
+            }
+            for part in far_parts {
+                if part.len() >= min {
+                    pieces.extend(cap_split(w, &part, cap, cost, &mut at).into_iter().map(|p| (p, None)));
+                }
+            }
+            for (ci, cells) in own.into_iter().enumerate() {
+                if !cells.is_empty() {
+                    pieces.push((cells, Some(claims[ci].0)));
+                }
+            }
+        }
+        for (mut piece, label) in pieces {
+            piece.sort_unstable();
+            let (ax, ay) = piece_pole(w, &piece, &mut at);
+            let (angle, len) = principal_axis(w, &piece, if kind == "range" { 1.2 } else { 0.35 });
+            let extent = if kind == "range" { len * self.inp.cell_ft } else { (piece.len() as f64).sqrt() * self.inp.cell_ft };
+            self.push(kind, nk, ax, ay, angle, extent, None, None);
+            self.covers(w, self.inp.cell_ft, &piece);
+            if let Some(l) = label {
+                self.label_name(l);
+            }
+        }
+        self.scratch = at;
     }
 
     fn above_sea(&self, k: usize) -> f64 {
@@ -391,18 +691,62 @@ impl Builder<'_> {
         let inp = self.inp;
         let (w, h) = (inp.w, inp.h);
         let p = inp.world.params();
-        let mountain = |k: usize| inp.land[k] && self.above_sea(k) >= (0.28 * p.max_elev_ft).max(2500.0);
-        let mask: Vec<bool> = (0..w * h).map(mountain).collect();
+        let mask = std::mem::take(&mut self.mountain);
         let inside = distance_to(w, h, &mask.iter().map(|m| !m).collect::<Vec<_>>());
-        for comp in components(w, h, |k| mask[k], true) {
-            if comp.len() < 25 {
-                continue;
+        // Named ranges, massifs and range names: each claims the mountains it is drawn on.
+        let claims = self.claims(Target::Range, &mask);
+        let mut by_comp: crate::core::hash::FastMap<u32, Vec<(usize, Vec<u32>)>> = Default::default();
+        let comps = components(w, h, |k| mask[k], true);
+        let mut comp_of = vec![u32::MAX; w * h];
+        for (ci, comp) in comps.iter().enumerate() {
+            for &k in comp {
+                comp_of[k as usize] = ci as u32;
             }
-            let (ax, ay) = pole(w, &comp, &inside);
-            let (angle, len) = principal_axis(w, &comp, 1.2);
-            self.push("range", NameKind::Range, ax, ay, angle, len * inp.cell_ft, None, None);
-            self.covers(w, inp.cell_ft, &comp);
         }
+        for (li, cells) in &claims {
+            let mut per: Vec<(u32, Vec<u32>)> = Vec::new();
+            for &k in cells {
+                let c = comp_of[k as usize];
+                match per.iter_mut().find(|x| x.0 == c) {
+                    Some(x) => x.1.push(k),
+                    None => per.push((c, vec![k])),
+                }
+            }
+            // (A drawn range reaching a range of its own names that, not the specks beside it.)
+            if per.iter().any(|x| comps[x.0 as usize].len() >= 25) {
+                per.retain(|x| comps[x.0 as usize].len() >= 25);
+            }
+            for (c, ks) in per {
+                by_comp.entry(c).or_default().push((*li, ks));
+            }
+        }
+        for (ci, comp) in comps.iter().enumerate() {
+            match by_comp.get(&(ci as u32)) {
+                Some(claims) => self.split_push("range", NameKind::Range, comp, &claims.clone(), 25, usize::MAX, &|_| 1),
+                None if comp.len() >= 25 => {
+                    let (ax, ay) = pole(w, comp, &inside);
+                    let (angle, len) = principal_axis(w, comp, 1.2);
+                    self.push("range", NameKind::Range, ax, ay, angle, len * inp.cell_ft, None, None);
+                    self.covers(w, inp.cell_ft, comp);
+                }
+                None => {}
+            }
+        }
+        // A named range or massif drawn where no mountains rose (low hills) is still named, over
+        // the ground it was drawn on.
+        let lone: Vec<usize> = (0..self.labels.len())
+            .filter(|&l| {
+                let lb = &self.labels[l];
+                lb.target == Target::Range && !lb.used && lb.asked.is_none() && matches!(inp.world.file.sketch.strokes[lb.stroke].tool, SketchTool::Range | SketchTool::Massif)
+            })
+            .collect();
+        for l in lone {
+            let cells: Vec<u32> = self.labels[l].cells.iter().copied().filter(|&k| inp.land[k as usize]).collect();
+            if !cells.is_empty() {
+                self.split_push("range", NameKind::Range, &cells, &[(l, cells.clone())], 1, usize::MAX, &|_| 1);
+            }
+        }
+        self.mountain = mask;
 
         // Topographic prominence by union-find over land cells, highest first.
         let mut order: Vec<usize> = (0..w * h).filter(|&k| inp.land[k]).collect();
@@ -519,10 +863,7 @@ impl Builder<'_> {
             self.push(kind, NameKind::Settlement, cx, cy, 0.0, extent, Some(elev.round()), Some(detail));
             self.radius(crate::town::urban_radius(s.tier, s.population));
             // A pinned settlement keeps the name drawn with it.
-            let pinned = s.pin.and_then(|i| inp.world.file.sketch.strokes.get(i as usize)).and_then(|st| st.name.as_deref()).map(str::trim).filter(|n| !n.is_empty());
-            if let Some(name) = pinned {
-                self.out.features.last_mut().expect("just pushed").name = name.to_string();
-            }
+            self.drawn_name(s.pin);
         }
         for p in inp.pois {
             let (cx, cy) = (p.x / c, p.y / c);
@@ -546,6 +887,7 @@ impl Builder<'_> {
                 f.name = format!("{} Inn", f.name);
                 f.detail = Some("roadside inn".into());
             }
+            self.drawn_name(p.stroke);
         }
     }
 
@@ -610,14 +952,53 @@ impl Builder<'_> {
         let inp = self.inp;
         let w = inp.w;
         let chains = inp.hydro.rivers.clone();
+        // A drawn river's name goes to the rivers mapped mostly on its course (its channel, which
+        // the hydrology follows; not the tributaries that only meet it); a river name drawn as a
+        // point, to the nearest river within `SNAP_MI`.
+        let mut along: crate::core::hash::FastMap<u32, usize> = Default::default();
+        for (li, l) in self.labels.iter().enumerate().filter(|(_, l)| l.target == Target::River && l.cells.len() > 1) {
+            for &c in &l.cells {
+                along.entry(c).or_insert(li);
+            }
+        }
+        let mut pointed: Vec<Option<usize>> = vec![None; chains.len()];
+        let snap = (SNAP_MI * 5280.0 / inp.cell_ft).ceil() as i64;
+        for (li, l) in self.labels.iter().enumerate().filter(|(_, l)| l.target == Target::River && l.cells.len() == 1) {
+            let c = l.cells[0] as usize;
+            let (ci, cj) = ((c % w) as i64, (c / w) as i64);
+            let d2 = |k: u32| ((k as usize % w) as i64 - ci).pow(2) + ((k as usize / w) as i64 - cj).pow(2);
+            let best = chains
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.cells.len() >= 3)
+                .filter_map(|(ri, r)| r.cells.iter().map(|&k| d2(k)).min().map(|d| (d, ri)))
+                .filter(|&(d, _)| d <= snap * snap)
+                .min();
+            if let Some((_, ri)) = best
+                && pointed[ri].is_none()
+            {
+                pointed[ri] = Some(li);
+            }
+        }
         let mut falls: Vec<(f64, f64, f64, usize)> = Vec::new();
-        for r in &chains {
+        for (ri, r) in chains.iter().enumerate() {
             if r.cells.len() < 3 {
                 continue;
             }
             let pts_cells: Vec<[f64; 2]> = r.cells.iter().map(|&c| [(c as usize % w) as f64, (c as usize / w) as f64]).collect();
             let (pts, q) = chaikin(&pts_cells, &r.q, 2);
-            let named = r.cells.len() >= if r.mouth == Mouth::Confluence { 14 } else { 20 };
+            let mut votes: Vec<(usize, usize)> = Vec::new();
+            for c in &r.cells {
+                if let Some(&li) = along.get(c) {
+                    match votes.iter_mut().find(|v| v.0 == li) {
+                        Some(v) => v.1 += 1,
+                        None => votes.push((li, 1)),
+                    }
+                }
+            }
+            let drawn = votes.iter().max_by_key(|v| (v.1, std::cmp::Reverse(v.0))).filter(|v| v.1 >= 3 && 2 * v.1 >= r.cells.len()).map(|v| v.0);
+            let label = drawn.or(pointed[ri]);
+            let named = label.is_some() || r.cells.len() >= if r.mouth == Mouth::Confluence { 14 } else { 20 };
             if named {
                 let m = pts.len() * 11 / 20;
                 let a = pts[m.saturating_sub(3)];
@@ -626,6 +1007,9 @@ impl Builder<'_> {
                 let len = r.cells.len() as f64 * inp.cell_ft;
                 self.push("river", NameKind::River, pts[m][0], pts[m][1], angle, len, None, None);
                 *self.out.shapes.last_mut().expect("just pushed") = Shape::Line(pts.iter().map(|p| [(p[0] * inp.cell_ft) as f32, (p[1] * inp.cell_ft) as f32]).collect());
+                if let Some(l) = label {
+                    self.label_name(l);
+                }
             }
             let _ = q;
 
@@ -655,32 +1039,150 @@ impl Builder<'_> {
         }
     }
 
+    /// Biome regions: drawn outlines first (their own ground), then each group's components,
+    /// split between the names in them or, left very large, into parts of `REGION_CAP_SQ_MI`.
     fn regions(&mut self) {
         let inp = self.inp;
-        let groups: [(&'static str, NameKind, &[Biome], usize); 8] = [
-            ("forest", NameKind::Forest, &[Biome::TemperateForest, Biome::TemperateRainforest], 120),
-            ("jungle", NameKind::Jungle, &[Biome::Jungle], 120),
-            ("taiga", NameKind::Taiga, &[Biome::Taiga], 150),
-            ("desert", NameKind::Desert, &[Biome::HotDesert, Biome::ColdDesert], 150),
-            ("swamp", NameKind::Swamp, &[Biome::Swamp], 15),
-            ("plains", NameKind::Plains, &[Biome::Grassland, Biome::Steppe, Biome::Savanna], 250),
-            ("tundra", NameKind::Tundra, &[Biome::Tundra], 150),
-            ("glacier", NameKind::Glacier, &[Biome::Ice], 40),
-        ];
-        for (kind, nk, members, min_cells) in groups {
-            let member: [bool; 256] = std::array::from_fn(|b| members.contains(&Biome::from_u8(b as u8)));
-            let mask: Vec<bool> = inp.biome.iter().map(|&b| member[(b & 0xff) as usize]).collect();
-            let comps: Vec<Vec<u32>> = components(inp.w, inp.h, |k| mask[k], false).into_iter().filter(|c| c.len() >= min_cells).collect();
-            if comps.is_empty() {
+        let (w, h) = (inp.w, inp.h);
+        let n = w * h;
+        let mut taken = vec![false; n];
+        for l in 0..self.labels.len() {
+            if self.labels[l].target != Target::Outline {
                 continue;
             }
-            let inside = distance_to(inp.w, inp.h, &mask.iter().map(|m| !m).collect::<Vec<_>>());
-            for comp in comps {
-                let (ax, ay) = pole(inp.w, &comp, &inside);
-                let (angle, _) = principal_axis(inp.w, &comp, 0.35);
-                let extent = (comp.len() as f64).sqrt() * inp.cell_ft;
-                self.push(kind, nk, ax, ay, angle, extent, None, None);
-                self.covers(inp.w, inp.cell_ft, &comp);
+            let cells: Vec<u32> = self.labels[l].cells.iter().copied().filter(|&k| !taken[k as usize]).collect();
+            if cells.is_empty() {
+                self.label_conflict(l, "This region has no dry land left to name (or another region has it)".into());
+                self.labels[l].used = true;
+                continue;
+            }
+            for &k in &cells {
+                taken[k as usize] = true;
+            }
+            // Of the kind asked, else the land's own kind there (most of it), else a region.
+            let mut count = [0usize; GROUPS.len()];
+            for &k in &cells {
+                if let Some(g) = group_of(inp.biome[k as usize]) {
+                    count[g] += 1;
+                }
+            }
+            let most = (0..GROUPS.len()).max_by_key(|&g| (count[g], std::cmp::Reverse(g))).filter(|&g| count[g] * 2 > cells.len());
+            let group = self.labels[l].asked.and_then(|k| GROUPS.iter().position(|x| x.0 == k)).or(if self.labels[l].asked == Some("region") { None } else { most });
+            let (kind, nk) = group.map_or(("region", NameKind::Region), |g| (GROUPS[g].0, GROUPS[g].1));
+            self.split_push(kind, nk, &cells, &[(l, cells.clone())], 1, usize::MAX, &|_| 1);
+        }
+        // Mapped rivers and mountains are borders.
+        let mut barrier = self.mountain.clone();
+        for r in inp.hydro.rivers.iter().filter(|r| r.cells.len() >= 20) {
+            for &c in &r.cells {
+                barrier[c as usize] |= inp.land[c as usize];
+            }
+        }
+        let cost = |k: usize| if barrier[k] { 1 + BARRIER } else { 1 };
+        let cell_mi = inp.cell_ft / 5280.0;
+        let cap = (REGION_CAP_SQ_MI / (cell_mi * cell_mi)).round() as usize;
+        for (gi, &(kind, nk, members, min_cells)) in GROUPS.iter().enumerate() {
+            let member: [bool; 256] = std::array::from_fn(|b| members.contains(&Biome::from_u8(b as u8)));
+            let mask: Vec<bool> = (0..n).map(|k| member[(inp.biome[k] & 0xff) as usize] && !taken[k]).collect();
+            let claims = self.claims(Target::Region(gi), &mask);
+            if claims.is_empty() && !mask.iter().any(|&m| m) {
+                continue;
+            }
+            let comps = components(w, h, |k| mask[k], false);
+            let mut comp_of = vec![u32::MAX; if claims.is_empty() { 0 } else { n }];
+            if !claims.is_empty() {
+                for (ci, comp) in comps.iter().enumerate() {
+                    for &k in comp {
+                        comp_of[k as usize] = ci as u32;
+                    }
+                }
+            }
+            for (ci, comp) in comps.iter().enumerate() {
+                let mine: Vec<(usize, Vec<u32>)> = claims
+                    .iter()
+                    .map(|(l, cells)| (*l, cells.iter().copied().filter(|&k| comp_of[k as usize] == ci as u32).collect::<Vec<u32>>()))
+                    .filter(|(_, cells)| !cells.is_empty())
+                    .collect();
+                if mine.is_empty() && comp.len() < min_cells {
+                    continue;
+                }
+                self.split_push(kind, nk, comp, &mine, min_cells, cap, &cost);
+            }
+        }
+    }
+
+    /// Names drawn on islands, seas, bays and lakes (one name each; a region stroke as a point
+    /// names the most local one there), and what no name found to name.
+    fn place_labels(&mut self) {
+        let cell = self.inp.cell_ft;
+        let w = self.inp.w;
+        for l in 0..self.labels.len() {
+            let (target, asked) = (self.labels[l].target, self.labels[l].asked);
+            let kinds: &[&str] = match (target, asked) {
+                (Target::Land, Some(k)) => if k == "continent" { &["continent"] } else { &["island"] },
+                (Target::Land, None) => &["island", "continent"],
+                (Target::Water, Some(k)) => match k {
+                    "bay" => &["bay"],
+                    _ => &["sea", "ocean"],
+                },
+                (Target::Water, None) => &["bay", "sea", "ocean"],
+                (Target::Lake, _) => &["lake", "salt_lake", "salt_flat"],
+                _ => &[],
+            };
+            if kinds.is_empty() || self.labels[l].used {
+                continue;
+            }
+            // The feature holding most of its cells (a sample), the smallest of those; else the
+            // nearest within reach (a point that asked for this kind).
+            let cells = &self.labels[l].cells;
+            let step = cells.len().div_ceil(64).max(1);
+            let at = |k: u32| [(k as usize % w) as f64 * cell, (k as usize / w) as f64 * cell];
+            let mut best: Option<(usize, f64, usize)> = None;
+            for (fi, _) in self.out.features.iter().enumerate().filter(|(_, f)| kinds.contains(&f.kind)) {
+                let shape = &self.out.shapes[fi];
+                let hits = cells.iter().step_by(step).filter(|&&k| shape.distance(at(k)).0 == 0.0).count();
+                let area = shape.area_sq_ft();
+                if hits > 0 && best.is_none_or(|b| hits > b.0 || (hits == b.0 && area < b.1)) {
+                    best = Some((hits, area, fi));
+                }
+            }
+            let mut pick = best.map(|b| b.2);
+            if pick.is_none() && cells.len() == 1 {
+                let reach = if asked.is_some() { SNAP_MI } else { 2.0 } * 5280.0;
+                pick = self
+                    .out
+                    .features
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| kinds.contains(&f.kind))
+                    .map(|(fi, _)| (self.out.shapes[fi].distance(at(cells[0])).0, fi))
+                    .filter(|&(d, _)| d <= reach)
+                    .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
+                    .map(|(_, fi)| fi);
+            }
+            let Some(fi) = pick else { continue };
+            self.labels[l].used = true;
+            if let Some(&(_, by)) = self.named.iter().find(|n| n.0 == fi) {
+                let other = self.inp.world.file.sketch.strokes[by].name.clone().unwrap_or_default();
+                self.label_conflict(l, format!("This name falls on {}, already named {}: not used", self.out.features[fi].kind.replace('_', " "), other.trim()));
+                continue;
+            }
+            self.out.features[fi].name = self.labels[l].name.clone();
+            self.named.push((fi, self.labels[l].stroke));
+        }
+        for l in 0..self.labels.len() {
+            if !self.labels[l].used {
+                self.labels[l].used = true;
+                let what = match self.labels[l].target {
+                    Target::Region(g) => GROUPS[g].0,
+                    Target::Outline => "region",
+                    Target::Range => "range",
+                    Target::Lake => "lake",
+                    Target::River => "river",
+                    Target::Land => "island",
+                    Target::Water => "sea",
+                };
+                self.label_conflict(l, format!("No {what} here for this name: not used"));
             }
         }
     }
@@ -721,6 +1223,147 @@ pub fn components(w: usize, h: usize, mask: impl Fn(usize) -> bool, eight: bool)
         out.push(comp);
     }
     out
+}
+
+/// A set of cells of a grid `w` wide, with each one's place in it: `at` is grid-sized scratch,
+/// `u32::MAX` where not in the set (and again when this is dropped).
+struct Local<'a> {
+    w: usize,
+    cells: &'a [u32],
+    at: &'a mut [u32],
+}
+
+impl<'a> Local<'a> {
+    fn new(w: usize, cells: &'a [u32], at: &'a mut [u32]) -> Self {
+        for (i, &k) in cells.iter().enumerate() {
+            at[k as usize] = i as u32;
+        }
+        Local { w, cells, at }
+    }
+
+    fn get(&self, k: usize) -> Option<usize> {
+        self.at.get(k).filter(|&&i| i != u32::MAX).map(|&i| i as usize)
+    }
+
+    /// The set's 4-neighbours of its `i`th cell (by place).
+    fn around(&self, i: usize) -> impl Iterator<Item = usize> + '_ {
+        let c = self.cells[i] as usize;
+        let w = self.w;
+        [c.wrapping_sub(1), c + 1, c.wrapping_sub(w), c + w].into_iter().filter(move |&nb| (nb % w).abs_diff(c % w) <= 1).filter_map(|nb| self.get(nb))
+    }
+}
+
+impl Drop for Local<'_> {
+    fn drop(&mut self) {
+        for &k in self.cells {
+            self.at[k as usize] = u32::MAX;
+        }
+    }
+}
+
+/// Grow seeds through the set: each cell goes to the seed set (`owner`) fewest steps away
+/// (`cost` per cell entered; ties to the lower set), `dist` the steps. Both hold what is known
+/// before (`u32::MAX`: nothing); `seeds` (set, place) start at 0.
+fn grow(l: &Local, seeds: &[(u32, usize)], cost: &dyn Fn(usize) -> u32, dist: &mut [u32], owner: &mut [u32]) {
+    use std::cmp::Reverse;
+    let mut heap = std::collections::BinaryHeap::new();
+    for &(o, i) in seeds {
+        if dist[i] != 0 || o < owner[i] {
+            (dist[i], owner[i]) = (0, o);
+            heap.push(Reverse((0u32, o, i)));
+        }
+    }
+    while let Some(Reverse((d, o, i))) = heap.pop() {
+        if d != dist[i] || o != owner[i] {
+            continue;
+        }
+        for j in l.around(i) {
+            let nd = d + cost(l.cells[j] as usize);
+            if nd < dist[j] || (nd == dist[j] && o < owner[j]) {
+                (dist[j], owner[j]) = (nd, o);
+                heap.push(Reverse((nd, o, j)));
+            }
+        }
+    }
+}
+
+/// `comp` in parts of about `cap` cells (one part if it is no larger): seeds spread out from its
+/// pole (each next where the ground is most steps from those before), moved a few times to their
+/// parts' middles to even them out; then each cell to its nearest by `cost`.
+fn cap_split(w: usize, comp: &[u32], cap: usize, cost: &dyn Fn(usize) -> u32, at: &mut [u32]) -> Vec<Vec<u32>> {
+    let k = comp.len().div_ceil(cap.max(1));
+    if k <= 1 {
+        return vec![comp.to_vec()];
+    }
+    let (px, py) = piece_pole(w, comp, at);
+    let l = Local::new(w, comp, at);
+    let n = comp.len();
+    let (mut dist, mut owner) = (vec![u32::MAX; n], vec![u32::MAX; n]);
+    let mut seeds: Vec<usize> = vec![l.get(py as usize * w + px as usize).expect("in it")];
+    grow(&l, &[(0, seeds[0])], &|_| 1, &mut dist, &mut owner);
+    while seeds.len() < k {
+        let far = (0..n).max_by(|&a, &b| dist[a].cmp(&dist[b]).then(comp[b].cmp(&comp[a]))).expect("cells");
+        seeds.push(far);
+        grow(&l, &[(seeds.len() as u32 - 1, far)], &|_| 1, &mut dist, &mut owner);
+    }
+    for round in 0..5 {
+        if round > 0 {
+            dist.fill(u32::MAX);
+            owner.fill(u32::MAX);
+            let all: Vec<(u32, usize)> = seeds.iter().enumerate().map(|(o, &i)| (o as u32, i)).collect();
+            grow(&l, &all, &|_| 1, &mut dist, &mut owner);
+        }
+        // Each seed to the cell of its part nearest the part's middle.
+        let mut sum = vec![(0.0f64, 0.0f64, 0usize); k];
+        for i in 0..n {
+            let s = &mut sum[owner[i] as usize];
+            (s.0, s.1, s.2) = (s.0 + (comp[i] as usize % w) as f64, s.1 + (comp[i] as usize / w) as f64, s.2 + 1);
+        }
+        let mut best = vec![(f64::MAX, usize::MAX); k];
+        for i in 0..n {
+            let o = owner[i] as usize;
+            let (mx, my) = (sum[o].0 / sum[o].2 as f64, sum[o].1 / sum[o].2 as f64);
+            let (dx, dy) = ((comp[i] as usize % w) as f64 - mx, (comp[i] as usize / w) as f64 - my);
+            if dx * dx + dy * dy < best[o].0 {
+                best[o] = (dx * dx + dy * dy, i);
+            }
+        }
+        seeds = best.into_iter().map(|b| b.1).filter(|&i| i != usize::MAX).collect();
+    }
+    dist.fill(u32::MAX);
+    owner.fill(u32::MAX);
+    let all: Vec<(u32, usize)> = seeds.iter().enumerate().map(|(o, &i)| (o as u32, i)).collect();
+    grow(&l, &all, cost, &mut dist, &mut owner);
+    let mut parts: Vec<Vec<u32>> = vec![Vec::new(); seeds.len()];
+    for (i, &o) in owner.iter().enumerate() {
+        parts[o as usize].push(comp[i]);
+    }
+    parts.retain(|p| !p.is_empty());
+    parts
+}
+
+/// The cell of `piece` (a grid `w` wide) most steps in from its edge, cell coordinates (the
+/// lowest such cell).
+fn piece_pole(w: usize, piece: &[u32], at: &mut [u32]) -> (f64, f64) {
+    let l = Local::new(w, piece, at);
+    let mut depth = vec![u32::MAX; piece.len()];
+    let mut queue: std::collections::VecDeque<usize> = Default::default();
+    for i in 0..piece.len() {
+        if l.around(i).count() < 4 {
+            depth[i] = 0;
+            queue.push_back(i);
+        }
+    }
+    while let Some(i) = queue.pop_front() {
+        for j in l.around(i) {
+            if depth[j] == u32::MAX {
+                depth[j] = depth[i] + 1;
+                queue.push_back(j);
+            }
+        }
+    }
+    let best = (0..piece.len()).max_by(|&a, &b| depth[a].cmp(&depth[b]).then(piece[b].cmp(&piece[a]))).expect("cells");
+    ((piece[best] as usize % w) as f64, (piece[best] as usize / w) as f64)
 }
 
 /// The component cell farthest from its edge (pole of inaccessibility), cell coordinates.

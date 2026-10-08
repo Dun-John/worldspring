@@ -4,7 +4,8 @@
 //! Water is drawn by kind: sea, fresh lakes, salt lakes, and standing water along a drawn river
 //! (a river the world maps as a lake). Writes `<out>.stats.json` beside the picture: conflicts, pins,
 //! per drawn river how much of it is mapped as river, lake, sea or dry land, the rivers
-//! (polylines with discharge) and the lakes (with area). `--json` prints the same on stdout.
+//! (polylines with discharge), the lakes (with area) and the named features (kind, name, label
+//! point, area). `--json` prints the same on stdout.
 
 mod common;
 
@@ -112,6 +113,15 @@ fn main() {
         named("island"),
         named("bay")
     );
+    // Regions by kind: count and the largest (sq mi).
+    let mut regions: Vec<String> = Vec::new();
+    for k in ["forest", "jungle", "taiga", "desert", "swamp", "plains", "tundra", "glacier", "blight", "ashlands", "region"] {
+        let areas: Vec<f64> = extra.overlay.features.iter().zip(&extra.overlay.shapes).filter(|(f, _)| f.kind == k).map(|(_, s)| s.area_sq_ft() / 5280.0 / 5280.0).collect();
+        if !areas.is_empty() {
+            regions.push(format!("{k} {} (largest {:.0})", areas.len(), areas.iter().fold(0.0f64, |a, &b| a.max(b))));
+        }
+    }
+    eprintln!("regions: {}", regions.join(", "));
     let mut bs: Vec<String> = ALL
         .iter()
         .filter(|b| counts[**b as usize] > 0 && !matches!(b, Biome::Ocean))
@@ -387,6 +397,13 @@ fn main() {
         "drawn_lakes": drawn_lakes,
         "lakes": lakes,
         "rivers": rivers,
+        "features": extra
+            .overlay
+            .features
+            .iter()
+            .zip(&extra.overlay.shapes)
+            .map(|(f, s)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "x": f.x.round(), "y": f.y.round(), "area_sq_mi": (s.area_sq_ft() / 5280.0 / 5280.0).round() }))
+            .collect::<Vec<_>>(),
     });
 
     // Render: biome color × hillshade, water by kind (sea, fresh lake, salt lake, standing water
@@ -498,5 +515,7 @@ fn color(b: Biome) -> [u8; 3] {
         Biome::Swamp => [90, 115, 80],
         Biome::Volcanic => [80, 60, 55],
         Biome::SaltFlat => [235, 230, 215],
+        Biome::Blight => [105, 95, 105],
+        Biome::Ashland => [140, 138, 135],
     }
 }

@@ -86,6 +86,9 @@ const STYLES: Record<string, KindStyle> = {
   plains: { ...REGION, fill: '#5d5a2e' },
   tundra: { ...REGION, fill: '#56574a' },
   glacier: { ...REGION, fill: '#4f6470' },
+  blight: { ...REGION, fill: '#4e4452' },
+  ashlands: { ...REGION, fill: '#4f4c48' },
+  region: { ...REGION, fill: '#4e4038' },
   district: { size: 12, fill: '#6b3f2a', spacing: 3, upper: true, minPx: 160, maxPx: 3200, prio: 25 },
 };
 

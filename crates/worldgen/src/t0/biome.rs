@@ -1,7 +1,8 @@
 //! Biomes from climate (a weighted Whittaker diagram) plus terrain overrides: alpine and ice
 //! on high ground, swamps on flat wet floodplains and lake margins, volcanic waste around
-//! active volcanoes, salt flats in dry basins. Each cell keeps its two best climate biomes
-//! and a blend factor so the renderer can draw ecotones instead of hard borders.
+//! active volcanoes, salt flats in dry basins (blighted woods and ashlands are only painted).
+//! Each cell keeps its two best climate biomes and a blend factor so the renderer can draw
+//! ecotones instead of hard borders.
 
 use super::climate::Climate;
 use super::hydro::{Hydro, LakeKind, NO_LAKE};
@@ -28,9 +29,13 @@ pub enum Biome {
     Swamp,
     Volcanic,
     SaltFlat,
+    /// Painted only: woods sickened by a curse or rot (dead and dying trees, fungus).
+    Blight,
+    /// Painted only: land buried under old ash falls (grey, sparse, burnt stumps).
+    Ashland,
 }
 
-pub const ALL: [Biome; 17] = [
+pub const ALL: [Biome; 19] = [
     Biome::Ocean,
     Biome::Lake,
     Biome::Ice,
@@ -48,6 +53,8 @@ pub const ALL: [Biome; 17] = [
     Biome::Swamp,
     Biome::Volcanic,
     Biome::SaltFlat,
+    Biome::Blight,
+    Biome::Ashland,
 ];
 
 impl Biome {
@@ -70,6 +77,8 @@ impl Biome {
             Biome::Swamp => "swamp",
             Biome::Volcanic => "volcanic",
             Biome::SaltFlat => "salt_flat",
+            Biome::Blight => "blighted_woods",
+            Biome::Ashland => "ashlands",
         }
     }
 

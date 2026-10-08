@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use super::biome::{ALL as BIOMES, Biome};
 use super::hydro::NO_LAKE;
-use super::settle::Tier;
+use super::settle::{PoiKind, SettleKind, Tier};
 use crate::World;
 use crate::core::hash::FastMap;
 use crate::core::noise::{fbm, ridged, smoothstep};
@@ -47,6 +47,18 @@ pub struct Pin {
     pub x: f64,
     pub y: f64,
     pub cell: usize,
+    /// What it lives by, if the pin says.
+    pub kind: Option<SettleKind>,
+    pub capital: bool,
+}
+
+/// A site the sketch places (`SketchTool::Site`).
+#[derive(Clone, Debug)]
+pub struct Site {
+    pub stroke: usize,
+    pub kind: PoiKind,
+    pub x: f64,
+    pub y: f64,
 }
 
 /// The grid the sketch is applied to: `w` × `h` points `cell` ft apart, point (i, j) at
@@ -59,7 +71,7 @@ pub struct Raster {
 }
 
 impl Raster {
-    fn cell_of(&self, p: [f64; 2]) -> usize {
+    pub fn cell_of(&self, p: [f64; 2]) -> usize {
         let i = (p[0] / self.cell).round().clamp(0.0, (self.w - 1) as f64) as usize;
         let j = (p[1] / self.cell).round().clamp(0.0, (self.h - 1) as f64) as usize;
         j * self.w + i
@@ -141,6 +153,25 @@ fn inside(g: Raster, pts: &[[f64; 2]]) -> Vec<bool> {
         }
     }
     out
+}
+
+/// The grid points a stroke covers: inside a closed outline (else the point under its middle),
+/// within `reach` ft of a line (at least the points it passes), a point's own.
+pub fn stroke_cells(g: Raster, s: &Stroke, reach: f64) -> Vec<usize> {
+    if s.closed && s.pts.len() >= 3 {
+        let ins = inside(g, &s.pts);
+        let out: Vec<usize> = (0..g.w * g.h).filter(|&k| ins[k]).collect();
+        if !out.is_empty() {
+            return out;
+        }
+        let n = s.pts.len() as f64;
+        return vec![g.cell_of([s.pts.iter().map(|p| p[0]).sum::<f64>() / n, s.pts.iter().map(|p| p[1]).sum::<f64>() / n])];
+    }
+    if s.pts.len() == 1 {
+        return vec![g.cell_of(s.pts[0])];
+    }
+    let r = reach.max(0.75 * g.cell);
+    distance(g, &s.pts, false, r).iter().enumerate().filter(|(_, d)| (**d as f64) < r).map(|(k, _)| k).collect()
 }
 
 /// How far into a stroke's area each point is (ft): positive inside a closed outline or
@@ -519,6 +550,8 @@ impl Lakes {
 /// channels.
 pub struct Courses {
     pub cells: Vec<Vec<usize>>,
+    /// Each course's stroke.
+    pub strokes: Vec<usize>,
     pub channel: Vec<bool>,
 }
 
@@ -1001,7 +1034,8 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
         }
     }
     let channel = if courses.is_empty() { Vec::new() } else { zc.iter().map(|z| !z.is_nan()).collect() };
-    (feed, Courses { cells: courses.into_iter().map(|c| c.cells).collect(), channel })
+    let strokes = courses.iter().map(|c| c.stroke).collect();
+    (feed, Courses { cells: courses.into_iter().map(|c| c.cells).collect(), strokes, channel })
 }
 
 /// Carry a course that stops short on to the nearest sea cell or resolved course within
@@ -1142,7 +1176,44 @@ pub fn pins(world: &World, g: Raster, land: &[bool], conflicts: &mut Vec<Conflic
             conflicts.push(Conflict { stroke: si, message: "This pin is within 3 miles of another: no settlement placed".into(), x, y });
             continue;
         }
-        out.push(Pin { stroke: si, tier, x, y, cell: k });
+        out.push(Pin { stroke: si, tier, x, y, cell: k, kind: s.kind.as_deref().and_then(SettleKind::parse), capital: s.capital });
+    }
+    out
+}
+
+/// The sites the sketch places: where drawn, or moved onto the nearest dry land (not a lake)
+/// within 10 mi.
+pub fn sites(world: &World, g: Raster, land: &[bool], lake_of: &[u32], conflicts: &mut Vec<Conflict>) -> Vec<Site> {
+    let dry = |k: usize| land[k] && lake_of[k] == NO_LAKE;
+    let mut out = Vec::new();
+    for (si, s) in strokes(world, SketchTool::Site) {
+        let p = s.pts[0];
+        let (mut x, mut y) = (p[0].clamp(0.0, (g.w - 1) as f64 * g.cell), p[1].clamp(0.0, (g.h - 1) as f64 * g.cell));
+        let k = g.cell_of([x, y]);
+        if !dry(k) {
+            let r = (10.0 * MI / g.cell).ceil() as i64;
+            let (ci, cj) = ((k % g.w) as i64, (k / g.w) as i64);
+            let mut best: Option<(i64, usize)> = None;
+            for dj in -r..=r {
+                for di in -r..=r {
+                    let (i, j) = (ci + di, cj + dj);
+                    if i < 0 || j < 0 || i >= g.w as i64 || j >= g.h as i64 || di * di + dj * dj > r * r {
+                        continue;
+                    }
+                    let c = j as usize * g.w + i as usize;
+                    if dry(c) && best.is_none_or(|b| di * di + dj * dj < b.0) {
+                        best = Some((di * di + dj * dj, c));
+                    }
+                }
+            }
+            let Some((_, c)) = best else {
+                conflicts.push(Conflict { stroke: si, message: "This site is in the water, far from land: not placed".into(), x: p[0], y: p[1] });
+                continue;
+            };
+            [x, y] = g.at(c);
+            conflicts.push(Conflict { stroke: si, message: "This site was in the water: moved onto the nearest land".into(), x, y });
+        }
+        out.push(Site { stroke: si, kind: PoiKind::parse(s.kind.as_deref().unwrap_or("ruin")), x, y });
     }
     out
 }

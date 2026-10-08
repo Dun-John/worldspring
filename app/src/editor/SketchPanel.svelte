@@ -1,8 +1,8 @@
 <script lang="ts">
   // World › Sketch: the tools in one strip (all that shows when the panel is folded down),
   // the chosen tool's options, the preview, what the world can't follow, and Generate.
-  import type { Conflict, VolcanoActivity, VolcanoKind } from '../gen/protocol';
-  import { TUNABLE_BIOMES } from '../world/world';
+  import type { Conflict, PinKind, SiteKind, VolcanoActivity, VolcanoKind } from '../gen/protocol';
+  import { PAINT_BIOMES } from '../world/world';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
   import type { EditTool, PinTier, Sketcher, ToolSettings } from './sketcher';
@@ -46,7 +46,64 @@
     ['biome', 'leaf', 'Biome', 'B', 'Paint a biome over the land.'],
     ['volcano', 'volcano', 'Volcano', 'V', 'Click to place a volcano. The Volcanoes setting adds more: set it to None for only yours.'],
     ['pin', 'castle', 'Settlement', 'T', 'Click to place a settlement of the chosen size.'],
+    ['site', 'ruin', 'Site', 'D', 'Click to place a ruin, tower, camp, inn, cave, mine or way underground.'],
+    ['region', 'tag', 'Name', 'N', 'Type a name, then click what it names: a region, mountains, a lake, an island or a sea (names in one region share it out). Or draw round a region of your own.'],
     ['erase', 'eraser', 'Erase', 'E', 'Click a stroke or settlement to remove it.'],
+  ];
+  const PIN_KINDS: [PinKind | '', string][] = [
+    ['', 'From its land'],
+    ['port', 'Port'],
+    ['river', 'River town'],
+    ['market', 'Market town'],
+    ['fortress', 'Fortress'],
+    ['mining', 'Mining town'],
+    ['farming', 'Farming'],
+    ['fishing', 'Fishing'],
+    ['lumber', 'Lumber'],
+    ['herding', 'Herding'],
+    ['oasis', 'Oasis'],
+  ];
+  const SITES: [SiteKind, string][] = [
+    ['ruin', 'Ruin'],
+    ['tower', 'Tower'],
+    ['camp', 'Camp'],
+    ['waystation', 'Inn'],
+    ['cave', 'Cave'],
+    ['mine', 'Mine'],
+    ['lava_tube', 'Lava tube'],
+    ['entrance', 'Way down'],
+  ];
+  /** What lies beneath a ruin (built sites) or a way down (any site). */
+  const UNDER: [string, string][] = [
+    ['dungeon', 'Dungeon'],
+    ['crypt', 'Crypt'],
+    ['catacombs', 'Catacombs'],
+    ['cave', 'Caves'],
+    ['mine', 'Mine'],
+    ['lava_tube', 'Lava tubes'],
+  ];
+  /** What a name names (`world.rs` `REGION_KINDS`); an outline of a region kind is that region. */
+  const REGION_KINDS: [string, string][] = [
+    ['', 'Whatever is there'],
+    ['plains', 'Plains'],
+    ['forest', 'Forest'],
+    ['jungle', 'Jungle'],
+    ['taiga', 'Taiga'],
+    ['desert', 'Desert'],
+    ['swamp', 'Swamp'],
+    ['tundra', 'Tundra'],
+    ['glacier', 'Glacier'],
+    ['blight', 'Blighted woods'],
+    ['ashlands', 'Ashlands'],
+    ['region', 'Region'],
+    ['range', 'Mountains'],
+    ['lake', 'Lake'],
+    ['river', 'River'],
+    ['island', 'Island'],
+    ['continent', 'Continent'],
+    ['bay', 'Bay'],
+    ['sea', 'Sea'],
+    ['ocean', 'Ocean'],
   ];
   const TIERS: [PinTier, string][] = [
     ['metropolis', 'Metropolis'],
@@ -66,7 +123,7 @@
     ['extinct', 'Extinct'],
   ];
   const tool = $derived(TOOLS.find((t) => t[0] === settings.tool)!);
-  const brushKey = $derived(['coast', 'lake', 'volcano', 'pin', 'erase'].includes(settings.tool) ? null : settings.tool);
+  const brushKey = $derived(['coast', 'lake', 'volcano', 'pin', 'site', 'region', 'erase'].includes(settings.tool) ? null : settings.tool);
   const brushLabel = $derived(({ river: 'Valley', range: 'Width', massif: 'Foothills', elevation: 'Edge' } as Record<string, string>)[settings.tool] ?? 'Brush');
   const hasEdges = $derived(['coast', 'land', 'sea', 'biome', 'elevation'].includes(settings.tool));
   const hasStrength = $derived(['range', 'massif', 'river', 'volcano'].includes(settings.tool));
@@ -74,7 +131,19 @@
     const [a, b, c] = settings.tool === 'river' ? ['Stream', 'River', 'Great river'] : settings.tool === 'volcano' ? ['Small', 'Middling', 'Great'] : ['Hills', 'Mountains', 'High peaks'];
     return settings.strength < 0.35 ? a : settings.strength < 0.75 ? b : c;
   });
-  const NAMED: Record<string, string> = { pin: 'Settlement name', lake: 'Lake name', volcano: 'Volcano name' };
+  const NAMED: Record<string, string> = {
+    pin: 'Settlement name',
+    lake: 'Lake name',
+    volcano: 'Volcano name',
+    coast: 'Landmass name',
+    land: 'Land name',
+    sea: 'Sea name',
+    range: 'Range name',
+    massif: 'Mountains name',
+    river: 'River name',
+    biome: 'Region name',
+    site: 'Site name',
+  };
   const feet = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString()} ft`;
 
   function clear() {
@@ -146,7 +215,7 @@
       <label class="ws-field">
         Biome
         <select class="ws-input" bind:value={settings.biome}>
-          {#each TUNABLE_BIOMES as [id, label] (id)}<option value={id}>{label}</option>{/each}
+          {#each PAINT_BIOMES as [id, label] (id)}<option value={id}>{label}</option>{/each}
         </select>
       </label>
       <div class="ws-seg" role="radiogroup" aria-label="How it paints">
@@ -167,6 +236,44 @@
       <div class="ws-seg" role="radiogroup" aria-label="Settlement size">
         {#each TIERS as [t, label] (t)}<button class:on={settings.tier === t} onclick={() => (settings.tier = t)}>{label}</button>{/each}
       </div>
+      <label class="ws-field">
+        Lives by
+        <select class="ws-input" bind:value={settings.pinKind}>
+          {#each PIN_KINDS as [k, label] (k)}<option value={k}>{label}</option>{/each}
+        </select>
+      </label>
+      <label class="switch"><span class="grow">The realm's capital</span><input type="checkbox" class="ws-switch" bind:checked={settings.capital} /></label>
+      <input class="ws-input" placeholder="District names, central first (optional)" bind:value={settings.wards} aria-label="District names, separated by commas" />
+    {/if}
+    {#if settings.tool === 'site'}
+      <label class="ws-field">
+        Kind
+        <select class="ws-input" bind:value={settings.site}>
+          {#each SITES as [k, label] (k)}<option value={k}>{label}</option>{/each}
+        </select>
+      </label>
+      {#if settings.site === 'ruin' || settings.site === 'entrance'}
+        <label class="ws-field">
+          Beneath
+          <select class="ws-input" bind:value={settings.under}>
+            <option value="">{settings.site === 'ruin' ? 'Dungeon or crypt' : 'Dungeon'}</option>
+            {#each UNDER.slice(0, settings.site === 'ruin' ? 3 : UNDER.length) as [k, label] (k)}<option value={k}>{label}</option>{/each}
+          </select>
+        </label>
+      {/if}
+    {/if}
+    {#if settings.tool === 'region'}
+      <input class="ws-input" placeholder="Name" bind:value={settings.name} aria-label="Name" />
+      <div class="ws-seg" role="radiogroup" aria-label="How it names">
+        <button class:on={!settings.regionOutline} onclick={() => (settings.regionOutline = false)}>Click</button>
+        <button class:on={settings.regionOutline} onclick={() => (settings.regionOutline = true)}>Draw round</button>
+      </div>
+      <label class="ws-field">
+        {settings.regionOutline ? 'A region of' : 'Names'}
+        <select class="ws-input" bind:value={settings.regionKind}>
+          {#each REGION_KINDS as [k, label] (k)}<option value={k}>{k === '' && settings.regionOutline ? 'Its land' : label}</option>{/each}
+        </select>
+      </label>
     {/if}
     {#if NAMED[settings.tool]}
       <input class="ws-input" placeholder="Name (optional)" bind:value={settings.name} aria-label={NAMED[settings.tool]} />
@@ -209,7 +316,7 @@
   }
   .tools {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(7, 1fr);
     gap: 2px;
   }
   .tools .ws-icon-btn {

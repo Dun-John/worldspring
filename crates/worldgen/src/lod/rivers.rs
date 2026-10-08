@@ -309,6 +309,13 @@ impl RiverNet {
                 }
             }
         }
+        // (A junction can lift a tributary's last level over the one before it, to the lake its
+        // river runs into; levels never rise downstream, as a curve loaded from bytes has them.)
+        for r in &mut self.rivers {
+            for k in 1..r.z.len() {
+                r.z[k] = r.z[k].min(r.z[k - 1]);
+            }
+        }
         // Meanders and drift carry the curve up to a cell off its cells' line: where that puts
         // it over ground lower than its water (a neighbouring valley), it would stand on a dike.
         // There the wander is halved (up to three times), drawing it back toward its cells.

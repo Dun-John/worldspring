@@ -2252,6 +2252,12 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
     let front = if gx.abs() > gy.abs() { if gx > 0.0 { 1 } else { 3 } } else if gy > 0.0 { 2 } else { 0 };
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
     let pad = t0.ground_at(at[0], at[1], lattice) as f32;
+    // The door opens onto open ground, never into a building built against the tower.
+    let near: Vec<&Vec<P>> = l.buildings.iter().filter(|o| o.structure == town::Structure::Roofed && o.poly.iter().any(|p| geom::dist(*p, at) < r + 120.0)).map(|o| &o.poly).collect();
+    let ext_free = |i: isize, j: isize| {
+        let p = add(origin, add(mul(u, (i as f64 + 0.5) * SQUARE_FT), mul(v, (j as f64 + 0.5) * SQUARE_FT)));
+        !near.iter().any(|poly| geom::contains(poly, p))
+    };
 
     let mut levels = Vec::new();
     for (z, name, elev) in [(0i8, "Guardroom", 0.0f32), (1, "Wall walk", WALL_WALK_FT), (2, "Battlements", TOWER_TOP_FT)] {
@@ -2282,7 +2288,7 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
             }
         }
         finish_rooms(&mut rooms, &cells, n);
-        let mut lvl = connect(cells, rooms, n, n, stairs, front, z == 0, None, &|_, _| true, &mut rng);
+        let mut lvl = connect(cells, rooms, n, n, stairs, front, z == 0, None, &ext_free, &mut rng);
         windows(&mut lvl, n, n, z == 0);
         lvl.z = z;
         lvl.name = name.to_string();

@@ -21,15 +21,19 @@ const sketched = JSON.parse(wasm.default_world_json(77));
 sketched.sketch = {
   strokes: [
     { tool: 'land', closed: true, pts: outline },
-    { tool: 'range', radius_ft: 15 * MI, strength: 0.8, pts: [mi(350, 300), mi(500, 320), mi(650, 280)] },
+    { tool: 'range', radius_ft: 15 * MI, strength: 0.8, name: 'Det Ridge', pts: [mi(350, 300), mi(500, 320), mi(650, 280)] },
     { tool: 'massif', closed: true, radius_ft: 8 * MI, strength: 0.7, pts: [mi(250, 500), mi(380, 470), mi(420, 560), mi(300, 620)] },
     { tool: 'elevation', closed: true, radius_ft: 10 * MI, delta_ft: 800, pts: [mi(650, 450), mi(760, 450), mi(760, 560), mi(650, 560)] },
     { tool: 'lake', closed: true, name: 'Det Water', pts: [mi(505, 480), mi(535, 480), mi(540, 520), mi(510, 525)] },
     { tool: 'river', radius_ft: 3 * MI, strength: 0.7, pts: [mi(500, 360), mi(520, 500), mi(560, 760)] },
     { tool: 'volcano', kind: 'caldera', activity: 'active', name: 'Det Peak', strength: 0.6, pts: [mi(700, 650)] },
     { tool: 'biome', biome: 'jungle', closed: true, pts: [mi(800, 400), mi(900, 420), mi(880, 560), mi(780, 520)] },
-    { tool: 'pin', tier: 'city', name: 'Sketchford', pts: [mi(540, 600)] },
-    { tool: 'pin', tier: 'village', pts: [mi(300, 450)] },
+    { tool: 'pin', tier: 'city', name: 'Sketchford', kind: 'fortress', wards: ['Det Ward', 'Second Ward'], pts: [mi(540, 600)] },
+    { tool: 'pin', tier: 'village', capital: true, pts: [mi(300, 450)] },
+    { tool: 'biome', biome: 'blighted_woods', closed: true, name: 'Det Blight', pts: [mi(560, 380), mi(620, 380), mi(620, 430), mi(560, 430)] },
+    { tool: 'region', name: 'Det Fields', pts: [mi(450, 650)] },
+    { tool: 'region', name: 'Det Vale', closed: true, pts: [mi(250, 300), mi(300, 300), mi(300, 350), mi(250, 350)] },
+    { tool: 'site', kind: 'ruin', under: 'catacombs', name: 'Det Barrow', pts: [mi(600, 520)] },
   ],
 };
 

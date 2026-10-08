@@ -64,9 +64,9 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | Group | Kinds |
 |---|---|
 | Settlements | `metropolis`, `city`, `town`, `village` |
-| Sites | `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube`; created only: `entrance`, `building` |
+| Sites | `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube`; created or drawn in the sketch only: `entrance`; created only: `building` |
 | Nature | `continent`, `island`, `ocean`, `sea`, `bay`, `range`, `peak`, `pass`, `volcano`, `river`, `lake`, `waterfall` |
-| Regions | `forest`, `jungle`, `taiga`, `desert`, `swamp`, `plains`, `tundra`, `glacier`, `salt_flat` |
+| Regions | `forest`, `jungle`, `taiga`, `desert`, `swamp`, `plains`, `tundra`, `glacier`, `salt_flat`; painted in the sketch only: `blight` (blighted woods), `ashlands`; drawn in the sketch only: `region` |
 | Inside settlements | `district`, `building`, `tower`, `underground` (in `list_names`) |
 | Inside buildings and sites | `level`, `room` (in `list_names`) |
 
