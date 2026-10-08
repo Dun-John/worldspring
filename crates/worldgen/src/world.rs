@@ -34,6 +34,11 @@ pub struct WorldParams {
     pub land_fraction: f64,
     /// Scales tectonic uplift and fine-detail amplitude, 0..3.
     pub ruggedness: f64,
+    /// How much of the plates' own mountain building is kept, 0..1 (0: mountains only where
+    /// drawn; the plains keep their hills). Left out of the file at 1, so older worlds keep
+    /// their hash.
+    #[serde(skip_serializing_if = "is_one")]
+    pub procedural_mountains: f64,
     /// Tectonic plates, 4..40. More plates → more, shorter ranges.
     pub plate_count: u32,
     /// Erosion strength, 0..2 (0 = raw uplift, 2 = old, worn-down land).
@@ -67,6 +72,7 @@ impl Default for WorldParams {
             max_elev_ft: 14_000.0,
             land_fraction: 0.45,
             ruggedness: 1.0,
+            procedural_mountains: 1.0,
             plate_count: 14,
             erosion: 1.0,
             lat_top: 62.0,
@@ -83,17 +89,22 @@ impl Default for WorldParams {
     }
 }
 
+fn is_one(v: &f64) -> bool {
+    *v == 1.0
+}
+
 impl WorldParams {
     pub fn biome_weight(&self, name: &str) -> f64 {
         self.biome_weights.get(name).copied().unwrap_or(1.0).max(0.0)
     }
 
     fn validate(&self) -> Result<(), String> {
-        let checks: [(bool, &str); 13] = [
+        let checks: [(bool, &str); 14] = [
             ((150.0..=3000.0).contains(&self.width_mi), "width_mi must be 150–3000"),
             ((100.0..=3000.0).contains(&self.height_mi), "height_mi must be 100–3000"),
             ((0.05..=0.95).contains(&self.land_fraction), "land_fraction must be 0.05–0.95"),
             ((0.0..=3.0).contains(&self.ruggedness), "ruggedness must be 0–3"),
+            ((0.0..=1.0).contains(&self.procedural_mountains), "procedural_mountains must be 0–1"),
             ((4..=40).contains(&self.plate_count), "plate_count must be 4–40"),
             ((0.0..=2.0).contains(&self.erosion), "erosion must be 0–2"),
             ((-85.0..=85.0).contains(&self.lat_top) && (-85.0..=85.0).contains(&self.lat_bottom), "latitudes must be within ±85"),
@@ -152,7 +163,25 @@ pub enum SketchTool {
     Biome,
     /// A settlement at the first point (`tier`, optional `name`).
     Pin,
+    /// A mountain mass over a closed outline: rising from its edge (foothills `radius_ft` out)
+    /// to its core, ridged along `trend` (strength: hills at 0.2 to high peaks at 1).
+    Massif,
+    /// Raises or lowers the land inside a closed outline by `delta_ft` (plateaus, basins),
+    /// with an edge `radius_ft` wide.
+    Elevation,
+    /// A lake filling a closed outline (`level_ft`, else the lowest point of its shore; `salt`;
+    /// optional `name`). It drains out of its lowest shore, or into a river drawn out of it.
+    Lake,
+    /// A volcano at the first point (`kind`, `activity`, strength: its size; optional `name`).
+    Volcano,
 }
+
+/// Volcano strokes' kinds and activities.
+pub const VOLCANO_KINDS: [&str; 4] = ["strato", "shield", "cinder", "caldera"];
+pub const VOLCANO_ACTIVITY: [&str; 3] = ["active", "dormant", "extinct"];
+
+/// The most points a sketch may hold in all (the cost of applying it grows with them).
+pub const SKETCH_POINTS: usize = 200_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Stroke {
@@ -177,9 +206,28 @@ pub struct Stroke {
     /// Pins: `metropolis`, `city`, `town` or `village`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
-    /// Pins: the settlement's name (else generated).
+    /// Pins, lakes and volcanoes: the name (else generated).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Massifs: the direction their ridges run (degrees, 0 = east, 90 = south), else along
+    /// the outline's long axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trend: Option<f64>,
+    /// Elevation strokes: how far the land is raised (negative: lowered), ft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta_ft: Option<f64>,
+    /// Lakes: the water's level (ft above sea level).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_ft: Option<f64>,
+    /// Lakes: a salt lake (no outflow).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub salt: bool,
+    /// Volcanoes: `strato`, `shield`, `cinder` or `caldera` (default strato).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Volcanoes: `active`, `dormant` or `extinct` (default dormant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
 }
 
 fn default_radius() -> f64 {
@@ -198,8 +246,8 @@ impl Sketch {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.strokes.len() > 1000 {
-            return Err("a sketch has at most 1000 strokes".into());
+        if self.strokes.iter().map(|s| s.pts.len()).sum::<usize>() > SKETCH_POINTS {
+            return Err(format!("a sketch has at most {SKETCH_POINTS} points in all"));
         }
         for s in &self.strokes {
             if s.pts.is_empty() || s.pts.len() > 5000 || s.pts.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
@@ -213,7 +261,16 @@ impl Sketch {
                     return Err("a biome stroke needs a biome name".into());
                 }
                 SketchTool::Pin if !s.tier.as_deref().is_some_and(|t| PIN_TIERS.contains(&t)) => return Err("a pin needs a tier: metropolis, city, town or village".into()),
+                SketchTool::Massif | SketchTool::Elevation | SketchTool::Lake if !s.closed || s.pts.len() < 3 => {
+                    return Err("massif, elevation and lake strokes are closed outlines of 3 or more points".into());
+                }
+                SketchTool::Elevation if !s.delta_ft.is_some_and(|d| d.is_finite() && d.abs() <= 20_000.0) => return Err("an elevation stroke needs delta_ft (±20,000 ft at most)".into()),
+                SketchTool::Volcano if !s.kind.as_deref().is_none_or(|k| VOLCANO_KINDS.contains(&k)) => return Err("a volcano's kind is strato, shield, cinder or caldera".into()),
+                SketchTool::Volcano if !s.activity.as_deref().is_none_or(|a| VOLCANO_ACTIVITY.contains(&a)) => return Err("a volcano's activity is active, dormant or extinct".into()),
                 _ => {}
+            }
+            if !s.trend.is_none_or(f64::is_finite) || !s.level_ft.is_none_or(|l| l.is_finite() && l.abs() <= 30_000.0) {
+                return Err("trend and level_ft must be finite (level_ft ±30,000 ft at most)".into());
             }
         }
         Ok(())

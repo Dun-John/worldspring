@@ -1479,6 +1479,7 @@ fn sketch_guarantee() {
     assert!(extra.overlay.conflicts.iter().any(|c| c.stroke == 8), "the pin at sea was not reported");
 
     sketch_rivers_and_ports();
+    sketch_relief_and_lakes();
 }
 
 /// Sketch guarantee (R2): drawn rivers stay rivers and coasts keep their ports. On a low plain
@@ -1551,4 +1552,146 @@ fn sketch_rivers_and_ports() {
     // The pin on the barren coast is a port.
     let s = t0.settlements.iter().find(|s| s.pin == Some(4)).expect("the coastal pin placed no settlement");
     assert!(s.coastal && s.kind == worldgen::t0::settle::SettleKind::Port, "the town pinned on the coast is not a port ({:?}, coastal {})", s.kind, s.coastal);
+}
+
+/// Sketch guarantee (R2.4): relief and water drawn as areas and points. With the plates'
+/// mountains off, the land is high only where drawn: a massif is mountains across its outline,
+/// a plateau stands its height above the land round it without damming the streams that cross
+/// it, and the plains stay low. A lake drawn on the plain fills its outline (and little more),
+/// keeps its name and, with a river drawn through it, is fresh and the river runs on out of it.
+/// Drawn volcanoes stand where drawn, as drawn, and no others are placed.
+fn sketch_relief_and_lakes() {
+    const MI: f64 = 5280.0;
+    let p = |x: f64, y: f64| serde_json::json!([(x * MI).round(), (y * MI).round()]);
+    let ring = |cx: f64, cy: f64, rx: f64, ry: f64, n: usize, wob: f64| -> Vec<(f64, f64)> {
+        (0..n)
+            .map(|k| {
+                let a = std::f64::consts::TAU * k as f64 / n as f64;
+                let r = 1.0 + wob * (3.0 * a).sin() + wob * 0.6 * (5.0 * a + 1.0).cos();
+                (cx + rx * r * a.cos(), cy + ry * r * a.sin())
+            })
+            .collect()
+    };
+    let pts = |v: &[(f64, f64)]| v.iter().map(|q| p(q.0, q.1)).collect::<Vec<_>>();
+    let massif = ring(170.0, 130.0, 90.0, 45.0, 20, 0.08);
+    let plateau = ring(390.0, 285.0, 80.0, 40.0, 20, 0.08);
+    let lake = ring(350.0, 150.0, 18.0, 10.0, 16, 0.08);
+    let river = [(210.0, 160.0), (280.0, 165.0), (330.0, 152.0), (370.0, 148.0), (450.0, 130.0), (520.0, 110.0), (575.0, 100.0)];
+    let strokes = serde_json::json!([
+        { "tool": "land", "closed": true, "pts": pts(&ring(300.0, 200.0, 260.0, 165.0, 48, 0.05)) },
+        { "tool": "massif", "closed": true, "radius_ft": 12.0 * MI, "strength": 0.8, "pts": pts(&massif) },
+        { "tool": "elevation", "closed": true, "radius_ft": 10.0 * MI, "delta_ft": 1200.0, "pts": pts(&plateau) },
+        { "tool": "lake", "closed": true, "name": "Mirrormere", "pts": pts(&lake) },
+        { "tool": "river", "radius_ft": 3.0 * MI, "strength": 0.6, "pts": pts(&river) },
+        { "tool": "volcano", "kind": "caldera", "activity": "dormant", "name": "Mount Ash", "strength": 0.7, "pts": [p(450.0, 230.0)] },
+        { "tool": "volcano", "kind": "strato", "activity": "active", "name": "Emberhorn", "strength": 0.8, "pts": [p(120.0, 280.0)] },
+    ]);
+    let params = serde_json::json!({ "width_mi": 600.0, "height_mi": 400.0, "procedural_mountains": 0.0, "volcanoes": 0 });
+    let file: WorldFile = serde_json::from_value(serde_json::json!({ "gen_version": worldgen::world::GEN_VERSION, "seed": 5, "params": params, "sketch": { "strokes": strokes } })).unwrap();
+    let world = World::new(file).unwrap();
+    let t0 = worldgen::t0::T0::generate(&world);
+    let extra = t0.extra.as_ref().unwrap();
+    let hydro = &extra.hydro;
+    let sea = world.params().sea_level_ft;
+    let (w, h, cell) = (t0.height.w, t0.height.h, t0.cell_ft);
+    let no_lake = worldgen::t0::hydro::NO_LAKE;
+    let inside = |poly: &[(f64, f64)], x: f64, y: f64| {
+        let mut ins = false;
+        for e in 0..poly.len() {
+            let (a, b) = (poly[e], poly[(e + 1) % poly.len()]);
+            if (a.1 <= y) != (b.1 <= y) && x < a.0 + (y - a.1) / (b.1 - a.1) * (b.0 - a.0) {
+                ins = !ins;
+            }
+        }
+        ins
+    };
+    // Distance (mi) from a point to an outline's edge.
+    let edge = |poly: &[(f64, f64)], x: f64, y: f64| {
+        (0..poly.len())
+            .map(|e| {
+                let (a, b) = (poly[e], poly[(e + 1) % poly.len()]);
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let t = (((x - a.0) * dx + (y - a.1) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+                ((a.0 + t * dx - x).powi(2) + (a.1 + t * dy - y).powi(2)).sqrt()
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    let at = |k: usize| ((k % w) as f64 * cell / MI, (k / w) as f64 * cell / MI);
+    let above = |k: usize| t0.height.data[k] as f64 - sea;
+    let land = |k: usize| t0.height.data[k] as f64 > sea || hydro.lake_of[k] != no_lake;
+
+    // The massif: mountains across it (10+ mi inside, the 80th percentile over 4,000 ft).
+    let mut core: Vec<f64> = (0..w * h).filter(|&k| { let (x, y) = at(k); inside(&massif, x, y) && edge(&massif, x, y) > 10.0 }).map(above).collect();
+    core.sort_by(|a, b| a.total_cmp(b));
+    let m80 = core[core.len() * 8 / 10];
+    assert!(m80 > 4_000.0, "the massif is not mountains across its outline: 80th percentile {m80:.0} ft");
+
+    // The plains (land 40+ mi from anything drawn): low, with the plates' mountains off.
+    let mut plains: Vec<f64> = (0..w * h)
+        .filter(|&k| {
+            let (x, y) = at(k);
+            land(k) && edge(&massif, x, y) > 40.0 && !inside(&massif, x, y) && edge(&plateau, x, y) > 40.0 && !inside(&plateau, x, y) && ((x - 450.0).powi(2) + (y - 230.0).powi(2)).sqrt() > 40.0 && ((x - 120.0).powi(2) + (y - 280.0).powi(2)).sqrt() > 40.0
+        })
+        .map(above)
+        .collect();
+    plains.sort_by(|a, b| a.total_cmp(b));
+    let p95 = plains[plains.len() * 95 / 100];
+    assert!(p95 < 2_500.0, "the plains rise to {p95:.0} ft (95th percentile) with the plates' mountains off");
+
+    // The plateau: 1,200 ft drawn, at least 900 ft over the land round it (median inside 10+ mi
+    // from its edge vs a ring 15–35 mi out), and no undrawn lakes dammed round it.
+    let median = |mut v: Vec<f64>| {
+        v.sort_by(|a, b| a.total_cmp(b));
+        v[v.len() / 2]
+    };
+    let top = median((0..w * h).filter(|&k| { let (x, y) = at(k); land(k) && inside(&plateau, x, y) && edge(&plateau, x, y) > 10.0 }).map(above).collect());
+    let round = median((0..w * h).filter(|&k| { let (x, y) = at(k); land(k) && !inside(&plateau, x, y) && (15.0..35.0).contains(&edge(&plateau, x, y)) }).map(above).collect());
+    assert!(top - round > 900.0, "the plateau stands only {:.0} ft over the land round it", top - round);
+    let near: Vec<usize> = (0..w * h).filter(|&k| { let (x, y) = at(k); land(k) && (inside(&plateau, x, y) || edge(&plateau, x, y) < 30.0) }).collect();
+    let dammed = near.iter().filter(|&&k| hydro.lake_of[k] != no_lake && hydro.lakes[hydro.lake_of[k] as usize].stroke.is_none()).count();
+    assert!(dammed * 50 <= near.len(), "lakes dammed round the plateau: {dammed}/{} cells", near.len());
+
+    // The lake: its outline's cells are its water, hardly any beyond; named, fresh.
+    let li = hydro.lakes.iter().position(|l| l.stroke == Some(3)).expect("the drawn lake is not a lake");
+    let lk = &hydro.lakes[li];
+    let ins = (0..w * h).filter(|&k| { let (x, y) = at(k); inside(&lake, x, y) }).count();
+    let wet = lk.cells.iter().filter(|&&c| { let (x, y) = at(c as usize); inside(&lake, x, y) }).count();
+    assert!(wet * 10 >= ins * 9 && (lk.cells.len() - wet) * 10 <= ins, "the drawn lake: {wet}/{ins} cells of its outline wet, {} outside", lk.cells.len() - wet);
+    assert_eq!(lk.kind, worldgen::t0::hydro::LakeKind::Fresh, "a lake with a river drawn out of it is not fresh");
+    let feature = extra.overlay.features.iter().find(|f| f.name == "Mirrormere").expect("the drawn lake lost its name");
+    assert!(feature.kind == "lake" && edge(&lake, feature.x / MI, feature.y / MI) < 20.0, "Mirrormere is a {} at ({:.0}, {:.0}) mi", feature.kind, feature.x / MI, feature.y / MI);
+
+    // The river through it: mapped as a river (lake and sea aside) over 90%+ of its course.
+    let mut river_cell = vec![false; w * h];
+    for r in &hydro.rivers {
+        for &c in &r.cells {
+            river_cell[c as usize] = true;
+        }
+    }
+    let (mut on, mut all, mut last) = (0, 0, usize::MAX);
+    for seg in river.windows(2) {
+        for t in 0..=200 {
+            let f = t as f64 / 200.0;
+            let (x, y) = (seg[0].0 + (seg[1].0 - seg[0].0) * f, seg[0].1 + (seg[1].1 - seg[0].1) * f);
+            let (i, j) = (((x * MI / cell).round() as usize).min(w - 1), ((y * MI / cell).round() as usize).min(h - 1));
+            let k = j * w + i;
+            if k == last || !land(k) || hydro.lake_of[k] != no_lake || inside(&lake, x, y) {
+                continue;
+            }
+            last = k;
+            all += 1;
+            on += usize::from((j.saturating_sub(1)..=(j + 1).min(h - 1)).any(|y| (i.saturating_sub(1)..=(i + 1).min(w - 1)).any(|x| river_cell[y * w + x])));
+        }
+    }
+    assert!(on * 10 >= all * 9, "the river drawn through the lake is mapped over only {on}/{all} cells");
+
+    // Volcanoes: the two drawn, where drawn, as drawn; none placed.
+    let volcanoes: Vec<_> = extra.overlay.features.iter().filter(|f| f.kind == "volcano").collect();
+    assert_eq!(volcanoes.len(), 2, "volcanoes: {:?}", volcanoes.iter().map(|f| &f.name).collect::<Vec<_>>());
+    for (name, x, y, what) in [("Mount Ash", 450.0, 230.0, "dormant caldera"), ("Emberhorn", 120.0, 280.0, "active stratovolcano")] {
+        let f = volcanoes.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("the volcano {name} lost its name"));
+        let d = ((f.x / MI - x).powi(2) + (f.y / MI - y).powi(2)).sqrt();
+        assert!(d < 2.0 && f.detail.as_deref().is_some_and(|s| s.starts_with(what)), "{name}: {:?}, {d:.1} mi from where drawn", f.detail);
+    }
+    println!("relief and lakes: massif 80th pct {m80:.0} ft, plains 95th pct {p95:.0} ft, plateau +{:.0} ft ({dammed} dammed cells), lake {wet}/{ins} (+{}), river {on}/{all}", top - round, lk.cells.len() - wet);
 }

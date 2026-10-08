@@ -228,6 +228,29 @@ fn main() {
     }
     let near = |m: &[bool], i: usize, j: usize| (j.saturating_sub(1)..=(j + 1).min(h - 1)).any(|y| (i.saturating_sub(1)..=(i + 1).min(w - 1)).any(|x| m[y * w + x]));
     let is_sea = |k: usize| hydro.lake_of[k] == NO_LAKE && t0.water.data[k] > -29_000.0;
+    // Cells inside drawn lakes (by stroke + 1; 0 outside any): water there is meant.
+    let mut in_lake = vec![0u32; w * h];
+    for (si, s) in world.file.sketch.strokes.iter().enumerate().filter(|(_, s)| s.tool == SketchTool::Lake) {
+        let (x0, x1) = s.pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p[0]), b.max(p[0])));
+        let (y0, y1) = s.pts.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p[1]), b.max(p[1])));
+        let (i0, j0) = at_cell([x0, y0]);
+        let (i1, j1) = at_cell([x1, y1]);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let (x, y) = (i as f64 * cell, j as f64 * cell);
+                let mut inside = false;
+                for e in 0..s.pts.len() {
+                    let (a, b) = (s.pts[e], s.pts[(e + 1) % s.pts.len()]);
+                    if (a[1] <= y) != (b[1] <= y) && x < a[0] + (y - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
+                        inside = !inside;
+                    }
+                }
+                if inside {
+                    in_lake[j * w + i] = si as u32 + 1;
+                }
+            }
+        }
+    }
     let mut along = vec![false; w * h];
     let mut strokes = Vec::new();
     let mut total = [0usize; 4];
@@ -247,7 +270,7 @@ fn main() {
         // River, lake, sea, dry land.
         let mut c = [0usize; 4];
         let mut first_lake: Option<usize> = None;
-        for &k in &cells {
+        for &k in cells.iter().filter(|&&k| in_lake[k] == 0) {
             let (i, j) = (k % w, k / w);
             for y in j.saturating_sub(1)..=(j + 1).min(h - 1) {
                 for x in i.saturating_sub(1)..=(i + 1).min(w - 1) {
@@ -278,6 +301,7 @@ fn main() {
     let share = if mapped > 0 { total[0] as f64 / mapped as f64 } else { 0.0 };
     let lake_along = (0..w * h).filter(|&k| along[k] && hydro.lake_of[k] != NO_LAKE).count();
     let standing = (0..w * h).filter(|&k| hydro.lake_of[k] != NO_LAKE).count();
+    let standing_undrawn = (0..w * h).filter(|&k| hydro.lake_of[k] != NO_LAKE && hydro.lakes[hydro.lake_of[k] as usize].stroke.is_none()).count();
     if !strokes.is_empty() {
         let mut worst: Vec<&serde_json::Value> = strokes.iter().filter(|s| s["lake"].as_u64().unwrap_or(0) + s["dry"].as_u64().unwrap_or(0) > 4).collect();
         worst.sort_by(|a, b| a["river_share"].as_f64().unwrap().total_cmp(&b["river_share"].as_f64().unwrap()));
@@ -304,7 +328,25 @@ fn main() {
             lake_along as f64 * cell_mi2
         );
     }
-    eprintln!("standing water (lakes, salt flats) {:.0} sq mi", standing as f64 * cell_mi2);
+    eprintln!("standing water (lakes, salt flats) {:.0} sq mi, {:.0} of it not drawn", standing as f64 * cell_mi2, standing_undrawn as f64 * cell_mi2);
+    // Drawn lakes: how much of each outline is its lake, and how much of the lake lies outside.
+    let mut drawn_lakes = Vec::new();
+    for (si, s) in world.file.sketch.strokes.iter().enumerate().filter(|(_, s)| s.tool == SketchTool::Lake) {
+        let inside: Vec<usize> = (0..w * h).filter(|&k| in_lake[k] == si as u32 + 1).collect();
+        // (A drawn lake trimmed off the sea or another lake can be in parts.)
+        let parts: Vec<&worldgen::t0::hydro::Lake> = hydro.lakes.iter().filter(|l| l.stroke == Some(si as u32)).collect();
+        let wet = inside.iter().filter(|&&k| hydro.lake_of[k] != NO_LAKE && hydro.lakes[hydro.lake_of[k] as usize].stroke == Some(si as u32)).count();
+        let outside = parts.iter().map(|l| l.cells.len()).sum::<usize>().saturating_sub(wet);
+        let (level, kind) = parts.first().map_or((None, None), |l| (Some(l.level_ft), Some(format!("{:?}", l.kind))));
+        eprintln!(
+            "  drawn lake (stroke {si}{}): {wet}/{} cells inside are its water, {outside} outside; level {}{}",
+            s.name.as_deref().map(|n| format!(", {n}")).unwrap_or_default(),
+            inside.len(),
+            level.map_or("-".into(), |l| format!("{l:.0} ft")),
+            kind.as_ref().map(|k| format!(", {k}")).unwrap_or_else(|| ", NOT MAPPED".into())
+        );
+        drawn_lakes.push(json!({ "stroke": si, "name": s.name, "inside": inside.len(), "wet": wet, "outside": outside, "level_ft": level, "kind": kind }));
+    }
     let lakes: Vec<serde_json::Value> = hydro
         .lakes
         .iter()
@@ -317,7 +359,7 @@ fn main() {
                 LakeKind::SaltFlat => "salt_flat",
             };
             let on_river = l.cells.iter().filter(|&&c| along[c as usize]).count();
-            json!({ "level_ft": l.level_ft, "kind": kind, "cells": l.cells.len(), "area_sq_mi": n * cell_mi2, "along_drawn_river": on_river, "x": sx / n * cell, "y": sy / n * cell })
+            json!({ "stroke": l.stroke, "level_ft": l.level_ft, "kind": kind, "cells": l.cells.len(), "area_sq_mi": n * cell_mi2, "along_drawn_river": on_river, "x": sx / n * cell, "y": sy / n * cell })
         })
         .collect();
     let rivers: Vec<serde_json::Value> = t0
@@ -335,12 +377,14 @@ fn main() {
             "salt_flat_below_sea": low_flats,
             "land_pct": 100.0 * land as f64 / (w * h) as f64,
             "standing_water_sq_mi": standing as f64 * cell_mi2,
+            "standing_water_not_drawn_sq_mi": standing_undrawn as f64 * cell_mi2,
             "drawn_river_share": share,
             "drawn_river_cells": { "river": total[0], "lake": total[1], "sea": total[2], "dry": total[3] },
             "standing_water_along_drawn_rivers_sq_mi": lake_along as f64 * cell_mi2,
             "pins_coastal": pinned_coastal,
         },
         "drawn_rivers": strokes,
+        "drawn_lakes": drawn_lakes,
         "lakes": lakes,
         "rivers": rivers,
     });

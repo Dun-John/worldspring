@@ -1,7 +1,7 @@
 <script lang="ts">
   // World › Sketch: the tools in one strip (all that shows when the panel is folded down),
   // the chosen tool's options, the preview, what the world can't follow, and Generate.
-  import type { Conflict } from '../gen/protocol';
+  import type { Conflict, VolcanoActivity, VolcanoKind } from '../gen/protocol';
   import { TUNABLE_BIOMES } from '../world/world';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
@@ -28,6 +28,9 @@
   let { sketcher, settings = $bindable(), version, conflicts, previewStatus, showPreview, busy, peek = false, onPreview, onConflict, onGenerate, onStop }: Props = $props();
 
   const count = $derived((void version, sketcher.strokes.length));
+  /** A sketch holds at most this many points (`world.rs` `SKETCH_POINTS`). */
+  const POINTS = 200_000;
+  const points = $derived((void version, sketcher.strokes.reduce((n, s) => n + s.pts.length, 0)));
   const canUndo = $derived((void version, sketcher.canUndo));
   let clearing = $state(false);
 
@@ -36,8 +39,12 @@
     ['land', 'land', 'Land', 'L', 'Brush on land: islands, peninsulas, land bridges.'],
     ['sea', 'waves', 'Sea', 'S', 'Brush on sea: bays, straits, inland seas.'],
     ['range', 'mountain', 'Range', 'R', 'Draw along a mountain ridge.'],
-    ['river', 'river', 'River', 'W', 'Draw from the source to the sea or into another river: it runs the way you draw it.'],
+    ['massif', 'massif', 'Massif', 'M', 'Draw round a mountain mass: it rises from its edge to high ground in its middle.'],
+    ['elevation', 'plateau', 'Elevation', 'H', 'Draw round land to raise it (a plateau) or lower it (a basin). Rivers keep their courses.'],
+    ['river', 'river', 'River', 'W', 'Draw from the source to the sea, a lake or another river: it runs the way you draw it.'],
+    ['lake', 'lake', 'Lake', 'K', 'Draw round a lake. It drains from its lowest shore, or into a river drawn out of it.'],
     ['biome', 'leaf', 'Biome', 'B', 'Paint a biome over the land.'],
+    ['volcano', 'volcano', 'Volcano', 'V', 'Click to place a volcano. The Volcanoes setting adds more: set it to None for only yours.'],
     ['pin', 'castle', 'Settlement', 'T', 'Click to place a settlement of the chosen size.'],
     ['erase', 'eraser', 'Erase', 'E', 'Click a stroke or settlement to remove it.'],
   ];
@@ -47,10 +54,28 @@
     ['town', 'Town'],
     ['village', 'Village'],
   ];
+  const VOLCANOES: [VolcanoKind, string][] = [
+    ['strato', 'Cone'],
+    ['shield', 'Shield'],
+    ['cinder', 'Cinder'],
+    ['caldera', 'Caldera'],
+  ];
+  const ACTIVITY: [VolcanoActivity, string][] = [
+    ['active', 'Active'],
+    ['dormant', 'Dormant'],
+    ['extinct', 'Extinct'],
+  ];
   const tool = $derived(TOOLS.find((t) => t[0] === settings.tool)!);
-  const brushKey = $derived(['coast', 'pin', 'erase'].includes(settings.tool) ? null : settings.tool);
-  const hasEdges = $derived(['coast', 'land', 'sea', 'biome'].includes(settings.tool));
-  const strength = $derived(settings.tool === 'range' ? (settings.strength < 0.35 ? 'Hills' : settings.strength < 0.75 ? 'Mountains' : 'High peaks') : settings.strength < 0.35 ? 'Stream' : settings.strength < 0.75 ? 'River' : 'Great river');
+  const brushKey = $derived(['coast', 'lake', 'volcano', 'pin', 'erase'].includes(settings.tool) ? null : settings.tool);
+  const brushLabel = $derived(({ river: 'Valley', range: 'Width', massif: 'Foothills', elevation: 'Edge' } as Record<string, string>)[settings.tool] ?? 'Brush');
+  const hasEdges = $derived(['coast', 'land', 'sea', 'biome', 'elevation'].includes(settings.tool));
+  const hasStrength = $derived(['range', 'massif', 'river', 'volcano'].includes(settings.tool));
+  const strength = $derived.by(() => {
+    const [a, b, c] = settings.tool === 'river' ? ['Stream', 'River', 'Great river'] : settings.tool === 'volcano' ? ['Small', 'Middling', 'Great'] : ['Hills', 'Mountains', 'High peaks'];
+    return settings.strength < 0.35 ? a : settings.strength < 0.75 ? b : c;
+  });
+  const NAMED: Record<string, string> = { pin: 'Settlement name', lake: 'Lake name', volcano: 'Volcano name' };
+  const feet = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString()} ft`;
 
   function clear() {
     if (!clearing) {
@@ -72,19 +97,50 @@
   {#if !peek}
     <div class="what"><b>{tool[2]}</b> <span class="ws-hint">{tool[4]}</span></div>
 
-    {#if brushKey && !(settings.tool === 'biome' && settings.fill)}
+    {#if settings.tool === 'elevation'}
       <label class="slider">
-        <span>{settings.tool === 'river' ? 'Valley' : settings.tool === 'range' ? 'Width' : 'Brush'}</span>
-        <output>{settings.radiusMi[brushKey]} mi</output>
-        <input type="range" min={settings.tool === 'river' ? 1 : 2} max={settings.tool === 'river' ? 8 : 80} step="1" bind:value={settings.radiusMi[brushKey]} />
+        <span>Raise by</span>
+        <output>{feet(settings.delta)}</output>
+        <input type="range" min="-3000" max="5000" step="100" bind:value={settings.delta} />
       </label>
     {/if}
-    {#if settings.tool === 'range' || settings.tool === 'river'}
+    {#if brushKey && !(settings.tool === 'biome' && settings.fill)}
       <label class="slider">
-        <span>{settings.tool === 'range' ? 'Height' : 'Size'}</span>
+        <span>{brushLabel}</span>
+        <output>{settings.radiusMi[brushKey]} mi</output>
+        <input type="range" min={settings.tool === 'river' ? 1 : 2} max={settings.tool === 'river' ? 8 : settings.tool === 'massif' || settings.tool === 'elevation' ? 40 : 80} step="1" bind:value={settings.radiusMi[brushKey]} />
+      </label>
+    {/if}
+    {#if hasStrength}
+      <label class="slider">
+        <span>{settings.tool === 'river' || settings.tool === 'volcano' ? 'Size' : 'Height'}</span>
         <output>{strength}</output>
         <input type="range" min="0.1" max="1" step="0.05" bind:value={settings.strength} />
       </label>
+    {/if}
+    {#if settings.tool === 'volcano'}
+      <div class="ws-seg" role="radiogroup" aria-label="Kind of volcano">
+        {#each VOLCANOES as [k, label] (k)}<button class:on={settings.volcano === k} onclick={() => (settings.volcano = k)}>{label}</button>{/each}
+      </div>
+      <div class="ws-seg" role="radiogroup" aria-label="Activity">
+        {#each ACTIVITY as [a, label] (a)}<button class:on={settings.activity === a} onclick={() => (settings.activity = a)}>{label}</button>{/each}
+      </div>
+    {/if}
+    {#if settings.tool === 'lake'}
+      <div class="ws-field">
+        Water level
+        <div class="ws-seg" role="radiogroup" aria-label="Water level">
+          <button class:on={settings.level === null} onclick={() => (settings.level = null)}>Natural</button>
+          <button class:on={settings.level !== null} onclick={() => (settings.level ??= 500)}>Set</button>
+        </div>
+      </div>
+      {#if settings.level !== null}
+        <label class="ws-field">
+          Feet above sea level
+          <input class="ws-input" type="number" step="50" bind:value={settings.level} />
+        </label>
+      {/if}
+      <label class="switch"><span class="grow">Salt lake (no outflow)</span><input type="checkbox" class="ws-switch" bind:checked={settings.salt} /></label>
     {/if}
     {#if settings.tool === 'biome'}
       <label class="ws-field">
@@ -111,14 +167,16 @@
       <div class="ws-seg" role="radiogroup" aria-label="Settlement size">
         {#each TIERS as [t, label] (t)}<button class:on={settings.tier === t} onclick={() => (settings.tier = t)}>{label}</button>{/each}
       </div>
-      <input class="ws-input" placeholder="Name (optional)" bind:value={settings.name} aria-label="Settlement name" />
+    {/if}
+    {#if NAMED[settings.tool]}
+      <input class="ws-input" placeholder="Name (optional)" bind:value={settings.name} aria-label={NAMED[settings.tool]} />
     {/if}
 
     <div class="ws-row bar">
       <button class="ws-icon-btn" onclick={() => sketcher.undo()} disabled={!canUndo} title="Undo (Ctrl+Z)" aria-label="Undo"><Icon name="undo" /></button>
       <button class="ws-btn" class:danger={clearing} onclick={clear} disabled={count === 0}>{clearing ? 'Clear all?' : 'Clear'}</button>
       <button class="ws-icon-btn" aria-pressed={showPreview} onclick={() => onPreview(!showPreview)} title={showPreview ? 'Hide the preview' : 'Show the preview'} aria-label="Preview"><Icon name={showPreview ? 'eye' : 'eye-off'} /></button>
-      <span class="ws-muted grow">{count} {count === 1 ? 'stroke' : 'strokes'}</span>
+      <span class="ws-muted grow">{count} {count === 1 ? 'stroke' : 'strokes'}{#if points > POINTS * 0.75}<span class:over={points > POINTS}> · {points.toLocaleString()} of {POINTS.toLocaleString()} points</span>{/if}</span>
     </div>
     <div class="ws-muted">{previewStatus}</div>
 
@@ -151,7 +209,7 @@
   }
   .tools {
     display: grid;
-    grid-template-columns: repeat(8, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 2px;
   }
   .tools .ws-icon-btn {
@@ -182,6 +240,9 @@
   .grow {
     flex: 1;
   }
+  .over {
+    color: #8a2a1a;
+  }
   .conflicts > summary {
     color: #8a2a1a;
   }
@@ -198,6 +259,12 @@
   .foot {
     display: flex;
     gap: 6px;
+  }
+  .switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
   }
   .note {
     margin-top: -4px;

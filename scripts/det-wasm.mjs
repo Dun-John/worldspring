@@ -9,7 +9,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const wasm = require(join(root, 'target/wasm-node/worldgen_wasm.js'));
 
-// A generated world, and a sketched one (coastline, range, river, painted biome, pins).
+// A generated world, and a sketched one (coastline, range, massif, plateau, a river through a
+// lake, a caldera, painted biome, pins).
 const MI = 5280;
 const mi = (x, y) => [Math.round(x * MI), Math.round(y * MI)];
 const outline = Array.from({ length: 40 }, (_, k) => {
@@ -21,7 +22,11 @@ sketched.sketch = {
   strokes: [
     { tool: 'land', closed: true, pts: outline },
     { tool: 'range', radius_ft: 15 * MI, strength: 0.8, pts: [mi(350, 300), mi(500, 320), mi(650, 280)] },
+    { tool: 'massif', closed: true, radius_ft: 8 * MI, strength: 0.7, pts: [mi(250, 500), mi(380, 470), mi(420, 560), mi(300, 620)] },
+    { tool: 'elevation', closed: true, radius_ft: 10 * MI, delta_ft: 800, pts: [mi(650, 450), mi(760, 450), mi(760, 560), mi(650, 560)] },
+    { tool: 'lake', closed: true, name: 'Det Water', pts: [mi(505, 480), mi(535, 480), mi(540, 520), mi(510, 525)] },
     { tool: 'river', radius_ft: 3 * MI, strength: 0.7, pts: [mi(500, 360), mi(520, 500), mi(560, 760)] },
+    { tool: 'volcano', kind: 'caldera', activity: 'active', name: 'Det Peak', strength: 0.6, pts: [mi(700, 650)] },
     { tool: 'biome', biome: 'jungle', closed: true, pts: [mi(800, 400), mi(900, 420), mi(880, 560), mi(780, 520)] },
     { tool: 'pin', tier: 'city', name: 'Sketchford', pts: [mi(540, 600)] },
     { tool: 'pin', tier: 'village', pts: [mi(300, 450)] },

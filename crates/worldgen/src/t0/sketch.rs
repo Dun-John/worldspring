@@ -3,9 +3,13 @@
 //!
 //! - land and sea strokes decide the land mask (outlines are coastlines; once any land is
 //!   drawn, undrawn map is sea), with a natural, noisy coast unless drawn hard;
-//! - ranges add rock uplift along their lines, before erosion carves them;
+//! - ranges add rock uplift along their lines and massifs over their outlines, before erosion
+//!   carves them;
+//! - elevation outlines raise or lower the land after erosion; a sketched world never ponds
+//!   water the land itself wouldn't (`fill`, `breach`);
+//! - volcanoes are stamped where drawn (`volcano::drawn`);
 //! - rivers are carved strictly downhill along their lines and fed at their sources, so the
-//!   hydrology maps them;
+//!   hydrology maps them; lakes are carved on their beds, each with its outlet;
 //! - biome paint overrides the climate's biomes, blending at its edges;
 //! - pins place settlements (snapped onto land, kept apart).
 //!
@@ -239,15 +243,23 @@ pub fn land_crust(world: &World, g: Raster, crust: &[f64], thr: f64) -> Option<V
     )
 }
 
-/// Rock uplift along drawn ranges (added to the plates' field before erosion, which halves
-/// when any range is drawn).
-pub fn add_ranges(world: &World, g: Raster, uplift: &mut [f64]) {
+/// Rock uplift along drawn ranges and over drawn massifs (added to the plates' field before
+/// erosion, which halves when either is drawn). `reference` (the plates' field with all their
+/// mountains, when fewer are kept; else empty) gets the same.
+pub fn add_ranges(world: &World, g: Raster, uplift: &mut [f64], reference: &mut [f64]) {
     let s_rid = world.stream("t0.sketch.range");
     let rugged = world.params().ruggedness.max(0.3);
     // Drawn ranges are the main ones: the plates' own ranges are kept, but lower.
-    if strokes(world, SketchTool::Range).next().is_some() {
+    if strokes(world, SketchTool::Range).chain(strokes(world, SketchTool::Massif)).next().is_some() {
         uplift.iter_mut().for_each(|u| *u *= 0.5);
+        reference.iter_mut().for_each(|u| *u *= 0.5);
     }
+    let mut add = |k: usize, v: f64| {
+        uplift[k] += v;
+        if let Some(r) = reference.get_mut(k) {
+            *r += v;
+        }
+    };
     for (_, s) in strokes(world, SketchTool::Range) {
         let r = s.radius_ft.max(2.0 * g.cell);
         let amp = (0.2 + 1.3 * s.strength) * rugged;
@@ -259,18 +271,368 @@ pub fn add_ranges(world: &World, g: Raster, uplift: &mut [f64]) {
             }
             let (x, y) = unit(world, g, k);
             let crest = 0.6 + 0.5 * ridged(s_rid, x * 10.0, y * 10.0, 4);
-            uplift[k] += amp * crest * libm::exp(-(d / r) * (d / r));
+            add(k, amp * crest * libm::exp(-(d / r) * (d / r)));
+        }
+    }
+    let s_mas = world.stream("t0.sketch.massif");
+    for (si, s) in strokes(world, SketchTool::Massif) {
+        let amp = (0.2 + 1.3 * s.strength) * rugged;
+        let foot = s.radius_ft.max(g.cell);
+        let area = Area::of(g, &s.pts, foot);
+        let Some(deepest) = area.cells().map(|(_, d)| d).reduce(f64::max) else { continue };
+        // Ridges run along the trend (as drawn, else the outline's long axis): ~70 mi long,
+        // ~20 mi apart, eroded into valleys between them.
+        let angle = s.trend.map_or_else(|| area.long_axis(g), f64::to_radians);
+        let (ca, sa) = (libm::cos(angle), libm::sin(angle));
+        let seed = s_mas ^ crate::core::rng::mix64(si as u64);
+        // Up from the edge (foothills outside it) to the core, the inner 40% of its depth.
+        let core = 0.6 * deepest;
+        let outside = distance(g, &s.pts, true, foot);
+        for k in area.bbox(g) {
+            let d = area.depth(g, k);
+            let f = if d > 0.0 {
+                0.15 + 0.85 * smoothstep(0.0, core, d)
+            } else {
+                let o = outside[k] as f64;
+                if o >= foot {
+                    continue;
+                }
+                let t = 1.0 - o / foot;
+                0.15 * t * t
+            };
+            let [x, y] = g.at(k);
+            let (u, v) = ((x * ca + y * sa) / MI, (-x * sa + y * ca) / MI);
+            add(k, amp * f * (0.5 + 0.6 * ridged(seed, u / 70.0, v / 20.0, 4)));
         }
     }
 }
 
-/// Ranges drawn mostly over the sea (they raise nothing there).
+/// The grid points inside a closed outline, with how deep inside each is (ft, by a chamfer
+/// distance to the nearest point outside), over the outline's box (grown by `margin` ft).
+struct Area {
+    i0: usize,
+    j0: usize,
+    w: usize,
+    h: usize,
+    /// Over the box: depth (ft), 0 outside.
+    depth: Vec<f64>,
+}
+
+impl Area {
+    fn of(g: Raster, pts: &[[f64; 2]], margin: f64) -> Area {
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for p in pts {
+            (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
+        }
+        // (A point past the outline on every side, so the box's border is outside it.)
+        let lo = |v: f64| (((v - margin) / g.cell).floor() - 1.0).max(0.0) as usize;
+        let (i1, j1) = ((((x1 + margin) / g.cell).ceil().max(0.0) as usize + 1).min(g.w - 1), (((y1 + margin) / g.cell).ceil().max(0.0) as usize + 1).min(g.h - 1));
+        let (i0, j0) = (lo(x0).min(i1), lo(y0).min(j1));
+        let (w, h) = (i1 - i0 + 1, j1 - j0 + 1);
+        let sub = Raster { w, h, cell: g.cell };
+        let shifted: Vec<[f64; 2]> = pts.iter().map(|p| [p[0] - i0 as f64 * g.cell, p[1] - j0 as f64 * g.cell]).collect();
+        let ins = inside(sub, &shifted);
+        let out: Vec<bool> = ins.iter().map(|i| !i).collect();
+        let depth = super::climate::distance_to(w, h, &out).into_iter().zip(&ins).map(|(d, &i)| if i { d * g.cell } else { 0.0 }).collect();
+        Area { i0, j0, w, h, depth }
+    }
+
+    /// Grid points of the box.
+    fn bbox(&self, g: Raster) -> impl Iterator<Item = usize> + '_ {
+        (0..self.h).flat_map(move |j| (0..self.w).map(move |i| (self.j0 + j) * g.w + self.i0 + i))
+    }
+
+    /// How deep inside grid point `k` is (0 outside, or off the box).
+    fn depth(&self, g: Raster, k: usize) -> f64 {
+        let (i, j) = (k % g.w, k / g.w);
+        if i < self.i0 || j < self.j0 || i >= self.i0 + self.w || j >= self.j0 + self.h {
+            return 0.0;
+        }
+        self.depth[(j - self.j0) * self.w + i - self.i0]
+    }
+
+    /// The points inside (box-local indices, see `grid`) and their depth.
+    fn cells(&self) -> impl Iterator<Item = (usize, f64)> + '_ {
+        self.depth.iter().enumerate().filter(|(_, d)| **d > 0.0).map(|(k, &d)| (k, d))
+    }
+
+    /// The grid index of a box-local one.
+    fn grid(&self, g: Raster, local: usize) -> usize {
+        (self.j0 + local / self.w) * g.w + self.i0 + local % self.w
+    }
+
+    /// The direction (radians) of the area's long axis.
+    fn long_axis(&self, g: Raster) -> f64 {
+        let pts: Vec<[f64; 2]> = self.cells().map(|(k, _)| g.at(self.grid(g, k))).collect();
+        let n = pts.len().max(1) as f64;
+        let (mx, my) = (pts.iter().map(|p| p[0]).sum::<f64>() / n, pts.iter().map(|p| p[1]).sum::<f64>() / n);
+        let (mut sxx, mut syy, mut sxy) = (0.0, 0.0, 0.0);
+        for p in &pts {
+            let (dx, dy) = (p[0] - mx, p[1] - my);
+            (sxx, syy, sxy) = (sxx + dx * dx, syy + dy * dy, sxy + dx * dy);
+        }
+        0.5 * libm::atan2(2.0 * sxy, sxx - syy)
+    }
+}
+
+/// Raise or lower the land inside drawn elevation outlines by their `delta_ft` (after erosion,
+/// so no ridges form; before volcanoes, rivers and lakes), easing in across an edge `radius_ft`
+/// wide centred on the line (wavering unless drawn exact). Never above the highest ground.
+/// (`breach` then keeps water from ponding where it didn't stand before.)
+pub fn elevate(world: &World, g: Raster, land: &[bool], height: &mut [f64]) {
+    let p = world.params();
+    let s_edge = world.stream("t0.sketch.elevation");
+    for (_, s) in strokes(world, SketchTool::Elevation) {
+        let delta = s.delta_ft.unwrap_or(0.0);
+        let width = s.radius_ft.max(g.cell);
+        for (k, v) in signed(g, s, width).into_iter().enumerate() {
+            if !land[k] || v <= -width {
+                continue;
+            }
+            let [x, y] = g.at(k);
+            let wobble = if s.hard { 0.0 } else { 0.4 * width * fbm(s_edge, x / (25.0 * MI), y / (25.0 * MI), 3, 2.0, 0.5) };
+            let m = smoothstep(-0.5 * width, 0.5 * width, v + wobble);
+            if m > 0.0 {
+                height[k] = (height[k] + delta * m).min(p.sea_level_ft + p.max_elev_ft);
+            }
+        }
+    }
+}
+
+/// How deep water would stand at each point (ft; 0 where it drains).
+pub fn depths(g: Raster, land: &[bool], height: &[f64]) -> Vec<f64> {
+    let sinks: Vec<bool> = land.iter().map(|l| !l).collect();
+    super::flood::priority_flood(g.w, g.h, height, &sinks, 0.01).filled.iter().zip(height).map(|(f, h)| f - h).collect()
+}
+
+/// Fill hollows where water would stand deeper than `before` (`depths` of the ground it should
+/// hold water like) up to where it would stand that deep: flat floors at the brim.
+pub fn fill(g: Raster, land: &[bool], height: &mut [f64], before: &[f64]) {
+    let now = depths(g, land, height);
+    for k in 0..g.w * g.h {
+        if land[k] && now[k] > before[k] + 1.0 {
+            height[k] += now[k] - before[k];
+        }
+    }
+}
+
+/// Cut outlets for water the ground would pond deeper than `before` (`depths` of the ground it
+/// should hold water like): from each such hollow's lowest point (at the depth it had), down
+/// the way water would spill, cut until the ground beyond drains lower, as a river older than
+/// the land around it keeps its course. A few rounds (an outlet can open into another hollow).
+pub fn breach(g: Raster, land: &[bool], height: &mut [f64], before: &[f64]) {
+    let sinks: Vec<bool> = land.iter().map(|l| !l).collect();
+    for _ in 0..4 {
+        let fl = super::flood::priority_flood(g.w, g.h, height, &sinks, 0.01);
+        let deeper: Vec<bool> = (0..g.w * g.h).map(|k| land[k] && fl.filled[k] - height[k] > before[k] + 1.0).collect();
+        let (rec, _) = super::flood::receivers(g.w, g.h, &fl.filled);
+        let mut seen = vec![false; g.w * g.h];
+        let mut cut = false;
+        for s in 0..g.w * g.h {
+            if !deeper[s] || seen[s] {
+                continue;
+            }
+            // The hollow, and its lowest point at the depth it had.
+            let mut comp = vec![s];
+            seen[s] = true;
+            let mut q = 0;
+            while q < comp.len() {
+                let c = comp[q];
+                q += 1;
+                for nb in neighbours8(g, c) {
+                    if deeper[nb] && !seen[nb] {
+                        seen[nb] = true;
+                        comp.push(nb);
+                    }
+                }
+            }
+            let level = |k: usize| height[k] + before[k];
+            let low = *comp.iter().min_by(|&&a, &&b| level(a).total_cmp(&level(b)).then(a.cmp(&b))).unwrap();
+            let (mut cur, mut z) = (low, level(low));
+            for _ in 0..g.w * g.h {
+                let k = rec[cur] as usize;
+                if k == cur || !land[k] || fl.filled[k] < z {
+                    break;
+                }
+                z -= MIN_FALL;
+                if height[k] > z {
+                    height[k] = z;
+                    cut = true;
+                }
+                z = height[k];
+                cur = k;
+            }
+        }
+        if !cut {
+            break;
+        }
+    }
+}
+
+/// Ranges and massifs drawn mostly over the sea (they raise nothing there).
 pub fn check_ranges(world: &World, g: Raster, land: &[bool], conflicts: &mut Vec<Conflict>) {
     for (i, s) in strokes(world, SketchTool::Range) {
         let wet = s.pts.iter().filter(|p| !land[g.cell_of(**p)]).count();
         if wet * 2 > s.pts.len() {
             let p = s.pts[s.pts.len() / 2];
             conflicts.push(Conflict { stroke: i, message: "This range is mostly at sea: draw land under it".into(), x: p[0], y: p[1] });
+        }
+    }
+    for (i, s) in strokes(world, SketchTool::Massif) {
+        let area = Area::of(g, &s.pts, 0.0);
+        let (wet, all) = area.cells().fold((0, 0), |(w, a), (k, _)| (w + usize::from(!land[area.grid(g, k)]), a + 1));
+        if wet * 2 > all {
+            let p = s.pts[0];
+            conflicts.push(Conflict { stroke: i, message: "This massif is mostly at sea: draw land under it".into(), x: p[0], y: p[1] });
+        }
+    }
+}
+
+/// A drawn lake on the grid.
+pub struct DrawnLake {
+    pub stroke: usize,
+    /// Its cells (inside the outline) and how deep inside each is (ft).
+    cells: Vec<(usize, f64)>,
+    /// The water's level (ft; set when carved).
+    pub level: f64,
+    pub salt: bool,
+    /// A drawn river leaves it (its outlet).
+    pub outflow: bool,
+}
+
+/// The sketch's lakes: where each lies (`lakes`, before the rivers), then carved (`carve_lakes`,
+/// after them).
+#[derive(Default)]
+pub struct Lakes {
+    pub list: Vec<DrawnLake>,
+    /// Per grid point: the drawn lake it is in, or `NONE`.
+    pub of: Vec<u32>,
+}
+
+impl Lakes {
+    fn at(&self, k: usize) -> Option<usize> {
+        self.of.get(k).filter(|&&l| l != NONE).map(|&l| l as usize)
+    }
+}
+
+/// The drawn rivers as carved: each course's cells (source to mouth) and which cells are
+/// channels.
+pub struct Courses {
+    pub cells: Vec<Vec<usize>>,
+    pub channel: Vec<bool>,
+}
+
+/// Where the drawn lakes lie: the cells inside each outline (the cell under it, if it is
+/// smaller than a cell), but those beside the sea or another lake, so a strip of shore always
+/// keeps them apart.
+pub fn lakes(world: &World, g: Raster, land: &[bool], conflicts: &mut Vec<Conflict>) -> Lakes {
+    let mut lakes = Lakes { of: vec![NONE; g.w * g.h], ..Default::default() };
+    for (si, s) in strokes(world, SketchTool::Lake) {
+        let area = Area::of(g, &s.pts, 0.0);
+        let mut cells: Vec<(usize, f64)> = area.cells().map(|(k, d)| (area.grid(g, k), d)).collect();
+        if cells.is_empty() {
+            let n = s.pts.len() as f64;
+            cells.push((g.cell_of([s.pts.iter().map(|p| p[0]).sum::<f64>() / n, s.pts.iter().map(|p| p[1]).sum::<f64>() / n]), 0.5 * g.cell));
+        }
+        let had = cells.len();
+        let apart = |k: usize| std::iter::once(k).chain(neighbours8(g, k)).all(|c| land[c] && lakes.of[c] == NONE);
+        cells.retain(|&(k, _)| apart(k));
+        let at = s.pts[0];
+        if cells.is_empty() {
+            conflicts.push(Conflict { stroke: si, message: "This lake lies in the sea or another lake: no lake made".into(), x: at[0], y: at[1] });
+            continue;
+        }
+        if cells.len() < had {
+            conflicts.push(Conflict { stroke: si, message: "This lake reaches the sea or another lake: a strip of shore is kept between them".into(), x: at[0], y: at[1] });
+        }
+        let id = lakes.list.len() as u32;
+        for &(k, _) in &cells {
+            lakes.of[k] = id;
+        }
+        lakes.list.push(DrawnLake { stroke: si, cells, level: 0.0, salt: s.salt, outflow: false });
+    }
+    lakes
+}
+
+/// Carve the drawn lakes onto the ground the rivers left: each basin dug below its level (deeper
+/// toward the middle) and its shore raised where lower than the water, but at its outlet, from
+/// which it drains at that level (cut down the way water would go where the ground beyond is
+/// higher). The outlet is where a drawn river leaves it, else the lowest point of its shore (a
+/// river's mouth into it aside); the level is drawn, else the outlet's.
+pub fn carve_lakes(world: &World, g: Raster, height: &mut [f64], land: &[bool], lakes: &mut Lakes, courses: &Courses, conflicts: &mut Vec<Conflict>) {
+    if lakes.list.is_empty() {
+        return;
+    }
+    let sea = world.params().sea_level_ft;
+    let mut outlets = Vec::new();
+    for (id, l) in lakes.list.iter_mut().enumerate() {
+        let id = id as u32;
+        let s = &world.file.sketch.strokes[l.stroke];
+        let at = s.pts[0];
+        let mut shore: Vec<usize> = l.cells.iter().flat_map(|&(k, _)| neighbours8(g, k)).filter(|&nb| lakes.of[nb] != id).collect();
+        shore.sort_unstable();
+        shore.dedup();
+        // Drawn rivers at its shore: where they leave it (outflows) and where they come in.
+        let (mut outs, mut ins) = (Vec::new(), Vec::new());
+        for c in &courses.cells {
+            for w in c.windows(2) {
+                match (lakes.of[w[0]] == id, lakes.of[w[1]] == id) {
+                    (true, false) => outs.push(w[1]),
+                    (false, true) => ins.push(w[0]),
+                    _ => {}
+                }
+            }
+            if c.last().is_some_and(|&e| shore.contains(&e)) {
+                ins.push(*c.last().unwrap());
+            }
+        }
+        let lowest = |v: &mut dyn Iterator<Item = usize>| v.min_by(|&a, &b| height[a].total_cmp(&height[b]).then(a.cmp(&b)));
+        let outlet = lowest(&mut outs.iter().copied().filter(|k| shore.contains(k))).or_else(|| lowest(&mut shore.iter().copied().filter(|k| !ins.contains(k)))).unwrap_or(shore[0]);
+        l.outflow = outs.contains(&outlet);
+        l.level = s.level_ft.map_or(height[outlet], |v| sea + v);
+        let level = l.level;
+        // The basin: 30 ft deep at the shore, a foot more every 125 ft out (800 at most).
+        for &(k, d) in &l.cells {
+            height[k] = height[k].min(level - (30.0 + 0.008 * d).min(800.0));
+        }
+        height[outlet] = height[outlet].min(level);
+        // (Drawn rivers' channels at the shore keep their beds: where they come in, they are
+        // above the water.)
+        let mut raised = 0.0f64;
+        for &k in &shore {
+            if k != outlet && !courses.channel.get(k).is_some_and(|&c| c) && land[k] {
+                raised = raised.max(level + 2.0 - height[k]);
+                height[k] = height[k].max(level + 2.0);
+            }
+        }
+        if raised > 50.0 {
+            conflicts.push(Conflict { stroke: l.stroke, message: format!("This lake stands up to {:.0} ft above the land around it: its shores are raised", (raised / 10.0).round() * 10.0), x: at[0], y: at[1] });
+        }
+        outlets.push(outlet);
+    }
+    // From each outlet, down the way water would flow, cut until the ground beyond drains lower
+    // than the lake.
+    let sinks: Vec<bool> = land.iter().map(|l| !l).collect();
+    let fl = super::flood::priority_flood(g.w, g.h, height, &sinks, 0.01);
+    let (rec, _) = super::flood::receivers(g.w, g.h, &fl.filled);
+    for (l, &outlet) in lakes.list.iter().zip(&outlets) {
+        let (mut cur, mut z, mut cut) = (outlet, l.level, 0.0f64);
+        loop {
+            let k = rec[cur] as usize;
+            if k == cur || !land[k] || fl.filled[k] < z || lakes.of[k] != NONE {
+                break;
+            }
+            z -= MIN_FALL;
+            if height[k] > z {
+                cut = cut.max(height[k] - z);
+                height[k] = z;
+            }
+            z = height[k];
+            cur = k;
+        }
+        if cut > 300.0 {
+            let p = g.at(outlet);
+            conflicts.push(Conflict { stroke: l.stroke, message: format!("To drain at its level this lake's outlet cuts a {:.0}-ft gorge", (cut / 100.0).round() * 100.0), x: p[0], y: p[1] });
         }
     }
 }
@@ -315,7 +677,7 @@ const MIN_FALL: f64 = 0.05;
 const MOUTH_FT: f64 = 3.0;
 /// A valley's sides: how fast they climb away from the river (per ft across).
 const SIDE: f64 = 0.05;
-const NONE: u32 = u32::MAX;
+pub(crate) const NONE: u32 = u32::MAX;
 
 /// Where a drawn river's course ends.
 #[derive(Clone, Copy, PartialEq)]
@@ -323,6 +685,8 @@ enum End {
     Sea,
     /// Joins another course at this cell (one of that course's cells).
     Join(usize),
+    /// Flows into this drawn lake.
+    Lake(usize),
     /// Nowhere to go: it ends on land.
     Inland,
 }
@@ -344,18 +708,19 @@ fn neighbours8(g: Raster, k: usize) -> impl Iterator<Item = usize> {
 }
 
 /// Carve the drawn rivers into `height` and return the discharge (mm·cells) to add at each
-/// source so the hydrology maps them as rivers.
+/// source so the hydrology maps them as rivers, and which cells their channels take.
 ///
 /// - A river runs the way it was drawn (unless drawn from the sea inland).
 /// - It ends at the sea, or joins the first other drawn river it meets (a tributary ends on
 ///   that river's channel, at its level). One that stops short of the sea or another river
-///   within `REACH_FT` is carried on to it in a straight line.
+///   within `REACH_FT` is carried on to it in a straight line (through a drawn lake it ends in).
+///   Drawn lakes are carved after (`carve_lakes`), on the rivers' beds.
 /// - Its profile never rises and falls at least `MIN_FALL` per cell (more on a high, short
 ///   course, up to a foot), and stays above the water it ends in: where that needs the river
 ///   above the ground, the ground along it is raised rather than the river dug under the sea.
 /// - Every course is set first, then the valleys: banks a little above the water (never over
 ///   any river's channel), sides sloping up to the valley's edge.
-pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool], conflicts: &mut Vec<Conflict>) -> Vec<(usize, f64)> {
+pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool], lakes: &Lakes, conflicts: &mut Vec<Conflict>) -> (Vec<(usize, f64)>, Courses) {
     let threshold = super::hydro::RIVER_Q / world.params().river_density;
     let sea = world.params().sea_level_ft;
     let n = g.w * g.h;
@@ -377,7 +742,7 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
             continue;
         };
         let mut cells: Vec<usize> = Vec::new();
-        let mut end = None;
+        let mut end: Option<End> = None;
         for (idx, &k) in path.iter().enumerate().skip(start) {
             if !land[k] {
                 if path[idx..].iter().filter(|&&c| land[c]).count() >= 6 {
@@ -390,7 +755,7 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
             cells.push(k);
         }
         if cells.len() < 3 {
-            let p = g.at(cells[0]);
+            let p = g.at(cells.first().copied().unwrap_or(path[start]));
             conflicts.push(Conflict { stroke: si, message: "This river is too short to map".into(), x: p[0], y: p[1] });
             continue;
         }
@@ -456,7 +821,7 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
                 Some(_) => continue,
                 None => {
                     let had = courses[ci].cells.len();
-                    let Some(end) = carry_on(g, land, &owner, &resolved, &mut courses[ci], ci) else { continue };
+                    let Some(end) = carry_on(g, land, lakes, &owner, &resolved, &mut courses[ci], ci) else { continue };
                     courses[ci].end = Some(end);
                     claim(&mut owner, &courses[ci].cells[had..], ci);
                 }
@@ -473,7 +838,7 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
                 join(&mut courses, &mut owner, ci, idx, k);
             } else {
                 let had = courses[ci].cells.len();
-                let end = carry_on(g, land, &owner, &resolved, &mut courses[ci], ci).unwrap_or(End::Inland);
+                let end = carry_on(g, land, lakes, &owner, &resolved, &mut courses[ci], ci).unwrap_or(End::Inland);
                 courses[ci].end = Some(end);
                 claim(&mut owner, &courses[ci].cells[had..], ci);
             }
@@ -481,6 +846,33 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
             order.push(ci);
         }
     }
+
+    // A course into a drawn lake goes after those running through it: the lake will take its
+    // level from where they leave it.
+    let order = {
+        let through = |cj: usize, l: usize| courses[cj].end != Some(End::Lake(l)) && courses[cj].cells.iter().any(|&k| lakes.at(k) == Some(l));
+        let mut sorted = Vec::with_capacity(order.len());
+        let mut placed = vec![false; courses.len()];
+        let mut stack: Vec<(usize, bool)> = order.iter().rev().map(|&ci| (ci, false)).collect();
+        while let Some((ci, ready)) = stack.pop() {
+            if ready {
+                sorted.push(ci);
+                continue;
+            }
+            if placed[ci] {
+                continue;
+            }
+            placed[ci] = true;
+            stack.push((ci, true));
+            let deps: Vec<usize> = match courses[ci].end {
+                Some(End::Join(k)) if owner[k] != NONE => vec![owner[k] as usize],
+                Some(End::Lake(l)) => (0..courses.len()).filter(|&cj| through(cj, l)).collect(),
+                _ => Vec::new(),
+            };
+            stack.extend(deps.into_iter().rev().filter(|&d| !placed[d]).map(|d| (d, false)));
+        }
+        sorted
+    };
 
     // Profiles, in that order (a tributary after the river it joins): each on the ground as the
     // valleys before it left it.
@@ -502,6 +894,17 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
         let floor_end = match end {
             End::Sea => Some(sea + MOUTH_FT),
             End::Join(k) => Some(zc[k] + MIN_FALL),
+            // The level the lake will take: where a river set before leaves it, else the lowest
+            // point of its shore (never below the sea).
+            End::Lake(l) => {
+                let exit = order.iter().take_while(|&&cj| cj != ci).flat_map(|&cj| courses[cj].cells.windows(2)).filter(|w| lakes.at(w[0]) == Some(l) && lakes.at(w[1]) != Some(l)).map(|w| zc[w[1]]).fold(f64::INFINITY, f64::min);
+                let level = if exit.is_finite() {
+                    exit
+                } else {
+                    lakes.list[l].cells.iter().flat_map(|&(k, _)| neighbours8(g, k)).filter(|&k| lakes.at(k) != Some(l) && zc[k].is_nan() && !c.cells.contains(&k)).map(ground).fold(f64::INFINITY, f64::min)
+                };
+                Some(level.max(sea + MOUTH_FT) + MOUTH_FT)
+            }
             End::Inland => None,
         };
         let h0 = ground(c.cells[0]);
@@ -567,6 +970,12 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
             }
         }
         feed.push((c.cells[0], c.feed));
+        // (Fed again where it leaves a drawn lake, which may lose all it brings to the air.)
+        for w in c.cells.windows(2) {
+            if lakes.at(w[0]).is_some() && lakes.at(w[1]).is_none() {
+                feed.push((w[1], c.feed));
+            }
+        }
     }
 
     // The valleys, never over a channel: banks between 10 ft above the water and the side's
@@ -575,7 +984,7 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
     let mut cells: Vec<(&usize, &(f64, f64, f64, bool))> = valley.iter().collect();
     cells.sort_by_key(|(k, _)| **k);
     for (&k, &(target, d, z, lifted)) in cells {
-        if !land[k] || !zc[k].is_nan() {
+        if !land[k] || !zc[k].is_nan() || lakes.at(k).is_some() {
             continue;
         }
         height[k] = if d < 1.5 {
@@ -591,19 +1000,30 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
             height[k] = zc[k];
         }
     }
-    feed
+    let channel = if courses.is_empty() { Vec::new() } else { zc.iter().map(|z| !z.is_nan()).collect() };
+    (feed, Courses { cells: courses.into_iter().map(|c| c.cells).collect(), channel })
 }
 
 /// Carry a course that stops short on to the nearest sea cell or resolved course within
-/// `REACH_FT` of its end (straight there; it joins whatever course it meets on the way).
-/// `None` when there is nothing in reach yet but some course is still unresolved (one may come
-/// within reach); `Inland` when nothing can.
-fn carry_on(g: Raster, land: &[bool], owner: &[u32], resolved: &[bool], c: &mut Course, ci: usize) -> Option<End> {
+/// `REACH_FT` of its end (straight there; it joins whatever course it meets on the way). One
+/// that ends in a drawn lake (or at its shore) is carried on through it, as far again as the
+/// lake is wide: the lake will sit on its course. `None` when there is nothing in reach yet but
+/// some course is still unresolved (one may come within reach); `Inland` (or `Lake`, ending at
+/// one) when nothing can.
+#[allow(clippy::too_many_arguments)]
+fn carry_on(g: Raster, land: &[bool], lakes: &Lakes, owner: &[u32], resolved: &[bool], c: &mut Course, ci: usize) -> Option<End> {
     let last = *c.cells.last().unwrap();
     let (ei, ej) = ((last % g.w) as i64, (last / g.w) as i64);
     let goal = |k: usize| !land[k] || (owner[k] != NONE && owner[k] as usize != ci && resolved[owner[k] as usize]);
     let mut best: Option<(i64, usize)> = None;
-    let reach = (crate::core::ceil(REACH_FT / g.cell) as i64).max(2);
+    let lake = lakes.at(last).or_else(|| neighbours8(g, last).find_map(|k| lakes.at(k)));
+    let across = lake.map_or(0.0, |l| {
+        let cells = &lakes.list[l].cells;
+        let (i0, i1) = cells.iter().fold((usize::MAX, 0), |(a, b), &(k, _)| (a.min(k % g.w), b.max(k % g.w)));
+        let (j0, j1) = cells.iter().fold((usize::MAX, 0), |(a, b), &(k, _)| (a.min(k / g.w), b.max(k / g.w)));
+        crate::core::sqrt(((i1 - i0) * (i1 - i0) + (j1 - j0) * (j1 - j0)) as f64) * g.cell
+    });
+    let reach = (crate::core::ceil((REACH_FT + across) / g.cell) as i64).max(2);
     for dj in -reach..=reach {
         for di in -reach..=reach {
             let (i, j) = (ei + di, ej + dj);
@@ -618,7 +1038,7 @@ fn carry_on(g: Raster, land: &[bool], owner: &[u32], resolved: &[bool], c: &mut 
         }
     }
     let Some((_, target)) = best else {
-        return if resolved.iter().enumerate().all(|(i, &r)| r || i == ci) { Some(End::Inland) } else { None };
+        return if resolved.iter().enumerate().all(|(i, &r)| r || i == ci) { Some(lake.map_or(End::Inland, End::Lake)) } else { None };
     };
     // Its last cell is another course's: it joins there.
     if target == last {
@@ -641,7 +1061,7 @@ fn carry_on(g: Raster, land: &[bool], owner: &[u32], resolved: &[bool], c: &mut 
         extra.push(k);
     }
     // (The line found its way blocked by the course itself.)
-    Some(End::Inland)
+    Some(lake.map_or(End::Inland, End::Lake))
 }
 
 /// Paint drawn biomes over the classified ones (on land, not lakes): the painted biome inside,

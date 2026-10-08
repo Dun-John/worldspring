@@ -23,7 +23,11 @@ const BIOME_COLORS: Record<string, number> = {
   salt_flat: 0xede8db,
 };
 
-const COLORS = { land: 0x4f7a37, sea: 0x2f6390, range: 0x6b4423, river: 0x2a6db5, pin: 0x8a2a1a };
+const COLORS: Record<string, number> = { land: 0x4f7a37, sea: 0x2f6390, range: 0x6b4423, massif: 0x6b4423, river: 0x2a6db5, lake: 0x2a6db5, pin: 0x8a2a1a, volcano: 0x8a3a1a };
+/** Elevation strokes: raised, lowered. */
+const RAISE = 0xa8822f;
+const LOWER = 0x6a62a0;
+const SALT = 0x7aaebf;
 const PIN_R: Record<string, number> = { metropolis: 8, city: 6.5, town: 5, village: 3.5 };
 
 export class SketchLayer {
@@ -95,40 +99,64 @@ export class SketchLayer {
     const [x1, y1] = cam.worldToScreen(this.mapSize[0], this.mapSize[1]);
     g.rect(x0, y0, x1 - x0, y1 - y0).stroke({ width: 1.5, color: 0x3a322a, alpha: 0.7 });
     const all = this.sketcher.drawing ? [...this.sketcher.strokes, this.sketcher.drawing] : this.sketcher.strokes;
-    // Areas first, then lines, then pins on top.
-    const order = (s: Stroke) => (s.tool === 'pin' ? 2 : s.closed || s.tool === 'land' || s.tool === 'sea' || s.tool === 'biome' ? 0 : 1);
+    // Areas first, then lines, then pins and volcanoes on top.
+    const order = (s: Stroke) => (s.tool === 'pin' || s.tool === 'volcano' ? 2 : s.closed || s.tool === 'land' || s.tool === 'sea' || s.tool === 'biome' ? 0 : 1);
     for (const s of [...all].sort((a, b) => order(a) - order(b))) this.draw(s, cam, s === this.sketcher.drawing);
-    // Pin names left over from before.
+    // Labels left over from before.
     for (const c of this.names.children.slice(this.nameCount)) c.destroy();
+  }
+
+  /** A label at (x, y) (screen px; `center`ed on it, else left-aligned). Labels are reused in
+   * order (lettering text is slow): only a changed one re-letters. */
+  private label(text: string, italic: boolean, x: number, y: number, center = false) {
+    let label = this.names.children[this.nameCount] as Text | undefined;
+    if (!label) {
+      label = new Text({ text, style: { fontFamily: 'Georgia, serif', fontSize: 13, fill: 0x2b241d, stroke: { color: 0xf3ecd8, width: 3 } } });
+      this.names.addChild(label);
+    } else if (label.text !== text) {
+      label.text = text;
+    }
+    label.style.fontStyle = italic ? 'italic' : 'normal';
+    label.anchor.set(center ? 0.5 : 0, center ? 0.5 : 0);
+    label.position.set(x, y);
+    this.nameCount++;
   }
 
   private draw(s: Stroke, cam: Camera, live: boolean) {
     const g = this.g;
     const pts = s.pts.map((p) => cam.worldToScreen(p[0], p[1]));
-    const color = s.tool === 'biome' ? (BIOME_COLORS[s.biome ?? ''] ?? 0x999999) : COLORS[s.tool];
+    const color =
+      s.tool === 'biome' ? (BIOME_COLORS[s.biome ?? ''] ?? 0x999999) : s.tool === 'elevation' ? ((s.delta_ft ?? 0) < 0 ? LOWER : RAISE) : s.tool === 'lake' && s.salt ? SALT : (COLORS[s.tool] ?? 0x999999);
     if (s.tool === 'pin') {
       const [x, y] = pts[0];
       const r = PIN_R[s.tier ?? 'town'] ?? 5;
       g.circle(x, y, r + 2).fill({ color: 0xf3ecd8 });
       g.circle(x, y, r).fill({ color }).stroke({ width: 1.5, color: 0x2b241d });
-      // Labels are reused in order (lettering text is slow): only a changed name re-letters.
-      const text = s.name || `(${s.tier})`;
-      let label = this.names.children[this.nameCount] as Text | undefined;
-      if (!label) {
-        label = new Text({ text, style: { fontFamily: 'Georgia, serif', fontSize: 13, fill: 0x2b241d, stroke: { color: 0xf3ecd8, width: 3 } } });
-        this.names.addChild(label);
-      } else if (label.text !== text) {
-        label.text = text;
-      }
-      label.style.fontStyle = s.name ? 'normal' : 'italic';
-      label.position.set(x + r + 4, y - 9);
-      this.nameCount++;
+      this.label(s.name || `(${s.tier})`, !s.name, x + r + 4, y - 9);
+      return;
+    }
+    if (s.tool === 'volcano') {
+      // A cone with its crater (wider for a caldera, lower for a shield).
+      const [x, y] = pts[0];
+      const [w, h] = s.kind === 'shield' ? [10, 5] : s.kind === 'cinder' ? [5, 5] : s.kind === 'caldera' ? [10, 6] : [7, 9];
+      const c = s.kind === 'caldera' ? 4.5 : 2;
+      g.poly([x - w - 1.5, y + 4, x - c - 1, y + 4 - h - 1.5, x + c + 1, y + 4 - h - 1.5, x + w + 1.5, y + 4], true).fill({ color: 0xf3ecd8 });
+      g.poly([x - w, y + 3, x - c, y + 3 - h, x + c, y + 3 - h, x + w, y + 3], true).fill({ color }).stroke({ width: 1.5, color: 0x2b241d, join: 'round' });
+      if (s.activity !== 'extinct') g.circle(x, y + 3 - h, c * 0.7).fill({ color: s.activity === 'active' ? 0xe0662a : 0x5a4a40 });
+      this.label(s.name || `(${s.kind === 'caldera' ? 'caldera' : 'volcano'})`, !s.name, x + w + 4, y - 9);
       return;
     }
     const flat = pts.flat();
     if (s.closed) {
-      if (pts.length >= 3) g.poly(flat, true).fill({ color, alpha: s.tool === 'biome' ? 0.45 : 0.3 });
+      const alpha = s.tool === 'biome' || s.tool === 'lake' ? 0.45 : s.tool === 'massif' ? 0.35 : 0.3;
+      if (pts.length >= 3) g.poly(flat, true).fill({ color, alpha });
       g.poly(flat, !live).stroke({ width: 2.5, color, alpha: 0.95, join: 'round', cap: 'round' });
+      // What it does, in its middle: a lake's name, an elevation's change.
+      const text = s.tool === 'lake' ? (s.name ?? '') : s.tool === 'elevation' ? `${(s.delta_ft ?? 0) < 0 ? '−' : '+'}${Math.abs(s.delta_ft ?? 0).toLocaleString()} ft` : '';
+      if (text && !live && pts.length >= 3) {
+        const [cx, cy] = [pts.reduce((a, p) => a + p[0], 0) / pts.length, pts.reduce((a, p) => a + p[1], 0) / pts.length];
+        this.label(text, s.tool === 'lake', cx, cy, true);
+      }
       return;
     }
     const band = Math.max(3, 2 * (s.radius_ft ?? 0) * cam.ppf);

@@ -109,9 +109,9 @@ impl T0 {
     }
 
     /// The terrain stages on a `w` × `h` grid of `cell` ft (the T0 grid, or a coarse one for
-    /// sketch previews): plates and the sketch's land, sea and ranges → erosion → heights →
-    /// volcanoes → the sketch's rivers → climate → hydrology → biomes and the sketch's paint,
-    /// and where its pins go.
+    /// sketch previews): plates and the sketch's land, sea, ranges and massifs → erosion →
+    /// heights and the sketch's elevation → volcanoes (drawn and placed) → the sketch's rivers
+    /// and lakes → climate → hydrology → biomes and the sketch's paint, and where its pins go.
     fn shape(world: &World, w: usize, h: usize, cell: f64, progress: &mut dyn FnMut(&str, f64)) -> Shaped {
         let p = world.params();
         let sea = p.sea_level_ft;
@@ -120,7 +120,7 @@ impl T0 {
         progress("plates", 0.0);
         let mut tect = plates::build(world, w, h);
         let mut thr = plates::threshold_for_fraction(&tect.crust, p.land_fraction);
-        // Drawn land and sea decide the land mask; drawn ranges add uplift.
+        // Drawn land and sea decide the land mask; drawn ranges and massifs add uplift.
         let raster = sketch::Raster { w, h, cell };
         if let Some(crust) = sketch::land_crust(world, raster, &tect.crust, thr) {
             tect.crust = crust;
@@ -129,7 +129,7 @@ impl T0 {
             // channels through it.
             tect.rift.iter_mut().for_each(|r| *r = 0.0);
         }
-        sketch::add_ranges(world, raster, &mut tect.uplift);
+        sketch::add_ranges(world, raster, &mut tect.uplift, &mut tect.reference);
         let mut land: Vec<bool> = tect.crust.iter().map(|&c| c > thr).collect();
 
         // Erosion at half resolution.
@@ -140,59 +140,92 @@ impl T0 {
         let iterations = (20.0 + 50.0 * p.erosion).round() as usize;
         let z = erosion::erode(ew, eh, &e_land, &e_up, iterations, world.stream("t0.erosion"), |f| progress("erosion", f));
 
-        // Model units → feet: the 99.5th percentile of land maps to 85% of max elevation.
-        let mut land_z: Vec<f64> = z.iter().zip(&e_land).filter(|(_, l)| **l).map(|(v, _)| *v).collect();
-        land_z.sort_by(|a, b| a.total_cmp(b));
-        let p995 = land_z.get(land_z.len() * 995 / 1000).copied().unwrap_or(1.0).max(1e-9);
+        // Model units → feet: the 99.5th percentile of land maps to 85% of max elevation. With
+        // fewer of the plates' mountains, as if they were all there (heights grow about as the
+        // uplift does), so the land left doesn't rise to fill the range of heights.
+        let quantile = |v: &[f64], q: usize| {
+            let mut on: Vec<f64> = v.iter().zip(&e_land).filter(|(_, l)| **l).map(|(v, _)| *v).collect();
+            on.sort_by(|a, b| a.total_cmp(b));
+            on.get(on.len() * q / 1000).copied().unwrap_or(1.0).max(1e-9)
+        };
+        let e_ref = if tect.reference.is_empty() { None } else { Some(downsample(w, h, &tect.reference)) };
+        let mut p995 = quantile(&z, 995);
+        if let Some(r) = &e_ref {
+            p995 *= (quantile(r, 995) / quantile(&e_up, 995)).max(1.0);
+        }
         // Lowlands fill with sediment (which stream-power alone lacks): blend weakly uplifted
         // land toward a heavily smoothed surface so plains read as plains, ranges stay rugged.
         let mut smooth = z.clone();
         for _ in 0..4 {
             smooth = blur_land(ew, eh, &smooth, &e_land, 3);
         }
-        let mut up_sorted: Vec<f64> = e_up.iter().zip(&e_land).filter(|(_, l)| **l).map(|(u, _)| *u).collect();
-        up_sorted.sort_by(|a, b| a.total_cmp(b));
-        let up_ref = up_sorted.get(up_sorted.len() * 95 / 100).copied().unwrap_or(1.0).max(1e-9);
-        let z: Vec<f64> = (0..ew * eh)
-            .map(|k| {
-                let rugged = smoothstep(0.12, 0.45, e_up[k] / up_ref);
-                smooth[k] + (z[k] - smooth[k]) * (0.25 + 0.75 * rugged)
-            })
-            .collect();
-        let zg = Grid::from_vec(ew, eh, z.iter().map(|&v| (v / p995 * 0.85 * p.max_elev_ft) as f32).collect());
+        let up_ref = quantile(e_ref.as_deref().unwrap_or(&e_up), 950);
+        // (`rough`: without the lowlands' fill, for where water would stand without it.)
+        let blend = |rough: bool| {
+            let z: Vec<f64> = if rough {
+                z.clone()
+            } else {
+                (0..ew * eh)
+                    .map(|k| {
+                        let rugged = smoothstep(0.12, 0.45, e_up[k] / up_ref);
+                        smooth[k] + (z[k] - smooth[k]) * (0.25 + 0.75 * rugged)
+                    })
+                    .collect()
+            };
+            Grid::from_vec(ew, eh, z.iter().map(|&v| (v / p995 * 0.85 * p.max_elev_ft) as f32).collect())
+        };
+        let zg = blend(false);
 
         progress("terrain", 0.0);
         let dist_land = climate::distance_to(w, h, &land);
         let (s_detail, s_kettle, s_bathy) = (world.stream("t0.detail"), world.stream("t0.kettle"), world.stream("t0.bathy"));
         let cap = 0.9 * p.max_elev_ft;
-        let (mut detail, mut kettle, mut bathy) = (Fbm::new(s_detail, 3, 2.0, 0.5), Fbm::new(s_kettle, 2, 2.0, 0.5), Fbm::new(s_bathy, 4, 2.0, 0.5));
-        let mut height = vec![0.0f64; n];
-        for j in 0..h {
-            let lat = climate::latitude(world, j, h);
-            for i in 0..w {
-                let k = j * w + i;
-                let (fi, fj) = (i as f64, j as f64);
-                if land[k] {
-                    let base = zg.sample_cubic((fi - 0.5) / 2.0, (fj - 0.5) / 2.0).max(0.0);
-                    let mut v = base * (1.0 + 0.12 * detail.at(fi / 3.0, fj / 3.0));
-                    if v > cap {
-                        // Soft ceiling: approach max elevation, never exceed it.
-                        let room = p.max_elev_ft - cap;
-                        v = cap + room * libm::tanh((v - cap) / room);
+        let heights = |zg: &Grid<f32>| {
+            let (mut detail, mut kettle, mut bathy) = (Fbm::new(s_detail, 3, 2.0, 0.5), Fbm::new(s_kettle, 2, 2.0, 0.5), Fbm::new(s_bathy, 4, 2.0, 0.5));
+            let mut height = vec![0.0f64; n];
+            for j in 0..h {
+                let lat = climate::latitude(world, j, h);
+                for i in 0..w {
+                    let k = j * w + i;
+                    let (fi, fj) = (i as f64, j as f64);
+                    if land[k] {
+                        let base = zg.sample_cubic((fi - 0.5) / 2.0, (fj - 0.5) / 2.0).max(0.0);
+                        let mut v = base * (1.0 + 0.12 * detail.at(fi / 3.0, fj / 3.0));
+                        if v > cap {
+                            // Soft ceiling: approach max elevation, never exceed it.
+                            let room = p.max_elev_ft - cap;
+                            v = cap + room * libm::tanh((v - cap) / room);
+                        }
+                        // Rift valleys subside (rift lakes); glaciated lowlands get kettle hollows.
+                        v -= tect.rift[k] * 2_200.0;
+                        if crate::core::fabs(lat) > 50.0 {
+                            v -= 160.0 * smoothstep(0.85, 0.95, kettle.at(fi / 5.0, fj / 5.0) + 0.5);
+                        }
+                        height[k] = sea + 5.0 + v;
+                    } else {
+                        let d_mi = dist_land[k] * cell / 5280.0;
+                        let depth = 60.0 + 540.0 * smoothstep(0.0, 50.0, d_mi) + 11_000.0 * smoothstep(40.0, 220.0, d_mi)
+                            + 600.0 * bathy.at(fi / 10.0, fj / 10.0)
+                            - 6_500.0 * tect.ridge[k];
+                        height[k] = sea - depth.max(20.0);
                     }
-                    // Rift valleys subside (rift lakes); glaciated lowlands get kettle hollows.
-                    v -= tect.rift[k] * 2_200.0;
-                    if crate::core::fabs(lat) > 50.0 {
-                        v -= 160.0 * smoothstep(0.85, 0.95, kettle.at(fi / 5.0, fj / 5.0) + 0.5);
-                    }
-                    height[k] = sea + 5.0 + v;
-                } else {
-                    let d_mi = dist_land[k] * cell / 5280.0;
-                    let depth = 60.0 + 540.0 * smoothstep(0.0, 50.0, d_mi) + 11_000.0 * smoothstep(40.0, 220.0, d_mi)
-                        + 600.0 * bathy.at(fi / 10.0, fj / 10.0)
-                        - 6_500.0 * tect.ridge[k];
-                    height[k] = sea - depth.max(20.0);
                 }
+            }
+            height
+        };
+        let mut height = heights(&zg);
+
+        // A sketched world holds water where its land or its sketch puts it: hollows the lowlands'
+        // fill deepened (between drawn mountains, most of all) are filled to their brims, as
+        // basins fill with sediment. Then its plateaus and basins, which cut outlets for water
+        // they would pond.
+        let rough = (!world.file.sketch.strokes.is_empty()).then(|| sketch::depths(raster, &land, &heights(&blend(true))));
+        if let Some(rough) = &rough {
+            sketch::fill(raster, &land, &mut height, rough);
+            if world.file.sketch.strokes.iter().any(|s| s.tool == crate::world::SketchTool::Elevation) {
+                let before = sketch::depths(raster, &land, &height);
+                sketch::elevate(world, raster, &land, &mut height);
+                sketch::breach(raster, &land, &mut height, &before);
             }
         }
 
@@ -214,15 +247,35 @@ impl T0 {
             }
         }
 
-        // Drawn rivers are carved downhill along their lines (and fed at their sources).
+        // Drawn rivers are carved downhill along their lines (and fed at their sources), then
+        // drawn lakes on their beds, with their outlets.
         let mut conflicts = Vec::new();
         sketch::check_ranges(world, raster, &land, &mut conflicts);
-        let feed = sketch::carve_rivers(world, raster, &mut height, &land, &mut conflicts);
+        let mut lakes = sketch::lakes(world, raster, &land, &mut conflicts);
+        let (feed, courses) = sketch::carve_rivers(world, raster, &mut height, &land, &lakes, &mut conflicts);
+        sketch::carve_lakes(world, raster, &mut height, &land, &mut lakes, &courses, &mut conflicts);
+        // (And, all drawn, no hollow holds water the land itself wouldn't but the drawn lakes and
+        // volcanoes' craters: drawn mountains, plateaus and rivers together can still make some.)
+        if let Some(mut before) = rough {
+            for k in (0..n).filter(|&k| lakes.of[k] != sketch::NONE) {
+                before[k] = f64::INFINITY;
+            }
+            for v in &volcanoes {
+                let r = (v.radius_ft / cell).ceil() as i64;
+                for j in (v.cy as i64 - r).max(0)..=(v.cy as i64 + r).min(h as i64 - 1) {
+                    for i in (v.cx as i64 - r).max(0)..=(v.cx as i64 + r).min(w as i64 - 1) {
+                        before[j as usize * w + i as usize] = f64::INFINITY;
+                    }
+                }
+            }
+            sketch::fill(raster, &land, &mut height, &before);
+        }
 
         progress("climate", 0.0);
         let clim = climate::build(world, w, h, cell, &height, &land);
         progress("rivers", 0.0);
-        let hydro = hydro::build(w, h, &mut height, &land, &clim, sea, p.river_density, &feed);
+        let drawn: Vec<(u32, bool, bool)> = lakes.list.iter().map(|l| (l.stroke as u32, l.salt, l.outflow)).collect();
+        let hydro = hydro::build(w, h, &mut height, &land, &clim, sea, p.river_density, &feed, hydro::Drawn { of: &lakes.of, lakes: &drawn, courses: &courses.channel });
 
         progress("biomes", 0.0);
         let vents = volcanoes

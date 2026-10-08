@@ -93,8 +93,12 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['L', 'land', 'Land'],
     ['S', 'sea', 'Sea'],
     ['R', 'range', 'Range'],
+    ['M', 'massif', 'Massif'],
+    ['H', 'elevation', 'Elevation'],
     ['W', 'river', 'River'],
+    ['K', 'lake', 'Lake'],
     ['B', 'biome', 'Biome'],
+    ['V', 'volcano', 'Volcano'],
     ['T', 'pin', 'Settlement'],
     ['E', 'erase', 'Erase'],
   ];

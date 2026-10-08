@@ -15,6 +15,7 @@ export const DEFAULT_PARAMS: WorldParams = {
   max_elev_ft: 14000,
   land_fraction: 0.45,
   ruggedness: 1,
+  procedural_mountains: 1,
   plate_count: 14,
   erosion: 1,
   lat_top: 62,
@@ -127,10 +128,16 @@ function hash64(text: string): string {
   return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
 }
 
+/** Parameters added after worlds were first keyed: part of the key only when changed, so every
+ * older world keeps its key (and its edits). */
+const LATER_PARAMS = new Set(['procedural_mountains']);
+
 /** A key for a world's seed and parameters. */
 export function worldKey(w: WorldFile): string {
   const p = { ...DEFAULT_PARAMS, ...w.params } as Record<string, unknown>;
-  return hash64(JSON.stringify([w.seed >>> 0, Object.keys(DEFAULT_PARAMS).map((k) => p[k])]));
+  const d = DEFAULT_PARAMS as unknown as Record<string, unknown>;
+  const keys = Object.keys(DEFAULT_PARAMS).filter((k) => !LATER_PARAMS.has(k) || JSON.stringify(p[k]) !== JSON.stringify(d[k]));
+  return hash64(JSON.stringify([w.seed >>> 0, keys.map((k) => p[k])]));
 }
 
 /** Whether `v` as JSON is at most `max` characters, measured entry by entry (a big world's edits

@@ -283,6 +283,14 @@ impl Builder<'_> {
         }
     }
 
+    /// The feature just pushed keeps the name drawn with it (if its stroke has one).
+    fn drawn_name(&mut self, stroke: Option<u32>) {
+        let name = stroke.and_then(|i| self.inp.world.file.sketch.strokes.get(i as usize)).and_then(|s| s.name.as_deref()).map(str::trim).filter(|n| !n.is_empty());
+        if let Some(name) = name {
+            self.out.features.last_mut().expect("just pushed").name = name.to_string();
+        }
+    }
+
     fn above_sea(&self, k: usize) -> f64 {
         self.inp.height[k] - self.inp.world.params().sea_level_ft
     }
@@ -545,11 +553,22 @@ impl Builder<'_> {
         let vs: Vec<Volcano> = self.inp.volcanoes.to_vec();
         for v in vs {
             let k = v.cy as usize * self.inp.w + v.cx as usize;
-            let elev = self.above_sea(k);
+            let mut elev = self.above_sea(k);
+            if v.kind == VolcanoKind::Caldera {
+                // (Its height is its rim's, round the crater.)
+                let r = (v.radius_ft / self.inp.cell_ft).ceil() as i64;
+                let (ci, cj) = (v.cx as i64, v.cy as i64);
+                for j in (cj - r).max(0)..=(cj + r).min(self.inp.h as i64 - 1) {
+                    for i in (ci - r).max(0)..=(ci + r).min(self.inp.w as i64 - 1) {
+                        elev = elev.max(self.above_sea(j as usize * self.inp.w + i as usize));
+                    }
+                }
+            }
             let kind = match v.kind {
                 VolcanoKind::Stratovolcano => "stratovolcano",
                 VolcanoKind::Shield => "shield volcano",
                 VolcanoKind::CinderCone => "cinder cone",
+                VolcanoKind::Caldera => "caldera",
             };
             let act = match v.activity {
                 Activity::Active => "active",
@@ -559,6 +578,7 @@ impl Builder<'_> {
             let detail = format!("{act} {kind}, {} ft", fmt_thousands(elev));
             self.push("volcano", NameKind::Volcano, v.cx, v.cy, 0.0, v.radius_ft * 4.0, Some(elev.round()), Some(detail));
             self.radius(v.radius_ft);
+            self.drawn_name(v.stroke);
         }
     }
 
@@ -582,6 +602,7 @@ impl Builder<'_> {
             let elev = lake.level_ft - inp.world.params().sea_level_ft;
             self.push(kind, nk, ax, ay, angle, extent, Some(elev.round()), None);
             self.covers(inp.w, inp.cell_ft, &lake.cells);
+            self.drawn_name(lake.stroke);
         }
     }
 

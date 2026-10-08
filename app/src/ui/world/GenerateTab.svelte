@@ -48,6 +48,7 @@
       open: false,
       sliders: [
         ['ruggedness', 'Ruggedness', 0.1, 2.5, 0.05, times],
+        ['procedural_mountains', 'Generated mountains', 0, 1, 0.05, (v) => (v >= 0.999 ? 'All' : v <= 0.001 ? 'None' : `${Math.round(v * 100)}%`)],
         ['max_elev_ft', 'Highest peaks', 4000, 25000, 500, (v) => `${v.toLocaleString()} ft`],
         ['erosion', 'Erosion (age)', 0, 2, 0.05, times],
         ['plate_count', 'Tectonic plates', 4, 40, 1, (v) => `${v}`],

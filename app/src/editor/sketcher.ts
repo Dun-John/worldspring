@@ -1,34 +1,50 @@
 // The sketch being drawn (before it is generated): tools and their settings, freehand strokes
 // from pointer input (thinned while drawing, simplified when done), erasing and undo.
-import type { Stroke } from '../gen/protocol';
+import type { Stroke, VolcanoActivity, VolcanoKind } from '../gen/protocol';
 
 export const MI = 5280;
 
 /** Editor tools; each makes strokes of one kind (`erase` removes them). */
-export type EditTool = 'coast' | 'land' | 'sea' | 'range' | 'river' | 'biome' | 'pin' | 'erase';
+export type EditTool = 'coast' | 'land' | 'sea' | 'range' | 'massif' | 'elevation' | 'river' | 'lake' | 'biome' | 'volcano' | 'pin' | 'erase';
+
+/** Tools that draw a closed outline (always filled). */
+const OUTLINES: EditTool[] = ['coast', 'massif', 'elevation', 'lake'];
 
 export type PinTier = 'metropolis' | 'city' | 'town' | 'village';
 
 export interface ToolSettings {
   tool: EditTool;
-  /** Brush radius (mi) per tool: band half-width, a range's half-width, a river's valley. */
+  /** Brush radius (mi) per tool: band half-width, a range's half-width, a river's valley, a
+   * massif's foothills, an elevation's edge. */
   radiusMi: Record<string, number>;
-  /** 0..1: a range's height, a river's size. */
+  /** 0..1: a range's or massif's height, a river's or volcano's size. */
   strength: number;
+  /** Elevation: ft raised (negative: lowered). */
+  delta: number;
+  /** Lakes: the water's level (ft above sea level), or null for its shore's lowest point. */
+  level: number | null;
+  salt: boolean;
+  volcano: VolcanoKind;
+  activity: VolcanoActivity;
   /** Exact edges instead of natural ones. */
   hard: boolean;
   biome: string;
   /** Biome strokes: fill the drawn outline instead of brushing along the line. */
   fill: boolean;
   tier: PinTier;
-  /** The next pin's name (empty: generated). */
+  /** The next settlement's, lake's or volcano's name (empty: generated). */
   name: string;
 }
 
 export const DEFAULT_SETTINGS: ToolSettings = {
   tool: 'coast',
-  radiusMi: { land: 15, sea: 10, range: 15, river: 3, biome: 20 },
+  radiusMi: { land: 15, sea: 10, range: 15, river: 3, biome: 20, massif: 10, elevation: 10 },
   strength: 0.7,
+  delta: 1000,
+  level: null,
+  salt: false,
+  volcano: 'strato',
+  activity: 'active',
   hard: false,
   biome: 'temperate_forest',
   fill: true,
@@ -141,22 +157,26 @@ export class Sketcher {
       if (best >= 0) this.commit(this.strokes.filter((_, k) => k !== best));
       return;
     }
-    if (t.tool === 'pin') {
-      const name = t.name.trim();
-      this.commit([...this.strokes, { tool: 'pin', pts: [[Math.round(x), Math.round(y)]], tier: t.tier, ...(name ? { name } : {}) }]);
+    const name = t.name.trim();
+    if (t.tool === 'pin' || t.tool === 'volcano') {
+      const at: [number, number] = [Math.round(x), Math.round(y)];
+      const s: Stroke = t.tool === 'pin' ? { tool: 'pin', pts: [at], tier: t.tier } : { tool: 'volcano', pts: [at], kind: t.volcano, activity: t.activity, strength: t.strength };
+      this.commit([...this.strokes, { ...s, ...(name ? { name } : {}) }]);
       this.settings.name = '';
       return;
     }
     const tool = t.tool === 'coast' ? 'land' : t.tool;
-    const closed = t.tool === 'coast' || (t.tool === 'biome' && t.fill);
+    const closed = OUTLINES.includes(t.tool) || (t.tool === 'biome' && t.fill);
     this.drawing = {
       tool,
       pts: [[x, y]],
       ...(closed ? { closed } : {}),
       radius_ft: (t.radiusMi[tool] ?? 10) * MI,
-      ...(tool === 'range' || tool === 'river' ? { strength: t.strength } : {}),
-      ...(t.hard && tool !== 'range' && tool !== 'river' ? { hard: true } : {}),
+      ...(tool === 'range' || tool === 'river' || tool === 'massif' ? { strength: t.strength } : {}),
+      ...(t.hard && ['land', 'sea', 'biome', 'elevation'].includes(tool) ? { hard: true } : {}),
       ...(tool === 'biome' ? { biome: t.biome } : {}),
+      ...(tool === 'elevation' ? { delta_ft: t.delta } : {}),
+      ...(tool === 'lake' ? { ...(t.level !== null ? { level_ft: t.level } : {}), ...(t.salt ? { salt: true } : {}), ...(name ? { name } : {}) } : {}),
     };
     this.onDraw();
   }
@@ -183,6 +203,7 @@ export class Sketcher {
     }
     if (pts.length === 1 && !d.closed) pts = [pts[0], [pts[0][0] + 10, pts[0][1]]];
     this.commit([...this.strokes, { ...d, pts }]);
+    if (d.name) this.settings.name = '';
   }
 
   cancel() {

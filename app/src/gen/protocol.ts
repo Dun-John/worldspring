@@ -12,6 +12,8 @@ export interface WorldParams {
   max_elev_ft: number;
   land_fraction: number;
   ruggedness: number;
+  /** 0..1: how much of the plates' own mountain building is kept (0: only drawn mountains). */
+  procedural_mountains: number;
   plate_count: number;
   erosion: number;
   lat_top: number;
@@ -36,21 +38,35 @@ export interface WorldFile {
   edits?: Edits;
 }
 
-export type SketchTool = 'land' | 'sea' | 'range' | 'river' | 'biome' | 'pin';
+export type SketchTool = 'land' | 'sea' | 'range' | 'river' | 'biome' | 'pin' | 'massif' | 'elevation' | 'lake' | 'volcano';
+
+export type VolcanoKind = 'strato' | 'shield' | 'cinder' | 'caldera';
+export type VolcanoActivity = 'active' | 'dormant' | 'extinct';
 
 /** A stroke of a sketch (`worldgen::world::Stroke`); points are world ft. */
 export interface Stroke {
   tool: SketchTool;
   pts: [number, number][];
-  /** Land, sea, biome: the outline is filled. */
+  /** Land, sea, biome: the outline is filled (massif, elevation and lake strokes always are). */
   closed?: boolean;
+  /** Brush radius; a massif's foothills, an elevation's edge. */
   radius_ft?: number;
-  /** 0..1: a range's height, a river's size. */
+  /** 0..1: a range's or massif's height, a river's or volcano's size. */
   strength?: number;
   hard?: boolean;
   biome?: string;
   tier?: 'metropolis' | 'city' | 'town' | 'village';
+  /** Pins, lakes, volcanoes. */
   name?: string;
+  /** Massifs: the ridges' direction (degrees; else the outline's long axis). */
+  trend?: number;
+  /** Elevation: ft raised (negative: lowered). */
+  delta_ft?: number;
+  /** Lakes: the water's level (ft above sea level; else its shore's lowest point). */
+  level_ft?: number;
+  salt?: boolean;
+  kind?: VolcanoKind;
+  activity?: VolcanoActivity;
 }
 
 export interface Sketch {

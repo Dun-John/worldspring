@@ -1,7 +1,8 @@
 //! Hydrology on the T0 grid: lakes, water balance, rivers.
 //!
-//! - Depressions from priority-flood become lakes when large and deep enough; small ones are
-//!   filled, so every other land cell drains downhill to the sea or a lake.
+//! - Depressions from priority-flood become lakes when large and deep enough, or drawn (the
+//!   sketch's lakes, carved before); small ones are filled, so every other land cell drains
+//!   downhill to the sea or a lake.
 //! - Runoff (precipitation minus evapotranspiration) is accumulated downstream. Open water
 //!   evaporates, so a lake in a dry basin can lose all its inflow: an endorheic salt lake or,
 //!   when very dry, a salt flat. Desert streams lose water and fade out.
@@ -20,7 +21,7 @@ pub const NO_LAKE: u32 = u32::MAX;
 
 /// Discharge (mm·cells) at which a stream is mapped as a river, before `river_density`.
 pub const RIVER_Q: f64 = 90_000.0;
-const MIN_LAKE_CELLS: usize = 12;
+pub(crate) const MIN_LAKE_CELLS: usize = 12;
 const MIN_LAKE_DEPTH_FT: f64 = 60.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -39,6 +40,18 @@ pub struct Lake {
     pub cells: Vec<u32>,
     pub kind: LakeKind,
     pub max_depth_ft: f64,
+    /// The sketch stroke that drew it.
+    pub stroke: Option<u32>,
+}
+
+/// What the sketch draws: per cell, the drawn lake it is in (`NO_LAKE` if none; may be empty);
+/// per drawn lake, its stroke, whether it is salt and whether a river is drawn out of it; the
+/// cells of drawn rivers' courses (may be empty).
+#[derive(Clone, Copy)]
+pub struct Drawn<'a> {
+    pub of: &'a [u32],
+    pub lakes: &'a [(u32, bool, bool)],
+    pub courses: &'a [bool],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,8 +84,11 @@ pub struct Hydro {
     pub rivers: Vec<River>,
 }
 
-/// `feed`: extra discharge entering at cells (sketched rivers' sources).
-pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Climate, sea: f64, river_density: f64, feed: &[(usize, f64)]) -> Hydro {
+/// `feed`: extra discharge entering at cells (sketched rivers' sources); `drawn`: the sketch's
+/// lakes (always lakes; a salt one has no outflow, one a river is drawn out of is fresh, and
+/// none dries to a salt flat) and rivers (which lose no water in dry country).
+#[allow(clippy::too_many_arguments)]
+pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Climate, sea: f64, river_density: f64, feed: &[(usize, f64)], drawn: Drawn) -> Hydro {
     let n = w * h;
     let outlet: Vec<bool> = land.iter().map(|l| !l).collect();
     let fl = priority_flood(w, h, height, &outlet, 0.01);
@@ -99,13 +115,14 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
             }
         }
         let depth = comp.iter().map(|&c| fl.filled[c as usize] - height[c as usize]).fold(0.0, f64::max);
-        if comp.len() >= MIN_LAKE_CELLS && depth >= MIN_LAKE_DEPTH_FT {
+        let drawn_as = comp.iter().find_map(|&c| drawn.of.get(c as usize).copied().filter(|&l| l != NO_LAKE));
+        if drawn_as.is_some() || (comp.len() >= MIN_LAKE_CELLS && depth >= MIN_LAKE_DEPTH_FT) {
             let level = comp.iter().map(|&c| fl.filled[c as usize]).fold(f64::INFINITY, f64::min);
             let id = lakes.len() as u32;
             for &c in &comp {
                 lake_of[c as usize] = id;
             }
-            lakes.push(Lake { level_ft: level, cells: comp, kind: LakeKind::Fresh, max_depth_ft: depth });
+            lakes.push(Lake { level_ft: level, cells: comp, kind: LakeKind::Fresh, max_depth_ft: depth, stroke: drawn_as.map(|l| drawn.lakes[l as usize].0) });
         }
     }
     // Fill every non-lake cell to the flooded surface: guarantees strictly downhill drainage.
@@ -119,6 +136,9 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
 
     // Water balance. `raw` ignores losses (catchment supply); `q` includes them.
     let pet: Vec<f64> = clim.temp.iter().map(|&t| (350.0 + 55.0 * t as f64).max(0.0)).collect();
+    let salt = |l: &Lake| l.stroke.is_some_and(|st| drawn.lakes.iter().any(|d| d.0 == st && d.1));
+    let drains = |l: &Lake| l.stroke.is_some_and(|st| drawn.lakes.iter().any(|d| d.0 == st && d.2));
+    let closed: Vec<bool> = lakes.iter().map(salt).collect();
     let mut q = vec![0.0f64; n];
     let mut raw = vec![0.0f64; n];
     for &(k, v) in feed {
@@ -132,8 +152,9 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
         q[i] += runoff;
         raw[i] += runoff;
         if lake_of[i] != NO_LAKE {
-            q[i] = (q[i] - pet[i]).max(0.0);
-        } else if p < 400.0 {
+            // (A drawn salt lake loses all its water.)
+            q[i] = if closed[lake_of[i] as usize] { 0.0 } else { (q[i] - pet[i]).max(0.0) };
+        } else if p < 400.0 && !drawn.courses.get(i).is_some_and(|&c| c) {
             q[i] *= 0.985; // transmission loss in dry country
         }
         let r = rec[i] as usize;
@@ -151,10 +172,13 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
         // Only dry climates make salt lakes; elsewhere small closed basins stay fresh
         // (groundwater seepage), like glacial kettle ponds.
         let precip = lake.cells.iter().map(|&c| clim.precip[c as usize] as f64).sum::<f64>() / lake.cells.len() as f64;
-        lake.kind = if precip > 550.0 {
+        lake.kind = if salt(lake) {
+            LakeKind::Salt
+        } else if precip > 550.0 || drains(lake) {
             LakeKind::Fresh
         } else if ratio < 0.35 {
-            LakeKind::SaltFlat
+            // (A drawn lake keeps its water.)
+            if lake.stroke.is_some() { LakeKind::Salt } else { LakeKind::SaltFlat }
         } else if q[exit] <= 0.0 {
             LakeKind::Salt
         } else {

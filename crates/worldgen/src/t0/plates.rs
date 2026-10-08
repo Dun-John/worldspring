@@ -16,6 +16,9 @@ pub struct Tectonics {
     pub crust: Vec<f64>,
     /// Rock uplift rate, roughly 0..1.5.
     pub uplift: Vec<f64>,
+    /// The uplift with all the plates' mountains (`procedural_mountains` 1), when fewer are
+    /// kept (else empty): heights are scaled as if they were there, so the plains stay low.
+    pub reference: Vec<f64>,
     /// Divergence on continental crust (rift valleys), 0..1.
     pub rift: Vec<f64>,
     /// Divergent ocean boundaries (mid-ocean ridges), 0..1.
@@ -120,6 +123,7 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
         h,
         crust: vec![0.0; n],
         uplift: vec![0.0; n],
+        reference: if p.procedural_mountains < 1.0 { vec![0.0; n] } else { Vec::new() },
         rift: vec![0.0; n],
         ridge: vec![0.0; n],
         arc: vec![0.0; n],
@@ -176,7 +180,8 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
         }
 
         // Interior: gentle hills everywhere plus a few ancient, worn ranges.
-        up += 0.01 + 0.04 * (0.5 + 0.5 * base.at(q[0] * 3.0, q[1] * 3.0));
+        let hills = 0.01 + 0.04 * (0.5 + 0.5 * base.at(q[0] * 3.0, q[1] * 3.0));
+        up += hills;
         let old = old_r.at(q[0] * 2.5, q[1] * 2.5);
         up += 0.35 * old * old * smoothstep(0.15, 0.5, age.at(q[0] * 1.5, q[1] * 1.5));
 
@@ -196,7 +201,14 @@ pub fn build(world: &World, w: usize, h: usize) -> Tectonics {
         crust -= 1.5 * smoothstep(0.8, 1.1, crate::core::sqrt(ex * ex + ey * ey));
 
         t.crust[idx] = crust;
-        t.uplift[idx] = up * p.ruggedness.max(0.02);
+        let rugged = p.ruggedness.max(0.02);
+        if t.reference.is_empty() {
+            t.uplift[idx] = up * rugged;
+        } else {
+            // Only the hills stay whole: ranges, old ranges and hotspots are scaled.
+            t.uplift[idx] = (hills + p.procedural_mountains * (up - hills)) * rugged;
+            t.reference[idx] = up * rugged;
+        }
     }
     t
 }
