@@ -36,7 +36,8 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
     regions, and the generator follows; or have only the roads you draw); save worlds and open them again.
   - **Edit**: rename anything, place your own towns and sites, draw buildings, change or remove a town's own (or
     clear a whole ward to build your own), raise castles and walls anywhere, put down bridges, fords and ferries,
-    design dungeons room by room, and put down or clear objects on battlemaps (your own pictures too).
+    design dungeons and the insides of buildings room by room (walls, doors, stairs, furniture), and put down or
+    clear objects on battlemaps (your own pictures too).
   - **Notes**: your notebook for the people and plots of your campaign, pinned to places on the map.
   - **Play**: run a session at the table. Tokens, fog of war, line of sight, lights, doors and secret doors, and a
     second **players' window** to put on a TV or another screen. It shows only what the players have seen.

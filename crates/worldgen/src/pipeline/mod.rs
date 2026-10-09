@@ -208,5 +208,18 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         let json = design::design_json(&ex.world, &ex.t0, &id, Some(&serde_json::to_string(&d).unwrap_or_default()), Some(r#"{"doors":null}"#));
         writeln!(out, "design/{id} {:016x} {:016x}", fnv64(text.as_bytes()), fnv64(json.as_bytes())).unwrap();
     }
+    // A building's interior designed: its first room of every level furnished again, the plan
+    // as text, then built again a storey taller, with its problems.
+    let house = crate::town::layout(&ex.world, &ex.t0, 0).buildings.iter().find(|b| b.structure == crate::town::Structure::Roofed && b.floors >= 2).map(|b| (format!("b:0:{}", b.id), b.floors));
+    if let Some((id, floors)) = house
+        && let Ok(mut d) = design::design_of(&ex.world, &ex.t0, &id, true)
+    {
+        for li in 0..d.levels.len() {
+            d.furnish(li, 0, 7);
+        }
+        let text = design::to_text(&d, &|_, _| None).unwrap_or_default();
+        let json = design::design_json(&ex.world, &ex.t0, &id, Some(&serde_json::to_string(&d).unwrap_or_default()), Some(&format!(r#"{{"refit":{}}}"#, floors + 1)));
+        writeln!(out, "design/{id} {:016x} {:016x}", fnv64(text.as_bytes()), fnv64(json.as_bytes())).unwrap();
+    }
     Ok(out)
 }

@@ -87,6 +87,8 @@ A summary of the world:
 - `roads`: `generated and drawn`, or `only drawn` (see "Worlds with only drawn roads");
 - `buildings_changed`, and `buildings_set_aside`: changes to the world's own buildings that no longer apply
   because the town was laid out anew (each with why);
+- `designs_set_aside`: buildings' interiors designed by hand that are not built (the building's footprint or
+  storeys changed, or it is gone, or the design breaks a rule now), each with why;
 - `world`: its hash, for the `world` parameter of other tools.
 
 | Parameter | Type | Default | |
@@ -853,7 +855,83 @@ level 2: Level 2 · the deep
 > vault beyond it as the boss chamber, furnished."*
 
 ### `reset_site_design`
-`id`: the site as generated again.
+`id`: the site (or a building's interior) as generated again.
+
+## Building interiors designed by hand
+
+Any roofed building (`b:<layout>:<id>`: the world's own and those drawn by hand) can have its interior
+**redesigned** the same way, by the user (the app's designer: *Design this building* inside it) or by agents,
+with the same three tools. The first change copies the generated interior; from then on the world builds the
+design. Walls are where rooms meet: a room is split by giving a line of its squares to a new room (the wall
+runs between them), and two rooms become one by giving one's squares to the other. The outer walls follow the
+footprint, and windows are worked out as for a generated interior. The cellar's ways to other sites (a trapdoor
+to the sewers, stairs down to a keep's deep dungeons) are put back on its free floor when it is built.
+
+A design is made for the building as it is: its grid, footprint and storeys. When the footprint changes (or the
+building is made a ruin) the design is **set aside**: the generated interior stands, `get_site_design` says so
+(`set_aside`), `get_feature` gives `interior_designed`, and `world_overview` lists it in `designs_set_aside`;
+put the footprint back and it applies again. When only the storeys change (`update_building` with `floors`),
+the design follows in the same change: the floors both have stay as designed, new storeys come as generated.
+
+The rules (the ones every generated interior is tested against):
+
+- one ground floor (`level 0`) with one front door, onto open ground (not into the building next door); doors
+  to the outside (front and back doors) only on the ground floor, each onto open ground;
+- the stair block (1 to 3 squares each way) on floor on every level it reaches;
+- squares only inside the footprint;
+- no furniture off the floor, on another piece, on the stairs or in a doorway (either side of a door);
+- every room and every door reached from the stairs (on a keep's tower tops, from its spiral stairs), through
+  doors between rooms, around furniture that blocks movement;
+- the cellar has free floor for its ways to other sites.
+
+**The plan:**
+
+```text
+building · 7 x 6 squares · 3 levels · stairs 1,1 2x1
+
+level 1: Upper floor
+rooms: a=bedroom; b=bedroom
+grid:
+aaaaabb
+…
+
+level 0: Ground floor
+rooms: a=main room; b=kitchen
+grid:
+aaaaabb
+aaaaabb
+aaaaabb
+aaaaabb
+.aaaabb
+.....bb
+doors: 4,2 e; 2,4 s front; 1,4 s back
+items: hearth 1,0 2x1; table 2,3 2x1; chest 0,3; bench 3,0 2x1; oven 6,0 1x2; shelf 5,5 2x1; barrel 6,4
+
+level -1: Cellar
+…
+```
+
+- The header gives the grid, how many levels and the stair block (`stairs x,y wxh`: change it there to move or
+  resize the stairs).
+- Levels go by storey: `level -1` the cellar, `level 0` the ground floor, `level 1` and up the floors above (an
+  open roof and a keep's tower tops are the storeys above its top floor). They follow the building's storeys:
+  a plan can't add or take away levels.
+- `grid:` as for a site, `.` outside the walls.
+- `doors:` `x,y e|s|w|n` is a door on the east, south, west or north edge of square x,y; `secret` makes a door
+  between rooms a secret door; on an outside wall `front` (one, on the ground floor) or `back`. `doors: auto`
+  keeps the level's doors to the outside and adds inner doors wherever a room would be shut off.
+- `items:` furniture by kind or name: `bed`, `table`, `chair`, `long_table`, `bar`, `counter`, `hearth`,
+  `oven`, `shelf`, `bookcase`, `chest`, `wardrobe`, `barrel`, `crate`, `workbench`, `forge`, `anvil`, `altar`,
+  `pew`, `statue`, `rug`, `couch`, `desk`, `cage`, `spiral_stair`… (the designer's furniture list shows them
+  all, with cover and whether they block movement).
+- Room kinds as the generator names rooms in buildings: `main room`, `kitchen`, `bedroom`, `common room`,
+  `storeroom`, `shop`, `workshop`, `forge`, `nave`, `great hall`, `guardroom`, `study`, `library`… A kind it
+  doesn't know becomes a chamber named as written.
+
+```json
+{ "name": "set_site_design", "arguments": { "id": "b:23:70", "text": "level 0\ndoors: 4,2 e; 2,4 s front; 1,4 s back" } }
+```
+> *"Give the house by the well a back door out of its main room."*
 
 ---
 
@@ -915,5 +993,7 @@ It also answers `initialize`, `ping` and `tools/list`.
 | `under a ruin: …` / `under an entrance: …` / `'under' is for ruins and entrances` | Only ruins and entrances choose what lies beneath them. |
 | `themes for a …: …` / `size must be …` / `levels: 1 to 6` / `… has nothing underground` | `create_feature` options that don't fit the site. |
 | `not saved: …` | `set_site_design`: the plan breaks a rule play mode needs (the reasons follow). |
-| `only underground sites (u:<layout>:<k>) can be designed` / `a city's sewers can't be designed` | `get_site_design` / `set_site_design` take `u:` sites, not sewers, keeps' deep dungeons or buildings. |
+| `only underground sites (u:<layout>:<k>) can be designed` / `a city's sewers can't be designed` | `get_site_design` / `set_site_design` take `u:` sites and `b:` buildings, not sewers or keeps' deep dungeons. |
+| `a ruin or a yard has no inside to design` | Only roofed buildings have interiors. |
+| `a building's levels follow its storeys` | A building's plan can't add or take away levels: change its storeys with `update_building`. |
 | `'x' at 4,7 is not in its rooms list` / `level 3 is new: give its grid` | A plan that can't be read. |

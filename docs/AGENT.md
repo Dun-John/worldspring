@@ -106,9 +106,9 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | `restore_building` | Put one of the world's own buildings back as generated. |
 | `place_crossing` | Put a bridge, ford or ferry down `from` one bank `to` the other (`[x_ft, y_ft]` each; 10 to 2000 ft, a ferry at least 68; `width_ft` 5 to 40, default 12): a bridge's plank deck clear of the water, a ford's bed at wading depth under stepping stones, a ferry's jetties with a raft on a rope between. With `id`, changes that one. Returns its `v:` id. |
 | `list_crossings`, `remove_crossings` | The crossings put down by hand; take some away by id. |
-| `get_site_design` | An underground site (`u:`) as a text plan: rooms by symbol, one character per 5-ft square, doors, items and the ways between levels. |
-| `set_site_design` | Change a site from a plan (any part of it; `doors: auto`; `furnish`; levels added below). Refused when it breaks a rule play mode needs (one way in, ways down over ways up, every square reachable). |
-| `reset_site_design` | The site as generated again. |
+| `get_site_design` | An underground site (`u:`) or a building's interior (`b:`) as a text plan: rooms by symbol, one character per 5-ft square, doors, items and the ways between levels (a building's: its stair block, levels by storey, doors to the outside). |
+| `set_site_design` | Change a site or a building's interior from a plan (any part of it; `doors: auto`; `furnish`; a site's levels added below). Refused when it breaks a rule play mode needs (a site's one way in, ways down over ways up, every square reachable; a building's one front door onto open ground, the stairs on floor, every room reached). A building's design is set aside when its footprint changes, and follows a change of storeys. |
+| `reset_site_design` | The site or the building's interior as generated again. |
 | `batch` | Many edit tools as one change (`steps`: `{tool, arguments}` each): later steps see earlier ones (a site created in step 3 can be renamed in step 4), one save, one log entry, one notice in the app. If a step fails, nothing changes. |
 
 `render_view` and `focus_view` need the app open. The other tools work without it. `get_feature` and
@@ -129,7 +129,7 @@ Edits are layered over the generated world. The world file is seed + parameters 
 | `objects` | Battlemap objects put down by hand, by `o:<id>`: kind, x, y (ft), rot, scale, variant. |
 | `cleared` | Generated objects taken away, by `x:<id>`: one by kind and place, or all within `r` ft. |
 | `sprites` | Uploaded sprites by asset id: name, size, cover, blocks_move, blocks_sight, difficult, height_ft. |
-| `designs` | Underground sites designed by hand, by site id: the grid's place, and per level its squares (run-length encoded), rooms, doors and items. Built instead of the generated site. |
+| `designs` | Underground sites and building interiors designed by hand, by site or building id: the grid's place, and per level its squares (run-length encoded), rooms, doors and items (a building's also its stair block and what it was made for). Built instead of the generated one. |
 | `crossings` | Crossings put down by hand, by `v:<id>`: kind (bridge, ford, ferry), ends `a` and `b` (ft), width. |
 | `buildings` | The world's own buildings changed or taken away, by `b:<layout>:<id>`: `at` (its middle as generated; the change is set aside if another building stands at that id after the town is laid out anew), `removed`, `func`, `floors`, `poly`, `roof`, `tint`, `structure`. |
 

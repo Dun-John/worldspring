@@ -10,6 +10,8 @@
 
 use serde::Serialize;
 
+pub mod design;
+
 use crate::World;
 use crate::core::rng::{Pcg32, hash3};
 use crate::t0::T0;
@@ -330,59 +332,61 @@ fn big_room(kind: &str) -> bool {
 // ---------------------------------------------------------------------------------------
 // Furniture.
 
+/// Furniture: (kind, display name, cover, blocks movement, height ft).
+pub const FURNITURE: &[(&str, &str, u8, bool, f32)] = &[
+    ("bed", "bed", 1, false, 2.0),
+    ("chest", "chest", 1, true, 2.5),
+    ("wardrobe", "wardrobe", 3, true, 7.0),
+    ("table", "table", 1, true, 3.0),
+    ("long_table", "long table", 1, true, 3.0),
+    ("desk", "desk", 1, true, 3.0),
+    ("bench", "bench", 0, false, 1.5),
+    ("pew", "pew", 1, false, 3.0),
+    ("bar", "bar counter", 2, true, 4.0),
+    ("counter", "counter", 2, true, 4.0),
+    ("hearth", "hearth", 2, true, 5.0),
+    ("oven", "oven", 2, true, 5.0),
+    ("shelf", "shelves", 2, true, 7.0),
+    ("bookcase", "bookcase", 3, true, 8.0),
+    ("barrel", "barrel", 1, true, 3.5),
+    ("keg_rack", "keg rack", 2, true, 5.0),
+    ("crate", "crate stack", 2, true, 5.0),
+    ("workbench", "workbench", 1, true, 3.0),
+    ("forge", "forge", 2, true, 5.0),
+    ("anvil", "anvil", 1, true, 3.0),
+    ("weapon_rack", "weapon rack", 1, true, 6.0),
+    ("altar", "altar", 2, true, 4.0),
+    ("statue", "statue", 3, true, 9.0),
+    ("sarcophagus", "sarcophagus", 2, true, 3.5),
+    ("cage", "iron cage", 1, true, 7.0),
+    ("throne", "throne", 1, true, 5.0),
+    ("rug", "rug", 0, false, 0.0),
+    ("couch", "couch", 1, true, 3.0),
+    ("cauldron", "cauldron", 1, true, 3.0),
+    ("alchemy_bench", "alchemy bench", 1, true, 3.5),
+    ("telescope", "telescope", 1, true, 6.0),
+    ("bell", "bell", 3, true, 6.0),
+    ("bath", "bath", 1, true, 2.0),
+    ("cot", "cot", 0, false, 1.5),
+    ("pillar", "pillar", 3, true, 10.0),
+    ("barricade", "barricade", 2, true, 4.0),
+    ("display", "display table", 1, true, 3.0),
+    ("vat", "brewing vat", 2, true, 6.0),
+    ("chair", "chair", 0, false, 3.0),
+    ("spiral_stair", "spiral stairs", 0, false, 0.0),
+    ("rack", "rack", 1, true, 3.0),
+    ("bucket", "slop bucket", 0, false, 1.0),
+    ("booth_table", "booth table", 1, true, 3.0),
+    ("booth_seat", "booth seat", 1, false, 3.5),
+    ("trapdoor", "trapdoor (to the undercroft)", 0, false, 0.0),
+    ("winch", "portcullis winch", 1, true, 4.0),
+    ("sideboard", "sideboard", 1, true, 3.5),
+    ("stage", "stage", 0, false, 2.0),
+];
+
 /// (kind, display name, cover, blocks movement, height ft).
 fn item_info(kind: &'static str) -> (&'static str, u8, bool, f32) {
-    match kind {
-        "bed" => ("bed", 1, false, 2.0),
-        "chest" => ("chest", 1, true, 2.5),
-        "wardrobe" => ("wardrobe", 3, true, 7.0),
-        "table" => ("table", 1, true, 3.0),
-        "long_table" => ("long table", 1, true, 3.0),
-        "desk" => ("desk", 1, true, 3.0),
-        "bench" => ("bench", 0, false, 1.5),
-        "pew" => ("pew", 1, false, 3.0),
-        "bar" => ("bar counter", 2, true, 4.0),
-        "counter" => ("counter", 2, true, 4.0),
-        "hearth" => ("hearth", 2, true, 5.0),
-        "oven" => ("oven", 2, true, 5.0),
-        "shelf" => ("shelves", 2, true, 7.0),
-        "bookcase" => ("bookcase", 3, true, 8.0),
-        "barrel" => ("barrel", 1, true, 3.5),
-        "keg_rack" => ("keg rack", 2, true, 5.0),
-        "crate" => ("crate stack", 2, true, 5.0),
-        "workbench" => ("workbench", 1, true, 3.0),
-        "forge" => ("forge", 2, true, 5.0),
-        "anvil" => ("anvil", 1, true, 3.0),
-        "weapon_rack" => ("weapon rack", 1, true, 6.0),
-        "altar" => ("altar", 2, true, 4.0),
-        "statue" => ("statue", 3, true, 9.0),
-        "sarcophagus" => ("sarcophagus", 2, true, 3.5),
-        "cage" => ("iron cage", 1, true, 7.0),
-        "throne" => ("throne", 1, true, 5.0),
-        "rug" => ("rug", 0, false, 0.0),
-        "couch" => ("couch", 1, true, 3.0),
-        "cauldron" => ("cauldron", 1, true, 3.0),
-        "alchemy_bench" => ("alchemy bench", 1, true, 3.5),
-        "telescope" => ("telescope", 1, true, 6.0),
-        "bell" => ("bell", 3, true, 6.0),
-        "bath" => ("bath", 1, true, 2.0),
-        "cot" => ("cot", 0, false, 1.5),
-        "pillar" => ("pillar", 3, true, 10.0),
-        "barricade" => ("barricade", 2, true, 4.0),
-        "display" => ("display table", 1, true, 3.0),
-        "vat" => ("brewing vat", 2, true, 6.0),
-        "chair" => ("chair", 0, false, 3.0),
-        "spiral_stair" => ("spiral stairs", 0, false, 0.0),
-        "rack" => ("rack", 1, true, 3.0),
-        "bucket" => ("slop bucket", 0, false, 1.0),
-        "booth_table" => ("booth table", 1, true, 3.0),
-        "booth_seat" => ("booth seat", 1, false, 3.5),
-        "trapdoor" => ("trapdoor (to the undercroft)", 0, false, 0.0),
-        "winch" => ("portcullis winch", 1, true, 4.0),
-        "sideboard" => ("sideboard", 1, true, 3.5),
-        "stage" => ("stage", 0, false, 2.0),
-        _ => ("furniture", 1, true, 3.0),
-    }
+    FURNITURE.iter().find(|f| f.0 == kind).map(|f| (f.1, f.2, f.3, f.4)).unwrap_or(("furniture", 1, true, 3.0))
 }
 
 #[derive(Clone, Copy)]
@@ -462,6 +466,25 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
     }
 }
 
+/// Every kind of room in a building (those with furnishing rules), for the designer.
+pub const ROOM_KINDS: &[&str] = &[
+    "common room", "taproom", "brewhouse", "battlements", "kitchen", "storeroom", "loft storage", "keg cellar",
+    "wine cellar", "bedroom", "guest room", "owner's quarters", "chamber", "master bedroom", "lord's chamber",
+    "bedchamber", "main room", "living room", "shop", "workshop", "forge", "warehouse floor", "office", "archive",
+    "study", "meeting room", "library", "reading room", "laboratory", "observatory", "entry hall", "foyer", "nave",
+    "sanctuary", "chapel", "vestry", "crypt", "ossuary", "bell loft", "monk's cell", "cell", "holding cell",
+    "great hall", "mess hall", "dining room", "parlor", "gallery", "guardroom", "armory", "barrack room", "dormitory",
+    "dungeon", "holding pen", "beast pen", "vault", "counting house", "courtroom", "baths", "infirmary",
+    "arena floor", "stands", "tower room", "winch room", "wall walk", "hall", "corridor", "solar", "map room",
+    "treasury", "guest chamber", "servants' quarters", "officers' quarters", "pantry", "buttery", "wardrobe",
+    "guard post", "tower top", "torture chamber", "prison block", "well room", "warden's office",
+];
+
+/// A kind of room in a building, by name.
+pub fn room_kind(s: &str) -> Option<&'static str> {
+    ROOM_KINDS.iter().copied().find(|k| *k == s)
+}
+
 // ---------------------------------------------------------------------------------------
 // Generation.
 
@@ -475,12 +498,40 @@ pub fn generate(world: &World, t0: &T0, settlement: usize, building: usize) -> O
     if b.structure != Structure::Roofed {
         return None;
     }
+    // (As designed by hand, while the design fits the building: `design`.)
+    if !world.file.edits.designs.is_empty()
+        && let Some(d) = world.file.edits.designs.get(&format!("b:{}:{}", l.index, b.id))
+        && let Some(it) = design::designed(t0, &l, settlement, b, d)
+    {
+        return Some(it);
+    }
     Some(build(world, t0, &l, settlement, b))
 }
 
 /// A keep big enough for deep dungeons below its cellar (`under::keep_dungeon`).
 pub fn has_deep_dungeon(b: &town::Building) -> bool {
     b.structure == Structure::Roofed && arch_of(b) == Arch::Keep && geom::area(&b.poly).abs() >= 150.0 * SQUARE_FT * SQUARE_FT
+}
+
+/// The ways from a cellar to other sites: a trapdoor down into the sewers (on the street side),
+/// stairs down to a keep's deep dungeons (in the middle of the far end). How many it should
+/// have, and puts them on its free floor (fewer if there is none).
+fn cellar_links(lvl: &mut Level, t0: &T0, l: &Layout, b: &town::Building, sh: &Shell, stairs: [usize; 4]) -> usize {
+    let (nx, ny) = (sh.nx, sh.ny);
+    let grid = |p: P| {
+        let d = sub(p, sh.origin);
+        [dot(d, sh.u) / SQUARE_FT, dot(d, sh.v) / SQUARE_FT]
+    };
+    let mut want = 0;
+    if let Some(q) = crate::under::sewer_link_of(t0, l, b) {
+        want += 1;
+        place_link(lvl, nx, ny, stairs, grid(q), "trapdoor", "trapdoor to the sewers", crate::under::sewer_id(l.index as usize, q));
+    }
+    if has_deep_dungeon(b) {
+        want += 1;
+        place_link(lvl, nx, ny, stairs, [nx as f64 * 0.5, ny as f64 * 0.5], "link_down", "stairs down to the deep dungeons", format!("k:{}:{}", l.index, b.id));
+    }
+    want
 }
 
 /// Put a link item on the free floor square of `lvl` nearest grid point `at` (off the stairs
@@ -517,6 +568,56 @@ fn place_link(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64; 2
     true
 }
 
+/// A building's grid: along its footprint's long axis, the squares inside it, and which squares
+/// just outside are open ground (not inside a neighbouring building): a door must open onto one.
+pub struct Shell<'a> {
+    pub nx: usize,
+    pub ny: usize,
+    /// World ft of grid corner (0, 0); grid x runs along `u`, y along `v`.
+    pub origin: P,
+    pub u: P,
+    pub v: P,
+    pub inside: Vec<bool>,
+    neighbours: Vec<&'a Vec<P>>,
+}
+
+impl<'a> Shell<'a> {
+    pub fn of(l: &'a Layout, b: &town::Building) -> Shell<'a> {
+        let o = geom::obb(&b.poly);
+        let (u, v) = (o.axis, [-o.axis[1], o.axis[0]]);
+        let (a0, a1) = geom::extent(&b.poly, u);
+        let (b0, b1) = geom::extent(&b.poly, v);
+        let nx = (crate::core::round((a1 - a0) / SQUARE_FT) as usize).max(2);
+        let ny = (crate::core::round((b1 - b0) / SQUARE_FT) as usize).max(2);
+        let (u0, v0) = (0.5 * (a0 + a1) - 0.5 * nx as f64 * SQUARE_FT, 0.5 * (b0 + b1) - 0.5 * ny as f64 * SQUARE_FT);
+        let origin = add(mul(u, u0), mul(v, v0));
+        let world_at = |x: f64, y: f64| add(origin, add(mul(u, x * SQUARE_FT), mul(v, y * SQUARE_FT)));
+        // Squares inside the footprint (a tolerance keeps rectangle edges whole).
+        let grown = grow(&b.poly, 1.5);
+        let inside: Vec<bool> = (0..nx * ny).map(|k| geom::contains(&grown, world_at((k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5))).collect();
+        let c0 = geom::centroid(&b.poly);
+        let reach = b.poly.iter().map(|p| geom::dist(*p, c0)).fold(0.0, f64::max) + 40.0;
+        let neighbours: Vec<&Vec<P>> = l
+            .buildings
+            .iter()
+            .filter(|o| o.id != b.id && o.structure == Structure::Roofed && o.poly.iter().any(|p| geom::dist(*p, c0) < reach + 60.0))
+            .map(|o| &o.poly)
+            .collect();
+        Shell { nx, ny, origin, u, v, inside, neighbours }
+    }
+
+    /// World position (ft) of a grid point.
+    pub fn world_at(&self, x: f64, y: f64) -> P {
+        add(self.origin, add(mul(self.u, x * SQUARE_FT), mul(self.v, y * SQUARE_FT)))
+    }
+
+    /// Square (i, j) (maybe off the grid) is open ground: inside no neighbouring building.
+    pub fn ext_free(&self, i: isize, j: isize) -> bool {
+        let p = self.world_at(i as f64 + 0.5, j as f64 + 0.5);
+        !self.neighbours.iter().any(|poly| geom::contains(poly, p))
+    }
+}
+
 fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Building) -> Interior {
     let bi = b.id as usize;
     let mut rng = Pcg32::new(hash3(world.stream("interior"), settlement as i64, bi as i64, 0x1a7), 71);
@@ -524,33 +625,11 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Buildi
     let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
 
     // Grid along the footprint's long axis.
-    let o = geom::obb(&b.poly);
-    let (u, v) = (o.axis, [-o.axis[1], o.axis[0]]);
-    let (a0, a1) = geom::extent(&b.poly, u);
-    let (b0, b1) = geom::extent(&b.poly, v);
-    let nx = (crate::core::round((a1 - a0) / SQUARE_FT) as usize).max(2);
-    let ny = (crate::core::round((b1 - b0) / SQUARE_FT) as usize).max(2);
-    let (u0, v0) = (0.5 * (a0 + a1) - 0.5 * nx as f64 * SQUARE_FT, 0.5 * (b0 + b1) - 0.5 * ny as f64 * SQUARE_FT);
-    let origin = add(mul(u, u0), mul(v, v0));
-    let world_at = |x: f64, y: f64| add(origin, add(mul(u, x * SQUARE_FT), mul(v, y * SQUARE_FT)));
-    // Squares inside the footprint (a tolerance keeps rectangle edges whole).
-    let grown = grow(&b.poly, 1.5);
-    let inside: Vec<bool> = (0..nx * ny).map(|k| geom::contains(&grown, world_at((k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5))).collect();
-
-    // Squares just outside the walls that are open ground (not inside a neighbouring
-    // building): a door must open onto one of these.
-    let c0 = geom::centroid(&b.poly);
-    let reach = b.poly.iter().map(|p| geom::dist(*p, c0)).fold(0.0, f64::max) + 40.0;
-    let neighbours: Vec<&Vec<P>> = l
-        .buildings
-        .iter()
-        .filter(|o| o.id != b.id && o.structure == Structure::Roofed && o.poly.iter().any(|p| geom::dist(*p, c0) < reach + 60.0))
-        .map(|o| &o.poly)
-        .collect();
-    let ext_free = |i: isize, j: isize| {
-        let p = world_at(i as f64 + 0.5, j as f64 + 0.5);
-        !neighbours.iter().any(|poly| geom::contains(poly, p))
-    };
+    let sh = Shell::of(l, b);
+    let (nx, ny, origin, u, v) = (sh.nx, sh.ny, sh.origin, sh.u, sh.v);
+    let world_at = |x: f64, y: f64| sh.world_at(x, y);
+    let inside = &sh.inside;
+    let ext_free = |i: isize, j: isize| sh.ext_free(i, j);
     let is_in = |i: isize, j: isize| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny && inside[j as usize * nx + i as usize];
     // Open exterior squares along each side (0 top, 1 right, 2 bottom, 3 left).
     let open_on = |side: usize| -> usize {
@@ -643,18 +722,7 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Buildi
         }
         furnish(&mut lvl, nx, ny, stairs, &mut rng);
         if z == -1 {
-            let grid = |p: P| {
-                let d = sub(p, origin);
-                [dot(d, u) / SQUARE_FT, dot(d, v) / SQUARE_FT]
-            };
-            // A trapdoor down into the sewers (on the street side).
-            if let Some(q) = crate::under::sewer_link_of(t0, l, b) {
-                place_link(&mut lvl, nx, ny, stairs, grid(q), "trapdoor", "trapdoor to the sewers", crate::under::sewer_id(l.index as usize, q));
-            }
-            // Stairs down to a keep's deep dungeons, in the middle of the far end.
-            if has_deep_dungeon(b) {
-                place_link(&mut lvl, nx, ny, stairs, [nx as f64 * 0.5, ny as f64 * 0.5], "link_down", "stairs down to the deep dungeons", format!("k:{}:{}", l.index, bi));
-            }
+            cellar_links(&mut lvl, t0, l, b, &sh, stairs);
         }
         levels.push(lvl);
     }
@@ -1724,8 +1792,14 @@ fn connect(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [usize; 
             doors.push(Door { a: p, b: q, kind: "front", rooms: [r, -1] });
         }
     }
-    // Wall runs: every square edge between different rooms (or a room and the outside) that
-    // is not a door, merged along straight lines.
+    let walls = wall_runs(&cells, nx, ny, &doors);
+    Level { z: 0, name: String::new(), elevation_ft: 0.0, cells, rooms, walls, doors, windows: Vec::new(), furniture: Vec::new(), roof: false, has_stairs: true, natural: false, paths: Vec::new(), links: Vec::new() }
+}
+
+/// Wall runs: every square edge between different rooms (or a room and the outside) that is not
+/// a door, merged along straight lines.
+pub fn wall_runs(cells: &[i16], nx: usize, ny: usize, doors: &[Door]) -> Vec<Wall> {
+    let at = |i: isize, j: isize| if i < 0 || j < 0 || i >= nx as isize || j >= ny as isize { -1 } else { cells[j as usize * nx + i as usize] };
     let mut h_edges: Vec<(usize, usize, bool)> = Vec::new(); // (x, y line, exterior) horizontal unit edges at y
     let mut v_edges: Vec<(usize, usize, bool)> = Vec::new(); // (x line, y, exterior)
     let is_door = |a: [f32; 2], b: [f32; 2]| doors.iter().any(|d| (d.a == a && d.b == b) || (d.a == b && d.b == a));
@@ -1762,7 +1836,7 @@ fn connect(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [usize; 
             walls.push(Wall { a: [e.0 as f32, e.1 as f32], b: [e.0 as f32, (e.1 + 1) as f32], exterior: e.2 });
         }
     }
-    Level { z: 0, name: String::new(), elevation_ft: 0.0, cells, rooms, walls, doors, windows: Vec::new(), furniture: Vec::new(), roof: false, has_stairs: true, natural: false, paths: Vec::new(), links: Vec::new() }
+    walls
 }
 
 /// Windows on exterior walls above ground: every third square along a run, off doors.
@@ -1801,6 +1875,11 @@ fn is_pub(arch: Arch) -> bool {
 /// stairs or a doorway (the squares either side of every door stay open), and never cutting
 /// a room's doors and stairs off from each other.
 fn furnish(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], rng: &mut Pcg32) {
+    furnish_rooms(lvl, nx, ny, st, None, rng);
+}
+
+/// `furnish` for every room, or `only` one (round what is already there).
+fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], only: Option<i16>, rng: &mut Pcg32) {
     let st = if lvl.has_stairs { st } else { [0, 0, 0, 0] };
     let mut taken = vec![false; nx * ny];
     for j in st[1]..st[1] + st[3] {
@@ -1837,6 +1916,9 @@ fn furnish(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], rng: &mut Pcg3
     }
     for (ri, room) in lvl.rooms.iter().enumerate() {
         let ri = ri as i16;
+        if only.is_some_and(|o| o != ri) {
+            continue;
+        }
         let mine: Vec<(usize, usize)> = (0..nx * ny).filter(|&k| cells[k] == ri).map(|k| (k % nx, k / nx)).collect();
         if mine.is_empty() {
             continue;

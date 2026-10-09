@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use super::{BOSS, KEEP_DUNGEON, LEVEL_FT, MAX_LEVELS, PROPS, Plan, THEMES, UNDERCROFT, UnderKind, furnish_room, item, kit, lava, neighbours};
 use crate::World;
 use crate::core::rng::{Pcg32, hash3};
+use crate::interior::design::{BUILDING, furniture_kind};
 use crate::interior::{Interior, Item};
 use crate::t0::T0;
 use crate::town;
@@ -38,6 +39,12 @@ pub struct SiteDesign {
     pub entry: [u16; 2],
     /// Levels bottom to top (as `Interior::levels`, so `l:<site>:<level>` ids hold).
     pub levels: Vec<DesignLevel>,
+    /// A building's stair block (x, y, w, h: the same squares on every level it reaches).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stairs: Option<[u16; 4]>,
+    /// A building's: what the design was made for (`interior::design::fingerprint`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fingerprint: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -51,11 +58,27 @@ pub struct DesignLevel {
     /// Rooms keep their index (`r:<site>:<level>:<room>` names hold); one with no squares is
     /// simply not there.
     pub rooms: Vec<DesignRoom>,
-    /// Doors: x, y, side (0: between the square and the one east of it, 1: south), secret (0/1).
+    /// Doors: x, y, side (0: between the square and the one east of it, 1: south; a building's
+    /// also 2 west, 3 north), flags (1 secret; a building's door to the outside: 2 front, 4 back).
     pub doors: Vec<[u16; 4]>,
     /// Everything standing on the floor, the ways in, up and down too (kinds `exit`, `up`,
     /// `down`), in order.
     pub items: Vec<DesignItem>,
+    /// A building's: the storey (-1 cellar, 0 ground floor, as `Level::z`), an open roof, the
+    /// stair block reaching it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub z: i8,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub roof: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_stairs: bool,
+}
+
+fn is_zero(z: &i8) -> bool {
+    *z == 0
+}
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -86,6 +109,8 @@ pub struct Problem {
     pub blocking: bool,
 }
 
+/// Most levels a building's design has (cellar, storeys, an open roof, tower tops).
+pub const BUILDING_LEVELS: usize = 16;
 /// Largest grid side, most rooms and items a level holds.
 pub const MAX_SIDE: u16 = 200;
 pub const MAX_ROOMS: usize = 500;
@@ -170,12 +195,17 @@ pub fn catalog_json() -> String {
             json!({ "key": t.key, "kind": t.kind.key(), "first": t.first, "passage": t.passage, "rooms": kinds })
         })
         .collect();
-    json!({ "props": props, "rooms": rooms, "themes": themes, "boss": BOSS, "max_levels": MAX_LEVELS }).to_string()
+    json!({ "props": props, "rooms": rooms, "themes": themes, "boss": BOSS, "max_levels": MAX_LEVELS, "building": crate::interior::design::catalog() }).to_string()
 }
 
 impl SiteDesign {
     pub fn under_kind(&self) -> Option<UnderKind> {
         UnderKind::parse(&self.kind)
+    }
+
+    /// A building's interior (`interior::design`), not a site underground.
+    pub fn is_building(&self) -> bool {
+        self.kind == BUILDING
     }
 
     /// A copy of a site as it is: the design that builds it again, exactly.
@@ -222,6 +252,7 @@ impl SiteDesign {
                             h: f.h,
                         })
                         .collect(),
+                    ..Default::default()
                 }
             })
             .collect();
@@ -234,6 +265,7 @@ impl SiteDesign {
             ny: it.ny as u16,
             entry,
             levels,
+            ..Default::default()
         }
     }
 
@@ -247,19 +279,21 @@ impl SiteDesign {
             text,
             blocking: true,
         };
-        if self.under_kind().is_none() {
+        let building = self.is_building();
+        if self.under_kind().is_none() && !building {
             out.push(bad(0, format!("{} sites can't be designed", self.kind)));
         }
         if self.nx == 0 || self.ny == 0 || self.nx > MAX_SIDE || self.ny > MAX_SIDE {
             out.push(bad(0, format!("the grid must be 1 to {MAX_SIDE} squares a side")));
             return out;
         }
-        if self.levels.is_empty() || self.levels.len() > MAX_LEVELS as usize {
-            out.push(bad(0, format!("a site has 1 to {MAX_LEVELS} levels")));
+        let most = if building { BUILDING_LEVELS } else { MAX_LEVELS as usize };
+        if self.levels.is_empty() || self.levels.len() > most {
+            out.push(bad(0, format!("a site has 1 to {most} levels")));
         }
         let n = self.nx as usize * self.ny as usize;
         for (li, lv) in self.levels.iter().enumerate() {
-            let tag = depth_tag(self.levels.len(), li);
+            let tag = if building { lv.name.clone() } else { depth_tag(self.levels.len(), li) };
             match decode(&lv.cells, n) {
                 None => out.push(bad(li, format!("{tag}: its squares don't add up to {} x {}", self.nx, self.ny))),
                 Some(c) if c.iter().any(|&r| r >= lv.rooms.len() as i16) => out.push(bad(li, format!("{tag}: a square of a room that isn't in its rooms list"))),
@@ -269,7 +303,8 @@ impl SiteDesign {
                 out.push(bad(li, format!("{tag}: at most {MAX_ROOMS} rooms and {MAX_ITEMS} items and doors")));
             }
             for f in &lv.items {
-                if item_kind(&f.kind).is_none() {
+                let known = if building { furniture_kind(&f.kind) } else { item_kind(&f.kind) };
+                if known.is_none() {
                     out.push(bad(li, format!("{tag}: no such item: {}", f.kind)));
                 } else if f.w == 0 || f.h == 0 || f.x as usize + f.w as usize > self.nx as usize || f.y as usize + f.h as usize > self.ny as usize {
                     out.push(Problem {
@@ -361,12 +396,16 @@ impl SiteDesign {
         p
     }
 
-    /// Everything wrong with it (shape first; then the rules of `check`).
-    pub fn problems(&self, id: &str) -> (Interior, Vec<Problem>) {
+    /// Everything wrong with it (shape first; then the rules of `check`, a building's of
+    /// `interior::design::check`), with what it builds.
+    pub fn problems(&self, world: &World, t0: &T0, id: &str) -> Result<(Interior, Vec<Problem>), String> {
+        if self.is_building() {
+            return crate::interior::design::problems(world, t0, id, self);
+        }
         let mut out = self.shape_problems();
         let it = self.build(id, 0, 0);
         out.extend(check(&it, Some(self.entry)));
-        (it, out)
+        Ok((it, out))
     }
 
     /// Doors wherever a room can't be reached otherwise: from the way onto each level, the
@@ -374,16 +413,19 @@ impl SiteDesign {
     /// cut off touches anything reached).
     pub fn add_doors(&mut self, level: Option<usize>) {
         let (nx, ny) = (self.nx as usize, self.ny as usize);
+        let building = self.is_building();
+        let stairs = building.then(|| crate::interior::design::stairs_of(self)).map(|s| s[1] * nx + s[0]);
         for (li, lv) in self.levels.iter_mut().enumerate() {
             if level.is_some_and(|l| l != li) || lv.natural {
                 continue;
             }
             let Some(cells) = decode(&lv.cells, nx * ny) else { continue };
             let items: Vec<(String, usize)> = lv.items.iter().map(|f| (f.kind.clone(), f.y as usize * nx + f.x as usize)).collect();
-            let start = items
-                .iter()
-                .find(|(k, _)| k == "exit" || k == "up")
-                .map(|e| e.1)
+            // (A building's floors are reached from the stairs, else the spiral stairs.)
+            let ways: &[&str] = if building { &["spiral_stair"] } else { &["exit", "up"] };
+            let start = stairs
+                .filter(|_| lv.has_stairs)
+                .or_else(|| items.iter().find(|(k, _)| ways.contains(&k.as_str())).map(|e| e.1))
                 .or_else(|| (0..nx * ny).find(|&k| cells[k] >= 0));
             let Some(start) = start.filter(|&s| s < nx * ny && cells[s] >= 0) else { continue };
             let mut doors: Vec<(usize, usize)> = lv.doors.iter().filter_map(|d| door_squares(d[0], d[1], d[2], nx, ny)).collect();
@@ -417,6 +459,9 @@ impl SiteDesign {
     /// Room `room` of level `level` furnished from its kit (a boss chamber's set piece) where
     /// that fits round what is already there; `seed` picks the arrangement.
     pub fn furnish(&mut self, level: usize, room: usize, seed: u64) {
+        if self.is_building() {
+            return crate::interior::design::furnish(self, level, room, seed);
+        }
         let (nx, ny) = (self.nx as usize, self.ny as usize);
         let kind = self.under_kind().unwrap_or(UnderKind::Dungeon);
         let Some(lv) = self.levels.get(level) else { return };
@@ -710,6 +755,9 @@ pub fn site(world: &World, t0: &T0, id: &str, d: &SiteDesign) -> Option<Interior
 /// Site `id` as a design: the one saved, else (or with `original`) a copy of what the
 /// generator makes.
 pub fn design_of(world: &World, t0: &T0, id: &str, original: bool) -> Result<SiteDesign, String> {
+    if id.starts_with("b:") {
+        return crate::interior::design::design_of(world, t0, id, original).map(|d| d.0);
+    }
     let (l, k) = editable(world, t0, id)?;
     match world.file.edits.designs.get(id) {
         Some(d) if !original => Ok(d.clone()),
@@ -720,17 +768,33 @@ pub fn design_of(world: &World, t0: &T0, id: &str, original: bool) -> Result<Sit
 }
 
 /// For the editor (WASM): the design given (else the site's own, `design_of`), changed by
-/// `action` (`{"doors": level|null}`, `{"furnish": {level, room, seed}}`, `{"original": true}`),
-/// with the site it builds and its problems: `{design, interior, problems}` or `{error}`.
+/// `action` (`{"doors": level|null}`, `{"furnish": {level, room, seed}}`, `{"original": true}`;
+/// a building's `{"refit": true}`: fitted to its storeys as they are now, `{"refit": n}`: to n
+/// storeys), with the site it
+/// builds and its problems: `{design, interior, problems}` (a building's saved design that no
+/// longer fits: `set_aside`) or `{error}`.
 pub fn design_json(world: &World, t0: &T0, id: &str, design: Option<&str>, action: Option<&str>) -> String {
     let run = || -> Result<Value, String> {
-        let (l, k) = editable(world, t0, id)?;
+        let building = id.starts_with("b:");
+        let (l, k) = if building { (0, 0) } else { editable(world, t0, id)? };
         let action: Value = action.map(serde_json::from_str).transpose().map_err(|e| format!("bad action: {e}"))?.unwrap_or(Value::Null);
         let original = action["original"].as_bool().unwrap_or(false);
+        let mut set_aside = false;
         let mut d = match design.filter(|_| !original) {
             Some(s) => serde_json::from_str::<SiteDesign>(s).map_err(|e| format!("bad design: {e}"))?,
+            None if building => {
+                let (d, aside) = crate::interior::design::design_of(world, t0, id, original)?;
+                set_aside = aside;
+                d
+            }
             None => design_of(world, t0, id, original)?,
         };
+        // (Fitted ahead of a change of storeys: checked as the building will be.)
+        let mut floors = None;
+        if building && (action["refit"].as_bool() == Some(true) || action["refit"].is_u64()) {
+            floors = action["refit"].as_u64().map(|f| f.min(12) as u8);
+            d = crate::interior::design::refit(world, t0, id, &d, floors)?.ok_or_else(|| format!("{id}: its footprint changed: the design no longer fits"))?;
+        }
         if action.get("doors").is_some() {
             d.add_doors(action["doors"].as_u64().map(|l| l as usize));
         }
@@ -741,9 +805,15 @@ pub fn design_json(world: &World, t0: &T0, id: &str, design: Option<&str>, actio
                 f["seed"].as_u64().unwrap_or(0),
             );
         }
-        let (mut it, problems) = d.problems(id);
-        (it.settlement, it.building) = (l as u32, k as u32);
-        Ok(json!({ "design": d, "interior": it, "problems": problems }))
+        let (mut it, problems) = if building { crate::interior::design::problems_as(world, t0, id, &d, floors)? } else { d.problems(world, t0, id)? };
+        if !building {
+            (it.settlement, it.building) = (l as u32, k as u32);
+        }
+        let mut out = json!({ "design": d, "interior": it, "problems": problems });
+        if set_aside {
+            out["set_aside"] = json!(true);
+        }
+        Ok(out)
     };
     run().unwrap_or_else(|e| json!({ "error": e })).to_string()
 }
@@ -758,7 +828,12 @@ pub const SYMBOLS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY
 pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) -> Result<String, String> {
     let (nx, ny) = (d.nx as usize, d.ny as usize);
     let n = d.levels.len();
-    let mut s = format!(
+    let building = d.is_building();
+    let st = crate::interior::design::stairs_of(d);
+    let mut s = if building {
+        format!("building · {nx} x {ny} squares · {n} level{} · stairs {},{} {}x{}\n", if n == 1 { "" } else { "s" }, st[0], st[1], st[2], st[3])
+    } else {
+        format!(
         "site {}{} · {} x {} squares · {} level{} · entry {},{}\n",
         d.kind,
         d.theme.as_deref().map(|t| format!(" · theme {t}")).unwrap_or_default(),
@@ -768,14 +843,15 @@ pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) ->
         if n == 1 { "" } else { "s" },
         d.entry[0],
         d.entry[1]
-    );
+    )
+    };
     for (li, lv) in d.levels.iter().enumerate().rev() {
         let cells = decode(&lv.cells, nx * ny).ok_or_else(|| format!("{}: bad squares", depth_tag(n, li)))?;
         let used: Vec<bool> = (0..lv.rooms.len()).map(|r| cells.contains(&(r as i16))).collect();
         if lv.rooms.len() > SYMBOLS.len() && used.iter().skip(SYMBOLS.len()).any(|&u| u) {
             return Err(format!("{} has more than {} rooms: too many to show as text", depth_tag(n, li), SYMBOLS.len()));
         }
-        s.push_str(&format!("\nlevel {}: {}\n", n - li, lv.name));
+        s.push_str(&format!("\nlevel {}: {}\n", if building { lv.z as i64 } else { (n - li) as i64 }, lv.name));
         let legend: Vec<String> = lv
             .rooms
             .iter()
@@ -798,7 +874,15 @@ pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) ->
         let doors: Vec<String> = lv
             .doors
             .iter()
-            .map(|d| format!("{},{} {}{}", d[0], d[1], if d[2] == 0 { "e" } else { "s" }, if d[3] != 0 { " secret" } else { "" }))
+            .map(|d| {
+                let flag = match d[3] {
+                    0 => "",
+                    f if f & 1 != 0 => " secret",
+                    f if f & 2 != 0 => " front",
+                    _ => " back",
+                };
+                format!("{},{} {}{flag}", d[0], d[1], ["e", "s", "w", "n"][d[2].min(3) as usize])
+            })
             .collect();
         if !lv.natural || !doors.is_empty() {
             s.push_str(&format!("doors: {}\n", doors.join("; ")));
@@ -826,8 +910,10 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
     let (nx, ny) = (d.nx as usize, d.ny as usize);
     let mut names: Vec<TextName> = Vec::new();
     // Blocks by level number, in order.
+    let building = d.is_building();
     struct Block<'a> {
         depth: usize,
+        tag: String,
         name: Option<&'a str>,
         rooms: Option<&'a str>,
         grid: Option<Vec<&'a str>>,
@@ -845,12 +931,20 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             in_grid = false;
             continue;
         }
-        if let Some(h) = keyword("site ") {
-            // "… · 3 levels · …"
+        if let Some(h) = keyword("site ").or_else(|| keyword("building")) {
+            // "… · 3 levels · …"; a building's "… · stairs 3,4 2x1"
             for part in h.split('·') {
                 let p = part.trim();
                 if let Some(v) = p.strip_suffix(" levels").or_else(|| p.strip_suffix(" level")) {
                     levels = Some(v.trim().parse().map_err(|_| format!("line {}: '{p}': how many levels?", ln + 1))?);
+                }
+                if let Some(v) = p.strip_prefix("stairs ").filter(|_| building) {
+                    let mut w = v.split_whitespace();
+                    let (xy, size) = (w.next().unwrap_or(""), w.next().unwrap_or("1x1"));
+                    let wrong = || format!("line {}: '{p}': write it as stairs x,y wxh", ln + 1);
+                    let (x, y) = coords(xy).ok_or_else(wrong)?;
+                    let (sw, sh) = size.split_once('x').and_then(|(a, b)| Some((a.parse::<u16>().ok()?, b.parse::<u16>().ok()?))).ok_or_else(wrong)?;
+                    d.stairs = Some([x, y, sw, sh]);
                 }
             }
             in_grid = false;
@@ -858,12 +952,24 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
         }
         if let Some(h) = keyword("level ") {
             let (num, rest) = h.split_once(':').map(|(a, b)| (a.trim(), Some(b.trim()))).unwrap_or((h, None));
-            let depth: usize = num.parse().map_err(|_| format!("line {}: 'level {num}': levels are numbered from 1 at the top", ln + 1))?;
-            if depth == 0 || depth > MAX_LEVELS as usize {
-                return Err(format!("line {}: levels are 1 to {MAX_LEVELS}", ln + 1));
-            }
+            let depth = if building {
+                // A building's levels by storey: -1 the cellar, 0 the ground floor.
+                let z: i64 = num.parse().map_err(|_| format!("line {}: 'level {num}': a building's levels are its storeys (-1 the cellar, 0 the ground floor)", ln + 1))?;
+                let li = d.levels.iter().position(|l| l.z as i64 == z).ok_or_else(|| {
+                    let zs: Vec<String> = d.levels.iter().map(|l| l.z.to_string()).collect();
+                    format!("line {}: the building has no level {z} (its levels: {})", ln + 1, zs.join(", "))
+                })?;
+                d.levels.len() - li
+            } else {
+                let depth: usize = num.parse().map_err(|_| format!("line {}: 'level {num}': levels are numbered from 1 at the top", ln + 1))?;
+                if depth == 0 || depth > MAX_LEVELS as usize {
+                    return Err(format!("line {}: levels are 1 to {MAX_LEVELS}", ln + 1));
+                }
+                depth
+            };
             blocks.push(Block {
                 depth,
+                tag: format!("level {num}"),
                 name: rest.filter(|r| !r.is_empty()),
                 rooms: None,
                 grid: None,
@@ -891,6 +997,9 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
         } else {
             return Err(format!("line {}: expected rooms:, grid:, doors: or items:, not '{t}'", ln + 1));
         }
+    }
+    if building && levels.is_some_and(|n| n != d.levels.len()) {
+        return Err(format!("a building's levels follow its storeys: it has {}", d.levels.len()));
     }
     let count = levels.unwrap_or_else(|| d.levels.len().max(blocks.iter().map(|b| b.depth).max().unwrap_or(0)));
     if count == 0 || count > MAX_LEVELS as usize {
@@ -924,7 +1033,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
     for b in &blocks {
         let li = count - b.depth;
         let lv = &mut d.levels[li];
-        let tag = format!("level {}", b.depth);
+        let tag = b.tag.clone();
         if let Some(nm) = b.name {
             lv.name = nm.to_string();
         }
@@ -947,7 +1056,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                     Some((k, v)) if v.trim().parse::<u16>().is_ok() => (k.trim(), v.trim().parse::<u16>().unwrap_or(0)),
                     _ => (body, 0),
                 };
-                let known = room_kind(kind);
+                let known = if building { crate::interior::room_kind(kind) } else { room_kind(kind) };
                 if rooms.len() <= r {
                     rooms.resize(r + 1, None);
                 }
@@ -996,21 +1105,35 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             lv.cells = encode(&cells);
         }
         if let Some(list) = b.doors {
-            lv.doors.clear();
-            if list.trim() != "auto" {
+            // (`auto` keeps a building's doors to the outside.)
+            let auto = list.trim() == "auto";
+            lv.doors.retain(|d| building && auto && d[3] & 6 != 0);
+            if !auto {
+                let how = if building { "x,y e|s|w|n [secret|front|back]" } else { "x,y e|s [secret]" };
                 for e in list.split(';').map(str::trim).filter(|e| !e.is_empty()) {
                     let mut w = e.split_whitespace();
-                    let (xy, side, secret) = (w.next().unwrap_or(""), w.next().unwrap_or(""), w.next());
-                    let (x, y) = coords(xy).ok_or_else(|| format!("{tag}: door '{e}': write it as x,y e|s [secret]"))?;
+                    let (xy, side, flag) = (w.next().unwrap_or(""), w.next().unwrap_or(""), w.next());
+                    let (x, y) = coords(xy).ok_or_else(|| format!("{tag}: door '{e}': write it as {how}"))?;
                     let side = match side {
                         "e" => 0,
                         "s" => 1,
+                        "w" if building => 2,
+                        "n" if building => 3,
+                        _ if building => return Err(format!("{tag}: door '{e}': the side is e, s, w or n (the square's edge east, south, west or north)")),
                         _ => return Err(format!("{tag}: door '{e}': the side is e (to the square east) or s (south)")),
                     };
-                    if door_squares(x, y, side, nx, ny).is_none() {
+                    let on_grid = if building { crate::interior::design::door_at(x, y, side, nx, ny).is_some() } else { door_squares(x, y, side, nx, ny).is_some() };
+                    if !on_grid {
                         return Err(format!("{tag}: door '{e}' is off the grid"));
                     }
-                    lv.doors.push([x, y, side, matches!(secret, Some("secret")) as u16]);
+                    let flags = match flag {
+                        None => 0,
+                        Some("secret") => 1,
+                        Some("front") if building => 2,
+                        Some("back") if building => 4,
+                        Some(f) => return Err(format!("{tag}: door '{e}': '{f}'? write it as {how}")),
+                    };
+                    lv.doors.push([x, y, side, flags]);
                 }
             }
         }
@@ -1028,8 +1151,8 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                 };
                 let (x, y) = coords(xy).ok_or_else(|| format!("{tag}: item '{e}': write it as kind x,y [wxh]"))?;
                 let name = words[..at].join(" ");
-                let kind = item_kind(&name).ok_or_else(|| format!("{tag}: no such item: {name}"))?;
-                let (w, h) = if WAYS.contains(&kind) || kind == "lava" { (1, 1) } else { size.unwrap_or((1, 1)) };
+                let kind = if building { furniture_kind(&name) } else { item_kind(&name) }.ok_or_else(|| format!("{tag}: no such item: {name}"))?;
+                let (w, h) = if !building && (WAYS.contains(&kind) || kind == "lava") { (1, 1) } else { size.unwrap_or((1, 1)) };
                 lv.items.push(DesignItem {
                     kind: kind.into(),
                     x,
@@ -1040,7 +1163,9 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             }
         }
     }
-    d.settle_ways();
+    if !building {
+        d.settle_ways();
+    }
     for b in blocks.iter().filter(|b| b.doors.is_some_and(|l| l.trim() == "auto")) {
         d.add_doors(Some(count - b.depth));
     }

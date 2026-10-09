@@ -264,14 +264,14 @@ export class InteriorLayer {
       if (this.level + 1 < n && it.levels[this.level + 1].has_stairs) out.push(level(this.level + 1, 'up', 'stairs up'));
       if (this.level > 0 && it.levels[this.level - 1].has_stairs) out.push(level(this.level - 1, 'down', 'stairs down'));
     }
-    // A building's front door: out into the street.
+    // A building's front door (or a back door): out into the street.
     if (!this.underground && this.level === it.entry_level) {
       const door = lv.doors.find((d) => {
-        if (d.kind !== 'front') return false;
+        if (d.kind !== 'front' && d.kind !== 'back') return false;
         const [mx, my] = [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2];
         return Math.abs(gx - mx) < 0.9 && Math.abs(gy - my) < 0.9;
       });
-      if (door) out.push({ kind: 'surface', label: 'Leave by the front door', at: this.toWorld(...this.outside(door)) });
+      if (door) out.push({ kind: 'surface', label: `Leave by the ${door.kind} door`, at: this.toWorld(...this.outside(door)) });
     }
     return out;
   }

@@ -580,9 +580,10 @@ export class MapView {
     if (!layer || this.sewers || !this.geom || layer.interior.id !== it.id) return;
     const ticket = ++this.shown;
     const level = Math.max(0, Math.min(it.levels.length - 1, layer.currentLevel + it.levels.length - layer.interior.levels.length));
-    const field = await prepareField(it, level, false);
+    // (Underground floors are shaded in a worker first; a building's need nothing.)
+    const field = /^[uwk]:/.test(it.id) ? await prepareField(it, level, false) : null;
     if (ticket !== this.shown || this.interior !== layer || !this.geom) return;
-    const next = new InteriorLayer(it, this.geom.sea_level_ft, false, false, this.interiorStyle, false, new Map([[level, field]]), level);
+    const next = new InteriorLayer(it, this.geom.sea_level_ft, false, false, this.interiorStyle, false, field ? new Map([[level, field]]) : undefined, level);
     const at = this.app.stage.getChildIndex(layer.container);
     layer.destroy();
     this.app.stage.addChildAt(next.container, at);

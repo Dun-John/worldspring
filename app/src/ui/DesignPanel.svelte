@@ -1,8 +1,9 @@
 <script lang="ts">
-  // Edit › Design: tools for the map (rooms, corridors, rock, doors, props, the way down), the
-  // room chosen (what it is, its name, a raised floor, the boss chamber, props), the site's
-  // levels and what is wrong with it (folded away), and undo, redo and Save (only once nothing
-  // breaks the rules a site keeps) pinned at the bottom.
+  // Edit › Design: tools for the map (rooms, corridors, rock, doors, props, the way down; in a
+  // building rooms, wall lines, walls taken away, doors, furniture, the stairs), the room chosen
+  // (what it is, its name, a raised floor, the boss chamber, props), the site's levels and what
+  // is wrong with it (folded away), and undo, redo and Save (only once nothing breaks the rules
+  // a site keeps) pinned at the bottom.
   import type { UnderCatalog } from '../gen/protocol';
   import type { DesignMode, DesignSettings, SiteDesigner } from '../editor/site/designer';
   import { BOSS } from '../editor/site/designer';
@@ -40,6 +41,17 @@
     { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F', hint: 'Click to put the prop down; click a prop to take it away.' },
     { key: 'stairs', label: 'Way down', icon: 'stairs', kbd: 'W', hint: 'Click a square for this level’s way down; the way up below follows.' },
   ];
+  // A building's: walls are where rooms meet; its floors follow its storeys.
+  const BUILDING_TOOLS: typeof TOOLS = [
+    { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a room to choose it.' },
+    { key: 'room', label: 'Room', icon: 'room', kbd: 'R', hint: 'Paint squares into the room chosen, else into a new room of the kind below.' },
+    { key: 'rect', label: 'Rectangle', icon: 'square', kbd: 'X', hint: 'Drag out a new room of the kind below, inside the walls.' },
+    { key: 'wall', label: 'Wall', icon: 'wall', kbd: 'L', hint: 'Draw a line along the grid across a room (or click by a grid line): the wall runs on to the room’s walls and splits it in two.' },
+    { key: 'merge', label: 'Take a wall away', icon: 'eraser', kbd: 'E', hint: 'Click a wall between two rooms: they become one.' },
+    { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. In an outside wall of the ground floor: a back door, again the front door, again none.' },
+    { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F', hint: 'Click to put the piece down; click a piece to take it away.' },
+    { key: 'stairs', label: 'Stairs', icon: 'stairs', kbd: 'W', hint: 'Drag out the stair block (1 to 3 squares each way): the same squares on every floor it reaches. Furniture there goes.' },
+  ];
   const cap = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
 
   // The designer as it is now (read again on every change: `version`).
@@ -49,18 +61,22 @@
     return { draft: d.draft, level: d.level, selected: d.selected, problems: d.problems, dirty: d.dirty, canUndo: d.canUndo, canRedo: d.canRedo };
   });
   const draft = $derived(now.draft);
+  const building = $derived(draft?.kind === 'building');
+  const tools = $derived(building ? BUILDING_TOOLS : TOOLS);
   const level = $derived(now.level);
   const lv = $derived(draft?.levels[level] ?? null);
   const room = $derived(now.selected !== null && lv ? (lv.rooms[now.selected] ?? null) : null);
   const roomId = $derived(now.selected !== null ? `r:${designer.id}:${level}:${now.selected}` : '');
-  const theme = $derived(catalog?.themes.find((t) => t.key === draft?.theme) ?? null);
+  const theme = $derived(building ? null : (catalog?.themes.find((t) => t.key === draft?.theme) ?? null));
   const own = $derived(theme?.rooms ?? []);
-  const others = $derived((catalog?.rooms ?? []).filter((k) => !own.includes(k)));
+  const allRooms = $derived((building ? catalog?.building.rooms : catalog?.rooms) ?? []);
+  const others = $derived(allRooms.filter((k) => !own.includes(k)));
   const problems = $derived(now.problems);
   const blocking = $derived(problems.filter((p) => p.blocking).length);
-  const tool = $derived(TOOLS.find((t) => t.key === settings.mode));
+  const tool = $derived(tools.find((t) => t.key === settings.mode));
   let propFilter = $state('');
-  const propList = $derived((catalog?.props ?? []).filter((p) => !propFilter || p.name.includes(propFilter.toLowerCase()) || p.kind.includes(propFilter.toLowerCase())));
+  const pieces = $derived((building ? catalog?.building.furniture.map((f) => ({ ...f, hazard: null as string | null })) : catalog?.props) ?? []);
+  const propList = $derived(pieces.filter((p) => !propFilter || p.name.includes(propFilter.toLowerCase()) || p.kind.includes(propFilter.toLowerCase())));
   let sure = $state<'' | 'level' | 'reset' | 'room'>('');
 
   /** Ask twice before something that can't be put back in one click. */
@@ -75,7 +91,7 @@
   }
 
   function pickProp(kind: string) {
-    const p = catalog?.props.find((x) => x.kind === kind);
+    const p = pieces.find((x) => x.kind === kind);
     settings = { ...settings, mode: 'prop', prop: kind, pw: p?.w ?? 1, ph: p?.h ?? 1 };
   }
 
@@ -83,9 +99,9 @@
 </script>
 
 <div class="design">
-  {#if !peek}<div class="site">Designing <b>{name}</b> <span class="ws-muted">· level {level + 1} of {draft?.levels.length ?? 1}</span></div>{/if}
+  {#if !peek}<div class="site">Designing <b>{name}</b> <span class="ws-muted">· {building ? (lv?.name ?? '') : `level ${level + 1} of ${draft?.levels.length ?? 1}`}</span></div>{/if}
   <div class="tools" role="toolbar" aria-label="Design tools">
-    {#each TOOLS as t (t.key)}
+    {#each tools as t (t.key)}
       <button class="ws-icon-btn" aria-pressed={settings.mode === t.key} title="{t.label} ({t.kbd})" aria-label={t.label} onclick={() => (settings = { ...settings, mode: t.key })}><Icon name={t.icon} /></button>
     {/each}
   </div>
@@ -115,11 +131,11 @@
         </div>
       </div>
     {/if}
-    {#if settings.mode === 'room' || settings.mode === 'rect' || settings.mode === 'corridor' || settings.mode === 'stairs'}
+    {#if settings.mode === 'room' || settings.mode === 'rect' || settings.mode === 'corridor' || settings.mode === 'stairs' || settings.mode === 'wall'}
       <label class="switch"><span class="grow">Add doors where a room would be shut off</span><input type="checkbox" class="ws-switch" bind:checked={settings.autoDoors} /></label>
     {/if}
     {#if settings.mode === 'prop'}
-      <input class="ws-input" type="search" bind:value={propFilter} placeholder="Find a prop…" aria-label="Find a prop" />
+      <input class="ws-input" type="search" bind:value={propFilter} placeholder={building ? 'Find a piece…' : 'Find a prop…'} aria-label={building ? 'Find a piece of furniture' : 'Find a prop'} />
       <div class="list">
         {#each propList as p (p.kind)}
           <button class="ws-chip" class:on={settings.prop === p.kind} onclick={() => pickProp(p.kind)} title={[p.blocks ? 'blocks movement' : 'passable', p.cover ? `cover ${['', '½', '¾', 'total'][p.cover]}` : '', p.hazard ?? ''].filter(Boolean).join(' · ')}>
@@ -152,35 +168,40 @@
             <input class="ws-input" value={renames[roomId] ?? ''} placeholder={cap(room.kind)} onchange={(e) => onRename(roomId, e.currentTarget.value.trim())} />
           </label>
         </div>
-        <div class="ws-field">
-          Floor
-          <div class="ws-seg">
-            {#each [0, 5, 10] as f (f)}<button class:on={room.raise_ft === f} onclick={() => designer.setRoom(ri, { raise_ft: f })}>{f ? `Raised ${f} ft` : 'Level'}</button>{/each}
+        {#if !building}
+          <div class="ws-field">
+            Floor
+            <div class="ws-seg">
+              {#each [0, 5, 10] as f (f)}<button class:on={room.raise_ft === f} onclick={() => designer.setRoom(ri, { raise_ft: f })}>{f ? `Raised ${f} ft` : 'Level'}</button>{/each}
+            </div>
           </div>
-        </div>
-        <label class="switch">
-          <span class="grow">The boss chamber</span>
-          <input type="checkbox" class="ws-switch" checked={room.kind === BOSS} onchange={(e) => designer.setRoom(ri, { kind: e.currentTarget.checked ? BOSS : (own.find((k) => k !== BOSS && k !== theme?.passage) ?? 'chamber') })} />
-        </label>
+          <label class="switch">
+            <span class="grow">The boss chamber</span>
+            <input type="checkbox" class="ws-switch" checked={room.kind === BOSS} onchange={(e) => designer.setRoom(ri, { kind: e.currentTarget.checked ? BOSS : (own.find((k) => k !== BOSS && k !== theme?.passage) ?? 'chamber') })} />
+          </label>
+        {/if}
         <div class="ws-row wrap">
-          <button class="ws-btn" onclick={() => designer.furnish(ri)} title="Props from its kind’s kit, where they fit">Furnish</button>
-          <button class="ws-btn" onclick={() => designer.clearProps(ri)}>Clear props</button>
-          <button class="ws-btn" class:danger={sure === 'room'} onclick={() => twice('room', () => designer.deleteRoom(ri))}>{sure === 'room' ? 'Fill it in?' : 'Fill in'}</button>
+          <button class="ws-btn" onclick={() => designer.furnish(ri)} title={building ? 'Furniture for its kind of room, where it fits' : 'Props from its kind’s kit, where they fit'}>Furnish</button>
+          <button class="ws-btn" onclick={() => designer.clearProps(ri)}>{building ? 'Clear furniture' : 'Clear props'}</button>
+          {#if !building}<button class="ws-btn" class:danger={sure === 'room'} onclick={() => twice('room', () => designer.deleteRoom(ri))}>{sure === 'room' ? 'Fill it in?' : 'Fill in'}</button>{/if}
         </div>
       </section>
     {/if}
 
     <details class="ws-group" open={remembered('design.site', !!blocking)} ontoggle={(e) => remember('design.site', e.currentTarget.open)}>
       <summary>
-        <span class="grow">Site</span>
+        <span class="grow">{building ? 'Building' : 'Site'}</span>
         {#if problems.length}<span class="badge" class:blocking={blocking > 0}>{problems.length} {problems.length === 1 ? 'problem' : 'problems'}</span>{:else}<span class="ok">keeps every rule</span>{/if}
       </summary>
       <div class="ws-group-body">
         <div class="ws-row wrap">
-          <button class="ws-btn" onclick={() => designer.addLevel()} disabled={(draft?.levels.length ?? 0) >= (catalog?.max_levels ?? 6)}>Add a level below</button>
-          <button class="ws-btn" class:danger={sure === 'level'} onclick={() => twice('level', () => designer.removeLevel())} disabled={(draft?.levels.length ?? 0) <= 1}>{sure === 'level' ? 'Fill it in?' : 'Fill in the deepest'}</button>
+          {#if !building}
+            <button class="ws-btn" onclick={() => designer.addLevel()} disabled={(draft?.levels.length ?? 0) >= (catalog?.max_levels ?? 6)}>Add a level below</button>
+            <button class="ws-btn" class:danger={sure === 'level'} onclick={() => twice('level', () => designer.removeLevel())} disabled={(draft?.levels.length ?? 0) <= 1}>{sure === 'level' ? 'Fill it in?' : 'Fill in the deepest'}</button>
+          {/if}
           <button class="ws-btn" onclick={() => designer.addDoors()}>Doors where needed</button>
         </div>
+        {#if building}<p class="ws-hint">Its floors follow its storeys: change those in the Build tab.</p>{/if}
         {#if problems.length}
           <ul class="problems">
             {#each problems as p, i (i)}
@@ -195,7 +216,7 @@
   <div class="foot">
     <button class="ws-icon-btn" onclick={() => designer.undo()} disabled={!now.canUndo} title="Undo (Ctrl+Z)" aria-label="Undo"><Icon name="undo" /></button>
     <button class="ws-icon-btn" onclick={() => designer.redo()} disabled={!now.canRedo} title="Redo (Ctrl+Y)" aria-label="Redo"><Icon name="redo" /></button>
-    {#if saved && !peek}<button class="ws-btn quiet" class:danger={sure === 'reset'} onclick={() => twice('reset', onReset)} title="Drop the design: the site as generated">{sure === 'reset' ? 'Drop the design?' : 'As generated'}</button>{/if}
+    {#if saved && !peek}<button class="ws-btn quiet" class:danger={sure === 'reset'} onclick={() => twice('reset', onReset)} title={building ? 'Drop the design: the inside as generated' : 'Drop the design: the site as generated'}>{sure === 'reset' ? 'Drop the design?' : 'As generated'}</button>{/if}
     <span class="grow"></span>
     <button class="ws-btn primary" onclick={onSave} disabled={!now.dirty || blocking > 0} title={saveWhy}>{blocking ? `Save (${blocking} to fix)` : 'Save'}</button>
   </div>

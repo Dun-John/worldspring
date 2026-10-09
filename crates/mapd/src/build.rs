@@ -95,13 +95,32 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
     let change = agent::BuildingChange { func: opt("func"), floors, poly: footprint(a)?, roof: opt("roof"), tint: opt("tint"), structure: opt("structure") };
     let name = opt("name");
     let id2 = id.clone();
-    let edit = app.worker.with(move |ex| agent::building_edit(&ex.world, &ex.t0, &id2, &change)).await?;
+    // Its inside designed by hand: new storeys follow (in the same change); a new footprint or a
+    // ruin sets the design aside.
+    let reshaped = change.poly.is_some() || change.structure.as_deref() == Some("ruin");
+    let (edit, design, aside) = app
+        .worker
+        .with(move |ex| {
+            let edit = agent::building_edit(&ex.world, &ex.t0, &id2, &change)?;
+            let Some(d) = ex.world.file.edits.designs.get(&id2) else { return Ok((edit, None, false)) };
+            if reshaped {
+                return Ok((edit, None, true));
+            }
+            let Some(f) = change.floors else { return Ok((edit, None, false)) };
+            let fit = worldgen::interior::design::refit(&ex.world, &ex.t0, &id2, d, Some(f))?;
+            let ok = fit.as_ref().and_then(|d| worldgen::interior::design::problems_as(&ex.world, &ex.t0, &id2, d, Some(f)).ok()).is_some_and(|(_, p)| p.iter().all(|p| !p.blocking));
+            Ok::<_, String>(if ok { (edit, fit, false) } else { (edit, None, true) })
+        })
+        .await?;
     let id3 = id.clone();
     app.edit("agent", 0, move |e| {
         match edit {
             Some(b) => e.buildings.insert(id3.clone(), b),
             None => e.buildings.remove(&id3),
         };
+        if let Some(d) = design {
+            e.designs.insert(id3.clone(), d);
+        }
         match name {
             Some(n) if !n.is_empty() => {
                 e.renames.insert(id3.clone(), n);
@@ -116,6 +135,9 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
     .await?;
     let mut v = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "changed, but it could not be read back".to_string())).await?;
     v["tool"] = json!("update_building");
+    if aside {
+        v["note"] = json!("its inside was designed by hand for the building as it was: that design is set aside (the generated interior stands) until the footprint and storeys are as they were; set_site_design makes a new one");
+    }
     Ok(v)
 }
 

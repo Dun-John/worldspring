@@ -143,7 +143,9 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['K', 'rock', 'Rock'],
     ['O', 'door', 'Door'],
     ['F', 'prop', 'Props'],
-    ['W', 'stairs', 'Way down'],
+    ['W', 'stairs', 'Way down (in a building: the stairs)'],
+    ['L', 'wall', 'Wall line (in a building)'],
+    ['E', 'merge', 'Take a wall away (in a building)'],
   ];
   const designing = () => edit('design')() && k.designing();
   for (const [key, m, label] of design) out.push({ keys: [key], label, group: 'Design', when: designing, run: () => k.designMode(m) });

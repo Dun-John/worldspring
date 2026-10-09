@@ -248,10 +248,11 @@ export const CROSSING_WIDTH: [number, number] = [5, 40];
 export const CROSSING_LENGTH: [number, number] = [10, 2000];
 export const FERRY_MIN_FT = 68;
 
-/** An underground site designed by hand (`worldgen::under::design::SiteDesign`): a copy of the
- * generated site, changed. Walls are derived; levels run bottom to top, as `Interior`'s. */
+/** An underground site or a building's interior designed by hand
+ * (`worldgen::under::design::SiteDesign`): a copy of the generated one, changed. Walls are
+ * derived; levels run bottom to top, as `Interior`'s. */
 export interface SiteDesign {
-  /** dungeon, crypt, catacombs, cave, mine, lava_tube. */
+  /** dungeon, crypt, catacombs, cave, mine, lava_tube; `building` (`b:` ids). */
   kind: string;
   theme?: string;
   origin: [number, number];
@@ -261,6 +262,10 @@ export interface SiteDesign {
   /** The way in on the top level (under the entrance). */
   entry: [number, number];
   levels: DesignLevel[];
+  /** A building's stair block: x, y, w, h (the same squares on every level it reaches). */
+  stairs?: [number, number, number, number];
+  /** A building's: what it was made for (its grid, footprint and storeys). */
+  fingerprint?: string;
 }
 
 export interface DesignLevel {
@@ -271,10 +276,15 @@ export interface DesignLevel {
   cells: number[];
   /** By index (empty ones stay, so room names hold). */
   rooms: { kind: string; raise_ft: number }[];
-  /** x, y, side (0 east, 1 south), secret (0/1). */
+  /** x, y, side (0 east, 1 south; a building's also 2 west, 3 north), flags (1 secret; a
+   * building's door to the outside: 2 front, 4 back). */
   doors: [number, number, number, number][];
-  /** Props and the ways (`exit`, `up`, `down`), in order. */
+  /** Props and the ways (`exit`, `up`, `down`), in order; a building's furniture. */
   items: { kind: string; x: number; y: number; w: number; h: number }[];
+  /** A building's: storey (-1 cellar, 0 ground floor), an open roof, the stairs reach it. */
+  z?: number;
+  roof?: boolean;
+  has_stairs?: boolean;
 }
 
 /** Something wrong with a design (`worldgen::under::design::Problem`); `blocking` ones keep it
@@ -287,7 +297,7 @@ export interface DesignProblem {
 }
 
 /** A design with the site it builds and its problems (Ask op `design`). */
-export type DesignReply = { design: SiteDesign; interior: Interior; problems: DesignProblem[] } | { error: string };
+export type DesignReply = { design: SiteDesign; interior: Interior; problems: DesignProblem[]; set_aside?: boolean } | { error: string };
 
 /** What the designer offers (`worldgen::under::design::catalog_json`). */
 export interface UnderCatalog {
@@ -298,6 +308,8 @@ export interface UnderCatalog {
   themes: { key: string; kind: string; first: string; passage: string; rooms: string[] }[];
   boss: string;
   max_levels: number;
+  /** What a building's design can be given: furniture and room kinds. */
+  building: { furniture: { kind: string; name: string; cover: number; blocks: boolean; height_ft: number; w: number; h: number }[]; rooms: string[] };
 }
 
 /** A battlemap object put down by hand (`worldgen::world::Placed`): a built-in kind (catalog

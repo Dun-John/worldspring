@@ -1,19 +1,22 @@
-// The dungeon designer: changes an underground site (a copy of the generated one, or the design
-// saved before) and shows each change at once as the site it builds. Changes go to a draft with
-// its own undo; Save puts the draft in the world's edits, and only when it keeps the rules
-// play mode needs (one way in, ways down and up aligned, every square reached: the generator
-// checks them, `under::design::check`).
+// The designer: changes an underground site or a building's interior (a copy of the generated
+// one, or the design saved before) and shows each change at once as what it builds. Changes go
+// to a draft with its own undo; Save puts the draft in the world's edits, and only when it keeps
+// the rules play mode needs (the generator checks them: `under::design::check`, a building's
+// `interior::design::check`).
 //
-// On the map: paint a room, dig a rectangle room or a corridor, fill squares back with rock;
-// click a wall for a door (again: a secret door, again: none); put props down (click one to
-// take it away); click a square for the level's way down. Right-drag pans.
+// On the map, underground: paint a room, dig a rectangle room or a corridor, fill squares back
+// with rock; click a wall for a door (again: a secret door, again: none); put props down (click
+// one to take it away); click a square for the level's way down. In a building: paint squares
+// into a room, draw a wall line to split a room, click a wall to take it away (two rooms made
+// one), doors as underground (in an outside wall: a back door, then the front door), furniture,
+// drag out the stair block. Right-drag pans.
 import type { Graphics } from 'pixi.js';
 import type { DesignProblem, SiteDesign, UnderCatalog } from '../../gen/protocol';
 import type { Camera } from '../../render/camera';
 import type { MapView, PointerTool } from '../../render/MapView';
-import { addLevel, addProp, addRoom, BOSS, cycleDoor, decode, paint, propAt, rectSquares, removeLevel, setWayDown, WAYS } from './model';
+import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, isBuilding, mergeRooms, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, wallLine, WAYS } from './model';
 
-export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'prop' | 'stairs';
+export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'prop' | 'stairs' | 'wall' | 'merge';
 
 /** The designer menu's choices. */
 export interface DesignSettings {
@@ -57,6 +60,8 @@ export class SiteDesigner implements PointerTool {
   private stroke: Set<number> | null = null;
   private last: Sq | null = null;
   private rect: { from: Sq; to: Sq } | null = null;
+  /** A wall line being drawn (grid corners). */
+  private line: { from: Sq; to: Sq } | null = null;
   /** The pointer (grid units). */
   private pointer: [number, number] | null = null;
 
@@ -75,6 +80,7 @@ export class SiteDesigner implements PointerTool {
     }
     this.saved = JSON.stringify(reply.design);
     await this.take(reply.design, reply.problems, reply.interior);
+    if (reply.set_aside) this.host.hint('Its inside was designed for the building as it was: this is the generated one (saving replaces that design)');
     return true;
   }
 
@@ -183,16 +189,21 @@ export class SiteDesigner implements PointerTool {
     void this.change(() => {}, { furnish: { level: this.level, room: ri, seed: Math.floor(Math.random() * 2 ** 31) } });
   }
 
-  /** Every prop standing in the room taken away. */
+  /** Every prop (a building's furniture) standing in the room taken away. */
   clearProps(ri: number) {
     const li = this.level;
     void this.change((d) => {
       const lv = d.levels[li];
       const cells = decode(lv.cells, d.nx * d.ny);
       const n = lv.items.length;
-      lv.items = lv.items.filter((f) => WAYS.includes(f.kind) || cells[f.y * d.nx + f.x] !== ri);
+      // (Spiral stairs stay: above the stair block they are the way up.)
+      lv.items = lv.items.filter((f) => WAYS.includes(f.kind) || f.kind === 'spiral_stair' || cells[f.y * d.nx + f.x] !== ri);
       return lv.items.length !== n;
     });
+  }
+
+  get building(): boolean {
+    return isBuilding(this.draft);
   }
 
   /** The room filled back with rock. */
@@ -271,14 +282,23 @@ export class SiteDesigner implements PointerTool {
       if (!sq) return true;
       this.stroke = new Set(this.brush(sq));
       this.last = sq;
-    } else if (mode === 'rect' && sq) {
+    } else if ((mode === 'rect' || (mode === 'stairs' && this.building)) && sq) {
       this.rect = { from: sq, to: sq };
+    } else if (mode === 'wall') {
+      const g = this.grid(x, y);
+      if (g) this.line = { from: [Math.round(g[0]), Math.round(g[1])], to: [Math.round(g[0]), Math.round(g[1])] };
     }
     return true;
   }
 
   move(x: number, y: number) {
     this.pointer = this.grid(x, y);
+    if (this.line && this.pointer) {
+      // Along the grid line the pointer is furthest along.
+      const [p, f] = [this.pointer, this.line.from];
+      const [dx, dy] = [Math.round(p[0]) - f[0], Math.round(p[1]) - f[1]];
+      this.line.to = Math.abs(dx) >= Math.abs(dy) ? [f[0] + dx, f[1]] : [f[0], f[1] + dy];
+    }
     const sq = this.square(x, y);
     if (!sq) return;
     if (this.stroke && this.last) {
@@ -300,8 +320,15 @@ export class SiteDesigner implements PointerTool {
     const d = this.draft;
     if (!d) return;
     const doors = s.autoDoors ? { doors: li } : undefined;
+    if (this.line) {
+      const { from, to } = this.line;
+      this.line = null;
+      return this.drawWall(from, to, x, y, doors);
+    }
     if (this.stroke) {
-      const squares = [...this.stroke];
+      // (A building's squares stay inside its walls: only those with a room are painted.)
+      const inside = this.building ? decode(d.levels[li].cells, d.nx * d.ny) : null;
+      const squares = [...this.stroke].filter((k) => !inside || inside[k] >= 0);
       this.stroke = null;
       this.last = null;
       if (s.mode === 'rock') return void this.change((n) => paint(n, li, squares, -1));
@@ -319,9 +346,18 @@ export class SiteDesigner implements PointerTool {
     if (this.rect) {
       const { from, to } = this.rect;
       this.rect = null;
+      if (s.mode === 'stairs') {
+        const [x0, y0] = [Math.min(from[0], to[0]), Math.min(from[1], to[1])];
+        const [w, h] = [Math.abs(to[0] - from[0]) + 1, Math.abs(to[1] - from[1]) + 1];
+        if (w > 3 || h > 3) return this.host.hint('The stairs are 1 to 3 squares each way');
+        return void this.change((n) => setStairs(n, x0, y0, w, h), s.autoDoors ? { doors: null } : undefined);
+      }
+      const inside = this.building ? decode(d.levels[li].cells, d.nx * d.ny) : null;
+      const squares = rectSquares(d, from[0], from[1], to[0], to[1]).filter((k) => !inside || inside[k] >= 0);
+      if (!squares.length) return;
       void this.change((n) => {
         const ri = addRoom(n, li, s.kind);
-        paint(n, li, rectSquares(n, from[0], from[1], to[0], to[1]), ri);
+        paint(n, li, squares, ri);
         this.selected = ri;
       }, doors);
       return;
@@ -337,6 +373,7 @@ export class SiteDesigner implements PointerTool {
         this.host.changed();
         return;
       case 'door': {
+        if (this.building) return this.buildingDoor(g, cells);
         const e = this.edge(g);
         if (!e) return this.host.hint('Click a wall between two rooms');
         const ka = e[1] * d.nx + e[0];
@@ -355,12 +392,78 @@ export class SiteDesigner implements PointerTool {
           }
         });
       }
+      case 'merge': {
+        const e = this.edge4(g);
+        if (!e) return;
+        return void this.change((n) => {
+          if (!mergeRooms(n, li, e)) {
+            this.host.hint('Click a wall between two rooms');
+            return false;
+          }
+        });
+      }
       case 'stairs': {
+        if (this.building) return;
         if (li === 0) return this.host.hint('The deepest level has no way down: add a level below first');
         if (cells[k] < 0) return this.host.hint('The way down goes on the floor');
         return void this.change((n) => setWayDown(n, li, sq[0], sq[1]), s.autoDoors ? { doors: li - 1 } : undefined);
       }
     }
+  }
+
+  /** A door in a building's wall: between two rooms none → door → secret door → none; in an
+   * outside wall none → back door → front door → none. */
+  private buildingDoor(g: [number, number], cells: Int16Array) {
+    const d = this.draft!;
+    const li = this.level;
+    const e = this.edge4(g);
+    if (!e) return;
+    const room = (s: Sq) => (s[0] >= 0 && s[1] >= 0 && s[0] < d.nx && s[1] < d.ny ? cells[s[1] * d.nx + s[0]] : -1);
+    const [ra, rb] = [room(e.a), room(e.b)];
+    const at = doorPlace(d, cells, e);
+    if (!at || ra === rb) return this.host.hint('Doors go in walls: between two rooms, or to the outside');
+    if (ra >= 0 && rb >= 0) return void this.change((n) => cycleDoor(n, li, at[0], at[1], at[2]));
+    if ((d.levels[li].z ?? 0) !== 0) return this.host.hint('Doors to the outside go on the ground floor');
+    return void this.change((n) => cycleOuterDoor(n, li, at[0], at[1], at[2]));
+  }
+
+  /** A wall line from corner to corner splits the room it crosses (it runs on to the room's own
+   * walls); a click puts one along the grid line nearest it. */
+  private drawWall(from: Sq, to: Sq, x: number, y: number, doors?: object) {
+    const d = this.draft!;
+    const li = this.level;
+    const cells = decode(d.levels[li].cells, d.nx * d.ny);
+    let [p, q] = [from, to];
+    if (p[0] === q[0] && p[1] === q[1]) {
+      const g = this.grid(x, y);
+      const e = g && this.edge4(g);
+      if (!e) return;
+      // The edge's line: between its squares.
+      const [a, b] = [e.a, e.b];
+      [p, q] = a[0] === b[0] ? [[a[0], Math.max(a[1], b[1])], [a[0] + 1, Math.max(a[1], b[1])]] : [[Math.max(a[0], b[0]), a[1]], [Math.max(a[0], b[0]), a[1] + 1]];
+    }
+    const walls = wallLine(d, cells, p, q);
+    if (!walls.length) return this.host.hint('Draw the wall across a room');
+    void this.change((n) => {
+      const made = splitRooms(n, li, walls);
+      if (!made.length) {
+        this.host.hint('A wall must cut the room in two: draw it from wall to wall');
+        return false;
+      }
+      this.selected = made[0];
+    }, doors);
+  }
+
+  /** The square edge nearest a grid point, as the squares either side (one maybe off the grid:
+   * a building's outside walls). */
+  private edge4(g: [number, number]): Edge | null {
+    const d = this.draft!;
+    const [i, j] = [Math.floor(g[0]), Math.floor(g[1])];
+    const [fx, fy] = [g[0] - i, g[1] - j];
+    const near = Math.min(fx, 1 - fx, fy, 1 - fy);
+    const e: Edge = near === fx ? { a: [i - 1, j], b: [i, j] } : near === 1 - fx ? { a: [i, j], b: [i + 1, j] } : near === fy ? { a: [i, j - 1], b: [i, j] } : { a: [i, j], b: [i, j + 1] };
+    const on = (s: Sq) => s[0] >= 0 && s[1] >= 0 && s[0] < d.nx && s[1] < d.ny;
+    return on(e.a) || on(e.b) ? e : null;
   }
 
   /** The room a corridor paints on this level: the theme's passages (caves: the open floor,
@@ -384,6 +487,7 @@ export class SiteDesigner implements PointerTool {
   cancel() {
     this.stroke = null;
     this.rect = null;
+    this.line = null;
     this.last = null;
   }
 
@@ -412,6 +516,15 @@ export class SiteDesigner implements PointerTool {
         .fill({ color: ink, alpha: 0.3 })
         .stroke({ width: 2, color: ink });
     }
+    if (this.line) {
+      const [a, b] = [scr(...this.line.from), scr(...this.line.to)];
+      g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: 4, color: ink, cap: 'round' });
+    }
+    // A building's stair block, while it is being moved.
+    if (this.building && s.mode === 'stairs' && d.stairs && !this.rect) {
+      const [sx, sy, sw, sh] = d.stairs;
+      g.poly(quad(sx, sy, sx + sw, sy + sh)).stroke({ width: 2, color: 0x38bdf8 });
+    }
     // The room chosen.
     const li = this.level;
     if (this.selected !== null && s.mode !== 'rock') {
@@ -420,9 +533,21 @@ export class SiteDesigner implements PointerTool {
     }
     // What the pointer is on.
     const h = this.pointer;
-    if (h && !this.stroke && !this.rect) {
+    if (h && !this.stroke && !this.rect && !this.line) {
       const [i, j] = [Math.floor(h[0]), Math.floor(h[1])];
-      if (s.mode === 'door') {
+      if (this.building && (s.mode === 'door' || s.mode === 'merge' || s.mode === 'wall')) {
+        const e = this.edge4(h);
+        if (e && s.mode === 'wall') {
+          const c = [Math.round(h[0]), Math.round(h[1])] as const;
+          g.circle(...scr(c[0], c[1]), 4).fill({ color: ink });
+        } else if (e) {
+          // The edge between its two squares.
+          const vert = e.a[1] === e.b[1];
+          const [x0, y0] = [Math.max(e.a[0], e.b[0]), Math.max(e.a[1], e.b[1])];
+          const [a, b] = vert ? [scr(x0, y0), scr(x0, y0 + 1)] : [scr(x0, y0), scr(x0 + 1, y0)];
+          g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: 4, color: s.mode === 'merge' ? 0x7f1d1d : ink });
+        }
+      } else if (s.mode === 'door') {
         const e = this.edge(h);
         if (e) {
           const [a, b] = e[2] === 0 ? [scr(e[0] + 1, e[1]), scr(e[0] + 1, e[1] + 1)] : [scr(e[0], e[1] + 1), scr(e[0] + 1, e[1] + 1)];

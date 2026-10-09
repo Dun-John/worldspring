@@ -838,7 +838,7 @@
   const buildOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'build');
   const notebookOn = $derived(shell.section === 'notes');
   /** Sites underground can be designed, but not while playing. */
-  const canDesign = $derived(!!inside?.id.startsWith('u:') && !playOn);
+  const canDesign = $derived(!!inside && /^[ub]:/.test(inside.id) && !playOn);
   // The place menu: put a site on the map (a click places it).
   let placeArmed = $state(false);
   /** What is being placed ("crypt"), for the banner over the map. */
@@ -860,7 +860,7 @@
   function go(to: Section | null, tab?: string) {
     const t = to && to !== 'play' ? (tab ?? shell.tabs[to]) : undefined;
     if (busy && (to === 'edit' || to === 'play')) return;
-    if (to === 'edit' && t === 'design' && !designer && !canDesign) return toast(playOn ? 'Stop playing to design a site' : 'Go down into a dungeon, cave or mine to design it');
+    if (to === 'edit' && t === 'design' && !designer && !canDesign) return toast(playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design it');
     const keepSketch = to === 'world';
     const keepDesign = to === 'edit' && t === 'design';
     if (sketchOn && !keepSketch && sketchDirty()) return ask('sketch', () => go(to, tab));
@@ -1228,7 +1228,19 @@
     else delete all[id];
     const name = build.name.trim();
     const renamesNext = name ? { ...(edits.renames ?? {}), [id]: name } : edits.renames;
-    applyEdits({ ...edits, buildings: all, renames: renamesNext }, { tool: 'update_building', id, name: name || g.name }, 'user');
+    // Its inside designed by hand: new storeys follow (in the same step); a new footprint sets
+    // the design aside (it comes back with the footprint).
+    const designed = edits.designs?.[id];
+    let designs = edits.designs;
+    let aside = '';
+    if (designed && (poly || change.structure === 'ruin')) aside = 'Its inside, designed by hand, no longer fits: set aside';
+    else if (designed && change.floors !== undefined) {
+      const fit = await view.gen.design(id, designed, { refit: build.floors });
+      if (!('error' in fit) && !fit.problems.some((p) => p.blocking)) designs = { ...designs, [id]: fit.design };
+      else aside = 'Its inside, designed by hand, can’t follow the new storeys: set aside';
+    }
+    applyEdits({ ...edits, buildings: all, renames: renamesNext, designs }, { tool: 'update_building', id, name: name || g.name }, 'user');
+    if (aside) toast(aside);
     genEditing = { name: name || g.name, was: { ...build, name: '' } };
     build.name = '';
     // The info panel and the build menu show it as it is now (a new trade brings a new name).
@@ -1338,7 +1350,7 @@
   let underCatalog = $state.raw<UnderCatalog | null>(null);
   async function openDesigner() {
     const id = inside?.id;
-    if (!id || !id.startsWith('u:') || designer) return;
+    if (!id || !/^[ub]:/.test(id) || designer) return;
     if (!underCatalog) underCatalog = await view.gen.underCatalog();
     const d = new SiteDesigner(view, id, {
       settings: () => designSettings,
@@ -1348,9 +1360,18 @@
     });
     // (Still wanted once it has loaded: the same site, the Design tab open.)
     if (!(await d.open()) || inside?.id !== id || designer || shell.section !== 'edit' || shell.tabs.edit !== 'design') return;
-    // New rooms are, at first, the kind this site has most of its own.
+    // New rooms are, at first, the kind this site has most of its own (a building's: a
+    // storeroom); the tools and the props are the ones it has.
     const t = underCatalog.themes.find((x) => x.key === d.draft?.theme);
-    designSettings.kind = t?.rooms.find((k) => k !== t.first && k !== t.passage) ?? 'chamber';
+    const inBuilding = d.draft?.kind === 'building';
+    const mode = designSettings.mode;
+    const bad = inBuilding ? mode === 'corridor' || mode === 'rock' : mode === 'wall' || mode === 'merge';
+    designSettings = {
+      ...designSettings,
+      mode: bad ? 'room' : mode,
+      kind: inBuilding ? 'storeroom' : (t?.rooms.find((k) => k !== t.first && k !== t.passage) ?? 'chamber'),
+      ...(inBuilding ? { prop: 'table', pw: 2, ph: 1 } : { prop: 'chest', pw: 1, ph: 1 }),
+    };
     designer = d;
     view.designing = id;
     syncTool();
@@ -1946,7 +1967,12 @@
     },
     buildFinish: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildArmed?.tool.finish()),
     buildBack: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildArmed?.tool.back()),
-    designMode: (m) => (designSettings = { ...designSettings, mode: m }),
+    designMode: (m) => {
+      // (Rock and corridors are underground; wall lines and taking walls away, in buildings.)
+      const inBuilding = designer?.building ?? false;
+      if (inBuilding ? m === 'corridor' || m === 'rock' : m === 'wall' || m === 'merge') return;
+      designSettings = { ...designSettings, mode: m };
+    },
     playTool: (t) => play.setTool(t),
     removeTokens: () => play.removeSelected(),
     escape: [
@@ -2206,7 +2232,7 @@
         { key: 'sites', label: 'Sites', icon: 'pin', kbd: 'S' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B' },
         { key: 'scatter', label: 'Scatter', icon: 'tree', kbd: 'C' },
-        { key: 'design', label: 'Design', icon: 'room', kbd: 'D', disabled: !canDesign && !designer, title: designer || canDesign ? 'Design this site (D)' : playOn ? 'Stop playing to design a site' : 'Go down into a dungeon, cave or mine to design it' },
+        { key: 'design', label: 'Design', icon: 'room', kbd: 'D', disabled: !canDesign && !designer, title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building (D)' : 'Design this site (D)') : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design it' },
       ]}
       tab={shell.tabs.edit}
       onTab={(k) => go('edit', k)}

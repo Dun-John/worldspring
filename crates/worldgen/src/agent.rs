@@ -906,6 +906,7 @@ pub fn overview(world: &World, t0: &T0) -> Value {
         "buildings_changed": world.file.edits.buildings.len(),
         // Changes to the world's own buildings that no longer apply (the town was laid out anew).
         "buildings_set_aside": town::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
+        "designs_set_aside": crate::interior::design::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
     })
 }
 
@@ -1055,6 +1056,11 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         });
         if world.file.edits.buildings.get(id).is_some() {
             v["edited"] = json!(true);
+        }
+        // Its inside designed by hand (get_site_design), or a design that no longer fits.
+        if let Some(d) = world.file.edits.designs.get(id) {
+            let fits = crate::interior::design::designed(t0, &l, nums[0], b, d).is_some();
+            v["interior_designed"] = json!(if fits { "yes" } else { "set aside: it no longer fits the building (see world_overview)" });
         }
         v["settlement"] = json!({ "id": feature_of_layout(world, t0, nums[0]), "name": feature_of_layout(world, t0, nums[0]).and_then(|f| name_of(world, t0, &f)) });
         if let Some(it) = crate::interior::generate_id(world, t0, id) {

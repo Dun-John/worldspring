@@ -34,7 +34,7 @@
     {/each}
   </div>
   <div class="actions">
-    {#if onDesign}<button class="ws-icon-btn" onclick={onDesign} title={designed ? 'Change the design' : 'Design this site'} aria-label="Design this site"><Icon name="pencil" size={16} /></button>{/if}
+    {#if onDesign}<button class="ws-icon-btn" onclick={onDesign} title={designed ? 'Change the design' : state.id.startsWith('b:') ? 'Design this building' : 'Design this site'} aria-label="Design this site"><Icon name="pencil" size={16} /></button>{/if}
     <button class="ws-btn leave" onclick={onExit} title="{under ? 'Back to the surface' : 'Leave the building'} (Esc)"><Icon name="leave" size={16} /><span class="word">Leave</span></button>
   </div>
 </aside>

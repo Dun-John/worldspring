@@ -562,12 +562,137 @@ fn interiors_guarantee() {
             checked += 1;
         }
     }
+    designed_building(&world, &t0, by_tier(Tier::Town).expect("a town"));
     assert!(checked > 500, "too few interiors ({checked})");
     assert!(drinking > 10, "too few inns and taverns checked ({drinking})");
     assert!(towers > 20, "too few wall towers checked ({towers})");
     assert!(cells > 50, "too few prison cells checked ({cells})");
     // The M5 budget (an interior opens within 300 ms); typical is well under 1 ms.
     assert!(worst_ms < 300.0, "slowest interior took {worst_ms:.1} ms");
+}
+
+/// A building's interior designed by hand (the designer's changes: a room split in two by a wall,
+/// the stairs moved, a back door to the outside): it keeps every rule interiors keep, the world
+/// builds it (its hash unchanged; the design travels as an edit op and back); once the footprint
+/// changes the design is set aside (the generated interior stands); with another storey it is
+/// fitted to the building, its own floors kept.
+fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
+    use worldgen::interior::{self, design as bd};
+    use worldgen::town::{self, Structure, geom};
+    use worldgen::under::design::{self, DesignRoom};
+    let l = town::layout(world, t0, si);
+    let buckets = building_buckets(&l);
+    let ok = |d: &design::SiteDesign, id: &str| d.problems(world, t0, id).unwrap().1.iter().all(|p| !p.blocking);
+    let mut done = None;
+    for b in l.buildings.iter().filter(|b| b.structure == Structure::Roofed && b.floors >= 2 && b.poly.len() == 4) {
+        let id = format!("b:{si}:{}", b.id);
+        let (mut d, aside) = bd::design_of(world, t0, &id, false).unwrap();
+        assert!(!aside, "{id}: set aside with no design saved");
+        let (nx, ny) = (d.nx as usize, d.ny as usize);
+        let g = d.levels.iter().position(|lv| lv.z == 0).unwrap();
+        // The ground floor's biggest room, split across its depth: the far part a study.
+        let mut cells = design::decode(&d.levels[g].cells, nx * ny).unwrap();
+        let big = (0..d.levels[g].rooms.len()).max_by_key(|&r| cells.iter().filter(|&&c| c == r as i16).count()).unwrap() as i16;
+        let ys: Vec<usize> = (0..nx * ny).filter(|&k| cells[k] == big).map(|k| k / nx).collect();
+        let (y0, y1) = (*ys.iter().min().unwrap(), *ys.iter().max().unwrap());
+        if y1 - y0 < 3 {
+            continue;
+        }
+        let cut = (y0 + y1 + 1) / 2;
+        let study = d.levels[g].rooms.len() as i16;
+        for k in 0..nx * ny {
+            if cells[k] == big && k / nx >= cut {
+                cells[k] = study;
+            }
+        }
+        d.levels[g].rooms.push(DesignRoom { kind: "study".into(), raise_ft: 0 });
+        d.levels[g].cells = design::encode(&cells);
+        d.add_doors(Some(g));
+        if !ok(&d, &id) {
+            continue;
+        }
+        // A back door: an outside wall of the study onto open ground, its doorway clear.
+        let mut back = false;
+        'door: for k in (0..nx * ny).filter(|&k| cells[k] == study) {
+            for side in 0..4u16 {
+                let (x, y) = ((k % nx) as u16, (k / nx) as u16);
+                let Some((_, other, _, _)) = bd::door_at(x, y, side, nx, ny) else { continue };
+                if other.is_some_and(|o| cells[o] >= 0) {
+                    continue;
+                }
+                let mut t = d.clone();
+                t.levels[g].doors.push([x, y, side, bd::BACK]);
+                if ok(&t, &id) {
+                    d = t;
+                    back = true;
+                    break 'door;
+                }
+            }
+        }
+        // The stairs moved: the same size, elsewhere on the floor of every level they reach.
+        let [sx, sy, sw, sh_] = bd::stairs_of(&d);
+        let mut moved = false;
+        'stairs: for y in 0..=ny - sh_ {
+            for x in 0..=nx - sw {
+                if (x, y) == (sx, sy) {
+                    continue;
+                }
+                let mut t = d.clone();
+                t.stairs = Some([x as u16, y as u16, sw as u16, sh_ as u16]);
+                if ok(&t, &id) {
+                    d = t;
+                    moved = true;
+                    break 'stairs;
+                }
+            }
+        }
+        if back && moved {
+            done = Some((id, d, b.floors));
+            break;
+        }
+    }
+    let (id, d, floors) = done.expect("a building to design");
+    let (built, problems) = d.problems(world, t0, &id).unwrap();
+    assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
+    // The world builds it, as every interior is built: the vital rules hold.
+    let mut file = world.file.clone();
+    let v = serde_json::to_value(&d).unwrap();
+    let undo = file.edits.apply(&worldgen::world::EditOp::Set { field: "designs".into(), key: id.clone(), value: v.clone() }).unwrap();
+    assert_eq!(serde_json::to_value(&file.edits.designs[&id]).unwrap(), v, "{id}: the design changed on the round trip");
+    assert!(matches!(undo, worldgen::world::EditOp::Unset { .. }), "{id}: undoing a new design unsets it");
+    let w2 = World::from_json(&serde_json::to_string(&file).unwrap()).unwrap();
+    assert_eq!(w2.hash, world.hash, "designs are edits: the world hash stays");
+    let it = interior::generate_id(&w2, t0, &id).unwrap();
+    assert_eq!(serde_json::to_string(&it).unwrap(), serde_json::to_string(&built).unwrap(), "{id}: the world doesn't build the design");
+    let g = &it.levels[it.entry_level];
+    assert!(g.rooms.iter().any(|r| r.kind == "study") && g.doors.iter().any(|d| d.kind == "back"), "{id}: the study and its back door");
+    check_interior(&w2, t0, &town::layout(&w2, t0, si), si, &id, &buckets);
+    // A new footprint: the design no longer fits, the generated interior stands.
+    let b = l.building(id.rsplit(':').next().unwrap().parse().unwrap()).unwrap();
+    let c = geom::centroid(&b.poly);
+    let smaller: Vec<[f64; 2]> = b.poly.iter().map(|p| [c[0] + (p[0] - c[0]) * 0.8, c[1] + (p[1] - c[1]) * 0.8]).collect();
+    let edit = |change: worldgen::agent::BuildingChange| {
+        let mut f = file.clone();
+        f.edits.buildings.insert(id.clone(), worldgen::agent::building_edit(&w2, t0, &id, &change).unwrap().expect("a change"));
+        World::new(f).unwrap()
+    };
+    let w3 = edit(worldgen::agent::BuildingChange { poly: Some(smaller), ..Default::default() });
+    let it3 = interior::generate_id(&w3, t0, &id).unwrap();
+    assert!(!it3.levels.iter().any(|lv| lv.doors.iter().any(|d| d.kind == "back")), "{id}: a design built on a footprint it wasn't made for");
+    assert!(bd::design_of(&w3, t0, &id, false).unwrap().1, "{id}: the design not set aside");
+    // Another storey: the design follows, its ground floor as designed.
+    let w4 = edit(worldgen::agent::BuildingChange { floors: Some(floors + 1), ..Default::default() });
+    let fit = bd::refit(&w4, t0, &id, &d, None).unwrap().expect("refitted");
+    assert!(bd::refit(world, t0, &id, &d, Some(floors + 1)).unwrap().as_ref() == Some(&fit), "{id}: fitted ahead of the change, it differs");
+    assert!(bd::problems_as(world, t0, &id, &fit, Some(floors + 1)).unwrap().1.iter().all(|p| !p.blocking), "{id}: fitted ahead of the change, it breaks a rule");
+    assert_eq!(fit.levels.len(), d.levels.len() + 1, "{id}: no storey added");
+    assert!(fit.levels.iter().find(|lv| lv.z == 0) == d.levels.iter().find(|lv| lv.z == 0), "{id}: the ground floor's design lost");
+    let (_, problems) = fit.problems(&w4, t0, &id).unwrap();
+    assert!(problems.iter().all(|p| !p.blocking), "{id}: refitted: {problems:?}");
+    // The text plan reads back as the design.
+    let text = design::to_text(&d, &|_, _| None).unwrap();
+    let (back, _) = design::from_text(&text, &bd::design_of(world, t0, &id, false).unwrap().0).unwrap();
+    assert!(back == d, "{id}: the text plan doesn't read back:\n{text}");
 }
 
 /// A layout's roofed buildings by 100-ft bucket, for "does this door open into a neighbour's wall".
@@ -601,6 +726,13 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
     let (nx, ny) = (it.nx, it.ny);
     let tag = format!("{bi} ({})", it.function);
     assert!(it.levels.len() >= 2, "{tag}: only {} level", it.levels.len());
+    // A building's interior as a design builds it again exactly, and keeps the designer's rules.
+    if id.starts_with("b:") {
+        let (d, _) = interior::design::design_of(world, t0, id, false).unwrap();
+        let (built, problems) = interior::design::problems(world, t0, id, &d).unwrap();
+        assert!(problems.is_empty(), "{tag}: as a design: {problems:?}");
+        assert_eq!(serde_json::to_string(&built).unwrap(), serde_json::to_string(&it).unwrap(), "{tag}: built again from its design, it differs");
+    }
     // One chapel per building; spiral stairs on the same square on every level with them.
     let chapels = it.levels.iter().flat_map(|lv| lv.rooms.iter()).filter(|r| r.kind == "chapel").count();
     assert!(chapels <= 1, "{tag}: {chapels} chapels");
@@ -1084,20 +1216,20 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     assert_eq!(d.levels.len(), n + 1, "{id}: a level added");
     assert_eq!(names, vec![(0, 1, "The Hoard".to_string())], "{id}: an unknown kind of room is a chamber by that name");
     assert_eq!(d.levels[0].items.iter().filter(|f| f.kind == "up").map(|f| (f.x as usize, f.y as usize)).collect::<Vec<_>>(), vec![(x, y)], "{id}: the way up is put under the way down");
-    let (it, problems) = d.problems(&id);
+    let (it, problems) = d.problems(world, t0, &id).unwrap();
     assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
     assert_eq!(it.levels[0].doors.len(), 1, "{id}: one door from the landing into the vault");
     // Broken: the vault shut off; the way in moved; the way up off the way down.
     let (shut, _) = design::from_text(&level(""), &base).unwrap();
-    assert!(shut.problems(&id).1.iter().any(|p| p.blocking && p.level == 0 && p.text.contains("can't be reached")), "{id}: a room shut off");
+    assert!(shut.problems(world, t0, &id).unwrap().1.iter().any(|p| p.blocking && p.level == 0 && p.text.contains("can't be reached")), "{id}: a room shut off");
     let mut moved = d.clone();
     let top = moved.levels.last_mut().unwrap();
     let e = top.items.iter_mut().find(|f| f.kind == "exit").unwrap();
     e.x += 1;
-    assert!(moved.problems(&id).1.iter().any(|p| p.blocking && p.text.contains("under the entrance")), "{id}: the way in moved");
+    assert!(moved.problems(world, t0, &id).unwrap().1.iter().any(|p| p.blocking && p.text.contains("under the entrance")), "{id}: the way in moved");
     let mut off = d.clone();
     off.levels[0].items.iter_mut().find(|f| f.kind == "up").unwrap().y += 1;
-    assert!(off.problems(&id).1.iter().any(|p| p.blocking && p.level == 0), "{id}: the way up off the way down");
+    assert!(off.problems(world, t0, &id).unwrap().1.iter().any(|p| p.blocking && p.level == 0), "{id}: the way up off the way down");
     // Furnished: props go where they leave everything reachable.
     let mut f = d.clone();
     let had = f.levels[0].items.len();
@@ -1105,7 +1237,7 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     f.levels[0].rooms[0].kind = "armory".into();
     f.furnish(0, 0, 7);
     assert!(f.levels[0].items.len() > had, "{id}: the armory got nothing");
-    assert!(f.problems(&id).1.iter().all(|p| !p.blocking), "{id}: furnishing broke it");
+    assert!(f.problems(world, t0, &id).unwrap().1.iter().all(|p| !p.blocking), "{id}: furnishing broke it");
     // A design travels as an edit op (the app's, an agent's) and comes back as it was.
     let mut file = world.file.clone();
     let v = serde_json::to_value(&f).unwrap();

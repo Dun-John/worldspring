@@ -1124,7 +1124,7 @@ export class PlayController implements PointerTool {
   }
 
   /** Ways in from the street to a place (world ft): its ways up to the surface and its front
-   * doors (inside them). */
+   * and back doors (inside them). */
   private entriesOf(to: Place): [number, number][] {
     if (to.sewers) return this.exitsOfSewers(to.sewers);
     const it = to.it;
@@ -1132,7 +1132,7 @@ export class PlayController implements PointerTool {
     const lv = it.levels[to.level];
     const out: [number, number][] = lv.furniture.filter((f) => f.kind === 'exit').map((f) => to.toWorld(f.x + 0.5, f.y + 0.5));
     for (const d of lv.doors) {
-      if (d.kind !== 'front') continue;
+      if (d.kind !== 'front' && d.kind !== 'back') continue;
       const [ox, oy] = this.outsideOf(it, to.level, d);
       const [mx, my] = [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2];
       out.push(to.toWorld(mx * 2 - ox, my * 2 - oy));
@@ -1141,7 +1141,7 @@ export class PlayController implements PointerTool {
   }
 
   /** Ways out to the street from a place (world ft): its ways up and the street outside its
-   * front doors. */
+   * front and back doors. */
   private exitsOf(from: Place): [number, number][] {
     if (from.sewers) return this.sewerExits;
     const it = from.it;
@@ -1151,7 +1151,7 @@ export class PlayController implements PointerTool {
     const lv = it.levels[level];
     const ground = interiorPlace(it, level, null);
     const out: [number, number][] = lv.furniture.filter((f) => f.kind === 'exit').map((f) => ground.toWorld(f.x + 0.5, f.y + 0.5));
-    for (const d of lv.doors) if (d.kind === 'front') out.push(ground.toWorld(...this.outsideOf(it, level, d)));
+    for (const d of lv.doors) if (d.kind === 'front' || d.kind === 'back') out.push(ground.toWorld(...this.outsideOf(it, level, d)));
     return out;
   }
 
