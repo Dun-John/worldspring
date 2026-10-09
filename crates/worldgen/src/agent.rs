@@ -1059,7 +1059,7 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         }
         // Its inside designed by hand (get_site_design), or a design that no longer fits.
         if let Some(d) = world.file.edits.designs.get(id) {
-            let fits = crate::interior::design::designed(t0, &l, nums[0], b, d).is_some();
+            let fits = b.structure == town::Structure::Roofed && crate::interior::design::designed(world, t0, &l, nums[0], b, d).is_some();
             v["interior_designed"] = json!(if fits { "yes" } else { "set aside: it no longer fits the building (see world_overview)" });
         }
         v["settlement"] = json!({ "id": feature_of_layout(world, t0, nums[0]), "name": feature_of_layout(world, t0, nums[0]).and_then(|f| name_of(world, t0, &f)) });

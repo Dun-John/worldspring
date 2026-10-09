@@ -3,8 +3,10 @@
   // building rooms, wall lines, walls taken away, doors, furniture, the stairs), the room chosen
   // (what it is, its name, a raised floor, the boss chamber, props), the site's levels and what
   // is wrong with it (folded away), and undo, redo and Save (only once nothing breaks the rules
-  // a site keeps) pinned at the bottom.
-  import type { UnderCatalog } from '../gen/protocol';
+  // a site keeps) pinned at the bottom. Props come in groups: a building's furniture and indoor
+  // props, a site's props, and the pictures uploaded in Scatter (either). A building's storeys are
+  // added or taken away here too (the building follows on Save).
+  import type { SpriteMeta, UnderCatalog } from '../gen/protocol';
   import type { DesignMode, DesignSettings, SiteDesigner } from '../editor/site/designer';
   import { BOSS } from '../editor/site/designer';
   import Icon from './Icon.svelte';
@@ -21,6 +23,9 @@
     renames: Record<string, string>;
     /** A design of this site is saved (it can go back to the generated one). */
     saved: boolean;
+    /** Uploaded pictures (asset id → name and rules), and a picture's URL. */
+    sprites: Record<string, SpriteMeta>;
+    picture: (asset: string) => Promise<string | null>;
     /** Only the tools and Save (the panel is folded down). */
     peek?: boolean;
     onRename: (id: string, name: string) => void;
@@ -29,7 +34,7 @@
     onProblem: (level: number, at?: [number, number]) => void;
   }
 
-  let { designer, version, settings = $bindable(), catalog, name, renames, saved, peek = false, onRename, onSave, onReset, onProblem }: Props = $props();
+  let { designer, version, settings = $bindable(), catalog, name, renames, saved, sprites, picture, peek = false, onRename, onSave, onReset, onProblem }: Props = $props();
 
   const TOOLS: { key: DesignMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a room to choose it.' },
@@ -49,7 +54,7 @@
     { key: 'wall', label: 'Wall', icon: 'wall', kbd: 'L', hint: 'Draw a line along the grid across a room (or click by a grid line): the wall runs on to the room’s walls and splits it in two.' },
     { key: 'merge', label: 'Take a wall away', icon: 'eraser', kbd: 'E', hint: 'Click a wall between two rooms: they become one.' },
     { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. In an outside wall of the ground floor: a back door, again the front door, again none.' },
-    { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F', hint: 'Click to put the piece down; click a piece to take it away.' },
+    { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F', hint: 'Click to put the piece down (furniture, a prop or one of your pictures); click a piece to take it away.' },
     { key: 'stairs', label: 'Stairs', icon: 'stairs', kbd: 'W', hint: 'Drag out the stair block (1 to 3 squares each way): the same squares on every floor it reaches. Furniture there goes.' },
   ];
   const cap = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
@@ -58,7 +63,7 @@
   const now = $derived.by(() => {
     void version;
     const d = designer;
-    return { draft: d.draft, level: d.level, selected: d.selected, problems: d.problems, dirty: d.dirty, canUndo: d.canUndo, canRedo: d.canRedo };
+    return { draft: d.draft, level: d.level, selected: d.selected, problems: d.problems, dirty: d.dirty, canUndo: d.canUndo, canRedo: d.canRedo, storeys: d.storeys, storeysChanged: d.storeysChanged };
   });
   const draft = $derived(now.draft);
   const building = $derived(draft?.kind === 'building');
@@ -75,9 +80,20 @@
   const blocking = $derived(problems.filter((p) => p.blocking).length);
   const tool = $derived(tools.find((t) => t.key === settings.mode));
   let propFilter = $state('');
-  const pieces = $derived((building ? catalog?.building.furniture.map((f) => ({ ...f, hazard: null as string | null })) : catalog?.props) ?? []);
-  const propList = $derived(pieces.filter((p) => !propFilter || p.name.includes(propFilter.toLowerCase()) || p.kind.includes(propFilter.toLowerCase())));
-  let sure = $state<'' | 'level' | 'reset' | 'room'>('');
+  // The palette's groups: a building's furniture or indoor props, a site's props, your pictures.
+  type Piece = { kind: string; name: string; cover: number; blocks: boolean; hazard: string | null; w: number; h: number; asset?: string };
+  let group = $state<'main' | 'props' | 'yours'>('main');
+  const yours = $derived(
+    Object.entries(sprites).map(([asset, m]): Piece => {
+      const n = Math.max(1, Math.min(6, Math.ceil(m.size || 1)));
+      return { kind: `s:${asset}`, name: m.name || 'your picture', cover: m.cover, blocks: m.blocks_move, hazard: null, w: n, h: n, asset };
+    }),
+  );
+  const pieces = $derived<Piece[]>(
+    group === 'yours' ? yours : building ? (group === 'props' ? (catalog?.building.props ?? []) : (catalog?.building.furniture.map((f) => ({ ...f, hazard: null })) ?? [])) : (catalog?.props ?? []),
+  );
+  const propList = $derived(pieces.filter((p) => !propFilter || p.name.toLowerCase().includes(propFilter.toLowerCase()) || p.kind.includes(propFilter.toLowerCase())));
+  let sure = $state<'' | 'level' | 'reset' | 'room' | 'storey'>('');
 
   /** Ask twice before something that can't be put back in one click. */
   function twice(what: typeof sure, act: () => void) {
@@ -135,12 +151,20 @@
       <label class="switch"><span class="grow">Add doors where a room would be shut off</span><input type="checkbox" class="ws-switch" bind:checked={settings.autoDoors} /></label>
     {/if}
     {#if settings.mode === 'prop'}
-      <input class="ws-input" type="search" bind:value={propFilter} placeholder={building ? 'Find a piece…' : 'Find a prop…'} aria-label={building ? 'Find a piece of furniture' : 'Find a prop'} />
+      <div class="ws-seg" role="group" aria-label="What to put down">
+        <button class:on={group === 'main'} onclick={() => (group = 'main')}>{building ? 'Furniture' : 'Props'}</button>
+        {#if building}<button class:on={group === 'props'} onclick={() => (group = 'props')}>Indoor props</button>{/if}
+        <button class:on={group === 'yours'} onclick={() => (group = 'yours')}>Yours</button>
+      </div>
+      <input class="ws-input" type="search" bind:value={propFilter} placeholder={building && group !== 'props' ? 'Find a piece…' : 'Find a prop…'} aria-label={building ? 'Find a piece of furniture' : 'Find a prop'} />
       <div class="list">
         {#each propList as p (p.kind)}
-          <button class="ws-chip" class:on={settings.prop === p.kind} onclick={() => pickProp(p.kind)} title={[p.blocks ? 'blocks movement' : 'passable', p.cover ? `cover ${['', '½', '¾', 'total'][p.cover]}` : '', p.hazard ?? ''].filter(Boolean).join(' · ')}>
+          <button class="ws-chip" class:on={settings.prop === p.kind} class:pic={!!p.asset} onclick={() => pickProp(p.kind)} title={[p.blocks ? 'blocks movement' : 'passable', p.cover ? `cover ${['', '½', '¾', 'total'][p.cover]}` : '', p.hazard ?? ''].filter(Boolean).join(' · ')}>
+            {#if p.asset}{#await picture(p.asset) then src}{#if src}<img {src} alt="" />{/if}{/await}{/if}
             {p.name}{p.hazard ? ' ⚠' : ''}
           </button>
+        {:else}
+          <span class="ws-hint">{group === 'yours' ? 'No pictures yet: upload them in Edit › Scatter.' : 'Nothing by that name.'}</span>
         {/each}
       </div>
       <div class="ws-row size">
@@ -201,7 +225,13 @@
           {/if}
           <button class="ws-btn" onclick={() => designer.addDoors()}>Doors where needed</button>
         </div>
-        {#if building}<p class="ws-hint">Its floors follow its storeys: change those in the Build tab.</p>{/if}
+        {#if building}
+          <div class="ws-hint">{now.storeys} {now.storeys === 1 ? 'storey' : 'storeys'} above ground{now.storeysChanged ? ': the building follows on Save' : ''}</div>
+          <div class="ws-row wrap">
+            <button class="ws-btn" onclick={() => designer.setStoreys(now.storeys + 1)} disabled={now.storeys >= (catalog?.building.max_floors ?? 8)}>Add a floor on top</button>
+            <button class="ws-btn" class:danger={sure === 'storey'} onclick={() => twice('storey', () => designer.setStoreys(now.storeys - 1))} disabled={now.storeys <= 1}>{sure === 'storey' ? 'Take it away?' : 'Take the top floor away'}</button>
+          </div>
+        {/if}
         {#if problems.length}
           <ul class="problems">
             {#each problems as p, i (i)}
@@ -265,6 +295,17 @@
   .size input {
     width: 3.4em;
   }
+  .ws-chip.pic {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .ws-chip img {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+  }
+
   .card {
     display: flex;
     flex-direction: column;

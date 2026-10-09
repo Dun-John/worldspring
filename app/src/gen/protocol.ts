@@ -308,8 +308,8 @@ export interface UnderCatalog {
   themes: { key: string; kind: string; first: string; passage: string; rooms: string[] }[];
   boss: string;
   max_levels: number;
-  /** What a building's design can be given: furniture and room kinds. */
-  building: { furniture: { kind: string; name: string; cover: number; blocks: boolean; height_ft: number; w: number; h: number }[]; rooms: string[] };
+  /** What a building's design can be given: furniture, indoor props (kinds of `props`) and room kinds. */
+  building: { furniture: { kind: string; name: string; cover: number; blocks: boolean; height_ft: number; w: number; h: number }[]; props: UnderCatalog['props']; rooms: string[]; max_floors: number };
 }
 
 /** A battlemap object put down by hand (`worldgen::world::Placed`): a built-in kind (catalog
@@ -419,6 +419,8 @@ export interface Interior {
   entry_level: number;
   /** Stair block: x, y, w, h (same on every level). */
   stairs: [number, number, number, number];
+  /** Uploaded pictures standing on its floors (`InteriorItem.sprite` is index + 1). */
+  sprites?: { asset: string; name: string }[];
 }
 
 export interface InteriorLevel {
@@ -456,6 +458,8 @@ export interface InteriorItem {
   height_ft: number;
   /** Hazard rules (traps, lava, pits), if any. */
   hazard?: string;
+  /** An uploaded picture (kind `sprite`): index + 1 into `Interior.sprites`. */
+  sprite?: number;
 }
 
 /** What a point query or building search returns. */

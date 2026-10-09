@@ -609,6 +609,7 @@ fn site(
         levels,
         entry_level,
         stairs: [0; 4],
+        sprites: Vec::new(),
     })
 }
 
@@ -1710,7 +1711,7 @@ fn mine(nx: usize, ny: usize, arrive: usize, last: bool, rng: &mut Pcg32) -> Pla
 impl Item {
     #[allow(clippy::too_many_arguments)]
     pub fn new(kind: &'static str, name: &'static str, x: usize, y: usize, w: usize, h: usize, cover: u8, blocks_move: bool, height_ft: f32, hazard: Option<&'static str>) -> Item {
-        Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move, height_ft, hazard }
+        Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move, height_ft, hazard, sprite: 0 }
     }
 }
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Npc, Overlay, Placed, Plot, SpriteMeta, Stroke, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Npc, Overlay, Placed, Plot, SpriteMeta, Stroke, WorldFile, WorldParams } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { Sketcher, drawsLand, scaleStrokes, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
@@ -912,7 +912,7 @@
       if (choice === 'commit') await generate(draftWorld(), true);
       else leaveSketch();
     } else {
-      if (choice === 'commit') saveDesign();
+      if (choice === 'commit') await saveDesign();
       closeDesigner();
     }
     a.proceed();
@@ -987,6 +987,22 @@
     const m = /^b:(\d+):0$/.exec(id);
     const c = m ? all[Number(m[1]) - settlements.length - sites.length] : all.find((x) => x.id === id);
     return c && c.kind === 'building' && !c.removed ? c : null;
+  }
+
+  /** A building drawn by hand (`c:<n>`) as a building id (`b:<layout>:0`: its inside's). */
+  function drawnBuildingId(cid: string): string {
+    const k = (edits.created ?? []).findIndex((x) => x.id === cid);
+    return `b:${settlements.length + sites.length + k}:0`;
+  }
+
+  /** A building's inside designed by hand, fitted to `floors` storeys (`designs` with it), or why
+   * it is set aside. */
+  async function fitDesign(bid: string, floors: number): Promise<{ designs: Edits['designs']; aside: string }> {
+    const designed = edits.designs?.[bid];
+    if (!designed) return { designs: edits.designs, aside: '' };
+    const fit = await view.gen.design(bid, designed, { refit: floors });
+    if (!('error' in fit) && !fit.problems.some((p) => p.blocking)) return { designs: { ...edits.designs, [bid]: fit.design }, aside: '' };
+    return { designs: edits.designs, aside: 'Its inside, designed by hand, can’t follow the new storeys: set aside' };
   }
 
   function armBuild() {
@@ -1234,11 +1250,7 @@
     let designs = edits.designs;
     let aside = '';
     if (designed && (poly || change.structure === 'ruin')) aside = 'Its inside, designed by hand, no longer fits: set aside';
-    else if (designed && change.floors !== undefined) {
-      const fit = await view.gen.design(id, designed, { refit: build.floors });
-      if (!('error' in fit) && !fit.problems.some((p) => p.blocking)) designs = { ...designs, [id]: fit.design };
-      else aside = 'Its inside, designed by hand, can’t follow the new storeys: set aside';
-    }
+    else if (designed && change.floors !== undefined) ({ designs, aside } = await fitDesign(id, build.floors));
     applyEdits({ ...edits, buildings: all, renames: renamesNext, designs }, { tool: 'update_building', id, name: name || g.name }, 'user');
     if (aside) toast(aside);
     genEditing = { name: name || g.name, was: { ...build, name: '' } };
@@ -1302,6 +1314,7 @@
       const c: Created = { id: editing.id, kind: 'building', x: spot.x, y: spot.y, name: name || editing.name, poly, ...opts };
       const created = (edits.created ?? []).map((x) => (x.id === c.id ? c : x));
       applyEdits({ ...edits, created }, { tool: 'update_building', id: c.id, name: c.name }, 'user');
+      if (edits.designs?.[drawnBuildingId(c.id)]) toast('Its inside, designed by hand, no longer fits: set aside');
       return void reselect(c);
     }
     // (Numbered as it is added: another site may have come in meanwhile.)
@@ -1311,15 +1324,23 @@
     build.name = '';
   }
 
-  /** Change the building being edited to the menu's choices (its footprint stays). */
-  function saveBuilding() {
+  /** Change the building being edited to the menu's choices (its footprint stays). Its inside,
+   * if designed by hand, follows new storeys (in the same step). */
+  async function saveBuilding() {
     if (genEditing) return void saveGenerated();
     const c = buildEditing ? drawnBuilding(buildEditing) : null;
     if (!c) return;
     const { roof: _r, tint: _t, structure: _s, ...rest } = c;
     const next: Created = { ...rest, ...buildOptions(build), name: build.name.trim() || c.name };
+    const bid = drawnBuildingId(c.id);
+    let designs = edits.designs;
+    let aside = '';
+    if (edits.designs?.[bid] && next.structure === 'ruin' && c.structure !== 'ruin') aside = 'Its inside, designed by hand, no longer fits: set aside';
+    else if ((next.floors ?? 1) !== (c.floors ?? 1)) ({ designs, aside } = await fitDesign(bid, next.floors ?? 1));
+    if (drawnBuilding(c.id) !== c) return;
     const created = (edits.created ?? []).map((x) => (x.id === c.id ? next : x));
-    applyEdits({ ...edits, created }, { tool: 'update_building', id: c.id, name: next.name }, 'user');
+    applyEdits({ ...edits, created, designs }, { tool: 'update_building', id: c.id, name: next.name }, 'user');
+    if (aside) toast(aside);
     void reselect(next);
   }
 
@@ -1389,11 +1410,27 @@
     if (d.dirty && view.interior?.interior.id === d.id) void view.enterBuilding(d.id, { level: view.interior.currentLevel });
   }
 
-  function saveDesign() {
+  /** The draft into the edits; a building's storeys changed in the designer change the building
+   * too (one step). */
+  async function saveDesign() {
     const d = designer;
     if (!d?.draft || d.blocking.length) return;
+    const draft = JSON.parse(JSON.stringify(d.draft)) as NonNullable<typeof d.draft>;
+    const floors = d.storeysChanged ? d.storeys : null;
+    const drawn = floors !== null ? drawnBuilding(d.id) : null;
+    let built: { edit: BuildingEdit | null } | null = null;
+    if (floors !== null && !drawn) {
+      const r = await view.gen.buildingEdit(d.id, { floors });
+      if (!r || 'error' in r) return toast(r && 'error' in r ? r.error.charAt(0).toUpperCase() + r.error.slice(1) : 'The map could not answer: try again');
+      built = r;
+      if (designer !== d) return;
+    }
     const e = edits;
-    applyEdits({ ...e, designs: { ...(e.designs ?? {}), [d.id]: JSON.parse(JSON.stringify(d.draft)) } }, { tool: 'set_site_design', id: d.id, name: inside?.name }, 'user');
+    const buildings = { ...(e.buildings ?? {}) };
+    if (built?.edit) buildings[d.id] = built.edit;
+    else if (built) delete buildings[d.id];
+    const created = drawn && floors !== null ? (e.created ?? []).map((x) => (x.id === drawn.id ? { ...x, floors } : x)) : e.created;
+    applyEdits({ ...e, buildings, created, designs: { ...(e.designs ?? {}), [d.id]: draft } }, { tool: 'set_site_design', id: d.id, name: inside?.name }, 'user');
     d.markSaved();
   }
 
@@ -2297,6 +2334,8 @@
               name={inside?.name ?? 'the site'}
               {renames}
               saved={!!edits.designs?.[designer.id]}
+              sprites={edits.sprites ?? {}}
+              picture={assetUrl}
               onRename={rename}
               onSave={saveDesign}
               onReset={resetDesign}

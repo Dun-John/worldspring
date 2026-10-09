@@ -44,6 +44,16 @@ pub struct Interior {
     pub entry_level: usize,
     /// The stair block (same squares on every level): x, y, w, h.
     pub stairs: [usize; 4],
+    /// Uploaded pictures standing on its floors (`Item::sprite` is index + 1).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sprites: Vec<InteriorSprite>,
+}
+
+/// An uploaded picture used as an item (`Edits::sprites`): its asset id and name.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct InteriorSprite {
+    pub asset: String,
+    pub name: String,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -131,6 +141,13 @@ pub struct Item {
     /// Hazard rules (traps, lava, pits), if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hazard: Option<&'static str>,
+    /// An uploaded picture (kind `sprite`): index + 1 into `Interior::sprites`; 0 for the rest.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sprite: u16,
+}
+
+fn is_zero(v: &u16) -> bool {
+    *v == 0
 }
 
 // ---------------------------------------------------------------------------------------
@@ -389,6 +406,89 @@ fn item_info(kind: &'static str) -> (&'static str, u8, bool, f32) {
     FURNITURE.iter().find(|f| f.0 == kind).map(|f| (f.1, f.2, f.3, f.4)).unwrap_or(("furniture", 1, true, 3.0))
 }
 
+/// Clutter a building's design can hold besides its furniture (the designer's indoor props):
+/// kinds of `under::PROPS`, with their rules, drawn as they are underground.
+pub const INDOOR_PROPS: &[&str] = &[
+    "sacks", "rubble", "timber", "bones", "skeleton", "skulls", "urn", "coffin", "effigy", "brazier", "candles", "sconce",
+    "lantern", "banner", "chains", "cobweb", "bedroll", "tools", "powder", "hoard", "offering", "glyph", "dais", "well",
+    "fountain", "iron_maiden", "stocks", "rat_nest", "trap",
+];
+
+/// An item a building's design puts down, by kind or name: furniture (`FURNITURE`), else an
+/// indoor prop (`INDOOR_PROPS`, with its hazard). Not uploaded pictures (`Sprites`).
+pub fn building_item(kind: &str, x: usize, y: usize, w: usize, h: usize) -> Option<Item> {
+    let at = |kind, name, cover, blocks_move, height_ft, hazard| Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move, height_ft, hazard, sprite: 0 };
+    if let Some(f) = FURNITURE.iter().find(|f| f.0 == kind || f.1 == kind) {
+        return Some(at(f.0, f.1, f.2, f.3, f.4, None));
+    }
+    let p = crate::under::PROPS.iter().find(|p| (p.0 == kind || p.1 == kind) && INDOOR_PROPS.contains(&p.0))?;
+    Some(at(p.0, p.1, p.2, p.3, p.4, p.5))
+}
+
+/// Item kind `sprite`: an uploaded picture (`Item::sprite`).
+pub const SPRITE: &str = "sprite";
+
+/// The asset id of a design's item kind that names an uploaded picture (`s:<asset id>`).
+pub fn sprite_asset(kind: &str) -> Option<&str> {
+    kind.strip_prefix("s:").filter(|a| !a.is_empty() && a.len() <= 128)
+}
+
+/// Uploaded pictures put down as items while a site is built: each picture's rules
+/// (`Edits::sprites`) and its place in `Interior::sprites`.
+pub struct Sprites<'a> {
+    metas: &'a std::collections::BTreeMap<String, crate::world::SpriteMeta>,
+    used: Vec<String>,
+}
+
+impl<'a> Sprites<'a> {
+    pub fn new(metas: &'a std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> Self {
+        Sprites { metas, used: Vec::new() }
+    }
+
+    /// Picture `asset` as an item. Its rules in the terms play mode reads items by
+    /// (`play/vision.ts`): what blocks movement and stands 6 ft or more blocks sight; what
+    /// doesn't block movement but stands 1 ft or more is difficult ground. So the height kept is
+    /// moved across those lines as the picture's own rules say (a picture that blocks sight
+    /// but not movement doesn't block sight indoors).
+    pub fn item(&mut self, asset: &str, x: usize, y: usize, w: usize, h: usize) -> Item {
+        let k = match self.used.iter().position(|a| a == asset) {
+            Some(k) => k,
+            None => {
+                self.used.push(asset.to_string());
+                self.used.len() - 1
+            }
+        };
+        let m = self.metas.get(asset).cloned().unwrap_or_default();
+        let h0 = if m.height_ft.is_finite() { m.height_ft.clamp(0.0, 100.0) } else { 3.0 };
+        let height_ft = match (m.blocks_move, m.blocks_sight, m.difficult) {
+            (true, true, _) => h0.max(6.0),
+            (true, false, _) => h0.min(5.5),
+            (false, _, true) => h0.max(1.0),
+            (false, _, false) => h0.min(0.5),
+        };
+        Item { kind: SPRITE, name: "custom object", x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover: m.cover.min(3), blocks_move: m.blocks_move, height_ft, hazard: None, sprite: k as u16 + 1 }
+    }
+
+    /// `Interior::sprites`: the pictures used, in the order first put down.
+    pub fn table(&self) -> Vec<InteriorSprite> {
+        self.used
+            .iter()
+            .map(|a| {
+                let name = self.metas.get(a).map(|m| m.name.trim()).filter(|n| !n.is_empty()).unwrap_or("custom object");
+                InteriorSprite { asset: a.clone(), name: name.to_string() }
+            })
+            .collect()
+    }
+}
+
+/// A design's item kind for item `f` of an interior: an uploaded picture as `s:<asset id>`.
+pub fn design_kind(it: &Interior, f: &Item) -> String {
+    match it.sprites.get((f.sprite as usize).wrapping_sub(1)) {
+        Some(s) if f.sprite > 0 => format!("s:{}", s.asset),
+        _ => f.kind.to_string(),
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Place {
     /// Against a wall (length along the wall, depth into the room).
@@ -501,7 +601,7 @@ pub fn generate(world: &World, t0: &T0, settlement: usize, building: usize) -> O
     // (As designed by hand, while the design fits the building: `design`.)
     if !world.file.edits.designs.is_empty()
         && let Some(d) = world.file.edits.designs.get(&format!("b:{}:{}", l.index, b.id))
-        && let Some(it) = design::designed(t0, &l, settlement, b, d)
+        && let Some(it) = design::designed(world, t0, &l, settlement, b, d)
     {
         return Some(it);
     }
@@ -563,7 +663,7 @@ fn place_link(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64; 2
     });
     let Some(k) = best else { return false };
     let (x, y) = (k % nx, k / nx);
-    lvl.furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: 1, h: 1, cover: 0, blocks_move: false, height_ft: 0.0, hazard: None });
+    lvl.furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: 1, h: 1, cover: 0, blocks_move: false, height_ft: 0.0, hazard: None, sprite: 0 });
     lvl.links.push(Link { x: x as u16, y: y as u16, to });
     true
 }
@@ -741,6 +841,7 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Buildi
         levels,
         entry_level,
         stairs,
+        sprites: Vec::new(),
     }
 }
 
@@ -2038,7 +2139,7 @@ fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], only: Op
                                     }
                                 }
                             }
-                            furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move: blocks, height_ft: height, hazard: None });
+                            furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move: blocks, height_ft: height, hazard: None, sprite: 0 });
                             placed = true;
                             break 'search;
                         }
@@ -2062,7 +2163,7 @@ fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], only: Op
 
 fn push_item(furniture: &mut Vec<Item>, kind: &'static str, x: usize, y: usize) {
     let (name, cover, blocks, height) = item_info(kind);
-    furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: 1, h: 1, cover, blocks_move: blocks, height_ft: height, hazard: None });
+    furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: 1, h: 1, cover, blocks_move: blocks, height_ft: height, hazard: None, sprite: 0 });
 }
 
 /// A one-square round table with chairs on its open sides: four chairs and a clear ring around
@@ -2402,5 +2503,6 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
         levels,
         entry_level: 0,
         stairs,
+        sprites: Vec::new(),
     })
 }

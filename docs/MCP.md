@@ -870,8 +870,10 @@ to the sewers, stairs down to a keep's deep dungeons) are put back on its free f
 A design is made for the building as it is: its grid, footprint and storeys. When the footprint changes (or the
 building is made a ruin) the design is **set aside**: the generated interior stands, `get_site_design` says so
 (`set_aside`), `get_feature` gives `interior_designed`, and `world_overview` lists it in `designs_set_aside`;
-put the footprint back and it applies again. When only the storeys change (`update_building` with `floors`),
-the design follows in the same change: the floors both have stay as designed, new storeys come as generated.
+put the footprint back and it applies again. When only the storeys change (`update_building` with `floors`, on
+the world's own buildings and those drawn by hand), the design follows in the same change: the floors both have
+stay as designed, new storeys come as generated. The app's designer does the same (*Add a floor on top*, *Take
+the top floor away*): the building takes the new storeys when the design is saved.
 
 The rules (the ones every generated interior is tested against):
 
@@ -923,7 +925,13 @@ level -1: Cellar
 - `items:` furniture by kind or name: `bed`, `table`, `chair`, `long_table`, `bar`, `counter`, `hearth`,
   `oven`, `shelf`, `bookcase`, `chest`, `wardrobe`, `barrel`, `crate`, `workbench`, `forge`, `anvil`, `altar`,
   `pew`, `statue`, `rug`, `couch`, `desk`, `cage`, `spiral_stair`… (the designer's furniture list shows them
-  all, with cover and whether they block movement).
+  all, with cover and whether they block movement); indoor props, with the rules they have underground:
+  `sacks`, `rubble`, `timber`, `bones`, `skeleton`, `skulls`, `urn`, `coffin`, `effigy`, `brazier`,
+  `candles`, `sconce`, `lantern`, `banner`, `chains`, `cobweb`, `bedroll`, `tools`, `powder`, `hoard`,
+  `offering`, `glyph`, `dais`, `well`, `fountain`, `iron_maiden`, `stocks`, `rat_nest`, `trap`; and uploaded
+  sprites as `s:<asset id>` (as `list_sprites` gives them; underground sites take them too). A sprite keeps its
+  rules: cover, blocking movement; one that blocks movement blocks sight from 6 ft up (a sprite that blocks
+  sight but not movement doesn't indoors), one that doesn't is difficult ground when marked so.
 - Room kinds as the generator names rooms in buildings: `main room`, `kitchen`, `bedroom`, `common room`,
   `storeroom`, `shop`, `workshop`, `forge`, `nave`, `great hall`, `guardroom`, `study`, `library`… A kind it
   doesn't know becomes a chamber named as written.

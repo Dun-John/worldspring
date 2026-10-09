@@ -817,8 +817,8 @@ export class MapView {
         const pts: [number, number][] = [[e.at[0] - 150, e.at[1] - 150], [e.at[0] + 150, e.at[1] + 150], ...(e.poly ?? [])];
         rects.push([Math.min(...pts.map((p) => p[0])) - 5, Math.min(...pts.map((p) => p[1])) - 5, Math.max(...pts.map((p) => p[0])) + 5, Math.max(...pts.map((p) => p[1])) + 5]);
       }
-      // Inside it: shown as it is now.
-      if (id === here && b && !b.removed) reenter = true;
+      // Inside it: shown as it is now (unless it is being designed: the designer shows it).
+      if (id === here && b && !b.removed && id !== this.designing) reenter = true;
     }
     // Their business pins: dropped, and asked for again (as they are now).
     if (replaced.length) {

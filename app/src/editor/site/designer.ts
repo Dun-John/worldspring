@@ -9,12 +9,13 @@
 // one to take it away); click a square for the level's way down. In a building: paint squares
 // into a room, draw a wall line to split a room, click a wall to take it away (two rooms made
 // one), doors as underground (in an outside wall: a back door, then the front door), furniture,
-// drag out the stair block. Right-drag pans.
+// indoor props and uploaded pictures, drag out the stair block; storeys added on top or taken
+// away (the building follows on Save). Right-drag pans.
 import type { Graphics } from 'pixi.js';
 import type { DesignProblem, SiteDesign, UnderCatalog } from '../../gen/protocol';
 import type { Camera } from '../../render/camera';
 import type { MapView, PointerTool } from '../../render/MapView';
-import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, isBuilding, mergeRooms, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, wallLine, WAYS } from './model';
+import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, isBuilding, mergeRooms, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, wallLine, WAYS } from './model';
 
 export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'prop' | 'stairs' | 'wall' | 'merge';
 
@@ -64,6 +65,8 @@ export class SiteDesigner implements PointerTool {
   private line: { from: Sq; to: Sq } | null = null;
   /** The pointer (grid units). */
   private pointer: [number, number] | null = null;
+  /** A building's storeys as they are (the draft's may differ until Save). */
+  private floors = 0;
 
   constructor(
     private readonly view: MapView,
@@ -79,6 +82,7 @@ export class SiteDesigner implements PointerTool {
       return false;
     }
     this.saved = JSON.stringify(reply.design);
+    this.floors = storeysOf(reply.design);
     await this.take(reply.design, reply.problems, reply.interior);
     if (reply.set_aside) this.host.hint('Its inside was designed for the building as it was: this is the generated one (saving replaces that design)');
     return true;
@@ -110,10 +114,29 @@ export class SiteDesigner implements PointerTool {
     this.host.changed();
   }
 
-  /** The draft was saved as it is. */
+  /** The draft was saved as it is (a building's storeys too). */
   markSaved() {
     this.saved = JSON.stringify(this.draft);
+    if (this.draft && this.building) this.floors = storeysOf(this.draft);
     this.host.changed();
+  }
+
+  /** A building's storeys in the draft. */
+  get storeys(): number {
+    return this.draft ? storeysOf(this.draft) : 0;
+  }
+
+  /** The draft has more or fewer storeys than the building: Save changes the building too. */
+  get storeysChanged(): boolean {
+    return this.building && this.storeys !== this.floors;
+  }
+
+  /** What `d` builds (changed by `action`), checked as the building will be: with the draft's
+   * storeys, if they differ from its own. */
+  private ask(d: SiteDesign, action?: object) {
+    const n = storeysOf(d);
+    const fit = isBuilding(d) && n !== this.floors && !(action && 'refit' in action);
+    return this.view.gen.design(this.id, d, fit ? { ...action, refit: n } : action);
   }
 
   /** A new draft, shown once its site is drawn. */
@@ -135,7 +158,7 @@ export class SiteDesigner implements PointerTool {
       if (!this.draft) return;
       const next = plain(this.draft);
       if (f(next) === false) return;
-      const reply = await this.view.gen.design(this.id, next, action);
+      const reply = await this.ask(next, action);
       if ('error' in reply) return this.host.hint(reply.error);
       this.past.push(this.draft);
       if (this.past.length > 200) this.past.shift();
@@ -155,7 +178,7 @@ export class SiteDesigner implements PointerTool {
     this.queue = this.queue.then(async () => {
       const d = from.pop();
       if (!d || !this.draft) return;
-      const reply = await this.view.gen.design(this.id, d);
+      const reply = await this.ask(d);
       if ('error' in reply) return this.host.hint(reply.error);
       to.push(this.draft);
       await this.take(reply.design, reply.problems, reply.interior);
@@ -237,6 +260,19 @@ export class SiteDesigner implements PointerTool {
     void this.change((d) => {
       if (d.levels.length <= 1) return false;
       removeLevel(d);
+    });
+  }
+
+  /** A building's storeys: one added on top (as generated, the stairs going on up) or the top one
+   * taken away; an open roof and a keep's tower tops follow. Saved with the building. */
+  setStoreys(n: number) {
+    const most = this.host.catalog()?.building.max_floors ?? 8;
+    if (n < 1 || n > most) return this.host.hint(n < 1 ? 'A building has at least one storey' : `A building has at most ${most} storeys`);
+    void this.change(() => {}, { refit: n });
+    // Up onto the new top floor (or the one left on top).
+    void this.queue.then(() => {
+      const top = this.draft?.levels.findIndex((l) => (l.z ?? 0) === n - 1 && !l.roof) ?? -1;
+      if (top >= 0 && top !== this.level) this.view.setInteriorLevel(top);
     });
   }
 

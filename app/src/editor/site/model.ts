@@ -318,6 +318,12 @@ export function mergeRooms(d: SiteDesign, li: number, e: Edge): boolean {
   return done;
 }
 
+/** A building's storeys above ground in a design: its levels from the ground floor up, the
+ * open roof and tower tops aside. */
+export function storeysOf(d: SiteDesign): number {
+  return d.levels.filter((l) => (l.z ?? 0) >= 0 && !l.roof).length;
+}
+
 /** The stair block put at x, y (w × h squares); furniture on its squares, on every level it
  * reaches, goes. */
 export function setStairs(d: SiteDesign, x: number, y: number, w: number, h: number) {

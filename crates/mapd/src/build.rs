@@ -239,6 +239,7 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
         }
     };
     let creating = id.is_none();
+    let (was_floors, was_ruin) = (c.floors, c.structure.as_deref() == Some("ruin"));
     let poly = match poly {
         None if creating && !a["near"].is_null() => {
             // The nearest clear lot near a place.
@@ -291,6 +292,30 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
         v => c.floors = Some(v.as_u64().filter(|f| *f <= 255).ok_or("floors: a whole number")? as u8),
     }
     c.check()?;
+    // Its inside designed by hand (`b:<layout>:0`): new storeys follow (in the same change); a new
+    // footprint or a ruin sets the design aside.
+    let mut design: Option<(String, worldgen::under::design::SiteDesign)> = None;
+    let mut aside = false;
+    if !creating {
+        let reshaped = reshaped || (!was_ruin && c.structure.as_deref() == Some("ruin"));
+        let floors = (c.floors != was_floors).then(|| c.floors.unwrap_or(1).max(1));
+        let cid = c.id.clone();
+        (design, aside) = app
+            .worker
+            .with(move |ex| {
+                let Some(li) = agent::layout_of(&ex.world, &ex.t0, &cid) else { return Ok((None, false)) };
+                let bid = format!("b:{li}:0");
+                let Some(d) = ex.world.file.edits.designs.get(&bid) else { return Ok((None, false)) };
+                if reshaped {
+                    return Ok((None, true));
+                }
+                let Some(f) = floors else { return Ok((None, false)) };
+                let fit = worldgen::interior::design::refit(&ex.world, &ex.t0, &bid, d, Some(f)).ok().flatten();
+                let ok = fit.as_ref().and_then(|d| worldgen::interior::design::problems_as(&ex.world, &ex.t0, &bid, d, Some(f)).ok()).is_some_and(|(_, p)| p.iter().all(|p| !p.blocking));
+                Ok(if ok { (fit.map(|d| (bid, d)), false) } else { (None, true) })
+            })
+            .await?;
+    }
     // The same building again (a script run twice): that one, nothing added (checked again
     // when it is added).
     let at = [c.x, c.y];
@@ -333,6 +358,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
         } else {
             let slot = e.created.iter_mut().find(|x| x.id == c.id && !x.removed).ok_or_else(|| format!("{} was deleted meanwhile", c.id))?;
             *slot = c;
+            if let Some((bid, d)) = design {
+                e.designs.insert(bid, d);
+            }
         }
         Ok(reply)
     })
@@ -346,6 +374,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "built, but it could not be read back".to_string())?;
             if let Some(li) = agent::layout_of(&ex.world, &ex.t0, &id) {
                 v["building"] = json!(format!("b:{li}:0"));
+            }
+            if aside {
+                v["note"] = json!("its inside was designed by hand for the building as it was: that design is set aside (the generated interior stands) until the footprint and storeys are as they were; set_site_design makes a new one");
             }
             Ok(v)
         })

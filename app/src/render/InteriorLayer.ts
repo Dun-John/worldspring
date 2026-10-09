@@ -7,6 +7,7 @@ import { BufferImageSource, Container, Geometry, GlProgram, Graphics, Mesh, Rend
 import type { Interior, InteriorItem, InteriorLevel } from '../gen/protocol';
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
+import { customTexture, onLoaded } from './customAtlas';
 import { drawFurniture, drawUnderProp, ORIENTED, UNDER_DRAWN, VARIED } from './furniture';
 import { ITEM_PX, ItemAtlas } from './itemAtlas';
 import type { SquareInfo } from './BattlemapLayer';
@@ -423,7 +424,7 @@ export class InteriorLayer {
     if (item) {
       const linked = lv.links?.some((k) => k.x === i && k.y === j);
       const notes = [item.blocks_move ? 'blocks movement' : 'passable', item.height_ft >= 5 ? `${item.height_ft} ft tall` : '', item.hazard ?? '', linked ? 'double-click to follow' : ''].filter(Boolean).join(' · ');
-      object = { name: item.name, cover: COVER[item.cover], notes };
+      object = { name: this.itemName(item), cover: COVER[item.cover], notes };
     } else if (onStairs) {
       object = { name: 'stairs', cover: COVER[0], notes: 'difficult terrain' };
     }
@@ -582,6 +583,12 @@ export class InteriorLayer {
       // Marks where a tunnel leaves the section: the next section is drawn on from there.
       if (this.tile && f.kind === 'continues') continue;
       if (this.style.player && dmOnlyHazard(f.hazard)) continue;
+      if (f.sprite && atlas) {
+        const s = this.pictureOf(f);
+        if (s) items.addChild(s);
+        else this.drawItem(g, f);
+        continue;
+      }
       if (!atlas) {
         this.drawItem(g, f);
         continue;
@@ -716,18 +723,57 @@ export class InteriorLayer {
     g.arc(ax, ay, len, open, closed).stroke({ width: 0.03, color: INK, alpha: 0.5 });
   }
 
+  /** What an item is called (an uploaded picture by its own name). */
+  itemName(f: InteriorItem): string {
+    return (f.sprite && this.interior.sprites?.[f.sprite - 1]?.name) || f.name;
+  }
+
+  /** An uploaded picture standing on the floor, fitted into its squares (its shape kept); null
+   * while it loads (the level is drawn again once it has). */
+  private pictureOf(f: InteriorItem): Sprite | null {
+    const asset = this.interior.sprites?.[(f.sprite ?? 0) - 1]?.asset;
+    if (!asset) return null;
+    const tex = customTexture(asset);
+    if (!tex) {
+      const off = onLoaded((id) => {
+        if (id !== asset) return;
+        off();
+        if (!this.dead) this.draw();
+      });
+      return null;
+    }
+    const s = new Sprite(tex);
+    const k = Math.min(f.w / Math.max(1, tex.width), f.h / Math.max(1, tex.height));
+    s.scale.set(k);
+    s.position.set(f.x + (f.w - tex.width * k) / 2, f.y + (f.h - tex.height * k) / 2);
+    return s;
+  }
+
+  /** The kind a building's furniture or an underground prop is drawn as with the furniture's
+   * drawing (in a building: everything but the indoor props, drawn as underground). */
+  private sharedKind(kind: string): string | undefined {
+    if (this.underground) return SHARED[kind];
+    return VARIED.has(kind) || !UNDER_DRAWN.has(kind) ? kind : undefined;
+  }
+
+  /** The wall a prop hangs on: underground the rock beside it; in a building a wall or the
+   * outside beside it. */
+  private propWall(f: InteriorItem): [number, number] {
+    return this.underground ? this.wallSide(f) : this.backSide(f);
+  }
+
   /** Everything an item's look depends on: what it is and its size; underground also the light, the
    * wall it is set against and its scatter variant. */
   private itemKey(f: InteriorItem): string {
     const base = `${f.kind}:${f.w}x${f.h}`;
     const light = this.light.map((v) => Math.round(v * 100)).join(',');
-    const shared = this.underground ? SHARED[f.kind] : f.kind;
+    const shared = this.sharedKind(f.kind);
     if (shared) {
       const g = { ...f, kind: shared };
       const back = ORIENTED.has(shared) ? this.backSide(g).join(',') : '';
       return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? itemVariant(f.x, f.y) : 0}:${back}`;
     }
-    const wall = ON_WALL.has(f.kind) ? this.wallSide(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
+    const wall = ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
     const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) ? itemVariant(f.x, f.y) : 0;
     return `u:${base}:${light}:${wall}:${variant}`;
   }
@@ -802,12 +848,18 @@ export class InteriorLayer {
     const c = itemColor(kind);
     const inset = 0.08;
     // Building furniture, and underground props that share its drawing.
-    const shared = this.underground ? SHARED[kind] : kind;
+    const shared = this.sharedKind(kind);
     if (shared) {
       const s = { ...f, kind: shared };
       if (drawFurniture(g, s, this.light, itemVariant(x, y), ORIENTED.has(shared) ? this.backSide(s) : null)) return;
     }
-    if (this.underground && drawUnderProp(g, f, this.light, itemVariant(x, y), ON_WALL.has(kind) ? this.wallSide(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0])) return;
+    // (Indoor props in a building too.)
+    if ((this.underground || !shared) && drawUnderProp(g, f, this.light, itemVariant(x, y), ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0])) return;
+    if (kind === 'sprite') {
+      // A picture not loaded yet (or no renderer): a plain square in its place.
+      g.rect(x + 0.1, y + 0.1, w - 0.2, h - 0.2).fill({ color: 0x786046, alpha: 0.5 }).stroke({ width: 0.05, color: INK });
+      return;
+    }
     if (this.drawUnderItem(g, f)) return;
     if (kind === 'link_down') {
       g.rect(x + 0.06, y + 0.06, 0.88, 0.88).fill(0x1e1a16).stroke({ width: 0.06, color: INK });

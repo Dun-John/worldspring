@@ -12,7 +12,7 @@
 
 use serde_json::Value;
 
-use super::{Door, FURNITURE, Interior, Item, Level, Room, STOREY_FT, Shell, battlements, cellar_links, finish_rooms, furnish_rooms, room_kind, wall_runs, windows};
+use super::{Door, FURNITURE, Interior, Item, Level, Room, STOREY_FT, Shell, Sprites, battlements, building_item, cellar_links, design_kind, finish_rooms, furnish_rooms, room_kind, sprite_asset, wall_runs, windows};
 use crate::World;
 use crate::core::hash::fnv64;
 use crate::core::rng::{Pcg32, hash3};
@@ -31,9 +31,16 @@ pub const BACK: u16 = 4;
 /// Items that are ways to other sites, put back at build time (never in a design).
 const LINKS: [&str; 2] = ["trapdoor", "link_down"];
 
-/// A furniture kind by key or name ("spiral stairs").
+/// What a building's design can put down, by key or name ("spiral stairs"): furniture or an
+/// indoor prop (an uploaded picture, `s:<asset id>`, is `sprite_asset`'s).
 pub fn furniture_kind(s: &str) -> Option<&'static str> {
-    FURNITURE.iter().find(|f| f.0 == s || f.1 == s).map(|f| f.0)
+    building_item(s, 0, 0, 1, 1).map(|f| f.kind)
+}
+
+/// The sprites' rules (`Edits::sprites`) when there are none.
+fn no_sprites() -> &'static std::collections::BTreeMap<String, crate::world::SpriteMeta> {
+    static EMPTY: std::sync::OnceLock<std::collections::BTreeMap<String, crate::world::SpriteMeta>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(Default::default)
 }
 
 /// What a design is fitted to: the building's grid (frame, size, the squares inside its
@@ -114,7 +121,7 @@ pub fn from_interior(it: &Interior, fingerprint: String) -> SiteDesign {
                 cells: encode(&lv.cells),
                 rooms: lv.rooms.iter().map(|r| DesignRoom { kind: r.kind.into(), raise_ft: r.raise_ft.max(0.0) as u16 }).collect(),
                 doors,
-                items: lv.furniture.iter().filter(|f| !link(f)).map(|f| DesignItem { kind: f.kind.into(), x: f.x, y: f.y, w: f.w, h: f.h }).collect(),
+                items: lv.furniture.iter().filter(|f| !link(f)).map(|f| DesignItem { kind: design_kind(it, f), x: f.x, y: f.y, w: f.w, h: f.h }).collect(),
                 z: lv.z,
                 roof: lv.roof,
                 has_stairs: lv.has_stairs,
@@ -145,8 +152,9 @@ pub fn stairs_of(d: &SiteDesign) -> [usize; 4] {
 }
 
 /// Level `li` as the design has it: squares (none outside `inside`, if given), rooms, doors,
-/// walls, windows (not on an open roof) and items; no ways to other sites yet.
-pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>) -> Level {
+/// walls, windows (not on an open roof) and items (pictures through `sprites`); no ways to
+/// other sites yet.
+pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mut Sprites) -> Level {
     let (nx, ny) = (d.nx as usize, d.ny as usize);
     let lv = &d.levels[li];
     let mut cells = decode(&lv.cells, nx * ny).unwrap_or_else(|| vec![-1; nx * ny]);
@@ -179,13 +187,14 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>) -> Level {
         .items
         .iter()
         .filter_map(|f| {
-            let kind = furniture_kind(&f.kind)?;
             let (x, y, w, h) = (f.x as usize, f.y as usize, f.w.max(1) as usize, f.h.max(1) as usize);
             if x + w > nx || y + h > ny {
                 return None;
             }
-            let (name, cover, blocks, height) = super::item_info(kind);
-            Some(Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move: blocks, height_ft: height, hazard: None })
+            match sprite_asset(&f.kind) {
+                Some(a) => Some(sprites.item(a, x, y, w, h)),
+                None => building_item(&f.kind, x, y, w, h),
+            }
         })
         .collect();
     let mut level = Level {
@@ -210,14 +219,15 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>) -> Level {
     level
 }
 
-/// The interior a design builds for building `b` of layout `l` (its grid `sh`), with how many
-/// ways to other sites its cellar should have.
-pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::Building, sh: &Shell) -> (Interior, usize) {
+/// The interior a design builds for building `b` of layout `l` (its grid `sh`; uploaded
+/// pictures' rules `metas`), with how many ways to other sites its cellar should have.
+pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::Building, sh: &Shell, metas: &std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> (Interior, usize) {
     let stairs = stairs_of(d);
     let mut want = 0;
+    let mut sprites = Sprites::new(metas);
     let levels: Vec<Level> = (0..d.levels.len())
         .map(|li| {
-            let mut lvl = level_of(d, li, Some(&sh.inside));
+            let mut lvl = level_of(d, li, Some(&sh.inside), &mut sprites);
             lvl.elevation_ft = b.pad_ft + STOREY_FT * lvl.z as f32;
             if lvl.z == -1 {
                 want = cellar_links(&mut lvl, t0, l, b, sh, stairs);
@@ -240,6 +250,7 @@ pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::B
         entry_level: levels.iter().position(|lv| lv.z == 0).unwrap_or(0),
         levels,
         stairs,
+        sprites: sprites.table(),
     };
     (it, want)
 }
@@ -416,12 +427,12 @@ pub fn building_of(world: &World, t0: &T0, id: &str) -> Result<(usize, std::rc::
 }
 
 /// The interior a building's design builds, if it still fits the building and keeps the rules.
-pub fn designed(t0: &T0, l: &Layout, settlement: usize, b: &town::Building, d: &SiteDesign) -> Option<Interior> {
+pub fn designed(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Building, d: &SiteDesign) -> Option<Interior> {
     let sh = Shell::of(l, b);
     if d.kind != BUILDING || d.fingerprint != fingerprint(&sh, b) || d.nx as usize != sh.nx || d.ny as usize != sh.ny {
         return None;
     }
-    let (it, want) = build(d, t0, l, settlement, b, &sh);
+    let (it, want) = build(d, t0, l, settlement, b, &sh, &world.file.edits.sprites);
     check(&it, &sh, want).iter().all(|p| !p.blocking).then_some(it)
 }
 
@@ -461,7 +472,7 @@ pub fn problems_as(world: &World, t0: &T0, id: &str, d: &SiteDesign, floors: Opt
     if d.nx as usize != sh.nx || d.ny as usize != sh.ny || d.fingerprint != fingerprint(&sh, b) {
         out.push(Problem { level: 0, at: None, text: "the design was made for the building as it was: its footprint or storeys have changed since".into(), blocking: true });
     }
-    let (it, want) = build(d, t0, &l, li, b, &sh);
+    let (it, want) = build(d, t0, &l, li, b, &sh, &world.file.edits.sprites);
     out.extend(check(&it, &sh, want));
     Ok((it, out))
 }
@@ -473,7 +484,7 @@ pub fn furnish(d: &mut SiteDesign, level: usize, room: usize, seed: u64) {
         return;
     }
     let (nx, ny) = (d.nx as usize, d.ny as usize);
-    let mut lvl = level_of(d, level, None);
+    let mut lvl = level_of(d, level, None, &mut Sprites::new(no_sprites()));
     let had = lvl.furniture.len();
     let mut rng = Pcg32::new(hash3(seed, level as i64, room as i64, 0xf0), 77);
     furnish_rooms(&mut lvl, nx, ny, stairs_of(d), Some(room as i16), &mut rng);
@@ -543,7 +554,16 @@ pub fn catalog() -> Value {
             serde_json::json!({ "kind": f.0, "name": f.1, "cover": f.2, "blocks": f.3, "height_ft": f.4, "w": w, "h": h })
         })
         .collect();
-    serde_json::json!({ "furniture": furniture, "rooms": super::ROOM_KINDS })
+    // Indoor props: their usual size as underground.
+    let props: Vec<Value> = super::INDOOR_PROPS
+        .iter()
+        .filter_map(|k| crate::under::PROPS.iter().find(|p| p.0 == *k))
+        .map(|p| {
+            let (w, h) = crate::under::design::prop_size(p.0);
+            serde_json::json!({ "kind": p.0, "name": p.1, "cover": p.2, "blocks": p.3, "height_ft": p.4, "hazard": p.5, "w": w, "h": h })
+        })
+        .collect();
+    serde_json::json!({ "furniture": furniture, "props": props, "rooms": super::ROOM_KINDS, "max_floors": crate::world::MAX_FLOORS })
 }
 
 /// Buildings' designs not built (the generated interior stands), with why: the building is gone,
@@ -559,7 +579,7 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String)> {
                 if d.fingerprint != fingerprint(&sh, b) {
                     Some("made for the building as it was: its footprint or storeys have changed since".into())
                 } else {
-                    let (it, want) = build(d, t0, &l, li, b, &sh);
+                    let (it, want) = build(d, t0, &l, li, b, &sh, &world.file.edits.sprites);
                     check(&it, &sh, want).into_iter().find(|p| p.blocking).map(|p| format!("it breaks a rule now: {}", p.text))
                 }
             }

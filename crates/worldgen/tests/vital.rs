@@ -575,7 +575,8 @@ fn interiors_guarantee() {
 /// the stairs moved, a back door to the outside): it keeps every rule interiors keep, the world
 /// builds it (its hash unchanged; the design travels as an edit op and back); once the footprint
 /// changes the design is set aside (the generated interior stands); with another storey it is
-/// fitted to the building, its own floors kept.
+/// fitted to the building, its own floors kept; indoor props and an uploaded picture stand on its
+/// floor with their rules; a storey added and taken away in the designer comes back as it was.
 fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
     use worldgen::interior::{self, design as bd};
     use worldgen::town::{self, Structure, geom};
@@ -651,16 +652,40 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
             break;
         }
     }
-    let (id, d, floors) = done.expect("a building to design");
-    let (built, problems) = d.problems(world, t0, &id).unwrap();
-    assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
-    // The world builds it, as every interior is built: the vital rules hold.
+    let (id, mut d, floors) = done.expect("a building to design");
+    // An uploaded picture's rules (passable, difficult ground, 2 ft, half cover), and grain
+    // sacks and the picture put down in the study.
     let mut file = world.file.clone();
+    let kettle = worldgen::world::SpriteMeta { name: "Kettle".into(), size: 1.0, cover: 1, blocks_move: false, blocks_sight: false, difficult: true, height_ft: 2.0 };
+    file.edits.sprites.insert("k3ttle".into(), kettle);
+    let ws = World::new(file.clone()).unwrap();
+    let g = d.levels.iter().position(|lv| lv.z == 0).unwrap();
+    let cells = design::decode(&d.levels[g].cells, d.nx as usize * d.ny as usize).unwrap();
+    let study = d.levels[g].rooms.iter().position(|r| r.kind == "study").unwrap() as i16;
+    for kind in ["sacks", "s:k3ttle"] {
+        let nx = d.nx as usize;
+        let put = (0..cells.len()).filter(|&k| cells[k] == study).find_map(|k| {
+            let mut t = d.clone();
+            t.levels[g].items.push(design::DesignItem { kind: kind.into(), x: (k % nx) as u16, y: (k / nx) as u16, w: 1, h: 1 });
+            t.problems(&ws, t0, &id).unwrap().1.iter().all(|p| !p.blocking).then_some(t)
+        });
+        d = put.unwrap_or_else(|| panic!("{id}: no room in the study for {kind}"));
+    }
+    let (built, problems) = d.problems(&ws, t0, &id).unwrap();
+    assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
+    let floor = &built.levels[built.entry_level].furniture;
+    let sacks = floor.iter().find(|f| f.kind == "sacks").expect("the sacks");
+    assert!((sacks.name, sacks.cover, sacks.blocks_move) == ("grain sacks", 1, true), "{id}: the sacks' rules: {sacks:?}");
+    let pic = floor.iter().find(|f| f.kind == interior::SPRITE).expect("the picture");
+    assert!(pic.sprite == 1 && built.sprites == [interior::InteriorSprite { asset: "k3ttle".into(), name: "Kettle".into() }], "{id}: the picture's table: {:?}", built.sprites);
+    assert!((pic.cover, pic.blocks_move, pic.height_ft) == (1, false, 2.0), "{id}: the picture's rules: {pic:?}");
+    // The world builds it, as every interior is built: the vital rules hold.
     let v = serde_json::to_value(&d).unwrap();
     let undo = file.edits.apply(&worldgen::world::EditOp::Set { field: "designs".into(), key: id.clone(), value: v.clone() }).unwrap();
     assert_eq!(serde_json::to_value(&file.edits.designs[&id]).unwrap(), v, "{id}: the design changed on the round trip");
     assert!(matches!(undo, worldgen::world::EditOp::Unset { .. }), "{id}: undoing a new design unsets it");
     let w2 = World::from_json(&serde_json::to_string(&file).unwrap()).unwrap();
+    assert!(bd::design_of(&w2, t0, &id, false).unwrap().0 == d, "{id}: the design read back from the world differs");
     assert_eq!(w2.hash, world.hash, "designs are edits: the world hash stays");
     let it = interior::generate_id(&w2, t0, &id).unwrap();
     assert_eq!(serde_json::to_string(&it).unwrap(), serde_json::to_string(&built).unwrap(), "{id}: the world doesn't build the design");
@@ -693,6 +718,23 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
     let text = design::to_text(&d, &|_, _| None).unwrap();
     let (back, _) = design::from_text(&text, &bd::design_of(world, t0, &id, false).unwrap().0).unwrap();
     assert!(back == d, "{id}: the text plan doesn't read back:\n{text}");
+    // The designer's storeys (its draft through the editor's call): one added, then taken away
+    // again, is the design it was; with the building changed to match, the world builds it.
+    let draft = |d: &design::SiteDesign, n: u8| -> design::SiteDesign {
+        let v: serde_json::Value = serde_json::from_str(&design::design_json(&w2, t0, &id, Some(&serde_json::to_string(d).unwrap()), Some(&format!(r#"{{"refit":{n}}}"#)))).unwrap();
+        assert!(v["problems"].as_array().unwrap().iter().all(|p| p["blocking"] == false), "{id}: {n} storeys in the designer: {}", v["problems"]);
+        serde_json::from_value(v["design"].clone()).unwrap()
+    };
+    let up = draft(&d, floors + 1);
+    assert_eq!(up.levels.iter().filter(|lv| lv.z >= 0 && !lv.roof).count(), floors as usize + 1, "{id}: no storey added in the designer");
+    assert!(draft(&up, floors) == d, "{id}: a storey added and taken away: not the design it was");
+    let mut f5 = file.clone();
+    f5.edits.buildings.insert(id.clone(), worldgen::agent::building_edit(&w2, t0, &id, &worldgen::agent::BuildingChange { floors: Some(floors + 1), ..Default::default() }).unwrap().expect("a change"));
+    f5.edits.designs.insert(id.clone(), up.clone());
+    let w5 = World::new(f5).unwrap();
+    let it5 = interior::generate_id(&w5, t0, &id).unwrap();
+    assert!(it5.sprites.len() == 1 && it5.levels.iter().filter(|lv| lv.z >= 0 && !lv.roof).count() == floors as usize + 1, "{id}: the taller building's design not built");
+    check_interior(&w5, t0, &town::layout(&w5, t0, si), si, &id, &buckets);
 }
 
 /// A layout's roofed buildings by 100-ft bucket, for "does this door open into a neighbour's wall".
@@ -1092,7 +1134,7 @@ fn underground_guarantee() {
                 let d = design::SiteDesign::from_interior(&it);
                 let problems = design::check(&it, Some(d.entry));
                 assert!(problems.is_empty(), "{tag}: the designer finds {problems:?}");
-                let again = d.build(&it.id, it.settlement, it.building);
+                let again = d.build(&it.id, it.settlement, it.building, &Default::default());
                 assert_eq!(serde_json::to_string(&again).unwrap(), serde_json::to_string(&it).unwrap(), "{tag}: its design builds something else");
                 let text = design::to_text(&d, &|_, _| None).unwrap_or_else(|e| panic!("{tag}: {e}"));
                 // (Over the same site emptied: the text says it all.)

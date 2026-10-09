@@ -19,7 +19,7 @@ use super::{BOSS, KEEP_DUNGEON, LEVEL_FT, MAX_LEVELS, PROPS, Plan, THEMES, UNDER
 use crate::World;
 use crate::core::rng::{Pcg32, hash3};
 use crate::interior::design::{BUILDING, furniture_kind};
-use crate::interior::{Interior, Item};
+use crate::interior::{Interior, Item, Sprites, design_kind, sprite_asset};
 use crate::t0::T0;
 use crate::town;
 
@@ -169,12 +169,16 @@ pub fn item_kind(s: &str) -> Option<&'static str> {
         .or_else(|| PROPS.iter().find(|p| p.0 == s || p.1 == s).map(|p| p.0))
 }
 
+/// A prop's usual size (squares): as the first room kit that holds it has it.
+pub fn prop_size(kind: &str) -> (usize, usize) {
+    room_kinds().iter().flat_map(|r| kit(r).iter()).find(|e| e.0 == kind).map(|e| (e.1, e.2)).unwrap_or((1, 1))
+}
+
 /// What can be designed (for the editor's menus): props with their rules and usual size,
 /// room kinds by theme (each theme's own first), the themes.
 pub fn catalog_json() -> String {
     let rooms = room_kinds();
-    // A prop's usual size: as the first room kit that holds it has it.
-    let size = |kind: &str| rooms.iter().flat_map(|r| kit(r).iter()).find(|e| e.0 == kind).map(|e| (e.1, e.2)).unwrap_or((1, 1));
+    let size = prop_size;
     let props: Vec<Value> = PROPS
         .iter()
         .map(|p| {
@@ -245,7 +249,7 @@ impl SiteDesign {
                         .furniture
                         .iter()
                         .map(|f| DesignItem {
-                            kind: f.kind.into(),
+                            kind: design_kind(it, f),
                             x: f.x,
                             y: f.y,
                             w: f.w,
@@ -303,8 +307,8 @@ impl SiteDesign {
                 out.push(bad(li, format!("{tag}: at most {MAX_ROOMS} rooms and {MAX_ITEMS} items and doors")));
             }
             for f in &lv.items {
-                let known = if building { furniture_kind(&f.kind) } else { item_kind(&f.kind) };
-                if known.is_none() {
+                let known = sprite_asset(&f.kind).is_some() || if building { furniture_kind(&f.kind).is_some() } else { item_kind(&f.kind).is_some() };
+                if !known {
                     out.push(bad(li, format!("{tag}: no such item: {}", f.kind)));
                 } else if f.w == 0 || f.h == 0 || f.x as usize + f.w as usize > self.nx as usize || f.y as usize + f.h as usize > self.ny as usize {
                     out.push(Problem {
@@ -319,17 +323,18 @@ impl SiteDesign {
         out
     }
 
-    /// The site it builds (`id` `u:<layout>:<k>`).
-    pub fn build(&self, id: &str, settlement: u32, building: u32) -> Interior {
+    /// The site it builds (`id` `u:<layout>:<k>`; uploaded pictures' rules `metas`).
+    pub fn build(&self, id: &str, settlement: u32, building: u32, metas: &std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> Interior {
         let kind = self.under_kind().unwrap_or(UnderKind::Dungeon);
         let (nx, ny) = (self.nx.clamp(1, MAX_SIDE) as usize, self.ny.clamp(1, MAX_SIDE) as usize);
         let n = self.levels.len();
+        let mut sprites = Sprites::new(metas);
         let levels = self
             .levels
             .iter()
             .enumerate()
             .map(|(li, lv)| {
-                let p = self.plan(lv, kind, nx, ny);
+                let p = self.plan(lv, kind, nx, ny, &mut sprites);
                 p.finish(nx, ny, -((n - li) as i8), lv.name.clone(), lv.elevation_ft)
             })
             .collect();
@@ -348,11 +353,12 @@ impl SiteDesign {
             levels,
             entry_level: n.saturating_sub(1),
             stairs: [0; 4],
+            sprites: sprites.table(),
         }
     }
 
     /// A level as the generators lay one out (rooms, doors, items), for `Plan::finish`.
-    fn plan(&self, lv: &DesignLevel, kind: UnderKind, nx: usize, ny: usize) -> Plan {
+    fn plan(&self, lv: &DesignLevel, kind: UnderKind, nx: usize, ny: usize, sprites: &mut Sprites) -> Plan {
         let mut p = Plan::new(nx, ny, 0, lv.natural);
         for r in &lv.rooms {
             p.room(room_kind(&r.kind).unwrap_or(CHAMBER), r.raise_ft as f32);
@@ -377,11 +383,15 @@ impl SiteDesign {
         }
         let (down_name, up_name) = kind.ways();
         for f in &lv.items {
-            let Some(k) = item_kind(&f.kind) else { continue };
             let (x, y, w, h) = (f.x as usize, f.y as usize, f.w.max(1) as usize, f.h.max(1) as usize);
             if x + w > nx || y + h > ny {
                 continue;
             }
+            if let Some(a) = sprite_asset(&f.kind) {
+                p.put(sprites.item(a, x, y, w, h));
+                continue;
+            }
+            let Some(k) = item_kind(&f.kind) else { continue };
             let it = match k {
                 "exit" => Item::new("exit", kind.entrance_name(), x, y, 1, 1, 0, false, 0.0, None),
                 "up" => Item::new("up", up_name, x, y, 1, 1, 0, false, 0.0, None),
@@ -403,7 +413,7 @@ impl SiteDesign {
             return crate::interior::design::problems(world, t0, id, self);
         }
         let mut out = self.shape_problems();
-        let it = self.build(id, 0, 0);
+        let it = self.build(id, 0, 0, &world.file.edits.sprites);
         out.extend(check(&it, Some(self.entry)));
         Ok((it, out))
     }
@@ -465,7 +475,8 @@ impl SiteDesign {
         let (nx, ny) = (self.nx as usize, self.ny as usize);
         let kind = self.under_kind().unwrap_or(UnderKind::Dungeon);
         let Some(lv) = self.levels.get(level) else { return };
-        let mut p = self.plan(lv, kind, nx, ny);
+        let metas = Default::default();
+        let mut p = self.plan(lv, kind, nx, ny, &mut Sprites::new(&metas));
         let Some(rkind) = p.rooms.get(room).map(|r| r.kind) else { return };
         p.reserve_doors();
         let had = p.items.len();
@@ -749,7 +760,7 @@ pub fn editable(world: &World, t0: &T0, id: &str) -> Result<(usize, usize), Stri
 /// The designed site `id`, if the world still has its entrance.
 pub fn site(world: &World, t0: &T0, id: &str, d: &SiteDesign) -> Option<Interior> {
     let (l, k) = editable(world, t0, id).ok()?;
-    Some(d.build(id, l as u32, k as u32))
+    Some(d.build(id, l as u32, k as u32, &world.file.edits.sprites))
 }
 
 /// Site `id` as a design: the one saved, else (or with `original`) a copy of what the
@@ -1151,7 +1162,11 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                 };
                 let (x, y) = coords(xy).ok_or_else(|| format!("{tag}: item '{e}': write it as kind x,y [wxh]"))?;
                 let name = words[..at].join(" ");
-                let kind = if building { furniture_kind(&name) } else { item_kind(&name) }.ok_or_else(|| format!("{tag}: no such item: {name}"))?;
+                // (An uploaded picture: s:<asset id>.)
+                let kind = match sprite_asset(&name) {
+                    Some(_) => name.as_str(),
+                    None => if building { furniture_kind(&name) } else { item_kind(&name) }.ok_or_else(|| format!("{tag}: no such item: {name}"))?,
+                };
                 let (w, h) = if !building && (WAYS.contains(&kind) || kind == "lava") { (1, 1) } else { size.unwrap_or((1, 1)) };
                 lv.items.push(DesignItem {
                     kind: kind.into(),
