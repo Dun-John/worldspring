@@ -79,7 +79,7 @@ try {
   if (r.pan) {
     if (r.error) throw new Error(r.error);
     const pass = r.pan.heavy.low1Fps >= 30;
-    console.log(`\nholds ${r.holds.editsKB} KB of edits (designs ${r.holds.designsKB} KB; ${r.holds.buildings} buildings edited, ${r.holds.buildingsKB} KB; ${r.holds.buildingDesigns} building designs; ${r.holds.castles} castles, ${r.holds.walls} walls; ${r.holds.towns ?? 0} towns laid out anew, ${r.holds.townsKB ?? 0} KB); loaded in ${r.loadMs.apply} ms, settled in ${r.loadMs.settle} ms`);
+    console.log(`\nholds ${r.holds.editsKB} KB of edits (designs ${r.holds.designsKB} KB; ${r.holds.buildings} buildings edited, ${r.holds.buildingsKB} KB; ${r.holds.buildingDesigns} building designs; ${r.holds.castles} castles, ${r.holds.walls} walls; ${r.holds.towns ?? 0} towns laid out anew: ${r.holds.townCorners ?? 0} corners moved, ${r.holds.townPatches ?? 0} patches set, ${r.holds.townsKB ?? 0} KB); loaded in ${r.loadMs.apply} ms, settled in ${r.loadMs.settle} ms`);
     for (const [k, t] of Object.entries(r.edits.heavy)) {
       const e = r.edits.empty[k];
       console.log(`${k.padEnd(7)} main thread ${e.syncMs[0]} → ${t.syncMs[0]} ms (worst ${t.syncMs[1]}), drawn ${e.frameMs[0]} → ${t.frameMs[0]} ms, worker ${e.workerMs[0]} → ${t.workerMs[0]} ms`);

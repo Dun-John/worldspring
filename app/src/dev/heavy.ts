@@ -3,20 +3,21 @@
 // of objects put down and cleared, uploaded sprites, NPCs, plot points, notes, renames and
 // created sites; the world's own buildings removed or changed by the hundred, buildings' insides
 // designed (some two cellars deep), castles and walls; towns laid out anew by hand (corners
-// relaxed, a ward made a castle or a park, walls taken down). Each time: small edits timed (a
+// relaxed and patches evened out, wards given over to a castle, a park, bigger or smaller lots,
+// laid out again or joined to a neighbour, walls taken down or put up). Each time: small edits timed (a
 // rename, a brush stroke of objects, a dungeon design saved, a building taken away, a town's
 // corner moved) and a pan over a battlemap thick with objects and sprites while a rename lands
 // every 2 s. The world's edits are put back afterwards, and the bench's pictures removed. It
 // only runs on a world with no edits (so nothing of the user's is ever at stake).
 import { runBench, type BenchResult } from './bench';
 import type { MapView } from '../render/MapView';
-import type { Created, Edits, Npc, Placed, Plot, SiteDesign } from '../gen/protocol';
+import type { Created, Edits, Npc, Placed, Plot, SiteDesign, TownRequest } from '../gen/protocol';
 import { putAsset } from '../world/assets';
 import { tx } from '../world/library';
 import { SETTLEMENT_KINDS } from '../ui/gazetteer';
 
 /** How much the heavy world holds. */
-const HEAVY = { designs: 50, objects: 20000, clears: 2000, sprites: 40, npcs: 2000, plots: 500, notes: 2000, renames: 1000, created: 30, buildings: 400, buildingDesigns: 30, castles: 3, walls: 3, towns: 3 };
+const HEAVY = { designs: 50, objects: 20000, clears: 2000, sprites: 40, npcs: 2000, plots: 500, notes: 2000, renames: 1000, created: 30, buildings: 400, buildingDesigns: 30, castles: 3, walls: 3, towns: 6 };
 /** Side (ft) of the square about the focus that the objects fill (about 6 x 6 battlemap chunks). */
 const SPREAD_FT = 3600;
 const BATTLEMAP_ZOOM = Math.log2(64 / 5);
@@ -31,7 +32,7 @@ export interface EditTiming {
 
 export interface HeavyResult {
   error?: string;
-  holds: typeof HEAVY & { editsKB: number; designsKB: number; buildingsKB: number; townsKB: number };
+  holds: typeof HEAVY & { editsKB: number; designsKB: number; buildingsKB: number; townsKB: number; townCorners: number; townPatches: number };
   /** Making the heavy world's edits and putting them in (one change), until the map settled. */
   loadMs: { build: number; apply: number; settle: number };
   heapMB: { empty: number; heavy: number };
@@ -64,7 +65,7 @@ export async function runHeavyBench(view: MapView, edits: () => Edits, apply: (e
     (window as unknown as { __benchResult: HeavyResult }).__benchResult = r;
     return r;
   };
-  const empty = (): HeavyResult => ({ holds: { ...HEAVY, editsKB: 0, designsKB: 0, buildingsKB: 0, townsKB: 0 }, loadMs: { build: 0, apply: 0, settle: 0 }, heapMB: { empty: 0, heavy: 0 }, edits: { empty: {}, heavy: {} }, siteMs: { generated: 0, designed: 0 }, pan: { empty: blankPan(), heavy: blankPan() } });
+  const empty = (): HeavyResult => ({ holds: { ...HEAVY, editsKB: 0, designsKB: 0, buildingsKB: 0, townsKB: 0, townCorners: 0, townPatches: 0 }, loadMs: { build: 0, apply: 0, settle: 0 }, heapMB: { empty: 0, heavy: 0 }, edits: { empty: {}, heavy: {} }, siteMs: { generated: 0, designed: 0 }, pan: { empty: blankPan(), heavy: blankPan() } });
   if (Object.keys(edits()).length) return publish({ ...empty(), error: 'The stress bench runs on a world with no edits: open a fresh seed (or start over) first.' });
   await settle(view, 8000);
   const result = empty();
@@ -102,6 +103,8 @@ export async function runHeavyBench(view: MapView, edits: () => Edits, apply: (e
     result.holds.buildingsKB = Math.round(JSON.stringify(heavy.buildings ?? {}).length / 1024);
     result.holds.towns = Object.keys(heavy.towns ?? {}).length;
     result.holds.townsKB = Math.round(JSON.stringify(heavy.towns ?? {}).length / 1024);
+    result.holds.townCorners = Object.values(heavy.towns ?? {}).reduce((n, t) => n + (t.corners?.length ?? 0), 0);
+    result.holds.townPatches = Object.values(heavy.towns ?? {}).reduce((n, t) => n + (t.patches?.length ?? 0), 0);
     result.holds.buildings = Object.keys(heavy.buildings ?? {}).length;
     result.holds.buildingDesigns = Object.keys(heavy.designs ?? {}).filter((k) => k.startsWith('b:')).length;
     result.holds.castles = (heavy.created ?? []).filter((c) => c.kind === 'castle').length;
@@ -244,18 +247,40 @@ async function build(view: MapView, sites: string[], houses: string[], towns: nu
     e.designs[houses[i]] = r.design as SiteDesign;
     designed++;
   }
-  // Towns laid out anew: corners relaxed round the middle, a ward given over (the first town a
-  // park, the others a castle), the walls of the last taken down or put up.
+  // Towns laid out anew, each as a user might over an evening: corners relaxed over the middle of
+  // town, six patches evened out, six set by hand (a castle, a park, huge and small lots, laid out
+  // again, joined to a neighbour), every other town's walls taken down (or put up). A part the
+  // town refuses (a merge across a main street) is left out and the rest asked again.
   e.towns = {};
   for (const [k, li] of towns.entries()) {
     const plan = await view.gen.townPlan(li);
     if ('error' in plan) continue;
-    const ward = plan.patches.find((p) => p.in_town && ['common', 'craft', 'merchant'].includes(p.ward) && Math.hypot(p.at[0] - plan.center[0], p.at[1] - plan.center[1]) > plan.max_move_ft * 2);
-    const r = await view.gen.townChange(li, {
-      relax: { at: plan.center, radius_ft: plan.max_move_ft * 3, amount: 0.6 },
-      ...(ward ? { patches: [{ patch: ward.patch, ward: k === 0 ? 'park' : 'castle' }] } : {}),
-      ...(k === towns.length - 1 ? { walls: !plan.walls.built } : {}),
-    });
+    const far = (p: (typeof plan.patches)[number]) => Math.hypot(p.at[0] - plan.center[0], p.at[1] - plan.center[1]) / plan.max_move_ft;
+    const lots = plan.patches.filter((p) => p.in_town && ['common', 'craft', 'merchant', 'noble', 'slum'].includes(p.ward)).sort((a, b) => far(a) - far(b));
+    const pick = (n: number) => lots[Math.min(lots.length - 1, Math.floor((n * lots.length) / 7))];
+    const set: NonNullable<TownRequest['patches']> = [];
+    const used = new Set<number>();
+    const add = (p: (typeof plan.patches)[number] | undefined, change: Omit<NonNullable<TownRequest['patches']>[number], 'patch'>) => {
+      if (p && !used.has(p.patch)) {
+        used.add(p.patch);
+        set.push({ patch: p.patch, ...change });
+      }
+    };
+    add(pick(1), { ward: 'castle' });
+    add(pick(2), { ward: 'park' });
+    add(pick(3), { lots: 'huge' });
+    add(pick(4), { lots: 'small' });
+    add(pick(5), { reroll: true });
+    const joiner = lots.find((p) => !used.has(p.patch) && p.neighbours.some((q) => !used.has(q) && lots.some((o) => o.patch === q)));
+    if (joiner) add(joiner, { merge_with: joiner.neighbours.find((q) => !used.has(q) && lots.some((o) => o.patch === q))! });
+    const request: TownRequest = {
+      relax: { at: plan.center, radius_ft: plan.max_move_ft * 4, amount: 0.6 },
+      equalize: lots.slice(0, 12).filter((p) => !used.has(p.patch)).slice(0, 6).map((p) => p.patch),
+      patches: set,
+      ...(k % 2 === 1 ? { walls: !plan.walls.built } : {}),
+    };
+    let r = await view.gen.townChange(li, request);
+    if ('error' in r) r = await view.gen.townChange(li, { ...request, patches: set.filter((x) => x.merge_with === undefined) });
     if ('edit' in r && r.edit) e.towns[String(li)] = r.edit;
   }
   // Castles and walls where the pan goes (on open ground: nothing in their way).
