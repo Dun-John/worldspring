@@ -248,6 +248,8 @@ export class MapView {
   private lastHud = 0;
   private genStats: GenStats | null = null;
   private status = 'starting';
+  /** How long the last continent took to generate (ms, in the worker that made it). */
+  t0Ms = 0;
   private exagFactor = 1;
   private progress: number | null = null;
   private lastWantKey = '';
@@ -703,6 +705,7 @@ export class MapView {
     this.syncSize();
     this.cam.minZoom = this.cam.fitZoom(geom.map_w_ft, geom.map_h_ft, 0.5);
     this.cam.set({ cx: geom.map_w_ft / 2, cy: geom.map_h_ft / 2, zoom: this.cam.fitZoom(geom.map_w_ft, geom.map_h_ft) });
+    this.t0Ms = t0Ms;
     this.status = `Continent generated in ${(t0Ms / 1000).toFixed(1)} s`;
   }
 

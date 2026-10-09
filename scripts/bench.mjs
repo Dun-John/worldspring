@@ -89,9 +89,21 @@ try {
     console.log(`\nheavy pan 1% low (gate ≥ 30): ${pass ? 'PASS' : 'FAIL'}`);
     process.exitCode = pass ? 0 : 1;
   } else {
-    const pass = r.low1Fps >= 30;
+    let pass = r.low1Fps >= 30;
     console.log(`\n1% low ${r.low1Fps.toFixed(1)} fps (gate ≥ 30): ${pass ? 'PASS' : 'FAIL'}`);
     console.log(`detail after stops: ${r.detailLatencyMs.join(' / ')} ms (target ≤ 500)`);
+    // The standard run (?bench=1) also times the world's generation.
+    if (r.continentMs !== undefined) {
+      const made = r.continentMs <= 15_000;
+      console.log(`continent generated in ${(r.continentMs / 1000).toFixed(1)} s (gate ≤ 15 s): ${made ? 'PASS' : 'FAIL'}`);
+      pass &&= made;
+    }
+    if (r.regenerate) {
+      const again = r.regenerate.readyMs <= 10_000;
+      console.log(`regenerated with a sketch in ${(r.regenerate.readyMs / 1000).toFixed(1)} s, its continent ${(r.regenerate.continentMs / 1000).toFixed(1)} s (gate ≤ 10 s): ${again ? 'PASS' : 'FAIL'}`);
+      pass &&= again;
+    }
+    process.exitCode = pass ? 0 : 1;
   }
 } finally {
   chrome.kill();

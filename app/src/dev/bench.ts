@@ -5,10 +5,16 @@ import type { PlayController } from '../play/controller';
 import { newId } from '../play/state';
 import { flyPath, type CameraState } from '../render/camera';
 import type { MapView } from '../render/MapView';
-import type { Edits, Placed } from '../gen/protocol';
+import type { Edits, Placed, Stroke, WorldFile } from '../gen/protocol';
+import { GenClient } from '../gen/client';
 import { putAsset } from '../world/assets';
 
 export interface BenchResult {
+  /** The world's continent as the app generated it (ms; the gate is 15 s). */
+  continentMs?: number;
+  /** The same world regenerated with a sketch drawn on it, as Generate does: until every generator
+   * has the new continent (ms; the gate is 10 s), and its continent alone. */
+  regenerate?: { readyMs: number; continentMs: number };
   seconds: number;
   frames: number;
   avgFps: number;
@@ -47,9 +53,42 @@ type Seg = { to: CameraState; ms: number } | { hold: number };
 
 const BATTLEMAP_ZOOM = Math.log2(64 / 5); // 5-ft square = 64 px
 
+/** A sketch as one draws it on a fresh world (fractions of the map): an island's coast, a range,
+ * a massif, a river into a lake, a city pin and a road to it. */
+function benchSketch(w: number, h: number): Stroke[] {
+  const p = (x: number, y: number): [number, number] => [Math.round(x * w), Math.round(y * h)];
+  const coast = Array.from({ length: 40 }, (_, k) => {
+    const a = (2 * Math.PI * k) / 40;
+    return p(0.5 + 0.36 * Math.cos(a) * (1 + 0.1 * Math.sin(3 * a)), 0.5 + 0.34 * Math.sin(a));
+  });
+  return [
+    { tool: 'land', closed: true, pts: coast },
+    { tool: 'range', radius_ft: 0.012 * w, strength: 0.8, name: 'Bench Ridge', pts: [p(0.3, 0.33), p(0.45, 0.36), p(0.6, 0.31)] },
+    { tool: 'massif', closed: true, radius_ft: 0.007 * w, strength: 0.7, pts: [p(0.25, 0.55), p(0.35, 0.52), p(0.38, 0.62), p(0.28, 0.66)] },
+    { tool: 'lake', closed: true, name: 'Bench Water', pts: [p(0.5, 0.52), p(0.53, 0.52), p(0.535, 0.56), p(0.505, 0.565)] },
+    { tool: 'river', radius_ft: 0.003 * w, strength: 0.7, pts: [p(0.47, 0.39), p(0.51, 0.53), p(0.55, 0.8)] },
+    { tool: 'pin', tier: 'city', name: 'Benchford', pts: [p(0.55, 0.66)] },
+    { tool: 'road', kind: 'kings_road', name: 'Bench Way', pts: [p(0.3, 0.5), p(0.42, 0.62), p(0.55, 0.66)] },
+  ] as Stroke[];
+}
+
+/** `world` regenerated with a sketch drawn on it, in a generator of its own (as Generate would:
+ * new workers, the continent made in one and loaded into the rest), timed. */
+async function timeRegenerate(world: WorldFile, w: number, h: number): Promise<{ readyMs: number; continentMs: number }> {
+  const gen = new GenClient();
+  try {
+    const t = performance.now();
+    const r = await gen.init({ ...world, sketch: { strokes: benchSketch(w, h) } });
+    return { readyMs: Math.round(performance.now() - t), continentMs: Math.round(r.t0Ms) };
+  } finally {
+    gen.dispose();
+  }
+}
+
 /** `route`: another fly-through than the standard one; `tick`: called every frame of it;
- * `quiet`: a run inside another bench (its result is not the one published). */
-export async function runBench(view: MapView, route?: { segs: Seg[]; tick?: (now: number) => void; quiet?: boolean }): Promise<BenchResult> {
+ * `quiet`: a run inside another bench (its result is not the one published). `world` (the
+ * standard run): the world shown, regenerated with a sketch after the fly-through, timed. */
+export async function runBench(view: MapView, route?: { segs: Seg[]; tick?: (now: number) => void; quiet?: boolean }, world?: WorldFile): Promise<BenchResult> {
   const geom = view.geom!;
   const cam = view.cam;
   await waitReady(view, 4000);
@@ -190,6 +229,10 @@ export async function runBench(view: MapView, route?: { segs: Seg[]; tick?: (now
     gpu: gpuName(view),
   };
   if (route?.quiet) return result;
+  if (world) {
+    result.continentMs = Math.round(view.t0Ms);
+    result.regenerate = await timeRegenerate(world, geom.map_w_ft, geom.map_h_ft);
+  }
   console.log('[bench]', JSON.stringify(result));
   (window as unknown as { __benchResult: BenchResult }).__benchResult = result;
   return result;

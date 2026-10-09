@@ -2047,7 +2047,7 @@
     benchRunning = true;
     bench = null;
     try {
-      bench = await runBench(view);
+      bench = await runBench(view, undefined, $state.snapshot(world) as WorldFile);
     } finally {
       benchRunning = false;
     }
