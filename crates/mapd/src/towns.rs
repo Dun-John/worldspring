@@ -85,6 +85,7 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
         }
     }
     let req: wards::TownRequest = serde_json::from_value(req).map_err(|e| e.to_string())?;
+    let town = id.clone();
     let (li, edit, mut report) = app
         .worker
         .with(move |ex| {
@@ -94,6 +95,7 @@ async fn edit(app: &Shared, a: &Value) -> Result<Value, String> {
         })
         .await?;
     report["tool"] = json!("edit_town");
+    report["id"] = json!(town);
     report["layout"] = json!(li);
     if dry {
         report["dry_run"] = json!(true);

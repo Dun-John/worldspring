@@ -423,6 +423,8 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
     }
     let tier = l.tier;
     let center = l.center;
+    // (A new business is named unlike any other in the town: a new keep isn't the citadel's twin.)
+    let mut names: std::collections::BTreeSet<String> = l.buildings.iter().filter(|b| b.func.is_some()).filter_map(|b| b.name.clone()).collect();
     for &k in fresh {
         let b = &mut l.buildings[k];
         let (id, big) = (b.id, area(&b.poly).abs() > 2500.0);
@@ -430,8 +432,17 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
         match b.func {
             Some(fi) => {
                 let f = &CATALOG[fi as usize];
-                let mut rng = Pcg32::new(hash3(stream, index, id as i64, 0x4e), 43);
-                b.name = super::sites::trade_name(Some(fi), &mut rng, t0, center);
+                if let Some(n) = &b.name {
+                    names.remove(n);
+                }
+                for salt in 0..8 {
+                    let mut rng = Pcg32::new(hash3(stream, index, id as i64, 0x4e + salt), 43);
+                    b.name = super::sites::trade_name(Some(fi), &mut rng, t0, center);
+                    if b.name.as_ref().is_none_or(|n| !names.contains(n)) {
+                        break;
+                    }
+                }
+                names.extend(b.name.clone());
                 b.floors = match f.key {
                     "castle" | "palace" => 4,
                     "inn" | "tavern" | "town_hall" | "library" | "arcane_academy" | "guildhall" => 2 + coin(0.5, 1) as u8,
@@ -952,7 +963,8 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             stayed.push(json!({ "corner": v, "asked": round1(world_pt(to)), "got": round1(world_pt(got)) }));
         }
     }
-    let ids = |l: &Layout| l.buildings.iter().map(|b| b.id).collect::<std::collections::BTreeSet<u32>>();
+    // (By id and footprint: a patch laid out again reuses its new buildings' ids.)
+    let ids = |l: &Layout| l.buildings.iter().map(|b| (b.id, b.poly.iter().flat_map(|p| [p[0].to_bits(), p[1].to_bits()]).collect::<Vec<u64>>())).collect::<std::collections::BTreeSet<_>>();
     let (ib, ia) = (ids(&before), ids(&after));
     let generated = super::generated_layout(world, t0, index);
     let funcs = |l: &Layout| {

@@ -35,7 +35,9 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
     (draw coasts, mountain ranges and masses, plateaus, rivers, lakes, volcanoes, towns and sites, roads, name
     regions, and the generator follows; or have only the roads you draw); save worlds and open them again.
   - **Edit**: rename anything, place your own towns and sites, draw buildings, change or remove a town's own (or
-    clear a whole ward to build your own), raise castles and walls anywhere, put down bridges, fords and ferries,
+    clear a whole ward to build your own), lay a town out anew (move its wards' corners by hand or with brushes,
+    give a ward over to another use, bigger or smaller lots, walls up or down), raise castles and walls anywhere,
+    put down bridges, fords and ferries,
     design dungeons and the insides of buildings room by room (walls, doors, stairs, storeys, cellars, furniture
     and props, your own pictures too), and put down or clear objects on battlemaps.
   - **Notes**: your notebook for the people and plots of your campaign, pinned to places on the map.

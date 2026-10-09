@@ -231,6 +231,79 @@ export interface TownEdit {
   walls?: boolean;
 }
 
+/** What a patch of a town can be given (`worldgen::world::TOWN_WARDS`; `empty`: open ground). */
+export const TOWN_WARDS = ['plaza', 'castle', 'temple', 'merchant', 'craft', 'noble', 'common', 'slum', 'docks', 'military', 'farm', 'park', 'empty'] as const;
+export type TownWard = (typeof TOWN_WARDS)[number];
+/** Lot sizes, smallest first (`worldgen::world::LOT_SIZES`). */
+export const LOT_SIZES = ['small', 'medium', 'large', 'huge'] as const;
+export type LotSize = (typeof LOT_SIZES)[number];
+
+/** A patch of a town as the ward editor sees it (`town::wards::plan_json`): its corners (plan
+ * corner ids), ward as it is now (and as generated, if set by hand), district, neighbours. */
+export interface TownPatch {
+  patch: number;
+  /** Its middle as planned (world ft). */
+  at: [number, number];
+  corners: number[];
+  ward: TownWard;
+  ward_generated?: TownWard;
+  /** Inside the town (else its farms and sprawl). */
+  in_town: boolean;
+  neighbours: number[];
+  district?: { name: string; id: string };
+  /** The patch whose lots it shares (its district group). */
+  lots_like?: number;
+  lots?: LotSize;
+  reroll?: number;
+  merged_with?: number;
+}
+
+/** A corner of a town's patches: where it stands now (world ft), where it was planned (if moved). */
+export interface TownCorner {
+  corner: number;
+  at: [number, number];
+  planned?: [number, number];
+  /** On the water or a river: it never moves. */
+  pinned?: boolean;
+  gate?: boolean;
+  wall?: boolean;
+}
+
+/** A town's plan for the ward editor (Ask op `townplan`). */
+export interface TownPlan {
+  layout: number;
+  center: [number, number];
+  /** How far a corner may go from where it was planned. */
+  max_move_ft: number;
+  walls: { built: boolean; generated: boolean };
+  edited: boolean;
+  patches: TownPatch[];
+  corners: TownCorner[];
+  /** What of the town's edit no longer applies. */
+  set_aside: string[];
+}
+
+/** A change asked of a town (`town::wards::TownRequest`). */
+export interface TownRequest {
+  moves?: { corner: number; to?: [number, number]; by?: [number, number]; as_generated?: boolean }[];
+  equalize?: number[];
+  relax?: { at: [number, number]; radius_ft: number; amount?: number };
+  patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; as_generated?: boolean }[];
+  walls?: boolean | 'auto';
+  reset?: 'all' | 'corners' | 'patches';
+}
+
+/** What a change to a town does (`town::wards::change`). */
+export interface TownReport {
+  corners: { asked: number; moved: number; part_way: number; stayed: number };
+  buildings: { before: number; after: number; added: number; taken_away: number };
+  walls: { built: boolean; towers: number; gates: number };
+  /** The rectangles (x0, y0, x1, y1 ft) to draw again. */
+  rects: Rect[];
+  functions_lost?: string[];
+  unmerged?: number[];
+}
+
 /** A generated building changed by hand (`worldgen::world::BuildingEdit`): `at` is its middle
  * as generated (the edit is set aside if another building stands at its id after the town is
  * laid out anew); every option left out is as generated. */
@@ -389,7 +462,11 @@ export type Ask =
    * what it builds and its problems (`under::design::design_json`). */
   | { op: 'design'; id: string; design?: string; action?: string }
   /** What the designer offers (`under::design::catalog_json`). */
-  | { op: 'undercat' };
+  | { op: 'undercat' }
+  /** A town's plan for the ward editor (`town::wards::plan_json`). */
+  | { op: 'townplan'; layout: number }
+  /** A town changed as asked, without changing the edits (`town::wards::change_json`). */
+  | { op: 'townchange'; layout: number; request: string };
 
 /** A name to rename (`worldgen::agent::name_entry`): `generated` is the name before renames. */
 export interface NameEntry {

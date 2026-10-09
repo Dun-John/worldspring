@@ -47,6 +47,13 @@ export const ICONS = {
   stairs: '<path d="M3 20h5v-5h5v-5h5V5h3"/>',
   ruler: '<path d="M3 17 17 3l4 4L7 21Z"/><path d="m7 13 2 2M10 10l2 2M13 7l2 2"/>',
   pointer: '<path d="M4 3l7 17 2.5-7.5L21 10Z"/>',
+  // The ward editor: a town's patches, and its brushes.
+  wards: '<path d="M3 4l7 2 2 6-5 3-4-2Z"/><path d="M10 6l8-2 3 7-9 1"/><path d="M12 12l9-1-1 9-8-2-5-3"/><path d="M7 15l-3 6"/>',
+  move: '<path d="M12 2v20M2 12h20"/><path d="m9 5 3-3 3 3M9 19l3 3 3-3M5 9l-3 3 3 3M19 9l3 3-3 3"/>',
+  liquify: '<path d="M3 8c3-3 6 3 9 0s6 3 9 0"/><path d="M3 16c3-3 6 3 9 0s6 3 9 0"/>',
+  bloat: '<circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><path d="m10 4 2-2 2 2M10 20l2 2 2-2M4 10l-2 2 2 2M20 10l2 2-2 2"/>',
+  pinch: '<circle cx="12" cy="12" r="2"/><path d="M12 2v6M12 16v6M2 12h6M16 12h6"/><path d="m10 6 2 2 2-2M10 18l2-2 2 2M6 10l2 2-2 2M18 10l-2 2 2 2"/>',
+  relax: '<path d="M3 7c4-2 5 2 9 0s5-2 9 0"/><path d="M3 12h18"/><path d="M3 17c4 1 5-1 9 0s5 1 9 0"/>',
   cloud: '<path d="M17.5 19H8a6 6 0 1 1 5.7-7.9A4.5 4.5 0 1 1 17.5 19Z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5Z"/>',

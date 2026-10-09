@@ -1000,7 +1000,8 @@ Change a town's layout. Every field is optional; they apply in this order: `rese
 `relax`, `patches`, `walls`. The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`, and the
 ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken_away`), `walls` (`built`, `towers`,
 `gates`), `functions_lost`, `unmerged` (merges dropped because a ward no longer allows them), `rects` (where the
-map is drawn again).
+map is drawn again). `added` and `taken_away` count buildings by id and footprint (a patch laid out again keeps
+reusing its new buildings' ids).
 
 | Parameter | Type | Default | |
 |---|---|---|---|

@@ -2,7 +2,7 @@
 // and per-frame styling (zoom-adaptive hillshade and contour interval).
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type WantTile, type WorldFile, WORKS_MARGIN_FT } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, WORKS_MARGIN_FT } from '../gen/protocol';
 import { BattlemapLayer, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { InteriorLayer, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
@@ -125,6 +125,10 @@ export interface PointerTool {
   draw?(g: Graphics, cam: Camera): void;
   /** A double click on the map: true if the tool took it (else it goes into a building). */
   dblclick?(x: number, y: number): boolean;
+  /** What its drawing shows besides the camera: while this and the camera's zoom stay the same,
+   * the last frame's drawing is kept, shifted as the map pans (for a tool that draws a lot; it
+   * must draw at least a quarter of the view beyond each side). */
+  drawKey?(): string;
 }
 
 const TIERS: [number, string][] = [
@@ -180,6 +184,7 @@ export class MapView {
   renames: Record<string, string> = {};
   /** Settlements (layout order) and which have had their districts asked for. */
   private towns: { x: number; y: number; r: number; index: number }[] = [];
+  private readonly townHints = new Map<string, { edit: string; rects: Rect[] }>();
   private districtsAsked = new Set<number>();
   private lastDistrictCheck = 0;
   /** Business pins ("Places"): shown or not, the area asked for last, and a pending ask. */
@@ -208,6 +213,10 @@ export class MapView {
   /** What the tool draws over everything (`PointerTool.draw`). */
   private readonly toolLayer = new Graphics();
   private toolDrawn = false;
+  /** The drawing kept from the last frame: its key and tool (`PointerTool.drawKey`). */
+  private toolKey: string | null = null;
+  private toolKeyOf: PointerTool | null = null;
+  private toolAt: [number, number] = [0, 0];
   private toolPointer: number | null = null;
   /** Called every frame after the camera moved and the map updated. */
   onFrame: ((now: number) => void) | null = null;
@@ -390,6 +399,24 @@ export class MapView {
     };
     this.bindInput();
     this.app.ticker.add(() => this.frame());
+  }
+
+  /** The town (layout index) whose patches lie round (x, y): the nearest within 2.3 of its
+   * radii (its farms and sprawl), else -1. Villages have none. */
+  townAt(x: number, y: number): number {
+    let best = -1;
+    let bestD = 2.3;
+    for (const t of this.towns) {
+      const d = Math.hypot(x - t.x, y - t.y) / Math.max(1, t.r);
+      if (d < bestD) [best, bestD] = [t.index, d];
+    }
+    return best;
+  }
+
+  /** The rectangles a change to town `key` redraws (the generator's, from the ward editor),
+   * taken when edits holding `edit` for it come in; any other change redraws all it reaches. */
+  hintTown(key: string, edit: TownEdit | null, rects: Rect[]) {
+    this.townHints.set(key, { edit: JSON.stringify(edit), rects });
   }
 
   /** At town zoom, ask once for the districts of each town in view. */
@@ -831,8 +858,12 @@ export class MapView {
       if (JSON.stringify(pt[key]) === JSON.stringify(nt[key])) continue;
       const t = this.towns.find((t) => t.index === Number(key));
       if (!t) continue;
+      // (The ward editor's own changes come with what they redraw, worked out by the generator.)
+      const hint = this.townHints.get(key);
+      this.townHints.delete(key);
       const r = 2.3 * t.r + 200;
-      rects.push([t.x - r, t.y - r, t.x + r, t.y + r]);
+      if (hint && hint.edit === JSON.stringify(nt[key] ?? null)) rects.push(...hint.rects);
+      else rects.push([t.x - r, t.y - r, t.x + r, t.y + r]);
       this.districtsAsked.delete(t.index);
       this.labels?.forgetTown(t.index);
       this.placesRect = null;
@@ -1058,9 +1089,23 @@ export class MapView {
       this.onFrame?.(now);
       this.playMs = performance.now() - tp;
       if (this.tool?.draw || this.toolDrawn) {
-        this.toolLayer.clear();
-        this.tool?.draw?.(this.toolLayer, this.cam);
-        this.toolDrawn = !!this.tool?.draw;
+        // (A tool with a key: its drawing kept and shifted while only the camera's middle moves,
+        // drawn again once that is a quarter of the view away.)
+        const cam = this.cam;
+        const key = this.tool?.drawKey ? `${this.tool.drawKey()}|${cam.zoom},${cam.width},${cam.height}` : null;
+        const [ax, ay] = this.toolAt;
+        const far = Math.abs(cam.cx - ax) * cam.ppf > cam.width / 4 || Math.abs(cam.cy - ay) * cam.ppf > cam.height / 4;
+        if (key === null || key !== this.toolKey || this.tool !== this.toolKeyOf || far) {
+          this.toolLayer.position.set(0, 0);
+          this.toolLayer.clear();
+          this.tool?.draw?.(this.toolLayer, cam);
+          this.toolDrawn = !!this.tool?.draw;
+          this.toolKey = key;
+          this.toolKeyOf = this.tool;
+          this.toolAt = [cam.cx, cam.cy];
+        } else {
+          this.toolLayer.position.set((ax - cam.cx) * cam.ppf, (ay - cam.cy) * cam.ppf);
+        }
       }
       if (now - this.lastDistrictCheck > 300) {
         this.lastDistrictCheck = now;

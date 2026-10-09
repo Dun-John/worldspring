@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Npc, Overlay, Placed, Plot, SpriteMeta, Stroke, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Npc, Overlay, Placed, Plot, SpriteMeta, Stroke, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { Sketcher, drawsLand, scaleStrokes, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
@@ -32,6 +32,8 @@
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
   import BuildPanel from './ui/BuildPanel.svelte';
+  import TownPanel from './ui/TownPanel.svelte';
+  import { TownTool, type TownMode } from './editor/town';
   import DesignPanel from './ui/DesignPanel.svelte';
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { belowGround } from './editor/site/model';
@@ -837,6 +839,7 @@
   const placeOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'sites');
   const scatterOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'scatter');
   const buildOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'build');
+  const townOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'town');
   const notebookOn = $derived(shell.section === 'notes');
   /** Sites underground can be designed, but not while playing. */
   const canDesign = $derived(!!inside && /^[ub]:/.test(inside.id) && !playOn);
@@ -853,7 +856,7 @@
   function syncTool() {
     const buildTool =
       buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
-    view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? scatterArmed?.tool ?? (playOn ? play : null);
+    view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? townTool ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -871,6 +874,7 @@
     const editTab = to === 'edit' ? t : null;
     if (editTab !== 'scatter') disarmScatter();
     if (editTab !== 'build') disarmBuild();
+    if (editTab !== 'town') disarmTown();
     if (editTab !== 'sites') disarmPlace();
     pickTool = null;
     if (to && to !== shell.section) {
@@ -882,6 +886,7 @@
     if (to && t) (shell.tabs as Record<string, string>)[to] = t;
     if (editTab === 'scatter') armScatter();
     if (editTab === 'build') armBuild();
+    if (editTab === 'town') armTown();
     if (editTab === 'design' && !designer) void openDesigner();
     if (to === 'world' && t === 'sketch' && !sketchOn) enterSketch();
     if (to === 'play') startPlay();
@@ -920,7 +925,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: 'npcs' | 'plots' | 'places', id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: 'npcs' | 'plots' | 'places', id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -1120,6 +1125,143 @@
     setBuildMode(c.kind as 'castle' | 'wall');
     worksEditing = c.id;
     works = { castleShape: (c.poly?.length ?? 0) === 4 ? 'rect' : 'poly', keep: c.keep !== false, yardBuildings: c.yard_buildings !== false, ruin: c.structure === 'ruin', closed: !!c.closed, name: '' };
+  }
+
+  // Edit › Town: the town in view laid out anew by hand (the ward editor, `editor/town.ts`).
+  let townTool = $state.raw<TownTool | null>(null);
+  let townMode = $state<TownMode>('select');
+  /** The brush's size, in patch widths. */
+  let townSize = $state(1);
+  /** The town in view (its layout index), its plan, the patch picked. */
+  let townIndex = $state(-1);
+  let townPlan = $state.raw<TownPlan | null>(null);
+  let townNote = $state('');
+  let townPatch = $state<number | null>(null);
+  let townMerging = $state(false);
+  let townBusy = $state(false);
+  /** What the plan shown was read for: the town and its edit. */
+  let townRead = '';
+  let townAsked = 0;
+  const townSelected = $derived(townPlan?.patches.find((p) => p.patch === townPatch) ?? null);
+  const townName = $derived(townIndex >= 0 && settlements[townIndex] ? (renames[settlements[townIndex].id] ?? settlements[townIndex].name) : null);
+  const townNear = $derived(!!townPlan && townPlan.max_move_ft / (hud?.ftPerPx ?? 99) >= 40);
+
+  function armTown() {
+    if (townTool) return;
+    townTool = new TownTool({
+      mode: () => townMode,
+      radius: () => townSize * (townPlan?.max_move_ft ?? 300),
+      selected: () => townPatch,
+      moved: (moves) => void townChange({ moves }, 'corners'),
+      equalize: (patches) => void townChange({ equalize: patches }, 'equalize'),
+      hint: (t) => toast(t),
+    });
+    townTool.setPlan(townPlan);
+    townRead = '';
+  }
+
+  function disarmTown() {
+    townTool = null;
+    townMerging = false;
+    townPatch = null;
+  }
+
+  // The town in view (by the middle of the map), while the tab is open.
+  $effect(() => {
+    const c = hud?.center;
+    if (!townOn || !c || townBusy) return;
+    const i = view.townAt(c.x, c.y);
+    if (i !== untrack(() => townIndex)) {
+      townIndex = i;
+      townPatch = null;
+      townMerging = false;
+    }
+  });
+
+  // Its plan, read again when the town or its edit changes (here, by undo, from elsewhere) or
+  // the world is made again.
+  $effect(() => {
+    if (!townOn || !townTool || !overlay) return;
+    const i = townIndex;
+    const key = `${i}|${JSON.stringify(edits.towns?.[String(i)] ?? null)}|${world.seed}|${overlay.features.length}`;
+    if (key === townRead) return;
+    townRead = key;
+    void untrack(() => readTownPlan(i));
+  });
+
+  async function readTownPlan(i: number) {
+    const asked = ++townAsked;
+    if (i < 0) {
+      townPlan = null;
+      townNote = 'Go to a town, city or metropolis to lay it out anew (villages grow along their roads).';
+      townTool?.setPlan(null);
+      return;
+    }
+    if (!townPlan || townPlan.layout !== i) townNote = 'Reading the town’s plan…';
+    const r = await view.gen.townPlan(i);
+    if (asked !== townAsked) return;
+    if ('error' in r) {
+      townPlan = null;
+      townNote = r.error.charAt(0).toUpperCase() + r.error.slice(1);
+    } else {
+      townPlan = r;
+      if (townPatch !== null && !r.patches.some((p) => p.patch === townPatch)) townPatch = null;
+    }
+    townTool?.setPlan(townPlan);
+  }
+
+  /** A click on the map with the tab open: a patch picked, or the neighbour to join. */
+  function townPick(x: number, y: number) {
+    const p = townTool?.patchAt(x, y) ?? null;
+    if (townMerging && townSelected) {
+      townMerging = false;
+      if (p === null || p === townSelected.patch) return;
+      if (!townSelected.neighbours.includes(p)) return void toast('Pick a patch next to it');
+      void townChange({ patches: [{ patch: townSelected.patch, merge_with: p }] }, 'merge');
+      return;
+    }
+    townPatch = p;
+  }
+
+  /** A change asked of the town in view: made (one step to undo), or why not. */
+  async function townChange(request: TownRequest, what: string) {
+    const i = townIndex;
+    if (i < 0 || townBusy) return void townTool?.settled();
+    townBusy = true;
+    const r = await view.gen.townChange(i, request).finally(() => (townBusy = false));
+    if (i !== townIndex) return void townTool?.settled();
+    if ('error' in r) {
+      townTool?.settled();
+      return void toast(r.error.charAt(0).toUpperCase() + r.error.slice(1));
+    }
+    const key = String(i);
+    if (JSON.stringify(edits.towns?.[key] ?? null) === JSON.stringify(r.edit)) {
+      townTool?.settled();
+      return void toast(what === 'corners' ? 'Nothing moved: the patches round those corners must stay convex' : 'Nothing changed');
+    }
+    const towns = { ...(edits.towns ?? {}) };
+    if (r.edit) towns[key] = r.edit;
+    else delete towns[key];
+    view.hintTown(key, r.edit, r.report.rects);
+    applyEdits({ ...edits, towns }, { tool: 'edit_town', id: settlements[i]?.id, name: townName ?? undefined, what, ...townReport(r.report) }, 'user');
+  }
+
+  /** What a change did, for its description (`describe`), as an agent's reply has it. */
+  function townReport(r: TownReport): Partial<TownReport> {
+    const { rects: _, ...rest } = r;
+    return rest;
+  }
+
+  function townZoomIn() {
+    const f = settlements[townIndex];
+    if (!f) return;
+    let size = 5000;
+    if (townPlan) {
+      const at = new Map(townPlan.corners.map((c) => [c.corner, c.at]));
+      const pts = townPlan.patches.filter((p) => p.in_town).flatMap((p) => p.corners.map((v) => at.get(v) ?? p.at));
+      if (pts.length) size = Math.max(Math.max(...pts.map((p) => p[0])) - Math.min(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1])) - Math.min(...pts.map((p) => p[1])));
+    }
+    flyToSize(f.x, f.y, size);
   }
 
   function disarmBuild() {
@@ -1894,6 +2036,7 @@
   }
 
   async function pick(x: number, y: number, sx: number, sy: number) {
+    if (townOn && townTool) return townPick(x, y);
     const f = view.labels?.hit(sx, sy);
     const shop = f?.kind === 'place' ? view.labels?.placeHit(f.id) : null;
     if (shop) {
@@ -2016,6 +2159,12 @@
       if (inBuilding ? m === 'corridor' || m === 'rock' : m === 'wall' || m === 'merge') return;
       designSettings = { ...designSettings, mode: m };
     },
+    townMode: (m) => {
+      townMode = m;
+      townMerging = false;
+      townTool?.reset();
+    },
+    townBrush: (d) => (townSize = Math.max(0.25, Math.min(4, townSize * (d > 0 ? 1.15 : 1 / 1.15)))),
     playTool: (t) => play.setTool(t),
     removeTokens: () => play.removeSelected(),
     escape: [
@@ -2033,6 +2182,9 @@
       () => (worksEditing ? ((worksEditing = null), true) : false),
       () => !!buildArmed?.cross.reset(),
       () => (crossEditing ? ((crossEditing = null), true) : false),
+      () => !!townTool?.reset(),
+      () => (townMerging ? ((townMerging = false), true) : false),
+      () => (townOn && townPatch !== null ? ((townPatch = null), true) : false),
       () => (placeArmed ? (disarmPlace(), true) : false),
       () => (pickTool ? ((pickTool = null), syncTool(), true) : false),
       () => (designer ? (go('edit', 'names'), true) : false),
@@ -2274,6 +2426,7 @@
         { key: 'names', label: 'Names', icon: 'tag', kbd: 'N' },
         { key: 'sites', label: 'Sites', icon: 'pin', kbd: 'S' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B' },
+        { key: 'town', label: 'Town', icon: 'wards', kbd: 'U', title: 'Lay the town in view out anew: its wards, corners and walls (U)' },
         { key: 'scatter', label: 'Scatter', icon: 'tree', kbd: 'C' },
         { key: 'design', label: 'Design', icon: 'room', kbd: 'D', disabled: !canDesign && !designer, title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building (D)' : 'Design this site (D)') : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design it' },
       ]}
@@ -2317,6 +2470,23 @@
             onCrossSave={saveCrossing}
             onCrossRemove={removeCrossing}
             onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 0.5)) })}
+          />
+        {:else if townOn}
+          <TownPanel
+            plan={townPlan}
+            name={townName}
+            note={townNote}
+            mode={townMode}
+            bind:size={townSize}
+            selected={townSelected}
+            merging={townMerging}
+            busy={townBusy}
+            near={townNear}
+            {peek}
+            onMode={(m) => ((townMode = m), (townMerging = false), townTool?.reset())}
+            onChange={(req, what) => void townChange(req, what)}
+            onMerge={() => (townMerging = !townMerging)}
+            onZoomIn={townZoomIn}
           />
         {:else if scatterOn}
           <ScatterPanel

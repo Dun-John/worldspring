@@ -97,6 +97,21 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return `removed sprite “${String(change.name ?? id)}”`;
       case 'set_site_design':
         return `redesigned ${String(change.name ?? nameOf(id))}`;
+      case 'edit_town': {
+        // (The app's own changes and an agent's reply carry the same report.)
+        const c = change.corners as { asked: number; moved: number; part_way: number } | undefined;
+        const b = change.buildings as { added: number; taken_away: number } | undefined;
+        const lost = Array.isArray(change.functions_lost) ? (change.functions_lost as string[]) : [];
+        const parts: string[] = [];
+        if (c?.asked) {
+          const got = c.moved + c.part_way;
+          parts.push(`${got === c.asked ? got : `${got} of ${c.asked}`} ${c.asked === 1 ? 'corner' : 'corners'} moved${c.part_way ? ` (${c.part_way} part way)` : ''}`);
+        }
+        if (b && (b.added || b.taken_away)) parts.push(`${b.added} new ${b.added === 1 ? 'building' : 'buildings'}, ${b.taken_away} gone`);
+        if (lost.length) parts.push(`no room left for: ${lost.map((f) => f.replace(/_/g, ' ')).join(', ')}`);
+        const town = String(change.name ?? (id ? nameOf(id) : 'the town'));
+        return `laid ${town} out anew${parts.length ? `: ${parts.join('; ')}` : ''}`;
+      }
       case 'start_over':
         return 'started over: every change to this world cleared';
       case 'reset_site_design':

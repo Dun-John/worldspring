@@ -5,6 +5,7 @@ import type { EditTool } from '../../editor/sketcher';
 import type { ScatterMode } from '../../editor/scatter';
 import type { BuildShape } from '../../editor/build';
 import type { DesignMode } from '../../editor/site/designer';
+import type { TownMode } from '../../editor/town';
 import type { Tool as PlayTool } from '../../play/controller';
 import type { EditTab, Section } from './layout.svelte';
 import type { Shortcut } from './shortcuts';
@@ -44,6 +45,9 @@ export interface KeyContext {
   buildFinish(): void;
   buildBack(): void;
   designMode(m: DesignMode): void;
+  townMode(m: TownMode): void;
+  /** The town brush a step bigger (1) or smaller (-1). */
+  townBrush(d: number): void;
   playTool(t: PlayTool): void;
   removeTokens(): void;
   /** Steps Escape tries in order; the first that does something wins. */
@@ -112,6 +116,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['N', 'names', 'Names'],
     ['S', 'sites', 'Sites'],
     ['B', 'build', 'Build'],
+    ['U', 'town', 'Town'],
     ['C', 'scatter', 'Scatter'],
     ['D', 'design', 'Design'],
   ];
@@ -128,6 +133,20 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   out.push(
     { keys: ['Enter'], label: 'Finish the polygon, castle or wall', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
     { keys: ['Backspace'], label: 'Take a corner back', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildBack() },
+  );
+  const town: [string, TownMode, string][] = [
+    ['V', 'select', 'Choose a patch, drag a corner'],
+    ['Q', 'displace', 'Displace'],
+    ['L', 'liquify', 'Liquify'],
+    ['O', 'bloat', 'Bloat'],
+    ['I', 'pinch', 'Pinch'],
+    ['R', 'relax', 'Relax'],
+    ['E', 'equalize', 'Equalize'],
+  ];
+  for (const [key, m, label] of town) out.push({ keys: [key], label, group: 'Town', when: edit('town'), run: () => k.townMode(m) });
+  out.push(
+    { keys: [']'], label: 'Bigger brush', group: 'Town', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(1) },
+    { keys: ['['], label: 'Smaller brush', group: 'Town', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(-1) },
   );
   const modes: [string, ScatterMode, string][] = [
     ['Q', 'stamp', 'Stamp'],

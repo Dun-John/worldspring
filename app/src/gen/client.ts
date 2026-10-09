@@ -4,7 +4,7 @@ import { EDIT_FIELDS } from '../sync/ops';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -148,6 +148,19 @@ export class GenClient {
   /** What the designer offers: props, room kinds, themes. */
   underCatalog(): Promise<UnderCatalog> {
     return this.ask({ op: 'undercat' }).then((j) => JSON.parse(j) as UnderCatalog);
+  }
+
+  /** A town's plan for the ward editor (patches, corners, walls), or why it has none. */
+  townPlan(layout: number): Promise<TownPlan | { error: string }> {
+    return this.ask({ op: 'townplan', layout }).then((j) => (JSON.parse(j) as TownPlan | { error: string } | null) ?? { error: 'The map could not answer: try again' });
+  }
+
+  /** A town changed as asked, the edits left alone: the town's edit it then has (null: as
+   * generated) and what the change does, or why not. */
+  townChange(layout: number, request: TownRequest): Promise<{ edit: TownEdit | null; report: TownReport } | { error: string }> {
+    return this.ask({ op: 'townchange', layout, request: JSON.stringify(request) }).then(
+      (j) => (JSON.parse(j) as { edit: TownEdit | null; report: TownReport } | { error: string } | null) ?? { error: 'The map could not answer: try again' },
+    );
   }
 
   /** A settlement's named districts, for labels. */
