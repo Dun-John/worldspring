@@ -790,7 +790,8 @@ export class InteriorLayer {
   }
 
   /** The back of a building's item (unit step in grid axes): a bed's head and a booth seat's back are
-   * away from the room (the wall at a bed's end; the side away from its booth table); a pew's back is
+   * away from the room (the wall at a bed's end; the side away from its booth table; a corner seat,
+   * diagonal to its table, backs onto both walls: a diagonal step); a pew's back is
    * away from the level's nearest altar; everything else backs onto the wall along a long side. */
   private backSide(f: InteriorItem): [number, number] {
     const lv = this.interior.levels[this.level];
@@ -801,6 +802,8 @@ export class InteriorLayer {
         const [dx, dy] = [t.x + t.w / 2 - cx, t.y + t.h / 2 - cy];
         return Math.abs(dx) > Math.abs(dy) ? [-Math.sign(dx), 0] : [0, -Math.sign(dy)];
       }
+      const c = lv.furniture.find((o) => o.kind === 'booth_table' && Math.abs(o.x + o.w / 2 - cx) <= (o.w + f.w) / 2 + 0.01 && Math.abs(o.y + o.h / 2 - cy) <= (o.h + f.h) / 2 + 0.01);
+      if (c) return [-Math.sign(c.x + c.w / 2 - cx), -Math.sign(c.y + c.h / 2 - cy)];
     }
     if (f.kind === 'pew') {
       // Every pew in a room faces the same way: measured from the room's middle to the nearest altar,

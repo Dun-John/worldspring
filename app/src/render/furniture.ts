@@ -819,17 +819,34 @@ function boothTable(g: Graphics, f: InteriorItem, light: Light, rnd: () => numbe
   planks(g, face, true, 3, WOOD[0], rnd);
 }
 
-/** Booth seat: an upholstered bench with a high back on the side away from its table. */
-function boothSeat(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
-  const { rect } = frame(f, back);
-  const t = PLUSH[v % PLUSH.length];
-  board(g, rect(0.06, 0.06, 0.94, 0.92), DARK_WOOD, light, rnd, true, 0.03, 0);
+/** Booth seat: an upholstered bench half a square deep, its high back on the side away from its
+ * table, always in the same red. The corner seat (`back` a diagonal step) is an L along both walls,
+ * so the bench runs on round the corner. */
+function boothSeat(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
+  const t = PLUSH[0];
   const pad = (r: number[], c: readonly number[]) => {
-    g.roundRect(r[0], r[1], r[2] - r[0], r[3] - r[1], 0.06).fill(c[0]).stroke({ width: LINE, color: INK });
-    g.roundRect(r[0] + 0.03 + light[0] * 0.015, r[1] + 0.03 + light[1] * 0.015, r[2] - r[0] - 0.06, r[3] - r[1] - 0.06, 0.05).fill(c[1]);
+    g.roundRect(r[0], r[1], r[2] - r[0], r[3] - r[1], 0.05).fill(c[0]).stroke({ width: LINE, color: INK });
+    g.roundRect(r[0] + 0.025 + light[0] * 0.012, r[1] + 0.025 + light[1] * 0.012, r[2] - r[0] - 0.05, r[3] - r[1] - 0.05, 0.04).fill(c[1]);
   };
-  pad(rect(0.1, 0.1, 0.9, 0.36), t);
-  pad(rect(0.12, 0.38, 0.88, 0.88), t.map((c) => shade(c, 1.06)));
+  if (back[0] !== 0 && back[1] !== 0) {
+    // (u from the wall at x's back, v from the wall at y's back.)
+    const { x, y } = f;
+    const px = (u: number) => (back[0] < 0 ? x + u : x + 1 - u);
+    const py = (v: number) => (back[1] < 0 ? y + v : y + 1 - v);
+    const r = (u0: number, v0: number, u1: number, v1: number) => [Math.min(px(u0), px(u1)), Math.min(py(v0), py(v1)), Math.max(px(u0), px(u1)), Math.max(py(v0), py(v1))];
+    g.poly([px(0.06), py(0.06), px(0.94), py(0.06), px(0.94), py(0.5), px(0.5), py(0.5), px(0.5), py(0.94), px(0.06), py(0.94)])
+      .fill(DARK_WOOD[1])
+      .stroke({ width: LINE, color: INK, join: 'round' });
+    pad(r(0.09, 0.09, 0.9, 0.22), t);
+    pad(r(0.09, 0.22, 0.22, 0.9), t);
+    pad(r(0.23, 0.23, 0.9, 0.47), t.map((c) => shade(c, 1.06)));
+    pad(r(0.23, 0.47, 0.47, 0.9), t.map((c) => shade(c, 1.06)));
+    return;
+  }
+  const { rect } = frame(f, back);
+  board(g, rect(0.06, 0.06, 0.94, 0.5), DARK_WOOD, light, rnd, true, 0.03, 0);
+  pad(rect(0.1, 0.09, 0.9, 0.22), t);
+  pad(rect(0.12, 0.23, 0.88, 0.47), t.map((c) => shade(c, 1.06)));
 }
 
 /** Rug: a woven rug in two dyes, a border and a pattern of diamonds down the middle, fringed ends. */
@@ -1087,8 +1104,8 @@ function throne(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, b
 /** Stage: a raised platform of planks — its front edge (the apron) darker, a shadow on the floor along the
  * front and sides — a flight of steps up the middle of the front, and a heavy curtain hung along the back,
  * folds in light and dark, a wavy hem, tied back at both ends. */
-function stage(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
-  const { along, len, rect, at } = frame(f);
+function stage(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
+  const { along, len, rect, at } = frame(f, back);
   const wid = along ? f.h : f.w;
   const front = wid - 0.36;
   // Shadow on the floor round the front and sides.
@@ -1549,7 +1566,7 @@ function linkDown(g: Graphics, f: InteriorItem, rnd: () => number) {
 
 /** Furniture with a back (InteriorLayer.backSide): to the wall, a bed's head to the wall at its end, a
  * pew's away from the altar, a booth seat's away from its table. */
-export const ORIENTED = new Set(['shelf', 'bookcase', 'hearth', 'oven', 'forge', 'workbench', 'counter', 'bar', 'keg_rack', 'bed', 'couch', 'sideboard', 'pew', 'booth_seat', 'altar', 'statue', 'throne', 'alchemy_bench', 'weapon_rack']);
+export const ORIENTED = new Set(['shelf', 'bookcase', 'hearth', 'oven', 'forge', 'workbench', 'counter', 'bar', 'keg_rack', 'bed', 'couch', 'sideboard', 'pew', 'booth_seat', 'altar', 'statue', 'throne', 'alchemy_bench', 'weapon_rack', 'stage']);
 
 /** Furniture drawn here: one of four looks each, picked by position (InteriorLayer.itemKey). */
 export const VARIED = new Set([
@@ -1588,7 +1605,7 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       boothTable(g, f, light, rnd);
       break;
     case 'booth_seat':
-      boothSeat(g, f, light, v, rnd, back ?? [0, -1]);
+      boothSeat(g, f, light, rnd, back ?? [0, -1]);
       break;
     case 'rug':
       rug(g, f, v, rnd);
@@ -1618,7 +1635,7 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       throne(g, f, light, rnd, back ?? [0, -1]);
       break;
     case 'stage':
-      stage(g, f, light, rnd);
+      stage(g, f, light, rnd, back ?? (f.w >= f.h ? [0, -1] : [-1, 0]));
       break;
     case 'vat':
       vat(g, f, light, rnd);
