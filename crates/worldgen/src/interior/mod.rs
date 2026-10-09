@@ -614,22 +614,27 @@ pub fn has_deep_dungeon(b: &town::Building) -> bool {
 }
 
 /// The ways from a cellar to other sites: a trapdoor down into the sewers (on the street side),
-/// stairs down to a keep's deep dungeons (in the middle of the far end). How many it should
-/// have, and puts them on its free floor (fewer if there is none).
-fn cellar_links(lvl: &mut Level, t0: &T0, l: &Layout, b: &town::Building, sh: &Shell, stairs: [usize; 4]) -> usize {
+/// stairs down to a keep's deep dungeons (in the middle of the far end). Which ones it should
+/// have (their names), put on the free floor of `lvl` (the deepest level below ground; fewer if
+/// there is none; none without a level).
+fn cellar_links(mut lvl: Option<&mut Level>, t0: &T0, l: &Layout, b: &town::Building, sh: &Shell, stairs: [usize; 4]) -> Vec<&'static str> {
     let (nx, ny) = (sh.nx, sh.ny);
     let grid = |p: P| {
         let d = sub(p, sh.origin);
         [dot(d, sh.u) / SQUARE_FT, dot(d, sh.v) / SQUARE_FT]
     };
-    let mut want = 0;
+    let mut want = Vec::new();
     if let Some(q) = crate::under::sewer_link_of(t0, l, b) {
-        want += 1;
-        place_link(lvl, nx, ny, stairs, grid(q), "trapdoor", "trapdoor to the sewers", crate::under::sewer_id(l.index as usize, q));
+        want.push("the trapdoor to the sewers");
+        if let Some(lvl) = lvl.as_deref_mut() {
+            place_link(lvl, nx, ny, stairs, grid(q), "trapdoor", "trapdoor to the sewers", crate::under::sewer_id(l.index as usize, q));
+        }
     }
     if has_deep_dungeon(b) {
-        want += 1;
-        place_link(lvl, nx, ny, stairs, [nx as f64 * 0.5, ny as f64 * 0.5], "link_down", "stairs down to the deep dungeons", format!("k:{}:{}", l.index, b.id));
+        want.push("the stairs down to the deep dungeons");
+        if let Some(lvl) = lvl {
+            place_link(lvl, nx, ny, stairs, [nx as f64 * 0.5, ny as f64 * 0.5], "link_down", "stairs down to the deep dungeons", format!("k:{}:{}", l.index, b.id));
+        }
     }
     want
 }
@@ -822,7 +827,7 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Buildi
         }
         furnish(&mut lvl, nx, ny, stairs, &mut rng);
         if z == -1 {
-            cellar_links(&mut lvl, t0, l, b, &sh, stairs);
+            cellar_links(Some(&mut lvl), t0, l, b, &sh, stairs);
         }
         levels.push(lvl);
     }

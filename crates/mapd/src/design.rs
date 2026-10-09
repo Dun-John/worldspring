@@ -10,7 +10,7 @@ use worldgen::under::design::{self, SiteDesign};
 use crate::Shared;
 use crate::tools::{arg_str, schema, text};
 
-const BUILDING_FORMAT: &str = "A building's plan (b:<layout>:<id>, any roofed building): a header 'building · <w> x <h> squares · <n> levels · stairs x,y wxh' (the stair block, the same squares on every level it reaches: move or resize it here), then its levels by storey, 'level -1: Cellar', 'level 0: Ground floor', 'level 1: …' (an open roof and a keep's tower tops are the storeys above), each with 'rooms:', 'grid:' ('.' is outside the walls), 'doors: x,y e|s|w|n [secret|front|back]' (on the edge of square x,y east, south, west or north; one front door on the ground floor, onto the street side; back doors to the outside on the ground floor only; 'auto' keeps the doors to the outside and adds inner doors wherever a room is shut off) and 'items: <furniture> x,y [wxh]' (furniture kinds: bed, table, chair, bar, hearth, shelf, bookcase, chest, barrel, crate, workbench, spiral_stair, …; indoor props: sacks, rubble, timber, bones, skeleton, skulls, urn, coffin, effigy, brazier, candles, sconce, lantern, banner, chains, cobweb, bedroll, tools, powder, hoard, offering, glyph, dais, well, fountain, iron_maiden, stocks, rat_nest, trap; an uploaded sprite as s:<asset id>, with the rules list_sprites gives it). The levels follow the building's storeys: they can't be added or taken away here (change its storeys with update_building, which fits a saved design to them: the floors it keeps as designed, new ones as generated). Walls are where rooms meet: a room split in two by a line of squares of another room, or two rooms made one, changes the walls. A building's design is set aside (the generated interior stands) when its footprint or storeys change.";
+const BUILDING_FORMAT: &str = "A building's plan (b:<layout>:<id>, any roofed building): a header 'building · <w> x <h> squares · <n> levels · stairs x,y wxh · cellars <n>' (the stair block, the same squares on every level it reaches: move or resize it here; cellars: how many levels below ground, 0 to 3, each new one a storeroom under the whole building that the stairs reach, the deepest filled in first; a 'level -2' block digs down to it too), then its levels by storey, 'level -2: Lower cellar', 'level -1: Cellar', 'level 0: Ground floor', 'level 1: …' (an open roof and a keep's tower tops are the storeys above), each with 'rooms:', 'grid:' ('.' is outside the walls), 'doors: x,y e|s|w|n [secret|front|back]' (on the edge of square x,y east, south, west or north; one front door on the ground floor, onto the street side; back doors to the outside on the ground floor only; 'auto' keeps the doors to the outside and adds inner doors wherever a room is shut off) and 'items: <furniture> x,y [wxh]' (furniture kinds: bed, table, chair, bar, hearth, shelf, bookcase, chest, barrel, crate, workbench, spiral_stair, …; indoor props: sacks, rubble, timber, bones, skeleton, skulls, urn, coffin, effigy, brazier, candles, sconce, lantern, banner, chains, cobweb, bedroll, tools, powder, hoard, offering, glyph, dais, well, fountain, iron_maiden, stocks, rat_nest, trap; an uploaded sprite as s:<asset id>, with the rules list_sprites gives it). The levels above ground follow the building's storeys: they can't be added or taken away here (change its storeys with update_building, which fits a saved design to them: the floors it keeps as designed, new ones as generated). A building with a trapdoor to the sewers or stairs down to a keep's deep dungeons keeps at least one cellar: those ways are on its deepest. Names, notes and NPCs on its levels follow them when cellars are dug or filled in. Walls are where rooms meet: a room split in two by a line of squares of another room, or two rooms made one, changes the walls. A building's design is set aside (the generated interior stands) when its footprint or storeys change.";
 
 const FORMAT: &str = "The plan, levels numbered from 1 at the top: 'level <n>: <name>', then 'rooms: a=<kind>; b=<kind>+5 \"<name>\"' (symbol = room; +5 a floor raised 5 ft; a name in quotes), 'grid:' and one row per line (one character per 5-ft square, '.' rock, x across from 0, y down from 0), 'doors: x,y e; x,y s secret' (between square x,y and the one east or south of it; 'auto' adds doors wherever a room is shut off), 'items: <kind> x,y [wxh]; …' (props, an uploaded sprite as s:<asset id>, and the ways: exit on the top level at the entry, down on every level but the deepest, up below each down on the same square).";
 
@@ -83,7 +83,7 @@ async fn set(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
     let src = arg_str(a, "text")?;
     let (furnish, dry) = (a["furnish"].as_bool().unwrap_or(false), a["dry_run"].as_bool().unwrap_or(false));
     let id2 = id.clone();
-    let (d, names, problems) = app
+    let (d, names, problems, shift) = app
         .worker
         .with(move |ex| {
             let base = design::design_of(&ex.world, &ex.t0, &id2, false)?;
@@ -103,7 +103,8 @@ async fn set(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
                 }
             }
             let (_, problems) = d.problems(&ex.world, &ex.t0, &id2)?;
-            Ok((d, names, problems))
+            let shift = d.below_ground() as isize - base.below_ground() as isize;
+            Ok((d, names, problems, shift))
         })
         .await?;
     let refused: Vec<&str> = problems.iter().filter(|p| p.blocking).map(|p| p.text.as_str()).collect();
@@ -117,6 +118,8 @@ async fn set(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
     }
     let id3 = id.clone();
     app.edit("agent", 0, move |e| {
+        // (Levels dug or filled in below: names and places on the others follow them.)
+        e.shift_levels(&id3, shift);
         for (li, ri, name) in names {
             e.renames.insert(format!("r:{id3}:{li}:{ri}"), name);
         }
@@ -129,8 +132,20 @@ async fn set(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
 
 async fn reset(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
     let id = arg_str(a, "id")?;
+    let id2 = id.clone();
+    // (As generated, it may have more or fewer levels below ground than as designed.)
+    let shift = app
+        .worker
+        .with(move |ex| {
+            let now = design::design_of(&ex.world, &ex.t0, &id2, false)?;
+            let generated = design::design_of(&ex.world, &ex.t0, &id2, true)?;
+            Ok::<_, String>(generated.below_ground() as isize - now.below_ground() as isize)
+        })
+        .await
+        .unwrap_or(0);
     app.edit("agent", 0, move |e| {
         e.designs.remove(&id).ok_or_else(|| format!("{id} has no design: it is as generated"))?;
+        e.shift_levels(&id, shift);
         Ok(json!({ "tool": "reset_site_design", "id": id }))
     })
     .await

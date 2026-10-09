@@ -1029,6 +1029,55 @@ impl Edits {
         next
     }
 
+    /// Site `site`'s levels renumbered (they count from the bottom) after `delta` levels were dug
+    /// below its deepest (or, below 0, its deepest filled in): the names, notes and hidden marks
+    /// of its levels and rooms, plots' anchors on them and NPCs inside follow their levels; those
+    /// of levels filled in go (an NPC stays in the site, on its level as it is now).
+    pub fn shift_levels(&mut self, site: &str, delta: isize) {
+        if delta == 0 {
+            return;
+        }
+        // Some(new id, or None if its level is gone) for the site's level and room ids.
+        let moved = |id: &str| -> Option<Option<String>> {
+            let (s, li, ri) = crate::agent::split_room_id(id).filter(|(s, _, _)| *s == site)?;
+            let li = li as isize + delta;
+            Some((li >= 0).then(|| match ri {
+                Some(ri) => format!("r:{s}:{li}:{ri}"),
+                None => format!("l:{s}:{li}"),
+            }))
+        };
+        fn rekey<V>(m: &mut BTreeMap<String, V>, moved: &dyn Fn(&str) -> Option<Option<String>>) {
+            let ids: Vec<String> = m.keys().filter(|k| moved(k).is_some()).cloned().collect();
+            let taken: Vec<(Option<String>, V)> = ids.iter().map(|k| (moved(k).flatten(), m.remove(k).expect("listed"))).collect();
+            for (k, v) in taken {
+                if let Some(k) = k {
+                    m.insert(k, v);
+                }
+            }
+        }
+        rekey(&mut self.renames, &moved);
+        rekey(&mut self.notes, &moved);
+        let hidden: Vec<String> = self.hidden.iter().filter(|k| moved(k).is_some()).cloned().collect();
+        for k in hidden {
+            self.hidden.remove(&k);
+            if let Some(k) = moved(&k).flatten() {
+                self.hidden.insert(k);
+            }
+        }
+        for p in self.plots.values_mut() {
+            if p.anchors.iter().any(|a| moved(a).is_some()) {
+                p.anchors = p.anchors.iter().filter_map(|a| moved(a).unwrap_or_else(|| Some(a.clone()))).collect();
+            }
+        }
+        for n in self.npcs.values_mut() {
+            if let Some(at) = n.location.as_mut().filter(|at| at.id == site)
+                && let Some(li) = at.level
+            {
+                at.level = Some((li as isize + delta).max(0) as usize);
+            }
+        }
+    }
+
     /// The live site `c` (being created, asked for at `asked`) would duplicate, if any
     /// (`Created::same_site`).
     pub fn existing_site(&self, c: &Created, asked: [f64; 2]) -> Option<&Created> {

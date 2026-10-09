@@ -558,7 +558,7 @@ export class InteriorLayer {
     g.stroke({ width: 0.05, color: INK, alpha: 0.7 });
     g.rect(sx, sy, sw, sh).stroke({ width: 0.08, color: INK });
     const up = this.level + 1 < it.levels.length && it.levels[this.level + 1].has_stairs;
-    const down = this.level > 0;
+    const down = this.level > 0 && it.levels[this.level - 1].has_stairs;
     const arrow = (dir: 1 | -1) => {
       const cx = sx + sw / 2;
       const cy = sy + sh / 2;

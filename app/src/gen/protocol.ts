@@ -309,7 +309,7 @@ export interface UnderCatalog {
   boss: string;
   max_levels: number;
   /** What a building's design can be given: furniture, indoor props (kinds of `props`) and room kinds. */
-  building: { furniture: { kind: string; name: string; cover: number; blocks: boolean; height_ft: number; w: number; h: number }[]; props: UnderCatalog['props']; rooms: string[]; max_floors: number };
+  building: { furniture: { kind: string; name: string; cover: number; blocks: boolean; height_ft: number; w: number; h: number }[]; props: UnderCatalog['props']; rooms: string[]; max_floors: number; max_cellars: number };
 }
 
 /** A battlemap object put down by hand (`worldgen::world::Placed`): a built-in kind (catalog

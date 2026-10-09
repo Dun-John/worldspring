@@ -15,7 +15,7 @@ import type { Graphics } from 'pixi.js';
 import type { DesignProblem, SiteDesign, UnderCatalog } from '../../gen/protocol';
 import type { Camera } from '../../render/camera';
 import type { MapView, PointerTool } from '../../render/MapView';
-import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, isBuilding, mergeRooms, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, wallLine, WAYS } from './model';
+import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, isBuilding, mergeRooms, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
 
 export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'prop' | 'stairs' | 'wall' | 'merge';
 
@@ -119,6 +119,17 @@ export class SiteDesigner implements PointerTool {
     this.saved = JSON.stringify(this.draft);
     if (this.draft && this.building) this.floors = storeysOf(this.draft);
     this.host.changed();
+  }
+
+  /** Levels the draft has dug (or filled in) below the site as it is: the others' numbers move
+   * by that much. */
+  get shift(): number {
+    return this.draft && this.saved ? belowGround(this.draft) - this.belowSaved : 0;
+  }
+
+  /** Levels below ground of the site as it is (saved, else generated). */
+  get belowSaved(): number {
+    return this.saved ? belowGround(JSON.parse(this.saved)) : 0;
   }
 
   /** A building's storeys in the draft. */
@@ -274,6 +285,19 @@ export class SiteDesigner implements PointerTool {
       const top = this.draft?.levels.findIndex((l) => (l.z ?? 0) === n - 1 && !l.roof) ?? -1;
       if (top >= 0 && top !== this.level) this.view.setInteriorLevel(top);
     });
+  }
+
+  /** A building's levels below ground: one dug below the deepest (a storeroom under the whole
+   * building, the stairs going on down; shown once made) or the deepest filled in. The ways to
+   * the sewers or a keep's deep dungeons are on the deepest. */
+  setCellars(n: number) {
+    const most = this.host.catalog()?.building.max_cellars ?? 3;
+    if (n < 0 || n > most) return this.host.hint(`A building has at most ${most} levels below ground`);
+    const was = this.draft ? cellarsOf(this.draft) : 0;
+    const at = this.level;
+    void this.change(() => {}, { cellars: n });
+    // Down to the new level; else the level in view stays (one lower in the list).
+    void this.queue.then(() => this.view.setInteriorLevel(n > was ? 0 : Math.max(0, at - (was - n))));
   }
 
   /** Doors wherever a room on this level is shut off. */

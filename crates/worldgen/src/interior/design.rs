@@ -219,22 +219,31 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
     level
 }
 
+/// The deepest level below ground (index), if the design has one.
+pub fn deepest_cellar(d: &SiteDesign) -> Option<usize> {
+    (0..d.levels.len()).filter(|&li| d.levels[li].z < 0).min_by_key(|&li| d.levels[li].z)
+}
+
 /// The interior a design builds for building `b` of layout `l` (its grid `sh`; uploaded
-/// pictures' rules `metas`), with how many ways to other sites its cellar should have.
-pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::Building, sh: &Shell, metas: &std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> (Interior, usize) {
+/// pictures' rules `metas`), with the ways to other sites its deepest cellar should have.
+pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::Building, sh: &Shell, metas: &std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> (Interior, Vec<&'static str>) {
     let stairs = stairs_of(d);
-    let mut want = 0;
+    let deepest = deepest_cellar(d);
+    let mut want = Vec::new();
     let mut sprites = Sprites::new(metas);
     let levels: Vec<Level> = (0..d.levels.len())
         .map(|li| {
             let mut lvl = level_of(d, li, Some(&sh.inside), &mut sprites);
             lvl.elevation_ft = b.pad_ft + STOREY_FT * lvl.z as f32;
-            if lvl.z == -1 {
-                want = cellar_links(&mut lvl, t0, l, b, sh, stairs);
+            if Some(li) == deepest {
+                want = cellar_links(Some(&mut lvl), t0, l, b, sh, stairs);
             }
             lvl
         })
         .collect();
+    if deepest.is_none() {
+        want = cellar_links(None, t0, l, b, sh, stairs);
+    }
     let it = Interior {
         id: format!("b:{}:{}", l.index, b.id),
         settlement: settlement as u32,
@@ -265,15 +274,17 @@ fn door_squares(d: &Door) -> [(isize, isize); 2] {
 /// one ground floor with one front door; doors to the outside only there, onto open ground; the
 /// stair block on floor on every level it reaches; squares only inside the footprint; no item
 /// off the floor, on another, on the stairs or in a doorway; every room and door reached from
-/// the stairs (above them, from the spiral stairs) around whatever blocks movement; the cellar's
-/// ways to other sites (`want`) in place.
-pub fn check(it: &Interior, sh: &Shell, want: usize) -> Vec<Problem> {
+/// the stairs (above them, from the spiral stairs; a ground floor without either, from its doors
+/// to the outside) around whatever blocks movement; the ways to other sites (`want`) in place on
+/// the deepest cellar (a building with such a way has a cellar).
+pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
     let (nx, ny) = (it.nx, it.ny);
     let mut out = Vec::new();
     let mut put = |level: usize, at: Option<(usize, usize)>, text: String, blocking: bool| {
         let name = it.levels.get(level).map_or("", |l| l.name.as_str());
         out.push(Problem { level, at: at.map(|(i, j)| [i as u16, j as u16]), text: format!("{name}: {text}"), blocking });
     };
+    let deepest = (0..it.levels.len()).filter(|&li| it.levels[li].z < 0).min_by_key(|&li| it.levels[li].z);
     let grounds = it.levels.iter().filter(|l| l.z == 0).count();
     if grounds != 1 {
         put(0, None, format!("{grounds} ground floors (one only)"), true);
@@ -346,12 +357,18 @@ pub fn check(it: &Interior, sh: &Shell, want: usize) -> Vec<Problem> {
         if let Some((at, text)) = bad {
             put(li, Some(at), text, true);
         }
-        // Everything reached from the stairs (else the spiral stairs), between rooms through doors.
-        let starts: Vec<usize> = if lv.has_stairs {
+        // Everything reached from the stairs (else the spiral stairs, else the doors to the
+        // outside), between rooms through doors.
+        let mut starts: Vec<usize> = if lv.has_stairs {
             vec![st[1] * nx + st[0]]
         } else {
             lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).collect()
         };
+        if starts.is_empty() && lv.z == 0 {
+            for d in lv.doors.iter().filter(|d| d.rooms[1] < 0) {
+                starts.extend(door_squares(d).into_iter().filter(|&p| inb(p)).map(|(i, j)| j as usize * nx + i as usize));
+            }
+        }
         let starts: Vec<usize> = starts.into_iter().filter(|&k| lv.cells[k] >= 0).collect();
         if starts.is_empty() {
             if lv.cells.iter().any(|&c| c >= 0) {
@@ -399,9 +416,12 @@ pub fn check(it: &Interior, sh: &Shell, want: usize) -> Vec<Problem> {
                 put(li, Some((k % nx, k / nx)), format!("the {} at {},{} can't be reached", room.kind, k % nx, k / nx), true);
             }
         }
-        if lv.z == -1 && lv.links.len() < want {
+        if Some(li) == deepest && lv.links.len() < want.len() {
             put(li, None, "no free floor for the way down to the sewers or dungeons".into(), true);
         }
+    }
+    if deepest.is_none() && !want.is_empty() {
+        put(it.entry_level, None, format!("it needs a cellar, for {}", want.join(" and ")), true);
     }
     out
 }
@@ -433,7 +453,7 @@ pub fn designed(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         return None;
     }
     let (it, want) = build(d, t0, l, settlement, b, &sh, &world.file.edits.sprites);
-    check(&it, &sh, want).iter().all(|p| !p.blocking).then_some(it)
+    check(&it, &sh, &want).iter().all(|p| !p.blocking).then_some(it)
 }
 
 /// Building `id`'s design: the one saved (if it still fits), else (or with `original`) a copy
@@ -473,7 +493,7 @@ pub fn problems_as(world: &World, t0: &T0, id: &str, d: &SiteDesign, floors: Opt
         out.push(Problem { level: 0, at: None, text: "the design was made for the building as it was: its footprint or storeys have changed since".into(), blocking: true });
     }
     let (it, want) = build(d, t0, &l, li, b, &sh, &world.file.edits.sprites);
-    out.extend(check(&it, &sh, want));
+    out.extend(check(&it, &sh, &want));
     Ok((it, out))
 }
 
@@ -518,24 +538,87 @@ pub fn refit(world: &World, t0: &T0, id: &str, d: &SiteDesign, floors: Option<u8
     let st = stairs_of(d);
     let mut out = d.clone();
     out.fingerprint = fp;
-    out.levels = generated
-        .levels
-        .iter()
-        .map(|g| {
-            // Kept: the cellar and the storeys both have (open roofs follow the building).
-            if let Some(mine) = d.levels.iter().find(|m| m.z == g.z && !m.roof && !g.roof && g.z < floors) {
-                return mine.clone();
-            }
-            // New: as generated, with nothing on the stairs where the design has them.
-            let mut g = g.clone();
-            g.items.retain(|f| {
-                let (x, y) = (f.x as usize, f.y as usize);
-                !g.has_stairs || x + f.w as usize <= st[0] || x >= st[0] + st[2] || y + f.h as usize <= st[1] || y >= st[1] + st[3]
-            });
-            g
-        })
-        .collect();
+    // Kept: the design's cellars (however many) and the storeys both have (open roofs follow the
+    // building).
+    out.levels = d.levels.iter().filter(|m| m.z < 0).cloned().collect();
+    out.levels.extend(generated.levels.iter().filter(|g| g.z >= 0).map(|g| {
+        if let Some(mine) = d.levels.iter().find(|m| m.z == g.z && !m.roof && !g.roof && g.z < floors) {
+            return mine.clone();
+        }
+        // New: as generated, with nothing on the stairs where the design has them.
+        let mut g = g.clone();
+        g.items.retain(|f| !g.has_stairs || !on_block(f, st));
+        g
+    }));
+    settle_stairs(&mut out);
     Ok(Some(out))
+}
+
+/// Item `f` stands on the stair block `st`.
+fn on_block(f: &DesignItem, st: [usize; 4]) -> bool {
+    let (x, y) = (f.x as usize, f.y as usize);
+    !(x + f.w as usize <= st[0] || x >= st[0] + st[2] || y + f.h as usize <= st[1] || y >= st[1] + st[3])
+}
+
+/// The ground floor's stairs where they lead somewhere: down to a cellar or up to a floor with
+/// stairs (a one-storey building without a cellar has none). Furniture on the block goes when
+/// they come back.
+fn settle_stairs(d: &mut SiteDesign) {
+    let Some(g) = d.levels.iter().position(|lv| lv.z == 0) else { return };
+    let want = d.levels.iter().any(|lv| lv.z < 0 || (lv.z == 1 && lv.has_stairs));
+    if want && !d.levels[g].has_stairs {
+        let st = stairs_of(d);
+        d.levels[g].items.retain(|f| !on_block(f, st));
+    }
+    d.levels[g].has_stairs = want;
+}
+
+/// Levels a building can have below ground.
+pub const MAX_CELLARS: usize = 3;
+
+/// A cellar's name by its storey (-1 the first below ground).
+fn cellar_name(z: i8) -> &'static str {
+    match z {
+        -1 => "Cellar",
+        -2 => "Lower cellar",
+        _ => "Deep cellar",
+    }
+}
+
+/// The design with `n` levels below ground (0 to `MAX_CELLARS`): the deepest filled in, or new
+/// ones dug below it, each a storeroom under the whole footprint (the ground floor's squares)
+/// that the stairs reach. The ways to the sewers or a keep's deep dungeons go on the deepest.
+/// False (nothing changed) if `n` is out of range or there is no ground floor.
+pub fn set_cellars(d: &mut SiteDesign, n: usize) -> bool {
+    let Some(g) = d.levels.iter().position(|lv| lv.z == 0).filter(|_| n <= MAX_CELLARS) else { return false };
+    let size = d.nx as usize * d.ny as usize;
+    let floor: Vec<i16> = decode(&d.levels[g].cells, size).map_or_else(|| vec![-1; size], |c| c.iter().map(|&r| if r >= 0 { 0 } else { -1 }).collect());
+    let ground_ft = d.levels[g].elevation_ft;
+    while d.levels.iter().filter(|lv| lv.z < 0).count() > n {
+        let k = deepest_cellar(d).expect("a cellar");
+        d.levels.remove(k);
+    }
+    while d.levels.iter().filter(|lv| lv.z < 0).count() < n {
+        let at = deepest_cellar(d).unwrap_or_else(|| d.levels.iter().position(|lv| lv.z == 0).expect("the ground floor"));
+        let z = d.levels[at].z.min(0) - 1;
+        d.levels.insert(
+            at,
+            DesignLevel {
+                name: cellar_name(z).into(),
+                elevation_ft: ground_ft + STOREY_FT * z as f32,
+                natural: false,
+                cells: encode(&floor),
+                rooms: vec![DesignRoom { kind: "storeroom".into(), raise_ft: 0 }],
+                doors: Vec::new(),
+                items: Vec::new(),
+                z,
+                roof: false,
+                has_stairs: true,
+            },
+        );
+    }
+    settle_stairs(d);
+    true
 }
 
 /// Room and item kinds a building's design can be given (for the editor's menus).
@@ -563,7 +646,7 @@ pub fn catalog() -> Value {
             serde_json::json!({ "kind": p.0, "name": p.1, "cover": p.2, "blocks": p.3, "height_ft": p.4, "hazard": p.5, "w": w, "h": h })
         })
         .collect();
-    serde_json::json!({ "furniture": furniture, "props": props, "rooms": super::ROOM_KINDS, "max_floors": crate::world::MAX_FLOORS })
+    serde_json::json!({ "furniture": furniture, "props": props, "rooms": super::ROOM_KINDS, "max_floors": crate::world::MAX_FLOORS, "max_cellars": MAX_CELLARS })
 }
 
 /// Buildings' designs not built (the generated interior stands), with why: the building is gone,
@@ -580,7 +663,7 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String)> {
                     Some("made for the building as it was: its footprint or storeys have changed since".into())
                 } else {
                     let (it, want) = build(d, t0, &l, li, b, &sh, &world.file.edits.sprites);
-                    check(&it, &sh, want).into_iter().find(|p| p.blocking).map(|p| format!("it breaks a rule now: {}", p.text))
+                    check(&it, &sh, &want).into_iter().find(|p| p.blocking).map(|p| format!("it breaks a rule now: {}", p.text))
                 }
             }
         };

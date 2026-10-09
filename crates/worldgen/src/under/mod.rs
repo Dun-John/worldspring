@@ -501,7 +501,8 @@ pub fn keep_dungeon(world: &World, t0: &T0, layout: usize, bi: usize) -> Option<
     }
     let keep = crate::interior::generate(world, t0, layout, bi)?;
     let id = format!("k:{layout}:{bi}");
-    let link = keep.levels[0].links.iter().find(|k| k.to == id)?;
+    // (On its deepest cellar: the first level, or a designed keep's deeper one.)
+    let (cellar, link) = keep.levels.iter().find_map(|lv| Some((lv, lv.links.iter().find(|k| k.to == id)?)))?;
     let m = 14;
     let (nx, ny) = (keep.nx + 2 * m, keep.ny + 2 * m);
     let origin = sub(keep.origin, add(mul(keep.axis, m as f64 * SQUARE_FT), mul(keep.across, m as f64 * SQUARE_FT)));
@@ -509,7 +510,7 @@ pub fn keep_dungeon(world: &World, t0: &T0, layout: usize, bi: usize) -> Option<
     let frame = Frame { origin, axis: keep.axis, across: keep.across, nx, ny };
     let mut rng = Pcg32::new(hash3(world.stream("under.keep"), layout as i64, bi as i64, 0), 93);
     let depth = if nx * ny > 6000 { 3 } else { 2 };
-    let surface = keep.levels[0].elevation_ft;
+    let surface = cellar.elevation_ft;
     site(t0, &l, UnderKind::KeepDungeon, id, (layout as u32, bi as u32), frame, depth, Some(entry), surface, (&KEEP_DUNGEON, 1.0), &mut rng)
 }
 

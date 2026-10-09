@@ -87,6 +87,45 @@ export function keepPlaces(before: Edits, next: Edits): Edits {
   return out;
 }
 
+/** Site `site`'s levels renumbered (they count from the bottom) after `delta` levels were dug
+ * below its deepest (below 0: filled in): names, notes and hidden marks of its levels and rooms,
+ * plots' anchors on them and NPCs inside follow their levels; those of levels filled in go
+ * (`world.rs` `shift_levels`). */
+export function shiftLevels(e: Edits, site: string, delta: number): Edits {
+  if (!delta) return e;
+  // The new id ('' when its level is gone), or undefined when not one of the site's levels.
+  // (`l:<site>:<level>`, `r:<site>:<level>:<room>`: the site is everything between.)
+  const moved = (id: string): string | undefined => {
+    const room = id.startsWith('r:');
+    if (!room && !id.startsWith('l:')) return undefined;
+    const parts = id.slice(2).split(':');
+    const ri = room ? parts.pop() : undefined;
+    const lv = parts.pop();
+    if (parts.join(':') !== site || !/^\d+$/.test(lv ?? '') || (room && !/^\d+$/.test(ri ?? ''))) return undefined;
+    const li = Number(lv) + delta;
+    return li < 0 ? '' : room ? `r:${site}:${li}:${ri}` : `l:${site}:${li}`;
+  };
+  const rekey = <V>(m: Record<string, V> | undefined): Record<string, V> | undefined => {
+    if (!m || !Object.keys(m).some((k) => moved(k) !== undefined)) return m;
+    const out: Record<string, V> = {};
+    for (const [k, v] of Object.entries(m)) if (moved(k) === undefined) out[k] = v;
+    for (const [k, v] of Object.entries(m)) if (moved(k)) out[moved(k)!] = v;
+    return out;
+  };
+  const out: Edits = { ...e };
+  const [renames, notes] = [rekey(e.renames), rekey(e.notes)];
+  if (renames !== e.renames) out.renames = renames;
+  if (notes !== e.notes) out.notes = notes;
+  if (e.hidden?.some((k) => moved(k) !== undefined)) out.hidden = [...new Set(e.hidden.map((k) => moved(k) ?? k).filter(Boolean))].sort();
+  if (e.plots && Object.values(e.plots).some((p) => p.anchors.some((a) => moved(a) !== undefined))) {
+    out.plots = Object.fromEntries(Object.entries(e.plots).map(([k, p]) => [k, p.anchors.some((a) => moved(a) !== undefined) ? { ...p, anchors: p.anchors.map((a) => moved(a) ?? a).filter(Boolean) } : p]));
+  }
+  if (e.npcs && Object.values(e.npcs).some((n) => n.location?.id === site && n.location.level !== undefined)) {
+    out.npcs = Object.fromEntries(Object.entries(e.npcs).map(([k, n]) => [k, n.location?.id === site && n.location.level !== undefined ? { ...n, location: { ...n.location, level: Math.max(0, n.location.level + delta) } } : n]));
+  }
+  return out;
+}
+
 /** `e` with `op` applied, and the op that undoes it. */
 export function applyOp(e: Edits, op: EditOp): { edits: Edits; inverse: EditOp } {
   const shape = EDIT_FIELDS[op.field];

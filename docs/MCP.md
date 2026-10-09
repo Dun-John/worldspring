@@ -867,6 +867,14 @@ runs between them), and two rooms become one by giving one's squares to the othe
 footprint, and windows are worked out as for a generated interior. The cellar's ways to other sites (a trapdoor
 to the sewers, stairs down to a keep's deep dungeons) are put back on its free floor when it is built.
 
+A design may have **no cellar, or up to three levels below ground** (generated buildings have one): the header's
+`cellars <n>` digs new ones below the deepest (each a storeroom under the whole building, the stair block going
+on down to it) or fills in the deepest, and a `level -2` block digs down to it. The ways to other sites go on the
+deepest; a building that has one (a cellar on the sewers, a large keep over its deep dungeons) keeps at least one
+cellar. Levels count from the bottom in level and room ids (`l:`, `r:`), so when cellars are dug or filled in
+(here, in the app, or by going back to the generated interior) the names, notes and hidden marks of the other
+levels and rooms, plots' anchors on them and NPCs inside move with them; those on a level filled in go.
+
 A design is made for the building as it is: its grid, footprint and storeys. When the footprint changes (or the
 building is made a ruin) the design is **set aside**: the generated interior stands, `get_site_design` says so
 (`set_aside`), `get_feature` gives `interior_designed`, and `world_overview` lists it in `designs_set_aside`;
@@ -884,7 +892,9 @@ The rules (the ones every generated interior is tested against):
 - no furniture off the floor, on another piece, on the stairs or in a doorway (either side of a door);
 - every room and every door reached from the stairs (on a keep's tower tops, from its spiral stairs), through
   doors between rooms, around furniture that blocks movement;
-- the cellar has free floor for its ways to other sites.
+- the deepest cellar has free floor for its ways to other sites, and a building with such a way has a cellar;
+- levels one above another from at most three below ground (a one-storey building without a cellar has no
+  stairs: its ground floor is reached from its doors).
 
 **The plan:**
 
@@ -914,10 +924,10 @@ level -1: Cellar
 ```
 
 - The header gives the grid, how many levels and the stair block (`stairs x,y wxh`: change it there to move or
-  resize the stairs).
-- Levels go by storey: `level -1` the cellar, `level 0` the ground floor, `level 1` and up the floors above (an
-  open roof and a keep's tower tops are the storeys above its top floor). They follow the building's storeys:
-  a plan can't add or take away levels.
+  resize the stairs); `cellars <n>` (0 to 3) when it has other than one cellar, to dig or fill in cellars.
+- Levels go by storey: `level -2` a lower cellar, `level -1` the cellar, `level 0` the ground floor, `level 1`
+  and up the floors above (an open roof and a keep's tower tops are the storeys above its top floor). Those
+  above ground follow the building's storeys: a plan can't add or take away floors (`update_building` does).
 - `grid:` as for a site, `.` outside the walls.
 - `doors:` `x,y e|s|w|n` is a door on the east, south, west or north edge of square x,y; `secret` makes a door
   between rooms a secret door; on an outside wall `front` (one, on the ground floor) or `back`. `doors: auto`
@@ -1003,5 +1013,7 @@ It also answers `initialize`, `ping` and `tools/list`.
 | `not saved: …` | `set_site_design`: the plan breaks a rule play mode needs (the reasons follow). |
 | `only underground sites (u:<layout>:<k>) can be designed` / `a city's sewers can't be designed` | `get_site_design` / `set_site_design` take `u:` sites and `b:` buildings, not sewers or keeps' deep dungeons. |
 | `a ruin or a yard has no inside to design` | Only roofed buildings have interiors. |
-| `a building's levels follow its storeys` | A building's plan can't add or take away levels: change its storeys with `update_building`. |
+| `a building's levels are its cellars and storeys` | A building's plan can't add or take away floors: change its storeys with `update_building`; cellars with `cellars <n>`. |
+| `a building has 0 to 3 levels below ground` | `cellars <n>` (or a `level -4` block) asks for too many. |
+| `it needs a cellar, for the trapdoor to the sewers` (or `the stairs down to the deep dungeons`) | A building with a way to another site keeps at least one cellar. |
 | `'x' at 4,7 is not in its rooms list` / `level 3 is new: give its grid` | A plan that can't be read. |

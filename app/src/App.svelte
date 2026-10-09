@@ -34,6 +34,7 @@
   import BuildPanel from './ui/BuildPanel.svelte';
   import DesignPanel from './ui/DesignPanel.svelte';
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
+  import { belowGround } from './editor/site/model';
   import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
   import { CrossingTool, crossingProblem, defaultCross, type CrossSettings } from './editor/crossing';
   import { ClearAreaTool, type ClearShape } from './editor/clearArea';
@@ -50,7 +51,7 @@
   import { PlayController } from './play/controller';
   import PlayPanel from './play/PlayPanel.svelte';
   import { describe, tidy, type Step } from './sync/history';
-  import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, type EditOp } from './sync/ops';
+  import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, shiftLevels, type EditOp } from './sync/ops';
   import { breadcrumbs, frameSize, hitName, settlementAt, SETTLEMENT_KINDS, zoomFor, type BuildingHit, type Crumb, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, PINNED } from './world/versions';
@@ -1430,18 +1431,23 @@
     if (built?.edit) buildings[d.id] = built.edit;
     else if (built) delete buildings[d.id];
     const created = drawn && floors !== null ? (e.created ?? []).map((x) => (x.id === drawn.id ? { ...x, floors } : x)) : e.created;
-    applyEdits({ ...e, buildings, created, designs: { ...(e.designs ?? {}), [d.id]: draft } }, { tool: 'set_site_design', id: d.id, name: inside?.name }, 'user');
+    // (Levels dug or filled in below: names and places on the others follow them.)
+    applyEdits({ ...shiftLevels(e, d.id, d.shift), buildings, created, designs: { ...(e.designs ?? {}), [d.id]: draft } }, { tool: 'set_site_design', id: d.id, name: inside?.name }, 'user');
     d.markSaved();
   }
 
-  /** The site as generated again: its design dropped. */
-  function resetDesign() {
+  /** The site as generated again: its design dropped (names and places on its levels follow
+   * them, if it has more or fewer below ground as generated). */
+  async function resetDesign() {
     const d = designer;
     if (!d) return;
+    const generated = await view.gen.design(d.id, undefined, { original: true });
+    if (designer !== d) return;
+    const shift = 'error' in generated ? 0 : belowGround(generated.design) - d.belowSaved;
     const e = edits;
     const designs = { ...(e.designs ?? {}) };
     delete designs[d.id];
-    applyEdits({ ...e, designs }, { tool: 'reset_site_design', id: d.id, name: inside?.name }, 'user');
+    applyEdits({ ...shiftLevels(e, d.id, shift), designs }, { tool: 'reset_site_design', id: d.id, name: inside?.name }, 'user');
     void d.open();
   }
 

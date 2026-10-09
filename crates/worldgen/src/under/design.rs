@@ -212,6 +212,12 @@ impl SiteDesign {
         self.kind == BUILDING
     }
 
+    /// Its levels below ground (a building's cellars; every level of a site): those dug or
+    /// filled in at the bottom renumber the rest (`Edits::shift_levels`).
+    pub fn below_ground(&self) -> usize {
+        if self.is_building() { self.levels.iter().filter(|l| l.z < 0).count() } else { self.levels.len() }
+    }
+
     /// A copy of a site as it is: the design that builds it again, exactly.
     pub fn from_interior(it: &Interior) -> SiteDesign {
         let kind = UnderKind::CREATABLE.into_iter().find(|k| k.name() == it.function).unwrap_or(UnderKind::Dungeon);
@@ -294,6 +300,13 @@ impl SiteDesign {
         let most = if building { BUILDING_LEVELS } else { MAX_LEVELS as usize };
         if self.levels.is_empty() || self.levels.len() > most {
             out.push(bad(0, format!("a site has 1 to {most} levels")));
+        }
+        // A building's levels go up a storey at a time, from at most three below ground.
+        if building && let Some(lv) = self.levels.first() {
+            let most = crate::interior::design::MAX_CELLARS as i8;
+            if lv.z < -most || self.levels.windows(2).any(|w| w[1].z != w[0].z + 1) {
+                out.push(bad(0, format!("a building's levels are its storeys from the bottom, one each, at most {most} below ground")));
+            }
         }
         let n = self.nx as usize * self.ny as usize;
         for (li, lv) in self.levels.iter().enumerate() {
@@ -781,7 +794,7 @@ pub fn design_of(world: &World, t0: &T0, id: &str, original: bool) -> Result<Sit
 /// For the editor (WASM): the design given (else the site's own, `design_of`), changed by
 /// `action` (`{"doors": level|null}`, `{"furnish": {level, room, seed}}`, `{"original": true}`;
 /// a building's `{"refit": true}`: fitted to its storeys as they are now, `{"refit": n}`: to n
-/// storeys), with the site it
+/// storeys, `{"cellars": n}`: n levels below ground), with the site it
 /// builds and its problems: `{design, interior, problems}` (a building's saved design that no
 /// longer fits: `set_aside`) or `{error}`.
 pub fn design_json(world: &World, t0: &T0, id: &str, design: Option<&str>, action: Option<&str>) -> String {
@@ -805,6 +818,12 @@ pub fn design_json(world: &World, t0: &T0, id: &str, design: Option<&str>, actio
         if building && (action["refit"].as_bool() == Some(true) || action["refit"].is_u64()) {
             floors = action["refit"].as_u64().map(|f| f.min(12) as u8);
             d = crate::interior::design::refit(world, t0, id, &d, floors)?.ok_or_else(|| format!("{id}: its footprint changed: the design no longer fits"))?;
+        }
+        if building && let Some(n) = action["cellars"].as_u64() {
+            let most = crate::interior::design::MAX_CELLARS;
+            if !crate::interior::design::set_cellars(&mut d, n as usize) {
+                return Err(format!("a building has 0 to {most} levels below ground"));
+            }
         }
         if action.get("doors").is_some() {
             d.add_doors(action["doors"].as_u64().map(|l| l as usize));
@@ -842,7 +861,10 @@ pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) ->
     let building = d.is_building();
     let st = crate::interior::design::stairs_of(d);
     let mut s = if building {
-        format!("building · {nx} x {ny} squares · {n} level{} · stairs {},{} {}x{}\n", if n == 1 { "" } else { "s" }, st[0], st[1], st[2], st[3])
+        // (One cellar, as generated, goes without saying.)
+        let cellars = d.below_ground();
+        let deep = if cellars == 1 { String::new() } else { format!(" · cellars {cellars}") };
+        format!("building · {nx} x {ny} squares · {n} level{} · stairs {},{} {}x{}{deep}\n", if n == 1 { "" } else { "s" }, st[0], st[1], st[2], st[3])
     } else {
         format!(
         "site {}{} · {} x {} squares · {} level{} · entry {},{}\n",
@@ -924,6 +946,8 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
     let building = d.is_building();
     struct Block<'a> {
         depth: usize,
+        /// A building's: the level's storey (its depth is known once its cellars are).
+        z: i64,
         tag: String,
         name: Option<&'a str>,
         rooms: Option<&'a str>,
@@ -933,6 +957,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
     }
     let mut blocks: Vec<Block> = Vec::new();
     let mut levels: Option<usize> = None;
+    let mut cellars: Option<usize> = None;
     let mut in_grid = false;
     for (ln, raw) in text.lines().enumerate() {
         let line = raw.trim_end();
@@ -957,20 +982,20 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                     let (sw, sh) = size.split_once('x').and_then(|(a, b)| Some((a.parse::<u16>().ok()?, b.parse::<u16>().ok()?))).ok_or_else(wrong)?;
                     d.stairs = Some([x, y, sw, sh]);
                 }
+                if let Some(v) = p.strip_prefix("cellars ").filter(|_| building) {
+                    cellars = Some(v.trim().parse().map_err(|_| format!("line {}: '{p}': how many levels below ground?", ln + 1))?);
+                }
             }
             in_grid = false;
             continue;
         }
         if let Some(h) = keyword("level ") {
             let (num, rest) = h.split_once(':').map(|(a, b)| (a.trim(), Some(b.trim()))).unwrap_or((h, None));
+            let mut z = 0;
             let depth = if building {
                 // A building's levels by storey: -1 the cellar, 0 the ground floor.
-                let z: i64 = num.parse().map_err(|_| format!("line {}: 'level {num}': a building's levels are its storeys (-1 the cellar, 0 the ground floor)", ln + 1))?;
-                let li = d.levels.iter().position(|l| l.z as i64 == z).ok_or_else(|| {
-                    let zs: Vec<String> = d.levels.iter().map(|l| l.z.to_string()).collect();
-                    format!("line {}: the building has no level {z} (its levels: {})", ln + 1, zs.join(", "))
-                })?;
-                d.levels.len() - li
+                z = num.parse().map_err(|_| format!("line {}: 'level {num}': a building's levels are its storeys (-1 the cellar, 0 the ground floor)", ln + 1))?;
+                0
             } else {
                 let depth: usize = num.parse().map_err(|_| format!("line {}: 'level {num}': levels are numbered from 1 at the top", ln + 1))?;
                 if depth == 0 || depth > MAX_LEVELS as usize {
@@ -980,6 +1005,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             };
             blocks.push(Block {
                 depth,
+                z,
                 tag: format!("level {num}"),
                 name: rest.filter(|r| !r.is_empty()),
                 rooms: None,
@@ -1009,12 +1035,29 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             return Err(format!("line {}: expected rooms:, grid:, doors: or items:, not '{t}'", ln + 1));
         }
     }
-    if building && levels.is_some_and(|n| n != d.levels.len()) {
-        return Err(format!("a building's levels follow its storeys: it has {}", d.levels.len()));
+    if building {
+        // Cellars as asked (`cellars n`), else down to the deepest level given.
+        let has = d.levels.iter().filter(|l| l.z < 0).count();
+        let deepest = blocks.iter().map(|b| b.z).min().unwrap_or(0);
+        let want = cellars.unwrap_or_else(|| has.max((-deepest).max(0) as usize));
+        if want != has && !crate::interior::design::set_cellars(&mut d, want) {
+            return Err(format!("a building has 0 to {} levels below ground", crate::interior::design::MAX_CELLARS));
+        }
+        for b in &mut blocks {
+            let li = d.levels.iter().position(|l| l.z as i64 == b.z).ok_or_else(|| {
+                let zs: Vec<String> = d.levels.iter().map(|l| l.z.to_string()).collect();
+                format!("{}: the building has no such level (its levels: {})", b.tag, zs.join(", "))
+            })?;
+            b.depth = d.levels.len() - li;
+        }
+        if levels.is_some_and(|n| n != d.levels.len()) {
+            return Err(format!("a building's levels are its cellars and storeys: it has {}", d.levels.len()));
+        }
     }
     let count = levels.unwrap_or_else(|| d.levels.len().max(blocks.iter().map(|b| b.depth).max().unwrap_or(0)));
-    if count == 0 || count > MAX_LEVELS as usize {
-        return Err(format!("a site has 1 to {MAX_LEVELS} levels"));
+    let most = if building { BUILDING_LEVELS } else { MAX_LEVELS as usize };
+    if count == 0 || count > most {
+        return Err(format!("a site has 1 to {most} levels"));
     }
     if let Some(b) = blocks.iter().find(|b| b.depth > count) {
         return Err(format!("level {} given, but the site has {count} levels", b.depth));

@@ -576,7 +576,8 @@ fn interiors_guarantee() {
 /// builds it (its hash unchanged; the design travels as an edit op and back); once the footprint
 /// changes the design is set aside (the generated interior stands); with another storey it is
 /// fitted to the building, its own floors kept; indoor props and an uploaded picture stand on its
-/// floor with their rules; a storey added and taken away in the designer comes back as it was.
+/// floor with their rules; a storey added and taken away in the designer comes back as it was;
+/// with no cellar or two, the world builds it (the text plan reading back).
 fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
     use worldgen::interior::{self, design as bd};
     use worldgen::town::{self, Structure, geom};
@@ -735,6 +736,29 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
     let it5 = interior::generate_id(&w5, t0, &id).unwrap();
     assert!(it5.sprites.len() == 1 && it5.levels.iter().filter(|lv| lv.z >= 0 && !lv.roof).count() == floors as usize + 1, "{id}: the taller building's design not built");
     check_interior(&w5, t0, &town::layout(&w5, t0, si), si, &id, &buckets);
+    // Its cellars designed: none, or two (the stairs going on down to a storeroom); through the
+    // editor's call, as the world builds it, as a text plan.
+    for n in [0, 2] {
+        let v: serde_json::Value = serde_json::from_str(&design::design_json(&w2, t0, &id, Some(&serde_json::to_string(&d).unwrap()), Some(&format!(r#"{{"cellars":{n}}}"#)))).unwrap();
+        let c: design::SiteDesign = serde_json::from_value(v["design"].clone()).unwrap();
+        assert_eq!(c.levels.iter().filter(|lv| lv.z < 0).count(), n, "{id}: {n} cellars asked");
+        let needs = interior::has_deep_dungeon(b);
+        let refused = v["problems"].as_array().unwrap().iter().any(|p| p["blocking"] == true);
+        assert_eq!(refused, n == 0 && needs, "{id}: {n} cellars: {}", v["problems"]);
+        if refused {
+            continue;
+        }
+        let mut f = file.clone();
+        f.edits.designs.insert(id.clone(), c.clone());
+        let w = World::new(f).unwrap();
+        let it = interior::generate_id(&w, t0, &id).unwrap();
+        assert!(it.levels.iter().filter(|lv| lv.z < 0).count() == n && it.levels[it.entry_level].z == 0, "{id}: {n} cellars not built");
+        check_interior(&w, t0, &town::layout(&w, t0, si), si, &id, &buckets);
+        let text = design::to_text(&c, &|_, _| None).unwrap();
+        let (back, _) = design::from_text(&text, &bd::design_of(world, t0, &id, false).unwrap().0).unwrap();
+        assert!(back == c, "{id}: {n} cellars: the text plan doesn't read back:
+{text}");
+    }
 }
 
 /// A layout's roofed buildings by 100-ft bucket, for "does this door open into a neighbour's wall".
@@ -767,7 +791,8 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
     let ms = t.elapsed().as_secs_f64() * 1e3;
     let (nx, ny) = (it.nx, it.ny);
     let tag = format!("{bi} ({})", it.function);
-    assert!(it.levels.len() >= 2, "{tag}: only {} level", it.levels.len());
+    // (Generated ones; a design may have no cellar.)
+    assert!(it.levels.len() >= 2 || world.file.edits.designs.contains_key(id), "{tag}: only {} level", it.levels.len());
     // A building's interior as a design builds it again exactly, and keeps the designer's rules.
     if id.starts_with("b:") {
         let (d, _) = interior::design::design_of(world, t0, id, false).unwrap();
@@ -861,12 +886,16 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
                 s.contains(&(a.0 as isize, a.1 as isize)) && s.contains(&(b.0 as isize, b.1 as isize))
             })
         };
-        // From the stairs (or, above the main stairs, every spiral stair).
-        let starts: Vec<usize> = if lv.has_stairs {
+        // From the stairs (or, above the main stairs, every spiral stair; a ground floor with
+        // neither, a designed one-storey building without a cellar, from its doors).
+        let mut starts: Vec<usize> = if lv.has_stairs {
             vec![st[1] * nx + st[0]]
         } else {
             lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).collect()
         };
+        if starts.is_empty() && lv.z == 0 {
+            starts = lv.doors.iter().filter(|d| d.rooms[1] < 0).flat_map(door_sq).filter(|&p| inb(p)).map(|(i, j)| j as usize * nx + i as usize).filter(|&k| lv.cells[k] >= 0).collect();
+        }
         let mut seen = vec![false; nx * ny];
         let mut stack = starts.clone();
         for &k in &starts {
@@ -1213,6 +1242,52 @@ fn underground_guarantee() {
     assert!(worst_ms < 300.0, "slowest underground site took {worst_ms:.1} ms");
     assert!(designed > 0, "no site to design");
     designed_site(&world, &t0);
+    designed_cellars(&world, &t0);
+}
+
+/// Cellars designed where they lead on: a large keep's and a cellar on the sewers dug two deep
+/// keep their ways on (the stairs down to the deep dungeons, the trapdoor to the sewers) on the
+/// deepest, each with its way back, the deep dungeons below it; without a cellar, refused.
+fn designed_cellars(world: &World, t0: &worldgen::t0::T0) {
+    use worldgen::interior::{self, design as bd};
+    use worldgen::town;
+    let (li, keep, sewer) = (0..t0.settlements.len())
+        .find_map(|li| {
+            let l = town::layout(world, t0, li);
+            let keep = l.buildings.iter().find(|b| interior::has_deep_dungeon(b))?.id;
+            let sewer = l.buildings.iter().find(|b| worldgen::under::sewer_link_of(t0, &l, b).is_some() && !interior::has_deep_dungeon(b))?.id;
+            Some((li, keep, sewer))
+        })
+        .expect("a city with a large keep and a cellar on the sewers");
+    let mut file = world.file.clone();
+    for bi in [keep, sewer] {
+        let id = format!("b:{li}:{bi}");
+        let (d, _) = bd::design_of(world, t0, &id, false).unwrap();
+        let mut none = d.clone();
+        assert!(bd::set_cellars(&mut none, 0));
+        let (_, problems) = bd::problems(world, t0, &id, &none).unwrap();
+        assert!(problems.iter().any(|p| p.blocking && p.text.contains("needs a cellar")), "{id}: no cellar, its way on lost: {problems:?}");
+        let mut two = d.clone();
+        assert!(bd::set_cellars(&mut two, 2));
+        let (_, problems) = bd::problems(world, t0, &id, &two).unwrap();
+        assert!(problems.iter().all(|p| !p.blocking), "{id}: two cellars: {problems:?}");
+        file.edits.designs.insert(id, two);
+    }
+    let w = World::new(file).unwrap();
+    let l = town::layout(&w, t0, li);
+    for bi in [keep, sewer] {
+        let id = format!("b:{li}:{bi}");
+        let it = interior::generate_id(&w, t0, &id).unwrap();
+        assert!(it.levels[0].z == -2 && !it.levels[0].links.is_empty() && it.levels[1].links.is_empty(), "{id}: its ways on not on the deepest cellar");
+        for k in &it.levels[0].links {
+            let there = interior::generate_id(&w, t0, &k.to).unwrap_or_else(|| panic!("{id}: a way to {} that doesn't exist", k.to));
+            assert!(there.levels.iter().any(|lv| lv.links.iter().any(|b| b.to == id)), "{id}: {} has no way back", k.to);
+            if k.to.starts_with("k:") {
+                assert!(there.levels.iter().all(|lv| lv.elevation_ft < it.levels[0].elevation_ft), "{id}: the deep dungeons are not below its deepest cellar");
+            }
+        }
+        check_interior(&w, t0, &l, li, &id, &building_buckets(&l));
+    }
 }
 
 /// A site designed by hand (as an agent writes one, in text): a level dug below the deepest,

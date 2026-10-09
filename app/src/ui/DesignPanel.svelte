@@ -5,10 +5,11 @@
   // is wrong with it (folded away), and undo, redo and Save (only once nothing breaks the rules
   // a site keeps) pinned at the bottom. Props come in groups: a building's furniture and indoor
   // props, a site's props, and the pictures uploaded in Scatter (either). A building's storeys are
-  // added or taken away here too (the building follows on Save).
+  // added or taken away here too (the building follows on Save), and its levels below ground.
   import type { SpriteMeta, UnderCatalog } from '../gen/protocol';
   import type { DesignMode, DesignSettings, SiteDesigner } from '../editor/site/designer';
   import { BOSS } from '../editor/site/designer';
+  import { cellarsOf } from '../editor/site/model';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
   import { remember, remembered } from './shell/layout.svelte';
@@ -63,7 +64,7 @@
   const now = $derived.by(() => {
     void version;
     const d = designer;
-    return { draft: d.draft, level: d.level, selected: d.selected, problems: d.problems, dirty: d.dirty, canUndo: d.canUndo, canRedo: d.canRedo, storeys: d.storeys, storeysChanged: d.storeysChanged };
+    return { draft: d.draft, level: d.level, selected: d.selected, problems: d.problems, dirty: d.dirty, canUndo: d.canUndo, canRedo: d.canRedo, storeys: d.storeys, storeysChanged: d.storeysChanged, cellars: d.draft ? cellarsOf(d.draft) : 0 };
   });
   const draft = $derived(now.draft);
   const building = $derived(draft?.kind === 'building');
@@ -93,7 +94,7 @@
     group === 'yours' ? yours : building ? (group === 'props' ? (catalog?.building.props ?? []) : (catalog?.building.furniture.map((f) => ({ ...f, hazard: null })) ?? [])) : (catalog?.props ?? []),
   );
   const propList = $derived(pieces.filter((p) => !propFilter || p.name.toLowerCase().includes(propFilter.toLowerCase()) || p.kind.includes(propFilter.toLowerCase())));
-  let sure = $state<'' | 'level' | 'reset' | 'room' | 'storey'>('');
+  let sure = $state<'' | 'level' | 'reset' | 'room' | 'storey' | 'cellar'>('');
 
   /** Ask twice before something that can't be put back in one click. */
   function twice(what: typeof sure, act: () => void) {
@@ -230,6 +231,11 @@
           <div class="ws-row wrap">
             <button class="ws-btn" onclick={() => designer.setStoreys(now.storeys + 1)} disabled={now.storeys >= (catalog?.building.max_floors ?? 8)}>Add a floor on top</button>
             <button class="ws-btn" class:danger={sure === 'storey'} onclick={() => twice('storey', () => designer.setStoreys(now.storeys - 1))} disabled={now.storeys <= 1}>{sure === 'storey' ? 'Take it away?' : 'Take the top floor away'}</button>
+          </div>
+          <div class="ws-hint">{now.cellars === 0 ? 'No cellar' : now.cellars === 1 ? 'A cellar' : `${now.cellars} levels below ground`}</div>
+          <div class="ws-row wrap">
+            <button class="ws-btn" onclick={() => designer.setCellars(now.cellars + 1)} disabled={now.cellars >= (catalog?.building.max_cellars ?? 3)}>Add a level below</button>
+            <button class="ws-btn" class:danger={sure === 'cellar'} onclick={() => twice('cellar', () => designer.setCellars(now.cellars - 1))} disabled={now.cellars < 1}>{sure === 'cellar' ? 'Fill it in?' : 'Fill in the deepest'}</button>
           </div>
         {/if}
         {#if problems.length}

@@ -324,6 +324,17 @@ export function storeysOf(d: SiteDesign): number {
   return d.levels.filter((l) => (l.z ?? 0) >= 0 && !l.roof).length;
 }
 
+/** A building's levels below ground. */
+export function cellarsOf(d: SiteDesign): number {
+  return d.levels.filter((l) => (l.z ?? 0) < 0).length;
+}
+
+/** Its levels below ground (a building's cellars, every level of a site): dug or filled in at
+ * the bottom, the others' numbers move (`shiftLevels`). */
+export function belowGround(d: SiteDesign): number {
+  return isBuilding(d) ? cellarsOf(d) : d.levels.length;
+}
+
 /** The stair block put at x, y (w × h squares); furniture on its squares, on every level it
  * reaches, goes. */
 export function setStairs(d: SiteDesign, x: number, y: number, w: number, h: number) {
