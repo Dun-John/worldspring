@@ -25,24 +25,40 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 
 ## Getting around
 
-- **Pan** by dragging, **zoom** with the scroll wheel, a pinch, or the **+ / −** buttons.
-- **Click** a place to see what it is; **double-click** (or double-tap) a building, a ruin or a cave mouth to go
-  inside, and pick the floor or level at the side.
-- **Search** (top left) finds towns, buildings, people and your notes by name.
-- **☰** (top left) has the menu; **?** shows every keyboard shortcut.
-- The four sections at the top right:
-  - **World**: start a new world from a seed, change its size and climate, or *sketch* the continent you want
-    (draw coasts, mountain ranges and masses, plateaus, rivers, lakes, volcanoes, towns and sites, roads, name
-    regions, and the generator follows; or have only the roads you draw); save worlds and open them again.
-  - **Edit**: rename anything, place your own towns and sites, draw buildings, change or remove a town's own (or
-    clear a whole ward to build your own), lay a town out anew (move its wards' corners by hand or with brushes,
-    give a ward over to another use, bigger or smaller lots, walls up or down), raise castles and walls anywhere,
-    put down bridges, fords and ferries,
-    design dungeons and the insides of buildings room by room (walls, doors, stairs, storeys, cellars, furniture
-    and props, your own pictures too), and put down or clear objects on battlemaps.
-  - **Notes**: your notebook for the people and plots of your campaign, pinned to places on the map.
-  - **Play**: run a session at the table. Tokens, fog of war, line of sight, lights, doors and secret doors, and a
-    second **players' window** to put on a TV or another screen. It shows only what the players have seen.
+**On the map**
+
+- **Pan** by dragging, **zoom** with the scroll wheel, a pinch, or the **+ / −** buttons. **Home** shows the whole map.
+- **Click** a place to see what it is. **Double-click** (or double-tap) a building, a ruin or a cave mouth to go
+  inside, and pick the floor or level at the side. **Esc** steps back out.
+- **Search** (top left, or `/`) finds towns, buildings, people and your notes by name.
+- **☰** (top left) is the menu. **?** lists every keyboard shortcut. **G** toggles the battlemap grid and **P** the
+  names of inns, shops and temples.
+- **Ctrl+Z** undoes your last change, **Ctrl+Shift+Z** redoes it.
+
+**The four sections** (top right, or keys **1**–**4**)
+
+| Section | What it's for |
+|---|---|
+| **World** (1) | **Generate** a world from a seed, size and climate. **Sketch** the continent you want and the generator follows. **Library** saves, opens, backs up and shares your worlds. |
+| **Edit** (2) | Change the world and make it yours. See below. |
+| **Notes** (3) | Your campaign's **NPCs**, **plots** and **places**, pinned to the map. |
+| **Play** (4) | Run a session: tokens, fog of war, line of sight, lights, doors and secret doors, and a second **players' window** for a TV or another screen that shows only what the players have seen. |
+
+### What you can edit
+
+Open **Edit** and pick a tab (or press its letter). Every change can be undone.
+
+| Tab | What you can do |
+|---|---|
+| **Names** (N) | Rename anything: towns, regions, buildings, places. |
+| **Sites** (S) | Put down your own towns and sites, and move or remove the generated ones. |
+| **Build** (B) | Draw buildings (rectangles, polygons, round towers). Raise castles (K) and walls (W) anywhere. Put bridges, fords and ferries (X) across a river, bank to bank. |
+| **Town** (U) | Lay the town in view out anew: drag its ward corners, or move them with brushes (Displace, Liquify, Bloat, Pinch, Relax, Equalize). Give a ward another use, change its lots, merge or reroll them, put walls up or down, or clear a ward and build your own. |
+| **Scatter** (C) | Stamp or brush objects onto a battlemap, or erase them. Upload your own pictures to use as objects. |
+| **Design** (D) | Go inside a building, dungeon, cave or mine and design it room by room: walls, doors, stairs, storeys, cellars, furniture and props. |
+
+**Sketch** (World › Sketch) works the same way at the scale of the continent: draw coastlines, land and sea, ranges,
+massifs, rivers, lakes, biomes, volcanoes, towns and sites, and roads, and name regions. Or keep only the roads you draw.
 
 ## Your worlds stay in your browser
 
