@@ -64,7 +64,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | Group | Kinds |
 |---|---|
 | Settlements | `metropolis`, `city`, `town`, `village` |
-| Sites | `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube`; created or drawn in the sketch only: `entrance`; created only: `building` |
+| Sites | `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube`; created or drawn in the sketch only: `entrance`; created only: `building`, `castle`, `wall` |
 | Nature | `continent`, `island`, `ocean`, `sea`, `bay`, `range`, `peak`, `pass`, `volcano`, `river`, `lake`, `waterfall` |
 | Roads | drawn and named in the sketch only: `road` (its `detail` is its class: king's road, road or track) |
 | Regions | `forest`, `jungle`, `taiga`, `desert`, `swamp`, `plains`, `tundra`, `glacier`, `salt_flat`; painted in the sketch only: `blight` (blighted woods), `ashlands`; drawn in the sketch only: `region` |
@@ -400,7 +400,7 @@ Creating the same site again adds nothing: if a live site of the same `kind` (an
 
 | Parameter | Type | | |
 |---|---|---|---|
-| `kind` | string | required | `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube`, `entrance` |
+| `kind` | string | required | `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube`, `entrance`; `castle`, `wall` (drawn by their shape: see *Castles and walls* below) |
 | `id` or `x_ft` + `y_ft` | | required | Where to put it. With an `id`, the site goes at that feature's position. |
 | `name` | string | optional | If left out, it is named in the local culture's style. |
 | `under` | string | optional | What lies beneath: for a ruin `dungeon`, `crypt` or `catacombs`; for an entrance any of those or `cave`, `mine`, `lava_tube` (default `dungeon`). |
@@ -439,6 +439,38 @@ Rules:
 { "name": "create_feature", "arguments": { "kind": "tower", "x_ft": 4600000, "y_ft": 2050000, "name": "Spire of Vael" } }
 ```
 > *"Put a ruined watchtower with a crypt under it two miles north of Gatewatch."* · *"Hide a small two-level goblin warren in the hills east of Bulol."* · *"Add a roadside inn halfway between Agentholm and Bulol."* · *"Make a bandit camp in the Emberwood."*
+
+### Castles and walls
+`create_feature` with `kind: "castle"` or `"wall"` takes a shape instead of a place. A **castle** is an outline
+(`poly`, convex, 3–32 corners, 80 to 600 ft across; or `rect` about its middle): a curtain wall just inside it with a
+tower on every corner and along long runs, a gatehouse on one side (`gate`: the side from corner `gate` to the next;
+else the side facing the nearest road), the keep (the castle itself, named as the site; `keep: false` for none) and
+buildings along the inside of the walls (the biggest the barracks, then stables and a smithy;
+`yard_buildings: false` for none). The bailey inside is open ground; buildings can be drawn in it. With
+`structure: "ruin"` the walls are broken, some towers fallen and every building a roofless shell.
+
+A **wall** is a line (`pts`, 2–64 corners, each side at least 10 ft, at most 3,000 ft in all; `closed: true` joins
+the last corner to the first): towers on its corners and along long runs, a gatehouse on each corner listed in
+`gates` (indices into `pts`) and wherever a road, a town's approach or its main street crosses it (side streets and
+alleys are closed by it). Where it would stand in water it is broken (a tower on each bank).
+
+Both must stand on dry land, off river channels, and not cross another wall; a castle also stays off squares, roads
+and main streets. Buildings drawn by hand in the way refuse it; the world's own buildings in the way are named in the
+refusal, or taken away with it (one change) when `remove_in_way: true`. Corners snap to the 5-ft grid (`snap: false`
+not). Their wall and gate towers have interiors (`t:<layout>:<k>`), and a building drawn on the wall is refused. The
+result also gives `towers`, `gates`, `buildings` and the castle's `keep` (its building id).
+
+```json
+{ "name": "create_feature", "arguments": { "kind": "castle", "rect": { "x_ft": 4772760, "y_ft": 1498825, "width_ft": 300, "depth_ft": 200 }, "gate": 2, "name": "Highmoor Keep" } }
+{ "name": "create_feature", "arguments": { "kind": "wall", "pts": [[4772500, 1499150], [4773050, 1499150], [4773200, 1498650]], "gates": [1] } }
+{ "name": "create_feature", "arguments": { "kind": "wall", "pts": [[412000, 380000], [413200, 380000], [413200, 381000], [412000, 381000]], "closed": true, "remove_in_way": true } }
+```
+> *"Build a castle on the hill west of Bulol with its gate toward the road."* · *"Wall off the north side of Agentholm."* · *"A ruined fort, keep only."*
+
+### `update_fortification`
+`id` (a castle's or wall's `c:` id) and any of `create_feature`'s castle or wall fields: a new outline or line, its
+gate or gates, `keep`, `yard_buildings`, `structure`, `closed`, `name`. Fields left out stay; the result is checked
+like a new one (`remove_in_way` as there). `delete_feature` takes it away.
 
 ### `update_feature`
 Changes a name and the notes in one call. Unlike `annotate_feature`, `tags` here replace the existing tags.

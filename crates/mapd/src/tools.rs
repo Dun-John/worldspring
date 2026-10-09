@@ -57,7 +57,7 @@ pub fn list() -> Value {
         { "name": "focus_view", "title": "Show the user", "description": "Move the open map app's view to a place (the user sees it).", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "default": 3000 } })), &[]) },
         { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, underground site, or a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), ids as list_names gives them. An empty name restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
         { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets for the DM, with tags.", "inputSchema": schema(json!({ "id": { "type": "string" }, "text": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "append": { "type": "boolean", "default": false } }), &["id", "text"]) },
-        { "name": "create_feature", "title": "Create a site", "description": "Add a site at a place on dry land, generated like the world's own (map, battlemap, interiors, underground): ruin (over a dungeon, crypt or catacombs), tower, camp, waystation (roadside inn), cave, mine, lava_tube, or entrance (a bare way underground: stairs, a cave mouth, a mine adit or a skylight, by 'under'). Sites with something underground take its size, levels and theme (anything left out is chosen as for the world's own). Returns its id and the ids of its ways underground.", "inputSchema": schema(merge(place_props(), json!({
+        { "name": "create_feature", "title": "Create a site", "description": "Add a site at a place on dry land, generated like the world's own (map, battlemap, interiors, underground): ruin (over a dungeon, crypt or catacombs), tower, camp, waystation (roadside inn), cave, mine, lava_tube, or entrance (a bare way underground: stairs, a cave mouth, a mine adit or a skylight, by 'under'). Sites with something underground take its size, levels and theme (anything left out is chosen as for the world's own). Or a castle (an outline: curtain wall, towers, gatehouse, keep, yard buildings) or a wall (a line of wall with towers; gates where asked and where roads and streets cross it), drawn by poly/rect or pts instead of a place; the world's own buildings in the way are named, or taken away with remove_in_way. Returns its id and the ids of its ways underground (a castle: its keep's building id, towers and gates).", "inputSchema": schema(merge(merge(place_props(), crate::works::props()), json!({
             "kind": { "type": "string", "enum": CREATABLE.iter().filter(|k| **k != "building").collect::<Vec<_>>() },
             "name": { "type": "string" },
             "under": { "type": "string", "enum": UnderKind::CREATABLE.map(|k| k.key()), "description": "What lies beneath a ruin (dungeon, crypt, catacombs) or an entrance (any)" },
@@ -73,6 +73,7 @@ pub fn list() -> Value {
         a.extend(crate::notebook::list());
         a.extend(crate::scatter::list());
         a.extend(crate::build::list());
+        a.extend(crate::works::list());
         a.extend(crate::crossings::list());
         a.extend(crate::design::list());
         a.extend(crate::batch::list());
@@ -136,6 +137,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::build::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::works::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::scatter::call(app, name, &a).await {
@@ -352,6 +356,9 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
     let kind = arg_str(&a, "kind")?;
     if kind == "building" {
         return Err("buildings are drawn with create_building".into());
+    }
+    if kind == "castle" || kind == "wall" {
+        return crate::works::place(app, &a, None, Some(&kind)).await;
     }
     let opt = |k: &str| a[k].as_str().map(str::to_string);
     let levels = match &a["levels"] {

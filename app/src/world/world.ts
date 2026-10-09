@@ -82,7 +82,14 @@ export function existingSite(edits: Edits, c: Created, asked: [number, number]):
   const samePoly = (a: [number, number][], b: [number, number][]) => a.length === b.length && a.every((p, i) => Math.abs(p[0] - b[i][0]) <= 2 && Math.abs(p[1] - b[i][1]) <= 2);
   return (
     (edits.created ?? []).find(
-      (o) => !o.removed && o.kind === c.kind && (c.kind === 'building' ? samePoly(o.poly ?? [], c.poly ?? []) : underOf(o) === underOf(c) && (near(o, [c.x, c.y]) || near(o, asked))),
+      (o) =>
+        !o.removed &&
+        o.kind === c.kind &&
+        (c.kind === 'building' || c.kind === 'castle'
+          ? samePoly(o.poly ?? [], c.poly ?? [])
+          : c.kind === 'wall'
+            ? !!o.closed === !!c.closed && samePoly(o.pts ?? [], c.pts ?? [])
+            : underOf(o) === underOf(c) && (near(o, [c.x, c.y]) || near(o, asked))),
     ) ?? null
   );
 }

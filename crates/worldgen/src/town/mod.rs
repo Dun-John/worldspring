@@ -424,7 +424,15 @@ pub fn layouts_near(world: &World, t0: &T0, rect: [f64; 4]) -> Vec<Rc<Layout>> {
     let hit = |x: f64, y: f64, r: f64| x + r >= rect[0] && x - r <= rect[2] && y + r >= rect[1] && y - r <= rect[3];
     let n = t0.settlements.len();
     let towns = t0.settlements.iter().enumerate().filter(|(_, s)| hit(s.x, s.y, reach(s))).map(|(i, _)| i);
-    let pois = t0.pois.iter().enumerate().filter(|&(i, p)| hit(p.x, p.y, sites::SITE_REACH_FT) && !t0.created_site(i).is_some_and(|c| c.removed)).map(|(i, _)| n + i);
+    let pois = t0
+        .pois
+        .iter()
+        .enumerate()
+        .filter(|&(i, p)| {
+            let c = t0.created_site(i);
+            hit(p.x, p.y, c.map_or(sites::SITE_REACH_FT, |c| c.reach)) && !c.is_some_and(|c| c.removed)
+        })
+        .map(|(i, _)| n + i);
     towns.chain(pois).map(|i| layout(world, t0, i)).collect()
 }
 
@@ -2010,63 +2018,8 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                 l.plazas.push(block)
             }
             Ward::Farm => farm(site, &block, &mut prng, l),
-            Ward::Castle => {
-                // Curtain wall with towers on every corner but the gate, which faces the
-                // centre (the plaza, if the citadel backs onto it).
-                let curtain = inset(&block, &vec![6.0; block.len()]);
-                if curtain.len() >= 3 {
-                    let n = curtain.len();
-                    let gate_e = (0..n).min_by(|&x, &y| len(lerp(curtain[x], curtain[(x + 1) % n], 0.5)).total_cmp(&len(lerp(curtain[y], curtain[(y + 1) % n], 0.5)))).unwrap_or(0);
-                    // Walk the curtain from the far end of the gate edge back to its start,
-                    // with a gatehouse in the middle of the gate edge.
-                    let gate_mid = lerp(curtain[gate_e], curtain[(gate_e + 1) % n], 0.5);
-                    let mut ring: Vec<(P, bool)> = vec![(gate_mid, true)];
-                    for k in 1..=n {
-                        ring.push((curtain[(gate_e + k) % n], false));
-                    }
-                    ring.push((gate_mid, true));
-                    let (pieces, towers, gate_towers) = wall_pieces(&ring, false);
-                    l.walls.extend(pieces);
-                    l.towers.extend(towers);
-                    l.gate_towers.extend(gate_towers);
-                    let cc = centroid(&curtain);
-                    l.castles.push((cc, curtain.iter().map(|p| dist(*p, cc)).fold(0.0, f64::max)));
-                }
-                let yard = inset(&block, &vec![22.0; block.len()]);
-                if yard.len() >= 3 {
-                    // The keep: the largest rectangle that fits well inside the yard.
-                    let zone = inset(&block, &vec![50.0; block.len()]);
-                    let keep = if zone.len() >= 3 {
-                        let o = obb(&zone);
-                        let c = centroid(&zone);
-                        let mut f = 0.75;
-                        let mut k = rect(c, o.axis, o.long * f, o.short * f);
-                        for _ in 0..8 {
-                            if k.iter().all(|p| contains(&zone, *p)) {
-                                break;
-                            }
-                            f *= 0.85;
-                            k = rect(c, o.axis, o.long * f, o.short * f);
-                        }
-                        k.iter().all(|p| contains(&zone, *p)).then_some(k)
-                    } else {
-                        None
-                    };
-                    // Buildings line the inside of the curtain, clear of the keep.
-                    let first = l.buildings.len();
-                    let mut inner_lines = edge_lines(&yard);
-                    build_block(site, &yard, &mut inner_lines, w, &dp, &mut prng, l, None);
-                    if let Some(keep) = keep {
-                        let mut kept: Vec<Building> = l.buildings.drain(first..).collect();
-                        kept.retain(|b| !overlaps(&b.poly, &keep));
-                        l.buildings.extend(kept);
-                        if site.buildable(&keep) {
-                            let pad = site.pad(&keep);
-                            l.buildings.push(Building { poly: keep, ward: w, func: None, residential: 4, name: None, floors: 4, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
-                        }
-                    }
-                }
-            }
+            // The gate faces the centre (the plaza, if the citadel backs onto it).
+            Ward::Castle => castle(site, &block, [0.0, 0.0], w, &dp, &mut prng, l, true, true),
             Ward::Slum if i >= n_inner => {
                 // Sprawl thins out away from the city: lots are kept with a probability that
                 // falls with distance from the corners this patch shares with the city.
@@ -2516,6 +2469,88 @@ impl District {
     }
 }
 
+/// The ground a layout is built on, as building lots see it: whether a footprint can stand
+/// there, and the level it is built at.
+trait Ground {
+    fn buildable(&self, poly: &[P]) -> bool;
+    fn pad(&self, poly: &[P]) -> f32;
+}
+
+impl Ground for Site<'_> {
+    fn buildable(&self, poly: &[P]) -> bool {
+        Site::buildable(self, poly)
+    }
+    fn pad(&self, poly: &[P]) -> f32 {
+        Site::pad(self, poly)
+    }
+}
+
+/// A castle on `block` (convex): a curtain wall 6 ft in from its edge with towers on every
+/// corner but the gate, a gatehouse in the middle of the side nearest `gate_toward`; with
+/// `keep`, the keep (4 storeys: the largest rectangle that fits well inside the yard), and
+/// with `yard`, buildings lining the inside of the curtain, clear of the keep.
+#[allow(clippy::too_many_arguments)]
+fn castle<G: Ground>(site: &G, block: &[P], gate_toward: P, w: Ward, dp: &District, prng: &mut Pcg32, l: &mut Layout, keep: bool, yard: bool) {
+    let curtain = inset(block, &vec![6.0; block.len()]);
+    if curtain.len() >= 3 {
+        let n = curtain.len();
+        let gate_e = (0..n)
+            .min_by(|&x, &y| dist(lerp(curtain[x], curtain[(x + 1) % n], 0.5), gate_toward).total_cmp(&dist(lerp(curtain[y], curtain[(y + 1) % n], 0.5), gate_toward)))
+            .unwrap_or(0);
+        // Walk the curtain from the far end of the gate edge back to its start, with a
+        // gatehouse in the middle of the gate edge.
+        let gate_mid = lerp(curtain[gate_e], curtain[(gate_e + 1) % n], 0.5);
+        let mut ring: Vec<(P, bool)> = vec![(gate_mid, true)];
+        for k in 1..=n {
+            ring.push((curtain[(gate_e + k) % n], false));
+        }
+        ring.push((gate_mid, true));
+        let (pieces, towers, gate_towers) = wall_pieces(&ring, false);
+        l.walls.extend(pieces);
+        l.towers.extend(towers);
+        l.gate_towers.extend(gate_towers);
+        let cc = centroid(&curtain);
+        l.castles.push((cc, curtain.iter().map(|p| dist(*p, cc)).fold(0.0, f64::max)));
+    }
+    let court = inset(block, &vec![22.0; block.len()]);
+    if court.len() < 3 {
+        return;
+    }
+    // The keep: the largest rectangle that fits well inside the yard.
+    let zone = inset(block, &vec![50.0; block.len()]);
+    let keep = if keep && zone.len() >= 3 {
+        let o = obb(&zone);
+        let c = centroid(&zone);
+        let mut f = 0.75;
+        let mut k = rect(c, o.axis, o.long * f, o.short * f);
+        for _ in 0..8 {
+            if k.iter().all(|p| contains(&zone, *p)) {
+                break;
+            }
+            f *= 0.85;
+            k = rect(c, o.axis, o.long * f, o.short * f);
+        }
+        k.iter().all(|p| contains(&zone, *p)).then_some(k)
+    } else {
+        None
+    };
+    // Buildings line the inside of the curtain, clear of the keep.
+    let first = l.buildings.len();
+    if yard {
+        let mut inner_lines = edge_lines(&court);
+        build_block(site, &court, &mut inner_lines, w, dp, prng, l, None);
+    }
+    if let Some(keep) = keep {
+        let mut kept: Vec<Building> = l.buildings.drain(first..).collect();
+        kept.retain(|b| !overlaps(&b.poly, &keep));
+        l.buildings.extend(kept);
+        if site.buildable(&keep) {
+            let pad = site.pad(&keep);
+            l.buildings.push(Building { poly: keep, ward: w, func: None, residential: 4, name: None, floors: 4, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
+        }
+    }
+}
+
 /// Split a wall line at its gates: a 22 ft passage through the wall at each gate corner
 /// between two gate towers, towers on every other corner, and more towers along long runs.
 /// Input: corners with a gate flag; `closed` joins the last corner back to the first.
@@ -2673,7 +2708,7 @@ fn shortest(adj: &Graph, start: (i64, i64), targets: &std::collections::BTreeSet
 /// their street frontage; lots without frontage stay open (yards and gardens); buildings
 /// fill their lots wall to wall, some standing back from the street.
 #[allow(clippy::too_many_arguments)]
-fn build_block(site: &Site, block: &[P], streets: &mut Vec<(P, f64)>, ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>) {
+fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P, f64)>, ward: Ward, dp: &District, rng: &mut Pcg32, l: &mut Layout, thin: Option<(&[P], f64)>) {
     let mut parts: Vec<Vec<P>> = Vec::new();
     let alley_area = dp.min_sq * dp.block_size;
     if area(block).abs() > alley_area * libm::pow(2.0, dp.size_chaos * (2.0 * rng.next_f64() - 1.0)) {
@@ -3275,7 +3310,12 @@ fn walls_off_river(site: &Site, l: &mut Layout) {
     if site.river.is_empty() {
         return;
     }
-    let wet = |p: P| site.near_river(p, 3.0);
+    clip_walls(l, |p| site.near_river(p, 3.0), |t| site.near_river(t, 2.0));
+}
+
+/// Break walls where they would stand in water (`wet`, every 5 ft; a tower on each bank), and
+/// drop the towers standing in it (`tower_wet`).
+fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> bool) {
     let mut walls: Vec<Vec<P>> = Vec::new();
     for w in std::mem::take(&mut l.walls) {
         let mut cur: Vec<P> = Vec::new();
@@ -3321,8 +3361,8 @@ fn walls_off_river(site: &Site, l: &mut Layout) {
     }
     walls.retain(|w| w.windows(2).map(|s| dist(s[0], s[1])).sum::<f64>() > 10.0);
     l.walls = walls;
-    l.towers.retain(|t| !site.near_river(*t, 2.0));
-    l.gate_towers.retain(|t| !site.near_river(*t, 2.0));
+    l.towers.retain(|t| !tower_wet(*t));
+    l.gate_towers.retain(|t| !tower_wet(*t));
 }
 
 /// Point and unit direction `at` ft along a polyline.

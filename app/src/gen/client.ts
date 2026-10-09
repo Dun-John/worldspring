@@ -4,7 +4,7 @@ import { EDIT_FIELDS } from '../sync/ops';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, BuildingFuncs, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -123,6 +123,12 @@ export class GenClient {
   /** The world's own buildings with their middle inside a polygon (ft): ids and middles as generated. */
   buildingsIn(poly: [number, number][]): Promise<{ id: string; at: [number, number] }[]> {
     return this.ask({ op: 'bin', poly }).then((j) => JSON.parse(j) ?? []);
+  }
+
+  /** Whether a castle or wall drawn by hand can stand there: its point, a name for it and the
+   * world's own buildings in its way (to take away with it); null if the generator could not answer. */
+  worksSpot(site: Created): Promise<{ x: number; y: number; name: string; in_way: { id: string; at: [number, number] }[] } | { error: string } | null> {
+    return this.ask({ op: 'works', site }).then((j) => JSON.parse(j));
   }
 
   /** What a building drawn by hand can be. */

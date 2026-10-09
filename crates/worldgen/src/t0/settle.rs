@@ -98,6 +98,10 @@ pub enum PoiKind {
     Entrance,
     /// Created only: a building drawn by hand (`world::Created::poly`).
     Building,
+    /// Created only: a castle drawn by hand (its outline, `world::Created::poly`).
+    Castle,
+    /// Created only: a wall drawn by hand (its line, `world::Created::pts`).
+    Wall,
 }
 
 impl PoiKind {
@@ -112,12 +116,14 @@ impl PoiKind {
             "lava_tube" => PoiKind::LavaTube,
             "entrance" => PoiKind::Entrance,
             "building" => PoiKind::Building,
+            "castle" => PoiKind::Castle,
+            "wall" => PoiKind::Wall,
             _ => PoiKind::Ruin,
         }
     }
 
     pub fn from_u8(v: u8) -> PoiKind {
-        const ALL: [PoiKind; 9] = [PoiKind::Ruin, PoiKind::Tower, PoiKind::Camp, PoiKind::Waystation, PoiKind::Cave, PoiKind::Mine, PoiKind::LavaTube, PoiKind::Entrance, PoiKind::Building];
+        const ALL: [PoiKind; 11] = [PoiKind::Ruin, PoiKind::Tower, PoiKind::Camp, PoiKind::Waystation, PoiKind::Cave, PoiKind::Mine, PoiKind::LavaTube, PoiKind::Entrance, PoiKind::Building, PoiKind::Castle, PoiKind::Wall];
         ALL[(v as usize).min(ALL.len() - 1)]
     }
 }

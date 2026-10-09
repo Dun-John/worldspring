@@ -945,6 +945,8 @@ impl Builder<'_> {
                 PoiKind::LavaTube => ("lava_tube", NameKind::LavaTube, 2.0),
                 PoiKind::Entrance => ("entrance", NameKind::Ruin, 2.0),
                 PoiKind::Building => ("building", NameKind::Settlement, 0.5),
+                PoiKind::Castle => ("castle", NameKind::Settlement, 1.0),
+                PoiKind::Wall => ("wall", NameKind::Settlement, 1.0),
             };
             let k = (cy.round() as usize).min(inp.h - 1) * inp.w + (cx.round() as usize).min(inp.w - 1);
             let elev = self.above_sea(k);

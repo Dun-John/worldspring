@@ -1,14 +1,21 @@
+<script lang="ts" module>
+  export type BuildMode = 'building' | 'castle' | 'wall' | 'crossing' | 'clear';
+</script>
+
 <script lang="ts">
   // Edit › Build: draw a building on the map (a rectangle, any polygon, a round tower), snapped
   // to the 5-ft grid, and say what it is, its storeys, roof and roof colour. While the tab is
   // open the map's pointer draws; each footprint drawn becomes a building. Editing one: change
   // its options, or draw again to move or reshape it. Or put a crossing down (a bridge, ford
   // or ferry) by clicking one bank, then the other; clicking one picks it to change or take away.
+  // Castle: an outline (a rectangle or a convex polygon), then the side its gate is in; Wall: a
+  // line of corners (a ring if closed), gates on the corners clicked twice.
   import { CROSSING_WIDTH, MAX_FLOORS, ROOFS, TINTS, type BuildingFuncs, type CrossingKind } from '../gen/protocol';
   import { ROOF_TINTS } from '../gen/battlePrep';
   import type { BuildSettings, BuildShape } from '../editor/build';
   import type { CrossSettings } from '../editor/crossing';
   import type { ClearShape } from '../editor/clearArea';
+  import type { WorksSettings } from '../editor/works';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -17,8 +24,11 @@
     funcs: BuildingFuncs | null;
     /** The building being changed (its name), else drawing new ones. */
     editing: string | null;
-    /** Buildings, crossings, or clearing the world's own buildings. */
-    mode: 'building' | 'crossing' | 'clear';
+    /** Buildings, castles, walls, crossings, or clearing the world's own buildings. */
+    mode: BuildMode;
+    works: WorksSettings;
+    /** The castle or wall being changed (its name), else drawing new ones. */
+    worksEditing: string | null;
     /** Clear area: a box dragged, or a lasso drawn. */
     clearShape: ClearShape;
     cross: CrossSettings;
@@ -30,7 +40,8 @@
     peek?: boolean;
     onSave: () => void;
     onDone: () => void;
-    onMode: (m: 'building' | 'crossing' | 'clear') => void;
+    onMode: (m: BuildMode) => void;
+    onWorksSave: () => void;
     onCrossSave: () => void;
     onCrossRemove: () => void;
     /** Fly in close enough to draw. */
@@ -42,6 +53,8 @@
     funcs,
     editing,
     mode,
+    works = $bindable(),
+    worksEditing,
     clearShape = $bindable(),
     cross = $bindable(),
     crossEditing,
@@ -50,6 +63,7 @@
     onSave,
     onDone,
     onMode,
+    onWorksSave,
     onCrossSave,
     onCrossRemove,
     onZoomIn,
@@ -73,6 +87,14 @@
   const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
   const label = (s: string) => s.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
+  const MODES: { key: BuildMode; label: string; icon: IconName; title: string }[] = [
+    { key: 'building', label: 'Building', icon: 'building', title: 'Draw a building (B)' },
+    { key: 'castle', label: 'Castle', icon: 'castle', title: 'Draw a castle: its walls, gate, keep and yard' },
+    { key: 'wall', label: 'Wall', icon: 'wall', title: 'Draw a wall with towers and gates' },
+    { key: 'crossing', label: 'Crossing', icon: 'bridge', title: 'A bridge, ford or ferry (X)' },
+    { key: 'clear', label: 'Clear', icon: 'trash', title: 'Take away the town’s own buildings in an area' },
+  ];
+
   const categories = $derived(funcs ? [...new Set(funcs.businesses.map((b) => b.category))] : []);
 
   function shape(k: BuildShape) {
@@ -84,13 +106,68 @@
 
 <div class="build">
   {#if !peek}
-    <div class="ws-seg" role="radiogroup" aria-label="What to build">
-      <button class:on={mode === 'building'} aria-pressed={mode === 'building'} onclick={() => onMode('building')}><Icon name="building" size={16} />Building</button>
-      <button class:on={mode === 'crossing'} aria-pressed={mode === 'crossing'} onclick={() => onMode('crossing')} title="A bridge, ford or ferry (X)"><Icon name="bridge" size={16} />Crossing</button>
-      <button class:on={mode === 'clear'} aria-pressed={mode === 'clear'} onclick={() => onMode('clear')} title="Take away the town's own buildings in an area"><Icon name="trash" size={16} />Clear area</button>
+    <div class="ws-seg modes" role="radiogroup" aria-label="What to build">
+      {#each MODES as m (m.key)}
+        <button class:on={mode === m.key} aria-pressed={mode === m.key} onclick={() => onMode(m.key)} title={m.title}><Icon name={m.icon} size={16} />{m.label}</button>
+      {/each}
     </div>
   {/if}
-  {#if mode === 'clear'}
+  {#if mode === 'castle' || mode === 'wall'}
+    {#if worksEditing}
+      <div class="editing">
+        <span class="grow">Changing <b>{worksEditing}</b></span>
+        <button class="ws-btn" onclick={onDone}>Done</button>
+      </div>
+    {/if}
+    {#if mode === 'castle'}
+      <div class="ws-seg" role="radiogroup" aria-label="Outline">
+        <button class:on={works.castleShape === 'rect'} aria-pressed={works.castleShape === 'rect'} onclick={() => (works.castleShape = 'rect')} title="Rectangle (R)"><Icon name="square" size={16} />Rectangle</button>
+        <button class:on={works.castleShape === 'poly'} aria-pressed={works.castleShape === 'poly'} onclick={() => (works.castleShape = 'poly')} title="Polygon (O)"><Icon name="polygon" size={16} />Polygon</button>
+      </div>
+    {/if}
+    {#if !near}
+      <div class="zoom">
+        <span class="grow">Zoom in to draw.</span>
+        <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
+      </div>
+    {/if}
+    {#if !peek}
+      <div class="ws-hint">
+        {#if mode === 'castle'}
+          {worksEditing ? 'Click a side to move the gate there, or draw the walls again. ' : ''}{works.castleShape === 'rect'
+            ? 'Drag the walls from corner to corner'
+            : 'Click each corner (no corner turning inward); click the first again or press Enter'}, then click the side the gate is in (Enter: the side facing the road). 80 to 600 ft across.
+        {:else}
+          {worksEditing ? 'Click the wall to add a gate there (on a gate: take it away), or draw it again. ' : ''}Click each corner; click a corner twice to make it a gate.
+          Double-click or press Enter to finish. Roads and streets that cross it get a gate. Up to 3,000 ft.
+        {/if}
+      </div>
+      {#if mode === 'castle'}
+        <label class="switch">
+          <span class="grow">Keep<span class="ws-muted"> · the castle’s great tower in the yard</span></span>
+          <input type="checkbox" class="ws-switch" bind:checked={works.keep} />
+        </label>
+        <label class="switch">
+          <span class="grow">Yard buildings<span class="ws-muted"> · barracks, stables, a smithy along the walls</span></span>
+          <input type="checkbox" class="ws-switch" bind:checked={works.yardBuildings} />
+        </label>
+        <label class="switch">
+          <span class="grow">In ruins<span class="ws-muted"> · broken walls, roofless</span></span>
+          <input type="checkbox" class="ws-switch" bind:checked={works.ruin} />
+        </label>
+      {:else}
+        <label class="switch">
+          <span class="grow">Closed ring<span class="ws-muted"> · the last corner joins the first</span></span>
+          <input type="checkbox" class="ws-switch" bind:checked={works.closed} />
+        </label>
+      {/if}
+      <label class="ws-field">
+        Name
+        <input class="ws-input" bind:value={works.name} placeholder={worksEditing ? '' : 'Named for the place if left empty'} />
+      </label>
+      {#if worksEditing}<button class="ws-btn primary block" onclick={onWorksSave}>Save changes</button>{/if}
+    {/if}
+  {:else if mode === 'clear'}
     <div class="ws-seg" role="radiogroup" aria-label="Area">
       <button class:on={clearShape === 'box'} aria-pressed={clearShape === 'box'} onclick={() => (clearShape = 'box')}><Icon name="square" size={16} />Box</button>
       <button class:on={clearShape === 'lasso'} aria-pressed={clearShape === 'lasso'} onclick={() => (clearShape = 'lasso')}><Icon name="polygon" size={16} />Lasso</button>
@@ -271,6 +348,13 @@
   .swatch.on {
     outline: 2px solid var(--ink);
     outline-offset: 2px;
+  }
+  /* Five modes side by side: each its icon over its word. */
+  .modes > button {
+    flex-direction: column;
+    gap: 0;
+    padding: 4px 2px;
+    font-size: 12px;
   }
   .switch {
     display: flex;

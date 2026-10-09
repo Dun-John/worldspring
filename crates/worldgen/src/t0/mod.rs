@@ -69,6 +69,8 @@ pub struct T0 {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CreatedSite {
     pub removed: bool,
+    /// How far (ft) its layout reaches from its point (`world::Created::reach`).
+    pub reach: f64,
     pub under: Option<crate::under::UnderKind>,
     /// Its site underground: size, levels, theme.
     pub spec: crate::under::SiteSpec,
@@ -587,7 +589,7 @@ impl T0 {
             };
             let seed = crate::core::hash::fnv64(c.id.as_bytes()) ^ world.seed;
             self.pois.push(settle::Poi { kind, x: c.x, y: c.y, seed, stroke: None });
-            self.created.push(CreatedSite { removed: c.removed, under, spec });
+            self.created.push(CreatedSite { removed: c.removed, reach: c.reach(), under, spec });
         }
     }
 
@@ -597,7 +599,7 @@ impl T0 {
         self.sketched = (0..self.base_pois)
             .filter_map(|i| {
                 let s = world.file.sketch.strokes.get(self.pois[i].stroke? as usize)?;
-                Some((i, CreatedSite { removed: false, under: s.under.as_deref().and_then(crate::under::UnderKind::parse), spec: Default::default() }))
+                Some((i, CreatedSite { removed: false, reach: crate::town::sites::SITE_REACH_FT, under: s.under.as_deref().and_then(crate::under::UnderKind::parse), spec: Default::default() }))
             })
             .collect();
     }

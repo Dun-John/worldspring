@@ -75,6 +75,7 @@ export const ICONS = {
   ford: '<ellipse cx="5.5" cy="12" rx="2.5" ry="1.8"/><ellipse cx="12" cy="10" rx="2.5" ry="1.8"/><ellipse cx="18.5" cy="12" rx="2.5" ry="1.8"/><path d="M2 18c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 5-2"/><path d="M2 4c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 5-2"/>',
   ferry: '<path d="M2 5h20"/><path d="M12 5v5"/><rect x="6" y="10" width="12" height="5" rx="1"/><path d="M2 19c2.5 0 2.5 2 5 2s2.5-2 5-2 2.5 2 5 2 2.5-2 5-2"/>',
   castle: '<path d="M4 21V10h3V7h3v3h4V7h3v3h3v11Z"/><path d="M10 21v-4h4v4"/>',
+  wall: '<path d="M2 20v-9h3V8h3v3h3V8h2v3h3V8h3v3h3v9Z"/><path d="M2 15.5h20"/><path d="M8 15.5V20M16 15.5V20M12 11v4.5"/>',
   chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
   target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',

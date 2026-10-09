@@ -49,6 +49,9 @@ const built = JSON.parse(wasm.default_world_json(424242));
     created: [
       { id: 'c:0', kind: 'building', x: x + 20, y: y + 18, name: '', poly: ell, func: 'inn', floors: 2, roof: 'battlements', tint: 'slate' },
       { id: 'c:1', kind: 'building', x: x + 90, y: y + 20, name: 'The Needle', poly: tower, func: 'wizard_tower', floors: 4, roof: 'cone' },
+      // A castle (gate on its second side) and a wall with a gate on its bend.
+      { id: 'c:2', kind: 'castle', x: x + 400, y: y - 180, name: 'Det Hold', poly: [[x + 300, y - 260], [x + 500, y - 260], [x + 500, y - 100], [x + 300, y - 100]], gate: 1 },
+      { id: 'c:3', kind: 'wall', x: x, y: y + 400, name: '', pts: [[x - 300, y + 300], [x + 300, y + 300], [x + 300, y + 500]], gates: [1] },
     ],
     // Crossings put down by hand, across the sampled tile.
     crossings: {
@@ -78,4 +81,4 @@ for (const worldJson of [wasm.default_world_json(424242), JSON.stringify(sketche
   }
   total += a.length;
 }
-console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings, the world's own buildings edited, crossings and a site redesigned`);
+console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings, a castle and a wall, the world's own buildings edited, crossings and a site redesigned`);

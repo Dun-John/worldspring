@@ -643,6 +643,26 @@ pub struct Created {
     /// `roofed` (default) or `ruin` (broken walls, no roof).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure: Option<String>,
+    /// A castle's gate: the side of `poly` it is in (corner `gate` to the next), else the side
+    /// facing the nearest road.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<u32>,
+    /// A castle's keep in the yard (default true).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<bool>,
+    /// Buildings lining the inside of a castle's curtain (default true).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yard_buildings: Option<bool>,
+    /// A wall's line (world ft), 2–64 corners, at most `WALL_MAX_FT` long.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pts: Vec<[f64; 2]>,
+    /// A wall's corners that are gates (indices into `pts`); more gates come where roads and
+    /// streets cross it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<u32>,
+    /// A wall's last corner joins its first (a ring).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
     /// Deleted (kept in the list so later sites keep their place).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
@@ -728,7 +748,17 @@ pub enum PlotStatus {
 pub const PLOT_STATUSES: [&str; 3] = ["idea", "active", "resolved"];
 
 /// The kinds of site that can be created.
-pub const CREATABLE: [&str; 9] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building"];
+pub const CREATABLE: [&str; 11] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall"];
+/// Kinds drawn by hand as a shape (a footprint, an outline, a line), not put at a point.
+pub const DRAWN_KINDS: [&str; 3] = ["building", "castle", "wall"];
+/// Widest a castle may be, corner to corner (ft).
+pub const CASTLE_MAX_FT: f64 = 600.0;
+/// Narrowest a castle may be (ft): room for a curtain, a yard and a keep.
+pub const CASTLE_MIN_FT: f64 = 80.0;
+/// Longest a wall may be (ft).
+pub const WALL_MAX_FT: f64 = 3000.0;
+/// How far a castle's or wall's layout reaches past its outline (towers stand astride it).
+pub const WORKS_MARGIN_FT: f64 = 40.0;
 
 /// Homes a building can be (`func`), as `town::catalog::RESIDENTIAL`: hovel, house, townhouse,
 /// tenement, noble estate, farmhouse, wizard's tower.
@@ -757,12 +787,13 @@ impl Created {
         if other.removed || other.kind != self.kind {
             return false;
         }
-        if self.kind == "building" {
-            let named = self.name.trim().is_empty() || self.name.trim() == other.name.trim();
-            return other.func == self.func
-                && named
-                && other.poly.len() == self.poly.len()
-                && other.poly.iter().zip(&self.poly).all(|(a, b)| (a[0] - b[0]).abs() <= 2.0 && (a[1] - b[1]).abs() <= 2.0);
+        let same = |a: &[[f64; 2]], b: &[[f64; 2]]| a.len() == b.len() && a.iter().zip(b).all(|(a, b)| (a[0] - b[0]).abs() <= 2.0 && (a[1] - b[1]).abs() <= 2.0);
+        let named = self.name.trim().is_empty() || self.name.trim() == other.name.trim();
+        match self.kind.as_str() {
+            "building" => return other.func == self.func && named && same(&other.poly, &self.poly),
+            "castle" => return named && same(&other.poly, &self.poly),
+            "wall" => return named && other.closed == self.closed && same(&other.pts, &self.pts),
+            _ => {}
         }
         let near = |p: [f64; 2]| (other.x - p[0]).hypot(other.y - p[1]) <= Self::SAME_SPOT_FT;
         other.under_kind() == self.under_kind() && (near([self.x, self.y]) || near(asked))
@@ -789,11 +820,16 @@ impl Created {
         if !CREATABLE.contains(&self.kind.as_str()) {
             return Err(format!("kind must be one of {}", CREATABLE.join(", ")));
         }
-        if self.kind == "building" {
-            return self.check_building();
+        let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed;
+        match self.kind.as_str() {
+            "building" if works => return Err("gate, keep, yard_buildings, pts, gates and closed are for castles and walls".into()),
+            "building" => return self.check_building(),
+            "castle" => return self.check_castle(),
+            "wall" => return self.check_wall(),
+            _ => {}
         }
-        if !self.poly.is_empty() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.structure.is_some() {
-            return Err("footprint, floors, function, roof, tint and structure are for buildings".into());
+        if !self.poly.is_empty() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.structure.is_some() || works {
+            return Err("footprint, floors, function, roof, tint and structure are for buildings; gates, keep and lines for castles and walls".into());
         }
         if let Some(u) = &self.under {
             let built = [UnderKind::Dungeon, UnderKind::Crypt, UnderKind::Catacombs];
@@ -862,6 +898,100 @@ impl Created {
             }
         }
         Ok(())
+    }
+}
+
+impl Created {
+    /// A castle's options: a convex outline of 3–32 corners round its point, `CASTLE_MIN_FT`
+    /// to `CASTLE_MAX_FT` across, its gate on one of its sides; ruined or not.
+    fn check_castle(&self) -> Result<(), String> {
+        use crate::town::geom::{cross, obb, sub};
+        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() {
+            return Err("a castle takes its outline (poly), gate, keep, yard_buildings and structure".into());
+        }
+        if !self.pts.is_empty() || !self.gates.is_empty() || self.closed {
+            return Err("pts, gates and closed are for walls: a castle has an outline (poly) and one gate".into());
+        }
+        let p = &self.poly;
+        if p.len() < 3 || p.len() > 32 || p.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) {
+            return Err("a castle's outline needs 3–32 corners".into());
+        }
+        if !simple(p) {
+            return Err("a castle's outline must not cross itself".into());
+        }
+        let m = p.len();
+        let turns: Vec<f64> = (0..m).map(|i| cross(sub(p[(i + 1) % m], p[i]), sub(p[(i + 2) % m], p[(i + 1) % m]))).collect();
+        if !(turns.iter().all(|t| *t >= -1e-6) || turns.iter().all(|t| *t <= 1e-6)) {
+            return Err("a castle's outline must be convex (no corner turning inward)".into());
+        }
+        let across = p.iter().flat_map(|a| p.iter().map(move |b| (a[0] - b[0]).hypot(a[1] - b[1]))).fold(0.0, f64::max);
+        if across > CASTLE_MAX_FT {
+            return Err(format!("a castle is at most {CASTLE_MAX_FT} ft across (this is {across:.0})"));
+        }
+        if obb(p).short < CASTLE_MIN_FT {
+            return Err(format!("a castle is at least {CASTLE_MIN_FT} ft across: room for its walls, a yard and a keep"));
+        }
+        if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > CASTLE_MAX_FT) {
+            return Err("a castle's corners must lie round its point".into());
+        }
+        if self.gate.is_some_and(|g| g as usize >= m) {
+            return Err(format!("gate: a side of the outline, 0 to {}", m - 1));
+        }
+        if let Some(s) = &self.structure
+            && !STRUCTURES.contains(&s.as_str())
+        {
+            return Err(format!("structure must be one of {}", STRUCTURES.join(", ")));
+        }
+        Ok(())
+    }
+
+    /// A wall's options: a line of 2–64 corners (a ring of 3 or more if closed), each side at
+    /// least 10 ft, at most `WALL_MAX_FT` in all, its gates on its corners.
+    fn check_wall(&self) -> Result<(), String> {
+        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() {
+            return Err("a wall takes its line (pts), gates and closed".into());
+        }
+        if !self.poly.is_empty() || self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || self.structure.is_some() {
+            return Err("poly, gate, keep, yard_buildings and structure are for castles: a wall has a line (pts) and gates".into());
+        }
+        let p = &self.pts;
+        if p.len() < 2 || p.len() > 64 || p.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) {
+            return Err("a wall's line needs 2–64 corners".into());
+        }
+        if self.closed && p.len() < 3 {
+            return Err("a closed wall needs at least 3 corners".into());
+        }
+        let n = p.len();
+        let sides = if self.closed { n } else { n - 1 };
+        let side = |i: usize| (p[(i + 1) % n][0] - p[i][0]).hypot(p[(i + 1) % n][1] - p[i][1]);
+        if (0..sides).any(|i| side(i) < 10.0) {
+            return Err("a wall's corners must be at least 10 ft apart".into());
+        }
+        let length: f64 = (0..sides).map(side).sum();
+        if length > WALL_MAX_FT {
+            return Err(format!("a wall is at most {WALL_MAX_FT} ft long (this is {length:.0})"));
+        }
+        if self.closed && !simple(p) {
+            return Err("a closed wall must not cross itself".into());
+        }
+        if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > WALL_MAX_FT) {
+            return Err("a wall's corners must lie round its point".into());
+        }
+        if self.gates.iter().any(|g| *g as usize >= n) {
+            return Err(format!("gates: corners of the line, 0 to {}", n - 1));
+        }
+        Ok(())
+    }
+
+    /// How far (ft) from its point a created site's layout reaches: a castle's or wall's
+    /// farthest corner and its towers; any other site `town::sites::SITE_REACH_FT`.
+    pub fn reach(&self) -> f64 {
+        let far = |pts: &[[f64; 2]]| pts.iter().map(|q| (q[0] - self.x).hypot(q[1] - self.y)).fold(0.0, f64::max);
+        match self.kind.as_str() {
+            "castle" => far(&self.poly) + WORKS_MARGIN_FT,
+            "wall" => far(&self.pts) + WORKS_MARGIN_FT,
+            _ => crate::town::sites::SITE_REACH_FT,
+        }
     }
 }
 

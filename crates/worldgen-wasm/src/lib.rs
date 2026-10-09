@@ -178,6 +178,16 @@ impl Ctx {
         }
     }
 
+    /// Whether a castle or a wall drawn by hand (a created site as JSON: `kind`, `id`, `poly` or
+    /// `pts`, `closed`) can stand there: `{x, y, name, in_way: [{id, at}]}` (the world's own
+    /// buildings in its way) or `{error}` (`agent::works_spot_json`).
+    pub fn works_spot_json(&self, created: &str) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::agent::works_spot_json(&self.world, t0, created),
+            None => "null".into(),
+        }
+    }
+
     /// A generated building's edit with a change made (`{func, floors, poly, roof, tint,
     /// structure}`, or `{remove: true}`): `{edit}` (null: as generated) or `{error}`
     /// (`agent::building_edit_json`).

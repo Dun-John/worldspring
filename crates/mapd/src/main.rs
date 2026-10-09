@@ -15,6 +15,7 @@ mod scatter;
 mod store;
 mod tools;
 mod worker;
+mod works;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

@@ -145,6 +145,12 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
             }
         }
     }
+    // A wall drawn by hand (or a castle's curtain) is picked on its line.
+    for l in layouts.iter().filter(|l| l.site) {
+        if l.walls.iter().any(|w| w.windows(2).any(|s| geom::seg_dist([x, y], s[0], s[1]) <= 6.0)) {
+            return Some(Hit::Settlement { settlement: l.index, x: l.center[0], y: l.center[1], radius_ft: l.radius });
+        }
+    }
     for l in &layouts {
         if let Some(qi) = quarter_at(l, [x, y]) {
             return Some(district_hit(l, qi));

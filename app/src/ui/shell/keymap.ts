@@ -39,6 +39,8 @@ export interface KeyContext {
   buildShape(s: BuildShape): void;
   /** Crossings (again: the next kind). */
   buildCross(): void;
+  /** Castles or walls. */
+  buildWorks(m: 'castle' | 'wall'): void;
   buildFinish(): void;
   buildBack(): void;
   designMode(m: DesignMode): void;
@@ -121,8 +123,10 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   ];
   for (const [key, s, label] of shapes) out.push({ keys: [key], label, group: 'Build', when: edit('build'), run: () => k.buildShape(s) });
   out.push({ keys: ['X'], label: 'Crossing (again: bridge, ford, ferry)', group: 'Build', when: edit('build'), run: () => k.buildCross() });
+  out.push({ keys: ['K'], label: 'Castle', group: 'Build', when: edit('build'), run: () => k.buildWorks('castle') });
+  out.push({ keys: ['W'], label: 'Wall', group: 'Build', when: edit('build'), run: () => k.buildWorks('wall') });
   out.push(
-    { keys: ['Enter'], label: 'Finish the polygon', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
+    { keys: ['Enter'], label: 'Finish the polygon, castle or wall', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildFinish() },
     { keys: ['Backspace'], label: 'Take a corner back', group: 'Build', when: () => edit('build')() && k.building(), run: () => k.buildBack() },
   );
   const modes: [string, ScatterMode, string][] = [

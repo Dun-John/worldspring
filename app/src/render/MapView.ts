@@ -2,7 +2,7 @@
 // and per-frame styling (zoom-adaptive hillshade and contour interval).
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type WantTile, type WorldFile } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type WantTile, type WorldFile, WORKS_MARGIN_FT } from '../gen/protocol';
 import { BattlemapLayer, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { InteriorLayer, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
@@ -63,6 +63,22 @@ const SITE_MIN_LEVEL = 9;
 /** How far a created site's layout reaches (`town::sites::SITE_REACH_FT`), with a margin. */
 const SITE_REACH_FT = 260 + 100;
 
+/** How far (ft) from its point a created site's layout reaches, with a margin (as
+ * `worldgen::world::Created::reach`: a castle's or wall's farthest corner and its towers). */
+export function siteReach(c: Created): number {
+  const pts = c.kind === 'castle' ? c.poly : c.kind === 'wall' ? c.pts : null;
+  if (!pts?.length) return SITE_REACH_FT;
+  return Math.max(...pts.map((p) => Math.hypot(p[0] - c.x, p[1] - c.y))) + WORKS_MARGIN_FT + 100;
+}
+
+/** A wall's length (ft). */
+export function wallLength(pts: [number, number][], closed: boolean): number {
+  let s = 0;
+  const n = pts.length;
+  for (let i = 0; i < (closed ? n : n - 1); i++) s += Math.hypot(pts[(i + 1) % n][0] - pts[i][0], pts[(i + 1) % n][1] - pts[i][1]);
+  return s;
+}
+
 /** What a created site is (as `worldgen::agent::created_detail`). */
 function createdDetail(c: Created): string {
   const words = (s: string) => s.replace(/_/g, ' ');
@@ -71,18 +87,27 @@ function createdDetail(c: Created): string {
     const opts = [c.func && words(c.func), floors, c.structure === 'ruin' && 'ruined', c.roof && (c.roof === 'hip' ? 'hip roof' : c.roof), c.tint && `${c.tint} roof`].filter(Boolean);
     return `created building${opts.length ? ` (${opts.join(', ')})` : ''}`;
   }
+  if (c.kind === 'castle') {
+    const opts = [c.structure === 'ruin' && 'ruined', c.keep === false && 'no keep', c.yard_buildings === false && 'an empty yard', c.gate != null && `gate on side ${c.gate}`].filter(Boolean);
+    return `created castle${opts.length ? ` (${opts.join(', ')})` : ''}`;
+  }
+  if (c.kind === 'wall') {
+    const g = c.gates?.length ?? 0;
+    return `created wall (${c.closed ? 'a ring, ' : ''}${Math.round(wallLength(c.pts ?? [], !!c.closed))} ft${g === 1 ? ', a gate' : g ? `, ${g} gates` : ''})`;
+  }
   const opts = [c.theme && words(c.theme), c.size, c.levels && `${c.levels} level${c.levels === 1 ? '' : 's'}`].filter(Boolean);
   return `created ${words(c.kind)}${c.under ? ` over a ${words(c.under)}` : ''}${opts.length ? ` (${opts.join(', ')})` : ''}`;
 }
 
 /** A created site as a named feature (as `worldgen::agent::features` lists it). */
 function createdFeature(c: Created): Feature {
-  return { id: c.id, kind: c.kind, name: c.name, x: c.x, y: c.y, angle: 0, extent_ft: (c.kind === 'building' ? 0.5 : 2) * 5280, detail: createdDetail(c) };
+  const extent = c.kind === 'building' ? 0.5 * 5280 : c.kind === 'castle' || c.kind === 'wall' ? Math.max(2 * (siteReach(c) - 100), 0.5 * 5280) : 2 * 5280;
+  return { id: c.id, kind: c.kind, name: c.name, x: c.x, y: c.y, angle: 0, extent_ft: extent, detail: createdDetail(c) };
 }
 
 /** What a created site's layout depends on (not its name, but a drawn building's: it is the
  * building's own). */
-const siteKey = (c: Created) => JSON.stringify({ ...c, name: c.kind === 'building' ? c.name : null });
+const siteKey = (c: Created) => JSON.stringify({ ...c, name: c.kind === 'building' || c.kind === 'castle' ? c.name : null });
 
 /** Screenshots for agents (`render_view`): pixels. */
 const CAPTURE_W = 1536;
@@ -699,7 +724,11 @@ export class MapView {
       const a = before[k];
       const b = after[k];
       if (a && b && siteKey(a) === siteKey(b)) continue;
-      for (const c of [a, b]) if (c) rects.push([c.x - SITE_REACH_FT, c.y - SITE_REACH_FT, c.x + SITE_REACH_FT, c.y + SITE_REACH_FT]);
+      for (const c of [a, b]) {
+        if (!c) continue;
+        const r = siteReach(c);
+        rects.push([c.x - r, c.y - r, c.x + r, c.y + r]);
+      }
     }
     const createdChanged = JSON.stringify(before) !== JSON.stringify(after);
     if (createdChanged && this.baseOverlay) {

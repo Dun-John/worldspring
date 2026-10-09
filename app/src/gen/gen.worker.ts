@@ -71,6 +71,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                           ? c.building_edit_json(a.id, a.change)
                           : a.op === 'bin'
                           ? c.buildings_in_json(JSON.stringify(a.poly))
+                          : a.op === 'works'
+                          ? c.works_spot_json(JSON.stringify(a.site))
                           : a.op === 'design'
                             ? c.design_json(a.id, a.design, a.action)
                             : a.op === 'undercat'

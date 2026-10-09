@@ -21,7 +21,7 @@
   }
   let { features, renames, hidden, layoutOf, list, onRename, onGo }: Props = $props();
 
-  const SITE_KINDS = ['ruin', 'tower', 'camp', 'waystation', 'cave', 'mine', 'lava_tube', 'entrance', 'building'];
+  const SITE_KINDS = ['ruin', 'tower', 'camp', 'waystation', 'cave', 'mine', 'lava_tube', 'entrance', 'building', 'castle', 'wall'];
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
     { key: 'land', label: 'Land', kinds: ['continent', 'island', 'range', 'peak', 'pass', 'volcano', 'forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'blight', 'ashlands', 'region', 'salt_flat', 'road'] },

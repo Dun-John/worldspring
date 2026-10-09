@@ -535,7 +535,7 @@ fn world_sea(ex: &Executor) -> f64 {
 fn interiors_guarantee() {
     use worldgen::interior;
     use worldgen::t0::settle::Tier;
-    use worldgen::town::{self, Structure, geom};
+    use worldgen::town::{self, Structure};
     let world = World::from_json(&world_json(1)).unwrap();
     let t0 = worldgen::t0::T0::generate(&world);
     let by_tier = |t: Tier| (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier == t).max_by_key(|&i| t0.settlements[i].population);
@@ -553,178 +553,12 @@ fn interiors_guarantee() {
             .chain((0..interior::towers(&l).len()).map(|k| format!("t:{si}:{k}")))
             .collect();
         towers += interior::towers(&l).len();
-        // Buildings by 100-ft bucket, for "does this door open into a neighbour's wall".
-        let mut buckets: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
-        for (k, b) in l.buildings.iter().enumerate() {
-            if b.structure != Structure::Roofed {
-                continue;
-            }
-            let (x0, y0, x1, y1) = b.poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
-            for by in (y0 / 100.0).floor() as i64..=(y1 / 100.0).floor() as i64 {
-                for bx in (x0 / 100.0).floor() as i64..=(x1 / 100.0).floor() as i64 {
-                    buckets.entry((bx, by)).or_default().push(k);
-                }
-            }
-        }
+        let buckets = building_buckets(&l);
         for id in ids {
-            let bi = &id;
-            let t = std::time::Instant::now();
-            let it = interior::generate_id(&world, &t0, &id).expect("enterable");
-            worst_ms = worst_ms.max(t.elapsed().as_secs_f64() * 1e3);
-            let (nx, ny) = (it.nx, it.ny);
-            let tag = format!("{bi} ({})", it.function);
-            assert!(it.levels.len() >= 2, "{tag}: only {} level", it.levels.len());
-            // One chapel per building; spiral stairs on the same square on every level with them.
-            let chapels = it.levels.iter().flat_map(|lv| lv.rooms.iter()).filter(|r| r.kind == "chapel").count();
-            assert!(chapels <= 1, "{tag}: {chapels} chapels");
-            let spirals: Vec<Vec<(u16, u16)>> = it.levels.iter().map(|lv| lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| (f.x, f.y)).collect()).collect();
-            if let Some(first) = spirals.iter().find(|v| !v.is_empty()) {
-                for v in spirals.iter().filter(|v| !v.is_empty()) {
-                    assert_eq!(v, first, "{tag}: spiral stairs move between levels");
-                }
-                assert!(spirals.iter().filter(|v| !v.is_empty()).count() >= 2, "{tag}: spiral stairs on one level only");
-            }
-            // Cells: under 15 ft a side, each with a door onto a corridor or guardroom (never
-            // through another cell).
-            for lv in &it.levels {
-                for (ri, _) in lv.rooms.iter().enumerate().filter(|(_, r)| r.kind == "cell") {
-                    let sq: Vec<usize> = (0..it.nx * it.ny).filter(|&k| lv.cells[k] == ri as i16).collect();
-                    let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % it.nx), a.1.max(k % it.nx)));
-                    let (y0, y1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / it.nx), a.1.max(k / it.nx)));
-                    assert!(x1 - x0 < 3 && y1 - y0 < 3, "{tag} {}: a {}x{} ft cell", lv.name, 5 * (x1 - x0 + 1), 5 * (y1 - y0 + 1));
-                    let doors: Vec<i16> = lv.doors.iter().filter(|d| d.rooms.contains(&(ri as i16))).map(|d| if d.rooms[0] == ri as i16 { d.rooms[1] } else { d.rooms[0] }).collect();
-                    assert!(!doors.is_empty(), "{tag} {}: a cell with no door", lv.name);
-                    assert!(doors.iter().all(|&o| o < 0 || lv.rooms[o as usize].kind != "cell"), "{tag} {}: a cell entered through another cell", lv.name);
-                    cells += 1;
-                }
-            }
-            // Drinking places serve from a bar to tables on the ground floor.
-            const DRINKING: [&str; 10] = ["Inn", "Tavern", "Alehouse", "Fine dining", "Brewery", "Winery", "Distillery", "Gambling den", "Smugglers' den", "Caravanserai"];
-            if DRINKING.contains(&it.function) {
-                let g = &it.levels[it.entry_level];
-                let bars = g.furniture.iter().filter(|f| f.kind == "bar").count();
-                let tables = g.furniture.iter().filter(|f| f.kind == "table" || f.kind == "booth_table").count();
-                assert!(bars >= 1 && tables >= 2, "{tag}: {bars} bars and {tables} tables on the ground floor");
-                // Guests come in through the taproom and go upstairs from it.
-                let public = |r: i16| r >= 0 && matches!(g.rooms[r as usize].kind, "common room" | "taproom");
-                let front = g.doors.iter().find(|d| d.kind == "front").expect("front door");
-                assert!(public(front.rooms[0]), "{tag}: the front door opens into the {}", g.rooms[front.rooms[0] as usize].kind);
-                let stair_room = g.cells[it.stairs[1] * it.nx + it.stairs[0]];
-                assert!(public(stair_room), "{tag}: the stairs are in the {}", g.rooms[stair_room.max(0) as usize].kind);
-                drinking += 1;
-            }
-            let st = it.stairs;
-            let on_stairs = |i: usize, j: usize| i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3];
-            for lv in &it.levels {
-                if lv.has_stairs {
-                    for j in st[1]..st[1] + st[3] {
-                        for i in st[0]..st[0] + st[2] {
-                            assert!(lv.cells[j * nx + i] >= 0, "{tag} {}: stairs outside the building", lv.name);
-                        }
-                    }
-                }
-                let fronts = lv.doors.iter().filter(|d| d.kind == "front").count();
-                assert_eq!(fronts, if lv.z == 0 { 1 } else { 0 }, "{tag} {}: {fronts} front doors", lv.name);
-                // The front door opens onto open ground, not into a neighbouring building.
-                if let Some(d) = lv.doors.iter().find(|d| d.kind == "front") {
-                    let (x0, y0, x1) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize, d.a[0].max(d.b[0]) as isize);
-                    let sq: [(isize, isize); 2] = if x0 == x1 { [(x0 - 1, y0), (x0, y0)] } else { [(x0, y0 - 1), (x0, y0)] };
-                    let outside = sq.into_iter().find(|&(i, j)| i < 0 || j < 0 || i >= nx as isize || j >= ny as isize || lv.cells[j as usize * nx + i as usize] < 0).expect("door on an outside wall");
-                    let p = interior::to_world(&it, outside.0 as f64 + 0.5, outside.1 as f64 + 0.5);
-                    let own = id.strip_prefix(&format!("b:{si}:")).and_then(|k| k.parse::<usize>().ok());
-                    let hit = buckets.get(&((p[0] / 100.0).floor() as i64, (p[1] / 100.0).floor() as i64)).into_iter().flatten().find(|&&k| Some(k) != own && geom::contains(&l.buildings[k].poly, p));
-                    assert!(hit.is_none(), "{tag}: the front door opens into building {}", hit.unwrap());
-                }
-                // Squares either side of each door.
-                let door_sq = |d: &interior::Door| -> Vec<(isize, isize)> {
-                    let (x0, y0, x1) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize, d.a[0].max(d.b[0]) as isize);
-                    if x0 == x1 { vec![(x0 - 1, y0), (x0, y0)] } else { vec![(x0, y0 - 1), (x0, y0)] }
-                };
-                let inb = |(i, j): (isize, isize)| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny;
-                let mut blocked = vec![false; nx * ny];
-                for f in &lv.furniture {
-                    for j in f.y as usize..(f.y + f.h) as usize {
-                        for i in f.x as usize..(f.x + f.w) as usize {
-                            assert!(!lv.has_stairs || !on_stairs(i, j), "{tag} {}: {} on the stairs", lv.name, f.name);
-                            assert!(!lv.doors.iter().any(|d| door_sq(d).contains(&(i as isize, j as isize))), "{tag} {}: {} in a doorway", lv.name, f.name);
-                            if f.blocks_move {
-                                blocked[j * nx + i] = true;
-                            }
-                        }
-                    }
-                }
-                // Flood over open floor from the stairs, crossing between rooms only at doors.
-                let door_between = |a: (usize, usize), b: (usize, usize)| {
-                    lv.doors.iter().any(|d| {
-                        let s = door_sq(d);
-                        s.contains(&(a.0 as isize, a.1 as isize)) && s.contains(&(b.0 as isize, b.1 as isize))
-                    })
-                };
-                // From the stairs (or, above the main stairs, every spiral stair).
-                let starts: Vec<usize> = if lv.has_stairs {
-                    vec![st[1] * nx + st[0]]
-                } else {
-                    lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).collect()
-                };
-                let mut seen = vec![false; nx * ny];
-                let mut stack = starts.clone();
-                for &k in &starts {
-                    seen[k] = true;
-                }
-                while let Some(k) = stack.pop() {
-                    let (i, j) = (k % nx, k / nx);
-                    for (di, dj) in [(1isize, 0isize), (-1, 0), (0, 1), (0, -1)] {
-                        let (a, b) = (i as isize + di, j as isize + dj);
-                        if !inb((a, b)) {
-                            continue;
-                        }
-                        let q = b as usize * nx + a as usize;
-                        if seen[q] || lv.cells[q] < 0 || blocked[q] {
-                            continue;
-                        }
-                        if lv.cells[q] != lv.cells[k] && !door_between((i, j), (a as usize, b as usize)) {
-                            continue;
-                        }
-                        seen[q] = true;
-                        stack.push(q);
-                    }
-                }
-                for d in &lv.doors {
-                    let reached = door_sq(d).into_iter().filter(|&p| inb(p)).any(|(i, j)| seen[j as usize * nx + i as usize]);
-                    assert!(reached, "{tag} {}: a {} door is cut off", lv.name, d.kind);
-                }
-                for (ri, room) in lv.rooms.iter().enumerate() {
-                    let open = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && !blocked[k]);
-                    let reached = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && seen[k]);
-                    assert!(!open || reached, "{tag} {}: the {} is unreachable", lv.name, room.kind);
-                }
-                // Floors with corridors: no room is reached through more than one other room (a
-                // guardroom is a way through, as for cells).
-                let circ = |r: usize| matches!(lv.rooms[r].kind, "hall" | "corridor" | "landing" | "great hall" | "mess hall" | "guardroom");
-                if lv.rooms.len() >= 8 && (0..lv.rooms.len()).any(circ) {
-                    let mut hops = vec![usize::MAX; lv.rooms.len()];
-                    let mut q = std::collections::VecDeque::new();
-                    for r in (0..lv.rooms.len()).filter(|&r| circ(r)) {
-                        hops[r] = 0;
-                        q.push_back(r);
-                    }
-                    while let Some(r) = q.pop_front() {
-                        for d in &lv.doors {
-                            let [a, b] = d.rooms;
-                            let other = if a == r as i16 { b } else if b == r as i16 { a } else { continue };
-                            if other >= 0 && hops[other as usize] == usize::MAX {
-                                hops[other as usize] = hops[r] + 1;
-                                q.push_back(other as usize);
-                            }
-                        }
-                    }
-                    for (ri, room) in lv.rooms.iter().enumerate() {
-                        if room.squares > 0 && hops[ri] != usize::MAX {
-                            assert!(hops[ri] <= 2, "{tag} {}: the {} is {} rooms from a corridor", lv.name, room.kind, hops[ri] - 1);
-                        }
-                    }
-                }
-            }
+            let (ms, drinks, n) = check_interior(&world, &t0, &l, si, &id, &buckets);
+            worst_ms = worst_ms.max(ms);
+            drinking += drinks as usize;
+            cells += n;
             checked += 1;
         }
     }
@@ -734,6 +568,191 @@ fn interiors_guarantee() {
     assert!(cells > 50, "too few prison cells checked ({cells})");
     // The M5 budget (an interior opens within 300 ms); typical is well under 1 ms.
     assert!(worst_ms < 300.0, "slowest interior took {worst_ms:.1} ms");
+}
+
+/// A layout's roofed buildings by 100-ft bucket, for "does this door open into a neighbour's wall".
+fn building_buckets(l: &worldgen::town::Layout) -> std::collections::HashMap<(i64, i64), Vec<usize>> {
+    use worldgen::town::Structure;
+    let mut buckets: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
+    for (k, b) in l.buildings.iter().enumerate() {
+        if b.structure != Structure::Roofed {
+            continue;
+        }
+        let (x0, y0, x1, y1) = b.poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+        for by in (y0 / 100.0).floor() as i64..=(y1 / 100.0).floor() as i64 {
+            for bx in (x0 / 100.0).floor() as i64..=(x1 / 100.0).floor() as i64 {
+                buckets.entry((bx, by)).or_default().push(k);
+            }
+        }
+    }
+    buckets
+}
+
+/// The rules every interior keeps (`interiors_guarantee`): building or tower `id` of layout `si`
+/// (`l`). Returns how long it took (ms), whether it is a drinking place, and its prison cells.
+fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout, si: usize, id: &str, buckets: &std::collections::HashMap<(i64, i64), Vec<usize>>) -> (f64, bool, usize) {
+    use worldgen::interior;
+    use worldgen::town::geom;
+    let (mut drinking, mut cells) = (false, 0);
+    let bi = &id;
+    let t = std::time::Instant::now();
+    let it = interior::generate_id(&world, &t0, &id).expect("enterable");
+    let ms = t.elapsed().as_secs_f64() * 1e3;
+    let (nx, ny) = (it.nx, it.ny);
+    let tag = format!("{bi} ({})", it.function);
+    assert!(it.levels.len() >= 2, "{tag}: only {} level", it.levels.len());
+    // One chapel per building; spiral stairs on the same square on every level with them.
+    let chapels = it.levels.iter().flat_map(|lv| lv.rooms.iter()).filter(|r| r.kind == "chapel").count();
+    assert!(chapels <= 1, "{tag}: {chapels} chapels");
+    let spirals: Vec<Vec<(u16, u16)>> = it.levels.iter().map(|lv| lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| (f.x, f.y)).collect()).collect();
+    if let Some(first) = spirals.iter().find(|v| !v.is_empty()) {
+        for v in spirals.iter().filter(|v| !v.is_empty()) {
+            assert_eq!(v, first, "{tag}: spiral stairs move between levels");
+        }
+        assert!(spirals.iter().filter(|v| !v.is_empty()).count() >= 2, "{tag}: spiral stairs on one level only");
+    }
+    // Cells: under 15 ft a side, each with a door onto a corridor or guardroom (never
+    // through another cell).
+    for lv in &it.levels {
+        for (ri, _) in lv.rooms.iter().enumerate().filter(|(_, r)| r.kind == "cell") {
+            let sq: Vec<usize> = (0..it.nx * it.ny).filter(|&k| lv.cells[k] == ri as i16).collect();
+            let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % it.nx), a.1.max(k % it.nx)));
+            let (y0, y1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / it.nx), a.1.max(k / it.nx)));
+            assert!(x1 - x0 < 3 && y1 - y0 < 3, "{tag} {}: a {}x{} ft cell", lv.name, 5 * (x1 - x0 + 1), 5 * (y1 - y0 + 1));
+            let doors: Vec<i16> = lv.doors.iter().filter(|d| d.rooms.contains(&(ri as i16))).map(|d| if d.rooms[0] == ri as i16 { d.rooms[1] } else { d.rooms[0] }).collect();
+            assert!(!doors.is_empty(), "{tag} {}: a cell with no door", lv.name);
+            assert!(doors.iter().all(|&o| o < 0 || lv.rooms[o as usize].kind != "cell"), "{tag} {}: a cell entered through another cell", lv.name);
+            cells += 1;
+        }
+    }
+    // Drinking places serve from a bar to tables on the ground floor.
+    const DRINKING: [&str; 10] = ["Inn", "Tavern", "Alehouse", "Fine dining", "Brewery", "Winery", "Distillery", "Gambling den", "Smugglers' den", "Caravanserai"];
+    if DRINKING.contains(&it.function) {
+        let g = &it.levels[it.entry_level];
+        let bars = g.furniture.iter().filter(|f| f.kind == "bar").count();
+        let tables = g.furniture.iter().filter(|f| f.kind == "table" || f.kind == "booth_table").count();
+        assert!(bars >= 1 && tables >= 2, "{tag}: {bars} bars and {tables} tables on the ground floor");
+        // Guests come in through the taproom and go upstairs from it.
+        let public = |r: i16| r >= 0 && matches!(g.rooms[r as usize].kind, "common room" | "taproom");
+        let front = g.doors.iter().find(|d| d.kind == "front").expect("front door");
+        assert!(public(front.rooms[0]), "{tag}: the front door opens into the {}", g.rooms[front.rooms[0] as usize].kind);
+        let stair_room = g.cells[it.stairs[1] * it.nx + it.stairs[0]];
+        assert!(public(stair_room), "{tag}: the stairs are in the {}", g.rooms[stair_room.max(0) as usize].kind);
+        drinking = true;
+    }
+    let st = it.stairs;
+    let on_stairs = |i: usize, j: usize| i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3];
+    for lv in &it.levels {
+        if lv.has_stairs {
+            for j in st[1]..st[1] + st[3] {
+                for i in st[0]..st[0] + st[2] {
+                    assert!(lv.cells[j * nx + i] >= 0, "{tag} {}: stairs outside the building", lv.name);
+                }
+            }
+        }
+        let fronts = lv.doors.iter().filter(|d| d.kind == "front").count();
+        assert_eq!(fronts, if lv.z == 0 { 1 } else { 0 }, "{tag} {}: {fronts} front doors", lv.name);
+        // The front door opens onto open ground, not into a neighbouring building.
+        if let Some(d) = lv.doors.iter().find(|d| d.kind == "front") {
+            let (x0, y0, x1) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize, d.a[0].max(d.b[0]) as isize);
+            let sq: [(isize, isize); 2] = if x0 == x1 { [(x0 - 1, y0), (x0, y0)] } else { [(x0, y0 - 1), (x0, y0)] };
+            let outside = sq.into_iter().find(|&(i, j)| i < 0 || j < 0 || i >= nx as isize || j >= ny as isize || lv.cells[j as usize * nx + i as usize] < 0).expect("door on an outside wall");
+            let p = interior::to_world(&it, outside.0 as f64 + 0.5, outside.1 as f64 + 0.5);
+            let own = id.strip_prefix(&format!("b:{si}:")).and_then(|k| k.parse::<usize>().ok());
+            let hit = buckets.get(&((p[0] / 100.0).floor() as i64, (p[1] / 100.0).floor() as i64)).into_iter().flatten().find(|&&k| Some(k) != own && geom::contains(&l.buildings[k].poly, p));
+            assert!(hit.is_none(), "{tag}: the front door opens into building {}", hit.unwrap());
+        }
+        // Squares either side of each door.
+        let door_sq = |d: &interior::Door| -> Vec<(isize, isize)> {
+            let (x0, y0, x1) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize, d.a[0].max(d.b[0]) as isize);
+            if x0 == x1 { vec![(x0 - 1, y0), (x0, y0)] } else { vec![(x0, y0 - 1), (x0, y0)] }
+        };
+        let inb = |(i, j): (isize, isize)| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny;
+        let mut blocked = vec![false; nx * ny];
+        for f in &lv.furniture {
+            for j in f.y as usize..(f.y + f.h) as usize {
+                for i in f.x as usize..(f.x + f.w) as usize {
+                    assert!(!lv.has_stairs || !on_stairs(i, j), "{tag} {}: {} on the stairs", lv.name, f.name);
+                    assert!(!lv.doors.iter().any(|d| door_sq(d).contains(&(i as isize, j as isize))), "{tag} {}: {} in a doorway", lv.name, f.name);
+                    if f.blocks_move {
+                        blocked[j * nx + i] = true;
+                    }
+                }
+            }
+        }
+        // Flood over open floor from the stairs, crossing between rooms only at doors.
+        let door_between = |a: (usize, usize), b: (usize, usize)| {
+            lv.doors.iter().any(|d| {
+                let s = door_sq(d);
+                s.contains(&(a.0 as isize, a.1 as isize)) && s.contains(&(b.0 as isize, b.1 as isize))
+            })
+        };
+        // From the stairs (or, above the main stairs, every spiral stair).
+        let starts: Vec<usize> = if lv.has_stairs {
+            vec![st[1] * nx + st[0]]
+        } else {
+            lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).collect()
+        };
+        let mut seen = vec![false; nx * ny];
+        let mut stack = starts.clone();
+        for &k in &starts {
+            seen[k] = true;
+        }
+        while let Some(k) = stack.pop() {
+            let (i, j) = (k % nx, k / nx);
+            for (di, dj) in [(1isize, 0isize), (-1, 0), (0, 1), (0, -1)] {
+                let (a, b) = (i as isize + di, j as isize + dj);
+                if !inb((a, b)) {
+                    continue;
+                }
+                let q = b as usize * nx + a as usize;
+                if seen[q] || lv.cells[q] < 0 || blocked[q] {
+                    continue;
+                }
+                if lv.cells[q] != lv.cells[k] && !door_between((i, j), (a as usize, b as usize)) {
+                    continue;
+                }
+                seen[q] = true;
+                stack.push(q);
+            }
+        }
+        for d in &lv.doors {
+            let reached = door_sq(d).into_iter().filter(|&p| inb(p)).any(|(i, j)| seen[j as usize * nx + i as usize]);
+            assert!(reached, "{tag} {}: a {} door is cut off", lv.name, d.kind);
+        }
+        for (ri, room) in lv.rooms.iter().enumerate() {
+            let open = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && !blocked[k]);
+            let reached = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && seen[k]);
+            assert!(!open || reached, "{tag} {}: the {} is unreachable", lv.name, room.kind);
+        }
+        // Floors with corridors: no room is reached through more than one other room (a
+        // guardroom is a way through, as for cells).
+        let circ = |r: usize| matches!(lv.rooms[r].kind, "hall" | "corridor" | "landing" | "great hall" | "mess hall" | "guardroom");
+        if lv.rooms.len() >= 8 && (0..lv.rooms.len()).any(circ) {
+            let mut hops = vec![usize::MAX; lv.rooms.len()];
+            let mut q = std::collections::VecDeque::new();
+            for r in (0..lv.rooms.len()).filter(|&r| circ(r)) {
+                hops[r] = 0;
+                q.push_back(r);
+            }
+            while let Some(r) = q.pop_front() {
+                for d in &lv.doors {
+                    let [a, b] = d.rooms;
+                    let other = if a == r as i16 { b } else if b == r as i16 { a } else { continue };
+                    if other >= 0 && hops[other as usize] == usize::MAX {
+                        hops[other as usize] = hops[r] + 1;
+                        q.push_back(other as usize);
+                    }
+                }
+            }
+            for (ri, room) in lv.rooms.iter().enumerate() {
+                if room.squares > 0 && hops[ri] != usize::MAX {
+                    assert!(hops[ri] <= 2, "{tag} {}: the {} is {} rooms from a corridor", lv.name, room.kind, hops[ri] - 1);
+                }
+            }
+        }
+    }
+    (ms, drinking, cells)
 }
 
 /// M6: every underground site opens where its entrance is on the surface, has at least two
@@ -1394,6 +1413,78 @@ fn agent_edits_guarantee() {
     assert!(!matches!(worldgen::gazetteer::query(world, t0, gc[0], gc[1]), Some(worldgen::gazetteer::Hit::Building { ref id, .. }) if *id == bid(gone)), "the gazetteer still finds the removed building");
     assert!(agent::building_spot(world, t0, &gone.poly, None, "c:99", None).is_ok(), "a removed building's ground is not free");
     assert!(agent::building_spot(world, t0, &smithy.poly, None, "c:99", None).is_err(), "a standing building's ground is free");
+
+    // Castles and walls drawn by hand: a castle has a curtain with towers, a gatehouse and a
+    // keep that is the castle (named as the site), and its towers and buildings keep the
+    // interior rules; a wall gets a gate where a road crosses it, and a building on it is
+    // refused; neither changes the world hash.
+    let n0 = f.edits.created.len();
+    let works = |kind: &str, id: String, poly: Vec<[f64; 2]>, pts: Vec<[f64; 2]>| Created { id, kind: kind.into(), poly, pts, ..Default::default() };
+    let rect_at = |c: [f64; 2]| vec![[c[0] - 150.0, c[1] - 100.0], [c[0] + 150.0, c[1] - 100.0], [c[0] + 150.0, c[1] + 100.0], [c[0] - 150.0, c[1] + 100.0]];
+    let castle_spot = (0..t0.settlements.len() * 8)
+        .map(|k| {
+            let s = &t0.settlements[k / 8];
+            let a = (k % 8) as f64 * std::f64::consts::TAU / 8.0 + 0.3;
+            [s.x + 15_840.0 * libm::cos(a), s.y + 15_840.0 * libm::sin(a)].map(|v| (v / 5.0).round() * 5.0)
+        })
+        .find(|p| t0.sample(p[0], p[1], 20.0) > sea + 20.0 && agent::works_spot(world, t0, &works("castle", "c:98".into(), rect_at(*p), vec![]), "c:98", None).is_ok_and(|s| s.in_way.is_empty()))
+        .expect("open ground for a castle");
+    let mut keep = works("castle", format!("c:{n0}"), rect_at(castle_spot), vec![]);
+    let s = agent::works_spot(world, t0, &keep, &keep.id, None).unwrap();
+    (keep.x, keep.y, keep.name) = (s.at[0], s.at[1], s.name);
+    assert!(keep.check().is_ok() && keep.name.ends_with("Castle"), "a castle drawn by hand is refused: {:?}", keep.check());
+    // A wall across a road, 150 ft each side of it, square to it.
+    let (wall_pts, crossing) = t0
+        .roads
+        .roads
+        .iter()
+        .filter_map(|rc| {
+            let k = rc.pts.len() / 2;
+            let (a, b) = (rc.eval(k, 0.45, 5.0, t0.cell_ft).p, rc.eval(k, 0.55, 5.0, t0.cell_ft).p);
+            let d = geom::sub(b, a);
+            let nrm = geom::mul([-d[1], d[0]], 1.0 / geom::len(d).max(1e-9));
+            let m = geom::lerp(a, b, 0.5);
+            let pts = vec![geom::add(m, geom::mul(nrm, -150.0)), geom::add(m, geom::mul(nrm, 150.0))];
+            let ok = agent::works_spot(world, t0, &works("wall", "c:98".into(), vec![], pts.clone()), "c:98", None).is_ok_and(|s| s.in_way.is_empty());
+            (ok && geom_dist(m, castle_spot) > 2_000.0).then_some((pts, m))
+        })
+        .next()
+        .expect("a road to wall across");
+    let mut wall = works("wall", format!("c:{}", n0 + 1), vec![], wall_pts.clone());
+    let s = agent::works_spot(world, t0, &wall, &wall.id, None).unwrap();
+    (wall.x, wall.y, wall.name) = (s.at[0], s.at[1], s.name);
+    assert!(wall.check().is_ok(), "a wall drawn by hand is refused: {:?}", wall.check());
+    let mut e = f.edits.clone();
+    for c in [&keep, &wall] {
+        let v = serde_json::to_value(c).unwrap();
+        e.apply(&worldgen::world::EditOp::Set { field: "created".into(), key: c.id.clone(), value: v.clone() }).unwrap();
+        assert_eq!(serde_json::to_value(e.created.last().unwrap()).unwrap(), v, "{} changed on the round trip", c.kind);
+    }
+    let ex = Executor::new(World::new(WorldFile { edits: e, ..f.clone() }).unwrap());
+    let (world, t0) = (&ex.world, &ex.t0);
+    assert_eq!(world.hash, base.hash, "castles and walls changed the world hash");
+    let li = agent::layout_of(world, t0, &keep.id).expect("the castle's layout");
+    let l = town::layout(world, t0, li);
+    let fi = town::catalog::index_of("castle").unwrap() as u16;
+    let k = l.buildings.iter().find(|b| b.func == Some(fi)).expect("the castle has no keep");
+    assert_eq!(k.name.as_deref(), Some(keep.name.as_str()), "the keep is not named as the castle");
+    assert!(!l.walls.is_empty() && l.towers.len() >= 3 && l.gate_towers.len() == 2 && l.castles.len() == 1, "the castle's curtain: {} walls, {} towers, {} gate towers", l.walls.len(), l.towers.len(), l.gate_towers.len());
+    assert!(l.walls.iter().flatten().all(|p| geom::contains(&keep.poly, *p)), "the curtain stands outside the outline drawn");
+    let buckets = building_buckets(&l);
+    let ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed).map(|b| format!("b:{li}:{}", b.id)).chain((0..interior::towers(&l).len()).map(|k| format!("t:{li}:{k}"))).collect();
+    assert!(ids.len() >= 5, "too few castle interiors ({ids:?})");
+    for id in &ids {
+        check_interior(world, t0, &l, li, id, &buckets);
+    }
+    let wi = agent::layout_of(world, t0, &wall.id).expect("the wall's layout");
+    let wl = town::layout(world, t0, wi);
+    let gate = wl.gate_towers.chunks(2).find(|g| g.len() == 2 && geom_dist(geom::lerp(g[0], g[1], 0.5), crossing) < 40.0);
+    assert!(gate.is_some(), "no gate where the road crosses the wall: gate towers {:?}, road at {crossing:?}", wl.gate_towers);
+    assert!(wl.towers.len() >= 2, "a wall without towers at its ends");
+    let on_wall = geom::lerp(wall_pts[0], crossing, 0.4);
+    let hut = geom::circle(on_wall, 8.0, 12);
+    assert!(agent::building_spot(world, t0, &hut, None, "c:99", None).is_err_and(|e| e.contains("wall")), "a building on a wall is allowed");
+    assert!(agent::works_spot(world, t0, &works("castle", "c:99".into(), rect_at(castle_spot), vec![]), "c:99", None).is_err(), "a castle over a castle is allowed");
 }
 
 fn geom_dist(a: [f64; 2], b: [f64; 2]) -> f64 {

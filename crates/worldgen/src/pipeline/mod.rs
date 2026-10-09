@@ -142,6 +142,23 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         let json = crate::interior::generate_id(&ex.world, &ex.t0, &id).map(|it| serde_json::to_string(&it).unwrap_or_default()).unwrap_or_default();
         writeln!(out, "interior/{} {} {:016x}", c.id, id, fnv64(json.as_bytes())).unwrap();
     }
+    // Castles and walls drawn by hand: their layouts, first tower's interior and the battlemap
+    // at their point.
+    let works: Vec<(usize, String, [f64; 2])> = ex.world.file.edits.created.iter().enumerate().filter(|(_, c)| (c.kind == "castle" || c.kind == "wall") && !c.removed).map(|(k, c)| (first + k, c.id.clone(), [c.x, c.y])).collect();
+    for (li, id, at) in works {
+        let l = crate::town::layout(&ex.world, &ex.t0, li);
+        let mut h = crate::core::hash::Fnv64::default();
+        h.write(format!("{:?} {:?} {:?} {:?}", l.walls, l.towers, l.gate_towers, l.plazas).as_bytes());
+        for b in &l.buildings {
+            h.write(format!("{} {:?} {:?} {} {:?} {}", b.id, b.poly, b.func, b.floors, b.name, b.pad_ft).as_bytes());
+        }
+        let json = crate::interior::generate_id(&ex.world, &ex.t0, &format!("t:{li}:0")).map(|it| serde_json::to_string(&it).unwrap_or_default()).unwrap_or_default();
+        let size = ex.world.geom.tile_size_ft(max_level);
+        let key = TileKey::surface(max_level, (at[0] / size) as u32, (at[1] / size) as u32);
+        let chunk = ex.battlemap(key);
+        let bytes = crate::battlemap::pack(&ex.world, &chunk);
+        writeln!(out, "works/{id} {:016x} {:016x} {:016x}", h.finish(), fnv64(json.as_bytes()), fnv64(&bytes)).unwrap();
+    }
     // The world's own buildings edited (a world without edits): in the largest settlement, the
     // first residence taken away, the next made a three-storey smithy; its layout, the smithy's
     // interior and the battlemap where the first stood.

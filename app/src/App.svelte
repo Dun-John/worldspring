@@ -37,6 +37,8 @@
   import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
   import { CrossingTool, crossingProblem, defaultCross, type CrossSettings } from './editor/crossing';
   import { ClearAreaTool, type ClearShape } from './editor/clearArea';
+  import { WorksTool, defaultWorks, type WorksSettings } from './editor/works';
+  import type { BuildMode } from './ui/BuildPanel.svelte';
   import { defaultScatter, newObjectId, ScatterTool, type ScatterSettings } from './editor/scatter';
   import { shrink } from './render/customAtlas';
   import Notebook, { blankNpc, blankPlot, newNoteId, type Here } from './ui/Notebook.svelte';
@@ -848,7 +850,8 @@
   /** The map's pointer goes to the first of: a place being picked, a site being placed, the
    * designer, the Build or Scatter tool, play's tools while a session runs. */
   function syncTool() {
-    const buildTool = buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'clear' ? buildArmed.clear : buildArmed.tool);
+    const buildTool =
+      buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
     view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
@@ -916,7 +919,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: 'npcs' | 'plots' | 'places', id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: 'npcs' | 'plots' | 'places', id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -964,9 +967,15 @@
   /** One of the world's own being changed: its name, and the menu's choices as it was opened
    * (only what differs from them is changed). */
   let genEditing = $state<{ name: string; was: BuildSettings } | null>(null);
-  let buildArmed: { tool: BuildTool; cross: CrossingTool; clear: ClearAreaTool } | null = null;
-  /** The Build tab draws buildings, puts crossings down, or clears the world's own buildings. */
-  let buildMode = $state<'building' | 'crossing' | 'clear'>('building');
+  let buildArmed: { tool: BuildTool; cross: CrossingTool; clear: ClearAreaTool; works: WorksTool } | null = null;
+  /** The Build tab draws buildings, castles or walls, puts crossings down, or clears the world's
+   * own buildings. */
+  let buildMode = $state<BuildMode>('building');
+  let works = $state<WorksSettings>(defaultWorks());
+  /** The castle or wall drawn by hand being changed (its created id). */
+  let worksEditing = $state<string | null>(null);
+  /** The world's own buildings standing where a castle or wall would go: take them away with it? */
+  let inWayAsk = $state<{ what: string; count: number; choose: (go: boolean) => void } | null>(null);
   let clearShape = $state<ClearShape>('box');
   let cross = $state<CrossSettings>(defaultCross());
   /** The crossing put down by hand being changed (its id). */
@@ -1001,18 +1010,113 @@
       drawn: (poly) => void clearArea(poly),
       hint: (t) => toast(t),
     });
-    buildArmed = { tool, cross: crossTool, clear };
+    const worksTool = new WorksTool({
+      mode: () => (buildMode === 'castle' ? 'castle' : 'wall'),
+      settings: () => works,
+      editing: () => worksSite(worksEditing),
+      castle: (poly, gate) => void placeWorks({ kind: 'castle', poly, ...(gate != null ? { gate } : {}) }),
+      wall: (pts, gates, closed) => void placeWorks({ kind: 'wall', pts, ...(gates.length ? { gates } : {}), ...(closed ? { closed } : {}) }),
+      gates: (change) => {
+        const c = worksSite(worksEditing);
+        if (!c) return;
+        void placeWorks('gate' in change ? { kind: 'castle', poly: c.poly, gate: change.gate } : { kind: 'wall', pts: change.pts, gates: change.gates.length ? change.gates : undefined }, true);
+      },
+      hint: (t) => toast(t),
+    });
+    buildArmed = { tool, cross: crossTool, clear, works: worksTool };
+  }
+
+  /** A castle or wall drawn by hand, by its created id. */
+  function worksSite(id: string | null): Created | null {
+    const c = id ? edits.created?.find((x) => x.id === id) : null;
+    return c && !c.removed && (c.kind === 'castle' || c.kind === 'wall') ? c : null;
+  }
+
+  /** A castle's or wall's options from the menu (its outline, line and gates aside). */
+  function worksOptions(kind: string): Partial<Created> {
+    if (kind === 'wall') return works.closed ? { closed: true } : {};
+    const o: Partial<Created> = {};
+    if (!works.keep) o.keep = false;
+    if (!works.yardBuildings) o.yard_buildings = false;
+    if (works.ruin) o.structure = 'ruin';
+    return o;
+  }
+
+  /** A castle or wall drawn, or the one being changed drawn again or given new options or gates
+   * (`keepOpts`: with its options as they were): checked by the generator; the world's own
+   * buildings in its way go with it, in the same change, if the user says so. */
+  async function placeWorks(shape: Partial<Created> & { kind: 'castle' | 'wall' }, keepOpts = false) {
+    const tool = buildArmed?.works;
+    const done = () => {
+      if (tool) tool.pending = null;
+    };
+    const editing = worksSite(worksEditing);
+    if (editing && editing.kind !== shape.kind) return void (done(), toast(`Draw a ${editing.kind} to change it`));
+    const id = editing?.id ?? `c:${(edits.created ?? []).length}`;
+    const opts: Partial<Created> =
+      keepOpts && editing ? { keep: editing.keep, yard_buildings: editing.yard_buildings, structure: editing.structure, closed: editing.closed } : worksOptions(shape.kind);
+    const draft = { id, x: 0, y: 0, name: '', ...opts, ...shape } as Created;
+    for (const k of Object.keys(draft) as (keyof Created)[]) if (draft[k] === undefined) delete draft[k];
+    if (!editing && existingSite(edits, draft, [0, 0])) {
+      done();
+      return toast('That is already here');
+    }
+    const spot = await view.gen.worksSpot(draft);
+    if (!spot) return void (done(), toast('The map could not answer: try again'));
+    if ('error' in spot) return void (done(), toast(spot.error.charAt(0).toUpperCase() + spot.error.slice(1)));
+    const what = shape.kind;
+    if (spot.in_way.length) {
+      const go = await new Promise<boolean>((choose) => (inWayAsk = { what, count: spot.in_way.length, choose }));
+      inWayAsk = null;
+      if (!go) return void done();
+    }
+    done();
+    const name = works.name.trim() || editing?.name || spot.name;
+    const c: Created = { ...draft, x: spot.x, y: spot.y, name };
+    const all = { ...(edits.buildings ?? {}) };
+    for (const b of spot.in_way) all[b.id] = { at: b.at, removed: true };
+    const buildings = spot.in_way.length ? all : edits.buildings;
+    if (editing) {
+      const created = (edits.created ?? []).map((x) => (x.id === c.id ? c : x));
+      applyEdits({ ...edits, created, buildings }, { tool: 'update_feature', id: c.id, name }, 'user');
+    } else {
+      // (Numbered as it is added: another site may have come in meanwhile.)
+      c.id = `c:${(edits.created ?? []).length}`;
+      applyEdits({ ...edits, created: [...(edits.created ?? []), c], buildings }, { tool: 'create_feature', id: c.id, kind: what, name }, 'user');
+    }
+    works.name = '';
+  }
+
+  /** The castle or wall being changed gets the menu's options (its outline, line and gates stay). */
+  function saveWorks() {
+    const c = worksSite(worksEditing);
+    if (!c) return;
+    const { keep: _k, yard_buildings: _y, structure: _s, closed: _c, ...rest } = c;
+    void placeWorks({ ...rest, ...worksOptions(c.kind), kind: c.kind as 'castle' | 'wall' });
+  }
+
+  /** Open the build menu on a castle or wall drawn by hand. */
+  function editWorks(id: string) {
+    const c = worksSite(id);
+    if (!c) return;
+    go('edit', 'build');
+    setBuildMode(c.kind as 'castle' | 'wall');
+    worksEditing = c.id;
+    works = { castleShape: (c.poly?.length ?? 0) === 4 ? 'rect' : 'poly', keep: c.keep !== false, yardBuildings: c.yard_buildings !== false, ruin: c.structure === 'ruin', closed: !!c.closed, name: '' };
   }
 
   function disarmBuild() {
     buildArmed = null;
+    worksEditing = null;
     buildEditing = null;
     genEditing = null;
     crossEditing = null;
   }
 
-  function setBuildMode(m: 'building' | 'crossing' | 'clear') {
+  function setBuildMode(m: BuildMode) {
     buildMode = m;
+    worksEditing = null;
+    buildArmed?.works.reset();
     buildEditing = null;
     genEditing = null;
     crossEditing = null;
@@ -1441,9 +1545,11 @@
             onEdit: () => editBuilding(id),
             onGoIn: c.structure === 'ruin' ? undefined : () => void view.enterBuilding(`b:${li}:0`),
           }
-        : {};
+        : c.kind === 'castle' || c.kind === 'wall'
+          ? { onEdit: () => editWorks(id) }
+          : {};
     const hiddenNow = (edits.hidden ?? []).includes(id);
-    const under = !['tower', 'camp', 'waystation', 'building'].includes(c.kind);
+    const under = !['tower', 'camp', 'waystation', 'building', 'castle', 'wall'].includes(c.kind);
     return {
       ...drawn,
       hidden: hiddenNow,
@@ -1831,13 +1937,15 @@
       const kind = order[(order.indexOf(cross.kind) + 1) % order.length];
       cross = { kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
     },
+    buildWorks: (m) => setBuildMode(m),
     buildShape: (k) => {
+      if (buildMode === 'castle' && k !== 'tower') return void (works.castleShape = k);
       if (buildMode !== 'building') setBuildMode('building');
       // A round tower is a wizard's tower unless it was something else already.
       build = k === 'tower' && build.func === 'house' ? { ...build, shape: k, func: 'wizard_tower', floors: Math.max(build.floors, 4) } : { ...build, shape: k };
     },
-    buildFinish: () => buildArmed?.tool.finish(),
-    buildBack: () => buildArmed?.tool.back(),
+    buildFinish: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.finish() : buildArmed?.tool.finish()),
+    buildBack: () => (buildMode === 'castle' || buildMode === 'wall' ? buildArmed?.works.back() : buildArmed?.tool.back()),
     designMode: (m) => (designSettings = { ...designSettings, mode: m }),
     playTool: (t) => play.setTool(t),
     removeTokens: () => play.removeSelected(),
@@ -1852,6 +1960,8 @@
         return true;
       },
       () => !!buildArmed?.tool.reset(),
+      () => !!buildArmed?.works.reset(),
+      () => (worksEditing ? ((worksEditing = null), true) : false),
       () => !!buildArmed?.cross.reset(),
       () => (crossEditing ? ((crossEditing = null), true) : false),
       () => (placeArmed ? (disarmPlace(), true) : false),
@@ -2124,13 +2234,16 @@
             funcs={buildFuncs}
             editing={buildEditing ? (genEditing?.name ?? drawnBuilding(buildEditing)?.name ?? null) : null}
             mode={buildMode}
+            bind:works
+            worksEditing={worksSite(worksEditing)?.name ?? null}
+            onWorksSave={saveWorks}
             bind:clearShape
             bind:cross
             crossEditing={crossEditing ? (edits.crossings?.[crossEditing]?.kind ?? null) : null}
             {near}
             {peek}
             onSave={saveBuilding}
-            onDone={() => ((buildEditing = null), (genEditing = null), (crossEditing = null))}
+            onDone={() => ((buildEditing = null), (genEditing = null), (crossEditing = null), (worksEditing = null))}
             onMode={setBuildMode}
             onCrossSave={saveCrossing}
             onCrossRemove={removeCrossing}
@@ -2292,6 +2405,23 @@
         Keep yours, take the {what}’s, or start clean; nothing is mixed.
       </p>
       <p class="ws-muted">If yours give way, Undo brings them back while this page is open. Download them to keep a copy.</p>
+    </Choice>
+  {/if}
+  {#if inWayAsk}
+    {@const ask = inWayAsk}
+    <Choice
+      title="Buildings in the way"
+      icon={ask.what === 'castle' ? 'castle' : 'wall'}
+      buttons={[
+        { label: 'Cancel', value: 'no', kind: 'quiet' },
+        { label: `Take ${ask.count === 1 ? 'it' : 'them'} away and build`, value: 'yes', kind: 'primary' },
+      ]}
+      onChoose={(v) => ask.choose(v === 'yes')}
+    >
+      <p>
+        {ask.count} of the town’s own {ask.count === 1 ? 'building stands' : 'buildings stand'} where the {ask.what} would go. Take {ask.count === 1 ? 'it' : 'them'} away with
+        it? Undo brings {ask.count === 1 ? 'it' : 'them'} back.
+      </p>
     </Choice>
   {/if}
   {#if restoreAsk}

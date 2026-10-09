@@ -118,8 +118,25 @@ export interface Created {
   roof?: RoofStyle;
   tint?: Tint;
   structure?: 'roofed' | 'ruin';
+  /** A castle drawn by hand (its outline in `poly`, `structure` too): the side its gate is in
+   * (corner `gate` to the next; else facing the nearest road), a keep, buildings round the yard
+   * (both by default). */
+  gate?: number;
+  keep?: boolean;
+  yard_buildings?: boolean;
+  /** A wall drawn by hand: its line (world ft), the corners that are gates, a ring or not. */
+  pts?: [number, number][];
+  gates?: number[];
+  closed?: boolean;
   removed?: boolean;
 }
+
+/** Widest a castle may be and narrowest (ft), longest a wall (`worldgen::world`), how far past
+ * its outline a castle's or wall's layout reaches (`WORKS_MARGIN_FT`). */
+export const CASTLE_MAX_FT = 600;
+export const CASTLE_MIN_FT = 80;
+export const WALL_MAX_FT = 3000;
+export const WORKS_MARGIN_FT = 40;
 
 export type RoofStyle = 'hip' | 'battlements' | 'cone';
 export const ROOFS: RoofStyle[] = ['hip', 'battlements', 'cone'];
@@ -342,6 +359,7 @@ export type Ask =
   | { op: 'bedit'; id: string; change: string }
   /** The generated buildings with their middle inside a polygon (`agent::generated_buildings_in`). */
   | { op: 'bin'; poly: [number, number][] }
+  | { op: 'works'; site: Created }
   /** An underground site as a design (the one given, else its own), changed by `action`, with
    * what it builds and its problems (`under::design::design_json`). */
   | { op: 'design'; id: string; design?: string; action?: string }
