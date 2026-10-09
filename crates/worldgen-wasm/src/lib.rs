@@ -198,6 +198,25 @@ impl Ctx {
         }
     }
 
+    /// A town's plan for the ward editor (`town::wards::plan_json`): patches, corners, walls,
+    /// or `{error}`.
+    pub fn town_plan_json(&self, layout: u32) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::town::wards::plan_json(&self.world, t0, layout as usize).unwrap_or_else(|e| serde_json::json!({ "error": e })).to_string(),
+            None => "null".into(),
+        }
+    }
+
+    /// A town changed as asked (`town::wards::TownRequest` JSON), without changing the edits:
+    /// `{edit, report}` (the town's edit then, null: as generated; what it does, with the
+    /// rectangles to draw again) or `{error}`.
+    pub fn town_change_json(&self, layout: u32, request: &str) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::town::wards::change_json(&self.world, t0, layout as usize, request),
+            None => "null".into(),
+        }
+    }
+
     /// The generated buildings with their middle inside a polygon (`[[x, y], …]` JSON, ft):
     /// `[{id, at}]` (`agent::generated_buildings_in`).
     pub fn buildings_in_json(&self, poly: &str) -> String {

@@ -216,6 +216,19 @@ export interface Edits {
   crossings?: Record<string, Crossing>;
   /** `b:<layout>:<id>` → one of the world's own buildings changed or taken away. */
   buildings?: Record<string, BuildingEdit>;
+  /** `<layout>` → a town laid out anew by hand (the ward editor). */
+  towns?: Record<string, TownEdit>;
+}
+
+/** A town's layout changed by hand (`worldgen::world::TownEdit`): `at` is the town's centre (the
+ * edit is set aside if the town is laid out elsewhere); corners of its patches moved (`v` the
+ * plan's corner, `from` where it was planned), patches set (`p` the plan's patch, `at` its middle
+ * as planned), walls on or off. */
+export interface TownEdit {
+  at: [number, number];
+  corners?: { v: number; from: [number, number]; to: [number, number] }[];
+  patches?: { p: number; at: [number, number]; ward?: string; lots?: string; merge_with?: number; reroll?: number }[];
+  walls?: boolean;
 }
 
 /** A generated building changed by hand (`worldgen::world::BuildingEdit`): `at` is its middle

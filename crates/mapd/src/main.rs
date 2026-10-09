@@ -14,6 +14,7 @@ mod notebook;
 mod scatter;
 mod store;
 mod tools;
+mod towns;
 mod worker;
 mod works;
 

@@ -285,6 +285,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
         bridges: Vec::new(),
         piers: Vec::new(),
         gate_towers,
+        extra_towers: Vec::new(),
         monuments: Vec::new(),
         quarters: Vec::new(),
         castles,
@@ -384,6 +385,7 @@ fn scratch(index: u32) -> Layout {
         bridges: Vec::new(),
         piers: Vec::new(),
         gate_towers: Vec::new(),
+        extra_towers: Vec::new(),
         monuments: Vec::new(),
         quarters: Vec::new(),
         castles: Vec::new(),
@@ -569,7 +571,7 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
         if !hit(s.x, s.y, super::reach(s)) {
             continue;
         }
-        let town = super::base_layout(world, t0, i);
+        let town = super::generated_layout(world, t0, i);
         // (Its paved side streets and alleys, class 3, the wall closes.)
         for (pts, _, _) in town.roads.iter().filter(|r| r.1 != 3) {
             lanes.extend(pts.windows(2).map(|q| (sub(q[0], center), sub(q[1], center))));

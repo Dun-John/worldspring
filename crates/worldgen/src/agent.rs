@@ -907,6 +907,7 @@ pub fn overview(world: &World, t0: &T0) -> Value {
         // Changes to the world's own buildings that no longer apply (the town was laid out anew).
         "buildings_set_aside": town::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
         "designs_set_aside": crate::interior::design::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
+        "towns_set_aside": town::wards::set_aside(world, t0).into_iter().map(|(layout, why)| json!({ "layout": layout, "why": why })).collect::<Vec<_>>(),
     })
 }
 
@@ -1021,6 +1022,9 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         v["layout"] = layout_summary(world, t0, &l);
         if li < t0.settlements.len() {
             v["roads_to"] = json!(roads_from(world, t0, li));
+            if t0.settlements[li].tier >= crate::t0::settle::Tier::Town {
+                v["layout"]["wards_edited"] = json!(town::wards::edit_of(world, t0, li).is_some());
+            }
         }
     } else if head == "b" && nums.len() == 2 {
         let l = town::layout(world, t0, nums[0]);

@@ -47,6 +47,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `b:<layout>:<i>` | `b:0:57` | A building in a settlement or site |
 | `d:<layout>:<q>` | `d:0:3` | A district |
 | `t:<layout>:<k>` | `t:0:2` | A wall tower |
+| `<layout>` | `0` | A town's entry in `towns` (the ward editor): its layout number; its patches and corners are numbered by `get_town_plan` |
 | `u:<layout>:<k>` | `u:312:0` | An underground site: dungeon, crypt, cave, mine or lava tube |
 | `w:<layout>:<sx>:<sy>` | `w:0:2:1` | A sewer section |
 | `k:<layout>:…` | | A keep's dungeon |
@@ -89,6 +90,8 @@ A summary of the world:
   because the town was laid out anew (each with why);
 - `designs_set_aside`: buildings' interiors designed by hand that are not built (the building's footprint or
   storeys changed, or it is gone, or the design breaks a rule now), each with why;
+- `towns_set_aside`: towns laid out anew by hand whose changes no longer apply, whole or in part (the town was
+  laid out elsewhere after a sketch change, a corner or patch is not where it was planned), each with why;
 - `world`: its hash, for the `world` parameter of other tools.
 
 | Parameter | Type | Default | |
@@ -950,6 +953,79 @@ level -1: Cellar
 { "name": "set_site_design", "arguments": { "id": "b:23:70", "text": "level 0\ndoors: 4,2 e; 2,4 s front; 1,4 s back" } }
 ```
 > *"Give the house by the well a back door out of its main room."*
+
+## Towns laid out anew (the ward editor)
+
+A town or city is laid out on patches, as in watabou's city generator: Voronoi cells that share their corners,
+each a ward (merchant, craft, common, noble, slum, docks, military, temple, castle, the market square, parks,
+farms outside the walls) cut into lots. The ward editor changes that layout without starting it again:
+
+- **Corners move** one at a time or by brushes, as the generator's Warp tools move them: every patch that meets a
+  corner bends with it. A corner goes only as far as keeps every patch round it convex (all the way, half, a
+  quarter, or not at all), and at most `max_move_ft` (one patch's spacing) from where it was laid out. Corners on
+  the water or a river are pinned. Gates move with their corner, and the roads come in to them.
+- **Patches** take another ward (`empty` leaves the ground open, for buildings of your own), a lot size (`small`,
+  `medium`, `large`, `huge`: the target lot area, times the ward's usual), a merge with a neighbour (it joins
+  that district: same ward and lots, no street between; not across a main street), or a new roll (`reroll`: its
+  lots and buildings drawn again). A `castle` ward builds a curtain wall with towers, a gatehouse facing the town's
+  middle and a keep that is the castle.
+- **Walls** go up round a town that had none, or come down (the strip they stood on is a street round the town;
+  the gates stay where the roads come in).
+- **What stays:** the town's plan (gates, main streets, districts and their names, the towers along each wall).
+  Only the patches touched are built again. A building that comes out as it was generated keeps its id
+  (`b:<layout>:<id>`) and everything decided about it; new ones get ids of 1,000,000 and up (by patch), so a
+  change to one ward never renumbers another's. A business the town lost with the buildings taken away goes to a
+  new building where one fits; `functions_lost` lists the ones that found none. Renames, notes, NPCs and building
+  changes on buildings that keep their ids stay with them.
+- Villages have no wards (they grow along their roads). Draw roads before editing towns: a road drawn into a town
+  lays it out anew (from the sketch) and sets its ward edits aside.
+
+### `get_town_plan`
+A town's plan: `patches` (`patch`, `at`, `corners`, `ward`, `ward_generated` when set by hand, `in_town`,
+`district` with its id, `neighbours`, `lots`, `merged_with`, `reroll`, `lots_like` for a patch sharing another's
+lots), `corners` (`corner`, `at`, `planned` when moved, `pinned`, `gate`, `wall`), `max_move_ft`, `walls`
+(`built`, `generated`), `edited`, `set_aside`.
+
+| Parameter | Type | Default | |
+|---|---|---|---|
+| `id` | string | required | The town or city (its feature id) |
+| `within` | `[x0_ft, y0_ft, x1_ft, y1_ft]` | | Only the patches whose middle is inside, and their corners |
+
+```json
+{ "name": "get_town_plan", "arguments": { "id": "city:bab44567", "within": [1288000, 2229000, 1289500, 2230500] } }
+```
+
+### `edit_town`
+Change a town's layout. Every field is optional; they apply in this order: `reset`, `moves`, `equalize`,
+`relax`, `patches`, `walls`. The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`, and the
+ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken_away`), `walls` (`built`, `towers`,
+`gates`), `functions_lost`, `unmerged` (merges dropped because a ward no longer allows them), `rects` (where the
+map is drawn again).
+
+| Parameter | Type | Default | |
+|---|---|---|---|
+| `id` | string | required | The town or city |
+| `moves` | `[{corner, to \| by \| as_generated}]` | | `to: [x_ft, y_ft]`, or `by: [dx_ft, dy_ft]` from where it stands now; `as_generated` puts it back |
+| `equalize` | `[patch]` | | Pull each patch toward a regular polygon (its corners move) |
+| `relax` | `{at, radius_ft, amount}` | | Each corner within `radius_ft` of `at` toward the middle of its neighbours, by `amount` (0–1, default 0.5) at the centre, less toward the edge |
+| `patches` | `[{patch, ward, lots, merge_with, reroll, as_generated}]` | | `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `"auto"` puts a field back |
+| `walls` | `true` \| `false` \| `"auto"` | | Walls up, down, or as generated |
+| `reset` | `"all"` \| `"corners"` \| `"patches"` | | Back to as generated |
+| `dry_run` | boolean | `false` | Report without changing anything |
+
+```json
+{ "name": "edit_town", "arguments": { "id": "city:bab44567", "moves": [{ "corner": 41, "by": [40, 25] }], "patches": [{ "patch": 2, "ward": "castle" }] } }
+```
+> *"Put a castle on the ward east of Agentholm's market, and take its walls down."* · *"Make the docks' lots
+> bigger and round off the square by the north gate."*
+
+| Error | Why |
+|---|---|
+| `a village has no wards` | Villages grow along their roads |
+| `it is on the water or a river: it stays put` | A pinned corner |
+| `that is N ft from where it was laid out: at most M` | Past one patch's spacing |
+| `patch q is not next to patch p` / `a main street runs between them` / `only wards built on lots merge` | A merge refused |
+| `the town was laid out anew: …` | The edit was made before a sketch change moved the town or its patches |
 
 ---
 

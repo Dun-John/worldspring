@@ -2361,7 +2361,8 @@ const TOWER_TOP_FT: f32 = 30.0;
 
 /// Wall and gate towers of a layout: (centre, radius ft, gate tower).
 pub fn towers(l: &Layout) -> Vec<(P, f64, bool)> {
-    l.towers.iter().map(|&t| (t, 11.0, false)).chain(l.gate_towers.iter().map(|&t| (t, 15.0, true))).collect()
+    let extra = l.extra_towers.iter().map(|&(t, gate)| (t, if gate { 15.0 } else { 11.0 }, gate));
+    l.towers.iter().map(|&t| (t, 11.0, false)).chain(l.gate_towers.iter().map(|&t| (t, 15.0, true))).chain(extra).collect()
 }
 
 /// A wall or gate tower: a guardroom at the foot (its door toward the town, or the castle yard

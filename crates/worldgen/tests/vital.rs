@@ -1395,6 +1395,7 @@ fn agent_edits_guarantee() {
     let mut file: WorldFile = serde_json::from_str(&world_json(1)).unwrap();
     let base = World::new(file.clone()).unwrap();
     let t0 = worldgen::t0::T0::generate(&base);
+    ward_edits(&base, &t0);
     let sea = base.params().sea_level_ft;
     // Dry open land two miles from a town, clear of every layout.
     let spot = (0..t0.settlements.len() * 8)
@@ -1734,6 +1735,112 @@ fn agent_edits_guarantee() {
     let hut = geom::circle(on_wall, 8.0, 12);
     assert!(agent::building_spot(world, t0, &hut, None, "c:99", None).is_err_and(|e| e.contains("wall")), "a building on a wall is allowed");
     assert!(agent::works_spot(world, t0, &works("castle", "c:99".into(), rect_at(castle_spot), vec![]), "c:99", None).is_err(), "a castle over a castle is allowed");
+}
+
+/// The ward editor (`Edits.towns`) on the largest walled city: one corner moved and one patch
+/// made a castle. Patches away from them keep their buildings (ids, footprints, functions and
+/// names), the districts their names, the wall its towers; the new buildings pass the interior
+/// rules; the castle stands with its keep and towers after every other; the result is
+/// repeatable, round-trips as an edit op and leaves the world hash alone. Walls taken down keep
+/// the gates and every building; walls put up round an unwalled town stand; a stale edit is set
+/// aside; a corner on the water is refused.
+fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::{self, geom, wards};
+    use worldgen::world::{Edits, TownEdit};
+    let n = t0.settlements.len();
+    let plan_of = |li: usize| wards::plan_json(base, t0, li).unwrap();
+    let ci = (0..n).filter(|&i| t0.settlements[i].tier >= Tier::City && plan_of(i)["walls"]["generated"] == true).max_by_key(|&i| t0.settlements[i].population).expect("a walled city");
+    let g = town::layout(base, t0, ci);
+    let plan = plan_of(ci);
+    let spacing = plan["max_move_ft"].as_f64().unwrap();
+    let patches = plan["patches"].as_array().unwrap();
+    let corners = plan["corners"].as_array().unwrap();
+    let at = |v: &serde_json::Value| [v["at"][0].as_f64().unwrap(), v["at"][1].as_f64().unwrap()];
+    let moves = |c: &serde_json::Value| format!(r#"{{"moves":[{{"corner":{},"by":[30,20]}}]}}"#, c["corner"]);
+    let goes = |c: &serde_json::Value| wards::change(base, t0, ci, &serde_json::from_str(&moves(c)).unwrap()).is_ok_and(|(_, r)| r["corners"]["moved"] == 1);
+    let corner = corners.iter().filter(|c| c["pinned"].is_null() && c["gate"].is_null() && c["wall"].is_null() && patches.iter().filter(|p| p["in_town"] == true && p["corners"].as_array().unwrap().contains(&c["corner"])).count() >= 3).find(|c| goes(c)).expect("an inner corner that moves");
+    let cp = at(corner);
+    let patch = patches.iter().filter(|p| p["in_town"] == true && matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant")) && geom_dist(at(p), cp) > 3.0 * spacing).min_by(|a, b| geom_dist(at(a), g.center).total_cmp(&geom_dist(at(b), g.center))).expect("a ward to make a castle");
+    let pc = at(patch);
+    let req = format!(r#"{{"moves":[{{"corner":{},"by":[30,20]}}],"patches":[{{"patch":{},"ward":"castle"}}]}}"#, corner["corner"], patch["patch"]);
+    let req: wards::TownRequest = serde_json::from_str(&req).unwrap();
+    let (edit, report) = wards::change(base, t0, ci, &req).expect("the change");
+    let edit = edit.expect("an edit");
+    assert_eq!(report["corners"]["moved"], 1, "the corner did not move: {report}");
+    assert!(report["rects"].as_array().is_some_and(|r| !r.is_empty()), "nothing to draw again: {report}");
+    let mut e = Edits::default();
+    let v = serde_json::to_value(&edit).unwrap();
+    e.apply(&worldgen::world::EditOp::Set { field: "towns".into(), key: wards::key(ci), value: v.clone() }).unwrap();
+    assert_eq!(serde_json::to_value(&e.towns[&wards::key(ci)]).unwrap(), v, "the town edit changed on the round trip");
+    let world = World::new(WorldFile { edits: e.clone(), ..base.file.clone() }).unwrap();
+    assert_eq!(world.hash, base.hash, "a town edit changed the world hash");
+    let l = town::layout(&world, t0, ci);
+    // Away from the corner and the castle (and the castle's neighbours, whose blocks it borders),
+    // every building is as generated.
+    let far = |p: [f64; 2]| geom_dist(p, cp) > 2.0 * spacing && geom_dist(p, pc) > 2.5 * spacing;
+    let mut kept = 0;
+    for b in g.buildings.iter().filter(|b| far(geom::centroid(&b.poly))) {
+        let o = l.building(b.id as usize).unwrap_or_else(|| panic!("b:{ci}:{} is gone", b.id));
+        assert!(o.poly == b.poly && o.func == b.func && o.name == b.name && o.floors == b.floors, "b:{ci}:{} changed", b.id);
+        kept += 1;
+    }
+    assert!(kept > g.buildings.len() / 2, "too few buildings far from the change ({kept} of {})", g.buildings.len());
+    assert!(l.buildings.windows(2).all(|w| w[0].id < w[1].id), "building ids out of order");
+    assert_eq!(l.quarters.iter().map(|q| &q.name).collect::<Vec<_>>(), g.quarters.iter().map(|q| &q.name).collect::<Vec<_>>(), "district names changed");
+    assert!(l.towers == g.towers && l.gate_towers == g.gate_towers, "the wall's towers changed");
+    assert!(!l.extra_towers.is_empty() && l.castles.len() == g.castles.len() + 1, "no castle on the patch: {} extra towers, {} castles", l.extra_towers.len(), l.castles.len());
+    assert_eq!(worldgen::interior::towers(&l).len(), g.towers.len() + g.gate_towers.len() + l.extra_towers.len());
+    let fi = town::catalog::index_of("castle").unwrap() as u16;
+    let keep = l.buildings.iter().find(|b| b.id >= wards::NEW_ID && b.func == Some(fi) && geom_dist(geom::centroid(&b.poly), pc) < spacing).expect("the new castle has no keep");
+    assert!(keep.floors == 4 && keep.name.is_some(), "the keep: {} storeys, name {:?}", keep.floors, keep.name);
+    let fresh: Vec<&town::Building> = l.buildings.iter().filter(|b| b.id >= wards::NEW_ID && b.structure == town::Structure::Roofed).collect();
+    assert!(fresh.len() >= 5, "too few new buildings ({})", fresh.len());
+    let buckets = building_buckets(&l);
+    for b in &fresh {
+        check_interior(&world, t0, &l, ci, &format!("b:{ci}:{}", b.id), &buckets);
+    }
+    for k in g.towers.len() + g.gate_towers.len()..worldgen::interior::towers(&l).len() {
+        check_interior(&world, t0, &l, ci, &format!("t:{ci}:{k}"), &buckets);
+    }
+    // Repeatable: built again with nothing kept.
+    let again = format!("{:?}", *l);
+    town::forget_from(0);
+    assert_eq!(format!("{:?}", *town::layout(&world, t0, ci)), again, "a town laid out anew is not repeatable");
+
+    // Walls taken down: the gates and every building stay, only castle curtains stand.
+    let (edit2, _) = wards::change(&world, t0, ci, &serde_json::from_str(r#"{"walls":false}"#).unwrap()).unwrap();
+    let mut e2 = e.clone();
+    e2.towns.insert(wards::key(ci), edit2.unwrap());
+    let w2 = World::new(WorldFile { edits: e2, ..base.file.clone() }).unwrap();
+    let l2 = town::layout(&w2, t0, ci);
+    assert_eq!(l2.gates, l.gates, "the gates moved with the walls down");
+    assert!(l2.buildings.iter().map(|b| b.id).eq(l.buildings.iter().map(|b| b.id)), "buildings changed with the walls down");
+    assert!(l2.walls.iter().flatten().all(|p| l2.castles.iter().any(|(c, r)| geom_dist(*p, *c) <= r + 30.0)), "a town wall still stands");
+    assert!(l2.towers.len() < l.towers.len() && l2.gate_towers.len() < l.gate_towers.len(), "the wall towers still stand");
+
+    // Walls put up round an unwalled town.
+    if let Some(ti) = (0..n).filter(|&i| t0.settlements[i].tier == Tier::Town && plan_of(i)["walls"]["generated"] == false).max_by_key(|&i| t0.settlements[i].population) {
+        let (edit3, _) = wards::change(base, t0, ti, &serde_json::from_str(r#"{"walls":true}"#).unwrap()).unwrap();
+        let mut e3 = Edits::default();
+        e3.towns.insert(wards::key(ti), edit3.expect("walls put up"));
+        let w3 = World::new(WorldFile { edits: e3, ..base.file.clone() }).unwrap();
+        let (open, walled) = (town::layout(base, t0, ti), town::layout(&w3, t0, ti));
+        assert!(open.walls.is_empty() && !walled.walls.is_empty() && walled.towers.len() >= 3 && walled.gates == open.gates, "no walls put up round town {ti}");
+    }
+
+    // Set aside when the town is elsewhere; a corner on the water refused.
+    let mut e4 = e.clone();
+    e4.towns.insert(wards::key(ci), TownEdit { at: [edit.at[0] + 5.0, edit.at[1]], ..edit.clone() });
+    let w4 = World::new(WorldFile { edits: e4, ..base.file.clone() }).unwrap();
+    assert!(wards::edit_of(&w4, t0, ci).is_none() && wards::set_aside(&w4, t0).iter().any(|(k, _)| *k == wards::key(ci)), "a stale town edit was applied");
+    assert_eq!(format!("{:?}", *town::layout(&w4, t0, ci)), format!("{:?}", *g), "a stale town edit changed the town");
+    if let Some(pinned) = corners.iter().find(|c| c["pinned"] == true) {
+        let req = format!(r#"{{"moves":[{{"corner":{},"by":[10,0]}}]}}"#, pinned["corner"]);
+        assert!(wards::change(base, t0, ci, &serde_json::from_str(&req).unwrap()).is_err(), "a corner on the water moved");
+    }
+    let village = (0..n).find(|&i| t0.settlements[i].tier == Tier::Village).unwrap();
+    assert!(wards::plan_json(base, t0, village).is_err(), "a village has wards");
 }
 
 fn geom_dist(a: [f64; 2], b: [f64; 2]) -> f64 {

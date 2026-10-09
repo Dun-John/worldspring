@@ -1111,6 +1111,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for t in &l.gate_towers {
             raise(*t, *t, 15.0, URBAN_TOWER, &mut urb_h, &mut hh, &mut lift);
         }
+        for &(t, gate) in &l.extra_towers {
+            raise(t, t, if gate { 15.0 } else { 11.0 }, URBAN_TOWER, &mut urb_h, &mut hh, &mut lift);
+        }
         for w in &l.walls {
             for seg in w.windows(2) {
                 raise(seg[0], seg[1], 4.0, URBAN_WALL, &mut urb_h, &mut hh, &mut lift);
@@ -1124,11 +1127,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         }
-        for (ts, r) in [(&l.towers, 11.0), (&l.gate_towers, 15.0)] {
-            for t in ts.iter() {
-                if owns(*t) {
-                    shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(t)] });
-                }
+        for (t, r) in crate::interior::towers(&l).into_iter().map(|(t, r, _)| (t, r)) {
+            if owns(t) {
+                shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(&t)] });
             }
         }
         // Deck style: 0 pier, 1 a village or town's timber bridge, 2 a city's stone bridge.

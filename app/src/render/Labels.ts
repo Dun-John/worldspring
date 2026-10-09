@@ -513,6 +513,24 @@ export class Labels {
     this.lastZoom = NaN;
   }
 
+  /** Drop a town's district labels and business pins (it was laid out anew: asked for again). */
+  forgetTown(layout: number) {
+    const mine = (id: string) => id.startsWith(`d:${layout}:`) || id.startsWith(`b:${layout}:`);
+    let n = 0;
+    for (let k = this.items.length - 1; k >= 0; k--) {
+      const it = this.items[k];
+      if (!mine(it.f.id) || (it.f.kind !== 'district' && !this.placeHits.has(it.f.id))) continue;
+      this.unletter(it);
+      this.items.splice(k, 1);
+      n++;
+    }
+    for (const id of [...this.placeHits.keys()]) if (mine(id)) this.placeHits.delete(id);
+    if (n) {
+      this.sort();
+      this.lastZoom = NaN;
+    }
+  }
+
   /** Drop the business pins of these buildings (changed or taken away: asked for again). */
   forgetPlaces(ids: Iterable<string>) {
     const gone = new Set(ids);

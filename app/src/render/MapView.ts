@@ -823,6 +823,21 @@ export class MapView {
       // Inside it: shown as it is now (unless it is being designed: the designer shows it).
       if (id === here && b && !b.removed && id !== this.designing) reenter = true;
     }
+    // Towns laid out anew by hand: all they reach (fields and sprawl, 2.3 radii), and their
+    // district labels and business pins asked for again.
+    const pt = prev.towns ?? {};
+    const nt = next.towns ?? {};
+    if (pt !== nt) for (const key of keys('towns', pt, nt)) {
+      if (JSON.stringify(pt[key]) === JSON.stringify(nt[key])) continue;
+      const t = this.towns.find((t) => t.index === Number(key));
+      if (!t) continue;
+      const r = 2.3 * t.r + 200;
+      rects.push([t.x - r, t.y - r, t.x + r, t.y + r]);
+      this.districtsAsked.delete(t.index);
+      this.labels?.forgetTown(t.index);
+      this.placesRect = null;
+      this.placesEpoch++;
+    }
     // Their business pins: dropped, and asked for again (as they are now).
     if (replaced.length) {
       this.labels?.forgetPlaces(replaced);

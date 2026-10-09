@@ -16,6 +16,7 @@ pub mod catalog;
 pub mod geom;
 pub mod mesh;
 pub mod sites;
+pub mod wards;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -158,6 +159,9 @@ pub struct Layout {
     pub piers: Vec<Vec<P>>,
     /// Towers flanking the gates (larger than wall towers).
     pub gate_towers: Vec<P>,
+    /// Towers of castles set by hand on a town's ward (and whether each flanks a gate): after
+    /// the others, so no other tower's `t:` id moves.
+    pub extra_towers: Vec<(P, bool)>,
     /// Plaza monuments (plinth footprints).
     pub monuments: Vec<Vec<P>>,
     /// Named districts (towns and up).
@@ -268,7 +272,8 @@ pub fn pad_weight(d: f64, reach: f64) -> f64 {
 
 // ---------------------------------------------------------------------------------------
 // Memo: layouts are pure, so each worker builds a settlement once and keeps it, and keeps
-// the edited copy (`Edits.buildings` applied) by a fingerprint of that layout's edits.
+// the edited copies by a fingerprint of that layout's edits: a town laid out anew by hand
+// (`Edits.towns`, `wards`), and that with its buildings edited (`Edits.buildings`).
 
 thread_local! {
     static CACHE: RefCell<(u64, FastMap<u32, Rc<Layout>>)> = RefCell::new((0, FastMap::default()));
@@ -283,6 +288,10 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     }
     let key = index as u32;
     let Some(fp) = edits_fingerprint(world, key) else { return base };
+    let fp = match wards::fingerprint(world, t0, index) {
+        Some(t) => crate::core::rng::hash2(fp, t as i64, 0x70e5),
+        None => fp,
+    };
     if let Some(l) = EDITED.with(|c| c.borrow().get(&key).filter(|e| e.0 == fp).map(|e| e.1.clone())) {
         return l;
     }
@@ -389,8 +398,14 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, &'static str)> {
     out
 }
 
-/// A layout as generated (no building edits).
+/// A layout as laid out, before its building edits: as generated, or the town laid out anew by
+/// hand (`Edits.towns`). Building edits are made against it.
 pub fn base_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
+    wards::edited(world, t0, index).unwrap_or_else(|| generated_layout(world, t0, index))
+}
+
+/// A layout as generated (no edits).
+pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     let key = index as u32;
     if let Some(l) = CACHE.with(|c| {
         let c = c.borrow();
@@ -416,6 +431,7 @@ pub fn base_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
 pub fn forget_from(index: usize) {
     CACHE.with(|c| c.borrow_mut().1.retain(|&k, _| (k as usize) < index));
     EDITED.with(|c| c.borrow_mut().retain(|&k, _| (k as usize) < index));
+    wards::forget_from(index);
 }
 
 /// Settlement and site layouts whose reach intersects the rectangle (world ft). Layout index
@@ -938,12 +954,17 @@ fn river_pieces(t0: &T0, center: P, r: f64) -> Vec<(P, P, f64)> {
 // ---------------------------------------------------------------------------------------
 
 pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
+    generate_with(world, t0, index, None)
+}
+
+/// A settlement's layout; a town with the ward editor's changes (`Edits.towns`) applied between
+/// planning it and building it, its buildings and ways underground matched to the generated
+/// layout's (`wards::inherit`).
+fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::world::TownEdit>) -> Layout {
     let s = &t0.settlements[index];
     let center = [s.x, s.y];
     let r = urban_radius(s.tier, s.population);
-    let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-    let site = Site::new(t0, center, lattice, reach(s) + 500.0, river_pieces(t0, center, reach(s) + 500.0));
-    let mut rng = Pcg32::new(hash2(world.stream("town"), index as i64, s.seed as i64), 31);
+    let (site, road_ends, mut rng) = prepare(world, t0, index);
     let mut l = Layout {
         index: index as u32,
         center,
@@ -963,6 +984,7 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
         bridges: Vec::new(),
         piers: Vec::new(),
         gate_towers: Vec::new(),
+        extra_towers: Vec::new(),
         monuments: Vec::new(),
         quarters: Vec::new(),
         castles: Vec::new(),
@@ -972,12 +994,15 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
         yards: Vec::new(),
         props: Vec::new(),
     };
-    // Where roads arrive (local coords): the road ends and passes near the settlement.
-    let road_ends = road_ends(t0, center, r, road_trim_radius(s.tier, s.population));
     if s.tier == Tier::Village {
         village(&site, s, r, &road_ends, &mut rng, &mut l);
     } else {
-        town(&site, s, r, &road_ends, &mut rng, &mut l);
+        let plan = match edit {
+            Some(_) => wards::plan(world, index, || plan_town(&site, s, r, &road_ends, &mut rng)),
+            None => Rc::new(plan_town(&site, s, r, &road_ends, &mut rng)),
+        };
+        let ch = edit.map(|e| wards::changes(&plan, e, center).0).unwrap_or_default();
+        build_town(&site, s, r, &plan, &ch, &mut l);
         walls_off_river(&site, &mut l);
     }
     // A pin's ward names go to its districts in order, the central one first.
@@ -993,7 +1018,9 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
     drop_walled_in(&mut l);
     let on_water = s.coastal || s.river || !site.river.is_empty();
     l.on_water = on_water;
-    assign_functions(&site, s, on_water, &mut rng, &mut l);
+    if edit.is_none() {
+        assign_functions(&site, s, on_water, &mut rng, &mut l);
+    }
     // Local → world.
     let tw = |p: &mut P| *p = add(*p, center);
     for b in &mut l.buildings {
@@ -1015,6 +1042,12 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
     for c in &mut l.castles {
         tw(&mut c.0);
     }
+    for t in &mut l.extra_towers {
+        tw(&mut t.0);
+    }
+    if edit.is_some() {
+        wards::inherit(world, t0, &generated_layout(world, t0, index), &mut l);
+    }
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);
@@ -1024,8 +1057,32 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
         bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
     }
     l.bbox = if bb[0] <= bb[2] { bb } else { [center[0], center[1], center[0], center[1]] };
-    l.number();
+    match edit {
+        Some(_) => wards::inherit_entrances(&generated_layout(world, t0, index), &mut l),
+        None => l.number(),
+    }
     l
+}
+
+/// What a settlement is laid out from: its ground (`Site`), where its roads arrive (local
+/// coords: the road ends and passes near it), and its random stream.
+fn prepare<'a>(world: &World, t0: &'a T0, index: usize) -> (Site<'a>, Vec<(P, u8)>, Pcg32) {
+    let s = &t0.settlements[index];
+    let center = [s.x, s.y];
+    let r = urban_radius(s.tier, s.population);
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+    let site = Site::new(t0, center, lattice, reach(s) + 500.0, river_pieces(t0, center, reach(s) + 500.0));
+    let rng = Pcg32::new(hash2(world.stream("town"), index as i64, s.seed as i64), 31);
+    (site, road_ends(t0, center, r, road_trim_radius(s.tier, s.population)), rng)
+}
+
+/// A town's plan (kept by `wards::plan`), without building it; `None` for a village or a site.
+fn town_plan(world: &World, t0: &T0, index: usize) -> Option<Rc<TownPlan>> {
+    let s = t0.settlements.get(index).filter(|s| s.tier >= Tier::Town)?;
+    Some(wards::plan(world, index, || {
+        let (site, road_ends, mut rng) = prepare(world, t0, index);
+        plan_town(&site, s, urban_radius(s.tier, s.population), &road_ends, &mut rng)
+    }))
 }
 
 /// Buildings with no way in: every point just outside their walls lies inside another
@@ -1157,11 +1214,6 @@ fn voronoi(sites: &[P], boundary: &[P]) -> Vec<Labeled> {
 /// Outskirts (farmland) reach this many urban radii from the centre.
 const OUTSKIRTS: f64 = 2.15;
 
-fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pcg32, l: &mut Layout) {
-    let plan = plan_town(site, s, r, road_ends, rng);
-    build_town(site, s, r, &plan, &[], l);
-}
-
 /// What a town decides before anything is built on it (`plan_town`): its patch mesh (smoothed
 /// along the wall and the main streets), walls, gates, main streets, bridges, wards and named
 /// districts. `build_town` may move the mesh's corners first, as watabou's Warp tools do:
@@ -1169,6 +1221,8 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
 /// district groups, names, the towers along each wall run) stays as planned on the unmoved mesh,
 /// so a moved corner changes only the patches round it.
 struct TownPlan {
+    /// Patch spacing (ft): how far a corner may be moved from where it was planned.
+    spacing: f64,
     mesh: Mesh,
     /// Faces round each vertex.
     vf: Vec<Vec<usize>>,
@@ -1181,7 +1235,7 @@ struct TownPlan {
     pinned: Vec<bool>,
     walled: bool,
     /// Wall runs (a closed ring starts at a plain corner): corners, closed, and the towers along
-    /// each stretch (`wall_pieces_spaced`).
+    /// each stretch (`wall_pieces_spaced`). Planned for unwalled towns too (walls set by hand).
     wall_runs: Vec<(Vec<usize>, bool, Vec<usize>)>,
     gates: Vec<usize>,
     /// Where roads arrive (class), the way each comes in, and its gate.
@@ -1634,16 +1688,14 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
     // Wall runs, and how many towers stand along each stretch (fixed here, so a corner moved
     // later never adds or drops one).
     let mut wall_runs: Vec<(Vec<usize>, bool, Vec<usize>)> = Vec::new();
-    if walled {
-        for (chain, closed) in &chains {
-            let mut chain = chain.clone();
-            // A closed ring starts at a plain corner so a gate never falls on the seam.
-            if *closed && let Some(k) = chain.iter().position(|v| !gates.contains(v)) {
-                chain.rotate_left(k);
-            }
-            let along = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], gates.contains(&v))).collect::<Vec<_>>(), *closed, None).3;
-            wall_runs.push((chain, *closed, along));
+    for (chain, closed) in &chains {
+        let mut chain = chain.clone();
+        // A closed ring starts at a plain corner so a gate never falls on the seam.
+        if *closed && let Some(k) = chain.iter().position(|v| !gates.contains(v)) {
+            chain.rotate_left(k);
         }
+        let along = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], gates.contains(&v))).collect::<Vec<_>>(), *closed, None).3;
+        wall_runs.push((chain, *closed, along));
     }
 
     // Patches as planned (wards, districts and their names are decided on these).
@@ -1841,6 +1893,7 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         .collect();
     let quarters = quarters(s, &QuarterInput { cells: &cells, ward: &ward, n_inner, plaza, castle: castle_face, gates: &gate_pts, crossings: &crossings, edge_w: &edge_w, landing: &landing });
     TownPlan {
+        spacing,
         mesh,
         vf,
         n_inner,
@@ -1868,21 +1921,18 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
     }
 }
 
-/// Build a planned town, its mesh corners first moved to `moves` (local ft; corners on the
-/// water or a river stay put, and a move that would bend a patch inward goes part of the way,
-/// as `Mesh::try_move`).
-fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, moves: &[(usize, P)], l: &mut Layout) {
-    let mut mesh = plan.mesh.clone();
-    for &(v, to) in moves {
-        if v < mesh.pos.len() && !plan.pinned[v] {
-            mesh.try_move(&plan.vf, v, to);
-        }
-    }
+/// Build a planned town with the ward editor's changes (`wards::Changes`; none: as planned):
+/// its mesh corners moved first (`wards::moved_mesh`), then patches given another ward, lot
+/// size, merge or roll, the walls on or off. Each building's `id` is left as the patch it
+/// stands on (`generate` numbers them, `wards::inherit` matches them).
+fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::Changes, l: &mut Layout) {
+    let mut mesh = wards::moved_mesh(plan, &ch.moves);
     let total = mesh.faces.len();
     let n_inner = plan.n_inner;
     let wet = &plan.wet;
-    let ward = &plan.ward;
-    let group = &plan.group;
+    let (ward, group) = ch.wards(plan);
+    let (ward, group) = (&ward, &group);
+    let walled = ch.walls.unwrap_or(plan.walled);
     let usable = |i: usize| plan.usable(i);
 
     // Bridges: the river vertex back on the bank-to-bank line, and the deck along it.
@@ -1917,7 +1967,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, moves: &[(us
     let cells: Vec<Labeled> = (0..total).map(|i| Labeled { pts: mesh.face_pts(i), labels: mesh.labels[i].clone() }).collect();
     let edge_v = |i: usize, e: usize| (mesh.faces[i][e], mesh.faces[i][(e + 1) % mesh.faces[i].len()]);
     l.gates = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
-    for (chain, closed, along) in &plan.wall_runs {
+    for (chain, closed, along) in plan.wall_runs.iter().filter(|_| walled) {
         let (pieces, towers, gate_towers, _) = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect::<Vec<_>>(), *closed, Some(along));
         l.walls.extend(pieces);
         l.towers.extend(towers);
@@ -2102,7 +2152,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, moves: &[(us
                 if nb >= 0 && group[i] != usize::MAX && group[nb as usize] == group[i] {
                     return 0.0;
                 }
-                let wall = plan.walled && i < n_inner && (!plan.inner(nb) || wet[nb as usize]);
+                // (A planned wall taken down leaves its strip as a street round the town.)
+                let wall = (walled || plan.walled) && i < n_inner && (!plan.inner(nb) || wet[nb as usize]);
                 (if main { 12.0 } else { 7.0 }) + if wall { 18.0 } else { 0.0 }
             })
             .collect();
@@ -2154,11 +2205,18 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, moves: &[(us
         } else {
             w
         };
-        let dp = District::roll(w, hash2(plan.base_seed, key as i64, 0xd15));
-        let mut prng = Pcg32::new(hash2(plan.base_seed, i as i64, 0x107), 47);
+        // Rolled again by hand: its own streams.
+        let roll = ch.reroll.get(&i).copied().unwrap_or(0);
+        let salt = |h: u64| if roll == 0 { h } else { hash3(h, roll as i64, 0x7e70, 1) };
+        let mut dp = District::roll(w, salt(hash2(plan.base_seed, key as i64, 0xd15)));
+        if let Some(f) = ch.lots.get(&i) {
+            dp.min_sq = District::base(w) * f;
+        }
+        let mut prng = Pcg32::new(salt(hash2(plan.base_seed, i as i64, 0x107)), 47);
         if !matches!(w, Ward::Plaza | Ward::Farm | Ward::Park) {
             l.blocks.push(block.clone());
         }
+        let (first, towers_at, gates_at) = (l.buildings.len(), l.towers.len(), l.gate_towers.len());
         match w {
             Ward::Plaza => {
                 // A monument, pushed toward the square's longest side (watabou's market).
@@ -2198,6 +2256,15 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, moves: &[(us
                 build_block(site, &block, &mut streets, w, &dp, &mut prng, l, Some((&anchors, reach)))
             }
             _ => build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None),
+        }
+        for b in &mut l.buildings[first..] {
+            b.id = i as u32;
+        }
+        // A castle set by hand: its towers after every other (no `t:` id moves).
+        if w == Ward::Castle && plan.ward[i] != Some(Ward::Castle) {
+            let gates: Vec<(P, bool)> = l.gate_towers.drain(gates_at..).map(|t| (t, true)).collect();
+            let towers: Vec<(P, bool)> = l.towers.drain(towers_at..).map(|t| (t, false)).collect();
+            l.extra_towers.extend(towers.into_iter().chain(gates));
         }
     }
     // Roads into the city and the ground before each gate stay open: the sprawl outside the
@@ -2586,9 +2653,9 @@ struct District {
 }
 
 impl District {
-    fn roll(w: Ward, seed: u64) -> District {
-        let mut r = Pcg32::new(seed, 53);
-        let base = match w {
+    /// The ward's usual lot area (ft²).
+    fn base(w: Ward) -> f64 {
+        match w {
             Ward::Merchant => 1400.0,
             Ward::Craft => 1600.0,
             Ward::Noble => 4200.0,
@@ -2599,7 +2666,12 @@ impl District {
             Ward::Castle => 2600.0,
             Ward::Park => 9000.0,
             _ => 1100.0,
-        };
+        }
+    }
+
+    fn roll(w: Ward, seed: u64) -> District {
+        let mut r = Pcg32::new(seed, 53);
+        let base = District::base(w);
         let spread = r.next_f64();
         let mut d = District {
             min_sq: base * (0.75 + 0.9 * spread),

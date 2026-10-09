@@ -190,6 +190,39 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
             }
         }
     }
+    // The ward editor on the largest settlement (a world without edits): a corner moved, a ward
+    // made military and another rolled again; the change's report, the layout, the first new
+    // building's interior and the battlemap at the corner.
+    if ex.world.file.edits.is_empty()
+        && let Some(si) = (0..ex.t0.settlements.len()).max_by_key(|&i| ex.t0.settlements[i].population)
+        && let Ok(plan) = crate::town::wards::plan_json(&ex.world, &ex.t0, si)
+    {
+        let corner = plan["corners"].as_array().into_iter().flatten().find(|c| c["pinned"].is_null() && c["gate"].is_null() && c["wall"].is_null()).cloned();
+        let wards: Vec<u64> = plan["patches"].as_array().into_iter().flatten().filter(|p| p["in_town"] == true && p["ward"] == "common").filter_map(|p| p["patch"].as_u64()).take(2).collect();
+        if let (Some(c), [a, b]) = (corner, &wards[..]) {
+            let req = format!(r#"{{"moves":[{{"corner":{},"by":[24,16]}}],"patches":[{{"patch":{a},"ward":"military"}},{{"patch":{b},"reroll":true}}]}}"#, c["corner"]);
+            let change = crate::town::wards::change_json(&ex.world, &ex.t0, si, &req);
+            let v: serde_json::Value = serde_json::from_str(&change).unwrap_or_default();
+            if let Ok(e) = serde_json::from_value::<crate::world::TownEdit>(v["edit"].clone()) {
+                ex.world.file.edits.towns.insert(crate::town::wards::key(si), e);
+                let l = crate::town::layout(&ex.world, &ex.t0, si);
+                let mut h = crate::core::hash::Fnv64::default();
+                h.write(format!("{:?} {:?} {:?} {:?} {:?}", l.walls, l.towers, l.gate_towers, l.extra_towers, l.roads).as_bytes());
+                for b in &l.buildings {
+                    h.write(format!("{} {:?} {:?} {} {:?} {}", b.id, b.poly, b.func, b.floors, b.name, b.pad_ft).as_bytes());
+                }
+                let fresh = l.buildings.iter().find(|b| b.id >= crate::town::wards::NEW_ID && b.structure == crate::town::Structure::Roofed).map(|b| format!("b:{si}:{}", b.id)).unwrap_or_default();
+                let json = crate::interior::generate_id(&ex.world, &ex.t0, &fresh).map(|it| serde_json::to_string(&it).unwrap_or_default()).unwrap_or_default();
+                let at = [c["at"][0].as_f64().unwrap_or(0.0), c["at"][1].as_f64().unwrap_or(0.0)];
+                let size = ex.world.geom.tile_size_ft(max_level);
+                let key = TileKey::surface(max_level, (at[0] / size) as u32, (at[1] / size) as u32);
+                let chunk = ex.battlemap(key);
+                let bytes = crate::battlemap::pack(&ex.world, &chunk);
+                writeln!(out, "towns/{si} {fresh} {:016x} {:016x} {:016x} {:016x}", fnv64(change.as_bytes()), h.finish(), fnv64(json.as_bytes()), fnv64(&bytes)).unwrap();
+                ex.world.file.edits.towns.clear();
+            }
+        }
+    }
     // The designer's steps on the first site underground: every room furnished again, doors
     // where needed, the plan as text, the site it builds and its problems.
     use crate::under::{UnderKind, design};

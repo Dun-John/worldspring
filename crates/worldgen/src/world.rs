@@ -393,6 +393,10 @@ pub struct Edits {
     /// as generated (`town::layout`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub buildings: BTreeMap<String, BuildingEdit>,
+    /// Towns and cities laid out anew by hand (`<layout>` → corners moved, wards set, walls on or
+    /// off), applied between planning a town and building it (`town::base_layout`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub towns: BTreeMap<String, TownEdit>,
 }
 
 /// A generated building changed by hand: removed, or given another function, storeys,
@@ -452,6 +456,75 @@ impl BuildingEdit {
     /// Whether it changes nothing (every option as generated).
     pub fn is_noop(&self) -> bool {
         !self.removed && self.func.is_none() && self.floors.is_none() && self.poly.is_empty() && self.roof.is_none() && self.tint.is_none() && self.structure.is_none()
+    }
+}
+
+/// A town's layout changed by hand (the ward editor). Corners of its patches moved (as watabou's
+/// Warp tools move them), patches given another ward, lot size, a merge with a neighbour or a
+/// fresh roll, its walls on or off. `at` is the town's centre: a town laid out somewhere else (a
+/// changed sketch) sets the whole edit aside; each corner and patch also remembers where it was
+/// planned, and is set aside alone when that drifts.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TownEdit {
+    pub at: [f64; 2],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corners: Vec<CornerMove>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patches: Vec<PatchEdit>,
+    /// Walls built or not (left out: as generated). Gates stay where the roads come in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walls: Option<bool>,
+}
+
+/// A patch corner (`v`, the plan's vertex) moved from where it was planned (`from`, world ft) to
+/// `to`.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct CornerMove {
+    pub v: u32,
+    pub from: [f64; 2],
+    pub to: [f64; 2],
+}
+
+/// A patch (`p`, the plan's face; `at` its middle as planned) set by hand: its ward
+/// (`TOWN_WARDS`), lot size (`LOT_SIZES`), merged into a neighbour's district, rolled again
+/// (`reroll` counts the rolls).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct PatchEdit {
+    pub p: u32,
+    pub at: [f64; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ward: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lots: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_with: Option<u32>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reroll: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
+/// Wards a patch can be given by hand (`empty`: open ground, for buildings drawn by hand).
+pub const TOWN_WARDS: [&str; 13] = ["plaza", "castle", "temple", "merchant", "craft", "noble", "common", "slum", "docks", "military", "farm", "park", "empty"];
+
+/// Lot sizes, smallest first: each a target lot area (ft²) times the ward's own.
+pub const LOT_SIZES: [&str; 4] = ["small", "medium", "large", "huge"];
+
+impl TownEdit {
+    /// How far (ft) a town, corner or patch may stand from where its edit says it was planned.
+    pub const SAME_AT_FT: f64 = 1.0;
+
+    /// Whether it changes nothing.
+    pub fn is_noop(&self) -> bool {
+        self.corners.is_empty() && self.patches.iter().all(PatchEdit::is_noop) && self.walls.is_none()
+    }
+}
+
+impl PatchEdit {
+    pub fn is_noop(&self) -> bool {
+        self.ward.is_none() && self.lots.is_none() && self.merge_with.is_none() && self.reroll == 0
     }
 }
 
@@ -1105,6 +1178,7 @@ impl Edits {
                 "designs" => self.designs = std::mem::take(&mut part.designs),
                 "crossings" => self.crossings = std::mem::take(&mut part.crossings),
                 "buildings" => self.buildings = std::mem::take(&mut part.buildings),
+                "towns" => self.towns = std::mem::take(&mut part.towns),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1136,6 +1210,7 @@ impl Edits {
                 "designs" => patch(&mut self.designs, p)?,
                 "crossings" => patch(&mut self.crossings, p)?,
                 "buildings" => patch(&mut self.buildings, p)?,
+                "towns" => patch(&mut self.towns, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -1145,7 +1220,7 @@ impl Edits {
     pub fn is_empty(&self) -> bool {
         self.renames.is_empty() && self.notes.is_empty() && self.hidden.is_empty() && self.created.is_empty() && self.npcs.is_empty() && self.plots.is_empty()
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
-            && self.buildings.is_empty()
+            && self.buildings.is_empty() && self.towns.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1266,6 +1341,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("designs", Shape::Map),
     ("crossings", Shape::Map),
     ("buildings", Shape::Map),
+    ("towns", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

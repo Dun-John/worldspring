@@ -278,6 +278,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             for t in &l.gate_towers {
                 lines.push(vec![[t[0], t[1], 30.0, 1.0], [t[0] + 0.01, t[1], 30.0, 1.0]]);
             }
+            for &(t, gate) in &l.extra_towers {
+                let w = if gate { 30.0 } else { 22.0 };
+                lines.push(vec![[t[0], t[1], w, 1.0], [t[0] + 0.01, t[1], w, 1.0]]);
+            }
         }
     }
     let n = attrs.len() as u32;
