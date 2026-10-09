@@ -94,7 +94,7 @@ fn poly_extent(polys: &[&[P]]) -> Value {
 fn extent_of(world: &World, t0: &T0, id: &str) -> Option<Value> {
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     match (id.split(':').next()?, nums.as_slice()) {
-        ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).buildings.get(*bi).map(|b| poly_extent(&[&b.poly])),
+        ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| poly_extent(&[&b.poly])),
         ("d", [li, qi]) if *li < town::layout_count(t0) => {
             town::layout(world, t0, *li).quarters.get(*qi).map(|q| poly_extent(&q.patches.iter().map(Vec::as_slice).collect::<Vec<_>>()))
         }
@@ -169,11 +169,12 @@ pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id
 }
 
 /// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
-/// clear of other buildings (sharing a wall is fine), roads, streets and town walls. `skip`:
-/// the layout it already has (reshaping one). With its point (the footprint's middle) and a
-/// name for it: its trade's in the nearest settlement's culture, seeded by its id (else what
-/// it is: "House").
-pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<usize>) -> Result<(P, String), String> {
+/// clear of other buildings (sharing a wall is fine), roads, streets, town walls and squares
+/// (market squares, quays, greens, yards). `skip`: the building being reshaped: (its layout,
+/// and in a settlement its id; a drawn building's own layout is all of it). With its point
+/// (the footprint's middle) and a name for it: its trade's in the nearest settlement's
+/// culture, seeded by its id (else what it is: "House").
+pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
     use crate::core::rng::Pcg32;
     if poly.len() < 3 {
         return Err("a building needs at least 3 corners".to_string());
@@ -205,11 +206,15 @@ pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id:
     // A foot in from every side, so walls may touch.
     let inner: Vec<P> = poly.iter().map(|p| geom::lerp(*p, c, 1.0 / geom::dist(*p, c).max(1.0))).collect();
     for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
-        if Some(l.index as usize) == skip {
+        let own = skip.filter(|s| s.0 == l.index as usize).map(|s| s.1);
+        if own == Some(None) {
             continue;
         }
-        if let Some(bi) = l.buildings.iter().position(|b| polys_overlap(&inner, &b.poly)) {
-            return Err(format!("that overlaps {}", building_name(world, &l, bi)));
+        if let Some(b) = l.buildings.iter().find(|b| Some(Some(b.id)) != own && polys_overlap(&inner, &b.poly)) {
+            return Err(format!("that overlaps {}", building_name(world, &l, b)));
+        }
+        if l.plazas.iter().any(|p| polys_overlap(&inner, p)) {
+            return Err(format!("that is on {}", if l.site { "the yard" } else { "a square (a market, quay or green)" }));
         }
         let streets = l.roads.iter().map(|(pts, _, w)| (pts, 0.5 * w)).chain(l.walls.iter().map(|w| (w, 4.5)));
         for (pts, half) in streets {
@@ -244,6 +249,202 @@ pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id:
     Ok((c, name))
 }
 
+/// The nearest clear spot for a `width` × `depth` ft building near `near` (world ft): turned
+/// square to the nearest street (or road), its front within a few feet of it where there is
+/// one within 300 ft, on the 5-ft grid when unturned; tried outward ring by ring to 400 ft.
+/// Returns the footprint, its point and its name (`building_spot`).
+pub fn find_spot(world: &World, t0: &T0, near: P, width: f64, depth: f64, func: Option<&str>, id: &str) -> Result<(Vec<P>, P, String), String> {
+    if !(10.0..=400.0).contains(&width) || !(10.0..=400.0).contains(&depth) {
+        return Err("width_ft and depth_ft: 10 to 400".into());
+    }
+    let pad = 300.0 + width.max(depth);
+    let rect_q = [near[0] - pad, near[1] - pad, near[0] + pad, near[1] + pad];
+    // Street pieces (edges of their beds) near the place, from the settlements' layouts.
+    let mut streets: Vec<(P, P, f64)> = Vec::new();
+    for l in town::layouts_near(world, t0, rect_q) {
+        for (pts, _, w) in &l.roads {
+            streets.extend(pts.windows(2).map(|s| (s[0], s[1], 0.5 * w)));
+        }
+    }
+    if streets.is_empty() {
+        for (ri, k) in t0.roads.segments_near(rect_q, 0.0) {
+            let rc = &t0.roads.roads[ri as usize];
+            let pts: Vec<P> = (0..=8).map(|j| rc.eval(k as usize, j as f64 / 8.0, 5.0, t0.cell_ft).p).collect();
+            streets.extend(pts.windows(2).map(|s| (s[0], s[1], 0.5 * rc.class.width_ft())));
+        }
+    }
+    let nearest = |p: P| streets.iter().map(|&(a, b, half)| (geom::seg_dist(p, a, b) - half, a, b)).min_by(|x, y| x.0.total_cmp(&y.0));
+    let front = depth * 0.5;
+    let mut tried = 0;
+    for ring in 0..=40 {
+        let r = ring as f64 * 10.0;
+        let n = if ring == 0 { 1 } else { (std::f64::consts::TAU * r / 10.0).ceil() as usize };
+        for k in 0..n {
+            let a = std::f64::consts::TAU * k as f64 / n as f64;
+            let mut c = [near[0] + r * libm::cos(a), near[1] + r * libm::sin(a)];
+            let (dir, gap) = match nearest(c) {
+                Some((d, a, b)) if d < 300.0 => {
+                    let u = geom::sub(b, a);
+                    (geom::mul(u, 1.0 / geom::len(u).max(1e-9)), d - front)
+                }
+                _ => ([1.0, 0.0], 0.0),
+            };
+            // Its front on the street: within 2–12 ft of the bed.
+            if !(2.0..=12.0).contains(&gap) && !streets.is_empty() && nearest(c).is_some_and(|s| s.0 < 300.0) {
+                continue;
+            }
+            let square = dir[0].abs() > 0.999 || dir[1].abs() > 0.999;
+            if square {
+                c = c.map(|v| crate::core::round(v / 5.0) * 5.0);
+            }
+            let poly = town::rect(c, dir, width, depth);
+            tried += 1;
+            if let Ok((p, name)) = building_spot(world, t0, &poly, func, id, None) {
+                return Ok((poly, p, name));
+            }
+        }
+    }
+    Err(format!("no clear spot for a {width} × {depth} ft building within 400 ft of that place ({tried} tried)"))
+}
+
+/// Generated buildings (not drawn by hand) whose middle lies inside `poly` (world ft), as they
+/// stand: (building id, its middle as generated: an edit's `at`).
+pub fn generated_buildings_in(world: &World, t0: &T0, poly: &[P]) -> Vec<(String, P)> {
+    if poly.len() < 3 {
+        return Vec::new();
+    }
+    let (x0, y0) = poly.iter().fold((f64::MAX, f64::MAX), |a, p| (a.0.min(p[0]), a.1.min(p[1])));
+    let (x1, y1) = poly.iter().fold((f64::MIN, f64::MIN), |a, p| (a.0.max(p[0]), a.1.max(p[1])));
+    let mut out = Vec::new();
+    for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
+        let li = l.index as usize;
+        if li >= t0.settlements.len() + t0.base_pois {
+            continue;
+        }
+        let base = town::base_layout(world, t0, li);
+        for b in &l.buildings {
+            if geom::contains(poly, geom::centroid(&b.poly))
+                && let Some(g) = base.building(b.id as usize)
+            {
+                out.push((format!("b:{li}:{}", b.id), geom::centroid(&g.poly)));
+            }
+        }
+    }
+    out
+}
+
+/// What may change on a generated building (`update_building`): each `None` stays as it is;
+/// `Some("")` (or `auto`, or for `structure` the generated one) goes back to as generated.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct BuildingChange {
+    pub func: Option<String>,
+    pub floors: Option<u8>,
+    pub poly: Option<Vec<P>>,
+    pub roof: Option<String>,
+    pub tint: Option<String>,
+    pub structure: Option<String>,
+}
+
+/// Generated building `id`'s edit with `change` made: checked (a new footprint as a drawn
+/// building's, skipping itself). `None` when it is then as generated.
+pub fn building_edit(world: &World, t0: &T0, id: &str, change: &BuildingChange) -> Result<Option<crate::world::BuildingEdit>, String> {
+    let (li, bi) = generated_building(t0, id).ok_or_else(|| format!("{id} is not a generated building (b:<layout>:<id>; buildings drawn by hand go by their c: id)"))?;
+    let base = town::base_layout(world, t0, li);
+    let g = base.building(bi as usize).ok_or_else(|| format!("no such building: {id}"))?;
+    let at = geom::centroid(&g.poly);
+    let mut e = world.file.edits.buildings.get(id).filter(|e| town::edit_applies(g, e)).cloned().unwrap_or_default();
+    if e.removed {
+        return Err(format!("{id} was removed: restore it first (restore_building)"));
+    }
+    e.at = at;
+    let keep = |v: &Option<String>| v.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != "auto");
+    if change.func.is_some() {
+        e.func = keep(&change.func);
+    }
+    if change.roof.is_some() {
+        e.roof = keep(&change.roof);
+    }
+    if change.tint.is_some() {
+        e.tint = keep(&change.tint);
+    }
+    if change.structure.is_some() {
+        let generated = match g.structure {
+            town::Structure::Ruin => "ruin",
+            _ => "roofed",
+        };
+        e.structure = keep(&change.structure).filter(|s| s != generated);
+    }
+    if let Some(f) = change.floors {
+        e.floors = Some(f).filter(|&f| f != g.floors);
+    }
+    if let Some(p) = &change.poly {
+        e.poly = p.clone();
+        if !p.is_empty() {
+            building_spot(world, t0, p, e.func.as_deref(), id, Some((li, Some(bi))))?;
+        }
+    }
+    if g.structure == town::Structure::Open && (e.structure.is_some() || !e.poly.is_empty()) {
+        return Err(format!("{id} is a graveyard: it can be removed, not rebuilt"));
+    }
+    e.check()?;
+    Ok((!e.is_noop()).then_some(e))
+}
+
+/// `building_edit` (or with `{"remove": true}`, `building_removal`) as JSON: `{edit}` (null:
+/// as generated) or `{error}`.
+pub fn building_edit_json(world: &World, t0: &T0, id: &str, change_json: &str) -> String {
+    let v: Value = serde_json::from_str(change_json).unwrap_or_default();
+    let r = if v["remove"].as_bool() == Some(true) {
+        building_removal(world, t0, id).map(Some)
+    } else {
+        serde_json::from_value::<BuildingChange>(v).map_err(|e| e.to_string()).and_then(|c| building_edit(world, t0, id, &c))
+    };
+    match r {
+        Ok(e) => json!({ "edit": e }),
+        Err(e) => json!({ "error": e }),
+    }
+    .to_string()
+}
+
+/// `generated_buildings_in` as JSON: `[{id, at}]`.
+pub fn generated_buildings_in_json(world: &World, t0: &T0, poly: &[P]) -> String {
+    Value::Array(generated_buildings_in(world, t0, poly).into_iter().map(|(id, at)| json!({ "id": id, "at": at })).collect()).to_string()
+}
+
+/// The edit that takes generated building `id` away.
+pub fn building_removal(world: &World, t0: &T0, id: &str) -> Result<crate::world::BuildingEdit, String> {
+    let (li, bi) = generated_building(t0, id).ok_or_else(|| format!("{id} is not a generated building (buildings drawn by hand are deleted with delete_feature)"))?;
+    let base = town::base_layout(world, t0, li);
+    let g = base.building(bi as usize).ok_or_else(|| format!("no such building: {id}"))?;
+    Ok(crate::world::BuildingEdit { at: geom::centroid(&g.poly), removed: true, ..Default::default() })
+}
+
+/// What `building_spot` leaves out for the building `id`: a generated building (`b:<layout>:<id>`
+/// in a settlement or generated site) itself, a drawn building's (`c:<n>`, or its `b:<layout>:0`)
+/// whole layout.
+pub fn spot_skip(world: &World, t0: &T0, id: &str) -> Option<(usize, Option<u32>)> {
+    if let Some((li, bi)) = generated_building(t0, id) {
+        return Some((li, Some(bi)));
+    }
+    layout_of(world, t0, id).map(|li| (li, None))
+}
+
+/// A generated building's id (`b:<layout>:<id>` in a settlement or a generated site, not a
+/// building drawn by hand): (layout, id).
+pub fn generated_building(t0: &T0, id: &str) -> Option<(usize, u32)> {
+    let mut parts = id.split(':');
+    if parts.next()? != "b" {
+        return None;
+    }
+    let li: usize = parts.next()?.parse().ok()?;
+    let bi: u32 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || li >= t0.settlements.len() + t0.base_pois {
+        return None;
+    }
+    Some((li, bi))
+}
+
 /// What a building drawn by hand can be: businesses (catalog key, name, category) and homes.
 pub fn building_funcs_json() -> String {
     let businesses: Vec<Value> = town::catalog::CATALOG.iter().map(|f| json!({ "key": f.key, "name": f.name, "category": f.category })).collect();
@@ -253,7 +454,7 @@ pub fn building_funcs_json() -> String {
 
 /// `building_spot` as JSON: `{x, y, name}` or `{error}`.
 pub fn building_spot_json(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str) -> String {
-    let skip = layout_of(world, t0, id);
+    let skip = spot_skip(world, t0, id);
     match building_spot(world, t0, poly, func, id, skip) {
         Ok((q, name)) => json!({ "x": q[0], "y": q[1], "name": name }),
         Err(e) => json!({ "error": e }),
@@ -330,9 +531,9 @@ fn name_of(world: &World, t0: &T0, id: &str) -> Option<String> {
 }
 
 /// A building's display name (renamed, its own, or its trade).
-fn building_name(world: &World, l: &town::Layout, bi: usize) -> String {
-    let id = format!("b:{}:{bi}", l.index);
-    world.file.edits.renames.get(&id).cloned().or_else(|| l.buildings[bi].name.clone()).unwrap_or_else(|| l.buildings[bi].label().to_string())
+fn building_name(world: &World, l: &town::Layout, b: &town::Building) -> String {
+    let id = format!("b:{}:{}", l.index, b.id);
+    world.file.edits.renames.get(&id).cloned().or_else(|| b.name.clone()).unwrap_or_else(|| b.label().to_string())
 }
 
 /// Where an id is (ft), for features, buildings, districts, towers, underground sites.
@@ -362,11 +563,11 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     let head = parts.next()?;
     let nums: Vec<usize> = parts.filter_map(|p| p.parse().ok()).collect();
     match (head, nums.as_slice()) {
-        ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).buildings.get(*bi).map(|b| geom::centroid(&b.poly)),
+        ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
         ("d", [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).map(|q| q.label[q.label.len() / 2]),
         ("t", [li, k]) if *li < town::layout_count(t0) => crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| t.0),
-        ("u", [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrances.get(*k).map(|e| e.at),
-        ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).buildings.get(*bi).map(|b| geom::centroid(&b.poly)),
+        ("u", [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| e.at),
+        ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
         ("w", [_, sx, sy]) => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
         _ => features(world, t0).into_iter().find(|f| f.id == id).map(|f| [f.x, f.y]),
     }
@@ -469,7 +670,7 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
     }
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     match (id.split(':').next(), nums.as_slice()) {
-        (Some("b"), [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).buildings.get(*bi).map(|b| b.name.clone().unwrap_or_else(|| b.label().to_string())),
+        (Some("b"), [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| b.name.clone().unwrap_or_else(|| b.label().to_string())),
         (Some("d"), [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).map(|q| q.name.clone()),
         _ => match world.file.edits.created.iter().find(|c| c.id == id) {
             Some(c) => Some(c.name.clone()),
@@ -545,6 +746,10 @@ pub fn overview(world: &World, t0: &T0) -> Value {
         "notes": world.file.edits.notes.len(),
         "npcs": world.file.edits.npcs.len(),
         "plots": world.file.edits.plots.len(),
+        "roads": if p.generated_roads { "generated and drawn" } else { "only drawn" },
+        "buildings_changed": world.file.edits.buildings.len(),
+        // Changes to the world's own buildings that no longer apply (the town was laid out anew).
+        "buildings_set_aside": town::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
     })
 }
 
@@ -631,7 +836,8 @@ pub fn near(world: &World, t0: &T0, p: P, radius: f64, kinds: &[String], limit: 
 /// notable buildings; a building's floors; an underground site's levels).
 pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
     let fs = features(world, t0);
-    let p = position(world, t0, id)?;
+    // (A building taken away: where it stood.)
+    let p = position(world, t0, id).or_else(|| world.file.edits.buildings.get(id).filter(|e| e.removed).map(|e| e.at))?;
     let ground = t0.sample(p[0], p[1], t0.cell_ft);
     let mut v = json!({
         "id": id,
@@ -661,11 +867,39 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         }
     } else if head == "b" && nums.len() == 2 {
         let l = town::layout(world, t0, nums[0]);
-        let b = l.buildings.get(nums[1])?;
+        let Some(b) = l.building(nums[1]) else {
+            // Taken away (`remove_buildings`): what it was.
+            let e = world.file.edits.buildings.get(id).filter(|e| e.removed)?;
+            let g = town::base_layout(world, t0, nums[0]).building(nums[1]).cloned()?;
+            v["kind"] = json!("building");
+            v["removed"] = json!(true);
+            v["function"] = json!(g.label());
+            v["x_ft"] = json!(e.at[0].round());
+            v["y_ft"] = json!(e.at[1].round());
+            return Some(v);
+        };
         v["kind"] = json!("building");
-        v["name"] = json!(building_name(world, &l, nums[1]));
+        v["name"] = json!(building_name(world, &l, b));
         v["function"] = json!(b.label());
         v["floors"] = json!(b.floors);
+        // The footprint: corners in order, and its long side's direction and size.
+        let o = geom::obb(&b.poly);
+        let r1 = |x: f64| (x * 10.0).round() / 10.0;
+        v["footprint"] = json!({
+            "poly": b.poly.iter().map(|p| [r1(p[0]), r1(p[1])]).collect::<Vec<_>>(),
+            "angle_deg": r1(libm::atan2(o.axis[1], o.axis[0]).to_degrees().rem_euclid(180.0)),
+            "length_ft": r1(o.long),
+            "width_ft": r1(o.short),
+            "area_sq_ft": geom::area(&b.poly).abs().round(),
+        });
+        v["structure"] = json!(match b.structure {
+            town::Structure::Roofed => "roofed",
+            town::Structure::Open => "open",
+            town::Structure::Ruin => "ruin",
+        });
+        if world.file.edits.buildings.get(id).is_some() {
+            v["edited"] = json!(true);
+        }
         v["settlement"] = json!({ "id": feature_of_layout(world, t0, nums[0]), "name": feature_of_layout(world, t0, nums[0]).and_then(|f| name_of(world, t0, &f)) });
         if let Some(it) = crate::interior::generate_id(world, t0, id) {
             v["interior"] = interior_summary(world, &it);
@@ -698,17 +932,15 @@ fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
     let notable: Vec<Value> = l
         .buildings
         .iter()
-        .enumerate()
-        .filter(|(_, b)| b.func.is_some())
+        .filter(|b| b.func.is_some())
         .take(60)
-        .map(|(bi, b)| json!({ "id": format!("b:{}:{bi}", l.index), "name": building_name(world, l, bi), "function": b.label() }))
+        .map(|b| json!({ "id": format!("b:{}:{}", l.index, b.id), "name": building_name(world, l, b), "function": b.label() }))
         .collect();
     let entrances: Vec<Value> = l
         .entrances
         .iter()
-        .enumerate()
-        .filter(|(_, e)| e.kind != crate::under::UnderKind::Sewer)
-        .map(|(k, e)| json!({ "id": format!("u:{}:{k}", l.index), "kind": e.kind.name(), "x_ft": e.at[0].round(), "y_ft": e.at[1].round() }))
+        .filter(|e| e.kind != crate::under::UnderKind::Sewer)
+        .map(|e| json!({ "id": format!("u:{}:{}", l.index, e.id), "kind": e.kind.name(), "x_ft": e.at[0].round(), "y_ft": e.at[1].round() }))
         .collect();
     let sewers = l.entrances.iter().filter(|e| e.kind == crate::under::UnderKind::Sewer).count();
     let _ = t0;
@@ -770,9 +1002,8 @@ pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
         let businesses: Vec<Value> = l
             .buildings
             .iter()
-            .enumerate()
-            .filter(|(_, b)| b.func.is_some())
-            .map(|(bi, b)| json!({ "id": format!("b:{}:{bi}", l.index), "name": building_name(world, &l, bi), "function": b.label() }))
+            .filter(|b| b.func.is_some())
+            .map(|b| json!({ "id": format!("b:{}:{}", l.index, b.id), "name": building_name(world, &l, b), "function": b.label() }))
             .collect();
         return Some(json!({ "districts": layout_summary(world, t0, &l)["districts"], "businesses": businesses, "underground": layout_summary(world, t0, &l)["underground"] }));
     }
@@ -782,9 +1013,8 @@ pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
         let businesses: Vec<Value> = l
             .buildings
             .iter()
-            .enumerate()
-            .filter(|(_, b)| b.func.is_some() && q.patches.iter().any(|poly| geom::contains(poly, geom::centroid(&b.poly))))
-            .map(|(bi, b)| json!({ "id": format!("b:{}:{bi}", l.index), "name": building_name(world, &l, bi), "function": b.label() }))
+            .filter(|b| b.func.is_some() && q.patches.iter().any(|poly| geom::contains(poly, geom::centroid(&b.poly))))
+            .map(|b| json!({ "id": format!("b:{}:{}", l.index, b.id), "name": building_name(world, &l, b), "function": b.label() }))
             .collect();
         return Some(json!({ "businesses": businesses }));
     }
@@ -892,18 +1122,18 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     for (qi, q) in l.quarters.iter().enumerate() {
         out.push(name_entry(world, format!("d:{li}:{qi}"), "district", q.name.clone(), Some(q.label[q.label.len() / 2]), false));
     }
-    for (bi, b) in l.buildings.iter().enumerate().filter(|(_, b)| b.func.is_some()) {
+    for b in l.buildings.iter().filter(|b| b.func.is_some()) {
         let generated = b.name.clone().unwrap_or_else(|| b.label().to_string());
-        out.push(name_entry(world, format!("b:{li}:{bi}"), "building", generated, Some(geom::centroid(&b.poly)), true));
+        out.push(name_entry(world, format!("b:{li}:{}", b.id), "building", generated, Some(geom::centroid(&b.poly)), true));
     }
     for (k, (at, _, gate)) in crate::interior::towers(&l).into_iter().enumerate() {
         out.push(name_entry(world, format!("t:{li}:{k}"), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
     }
-    for (k, e) in l.entrances.iter().enumerate().filter(|(_, e)| e.kind != crate::under::UnderKind::Sewer) {
-        out.push(name_entry(world, format!("u:{li}:{k}"), "underground", cap(e.kind.name()), Some(e.at), true));
+    for e in l.entrances.iter().filter(|e| e.kind != crate::under::UnderKind::Sewer) {
+        out.push(name_entry(world, format!("u:{li}:{}", e.id), "underground", cap(e.kind.name()), Some(e.at), true));
     }
-    for (bi, b) in l.buildings.iter().enumerate().filter(|(_, b)| crate::interior::has_deep_dungeon(b)) {
-        out.push(name_entry(world, format!("k:{li}:{bi}"), "underground", "Deep dungeons".into(), Some(geom::centroid(&b.poly)), true));
+    for b in l.buildings.iter().filter(|b| crate::interior::has_deep_dungeon(b)) {
+        out.push(name_entry(world, format!("k:{li}:{}", b.id), "underground", "Deep dungeons".into(), Some(geom::centroid(&b.poly)), true));
     }
     out
 }

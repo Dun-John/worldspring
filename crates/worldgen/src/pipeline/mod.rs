@@ -142,11 +142,42 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         let json = crate::interior::generate_id(&ex.world, &ex.t0, &id).map(|it| serde_json::to_string(&it).unwrap_or_default()).unwrap_or_default();
         writeln!(out, "interior/{} {} {:016x}", c.id, id, fnv64(json.as_bytes())).unwrap();
     }
+    // The world's own buildings edited (a world without edits): in the largest settlement, the
+    // first residence taken away, the next made a three-storey smithy; its layout, the smithy's
+    // interior and the battlemap where the first stood.
+    if ex.world.file.edits.is_empty()
+        && let Some(si) = (0..ex.t0.settlements.len()).max_by_key(|&i| ex.t0.settlements[i].population)
+    {
+        let l = crate::town::layout(&ex.world, &ex.t0, si);
+        let homes: Vec<u32> = l.buildings.iter().filter(|b| b.structure == crate::town::Structure::Roofed && b.func.is_none()).map(|b| b.id).take(2).collect();
+        if let [gone, smithy] = homes[..] {
+            let (gone, smithy) = (format!("b:{si}:{gone}"), format!("b:{si}:{smithy}"));
+            let change = crate::agent::BuildingChange { func: Some("blacksmith".into()), floors: Some(3), ..Default::default() };
+            let edits = [(gone.clone(), crate::agent::building_removal(&ex.world, &ex.t0, &gone)), (smithy.clone(), crate::agent::building_edit(&ex.world, &ex.t0, &smithy, &change).and_then(|e| e.ok_or_else(String::new)))];
+            if let [(_, Ok(a)), (_, Ok(b))] = &edits {
+                let at = a.at;
+                ex.world.file.edits.buildings.insert(gone.clone(), a.clone());
+                ex.world.file.edits.buildings.insert(smithy.clone(), b.clone());
+                let l = crate::town::layout(&ex.world, &ex.t0, si);
+                let mut h = crate::core::hash::Fnv64::default();
+                for b in &l.buildings {
+                    h.write(format!("{} {:?} {:?} {} {:?}", b.id, b.poly, b.func, b.floors, b.name).as_bytes());
+                }
+                let json = crate::interior::generate_id(&ex.world, &ex.t0, &smithy).map(|it| serde_json::to_string(&it).unwrap_or_default()).unwrap_or_default();
+                let size = ex.world.geom.tile_size_ft(max_level);
+                let key = TileKey::surface(max_level, (at[0] / size) as u32, (at[1] / size) as u32);
+                let chunk = ex.battlemap(key);
+                let bytes = crate::battlemap::pack(&ex.world, &chunk);
+                writeln!(out, "edited/{gone} {smithy} {:016x} {:016x} {:016x}", h.finish(), fnv64(json.as_bytes()), fnv64(&bytes)).unwrap();
+                ex.world.file.edits.buildings.clear();
+            }
+        }
+    }
     // The designer's steps on the first site underground: every room furnished again, doors
     // where needed, the plan as text, the site it builds and its problems.
     use crate::under::{UnderKind, design};
     let site = (0..crate::town::layout_count(&ex.t0))
-        .find_map(|li| crate::town::layout(&ex.world, &ex.t0, li).entrances.iter().position(|e| e.kind != UnderKind::Sewer).map(|k| format!("u:{li}:{k}")));
+        .find_map(|li| crate::town::layout(&ex.world, &ex.t0, li).entrances.iter().find(|e| e.kind != UnderKind::Sewer).map(|e| format!("u:{li}:{}", e.id)));
     if let Some(id) = site
         && let Ok(mut d) = design::design_of(&ex.world, &ex.t0, &id, true)
     {

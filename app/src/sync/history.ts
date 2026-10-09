@@ -77,6 +77,14 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
       }
       case 'restore_objects':
         return 'brought objects back';
+      case 'remove_buildings': {
+        const ids = Array.isArray(change.removed) ? (change.removed as string[]) : [];
+        const n = Number(change.count ?? ids.length);
+        if (n === 1 && change.name) return `took away ${String(change.name)}`;
+        return n === 1 && ids[0] ? `took away ${nameOf(ids[0])}` : `took away ${n} buildings`;
+      }
+      case 'restore_building':
+        return `${nameOf(id)} as generated again`;
       case 'place_crossing':
         return `${change.changed ? 'changed' : 'put down'} a ${String(change.kind ?? 'crossing')}`;
       case 'remove_crossings': {

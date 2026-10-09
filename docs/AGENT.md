@@ -97,8 +97,11 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | `upload_sprite` | A picture (base64, or a file on this machine) as a new kind of object, with its size and rules (cover, blocks movement or sight, difficult, height). |
 | `place_objects` | Put objects on the battlemap at world positions (up to 500 at once). |
 | `remove_objects`, `restore_objects` | Take objects away (placed ones by id, generated ones by kind and place, or all in a circle); bring cleared ones back. |
-| `create_building` | Draw a building: a footprint (`poly` corners, a `rect` or a round tower `circle`, snapped to the 5-ft grid) on dry land clear of buildings, roads and walls; what it is (`func`: a business such as inn, blacksmith, temple, castle, or a home), `floors`, `roof` (hip, battlements, cone), `tint`, `structure` (ruin). It gets an interior, a roof and walls on the battlemap. Returns its `c:` id and building id (the same footprint again returns the building already there). |
-| `update_building` | Change a drawn building's options, or move or reshape it with a new footprint. |
+| `create_building` | Draw a building: a footprint (`poly` corners, a `rect` or a round tower `circle`, snapped to the 5-ft grid), or `near` a place with `width_ft` and `depth_ft` (the nearest clear lot on a street), on dry land clear of buildings, roads, walls and squares; what it is (`func`: a business such as inn, blacksmith, temple, castle, or a home), `floors`, `roof` (hip, battlements, cone), `tint`, `structure` (ruin). It gets an interior, a roof and walls on the battlemap. Returns its `c:` id and building id (the same footprint again returns the building already there). |
+| `update_building` | Change a building's options, or move or reshape it with a new footprint: a drawn one (`c:` id) or one of the world's own (`b:<layout>:<id>`; `auto` puts an option back as generated). |
+| `check_building_spot` | Whether a footprint is clear for a building (read-only): its point and name, or why not. |
+| `remove_buildings` | Take away buildings of the world's own, by ids or every one with its middle inside a polygon (a ward to clear); every other building keeps its id. |
+| `restore_building` | Put one of the world's own buildings back as generated. |
 | `place_crossing` | Put a bridge, ford or ferry down `from` one bank `to` the other (`[x_ft, y_ft]` each; 10 to 2000 ft, a ferry at least 68; `width_ft` 5 to 40, default 12): a bridge's plank deck clear of the water, a ford's bed at wading depth under stepping stones, a ferry's jetties with a raft on a rope between. With `id`, changes that one. Returns its `v:` id. |
 | `list_crossings`, `remove_crossings` | The crossings put down by hand; take some away by id. |
 | `get_site_design` | An underground site (`u:`) as a text plan: rooms by symbol, one character per 5-ft square, doors, items and the ways between levels. |
@@ -126,6 +129,7 @@ Edits are layered over the generated world. The world file is seed + parameters 
 | `sprites` | Uploaded sprites by asset id: name, size, cover, blocks_move, blocks_sight, difficult, height_ft. |
 | `designs` | Underground sites designed by hand, by site id: the grid's place, and per level its squares (run-length encoded), rooms, doors and items. Built instead of the generated site. |
 | `crossings` | Crossings put down by hand, by `v:<id>`: kind (bridge, ford, ferry), ends `a` and `b` (ft), width. |
+| `buildings` | The world's own buildings changed or taken away, by `b:<layout>:<id>`: `at` (its middle as generated; the change is set aside if another building stands at that id after the town is laid out anew), `removed`, `func`, `floors`, `poly`, `roof`, `tint`, `structure`. |
 
 Edits don't change the world's hash, and created sites use the same generators as the world's own. Objects
 and clears change only the battlemap chunks holding them; crossings, the battlemaps and town-zoom tiles along them.

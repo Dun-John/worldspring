@@ -339,10 +339,16 @@ impl T0 {
         let rinp = roads::Inputs { world, drawn, pre: Default::default(), plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, routes: Default::default() };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None, &mut conflicts);
-        let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
-        settlements = settle::place(&sinp, settlements, &[T::Town], Some(&usage), &mut conflicts);
-        let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad, roads::RoadClass::Road]);
-        settlements = settle::place(&sinp, settlements, &[T::Village], Some(&usage), &mut conflicts);
+        if world.file.params.generated_roads {
+            let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
+            settlements = settle::place(&sinp, settlements, &[T::Town], Some(&usage), &mut conflicts);
+            let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad, roads::RoadClass::Road]);
+            settlements = settle::place(&sinp, settlements, &[T::Village], Some(&usage), &mut conflicts);
+        } else {
+            // Placed without regard to roads, so drawing one never moves a settlement.
+            settlements = settle::place(&sinp, settlements, &[T::Town], None, &mut conflicts);
+            settlements = settle::place(&sinp, settlements, &[T::Village], None, &mut conflicts);
+        }
         // Waterside settlements stand on their water, not at the centre of their map cell.
         let water_grid = Grid::from_vec(w, h, hydro.water.clone());
         let biome_seed = world.stream("t0.biome.warp");

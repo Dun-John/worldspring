@@ -513,6 +513,24 @@ export class Labels {
     this.lastZoom = NaN;
   }
 
+  /** Drop the business pins of these buildings (changed or taken away: asked for again). */
+  forgetPlaces(ids: Iterable<string>) {
+    const gone = new Set(ids);
+    let n = 0;
+    for (let k = this.items.length - 1; k >= 0; k--) {
+      const it = this.items[k];
+      if (!gone.has(it.f.id) || !this.placeHits.has(it.f.id)) continue;
+      this.unletter(it);
+      this.items.splice(k, 1);
+      n++;
+    }
+    for (const id of gone) this.placeHits.delete(id);
+    if (n) {
+      this.sort();
+      this.lastZoom = NaN;
+    }
+  }
+
   private unletter(it: Placed) {
     it.text?.destroy();
     it.text = null;

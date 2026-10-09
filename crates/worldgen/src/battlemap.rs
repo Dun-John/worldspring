@@ -1036,7 +1036,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         }
-        for (bi, b) in l.buildings.iter().enumerate() {
+        for b in &l.buildings {
             let bb = bbox(&b.poly);
             if !overlaps(bb) {
                 continue;
@@ -1062,7 +1062,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 for i in i0..=i1 as usize {
                     if crate::town::geom::contains(&b.poly, center(i, j)) {
                         if id == 0 {
-                            refs.push((l.index, bi as u32));
+                            refs.push((l.index, b.id));
                             let battlements = crate::interior::battlements(b);
                             polys.push((
                                 b.poly.iter().map(|p| [((p[0] - ox) / SQUARE_FT) as f32, ((p[1] - oy) / SQUARE_FT) as f32]).collect(),

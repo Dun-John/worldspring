@@ -78,4 +78,4 @@ for (const worldJson of [wasm.default_world_json(424242), JSON.stringify(sketche
   }
   total += a.length;
 }
-console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings, crossings and a site redesigned`);
+console.log(`determinism ok: ${total} artifacts identical (native == wasm), with a sketched world, drawn buildings, the world's own buildings edited, crossings and a site redesigned`);

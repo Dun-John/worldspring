@@ -61,6 +61,11 @@ pub struct WorldParams {
     pub poi_density: f64,
     /// Per-biome weight by name (see `t0::biome::Biome::name`); missing = 1, 0 disables.
     pub biome_weights: BTreeMap<String, f64>,
+    /// Off: only the roads drawn in the sketch (with short spurs to the settlements beside
+    /// them); settlements are placed without regard to roads and no waystations are made.
+    /// Left out of the file when on, so older worlds keep their hash.
+    #[serde(skip_serializing_if = "is_true")]
+    pub generated_roads: bool,
 }
 
 impl Default for WorldParams {
@@ -85,12 +90,17 @@ impl Default for WorldParams {
             settlement_density: 1.0,
             poi_density: 1.0,
             biome_weights: BTreeMap::new(),
+            generated_roads: true,
         }
     }
 }
 
 fn is_one(v: &f64) -> bool {
     *v == 1.0
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 impl WorldParams {
@@ -379,6 +389,70 @@ pub struct Edits {
     /// another, drawn on the battlemap over what is there.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub crossings: BTreeMap<String, Crossing>,
+    /// Generated buildings changed or taken away (`b:<layout>:<id>`), applied over the layout
+    /// as generated (`town::layout`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub buildings: BTreeMap<String, BuildingEdit>,
+}
+
+/// A generated building changed by hand: removed, or given another function, storeys,
+/// footprint, roof, tint or structure (each left out: as generated). `at` is the generated
+/// footprint's centre: when the building at that id no longer stands there (the world was
+/// generated again from a changed sketch and the town laid out anew), the edit is set aside.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct BuildingEdit {
+    pub at: [f64; 2],
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
+    /// A `town::catalog` function key or a home (`BUILDING_HOMES`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub func: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floors: Option<u8>,
+    /// A new footprint (world ft), as a drawn building's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub poly: Vec<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roof: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<String>,
+    /// `roofed` or `ruin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structure: Option<String>,
+}
+
+impl BuildingEdit {
+    /// How far (ft) the building at its id may stand from `at` and still be the one edited.
+    pub const SAME_AT_FT: f64 = 3.0;
+
+    /// Whether its options make sense (as a drawn building's).
+    pub fn check(&self) -> Result<(), String> {
+        if !self.at[0].is_finite() || !self.at[1].is_finite() {
+            return Err("at: the building's centre as generated".into());
+        }
+        if self.removed {
+            return Ok(());
+        }
+        let c = crate::town::geom::centroid(&self.poly);
+        let probe = Created {
+            kind: "building".into(),
+            x: if self.poly.is_empty() { self.at[0] } else { c[0] },
+            y: if self.poly.is_empty() { self.at[1] } else { c[1] },
+            poly: if self.poly.is_empty() { vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]].into_iter().map(|q| [q[0] + self.at[0] - 10.0, q[1] + self.at[1] - 10.0]).collect() } else { self.poly.clone() },
+            floors: self.floors,
+            func: self.func.clone(),
+            roof: self.roof.clone(),
+            tint: self.tint.clone(),
+            structure: self.structure.clone(),
+            ..Default::default()
+        };
+        probe.check()
+    }
+
+    /// Whether it changes nothing (every option as generated).
+    pub fn is_noop(&self) -> bool {
+        !self.removed && self.func.is_none() && self.floors.is_none() && self.poly.is_empty() && self.roof.is_none() && self.tint.is_none() && self.structure.is_none()
+    }
 }
 
 /// A crossing put down by hand: from `a` to `b` (world ft, bank to bank), `width` ft across.
@@ -676,14 +750,19 @@ impl Created {
 
     /// Whether `self`, being created (asked for at `asked`, put at its own point), is `other`, a
     /// live site already there: the same kind and beneath, within `SAME_SPOT_FT` of either point;
-    /// a building, the same footprint (each corner within 2 ft). Creating a site again (a script
-    /// run twice, a world file opened again) then adds nothing.
+    /// a building, the same footprint (each corner within 2 ft), function and name (if `self`
+    /// has one). Creating a site again (a script run twice, a world file opened again) then adds
+    /// nothing; another building on that footprint is refused where it overlaps the first.
     pub fn same_site(&self, other: &Created, asked: [f64; 2]) -> bool {
         if other.removed || other.kind != self.kind {
             return false;
         }
         if self.kind == "building" {
-            return other.poly.len() == self.poly.len() && other.poly.iter().zip(&self.poly).all(|(a, b)| (a[0] - b[0]).abs() <= 2.0 && (a[1] - b[1]).abs() <= 2.0);
+            let named = self.name.trim().is_empty() || self.name.trim() == other.name.trim();
+            return other.func == self.func
+                && named
+                && other.poly.len() == self.poly.len()
+                && other.poly.iter().zip(&self.poly).all(|(a, b)| (a[0] - b[0]).abs() <= 2.0 && (a[1] - b[1]).abs() <= 2.0);
         }
         let near = |p: [f64; 2]| (other.x - p[0]).hypot(other.y - p[1]) <= Self::SAME_SPOT_FT;
         other.under_kind() == self.under_kind() && (near([self.x, self.y]) || near(asked))
@@ -846,6 +925,7 @@ impl Edits {
                 "sprites" => self.sprites = std::mem::take(&mut part.sprites),
                 "designs" => self.designs = std::mem::take(&mut part.designs),
                 "crossings" => self.crossings = std::mem::take(&mut part.crossings),
+                "buildings" => self.buildings = std::mem::take(&mut part.buildings),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -876,6 +956,7 @@ impl Edits {
                 "sprites" => patch(&mut self.sprites, p)?,
                 "designs" => patch(&mut self.designs, p)?,
                 "crossings" => patch(&mut self.crossings, p)?,
+                "buildings" => patch(&mut self.buildings, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -885,6 +966,7 @@ impl Edits {
     pub fn is_empty(&self) -> bool {
         self.renames.is_empty() && self.notes.is_empty() && self.hidden.is_empty() && self.created.is_empty() && self.npcs.is_empty() && self.plots.is_empty()
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
+            && self.buildings.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1004,6 +1086,7 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("sprites", Shape::Map),
     ("designs", Shape::Map),
     ("crossings", Shape::Map),
+    ("buildings", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {

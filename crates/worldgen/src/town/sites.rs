@@ -63,6 +63,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             structure,
             roof: None,
             tint: None,
+            id: 0,
         });
     };
     match p.kind {
@@ -91,24 +92,24 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             if let Some(under) = t0.created_site(poi).and_then(|c| c.under) {
                 kind = under;
             }
-            entrances.push(super::Entrance { at: mul(dir, -7.5), dir, kind });
+            entrances.push(super::Entrance { at: mul(dir, -7.5), dir, kind, id: 0 });
         }
         PoiKind::Cave => {
             let dir = uphill([0.0, 0.0]).unwrap_or_else(|| any_dir(&mut rng));
-            entrances.push(super::Entrance { at: [0.0, 0.0], dir, kind: UnderKind::Cave });
+            entrances.push(super::Entrance { at: [0.0, 0.0], dir, kind: UnderKind::Cave, id: 0 });
         }
         PoiKind::Mine => {
             // The adit runs into the hill; the miners' shed and the yard stand below it.
             let dir = uphill([0.0, 0.0]).unwrap_or_else(|| any_dir(&mut rng));
             let side = [-dir[1], dir[0]];
-            entrances.push(super::Entrance { at: [0.0, 0.0], dir, kind: UnderKind::Mine });
+            entrances.push(super::Entrance { at: [0.0, 0.0], dir, kind: UnderKind::Mine, id: 0 });
             push(rect(add(mul(dir, -40.0), mul(side, 28.0)), dir, 26.0, 18.0), Structure::Roofed, None, 1, 1, &mut buildings);
             plazas.push(rect(mul(dir, -30.0), dir, 40.0, 30.0));
         }
         PoiKind::LavaTube => {
             // Tubes run down the flank, the way the lava flowed.
             let dir = uphill([0.0, 0.0]).map(|u| mul(u, -1.0)).unwrap_or_else(|| any_dir(&mut rng));
-            entrances.push(super::Entrance { at: [0.0, 0.0], dir, kind: UnderKind::LavaTube });
+            entrances.push(super::Entrance { at: [0.0, 0.0], dir, kind: UnderKind::LavaTube, id: 0 });
         }
         PoiKind::Entrance => {
             // Just the way down: into the hill for caves and mines, down the flank for lava
@@ -123,7 +124,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
                     ([snap(center[0]), snap(center[1])], [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]][rng.below(4) as usize])
                 }
             };
-            entrances.push(super::Entrance { at, dir, kind });
+            entrances.push(super::Entrance { at, dir, kind, id: 0 });
         }
         PoiKind::Tower => {
             let r = rng.range(16.0, 22.0);
@@ -236,7 +237,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     for p in &mut props {
         p.at = add(p.at, center);
     }
-    Layout {
+    let mut l = Layout {
         index,
         center,
         radius: 80.0,
@@ -263,41 +264,72 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
         entrances,
         yards,
         props,
-    }
+    };
+    l.number();
+    l
 }
 
 /// A building drawn by hand (footprint local to its point): its function (a business, else a
 /// home; a house by default), storeys, structure, roof and tint as chosen; named as created,
 /// else as its trade would be.
 fn drawn(c: &crate::world::Created, poly: Vec<P>, pad_ft: f32, rng: &mut Pcg32, t0: &T0, center: P) -> Building {
-    use super::{RoofStyle, catalog::RESIDENTIAL};
-    use crate::world::{BUILDING_HOMES, TINTS};
-    let func = c.func.as_deref().and_then(catalog::index_of);
-    let home = c.func.as_deref().and_then(|f| BUILDING_HOMES.iter().position(|h| *h == f));
     let ruin = c.structure.as_deref() == Some("ruin");
-    let residential = if ruin && func.is_none() && home.is_none() { catalog::RUINED } else { home.unwrap_or(1) };
-    debug_assert!(residential < RESIDENTIAL.len());
-    let name = Some(c.name.trim().to_string()).filter(|n| !n.is_empty()).or_else(|| {
-        let f = &catalog::CATALOG[func?];
-        let culture = t0.settlements.iter().min_by(|a, b| (a.x - center[0]).hypot(a.y - center[1]).total_cmp(&(b.x - center[0]).hypot(b.y - center[1]))).map_or(0, |s| s.culture as usize);
-        let mut namer = crate::t0::names::Namer::new(rng.next_u32() as u64);
-        super::business_name(f, rng, &mut namer, culture)
-    });
-    Building {
+    let (func, residential) = func_of(c.func.as_deref().unwrap_or(""), ruin);
+    let name = Some(c.name.trim().to_string()).filter(|n| !n.is_empty()).or_else(|| trade_name(func, rng, t0, center));
+    let tower = func.is_none() && residential as usize == catalog::WIZARD_TOWER;
+    let mut b = Building {
         poly,
         ward: Ward::Rural,
-        func: func.map(|i| i as u16),
-        residential: residential as u8,
+        func,
+        residential,
         name,
-        floors: c.floors.unwrap_or(if home == Some(catalog::WIZARD_TOWER) { 4 } else { 1 }).max(1),
+        floors: c.floors.unwrap_or(if tower { 4 } else { 1 }).max(1),
         pad_ft,
-        structure: if ruin { Structure::Ruin } else { Structure::Roofed },
-        roof: match c.roof.as_deref() {
-            Some("hip") => Some(RoofStyle::Hip),
-            Some("battlements") => Some(RoofStyle::Battlements),
-            Some("cone") => Some(RoofStyle::Cone),
-            _ => None,
-        },
-        tint: c.tint.as_deref().and_then(|t| TINTS.iter().position(|x| *x == t)).map(|i| i as u8),
+        structure: Structure::Roofed,
+        roof: None,
+        tint: None,
+        id: 0,
+    };
+    apply_looks(&mut b, c.roof.as_deref(), c.tint.as_deref(), c.structure.as_deref());
+    b
+}
+
+/// A building's function from a catalog key or a home (`BUILDING_HOMES`); else a house, or a
+/// ruined building for a ruin. (`func`, `residential`)
+pub fn func_of(key: &str, ruin: bool) -> (Option<u16>, u8) {
+    use crate::world::BUILDING_HOMES;
+    let func = catalog::index_of(key);
+    let home = BUILDING_HOMES.iter().position(|h| *h == key);
+    let residential = if ruin && func.is_none() && home.is_none() { catalog::RUINED } else { home.unwrap_or(1) };
+    debug_assert!(residential < catalog::RESIDENTIAL.len());
+    (func.map(|i| i as u16), residential as u8)
+}
+
+/// The name a business would have here (in the nearest settlement's culture); none for a home.
+pub fn trade_name(func: Option<u16>, rng: &mut Pcg32, t0: &T0, center: P) -> Option<String> {
+    let f = &catalog::CATALOG[func? as usize];
+    let culture = t0.settlements.iter().min_by(|a, b| (a.x - center[0]).hypot(a.y - center[1]).total_cmp(&(b.x - center[0]).hypot(b.y - center[1]))).map_or(0, |s| s.culture as usize);
+    let mut namer = crate::t0::names::Namer::new(rng.next_u32() as u64);
+    super::business_name(f, rng, &mut namer, culture)
+}
+
+/// A roof (`ROOFS`), tint (`TINTS`) and structure (`STRUCTURES`) chosen by hand; each not
+/// given stays as it is.
+pub fn apply_looks(b: &mut Building, roof: Option<&str>, tint: Option<&str>, structure: Option<&str>) {
+    use super::RoofStyle;
+    use crate::world::TINTS;
+    match roof {
+        Some("hip") => b.roof = Some(RoofStyle::Hip),
+        Some("battlements") => b.roof = Some(RoofStyle::Battlements),
+        Some("cone") => b.roof = Some(RoofStyle::Cone),
+        _ => {}
+    }
+    if let Some(t) = tint.and_then(|t| TINTS.iter().position(|x| *x == t)) {
+        b.tint = Some(t as u8);
+    }
+    match structure {
+        Some("ruin") => b.structure = Structure::Ruin,
+        Some("roofed") => b.structure = Structure::Roofed,
+        _ => {}
     }
 }

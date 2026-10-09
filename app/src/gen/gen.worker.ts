@@ -67,6 +67,10 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                         ? c.building_spot_json(JSON.stringify(a.poly), a.func, a.id)
                         : a.op === 'funcs'
                           ? building_funcs_json()
+                          : a.op === 'bedit'
+                          ? c.building_edit_json(a.id, a.change)
+                          : a.op === 'bin'
+                          ? c.buildings_in_json(JSON.stringify(a.poly))
                           : a.op === 'design'
                             ? c.design_json(a.id, a.design, a.action)
                             : a.op === 'undercat'

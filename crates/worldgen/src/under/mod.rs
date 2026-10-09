@@ -321,7 +321,7 @@ pub fn city_entrances(l: &Layout, t0: &T0, seed: u64) -> Vec<Entrance> {
                     }
                 }
                 for at in chosen {
-                    out.push(Entrance { at, dir: [1.0, 0.0], kind: UnderKind::Sewer });
+                    out.push(Entrance { at, dir: [1.0, 0.0], kind: UnderKind::Sewer, id: 0 });
                 }
             }
         }
@@ -345,7 +345,7 @@ pub fn city_entrances(l: &Layout, t0: &T0, seed: u64) -> Vec<Entrance> {
                 [(-1.5, -1.5), (2.5, -1.5), (2.5, 1.5), (-1.5, 1.5)].iter().all(|&(a, s)| town::geom::contains(&b.poly, add(at, add(mul(d, a * sq), mul(side, s * sq)))))
             };
             let dir = dirs.iter().copied().find(|d| fits(*d)).unwrap_or(dirs[0]);
-            out.push(Entrance { at, dir, kind: UnderKind::Catacombs });
+            out.push(Entrance { at, dir, kind: UnderKind::Catacombs, id: 0 });
         } else if matches!(key, Some("catacombs" | "mausoleum")) {
             // A stair beside the house, running in under it.
             let m = b.poly.len();
@@ -364,7 +364,7 @@ pub fn city_entrances(l: &Layout, t0: &T0, seed: u64) -> Vec<Entrance> {
                 let at = add(mid, mul(n, 9.0));
                 let near = |o: &town::Building| o.poly.iter().any(|v| town::geom::dist(*v, at) < 80.0);
                 if !wet(t0, at) && !l.buildings.iter().any(|o| near(o) && town::geom::contains(&o.poly, at)) {
-                    out.push(Entrance { at, dir: mul(n, -1.0), kind: UnderKind::Catacombs });
+                    out.push(Entrance { at, dir: mul(n, -1.0), kind: UnderKind::Catacombs, id: 0 });
                     break;
                 }
             }
@@ -380,7 +380,7 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
         return None;
     }
     let l = town::layout(world, t0, layout);
-    let e = *l.entrances.get(k)?;
+    let e = *l.entrance(k)?;
     if e.kind == UnderKind::Sewer {
         let o = sewer_section(e.at);
         return sewer_site(world, t0, layout, (o[0] / SEWER_SECTION_FT) as i64, (o[1] / SEWER_SECTION_FT) as i64);
@@ -459,18 +459,17 @@ fn street_point(t0: &T0, l: &Layout, c: P, reach: f64) -> Option<P> {
     best.map(|(_, q)| q).filter(|&q| !wet(t0, q))
 }
 
-/// Where building `bi`'s cellar meets the sewers (a point on the street outside it), for
+/// Where building `b`'s cellar meets the sewers (a point on the street outside it), for
 /// taverns, warehouses, temples, smugglers' dens and the like and one house in ten, in cities.
-pub fn sewer_link_of(t0: &T0, l: &Layout, bi: usize) -> Option<P> {
+pub fn sewer_link_of(t0: &T0, l: &Layout, b: &town::Building) -> Option<P> {
     if l.site || l.tier < crate::t0::settle::Tier::City {
         return None;
     }
-    let b = l.buildings.get(bi)?;
     if b.structure != Structure::Roofed {
         return None;
     }
     let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
-    let chosen = key.is_some_and(|k| SEWER_CELLARS.contains(&k)) || (b.func.is_none() && crate::core::rng::hash2(l.index as u64 ^ 0x5e3e, bi as i64, 7) % 10 == 0);
+    let chosen = key.is_some_and(|k| SEWER_CELLARS.contains(&k)) || (b.func.is_none() && crate::core::rng::hash2(l.index as u64 ^ 0x5e3e, b.id as i64, 7) % 10 == 0);
     if !chosen {
         return None;
     }
@@ -480,11 +479,10 @@ pub fn sewer_link_of(t0: &T0, l: &Layout, bi: usize) -> Option<P> {
 }
 
 /// Where a large keep's deep dungeons break out into the sewers: the street nearest it.
-pub fn keep_escape(t0: &T0, l: &Layout, bi: usize) -> Option<P> {
+pub fn keep_escape(t0: &T0, l: &Layout, b: &town::Building) -> Option<P> {
     if l.site || l.tier < crate::t0::settle::Tier::City {
         return None;
     }
-    let b = l.buildings.get(bi)?;
     if !crate::interior::has_deep_dungeon(b) {
         return None;
     }
@@ -498,7 +496,7 @@ pub fn keep_dungeon(world: &World, t0: &T0, layout: usize, bi: usize) -> Option<
         return None;
     }
     let l = town::layout(world, t0, layout);
-    if !crate::interior::has_deep_dungeon(l.buildings.get(bi)?) {
+    if !crate::interior::has_deep_dungeon(l.building(bi)?) {
         return None;
     }
     let keep = crate::interior::generate(world, t0, layout, bi)?;
@@ -562,7 +560,7 @@ fn site(
             // Up into the keep's cellar; and an old escape tunnel out to the sewers.
             p.put(Item::new("up", "stairs up to the keep", here % nx, here / nx, 1, 1, 0, false, 0.0, None));
             p.links.push(Link { x: (here % nx) as u16, y: (here / nx) as u16, to: format!("b:{settlement}:{building}") });
-            if let Some(q) = keep_escape(t0, l, building as usize) {
+            if let Some(q) = l.building(building as usize).and_then(|b| keep_escape(t0, l, b)) {
                 let g = sub(q, f.origin);
                 let at = [crate::town::geom::dot(g, f.axis) / SQUARE_FT, crate::town::geom::dot(g, f.across) / SQUARE_FT];
                 let free = (0..nx * ny).filter(|&k| p.cells[k] >= 0 && !p.taken[k]).min_by(|&a, &b| {
@@ -1038,17 +1036,17 @@ fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate: Option<usi
         let (i, j) = (((q[0] - origin[0]) / SQUARE_FT).floor(), ((q[1] - origin[1]) / SQUARE_FT).floor());
         (i >= 0.0 && j >= 0.0 && (i as usize) < nx && (j as usize) < ny).then(|| j as usize * nx + i as usize)
     };
-    for bi in 0..l.buildings.len() {
-        let c = town::geom::centroid(&l.buildings[bi].poly);
+    for b in &l.buildings {
+        let (c, bi) = (town::geom::centroid(&b.poly), b.id);
         if (c[0] / s_ft - here[0] - 0.5).abs() > 0.8 || (c[1] / s_ft - here[1] - 0.5).abs() > 0.8 {
             continue;
         }
-        if let Some(q) = sewer_link_of(t0, l, bi)
+        if let Some(q) = sewer_link_of(t0, l, b)
             && let Some(k) = square_of(q)
         {
             joins.push((k, Link { x: (k % nx) as u16, y: (k / nx) as u16, to: format!("b:{}:{bi}", l.index) }, "ladder", "ladder up into a cellar"));
         }
-        if let Some(q) = keep_escape(t0, l, bi)
+        if let Some(q) = keep_escape(t0, l, b)
             && let Some(k) = square_of(q)
         {
             joins.push((k, Link { x: (k % nx) as u16, y: (k / nx) as u16, to: format!("k:{}:{bi}", l.index) }, "tunnel", "tunnel to the keep's dungeons"));

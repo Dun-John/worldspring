@@ -22,16 +22,18 @@
     paintedBiomes: number;
     /** Settlements placed in the sketch (they stand whatever the Settlements dial says). */
     pins: number;
+    /** Roads drawn in the sketch. */
+    roads: number;
     /** Generate the draft (with the sketch, stretched to its size). */
     onGenerate: () => void;
   }
-  let { draft, world, busy, status, progress, sketching, strokes, sketchLand, paintedBiomes, pins, onGenerate }: Props = $props();
+  let { draft, world, busy, status, progress, sketching, strokes, sketchLand, paintedBiomes, pins, roads, onGenerate }: Props = $props();
 
   type Num = { [K in keyof WorldParams]: WorldParams[K] extends number ? K : never }[keyof WorldParams];
   /** [key, label, min, max, step, format] */
   type Slider = [Num, string, number, number, number, (v: number) => string];
   const times = (v: number) => (Math.abs(v - 1) < 1e-6 ? 'Normal' : `×${v.toFixed(v * 10 === Math.round(v * 10) ? 1 : 2)}`);
-  const GROUPS: { key: string; label: string; open: boolean; sliders: Slider[]; wind?: boolean }[] = [
+  const GROUPS: { key: string; label: string; open: boolean; sliders: Slider[]; wind?: boolean; roads?: boolean }[] = [
     {
       key: 'size',
       label: 'Size & land',
@@ -72,6 +74,7 @@
       key: 'people',
       label: 'People & places',
       open: false,
+      roads: true,
       sliders: [
         ['settlement_density', 'Settlements', 0, 3, 0.05, (v) => (v ? times(v) : 'None')],
         ['poi_density', 'Ruins & sites', 0, 3, 0.05, (v) => (v ? times(v) : 'None')],
@@ -87,11 +90,14 @@
   const p = $derived(draft.p);
   const moot = (key: Num) => key === 'land_fraction' && sketchLand;
   const isChanged = (key: Num) => p[key] !== DEFAULT_PARAMS[key];
-  const changedIn = (g: (typeof GROUPS)[number]) => g.sliders.filter(([k]) => isChanged(k) && !moot(k)).length + (g.wind && p.wind !== DEFAULT_PARAMS.wind ? 1 : 0);
+  const generated = $derived(p.generated_roads !== false);
+  const changedIn = (g: (typeof GROUPS)[number]) =>
+    g.sliders.filter(([k]) => isChanged(k) && !moot(k)).length + (g.wind && p.wind !== DEFAULT_PARAMS.wind ? 1 : 0) + (g.roads && !generated ? 1 : 0);
   function reset(g: (typeof GROUPS)[number]) {
     const next = { ...draft.p };
     for (const [k] of g.sliders) (next as Record<string, unknown>)[k] = DEFAULT_PARAMS[k];
     if (g.wind) next.wind = DEFAULT_PARAMS.wind;
+    if (g.roads) next.generated_roads = true;
     draft.p = next;
   }
 
@@ -142,6 +148,18 @@
           {#if key === 'settlement_density' && p.settlement_density <= 0 && pins}<div class="ws-hint">Your {pins} sketched {pins === 1 ? 'settlement still appears' : 'settlements still appear'}.</div>{/if}
           {#if key === 'poi_density' && p.poi_density <= 0}<div class="ws-hint">Sites you place in Edit › Sites still appear.</div>{/if}
         {/each}
+        {#if g.roads}
+          <div class="ws-field">
+            Roads
+            <div class="ws-seg">
+              <button class:on={generated} onclick={() => (draft.p.generated_roads = true)}>Generated</button>
+              <button class:on={!generated} onclick={() => (draft.p.generated_roads = false)}>Only drawn</button>
+            </div>
+          </div>
+          {#if !generated}<div class="ws-hint">
+              Only roads you draw in Sketch › Road appear, with short spurs to towns beside them{roads ? ` (${roads} drawn)` : ': none drawn yet'}. Settlements are placed without regard to roads, so drawing one never moves a town.
+            </div>{/if}
+        {/if}
         {#if g.wind}
           <div class="ws-field">
             Winds

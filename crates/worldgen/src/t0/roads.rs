@@ -386,7 +386,9 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     let mut rng = Pcg32::new(inp.world.stream("t0.waystation"), 23);
     let mut waystations: Vec<Poi> = Vec::new();
     let day = 24.0 * 5280.0;
-    for r in roads.iter().filter(|r| r.class == RoadClass::KingsRoad) {
+    // None with generated roads off (roadside inns go in by hand there).
+    let generated = inp.world.file.params.generated_roads;
+    for r in roads.iter().filter(|r| generated && r.class == RoadClass::KingsRoad) {
         let mut acc = 0.0;
         for pair in r.pts.windows(2) {
             acc += dist(pair[0], pair[1]);
@@ -472,7 +474,9 @@ pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) ->
     // The drawn roads each settlement lies beside.
     let beside: Vec<Vec<usize>> = settlements.iter().map(|s| inp.drawn.iter().enumerate().filter(|(_, d)| d.class.is_some() && line_dist(at(s), &d.pts) <= snap).map(|(i, _)| i).collect()).collect();
     let barriers: Vec<&Drawn> = inp.drawn.iter().filter(|d| d.class.is_none()).collect();
-    let mut out: Vec<Link> = link_edges(settlements, classes)
+    // With generated roads off, only the drawn roads and their spurs.
+    let planned = if inp.world.file.params.generated_roads { link_edges(settlements, classes) } else { Vec::new() };
+    let mut out: Vec<Link> = planned
         .into_iter()
         .filter(|&(a, b, _)| !beside[a].iter().any(|d| beside[b].contains(d)) && !barriers.iter().any(|d| crosses(at(&settlements[a]), at(&settlements[b]), &d.pts)))
         .map(|(a, b, class)| Link { a: End::Town(a), b: End::Town(b), class, stroke: None })

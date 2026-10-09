@@ -26,6 +26,8 @@ export interface WorldParams {
   settlement_density: number;
   poi_density: number;
   biome_weights: Record<string, number>;
+  /** Off: only the roads drawn in the sketch (with short spurs to the settlements beside them). */
+  generated_roads: boolean;
 }
 
 export interface WorldFile {
@@ -195,6 +197,22 @@ export interface Edits {
   designs?: Record<string, SiteDesign>;
   /** `v:<id>` → a bridge, ford or ferry put down by hand. */
   crossings?: Record<string, Crossing>;
+  /** `b:<layout>:<id>` → one of the world's own buildings changed or taken away. */
+  buildings?: Record<string, BuildingEdit>;
+}
+
+/** A generated building changed by hand (`worldgen::world::BuildingEdit`): `at` is its middle
+ * as generated (the edit is set aside if another building stands at its id after the town is
+ * laid out anew); every option left out is as generated. */
+export interface BuildingEdit {
+  at: [number, number];
+  removed?: boolean;
+  func?: string;
+  floors?: number;
+  poly?: [number, number][];
+  roof?: string;
+  tint?: string;
+  structure?: string;
 }
 
 export type CrossingKind = 'bridge' | 'ford' | 'ferry';
@@ -320,6 +338,10 @@ export type Ask =
   | { op: 'building'; poly: [number, number][]; func?: string; id: string }
   /** What a building can be (`agent::building_funcs_json`). */
   | { op: 'funcs' }
+  /** A generated building's edit with a change made, or its removal (`agent::building_edit_json`). */
+  | { op: 'bedit'; id: string; change: string }
+  /** The generated buildings with their middle inside a polygon (`agent::generated_buildings_in`). */
+  | { op: 'bin'; poly: [number, number][] }
   /** An underground site as a design (the one given, else its own), changed by `action`, with
    * what it builds and its problems (`under::design::design_json`). */
   | { op: 'design'; id: string; design?: string; action?: string }

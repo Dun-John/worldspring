@@ -4,7 +4,7 @@ import { EDIT_FIELDS } from '../sync/ops';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingFuncs, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, BuildingFuncs, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -111,6 +111,18 @@ export class GenClient {
    * name for it; null if the generator could not answer. */
   buildingSpot(poly: [number, number][], func: string | undefined, id: string): Promise<{ x: number; y: number; name: string } | { error: string } | null> {
     return this.ask({ op: 'building', poly, func, id }).then((j) => JSON.parse(j));
+  }
+
+  /** A generated building's edit with `change` made (`{func, floors, poly, roof, tint, structure}`;
+   * an empty string or `auto` goes back to as generated), or `{remove: true}`: the edit (null: as
+   * generated) or why not; null if the generator could not answer. */
+  buildingEdit(id: string, change: object): Promise<{ edit: BuildingEdit | null } | { error: string } | null> {
+    return this.ask({ op: 'bedit', id, change: JSON.stringify(change) }).then((j) => JSON.parse(j));
+  }
+
+  /** The world's own buildings with their middle inside a polygon (ft): ids and middles as generated. */
+  buildingsIn(poly: [number, number][]): Promise<{ id: string; at: [number, number] }[]> {
+    return this.ask({ op: 'bin', poly }).then((j) => JSON.parse(j) ?? []);
   }
 
   /** What a building drawn by hand can be. */

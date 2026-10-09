@@ -28,6 +28,7 @@ export const DEFAULT_PARAMS: WorldParams = {
   settlement_density: 1,
   poi_density: 1,
   biome_weights: {},
+  generated_roads: true,
 };
 
 /** Biomes whose weight can be tuned (names match `t0::biome::Biome::name`). */
@@ -133,7 +134,7 @@ function hash64(text: string): string {
 
 /** Parameters added after worlds were first keyed: part of the key only when changed, so every
  * older world keeps its key (and its edits). */
-const LATER_PARAMS = new Set(['procedural_mountains']);
+const LATER_PARAMS = new Set(['procedural_mountains', 'generated_roads']);
 
 /** A key for a world's seed and parameters. */
 export function worldKey(w: WorldFile): string {

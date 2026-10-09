@@ -84,6 +84,9 @@ A summary of the world:
 - how many features of each kind it has;
 - its largest settlements, with population and position;
 - how many sites have been created;
+- `roads`: `generated and drawn`, or `only drawn` (see "Worlds with only drawn roads");
+- `buildings_changed`, and `buildings_set_aside`: changes to the world's own buildings that no longer apply
+  because the town was laid out anew (each with why);
 - `world`: its hash, for the `world` parameter of other tools.
 
 | Parameter | Type | Default | |
@@ -123,6 +126,7 @@ One feature in detail. What comes back depends on the feature:
 | Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground |
 | Sites | The layout: buildings, and ways underground with their `u:` ids |
 | Buildings and underground sites | Levels and rooms |
+| Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`; `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -649,8 +653,10 @@ furniture on every storey (a cellar too), its name on the map and in search. Its
 (returned as `building`); use it with `get_feature`, `place_npc` and interiors, as for any building. Like the
 other edits, buildings are saved, logged, shown live and leave the world hash alone.
 
-- **Where:** on dry land, out of rivers, clear of other buildings (walls may touch), roads, streets and town
-  walls. Anything else is refused with the reason (`that overlaps The Gilded Goose`, `that is on a road`).
+- **Where:** on dry land, out of rivers, clear of other buildings (walls may touch), roads, streets, town
+  walls and squares (market squares, quays, village greens, a site's yard). Anything else is refused with the
+  reason (`that overlaps The Gilded Goose`, `that is on a road`, `that is on a square (a market, quay or
+  green)`). `check_building_spot` asks without building.
 - **Footprint:** any simple shape of 3–64 corners, at least 10 ft across, every corner within 200 ft of its
   middle. L-shapes and other concave plans are fine (their roofs are drawn as several hips).
 - **What it is (`func`):** a business by its catalog key (`inn`, `tavern`, `blacksmith`, `temple`, `castle`,
@@ -666,8 +672,13 @@ other edits, buildings are saved, logged, shown live and leave the world hash al
   its building id.
 
 ### `create_building`
-A building with the same footprint as one already drawn (every corner within 2 ft) is not drawn twice: the
-result is that building, with `"existing": true`.
+A building with the same footprint as one already drawn (every corner within 2 ft), the same `func` and (if
+given) the same name is not drawn twice: the result is that building, with `"existing": true`. A different
+building on that footprint is refused (`that overlaps …`).
+
+Instead of a footprint, `near` (an id, or `{x_ft, y_ft}`) with `width_ft` and `depth_ft` finds the nearest clear
+lot: tried ring by ring out to 400 ft, turned square to the nearest street (or road), its front 2–12 ft from it
+where a street is within 300 ft, on the grid when unturned, off squares.
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -681,6 +692,8 @@ result is that building, with `"existing": true`.
 | `roof` | string | optional | `hip`, `battlements`, `cone` or `auto`. |
 | `tint` | string | optional | `terracotta`, `slate`, `thatch`, `shingle`, `moss` or `auto`. |
 | `structure` | string | optional | `roofed` (default) or `ruin`. |
+| `near` | id or object | instead of a footprint | Find the nearest clear lot near this place (see above). |
+| `width_ft`, `depth_ft` | number | with `near` | The lot along the street and back from it, 10–400 ft. |
 
 Returns the site as `get_feature` does, plus `building` (its building id).
 
@@ -688,17 +701,53 @@ Returns the site as `get_feature` does, plus `building` (its building id).
 { "name": "create_building", "arguments": { "rect": { "x_ft": 412500, "y_ft": 380120, "width_ft": 50, "depth_ft": 30 }, "func": "inn", "floors": 2, "tint": "thatch" } }
 { "name": "create_building", "arguments": { "circle": { "x_ft": 412600, "y_ft": 380200, "radius_ft": 15 }, "func": "wizard_tower", "floors": 5, "roof": "cone", "tint": "slate", "name": "The Needle" } }
 { "name": "create_building", "arguments": { "poly": [[412700, 380100], [412750, 380100], [412750, 380120], [412720, 380120], [412720, 380145], [412700, 380145]], "func": "blacksmith" } }
+{ "name": "create_building", "arguments": { "near": "b:12:340", "width_ft": 60, "depth_ft": 45, "func": "tavern", "floors": 2, "name": "The Leaky Tap" } }
 ```
 > *"Build a two-storey inn with a thatched roof at the crossroads south of Bulol, and an L-shaped smithy beside it."*
 
 ### `update_building`
-`id` (the building's `c:` id) and any of the parameters of `create_building`; those left out stay. A new
-footprint (`poly`, `rect` or `circle`) moves or reshapes it and is checked like a new one (it never collides with
-itself).
+`id` (a drawn building's `c:` id, or one of the world's own: `b:<layout>:<id>`) and any of the parameters of
+`create_building`; those left out stay. A new footprint (`poly`, `rect` or `circle`) moves or reshapes it and is
+checked like a new one (it never collides with itself).
+
+The world's own buildings take the same changes (`edits.buildings`): what it is (`func`), `floors`, `roof`,
+`tint`, `structure`, a new footprint, and `name` (a rename). `auto` (or an empty `func`) puts one option back as
+generated. A new trade with no name of its own is named as a drawn building's would be. Every other building
+keeps its id and footprint. If the world is generated again from a changed sketch and the town is laid out anew,
+a change whose building no longer stands at its id is set aside (not applied to another building).
 
 ```json
 { "name": "update_building", "arguments": { "id": "c:4", "floors": 3, "roof": "battlements" } }
+{ "name": "update_building", "arguments": { "id": "b:12:340", "func": "tavern", "floors": 2, "name": "The Leaky Tap" } }
 ```
+
+### `check_building_spot`
+Read-only: whether a footprint (`poly`, `rect` or `circle`, with `snap`) is clear for a building, as
+`create_building` checks it. `id` is the building being reshaped (it does not count against itself). Returns
+`{ok: true, x_ft, y_ft, name}` (its point and the name it would get for `func`) or `{ok: false, reason}`.
+
+```json
+{ "name": "check_building_spot", "arguments": { "rect": { "x_ft": 412500, "y_ft": 380120, "width_ft": 50, "depth_ft": 30 }, "func": "inn" } }
+```
+
+### `remove_buildings`
+Take away buildings of the world's own (drawn ones go with `delete_feature`): `ids` (`b:<layout>:<id>`), and/or
+every one whose middle lies inside `within` (a polygon, `[[x_ft, y_ft], …]`), such as a ward to clear for
+buildings of your own. Their ground is free to build on; every other building keeps its id. Returns `removed`
+(the ids) and `count`.
+
+```json
+{ "name": "remove_buildings", "arguments": { "within": [[412400, 380000], [412800, 380000], [412800, 380300], [412400, 380300]] } }
+```
+
+### `restore_building`
+`id` (`b:<layout>:<id>`): the building back as generated, whether taken away or changed (a rename stays).
+
+### Worlds with only drawn roads
+With the world parameter `generated_roads: false` (the app's World › Generate › People & places › Roads: Only
+drawn), the world has only the roads drawn in its sketch, with short spurs to the settlements beside them, and no
+roadside inns; settlements are placed without regard to roads, so drawing a road never moves one. Drawing a road
+into a town lays the town out anew (its gates follow its roads): draw roads before changing a town's buildings.
 
 ## Underground sites designed by hand
 

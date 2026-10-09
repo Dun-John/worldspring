@@ -21,6 +21,7 @@ export const EDIT_FIELDS: Record<string, Shape> = {
   sprites: 'map',
   designs: 'map',
   crossings: 'map',
+  buildings: 'map',
 };
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);

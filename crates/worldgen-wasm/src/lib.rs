@@ -178,6 +178,26 @@ impl Ctx {
         }
     }
 
+    /// A generated building's edit with a change made (`{func, floors, poly, roof, tint,
+    /// structure}`, or `{remove: true}`): `{edit}` (null: as generated) or `{error}`
+    /// (`agent::building_edit_json`).
+    pub fn building_edit_json(&self, id: &str, change: &str) -> String {
+        match &self.t0 {
+            Some(t0) => worldgen::agent::building_edit_json(&self.world, t0, id, change),
+            None => "null".into(),
+        }
+    }
+
+    /// The generated buildings with their middle inside a polygon (`[[x, y], …]` JSON, ft):
+    /// `[{id, at}]` (`agent::generated_buildings_in`).
+    pub fn buildings_in_json(&self, poly: &str) -> String {
+        let Ok(poly) = serde_json::from_str::<Vec<[f64; 2]>>(poly) else { return "[]".into() };
+        match &self.t0 {
+            Some(t0) => worldgen::agent::generated_buildings_in_json(&self.world, t0, &poly),
+            None => "null".into(),
+        }
+    }
+
     /// Districts and businesses inside a rectangle (x0, y0, x1, y1 in ft), JSON array.
     pub fn in_view_json(&self, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
         match &self.t0 {

@@ -48,12 +48,11 @@ pub enum Hit {
     },
 }
 
-fn building_hit(l: &town::Layout, bi: usize) -> Hit {
-    let b = &l.buildings[bi];
+fn building_hit(l: &town::Layout, b: &town::Building) -> Hit {
     let c = geom::centroid(&b.poly);
     let size = b.poly.iter().map(|p| geom::dist(*p, c)).fold(0.0, f64::max) * 2.0;
     Hit::Building {
-        id: format!("b:{}:{}", l.index, bi),
+        id: format!("b:{}:{}", l.index, b.id),
         settlement: l.index,
         name: b.name.clone(),
         function: b.label(),
@@ -94,14 +93,14 @@ const ENTRANCE_PICK_FT: f64 = 12.0;
 pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
     let layouts = town::layouts_near(world, t0, [x, y, x, y]);
     for l in &layouts {
-        for (k, e) in l.entrances.iter().enumerate() {
+        for e in &l.entrances {
             if geom::dist(e.at, [x, y]) <= ENTRANCE_PICK_FT {
                 // A sewer grate opens onto its section of the sewers.
                 let id = if e.kind == crate::under::UnderKind::Sewer {
                     let o = crate::under::sewer_section(e.at);
                     format!("w:{}:{}:{}", l.index, (o[0] / crate::under::SEWER_SECTION_FT) as i64, (o[1] / crate::under::SEWER_SECTION_FT) as i64)
                 } else {
-                    format!("u:{}:{}", l.index, k)
+                    format!("u:{}:{}", l.index, e.id)
                 };
                 return Some(Hit::Building {
                     id,
@@ -120,9 +119,9 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
         }
     }
     for l in &layouts {
-        for (bi, b) in l.buildings.iter().enumerate() {
+        for b in &l.buildings {
             if geom::contains(&b.poly, [x, y]) {
-                return Some(building_hit(l, bi));
+                return Some(building_hit(l, b));
             }
         }
     }
@@ -197,8 +196,8 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
                 districts.push(district_hit(&l, qi));
             }
         }
-        for (bi, b) in l.buildings.iter().enumerate() {
-            let id = format!("b:{}:{bi}", l.index);
+        for b in &l.buildings {
+            let id = format!("b:{}:{}", l.index, b.id);
             let renamed = edits.renames.contains_key(&id);
             if b.func.is_none() && !renamed {
                 continue;
@@ -209,9 +208,9 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
             }
             let Some(name) = current(&id, b.name.as_deref()) else { continue };
             if name.is_some_and(|n| n.contains(&q)) {
-                by_name.push(building_hit(&l, bi));
+                by_name.push(building_hit(&l, b));
             } else if b.func.is_some() && b.label().to_lowercase().contains(&q) && by_function.len() < limit {
-                by_function.push(building_hit(&l, bi));
+                by_function.push(building_hit(&l, b));
             }
         }
     }
@@ -260,9 +259,9 @@ pub fn in_view(world: &World, t0: &T0, rect: [f64; 4], limit: usize) -> Vec<Hit>
                 districts.push(district_hit(&l, qi));
             }
         }
-        for (bi, b) in l.buildings.iter().enumerate() {
+        for b in &l.buildings {
             if b.func.is_some() && inside(geom::centroid(&b.poly)) && shops.len() < limit {
-                shops.push(building_hit(&l, bi));
+                shops.push(building_hit(&l, b));
             }
         }
     }

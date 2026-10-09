@@ -48,7 +48,7 @@
     ['pin', 'castle', 'Settlement', 'T', 'Click to place a settlement of the chosen size.'],
     ['site', 'ruin', 'Site', 'D', 'Click to place a ruin, tower, camp, inn, cave, mine or way underground.'],
     ['region', 'tag', 'Name', 'N', 'Type a name, then click what it names: a region, mountains, a lake, an island or a sea (names in one region share it out). Or draw round a region of your own.'],
-    ['road', 'road', 'Road', 'O', 'Draw a road along its way: it follows your line, round water, and joins the settlements at its ends and beside it. No road: draw across the planned roads you don’t want.'],
+    ['road', 'road', 'Road', 'O', 'Draw a road along its way: it follows your line, round water, and joins the settlements at its ends and beside it. No road: draw across the planned roads you don’t want. To have only the roads you draw, set Roads to Only drawn in World › Generate.'],
     ['erase', 'eraser', 'Erase', 'E', 'Click a stroke or settlement to remove it.'],
   ];
   const PIN_KINDS: [PinKind | '', string][] = [

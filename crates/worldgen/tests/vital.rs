@@ -1005,7 +1005,7 @@ fn underground_guarantee() {
                 *kinds.entry("deep dungeons").or_default() += 1;
                 check(&format!("{id} (deep dungeons)"), &it, &l, None);
             }
-            if worldgen::under::sewer_link_of(&t0, &l, bi).is_some() {
+            if worldgen::under::sewer_link_of(&t0, &l, &l.buildings[bi]).is_some() {
                 let id = format!("b:{li}:{bi}");
                 let it = interior::generate_id(&world, &t0, &id).unwrap();
                 assert!(it.levels[0].links.iter().any(|k| k.to.starts_with("w:")), "{id}: no way into the sewers");
@@ -1342,12 +1342,58 @@ fn agent_edits_guarantee() {
     let (world, t0) = (&ex.world, &ex.t0);
     let over = ell([at_inn[0] + 10.0, at_inn[1] + 10.0]);
     assert!(agent::building_spot(world, t0, &over, None, "c:99", None).is_err_and(|e| e.contains("overlaps")), "a building drawn over another is allowed");
-    let skip = agent::layout_of(world, t0, &inn.id);
+    let skip = agent::spot_skip(world, t0, &inn.id);
     assert!(agent::building_spot(world, t0, &over, None, &inn.id, skip).is_ok(), "reshaping a building is refused by itself");
     let road = &t0.roads.roads[0];
     let rp = road.eval(road.pts.len() / 2, 0.5, 5.0, t0.cell_ft).p;
     let on_road = geom::circle(rp, 12.0, 12);
     assert!(agent::building_spot(world, t0, &on_road, None, "c:99", None).is_err(), "a building on a road is allowed");
+    let ci = agent::layout_of(world, t0, &city).unwrap();
+    let plaza = &town::layout(world, t0, ci).plazas[0];
+    let on_plaza = geom::circle(geom::centroid(plaza), 8.0, 12);
+    assert!(agent::building_spot(world, t0, &on_plaza, None, "c:99", None).is_err_and(|e| e.contains("square")), "a building on a market square is allowed");
+
+    // The world's own buildings edited: one taken away (gone from the battlemap's buildings and
+    // squares and from the gazetteer, its ground free to build on), one made a smithy of three
+    // storeys (its interior is one); every other id and footprint stays, the hash too, the
+    // chunk is repeatable; an edit whose building no longer stands where it was is set aside.
+    use worldgen::world::BuildingEdit;
+    let base_l = town::layout(world, t0, ci);
+    let homes: Vec<&town::Building> = base_l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && b.func.is_none() && geom::area(&b.poly).abs() > 400.0).collect();
+    let (gone, smithy, stale) = (homes[0], homes[1], homes[2]);
+    let bid = |b: &town::Building| format!("b:{ci}:{}", b.id);
+    let mut e = world.file.edits.clone();
+    e.buildings.insert(bid(gone), agent::building_removal(world, t0, &bid(gone)).unwrap());
+    let change = agent::BuildingChange { func: Some("blacksmith".into()), floors: Some(3), ..Default::default() };
+    e.buildings.insert(bid(smithy), agent::building_edit(world, t0, &bid(smithy), &change).unwrap().expect("a change"));
+    e.buildings.insert(bid(stale), BuildingEdit { at: [0.0, 0.0], removed: true, ..Default::default() });
+    let back = serde_json::to_value(&e).unwrap();
+    assert_eq!(serde_json::from_value::<worldgen::world::Edits>(back).unwrap(), e, "building edits changed on the round trip");
+    let f = WorldFile { edits: e, ..world.file.clone() };
+    let mut ex = Executor::new(World::new(f.clone()).unwrap());
+    assert_eq!(ex.world.hash, base.hash, "building edits changed the world hash");
+    let l = town::layout(&ex.world, &ex.t0, ci);
+    assert!(l.building(gone.id as usize).is_none() && l.buildings.len() == base_l.buildings.len() - 1, "a removed building is still laid out");
+    assert!(base_l.buildings.iter().filter(|b| b.id != gone.id).all(|b| l.building(b.id as usize).is_some_and(|n| n.poly == b.poly)), "another building moved or lost its id");
+    assert!(l.building(stale.id as usize).is_some() && town::set_aside(&ex.world, &ex.t0).iter().any(|(k, _)| *k == bid(stale)), "an edit for a building no longer there was applied");
+    let fi = town::catalog::index_of("blacksmith").unwrap();
+    let s = l.building(smithy.id as usize).unwrap();
+    assert!(s.func == Some(fi as u16) && s.floors == 3, "the changed building is not a three-storey smithy");
+    let it = interior::generate_id(&ex.world, &ex.t0, &bid(smithy)).expect("the smithy's interior");
+    assert!(it.function == town::catalog::CATALOG[fi].name && it.levels.iter().filter(|l| l.z >= 0 && !l.roof).count() == 3, "the interior is not the smithy's: {} {}", it.function, it.levels.len());
+    let gc = geom::centroid(&gone.poly);
+    let key = TileKey::surface(g.max_level, (gc[0] / size) as u32, (gc[1] / size) as u32);
+    let chunk = ex.battlemap(key);
+    assert!(!chunk.buildings.contains(&(ci as u32, gone.id)), "the removed building is on the battlemap");
+    let (sx, sy) = (((gc[0] - key.x as f64 * size) / 5.0) as usize, ((gc[1] - key.y as f64 * size) / 5.0) as usize);
+    assert_eq!(chunk.building[sy * worldgen::battlemap::SQ + sx], 0, "the removed building's squares are still built on");
+    let packed = worldgen::battlemap::pack(&ex.world, &chunk);
+    let again = ex.battlemap(key);
+    assert_eq!(packed, worldgen::battlemap::pack(&ex.world, &again), "an edited chunk is not repeatable");
+    let (world, t0) = (&ex.world, &ex.t0);
+    assert!(!matches!(worldgen::gazetteer::query(world, t0, gc[0], gc[1]), Some(worldgen::gazetteer::Hit::Building { ref id, .. }) if *id == bid(gone)), "the gazetteer still finds the removed building");
+    assert!(agent::building_spot(world, t0, &gone.poly, None, "c:99", None).is_ok(), "a removed building's ground is not free");
+    assert!(agent::building_spot(world, t0, &smithy.poly, None, "c:99", None).is_err(), "a standing building's ground is free");
 }
 
 fn geom_dist(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -1831,4 +1877,27 @@ fn sketch_names_and_sites() {
     let f2 = t2.extra.as_ref().unwrap().overlay.features.iter().find(|f| f.name == "Barrow of Kings").expect("the site lost its name");
     assert_eq!(f2.id, id, "the site's id changed with the sketch elsewhere");
     let _ = i;
+
+    // Generated roads off: only the drawn road and short spurs from it to the settlements beside
+    // it, no roadside inns; the settlements stand where they would without the road.
+    let off = |strokes: &[serde_json::Value]| {
+        let mut f = file(strokes).file;
+        f.params.generated_roads = false;
+        let w = World::new(f).unwrap();
+        let t = worldgen::t0::T0::generate(&w);
+        (w, t)
+    };
+    let roads = &strokes[strokes.len() - 3..strokes.len() - 1];
+    assert!(roads.iter().all(|s| s["tool"] == "road"), "the road strokes are not where this test expects them");
+    let (w_road, t_road) = off(&strokes[..strokes.len() - 1]);
+    let (_, t_none) = off(&strokes[..strokes.len() - 3]);
+    let length = |r: &worldgen::lod::roads::RoadCurve| r.pts.windows(2).map(|v| (v[1][0] - v[0][0]).hypot(v[1][1] - v[0][1])).sum::<f64>();
+    let gilded = w_road.file.sketch.strokes.iter().position(|s| s.kind.as_deref() == Some("kings_road")).unwrap() as u32;
+    assert!(t_road.roads.roads.iter().any(|r| r.stroke == Some(gilded)), "the drawn road is not made with generated roads off");
+    let long: Vec<f64> = t_road.roads.roads.iter().filter(|r| r.stroke.is_none()).map(length).filter(|&l| l > 10.0 * MI).map(|l| l / MI).collect();
+    assert!(long.is_empty(), "with generated roads off, roads not drawn run {long:?} mi");
+    assert!(t_none.roads.roads.is_empty(), "with generated roads off and none drawn, there are roads");
+    assert!(!t_road.pois.iter().any(|p| p.kind == worldgen::t0::settle::PoiKind::Waystation), "roadside inns made with generated roads off");
+    let places = |t: &worldgen::t0::T0| t.settlements.iter().map(|s| (s.x.round() as i64, s.y.round() as i64, s.tier as u8)).collect::<Vec<_>>();
+    assert_eq!(places(&t_road), places(&t_none), "drawing a road moved settlements with generated roads off");
 }

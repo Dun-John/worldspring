@@ -8,6 +8,7 @@
   import { ROOF_TINTS } from '../gen/battlePrep';
   import type { BuildSettings, BuildShape } from '../editor/build';
   import type { CrossSettings } from '../editor/crossing';
+  import type { ClearShape } from '../editor/clearArea';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -16,8 +17,10 @@
     funcs: BuildingFuncs | null;
     /** The building being changed (its name), else drawing new ones. */
     editing: string | null;
-    /** Buildings, or crossings. */
-    mode: 'building' | 'crossing';
+    /** Buildings, crossings, or clearing the world's own buildings. */
+    mode: 'building' | 'crossing' | 'clear';
+    /** Clear area: a box dragged, or a lasso drawn. */
+    clearShape: ClearShape;
     cross: CrossSettings;
     /** The crossing picked (what it is), else putting new ones down. */
     crossEditing: string | null;
@@ -27,7 +30,7 @@
     peek?: boolean;
     onSave: () => void;
     onDone: () => void;
-    onMode: (m: 'building' | 'crossing') => void;
+    onMode: (m: 'building' | 'crossing' | 'clear') => void;
     onCrossSave: () => void;
     onCrossRemove: () => void;
     /** Fly in close enough to draw. */
@@ -39,6 +42,7 @@
     funcs,
     editing,
     mode,
+    clearShape = $bindable(),
     cross = $bindable(),
     crossEditing,
     near,
@@ -83,9 +87,27 @@
     <div class="ws-seg" role="radiogroup" aria-label="What to build">
       <button class:on={mode === 'building'} aria-pressed={mode === 'building'} onclick={() => onMode('building')}><Icon name="building" size={16} />Building</button>
       <button class:on={mode === 'crossing'} aria-pressed={mode === 'crossing'} onclick={() => onMode('crossing')} title="A bridge, ford or ferry (X)"><Icon name="bridge" size={16} />Crossing</button>
+      <button class:on={mode === 'clear'} aria-pressed={mode === 'clear'} onclick={() => onMode('clear')} title="Take away the town's own buildings in an area"><Icon name="trash" size={16} />Clear area</button>
     </div>
   {/if}
-  {#if mode === 'crossing'}
+  {#if mode === 'clear'}
+    <div class="ws-seg" role="radiogroup" aria-label="Area">
+      <button class:on={clearShape === 'box'} aria-pressed={clearShape === 'box'} onclick={() => (clearShape = 'box')}><Icon name="square" size={16} />Box</button>
+      <button class:on={clearShape === 'lasso'} aria-pressed={clearShape === 'lasso'} onclick={() => (clearShape = 'lasso')}><Icon name="polygon" size={16} />Lasso</button>
+    </div>
+    {#if !near}
+      <div class="zoom">
+        <span class="grow">Zoom in to clear an area.</span>
+        <button class="ws-btn" onclick={onZoomIn}><Icon name="plus" size={16} /> Zoom in</button>
+      </div>
+    {/if}
+    {#if !peek}
+      <div class="ws-hint">
+        {clearShape === 'box' ? 'Drag a box' : 'Draw round an area'}: the town's own buildings with their middle inside it are taken away, leaving the ground open to build on.
+        Undo brings them back.
+      </div>
+    {/if}
+  {:else if mode === 'crossing'}
     {#if crossEditing}
       <div class="editing">
         <span class="grow">Changing the <b>{crossEditing}</b></span>

@@ -50,6 +50,9 @@ pub struct Building {
     pub roof: Option<RoofStyle>,
     /// Roof colour (index into the battlemap's tints), else picked.
     pub tint: Option<u8>,
+    /// Its id (`b:<layout>:<id>`): its place in the layout as generated, kept when buildings
+    /// before it are taken away (`Layout::building`).
+    pub id: u32,
 }
 
 /// A roof chosen for a building drawn by hand.
@@ -190,6 +193,41 @@ pub struct Entrance {
     pub at: P,
     pub dir: P,
     pub kind: crate::under::UnderKind,
+    /// Its id (`u:<layout>:<id>`), as `Building::id`.
+    pub id: u32,
+}
+
+impl Layout {
+    /// Ids from list places (at the end of generating).
+    fn number(&mut self) {
+        for (i, b) in self.buildings.iter_mut().enumerate() {
+            b.id = i as u32;
+        }
+        for (i, e) in self.entrances.iter_mut().enumerate() {
+            e.id = i as u32;
+        }
+    }
+
+    /// The place in `buildings` of the building with this id (ids rise along the list).
+    pub fn building_index(&self, id: usize) -> Option<usize> {
+        if self.buildings.get(id).is_some_and(|b| b.id as usize == id) {
+            return Some(id);
+        }
+        self.buildings.binary_search_by_key(&id, |b| b.id as usize).ok()
+    }
+
+    /// The building with this id.
+    pub fn building(&self, id: usize) -> Option<&Building> {
+        self.building_index(id).map(|i| &self.buildings[i])
+    }
+
+    /// The way underground with this id.
+    pub fn entrance(&self, id: usize) -> Option<&Entrance> {
+        if self.entrances.get(id).is_some_and(|e| e.id as usize == id) {
+            return self.entrances.get(id);
+        }
+        self.entrances.iter().find(|e| e.id as usize == id)
+    }
 }
 
 /// Built-up radius (ft) by tier and population.
@@ -229,13 +267,130 @@ pub fn pad_weight(d: f64, reach: f64) -> f64 {
 }
 
 // ---------------------------------------------------------------------------------------
-// Memo: layouts are pure, so each worker builds a settlement once and keeps it.
+// Memo: layouts are pure, so each worker builds a settlement once and keeps it, and keeps
+// the edited copy (`Edits.buildings` applied) by a fingerprint of that layout's edits.
 
 thread_local! {
     static CACHE: RefCell<(u64, FastMap<u32, Rc<Layout>>)> = RefCell::new((0, FastMap::default()));
+    static EDITED: RefCell<FastMap<u32, (u64, Rc<Layout>)>> = RefCell::new(FastMap::default());
 }
 
+/// A layout with its buildings as edited (`Edits.buildings`).
 pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
+    let base = base_layout(world, t0, index);
+    if world.file.edits.buildings.is_empty() {
+        return base;
+    }
+    let key = index as u32;
+    let Some(fp) = edits_fingerprint(world, key) else { return base };
+    if let Some(l) = EDITED.with(|c| c.borrow().get(&key).filter(|e| e.0 == fp).map(|e| e.1.clone())) {
+        return l;
+    }
+    let l = Rc::new(apply_building_edits(world, t0, &base));
+    EDITED.with(|c| c.borrow_mut().insert(key, (fp, l.clone())));
+    l
+}
+
+/// A layout's building edits (`b:<layout>:<id>`), by id.
+pub fn building_edits(world: &World, index: u32) -> impl Iterator<Item = (u32, &crate::world::BuildingEdit)> {
+    let prefix = format!("b:{index}:");
+    world.file.edits.buildings.range(prefix.clone()..).take_while(move |(k, _)| k.starts_with(&prefix)).filter_map(|(k, e)| Some((k.rsplit(':').next()?.parse().ok()?, e)))
+}
+
+/// A hash of the world and the layout's building edits, or `None` without any.
+fn edits_fingerprint(world: &World, index: u32) -> Option<u64> {
+    let mut h = crate::core::hash::Fnv64::default();
+    h.write(&world.hash.to_le_bytes());
+    let mut any = false;
+    for (id, e) in building_edits(world, index) {
+        any = true;
+        h.write(&id.to_le_bytes());
+        for v in e.at.iter().chain(e.poly.iter().flatten()) {
+            h.write(&v.to_le_bytes());
+        }
+        h.write(&[e.removed as u8, e.floors.map_or(0, |f| f.saturating_add(1)), 0xfe]);
+        for t in [&e.func, &e.roof, &e.tint, &e.structure] {
+            h.write(t.as_deref().unwrap_or("-").as_bytes());
+            h.write(&[0xff]);
+        }
+    }
+    any.then(|| h.finish())
+}
+
+/// Whether the building edited still stands where it was edited (else the edit is set aside).
+pub fn edit_applies(b: &Building, e: &crate::world::BuildingEdit) -> bool {
+    dist(centroid(&b.poly), e.at) <= crate::world::BuildingEdit::SAME_AT_FT
+}
+
+/// The layout with its building edits applied: buildings taken away leave the list (the others
+/// keep their ids); a new function is named as a drawn building's would be (seeded by id).
+fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
+    let mut l = base.clone();
+    let mut removed: FastSet<u32> = FastSet::default();
+    for (id, e) in building_edits(world, l.index) {
+        let Some(i) = l.building_index(id as usize) else { continue };
+        if !edit_applies(&l.buildings[i], e) {
+            continue;
+        }
+        if e.removed {
+            removed.insert(id);
+            continue;
+        }
+        let b = &mut l.buildings[i];
+        if let Some(f) = &e.func {
+            let (func, residential) = sites::func_of(f, false);
+            if (func, residential) != (b.func, b.residential) {
+                b.func = func;
+                b.residential = residential;
+                let mut rng = Pcg32::new(hash2(world.stream("town.edit"), l.index as i64, id as i64), 43);
+                b.name = sites::trade_name(func, &mut rng, t0, l.center);
+            }
+        }
+        if let Some(f) = e.floors {
+            b.floors = f.max(1);
+        }
+        if e.poly.len() >= 3 {
+            b.poly = e.poly.clone();
+        }
+        sites::apply_looks(b, e.roof.as_deref(), e.tint.as_deref(), e.structure.as_deref());
+        if b.structure == Structure::Ruin && b.func.is_none() && e.func.is_none() {
+            b.residential = catalog::RUINED as u8;
+        }
+        for q in &b.poly {
+            l.bbox = [l.bbox[0].min(q[0]), l.bbox[1].min(q[1]), l.bbox[2].max(q[0]), l.bbox[3].max(q[1])];
+        }
+    }
+    if !removed.is_empty() {
+        l.buildings.retain(|b| !removed.contains(&b.id));
+    }
+    l
+}
+
+/// Building edits set aside: the building at their id no longer stands where it was edited, or
+/// is gone. (key, why)
+pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    for (k, e) in &world.file.edits.buildings {
+        let mut parts = k.split(':').skip(1).map(|v| v.parse::<usize>().ok());
+        let (Some(Some(li)), Some(Some(id))) = (parts.next(), parts.next()) else {
+            out.push((k.clone(), "not a building id"));
+            continue;
+        };
+        if li >= layout_count(t0) {
+            out.push((k.clone(), "no such place"));
+            continue;
+        }
+        match base_layout(world, t0, li).building(id) {
+            None => out.push((k.clone(), "no such building")),
+            Some(b) if !edit_applies(b, e) => out.push((k.clone(), "the town was laid out anew: another building stands at this id")),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A layout as generated (no building edits).
+pub fn base_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     let key = index as u32;
     if let Some(l) = CACHE.with(|c| {
         let c = c.borrow();
@@ -260,6 +415,7 @@ pub fn layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
 /// ones, whose layouts stay cached).
 pub fn forget_from(index: usize) {
     CACHE.with(|c| c.borrow_mut().1.retain(|&k, _| (k as usize) < index));
+    EDITED.with(|c| c.borrow_mut().retain(|&k, _| (k as usize) < index));
 }
 
 /// Settlement and site layouts whose reach intersects the rectangle (world ft). Layout index
@@ -860,6 +1016,7 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
         bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
     }
     l.bbox = if bb[0] <= bb[2] { bb } else { [center[0], center[1], center[0], center[1]] };
+    l.number();
     l
 }
 
@@ -1905,7 +2062,7 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                         l.buildings.extend(kept);
                         if site.buildable(&keep) {
                             let pad = site.pad(&keep);
-                            l.buildings.push(Building { poly: keep, ward: w, func: None, residential: 4, name: None, floors: 4, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None });
+                            l.buildings.push(Building { poly: keep, ward: w, func: None, residential: 4, name: None, floors: 4, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
                         }
                     }
                 }
@@ -2566,7 +2723,7 @@ fn build_block(site: &Site, block: &[P], streets: &mut Vec<(P, f64)>, ward: Ward
                 continue;
             }
             let pad = site.pad(&poly);
-            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None });
+            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
         }
     }
 }
@@ -2725,7 +2882,7 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
             let house = rect(add(add(a, mul(u, 0.5 * w + 6.0)), mul(inward, 0.5 * dp + 6.0)), u, w, dp);
             if house.iter().all(|p| contains(&f, *p)) && site.buildable(&house) {
                 let pad = site.pad(&house);
-                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None });
+                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
             }
         }
         l.fields.push(f);
@@ -2892,7 +3049,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
                     let house = rect(add(p, mul(n, side * back)), u, w, d);
                     if clear(&house, l) && site.buildable(&house) {
                         let pad = site.pad(&house);
-                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None });
+                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
                     }
                 }
                 let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
@@ -2913,7 +3070,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
         let house = rect(c, [-libm::sin(a), libm::cos(a)], rng.range(22.0, 34.0), rng.range(16.0, 22.0));
         if clear(&house, l) && site.buildable(&house) {
             let pad = site.pad(&house);
-            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None });
+            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
         }
     }
     // Fields: Voronoi cells seeded along the lanes and on a jittered ring, split into plots
@@ -3255,7 +3412,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
-            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None });
+            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
         }
     }
     // Big functions first so they get the big lots.

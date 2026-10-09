@@ -36,6 +36,7 @@
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
   import { CrossingTool, crossingProblem, defaultCross, type CrossSettings } from './editor/crossing';
+  import { ClearAreaTool, type ClearShape } from './editor/clearArea';
   import { defaultScatter, newObjectId, ScatterTool, type ScatterSettings } from './editor/scatter';
   import { shrink } from './render/customAtlas';
   import Notebook, { blankNpc, blankPlot, newNoteId, type Here } from './ui/Notebook.svelte';
@@ -48,7 +49,7 @@
   import PlayPanel from './play/PlayPanel.svelte';
   import { describe, tidy, type Step } from './sync/history';
   import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, type EditOp } from './sync/ops';
-  import { breadcrumbs, frameSize, hitName, settlementAt, SETTLEMENT_KINDS, zoomFor, type Crumb, type Selection } from './ui/gazetteer';
+  import { breadcrumbs, frameSize, hitName, settlementAt, SETTLEMENT_KINDS, zoomFor, type BuildingHit, type Crumb, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, PINNED } from './world/versions';
   import VersionAsk, { type VersionChoice } from './ui/shell/VersionAsk.svelte';
@@ -847,7 +848,7 @@
   /** The map's pointer goes to the first of: a place being picked, a site being placed, the
    * designer, the Build or Scatter tool, play's tools while a session runs. */
   function syncTool() {
-    const buildTool = buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildArmed.tool);
+    const buildTool = buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'clear' ? buildArmed.clear : buildArmed.tool);
     view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
@@ -957,11 +958,16 @@
   // changed).
   let build = $state<BuildSettings>(defaultBuild());
   let buildFuncs = $state<BuildingFuncs | null>(null);
-  /** The building drawn by hand being changed (its created id). */
+  /** The building being changed: one drawn by hand (its created id) or one of the world's own
+   * (its building id, `b:<layout>:<id>`). */
   let buildEditing = $state<string | null>(null);
-  let buildArmed: { tool: BuildTool; cross: CrossingTool } | null = null;
-  /** The Build tab draws buildings, or puts crossings down. */
-  let buildMode = $state<'building' | 'crossing'>('building');
+  /** One of the world's own being changed: its name, and the menu's choices as it was opened
+   * (only what differs from them is changed). */
+  let genEditing = $state<{ name: string; was: BuildSettings } | null>(null);
+  let buildArmed: { tool: BuildTool; cross: CrossingTool; clear: ClearAreaTool } | null = null;
+  /** The Build tab draws buildings, puts crossings down, or clears the world's own buildings. */
+  let buildMode = $state<'building' | 'crossing' | 'clear'>('building');
+  let clearShape = $state<ClearShape>('box');
   let cross = $state<CrossSettings>(defaultCross());
   /** The crossing put down by hand being changed (its id). */
   let crossEditing = $state<string | null>(null);
@@ -990,18 +996,25 @@
       pick: pickCrossing,
       hint: (t) => toast(t),
     });
-    buildArmed = { tool, cross: crossTool };
+    const clear = new ClearAreaTool({
+      shape: () => clearShape,
+      drawn: (poly) => void clearArea(poly),
+      hint: (t) => toast(t),
+    });
+    buildArmed = { tool, cross: crossTool, clear };
   }
 
   function disarmBuild() {
     buildArmed = null;
     buildEditing = null;
+    genEditing = null;
     crossEditing = null;
   }
 
-  function setBuildMode(m: 'building' | 'crossing') {
+  function setBuildMode(m: 'building' | 'crossing' | 'clear') {
     buildMode = m;
     buildEditing = null;
+    genEditing = null;
     crossEditing = null;
     buildArmed?.cross.reset();
     syncTool();
@@ -1044,9 +1057,116 @@
     applyEdits({ ...edits, crossings: rest }, { tool: 'remove_crossings', ids: [id], kind: c.kind }, 'user');
   }
 
+  /** One of the world's own buildings (not drawn by hand) behind a building id. */
+  function generatedBuilding(id: string): boolean {
+    const m = /^b:(\d+):(\d+)$/.exec(id);
+    return !!m && Number(m[1]) < settlements.length + sites.length;
+  }
+
+  /** The world's own buildings with their middle in an area drawn: taken away (one change). */
+  async function clearArea(poly: Pt[]) {
+    const tool = buildArmed?.clear;
+    const found = await view.gen.buildingsIn(poly);
+    if (tool) tool.pending = null;
+    if (!found.length) return toast('No buildings of the town’s own there (drawn ones go with Delete)');
+    const all = { ...(edits.buildings ?? {}) };
+    for (const b of found) all[b.id] = { at: b.at, removed: true };
+    const removed = found.map((b) => b.id);
+    applyEdits({ ...edits, buildings: all }, { tool: 'remove_buildings', removed, count: removed.length }, 'user');
+    if (selection?.kind === 'building' && removed.includes(selection.hit.id)) selection = null;
+  }
+
+  /** A business's or home's key from what a building is called (its label). */
+  async function funcKey(label: string): Promise<string> {
+    buildFuncs ??= await view.gen.buildingFuncs();
+    const l = label.toLowerCase();
+    return buildFuncs.businesses.find((b) => b.name.toLowerCase() === l)?.key ?? buildFuncs.homes.find((h) => h.name.toLowerCase() === l)?.key ?? 'house';
+  }
+
+  /** Open the build menu on one of the world's own buildings. */
+  async function editGenerated(hit: BuildingHit) {
+    const e = edits.buildings?.[hit.id];
+    const settings: BuildSettings = {
+      shape: 'rect',
+      func: e?.func ?? (await funcKey(hit.function)),
+      floors: hit.floors,
+      roof: (e?.roof ?? '') as BuildSettings['roof'],
+      tint: (e?.tint ?? '') as BuildSettings['tint'],
+      ruin: hit.ward !== 'underground' && (e?.structure === 'ruin' || hit.function.toLowerCase() === 'ruined building'),
+      name: '',
+    };
+    go('edit', 'build');
+    if (buildMode !== 'building') setBuildMode('building');
+    buildEditing = hit.id;
+    genEditing = { name: hitName(hit, renames), was: settings };
+    build = { ...settings };
+  }
+
+  /** The world's own building being changed gets the menu's choices (what differs from when it
+   * was opened), and a footprint drawn. */
+  async function saveGenerated(poly?: Pt[]) {
+    const id = buildEditing;
+    const g = genEditing;
+    if (!id || !g) return;
+    const change: Record<string, unknown> = {};
+    if (build.func !== g.was.func) change.func = build.func;
+    if (build.floors !== g.was.floors) change.floors = build.floors;
+    if (build.roof !== g.was.roof) change.roof = build.roof || 'auto';
+    if (build.tint !== g.was.tint) change.tint = build.tint || 'auto';
+    if (build.ruin !== g.was.ruin) change.structure = build.ruin ? 'ruin' : 'roofed';
+    if (poly) change.poly = poly;
+    const r = await view.gen.buildingEdit(id, change);
+    if (buildArmed) buildArmed.tool.pending = null;
+    if (!r) return toast('The map could not answer: try again');
+    if ('error' in r) return toast(r.error.charAt(0).toUpperCase() + r.error.slice(1));
+    const all = { ...(edits.buildings ?? {}) };
+    if (r.edit) all[id] = r.edit;
+    else delete all[id];
+    const name = build.name.trim();
+    const renamesNext = name ? { ...(edits.renames ?? {}), [id]: name } : edits.renames;
+    applyEdits({ ...edits, buildings: all, renames: renamesNext }, { tool: 'update_building', id, name: name || g.name }, 'user');
+    genEditing = { name: name || g.name, was: { ...build, name: '' } };
+    build.name = '';
+    // The info panel and the build menu show it as it is now (a new trade brings a new name).
+    const s = selection;
+    const fp = r.edit?.poly;
+    const c = fp?.length ? fp.reduce((a, p) => [a[0] + p[0] / fp.length, a[1] + p[1] / fp.length], [0, 0]) : r.edit ? r.edit.at : null;
+    const hit = c && (await view.gen.query(c[0], c[1]));
+    if (hit?.kind !== 'building' || hit.id !== id) return;
+    if (buildEditing === id && genEditing) genEditing = { ...genEditing, name: hitName(hit, edits.renames ?? {}) };
+    if (s?.kind === 'building' && s.hit.id === id && selection === s) selection = { kind: 'building', hit };
+  }
+
+  /** The info panel's actions for one of the world's own buildings: change it in the build menu,
+   * take it away, put it back as generated. */
+  function generatedActions(hit: BuildingHit) {
+    const id = hit.id;
+    return {
+      onEdit: () => void editGenerated(hit),
+      onRemove: async () => {
+        const r = await view.gen.buildingEdit(id, { remove: true });
+        if (!r || 'error' in r || !r.edit) return toast(r && 'error' in r ? r.error : 'The map could not answer: try again');
+        applyEdits({ ...edits, buildings: { ...(edits.buildings ?? {}), [id]: r.edit } }, { tool: 'remove_buildings', removed: [id], count: 1, name: hitName(hit, renames) }, 'user');
+        if (buildEditing === id) ((buildEditing = null), (genEditing = null));
+        selection = null;
+      },
+      onRestore: edits.buildings?.[id]
+        ? () => {
+            const { [id]: _gone, ...rest } = edits.buildings ?? {};
+            applyEdits({ ...edits, buildings: rest }, { tool: 'restore_building', id }, 'user');
+            if (buildEditing === id) ((buildEditing = null), (genEditing = null));
+            void view.gen.query(hit.x, hit.y).then((h) => {
+              if (h?.kind === 'building' && selection?.kind === 'building' && selection.hit.id === id) selection = { kind: 'building', hit: h };
+            });
+          }
+        : undefined,
+    };
+  }
+
   /** A footprint drawn: a new building there, or the one being changed moved there. */
   async function buildDrawn(poly: Pt[]) {
     const tool = buildArmed?.tool;
+    if (buildEditing && genEditing) return saveGenerated(poly);
     const editing = buildEditing ? drawnBuilding(buildEditing) : null;
     const id = editing?.id ?? `c:${(edits.created ?? []).length}`;
     const opts = buildOptions(build);
@@ -1077,6 +1197,7 @@
 
   /** Change the building being edited to the menu's choices (its footprint stays). */
   function saveBuilding() {
+    if (genEditing) return void saveGenerated();
     const c = buildEditing ? drawnBuilding(buildEditing) : null;
     if (!c) return;
     const { roof: _r, tint: _t, structure: _s, ...rest } = c;
@@ -1945,6 +2066,7 @@
               sketchLand={drawsLand(sketchStrokes)}
               paintedBiomes={sketchStrokes.filter((s) => s.tool === 'biome').length}
               pins={sketchStrokes.filter((s) => s.tool === 'pin').length}
+              roads={sketchStrokes.filter((s) => s.tool === 'road' && s.kind !== 'none').length}
               onGenerate={() => void generate(draftWorld(), true)}
             />
           {:else if shell.tabs.world === 'sketch'}
@@ -2000,14 +2122,15 @@
           <BuildPanel
             bind:settings={build}
             funcs={buildFuncs}
-            editing={buildEditing ? (drawnBuilding(buildEditing)?.name ?? null) : null}
+            editing={buildEditing ? (genEditing?.name ?? drawnBuilding(buildEditing)?.name ?? null) : null}
             mode={buildMode}
+            bind:clearShape
             bind:cross
             crossEditing={crossEditing ? (edits.crossings?.[crossEditing]?.kind ?? null) : null}
             {near}
             {peek}
             onSave={saveBuilding}
-            onDone={() => ((buildEditing = null), (crossEditing = null))}
+            onDone={() => ((buildEditing = null), (genEditing = null), (crossEditing = null))}
             onMode={setBuildMode}
             onCrossSave={saveCrossing}
             onCrossRemove={removeCrossing}
@@ -2116,7 +2239,13 @@
       {plotsHere}
       onOpen={openNotebook}
       onAdd={addHere}
-      {...sel.kind === 'feature' && sel.feature.id.startsWith('c:') ? createdActions(sel.feature.id) : sel.kind === 'building' && drawnBuilding(sel.hit.id) ? createdActions(sel.hit.id) : {}}
+      {...sel.kind === 'feature' && sel.feature.id.startsWith('c:')
+        ? createdActions(sel.feature.id)
+        : sel.kind === 'building' && drawnBuilding(sel.hit.id)
+          ? createdActions(sel.hit.id)
+          : sel.kind === 'building' && generatedBuilding(sel.hit.id)
+            ? generatedActions(sel.hit)
+            : {}}
       onFly={() => selection && flyToSelection(selection)}
       onClose={() => (selection = null)}
       onEnter={async () => {

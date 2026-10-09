@@ -67,7 +67,7 @@ pub fn list() -> Value {
         })), &["kind"]) },
         { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } }), &["id"]) },
         { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there.", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
-        { "name": "delete_feature", "title": "Delete a created site", "description": "Delete a site that was created, buildings drawn by hand too (generated features can only be hidden).", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]) },
+        { "name": "delete_feature", "title": "Delete a created site", "description": "Delete a site that was created, buildings drawn by hand too (the world's own buildings go with remove_buildings; other generated features can only be hidden).", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]) },
     ]);
     if let Some(a) = v.as_array_mut() {
         a.extend(crate::notebook::list());
@@ -330,7 +330,7 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
                     .created
                     .iter_mut()
                     .find(|c| c.id == id && !c.removed)
-                    .ok_or_else(|| format!("{id} is not a created site (generated features can be hidden with hide_feature)"))?;
+                    .ok_or_else(|| format!("{id} is not a created site (the world's own buildings go with remove_buildings; other generated features can be hidden with hide_feature)"))?;
                 c.removed = true;
                 Ok(json!({ "tool": "delete_feature", "id": id }))
             })

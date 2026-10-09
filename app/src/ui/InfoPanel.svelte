@@ -34,12 +34,15 @@
     /** A building drawn by hand: go inside it, change it in the build menu. */
     onGoIn?: () => void;
     onEdit?: () => void;
+    /** One of the world's own buildings: take it away; put it back as generated (if changed). */
+    onRemove?: () => void;
+    onRestore?: () => void;
     /** In a phone's sheet (which has its own frame and close). */
     docked?: boolean;
     /** Only the name, what it is and the actions (the sheet is down to its strip). */
     peek?: boolean;
   }
-  let { selection, renames, notes, settlementName, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, docked = false, peek = false }: Props = $props();
+  let { selection, renames, notes, settlementName, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, docked = false, peek = false }: Props = $props();
   let cannot = $state(false);
   let confirmDelete = $state(false);
   /** The ⋯ menu (hide, delete). */
@@ -110,13 +113,15 @@
     {#if onGoIn && selection.kind === 'feature'}<button class="ws-btn" onclick={onGoIn}><Icon name="enter" size={16} /> Enter</button>{/if}
     {#if onDown}<button class="ws-btn" onclick={onDown} title="Into the site underground"><Icon name="stairs" size={16} /> Go down</button>{/if}
     {#if onEdit}<button class="ws-btn" onclick={onEdit} title="Change what it is, its storeys and roof, or draw it again"><Icon name="pencil" size={16} /> Edit</button>{/if}
-    {#if onHide || onDelete}
+    {#if onHide || onDelete || onRemove}
       <div class="more-wrap">
         <button class="ws-icon-btn" onclick={() => ((more = !more), (confirmDelete = false))} aria-label="More" aria-expanded={more}><Icon name="more" /></button>
         {#if more}
           <div class="menu ws-panel" role="menu">
             {#if onHide}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onHide(!hidden))} title={hidden ? 'Show its label and list it in search again' : 'Hide its label and leave it out of search'}><Icon name={hidden ? 'eye' : 'eye-off'} size={16} /> {hidden ? 'Show on the map' : 'Hide from the map'}</button>{/if}
             {#if onDelete}<button class="ws-btn" class:quiet={!confirmDelete} class:danger={confirmDelete} role="menuitem" onclick={() => (confirmDelete ? onDelete() : (confirmDelete = true))} title="Remove this site from the world"><Icon name="trash" size={16} /> {confirmDelete ? 'Delete for good?' : 'Delete'}</button>{/if}
+            {#if onRestore}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onRestore())} title="Undo every change made to it: what it is, storeys, roof, footprint"><Icon name="reset" size={16} /> As generated</button>{/if}
+            {#if onRemove}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onRemove())} title="Take it away, leaving open ground to build on (Undo brings it back)"><Icon name="trash" size={16} /> Remove</button>{/if}
           </div>
         {/if}
       </div>

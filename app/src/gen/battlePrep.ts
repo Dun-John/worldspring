@@ -21,7 +21,7 @@ export interface Roof {
   cone: boolean;
   /** Index into `ROOF_TINTS` chosen by hand; -1: picked. */
   tint: number;
-  /** Index among the chunk's roofs (for the tint). */
+  /** A hash of where it stands (for the tint). */
   idx: number;
 }
 
@@ -177,11 +177,14 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
       const tower = dv.getUint8(o + 3) * PX;
       o += 4;
       const pts: number[] = [];
+      // (Its first corner on the map, in quarter squares: the same in every chunk it is in,
+      // and whatever else is built or taken away round it.)
+      const at = m ? Math.imul(Math.round((cx * SQ + dv.getFloat32(o, true)) * 4), 73856093) ^ Math.imul(Math.round((cy * SQ + dv.getFloat32(o + 4, true)) * 4), 19349663) : b;
       for (let v = 0; v < m; v++) {
         pts.push(dv.getFloat32(o, true) * PX, dv.getFloat32(o + 4, true) * PX);
         o += 8;
       }
-      roofs.push({ pts, floors, battlements, tower, cone, tint, idx: b });
+      roofs.push({ pts, floors, battlements, tower, cone, tint, idx: at });
     }
     // Walls, towers and decks, drawn as vectors (see `battlemap::pack`).
     const nShapes = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
@@ -262,7 +265,7 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     surface: surface.slice(),
     raised,
     objs,
-    roofMesh: roofs.length ? roofMesh(roofs, cx * 7919 + cy * 104729) : null,
+    roofMesh: roofs.length ? roofMesh(roofs) : null,
     battlements: roofs.filter((r) => r.battlements),
     shapes,
     sprites,
@@ -353,7 +356,7 @@ class MeshBuilder {
 
 /** Hip roofs: shaded slopes, shingle courses, ridge and hips, an inked eave; drop shadows of
  * every roof (battlemented ones included) first. */
-function roofMesh(roofs: Roof[], seed: number): ColorMesh {
+function roofMesh(roofs: Roof[]): ColorMesh {
   const g = new MeshBuilder();
   for (const { pts, floors } of roofs) {
     const off = PX * (0.25 + 0.3 * floors);
@@ -365,7 +368,7 @@ function roofMesh(roofs: Roof[], seed: number): ColorMesh {
   }
   for (const roof of roofs) {
     if (roof.battlements || roof.pts.length < 6) continue;
-    const tint = ROOF_TINTS[roof.tint >= 0 && roof.tint < ROOF_TINTS.length ? roof.tint : (((roof.idx + 1) * 2654435761 + seed) >>> 0) % ROOF_TINTS.length];
+    const tint = ROOF_TINTS[roof.tint >= 0 && roof.tint < ROOF_TINTS.length ? roof.tint : (Math.imul(roof.idx, 2654435761) >>> 16) % ROOF_TINTS.length];
     // Footprints drawn by hand may be concave: a roof on each convex part, valleys between.
     const parts = convexParts(roof.pts);
     for (const part of parts) {

@@ -694,7 +694,7 @@ pub fn editable(world: &World, t0: &T0, id: &str) -> Result<(usize, usize), Stri
         return Err(format!("no such site: {id}"));
     }
     let layout = town::layout(world, t0, l);
-    match layout.entrances.get(k) {
+    match layout.entrance(k) {
         None => Err(format!("no such site: {id}")),
         Some(e) if e.kind == UnderKind::Sewer => Err(format!("{id}: a city's sewers can't be designed")),
         Some(_) => Ok((l, k)),

@@ -471,11 +471,11 @@ pub fn generate(world: &World, t0: &T0, settlement: usize, building: usize) -> O
         return None;
     }
     let l = town::layout(world, t0, settlement);
-    let b = l.buildings.get(building)?;
+    let b = l.building(building)?;
     if b.structure != Structure::Roofed {
         return None;
     }
-    Some(build(world, t0, &l, settlement, building))
+    Some(build(world, t0, &l, settlement, b))
 }
 
 /// A keep big enough for deep dungeons below its cellar (`under::keep_dungeon`).
@@ -517,8 +517,8 @@ fn place_link(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64; 2
     true
 }
 
-fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, bi: usize) -> Interior {
-    let b = &l.buildings[bi];
+fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Building) -> Interior {
+    let bi = b.id as usize;
     let mut rng = Pcg32::new(hash3(world.stream("interior"), settlement as i64, bi as i64, 0x1a7), 71);
     let arch = arch_of(b);
     let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
@@ -544,9 +544,8 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, bi: usize) -> In
     let neighbours: Vec<&Vec<P>> = l
         .buildings
         .iter()
-        .enumerate()
-        .filter(|&(k, o)| k != bi && o.structure == Structure::Roofed && o.poly.iter().any(|p| geom::dist(*p, c0) < reach + 60.0))
-        .map(|(_, o)| &o.poly)
+        .filter(|o| o.id != b.id && o.structure == Structure::Roofed && o.poly.iter().any(|p| geom::dist(*p, c0) < reach + 60.0))
+        .map(|o| &o.poly)
         .collect();
     let ext_free = |i: isize, j: isize| {
         let p = world_at(i as f64 + 0.5, j as f64 + 0.5);
@@ -649,7 +648,7 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, bi: usize) -> In
                 [dot(d, u) / SQUARE_FT, dot(d, v) / SQUARE_FT]
             };
             // A trapdoor down into the sewers (on the street side).
-            if let Some(q) = crate::under::sewer_link_of(t0, l, bi) {
+            if let Some(q) = crate::under::sewer_link_of(t0, l, b) {
                 place_link(&mut lvl, nx, ny, stairs, grid(q), "trapdoor", "trapdoor to the sewers", crate::under::sewer_id(l.index as usize, q));
             }
             // Stairs down to a keep's deep dungeons, in the middle of the far end.

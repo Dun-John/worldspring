@@ -161,6 +161,8 @@ export class MapView {
   places = false;
   onPlaces: (on: boolean) => void = () => {};
   private placesRect: [number, number, number, number] | null = null;
+  /** Bumped when buildings are changed by hand: an answer asked for before is dropped. */
+  private placesEpoch = 0;
   private placesBusy = false;
   onHud: (s: HudState) => void = () => {};
   /** A click (not a drag) on the map: world and screen position. */
@@ -395,10 +397,11 @@ export class MapView {
     const [w, h] = [x1 - x0, y1 - y0];
     const rect: [number, number, number, number] = [x0 - w / 2, y0 - h / 2, x1 + w / 2, y1 + h / 2];
     this.placesBusy = true;
+    const epoch = this.placesEpoch;
     void this.gen
       .inView(rect)
       .then((hits) => {
-        if (this.labels !== labels) return;
+        if (this.labels !== labels || epoch !== this.placesEpoch) return;
         labels.addPlaces(
           hits.filter((h): h is Extract<typeof h, { kind: 'building' }> => h.kind === 'building'),
           this.renames,
@@ -769,6 +772,30 @@ export class MapView {
         rects.push(box);
       }
     }
+    // The world's own buildings changed or taken away: round their middle as generated (a
+    // castle keep reaches ~150 ft) and any new footprint.
+    const pb = prev.buildings ?? {};
+    const nb = next.buildings ?? {};
+    let reenter = false;
+    const replaced: string[] = [];
+    if (pb !== nb) for (const id of keys('buildings', pb, nb)) {
+      const [a, b] = [pb[id], nb[id]];
+      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
+      replaced.push(id);
+      for (const e of [a, b]) {
+        if (!e) continue;
+        const pts: [number, number][] = [[e.at[0] - 150, e.at[1] - 150], [e.at[0] + 150, e.at[1] + 150], ...(e.poly ?? [])];
+        rects.push([Math.min(...pts.map((p) => p[0])) - 5, Math.min(...pts.map((p) => p[1])) - 5, Math.max(...pts.map((p) => p[0])) + 5, Math.max(...pts.map((p) => p[1])) + 5]);
+      }
+      // Inside it: shown as it is now.
+      if (id === here && b && !b.removed) reenter = true;
+    }
+    // Their business pins: dropped, and asked for again (as they are now).
+    if (replaced.length) {
+      this.labels?.forgetPlaces(replaced);
+      this.placesRect = null;
+      this.placesEpoch++;
+    }
     if (!send) return;
     if (rects.length || battleRects.length) {
       const epoch = ++this.editEpoch;
@@ -779,6 +806,7 @@ export class MapView {
     } else {
       this.gen.setEdits(next, [], this.editEpoch, [], changed && { prev, changed });
     }
+    if (reenter && this.interior) void this.enterBuilding(this.interior.interior.id, { level: this.interior.currentLevel });
   }
 
   /** Draw objects about to be put down (a brush stroke) at once, before the change is made. */
