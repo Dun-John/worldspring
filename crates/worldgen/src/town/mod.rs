@@ -1154,15 +1154,87 @@ fn voronoi(sites: &[P], boundary: &[P]) -> Vec<Labeled> {
         .collect()
 }
 
-#[inline]
-fn qkey(p: P) -> (i64, i64) {
-    (crate::core::round(p[0] * 2.0) as i64, crate::core::round(p[1] * 2.0) as i64)
-}
-
 /// Outskirts (farmland) reach this many urban radii from the centre.
 const OUTSKIRTS: f64 = 2.15;
 
 fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pcg32, l: &mut Layout) {
+    let plan = plan_town(site, s, r, road_ends, rng);
+    build_town(site, s, r, &plan, &[], l);
+}
+
+/// What a town decides before anything is built on it (`plan_town`): its patch mesh (smoothed
+/// along the wall and the main streets), walls, gates, main streets, bridges, wards and named
+/// districts. `build_town` may move the mesh's corners first, as watabou's Warp tools do:
+/// walls, streets and blocks follow the corners they run along, while what was decided (wards,
+/// district groups, names, the towers along each wall run) stays as planned on the unmoved mesh,
+/// so a moved corner changes only the patches round it.
+struct TownPlan {
+    mesh: Mesh,
+    /// Faces round each vertex.
+    vf: Vec<Vec<usize>>,
+    /// The town's patches are the first `n_inner` faces; the rest are its outskirts.
+    n_inner: usize,
+    /// Faces on the water (or too small to keep).
+    wet: Vec<bool>,
+    face_ok: Vec<bool>,
+    /// Corners that never move (on the water or a river).
+    pinned: Vec<bool>,
+    walled: bool,
+    /// Wall runs (a closed ring starts at a plain corner): corners, closed, and the towers along
+    /// each stretch (`wall_pieces_spaced`).
+    wall_runs: Vec<(Vec<usize>, bool, Vec<usize>)>,
+    gates: Vec<usize>,
+    /// Where roads arrive (class), the way each comes in, and its gate.
+    ends: Vec<(P, u8)>,
+    heading_of: Vec<Option<P>>,
+    gate_of: Vec<Option<usize>>,
+    /// The town's patches as first laid out (bbox, polygon): where an approach road becomes a
+    /// town street.
+    town_faces: Vec<([f64; 4], Vec<P>)>,
+    /// The market square's face (a rhombus plaza), and the face the main streets lead to.
+    plaza_face: Option<usize>,
+    plaza: Option<usize>,
+    /// Ways over the river: (bank corner, river corner, bank corner).
+    crossing_links: Vec<(usize, usize, usize)>,
+    /// Main streets: corners from each gate to the plaza.
+    paths: Vec<Vec<usize>>,
+    /// The crossings bridged, and whether a main street uses each.
+    bridged: Vec<((usize, usize, usize), bool)>,
+    /// Patch edges along main streets and bridges (corner pairs, lower first).
+    main_edges: FastSet<(usize, usize)>,
+    ward: Vec<Option<Ward>>,
+    /// A patch's district group (its first patch), else `usize::MAX`.
+    group: Vec<usize>,
+    /// Per-patch random streams (`roll`), and the seed of block and lot parameters.
+    pseed: u64,
+    base_seed: u64,
+    /// Named districts and their patches.
+    quarters: Vec<(Quarter, Vec<usize>)>,
+}
+
+impl TownPlan {
+    fn usable(&self, i: usize) -> bool {
+        i < self.n_inner && !self.wet[i] && self.face_ok[i]
+    }
+
+    fn inner(&self, j: i32) -> bool {
+        j >= 0 && (j as usize) < self.n_inner
+    }
+
+    fn in_town(&self, p: P) -> bool {
+        self.town_faces.iter().any(|(bb, poly)| p[0] >= bb[0] && p[0] <= bb[2] && p[1] >= bb[1] && p[1] <= bb[3] && contains(poly, p))
+    }
+
+    fn main_edge(&self, a: usize, b: usize) -> bool {
+        self.main_edges.contains(&(a.min(b), a.max(b)))
+    }
+
+    fn roll(&self, i: usize, stage: i64) -> f64 {
+        unit(hash3(self.pseed, i as i64, stage, 0x9a7c))
+    }
+}
+
+fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pcg32) -> TownPlan {
     let pop = s.population as f64;
     let n_spiral = match s.tier {
         Tier::Town => (pop / 220.0).clamp(9.0, 26.0),
@@ -1544,36 +1616,24 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
     }
     // The river vertex moves onto the straight bank-to-bank line, so the patch edges on
     // either side run with the street and the blocks leave room for it.
-    let mut bridge_streets: Vec<(Vec<P>, bool)> = Vec::new();
-    for &((a, v, b), main) in &bridged {
+    for &((a, v, b), _) in &bridged {
         mesh.pos[v] = river_crossing(site, mesh.pos[a], mesh.pos[b]);
-        bridge_streets.push((vec![mesh.pos[a], mesh.pos[v], mesh.pos[b]], main));
     }
-    for (pts, main) in &bridge_streets {
-        let dir = sub(pts[2], pts[0]);
-        let dl = len(dir).max(1e-9);
-        let u = mul(dir, 1.0 / dl);
-        // Span from bank to bank along the street, plus a landing on each side.
-        let (fwd, back) = (site.dry_reach(pts[1], u, 0.0, 1.0, 0.0) + 14.0, site.dry_reach(pts[1], u, 0.0, -1.0, 0.0) + 14.0);
-        // A span far wider than the river means the street runs along the water, not over it.
-        let hw = site.nearest_river(pts[1]).map_or(0.0, |r| r.2);
-        if fwd + back > 4.0 * hw + 80.0 {
-            continue;
-        }
-        // Cities build in stone, as wide as the street's gap between blocks (12 ft a side).
-        let width = if s.tier >= Tier::City { 24.0 } else if *main { 16.0 } else { 12.0 };
-        // Long enough that every corner stands on the bank, crossing at a slant too.
-        let (fwd, back) = (site.dry_reach(pts[1], u, width, 1.0, fwd - 14.0) + 14.0, site.dry_reach(pts[1], u, width, -1.0, back - 14.0) + 14.0);
-        let c = add(pts[1], mul(u, 0.5 * (fwd - back)));
-        l.bridges.push(rect(c, u, fwd + back, width));
-        if !main {
-            l.roads.push((pts.clone(), 4, 12.0));
+    let mut main_edges: FastSet<(usize, usize)> = FastSet::default();
+    for &((a, v, b), _) in &bridged {
+        for (p, q) in [(a, v), (v, b)] {
+            main_edges.insert((p.min(q), p.max(q)));
         }
     }
-
-    // Materialise: patches, walls, gates and streets as points.
-    let cells: Vec<Labeled> = (0..total).map(|i| Labeled { pts: mesh.face_pts(i), labels: mesh.labels[i].clone() }).collect();
-    l.gates = gates.iter().map(|&g| mesh.pos[g]).collect();
+    for path in &paths {
+        for w in path.windows(2) {
+            main_edges.insert((w[0].min(w[1]), w[0].max(w[1])));
+        }
+    }
+    let main_edge = |a: usize, b: usize| main_edges.contains(&(a.min(b), a.max(b)));
+    // Wall runs, and how many towers stand along each stretch (fixed here, so a corner moved
+    // later never adds or drops one).
+    let mut wall_runs: Vec<(Vec<usize>, bool, Vec<usize>)> = Vec::new();
     if walled {
         for (chain, closed) in &chains {
             let mut chain = chain.clone();
@@ -1581,104 +1641,16 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
             if *closed && let Some(k) = chain.iter().position(|v| !gates.contains(v)) {
                 chain.rotate_left(k);
             }
-            let (pieces, towers, gate_towers) = wall_pieces(&chain.iter().map(|&v| (mesh.pos[v], gates.contains(&v))).collect::<Vec<_>>(), *closed);
-            l.walls.extend(pieces);
-            l.towers.extend(towers);
-            l.gate_towers.extend(gate_towers);
+            let along = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], gates.contains(&v))).collect::<Vec<_>>(), *closed, None).3;
+            wall_runs.push((chain, *closed, along));
         }
     }
-    let mut main_edges: std::collections::BTreeSet<((i64, i64), (i64, i64))> = Default::default();
-    for &((a, v, b), _) in &bridged {
-        for (p, q) in [(a, v), (v, b)] {
-            let (kp, kq) = (qkey(mesh.pos[p]), qkey(mesh.pos[q]));
-            main_edges.insert((kp.min(kq), kp.max(kq)));
-        }
-    }
-    for path in &paths {
-        for w in path.windows(2) {
-            let (a, b) = (qkey(mesh.pos[w[0]]), qkey(mesh.pos[w[1]]));
-            main_edges.insert((a.min(b), a.max(b)));
-        }
-        l.streets.push(path.iter().map(|&v| mesh.pos[v]).collect());
-        let mut drawn: Vec<P> = Vec::new();
-        for (k, &v) in path.iter().enumerate() {
-            if k > 0
-                && crossing_links.iter().any(|&(a, _, b)| (a == path[k - 1] && b == v) || (a == v && b == path[k - 1]))
-            {
-                drawn.push(river_crossing(site, mesh.pos[path[k - 1]], mesh.pos[v]));
-            }
-            drawn.push(mesh.pos[v]);
-        }
-        l.roads.push((drawn, 4, 18.0));
-    }
-    // Each road continues from where it ends to its gate (`approach_curve`).
-    for (k, (e, class)) in ends.iter().enumerate() {
-        if let Some(Some(g)) = gate_of.get(k) {
-            let gp = mesh.pos[*g];
-            let span = dist(*e, gp);
-            if span > 1.0 {
-                let curve = approach_curve(*e, gp, heading_of[k]);
-                let width = [24.0, 16.0, 10.0][(*class as usize).min(2)];
-                // Where the approach crosses the river it goes straight over a bridge: the
-                // wet stretch of the curve becomes the deck's line, bank to bank.
-                let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
-                let steps = (total / 5.0).ceil().max(1.0) as usize;
-                let samples: Vec<P> = (0..=steps).map(|j| point_along(&curve, total * j as f64 / steps as f64).0).collect();
-                let mut straight: Vec<P> = Vec::new();
-                let mut j = 0;
-                while j < samples.len() {
-                    if !site.near_river(samples[j], 0.0) {
-                        // One point in eight (40 ft) where it runs on land, and its ends.
-                        if j % 8 == 0 || j + 1 == samples.len() || site.near_river(samples[(j + 1).min(samples.len() - 1)], 0.0) {
-                            straight.push(samples[j]);
-                        }
-                        j += 1;
-                        continue;
-                    }
-                    let start = j;
-                    while j + 1 < samples.len() && site.near_river(samples[j + 1], 0.0) {
-                        j += 1;
-                    }
-                    let (a, b) = (samples[start.saturating_sub(1)], samples[(j + 1).min(samples.len() - 1)]);
-                    if straight.last().is_none_or(|p| dist(*p, a) > 1e-9) {
-                        straight.push(a);
-                    }
-                    straight.push(b);
-                    let span = dist(a, b);
-                    if span > 1.0 {
-                        let u = mul(sub(b, a), 1.0 / span);
-                        let deck = if s.tier >= Tier::City { f64::max(width + 4.0, 24.0) } else { width + 4.0 };
-                        // From bank to bank at every corner, plus a landing each side.
-                        let m = lerp(a, b, 0.5);
-                        let (fwd, back) = (site.dry_reach(m, u, deck, 1.0, 0.5 * span) + 8.0, site.dry_reach(m, u, deck, -1.0, 0.5 * span) + 8.0);
-                        l.bridges.push(rect(add(m, mul(u, 0.5 * (fwd - back))), u, fwd + back, deck));
-                    }
-                    j += 2;
-                }
-                straight.dedup_by(|a, b| dist(*a, *b) < 1e-9);
-                let curve = if straight.len() >= 2 { straight } else { curve };
-                let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
-                let samples: Vec<P> = (0..=steps).map(|j| point_along(&curve, total * j as f64 / steps as f64).0).collect();
-                // Once it is in the town (on land, short of the gate itself) the road is a
-                // town street, paved like the main streets.
-                match samples.iter().position(|p| dist(*p, gp) >= 40.0 && !site.wet(*p) && in_town(*p)) {
-                    Some(entry) if entry > 0 => {
-                        let at = total * entry as f64 / steps as f64;
-                        let mut acc = 0.0;
-                        let (mut outside, mut inside) = (vec![curve[0]], vec![samples[entry]]);
-                        for w in curve.windows(2) {
-                            acc += dist(w[0], w[1]);
-                            if acc < at { outside.push(w[1]) } else { inside.push(w[1]) }
-                        }
-                        outside.push(samples[entry]);
-                        l.roads.push((outside, *class, width));
-                        l.roads.push((inside, 4, width));
-                    }
-                    _ => l.roads.push((curve, *class, width)),
-                }
-            }
-        }
-    }
+
+    // Patches as planned (wards, districts and their names are decided on these).
+    let cells: Vec<Labeled> = (0..total).map(|i| Labeled { pts: mesh.face_pts(i), labels: mesh.labels[i].clone() }).collect();
+    let gate_pts: Vec<P> = gates.iter().map(|&g| mesh.pos[g]).collect();
+    // Patch edges as vertex pairs (edge e of patch i runs from corner e to e + 1).
+    let edge_v = |i: usize, e: usize| (mesh.faces[i][e], mesh.faces[i][(e + 1) % mesh.faces[i].len()]);
 
     // Wards.
     let mut ward: Vec<Option<Ward>> = vec![None; total];
@@ -1714,14 +1686,11 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
             docks += 1;
         }
     }
-    let gate_patch = |i: usize| l.gates.iter().any(|g| cells[i].pts.iter().any(|p| dist(*p, *g) < 12.0));
-    let on_main = |i: usize| {
-        let m = cells[i].pts.len();
-        (0..m).any(|e| {
-            let (a, b) = (qkey(cells[i].pts[e]), qkey(cells[i].pts[(e + 1) % m]));
-            main_edges.contains(&(a.min(b), a.max(b)))
-        })
-    };
+    let gate_patch = |i: usize| gate_pts.iter().any(|g| cells[i].pts.iter().any(|p| dist(*p, *g) < 12.0));
+    let on_main = |i: usize| (0..cells[i].pts.len()).any(|e| {
+        let (a, b) = edge_v(i, e);
+        main_edge(a, b)
+    });
     if s.tier == Tier::Metropolis
         && let Some(&p) = free.iter().find(|&&i| ward[i].is_none() && len(sites[i]) > 0.5 * r)
     {
@@ -1761,7 +1730,7 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                 continue;
             }
             let c = centroid(&cells[i].pts);
-            let gate_d = l.gates.iter().map(|g| dist(*g, c)).fold(f64::MAX, f64::min);
+            let gate_d = gate_pts.iter().map(|g| dist(*g, c)).fold(f64::MAX, f64::min);
             let shore_d = if neighbors(i).iter().any(|&j| wet[j]) { 0.5 * spacing } else { f64::MAX };
             let nearest = (3.0 * len(c)).min(2.0 * gate_d).min(shore_d).max(1.0);
             cands.push((i, 1.0 / (nearest * nearest)));
@@ -1820,13 +1789,13 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                     continue;
                 }
                 let j = nb as usize;
-                let (ka, kb) = (qkey(cells[i].pts[e]), qkey(cells[i].pts[(e + 1) % m]));
+                let (ka, kb) = edge_v(i, e);
                 if group[j] != usize::MAX
                     || ward[j] != ward[start]
                     || wet[j]
                     || cells[j].pts.len() < 3
                     || (j < n_inner) != (start < n_inner)
-                    || main_edges.contains(&(ka.min(kb), ka.max(kb)))
+                    || main_edge(ka, kb)
                 {
                     continue;
                 }
@@ -1837,6 +1806,201 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                 }
                 group[j] = start;
                 members.push(j);
+            }
+        }
+    }
+
+    // Named districts.
+    let crossings: Vec<P> = bridged.iter().map(|&((_, v, _), _)| mesh.pos[v]).collect();
+    let edge_w: Vec<Vec<f64>> = (0..total)
+        .map(|i| {
+            let c = &cells[i];
+            let m = c.pts.len();
+            (0..m)
+                .map(|e| {
+                    let (a, b) = (c.pts[e], c.pts[(e + 1) % m]);
+                    let nb = c.labels[e];
+                    let (va, vb) = edge_v(i, e);
+                    if site.near_river(lerp(a, b, 0.5), 2.0) || (walled && nb >= 0 && (i < n_inner) != ((nb as usize) < n_inner)) {
+                        0.0
+                    } else if main_edge(va, vb) {
+                        0.9
+                    } else {
+                        1.0
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let landing: Vec<bool> = (0..total)
+        .map(|i| {
+            let c = &cells[i];
+            let m = c.pts.len();
+            (0..m).any(|e| (c.labels[e] >= 0 && wet[c.labels[e] as usize]) || site.near_river(lerp(c.pts[e], c.pts[(e + 1) % m], 0.5), 2.0))
+        })
+        .collect();
+    let quarters = quarters(s, &QuarterInput { cells: &cells, ward: &ward, n_inner, plaza, castle: castle_face, gates: &gate_pts, crossings: &crossings, edge_w: &edge_w, landing: &landing });
+    TownPlan {
+        mesh,
+        vf,
+        n_inner,
+        wet,
+        face_ok,
+        pinned,
+        walled,
+        wall_runs,
+        gates,
+        ends,
+        heading_of,
+        gate_of,
+        town_faces,
+        plaza_face,
+        plaza,
+        crossing_links,
+        bridged,
+        paths,
+        main_edges,
+        ward,
+        group,
+        pseed,
+        base_seed,
+        quarters,
+    }
+}
+
+/// Build a planned town, its mesh corners first moved to `moves` (local ft; corners on the
+/// water or a river stay put, and a move that would bend a patch inward goes part of the way,
+/// as `Mesh::try_move`).
+fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, moves: &[(usize, P)], l: &mut Layout) {
+    let mut mesh = plan.mesh.clone();
+    for &(v, to) in moves {
+        if v < mesh.pos.len() && !plan.pinned[v] {
+            mesh.try_move(&plan.vf, v, to);
+        }
+    }
+    let total = mesh.faces.len();
+    let n_inner = plan.n_inner;
+    let wet = &plan.wet;
+    let ward = &plan.ward;
+    let group = &plan.group;
+    let usable = |i: usize| plan.usable(i);
+
+    // Bridges: the river vertex back on the bank-to-bank line, and the deck along it.
+    let mut bridge_streets: Vec<(Vec<P>, bool)> = Vec::new();
+    for &((a, v, b), main) in &plan.bridged {
+        mesh.pos[v] = river_crossing(site, mesh.pos[a], mesh.pos[b]);
+        bridge_streets.push((vec![mesh.pos[a], mesh.pos[v], mesh.pos[b]], main));
+    }
+    for (pts, main) in &bridge_streets {
+        let dir = sub(pts[2], pts[0]);
+        let dl = len(dir).max(1e-9);
+        let u = mul(dir, 1.0 / dl);
+        // Span from bank to bank along the street, plus a landing on each side.
+        let (fwd, back) = (site.dry_reach(pts[1], u, 0.0, 1.0, 0.0) + 14.0, site.dry_reach(pts[1], u, 0.0, -1.0, 0.0) + 14.0);
+        // A span far wider than the river means the street runs along the water, not over it.
+        let hw = site.nearest_river(pts[1]).map_or(0.0, |r| r.2);
+        if fwd + back > 4.0 * hw + 80.0 {
+            continue;
+        }
+        // Cities build in stone, as wide as the street's gap between blocks (12 ft a side).
+        let width = if s.tier >= Tier::City { 24.0 } else if *main { 16.0 } else { 12.0 };
+        // Long enough that every corner stands on the bank, crossing at a slant too.
+        let (fwd, back) = (site.dry_reach(pts[1], u, width, 1.0, fwd - 14.0) + 14.0, site.dry_reach(pts[1], u, width, -1.0, back - 14.0) + 14.0);
+        let c = add(pts[1], mul(u, 0.5 * (fwd - back)));
+        l.bridges.push(rect(c, u, fwd + back, width));
+        if !main {
+            l.roads.push((pts.clone(), 4, 12.0));
+        }
+    }
+
+    // Materialise: patches, walls, gates and streets as points.
+    let cells: Vec<Labeled> = (0..total).map(|i| Labeled { pts: mesh.face_pts(i), labels: mesh.labels[i].clone() }).collect();
+    let edge_v = |i: usize, e: usize| (mesh.faces[i][e], mesh.faces[i][(e + 1) % mesh.faces[i].len()]);
+    l.gates = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
+    for (chain, closed, along) in &plan.wall_runs {
+        let (pieces, towers, gate_towers, _) = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect::<Vec<_>>(), *closed, Some(along));
+        l.walls.extend(pieces);
+        l.towers.extend(towers);
+        l.gate_towers.extend(gate_towers);
+    }
+    for path in &plan.paths {
+        l.streets.push(path.iter().map(|&v| mesh.pos[v]).collect());
+        let mut drawn: Vec<P> = Vec::new();
+        for (k, &v) in path.iter().enumerate() {
+            if k > 0
+                && plan.crossing_links.iter().any(|&(a, _, b)| (a == path[k - 1] && b == v) || (a == v && b == path[k - 1]))
+            {
+                drawn.push(river_crossing(site, mesh.pos[path[k - 1]], mesh.pos[v]));
+            }
+            drawn.push(mesh.pos[v]);
+        }
+        l.roads.push((drawn, 4, 18.0));
+    }
+    // Each road continues from where it ends to its gate (`approach_curve`).
+    for (k, (e, class)) in plan.ends.iter().enumerate() {
+        if let Some(Some(g)) = plan.gate_of.get(k) {
+            let gp = mesh.pos[*g];
+            let span = dist(*e, gp);
+            if span > 1.0 {
+                let curve = approach_curve(*e, gp, plan.heading_of[k]);
+                let width = [24.0, 16.0, 10.0][(*class as usize).min(2)];
+                // Where the approach crosses the river it goes straight over a bridge: the
+                // wet stretch of the curve becomes the deck's line, bank to bank.
+                let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
+                let steps = (total / 5.0).ceil().max(1.0) as usize;
+                let samples: Vec<P> = (0..=steps).map(|j| point_along(&curve, total * j as f64 / steps as f64).0).collect();
+                let mut straight: Vec<P> = Vec::new();
+                let mut j = 0;
+                while j < samples.len() {
+                    if !site.near_river(samples[j], 0.0) {
+                        // One point in eight (40 ft) where it runs on land, and its ends.
+                        if j % 8 == 0 || j + 1 == samples.len() || site.near_river(samples[(j + 1).min(samples.len() - 1)], 0.0) {
+                            straight.push(samples[j]);
+                        }
+                        j += 1;
+                        continue;
+                    }
+                    let start = j;
+                    while j + 1 < samples.len() && site.near_river(samples[j + 1], 0.0) {
+                        j += 1;
+                    }
+                    let (a, b) = (samples[start.saturating_sub(1)], samples[(j + 1).min(samples.len() - 1)]);
+                    if straight.last().is_none_or(|p| dist(*p, a) > 1e-9) {
+                        straight.push(a);
+                    }
+                    straight.push(b);
+                    let span = dist(a, b);
+                    if span > 1.0 {
+                        let u = mul(sub(b, a), 1.0 / span);
+                        let deck = if s.tier >= Tier::City { f64::max(width + 4.0, 24.0) } else { width + 4.0 };
+                        // From bank to bank at every corner, plus a landing each side.
+                        let m = lerp(a, b, 0.5);
+                        let (fwd, back) = (site.dry_reach(m, u, deck, 1.0, 0.5 * span) + 8.0, site.dry_reach(m, u, deck, -1.0, 0.5 * span) + 8.0);
+                        l.bridges.push(rect(add(m, mul(u, 0.5 * (fwd - back))), u, fwd + back, deck));
+                    }
+                    j += 2;
+                }
+                straight.dedup_by(|a, b| dist(*a, *b) < 1e-9);
+                let curve = if straight.len() >= 2 { straight } else { curve };
+                let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
+                let samples: Vec<P> = (0..=steps).map(|j| point_along(&curve, total * j as f64 / steps as f64).0).collect();
+                // Once it is in the town (on land, short of the gate itself) the road is a
+                // town street, paved like the main streets.
+                match samples.iter().position(|q| dist(*q, gp) >= 40.0 && !site.wet(*q) && plan.in_town(*q)) {
+                    Some(entry) if entry > 0 => {
+                        let at = total * entry as f64 / steps as f64;
+                        let mut acc = 0.0;
+                        let (mut outside, mut inside) = (vec![curve[0]], vec![samples[entry]]);
+                        for w in curve.windows(2) {
+                            acc += dist(w[0], w[1]);
+                            if acc < at { outside.push(w[1]) } else { inside.push(w[1]) }
+                        }
+                        outside.push(samples[entry]);
+                        l.roads.push((outside, *class, width));
+                        l.roads.push((inside, 4, width));
+                    }
+                    _ => l.roads.push((curve, *class, width)),
+                }
             }
         }
     }
@@ -1913,8 +2077,8 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
         }
         let d: Vec<f64> = (0..m)
             .map(|e| {
-                let (a, b) = (qkey(c.pts[e]), qkey(c.pts[(e + 1) % m]));
-                let main = main_edges.contains(&(a.min(b), a.max(b)));
+                let (va, vb) = edge_v(i, e);
+                let main = plan.main_edge(va, vb);
                 let nb = c.labels[e];
                 // On the river: blocks end at a quay 16 ft from the water.
                 let mid = lerp(c.pts[e], c.pts[(e + 1) % m], 0.5);
@@ -1932,13 +2096,13 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                 if w == Ward::Plaza {
                     return 0.0;
                 }
-                if nb >= 0 && Some(nb as usize) == plaza && plaza_face.is_some() {
+                if nb >= 0 && Some(nb as usize) == plan.plaza && plan.plaza_face.is_some() {
                     return 13.0_f64.max(if main { 12.0 } else { 7.0 });
                 }
                 if nb >= 0 && group[i] != usize::MAX && group[nb as usize] == group[i] {
                     return 0.0;
                 }
-                let wall = walled && i < n_inner && (!inner(nb) || wet[nb as usize]);
+                let wall = plan.walled && i < n_inner && (!plan.inner(nb) || wet[nb as usize]);
                 (if main { 12.0 } else { 7.0 }) + if wall { 18.0 } else { 0.0 }
             })
             .collect();
@@ -1957,12 +2121,12 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                 let inward = if ccw { [-ev[1], ev[0]] } else { [ev[1], -ev[0]] };
                 let o = mul(inward, 0.5 * d[e]);
                 // Not where the river cuts across the strip.
-                let (p, q) = (add(a, o), add(b, o));
+                let (pp, q) = (add(a, o), add(b, o));
                 let n = (el / 5.0).ceil() as usize;
-                if (0..=n).any(|j| site.near_river(lerp(p, q, j as f64 / n as f64), 0.5 * d[e])) {
+                if (0..=n).any(|j| site.near_river(lerp(pp, q, j as f64 / n as f64), 0.5 * d[e])) {
                     continue;
                 }
-                l.roads.push((vec![p, q], 3, d[e] + 1.0));
+                l.roads.push((vec![pp, q], 3, d[e] + 1.0));
             }
         }
         let block = inset(&c.pts, &d);
@@ -1990,28 +2154,28 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
         } else {
             w
         };
-        let dp = District::roll(w, hash2(base_seed, key as i64, 0xd15));
-        let mut prng = Pcg32::new(hash2(base_seed, i as i64, 0x107), 47);
+        let dp = District::roll(w, hash2(plan.base_seed, key as i64, 0xd15));
+        let mut prng = Pcg32::new(hash2(plan.base_seed, i as i64, 0x107), 47);
         if !matches!(w, Ward::Plaza | Ward::Farm | Ward::Park) {
             l.blocks.push(block.clone());
         }
         match w {
             Ward::Plaza => {
                 // A monument, pushed toward the square's longest side (watabou's market).
-                let mr = roll(i, 40);
+                let mr = plan.roll(i, 40);
                 if mr < 0.9 {
                     let mb = block.len();
                     let e = (0..mb).max_by(|&x, &y| dist(block[x], block[(x + 1) % mb]).total_cmp(&dist(block[y], block[(y + 1) % mb]))).unwrap_or(0);
                     let (a, b) = (block[e], block[(e + 1) % mb]);
                     let cen = centroid(&block);
-                    let at = lerp(cen, lerp(a, b, 0.5), 0.2 + 0.4 * roll(i, 41));
+                    let at = lerp(cen, lerp(a, b, 0.5), 0.2 + 0.4 * plan.roll(i, 41));
                     let u = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
-                    let size = 13.0 + 13.0 * roll(i, 42);
+                    let size = 13.0 + 13.0 * plan.roll(i, 42);
                     let plinth = if mr < 0.6 {
-                        rect(at, u, size, 13.0 + 13.0 * roll(i, 43))
+                        rect(at, u, size, 13.0 + 13.0 * plan.roll(i, 43))
                     } else {
                         let o = circle(at, 0.6 * size, 8);
-                        o.iter().map(|p| add(at, rotate(sub(*p, at), libm::atan2(u[1], u[0])))).collect()
+                        o.iter().map(|q| add(at, rotate(sub(*q, at), libm::atan2(u[1], u[0])))).collect()
                     };
                     l.monuments.push(plinth);
                 }
@@ -2030,7 +2194,7 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
                     })
                     .flat_map(|e| [c.pts[e], c.pts[(e + 1) % m]])
                     .collect();
-                let reach = c.pts.iter().map(|p| dist(*p, centroid(&c.pts))).fold(0.0, f64::max);
+                let reach = c.pts.iter().map(|q| dist(*q, centroid(&c.pts))).fold(0.0, f64::max);
                 build_block(site, &block, &mut streets, w, &dp, &mut prng, l, Some((&anchors, reach)))
             }
             _ => build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None),
@@ -2116,35 +2280,17 @@ fn town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pc
         }
     }
     l.roads = clipped;
-    let crossings: Vec<P> = bridge_streets.iter().map(|(pts, _)| pts[1]).collect();
-    let edge_w: Vec<Vec<f64>> = (0..total)
-        .map(|i| {
-            let c = &cells[i];
-            let m = c.pts.len();
-            (0..m)
-                .map(|e| {
-                    let (a, b) = (c.pts[e], c.pts[(e + 1) % m]);
-                    let nb = c.labels[e];
-                    let (ka, kb) = (qkey(a), qkey(b));
-                    if site.near_river(lerp(a, b, 0.5), 2.0) || (walled && nb >= 0 && (i < n_inner) != ((nb as usize) < n_inner)) {
-                        0.0
-                    } else if main_edges.contains(&(ka.min(kb), ka.max(kb))) {
-                        0.9
-                    } else {
-                        1.0
-                    }
-                })
-                .collect()
+    // Districts keep the patches and names they were planned with; their outlines and labels
+    // follow the moved corners.
+    l.quarters = plan
+        .quarters
+        .iter()
+        .map(|(q, members)| {
+            let patches: Vec<Vec<P>> = members.iter().map(|&i| cells[i].pts.clone()).collect();
+            let label = label_curve(&patches).0;
+            Quarter { name: q.name.clone(), kind: q.kind, patches, label }
         })
         .collect();
-    let landing: Vec<bool> = (0..total)
-        .map(|i| {
-            let c = &cells[i];
-            let m = c.pts.len();
-            (0..m).any(|e| (c.labels[e] >= 0 && wet[c.labels[e] as usize]) || site.near_river(lerp(c.pts[e], c.pts[(e + 1) % m], 0.5), 2.0))
-        })
-        .collect();
-    l.quarters = quarters(s, &QuarterInput { cells: &cells, ward: &ward, n_inner, plaza, castle: castle_face, gates: &l.gates, crossings: &crossings, edge_w: &edge_w, landing: &landing });
 }
 
 struct QuarterInput<'a> {
@@ -2168,7 +2314,7 @@ struct QuarterInput<'a> {
 /// √(patches) of them become districts, which grow over neighbouring patches (gate, bridge
 /// and castle districts slowly; never across the wall or the river; docks and parks only
 /// over their own kind; not between the waterfront and inland). Leftover patches seed more.
-fn quarters(s: &Settlement, q: &QuarterInput) -> Vec<Quarter> {
+fn quarters(s: &Settlement, q: &QuarterInput) -> Vec<(Quarter, Vec<usize>)> {
     use QuarterKind as K;
     let total = q.cells.len();
     let in_city: Vec<bool> = (0..total).map(|i| q.cells[i].pts.len() >= 3 && q.ward[i].is_some_and(|w| w != Ward::Farm)).collect();
@@ -2354,7 +2500,7 @@ fn quarters(s: &Settlement, q: &QuarterInput) -> Vec<Quarter> {
             name = format!("{} {noun}", namer.word(culture, 1, 2));
         }
         used.insert(name.clone());
-        out.push(Quarter { name, kind: k, patches, label });
+        out.push((Quarter { name, kind: k, patches, label }, members));
     }
     out
 }
@@ -2555,7 +2701,16 @@ fn castle<G: Ground>(site: &G, block: &[P], gate_toward: P, w: Ward, dp: &Distri
 /// between two gate towers, towers on every other corner, and more towers along long runs.
 /// Input: corners with a gate flag; `closed` joins the last corner back to the first.
 fn wall_pieces(corners: &[(P, bool)], closed: bool) -> (Vec<Vec<P>>, Vec<P>, Vec<P>) {
+    let (pieces, towers, gate_towers, _) = wall_pieces_spaced(corners, closed, None);
+    (pieces, towers, gate_towers)
+}
+
+/// `wall_pieces`, with how many towers stand along each stretch between corners given (in
+/// order; else from its length, one per 160 ft), so a town whose corners moved keeps its towers
+/// (and their `t:` ids). Also returns the counts used.
+fn wall_pieces_spaced(corners: &[(P, bool)], closed: bool, along: Option<&[usize]>) -> (Vec<Vec<P>>, Vec<P>, Vec<P>, Vec<usize>) {
     const TOWER_SPACING: f64 = 160.0;
+    let mut used: Vec<usize> = Vec::new();
     // Gate towers (15 ft radius) stand 26 ft either side of the gate: a 22 ft passage.
     const GATE_HALF: f64 = 26.0;
     let mut pts: Vec<(P, bool)> = corners.to_vec();
@@ -2588,7 +2743,8 @@ fn wall_pieces(corners: &[(P, bool)], closed: bool) -> (Vec<Vec<P>>, Vec<P>, Vec
         // Towers along a long run since the last corner.
         if let Some(&last) = cur.last() {
             let d = dist(last, p);
-            let extra = (d / TOWER_SPACING).floor() as usize;
+            let extra = along.and_then(|a| a.get(used.len()).copied()).unwrap_or((d / TOWER_SPACING).floor() as usize);
+            used.push(extra);
             for j in 1..=extra {
                 towers.push(lerp(last, p, j as f64 / (extra + 1) as f64));
             }
@@ -2601,7 +2757,7 @@ fn wall_pieces(corners: &[(P, bool)], closed: bool) -> (Vec<Vec<P>>, Vec<P>, Vec
     if cur.len() >= 2 {
         pieces.push(cur);
     }
-    (pieces, towers, gate_towers)
+    (pieces, towers, gate_towers, used)
 }
 
 /// Two convex polygons overlap (a corner of one inside the other).

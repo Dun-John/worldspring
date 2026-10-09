@@ -7,6 +7,7 @@ use crate::core::hash::{FastMap, FastSet};
 
 use super::geom::*;
 
+#[derive(Clone)]
 pub struct Mesh {
     pub pos: Vec<P>,
     /// Vertex ids per face; edge k runs from `faces[f][k]` to `faces[f][k + 1]`.
