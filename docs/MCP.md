@@ -973,8 +973,9 @@ farms outside the walls) cut into lots. The ward editor changes that layout with
   the gates stay where the roads come in).
 - **What stays:** the town's plan (gates, main streets, districts and their names, the towers along each wall).
   Only the patches touched are built again. A building that comes out as it was generated keeps its id
-  (`b:<layout>:<id>`) and everything decided about it; new ones get ids of 1,000,000 and up (by patch), so a
-  change to one ward never renumbers another's. A business the town lost with the buildings taken away goes to a
+  (`b:<layout>:<id>`) and everything decided about it; new ones get ids of 1,000,000 and up (by patch; in
+  a patch rolled again, 100,000,000 and up, by patch and roll), so a change to one ward never renumbers another's
+  and a roll's buildings never take the last roll's ids. A business the town lost with the buildings taken away goes to a
   new building where one fits; `functions_lost` lists the ones that found none. Renames, notes, NPCs and building
   changes on buildings that keep their ids stay with them.
 - Villages have no wards (they grow along their roads). Draw roads before editing towns: a road drawn into a town
