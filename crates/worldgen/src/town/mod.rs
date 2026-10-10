@@ -1117,8 +1117,8 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for t in &mut l.extra_towers {
         tw(&mut t.0);
     }
-    if edit.is_some() {
-        wards::inherit(world, t0, &generated_layout(world, t0, index), &mut l);
+    if let Some(e) = edit {
+        wards::inherit(world, t0, e, &generated_layout(world, t0, index), &mut l);
     }
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {

@@ -30,9 +30,13 @@ use crate::t0::settle::Tier;
 use crate::world::{CornerMove, LOT_SIZES, PatchEdit, TOWN_WARDS, TownEdit};
 
 /// Ids of the buildings a town edit adds: `NEW_ID + patch × PER_PATCH + k` (k in the order its
-/// patch builds them).
+/// patch builds them); in a patch rolled again (`reroll` r ≥ 1), `ROLLED_ID + (patch × ROLLS +
+/// (r − 1) mod ROLLS) × PER_PATCH + k`, so a roll's buildings never take the last roll's ids
+/// (and what was said about them is set aside).
 pub const NEW_ID: u32 = 1_000_000;
 pub const PER_PATCH: u32 = 10_000;
+pub const ROLLED_ID: u32 = 100_000_000;
+pub const ROLLS: u32 = 64;
 
 /// Each lot size's target lot area, times the ward's usual (`LOT_SIZES` order).
 const LOT_FACTOR: [f64; 4] = [0.6, 1.2, 2.4, 4.0];
@@ -336,7 +340,8 @@ pub fn with_edit(world: &World, t0: &T0, index: usize, e: &TownEdit) -> Rc<Layou
 /// with a footprint the generated layout `generated` has takes that building's id and what was
 /// decided about it; the rest are new (`NEW_ID`), with functions the town lost, homes and storeys
 /// of their own. Leaves the buildings in id order.
-pub(super) fn inherit(world: &World, t0: &T0, generated: &Layout, l: &mut Layout) {
+pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layout, l: &mut Layout) {
+    let rolls: FastMap<u32, u32> = edit.patches.iter().filter(|p| p.reroll > 0).map(|p| (p.p, p.reroll)).collect();
     const CELL: f64 = 2.0;
     let cell = |p: P| (crate::core::floor(p[0] / CELL) as i64, crate::core::floor(p[1] / CELL) as i64);
     let mut grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
@@ -359,7 +364,10 @@ pub(super) fn inherit(world: &World, t0: &T0, generated: &Layout, l: &mut Layout
             }
             None => {
                 let n = next.entry(b.id).or_insert(0);
-                b.id = NEW_ID + b.id * PER_PATCH + *n;
+                b.id = match rolls.get(&b.id) {
+                    Some(r) => ROLLED_ID + (b.id * ROLLS + (r - 1) % ROLLS) * PER_PATCH + *n,
+                    None => NEW_ID + b.id * PER_PATCH + *n,
+                };
                 *n += 1;
                 fresh.push(k);
             }
