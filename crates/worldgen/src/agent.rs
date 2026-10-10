@@ -166,9 +166,9 @@ pub fn created_detail(c: &crate::world::Created) -> String {
     s
 }
 
-/// Where a site of `kind` can be created near `p`: on dry land inside the map, stepped out of
-/// river channels (as generated sites are); with a name for it (the nearest settlement's naming
-/// culture's), seeded by its id. The app and mapd both place sites through this.
+/// Where a site of `kind` can be created near `p`: on dry land (as the map draws the shore)
+/// inside the map, stepped out of river channels (as generated sites are); with a name for it
+/// (the nearest settlement's naming culture's), seeded by its id. The app and mapd both place sites through this.
 pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2]) -> Result<([f64; 2], String), String> {
     use crate::t0::names::{NameKind, Namer};
     use crate::under::UnderKind;
@@ -183,8 +183,8 @@ pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id
         let size = world.geom.tile_size_ft(world.geom.max_level);
         p = p.map(|v| crate::core::floor(v / size) * size + (v - crate::core::floor(v / size) * size).clamp(70.0, size - 70.0));
     }
-    let ground = t0.sample(p[0], p[1], 20.0);
-    if (t0.sample_water(p[0], p[1]) as f64) >= ground || ground <= world.params().sea_level_ft {
+    // Sea or lake as the map draws the shore (`town::Shore`, as the site is then built).
+    if town::Shore::new(world, t0, [p[0] - 1.0, p[1] - 1.0, p[0] + 1.0, p[1] + 1.0]).wet(p) {
         return Err("that place is under water: pick dry land".to_string());
     }
     let culture = t0.settlements.iter().min_by(|a, b| (a.x - p[0]).hypot(a.y - p[1]).total_cmp(&(b.x - p[0]).hypot(b.y - p[1]))).map(|s| s.culture as usize).unwrap_or(0);

@@ -20,11 +20,20 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let p = &t0.pois[poi];
     let center = [p.x, p.y];
     let mut rng = Pcg32::new(hash2(world.stream("site"), poi as i64, p.seed as i64), 41);
-    let ground = |q: P| t0.sample(center[0] + q[0], center[1] + q[1], 20.0);
+    // A site created by hand stands on the ground the map draws (`Shore`, as it was placed:
+    // `agent::creation_spot`); the world's own on the T0 grid they were placed on.
+    let shore = (poi >= t0.base_pois).then(|| {
+        let r = SITE_REACH_FT;
+        super::Shore::new(world, t0, [center[0] - r, center[1] - r, center[0] + r, center[1] + r])
+    });
+    let ground = |q: P| match &shore {
+        Some(s) => s.ground(add(q, center)),
+        None => t0.sample(center[0] + q[0], center[1] + q[1], 20.0),
+    };
     let dry = |poly: &[P]| {
-        poly.iter().all(|q| {
-            let w = [center[0] + q[0], center[1] + q[1]];
-            (t0.sample_water(w[0], w[1]) as f64) < ground(*q)
+        poly.iter().all(|q| match &shore {
+            Some(s) => !s.wet(add(*q, center)),
+            None => (t0.sample_water(center[0] + q[0], center[1] + q[1]) as f64) < ground(*q),
         })
     };
     let pad = |poly: &[P]| {
