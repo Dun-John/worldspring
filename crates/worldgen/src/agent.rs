@@ -201,6 +201,13 @@ pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id
     Ok((p, if kind == "waystation" { format!("{n} Inn") } else { n }))
 }
 
+/// Sea or lake at `p`, as the map draws the shore: the water mask's level above the ground. (Not
+/// the ground under sea level: a beach just inside the shoreline can dip a few feet below it.)
+fn standing_water(t0: &T0, p: P) -> bool {
+    let level = t0.sample_water(p[0], p[1]);
+    level > crate::t0::hydro::DRY && level as f64 > t0.sample(p[0], p[1], 5.0)
+}
+
 /// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
 /// clear of other buildings (sharing a wall is fine), roads, streets, town walls and squares
 /// (market squares, quays, greens, yards). `skip`: the building being reshaped: (its layout,
@@ -223,10 +230,8 @@ pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id:
         let n = (geom::dist(a, b) / 10.0).ceil().max(1.0) as usize;
         probes.extend((0..n).map(|s| geom::lerp(a, b, s as f64 / n as f64)));
     }
-    let sea = world.params().sea_level_ft;
     for p in &probes {
-        let ground = t0.sample(p[0], p[1], 5.0);
-        if (t0.sample_water(p[0], p[1]) as f64) >= ground || ground <= sea {
+        if standing_water(t0, *p) {
             return Err("that is in the water: draw it on dry land".to_string());
         }
         let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 2.0, t0.cell_ft);
@@ -479,10 +484,8 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
         let k = (geom::dist(a, b) / 10.0).ceil().max(1.0) as usize;
         probes.extend((0..=k).map(|s| geom::lerp(a, b, s as f64 / k as f64)));
     }
-    let sea = world.params().sea_level_ft;
     for p in &probes {
-        let ground = t0.sample(p[0], p[1], 5.0);
-        if (t0.sample_water(p[0], p[1]) as f64) >= ground || ground <= sea {
+        if standing_water(t0, *p) {
             return Err(format!("that is in the water: {}", if castle { "draw it on dry land" } else { "end the wall at the shore" }));
         }
         let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 2.0, t0.cell_ft);

@@ -48,17 +48,19 @@
     }
   }
 
-  // Names of places notes are on (map features at once, the rest looked up once).
+  // Names of places notes are on (map features at once, the rest looked up once). Called while
+  // the rows are derived, so a lookup only starts there: the name is set when it comes back.
   let names = $state<Record<string, string>>({});
+  const asked = new Set<string>();
   function placeName(id: string): string {
     if (renames[id]) return renames[id];
     const f = overlay.features.find((g) => g.id === id);
     if (f) return f.name;
-    if (!(id in names)) {
-      names[id] = '…';
+    if (!asked.has(id)) {
+      asked.add(id);
       void resolve(id).then((p) => (names[id] = p?.generated ?? p?.name ?? id));
     }
-    return names[id];
+    return names[id] ?? '…';
   }
 
   const needle = $derived(q.trim().toLowerCase());
