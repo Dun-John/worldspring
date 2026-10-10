@@ -611,6 +611,53 @@ impl<'a> PlanGround<'a> {
     }
 }
 
+/// Sea and lake over an area as the map draws them (for things placed by hand and built on
+/// open ground): the water mask's level above the drawn ground. That is the smooth T0 surface
+/// refinement starts from (`T0::ground_at`), in a settlement's river valleys under its pad
+/// (`PlanGround`, as `lod::terrain_refine` resets it), not the T0 grid, which on a harbour's
+/// waterfront can lie tens of feet (on steep coasts hundreds) below it. Worked out once, on
+/// the first point asked about.
+pub struct Shore<'a> {
+    t0: &'a T0,
+    /// Pads reaching the area: (x, y, reach).
+    pads: Vec<(f64, f64, f64)>,
+    rect: [f64; 4],
+    lattice_ft: f64,
+    plan: std::cell::OnceCell<PlanGround<'a>>,
+}
+
+impl<'a> Shore<'a> {
+    /// Over `rect` (x0, y0, x1, y1 world ft).
+    pub fn new(world: &World, t0: &'a T0, rect: [f64; 4]) -> Shore<'a> {
+        let pads = t0
+            .settlements
+            .iter()
+            .map(|s| (s.x, s.y, reach(s)))
+            .filter(|&(x, y, r)| {
+                let e = pad_extent(r);
+                x + e >= rect[0] && x - e <= rect[2] && y + e >= rect[1] && y - e <= rect[3]
+            })
+            .collect();
+        let lattice_ft = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+        Shore { t0, pads, rect, lattice_ft, plan: std::cell::OnceCell::new() }
+    }
+
+    /// The drawn ground at `p` (world ft), without its fine detail.
+    pub fn ground(&self, p: P) -> f64 {
+        let r = self.rect;
+        let plan = self.plan.get_or_init(|| PlanGround::new(self.t0, r, r, self.lattice_ft, VALLEY_CELL));
+        let pad = self.pads.iter().fold(0.0f64, |m, &(x, y, r)| m.max(pad_weight(crate::core::sqrt((p[0] - x) * (p[0] - x) + (p[1] - y) * (p[1] - y)), r)));
+        let g = plan.ground(p[0], p[1], true);
+        if pad > 0.0 { g + plan.depth(p[0], p[1]) * pad } else { g }
+    }
+
+    /// Standing water at `p` (world ft).
+    pub fn wet(&self, p: P) -> bool {
+        let level = self.t0.sample_water(p[0], p[1]);
+        level > crate::t0::hydro::DRY && level as f64 > self.ground(p)
+    }
+}
+
 /// `PlanGround::columns`: the ground node and valley cell column ranges, and per x its first
 /// node column (from the range's start) and Catmull-Rom weights, its valley cell column and
 /// fraction across it.

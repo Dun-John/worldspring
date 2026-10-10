@@ -201,11 +201,9 @@ pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id
     Ok((p, if kind == "waystation" { format!("{n} Inn") } else { n }))
 }
 
-/// Sea or lake at `p`, as the map draws the shore: the water mask's level above the ground. (Not
-/// the ground under sea level: a beach just inside the shoreline can dip a few feet below it.)
-fn standing_water(t0: &T0, p: P) -> bool {
-    let level = t0.sample_water(p[0], p[1]);
-    level > crate::t0::hydro::DRY && level as f64 > t0.sample(p[0], p[1], 5.0)
+/// The bounding box (x0, y0, x1, y1) of `pts`.
+fn bbox(pts: &[P]) -> [f64; 4] {
+    pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
 }
 
 /// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
@@ -215,6 +213,11 @@ fn standing_water(t0: &T0, p: P) -> bool {
 /// (the footprint's middle) and a name for it: its trade's in the nearest settlement's
 /// culture, seeded by its id (else what it is: "House").
 pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
+    building_spot_on(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, func, id, skip)
+}
+
+/// `building_spot` with the shore over an area that holds `poly`.
+fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
     use crate::core::rng::Pcg32;
     if poly.len() < 3 {
         return Err("a building needs at least 3 corners".to_string());
@@ -223,7 +226,9 @@ pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id:
         return Err("that place is off the map".to_string());
     }
     let c = geom::centroid(poly);
-    // Corners, the middle and every 10 ft along the walls must be dry.
+    // Corners, the middle and every 10 ft along the walls must be dry: sea or lake as the map
+    // draws the shore (`town::Shore`; not the ground under sea level: a beach just inside the
+    // shoreline can dip a few feet below it).
     let mut probes = vec![c];
     for (k, &a) in poly.iter().enumerate() {
         let b = poly[(k + 1) % poly.len()];
@@ -231,7 +236,7 @@ pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id:
         probes.extend((0..n).map(|s| geom::lerp(a, b, s as f64 / n as f64)));
     }
     for p in &probes {
-        if standing_water(t0, *p) {
+        if shore.wet(*p) {
             return Err("that is in the water: draw it on dry land".to_string());
         }
         let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 2.0, t0.cell_ft);
@@ -315,6 +320,9 @@ pub fn find_spot(world: &World, t0: &T0, near: P, width: f64, depth: f64, func: 
     }
     let nearest = |p: P| streets.iter().map(|&(a, b, half)| (geom::seg_dist(p, a, b) - half, a, b)).min_by(|x, y| x.0.total_cmp(&y.0));
     let front = depth * 0.5;
+    // (One shore for every footprint tried.)
+    let r = 400.0 + width.max(depth);
+    let shore = town::Shore::new(world, t0, [near[0] - r, near[1] - r, near[0] + r, near[1] + r]);
     let mut tried = 0;
     for ring in 0..=40 {
         let r = ring as f64 * 10.0;
@@ -339,7 +347,7 @@ pub fn find_spot(world: &World, t0: &T0, near: P, width: f64, depth: f64, func: 
             }
             let poly = town::rect(c, dir, width, depth);
             tried += 1;
-            if let Ok((p, name)) = building_spot(world, t0, &poly, func, id, None) {
+            if let Ok((p, name)) = building_spot_on(world, t0, &shore, &poly, func, id, None) {
                 return Ok((poly, p, name));
             }
         }
@@ -484,8 +492,9 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
         let k = (geom::dist(a, b) / 10.0).ceil().max(1.0) as usize;
         probes.extend((0..=k).map(|s| geom::lerp(a, b, s as f64 / k as f64)));
     }
+    let shore = town::Shore::new(world, t0, [x0, y0, x1, y1]);
     for p in &probes {
-        if standing_water(t0, *p) {
+        if shore.wet(*p) {
             return Err(format!("that is in the water: {}", if castle { "draw it on dry land" } else { "end the wall at the shore" }));
         }
         let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 2.0, t0.cell_ft);

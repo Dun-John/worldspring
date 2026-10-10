@@ -202,7 +202,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             if let Some(c) = created {
                 let poly: Vec<P> = c.poly.iter().map(|q| sub(*q, center)).collect();
                 if poly.len() >= 3 {
-                    let pad_ft = pad(&poly);
+                    let pad_ft = Open::new(world, t0, center, &c.poly).pad(&poly);
                     buildings.push(drawn(c, poly, pad_ft, &mut rng, t0, center));
                 }
             }
@@ -398,20 +398,24 @@ fn scratch(index: u32) -> Layout {
 }
 
 /// The open ground round a site, as its buildings stand on it (local coordinates): dry
-/// everywhere along a footprint's outline, built at the mean ground under it.
+/// everywhere along a footprint's outline (the shore as drawn: `Shore`, over the works drawn
+/// by hand), built at the mean ground under it.
 struct Open<'a> {
     t0: &'a T0,
     center: P,
+    shore: super::Shore<'a>,
 }
 
-impl Open<'_> {
-    fn ground(&self, q: P) -> f64 {
-        self.t0.sample(self.center[0] + q[0], self.center[1] + q[1], 20.0)
+impl<'a> Open<'a> {
+    /// Round `pts` (world ft).
+    fn new(world: &World, t0: &'a T0, center: P, pts: &[P]) -> Open<'a> {
+        let r = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        Open { t0, center, shore: super::Shore::new(world, t0, r) }
     }
     /// Standing water or a river channel at `q` (local).
     fn wet(&self, q: P) -> bool {
         let w = add(q, self.center);
-        if (self.t0.sample_water(w[0], w[1]) as f64) >= self.ground(q) {
+        if self.shore.wet(w) {
             return true;
         }
         let c = crate::lod::rivers::clear_of_rivers(&self.t0.rivers, w[0], w[1], 2.0, self.t0.cell_ft);
@@ -429,7 +433,7 @@ impl Ground for Open<'_> {
         }) && !self.wet(centroid(poly))
     }
     fn pad(&self, poly: &[P]) -> f32 {
-        (poly.iter().map(|q| self.ground(*q)).sum::<f64>() / poly.len() as f64) as f32
+        (poly.iter().map(|q| self.shore.ground(add(*q, self.center))).sum::<f64>() / poly.len() as f64) as f32
     }
 }
 
@@ -472,7 +476,7 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     if area(&block) < 0.0 {
         block.reverse();
     }
-    let ground = Open { t0, center };
+    let ground = Open::new(world, t0, center, &c.poly);
     let dp = District::roll(Ward::Castle, hash2(world.stream("castle"), rng.next_u32() as i64, 0));
     let keep = c.keep.unwrap_or(true);
     castle(&ground, &block, toward, Ward::Castle, &dp, rng, l, keep, c.yard_buildings.unwrap_or(true));
@@ -616,7 +620,7 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
     l.walls = pieces;
     l.towers = towers;
     l.gate_towers = gate_towers;
-    let ground = Open { t0, center };
+    let ground = Open::new(world, t0, center, &c.pts);
     clip_walls(l, |p| ground.wet(p), |p| ground.wet(p));
     if c.closed {
         let ring: Vec<P> = line.iter().map(|q| q.0).collect();
