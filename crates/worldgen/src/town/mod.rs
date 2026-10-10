@@ -276,7 +276,8 @@ pub fn pad_weight(d: f64, reach: f64) -> f64 {
 // (`Edits.towns`, `wards`), and that with its buildings edited (`Edits.buildings`).
 
 thread_local! {
-    static CACHE: RefCell<(u64, FastMap<u32, Rc<Layout>>)> = RefCell::new((0, FastMap::default()));
+    /// By world hash; each with the fingerprint of the town edits it was built over (`site_deps`).
+    static CACHE: RefCell<(u64, FastMap<u32, (u64, Rc<Layout>)>)> = RefCell::new((0, FastMap::default()));
     static EDITED: RefCell<FastMap<u32, (u64, Rc<Layout>)>> = RefCell::new(FastMap::default());
 }
 
@@ -407,9 +408,10 @@ pub fn base_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
 /// A layout as generated (no edits).
 pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     let key = index as u32;
+    let deps = site_deps(world, t0, index);
     if let Some(l) = CACHE.with(|c| {
         let c = c.borrow();
-        if c.0 == world.hash { c.1.get(&key).cloned() } else { None }
+        if c.0 == world.hash { c.1.get(&key).filter(|e| e.0 == deps).map(|e| e.1.clone()) } else { None }
     }) {
         return l;
     }
@@ -421,9 +423,32 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
             c.0 = world.hash;
             c.1.clear();
         }
-        c.1.insert(key, l.clone());
+        c.1.insert(key, (deps, l.clone()));
     });
     l
+}
+
+/// What a site's layout reads of the towns' edits: a wall drawn by hand gets its gates from the
+/// streets of the towns it reaches, as laid out (`Edits.towns`). 0 for anything else.
+fn site_deps(world: &World, t0: &T0, index: usize) -> u64 {
+    if world.file.edits.towns.is_empty() {
+        return 0;
+    }
+    let Some(c) = index.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| world.file.edits.created.get(k)) else { return 0 };
+    if c.kind != "wall" || c.pts.is_empty() {
+        return 0;
+    }
+    let (x0, y0, x1, y1) = c.pts.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, q| (b.0.min(q[0]), b.1.min(q[1]), b.2.max(q[0]), b.3.max(q[1])));
+    let mut h = 0;
+    for (i, s) in t0.settlements.iter().enumerate() {
+        let r = reach(s);
+        if s.x + r >= x0 && s.x - r <= x1 && s.y + r >= y0 && s.y - r <= y1
+            && let Some(fp) = wards::fingerprint(world, t0, i)
+        {
+            h = hash2(h ^ fp, i as i64, 0x3a11);
+        }
+    }
+    h
 }
 
 /// Forget cached layouts from `index` on (created sites changed: they follow the generated
