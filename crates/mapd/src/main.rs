@@ -54,6 +54,8 @@ pub struct AppState {
     pub next_id: AtomicU64,
     /// The world each connected app (each browser tab) shows, by client id.
     pub tabs: Mutex<HashMap<u64, Option<u64>>>,
+    /// The built app's folder, when it is built (`--app`).
+    pub dist: Option<PathBuf>,
     /// One change to the open world at a time: a batch holds it for all its steps, and
     /// switching worlds waits for it.
     pub gate: tokio::sync::Mutex<()>,
@@ -425,13 +427,21 @@ pub fn image_type(b: &[u8]) -> Option<&'static str> {
     })
 }
 
-async fn asset_get(State(app): State<Shared>, Path(id): Path<String>) -> Response {
+/// An uploaded picture; else (the built app's bundle is in `assets/` too) the app's file of
+/// that name.
+async fn asset_get(State(app): State<Shared>, Path(id): Path<String>, req: axum::extract::Request) -> Response {
     match app.store.asset(&id) {
         Some(bytes) => {
             let kind = image_type(&bytes).unwrap_or("application/octet-stream");
             ([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")], bytes).into_response()
         }
-        None => StatusCode::NOT_FOUND.into_response(),
+        None => match &app.dist {
+            Some(dist) => match ServeDir::new(dist).try_call(req).await {
+                Ok(r) => r.into_response(),
+                Err(_) => StatusCode::NOT_FOUND.into_response(),
+            },
+            None => StatusCode::NOT_FOUND.into_response(),
+        },
     }
 }
 
@@ -472,6 +482,7 @@ async fn main() {
         pending: Mutex::new(HashMap::new()),
         next_id: AtomicU64::new(1),
         tabs: Mutex::new(HashMap::new()),
+        dist: dist.join("index.html").exists().then(|| dist.clone()),
         gate: tokio::sync::Mutex::new(()),
         unsaved: AtomicBool::new(false),
     });
