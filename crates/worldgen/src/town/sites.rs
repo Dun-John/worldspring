@@ -571,8 +571,7 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
     }
     let mut corners: Vec<(P, bool)> = c.pts.iter().enumerate().map(|(i, q)| (sub(*q, center), c.gates.contains(&(i as u32)))).collect();
     // Lanes that pass through: the world's roads, and the approaches and main streets of the
-    // towns the wall reaches, as laid out (`Edits.towns`; the layout cache keys the wall by
-    // those edits: `site_deps`).
+    // towns the wall reaches.
     let (x0, y0, x1, y1) = c.pts.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, q| (b.0.min(q[0]), b.1.min(q[1]), b.2.max(q[0]), b.3.max(q[1])));
     let mut lanes: Vec<(P, P)> = Vec::new();
     for (ri, k) in t0.roads.segments_near([x0, y0, x1, y1], 20.0) {
@@ -585,7 +584,7 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
         if !hit(s.x, s.y, super::reach(s)) {
             continue;
         }
-        let town = super::base_layout(world, t0, i);
+        let town = super::generated_layout(world, t0, i);
         // (Its paved side streets and alleys, class 3, the wall closes.)
         for (pts, _, _) in town.roads.iter().filter(|r| r.1 != 3) {
             lanes.extend(pts.windows(2).map(|q| (sub(q[0], center), sub(q[1], center))));
