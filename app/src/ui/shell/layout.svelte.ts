@@ -50,7 +50,7 @@ class Shell {
   /** The section whose panel is open. */
   section = $state<Section | null>(null);
   /** Each section's tab, kept while the panel is shut. */
-  tabs = $state<Tabs>({ world: 'generate', edit: 'names', notes: 'npcs' });
+  tabs = $state<Tabs>({ world: 'generate', edit: 'sites', notes: 'npcs' });
   /** Desktop: the dock folded down to its header and tool strip. */
   collapsed = $state(false);
   snap = $state<Snap>('half');

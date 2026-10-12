@@ -50,15 +50,16 @@ Open **Edit** and pick a tab (or press its letter). Every change can be undone.
 
 | Tab | What you can do |
 |---|---|
-| **Names** (N) | Rename anything: towns, regions, buildings, places. |
-| **Sites** (S) | Put down your own towns and sites, and move or remove the generated ones. |
+| **Places** (S) | Add your own ruins, dungeons, crypts, catacombs, caves, mines, lava tubes, towers, camps and roadside inns, with their size, depth and theme. |
 | **Build** (B) | Draw buildings (rectangles, polygons, round towers). Raise castles (K) and walls (W) anywhere. Put bridges, fords and ferries (X) across a river, bank to bank. |
-| **Town** (U) | Lay the town in view out anew: drag its ward corners, or move them with brushes (Displace, Liquify, Bloat, Pinch, Relax, Equalize). Give a ward another use, change its lots, merge or reroll them, put walls up or down, or clear a ward and build your own. |
-| **Scatter** (C) | Stamp or brush objects onto a battlemap, or erase them. Upload your own pictures to use as objects. |
-| **Design** (D) | Go inside a building, dungeon, cave or mine and design it room by room: walls, doors, stairs, storeys, cellars, furniture and props. |
+| **Streets** (U) | Re-plan the town in view: drag its ward corners, or move them with brushes (Displace, Liquify, Bloat, Pinch, Relax, Equalize). Give a ward another use, change its lots, merge or reroll them, put walls up or down, or clear a ward and build your own. |
+| **Objects** (C) | Stamp or brush objects onto a battlemap, or erase them. Upload your own pictures to use as objects. |
+| **Rooms** (D) | Go inside a building, dungeon, cave or mine and design it room by room: walls, doors, stairs, storeys, cellars, furniture and props. |
+| **Names** (N) | Rename anything: towns, regions, buildings, places. Hide the names you don't want shown. |
 
-**Sketch** (World › Sketch) works the same way at the scale of the continent: draw coastlines, land and sea, ranges,
-massifs, rivers, lakes, biomes, volcanoes, towns and sites, and roads, and name regions. Or keep only the roads you draw.
+**Sketch** (World › Sketch) works at the scale of the continent, and generating from it remakes the world to fit:
+draw coastlines, land and sea, ranges, massifs, rivers, lakes, biomes, volcanoes, **towns and cities**, planned sites
+and roads, and name regions. Or keep only the roads you draw.
 
 ## Your worlds stay in your browser
 

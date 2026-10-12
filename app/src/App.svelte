@@ -1127,7 +1127,7 @@
     works = { castleShape: (c.poly?.length ?? 0) === 4 ? 'rect' : 'poly', keep: c.keep !== false, yardBuildings: c.yard_buildings !== false, ruin: c.structure === 'ruin', closed: !!c.closed, name: '' };
   }
 
-  // Edit › Town: the town in view laid out anew by hand (the ward editor, `editor/town.ts`).
+  // Edit › Streets: the town in view laid out anew by hand (the ward editor, `editor/town.ts`).
   let townTool = $state.raw<TownTool | null>(null);
   let townMode = $state<TownMode>('select');
   /** The brush's size, in patch widths. */
@@ -1193,7 +1193,7 @@
     const asked = ++townAsked;
     if (i < 0) {
       townPlan = null;
-      townNote = 'Go to a town, city or metropolis to lay it out anew (villages grow along their roads).';
+      townNote = 'Go to a town, city or metropolis to re-plan it (villages grow along their roads). New towns are drawn in World › Sketch.';
       townTool?.setPlan(null);
       return;
     }
@@ -2359,9 +2359,22 @@
       title="World"
       icon="globe"
       tabs={[
-        { key: 'generate', label: 'Generate', icon: 'globe' },
-        { key: 'sketch', label: 'Sketch', icon: 'sketch', dot: sketchOn, title: sketchOn ? 'Sketching' : 'Draw coastlines, ranges, rivers, biomes and settlements' },
-        { key: 'library', label: 'Library', icon: 'folder' },
+        {
+          key: 'generate',
+          label: 'Generate',
+          icon: 'globe',
+          badge: worldDraft.changed(world) && !busy ? { text: '↻', title: 'Settings changed: not generated yet' } : undefined,
+          hint: 'Seed and settings. New settings make a different world; each world keeps its own changes.',
+        },
+        {
+          key: 'sketch',
+          label: 'Sketch',
+          icon: 'sketch',
+          dot: sketchOn,
+          title: sketchOn ? 'Sketching' : 'Draw coastlines, ranges, rivers, biomes, towns and roads',
+          hint: 'Draw the continent: coasts, mountains, rivers, biomes, towns and roads. Generate remakes this world to fit.',
+        },
+        { key: 'library', label: 'Library', icon: 'folder', hint: 'Save, open, download and share your worlds.' },
       ]}
       tab={shell.tabs.world}
       onTab={(k) => go('world', k)}
@@ -2423,12 +2436,20 @@
       title="Edit"
       icon="pencil"
       tabs={[
-        { key: 'names', label: 'Names', icon: 'tag', kbd: 'N' },
-        { key: 'sites', label: 'Sites', icon: 'pin', kbd: 'S' },
-        { key: 'build', label: 'Build', icon: 'building', kbd: 'B' },
-        { key: 'town', label: 'Town', icon: 'wards', kbd: 'U', title: 'Lay the town in view out anew: its wards, corners and walls (U)' },
-        { key: 'scatter', label: 'Scatter', icon: 'tree', kbd: 'C' },
-        { key: 'design', label: 'Design', icon: 'room', kbd: 'D', disabled: !canDesign && !designer, title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building (D)' : 'Design this site (D)') : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design it' },
+        { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a ruin, dungeon, crypt, cave, mine, tower, camp or inn.' },
+        { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, bridges and fords; clear a town’s own buildings.' },
+        { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the town in view (U)', hint: 'Re-plan the town in view: its streets, wards, lots and walls.' },
+        { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap: stamp, brush, erase, or upload your own.' },
+        {
+          key: 'design',
+          label: 'Rooms',
+          icon: 'room',
+          kbd: 'D',
+          disabled: !canDesign && !designer,
+          title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
+          hint: 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
+        },
+        { key: 'names', label: 'Names', icon: 'tag', kbd: 'N', hint: 'Rename or hide what the map names.' },
       ]}
       tab={shell.tabs.edit}
       onTab={(k) => go('edit', k)}
@@ -2449,7 +2470,7 @@
             />
           {/if}
         {:else if placeOn}
-          <PlacePanel armed={placeArmed} {peek} onPlace={armPlace} onCancel={disarmPlace} />
+          <PlacePanel armed={placeArmed} {peek} onPlace={armPlace} onCancel={disarmPlace} onTowns={() => go('world', 'sketch')} />
         {:else if buildOn}
           <BuildPanel
             bind:settings={build}

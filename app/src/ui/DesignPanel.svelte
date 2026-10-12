@@ -1,10 +1,10 @@
 <script lang="ts">
-  // Edit › Design: tools for the map (rooms, corridors, rock, doors, props, the way down; in a
+  // Edit › Rooms: tools for the map (rooms, corridors, rock, doors, props, the way down; in a
   // building rooms, wall lines, walls taken away, doors, furniture, the stairs), the room chosen
   // (what it is, its name, a raised floor, the boss chamber, props), the site's levels and what
   // is wrong with it (folded away), and undo, redo and Save (only once nothing breaks the rules
   // a site keeps) pinned at the bottom. Props come in groups: a building's furniture and indoor
-  // props, a site's props, and the pictures uploaded in Scatter (either). A building's storeys are
+  // props, a site's props, and the pictures uploaded in Objects (either). A building's storeys are
   // added or taken away here too (the building follows on Save), and its levels below ground.
   import type { SpriteMeta, UnderCatalog } from '../gen/protocol';
   import type { DesignMode, DesignSettings, SiteDesigner } from '../editor/site/designer';
@@ -165,7 +165,7 @@
             {p.name}{p.hazard ? ' ⚠' : ''}
           </button>
         {:else}
-          <span class="ws-hint">{group === 'yours' ? 'No pictures yet: upload them in Edit › Scatter.' : 'Nothing by that name.'}</span>
+          <span class="ws-hint">{group === 'yours' ? 'No pictures yet: upload them in Edit › Objects.' : 'Nothing by that name.'}</span>
         {/each}
       </div>
       <div class="ws-row size">

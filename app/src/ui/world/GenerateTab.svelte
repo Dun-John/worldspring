@@ -146,7 +146,7 @@
             <input type="range" {min} {max} {step} bind:value={draft.p[key]} disabled={moot(key)} />
           </label>
           {#if key === 'settlement_density' && p.settlement_density <= 0 && pins}<div class="ws-hint">Your {pins} sketched {pins === 1 ? 'settlement still appears' : 'settlements still appear'}.</div>{/if}
-          {#if key === 'poi_density' && p.poi_density <= 0}<div class="ws-hint">Sites you place in Edit › Sites still appear.</div>{/if}
+          {#if key === 'poi_density' && p.poi_density <= 0}<div class="ws-hint">Places you add in Edit › Places still appear.</div>{/if}
         {/each}
         {#if g.roads}
           <div class="ws-field">

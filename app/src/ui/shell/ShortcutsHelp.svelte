@@ -10,15 +10,23 @@
   }
   let { list, onClose }: Props = $props();
 
-  const ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit', 'Build', 'Scatter', 'Design', 'Play'];
+  const ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit', 'Build', 'Streets', 'Objects', 'Rooms', 'Play'];
   const NOTES: Record<string, string> = {
     Sketch: 'While sketching',
     Edit: 'With Edit open',
     Build: 'Edit › Build',
-    Scatter: 'Edit › Scatter',
-    Design: 'Edit › Design, in a site underground',
+    Streets: 'Edit › Streets',
+    Objects: 'Edit › Objects',
+    Rooms: 'Edit › Rooms, inside a building or site',
     Play: 'While playing, with Play (or no panel) open',
   };
+  /** What each section is for, for a first look. */
+  const WHERE: [string, string][] = [
+    ['World', 'Make the world: settings, the sketch (coasts, mountains, rivers, towns, roads), the library. Generating remakes the world.'],
+    ['Edit', 'Change it in place: places, buildings, streets, objects, rooms, names.'],
+    ['Notes', 'Your NPCs, plots and notes on places.'],
+    ['Play', 'Run a session: tokens, fog, the players’ window.'],
+  ];
   const groups = $derived(
     ORDER.map((g) => ({ name: g, rows: list.filter((s) => s.group === g && !s.hidden).map((s) => ({ s, live: !s.when || s.when() })) })).filter((g) => g.rows.length),
   );
@@ -33,6 +41,12 @@
     <button class="ws-icon-btn" onclick={onClose} aria-label="Close" title="Close (Esc)"><Icon name="x" /></button>
   </header>
   <div class="cols">
+    <section>
+      <h3>Where things are</h3>
+      <dl>
+        {#each WHERE as [name, what] (name)}<dt>{name}</dt><dd>{what}</dd>{/each}
+      </dl>
+    </section>
     {#if touch}
       <section>
         <h3>Gestures</h3>

@@ -106,19 +106,19 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['B', 'biome', 'Biome'],
     ['V', 'volcano', 'Volcano'],
     ['T', 'pin', 'Settlement'],
-    ['D', 'site', 'Site'],
+    ['D', 'site', 'Planned site'],
     ['N', 'region', 'Name a place'],
     ['O', 'road', 'Road'],
     ['E', 'erase', 'Erase'],
   ];
   for (const [key, t, label] of sketch) out.push({ keys: [key], label, group: 'Sketch', when: sketching, run: () => k.sketchTool(t) });
   const tabs: [string, EditTab, string][] = [
-    ['N', 'names', 'Names'],
-    ['S', 'sites', 'Sites'],
+    ['S', 'sites', 'Places'],
     ['B', 'build', 'Build'],
-    ['U', 'town', 'Town'],
-    ['C', 'scatter', 'Scatter'],
-    ['D', 'design', 'Design'],
+    ['U', 'town', 'Streets'],
+    ['C', 'scatter', 'Objects'],
+    ['D', 'design', 'Rooms'],
+    ['N', 'names', 'Names'],
   ];
   for (const [key, t, label] of tabs) out.push({ keys: [key], label, group: 'Edit', when: edit(), run: () => k.editTabTo(t) });
   const shapes: [string, BuildShape, string][] = [
@@ -143,17 +143,17 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['R', 'relax', 'Relax'],
     ['E', 'equalize', 'Equalize'],
   ];
-  for (const [key, m, label] of town) out.push({ keys: [key], label, group: 'Town', when: edit('town'), run: () => k.townMode(m) });
+  for (const [key, m, label] of town) out.push({ keys: [key], label, group: 'Streets', when: edit('town'), run: () => k.townMode(m) });
   out.push(
-    { keys: [']'], label: 'Bigger brush', group: 'Town', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(1) },
-    { keys: ['['], label: 'Smaller brush', group: 'Town', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(-1) },
+    { keys: [']'], label: 'Bigger brush', group: 'Streets', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(1) },
+    { keys: ['['], label: 'Smaller brush', group: 'Streets', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(-1) },
   );
   const modes: [string, ScatterMode, string][] = [
     ['Q', 'stamp', 'Stamp'],
     ['W', 'brush', 'Brush'],
     ['E', 'erase', 'Erase'],
   ];
-  for (const [key, m, label] of modes) out.push({ keys: [key], label, group: 'Scatter', when: edit('scatter'), run: () => k.scatterMode(m) });
+  for (const [key, m, label] of modes) out.push({ keys: [key], label, group: 'Objects', when: edit('scatter'), run: () => k.scatterMode(m) });
   const design: [string, DesignMode, string][] = [
     ['V', 'select', 'Choose a room'],
     ['R', 'room', 'Room'],
@@ -167,8 +167,8 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['E', 'merge', 'Take a wall away (in a building)'],
   ];
   const designing = () => edit('design')() && k.designing();
-  for (const [key, m, label] of design) out.push({ keys: [key], label, group: 'Design', when: designing, run: () => k.designMode(m) });
-  out.push({ keys: ['Ctrl+S'], label: 'Save the design', group: 'Design', inInputs: true, when: designing, run: () => k.saveDesign() });
+  for (const [key, m, label] of design) out.push({ keys: [key], label, group: 'Rooms', when: designing, run: () => k.designMode(m) });
+  out.push({ keys: ['Ctrl+S'], label: 'Save the design', group: 'Rooms', inInputs: true, when: designing, run: () => k.saveDesign() });
   const tools: [string, PlayTool, string][] = [
     ['V', 'select', 'Select and move'],
     ['T', 'token', 'Tokens'],

@@ -10,6 +10,10 @@
     disabled?: boolean;
     title?: string;
     kbd?: string;
+    /** What the tab is for, one line under the strip while it is open. */
+    hint?: string;
+    /** A mark after the label (↻: settings changed, not generated yet), with its own tooltip. */
+    badge?: { text: string; title: string };
   }
 </script>
 
@@ -108,7 +112,8 @@
       <button class="ws-icon-btn" onclick={onClose} aria-label="Close {title}" title="Close"><Icon name="x" /></button>
     </header>
     {#if tabs?.length}
-      <div class="tabs" role="tablist">
+      <!-- Six tabs or more: only the open one keeps its icon, so every label fits a narrow dock. -->
+      <div class="tabs" class:many={tabs.length >= 6} role="tablist">
         {#each tabs as t (t.key)}
           <button
             role="tab"
@@ -120,10 +125,13 @@
           >
             {#if t.icon}<Icon name={t.icon} size={16} />{/if}
             <span>{t.label}</span>
+            {#if t.badge}<span class="badge" title={t.badge.title}>{t.badge.text}</span>{/if}
             {#if t.dot}<i class="dot"></i>{/if}
           </button>
         {/each}
       </div>
+      {@const hint = tabs.find((t) => t.key === tab)?.hint}
+      {#if hint && !peek}<div class="ws-hint sub">{hint}</div>{/if}
     {/if}
   </div>
   {#if ask}<div class="ask">{@render ask()}</div>{/if}
@@ -194,6 +202,12 @@
     cursor: pointer;
     white-space: nowrap;
   }
+  .tabs.many button {
+    padding: 0 2px;
+  }
+  .tabs.many button:not(.on) :global(svg) {
+    display: none;
+  }
   .tabs button:hover:not(:disabled) {
     color: var(--ink);
     background: rgba(226, 213, 176, 0.5);
@@ -206,6 +220,13 @@
   .tabs button:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+  .badge {
+    color: var(--accent);
+    font-weight: bold;
+  }
+  .sub {
+    padding: 2px 10px 6px;
   }
   .dot {
     width: 6px;

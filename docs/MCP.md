@@ -615,7 +615,7 @@ A plot point in full: `title`, `text`, `status`, `anchors` and `npcs` (each with
 
 Battlemaps are generated with their trees, rocks, props and hazards. On top of that, objects can be **put down**
 by hand (`o:<id>` entries) and generated ones **taken away** (clears, `x:<id>` entries), by the user (the app's
-**Scatter** menu) or by agents. Pictures can be **uploaded** as new kinds of object, with their own tactical
+**Edit › Objects** tab) or by agents. Pictures can be **uploaded** as new kinds of object, with their own tactical
 rules (`s:<asset>` kinds). Objects block, cover and hinder in play mode by their kind's rules, and
 `get_battlemap` lists them. Like the other edits, they are saved, logged, shown live, and leave the world hash
 alone; only the battlemap chunk holding each object (by its centre) is made again.
@@ -789,7 +789,7 @@ into a town lays the town out anew (its gates follow its roads): draw roads befo
 ## Underground sites designed by hand
 
 An underground site (`u:<layout>:<k>`: a dungeon, crypt, catacombs, cave, mine or lava tube; not a city's sewers)
-can be **redesigned**, by the user (the app's designer: *Design this site* inside it) or by agents, as a text
+can be **redesigned**, by the user (the app's designer: *Edit › Rooms* inside it) or by agents, as a text
 plan. The first change copies the generated site; from then on the world builds the design instead (walls are
 always worked out from the squares, as for a generated site). Like the other edits, designs are saved, logged,
 shown live (to the players' window too) and leave the world hash alone; `reset_site_design` brings back the
@@ -863,7 +863,7 @@ level 2: Level 2 · the deep
 ## Building interiors designed by hand
 
 Any roofed building (`b:<layout>:<id>`: the world's own and those drawn by hand) can have its interior
-**redesigned** the same way, by the user (the app's designer: *Design this building* inside it) or by agents,
+**redesigned** the same way, by the user (the app's designer: *Edit › Rooms* inside it) or by agents,
 with the same three tools. The first change copies the generated interior; from then on the world builds the
 design. Walls are where rooms meet: a room is split by giving a line of its squares to a new room (the wall
 runs between them), and two rooms become one by giving one's squares to the other. The outer walls follow the

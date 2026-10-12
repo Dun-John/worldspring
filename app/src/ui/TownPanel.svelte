@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Edit › Town: the town in view laid out anew by hand (the ward editor). Its patches are drawn
+  // Edit › Streets: the town in view laid out anew by hand (the ward editor). Its patches are drawn
   // over the map; a corner dragged, or the brushes, move them (applied on release); a patch
   // picked can be given another ward, lot size, joined to a neighbour's district or laid out
   // again; the town's walls put up or taken down. Each change is one step to undo.

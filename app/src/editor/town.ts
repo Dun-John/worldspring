@@ -1,4 +1,4 @@
-// Edit › Town: a town laid out anew by hand, on its plan's patches (the ward editor). The
+// Edit › Streets: a town laid out anew by hand, on its plan's patches (the ward editor). The
 // patches are drawn over the map, each tinted by its ward. Choose (the default) picks a patch on
 // a click and drags one corner at a time; the brushes move every corner within their ring, as
 // watabou's Warp tools do: Displace (the drag, full strength in the middle half), Liquify (smudged

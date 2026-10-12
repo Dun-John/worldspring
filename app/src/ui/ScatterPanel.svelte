@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Edit › Scatter: put battlemap objects down (a stamp, or a brush scattering the chosen
+  // Edit › Objects: put battlemap objects down (a stamp, or a brush scattering the chosen
   // kinds), take them away (click or brush), and upload pictures as new kinds of object with
   // their tactical rules. The tool works on the map while the tab is open.
   import type { KindInfo } from '../gen/client';
@@ -142,7 +142,7 @@
 
 {#if form && !peek}
   <div class="scatter">
-    <button class="ws-btn quiet back" onclick={closeForm}><Icon name="chevron-left" size={16} /> Scatter</button>
+    <button class="ws-btn quiet back" onclick={closeForm}><Icon name="chevron-left" size={16} /> Objects</button>
     <div class="formhead">
       {#if form.preview}<img src={form.preview} alt="" />{/if}
       <div>

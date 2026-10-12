@@ -6,8 +6,9 @@
 </script>
 
 <script lang="ts">
-  // Edit › Sites: what to put on the map (a way underground with its size, depth and theme, or
-  // a site on the surface), then Place on map waits for a click there.
+  // Edit › Places: what to put on the map (a way underground with its size, depth and theme, or
+  // a site on the surface), then Place on map waits for a click there. Towns are drawn in the
+  // sketch (they remake the world), so a line points there.
   import { SITE_SIZES, THEMES, type SiteSize } from '../gen/protocol';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
@@ -19,9 +20,11 @@
     peek?: boolean;
     onPlace: (c: SiteChoice, label: string) => void;
     onCancel: () => void;
+    /** Open the sketch, where towns and cities are drawn. */
+    onTowns?: () => void;
   }
 
-  let { armed, peek = false, onPlace, onCancel }: Props = $props();
+  let { armed, peek = false, onPlace, onCancel, onTowns }: Props = $props();
 
   /** The choices: what each makes (`Created` kind, and what lies beneath). */
   const CHOICES: { key: string; label: string; icon: IconName; kind: string; under?: string; group: 'Underground' | 'On the surface'; look: string }[] = [
@@ -122,6 +125,13 @@
       Name
       <input class="ws-input" bind:value={name} placeholder="Named for you if left empty" />
     </label>
+    {#if onTowns}
+      <div class="towns">
+        <Icon name="castle" size={16} />
+        <span class="grow">Towns and cities are drawn in World › Sketch, and the world is remade round them.</span>
+        <button class="ws-btn" onclick={onTowns}>Sketch</button>
+      </div>
+    {/if}
   {/if}
   {#if armed}
     <div class="armed">
@@ -184,6 +194,13 @@
     text-align: center;
     color: var(--ink);
     font-size: 13px;
+  }
+  .towns {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink-2);
+    font-size: 12px;
   }
   .armed {
     display: flex;
