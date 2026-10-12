@@ -85,6 +85,11 @@ try {
       console.log(`${k.padEnd(7)} main thread ${e.syncMs[0]} → ${t.syncMs[0]} ms (worst ${t.syncMs[1]}), drawn ${e.frameMs[0]} → ${t.frameMs[0]} ms, worker ${e.workerMs[0]} → ${t.workerMs[0]} ms`);
     }
     console.log(`pan 1% low ${r.pan.empty.low1Fps} → ${r.pan.heavy.low1Fps} fps, worst frame ${r.pan.empty.maxMs} → ${r.pan.heavy.maxMs} ms, ms per job ${r.pan.empty.jobMs} → ${r.pan.heavy.jobMs}`);
+    // The generators' jobs by phase (jobs / ms in all workers / ms per job); `ms per job` above is a mean since the page loaded.
+    if (r.jobs) {
+      const w = (k) => `${r.jobs[k].jobs} jobs, ${r.jobs[k].ms} ms, ${r.jobs[k].perJob} ms/job`;
+      console.log(`jobs (${r.jobs.workers} workers): empty edits ${w('emptyEdits')}; empty pan ${w('emptyPan')}; load+settle ${w('load')}; heavy edits ${w('heavyEdits')}; heavy pan ${w('heavyPan')}`);
+    }
     console.log(`heap ${r.heapMB.empty} → ${r.heapMB.heavy} MB; a site generated ${r.siteMs.generated} ms, designed ${r.siteMs.designed} ms`);
     console.log(`\nheavy pan 1% low (gate ≥ 30): ${pass ? 'PASS' : 'FAIL'}`);
     process.exitCode = pass ? 0 : 1;
