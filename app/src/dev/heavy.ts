@@ -22,6 +22,15 @@ const HEAVY = { designs: 50, objects: 20000, clears: 2000, sprites: 40, npcs: 20
 const SPREAD_FT = 3600;
 const BATTLEMAP_ZOOM = Math.log2(64 / 5);
 
+/** What the generator workers did over a stretch of the run: jobs finished, the ms they took (all
+ * workers) and the mean per job. (`genStats.avgMs` is a mean since the page loaded: it cannot be
+ * compared between phases, so every phase is taken as a difference of two readings.) */
+export interface JobWindow {
+  jobs: number;
+  ms: number;
+  perJob: number;
+}
+
 /** One kind of edit, timed: on the main thread (`sync`), to the next frame drawn (`frame`), and
  * until a generator worker has taken the edits in and answers (`worker`); median and worst. */
 export interface EditTiming {
@@ -41,6 +50,8 @@ export interface HeavyResult {
   siteMs: { generated: number; designed: number };
   /** The pan: fps and frame times, and the generators' mean ms per job meanwhile. */
   pan: { empty: PanStats; heavy: PanStats };
+  /** The generators' jobs by phase (`JobWindow`), and how many workers there were. */
+  jobs: { workers: number; emptyEdits: JobWindow; emptyPan: JobWindow; load: JobWindow; heavyEdits: JobWindow; heavyPan: JobWindow };
 }
 
 interface PanStats {
@@ -48,15 +59,21 @@ interface PanStats {
   low1Fps: number;
   p95Ms: number;
   maxMs: number;
+  /** The generators' mean ms per job since the page loaded, at the middle of the pan (as in the log's earlier rows). */
   jobMs: number;
+  /** The same over the pan alone (`JobWindow.perJob`). */
+  jobMsWindow: number;
   /** The slowest frames and what the frame before was doing (`BenchResult.slowFrames`). */
   slowest?: BenchResult['slowFrames'];
+  /** The generators' jobs over the pan alone. */
+  window: JobWindow;
 }
 
 const median = (v: number[]) => [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)] ?? 0;
 const r1 = (v: number) => Math.round(v * 10) / 10;
 const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const noJobs = (): JobWindow => ({ jobs: 0, ms: 0, perJob: 0 });
 const heapMB = () => r1(((performance as unknown as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 2 ** 20);
 
 export async function runHeavyBench(view: MapView, edits: () => Edits, apply: (e: Edits) => void): Promise<HeavyResult> {
@@ -65,7 +82,7 @@ export async function runHeavyBench(view: MapView, edits: () => Edits, apply: (e
     (window as unknown as { __benchResult: HeavyResult }).__benchResult = r;
     return r;
   };
-  const empty = (): HeavyResult => ({ holds: { ...HEAVY, editsKB: 0, designsKB: 0, buildingsKB: 0, townsKB: 0, townCorners: 0, townPatches: 0 }, loadMs: { build: 0, apply: 0, settle: 0 }, heapMB: { empty: 0, heavy: 0 }, edits: { empty: {}, heavy: {} }, siteMs: { generated: 0, designed: 0 }, pan: { empty: blankPan(), heavy: blankPan() } });
+  const empty = (): HeavyResult => ({ holds: { ...HEAVY, editsKB: 0, designsKB: 0, buildingsKB: 0, townsKB: 0, townCorners: 0, townPatches: 0 }, loadMs: { build: 0, apply: 0, settle: 0 }, heapMB: { empty: 0, heavy: 0 }, edits: { empty: {}, heavy: {} }, siteMs: { generated: 0, designed: 0 }, pan: { empty: blankPan(), heavy: blankPan() }, jobs: { workers: Math.max(1, Math.min(6, (navigator.hardwareConcurrency || 4) - 2)), emptyEdits: noJobs(), emptyPan: noJobs(), load: noJobs(), heavyEdits: noJobs(), heavyPan: noJobs() } });
   if (Object.keys(edits()).length) return publish({ ...empty(), error: 'The stress bench runs on a world with no edits: open a fresh seed (or start over) first.' });
   await settle(view, 8000);
   const result = empty();
@@ -86,18 +103,21 @@ export async function runHeavyBench(view: MapView, edits: () => Edits, apply: (e
     const houses = [...(await view.gen.buildingsIn(around(fx, fy, SPREAD_FT / 2))), ...(town ? await view.gen.buildingsIn(around(town.x, town.y, 2500)) : [])];
     const own = [...new Map(houses.map((b) => [b.id, b])).values()].map((b) => b.id);
     const timed = own.slice(0, 10);
-    result.edits.empty = await timeEdits(view, edits, apply, sites[0], timed.slice(0, 5), panTown, fx, fy);
+    [result.edits.empty, result.jobs.emptyEdits] = await jobsOver(view, () => timeEdits(view, edits, apply, sites[0], timed.slice(0, 5), panTown, fx, fy));
     result.heapMB.empty = heapMB();
     result.pan.empty = await pan(view, edits, apply, fx, fy);
+    result.jobs.emptyPan = result.pan.empty.window;
     // --- Loaded.
     const t0 = performance.now();
     const heavy = await build(view, sites.slice(1), own.slice(10), towns, fx, fy, assets);
     result.loadMs.build = Math.round(performance.now() - t0);
     const t1 = performance.now();
+    const loadFrom = await jobTotals(view);
     apply(heavy);
     result.loadMs.apply = Math.round(performance.now() - t1);
     await settle(view, 30000);
     result.loadMs.settle = Math.round(performance.now() - t1);
+    result.jobs.load = jobsSince(loadFrom, await jobTotals(view));
     result.holds.editsKB = Math.round(JSON.stringify(heavy).length / 1024);
     result.holds.designsKB = Math.round(JSON.stringify(heavy.designs).length / 1024);
     result.holds.buildingsKB = Math.round(JSON.stringify(heavy.buildings ?? {}).length / 1024);
@@ -110,7 +130,7 @@ export async function runHeavyBench(view: MapView, edits: () => Edits, apply: (e
     result.holds.castles = (heavy.created ?? []).filter((c) => c.kind === 'castle').length;
     result.holds.walls = (heavy.created ?? []).filter((c) => c.kind === 'wall').length;
     result.heapMB.heavy = heapMB();
-    result.edits.heavy = await timeEdits(view, edits, apply, sites[0], timed.slice(5), panTown, fx, fy);
+    [result.edits.heavy, result.jobs.heavyEdits] = await jobsOver(view, () => timeEdits(view, edits, apply, sites[0], timed.slice(5), panTown, fx, fy));
     // A site underground generated, and one built from its design.
     let t = performance.now();
     await view.gen.interior(sites[0]);
@@ -119,6 +139,7 @@ export async function runHeavyBench(view: MapView, edits: () => Edits, apply: (e
     await view.gen.interior(sites[1]);
     result.siteMs.designed = r1(performance.now() - t);
     result.pan.heavy = await pan(view, edits, apply, fx, fy);
+    result.jobs.heavyPan = result.pan.heavy.window;
   } finally {
     apply({});
     for (const id of assets) await tx('readwrite', (s) => s.delete(id), 'assets').catch(() => {});
@@ -127,7 +148,26 @@ export async function runHeavyBench(view: MapView, edits: () => Edits, apply: (e
 }
 
 function blankPan(): PanStats {
-  return { avgFps: 0, low1Fps: 0, p95Ms: 0, maxMs: 0, jobMs: 0 };
+  return { avgFps: 0, low1Fps: 0, p95Ms: 0, maxMs: 0, jobMs: 0, jobMsWindow: 0, window: noJobs() };
+}
+
+/** The generators' jobs finished and the ms they took, in all, as of now (the stats arrive every 250 ms). */
+async function jobTotals(view: MapView): Promise<{ jobs: number; ms: number }> {
+  await sleep(300);
+  const s = (view as unknown as { genStats: { avgMs: number; jobs: number } | null }).genStats;
+  return s ? { jobs: s.jobs, ms: s.avgMs * s.jobs } : { jobs: 0, ms: 0 };
+}
+
+function jobsSince(from: { jobs: number; ms: number }, to: { jobs: number; ms: number }): JobWindow {
+  const jobs = to.jobs - from.jobs;
+  return { jobs, ms: Math.round(to.ms - from.ms), perJob: jobs > 0 ? r1((to.ms - from.ms) / jobs) : 0 };
+}
+
+/** `run`, and the generators' jobs over it. */
+async function jobsOver<T>(view: MapView, run: () => Promise<T>): Promise<[T, JobWindow]> {
+  const from = await jobTotals(view);
+  const out = await run();
+  return [out, jobsSince(from, await jobTotals(view))];
 }
 
 /** Wait until the map has everything in view (or `ms` passed). */
@@ -369,6 +409,7 @@ async function pan(view: MapView, edits: () => Edits, apply: (e: Edits) => void,
   const z = BATTLEMAP_ZOOM - 1;
   view.cam.set({ cx: fx - 900, cy: fy - 600, zoom: z });
   await settle(view, 15000);
+  const from = await jobTotals(view);
   let last = performance.now();
   let n = 0;
   const jobs: number[] = [];
@@ -391,8 +432,9 @@ async function pan(view: MapView, edits: () => Edits, apply: (e: Edits) => void,
       { hold: 1000 },
     ],
   });
+  const window = jobsSince(from, await jobTotals(view));
   const e = edits();
   const { 'bench:pan': _, ...renames } = e.renames ?? {};
   apply({ ...e, renames });
-  return { avgFps: r1(r.avgFps), low1Fps: r1(r.low1Fps), p95Ms: r1(r.p95Ms), maxMs: r1(r.maxMs), jobMs: r1(median(jobs)), slowest: r.slowFrames.slice(0, 5) };
+  return { avgFps: r1(r.avgFps), low1Fps: r1(r.low1Fps), p95Ms: r1(r.p95Ms), maxMs: r1(r.maxMs), jobMs: r1(median(jobs)), jobMsWindow: window.perJob, window, slowest: r.slowFrames.slice(0, 5) };
 }

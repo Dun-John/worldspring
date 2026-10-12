@@ -278,6 +278,17 @@ pub fn pad_weight(d: f64, reach: f64) -> f64 {
 thread_local! {
     static CACHE: RefCell<(u64, FastMap<u32, Rc<Layout>>)> = RefCell::new((0, FastMap::default()));
     static EDITED: RefCell<FastMap<u32, (u64, Rc<Layout>)>> = RefCell::new(FastMap::default());
+    /// What each wall drawn by hand read when its layout was built (`WallDeps`), by layout index.
+    static WALLS: RefCell<FastMap<u32, WallDeps>> = RefCell::new(FastMap::default());
+}
+
+/// What a cached wall layout was built from: the towns it reached, the fingerprint of their
+/// edits (`towns_fp`) and a hash of the lanes that can cross it (`lanes_fp`). A wall is read
+/// again only when the first changes, and kept when the second still holds.
+struct WallDeps {
+    reached: Vec<u32>,
+    towns_fp: u64,
+    lanes_fp: u64,
 }
 
 /// A layout with its buildings as edited (`Edits.buildings`).
@@ -404,32 +415,90 @@ pub fn base_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     wards::edited(world, t0, index).unwrap_or_else(|| generated_layout(world, t0, index))
 }
 
-/// A layout as generated (no edits).
+/// A layout as generated (no edits). A wall drawn by hand is the exception: its gates follow the
+/// streets of the towns it reaches as laid out (`Edits.towns`), so its cached layout is kept
+/// only while those streets are where it was built.
 pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
     let key = index as u32;
     if let Some(l) = CACHE.with(|c| {
         let c = c.borrow();
         if c.0 == world.hash { c.1.get(&key).cloned() } else { None }
-    }) {
+    }) && wall_kept(world, t0, index)
+    {
         return l;
     }
     let n = t0.settlements.len();
     let l = Rc::new(if index < n { generate(world, t0, index) } else { sites::generate(world, t0, index - n, key) });
+    let deps = wall_of(world, t0, index).map(|c| {
+        let w = sites::wall_lanes(world, t0, c);
+        WallDeps { towns_fp: towns_fp(world, t0, &w.reached), lanes_fp: w.fp, reached: w.reached }
+    });
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
         if c.0 != world.hash {
             c.0 = world.hash;
             c.1.clear();
+            WALLS.with(|w| w.borrow_mut().clear());
         }
         c.1.insert(key, l.clone());
     });
+    WALLS.with(|w| match deps {
+        Some(d) => drop(w.borrow_mut().insert(key, d)),
+        None => drop(w.borrow_mut().remove(&key)),
+    });
     l
+}
+
+/// The wall drawn by hand that layout `index` is, if it is one.
+fn wall_of<'a>(world: &'a World, t0: &T0, index: usize) -> Option<&'a crate::world::Created> {
+    let c = index.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| world.file.edits.created.get(k))?;
+    (c.kind == "wall" && !c.pts.is_empty()).then_some(c)
+}
+
+/// A hash of the edits of the towns (settlement indices) a wall reaches; 0 with none.
+fn towns_fp(world: &World, t0: &T0, reached: &[u32]) -> u64 {
+    if world.file.edits.towns.is_empty() {
+        return 0;
+    }
+    let mut h = 0;
+    for &i in reached {
+        if let Some(fp) = wards::fingerprint(world, t0, i as usize) {
+            h = hash2(h ^ fp, i as i64, 0x3a11);
+        }
+    }
+    h
+}
+
+/// Whether the cached layout of `index` is still what would be built: anything but a wall drawn
+/// by hand always is. A wall is when the edits of the towns it reached are as they were, or
+/// when they changed and the lanes that can cross the wall did not (the wall then reads the
+/// same, so its layout is the same).
+fn wall_kept(world: &World, t0: &T0, index: usize) -> bool {
+    let key = index as u32;
+    let Some((reached, was)) = WALLS.with(|w| w.borrow().get(&key).map(|d| (d.reached.clone(), d.towns_fp))) else { return true };
+    let now = towns_fp(world, t0, &reached);
+    if now == was {
+        return true;
+    }
+    let Some(c) = wall_of(world, t0, index) else { return false };
+    let lanes = sites::wall_lanes(world, t0, c).fp;
+    WALLS.with(|w| {
+        let mut w = w.borrow_mut();
+        match w.get_mut(&key) {
+            Some(d) if d.lanes_fp == lanes => {
+                d.towns_fp = now;
+                true
+            }
+            _ => false,
+        }
+    })
 }
 
 /// Forget cached layouts from `index` on (created sites changed: they follow the generated
 /// ones, whose layouts stay cached).
 pub fn forget_from(index: usize) {
     CACHE.with(|c| c.borrow_mut().1.retain(|&k, _| (k as usize) < index));
+    WALLS.with(|w| w.borrow_mut().retain(|&k, _| (k as usize) < index));
     EDITED.with(|c| c.borrow_mut().retain(|&k, _| (k as usize) < index));
     wards::forget_from(index);
 }

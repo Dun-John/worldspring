@@ -561,6 +561,50 @@ fn ruin_works(l: &mut Layout, rng: &mut Pcg32) {
     l.towers.retain(|_| rng.next_f64() < 0.65);
 }
 
+/// What a wall drawn by hand reads of its surroundings: the lanes that can cross it.
+pub(super) struct WallLanes {
+    /// The settlements whose reach meets the wall's bounding box (their streets are read).
+    pub reached: Vec<u32>,
+    /// World ft; only lanes whose own box overlaps the wall's (a segment outside it crosses no side).
+    pub lanes: Vec<(P, P)>,
+    /// A hash of `lanes`, in order: the wall's layout is a function of this, its own points and the ground.
+    pub fp: u64,
+}
+
+/// The lanes that pass through a wall: the world's roads, and the approaches and main streets
+/// of the towns it reaches, as those are laid out (`Edits.towns`; the paved side streets and
+/// alleys, class 3, the wall closes).
+pub(super) fn wall_lanes(world: &World, t0: &T0, c: &crate::world::Created) -> WallLanes {
+    const MARGIN_FT: f64 = 1.0;
+    let (x0, y0, x1, y1) = c.pts.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, q| (b.0.min(q[0]), b.1.min(q[1]), b.2.max(q[0]), b.3.max(q[1])));
+    let near = |p: P, q: P| p[0].max(q[0]) >= x0 - MARGIN_FT && p[0].min(q[0]) <= x1 + MARGIN_FT && p[1].max(q[1]) >= y0 - MARGIN_FT && p[1].min(q[1]) <= y1 + MARGIN_FT;
+    let mut lanes: Vec<(P, P)> = Vec::new();
+    for (ri, k) in t0.roads.segments_near([x0, y0, x1, y1], 20.0) {
+        let rc = &t0.roads.roads[ri as usize];
+        let pts: Vec<P> = (0..=16).map(|j| rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p).collect();
+        lanes.extend(pts.windows(2).map(|s| (s[0], s[1])).filter(|s| near(s.0, s.1)));
+    }
+    let hit = |x: f64, y: f64, r: f64| x + r >= x0 && x - r <= x1 && y + r >= y0 && y - r <= y1;
+    let mut reached: Vec<u32> = Vec::new();
+    for (i, s) in t0.settlements.iter().enumerate() {
+        if !hit(s.x, s.y, super::reach(s)) {
+            continue;
+        }
+        reached.push(i as u32);
+        let town = super::base_layout(world, t0, i);
+        for (pts, _, _) in town.roads.iter().filter(|r| r.1 != 3) {
+            lanes.extend(pts.windows(2).map(|q| (q[0], q[1])).filter(|q| near(q.0, q.1)));
+        }
+    }
+    let mut h = crate::core::hash::Fnv64::default();
+    for (p, q) in &lanes {
+        for v in [p[0], p[1], q[0], q[1]] {
+            h.write(&v.to_le_bytes());
+        }
+    }
+    WallLanes { reached, lanes, fp: h.finish() }
+}
+
 /// A wall drawn by hand (`Created` kind `wall`): towers on its corners and along long runs, a
 /// gatehouse on each corner marked a gate and wherever a road or a town's main street crosses it,
 /// broken where it would stand in water.
@@ -570,26 +614,7 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
         return;
     }
     let mut corners: Vec<(P, bool)> = c.pts.iter().enumerate().map(|(i, q)| (sub(*q, center), c.gates.contains(&(i as u32)))).collect();
-    // Lanes that pass through: the world's roads, and the approaches and main streets of the
-    // towns the wall reaches.
-    let (x0, y0, x1, y1) = c.pts.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, q| (b.0.min(q[0]), b.1.min(q[1]), b.2.max(q[0]), b.3.max(q[1])));
-    let mut lanes: Vec<(P, P)> = Vec::new();
-    for (ri, k) in t0.roads.segments_near([x0, y0, x1, y1], 20.0) {
-        let rc = &t0.roads.roads[ri as usize];
-        let pts: Vec<P> = (0..=16).map(|j| sub(rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p, center)).collect();
-        lanes.extend(pts.windows(2).map(|s| (s[0], s[1])));
-    }
-    let hit = |x: f64, y: f64, r: f64| x + r >= x0 && x - r <= x1 && y + r >= y0 && y - r <= y1;
-    for (i, s) in t0.settlements.iter().enumerate() {
-        if !hit(s.x, s.y, super::reach(s)) {
-            continue;
-        }
-        let town = super::generated_layout(world, t0, i);
-        // (Its paved side streets and alleys, class 3, the wall closes.)
-        for (pts, _, _) in town.roads.iter().filter(|r| r.1 != 3) {
-            lanes.extend(pts.windows(2).map(|q| (sub(q[0], center), sub(q[1], center))));
-        }
-    }
+    let lanes: Vec<(P, P)> = wall_lanes(world, t0, c).lanes.into_iter().map(|(p, q)| (sub(p, center), sub(q, center))).collect();
     // Each crossing is a gate (a corner within 20 ft of it is made one instead), at least
     // 60 ft from the gate before it.
     let sides = if c.closed { n } else { n - 1 };

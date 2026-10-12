@@ -1747,6 +1747,7 @@ fn agent_edits_guarantee() {
 fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     use worldgen::t0::settle::Tier;
     use worldgen::town::{self, geom, wards};
+    use std::rc::Rc;
     use worldgen::world::{Edits, TownEdit};
     let n = t0.settlements.len();
     let plan_of = |li: usize| wards::plan_json(base, t0, li).unwrap();
@@ -1807,6 +1808,47 @@ fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     let again = format!("{:?}", *l);
     town::forget_from(0);
     assert_eq!(format!("{:?}", *town::layout(&world, t0, ci)), again, "a town laid out anew is not repeatable");
+
+    // A wall drawn by hand across a main street the edit moved takes its gate from the street as
+    // laid out, not where the generated one ran (item 48): the same cold or kept, rebuilt after the
+    // town changes under it, and left alone by a town edit that moves nothing it reads.
+    let lanes = |l: &town::Layout| -> Vec<([f64; 2], [f64; 2])> { l.roads.iter().filter(|r| r.1 != 3).flat_map(|r| r.0.windows(2).map(|q| (q[0], q[1]))).collect() };
+    let (before, after) = (lanes(&g), lanes(&l));
+    // (Where the street moved most: near the end of a segment the edit changed.)
+    let (a, b) = after.iter().copied().find(|&(a, b)| geom::dist(a, b) > 40.0 && !before.contains(&(a, b)) && before.iter().all(|&(p, q)| geom::seg_dist(geom::lerp(a, b, 0.85), p, q) > 5.0)).expect("a main street the edit moved");
+    let m = geom::lerp(a, b, 0.85);
+    let d = geom::sub(b, a);
+    let nrm = geom::mul([-d[1], d[0]], 1.0 / geom::len(d).max(1e-9));
+    let wall = worldgen::world::Created { id: "c:0".into(), kind: "wall".into(), x: m[0], y: m[1], name: "Test Wall".into(), pts: vec![geom::add(m, geom::mul(nrm, -60.0)), geom::add(m, geom::mul(nrm, 60.0))], ..Default::default() };
+    let with_wall = |mut e: Edits| {
+        e.created.push(wall.clone());
+        let w = World::new(WorldFile { edits: e, ..base.file.clone() }).unwrap();
+        let mut t = worldgen::t0::T0::from_bytes(&t0.to_bytes()).unwrap();
+        t.apply_edits(&w);
+        (w, t)
+    };
+    let (wb, tb) = with_wall(Edits::default());
+    let (we, te) = with_wall(e.clone());
+    let li = n + tb.base_pois;
+    let at_m = |g: &[[f64; 2]]| g.chunks(2).any(|p| p.len() == 2 && geom_dist(geom::lerp(p[0], p[1], 0.5), m) < 20.0);
+    town::forget_from(0);
+    let generated = town::layout(&wb, &tb, li).gate_towers.clone();
+    let laid_out = town::layout(&we, &te, li);
+    assert!(at_m(&laid_out.gate_towers), "no gate where the wall crosses the street as laid out: {:?} at {m:?}", laid_out.gate_towers);
+    assert_ne!(generated, laid_out.gate_towers, "the wall kept the gates of the generated streets");
+    let kept = format!("{:?}", *laid_out);
+    town::forget_from(0);
+    assert_eq!(format!("{:?}", *town::layout(&we, &te, li)), kept, "a wall built after the town was laid out anew differs from one built before");
+    let patch = patches.iter().filter(|p| p["in_town"] == true && matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant")) && p["patch"] != patch["patch"] && geom_dist(at(p), m) > 6.0 * spacing && geom_dist(at(p), pc) > 3.0 * spacing).min_by(|a, b| geom_dist(at(b), m).total_cmp(&geom_dist(at(a), m))).expect("a ward far from the wall");
+    let req = format!(r#"{{"patches":[{{"patch":{},"lots":"huge"}}]}}"#, patch["patch"]);
+    let (edit5, _) = wards::change(&world, t0, ci, &serde_json::from_str(&req).unwrap()).unwrap();
+    let mut e5 = e.clone();
+    e5.towns.insert(wards::key(ci), edit5.expect("lots changed"));
+    let (w5, t5) = with_wall(e5);
+    let l5 = town::layout(&w5, t0, ci);
+    assert!(lanes(&l5) == after && !Rc::ptr_eq(&l5, &l), "the far edit moved a main street or changed nothing");
+    let held = town::layout(&we, &te, li);
+    assert!(Rc::ptr_eq(&town::layout(&w5, &t5, li), &held), "a wall was laid out again by a town edit that moved nothing it reads");
 
     // Walls taken down: the gates and every building stay, only castle curtains stand.
     let (edit2, _) = wards::change(&world, t0, ci, &serde_json::from_str(r#"{"walls":false}"#).unwrap()).unwrap();
