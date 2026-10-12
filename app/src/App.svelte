@@ -21,14 +21,14 @@
   import Icon from './ui/Icon.svelte';
   import Readout from './ui/shell/Readout.svelte';
   import DevStats from './ui/shell/DevStats.svelte';
-  import { SECTIONS, shell, type Section } from './ui/shell/layout.svelte';
+  import { SECTIONS, shell, type NotesTab, type Section } from './ui/shell/layout.svelte';
   import Confirm from './ui/shell/Confirm.svelte';
   import { UndoHistory } from './ui/shell/history.svelte';
   import FloorSelector from './ui/FloorSelector.svelte';
   import MovesMenu from './ui/MovesMenu.svelte';
   import type { Move } from './render/InteriorLayer';
   import InfoPanel from './ui/InfoPanel.svelte';
-  import Names from './ui/Names.svelte';
+  import Gazetteer from './ui/Gazetteer.svelte';
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
   import BuildPanel from './ui/BuildPanel.svelte';
@@ -859,7 +859,6 @@
   }
 
   // What is open: one section's panel at a time (the shell's state), each on its tab.
-  const namesOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'names');
   const placeOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'sites');
   const scatterOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'scatter');
   const buildOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'build');
@@ -949,7 +948,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: 'npcs' | 'plots' | 'places', id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -1571,8 +1570,8 @@
     if (!d) return;
     designer = null;
     view.designing = null;
-    // (Shut while its tab is showing: Edit falls back to Names.)
-    if (shell.tabs.edit === 'design') shell.tabs.edit = 'names';
+    // (Shut while its tab is showing: Edit falls back to Places.)
+    if (shell.tabs.edit === 'design') shell.tabs.edit = 'sites';
     syncTool();
     if (d.dirty && view.interior?.interior.id === d.id) void view.enterBuilding(d.id, { level: view.interior.currentLevel });
   }
@@ -1783,12 +1782,7 @@
     return {
       ...drawn,
       hidden: hiddenNow,
-      onHide: (hide: boolean) => {
-        const set = new Set(edits.hidden ?? []);
-        if (hide) set.add(id);
-        else set.delete(id);
-        applyEdits({ ...edits, hidden: [...set].sort() }, { tool: 'hide_feature', id, hidden: hide }, 'user');
-      },
+      onHide: (hide: boolean) => setHidden(id, hide),
       onDelete: () => {
         const all = (edits.created ?? []).map((x) => (x.id === id ? { ...x, removed: true } : x));
         applyEdits({ ...edits, created: all }, { tool: 'delete_feature', id }, 'user');
@@ -1803,9 +1797,9 @@
   }
 
   // The notebook: NPCs and plot points (the user's and agents').
-  let notebookFocus = $state<{ tab: 'npcs' | 'plots' | 'places'; id: string | null; seq: number }>({ tab: 'npcs', id: null, seq: 0 });
+  let notebookFocus = $state<{ tab: NotesTab; id: string | null; seq: number }>({ tab: 'npcs', id: null, seq: 0 });
 
-  function openNotebook(tab: 'npcs' | 'plots' | 'places', id: string | null) {
+  function openNotebook(tab: NotesTab, id: string | null) {
     notebookFocus = { tab, id, seq: notebookFocus.seq + 1 };
     go('notes', tab);
   }
@@ -1936,11 +1930,21 @@
     applyEdits({ ...edits, plots: all }, { tool, id, name }, 'user');
   }
 
-  function setNote(id: string, note: { text: string; tags?: string[] } | null) {
+  /** Hide a feature's label from both maps and search, or show it again. */
+  function setHidden(id: string, hide: boolean) {
+    if ((edits.hidden ?? []).includes(id) === hide) return;
+    const set = new Set(edits.hidden ?? []);
+    if (hide) set.add(id);
+    else set.delete(id);
+    applyEdits({ ...edits, hidden: [...set].sort() }, { tool: 'hide_feature', id, hidden: hide }, 'user');
+  }
+
+  /** Set (or with null, clear) a place's note; `name` says which place in the undo line. */
+  function setNote(id: string, note: { text: string; tags?: string[] } | null, name = here?.id === id ? here.name : undefined) {
     const all = { ...notes };
     if (note) all[id] = note;
     else delete all[id];
-    applyEdits({ ...edits, notes: all }, { tool: 'annotate_feature', id }, 'user');
+    applyEdits({ ...edits, notes: all }, { tool: 'annotate_feature', id, ...(name ? { name } : {}) }, 'user');
   }
 
   /** Show a place: a map feature is selected (and framed); a building or district is found
@@ -2029,7 +2033,7 @@
     if (p) flyToSize(p.x, p.y, /^d:/.test(place.id) ? 1500 : 300);
   }
 
-  /** Go to a name in the names menu: a map feature is selected (and framed); the rest as `goTo`. */
+  /** Go to a name in the Gazetteer: a map feature is selected (and framed); the rest as `goTo`. */
   async function goName(id: string) {
     if (designer?.dirty) return ask('design', () => void goName(id));
     const f = overlay?.features.find((g) => g.id === id);
@@ -2282,7 +2286,7 @@
       () => (townOn && townPatch !== null ? ((townPatch = null), true) : false),
       () => (placeArmed ? (disarmPlace(), true) : false),
       () => (pickTool ? ((pickTool = null), syncTool(), true) : false),
-      () => (designer ? (go('edit', 'names'), true) : false),
+      () => (designer ? (go('edit', 'sites'), true) : false),
       () => (shell.phone && shell.card ? ((shell.card = false), true) : false),
       () => (view.interior ? (leaveSite(), true) : false),
       () => (selection ? ((selection = null), true) : false),
@@ -2546,7 +2550,6 @@
           title: designer || canDesign ? (inside?.id.startsWith('b:') ? 'Design this building’s rooms (D)' : 'Design this site’s rooms (D)') : playOn ? 'Stop playing to design a site' : 'Go into a building, or down into a dungeon, cave or mine, to design its rooms',
           hint: 'Design the rooms, doors, stairs and furniture of the building or dungeon you are in.',
         },
-        { key: 'names', label: 'Names', icon: 'tag', kbd: 'N', hint: 'Rename or hide what the map names.' },
       ]}
       tab={shell.tabs.edit}
       onTab={(k) => go('edit', k)}
@@ -2554,19 +2557,7 @@
       ask={shell.ask ? askBar : undefined}
     >
       {#snippet children(peek)}
-        {#if namesOn && overlay}
-          {#if !peek}
-            <Names
-              features={overlay.features}
-              {renames}
-              hidden={edits.hidden ?? []}
-              layoutOf={layoutIndexOf}
-              list={(scope) => view.gen.names(scope)}
-              onRename={rename}
-              onGo={(id) => void goName(id)}
-            />
-          {/if}
-        {:else if placeOn}
+        {#if placeOn}
           <PlacePanel armed={placeArmed} {peek} onPlace={armPlace} onCancel={disarmPlace} onTowns={() => go('world', 'sketch')} />
         {:else if buildOn}
           <BuildPanel
@@ -2645,26 +2636,44 @@
       title="Notes"
       icon="book"
       tabs={[
-        { key: 'npcs', label: `NPCs (${Object.keys(npcs).length})`, icon: 'user' },
-        { key: 'plots', label: `Plots (${Object.keys(plots).length})`, icon: 'scroll' },
-        { key: 'places', label: `Places (${Object.keys(notes).length})`, icon: 'note' },
+        { key: 'npcs', label: `NPCs (${Object.keys(npcs).length})`, icon: 'user', hint: 'Who they are, where they are, how they feel about the players.' },
+        { key: 'plots', label: `Plots (${Object.keys(plots).length})`, icon: 'scroll', hint: 'Plot points tied to places and NPCs.' },
+        { key: 'gazetteer', label: 'Gazetteer', icon: 'tag', hint: 'Every name in the world: rename it, hide a place from the map, write notes only you see.' },
       ]}
       tab={notebookFocus.tab}
-      onTab={(k) => openNotebook(k as 'npcs' | 'plots' | 'places', null)}
+      onTab={(k) => openNotebook(k as NotesTab, null)}
       onClose={() => go(null)}
       ask={shell.ask ? askBar : undefined}
     >
       {#snippet children(peek)}
-        {#if !peek}
+        {#if peek}
+          <!-- (Folded down: the tabs alone.) -->
+        {:else if notebookFocus.tab === 'gazetteer'}
+          {#if overlay}
+            <Gazetteer
+              features={overlay.features}
+              {renames}
+              hidden={edits.hidden ?? []}
+              {notes}
+              {here}
+              focus={notebookFocus}
+              layoutOf={layoutIndexOf}
+              list={(scope) => view.gen.names(scope)}
+              resolve={placeInfo}
+              onRename={rename}
+              onHide={setHidden}
+              onNote={(id, note, name) => setNote(id, note, name)}
+              onGo={(id) => void goName(id)}
+              onShow={(id) => void showPlace(id)}
+            />
+          {/if}
+        {:else}
           <Notebook
             {npcs}
             {plots}
             {renames}
             {here}
             focus={notebookFocus}
-            {notes}
-            onNote={setNote}
-            onShow={(id) => void showPlace(id)}
             playing={playOn}
             resolve={placeInfo}
             levelName={(id, l) => (inside?.id === id ? (inside.levels[l]?.name ?? null) : null)}
@@ -2711,7 +2720,7 @@
       {placesHere}
       onShow={(id) => void showPlace(id)}
       onRename={rename}
-      onNote={setNote}
+      onNote={(id, note) => setNote(id, note)}
       {npcsHere}
       {plotsHere}
       onOpen={openNotebook}

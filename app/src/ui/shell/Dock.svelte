@@ -112,8 +112,8 @@
       <button class="ws-icon-btn" onclick={onClose} aria-label="Close {title}" title="Close"><Icon name="x" /></button>
     </header>
     {#if tabs?.length}
-      <!-- Six tabs or more: only the open one keeps its icon, so every label fits a narrow dock. -->
-      <div class="tabs" class:many={tabs.length >= 6} role="tablist">
+      <!-- Five tabs or more: only the open one keeps its icon, so every label fits a narrow dock. -->
+      <div class="tabs" class:many={tabs.length >= 5} role="tablist">
         {#each tabs as t (t.key)}
           <button
             role="tab"

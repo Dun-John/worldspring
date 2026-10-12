@@ -826,7 +826,7 @@ fn name_any(world: &World, t0: &T0, id: &str) -> Option<String> {
 }
 
 /// A place's name before renames (a building's own name or its trade, a level's or room's
-/// generated name, a feature's overlay name).
+/// generated name, a tower's or way underground's label, a feature's overlay name).
 fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
     if let Some((site, li, ri)) = split_room_id(id) {
         let it = crate::interior::generate_id(world, t0, site)?;
@@ -840,6 +840,13 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
     match (id.split(':').next(), nums.as_slice()) {
         (Some("b"), [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| b.name.clone().unwrap_or_else(|| b.label().to_string())),
         (Some("d"), [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).map(|q| q.name.clone()),
+        // Towers and ways underground as `layout_names` lists them; a sewer section as its site.
+        (Some("t"), [li, k]) if *li < town::layout_count(t0) => {
+            crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| format!("{} {}", if t.2 { "Gate tower" } else { "Wall tower" }, k + 1))
+        }
+        (Some("u"), [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| cap(e.kind.name())),
+        (Some("k"), [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).filter(|b| crate::interior::has_deep_dungeon(b)).map(|_| "Deep dungeons".into()),
+        (Some("w"), [li, ..]) if *li < town::layout_count(t0) => crate::interior::generate_id(world, t0, id).map(|it| it.name.unwrap_or_else(|| it.function.to_string())),
         _ => match world.file.edits.created.iter().find(|c| c.id == id) {
             Some(c) => Some(c.name.clone()),
             None => t0.extra.as_ref()?.overlay.features.iter().find(|f| f.id == id).map(|f| f.name.clone()),
@@ -1401,7 +1408,7 @@ fn cap(s: &str) -> String {
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
-/// A name as the Names menu and `list_names` show it: current and generated, where it is, and
+/// A name as the Gazetteer and `list_names` show it: current and generated, where it is, and
 /// whether it can be entered (a building or site with levels).
 fn name_entry(world: &World, id: String, kind: &str, generated: String, p: Option<P>, enter: bool) -> Value {
     let edits = &world.file.edits;

@@ -41,7 +41,7 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 |---|---|
 | **World** (1) | **Generate** a world from a seed, size and climate. **Sketch** the continent you want and the generator follows. **Library** saves, opens, backs up and shares your worlds. |
 | **Edit** (2) | Change the world and make it yours. See below. |
-| **Notes** (3) | Your campaign's **NPCs**, **plots** and **places**, pinned to the map. |
+| **Notes** (3) | Your campaign's **NPCs** and **plots**, pinned to the map, and the **Gazetteer**: every name in the world to rename, places to hide from the map, and the notes only you see. |
 | **Play** (4) | Run a session: tokens, fog of war, line of sight, lights, doors and secret doors, and a second **players' window** for a TV or another screen that shows only what the players have seen. |
 
 ### What you can edit
@@ -55,7 +55,6 @@ Open **Edit** and pick a tab (or press its letter). Every change can be undone.
 | **Streets** (U) | Re-plan the town in view: drag its ward corners, or move them with brushes (Displace, Liquify, Bloat, Pinch, Relax, Equalize). Give a ward another use, change its lots, merge or reroll them, put walls up or down, or clear a ward and build your own. |
 | **Objects** (C) | Stamp or brush objects onto a battlemap, or erase them. Upload your own pictures to use as objects. |
 | **Rooms** (D) | Go inside a building, dungeon, cave or mine and design it room by room: walls, doors, stairs, storeys, cellars, furniture and props. |
-| **Names** (N) | Rename anything: towns, regions, buildings, places. Hide the names you don't want shown. |
 
 **Sketch** (World › Sketch) works at the scale of the continent, and generating from it remakes the world to fit:
 draw coastlines, land and sea, ranges, massifs, rivers, lakes, biomes, volcanoes, **towns and cities**, planned sites

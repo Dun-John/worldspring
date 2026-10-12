@@ -23,8 +23,8 @@
   /** What each section is for, for a first look. */
   const WHERE: [string, string][] = [
     ['World', 'Make the world: settings, the sketch (coasts, mountains, rivers, towns, roads), the library. Generating remakes the world.'],
-    ['Edit', 'Change it in place: places, buildings, streets, objects, rooms, names.'],
-    ['Notes', 'Your NPCs, plots and notes on places.'],
+    ['Edit', 'Change it in place: places, buildings, streets, objects, rooms.'],
+    ['Notes', 'Your NPCs and plots, and the Gazetteer: every name to rename, places to hide from the map, your notes on places.'],
     ['Play', 'Run a session: tokens, fog, the players’ window.'],
   ];
   const groups = $derived(

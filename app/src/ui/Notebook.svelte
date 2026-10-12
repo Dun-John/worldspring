@@ -21,15 +21,15 @@
 </script>
 
 <script lang="ts">
-  // The DM's notebook: NPCs (who they are, how they feel about the players, where they are),
-  // plot points tied to places and NPCs, and the notes written on places. Agents read and write
-  // the same entries through mapd. Fields save when they lose focus.
+  // The DM's notebook: NPCs (who they are, how they feel about the players, where they are) and
+  // plot points tied to places and NPCs (notes on places are in the Gazetteer). Agents read and
+  // write the same entries through mapd. Fields save when they lose focus.
   import { PLOT_STATUSES, STANCES, type PlaceInfo, type PlotStatus, type Stance } from '../gen/protocol';
   import { assetUrl, putAsset } from '../world/assets';
+  import type { NotesTab } from './shell/layout.svelte';
   import Icon from './Icon.svelte';
 
-  type Tab = 'npcs' | 'plots' | 'places';
-  type Note = { text: string; tags?: string[] };
+  type Tab = 'npcs' | 'plots';
 
   interface Props {
     npcs: Record<string, Npc>;
@@ -38,20 +38,14 @@
     renames: Record<string, string>;
     /** The place selected or entered: NPCs can be put there, plots tied to it. */
     here: Here | null;
-    /** The notes written on places, by place id. */
-    notes: Record<string, Note>;
     /** Open on this entry (set by the info panel and search; `seq` makes a repeat count). */
-    focus: { tab: Tab; id: string | null; seq: number };
+    focus: { tab: NotesTab; id: string | null; seq: number };
     playing: boolean;
     resolve: (id: string) => Promise<PlaceInfo | null>;
     /** A level's name in the building or site in view (else null: shown by number). */
     levelName: (id: string, level: number) => string | null;
     onNpc: (id: string, npc: Npc | null, tool: string) => void;
     onPlot: (id: string, plot: Plot | null, tool: string) => void;
-    /** Set (or with null, clear) a place's note. */
-    onNote: (id: string, note: Note | null) => void;
-    /** Show a place: selected on the map, its card open. */
-    onShow: (id: string) => void;
     /** Go to a place, or to where an NPC is. */
     onGo: (id: string) => void;
     /** Click on the map to put this NPC there. */
@@ -61,9 +55,9 @@
     /** Say what went wrong (a picture refused). */
     onError: (text: string) => void;
     /** Show another entry (an NPC's plot, a plot's NPC): the tab follows. */
-    onFocus: (tab: Tab, id: string | null) => void;
+    onFocus: (tab: NotesTab, id: string | null) => void;
   }
-  let { npcs, plots, renames, here, notes, focus, playing, resolve, levelName, onNpc, onPlot, onNote, onShow, onGo, onPick, onToken, onError, onFocus }: Props = $props();
+  let { npcs, plots, renames, here, focus, playing, resolve, levelName, onNpc, onPlot, onGo, onPick, onToken, onError, onFocus }: Props = $props();
 
   // The tab is the dock's (NPCs, Plots); the entry open is the last one asked for.
   const tab = $derived(focus.tab);
@@ -92,7 +86,7 @@
   // Place names before renames, looked up once from the generators (buildings, districts,
   // sites; a level or room generates its site, so not again on every rename).
   let names = $state<Record<string, string>>({});
-  const placeIds = $derived([...new Set([...Object.values(npcs).flatMap((n) => (n.location ? [n.location.id] : [])), ...Object.values(plots).flatMap((p) => p.anchors), ...Object.keys(notes)])]);
+  const placeIds = $derived([...new Set([...Object.values(npcs).flatMap((n) => (n.location ? [n.location.id] : [])), ...Object.values(plots).flatMap((p) => p.anchors)])]);
   $effect(() => {
     for (const id of placeIds) {
       if (id in names) continue;
@@ -138,21 +132,6 @@
       .sort(([, a], [, b]) => order[a.status] - order[b.status] || a.title.localeCompare(b.title));
   });
 
-  const noteList = $derived.by(() => {
-    const t = q.trim().toLowerCase();
-    return Object.entries(notes)
-      .filter(([id, n]) => !t || has(n.text, t) || (n.tags ?? []).some((g) => has(g, t)) || has(placeName(id), t))
-      .filter(([id]) => !hereOnly || (here && id === here.id))
-      .sort(([a], [b]) => placeName(a).localeCompare(placeName(b)));
-  });
-  const note = $derived(tab === 'places' && current ? notes[current] : undefined);
-
-  function setNote(text: string, tags: string[]) {
-    if (!current) return;
-    if (!text.trim() && !tags.length) onNote(current, null);
-    else onNote(current, tags.length ? { text, tags } : { text });
-  }
-
   function open(t: Tab, id: string) {
     if (t !== tab) return onFocus(t, id);
     current = id;
@@ -161,10 +140,6 @@
   }
 
   function create() {
-    if (tab === 'places') {
-      if (here) open('places', here.id);
-      return;
-    }
     const id = newNoteId(tab === 'npcs' ? 'n' : 'p');
     if (tab === 'npcs') onNpc(id, { ...blankNpc(), ...(hereOnly && here ? { location: { id: here.id, ...(here.level !== undefined ? { level: here.level } : {}) } } : {}) }, 'create_npc');
     else onPlot(id, { ...blankPlot(), anchors: hereOnly && here ? [here.id] : [] }, 'create_plot');
@@ -209,8 +184,7 @@
       return;
     }
     if (tab === 'npcs') onNpc(current, null, 'delete_npc');
-    else if (tab === 'plots') onPlot(current, null, 'delete_plot');
-    else onNote(current, null);
+    else onPlot(current, null, 'delete_plot');
     current = null;
     confirmDelete = false;
   }
@@ -336,23 +310,10 @@
       {/if}
     </section>
     <label class="ws-field">Tags<input class="ws-input" value={plot.tags.join(', ')} onchange={(e) => setPlot({ tags: tagList(val(e)) })} placeholder="comma, separated" /></label>
-  {:else if tab === 'places' && current}
-    {@const id = current}
-    <div class="ws-row top">
-      <button class="ws-btn quiet back" onclick={() => (current = null)}><Icon name="chevron-left" size={16} /> Places</button>
-      <span class="grow"></span>
-      <button class="ws-btn" onclick={() => onShow(id)}><Icon name="target" size={16} /> Show on map</button>
-      {#if note}<button class="ws-btn" class:quiet={!confirmDelete} class:danger={confirmDelete} onclick={remove} title="Delete the note">{#if confirmDelete}Delete?{:else}<Icon name="trash" size={16} />{/if}</button>{/if}
-    </div>
-    <div class="title-text">{placeName(id)}</div>
-    <label class="ws-field">Note<textarea class="ws-input grow-text" rows="6" value={note?.text ?? ''} placeholder="Lore, hooks, secrets…" onchange={(e) => setNote(val(e), note?.tags ?? [])}></textarea></label>
-    <label class="ws-field">Tags<input class="ws-input" value={(note?.tags ?? []).join(', ')} placeholder="comma, separated" onchange={(e) => setNote(note?.text ?? '', tagList(val(e)))} /></label>
   {:else}
     <div class="ws-row">
-      <input class="ws-input grow" type="search" placeholder={tab === 'npcs' ? 'Find NPCs…' : tab === 'plots' ? 'Find plots…' : 'Find notes…'} bind:value={q} aria-label="Search the notebook" />
-      {#if tab !== 'places' || here}
-        <button class="ws-btn primary" onclick={create} title={tab === 'places' ? `Write a note on ${here?.name}` : undefined}><Icon name="plus" size={16} /> {tab === 'npcs' ? 'NPC' : tab === 'plots' ? 'Plot' : 'Note'}</button>
-      {/if}
+      <input class="ws-input grow" type="search" placeholder={tab === 'npcs' ? 'Find NPCs…' : 'Find plots…'} bind:value={q} aria-label="Search the notebook" />
+      <button class="ws-btn primary" onclick={create}><Icon name="plus" size={16} /> {tab === 'npcs' ? 'NPC' : 'Plot'}</button>
     </div>
     <div class="chips">
       {#if here}<button class="ws-chip" class:on={hereOnly} aria-pressed={hereOnly} onclick={() => (hereOnly = !hereOnly)} title="Only those at {here.name}"><Icon name="pin" size={12} /> At {here.name}</button>{/if}
@@ -360,7 +321,7 @@
         {#each STANCES as s (s)}
           <button class="ws-chip" class:on={filter === s} aria-pressed={filter === s} onclick={() => (filter = filter === s ? '' : s)}><span class="dot" style:background={STANCE_COLOR[s]}></span>{s}</button>
         {/each}
-      {:else if tab === 'plots'}
+      {:else}
         {#each PLOT_STATUSES as s (s)}
           <button class="ws-chip" class:on={filter === s} aria-pressed={filter === s} onclick={() => (filter = filter === s ? '' : s)}>{s}</button>
         {/each}
@@ -381,7 +342,7 @@
         {:else}
           <li class="empty">{Object.keys(npcs).length ? 'No NPCs match.' : 'No NPCs yet. Add one here, or with + NPC on a place’s card.'}</li>
         {/each}
-      {:else if tab === 'plots'}
+      {:else}
         {#each plotList as [k, p] (k)}
           <li>
             <button class="row" onclick={() => open('plots', k)}>
@@ -394,20 +355,6 @@
           </li>
         {:else}
           <li class="empty">{Object.keys(plots).length ? 'No plot points match.' : 'No plot points yet.'}</li>
-        {/each}
-      {:else}
-        {#each noteList as [k, n] (k)}
-          <li>
-            <button class="row" onclick={() => open('places', k)}>
-              <span class="thumb"><Icon name="note" size={18} /></span>
-              <span class="text">
-                <span class="name">{placeName(k)}</span>
-                <span class="ws-muted snippet">{n.text}{(n.tags ?? []).length ? ` · ${(n.tags ?? []).join(', ')}` : ''}</span>
-              </span>
-            </button>
-          </li>
-        {:else}
-          <li class="empty">{Object.keys(notes).length ? 'No notes match.' : 'No notes yet. Choose a place on the map and write on its card, or here with + Note.'}</li>
         {/each}
       {/if}
     </ul>
@@ -437,8 +384,7 @@
   .back {
     padding-left: 2px;
   }
-  .title,
-  .title-text {
+  .title {
     font-size: 16px;
     font-weight: bold;
     width: 100%;

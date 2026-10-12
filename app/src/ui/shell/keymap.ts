@@ -118,7 +118,6 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['U', 'town', 'Streets'],
     ['C', 'scatter', 'Objects'],
     ['D', 'design', 'Rooms'],
-    ['N', 'names', 'Names'],
   ];
   for (const [key, t, label] of tabs) out.push({ keys: [key], label, group: 'Edit', when: edit(), run: () => k.editTabTo(t) });
   const shapes: [string, BuildShape, string][] = [
