@@ -115,17 +115,48 @@ export interface Crumb {
   size: number;
 }
 
-/** Where the view is: landmass › region › settlement, as far as the zoom makes meaningful. */
+/** How far (ft) from its centre a place stands in a settlement, as `worldgen::town::holds_radius`. */
+export function holdsRadius(f: Feature): number {
+  return urbanRadius(f) * (f.kind === 'village' ? 1.4 : 2.15);
+}
+
+/** The sites the breadcrumbs may name: those shown on the map, the settlement each stands in, and
+ * the one whose inside is open. `version` changes whenever any of these does. */
+export interface CrumbSites {
+  list: Feature[];
+  townOf: (site: Feature) => Feature | null;
+  inside: Feature | null;
+  /** An inside open that is no site's (a settlement's building, way underground or sewers): no
+   * site is named by nearness then. */
+  insideOther: boolean;
+  version: unknown;
+}
+
 /** Features of each kind list, per overlay (the breadcrumbs scan only these). */
 const byKinds = new WeakMap<Overlay, Map<string, Feature[]>>();
 /** The last breadcrumbs, and the view they were for (the HUD asks ten times a second). */
-let lastCrumbs: { overlay: Overlay; key: string; out: Crumb[] } | null = null;
+let lastCrumbs: { overlay: Overlay; key: string; version: unknown; out: Crumb[] } | null = null;
 
-export function breadcrumbs(overlay: Overlay, cx: number, cy: number, ftPerPx: number): Crumb[] {
+/** Where the view is: landmass › region › settlement, as far as the zoom makes meaningful; close to
+ * a site (or inside it), region › its settlement › the site. */
+export function breadcrumbs(overlay: Overlay, cx: number, cy: number, ftPerPx: number, sites?: CrumbSites): Crumb[] {
+  // The site the view is on (close in), or inside: looked for each time (a site's reach is far
+  // smaller than the cells below; the sites are a short list).
+  let site = sites?.inside ?? null;
+  if (!site && sites && !sites.insideOther && ftPerPx < 40) {
+    let bestD = Infinity;
+    for (const f of sites.list) {
+      const d = Math.hypot(f.x - cx, f.y - cy) / siteReach(f);
+      if (d < 1 && d < bestD) {
+        bestD = d;
+        site = f;
+      }
+    }
+  }
   // The same crumbs until the view moves a tenth of its own width or zooms by a quarter step.
   const cell = ftPerPx * 150;
-  const key = `${Math.round(cx / cell)},${Math.round(cy / cell)},${Math.round(Math.log2(ftPerPx) * 4)}`;
-  if (lastCrumbs && lastCrumbs.overlay === overlay && lastCrumbs.key === key) return lastCrumbs.out;
+  const key = `${Math.round(cx / cell)},${Math.round(cy / cell)},${Math.round(Math.log2(ftPerPx) * 4)},${site?.id ?? ''}`;
+  if (lastCrumbs && lastCrumbs.overlay === overlay && lastCrumbs.key === key && lastCrumbs.version === sites?.version) return lastCrumbs.out;
   const out: Crumb[] = [];
   let lists = byKinds.get(overlay);
   if (!lists) byKinds.set(overlay, (lists = new Map()));
@@ -144,18 +175,32 @@ export function breadcrumbs(overlay: Overlay, cx: number, cy: number, ftPerPx: n
     }
     return best;
   };
-  const land = nearest(['continent', 'island'], (f) => f.extent_ft * 0.9);
-  if (land) out.push({ label: land.name, x: land.x, y: land.y, size: frameSize(land) });
-  if (ftPerPx < 2500) {
+  const crumb = (f: Feature): Crumb => ({ label: f.name, x: f.x, y: f.y, size: frameSize(f) });
+  if (!site) {
+    const land = nearest(['continent', 'island'], (f) => f.extent_ft * 0.9);
+    if (land) out.push(crumb(land));
+  }
+  if (ftPerPx < 2500 || site) {
     const region = nearest(REGION_KINDS, (f) => f.extent_ft * 0.6);
-    if (region) out.push({ label: region.name, x: region.x, y: region.y, size: frameSize(region) });
+    if (region) out.push(crumb(region));
   }
-  if (ftPerPx < 250) {
-    const town = nearest(SETTLEMENT_KINDS, (f) => urbanRadius(f) * 2.2);
-    if (town) out.push({ label: town.name, x: town.x, y: town.y, size: frameSize(town) });
+  if (site) {
+    // (A site out of town has no settlement crumb.)
+    const town = sites!.townOf(site);
+    if (town) out.push(crumb(town));
+    out.push(crumb(site));
+  } else if (ftPerPx < 250) {
+    const town = nearest(SETTLEMENT_KINDS, holdsRadius);
+    if (town) out.push(crumb(town));
   }
-  lastCrumbs = { overlay, key, out };
+  lastCrumbs = { overlay, key, version: sites?.version, out };
   return out;
+}
+
+/** How close (ft) the view's centre must be to a site for the breadcrumbs to name it: half of
+ * what flying there frames, at most 750 ft (castles, walls and camps would frame miles). */
+function siteReach(f: Feature): number {
+  return Math.min(frameSize(f), 1500) / 2;
 }
 
 export function buildingName(hit: BuildingHit, renames: Record<string, string>): string {

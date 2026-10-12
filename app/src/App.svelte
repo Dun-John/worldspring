@@ -54,7 +54,7 @@
   import PlayPanel from './play/PlayPanel.svelte';
   import { describe, tidy, type Step } from './sync/history';
   import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, shiftLevels, type EditOp } from './sync/ops';
-  import { breadcrumbs, frameSize, hitName, kindLabel, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, zoomFor, type BuildingHit, type Crumb, type Selection } from './ui/gazetteer';
+  import { breadcrumbs, frameSize, hitName, kindLabel, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, PINNED } from './world/versions';
   import VersionAsk, { type VersionChoice } from './ui/shell/VersionAsk.svelte';
@@ -170,7 +170,22 @@
     const hidden = new Set(edits.hidden ?? []);
     return overlay ? { ...overlay, features: overlay.features.filter((f) => !hidden.has(f.id)) } : null;
   });
-  const crumbs = $derived<Crumb[]>(shown && hud ? breadcrumbs(shown, hud.center.x, hud.center.y, hud.ftPerPx) : []);
+  // The sites the breadcrumbs may name (those shown), each with the settlement it stands in, and the
+  // site whose inside is open (a building or way underground of a site's layout).
+  const crumbSites = $derived.by<CrumbSites | null>(() => {
+    if (!shown) return null;
+    void parentOf;
+    const ids = new Set(shown.features.map((f) => f.id));
+    const list = shown.features.filter((f) => SITE_KINDS.includes(f.kind));
+    const townOfSite = (f: Feature) => {
+      const t = layoutFeature(townOf(layoutIndexOf(f.id)));
+      return t && ids.has(t.id) ? t : null;
+    };
+    const m = inside ? /^[bdtukw]:(\d+):/.exec(inside.id) : null;
+    const at = m && Number(m[1]) >= settlements.length ? layoutFeature(Number(m[1])) : null;
+    return { list, townOf: townOfSite, inside: at && ids.has(at.id) ? at : null, insideOther: !!inside && !at, version: {} };
+  });
+  const crumbs = $derived<Crumb[]>(shown && hud ? breadcrumbs(shown, hud.center.x, hud.center.y, hud.ftPerPx, crumbSites ?? undefined) : []);
 
   // Live link to mapd (agents), undo history and notices.
   const sync = new MapdSync();
@@ -948,7 +963,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null) => openNotebook(t, id), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -1797,12 +1812,46 @@
   }
 
   // The notebook: NPCs and plot points (the user's and agents').
-  let notebookFocus = $state<{ tab: NotesTab; id: string | null; seq: number }>({ tab: 'npcs', id: null, seq: 0 });
+  let notebookFocus = $state<{ tab: NotesTab; id: string | null; seq: number; reveal?: boolean }>({ tab: 'npcs', id: null, seq: 0 });
 
-  function openNotebook(tab: NotesTab, id: string | null) {
-    notebookFocus = { tab, id, seq: notebookFocus.seq + 1 };
+  /** Open a Notes tab on a place, an NPC or a plot (`reveal`: the place's row in the Gazetteer's
+   * list, opened, rather than its page). */
+  function openNotebook(tab: NotesTab, id: string | null, reveal = false) {
+    notebookFocus = { tab, id, seq: notebookFocus.seq + 1, reveal };
     go('notes', tab);
+    // (Asked to show something: Notes, already open, unfolds, and on phones the card gives way.)
+    if (id) {
+      shell.collapsed = false;
+      shell.card = false;
+      if (shell.snap === 'peek') shell.snap = 'half';
+    }
   }
+
+  /** What a place opens onto in the Gazetteer: a settlement's or site's layout (its index), the
+   * floors of a building drawn by hand (its building id; a ruin has none), else nothing. */
+  function gazetteerScope(id: string): number | string | null {
+    const c = drawnBuilding(id);
+    if (c) return c.structure === 'ruin' ? null : drawnBuildingId(c.id);
+    const li = layoutIndexOf(id);
+    return li >= 0 ? li : null;
+  }
+
+  /** The sites standing in a settlement (by its id), hidden ones too. */
+  function placesIn(id: string): Feature[] {
+    const li = layoutIndexOf(id);
+    if (li < 0 || li >= settlements.length) return [];
+    return (sitesOf.get(li) ?? []).map(layoutFeature).filter((f): f is Feature => !!f);
+  }
+
+  // What the Gazetteer's lists inside layouts and buildings come from: when any of it changes,
+  // the lists it holds are asked for again.
+  // (The same array while its parts are the same: renames, notes and the like change none.)
+  let namesParts: unknown[] = [];
+  const namesVersion = $derived.by(() => {
+    const parts = [overlay, edits.towns, edits.buildings, edits.designs];
+    if (parts.some((p, i) => p !== namesParts[i])) namesParts = parts;
+    return namesParts;
+  });
 
   /** The place in view for the notebook: the building or site we are in, else the selection. */
   const here = $derived.by<Here | null>(() => {
@@ -2657,7 +2706,15 @@
               {notes}
               {here}
               focus={notebookFocus}
-              layoutOf={layoutIndexOf}
+              scopeOf={gazetteerScope}
+              {placesIn}
+              buildingOf={(id) => (drawnBuilding(id) ? drawnBuildingId(id) : null)}
+              townIn={(id) => {
+                const li = layoutIndexOf(id);
+                return li >= settlements.length ? layoutRef(townOf(li)) : null;
+              }}
+              what={siteWhat}
+              version={namesVersion}
               list={(scope) => view.gen.names(scope)}
               resolve={placeInfo}
               onRename={rename}
@@ -2718,6 +2775,7 @@
       parent={sel.kind === 'feature' && layoutIndexOf(sel.feature.id) >= settlements.length ? layoutRef(townOf(layoutIndexOf(sel.feature.id))) : null}
       drawn={sel.kind === 'building' && !!drawnBuilding(sel.hit.id)}
       {placesHere}
+      onList={sel.kind === 'feature' ? () => openNotebook('gazetteer', sel.feature.id, true) : undefined}
       onShow={(id) => void showPlace(id)}
       onRename={rename}
       onNote={(id, note) => setNote(id, note)}

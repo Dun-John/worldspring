@@ -1,11 +1,13 @@
 <script lang="ts">
   // The gazetteer (Notes): every name in the world, renamed from a list, and the notes written on
   // places. Natural features, then settlements and sites; a settlement or site opens onto its
-  // districts, businesses, towers and ways underground (its layout is generated then), a building
-  // or site onto its levels and rooms. A place's page holds its name (the players see it), whether
-  // its label is hidden, and its note (only the DM sees it).
+  // districts, businesses, towers and ways underground (its layout is generated then), a settlement
+  // also onto the places standing in it, a building or site onto its levels and rooms. A place's
+  // page holds its name (the players see it), whether its label is hidden, and its note (only the
+  // DM sees it).
+  import { tick, untrack } from 'svelte';
   import type { Feature, NameEntry, PlaceInfo } from '../gen/protocol';
-  import { kindLabel, SETTLEMENT_KINDS, SITE_KINDS } from './gazetteer';
+  import { kindIcon, kindLabel, SETTLEMENT_KINDS, SITE_KINDS } from './gazetteer';
   import Icon from './Icon.svelte';
   import type { Here } from './Notebook.svelte';
 
@@ -20,10 +22,22 @@
     notes: Record<string, Note>;
     /** The place selected or entered: a note can be written on it. */
     here: Here | null;
-    /** Open on this place's page (`seq` makes a repeat count; no id: the list). */
-    focus: { id: string | null; seq: number };
-    /** A settlement's or site's layout index, else -1. */
-    layoutOf: (id: string) => number;
+    /** Open on this place's page, or with `reveal` on its row in the list (`seq` makes a repeat
+     * count; no id: the list). */
+    focus: { id: string | null; seq: number; reveal?: boolean };
+    /** What a place opens onto: a settlement's or site's layout (its index), a building's or site's
+     * levels (its id), else nothing. */
+    scopeOf: (id: string) => number | string | null;
+    /** The sites standing in a settlement (by its id). */
+    placesIn: (id: string) => Feature[];
+    /** A building drawn by hand (by its site's id) as a building id. */
+    buildingOf: (id: string) => string | null;
+    /** The settlement a site stands in. */
+    townIn: (id: string) => { id: string; name: string } | null;
+    /** What a site is, in a few words. */
+    what: (f: Feature) => string;
+    /** Changes when the lists inside layouts and buildings may have: those held are asked again. */
+    version: unknown;
     /** What can be renamed in a layout (by index) or a building or site (by id). */
     list: (scope: number | string) => Promise<NameEntry[] | null>;
     /** A place that is not a map feature (a building, a room…): its generated name. */
@@ -39,7 +53,7 @@
     /** Show a place: selected on the map, its card open. */
     onShow: (id: string) => void;
   }
-  let { features, renames, hidden, notes, here, focus, layoutOf, list, resolve, onRename, onHide, onNote, onGo, onShow }: Props = $props();
+  let { features, renames, hidden, notes, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow }: Props = $props();
 
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
@@ -76,9 +90,36 @@
   $effect(() => {
     if (focus.seq === lastSeq) return;
     lastSeq = focus.seq;
-    current = focus.id;
     confirmDelete = false;
+    if (focus.reveal && focus.id) {
+      const id = focus.id;
+      current = null;
+      untrack(() => reveal(id));
+    } else current = focus.id;
   });
+
+  let listEl = $state<HTMLElement | null>(null);
+  /** Show a settlement's or site's row in the list: its tab and kind open, the row opened (a
+   * settlement's places too), scrolled to and marked for a moment. */
+  async function reveal(id: string) {
+    const f = featureById.get(id);
+    if (!f) return;
+    withNotes = false;
+    q = '';
+    if (hiddenSet.has(id)) showHidden = true;
+    tab = SETTLEMENT_KINDS.includes(f.kind) ? 'settlements' : SITE_KINDS.includes(f.kind) ? 'sites' : TABS.find((t) => t.kinds.includes(f.kind))?.key ?? 'land';
+    opened[`kind/${f.kind}`] = true;
+    const scope = scopeOf(id);
+    if (scope !== null && !opened[id]) expand(id, scope);
+    if (SETTLEMENT_KINDS.includes(f.kind)) opened[`${id}/places`] = true;
+    await tick();
+    const row = listEl?.querySelector<HTMLElement>(`[data-row="${CSS.escape(id)}"]`);
+    row?.scrollIntoView({ block: 'start' });
+    flash = id;
+    setTimeout(() => flash === id && (flash = null), 1600);
+  }
+  /** The row just revealed. */
+  let flash = $state<string | null>(null);
 
   const hiddenSet = $derived(new Set(hidden));
   const featureById = $derived(new Map(features.map((f) => [f.id, f])));
@@ -161,17 +202,50 @@
   /** Open a settlement, site or building row, asking for what is in it the first time. */
   function expand(id: string, scope: number | string) {
     opened[id] = !opened[id];
-    if (opened[id] && !(id in inside)) {
-      inside[id] = null;
-      failed[id] = false;
-      void list(scope).then((v) => {
-        failed[id] = !v;
-        if (v) inside[id] = v;
-        // (Asked again the next time it is opened.)
-        else delete inside[id];
-      });
-    }
+    if (opened[id] && !(id in inside)) ask(id, scope);
   }
+
+  /** Answers still to come, by row (a newer ask replaces an older one). */
+  const asking: Record<string, number> = {};
+  let asks = 0;
+  /** Ask what is in a row (`keep`: show what it held meanwhile). */
+  function ask(id: string, scope: number | string, keep = false) {
+    const n = (asking[id] = ++asks);
+    if (!keep) inside[id] = null;
+    failed[id] = false;
+    void list(scope).then((v) => {
+      if (asking[id] !== n) return;
+      delete asking[id];
+      if (v) inside[id] = v;
+      else if (keep && inside[id]) return;
+      else {
+        failed[id] = true;
+        // (Asked again the next time it is opened.)
+        delete inside[id];
+      }
+    });
+  }
+
+  // Sites created, moved or deleted, towns or buildings changed, another world: the lists held
+  // may be out of date. Open rows are asked again (showing the old list until the answer comes);
+  // shut ones forget theirs. A map feature's row asks by its scope now (a remade world's layout
+  // indices can differ), anything else by its own id.
+  let seenVersion: { v: unknown } | null = null;
+  $effect(() => {
+    const was = seenVersion;
+    seenVersion = { v: version };
+    if (!was || was.v === version) return;
+    untrack(() => {
+      for (const id of Object.keys(inside)) {
+        const scope = featureById.has(id) ? scopeOf(id) : id;
+        if (opened[id] && scope !== null) ask(id, scope, true);
+        else {
+          delete inside[id];
+          delete asking[id];
+        }
+      }
+    });
+  });
 
   function edit(id: string, generated: string) {
     editing = id;
@@ -253,10 +327,10 @@
   <button class="icon caret" {onclick} aria-expanded={open} aria-label={open ? 'Shut' : 'Open'}>{open ? '▾' : '▸'}</button>
 {/snippet}
 
-<!-- A building's or site's levels and their rooms. -->
-{#snippet site(e: NameEntry)}
-  {@const v = inside[e.id]}
-  {#if failed[e.id]}
+<!-- A building's or site's levels and their rooms (the row `key`'s). -->
+{#snippet site(key: string)}
+  {@const v = inside[key]}
+  {#if failed[key]}
     <li class="muted">The map's generator could not list these. Reload the page and try again.</li>
   {:else if v === null}
     <li class="muted wait">Working it out…</li>
@@ -284,19 +358,39 @@
   {/if}
 {/snippet}
 
-<!-- A settlement's or site's districts, businesses, towers and ways underground. -->
-{#snippet layout(f: Feature)}
-  {@const v = inside[f.id]}
-  {#if failed[f.id]}
+<!-- A map feature's row (a settlement or site): its name, what it is, and what it opens onto. -->
+{#snippet place(f: Feature, kind: string | null = null)}
+  {@const scope = scopeOf(f.id)}
+  {@const town = tab === 'sites' && !kind ? townIn(f.id) : null}
+  <div class="row" class:flash={flash === f.id} data-row={f.id}>
+    {#if scope !== null}{@render caret(f.id, !!opened[f.id], () => expand(f.id, scope))}{:else}<span class="pad"></span>{/if}
+    {#if kind}<span class="kind" title={kind}><Icon name={kindIcon(f.kind)} size={13} /></span>{/if}
+    {@render name(f.id, f.name)}
+    {#if kind}<span class="muted what">{kind}</span>{/if}
+    {#if town}<button class="muted in" onclick={() => reveal(town.id)} title="Show it under {town.name}">in {town.name}</button>{/if}
+    {@render acts(f.id, f.name)}
+  </div>
+  {#if scope !== null && opened[f.id]}
+    <ul>{#if typeof scope === 'number'}{@render layout(f.id, renames[f.id] ?? f.name, SETTLEMENT_KINDS.includes(f.kind))}{:else}{@render site(f.id)}{/if}</ul>
+  {/if}
+{/snippet}
+
+<!-- A settlement's or site's districts, businesses, towers and ways underground (the row `key`'s);
+     a settlement's places last. -->
+{#snippet layout(owner: string, title: string, town: boolean)}
+  {@const v = inside[owner]}
+  {@const of = featureById.get(owner)}
+  {@const ownerMatches = !!of && matches(of.id, of.name)}
+  {#if failed[owner]}
     <li class="muted">The map's generator could not list these. Reload the page and try again.</li>
   {:else if v === null}
-    <li class="muted wait">Laying out {renames[f.id] ?? f.name}…</li>
+    <li class="muted wait">Laying out {title}…</li>
   {:else if v}
     {#each CHILD_GROUPS as [kind, label] (kind)}
       {@const all = v.filter((e) => e.kind === kind && (showHidden || !hiddenSet.has(e.id)))}
-      {@const rows = numbered(all).filter((r) => matches(f.id, f.name) || matches(r.e.id, r.label) || opened[r.e.id])}
+      {@const rows = numbered(all).filter((r) => ownerMatches || matches(r.e.id, r.label) || opened[r.e.id])}
       {#if rows.length}
-        {@const key = `${f.id}/${kind}`}
+        {@const key = `${owner}/${kind}`}
         {@const open = opened[key] ?? (kind === 'district' || kind === 'underground' || !!needle)}
         <li>
           <div class="row sub">
@@ -313,7 +407,7 @@
                     {@render name(e.id, e.generated, label)}
                     {@render acts(e.id, e.generated, e.enter)}
                   </div>
-                  {#if e.enter && opened[e.id]}<ul>{@render site(e)}</ul>{/if}
+                  {#if e.enter && opened[e.id]}<ul>{@render site(e.id)}</ul>{/if}
                 </li>
               {/each}
             </ul>
@@ -321,7 +415,28 @@
         </li>
       {/if}
     {/each}
-    {#if !v.length}<li class="muted">Nothing here to name.</li>{/if}
+    <!-- (Its buildings drawn by hand that have a trade are among its businesses already.) -->
+    {@const listed = new Set(v.map((e) => e.id))}
+    {@const places = town ? placesIn(owner).filter((f) => (showHidden || !hiddenSet.has(f.id)) && !listed.has(buildingOf(f.id) ?? '') && (ownerMatches || matches(f.id, f.name) || opened[f.id])) : []}
+    {#if places.length}
+      {@const key = `${owner}/places`}
+      {@const open = opened[key] ?? true}
+      <li>
+        <div class="row sub">
+          {@render caret(key, open, () => (opened[key] = !open))}
+          <span class="group">Places</span>
+          <span class="muted">{places.length}</span>
+        </div>
+        {#if open}
+          <ul>
+            {#each places.sort((a, b) => nameOf(a.id, a.name).localeCompare(nameOf(b.id, b.name), undefined, { numeric: true })) as f (f.id)}
+              <li>{@render place(f, what(f))}</li>
+            {/each}
+          </ul>
+        {/if}
+      </li>
+    {/if}
+    {#if !v.length && !places.length}<li class="muted">Nothing here to name.</li>{/if}
   {/if}
 {/snippet}
 
@@ -389,7 +504,7 @@
         {/each}
       </ul>
     {:else}
-      <ul class="list">
+      <ul class="list" bind:this={listEl}>
         {#each groups as g (g.kind)}
           {@const open = isOpen(`kind/${g.kind}`, g.rows.length)}
           <li>
@@ -401,15 +516,7 @@
             {#if open}
               <ul>
                 {#each g.rows as f (f.id)}
-                  {@const li = layoutOf(f.id)}
-                  <li>
-                    <div class="row">
-                      {#if li >= 0}{@render caret(f.id, !!opened[f.id], () => expand(f.id, li))}{:else}<span class="pad"></span>{/if}
-                      {@render name(f.id, f.name)}
-                      {@render acts(f.id, f.name)}
-                    </div>
-                    {#if li >= 0 && opened[f.id]}<ul>{@render layout(f)}</ul>{/if}
-                  </li>
+                  <li>{@render place(f)}</li>
                 {/each}
               </ul>
             {/if}
@@ -578,6 +685,38 @@
   }
   .row:hover {
     background: rgba(226, 213, 176, 0.6);
+  }
+  .row.flash {
+    background: rgba(201, 162, 39, 0.35);
+    transition: background 0.4s;
+  }
+  .kind {
+    display: inline-flex;
+    align-self: center;
+    flex: none;
+    color: #7a5530;
+  }
+  .what,
+  .in {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .in {
+    all: unset;
+    color: #7a6a55;
+    font-size: 12px;
+    cursor: pointer;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .in:hover,
+  .in:focus-visible {
+    text-decoration: underline;
   }
   .head {
     border-top: 1px solid rgba(58, 50, 42, 0.2);

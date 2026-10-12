@@ -24,6 +24,8 @@
     drawn?: boolean;
     /** The sites standing in the selected settlement. */
     placesHere?: { id: string; name: string; kind: string; what: string }[];
+    /** Open the selected settlement in the Gazetteer, its places shown. */
+    onList?: () => void;
     /** Select a place (and frame it). */
     onShow: (id: string) => void;
     onRename: (id: string, name: string) => void;
@@ -55,7 +57,7 @@
     /** Only the name, what it is and the actions (the sheet is down to its strip). */
     peek?: boolean;
   }
-  let { selection, renames, notes, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onShow, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, docked = false, peek = false }: Props = $props();
+  let { selection, renames, notes, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onList, onShow, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, docked = false, peek = false }: Props = $props();
   let cannot = $state(false);
   let confirmDelete = $state(false);
   /** The ⋯ menu (hide, delete). */
@@ -182,7 +184,10 @@
     </div>
     {#if placesHere.length}
       <div class="here">
-        <span class="ws-label">Places here ({placesHere.length})</span>
+        <div class="sub">
+          <span class="ws-label grow">Places here ({placesHere.length})</span>
+          {#if onList}<button class="ws-chip" onclick={onList} title="Them all in the Gazetteer, with what is in each"><Icon name="tag" size={12} /> Gazetteer</button>{/if}
+        </div>
         {#each allPlaces ? placesHere : placesHere.slice(0, FEW) as p (p.id)}
           <button class="item" onclick={() => onShow(p.id)} title="Show it on the map"><Icon name={kindIcon(p.kind)} size={14} /><b>{p.name}</b> <span class="muted">{p.what}</span></button>
         {/each}
