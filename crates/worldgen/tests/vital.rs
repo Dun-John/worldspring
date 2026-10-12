@@ -1437,6 +1437,9 @@ fn agent_edits_guarantee() {
     assert!(near.iter().all(|l| l.index as usize != li + 1), "a removed site is still laid out");
     // Agent queries.
     assert_eq!(agent::get(world, t0, &city).unwrap()["name"], "Agentholm");
+    // Out of town, a site is in no settlement; a removed one is nowhere.
+    assert!(town::parent_of(t0, li).is_none() && agent::get(world, t0, "c:0").unwrap().get("settlement") == Some(&serde_json::Value::Null), "a ruin two miles out stands in a town");
+    assert!(town::parents(t0).iter().all(|&(s, _)| s != li + 1), "a removed site stands in a town");
     assert!(agent::search(world, t0, "agent's ruin", None, 5, false)["results"].as_array().unwrap().iter().any(|r| r["id"] == "c:0"));
     let a = agent::position(world, t0, &city).unwrap();
     let r = agent::route(world, t0, a, spot);
@@ -1704,15 +1707,43 @@ fn agent_edits_guarantee() {
     let s = agent::works_spot(world, t0, &wall, &wall.id, None).unwrap();
     (wall.x, wall.y, wall.name) = (s.at[0], s.at[1], s.name);
     assert!(wall.check().is_ok(), "a wall drawn by hand is refused: {:?}", wall.check());
+    // And an inn drawn where the city's home was taken away, with an NPC in it and a plot in one
+    // of its rooms: it stands in the city (see below).
+    let s = &t0.settlements[ci];
+    assert!(geom_dist(gc, [s.x, s.y]) < town::holds_radius(s), "the home taken away is out of town");
+    let inn_id = format!("c:{}", n0 + 2);
+    let (at, name) = agent::building_spot(world, t0, &gone.poly, Some("inn"), &inn_id, None).unwrap();
+    let inn = Created { id: inn_id.clone(), kind: "building".into(), x: at[0], y: at[1], name, poly: gone.poly.clone(), floors: Some(2), func: Some("inn".into()), ..Default::default() };
+    // A camp in the middle of the city, removed: in no town.
+    let gone_camp = Created { id: format!("c:{}", n0 + 3), kind: "camp".into(), x: s.x, y: s.y, name: "Gone Camp".into(), removed: true, ..Default::default() };
     let mut e = f.edits.clone();
-    for c in [&keep, &wall] {
+    for c in [&keep, &wall, &inn, &gone_camp] {
         let v = serde_json::to_value(c).unwrap();
         e.apply(&worldgen::world::EditOp::Set { field: "created".into(), key: c.id.clone(), value: v.clone() }).unwrap();
         assert_eq!(serde_json::to_value(e.created.last().unwrap()).unwrap(), v, "{} changed on the round trip", c.kind);
     }
+    let ib = format!("b:{}:0", t0.settlements.len() + t0.base_pois + n0 + 2);
+    e.npcs.insert("n:host".into(), worldgen::world::Npc { name: "Host".into(), location: Some(worldgen::world::NpcPlace { id: ib.clone(), ..Default::default() }), ..Default::default() });
+    e.plots.insert("p:upstairs".into(), worldgen::world::Plot { title: "Upstairs".into(), anchors: vec![format!("r:{ib}:0:0")], ..Default::default() });
     let ex = Executor::new(World::new(WorldFile { edits: e, ..f.clone() }).unwrap());
     let (world, t0) = (&ex.world, &ex.t0);
     assert_eq!(world.hash, base.hash, "castles and walls changed the world hash");
+    // The inn is the city's: its settlement (and its building's), among the city's sites and
+    // businesses, its NPC and plot the city's; `parents` agrees.
+    let ii = agent::layout_of(world, t0, &inn_id).expect("the inn's layout");
+    assert_eq!(ib, format!("b:{ii}:0"));
+    assert!(town::parent_of(t0, ii) == Some(ci) && town::parents(t0).contains(&(ii, ci)), "the inn drawn in the city is not the city's");
+    assert_eq!(agent::get(world, t0, &inn_id).unwrap()["settlement"]["id"], city, "the inn's settlement");
+    let got = agent::get(world, t0, &ib).unwrap();
+    assert!(got["settlement"]["id"] == city && got["site"]["id"] == inn_id, "the inn's building: {}", got["settlement"]);
+    let kids = agent::children(world, t0, &city).unwrap();
+    assert!(kids["sites"].as_array().unwrap().iter().any(|s| s["id"] == inn_id && s["building"] == ib), "the inn is not among the city's sites: {}", kids["sites"]);
+    assert!(kids["businesses"].as_array().unwrap().iter().any(|b| b["id"] == ib), "the inn is not among the city's businesses");
+    let gi = ii + 1;
+    assert!(town::parent_of(t0, gi).is_none() && !town::parents(t0).iter().any(|p| p.0 == gi) && !town::sites_in(t0, ci).contains(&gi), "a removed site stands in the city");
+    assert!(!kids["sites"].as_array().unwrap().iter().any(|s| s["id"] == gone_camp.id), "a removed site is among the city's sites");
+    let got = agent::get(world, t0, &city).unwrap();
+    assert!(got["npcs"].as_array().unwrap().iter().any(|n| n["id"] == "n:host") && got["plots"].as_array().unwrap().iter().any(|p| p["id"] == "p:upstairs"), "the city does not show the inn's NPC and plot");
     let li = agent::layout_of(world, t0, &keep.id).expect("the castle's layout");
     let l = town::layout(world, t0, li);
     let fi = town::catalog::index_of("castle").unwrap() as u16;

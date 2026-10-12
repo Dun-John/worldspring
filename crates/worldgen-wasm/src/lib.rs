@@ -158,6 +158,12 @@ impl Ctx {
         }
     }
 
+    /// The sites standing in settlements (`agent::parents_json`): `{n, base, pairs: [[site layout,
+    /// settlement]…]}`, or `null` before T0.
+    pub fn parents_json(&self) -> String {
+        self.t0.as_ref().map_or_else(|| "null".into(), worldgen::agent::parents_json)
+    }
+
     /// Where a site of `kind` (over `under`, if given) can be created near (x, y), with a name
     /// for it: `{x, y, name}` or `{error}` (`agent::creation_spot`).
     pub fn creation_spot_json(&self, kind: &str, under: Option<String>, id: &str, x: f64, y: f64) -> String {

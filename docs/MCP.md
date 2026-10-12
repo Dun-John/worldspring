@@ -35,6 +35,15 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   unless you ask for them.
 - **Extents:** search results, `get_feature` and `features_near` give each place's `extent`: `bbox_ft` (`[x0, y0,
   x1, y1]`) with `area_sq_mi`, or a river's `length_mi`. Settlements' and sites' areas are their built-up circle.
+- **Sites in settlements:** a site (created, drawn by hand or generated) is *in* a settlement when its point stands
+  within the settlement's holding radius: its built-up area and its outer districts (1.4 built-up radii for a
+  village, 2.15 for a town and up). When several hold it, the nearest for its size wins. A wall or castle has one
+  settlement, from its point. Such a site is listed under the settlement (`get_feature` `sites`, `list_children`,
+  `list_names`), and the settlement's NPCs and plots include those at the site.
+- **`settlement` and `site`:** `get_feature` on a site, or on anything inside a settlement's or site's layout
+  (building, district, tower, underground site, level, room), gives `settlement`: the town it is in, `{id, name}`,
+  or `null` when it stands in none. Inside a site's layout it also gives `site`: `{id, name}` (for levels and rooms,
+  `site` is the building's or site's id).
 - **Which world:** every tool takes an optional `world`, the hash `world_overview` returns. If mapd has another
   world open (the user opened a different one in the app), the call is refused and nothing happens. Pass it in
   long scripted sessions.
@@ -69,7 +78,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | Nature | `continent`, `island`, `ocean`, `sea`, `bay`, `range`, `peak`, `pass`, `volcano`, `river`, `lake`, `waterfall` |
 | Roads | drawn and named in the sketch only: `road` (its `detail` is its class: king's road, road or track) |
 | Regions | `forest`, `jungle`, `taiga`, `desert`, `swamp`, `plains`, `tundra`, `glacier`, `salt_flat`; painted in the sketch only: `blight` (blighted woods), `ashlands`; drawn in the sketch only: `region` |
-| Inside settlements | `district`, `building`, `tower`, `underground` (in `list_names`) |
+| Inside settlements | `district`, `building`, `tower`, `underground`, and the sites standing in it as `site` (in `list_names`) |
 | Inside buildings and sites | `level`, `room` (in `list_names`) |
 
 ---
@@ -128,10 +137,12 @@ One feature in detail. What comes back depends on the feature:
 |---|---|
 | Any feature | `name`, `kind`, `detail`, position, elevation, `notes`, `hidden` |
 | Any place | `in`: the regions it lies in (continent, range, forest…), and `nearest_settlements` |
-| Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground |
-| Sites | The layout: buildings, and ways underground with their `u:` ids |
+| Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground; `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
+| Sites | The layout: buildings, and ways underground with their `u:` ids; `settlement`: the town it stands in, or `null` |
 | Buildings and underground sites | Levels and rooms |
 | Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`; `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
+| Anything in a layout | `settlement` (and in a site's layout `site`): see Conventions. A building drawn by hand (`b:<layout>:0`) used to give its own site as `settlement`; it now gives the town it stands in (or `null`), and its site as `site` |
+| Places with NPCs or plots | `npcs`, `plots`: those at the place, at anything in its layout, at their levels and rooms; for a settlement also at its sites |
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -148,7 +159,8 @@ What a feature contains:
 
 | Feature | Children |
 |---|---|
-| Settlement | Its districts and businesses |
+| Settlement | Its districts, businesses (buildings drawn in it with a trade too, as `b:<layout>:0`) and ways underground; `sites`: the sites in it (`id`, `kind`, `name`, a drawn building's `building` id, and `underground`: their ways underground) |
+| Site | Its businesses and ways underground |
 | District | Its businesses |
 | Building or underground site | Its levels, with rooms and hazards |
 | Region | Its settlements and sites |
@@ -170,8 +182,8 @@ sites with levels, and `hidden: true` for hidden features.
 
 | Parameter | Type | | |
 |---|---|---|---|
-| `kind` | string | optional | Only this kind: `river`, `range`, `city`… or `district`, `building`, `tower`, `underground`, `level`, `room`. |
-| `settlement` | string | optional | A settlement's or site's id: its districts, businesses, wall and gate towers and underground sites (sewer grates aside). |
+| `kind` | string | optional | Only this kind: `river`, `range`, `city`… or `district`, `building`, `tower`, `underground`, `site`, `level`, `room`. |
+| `settlement` | string | optional | A settlement's or site's id: its districts, businesses, wall and gate towers and underground sites (sewer grates aside). For a settlement, also the buildings drawn in it that have a trade (as businesses, `b:<layout>:0`) and every site in it (kind `site`, by the site's own id). |
 | `within` | string | optional | A building's or underground site's id: its levels (`l:`) and their rooms (`r:`). |
 
 Without `settlement` or `within` it lists every named feature: oceans, seas, rivers, ranges, settlements, sites
@@ -362,7 +374,8 @@ app as one notice. If a step fails, nothing is changed, and the error names the 
 ### `rename_feature`
 Renames anything with a name: a feature, building, district, tower, underground site, or a site's level (`l:`) or
 room (`r:`). Use `list_names` for the ids. The app shows the new names everywhere, including the level list and
-the room labels inside.
+the room labels inside. A building drawn by hand has one name, whether it is renamed by its `c:` id or its
+building id (`b:<layout>:0`).
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -530,7 +543,8 @@ tools. Ids are random (`n:k3x9q0ab`), so the app and an agent can create at the 
   else in that level's biggest room. The DM can drop them into play as a token.
 - A plot point is tied to places (`anchors`) and NPCs (`npcs`).
 - `get_feature` and `describe_location` include the NPCs and plot points there (`npcs`, `plots`). For a
-  settlement or site that includes those in its buildings, districts, towers and ways underground.
+  settlement or site that includes those in its buildings, districts, towers and ways underground, and on their
+  levels and rooms; for a settlement, also those at the sites in it (see Conventions).
 - `focus_view` and `route` take an NPC's id (where they are) or a plot's (its first place).
 - The players' window never gets NPCs, plots or notes.
 
@@ -538,7 +552,7 @@ tools. Ids are random (`n:k3x9q0ab`), so the app and an agent can create at the 
 | Parameter | Type | | |
 |---|---|---|---|
 | `query` | string | optional | Matches name, appearance, mannerisms, goals, notes, attitude. |
-| `location` | string | optional | A place id; a settlement's id also finds NPCs in its buildings and districts. |
+| `location` | string | optional | A place id. Also finds NPCs on its levels and in its rooms; a settlement's or site's id, NPCs in its buildings, districts, towers and ways underground; a settlement's, NPCs at the sites in it too. |
 | `tag` | string | optional | |
 | `stance` | string | optional | `hostile`, `unfriendly`, `neutral`, `friendly` or `allied`. |
 
@@ -687,8 +701,10 @@ Buildings and towers can be **drawn**, by the user (the app's **Build** menu) or
 and what the building is. Each one is a created site (`c:<n>`, kind `building`) with a layout of its own, so it
 gets everything a generated building has: a roof and walls on the battlemap, an interior with its rooms and
 furniture on every storey (a cellar too), its name on the map and in search. Its building id is `b:<layout>:0`
-(returned as `building`); use it with `get_feature`, `place_npc` and interiors, as for any building. Like the
-other edits, buildings are saved, logged, shown live and leave the world hash alone.
+(returned as `building`); use it with `get_feature`, `place_npc` and interiors, as for any building. One drawn in
+a settlement is listed under it: among its sites and, with a trade, its businesses (`settlement` on its ids names
+the town; see Conventions). Like the other edits, buildings are saved, logged, shown live and leave the world hash
+alone.
 
 - **Where:** on dry land, out of rivers, clear of other buildings (walls may touch), roads, streets, town
   walls and squares (market squares, quays, village greens, a site's yard). Anything else is refused with the

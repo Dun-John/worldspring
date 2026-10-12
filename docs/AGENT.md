@@ -73,9 +73,9 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 |---|---|
 | `world_overview` | Size, land masses, how many features of each kind, the largest settlements. |
 | `search_features` | Features by current name or kind, each with its extent (bounding box and area, or a river's length). From three letters it also finds districts and businesses (inns, temples, …), renamed ones by their new names. |
-| `get_feature` | Details and relations: what it is, its extent, the areas it lies in, nearest settlements, roads, districts, notable buildings, ways underground, a site's levels and rooms. |
-| `list_children` | What a feature contains: districts and businesses, levels and rooms, a region's settlements and sites. |
-| `list_names` | Everything that can be renamed, with current and generated names: named features; a settlement's districts, businesses, towers and underground sites; a building's or site's levels (`l:`) and rooms (`r:`). |
+| `get_feature` | Details and relations: what it is, its extent, the areas it lies in, nearest settlements, roads, districts, notable buildings, ways underground, a site's levels and rooms; a settlement's sites, and for anything in a layout the settlement (and site) it is in. |
+| `list_children` | What a feature contains: districts and businesses, levels and rooms, a settlement's sites (drawn businesses among its businesses), a region's settlements and sites. |
+| `list_names` | Everything that can be renamed, with current and generated names: named features; a settlement's districts, businesses, towers, underground sites and the sites in it; a building's or site's levels (`l:`) and rooms (`r:`). |
 | `describe_location` | What is at a place: elevation, biome, the areas it lies in, the building, district or site there, named features nearby (measured to their nearest edge or course). |
 | `features_near` | Everything named within a radius of a place, nearest first, with distance, direction and extent; `kinds` filters (districts and businesses too). |
 | `route` | Road or overland distance between two places, with travel days at normal, fast and slow pace. |
@@ -89,7 +89,7 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | `update_feature` | Name and notes in one go. |
 | `hide_feature` | Hide a feature from labels and search, or show it again. |
 | `delete_feature` | Remove a created site. Generated features can only be hidden. |
-| `list_npcs`, `get_npc` | The notebook's NPCs: filter by text, place (a settlement includes its buildings), tag or attitude; one in full. |
+| `list_npcs`, `get_npc` | The notebook's NPCs: filter by text, place (a settlement includes its buildings, levels and rooms, and the sites in it), tag or attitude; one in full. |
 | `create_npc`, `update_npc`, `delete_npc` | NPCs: name, appearance, mannerisms, attitude toward the players (stance and why), goals, DM notes, tags, status, portrait. |
 | `place_npc` | Put an NPC at a place (a building puts them inside, on a level, shown to the DM), at a point, or nowhere. |
 | `list_plots`, `get_plot`, `create_plot`, `update_plot`, `delete_plot` | Plot points tied to places and NPCs, with a status (idea, active, resolved). |

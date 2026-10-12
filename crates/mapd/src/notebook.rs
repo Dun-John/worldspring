@@ -55,7 +55,7 @@ pub fn list() -> Vec<Value> {
     let id = json!({ "id": { "type": "string" } });
     let ro = json!({ "readOnlyHint": true });
     vec![
-        json!({ "name": "list_npcs", "title": "NPCs", "description": "The world's NPCs (written by the DM or agents): name, attitude, status, where they are. Filter by text, place (a settlement's id also finds those in its buildings), tag or stance.", "inputSchema": schema(json!({ "query": { "type": "string" }, "location": { "type": "string" }, "tag": { "type": "string" }, "stance": { "type": "string", "enum": STANCES } }), &[]), "annotations": ro }),
+        json!({ "name": "list_npcs", "title": "NPCs", "description": "The world's NPCs (written by the DM or agents): name, attitude, status, where they are. Filter by text, place (also on its levels and in its rooms; a settlement's id also finds those in its buildings and the sites standing in it), tag or stance.", "inputSchema": schema(json!({ "query": { "type": "string" }, "location": { "type": "string" }, "tag": { "type": "string" }, "stance": { "type": "string", "enum": STANCES } }), &[]), "annotations": ro }),
         json!({ "name": "get_npc", "title": "NPC", "description": "An NPC in full: appearance, mannerisms, attitude toward the players, goals, notes, where they are and the plots they are in.", "inputSchema": schema(id.clone(), &["id"]), "annotations": ro }),
         json!({ "name": "create_npc", "title": "Create an NPC", "description": "Add an NPC, optionally placed somewhere (a building's id puts them inside it; the DM sees them there). Returns the NPC with its id.", "inputSchema": schema(with(npc_props(), place_props()), &["name"]) }),
         json!({ "name": "update_npc", "title": "Update an NPC", "description": "Change an NPC's fields (only those given).", "inputSchema": schema(with(id.clone(), npc_props()), &["id"]) }),
@@ -231,11 +231,10 @@ async fn read(app: &Shared, name: &str, a: Value) -> Result<Value, String> {
                 "get_npc" => agent::npc_json(w, t0, a["id"].as_str().unwrap_or(""), false).ok_or_else(|| "no such NPC".to_string()),
                 "get_plot" => agent::plot_json(w, t0, a["id"].as_str().unwrap_or(""), false).ok_or_else(|| "no such plot point".to_string()),
                 "list_npcs" => {
-                    // A settlement or site also holds its buildings, districts, towers and ways underground.
-                    let at = a["location"].as_str().map(|id| (id.to_string(), agent::layout_of(w, t0, id)));
-                    let inside = |l: &str| {
-                        at.as_ref().is_none_or(|(id, li)| l == id || li.is_some_and(|li| l.split(':').nth(1).and_then(|s| s.parse().ok()) == Some(li) && !l.starts_with("c:")))
-                    };
+                    // A settlement or site also holds its buildings, districts, towers and ways underground
+                    // (and their levels and rooms); a settlement, the sites in it (`agent::at_place`).
+                    let at = a["location"].as_str().map(|id| agent::at_place(w, t0, id));
+                    let inside = |l: &str| at.as_ref().is_none_or(|f| f(l));
                     let stance = a["stance"].as_str();
                     let v: Vec<Value> = e
                         .npcs

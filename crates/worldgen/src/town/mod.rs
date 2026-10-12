@@ -256,6 +256,69 @@ pub fn reach(s: &Settlement) -> f64 {
     if s.tier == Tier::Village { r * 2.2 } else { r * (OUTSKIRTS + 0.15) }
 }
 
+/// How far (ft) from its centre a place stands in a settlement: its buildings and districts, the
+/// sprawl outside the walls included. Measured over seeds 1–3 in built-up radii: villages'
+/// buildings reach 1.36; cities' and metropolises' districts 2.12 and 1.90, towns' 2.05 for 95
+/// in 100 (a few river towns' run on past their reach).
+pub fn holds_radius(s: &Settlement) -> f64 {
+    urban_radius(s.tier, s.population) * if s.tier == Tier::Village { 1.4 } else { OUTSKIRTS }
+}
+
+/// The settlement site layout `li` stands in: of those whose `holds_radius` takes in its point,
+/// the nearest for its size (then the lowest index). `None` for settlements, removed created
+/// sites and sites out of town. From T0 alone (no layout is read).
+pub fn parent_of(t0: &T0, li: usize) -> Option<usize> {
+    let p = site_point(t0, li)?;
+    best_holder(t0, p, 0..t0.settlements.len())
+}
+
+/// Every site layout in a settlement: (site layout, settlement), by layout.
+pub fn parents(t0: &T0) -> Vec<(usize, usize)> {
+    let n = t0.settlements.len();
+    let mut by_x: Vec<u32> = (0..n as u32).collect();
+    by_x.sort_by(|&a, &b| t0.settlements[a as usize].x.total_cmp(&t0.settlements[b as usize].x).then(a.cmp(&b)));
+    let widest = t0.settlements.iter().map(holds_radius).fold(0.0, f64::max);
+    let mut out = Vec::new();
+    for li in n..layout_count(t0) {
+        let Some(p) = site_point(t0, li) else { continue };
+        let from = by_x.partition_point(|&i| t0.settlements[i as usize].x < p[0] - widest);
+        let to = by_x.partition_point(|&i| t0.settlements[i as usize].x <= p[0] + widest);
+        if let Some(si) = best_holder(t0, p, by_x[from..to].iter().map(|&i| i as usize)) {
+            out.push((li, si));
+        }
+    }
+    out
+}
+
+/// The site layouts in settlement `si`, by layout.
+pub fn sites_in(t0: &T0, si: usize) -> Vec<usize> {
+    let Some(s) = t0.settlements.get(si) else { return Vec::new() };
+    let (c, r) = ([s.x, s.y], holds_radius(s));
+    let n = t0.settlements.len();
+    (n..layout_count(t0)).filter(|&li| site_point(t0, li).is_some_and(|p| dist(p, c) < r) && parent_of(t0, li) == Some(si)).collect()
+}
+
+/// A site layout's point (a created site's `x`, `y`), unless it is a settlement or removed.
+fn site_point(t0: &T0, li: usize) -> Option<P> {
+    let k = li.checked_sub(t0.settlements.len())?;
+    let p = t0.pois.get(k)?;
+    (!t0.created_site(k).is_some_and(|c| c.removed)).then_some([p.x, p.y])
+}
+
+/// Of the settlements `among`, the one holding point `p` (nearest for its size, then by index).
+fn best_holder(t0: &T0, p: P, among: impl Iterator<Item = usize>) -> Option<usize> {
+    let mut best: Option<(f64, usize)> = None;
+    for si in among {
+        let s = &t0.settlements[si];
+        let r = holds_radius(s);
+        let d = dist(p, [s.x, s.y]);
+        if d < r && best.is_none_or(|(b, bi)| (d / r, si) < (b, bi)) {
+            best = Some((d / r, si));
+        }
+    }
+    best.map(|b| b.1)
+}
+
 /// How far (ft) from its centre a settlement's pad reaches: the terrain eases from the
 /// ground its layout was planned on (all of the layout's reach) back to the land round it
 /// over a broad band, so whatever stands between them (fine detail, a river valley the
