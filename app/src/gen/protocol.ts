@@ -446,6 +446,8 @@ export type Ask =
   | { op: 'place'; id: string }
   /** What can be renamed in a layout (its index) or a building or site (its id). */
   | { op: 'names'; scope: string }
+  /** The sites standing in settlements (`agent::parents_json`). */
+  | { op: 'parents' }
   /** Where a site can be created near (x, y), and a name for it (`agent::creation_spot`). */
   | { op: 'spot'; kind: string; under?: string; id: string; x: number; y: number }
   /** Whether a building drawn by hand can stand there, its point and a name
@@ -479,6 +481,15 @@ export interface NameEntry {
   /** A building or site with levels and rooms. */
   enter?: boolean;
   hidden?: boolean;
+}
+
+/** The sites standing in settlements (`worldgen::agent::parents_json`): `[site layout, settlement]`
+ * pairs, with the counts of settlements (`n`) and of sites not created by hand (`base`) the
+ * layout indices assume. */
+export interface Parents {
+  n: number;
+  base: number;
+  pairs: [number, number][];
 }
 
 export interface PlaceInfo {
@@ -562,7 +573,9 @@ export type Hit =
       function: string;
       category: string | null;
       ward: string;
+      /** The district it stands in: its generated name and id (`d:<layout>:<i>`, for renames). */
       district: string | null;
+      district_id: string | null;
       floors: number;
       x: number;
       y: number;

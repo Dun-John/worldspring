@@ -16,7 +16,12 @@
     renames: Record<string, string>;
     searchBuildings: (q: string, rect?: Rect) => Promise<Found[]>;
     viewRect: () => Rect;
-    settlementName: (index: number) => string;
+    /** Where something in a layout is, by name: its settlement, else its site. */
+    whereName: (index: number) => string;
+    /** The settlement a site (by id) stands in, by name, if any. */
+    inTown: (id: string) => string | null;
+    /** A building drawn by hand behind a building id: its site's id (else null). */
+    drawnOf: (id: string) => string | null;
     onSelect: (s: Selection) => void;
     npcs: Record<string, Npc>;
     plots: Record<string, Plot>;
@@ -28,7 +33,7 @@
     /** Show the place a note is on. */
     onNote: (id: string) => void;
   }
-  let { overlay, renames, searchBuildings, viewRect, settlementName, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote }: Props = $props();
+  let { overlay, renames, searchBuildings, viewRect, whereName, inTown, drawnOf, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote }: Props = $props();
 
   let q = $state('');
   let open = $state(false);
@@ -88,17 +93,25 @@
       .filter(([id, n]) => has(n.text, t) || (n.tags ?? []).some((g) => has(g, t)) || has(placeName(id), t))
       .slice(0, 5);
     for (const [id, n] of noteRows) out.push({ key: `note:${id}`, group: 'Notes', icon: 'note', name: placeName(id), sub: snippet(n.text, t) || (n.tags ?? []).join(', '), pick: () => onNote(id) });
-    for (const f of searchFeatures(overlay, q, 12, local && rect ? rect : undefined))
-      out.push({ key: f.id, group: 'Places', icon: 'pin', name: renames[f.id] ?? f.name, sub: kindLabel(f.kind), pick: () => onSelect({ kind: 'feature', feature: f }) });
-    for (const b of buildings)
+    const places = new Set<string>();
+    for (const f of searchFeatures(overlay, q, 12, local && rect ? rect : undefined)) {
+      const town = inTown(f.id);
+      places.add(f.id);
+      out.push({ key: f.id, group: 'Places', icon: 'pin', name: renames[f.id] ?? f.name, sub: `${kindLabel(f.kind)}${town ? ` · in ${town}` : ''}`, pick: () => onSelect({ kind: 'feature', feature: f }) });
+    }
+    for (const b of buildings) {
+      // A building drawn by hand is its site: listed once, under Places, and hidden with it.
+      const site = b.kind === 'building' ? drawnOf(b.id) : null;
+      if (site && (places.has(site) || !overlay.features.some((f) => f.id === site))) continue;
       out.push({
         key: b.id,
         group: 'Buildings & districts',
         icon: b.kind === 'district' ? 'grid' : 'building',
         name: hitName(b, renames),
-        sub: `${b.kind === 'district' ? 'district' : b.function.toLowerCase()} · ${settlementName(b.settlement)}`,
+        sub: `${b.kind === 'district' ? 'district' : b.function.toLowerCase()} · ${whereName(b.settlement)}`,
         pick: () => onSelect(b.kind === 'district' ? { kind: 'district', hit: b } : { kind: 'building', hit: b }),
       });
+    }
     return out;
   });
   const groups = $derived([...new Set(rows.map((r) => r.group))].map((g) => ({ g, rows: rows.filter((r) => r.group === g) })));

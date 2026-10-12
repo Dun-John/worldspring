@@ -3,7 +3,7 @@
   // settlements and sites; a settlement or site opens onto its districts, businesses, towers and
   // ways underground (its layout is generated then), a building or site onto its levels and rooms.
   import type { Feature, NameEntry } from '../gen/protocol';
-  import { kindLabel, SETTLEMENT_KINDS } from './gazetteer';
+  import { kindLabel, SETTLEMENT_KINDS, SITE_KINDS } from './gazetteer';
 
   interface Props {
     /** The map's named features (created sites included). */
@@ -21,7 +21,6 @@
   }
   let { features, renames, hidden, layoutOf, list, onRename, onGo }: Props = $props();
 
-  const SITE_KINDS = ['ruin', 'tower', 'camp', 'waystation', 'cave', 'mine', 'lava_tube', 'entrance', 'building', 'castle', 'wall'];
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
     { key: 'land', label: 'Land', kinds: ['continent', 'island', 'range', 'peak', 'pass', 'volcano', 'forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'blight', 'ashlands', 'region', 'salt_flat', 'road'] },

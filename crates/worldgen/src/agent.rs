@@ -1064,6 +1064,11 @@ fn with_rename(world: &World, mut v: Value) -> Value {
     {
         v["name"] = json!(n);
     }
+    if let Some(id) = v["district_id"].as_str()
+        && let Some(n) = world.file.edits.renames.get(id)
+    {
+        v["district"] = json!(n);
+    }
     v
 }
 

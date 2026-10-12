@@ -1744,6 +1744,12 @@ fn agent_edits_guarantee() {
     assert!(!kids["sites"].as_array().unwrap().iter().any(|s| s["id"] == gone_camp.id), "a removed site is among the city's sites");
     let got = agent::get(world, t0, &city).unwrap();
     assert!(got["npcs"].as_array().unwrap().iter().any(|n| n["id"] == "n:host") && got["plots"].as_array().unwrap().iter().any(|p| p["id"] == "p:upstairs"), "the city does not show the inn's NPC and plot");
+    // Found on the map, it is in the city's district there.
+    let quarter = town::layout(world, t0, ci).quarters.iter().find(|q| q.patches.iter().any(|p| geom::contains(p, gc))).map(|q| q.name.clone());
+    let pins = serde_json::to_value(worldgen::gazetteer::in_view(world, t0, [gc[0] - 50.0, gc[1] - 50.0, gc[0] + 50.0, gc[1] + 50.0], 100)).unwrap();
+    let pin = pins.as_array().unwrap().iter().find(|h| h["id"] == ib).expect("the inn is not found on the map");
+    assert!(quarter.is_some() && pin["district"] == serde_json::json!(quarter), "the inn's district: {} (the city's there: {quarter:?})", pin["district"]);
+    assert!(pin["district_id"].as_str().is_some_and(|d| d.starts_with(&format!("d:{ci}:"))), "the inn's district id: {}", pin["district_id"]);
     let li = agent::layout_of(world, t0, &keep.id).expect("the castle's layout");
     let l = town::layout(world, t0, li);
     let fi = town::catalog::index_of("castle").unwrap() as u16;

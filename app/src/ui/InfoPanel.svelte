@@ -2,17 +2,30 @@
   // Info panel for the selected feature or building; the name renames in place. Notes are
   // edited here; the NPCs and plot points at the place open in the notebook.
   import type { Npc, Plot } from '../gen/protocol';
-  import { hitName, kindLabel, type Selection } from './gazetteer';
+  import { hitName, kindIcon, kindLabel, type Selection } from './gazetteer';
   import Icon from './Icon.svelte';
 
   type Note = { text: string; tags?: string[] };
+  type Ref = { id: string; name: string };
 
   interface Props {
     selection: Selection;
     renames: Record<string, string>;
     /** The world's notes (lore, written by the user or agents), by id. */
     notes: Record<string, { text: string; tags?: string[] }>;
+    /** A settlement's or site's name, by layout index. */
     settlementName: (index: number) => string;
+    /** Where a layout is: the settlement it is or its site stands in, and its site (a site's
+     * layout); null where there is none. */
+    whereOf: (index: number) => { town: Ref | null; site: Ref | null };
+    /** A site's settlement (for a selected map feature; null: none). */
+    parent?: Ref | null;
+    /** The selected building was drawn by hand. */
+    drawn?: boolean;
+    /** The sites standing in the selected settlement. */
+    placesHere?: { id: string; name: string; kind: string; what: string }[];
+    /** Select a place (and frame it). */
+    onShow: (id: string) => void;
     onRename: (id: string, name: string) => void;
     onFly: () => void;
     onClose: () => void;
@@ -42,11 +55,18 @@
     /** Only the name, what it is and the actions (the sheet is down to its strip). */
     peek?: boolean;
   }
-  let { selection, renames, notes, settlementName, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, docked = false, peek = false }: Props = $props();
+  let { selection, renames, notes, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onShow, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, docked = false, peek = false }: Props = $props();
   let cannot = $state(false);
   let confirmDelete = $state(false);
   /** The ⋯ menu (hide, delete). */
   let more = $state(false);
+  /** Places here: the first few, unless all were asked for. */
+  const FEW = 8;
+  let allPlaces = $state(false);
+  $effect(() => {
+    void id;
+    allPlaces = false;
+  });
 
   async function enter() {
     cannot = !(await onEnter());
@@ -67,6 +87,14 @@
         : `${selection.hit.function.toLowerCase()}${selection.hit.category ? ` · ${selection.hit.category}` : ''}`,
   );
   const mi = (ft: number) => (ft / 5280).toFixed(1);
+
+  /** Where a building is: its site (unless it is the building, drawn by hand), its district,
+   * and its settlement (a link); else (a building drawn out of town) its own name. */
+  function buildingWhere(li: number, district: string | null, districtId: string | null) {
+    const { town, site } = whereOf(li);
+    const within = [drawn ? null : site?.name, district ? ((districtId && renames[districtId]) || district) : null].filter(Boolean).join(', ');
+    return { town, within: within || (town ? '' : settlementName(li)) };
+  }
 
   function startEdit() {
     draft = name;
@@ -94,6 +122,8 @@
     else if (e.key === 'Escape') editing = false;
   }
 </script>
+
+{#snippet link(r: Ref)}<button class="link" onclick={() => onShow(r.id)} title="Show it on the map">{r.name}</button>{/snippet}
 
 <aside class="info" class:docked aria-label="Selected place">
   <div class="head">
@@ -133,20 +163,32 @@
     <div class="facts">
       {#if selection.kind === 'feature'}
         {@const f = selection.feature}
+        {#if parent}<div>in {@render link(parent)}</div>{/if}
         {#if f.detail}<div>{f.detail}</div>{/if}
         {#if f.elev_ft !== undefined}<div>Elevation {Math.round(f.elev_ft).toLocaleString()} ft</div>{/if}
         <div class="muted">{mi(f.x)} mi E, {mi(f.y)} mi S</div>
       {:else if selection.kind === 'district'}
         {@const d = selection.hit}
-        <div>in {settlementName(d.settlement)}</div>
+        {@const town = whereOf(d.settlement).town}
+        <div>in {#if town}{@render link(town)}{:else}{settlementName(d.settlement)}{/if}</div>
         <div class="muted">{mi(d.x)} mi E, {mi(d.y)} mi S</div>
       {:else}
         {@const b = selection.hit}
-        <div>{b.floors} {b.floors === 1 ? 'storey' : 'storeys'} · {b.ward} ward</div>
-        <div>in {b.district ? `${renames[b.district] ?? b.district}, ` : ''}{settlementName(b.settlement)}</div>
+        {@const w = buildingWhere(b.settlement, b.district, b.district_id)}
+        <div>{b.floors} {b.floors === 1 ? 'storey' : 'storeys'}{drawn ? '' : ` · ${b.ward} ward`}</div>
+        <div>in {w.within}{#if w.town}{w.within ? ', ' : ''}{@render link(w.town)}{/if}</div>
         <div class="muted">{mi(b.x)} mi E, {mi(b.y)} mi S</div>
       {/if}
     </div>
+    {#if placesHere.length}
+      <div class="here">
+        <span class="ws-label">Places here ({placesHere.length})</span>
+        {#each allPlaces ? placesHere : placesHere.slice(0, FEW) as p (p.id)}
+          <button class="item" onclick={() => onShow(p.id)} title="Show it on the map"><Icon name={kindIcon(p.kind)} size={14} /><b>{p.name}</b> <span class="muted">{p.what}</span></button>
+        {/each}
+        {#if !allPlaces && placesHere.length > FEW}<button class="item more" onclick={() => (allPlaces = true)}>{placesHere.length - FEW} more…</button>{/if}
+      </div>
+    {/if}
     <div class="note">
       <textarea class="ws-input" placeholder="Add a note: lore, hooks, secrets…" value={note?.text ?? ''} onchange={(e) => saveNote(e.currentTarget.value, note?.tags ?? [])} aria-label="Note"></textarea>
       {#if note?.text || note?.tags?.length}
@@ -311,5 +353,20 @@
   .item:hover,
   .item:focus-visible {
     background: var(--btn-hover);
+  }
+  .item.more {
+    color: var(--ink-2);
+    font-style: italic;
+  }
+  .link {
+    all: unset;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: var(--line);
+    text-underline-offset: 2px;
+  }
+  .link:hover,
+  .link:focus-visible {
+    text-decoration-color: currentColor;
   }
 </style>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Npc, Overlay, Placed, Plot, SpriteMeta, Stroke, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Npc, Overlay, Placed, Plot, SpriteMeta, Stroke, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { Sketcher, drawsLand, scaleStrokes, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
@@ -54,7 +54,7 @@
   import PlayPanel from './play/PlayPanel.svelte';
   import { describe, tidy, type Step } from './sync/history';
   import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, shiftLevels, type EditOp } from './sync/ops';
-  import { breadcrumbs, frameSize, hitName, settlementAt, SETTLEMENT_KINDS, zoomFor, type BuildingHit, type Crumb, type Selection } from './ui/gazetteer';
+  import { breadcrumbs, frameSize, hitName, kindLabel, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, zoomFor, type BuildingHit, type Crumb, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, PINNED } from './world/versions';
   import VersionAsk, { type VersionChoice } from './ui/shell/VersionAsk.svelte';
@@ -140,7 +140,31 @@
   const plots = $derived(edits.plots ?? {});
   const settlements = $derived(overlay ? overlay.features.filter((f) => SETTLEMENT_KINDS.includes(f.kind)) : []);
   // Layout indices: settlements, then points of interest (same order as T0), then created sites.
-  const sites = $derived(overlay ? overlay.features.filter((f) => ['ruin', 'tower', 'waystation', 'camp', 'cave', 'mine', 'lava_tube'].includes(f.kind) && !f.id.startsWith('c:')) : []);
+  const sites = $derived(overlay ? overlay.features.filter((f) => SITE_KINDS.includes(f.kind) && !f.id.startsWith('c:')) : []);
+  const featureById = $derived(new Map((overlay?.features ?? []).map((f) => [f.id, f])));
+  // The settlement each site stands in (site layout → settlement layout), worked out by the
+  // generator from T0, for the overlay it was asked about: a new overlay (sites created, moved or
+  // deleted, or another world) has none until its own answer comes, so indices never go stale.
+  let parentsFor = $state.raw<{ overlay: Overlay; of: Map<number, number> } | null>(null);
+  const parentOf = $derived(parentsFor && parentsFor.overlay === overlay ? parentsFor.of : new Map<number, number>());
+  /** The sites in each settlement (layout indices, ascending). */
+  const sitesOf = $derived.by(() => {
+    const m = new Map<number, number[]>();
+    for (const [li, si] of parentOf) m.set(si, [...(m.get(si) ?? []), li]);
+    return m;
+  });
+  $effect(() => {
+    const o = overlay;
+    if (!o) return;
+    const [n, base] = [settlements.length, sites.length];
+    void view.gen.parents().then((p) => {
+      if (overlay !== o || !p) return;
+      // (Counted differently, the indices would name the wrong places: none is better.)
+      const agree = p.n === n && p.base === base;
+      if (!agree) console.warn(`[places] the generator counts ${p.n} settlements and ${p.base} sites, the map ${n} and ${base}: sites are not listed under settlements`);
+      parentsFor = { overlay: o, of: new Map(agree ? p.pairs : []) };
+    });
+  });
   // Search and breadcrumbs leave hidden features out (a new object per edit: names change in place).
   const shown = $derived.by<Overlay | null>(() => {
     const hidden = new Set(edits.hidden ?? []);
@@ -1805,11 +1829,82 @@
     return c >= 0 ? n + sites.length + c : -1;
   }
 
-  function atPlace(id: string): (at: string | undefined) => boolean {
-    const li = layoutIndexOf(id);
-    const inLayout = li >= 0 ? new RegExp(`^[bdtukw]:${li}:`) : null;
-    return (at) => !!at && (at === id || !!inLayout?.test(at));
+  /** The feature of a settlement's or site's layout index (null if none, or deleted). */
+  function layoutFeature(li: number): Feature | null {
+    const n = settlements.length;
+    if (li < 0) return null;
+    if (li < n) return settlements[li];
+    if (li < n + sites.length) return sites[li - n];
+    const c = edits.created?.[li - n - sites.length];
+    return (c && featureById.get(c.id)) ?? null;
   }
+
+  /** A layout's place as `{id, name}` (as renamed), or null. */
+  function layoutRef(li: number): { id: string; name: string } | null {
+    const f = layoutFeature(li);
+    return f && { id: f.id, name: renames[f.id] ?? f.name };
+  }
+
+  /** The settlement a layout is, or the one its site stands in (layout index), else -1. */
+  function townOf(li: number): number {
+    return li < settlements.length ? li : (parentOf.get(li) ?? -1);
+  }
+
+  /** Where something in a layout is, by name: the settlement it is or stands in, else its site. */
+  function whereName(li: number): string {
+    const t = townOf(li);
+    return settlementName(t >= 0 ? t : li);
+  }
+
+  /** The settlement a site (by id) stands in, by name; null for anything else. */
+  function inTown(id: string): string | null {
+    const li = layoutIndexOf(id);
+    return li >= settlements.length ? (layoutRef(townOf(li))?.name ?? null) : null;
+  }
+
+  /** What a site is, in a few words (a building drawn by hand: what it is for). */
+  function siteWhat(f: Feature): string {
+    const func = f.kind === 'building' ? edits.created?.find((c) => c.id === f.id)?.func : undefined;
+    return func ? func.replace(/_/g, ' ') : kindLabel(f.kind);
+  }
+
+  /** Whether an NPC's location or a plot's anchor is at place `id` (as `worldgen::agent::at_place`):
+   * the place itself, or a level or room of it (a room of a level too); for a settlement's or site's
+   * id, anything in its layout (`b d t u k w:<layout>:` ids, their levels and rooms); for a
+   * settlement, the same for each site in it, the sites' own ids included. */
+  function atPlace(id: string): (at: string | undefined) => boolean {
+    const ids = new Set([id]);
+    const layouts = new Set<number>();
+    const li = layoutIndexOf(id);
+    if (li >= 0) {
+      layouts.add(li);
+      for (const c of li < settlements.length ? (sitesOf.get(li) ?? []) : []) {
+        layouts.add(c);
+        const f = layoutFeature(c);
+        if (f) ids.add(f.id);
+      }
+    }
+    return (a) => {
+      if (!a) return false;
+      const room = /^r:(.+):(\d+):\d+$/.exec(a) ?? /^l:(.+):(\d+)$/.exec(a);
+      const at = room ? room[1] : a;
+      if (ids.has(a) || ids.has(at) || (room && a.startsWith('r:') && ids.has(`l:${room[1]}:${room[2]}`))) return true;
+      const m = /^[bdtukw]:(\d+)(?::|$)/.exec(at);
+      return !!m && layouts.has(Number(m[1]));
+    };
+  }
+
+  /** The sites standing in the selected settlement (not those hidden), for its card. */
+  const placesHere = $derived.by(() => {
+    if (selection?.kind !== 'feature') return [];
+    const li = layoutIndexOf(selection.feature.id);
+    if (li < 0 || li >= settlements.length) return [];
+    const hidden = new Set(edits.hidden ?? []);
+    return (sitesOf.get(li) ?? [])
+      .map(layoutFeature)
+      .filter((f): f is Feature => !!f && !hidden.has(f.id))
+      .map((f) => ({ id: f.id, name: renames[f.id] ?? f.name, kind: f.kind, what: siteWhat(f) }));
+  });
 
   const selectedId = $derived(selection ? (selection.kind === 'feature' ? selection.feature.id : selection.hit.id) : null);
   const npcsHere = $derived.by<[string, Npc][]>(() => {
@@ -2317,7 +2412,9 @@
           {renames}
           searchBuildings={(q, rect) => view.gen.searchBuildings(q, rect)}
           viewRect={() => view.cam.viewRect()}
-          {settlementName}
+          {whereName}
+          {inTown}
+          drawnOf={(id) => drawnBuilding(id)?.id ?? null}
           onSelect={select}
           {npcs}
           {plots}
@@ -2608,6 +2705,11 @@
       {renames}
       {notes}
       {settlementName}
+      whereOf={(li) => ({ town: layoutRef(townOf(li)), site: li >= settlements.length ? layoutRef(li) : null })}
+      parent={sel.kind === 'feature' && layoutIndexOf(sel.feature.id) >= settlements.length ? layoutRef(townOf(layoutIndexOf(sel.feature.id))) : null}
+      drawn={sel.kind === 'building' && !!drawnBuilding(sel.hit.id)}
+      {placesHere}
+      onShow={(id) => void showPlace(id)}
       onRename={rename}
       onNote={setNote}
       {npcsHere}

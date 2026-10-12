@@ -1,5 +1,6 @@
 // Gazetteer helpers for the UI: feature search, framing zooms, breadcrumbs, names with edits.
 import type { Feature, Hit, Overlay } from '../gen/protocol';
+import type { IconName } from './icons';
 
 export type BuildingHit = Extract<Hit, { kind: 'building' }>;
 export type DistrictHit = Extract<Hit, { kind: 'district' }>;
@@ -7,6 +8,10 @@ export type DistrictHit = Extract<Hit, { kind: 'district' }>;
 export type Selection = { kind: 'feature'; feature: Feature } | { kind: 'building'; hit: BuildingHit } | { kind: 'district'; hit: DistrictHit };
 
 export const SETTLEMENT_KINDS = ['metropolis', 'city', 'town', 'village'];
+/** Kinds of sites (`worldgen::agent::SITE_KINDS`): those not created by hand are the points of
+ * interest, whose order gives their layout indices after the settlements'. The last three are
+ * only ever created. */
+export const SITE_KINDS = ['ruin', 'tower', 'camp', 'waystation', 'cave', 'mine', 'lava_tube', 'entrance', 'building', 'castle', 'wall'];
 const REGION_KINDS = ['range', 'forest', 'jungle', 'taiga', 'desert', 'swamp', 'plains', 'tundra', 'glacier', 'blight', 'ashlands', 'region', 'volcano'];
 
 const KIND_LABEL: Record<string, string> = {
@@ -21,6 +26,25 @@ const KIND_LABEL: Record<string, string> = {
 
 export function kindLabel(kind: string): string {
   return KIND_LABEL[kind] ?? kind.replace(/_/g, ' ');
+}
+
+const KIND_ICON: Record<string, IconName> = {
+  ruin: 'ruin',
+  tower: 'tower',
+  camp: 'tent',
+  waystation: 'mug',
+  cave: 'cave',
+  mine: 'pick',
+  lava_tube: 'flame',
+  entrance: 'stairs',
+  building: 'building',
+  castle: 'castle',
+  wall: 'wall',
+};
+
+/** A site's icon (as on the Places tab). */
+export function kindIcon(kind: string): IconName {
+  return KIND_ICON[kind] ?? 'pin';
 }
 
 /** Built-up radius (ft), as `worldgen::town::urban_radius`. */

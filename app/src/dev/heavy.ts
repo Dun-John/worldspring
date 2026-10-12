@@ -14,7 +14,7 @@ import type { MapView } from '../render/MapView';
 import type { Created, Edits, Npc, Placed, Plot, SiteDesign, TownRequest } from '../gen/protocol';
 import { putAsset } from '../world/assets';
 import { tx } from '../world/library';
-import { SETTLEMENT_KINDS } from '../ui/gazetteer';
+import { SETTLEMENT_KINDS, SITE_KINDS } from '../ui/gazetteer';
 
 /** How much the heavy world holds. */
 const HEAVY = { designs: 50, objects: 20000, clears: 2000, sprites: 40, npcs: 2000, plots: 500, notes: 2000, renames: 1000, created: 30, buildings: 400, buildingDesigns: 30, castles: 3, walls: 3, towns: 6 };
@@ -189,7 +189,7 @@ function focus(view: MapView): [number, number] {
 async function designable(view: MapView, n: number): Promise<string[]> {
   const features = view.overlay?.features ?? [];
   const towns = features.filter((f) => SETTLEMENT_KINDS.includes(f.kind)).length;
-  const pois = features.filter((f) => ['ruin', 'tower', 'waystation', 'camp', 'cave', 'mine', 'lava_tube'].includes(f.kind) && !f.id.startsWith('c:'));
+  const pois = features.filter((f) => SITE_KINDS.includes(f.kind) && !f.id.startsWith('c:'));
   const out: string[] = [];
   for (let j = 0; j < pois.length && out.length < n; j++) {
     if (!['ruin', 'cave', 'mine', 'lava_tube'].includes(pois[j].kind)) continue;

@@ -8,6 +8,7 @@ import type { MapView } from '../render/MapView';
 import type { Edits, Placed, Stroke, WorldFile } from '../gen/protocol';
 import { GenClient } from '../gen/client';
 import { putAsset } from '../world/assets';
+import { SITE_KINDS } from '../ui/gazetteer';
 
 export interface BenchResult {
   /** The world's continent as the app generated it (ms; the gate is 15 s). */
@@ -344,7 +345,7 @@ export async function runDungeonBench(view: MapView): Promise<BenchResult> {
   await waitReady(view, 4000);
   const features = view.overlay!.features;
   const towns = features.filter((f) => ['metropolis', 'city', 'town', 'village'].includes(f.kind)).length;
-  const sites = features.filter((f) => ['ruin', 'tower', 'waystation', 'camp', 'cave', 'mine', 'lava_tube'].includes(f.kind) && !f.id.startsWith('c:'));
+  const sites = features.filter((f) => SITE_KINDS.includes(f.kind) && !f.id.startsWith('c:'));
   let best: { id: string; squares: number } | null = null;
   for (let k = 0; k < sites.length; k++) {
     if (sites[k].kind !== 'ruin') continue;

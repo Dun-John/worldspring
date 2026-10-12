@@ -5,6 +5,8 @@
 //! Building ids are `b:<settlement>:<building>`, district ids `d:<settlement>:<district>`,
 //! underground sites `u:<layout>:<entrance>`: stable for an unchanged world file.
 
+use std::rc::Rc;
+
 use serde::Serialize;
 
 use crate::World;
@@ -21,8 +23,10 @@ pub enum Hit {
         function: &'static str,
         category: Option<&'static str>,
         ward: &'static str,
-        /// The named district it stands in.
+        /// The named district it stands in (its generated name), and its id (`d:<layout>:<i>`,
+        /// for its rename).
         district: Option<String>,
+        district_id: Option<String>,
         floors: u8,
         /// Footprint centre (ft).
         x: f64,
@@ -48,9 +52,10 @@ pub enum Hit {
     },
 }
 
-fn building_hit(l: &town::Layout, b: &town::Building) -> Hit {
+fn building_hit(t0: &T0, layouts: &[Rc<town::Layout>], l: &town::Layout, b: &town::Building) -> Hit {
     let c = geom::centroid(&b.poly);
     let size = b.poly.iter().map(|p| geom::dist(*p, c)).fold(0.0, f64::max) * 2.0;
+    let (district_id, district) = district_at(t0, layouts, l, c).unzip();
     Hit::Building {
         id: format!("b:{}:{}", l.index, b.id),
         settlement: l.index,
@@ -58,7 +63,8 @@ fn building_hit(l: &town::Layout, b: &town::Building) -> Hit {
         function: b.label(),
         category: b.func.map(|f| CATALOG[f as usize].category),
         ward: b.ward.name(),
-        district: quarter_at(l, c).map(|qi| l.quarters[qi].name.clone()),
+        district,
+        district_id,
         floors: b.floors,
         x: c[0],
         y: c[1],
@@ -68,6 +74,19 @@ fn building_hit(l: &town::Layout, b: &town::Building) -> Hit {
 
 fn quarter_at(l: &town::Layout, p: [f64; 2]) -> Option<usize> {
     l.quarters.iter().position(|q| q.patches.iter().any(|poly| geom::contains(poly, p)))
+}
+
+/// The named district a point of layout `l` lies in (its id and generated name): the layout's own,
+/// else (a site standing in a settlement, `town::parent_of`) the settlement's, when its layout is
+/// among `layouts` (a town reaches past where it holds sites, so those near a point or in an area
+/// have it).
+fn district_at(t0: &T0, layouts: &[Rc<town::Layout>], l: &town::Layout, p: [f64; 2]) -> Option<(String, String)> {
+    let named = |t: &town::Layout, qi: usize| (format!("d:{}:{qi}", t.index), t.quarters[qi].name.clone());
+    quarter_at(l, p).map(|qi| named(l, qi)).or_else(|| {
+        let si = town::parent_of(t0, l.index as usize)?;
+        let tl = layouts.iter().find(|t| t.index as usize == si)?;
+        quarter_at(tl, p).map(|qi| named(tl, qi))
+    })
 }
 
 fn district_hit(l: &town::Layout, qi: usize) -> Hit {
@@ -110,6 +129,7 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
                     category: Some("underground"),
                     ward: "underground",
                     district: None,
+                    district_id: None,
                     floors: 0,
                     x: e.at[0],
                     y: e.at[1],
@@ -121,7 +141,7 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
     for l in &layouts {
         for b in &l.buildings {
             if geom::contains(&b.poly, [x, y]) {
-                return Some(building_hit(l, b));
+                return Some(building_hit(t0, &layouts, l, b));
             }
         }
     }
@@ -129,6 +149,7 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
     for l in &layouts {
         for (k, (at, r, gate)) in crate::interior::towers(l).into_iter().enumerate() {
             if geom::dist(at, [x, y]) <= r {
+                let (district_id, district) = district_at(t0, &layouts, l, at).unzip();
                 return Some(Hit::Building {
                     id: format!("t:{}:{}", l.index, k),
                     settlement: l.index,
@@ -136,7 +157,8 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
                     function: if gate { "Gate tower" } else { "Wall tower" },
                     category: Some("fortification"),
                     ward: "wall",
-                    district: quarter_at(l, at).map(|qi| l.quarters[qi].name.clone()),
+                    district,
+                    district_id,
                     floors: 3,
                     x: at[0],
                     y: at[1],
@@ -182,7 +204,7 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
     let mut districts = Vec::new();
     let mut by_name = Vec::new();
     let mut by_function = Vec::new();
-    let layouts: Vec<std::rc::Rc<town::Layout>> = match rect {
+    let layouts: Vec<Rc<town::Layout>> = match rect {
         Some(r) => town::layouts_near(world, t0, r),
         None => (0..town::layout_count(t0)).map(|i| town::layout(world, t0, i)).collect(),
     };
@@ -194,12 +216,12 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
         }
         Some(edits.renames.get(id).map(String::as_str).or(generated).map(str::to_lowercase))
     };
-    for l in layouts {
+    for l in &layouts {
         for qi in 0..l.quarters.len() {
             let at = l.quarters[qi].label[l.quarters[qi].label.len() / 2];
             let name = current(&format!("d:{}:{qi}", l.index), Some(&l.quarters[qi].name)).flatten();
             if name.is_some_and(|n| n.contains(&q)) && districts.len() < limit && inside(at[0], at[1]) {
-                districts.push(district_hit(&l, qi));
+                districts.push(district_hit(l, qi));
             }
         }
         for b in &l.buildings {
@@ -214,9 +236,9 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
             }
             let Some(name) = current(&id, b.name.as_deref()) else { continue };
             if name.is_some_and(|n| n.contains(&q)) {
-                by_name.push(building_hit(&l, b));
+                by_name.push(building_hit(t0, &layouts, l, b));
             } else if b.func.is_some() && b.label().to_lowercase().contains(&q) && by_function.len() < limit {
-                by_function.push(building_hit(&l, b));
+                by_function.push(building_hit(t0, &layouts, l, b));
             }
         }
     }
@@ -258,16 +280,17 @@ pub fn search_json(world: &World, t0: &T0, q: &str, rect: Option<[f64; 4]>) -> S
 pub fn in_view(world: &World, t0: &T0, rect: [f64; 4], limit: usize) -> Vec<Hit> {
     let inside = |p: [f64; 2]| p[0] >= rect[0] && p[0] <= rect[2] && p[1] >= rect[1] && p[1] <= rect[3];
     let (mut districts, mut shops) = (Vec::new(), Vec::new());
-    for l in town::layouts_near(world, t0, rect) {
+    let layouts = town::layouts_near(world, t0, rect);
+    for l in &layouts {
         for qi in 0..l.quarters.len() {
             let q = &l.quarters[qi];
             if inside(q.label[q.label.len() / 2]) {
-                districts.push(district_hit(&l, qi));
+                districts.push(district_hit(l, qi));
             }
         }
         for b in &l.buildings {
             if b.func.is_some() && inside(geom::centroid(&b.poly)) && shops.len() < limit {
-                shops.push(building_hit(&l, b));
+                shops.push(building_hit(t0, &layouts, l, b));
             }
         }
     }

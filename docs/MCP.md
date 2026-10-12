@@ -200,7 +200,8 @@ and created sites.
 What is at a point:
 - elevation and biome;
 - `in`: the areas it lies in, largest first (continent or island, sea, range, forest, lake…);
-- the building, district or site there;
+- the building, district or site there (a building's `district` is its name as renamed, `district_id` its id; a
+  building of a site standing in a settlement, such as one drawn by hand, has the settlement's district there);
 - `nearby`: named features within a tenth of their size (2 to 10 miles), nearest first, measured to their nearest
   edge or course, with `distance_mi` and `direction`;
 - the nearest settlements.

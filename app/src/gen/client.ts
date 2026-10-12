@@ -4,7 +4,7 @@ import { EDIT_FIELDS } from '../sync/ops';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -99,6 +99,11 @@ export class GenClient {
    * generator could not answer. */
   names(scope: number | string): Promise<NameEntry[] | null> {
     return this.ask({ op: 'names', scope: String(scope) }).then((j) => JSON.parse(j) as NameEntry[] | null);
+  }
+
+  /** The sites standing in settlements, as layout indices; null if the generator could not answer. */
+  parents(): Promise<Parents | null> {
+    return this.ask({ op: 'parents' }).then((j) => JSON.parse(j) as Parents | null);
   }
 
   /** Where a site of `kind` can be created near (x, y), and a name for it; null if the
