@@ -10,7 +10,7 @@ import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
 import { drawFurniture, drawUnderProp, ORIENTED, UNDER_DRAWN, VARIED } from './furniture';
 import { ITEM_PX, ItemAtlas } from './itemAtlas';
-import type { ThumbTile } from './thumbs';
+import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
 import { noiseSource } from './noise';
@@ -35,6 +35,12 @@ const SHARED: Record<string, string> = {
   cage: 'cage', rack: 'rack', weapon_rack: 'weapon_rack', cot: 'cot', sarcophagus: 'sarcophagus', winch: 'winch', trapdoor: 'trapdoor',
   bookshelf: 'bookcase',
 };
+/** The kind a building's furniture or an underground prop is drawn as with the furniture's drawing
+ * (in a building: everything but the indoor props, drawn as underground); none for the rest. */
+export function sharedKind(kind: string, underground: boolean): string | undefined {
+  if (underground) return SHARED[kind];
+  return VARIED.has(kind) || !UNDER_DRAWN.has(kind) ? kind : undefined;
+}
 /** Props scattered differently per placement: one of four variants, picked by position. */
 export const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
 const INK = 0x1d1a14;
@@ -811,6 +817,15 @@ export class InteriorLayer {
     return tiles;
   }
 
+  /** The pickers' sheet of these pieces (keyed by kind), made once per renderer in idle time; null
+   * before any inside has been drawn. */
+  static sheet(underground: boolean, items: { kind: string; w: number; h: number }[]): Promise<ThumbSheet> | null {
+    const r = InteriorLayer.renderer;
+    if (!r) return null;
+    const key = `${underground ? 'u' : 'b'}:${items.map((i) => `${i.kind}:${i.w}x${i.h}`).join('|')}`;
+    return sheetFor(r, key, () => thumbSheet(r, InteriorLayer.thumbs(underground, items)));
+  }
+
   /** What an item is called (an uploaded picture by its own name). */
   itemName(f: InteriorItem): string {
     return (f.sprite && this.interior.sprites?.[f.sprite - 1]?.name) || f.name;
@@ -845,8 +860,7 @@ export class InteriorLayer {
   /** The kind a building's furniture or an underground prop is drawn as with the furniture's
    * drawing (in a building: everything but the indoor props, drawn as underground). */
   private sharedKind(kind: string): string | undefined {
-    if (this.underground) return SHARED[kind];
-    return VARIED.has(kind) || !UNDER_DRAWN.has(kind) ? kind : undefined;
+    return sharedKind(kind, this.underground);
   }
 
   /** The wall a prop hangs on: underground the rock beside it; in a building a wall or the

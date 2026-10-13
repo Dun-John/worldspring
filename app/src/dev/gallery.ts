@@ -6,9 +6,10 @@
 // things look turned by hand instead: battlemap props that may turn (`TURNABLE`, and the other candidates) at four
 // turns on grass with their shadows, and furniture and props with a back at each of their four sides.
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
-import init, { battlemap_catalog_json } from '../gen/pkg/worldgen_wasm.js';
+import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { KindInfo } from '../gen/client';
-import type { Interior, InteriorItem } from '../gen/protocol';
+import type { Interior, InteriorItem, UnderCatalog } from '../gen/protocol';
+import { BATTLE_GROUPS, ITEM_GROUPS } from '../editor/itemGroups';
 import { buildAtlas, PX, VARIANTS } from '../render/atlas';
 import { drawnTurned, TURNABLE } from '../render/BattlemapLayer';
 import { ORIENTED } from '../render/furniture';
@@ -79,6 +80,12 @@ export async function runGallery(target: HTMLElement) {
   target.style.cssText = 'position:static;height:auto';
   await init();
   const catalog = JSON.parse(battlemap_catalog_json()) as KindInfo[];
+  // Kinds the item pickers have no group for (they show under "Other"): give them one in itemGroups.ts.
+  const under = JSON.parse(under_catalog_json()) as UnderCatalog;
+  const inside = [...under.props, ...under.building.furniture, ...under.building.props].map((p) => p.kind).filter((k) => !ITEM_GROUPS[k]);
+  const grouped = new Set(BATTLE_GROUPS.flatMap(([, kinds]) => kinds));
+  const outside = catalog.filter((k) => !grouped.has(k.id)).map((k) => k.name);
+  if (inside.length || outside.length) console.warn('[gallery] in no picker group:', [...new Set(inside), ...outside].join(', '));
   const app = new Application();
   const width = Math.max(1200, window.innerWidth - 20);
   await app.init({ width, height: 400, background: 0xefe6d2, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });

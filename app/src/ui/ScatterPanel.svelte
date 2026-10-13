@@ -1,13 +1,17 @@
 <script lang="ts">
   // Edit › Objects: put battlemap objects down (a stamp, or a brush scattering the chosen
-  // kinds), take them away (click or brush), and upload pictures as new kinds of object with
-  // their tactical rules. The tool works on the map while the tab is open.
+  // kinds, chosen in the item picker), take them away (click or brush), and upload pictures as
+  // new kinds of object with their tactical rules. The tool works on the map while the tab is open.
   import type { KindInfo } from '../gen/client';
   import type { SpriteMeta } from '../gen/protocol';
+  import { BATTLE_GROUPS } from '../editor/itemGroups';
   import type { ScatterMode, ScatterSettings } from '../editor/scatter';
+  import { drawnTurned } from '../render/BattlemapLayer';
+  import type { ThumbSheet } from '../render/thumbs';
   import { MAX_PICTURE_BYTES } from '../world/assets';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
+  import ItemPicker, { type PickItem } from './ItemPicker.svelte';
   import { remember, remembered } from './shell/layout.svelte';
 
   interface Props {
@@ -16,8 +20,8 @@
     sprites: Record<string, SpriteMeta>;
     /** How many of each uploaded sprite are put down. */
     placed: Record<string, number>;
-    /** A built-in kind's picture (data URL). */
-    icon: (kind: number) => Promise<string | null>;
+    /** The built-in kinds' pictures, one sheet keyed by kind id. */
+    thumbs: () => Promise<ThumbSheet> | null | undefined;
     /** An uploaded sprite's picture (object URL). */
     picture: (asset: string) => Promise<string | null>;
     /** Only the modes and the chosen kinds (the panel is folded down). */
@@ -27,16 +31,8 @@
     onSprite: (asset: string, meta: SpriteMeta | null) => void;
   }
 
-  let { settings = $bindable(), catalog, sprites, placed, icon, picture, peek = false, onUpload, onSprite }: Props = $props();
+  let { settings = $bindable(), catalog, sprites, placed, thumbs, picture, peek = false, onUpload, onSprite }: Props = $props();
 
-  const GROUPS: [string, number[]][] = [
-    ['Trees', [1, 2, 3, 4, 5, 6, 7]],
-    ['Plants', [8, 9, 10, 11, 15, 16, 17, 18, 19]],
-    ['Rocks', [12, 13, 14, 20, 21, 22, 23, 24]],
-    ['Hazards', [25, 26, 27, 28, 29, 30, 31, 32]],
-    ['Props', [33, 34, 35, 36, 37, 38, 39, 40, 41]],
-    ['Camp', [42, 43, 44, 45]],
-  ];
   const MODES: [ScatterMode, string, IconName, string, string][] = [
     ['stamp', 'Stamp', 'stamp', 'Q', 'Click on the battlemap to put the chosen object down.'],
     ['brush', 'Brush', 'brush', 'W', 'Drag on the battlemap to scatter the chosen kinds (choose several).'],
@@ -47,16 +43,34 @@
   const nameOf = (k: number | string) => (typeof k === 'string' ? (sprites[k.slice(2)]?.name ?? 'Your sprite') : cap(catalog[k - 1]?.name ?? `kind ${k}`));
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-  // The palette: one group (or all, or your sprites), and a name to look for.
-  let group = $state('All');
-  let find = $state('');
-  const needle = $derived(find.trim().toLowerCase());
-  const shown = $derived(
-    GROUPS.filter(([g]) => group === 'All' || group === g)
-      .flatMap(([, kinds]) => kinds)
-      .filter((k) => k <= catalog.length && (!needle || nameOf(k).toLowerCase().includes(needle))),
-  );
-  const ownShown = $derived(Object.entries(sprites).filter(([, m]) => (group === 'All' || group === 'Yours') && (!needle || m.name.toLowerCase().includes(needle))));
+  const SHORT_COVER = ['', '½ cover', '¾ cover', 'full cover'];
+  const squares = (n: number) => `${n} square${n === 1 ? '' : 's'}`;
+  const rules = (r: { blocks_move: boolean; blocks_sight: boolean; cover: number; difficult: boolean; height_ft: number }) =>
+    [r.blocks_move ? 'blocks movement' : '', r.blocks_sight ? 'blocks sight' : '', SHORT_COVER[r.cover] ?? '', r.difficult ? 'difficult terrain' : '', `${+r.height_ft.toFixed(1)} ft`].filter(Boolean).join(' · ');
+  const groupOf = new Map(BATTLE_GROUPS.flatMap(([g, kinds]) => kinds.map((k) => [k, g] as const)));
+  // The picker's items: the built-in kinds (by group), then your sprites.
+  const items = $derived<PickItem[]>([
+    ...catalog.map((k): PickItem => ({
+      id: k.id,
+      name: cap(k.name),
+      group: groupOf.get(k.id) ?? 'Other',
+      thumb: String(k.id),
+      size: `about ${squares(Math.max(0.5, Math.round(k.radius * 4) / 2))}`,
+      rules: rules(k),
+      note: `4 looks · ${drawnTurned(k, true) ? 'can be turned' : 'same any way round'}`,
+      hazard: k.hazard?.effect ?? null,
+    })),
+    ...Object.entries(sprites).map(([asset, m]): PickItem => ({
+      id: `s:${asset}`,
+      name: m.name,
+      group: 'Yours',
+      asset,
+      size: squares(m.size),
+      rules: rules(m),
+      note: 'Your picture · can be turned',
+      title: `${m.name} (${placed[asset] ?? 0} put down)`,
+    })),
+  ]);
 
   function choose(kind: number | string) {
     // A stamp puts down one kind; a brush or eraser takes several (a click adds or drops one).
@@ -131,14 +145,6 @@
     onSprite(asset, null);
   }
 </script>
-
-{#snippet thumb(kind: number | string)}
-  {#if typeof kind === 'string'}
-    {#await picture(kind.slice(2)) then src}{#if src}<img {src} alt="" />{/if}{/await}
-  {:else}
-    {#await icon(kind) then src}{#if src}<img {src} alt="" />{/if}{/await}
-  {/if}
-{/snippet}
 
 {#if form && !peek}
   <div class="scatter">
@@ -220,37 +226,20 @@
         </div>
       </details>
 
-      <div class="filters">
-        {#each ['All', ...GROUPS.map(([g]) => g), 'Yours'] as g (g)}
-          <button class="ws-chip" class:on={group === g} onclick={() => (group = g)}>{g}</button>
-        {/each}
-      </div>
-      <input class="ws-input" type="search" placeholder="Find an object…" bind:value={find} aria-label="Find an object" />
-      <div class="kinds">
-        {#if group !== 'Yours'}
-          {#each shown as k (k)}
-            <button class="kind" class:on={settings.kinds.includes(k)} aria-pressed={settings.kinds.includes(k)} title={nameOf(k)} onclick={() => choose(k)}>
-              {@render thumb(k)}
-              <span>{nameOf(k)}</span>
-            </button>
-          {/each}
-        {/if}
-        {#each ownShown as [asset, m] (asset)}
-          {@const k = `s:${asset}`}
-          <span class="own">
-            <button class="kind" class:on={settings.kinds.includes(k)} aria-pressed={settings.kinds.includes(k)} title={`${m.name} (${placed[asset] ?? 0} put down)`} onclick={() => choose(k)}>
-              {@render thumb(k)}
-              <span>{m.name}</span>
-            </button>
-            <button class="tiny" title="Change its rules" aria-label="Change {m.name}" onclick={() => edit(asset)}><Icon name="pencil" size={12} /></button>
-            <button class="tiny" class:warn={removing === asset} title={removing === asset ? `Click again to remove it and the ${placed[asset]} put down` : 'Remove it'} aria-label="Remove {m.name}" onclick={() => remove(asset)}><Icon name="x" size={12} /></button>
-          </span>
-        {/each}
-        {#if group === 'All' || group === 'Yours'}
-          <button class="kind upload" onclick={() => input?.click()} title="Upload a picture as a new kind of object"><Icon name="upload" size={24} /><span>Upload…</span></button>
-        {/if}
-        <input bind:this={input} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden onchange={picked} />
-      </div>
+      <ItemPicker
+        {items}
+        groups={[...BATTLE_GROUPS.map(([g]) => g), 'Other']}
+        chosen={settings.kinds}
+        context="scatter"
+        {thumbs}
+        {picture}
+        onPick={choose}
+        onUpload={() => input?.click()}
+        onEditOwn={edit}
+        onRemoveOwn={remove}
+        {removing}
+      />
+      <input bind:this={input} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden onchange={picked} />
       {#if error}<div class="error">{error}</div>{/if}
     {/if}
   </div>
@@ -275,8 +264,7 @@
     align-self: flex-start;
     padding-left: 2px;
   }
-  .chosen,
-  .filters {
+  .chosen {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
@@ -315,75 +303,6 @@
   .deg {
     width: 64px;
   }
-  .kinds {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
-    gap: 4px;
-  }
-  .kind {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 100%;
-    min-height: 66px;
-    padding: 3px 2px;
-    background: #efe6cf;
-    border: 1px solid #b3a385;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font: 11px/1.15 var(--font);
-    color: var(--ink);
-  }
-  .kind:hover {
-    background: var(--btn-hover);
-  }
-  .kind.on {
-    border-color: var(--line);
-    background: #d9c79c;
-    box-shadow: inset 0 0 0 1px var(--line);
-  }
-  .kind :global(img) {
-    width: 38px;
-    height: 38px;
-    object-fit: contain;
-  }
-  .kind span {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .upload {
-    justify-content: center;
-    gap: 4px;
-    border-style: dashed;
-    color: var(--ink-2);
-  }
-  .own {
-    position: relative;
-    display: flex;
-  }
-  .own .tiny {
-    position: absolute;
-    top: 2px;
-    display: inline-flex;
-    padding: 2px;
-    background: var(--btn);
-    border: 1px solid var(--line-soft);
-    border-radius: 3px;
-    cursor: pointer;
-    color: var(--ink);
-  }
-  .own .tiny:first-of-type {
-    left: 2px;
-  }
-  .own .tiny:last-of-type {
-    right: 2px;
-  }
-  .tiny.warn {
-    background: #a33a2a;
-    color: #fff;
-  }
   .formhead {
     display: flex;
     align-items: center;
@@ -394,10 +313,10 @@
     height: 48px;
     object-fit: contain;
     background: var(--field);
-    border: 1px solid #b3a385;
+    border: 1px solid var(--line-soft);
     border-radius: var(--radius-sm);
   }
   .error {
-    color: #a33a2a;
+    color: var(--danger);
   }
 </style>

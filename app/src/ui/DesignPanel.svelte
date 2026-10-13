@@ -3,15 +3,19 @@
   // building rooms, wall lines, walls taken away, doors, furniture, the stairs), the room chosen
   // (what it is, its name, a raised floor, the boss chamber, props), the site's levels and what
   // is wrong with it (folded away), and undo, redo and Save (only once nothing breaks the rules
-  // a site keeps) pinned at the bottom. Props come in groups: a building's furniture and indoor
-  // props, a site's props, and the pictures uploaded in Objects (either). A building's storeys are
-  // added or taken away here too (the building follows on Save), and its levels below ground.
+  // a site keeps) pinned at the bottom. Props are chosen in the item picker: a building's furniture
+  // and indoor props or a site's props, in groups, and the pictures uploaded in Objects. A
+  // building's storeys are added or taken away here too (the building follows on Save), and its
+  // levels below ground.
   import type { SpriteMeta, UnderCatalog } from '../gen/protocol';
   import type { DesignMode, DesignSettings, SiteDesigner } from '../editor/site/designer';
   import { BOSS } from '../editor/site/designer';
   import { cellarsOf } from '../editor/site/model';
+  import { INSIDE_GROUPS, itemGroup, looks, turnsInside } from '../editor/itemGroups';
+  import { InteriorLayer } from '../render/InteriorLayer';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
+  import ItemPicker, { type PickItem } from './ItemPicker.svelte';
   import { remember, remembered } from './shell/layout.svelte';
 
   interface Props {
@@ -80,20 +84,37 @@
   const problems = $derived(now.problems);
   const blocking = $derived(problems.filter((p) => p.blocking).length);
   const tool = $derived(tools.find((t) => t.key === settings.mode));
-  let propFilter = $state('');
-  // The palette's groups: a building's furniture or indoor props, a site's props, your pictures.
-  type Piece = { kind: string; name: string; cover: number; blocks: boolean; hazard: string | null; w: number; h: number; asset?: string };
-  let group = $state<'main' | 'props' | 'yours'>('main');
-  const yours = $derived(
-    Object.entries(sprites).map(([asset, m]): Piece => {
-      const n = Math.max(1, Math.min(6, Math.ceil(m.size || 1)));
-      return { kind: `s:${asset}`, name: m.name || 'your picture', cover: m.cover, blocks: m.blocks_move, hazard: null, w: n, h: n, asset };
+  // The picker: a building's furniture and indoor props, or a site's props; then your pictures.
+  type Piece = { kind: string; name: string; cover: number; blocks: boolean; height_ft: number; hazard: string | null; w: number; h: number };
+  const pieces = $derived.by((): Piece[] => {
+    if (!building) return catalog?.props ?? [];
+    const all = [...(catalog?.building.furniture.map((f) => ({ ...f, hazard: null })) ?? []), ...(catalog?.building.props ?? [])];
+    return all.filter((p, i) => all.findIndex((q) => q.kind === p.kind) === i);
+  });
+  const SHORT_COVER = ['', '½ cover', '¾ cover', 'total cover'];
+  const rules = (blocks: boolean, cover: number, height: number) => [blocks ? 'blocks movement' : 'passable', SHORT_COVER[cover] ?? '', `${+height.toFixed(1)} ft`].filter(Boolean).join(' · ');
+  const squares = (w: number, h: number) => `${w}×${h} square${w * h === 1 ? '' : 's'}`;
+  const items = $derived<PickItem[]>([
+    ...pieces.map((p): PickItem => {
+      const n = looks(p.kind, !building);
+      return {
+        id: p.kind,
+        name: cap(p.name),
+        group: itemGroup(p.kind),
+        thumb: p.kind,
+        key: p.kind,
+        size: squares(p.w, p.h),
+        rules: rules(p.blocks, p.cover, p.height_ft),
+        note: `${n > 1 ? `${n} looks` : 'One look'} · ${turnsInside(p.kind, !building, p.w, p.h) ? 'can be turned' : 'same any way round'}`,
+        hazard: p.hazard,
+      };
     }),
-  );
-  const pieces = $derived<Piece[]>(
-    group === 'yours' ? yours : building ? (group === 'props' ? (catalog?.building.props ?? []) : (catalog?.building.furniture.map((f) => ({ ...f, hazard: null })) ?? [])) : (catalog?.props ?? []),
-  );
-  const propList = $derived(pieces.filter((p) => !propFilter || p.name.toLowerCase().includes(propFilter.toLowerCase()) || p.kind.includes(propFilter.toLowerCase())));
+    ...Object.entries(sprites).map(([asset, m]): PickItem => {
+      const n = Math.max(1, Math.min(6, Math.ceil(m.size || 1)));
+      return { id: `s:${asset}`, name: m.name || 'Your picture', group: 'Yours', asset, size: squares(n, n), rules: rules(m.blocks_move, m.cover, m.height_ft), note: 'Your picture · can be turned' };
+    }),
+  ]);
+  const thumbs = () => InteriorLayer.sheet(!building, pieces.map(({ kind, w, h }) => ({ kind, w, h })));
   let sure = $state<'' | 'level' | 'reset' | 'room' | 'storey' | 'cellar'>('');
 
   /** Ask twice before something that can't be put back in one click. */
@@ -107,9 +128,11 @@
     }
   }
 
-  function pickProp(kind: string) {
+  function pickProp(id: number | string) {
+    const kind = String(id);
     const p = pieces.find((x) => x.kind === kind);
-    settings = { ...settings, mode: 'prop', prop: kind, pw: p?.w ?? 1, ph: p?.h ?? 1 };
+    const n = kind.startsWith('s:') ? Math.max(1, Math.min(6, Math.ceil(sprites[kind.slice(2)]?.size || 1))) : 1;
+    settings = { ...settings, mode: 'prop', prop: kind, pw: p?.w ?? n, ph: p?.h ?? n };
   }
 
   const saveWhy = $derived(blocking ? 'Fix the problems marked ✕ first' : !now.dirty ? 'Nothing new to save' : 'Save the design (Ctrl+S)');
@@ -152,22 +175,7 @@
       <label class="switch"><span class="grow">Add doors where a room would be shut off</span><input type="checkbox" class="ws-switch" bind:checked={settings.autoDoors} /></label>
     {/if}
     {#if settings.mode === 'prop'}
-      <div class="ws-seg" role="group" aria-label="What to put down">
-        <button class:on={group === 'main'} onclick={() => (group = 'main')}>{building ? 'Furniture' : 'Props'}</button>
-        {#if building}<button class:on={group === 'props'} onclick={() => (group = 'props')}>Indoor props</button>{/if}
-        <button class:on={group === 'yours'} onclick={() => (group = 'yours')}>Yours</button>
-      </div>
-      <input class="ws-input" type="search" bind:value={propFilter} placeholder={building && group !== 'props' ? 'Find a piece…' : 'Find a prop…'} aria-label={building ? 'Find a piece of furniture' : 'Find a prop'} />
-      <div class="list">
-        {#each propList as p (p.kind)}
-          <button class="ws-chip" class:on={settings.prop === p.kind} class:pic={!!p.asset} onclick={() => pickProp(p.kind)} title={[p.blocks ? 'blocks movement' : 'passable', p.cover ? `cover ${['', '½', '¾', 'total'][p.cover]}` : '', p.hazard ?? ''].filter(Boolean).join(' · ')}>
-            {#if p.asset}{#await picture(p.asset) then src}{#if src}<img {src} alt="" />{/if}{/await}{/if}
-            {p.name}{p.hazard ? ' ⚠' : ''}
-          </button>
-        {:else}
-          <span class="ws-hint">{group === 'yours' ? 'No pictures yet: upload them in Edit › Objects.' : 'Nothing by that name.'}</span>
-        {/each}
-      </div>
+      <ItemPicker {items} groups={[...INSIDE_GROUPS, 'Other']} chosen={[settings.prop]} context={building ? 'building' : 'underground'} {thumbs} {picture} onPick={pickProp} />
       <div class="ws-row size">
         <span>Size</span>
         <input class="ws-input" type="number" min="1" max="6" bind:value={settings.pw} aria-label="Across" /> ×
@@ -291,27 +299,9 @@
     font-size: 12px;
     cursor: pointer;
   }
-  .list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 3px;
-    max-height: 150px;
-    overflow-y: auto;
-  }
   .size input {
     width: 3.4em;
   }
-  .ws-chip.pic {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .ws-chip img {
-    width: 18px;
-    height: 18px;
-    object-fit: contain;
-  }
-
   .card {
     display: flex;
     flex-direction: column;

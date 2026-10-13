@@ -26,7 +26,7 @@ import { buildAtlas, PX, VARIANTS, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
-import { sheetFor, thumbSheet, thumbUrl, type ThumbSheet } from './thumbs';
+import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
 import type { Camera } from './camera';
 import atmoFragment from './shaders/atmosphere.frag?raw';
 import colorMeshFragment from './shaders/colormesh.frag?raw';
@@ -320,8 +320,6 @@ export class BattlemapLayer {
     this.destroyChunk(c);
   }
 
-  private icons = new Map<number, Promise<string | null>>();
-
   /** Every built-in kind's picture (its first variant) on one sheet, keyed by kind id. */
   thumbs(): Promise<ThumbSheet> {
     return sheetFor(this.renderer, `battle:${this.catalog.map((k) => k.name).join('|')}`, () => {
@@ -329,16 +327,6 @@ export class BattlemapLayer {
       const tiles = this.catalog.flatMap((k) => (atlas.frames[k.id]?.[0] ? [{ key: String(k.id), node: new Sprite(atlas.frames[k.id][0]) }] : []));
       return thumbSheet(this.renderer, tiles);
     });
-  }
-
-  /** A built-in kind's picture (its first variant), as a data URL. */
-  icon(kind: number): Promise<string | null> {
-    let p = this.icons.get(kind);
-    if (!p) {
-      p = this.thumbs().then((s) => thumbUrl(s, String(kind)), () => null);
-      this.icons.set(kind, p);
-    }
-    return p;
   }
 
   /** The object whose footprint holds a world position (the nearest centre), if its chunk is

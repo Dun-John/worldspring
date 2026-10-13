@@ -2653,7 +2653,7 @@
               catalog={view.battle?.catalog ?? []}
               sprites={edits.sprites ?? {}}
               placed={placedSprites}
-              icon={(k) => view.battle?.icon(k) ?? Promise.resolve(null)}
+              thumbs={() => view.battle?.thumbs()}
               picture={assetUrl}
               onUpload={uploadSprite}
               onSprite={saveSprite}

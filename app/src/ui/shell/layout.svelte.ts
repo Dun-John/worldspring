@@ -27,7 +27,8 @@ export interface Ask {
 const PHONE ='(max-width: 720px) and (min-height: 501px)';
 const SHORT = '(max-height: 500px)';
 
-function stored(key: string): string | null {
+/** A setting this viewer's browser keeps (null when unset or unreadable). */
+export function stored(key: string): string | null {
   try {
     return localStorage.getItem(key);
   } catch {
@@ -35,7 +36,8 @@ function stored(key: string): string | null {
   }
 }
 
-function store(key: string, value: string) {
+/** Keep a setting in this viewer's browser. */
+export function store(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
   } catch {

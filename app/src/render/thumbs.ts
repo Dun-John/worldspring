@@ -80,12 +80,3 @@ export function paintThumb(canvas: HTMLCanvasElement, sheet: ThumbSheet, key: st
   ctx.drawImage(sheet.canvas, x, y, w, h, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
   return true;
 }
-
-/** A tile as a data URL (for an `<img>`), or null if the sheet has none. */
-export function thumbUrl(sheet: ThumbSheet, key: string): string | null {
-  const r = sheet.rects.get(key);
-  if (!r) return null;
-  const c = document.createElement('canvas');
-  [c.width, c.height] = [r[2], r[3]];
-  return paintThumb(c, sheet, key) ? c.toDataURL() : null;
-}
