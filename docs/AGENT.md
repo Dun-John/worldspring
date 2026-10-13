@@ -73,7 +73,7 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 |---|---|
 | `world_overview` | Size, land masses, how many features of each kind, the largest settlements. |
 | `search_features` | Features by current name or kind, each with its extent (bounding box and area, or a river's length). From three letters it also finds districts and businesses (inns, temples, …), renamed ones by their new names. |
-| `get_feature` | Details and relations: what it is, its extent, the areas it lies in, nearest settlements, roads, districts, notable buildings, ways underground, a site's levels and rooms; a settlement's sites, and for anything in a layout the settlement (and site) it is in. |
+| `get_feature` | Details and relations: what it is, its extent, the areas it lies in, nearest settlements, roads, districts, notable buildings, ways underground, a site's levels and rooms; a settlement's sites and flights of steps, and for anything in a layout the settlement (and site) it is in. |
 | `list_children` | What a feature contains: districts and businesses, levels and rooms, a settlement's sites (drawn businesses among its businesses), a region's settlements and sites. |
 | `list_names` | Everything that can be renamed, with current and generated names: named features; a settlement's districts, businesses, towers, underground sites and the sites in it; a building's or site's levels (`l:`) and rooms (`r:`). |
 | `describe_location` | What is at a place: elevation, biome, the areas it lies in, the building, district or site there, named features nearby (measured to their nearest edge or course). |

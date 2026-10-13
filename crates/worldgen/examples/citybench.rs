@@ -34,6 +34,8 @@ fn main() {
         lh.push_str(&format!("{p:?}"));
     }
     println!("layout hash {:016x}", worldgen::core::hash::fnv64(lh.as_bytes()));
+    let flights = l.stairs.last().map_or(0, |s| s.flight + 1);
+    println!("stairs: {flights} flights, {} pieces, hash {:016x}", l.stairs.len(), worldgen::core::hash::fnv64(format!("{:?}", l.stairs).as_bytes()));
     let mut chunk_bytes: Vec<u8> = Vec::new();
     let lv = g.max_level;
     let size = g.tile_size_ft(lv);

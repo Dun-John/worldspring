@@ -7,6 +7,8 @@
 //! - drawn roads (a sketch's road strokes): how closely the road follows each line drawn (share
 //!   of the line within a mile of it, mean, 95th percentile and worst offset), and planned roads
 //!   crossing a `none` line.
+//! - steep streets in towns and up: length by grade per tier and kind of street, and the flights
+//!   of steps the stair rule would make at three thresholds; `TOP=n` lists the steepest flights.
 //! `DUMP=file.json` writes every road and settlement (for drawing over a preview).
 //!
 //! Usage: cargo run --release -p worldgen --example roadcheck -- [seed|world.json...] [--json]   (default 1 2 3)
@@ -309,6 +311,7 @@ fn main() {
             }
         }
         let drawn = drawn_roads(&world, &t0, &standing);
+        let steps = stairs(&world, &t0);
         // `DUMP=file.json`: every road (class, drawn stroke, control points) and settlement, for
         // drawing over a preview.
         if let Ok(path) = std::env::var("DUMP") {
@@ -333,11 +336,110 @@ fn main() {
             tally.print(label, key, &mut counts, &mut worst);
         }
         say!("  ({n_layouts} layouts in {layout_s:.1} s)");
-        report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst, "drawn_roads": drawn }));
+        report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst, "drawn_roads": drawn, "stairs": steps }));
     }
     if args.json {
         println!("{}", Value::Array(report));
     }
+}
+
+/// Street grades in towns and up (`town::stairs::survey`, the stair rule's own stations), per tier
+/// and kind of street: length, length at or above some grades, grade percentiles (by length), and
+/// the flights of steps (count, stepped length) with steps from 0.12, 0.15 (the default) and 0.20,
+/// stopping at 80% of that. Settlements listed with their tier for `TOP`.
+fn stairs(world: &worldgen::World, t0: &T0) -> Value {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::stairs::{self, Kind, StairParams};
+    const GRADES: [f64; 6] = [0.10, 0.12, 0.15, 0.20, 0.25, 0.33];
+    let sets: Vec<StairParams> = [0.12, 0.15, 0.20].iter().map(|&g| StairParams { g_on: g, g_off: 0.8 * g, ..StairParams::DEFAULT }).collect();
+    #[derive(Default)]
+    struct Row {
+        len: f64,
+        at: [f64; 6],
+        grades: Vec<(f64, f64)>,
+        flights: [usize; 3],
+        stepped: [f64; 3],
+        towns: [usize; 3],
+    }
+    let kinds = [("strip", Kind::Edge, 3u8), ("main", Kind::Edge, 4), ("alley", Kind::Alley, 3), ("approach", Kind::Approach, 4)];
+    let mut rows: std::collections::BTreeMap<(u8, usize), Row> = Default::default();
+    // Steepest flights at the default: (grade, middle, rise, length, settlement).
+    let mut steep: Vec<(f64, P, f64, f64, usize)> = Vec::new();
+    let t = std::time::Instant::now();
+    for (si, st) in t0.settlements.iter().enumerate().filter(|(_, st)| st.tier >= Tier::Town) {
+        let profiles = stairs::survey(world, t0, si);
+        let mut any = [[false; 3]; 4];
+        for p in &profiles {
+            let ki = kinds.iter().position(|k| k.1 == p.kind && k.2 == p.class).unwrap_or(0);
+            let row = rows.entry((st.tier as u8, ki)).or_default();
+            row.len += p.len;
+            for k in 1..p.s.len() {
+                let ds = p.s[k] - p.s[k - 1];
+                let g = (p.h[k] - p.h[k - 1]).abs() / ds.max(1e-9);
+                row.grades.push((g, ds));
+                for (j, &lim) in GRADES.iter().enumerate() {
+                    if g >= lim {
+                        row.at[j] += ds;
+                    }
+                }
+            }
+            for (j, prm) in sets.iter().enumerate() {
+                let runs = stairs::runs(p, prm);
+                row.flights[j] += runs.len();
+                row.stepped[j] += runs.iter().map(|r| r.1 - r.0).sum::<f64>();
+                any[ki][j] |= !runs.is_empty();
+            }
+        }
+        for (ki, a) in any.iter().enumerate() {
+            let row = rows.entry((st.tier as u8, ki)).or_default();
+            for j in 0..3 {
+                row.towns[j] += a[j] as usize;
+            }
+        }
+        for f in stairs::flights(&profiles, &StairParams::DEFAULT).iter().filter(|f| f.pts.len() >= 2) {
+            let length: f64 = f.pts.windows(2).map(|w| dist(w[0], w[1])).sum();
+            if steep.last().is_some_and(|l| l.4 == si && l.2 == f.rise as f64 && (l.3 - length).abs() < 1e-6) {
+                continue;
+            }
+            steep.push((f.rise as f64 / length.max(1.0), lerp(f.pts[0], f.pts[f.pts.len() - 1], 0.5), f.rise as f64, length, si));
+        }
+    }
+    say!("  steep streets (towns and up, {:.1} s): length, at grade >= {GRADES:?}; p50 p90 p99; flights / stepped ft / settlements with any, steps from 0.12 | 0.15 | 0.20", t.elapsed().as_secs_f64());
+    let mut out = Vec::new();
+    for ((tier, ki), row) in &mut rows {
+        if row.len <= 0.0 {
+            continue;
+        }
+        row.grades.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let total: f64 = row.grades.iter().map(|g| g.1).sum();
+        let pct = |q: f64| {
+            let mut acc = 0.0;
+            row.grades.iter().find(|g| {
+                acc += g.1;
+                acc >= q * total
+            }).map_or(0.0, |g| g.0)
+        };
+        let tier_name = [Tier::Village, Tier::Town, Tier::City, Tier::Metropolis].iter().find(|t| **t as u8 == *tier).map_or("?".to_string(), |t| format!("{t:?}"));
+        let at: Vec<String> = row.at.iter().map(|a| format!("{:.1}%", 100.0 * a / row.len)).collect();
+        let fl: Vec<String> = (0..3).map(|j| format!("{} / {:.0} / {}", row.flights[j], row.stepped[j], row.towns[j])).collect();
+        say!(
+            "    {tier_name:<10} {:<8} {:>8.0} ft  {}  p {:.3} {:.3} {:.3}  {}",
+            kinds[*ki].0,
+            row.len,
+            at.join(" "),
+            pct(0.5),
+            pct(0.9),
+            pct(0.99),
+            fl.join(" | ")
+        );
+        out.push(json!({ "tier": tier_name, "street": kinds[*ki].0, "length_ft": row.len.round(), "at_grade": GRADES.iter().zip(&row.at).map(|(g, a)| json!([g, a.round()])).collect::<Vec<_>>(), "p50": pct(0.5), "p90": pct(0.9), "p99": pct(0.99), "flights": row.flights, "stepped_ft": row.stepped.map(|x| x.round()), "settlements": row.towns }));
+    }
+    steep.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let top = std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    for (g, at, rise, length, si) in steep.iter().take(top) {
+        say!("      flight at ({:.0}, {:.0}) in settlement {si} ({:?}): rise {rise:.1} ft over {length:.0} ft (grade {g:.2})", at[0], at[1], t0.settlements[*si].tier);
+    }
+    Value::Array(out)
 }
 
 /// Drawn roads against the roads made from them: per road stroke, the line sampled every

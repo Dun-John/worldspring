@@ -137,7 +137,7 @@ One feature in detail. What comes back depends on the feature:
 |---|---|
 | Any feature | `name`, `kind`, `detail`, position, elevation, `notes`, `hidden` |
 | Any place | `in`: the regions it lies in (continent, range, forest…), and `nearest_settlements` |
-| Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground; `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
+| Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground; flights of steps on steep streets (`stairs`: each flight's middle `x_ft`/`y_ft`, `length_ft`, `rise_ft`, the highest first, up to 40; cities and up); `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
 | Sites | The layout: buildings, and ways underground with their `u:` ids; `settlement`: the town it stands in, or `null` |
 | Buildings and underground sites | Levels and rooms |
 | Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`; `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |

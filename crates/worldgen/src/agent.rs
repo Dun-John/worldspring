@@ -1247,6 +1247,19 @@ fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
         .map(|e| json!({ "id": format!("u:{}:{}", l.index, e.id), "kind": e.kind.name(), "x_ft": e.at[0].round(), "y_ft": e.at[1].round() }))
         .collect();
     let sewers = l.entrances.iter().filter(|e| e.kind == crate::under::UnderKind::Sewer).count();
+    // Flights of steps: one entry each (at the middle of its pieces), the highest first.
+    let mut flights: Vec<(f32, [f64; 2], f64)> = Vec::new();
+    for (k, st) in l.stairs.iter().enumerate() {
+        if k > 0 && l.stairs[k - 1].flight == st.flight {
+            continue;
+        }
+        let pieces: Vec<&town::Stair> = l.stairs[k..].iter().take_while(|p| p.flight == st.flight).collect();
+        let mid = |p: &town::Stair| town::geom::lerp(p.pts[0], p.pts[p.pts.len() - 1], 0.5);
+        let at = pieces.iter().fold([0.0, 0.0], |a, p| town::geom::add(a, town::geom::mul(mid(p), 1.0 / pieces.len() as f64)));
+        flights.push((st.rise, at, st.pts.windows(2).map(|w| town::geom::dist(w[0], w[1])).sum()));
+    }
+    flights.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let stairs: Vec<Value> = flights.iter().take(40).map(|(rise, at, length)| json!({ "x_ft": at[0].round(), "y_ft": at[1].round(), "length_ft": length.round(), "rise_ft": (*rise as f64 * 10.0).round() / 10.0 })).collect();
     let _ = t0;
     json!({
         "tier": l.tier.name(),
@@ -1256,6 +1269,7 @@ fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
         "notable_buildings": notable,
         "underground": entrances,
         "sewer_grates": sewers,
+        "stairs": stairs,
     })
 }
 

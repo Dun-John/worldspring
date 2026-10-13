@@ -303,6 +303,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
         entrances,
         yards,
         props,
+        stairs: Vec::new(),
     };
     l.number();
     l
@@ -403,6 +404,7 @@ fn scratch(index: u32) -> Layout {
         entrances: Vec::new(),
         yards: Vec::new(),
         props: Vec::new(),
+        stairs: Vec::new(),
     }
 }
 

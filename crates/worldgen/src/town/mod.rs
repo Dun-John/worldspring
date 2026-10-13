@@ -16,6 +16,7 @@ pub mod catalog;
 pub mod geom;
 pub mod mesh;
 pub mod sites;
+pub mod stairs;
 pub mod wards;
 
 use std::cell::RefCell;
@@ -178,6 +179,19 @@ pub struct Layout {
     pub yards: Vec<(Vec<P>, f32)>,
     /// Battlemap objects the layout sets out itself (a camp's tents, fire, bedrolls).
     pub props: Vec<Prop>,
+    /// Flights of steps on steep streets (cities and up; `stairs`).
+    pub stairs: Vec<Stair>,
+}
+
+/// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
+/// width, and the flight's rise (ft); the pieces of one flight (a street's strips and main
+/// street side by side) share `flight`.
+#[derive(Clone, Debug)]
+pub struct Stair {
+    pub pts: Vec<P>,
+    pub width: f64,
+    pub rise: f32,
+    pub flight: u32,
 }
 
 /// A battlemap object placed by a layout: where (world ft), facing (rad), kind, variant, size.
@@ -1133,13 +1147,14 @@ fn river_pieces(t0: &T0, center: P, r: f64) -> Vec<(P, P, f64)> {
 // ---------------------------------------------------------------------------------------
 
 pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
-    generate_with(world, t0, index, None)
+    generate_with(world, t0, index, None, None)
 }
 
 /// A settlement's layout; a town with the ward editor's changes (`Edits.towns`) applied between
 /// planning it and building it, its buildings and ways underground matched to the generated
 /// layout's (`wards::inherit`).
-fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::world::TownEdit>) -> Layout {
+/// `survey`: every street judged for steps, towns' too (`stairs::survey`).
+fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::world::TownEdit>, survey: Option<&mut Vec<stairs::Profile>>) -> Layout {
     let s = &t0.settlements[index];
     let center = [s.x, s.y];
     let r = urban_radius(s.tier, s.population);
@@ -1172,6 +1187,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         entrances: Vec::new(),
         yards: Vec::new(),
         props: Vec::new(),
+        stairs: Vec::new(),
     };
     if s.tier == Tier::Village {
         village(&site, s, r, &road_ends, &mut rng, &mut l);
@@ -1181,7 +1197,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
             None => Rc::new(plan_town(&site, s, r, &road_ends, &mut rng)),
         };
         let ch = edit.map(|e| wards::changes(&plan, e, center).0).unwrap_or_default();
-        build_town(&site, s, r, &plan, &ch, &mut l);
+        build_town(&site, s, r, &plan, &ch, &mut l, survey);
         walls_off_river(&site, &mut l);
     }
     // A pin's ward names go to its districts in order, the central one first.
@@ -1207,6 +1223,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     }
     for (pts, _, _) in &mut l.roads {
         pts.iter_mut().for_each(tw);
+    }
+    for st in &mut l.stairs {
+        st.pts.iter_mut().for_each(tw);
     }
     for poly in l.walls.iter_mut().chain(&mut l.streets).chain(&mut l.plazas).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.bridges).chain(&mut l.piers) {
         poly.iter_mut().for_each(tw);
@@ -2104,7 +2123,7 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
 /// its mesh corners moved first (`wards::moved_mesh`), then patches given another ward, lot
 /// size, merge or roll, the walls on or off. Each building's `id` is left as the patch it
 /// stands on (`generate` numbers them, `wards::inherit` matches them).
-fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::Changes, l: &mut Layout) {
+fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::Changes, l: &mut Layout, survey: Option<&mut Vec<stairs::Profile>>) {
     let mut mesh = wards::moved_mesh(plan, &ch.moves);
     let total = mesh.faces.len();
     let n_inner = plan.n_inner;
@@ -2113,6 +2132,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let (ward, group) = (&ward, &group);
     let walled = ch.walls.unwrap_or(plan.walled);
     let usable = |i: usize| plan.usable(i);
+    // The streets as they are laid, for the steps on them.
+    let mut pieces = stairs::Pieces::default();
 
     // Bridges: the river vertex back on the bank-to-bank line, and the deck along it.
     let mut bridge_streets: Vec<(Vec<P>, bool)> = Vec::new();
@@ -2120,7 +2141,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         mesh.pos[v] = river_crossing(site, mesh.pos[a], mesh.pos[b]);
         bridge_streets.push((vec![mesh.pos[a], mesh.pos[v], mesh.pos[b]], main));
     }
-    for (pts, main) in &bridge_streets {
+    for (&((a, v, b), _), (pts, main)) in plan.bridged.iter().zip(&bridge_streets) {
         let dir = sub(pts[2], pts[0]);
         let dl = len(dir).max(1e-9);
         let u = mul(dir, 1.0 / dl);
@@ -2137,6 +2158,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         let (fwd, back) = (site.dry_reach(pts[1], u, width, 1.0, fwd - 14.0) + 14.0, site.dry_reach(pts[1], u, width, -1.0, back - 14.0) + 14.0);
         let c = add(pts[1], mul(u, 0.5 * (fwd - back)));
         l.bridges.push(rect(c, u, fwd + back, width));
+        pieces.bridge((a, v, b), pts, if *main { 18.0 } else { 12.0 }, (!main).then_some(l.roads.len()));
         if !main {
             l.roads.push((pts.clone(), 4, 12.0));
         }
@@ -2160,9 +2182,12 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 && plan.crossing_links.iter().any(|&(a, _, b)| (a == path[k - 1] && b == v) || (a == v && b == path[k - 1]))
             {
                 drawn.push(river_crossing(site, mesh.pos[path[k - 1]], mesh.pos[v]));
+            } else if k > 0 {
+                pieces.edge(path[k - 1], v, mesh.pos[path[k - 1]], mesh.pos[v], 18.0, true, l.roads.len());
             }
             drawn.push(mesh.pos[v]);
         }
+        pieces.main_street(l.roads.len());
         l.roads.push((drawn, 4, 18.0));
     }
     // Each road continues from where it ends to its gate (`approach_curve`).
@@ -2226,6 +2251,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                         }
                         outside.push(samples[entry]);
                         l.roads.push((outside, *class, width));
+                        pieces.approach(l.roads.len(), *g);
                         l.roads.push((inside, 4, width));
                     }
                     _ => l.roads.push((curve, *class, width)),
@@ -2356,6 +2382,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 if (0..=n).any(|j| site.near_river(lerp(pp, q, j as f64 / n as f64), 0.5 * d[e])) {
                     continue;
                 }
+                let (va, vb) = edge_v(i, e);
+                pieces.edge(va, vb, pp, q, d[e] + 1.0, false, l.roads.len());
                 l.roads.push((vec![pp, q], 3, d[e] + 1.0));
             }
         }
@@ -2491,6 +2519,18 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         }
         true
     });
+    // Steps on steep streets, judged before the streets are cut at the water (wet ground is
+    // level), so every piece is still as recorded.
+    if s.tier >= stairs::STAIR_TIER || survey.is_some() {
+        let prm = stairs::StairParams::DEFAULT;
+        let profiles = stairs::profiles(site, &mesh.pos, &pieces, l, if survey.is_some() { stairs::SURVEY_FROM } else { prm.g_off });
+        if s.tier >= stairs::STAIR_TIER {
+            l.stairs = stairs::flights(&profiles, &prm);
+        }
+        if let Some(out) = survey {
+            out.extend(profiles);
+        }
+    }
     // Paved streets stop at the water's edge unless a bridge carries them.
     let bridges = l.bridges.clone();
     let on_water = |p: P| site.wet(p) && !bridges.iter().any(|b| contains(b, p));

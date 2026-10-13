@@ -328,7 +328,7 @@ pub fn with_edit(world: &World, t0: &T0, index: usize, e: &TownEdit) -> Rc<Layou
     if let Some(l) = TOWNS.with(|c| c.borrow().get(&key).filter(|x| x.0 == fp).map(|x| x.1.clone())) {
         return l;
     }
-    let l = Rc::new(super::generate_with(world, t0, index, Some(e)));
+    let l = Rc::new(super::generate_with(world, t0, index, Some(e), None));
     TOWNS.with(|c| c.borrow_mut().insert(key, (fp, l.clone())));
     l
 }
@@ -549,6 +549,9 @@ pub fn changed_rects(a: &Layout, b: &Layout) -> Vec<[f64; 4]> {
         }
         for e in &l.entrances {
             add(14, e.kind as u8 as f64, &pad(e.at));
+        }
+        for s in &l.stairs {
+            add(15, s.width, &s.pts);
         }
         out
     };

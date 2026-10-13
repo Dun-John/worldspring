@@ -135,6 +135,17 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         let bytes = crate::battlemap::pack(&ex.world, &chunk);
         writeln!(out, "battlemap/{}/{}/{} {:016x}", k.level, k.x, k.y, fnv64(&bytes)).unwrap();
     }
+    // Flights of steps on the steep streets of every city.
+    {
+        let mut h = crate::core::hash::Fnv64::default();
+        let mut n = 0;
+        for si in (0..ex.t0.settlements.len()).filter(|&i| ex.t0.settlements[i].tier >= crate::town::stairs::STAIR_TIER) {
+            let l = crate::town::layout(&ex.world, &ex.t0, si);
+            h.write(format!("{si} {:?}", l.stairs).as_bytes());
+            n += l.stairs.len();
+        }
+        writeln!(out, "stairs {n} {:016x}", h.finish()).unwrap();
+    }
     // Objects put down by hand (a world without edits): barrels turned and crates not, on the
     // first battlemap; the chunk packed.
     if ex.world.file.edits.is_empty()
@@ -224,7 +235,7 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
                 ex.world.file.edits.towns.insert(crate::town::wards::key(si), e);
                 let l = crate::town::layout(&ex.world, &ex.t0, si);
                 let mut h = crate::core::hash::Fnv64::default();
-                h.write(format!("{:?} {:?} {:?} {:?} {:?}", l.walls, l.towers, l.gate_towers, l.extra_towers, l.roads).as_bytes());
+                h.write(format!("{:?} {:?} {:?} {:?} {:?} {:?}", l.walls, l.towers, l.gate_towers, l.extra_towers, l.roads, l.stairs).as_bytes());
                 for b in &l.buildings {
                     h.write(format!("{} {:?} {:?} {} {:?} {}", b.id, b.poly, b.func, b.floors, b.name, b.pad_ft).as_bytes());
                 }
