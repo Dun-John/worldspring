@@ -388,7 +388,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
 /// noise per building); the rest are homes. Names and storeys as the town's own.
 fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: Vec<usize>) {
     let stream = world.stream("town.edit");
-    let index = l.index as i64;
+    let index = super::rng_key(t0, l.index as usize);
     let noise = |id: u32, salt: i64| unit(hash3(stream, index, id as i64, salt));
     let castle = catalog::index_of("castle");
     for &k in fresh {

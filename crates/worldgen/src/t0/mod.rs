@@ -351,6 +351,12 @@ impl T0 {
             settlements = settle::place(&sinp, settlements, &[T::Town], None, &mut conflicts);
             settlements = settle::place(&sinp, settlements, &[T::Village], None, &mut conflicts);
         }
+        // (A capital pinned where none could be placed leaves the first metropolis the capital.)
+        if !settlements.iter().any(|s| s.capital)
+            && let Some(s) = settlements.iter_mut().find(|s| s.tier == T::Metropolis)
+        {
+            s.capital = true;
+        }
         // Waterside settlements stand on their water, not at the centre of their map cell.
         let water_grid = Grid::from_vec(w, h, hydro.water.clone());
         let biome_seed = world.stream("t0.biome.warp");
@@ -416,8 +422,9 @@ impl T0 {
         conflicts.extend(rinp.pre().conflicts.iter().cloned());
         // Roads keep out of the belts the rivers meander in, crossing each one once.
         let belts = crate::lod::roads::BeltCache::default();
+        let seeds: Vec<u64> = network.roads.iter().map(|r| road_seed(world.seed, &r.pts)).collect();
         for (i, r) in network.roads.iter_mut().enumerate() {
-            let curve = RoadCurve::new(r.class, r.pts.clone(), r.z.clone(), r.wander.clone(), road_seed(world.seed, i));
+            let curve = RoadCurve::new(r.class, r.pts.clone(), r.z.clone(), r.wander.clone(), seeds[i]);
             if let Some((pts, z, wander)) = crate::lod::roads::unweave(&curve, &rivers, cell, &|x, y| wet(x, y), &belts) {
                 (r.pts, r.z, r.wander) = (pts, z, wander);
             }
@@ -439,7 +446,7 @@ impl T0 {
                 .roads
                 .iter()
                 .enumerate()
-                .map(|(i, r)| RoadCurve::new(r.class, r.pts.clone(), r.z.clone(), r.wander.clone(), road_seed(world.seed, i)).drawn(r.stroke))
+                .map(|(i, r)| RoadCurve::new(r.class, r.pts.clone(), r.z.clone(), r.wander.clone(), seeds[i]).drawn(r.stroke))
                 .collect(),
             map_w,
             map_h,

@@ -82,7 +82,8 @@ export class GenClient {
 
   /** Districts and businesses inside a rectangle (x0, y0, x1, y1 ft). */
   inView(rect: [number, number, number, number]): Promise<Extract<Hit, { kind: 'building' | 'district' }>[]> {
-    return this.ask({ op: 'inview', rect }).then((j) => JSON.parse(j) as Extract<Hit, { kind: 'building' | 'district' }>[]);
+    // (None while the world is being made again.)
+    return this.ask({ op: 'inview', rect }).then((j) => (JSON.parse(j) as Extract<Hit, { kind: 'building' | 'district' }>[] | null) ?? []);
   }
 
   /** An interior by building or tower id, or null if it can't be entered. */
@@ -176,7 +177,7 @@ export class GenClient {
 
   /** A settlement's named districts, for labels. */
   districts(settlement: number): Promise<DistrictLabel[]> {
-    return this.ask({ op: 'districts', settlement }).then((j) => JSON.parse(j) as DistrictLabel[]);
+    return this.ask({ op: 'districts', settlement }).then((j) => (JSON.parse(j) as DistrictLabel[] | null) ?? []);
   }
 
   private ask(ask: Ask): Promise<string> {

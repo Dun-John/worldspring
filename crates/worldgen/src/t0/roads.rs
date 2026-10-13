@@ -22,7 +22,6 @@ use crate::World;
 use crate::world::SketchTool;
 use crate::core::grid::Grid;
 use crate::core::noise::{gradient2, smoothstep};
-use crate::core::rng::Pcg32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -383,7 +382,8 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
             }
         }
     }
-    let mut rng = Pcg32::new(inp.world.stream("t0.waystation"), 23);
+    // Each inn seeded by where it stands, so one road more or less elsewhere changes none.
+    let stream = inp.world.stream("t0.waystation");
     let mut waystations: Vec<Poi> = Vec::new();
     let day = 24.0 * 5280.0;
     // None with generated roads off (roadside inns go in by hand there).
@@ -398,7 +398,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
                 let far_from_town = settlements.iter().all(|s| crate::core::sqrt((s.x - x) * (s.x - x) + (s.y - y) * (s.y - y)) > 10.0 * 5280.0);
                 let far_from_other = waystations.iter().all(|q| crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) > 15.0 * 5280.0);
                 if far_from_town && far_from_other {
-                    waystations.push(Poi { kind: PoiKind::Waystation, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });
+                    waystations.push(Poi { kind: PoiKind::Waystation, x, y, seed: crate::core::rng::hash2(stream, (x / 10.0) as i64, (y / 10.0) as i64), stroke: None });
                 }
             }
         }

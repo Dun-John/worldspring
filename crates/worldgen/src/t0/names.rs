@@ -101,9 +101,10 @@ pub enum NameKind {
 
 pub struct Namer {
     rng: Pcg32,
-    /// Settlements' and sites' own stream (when they have one), so the land's names (more or
-    /// fewer regions, say) don't change theirs.
-    sites: Option<Pcg32>,
+    /// Settlements' and sites' own seed (when they have one): each draws from a stream of its
+    /// own, keyed by where it stands, so neither the land's names (more or fewer regions, say)
+    /// nor a settlement or site added or taken away elsewhere change theirs.
+    sites: Option<u64>,
     used: BTreeSet<String>,
 }
 
@@ -112,9 +113,10 @@ impl Namer {
         Self { rng: Pcg32::new(seed, 11), sites: None, used: BTreeSet::new() }
     }
 
-    /// A namer whose settlements and sites draw from their own stream (`site_seed`).
+    /// A namer whose settlements and sites draw from streams of their own (`site_seed` and where
+    /// they stand: `name_at`).
     pub fn with_sites(seed: u64, site_seed: u64) -> Self {
-        Self { rng: Pcg32::new(seed, 11), sites: Some(Pcg32::new(site_seed, 13)), used: BTreeSet::new() }
+        Self { rng: Pcg32::new(seed, 11), sites: Some(site_seed), used: BTreeSet::new() }
     }
 
     fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str {
@@ -140,12 +142,19 @@ impl Namer {
 
     /// Unique name for a feature of `kind` in the given culture region.
     pub fn name(&mut self, kind: NameKind, culture: usize) -> String {
+        self.unique(kind, culture)
+    }
+
+    /// `name` for a feature standing at `at` (ft): a settlement or site draws from its own
+    /// stream there, when this namer gives them one (`with_sites`).
+    pub fn name_at(&mut self, kind: NameKind, culture: usize, at: [i64; 2]) -> String {
         use NameKind::*;
         let site = matches!(kind, Settlement | Ruin | Tower | Camp | Cave | Mine | LavaTube);
-        if site && let Some(own) = &mut self.sites {
-            std::mem::swap(&mut self.rng, own);
+        if site && let Some(seed) = self.sites {
+            let mut own = Pcg32::new(crate::core::rng::hash2(seed, at[0], at[1]), 13);
+            std::mem::swap(&mut self.rng, &mut own);
             let n = self.unique(kind, culture);
-            std::mem::swap(&mut self.rng, self.sites.as_mut().expect("there"));
+            std::mem::swap(&mut self.rng, &mut own);
             return n;
         }
         self.unique(kind, culture)

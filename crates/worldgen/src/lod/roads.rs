@@ -95,8 +95,11 @@ impl RoadCurve {
     }
 }
 
-pub fn road_seed(world_seed: u64, index: usize) -> u64 {
-    hash2(world_seed, index as i64, 0x20AD)
+/// A road's seed, from where it runs (its ends, ft), not its place in the network: one road more
+/// or less elsewhere changes no other.
+pub fn road_seed(world_seed: u64, pts: &[[f64; 2]]) -> u64 {
+    let (a, b) = (pts.first().copied().unwrap_or_default(), pts.last().copied().unwrap_or_default());
+    hash2(hash2(world_seed, (a[0] / 10.0) as i64, (a[1] / 10.0) as i64), (b[0] / 10.0) as i64, (b[1] / 10.0) as i64 ^ 0x20AD)
 }
 
 pub struct RoadNet {

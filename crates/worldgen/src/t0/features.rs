@@ -431,12 +431,12 @@ impl Builder<'_> {
     #[allow(clippy::too_many_arguments)]
     fn push(&mut self, kind: &'static str, nk: NameKind, cx: f64, cy: f64, angle: f64, extent_ft: f64, elev_ft: Option<f64>, detail: Option<String>) -> String {
         let culture = self.culture_at(cx, cy);
-        let name = self.namer.name(nk, culture);
+        let c = self.inp.cell_ft;
+        let name = self.namer.name_at(nk, culture, [(cx * c) as i64, (cy * c) as i64]);
         let mut id = format!("{kind}:{:x}", hash2(self.inp.world.seed, (cx / 8.0) as i64, (cy / 8.0) as i64) & 0xffff_ffff);
         while !self.ids.insert(id.clone()) {
             id.push('b');
         }
-        let c = self.inp.cell_ft;
         self.out.features.push(Feature { id: id.clone(), kind, name, x: cx * c, y: cy * c, angle, extent_ft, elev_ft, detail });
         self.out.shapes.push(Shape::Point { at: [cx * c, cy * c], radius_ft: 0.0 });
         id

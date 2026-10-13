@@ -50,6 +50,8 @@ pub struct Pin {
     /// What it lives by, if the pin says.
     pub kind: Option<SettleKind>,
     pub capital: bool,
+    /// Beside the world's own settlements, not in place of one (`Stroke::added`).
+    pub added: bool,
 }
 
 /// A site the sketch places (`SketchTool::Site`).
@@ -1176,7 +1178,7 @@ pub fn pins(world: &World, g: Raster, land: &[bool], conflicts: &mut Vec<Conflic
             conflicts.push(Conflict { stroke: si, message: "This pin is within 3 miles of another: no settlement placed".into(), x, y });
             continue;
         }
-        out.push(Pin { stroke: si, tier, x, y, cell: k, kind: s.kind.as_deref().and_then(SettleKind::parse), capital: s.capital });
+        out.push(Pin { stroke: si, tier, x, y, cell: k, kind: s.kind.as_deref().and_then(SettleKind::parse), capital: s.capital, added: s.added });
     }
     out
 }

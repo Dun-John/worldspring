@@ -82,6 +82,10 @@ export interface Stroke {
   capital?: boolean;
   /** Pins: district names, the central one first. */
   wards?: string[];
+  /** Pins: added beside the world's own settlements (Edit › Places), not in place of one of its
+   * tier (it doesn't count toward their number or keep them away; smaller ones keep 10 mi off,
+   * and none is placed within 3 mi of a settlement). */
+  added?: boolean;
   /** Sites: beneath a ruin (dungeon, crypt, catacombs) or an entrance (any site). */
   under?: string;
 }

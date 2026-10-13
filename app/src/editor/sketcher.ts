@@ -12,6 +12,33 @@ const OUTLINES: EditTool[] = ['coast', 'massif', 'elevation', 'lake'];
 
 export type PinTier = 'metropolis' | 'city' | 'town' | 'village';
 
+/** What a pinned settlement can live by, as the pin's options list them ('' leaves it to its land). */
+export const PIN_KINDS: [PinKind | '', string][] = [
+  ['', 'From its land'],
+  ['port', 'Port'],
+  ['river', 'River town'],
+  ['market', 'Market town'],
+  ['fortress', 'Fortress'],
+  ['mining', 'Mining town'],
+  ['farming', 'Farming'],
+  ['fishing', 'Fishing'],
+  ['lumber', 'Lumber'],
+  ['herding', 'Herding'],
+  ['oasis', 'Oasis'],
+];
+
+/** A settlement pinned at `at` (world ft): its tier, what it lives by, the realm's capital or not,
+ * its district names (typed comma-separated, central first) and name, as the sketch keeps them;
+ * `added`: beside the world's own settlements, not in place of one (Edit › Places). */
+export function pinStroke(at: [number, number], o: { tier: PinTier; kind?: PinKind | ''; capital?: boolean; wards?: string; name?: string; added?: boolean }): Stroke {
+  const wards = (o.wards ?? '')
+    .split(',')
+    .map((w) => w.trim())
+    .filter(Boolean);
+  const name = o.name?.trim();
+  return { tool: 'pin', pts: [[Math.round(at[0]), Math.round(at[1])]], tier: o.tier, ...(o.kind ? { kind: o.kind } : {}), ...(o.capital ? { capital: true } : {}), ...(wards.length ? { wards } : {}), ...(name ? { name } : {}), ...(o.added ? { added: true } : {}) };
+}
+
 export interface ToolSettings {
   tool: EditTool;
   /** Brush radius (mi) per tool: band half-width, a range's half-width, a river's valley, a
@@ -187,13 +214,9 @@ export class Sketcher {
     if (t.tool === 'region' && !name) return;
     if (t.tool === 'pin' || t.tool === 'volcano' || t.tool === 'site' || (t.tool === 'region' && !t.regionOutline)) {
       const at: [number, number] = [Math.round(x), Math.round(y)];
-      const wards = t.wards
-        .split(',')
-        .map((w) => w.trim())
-        .filter(Boolean);
       const s: Stroke =
         t.tool === 'pin'
-          ? { tool: 'pin', pts: [at], tier: t.tier, ...(t.pinKind ? { kind: t.pinKind } : {}), ...(t.capital ? { capital: true } : {}), ...(wards.length ? { wards } : {}) }
+          ? pinStroke(at, { tier: t.tier, kind: t.pinKind, capital: t.capital, wards: t.wards })
           : t.tool === 'site'
             ? { tool: 'site', pts: [at], kind: t.site, ...(t.under && (t.site === 'ruin' || t.site === 'entrance') ? { under: t.under } : {}) }
             : t.tool === 'region'

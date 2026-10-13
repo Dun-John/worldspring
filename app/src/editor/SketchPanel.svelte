@@ -1,11 +1,11 @@
 <script lang="ts">
   // World › Sketch: the tools in one strip (all that shows when the panel is folded down),
   // the chosen tool's options, the preview, what the world can't follow, and Generate.
-  import type { Conflict, PinKind, RoadKind, SiteKind, VolcanoActivity, VolcanoKind } from '../gen/protocol';
+  import type { Conflict, RoadKind, SiteKind, VolcanoActivity, VolcanoKind } from '../gen/protocol';
   import { PAINT_BIOMES } from '../world/world';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
-  import type { EditTool, PinTier, Sketcher, ToolSettings } from './sketcher';
+  import { PIN_KINDS, type EditTool, type PinTier, type Sketcher, type ToolSettings } from './sketcher';
 
   interface Props {
     sketcher: Sketcher;
@@ -45,24 +45,11 @@
     ['lake', 'lake', 'Lake', 'K', 'Draw round a lake. It drains from its lowest shore, or into a river drawn out of it.'],
     ['biome', 'leaf', 'Biome', 'B', 'Paint a biome over the land.'],
     ['volcano', 'volcano', 'Volcano', 'V', 'Click to place a volcano. The Volcanoes setting adds more: set it to None for only yours.'],
-    ['pin', 'castle', 'Settlement', 'T', 'Click to place a settlement of the chosen size.'],
+    ['pin', 'castle', 'Settlement', 'T', 'Click to place a settlement of the chosen size. Edit › Places adds one without opening the sketch.'],
     ['site', 'ruin', 'Planned site', 'D', 'Click to plan a ruin, tower, camp, inn, cave, mine or way underground. Planned sites stay through new settings. For one right away, with its size, levels and theme, use Edit › Places.'],
     ['region', 'tag', 'Name', 'N', 'Type a name, then click what it names: a region, mountains, a lake, an island or a sea (names in one region share it out). Or draw round a region of your own. To rename something already on the map, click it, then its name.'],
     ['road', 'road', 'Road', 'O', 'Draw a road along its way: it follows your line, round water, and joins the settlements at its ends and beside it. No road: draw across the planned roads you don’t want. To have only the roads you draw, set Roads to Only drawn in World › Generate.'],
     ['erase', 'eraser', 'Erase', 'E', 'Click a stroke or settlement to remove it.'],
-  ];
-  const PIN_KINDS: [PinKind | '', string][] = [
-    ['', 'From its land'],
-    ['port', 'Port'],
-    ['river', 'River town'],
-    ['market', 'Market town'],
-    ['fortress', 'Fortress'],
-    ['mining', 'Mining town'],
-    ['farming', 'Farming'],
-    ['fishing', 'Fishing'],
-    ['lumber', 'Lumber'],
-    ['herding', 'Herding'],
-    ['oasis', 'Oasis'],
   ];
   const SITES: [SiteKind, string][] = [
     ['ruin', 'Ruin'],

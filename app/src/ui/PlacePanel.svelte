@@ -1,15 +1,28 @@
 <script lang="ts" module>
-  import type { Created } from '../gen/protocol';
+  import type { Created, PinKind } from '../gen/protocol';
+  import type { PinTier } from '../editor/sketcher';
 
-  /** What to put on the map: a created site's kind and options (no id, place or name yet). */
-  export type SiteChoice = Pick<Created, 'kind' | 'under' | 'size' | 'levels' | 'theme'> & { name?: string };
+  /** A settlement to pin (the world is remade round it): its tier and the pin's options. */
+  export interface SettlementChoice {
+    tier: PinTier;
+    livesBy: PinKind | '';
+    capital: boolean;
+    /** District names, comma-separated, central first. */
+    wards: string;
+  }
+
+  /** What to put on the map: a created site's kind and options (no id, place or name yet), or a
+   * settlement (kind `settlement`). */
+  export type SiteChoice = Pick<Created, 'kind' | 'under' | 'size' | 'levels' | 'theme'> & { name?: string; settlement?: SettlementChoice };
 </script>
 
 <script lang="ts">
-  // Edit › Places: what to put on the map (a way underground with its size, depth and theme, or
-  // a site on the surface), then Place on map waits for a click there. Towns are drawn in the
-  // sketch (they remake the world), so a line points there.
+  // Edit › Places: what to put on the map (a settlement, a way underground with its size, depth
+  // and theme, or a site on the surface), then Place on map waits for a click there. A
+  // settlement is a pin in the sketch: the world is remade round it, so its tiles say so, and
+  // they wait while a session is played.
   import { SITE_SIZES, THEMES, type SiteSize } from '../gen/protocol';
+  import { PIN_KINDS } from '../editor/sketcher';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -20,14 +33,24 @@
     peek?: boolean;
     onPlace: (c: SiteChoice, label: string) => void;
     onCancel: () => void;
-    /** Open the sketch, where towns and cities are drawn. */
+    /** Open the sketch, where many settlements can be drawn at once. */
     onTowns?: () => void;
+    /** A session is being played: no world is remade meanwhile. */
+    playing?: boolean;
+    /** How long the world took to make last time (s). */
+    seconds?: number | null;
   }
 
-  let { armed, peek = false, onPlace, onCancel, onTowns }: Props = $props();
+  let { armed, peek = false, onPlace, onCancel, onTowns, playing = false, seconds = null }: Props = $props();
+
+  type Group = 'Settlements' | 'Underground' | 'On the surface';
 
   /** The choices: what each makes (`Created` kind, and what lies beneath). */
-  const CHOICES: { key: string; label: string; icon: IconName; kind: string; under?: string; group: 'Underground' | 'On the surface'; look: string }[] = [
+  const CHOICES: { key: string; label: string; icon: IconName; kind: string; under?: string; tier?: PinTier; group: Group; look: string }[] = [
+    { key: 'village', label: 'Village', icon: 'home', kind: 'settlement', tier: 'village', group: 'Settlements', look: 'A few dozen to a few hundred souls' },
+    { key: 'town', label: 'Town', icon: 'building', kind: 'settlement', tier: 'town', group: 'Settlements', look: 'Hundreds to a few thousand, in districts' },
+    { key: 'city', label: 'City', icon: 'castle', kind: 'settlement', tier: 'city', group: 'Settlements', look: 'Thousands, walled, with sewers below' },
+    { key: 'metropolis', label: 'Metropolis', icon: 'wards', kind: 'settlement', tier: 'metropolis', group: 'Settlements', look: 'Tens of thousands: a great city' },
     { key: 'dungeon', label: 'Dungeon', icon: 'stairs', kind: 'entrance', under: 'dungeon', group: 'Underground', look: 'Stairs down, nothing above' },
     { key: 'crypt', label: 'Crypt', icon: 'skull', kind: 'entrance', under: 'crypt', group: 'Underground', look: 'Stairs down, nothing above' },
     { key: 'catacombs', label: 'Catacombs', icon: 'skull', kind: 'entrance', under: 'catacombs', group: 'Underground', look: 'Stairs down, nothing above' },
@@ -47,11 +70,16 @@
   let levels = $state(0);
   let theme = $state('');
   let name = $state('');
+  let livesBy = $state<PinKind | ''>('');
+  let capital = $state(false);
+  let wards = $state('');
 
   const choice = $derived(CHOICES.find((c) => c.key === pick)!);
   /** The kind of site underground, if any. */
   const underKind = $derived(pick === 'ruin' ? ruinUnder : choice.kind === 'entrance' ? choice.under! : ['cave', 'mine', 'lava_tube'].includes(pick) ? pick : null);
   const themes = $derived(underKind ? THEMES[underKind] : []);
+  const tier = $derived(choice.tier);
+  const remakes = $derived(seconds ? `Remakes the world round it (about ${seconds} s)` : 'Remakes the world round it');
 
   const label = (key: string) => key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
@@ -61,6 +89,13 @@
   }
 
   function place() {
+    if (tier) {
+      if (playing) return;
+      const c: SiteChoice = { kind: 'settlement', settlement: { tier, livesBy, capital, wards: tier === 'village' ? '' : wards } };
+      if (name.trim()) c.name = name.trim();
+      onPlace(c, choice.label.toLowerCase());
+      return;
+    }
     const c: SiteChoice = { kind: choice.kind };
     if (pick === 'ruin') c.under = ruinUnder;
     else if (choice.under) c.under = choice.under;
@@ -76,15 +111,34 @@
 
 <div class="sites">
   {#if !peek}
-    {#each ['Underground', 'On the surface'] as group (group)}
+    {#each ['Settlements', 'Underground', 'On the surface'] as group (group)}
       <div class="ws-label">{group}</div>
       <div class="kinds">
         {#each CHOICES.filter((c) => c.group === group) as c (c.key)}
-          <button class="tile" class:on={pick === c.key} aria-pressed={pick === c.key} onclick={() => choose(c.key)}><Icon name={c.icon} size={20} /><span>{c.label}</span></button>
+          <button
+            class="tile"
+            class:on={pick === c.key}
+            aria-pressed={pick === c.key}
+            title={c.tier ? (playing ? 'Stop playing to remake the world' : remakes) : undefined}
+            onclick={() => choose(c.key)}
+            ><Icon name={c.icon} size={20} /><span>{c.label}{#if c.tier}<span class="remade" aria-label="(remakes the world)">↻</span>{/if}</span></button
+          >
         {/each}
       </div>
     {/each}
     <div class="ws-hint">{choice.look}</div>
+    {#if tier}
+      <label class="ws-field">
+        Lives by
+        <select class="ws-input" bind:value={livesBy}>
+          {#each PIN_KINDS as [k, label] (k)}<option value={k}>{label}</option>{/each}
+        </select>
+      </label>
+      <label class="switch"><span class="grow">The realm's capital</span><input type="checkbox" class="ws-switch" bind:checked={capital} /></label>
+      {#if tier !== 'village'}
+        <input class="ws-input" placeholder="District names, central first (optional)" bind:value={wards} aria-label="District names, separated by commas" />
+      {/if}
+    {/if}
     {#if pick === 'ruin'}
       <div class="ws-field">
         Beneath
@@ -125,11 +179,11 @@
       Name
       <input class="ws-input" bind:value={name} placeholder="Named for you if left empty" />
     </label>
-    {#if onTowns}
+    {#if tier}
       <div class="towns">
-        <Icon name="castle" size={16} />
-        <span class="grow">Towns and cities are drawn in World › Sketch, and the world is remade round them.</span>
-        <button class="ws-btn" onclick={onTowns}>Sketch</button>
+        <Icon name="reset" size={16} />
+        <span class="grow">{playing ? 'Stop playing to remake the world.' : `${remakes}: towns and roads near it may move.`}{onTowns ? ' Several at once: World › Sketch.' : ''}</span>
+        {#if onTowns}<button class="ws-btn" onclick={onTowns}>Sketch</button>{/if}
       </div>
     {/if}
   {/if}
@@ -139,7 +193,9 @@
       <button class="ws-btn" onclick={onCancel}>Cancel</button>
     </div>
   {:else}
-    <button class="ws-btn primary block" onclick={place}><Icon name="pin" size={16} /> Place {peek ? `a ${choice.label.toLowerCase()}` : 'on map'}</button>
+    <button class="ws-btn primary block" onclick={place} disabled={!!tier && playing} title={tier && playing ? 'Stop playing to remake the world' : undefined}
+      ><Icon name="pin" size={16} /> Place {peek ? `a ${choice.label.toLowerCase()}` : 'on map'}</button
+    >
   {/if}
 </div>
 
@@ -201,6 +257,18 @@
     gap: 8px;
     color: var(--ink-2);
     font-size: 12px;
+  }
+  .remade {
+    margin-left: 3px;
+    color: var(--ink-2);
+  }
+  .tile.on .remade {
+    color: inherit;
+  }
+  .switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .armed {
     display: flex;

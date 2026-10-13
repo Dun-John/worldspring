@@ -423,7 +423,7 @@ pub fn sewer_site(world: &World, t0: &T0, layout: usize, sx: i64, sy: i64) -> Op
         })
         .collect();
     let grate = grates.first().copied();
-    let mut rng = Pcg32::new(hash3(world.stream("under.sewer"), layout as i64, sx, sy), 91);
+    let mut rng = Pcg32::new(hash3(world.stream("under.sewer"), town::rng_key(t0, layout), sx, sy), 91);
     let surface = t0.sample(origin[0] + 0.5 * s, origin[1] + 0.5 * s, 20.0) as f32;
     let frame = Frame { origin, axis: [1.0, 0.0], across: [0.0, 1.0], nx: n, ny: n };
     site(t0, &l, UnderKind::Sewer, format!("w:{layout}:{sx}:{sy}"), (layout as u32, 0), frame, 2, grate, surface, (&UNDERCROFT, 1.0), &mut rng)
@@ -469,7 +469,7 @@ pub fn sewer_link_of(t0: &T0, l: &Layout, b: &town::Building) -> Option<P> {
         return None;
     }
     let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
-    let chosen = key.is_some_and(|k| SEWER_CELLARS.contains(&k)) || (b.func.is_none() && crate::core::rng::hash2(l.index as u64 ^ 0x5e3e, b.id as i64, 7) % 10 == 0);
+    let chosen = key.is_some_and(|k| SEWER_CELLARS.contains(&k)) || (b.func.is_none() && crate::core::rng::hash2(town::rng_key(t0, l.index as usize) as u64 ^ 0x5e3e, b.id as i64, 7) % 10 == 0);
     if !chosen {
         return None;
     }

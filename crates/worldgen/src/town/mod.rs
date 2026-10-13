@@ -594,18 +594,17 @@ pub fn forget_created(old: &[crate::world::Created], new: &[crate::world::Create
     wards::forget(&gone);
 }
 
-/// What layout `index`'s randomness is keyed by: the index itself for the world's own
-/// settlements; for its sites, their place among the sites and their seed (as `sites::generate`
-/// lays them out), so a world remade with more or fewer settlements keeps their dungeons and
-/// interiors; a created site's id (through its seed) for one added by hand, so it is laid out the
-/// same wherever it falls in the list: a world remade with more or fewer generated places moves
-/// it along.
+/// What layout `index`'s randomness is keyed by, never its number: the world's own settlements
+/// and sites by their seeds (a settlement's from its cell or where its pin was drawn, a site's
+/// from its place), so a world remade with a settlement or site more or fewer lays the others out
+/// as before, their dungeons and interiors too; a created site's id (through its seed) for one
+/// added by hand, so it is laid out the same wherever it falls in the list.
 pub fn rng_key(t0: &T0, index: usize) -> i64 {
     let n = t0.settlements.len();
-    let Some(poi) = index.checked_sub(n) else { return index as i64 };
+    let Some(poi) = index.checked_sub(n) else { return hash2(0x7365_7474_6c65_6b00, 0, t0.settlements[index].seed as i64) as i64 };
     match t0.pois.get(poi) {
         Some(p) if poi >= t0.base_pois => (p.seed ^ 0x6372_6561_7465_6400) as i64,
-        Some(p) => hash2(0x7369_7465_706f_6900, poi as i64, p.seed as i64) as i64,
+        Some(p) => hash2(0x7369_7465_706f_6900, 0, p.seed as i64) as i64,
         None => index as i64,
     }
 }
@@ -624,16 +623,16 @@ pub fn layout_print(world: &World, t0: &T0, index: usize) -> u64 {
     crate::core::hash::fnv64(format!("{l:?}").as_bytes())
 }
 
-/// What layout `index` is drawn from, as a hash: the inputs of its randomness (`town`'s index
-/// and seed, `sites::generate`'s and `rng_key`'s) with its tier, kind and size. Two worlds whose
+/// What layout `index` is drawn from, as a hash: the inputs of its randomness (`rng_key` and the
+/// seed) with its tier, kind, size and waters; never its number. Two worlds whose
 /// layouts at an index (each) hash the same lay them out the same, and everything in them, given
 /// the same ground and roads round them: the app keeps changes on a place across a remade world
 /// only then (`remapLayouts`); 0 past the last layout.
 pub fn layout_identity(t0: &T0, index: usize) -> u64 {
     let n = t0.settlements.len();
     if let Some(s) = t0.settlements.get(index) {
-        let what = (s.tier as i64) << 40 | (s.kind as i64) << 32 | s.population as i64;
-        return hash3(0x7365_7474_6c65_0000, index as i64, s.seed as i64, what);
+        let what = (s.coastal as i64) << 49 | (s.river as i64) << 48 | (s.tier as i64) << 40 | (s.kind as i64) << 32 | s.population as i64;
+        return hash3(0x7365_7474_6c65_0000, rng_key(t0, index), s.seed as i64, what);
     }
     match t0.pois.get(index - n) {
         Some(p) => hash3(0x7369_7465_0000_0000, rng_key(t0, index), p.seed as i64, p.kind as i64),
@@ -1258,8 +1257,8 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
             None => Rc::new(plan_town(&site, s, r, &road_ends, &mut rng)),
         };
         let ch = edit.map(|e| wards::changes(&plan, e, center).0).unwrap_or_default();
-        build_town(&site, s, r, &plan, &ch, &mut l, survey);
-        walls_off_river(&site, &mut l);
+        let hand = build_town(&site, s, r, &plan, &ch, &mut l, survey);
+        walls_off_river(&site, &mut l, &hand);
     }
     // A pin's ward names go to its districts in order, the central one first.
     if let Some(pin) = s.pin.and_then(|i| world.file.sketch.strokes.get(i as usize)) {
@@ -1331,7 +1330,7 @@ fn prepare<'a>(world: &World, t0: &'a T0, index: usize) -> (Site<'a>, Vec<(P, u8
     let r = urban_radius(s.tier, s.population);
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
     let site = Site::new(t0, center, lattice, reach(s) + 500.0, river_pieces(t0, center, reach(s) + 500.0));
-    let rng = Pcg32::new(hash2(world.stream("town"), index as i64, s.seed as i64), 31);
+    let rng = Pcg32::new(hash2(world.stream("town"), rng_key(t0, index), s.seed as i64), 31);
     (site, road_ends(t0, center, r, road_trim_radius(s.tier, s.population)), rng)
 }
 
@@ -2184,7 +2183,9 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
 /// its mesh corners moved first (`wards::moved_mesh`), then patches given another ward, lot
 /// size, merge or roll, the walls on or off. Each building's `id` is left as the patch it
 /// stands on (`generate` numbers them, `wards::inherit` matches them).
-fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::Changes, l: &mut Layout, survey: Option<&mut Vec<stairs::Profile>>) {
+/// Lays the town out into `l`; the walls of castles set by hand (their places in `l.walls`).
+fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::Changes, l: &mut Layout, survey: Option<&mut Vec<stairs::Profile>>) -> Vec<usize> {
+    let mut hand_walls = Vec::new();
     let mut mesh = wards::moved_mesh(plan, &ch.moves);
     let total = mesh.faces.len();
     let n_inner = plan.n_inner;
@@ -2484,7 +2485,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         if !matches!(w, Ward::Plaza | Ward::Farm | Ward::Park) {
             l.blocks.push(block.clone());
         }
-        let (first, towers_at, gates_at) = (l.buildings.len(), l.towers.len(), l.gate_towers.len());
+        let (first, towers_at, gates_at, walls_at) = (l.buildings.len(), l.towers.len(), l.gate_towers.len(), l.walls.len());
         match w {
             Ward::Plaza => {
                 // A monument, pushed toward the square's longest side (watabou's market).
@@ -2533,6 +2534,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             let gates: Vec<(P, bool)> = l.gate_towers.drain(gates_at..).map(|t| (t, true)).collect();
             let towers: Vec<(P, bool)> = l.towers.drain(towers_at..).map(|t| (t, false)).collect();
             l.extra_towers.extend(towers.into_iter().chain(gates));
+            hand_walls.extend(walls_at..l.walls.len());
         }
     }
     // Roads into the city and the ground before each gate stay open: the sprawl outside the
@@ -2638,6 +2640,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             Quarter { name: q.name.clone(), kind: q.kind, patches, label }
         })
         .collect();
+    hand_walls
 }
 
 struct QuarterInput<'a> {
@@ -3813,19 +3816,23 @@ fn approach_curve(e: P, g: P, heading: Option<P>) -> Vec<P> {
 
 /// Walls end at the bank: wall runs are cut where they cross a river channel (the water is
 /// the defence there), each cut end gets a tower on the bank, and towers standing in the
-/// channel go.
-fn walls_off_river(site: &Site, l: &mut Layout) {
+/// channel go. The walls of castles set by hand (`hand`, places in `l.walls`) put their bank
+/// towers after every other, as their own towers are (no `t:` id moves).
+fn walls_off_river(site: &Site, l: &mut Layout, hand: &[usize]) {
     if site.river.is_empty() {
         return;
     }
-    clip_walls(l, |p| site.near_river(p, 3.0), |t| site.near_river(t, 2.0));
+    clip_walls(l, |p| site.near_river(p, 3.0), |t| site.near_river(t, 2.0), hand);
 }
 
 /// Break walls where they would stand in water (`wet`, every 5 ft; a tower on each bank), and
-/// drop the towers standing in it (`tower_wet`).
-fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> bool) {
+/// drop the towers standing in it (`tower_wet`). The bank towers of the walls at `hand` go with
+/// the towers of castles set by hand (`l.extra_towers`).
+fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> bool, hand: &[usize]) {
     let mut walls: Vec<Vec<P>> = Vec::new();
-    for w in std::mem::take(&mut l.walls) {
+    for (wi, w) in std::mem::take(&mut l.walls).into_iter().enumerate() {
+        let by_hand = hand.contains(&wi);
+        let bank = |l: &mut Layout, t: P| if by_hand { l.extra_towers.push((t, false)) } else { l.towers.push(t) };
         let mut cur: Vec<P> = Vec::new();
         for (k, seg) in w.windows(2).enumerate() {
             let (a, b) = (seg[0], seg[1]);
@@ -3848,12 +3855,12 @@ fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> 
                     if is {
                         cur.push(edge);
                         if cur.len() >= 2 {
-                            l.towers.push(edge);
+                            bank(l, edge);
                             walls.push(std::mem::take(&mut cur));
                         }
                         cur.clear();
                     } else {
-                        l.towers.push(edge);
+                        bank(l, edge);
                         cur.push(edge);
                     }
                 }
@@ -3871,6 +3878,7 @@ fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> 
     l.walls = walls;
     l.towers.retain(|t| !tower_wet(*t));
     l.gate_towers.retain(|t| !tower_wet(*t));
+    l.extra_towers.retain(|t| !tower_wet(t.0));
 }
 
 /// Point and unit direction `at` ft along a polyline.

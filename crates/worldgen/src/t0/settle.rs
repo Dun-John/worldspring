@@ -13,7 +13,7 @@ use super::flood::neighbors;
 use super::hydro::{Hydro, Mouth, NO_LAKE};
 use crate::World;
 use crate::core::noise::{fbm, smoothstep};
-use crate::core::rng::Pcg32;
+use crate::core::rng::{Pcg32, hash3, unit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -303,12 +303,14 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         if !tiers.contains(&tier) {
             continue;
         }
-        let mut rng = Pcg32::new(world.stream("t0.settle"), 21 + tier as u64);
-        let mut cands: Vec<(f64, usize)> = (0..n).filter(|&k| score[k] > 0.05).map(|k| (score[k] * road_bonus(k, tier) * (0.55 + 0.45 * rng.next_f64()), k)).collect();
+        // Each cell's draws are its own (its jitter here, its seed and size in `make`), so a
+        // settlement added or taken away elsewhere changes no other's.
+        let jitter = world.stream("t0.settle");
+        let mut cands: Vec<(f64, usize)> = (0..n).filter(|&k| score[k] > 0.05).map(|k| (score[k] * road_bonus(k, tier) * (0.55 + 0.45 * unit(hash3(jitter, k as i64, tier as i64, 0))), k)).collect();
         cands.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         let spacing = spacing_mi * 5280.0 / cell;
-        // A settlement of this tier at cell `k`, standing at (x, y) ft.
-        let make = |k: usize, rng: &mut Pcg32, x: f64, y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
+        // A settlement of this tier at cell `k`, standing at (x, y) ft, drawn from `seed`.
+        let make = |k: usize, seed: u64, x: f64, y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
             let (lo, hi) = match tier {
                 Tier::Metropolis => (25_000.0, 80_000.0),
@@ -316,7 +318,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 Tier::Town => (500.0, 5_000.0),
                 Tier::Village => (50.0, 500.0),
             };
-            let population = (lo * libm::pow(hi / lo, rng.next_f64())) as u32;
+            let population = (lo * libm::pow(hi / lo, unit(hash3(seed, 0x706f_70, 0, 0)))) as u32;
             let b = biome_of(k);
             let above = inp.height[k] - sea;
             let ore = fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5);
@@ -384,21 +386,24 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 coastal: is_coast,
                 river: on_river[k],
                 capital,
-                seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32,
+                seed,
                 culture: 0,
                 pin: pin.map(|p| p.stroke as u32),
             }
         };
-        // Pinned ones first (they count toward the tier's quota), with their own seeds.
-        let mut placed = 0;
-        for pin in inp.pins.iter().filter(|p| p.tier == tier) {
-            let mut prng = Pcg32::new(crate::core::rng::hash2(world.stream("t0.pin"), pin.stroke as i64, 0), 7);
+        // Pinned ones first (they count toward the tier's quota), seeded by where they were
+        // drawn (as the sketch's sites are), so taking another stroke away changes none. Those
+        // added beside the world's own come after them (`Pin::added`).
+        let pinned = |pin: &super::sketch::Pin, out: &[Settlement], conflicts: &mut Vec<super::sketch::Conflict>| {
+            let seed = hash3(world.stream("t0.pin"), (pin.x / 10.0) as i64, (pin.y / 10.0) as i64, tier as i64);
             let capital = if pinned_capital { pin.capital } else { tier == Tier::Metropolis } && !out.iter().any(|s| s.capital);
-            out.push(make(pin.cell, &mut prng, pin.x, pin.y, capital, Some(pin), conflicts));
+            make(pin.cell, seed, pin.x, pin.y, capital, Some(pin), conflicts)
+        };
+        let mut placed = 0;
+        for pin in inp.pins.iter().filter(|p| p.tier == tier && !p.added) {
+            let s = pinned(pin, &out, conflicts);
+            out.push(s);
             placed += 1;
-        }
-        if count == 0 {
-            continue;
         }
         for &(_, k) in &cands {
             if placed >= count {
@@ -408,15 +413,27 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             let ok = out.iter().all(|s| {
                 let (sx, sy) = ((s.cell % w) as f64, (s.cell / w) as f64);
                 let d = crate::core::sqrt((sx - cx) * (sx - cx) + (sy - cy) * (sy - cy));
-                let need = if s.tier >= tier { spacing } else { 10.0 * 5280.0 / cell };
+                // (One added beside the world's own keeps only the least room round it.)
+                let added = s.pin.is_some_and(|st| inp.pins.iter().any(|p| p.stroke == st as usize && p.added));
+                let need = if s.tier >= tier && !added { spacing } else { 10.0 * 5280.0 / cell };
                 d >= need.max(10.0 * 5280.0 / cell)
             });
             if !ok {
                 continue;
             }
             let capital = tier == Tier::Metropolis && !pinned_capital && !out.iter().any(|s| s.capital);
-            out.push(make(k, &mut rng, cx * cell, cy * cell, capital, None, conflicts));
+            out.push(make(k, hash3(world.stream("t0.settle.seed"), k as i64, tier as i64, 0), cx * cell, cy * cell, capital, None, conflicts));
             placed += 1;
+        }
+        for pin in inp.pins.iter().filter(|p| p.tier == tier && p.added) {
+            // (Not on another settlement: drawn on one, it would be laid out over it.)
+            if let Some(o) = out.iter().find(|s| crate::core::sqrt((s.x - pin.x) * (s.x - pin.x) + (s.y - pin.y) * (s.y - pin.y)) < 3.0 * 5280.0) {
+                let message = format!("This settlement is within 3 miles of a {}: no settlement placed", o.tier.name());
+                conflicts.push(super::sketch::Conflict { stroke: pin.stroke, message, x: pin.x, y: pin.y });
+                continue;
+            }
+            let s = pinned(pin, &out, conflicts);
+            out.push(s);
         }
     }
     out
@@ -477,7 +494,9 @@ pub fn snap_to_water(settlements: &mut [Settlement], cell: f64, wet: &dyn Fn(f64
 pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f64, f64)]) -> Vec<Poi> {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let p = inp.world.params();
-    let mut rng = Pcg32::new(inp.world.stream("t0.poi"), 22);
+    // Each try draws from its own stream (where it looks, whether it takes the place, the seed),
+    // so a try a settlement now blocks (or one more settlement's extra ruin) moves no other site.
+    let stream = inp.world.stream("t0.poi");
     let n_ruins = ((settlements.len() as f64) * 0.35 * p.poi_density).round() as usize;
     let n_towers = ((settlements.len() as f64) * 0.06 * p.poi_density).round().max(if p.poi_density > 0.0 { 1.0 } else { 0.0 }) as usize;
     let mut out: Vec<Poi> = Vec::new();
@@ -489,6 +508,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
         let mut placed = 0;
         while placed < count && tries < count * 60 + 100 {
             tries += 1;
+            let mut rng = Pcg32::new(hash3(stream, kind as i64, tries as i64, 0), 22);
             let k = rng.below((w * h) as u32) as usize;
             if !inp.land[k] || inp.hydro.lake_of[k] != NO_LAKE {
                 continue;
@@ -510,7 +530,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
         }
     }
     // Underground entrances, from their own stream (the surface sites above stay put).
-    let mut rng = Pcg32::new(inp.world.stream("t0.poi.under"), 23);
+    let stream = inp.world.stream("t0.poi.under");
     let sea = p.sea_level_ft;
     // Steepest drop to a neighbour (ft per cell): caves open in rugged ground and sea cliffs.
     let relief = |k: usize| {
@@ -530,6 +550,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
         let (mut tries, mut placed) = (0, 0);
         while placed < count && tries < count * 200 + 200 {
             tries += 1;
+            let mut rng = Pcg32::new(hash3(stream, kind as i64, tries as i64, 0), 23);
             let k = rng.below((w * h) as u32) as usize;
             if !inp.land[k] || inp.hydro.lake_of[k] != NO_LAKE || inp.height[k] < sea + 20.0 {
                 continue;
@@ -554,7 +575,8 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
         }
     }
     // A lava tube on each volcano's flank, where it opens on dry land.
-    for &(vx, vy, r_ft) in volcanoes {
+    for (v, &(vx, vy, r_ft)) in volcanoes.iter().enumerate() {
+        let mut rng = Pcg32::new(hash3(stream, PoiKind::LavaTube as i64, v as i64, 0), 23);
         for _ in 0..12 {
             let a = rng.range(0.0, std::f64::consts::TAU);
             let d = r_ft * rng.range(0.7, 1.4);

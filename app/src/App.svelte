@@ -3,7 +3,7 @@
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
   import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Npc, Overlay, Placed, Plateau, Plot, SpriteMeta, Stroke, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
-  import { Sketcher, drawsLand, scaleStrokes, type ToolSettings } from './editor/sketcher';
+  import { MI, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
   import { buildKeymap } from './ui/shell/keymap';
   import { createKeyHandler, focusKind } from './ui/shell/shortcuts';
@@ -220,11 +220,12 @@
    * The world's edits changed (here, by an agent, or by undo): apply them to the map, keep the
    * share link, tell mapd (unless it told us), and note it in the history.
    */
-  function applyEdits(next: Edits, change: Change, author: string, opts: { record?: boolean; send?: boolean } = {}) {
+  function applyEdits(next: Edits, change: Change, author: string, opts: { record?: boolean; send?: boolean; quiet?: boolean } = {}) {
     const before = edits;
     next = tidy(next);
     const ops = diffEdits(before, next);
     if (!ops.length) return;
+    editCount++;
     // (What changed made plain: the undo step and the saved copy must clone.)
     next = plainChanges(next, ops);
     world = { ...world, edits: next };
@@ -238,7 +239,7 @@
     if (opts.send !== false) sync.ops(ops, change);
     const label = describe(change, author, nameOf);
     if (opts.record === false) {
-      toast(label);
+      if (!opts.quiet) toast(label);
       return;
     }
     const step: Step = { label, author, ops, inverse: diffEdits(next, before) };
@@ -284,12 +285,20 @@
   let syncKeeps = $state(false);
   sync.onWorld = (w, mine) => {
     syncKeeps = sync.keeps;
-    if (!sameWorld(w, world)) return true;
+    // (A copy of the world as it was before a remake, answered late, is not this one's.)
+    if (!sameWorld(w, world) || JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null)) return true;
     if (busy) return false;
     // mapd's copy of this world keeps the edits made while the app was away; what was changed
-    // here meanwhile goes on top (and to mapd).
-    applyEdits(w.edits ?? {}, { tool: 'sync', label: 'Synced changes made elsewhere' }, 'mapd', { record: false, send: false });
-    if (mine.length) applyEdits(withOps(mine), { tool: 'sync', label: 'Kept the changes made here meanwhile' }, 'user', { record: false });
+    // here meanwhile goes on top (and to mapd). (When that is what the app has, as after a
+    // remake whose changes went on while mapd took the world, only mapd needs them.)
+    const theirs = w.edits ?? {};
+    const change: Change = { tool: 'sync', label: 'Kept the changes made here meanwhile' };
+    if (!diffEdits(edits, tidy(mine.length ? applyOps(theirs, mine).edits : theirs)).length) {
+      if (mine.length) sync.ops(mine, change);
+    } else {
+      applyEdits(theirs, { tool: 'sync', label: 'Synced changes made elsewhere' }, 'mapd', { record: false, send: false });
+      if (mine.length) applyEdits(withOps(mine), change, 'user', { record: false });
+    }
     // A world opened with its own edits, none kept here: mapd's copy, if other, is asked about.
     const c = openCheck;
     openCheck = null;
@@ -652,14 +661,24 @@
   /** How long the last world took to generate (s), as the Generate button says. */
   let genSeconds = $state<number | null>(Number(stored('ui.genSeconds')) || null);
 
+  /** What the last remake did with the changes (null: nothing moved), for a caller that says so
+   * itself (`generate`'s `quiet`). */
+  let lastFollowed: Followed | null = null;
+  /** How many changes the last remake made itself (`editCount`): 1 when the changes moved. */
+  let remapCount = 0;
+
   /**
    * Generate `w`. `keepSketch`: with the sketch being drawn (or else the world's), stretched
    * from the map size it was drawn at to `w`'s (a file opened or imported brings its own).
    * Remaking the world shown round its changes, or leaving them for another world, is asked
-   * about first unless `confirmed`. False if it wasn't generated (asked, cancelled, busy).
+   * about first unless `confirmed`. `quiet`: no notice of what the changes did or what the sketch
+   * can't follow (the caller says so: `lastFollowed`). False if it wasn't generated (asked,
+   * cancelled, busy).
    */
-  async function generate(w: WorldFile, keepSketch = false, from: Source | null = null, confirmed = false): Promise<boolean> {
+  async function generate(w: WorldFile, keepSketch = false, from: Source | null = null, confirmed = false, quiet = false): Promise<boolean> {
     if (busy) return false;
+    lastFollowed = null;
+    remapCount = 0;
     if (w.gen_version !== GEN_VERSION) {
       busy = true;
       const settled = await settleVersion(w, from).finally(() => (busy = false));
@@ -741,8 +760,9 @@
       // (The view applies the world's edits: names, created sites, hidden labels.)
       await view.loadWorld(world, following ? follow : undefined);
       overlay = view.overlay;
-      // (Edits the user chose over those kept replace mapd's copy too.)
-      sync.open(world, replaced || restored);
+      // (Edits the user chose over those kept replace mapd's copy too; so do those carried over
+      // to the world remade, over any copy kept of it from before.)
+      sync.open(world, replaced || restored || following);
       await play.setWorld(world, view.geom!.world_hash);
       worldShown = true;
       worldsMade++;
@@ -768,10 +788,13 @@
         ? `${m.kept ? `Kept ${changes(m.kept)} with the remade world; ` : ''}${changes(m.parked)} set aside: their places came out differently`
         : `Kept ${changes(m.kept)} with the remade world`;
       // (Only what moved: changes made here while the world was generating stay.)
-      applyEdits(applyOps(edits, diffEdits(kept, m.edits)).edits, { tool: 'reanchor', label }, 'user', { record: false });
+      const n = editCount;
+      applyEdits(applyOps(edits, diffEdits(kept, m.edits)).edits, { tool: 'reanchor', label }, 'user', { record: false, quiet });
+      remapCount = editCount - n;
+      lastFollowed = m;
     }
     const n = overlay?.conflicts?.length ?? 0;
-    if (w.sketch && n) toast(`The world follows your sketch, with ${n} ${n === 1 ? 'exception' : 'exceptions'}: see Sketch`);
+    if (w.sketch && n && !quiet) toast(`The world follows your sketch, with ${n} ${n === 1 ? 'exception' : 'exceptions'}: see Sketch`);
     return true;
   }
 
@@ -1048,7 +1071,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, keepSketch?: boolean) => generate(w, keepSketch), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, keepSketch?: boolean) => generate(w, keepSketch), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -1316,7 +1339,7 @@
     const asked = ++townAsked;
     if (i < 0) {
       townPlan = null;
-      townNote = 'Go to a town, city or metropolis to re-plan it (villages grow along their roads). New towns are drawn in World › Sketch.';
+      townNote = 'Go to a town, city or metropolis to re-plan it (villages grow along their roads). New towns are added in Edit › Places.';
       townTool?.setPlan(null);
       return;
     }
@@ -1949,14 +1972,23 @@
   function armPlace(c: SiteChoice, label = 'site') {
     placeLabel = label;
     disarmPlace();
+    // A settlement's ring: about how far it reaches, at a middling size for its tier.
+    const reach = c.settlement ? SETTLEMENT_REACH_FT[c.settlement.tier] : 0;
+    const showRing = (x: number, y: number) => {
+      const [sx, sy] = view.cam.worldToScreen(x, y);
+      const b = container.getBoundingClientRect();
+      ring = { x: b.left + sx, y: b.top + sy, r: Math.max(6, reach * view.cam.ppf) };
+    };
     const tool: PointerTool = {
       down: () => true,
-      move: () => {},
-      hover: () => {},
+      move: (x, y) => reach && showRing(x, y),
+      hover: (x, y) => reach && showRing(x, y),
+      leave: () => (ring = null),
+      hoverFollows: true,
       cancel: () => disarmPlace(),
       up: (x, y) => {
         disarmPlace();
-        void createSite(c, x, y);
+        void (c.settlement ? addSettlement(c, x, y) : createSite(c, x, y));
       },
     };
     placeTool = tool;
@@ -1968,7 +2000,136 @@
   function disarmPlace() {
     placeTool = null;
     placeArmed = false;
+    ring = null;
     syncTool();
+  }
+
+  /** How far a settlement of each tier reaches (ft), at the middle of its tier's sizes (as
+   * `town::reach` makes it): the ring shown while placing one. */
+  const SETTLEMENT_REACH_FT: Record<PinTier, number> = { village: 660, town: 1000, city: 2900, metropolis: 5800 };
+
+  /** A settlement added from Places: the world before and after (its sketch and changes), so
+   * Take back can make it again as it was. */
+  interface Added {
+    name: string;
+    /** The toast's words (offered again when Take back can't run yet). */
+    text: string;
+    seed: number;
+    params: string;
+    sketchBefore: WorldFile['sketch'];
+    sketchAfter: string;
+    /** The changes as they were before (null: others came in while the world was remade, so
+     * they can't simply be put back), and `editCount` once it was added. */
+    editsBefore: Edits | null;
+    count: number;
+    parked: number;
+    toast: number;
+  }
+  let added: Added | null = null;
+
+  /** Changes made to the edits (`applyEdits`), counted: whether any came in meanwhile. */
+  let editCount = 0;
+
+  /** The notice of a settlement added, with Take back (it stays until dismissed). */
+  function offerTakeBack(a: Added) {
+    a.toast = toast(a.text, undefined, { sticky: true, action: { label: 'Take back', run: () => void takeBack() } });
+    added = a;
+  }
+
+  /** Add a settlement at (x, y): a pin in the sketch with the options chosen, and the world
+   * remade round it (asked first when it has changes, as any remake is); then say what came
+   * of it, with Take back. */
+  async function addSettlement(c: SiteChoice, x: number, y: number) {
+    const st = c.settlement!;
+    if (playOn) return toast('Stop playing to remake the world');
+    if (busy) return;
+    if (world.gen_version !== GEN_VERSION) return toast('This world was made with an older generator: open it upgraded to add settlements');
+    const strokes = ($state.snapshot(world.sketch?.strokes ?? []) as Stroke[]).slice();
+    // (Within 3 miles of another settlement none is placed: the generator's rule.)
+    const near = (overlay?.features ?? []).find((f) => SETTLEMENT_KINDS.includes(f.kind) && Math.hypot(f.x - x, f.y - y) < 3 * MI);
+    if (near) return toast(`Too close to ${near.name}: keep settlements 3 miles apart`);
+    if (strokes.some((s) => s.tool === 'pin' && Math.hypot(s.pts[0][0] - x, s.pts[0][1] - y) < 3 * MI)) return toast('Too close to a settlement placed by hand: keep them 3 miles apart');
+    const spot = await view.gen.spot('ruin', undefined, 'c:0', x, y);
+    if (!spot) return toast('The map could not answer: try again');
+    if ('error' in spot) return toast(spot.error.charAt(0).toUpperCase() + spot.error.slice(1));
+    const pin = pinStroke([x, y], { tier: st.tier, kind: st.livesBy, capital: st.capital, wards: st.wards, name: c.name, added: true });
+    const next: WorldFile = { ...($state.snapshot(world) as WorldFile), sketch: { strokes: [...strokes, pin] } };
+    const run = async () => {
+      if (playOn || busy) return toast(playOn ? 'Stop playing to remake the world' : 'The world is being made: try again');
+      if (added) dismiss(added.toast);
+      added = null;
+      // (As they are now: the question may have been open a while.)
+      const before = $state.snapshot(world) as WorldFile;
+      const had = new Set((overlay?.features ?? []).map((f) => f.id));
+      const n0 = editCount;
+      if (!(await generate({ ...before, sketch: next.sketch }, false, null, true, true))) return;
+      const k = strokes.length;
+      const conflicts = (overlay?.conflicts ?? []).filter((x) => x.stroke === k).map((x) => x.message);
+      const missing = conflicts.find((m) => m.includes('no settlement placed'));
+      // The new one of its tier nearest the pin (ports move to the water, pins on the water to
+      // the nearest land).
+      const made = missing
+        ? null
+        : ((overlay?.features ?? [])
+            .filter((f) => f.kind === st.tier && !had.has(f.id))
+            .map((f) => [f, Math.hypot(f.x - x, f.y - y)] as const)
+            .sort((a, b) => a[1] - b[1])[0]?.[0] ?? null);
+      const name = made?.name ?? c.name ?? `the ${st.tier}`;
+      const m = lastFollowed as Followed | null;
+      const count = (n: number) => `${n} ${n === 1 ? 'change' : 'changes'}`;
+      const kept = m ? (m.parked ? ` Kept ${count(m.kept)}; ${count(m.parked)} set aside: their places came out differently.` : ` Kept ${count(m.kept)} with the remade world.`) : '';
+      const other = conflicts.filter((x) => x !== missing);
+      const text = missing ? `No ${st.tier} placed: ${missing.replace(/^This (pin|settlement) /, 'it ').replace(/: no settlement placed$/, '')}.${kept}` : `Added ${name}.${other.length ? ` ${other.join('; ')}.` : ''}${kept}`;
+      offerTakeBack({
+        name,
+        text,
+        seed: before.seed,
+        params: JSON.stringify(before.params),
+        sketchBefore: before.sketch,
+        sketchAfter: JSON.stringify(world.sketch ?? null),
+        // (Only the remake's own change came in while it was made.)
+        editsBefore: editCount - n0 === remapCount ? (before.edits ?? {}) : null,
+        count: editCount,
+        parked: m?.parked ?? 0,
+        toast: 0,
+      });
+      if (made) select({ kind: 'feature', feature: made });
+    };
+    if (remakeOf(next)) ask('regen', () => void run());
+    else await run();
+  }
+
+  /** Take back the settlement last added: the world made again without its pin, with the changes
+   * as they were before it came (when none were made since, nor while either world was made;
+   * else they follow as in any remake). */
+  async function takeBack() {
+    const a = added;
+    if (!a) return;
+    // (Its toast went with the click: offered again when it can't run yet.)
+    if (playOn || busy) {
+      toast(playOn ? 'Stop playing to remake the world' : 'The world is being made: try again');
+      return offerTakeBack(a);
+    }
+    // (Strokes or a design not saved yet are asked about first: kept, Take back stays offered.)
+    if (sketchDirty() || designer?.dirty) {
+      offerTakeBack(a);
+      return sketchDirty() ? ask('sketch', () => void takeBack(), false) : ask('design', () => void takeBack());
+    }
+    dismiss(a.toast);
+    added = null;
+    if (!worldShown || world.seed !== a.seed || JSON.stringify(world.params) !== a.params || JSON.stringify(world.sketch ?? null) !== a.sketchAfter) return toast('The world has changed since: erase the settlement in World › Sketch');
+    const untouched = a.editsBefore && editCount === a.count;
+    const { sketch: _, ...rest } = $state.snapshot(world) as WorldFile;
+    const back: WorldFile = a.sketchBefore ? { ...rest, sketch: a.sketchBefore } : rest;
+    const n0 = editCount;
+    if (!(await generate(back, false, null, true, true))) return;
+    const restore = untouched && editCount - n0 === remapCount;
+    const m = lastFollowed as Followed | null;
+    if (restore) applyEdits(a.editsBefore!, { tool: 'reanchor', label: `Took back ${a.name}` }, 'user', { record: false, quiet: true });
+    const count = (n: number) => `${n} ${n === 1 ? 'change' : 'changes'}`;
+    // (Not put back as they were: what the remake kept or set aside, and those set aside before.)
+    const said = restore ? '' : `${m?.parked ? ` ${count(m.parked)} set aside: their places came out differently.` : ''}${a.parked ? ` ${count(a.parked)} set aside when it was added stay aside: others were made since.` : ''}`;
+    toast(`Took back ${a.name}.${said}`);
   }
 
   /** Create a site near (x, y), where the generator allows (dry land, out of rivers), named
@@ -2821,7 +2982,7 @@
       title="Edit"
       icon="pencil"
       tabs={[
-        { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a ruin, dungeon, crypt, cave, mine, tower, camp or inn.' },
+        { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a town, ruin, dungeon, cave, mine, tower, camp or inn.' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, bridges and fords; clear a town’s own buildings.' },
         { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the town in view (U)', hint: 'Re-plan the town in view: its streets, wards, lots and walls.' },
         { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s ground; draw plateaus, cliffs and pits.' },
@@ -2843,7 +3004,7 @@
     >
       {#snippet children(peek)}
         {#if placeOn}
-          <PlacePanel armed={placeArmed} {peek} onPlace={armPlace} onCancel={disarmPlace} onTowns={() => go('world', 'sketch')} />
+          <PlacePanel armed={placeArmed} {peek} onPlace={armPlace} onCancel={disarmPlace} onTowns={() => go('world', 'sketch')} playing={playOn} seconds={genSeconds} />
         {:else if buildOn}
           <BuildPanel
             bind:settings={build}
@@ -3067,7 +3228,7 @@
       <button class="ws-btn" onclick={disarmPlace}>Cancel</button>
     </div>
   {/if}
-  {#if (scatterOn || groundOn) && ring}<div class="ring" style="left: {ring.x - ring.r}px; top: {ring.y - ring.r}px; width: {ring.r * 2}px; height: {ring.r * 2}px" class:erase={scatter.mode === 'erase'}></div>{/if}
+  {#if (scatterOn || groundOn || placeArmed) && ring}<div class="ring" style="left: {ring.x - ring.r}px; top: {ring.y - ring.r}px; width: {ring.r * 2}px; height: {ring.r * 2}px" class:erase={scatterOn && scatter.mode === 'erase'}></div>{/if}
   {#if (scatterOn || groundOn || designer) && chip}<div class="hand-chip" style="left: {chip.x}px; top: {chip.y}px">{chip.text}</div>{/if}
   {#if placeBar && placeBarAt}
     {@const p = placer()}

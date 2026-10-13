@@ -273,6 +273,11 @@ pub struct Stroke {
     /// Pins: names for the settlement's districts, in order (the central one first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wards: Vec<String>,
+    /// Pins: added beside the world's own settlements (Edit › Places), not in place of one of
+    /// its tier: it neither counts toward the tier's number nor keeps the others of its tier away
+    /// (smaller ones keep the least room, 10 mi); none is placed within 3 mi of a settlement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub added: bool,
     /// Sites: what lies beneath a ruin (dungeon, crypt, catacombs) or an entrance (any site).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub under: Option<String>,
@@ -333,8 +338,8 @@ impl Sketch {
                     _ => return Err("'under' is for ruin sites (dungeon, crypt, catacombs) and entrances (any site)".into()),
                 }
             }
-            if (s.capital || !s.wards.is_empty()) && s.tool != SketchTool::Pin {
-                return Err("capital and wards are for pins".into());
+            if (s.capital || s.added || !s.wards.is_empty()) && s.tool != SketchTool::Pin {
+                return Err("capital, added and wards are for pins".into());
             }
             if s.wards.len() > WARDS_MAX || s.name.iter().chain(&s.wards).any(|n| n.chars().count() > NAME_MAX) {
                 return Err(format!("names are at most {NAME_MAX} characters, and a pin names at most {WARDS_MAX} wards"));

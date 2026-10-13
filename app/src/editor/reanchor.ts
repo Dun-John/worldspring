@@ -123,7 +123,7 @@ export function layoutsIn(edits: Edits): number[] {
 }
 
 /** The world's own layouts among `lis` (in `before`) whose place the remade world (`after`) has
- * drawn alike: the same feature (id, kind and place) from the same index and seed (the same
+ * drawn alike: the same feature (id, kind and place) from the same seed (the same
  * `layout_ids` entry). Old layout number → new; the others aren't in it. */
 export function matchLayouts(lis: number[], before: Overlay, after: Overlay): Map<number, number> {
   const [a, b] = [layoutsOf(before), layoutsOf(after)];
