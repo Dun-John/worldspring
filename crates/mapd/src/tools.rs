@@ -19,7 +19,7 @@ use crate::Shared;
 pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from \
 the map's top-left corner, x east and y south. Find places with search_features, features_near or world_overview, \
 inspect them with get_feature and list_children, see them with render_view. Edits (rename, annotate, create, hide) are saved and appear live \
-in the open map app. Created sites are generated like the world's own: a ruin's dungeon or crypt is fully playable. Battlemaps take objects put down or taken away by hand (place_objects, remove_objects), including uploaded sprites (upload_sprite). Many edits at once go in one batch. Every tool takes an optional world (the hash world_overview gives) and refuses to run if another world is open. The DM's notebook holds NPCs (list_npcs, create_npc, place_npc...) and plot points tied to places (list_plots, create_plot...); get_feature and describe_location show those at a place.";
+in the open map app. Created sites are generated like the world's own: a ruin's dungeon or crypt is fully playable. Battlemaps take objects put down or taken away by hand (place_objects, remove_objects), including uploaded sprites (upload_sprite); their ground can be shaped (shape_ground, set_plateau). Many edits at once go in one batch. Every tool takes an optional world (the hash world_overview gives) and refuses to run if another world is open. The DM's notebook holds NPCs (list_npcs, create_npc, place_npc...) and plot points tied to places (list_plots, create_plot...); get_feature and describe_location show those at a place.";
 
 pub(crate) fn schema(props: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": props, "required": required })
@@ -75,6 +75,7 @@ pub fn list() -> Value {
         a.extend(crate::build::list());
         a.extend(crate::works::list());
         a.extend(crate::crossings::list());
+        a.extend(crate::ground::list());
         a.extend(crate::design::list());
         a.extend(crate::towns::list());
         a.extend(crate::batch::list());
@@ -95,7 +96,7 @@ pub(crate) fn arg_str(a: &Value, k: &str) -> Result<String, String> {
 }
 
 /// A place from `id` or `x_ft`/`y_ft` (or a value that is either).
-async fn place(app: &Shared, a: &Value) -> Result<[f64; 2], String> {
+pub(crate) async fn place(app: &Shared, a: &Value) -> Result<[f64; 2], String> {
     if let (Some(x), Some(y)) = (a["x_ft"].as_f64(), a["y_ft"].as_f64()) {
         return Ok([x, y]);
     }
@@ -147,6 +148,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::crossings::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::ground::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::design::call(app, name, &a).await {

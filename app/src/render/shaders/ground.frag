@@ -150,7 +150,7 @@ vec3 surfaceColor(int s, vec2 w) {
 
 // Flights of steps crossing the chunk: per axis (bottom, top) and (half width, start up the
 // flight, tread depth, 0), in squares.
-uniform vec4 uStairs[32];
+uniform vec4 uStairs[128];
 uniform float uStairN;
 
 // A flight of steps: treads square across the nearest flight's axis (a bold nosing line on each,
@@ -160,7 +160,7 @@ vec3 treads(vec3 col, vec2 q, float steep) {
     float best = 1e9;
     vec4 axis = vec4(0.0);
     vec4 more = vec4(0.0);
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 64; i++) {
         if (float(i) >= uStairN) break;
         vec4 a = uStairs[2 * i];
         vec4 m = uStairs[2 * i + 1];

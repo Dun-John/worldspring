@@ -374,7 +374,7 @@ pub fn runs(p: &Profile, prm: &StairParams) -> Vec<(f64, f64, f64)> {
 
 /// The depth of a tread drawn (ft): two to a square, whatever the rise (bold enough to read at
 /// a battlemap's scale).
-const TREAD: f64 = 2.5;
+pub const TREAD: f64 = 2.5;
 
 /// A stretch of a flight as it is drawn: its axis from the bottom up (world ft), the width it
 /// covers, how far up the flight its bottom lies, and the depth of a tread (ft). A street's

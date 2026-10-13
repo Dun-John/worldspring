@@ -62,6 +62,7 @@ pace.
 | `n:<id>`, `p:<id>` | An NPC, a plot point (the DM's notebook). |
 | `o:<id>`, `x:<id>`, `s:<asset>` | A battlemap object put down by hand; a clear (generated objects taken away); an uploaded sprite (an object kind). |
 | `v:<id>` | A crossing put down by hand: a bridge, ford or ferry. |
+| `h:<id>`, `g:<x>:<y>` | A plateau or pit; a block of ground brushed by hand (80 ft square, block indices). |
 
 A tool that takes a place accepts either an `id` or `x_ft` and `y_ft`.
 
@@ -73,7 +74,7 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 |---|---|
 | `world_overview` | Size, land masses, how many features of each kind, the largest settlements. |
 | `search_features` | Features by current name or kind, each with its extent (bounding box and area, or a river's length). From three letters it also finds districts and businesses (inns, temples, …), renamed ones by their new names. |
-| `get_feature` | Details and relations: what it is, its extent, the areas it lies in, nearest settlements, roads, districts, notable buildings, ways underground, a site's levels and rooms; a settlement's sites and flights of steps, and for anything in a layout the settlement (and site) it is in. |
+| `get_feature` | Details and relations: what it is, its extent, the areas it lies in, nearest settlements, roads, districts, notable buildings, ways underground, a site's levels and rooms; a settlement's sites and flights of steps (as generated), and for anything in a layout the settlement (and site) it is in. |
 | `list_children` | What a feature contains: districts and businesses, levels and rooms, a settlement's sites (drawn businesses among its businesses), a region's settlements and sites. |
 | `list_names` | Everything that can be renamed, with current and generated names: named features; a settlement's districts, businesses, towers, underground sites and the sites in it; a building's or site's levels (`l:`) and rooms (`r:`). |
 | `describe_location` | What is at a place: elevation, biome, the areas it lies in, the building, district or site there, named features nearby (measured to their nearest edge or course). |
@@ -106,6 +107,9 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 | `restore_building` | Put one of the world's own buildings back as generated. |
 | `place_crossing` | Put a bridge, ford or ferry down `from` one bank `to` the other (`[x_ft, y_ft]` each; 10 to 2000 ft, a ferry at least 68; `width_ft` 5 to 40, default 12): a bridge's plank deck clear of the water, a ford's bed at wading depth under stepping stones, a ferry's jetties with a raft on a rope between. With `id`, changes that one. Returns its `v:` id. |
 | `list_crossings`, `remove_crossings` | The crossings put down by hand; take some away by id. |
+| `shape_ground` | Shape a battlemap's ground with a round brush, a dab (`at`, `radius_ft`) or a stroke (`path`, `width_ft`): `raise` or `lower` (`height_ft`, `hardness`), `smooth` or `restore` (`strength`). Dry ground lowered never sinks below the water beside it. Returns the blocks changed and the lowest and highest ground under it before and after. |
+| `set_plateau`, `delete_plateau` | A plateau or pit: an `outline`, or `around` a building, tower or site (its footprint grown by `margin_ft`), at `level_ft` above the sea or `rise_ft` above the ground there, with an `edge_ft` slope (0: a sheer cliff). With `id`, changes one; buildings on it stand at its level. |
+| `ground_heights` | The ground's height on every square of a box round a place, as generated and as shaped, with the plateaus and brushed blocks there. |
 | `get_site_design` | An underground site (`u:`) or a building's interior (`b:`) as a text plan: rooms by symbol, one character per 5-ft square, doors, items and the ways between levels (a building's: its stair block, levels by storey, cellars, doors to the outside). |
 | `set_site_design` | Change a site or a building's interior from a plan (any part of it; `doors: auto`; `furnish`; a site's levels added below). Refused when it breaks a rule play mode needs (a site's one way in, ways down over ways up, every square reachable; a building's one front door onto open ground, the stairs on floor, every room reached). A building's design is set aside when its footprint changes, and follows a change of storeys; `cellars <n>` digs or fills in cellars (0 to 3; names and NPCs on its levels follow). Items: furniture, indoor props (`sacks`, `brazier`, `bones`…) and uploaded sprites (`s:<asset id>`, sites underground too); `back n|e|s|w` sets the side one stands against (left out: it finds its wall), `variant 0-3` one of its looks (left out: picked by position). |
 | `reset_site_design` | The site or the building's interior as generated again. |
@@ -134,10 +138,13 @@ Edits are layered over the generated world. The world file is seed + parameters 
 | `designs` | Underground sites and building interiors designed by hand, by site or building id: the grid's place, and per level its squares (run-length encoded), rooms, doors and items (a building's also its stair block and what it was made for); items include uploaded sprites as `s:<asset id>` and, when set by hand, `back` (the side one stands against, 0 north to 3 west) and `variant` (0-3). Built instead of the generated one. |
 | `crossings` | Crossings put down by hand, by `v:<id>`: kind (bridge, ford, ferry), ends `a` and `b` (ft), width. |
 | `buildings` | The world's own buildings changed or taken away, by `b:<layout>:<id>`: `at` (its middle as generated; the change is set aside if another building stands at that id after the town is laid out anew), `removed`, `func`, `floors`, `poly`, `roof`, `tint`, `structure`. |
+| `ground` | Ground brushed by hand, by block (`g:XXXXX:YYYYY`, block indices zero-padded, x first): one string per 16 × 16 squares of height change in tenths of a foot. |
+| `plateaus` | Plateaus and pits, by `h:<id>`: `pts` (the outline, ft), `level` (ft, the world's datum: above the sea plus the sea's level), `edge` (ft, absent: sheer). |
 | `towns` | Towns laid out anew, by layout number: `at` (the town's centre; the edit is set aside if the town is laid out elsewhere), `corners` (`{v, from, to}`: a patch corner moved from where it was planned), `patches` (`{p, at, ward, lots, merge_with, reroll}`), `walls`. Building changes (`buildings`) apply on top of it. |
 
 Edits don't change the world's hash, and created sites use the same generators as the world's own. Objects
-and clears change only the battlemap chunks holding them; crossings, the battlemaps and town-zoom tiles along them.
+and clears change only the battlemap chunks holding them; crossings, the battlemaps and town-zoom tiles along them;
+shaped ground, the battlemaps (and the buildings, interiors and steps on them) and the three finest zooms over it.
 
 How edits are stored and shared:
 

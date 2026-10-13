@@ -585,6 +585,28 @@ fn relief_value(f: &Relief, x: f64, y: f64) -> f64 {
 pub const JETTY_FT: f64 = 24.0;
 pub const JETTY_WIDTH_FT: f64 = 9.0;
 
+/// A city street's line nearest a square where the ground was shaped by hand (`key`: layout,
+/// street and segment in the chunk's `layouts_near`), for steps on slopes made by hand.
+#[derive(Clone)]
+struct HandStreet {
+    key: (u32, u32, u32),
+    a: [f64; 2],
+    b: [f64; 2],
+    width: f64,
+    d: f64,
+}
+
+/// A street square steps up once shaping leaves it climbing at least `g_on` along its street (and
+/// `HAND_MARGIN` more than it did); a flight's square goes back to paving once its slope is below
+/// `g_off` (and that much gentler than it was, or on a plateau). Steeper than `HAND_CLIFF` it
+/// stays a rock face.
+const HAND_MARGIN: f64 = 0.03;
+const HAND_CLIFF: f64 = 1.0;
+
+/// The most flights of steps' axes the ground draws treads for in one chunk (the renderer's
+/// `STAIR_AXES`).
+pub const MAX_STAIR_AXES: usize = 64;
+
 /// A road crossing as drawn: along the road from bank to bank (the run over the channel at
 /// the crossing angle, extended until both corners are 4 ft clear of every river piece): a
 /// bridge deck with an 8-ft landing each side, a ford's stepping stones, or a ferry's line
@@ -841,6 +863,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut ent_h = vec![false; HS * HS];
     // Squares on a flight of steps (only where a flight comes near the chunk).
     let mut stair_h: Option<Vec<bool>> = None;
+    // Where the ground was shaped by hand round a city's streets: the street line nearest each such
+    // square (steps follow the slopes made by hand; empty when nothing is shaped here).
+    let mut hand_st: Vec<Option<HandStreet>> = Vec::new();
     let mut refs: Vec<(u32, u32)> = Vec::new();
     let mut polys: Vec<(Vec<[f32; 2]>, u8, u8, u8)> = Vec::new();
     let mut shapes: Vec<VectorShape> = Vec::new();
@@ -874,7 +899,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         (i0, j0, i1, j1)
     };
     let overlaps = |b: (f64, f64, f64, f64)| b.2 >= hx0 && b.0 <= hx0 + span && b.3 >= hy0 && b.1 <= hy0 + span;
-    for l in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]) {
+    for (li, l) in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]).into_iter().enumerate() {
         let stamp = |poly: &[[f64; 2]], val: u8, urb_h: &mut Vec<u8>| {
             let b = bbox(poly);
             if !overlaps(b) {
@@ -1012,9 +1037,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         // Streets drawn as roads (approaches to gates, main streets, bridge streets): street
         // ground wherever they run, inside the walls or out.
-        for (pts, _, width) in &l.roads {
+        let hand = shaper.is_some() && l.tier >= crate::town::stairs::STAIR_TIER;
+        for (ri, (pts, _, width)) in l.roads.iter().enumerate() {
             let half = 0.5 * width;
-            for seg in pts.windows(2) {
+            for (si, seg) in pts.windows(2).enumerate() {
                 let b = (seg[0][0].min(seg[1][0]) - half, seg[0][1].min(seg[1][1]) - half, seg[0][0].max(seg[1][0]) + half, seg[0][1].max(seg[1][1]) + half);
                 if !overlaps(b) {
                     continue;
@@ -1026,8 +1052,22 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 for j in j0..=j1 as usize {
                     for i in i0..=i1 as usize {
                         let h = j * HS + i;
-                        if urb_h[h] != URBAN_DECK && crate::town::geom::seg_dist(center(i, j), seg[0], seg[1]) < half {
+                        let d = crate::town::geom::seg_dist(center(i, j), seg[0], seg[1]);
+                        if urb_h[h] != URBAN_DECK && d < half {
                             urb_h[h] = URBAN_STREET;
+                            // An own square the shaping reaches (or its neighbours'), off the plazas.
+                            if hand
+                                && (1..=SQ).contains(&i)
+                                && (1..=SQ).contains(&j)
+                                && [h, h - 1, h + 1, h - HS, h + HS].iter().any(|&q| moved[q])
+                                && hand_st.get(h).is_none_or(|r| r.as_ref().is_none_or(|r| d < r.d))
+                                && !l.plazas.iter().any(|p| crate::town::geom::contains(p, center(i, j)))
+                            {
+                                if hand_st.is_empty() {
+                                    hand_st = vec![None; HS * HS];
+                                }
+                                hand_st[h] = Some(HandStreet { key: (li as u32, ri as u32, si as u32), a: seg[0], b: seg[1], width: *width, d });
+                            }
                         }
                     }
                 }
@@ -1370,6 +1410,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let road_bed = hh.clone();
     let mut biome = vec![Biome::Grassland; n];
     let mut slope = vec![0f64; n];
+    // Steps on slopes made by hand, by street segment and way up: (segment start, its direction,
+    // street width, the squares' places along it).
+    let mut hand_runs: std::collections::BTreeMap<((u32, u32, u32), bool), ([f64; 2], [f64; 2], f64, Vec<f64>)> = std::collections::BTreeMap::new();
     for j in 0..SQ {
         for i in 0..SQ {
             let k = j * SQ + i;
@@ -1377,15 +1420,90 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             biome[k] = Biome::from_u8(t0.sample_biome(x, y, t0.biome_warp(x, y))[0]);
             let c = sidx(i as i64, j as i64);
             let h = (j + 1) * HS + i + 1;
+            let plain = || ((tile.padded[c + 1] - tile.padded[c - 1]) as f64 / 5.0, (tile.padded[c + PADDED] - tile.padded[c - PADDED]) as f64 / 5.0);
             let (gx, gy) = match &shaper {
                 Some(s) if [h, h - 1, h + 1, h - HS, h + HS].iter().any(|&q| moved[q]) => {
                     let at = |dx: f64, dy: f64, c: usize| s.at_point(x + dx, y + dy, tile.padded[c], hw[h]) as f64;
                     ((at(2.5, 0.0, c + 1) - at(-2.5, 0.0, c - 1)) / 5.0, (at(0.0, 2.5, c + PADDED) - at(0.0, -2.5, c - PADDED)) / 5.0)
                 }
-                _ => ((tile.padded[c + 1] - tile.padded[c - 1]) as f64 / 5.0, (tile.padded[c + PADDED] - tile.padded[c - PADDED]) as f64 / 5.0),
+                _ => plain(),
             };
             slope[k] = crate::core::sqrt(gx * gx + gy * gy);
+            // Steps on a city street's slope made by hand, or paving again where shaping levelled a
+            // flight, judged by the climb along the street (square by square: a pure function of
+            // the square, so chunks agree).
+            if let Some(Some(st)) = hand_st.get(h) {
+                let len = crate::town::geom::dist(st.a, st.b).max(1e-9);
+                let u = [(st.b[0] - st.a[0]) / len, (st.b[1] - st.a[1]) / len];
+                let (px, py) = plain();
+                let (along, was) = ((gx * u[0] + gy * u[1]).abs(), (px * u[0] + py * u[1]).abs());
+                let prm = crate::town::stairs::StairParams::DEFAULT;
+                let flight = stair_h.as_ref().is_some_and(|s| s[h]);
+                // (A flight by the slope's whole grade: its square's nearest line may be a street
+                // crossing it. A plateau's top is flat, steps or not before.)
+                if flight && slope[k] < prm.g_off && (plat_w[h] >= 0.5 || slope[k] < crate::core::sqrt(px * px + py * py) - HAND_MARGIN) {
+                    stair_h.as_mut().expect("a flight")[h] = false;
+                } else if !flight && along >= prm.g_on && along >= was + HAND_MARGIN && slope[k] < HAND_CLIFF && urb_h[h] == URBAN_STREET && road_h[h] == 0 && hw[h] <= hh[h] {
+                    stair_h.get_or_insert_with(|| vec![false; HS * HS])[h] = true;
+                    let t = crate::town::geom::dot([x - st.a[0], y - st.a[1]], u);
+                    let up = gx * u[0] + gy * u[1] > 0.0;
+                    hand_runs.entry((st.key, up)).or_insert((st.a, u, st.width, Vec::new())).3.push(t);
+                }
+            }
         }
+    }
+
+    // Their treads, square across the street from the bottom up, in step across chunks and across
+    // a street's strips side by side (counted along the way up from the world's origin). Each run
+    // (a segment's steps, split where they stop for more than a square) is `[along, across]`
+    // ranges in world ft on its way up `w` and the normal `[-w.y, w.x]`; runs on one way up side
+    // by side or end to end are drawn as one axis.
+    let mut runs: Vec<([f64; 2], [f64; 2], [f64; 2])> = Vec::new();
+    for (&(_, up), (a, u, width, ts)) in &hand_runs {
+        let w = if up { *u } else { [-u[0], -u[1]] };
+        let off = crate::town::geom::dot(*a, [-w[1], w[0]]);
+        let mut ts = ts.clone();
+        ts.sort_by(f64::total_cmp);
+        let along = |t: f64| crate::town::geom::dot([a[0] + u[0] * t, a[1] + u[1] * t], w);
+        let mut first = 0;
+        for k in 1..=ts.len() {
+            if k == ts.len() || ts[k] - ts[k - 1] > 1.5 * SQUARE_FT {
+                let (s0, s1) = (along(ts[first]), along(ts[k - 1]));
+                runs.push((w, [s0.min(s1), s0.max(s1)], [off - 0.5 * width, off + 0.5 * width]));
+                first = k;
+            }
+        }
+    }
+    let mut group: Vec<usize> = (0..runs.len()).collect();
+    fn root(g: &[usize], mut i: usize) -> usize {
+        while g[i] != i {
+            i = g[i];
+        }
+        i
+    }
+    let gap = |a: [f64; 2], b: [f64; 2]| (a[0] - b[1]).max(b[0] - a[1]);
+    for i in 0..runs.len() {
+        for j in i + 1..runs.len() {
+            let (p, q) = (&runs[i], &runs[j]);
+            if (p.0[0] - q.0[0]).abs() < 1e-3 && (p.0[1] - q.0[1]).abs() < 1e-3 && gap(p.1, q.1) <= 1.5 * SQUARE_FT && gap(p.2, q.2) <= 1.0 {
+                let (a, b) = (root(&group, i), root(&group, j));
+                group[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let tread = crate::town::stairs::TREAD;
+    for r in (0..runs.len()).filter(|&r| root(&group, r) == r) {
+        let w = runs[r].0;
+        let nrm = [-w[1], w[0]];
+        let (mut s, mut o) = ([f64::MAX, f64::MIN], [f64::MAX, f64::MIN]);
+        for q in (0..runs.len()).filter(|&q| root(&group, q) == r) {
+            s = [s[0].min(runs[q].1[0]), s[1].max(runs[q].1[1])];
+            o = [o[0].min(runs[q].2[0]), o[1].max(runs[q].2[1])];
+        }
+        let (lo, hi, mid) = (s[0] - 0.75 * SQUARE_FT, s[1] + 0.75 * SQUARE_FT, 0.5 * (o[0] + o[1]));
+        let at = |t: f64| [w[0] * t + nrm[0] * mid, w[1] * t + nrm[1] * mid];
+        let s0 = lo - crate::core::floor(lo / tread) * tread;
+        shapes.push(VectorShape { kind: ShapeKind::Stairs, size: ((o[1] - o[0]) / SQUARE_FT) as f32, pts: vec![local(&at(lo)), local(&at(hi)), [(s0 / SQUARE_FT) as f32, (tread / SQUARE_FT) as f32]] });
     }
 
     // Micro-relief from global feature cells (dry ground only).

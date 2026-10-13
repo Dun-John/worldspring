@@ -141,8 +141,8 @@ const SURFACES = [
   'field (crops)',
   'stairs',
 ];
-/** The most flights of steps' axes one chunk's ground draws treads for (`ground.frag`). */
-const STAIR_AXES = 16;
+/** The most flights of steps' axes one chunk's ground draws treads for (`ground.frag`; `battlemap::MAX_STAIR_AXES`). */
+const STAIR_AXES = 64;
 /** `URBAN_*` kinds that stand on the ground (battlemap.rs), as hover labels. */
 const RAISED: Record<number, string> = { 6: 'bridge deck', 7: 'wall walk', 8: 'tower top' };
 

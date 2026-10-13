@@ -1,13 +1,14 @@
 # Worldspring MCP: full reference
 
-`mapd` exposes the open world to agents (any MCP client) through 34 tools. With them an agent can:
+`mapd` exposes the open world to agents (any MCP client) through 53 tools. With them an agent can:
 - read and search the world: features, buildings, districts, underground sites, routes, battlemaps;
 - look at the map as you see it, or move your view;
 - edit the world: rename anything (down to a dungeon's levels and rooms), write notes, hide features, and create
   sites that are as playable as generated ones;
 - keep the DM's notebook: NPCs and plot points;
 - put objects on battlemaps (and take generated ones away), with uploaded sprites;
-- draw buildings and towers, with what they are, their storeys and roofs.
+- draw buildings and towers, with what they are, their storeys and roofs;
+- shape a battlemap's ground: mounds, hollows, plateaus, cliffs and pits.
 
 Every edit is saved and appears live in the open map app.
 
@@ -68,6 +69,8 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `o:<id>` | `o:4f0x2kq9` | A battlemap object put down by hand |
 | `x:<id>` | `x:9a1b7c3d` | Generated battlemap objects taken away (a clear) |
 | `s:<asset>` | `s:0123…cdef` | An uploaded sprite, as an object kind |
+| `h:<id>` | `h:d470a78s` | A plateau or pit (ground shaped by hand) |
+| `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 
 ### Feature kinds
 
@@ -137,7 +140,7 @@ One feature in detail. What comes back depends on the feature:
 |---|---|
 | Any feature | `name`, `kind`, `detail`, position, elevation, `notes`, `hidden` |
 | Any place | `in`: the regions it lies in (continent, range, forest…), and `nearest_settlements` |
-| Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground; flights of steps on steep streets (`stairs`: each flight's middle `x_ft`/`y_ft`, `length_ft`, `rise_ft`, the highest first, up to 40; cities and up); `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
+| Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground; flights of steps on steep streets as generated (`stairs`: each flight's middle `x_ft`/`y_ft`, `length_ft`, `rise_ft`, the highest first, up to 40; cities and up); `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
 | Sites | The layout: buildings, and ways underground with their `u:` ids; `settlement`: the town it stands in, or `null` |
 | Buildings and underground sites | Levels and rooms |
 | Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`; `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
@@ -198,7 +201,7 @@ and created sites.
 
 ### `describe_location`
 What is at a point:
-- elevation and biome;
+- elevation (the world's coarse ground, before shaping by hand: `ground_heights` has the battlemap's) and biome;
 - `in`: the areas it lies in, largest first (continent or island, sea, range, forest, lake…);
 - the building, district or site there (a building's `district` is its name as renamed, `district_id` its id; a
   building of a site standing in a settlement, such as one drawn by hand, has the settlement's district there);
@@ -279,7 +282,7 @@ The road network:
 The 640-ft battlemap chunk (128 × 128 five-foot squares) that contains a place, for running a fight there. It
 lists:
 - the elevation range, surfaces and buildings (`stairs`: a flight of steps on a steep city street, paved, walkable,
-  no movement cost);
+  no movement cost; also where ground shaped by hand makes a city street climb steeply);
 - each kind of object in the chunk, with its 5e rules: cover, whether it blocks movement or sight, difficult
   terrain, hazards and their effects;
 - the objects within `radius_squares` of the place, by grid square (`near_focus`), each with its centre
@@ -1061,6 +1064,107 @@ reusing its new buildings' ids).
 | `that is N ft from where it was laid out: at most M` | Past one patch's spacing |
 | `patch q is not next to patch p` / `a main street runs between them` / `only wards built on lots merge` | A merge refused |
 | `the town was laid out anew: …` | The edit was made before a sketch change moved the town or its patches |
+
+## Shaping the ground
+
+A battlemap's ground can be shaped by hand, as the Ground tab shapes it: brushed up or down, smoothed, put back,
+or levelled as plateaus and pits. Two edits fields hold it:
+
+- **`ground`**: brushed blocks, by `g:XXXXX:YYYYY` (block indices, zero-padded, x first; block `(bx, by)` holds
+  squares `16·bx … 16·bx + 15` east and `16·by …` south). Each is one string: 256 height changes in tenths of a
+  foot, row by row, written as zigzag-delta varints (a 0 delta is followed by a byte counting the further zeros)
+  in base64url without padding. A block that comes out all zero is removed. Use `shape_ground` rather than
+  writing them.
+- **`plateaus`**: by `h:<id>`: `pts` (the outline, 3 to 48 points, rounded to 0.5 ft, not crossing itself,
+  spanning at most 1,280 ft), `level` (ft on the world's datum: above the sea plus the sea's level), `edge` (0 to
+  60 ft; absent: 0, a sheer cliff at the outline).
+
+How it applies:
+
+- Plateaus first, largest first (a terrace or pit inside a plateau goes on top of it): inside the outline the
+  ground is at the level; outside it eases back to the ground over `edge` ft (a sheer one over a square). Then the
+  brushed change, at most 150 ft from the ground as generated either way. Ground that was dry never sinks below
+  the water beside it; raising ground under water makes dry land.
+- Everything on the ground follows it: buildings stand on it (on a plateau, at its level; a building over a sheer
+  edge takes the mean, so draw round it), with their interiors and cellars; streets, roads, walls, towers and camp
+  yards. Plateaus are flat: no generated knolls on them. Steep shaped ground draws as rock, with its cliffs.
+- In cities and metropolises a street square that shaping makes climb at least 0.15 along the street, and at
+  least 0.03 more than it did (but less than 1: steeper is a cliff), is drawn as steps, its treads across the
+  street. A generated flight's square goes back to paving where shaping leaves it gentler than 0.12 and 0.03
+  gentler than it was, or puts it on a plateau.
+- Battlemaps and the three finest zooms draw it. The world's own heights (`describe_location`, routes, where
+  settlements stand) don't change, nor does `get_feature`'s `stairs` (the flights as generated); `get_battlemap`
+  has the steps as drawn.
+- Limits: a stroke reaches at most 48 blocks; a world holds 1,500 blocks and 256 plateaus.
+
+### `shape_ground`
+A round brush. `raise` and `lower` move each square by up to `height_ft` (full out to `hardness` of the radius,
+fading to the rim), `smooth` eases each square toward the mean of its neighbours as drawn by `strength`,
+`restore` takes brushed change back toward the ground as generated by `strength` (plateaus stay). Each square
+takes the stroke's strongest touch, so going over a place twice in one stroke doesn't pile up (a second call
+does). The reply: `blocks` changed, `squares` under the brush, the lowest and highest ground there `before` and
+`after` (ft above the sea).
+
+| Parameter | Type | Default | |
+|---|---|---|---|
+| `mode` | string | required | `raise`, `lower`, `smooth`, `restore` |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | | A dab (or `x_ft` + `y_ft`, or `id`, beside the other arguments) |
+| `radius_ft` | number | 15 | A dab's radius, 2.5–200 |
+| `path` | `[[x_ft, y_ft], …]` | | Or a stroke along a line |
+| `width_ft` | number | 30 | A stroke's width, 5–400 |
+| `height_ft` | number | 5 | Raise, lower: 0–50 (one tier is 5) |
+| `hardness` | number | 0.5 | 0 soft to 1 hard |
+| `strength` | number | 0.5 | Smooth, restore: 0–1 |
+
+```json
+{ "name": "shape_ground", "arguments": { "mode": "raise", "at": "b:0:2", "radius_ft": 25, "height_ft": 8 } }
+```
+
+### `set_plateau`
+A plateau or pit, or a change to one. The outline is `outline`, or `around` a building (`b:`), a keep, a wall
+tower (`t:`) or a site (its buildings, towers and walls), its footprint's convex outline grown by `margin_ft`;
+outlines are simplified to at most 48 points. The level is `level_ft` above the sea, or `rise_ft` above the
+ground (as shaped, this plateau left out) at the outline's middle. The reply: `id`, `changed`, `level_ft`,
+`ground_ft` (the ground at the middle), `edge_ft`, `points`, `area_sq_ft`, `bbox`.
+
+| Parameter | Type | Default | |
+|---|---|---|---|
+| `id` | string | | A plateau to change (`h:…`): only the fields given change |
+| `outline` | `[[x_ft, y_ft], …]` | | The outline (world ft) |
+| `around` | string | | Or a building, tower or site to raise it round |
+| `margin_ft` | number | 10 | Round the footprint, 0–200 |
+| `level_ft` | number | | Its level above the sea |
+| `rise_ft` | number | 10 | Or its level above the ground at the middle (below zero: a pit); with `id`, only when given |
+| `edge_ft` | number | 0 | The slope round it, 0 (sheer) to 60 |
+
+```json
+{ "name": "set_plateau", "arguments": { "around": "c:3", "margin_ft": 15, "rise_ft": 25, "edge_ft": 0 } }
+```
+
+### `delete_plateau`
+Take plateaus or pits away by `id` or `ids`; the ground goes back as it was (brushed changes stay).
+
+### `ground_heights`
+Every square of the box reaching `radius_ft` (default 25, at most 200) east, west, north and south of a place:
+`origin` (the first square's middle),
+`columns`, `rows`, `heights_generated` and `heights_shaped` (rows north to south, ft above the sea), their
+`generated` and `shaped` ranges, `squares_shaped`, `wet` (`[column, row]` of squares under water), and the
+`plateaus` (id, level, edge, middle, bbox) and `brushed_blocks` there. The battlemap draws a little relief on
+top (knolls, hollows) and levels road beds under roads.
+
+```json
+{ "name": "ground_heights", "arguments": { "x_ft": 1288677, "y_ft": 2229693, "radius_ft": 60 } }
+```
+> *"Put the Sunken Bastion on a cliff 30 ft above the plain, sheer on every side."* · *"Dig a 10-ft pit with
+> sloping sides in the middle of the market."* · *"Raise a low ridge along the road north of Gatewatch for an
+> ambush."*
+
+| Error | Why |
+|---|---|
+| `a stroke reaches at most 48 blocks of 80 ft` | Shorten the path or narrow it; or several calls |
+| `a world holds at most 1500 blocks of brushed ground` / `at most 256 plateaus` | The world's limits |
+| `an outline spans at most 1280 ft` / `the outline crosses itself` / `the outline holds no ground` | A plateau's outline |
+| `… is a settlement: a plateau spans at most 1280 ft` | `around` a whole town: give a building or an outline |
 
 ---
 

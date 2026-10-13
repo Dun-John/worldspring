@@ -492,6 +492,74 @@ fn towns_meet_roads_and_water() {
         let k = (o.y.floor() as usize).min(SQ - 1) * SQ + (o.x.floor() as usize).min(SQ - 1);
         assert!(c.surface[k] != Surface::Stairs, "a {:?} stands on the steps at {mid:?}", o.kind);
     }
+    // On ground shaped by hand: a plateau over the flight levels it, and its steps go back to
+    // paving; a plateau's sloping edge across a flat street of the largest settlement steps the
+    // street where it climbs (never on top), each new step under the axis of its treads, from the
+    // bottom up. Nothing else made with them.
+    use worldgen::ground;
+    let at_square = |c: &bm::Chunk, p: [f64; 2]| c.height[(((p[1] - oy) / SQUARE_FT).floor().clamp(0.0, SQ as f64 - 1.0) as usize) * SQ + ((p[0] - ox) / SQUARE_FT).floor().clamp(0.0, SQ as f64 - 1.0) as usize];
+    let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let outline = [[b[0] - 10.0, b[1] - 10.0], [b[2] + 10.0, b[1] - 10.0], [b[2] + 10.0, b[3] + 10.0], [b[0] - 10.0, b[3] + 10.0]];
+    ex.world.file.edits.plateaus.insert("h:level".into(), ground::plateau_for(&outline, at_square(&c, mid) as f64, 0.0).unwrap());
+    let levelled = ex.battlemap(key);
+    let left = line.iter().filter(|&&k| levelled.surface[k] == Surface::Stairs).count();
+    assert!(left == 0 && line.iter().all(|&k| levelled.surface[k] == Surface::Cobble), "a plateau over the flight at {mid:?} leaves {left} of its {} squares as steps", line.len());
+    ex.world.file.edits = Default::default();
+    let big = ex.t0.settlements.iter().max_by_key(|s| s.population).unwrap().clone();
+    assert!(big.tier >= town::stairs::STAIR_TIER, "the largest settlement is not a city");
+    let key = TileKey::surface(g.max_level, (big.x / size) as u32, (big.y / size) as u32);
+    let (ox, oy) = g.tile_origin_ft(&key);
+    let plain = ex.battlemap(key);
+    let streets: Vec<usize> = (0..SQ * SQ)
+        .filter(|&k| (16..SQ - 16).contains(&(k % SQ)) && (16..SQ - 16).contains(&(k / SQ)))
+        .filter(|&k| plain.surface[k] == Surface::Cobble && plain.urban[k] == bm::URBAN_STREET && plain.road_halo[(k / SQ + 1) * (SQ + 2) + k % SQ + 1] == 0)
+        .collect();
+    let mut stepped = 0;
+    for &k in streets.iter().step_by((streets.len() / 12).max(1)) {
+        let p = [ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT];
+        let (half, edge) = (20.0, 30.0);
+        let outline = [[-half, -half], [half, -half], [half, half], [-half, half]].map(|d| [p[0] + d[0], p[1] + d[1]]);
+        ex.world.file.edits.plateaus.insert("h:ramp".into(), ground::plateau_for(&outline, plain.height[k] as f64 + 6.0, edge).unwrap());
+        let c = ex.battlemap(key);
+        let new: Vec<usize> = (0..SQ * SQ).filter(|&q| c.surface[q] == Surface::Stairs && plain.surface[q] != Surface::Stairs).collect();
+        let axes: Vec<&bm::VectorShape> = c.structures.iter().filter(|s| s.kind == bm::ShapeKind::Stairs).collect();
+        assert!(axes.len() <= bm::MAX_STAIR_AXES, "{} treads' axes in the battlemap round {p:?}: the ground draws {}", axes.len(), bm::MAX_STAIR_AXES);
+        for &q in &new {
+            let centre = [ox + ((q % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+            let d = (0..4).map(|e| geom::seg_dist(centre, outline[e], outline[(e + 1) % 4])).fold(f64::MAX, f64::min);
+            assert!(!geom::contains(&outline, centre) && d < edge + SQUARE_FT, "a step at {centre:?} off the plateau's edge round {p:?}");
+            assert!(c.urban[q] == bm::URBAN_STREET && c.building[q] == 0 && c.road_halo[(q / SQ + 1) * (SQ + 2) + q % SQ + 1] == 0, "a step at {centre:?} off the street");
+            // As the ground's shader finds the axis: within a little of its ends and width.
+            let local = [(q % SQ) as f64 + 0.5, (q / SQ) as f64 + 0.5];
+            let covered = axes.iter().any(|s| {
+                let (a, b) = ([s.pts[0][0] as f64, s.pts[0][1] as f64], [s.pts[1][0] as f64, s.pts[1][1] as f64]);
+                let len = geom::dist(a, b).max(1e-4);
+                let u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+                let pa = [local[0] - a[0], local[1] - a[1]];
+                let t = geom::dot(pa, u);
+                (-t).max(t - len).max((pa[0] * u[1] - pa[1] * u[0]).abs() - 0.5 * s.size as f64) <= 0.6
+            });
+            assert!(covered, "a step at {centre:?} with no treads' axis");
+        }
+        if new.len() >= 4 {
+            // The new axes run up the slope (drawn ground a fifth and four fifths of the way along).
+            let mut climb = 0.0;
+            for s in axes.iter().filter(|s| !plain.structures.iter().any(|o| o.kind == s.kind && o.pts == s.pts)) {
+                let h = |t: f32| {
+                    let v = [s.pts[0][0] + (s.pts[1][0] - s.pts[0][0]) * t, s.pts[0][1] + (s.pts[1][1] - s.pts[0][1]) * t];
+                    let q = (v[1].floor().clamp(0.0, SQ as f32 - 1.0) as usize + 1) * (SQ + 2) + v[0].floor().clamp(0.0, SQ as f32 - 1.0) as usize + 1;
+                    c.halo_height[q] - c.roof_lift[q]
+                };
+                assert!(h(0.8) - h(0.2) >= -0.05, "treads' axis {:?} runs down the slope round {p:?}", s.pts);
+                climb += h(0.8) - h(0.2);
+            }
+            assert!(climb > 1.0, "the new treads' axes round {p:?} climb {climb} ft in all");
+            stepped = new.len();
+            break;
+        }
+    }
+    assert!(stepped >= 4, "no street of the largest settlement steps up a plateau's sloping edge (tried {})", streets.len().min(12));
+    ex.world.file.edits = Default::default();
 }
 
 /// Settlements: every one gets its guaranteed buildings — an inn in every village, the full
