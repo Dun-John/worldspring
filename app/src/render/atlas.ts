@@ -8,6 +8,7 @@ import type { KindInfo } from '../gen/client';
 
 /** Atlas resolution: pixels per 5-ft square. */
 export const PX = 64;
+/** Looks per kind. Must divide 256: `battlePrep` packs the turned flag above an object's variant byte. */
 export const VARIANTS = 4;
 const ATLAS_W = 2048;
 /** Mip levels kept (full size down to 1/8), and the empty gap round every frame, on a grid of the same

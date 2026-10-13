@@ -10,6 +10,7 @@ import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
 import { drawFurniture, drawUnderProp, ORIENTED, UNDER_DRAWN, VARIED } from './furniture';
 import { ITEM_PX, ItemAtlas } from './itemAtlas';
+import type { ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
 import { noiseSource } from './noise';
@@ -19,9 +20,15 @@ import vertex from './shaders/terrain.vert?raw';
 
 const SQUARE_FT = 5;
 /** Underground props drawn against the wall beside them (their look depends on its side). */
-const ON_WALL = new Set(['tunnel', 'cobweb', 'ore_vein', 'niche', 'chains', 'sconce', 'banner', 'pipe', 'ladder']);
+export const ON_WALL = new Set(['tunnel', 'cobweb', 'ore_vein', 'niche', 'chains', 'sconce', 'banner', 'pipe', 'ladder']);
 /** Underground props with a back against a wall (a dais's throne). */
-const BACKED = new Set(['dais']);
+export const BACKED = new Set(['dais']);
+/** An item's `back` (0 north 1 east 2 south 3 west) as a unit step in grid axes. */
+const FACES: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+/** The side set on an item in its design, if any. */
+const setBack = (f: InteriorItem): [number, number] | null => (f.back !== undefined && f.back >= 0 && f.back < 4 ? FACES[f.back] : null);
+/** The side (0-3) a unit step points to (a diagonal counts as north or south); null for none. */
+const sideOf = ([dx, dy]: [number, number]): number | null => (!dx && !dy ? null : Math.abs(dy) >= Math.abs(dx) ? (dy < 0 ? 0 : 2) : dx > 0 ? 1 : 3);
 /** Underground props drawn like the building furniture of the same name (`bookshelf` as a bookcase). */
 const SHARED: Record<string, string> = {
   chest: 'chest', barrel: 'barrel', crate: 'crate', table: 'table', rug: 'rug', altar: 'altar', statue: 'statue', pillar: 'pillar',
@@ -29,7 +36,7 @@ const SHARED: Record<string, string> = {
   bookshelf: 'bookcase',
 };
 /** Props scattered differently per placement: one of four variants, picked by position. */
-const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
+export const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
 const INK = 0x1d1a14;
 const COVER = ['no cover', 'half cover', 'three-quarters cover', 'total cover'];
 
@@ -52,6 +59,9 @@ function itemVariant(x: number, y: number): number {
   const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
   return Math.floor((v - Math.floor(v)) * 4);
 }
+
+/** An item's look: the one set in its design, else picked by position. */
+const lookOf = (f: InteriorItem): number => f.variant ?? itemVariant(f.x, f.y);
 
 function floorColor(kind: string, z: number, natural = false, raise = 0): number {
   if (natural) {
@@ -175,6 +185,9 @@ export class InteriorLayer {
   readonly container = new Container();
   private readonly dim = new Sprite(Texture.WHITE);
   private readonly plan = new Container();
+  /** What is in the hand (`setGhost`), over the plan (which every draw rebuilds). */
+  private readonly ghostLayer = new Container();
+  private ghostKey = '';
   private readonly labels = new Container();
   private level = 0;
   private labelSpots: { text: Text; x: number; y: number; min: number }[] = [];
@@ -211,7 +224,7 @@ export class InteriorLayer {
     this.dim.visible = !peek && !ghost && !tile;
     this.labels.visible = !peek && !ghost;
     this.marks.visible = !peek && !ghost && !style.player;
-    this.container.addChild(this.dim, this.plan, this.labels, this.marks);
+    this.container.addChild(this.dim, this.plan, this.ghostLayer, this.labels, this.marks);
     this.level = Math.max(0, Math.min(interior.levels.length - 1, start ?? interior.entry_level));
     // Light from the NW of the screen, in grid axes, rounded to 45 degrees so items lit alike share
     // one look in the item atlas.
@@ -336,9 +349,11 @@ export class InteriorLayer {
     const it = this.interior;
     const [sx, sy] = cam.worldToScreen(it.origin[0], it.origin[1]);
     const s = SQUARE_FT * cam.ppf;
-    this.plan.position.set(sx, sy);
-    this.plan.rotation = Math.atan2(it.axis[1], it.axis[0]);
-    this.plan.scale.set(s);
+    for (const c of [this.plan, this.ghostLayer]) {
+      c.position.set(sx, sy);
+      c.rotation = Math.atan2(it.axis[1], it.axis[0]);
+      c.scale.set(s);
+    }
     if (this.under) this.under.uniforms.uniforms.uTime = performance.now() / 1000;
     this.dim.width = cam.width;
     this.dim.height = cam.height;
@@ -723,6 +738,79 @@ export class InteriorLayer {
     g.arc(ax, ay, len, open, closed).stroke({ width: 0.03, color: INK, alpha: 0.5 });
   }
 
+  /** The side (0 north 1 east 2 south 3 west) an item would stand against where it is, if nothing
+   * were set in its design: what it is drawn with on auto facing. Null for items with no back. */
+  autoBack(f: InteriorItem): number | null {
+    const g = { ...f, back: undefined };
+    const shared = this.sharedKind(f.kind);
+    if (shared) return ORIENTED.has(shared) ? sideOf(this.backSide({ ...g, kind: shared })) : null;
+    if (ON_WALL.has(f.kind)) return sideOf(this.propWall(g));
+    if (BACKED.has(f.kind)) return sideOf(this.backWall(g));
+    return null;
+  }
+
+  /** What is in the hand, drawn where it would land on this level (grid): `bad` reddened where it
+   * can't go, `doorway` amber where it fits but blocks a way. Null takes it away. */
+  setGhost(f: InteriorItem | null, state: 'ok' | 'doorway' | 'bad' = 'ok') {
+    const key = f ? `${this.itemKey(f)}|${f.x},${f.y}|${f.sprite ?? 0}|${f.back ?? ''}|${state}` : '';
+    if (key === this.ghostKey) return;
+    this.ghostKey = key;
+    this.ghostLayer.removeChildren().forEach((c) => c.destroy());
+    if (!f) return;
+    const atlas = InteriorLayer.renderer ? ItemAtlas.for(InteriorLayer.renderer) : null;
+    let node: Container | null = f.sprite && atlas ? this.pictureOf(f) : null;
+    // A picture still loading: a plain square for now, drawn again on the next call.
+    if (f.sprite && atlas && !node) this.ghostKey = '';
+    if (!node && atlas) {
+      const frame = atlas.get(this.itemKey(f), (ig) => this.drawItem(ig, f), [f.x, f.y]);
+      atlas.flush();
+      if (frame) {
+        const s = new Sprite(frame.texture);
+        s.position.set(f.x + frame.x, f.y + frame.y);
+        s.scale.set(1 / ITEM_PX);
+        node = s;
+      }
+    }
+    if (!node) {
+      const g = new Graphics();
+      this.drawItem(g, f);
+      node = g;
+    }
+    node.tint = state === 'bad' ? 0xff7a6a : state === 'doorway' ? 0xffc46a : 0xffffff;
+    node.alpha = state === 'ok' ? 0.85 : 0.75;
+    this.ghostLayer.addChild(node);
+  }
+
+  /** Pictures of building furniture or underground props for a picker, as tiles for `thumbSheet`
+   * (keyed by `key`, else the kind): each at its size, its back to the south, lit from the NW. */
+  static thumbs(underground: boolean, items: { kind: string; w: number; h: number; key?: string }[]): ThumbTile[] {
+    // A stand-in level of one square: with every back set, nothing reads it.
+    const level = { z: -1, name: '', elevation_ft: 0, cells: [0], rooms: [{ kind: ' ', squares: 1, raise_ft: 0, center: [0.5, 0.5] as [number, number] }], walls: [], doors: [], windows: [], furniture: [], roof: false, has_stairs: false, natural: false };
+    const it: Interior = { id: underground ? 'u:thumbs' : 'b:thumbs', settlement: 0, building: 0, name: null, function: underground ? 'dungeon' : 'house', origin: [0, 0], axis: [1, 0], across: [0, 1], nx: 1, ny: 1, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] };
+    const layer = new InteriorLayer(it, 0, false, true);
+    const atlas = InteriorLayer.renderer ? ItemAtlas.for(InteriorLayer.renderer) : null;
+    const tiles: ThumbTile[] = [];
+    for (const { kind, w, h, key } of items) {
+      const f: InteriorItem = { kind, name: kind, x: 0, y: 0, w, h, cover: 0, blocks_move: false, height_ft: 3, back: 2 };
+      const node = new Container();
+      const frame = atlas?.get(layer.itemKey(f), (ig) => layer.drawItem(ig, f));
+      if (frame) {
+        const s = new Sprite(frame.texture);
+        s.position.set(frame.x, frame.y);
+        s.scale.set(1 / ITEM_PX);
+        node.addChild(s);
+      } else {
+        const g = new Graphics();
+        layer.drawItem(g, f);
+        node.addChild(g);
+      }
+      tiles.push({ key: key ?? kind, node });
+    }
+    atlas?.flush();
+    layer.destroy();
+    return tiles;
+  }
+
   /** What an item is called (an uploaded picture by its own name). */
   itemName(f: InteriorItem): string {
     return (f.sprite && this.interior.sprites?.[f.sprite - 1]?.name) || f.name;
@@ -742,10 +830,15 @@ export class InteriorLayer {
       });
       return null;
     }
+    // Its top is its back: turned to the side set in its design (a quarter turn fits it across).
+    const turn = setBack(f) ? f.back! : 0;
+    const [tw, th] = turn % 2 ? [tex.height, tex.width] : [tex.width, tex.height];
     const s = new Sprite(tex);
-    const k = Math.min(f.w / Math.max(1, tex.width), f.h / Math.max(1, tex.height));
+    const k = Math.min(f.w / Math.max(1, tw), f.h / Math.max(1, th));
+    s.anchor.set(0.5);
     s.scale.set(k);
-    s.position.set(f.x + (f.w - tex.width * k) / 2, f.y + (f.h - tex.height * k) / 2);
+    s.rotation = (turn * Math.PI) / 2;
+    s.position.set(f.x + f.w / 2, f.y + f.h / 2);
     return s;
   }
 
@@ -771,15 +864,18 @@ export class InteriorLayer {
     if (shared) {
       const g = { ...f, kind: shared };
       const back = ORIENTED.has(shared) ? this.backSide(g).join(',') : '';
-      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? itemVariant(f.x, f.y) : 0}:${back}`;
+      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? lookOf(f) : 0}:${back}`;
     }
     const wall = ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
-    const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) ? itemVariant(f.x, f.y) : 0;
+    const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) ? lookOf(f) : 0;
     return `u:${base}:${light}:${wall}:${variant}`;
   }
 
-  /** The rock side of a wall-mounted prop's square (unit step), if any. */
+  /** The rock side of a wall-mounted prop's square (unit step), if any (the side set in its design
+   * first). */
   private wallSide(f: InteriorItem): [number, number] {
+    const set = setBack(f);
+    if (set) return set;
     const lv = this.interior.levels[this.level];
     const { nx, ny } = this.interior;
     for (const [dx, dy] of [[0, -1], [-1, 0], [1, 0], [0, 1]]) {
@@ -792,8 +888,11 @@ export class InteriorLayer {
   /** The back of a building's item (unit step in grid axes): a bed's head and a booth seat's back are
    * away from the room (the wall at a bed's end; the side away from its booth table; a corner seat,
    * diagonal to its table, backs onto both walls: a diagonal step); a pew's back is
-   * away from the level's nearest altar; everything else backs onto the wall along a long side. */
+   * away from the level's nearest altar; everything else backs onto the wall along a long side. A side
+   * set in its design comes first. */
   private backSide(f: InteriorItem): [number, number] {
+    const set = setBack(f);
+    if (set) return set;
     const lv = this.interior.levels[this.level];
     const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
     if (f.kind === 'booth_seat') {
@@ -819,8 +918,11 @@ export class InteriorLayer {
   }
 
   /** The side of a building's item that stands against a wall (unit step in grid axes): one along a
-   * wall segment or the building's edge, else the first one. A long side; with `ends`, a short one. */
+   * wall segment or the building's edge, else the first one. A long side; with `ends`, a short one.
+   * A side set in its design comes first. */
   private backWall(f: InteriorItem, ends = false): [number, number] {
+    const set = setBack(f);
+    if (set) return set;
     const lv = this.interior.levels[this.level];
     const { nx, ny } = this.interior;
     const wide = ends ? f.h > f.w : f.w > f.h;
@@ -854,10 +956,10 @@ export class InteriorLayer {
     const shared = this.sharedKind(kind);
     if (shared) {
       const s = { ...f, kind: shared };
-      if (drawFurniture(g, s, this.light, itemVariant(x, y), ORIENTED.has(shared) ? this.backSide(s) : null)) return;
+      if (drawFurniture(g, s, this.light, lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null)) return;
     }
     // (Indoor props in a building too.)
-    if ((this.underground || !shared) && drawUnderProp(g, f, this.light, itemVariant(x, y), ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0])) return;
+    if ((this.underground || !shared) && drawUnderProp(g, f, this.light, lookOf(f), ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0])) return;
     if (kind === 'sprite') {
       // A picture not loaded yet (or no renderer): a plain square in its place.
       g.rect(x + 0.1, y + 0.1, w - 0.2, h - 0.2).fill({ color: 0x786046, alpha: 0.5 }).stroke({ width: 0.05, color: INK });
@@ -1021,7 +1123,7 @@ export class InteriorLayer {
       g.ellipse(px, py + s * 0.25, s * 0.3, s * 0.55).fill(0xfde68a);
     };
     // Scatter: the same for every placement of one variant (so they can share a look).
-    const variant = itemVariant(x, y);
+    const variant = lookOf(f);
     const hash = (k: number) => {
       const v = Math.sin((variant * 127.1 + 311.7 + k * 74.7) * 0.0174533) * 43758.5453;
       return v - Math.floor(v);

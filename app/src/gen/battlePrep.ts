@@ -245,7 +245,9 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
   order.forEach((i, j) => {
     const o = objOffset + i * 20;
     objs[j * 6] = dv.getUint16(o, true);
-    objs[j * 6 + 1] = dv.getUint8(o + 2);
+    // Variant, and the turned flag above it (`pack`'s 4th byte): readers take `variant % VARIANTS`,
+    // which holds because VARIANTS (4) divides 256; `>> 8` is the flag.
+    objs[j * 6 + 1] = dv.getUint8(o + 2) | (dv.getUint8(o + 3) << 8);
     objs[j * 6 + 2] = dv.getFloat32(o + 4, true);
     objs[j * 6 + 3] = dv.getFloat32(o + 8, true);
     objs[j * 6 + 4] = dv.getFloat32(o + 12, true);

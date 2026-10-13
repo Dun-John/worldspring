@@ -26,6 +26,7 @@ import { buildAtlas, PX, VARIANTS, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
+import { sheetFor, thumbSheet, thumbUrl, type ThumbSheet } from './thumbs';
 import type { Camera } from './camera';
 import atmoFragment from './shaders/atmosphere.frag?raw';
 import colorMeshFragment from './shaders/colormesh.frag?raw';
@@ -74,11 +75,35 @@ interface ChunkView {
   /** Per square: height (ft) of what stands on the drawn ground, and its `URBAN_*` kind. */
   raised: Uint8Array | null;
   sea: number;
-  objs: { kind: number; x: number; y: number; scale: number }[];
+  objs: ChunkObject[];
   /** Uploaded sprites its objects use. */
   sprites: ChunkSprite[];
   /** What it was built from, kept while a sprite's picture is loading (to build it again). */
   prepared: PreparedChunk | null;
+}
+
+/** An object as a chunk holds it (squares within the chunk). */
+interface ChunkObject {
+  kind: number;
+  variant: number;
+  x: number;
+  y: number;
+  rot: number;
+  scale: number;
+  /** Drawn at `rot` (`Placed.turned`). */
+  turned: boolean;
+}
+
+/** The object under a point (`objectAt`): its kind (built-in id, or `s:<asset>`), centre (world ft)
+ * and look. */
+export interface ObjectHit {
+  kind: number | string;
+  x: number;
+  y: number;
+  variant: number;
+  rot: number;
+  scale: number;
+  turned: boolean;
 }
 
 export interface SquareInfo {
@@ -134,6 +159,8 @@ export class BattlemapLayer {
   sprites: Record<string, SpriteMeta> = {};
   /** Objects just put down, drawn over their chunk until it comes back with them. */
   private readonly previews = new Map<string, { holder: Container; epoch: number }>();
+  /** What is in the hand (`setGhost`): its sprite, where it is (world ft) and its scale (atlas px). */
+  private ghost: { sprite: Sprite; at: [number, number]; scale: number } | null = null;
   private readonly unlisten: () => void;
   /** A chunk being built a stage per frame (its parts are drawn once off screen as they are
    * made, so their uploads and tessellation don't all land in one frame). */
@@ -176,19 +203,8 @@ export class BattlemapLayer {
     for (const o of objects) {
       const [cx, cy] = [Math.floor(o.x / ts), Math.floor(o.y / ts)];
       const id = `${cx}/${cy}`;
-      let tex: Texture | null;
-      let size = 1;
-      let turned = true;
-      if (typeof o.kind === 'string') {
-        const asset = o.kind.slice(2);
-        tex = customTexture(asset);
-        size = this.sprites[asset]?.size ?? 1;
-      } else {
-        tex = atlas.frames[o.kind]?.[o.variant % VARIANTS] ?? null;
-        const inf = this.catalog[o.kind - 1];
-        turned = !!inf && (o.kind === 10 || o.kind === 20 || o.kind === 40 || TURNED.has(inf.name));
-      }
-      if (!tex) continue;
+      const look = this.objectLook(o);
+      if (!look) continue;
       let p = this.previews.get(id);
       if (!p) {
         const holder = new Container();
@@ -197,13 +213,54 @@ export class BattlemapLayer {
         this.previews.set(id, p);
       }
       p.epoch = Math.max(p.epoch, epoch);
-      const s = new Sprite(tex);
+      const s = new Sprite(look.texture);
       s.anchor.set(0.5);
       s.position.set(((o.x - cx * ts) / SQUARE_FT) * PX, ((o.y - cy * ts) / SQUARE_FT) * PX);
-      s.rotation = turned ? o.rot : 0;
-      s.scale.set(typeof o.kind === 'string' ? (size * PX * o.scale) / Math.max(tex.width, tex.height) : o.scale);
+      s.rotation = look.rotation;
+      s.scale.set(look.scale);
       p.holder.addChild(s);
     }
+  }
+
+  /** How an object put down by hand is drawn: its picture, turn and scale (atlas px), or null
+   * while its picture isn't there. */
+  private objectLook(o: Placed): { texture: Texture; rotation: number; scale: number } | null {
+    const atlas = (this.atlas ??= sharedAtlas(this.renderer, this.catalog));
+    if (typeof o.kind === 'string') {
+      const asset = o.kind.slice(2);
+      const texture = customTexture(asset);
+      if (!texture) return null;
+      const size = this.sprites[asset]?.size ?? 1;
+      return { texture, rotation: o.rot, scale: (size * PX * o.scale) / Math.max(texture.width, texture.height) };
+    }
+    const texture = atlas.frames[o.kind]?.[o.variant % VARIANTS];
+    if (!texture) return null;
+    return { texture, rotation: drawnTurned(this.catalog[o.kind - 1], !!o.turned) ? o.rot : 0, scale: o.scale };
+  }
+
+  /** What is in the hand, drawn where it would land (world ft): one sprite over the objects,
+   * reddened where it can't go (`ok` false). Null takes it away. */
+  setGhost(o: Placed | null, ok = true) {
+    const look = o && this.objectLook(o);
+    if (!o || !look) {
+      if (this.ghost) this.ghost.sprite.visible = false;
+      return;
+    }
+    if (!this.ghost) {
+      const sprite = new Sprite(look.texture);
+      sprite.anchor.set(0.5);
+      this.ghost = { sprite, at: [o.x, o.y], scale: 1 };
+    }
+    const g = this.ghost;
+    g.sprite.texture = look.texture;
+    g.sprite.rotation = look.rotation;
+    g.sprite.tint = ok ? 0xffffff : 0xff7a6a;
+    g.sprite.alpha = ok ? 0.85 : 0.75;
+    g.sprite.visible = true;
+    g.scale = look.scale;
+    g.at = [o.x, o.y];
+    // Over the tall objects (chunks built since are added under it).
+    if (this.layers[3].children[this.layers[3].children.length - 1] !== g.sprite) this.layers[3].addChild(g.sprite);
   }
 
   private dropPreview(id: string, epoch: number) {
@@ -265,28 +322,40 @@ export class BattlemapLayer {
 
   private icons = new Map<number, Promise<string | null>>();
 
+  /** Every built-in kind's picture (its first variant) on one sheet, keyed by kind id. */
+  thumbs(): Promise<ThumbSheet> {
+    return sheetFor(this.renderer, `battle:${this.catalog.map((k) => k.name).join('|')}`, () => {
+      const atlas = (this.atlas ??= sharedAtlas(this.renderer, this.catalog));
+      const tiles = this.catalog.flatMap((k) => (atlas.frames[k.id]?.[0] ? [{ key: String(k.id), node: new Sprite(atlas.frames[k.id][0]) }] : []));
+      return thumbSheet(this.renderer, tiles);
+    });
+  }
+
   /** A built-in kind's picture (its first variant), as a data URL. */
   icon(kind: number): Promise<string | null> {
     let p = this.icons.get(kind);
     if (!p) {
-      this.atlas ??= sharedAtlas(this.renderer, this.catalog);
-      const tex = this.atlas.frames[kind]?.[0];
-      p = tex ? this.renderer.extract.base64({ target: new Sprite(tex) }).catch(() => null) : Promise.resolve(null);
+      p = this.thumbs().then((s) => thumbUrl(s, String(kind)), () => null);
       this.icons.set(kind, p);
     }
     return p;
   }
 
   /** The object whose footprint holds a world position (the nearest centre), if its chunk is
-   * loaded: its kind (built-in id, or `s:<asset>`) and centre (world ft). */
-  objectAt(wx: number, wy: number): { kind: number | string; x: number; y: number } | null {
+   * loaded: its kind (built-in id, or `s:<asset>`), centre (world ft) and look. */
+  objectAt(wx: number, wy: number): ObjectHit | null {
     const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
-    let best: { kind: number | string; x: number; y: number } | null = null;
+    let best: ObjectHit | null = null;
     let bestD = Infinity;
-    // Footprints reach over chunk edges: the neighbours' too.
+    // Footprints reach over chunk edges (the widest about 2.5 squares from a centre): the
+    // neighbours' too, where the point is that near one.
     const [cx0, cy0] = [Math.floor(wx / ts), Math.floor(wy / ts)];
-    for (let cy = cy0 - 1; cy <= cy0 + 1; cy++) {
-      for (let cx = cx0 - 1; cx <= cx0 + 1; cx++) {
+    const near = 2.5 * SQUARE_FT;
+    const [fx, fy] = [wx - cx0 * ts, wy - cy0 * ts];
+    const [xa, xb] = [fx < near ? -1 : 0, fx > ts - near ? 1 : 0];
+    const [ya, yb] = [fy < near ? -1 : 0, fy > ts - near ? 1 : 0];
+    for (let cy = cy0 + ya; cy <= cy0 + yb; cy++) {
+      for (let cx = cx0 + xa; cx <= cx0 + xb; cx++) {
         const c = this.chunks.get(`${cx}/${cy}`);
         if (!c) continue;
         const [sx, sy] = [(wx - cx * ts) / SQUARE_FT, (wy - cy * ts) / SQUARE_FT];
@@ -297,7 +366,7 @@ export class BattlemapLayer {
           if (d <= Math.max(0.5, inf.radius * o.scale) && d < bestD) {
             bestD = d;
             const kind = o.kind >= SPRITE_KIND ? `s:${c.sprites[o.kind - SPRITE_KIND].asset}` : o.kind;
-            best = { kind, x: cx * ts + o.x * SQUARE_FT, y: cy * ts + o.y * SQUARE_FT };
+            best = { kind, x: cx * ts + o.x * SQUARE_FT, y: cy * ts + o.y * SQUARE_FT, variant: o.variant, rot: o.rot, scale: o.scale, turned: o.turned };
           }
         }
       }
@@ -487,6 +556,11 @@ export class BattlemapLayer {
       p.holder.scale.set(pxPerSq / PX);
       p.holder.alpha = alpha;
     }
+    if (this.ghost?.sprite.visible) {
+      const g = this.ghost;
+      g.sprite.position.set(...cam.worldToScreen(g.at[0], g.at[1]));
+      g.sprite.scale.set((g.scale * pxPerSq) / PX);
+    }
     for (const c of this.chunks.values()) {
       const show = inView.has(c.id);
       for (const p of c.parts) p.visible = show;
@@ -569,7 +643,7 @@ export class BattlemapLayer {
     yield;
 
     // Objects (sorted in the worker): flat things and hazards, then shadows, then tall things.
-    const objs: { kind: number; x: number; y: number; scale: number }[] = [];
+    const objs: ChunkObject[] = [];
     // Uploaded sprites: a particle container each (low or tall), only where a chunk has them.
     const customs = new Map<string, ParticleContainer>();
     let waiting = false;
@@ -580,9 +654,11 @@ export class BattlemapLayer {
     const shadows = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
     const tall = new ParticleContainer({ texture: atlas.shadow, dynamicProperties: fixed });
     for (let i = 0; i < nObj; i++) {
-      const [kind, variant, x, y, rot, scale] = c.objs.subarray(i * 6, i * 6 + 6);
+      const [kind, look, x, y, rot, scale] = c.objs.subarray(i * 6, i * 6 + 6);
+      // The variant byte, and the turned flag above it (`battlePrep`).
+      const [variant, turned] = [look & 255, look >> 8 === 1];
       const o = { kind, x, y, rot, scale };
-      objs.push({ kind, x, y, scale });
+      objs.push({ kind, variant, x, y, rot, scale, turned });
       const inf = kindRules(o.kind, this.catalog, c.sprites);
       if (!inf) continue;
       const custom = o.kind >= SPRITE_KIND ? c.sprites[o.kind - SPRITE_KIND] : null;
@@ -621,7 +697,7 @@ export class BattlemapLayer {
         pc.addParticle(new Particle({ texture: tex, x: o.x * PX, y: o.y * PX, anchorX: 0.5, anchorY: 0.5, scaleX: k, scaleY: k, rotation: o.rot }));
         continue;
       }
-      const rotation = o.kind === 10 || o.kind === 20 || o.kind === 40 || TURNED.has((inf as KindInfo).name) ? o.rot : 0;
+      const rotation = drawnTurned(inf as KindInfo, turned) ? o.rot : 0;
       (isTall ? tall : low).addParticle(
         new Particle({ texture: tex, x: o.x * PX, y: o.y * PX, anchorX: 0.5, anchorY: 0.5, scaleX: o.scale, scaleY: o.scale, rotation }),
       );
@@ -775,8 +851,20 @@ function sharedAtlas(renderer: Renderer, catalog: KindInfo[]): Atlas {
   return atlasCache.atlas;
 }
 
-/** Props drawn turned to their `rot` (by catalog name). */
+/** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
+ * walls, by id). */
 const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll']);
+/** Props drawn at their `rot` only when turned by hand (`Placed.turned`), by catalog name: those whose
+ * NW-lit look still reads turned (approved in the gallery, `?gallery=1&turn=1`). Trees, plants,
+ * pools and hazards never turn. */
+export const TURNABLE = new Set(['barrels', 'crates', 'headstone', 'statue on a plinth', 'haystack', 'rock pile', 'well']);
+
+/** Whether a built-in kind is drawn at its `rot`: some always, others only when turned by hand.
+ * (Uploaded sprites always are.) */
+export function drawnTurned(inf: KindInfo | undefined, turned: boolean): boolean {
+  if (!inf) return false;
+  return inf.id === 10 || inf.id === 20 || inf.id === 40 || TURNED.has(inf.name) || (turned && TURNABLE.has(inf.name));
+}
 /** Sparse plants (blades or fronds with ground between them): a smaller, fainter shadow than a solid
  * crown, as [size, strength] factors. */
 const SPARSE = new Map([

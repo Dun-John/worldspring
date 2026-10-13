@@ -2,13 +2,18 @@
 // redraw. `&kinds=15,16` shows only those battlemap kinds (and no furniture or props), `&sq=96` draws
 // them at that many px a square (default 48). `&items=bed,chair` shows only those furniture and props
 // (each in both orientations; no battlemap objects), `&sq=` then sizing their squares (default 44). Battlemap objects come from the atlas (all variants); building furniture and
-// underground props are drawn by InteriorLayer exactly as in the app, one per little room.
+// underground props are drawn by InteriorLayer exactly as in the app, one per little room. `&turn=1` shows how
+// things look turned by hand instead: battlemap props that may turn (`TURNABLE`, and the other candidates) at four
+// turns on grass with their shadows, and furniture and props with a back at each of their four sides.
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { KindInfo } from '../gen/client';
 import type { Interior, InteriorItem } from '../gen/protocol';
 import { buildAtlas, PX, VARIANTS } from '../render/atlas';
-import { InteriorLayer } from '../render/InteriorLayer';
+import { drawnTurned, TURNABLE } from '../render/BattlemapLayer';
+import { ORIENTED } from '../render/furniture';
+import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
+import { thumbSheet, type ThumbTile } from '../render/thumbs';
 
 /** Building furniture (`interior::item_info`), with a typical size in squares. */
 const FURNITURE: [string, number, number][] = [
@@ -43,22 +48,25 @@ const HEAD: TextStyleOptions = { fontFamily: 'Georgia, serif', fontSize: 22, fil
 const ITEM_SQ = 44;
 const SLOT = 4;
 
-/** One room per item in a grid of `cols` (each SLOT squares, rock between them). */
-function sampler(id: string, fn: string, items: [string, number, number][], cols: number): { it: Interior; spots: [string, number, number][] } {
+/** One room per item in a grid of `cols` (each SLOT squares, rock between them); an item may give the
+ * side its back is against (0-3) and its label. */
+function sampler(id: string, fn: string, items: [string, number, number, number?, string?][], cols: number): { it: Interior; spots: [string, number, number][] } {
   const rows = Math.ceil(items.length / cols);
   const [nx, ny] = [cols * (SLOT + 1) + 1, rows * (SLOT + 1) + 1];
   const cells = new Array<number>(nx * ny).fill(-1);
   const furniture: InteriorItem[] = [];
   const rooms: Interior['levels'][number]['rooms'] = [];
   const spots: [string, number, number][] = [];
-  items.forEach(([kind, w, h], k) => {
+  items.forEach(([kind, w, h, back, label], k) => {
     const [x0, y0] = [1 + (k % cols) * (SLOT + 1), 1 + Math.floor(k / cols) * (SLOT + 1)];
     for (let j = 0; j < SLOT; j++) for (let i = 0; i < SLOT; i++) cells[(y0 + j) * nx + x0 + i] = k;
     rooms.push({ kind: ' ', squares: SLOT * SLOT, raise_ft: 0, center: [x0 + SLOT / 2, y0 + SLOT / 2] });
     // Against the room's top wall, centred (props on a wall find the rock behind them).
     const x = x0 + Math.floor((SLOT - w) / 2);
-    furniture.push({ kind, name: kind, x, y: y0, w, h, cover: 0, blocks_move: false, height_ft: 3 });
-    spots.push([w === 1 && h === 1 && kind === 'table' ? 'table (round)' : `${kind.replace(/_/g, ' ')}${w * h > 1 ? ` ${w}×${h}` : ''}`, x0, y0 + SLOT]);
+    // With a side set: in the middle of the room, so only the side makes it face.
+    const y = back === undefined ? y0 : y0 + Math.floor((SLOT - h) / 2);
+    furniture.push({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 3, ...(back === undefined ? {} : { back }) });
+    spots.push([label ?? (w === 1 && h === 1 && kind === 'table' ? 'table (round)' : `${kind.replace(/_/g, ' ')}${w * h > 1 ? ` ${w}×${h}` : ''}`), x0, y0 + SLOT]);
   });
   const level = { z: -1, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };
   return { it: { id, settlement: 0, building: 0, name: null, function: fn, origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] }, spots };
@@ -90,6 +98,29 @@ export async function runGallery(target: HTMLElement) {
   const only = query.get('kinds')?.split(',').map(Number);
   const pick = query.get('items')?.split(',');
   const sq = Number(query.get('sq')) || 48;
+  if (query.has('turn')) {
+    turning(app, catalog, root, head, () => y, (v) => (y = v), width, sq);
+    const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
+    app.stage.addChild(bg, root);
+    app.renderer.resize(width, y);
+    // The pickers' thumbnail sheets, as they come out of `thumbSheet` (one canvas each).
+    const atlas = buildAtlas(app.renderer, catalog);
+    const sheets: [string, ThumbTile[]][] = [
+      ['Battlemap', catalog.map((k) => ({ key: String(k.id), node: new Sprite(atlas.frames[k.id][0]) }))],
+      ['Building', InteriorLayer.thumbs(false, FURNITURE.map(([kind, w, h]) => ({ kind, w, h, key: `${kind}:${w}x${h}` })))],
+      ['Underground', InteriorLayer.thumbs(true, UNDER.map(([kind, w, h]) => ({ kind, w, h, key: `${kind}:${w}x${h}` })))],
+    ];
+    for (const [name, tiles] of sheets) {
+      const n = tiles.length;
+      const sheet = thumbSheet(app.renderer, tiles, 64);
+      const h = document.createElement('h2');
+      h.textContent = `${name} thumbnails (${sheet.rects.size} of ${n} on one sheet)`;
+      h.style.cssText = 'font:bold 22px Georgia,serif;margin:16px';
+      sheet.canvas.style.cssText = 'margin:0 16px;background:#cfc4ad';
+      target.append(h, sheet.canvas);
+    }
+    return;
+  }
   if (!pick) {
     head(`Battlemap objects (atlas, ${catalog.length} kinds × ${VARIANTS} variants)`);
     const atlas = buildAtlas(app.renderer, catalog);
@@ -154,4 +185,107 @@ export async function runGallery(target: HTMLElement) {
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
   app.stage.addChild(bg, root);
   app.renderer.resize(width, y);
+}
+
+/** Trees and plants (by id): they look the same any way round, so they never turn. */
+const PLANTS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 18, 19]);
+
+/** `&turn=1`: battlemap props that may be turned by hand, at four turns on grass with their shadows
+ * (✓: in `TURNABLE`), then furniture and props with a back, at each side (as the designer turns
+ * them: a quarter turn swaps width and depth). */
+function turning(app: Application, catalog: KindInfo[], root: Container, head: (s: string) => void, getY: () => number, setY: (v: number) => void, width: number, sq: number) {
+  const atlas = buildAtlas(app.renderer, catalog);
+  const scale = sq / PX;
+  const cell = Math.max(104, Math.ceil((sq / 48) * 104));
+  const cellW = 4 * cell + 24;
+  const per = Math.max(1, Math.floor((width - 32) / cellW));
+  // Props not drawn turned already, but for trees, plants and hazards.
+  const cands = catalog.filter((k) => !k.hazard && !PLANTS.has(k.id) && !drawnTurned(k, false));
+  head(`Battlemap props turned by hand: 0°, 90°, 180°, 270° (✓ turns; the rest stay as drawn)`);
+  let y = getY();
+  cands.forEach((info, k) => {
+    if (k % per === 0 && k) y += cell + 30;
+    const x0 = 16 + (k % per) * cellW;
+    const tex = atlas.frames[info.id][0];
+    const fit = Math.min(scale, (cell - 8) / (Math.hypot(tex.width, tex.height) || 1));
+    for (let q = 0; q < 4; q++) {
+      const [cx, cy] = [x0 + cell / 2 + q * cell, y + cell / 2];
+      root.addChild(new Graphics().rect(cx - cell / 2 + 2, cy - cell / 2 + 2, cell - 4, cell - 4).fill(0x7f9152));
+      // The shadow as the battlemap casts it: always to the SE, whatever the turn.
+      if (info.height_ft >= 1.5) {
+        const off = Math.min(1.3, 0.15 + info.height_ft / 45) * PX * 0.7;
+        const r = info.radius * PX;
+        const sh = new Sprite(atlas.shadow);
+        sh.anchor.set(0.5);
+        sh.scale.set(((r * 2.1) / 128) * fit);
+        sh.alpha = info.height_ft >= 5 ? 0.6 : 0.35;
+        sh.position.set(cx + off * fit, cy + off * fit);
+        root.addChild(sh);
+      }
+      const s = new Sprite(tex);
+      s.anchor.set(0.5);
+      s.scale.set(fit);
+      s.rotation = (q * Math.PI) / 2;
+      s.position.set(cx, cy);
+      root.addChild(s);
+    }
+    const t = new Text({ text: `${TURNABLE.has(info.name) ? '✓ ' : ''}${info.id} ${info.name}`, style: LABEL });
+    t.position.set(x0, y + cell + 2);
+    root.addChild(t);
+  });
+  setY(y + cell + 50);
+
+  // Furniture and props with a back, at each of their four sides.
+  // Its size with its back to the north: a long side there (a bed's head at an end).
+  const sizeOf = (list: [string, number, number][], kind: string): [number, number] => {
+    const all = list.filter(([k]) => k === kind);
+    const [, w, h] = (kind === 'bed' ? all.find(([, w, h]) => h > w) : all.find(([, w, h]) => w >= h)) ?? all[0] ?? [kind, 1, 1];
+    return kind === 'bed' || w >= h ? [w, h] : [h, w];
+  };
+  const sides = (kinds: string[], list: [string, number, number][]) =>
+    kinds.flatMap((kind) => {
+      const [w, h] = sizeOf(list, kind);
+      return [0, 1, 2, 3].map((b): [string, number, number, number, string] => [kind, b % 2 ? h : w, b % 2 ? w : h, b, `${kind.replace(/_/g, ' ')} · back ${'NESW'[b]}`]);
+    });
+  const buildingKinds = [...ORIENTED];
+  const underKinds = [...new Set(UNDER.map(([k]) => k))].filter((k) => ON_WALL.has(k) || BACKED.has(k) || ORIENTED.has(k === 'bookshelf' ? 'bookcase' : k));
+  // Rooms a little smaller than the other views, two items to a row.
+  const isq = 34;
+  const cols = Math.max(4, Math.floor((width - 32) / ((SLOT + 1) * isq) / 4) * 4);
+  for (const [title, id, fn, list] of [
+    ['Building furniture with a back (N, E, S, W)', 'b:gallery', 'house', sides(buildingKinds, FURNITURE)],
+    ['Underground props with a back (N, E, S, W)', 'u:gallery', 'dungeon', sides(underKinds, UNDER)],
+  ] as const) {
+    head(title);
+    const { it, spots } = sampler(id, fn, list as [string, number, number, number, string][], cols);
+    const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
+    const holder = new Container();
+    holder.addChild(layer.container);
+    holder.scale.set(isq);
+    holder.position.set(16, getY());
+    layer.container.children[0].visible = false;
+    root.addChild(holder);
+    for (const [label, gx, gy] of spots) {
+      const t = new Text({ text: label, style: { ...LABEL, fill: id.startsWith('u') ? 0xf3ead8 : 0x2a2219, fontSize: 11 } });
+      t.position.set(16 + gx * isq + 2, getY() + (gy - 0.95) * isq);
+      root.addChild(t);
+    }
+    setY(getY() + it.ny * isq + 40);
+  }
+
+  // What is in the hand inside (`InteriorLayer.setGhost`): a bookcase on auto facing (it finds the
+  // bottom wall), where it fits, where it blocks a way, and where it can't go.
+  head('Ghosts: fits, blocks a way, can’t go');
+  ['ok', 'doorway', 'bad'].forEach((state, k) => {
+    const { it } = sampler('b:ghost', 'house', [['chest', 1, 1]], 1);
+    const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
+    layer.setGhost({ kind: 'bookcase', name: 'bookcase', x: 2, y: 4, w: 2, h: 1, cover: 0, blocks_move: false, height_ft: 6 }, state as 'ok' | 'doorway' | 'bad');
+    const holder = new Container();
+    holder.addChild(layer.container);
+    holder.scale.set(isq);
+    holder.position.set(16 + k * (SLOT + 2) * isq, getY());
+    layer.container.children[0].visible = false;
+    root.addChild(holder);
+  });
+  setY(getY() + (SLOT + 2) * isq + 40);
 }
