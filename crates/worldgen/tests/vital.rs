@@ -655,7 +655,7 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
     }
     let (id, mut d, floors) = done.expect("a building to design");
     // An uploaded picture's rules (passable, difficult ground, 2 ft, half cover), and grain
-    // sacks and the picture put down in the study.
+    // sacks (in their fourth look) and the picture (its back to the east) put down in the study.
     let mut file = world.file.clone();
     let kettle = worldgen::world::SpriteMeta { name: "Kettle".into(), size: 1.0, cover: 1, blocks_move: false, blocks_sight: false, difficult: true, height_ft: 2.0 };
     file.edits.sprites.insert("k3ttle".into(), kettle);
@@ -667,7 +667,8 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
         let nx = d.nx as usize;
         let put = (0..cells.len()).filter(|&k| cells[k] == study).find_map(|k| {
             let mut t = d.clone();
-            t.levels[g].items.push(design::DesignItem { kind: kind.into(), x: (k % nx) as u16, y: (k / nx) as u16, w: 1, h: 1 });
+            let (back, variant) = if kind == "sacks" { (None, Some(3)) } else { (Some(1), None) };
+            t.levels[g].items.push(design::DesignItem { kind: kind.into(), x: (k % nx) as u16, y: (k / nx) as u16, w: 1, h: 1, back, variant });
             t.problems(&ws, t0, &id).unwrap().1.iter().all(|p| !p.blocking).then_some(t)
         });
         d = put.unwrap_or_else(|| panic!("{id}: no room in the study for {kind}"));
@@ -677,9 +678,11 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
     let floor = &built.levels[built.entry_level].furniture;
     let sacks = floor.iter().find(|f| f.kind == "sacks").expect("the sacks");
     assert!((sacks.name, sacks.cover, sacks.blocks_move) == ("grain sacks", 1, true), "{id}: the sacks' rules: {sacks:?}");
+    assert!((sacks.back, sacks.variant) == (None, Some(3)), "{id}: the sacks' look: {sacks:?}");
     let pic = floor.iter().find(|f| f.kind == interior::SPRITE).expect("the picture");
     assert!(pic.sprite == 1 && built.sprites == [interior::InteriorSprite { asset: "k3ttle".into(), name: "Kettle".into() }], "{id}: the picture's table: {:?}", built.sprites);
     assert!((pic.cover, pic.blocks_move, pic.height_ft) == (1, false, 2.0), "{id}: the picture's rules: {pic:?}");
+    assert!((pic.back, pic.variant) == (Some(1), None), "{id}: the picture's side: {pic:?}");
     // The world builds it, as every interior is built: the vital rules hold.
     let v = serde_json::to_value(&d).unwrap();
     let undo = file.edits.apply(&worldgen::world::EditOp::Set { field: "designs".into(), key: id.clone(), value: v.clone() }).unwrap();
@@ -1291,7 +1294,8 @@ fn designed_cellars(world: &World, t0: &worldgen::t0::T0) {
 }
 
 /// A site designed by hand (as an agent writes one, in text): a level dug below the deepest,
-/// joined by a way down, doors added where needed, a room furnished; the world then builds the
+/// joined by a way down, doors added where needed, a chest turned and in another look (read back
+/// from the text plan), a room furnished; the world then builds the
 /// design instead of the generated site. Breaking a rule (a room shut off, the way in moved, a
 /// way up not under the way down) is caught.
 fn designed_site(world: &World, t0: &worldgen::t0::T0) {
@@ -1320,7 +1324,7 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
         .collect();
     let level = |doors: &str| {
         format!(
-            "site dungeon · {} levels\nlevel {n}\nitems: {}; down {x},{y}\nlevel {}: Level {} · the vault\nrooms: a=landing; b=secret vault \"The Hoard\"\ngrid:\n{grid}doors: {doors}\nitems: chest {},{}\n",
+            "site dungeon · {} levels\nlevel {n}\nitems: {}; down {x},{y}\nlevel {}: Level {} · the vault\nrooms: a=landing; b=secret vault \"The Hoard\"\ngrid:\n{grid}doors: {doors}\nitems: chest {},{} variant 2 back e\n",
             n + 1,
             items.join("; "),
             n + 1,
@@ -1336,6 +1340,11 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     let (it, problems) = d.problems(world, t0, &id).unwrap();
     assert!(problems.iter().all(|p| !p.blocking), "{id}: {problems:?}");
     assert_eq!(it.levels[0].doors.len(), 1, "{id}: one door from the landing into the vault");
+    let chest = it.levels[0].furniture.iter().find(|f| f.kind == "chest").expect("the chest");
+    assert!((chest.back, chest.variant) == (Some(1), Some(2)), "{id}: the chest's side and look: {chest:?}");
+    let text = design::to_text(&d, &|_, _| None).unwrap();
+    assert!(text.contains(&format!("chest {},{} back e variant 2", x + 5, y)), "{id}: the chest in the text plan:\n{text}");
+    assert!(design::from_text(&text, &base).unwrap().0 == d, "{id}: the text plan doesn't read back:\n{text}");
     // Broken: the vault shut off; the way in moved; the way up off the way down.
     let (shut, _) = design::from_text(&level(""), &base).unwrap();
     assert!(shut.problems(world, t0, &id).unwrap().1.iter().any(|p| p.blocking && p.level == 0 && p.text.contains("can't be reached")), "{id}: a room shut off");
@@ -1503,7 +1512,8 @@ fn agent_edits_guarantee() {
 
     // Objects put down and taken away by hand: generated ones go (one by kind and place, all in
     // a circle), placed ones come in the chunk holding them with their rules (built-in, or an
-    // uploaded sprite's), the payload names the sprite, and the app's entries survive mapd.
+    // uploaded sprite's, turned by hand), the payload names the sprite, and the app's entries
+    // survive mapd.
     let gen_chunk = |f: &WorldFile| {
         let mut ex = Executor::new(World::new(f.clone()).unwrap());
         let c = ex.battlemap(key);
@@ -1522,7 +1532,7 @@ fn agent_edits_guarantee() {
         ("cleared", "x:one", serde_json::json!({ "x": one_at[0] + 0.5, "y": one_at[1], "kind": one_kind })),
         ("cleared", "x:area", serde_json::json!({ "x": area[0], "y": area[1], "r": 15.0 })),
         ("objects", "o:rock", serde_json::json!({ "kind": 12, "x": free[0], "y": free[1], "rot": 0.0, "scale": 1.0, "variant": 2 })),
-        ("objects", "o:idol", serde_json::json!({ "kind": format!("s:{asset}"), "x": free[0] + 20.0, "y": free[1], "rot": 1.5, "scale": 1.0, "variant": 0 })),
+        ("objects", "o:idol", serde_json::json!({ "kind": format!("s:{asset}"), "x": free[0] + 20.0, "y": free[1], "rot": 1.5, "scale": 1.0, "variant": 0, "turned": true })),
         ("objects", "o:away", serde_json::json!({ "kind": 12, "x": origin[0] - 10.0, "y": free[1], "rot": 0.0, "scale": 1.0, "variant": 0 })),
         ("sprites", asset, serde_json::json!({ "name": "Idol", "size": 2.0, "cover": 3, "blocks_move": true, "blocks_sight": true, "difficult": false, "height_ft": 9.0 })),
     ];
@@ -1543,10 +1553,10 @@ fn agent_edits_guarantee() {
     let removed = plain.objects.len() - plain.objects.iter().filter(|o| geom_dist(at(o), area) > 15.0 && !(o.kind as u16 == one_kind && geom_dist(at(o), one_at) <= 1.25)).count();
     assert_eq!(edited.objects.len(), plain.objects.len() - removed + 2, "objects other than the cleared ones changed, or a placed one is missing or misplaced");
     let rock = edited.objects.iter().find(|o| o.sprite == 0 && geom_dist(at(o), free) < 0.01).expect("the placed boulder");
-    assert!(rock.kind as u16 == 12 && rock.variant == 2 && edited.info(rock).blocks_move, "the placed boulder is wrong");
+    assert!(rock.kind as u16 == 12 && rock.variant == 2 && !rock.turned && edited.info(rock).blocks_move, "the placed boulder is wrong");
     let idol = edited.objects.iter().find(|o| o.sprite != 0).expect("the placed sprite");
     let ii = edited.info(idol);
-    assert!(edited.name(idol) == "Idol" && ii.cover == 3 && ii.blocks_sight && (ii.radius - 1.0).abs() < 1e-6 && (idol.rot - 1.5).abs() < 1e-6, "the sprite's rules are wrong");
+    assert!(edited.name(idol) == "Idol" && ii.cover == 3 && ii.blocks_sight && (ii.radius - 1.0).abs() < 1e-6 && (idol.rot - 1.5).abs() < 1e-6 && idol.turned, "the sprite's rules are wrong");
     assert!(packed.ends_with(asset.as_bytes()) && edited.sprites.len() == 1, "the payload does not name the sprite");
     let dist = worldgen::battlemap::cover_distance(&edited);
     let (ix, iy) = (idol.x as usize, idol.y as usize);

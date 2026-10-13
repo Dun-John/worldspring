@@ -365,8 +365,10 @@ export interface DesignLevel {
   /** x, y, side (0 east, 1 south; a building's also 2 west, 3 north), flags (1 secret; a
    * building's door to the outside: 2 front, 4 back). */
   doors: [number, number, number, number][];
-  /** Props and the ways (`exit`, `up`, `down`), in order; a building's furniture. */
-  items: { kind: string; x: number; y: number; w: number; h: number }[];
+  /** Props and the ways (`exit`, `up`, `down`), in order; a building's furniture. `back`: the
+   * side it stands against (0 north 1 east 2 south 3 west), `variant`: one of its looks (0-3);
+   * absent: found from the walls, picked by position. */
+  items: { kind: string; x: number; y: number; w: number; h: number; back?: number; variant?: number }[];
   /** A building's: storey (-1 cellar, 0 ground floor), an open roof, the stairs reach it. */
   z?: number;
   roof?: boolean;
@@ -408,6 +410,8 @@ export interface Placed {
   rot: number;
   scale: number;
   variant: number;
+  /** Drawn at `rot` (turned by hand or by a tool); absent: as before. */
+  turned?: true;
 }
 
 /** Generated objects taken away (`worldgen::world::Clear`): with `kind`, the one of that kind
@@ -561,6 +565,11 @@ export interface InteriorItem {
   hazard?: string;
   /** An uploaded picture (kind `sprite`): index + 1 into `Interior.sprites`. */
   sprite?: number;
+  /** Set in a design: the side its back is against (0 north 1 east 2 south 3 west); absent: found
+   * from the walls. */
+  back?: number;
+  /** Set in a design: one of its looks (0-3); absent: picked by position. */
+  variant?: number;
 }
 
 /** What a point query or building search returns. */

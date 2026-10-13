@@ -282,6 +282,8 @@ pub struct Object {
     pub scale: f32,
     /// An uploaded sprite: index + 1 into `Chunk::sprites` (0 = the built-in `kind`).
     pub sprite: u16,
+    /// Put down by hand and turned (`Placed::turned`): drawn at `rot`.
+    pub turned: bool,
 }
 
 /// An uploaded sprite used in a chunk (`Edits::sprites`).
@@ -1498,20 +1500,20 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
                 let rot = libm::atan2(b[1] - a[1], b[0] - a[0]) as f32;
                 let variant = (h >> 20) as u8 & 7;
-                chunk.objects.push(Object { kind: Kind::RuinWall, variant, x: x as f32, y: y as f32, rot, scale: 1.0, sprite: 0 });
+                chunk.objects.push(Object { kind: Kind::RuinWall, variant, x: x as f32, y: y as f32, rot, scale: 1.0, sprite: 0, turned: false });
             }
         }
         let c = crate::town::geom::centroid(poly);
         let h = hash2(wseed, (c[0] * 2.0) as i64, (c[1] * 2.0) as i64);
         let (x, y) = ((c[0] - ox) / SQUARE_FT, (c[1] - oy) / SQUARE_FT);
         if unit(h) < 0.7 && x >= 0.0 && y >= 0.0 && x < SQ as f64 && y < SQ as f64 {
-            chunk.objects.push(Object { kind: Kind::RockPile, variant: (h >> 20) as u8 & 7, x: x as f32, y: y as f32, rot: 0.0, scale: 1.3, sprite: 0 });
+            chunk.objects.push(Object { kind: Kind::RockPile, variant: (h >> 20) as u8 & 7, x: x as f32, y: y as f32, rot: 0.0, scale: 1.3, sprite: 0, turned: false });
         }
     }
     for st in &statues {
         let (x, y) = ((st[0] - ox) / SQUARE_FT, (st[1] - oy) / SQUARE_FT);
         if x >= 0.0 && y >= 0.0 && x < SQ as f64 && y < SQ as f64 {
-            chunk.objects.push(Object { kind: Kind::Statue, variant: 0, x: x as f32, y: y as f32, rot: 0.0, scale: 1.0, sprite: 0 });
+            chunk.objects.push(Object { kind: Kind::Statue, variant: 0, x: x as f32, y: y as f32, rot: 0.0, scale: 1.0, sprite: 0, turned: false });
         }
     }
     // A layout's own props: each in the chunk holding it, on dry ground off roads and roofs.
@@ -1524,7 +1526,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         if chunk.building[k] != 0 || chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || chunk.water_level[k] > chunk.height[k] {
             continue;
         }
-        chunk.objects.push(Object { kind: p.kind, variant: p.variant, x: x as f32, y: y as f32, rot: p.rot, scale: p.scale, sprite: 0 });
+        chunk.objects.push(Object { kind: p.kind, variant: p.variant, x: x as f32, y: y as f32, rot: p.rot, scale: p.scale, sprite: 0, turned: false });
     }
     // Plaza features: drawn by the chunk holding the centre; a planter's tree stands in it.
     for &(fc, r, kind, ang) in &features {
@@ -1537,7 +1539,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let rim = [(x + rv * libm::cos(ang)) as f32, (y + rv * libm::sin(ang)) as f32];
         chunk.structures.push(VectorShape { kind: ShapeKind::Dais, size: kind as u8 as f32, pts: vec![[x as f32, y as f32], rim] });
         if kind == PlazaFeature::Planter {
-            chunk.objects.push(Object { kind: Kind::TreeDeciduous, variant: (hash2(seed, x as i64, y as i64) >> 20) as u8 & 7, x: x as f32, y: y as f32, rot: 0.0, scale: 0.9, sprite: 0 });
+            chunk.objects.push(Object { kind: Kind::TreeDeciduous, variant: (hash2(seed, x as i64, y as i64) >> 20) as u8 & 7, x: x as f32, y: y as f32, rot: 0.0, scale: 0.9, sprite: 0, turned: false });
         }
     }
     // The market: each stall in the chunk holding its centre, on open plaza ground.
@@ -1551,7 +1553,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             continue;
         }
         let h = hash2(seed ^ 0x5a11, (p[0] * 2.0) as i64, (p[1] * 2.0) as i64);
-        let o = Object { kind, variant: (h >> 20) as u8 & 7, x: x as f32, y: y as f32, rot, scale: 1.0, sprite: 0 };
+        let o = Object { kind, variant: (h >> 20) as u8 & 7, x: x as f32, y: y as f32, rot, scale: 1.0, sprite: 0, turned: false };
         // The plaza's margin keeps stalls off buildings; across a chunk edge the neighbour's
         // squares are plaza too.
         let r = info(kind as u16).radius;
@@ -1571,7 +1573,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         if i >= 0.0 && j >= 0.0 && (i as usize) < SQ && (j as usize) < SQ {
             let k = j as usize * SQ + i as usize;
             if chunk.building[k] == 0 && chunk.water_level[k] <= chunk.height[k] {
-                chunk.objects.push(Object { kind: Kind::Well, variant: 0, x: ((w[0] - ox) / SQUARE_FT) as f32, y: ((w[1] - oy) / SQUARE_FT) as f32, rot: 0.0, scale: 1.0, sprite: 0 });
+                chunk.objects.push(Object { kind: Kind::Well, variant: 0, x: ((w[0] - ox) / SQUARE_FT) as f32, y: ((w[1] - oy) / SQUARE_FT) as f32, rot: 0.0, scale: 1.0, sprite: 0, turned: false });
             }
         }
     }
@@ -1648,7 +1650,7 @@ fn apply_edits(c: &mut Chunk, e: &crate::world::Edits, ox: f64, oy: f64) {
         let (x, y) = (((p.x - ox) / SQUARE_FT) as f32, ((p.y - oy) / SQUARE_FT) as f32);
         let scale = if p.scale.is_finite() { p.scale.clamp(0.1, 10.0) } else { 1.0 };
         let rot = if p.rot.is_finite() { p.rot } else { 0.0 };
-        let mut o = Object { kind: Kind::Crate, variant: p.variant, x, y, rot, scale, sprite: 0 };
+        let mut o = Object { kind: Kind::Crate, variant: p.variant, x, y, rot, scale, sprite: 0, turned: p.turned };
         match &p.kind {
             ObjKind::Builtin(k) => match kind_of(*k) {
                 Some(k) => o.kind = k,
@@ -1804,6 +1806,7 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[boo
                     rot: rng.range(0.0, std::f64::consts::TAU) as f32,
                     scale: rng.range(0.8, 1.25) as f32,
                     sprite: 0,
+                    turned: false,
                 });
             }
         }
@@ -2044,7 +2047,7 @@ fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, se
             let ang = rng.range(0.0, std::f64::consts::TAU) as f32;
             c.structures.push(VectorShape { kind: ShapeKind::Dais, size: kind as u8 as f32, pts: vec![[cx, cy], [cx + rv * ang.cos(), cy + rv * ang.sin()]] });
             if kind == PlazaFeature::Planter {
-                c.objects.push(Object { kind: Kind::TreeDeciduous, variant: rng.below(8) as u8, x: cx, y: cy, rot: 0.0, scale: 0.9, sprite: 0 });
+                c.objects.push(Object { kind: Kind::TreeDeciduous, variant: rng.below(8) as u8, x: cx, y: cy, rot: 0.0, scale: 0.9, sprite: 0, turned: false });
             }
             retier(c, sea);
             return;
@@ -2489,6 +2492,7 @@ fn push_at(c: &mut Chunk, kind: Kind, k: usize, rng: &mut Pcg32) {
         rot: rng.range(0.0, std::f64::consts::TAU) as f32,
         scale: rng.range(0.85, 1.2) as f32,
         sprite: 0,
+        turned: false,
     };
     // Tall props draw above roofs, so they must not reach over a building (or past the chunk
     // edge, where a neighbour's building may stand): try it smaller and centred, else a crate.
@@ -2601,7 +2605,8 @@ fn compute_edges(c: &mut Chunk) {
 ///   0 magic "BATL" | 4 level | 8 x | 12 y | 16 n_objects | 20 atmosphere | 24 sea f32 | 28 reserved
 ///   32 height f32[HS²] | tier i16[SQ²] | surface u8[SQ²] | edges u8[SQ²] | water f32[HS²]
 ///   (height and water include the one-square halo ring)
-///   objects: (kind u16, variant u8, 0 u8, x f32, y f32, rot f32, scale f32) × n
+///   objects: (kind u16, variant u8, turned u8 (1: put down by hand and drawn at rot,
+///   `Placed::turned`; 0 otherwise), x f32, y f32, rot f32, scale f32) × n
 ///   road halo u8[HS²]: road class + 1 (0 = none), 0x80 = bridge deck
 ///   building u16[SQ²]: index + 1 of the building on each square (0 = none)
 ///   buildings: count u32, then per building: n u8, floors u8, roof u8 (style: 0 hip,
@@ -2639,7 +2644,8 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
         let kind = if o.sprite == 0 { o.kind as u16 } else { SPRITE_KIND + o.sprite - 1 };
         out.extend_from_slice(&kind.to_le_bytes());
         out.push(o.variant);
-        out.push(0);
+        // Drawn at `rot` (`Placed::turned`); 0 for generated objects, so their bytes are as before.
+        out.push(o.turned as u8);
         for v in [o.x, o.y, o.rot, o.scale] {
             out.extend_from_slice(&v.to_le_bytes());
         }

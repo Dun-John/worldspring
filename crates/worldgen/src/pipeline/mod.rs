@@ -135,6 +135,23 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         let bytes = crate::battlemap::pack(&ex.world, &chunk);
         writeln!(out, "battlemap/{}/{}/{} {:016x}", k.level, k.x, k.y, fnv64(&bytes)).unwrap();
     }
+    // Objects put down by hand (a world without edits): barrels turned and crates not, on the
+    // first battlemap; the chunk packed.
+    if ex.world.file.edits.is_empty()
+        && let Some(k) = keys.iter().find(|k| k.level == max_level)
+    {
+        let size = ex.world.geom.tile_size_ft(max_level);
+        let (ox, oy) = (k.x as f64 * size, k.y as f64 * size);
+        for i in 0..4 {
+            let (kind, turned) = if i % 2 == 0 { (crate::battlemap::Kind::Barrel, true) } else { (crate::battlemap::Kind::Crate, false) };
+            let p = crate::world::Placed { kind: crate::world::ObjKind::Builtin(kind as u16), x: ox + 100.0 + i as f64 * 37.5, y: oy + 220.0, rot: 0.7 * i as f32, scale: 1.0, variant: i as u8, turned };
+            ex.world.file.edits.objects.insert(format!("o:det{i}"), p);
+        }
+        let chunk = ex.battlemap(*k);
+        let bytes = crate::battlemap::pack(&ex.world, &chunk);
+        writeln!(out, "placed/{}/{}/{} {:016x}", k.level, k.x, k.y, fnv64(&bytes)).unwrap();
+        ex.world.file.edits.objects.clear();
+    }
     // Buildings drawn by hand: their interiors.
     let first = ex.t0.settlements.len() + ex.t0.base_pois;
     for (k, c) in ex.world.file.edits.created.iter().enumerate().filter(|(_, c)| c.kind == "building" && !c.removed) {
@@ -240,6 +257,11 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         let text = design::to_text(&d, &|_, _| None).unwrap_or_default();
         let json = design::design_json(&ex.world, &ex.t0, &id, Some(&serde_json::to_string(&d).unwrap_or_default()), Some(r#"{"doors":null}"#));
         writeln!(out, "design/{id} {:016x} {:016x}", fnv64(text.as_bytes()), fnv64(json.as_bytes())).unwrap();
+        // Its props given a side and a look by hand, through the text plan.
+        pose(&mut d);
+        let text = design::to_text(&d, &|_, _| None).unwrap_or_default();
+        let json = design::from_text(&text, &d).map(|(p, _)| design::design_json(&ex.world, &ex.t0, &id, Some(&serde_json::to_string(&p).unwrap_or_default()), None)).unwrap_or_else(|e| e);
+        writeln!(out, "posed/{id} {:016x} {:016x}", fnv64(text.as_bytes()), fnv64(json.as_bytes())).unwrap();
     }
     // A building's interior designed: its first room of every level furnished again, the plan
     // as text, then built again a storey taller, with its problems.
@@ -253,6 +275,23 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         let text = design::to_text(&d, &|_, _| None).unwrap_or_default();
         let json = design::design_json(&ex.world, &ex.t0, &id, Some(&serde_json::to_string(&d).unwrap_or_default()), Some(&format!(r#"{{"refit":{}}}"#, floors + 1)));
         writeln!(out, "design/{id} {:016x} {:016x}", fnv64(text.as_bytes()), fnv64(json.as_bytes())).unwrap();
+        pose(&mut d);
+        let text = design::to_text(&d, &|_, _| None).unwrap_or_default();
+        let json = design::design_json(&ex.world, &ex.t0, &id, Some(&serde_json::to_string(&d).unwrap_or_default()), None);
+        writeln!(out, "posed/{id} {:016x} {:016x}", fnv64(text.as_bytes()), fnv64(json.as_bytes())).unwrap();
     }
     Ok(out)
+}
+
+/// Every third prop of a design given a side to stand against and every other a look, as by
+/// hand (the det check's designed sites and buildings).
+fn pose(d: &mut crate::under::design::SiteDesign) {
+    for (k, f) in d.levels.iter_mut().flat_map(|l| l.items.iter_mut()).enumerate() {
+        if k % 3 == 0 {
+            f.back = Some((k / 3 % 4) as u8);
+        }
+        if k % 2 == 0 {
+            f.variant = Some((k / 2 % 4) as u8);
+        }
+    }
 }

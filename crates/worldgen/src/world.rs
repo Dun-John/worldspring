@@ -604,6 +604,9 @@ pub struct Placed {
     pub scale: f32,
     #[serde(default)]
     pub variant: u8,
+    /// Drawn at `rot` (set when it is turned by hand, or given a turn by a tool); absent: as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turned: bool,
 }
 
 fn one() -> f32 {

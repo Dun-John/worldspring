@@ -121,7 +121,7 @@ pub fn from_interior(it: &Interior, fingerprint: String) -> SiteDesign {
                 cells: encode(&lv.cells),
                 rooms: lv.rooms.iter().map(|r| DesignRoom { kind: r.kind.into(), raise_ft: r.raise_ft.max(0.0) as u16 }).collect(),
                 doors,
-                items: lv.furniture.iter().filter(|f| !link(f)).map(|f| DesignItem { kind: design_kind(it, f), x: f.x, y: f.y, w: f.w, h: f.h }).collect(),
+                items: lv.furniture.iter().filter(|f| !link(f)).map(|f| DesignItem { kind: design_kind(it, f), x: f.x, y: f.y, w: f.w, h: f.h, back: f.back, variant: f.variant }).collect(),
                 z: lv.z,
                 roof: lv.roof,
                 has_stairs: lv.has_stairs,
@@ -195,6 +195,7 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
                 Some(a) => Some(sprites.item(a, x, y, w, h)),
                 None => building_item(&f.kind, x, y, w, h),
             }
+            .map(|it| f.posed(it))
         })
         .collect();
     let mut level = Level {
@@ -511,7 +512,7 @@ pub fn furnish(d: &mut SiteDesign, level: usize, room: usize, seed: u64) {
     // (`furnish_rooms` keeps what was there first, in order.)
     let lv = &mut d.levels[level];
     for f in &lvl.furniture[had..] {
-        lv.items.push(DesignItem { kind: f.kind.into(), x: f.x, y: f.y, w: f.w, h: f.h });
+        lv.items.push(DesignItem { kind: f.kind.into(), x: f.x, y: f.y, w: f.w, h: f.h, ..Default::default() });
     }
 }
 

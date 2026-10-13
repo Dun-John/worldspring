@@ -282,8 +282,9 @@ lists:
 - each kind of object in the chunk, with its 5e rules: cover, whether it blocks movement or sight, difficult
   terrain, hazards and their effects;
 - the objects within `radius_squares` of the place, by grid square (`near_focus`), each with its centre
-  (`x_ft`, `y_ft`) and either its `id` (put down by hand: `remove_objects` takes it) or its built-in `kind`
-  (generated: `remove_objects` takes it by `at`);
+  (`x_ft`, `y_ft`) and either its `id` (put down by hand: `place_objects` moves or turns it, `remove_objects`
+  takes it; `rot_deg` when it was given a turn) or its built-in `kind` (generated: `remove_objects` takes it by
+  `at`);
 - the clears in the chunk (`cleared`: id, centre, kind or radius; `restore_objects` takes them).
 
 | Parameter | Type | Default | |
@@ -666,15 +667,23 @@ Returns `{kind: "s:<asset>", asset}`.
 ### `place_objects`
 | Parameter | Type | | |
 |---|---|---|---|
-| `objects` | array | required | 1–500 of `{kind, x_ft, y_ft, rot_deg?, scale?, variant?}`. |
+| `objects` | array | required | 1–500 of `{id?, kind, x_ft, y_ft, rot_deg?, scale?, variant?}`. |
 
-`kind` is a built-in kind (id or name) or an uploaded sprite. `rot_deg` turns it clockwise (uploaded sprites,
-and built-in props drawn turned: logs, walls, carts, stalls, tents…). `scale` is 0.2–5 (default 1). `variant`
-(0–7) picks a built-in kind's look (default by chance). Positions must be on the map. Returns
-`{tool, ids}`.
+`kind` is a built-in kind (id or name) or an uploaded sprite. `rot_deg` turns it clockwise: it is drawn turned
+for props that can turn (not trees, plants or pools) and for uploaded sprites; without it the object keeps the
+way it is drawn by default. `scale` is 0.2–5 (default 1). `variant` (0–7) picks a built-in kind's look (default
+by chance). Positions must be on the map.
+
+With `id` (`o:…`, an object put down before) the object is changed in place and keeps its id: only the fields
+given change, so `{id, x_ft, y_ft}` moves it and `{id, rot_deg}` turns it (`kind` is then optional). A
+generated object is moved by taking it away (`remove_objects` with `at`) and putting one down. Returns
+`{tool, ids, changed}` (`changed`: the ids that were given, changed in place).
 
 ```json
 { "name": "place_objects", "arguments": { "objects": [ { "kind": "boulder", "x_ft": 412500, "y_ft": 380120 }, { "kind": "s:0123456789abcdef0123456789abcdef", "x_ft": 412520, "y_ft": 380120, "rot_deg": 90 } ] } }
+```
+```json
+{ "name": "place_objects", "arguments": { "objects": [ { "id": "o:k2x9qa", "x_ft": 412540, "y_ft": 380125, "rot_deg": 45 } ] } }
 ```
 > *"Put a ring of standing stones (boulders) round the hilltop east of Bulol, with my altar sprite in the middle."*
 
@@ -835,7 +844,7 @@ grid:
 ..aaaafbbbb........cccc.............
 ..aaaa.....fffffffccccc.............
 doors: 5,1 e; 6,1 e secret; 17,2 e
-items: exit 2,15; down 21,16; statue 20,19; sarcophagus 8,21 1x2; trap 14,18
+items: exit 2,15; down 21,16; statue 20,19 back w; sarcophagus 8,21 1x2 variant 2; trap 14,18
 
 level 2: Level 2 · the deep
 …
@@ -850,9 +859,13 @@ level 2: Level 2 · the deep
   Rows may be short (the rest is rock).
 - `doors:` `x,y e` is a door between square x,y and the one east of it, `x,y s` the one south; `secret` makes it
   a secret door. `doors: auto` puts doors wherever a room would be shut off.
-- `items:` `kind x,y [wxh]`: props by kind or name (`chest`, `sarcophagus`, `pillar`, `pit`, `trap`, `altar`,
-  `brazier`, `well`, `cage`, `bookshelf`, `statue`, `mushroom`, `web`, `lava`… every prop underground; the
-  designer's prop list shows them with their rules), and the ways `exit`, `up`, `down`.
+- `items:` `kind x,y [wxh] [back n|e|s|w] [variant 0-3]`: props by kind or name (`chest`, `sarcophagus`,
+  `pillar`, `pit`, `trap`, `altar`, `brazier`, `well`, `cage`, `bookshelf`, `statue`, `mushroom`, `web`, `lava`…
+  every prop underground; the designer's prop list shows them with their rules), and the ways `exit`, `up`,
+  `down`. `back` is the side the prop stands against (north, east, south or west), for props that face one side
+  (shelves, beds, hearths, statues, altars, things hung on a wall; others ignore it); left out, it finds its
+  wall. `variant` picks one of its looks; left out, it is picked by position. The options come after the square,
+  in any order.
 - Only what the text gives changes: a level block with only `items:` replaces only that level's items.
 - The header's `<n> levels` adds levels below the deepest (new ones start as rock: give their grids) or fills
   in the deepest ones. A missing `up` under a level's `down` and a missing `exit` at the entry are filled in.
@@ -937,7 +950,7 @@ aaaaabb
 .aaaabb
 .....bb
 doors: 4,2 e; 2,4 s front; 1,4 s back
-items: hearth 1,0 2x1; table 2,3 2x1; chest 0,3; bench 3,0 2x1; oven 6,0 1x2; shelf 5,5 2x1; barrel 6,4
+items: hearth 1,0 2x1; table 2,3 2x1; chest 0,3; bench 3,0 2x1; oven 6,0 1x2; shelf 5,5 2x1 back s; barrel 6,4 variant 1
 
 level -1: Cellar
 …
@@ -961,7 +974,9 @@ level -1: Cellar
   `offering`, `glyph`, `dais`, `well`, `fountain`, `iron_maiden`, `stocks`, `rat_nest`, `trap`; and uploaded
   sprites as `s:<asset id>` (as `list_sprites` gives them; underground sites take them too). A sprite keeps its
   rules: cover, blocking movement; one that blocks movement blocks sight from 6 ft up (a sprite that blocks
-  sight but not movement doesn't indoors), one that doesn't is difficult ground when marked so.
+  sight but not movement doesn't indoors), one that doesn't is difficult ground when marked so. `back` and
+  `variant` as for a site: `shelf 5,5 2x1 back s` stands with its back to the south wall; a sprite's picture is
+  turned to put its top (north) edge against that side.
 - Room kinds as the generator names rooms in buildings: `main room`, `kitchen`, `bedroom`, `common room`,
   `storeroom`, `shop`, `workshop`, `forge`, `nave`, `great hall`, `guardroom`, `study`, `library`… A kind it
   doesn't know becomes a chamber named as written.

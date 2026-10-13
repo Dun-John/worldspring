@@ -95,6 +95,21 @@ pub struct DesignItem {
     pub y: u16,
     pub w: u16,
     pub h: u16,
+    /// The side its back is against, 0 north 1 east 2 south 3 west; absent: found from the walls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back: Option<u8>,
+    /// One of its looks, 0-3; absent: picked by position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<u8>,
+}
+
+impl DesignItem {
+    /// The built item with this one's facing and look (a `back` past 3 is read as none).
+    pub fn posed(&self, mut it: Item) -> Item {
+        it.back = self.back.filter(|&b| b < 4);
+        it.variant = self.variant.map(|v| v.min(3));
+        it
+    }
 }
 
 /// Something wrong with a design: `blocking` ones break play mode (a design with any is not
@@ -260,6 +275,8 @@ impl SiteDesign {
                             y: f.y,
                             w: f.w,
                             h: f.h,
+                            back: f.back,
+                            variant: f.variant,
                         })
                         .collect(),
                     ..Default::default()
@@ -401,7 +418,7 @@ impl SiteDesign {
                 continue;
             }
             if let Some(a) = sprite_asset(&f.kind) {
-                p.put(sprites.item(a, x, y, w, h));
+                p.put(f.posed(sprites.item(a, x, y, w, h)));
                 continue;
             }
             let Some(k) = item_kind(&f.kind) else { continue };
@@ -412,7 +429,7 @@ impl SiteDesign {
                 "lava" => lava(x, y),
                 _ => item(k, x, y, w, h),
             };
-            p.put(it);
+            p.put(f.posed(it));
         }
         // The way onto the level, for furnishing's reachability.
         p.up = arrival(&p.items, nx).unwrap_or(0);
@@ -503,6 +520,7 @@ impl SiteDesign {
                 y: f.y,
                 w: f.w,
                 h: f.h,
+                ..Default::default()
             });
         }
     }
@@ -923,7 +941,12 @@ pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) ->
         let items: Vec<String> = lv
             .items
             .iter()
-            .map(|f| format!("{} {},{}{}", f.kind, f.x, f.y, if f.w > 1 || f.h > 1 { format!(" {}x{}", f.w, f.h) } else { String::new() }))
+            .map(|f| {
+                let size = if f.w > 1 || f.h > 1 { format!(" {}x{}", f.w, f.h) } else { String::new() };
+                let back = f.back.filter(|&b| b < 4).map(|b| format!(" back {}", SIDES[b as usize])).unwrap_or_default();
+                let variant = f.variant.map(|v| format!(" variant {}", v.min(3))).unwrap_or_default();
+                format!("{} {},{}{size}{back}{variant}", f.kind, f.x, f.y)
+            })
             .collect();
         s.push_str(&format!("items: {}\n", items.join("; ")));
     }
@@ -1195,15 +1218,19 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             lv.items.clear();
             for e in list.split(';').map(str::trim).filter(|e| !e.is_empty()) {
                 let words: Vec<&str> = e.split_whitespace().collect();
-                let size = words
-                    .last()
-                    .and_then(|s| s.split_once('x'))
-                    .and_then(|(w, h)| Some((w.parse::<u16>().ok()?, h.parse::<u16>().ok()?)));
-                let at = words.len() - 1 - size.is_some() as usize;
-                let (Some(&xy), true) = (words.get(at), at > 0) else {
-                    return Err(format!("{tag}: item '{e}': write it as kind x,y [wxh]"));
-                };
-                let (x, y) = coords(xy).ok_or_else(|| format!("{tag}: item '{e}': write it as kind x,y [wxh]"))?;
+                let how = || format!("{tag}: item '{e}': write it as kind x,y [wxh] [back n|e|s|w] [variant 0-3]");
+                // The kind is the words before the last x,y; size, back and variant come after it.
+                let Some(at) = words.iter().rposition(|w| coords(w).is_some()).filter(|&at| at > 0) else { return Err(how()) };
+                let (x, y) = coords(words[at]).ok_or_else(how)?;
+                let (mut size, mut back, mut variant) = (None, None, None);
+                let mut rest = words[at + 1..].iter();
+                while let Some(&w) = rest.next() {
+                    match w {
+                        "back" => back = Some(rest.next().and_then(|v| SIDES.iter().position(|s| s == v)).ok_or_else(how)? as u8),
+                        "variant" => variant = Some(rest.next().and_then(|v| v.parse::<u8>().ok()).filter(|&v| v < 4).ok_or_else(how)?),
+                        _ => size = Some(w.split_once('x').and_then(|(w, h)| Some((w.parse::<u16>().ok()?, h.parse::<u16>().ok()?))).ok_or_else(how)?),
+                    }
+                }
                 let name = words[..at].join(" ");
                 // (An uploaded picture: s:<asset id>.)
                 let kind = match sprite_asset(&name) {
@@ -1217,6 +1244,8 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                     y,
                     w: w.max(1),
                     h: h.max(1),
+                    back,
+                    variant,
                 });
             }
         }
@@ -1229,6 +1258,9 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
     }
     Ok((d, names))
 }
+
+/// An item's `back` in the text form, by side (0 north 1 east 2 south 3 west).
+const SIDES: [&str; 4] = ["n", "e", "s", "w"];
 
 fn coords(s: &str) -> Option<(u16, u16)> {
     let (x, y) = s.split_once(',')?;
@@ -1255,6 +1287,7 @@ impl SiteDesign {
                     y: entry[1],
                     w: 1,
                     h: 1,
+                    ..Default::default()
                 },
             );
         }
@@ -1272,6 +1305,7 @@ impl SiteDesign {
                         y: k[1],
                         w: 1,
                         h: 1,
+                        ..Default::default()
                     },
                 );
             }

@@ -1750,9 +1750,15 @@ pub fn battlemap_summary(world: &World, chunk: &crate::battlemap::Chunk, origin:
         if (o.x as f64 - fx).hypot(o.y as f64 - fy) <= radius_sq && near.len() < 200 {
             let (x, y) = (origin[0] + o.x as f64 * 5.0, origin[1] + o.y as f64 * 5.0);
             let mut v = json!({ "object": name, "square": [o.x as i32, o.y as i32], "x_ft": (x * 100.0).round() / 100.0, "y_ft": (y * 100.0).round() / 100.0 });
-            // Put down by hand: its id (to remove it); generated: its kind (to clear it).
+            // Put down by hand: its id (to move or remove it) and its turn if drawn turned;
+            // generated: its kind (to clear it).
             match world.file.edits.objects.iter().find(|(_, p)| (p.x - x).abs() < 0.01 && (p.y - y).abs() < 0.01) {
-                Some((id, _)) => v["id"] = json!(id),
+                Some((id, _)) => {
+                    v["id"] = json!(id);
+                    if o.turned {
+                        v["rot_deg"] = json!((o.rot as f64 * 180.0 / std::f64::consts::PI * 10.0).round() / 10.0);
+                    }
+                }
                 None => v["kind"] = json!(o.kind as u16),
             }
             near.push(v);

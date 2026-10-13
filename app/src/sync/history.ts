@@ -68,6 +68,10 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         return `deleted plot point “${String(change.name ?? id)}”`;
       case 'place_objects': {
         const n = Number(change.count ?? (Array.isArray(change.ids) ? change.ids.length : 1));
+        // (Objects given by id were moved, turned or changed, not put down.)
+        const moved = Array.isArray(change.changed) ? change.changed.length : 0;
+        if (moved && moved === n) return n === 1 ? 'changed an object' : `changed ${n} objects`;
+        if (moved) return `put down ${n - moved} and changed ${moved} objects`;
         return n === 1 ? 'put down an object' : `put down ${n} objects`;
       }
       case 'remove_objects': {

@@ -144,6 +144,13 @@ pub struct Item {
     /// An uploaded picture (kind `sprite`): index + 1 into `Interior::sprites`; 0 for the rest.
     #[serde(skip_serializing_if = "is_zero")]
     pub sprite: u16,
+    /// The side its back is against, 0 north 1 east 2 south 3 west (set in a design); absent:
+    /// found from the walls when drawn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub back: Option<u8>,
+    /// One of its looks, 0-3 (set in a design); absent: picked by position when drawn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<u8>,
 }
 
 fn is_zero(v: &u16) -> bool {
@@ -417,7 +424,7 @@ pub const INDOOR_PROPS: &[&str] = &[
 /// An item a building's design puts down, by kind or name: furniture (`FURNITURE`), else an
 /// indoor prop (`INDOOR_PROPS`, with its hazard). Not uploaded pictures (`Sprites`).
 pub fn building_item(kind: &str, x: usize, y: usize, w: usize, h: usize) -> Option<Item> {
-    let at = |kind, name, cover, blocks_move, height_ft, hazard| Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move, height_ft, hazard, sprite: 0 };
+    let at = |kind, name, cover, blocks_move, height_ft, hazard| Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move, height_ft, hazard, sprite: 0, back: None, variant: None };
     if let Some(f) = FURNITURE.iter().find(|f| f.0 == kind || f.1 == kind) {
         return Some(at(f.0, f.1, f.2, f.3, f.4, None));
     }
@@ -466,7 +473,7 @@ impl<'a> Sprites<'a> {
             (false, _, true) => h0.max(1.0),
             (false, _, false) => h0.min(0.5),
         };
-        Item { kind: SPRITE, name: "custom object", x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover: m.cover.min(3), blocks_move: m.blocks_move, height_ft, hazard: None, sprite: k as u16 + 1 }
+        Item { kind: SPRITE, name: "custom object", x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover: m.cover.min(3), blocks_move: m.blocks_move, height_ft, hazard: None, sprite: k as u16 + 1, back: None, variant: None }
     }
 
     /// `Interior::sprites`: the pictures used, in the order first put down.
@@ -668,7 +675,7 @@ fn place_link(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64; 2
     });
     let Some(k) = best else { return false };
     let (x, y) = (k % nx, k / nx);
-    lvl.furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: 1, h: 1, cover: 0, blocks_move: false, height_ft: 0.0, hazard: None, sprite: 0 });
+    lvl.furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: 1, h: 1, cover: 0, blocks_move: false, height_ft: 0.0, hazard: None, sprite: 0, back: None, variant: None });
     lvl.links.push(Link { x: x as u16, y: y as u16, to });
     true
 }
@@ -2144,7 +2151,7 @@ fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], only: Op
                                     }
                                 }
                             }
-                            furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move: blocks, height_ft: height, hazard: None, sprite: 0 });
+                            furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: w as u16, h: h as u16, cover, blocks_move: blocks, height_ft: height, hazard: None, sprite: 0, back: None, variant: None });
                             placed = true;
                             break 'search;
                         }
@@ -2168,7 +2175,7 @@ fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], only: Op
 
 fn push_item(furniture: &mut Vec<Item>, kind: &'static str, x: usize, y: usize) {
     let (name, cover, blocks, height) = item_info(kind);
-    furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: 1, h: 1, cover, blocks_move: blocks, height_ft: height, hazard: None, sprite: 0 });
+    furniture.push(Item { kind, name, x: x as u16, y: y as u16, w: 1, h: 1, cover, blocks_move: blocks, height_ft: height, hazard: None, sprite: 0, back: None, variant: None });
 }
 
 /// A one-square round table with chairs on its open sides: four chairs and a clear ring around

@@ -37,7 +37,7 @@ pub fn list() -> Vec<Value> {
     vec![
         json!({ "name": "list_sprites", "title": "Object kinds", "description": "What can be put on a battlemap: the built-in kinds (trees, rocks, props, hazards) and uploaded sprites, each with its id and tactical rules; uploaded ones with how many are placed.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } }),
         json!({ "name": "upload_sprite", "title": "Upload a sprite", "description": "Add a picture as an object kind for battlemaps (64 px per 5-ft square is plenty), with its name, size and tactical rules. Give data_base64 or path; or asset to change an uploaded one's rules. Returns its kind id (s:<asset>).", "inputSchema": schema(upload, &[]) }),
-        json!({ "name": "place_objects", "title": "Put objects down", "description": "Put objects on the battlemap at world positions (ft): built-in kinds or uploaded sprites, up to 500 at once. They block, cover and hinder by their kind's rules in play. Returns their ids.", "inputSchema": schema(json!({ "objects": { "type": "array", "items": { "type": "object", "properties": { "kind": kind, "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "rot_deg": { "type": "number", "description": "Turned clockwise (props drawn turned, and sprites)" }, "scale": { "type": "number", "default": 1 }, "variant": { "type": "integer", "description": "0-7 (built-in kinds' look; default by chance)" } }, "required": ["kind", "x_ft", "y_ft"] } } }), &["objects"]) }),
+        json!({ "name": "place_objects", "title": "Put objects down", "description": "Put objects on the battlemap at world positions (ft): built-in kinds or uploaded sprites, up to 500 at once. They block, cover and hinder by their kind's rules in play. Give an id (o:...) to move, turn or change one put down before: only the fields given change. Returns their ids.", "inputSchema": schema(json!({ "objects": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string", "description": "A placed object (o:...) to change instead of a new one" }, "kind": kind, "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "rot_deg": { "type": "number", "description": "Turned clockwise: drawn turned for props that can turn (not trees, plants or pools) and for uploaded sprites" }, "scale": { "type": "number", "default": 1 }, "variant": { "type": "integer", "description": "0-7 (built-in kinds' look; default by chance)" } } } } }), &["objects"]) }),
         json!({ "name": "remove_objects", "title": "Take objects away", "description": "Take objects off the battlemap: ids of placed ones (o:...); generated ones by kind and place (as get_battlemap lists them: kind, x_ft, y_ft); or everything in a circle (placed and generated, optionally of some kinds). Returns the ids of the clears (restore_objects undoes them).", "inputSchema": schema(json!({ "ids": { "type": "array", "items": { "type": "string" } }, "at": { "type": "array", "items": { "type": "object", "properties": { "kind": kind, "x_ft": { "type": "number" }, "y_ft": { "type": "number" } }, "required": ["kind", "x_ft", "y_ft"] } }, "area": area }), &[]) }),
         json!({ "name": "restore_objects", "title": "Bring objects back", "description": "Bring back generated objects that were taken away: clear ids (x:...), or every clear touching a circle.", "inputSchema": schema(json!({ "ids": { "type": "array", "items": { "type": "string" } }, "area": area }), &[]) }),
     ]
@@ -204,21 +204,47 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     let [w, h] = bounds(app).await?;
     let ids = app
         .edit("agent", 0, move |e| {
-            let mut ids = Vec::new();
+            let (mut ids, mut changed) = (Vec::new(), Vec::new());
             for o in &list {
-                let kind = kind_of(&o["kind"], &e.sprites)?;
-                let (x, y) = (num(o, "x_ft")?, num(o, "y_ft")?);
+                // One put down before (`id`): only the fields given change.
+                let (id, old) = match &o["id"] {
+                    Value::Null => (new_id("o"), None),
+                    Value::String(id) => (id.clone(), Some(e.objects.get(id).cloned().ok_or_else(|| format!("no placed object {id}"))?)),
+                    v => return Err(format!("id: a placed object's id (o:...), not {v}")),
+                };
+                let kind = match (&o["kind"], &old) {
+                    (Value::Null, Some(p)) => p.kind.clone(),
+                    (Value::Null, None) => return Err("missing 'kind' (or give the id of an object put down before)".into()),
+                    (k, _) => kind_of(k, &e.sprites)?,
+                };
+                let at = |k: &str, was: Option<f64>| if o[k].is_null() { was.ok_or_else(|| format!("missing '{k}'")) } else { num(o, k) };
+                let (x, y) = (at("x_ft", old.as_ref().map(|p| p.x))?, at("y_ft", old.as_ref().map(|p| p.y))?);
                 if !(0.0..w).contains(&x) || !(0.0..h).contains(&y) {
                     return Err(format!("({x}, {y}) is off the map"));
                 }
-                let id = new_id("o");
-                let variant = o["variant"].as_u64().map(|v| v.min(7) as u8).unwrap_or_else(|| (worldgen::core::hash::fnv64(id.as_bytes()) & 7) as u8);
-                let scale = o["scale"].as_f64().filter(|s| s.is_finite()).unwrap_or(1.0).clamp(0.2, 5.0) as f32;
-                let rot = (o["rot_deg"].as_f64().filter(|r| r.is_finite()).unwrap_or(0.0).to_radians()) as f32;
-                e.objects.insert(id.clone(), Placed { kind, x, y, rot, scale, variant });
+                let variant = match (o["variant"].as_u64(), &old) {
+                    (Some(v), _) => v.min(7) as u8,
+                    (None, Some(p)) => p.variant,
+                    (None, None) => (worldgen::core::hash::fnv64(id.as_bytes()) & 7) as u8,
+                };
+                let scale = match (o["scale"].as_f64().filter(|s| s.is_finite()), &old) {
+                    (Some(s), _) => s.clamp(0.2, 5.0) as f32,
+                    (None, Some(p)) => p.scale,
+                    (None, None) => 1.0,
+                };
+                // A turn given is drawn (`turned`); none keeps the one it had.
+                let (rot, turned) = match (o["rot_deg"].as_f64().filter(|r| r.is_finite()), &old) {
+                    (Some(r), _) => (r.to_radians() as f32, true),
+                    (None, Some(p)) => (p.rot, p.turned),
+                    (None, None) => (0.0, false),
+                };
+                if old.is_some() {
+                    changed.push(id.clone());
+                }
+                e.objects.insert(id.clone(), Placed { kind, x, y, rot, scale, variant, turned });
                 ids.push(id);
             }
-            Ok(json!({ "tool": "place_objects", "ids": ids }))
+            Ok(json!({ "tool": "place_objects", "ids": ids, "changed": changed }))
         })
         .await?;
     Ok(ids)
