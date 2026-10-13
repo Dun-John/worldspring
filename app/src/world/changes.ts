@@ -19,6 +19,10 @@ export function changeList(e: Edits | undefined): string[] {
       [n(e.objects) + n(e.cleared), 'object put down or cleared', 'objects put down or cleared'],
       [n(e.sprites), 'uploaded sprite', 'uploaded sprites'],
       [n(e.crossings), 'crossing', 'crossings'],
+      [n(e.buildings), 'building changed', 'buildings changed'],
+      [n(e.towns), 'town re-planned', 'towns re-planned'],
+      [n(e.ground), 'patch of ground shaped', 'patches of ground shaped'],
+      [n(e.plateaus), 'plateau', 'plateaus'],
     ] as [number, string, string][]
   )
     .filter(([k]) => k > 0)

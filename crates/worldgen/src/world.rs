@@ -1379,7 +1379,25 @@ enum Shape {
     List,
 }
 
-/// The edit fields and how their entries are keyed (mirrored in `app/src/sync/ops.ts`).
+/// Layout numbers from here up are changes set aside: when the world is remade (a sketch
+/// redrawn), the app moves the keys of a place that came out differently, or is gone, here
+/// (`remapLayouts` in `app/src/editor/reanchor.ts`). They stay in the file and resolve nowhere.
+pub const PARKED_LAYOUT: usize = 1_000_000;
+
+/// The layout number in a layout-local id (`b:<layout>:…`, `d:`, `t:`, `u:`, `k:`, `w:`, a
+/// level's or room's `l:`/`r:` round one), if it has one.
+pub fn layout_in_id(id: &str) -> Option<usize> {
+    let id = id.strip_prefix("l:").or_else(|| id.strip_prefix("r:")).unwrap_or(id);
+    let (head, rest) = id.split_once(':')?;
+    if !matches!(head, "b" | "d" | "t" | "u" | "k" | "w") {
+        return None;
+    }
+    rest.split(':').next()?.parse().ok()
+}
+
+/// The edit fields and how their entries are keyed (mirrored in `app/src/sync/ops.ts`). A field
+/// whose keys or values hold layout numbers must also join `LAYOUT_ID_FIELDS` there, so a remade
+/// world's places keep them.
 const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("renames", Shape::Map),
     ("notes", Shape::Map),

@@ -707,10 +707,19 @@ export class MapView {
     it.setNpcs(list);
   }
 
-  async loadWorld(world: WorldFile) {
+  /**
+   * Generate `world` and show it. `adjust`: once its overlay is known and before anything else is
+   * made, the edits to use instead of the world's (a remade world's keys moved with their places),
+   * or null to keep them; the generators have them before any tile is asked for.
+   */
+  async loadWorld(world: WorldFile, adjust?: (overlay: Overlay) => Promise<Edits | null>) {
     this.status = 'Generating continent…';
     this.progress = 0;
     const { geom, t0Ms, overlay, catalog } = await this.gen.init(world);
+    const adjusted = (await adjust?.(overlay)) ?? null;
+    // (Anything made while it was worked out was made from the edits as they were: dropped.)
+    const all: Rect = [0, 0, geom.domain_ft, geom.domain_ft];
+    if (adjusted) this.gen.setEdits(adjusted, [all], ++this.editEpoch, [all]);
     this.tiles?.destroy();
     this.battle?.destroy();
     this.labels?.destroy();
@@ -725,7 +734,8 @@ export class MapView {
     this.labels = new Labels(overlay.features);
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
-    this.setEdits(world.edits ?? {}, false);
+    this.townHints.clear();
+    this.setEdits(adjusted ?? world.edits ?? {}, false);
     this.labels.setPlaces(this.places);
     this.placesRect = null;
     // Towns and up get district labels once zoomed in on them (layout order = settlement order).

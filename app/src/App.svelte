@@ -7,7 +7,7 @@
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
   import { buildKeymap } from './ui/shell/keymap';
   import { createKeyHandler, focusKind } from './ui/shell/shortcuts';
-  import { reanchor } from './editor/reanchor';
+  import { layoutsIn, matchLayouts, reanchor, remapLayouts } from './editor/reanchor';
   import type { PreviewReply, PreviewRequest } from './editor/preview.worker';
   import { MapView, type HudState, type InteriorState, type PointerTool } from './render/MapView';
   import TopBar from './ui/shell/TopBar.svelte';
@@ -21,7 +21,7 @@
   import Icon from './ui/Icon.svelte';
   import Readout from './ui/shell/Readout.svelte';
   import DevStats from './ui/shell/DevStats.svelte';
-  import { SECTIONS, shell, type NotesTab, type Section } from './ui/shell/layout.svelte';
+  import { SECTIONS, shell, store, stored, type Ask, type NotesTab, type Remake, type Section } from './ui/shell/layout.svelte';
   import Confirm from './ui/shell/Confirm.svelte';
   import { UndoHistory } from './ui/shell/history.svelte';
   import FloorSelector from './ui/FloorSelector.svelte';
@@ -58,12 +58,12 @@
   import PlayPanel from './play/PlayPanel.svelte';
   import { describe, tidy, type Step } from './sync/history';
   import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, shiftLevels, type EditOp } from './sync/ops';
-  import { breadcrumbs, frameSize, hitName, kindLabel, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
+  import { breadcrumbs, frameSize, hitName, kindLabel, setAside, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, unnamed, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
   import { buildUrl, keptVersions, PINNED } from './world/versions';
   import VersionAsk, { type VersionChoice } from './ui/shell/VersionAsk.svelte';
   import Choice, { type ChoiceButton } from './ui/shell/Choice.svelte';
-  import { backup, keepLinked, linked, loadEdits, restore, restorePlan, saveEdits, takeRestored, type Backup, type RestorePlan } from './world/library';
+  import { backup, keepLinked, linked, loadEdits, restore, restorePlan, saveEdits, saveWorld, takeRestored, type Backup, type RestorePlan } from './world/library';
   import { changeList } from './world/changes';
   import { noteChanges, noteExported, unexported } from './world/exported';
 
@@ -145,6 +145,8 @@
   const settlements = $derived(overlay ? overlay.features.filter((f) => SETTLEMENT_KINDS.includes(f.kind)) : []);
   // Layout indices: settlements, then points of interest (same order as T0), then created sites.
   const sites = $derived(overlay ? overlay.features.filter((f) => SITE_KINDS.includes(f.kind) && !f.id.startsWith('c:')) : []);
+  /** The layout index of the first created site, as the generator counts it. */
+  const firstCreated = $derived(overlay?.first_created ?? settlements.length + sites.length);
   const featureById = $derived(new Map((overlay?.features ?? []).map((f) => [f.id, f])));
   // The settlement each site stands in (site layout → settlement layout), worked out by the
   // generator from T0, for the overlay it was asked about: a new overlay (sites created, moved or
@@ -211,7 +213,7 @@
 
   function nameOf(id: string): string {
     const f = overlay?.features.find((g) => g.id === id);
-    return f?.name ?? renames[id] ?? edits.created?.find((c) => c.id === id)?.name ?? id;
+    return f?.name ?? renames[id] ?? edits.created?.find((c) => c.id === id)?.name ?? unnamed(id);
   }
 
   /**
@@ -619,24 +621,57 @@
     ];
   });
 
+  /** `w` with the sketch being drawn (or else the world's), stretched from the map size it was
+   * drawn at to `w`'s. */
+  function withSketch(w: WorldFile): WorldFile {
+    const [src, from] = sketchOn ? [$state.snapshot(sketcher.strokes), sketchSize] : [$state.snapshot(world.sketch?.strokes ?? []), mapSize(world.params)];
+    const to = mapSize(w.params);
+    const strokes = scaleStrokes(src, to[0] / from[0], to[1] / from[1]);
+    const { sketch: _, ...rest } = w;
+    return strokes.length ? { ...rest, sketch: { strokes } } : rest;
+  }
+
+  /** What generating `w` would do to the changes made on the world shown (asked about first): remake
+   * this world round them (`regen`: its sketch redrawn), or make another world and leave them with
+   * this one (`newworld`: a new seed or settings); null when there are none, or nothing moves. */
+  function remakeOf(w: WorldFile): Remake | null {
+    if (!worldShown || !Object.keys(edits).length) return null;
+    if (!sameWorld(w, world)) return 'newworld';
+    // (A world made with another generator: its own question was asked, `settleVersion`.)
+    if (world.gen_version !== w.gen_version) return null;
+    return JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null) ? 'regen' : null;
+  }
+
+  /** A remade world's edits with their keys moved to the places they were made on, and how many
+   * moved with them or were set aside (`reanchor`, `remapLayouts`). */
+  type Followed = { edits: Edits; kept: number; parked: number };
+
+  /** Worlds made (or remade) here: names looked up for one world are asked again for the next. */
+  let worldsMade = $state(0);
+
+  /** How long the last world took to generate (s), as the Generate button says. */
+  let genSeconds = $state<number | null>(Number(stored('ui.genSeconds')) || null);
+
   /**
    * Generate `w`. `keepSketch`: with the sketch being drawn (or else the world's), stretched
    * from the map size it was drawn at to `w`'s (a file opened or imported brings its own).
+   * Remaking the world shown round its changes, or leaving them for another world, is asked
+   * about first unless `confirmed`. False if it wasn't generated (asked, cancelled, busy).
    */
-  async function generate(w: WorldFile, keepSketch = false, from: Source | null = null) {
-    if (busy) return;
+  async function generate(w: WorldFile, keepSketch = false, from: Source | null = null, confirmed = false): Promise<boolean> {
+    if (busy) return false;
     if (w.gen_version !== GEN_VERSION) {
       busy = true;
       const settled = await settleVersion(w, from).finally(() => (busy = false));
-      if (!settled) return;
+      if (!settled) return false;
       w = settled;
     }
-    if (keepSketch) {
-      const [src, from] = sketchOn ? [$state.snapshot(sketcher.strokes), sketchSize] : [$state.snapshot(world.sketch?.strokes ?? []), mapSize(world.params)];
-      const to = mapSize(w.params);
-      const strokes = scaleStrokes(src, to[0] / from[0], to[1] / from[1]);
-      const { sketch: _, ...rest } = w;
-      w = strokes.length ? { ...rest, sketch: { strokes } } : rest;
+    const asked = w;
+    if (keepSketch) w = withSketch(w);
+    const remake = from || confirmed ? null : remakeOf(w);
+    if (remake) {
+      ask(remake, () => void generate(asked, keepSketch, from, true));
+      return false;
     }
     if (sketchOn) leaveSketch();
     shell.tabs.world = 'generate';
@@ -648,7 +683,7 @@
     // where they differ from those, the user picks.
     const shown = worldShown && sameWorld(w, world) && world.gen_version === w.gen_version;
     const redrawn = shown && JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null);
-    const before = overlay?.features ?? [];
+    const before = overlay;
     // (Not opened: the edits an upgrade carried over, else those kept.)
     let mine = shown ? (world.edits ?? {}) : from ? ((await storedEdits(w)) ?? {}) : (w.edits ?? (await storedEdits(w)) ?? {});
     if (from && !Object.keys(mine).length && upgradedMine) mine = upgradedMine;
@@ -663,7 +698,7 @@
         busy = false;
         sync.retake();
         sync.resync();
-        return;
+        return false;
       }
       ({ edits: kept, replaced } = pick);
       // (Sites made here keep their places, removed: the ids after them are indices.)
@@ -672,21 +707,47 @@
     }
     // Edits restored from a backup replace mapd's copy of the world too (asked for then).
     const restored = !shown && takeRestored(editsKey(w)) && kept === mine;
-    // (Another world's history can't be undone here.)
-    if (!shown) undoHistory.clear();
+    // (Another world's history can't be undone here, nor this one's from before it was redrawn:
+    // its steps name places by their old numbers.)
+    if (!shown || redrawn) undoHistory.clear();
     const { edits: _, ...bare } = w;
     world = Object.keys(kept).length ? { ...bare, edits: kept } : bare;
     unexportedCount = unexported(editsKey(world))?.n ?? 0;
     selection = null;
     saveUrl();
+    // Redrawn: names and notes follow features that moved, and changes inside places follow
+    // those laid out alike (when the edits kept are the ones made on the world shown); the
+    // generators have them so before anything is made.
+    let moved: Followed | null = null;
+    const following = redrawn && kept === mine && !!before;
+    // The world's own places changes are made on, as generated here (their fingerprints), so
+    // that only those laid out the same in the remade world keep them.
+    const keyed = following ? layoutsIn(kept).filter((li) => li < (before!.first_created ?? 0)) : [];
+    const printed = keyed.length ? await view.gen.prints(keyed) : null;
+    const was = new Map(keyed.map((li, i) => [li, printed?.[i] ?? 0]));
+    const follow = async (o: Overlay): Promise<Edits | null> => {
+      const named = reanchor(kept, before!.features, o.features);
+      const base = named?.edits ?? kept;
+      const pairs = [...matchLayouts(keyed, before!, o)];
+      const now = pairs.length ? await view.gen.prints(pairs.map(([, to]) => to)) : [];
+      const same = new Map(pairs.map(([li, to], i) => [`${li}>${to}`, !!now?.[i] && now[i] === was.get(li)]));
+      const placed = remapLayouts(base, before!, o, (li, to) => same.get(`${li}>${to}`) ?? false);
+      if (!named && !placed) return null;
+      moved = { edits: placed?.edits ?? named!.edits, kept: (named?.n ?? 0) + (placed?.moved ?? 0), parked: placed?.parked ?? 0 };
+      return moved.edits;
+    };
+    const started = performance.now();
     try {
       // (The view applies the world's edits: names, created sites, hidden labels.)
-      await view.loadWorld(world);
+      await view.loadWorld(world, following ? follow : undefined);
       overlay = view.overlay;
       // (Edits the user chose over those kept replace mapd's copy too.)
       sync.open(world, replaced || restored);
       await play.setWorld(world, view.geom!.world_hash);
       worldShown = true;
+      worldsMade++;
+      genSeconds = Math.max(1, Math.round((performance.now() - started) / 1000));
+      store('ui.genSeconds', String(genSeconds));
     } finally {
       busy = false;
     }
@@ -700,12 +761,18 @@
       toast(label, () => undo(step));
     }
     if (redrawn) changed();
-    // Redrawn: names and notes follow features that moved (when the edits kept are the ones
-    // made on the world shown).
-    const moved = redrawn && kept === mine && overlay ? reanchor(edits, before, overlay.features) : null;
-    if (moved) applyEdits(moved.edits, { tool: 'reanchor', label: `Kept ${moved.moved.length} edited ${moved.moved.length === 1 ? 'place' : 'places'} with the redrawn world` }, 'user', { record: false });
+    const m = moved as Followed | null;
+    if (m) {
+      const changes = (k: number) => `${k} ${k === 1 ? 'change' : 'changes'}`;
+      const label = m.parked
+        ? `${m.kept ? `Kept ${changes(m.kept)} with the remade world; ` : ''}${changes(m.parked)} set aside: their places came out differently`
+        : `Kept ${changes(m.kept)} with the remade world`;
+      // (Only what moved: changes made here while the world was generating stay.)
+      applyEdits(applyOps(edits, diffEdits(kept, m.edits)).edits, { tool: 'reanchor', label }, 'user', { record: false });
+    }
     const n = overlay?.conflicts?.length ?? 0;
     if (w.sketch && n) toast(`The world follows your sketch, with ${n} ${n === 1 ? 'exception' : 'exceptions'}: see Sketch`);
+    return true;
   }
 
   // Sketch mode: draw over the map, see a quick preview of the world it makes, generate it.
@@ -856,7 +923,7 @@
     const n = settlements.length;
     const f = index < n ? settlements[index] : sites[index - n];
     if (f) return renames[f.id] ?? f.name;
-    const c = edits.created?.[index - n - sites.length];
+    const c = index >= firstCreated ? edits.created?.[index - firstCreated] : undefined;
     return c ? (renames[c.id] ?? c.name) : 'a settlement';
   }
 
@@ -949,19 +1016,30 @@
     go(shell.section === s && shell.tabs[s] === tab ? null : s, tab);
   }
 
-  /** Ask before work would be dropped; `proceed` carries on once it is dealt with. */
-  function ask(kind: 'sketch' | 'design', proceed: () => void, generate = true) {
-    shell.ask = { kind, proceed, generate };
+  /** Ask before work would be dropped (or a world remade); `proceed` carries on once it is dealt
+   * with. The sketch's question says what generating it would do to the changes made, so it is
+   * the only one asked. */
+  function ask(kind: Ask['kind'], proceed: () => void, generate = true) {
+    const remake = kind === 'sketch' && generate ? remakeOf(withSketch(draftWorld())) : null;
+    shell.ask = { kind, proceed, generate, remake };
   }
 
-  async function answer(choice: 'keep' | 'drop' | 'commit') {
+  /** The answer to the question asked: `keep` (as it was), `drop`, `commit` (generate or save),
+   * `save` (keep a copy of this world in the Library, then generate). */
+  async function answer(choice: 'keep' | 'drop' | 'commit' | 'save') {
     const a = shell.ask;
     shell.ask = null;
     if (!a || choice === 'keep') return;
+    if (choice === 'save') {
+      const name = `World ${world.seed}`;
+      await saveWorld(name, $state.snapshot(world) as WorldFile);
+      toast(`Saved “${name}” with its changes in the Library`);
+    }
+    if (a.kind === 'regen' || a.kind === 'newworld') return a.proceed();
     if (a.kind === 'sketch') {
       // Generating keeps the sketch (as the world's), then carries on.
-      if (choice === 'commit') await generate(draftWorld(), true);
-      else leaveSketch();
+      if (choice === 'drop') leaveSketch();
+      else if (!(await generate(draftWorld(), true, null, true))) return;
     } else {
       if (choice === 'commit') await saveDesign();
       closeDesigner();
@@ -970,7 +1048,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, keepSketch?: boolean) => generate(w, keepSketch), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -1036,14 +1114,14 @@
   function drawnBuilding(id: string): Created | null {
     const all = edits.created ?? [];
     const m = /^b:(\d+):0$/.exec(id);
-    const c = m ? all[Number(m[1]) - settlements.length - sites.length] : all.find((x) => x.id === id);
+    const c = m ? all[Number(m[1]) - firstCreated] : all.find((x) => x.id === id);
     return c && c.kind === 'building' && !c.removed ? c : null;
   }
 
   /** A building drawn by hand (`c:<n>`) as a building id (`b:<layout>:0`: its inside's). */
   function drawnBuildingId(cid: string): string {
     const k = (edits.created ?? []).findIndex((x) => x.id === cid);
-    return `b:${settlements.length + sites.length + k}:0`;
+    return `b:${firstCreated + k}:0`;
   }
 
   /** A building's inside designed by hand, fitted to `floors` storeys (`designs` with it), or why
@@ -1228,7 +1306,7 @@
   $effect(() => {
     if (!townOn || !townTool || !overlay) return;
     const i = townIndex;
-    const key = `${i}|${JSON.stringify(edits.towns?.[String(i)] ?? null)}|${world.seed}|${overlay.features.length}`;
+    const key = `${i}|${JSON.stringify(edits.towns?.[String(i)] ?? null)}|${view.geom?.world_hash ?? world.seed}|${overlay.features.length}`;
     if (key === townRead) return;
     townRead = key;
     void untrack(() => readTownPlan(i));
@@ -1368,7 +1446,7 @@
   /** One of the world's own buildings (not drawn by hand) behind a building id. */
   function generatedBuilding(id: string): boolean {
     const m = /^b:(\d+):(\d+)$/.exec(id);
-    return !!m && Number(m[1]) < settlements.length + sites.length;
+    return !!m && Number(m[1]) < firstCreated;
   }
 
   /** The world's own buildings with their middle in an area drawn: taken away (one change). */
@@ -2012,7 +2090,7 @@
     const k = sites.findIndex((f) => f.id === id);
     if (k >= 0) return n + k;
     const c = (edits.created ?? []).findIndex((x) => x.id === id);
-    return c >= 0 ? n + sites.length + c : -1;
+    return c >= 0 ? firstCreated + c : -1;
   }
 
   /** The feature of a settlement's or site's layout index (null if none, or deleted). */
@@ -2021,7 +2099,7 @@
     if (li < 0) return null;
     if (li < n) return settlements[li];
     if (li < n + sites.length) return sites[li - n];
-    const c = edits.created?.[li - n - sites.length];
+    const c = li >= firstCreated ? edits.created?.[li - firstCreated] : undefined;
     return (c && featureById.get(c.id)) ?? null;
   }
 
@@ -2179,6 +2257,10 @@
     return it.toWorld(...it.npcSpot({ id, name: n.name, level, at: l.x !== undefined && l.y !== undefined ? [l.x, l.y] : undefined }));
   }
 
+  /** `placeInfo` for the world shown: a new one each time a world is made (or remade), so what
+   * keeps names it looked up asks again. */
+  const resolvePlace = $derived.by(() => (void worldsMade, (id: string) => placeInfo(id)));
+
   /** A place's name and position: map features from the overlay (as renamed), the rest
    * (buildings, districts, ways underground) from the generators. */
   async function placeInfo(id: string) {
@@ -2194,6 +2276,7 @@
     const n = npcs[id];
     const place = n ? n.location : { id };
     if (!place) return;
+    if (setAside(place.id)) return toast('That place was set aside when the world was remade: it is no longer on the map');
     // A site's level or room (`l:<site>:<level>`, `r:<site>:<level>:<room>`): into the site, on that level.
     const room = /^l:(.+):(\d+)$/.exec(place.id) ?? /^r:(.+):(\d+):\d+$/.exec(place.id);
     if (room) {
@@ -2582,7 +2665,7 @@
 <div class="map" bind:this={container} onpointerdowncapture={mapTouched}></div>
 
 {#snippet askBar()}
-  {#if shell.ask}<Confirm ask={shell.ask} blocked={designBlocked} onKeep={() => void answer('keep')} onDrop={() => void answer('drop')} onCommit={() => void answer('commit')} />{/if}
+  {#if shell.ask}<Confirm ask={shell.ask} blocked={designBlocked} seconds={genSeconds} onKeep={() => void answer('keep')} onDrop={() => void answer('drop')} onCommit={() => void answer('commit')} onSave={() => void answer('save')} />{/if}
 {/snippet}
 
 {#snippet floorPicker()}
@@ -2623,7 +2706,7 @@
           {npcs}
           {plots}
           {notes}
-          resolve={placeInfo}
+          resolve={resolvePlace}
           onNpc={(id) => openNotebook('npcs', id)}
           onPlot={(id) => openNotebook('plots', id)}
           onNote={(id) => void showPlace(id)}
@@ -2712,6 +2795,7 @@
               paintedBiomes={sketchStrokes.filter((s) => s.tool === 'biome').length}
               pins={sketchStrokes.filter((s) => s.tool === 'pin').length}
               roads={sketchStrokes.filter((s) => s.tool === 'road' && s.kind !== 'none').length}
+              seconds={genSeconds}
               onGenerate={() => void generate(draftWorld(), true)}
             />
           {:else if shell.tabs.world === 'sketch'}
@@ -2880,7 +2964,7 @@
               what={siteWhat}
               version={namesVersion}
               list={(scope) => view.gen.names(scope)}
-              resolve={placeInfo}
+              resolve={resolvePlace}
               onRename={rename}
               onHide={setHidden}
               onNote={(id, note, name) => setNote(id, note, name)}
@@ -2896,7 +2980,7 @@
             {here}
             focus={notebookFocus}
             playing={playOn}
-            resolve={placeInfo}
+            resolve={resolvePlace}
             levelName={(id, l) => (inside?.id === id ? (inside.levels[l]?.name ?? null) : null)}
             onNpc={saveNpc}
             onPlot={savePlot}

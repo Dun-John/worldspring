@@ -474,7 +474,7 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, &'static str)> {
             continue;
         };
         if li >= layout_count(t0) {
-            out.push((k.clone(), "no such place"));
+            out.push((k.clone(), if li >= crate::world::PARKED_LAYOUT { "set aside when the world was remade" } else { "no such place" }));
             continue;
         }
         match base_layout(world, t0, li).building(id) {
@@ -595,13 +595,49 @@ pub fn forget_created(old: &[crate::world::Created], new: &[crate::world::Create
 }
 
 /// What layout `index`'s randomness is keyed by: the index itself for the world's own
-/// settlements and sites, a created site's id (through its seed) for one added by hand, so it is
-/// laid out the same wherever it falls in the list: a world remade with more or fewer generated
-/// places moves it along.
+/// settlements; for its sites, their place among the sites and their seed (as `sites::generate`
+/// lays them out), so a world remade with more or fewer settlements keeps their dungeons and
+/// interiors; a created site's id (through its seed) for one added by hand, so it is laid out the
+/// same wherever it falls in the list: a world remade with more or fewer generated places moves
+/// it along.
 pub fn rng_key(t0: &T0, index: usize) -> i64 {
-    match index.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| t0.pois.get(t0.base_pois + k)) {
-        Some(p) => (p.seed ^ 0x6372_6561_7465_6400) as i64,
+    let n = t0.settlements.len();
+    let Some(poi) = index.checked_sub(n) else { return index as i64 };
+    match t0.pois.get(poi) {
+        Some(p) if poi >= t0.base_pois => (p.seed ^ 0x6372_6561_7465_6400) as i64,
+        Some(p) => hash2(0x7369_7465_706f_6900, poi as i64, p.seed as i64) as i64,
         None => index as i64,
+    }
+}
+
+/// A fingerprint of layout `index` as generated (before any edits: its buildings, districts,
+/// streets, walls and ways underground), its own number left out; 0 past the last layout. Two
+/// worlds' layouts with the same print and `layout_identity` are the same place inside: the app
+/// keeps changes on a world's own settlement or site across a remade world only then (a road or
+/// river redrawn past a town lays it out anew though it is drawn from the same seed).
+pub fn layout_print(world: &World, t0: &T0, index: usize) -> u64 {
+    if index >= layout_count(t0) {
+        return 0;
+    }
+    let mut l = (*generated_layout(world, t0, index)).clone();
+    l.index = 0;
+    crate::core::hash::fnv64(format!("{l:?}").as_bytes())
+}
+
+/// What layout `index` is drawn from, as a hash: the inputs of its randomness (`town`'s index
+/// and seed, `sites::generate`'s and `rng_key`'s) with its tier, kind and size. Two worlds whose
+/// layouts at an index (each) hash the same lay them out the same, and everything in them, given
+/// the same ground and roads round them: the app keeps changes on a place across a remade world
+/// only then (`remapLayouts`); 0 past the last layout.
+pub fn layout_identity(t0: &T0, index: usize) -> u64 {
+    let n = t0.settlements.len();
+    if let Some(s) = t0.settlements.get(index) {
+        let what = (s.tier as i64) << 40 | (s.kind as i64) << 32 | s.population as i64;
+        return hash3(0x7365_7474_6c65_0000, index as i64, s.seed as i64, what);
+    }
+    match t0.pois.get(index - n) {
+        Some(p) => hash3(0x7369_7465_0000_0000, rng_key(t0, index), p.seed as i64, p.kind as i64),
+        None => 0,
     }
 }
 

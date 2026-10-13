@@ -26,6 +26,7 @@
   // write the same entries through mapd. Fields save when they lose focus.
   import { PLOT_STATUSES, STANCES, type PlaceInfo, type PlotStatus, type Stance } from '../gen/protocol';
   import { assetUrl, putAsset } from '../world/assets';
+  import { unnamed } from './gazetteer';
   import type { NotesTab } from './shell/layout.svelte';
   import Icon from './Icon.svelte';
 
@@ -84,19 +85,23 @@
   const STANCE_COLOR: Record<Stance, string> = { hostile: '#991b1b', unfriendly: '#c2410c', neutral: '#6b5a45', friendly: '#3f6212', allied: '#1d4ed8' };
 
   // Place names before renames, looked up once from the generators (buildings, districts,
-  // sites; a level or room generates its site, so not again on every rename).
+  // sites; a level or room generates its site, so not again on every rename), and again for
+  // another world or this one remade (a new `resolve`).
   let names = $state<Record<string, string>>({});
+  let namesOf: unknown = null;
   const placeIds = $derived([...new Set([...Object.values(npcs).flatMap((n) => (n.location ? [n.location.id] : [])), ...Object.values(plots).flatMap((p) => p.anchors)])]);
   $effect(() => {
+    const ask = resolve;
+    if (namesOf !== ask) [namesOf, names] = [ask, {}];
     for (const id of placeIds) {
       if (id in names) continue;
       names[id] = '…';
-      void resolve(id).then((p) => {
-        names[id] = p?.generated ?? p?.name ?? id;
+      void ask(id).then((p) => {
+        if (namesOf === ask) names[id] = p?.generated ?? p?.name ?? unnamed(id);
       });
     }
   });
-  const placeName = (id: string) => renames[id] ?? names[id] ?? id;
+  const placeName = (id: string) => renames[id] ?? names[id] ?? unnamed(id);
 
   // Portraits as object URLs.
   let pictures = $state<Record<string, string>>({});

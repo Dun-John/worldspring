@@ -73,12 +73,24 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 
 Layout numbers count the settlements, then the world's own sites (those drawn in the sketch last), then the created
-sites in the order they were made. A created site is generated from its `c:<n>` id, not its number: when the world
-is remade (its sketch redrawn), its buildings, interiors and sites underground are generated the same, though its
-layout number moves when the world has more or fewer places of its own, and the ids inside it with it
-(`b:`, `u:`, `l:`, `r:`). Look it up again with `get_feature`. Changes stored under its old ids (a designed
-dungeon or interior, building changes, names and notes on its rooms and levels) stay under those ids and don't
-follow it.
+sites in the order they were made. A created site is generated from its `c:<n>` id, not its number, and one of the
+world's own sites from its place among the sites: when the world is remade (its sketch redrawn), their buildings,
+interiors and sites underground are generated the same, though their layout numbers move when the world has more
+or fewer places before them, and the ids inside them with them (`b:`, `u:`, `l:`, `r:`). Look a place up again
+with `get_feature`.
+
+When the app remakes a world, the changes stored under layout-local ids (names, notes and hidden marks on
+buildings, districts, rooms and levels; designed dungeons and interiors; building changes; towns laid out anew;
+where NPCs are; plot points' places) follow their places to their new numbers: a created site's always, one of the
+world's own when the remade world lays it out alike (the same feature in the same place, drawn from the same
+number and seed). Every other place's changes are set aside: moved to layout numbers from 1,000,000 up, one for
+each place, where they stay in the world file but name nothing. Tools treat those ids as no such place (renaming,
+hiding or annotating them is refused); `world_overview` lists their building changes, interiors and towns as
+"set aside when the world was remade". A place drawn from the same number and seed but laid out anew (a road or
+river redrawn past it) has its changes set aside too. Settlements are drawn from their number: one whose number
+changes is laid out anew. Pins come first in their tier, so a settlement pinned in the sketch moves every one of
+the world's own settlements of its tier along a number (their changes are set aside); with the Settlements dial
+at None it moves the world's own sites along too, and those keep theirs.
 
 ### Feature kinds
 

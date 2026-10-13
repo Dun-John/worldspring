@@ -7,7 +7,7 @@
   // DM sees it).
   import { tick, untrack } from 'svelte';
   import type { Feature, NameEntry, PlaceInfo } from '../gen/protocol';
-  import { kindIcon, kindLabel, SETTLEMENT_KINDS, SITE_KINDS } from './gazetteer';
+  import { kindIcon, kindLabel, SETTLEMENT_KINDS, SITE_KINDS, unnamed } from './gazetteer';
   import Icon from './Icon.svelte';
   import type { Here } from './Notebook.svelte';
 
@@ -133,17 +133,23 @@
   // Generated names of places that are not map features (a building, district, tower, way
   // underground, level or room), looked up from the generators: once for the notes listed, and
   // again whenever a page opens or renames (a drawn building's name is its generated one).
+  // (Again for another world or this one remade: a new `resolve`.)
   let generatedNames = $state<Record<string, string>>({});
+  let namesOf: unknown = null;
   /** Look a place's generated name up (`label`: what to show meanwhile). Never a rename. */
   function lookUp(id: string, label?: string) {
     if (featureById.has(id)) return;
+    const ask = resolve;
     generatedNames[id] = generatedNames[id] ?? label ?? '…';
-    void resolve(id).then((p) => (generatedNames[id] = p?.generated ?? label ?? id));
+    void ask(id).then((p) => {
+      if (namesOf === ask) generatedNames[id] = p?.generated ?? label ?? unnamed(id);
+    });
   }
   $effect(() => {
+    if (namesOf !== resolve) [namesOf, generatedNames] = [resolve, {}];
     for (const id of [...Object.keys(notes), ...(current ? [current] : [])]) if (!(id in generatedNames)) lookUp(id);
   });
-  const generatedOf = (id: string) => featureById.get(id)?.name ?? generatedNames[id] ?? id;
+  const generatedOf = (id: string) => featureById.get(id)?.name ?? generatedNames[id] ?? unnamed(id);
   const placeName = (id: string) => nameOf(id, generatedOf(id));
 
   /** The places with notes, by name (filtered by what is looked for). */

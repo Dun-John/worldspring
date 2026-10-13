@@ -16,12 +16,20 @@ export const SECTIONS: { key: Section; label: string; icon: 'globe' | 'pencil' |
   { key: 'play', label: 'Play', icon: 'pawn', kbd: '4' },
 ];
 
-/** A question before work would be dropped: new sketch strokes, or a site's unsaved design.
- * `proceed` carries on once the work is dealt with; `generate`: the sketch can be generated. */
+/** What generating would do to the changes made on the world shown: remake this world round
+ * them (`regen`: its sketch redrawn), or make another world and leave them with this one
+ * (`newworld`: a new seed or settings). */
+export type Remake = 'regen' | 'newworld';
+
+/** A question before work would be dropped or moved: new sketch strokes, a site's unsaved
+ * design, or a world about to be remade round its changes (or left for another). `proceed`
+ * carries on once it is answered; `generate`: the sketch can be generated, `remake`: what that
+ * would do to the changes made. */
 export interface Ask {
-  kind: 'sketch' | 'design';
+  kind: 'sketch' | 'design' | Remake;
   proceed: () => void;
   generate?: boolean;
+  remake?: Remake | null;
 }
 
 const PHONE ='(max-width: 720px) and (min-height: 501px)';

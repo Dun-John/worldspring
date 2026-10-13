@@ -101,6 +101,12 @@ export class GenClient {
     return this.ask({ op: 'names', scope: String(scope) }).then((j) => JSON.parse(j) as NameEntry[] | null);
   }
 
+  /** Fingerprints of layouts as generated (`town::layout_print`), in the order asked; null if the
+   * generator could not answer. */
+  prints(layouts: number[]): Promise<number[] | null> {
+    return this.ask({ op: 'prints', layouts }).then((j) => JSON.parse(j) as number[] | null);
+  }
+
   /** The sites standing in settlements, as layout indices; null if the generator could not answer. */
   parents(): Promise<Parents | null> {
     return this.ask({ op: 'parents' }).then((j) => JSON.parse(j) as Parents | null);

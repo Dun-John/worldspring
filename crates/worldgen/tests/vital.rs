@@ -1470,6 +1470,20 @@ fn designed_cellars(world: &World, t0: &worldgen::t0::T0) {
 /// from the text plan), a room furnished; the world then builds the
 /// design instead of the generated site. Breaking a rule (a room shut off, the way in moved, a
 /// way up not under the way down) is caught.
+/// A JSON value with every number that isn't a whole one rounded to 9 significant digits.
+fn rounded(v: serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Number(n) if !(n.is_i64() || n.is_u64()) => {
+            let x = n.as_f64().unwrap();
+            Value::String(format!("{x:.8e}"))
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(rounded).collect()),
+        Value::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, rounded(v))).collect()),
+        v => v,
+    }
+}
+
 fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     use worldgen::under::design;
     let (li, k) = (0..worldgen::town::layout_count(t0))
@@ -1561,7 +1575,10 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     let it2 = worldgen::interior::generate_id(&w2, t0, &id).unwrap();
     assert_eq!(it2.levels.len(), n + 1, "{id}: the world builds the design");
     let w3 = World::from_json(&serde_json::to_string(&w2.file).unwrap()).unwrap();
-    assert_eq!(serde_json::to_string(&worldgen::interior::generate_id(&w3, t0, &id).unwrap()).unwrap(), serde_json::to_string(&it2).unwrap(), "{id}: read back");
+    // (serde_json reads a long float back to within a unit in its last place, the design's origin
+    // among them: the same but for that.)
+    let it3 = serde_json::to_value(worldgen::interior::generate_id(&w3, t0, &id).unwrap()).unwrap();
+    assert_eq!(rounded(it3), rounded(serde_json::to_value(&it2).unwrap()), "{id}: read back");
     assert!(design::design_of(&w2, t0, &id, true).unwrap() == base, "{id}: the generated site is still there underneath");
 }
 
@@ -2020,6 +2037,54 @@ fn created_sites_survive_a_remade_world() {
     assert_eq!(site(&ea, ra), site(&eb, rb), "the ruin's dungeon was rolled again when the world was remade");
     let inside = |ex: &Executor, li: usize| plain(serde_json::to_string(&interior::generate_id(&ex.world, &ex.t0, &format!("b:{li}:0")).expect("the inn's interior")).unwrap(), li);
     assert_eq!(inside(&ea, ra + 1), inside(&eb, rb + 1), "the drawn inn's interior was rolled again when the world was remade");
+
+    // With the Settlements dial at None only pins make towns: a world of three pins remade with a
+    // fourth (on the dry land farthest from them) has one more settlement, so the world's own sites
+    // move along a number. Each drawn from the same place among the sites and seed
+    // (`layout_identity`) is laid out the same, its site underground too.
+    let pins: Vec<serde_json::Value> = t0.settlements[..3].iter().map(|s| serde_json::json!({ "tool": "pin", "tier": "town", "pts": [[s.x, s.y]] })).collect();
+    let pinned = |pins: &[serde_json::Value]| {
+        let mut v = serde_json::to_value(&file).unwrap();
+        v["params"]["settlement_density"] = serde_json::json!(0.0);
+        v["sketch"] = serde_json::json!({ "strokes": pins });
+        Executor::new(World::new(serde_json::from_value(v).unwrap()).unwrap())
+    };
+    let ep = pinned(&pins);
+    let g = &ep.world.geom;
+    let lonely = |p: &[f64; 2]| ep.t0.settlements.iter().map(|s| geom_dist([s.x, s.y], *p)).fold(f64::MAX, f64::min);
+    let pin = (1..40 * 40)
+        .map(|k| [g.map_w_ft * (k % 40) as f64 / 40.0, g.map_h_ft * (k / 40) as f64 / 40.0])
+        .filter(|p| {
+            let h = ep.t0.sample(p[0], p[1], 20.0);
+            h > sea + 50.0 && (ep.t0.sample_water(p[0], p[1]) as f64) < h
+        })
+        .max_by(|p, q| lonely(p).total_cmp(&lonely(q)))
+        .expect("dry land");
+    let more = [pins.clone(), vec![serde_json::json!({ "tool": "pin", "tier": "village", "name": "Lonely", "pts": [pin] })]].concat();
+    let ec = pinned(&more);
+    let n = ep.t0.settlements.len();
+    assert_eq!(ec.t0.settlements.len(), n + 1, "the pinned village");
+    let (mut alike, mut along, mut dungeons) = (0, 0, 0);
+    for pa in 0..ep.t0.base_pois {
+        let p = &ep.t0.pois[pa];
+        let Some(pc) = (0..ec.t0.base_pois).find(|&k| (ec.t0.pois[k].x - p.x).abs() < 1.0 && (ec.t0.pois[k].y - p.y).abs() < 1.0) else { continue };
+        let (la, lc) = (n + pa, n + 1 + pc);
+        if town::layout_identity(&ep.t0, la) != town::layout_identity(&ec.t0, lc) {
+            continue;
+        }
+        alike += 1;
+        along += (la != lc) as usize;
+        assert_eq!(plain(laid(&ep, la), la), plain(laid(&ec, lc), lc), "site {la} (now {lc}): laid out anew though drawn alike");
+        let l = town::layout(&ep.world, &ep.t0, la);
+        if dungeons < 12
+            && let Some(e) = l.entrances.iter().find(|e| e.kind != worldgen::under::UnderKind::Sewer)
+        {
+            dungeons += 1;
+            let under = |ex: &Executor, li: usize| plain(serde_json::to_string(&interior::generate_id(&ex.world, &ex.t0, &format!("u:{li}:{}", e.id)).expect("its site underground")).unwrap(), li);
+            assert_eq!(under(&ep, la), under(&ec, lc), "u:{la}:{} (now {lc}): rolled again though drawn alike", e.id);
+        }
+    }
+    assert!(along > 0 && dungeons > 0, "no site moved along and stayed alike ({alike} alike, {along} moved, {dungeons} underground)");
 
     // One created entry changed (the camp moved): only its layout is forgotten.
     let mut ex = ea;

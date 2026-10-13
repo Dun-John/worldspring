@@ -736,7 +736,7 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
         ("t", [li, k]) if *li < town::layout_count(t0) => crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| t.0),
         ("u", [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| e.at),
         ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
-        ("w", [_, sx, sy]) => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
+        ("w", [li, sx, sy]) if *li < t0.settlements.len() => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
         _ => features(world, t0).into_iter().find(|f| f.id == id).map(|f| [f.x, f.y]),
     }
 }
@@ -1123,8 +1123,9 @@ pub fn near(world: &World, t0: &T0, p: P, radius: f64, kinds: &[String], limit: 
 /// notable buildings; a building's floors; an underground site's levels).
 pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
     let fs = features(world, t0);
-    // (A building taken away: where it stood.)
-    let p = position(world, t0, id).or_else(|| world.file.edits.buildings.get(id).filter(|e| e.removed).map(|e| e.at))?;
+    // (A building taken away: where it stood, while its place is in the world.)
+    let here = || crate::world::layout_in_id(id).is_some_and(|li| li < town::layout_count(t0));
+    let p = position(world, t0, id).or_else(|| world.file.edits.buildings.get(id).filter(|e| e.removed && here()).map(|e| e.at))?;
     let ground = t0.sample(p[0], p[1], t0.cell_ft);
     let mut v = json!({
         "id": id,
@@ -1158,7 +1159,7 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         } else {
             v["settlement"] = whereabouts(world, t0, li).0;
         }
-    } else if head == "b" && nums.len() == 2 {
+    } else if head == "b" && nums.len() == 2 && nums[0] < town::layout_count(t0) {
         let l = town::layout(world, t0, nums[0]);
         let Some(b) = l.building(nums[1]) else {
             // Taken away (`remove_buildings`): what it was.
@@ -1336,7 +1337,7 @@ pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
         v["businesses"] = json!(businesses);
         return Some(v);
     }
-    if head == "d" && nums.len() == 2 {
+    if head == "d" && nums.len() == 2 && nums[0] < town::layout_count(t0) {
         let l = town::layout(world, t0, nums[0]);
         let q = l.quarters.get(nums[1])?;
         let businesses: Vec<Value> = l

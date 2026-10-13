@@ -48,12 +48,15 @@ impl Ctx {
     }
 
     /// Named features and river polylines (JSON) from the T0 generated in this context, with the
-    /// layout index of the first created site (`first_created`).
+    /// layout index of the first created site (`first_created`) and what each layout is drawn
+    /// from (`layout_ids`: `town::layout_identity` folded to 32 bits, by layout index), so the app
+    /// can tell which places a remade world lays out the same.
     pub fn overlay_json(&self) -> String {
         let Some(t0) = &self.t0 else { return "{}".into() };
         let o = t0.overlay_json();
+        let ids: Vec<String> = (0..worldgen::town::layout_count(t0)).map(|li| worldgen::town::layout_identity(t0, li)).map(|h| ((h ^ h >> 32) as u32).to_string()).collect();
         match o.strip_suffix('}') {
-            Some(head) => format!("{head},\"first_created\":{}}}", self.first_created()),
+            Some(head) => format!("{head},\"first_created\":{},\"layout_ids\":[{}]}}", self.first_created(), ids.join(",")),
             None => o,
         }
     }
@@ -171,6 +174,13 @@ impl Ctx {
             Some(t0) => worldgen::agent::names_json(&self.world, t0, scope),
             None => "[]".into(),
         }
+    }
+
+    /// Fingerprints of layouts as generated (`town::layout_print`, folded to 32 bits), by layout
+    /// index; 0 for one past the last, or before T0.
+    pub fn layout_prints(&self, layouts: Vec<u32>) -> Vec<u32> {
+        let Some(t0) = &self.t0 else { return vec![0; layouts.len()] };
+        layouts.iter().map(|&li| worldgen::town::layout_print(&self.world, t0, li as usize)).map(|h| (h ^ h >> 32) as u32).collect()
     }
 
     /// The sites standing in settlements (`agent::parents_json`): `{n, base, pairs: [[site layout,

@@ -58,7 +58,7 @@ pace.
 | `d:<layout>:<q>` | A district. |
 | `t:<layout>:<k>` | A wall tower. |
 | `u:<layout>:<k>`, `w:…`, `k:…` | Ways underground: a dungeon, crypt, cave, mine or lava tube; sewer sections; a keep's dungeon. |
-| `c:<n>` | A created site (a building drawn by hand too; its building is `b:<layout>:0`). Generated from its id, so a remade world lays it out the same, though its layout number (and the ids inside it) can move; changes stored under the old ids stay behind. |
+| `c:<n>` | A created site (a building drawn by hand too; its building is `b:<layout>:0`). Generated from its id, so a remade world lays it out the same, though its layout number (and the ids inside it) can move; the app moves the changes stored under them along. Changes on places a remade world lays out differently are set aside at layout numbers from 1,000,000 up: no such place to the tools. |
 | `n:<id>`, `p:<id>` | An NPC, a plot point (the DM's notebook). |
 | `o:<id>`, `x:<id>`, `s:<asset>` | A battlemap object put down by hand; a clear (generated objects taken away); an uploaded sprite (an object kind). |
 | `v:<id>` | A crossing put down by hand: a bridge, ford or ferry. |

@@ -4,7 +4,7 @@
   // they arrive, in groups. "Only in view" (a chip over the results) keeps to the current view.
   // ↑/↓ move through the results, Enter opens one.
   import type { Npc, Overlay, PlaceInfo, Plot } from '../gen/protocol';
-  import { hitName, kindLabel, searchFeatures, type BuildingHit, type DistrictHit, type Rect, type Selection } from './gazetteer';
+  import { hitName, kindLabel, searchFeatures, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection } from './gazetteer';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -55,15 +55,24 @@
 
   // Names of places notes are on (map features at once, the rest looked up once). Called while
   // the rows are derived, so a lookup only starts there: the name is set when it comes back.
+  // (Again for another world or this one remade: a new `resolve`.)
   let names = $state<Record<string, string>>({});
-  const asked = new Set<string>();
+  let asked = new Set<string>();
+  let namesOf: unknown = null;
+  $effect.pre(() => {
+    if (namesOf === resolve) return;
+    [namesOf, names, asked] = [resolve, {}, new Set()];
+  });
   function placeName(id: string): string {
     if (renames[id]) return renames[id];
     const f = overlay.features.find((g) => g.id === id);
     if (f) return f.name;
     if (!asked.has(id)) {
       asked.add(id);
-      void resolve(id).then((p) => (names[id] = p?.generated ?? p?.name ?? id));
+      const ask = resolve;
+      void ask(id).then((p) => {
+        if (namesOf === ask) names[id] = p?.generated ?? p?.name ?? unnamed(id);
+      });
     }
     return names[id] ?? '…';
   }

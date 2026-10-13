@@ -316,7 +316,7 @@
     {#if !peek}<button class="ws-btn" onclick={onStop} title="Leave sketch mode (new strokes are asked about first)">Stop sketching</button>{/if}
     <button class="ws-btn primary grow" onclick={onGenerate} disabled={busy}>Generate from sketch</button>
   </div>
-  {#if !peek}<div class="ws-muted note">Uses the Generate settings (the sketch stretches with the map's size); names and notes are kept.</div>{/if}
+  {#if !peek}<div class="ws-muted note">Uses the Generate settings (the sketch stretches with the map's size). Your changes are kept; those on towns and sites that come out differently are set aside.</div>{/if}
 </div>
 
 <style>

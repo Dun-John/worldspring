@@ -63,6 +63,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                     ? c.names_json(a.scope)
                     : a.op === 'parents'
                     ? c.parents_json()
+                    : a.op === 'prints'
+                    ? JSON.stringify([...c.layout_prints(new Uint32Array(a.layouts))])
                     : a.op === 'spot'
                       ? c.creation_spot_json(a.kind, a.under, a.id, a.x, a.y)
                       : a.op === 'building'

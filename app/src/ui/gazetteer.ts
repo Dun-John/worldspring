@@ -1,4 +1,5 @@
 // Gazetteer helpers for the UI: feature search, framing zooms, breadcrumbs, names with edits.
+import { PARKED_LAYOUT } from '../sync/ops';
 import type { Feature, Hit, Overlay } from '../gen/protocol';
 import type { IconName } from './icons';
 
@@ -8,6 +9,16 @@ export type DistrictHit = Extract<Hit, { kind: 'district' }>;
 export type Selection = { kind: 'feature'; feature: Feature } | { kind: 'building'; hit: BuildingHit } | { kind: 'district'; hit: DistrictHit };
 
 export const SETTLEMENT_KINDS = ['metropolis', 'city', 'town', 'village'];
+
+/** A layout-local id set aside when the world was remade (`PARKED_LAYOUT` and up): it names no
+ * place any more. */
+export function setAside(id: string): boolean {
+  const m = /^(?:[lr]:)?[bdtukw]:(\d+)(?::|$)/.exec(id);
+  return !!m && Number(m[1]) >= PARKED_LAYOUT;
+}
+
+/** What to call a place no name was found for: its id, or what became of it. */
+export const unnamed = (id: string) => (setAside(id) ? 'Set aside when the world was remade' : id);
 /** Kinds of sites (`worldgen::agent::SITE_KINDS`): those not created by hand are the points of
  * interest, whose order gives their layout indices after the settlements'. The last three are
  * only ever created. */

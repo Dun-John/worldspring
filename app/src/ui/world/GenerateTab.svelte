@@ -24,10 +24,12 @@
     pins: number;
     /** Roads drawn in the sketch. */
     roads: number;
+    /** How long the last world took to generate (s), if one was timed here. */
+    seconds?: number | null;
     /** Generate the draft (with the sketch, stretched to its size). */
     onGenerate: () => void;
   }
-  let { draft, world, busy, status, progress, sketching, strokes, sketchLand, paintedBiomes, pins, roads, onGenerate }: Props = $props();
+  let { draft, world, busy, status, progress, sketching, strokes, sketchLand, paintedBiomes, pins, roads, seconds = null, onGenerate }: Props = $props();
 
   type Num = { [K in keyof WorldParams]: WorldParams[K] extends number ? K : never }[keyof WorldParams];
   /** [key, label, min, max, step, format] */
@@ -191,7 +193,7 @@
 
   <div class="foot">
     <button class="ws-btn quiet" onclick={() => (draft.p = { ...DEFAULT_PARAMS, biome_weights: {} })} title="Every setting back to its default">Defaults</button>
-    <button class="ws-btn primary grow" onclick={onGenerate} disabled={busy}>{sketching ? 'Generate from sketch' : 'Generate world'}</button>
+    <button class="ws-btn primary grow" onclick={onGenerate} disabled={busy} title={seconds ? `Takes about ${seconds} s` : undefined}>{sketching ? 'Generate from sketch' : 'Generate world'}</button>
   </div>
 </div>
 

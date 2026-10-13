@@ -656,6 +656,7 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (id, d) in world.file.edits.designs.iter().filter(|(id, _)| id.starts_with("b:")) {
         let why = match building_of(world, t0, id) {
+            Err(_) if crate::world::layout_in_id(id).is_some_and(|li| li >= crate::world::PARKED_LAYOUT) => Some("set aside when the world was remade".into()),
             Err(e) => Some(e),
             Ok((li, l, bi)) => {
                 let b = l.building(bi as usize).expect("checked");

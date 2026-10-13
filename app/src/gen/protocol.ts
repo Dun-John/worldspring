@@ -466,6 +466,8 @@ export type Ask =
   | { op: 'names'; scope: string }
   /** The sites standing in settlements (`agent::parents_json`). */
   | { op: 'parents' }
+  /** Fingerprints of layouts as generated (`town::layout_print`), by layout index. */
+  | { op: 'prints'; layouts: number[] }
   /** Where a site can be created near (x, y), and a name for it (`agent::creation_spot`). */
   | { op: 'spot'; kind: string; under?: string; id: string; x: number; y: number }
   /** Whether a building drawn by hand can stand there, its point and a name
@@ -650,6 +652,9 @@ export interface Overlay {
   conflicts?: Conflict[];
   /** The layout index of the first created site (`Edits.created[0]`), as the generator counts. */
   first_created?: number;
+  /** What each layout is drawn from (`town::layout_identity`, 32 bits), by layout index: a
+   * remade world lays out alike the places whose number here is the same. */
+  layout_ids?: number[];
 }
 
 /** River polylines owned by one tile: vertex k is verts[4k..4k+4] = (x, y in tile units, width ft, discharge). */
