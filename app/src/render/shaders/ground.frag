@@ -274,10 +274,14 @@ void main() {
     // Elevation from the smooth height field. Slope in ft per ft; gradient points uphill.
     vec2 grad = vec2(hx, hy) / 5.0;
     float slope = length(grad);
-    float t = (h - uSea) / 5.0;
+    // Above a grade of 1.5 the 5-ft lines would crowd into a smear of ink (a 40-ft step in one
+    // square is 8 of them): only every n-th is drawn, n doubling with the grade, so a cliff reads
+    // as rock with a bold line or two.
+    float stride = exp2(max(0.0, ceil(log2(slope / 1.5))));
+    float t = (h - uSea) / (5.0 * stride);
     float fr = fract(t);
-    // Horizontal distance (squares) to the nearest 5-ft tier boundary.
-    float distSq = min(fr, 1.0 - fr) * 5.0 / max(slope, 0.02) / 5.0;
+    // Horizontal distance (squares) to the nearest line drawn.
+    float distSq = min(fr, 1.0 - fr) * 5.0 * stride / max(slope, 0.02) / 5.0;
     // Steps climb steeper ground before it is a cliff.
     float steep = surf == 19 ? smoothstep(1.0, 1.4, slope) : smoothstep(0.45, 0.8, slope);
     if (depth <= 0.0) {
@@ -286,8 +290,9 @@ void main() {
             vec2 dir = normalize(grad + 1e-6);
             float stri = vnoise(vec2(dot(w, vec2(-dir.y, dir.x)) * 3.0, 0.5));
             vec3 rock = vec3(0.44, 0.41, 0.37) * (0.7 + 0.5 * stri);
-            // Faces turned away from the NW light are in shadow.
-            float lit = clamp(0.55 + 0.6 * dot(-dir, normalize(vec2(-1.0, -1.0))), 0.35, 1.15);
+            // Faces turned away from the NW light are in shadow (dark grey rock, not black: a
+            // sheer step then reads as a rock face all round).
+            float lit = clamp(0.55 + 0.6 * dot(-dir, normalize(vec2(-1.0, -1.0))), 0.6, 1.15);
             col = mix(col, rock * lit, steep * 0.9);
         }
         // Tier contour: bold ink on cliffs, thin dashed line on gentle slopes (on steps only the

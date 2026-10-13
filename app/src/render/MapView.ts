@@ -10,6 +10,7 @@ import { Labels } from './Labels';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
+import { BLOCK, parseKey } from '../editor/groundCodec';
 import { RIVER_Q, TileLayer, type LayerStats } from './TileLayer';
 
 export interface InteriorState {
@@ -139,6 +140,8 @@ export interface PointerTool {
   /** Hovered again where the pointer now is when the camera moves under a still pointer (for
    * a ghost or ring that follows it). */
   readonly hoverFollows?: boolean;
+  /** A second finger cancels the stroke under way (`cancel`) and pinches the map instead. */
+  readonly pinchCancels?: boolean;
 }
 
 const TIERS: [number, string][] = [
@@ -230,6 +233,8 @@ export class MapView {
   private readonly hoverCam = [NaN, NaN, NaN];
   private toolAt: [number, number] = [0, 0];
   private toolPointer: number | null = null;
+  /** Where the tool's pointer is (client px). */
+  private toolClient = { x: 0, y: 0 };
   /** Called every frame after the camera moved and the map updated. */
   onFrame: ((now: number) => void) | null = null;
   /** How interiors draw doors and what they keep from the players. */
@@ -844,11 +849,49 @@ export class MapView {
         rects.push(box);
       }
     }
+    let reenter = false;
+    // Ground shaped by hand: the battlemaps over it, and every building that may stand on it
+    // (a building rides on the ground under its corners: 160 ft takes in the largest).
+    const ground: Rect[] = [];
+    const pg = prev.ground ?? {};
+    const ng = next.ground ?? {};
+    const box: Rect = [Infinity, Infinity, -Infinity, -Infinity];
+    const grow = (r: Rect) => {
+      box[0] = Math.min(box[0], r[0]);
+      box[1] = Math.min(box[1], r[1]);
+      box[2] = Math.max(box[2], r[2]);
+      box[3] = Math.max(box[3], r[3]);
+    };
+    if (pg !== ng) for (const key of keys('ground', pg, ng)) {
+      if (pg[key] === ng[key]) continue;
+      const b = parseKey(key);
+      if (b) grow([b[0] * BLOCK * 5 - 5, b[1] * BLOCK * 5 - 5, (b[0] + 1) * BLOCK * 5 + 5, (b[1] + 1) * BLOCK * 5 + 5]);
+    }
+    // (A stroke's blocks are one box, so the rects edited grow by one a stroke.)
+    if (box[0] <= box[2]) ground.push([...box]);
+    const ph = prev.plateaus ?? {};
+    const nh = next.plateaus ?? {};
+    if (ph !== nh) for (const id of keys('plateaus', ph, nh)) {
+      const [a, b] = [ph[id], nh[id]];
+      if (a === b || JSON.stringify(a) === JSON.stringify(b)) continue;
+      for (const p of [a, b]) {
+        if (!p) continue;
+        const e = Math.max(p.edge ?? 0, 5) + 5;
+        ground.push([Math.min(...p.pts.map((q) => q[0])) - e, Math.min(...p.pts.map((q) => q[1])) - e, Math.max(...p.pts.map((q) => q[0])) + e, Math.max(...p.pts.map((q) => q[1])) + e]);
+      }
+    }
+    const REACH = 160;
+    for (const r of ground) battleRects.push([r[0] - REACH, r[1] - REACH, r[2] + REACH, r[3] + REACH]);
+    // Inside a building over it: shown as it now stands (its floors follow the ground).
+    const inside = this.interior?.interior;
+    if (inside && ground.length && /^[btck]:/.test(inside.id) && inside.id !== this.designing) {
+      const [x, y] = inside.origin;
+      if (ground.some((r) => x >= r[0] - REACH && x <= r[2] + REACH && y >= r[1] - REACH && y <= r[3] + REACH)) reenter = true;
+    }
     // The world's own buildings changed or taken away: round their middle as generated (a
     // castle keep reaches ~150 ft) and any new footprint.
     const pb = prev.buildings ?? {};
     const nb = next.buildings ?? {};
-    let reenter = false;
     const replaced: string[] = [];
     if (pb !== nb) for (const id of keys('buildings', pb, nb)) {
       const [a, b] = [pb[id], nb[id]];
@@ -1231,11 +1274,18 @@ export class MapView {
       } catch {
         // Not a live pointer (synthetic input): no capture needed.
       }
+      // A second finger on a tool that asks for it: not a stroke after all, but a pinch.
+      if (this.tool?.pinchCancels && this.toolPointer !== null && e.pointerType === 'touch') {
+        this.tool.cancel();
+        this.pointers.set(this.toolPointer, { ...this.toolClient });
+        this.toolPointer = null;
+      }
       if (this.tool && this.pointers.size === 0 && this.toolPointer === null) {
         const r = c.getBoundingClientRect();
         const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
         if (this.tool.down(x, y, e)) {
           this.toolPointer = e.pointerId;
+          this.toolClient = { x: e.clientX, y: e.clientY };
           this.vel.x = this.vel.y = 0;
           return;
         }
@@ -1277,6 +1327,7 @@ export class MapView {
       if (this.tool) {
         const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
         if (e.pointerId === this.toolPointer) {
+          this.toolClient = { x: e.clientX, y: e.clientY };
           this.tool.move(x, y, e);
           return;
         }

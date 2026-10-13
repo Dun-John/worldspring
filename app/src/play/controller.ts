@@ -478,6 +478,7 @@ export class PlayController implements PointerTool {
   setEdits(world: WorldFile) {
     this.world = forPlayers(world);
     this.forgetRedesigned(world);
+    this.forgetReshaped(world);
     // To the players' window, if one is open: once a burst of changes settles (a big world's
     // edits take a while to send).
     if (!this.players) return;
@@ -488,6 +489,23 @@ export class PlayController implements PointerTool {
     }, 250);
   }
   private editsTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** The ground last seen (by reference: edits are never changed in place). */
+  private groundSeen: [unknown, unknown] = [undefined, undefined];
+
+  /** Ground shaped by hand since the last edits (rare in play): buildings' floors may have moved
+   * with it, so every interior is fetched again. */
+  private forgetReshaped(world: WorldFile) {
+    const now: [unknown, unknown] = [world.edits?.ground, world.edits?.plateaus];
+    const [g, p] = this.groundSeen;
+    this.groundSeen = now;
+    if (g === now[0] && p === now[1]) return;
+    if (JSON.stringify(g ?? {}) === JSON.stringify(now[0] ?? {}) && JSON.stringify(p ?? {}) === JSON.stringify(now[1] ?? {})) return;
+    this.interiors.clear();
+    for (const loc of [...this.places.keys()]) if (parseLoc(loc).interior) this.places.delete(loc);
+    this.placeCache = null;
+    this.visionDirty = true;
+  }
 
   /** Sites designed anew since the last edits: their walls and levels are fetched again. */
   private forgetRedesigned(world: WorldFile) {

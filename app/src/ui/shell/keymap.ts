@@ -7,6 +7,7 @@ import type { BuildShape } from '../../editor/build';
 import type { Placer } from '../../editor/placing';
 import type { DesignMode } from '../../editor/site/designer';
 import type { TownMode } from '../../editor/town';
+import type { GroundMode } from '../../editor/ground';
 import type { Tool as PlayTool } from '../../play/controller';
 import type { EditTab, Section } from './layout.svelte';
 import type { Shortcut } from './shortcuts';
@@ -51,6 +52,11 @@ export interface KeyContext {
   townMode(m: TownMode): void;
   /** The town brush a step bigger (1) or smaller (-1). */
   townBrush(d: number): void;
+  groundMode(m: GroundMode): void;
+  /** The ground brush a step wider (1) or narrower (-1). */
+  groundBrush(d: 1 | -1): void;
+  /** The chosen plateau taken away (false: none chosen). */
+  groundRemove(): boolean;
   playTool(t: PlayTool): void;
   removeTokens(): void;
   /** Steps Escape tries in order; the first that does something wins. */
@@ -119,6 +125,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     ['S', 'sites', 'Places'],
     ['B', 'build', 'Build'],
     ['U', 'town', 'Streets'],
+    ['M', 'ground', 'Ground'],
     ['C', 'scatter', 'Objects'],
     ['D', 'design', 'Rooms'],
   ];
@@ -149,6 +156,20 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   out.push(
     { keys: [']'], label: 'Bigger brush', group: 'Streets', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(1) },
     { keys: ['['], label: 'Smaller brush', group: 'Streets', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(-1) },
+  );
+  const ground: [string, GroundMode, string][] = [
+    ['Q', 'raise', 'Raise'],
+    ['W', 'lower', 'Lower'],
+    ['E', 'smooth', 'Smooth'],
+    ['R', 'restore', 'Restore'],
+    ['L', 'plateau', 'Plateau (drag a loop)'],
+    ['V', 'select', 'Choose a plateau'],
+  ];
+  for (const [key, m, label] of ground) out.push({ keys: [key], label, group: 'Ground', when: edit('ground'), run: () => k.groundMode(m) });
+  out.push(
+    { keys: [']'], label: 'Wider brush', group: 'Ground', repeat: true, when: () => edit('ground')() && !k.inside(), run: () => k.groundBrush(1) },
+    { keys: ['['], label: 'Narrower brush', group: 'Ground', repeat: true, when: () => edit('ground')() && !k.inside(), run: () => k.groundBrush(-1) },
+    { keys: ['Delete', 'Backspace'], label: 'Take away the chosen plateau', group: 'Ground', when: edit('ground'), run: () => k.groundRemove() },
   );
   const modes: [string, ScatterMode, string][] = [
     ['Q', 'place', 'Place'],

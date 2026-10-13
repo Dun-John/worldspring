@@ -17,7 +17,7 @@ import {
   UniformGroup,
   type Renderer,
 } from 'pixi.js';
-import { HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
+import { fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
@@ -53,6 +53,12 @@ interface ChunkView {
   ground: Mesh<Geometry, Shader>;
   uniforms: UniformGroup;
   textures: Texture[];
+  /** Its heights texture: what it was made with (half floats less `base`), and while the ground
+   * is previewed there (`previewGround`), the copy shown instead. */
+  hSrc: BufferImageSource;
+  hdata: Uint16Array;
+  base: number;
+  shown: { data: Uint16Array; dirty: boolean } | null;
   /** The roof mesh's vertex buffers (a mesh does not free its geometry). */
   roofGeometry: Geometry | null;
   /** The grid over bridge and pier decks, shown and hidden with the ground's. */
@@ -371,6 +377,57 @@ export class BattlemapLayer {
     return best;
   }
 
+  /** A square's drawn ground and the water there (ft; global square), if its chunk is loaded. */
+  groundAt(gx: number, gy: number): [number, number] | null {
+    const [cx, cy] = [Math.floor(gx / SQ), Math.floor(gy / SQ)];
+    const c = this.chunks.get(`${cx}/${cy}`);
+    if (!c) return null;
+    const k = (gy - cy * SQ + 1) * HS + gx - cx * SQ + 1;
+    return [c.heights[k], fromHalf(c.hdata[k * 4 + 1]) + c.base];
+  }
+
+  /**
+   * Show the ground of squares (global, an inclusive box) as it will be, before the chunks are
+   * made again: `at` gives a square's height from its drawn height and water, or null to leave
+   * it. Chunks show a copy of their heights (the halo rings too, so seams stay shut), uploaded
+   * once a frame; a chunk made again shows its own.
+   */
+  previewGround(box: [number, number, number, number], at: (gx: number, gy: number, h: number, water: number) => number | null) {
+    const [gx0, gy0, gx1, gy1] = box;
+    for (let cy = Math.floor((gy0 - 1) / SQ); cy <= Math.floor((gy1 + 1) / SQ); cy++) {
+      for (let cx = Math.floor((gx0 - 1) / SQ); cx <= Math.floor((gx1 + 1) / SQ); cx++) {
+        const c = this.chunks.get(`${cx}/${cy}`);
+        if (!c) continue;
+        const [ox, oy] = [cx * SQ - 1, cy * SQ - 1];
+        const [ax, bx] = [Math.max(gx0, ox), Math.min(gx1, ox + HS - 1)];
+        const [ay, by] = [Math.max(gy0, oy), Math.min(gy1, oy + HS - 1)];
+        for (let gy = ay; gy <= by; gy++) {
+          for (let gx = ax; gx <= bx; gx++) {
+            const k = (gy - oy) * HS + gx - ox;
+            const v = at(gx, gy, c.heights[k], fromHalf(c.hdata[k * 4 + 1]) + c.base);
+            if (v === null || !Number.isFinite(v)) continue;
+            if (!c.shown) {
+              c.shown = { data: c.hdata.slice(), dirty: true };
+              c.hSrc.resource = c.shown.data;
+            }
+            c.shown.data[k * 4] = toHalf(v - c.base);
+            c.shown.dirty = true;
+          }
+        }
+      }
+    }
+  }
+
+  /** Every chunk shows its own heights again. */
+  unpreviewGround() {
+    for (const c of this.chunks.values()) {
+      if (!c.shown) continue;
+      c.shown = null;
+      c.hSrc.resource = c.hdata;
+      c.hSrc.update();
+    }
+  }
+
   /** Tactical info for the square at a world position, if its chunk is loaded. */
   inspect(wx: number, wy: number): SquareInfo | null {
     const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
@@ -559,6 +616,10 @@ export class BattlemapLayer {
       g.sprite.scale.set((g.scale * pxPerSq) / PX);
     }
     for (const c of this.chunks.values()) {
+      if (c.shown?.dirty) {
+        c.shown.dirty = false;
+        c.hSrc.update();
+      }
       const show = inView.has(c.id);
       for (const p of c.parts) p.visible = show;
       if (!show) continue;
@@ -811,6 +872,10 @@ export class BattlemapLayer {
       ground,
       uniforms,
       textures,
+      hSrc,
+      hdata,
+      base,
+      shown: null,
       roofGeometry,
       deckGrid: gridG,
       decks,

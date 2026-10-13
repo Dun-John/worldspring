@@ -116,7 +116,7 @@ function clipHalf(pts: number[], ox: number, oy: number, nx: number, ny: number)
 /** f32 → IEEE half bits (round to nearest). */
 const f32 = new Float32Array(1);
 const u32 = new Uint32Array(f32.buffer);
-function toHalf(v: number): number {
+export function toHalf(v: number): number {
   f32[0] = v;
   const x = u32[0];
   const sign = (x >>> 16) & 0x8000;
@@ -130,6 +130,14 @@ function toHalf(v: number): number {
   if (e >= 31) return sign | 0x7c00;
   const h = sign | (e << 10) | (m >>> 13);
   return m & 0x1000 ? h + 1 : h;
+}
+
+/** IEEE half bits → number. */
+export function fromHalf(h: number): number {
+  const e = (h >> 10) & 31;
+  const m = h & 1023;
+  const v = e === 0 ? m * 2 ** -24 : e === 31 ? (m ? NaN : Infinity) : (1 + m / 1024) * 2 ** (e - 15);
+  return h & 0x8000 ? -v : v;
 }
 
 /** Decode a `battlemap::pack` payload (`kinds[kind - 1]`: the object catalog). */

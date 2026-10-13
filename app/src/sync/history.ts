@@ -116,6 +116,14 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
         const town = String(change.name ?? (id ? nameOf(id) : 'the town'));
         return `laid ${town} out anew${parts.length ? `: ${parts.join('; ')}` : ''}`;
       }
+      case 'shape_ground': {
+        const how: Record<string, string> = { raise: 'raised', lower: 'lowered', smooth: 'smoothed', restore: 'put back' };
+        return `${how[String(change.mode)] ?? 'shaped'} the ground`;
+      }
+      case 'set_plateau':
+        return change.changed ? 'changed a plateau' : 'made a plateau';
+      case 'delete_plateau':
+        return 'took away a plateau';
       case 'start_over':
         return 'started over: every change to this world cleared';
       case 'reset_site_design':

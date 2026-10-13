@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Npc, Overlay, Placed, Plot, SpriteMeta, Stroke, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Npc, Overlay, Placed, Plateau, Plot, SpriteMeta, Stroke, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { Sketcher, drawsLand, scaleStrokes, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
@@ -35,6 +35,8 @@
   import type { BarAt, Placer } from './editor/placing';
   import BuildPanel from './ui/BuildPanel.svelte';
   import TownPanel from './ui/TownPanel.svelte';
+  import GroundPanel from './ui/GroundPanel.svelte';
+  import { defaultGround, GroundTool, type GroundSettings } from './editor/ground';
   import { TownTool, type TownMode } from './editor/town';
   import DesignPanel from './ui/DesignPanel.svelte';
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
@@ -880,6 +882,7 @@
   const scatterOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'scatter');
   const buildOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'build');
   const townOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'town');
+  const groundOn = $derived(shell.section === 'edit' && shell.tabs.edit === 'ground');
   const notebookOn = $derived(shell.section === 'notes');
   /** Sites underground can be designed, but not while playing. */
   const canDesign = $derived(!!inside && /^[ub]:/.test(inside.id) && !playOn);
@@ -896,7 +899,7 @@
   function syncTool() {
     const buildTool =
       buildArmed && (buildMode === 'crossing' ? buildArmed.cross : buildMode === 'clear' ? buildArmed.clear : buildMode === 'castle' || buildMode === 'wall' ? buildArmed.works : buildArmed.tool);
-    view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? townTool ?? scatterArmed?.tool ?? (playOn ? play : null);
+    view.tool = pickTool ?? placeTool ?? designer ?? buildTool ?? townTool ?? groundArmed ?? scatterArmed?.tool ?? (playOn ? play : null);
   }
 
   /** Open a section (on a tab), or with null shut the panel. New sketch strokes or a site's
@@ -915,6 +918,7 @@
     if (editTab !== 'scatter') disarmScatter();
     if (editTab !== 'build') disarmBuild();
     if (editTab !== 'town') disarmTown();
+    if (editTab !== 'ground') disarmGround();
     if (editTab !== 'sites') disarmPlace();
     pickTool = null;
     if (to && to !== shell.section) {
@@ -927,6 +931,7 @@
     if (editTab === 'scatter') armScatter();
     if (editTab === 'build') armBuild();
     if (editTab === 'town') armTown();
+    if (editTab === 'ground') armGround();
     if (editTab === 'design' && !designer) void openDesigner();
     if (to === 'world' && t === 'sketch' && !sketchOn) enterSketch();
     if (to === 'play') startPlay();
@@ -1768,6 +1773,75 @@
     applyEdits({ ...e, objects: o, cleared: { ...(e.cleared ?? {}), ...cleared } }, { ...label, ...(Object.keys(cleared).length ? { clears: Object.keys(cleared).length } : {}) }, 'user');
   }
 
+  // Ground: while its tab is open, the map's pointer brushes the battlemap's ground up, down,
+  // smooth or back, or draws plateaus and pits.
+  let ground = $state<GroundSettings>(defaultGround());
+  /** The plateau chosen (Choose). */
+  let groundSel = $state<string | null>(null);
+  let groundArmed: GroundTool | null = null;
+  /** The battlemap is showing (the ground can be shaped). */
+  const groundNear = $derived((hud?.ftPerPx ?? 99) < 0.7);
+  const groundChosen = $derived(groundSel && edits.plateaus?.[groundSel] ? { id: groundSel, plateau: edits.plateaus[groundSel] } : null);
+
+  function armGround() {
+    if (groundArmed) return;
+    groundArmed = new GroundTool({
+      settings: () => ground,
+      edits: () => edits,
+      battlemap: () => (view.battle?.stats.alpha ?? 0) > 0 && !view.interior,
+      ground: (gx, gy) => view.battle?.groundAt(gx, gy) ?? null,
+      sea: () => view.geom?.sea_level_ft ?? 0,
+      preview: (box, at) => view.battle?.previewGround(box, at),
+      unpreview: () => view.battle?.unpreviewGround(),
+      commit: (g, p, label) => commitGround(g, p, label),
+      ring: (x, y, r) => {
+        if (r === null) return (ring = null);
+        const [sx, sy] = view.cam.worldToScreen(x, y);
+        const b = container.getBoundingClientRect();
+        ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
+      },
+      chip: (x, y, text) => chipAt(x, y, text),
+      select: (id) => (groundSel = id),
+      selected: () => groundSel,
+      ppf: () => view.cam.ppf,
+      hint: (t) => toast(t),
+    });
+  }
+
+  function disarmGround() {
+    groundArmed?.cancel();
+    groundArmed?.dispose();
+    groundArmed = null;
+    groundSel = null;
+    ring = null;
+    chip = null;
+  }
+
+  // The ring and chip follow the settings as the panel changes them.
+  $effect(() => {
+    void [ground.mode, ground.radius, ground.offset];
+    untrack(() => groundArmed)?.refresh();
+  });
+
+  /** Ground blocks brushed (or, null, cleared) and plateaus set or taken away, as one change. */
+  function commitGround(blocks: Record<string, string | null>, plateaus: Record<string, Plateau | null>, label: { tool: string; mode?: string; count?: number; changed?: boolean }) {
+    const e = edits;
+    const g = { ...(e.ground ?? {}) };
+    for (const [k, v] of Object.entries(blocks)) {
+      if (v) g[k] = v;
+      else delete g[k];
+    }
+    const h = { ...(e.plateaus ?? {}) };
+    for (const [k, v] of Object.entries(plateaus)) {
+      if (v) h[k] = v;
+      else delete h[k];
+    }
+    const next: Edits = { ...e };
+    if (Object.keys(blocks).length) next.ground = g;
+    if (Object.keys(plateaus).length) next.plateaus = h;
+    applyEdits(next, label, 'user');
+  }
+
   /** A picture as a new kind of object: drawn down to 64 px a square (128 for one square),
    * kept as an asset, described in `Edits.sprites`; then chosen in the menu. */
   async function uploadSprite(file: File, meta: SpriteMeta) {
@@ -2385,6 +2459,9 @@
       townTool?.reset();
     },
     townBrush: (d) => (townSize = Math.max(0.25, Math.min(4, townSize * (d > 0 ? 1.15 : 1 / 1.15)))),
+    groundMode: (m) => (ground.mode = m),
+    groundBrush: (d) => groundArmed?.size(d),
+    groundRemove: () => !!groundArmed?.remove(),
     playTool: (t) => play.setTool(t),
     removeTokens: () => play.removeSelected(),
     escape: [
@@ -2398,6 +2475,7 @@
         return true;
       },
       () => !!placer()?.escape(),
+      () => !!groundArmed?.escape(),
       () => !!buildArmed?.tool.reset(),
       () => !!buildArmed?.works.reset(),
       () => (worksEditing ? ((worksEditing = null), true) : false),
@@ -2662,6 +2740,7 @@
         { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a ruin, dungeon, crypt, cave, mine, tower, camp or inn.' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, bridges and fords; clear a town’s own buildings.' },
         { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the town in view (U)', hint: 'Re-plan the town in view: its streets, wards, lots and walls.' },
+        { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s ground; draw plateaus, cliffs and pits.' },
         { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap: place, brush, erase, or upload your own.' },
         {
           key: 'design',
@@ -2718,6 +2797,18 @@
             onChange={(req, what) => void townChange(req, what)}
             onMerge={() => (townMerging = !townMerging)}
             onZoomIn={townZoomIn}
+          />
+        {:else if groundOn}
+          <GroundPanel
+            bind:settings={ground}
+            selected={groundChosen}
+            sea={view.geom?.sea_level_ft ?? 0}
+            near={groundNear}
+            inside={!!inside}
+            {peek}
+            onPlateau={(id, p) => groundArmed?.change(id, p)}
+            onRemove={() => groundArmed?.remove()}
+            onZoomIn={() => view.flyTo({ cx: view.cam.cx, cy: view.cam.cy, zoom: clampZoom(Math.max(view.cam.zoom, 2)) })}
           />
         {:else if scatterOn}
           <ScatterPanel
@@ -2892,8 +2983,8 @@
       <button class="ws-btn" onclick={disarmPlace}>Cancel</button>
     </div>
   {/if}
-  {#if scatterOn && ring}<div class="ring" style="left: {ring.x - ring.r}px; top: {ring.y - ring.r}px; width: {ring.r * 2}px; height: {ring.r * 2}px" class:erase={scatter.mode === 'erase'}></div>{/if}
-  {#if (scatterOn || designer) && chip}<div class="hand-chip" style="left: {chip.x}px; top: {chip.y}px">{chip.text}</div>{/if}
+  {#if (scatterOn || groundOn) && ring}<div class="ring" style="left: {ring.x - ring.r}px; top: {ring.y - ring.r}px; width: {ring.r * 2}px; height: {ring.r * 2}px" class:erase={scatter.mode === 'erase'}></div>{/if}
+  {#if (scatterOn || groundOn || designer) && chip}<div class="hand-chip" style="left: {chip.x}px; top: {chip.y}px">{chip.text}</div>{/if}
   {#if placeBar && placeBarAt}
     {@const p = placer()}
     {#if p}

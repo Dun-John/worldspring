@@ -71,6 +71,8 @@ export const ICONS = {
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   mountain: '<path d="m3 20 6-11 4 7 2-3 6 7Z"/>',
   massif: '<path d="m2 20 5-8 2.5 3L14 6l3.5 6 1.5-2 3 10Z"/><path d="m12 9 2 1.5 1.5-1"/>',
+  raise: '<path d="m18 9-6-6-6 6"/><path d="M12 3v14"/><path d="M5 21h14"/>',
+  lower: '<path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/>',
   plateau: '<path d="M2 20h20"/><path d="m4 20 3-8h10l3 8"/><path d="M12 9V3M9.5 5.5 12 3l2.5 2.5"/>',
   lake: '<path d="M3 13c0-3.9 4-6.5 9-6.5s9 2.6 9 6.5-4 6.5-9 6.5-9-2.6-9-6.5Z"/><path d="M8 13c1.3 0 1.3 1 2.7 1s1.3-1 2.6-1 1.4 1 2.7 1"/>',
   volcano: '<path d="M2 21 9 10h6l7 11Z"/><path d="m9 10 1.5 2.5 1.5-1.5 1.5 1.5L15 10"/><path d="M11 7c0-2 2-2 2-4"/>',

@@ -10,12 +10,13 @@
   }
   let { list, onClose }: Props = $props();
 
-  const ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit', 'Build', 'Streets', 'Objects', 'Placing', 'Rooms', 'Play'];
+  const ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit', 'Build', 'Streets', 'Ground', 'Objects', 'Placing', 'Rooms', 'Play'];
   const NOTES: Record<string, string> = {
     Sketch: 'While sketching',
     Edit: 'With Edit open',
     Build: 'Edit › Build',
     Streets: 'Edit › Streets',
+    Ground: 'Edit › Ground, on the battlemap',
     Objects: 'Edit › Objects',
     Placing: 'Edit › Objects, on the piece held, pointed at or chosen',
     Rooms: 'Edit › Rooms, inside a building or site',
@@ -24,7 +25,7 @@
   /** What each section is for, for a first look. */
   const WHERE: [string, string][] = [
     ['World', 'Make the world: settings, the sketch (coasts, mountains, rivers, towns, roads), the library. Generating remakes the world.'],
-    ['Edit', 'Change it in place: places, buildings, streets, objects, rooms.'],
+    ['Edit', 'Change it in place: places, buildings, streets, the ground, objects, rooms.'],
     ['Notes', 'Your NPCs and plots, and the Gazetteer: every name to rename, places to hide from the map, your notes on places.'],
     ['Play', 'Run a session: tokens, fog, the players’ window.'],
   ];
