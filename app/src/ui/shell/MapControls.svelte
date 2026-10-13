@@ -25,7 +25,7 @@
   const layers = $derived(shell.menu === 'layers');
 </script>
 
-<div class="controls" class:phone={shell.phone}>
+<div class="controls" class:phone={shell.phone} data-map-controls>
   {#if floors}{@render floors()}{/if}
   {#if shell.phone && canUndo}
     <button class="ctl" onclick={onUndo} aria-label="Undo" title={undoLabel ? `Undo: ${undoLabel}` : 'Undo'}><Icon name="undo" /></button>

@@ -12,7 +12,7 @@
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
   import ItemPicker, { type PickItem } from './ItemPicker.svelte';
-  import { remember, remembered } from './shell/layout.svelte';
+  import { remember, remembered, shell } from './shell/layout.svelte';
 
   interface Props {
     settings: ScatterSettings;
@@ -34,7 +34,7 @@
   let { settings = $bindable(), catalog, sprites, placed, thumbs, picture, peek = false, onUpload, onSprite }: Props = $props();
 
   const MODES: [ScatterMode, string, IconName, string, string][] = [
-    ['place', 'Place', 'stamp', 'Q', 'Click on the battlemap to put the chosen object down; T or Shift+wheel turns it. With nothing chosen (Esc), click one you put down to pick it up and move it; Delete takes it away.'],
+    ['place', 'Place', 'stamp', 'Q', 'Click on the battlemap to put the chosen object down; T or Shift+wheel turns it. With nothing chosen (Esc), click one you put down to pick it up and move it; Delete takes it away. On a touch screen, tap to move the ghost, then ✓.'],
     ['brush', 'Brush', 'brush', 'W', 'Drag on the battlemap to scatter the chosen kinds (choose several).'],
     ['erase', 'Erase', 'eraser', 'E', 'Click an object to take it away, or drag to clear an area.'],
   ];
@@ -74,7 +74,11 @@
 
   function choose(kind: number | string) {
     // Place puts down one kind; a brush or eraser takes several (a click adds or drops one).
-    if (settings.mode === 'place') settings.kinds = [kind];
+    if (settings.mode === 'place') {
+      settings.kinds = [kind];
+      // (A phone's sheet goes down to its tools: the map shows where it goes.)
+      if (shell.phone) shell.snap = 'peek';
+    }
     else if (!settings.kinds.length) settings.kinds = [kind];
     else settings.kinds = settings.kinds.includes(kind) ? settings.kinds.filter((k) => k !== kind) : [...settings.kinds, kind];
   }

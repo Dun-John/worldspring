@@ -5,17 +5,23 @@
 // `interior::design::check`).
 //
 // On the map, underground: paint a room, dig a rectangle room or a corridor, fill squares back
-// with rock; click a wall for a door (again: a secret door, again: none); put props down (click
-// one to take it away); click a square for the level's way down. In a building: paint squares
-// into a room, draw a wall line to split a room, click a wall to take it away (two rooms made
-// one), doors as underground (in an outside wall: a back door, then the front door), furniture,
-// indoor props and uploaded pictures, drag out the stair block; storeys added on top or taken
-// away (the building follows on Save). Right-drag pans.
+// with rock; click a wall for a door (again: a secret door, again: none); put props down; click a
+// square for the level's way down. In a building: paint squares into a room, draw a wall line to
+// split a room, click a wall to take it away (two rooms made one), doors as underground (in an
+// outside wall: a back door, then the front door), furniture, indoor props and uploaded pictures,
+// drag out the stair block; storeys added on top or taken away (the building follows on Save).
+// Right-drag pans.
+//
+// Props and furniture are placed as placing.ts describes: the chosen piece's ghost follows the
+// pointer (red where it can't go, amber in a doorway); a click on a piece picks it up, a click
+// puts it down again (one change); T turns a quarter, Delete takes it away. A side turned to by
+// hand is kept only where the piece wouldn't face it by itself.
 import type { Graphics } from 'pixi.js';
-import type { DesignProblem, SiteDesign, UnderCatalog } from '../../gen/protocol';
+import type { DesignProblem, InteriorItem, SiteDesign, UnderCatalog } from '../../gen/protocol';
 import type { Camera } from '../../render/camera';
 import type { MapView, PointerTool } from '../../render/MapView';
-import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, isBuilding, mergeRooms, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
+import { FINGER_PX, WheelTurn, type BarAt, type HandState, type Placer } from '../placing';
+import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, fits, isBuilding, type Item, mergeRooms, moveProp, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
 
 export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'prop' | 'stairs' | 'wall' | 'merge';
 
@@ -26,15 +32,18 @@ export interface DesignSettings {
   kind: string;
   /** Brush width (squares). */
   width: number;
+  /** The piece in the hand ('' none: a click picks one up). */
   prop: string;
   /** The prop's size (squares), across and down. */
   pw: number;
   ph: number;
+  /** The side it is turned to stand against (0 north 1 east 2 south 3 west); null: its own. */
+  back: number | null;
   /** Doors added wherever a room dug would be shut off. */
   autoDoors: boolean;
 }
 
-export const defaultDesign = (): DesignSettings => ({ mode: 'room', kind: 'chamber', width: 1, prop: 'chest', pw: 1, ph: 1, autoDoors: true });
+export const defaultDesign = (): DesignSettings => ({ mode: 'room', kind: 'chamber', width: 1, prop: 'chest', pw: 1, ph: 1, back: null, autoDoors: true });
 
 /** What the designer needs from the app. */
 export interface DesignHost {
@@ -43,11 +52,23 @@ export interface DesignHost {
   /** The draft changed (problems, undo, the room chosen). */
   changed(): void;
   hint(text: string): void;
+  /** A piece's name and whether it blocks the way (a prop, furniture or `s:<asset>`). */
+  piece(kind: string): { name: string; blocks: boolean } | null;
+  /** The chip by the ghost (world ft: its corner), or none. */
+  chip(x: number, y: number, text: string | null): void;
+  /** The place bar by the ghost (touch), or none. */
+  bar(at: BarAt): void;
+  /** Screen px per world ft. */
+  ppf(): number;
 }
+
+/** A piece picked up: where it is in the list (on its level), as it was, as it is now (turned),
+ * and the square of it the pointer took it by. */
+type Held = { li: number; index: number; from: Item; now: Item; grab: [number, number] };
 
 type Sq = [number, number];
 
-export class SiteDesigner implements PointerTool {
+export class SiteDesigner implements PointerTool, Placer {
   draft: SiteDesign | null = null;
   problems: DesignProblem[] = [];
   /** The room chosen (on the level in view), for its settings and to paint into. */
@@ -67,6 +88,20 @@ export class SiteDesigner implements PointerTool {
   private pointer: [number, number] | null = null;
   /** A building's storeys as they are (the draft's may differ until Save). */
   private floors = 0;
+  /** Props: the piece picked up, if any. */
+  private holding: Held | null = null;
+  /** Props: the piece a click would pick up (its index on the level), else -1. */
+  private under = -1;
+  /** Props on a touch screen: the ghost stays where it was tapped or dragged to (grid). */
+  private touch = false;
+  private spot: [number, number] | null = null;
+  /** A finger dragging the ghost: from the finger to the spot (grid). */
+  private dragging: [number, number] | null = null;
+  private readonly wheelTurn = new WheelTurn();
+  /** The ghost as last shown, and whether it fits there (for its outline). */
+  private ghostShown: { f: Item; state: 'ok' | 'doorway' | 'bad' } | null = null;
+  /** The ghost and chip follow the pointer as the camera moves under it. */
+  readonly hoverFollows = true;
 
   constructor(
     private readonly view: MapView,
@@ -111,6 +146,7 @@ export class SiteDesigner implements PointerTool {
   levelShown() {
     if (this.level !== this.seenLevel) this.selected = null;
     this.seenLevel = this.level;
+    this.refresh();
     this.host.changed();
   }
 
@@ -159,6 +195,10 @@ export class SiteDesigner implements PointerTool {
     if (interior) await this.view.showInterior(interior);
     this.seenLevel = this.level;
     if (this.selected !== null && !(this.selected < (d.levels[this.level]?.rooms.length ?? 0))) this.selected = null;
+    // (A piece held is let go if the change took it away or moved it in the list.)
+    const h = this.holding;
+    if (h && !same(d.levels[h.li]?.items[h.index], h.from)) this.holding = null;
+    this.refresh();
     this.host.changed();
   }
 
@@ -180,9 +220,11 @@ export class SiteDesigner implements PointerTool {
   }
 
   undo() {
+    this.putBack();
     this.step(this.past, this.future);
   }
   redo() {
+    this.putBack();
     this.step(this.future, this.past);
   }
   private step(from: SiteDesign[], to: SiteDesign[]) {
@@ -198,6 +240,7 @@ export class SiteDesigner implements PointerTool {
 
   /** The generated site again (in the draft: Save keeps it). */
   original() {
+    this.putBack();
     this.queue = this.queue.then(async () => {
       const reply = await this.view.gen.design(this.id, undefined, { original: true });
       if ('error' in reply || !this.draft) return;
@@ -338,6 +381,16 @@ export class SiteDesigner implements PointerTool {
     if (e.button !== 0 || !this.draft) return false;
     const sq = this.square(x, y);
     const mode = this.host.settings().mode;
+    if (mode === 'prop' && e.pointerType !== 'mouse') {
+      // A finger on the ghost drags it; anywhere else it pans (a tap moves the ghost: `tap`).
+      this.touch = true;
+      const g = this.ghost();
+      const p = this.grid(x, y);
+      const reach = FINGER_PX / (this.host.ppf() * 5);
+      if (!g || !p || !this.spot || p[0] < g.x - reach || p[1] < g.y - reach || p[0] > g.x + g.w + reach || p[1] > g.y + g.h + reach) return false;
+      this.dragging = [this.spot[0] - p[0], this.spot[1] - p[1]];
+      return true;
+    }
     if (this.brushing()) {
       if (!sq) return true;
       this.stroke = new Set(this.brush(sq));
@@ -351,8 +404,16 @@ export class SiteDesigner implements PointerTool {
     return true;
   }
 
-  move(x: number, y: number) {
+  move(x: number, y: number, e: PointerEvent) {
     this.pointer = this.grid(x, y);
+    if (this.dragging) {
+      if (this.pointer) this.spot = [this.pointer[0] + this.dragging[0], this.pointer[1] + this.dragging[1]];
+      return this.refresh();
+    }
+    if (e.pointerType === 'mouse' && this.host.settings().mode === 'prop') {
+      this.touch = false;
+      this.refresh();
+    }
     if (this.line && this.pointer) {
       // Along the grid line the pointer is furthest along.
       const [p, f] = [this.pointer, this.line.from];
@@ -379,6 +440,10 @@ export class SiteDesigner implements PointerTool {
     const li = this.level;
     const d = this.draft;
     if (!d) return;
+    if (this.dragging) {
+      this.dragging = null;
+      return this.refresh();
+    }
     const doors = s.autoDoors ? { doors: li } : undefined;
     if (this.line) {
       const { from, to } = this.line;
@@ -441,17 +506,8 @@ export class SiteDesigner implements PointerTool {
         if (cells[ka] < 0 || cells[kb] < 0 || cells[ka] === cells[kb]) return this.host.hint('Doors go in walls between two rooms');
         return void this.change((n) => cycleDoor(n, li, e[0], e[1], e[2]));
       }
-      case 'prop': {
-        const at = propAt(d, li, sq[0], sq[1]);
-        if (at >= 0) return void this.change((n) => void n.levels[li].items.splice(at, 1));
-        if (cells[k] < 0) return this.host.hint('Props go on the floor');
-        return void this.change((n) => {
-          if (!addProp(n, li, s.prop, sq[0], sq[1], s.pw, s.ph)) {
-            this.host.hint('It doesn’t fit there');
-            return false;
-          }
-        });
-      }
+      case 'prop':
+        return this.click(sq);
       case 'merge': {
         const e = this.edge4(g);
         if (!e) return;
@@ -549,10 +605,305 @@ export class SiteDesigner implements PointerTool {
     this.rect = null;
     this.line = null;
     this.last = null;
+    this.dragging = null;
   }
 
   hover(x: number, y: number) {
     this.pointer = this.grid(x, y);
+    this.touch = false;
+    if (this.host.settings().mode === 'prop') this.refresh();
+  }
+
+  leave(e: PointerEvent) {
+    // (A finger lifted leaves too: the ghost stays where it was put.)
+    if (e.pointerType !== 'mouse') return;
+    this.pointer = null;
+    this.refresh();
+  }
+
+  /** A click the tool's `down` didn't take: a right click puts the held piece back; a tap moves
+   * the ghost there (on a piece, picks it up). */
+  tap(x: number, y: number, e: PointerEvent): boolean {
+    if (!this.props()) return false;
+    if (e.button === 2) return this.putBack();
+    if (e.pointerType === 'mouse' || e.button !== 0) return false;
+    this.touch = true;
+    const sq = this.square(x, y);
+    const at = sq && !this.holding ? propAt(this.draft!, this.level, sq[0], sq[1]) : -1;
+    if (at >= 0) this.pickUp(at, sq!);
+    else if (this.hand() !== 'empty') this.spot = this.grid(x, y);
+    else this.host.hint('Choose a piece to put down, or tap one to pick it up');
+    this.refresh();
+    return true;
+  }
+
+  /** Shift+wheel turns what is in the hand. */
+  wheel(e: WheelEvent): boolean {
+    if (!e.shiftKey || !this.props() || this.hand() === 'empty') return false;
+    const n = this.wheelTurn.steps(e);
+    if (n === null) return false;
+    for (let i = 0; i < Math.abs(n); i++) this.turn(n > 0 ? 1 : -1, true);
+    return true;
+  }
+
+  /** The designer is shut: nothing of the hand stays on the map. */
+  dispose() {
+    this.holding = null;
+    this.pointer = null;
+    this.spot = null;
+    this.view.interior?.setGhost(null);
+    this.host.chip(0, 0, null);
+    this.host.bar(null);
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Props: what is in the hand.
+
+  /** Props mode, a draft shown. */
+  private props(): boolean {
+    return this.host.settings().mode === 'prop' && !!this.draft && this.view.interior?.interior.id === this.id;
+  }
+
+  hand(): HandState {
+    if (this.holding) return 'holding';
+    return this.props() && this.host.settings().prop ? 'chosen' : 'empty';
+  }
+
+  /** Where the ghost is (grid): the pointer, or on a touch screen where it was put. */
+  private ghostAt(): [number, number] | null {
+    return this.touch ? this.spot : this.pointer;
+  }
+
+  /** What a click would put down, where the ghost is: the held piece (by the square it was taken
+   * by), or the chosen one by its top-left square. */
+  private ghost(): Item | null {
+    const p = this.ghostAt();
+    if (!p || !this.props()) return null;
+    const [i, j] = [Math.floor(p[0]), Math.floor(p[1])];
+    if (this.holding) return { ...this.holding.now, x: i - this.holding.grab[0], y: j - this.holding.grab[1] };
+    const s = this.host.settings();
+    if (!s.prop) return null;
+    const f: Item = { kind: s.prop, x: i, y: j, w: Math.max(1, s.pw), h: Math.max(1, s.ph) };
+    if (s.back !== null) f.back = s.back;
+    return f;
+  }
+
+  /** A design's piece as the map draws it (an uploaded picture by its place in the site's list). */
+  private shown(f: Item): InteriorItem {
+    const p = this.host.piece(f.kind);
+    const it: InteriorItem = { kind: f.kind, name: p?.name ?? f.kind, x: f.x, y: f.y, w: f.w, h: f.h, cover: 0, blocks_move: p?.blocks ?? false, height_ft: 0 };
+    if (f.kind.startsWith('s:')) {
+      it.kind = 'sprite';
+      const k = this.view.interior?.interior.sprites?.findIndex((x) => x.asset === f.kind.slice(2)) ?? -1;
+      if (k >= 0) it.sprite = k + 1;
+    }
+    if (f.back !== undefined) it.back = f.back;
+    if (f.variant !== undefined) it.variant = f.variant;
+    return it;
+  }
+
+  /** The side a piece would stand against where it is, by itself (an uploaded picture: its top,
+   * north); null for one with no back. */
+  private autoBack(f: Item): number | null {
+    const { back: _, ...g } = f;
+    return this.view.interior?.autoBack(this.shown(g)) ?? (f.kind.startsWith('s:') ? 0 : null);
+  }
+
+  /** The piece as stored: its side kept only where it wouldn't stand so by itself. */
+  private posed(f: Item): Item {
+    const { back, ...g } = f;
+    return back !== undefined && back !== this.autoBack(g) ? { ...g, back } : g;
+  }
+
+  /** Whether the piece fits where it is (the held one aside). */
+  private fit(f: Item): 'ok' | 'doorway' | 'bad' {
+    const h = this.holding;
+    return fits(this.draft!, this.level, f.x, f.y, f.w, f.h, h && h.li === this.level ? h.index : -1, this.host.piece(f.kind)?.blocks ?? true);
+  }
+
+  /** The ghost, its chip or bar, and the piece a click would pick up, as the hand and pointer are. */
+  refresh() {
+    const layer = this.view.interior;
+    if (!layer || layer.interior.id !== this.id) return;
+    const d = this.draft;
+    if (this.holding && this.holding.li !== this.level) this.holding = null;
+    this.under = -1;
+    const g = this.ghost();
+    const p = this.pointer;
+    const sq = !this.touch && p && d ? [Math.floor(p[0]), Math.floor(p[1])] : null;
+    // A click on a piece picks it up (an empty hand, or a piece chosen: nothing can go there).
+    if (d && sq && !this.holding && this.props()) this.under = propAt(d, this.level, sq[0], sq[1]);
+    const name = (f: Item) => this.host.piece(f.kind)?.name ?? f.kind;
+    this.ghostShown = null;
+    if (this.under >= 0 || !g) {
+      layer.setGhost(null);
+      this.host.bar(null);
+      const u = d?.levels[this.level].items[this.under];
+      if (u) this.host.chip(...layer.toWorld(u.x + u.w, u.y + u.h), `${cap(name(u))} · click to pick up`);
+      else this.host.chip(0, 0, null);
+      return;
+    }
+    const state = this.fit(g);
+    layer.setGhost(this.shown(g), state);
+    this.ghostShown = { f: g, state };
+    const turns = g.w !== g.h || (g.back ?? this.autoBack(g)) !== null;
+    if (this.touch) {
+      this.host.chip(0, 0, null);
+      this.host.bar({ ...xy(layer.toWorld(g.x + g.w / 2, g.y + g.h / 2)), r: (Math.max(g.w, g.h) / 2) * 5, holding: !!this.holding, turns });
+    } else {
+      this.host.bar(null);
+      const why = state === 'bad' ? ' · doesn’t fit here' : state === 'doorway' ? ' · in a doorway' : '';
+      this.host.chip(...layer.toWorld(g.x + g.w, g.y + g.h), `${cap(name(g))}${g.w * g.h > 1 ? ` · ${g.w}×${g.h}` : ''}${why}`);
+    }
+  }
+
+  /** The piece at `index` (on this level) into the hand, taken by square `sq`. */
+  private pickUp(index: number, sq: Sq) {
+    const f = this.draft!.levels[this.level].items[index];
+    const clamp = (v: number, n: number) => Math.max(0, Math.min(n - 1, v));
+    this.holding = { li: this.level, index, from: f, now: { ...f }, grab: [clamp(sq[0] - f.x, f.w), clamp(sq[1] - f.y, f.h)] };
+    if (this.touch) this.spot = [sq[0] + 0.5, sq[1] + 0.5];
+  }
+
+  /** Takes the piece a click would pick up into the hand (for a key that acts on it). */
+  private pickUnder(): boolean {
+    if (this.holding) return true;
+    const p = this.pointer;
+    if (this.under < 0 || !p) return false;
+    this.pickUp(this.under, [Math.floor(p[0]), Math.floor(p[1])]);
+    return true;
+  }
+
+  /** A click in Props: the held piece put down, else the piece clicked picked up, else the chosen
+   * piece put down. */
+  private click(sq: Sq) {
+    const d = this.draft!;
+    if (this.holding) return void this.drop();
+    const at = propAt(d, this.level, sq[0], sq[1]);
+    if (at >= 0) {
+      this.pickUp(at, sq);
+      return this.refresh();
+    }
+    if (!this.host.settings().prop) return this.host.hint('Choose a piece to put down, or click one to pick it up');
+    this.place();
+  }
+
+  /** One of the chosen piece put down where the ghost is. */
+  private place(): boolean {
+    const g = this.ghost();
+    if (!g || this.holding) return false;
+    if (this.fit(g) === 'bad') {
+      this.host.hint(this.onFloor(g) ? 'It doesn’t fit there' : 'Props go on the floor');
+      return true;
+    }
+    const li = this.level;
+    const f = this.posed(g);
+    void this.change((n) => addProp(n, li, f));
+    return true;
+  }
+
+  /** Whether a piece's top-left square is floor (for the hint). */
+  private onFloor(f: Item): boolean {
+    const d = this.draft!;
+    return f.x >= 0 && f.y >= 0 && f.x < d.nx && f.y < d.ny && decode(d.levels[this.level].cells, d.nx * d.ny)[f.y * d.nx + f.x] >= 0;
+  }
+
+  /** The held piece put down where the ghost is (in its place in the list: one change). */
+  private drop(): boolean {
+    const h = this.holding;
+    const g = this.ghost();
+    if (!h || !g) return false;
+    if (this.fit(g) === 'bad') {
+      this.host.hint('It doesn’t fit there');
+      return true;
+    }
+    this.holding = null;
+    const f = this.posed(g);
+    if (!same(f, h.from)) void this.change((n) => same(n.levels[h.li]?.items[h.index], h.from) && moveProp(n, h.li, h.index, f));
+    this.refresh();
+    return true;
+  }
+
+  /** Put the held piece back where it was (before an undo, say). */
+  putBack(): boolean {
+    if (!this.holding) return false;
+    this.holding = null;
+    this.refresh();
+    return true;
+  }
+
+  turn(dir: 1 | -1, _fine: boolean): boolean {
+    if (!this.props() || (!this.pickUnder() && this.hand() !== 'chosen')) return false;
+    const s = this.host.settings();
+    const f = this.ghost() ?? this.holding?.now ?? { kind: s.prop, x: 0, y: 0, w: s.pw, h: s.ph, ...(s.back !== null ? { back: s.back } : {}) };
+    const side = f.back ?? this.autoBack(f);
+    if (f.w === f.h && side === null) {
+      this.host.hint(`${cap(this.host.piece(f.kind)?.name ?? f.kind)}: looks the same any way round`);
+      return true;
+    }
+    // A quarter turn: across becomes down, and the side it stands against turns with it.
+    const back = side === null ? undefined : (side + dir + 4) % 4;
+    if (this.holding) {
+      const now = { ...this.holding.now, w: f.h, h: f.w };
+      if (back === undefined) delete now.back;
+      else now.back = back;
+      const [gx, gy] = this.holding.grab;
+      this.holding = { ...this.holding, now, grab: [Math.min(gx, now.w - 1), Math.min(gy, now.h - 1)] };
+    } else {
+      [s.pw, s.ph] = [f.h, f.w];
+      s.back = back ?? null;
+    }
+    this.refresh();
+    return true;
+  }
+
+  turnReset(): boolean {
+    if (!this.props() || (!this.pickUnder() && this.hand() !== 'chosen')) return false;
+    if (this.holding) {
+      const { back: _, ...now } = this.holding.now;
+      this.holding = { ...this.holding, now };
+    } else this.host.settings().back = null;
+    this.refresh();
+    return true;
+  }
+
+  putDown(): boolean {
+    return !!this.holding && this.drop();
+  }
+
+  confirm(): boolean {
+    if (!this.props()) return false;
+    return this.holding ? this.drop() : this.place();
+  }
+
+  remove(): boolean {
+    if (!this.props()) return false;
+    const h = this.holding;
+    const li = this.level;
+    const target = h ? { li: h.li, index: h.index, from: h.from } : this.under >= 0 ? { li, index: this.under, from: this.draft!.levels[li].items[this.under] } : null;
+    if (!target) return false;
+    this.holding = null;
+    this.under = -1;
+    void this.change((n) => {
+      const items = n.levels[target.li]?.items;
+      if (!items || !same(items[target.index], target.from)) return false;
+      items.splice(target.index, 1);
+    });
+    this.refresh();
+    return true;
+  }
+
+  size(): boolean {
+    return false;
+  }
+
+  escape(): boolean {
+    if (this.putBack()) return true;
+    const s = this.host.settings();
+    if (!this.props() || !s.prop) return false;
+    s.prop = '';
+    this.refresh();
+    return true;
   }
 
   /** Double-clicks are the designer's (painting quickly): none takes a way out of the site,
@@ -615,8 +966,28 @@ export class SiteDesigner implements PointerTool {
         }
       } else if (i >= 0 && j >= 0 && i < d.nx && j < d.ny) {
         if (this.brushing()) for (const k of this.brush([i, j])) g.poly(quad(k % d.nx, Math.floor(k / d.nx), (k % d.nx) + 1, Math.floor(k / d.nx) + 1)).stroke({ width: 1.5, color: ink });
-        else if (s.mode === 'prop' && propAt(d, li, i, j) < 0) g.poly(quad(i, j, i + s.pw, j + s.ph)).stroke({ width: 1.5, color: ink });
-        else g.poly(quad(i, j, i + 1, j + 1)).stroke({ width: 1.5, color: ink });
+        else if (s.mode !== 'prop') g.poly(quad(i, j, i + 1, j + 1)).stroke({ width: 1.5, color: ink });
+      }
+    }
+    if (s.mode === 'prop') {
+      const box = (f: Item, width: number, color: number) => g.poly(quad(f.x, f.y, f.x + f.w, f.y + f.h)).stroke({ width, color });
+      // Where the held piece was (dashed), the piece a click would pick up (gold), and the ghost's
+      // squares (red where it can't go, amber in a doorway).
+      const h = this.holding;
+      if (h && h.li === li) {
+        const c = [scr(h.from.x, h.from.y), scr(h.from.x + h.from.w, h.from.y), scr(h.from.x + h.from.w, h.from.y + h.from.h), scr(h.from.x, h.from.y + h.from.h)];
+        for (const [width, color] of [[3.5, 0x1c1917], [1.6, 0xfde047]]) {
+          for (let k = 0; k < 4; k++) dash(g, c[k], c[(k + 1) % 4]);
+          g.stroke({ width, color, alpha: 0.9 });
+        }
+      }
+      const u = this.under >= 0 ? d.levels[li]?.items[this.under] : undefined;
+      if (u) {
+        box(u, 3.5, 0x1c1917);
+        box(u, 1.6, 0xfde047);
+      } else if (this.ghostShown) {
+        const st = this.ghostShown.state;
+        box(this.ghostShown.f, st === 'ok' ? 1.5 : 2.5, st === 'bad' ? 0xdc2626 : st === 'doorway' ? 0xd97706 : ink);
       }
     }
     // Problems on this level.
@@ -632,5 +1003,23 @@ export class SiteDesigner implements PointerTool {
 function plain<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
+
+/** Whether two pieces are the same (where, how big, which way, which look). */
+function same(a: Item | undefined, b: Item): boolean {
+  return !!a && a.kind === b.kind && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h && a.back === b.back && a.variant === b.variant;
+}
+
+/** A dashed line from a to b (screen px), added to the path. */
+function dash(g: Graphics, a: [number, number], b: [number, number]) {
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  const n = Math.max(1, Math.round(len / 6));
+  for (let i = 0; i < n; i += 2) {
+    const [t0, t1] = [i / n, Math.min(1, (i + 1) / n)];
+    g.moveTo(a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0).lineTo(a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1);
+  }
+}
+
+const cap = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
+const xy = ([x, y]: [number, number]) => ({ x, y });
 
 export { BOSS };

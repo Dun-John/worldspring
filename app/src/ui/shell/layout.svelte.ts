@@ -65,6 +65,10 @@ class Shell {
   ask = $state.raw<Ask | null>(null);
   phone = $state(false);
   short = $state(false);
+  /** Where the dock begins (px): the phone's sheet's top, and the right dock's left edge (the
+   * window's edges while there is none), for what floats over the map beside it. */
+  sheetTop = $state(Infinity);
+  dockLeft = $state(Infinity);
 
   constructor() {
     if (typeof window === 'undefined') return;

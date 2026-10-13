@@ -6,14 +6,15 @@
 //
 // Place mode works as placing.ts describes: the chosen object's ghost follows the pointer, turned
 // and sized as it will land; with nothing chosen a click picks up an object put down by hand
-// (outlined under the pointer), which then follows the pointer until a click puts it down.
+// (outlined under the pointer), which then follows the pointer until a click puts it down. On a
+// touch screen a tap moves the ghost (or picks up the object tapped) and the place bar puts it down.
 import type { Clear, Edits, Placed } from '../gen/protocol';
 import type { KindInfo } from '../gen/client';
 import type { Camera } from '../render/camera';
 import type { Graphics } from 'pixi.js';
 import { drawnTurned } from '../render/BattlemapLayer';
 import type { PointerTool } from '../render/MapView';
-import { degrees, PlacedIndex, WheelTurn, type HandState, type Placer } from './placing';
+import { degrees, FINGER_PX, PlacedIndex, WheelTurn, type BarAt, type HandState, type Placer } from './placing';
 
 export type ScatterMode = 'place' | 'brush' | 'erase';
 
@@ -53,6 +54,10 @@ export interface ScatterHost {
   ghost(o: Placed | null, ok: boolean): void;
   /** The chip by the ghost (world ft: the ghost's corner), or none. */
   chip(x: number, y: number, text: string | null): void;
+  /** The place bar by the ghost (touch), or none. */
+  bar(at: BarAt): void;
+  /** Screen px per world ft. */
+  ppf(): number;
   /** Whether the battlemap is showing (objects can only be seen and picked there). */
   battlemap(): boolean;
   /** Whether the battlemap is loaded at a point. */
@@ -103,8 +108,13 @@ export class ScatterTool implements PointerTool, Placer {
   private filled = new Set<string>();
   private salt = 0;
   private last: [number, number] | null = null;
-  /** The pointer (world ft), while a mouse is over the map. */
+  /** The pointer (world ft), while a mouse is over the map; on a touch screen, where the ghost was
+   * last tapped or dragged to. */
   private at: [number, number] | null = null;
+  /** The last placing was by touch: the ghost stays where it was put and the bar shows. */
+  private touch = false;
+  /** A finger dragging the ghost: from the finger to the ghost (ft). */
+  private dragging: [number, number] | null = null;
   /** A piece picked up: its id, where it was, and how it is now (it follows the pointer). */
   private holding: { id: string; from: Placed; now: Placed } | null = null;
   /** With an empty hand, the object put down by hand under the pointer (and where it was looked for). */
@@ -164,6 +174,7 @@ export class ScatterTool implements PointerTool, Placer {
     if (!at || s.mode !== 'place' || !this.host.battlemap()) {
       this.host.ghost(null, true);
       this.host.chip(0, 0, null);
+      this.host.bar(null);
       this.under = null;
       this.probed = null;
       return;
@@ -175,10 +186,19 @@ export class ScatterTool implements PointerTool, Placer {
     else if (s.kinds.length) o = this.make(s.kinds[0], x, y);
     this.host.ghost(o, this.host.loaded(x, y));
     if (o) {
-      const r = placedRadius(o, e, this.host.catalog()) * 0.75;
-      this.host.chip(x + r, y + r, `${this.nameOf(o.kind)}${this.turns(o.kind) ? ` · ${this.shown(o)}°` : ''}`);
+      const r = placedRadius(o, e, this.host.catalog());
+      const text = `${this.nameOf(o.kind)}${this.turns(o.kind) ? ` · ${this.shown(o)}°` : ''}`;
+      this.host.bar(this.touch ? { x, y, r, holding: !!this.holding, turns: this.turns(o.kind) } : null);
+      this.host.chip(x + r * 0.75, y + r * 0.75, this.touch ? null : text);
       this.under = null;
       this.probed = null;
+      return;
+    }
+    this.host.bar(null);
+    // (A touch screen has no hover: a tap picks up.)
+    if (this.touch) {
+      this.host.chip(0, 0, null);
+      this.under = null;
       return;
     }
     // An empty hand: the object put down by hand under the pointer (looked for again only once
@@ -223,6 +243,14 @@ export class ScatterTool implements PointerTool, Placer {
     const s = this.host.settings();
     // Zoomed out, the map pans as usual.
     if (!this.host.battlemap()) return false;
+    if (s.mode === 'place' && e.pointerType !== 'mouse') {
+      // A finger on the ghost drags it; anywhere else it pans (a tap moves the ghost: `tap`).
+      this.touch = true;
+      const at = this.at;
+      if (!at || this.hand() === 'empty' || Math.hypot(x - at[0], y - at[1]) > Math.max(this.ghostRadius(), FINGER_PX / this.host.ppf())) return false;
+      this.dragging = [at[0] - x, at[1] - y];
+      return true;
+    }
     if (s.mode === 'brush') {
       if (!s.kinds.length) {
         this.host.hint('Choose what to scatter first');
@@ -240,6 +268,10 @@ export class ScatterTool implements PointerTool, Placer {
   }
 
   move(x: number, y: number, e: PointerEvent) {
+    if (this.dragging) {
+      this.at = [x + this.dragging[0], y + this.dragging[1]];
+      return this.refresh();
+    }
     const s = this.host.settings();
     this.host.ring(x, y, s.mode === 'place' ? null : s.radius);
     if (this.stroke) this.dab(x, y);
@@ -249,18 +281,22 @@ export class ScatterTool implements PointerTool, Placer {
     }
     if (e.pointerType === 'mouse' && s.mode === 'place') {
       this.at = [x, y];
+      this.touch = false;
       this.refresh();
     }
   }
 
   hover(x: number, y: number) {
     const s = this.host.settings();
+    this.touch = false;
     this.host.ring(x, y, s.mode === 'place' ? null : s.radius);
     this.at = [x, y];
     if (s.mode === 'place' || this.holding) this.refresh();
   }
 
-  leave() {
+  leave(e?: PointerEvent) {
+    // (A finger lifted leaves too: the ghost stays where it was put.)
+    if (e && e.pointerType !== 'mouse') return;
     this.at = null;
     this.host.ring(0, 0, null);
     this.refresh();
@@ -268,6 +304,10 @@ export class ScatterTool implements PointerTool, Placer {
 
   up(x: number, y: number, e: PointerEvent) {
     const s = this.host.settings();
+    if (this.dragging) {
+      this.dragging = null;
+      return this.refresh();
+    }
     if (this.stroke) {
       const objs = this.stroke;
       this.stroke = null;
@@ -300,13 +340,36 @@ export class ScatterTool implements PointerTool, Placer {
     this.refresh();
   }
 
-  /** A click that didn't start the tool: a right click puts the held piece back. */
-  tap(_x: number, _y: number, e: PointerEvent): boolean {
-    if (e.button !== 2 || !this.holding) return false;
-    this.holding = null;
-    this.probed = null;
+  /** A click that didn't start the tool: a right click puts the held piece back. A tap moves the
+   * ghost there, or with nothing in the hand picks up the object put down by hand there. */
+  tap(x: number, y: number, e: PointerEvent): boolean {
+    if (e.button === 2 && this.holding) return this.putBack();
+    const s = this.host.settings();
+    if (e.pointerType === 'mouse' || e.button !== 0 || s.mode !== 'place' || !this.host.battlemap()) return false;
+    this.touch = true;
+    if (this.hand() !== 'empty') {
+      this.at = [x, y];
+      this.refresh();
+      return true;
+    }
+    const objects = this.host.edits().objects;
+    const id = this.index.at(objects, x, y, Math.max(PICK_FT, FINGER_PX / this.host.ppf()));
+    const o = id && objects?.[id];
+    if (!id || !o) {
+      this.host.hint(this.host.objectAt(x, y) ? 'Only objects put down by hand can be picked up (Erase takes this one away)' : 'Choose what to put down, or tap one you put down to pick it up');
+      return true;
+    }
+    this.holding = { id, from: o, now: { ...o } };
+    this.at = [o.x, o.y];
     this.refresh();
     return true;
+  }
+
+  /** The ghost's footprint radius (ft). */
+  private ghostRadius(): number {
+    const s = this.host.settings();
+    const o = this.holding?.now ?? (s.kinds.length ? this.make(s.kinds[0], 0, 0) : null);
+    return o ? placedRadius(o, this.host.edits(), this.host.catalog()) : 0;
   }
 
   /** Shift+wheel turns what is in the hand. */
@@ -321,6 +384,7 @@ export class ScatterTool implements PointerTool, Placer {
   cancel() {
     this.stroke = null;
     this.wipes = null;
+    this.dragging = null;
     this.host.ring(0, 0, null);
   }
 
@@ -331,6 +395,7 @@ export class ScatterTool implements PointerTool, Placer {
     this.at = null;
     this.host.ghost(null, true);
     this.host.chip(0, 0, null);
+    this.host.bar(null);
   }
 
   /** Put the held piece back where it was (before an undo, say). */
@@ -375,6 +440,18 @@ export class ScatterTool implements PointerTool, Placer {
   putDown(): boolean {
     if (!this.holding || !this.at) return false;
     this.drop(...this.at);
+    this.refresh();
+    return true;
+  }
+
+  confirm(): boolean {
+    const s = this.host.settings();
+    if (!this.at || s.mode !== 'place') return false;
+    if (this.holding) this.drop(...this.at);
+    else if (s.kinds.length) {
+      this.host.commit({ [newObjectId('o')]: this.make(s.kinds[0], ...this.at) }, {}, { tool: 'place_objects', count: 1 });
+      this.next = roll();
+    } else return false;
     this.refresh();
     return true;
   }

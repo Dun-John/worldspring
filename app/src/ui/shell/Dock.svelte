@@ -62,6 +62,23 @@
     };
   });
 
+  // Its edges, for the place bar (kept beside it, never under it).
+  let el: HTMLElement | undefined = $state();
+  $effect(() => {
+    void [sheetH, shell.snap, shell.collapsed, shell.phone, shell.short];
+    const measure = () => {
+      const r = el?.getBoundingClientRect();
+      shell.sheetTop = r && shell.phone ? r.top : Infinity;
+      shell.dockLeft = r && !shell.phone ? r.left : Infinity;
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      shell.sheetTop = shell.dockLeft = Infinity;
+    };
+  });
+
   // Phones: drag the handle (or the header) to change how far the sheet is up.
   const ORDER: Snap[] = ['peek', 'half', 'full'];
   let drag: { y: number; dy: number; id: number } | null = $state(null);
@@ -95,6 +112,7 @@
   data-snap={shell.snap}
   aria-label={title}
   bind:clientHeight={sheetH}
+  bind:this={el}
   style:transform={drag && shell.phone ? `translateY(${Math.max(-120, drag.dy)}px)` : undefined}
 >
   <div class="top" role="presentation" onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={() => (drag = null)}>

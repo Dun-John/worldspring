@@ -63,6 +63,8 @@ export const ICONS = {
   enter: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5M15 12H3"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
   reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  'rotate-cw': '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+  'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
   shapes: '<circle cx="8.5" cy="8.5" r="5.5"/><path d="M13 13h8v8h-8Z"/>',
   token: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M7 18a5.5 5.5 0 0 1 10 0"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2 21a7 7 0 0 1 14 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M22 21a7 7 0 0 0-4-6.3"/>',

@@ -1,6 +1,12 @@
 // Placing things by hand, the same way in Edit › Objects (the battlemap) and Edit › Rooms
-// (inside): what is in the hand, the keys that act on it, turning by Shift+wheel, and an index of
-// the objects put down by hand for finding the one under the pointer.
+// (inside): what is in the hand, the keys (and on touch screens the place bar's buttons) that act
+// on it, turning by Shift+wheel, and an index of the objects put down by hand for finding the one
+// under the pointer.
+//
+// With a mouse the ghost follows the pointer and a click puts it down. On a touch screen a tap
+// moves the ghost (or picks up the piece tapped), a drag from the ghost moves it, any other drag
+// pans, and the bar beside the ghost turns it, puts it down (✓, the ghost stays for the next) or
+// puts it away (✕).
 import type { Placed } from '../gen/protocol';
 
 /** What is in the hand: nothing (a click picks up what it is on), an item chosen (its ghost
@@ -23,7 +29,17 @@ export interface Placer {
   size(d: 1 | -1): boolean;
   /** Escape: put the held piece back, else empty the hand. */
   escape(): boolean;
+  /** ✓ on the place bar: the held piece, or one of the chosen item, put down where the ghost is. */
+  confirm(): boolean;
 }
+
+/** Where the place bar goes (beside the ghost on a touch screen; world ft, `r` the ghost's
+ * radius) and which buttons it shows: `remove` while a piece is held, `turns` for what shows a
+ * turn. Null: no bar (a mouse, or nothing in the hand). */
+export type BarAt = { x: number; y: number; r: number; holding: boolean; turns: boolean } | null;
+
+/** A finger's reach on the map (screen px): a tap or drag this near the ghost or a piece is on it. */
+export const FINGER_PX = 22;
 
 /** Degrees in [0, 360), whole. */
 export function degrees(d: number): number {

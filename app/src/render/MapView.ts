@@ -134,8 +134,8 @@ export interface PointerTool {
   /** A click or tap the tool's `down` didn't take (a right click, say): true if the tool took
    * it (else it picks, or offers the ways on inside a site). */
   tap?(x: number, y: number, e: PointerEvent): boolean;
-  /** The pointer left the map. */
-  leave?(): void;
+  /** The pointer left the map (a finger lifted leaves it too). */
+  leave?(e: PointerEvent): void;
   /** Hovered again where the pointer now is when the camera moves under a still pointer (for
    * a ghost or ring that follows it). */
   readonly hoverFollows?: boolean;
@@ -1323,12 +1323,13 @@ export class MapView {
         const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
         // Inside a site, a click offers the ways on from that square; outside, it picks.
         const site = this.interiorAt(x, y);
-        if (this.tool?.tap?.(x, y, e)) {
-          // (taken by the tool)
-        } else if (site) this.onMoves(site.movesAt(x, y), e.clientX - r.left, e.clientY - r.top);
+        // (A tap the tool takes, placing say, is never half a double-tap.)
+        const taken = !!this.tool?.tap?.(x, y, e);
+        if (taken) this.lastTap = null;
+        else if (site) this.onMoves(site.movesAt(x, y), e.clientX - r.left, e.clientY - r.top);
         else this.onPick(x, y, e.clientX - r.left, e.clientY - r.top);
         // Touch screens: a second tap nearby soon after is a double-tap.
-        if (e.pointerType !== 'mouse') {
+        if (e.pointerType !== 'mouse' && !taken) {
           const now = performance.now();
           const last = this.lastTap;
           if (last && now - last.t < 350 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
@@ -1347,9 +1348,9 @@ export class MapView {
     };
     c.addEventListener('pointerup', end);
     c.addEventListener('pointercancel', end);
-    c.addEventListener('pointerleave', () => {
+    c.addEventListener('pointerleave', (e) => {
       this.cursor = null;
-      this.tool?.leave?.();
+      this.tool?.leave?.(e);
     });
     // Sketching pans with the right button, play tools use it: no menu.
     c.addEventListener('contextmenu', (e) => {

@@ -38,7 +38,7 @@ export interface KeyContext {
   saveDesign(): void;
   sketchTool(t: EditTool): void;
   scatterMode(m: ScatterMode): void;
-  /** What places things by hand while its panel is open (Objects), or none. */
+  /** What places things by hand while its panel is open (Objects, or Rooms on Props), or none. */
   placing(): Placer | null;
   buildShape(s: BuildShape): void;
   /** Crossings (again: the next kind). */
@@ -168,11 +168,11 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     return !!p && f(p);
   };
   out.push(
-    { keys: ['T'], label: 'Turn clockwise', group: 'Placing', repeat: true, when: placing, run: on((p) => p.turn(1, false)) },
+    { keys: ['T'], label: 'Turn clockwise (inside: a quarter)', group: 'Placing', repeat: true, when: placing, run: on((p) => p.turn(1, false)) },
     { keys: ['Shift+T'], label: 'Turn anticlockwise', group: 'Placing', repeat: true, when: placing, run: on((p) => p.turn(-1, false)) },
     { keys: ['.'], label: 'Turn a little clockwise (Shift+wheel too)', group: 'Placing', repeat: true, when: placing, run: on((p) => p.turn(1, true)) },
     { keys: [','], label: 'Turn a little anticlockwise', group: 'Placing', repeat: true, when: placing, run: on((p) => p.turn(-1, true)) },
-    { keys: ['Z'], label: 'Turn by itself again (at random)', group: 'Placing', when: placing, run: on((p) => p.turnReset()) },
+    { keys: ['Z'], label: 'Turn by itself again (at random; inside, as it stands)', group: 'Placing', when: placing, run: on((p) => p.turnReset()) },
     { keys: ['Enter'], label: 'Put the piece held down', group: 'Placing', when: placing, run: on((p) => p.putDown()) },
     { keys: ['Delete', 'Backspace'], label: 'Take away the piece held or pointed at', group: 'Placing', when: placing, run: on((p) => p.remove()) },
   );

@@ -31,6 +31,8 @@
   import Gazetteer from './ui/Gazetteer.svelte';
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
+  import PlaceBar from './ui/PlaceBar.svelte';
+  import type { BarAt, Placer } from './editor/placing';
   import BuildPanel from './ui/BuildPanel.svelte';
   import TownPanel from './ui/TownPanel.svelte';
   import { TownTool, type TownMode } from './editor/town';
@@ -1559,6 +1561,18 @@
       catalog: () => underCatalog,
       changed: () => designVersion++,
       hint: (t) => toast(t),
+      piece: (kind) => {
+        if (kind.startsWith('s:')) {
+          const m = edits.sprites?.[kind.slice(2)];
+          return m ? { name: m.name, blocks: m.blocks_move } : null;
+        }
+        const c = underCatalog;
+        const p = id.startsWith('b:') ? (c?.building.furniture.find((f) => f.kind === kind) ?? c?.building.props.find((f) => f.kind === kind)) : c?.props.find((f) => f.kind === kind);
+        return p ? { name: p.name, blocks: p.blocks } : null;
+      },
+      chip: (x, y, text) => chipAt(x, y, text),
+      bar: (at) => (placeBar = at),
+      ppf: () => view.cam.ppf,
     });
     // (Still wanted once it has loaded: the same site, the Design tab open.)
     if (!(await d.open()) || inside?.id !== id || designer || shell.section !== 'edit' || shell.tabs.edit !== 'design') return;
@@ -1573,6 +1587,7 @@
       mode: bad ? 'room' : mode,
       kind: inBuilding ? 'storeroom' : (t?.rooms.find((k) => k !== t.first && k !== t.passage) ?? 'chamber'),
       ...(inBuilding ? { prop: 'table', pw: 2, ph: 1 } : { prop: 'chest', pw: 1, ph: 1 }),
+      back: null,
     };
     designer = d;
     view.designing = id;
@@ -1583,6 +1598,7 @@
   function closeDesigner() {
     const d = designer;
     if (!d) return;
+    d.dispose();
     designer = null;
     view.designing = null;
     // (Shut while its tab is showing: Edit falls back to Places.)
@@ -1657,6 +1673,39 @@
   let ring = $state<{ x: number; y: number; r: number } | null>(null);
   /** The chip by what is in the hand (screen px). */
   let chip = $state<{ x: number; y: number; text: string } | null>(null);
+  /** On a touch screen, the place bar by the ghost (world ft), and where it is on screen (kept
+   * under the ghost as the map moves). */
+  let placeBar = $state.raw<BarAt>(null);
+  let placeBarAt = $state<{ x: number; y: number; r: number } | null>(null);
+  /** What places things by hand in the open tab: Objects, or Rooms on Props. */
+  function placer(): Placer | null {
+    if (scatterOn && scatterArmed) return scatterArmed.tool;
+    if (designer && shell.section === 'edit' && shell.tabs.edit === 'design' && designSettings.mode === 'prop') return designer;
+    return null;
+  }
+
+  /** The chip at a world point (none: null text). */
+  function chipAt(x: number, y: number, text: string | null) {
+    if (text === null) return (chip = null);
+    const [sx, sy] = view.cam.worldToScreen(x, y);
+    const b = container.getBoundingClientRect();
+    chip = { x: b.left + sx, y: b.top + sy, text };
+  }
+
+  $effect(() => {
+    const at = placeBar;
+    if (!at) return void (placeBarAt = null);
+    let raf = 0;
+    const tick = () => {
+      const [sx, sy] = view.cam.worldToScreen(at.x, at.y);
+      const b = container.getBoundingClientRect();
+      const next = { x: b.left + sx, y: b.top + sy, r: at.r * view.cam.ppf };
+      if (!placeBarAt || Math.abs(next.x - placeBarAt.x) + Math.abs(next.y - placeBarAt.y) + Math.abs(next.r - placeBarAt.r) > 0.5) placeBarAt = next;
+      raf = requestAnimationFrame(tick);
+    };
+    untrack(tick);
+    return () => cancelAnimationFrame(raf);
+  });
   let scatterArmed: { tool: ScatterTool } | null = null;
   const placedSprites = $derived.by(() => {
     const n: Record<string, number> = {};
@@ -1680,12 +1729,9 @@
         ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
       },
       ghost: (o, ok) => view.battle?.setGhost(o, ok),
-      chip: (x, y, text) => {
-        if (text === null) return (chip = null);
-        const [sx, sy] = view.cam.worldToScreen(x, y);
-        const b = container.getBoundingClientRect();
-        chip = { x: b.left + sx, y: b.top + sy, text };
-      },
+      chip: (x, y, text) => chipAt(x, y, text),
+      bar: (at) => (placeBar = at),
+      ppf: () => view.cam.ppf,
       battlemap: () => (view.battle?.stats.alpha ?? 0) > 0,
       loaded: (x, y) => !!view.battle?.loadedAt(x, y),
       hint: (t) => toast(t),
@@ -1698,12 +1744,17 @@
     scatterArmed = null;
     ring = null;
     chip = null;
+    placeBar = null;
   }
 
   // The ghost follows the settings as the panel changes them (kind, turn, size).
   $effect(() => {
     void [scatter.mode, scatter.kinds, scatter.kinds.length, scatter.rotation, scatter.scale, scatter.vary];
     scatterArmed?.tool.refresh();
+  });
+  $effect(() => {
+    void [designSettings.mode, designSettings.prop, designSettings.pw, designSettings.ph, designSettings.back];
+    untrack(() => designer)?.refresh();
   });
 
   /** Objects put down (or, null, taken away) and generated ones cleared, as one change. */
@@ -2306,7 +2357,7 @@
       scatter.mode = m;
       if (m === 'place' && scatter.kinds.length > 1) scatter.kinds = [scatter.kinds[0]];
     },
-    placing: () => (scatterOn && scatterArmed ? scatterArmed.tool : null),
+    placing: placer,
     buildCross: () => {
       if (buildMode !== 'crossing') return setBuildMode('crossing');
       const order = ['bridge', 'ford', 'ferry'] as const;
@@ -2346,7 +2397,7 @@
         el!.blur();
         return true;
       },
-      () => !!(scatterOn && scatterArmed?.tool.escape()),
+      () => !!placer()?.escape(),
       () => !!buildArmed?.tool.reset(),
       () => !!buildArmed?.works.reset(),
       () => (worksEditing ? ((worksEditing = null), true) : false),
@@ -2842,7 +2893,23 @@
     </div>
   {/if}
   {#if scatterOn && ring}<div class="ring" style="left: {ring.x - ring.r}px; top: {ring.y - ring.r}px; width: {ring.r * 2}px; height: {ring.r * 2}px" class:erase={scatter.mode === 'erase'}></div>{/if}
-  {#if scatterOn && chip}<div class="hand-chip" style="left: {chip.x}px; top: {chip.y}px">{chip.text}</div>{/if}
+  {#if (scatterOn || designer) && chip}<div class="hand-chip" style="left: {chip.x}px; top: {chip.y}px">{chip.text}</div>{/if}
+  {#if placeBar && placeBarAt}
+    {@const p = placer()}
+    {#if p}
+      <PlaceBar
+        at={placeBarAt}
+        holding={placeBar.holding}
+        turns={placeBar.turns}
+        quarter={p === designer}
+        onTurn={(d) => p.turn(d, false)}
+        onAuto={() => p.turnReset()}
+        onPut={() => p.confirm()}
+        onCancel={() => p.escape()}
+        onRemove={() => p.remove()}
+      />
+    {/if}
+  {/if}
   {#if hud}
     <Readout {hud} inside={!!inside} />
     {#if shell.stats}<DevStats {hud} {bench} {benchRunning} onBench={startBench} onClose={() => shell.setStats(false)} />{/if}

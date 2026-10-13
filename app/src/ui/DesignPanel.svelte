@@ -16,7 +16,7 @@
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
   import ItemPicker, { type PickItem } from './ItemPicker.svelte';
-  import { remember, remembered } from './shell/layout.svelte';
+  import { remember, remembered, shell } from './shell/layout.svelte';
 
   interface Props {
     designer: SiteDesigner;
@@ -48,7 +48,7 @@
     { key: 'corridor', label: 'Corridor', icon: 'corridor', kbd: 'H', hint: 'Paint the level’s passages.' },
     { key: 'rock', label: 'Rock', icon: 'rock', kbd: 'K', hint: 'Fill squares back with rock (props on them go too).' },
     { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none.' },
-    { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F', hint: 'Click to put the prop down; click a prop to take it away.' },
+    { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F', hint: 'Click to put the prop down, or click a prop to pick it up and click again to put it down. T turns it, Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Way down', icon: 'stairs', kbd: 'W', hint: 'Click a square for this level’s way down; the way up below follows.' },
   ];
   // A building's: walls are where rooms meet; its floors follow its storeys.
@@ -59,7 +59,7 @@
     { key: 'wall', label: 'Wall', icon: 'wall', kbd: 'L', hint: 'Draw a line along the grid across a room (or click by a grid line): the wall runs on to the room’s walls and splits it in two.' },
     { key: 'merge', label: 'Take a wall away', icon: 'eraser', kbd: 'E', hint: 'Click a wall between two rooms: they become one.' },
     { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. In an outside wall of the ground floor: a back door, again the front door, again none.' },
-    { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F', hint: 'Click to put the piece down (furniture, a prop or one of your pictures); click a piece to take it away.' },
+    { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F', hint: 'Click to put the piece down (furniture, a prop or one of your pictures), or click a piece to pick it up and click again to put it down. T turns it, Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Stairs', icon: 'stairs', kbd: 'W', hint: 'Drag out the stair block (1 to 3 squares each way): the same squares on every floor it reaches. Furniture there goes.' },
   ];
   const cap = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
@@ -132,7 +132,9 @@
     const kind = String(id);
     const p = pieces.find((x) => x.kind === kind);
     const n = kind.startsWith('s:') ? Math.max(1, Math.min(6, Math.ceil(sprites[kind.slice(2)]?.size || 1))) : 1;
-    settings = { ...settings, mode: 'prop', prop: kind, pw: p?.w ?? n, ph: p?.h ?? n };
+    settings = { ...settings, mode: 'prop', prop: kind, pw: p?.w ?? n, ph: p?.h ?? n, back: null };
+    // (A phone's sheet goes down to its tools: the map shows where it goes.)
+    if (shell.phone) shell.snap = 'peek';
   }
 
   const saveWhy = $derived(blocking ? 'Fix the problems marked ✕ first' : !now.dirty ? 'Nothing new to save' : 'Save the design (Ctrl+S)');
@@ -180,7 +182,8 @@
         <span>Size</span>
         <input class="ws-input" type="number" min="1" max="6" bind:value={settings.pw} aria-label="Across" /> ×
         <input class="ws-input" type="number" min="1" max="6" bind:value={settings.ph} aria-label="Down" />
-        <button class="ws-icon-btn" title="Turn" aria-label="Turn" onclick={() => (settings = { ...settings, pw: settings.ph, ph: settings.pw })}><Icon name="reset" size={16} /></button>
+        <button class="ws-icon-btn" title="Turn a quarter clockwise (T)" aria-label="Turn" onclick={() => designer.turn(1, false)}><Icon name="rotate-cw" size={16} /></button>
+        {#if settings.back !== null}<button class="ws-btn quiet" title="Face the way it would by itself (Z)" onclick={() => (settings.back = null)}>Auto</button>{/if}
       </div>
     {/if}
 

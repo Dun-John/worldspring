@@ -90,13 +90,42 @@ export function propAt(d: SiteDesign, li: number, x: number, y: number): number 
   return d.levels[li].items.findIndex((f) => !WAYS.includes(f.kind) && covers(f, x, y));
 }
 
-/** Put a prop down where its squares are floor and free; false if they aren't. */
-export function addProp(d: SiteDesign, li: number, kind: string, x: number, y: number, w: number, h: number): boolean {
+/** Whether a piece fits at x, y (w × h squares) on a level: `bad` off the grid, off the floor, on
+ * another piece (but `ignore`, the one being moved) or on a building's stair block; `doorway` where it
+ * fits but stands in a doorway, which the design check will complain of (in a building any piece,
+ * underground one that `blocks` the way); else `ok`. */
+export function fits(d: SiteDesign, li: number, x: number, y: number, w: number, h: number, ignore = -1, blocks = true): 'ok' | 'doorway' | 'bad' {
   const lv = d.levels[li];
-  if (x < 0 || y < 0 || x + w > d.nx || y + h > d.ny) return false;
+  if (!lv || x < 0 || y < 0 || x + w > d.nx || y + h > d.ny) return 'bad';
   const cells = decode(lv.cells, d.nx * d.ny);
-  for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) if (cells[j * d.nx + i] < 0 || lv.items.some((f) => covers(f, i, j))) return false;
-  lv.items.push({ kind, x, y, w, h });
+  const st = isBuilding(d) && lv.has_stairs ? d.stairs : undefined;
+  for (let j = y; j < y + h; j++) {
+    for (let i = x; i < x + w; i++) {
+      if (cells[j * d.nx + i] < 0 || lv.items.some((f, k) => k !== ignore && covers(f, i, j))) return 'bad';
+      if (st && i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3]) return 'bad';
+    }
+  }
+  if (!isBuilding(d) && !blocks) return 'ok';
+  for (const [dx, dy, side] of lv.doors) {
+    const e = doorEdge(dx, dy, side);
+    if ([e.a, e.b].some(([i, j]) => i >= x && i < x + w && j >= y && j < y + h)) return 'doorway';
+  }
+  return 'ok';
+}
+
+/** Put a piece down where it fits (in a doorway too: the check says so); false if it doesn't. */
+export function addProp(d: SiteDesign, li: number, item: Item): boolean {
+  if (fits(d, li, item.x, item.y, item.w, item.h) === 'bad') return false;
+  d.levels[li].items.push(item);
+  return true;
+}
+
+/** The piece at `index` moved, turned or changed (in its place in the list, so the rest build as
+ * before); false if it doesn't fit there. */
+export function moveProp(d: SiteDesign, li: number, index: number, next: Item): boolean {
+  const lv = d.levels[li];
+  if (!lv?.items[index] || fits(d, li, next.x, next.y, next.w, next.h, index) === 'bad') return false;
+  lv.items[index] = next;
   return true;
 }
 
