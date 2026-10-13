@@ -153,8 +153,8 @@ vec3 surfaceColor(int s, vec2 w) {
 uniform vec4 uStairs[32];
 uniform float uStairN;
 
-// A flight of steps: treads square across the nearest flight's axis (a nosing line on each, lit
-// at its front edge and shaded towards the riser above), each tread laid in a row of stone
+// A flight of steps: treads square across the nearest flight's axis (a bold nosing line on each,
+// lit at its front edge and shaded towards the riser above), each tread laid in a row of stone
 // blocks. Fades out where the treads crowd on screen and where the ground is a cliff.
 vec3 treads(vec3 col, vec2 q, float steep) {
     float best = 1e9;
@@ -190,12 +190,14 @@ vec3 treads(vec3 col, vec2 q, float steep) {
     float joint = min(fract(across), 1.0 - fract(across)) * 0.55 * uPxPerSq;
     col *= 0.92 + 0.14 * hash21(vec2(floor(x), floor(across)));
     col = mix(col, col * 0.78, (1.0 - smoothstep(0.3, 1.0, joint)) * 0.5 * show);
-    // Lit at the front (downhill) edge, shaded towards the riser of the tread above.
-    col = mix(col, col * 1.12, (1.0 - smoothstep(0.0, 0.3, fr)) * 0.6 * show);
-    col = mix(col, col * 0.7, smoothstep(0.6, 1.0, fr) * 0.7 * show);
+    // Lit at the front (downhill) edge, in the shadow of the riser above at the back.
+    col = mix(col, col * 1.15, (1.0 - smoothstep(0.0, 0.25, fr)) * 0.7 * show);
+    col = mix(col, col * 0.6, smoothstep(0.55, 1.0, fr) * 0.8 * show);
+    // A bold nosing: about a twentieth of the tread each side, 1-3 px.
     float d = min(fr, 1.0 - fr) * px;
-    float nosing = 1.0 - smoothstep(0.4, 1.3, d);
-    return mix(col, INK, nosing * 0.7 * show);
+    float hw = clamp(0.05 * px, 0.9, 3.0);
+    float nosing = 1.0 - smoothstep(hw - 0.5, hw + 0.5, d);
+    return mix(col, INK, nosing * 0.85 * show);
 }
 
 void main() {

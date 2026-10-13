@@ -32,11 +32,17 @@ pub const SURVEY_FROM: f64 = 0.09;
 /// The smallest settlement with stepped streets.
 pub const STAIR_TIER: Tier = Tier::City;
 const STATION: f64 = 5.0;
-/// The shortest landing at a flight's end (ft), and the room left past the streets that meet it.
-const LANDING_MIN: f64 = 6.0;
-const CLEAR: f64 = 3.0;
-/// An alley's landing at its ends and either side of an alley meeting it: half its width and `CLEAR`.
+/// The shortest landing at a flight's end (ft), and the room left past the streets that meet it:
+/// the steps come down to the street crossing them.
+const LANDING_MIN: f64 = 2.0;
+const CLEAR: f64 = 0.5;
+/// How far steps keep off a plaza (ft).
+const PLAZA_CLEAR: f64 = 6.0;
+/// An alley's landing either side of an alley meeting it: half its width and `CLEAR` (its own ends
+/// lie on the edge of the street they meet: `LANDING_MIN` there).
 const ALLEY_LANDING: f64 = CLEAR + super::ALLEY_HALF_FT;
+/// A flight goes on down the foot of its slope (and up over its brow) while the grade is this.
+const TOE: f64 = 0.08;
 const GRID: f64 = 80.0;
 
 /// What a street is, for the survey.
@@ -165,13 +171,13 @@ pub(super) fn profiles(site: &Site, pos: &[P], pieces: &Pieces, l: &Layout, g_mi
             meet.entry(g).or_default().push((Owner::Road(r), s[0], s[1], 0.5 * w));
         }
     }
-    let plazas: Vec<([f64; 4], &Vec<P>)> = l.plazas.iter().map(|p| (bbox(p, LANDING_MIN), p)).collect();
+    let plazas: Vec<([f64; 4], &Vec<P>)> = l.plazas.iter().map(|p| (bbox(p, PLAZA_CLEAR), p)).collect();
     let bridges: Vec<([f64; 4], &Vec<P>)> = l.bridges.iter().map(|p| (bbox(p, 0.0), p)).collect();
     let level_at = |p: P| {
         site.wet(p)
             || site.near_river(p, 10.0)
             || bridges.iter().any(|(bb, poly)| inside(bb, p) && contains(poly, p))
-            || plazas.iter().any(|(bb, poly)| inside(bb, p) && (contains(poly, p) || (0..poly.len()).any(|k| seg_dist(p, poly[k], poly[(k + 1) % poly.len()]) < LANDING_MIN)))
+            || plazas.iter().any(|(bb, poly)| inside(bb, p) && (contains(poly, p) || (0..poly.len()).any(|k| seg_dist(p, poly[k], poly[(k + 1) % poly.len()]) < PLAZA_CLEAR)))
     };
     let mut out = Vec::new();
 
@@ -248,7 +254,7 @@ pub(super) fn profiles(site: &Site, pos: &[P], pieces: &Pieces, l: &Layout, g_mi
             p.level[j] = p.g[j] >= g_min && level_at(along(&p.line, &cum, p.s[j]).0);
         }
         if alley {
-            p.ends = [ALLEY_LANDING; 2];
+            p.ends = [LANDING_MIN; 2];
             // Either side of an alley ending on this one.
             let (a, b) = (pts[0], pts[pts.len() - 1]);
             let (c0, c1) = (cell([a[0].min(b[0]) - 1.0, a[1].min(b[1]) - 1.0]), cell([a[0].max(b[0]) + 1.0, a[1].max(b[1]) + 1.0]));
@@ -327,13 +333,31 @@ pub fn runs(p: &Profile, prm: &StairParams) -> Vec<(f64, f64, f64)> {
     let mut cur: Option<(usize, usize)> = None;
     for k in 0..=n {
         let on = k < n && !p.level[k] && p.g[k] >= if cur.is_some() { prm.g_off } else { prm.g_on };
+        let stepped = |j: usize, g: f64| !p.level[j] && p.g[j] >= g;
         if on {
-            cur = Some((cur.map_or(k, |c| c.0), k));
-        } else if let Some((a, b)) = cur.take() {
+            // Steps start at `g_on` from either side: back down to `g_off` behind.
+            cur = Some(cur.map_or_else(
+                || {
+                    let mut a = k;
+                    while a > 0 && stepped(a - 1, prm.g_off) {
+                        a -= 1;
+                    }
+                    (a, k)
+                },
+                |c| (c.0, k),
+            ));
+        } else if let Some((mut a, mut b)) = cur.take() {
+            // Down the foot of the slope and up over its brow.
+            while a > 0 && stepped(a - 1, TOE) {
+                a -= 1;
+            }
+            while b + 1 < n && stepped(b + 1, TOE) {
+                b += 1;
+            }
             let (s0, s1) = ((p.s[a] - 0.5 * STATION).max(0.0), (p.s[b] + 0.5 * STATION).min(p.len));
             // A level gap of a station or less joins two runs.
             match spans.last_mut() {
-                Some(last) if s0 - last.1 <= STATION => last.1 = s1,
+                Some(last) if s0 - last.1 <= STATION => last.1 = last.1.max(s1),
                 _ => spans.push((s0, s1)),
             }
         }
@@ -348,8 +372,8 @@ pub fn runs(p: &Profile, prm: &StairParams) -> Vec<(f64, f64, f64)> {
         .collect()
 }
 
-/// The tallest riser drawn and the deepest tread (ft).
-const RISER: f64 = 0.625;
+/// The depth of a tread drawn (ft): two to a square, whatever the rise (bold enough to read at
+/// a battlemap's scale).
 const TREAD: f64 = 2.5;
 
 /// A stretch of a flight as it is drawn: its axis from the bottom up (world ft), the width it
@@ -365,8 +389,7 @@ pub struct Axis {
     pub tread: f64,
 }
 
-/// The axes of every flight: treads square across them, as many as keep each riser within
-/// `RISER` and each tread within `TREAD`.
+/// The axes of every flight: treads square across them, each as near `TREAD` deep as fits.
 pub fn axes(stairs: &[Stair]) -> Vec<Axis> {
     let mut out = Vec::new();
     let mut k = 0;
@@ -375,7 +398,7 @@ pub fn axes(stairs: &[Stair]) -> Vec<Axis> {
         let flight = &stairs[k..k + n];
         k += n;
         let first = &flight[0];
-        let tread = |len: f64| len / (first.rise as f64 / RISER).ceil().max((len / TREAD).ceil()).max(1.0);
+        let tread = |len: f64| len / crate::core::round(len / TREAD).max(1.0);
         if n == 1 {
             let len: f64 = first.pts.windows(2).map(|w| dist(w[0], w[1])).sum();
             let t = tread(len);
