@@ -37,6 +37,9 @@ fn main() {
     let flights = l.stairs.last().map_or(0, |s| s.flight + 1);
     println!("stairs: {flights} flights, {} pieces, hash {:016x}", l.stairs.len(), worldgen::core::hash::fnv64(format!("{:?}", l.stairs).as_bytes()));
     let mut chunk_bytes: Vec<u8> = Vec::new();
+    // The same chunks with steps paved as cobbles again and their axes left out (equal to the hash
+    // before steps were drawn).
+    let (mut folded_bytes, mut stair_squares): (Vec<u8>, usize) = (Vec::new(), 0);
     let lv = g.max_level;
     let size = g.tile_size_ft(lv);
     let (cx, cy) = ((s.x / size) as i64, (s.y / size) as i64);
@@ -63,8 +66,16 @@ fn main() {
             let ms = t.elapsed().as_secs_f64() * 1e3;
             let t = Instant::now();
             let bytes = worldgen::battlemap::pack(&world, &c);
-            chunk_bytes.extend_from_slice(&bytes);
             pack_ms += t.elapsed().as_secs_f64() * 1e3;
+            chunk_bytes.extend_from_slice(&bytes);
+            let mut f = c;
+            for v in f.surface.iter_mut().filter(|v| **v == worldgen::battlemap::Surface::Stairs) {
+                *v = worldgen::battlemap::Surface::Cobble;
+                stair_squares += 1;
+            }
+            f.structures.retain(|s| s.kind != worldgen::battlemap::ShapeKind::Stairs);
+            folded_bytes.extend_from_slice(&worldgen::battlemap::pack(&world, &f));
+            let c = f;
             chunk_ms += ms;
             worst = worst.max(ms);
             n += 1;
@@ -73,6 +84,7 @@ fn main() {
         }
     }
     println!("chunks hash {:016x}", worldgen::core::hash::fnv64(&chunk_bytes));
+    println!("chunks hash with steps as cobbles {:016x} ({stair_squares} squares of steps)", worldgen::core::hash::fnv64(&folded_bytes));
     let n = n as f64;
     println!(
         "{n} chunks: refine {:.1} ms, battlemap {:.1} ms (worst {worst:.1}), pack {:.2} ms, {:.0} objects, {:.0} KB avg",

@@ -2,7 +2,8 @@
 // Battlemap ground, painterly: mottled surfaces with organic square boundaries, hillshade,
 // elevation drawn from the smooth height field (5-ft tier contours; cliff-steep ground painted
 // as rock faces with an inked top edge and a cast shadow below), water with depth/ripples/inked
-// shore, lava glow, and the 5-ft grid. Gameplay tiers stay per-square in the data.
+// shore, lava glow, flights of steps (treads square across their streets), and the 5-ft grid.
+// Gameplay tiers stay per-square in the data.
 //
 // uData:    u8 (surface, edge bits, tier & 255, 0) per square (texelFetch).
 // uHeights: f16 (h - uBase, water - uBase) per square center, with a one-square halo ring
@@ -28,7 +29,7 @@ uniform float uSea;
 const float N = 128.0;
 const vec3 INK = vec3(0.12, 0.10, 0.08);
 
-const vec3 SURF[19] = vec3[19](
+const vec3 SURF[20] = vec3[20](
     vec3(0.40, 0.54, 0.25), // grass
     vec3(0.31, 0.35, 0.19), // forest floor
     vec3(0.64, 0.60, 0.36), // dry grass
@@ -47,7 +48,8 @@ const vec3 SURF[19] = vec3[19](
     vec3(0.60, 0.48, 0.33), // road (packed earth)
     vec3(0.55, 0.40, 0.25), // planks
     vec3(0.58, 0.50, 0.38), // under a building (roofs are drawn as vectors)
-    vec3(0.66, 0.62, 0.36)  // field
+    vec3(0.66, 0.62, 0.36), // field
+    vec3(0.62, 0.59, 0.53)  // stairs (dressed stone)
 );
 
 
@@ -127,6 +129,13 @@ vec3 surfaceColor(int s, vec2 w) {
         float seam = 1.0 - smoothstep(0.0, 0.08, min(fract(p), 1.0 - fract(p)));
         col *= 0.85 + 0.25 * hash21(vec2(floor(p), floor(w.x * 0.4 + hash21(vec2(floor(p), 3.0)) * 7.0)));
         col = mix(col, INK, seam * 0.7);
+    } else if (s == 19) {
+        // Dressed stone: coarse slabs with faint joints.
+        vec2 c = w * vec2(1.1, 1.6);
+        c.x += 0.5 * mod(floor(c.y), 2.0);
+        vec2 g = fract(c) - 0.5;
+        float slab = smoothstep(0.5, 0.44, max(abs(g.x), abs(g.y)));
+        col = mix(col * 0.8, col * (0.94 + 0.12 * hash21(floor(c))), slab);
     } else if (s == 18) {
         // Crop rows.
         float row = abs(fract(w.y * 0.9 + 0.2 * vnoise(w * 0.3)) - 0.5);
@@ -137,6 +146,56 @@ vec3 surfaceColor(int s, vec2 w) {
         col = mix(col, col * 0.82, 1.0 - smoothstep(0.0, 0.05, c));
     }
     return col;
+}
+
+// Flights of steps crossing the chunk: per axis (bottom, top) and (half width, start up the
+// flight, tread depth, 0), in squares.
+uniform vec4 uStairs[32];
+uniform float uStairN;
+
+// A flight of steps: treads square across the nearest flight's axis (a nosing line on each, lit
+// at its front edge and shaded towards the riser above), each tread laid in a row of stone
+// blocks. Fades out where the treads crowd on screen and where the ground is a cliff.
+vec3 treads(vec3 col, vec2 q, float steep) {
+    float best = 1e9;
+    vec4 axis = vec4(0.0);
+    vec4 more = vec4(0.0);
+    for (int i = 0; i < 16; i++) {
+        if (float(i) >= uStairN) break;
+        vec4 a = uStairs[2 * i];
+        vec4 m = uStairs[2 * i + 1];
+        vec2 ba = a.zw - a.xy;
+        float len = max(length(ba), 1e-4);
+        vec2 u = ba / len;
+        vec2 pa = q - a.xy;
+        float t = dot(pa, u);
+        // Outside the axis's ends or its width (a little slack for the warped squares).
+        float out_ = max(max(-t, t - len), abs(pa.x * u.y - pa.y * u.x) - m.x);
+        if (out_ < best) {
+            best = out_;
+            axis = a;
+            more = m;
+        }
+    }
+    if (best > 0.6) return col;
+    vec2 u = normalize(axis.zw - axis.xy);
+    vec2 pa = q - axis.xy;
+    float x = (more.y + dot(pa, u)) / more.z;
+    float fr = fract(x);
+    // Squares per tread on screen: fade the treads out below a few pixels.
+    float px = more.z * uPxPerSq;
+    float show = smoothstep(2.5, 5.0, px) * (1.0 - steep);
+    // Blocks across the tread, offset tread by tread.
+    float across = (pa.x * u.y - pa.y * u.x) / 0.55 + hash21(vec2(floor(x), 7.0)) * 3.0;
+    float joint = min(fract(across), 1.0 - fract(across)) * 0.55 * uPxPerSq;
+    col *= 0.92 + 0.14 * hash21(vec2(floor(x), floor(across)));
+    col = mix(col, col * 0.78, (1.0 - smoothstep(0.3, 1.0, joint)) * 0.5 * show);
+    // Lit at the front (downhill) edge, shaded towards the riser of the tread above.
+    col = mix(col, col * 1.12, (1.0 - smoothstep(0.0, 0.3, fr)) * 0.6 * show);
+    col = mix(col, col * 0.7, smoothstep(0.6, 1.0, fr) * 0.7 * show);
+    float d = min(fr, 1.0 - fr) * px;
+    float nosing = 1.0 - smoothstep(0.4, 1.3, d);
+    return mix(col, INK, nosing * 0.7 * show);
 }
 
 void main() {
@@ -156,7 +215,7 @@ void main() {
     bool onRoad = cov > 0.5;
     if (onRoad) {
         surf = road.y < 0.25 ? 15 : (road.y < 0.75 ? 14 : 16);
-    } else if ((surf >= 14 && surf <= 16 && road.x > 0.01) || (surf == 17 && dataAt(sq).a < 0.5)) {
+    } else if (((surf >= 14 && surf <= 16 || surf == 19) && road.x > 0.01) || (surf == 17 && dataAt(sq).a < 0.5)) {
         // Beside a road or building: the ground of a neighbouring square that is neither
         // (town streets and plazas away from roads keep their paving).
         int natural = 9;
@@ -165,7 +224,7 @@ void main() {
             for (int dx = -1; dx <= 1; dx++) {
                 int s = int(dataAt(sq + ivec2(dx, dy)).r + 0.5);
                 if ((s < 14 || s == 18) && natural == 9) natural = s;
-                paved = paved || s == 14;
+                paved = paved || s == 14 || s == 19;
             }
         }
         // In town the ground beside a road is the paved street, not dirt.
@@ -187,7 +246,9 @@ void main() {
     // Hillshade from square heights (NW light).
     float hx = heightsAt(q + vec2(0.5, 0.0)).x - heightsAt(q - vec2(0.5, 0.0)).x;
     float hy = heightsAt(q + vec2(0.0, 0.5)).x - heightsAt(q - vec2(0.0, 0.5)).x;
-    vec3 n = normalize(vec3(-hx / 5.0 * 1.6, -hy / 5.0 * 1.6, 1.0));
+    // (Steps are level treads: their slope shades less.)
+    float relief = surf == 19 ? 0.5 : 1.6;
+    vec3 n = normalize(vec3(-hx / 5.0 * relief, -hy / 5.0 * relief, 1.0));
     vec3 L = normalize(vec3(-1.0, -1.0, 1.4));
     col *= clamp(0.35 + 0.65 * dot(n, L) / L.z, 0.45, 1.25);
 
@@ -215,7 +276,8 @@ void main() {
     float fr = fract(t);
     // Horizontal distance (squares) to the nearest 5-ft tier boundary.
     float distSq = min(fr, 1.0 - fr) * 5.0 / max(slope, 0.02) / 5.0;
-    float steep = smoothstep(0.45, 0.8, slope);
+    // Steps climb steeper ground before it is a cliff.
+    float steep = surf == 19 ? smoothstep(1.0, 1.4, slope) : smoothstep(0.45, 0.8, slope);
     if (depth <= 0.0) {
         if (steep > 0.0) {
             // Cliff face: rock with striations running down the fall line.
@@ -226,11 +288,13 @@ void main() {
             float lit = clamp(0.55 + 0.6 * dot(-dir, normalize(vec2(-1.0, -1.0))), 0.35, 1.15);
             col = mix(col, rock * lit, steep * 0.9);
         }
-        // Tier contour: bold ink on cliffs, thin dashed line on gentle slopes.
+        // Tier contour: bold ink on cliffs, thin dashed line on gentle slopes (on steps only the
+        // cliff's: a contour would cut across the treads).
         float lineW = mix(0.035, 0.07, steep);
         float line = 1.0 - smoothstep(lineW, lineW + aa * 1.3, distSq);
         float dash = mix(step(0.35, fract((w.x + w.y) * 1.5)), 1.0, steep);
-        col = mix(col, INK, line * dash * mix(0.4, 0.85, steep));
+        col = mix(col, INK, line * dash * mix(0.4, 0.85, steep) * (surf == 19 ? steep : 1.0));
+        if (surf == 19) col = treads(col, q, steep);
     }
 
     // 5-ft grid.

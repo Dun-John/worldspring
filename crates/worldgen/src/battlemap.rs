@@ -62,11 +62,13 @@ pub enum Surface {
     Roof,
     /// Cropland.
     Field,
+    /// A flight of steps on a steep paved street (cities and up).
+    Stairs,
 }
 
 impl Surface {
     pub fn is_road(self) -> bool {
-        matches!(self, Surface::Cobble | Surface::Road | Surface::Planks)
+        matches!(self, Surface::Cobble | Surface::Road | Surface::Planks | Surface::Stairs)
     }
 }
 
@@ -389,6 +391,10 @@ pub enum ShapeKind {
     /// A ferry: a rope from landing to landing, a jetty at each end and the raft; size is the
     /// raft's width (squares).
     Ferry = 7,
+    /// A flight of steps' axis from the bottom up, then (how far up the flight its bottom lies,
+    /// the depth of a tread); size is the width it covers (squares). Every chunk it crosses has
+    /// it: the ground draws the treads square across it.
+    Stairs = 8,
 }
 
 /// Object mix per biome: (kind, count per 100 squares, allowed in shallow water).
@@ -824,6 +830,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Ground kept clear round a way underground (its own ground stays: graveyard grass, ruin
     // dirt, street cobbles).
     let mut ent_h = vec![false; HS * HS];
+    // Squares on a flight of steps (only where a flight comes near the chunk).
+    let mut stair_h: Option<Vec<bool>> = None;
     let mut refs: Vec<(u32, u32)> = Vec::new();
     let mut polys: Vec<(Vec<[f32; 2]>, u8, u8, u8)> = Vec::new();
     let mut shapes: Vec<VectorShape> = Vec::new();
@@ -1013,6 +1021,49 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                             urb_h[h] = URBAN_STREET;
                         }
                     }
+                }
+            }
+        }
+        // Flights of steps: the squares of the street under them, square at their ends (a round
+        // end would reach past the landing), never on a plaza (the street stamp paves over plazas).
+        for st in l.stairs.iter().filter(|_| l.tier >= crate::town::stairs::STAIR_TIER) {
+            let half = 0.5 * st.width;
+            let last = st.pts.len() - 2;
+            for (k, seg) in st.pts.windows(2).enumerate() {
+                let b = (seg[0][0].min(seg[1][0]) - half, seg[0][1].min(seg[1][1]) - half, seg[0][0].max(seg[1][0]) + half, seg[0][1].max(seg[1][1]) + half);
+                if !overlaps(b) {
+                    continue;
+                }
+                let (i0, j0, i1, j1) = range(b);
+                if i1 < 0.0 || j1 < 0.0 {
+                    continue;
+                }
+                let plazas: Vec<&Vec<[f64; 2]>> = l.plazas.iter().filter(|p| {
+                    let q = bbox(p);
+                    q.0 <= b.2 && q.2 >= b.0 && q.1 <= b.3 && q.3 >= b.1
+                }).collect();
+                let (u, len) = (crate::town::geom::sub(seg[1], seg[0]), crate::town::geom::dist(seg[0], seg[1]).max(1e-9));
+                for j in j0..=j1 as usize {
+                    for i in i0..=i1 as usize {
+                        let c = center(i, j);
+                        let t = crate::town::geom::dot(crate::town::geom::sub(c, seg[0]), u) / len;
+                        if (k == 0 && t < 0.0) || (k == last && t > len) || crate::town::geom::seg_dist(c, seg[0], seg[1]) >= half {
+                            continue;
+                        }
+                        if !plazas.iter().any(|p| crate::town::geom::contains(p, c)) {
+                            stair_h.get_or_insert_with(|| vec![false; HS * HS])[j * HS + i] = true;
+                        }
+                    }
+                }
+            }
+        }
+        if l.tier >= crate::town::stairs::STAIR_TIER && !l.stairs.is_empty() {
+            for ax in crate::town::stairs::axes(&l.stairs) {
+                let half = 0.5 * ax.width;
+                let b = (ax.a[0].min(ax.b[0]) - half, ax.a[1].min(ax.b[1]) - half, ax.a[0].max(ax.b[0]) + half, ax.a[1].max(ax.b[1]) + half);
+                if overlaps(b) {
+                    let pts = vec![local(&ax.a), local(&ax.b), [(ax.s0 / SQUARE_FT) as f32, (ax.tread / SQUARE_FT) as f32]];
+                    shapes.push(VectorShape { kind: ShapeKind::Stairs, size: (ax.width / SQUARE_FT) as f32, pts });
                 }
             }
         }
@@ -1444,6 +1495,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 // A village green and a graveyard keep the ground round them (no odd patch
                 // in a forest); a town's plaza is paved.
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
+                URBAN_STREET if stair_h.as_ref().is_some_and(|s| s[(k / SQ + 1) * HS + k % SQ + 1]) => chunk.surface[k] = Surface::Stairs,
                 URBAN_STREET => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_FIELD => chunk.surface[k] = Surface::Field,
                 URBAN_DECK => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
@@ -2614,7 +2666,8 @@ fn compute_edges(c: &mut Chunk) {
 ///   corner-tower side u8 (squares), then n × (x, y) f32 in
 ///   chunk squares (heights above are the ground; roofs are drawn from these outlines)
 ///   structures: count u32, then per shape: kind u8 (`ShapeKind`), n u8, 0, 0, size f32,
-///   then n × (x, y) f32 in chunk squares (drawn as vectors; decks are not in the road halo)
+///   then n × (x, y) f32 in chunk squares (drawn as vectors; decks are not in the road halo; a
+///   flight of steps' third point is its start up the flight and its tread, in squares)
 ///   raised u8[SQ² × 2]: per square, height (ft, capped 255) of what stands on the drawn
 ///   ground (roof, wall walk, tower top, deck) and its `URBAN_*` kind
 ///   sprites: count u32, then per uploaded sprite (object kind `SPRITE_KIND` + index): id length

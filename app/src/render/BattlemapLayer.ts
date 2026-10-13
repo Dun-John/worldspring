@@ -133,7 +133,10 @@ const SURFACES = [
   'bridge deck',
   'building',
   'field (crops)',
+  'stairs',
 ];
+/** The most flights of steps' axes one chunk's ground draws treads for (`ground.frag`). */
+const STAIR_AXES = 16;
 /** `URBAN_*` kinds that stand on the ground (battlemap.rs), as hover labels. */
 const RAISED: Record<number, string> = { 6: 'bridge deck', 7: 'wall walk', 8: 'tower top' };
 
@@ -621,12 +624,23 @@ export class BattlemapLayer {
     const textures = [new Texture({ source: dataSrc }), new Texture({ source: hSrc })];
 
     const noiseOff = new Float32Array([((cx * SQ) % 512 + 512) % 512, ((cy * SQ) % 512 + 512) % 512]);
+    // Flights of steps crossing the chunk (shape 8): per axis (bottom, top) and (half width,
+    // start up the flight, tread, 0) in squares, for the ground's treads.
+    const stairs = new Float32Array(STAIR_AXES * 8);
+    let nStairs = 0;
+    for (const s of c.shapes) {
+      if (s.kind !== 8 || nStairs === STAIR_AXES) continue;
+      const p = s.pts.map((v) => v / PX);
+      stairs.set([p[0], p[1], p[2], p[3], (0.5 * s.size) / PX, p[4], p[5], 0], nStairs++ * 8);
+    }
     const uniforms = new UniformGroup({
       uBase: { value: base, type: 'f32' },
       uAlpha: { value: 1, type: 'f32' },
       uPxPerSq: { value: 16, type: 'f32' },
       uNoiseOff: { value: noiseOff, type: 'vec2<f32>' },
       uSea: { value: c.sea, type: 'f32' },
+      uStairs: { value: stairs, type: 'vec4<f32>', size: STAIR_AXES * 2 },
+      uStairN: { value: nStairs, type: 'f32' },
     });
     const ground = new Mesh({
       geometry: this.quad,

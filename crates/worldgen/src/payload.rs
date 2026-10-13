@@ -282,6 +282,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 let w = if gate { 30.0 } else { 22.0 };
                 lines.push(vec![[t[0], t[1], w, 1.0], [t[0] + 0.01, t[1], w, 1.0]]);
             }
+            // Flights of steps: hatched ink (style 2) along each axis, over the street's whole width.
+            for ax in crate::town::stairs::axes(&l.stairs) {
+                lines.push(vec![[ax.a[0], ax.a[1], ax.width, 2.0], [ax.b[0], ax.b[1], ax.width, 2.0]]);
+            }
         }
     }
     let n = attrs.len() as u32;

@@ -348,6 +348,60 @@ pub fn runs(p: &Profile, prm: &StairParams) -> Vec<(f64, f64, f64)> {
         .collect()
 }
 
+/// The tallest riser drawn and the deepest tread (ft).
+const RISER: f64 = 0.625;
+const TREAD: f64 = 2.5;
+
+/// A stretch of a flight as it is drawn: its axis from the bottom up (world ft), the width it
+/// covers, how far up the flight its bottom lies, and the depth of a tread (ft). A street's
+/// pieces side by side (one stretch of a mesh edge, straight and parallel) make one axis over
+/// their whole width; an alley or approach makes one per segment of its line.
+#[derive(Clone, Copy, Debug)]
+pub struct Axis {
+    pub a: P,
+    pub b: P,
+    pub width: f64,
+    pub s0: f64,
+    pub tread: f64,
+}
+
+/// The axes of every flight: treads square across them, as many as keep each riser within
+/// `RISER` and each tread within `TREAD`.
+pub fn axes(stairs: &[Stair]) -> Vec<Axis> {
+    let mut out = Vec::new();
+    let mut k = 0;
+    while k < stairs.len() {
+        let n = stairs[k..].iter().take_while(|s| s.flight == stairs[k].flight).count();
+        let flight = &stairs[k..k + n];
+        k += n;
+        let first = &flight[0];
+        let tread = |len: f64| len / (first.rise as f64 / RISER).ceil().max((len / TREAD).ceil()).max(1.0);
+        if n == 1 {
+            let len: f64 = first.pts.windows(2).map(|w| dist(w[0], w[1])).sum();
+            let t = tread(len);
+            let mut s0 = 0.0;
+            for w in first.pts.windows(2) {
+                out.push(Axis { a: w[0], b: w[1], width: first.width, s0, tread: t });
+                s0 += dist(w[0], w[1]);
+            }
+            continue;
+        }
+        let (a, b) = (first.pts[0], *first.pts.last().unwrap());
+        let u = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
+        let nrm = [-u[1], u[0]];
+        let (mut t0, mut t1, mut o0, mut o1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for s in flight {
+            for p in &s.pts {
+                let (t, o) = (dot(sub(*p, a), u), dot(sub(*p, a), nrm));
+                (t0, t1, o0, o1) = (t0.min(t), t1.max(t), o0.min(o - 0.5 * s.width), o1.max(o + 0.5 * s.width));
+            }
+        }
+        let mid = mul(nrm, 0.5 * (o0 + o1));
+        out.push(Axis { a: add(add(a, mul(u, t0)), mid), b: add(add(a, mul(u, t1)), mid), width: o1 - o0, s0: 0.0, tread: tread(t1 - t0) });
+    }
+    out
+}
+
 /// The flights of steps on these streets, each piece from the bottom up; pieces of one flight
 /// (the strips and main street of one stretch of edge) share its number.
 pub fn flights(profiles: &[Profile], prm: &StairParams) -> Vec<Stair> {

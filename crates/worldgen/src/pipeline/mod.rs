@@ -139,12 +139,34 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
     {
         let mut h = crate::core::hash::Fnv64::default();
         let mut n = 0;
+        // The highest flight's settlement and middle (the first highest).
+        let mut top: Option<(usize, f32, [f64; 2])> = None;
         for si in (0..ex.t0.settlements.len()).filter(|&i| ex.t0.settlements[i].tier >= crate::town::stairs::STAIR_TIER) {
             let l = crate::town::layout(&ex.world, &ex.t0, si);
             h.write(format!("{si} {:?}", l.stairs).as_bytes());
             n += l.stairs.len();
+            for st in &l.stairs {
+                if top.is_none_or(|t| st.rise > t.1) {
+                    top = Some((si, st.rise, crate::town::geom::lerp(st.pts[0], st.pts[st.pts.len() - 1], 0.5)));
+                }
+            }
         }
         writeln!(out, "stairs {n} {:016x}", h.finish()).unwrap();
+        // Drawn: the battlemap round its middle and the tile above it (the hatch).
+        if let Some((si, _, p)) = top {
+            let g = ex.world.geom.clone();
+            for level in [max_level, max_level - 2] {
+                let size = g.tile_size_ft(level);
+                let k = TileKey::surface(level, (p[0] / size) as u32, (p[1] / size) as u32);
+                let bytes = if level == max_level {
+                    let chunk = ex.battlemap(k);
+                    crate::battlemap::pack(&ex.world, &chunk)
+                } else {
+                    ex.terrain_packed(k)
+                };
+                writeln!(out, "stairs/{si}/{}/{}/{} {:016x}", k.level, k.x, k.y, fnv64(&bytes)).unwrap();
+            }
+        }
     }
     // Objects put down by hand (a world without edits): barrels turned and crates not, on the
     // first battlemap; the chunk packed.

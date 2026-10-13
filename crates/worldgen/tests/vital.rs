@@ -449,6 +449,49 @@ fn towns_meet_roads_and_water() {
         }
         assert!(climb / length >= prm.g_off - 0.03, "settlement {i}: a flight at {:?} climbs only {:.3} on the drawn ground (rise {rise:.1} ft over {length:.0} ft)", pts[0], climb / length);
     }
+    // The battlemap draws the highest flight as steps: most of its centreline (2.5 ft in from its
+    // ends) in the chunk holding its middle; steps only on dry street squares, off network roads,
+    // and under nothing that blocks the way.
+    use worldgen::battlemap::{self as bm, SQ, SQUARE_FT, Surface};
+    let (i, pts, _) = flights.iter().max_by(|a, b| a.2.total_cmp(&b.2)).unwrap();
+    let mid = geom::lerp(pts[0], pts[pts.len() - 1], 0.5);
+    let key = TileKey::surface(g.max_level, (mid[0] / size) as u32, (mid[1] / size) as u32);
+    let (ox, oy) = g.tile_origin_ft(&key);
+    let c = ex.battlemap(key);
+    let square = |p: [f64; 2]| {
+        let (x, y) = (((p[0] - ox) / SQUARE_FT).floor(), ((p[1] - oy) / SQUARE_FT).floor());
+        (x >= 0.0 && y >= 0.0 && x < SQ as f64 && y < SQ as f64).then(|| y as usize * SQ + x as usize)
+    };
+    let total: f64 = pts.windows(2).map(|w| geom::dist(w[0], w[1])).sum();
+    let mut line: Vec<usize> = Vec::new();
+    let mut s0 = 0.0;
+    for seg in pts.windows(2) {
+        let d = geom::dist(seg[0], seg[1]);
+        let n = (d / 1.0).ceil().max(1.0) as usize;
+        for j in 0..=n {
+            let s = s0 + d * j as f64 / n as f64;
+            if s >= 2.5 && s <= total - 2.5 && let Some(k) = square(geom::lerp(seg[0], seg[1], j as f64 / n as f64)) && !line.contains(&k) {
+                line.push(k);
+            }
+        }
+        s0 += d;
+    }
+    let on = line.iter().filter(|&&k| c.surface[k] == Surface::Stairs).count();
+    assert!(line.len() >= 2 && on as f64 >= 0.6 * line.len() as f64, "settlement {i}: the flight at {mid:?} is drawn as steps on {on} of its {} squares", line.len());
+    // Its axis comes with the chunk (the ground draws the treads square across it).
+    let local = [((mid[0] - ox) / SQUARE_FT) as f32, ((mid[1] - oy) / SQUARE_FT) as f32];
+    assert!(
+        c.structures.iter().any(|s| s.kind == bm::ShapeKind::Stairs && geom::seg_dist([local[0] as f64, local[1] as f64], [s.pts[0][0] as f64, s.pts[0][1] as f64], [s.pts[1][0] as f64, s.pts[1][1] as f64]) <= 0.5 * s.size as f64 + 0.1),
+        "the battlemap at {mid:?} has no axis for the flight's treads"
+    );
+    for k in (0..SQ * SQ).filter(|&k| c.surface[k] == Surface::Stairs) {
+        assert!(c.surface[k].is_road() && c.urban[k] == bm::URBAN_STREET && c.building[k] == 0 && c.water_level[k] <= c.height[k], "steps on square {k} of the battlemap at {mid:?}: not a dry street square");
+        assert_eq!(c.road_halo[(k / SQ + 1) * (SQ + 2) + k % SQ + 1], 0, "steps on a network road (square {k} of the battlemap at {mid:?})");
+    }
+    for o in c.objects.iter().filter(|o| c.info(o).blocks_move) {
+        let k = (o.y.floor() as usize).min(SQ - 1) * SQ + (o.x.floor() as usize).min(SQ - 1);
+        assert!(c.surface[k] != Surface::Stairs, "a {:?} stands on the steps at {mid:?}", o.kind);
+    }
 }
 
 /// Settlements: every one gets its guaranteed buildings — an inn in every village, the full

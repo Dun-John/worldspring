@@ -278,7 +278,8 @@ The road network:
 ### `get_battlemap`
 The 640-ft battlemap chunk (128 × 128 five-foot squares) that contains a place, for running a fight there. It
 lists:
-- the elevation range, surfaces and buildings;
+- the elevation range, surfaces and buildings (`stairs`: a flight of steps on a steep city street, paved, walkable,
+  no movement cost);
 - each kind of object in the chunk, with its 5e rules: cover, whether it blocks movement or sight, difficult
   terrain, hazards and their effects;
 - the objects within `radius_squares` of the place, by grid square (`near_focus`), each with its centre
