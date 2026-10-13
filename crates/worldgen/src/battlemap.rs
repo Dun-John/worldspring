@@ -802,6 +802,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     merge_bridges(&crossings, &mut crossing_shapes);
     let x_ft = |i: i64| ox + (i as f64 + 0.5) * SQUARE_FT;
     let y_ft = |j: i64| oy + (j as f64 + 0.5) * SQUARE_FT;
+    // Ground shaped by hand, applied as heights are read (so whatever stands on the ground
+    // follows it); `plat_w` is the plateaus' weight per halo square (they are kept flat), `moved`
+    // where the shaping changed the ground (the slope is measured on the shaped ground there).
+    let shaper = crate::ground::Shaper::new(&world.file.edits, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT], SQUARE_FT);
+    let (mut plat_w, mut moved) = if shaper.is_some() { (vec![0f32; HS * HS], vec![false; HS * HS]) } else { (Vec::new(), Vec::new()) };
     for j in -1..=SQ as i64 {
         for i in -1..=SQ as i64 {
             let (x, y) = (ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT);
@@ -809,6 +814,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let h = (j + 1) as usize * HS + (i + 1) as usize;
             hh[h] = tile.padded[c];
             hw[h] = t0.sample_water(x, y).max(tile.river_water[c]);
+            if let Some(s) = &shaper {
+                (hh[h], plat_w[h]) = s.at_square(gsx + i, gsy + j, hh[h], hw[h]);
+                moved[h] = hh[h] != tile.padded[c] || plat_w[h] > 0.0;
+            }
             road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);
             // A ford or a ferry leaves the water as it is (wading, or the raft).
             if road_h[h] != 0 && hw[h] > hh[h] && crossings.iter().any(|x| x.kind != CrossingKind::Bridge && x.covers([x_ft(i), y_ft(j)])) {
@@ -1364,8 +1373,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let (x, y) = (ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT);
             biome[k] = Biome::from_u8(t0.sample_biome(x, y, t0.biome_warp(x, y))[0]);
             let c = sidx(i as i64, j as i64);
-            let gx = (tile.padded[c + 1] - tile.padded[c - 1]) as f64 / 5.0;
-            let gy = (tile.padded[c + PADDED] - tile.padded[c - PADDED]) as f64 / 5.0;
+            let h = (j + 1) * HS + i + 1;
+            let (gx, gy) = match &shaper {
+                Some(s) if [h, h - 1, h + 1, h - HS, h + HS].iter().any(|&q| moved[q]) => {
+                    let at = |dx: f64, dy: f64, c: usize| s.at_point(x + dx, y + dy, tile.padded[c], hw[h]) as f64;
+                    ((at(2.5, 0.0, c + 1) - at(-2.5, 0.0, c - 1)) / 5.0, (at(0.0, 2.5, c + PADDED) - at(0.0, -2.5, c - PADDED)) / 5.0)
+                }
+                _ => ((tile.padded[c + 1] - tile.padded[c - 1]) as f64 / 5.0, (tile.padded[c + PADDED] - tile.padded[c - PADDED]) as f64 / 5.0),
+            };
             slope[k] = crate::core::sqrt(gx * gx + gy * gy);
         }
     }
@@ -1392,6 +1407,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     for h in 0..HS * HS {
         if protected[h] {
             hh[h] = road_bed[h];
+        }
+    }
+    // Plateaus are flat: micro-relief fades out over them (empty when nothing is shaped here).
+    for (h, &w) in plat_w.iter().enumerate() {
+        if w > 0.0 {
+            hh[h] = road_bed[h] + (hh[h] - road_bed[h]) * (1.0 - w);
         }
     }
     // A camp's clearing is level: the ground eases to one height from just past the rim to
@@ -1629,10 +1650,20 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
-    enforce(&mut chunk, &biome, seed, gsx, gsy, sea);
+    // Where the ground is shaped, the guarantee's draws are keyed by cell (a mound in one corner
+    // moves nothing elsewhere) and plateaus get no knolls (`shaped`: empty when nothing is).
+    let shaped: Vec<bool> = if shaper.is_some() { (0..n).map(|k| plat_w[(k / SQ + 1) * HS + k % SQ + 1] >= 0.5).collect() } else { Vec::new() };
+    let before = if shaped.is_empty() { Vec::new() } else { chunk.height.clone() };
+    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped);
     // Enforcement knolls may have spilled onto a road bed or a building; those keep their
-    // level (on a street or plaza a raised terrace or dais is fine).
+    // level (on a street or plaza a raised terrace or dais is fine), as does a plateau.
     let mut touched = false;
+    for k in (0..shaped.len()).filter(|&k| shaped[k]) {
+        if chunk.height[k] != before[k] {
+            chunk.height[k] = before[k];
+            touched = true;
+        }
+    }
     for k in 0..n {
         let h = (k / SQ + 1) * HS + k % SQ + 1;
         let bed = road_bed[h];
@@ -1936,8 +1967,12 @@ fn flat_windows(c: &Chunk) -> Vec<(usize, usize)> {
     out
 }
 
-fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64) {
-    let mut rng = Pcg32::new(hash3(seed, gsx, gsy, 0xe4f), 9);
+/// `shaped`: empty for ground as generated (one stream for the chunk); else every draw is keyed
+/// by its own cell (global), and squares marked (on a plateau) get no knoll or built feature.
+fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool]) {
+    let mut chunk_rng = Pcg32::new(hash3(seed, gsx, gsy, 0xe4f), 9);
+    let keyed = !shaped.is_empty();
+    let cell_rng = |phase: i64, x: i64, y: i64| Pcg32::new(hash3(seed, x, y, 0xe4f ^ (phase << 16)), 9);
 
     // Elevation: every 16x16 cell spans at least two tiers.
     let mut deferred = false;
@@ -1958,7 +1993,17 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 deferred = true;
                 continue;
             }
-            raise(c, &cells, &mut rng, gsx, gsy, sea);
+            if keyed && cells.iter().any(|&k| shaped[k]) {
+                continue;
+            }
+            let mut own;
+            let rng = if keyed {
+                own = cell_rng(1, gsx / TIER_CELL as i64 + cx as i64, gsy / TIER_CELL as i64 + cy as i64);
+                &mut own
+            } else {
+                &mut chunk_rng
+            };
+            raise(c, &cells, rng, gsx, gsy, sea, shaped);
         }
     }
     // Plaza paving answers to the guarantee itself rather than cell by cell: every 32x32 window
@@ -1971,7 +2016,14 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
         let span = if tried.contains(&(wx, wy)) { (0, 32) } else { (8, 16) };
         tried.push((wx, wy));
         let cells: Vec<usize> = (0..span.1 * span.1).map(|q| (wy + span.0 + q / span.1) * SQ + wx + span.0 + q % span.1).collect();
-        raise(c, &cells, &mut rng, gsx, gsy, sea);
+        let mut own;
+        let rng = if keyed {
+            own = cell_rng(2 + span.0 as i64, gsx + wx as i64, gsy + wy as i64);
+            &mut own
+        } else {
+            &mut chunk_rng
+        };
+        raise(c, &cells, rng, gsx, gsy, sea, shaped);
     }
 
 
@@ -1990,9 +2042,16 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
             if cells.is_empty() {
                 continue;
             }
+            let mut own;
+            let rng = if keyed {
+                own = cell_rng(4, gsx / COVER_CELL as i64 + cx as i64, gsy / COVER_CELL as i64 + cy as i64);
+                &mut own
+            } else {
+                &mut chunk_rng
+            };
             let k = cells[rng.below(cells.len() as u32) as usize];
-            let kind = if c.urban[k] != 0 { town_cover(c.urban[k], &mut rng) } else { fallback_cover(biome[k], &mut rng) };
-            push_at(c, kind, k, &mut rng);
+            let kind = if c.urban[k] != 0 { town_cover(c.urban[k], rng) } else { fallback_cover(biome[k], rng) };
+            push_at(c, kind, k, rng);
         }
     }
 
@@ -2002,10 +2061,17 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
         let far = (0..SQ * SQ).filter(|&k| dry(c, k) && dist[k] > MAX_COVER_GAP).max_by_key(|&k| (dist[k], std::cmp::Reverse(k)));
         match far {
             Some(k) => {
+                let mut own;
+                let rng = if keyed {
+                    own = cell_rng(5, gsx + (k % SQ) as i64, gsy + (k / SQ) as i64);
+                    &mut own
+                } else {
+                    &mut chunk_rng
+                };
                 // On a road, put the cover on the nearest verge instead.
                 let k = if !placeable(c, k) { nearest_verge(c, k).unwrap_or(k) } else { k };
-                let kind = if c.urban[k] != 0 { town_cover(c.urban[k], &mut rng) } else { fallback_cover(biome[k], &mut rng) };
-                push_at(c, kind, k, &mut rng);
+                let kind = if c.urban[k] != 0 { town_cover(c.urban[k], rng) } else { fallback_cover(biome[k], rng) };
+                push_at(c, kind, k, rng);
             }
             None => break,
         }
@@ -2028,9 +2094,16 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 if cells.is_empty() {
                     continue;
                 }
+                let mut own;
+                let rng = if keyed {
+                    own = cell_rng(6, gsx / TIER_CELL as i64 + cx as i64, gsy / TIER_CELL as i64 + cy as i64);
+                    &mut own
+                } else {
+                    &mut chunk_rng
+                };
                 let k = cells[rng.below(cells.len() as u32) as usize];
-                let kind = if c.urban[k] != 0 { town_cover(c.urban[k], &mut rng) } else { fallback_feature(biome[k], &mut rng) };
-                push_at(c, kind, k, &mut rng);
+                let kind = if c.urban[k] != 0 { town_cover(c.urban[k], rng) } else { fallback_feature(biome[k], rng) };
+                push_at(c, kind, k, rng);
             }
         }
     }
@@ -2039,10 +2112,11 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
 /// Make a flat stretch (`cells`) span two tiers: a natural knoll on open ground, a round built
 /// feature on paving, at a dry spot far enough inside the chunk that it is never clipped at the
 /// chunk border (chunks are generated independently).
-fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64) {
+/// Squares marked in `shaped` (a plateau) are left alone.
+fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool]) {
     let interior = |k: usize| {
         let (x, y) = (k % SQ, k / SQ);
-        x >= 7 && y >= 7 && x < SQ - 7 && y < SQ - 7
+        x >= 7 && y >= 7 && x < SQ - 7 && y < SQ - 7 && !shaped.get(k).is_some_and(|&s| s)
     };
     // Open country and fields take a natural knoll; streets and plazas a built feature.
     let good: Vec<usize> = cells.iter().copied().filter(|&k| placeable(c, k) && interior(k) && matches!(c.urban[k], 0 | URBAN_FIELD)).collect();
@@ -2105,7 +2179,18 @@ fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, se
             return;
         }
     }
-    let pool: &[usize] = if !good.is_empty() { &good } else if !town.is_empty() { &town } else { cells };
+    let rest: Vec<usize> = if shaped.is_empty() { Vec::new() } else { cells.iter().copied().filter(|&k| !shaped[k]).collect() };
+    let pool: &[usize] = if !good.is_empty() {
+        &good
+    } else if !town.is_empty() {
+        &town
+    } else if shaped.is_empty() {
+        cells
+    } else if !rest.is_empty() {
+        &rest
+    } else {
+        return;
+    };
     let spot = pool[rng.below(pool.len() as u32) as usize];
     let (sx, sy) = ((spot % SQ) as f64 + 0.5, (spot / SQ) as f64 + 0.5);
     let rise = TIER_FT * rng.range(1.2, 2.0);

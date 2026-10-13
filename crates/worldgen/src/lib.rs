@@ -8,6 +8,7 @@ pub mod agent;
 pub mod battlemap;
 pub mod core;
 pub mod gazetteer;
+pub mod ground;
 pub mod interior;
 pub mod lod;
 pub mod payload;

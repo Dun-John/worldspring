@@ -273,6 +273,56 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
             }
         }
     }
+    // Ground shaped by hand (a world without edits): in the largest settlement, a sheer plateau
+    // across the chunk corner nearest a building that straddles a chunk edge, under it, and a
+    // mound brushed on the edge beside it; the four battlemaps, the tiles above the corner at the
+    // three finest levels and that building's interior.
+    if ex.world.file.edits.is_empty()
+        && let Some(si) = (0..ex.t0.settlements.len()).max_by_key(|&i| ex.t0.settlements[i].population)
+    {
+        let size = ex.world.geom.tile_size_ft(max_level);
+        let l = crate::town::layout(&ex.world, &ex.t0, si);
+        let snap = |v: f64| crate::core::round(v / size) * size;
+        let straddles = |b: &crate::town::Building| {
+            let (x0, x1) = b.poly.iter().fold((f64::MAX, f64::MIN), |a, p| (a.0.min(p[0]), a.1.max(p[0])));
+            let (y0, y1) = b.poly.iter().fold((f64::MAX, f64::MIN), |a, p| (a.0.min(p[1]), a.1.max(p[1])));
+            crate::core::floor(x0 / size) != crate::core::floor(x1 / size) || crate::core::floor(y0 / size) != crate::core::floor(y1 / size)
+        };
+        let at = |b: &crate::town::Building| crate::town::geom::centroid(&b.poly);
+        let near = l.buildings.iter().filter(|b| b.structure == crate::town::Structure::Roofed && straddles(b)).min_by(|a, b| {
+            let (p, q) = (at(a), at(b));
+            crate::town::geom::dist(p, [snap(p[0]), snap(p[1])]).total_cmp(&crate::town::geom::dist(q, [snap(q[0]), snap(q[1])]))
+        });
+        if let Some(b) = near {
+            let c = at(b);
+            let corner = [snap(c[0]), snap(c[1])];
+            let half = 80.0;
+            let outline = [[-half, -half], [half, -half], [half, half], [-half, half]].map(|d| [corner[0] + d[0], corner[1] + d[1]]);
+            let mut e = crate::world::Edits::default();
+            if let Ok(p) = crate::ground::plateau_for(&outline, b.pad_ft as f64 + 8.0, 0.0) {
+                e.plateaus.insert("h:det".into(), p);
+            }
+            let dab = [[corner[0], corner[1] + 2.0 * half]];
+            let stroke = crate::ground::Stroke { mode: crate::ground::Brush::Raise, path: &dab, radius_ft: 30.0, height_ft: 10.0, hardness: 0.5, strength: 1.0 };
+            let _ = crate::ground::stamp_brush(&mut e.ground, &stroke, &|_, _| 0.0);
+            ex.world.file.edits = e;
+            let (kx, ky) = ((corner[0] / size) as u32, (corner[1] / size) as u32);
+            let mut h = crate::core::hash::Fnv64::default();
+            for (x, y) in [(kx - 1, ky - 1), (kx, ky - 1), (kx - 1, ky), (kx, ky)] {
+                let chunk = ex.battlemap(TileKey::surface(max_level, x, y));
+                h.write(&crate::battlemap::pack(&ex.world, &chunk));
+            }
+            let mut t = crate::core::hash::Fnv64::default();
+            for level in max_level - 2..=max_level {
+                let s = ex.world.geom.tile_size_ft(level);
+                t.write(&ex.terrain_packed(TileKey::surface(level, (corner[0] / s) as u32, (corner[1] / s) as u32)));
+            }
+            let id = format!("b:{si}:{}", b.id);
+            let json = crate::interior::generate_id(&ex.world, &ex.t0, &id).map(|it| serde_json::to_string(&it).unwrap_or_default()).unwrap_or_default();
+            writeln!(out, "ground/{id} {:016x} {:016x} {:016x}", h.finish(), t.finish(), fnv64(json.as_bytes())).unwrap();
+            ex.world.file.edits = crate::world::Edits::default();
+        }
+    }
     // The designer's steps on the first site underground: every room furnished again, doors
     // where needed, the plan as text, the site it builds and its problems.
     use crate::under::{UnderKind, design};

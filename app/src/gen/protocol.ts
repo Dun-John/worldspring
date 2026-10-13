@@ -218,6 +218,20 @@ export interface Edits {
   buildings?: Record<string, BuildingEdit>;
   /** `<layout>` → a town laid out anew by hand (the ward editor). */
   towns?: Record<string, TownEdit>;
+  /** `g:XXXXX:YYYYY` → 16 × 16 squares of ground brushed by hand (`worldgen::ground::GroundBlock`:
+   * tenths of a foot, row-major, as base64url zigzag-delta varints, a 0 delta followed by a byte
+   * counting further zeros). Block indices zero-padded, x first. */
+  ground?: Record<string, string>;
+  /** `h:<id>` → a plateau or pit drawn by hand. */
+  plateaus?: Record<string, Plateau>;
+}
+
+/** A flat top or a pit (`worldgen::ground::Plateau`): ground inside `pts` (world ft) eases to
+ * `level` (ft); outside, back to the ground over `edge` ft (absent or 0: a sheer step). */
+export interface Plateau {
+  pts: [number, number][];
+  level: number;
+  edge?: number;
 }
 
 /** A town's layout changed by hand (`worldgen::world::TownEdit`): `at` is the town's centre (the

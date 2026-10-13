@@ -1509,6 +1509,7 @@ fn agent_edits_guarantee() {
     let base = World::new(file.clone()).unwrap();
     let t0 = worldgen::t0::T0::generate(&base);
     ward_edits(&base, &t0);
+    ground_edits(&base);
     let sea = base.params().sea_level_ft;
     // Dry open land two miles from a town, clear of every layout.
     let spot = (0..t0.settlements.len() * 8)
@@ -2034,6 +2035,155 @@ fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     }
     let village = (0..n).find(|&i| t0.settlements[i].tier == Tier::Village).unwrap();
     assert!(wards::plan_json(base, t0, village).is_err(), "a village has wards");
+}
+
+/// Ground shaped by hand (`Edits.ground`, `Edits.plateaus`) at the largest settlement: a sheer
+/// plateau across a chunk corner and a mound brushed across a chunk edge. The four chunks agree at
+/// their seams bit for bit; the plateau's top is flat at its level on the drawn ground (leaving
+/// out roads, buildings, plaza features, walls and towers); lowering a dry shore (by brush and by
+/// a pit) leaves every dry square dry; terrain samples never see the edits; the edits survive a
+/// round trip as JSON and as edit ops; clearing them gives the chunks back byte for byte.
+fn ground_edits(base: &World) {
+    use worldgen::battlemap::{self, Chunk, HS, SQ, SQUARE_FT};
+    use worldgen::ground::{self, Brush, Stroke};
+    use worldgen::world::{EditOp, Edits};
+    let mut ex = Executor::new(World::new(base.file.clone()).unwrap());
+    let g = ex.world.geom.clone();
+    let lvl = g.max_level;
+    let size = g.tile_size_ft(lvl);
+    let s = ex.t0.settlements.iter().max_by_key(|s| s.population).unwrap().clone();
+    let corner = [(s.x / size).round() * size, (s.y / size).round() * size];
+    let (kx, ky) = ((corner[0] / size) as u32, (corner[1] / size) as u32);
+    let keys = [(kx - 1, ky - 1), (kx, ky - 1), (kx - 1, ky), (kx, ky)].map(|(x, y)| TileKey::surface(lvl, x, y));
+    let pack = |ex: &mut Executor, k: TileKey| {
+        let c = ex.battlemap(k);
+        (battlemap::pack(&ex.world, &c), c)
+    };
+    let plain: Vec<(Vec<u8>, Chunk)> = keys.iter().map(|&k| pack(&mut ex, k)).collect();
+    let padded: Vec<Vec<f32>> = keys.iter().map(|&k| ex.terrain(k).padded.clone()).collect();
+    // A square's centre (world ft) and its height in the chunk holding it.
+    let centre = |k: &TileKey, i: usize, j: usize| [k.x as f64 * size + (i as f64 + 0.5) * SQUARE_FT, k.y as f64 * size + (j as f64 + 0.5) * SQUARE_FT];
+    let half = 60.0;
+    let inside = |p: [f64; 2], m: f64| (p[0] - corner[0]).abs() <= half - m && (p[1] - corner[1]).abs() <= half - m;
+    let mut top = f32::MIN;
+    for (q, k) in keys.iter().enumerate() {
+        for k2 in 0..SQ * SQ {
+            if inside(centre(k, k2 % SQ, k2 / SQ), 0.0) {
+                top = top.max(plain[q].1.height[k2]);
+            }
+        }
+    }
+    let level = (top + 10.0).round();
+    let outline = [[-half, -half], [half, -half], [half, half], [-half, half]].map(|d| [corner[0] + d[0], corner[1] + d[1]]);
+    let plateau = ground::plateau_for(&outline, level as f64, 0.0).expect("the plateau");
+    let mut e = Edits::default();
+    e.plateaus.insert("h:test".into(), plateau);
+    // The mound: on the edge between the southern two, where both sides have open dry ground.
+    let open = |c: &Chunk, k: &TileKey, at: [f64; 2]| -> Vec<usize> {
+        (0..SQ * SQ).filter(|&k2| geom_dist(centre(k, k2 % SQ, k2 / SQ), at) < 20.0 && c.building[k2] == 0 && c.water_level[k2] <= c.height[k2]).collect()
+    };
+    let dab = (6..28)
+        .map(|t| [corner[0], corner[1] + 20.0 * t as f64])
+        .find(|&p| [2, 3].iter().all(|&q| open(&plain[q].1, &keys[q], p).len() >= 4))
+        .map(|p| [p])
+        .expect("open ground on the chunks' edge");
+    let changed = ground::stamp_brush(&mut e.ground, &Stroke { mode: Brush::Raise, path: &dab, radius_ft: 40.0, height_ft: 12.0, hardness: 0.5, strength: 1.0 }, &|_, _| 0.0).unwrap();
+    assert!(changed.len() == 2 && changed.iter().all(|k| e.ground.contains_key(k)), "the mound's blocks: {changed:?}");
+    // As JSON and as ops, unchanged.
+    let json = serde_json::to_string(&e).unwrap();
+    assert_eq!(serde_json::from_str::<Edits>(&json).unwrap(), e, "shaped ground changed on a JSON round trip");
+    let mut by_ops = Edits::default();
+    for op in Edits::default().diff(&e) {
+        let undo = by_ops.apply(&op).unwrap();
+        assert!(matches!(undo, EditOp::Unset { .. }), "a new entry's undo is not an unset");
+    }
+    assert_eq!(by_ops, e, "shaped ground changed through edit ops");
+    let ops = e.diff(&Edits::default());
+    let mut back = e.clone();
+    let undo: Vec<EditOp> = ops.iter().map(|op| back.apply(op).unwrap()).collect();
+    assert!(back.is_empty(), "shaped ground left after its ops were undone");
+    for op in undo.iter().rev() {
+        back.apply(op).unwrap();
+    }
+    assert_eq!(back, e, "shaped ground not restored by the inverse ops");
+
+    ex.world.file.edits = e.clone();
+    let shaped: Vec<(Vec<u8>, Chunk)> = keys.iter().map(|&k| pack(&mut ex, k)).collect();
+    assert!(shaped.iter().zip(&plain).all(|(a, b)| a.0 != b.0), "a chunk the shaping reaches is unchanged");
+    for (q, k) in keys.iter().enumerate() {
+        assert_eq!(ex.terrain(*k).padded, padded[q], "terrain samples changed with shaped ground");
+    }
+    // Seams: each chunk's halo ring is its neighbour's edge, bit for bit (heights and water).
+    let ring = |a: &Chunk, b: &Chunk, east: bool| {
+        for t in 0..SQ {
+            let (ah, bk) = if east { ((t + 1) * HS + SQ + 1, t * SQ) } else { ((SQ + 1) * HS + t + 1, t) };
+            let (bh, ak) = if east { ((t + 1) * HS, t * SQ + SQ - 1) } else { (t + 1, (SQ - 1) * SQ + t) };
+            assert_eq!(a.halo_height[ah].to_bits(), b.height[bk].to_bits(), "shaped ground: seam at {t} ({})", if east { "east" } else { "south" });
+            assert_eq!(b.halo_height[bh].to_bits(), a.height[ak].to_bits(), "shaped ground: seam at {t} ({})", if east { "west" } else { "north" });
+            assert_eq!(a.halo_water[ah].to_bits(), b.water_level[bk].to_bits(), "shaped ground: water seam at {t}");
+        }
+    };
+    ring(&shaped[0].1, &shaped[1].1, true);
+    ring(&shaped[2].1, &shaped[3].1, true);
+    ring(&shaped[0].1, &shaped[2].1, false);
+    ring(&shaped[1].1, &shaped[3].1, false);
+    // The mound stands, on both sides of the edge.
+    for q in [2, 3] {
+        let (a, b) = (&plain[q].1, &shaped[q].1);
+        let open = open(a, &keys[q], dab[0]);
+        let rise = open.iter().map(|&k2| b.height[k2] - a.height[k2]).sum::<f32>() / open.len().max(1) as f32;
+        assert!(!open.is_empty() && rise >= 8.0, "no mound in chunk {:?} ({} open squares, {rise} ft up)", keys[q], open.len());
+    }
+    // Flat on top: squares two in from the outline, as drawn.
+    let mut flat = 0;
+    for (q, k) in keys.iter().enumerate() {
+        let c = &shaped[q].1;
+        for k2 in 0..SQ * SQ {
+            let (i, j) = (k2 % SQ, k2 / SQ);
+            let h = (j + 1) * HS + i + 1;
+            if !inside(centre(k, i, j), 2.0 * SQUARE_FT) || c.building[k2] != 0 || c.road_halo[h] != 0 || matches!(c.urban[k2], battlemap::URBAN_PLAZA | battlemap::URBAN_WALL | battlemap::URBAN_TOWER) {
+                continue;
+            }
+            let drawn = c.halo_height[h] - c.roof_lift[h];
+            assert!((drawn - level).abs() <= 0.1, "shaped ground: square ({i}, {j}) of {k:?} at {drawn} on a plateau at {level}");
+            flat += 1;
+        }
+    }
+    assert!(flat >= 100, "too few open squares on the plateau ({flat})");
+    // Cleared: as generated, byte for byte.
+    ex.world.file.edits = Edits::default();
+    for (q, k) in keys.iter().enumerate() {
+        assert!(pack(&mut ex, *k).0 == plain[q].0, "chunk {k:?} differs once the shaping is cleared");
+    }
+
+    // Lowering never floods: a dry square on a shore, dug by brush and by a pit.
+    let settlements = ex.t0.settlements.clone();
+    let (key, k2) = settlements
+        .iter()
+        .map(|s| TileKey::surface(lvl, (s.x / size) as u32, (s.y / size) as u32))
+        .find_map(|k| {
+            let c = ex.battlemap(k);
+            let wet = |k2: usize| c.water_level[k2] > c.height[k2];
+            (20..SQ - 20)
+                .flat_map(|j| (20..SQ - 20).map(move |i| j * SQ + i))
+                .find(|&k2| !wet(k2) && c.building[k2] == 0 && wet(k2 + 1) && wet(k2 + 2))
+                .map(|k2| (k, k2))
+        })
+        .expect("a shore");
+    let c = ex.battlemap(key);
+    let p = centre(&key, k2 % SQ, k2 / SQ);
+    let mut e = Edits::default();
+    ground::stamp_brush(&mut e.ground, &Stroke { mode: Brush::Lower, path: &[p], radius_ft: 30.0, height_ft: 20.0, hardness: 0.8, strength: 1.0 }, &|_, _| 0.0).unwrap();
+    let pit = [[-25.0, -25.0], [25.0, -25.0], [25.0, 25.0], [-25.0, 25.0]].map(|d| [p[0] - 30.0 + d[0], p[1] + d[1]]);
+    e.plateaus.insert("h:pit".into(), ground::plateau_for(&pit, c.height[k2] as f64 - 30.0, 10.0).unwrap());
+    ex.world.file.edits = e;
+    let dug = ex.battlemap(key);
+    let lowered = (0..SQ * SQ).filter(|&k| dug.height[k] < c.height[k] - 1.0).count();
+    assert!(lowered >= 20, "the shore was hardly lowered ({lowered} squares)");
+    for k in 0..SQ * SQ {
+        assert!(c.water_level[k] > c.height[k] || dug.water_level[k] <= dug.height[k], "lowering flooded square ({}, {}) of {key:?}", k % SQ, k / SQ);
+    }
+    ex.world.file.edits = Edits::default();
 }
 
 fn geom_dist(a: [f64; 2], b: [f64; 2]) -> f64 {

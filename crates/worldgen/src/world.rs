@@ -397,6 +397,13 @@ pub struct Edits {
     /// off), applied between planning a town and building it (`town::base_layout`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub towns: BTreeMap<String, TownEdit>,
+    /// Ground brushed by hand (`g:XXXXX:YYYYY`: block indices, zero-padded, x first), applied
+    /// where battlemaps and the finest terrain read heights (`ground::Shaper`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ground: BTreeMap<String, crate::ground::GroundBlock>,
+    /// Plateaus and pits drawn by hand (`h:<id>`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plateaus: BTreeMap<String, crate::ground::Plateau>,
 }
 
 /// A generated building changed by hand: removed, or given another function, storeys,
@@ -1182,6 +1189,8 @@ impl Edits {
                 "crossings" => self.crossings = std::mem::take(&mut part.crossings),
                 "buildings" => self.buildings = std::mem::take(&mut part.buildings),
                 "towns" => self.towns = std::mem::take(&mut part.towns),
+                "ground" => self.ground = std::mem::take(&mut part.ground),
+                "plateaus" => self.plateaus = std::mem::take(&mut part.plateaus),
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
@@ -1214,6 +1223,8 @@ impl Edits {
                 "crossings" => patch(&mut self.crossings, p)?,
                 "buildings" => patch(&mut self.buildings, p)?,
                 "towns" => patch(&mut self.towns, p)?,
+                "ground" => patch(&mut self.ground, p)?,
+                "plateaus" => patch(&mut self.plateaus, p)?,
                 _ => return Err(format!("{field}: not a keyed edits field")),
             }
         }
@@ -1223,7 +1234,7 @@ impl Edits {
     pub fn is_empty(&self) -> bool {
         self.renames.is_empty() && self.notes.is_empty() && self.hidden.is_empty() && self.created.is_empty() && self.npcs.is_empty() && self.plots.is_empty()
             && self.objects.is_empty() && self.cleared.is_empty() && self.sprites.is_empty() && self.designs.is_empty() && self.crossings.is_empty()
-            && self.buildings.is_empty() && self.towns.is_empty()
+            && self.buildings.is_empty() && self.towns.is_empty() && self.ground.is_empty() && self.plateaus.is_empty()
     }
 
     /// The NPCs found at `id` (placed there).
@@ -1271,6 +1282,43 @@ impl Edits {
             EditOp::Set { field, key, .. } | EditOp::Unset { field, key } => (field.as_str(), key.clone()),
         };
         let &(_, shape) = EDIT_FIELDS.iter().find(|(f, _)| *f == field).ok_or_else(|| format!("no such edits field: {field}"))?;
+        // Keyed fields change one entry in place (a brush stroke is dozens of ops in a world of
+        // thousands of entries); lists and sets go through the whole edits as JSON.
+        fn one<T: Serialize + serde::de::DeserializeOwned>(m: &mut BTreeMap<String, T>, op: &EditOp, field: &str, key: &str) -> Result<Option<Value>, String> {
+            let before = m.get(key).map(|v| serde_json::to_value(v).map_err(|e| e.to_string())).transpose()?;
+            match op {
+                EditOp::Set { value, .. } => {
+                    m.insert(key.to_string(), serde_json::from_value(value.clone()).map_err(|e| format!("{field} {key}: {e}"))?);
+                }
+                EditOp::Unset { .. } => {
+                    m.remove(key);
+                }
+            }
+            Ok(before)
+        }
+        let fast = match field {
+            "renames" => Some(one(&mut self.renames, op, field, &key)),
+            "notes" => Some(one(&mut self.notes, op, field, &key)),
+            "npcs" => Some(one(&mut self.npcs, op, field, &key)),
+            "plots" => Some(one(&mut self.plots, op, field, &key)),
+            "objects" => Some(one(&mut self.objects, op, field, &key)),
+            "cleared" => Some(one(&mut self.cleared, op, field, &key)),
+            "sprites" => Some(one(&mut self.sprites, op, field, &key)),
+            "designs" => Some(one(&mut self.designs, op, field, &key)),
+            "crossings" => Some(one(&mut self.crossings, op, field, &key)),
+            "buildings" => Some(one(&mut self.buildings, op, field, &key)),
+            "towns" => Some(one(&mut self.towns, op, field, &key)),
+            "ground" => Some(one(&mut self.ground, op, field, &key)),
+            "plateaus" => Some(one(&mut self.plateaus, op, field, &key)),
+            _ => None,
+        };
+        if let Some(before) = fast {
+            let field = field.to_string();
+            return Ok(match before? {
+                Some(value) => EditOp::Set { field, key, value },
+                None => EditOp::Unset { field, key },
+            });
+        }
         let mut v = serde_json::to_value(&*self).map_err(|e| e.to_string())?;
         let mut list = entries(&v, field, shape);
         let at = list.iter().position(|(k, _)| *k == key);
@@ -1345,6 +1393,8 @@ const EDIT_FIELDS: &[(&str, Shape)] = &[
     ("crossings", Shape::Map),
     ("buildings", Shape::Map),
     ("towns", Shape::Map),
+    ("ground", Shape::Map),
+    ("plateaus", Shape::Map),
 ];
 
 fn list_index(key: &str) -> Option<usize> {
