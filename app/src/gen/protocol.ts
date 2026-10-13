@@ -648,6 +648,8 @@ export interface Overlay {
   features: Feature[];
   /** The sketch's conflicts, when the world was drawn. */
   conflicts?: Conflict[];
+  /** The layout index of the first created site (`Edits.created[0]`), as the generator counts. */
+  first_created?: number;
 }
 
 /** River polylines owned by one tile: vertex k is verts[4k..4k+4] = (x, y in tile units, width ft, discharge). */

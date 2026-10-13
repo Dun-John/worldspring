@@ -209,6 +209,19 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         let bytes = crate::battlemap::pack(&ex.world, &chunk);
         writeln!(out, "works/{id} {:016x} {:016x} {:016x}", h.finish(), fnv64(json.as_bytes()), fnv64(&bytes)).unwrap();
     }
+    // Sites created by hand (not buildings or works): their layouts and the first site underground
+    // beneath each.
+    for (k, c) in ex.world.file.edits.created.iter().enumerate().filter(|(_, c)| !matches!(c.kind.as_str(), "building" | "castle" | "wall") && !c.removed) {
+        let li = first + k;
+        let l = crate::town::layout(&ex.world, &ex.t0, li);
+        let mut h = crate::core::hash::Fnv64::default();
+        h.write(format!("{:?} {:?}", l.plazas, l.entrances.iter().map(|e| (e.at, e.dir, e.kind as u8, e.id)).collect::<Vec<_>>()).as_bytes());
+        for b in &l.buildings {
+            h.write(format!("{} {:?} {:?} {} {:?} {}", b.id, b.poly, b.func, b.floors, b.name, b.pad_ft).as_bytes());
+        }
+        let under = l.entrances.first().and_then(|e| crate::interior::generate_id(&ex.world, &ex.t0, &format!("u:{li}:{}", e.id))).map(|it| serde_json::to_string(&it).unwrap_or_default()).unwrap_or_default();
+        writeln!(out, "created/{} {li} {:016x} {:016x}", c.id, h.finish(), fnv64(under.as_bytes())).unwrap();
+    }
     // The world's own buildings edited (a world without edits): in the largest settlement, the
     // first residence taken away, the next made a three-storey smithy; its layout, the smithy's
     // interior and the battlemap where the first stood.

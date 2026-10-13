@@ -385,7 +385,7 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
         let o = sewer_section(e.at);
         return sewer_site(world, t0, layout, (o[0] / SEWER_SECTION_FT) as i64, (o[1] / SEWER_SECTION_FT) as i64);
     }
-    let mut rng = Pcg32::new(hash3(world.stream("under"), layout as i64, k as i64, e.kind as i64), 91);
+    let mut rng = Pcg32::new(hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, e.kind as i64), 91);
     // A created site's own choices (size, levels, theme); the rest from the rng.
     let spec = layout.checked_sub(t0.settlements.len()).and_then(|p| t0.created_site(p)).map(|c| c.spec).unwrap_or_default();
     let (size, depth, theme) = resolve(e.kind, spec, &mut rng);
@@ -508,7 +508,7 @@ pub fn keep_dungeon(world: &World, t0: &T0, layout: usize, bi: usize) -> Option<
     let origin = sub(keep.origin, add(mul(keep.axis, m as f64 * SQUARE_FT), mul(keep.across, m as f64 * SQUARE_FT)));
     let entry = (link.y as usize + m) * nx + link.x as usize + m;
     let frame = Frame { origin, axis: keep.axis, across: keep.across, nx, ny };
-    let mut rng = Pcg32::new(hash3(world.stream("under.keep"), layout as i64, bi as i64, 0), 93);
+    let mut rng = Pcg32::new(hash3(world.stream("under.keep"), town::rng_key(t0, layout), bi as i64, 0), 93);
     let depth = if nx * ny > 6000 { 3 } else { 2 };
     let surface = cellar.elevation_ft;
     site(t0, &l, UnderKind::KeepDungeon, id, (layout as u32, bi as u32), frame, depth, Some(entry), surface, (&KEEP_DUNGEON, 1.0), &mut rng)

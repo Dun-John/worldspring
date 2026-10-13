@@ -1168,18 +1168,19 @@ impl Edits {
     }
 
     /// Replace the fields given (a JSON object of some of the edits' fields, each whole), the
-    /// rest staying: a big world's live edits arrive field by field. Returns whether `created`
-    /// was among them (only then is generation touched).
-    pub fn set_fields(&mut self, json: &str) -> Result<bool, String> {
+    /// rest staying: a big world's live edits arrive field by field. Returns the created sites as
+    /// they were when `created` was among them (only then is generation touched).
+    pub fn set_fields(&mut self, json: &str) -> Result<Option<Vec<Created>>, String> {
         let v: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
         let keys: Vec<String> = v.as_object().ok_or("edits fields: a JSON object")?.keys().cloned().collect();
         let mut part: Edits = serde_json::from_value(v).map_err(|e| e.to_string())?;
+        let mut old = None;
         for k in &keys {
             match k.as_str() {
                 "renames" => self.renames = std::mem::take(&mut part.renames),
                 "notes" => self.notes = std::mem::take(&mut part.notes),
                 "hidden" => self.hidden = std::mem::take(&mut part.hidden),
-                "created" => self.created = std::mem::take(&mut part.created),
+                "created" => old = Some(std::mem::replace(&mut self.created, std::mem::take(&mut part.created))),
                 "npcs" => self.npcs = std::mem::take(&mut part.npcs),
                 "plots" => self.plots = std::mem::take(&mut part.plots),
                 "objects" => self.objects = std::mem::take(&mut part.objects),
@@ -1194,7 +1195,7 @@ impl Edits {
                 _ => return Err(format!("no such edits field: {k}")),
             }
         }
-        Ok(keys.iter().any(|k| k == "created"))
+        Ok(old)
     }
 
     /// Change some entries of keyed fields: `{field: {set: {key: value…}, unset: [key…]}}`

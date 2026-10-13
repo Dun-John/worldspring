@@ -439,7 +439,7 @@ fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
             if (func, residential) != (b.func, b.residential) {
                 b.func = func;
                 b.residential = residential;
-                let mut rng = Pcg32::new(hash2(world.stream("town.edit"), l.index as i64, id as i64), 43);
+                let mut rng = Pcg32::new(hash2(world.stream("town.edit"), rng_key(t0, l.index as usize), id as i64), 43);
                 b.name = sites::trade_name(func, &mut rng, t0, l.center);
             }
         }
@@ -571,13 +571,38 @@ fn wall_kept(world: &World, t0: &T0, index: usize) -> bool {
     })
 }
 
-/// Forget cached layouts from `index` on (created sites changed: they follow the generated
-/// ones, whose layouts stay cached).
+/// Forget cached layouts from `index` on (`forget_from(0)`: all of them).
 pub fn forget_from(index: usize) {
     CACHE.with(|c| c.borrow_mut().1.retain(|&k, _| (k as usize) < index));
     WALLS.with(|w| w.borrow_mut().retain(|&k, _| (k as usize) < index));
     EDITED.with(|c| c.borrow_mut().retain(|&k, _| (k as usize) < index));
     wards::forget_from(index);
+}
+
+/// Forget the cached layouts of the created sites that changed between `old` and `new` (the
+/// entries that differ, or are in one list only; `first`: the first created layout index). The
+/// rest stay: no generated layout reads `Edits.created`, and a created one reads only its own
+/// entry (a wall drawn by hand reads the settlements it reaches, kept by `wall_kept`).
+pub fn forget_created(old: &[crate::world::Created], new: &[crate::world::Created], first: usize) {
+    let gone: FastSet<u32> = (0..old.len().max(new.len())).filter(|&k| old.get(k) != new.get(k)).map(|k| (first + k) as u32).collect();
+    if gone.is_empty() {
+        return;
+    }
+    CACHE.with(|c| c.borrow_mut().1.retain(|k, _| !gone.contains(k)));
+    WALLS.with(|w| w.borrow_mut().retain(|k, _| !gone.contains(k)));
+    EDITED.with(|c| c.borrow_mut().retain(|k, _| !gone.contains(k)));
+    wards::forget(&gone);
+}
+
+/// What layout `index`'s randomness is keyed by: the index itself for the world's own
+/// settlements and sites, a created site's id (through its seed) for one added by hand, so it is
+/// laid out the same wherever it falls in the list: a world remade with more or fewer generated
+/// places moves it along.
+pub fn rng_key(t0: &T0, index: usize) -> i64 {
+    match index.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| t0.pois.get(t0.base_pois + k)) {
+        Some(p) => (p.seed ^ 0x6372_6561_7465_6400) as i64,
+        None => index as i64,
+    }
 }
 
 /// Settlement and site layouts whose reach intersects the rectangle (world ft). Layout index

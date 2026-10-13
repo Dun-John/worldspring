@@ -47,9 +47,21 @@ impl Ctx {
         bytes
     }
 
-    /// Named features and river polylines (JSON) from the T0 generated in this context.
+    /// Named features and river polylines (JSON) from the T0 generated in this context, with the
+    /// layout index of the first created site (`first_created`).
     pub fn overlay_json(&self) -> String {
-        self.t0.as_ref().map(T0::overlay_json).unwrap_or_else(|| "{}".into())
+        let Some(t0) = &self.t0 else { return "{}".into() };
+        let o = t0.overlay_json();
+        match o.strip_suffix('}') {
+            Some(head) => format!("{head},\"first_created\":{}}}", self.first_created()),
+            None => o,
+        }
+    }
+
+    /// The layout index of the first created site (`Edits.created[0]`): the settlements, then the
+    /// world's own sites (the sketch's among them), then the created ones.
+    pub fn first_created(&self) -> u32 {
+        self.t0.as_ref().map_or(0, |t0| (t0.settlements.len() + t0.base_pois) as u32)
     }
 
     pub fn load_t0(&mut self, bytes: &[u8]) -> Result<(), JsError> {
@@ -60,13 +72,14 @@ impl Ctx {
     }
 
     /// Replace the world file's edits (live, from the app or an agent through `mapd`): created
-    /// sites are re-applied and their cached layouts forgotten; the rest needs nothing here.
+    /// sites are re-applied and the cached layouts of those that changed forgotten; the rest
+    /// needs nothing here.
     pub fn set_edits(&mut self, edits_json: &str) -> Result<(), JsError> {
         let edits: worldgen::world::Edits = serde_json::from_str(edits_json).map_err(|e| JsError::new(&e.to_string()))?;
-        self.world.file.edits = edits;
+        let old = std::mem::replace(&mut self.world.file.edits, edits).created;
         if let Some(t0) = &mut self.t0 {
             t0.apply_edits(&self.world);
-            worldgen::town::forget_from(t0.settlements.len() + t0.base_pois);
+            worldgen::town::forget_created(&old, &self.world.file.edits.created, t0.settlements.len() + t0.base_pois);
         }
         Ok(())
     }
@@ -74,10 +87,12 @@ impl Ctx {
     /// Replace only the edits fields given (a JSON object of whole fields): a big world's live
     /// edits arrive field by field. Created sites are re-applied only when they are among them.
     pub fn set_edit_fields(&mut self, fields_json: &str) -> Result<(), JsError> {
-        let created = self.world.file.edits.set_fields(fields_json).map_err(|e| JsError::new(&e))?;
-        if created && let Some(t0) = &mut self.t0 {
+        let old = self.world.file.edits.set_fields(fields_json).map_err(|e| JsError::new(&e))?;
+        if let Some(old) = old
+            && let Some(t0) = &mut self.t0
+        {
             t0.apply_edits(&self.world);
-            worldgen::town::forget_from(t0.settlements.len() + t0.base_pois);
+            worldgen::town::forget_created(&old, &self.world.file.edits.created, t0.settlements.len() + t0.base_pois);
         }
         Ok(())
     }

@@ -23,7 +23,7 @@ use super::geom::*;
 use super::mesh::Mesh;
 use super::{Building, Layout, Structure, TownPlan};
 use crate::World;
-use crate::core::hash::{FastMap, Fnv64};
+use crate::core::hash::{FastMap, FastSet, Fnv64};
 use crate::core::rng::{Pcg32, hash3, unit};
 use crate::t0::T0;
 use crate::t0::settle::Tier;
@@ -266,6 +266,11 @@ pub(super) fn plan(world: &World, index: usize, make: impl FnOnce() -> TownPlan)
 pub(super) fn forget_from(index: usize) {
     PLANS.with(|c| c.borrow_mut().1.retain(|&k, _| (k as usize) < index));
     TOWNS.with(|c| c.borrow_mut().retain(|&k, _| (k as usize) < index));
+}
+
+pub(super) fn forget(gone: &FastSet<u32>) {
+    PLANS.with(|c| c.borrow_mut().1.retain(|k, _| !gone.contains(k)));
+    TOWNS.with(|c| c.borrow_mut().retain(|k, _| !gone.contains(k)));
 }
 
 /// The key of a town's entry in `Edits.towns`.

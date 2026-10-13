@@ -1549,7 +1549,7 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     changed.designs.remove(&id);
     let mut by_field = file.edits.clone();
     let fields = serde_json::json!({ "renames": changed.renames, "designs": changed.designs });
-    assert!(!by_field.set_fields(&fields.to_string()).unwrap(), "{id}: created sites untouched");
+    assert!(by_field.set_fields(&fields.to_string()).unwrap().is_none(), "{id}: created sites untouched");
     assert!(by_field == changed, "{id}: edits set field by field differ");
     let mut patched = file.edits.clone();
     let patch = serde_json::json!({ "renames": { "set": { format!("r:{id}:0:1"): "The Hoard" } }, "designs": { "unset": [id] } });
@@ -1955,6 +1955,88 @@ fn agent_edits_guarantee() {
     let hut = geom::circle(on_wall, 8.0, 12);
     assert!(agent::building_spot(world, t0, &hut, None, "c:99", None).is_err_and(|e| e.contains("wall")), "a building on a wall is allowed");
     assert!(agent::works_spot(world, t0, &works("castle", "c:99".into(), rect_at(castle_spot), vec![]), "c:99", None).is_err(), "a castle over a castle is allowed");
+}
+
+/// Places created by hand stay put when the world is remade: keyed by their ids, not by where
+/// they fall in the list of layouts, a created ruin's layout and dungeon and a drawn building's
+/// layout and interior come out the same after a site drawn in the sketch far away moves them
+/// along. Changing one created entry forgets only its own cached layout: the others are kept
+/// (the same `Rc`), and every one is what a cold rebuild makes.
+#[test]
+fn created_sites_survive_a_remade_world() {
+    use worldgen::world::Created;
+    use worldgen::{agent, interior, town};
+    let file: WorldFile = serde_json::from_str(&world_json(1)).unwrap();
+    let base = World::new(file.clone()).unwrap();
+    let t0 = worldgen::t0::T0::generate(&base);
+    let sea = base.params().sea_level_ft;
+    // Dry open land two miles from a town, clear of every layout; the far settlement from it.
+    let spot = (0..t0.settlements.len() * 8)
+        .map(|k| {
+            let s = &t0.settlements[k / 8];
+            let a = (k % 8) as f64 * std::f64::consts::TAU / 8.0;
+            [s.x + 10_560.0 * libm::cos(a), s.y + 10_560.0 * libm::sin(a)]
+        })
+        .find(|p| {
+            let g = t0.sample(p[0], p[1], 20.0);
+            g > sea + 20.0 && (t0.sample_water(p[0], p[1]) as f64) < g && town::layouts_near(&base, &t0, [p[0] - 1_200.0, p[1] - 1_200.0, p[0] + 1_200.0, p[1] + 1_200.0]).is_empty()
+        })
+        .expect("a dry open spot");
+    let far = t0.settlements.iter().max_by(|a, b| geom_dist([a.x, a.y], spot).total_cmp(&geom_dist([b.x, b.y], spot))).map(|s| [s.x + 3_000.0, s.y]).unwrap();
+    let ell = |c: [f64; 2]| [[0.0, 0.0], [50.0, 0.0], [50.0, 20.0], [20.0, 20.0], [20.0, 45.0], [0.0, 45.0]].map(|p| [c[0] + p[0], c[1] + p[1]]).to_vec();
+    let inn = (0..64)
+        .map(|k| ell([spot[0] + 400.0 + 60.0 * (k % 8) as f64, spot[1] - 200.0 + 60.0 * (k / 8) as f64].map(|v| (v / 5.0).round() * 5.0)))
+        .find_map(|poly| Some((agent::building_spot(&base, &t0, &poly, Some("inn"), "c:1", None).ok()?, poly)))
+        .expect("open ground for a building");
+    let ((at, name), poly) = inn;
+    let mut a = file.clone();
+    a.edits.created = vec![
+        Created { id: "c:0".into(), kind: "ruin".into(), x: spot[0], y: spot[1], name: "The Kept Ruin".into(), under: Some("dungeon".into()), ..Default::default() },
+        Created { id: "c:1".into(), kind: "building".into(), x: at[0], y: at[1], name, poly, floors: Some(2), func: Some("inn".into()), roof: Some("battlements".into()), ..Default::default() },
+        Created { id: "c:2".into(), kind: "camp".into(), x: spot[0] - 600.0, y: spot[1] + 600.0, name: "Camp".into(), ..Default::default() },
+    ];
+    // The same world remade with a site drawn far away: one more of the world's own sites.
+    let mut b = a.clone();
+    b.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "site", "kind": "ruin", "pts": [far] })).unwrap());
+    let (ea, eb) = (Executor::new(World::new(a).unwrap()), Executor::new(World::new(b).unwrap()));
+    let first = |ex: &Executor| ex.t0.settlements.len() + ex.t0.base_pois;
+    assert_eq!(first(&eb), first(&ea) + 1, "the sketch's site did not move the created places along");
+    // A layout, an interior or a site underground as JSON, its layout index left out (ids).
+    let plain = |s: String, li: usize| ["b", "t", "u", "k", "w", "d"].iter().fold(s, |s, p| s.replace(&format!("\"{p}:{li}:"), &format!("\"{p}:#:"))).replace(&format!("\"settlement\":{li},"), "\"settlement\":#,");
+    let laid = |ex: &Executor, li: usize| {
+        let mut l = (*town::layout(&ex.world, &ex.t0, li)).clone();
+        assert_eq!(l.index as usize, li);
+        l.index = 0;
+        format!("{l:?}")
+    };
+    for k in 0..2 {
+        let (la, lb) = (first(&ea) + k, first(&eb) + k);
+        assert_eq!(laid(&ea, la), laid(&eb, lb), "c:{k}: laid out anew when the world was remade");
+    }
+    let (ra, rb) = (first(&ea), first(&eb));
+    let l = town::layout(&ea.world, &ea.t0, ra);
+    let e = l.entrances.iter().find(|e| e.kind == worldgen::under::UnderKind::Dungeon).expect("no dungeon under the ruin");
+    let site = |ex: &Executor, li: usize| plain(serde_json::to_string(&interior::generate_id(&ex.world, &ex.t0, &format!("u:{li}:{}", e.id)).expect("the dungeon")).unwrap(), li);
+    assert_eq!(site(&ea, ra), site(&eb, rb), "the ruin's dungeon was rolled again when the world was remade");
+    let inside = |ex: &Executor, li: usize| plain(serde_json::to_string(&interior::generate_id(&ex.world, &ex.t0, &format!("b:{li}:0")).expect("the inn's interior")).unwrap(), li);
+    assert_eq!(inside(&ea, ra + 1), inside(&eb, rb + 1), "the drawn inn's interior was rolled again when the world was remade");
+
+    // One created entry changed (the camp moved): only its layout is forgotten.
+    let mut ex = ea;
+    let f = first(&ex);
+    let kept: Vec<_> = (0..3).map(|k| town::layout(&ex.world, &ex.t0, f + k)).collect();
+    let old = ex.world.file.edits.created.clone();
+    ex.world.file.edits.created[2].x += 200.0;
+    ex.t0.apply_edits(&ex.world);
+    town::forget_created(&old, &ex.world.file.edits.created, f);
+    let now: Vec<_> = (0..3).map(|k| town::layout(&ex.world, &ex.t0, f + k)).collect();
+    assert!(std::rc::Rc::ptr_eq(&kept[0], &now[0]) && std::rc::Rc::ptr_eq(&kept[1], &now[1]), "an unchanged created place was laid out again");
+    assert!(!std::rc::Rc::ptr_eq(&kept[2], &now[2]) && geom_dist(now[2].center, [old[2].x + 200.0, old[2].y]) < 1.0, "the moved camp kept its old layout");
+    town::forget_from(0);
+    for k in 0..3 {
+        let cold = town::layout(&ex.world, &ex.t0, f + k);
+        assert_eq!(format!("{:?}", now[k]), format!("{cold:?}"), "c:{k}: the cached layout is not what a cold rebuild makes");
+    }
 }
 
 /// The ward editor (`Edits.towns`) on the largest walled city: one corner moved and one patch

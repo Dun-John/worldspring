@@ -741,7 +741,7 @@ impl<'a> Shell<'a> {
 
 fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Building) -> Interior {
     let bi = b.id as usize;
-    let mut rng = Pcg32::new(hash3(world.stream("interior"), settlement as i64, bi as i64, 0x1a7), 71);
+    let mut rng = Pcg32::new(hash3(world.stream("interior"), town::rng_key(t0, settlement), bi as i64, 0x1a7), 71);
     let arch = arch_of(b);
     let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
 
@@ -2390,7 +2390,7 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
     }
     let l = town::layout(world, t0, settlement);
     let (at, r, gate) = *towers(&l).get(k)?;
-    let mut rng = Pcg32::new(hash3(world.stream("interior.tower"), settlement as i64, k as i64, 0x70), 73);
+    let mut rng = Pcg32::new(hash3(world.stream("interior.tower"), town::rng_key(t0, settlement), k as i64, 0x70), 73);
     // The ways the wall runs from here.
     let mut dirs: Vec<P> = Vec::new();
     for w in &l.walls {

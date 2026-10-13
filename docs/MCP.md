@@ -72,6 +72,14 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `h:<id>` | `h:d470a78s` | A plateau or pit (ground shaped by hand) |
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 
+Layout numbers count the settlements, then the world's own sites (those drawn in the sketch last), then the created
+sites in the order they were made. A created site is generated from its `c:<n>` id, not its number: when the world
+is remade (its sketch redrawn), its buildings, interiors and sites underground are generated the same, though its
+layout number moves when the world has more or fewer places of its own, and the ids inside it with it
+(`b:`, `u:`, `l:`, `r:`). Look it up again with `get_feature`. Changes stored under its old ids (a designed
+dungeon or interior, building changes, names and notes on its rooms and levels) stay under those ids and don't
+follow it.
+
 ### Feature kinds
 
 | Group | Kinds |

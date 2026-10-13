@@ -41,9 +41,12 @@ impl Gen {
     /// Apply edit ops to the open world's edits (a batch's step).
     pub fn apply_ops(&mut self, ops: &[EditOp]) -> Result<(), String> {
         let Some(ex) = &mut self.ex else { return Ok(()) };
-        let mut edits = std::mem::take(&mut ex.world.file.edits);
-        let done = ops.iter().try_for_each(|op| edits.apply(op).map(|_| ()));
-        set_edits(ex, edits);
+        // (Only created sites touch generation here.)
+        let old = ops.iter().any(|op| matches!(op, EditOp::Set { field, .. } | EditOp::Unset { field, .. } if field == "created")).then(|| ex.world.file.edits.created.clone());
+        let done = ops.iter().try_for_each(|op| ex.world.file.edits.apply(op).map(|_| ()));
+        if let Some(old) = old {
+            created_changed(ex, &old);
+        }
         done
     }
 
@@ -59,9 +62,15 @@ impl Gen {
 }
 
 fn set_edits(ex: &mut Executor, edits: Edits) {
-    ex.world.file.edits = edits;
+    let old = std::mem::replace(&mut ex.world.file.edits, edits).created;
+    created_changed(ex, &old);
+}
+
+/// Created sites applied again after the edits changed from `old`'s, and the cached layouts of
+/// those that changed forgotten (the rest are kept).
+fn created_changed(ex: &mut Executor, old: &[worldgen::world::Created]) {
     ex.t0.apply_edits(&ex.world);
-    town::forget_from(ex.t0.settlements.len() + ex.t0.base_pois);
+    town::forget_created(old, &ex.world.file.edits.created, ex.t0.settlements.len() + ex.t0.base_pois);
 }
 
 type Job = Box<dyn FnOnce(&mut Gen) + Send>;

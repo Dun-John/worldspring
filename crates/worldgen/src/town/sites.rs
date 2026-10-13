@@ -19,7 +19,9 @@ pub const SITE_REACH_FT: f64 = 260.0;
 pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let p = &t0.pois[poi];
     let center = [p.x, p.y];
-    let mut rng = Pcg32::new(hash2(world.stream("site"), poi as i64, p.seed as i64), 41);
+    // (A created site's keyed by its id, not its place in the list: `rng_key`.)
+    let key = if poi < t0.base_pois { poi as i64 } else { super::rng_key(t0, t0.settlements.len() + poi) };
+    let mut rng = Pcg32::new(hash2(world.stream("site"), key, p.seed as i64), 41);
     // A site created by hand stands on the ground the map draws (`Shore`, as it was placed:
     // `agent::creation_spot`); the world's own on the T0 grid they were placed on.
     let shore = (poi >= t0.base_pois).then(|| {
