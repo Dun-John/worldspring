@@ -415,6 +415,34 @@ impl<'a> Shaper<'a> {
     }
 }
 
+/// How far the shaping moves a building standing at `pad` ft (its ground floor): the mean change
+/// at its outline's corners and centroid with the ground there taken as `pad` (so on a plateau it
+/// stands at the plateau's level), the water as T0's (a pad that was dry stays above it). It reads
+/// only the edits round the building, so it is the same in every chunk the building crosses and in
+/// its interior. 0 when nothing shaped reaches it.
+pub fn pad_shift(edits: &crate::world::Edits, t0: &crate::t0::T0, poly: &[[f64; 2]], pad: f32) -> f32 {
+    if (edits.ground.is_empty() && edits.plateaus.is_empty()) || poly.is_empty() {
+        return 0.0;
+    }
+    let Some(s) = Shaper::new(edits, bbox(poly), SQUARE_FT) else {
+        return 0.0;
+    };
+    let pts = poly.iter().copied().chain([geom::centroid(poly)]);
+    let sum: f64 = pts.map(|p| (s.at_point(p[0], p[1], pad, t0.sample_water(p[0], p[1])) - pad) as f64).sum();
+    (sum / (poly.len() + 1) as f64) as f32
+}
+
+/// `pad_shift` at one point (a wall tower's centre).
+pub fn shift_at(edits: &crate::world::Edits, t0: &crate::t0::T0, at: [f64; 2], pad: f32) -> f32 {
+    if edits.ground.is_empty() && edits.plateaus.is_empty() {
+        return 0.0;
+    }
+    let Some(s) = Shaper::new(edits, [at[0], at[1], at[0], at[1]], SQUARE_FT) else {
+        return 0.0;
+    };
+    s.at_point(at[0], at[1], pad, t0.sample_water(at[0], at[1])) - pad
+}
+
 // ---- making edits ----
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

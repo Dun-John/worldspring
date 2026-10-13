@@ -2156,6 +2156,49 @@ fn ground_edits(base: &World) {
         assert!(pack(&mut ex, *k).0 == plain[q].0, "chunk {k:?} differs once the shaping is cleared");
     }
 
+    // A building across a chunk edge, raised on one side only (a sheer plateau 10 ft past the
+    // edge, under its far corners): both chunks put its roof at one height, raised as much as its
+    // ground floor inside.
+    let si = (0..ex.t0.settlements.len()).max_by_key(|&i| ex.t0.settlements[i].population).unwrap();
+    let l = worldgen::town::layout(&ex.world, &ex.t0, si);
+    let (b, seam) = l
+        .buildings
+        .iter()
+        .filter(|b| b.structure == worldgen::town::Structure::Roofed)
+        .find_map(|b| {
+            let (x0, x1) = b.poly.iter().fold((f64::MAX, f64::MIN), |a, p| (a.0.min(p[0]), a.1.max(p[0])));
+            let (y0, y1) = b.poly.iter().fold((f64::MAX, f64::MIN), |a, p| (a.0.min(p[1]), a.1.max(p[1])));
+            let seam = (x1 / size).floor() * size;
+            (seam > x0 + 15.0 && x1 > seam + 15.0 && (y0 / size).floor() == (y1 / size).floor() && y0 - (y0 / size).floor() * size > 15.0 && ((y1 / size).floor() + 1.0) * size - y1 > 15.0)
+                .then_some((b.clone(), seam))
+        })
+        .expect("a building across a chunk edge");
+    let (x1, (y0, y1)) = (
+        b.poly.iter().map(|p| p[0]).fold(f64::MIN, f64::max),
+        b.poly.iter().fold((f64::MAX, f64::MIN), |a, p| (a.0.min(p[1]), a.1.max(p[1]))),
+    );
+    let ky = (y0 / size).floor() as u32;
+    let sides = [TileKey::surface(lvl, (seam / size) as u32 - 1, ky), TileKey::surface(lvl, (seam / size) as u32, ky)];
+    let id = format!("b:{si}:{}", b.id);
+    let roof = |ex: &mut Executor, k: TileKey| {
+        let c = ex.battlemap(k);
+        let mine: Vec<f32> = (0..SQ * SQ).filter(|&k2| c.building[k2] != 0 && c.buildings[c.building[k2] as usize - 1] == (l.index, b.id)).map(|k2| c.height[k2]).collect();
+        assert!(!mine.is_empty() && mine.iter().all(|h| h.to_bits() == mine[0].to_bits()), "building {id}'s roof is not level in chunk {k:?}");
+        mine[0]
+    };
+    let ground_floor = |ex: &Executor| worldgen::interior::generate_id(&ex.world, &ex.t0, &id).expect("the building's interior").levels.iter().find(|v| v.z == 0).unwrap().elevation_ft;
+    let before = (sides.map(|k| roof(&mut ex, k)), ground_floor(&ex));
+    let outline = [[seam + 10.0, y0 - 20.0], [x1 + 20.0, y0 - 20.0], [x1 + 20.0, y1 + 20.0], [seam + 10.0, y1 + 20.0]];
+    let mut e = Edits::default();
+    e.plateaus.insert("h:side".into(), ground::plateau_for(&outline, b.pad_ft as f64 + 12.0, 0.0).unwrap());
+    ex.world.file.edits = e;
+    let after = (sides.map(|k| roof(&mut ex, k)), ground_floor(&ex));
+    let rise = after.0[0] - before.0[0];
+    assert_eq!(after.0[0].to_bits(), after.0[1].to_bits(), "building {id} across a chunk edge stands at {} and {} on ground shaped on one side", after.0[0], after.0[1]);
+    assert!(rise >= 2.0, "building {id} rose only {rise} ft with a plateau 12 ft up under its far corners");
+    assert!((after.1 - before.1 - rise).abs() < 1e-3, "building {id}'s ground floor rose {} ft, its roof {rise} ft", after.1 - before.1);
+    ex.world.file.edits = Edits::default();
+
     // Lowering never floods: a dry square on a shore, dug by brush and by a pit.
     let settlements = ex.t0.settlements.clone();
     let (key, k2) = settlements

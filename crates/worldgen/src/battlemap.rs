@@ -1120,10 +1120,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 continue;
             }
             let mut id = 0u16;
+            // (Its ground floor rides on ground shaped by hand: `ground::pad_shift`.)
+            let mut pad = b.pad_ft;
             for j in j0..=j1 as usize {
                 for i in i0..=i1 as usize {
                     if crate::town::geom::contains(&b.poly, center(i, j)) {
                         if id == 0 {
+                            pad += crate::ground::pad_shift(&world.file.edits, t0, &b.poly, b.pad_ft);
                             refs.push((l.index, b.id));
                             let battlements = crate::interior::battlements(b);
                             polys.push((
@@ -1136,8 +1139,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                         }
                         let h = j * HS + i;
                         bld_h[h] = id;
-                        lift[h] = b.pad_ft + STOREY_FT * b.floors as f32 - hh[h];
-                        hh[h] = b.pad_ft + STOREY_FT * b.floors as f32;
+                        lift[h] = pad + STOREY_FT * b.floors as f32 - hh[h];
+                        hh[h] = pad + STOREY_FT * b.floors as f32;
                     }
                 }
             }
@@ -1417,7 +1420,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     // A camp's clearing is level: the ground eases to one height from just past the rim to
     // three quarters of the way in (so the tents stand on one tier). That height is the mean
-    // of the ground in it when the chunk holds it all (camps are placed so), else the layout's.
+    // of the ground in it when the chunk holds it all (camps are placed so), else the layout's
+    // (moved as a building's pad is by ground shaped by hand).
     for (poly, level) in &yards {
         let c = crate::town::geom::centroid(poly);
         let reach = poly.iter().map(|q| crate::town::geom::dist(*q, c)).fold(0.0, f64::max);
@@ -1434,7 +1438,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let inside: Vec<f32> = (j0..=j1 as usize).flat_map(|j| (i0..=i1 as usize).map(move |i| (i, j))).filter(|&(i, j)| crate::town::geom::contains(poly, center(i, j))).map(|(i, j)| hh[j * HS + i]).collect();
             if inside.is_empty() { *level } else { inside.iter().sum::<f32>() / inside.len() as f32 }
         } else {
-            *level
+            *level + crate::ground::pad_shift(&world.file.edits, t0, poly, *level)
         };
         for j in j0..=j1 as usize {
             for i in i0..=i1 as usize {

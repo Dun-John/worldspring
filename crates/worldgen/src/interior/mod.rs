@@ -605,6 +605,15 @@ pub fn generate(world: &World, t0: &T0, settlement: usize, building: usize) -> O
     if b.structure != Structure::Roofed {
         return None;
     }
+    // Its floors ride on ground shaped by hand, as its roof does on the battlemap.
+    let shift = crate::ground::pad_shift(&world.file.edits, t0, &b.poly, b.pad_ft);
+    let moved;
+    let b = if shift != 0.0 {
+        moved = town::Building { pad_ft: b.pad_ft + shift, ..b.clone() };
+        &moved
+    } else {
+        b
+    };
     // (As designed by hand, while the design fits the building: `design`.)
     if !world.file.edits.designs.is_empty()
         && let Some(d) = world.file.edits.designs.get(&format!("b:{}:{}", l.index, b.id))
@@ -2447,6 +2456,7 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
     let front = if gx.abs() > gy.abs() { if gx > 0.0 { 1 } else { 3 } } else if gy > 0.0 { 2 } else { 0 };
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
     let pad = t0.ground_at(at[0], at[1], lattice) as f32;
+    let pad = pad + crate::ground::shift_at(&world.file.edits, t0, at, pad);
     // The door opens onto open ground, never into a building built against the tower.
     let near: Vec<&Vec<P>> = l.buildings.iter().filter(|o| o.structure == town::Structure::Roofed && o.poly.iter().any(|p| geom::dist(*p, at) < r + 120.0)).map(|o| &o.poly).collect();
     let ext_free = |i: isize, j: isize| {
