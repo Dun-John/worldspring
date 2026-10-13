@@ -963,7 +963,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -1655,7 +1655,9 @@
   let scatter = $state<ScatterSettings>(defaultScatter());
   /** The brush ring under the pointer (screen px). */
   let ring = $state<{ x: number; y: number; r: number } | null>(null);
-  let scatterArmed: { tool: PointerTool } | null = null;
+  /** The chip by what is in the hand (screen px). */
+  let chip = $state<{ x: number; y: number; text: string } | null>(null);
+  let scatterArmed: { tool: ScatterTool } | null = null;
   const placedSprites = $derived.by(() => {
     const n: Record<string, number> = {};
     for (const o of Object.values(edits.objects ?? {})) if (typeof o.kind === 'string') n[o.kind.slice(2)] = (n[o.kind.slice(2)] ?? 0) + 1;
@@ -1677,19 +1679,35 @@
         const b = container.getBoundingClientRect();
         ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
       },
+      ghost: (o, ok) => view.battle?.setGhost(o, ok),
+      chip: (x, y, text) => {
+        if (text === null) return (chip = null);
+        const [sx, sy] = view.cam.worldToScreen(x, y);
+        const b = container.getBoundingClientRect();
+        chip = { x: b.left + sx, y: b.top + sy, text };
+      },
       battlemap: () => (view.battle?.stats.alpha ?? 0) > 0,
+      loaded: (x, y) => !!view.battle?.loadedAt(x, y),
       hint: (t) => toast(t),
     });
     scatterArmed = { tool };
   }
 
   function disarmScatter() {
+    scatterArmed?.tool.dispose();
     scatterArmed = null;
     ring = null;
+    chip = null;
   }
 
+  // The ghost follows the settings as the panel changes them (kind, turn, size).
+  $effect(() => {
+    void [scatter.mode, scatter.kinds, scatter.kinds.length, scatter.rotation, scatter.scale, scatter.vary];
+    scatterArmed?.tool.refresh();
+  });
+
   /** Objects put down (or, null, taken away) and generated ones cleared, as one change. */
-  function commitObjects(objects: Record<string, Placed | null>, cleared: Record<string, Clear>, label: { tool: string; count: number; name?: string }) {
+  function commitObjects(objects: Record<string, Placed | null>, cleared: Record<string, Clear>, label: { tool: string; count: number; name?: string; changed?: string[] }) {
     const e = edits;
     const o = { ...(e.objects ?? {}) };
     for (const [k, v] of Object.entries(objects)) {
@@ -2212,12 +2230,14 @@
   /** Undo and redo go to the designer's history while it is open, then the sketch's (which has
    * no redo), then the world's edits. */
   function undoAny() {
+    scatterArmed?.tool.putBack();
     if (designer) designer.undo();
     else if (sketchOn) sketcher.undo();
     else undo();
   }
 
   function redoAny() {
+    scatterArmed?.tool.putBack();
     if (designer) designer.redo();
     else if (!sketchOn) redo();
   }
@@ -2284,8 +2304,9 @@
     sketchTool: (t) => (sketchSettings.tool = t),
     scatterMode: (m) => {
       scatter.mode = m;
-      if (m === 'stamp' && scatter.kinds.length > 1) scatter.kinds = [scatter.kinds[0]];
+      if (m === 'place' && scatter.kinds.length > 1) scatter.kinds = [scatter.kinds[0]];
     },
+    placing: () => (scatterOn && scatterArmed ? scatterArmed.tool : null),
     buildCross: () => {
       if (buildMode !== 'crossing') return setBuildMode('crossing');
       const order = ['bridge', 'ford', 'ferry'] as const;
@@ -2325,6 +2346,7 @@
         el!.blur();
         return true;
       },
+      () => !!(scatterOn && scatterArmed?.tool.escape()),
       () => !!buildArmed?.tool.reset(),
       () => !!buildArmed?.works.reset(),
       () => (worksEditing ? ((worksEditing = null), true) : false),
@@ -2589,7 +2611,7 @@
         { key: 'sites', label: 'Places', icon: 'pin', kbd: 'S', hint: 'Add a ruin, dungeon, crypt, cave, mine, tower, camp or inn.' },
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, bridges and fords; clear a town’s own buildings.' },
         { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the town in view (U)', hint: 'Re-plan the town in view: its streets, wards, lots and walls.' },
-        { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap: stamp, brush, erase, or upload your own.' },
+        { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap: place, brush, erase, or upload your own.' },
         {
           key: 'design',
           label: 'Rooms',
@@ -2820,6 +2842,7 @@
     </div>
   {/if}
   {#if scatterOn && ring}<div class="ring" style="left: {ring.x - ring.r}px; top: {ring.y - ring.r}px; width: {ring.r * 2}px; height: {ring.r * 2}px" class:erase={scatter.mode === 'erase'}></div>{/if}
+  {#if scatterOn && chip}<div class="hand-chip" style="left: {chip.x}px; top: {chip.y}px">{chip.text}</div>{/if}
   {#if hud}
     <Readout {hud} inside={!!inside} />
     {#if shell.stats}<DevStats {hud} {bench} {benchRunning} onBench={startBench} onClose={() => shell.setStats(false)} />{/if}
@@ -2899,6 +2922,19 @@
     border: 2px solid rgba(58, 50, 42, 0.85);
     border-radius: 50%;
     box-shadow: 0 0 0 1px rgba(245, 236, 214, 0.7);
+  }
+  .hand-chip {
+    position: fixed;
+    z-index: var(--z-ring);
+    pointer-events: none;
+    padding: 1px 6px;
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius-sm);
+    background: var(--paper);
+    color: var(--ink);
+    font: 11px/1.4 var(--font);
+    white-space: nowrap;
+    box-shadow: var(--shadow);
   }
   .ring.erase {
     border-color: rgba(163, 58, 42, 0.9);

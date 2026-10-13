@@ -129,6 +129,16 @@ export interface PointerTool {
    * the last frame's drawing is kept, shifted as the map pans (for a tool that draws a lot; it
    * must draw at least a quarter of the view beyond each side). */
   drawKey?(): string;
+  /** The wheel over the map: true if the tool took it (else it zooms). */
+  wheel?(e: WheelEvent, x: number, y: number): boolean;
+  /** A click or tap the tool's `down` didn't take (a right click, say): true if the tool took
+   * it (else it picks, or offers the ways on inside a site). */
+  tap?(x: number, y: number, e: PointerEvent): boolean;
+  /** The pointer left the map. */
+  leave?(): void;
+  /** Hovered again where the pointer now is when the camera moves under a still pointer (for
+   * a ghost or ring that follows it). */
+  readonly hoverFollows?: boolean;
 }
 
 const TIERS: [number, string][] = [
@@ -216,6 +226,8 @@ export class MapView {
   /** The drawing kept from the last frame: its key and tool (`PointerTool.drawKey`). */
   private toolKey: string | null = null;
   private toolKeyOf: PointerTool | null = null;
+  /** The camera (centre, zoom) a `hoverFollows` tool was last hovered at. */
+  private readonly hoverCam = [NaN, NaN, NaN];
   private toolAt: [number, number] = [0, 0];
   private toolPointer: number | null = null;
   /** Called every frame after the camera moved and the map updated. */
@@ -1088,6 +1100,15 @@ export class MapView {
       const tp = performance.now();
       this.onFrame?.(now);
       this.playMs = performance.now() - tp;
+      // (A ghost or ring stays under a still pointer as the camera moves.)
+      const cam0 = this.cam;
+      if (this.tool?.hoverFollows && this.cursor && !this.pointers.size && this.toolPointer === null) {
+        const h = this.hoverCam;
+        if (h[0] !== cam0.cx || h[1] !== cam0.cy || h[2] !== cam0.zoom) {
+          [h[0], h[1], h[2]] = [cam0.cx, cam0.cy, cam0.zoom];
+          this.tool.hover(...cam0.screenToWorld(this.cursor.sx, this.cursor.sy));
+        }
+      }
       if (this.tool?.draw || this.toolDrawn) {
         // (A tool with a key: its drawing kept and shifted while only the camera's middle moves,
         // drawn again once that is a quarter of the view away.)
@@ -1194,6 +1215,7 @@ export class MapView {
         this.fly = null;
         const r = c.getBoundingClientRect();
         this.cursor = { sx: e.clientX - r.left, sy: e.clientY - r.top };
+        if (this.tool?.wheel?.(e, ...this.cam.screenToWorld(this.cursor.sx, this.cursor.sy))) return;
         const lines = e.deltaMode === 1 ? 40 : 1;
         this.vel.z += (-e.deltaY * lines) * 0.00004;
         this.vel.z = Math.max(-0.02, Math.min(0.02, this.vel.z));
@@ -1301,7 +1323,9 @@ export class MapView {
         const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
         // Inside a site, a click offers the ways on from that square; outside, it picks.
         const site = this.interiorAt(x, y);
-        if (site) this.onMoves(site.movesAt(x, y), e.clientX - r.left, e.clientY - r.top);
+        if (this.tool?.tap?.(x, y, e)) {
+          // (taken by the tool)
+        } else if (site) this.onMoves(site.movesAt(x, y), e.clientX - r.left, e.clientY - r.top);
         else this.onPick(x, y, e.clientX - r.left, e.clientY - r.top);
         // Touch screens: a second tap nearby soon after is a double-tap.
         if (e.pointerType !== 'mouse') {
@@ -1323,7 +1347,10 @@ export class MapView {
     };
     c.addEventListener('pointerup', end);
     c.addEventListener('pointercancel', end);
-    c.addEventListener('pointerleave', () => (this.cursor = null));
+    c.addEventListener('pointerleave', () => {
+      this.cursor = null;
+      this.tool?.leave?.();
+    });
     // Sketching pans with the right button, play tools use it: no menu.
     c.addEventListener('contextmenu', (e) => {
       if (this.sketcher || this.tool) e.preventDefault();

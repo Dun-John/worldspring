@@ -10,13 +10,14 @@
   }
   let { list, onClose }: Props = $props();
 
-  const ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit', 'Build', 'Streets', 'Objects', 'Rooms', 'Play'];
+  const ORDER = ['Panels', 'Map', 'World', 'Sketch', 'Edit', 'Build', 'Streets', 'Objects', 'Placing', 'Rooms', 'Play'];
   const NOTES: Record<string, string> = {
     Sketch: 'While sketching',
     Edit: 'With Edit open',
     Build: 'Edit › Build',
     Streets: 'Edit › Streets',
     Objects: 'Edit › Objects',
+    Placing: 'Edit › Objects, on the piece held, pointed at or chosen',
     Rooms: 'Edit › Rooms, inside a building or site',
     Play: 'While playing, with Play (or no panel) open',
   };

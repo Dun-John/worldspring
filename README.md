@@ -53,7 +53,7 @@ Open **Edit** and pick a tab (or press its letter). Every change can be undone.
 | **Places** (S) | Add your own ruins, dungeons, crypts, catacombs, caves, mines, lava tubes, towers, camps and roadside inns, with their size, depth and theme. |
 | **Build** (B) | Draw buildings (rectangles, polygons, round towers). Raise castles (K) and walls (W) anywhere. Put bridges, fords and ferries (X) across a river, bank to bank. |
 | **Streets** (U) | Re-plan the town in view: drag its ward corners, or move them with brushes (Displace, Liquify, Bloat, Pinch, Relax, Equalize). Give a ward another use, change its lots, merge or reroll them, put walls up or down, or clear a ward and build your own. |
-| **Objects** (C) | Stamp or brush objects onto a battlemap, or erase them. Upload your own pictures to use as objects. |
+| **Objects** (C) | Place objects on a battlemap one at a time (turned, picked up and moved again), brush them on, or erase them. Upload your own pictures to use as objects. |
 | **Rooms** (D) | Go inside a building, dungeon, cave or mine and design it room by room: walls, doors, stairs, storeys, cellars, furniture and props. |
 
 **Sketch** (World › Sketch) works at the scale of the continent, and generating from it remakes the world to fit:

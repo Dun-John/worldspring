@@ -4,6 +4,7 @@
 import type { EditTool } from '../../editor/sketcher';
 import type { ScatterMode } from '../../editor/scatter';
 import type { BuildShape } from '../../editor/build';
+import type { Placer } from '../../editor/placing';
 import type { DesignMode } from '../../editor/site/designer';
 import type { TownMode } from '../../editor/town';
 import type { Tool as PlayTool } from '../../play/controller';
@@ -37,6 +38,8 @@ export interface KeyContext {
   saveDesign(): void;
   sketchTool(t: EditTool): void;
   scatterMode(m: ScatterMode): void;
+  /** What places things by hand while its panel is open (Objects), or none. */
+  placing(): Placer | null;
   buildShape(s: BuildShape): void;
   /** Crossings (again: the next kind). */
   buildCross(): void;
@@ -148,11 +151,31 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     { keys: ['['], label: 'Smaller brush', group: 'Streets', repeat: true, when: () => edit('town')() && !k.inside(), run: () => k.townBrush(-1) },
   );
   const modes: [string, ScatterMode, string][] = [
-    ['Q', 'stamp', 'Stamp'],
+    ['Q', 'place', 'Place'],
     ['W', 'brush', 'Brush'],
     ['E', 'erase', 'Erase'],
   ];
   for (const [key, m, label] of modes) out.push({ keys: [key], label, group: 'Objects', when: edit('scatter'), run: () => k.scatterMode(m) });
+  out.push(
+    { keys: [']'], label: 'Bigger (brush: wider)', group: 'Objects', repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(1) },
+    { keys: ['['], label: 'Smaller (brush: narrower)', group: 'Objects', repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(-1) },
+  );
+  // Placing: on what the hand shows (the piece held, the one a click would pick up, or the
+  // chosen item's ghost). A key with nothing to act on goes on to the next binding.
+  const placing = () => !!k.placing();
+  const on = (f: (p: Placer) => boolean) => () => {
+    const p = k.placing();
+    return !!p && f(p);
+  };
+  out.push(
+    { keys: ['T'], label: 'Turn clockwise', group: 'Placing', repeat: true, when: placing, run: on((p) => p.turn(1, false)) },
+    { keys: ['Shift+T'], label: 'Turn anticlockwise', group: 'Placing', repeat: true, when: placing, run: on((p) => p.turn(-1, false)) },
+    { keys: ['.'], label: 'Turn a little clockwise (Shift+wheel too)', group: 'Placing', repeat: true, when: placing, run: on((p) => p.turn(1, true)) },
+    { keys: [','], label: 'Turn a little anticlockwise', group: 'Placing', repeat: true, when: placing, run: on((p) => p.turn(-1, true)) },
+    { keys: ['Z'], label: 'Turn by itself again (at random)', group: 'Placing', when: placing, run: on((p) => p.turnReset()) },
+    { keys: ['Enter'], label: 'Put the piece held down', group: 'Placing', when: placing, run: on((p) => p.putDown()) },
+    { keys: ['Delete', 'Backspace'], label: 'Take away the piece held or pointed at', group: 'Placing', when: placing, run: on((p) => p.remove()) },
+  );
   const design: [string, DesignMode, string][] = [
     ['V', 'select', 'Choose a room'],
     ['R', 'room', 'Room'],

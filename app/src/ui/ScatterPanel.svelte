@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Edit › Objects: put battlemap objects down (a stamp, or a brush scattering the chosen
-  // kinds, chosen in the item picker), take them away (click or brush), and upload pictures as
+  // Edit › Objects: put battlemap objects down (one at a time, picked up and moved, or a brush
+  // scattering the chosen kinds, chosen in the item picker), take them away (click or brush), and upload pictures as
   // new kinds of object with their tactical rules. The tool works on the map while the tab is open.
   import type { KindInfo } from '../gen/client';
   import type { SpriteMeta } from '../gen/protocol';
@@ -34,7 +34,7 @@
   let { settings = $bindable(), catalog, sprites, placed, thumbs, picture, peek = false, onUpload, onSprite }: Props = $props();
 
   const MODES: [ScatterMode, string, IconName, string, string][] = [
-    ['stamp', 'Stamp', 'stamp', 'Q', 'Click on the battlemap to put the chosen object down.'],
+    ['place', 'Place', 'stamp', 'Q', 'Click on the battlemap to put the chosen object down; T or Shift+wheel turns it. With nothing chosen (Esc), click one you put down to pick it up and move it; Delete takes it away.'],
     ['brush', 'Brush', 'brush', 'W', 'Drag on the battlemap to scatter the chosen kinds (choose several).'],
     ['erase', 'Erase', 'eraser', 'E', 'Click an object to take it away, or drag to clear an area.'],
   ];
@@ -73,15 +73,15 @@
   ]);
 
   function choose(kind: number | string) {
-    // A stamp puts down one kind; a brush or eraser takes several (a click adds or drops one).
-    if (settings.mode === 'stamp') settings.kinds = [kind];
+    // Place puts down one kind; a brush or eraser takes several (a click adds or drops one).
+    if (settings.mode === 'place') settings.kinds = [kind];
     else if (!settings.kinds.length) settings.kinds = [kind];
     else settings.kinds = settings.kinds.includes(kind) ? settings.kinds.filter((k) => k !== kind) : [...settings.kinds, kind];
   }
 
   function setMode(m: ScatterMode) {
     settings.mode = m;
-    if (m === 'stamp' && settings.kinds.length > 1) settings.kinds = [settings.kinds[0]];
+    if (m === 'place' && settings.kinds.length > 1) settings.kinds = [settings.kinds[0]];
   }
 
   // An upload being described, or an uploaded sprite being changed (a view of its own).
@@ -190,12 +190,12 @@
         {/each}
       </div>
     {:else if settings.mode !== 'erase'}
-      <div class="ws-hint">Choose what to put down below.</div>
+      <div class="ws-hint">Choose what to put down below{settings.mode === 'place' ? ', or click one you put down to pick it up' : ''}.</div>
     {/if}
     {#if !peek}
       <div class="ws-hint">{MODES.find((m) => m[0] === settings.mode)?.[4]}</div>
       <details class="ws-group" open={remembered('scatter.brush', false)} ontoggle={(e) => remember('scatter.brush', e.currentTarget.open)}>
-        <summary>{settings.mode === 'erase' ? 'Eraser' : 'Brush'} settings</summary>
+        <summary>{settings.mode === 'erase' ? 'Eraser settings' : settings.mode === 'place' ? 'Size and turn' : 'Brush settings'}</summary>
         <div class="ws-group-body">
           {#if settings.mode !== 'erase'}
             <label class="slider">
@@ -208,7 +208,7 @@
               {#if settings.rotation !== null}<input class="ws-input deg" type="number" step="15" bind:value={settings.rotation} aria-label="Turn (degrees)" />°{/if}
             </div>
           {/if}
-          {#if settings.mode !== 'stamp'}
+          {#if settings.mode !== 'place'}
             <label class="slider">
               <span>Radius</span><output>{settings.radius} ft</output>
               <input type="range" min="5" max="60" step="2.5" bind:value={settings.radius} />

@@ -329,6 +329,12 @@ export class BattlemapLayer {
     });
   }
 
+  /** Whether the chunk under a world position is built (objects there can be seen and found). */
+  loadedAt(wx: number, wy: number): boolean {
+    const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
+    return this.chunks.has(`${Math.floor(wx / ts)}/${Math.floor(wy / ts)}`);
+  }
+
   /** The object whose footprint holds a world position (the nearest centre), if its chunk is
    * loaded: its kind (built-in id, or `s:<asset>`), centre (world ft) and look. */
   objectAt(wx: number, wy: number): ObjectHit | null {
