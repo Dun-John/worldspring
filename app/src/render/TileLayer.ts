@@ -121,6 +121,8 @@ export class TileLayer {
   private readonly tiles = new Map<string, GpuTile>();
   private readonly uploads = new Map<string, TileMsg>();
   private readonly edited = new Edited();
+  /** The part of `edited` where the ground was shaped (tiles there draw old heights). */
+  private readonly reshaped = new Edited();
   private readonly program = GlProgram.from({ vertex, fragment, name: 'terrain-tile' });
   private readonly riverProgram = GlProgram.from({ vertex: riverVertex, fragment: riverFragment, name: 'tile-river' });
   private readonly roadProgram = GlProgram.from({ vertex: roadVertex, fragment: roadFragment, name: 'tile-road' });
@@ -158,10 +160,11 @@ export class TileLayer {
     this.uploads.set(tileId(t.level, t.x, t.y), t);
   }
 
-  /** Created sites changed within `rects`: tiles there from `minLevel` in are made again
-   * (and swapped in when they arrive). */
-  invalidate(rects: Rect[], minLevel: number, epoch: number) {
+  /** Created sites changed within `rects` (or the ground was shaped: `ground`): tiles there
+   * from `minLevel` in are made again (and swapped in when they arrive). */
+  invalidate(rects: Rect[], minLevel: number, epoch: number, ground = false) {
     this.edited.add(rects, minLevel, epoch);
+    if (ground) this.reshaped.add(rects, minLevel, epoch);
     for (const [id, m] of this.uploads) if (this.stale(m)) this.uploads.delete(id);
   }
 
@@ -308,14 +311,15 @@ export class TileLayer {
     return this.viewRms;
   }
 
-  /** Elevation (ft) at a world point from the finest loaded tile, or null. */
+  /** Elevation (ft) at a world point from the finest loaded tile, or null. (Not a tile made
+   * before the ground there was shaped: a coarser one is read until it is made again.) */
   heightAt(wx: number, wy: number): number | null {
     for (let l = this.geom.max_level; l >= 0; l--) {
       const ts = this.geom.domain_ft / 2 ** l;
       const x = Math.floor(wx / ts);
       const y = Math.floor(wy / ts);
       const t = this.tiles.get(tileId(l, x, y));
-      if (!t) continue;
+      if (!t || this.reshaped.staleAt(t.level, t.x, t.y, ts, t.epoch)) continue;
       const fx = ((wx - x * ts) / ts) * TILE_N;
       const fy = ((wy - y * ts) / ts) * TILE_N;
       const i = Math.min(TILE_N, Math.max(0, Math.round(fx)));

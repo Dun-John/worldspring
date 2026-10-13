@@ -294,6 +294,7 @@ pub struct Shaper<'a> {
     bh: i64,
     blocks: Vec<Option<&'a GroundBlock>>,
     plats: Vec<Kept<'a>>,
+    reach: [f64; 4],
 }
 
 impl<'a> Shaper<'a> {
@@ -311,6 +312,8 @@ impl<'a> Shaper<'a> {
         let (bw, bh) = ((bx1 - bx0 + 1).max(0), (by1 - by0 + 1).max(0));
         let mut blocks = vec![None; (bw * bh) as usize];
         let mut any = false;
+        let mut reach = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+        let mut grow = |r: [f64; 4]| reach = [reach[0].min(r[0]), reach[1].min(r[1]), reach[2].max(r[2]), reach[3].max(r[3])];
         if !edits.ground.is_empty() && sx1 >= 0 && sy1 >= 0 {
             for bx in bx0..=bx1 {
                 for (k, b) in edits.ground.range(block_key(bx, by0)..=block_key(bx, by1)) {
@@ -320,6 +323,8 @@ impl<'a> Shaper<'a> {
                     {
                         blocks[((y - by0) * bw + x - bx0) as usize] = Some(b);
                         any = true;
+                        let side = (BLOCK as f64) * SQUARE_FT;
+                        grow([x as f64 * side - SQUARE_FT, y as f64 * side - SQUARE_FT, (x + 1) as f64 * side + SQUARE_FT, (y + 1) as f64 * side + SQUARE_FT]);
                     }
                 }
             }
@@ -338,6 +343,7 @@ impl<'a> Shaper<'a> {
             if b[2] + band < rect[0] || b[0] - band > rect[2] || b[3] + band < rect[1] || b[1] - band > rect[3] {
                 continue;
             }
+            grow([b[0] - band, b[1] - band, b[2] + band, b[3] + band]);
             plats.push((geom::area(&p.pts).abs(), k, Kept { pts: &p.pts, level: p.level as f64, band, b }));
         }
         if !any && plats.is_empty() {
@@ -345,7 +351,13 @@ impl<'a> Shaper<'a> {
         }
         // Largest first, so terraces and pits inside a plateau come after it.
         plats.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
-        Some(Shaper { bx0, by0, bw, bh, blocks: if any { blocks } else { Vec::new() }, plats: plats.into_iter().map(|p| p.2).collect() })
+        Some(Shaper { bx0, by0, bw, bh, blocks: if any { blocks } else { Vec::new() }, plats: plats.into_iter().map(|p| p.2).collect(), reach })
+    }
+
+    /// Where the shaping it holds can change the ground (world ft: x0, y0, x1, y1); outside it
+    /// every point is the ground as given.
+    pub fn reach(&self) -> [f64; 4] {
+        self.reach
     }
 
     /// The brushed change of global square (gx, gy), ft.

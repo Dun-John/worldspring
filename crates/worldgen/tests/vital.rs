@@ -2061,6 +2061,17 @@ fn ground_edits(base: &World) {
     };
     let plain: Vec<(Vec<u8>, Chunk)> = keys.iter().map(|&k| pack(&mut ex, k)).collect();
     let padded: Vec<Vec<f32>> = keys.iter().map(|&k| ex.terrain(k).padded.clone()).collect();
+    // The tiles round the corner at the four finest levels, as generated.
+    let tile_keys: Vec<TileKey> = (lvl - 3..=lvl)
+        .flat_map(|l| {
+            let ts = g.tile_size_ft(l);
+            let mut ks: Vec<TileKey> = [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]].iter().map(|d| TileKey::surface(l, ((corner[0] + d[0]) / ts) as u32, ((corner[1] + d[1]) / ts) as u32)).collect();
+            ks.sort_by_key(|k| (k.y, k.x));
+            ks.dedup();
+            ks
+        })
+        .collect();
+    let plain_tiles: Vec<Vec<u8>> = tile_keys.iter().map(|&k| ex.terrain_packed(k)).collect();
     // A square's centre (world ft) and its height in the chunk holding it.
     let centre = |k: &TileKey, i: usize, j: usize| [k.x as f64 * size + (i as f64 + 0.5) * SQUARE_FT, k.y as f64 * size + (j as f64 + 0.5) * SQUARE_FT];
     let half = 60.0;
@@ -2150,10 +2161,66 @@ fn ground_edits(base: &World) {
         }
     }
     assert!(flat >= 100, "too few open squares on the plateau ({flat})");
+    // Tiles: the three finest levels draw the shaping (texels of the shaped heights, the plateau
+    // at its level at the corner) and send their samples on as generated; coarser ones unchanged.
+    use worldgen::core::tile::{PADDED, TILE_SAMPLES};
+    let mut drawn: Vec<(TileKey, Vec<f32>)> = Vec::new();
+    for (q, &k) in tile_keys.iter().enumerate() {
+        let bytes = ex.terrain_packed(k);
+        if k.level + 2 < lvl {
+            assert!(bytes == plain_tiles[q], "tile {k:?} above the three finest levels changed with shaped ground");
+            continue;
+        }
+        let samples = 48..48 + PADDED * PADDED * 4;
+        assert!(bytes != plain_tiles[q], "tile {k:?} doesn't show the shaped ground");
+        assert!(bytes[samples.clone()] == plain_tiles[q][samples.clone()], "tile {k:?}'s samples for its children changed with shaped ground");
+        let tile = ex.terrain(k);
+        let h = worldgen::payload::shaped_heights(&ex.world, &ex.t0, &k, &tile).expect("shaped heights");
+        let base = f32::from_le_bytes(bytes[16..20].try_into().unwrap());
+        let tex = samples.end;
+        for j in 0..TILE_SAMPLES {
+            for i in 0..TILE_SAMPLES {
+                let t = tex + (j * TILE_SAMPLES + i) * 8;
+                let v = u16::from_le_bytes([bytes[t], bytes[t + 1]]);
+                assert_eq!(v, worldgen::payload::f16_bits(h[(j + HALO) * PADDED + i + HALO] - base), "tile {k:?}'s texel ({i}, {j}) isn't its shaped height");
+            }
+        }
+        let ts = g.tile_size_ft(k.level);
+        let (ci, cj) = (((corner[0] - k.x as f64 * ts) / ts * TILE_N as f64).round() as usize, ((corner[1] - k.y as f64 * ts) / ts * TILE_N as f64).round() as usize);
+        if ci <= TILE_N && cj <= TILE_N {
+            let at = h[(cj + HALO) * PADDED + ci + HALO];
+            assert!((at - level).abs() < 0.01, "tile {k:?} draws the plateau's corner at {at}, not {level}");
+        }
+        drawn.push((k, h));
+    }
+    // Seamless: the samples two tiles share are shaped alike, bit for bit.
+    let mut seams = 0;
+    for (a, ha) in &drawn {
+        for (b, hb) in &drawn {
+            let edge = |t: usize, east: bool, h: &[f32], far: bool| {
+                let e = if far { TILE_N } else { 0 };
+                let (i, j) = if east { (e, t) } else { (t, e) };
+                h[(j + HALO) * PADDED + i + HALO].to_bits()
+            };
+            for east in [true, false] {
+                let next = if east { b.level == a.level && b.x == a.x + 1 && b.y == a.y } else { b.level == a.level && b.y == a.y + 1 && b.x == a.x };
+                if next {
+                    seams += 1;
+                    for t in 0..TILE_SAMPLES {
+                        assert_eq!(edge(t, east, ha, true), edge(t, east, hb, false), "shaped ground: tile seam {a:?} | {b:?} at {t}");
+                    }
+                }
+            }
+        }
+    }
+    assert!(seams >= 4, "too few tile seams checked ({seams})");
     // Cleared: as generated, byte for byte.
     ex.world.file.edits = Edits::default();
     for (q, k) in keys.iter().enumerate() {
         assert!(pack(&mut ex, *k).0 == plain[q].0, "chunk {k:?} differs once the shaping is cleared");
+    }
+    for (q, &k) in tile_keys.iter().enumerate() {
+        assert!(ex.terrain_packed(k) == plain_tiles[q], "tile {k:?} differs once the shaping is cleared");
     }
 
     // A building across a chunk edge, raised on one side only (a sheer plateau 10 ft past the

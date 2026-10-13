@@ -4,8 +4,10 @@
 //!   0 magic u32 | 4 level u32 | 8 x u32 | 12 y u32
 //!  16 base f32  | 20 min f32  | 24 max f32 | 28 grad_rms f32
 //!  32 padded_len u32 (f32 count) | 36 tex_len u32 (u16 count) | 40 biome_len u32 (bytes) | 44 rivers_len u32 (bytes)
-//!  48 padded heights f32[PADDED²]      (kept by the coordinator for child tiles)
-//!  .. render texels u16[TILE_SAMPLES² * 4] as f16 RGBA: (h - base, dh/dx, dh/dy, water - base)
+//!  48 padded heights f32[PADDED²]      (kept by the coordinator for child tiles; as generated)
+//!  .. render texels u16[TILE_SAMPLES² * 4] as f16 RGBA: (h - base, dh/dx, dh/dy, water - base),
+//!     h as drawn (at the three finest levels the ground shaped by hand: `shaped_heights`; base,
+//!     min, max and grad_rms are of it too)
 //!  .. biome texels u8[TILE_SAMPLES² * 4]: (primary, secondary, blend, coast distance)
 //!  .. rivers: n_lines u32, n_verts u32, starts u32[n_lines + 1], verts f32[n_verts * 4]
 //!     as (x, y in tile units 0..1, width ft, discharge). Each segment belongs to the one tile
@@ -31,7 +33,11 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     let padded = &tile.padded;
     assert_eq!(padded.len(), PADDED * PADDED);
     let s = world.geom.spacing_ft(key.level);
-    let at = |i: usize, j: usize| padded[(j + HALO) * PADDED + i + HALO];
+    // What is drawn (and read back for heights) is the ground shaped by hand; the samples sent on
+    // for child tiles are as generated.
+    let shaped = shaped_heights(world, t0, key, tile);
+    let h: &[f32] = shaped.as_deref().unwrap_or(padded);
+    let at = |i: usize, j: usize| h[(j + HALO) * PADDED + i + HALO];
 
     let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
     for j in 0..TILE_SAMPLES {
@@ -65,10 +71,10 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
         for i in 0..TILE_SAMPLES {
             let x = (gx0 + i as i64) as f64 * s;
             let k = (j + HALO) * PADDED + i + HALO;
-            let gx = (padded[k + 1] - padded[k - 1]) as f64 * inv_2s;
-            let gy = (padded[k + PADDED] - padded[k - PADDED]) as f64 * inv_2s;
+            let gx = (h[k + 1] - h[k - 1]) as f64 * inv_2s;
+            let gy = (h[k + PADDED] - h[k - PADDED]) as f64 * inv_2s;
             grad_sq += gx * gx + gy * gy;
-            tex.push(f16_bits(padded[k] - base));
+            tex.push(f16_bits(h[k] - base));
             tex.push(f16_bits(gx as f32));
             tex.push(f16_bits(gy as f32));
             tex.push(f16_bits(t0.sample_water(x, y).max(tile.river_water[k]) - base));
@@ -158,6 +164,35 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     out.extend_from_slice(&roads);
     out.extend_from_slice(&pack_sites(world, t0, key, tile));
     out
+}
+
+/// A tile's heights as drawn, at the three finest levels: the ground shaped by hand
+/// (`ground::Shaper`, a sheer edge eased over a sample or a battlemap square, whichever is wider)
+/// over the samples it reaches, one round the texels for the gradients; `None` where nothing
+/// shaped reaches the tile. Each sample is a pure function of its position (seamless), and at the
+/// finest level a battlemap square's centre is shaped exactly as the battlemap shapes it.
+pub fn shaped_heights(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Option<Vec<f32>> {
+    if key.level + 2 < world.geom.max_level {
+        return None;
+    }
+    let s = world.geom.spacing_ft(key.level);
+    let (gx0, gy0) = (key.x as i64 * TILE_N as i64, key.y as i64 * TILE_N as i64);
+    let (lo, hi) = (|g: i64| (g - 1) as f64 * s, |g: i64| (g + TILE_SAMPLES as i64) as f64 * s);
+    let sh = crate::ground::Shaper::new(&world.file.edits, [lo(gx0), lo(gy0), hi(gx0), hi(gy0)], s.max(crate::battlemap::SQUARE_FT))?;
+    let r = sh.reach();
+    // The samples (-1 to TILE_SAMPLES, tile-local) inside the reach.
+    let span = |a: f64, b: f64, g0: i64| ((crate::core::ceil(a / s) as i64 - g0).max(-1), (crate::core::floor(b / s) as i64 - g0).min(TILE_SAMPLES as i64));
+    let ((i0, i1), (j0, j1)) = (span(r[0], r[2], gx0), span(r[1], r[3], gy0));
+    let mut out = tile.padded.clone();
+    for j in j0..=j1 {
+        let y = (gy0 + j) as f64 * s;
+        for i in i0..=i1 {
+            let x = (gx0 + i) as f64 * s;
+            let k = (j + HALO as i64) as usize * PADDED + (i + HALO as i64) as usize;
+            out[k] = sh.at_point(x, y, out[k], t0.sample_water(x, y).max(tile.river_water[k]));
+        }
+    }
+    Some(out)
 }
 
 /// Decks (world ft polygons) where network roads bridge rivers: along the road, over the
@@ -360,6 +395,6 @@ fn pack_lines(ox: f64, oy: f64, size: f64, lines: impl Iterator<Item = Vec<[f64;
 }
 
 #[inline]
-fn f16_bits(v: f32) -> u16 {
+pub fn f16_bits(v: f32) -> u16 {
     half::f16::from_f32(v).to_bits()
 }

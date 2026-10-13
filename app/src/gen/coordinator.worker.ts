@@ -55,6 +55,11 @@ const inflight = new Map<number, { id: string; worker: GenWorker }>();
 const inflightIds = new Set<string>();
 /** Jobs started before an edit that touches them: their results are dropped. */
 const staleInflight = new Set<string>();
+/** Cached tiles drawn from ground since shaped by hand: their samples (as generated) still serve
+ * finer tiles and battlemaps, but they are made again when wanted. */
+const retex = new Set<string>();
+/** Stale jobs that only the shaped ground made stale: their samples are kept (to be made again). */
+const keepSamples = new Set<string>();
 /** The latest edits (by field, patches applied) and their epoch: results sent after them carry
  * it. Workers started later get them whole. */
 let editFields: Record<string, unknown> = {};
@@ -94,6 +99,8 @@ async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
   inflight.clear();
   inflightIds.clear();
   staleInflight.clear();
+  retex.clear();
+  keepSamples.clear();
   editFields = {};
   wanted = new Map();
 
@@ -134,7 +141,7 @@ function depsOf(kind: number, level: number, x: number, y: number): string[] {
   return out;
 }
 
-const isDone = (id: string) => cache.has(id) || battleCache.has(id);
+const isDone = (id: string) => (cache.has(id) && !retex.has(id)) || battleCache.has(id);
 
 function touch(id: string) {
   const v = cache.get(id);
@@ -144,9 +151,10 @@ function touch(id: string) {
   }
 }
 
-function schedule(kind: number, level: number, x: number, y: number, pri: number) {
+/** `dep`: needed only for its samples (a tile to be made again still serves). */
+function schedule(kind: number, level: number, x: number, y: number, pri: number, dep = false) {
   const id = jobId(kind, level, x, y);
-  if (isDone(id)) {
+  if (dep ? cache.has(id) : isDone(id)) {
     touch(id);
     return;
   }
@@ -160,7 +168,7 @@ function schedule(kind: number, level: number, x: number, y: number, pri: number
   pending.set(id, { kind, level, x, y, pri, deps });
   for (const d of deps) {
     const [l, dx, dy] = d.split('/').map(Number);
-    schedule(KIND_TERRAIN, l, dx, dy, pri - 0.5);
+    schedule(KIND_TERRAIN, l, dx, dy, pri - 0.5, true);
   }
 }
 
@@ -215,7 +223,13 @@ function onGenMessage(gw: GenWorker, m: FromGen) {
   if (m.type === 'error') {
     post({ type: 'error', message: `generation failed for ${job?.id}: ${m.message}` });
   } else if (m.type === 'done' && job && staleInflight.delete(job.id)) {
-    // Made before an edit here: make it again if it is still wanted.
+    // Made before an edit here: make it again if it is still wanted (a tile drawn from ground
+    // since shaped still serves finer ones with its samples).
+    if (keepSamples.delete(job.id) && m.buf) {
+      cache.set(job.id, parseTerrain(m.buf));
+      retex.add(job.id);
+      evict();
+    }
     const want = wanted.get(job.id);
     if (want) {
       const [l, x, y] = job.id.split('/').filter((p) => p !== 'b').map(Number);
@@ -228,6 +242,8 @@ function onGenMessage(gw: GenWorker, m: FromGen) {
       battleCache.set(job.id, m.chunk!);
       while (battleCache.size > BATTLE_CACHE_MAX) battleCache.delete(battleCache.keys().next().value!);
     } else {
+      cache.delete(job.id);
+      retex.delete(job.id);
       cache.set(job.id, parseTerrain(m.buf!));
       evict();
     }
@@ -286,7 +302,8 @@ function onEdits(m: Extract<ToCoordinator, { type: 'edits' }>) {
   const patch = Object.keys(m.patches).length ? JSON.stringify(m.patches) : null;
   if (json || patch) for (const gw of workers) gw.w.postMessage({ type: 'edits', json, patch } satisfies ToGen);
   const battleRects = m.battleRects ?? [];
-  if (!geom || (!m.rects.length && !battleRects.length)) return;
+  const groundRects = m.groundRects ?? [];
+  if (!geom || (!m.rects.length && !battleRects.length && !groundRects.length)) return;
   const touched = (id: string) => {
     const battle = id.startsWith('b/');
     const [l, x, y] = (battle ? id.slice(2) : id).split('/').map(Number);
@@ -295,9 +312,30 @@ function onEdits(m: Extract<ToCoordinator, { type: 'edits' }>) {
     const hit = (r: Rect) => (x + 1) * ts > r[0] && x * ts < r[2] && (y + 1) * ts > r[1] && y * ts < r[3];
     return m.rects.some(hit) || (battle && battleRects.some(hit));
   };
-  for (const id of [...cache.keys()]) if (touched(id)) cache.delete(id);
+  // Ground shaped by hand: the three finest levels' tiles over it are drawn from it.
+  const reshaped = (id: string) => {
+    if (id.startsWith('b/') || !groundRects.length) return false;
+    const [l, x, y] = id.split('/').map(Number);
+    if (l < geom!.max_level - 2) return false;
+    const ts = geom!.domain_ft / 2 ** l;
+    return groundRects.some((r) => (x + 1) * ts > r[0] && x * ts < r[2] && (y + 1) * ts > r[1] && y * ts < r[3]);
+  };
+  for (const id of [...cache.keys()]) {
+    if (touched(id)) {
+      cache.delete(id);
+      retex.delete(id);
+    } else if (reshaped(id)) retex.add(id);
+  }
   for (const id of [...battleCache.keys()]) if (touched(id)) battleCache.delete(id);
-  for (const { id } of inflight.values()) if (touched(id)) staleInflight.add(id);
+  for (const { id } of inflight.values()) {
+    if (touched(id)) {
+      staleInflight.add(id);
+      keepSamples.delete(id);
+    } else if (reshaped(id) && !staleInflight.has(id)) {
+      staleInflight.add(id);
+      keepSamples.add(id);
+    }
+  }
 }
 
 function evict() {
@@ -314,6 +352,7 @@ function evict() {
   for (const e of order) {
     if (cache.size <= CACHE_MAX) break;
     cache.delete(e.id);
+    retex.delete(e.id);
   }
 }
 

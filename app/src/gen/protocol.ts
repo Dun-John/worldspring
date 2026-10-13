@@ -883,8 +883,9 @@ export type ToCoordinator =
    * edits are not sent whole on every change); `rects` (x0, y0, x1, y1 ft) are where created
    * sites changed: cached site-level tiles and battlemaps there are dropped. Results sent
    * afterwards carry `epoch`. `battleRects`: where only battlemaps change (objects put down or
-   * taken away). */
-  | { type: 'edits'; fields: Record<string, string>; patches: Record<string, EditsPatch>; rects: Rect[]; epoch: number; battleRects?: Rect[] };
+   * taken away). `groundRects`: where the ground was shaped by hand: the three finest levels'
+   * tiles there are packed again (their samples, as generated, still serve finer tiles). */
+  | { type: 'edits'; fields: Record<string, string>; patches: Record<string, EditsPatch>; rects: Rect[]; epoch: number; battleRects?: Rect[]; groundRects?: Rect[] };
 
 /** Some entries of a keyed edits field changed: those set (whole) and those taken out. */
 export interface EditsPatch {

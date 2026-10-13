@@ -2,7 +2,7 @@
 // and per-frame styling (zoom-adaptive hillshade and contour interval).
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, WORKS_MARGIN_FT } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT } from '../gen/protocol';
 import { BattlemapLayer, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { InteriorLayer, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
@@ -882,6 +882,11 @@ export class MapView {
     }
     const REACH = 160;
     for (const r of ground) battleRects.push([r[0] - REACH, r[1] - REACH, r[2] + REACH, r[3] + REACH]);
+    // The tiles that draw it (the three finest levels), one of their samples round it: a sample
+    // just outside slopes into it.
+    const tileLevel = this.geom ? Math.max(0, this.geom.max_level - 2) : 0;
+    const pad = this.geom ? this.geom.domain_ft / 2 ** tileLevel / TILE_N : 0;
+    const groundRects: Rect[] = ground.map((r) => [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad]);
     // Inside a building over it: shown as it now stands (its floors follow the ground).
     const inside = this.interior?.interior;
     if (inside && ground.length && /^[btck]:/.test(inside.id) && inside.id !== this.designing) {
@@ -933,10 +938,14 @@ export class MapView {
     if (!send) return;
     if (rects.length || battleRects.length) {
       const epoch = ++this.editEpoch;
-      this.gen.setEdits(next, rects, epoch, battleRects, changed && { prev, changed });
+      this.gen.setEdits(next, rects, epoch, battleRects, changed && { prev, changed }, groundRects);
       if (rects.length) this.tiles?.invalidate(rects, SITE_MIN_LEVEL, epoch);
+      if (groundRects.length) this.tiles?.invalidate(groundRects, tileLevel, epoch, true);
       this.battle?.invalidate([...rects, ...battleRects], epoch);
       if (added.length) this.battle?.preview(added, epoch);
+      // Wanted again next frame though the wants look the same: one made before this edit and
+      // still on its way is dropped when it arrives, and the generator has it as sent.
+      this.lastWantKey = '';
     } else {
       this.gen.setEdits(next, [], this.editEpoch, [], changed && { prev, changed });
     }
