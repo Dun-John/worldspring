@@ -92,12 +92,28 @@ export interface PlayState {
   /** Line of sight: players see what their characters can see. */
   los: boolean;
   grid: GridSettings;
+  /** When the DM last changed it (ms since 1970; missing: not since this was kept). */
+  changed?: number;
+  /** Carried over from another world's session when the world was remade: that world's hash,
+   * and `changed` as it was then (the same now: nothing played here since). */
+  came?: { from: string; changed: number };
 }
+// (Places are named by layout-local ids in tokens', shapes' and doors' `loc`, and the keys of
+// `fog`, `doors` and `locs`: a remade world moves them (`carrySession`). A new field naming a
+// place must be moved there too.)
 
 export const DEFAULT_GRID: GridSettings = { scale: 5, unit: 'ft', measure: 'chebyshev' };
 
 export function emptyState(): PlayState {
   return { tokens: {}, shapes: {}, fog: {}, doors: {}, locs: {}, los: false, grid: { ...DEFAULT_GRID } };
+}
+
+/** Whether a session holds anything: tokens, shapes, fog, doors, settings, line of sight, or a
+ * grid changed. */
+export function hasSession(s: PlayState): boolean {
+  const g = s.grid;
+  const grid = g.scale !== DEFAULT_GRID.scale || g.unit !== DEFAULT_GRID.unit || g.measure !== DEFAULT_GRID.measure;
+  return grid || s.los || [s.tokens, s.shapes, s.fog, s.doors, s.locs].some((r) => Object.keys(r).length > 0);
 }
 
 /** A location's key: the surface, or a level of a building or site. */
@@ -219,6 +235,8 @@ export function normalize(raw: unknown): PlayState {
   const g = r.grid;
   if (g && g.scale > 0) s.grid = { scale: g.scale, unit: String(g.unit ?? ''), measure: g.measure ?? 'chebyshev' };
   else if ((r as { diagonal?: string }).diagonal === '5-10') s.grid.measure = 'alternating';
+  if (typeof r.changed === 'number') s.changed = r.changed;
+  if (r.came && typeof r.came.from === 'string') s.came = { from: r.came.from, changed: Number(r.came.changed) || 0 };
   return s;
 }
 

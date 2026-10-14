@@ -215,6 +215,40 @@ export function matchLayouts(lis: number[], before: Overlay, after: Overlay): Ma
   return out;
 }
 
+/** Where the places of layouts `lis` go from one world (`before`) to the same world remade
+ * (`after`): a created site (one of `created`) keeps its place among the created ones; one of
+ * the world's own its new number when `matchLayouts` pairs it and `same` says it was laid out
+ * the same. Null: it came out differently, or is gone. */
+export function layoutTargets(lis: number[], before: Overlay, after: Overlay, created: number, same: (from: number, to: number) => boolean): (li: number) => number | null {
+  const [aFirst, bFirst] = [layoutsOf(before).first, layoutsOf(after).first];
+  const matched = matchLayouts(lis, before, after);
+  return (li) => {
+    if (li >= aFirst) return li < aFirst + created ? bFirst + li - aFirst : null;
+    const to = matched.get(li);
+    return to !== undefined && same(li, to) ? to : null;
+  };
+}
+
+/** A layout-local id's layout number (null: the surface, or no such id). */
+export function layoutOfId(id: string): number | null {
+  const m = LOCAL_ID.exec(id);
+  return m ? Number(m[2]) : null;
+}
+
+/** A layout-local id with its layout number replaced. */
+export function withLayout(id: string, li: number): string {
+  const m = LOCAL_ID.exec(id)!;
+  return `${m[1]}${li}${m[3]}`;
+}
+
+/** Where a layout's place stands in a world (world ft): its feature, or a created one's entry
+ * (`edits.created`); null if there is none. */
+export function layoutAt(o: Overlay, edits: Edits, li: number): [number, number] | null {
+  const l = layoutsOf(o);
+  const f = li < l.first ? l.list[li] : edits.created?.[li - l.first];
+  return f ? [f.x, f.y] : null;
+}
+
 /**
  * `edits` with their layout-local ids (`LAYOUT_ID_FIELDS`) following their places from one world
  * (`before`) to the same world remade (`after`): a created site keeps its place among the created
@@ -233,16 +267,8 @@ export function remapLayouts(
   same: (from: number, to: number) => boolean,
   removed: number[] = [],
 ): { edits: Edits; moved: number; parked: number; removed: number } | null {
-  const [aFirst, bFirst] = [layoutsOf(before).first, layoutsOf(after).first];
-  const created = edits.created?.length ?? 0;
   const lis = layoutsIn(edits);
-  const matched = matchLayouts(lis, before, after);
-  /** Where layout `li`'s keys go: its new number, or null if set aside. */
-  const target = (li: number): number | null => {
-    if (li >= aFirst) return li < aFirst + created ? bFirst + li - aFirst : null;
-    const to = matched.get(li);
-    return to !== undefined && same(li, to) ? to : null;
-  };
+  const target = layoutTargets(lis, before, after, edits.created?.length ?? 0, same);
   // (Set aside past what is set aside already, so two remakes never share a number.)
   let next = PARKED_LAYOUT;
   eachId(edits, (id) => {

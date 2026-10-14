@@ -42,7 +42,7 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 | **World** (1) | **Generate** a world from a seed, size and climate. **Sketch** the continent you want and the generator follows. **Library** saves, opens, backs up and shares your worlds. |
 | **Edit** (2) | Change the world and make it yours. See below. |
 | **Notes** (3) | Your campaign's **NPCs** and **plots**, pinned to the map, and the **Gazetteer**: every name in the world to rename (each settlement with the places that stand in it), places to hide from the map, and the notes only you see. |
-| **Play** (4) | Run a session: tokens, fog of war, line of sight, lights, doors and secret doors, and a second **players' window** for a TV or another screen that shows only what the players have seen. |
+| **Play** (4) | Run a session: tokens, fog of war, line of sight, lights, doors and secret doors, and a second **players' window** for a TV or another screen that shows only what the players have seen. Each world's session is kept in this browser, and comes along when the world is remade (a settlement added or taken back, the sketch redrawn). |
 
 ### What you can edit
 

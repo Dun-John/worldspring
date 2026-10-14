@@ -7,7 +7,7 @@
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
   import { buildKeymap } from './ui/shell/keymap';
   import { createKeyHandler, focusKind } from './ui/shell/shortcuts';
-  import { layoutsIn, madeCount, madeOn, matchLayouts, reanchor, remapLayouts, setAsideRemoved, type MadeOn } from './editor/reanchor';
+  import { layoutAt, layoutsIn, layoutTargets, madeCount, madeOn, matchLayouts, reanchor, remapLayouts, setAsideRemoved, type MadeOn } from './editor/reanchor';
   import type { PreviewReply, PreviewRequest } from './editor/preview.worker';
   import { MapView, type HudState, type InteriorState, type PointerTool } from './render/MapView';
   import TopBar from './ui/shell/TopBar.svelte';
@@ -54,6 +54,7 @@
   import Toasts, { type Toast } from './ui/Toasts.svelte';
   import { lowMemory } from './ui/support';
   import { MapdSync, type Change } from './sync/mapd';
+  import { carrySession, sessionLayouts, tokensIn, type Carried } from './play/carry';
   import { PlayController } from './play/controller';
   import PlayPanel from './play/PlayPanel.svelte';
   import { describe, tidy, type Step } from './sync/history';
@@ -649,13 +650,16 @@
 
   /** What generating `w` would do to the changes made on the world shown (asked about first): remake
    * this world round them (`regen`: its sketch redrawn), or make another world and leave them with
-   * this one (`newworld`: a new seed or settings); null when there are none, or nothing moves. */
+   * this one (`newworld`: a new seed or settings, asked about for a play session too); null when
+   * there are none, or nothing moves. */
   function remakeOf(w: WorldFile): Remake | null {
-    if (!worldShown || !Object.keys(edits).length) return null;
+    const edited = Object.keys(edits).length > 0;
+    if (!worldShown || (!edited && !play.hasSession)) return null;
     if (!sameWorld(w, world)) return 'newworld';
     // (A world made with another generator: its own question was asked, `settleVersion`.)
     if (world.gen_version !== w.gen_version) return null;
-    return JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null) ? 'regen' : null;
+    // (A play session alone comes along unasked: what it couldn't bring is said after.)
+    return edited && JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null) ? 'regen' : null;
   }
 
   /** A remade world's edits with their keys moved to the places they were made on, and how many
@@ -676,8 +680,19 @@
   /** What the last remake did with the changes (null: nothing moved), for a caller that says so
    * itself (`generate`'s `quiet`). */
   let lastFollowed: Followed | null = null;
+  /** What the last remake did with the play session (null: none came along, or the world's own
+   * came back as it was). */
+  let lastCarried: Carried | null = null;
   /** How many changes the last remake made itself (`editCount`): 1 when the changes moved. */
   let remapCount = 0;
+
+  /** What a remake left of the play session, said in a line (empty when it all came along). */
+  function playSaid(c: Carried | null): string {
+    if (!c || (!c.out && !c.forgot)) return '';
+    const tokens = c.out ? `${c.out} ${c.out === 1 ? 'token waits' : 'tokens wait'} outside ${c.out === 1 ? 'a place' : 'places'} that came out differently` : '';
+    const places = c.forgot ? `fog and doors found in ${c.forgot} ${c.forgot === 1 ? 'place' : 'places'} start afresh${tokens ? '' : `: ${c.forgot === 1 ? 'it' : 'they'} came out differently`}` : '';
+    return `Play: ${[tokens, places].filter(Boolean).join('; ')}.`;
+  }
 
   /** How `generate` makes a world (each false or null when left out; `gone`: the settlements a
    * redrawn sketch takes away on purpose, whose changes are set aside, never handed to a
@@ -696,6 +711,7 @@
     const { keepSketch = false, from = null, confirmed = false, quiet = false, gone = [] } = o;
     if (busy) return false;
     lastFollowed = null;
+    lastCarried = null;
     remapCount = 0;
     if (w.gen_version !== GEN_VERSION) {
       busy = true;
@@ -757,20 +773,26 @@
     // generators have them so before anything is made.
     let moved: Followed | null = null;
     const following = redrawn && kept === mine && !!before;
-    // The world's own places changes are made on, as generated here (their fingerprints), so
-    // that only those laid out the same in the remade world keep them.
-    const keyed = following ? layoutsIn(kept).filter((li) => li < (before!.first_created ?? 0)) : [];
+    // The play session follows too, its places by the same map (the world as it was keeps its
+    // own); taken out while the world shown can still be read.
+    const carry = following ? await play.carryOut((li) => layoutAt(before!, kept, li)) : null;
+    const played = carry ? sessionLayouts(carry.state) : [];
+    let carried: Carried | null = null;
+    // The world's own places changes (or play) are made on, as generated here (their
+    // fingerprints), so that only those laid out the same in the remade world keep them.
+    const keyed = following ? [...new Set([...layoutsIn(kept), ...played])].filter((li) => li < (before!.first_created ?? 0)).sort((a, b) => a - b) : [];
     const printed = keyed.length ? await view.gen.prints(keyed) : null;
     const was = new Map(keyed.map((li, i) => [li, printed?.[i] ?? 0]));
     const follow = async (o: Overlay): Promise<Edits | null> => {
+      const pairs = [...matchLayouts(keyed, before!, o)];
+      const now = pairs.length ? await view.gen.prints(pairs.map(([, to]) => to)) : [];
+      const same = new Map(pairs.map(([li, to], i) => [`${li}>${to}`, !!now?.[i] && now[i] === was.get(li)]));
+      if (carry) carried = carrySession(carry, layoutTargets(played, before!, o, kept.created?.length ?? 0, (li, to) => same.get(`${li}>${to}`) ?? false));
       // (Places taken away on purpose first: what was made on them is set aside, so no
       // neighbour takes it.)
       const off = setAsideRemoved(kept, gone, o.features);
       const named = reanchor(off?.edits ?? kept, before!.features, o.features);
       const base = named?.edits ?? off?.edits ?? kept;
-      const pairs = [...matchLayouts(keyed, before!, o)];
-      const now = pairs.length ? await view.gen.prints(pairs.map(([, to]) => to)) : [];
-      const same = new Map(pairs.map(([li, to], i) => [`${li}>${to}`, !!now?.[i] && now[i] === was.get(li)]));
       const placed = remapLayouts(base, before!, o, (li, to) => same.get(`${li}>${to}`) ?? false, gone.map((g) => g.li));
       if (!off && !named && !placed) return null;
       moved = { edits: placed?.edits ?? base, kept: (named?.n ?? 0) + (placed?.moved ?? 0), parked: placed?.parked ?? 0, removed: (off?.n ?? 0) + (placed?.removed ?? 0) };
@@ -784,7 +806,8 @@
       // (Edits the user chose over those kept replace mapd's copy too; so do those carried over
       // to the world remade, over any copy kept of it from before.)
       sync.open(world, replaced || restored || following);
-      await play.setWorld(world, view.geom!.world_hash);
+      const how = await play.setWorld(world, view.geom!.world_hash, carried);
+      lastCarried = how === 'carried' ? carried : null;
       worldShown = true;
       worldsMade++;
       // (Take back belongs to the world it was offered in: another world, or this one drawn
@@ -830,6 +853,8 @@
       remapCount = editCount - n;
       lastFollowed = m;
     }
+    const said = playSaid(lastCarried);
+    if (said && !quiet) toast(said, undefined, { ms: 12_000 });
     const n = overlay?.conflicts?.length ?? 0;
     if (w.sketch && n && !quiet) toast(`The world follows your sketch, with ${n} ${n === 1 ? 'exception' : 'exceptions'}: see Sketch`);
     return true;
@@ -2193,7 +2218,8 @@
       const count = (n: number) => `${n} ${n === 1 ? 'change' : 'changes'}`;
       const kept = m ? (m.parked ? ` Kept ${count(m.kept)}; ${count(m.parked)} set aside: their places came out differently.` : ` Kept ${count(m.kept)} with the remade world.`) : '';
       const other = conflicts.filter((x) => x !== missing);
-      const text = missing ? `No ${st.tier} placed: ${missing.replace(/^This (pin|settlement) /, 'it ').replace(/: no settlement placed$/, '')}.${kept}` : `Added ${name}.${other.length ? ` ${other.join('; ')}.` : ''}${kept}`;
+      const said = playSaid(lastCarried);
+      const text = `${missing ? `No ${st.tier} placed: ${missing.replace(/^This (pin|settlement) /, 'it ').replace(/: no settlement placed$/, '')}.` : `Added ${name}.${other.length ? ` ${other.join('; ')}.` : ''}`}${kept}${said ? ` ${said}` : ''}`;
       offerTakeBack({
         name,
         text,
@@ -2224,7 +2250,7 @@
 
   /** The question before a settlement is taken away: what was made on it, and whether the world
    * has other changes a remake may set aside. */
-  let removeAsk = $state<{ r: Removal; on: MadeOn | null; others: boolean; choose: (go: boolean) => void } | null>(null);
+  let removeAsk = $state<{ r: Removal; on: MadeOn | null; tokens: number; others: boolean; choose: (go: boolean) => void } | null>(null);
 
   /** What was made on a place, in words ("1 note, 1 NPC and 2 building changes"). */
   function madeWords(on: MadeOn): string {
@@ -2264,8 +2290,10 @@
     if (a && !isAddedWorld(a)) return moved();
     if (!worldShown) return;
     const on = r.id ? madeOn(edits, r.id, r.li) : null;
-    if (confirm || !a || (on && madeCount(on))) {
-      const go = await new Promise<boolean>((choose) => (removeAsk = { r, on, others: Object.keys(edits).length > 0, choose }));
+    // (Tokens in it wait outside: asked about as what was made on it is.)
+    const tokens = r.id && r.li >= 0 ? tokensIn(play.state, r.li) : 0;
+    if (confirm || !a || (on && madeCount(on)) || tokens) {
+      const go = await new Promise<boolean>((choose) => (removeAsk = { r, on, tokens, others: Object.keys(edits).length > 0, choose }));
       removeAsk = null;
       if (!go) return;
       if (playOn || busy) return toast(playOn ? 'Stop playing to remake the world' : 'The world is being made: try again');
@@ -2290,7 +2318,8 @@
     const said = restore
       ? ''
       : `${what ? ` Set aside in Notes, as “Removed: ${r.name}”: ${what}.` : ''}${m?.kept ? ` Kept ${count(m.kept)} with the remade world.` : ''}${m?.parked ? ` ${count(m.parked)} set aside: their places came out differently.` : ''}${a?.parked ? ` ${count(a.parked)} set aside when it was added stay aside: others were made since.` : ''}`;
-    toast(`${a ? 'Took back' : 'Removed'} ${r.name}.${said}`, undefined, said ? { ms: 12_000 } : {});
+    const played = playSaid(lastCarried);
+    toast(`${a ? 'Took back' : 'Removed'} ${r.name}.${said}${played ? ` ${played}` : ''}`, undefined, said || played ? { ms: 12_000 } : {});
   }
 
   /** Take back the settlement last added (`confirm`: always asked, as from Undo). */
@@ -3532,6 +3561,7 @@
       {#if own || layout}
         <p>What was made on it stays in Notes, set aside as “Removed: {q.r.name}”: {madeWords(q.on!)}.{layout ? ' Its building changes and designed interiors are set aside too.' : ''}</p>
       {/if}
+      {#if q.tokens}<p>{q.tokens} play {q.tokens === 1 ? 'token in it waits' : 'tokens in it wait'} outside.</p>{/if}
       {#if q.others}<p class="ws-muted">Changes to towns and sites that come out differently are set aside. Undo starts afresh.</p>{/if}
     </Choice>
   {/if}

@@ -2,14 +2,16 @@
 // saved per world), the tools (tokens, ruler, shapes, fog brush, doors, pings), what the
 // characters can see, and the link to the player window; in the player window it follows the
 // DM (state, location, camera, place pins) and draws the players' view.
+import { layoutOfId } from '../editor/reanchor';
 import type { Feature, Interior, WorldFile } from '../gen/protocol';
 import type { InteriorLayer } from '../render/InteriorLayer';
 import type { MapView, PointerTool } from '../render/MapView';
 import { SECTION_N, type Sewers } from '../render/Sewers';
 import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scene, type Vision } from './channel';
 import { PlayLayer } from './PlayLayer';
+import { settle, type Carried, type Carry } from './carry';
 import { loadSession, putImage, saveSession } from './session';
-import { apply, emptyState, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, type Token, type TokenKind } from './state';
+import { apply, emptyState, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, type Token, type TokenKind } from './state';
 import { BLOCKS, bitAt, computeVision, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
 
 export type Tool = 'select' | 'token' | 'measure' | 'shape' | 'fog';
@@ -449,14 +451,60 @@ export class PlayController implements PointerTool {
   // ---------------------------------------------------------------------------------------
   // The DM's side.
 
-  /** A world was loaded (DM): its saved session comes back; the player window follows. */
-  async setWorld(world: WorldFile, hash: string) {
+  /** Whether the session holds anything (a remake carries it; another world leaves it). */
+  get hasSession(): boolean {
+    return hasSession(this.state);
+  }
+
+  /**
+   * The session taken out before the world shown is remade (null: there is none), while its
+   * buildings and sites can still be read: a copy, and for each token inside one, or in the
+   * sewers, the surface square it would wait on if its place came out differently: outside the
+   * nearest way out, else where it stands, else where its place stands (`fallback`, by layout).
+   * The world as it was keeps its session as it is.
+   */
+  async carryOut(fallback: (li: number) => [number, number] | null): Promise<Carry | null> {
+    if (!hasSession(this.state)) return null;
+    this.flushSave();
+    const state = structuredClone(this.state);
+    const tokens = Object.values(state.tokens);
+    const taken = new Set(tokens.filter((t) => t.loc === 'surface').map((t) => `${Math.floor(t.x)},${Math.floor(t.y)}`));
+    const outside: Record<string, [number, number]> = {};
+    for (const t of tokens) {
+      if (t.loc === 'surface') continue;
+      let at: [number, number] | null;
+      const { interior, level } = parseLoc(t.loc);
+      // (The sewer level is in world squares already.)
+      if (!interior) at = [t.x * 5, t.y * 5];
+      else {
+        const it = await this.fetchInterior(interior);
+        const here = it ? interiorPlace(it, level, null).toWorld(t.x, t.y) : null;
+        at = (it && here && nearest(this.exitsOf(interiorPlace(it, it.entry_level, null)), here)) ?? here;
+      }
+      at ??= fallback(layoutOfId(t.loc) ?? -1) ?? [this.view.cam.cx, this.view.cam.cy];
+      const [sq] = gather(null, [Math.floor(at[0] / 5), Math.floor(at[1] / 5)], 1, taken);
+      taken.add(`${sq[0]},${sq[1]}`);
+      outside[t.id] = snap(sq[0] + 0.5, sq[1] + 0.5, t.size);
+    }
+    return { state, from: this.worldHash, outside };
+  }
+
+  /**
+   * A world was loaded (DM): its saved session comes back, or the one `carried` from the world it
+   * was remade from (`settle`: kept at once, so a reload has it); the player window follows.
+   * Which opened: its own, the one carried, or its own come back as it was.
+   */
+  async setWorld(world: WorldFile, hash: string, carried: Carried | null = null): Promise<'own' | 'carried' | 'back'> {
     this.world = forPlayers(world);
+    let how: 'own' | 'carried' | 'back' = 'own';
     if (hash !== this.worldHash) {
       this.flushSave();
       const before = this.fogKeys();
       this.worldHash = hash;
-      this.state = await loadSession(hash);
+      const stored = await loadSession(hash);
+      if (carried) ({ state: this.state, how } = settle(carried, stored, hash));
+      else this.state = stored;
+      if (how === 'carried') void saveSession(hash, this.state);
       this.interiors.clear();
       this.places.clear();
       this.layer.fogChanged([...before, ...this.fogKeys()]);
@@ -472,6 +520,7 @@ export class PlayController implements PointerTool {
     }
     this.snapshot();
     this.onChange();
+    return how;
   }
 
   /** The world's edits changed (DM): the player window takes them too. */
@@ -546,6 +595,7 @@ export class PlayController implements PointerTool {
   /** Change the play state (DM): here, in the player window, and in the saved session. */
   dispatch(op: Op) {
     this.applyOp(op);
+    this.state.changed = Date.now();
     this.channel.send({ t: 'op', op });
     this.scheduleSave();
     this.onChange();

@@ -1,8 +1,9 @@
 <script lang="ts">
   // Asked before work would be dropped: new sketch strokes (generate them, drop them, or keep
   // sketching), or a site's unsaved design (save it, drop it, or keep designing). And before a
-  // world is remade round the changes made on it (some may be set aside), or left for another
-  // world with new settings (they stay with this one: a copy can go to the Library first).
+  // world is remade round the changes made on it and its play session (some may be set aside),
+  // or left for another world with new settings (they stay with this one: a copy can go to the
+  // Library first).
   import type { Ask } from './layout.svelte';
 
   interface Props {
@@ -27,12 +28,13 @@
     {:else if ask.kind === 'design'}<b>This site's design isn't saved.</b> The changes would be lost.
     {:else if ask.kind === 'regen'}<b>Remake this world?</b>{/if}
     {#if remake === 'regen'}
-      {ask.kind === 'sketch' ? 'Generating it remakes this world: towns' : 'Towns'} and roads may move. Places you added, drawn buildings, objects, ground, names, notes, NPCs
-      and plots stay; changes to towns and sites that come out differently are set aside. Undo starts afresh.
+      {ask.kind === 'sketch' ? 'Generating it remakes this world: towns' : 'Towns'} and roads may move. Places you added, drawn buildings, objects, ground, names, notes, NPCs,
+      plots and the play session stay; changes to towns and sites that come out differently are set aside (tokens there wait outside).
+      Undo starts afresh.
     {:else if remake === 'newworld'}
       {#if ask.kind === 'newworld'}<b>Make a different world?</b>{/if}
-      {ask.kind === 'sketch' ? 'With the new settings it makes' : 'New settings make'} another world, without this one's changes. They stay with this world: keep a
-      copy in the Library to open it again as it is.
+      {ask.kind === 'sketch' ? 'With the new settings it makes' : 'New settings make'} another world, without this one's changes or play session. They stay with this
+      world: keep a copy in the Library to open it again as it is.
     {/if}
   </div>
   <div class="ws-row buttons">
