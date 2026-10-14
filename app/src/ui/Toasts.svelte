@@ -8,6 +8,8 @@
     action?: { label: string; run: () => void };
     /** Stays until dismissed. */
     sticky?: boolean;
+    /** How long it stays (ms), when not the usual. */
+    ms?: number;
   }
 </script>
 

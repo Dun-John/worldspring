@@ -5,7 +5,7 @@
 // places inside them follow those that come out the same, the rest are set aside.
 import type { Edits, Feature, Npc, Overlay, Plot } from '../gen/protocol';
 import { LAYOUT_ID_FIELDS, PARKED_LAYOUT } from '../sync/ops';
-import { SETTLEMENT_KINDS, SITE_KINDS } from '../ui/gazetteer';
+import { GONE_ID, SETTLEMENT_KINDS, SITE_KINDS } from '../ui/gazetteer';
 
 /** How far a feature may have moved and still be the same one (ft): 40 mi, or more for big
  * ones (a range's or forest's anchor sits mid-way along it and moves as its shape does). */
@@ -94,6 +94,74 @@ export function reanchor(edits: Edits, before: Feature[], after: Feature[]): { e
   return { edits: r.edits, moved, n: r.n };
 }
 
+/** What `edits` hold on settlement `id` (layout `li`, -1 for none): on its id, or on a layout-local
+ * id in its layout (its buildings, districts, towers, ways down, levels and rooms; its streets
+ * re-planned). Not the sites standing in it: they stay. */
+export interface MadeOn {
+  notes: number;
+  names: number;
+  npcs: number;
+  plots: number;
+  designs: number;
+  buildings: number;
+  towns: number;
+  hidden: number;
+  renamed: boolean;
+}
+
+export function madeOn(edits: Edits, id: string, li: number): MadeOn {
+  const on = (k: string) => k === id || (li >= 0 && Number(LOCAL_ID.exec(k)?.[2] ?? -1) === li);
+  const keys = (r?: object) => Object.keys(r ?? {});
+  return {
+    notes: keys(edits.notes).filter(on).length,
+    names: keys(edits.renames).filter((k) => k !== id && on(k)).length,
+    renamed: !!edits.renames?.[id],
+    hidden: (edits.hidden ?? []).filter(on).length,
+    npcs: Object.values(edits.npcs ?? {}).filter((n) => n.location && on(n.location.id)).length,
+    plots: Object.values(edits.plots ?? {}).filter((p) => (p.anchors ?? []).some(on)).length,
+    designs: keys(edits.designs).filter(on).length,
+    buildings: keys(edits.buildings).filter(on).length,
+    towns: li >= 0 && edits.towns?.[String(li)] ? 1 : 0,
+  };
+}
+
+/** The prep worth asking about (not the place's own name or hidden mark). */
+export const madeCount = (m: MadeOn) => m.notes + m.names + m.npcs + m.plots + m.designs + m.buildings + m.towns;
+
+/** `edits` with the ids of places taken away on purpose (`removed`, gone from `after`) set aside
+ * at `gone:<n>:<id>` (n past those in use, so a place taken away twice keeps both): notes, NPCs'
+ * places and plot points' places. Its hidden mark goes (nothing to hide). Its name stays (as
+ * renamed, else the name it had) when anything is left on it, so the entries say what they were
+ * on; else it goes too. How many entries were set aside; null if nothing was. */
+export function setAsideRemoved(edits: Edits, removed: { id: string; name: string }[], after: Feature[]): { edits: Edits; n: number } | null {
+  const now = new Set(after.map((f) => f.id));
+  // (Still on the map: nothing to set aside.)
+  const gone = removed.filter((r) => !now.has(r.id));
+  if (!gone.length) return null;
+  let k = 1;
+  eachId(edits, (id) => {
+    const m = GONE_ID.exec(id);
+    if (m) k = Math.max(k, Number(m[1]) + 1);
+  });
+  const to = new Map(gone.map((r) => [r.id, `gone:${k++}:${r.id}`]));
+  const out = renamed(edits, (id, bare) => (bare ? id : (to.get(id) ?? id))).edits;
+  const ids = new Set(to.values());
+  if (out.hidden) out.hidden = out.hidden.filter((h) => !ids.has(h));
+  if (out.hidden && !out.hidden.length) delete out.hidden;
+  let n = 0;
+  const renames = { ...(out.renames ?? {}) };
+  for (const r of gone) {
+    const g = to.get(r.id)!;
+    const used = (out.notes?.[g] ? 1 : 0) + Object.values(out.npcs ?? {}).filter((x) => x.location?.id === g).length + Object.values(out.plots ?? {}).filter((p) => p.anchors.includes(g)).length;
+    n += used;
+    if (used) renames[g] ??= r.name;
+    else delete renames[g];
+  }
+  out.renames = renames;
+  if (!Object.keys(renames).length) delete out.renames;
+  return n || edits.hidden?.some((h) => to.has(h)) || gone.some((r) => edits.renames?.[r.id]) ? { edits: out, n } : null;
+}
+
 /** A world's layouts as the app counts them: the settlements, then the world's own sites (their
  * features, in the generator's order), then the created ones from `first`; and what each is drawn
  * from (`Overlay.layout_ids`). */
@@ -155,9 +223,16 @@ export function matchLayouts(lis: number[], before: Overlay, after: Overlay): Ma
  * generated: a road or river redrawn past it lays it out anew), so its buildings, districts, ways
  * down and rooms are the ones the keys name. Every other layout's keys are set aside, at
  * `PARKED_LAYOUT` and up (each layout a number of its own), so none lands on another place.
- * Null if nothing moved.
+ * The keys of layouts taken away on purpose (`removed`) are set aside too, counted apart
+ * (`removed`, not `parked`). Null if nothing moved.
  */
-export function remapLayouts(edits: Edits, before: Overlay, after: Overlay, same: (from: number, to: number) => boolean): { edits: Edits; moved: number; parked: number } | null {
+export function remapLayouts(
+  edits: Edits,
+  before: Overlay,
+  after: Overlay,
+  same: (from: number, to: number) => boolean,
+  removed: number[] = [],
+): { edits: Edits; moved: number; parked: number; removed: number } | null {
   const [aFirst, bFirst] = [layoutsOf(before).first, layoutsOf(after).first];
   const created = edits.created?.length ?? 0;
   const lis = layoutsIn(edits);
@@ -176,19 +251,22 @@ export function remapLayouts(edits: Edits, before: Overlay, after: Overlay, same
   });
   const to = new Map<number, number>();
   const parkedAt = new Set<number>();
+  const removedAt = new Set<number>();
   for (const li of lis) {
-    const t = target(li);
-    if (t === null) parkedAt.add(next);
+    const t = removed.includes(li) ? null : target(li);
+    if (t === null) (removed.includes(li) ? removedAt : parkedAt).add(next);
     to.set(li, t ?? next++);
   }
   let parked = 0;
+  let gone = 0;
   const r = renamed(edits, (id, bare) => {
     const m = bare ? /^()(\d+)()$/.exec(id) : LOCAL_ID.exec(id);
     const li = m ? Number(m[2]) : -1;
     const t = to.get(li);
     if (t === undefined || t === li) return id;
     if (parkedAt.has(t)) parked++;
+    else if (removedAt.has(t)) gone++;
     return `${m![1]}${t}${m![3]}`;
   });
-  return r.n ? { edits: r.edits, moved: r.n - parked, parked } : null;
+  return r.n ? { edits: r.edits, moved: r.n - parked - gone, parked, removed: gone } : null;
 }

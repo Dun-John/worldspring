@@ -50,13 +50,16 @@ impl Ctx {
     /// Named features and river polylines (JSON) from the T0 generated in this context, with the
     /// layout index of the first created site (`first_created`) and what each layout is drawn
     /// from (`layout_ids`: `town::layout_identity` folded to 32 bits, by layout index), so the app
-    /// can tell which places a remade world lays out the same.
+    /// can tell which places a remade world lays out the same; and the settlements added from
+    /// Edit › Places (`added`: `[layout, stroke]`, the stroke of the pin each stands for).
     pub fn overlay_json(&self) -> String {
         let Some(t0) = &self.t0 else { return "{}".into() };
         let o = t0.overlay_json();
         let ids: Vec<String> = (0..worldgen::town::layout_count(t0)).map(|li| worldgen::town::layout_identity(t0, li)).map(|h| ((h ^ h >> 32) as u32).to_string()).collect();
+        let strokes = &self.world.file.sketch.strokes;
+        let added: Vec<String> = t0.settlements.iter().enumerate().filter_map(|(li, s)| s.pin.filter(|&k| strokes.get(k as usize).is_some_and(|st| st.added)).map(|k| format!("[{li},{k}]"))).collect();
         match o.strip_suffix('}') {
-            Some(head) => format!("{head},\"first_created\":{},\"layout_ids\":[{}]}}", self.first_created(), ids.join(",")),
+            Some(head) => format!("{head},\"first_created\":{},\"layout_ids\":[{}],\"added\":[{}]}}", self.first_created(), ids.join(","), added.join(",")),
             None => o,
         }
     }

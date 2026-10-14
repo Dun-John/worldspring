@@ -26,7 +26,7 @@
   // write the same entries through mapd. Fields save when they lose focus.
   import { PLOT_STATUSES, STANCES, type PlaceInfo, type PlotStatus, type Stance } from '../gen/protocol';
   import { assetUrl, putAsset } from '../world/assets';
-  import { unnamed } from './gazetteer';
+  import { listedName, unnamed } from './gazetteer';
   import type { NotesTab } from './shell/layout.svelte';
   import Icon from './Icon.svelte';
 
@@ -103,7 +103,7 @@
       });
     }
   });
-  const placeName = (id: string) => renames[id] ?? names[id] ?? unnamed(id);
+  const placeName = (id: string) => listedName(id, renames, () => names[id] ?? unnamed(id));
 
   // Portraits as object URLs.
   let pictures = $state<Record<string, string>>({});

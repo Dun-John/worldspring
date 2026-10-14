@@ -54,12 +54,14 @@
     /** One of the world's own buildings: take it away; put it back as generated (if changed). */
     onRemove?: () => void;
     onRestore?: () => void;
+    /** A settlement added from Edit › Places: take it away again (the world is remade without it). */
+    onUnsettle?: () => void;
     /** In a phone's sheet (which has its own frame and close). */
     docked?: boolean;
     /** Only the name, what it is and the actions (the sheet is down to its strip). */
     peek?: boolean;
   }
-  let { selection, renames, notes, noteKey = (id: string) => id, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onList, onShow, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, docked = false, peek = false }: Props = $props();
+  let { selection, renames, notes, noteKey = (id: string) => id, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onList, onShow, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, onUnsettle, docked = false, peek = false }: Props = $props();
   let cannot = $state(false);
   let confirmDelete = $state(false);
   /** The ⋯ menu (hide, delete). */
@@ -147,7 +149,7 @@
     {#if onGoIn && selection.kind === 'feature'}<button class="ws-btn" onclick={onGoIn}><Icon name="enter" size={16} /> Enter</button>{/if}
     {#if onDown}<button class="ws-btn" onclick={onDown} title="Into the site underground"><Icon name="stairs" size={16} /> Go down</button>{/if}
     {#if onEdit}<button class="ws-btn" onclick={onEdit} title="Change what it is, its storeys and roof, or draw it again"><Icon name="pencil" size={16} /> Edit</button>{/if}
-    {#if onHide || onDelete || onRemove}
+    {#if onHide || onDelete || onRemove || onUnsettle}
       <div class="more-wrap">
         <button class="ws-icon-btn" onclick={() => ((more = !more), (confirmDelete = false))} aria-label="More" aria-expanded={more}><Icon name="more" /></button>
         {#if more}
@@ -156,6 +158,7 @@
             {#if onDelete}<button class="ws-btn" class:quiet={!confirmDelete} class:danger={confirmDelete} role="menuitem" onclick={() => (confirmDelete ? onDelete() : (confirmDelete = true))} title="Remove this site from the world"><Icon name="trash" size={16} /> {confirmDelete ? 'Delete for good?' : 'Delete'}</button>{/if}
             {#if onRestore}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onRestore())} title="Undo every change made to it: what it is, storeys, roof, footprint"><Icon name="reset" size={16} /> As generated</button>{/if}
             {#if onRemove}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onRemove())} title="Take it away, leaving open ground to build on (Undo brings it back)"><Icon name="trash" size={16} /> Remove</button>{/if}
+            {#if onUnsettle}<button class="ws-btn quiet" role="menuitem" onclick={() => ((more = false), onUnsettle())} title="Make the world again without it. What was made on it is set aside in Notes"><Icon name="trash" size={16} /> Remove (remakes the world)</button>{/if}
           </div>
         {/if}
       </div>

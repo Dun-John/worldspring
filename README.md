@@ -50,7 +50,7 @@ Open **Edit** and pick a tab (or press its letter). Every change can be undone.
 
 | Tab | What you can do |
 |---|---|
-| **Places** (S) | Add a village, town, city or metropolis (the world is remade round it, and Take back undoes it), or your own ruins, dungeons, crypts, catacombs, caves, mines, lava tubes, towers, camps and roadside inns, with their size, depth and theme. |
+| **Places** (S) | Add a village, town, city or metropolis (the world is remade round it; Take back, Undo or Remove on its card takes it away again, and what was made on it is kept in Notes), or your own ruins, dungeons, crypts, catacombs, caves, mines, lava tubes, towers, camps and roadside inns, with their size, depth and theme. |
 | **Build** (B) | Draw buildings (rectangles, polygons, round towers). Raise castles (K) and walls (W) anywhere. Put bridges, fords and ferries (X) across a river, bank to bank. |
 | **Streets** (U) | Re-plan the town in view: drag its ward corners, or move them with brushes (Displace, Liquify, Bloat, Pinch, Relax, Equalize). Give a ward another use, change its lots, merge or reroll them, put walls up or down, or clear a ward and build your own. |
 | **Ground** (M) | Shape a battlemap's ground: raise, lower, smooth or put it back with a brush, or draw a plateau, a cliff or a pit (a castle on a cliff) and change its level later. Buildings, streets and walls stand on it; a city street climbing steeply turns to steps. |

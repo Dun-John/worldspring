@@ -1059,7 +1059,26 @@ pub fn overview(world: &World, t0: &T0) -> Value {
         "buildings_set_aside": town::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
         "designs_set_aside": crate::interior::design::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
         "towns_set_aside": town::wards::set_aside(world, t0).into_iter().map(|(layout, why)| json!({ "layout": layout, "why": why })).collect::<Vec<_>>(),
+        "places_removed": places_removed(world),
     })
+}
+
+/// Settlements taken back or removed in the app (`gone:<n>:<id>`, which names nothing): what was
+/// made on each, kept under that id: its name then, whether it has a note, how many NPCs are
+/// there and plot points name it.
+fn places_removed(world: &World) -> Vec<Value> {
+    let e = &world.file.edits;
+    let gone = |id: &&String| id.starts_with("gone:");
+    let mut ids: std::collections::BTreeSet<&String> = e.notes.keys().chain(e.renames.keys()).filter(gone).collect();
+    ids.extend(e.npcs.values().filter_map(|n| n.location.as_ref().map(|l| &l.id)).filter(gone));
+    ids.extend(e.plots.values().flat_map(|p| &p.anchors).filter(gone));
+    ids.into_iter()
+        .map(|id| {
+            let npcs = e.npcs.values().filter(|n| n.location.as_ref().is_some_and(|l| &l.id == id)).count();
+            let plots = e.plots.values().filter(|p| p.anchors.contains(id)).count();
+            json!({ "id": id, "name": e.renames.get(id), "note": e.notes.contains_key(id), "npcs": npcs, "plots": plots })
+        })
+        .collect()
 }
 
 /// Named features (and, from three letters, districts and businesses) matching a query, by

@@ -17,8 +17,31 @@ export function setAside(id: string): boolean {
   return !!m && Number(m[1]) >= PARKED_LAYOUT;
 }
 
-/** What to call a place no name was found for: its id, or what became of it. */
-export const unnamed = (id: string) => (setAside(id) ? 'Set aside when the world was remade' : id);
+/** A place taken away on purpose (a settlement taken back or removed): what was made on it is
+ * kept under `gone:<n>:<its id>`, which names nothing and is never moved to another place. */
+export const GONE_ID = /^gone:(\d+):(([a-z_]+):.*)$/;
+
+/** A place taken away on purpose (`gone:<n>:<id>`): its kind, else null. */
+export const removedKind = (id: string): string | null => GONE_ID.exec(id)?.[3] ?? null;
+
+/** A feature's id (`kind:hash`, a `b` added on a clash), as the generator makes them. */
+const FEATURE_ID = /^([a-z_]{2,}):[0-9a-f]+b*$/;
+const a = (what: string) => `${/^[aeiou]/.test(what) ? 'an' : 'a'} ${what}`;
+
+/** What to call a place no name was found for: what became of it (taken away, set aside when the
+ * world was remade, or a feature the map no longer has), else its id. */
+export function unnamed(id: string): string {
+  const k = removedKind(id);
+  if (k) return `Removed: ${a(kindLabel(k))}`;
+  if (setAside(id)) return 'Set aside when the world was remade';
+  const f = FEATURE_ID.exec(id);
+  return f ? `No longer on the map: ${a(kindLabel(f[1]))}` : id;
+}
+
+/** A place's name as listed: a place taken away by its name then (`renames`), marked so; else
+ * its rename, else `fallback()`. */
+export const listedName = (id: string, renames: Record<string, string>, fallback: () => string): string =>
+  removedKind(id) ? (renames[id] ? `Removed: ${renames[id]}` : unnamed(id)) : (renames[id] ?? fallback());
 /** Kinds of sites (`worldgen::agent::SITE_KINDS`): those not created by hand are the points of
  * interest, whose order gives their layout indices after the settlements'. The last three are
  * only ever created. */

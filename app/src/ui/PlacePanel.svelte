@@ -39,9 +39,13 @@
     playing?: boolean;
     /** How long the world took to make last time (s). */
     seconds?: number | null;
+    /** What was last added here (a settlement, or a pin that placed none), which Take back takes
+     * away again. */
+    added?: string | null;
+    onTakeBack?: () => void;
   }
 
-  let { armed, peek = false, onPlace, onCancel, onTowns, playing = false, seconds = null }: Props = $props();
+  let { armed, peek = false, onPlace, onCancel, onTowns, playing = false, seconds = null, added = null, onTakeBack }: Props = $props();
 
   type Group = 'Settlements' | 'Underground' | 'On the surface';
 
@@ -110,6 +114,13 @@
 </script>
 
 <div class="sites">
+  {#if added && onTakeBack}
+    <div class="towns added">
+      <Icon name="check" size={16} />
+      <span class="grow">{added}</span>
+      <button class="ws-btn" onclick={onTakeBack} disabled={playing} title={playing ? 'Stop playing to remake the world' : 'Make the world again without it'}>Take back</button>
+    </div>
+  {/if}
   {#if !peek}
     {#each ['Settlements', 'Underground', 'On the surface'] as group (group)}
       <div class="ws-label">{group}</div>

@@ -71,6 +71,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `s:<asset>` | `s:0123…cdef` | An uploaded sprite, as an object kind |
 | `h:<id>` | `h:d470a78s` | A plateau or pit (ground shaped by hand) |
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
+| `gone:<n>:<id>` | `gone:1:village:d63861ee` | A settlement taken back or removed in the app: the notes, NPCs' places, plot points' places and its name (in `renames`) made on it are kept here; it names nothing |
 
 Layout numbers count the settlements, then the world's own sites (those drawn in the sketch last), then the created
 sites in the order they were made. No place is generated from its number: a created site from its `c:<n>` id, a
@@ -94,7 +95,9 @@ have had is gone (one near it, within its tier's spacing, else the last), with i
 tier's spacing round it. One added in the app's Edit › Places (a pin marked `added`) stands beside the world's
 own instead: after them in its tier, pushing none of its tier out; smaller places within 10 miles of it move
 away, and none is placed within 3 miles of another settlement. A city or metropolis brings king's roads either
-way, which draw other towns and villages to new places: those come out different.
+way, which draw other towns and villages to new places: those come out different. A settlement taken back or
+removed in the app doesn't hand what was made on it to a neighbour: the notes, NPCs and plot points on its own id
+move to `gone:<n>:<id>` (its name kept under that id in `renames`), and its layout's changes are set aside as above.
 
 ### Feature kinds
 
@@ -128,6 +131,8 @@ A summary of the world:
   storeys changed, or it is gone, or the design breaks a rule now), each with why;
 - `towns_set_aside`: towns laid out anew by hand whose changes no longer apply, whole or in part (the town was
   laid out elsewhere after a sketch change, a corner or patch is not where it was planned), each with why;
+- `places_removed`: settlements taken back or removed in the app (`gone:<n>:<id>`), each with its `name` then,
+  whether it has a `note`, and how many `npcs` are there and `plots` name it;
 - `world`: its hash, for the `world` parameter of other tools.
 
 | Parameter | Type | Default | |

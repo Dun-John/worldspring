@@ -6,9 +6,13 @@ export function changeList(e: Edits | undefined): string[] {
   e ??= {};
   const n = (v: object | undefined) => (v ? Object.keys(v).length : 0);
   const created = (e.created ?? []).filter((c) => !c.removed);
+  // (A place taken away keeps its name as the label of what was made on it: not a name given.)
+  const gone = (k: string) => k.startsWith('gone:');
+  const removed = new Set(Object.keys(e.renames ?? {}).filter(gone));
   return (
     [
-      [n(e.renames), 'name', 'names'],
+      [n(e.renames) - removed.size, 'name', 'names'],
+      [removed.size, 'place removed (its notes kept)', 'places removed (their notes kept)'],
       [n(e.notes), 'note', 'notes'],
       [e.hidden?.length ?? 0, 'hidden place', 'hidden places'],
       [created.filter((c) => c.kind === 'building').length, 'building drawn', 'buildings drawn'],

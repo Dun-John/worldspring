@@ -4,7 +4,7 @@
   // they arrive, in groups. "Only in view" (a chip over the results) keeps to the current view.
   // ↑/↓ move through the results, Enter opens one.
   import type { Npc, Overlay, PlaceInfo, Plot } from '../gen/protocol';
-  import { hitName, kindLabel, searchFeatures, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection } from './gazetteer';
+  import { hitName, kindLabel, listedName, removedKind, searchFeatures, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection } from './gazetteer';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -64,6 +64,7 @@
     [namesOf, names, asked] = [resolve, {}, new Set()];
   });
   function placeName(id: string): string {
+    if (removedKind(id)) return listedName(id, renames, () => unnamed(id));
     if (renames[id]) return renames[id];
     const f = overlay.features.find((g) => g.id === id);
     if (f) return f.name;

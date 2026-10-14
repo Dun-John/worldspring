@@ -659,6 +659,9 @@ export interface Overlay {
   /** What each layout is drawn from (`town::layout_identity`, 32 bits), by layout index: a
    * remade world lays out alike the places whose number here is the same. */
   layout_ids?: number[];
+  /** The settlements added from Edit › Places: `[layout index, sketch stroke index]` (the pin each
+   * stands for). */
+  added?: [number, number][];
 }
 
 /** River polylines owned by one tile: vertex k is verts[4k..4k+4] = (x, y in tile units, width ft, discharge). */

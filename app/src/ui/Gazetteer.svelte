@@ -7,7 +7,7 @@
   // DM sees it).
   import { tick, untrack } from 'svelte';
   import type { Feature, NameEntry, PlaceInfo } from '../gen/protocol';
-  import { kindIcon, kindLabel, SETTLEMENT_KINDS, SITE_KINDS, unnamed } from './gazetteer';
+  import { kindIcon, kindLabel, listedName, SETTLEMENT_KINDS, SITE_KINDS, unnamed } from './gazetteer';
   import Icon from './Icon.svelte';
   import type { Here } from './Notebook.svelte';
 
@@ -156,7 +156,7 @@
     for (const id of [...Object.keys(notes), ...(current ? [current] : [])]) if (!(id in generatedNames)) lookUp(id);
   });
   const generatedOf = (id: string) => featureById.get(id)?.name ?? generatedNames[id] ?? unnamed(id);
-  const placeName = (id: string) => nameOf(id, generatedOf(id));
+  const placeName = (id: string) => listedName(id, renames, () => generatedOf(id));
 
   /** The places with notes, by name (filtered by what is looked for). */
   const noteList = $derived(

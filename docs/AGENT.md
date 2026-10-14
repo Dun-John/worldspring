@@ -59,6 +59,7 @@ pace.
 | `t:<layout>:<k>` | A wall tower. |
 | `u:<layout>:<k>`, `w:…`, `k:…` | Ways underground: a dungeon, crypt, cave, mine or lava tube; sewer sections; a keep's dungeon. |
 | `c:<n>` | A created site (a building drawn by hand too; its building is `b:<layout>:0`: one place, its notes and hidden mark kept under `c:`, NPCs and plots found under either id). Generated from its id, so a remade world lays it out the same, though its layout number (and the ids inside it) can move; the app moves the changes stored under them along. Changes on places a remade world lays out differently are set aside at layout numbers from 1,000,000 up: no such place to the tools. |
+| `gone:<n>:<id>` | A settlement taken back or removed in the app: its notes, NPCs' and plot points' places and its name are kept under this id, which names nothing (`world_overview`'s `places_removed`). |
 | `n:<id>`, `p:<id>` | An NPC, a plot point (the DM's notebook). |
 | `o:<id>`, `x:<id>`, `s:<asset>` | A battlemap object put down by hand; a clear (generated objects taken away); an uploaded sprite (an object kind). |
 | `v:<id>` | A crossing put down by hand: a bridge, ford or ferry. |
@@ -72,7 +73,7 @@ Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md)
 
 | Tool | Does |
 |---|---|
-| `world_overview` | Size, land masses, how many features of each kind, the largest settlements. |
+| `world_overview` | Size, land masses, how many features of each kind, the largest settlements; what is set aside, and settlements removed (`places_removed`). |
 | `search_features` | Features by current name or kind, each with its extent (bounding box and area, or a river's length). From three letters it also finds districts and businesses (inns, temples, …), renamed ones by their new names. |
 | `get_feature` | Details and relations: what it is, its extent, the areas it lies in, nearest settlements, roads, districts, notable buildings, ways underground, a site's levels and rooms; a settlement's sites and flights of steps (as generated), and for anything in a layout the settlement (and site) it is in. |
 | `list_children` | What a feature contains: districts and businesses, levels and rooms, a settlement's sites (drawn businesses among its businesses), a region's settlements and sites. |
