@@ -39,6 +39,8 @@
     renames: Record<string, string>;
     /** The place selected or entered: NPCs can be put there, plots tied to it. */
     here: Here | null;
+    /** Whether two place ids name the same place (a building drawn by hand has two). */
+    samePlace?: (a?: string, b?: string) => boolean;
     /** Open on this entry (set by the info panel and search; `seq` makes a repeat count). */
     focus: { tab: NotesTab; id: string | null; seq: number };
     playing: boolean;
@@ -58,7 +60,7 @@
     /** Show another entry (an NPC's plot, a plot's NPC): the tab follows. */
     onFocus: (tab: NotesTab, id: string | null) => void;
   }
-  let { npcs, plots, renames, here, focus, playing, resolve, levelName, onNpc, onPlot, onGo, onPick, onToken, onError, onFocus }: Props = $props();
+  let { npcs, plots, renames, here, samePlace = (a?: string, b?: string) => !!a && a === b, focus, playing, resolve, levelName, onNpc, onPlot, onGo, onPick, onToken, onError, onFocus }: Props = $props();
 
   // The tab is the dock's (NPCs, Plots); the entry open is the last one asked for.
   const tab = $derived(focus.tab);
@@ -123,7 +125,7 @@
     return Object.entries(npcs)
       .filter(([, n]) => !t || [n.name, n.appearance, n.mannerisms, n.goals, n.notes, n.attitude.text, n.status, ...n.tags].some((s) => has(s, t)) || (n.location && has(placeName(n.location.id), t)))
       .filter(([, n]) => !filter || n.attitude.stance === filter)
-      .filter(([, n]) => !hereOnly || (here && n.location?.id === here.id))
+      .filter(([, n]) => !hereOnly || (here && samePlace(n.location?.id, here.id)))
       .sort(([, a], [, b]) => a.name.localeCompare(b.name));
   });
 
@@ -133,7 +135,7 @@
     return Object.entries(plots)
       .filter(([, p]) => !t || [p.title, p.text, ...p.tags].some((s) => has(s, t)) || p.npcs.some((k) => has(npcs[k]?.name, t)))
       .filter(([, p]) => !filter || p.status === filter)
-      .filter(([, p]) => !hereOnly || (here && p.anchors.includes(here.id)))
+      .filter(([, p]) => !hereOnly || (here && p.anchors.some((a) => samePlace(a, here.id))))
       .sort(([, a], [, b]) => order[a.status] - order[b.status] || a.title.localeCompare(b.title));
   });
 
@@ -252,7 +254,7 @@
       <div class="ws-label">Where</div>
       <div class="where">{#if npc.location}{placeName(npc.location.id)}{npc.location.level !== undefined ? ` · ${levelName(npc.location.id, npc.location.level) ?? `level ${npc.location.level + 1}`}` : ''}{npc.location.x !== undefined ? ' · placed' : ''}{:else}<span class="ws-muted">Not placed yet</span>{/if}</div>
       <div class="buttons">
-        {#if here && here.id !== npc.location?.id}<button class="ws-btn" onclick={placeHere} title="Put them in {here.name}"><Icon name="pin" size={16} /> {here.name}</button>{/if}
+        {#if here && !samePlace(here.id, npc.location?.id)}<button class="ws-btn" onclick={placeHere} title="Put them in {here.name}"><Icon name="pin" size={16} /> {here.name}</button>{/if}
         <button class="ws-btn" onclick={() => onPick(id)} title="Click on the map (or inside a building) to put them there"><Icon name="target" size={16} /> Pick on map</button>
         {#if npc.location}<button class="ws-btn quiet" onclick={unplace}>Clear</button>{/if}
       </div>
@@ -287,7 +289,7 @@
         {#each plot.anchors as a (a)}
           <span class="ws-chip"><button class="link" onclick={() => onGo(a)} title="Go there">{placeName(a)}</button><button class="x" onclick={() => setPlot({ anchors: plot.anchors.filter((x) => x !== a) })} aria-label="Remove {placeName(a)}"><Icon name="x" size={12} /></button></span>
         {/each}
-        {#if here && !plot.anchors.includes(here.id)}<button class="ws-chip add" onclick={() => setPlot({ anchors: [...plot.anchors, here.id] })}><Icon name="plus" size={12} /> {here.name}</button>{/if}
+        {#if here && !plot.anchors.some((a) => samePlace(a, here.id))}<button class="ws-chip add" onclick={() => setPlot({ anchors: [...plot.anchors, here.id] })}><Icon name="plus" size={12} /> {here.name}</button>{/if}
       </div>
       {#if !here && !plot.anchors.length}<div class="ws-muted">Select a place on the map to tie this to it.</div>{/if}
     </section>

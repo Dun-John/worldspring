@@ -875,7 +875,11 @@ fn authored_at(world: &World, t0: &T0, ids: &[String]) -> (Vec<Value>, Vec<Value
 pub fn at_place(world: &World, t0: &T0, id: &str) -> impl Fn(&str) -> bool + use<> {
     let mut ids = vec![id.to_string()];
     let mut layouts: Vec<usize> = Vec::new();
-    if let Some(li) = layout_of(world, t0, id) {
+    // A building drawn by hand is one place under both its ids (its layout is the building).
+    if let Some((k, c, b)) = drawn_building_ids(world, t0, id) {
+        ids.extend([c, b].into_iter().filter(|x| x != id));
+        layouts.push(t0.settlements.len() + t0.base_pois + k);
+    } else if let Some(li) = layout_of(world, t0, id) {
         layouts.push(li);
         if li < t0.settlements.len() {
             for c in town::sites_in(t0, li) {
@@ -924,16 +928,33 @@ fn set_whereabouts(world: &World, t0: &T0, v: &mut Value, li: usize) {
     }
 }
 
-/// The building drawn by hand behind an id (its created id `c:<n>`, or its building id
-/// `b:<layout>:0`): its place in `edits.created` and both ids. It keeps its name in its entry.
-pub fn drawn_building_ids(world: &World, t0: &T0, id: &str) -> Option<(usize, String, String)> {
+/// A building drawn by hand is one place with two ids: for either (its created id `c:<n>` or its
+/// building id `b:<layout>:0`), its place in `edits.created`, its created id (its name, note and
+/// hidden mark are kept under it) and its building id; removed ones too.
+pub fn drawn_pair(world: &World, t0: &T0, id: &str) -> Option<(usize, String, String)> {
     let base = t0.settlements.len() + t0.base_pois;
     let k = match id.strip_prefix("b:").and_then(|r| r.strip_suffix(":0")).and_then(|s| s.parse::<usize>().ok()) {
         Some(li) => li.checked_sub(base)?,
         None => world.file.edits.created.iter().position(|c| c.id == id)?,
     };
-    let c = world.file.edits.created.get(k).filter(|c| c.kind == "building" && !c.removed)?;
+    let c = world.file.edits.created.get(k).filter(|c| c.kind == "building")?;
     Some((k, c.id.clone(), format!("b:{}:0", base + k)))
+}
+
+/// `drawn_pair` for a building drawn by hand still standing (renames, `at_place`).
+pub fn drawn_building_ids(world: &World, t0: &T0, id: &str) -> Option<(usize, String, String)> {
+    drawn_pair(world, t0, id).filter(|p| !world.file.edits.created[p.0].removed)
+}
+
+/// The id a place's note and hidden mark are kept under: a building drawn by hand's created id.
+pub fn note_key(world: &World, t0: &T0, id: &str) -> String {
+    drawn_pair(world, t0, id).map_or_else(|| id.to_string(), |p| p.1)
+}
+
+/// Whether a place is hidden (a building drawn by hand under either of its ids).
+fn is_hidden(world: &World, t0: &T0, id: &str) -> bool {
+    let h = &world.file.edits.hidden;
+    h.contains(id) || drawn_pair(world, t0, id).is_some_and(|(_, c, b)| h.contains(&c) || h.contains(&b))
 }
 
 /// Whether site layout `li` is a building drawn by hand (its building is `b:<li>:0`).
@@ -973,8 +994,14 @@ fn drawn_businesses(world: &World, t0: &T0, si: usize) -> Vec<(String, std::rc::
         .collect()
 }
 
-fn note_of(world: &World, id: &str) -> Value {
-    world.file.edits.notes.get(id).map(|n| json!({ "text": n.text, "tags": n.tags })).unwrap_or(Value::Null)
+/// A place's note (a building drawn by hand: the notes under both its ids, as one).
+fn note_of(world: &World, t0: &T0, id: &str) -> Value {
+    let notes = &world.file.edits.notes;
+    let n = match drawn_pair(world, t0, id) {
+        Some((_, c, b)) => crate::world::Note::join(notes.get(&c), notes.get(&b)),
+        None => notes.get(id).cloned(),
+    };
+    n.map(|n| json!({ "text": n.text, "tags": n.tags })).unwrap_or(Value::Null)
 }
 
 fn compass(from: P, to: P) -> &'static str {
@@ -1106,7 +1133,7 @@ pub fn near(world: &World, t0: &T0, p: P, radius: f64, kinds: &[String], limit: 
             let (kind, id) = (v["kind"].as_str().unwrap_or("").to_string(), v["id"].as_str().unwrap_or("").to_string());
             let at = [v["x"].as_f64().unwrap_or(0.0), v["y"].as_f64().unwrap_or(0.0)];
             let d = geom::dist(at, p);
-            if d <= radius && wants(&kind) && (include_hidden || !hidden.contains(&id)) {
+            if d <= radius && wants(&kind) && (include_hidden || !is_hidden(world, t0, &id)) {
                 v["distance_mi"] = json!(mi(d));
                 v["direction"] = json!(if d > 0.0 { compass(p, at) } else { "here" });
                 out.push((d, v));
@@ -1132,8 +1159,8 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         "x_ft": p[0].round(),
         "y_ft": p[1].round(),
         "elevation_ft": (ground - world.params().sea_level_ft).round(),
-        "hidden": world.file.edits.hidden.contains(id),
-        "notes": note_of(world, id),
+        "hidden": is_hidden(world, t0, id),
+        "notes": note_of(world, t0, id),
         "in": regions_at(&fs, &shapes(world, t0), p),
         "nearest_settlements": nearest_settlements(&fs, p, id, 3),
     });
@@ -1469,7 +1496,12 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     if li < t0.settlements.len() {
         for (id, cl) in drawn_businesses(world, t0, li) {
             let Some(b) = cl.building(0) else { continue };
-            out.push(name_entry(world, id, "building", b.name.clone().unwrap_or_else(|| b.label().to_string()), Some(geom::centroid(&b.poly)), true));
+            let hidden = is_hidden(world, t0, &id);
+            let mut v = name_entry(world, id, "building", b.name.clone().unwrap_or_else(|| b.label().to_string()), Some(geom::centroid(&b.poly)), true);
+            if hidden {
+                v["hidden"] = json!(true);
+            }
+            out.push(v);
         }
     }
     out

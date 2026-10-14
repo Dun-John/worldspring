@@ -13,6 +13,8 @@
     renames: Record<string, string>;
     /** The world's notes (lore, written by the user or agents), by id. */
     notes: Record<string, { text: string; tags?: string[] }>;
+    /** The id a place's note is kept under (a building drawn by hand: its created id). */
+    noteKey?: (id: string) => string;
     /** A settlement's or site's name, by layout index. */
     settlementName: (index: number) => string;
     /** Where a layout is: the settlement it is or its site stands in, and its site (a site's
@@ -57,7 +59,7 @@
     /** Only the name, what it is and the actions (the sheet is down to its strip). */
     peek?: boolean;
   }
-  let { selection, renames, notes, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onList, onShow, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, docked = false, peek = false }: Props = $props();
+  let { selection, renames, notes, noteKey = (id: string) => id, settlementName, whereOf, parent = null, drawn = false, placesHere = [], onList, onShow, onRename, onFly, onClose, onEnter, onNote, npcsHere, plotsHere, onOpen, onAdd, hidden, onHide, onDelete, onDown, onGoIn, onEdit, onRemove, onRestore, docked = false, peek = false }: Props = $props();
   let cannot = $state(false);
   let confirmDelete = $state(false);
   /** The ⋯ menu (hide, delete). */
@@ -79,7 +81,7 @@
 
   const id = $derived(selection.kind === 'feature' ? selection.feature.id : selection.hit.id);
   const name = $derived(selection.kind === 'feature' ? (renames[selection.feature.id] ?? selection.feature.name) : hitName(selection.hit, renames));
-  const note = $derived(notes[id]);
+  const note = $derived(notes[noteKey(id)]);
   /** What it is, on one line. */
   const kind = $derived(
     selection.kind === 'feature'
@@ -288,18 +290,17 @@
     color: var(--ink-2);
     text-transform: capitalize;
   }
+  /* (The menu hangs from the row's right edge, inside the card, however many buttons come first.) */
   .actions {
+    position: relative;
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
   }
-  .more-wrap {
-    position: relative;
-  }
   .menu {
     position: absolute;
-    left: 0;
-    top: 100%;
+    right: 0;
+    top: calc(100% + 2px);
     z-index: 3;
     display: flex;
     flex-direction: column;

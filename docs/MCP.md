@@ -61,7 +61,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `u:<layout>:<k>` | `u:312:0` | An underground site: dungeon, crypt, cave, mine or lava tube |
 | `w:<layout>:<sx>:<sy>` | `w:0:2:1` | A sewer section |
 | `k:<layout>:…` | | A keep's dungeon |
-| `c:<n>` | `c:2` | A site created by you or an agent (a building drawn by hand too) |
+| `c:<n>` | `c:2` | A site created by you or an agent (a building drawn by hand too: one place with its building id `b:<layout>:0`; its notes and hidden mark are kept under `c:`, either id reads them, and NPCs and plots at either id are found under both) |
 | `l:<site>:<level>` | `l:u:312:0:1` | A building's or site's level (levels count from the bottom), for renaming |
 | `r:<site>:<level>:<room>` | `r:u:312:0:1:4` | A room on a level, for renaming |
 | `n:<id>` | `n:k3x9q0ab` | An NPC (the notebook) |
@@ -170,6 +170,7 @@ One feature in detail. What comes back depends on the feature:
 | Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`; `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
 | Anything in a layout | `settlement` (and in a site's layout `site`): see Conventions. A building drawn by hand (`b:<layout>:0`) used to give its own site as `settlement`; it now gives the town it stands in (or `null`), and its site as `site` |
 | Places with NPCs or plots | `npcs`, `plots`: those at the place, at anything in its layout, at their levels and rooms; for a settlement also at its sites |
+| A building drawn by hand | `notes`, `hidden`, `npcs` and `plots` are the same under its `c:` id and its building id |
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -404,8 +405,8 @@ app as one notice. If a step fails, nothing is changed, and the error names the 
 ### `rename_feature`
 Renames anything with a name: a feature, building, district, tower, underground site, or a site's level (`l:`) or
 room (`r:`). Use `list_names` for the ids. The app shows the new names everywhere, including the level list and
-the room labels inside. A building drawn by hand has one name, whether it is renamed by its `c:` id or its
-building id (`b:<layout>:0`).
+the room labels inside. A building drawn by hand is one place, whether it is named by its `c:` id or its
+building id (`b:<layout>:0`): one name, one note (kept under `c:`) and one hidden mark.
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -421,7 +422,9 @@ building id (`b:<layout>:0`).
 > *"Rename the capital to Agentholm."* · *"Call the biggest tavern in Bulol 'The Drunken Kraken'."* · *"Put Fyckmere's old name back."*
 
 ### `annotate_feature`
-Sets a feature's notes: lore, adventure hooks, secrets for the DM. The app shows them in the info panel.
+Sets a feature's notes: lore, adventure hooks, secrets for the DM. The app shows them in the info panel. A
+building drawn by hand keeps its note under its `c:` id, whichever id is given (the reply's `id`); a note left
+under its building id is joined onto it.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -521,7 +524,8 @@ gate or gates, `keep`, `yard_buildings`, `structure`, `closed`, `name`. Fields l
 like a new one (`remove_in_way` as there). `delete_feature` takes it away.
 
 ### `update_feature`
-Changes a name and the notes in one call. Unlike `annotate_feature`, `tags` here replace the existing tags.
+Changes a name and the notes in one call. Unlike `annotate_feature`, `tags` here replace the existing tags. A
+building drawn by hand takes either id, as in `rename_feature` and `annotate_feature`.
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -536,7 +540,8 @@ Changes a name and the notes in one call. Unlike `annotate_feature`, `tags` here
 
 ### `hide_feature`
 Hides a feature from the map's labels and from search, or shows it again. It still exists, and
-`search_features` with `include_hidden` finds it.
+`search_features` with `include_hidden` finds it. A building drawn by hand is hidden by either id (the mark is
+kept under its `c:` id), and its business pin is hidden with it.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -582,7 +587,7 @@ tools. Ids are random (`n:k3x9q0ab`), so the app and an agent can create at the 
 | Parameter | Type | | |
 |---|---|---|---|
 | `query` | string | optional | Matches name, appearance, mannerisms, goals, notes, attitude. |
-| `location` | string | optional | A place id. Also finds NPCs on its levels and in its rooms; a settlement's or site's id, NPCs in its buildings, districts, towers and ways underground; a settlement's, NPCs at the sites in it too. |
+| `location` | string | optional | A place id. Also finds NPCs on its levels and in its rooms; a settlement's or site's id, NPCs in its buildings, districts, towers and ways underground; a settlement's, NPCs at the sites in it too. A building drawn by hand by either of its ids. |
 | `tag` | string | optional | |
 | `stance` | string | optional | `hostile`, `unfriendly`, `neutral`, `friendly` or `allied`. |
 
@@ -761,8 +766,9 @@ alone.
   interior gains a roof level) or `cone`; left out, as its kind has it (battlements on castles, barracks and
   towers). **Tint:** `terracotta`, `slate`, `thatch`, `shingle` or `moss` (left out: picked).
 - **Structure:** `ruin` leaves broken walls with no roof and no way in.
-- Delete one with `delete_feature`, hide its label with `hide_feature`; notes and NPCs go on its `c:` id or
-  its building id.
+- Delete one with `delete_feature`, hide its label with `hide_feature`. It is one place under its `c:` id and
+  its building id: notes and the hidden mark are kept under `c:` (either id reads and writes them), and NPCs and
+  plots at either id are found under both.
 
 ### `create_building`
 A building with the same footprint as one already drawn (every corner within 2 ft), the same `func` and (if

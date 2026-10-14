@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::core::tile::TileKey;
 use worldgen::under::{MAX_LEVELS, SiteSize, THEMES, UnderKind};
-use worldgen::world::{CREATABLE, Created, Note};
+use worldgen::world::{CREATABLE, Created, Edits, Note};
 
 /// The themes by kind of site, for the tool's description.
 fn theme_doc() -> String {
@@ -45,7 +45,7 @@ pub fn list() -> Value {
     let mut v = json!([
         { "name": "world_overview", "title": "World overview", "description": "The world's size, land masses, counts of named features and its largest settlements.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "search_features", "title": "Search", "description": "Named features matching a query, by their current names (towns, ranges, rivers, ruins...; from three letters also districts and businesses such as inns and temples). Empty query with a kind lists that kind. Each result has its extent: bounding box (ft) and area (sq mi), or a river's length (mi).", "inputSchema": schema(json!({ "query": { "type": "string" }, "kind": { "type": "string", "description": "Only this kind (city, town, village, ruin, cave, range, forest, river, lake, building, district...)" }, "limit": { "type": "integer", "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &["query"]), "annotations": { "readOnlyHint": true } },
-        { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: what and where it is, its extent (bounding box, area or length), its notes, the regions it lies in, nearest settlements, roads to other settlements, a settlement's districts, notable buildings, ways underground and the sites standing in it (sites), a building's or site's levels and rooms; for anything in a settlement's or site's layout, the settlement it is in (settlement: {id, name} or null) and the site (site). NPCs and plots at it, its sites, levels and rooms.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
+        { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: what and where it is, its extent (bounding box, area or length), its notes, the regions it lies in, nearest settlements, roads to other settlements, a settlement's districts, notable buildings, ways underground and the sites standing in it (sites), a building's or site's levels and rooms; for anything in a settlement's or site's layout, the settlement it is in (settlement: {id, name} or null) and the site (site). NPCs and plots at it, its sites, levels and rooms (a building drawn by hand: the same under either of its ids).", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
         { "name": "list_children", "title": "Children", "description": "What a feature contains: a settlement's districts, businesses (buildings drawn in it with a trade too) and the sites standing in it, a district's businesses, a building's or underground site's levels and rooms, a region's settlements and sites.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
         { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, each with its id, kind, current and generated name: every named feature (oceans, rivers, ranges, settlements, sites...); with settlement (a settlement's or site's id) its districts, businesses, towers and underground sites, and for a settlement the sites standing in it (kind site); with within (a building or site id) its levels and rooms.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, range, city, district, building, tower, underground, site, level, room...)" }, "settlement": { "type": "string" }, "within": { "type": "string" } }), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, biome, the areas it lies in (land, sea, range, forest, lake...), the building or district or site there, named features nearby (within a tenth of their size, 2 to 10 mi, measured to their nearest edge or course), nearest settlements.", "inputSchema": schema(place_props(), &[]), "annotations": { "readOnlyHint": true } },
@@ -56,7 +56,7 @@ pub fn list() -> Value {
         { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (PNG, 1536x1024). size_ft is the ground across the image: up to about 450 shows the painted battlemap with its 5-ft grid, 3000 a village or a town's streets, 20000 a city and its fields, 200000 a region.", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "default": 3000 } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "focus_view", "title": "Show the user", "description": "Move the open map app's view to a place (the user sees it).", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "default": 3000 } })), &[]) },
         { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, underground site, or a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), ids as list_names gives them. An empty name restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
-        { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets for the DM, with tags.", "inputSchema": schema(json!({ "id": { "type": "string" }, "text": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "append": { "type": "boolean", "default": false } }), &["id", "text"]) },
+        { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets for the DM, with tags. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "text": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "append": { "type": "boolean", "default": false } }), &["id", "text"]) },
         { "name": "create_feature", "title": "Create a site", "description": "Add a site at a place on dry land, generated like the world's own (map, battlemap, interiors, underground): ruin (over a dungeon, crypt or catacombs), tower, camp, waystation (roadside inn), cave, mine, lava_tube, or entrance (a bare way underground: stairs, a cave mouth, a mine adit or a skylight, by 'under'). Sites with something underground take its size, levels and theme (anything left out is chosen as for the world's own). Or a castle (an outline: curtain wall, towers, gatehouse, keep, yard buildings) or a wall (a line of wall with towers; gates where asked and where roads and streets cross it), drawn by poly/rect or pts instead of a place; the world's own buildings in the way are named, or taken away with remove_in_way. Returns its id and the ids of its ways underground (a castle: its keep's building id, towers and gates).", "inputSchema": schema(merge(merge(place_props(), crate::works::props()), json!({
             "kind": { "type": "string", "enum": CREATABLE.iter().filter(|k| **k != "building").collect::<Vec<_>>() },
             "name": { "type": "string" },
@@ -65,8 +65,8 @@ pub fn list() -> Value {
             "levels": { "type": "integer", "minimum": 1, "maximum": MAX_LEVELS },
             "theme": { "type": "string", "enum": THEMES.iter().map(|t| t.key).collect::<Vec<_>>(), "description": theme_doc() },
         })), &["kind"]) },
-        { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } }), &["id"]) },
-        { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there.", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
+        { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } }), &["id"]) },
+        { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there. A building drawn by hand is one place: either of its ids (its business pin is hidden too).", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
         { "name": "delete_feature", "title": "Delete a created site", "description": "Delete a site that was created, buildings drawn by hand too (the world's own buildings go with remove_buildings; other generated features can only be hidden).", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]) },
     ]);
     if let Some(a) = v.as_array_mut() {
@@ -289,15 +289,17 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             let tags: Vec<String> = a["tags"].as_array().map(|v| v.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()).unwrap_or_default();
             let append = a["append"].as_bool().unwrap_or(false);
             known(app, &id).await?;
+            let pair = drawn_pair(app, &id).await?;
             app.edit("agent", 0, move |e| {
-                let n = e.notes.entry(id.clone()).or_insert_with(Note::default);
+                let key = note_key(e, pair, &id);
+                let n = e.notes.entry(key.clone()).or_insert_with(Note::default);
                 n.text = if append && !n.text.is_empty() { format!("{}\n\n{t}", n.text) } else { t };
                 for tag in tags {
                     if !n.tags.contains(&tag) {
                         n.tags.push(tag);
                     }
                 }
-                Ok(json!({ "tool": "annotate_feature", "id": id }))
+                Ok(json!({ "tool": "annotate_feature", "id": key }))
             })
             .await
             .map(text)
@@ -308,15 +310,25 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             let name = a["name"].as_str().map(|s| s.trim().to_string());
             let notes = a["notes"].as_str().map(str::to_string);
             let tags: Option<Vec<String>> = a["tags"].as_array().map(|v| v.iter().filter_map(|t| t.as_str().map(str::to_string)).collect());
+            let pair = drawn_pair(app, &id).await?;
             app.edit("agent", 0, move |e| {
                 if let Some(n) = &name {
-                    e.renames.insert(id.clone(), n.clone());
-                    if let Some(c) = e.created.iter_mut().find(|c| c.id == id) {
-                        c.name = n.clone();
+                    // A building drawn by hand keeps its name in its entry (as `rename_feature`).
+                    let drawn = pair.as_ref().filter(|p| !n.is_empty() && e.created.get(p.0).is_some_and(|c| c.id == p.1));
+                    if let Some((k, cid, bid)) = drawn {
+                        e.renames.remove(cid);
+                        e.renames.remove(bid);
+                        e.created[*k].name = n.clone();
+                    } else {
+                        e.renames.insert(id.clone(), n.clone());
+                        if let Some(c) = e.created.iter_mut().find(|c| c.id == id) {
+                            c.name = n.clone();
+                        }
                     }
                 }
                 if notes.is_some() || tags.is_some() {
-                    let n = e.notes.entry(id.clone()).or_insert_with(Note::default);
+                    let key = note_key(e, pair.clone(), &id);
+                    let n = e.notes.entry(key).or_insert_with(Note::default);
                     if let Some(t) = notes {
                         n.text = t;
                     }
@@ -333,13 +345,22 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             let id = arg_str(&a, "id")?;
             let hide = a["hidden"].as_bool().unwrap_or(true);
             known(app, &id).await?;
+            let pair = drawn_pair(app, &id).await?;
             app.edit("agent", 0, move |e| {
+                // (A building drawn by hand: its mark kept under its created id.)
+                let key = match pair.filter(|p| e.created.get(p.0).is_some_and(|c| c.id == p.1)) {
+                    Some((_, c, b)) => {
+                        e.hidden.remove(&b);
+                        c
+                    }
+                    None => id.clone(),
+                };
                 if hide {
-                    e.hidden.insert(id.clone());
+                    e.hidden.insert(key.clone());
                 } else {
-                    e.hidden.remove(&id);
+                    e.hidden.remove(&key);
                 }
-                Ok(json!({ "tool": "hide_feature", "id": id, "hidden": hide }))
+                Ok(json!({ "tool": "hide_feature", "id": key, "hidden": hide }))
             })
             .await
             .map(text)
@@ -367,6 +388,29 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
 pub(crate) async fn known(app: &Shared, id: &str) -> Result<(), String> {
     let id2 = id.to_string();
     app.worker.with(move |ex| agent::position(&ex.world, &ex.t0, &id2).map(|_| ()).ok_or_else(|| format!("no such feature: {id2}"))).await
+}
+
+/// A building drawn by hand behind an id (`agent::drawn_pair`: its place in `created`, created
+/// and building ids), else None.
+async fn drawn_pair(app: &Shared, id: &str) -> Result<Option<(usize, String, String)>, String> {
+    let q = id.to_string();
+    app.worker.with(move |ex| Ok(agent::drawn_pair(&ex.world, &ex.t0, &q))).await
+}
+
+/// The key a place's note is kept under: a building drawn by hand's created id (`pair`, while
+/// `created` still holds it there), its note under its building id (written before) joined
+/// onto it; else `id`.
+fn note_key(e: &mut Edits, pair: Option<(usize, String, String)>, id: &str) -> String {
+    match pair.filter(|p| e.created.get(p.0).is_some_and(|c| c.id == p.1)) {
+        Some((_, c, b)) => {
+            if let Some(old) = e.notes.remove(&b) {
+                let joined = Note::join(e.notes.get(&c), Some(&old));
+                e.notes.extend(joined.map(|n| (c.clone(), n)));
+            }
+            c
+        }
+        None => id.to_string(),
+    }
 }
 
 async fn create(app: &Shared, a: Value) -> Result<Value, String> {

@@ -693,13 +693,31 @@ export class MapView {
     this.onInterior({ id: it.interior.id, name: this.renames[it.interior.id] ?? it.interior.name ?? it.interior.function, levels: it.levelInfo(), level: it.currentLevel });
   }
 
+  /** The created id of a building drawn by hand, from its building id (else null). */
+  private drawnAlias(id: string): string | null {
+    const m = /^b:(\d+):0$/.exec(id);
+    const first = this.overlay?.first_created;
+    const c = m && first !== undefined ? this.edits.created?.[Number(m[1]) - first] : undefined;
+    return c?.kind === 'building' ? c.id : null;
+  }
+
+  /** The labels hidden: a building drawn by hand hidden by its created id hides its business
+   * pin (its building id) too. */
+  private hiddenLabels(e: Edits): Set<string> {
+    const set = new Set(e.hidden ?? []);
+    const first = this.overlay?.first_created;
+    if (first !== undefined) (e.created ?? []).forEach((c, k) => c.kind === 'building' && set.has(c.id) && set.add(`b:${first + k}:0`));
+    return set;
+  }
+
   /** Show the NPCs placed in the building or site we are in (the DM's map only). */
   private markNpcs() {
     const it = this.interior;
     if (!it || this.interiorStyle.player) return;
     const id = it.interior.id;
+    const alias = this.drawnAlias(id);
     const list = Object.entries(this.edits.npcs ?? {})
-      .filter(([, n]) => n.location?.id === id)
+      .filter(([, n]) => n.location?.id === id || (!!alias && n.location?.id === alias))
       .map(([k, n]) => {
         const l = n.location!;
         return { id: k, name: n.name, level: l.level ?? it.interior.entry_level, at: l.x !== undefined && l.y !== undefined ? ([l.x, l.y] as [number, number]) : undefined };
@@ -820,7 +838,7 @@ export class MapView {
       this.redrawInterior();
       this.emitInterior();
     }
-    if (prev.hidden !== next.hidden) this.labels?.setHidden(new Set(next.hidden ?? []));
+    if (prev.hidden !== next.hidden || createdChanged) this.labels?.setHidden(this.hiddenLabels(next));
     if (prev.npcs !== next.npcs) this.markNpcs();
     // A site designed anew while we are in it (by undo, an agent): shown as it is now.
     const here = this.interior?.interior.id;

@@ -67,6 +67,8 @@
   import { changeList } from './world/changes';
   import { noteChanges, noteExported, unexported } from './world/exported';
 
+  type Note = { text: string; tags?: string[] };
+
   const params = new URLSearchParams(location.search);
   // (Its keys come from the shortcuts below.)
   const view = new MapView('dm', { keys: false });
@@ -173,7 +175,7 @@
   });
   // Search and breadcrumbs leave hidden features out (a new object per edit: names change in place).
   const shown = $derived.by<Overlay | null>(() => {
-    const hidden = new Set(edits.hidden ?? []);
+    const hidden = new Set(placeHidden);
     return overlay ? { ...overlay, features: overlay.features.filter((f) => !hidden.has(f.id)) } : null;
   });
   // The sites the breadcrumbs may name (those shown), each with the settlement it stands in, and the
@@ -234,6 +236,8 @@
     overlay = view.overlay;
     const sel = selection;
     if (sel?.kind === 'feature' && sel.feature.id.startsWith('c:') && !overlay?.features.some((f) => f.id === sel.feature.id)) selection = null;
+    // (A building drawn by hand just taken away: its card goes with it.)
+    if (sel?.kind === 'building' && drawnPair(sel.hit.id)?.entry.removed) selection = null;
     saveUrl();
     changed();
     if (opts.send !== false) sync.ops(ops, change);
@@ -1096,7 +1100,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToScreen(x, y);
@@ -1177,6 +1181,50 @@
     const k = (edits.created ?? []).findIndex((x) => x.id === cid);
     return `b:${firstCreated + k}:0`;
   }
+
+  /** A building drawn by hand is one place with two ids: its created id (`c:<n>`: its note and
+   * hidden mark are kept under it) and its building id (`b:<layout>:0`: its inside's). Either id
+   * gives both; removed ones too (a note keeps one key through a delete and its undo). */
+  function drawnPair(id: string): { c: string; b: string; li: number; entry: Created } | null {
+    const all = edits.created ?? [];
+    const m = /^b:(\d+):0$/.exec(id);
+    const k = m ? Number(m[1]) - firstCreated : id.startsWith('c:') ? all.findIndex((x) => x.id === id) : -1;
+    const entry = k >= 0 ? all[k] : undefined;
+    return entry?.kind === 'building' ? { c: entry.id, b: `b:${firstCreated + k}:0`, li: firstCreated + k, entry } : null;
+  }
+  /** The id a place's note and hidden mark are kept under. */
+  const placeKey = (id: string) => drawnPair(id)?.c ?? id;
+  /** Whether two place ids name the same place. */
+  const samePlace = (a?: string, b?: string) => !!a && !!b && (a === b || placeKey(a) === placeKey(b));
+
+  /** Two notes on one place as one (the first's text, then the second's when it differs; the
+   * tags of both), as `worldgen::world::Note::join`. */
+  function joinNotes(a: Note | undefined, b: Note): Note {
+    if (!a) return b;
+    const text = a.text && b.text && a.text.trim() !== b.text.trim() ? `${a.text}\n\n${b.text}` : a.text || b.text;
+    const tags = [...new Set([...(a.tags ?? []), ...(b.tags ?? [])])];
+    return tags.length ? { text, tags } : { text };
+  }
+  /** The notes as shown, one per place: a note kept under a building drawn by hand's building
+   * id (as its map card wrote it before) is shown under its created id. The same object when
+   * there is none. */
+  const placeNotes = $derived.by(() => {
+    let out: Record<string, Note> | null = null;
+    for (const [k, n] of Object.entries(notes)) {
+      if (!/^b:\d+:0$/.test(k)) continue;
+      const c = placeKey(k);
+      if (c === k) continue;
+      out ??= { ...notes };
+      delete out[k];
+      out[c] = joinNotes(out[c], n);
+    }
+    return out ?? notes;
+  });
+  /** The hidden ids as shown: a building drawn by hand's building id as its created id. */
+  const placeHidden = $derived.by(() => {
+    const all = edits.hidden ?? [];
+    return all.some((h) => /^b:\d+:0$/.test(h) && placeKey(h) !== h) ? [...new Set(all.map(placeKey))].sort() : all;
+  });
 
   /** A building's inside designed by hand, fitted to `floors` storeys (`designs` with it), or why
    * it is set aside. */
@@ -2216,7 +2264,7 @@
         : c.kind === 'castle' || c.kind === 'wall'
           ? { onEdit: () => editWorks(id) }
           : {};
-    const hiddenNow = (edits.hidden ?? []).includes(id);
+    const hiddenNow = placeHidden.includes(id);
     const under = !['tower', 'camp', 'waystation', 'building', 'castle', 'wall'].includes(c.kind);
     return {
       ...drawn,
@@ -2340,9 +2388,11 @@
    * id, anything in its layout (`b d t u k w:<layout>:` ids, their levels and rooms); for a
    * settlement, the same for each site in it, the sites' own ids included. */
   function atPlace(id: string): (at: string | undefined) => boolean {
-    const ids = new Set([id]);
+    // (A building drawn by hand is one place under both its ids: its layout is the building.)
+    const pair = drawnPair(id);
+    const ids = new Set([id, ...(pair && !pair.entry.removed ? [pair.c, pair.b] : [])]);
     const layouts = new Set<number>();
-    const li = layoutIndexOf(id);
+    const li = pair && !pair.entry.removed ? pair.li : layoutIndexOf(id);
     if (li >= 0) {
       layouts.add(li);
       for (const c of li < settlements.length ? (sitesOf.get(li) ?? []) : []) {
@@ -2366,7 +2416,7 @@
     if (selection?.kind !== 'feature') return [];
     const li = layoutIndexOf(selection.feature.id);
     if (li < 0 || li >= settlements.length) return [];
-    const hidden = new Set(edits.hidden ?? []);
+    const hidden = new Set(placeHidden);
     return (sitesOf.get(li) ?? [])
       .map(layoutFeature)
       .filter((f): f is Feature => !!f && !hidden.has(f.id))
@@ -2405,19 +2455,30 @@
 
   /** Hide a feature's label from both maps and search, or show it again. */
   function setHidden(id: string, hide: boolean) {
-    if ((edits.hidden ?? []).includes(id) === hide) return;
+    // (A building drawn by hand: kept under its created id, a mark under its building id moved.)
+    const pair = drawnPair(id);
+    const key = pair?.c ?? id;
     const set = new Set(edits.hidden ?? []);
-    if (hide) set.add(id);
-    else set.delete(id);
-    applyEdits({ ...edits, hidden: [...set].sort() }, { tool: 'hide_feature', id, hidden: hide }, 'user');
+    if (pair) set.delete(pair.b);
+    if (hide) set.add(key);
+    else set.delete(key);
+    const next = [...set].sort();
+    const now = edits.hidden ?? [];
+    if (next.length === now.length && next.every((h, i) => h === now[i])) return;
+    applyEdits({ ...edits, hidden: next }, { tool: 'hide_feature', id: key, hidden: hide }, 'user');
   }
 
   /** Set (or with null, clear) a place's note; `name` says which place in the undo line. */
-  function setNote(id: string, note: { text: string; tags?: string[] } | null, name = here?.id === id ? here.name : undefined) {
+  function setNote(id: string, note: Note | null, name = here?.id === id ? here.name : undefined) {
+    // (A building drawn by hand: kept under its created id, a note under its building id, shown
+    // with it, dropped in the same step.)
+    const pair = drawnPair(id);
+    const key = pair?.c ?? id;
     const all = { ...notes };
-    if (note) all[id] = note;
-    else delete all[id];
-    applyEdits({ ...edits, notes: all }, { tool: 'annotate_feature', id, ...(name ? { name } : {}) }, 'user');
+    if (pair) delete all[pair.b];
+    if (note) all[key] = note;
+    else delete all[key];
+    applyEdits({ ...edits, notes: all }, { tool: 'annotate_feature', id: key, ...(name ? { name } : {}) }, 'user');
   }
 
   /** Show a place: a map feature is selected (and framed); a building or district is found
@@ -2454,7 +2515,7 @@
     const n = npcs[id];
     const it = view.interior;
     const l = n?.location;
-    if (!it || !l || l.id !== it.interior.id) return null;
+    if (!it || !l || !samePlace(l.id, it.interior.id)) return null;
     const level = l.level ?? it.interior.entry_level;
     if (level !== it.currentLevel) return null;
     return it.toWorld(...it.npcSpot({ id, name: n.name, level, at: l.x !== undefined && l.y !== undefined ? [l.x, l.y] : undefined }));
@@ -2477,9 +2538,12 @@
   async function goTo(id: string) {
     if (designer?.dirty) return ask('design', () => void goTo(id));
     const n = npcs[id];
-    const place = n ? n.location : { id };
+    let place = n ? n.location : { id };
     if (!place) return;
     if (setAside(place.id)) return toast('That place was set aside when the world was remade: it is no longer on the map');
+    // (At a building drawn by hand's created id: into it, as at its building id.)
+    const pair = drawnPair(place.id);
+    if (pair && place.id === pair.c && !pair.entry.removed && pair.entry.structure !== 'ruin') place = { ...place, id: pair.b };
     // A site's level or room (`l:<site>:<level>`, `r:<site>:<level>:<room>`): into the site, on that level.
     const room = /^l:(.+):(\d+)$/.exec(place.id) ?? /^r:(.+):(\d+):\d+$/.exec(place.id);
     if (room) {
@@ -2607,13 +2671,40 @@
     else flyToSize(s.hit.x, s.hit.y, Math.max(120, s.hit.size_ft * 6));
   }
 
-  function select(s: Selection) {
+  /** A building drawn by hand's building on the map (its card is the building's), else null
+   * (removed, or not answered: its feature's card stays). */
+  async function drawnHit(id: string): Promise<BuildingHit | null> {
+    const p = drawnPair(id);
+    if (!p || p.entry.removed) return null;
+    const hit = await view.gen.query(p.entry.x, p.entry.y);
+    return hit?.kind === 'building' && hit.id === p.b ? hit : null;
+  }
+
+  /** Counts choices of a place, so an answer that comes late never overrides a newer one. */
+  let selectSeq = 0;
+
+  /** Select a place (`fly`: and frame it). A building drawn by hand shows its building's card,
+   * whichever way it was opened. */
+  async function choose(s: Selection, fly: boolean) {
+    const seq = ++selectSeq;
+    if (s.kind === 'feature' && drawnPair(s.feature.id)) {
+      const was = selection;
+      const hit = await drawnHit(s.feature.id);
+      // (Something else chosen meanwhile wins.)
+      if (seq !== selectSeq || selection !== was) return;
+      if (hit) s = { kind: 'building', hit };
+    }
     selection = s;
-    flyToSelection(s);
+    if (fly) flyToSelection(s);
+  }
+
+  function select(s: Selection) {
+    void choose(s, true);
   }
 
   async function pick(x: number, y: number, sx: number, sy: number) {
     if (townOn && townTool) return townPick(x, y);
+    const seq = ++selectSeq;
     const f = view.labels?.hit(sx, sy);
     const shop = f?.kind === 'place' ? view.labels?.placeHit(f.id) : null;
     if (shop) {
@@ -2625,11 +2716,9 @@
       selection = { kind: 'district', hit: { kind: 'district', id: f.id, settlement: Number(f.id.split(':')[1]), name: f.name, district_kind: kind, x: f.x, y: f.y, size_ft: f.extent_ft * 0.7 } };
       return;
     }
-    if (f) {
-      selection = { kind: 'feature', feature: f };
-      return;
-    }
+    if (f) return void choose({ kind: 'feature', feature: f }, false);
     const hit = await view.gen.query(x, y);
+    if (seq !== selectSeq) return;
     if (hit?.kind === 'building') selection = { kind: 'building', hit };
     else if (hit?.kind === 'district') selection = { kind: 'district', hit };
     else if (hit?.kind === 'settlement' && overlay) {
@@ -2915,7 +3004,7 @@
           onSelect={select}
           {npcs}
           {plots}
-          {notes}
+          notes={placeNotes}
           resolve={resolvePlace}
           onNpc={(id) => openNotebook('npcs', id)}
           onPlot={(id) => openNotebook('plots', id)}
@@ -3168,8 +3257,9 @@
             <Gazetteer
               features={overlay.features}
               {renames}
-              hidden={edits.hidden ?? []}
-              {notes}
+              hidden={placeHidden}
+              notes={placeNotes}
+              noteKey={placeKey}
               {here}
               focus={notebookFocus}
               scopeOf={gazetteerScope}
@@ -3196,6 +3286,7 @@
             {plots}
             {renames}
             {here}
+            {samePlace}
             focus={notebookFocus}
             playing={playOn}
             resolve={resolvePlace}
@@ -3235,7 +3326,8 @@
       {peek}
       selection={sel}
       {renames}
-      {notes}
+      notes={placeNotes}
+      noteKey={placeKey}
       {settlementName}
       whereOf={(li) => ({ town: layoutRef(townOf(li)), site: li >= settlements.length ? layoutRef(li) : null })}
       parent={sel.kind === 'feature' && layoutIndexOf(sel.feature.id) >= settlements.length ? layoutRef(townOf(layoutIndexOf(sel.feature.id))) : null}

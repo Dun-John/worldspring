@@ -20,6 +20,9 @@
     hidden: string[];
     /** The notes written on places, by place id. */
     notes: Record<string, Note>;
+    /** The id a place's note and hidden mark are kept under (a building drawn by hand: its
+     * created id, whose page its building's row opens). */
+    noteKey?: (id: string) => string;
     /** The place selected or entered: a note can be written on it. */
     here: Here | null;
     /** Open on this place's page, or with `reveal` on its row in the list (`seq` makes a repeat
@@ -53,7 +56,7 @@
     /** Show a place: selected on the map, its card open. */
     onShow: (id: string) => void;
   }
-  let { features, renames, hidden, notes, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow }: Props = $props();
+  let { features, renames, hidden, notes, noteKey = (id: string) => id, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow }: Props = $props();
 
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
@@ -95,7 +98,7 @@
       const id = focus.id;
       current = null;
       untrack(() => reveal(id));
-    } else current = focus.id;
+    } else current = focus.id && noteKey(focus.id);
   });
 
   let listEl = $state<HTMLElement | null>(null);
@@ -127,7 +130,10 @@
   const nameOf = (id: string, generated: string) => renames[id] ?? generated;
   const has = (s: string | undefined, t: string) => !!s && s.toLowerCase().includes(t);
   /** A place's note matches what is looked for. */
-  const noteMatches = (id: string) => !!notes[id] && (has(notes[id].text, needle) || (notes[id].tags ?? []).some((g) => has(g, needle)));
+  const noteMatches = (id: string) => {
+    const n = notes[noteKey(id)];
+    return !!n && (has(n.text, needle) || (n.tags ?? []).some((g) => has(g, needle)));
+  };
   const matches = (id: string, generated: string) => !needle || nameOf(id, generated).toLowerCase().includes(needle) || generated.toLowerCase().includes(needle) || noteMatches(id);
 
   // Generated names of places that are not map features (a building, district, tower, way
@@ -161,6 +167,7 @@
 
   /** Open a place's page (`label`: the name its row shows before renames). */
   function openPage(id: string, label?: string) {
+    id = noteKey(id);
     lookUp(id, label);
     current = id;
     confirmDelete = false;
@@ -317,14 +324,15 @@
       <span class="muted was" title="The generated name">{shown}</span>
       <button class="icon" onclick={() => onRename(id, '')} title="Back to “{shown}”" aria-label="Reset the name">↺</button>
     {/if}
-    {#if hiddenSet.has(id)}<span class="mark" title="Hidden on both maps and in search"><Icon name="eye-off" size={13} /></span>{/if}
+    {#if hiddenSet.has(noteKey(id))}<span class="mark" title="Hidden on both maps and in search"><Icon name="eye-off" size={13} /></span>{/if}
   {/if}
 {/snippet}
 
 <!-- A row's note (only the DM sees it) and its way there. -->
 {#snippet acts(id: string, generated: string, enter = false)}
+  {@const noted = noteKey(id) in notes}
   <span class="acts">
-    <button class="icon note" class:has={id in notes} onclick={() => openPage(id, generated)} title={id in notes ? 'Its note (only you see it)' : 'Write a note (only you see it)'} aria-label={id in notes ? 'Its note' : 'Write a note'}><Icon name="note" size={14} /></button>
+    <button class="icon note" class:has={noted} onclick={() => openPage(id, generated)} title={noted ? 'Its note (only you see it)' : 'Write a note (only you see it)'} aria-label={noted ? 'Its note' : 'Write a note'}><Icon name="note" size={14} /></button>
     <button class="icon go" onclick={() => onGo(id)} title={enter ? 'Go inside' : 'Go to'} aria-label={enter ? 'Go inside' : 'Go to'}>➜</button>
   </span>
 {/snippet}
@@ -393,7 +401,7 @@
     <li class="muted wait">Laying out {title}…</li>
   {:else if v}
     {#each CHILD_GROUPS as [kind, label] (kind)}
-      {@const all = v.filter((e) => e.kind === kind && (showHidden || !hiddenSet.has(e.id)))}
+      {@const all = v.filter((e) => e.kind === kind && (showHidden || !hiddenSet.has(noteKey(e.id))))}
       {@const rows = numbered(all).filter((r) => ownerMatches || matches(r.e.id, r.label) || opened[r.e.id])}
       {#if rows.length}
         {@const key = `${owner}/${kind}`}

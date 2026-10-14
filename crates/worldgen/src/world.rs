@@ -687,6 +687,31 @@ pub struct Note {
     pub tags: Vec<String>,
 }
 
+impl Note {
+    /// Two notes on one place as one: the first's text, then the second's when it differs; the
+    /// tags of both, in order (as the app's `joinNotes`).
+    pub fn join(a: Option<&Note>, b: Option<&Note>) -> Option<Note> {
+        let (a, b) = match (a, b) {
+            (Some(a), Some(b)) => (a, b),
+            (a, b) => return a.or(b).cloned(),
+        };
+        let text = if !a.text.is_empty() && !b.text.is_empty() && a.text.trim() != b.text.trim() {
+            format!("{}\n\n{}", a.text, b.text)
+        } else if a.text.is_empty() {
+            b.text.clone()
+        } else {
+            a.text.clone()
+        };
+        let mut tags = a.tags.clone();
+        for t in &b.tags {
+            if !tags.contains(t) {
+                tags.push(t.clone());
+            }
+        }
+        Some(Note { text, tags })
+    }
+}
+
 /// A site added to the world: a ruin (with its dungeon or crypt), tower, camp, roadside inn,
 /// cave, mine, lava tube or a bare way underground, generated like the generated ones.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
