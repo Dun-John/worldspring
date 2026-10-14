@@ -1029,7 +1029,7 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String)> {
     for (k, e) in &world.file.edits.towns {
         let Some(index) = k.parse::<usize>().ok().filter(|&i| i < t0.settlements.len()) else {
             let parked = k.parse::<usize>().is_ok_and(|i| i >= crate::world::PARKED_LAYOUT);
-            out.push((k.clone(), if parked { "set aside when the world was remade" } else { "not a town" }.into()));
+            out.push((k.clone(), if parked { "set aside when the world was remade or upgraded" } else { "not a town" }.into()));
             continue;
         };
         let s = &t0.settlements[index];

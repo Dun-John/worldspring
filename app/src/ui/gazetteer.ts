@@ -21,27 +21,38 @@ export function setAside(id: string): boolean {
  * kept under `gone:<n>:<its id>`, which names nothing and is never moved to another place. */
 export const GONE_ID = /^gone:(\d+):(([a-z_]+):.*)$/;
 
-/** A place taken away on purpose (`gone:<n>:<id>`): its kind, else null. */
-export const removedKind = (id: string): string | null => GONE_ID.exec(id)?.[3] ?? null;
+/** A settlement or site of a world upgraded to a generator that makes them anew (`RENUMBERED`):
+ * what was made on it is kept under `was:<version made with>:<its id>`, which names nothing. */
+export const WAS_ID = /^was:(\d+):(([a-z_]+):.*)$/;
+
+/** A place no longer on the map whose id keeps what was made on it (taken away on purpose,
+ * `gone:`, or made anew by an upgrade, `was:`): its kind, else null. */
+export const removedKind = (id: string): string | null => GONE_ID.exec(id)?.[3] ?? WAS_ID.exec(id)?.[3] ?? null;
 
 /** A feature's id (`kind:hash`, a `b` added on a clash), as the generator makes them. */
 const FEATURE_ID = /^([a-z_]{2,}):[0-9a-f]+b*$/;
 const a = (what: string) => `${/^[aeiou]/.test(what) ? 'an' : 'a'} ${what}`;
+const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 
 /** What to call a place no name was found for: what became of it (taken away, set aside when the
  * world was remade, or a feature the map no longer has), else its id. */
 export function unnamed(id: string): string {
+  const w = WAS_ID.exec(id);
+  if (w) return `${cap(a(kindLabel(w[3])))} of version ${w[1]}`;
   const k = removedKind(id);
   if (k) return `Removed: ${a(kindLabel(k))}`;
-  if (setAside(id)) return 'Set aside when the world was remade';
+  if (setAside(id)) return 'Set aside when the world was remade or upgraded';
   const f = FEATURE_ID.exec(id);
   return f ? `No longer on the map: ${a(kindLabel(f[1]))}` : id;
 }
 
 /** A place's name as listed: a place taken away by its name then (`renames`), marked so; else
  * its rename, else `fallback()`. */
-export const listedName = (id: string, renames: Record<string, string>, fallback: () => string): string =>
-  removedKind(id) ? (renames[id] ? `Removed: ${renames[id]}` : unnamed(id)) : (renames[id] ?? fallback());
+export const listedName = (id: string, renames: Record<string, string>, fallback: () => string): string => {
+  const w = WAS_ID.exec(id);
+  if (w) return renames[id] ? `${renames[id]} (version ${w[1]})` : unnamed(id);
+  return removedKind(id) ? (renames[id] ? `Removed: ${renames[id]}` : unnamed(id)) : (renames[id] ?? fallback());
+};
 /** Kinds of sites (`worldgen::agent::SITE_KINDS`): those not created by hand are the points of
  * interest, whose order gives their layout indices after the settlements'. The last three are
  * only ever created. */

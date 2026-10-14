@@ -3,9 +3,9 @@
 // no longer exists move to the nearest feature of the same kind that took its place. And the
 // layout numbers of places shift (more or fewer settlements and sites before them): changes on
 // places inside them follow those that come out the same, the rest are set aside.
-import type { Edits, Feature, Npc, Overlay, Plot } from '../gen/protocol';
+import type { Edits, Feature, Npc, Overlay, Plot, Stroke } from '../gen/protocol';
 import { LAYOUT_ID_FIELDS, PARKED_LAYOUT } from '../sync/ops';
-import { GONE_ID, SETTLEMENT_KINDS, SITE_KINDS } from '../ui/gazetteer';
+import { GONE_ID, SETTLEMENT_KINDS, SITE_KINDS, WAS_ID } from '../ui/gazetteer';
 
 /** How far a feature may have moved and still be the same one (ft): 40 mi, or more for big
  * ones (a range's or forest's anchor sits mid-way along it and moves as its shape does). */
@@ -295,4 +295,55 @@ export function remapLayouts(
     return `${m![1]}${t}${m![3]}`;
   });
   return r.n ? { edits: r.edits, moved: r.n - parked - gone, parked, removed: gone } : null;
+}
+
+/** A settlement's or site's feature id, as the generator makes them (`kind:hash`). */
+const PLACE_ID = /^([a-z_]{2,}):[0-9a-f]+b*$/;
+const madeAnew = (id: string) => {
+  const m = PLACE_ID.exec(id);
+  return !!m && (SETTLEMENT_KINDS.includes(m[1]) || SITE_KINDS.includes(m[1]));
+};
+
+/**
+ * Edits made with generator `from`, for a world upgraded past a generator that makes every town
+ * and site anew (`crossesRenumber`): every layout-local id set aside at `PARKED_LAYOUT` and up (a
+ * number for each layout: its buildings, rooms and dungeons are others now), and every
+ * settlement's and site's feature id at `was:<from>:<id>` (its id may name another place now):
+ * names, notes, hidden marks, where NPCs are, plot points' places. Natural features, created
+ * places (`c:`), roads and regions keep theirs, and so does everything kept by world position.
+ * How many entries were set aside; null if none.
+ */
+export function upgradeEdits(edits: Edits, from: number): { edits: Edits; n: number } | null {
+  let next = PARKED_LAYOUT;
+  eachId(edits, (id) => {
+    const m = LOCAL_ID.exec(id);
+    if (m && Number(m[2]) >= PARKED_LAYOUT) next = Math.max(next, Number(m[2]) + 1);
+  });
+  const to = new Map(layoutsIn(edits).map((li) => [li, next++]));
+  const r = renamed(edits, (id, bare) => {
+    const m = bare ? /^()(\d+)()$/.exec(id) : LOCAL_ID.exec(id);
+    const t = m ? to.get(Number(m[2])) : undefined;
+    if (t !== undefined) return `${m![1]}${t}${m![3]}`;
+    return !bare && madeAnew(id) ? `was:${from}:${id}` : id;
+  });
+  return r.n ? r : null;
+}
+
+/** How far a settlement or site drawn in the sketch may stand from where it was drawn (ft). */
+const PIN_REACH = 5280;
+
+/** After an upgrade (`upgradeEdits`), the settlements and sites drawn in the sketch (`strokes`'
+ * pins and sites) take back what was made on them: they stand where they were drawn in both
+ * generators, so an id of one that the upgraded world has again (`after`, within a mile of a pin
+ * or site drawn) is the same place. How many entries came back; null if none. */
+export function restorePinned(edits: Edits, after: Feature[], strokes: Stroke[]): { edits: Edits; n: number } | null {
+  const drawn = strokes.filter((s) => (s.tool === 'pin' || s.tool === 'site') && s.pts.length).map((s) => s.pts[0]);
+  if (!drawn.length) return null;
+  const at = new Map(after.map((f) => [f.id, f]));
+  const r = renamed(edits, (id, bare) => {
+    const m = bare ? null : WAS_ID.exec(id);
+    const f = m && at.get(m[2]);
+    return f && drawn.some(([x, y]) => Math.hypot(f.x - x, f.y - y) <= PIN_REACH) ? m![2] : id;
+  });
+  return r.n ? r : null;
 }

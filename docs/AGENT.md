@@ -60,6 +60,7 @@ pace.
 | `u:<layout>:<k>`, `w:…`, `k:…` | Ways underground: a dungeon, crypt, cave, mine or lava tube; sewer sections; a keep's dungeon. |
 | `c:<n>` | A created site (a building drawn by hand too; its building is `b:<layout>:0`: one place, its notes and hidden mark kept under `c:`, NPCs and plots found under either id). Generated from its id, so a remade world lays it out the same, though its layout number (and the ids inside it) can move; the app moves the changes stored under them along. Changes on places a remade world lays out differently are set aside at layout numbers from 1,000,000 up: no such place to the tools. |
 | `gone:<n>:<id>` | A settlement taken back or removed in the app: its notes, NPCs' and plot points' places and its name are kept under this id, which names nothing (`world_overview`'s `places_removed`). |
+| `was:<version>:<id>` | A settlement or site of a world upgraded to a generator that makes every town and site anew: what was made on it is kept under this id, which names nothing (`places_removed` too). |
 | `n:<id>`, `p:<id>` | An NPC, a plot point (the DM's notebook). |
 | `o:<id>`, `x:<id>`, `s:<asset>` | A battlemap object put down by hand; a clear (generated objects taken away); an uploaded sprite (an object kind). |
 | `v:<id>` | A crossing put down by hand: a bridge, ford or ferry. |

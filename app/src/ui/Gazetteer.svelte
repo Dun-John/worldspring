@@ -10,6 +10,7 @@
   import { kindIcon, kindLabel, listedName, SETTLEMENT_KINDS, SITE_KINDS, unnamed } from './gazetteer';
   import Icon from './Icon.svelte';
   import type { Here } from './Notebook.svelte';
+  import type { AsideEntry, AsideGroup } from '../world/setaside';
 
   type Note = { text: string; tags?: string[] };
 
@@ -55,8 +56,14 @@
     onGo: (id: string) => void;
     /** Show a place: selected on the map, its card open. */
     onShow: (id: string) => void;
+    /** What the world's changes keep on places no longer on the map (`asideList`). */
+    aside?: AsideGroup[];
+    /** An entry kept on a place no longer on the map, in words. */
+    asideWhat?: (x: AsideEntry) => string;
+    /** Delete entries kept on places no longer on the map (one step). */
+    onForget?: (entries: AsideEntry[], label: string) => void;
   }
-  let { features, renames, hidden, notes, noteKey = (id: string) => id, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow }: Props = $props();
+  let { features, renames, hidden, notes, noteKey = (id: string) => id, here, focus, scopeOf, placesIn, buildingOf, townIn, what, version, list, resolve, onRename, onHide, onNote, onGo, onShow, aside = [], asideWhat = () => '', onForget = () => {} }: Props = $props();
 
   const TABS = [
     { key: 'water', label: 'Waters', kinds: ['ocean', 'sea', 'bay', 'strait', 'lake', 'salt_lake', 'river', 'waterfall'] },
@@ -85,6 +92,16 @@
   let draft = $state('');
   /** Only the places with notes, as one list. */
   let withNotes = $state(false);
+  /** Only what is kept on places no longer on the map. */
+  let showAside = $state(false);
+  const asideN = $derived(aside.reduce((n, g) => n + g.entries.length, 0));
+  // (Nothing left to show: back to the names.)
+  $effect(() => {
+    if (!asideN && showAside) showAside = false;
+  });
+  /** A place no longer on the map, as listed: its name then, else what it was. */
+  const asideName = (g: AsideGroup, i: number) =>
+    g.id ? placeName(g.id) : `A town or site set aside${aside.filter((x) => !x.id).length > 1 ? ` (${aside.slice(0, i + 1).filter((x) => !x.id).length})` : ''}`;
   /** The place whose page is open. */
   let current = $state<string | null>(null);
   let confirmDelete = $state(false);
@@ -490,21 +507,46 @@
     <label class="ws-field">Note · only you see it<textarea class="ws-input grow-text" rows="6" value={note?.text ?? ''} placeholder="Lore, hooks, secrets…" onchange={(e) => setNote(id, val(e), note?.tags ?? [])}></textarea></label>
     <label class="ws-field">Tags<input class="ws-input" value={(note?.tags ?? []).join(', ')} placeholder="comma, separated" onchange={(e) => setNote(id, note?.text ?? '', tagList(val(e)))} /></label>
   {:else}
-    {#if !withNotes}
+    {#if !withNotes && !showAside}
       <div class="ws-seg" role="tablist">
         {#each TABS as t (t.key)}
           <button role="tab" aria-selected={tab === t.key} class:on={tab === t.key} onclick={() => (tab = t.key)}>{t.label}</button>
         {/each}
       </div>
     {/if}
-    <input class="ws-input" type="search" placeholder={withNotes ? 'Find notes…' : 'Find a name or note…'} bind:value={q} aria-label="Find a name or note" />
+    {#if !showAside}<input class="ws-input" type="search" placeholder={withNotes ? 'Find notes…' : 'Find a name or note…'} bind:value={q} aria-label="Find a name or note" />{/if}
     <div class="bar">
-      <button class="ws-chip" class:on={withNotes} aria-pressed={withNotes} onclick={() => (withNotes = !withNotes)} title="Only the places you wrote notes on"><Icon name="note" size={12} /> With notes ({Object.keys(notes).length})</button>
-      {#if !withNotes}<button class="ws-chip" class:on={showHidden} aria-pressed={showHidden} onclick={() => (showHidden = !showHidden)} title="Names hidden from both maps">Show hidden</button>{/if}
+      <button class="ws-chip" class:on={withNotes} aria-pressed={withNotes} onclick={() => ((withNotes = !withNotes), (showAside = false))} title="Only the places you wrote notes on"><Icon name="note" size={12} /> With notes ({Object.keys(notes).length})</button>
+      {#if asideN}<button class="ws-chip" class:on={showAside} aria-pressed={showAside} onclick={() => ((showAside = !showAside), (withNotes = false))} title="What you made on places no longer on the map">Set aside ({asideN})</button>{/if}
+      {#if !withNotes && !showAside}<button class="ws-chip" class:on={showHidden} aria-pressed={showHidden} onclick={() => (showHidden = !showHidden)} title="Names hidden from both maps">Show hidden</button>{/if}
       {#if here}<button class="ws-chip here" onclick={() => openPage(here.id)} title="{here.name}: its name and your note on it"><Icon name="pin" size={12} /> <span>{here.name}</span></button>{/if}
     </div>
+    {#if showAside}
+      <div class="hint">Made on towns and sites that came out differently or were taken away: kept in the world, shown nowhere on the map. Delete what you no longer need (Undo brings it back).</div>
+      <ul class="list aside">
+        {#each aside as g, i (g.key)}
+          {@const name = asideName(g, i)}
+          <li>
+            <div class="row head">
+              <span class="group grow">{name}</span>
+              <button class="ws-btn quiet" onclick={() => onForget(g.entries, `Deleted what was set aside on ${name}`)} title="Delete everything kept on this place">Delete all</button>
+            </div>
+            <ul>
+              {#each g.entries as x (`${x.field}|${x.key}|${x.id}`)}
+                <li class="row">
+                  <span class="grow what">{asideWhat(x)}</span>
+                  <button class="ws-icon-btn" onclick={() => onForget([x], `Deleted: ${asideWhat(x)}`)} title="Delete" aria-label="Delete"><Icon name="trash" size={14} /></button>
+                </li>
+              {/each}
+            </ul>
+          </li>
+        {/each}
+      </ul>
+    {:else}
     <div class="hint">{withNotes ? 'Click a place for its name and note' : 'Click a name to rename it'}: the players see names, never notes.</div>
-    {#if withNotes}
+    {/if}
+    {#if showAside}
+      <!-- (Listed above.) -->{:else if withNotes}
       <ul class="list notes">
         {#each noteList as [k, n] (k)}
           <li>
@@ -657,6 +699,21 @@
   }
   .nname {
     font-weight: bold;
+  }
+  .aside .what {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .aside .grow {
+    flex: 1;
+    min-width: 0;
+  }
+  .aside .group {
+    text-transform: none;
+  }
+  .aside .row {
+    align-items: center;
   }
   .nname:first-letter {
     text-transform: uppercase;

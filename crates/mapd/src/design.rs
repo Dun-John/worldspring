@@ -65,13 +65,17 @@ async fn get(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
     let id = arg_str(a, "id")?;
     app.worker
         .with(move |ex| {
-            let (d, set_aside) = if id.starts_with("b:") { building::design_of(&ex.world, &ex.t0, &id, false)? } else { (design::design_of(&ex.world, &ex.t0, &id, false)?, false) };
+            let (d, set_aside) = if id.starts_with("b:") { building::design_of(&ex.world, &ex.t0, &id, false)? } else { (design::design_of(&ex.world, &ex.t0, &id, false)?, design::misplaced(&ex.world, &ex.t0, &id)) };
             let names = &ex.world.file.edits.renames;
             let plan = design::to_text(&d, &|li, ri| names.get(&format!("r:{id}:{li}:{ri}")).cloned())?;
             let (_, problems) = d.problems(&ex.world, &ex.t0, &id)?;
             let mut out = summary(&id, &d, ex.world.file.edits.designs.contains_key(&id) && !set_aside, &problems);
             if set_aside {
-                out["set_aside"] = json!("its saved design was made for the building as it was (footprint or storeys since changed): this is the generated interior; saving a new design replaces the old one");
+                out["set_aside"] = json!(if id.starts_with("b:") {
+                    "its saved design was made for the building as it was (footprint or storeys since changed): this is the generated interior; saving a new design replaces the old one"
+                } else {
+                    "its saved design was made for a site that stood elsewhere (its way in is not under it): this is the generated site; saving a new design replaces the old one"
+                });
             }
             Ok(reply(out, plan))
         })

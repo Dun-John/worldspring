@@ -1581,6 +1581,20 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     let it3 = serde_json::to_value(worldgen::interior::generate_id(&w3, t0, &id).unwrap()).unwrap();
     assert_eq!(rounded(it3), rounded(serde_json::to_value(&it2).unwrap()), "{id}: read back");
     assert!(design::design_of(&w2, t0, &id, true).unwrap() == base, "{id}: the generated site is still there underneath");
+    // The design under another site's key (edits kept for another sketch or generator): set
+    // aside, that site built as generated; its own site keeps it.
+    let other = (0..worldgen::town::layout_count(t0)).filter(|&l| l != li).map(|l| format!("u:{l}:0")).find(|o| design::editable(world, t0, o).is_ok()).expect("another site");
+    let mut f4 = w2.file.clone();
+    let d = f4.edits.designs.remove(&id).unwrap();
+    f4.edits.designs.insert(other.clone(), d);
+    let w4 = World::new(f4).unwrap();
+    assert!(!design::misplaced(&w2, t0, &id), "{id}: its own design is built");
+    assert!(design::misplaced(&w4, t0, &other), "{other}: a design made for {id} is not set aside");
+    let (ol, _) = design::editable(world, t0, &other).unwrap();
+    let generated = serde_json::to_value(worldgen::under::generate(world, t0, ol, 0).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(worldgen::interior::generate_id(&w4, t0, &other).unwrap()).unwrap(), generated, "{other}: not built as generated");
+    assert!(design::design_of(&w4, t0, &other, false).unwrap() == design::design_of(&w4, t0, &other, true).unwrap(), "{other}: the misplaced design is read back");
+    assert!(worldgen::interior::design::set_aside(&w4, t0).iter().any(|(i, _)| *i == other), "{other}: not listed as set aside");
 }
 
 /// Agent edits: a created ruin is a real site (laid out where it was put, its crypt a full

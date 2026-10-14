@@ -1482,6 +1482,14 @@ pub struct World {
     pub seed: u64,
 }
 
+/// The hash of a world file (any generator's: fields added since are left out when empty, so an
+/// older file hashes as its own build hashed it); edits are layered on top of generation, so the
+/// hash (which keys every cache) ignores them.
+pub fn file_hash(file: &WorldFile) -> Result<u64, String> {
+    let canonical = serde_json::to_string(&WorldFile { edits: Edits::default(), ..file.clone() }).map_err(|e| e.to_string())?;
+    Ok(fnv64(canonical.as_bytes()))
+}
+
 impl World {
     pub fn new(file: WorldFile) -> Result<Self, String> {
         if file.gen_version != GEN_VERSION {
@@ -1494,10 +1502,8 @@ impl World {
         p.validate()?;
         file.sketch.validate()?;
         let geom = WorldGeom::new(p.width_mi * FT_PER_MILE, p.height_mi * FT_PER_MILE);
-        // Edits are layered on top of generation; the hash (which keys every cache) ignores them.
-        let canonical = serde_json::to_string(&WorldFile { edits: Edits::default(), ..file.clone() }).map_err(|e| e.to_string())?;
         Ok(Self {
-            hash: fnv64(canonical.as_bytes()),
+            hash: file_hash(&file)?,
             seed: rng::mix64(file.seed as u64 ^ 0x5eed_5eed_5eed_5eed),
             geom,
             file,

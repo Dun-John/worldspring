@@ -72,6 +72,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `h:<id>` | `h:d470a78s` | A plateau or pit (ground shaped by hand) |
 | `g:<x>:<y>` | `g:16033:27870` | A block of ground brushed by hand: 16 × 16 squares (80 ft), block indices zero-padded to five digits |
 | `gone:<n>:<id>` | `gone:1:village:d63861ee` | A settlement taken back or removed in the app: the notes, NPCs' places, plot points' places and its name (in `renames`) made on it are kept here; it names nothing |
+| `was:<version>:<id>` | `was:57:village:5fde5f79` | A settlement or site of a world upgraded from that generator version to one that makes every town and site anew (58): its name, note, hidden mark, NPCs' and plot points' places are kept here; it names nothing |
 
 Layout numbers count the settlements, then the world's own sites (those drawn in the sketch last), then the created
 sites in the order they were made. No place is generated from its number: a created site from its `c:<n>` id, a
@@ -88,7 +89,7 @@ world's own when the remade world lays it out alike (the same feature in the sam
 seed, laid out the same). Every other place's changes are set aside: moved to layout numbers from 1,000,000 up, one for
 each place, where they stay in the world file but name nothing. Tools treat those ids as no such place (renaming,
 hiding or annotating them is refused); `world_overview` lists their building changes, interiors and towns as
-"set aside when the world was remade". A place drawn from the same seed but laid out anew (a road or river
+"set aside when the world was remade or upgraded". A place drawn from the same seed but laid out anew (a road or river
 redrawn past it) has its changes set aside too. A settlement pinned in the sketch comes first in its tier and
 moves the later ones along a number; they keep their changes. It counts as one of its tier: one the world would
 have had is gone (one near it, within its tier's spacing, else the last), with its roads, and the pin keeps its
@@ -127,11 +128,13 @@ A summary of the world:
 - `roads`: `generated and drawn`, or `only drawn` (see "Worlds with only drawn roads");
 - `buildings_changed`, and `buildings_set_aside`: changes to the world's own buildings that no longer apply
   because the town was laid out anew (each with why);
-- `designs_set_aside`: buildings' interiors designed by hand that are not built (the building's footprint or
-  storeys changed, or it is gone, or the design breaks a rule now), each with why;
+- `designs_set_aside`: interiors and sites underground designed by hand that are not built (the building's
+  footprint or storeys changed, or it is gone, or the design breaks a rule now; a site's design set aside with its
+  place, or made for a site that stood elsewhere: the site's way in is not under it), each with why;
 - `towns_set_aside`: towns laid out anew by hand whose changes no longer apply, whole or in part (the town was
   laid out elsewhere after a sketch change, a corner or patch is not where it was planned), each with why;
-- `places_removed`: settlements taken back or removed in the app (`gone:<n>:<id>`), each with its `name` then,
+- `places_removed`: settlements taken back or removed in the app (`gone:<n>:<id>`), and settlements and sites of a
+  world upgraded to a generator that made them anew (`was:<version>:<id>`), each with its `name` then,
   whether it has a `note`, and how many `npcs` are there and `plots` name it;
 - `world`: its hash, for the `world` parameter of other tools.
 
@@ -912,7 +915,9 @@ level 2: Level 2 · the deep
   in the deepest ones. A missing `up` under a level's `down` and a missing `exit` at the entry are filled in.
 
 ### `get_site_design`
-`id`. Returns a summary (`designed`, kind, theme, grid size, entry, levels, `problems`) and the plan as text.
+`id`. Returns a summary (`designed`, kind, theme, grid size, entry, levels, `problems`) and the plan as text. A
+site's saved design made for a site that stood elsewhere (its way in is not under the design's grid: edits kept for
+another sketch or generator) is set aside: the generated site stands, and the reply says so (`set_aside`).
 
 ### `set_site_design`
 | Parameter | Type | | |

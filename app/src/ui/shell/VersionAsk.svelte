@@ -16,11 +16,16 @@
     kept: boolean;
     /** The world has edits (else upgrading moves nothing of the user's). */
     edited: boolean;
+    /** That generator keeps a play session for it (upgraded, play starts afresh). */
+    played: boolean;
+    /** A generator since `from` that makes every town and site anew (what was made on them is set
+     * aside), else null. */
+    anew: number | null;
     /** Another world is showing, to go back to. */
     canCancel: boolean;
     onChoose: (c: VersionChoice) => void;
   }
-  let { from, to, kept, edited, canCancel, onChoose }: Props = $props();
+  let { from, to, kept, edited, played, anew, canCancel, onChoose }: Props = $props();
 </script>
 
 <div class="scrim" role="presentation"></div>
@@ -29,11 +34,24 @@
     <Icon name="globe" />
     <b id="version-title">Made with an older Worldspring</b>
   </header>
-  <p>
-    This world was made with version {from} of the world generator; this is version {to}. The newer generator may put
-    coasts, rivers, roads, towns and sites in other places{#if edited}, so your changes (names, notes, objects, people,
-    designed sites) may no longer line up with them{/if}.
-  </p>
+  {#if anew}
+    <p>
+      This world was made with version {from} of the world generator; this is version {to}. Since version {anew}, every
+      town and site comes out anew: new names, streets, buildings and dungeons, some a few miles from where they
+      were{#if edited}. What you made on them (their names and notes, designed rooms and dungeons, changed streets and
+      buildings, where NPCs and plot points are) is set aside; names and notes on coasts, rivers, ranges and forests are
+      kept, and objects, ground and crossings stay where you put them{/if}.
+    </p>
+  {:else}
+    <p>
+      This world was made with version {from} of the world generator; this is version {to}. The newer generator may put
+      coasts, rivers, roads, towns and sites in other places{#if edited}, so your changes (names, notes, objects, people,
+      designed sites) may no longer line up with them{/if}.
+    </p>
+  {/if}
+  {#if played}
+    <p>Your play session stays with version {from}: upgraded, play starts afresh.</p>
+  {/if}
   {#if kept}
     <p class="ws-muted">Opened as it was made, it looks exactly as before, and you can upgrade it from there later.</p>
   {:else}

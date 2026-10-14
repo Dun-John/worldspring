@@ -650,13 +650,14 @@ pub fn catalog() -> Value {
     serde_json::json!({ "furniture": furniture, "props": props, "rooms": super::ROOM_KINDS, "max_floors": crate::world::MAX_FLOORS, "max_cellars": MAX_CELLARS })
 }
 
-/// Buildings' designs not built (the generated interior stands), with why: the building is gone,
-/// its footprint or storeys changed, or it breaks a rule now (a neighbour built against its door).
+/// Designs not built (the generated interior or site stands), with why: the building is gone,
+/// its footprint or storeys changed, or it breaks a rule now (a neighbour built against its door);
+/// a site underground set aside with its layout, or made for a site that stood elsewhere.
 pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (id, d) in world.file.edits.designs.iter().filter(|(id, _)| id.starts_with("b:")) {
         let why = match building_of(world, t0, id) {
-            Err(_) if crate::world::layout_in_id(id).is_some_and(|li| li >= crate::world::PARKED_LAYOUT) => Some("set aside when the world was remade".into()),
+            Err(_) if crate::world::layout_in_id(id).is_some_and(|li| li >= crate::world::PARKED_LAYOUT) => Some("set aside when the world was remade or upgraded".into()),
             Err(e) => Some(e),
             Ok((li, l, bi)) => {
                 let b = l.building(bi as usize).expect("checked");
@@ -671,6 +672,14 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String)> {
         };
         if let Some(why) = why {
             out.push((id.clone(), why));
+        }
+    }
+    // Sites underground: set aside with their layout, or made for a site that stood elsewhere.
+    for id in world.file.edits.designs.keys().filter(|id| id.starts_with("u:")) {
+        if crate::world::layout_in_id(id).is_some_and(|li| li >= crate::world::PARKED_LAYOUT) {
+            out.push((id.clone(), "set aside when the world was remade or upgraded".into()));
+        } else if crate::under::design::misplaced(world, t0, id) {
+            out.push((id.clone(), "made for a site that stood elsewhere: the site's way in is not under it".into()));
         }
     }
     out

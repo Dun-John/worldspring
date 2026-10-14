@@ -19,7 +19,7 @@ use super::{BOSS, KEEP_DUNGEON, LEVEL_FT, MAX_LEVELS, PROPS, Plan, THEMES, UNDER
 use crate::World;
 use crate::core::rng::{Pcg32, hash3};
 use crate::interior::design::{BUILDING, furniture_kind};
-use crate::interior::{Interior, Item, Sprites, design_kind, sprite_asset};
+use crate::interior::{Interior, Item, SQUARE_FT, Sprites, design_kind, sprite_asset};
 use crate::t0::T0;
 use crate::town;
 
@@ -788,21 +788,44 @@ pub fn editable(world: &World, t0: &T0, id: &str) -> Result<(usize, usize), Stri
     }
 }
 
-/// The designed site `id`, if the world still has its entrance.
+/// Whether design `d` was made for site `l`/`k` as the world has it: its grid holds the site's
+/// entrance (2 squares' margin). A key that came to name another site (edits kept for another
+/// sketch or generator) would build the design far from that site's way in: it is set aside.
+pub fn fits(world: &World, t0: &T0, l: usize, k: usize, d: &SiteDesign) -> bool {
+    let layout = town::layout(world, t0, l);
+    let Some(e) = layout.entrance(k) else { return false };
+    let (dx, dy) = (e.at[0] - d.origin[0], e.at[1] - d.origin[1]);
+    let (gx, gy) = ((dx * d.axis[0] + dy * d.axis[1]) / SQUARE_FT, (dy * d.axis[0] - dx * d.axis[1]) / SQUARE_FT);
+    let m = 2.0;
+    gx >= -m && gy >= -m && gx <= d.nx as f64 + m && gy <= d.ny as f64 + m
+}
+
+/// The design saved for site `id` was made for a site that stood elsewhere (`fits`): the
+/// generated site stands in its place.
+pub fn misplaced(world: &World, t0: &T0, id: &str) -> bool {
+    let Some(d) = world.file.edits.designs.get(id) else { return false };
+    editable(world, t0, id).is_ok_and(|(l, k)| !fits(world, t0, l, k, d))
+}
+
+/// The designed site `id`, if the world still has its entrance (the generated one when the
+/// design was made for a site that stood elsewhere).
 pub fn site(world: &World, t0: &T0, id: &str, d: &SiteDesign) -> Option<Interior> {
     let (l, k) = editable(world, t0, id).ok()?;
+    if !fits(world, t0, l, k, d) {
+        return super::generate(world, t0, l, k);
+    }
     Some(d.build(id, l as u32, k as u32, &world.file.edits.sprites))
 }
 
-/// Site `id` as a design: the one saved, else (or with `original`) a copy of what the
-/// generator makes.
+/// Site `id` as a design: the one saved (if made for this site, `fits`), else (or with
+/// `original`) a copy of what the generator makes.
 pub fn design_of(world: &World, t0: &T0, id: &str, original: bool) -> Result<SiteDesign, String> {
     if id.starts_with("b:") {
         return crate::interior::design::design_of(world, t0, id, original).map(|d| d.0);
     }
     let (l, k) = editable(world, t0, id)?;
     match world.file.edits.designs.get(id) {
-        Some(d) if !original => Ok(d.clone()),
+        Some(d) if !original && fits(world, t0, l, k, d) => Ok(d.clone()),
         _ => super::generate(world, t0, l, k)
             .map(|it| SiteDesign::from_interior(&it))
             .ok_or_else(|| format!("no such site: {id}")),
@@ -813,8 +836,8 @@ pub fn design_of(world: &World, t0: &T0, id: &str, original: bool) -> Result<Sit
 /// `action` (`{"doors": level|null}`, `{"furnish": {level, room, seed}}`, `{"original": true}`;
 /// a building's `{"refit": true}`: fitted to its storeys as they are now, `{"refit": n}`: to n
 /// storeys, `{"cellars": n}`: n levels below ground), with the site it
-/// builds and its problems: `{design, interior, problems}` (a building's saved design that no
-/// longer fits: `set_aside`) or `{error}`.
+/// builds and its problems: `{design, interior, problems}` (a saved design that no longer fits
+/// the building, or was made for a site that stood elsewhere: `set_aside`) or `{error}`.
 pub fn design_json(world: &World, t0: &T0, id: &str, design: Option<&str>, action: Option<&str>) -> String {
     let run = || -> Result<Value, String> {
         let building = id.starts_with("b:");
@@ -829,7 +852,10 @@ pub fn design_json(world: &World, t0: &T0, id: &str, design: Option<&str>, actio
                 set_aside = aside;
                 d
             }
-            None => design_of(world, t0, id, original)?,
+            None => {
+                set_aside = !original && misplaced(world, t0, id);
+                design_of(world, t0, id, original)?
+            }
         };
         // (Fitted ahead of a change of storeys: checked as the building will be.)
         let mut floors = None;

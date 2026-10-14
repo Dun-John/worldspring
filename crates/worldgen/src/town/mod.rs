@@ -474,7 +474,7 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, &'static str)> {
             continue;
         };
         if li >= layout_count(t0) {
-            out.push((k.clone(), if li >= crate::world::PARKED_LAYOUT { "set aside when the world was remade" } else { "no such place" }));
+            out.push((k.clone(), if li >= crate::world::PARKED_LAYOUT { "set aside when the world was remade or upgraded" } else { "no such place" }));
             continue;
         }
         match base_layout(world, t0, li).building(id) {

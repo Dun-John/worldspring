@@ -333,6 +333,14 @@ pub fn det_report(world_json: &str) -> Result<String, JsError> {
     worldgen::pipeline::det_report(world_json).map_err(|e| JsError::new(&e))
 }
 
+/// The hash a world file's own generator keyed it by (`world::file_hash`; any version), as
+/// `world_hash` gives it.
+#[wasm_bindgen]
+pub fn file_hash(world_json: &str) -> Result<String, JsError> {
+    let file: worldgen::WorldFile = serde_json::from_str(world_json).map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(format!("{:016x}", worldgen::world::file_hash(&file).map_err(|e| JsError::new(&e))?))
+}
+
 #[wasm_bindgen]
 pub fn content_hash(bytes: &[u8]) -> String {
     format!("{:016x}", fnv64(bytes))

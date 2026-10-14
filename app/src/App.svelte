@@ -7,7 +7,9 @@
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
   import { buildKeymap } from './ui/shell/keymap';
   import { createKeyHandler, focusKind } from './ui/shell/shortcuts';
-  import { layoutAt, layoutsIn, layoutTargets, madeCount, madeOn, matchLayouts, reanchor, remapLayouts, setAsideRemoved, type MadeOn } from './editor/reanchor';
+  import { layoutAt, layoutsIn, layoutTargets, madeCount, madeOn, matchLayouts, reanchor, remapLayouts, restorePinned, setAsideRemoved, upgradeEdits, type MadeOn } from './editor/reanchor';
+  import { loadSession } from './play/session';
+  import { hasSession } from './play/state';
   import type { PreviewReply, PreviewRequest } from './editor/preview.worker';
   import { MapView, type HudState, type InteriorState, type PointerTool } from './render/MapView';
   import TopBar from './ui/shell/TopBar.svelte';
@@ -61,7 +63,8 @@
   import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, shiftLevels, type EditOp } from './sync/ops';
   import { breadcrumbs, frameSize, hitName, kindLabel, listedName, removedKind, setAside, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, unnamed, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
   import { DEFAULT_PARAMS, download, editsKey, editsStamp, existingSite, GEN_VERSION, linkFor, newWorld, readLink, sameWorld, shareHash, UNVERSIONED_EDITS_GEN, worldKey } from './world/world';
-  import { buildUrl, keptVersions, PINNED } from './world/versions';
+  import { buildUrl, keptVersions, ownHash, PINNED, renumberedSince } from './world/versions';
+  import { asideCount, asideList, asideWhat, forgetAside } from './world/setaside';
   import VersionAsk, { type VersionChoice } from './ui/shell/VersionAsk.svelte';
   import Choice, { type ChoiceButton } from './ui/shell/Choice.svelte';
   import { backup, keepLinked, linked, loadEdits, restore, restorePlan, saveEdits, saveWorld, takeRestored, type Backup, type RestorePlan } from './world/library';
@@ -514,7 +517,7 @@
   }
 
   /** A world from another generator asked about (`VersionAsk`), until answered. */
-  let versionAsk = $state<{ from: number; kept: boolean; edited: boolean; canCancel: boolean; choose: (c: VersionChoice) => void } | null>(null);
+  let versionAsk = $state<{ from: number; kept: boolean; edited: boolean; played: boolean; anew: number | null; canCancel: boolean; choose: (c: VersionChoice) => void } | null>(null);
   /** A world has been shown (so a question can be cancelled back to it). */
   let worldShown = false;
   /** An older generator's build sent this world here to be upgraded (`?upgrade`): no question. */
@@ -545,13 +548,18 @@
     if (w.gen_version > GEN_VERSION) return goTo(null);
     const edits = w.edits ?? (await storedEdits(w));
     const edited = !!edits && Object.keys(edits).length > 0;
+    // (A play session its generator keeps for it, by that generator's hash: upgraded, play starts
+    // afresh, so it is a reason to ask too.)
+    const own = await ownHash(w);
+    const played = !!own && hasSession(await loadSession(own));
+    const anew = renumberedSince(w.gen_version);
+    const kept = (await keptVersions()).includes(w.gen_version);
     // Development (bumped often), the newest build sent an upgrade, or nothing to lose: upgrade.
     const sent = upgradeSent;
     upgradeSent = false;
-    if (!import.meta.env.DEV && !sent && edited) {
-      const kept = (await keptVersions()).includes(w.gen_version);
+    if (!import.meta.env.DEV && !sent && (edited || played)) {
       for (;;) {
-        const c = await new Promise<VersionChoice>((choose) => (versionAsk = { from: w.gen_version, kept, edited, canCancel: worldShown, choose }));
+        const c = await new Promise<VersionChoice>((choose) => (versionAsk = { from: w.gen_version, kept, edited, played, anew, canCancel: worldShown, choose }));
         versionAsk = null;
         if (c === 'cancel') return null;
         if (c === 'made') return goTo(w.gen_version);
@@ -559,20 +567,50 @@
         await download({ ...w, ...(edits ? { edits } : {}) }, `world-${w.seed}-v${w.gen_version}`);
       }
     }
+    // (Said once the world is made: `generate`.)
+    upgrading = { from: w.gen_version, anew, played, made: kept ? () => void goTo(w.gen_version) : null };
+    // What was made on towns and sites a generator since makes anew is set aside (the version it
+    // was made with keeps its own, as made).
+    const settle = (e: Edits) => (anew ? (upgradeEdits(e, w.gen_version)?.edits ?? e) : e);
     // Upgraded: edits it brings, else those already made on this generator, else its own. (An
     // opened world brings its own, or none: asked about once it is upgraded.)
     const up = { ...w, gen_version: GEN_VERSION };
     if (from) {
-      if (edited) toast(`Upgraded from version ${w.gen_version}: check that your changes still sit where they should`);
       // (Those this browser kept on that version are offered as its own, if none here.)
-      upgradedMine = w.edits ? null : edits;
-      return up;
+      upgradedMine = w.edits ? null : edits && settle(edits);
+      return w.edits ? { ...up, edits: settle(w.edits) } : up;
     }
-    const already = w.edits ? null : await storedEdits(up);
-    const kept = w.edits ?? already ?? edits;
-    if (already && Object.keys(already).length) toast(`Opened the changes already made to this world on version ${GEN_VERSION} (version ${w.gen_version} keeps its own)`);
-    else if (edited) toast(`Upgraded from version ${w.gen_version}: check that your changes still sit where they should`);
-    return kept && Object.keys(kept).length ? { ...up, edits: kept } : up;
+    // (None made there, or all taken away again: those made on its own version come.)
+    const stored = w.edits ? null : await storedEdits(up);
+    const already = stored && Object.keys(stored).length ? stored : null;
+    const mine = w.edits ? settle(w.edits) : (already ?? (edits && settle(edits)));
+    if (already) {
+      upgrading = null;
+      toast(`Opened the changes already made to this world on version ${GEN_VERSION} (version ${w.gen_version} keeps its own)`);
+    }
+    return mine && Object.keys(mine).length ? { ...up, edits: mine } : up;
+  }
+
+  /** What the world's changes keep on places no longer on the map, by place (Gazetteer). */
+  const asideGroups = $derived(asideList(edits));
+
+  /** An upgrade `settleVersion` settled, said once the world is made (`generate`): the generator
+   * it was made with, the one since that makes towns and sites anew (null: none), whether that
+   * generator keeps a play session for it, and how to open it as it was made (null: the site
+   * keeps no build of it). */
+  type Upgrade = { from: number; anew: number | null; played: boolean; made: (() => void) | null };
+  let upgrading: Upgrade | null = null;
+  /** The notice of the last upgrade (its toast id), while it shows. */
+  let upgradeToast: number | null = null;
+
+  /** What an upgrade did, said in a line (`aside`: changes kept on places no longer on the map). */
+  function upgradeSaid(u: Upgrade, aside: number): string {
+    const play = u.played ? ` Play starts afresh: version ${u.from} keeps its session.` : '';
+    if (!u.anew) return `Upgraded from version ${u.from}: check that your changes still sit where they should.${play}`;
+    const changes = aside
+      ? ` ${aside} ${aside === 1 ? 'change' : 'changes'} made on them ${aside === 1 ? 'is' : 'are'} set aside (Notes › Gazetteer › Set aside); names and notes on coasts, rivers, ranges and forests, and objects, ground and crossings, stay where they were.`
+      : '';
+    return `Upgraded to version ${GEN_VERSION}: every town and site came out anew.${changes}${play}`;
   }
 
   /** In an older generator's build: open this world in the newest, upgraded. */
@@ -696,8 +734,8 @@
 
   /** How `generate` makes a world (each false or null when left out; `gone`: the settlements a
    * redrawn sketch takes away on purpose, whose changes are set aside, never handed to a
-   * neighbour). */
-  type GenerateOptions = { keepSketch?: boolean; from?: Source | null; confirmed?: boolean; quiet?: boolean; gone?: Gone[] };
+   * neighbour; `upgrade`: one settled before a question, said once the world is made). */
+  type GenerateOptions = { keepSketch?: boolean; from?: Source | null; confirmed?: boolean; quiet?: boolean; gone?: Gone[]; upgrade?: Upgrade | null };
 
   /**
    * Generate `w`. `keepSketch`: with the sketch being drawn (or else the world's), stretched
@@ -713,17 +751,21 @@
     lastFollowed = null;
     lastCarried = null;
     remapCount = 0;
+    upgrading = null;
     if (w.gen_version !== GEN_VERSION) {
       busy = true;
       const settled = await settleVersion(w, from).finally(() => (busy = false));
       if (!settled) return false;
       w = settled;
     }
+    // (Settled before a question asked here: carried to the answer.)
+    const upgrade = (upgrading as Upgrade | null) ?? o.upgrade ?? null;
+    upgrading = null;
     const asked = w;
     if (keepSketch) w = withSketch(w);
     const remake = from || confirmed ? null : remakeOf(w);
     if (remake) {
-      ask(remake, () => void generate(asked, { ...o, confirmed: true }));
+      ask(remake, () => void generate(asked, { ...o, confirmed: true, upgrade }));
       return false;
     }
     if (sketchOn) leaveSketch();
@@ -734,7 +776,8 @@
     // The world shown regenerated (or redrawn) keeps its edits; another has those this browser
     // kept for it. A world opened (a file, a saved world, a link) brings its own edits, or none:
     // where they differ from those, the user picks.
-    const shown = worldShown && sameWorld(w, world) && world.gen_version === w.gen_version;
+    // (A world just upgraded is never the one shown: it brings the edits made on its version.)
+    const shown = !upgrade && worldShown && sameWorld(w, world) && world.gen_version === w.gen_version;
     const redrawn = shown && JSON.stringify(w.sketch ?? null) !== JSON.stringify(world.sketch ?? null);
     const before = overlay;
     // (Not opened: the edits an upgrade carried over, else those kept.)
@@ -798,10 +841,14 @@
       moved = { edits: placed?.edits ?? base, kept: (named?.n ?? 0) + (placed?.moved ?? 0), parked: placed?.parked ?? 0, removed: (off?.n ?? 0) + (placed?.removed ?? 0) };
       return moved.edits;
     };
+    // Upgraded across a generator that makes towns and sites anew: those drawn in the sketch take
+    // back what was made on them (they stand where drawn in both).
+    let pinned: Edits | null = null;
+    const repin = async (o: Overlay): Promise<Edits | null> => (pinned = restorePinned(kept, o.features, w.sketch?.strokes ?? [])?.edits ?? null);
     const started = performance.now();
     try {
       // (The view applies the world's edits: names, created sites, hidden labels.)
-      await view.loadWorld(world, following ? follow : undefined);
+      await view.loadWorld(world, following ? follow : upgrade?.anew ? repin : undefined);
       overlay = view.overlay;
       // (Edits the user chose over those kept replace mapd's copy too; so do those carried over
       // to the world remade, over any copy kept of it from before.)
@@ -853,6 +900,13 @@
       remapCount = editCount - n;
       lastFollowed = m;
     }
+    const p = pinned as Edits | null;
+    if (p) applyEdits(applyOps(edits, diffEdits(kept, p)).edits, { tool: 'upgrade', label: 'Upgraded' }, 'user', { record: false, quiet: true });
+    // (Said when something of the user's came along, or play stays behind; the last world's
+    // notice goes.)
+    if (upgradeToast !== null) dismiss(upgradeToast);
+    upgradeToast = null;
+    if (upgrade && (Object.keys(kept).length || upgrade.played)) upgradeToast = toast(upgradeSaid(upgrade, asideCount(edits)), undefined, { sticky: true, ...(upgrade.made ? { action: { label: `Open as version ${upgrade.from} made it`, run: upgrade.made } } : {}) });
     const said = playSaid(lastCarried);
     if (said && !quiet) toast(said, undefined, { ms: 12_000 });
     const n = overlay?.conflicts?.length ?? 0;
@@ -2657,8 +2711,8 @@
     const n = npcs[id];
     let place = n ? n.location : { id };
     if (!place) return;
-    if (setAside(place.id)) return toast('That place was set aside when the world was remade: it is no longer on the map');
-    if (removedKind(place.id)) return toast(`${nameOf(place.id)} was removed: it is no longer on the map`);
+    if (setAside(place.id)) return toast('That place was set aside when the world was remade or upgraded: it is no longer on the map');
+    if (removedKind(place.id)) return toast(`${nameOf(place.id)} ${place.id.startsWith('was:') ? 'came out anew when the world was upgraded' : 'was removed'}: it is no longer on the map`);
     // (At a building drawn by hand's created id: into it, as at its building id.)
     const pair = drawnPair(place.id);
     if (pair && place.id === pair.c && !pair.entry.removed && pair.entry.structure !== 'ruin') place = { ...place, id: pair.b };
@@ -3406,6 +3460,9 @@
               onNote={(id, note, name) => setNote(id, note, name)}
               onGo={(id) => void goName(id)}
               onShow={(id) => void showPlace(id)}
+              aside={asideGroups}
+              asideWhat={(x) => asideWhat(x, edits)}
+              onForget={(entries, label) => applyEdits(forgetAside(edits, entries), { tool: 'forget_aside', label }, 'user')}
             />
           {/if}
         {:else}
@@ -3530,7 +3587,7 @@
   {/if}
   <Toasts {toasts} onDismiss={dismiss} />
   {#if shell.help}<ShortcutsHelp list={keymap} onClose={() => (shell.help = false)} />{/if}
-  {#if versionAsk}<VersionAsk from={versionAsk.from} to={GEN_VERSION} kept={versionAsk.kept} edited={versionAsk.edited} canCancel={versionAsk.canCancel} onChoose={versionAsk.choose} />{/if}
+  {#if versionAsk}<VersionAsk from={versionAsk.from} to={GEN_VERSION} kept={versionAsk.kept} edited={versionAsk.edited} played={versionAsk.played} anew={versionAsk.anew} canCancel={versionAsk.canCancel} onChoose={versionAsk.choose} />{/if}
   {#if openAsk}
     {@const what = openAsk.from === 'link' ? 'link' : openAsk.from === 'library' ? 'saved world' : 'file'}
     <Choice title="This world has changes here already" icon="globe" buttons={openButtons} onChoose={openAsk.choose}>

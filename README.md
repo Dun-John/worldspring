@@ -80,8 +80,9 @@ Everything you make (worlds, edits, notes, pictures) is kept in this browser on 
 
 Worldspring keeps improving its generator, and a newer generator may put rivers, roads and towns in other places.
 So that your worlds never change under you, every version of the generator stays on the site. When you open a world
-made with an older one, you choose: **open it as it was made** (exactly as before), or **upgrade** it to the newest
-(and check that your changes still sit where they should).
+made with an older one, you choose: **open it as it was made** (exactly as before, play session too), or **upgrade**
+it to the newest (and check that your changes still sit where they should). Version 58 makes every town and site
+anew: upgraded, what you made on them is set aside (Notes › Gazetteer › Set aside), and play starts afresh.
 
 ## Community
 

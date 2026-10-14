@@ -140,6 +140,8 @@ export function describe(change: Change, author: string, nameOf: (id: string) =>
       case 'restore':
       case 'open_edits':
       case 'replace_edits':
+      case 'forget_aside':
+      case 'upgrade':
         return String(change.label ?? change.tool);
       default:
         return 'changed the map';

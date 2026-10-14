@@ -3,7 +3,7 @@
 // older one can still be opened as it was made. The newest build is at the root.
 import type { WorldFile } from '../gen/protocol';
 import { keepLinked } from './library';
-import { plainHash, toHash } from './world';
+import { GEN_VERSION, plainHash, toHash } from './world';
 
 /** Where the newest build is (set by the publish script; else this build's own base). */
 export const SITE_ROOT: string = import.meta.env.VITE_SITE_ROOT || import.meta.env.BASE_URL;
@@ -29,3 +29,28 @@ export async function buildUrl(w: WorldFile, gen: number | null, search = ''): P
   const hash = gen !== null && gen < SHORT_LINKS_GEN ? plainHash(w) : await toHash(w, keepLinked);
   return `${SITE_ROOT}${gen === null ? '' : `v${gen}/`}${search}${hash}`;
 }
+
+/** Generators that make every town and site anew (their numbers, names, streets, buildings and
+ * dungeons): what a world made before one has on them names other places after it, and is set
+ * aside when the world is upgraded across it (`upgradeEdits`). */
+const RENUMBERED = [58];
+
+/** Upgrading a world made with generator `from` to this one crosses a generator that makes every
+ * town and site anew: that one (the newest such), else null. */
+export const renumberedSince = (from: number): number | null => RENUMBERED.filter((v) => from < v && v <= GEN_VERSION).pop() ?? null;
+
+/** The hash a world's own generator keeps its play session under (`world_hash`), for a world
+ * made with another (this build's wasm, loaded once: fields added since are left out of the file
+ * when empty, so it hashes as its own build hashed it); null if it can't be. */
+export async function ownHash(w: WorldFile): Promise<string | null> {
+  try {
+    const { default: init, file_hash } = await import('../gen/pkg/worldgen_wasm.js');
+    await (wasmReady ??= init());
+    const { edits: _, ...bare } = w;
+    return file_hash(JSON.stringify(bare));
+  } catch (e) {
+    console.warn('[versions] no hash for an older world', e);
+    return null;
+  }
+}
+let wasmReady: Promise<unknown> | null = null;
