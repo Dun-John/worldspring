@@ -61,12 +61,19 @@ export class GenClient {
 
   /** (Re)initialize with a world file. Resolves once T0 exists in every generator worker. */
   init(world: WorldFile): Promise<Ready> {
-    this.sentFields = null;
     const cores = navigator.hardwareConcurrency || 4;
     const workers = Math.max(1, Math.min(6, cores - 2));
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.readyResolve = resolve;
-      this.send({ type: 'init', world, workers });
+      try {
+        this.send({ type: 'init', world, workers });
+      } catch (e) {
+        // (Never sent, a world that can't be copied to the workers: they keep the one shown.)
+        this.readyResolve = null;
+        reject(e);
+        return;
+      }
+      this.sentFields = null;
     });
   }
 

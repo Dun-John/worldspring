@@ -58,8 +58,11 @@ export interface ScatterHost {
   bar(at: BarAt): void;
   /** Screen px per world ft. */
   ppf(): number;
-  /** Whether the battlemap is showing (objects can only be seen and picked there). */
+  /** Whether the battlemap is showing (and we are not inside a building or site): objects can
+   * only be seen, put down and picked there. */
   battlemap(): boolean;
+  /** Whether a point is under a roof (a building or tower there): what is put down there is hidden. */
+  roofed(x: number, y: number): boolean;
   /** Whether the battlemap is loaded at a point. */
   loaded(x: number, y: number): boolean;
   hint(text: string): void;
@@ -184,10 +187,12 @@ export class ScatterTool implements PointerTool, Placer {
     let o: Placed | null = null;
     if (this.holding) o = { ...this.holding.now, x, y };
     else if (s.kinds.length) o = this.make(s.kinds[0], x, y);
-    this.host.ghost(o, this.host.loaded(x, y));
+    // (Red under a roof: it would stand there, out of sight.)
+    const roofed = !!o && this.host.roofed(x, y);
+    this.host.ghost(o, this.host.loaded(x, y) && !roofed);
     if (o) {
       const r = placedRadius(o, e, this.host.catalog());
-      const text = `${this.nameOf(o.kind)}${this.turns(o.kind) ? ` · ${this.shown(o)}°` : ''}`;
+      const text = `${this.nameOf(o.kind)}${this.turns(o.kind) ? ` · ${this.shown(o)}°` : ''}${roofed ? ' · under a roof' : ''}`;
       this.host.bar(this.touch ? { x, y, r, holding: !!this.holding, turns: this.turns(o.kind) } : null);
       this.host.chip(x + r * 0.75, y + r * 0.75, this.touch ? null : text);
       this.under = null;
@@ -217,6 +222,7 @@ export class ScatterTool implements PointerTool, Placer {
 
   /** Takes the piece under the pointer into the hand (for a key that acts on it). */
   private pickUnder(): boolean {
+    if (!this.host.battlemap()) return false;
     if (this.holding) return true;
     if (this.hand() !== 'empty' || this.host.settings().mode !== 'place') return false;
     const o = this.under && this.host.edits().objects?.[this.under];
@@ -273,7 +279,7 @@ export class ScatterTool implements PointerTool, Placer {
       return this.refresh();
     }
     const s = this.host.settings();
-    this.host.ring(x, y, s.mode === 'place' ? null : s.radius);
+    this.host.ring(x, y, s.mode === 'place' || !this.host.battlemap() ? null : s.radius);
     if (this.stroke) this.dab(x, y);
     if (this.wipes && this.last && Math.hypot(x - this.last[0], y - this.last[1]) >= s.radius * 0.6) {
       this.wipes.push({ x, y });
@@ -289,7 +295,7 @@ export class ScatterTool implements PointerTool, Placer {
   hover(x: number, y: number) {
     const s = this.host.settings();
     this.touch = false;
-    this.host.ring(x, y, s.mode === 'place' ? null : s.radius);
+    this.host.ring(x, y, s.mode === 'place' || !this.host.battlemap() ? null : s.radius);
     this.at = [x, y];
     if (s.mode === 'place' || this.holding) this.refresh();
   }
@@ -438,7 +444,7 @@ export class ScatterTool implements PointerTool, Placer {
   }
 
   putDown(): boolean {
-    if (!this.holding || !this.at) return false;
+    if (!this.holding || !this.at || !this.host.battlemap()) return false;
     this.drop(...this.at);
     this.refresh();
     return true;
@@ -446,7 +452,7 @@ export class ScatterTool implements PointerTool, Placer {
 
   confirm(): boolean {
     const s = this.host.settings();
-    if (!this.at || s.mode !== 'place') return false;
+    if (!this.at || s.mode !== 'place' || !this.host.battlemap()) return false;
     if (this.holding) this.drop(...this.at);
     else if (s.kinds.length) {
       this.host.commit({ [newObjectId('o')]: this.make(s.kinds[0], ...this.at) }, {}, { tool: 'place_objects', count: 1 });
@@ -457,6 +463,7 @@ export class ScatterTool implements PointerTool, Placer {
   }
 
   remove(): boolean {
+    if (!this.host.battlemap()) return false;
     const id = this.holding?.id ?? (this.hand() === 'empty' ? this.under : null);
     if (!id) return false;
     const name = this.nameOf((this.holding?.now ?? this.host.edits().objects?.[id])?.kind ?? 0).toLowerCase();
@@ -472,7 +479,7 @@ export class ScatterTool implements PointerTool, Placer {
     const s = this.host.settings();
     if (s.mode !== 'place') {
       s.radius = Math.max(5, Math.min(60, s.radius + d * 2.5));
-      if (this.at) this.host.ring(...this.at, s.radius);
+      if (this.at && this.host.battlemap()) this.host.ring(...this.at, s.radius);
       return true;
     }
     this.pickUnder();
@@ -496,6 +503,7 @@ export class ScatterTool implements PointerTool, Placer {
 
   /** The outline of what a click would pick up, and where the held piece was (dashed). */
   draw(g: Graphics, cam: Camera) {
+    if (!this.host.battlemap()) return;
     const e = this.host.edits();
     const catalog = this.host.catalog();
     const ring = (o: Placed, dashed: boolean) => {

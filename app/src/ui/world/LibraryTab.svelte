@@ -38,7 +38,9 @@
   }
   let { world, busy, unexported, keeps, onOpen, onDownload, onCopyLink, onBackup, onRestore, onStartOver }: Props = $props();
 
-  let saved = $state<SavedWorld[]>([]);
+  // (Reassigned whole, never changed in place: plain objects, so a world opened from here can go
+  // to the generators and into storage as it is.)
+  let saved = $state.raw<SavedWorld[]>([]);
   let naming = $state(false);
   let saveName = $state('');
   let menu = $state<string | null>(null);
@@ -56,6 +58,10 @@
   let startingOver = $state(false);
   let confirmText = $state('');
   const confirmed = $derived(confirmText.trim().toLowerCase() === CONFIRM_WORD);
+  /** Each copy's sketch as JSON, written once per listing: a copy saved before a remake isn't the world open now. */
+  const sketchOf = (f: WorldFile) => (f.sketch?.strokes?.length ? JSON.stringify(f.sketch) : '');
+  const savedSketches = $derived(new Map(saved.map((w) => [w.id, sketchOf(w.file)])));
+  const sketchShown = $derived(sketchOf(world));
   /** What starting over would clear, counted. */
   const changes = $derived(changeList(world.edits));
 
@@ -163,7 +169,7 @@
     <div class="ws-label">Saved in this browser</div>
     <ul class="list">
       {#each saved as w (w.id)}
-        {@const open = sameWorld(w.file, world)}
+        {@const open = sameWorld(w.file, world) && savedSketches.get(w.id) === sketchShown}
         <li class:open>
           <button class="item" onclick={() => onOpen(w.file, 'library')} disabled={busy} title="Open {w.name}">
             <span class="name">{w.name}</span>

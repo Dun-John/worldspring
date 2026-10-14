@@ -123,19 +123,26 @@ export async function saveEdits(key: string, edits: Edits): Promise<void> {
     const now = edits as Record<string, unknown>;
     await new Promise<void>((resolve, reject) => {
       const t = d.transaction('edits', 'readwrite');
-      const s = t.objectStore('edits');
-      if (!was) {
-        // First save here: the old whole record and any fields stored before go.
-        s.delete(key);
-        s.delete(IDBKeyRange.bound(`${key}|`, `${key}|￿`));
-      }
-      for (const f of new Set([...Object.keys(was ?? {}), ...Object.keys(now)])) {
-        if (was && was[f] === now[f]) continue;
-        if (now[f] === undefined) s.delete(`${key}|${f}`);
-        else s.put(now[f], `${key}|${f}`);
-      }
       t.oncomplete = () => resolve();
       t.onerror = () => reject(t.error);
+      t.onabort = () => reject(t.error ?? new Error('edits not saved'));
+      try {
+        const s = t.objectStore('edits');
+        if (!was) {
+          // First save here: the old whole record and any fields stored before go.
+          s.delete(key);
+          s.delete(IDBKeyRange.bound(`${key}|`, `${key}|￿`));
+        }
+        for (const f of new Set([...Object.keys(was ?? {}), ...Object.keys(now)])) {
+          if (was && was[f] === now[f]) continue;
+          if (now[f] === undefined) s.delete(`${key}|${f}`);
+          else s.put(now[f], `${key}|${f}`);
+        }
+      } catch (e) {
+        // (One value that can't be stored: none of this save is, rather than the deletes before it.)
+        t.abort();
+        throw e;
+      }
     });
     stored.set(key, { ...now });
   } catch (e) {

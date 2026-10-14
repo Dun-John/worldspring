@@ -29,9 +29,13 @@
     onUpload: (file: File, meta: SpriteMeta) => Promise<void>;
     /** Change an uploaded sprite's rules, or (null) remove it and every one put down. */
     onSprite: (asset: string, meta: SpriteMeta | null) => void;
+    /** Inside a building or site: Rooms puts things there (`building`/`site`), or nothing does (`other`). */
+    inside: 'building' | 'site' | 'other' | null;
+    /** Rooms, on its Furniture (Props) tool. */
+    onRooms: () => void;
   }
 
-  let { settings = $bindable(), catalog, sprites, placed, thumbs, picture, peek = false, onUpload, onSprite }: Props = $props();
+  let { settings = $bindable(), catalog, sprites, placed, thumbs, picture, peek = false, onUpload, onSprite, inside, onRooms }: Props = $props();
 
   const MODES: [ScatterMode, string, IconName, string, string][] = [
     ['place', 'Place', 'stamp', 'Q', 'Click on the battlemap to put the chosen object down; T or Shift+wheel turns it. With nothing chosen (Esc), click one you put down to pick it up and move it; Delete takes it away. On a touch screen, tap to move the ghost, then ✓.'],
@@ -187,6 +191,18 @@
         <button class:on={settings.mode === m} aria-pressed={settings.mode === m} title="{label} ({key})" onclick={() => setMode(m)}><Icon name={ic} size={16} />{label}</button>
       {/each}
     </div>
+    {#if inside}
+      <div class="inside">
+        <span class="grow">
+          {#if inside === 'building'}You’re inside: objects go on the battlemap outside. Furniture and traps go in Rooms.
+          {:else if inside === 'site'}You’re underground: objects go on the battlemap above. Props and traps go in Rooms.
+          {:else}Go back out to put objects down.{/if}
+        </span>
+        {#if inside !== 'other'}
+          <button class="ws-btn" onclick={onRooms}><Icon name="chest" size={16} /> {inside === 'building' ? 'Furniture' : 'Props'} in Rooms</button>
+        {/if}
+      </div>
+    {/if}
     {#if settings.kinds.length}
       <div class="chosen">
         {#each settings.kinds as k (k)}
@@ -250,6 +266,15 @@
 {/if}
 
 <style>
+  .inside {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 4px 4px 8px;
+    border-radius: var(--radius-sm);
+    background: #efe2c2;
+  }
   .scatter {
     display: flex;
     flex-direction: column;

@@ -344,6 +344,19 @@ export class BattlemapLayer {
     return this.chunks.has(`${Math.floor(wx / ts)}/${Math.floor(wy / ts)}`);
   }
 
+  /** Whether a world position is under a roof (a building's or a tower's square, its chunk
+   * loaded): an object put down there stands under it. */
+  roofAt(wx: number, wy: number): boolean {
+    const ts = this.geom.domain_ft / 2 ** this.geom.max_level;
+    const cx = Math.floor(wx / ts);
+    const cy = Math.floor(wy / ts);
+    const c = this.chunks.get(`${cx}/${cy}`);
+    if (!c) return false;
+    const k = Math.floor((wy - cy * ts) / SQUARE_FT) * SQ + Math.floor((wx - cx * ts) / SQUARE_FT);
+    if (k < 0 || k >= SQ * SQ) return false;
+    return c.data[k * 4 + 3] !== 0 || (!!c.raised && c.raised[k * 2] > 0 && c.raised[k * 2 + 1] === 8);
+  }
+
   /** The object whose footprint holds a world position (the nearest centre), if its chunk is
    * loaded: its kind (built-in id, or `s:<asset>`), centre (world ft) and look. */
   objectAt(wx: number, wy: number): ObjectHit | null {

@@ -1,7 +1,7 @@
 // The map: Pixi application, camera, input (wheel/drag/pinch/keys with inertia), fly-to,
 // and per-frame styling (zoom-adaptive hillshade and contour interval).
 import { Application, Container, Graphics } from 'pixi.js';
-import { GenClient } from '../gen/client';
+import { GenClient, type Ready } from '../gen/client';
 import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT } from '../gen/protocol';
 import { BattlemapLayer, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
@@ -715,8 +715,17 @@ export class MapView {
   async loadWorld(world: WorldFile, adjust?: (overlay: Overlay) => Promise<Edits | null>) {
     this.status = 'Generating continent…';
     this.progress = 0;
-    const { geom, t0Ms, overlay, catalog } = await this.gen.init(world);
-    const adjusted = (await adjust?.(overlay)) ?? null;
+    let ready: Ready, adjusted: Edits | null;
+    try {
+      ready = await this.gen.init(world);
+      adjusted = (await adjust?.(ready.overlay)) ?? null;
+    } catch (e) {
+      // (Said so, not left "Generating" for good.)
+      this.status = 'This world could not be opened';
+      this.progress = null;
+      throw e;
+    }
+    const { geom, t0Ms, overlay, catalog } = ready;
     // (Anything made while it was worked out was made from the edits as they were: dropped.)
     const all: Rect = [0, 0, geom.domain_ft, geom.domain_ft];
     if (adjusted) this.gen.setEdits(adjusted, [all], ++this.editEpoch, [all]);

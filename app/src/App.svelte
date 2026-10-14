@@ -667,15 +667,19 @@
   /** How many changes the last remake made itself (`editCount`): 1 when the changes moved. */
   let remapCount = 0;
 
+  /** How `generate` makes a world (each false or null when left out). */
+  type GenerateOptions = { keepSketch?: boolean; from?: Source | null; confirmed?: boolean; quiet?: boolean };
+
   /**
    * Generate `w`. `keepSketch`: with the sketch being drawn (or else the world's), stretched
    * from the map size it was drawn at to `w`'s (a file opened or imported brings its own).
    * Remaking the world shown round its changes, or leaving them for another world, is asked
    * about first unless `confirmed`. `quiet`: no notice of what the changes did or what the sketch
    * can't follow (the caller says so: `lastFollowed`). False if it wasn't generated (asked,
-   * cancelled, busy).
+   * cancelled, busy, or it couldn't be made).
    */
-  async function generate(w: WorldFile, keepSketch = false, from: Source | null = null, confirmed = false, quiet = false): Promise<boolean> {
+  async function generate(w: WorldFile, o: GenerateOptions = {}): Promise<boolean> {
+    const { keepSketch = false, from = null, confirmed = false, quiet = false } = o;
     if (busy) return false;
     lastFollowed = null;
     remapCount = 0;
@@ -689,7 +693,7 @@
     if (keepSketch) w = withSketch(w);
     const remake = from || confirmed ? null : remakeOf(w);
     if (remake) {
-      ask(remake, () => void generate(asked, keepSketch, from, true));
+      ask(remake, () => void generate(asked, { ...o, confirmed: true }));
       return false;
     }
     if (sketchOn) leaveSketch();
@@ -768,17 +772,30 @@
       worldsMade++;
       genSeconds = Math.max(1, Math.round((performance.now() - started) / 1000));
       store('ui.genSeconds', String(genSeconds));
+    } catch (e) {
+      // Nothing is written for a world that wasn't made: the address and the store keep the one
+      // before, so a reload goes back to it.
+      console.error('[generate]', e);
+      if (saveTimer) clearTimeout(saveTimer);
+      if (linkTimer) clearTimeout(linkTimer);
+      saveTimer = linkTimer = null;
+      toast('This world could not be opened: reload the page to go back', undefined, { sticky: true });
+      return false;
     } finally {
       busy = false;
     }
     // (mapd's copy may have come while the world was loading.)
     sync.retake();
     if (replaced) {
-      // One step, so Undo brings back the changes this browser had.
+      // One step, so Undo brings back the changes this browser had; not when the sketch was
+      // redrawn: those name places by the other sketch's numbers.
       const label = changeList(kept).length ? `Opened the changes the ${from === 'link' ? 'link' : from === 'library' ? 'saved world' : 'file'} brought` : 'Opened the world without changes';
-      const step: Step = { label, author: 'user', ops: diffEdits(mine, kept), inverse: diffEdits(kept, mine) };
-      undoHistory.push(step);
-      toast(label, () => undo(step));
+      if (redrawn) toast(label);
+      else {
+        const step: Step = { label, author: 'user', ops: diffEdits(mine, kept), inverse: diffEdits(kept, mine) };
+        undoHistory.push(step);
+        toast(label, () => undo(step));
+      }
     }
     if (redrawn) changed();
     const m = moved as Followed | null;
@@ -891,7 +908,7 @@
 
   /** Leave sketch mode; `apply`: generate the world the sketch and settings describe. */
   function exitSketch(apply: boolean) {
-    if (apply) void generate(draftWorld(), true);
+    if (apply) void generate(draftWorld(), { keepSketch: true });
     else leaveSketch();
   }
 
@@ -976,6 +993,14 @@
   const notebookOn = $derived(shell.section === 'notes');
   /** Sites underground can be designed, but not while playing. */
   const canDesign = $derived(!!inside && /^[ub]:/.test(inside.id) && !playOn);
+  /** Objects inside: where Rooms would take the user, if anywhere. */
+  const scatterInside = $derived<'building' | 'site' | 'other' | null>(!inside ? null : !canDesign ? 'other' : inside.id.startsWith('b:') ? 'building' : 'site');
+
+  /** From Objects inside a building or site: Rooms, on its Furniture (Props) tool. */
+  function furnishHere() {
+    designSettings = { ...designSettings, mode: 'prop' };
+    go('edit', 'design');
+  }
   // The place menu: put a site on the map (a click places it).
   let placeArmed = $state(false);
   /** What is being placed ("crypt"), for the banner over the map. */
@@ -1062,7 +1087,7 @@
     if (a.kind === 'sketch') {
       // Generating keeps the sketch (as the world's), then carries on.
       if (choice === 'drop') leaveSketch();
-      else if (!(await generate(draftWorld(), true, null, true))) return;
+      else if (!(await generate(draftWorld(), { keepSketch: true, confirmed: true }))) return;
     } else {
       if (choice === 'commit') await saveDesign();
       closeDesigner();
@@ -1071,7 +1096,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, keepSketch?: boolean) => generate(w, keepSketch), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -1082,8 +1107,8 @@
 
   /** Open a world (saved or from a file); new sketch strokes are asked about first. */
   function openWorld(w: WorldFile, from: Source) {
-    if (sketchDirty()) return ask('sketch', () => void generate(w, false, from), false);
-    void generate(w, false, from);
+    if (sketchDirty()) return ask('sketch', () => void generate(w, { from }), false);
+    void generate(w, { from });
   }
 
   /** Phones: the sheet shows the selected place's card (no panel open, or asked for). */
@@ -1785,7 +1810,8 @@
   let placeBarAt = $state<{ x: number; y: number; r: number } | null>(null);
   /** What places things by hand in the open tab: Objects, or Rooms on Props. */
   function placer(): Placer | null {
-    if (scatterOn && scatterArmed) return scatterArmed.tool;
+    // (Inside, Objects has nothing in the hand that shows: its keys go on down, Escape leaves.)
+    if (scatterOn && scatterArmed && !view.interior) return scatterArmed.tool;
     if (designer && shell.section === 'edit' && shell.tabs.edit === 'design' && designSettings.mode === 'prop') return designer;
     return null;
   }
@@ -1838,7 +1864,8 @@
       chip: (x, y, text) => chipAt(x, y, text),
       bar: (at) => (placeBar = at),
       ppf: () => view.cam.ppf,
-      battlemap: () => (view.battle?.stats.alpha ?? 0) > 0,
+      battlemap: () => (view.battle?.stats.alpha ?? 0) > 0 && !view.interior,
+      roofed: (x, y) => !!view.battle?.roofAt(x, y),
       loaded: (x, y) => !!view.battle?.loadedAt(x, y),
       hint: (t) => toast(t),
     });
@@ -2062,7 +2089,7 @@
       const before = $state.snapshot(world) as WorldFile;
       const had = new Set((overlay?.features ?? []).map((f) => f.id));
       const n0 = editCount;
-      if (!(await generate({ ...before, sketch: next.sketch }, false, null, true, true))) return;
+      if (!(await generate({ ...before, sketch: next.sketch }, { confirmed: true, quiet: true }))) return;
       const k = strokes.length;
       const conflicts = (overlay?.conflicts ?? []).filter((x) => x.stroke === k).map((x) => x.message);
       const missing = conflicts.find((m) => m.includes('no settlement placed'));
@@ -2122,7 +2149,7 @@
     const { sketch: _, ...rest } = $state.snapshot(world) as WorldFile;
     const back: WorldFile = a.sketchBefore ? { ...rest, sketch: a.sketchBefore } : rest;
     const n0 = editCount;
-    if (!(await generate(back, false, null, true, true))) return;
+    if (!(await generate(back, { confirmed: true, quiet: true }))) return;
     const restore = untouched && editCount - n0 === remapCount;
     const m = lastFollowed as Followed | null;
     if (restore) applyEdits(a.editsBefore!, { tool: 'reanchor', label: `Took back ${a.name}` }, 'user', { record: false, quiet: true });
@@ -2664,7 +2691,7 @@
     level: (d) => view.levelBy(d),
     undo: undoAny,
     redo: redoAny,
-    generate: () => (sketchOn ? exitSketch(true) : void generate(draftWorld(), true)),
+    generate: () => (sketchOn ? exitSketch(true) : void generate(draftWorld(), { keepSketch: true })),
     saveDesign: () => {
       if (designBlocked) toast('Fix the problems marked ✕ before saving');
       else if (!designer?.dirty) toast('Nothing new to save');
@@ -2757,6 +2784,13 @@
       // Out of the site being designed: the designer shuts.
       if (designer && s?.id !== designer.id) closeDesigner();
       else if (designer) designer.levelShown();
+      // In or out of a building: Objects' hand is put back (it can't be put down in there) and
+      // its ghost, chip and ring follow; Ground's ring too.
+      if (scatterArmed) {
+        if (s) scatterArmed.tool.putBack();
+        scatterArmed.tool.refresh();
+      }
+      groundArmed?.refresh();
     };
     view.onPick = (x, y, sx, sy) => void pick(x, y, sx, sy);
     view.onPlaces = (on) => setPlaces(on);
@@ -2779,7 +2813,7 @@
       // (This tab's own address, made before the edits stored caught up: those are taken.)
       const own = !!w.edits && ownLinks().includes(editsStamp(w.edits));
       if (own) w = { gen_version: w.gen_version, seed: w.seed, params: w.params, ...(w.sketch ? { sketch: w.sketch } : {}) };
-      await generate(w, false, w.edits ? 'link' : null);
+      await generate(w, { from: w.edits ? 'link' : null });
       if (params.get('bench') === 'play') {
         go('play');
         benchRunning = true;
@@ -2957,7 +2991,7 @@
               pins={sketchStrokes.filter((s) => s.tool === 'pin').length}
               roads={sketchStrokes.filter((s) => s.tool === 'road' && s.kind !== 'none').length}
               seconds={genSeconds}
-              onGenerate={() => void generate(draftWorld(), true)}
+              onGenerate={() => void generate(draftWorld(), { keepSketch: true })}
             />
           {:else if shell.tabs.world === 'sketch'}
             {#if playOn}
@@ -2986,7 +3020,7 @@
         { key: 'build', label: 'Build', icon: 'building', kbd: 'B', hint: 'Draw buildings, castles, walls, bridges and fords; clear a town’s own buildings.' },
         { key: 'town', label: 'Streets', icon: 'wards', kbd: 'U', title: 'Re-plan the town in view (U)', hint: 'Re-plan the town in view: its streets, wards, lots and walls.' },
         { key: 'ground', label: 'Ground', icon: 'mountain', kbd: 'M', hint: 'Raise, lower and smooth the battlemap’s ground; draw plateaus, cliffs and pits.' },
-        { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap: place, brush, erase, or upload your own.' },
+        { key: 'scatter', label: 'Objects', icon: 'tree', kbd: 'C', hint: 'Trees, rocks and props on the battlemap outdoors: place, brush, erase, or upload your own.' },
         {
           key: 'design',
           label: 'Rooms',
@@ -3066,6 +3100,8 @@
               picture={assetUrl}
               onUpload={uploadSprite}
               onSprite={saveSprite}
+              inside={scatterInside}
+              onRooms={furnishHere}
             />
         {:else if designer}
           <DesignPanel
