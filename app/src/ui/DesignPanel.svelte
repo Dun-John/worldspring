@@ -8,6 +8,7 @@
   // building's storeys are added or taken away here too (the building follows on Save), and its
   // levels below ground.
   import type { SpriteMeta, UnderCatalog } from '../gen/protocol';
+  import type { HeldView } from '../editor/placing';
   import type { DesignMode, DesignSettings, SiteDesigner } from '../editor/site/designer';
   import { BOSS } from '../editor/site/designer';
   import { cellarsOf } from '../editor/site/model';
@@ -15,6 +16,7 @@
   import { InteriorLayer } from '../render/InteriorLayer';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
+  import InHand from './InHand.svelte';
   import ItemPicker, { type PickItem } from './ItemPicker.svelte';
   import { remember, remembered, shell } from './shell/layout.svelte';
 
@@ -37,9 +39,11 @@
     onSave: () => void;
     onReset: () => void;
     onProblem: (level: number, at?: [number, number]) => void;
+    /** The piece picked up, if any. */
+    held: HeldView;
   }
 
-  let { designer, version, settings = $bindable(), catalog, name, renames, saved, sprites, picture, peek = false, onRename, onSave, onReset, onProblem }: Props = $props();
+  let { designer, version, settings = $bindable(), catalog, name, renames, saved, sprites, picture, peek = false, onRename, onSave, onReset, onProblem, held }: Props = $props();
 
   const TOOLS: { key: DesignMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a room to choose it.' },
@@ -48,7 +52,7 @@
     { key: 'corridor', label: 'Corridor', icon: 'corridor', kbd: 'H', hint: 'Paint the level’s passages.' },
     { key: 'rock', label: 'Rock', icon: 'rock', kbd: 'K', hint: 'Fill squares back with rock (props on them go too).' },
     { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none.' },
-    { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F', hint: 'Click to put the prop down, or click a prop to pick it up and click again to put it down. T turns it, Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
+    { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the prop down. Click a prop to pick it up (even with another chosen), click again to put it down. T turns the prop pointed at, else what is in your hand; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Way down', icon: 'stairs', kbd: 'W', hint: 'Click a square for this level’s way down; the way up below follows.' },
   ];
   // A building's: walls are where rooms meet; its floors follow its storeys.
@@ -59,7 +63,7 @@
     { key: 'wall', label: 'Wall', icon: 'wall', kbd: 'L', hint: 'Draw a line along the grid across a room (or click by a grid line): the wall runs on to the room’s walls and splits it in two.' },
     { key: 'merge', label: 'Take a wall away', icon: 'eraser', kbd: 'E', hint: 'Click a wall between two rooms: they become one.' },
     { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. In an outside wall of the ground floor: a back door, again the front door, again none.' },
-    { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F', hint: 'Click to put the piece down (furniture, a prop or one of your pictures), or click a piece to pick it up and click again to put it down. T turns it, Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
+    { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the piece down (furniture, a prop or one of your pictures). Click a piece to pick it up (even with another chosen), click again to put it down. T turns the piece pointed at, else what is in your hand; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Stairs', icon: 'stairs', kbd: 'W', hint: 'Drag out the stair block (1 to 3 squares each way): the same squares on every floor it reaches. Furniture there goes.' },
   ];
   const cap = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
@@ -114,6 +118,8 @@
       return { id: `s:${asset}`, name: m.name || 'Your picture', group: 'Yours', asset, size: squares(n, n), rules: rules(m.blocks_move, m.cover, m.height_ft), note: 'Your picture · can be turned' };
     }),
   ]);
+  // The chosen piece, as the "in hand" row names it.
+  const chosenName = $derived(settings.prop.startsWith('s:') ? sprites[settings.prop.slice(2)]?.name || 'Your picture' : cap(pieces.find((p) => p.kind === settings.prop)?.name ?? settings.prop));
   const thumbs = () => InteriorLayer.sheet(!building, pieces.map(({ kind, w, h }) => ({ kind, w, h })));
   let sure = $state<'' | 'level' | 'reset' | 'room' | 'storey' | 'cellar'>('');
 
@@ -147,6 +153,27 @@
       <button class="ws-icon-btn" aria-pressed={settings.mode === t.key} title="{t.label} ({t.kbd})" aria-label={t.label} onclick={() => (settings = { ...settings, mode: t.key })}><Icon name={t.icon} /></button>
     {/each}
   </div>
+  {#if settings.mode === 'prop' && (held || settings.prop)}
+    <InHand
+      name={held?.name ?? chosenName}
+      held={!!held}
+      quarter={true}
+      turns={held ? held.turns : settings.pw !== settings.ph || turnsInside(settings.prop, !building, settings.pw, settings.ph)}
+      turn=""
+      auto={held ? held.auto : settings.back !== null}
+      onTurn={(d) => designer.turn(d, false)}
+      onAuto={() => designer.turnReset()}
+      onEmpty={() => designer.escape()}
+    >
+      {#snippet size()}
+        {#if held}<output>{held.size}</output>
+        {:else}
+          <input class="ws-input" type="number" min="1" max="6" bind:value={settings.pw} aria-label="Across" /> ×
+          <input class="ws-input" type="number" min="1" max="6" bind:value={settings.ph} aria-label="Down" />
+        {/if}
+      {/snippet}
+    </InHand>
+  {/if}
   {#if !peek}
     <div><b>{tool?.label}</b> <span class="ws-hint">{tool?.hint}</span></div>
 
@@ -178,13 +205,6 @@
     {/if}
     {#if settings.mode === 'prop'}
       <ItemPicker {items} groups={[...INSIDE_GROUPS, 'Other']} chosen={[settings.prop]} context={building ? 'building' : 'underground'} {thumbs} {picture} onPick={pickProp} />
-      <div class="ws-row size">
-        <span>Size</span>
-        <input class="ws-input" type="number" min="1" max="6" bind:value={settings.pw} aria-label="Across" /> ×
-        <input class="ws-input" type="number" min="1" max="6" bind:value={settings.ph} aria-label="Down" />
-        <button class="ws-icon-btn" title="Turn a quarter clockwise (T)" aria-label="Turn" onclick={() => designer.turn(1, false)}><Icon name="rotate-cw" size={16} /></button>
-        {#if settings.back !== null}<button class="ws-btn quiet" title="Face the way it would by itself (Z)" onclick={() => (settings.back = null)}>Auto</button>{/if}
-      </div>
     {/if}
 
     {#if room && now.selected !== null}
@@ -301,9 +321,6 @@
     gap: 8px;
     font-size: 12px;
     cursor: pointer;
-  }
-  .size input {
-    width: 3.4em;
   }
   .card {
     display: flex;

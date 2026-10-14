@@ -23,7 +23,7 @@ export interface Placer {
   turnReset(): boolean;
   /** Enter: put the held piece down where it is. */
   putDown(): boolean;
-  /** Delete: the held piece, or the one under the pointer, goes. */
+  /** Delete: the held piece, or the one under the pointer (also with an item chosen), goes. */
   remove(): boolean;
   /** `]` / `[`: bigger (1) or smaller (-1). */
   size(d: 1 | -1): boolean;
@@ -37,6 +37,11 @@ export interface Placer {
  * radius) and which buttons it shows: `remove` while a piece is held, `turns` for what shows a
  * turn. Null: no bar (a mouse, or nothing in the hand). */
 export type BarAt = { x: number; y: number; r: number; holding: boolean; turns: boolean } | null;
+
+/** A piece picked up, as the panel's "in hand" row shows it: its name, its turn ('45°'; '' where
+ * none is shown), whether it shows a turn, whether its turn was given by hand (Auto shown), and its
+ * size ('1.10×', '2×1'). */
+export type HeldView = { name: string; turn: string; turns: boolean; auto: boolean; size: string } | null;
 
 /** A finger's reach on the map (screen px): a tap or drag this near the ghost or a piece is on it. */
 export const FINGER_PX = 22;

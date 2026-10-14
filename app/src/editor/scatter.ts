@@ -6,15 +6,17 @@
 //
 // Place mode works as placing.ts describes: the chosen object's ghost follows the pointer, turned
 // and sized as it will land; with nothing chosen a click picks up an object put down by hand
-// (outlined under the pointer), which then follows the pointer until a click puts it down. On a
-// touch screen a tap moves the ghost (or picks up the object tapped) and the place bar puts it down.
+// (outlined under the pointer), which then follows the pointer until a click puts it down. With a
+// kind chosen a click always puts another down (objects stack), the keys turn the chosen kind, and
+// Delete takes away the one put down by hand under the pointer (thinly outlined). On a touch
+// screen a tap moves the ghost (or picks up the object tapped) and the place bar puts it down.
 import type { Clear, Edits, Placed } from '../gen/protocol';
 import type { KindInfo } from '../gen/client';
 import type { Camera } from '../render/camera';
 import type { Graphics } from 'pixi.js';
 import { drawnTurned } from '../render/BattlemapLayer';
 import type { PointerTool } from '../render/MapView';
-import { degrees, FINGER_PX, PlacedIndex, WheelTurn, type BarAt, type HandState, type Placer } from './placing';
+import { degrees, FINGER_PX, PlacedIndex, WheelTurn, type BarAt, type HandState, type HeldView, type Placer } from './placing';
 
 export type ScatterMode = 'place' | 'brush' | 'erase';
 
@@ -56,6 +58,8 @@ export interface ScatterHost {
   chip(x: number, y: number, text: string | null): void;
   /** The place bar by the ghost (touch), or none. */
   bar(at: BarAt): void;
+  /** The piece picked up, for the panel's "in hand" row, or none. */
+  held(h: HeldView): void;
   /** Screen px per world ft. */
   ppf(): number;
   /** Whether the battlemap is showing (and we are not inside a building or site): objects can
@@ -120,11 +124,15 @@ export class ScatterTool implements PointerTool, Placer {
   private dragging: [number, number] | null = null;
   /** A piece picked up: its id, where it was, and how it is now (it follows the pointer). */
   private holding: { id: string; from: Placed; now: Placed } | null = null;
-  /** With an empty hand, the object put down by hand under the pointer (and where it was looked for). */
+  /** The object put down by hand under the pointer (a mouse, nothing held): with an empty hand a
+   * click picks it up; Delete takes it away either way. */
   private under: string | null = null;
   /** Where (and in which `objects`) `under` was looked for: again once the pointer moves a foot,
    * the objects change or the hand empties. */
   private probed: { x: number; y: number; objects: Edits['objects'] } | null = null;
+  /** The object this tool last put down, and where: not pointed out while the pointer is still on
+   * it (stacking). */
+  private justPut: { id: string; x: number; y: number } | null = null;
   private next = roll();
   private readonly wheelTurn = new WheelTurn();
   private readonly index = new PlacedIndex((o) => placedRadius(o, this.host.edits(), this.host.catalog()));
@@ -173,6 +181,8 @@ export class ScatterTool implements PointerTool, Placer {
   refresh() {
     const s = this.host.settings();
     if (this.holding && s.mode !== 'place') this.holding = null;
+    const h = this.holding?.now;
+    this.host.held(h ? { name: this.nameOf(h.kind), turn: this.turns(h.kind) ? `${this.shown(h)}°` : '', turns: this.turns(h.kind), auto: !!h.turned, size: `${h.scale.toFixed(2)}×` } : null);
     const at = this.at;
     if (!at || s.mode !== 'place' || !this.host.battlemap()) {
       this.host.ghost(null, true);
@@ -192,11 +202,17 @@ export class ScatterTool implements PointerTool, Placer {
     this.host.ghost(o, this.host.loaded(x, y) && !roofed);
     if (o) {
       const r = placedRadius(o, e, this.host.catalog());
-      const text = `${this.nameOf(o.kind)}${this.turns(o.kind) ? ` · ${this.shown(o)}°` : ''}${roofed ? ' · under a roof' : ''}`;
+      let text = `${this.nameOf(o.kind)}${this.turns(o.kind) ? ` · ${this.shown(o)}°` : ''}${roofed ? ' · under a roof' : ''}`;
       this.host.bar(this.touch ? { x, y, r, holding: !!this.holding, turns: this.turns(o.kind) } : null);
+      // A kind chosen over one put down by hand (not the one just put down): a click stacks
+      // another, so the chip says how to pick it up instead.
+      if (this.holding || this.touch) [this.under, this.probed] = [null, null];
+      else {
+        const id = this.probe(e, x, y);
+        const u = id && id !== this.justPut?.id ? e.objects?.[id] : null;
+        if (u) text += ` · ${this.nameOf(u.kind).toLowerCase()} here: Esc, then click to pick up`;
+      }
       this.host.chip(x + r * 0.75, y + r * 0.75, this.touch ? null : text);
-      this.under = null;
-      this.probed = null;
       return;
     }
     this.host.bar(null);
@@ -206,18 +222,37 @@ export class ScatterTool implements PointerTool, Placer {
       this.under = null;
       return;
     }
-    // An empty hand: the object put down by hand under the pointer (looked for again only once
-    // the pointer has moved a foot).
+    // An empty hand: the object put down by hand under the pointer.
+    const id = this.probe(e, x, y);
+    const u = id && e.objects?.[id];
+    if (u) {
+      const r = Math.max(PICK_FT, placedRadius(u, e, this.host.catalog())) * 0.75;
+      this.host.chip(u.x + r, u.y + r, `${this.nameOf(u.kind)} · click to pick up`);
+    } else this.host.chip(0, 0, null);
+  }
+
+  /** The object put down by hand under the pointer, looked for again once the pointer moves a foot
+   * or the objects change. */
+  private probe(e: Edits, x: number, y: number): string | null {
     const p = this.probed;
     if (!p || p.objects !== e.objects || Math.hypot(p.x - x, p.y - y) >= 1) {
       this.probed = { x, y, objects: e.objects };
       this.under = this.index.at(e.objects, x, y, PICK_FT);
     }
+    const j = this.justPut;
+    if (j && Math.hypot(j.x - x, j.y - y) > PICK_FT * 2) this.justPut = null;
+    // (Stacked on the same spot, the one just put down is the one pointed at.)
     const u = this.under && e.objects?.[this.under];
-    if (u) {
-      const r = Math.max(PICK_FT, placedRadius(u, e, this.host.catalog())) * 0.75;
-      this.host.chip(u.x + r, u.y + r, `${this.nameOf(u.kind)} · click to pick up`);
-    } else this.host.chip(0, 0, null);
+    if (this.justPut && u && e.objects?.[this.justPut.id] && Math.hypot(this.justPut.x - x, this.justPut.y - y) <= Math.hypot(u.x - x, u.y - y)) this.under = this.justPut.id;
+    return this.under;
+  }
+
+  /** One of the chosen kind put down at (x, y). */
+  private putOne(x: number, y: number) {
+    const id = newObjectId('o');
+    this.host.commit({ [id]: this.make(this.host.settings().kinds[0], x, y) }, {}, { tool: 'place_objects', count: 1 });
+    this.justPut = { id, x, y };
+    this.next = roll();
   }
 
   /** Takes the piece under the pointer into the hand (for a key that acts on it). */
@@ -331,10 +366,8 @@ export class ScatterTool implements PointerTool, Placer {
     if (s.mode !== 'place' || !this.host.battlemap()) return;
     if (e.pointerType === 'mouse') this.at = [x, y];
     if (this.holding) this.drop(x, y);
-    else if (s.kinds.length) {
-      this.host.commit({ [newObjectId('o')]: this.make(s.kinds[0], x, y) }, {}, { tool: 'place_objects', count: 1 });
-      this.next = roll();
-    } else {
+    else if (s.kinds.length) this.putOne(x, y);
+    else {
       this.probed = null;
       if (this.at) this.refresh();
       else this.under = this.index.at(this.host.edits().objects, x, y, PICK_FT);
@@ -402,6 +435,7 @@ export class ScatterTool implements PointerTool, Placer {
     this.host.ghost(null, true);
     this.host.chip(0, 0, null);
     this.host.bar(null);
+    this.host.held(null);
   }
 
   /** Put the held piece back where it was (before an undo, say). */
@@ -454,17 +488,16 @@ export class ScatterTool implements PointerTool, Placer {
     const s = this.host.settings();
     if (!this.at || s.mode !== 'place' || !this.host.battlemap()) return false;
     if (this.holding) this.drop(...this.at);
-    else if (s.kinds.length) {
-      this.host.commit({ [newObjectId('o')]: this.make(s.kinds[0], ...this.at) }, {}, { tool: 'place_objects', count: 1 });
-      this.next = roll();
-    } else return false;
+    else if (s.kinds.length) this.putOne(...this.at);
+    else return false;
     this.refresh();
     return true;
   }
 
   remove(): boolean {
     if (!this.host.battlemap()) return false;
-    const id = this.holding?.id ?? (this.hand() === 'empty' ? this.under : null);
+    // (`under` is only found with a mouse over the map in Place, nothing held.)
+    const id = this.holding?.id ?? this.under;
     if (!id) return false;
     const name = this.nameOf((this.holding?.now ?? this.host.edits().objects?.[id])?.kind ?? 0).toLowerCase();
     this.holding = null;
@@ -501,7 +534,8 @@ export class ScatterTool implements PointerTool, Placer {
     return true;
   }
 
-  /** The outline of what a click would pick up, and where the held piece was (dashed). */
+  /** The outline of what a click would pick up (with a kind chosen, thin: what Delete takes), and
+   * where the held piece was (dashed). */
   draw(g: Graphics, cam: Camera) {
     if (!this.host.battlemap()) return;
     const e = this.host.edits();
@@ -521,8 +555,14 @@ export class ScatterTool implements PointerTool, Placer {
         }
       }
     };
+    const u = this.under ? e.objects?.[this.under] : undefined;
     if (this.holding) ring(this.holding.from, true);
-    else if (this.under && e.objects?.[this.under] && this.at) ring(e.objects[this.under], false);
+    else if (!u || !this.at) return;
+    else if (this.hand() === 'empty') ring(u, false);
+    else if (this.under !== this.justPut?.id) {
+      const [sx, sy] = cam.worldToScreen(u.x, u.y);
+      g.circle(sx, sy, Math.max(6, Math.max(PICK_FT, placedRadius(u, e, catalog)) * cam.ppf)).stroke({ width: 1, color: 0xfde047, alpha: 0.6 });
+    }
   }
 
   /** Brush: objects on a jittered lattice (spacing apart) within the radius, cells not yet

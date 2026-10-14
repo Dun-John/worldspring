@@ -32,7 +32,7 @@
   import PlacePanel, { type SiteChoice } from './ui/PlacePanel.svelte';
   import ScatterPanel from './ui/ScatterPanel.svelte';
   import PlaceBar from './ui/PlaceBar.svelte';
-  import type { BarAt, Placer } from './editor/placing';
+  import type { BarAt, HeldView, Placer } from './editor/placing';
   import BuildPanel from './ui/BuildPanel.svelte';
   import TownPanel from './ui/TownPanel.svelte';
   import GroundPanel from './ui/GroundPanel.svelte';
@@ -1096,7 +1096,13 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => select(s), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  /** A world point in client px (the dev hook's, for scripts that click on the map). */
+  function devScreen(x: number, y: number): [number, number] {
+    const [sx, sy] = view.cam.worldToScreen(x, y);
+    const b = container.getBoundingClientRect();
+    return [b.left + sx, b.top + sy];
+  }
 
   /** Leave sketch mode (new strokes asked about first); World shows Generate. */
   function stopSketch() {
@@ -1703,6 +1709,7 @@
       },
       chip: (x, y, text) => chipAt(x, y, text),
       bar: (at) => (placeBar = at),
+      held: setHeld,
       ppf: () => view.cam.ppf,
     });
     // (Still wanted once it has loaded: the same site, the Design tab open.)
@@ -1807,6 +1814,12 @@
   /** On a touch screen, the place bar by the ghost (world ft), and where it is on screen (kept
    * under the ghost as the map moves). */
   let placeBar = $state.raw<BarAt>(null);
+  /** The piece picked up in Objects or Rooms, for the panel's "in hand" row. */
+  let held = $state.raw<HeldView>(null);
+  // (Told on every pointer move: only a change is taken.)
+  const setHeld = (h: HeldView) => {
+    if (h?.name !== held?.name || h?.turn !== held?.turn || h?.turns !== held?.turns || h?.auto !== held?.auto || h?.size !== held?.size) held = h;
+  };
   let placeBarAt = $state<{ x: number; y: number; r: number } | null>(null);
   /** What places things by hand in the open tab: Objects, or Rooms on Props. */
   function placer(): Placer | null {
@@ -1863,6 +1876,7 @@
       ghost: (o, ok) => view.battle?.setGhost(o, ok),
       chip: (x, y, text) => chipAt(x, y, text),
       bar: (at) => (placeBar = at),
+      held: setHeld,
       ppf: () => view.cam.ppf,
       battlemap: () => (view.battle?.stats.alpha ?? 0) > 0 && !view.interior,
       roofed: (x, y) => !!view.battle?.roofAt(x, y),
@@ -1878,6 +1892,7 @@
     ring = null;
     chip = null;
     placeBar = null;
+    held = null;
   }
 
   // The ghost follows the settings as the panel changes them (kind, turn, size).
@@ -3102,6 +3117,11 @@
               onSprite={saveSprite}
               inside={scatterInside}
               onRooms={furnishHere}
+              {held}
+              onTurn={(d) => scatterArmed?.tool.turn(d, false)}
+              onAuto={() => scatterArmed?.tool.turnReset()}
+              onEmpty={() => scatterArmed?.tool.escape() || (scatter.kinds = [])}
+              onSize={(d) => scatterArmed?.tool.size(d)}
             />
         {:else if designer}
           <DesignPanel
@@ -3119,6 +3139,7 @@
               onSave={saveDesign}
               onReset={resetDesign}
               onProblem={showProblem}
+              {held}
             />
         {:else if shell.tabs.edit === 'design' && !peek}
           <div class="empty"><p>Opening the designer…</p></div>

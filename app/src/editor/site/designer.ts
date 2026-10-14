@@ -13,14 +13,15 @@
 // Right-drag pans.
 //
 // Props and furniture are placed as placing.ts describes: the chosen piece's ghost follows the
-// pointer (red where it can't go, amber in a doorway); a click on a piece picks it up, a click
+// pointer (red where it can't go, amber in a doorway); a click on a piece picks it up (also with
+// another chosen: nothing can go there, so its ghost shows red under the piece's outline), a click
 // puts it down again (one change); T turns a quarter, Delete takes it away. A side turned to by
 // hand is kept only where the piece wouldn't face it by itself.
 import type { Graphics } from 'pixi.js';
 import type { DesignProblem, InteriorItem, SiteDesign, UnderCatalog } from '../../gen/protocol';
 import type { Camera } from '../../render/camera';
 import type { MapView, PointerTool } from '../../render/MapView';
-import { FINGER_PX, WheelTurn, type BarAt, type HandState, type Placer } from '../placing';
+import { FINGER_PX, WheelTurn, type BarAt, type HandState, type HeldView, type Placer } from '../placing';
 import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, fits, isBuilding, type Item, mergeRooms, moveProp, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
 
 export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'prop' | 'stairs' | 'wall' | 'merge';
@@ -58,6 +59,8 @@ export interface DesignHost {
   chip(x: number, y: number, text: string | null): void;
   /** The place bar by the ghost (touch), or none. */
   bar(at: BarAt): void;
+  /** The piece picked up, for the panel's "in hand" row, or none. */
+  held(h: HeldView): void;
   /** Screen px per world ft. */
   ppf(): number;
 }
@@ -654,6 +657,7 @@ export class SiteDesigner implements PointerTool, Placer {
     this.view.interior?.setGhost(null);
     this.host.chip(0, 0, null);
     this.host.bar(null);
+    this.host.held(null);
   }
 
   // ---------------------------------------------------------------------------------------
@@ -727,22 +731,26 @@ export class SiteDesigner implements PointerTool, Placer {
     if (!layer || layer.interior.id !== this.id) return;
     const d = this.draft;
     if (this.holding && this.holding.li !== this.level) this.holding = null;
+    const name = (f: Item) => this.host.piece(f.kind)?.name ?? f.kind;
+    const h = this.holding;
+    this.host.held(h ? { name: cap(name(h.now)), turn: '', turns: h.now.w !== h.now.h || (h.now.back ?? this.autoBack(h.now)) !== null, auto: h.now.back !== undefined, size: `${h.now.w}×${h.now.h}` } : null);
     this.under = -1;
     const g = this.ghost();
     const p = this.pointer;
     const sq = !this.touch && p && d ? [Math.floor(p[0]), Math.floor(p[1])] : null;
     // A click on a piece picks it up (an empty hand, or a piece chosen: nothing can go there).
     if (d && sq && !this.holding && this.props()) this.under = propAt(d, this.level, sq[0], sq[1]);
-    const name = (f: Item) => this.host.piece(f.kind)?.name ?? f.kind;
+    const u = this.under >= 0 ? d?.levels[this.level].items[this.under] : undefined;
     this.ghostShown = null;
-    if (this.under >= 0 || !g) {
+    if (!g) {
       layer.setGhost(null);
       this.host.bar(null);
-      const u = d?.levels[this.level].items[this.under];
       if (u) this.host.chip(...layer.toWorld(u.x + u.w, u.y + u.h), `${cap(name(u))} · click to pick up`);
       else this.host.chip(0, 0, null);
       return;
     }
+    // (Over a piece with another chosen, the chosen one's ghost still shows, red, under the
+    // piece's outline: plain what is in the hand and what a click picks up.)
     const state = this.fit(g);
     layer.setGhost(this.shown(g), state);
     this.ghostShown = { f: g, state };
@@ -753,7 +761,8 @@ export class SiteDesigner implements PointerTool, Placer {
     } else {
       this.host.bar(null);
       const why = state === 'bad' ? ' · doesn’t fit here' : state === 'doorway' ? ' · in a doorway' : '';
-      this.host.chip(...layer.toWorld(g.x + g.w, g.y + g.h), `${cap(name(g))}${g.w * g.h > 1 ? ` · ${g.w}×${g.h}` : ''}${why}`);
+      if (u) this.host.chip(...layer.toWorld(u.x + u.w, u.y + u.h), `${cap(name(u))} · click to pick up (${name(g)} in hand)`);
+      else this.host.chip(...layer.toWorld(g.x + g.w, g.y + g.h), `${cap(name(g))}${g.w * g.h > 1 ? ` · ${g.w}×${g.h}` : ''}${why}`);
     }
   }
 
@@ -971,8 +980,8 @@ export class SiteDesigner implements PointerTool, Placer {
     }
     if (s.mode === 'prop') {
       const box = (f: Item, width: number, color: number) => g.poly(quad(f.x, f.y, f.x + f.w, f.y + f.h)).stroke({ width, color });
-      // Where the held piece was (dashed), the piece a click would pick up (gold), and the ghost's
-      // squares (red where it can't go, amber in a doorway).
+      // Where the held piece was (dashed), the ghost's squares (red where it can't go, amber in a
+      // doorway), and on top the piece a click would pick up (gold).
       const h = this.holding;
       if (h && h.li === li) {
         const c = [scr(h.from.x, h.from.y), scr(h.from.x + h.from.w, h.from.y), scr(h.from.x + h.from.w, h.from.y + h.from.h), scr(h.from.x, h.from.y + h.from.h)];
@@ -981,13 +990,14 @@ export class SiteDesigner implements PointerTool, Placer {
           g.stroke({ width, color, alpha: 0.9 });
         }
       }
+      if (this.ghostShown) {
+        const st = this.ghostShown.state;
+        box(this.ghostShown.f, st === 'ok' ? 1.5 : 2.5, st === 'bad' ? 0xdc2626 : st === 'doorway' ? 0xd97706 : ink);
+      }
       const u = this.under >= 0 ? d.levels[li]?.items[this.under] : undefined;
       if (u) {
         box(u, 3.5, 0x1c1917);
         box(u, 1.6, 0xfde047);
-      } else if (this.ghostShown) {
-        const st = this.ghostShown.state;
-        box(this.ghostShown.f, st === 'ok' ? 1.5 : 2.5, st === 'bad' ? 0xdc2626 : st === 'doorway' ? 0xd97706 : ink);
       }
     }
     // Problems on this level.

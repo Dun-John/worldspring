@@ -131,6 +131,8 @@
     if (e.key !== 'Enter' || !shown.length) return;
     e.preventDefault();
     pick(shown[0]);
+    // (The keys go back to the map: T turns what was picked, not the search.)
+    (e.currentTarget as HTMLInputElement).blur();
   }
 
   const dpr = typeof devicePixelRatio === 'number' ? Math.min(2, Math.max(1, devicePixelRatio)) : 1;

@@ -182,7 +182,8 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     { keys: ['['], label: 'Smaller (brush: narrower)', group: 'Objects', repeat: true, when: () => edit('scatter')() && !k.inside(), run: () => k.placing()?.size(-1) },
   );
   // Placing: on what the hand shows (the piece held, the one a click would pick up, or the
-  // chosen item's ghost). A key with nothing to act on goes on to the next binding.
+  // chosen item's ghost); Delete on the piece held, else the one pointed at (also with an item
+  // chosen). A key with nothing to act on goes on to the next binding.
   const placing = () => !!k.placing();
   const on = (f: (p: Placer) => boolean) => () => {
     const p = k.placing();
@@ -197,20 +198,20 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     { keys: ['Enter'], label: 'Put the piece held down', group: 'Placing', when: placing, run: on((p) => p.putDown()) },
     { keys: ['Delete', 'Backspace'], label: 'Take away the piece held or pointed at', group: 'Placing', when: placing, run: on((p) => p.remove()) },
   );
-  const design: [string, DesignMode, string][] = [
+  const design: [string | string[], DesignMode, string][] = [
     ['V', 'select', 'Choose a room'],
     ['R', 'room', 'Room'],
     ['X', 'rect', 'Rectangle'],
     ['H', 'corridor', 'Corridor'],
     ['K', 'rock', 'Rock'],
     ['O', 'door', 'Door'],
-    ['F', 'prop', 'Props'],
+    [['F', 'Q'], 'prop', 'Props (in a building: furniture)'],
     ['W', 'stairs', 'Way down (in a building: the stairs)'],
     ['L', 'wall', 'Wall line (in a building)'],
     ['E', 'merge', 'Take a wall away (in a building)'],
   ];
   const designing = () => edit('design')() && k.designing();
-  for (const [key, m, label] of design) out.push({ keys: [key], label, group: 'Rooms', when: designing, run: () => k.designMode(m) });
+  for (const [key, m, label] of design) out.push({ keys: typeof key === 'string' ? [key] : key, label, group: 'Rooms', when: designing, run: () => k.designMode(m) });
   out.push({ keys: ['Ctrl+S'], label: 'Save the design', group: 'Rooms', inInputs: true, when: designing, run: () => k.saveDesign() });
   const tools: [string, PlayTool, string][] = [
     ['V', 'select', 'Select and move'],

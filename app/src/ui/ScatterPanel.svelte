@@ -5,12 +5,14 @@
   import type { KindInfo } from '../gen/client';
   import type { SpriteMeta } from '../gen/protocol';
   import { BATTLE_GROUPS } from '../editor/itemGroups';
+  import type { HeldView } from '../editor/placing';
   import type { ScatterMode, ScatterSettings } from '../editor/scatter';
   import { drawnTurned } from '../render/BattlemapLayer';
   import type { ThumbSheet } from '../render/thumbs';
   import { MAX_PICTURE_BYTES } from '../world/assets';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
+  import InHand from './InHand.svelte';
   import ItemPicker, { type PickItem } from './ItemPicker.svelte';
   import { remember, remembered, shell } from './shell/layout.svelte';
 
@@ -33,12 +35,19 @@
     inside: 'building' | 'site' | 'other' | null;
     /** Rooms, on its Furniture (Props) tool. */
     onRooms: () => void;
+    /** The object picked up, if any. */
+    held: HeldView;
+    /** What is in the hand turned (clockwise 1), back to its own turn, put away, sized. */
+    onTurn: (d: 1 | -1) => void;
+    onAuto: () => void;
+    onEmpty: () => void;
+    onSize: (d: 1 | -1) => void;
   }
 
-  let { settings = $bindable(), catalog, sprites, placed, thumbs, picture, peek = false, onUpload, onSprite, inside, onRooms }: Props = $props();
+  let { settings = $bindable(), catalog, sprites, placed, thumbs, picture, peek = false, onUpload, onSprite, inside, onRooms, held, onTurn, onAuto, onEmpty, onSize }: Props = $props();
 
   const MODES: [ScatterMode, string, IconName, string, string][] = [
-    ['place', 'Place', 'stamp', 'Q', 'Click on the battlemap to put the chosen object down; T or Shift+wheel turns it. With nothing chosen (Esc), click one you put down to pick it up and move it; Delete takes it away. On a touch screen, tap to move the ghost, then ✓.'],
+    ['place', 'Place', 'stamp', 'Q', 'Click on the battlemap to put the chosen object down (again and again, even on top of others); T, Shift+T or Shift+wheel turn it, Z turns it at random again. To move one you put down, empty the hand (Esc or ×) and click it; Delete takes the one under the pointer away. On a touch screen, tap to move the ghost, then ✓.'],
     ['brush', 'Brush', 'brush', 'W', 'Drag on the battlemap to scatter the chosen kinds (choose several).'],
     ['erase', 'Erase', 'eraser', 'E', 'Click an object to take it away, or drag to clear an area.'],
   ];
@@ -46,6 +55,8 @@
 
   const nameOf = (k: number | string) => (typeof k === 'string' ? (sprites[k.slice(2)]?.name ?? 'Your sprite') : cap(catalog[k - 1]?.name ?? `kind ${k}`));
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  /** Whether a kind shows a turn given by hand (as the tool's `turns`). */
+  const turnsKind = (k: number | string) => typeof k === 'string' || drawnTurned(catalog[k - 1], true);
 
   const SHORT_COVER = ['', '½ cover', '¾ cover', 'full cover'];
   const squares = (n: number) => `${n} square${n === 1 ? '' : 's'}`;
@@ -203,19 +214,39 @@
         {/if}
       </div>
     {/if}
-    {#if settings.kinds.length}
+    {#if settings.mode === 'place' && (held || settings.kinds.length)}
+      {@const k = settings.kinds[0]}
+      {@const t = held ? held.turns : turnsKind(k)}
+      <InHand
+        name={held?.name ?? nameOf(k)}
+        held={!!held}
+        quarter={false}
+        turns={t}
+        turn={held ? held.turn : t ? (settings.rotation === null ? 'at random' : `${settings.rotation}°`) : ''}
+        auto={held ? held.auto : t && settings.rotation !== null}
+        {onTurn}
+        {onAuto}
+        {onEmpty}
+      >
+        {#snippet size()}
+          <button class="ws-icon-btn" title="Smaller ([)" aria-label="Smaller" onclick={() => onSize(-1)}>−</button>
+          <output>{held ? held.size : `${settings.scale.toFixed(2)}×`}</output>
+          <button class="ws-icon-btn" title="Bigger (])" aria-label="Bigger" onclick={() => onSize(1)}>+</button>
+        {/snippet}
+      </InHand>
+    {:else if settings.kinds.length}
       <div class="chosen">
         {#each settings.kinds as k (k)}
           <span class="ws-chip on">{nameOf(k)}<button class="x" onclick={() => (settings.kinds = settings.kinds.filter((x) => x !== k))} aria-label="Drop {nameOf(k)}"><Icon name="x" size={12} /></button></span>
         {/each}
       </div>
-    {:else if settings.mode !== 'erase'}
+    {:else if settings.mode !== 'erase' && !inside}
       <div class="ws-hint">Choose what to put down below{settings.mode === 'place' ? ', or click one you put down to pick it up' : ''}.</div>
     {/if}
     {#if !peek}
       <div class="ws-hint">{MODES.find((m) => m[0] === settings.mode)?.[4]}</div>
       <details class="ws-group" open={remembered('scatter.brush', false)} ontoggle={(e) => remember('scatter.brush', e.currentTarget.open)}>
-        <summary>{settings.mode === 'erase' ? 'Eraser settings' : settings.mode === 'place' ? 'Size and turn' : 'Brush settings'}</summary>
+        <summary>{settings.mode === 'erase' ? 'Eraser settings' : settings.mode === 'place' ? 'More size and turn' : 'Brush settings'}</summary>
         <div class="ws-group-body">
           {#if settings.mode !== 'erase'}
             <label class="slider">
