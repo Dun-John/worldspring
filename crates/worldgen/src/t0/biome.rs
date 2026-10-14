@@ -117,7 +117,10 @@ pub fn classify(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64],
     let n = w * h;
     let mut out = vec![0u32; n];
 
-    // Near-river / lake wetness for swamps, spread a few cells by a cheap dilation.
+    // Near-river / lake wetness for swamps, spread a few miles by a cheap dilation (and the
+    // niches' noise, in miles too).
+    let k_cell = crate::core::tile::cell_scale(cell_ft);
+    let (spread, fade) = ((crate::core::round(3.0 / k_cell) as usize).max(1), libm::pow(0.7, k_cell.min(1.0)) as f32);
     let mut wet = vec![0.0f32; n];
     for i in 0..n {
         if hydro.lake_of[i] != NO_LAKE {
@@ -126,18 +129,20 @@ pub fn classify(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64],
             wet[i] = (libm::log10(hydro.discharge[i].max(1.0) as f64) as f32 - 4.5).clamp(0.0, 1.0);
         }
     }
-    for _ in 0..3 {
+    for _ in 0..spread {
         let prev = wet.clone();
         for j in 1..h - 1 {
             for i in 1..w - 1 {
                 let k = j * w + i;
                 let m = prev[k - 1].max(prev[k + 1]).max(prev[k - w]).max(prev[k + w]);
-                wet[k] = prev[k].max(m * 0.7);
+                wet[k] = prev[k].max(m * fade);
             }
         }
     }
 
     let mut niche_noise = crate::core::noise::Fbm::new(noise, 3, 2.0, 0.5);
+    let mut lobes = crate::core::noise::Fbm::new(noise ^ 0x10be, 3, 2.0, 0.5);
+    let mut ragged = crate::core::noise::Fbm::new(noise ^ 0x5a6e, 3, 2.0, 0.5);
     for k in 0..n {
         let (i, j) = (k % w, k / w);
         if !land[k] {
@@ -151,7 +156,9 @@ pub fn classify(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64],
         }
         let t = clim.temp[k] as f64;
         let pr = clim.precip[k] as f64;
-        let nz = niche_noise.at(i as f64 / 7.0, j as f64 / 7.0);
+        let nz = niche_noise.at(i as f64 * k_cell / 7.0, j as f64 * k_cell / 7.0);
+        // Snowlines and the like stay ragged on fine cells, where the niches' noise is smooth.
+        let edge = if k_cell < 1.0 { nz + (1.0 - k_cell) * 0.8 * ragged.at(i as f64 / 4.0, j as f64 / 4.0) } else { nz };
 
         // Climate niches: best two by weighted score.
         let mut score = [0.0f64; ALL.len()];
@@ -182,13 +189,20 @@ pub fn classify(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64],
         // Terrain overrides.
         let above = height[k] - sea;
         let slope = local_slope(w, h, height, i, j, cell_ft);
-        let override_to = if t < -10.0 + 2.0 * nz && p.biome_weight("ice") > 0.0 {
+        let override_to = if t < -10.0 + 2.0 * edge && p.biome_weight("ice") > 0.0 {
             Some(Biome::Ice)
-        } else if t < 3.0 + 2.0 * nz && above > 5_500.0 && p.biome_weight("alpine") > 0.0 {
+        } else if t < 3.0 + 2.0 * edge && above > 5_500.0 && p.biome_weight("alpine") > 0.0 {
             Some(Biome::Alpine)
         } else if volcanic.vents.iter().any(|&(vx, vy, r)| {
+            // Lobed as flows run out from it, at any size of cone or cell.
             let (dx, dy) = (i as f64 - vx, j as f64 - vy);
-            dx * dx + dy * dy < r * r * (0.8 + 0.3 * nz)
+            let d = crate::core::sqrt(dx * dx + dy * dy);
+            if d >= 1.3 * r {
+                return false;
+            }
+            let (ca, sa) = if d > 0.0 { (dx / d, dy / d) } else { (1.0, 0.0) };
+            let lobe = lobes.at(vx + 2.2 * ca, vy + 2.2 * sa) + 0.25 * nz;
+            d < r * (0.8 + 0.4 * lobe)
         }) && p.biome_weight("volcanic") > 0.0
         {
             Some(Biome::Volcanic)

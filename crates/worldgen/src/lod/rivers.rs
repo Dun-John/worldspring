@@ -14,9 +14,9 @@
 use crate::core::noise::{gradient2, smoothstep};
 use crate::core::rng::hash2;
 
-/// Channel width (ft) from discharge (mm·cells); matches the renderer's expectations.
+/// Channel width (ft) from discharge (`t0::hydro::RIVER_Q`'s units); matches the renderer's expectations.
 pub fn width_ft(q: f64) -> f64 {
-    (14.0 * libm::pow((q / 90_000.0).max(0.05), 0.6)).max(8.0)
+    (14.0 * libm::pow((q / crate::t0::hydro::RIVER_Q).max(0.05), 0.6)).max(8.0)
 }
 
 fn depth_ft(width: f64) -> f64 {

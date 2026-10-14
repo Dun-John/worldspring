@@ -13,6 +13,17 @@ pub const PADDED: usize = TILE_SAMPLES + 2 * HALO;
 pub const FINEST_SPACING_FT: f64 = 2.5;
 pub const FT_PER_MILE: f64 = 5280.0;
 pub const T0_MAX_DIM: usize = 1024;
+/// The default map's width: the continent-scale stages are tuned on its T0 cell, and measure
+/// distances and areas against it on any other (`cell_scale`).
+pub const REF_MAP_W_FT: f64 = 1200.0 * FT_PER_MILE;
+pub const REF_CELL_FT: f64 = REF_MAP_W_FT / (T0_MAX_DIM - 1) as f64;
+
+/// A grid cell of `cell_ft` against the default map's T0 cell: 1 on a 1200-mile map, 1/8 on a
+/// 150-mile one. Lengths counted in cells divide by it, areas by its square.
+#[inline]
+pub fn cell_scale(cell_ft: f64) -> f64 {
+    cell_ft / REF_CELL_FT
+}
 
 pub const LAYER_SURFACE: u8 = 0;
 

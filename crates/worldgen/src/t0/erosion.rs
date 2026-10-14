@@ -13,13 +13,18 @@ use crate::core::rng::{mix64, unit};
 const K: f64 = 0.35;
 // Drainage-area exponent m = 0.5 in E = K A^m S^n (n = 1), applied as a square root below.
 const DT: f64 = 2.0;
-/// Hillslope diffusion per iteration (keeps ridges from becoming knife-edges).
+/// Hillslope diffusion per iteration (keeps ridges from becoming knife-edges), in the default
+/// map's cells. On finer cells it reaches farther in cells (as `scale^-1.5`, short of the
+/// `scale^-2` of a fixed reach in miles): smaller valleys between, but not fur.
 const KAPPA: f64 = 0.03;
 /// Receiver choice weighs each downhill slope by a random factor in [1 - J, 1 + J].
 const JITTER: f64 = 0.45;
 
-/// `land[i]` cells erode; everything else is a fixed base-level outlet at height 0.
-pub fn erode(w: usize, h: usize, land: &[bool], uplift: &[f64], iterations: usize, seed: u64, mut progress: impl FnMut(f64)) -> Vec<f64> {
+/// `land[i]` cells erode; everything else is a fixed base-level outlet at height 0. `scale` is
+/// the cell against the default map's (`core::tile::cell_scale`): stream power is the same at
+/// any cell size (m/n = 1/2); diffusion grows on finer cells and the starting relief keeps its
+/// size in miles.
+pub fn erode(w: usize, h: usize, land: &[bool], uplift: &[f64], iterations: usize, scale: f64, seed: u64, mut progress: impl FnMut(f64)) -> Vec<f64> {
     let n = w * h;
     let outlet: Vec<bool> = land.iter().map(|l| !l).collect();
     // Start from gentle multi-scale relief so early drainage is irregular, not grid-aligned.
@@ -30,9 +35,14 @@ pub fn erode(w: usize, h: usize, land: &[bool], uplift: &[f64], iterations: usiz
                 return 0.0;
             }
             let (x, y) = ((i % w) as f64, (i / w) as f64);
-            0.5 * (1.0 + relief.at(x / 18.0, y / 18.0))
+            0.5 * (1.0 + relief.at(x * scale / 18.0, y * scale / 18.0))
         })
         .collect();
+    // Diffusion per iteration in these cells, in explicit steps the 4-neighbour Laplacian
+    // keeps stable.
+    let kappa = KAPPA / libm::pow(scale, 1.5);
+    let steps = libm::ceil(kappa / 0.2).max(1.0) as usize;
+    let kappa = kappa / steps as f64;
     let mut area = vec![0.0f64; n];
     let mut rec = vec![0u32; n];
     let mut dist = vec![1.0f64; n];
@@ -107,20 +117,22 @@ pub fn erode(w: usize, h: usize, land: &[bool], uplift: &[f64], iterations: usiz
         }
 
         // Hillslope diffusion (4-neighbor Laplacian, outlets fixed).
-        for i in 0..n {
-            if !land[i] {
-                continue;
+        for _ in 0..steps {
+            for i in 0..n {
+                if !land[i] {
+                    continue;
+                }
+                let (x, y) = (i % w, i / w);
+                let mut s = 0.0;
+                for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
+                    s += if nx < w && ny < h { z[ny * w + nx] } else { 0.0 };
+                }
+                lap[i] = s - 4.0 * z[i];
             }
-            let (x, y) = (i % w, i / w);
-            let mut s = 0.0;
-            for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
-                s += if nx < w && ny < h { z[ny * w + nx] } else { 0.0 };
-            }
-            lap[i] = s - 4.0 * z[i];
-        }
-        for i in 0..n {
-            if land[i] {
-                z[i] = (z[i] + KAPPA * lap[i]).max(0.0);
+            for i in 0..n {
+                if land[i] {
+                    z[i] = (z[i] + kappa * lap[i]).max(0.0);
+                }
             }
         }
         progress((it + 1) as f64 / iterations as f64);

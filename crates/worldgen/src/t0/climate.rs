@@ -35,11 +35,14 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
     let rain_base = 1.0 - libm::exp(-cell_mi / 700.0);
     let mm_scale = 1300.0 / rain_base;
     let noise_seed = world.stream("t0.climate.noise");
+    // Blurs and noise keep their reach in miles: a default map's cell, any cell size.
+    let k_cell = crate::core::tile::cell_scale(cell_ft);
+    let reach = (crate::core::round(1.0 / k_cell) as usize).max(1);
 
     // Orographic lift follows the large-scale terrain, not every small ridge.
     let mut smooth = height.to_vec();
     for _ in 0..3 {
-        smooth = box_blur(w, h, &smooth, land);
+        smooth = box_blur(w, h, &smooth, land, reach);
     }
 
     let mut temp = vec![0f32; n];
@@ -84,7 +87,7 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
                 let rain = m * frac;
                 m -= 0.6 * rain;
                 // Wavy belt edges: the belt factor sees a latitude perturbed by a few degrees.
-            let wl = crate::core::fabs(lat + 5.0 * belt_noise.at(i as f64 / 90.0, j as f64 / 90.0));
+            let wl = crate::core::fabs(lat + 5.0 * belt_noise.at(i as f64 * k_cell / 90.0, j as f64 * k_cell / 90.0));
             let wavy = belt_factor(wl) / belt;
             precip[k] += share * rain * mm_scale * belt * wavy * p.moisture;
             }
@@ -93,7 +96,7 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
 
     // Rows are swept independently; blur to remove banding and spread orographic rain.
     for _ in 0..3 {
-        precip = box_blur(w, h, &precip, land);
+        precip = box_blur(w, h, &precip, land, reach);
     }
     let mut noise = crate::core::noise::Fbm::new(noise_seed, 3, 2.0, 0.5);
     let precip = precip
@@ -101,7 +104,7 @@ pub fn build(world: &World, w: usize, h: usize, cell_ft: f64, height: &[f64], la
         .enumerate()
         .map(|(k, &v)| {
             let (i, j) = ((k % w) as f64, (k / w) as f64);
-            (v * (1.0 + 0.15 * noise.at(i / 60.0, j / 60.0))).max(0.0) as f32
+            (v * (1.0 + 0.15 * noise.at(i * k_cell / 60.0, j * k_cell / 60.0))).max(0.0) as f32
         })
         .collect();
     Climate { temp, precip }
@@ -113,30 +116,37 @@ fn belt_factor(alat: f64) -> f64 {
     1.0 + 0.9 * g(0.0, 9.0) - 0.55 * g(27.0, 9.0) + 0.25 * g(55.0, 10.0)
 }
 
-/// 3x3 box blur over land cells only (ocean neither contributes nor receives).
-fn box_blur(w: usize, h: usize, v: &[f64], land: &[bool]) -> Vec<f64> {
+/// Box blur `2r + 1` cells across over land cells only (ocean neither contributes nor
+/// receives), by summed-area tables.
+fn box_blur(w: usize, h: usize, v: &[f64], land: &[bool], r: usize) -> Vec<f64> {
+    let (sw, sh) = (w + 1, h + 1);
+    let (mut sum, mut cnt) = (vec![0.0f64; sw * sh], vec![0u32; sw * sh]);
+    for j in 0..h {
+        let (mut rs, mut rc) = (0.0, 0u32);
+        for i in 0..w {
+            let k = j * w + i;
+            if land[k] {
+                rs += v[k];
+                rc += 1;
+            }
+            let t = (j + 1) * sw + i + 1;
+            sum[t] = sum[t - sw] + rs;
+            cnt[t] = cnt[t - sw] + rc;
+        }
+    }
     let mut out = v.to_vec();
     for j in 0..h {
+        let (y0, y1) = (j.saturating_sub(r), (j + r + 1).min(h));
         for i in 0..w {
             let k = j * w + i;
             if !land[k] {
                 continue;
             }
-            let (mut s, mut c) = (0.0, 0.0);
-            for dj in -1i64..=1 {
-                for di in -1i64..=1 {
-                    let (x, y) = (i as i64 + di, j as i64 + dj);
-                    if x < 0 || y < 0 || x >= w as i64 || y >= h as i64 {
-                        continue;
-                    }
-                    let kk = y as usize * w + x as usize;
-                    if land[kk] {
-                        s += v[kk];
-                        c += 1.0;
-                    }
-                }
-            }
-            out[k] = s / c;
+            let (x0, x1) = (i.saturating_sub(r), (i + r + 1).min(w));
+            let (a, b, c, d) = (y0 * sw + x0, y0 * sw + x1, y1 * sw + x0, y1 * sw + x1);
+            let s = sum[d] - sum[b] - sum[c] + sum[a];
+            let n = cnt[d] + cnt[a] - cnt[b] - cnt[c];
+            out[k] = s / n as f64;
         }
     }
     out

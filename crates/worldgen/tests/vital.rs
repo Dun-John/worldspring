@@ -22,11 +22,13 @@ fn determinism_repeatable() {
 }
 
 /// Terrain logic: every river flows strictly downhill from source to mouth, and ends in the
-/// sea, a lake, a confluence, or dries out (never climbs through terrain).
+/// sea, a lake, a confluence, or dries out (never climbs through terrain). On a small map too
+/// (its cells an eighth the size, its volcanoes' gullies many cells long).
 #[test]
 fn rivers_flow_downhill() {
-    for seed in [3u32, 99] {
-        let world = World::from_json(&world_json(seed)).unwrap();
+    let small = serde_json::to_string(&serde_json::json!({ "gen_version": worldgen::world::GEN_VERSION, "seed": 99, "params": { "width_mi": 200.0, "height_mi": 150.0, "volcanoes": 3 } })).unwrap();
+    for (seed, json) in [(3u32, world_json(3)), (99, world_json(99)), (99, small)] {
+        let world = World::from_json(&json).unwrap();
         let t0 = worldgen::t0::T0::generate(&world);
         let extra = t0.extra.as_ref().unwrap();
         let hydro = &extra.hydro;
@@ -791,7 +793,7 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
             for side in 0..4u16 {
                 let (x, y) = ((k % nx) as u16, (k / nx) as u16);
                 let Some((_, other, _, _)) = bd::door_at(x, y, side, nx, ny) else { continue };
-                if other.is_some_and(|o| cells[o] >= 0) {
+                if other.is_some_and(|o| cells[o] >= 0) || d.levels[g].doors.iter().any(|dr| (dr[0], dr[1], dr[2]) == (x, y, side)) {
                     continue;
                 }
                 let mut t = d.clone();
@@ -2258,7 +2260,9 @@ fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     let at = |v: &serde_json::Value| [v["at"][0].as_f64().unwrap(), v["at"][1].as_f64().unwrap()];
     let moves = |c: &serde_json::Value| format!(r#"{{"moves":[{{"corner":{},"by":[30,20]}}]}}"#, c["corner"]);
     let goes = |c: &serde_json::Value| wards::change(base, t0, ci, &serde_json::from_str(&moves(c)).unwrap()).is_ok_and(|(_, r)| r["corners"]["moved"] == 1);
-    let corner = corners.iter().filter(|c| c["pinned"].is_null() && c["gate"].is_null() && c["wall"].is_null() && patches.iter().filter(|p| p["in_town"] == true && p["corners"].as_array().unwrap().contains(&c["corner"])).count() >= 3).find(|c| goes(c)).expect("an inner corner that moves");
+    // (One a main street runs through, so moving it moves the street: see the wall below.)
+    let on_street = |c: &serde_json::Value| g.roads.iter().filter(|r| r.1 != 3).any(|r| r.0.iter().any(|&q| geom_dist(q, at(c)) < 1.0));
+    let corner = corners.iter().filter(|c| c["pinned"].is_null() && c["gate"].is_null() && c["wall"].is_null() && patches.iter().filter(|p| p["in_town"] == true && p["corners"].as_array().unwrap().contains(&c["corner"])).count() >= 3 && on_street(c)).find(|c| goes(c)).expect("an inner corner that moves");
     let cp = at(corner);
     let patch = patches.iter().filter(|p| p["in_town"] == true && matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant")) && geom_dist(at(p), cp) > 3.0 * spacing).min_by(|a, b| geom_dist(at(a), g.center).total_cmp(&geom_dist(at(b), g.center))).expect("a ward to make a castle");
     let pc = at(patch);
@@ -2337,7 +2341,7 @@ fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     let kept = format!("{:?}", *laid_out);
     town::forget_from(0);
     assert_eq!(format!("{:?}", *town::layout(&we, &te, li)), kept, "a wall built after the town was laid out anew differs from one built before");
-    let patch = patches.iter().filter(|p| p["in_town"] == true && matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant")) && p["patch"] != patch["patch"] && geom_dist(at(p), m) > 6.0 * spacing && geom_dist(at(p), pc) > 3.0 * spacing).min_by(|a, b| geom_dist(at(b), m).total_cmp(&geom_dist(at(a), m))).expect("a ward far from the wall");
+    let patch = patches.iter().filter(|p| p["in_town"] == true && matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant")) && p["patch"] != patch["patch"] && geom_dist(at(p), m) > 5.0 * spacing && geom_dist(at(p), pc) > 3.0 * spacing).min_by(|a, b| geom_dist(at(b), m).total_cmp(&geom_dist(at(a), m))).expect("a ward far from the wall");
     let req = format!(r#"{{"patches":[{{"patch":{},"lots":"huge"}}]}}"#, patch["patch"]);
     let (edit5, _) = wards::change(&world, t0, ci, &serde_json::from_str(&req).unwrap()).unwrap();
     let mut e5 = e.clone();
@@ -2439,7 +2443,9 @@ fn ground_edits(base: &World) {
     let open = |c: &Chunk, k: &TileKey, at: [f64; 2]| -> Vec<usize> {
         (0..SQ * SQ).filter(|&k2| geom_dist(centre(k, k2 % SQ, k2 / SQ), at) < 20.0 && c.building[k2] == 0 && c.water_level[k2] <= c.height[k2]).collect()
     };
+    // (Centred in a row of blocks, 80 ft: the brush's 40 ft reach keeps to that row.)
     let dab = (6..28)
+        .filter(|t| t % 4 == 2)
         .map(|t| [corner[0], corner[1] + 20.0 * t as f64])
         .find(|&p| [2, 3].iter().all(|&q| open(&plain[q].1, &keys[q], p).len() >= 4))
         .map(|p| [p])

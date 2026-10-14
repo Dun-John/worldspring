@@ -231,7 +231,7 @@ impl PartialOrd for Node {
 pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let p = inp.world.params();
-    let river_q = 90_000.0 / p.river_density;
+    let river_q = super::hydro::river_q(p.river_density);
 
     let edges = links(inp, settlements, &[RoadClass::KingsRoad, RoadClass::Road, RoadClass::Track]);
     let (_, paths) = route(inp, settlements, &edges);
@@ -638,7 +638,7 @@ impl Costs {
             Biome::HotDesert | Biome::ColdDesert => 0.3,
             _ => 0.0,
         };
-        Costs { pen: (0..inp.w * inp.h).map(biome_pen).collect(), river_q: 90_000.0 / inp.world.params().river_density }
+        Costs { pen: (0..inp.w * inp.h).map(biome_pen).collect(), river_q: super::hydro::river_q(inp.world.params().river_density) }
     }
 
     fn ground(&self, inp: &Inputs, i: usize, nb: usize, dist: f64) -> f64 {

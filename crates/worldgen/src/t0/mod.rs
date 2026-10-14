@@ -28,6 +28,12 @@ use volcano::Activity;
 const MAGIC: u32 = 0x5430_4736; // "T0G6"
 /// Height of the bank at the dry edge of a shore cell above the water (ft).
 const SHORE_BANK_FT: f64 = 6.0;
+/// The eroded land's 99.5th percentile on default maps (model units, unit ruggedness): mapped
+/// to 85% of max elevation on every map.
+const Z_REF: f64 = 15.6;
+/// The plates' uplift at its 95th percentile on default maps (unit ruggedness): what weakly
+/// uplifted land, filled as lowland, is measured against.
+const UP_REF: f64 = 1.0;
 /// Ocean distance encoded in the biome texture saturates here (ft).
 pub const COAST_ENCODE_FT: f64 = 250_000.0;
 
@@ -136,37 +142,33 @@ impl T0 {
             // channels through it.
             tect.rift.iter_mut().for_each(|r| *r = 0.0);
         }
-        sketch::add_ranges(world, raster, &mut tect.uplift, &mut tect.reference);
+        sketch::add_ranges(world, raster, &mut tect.uplift);
         let mut land: Vec<bool> = tect.crust.iter().map(|&c| c > thr).collect();
 
         // Erosion at half resolution.
         let (ew, eh) = (w.div_ceil(2), h.div_ceil(2));
+        let k_cell = crate::core::tile::cell_scale(cell);
         let e_crust = downsample(w, h, &tect.crust);
         let e_land: Vec<bool> = e_crust.iter().map(|&c| c > thr).collect();
         let e_up = downsample(w, h, &tect.uplift);
         let iterations = (20.0 + 50.0 * p.erosion).round() as usize;
-        let z = erosion::erode(ew, eh, &e_land, &e_up, iterations, world.stream("t0.erosion"), |f| progress("erosion", f));
+        let z = erosion::erode(ew, eh, &e_land, &e_up, iterations, k_cell, world.stream("t0.erosion"), |f| progress("erosion", f));
 
-        // Model units → feet: the 99.5th percentile of land maps to 85% of max elevation. With
-        // fewer of the plates' mountains, as if they were all there (heights grow about as the
-        // uplift does), so the land left doesn't rise to fill the range of heights.
-        let quantile = |v: &[f64], q: usize| {
-            let mut on: Vec<f64> = v.iter().zip(&e_land).filter(|(_, l)| **l).map(|(v, _)| *v).collect();
-            on.sort_by(|a, b| a.total_cmp(b));
-            on.get(on.len() * q / 1000).copied().unwrap_or(1.0).max(1e-9)
-        };
-        let e_ref = if tect.reference.is_empty() { None } else { Some(downsample(w, h, &tect.reference)) };
-        let mut p995 = quantile(&z, 995);
-        if let Some(r) = &e_ref {
-            p995 *= (quantile(r, 995) / quantile(&e_up, 995)).max(1.0);
-        }
+        // Model units → feet, the same on every map: a default map's highest ranges reach about
+        // 85% of max elevation (the eroded land's 99.5th percentile there, for unit ruggedness),
+        // so a small map with no plate boundary on it stays hills. Ruggedness shapes the land,
+        // not its height.
+        let ft_per_unit = 0.85 * p.max_elev_ft / (Z_REF * p.ruggedness.max(0.02));
         // Lowlands fill with sediment (which stream-power alone lacks): blend weakly uplifted
         // land toward a heavily smoothed surface so plains read as plains, ranges stay rugged.
         let mut smooth = z.clone();
+        let reach = (crate::core::round(3.0 / k_cell) as usize).max(1);
         for _ in 0..4 {
-            smooth = blur_land(ew, eh, &smooth, &e_land, 3);
+            smooth = blur_land(ew, eh, &smooth, &e_land, reach);
         }
-        let up_ref = quantile(e_ref.as_deref().unwrap_or(&e_up), 950);
+        // What counts as weakly uplifted, in the uplift's own units (fixed: with fewer of the
+        // plates' mountains kept, the land left isn't counted as the ranges).
+        let up_ref = UP_REF * p.ruggedness.max(0.02);
         // (`rough`: without the lowlands' fill, for where water would stand without it.)
         let blend = |rough: bool| {
             let z: Vec<f64> = if rough {
@@ -179,7 +181,7 @@ impl T0 {
                     })
                     .collect()
             };
-            Grid::from_vec(ew, eh, z.iter().map(|&v| (v / p995 * 0.85 * p.max_elev_ft) as f32).collect())
+            Grid::from_vec(ew, eh, z.iter().map(|&v| (v * ft_per_unit) as f32).collect())
         };
         let zg = blend(false);
 
@@ -197,7 +199,8 @@ impl T0 {
                     let (fi, fj) = (i as f64, j as f64);
                     if land[k] {
                         let base = zg.sample_cubic((fi - 0.5) / 2.0, (fj - 0.5) / 2.0).max(0.0);
-                        let mut v = base * (1.0 + 0.12 * detail.at(fi / 3.0, fj / 3.0));
+                        // (Finer than the eroded grid; as tall as its wavelength allows.)
+                        let mut v = base * (1.0 + 0.12 * k_cell.min(1.0) * detail.at(fi / 3.0, fj / 3.0));
                         if v > cap {
                             // Soft ceiling: approach max elevation, never exceed it.
                             let room = p.max_elev_ft - cap;
@@ -206,13 +209,13 @@ impl T0 {
                         // Rift valleys subside (rift lakes); glaciated lowlands get kettle hollows.
                         v -= tect.rift[k] * 2_200.0;
                         if crate::core::fabs(lat) > 50.0 {
-                            v -= 160.0 * smoothstep(0.85, 0.95, kettle.at(fi / 5.0, fj / 5.0) + 0.5);
+                            v -= 160.0 * smoothstep(0.85, 0.95, kettle.at(fi * k_cell / 5.0, fj * k_cell / 5.0) + 0.5);
                         }
                         height[k] = sea + 5.0 + v;
                     } else {
                         let d_mi = dist_land[k] * cell / 5280.0;
                         let depth = 60.0 + 540.0 * smoothstep(0.0, 50.0, d_mi) + 11_000.0 * smoothstep(40.0, 220.0, d_mi)
-                            + 600.0 * bathy.at(fi / 10.0, fj / 10.0)
+                            + 600.0 * bathy.at(fi * k_cell / 10.0, fj * k_cell / 10.0)
                             - 6_500.0 * tect.ridge[k];
                         height[k] = sea - depth.max(20.0);
                     }
@@ -236,7 +239,7 @@ impl T0 {
 
         progress("volcanoes", 0.0);
         let volcanoes = volcano::place(world, w, h, cell, &tect.arc, &height);
-        volcano::apply(&volcanoes, w, h, cell, sea, p.max_elev_ft, &mut height);
+        volcano::apply(&volcanoes, w, h, cell, sea, p.max_elev_ft, world.stream("t0.volcano.gullies"), &mut height);
         for k in 0..n {
             land[k] = land[k] || height[k] > sea;
         }
@@ -267,7 +270,7 @@ impl T0 {
                 before[k] = f64::INFINITY;
             }
             for v in &volcanoes {
-                let r = (v.radius_ft / cell).ceil() as i64;
+                let r = (1.3 * v.radius_ft / cell).ceil() as i64;
                 for j in (v.cy as i64 - r).max(0)..=(v.cy as i64 + r).min(h as i64 - 1) {
                     for i in (v.cx as i64 - r).max(0)..=(v.cx as i64 + r).min(w as i64 - 1) {
                         before[j as usize * w + i as usize] = f64::INFINITY;
@@ -281,7 +284,7 @@ impl T0 {
         let clim = climate::build(world, w, h, cell, &height, &land);
         progress("rivers", 0.0);
         let drawn: Vec<(u32, bool, bool)> = lakes.list.iter().map(|l| (l.stroke as u32, l.salt, l.outflow)).collect();
-        let hydro = hydro::build(w, h, &mut height, &land, &clim, sea, p.river_density, &feed, hydro::Drawn { of: &lakes.of, lakes: &drawn, courses: &courses.channel });
+        let hydro = hydro::build(w, h, cell, &mut height, &land, &clim, sea, p.river_density, &feed, hydro::Drawn { of: &lakes.of, lakes: &drawn, courses: &courses.channel });
 
         progress("biomes", 0.0);
         let vents = volcanoes
@@ -831,7 +834,7 @@ impl T0 {
             [0.60, 0.57, 0.58],
             [0.60, 0.56, 0.51],
         ];
-        let threshold = hydro::RIVER_Q / world.params().river_density;
+        let threshold = hydro::river_q(world.params().river_density);
         let mut river = vec![false; w * h];
         for r in &s.hydro.rivers {
             for (&c, &q) in r.cells.iter().zip(&r.q) {
@@ -1179,27 +1182,30 @@ fn bilinear(g: &Grid<f32>, x: f64, y: f64) -> f64 {
     a * (1.0 - fy) + b * fy
 }
 
-/// Box blur of radius `r` over land cells only.
-fn blur_land(w: usize, h: usize, v: &[f64], land: &[bool], r: i64) -> Vec<f64> {
+/// Box blur `2r + 1` cells across, onto land cells only (every cell contributes), by
+/// summed-area table.
+fn blur_land(w: usize, h: usize, v: &[f64], land: &[bool], r: usize) -> Vec<f64> {
+    let sw = w + 1;
+    let mut sum = vec![0.0f64; sw * (h + 1)];
+    for j in 0..h {
+        let mut rs = 0.0;
+        for i in 0..w {
+            rs += v[j * w + i];
+            let t = (j + 1) * sw + i + 1;
+            sum[t] = sum[t - sw] + rs;
+        }
+    }
     let mut out = v.to_vec();
-    for j in 0..h as i64 {
-        for i in 0..w as i64 {
-            let k = j as usize * w + i as usize;
+    for j in 0..h {
+        let (y0, y1) = (j.saturating_sub(r), (j + r + 1).min(h));
+        for i in 0..w {
+            let k = j * w + i;
             if !land[k] {
                 continue;
             }
-            let (mut s, mut c) = (0.0, 0.0);
-            for dj in -r..=r {
-                for di in -r..=r {
-                    let (x, y) = (i + di, j + dj);
-                    if x >= 0 && y >= 0 && x < w as i64 && y < h as i64 {
-                        let kk = y as usize * w + x as usize;
-                        s += v[kk];
-                        c += 1.0;
-                    }
-                }
-            }
-            out[k] = s / c;
+            let (x0, x1) = (i.saturating_sub(r), (i + r + 1).min(w));
+            let s = sum[y1 * sw + x1] - sum[y0 * sw + x1] - sum[y1 * sw + x0] + sum[y0 * sw + x0];
+            out[k] = s / ((y1 - y0) * (x1 - x0)) as f64;
         }
     }
     out

@@ -182,7 +182,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
     let sea = p.sea_level_ft;
     let n = w * h;
     let big_river = 900_000.0;
-    let river_q = 90_000.0 / p.river_density;
+    let river_q = super::hydro::river_q(p.river_density);
     let ore_seed = world.stream("t0.settle.ore");
 
     // Per-cell context.

@@ -215,9 +215,11 @@ pub fn land_crust(world: &World, g: Raster, crust: &[f64], thr: f64) -> Option<V
     // miles across down to coves; a hard one keeps within a few hundred yards (ragged, not
     // ruled).
     let s_coast = world.stream("t0.sketch.coast");
+    let ref_w = world.geom.map_w_ft / crate::core::tile::REF_MAP_W_FT;
     let wander: Vec<f64> = (0..n)
         .map(|k| {
             let (x, y) = unit(world, g, k);
+            let (x, y) = (x * ref_w, y * ref_w);
             // Wavelengths ~200, 60, 20 and 6 mi; amplitudes falling more slowly than them
             // (a coast's fractal roughness).
             let mut v = 0.0;
@@ -277,22 +279,17 @@ pub fn land_crust(world: &World, g: Raster, crust: &[f64], thr: f64) -> Option<V
 }
 
 /// Rock uplift along drawn ranges and over drawn massifs (added to the plates' field before
-/// erosion, which halves when either is drawn). `reference` (the plates' field with all their
-/// mountains, when fewer are kept; else empty) gets the same.
-pub fn add_ranges(world: &World, g: Raster, uplift: &mut [f64], reference: &mut [f64]) {
+/// erosion, which halves when either is drawn).
+pub fn add_ranges(world: &World, g: Raster, uplift: &mut [f64]) {
     let s_rid = world.stream("t0.sketch.range");
     let rugged = world.params().ruggedness.max(0.3);
     // Drawn ranges are the main ones: the plates' own ranges are kept, but lower.
     if strokes(world, SketchTool::Range).chain(strokes(world, SketchTool::Massif)).next().is_some() {
         uplift.iter_mut().for_each(|u| *u *= 0.5);
-        reference.iter_mut().for_each(|u| *u *= 0.5);
     }
-    let mut add = |k: usize, v: f64| {
-        uplift[k] += v;
-        if let Some(r) = reference.get_mut(k) {
-            *r += v;
-        }
-    };
+    // (The crest's ridges keep their size in miles.)
+    let ref_w = world.geom.map_w_ft / crate::core::tile::REF_MAP_W_FT;
+    let mut add = |k: usize, v: f64| uplift[k] += v;
     for (_, s) in strokes(world, SketchTool::Range) {
         let r = s.radius_ft.max(2.0 * g.cell);
         let amp = (0.2 + 1.3 * s.strength) * rugged;
@@ -303,7 +300,7 @@ pub fn add_ranges(world: &World, g: Raster, uplift: &mut [f64], reference: &mut 
                 continue;
             }
             let (x, y) = unit(world, g, k);
-            let crest = 0.6 + 0.5 * ridged(s_rid, x * 10.0, y * 10.0, 4);
+            let crest = 0.6 + 0.5 * ridged(s_rid, x * ref_w * 10.0, y * ref_w * 10.0, 4);
             add(k, amp * crest * libm::exp(-(d / r) * (d / r)));
         }
     }
@@ -756,7 +753,7 @@ fn neighbours8(g: Raster, k: usize) -> impl Iterator<Item = usize> {
 /// - Every course is set first, then the valleys: banks a little above the water (never over
 ///   any river's channel), sides sloping up to the valley's edge.
 pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool], lakes: &Lakes, conflicts: &mut Vec<Conflict>) -> (Vec<(usize, f64)>, Courses) {
-    let threshold = super::hydro::RIVER_Q / world.params().river_density;
+    let threshold = super::hydro::river_q(world.params().river_density);
     let sea = world.params().sea_level_ft;
     let n = g.w * g.h;
 
@@ -914,6 +911,9 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
     let mut zc = vec![f64::NAN; n];
     // Valley cells: (side target, distance in cells, the river's level there, lifted).
     let mut valley: FastMap<usize, (f64, f64, f64, bool)> = FastMap::default();
+    // The highest water beside each bank cell: a bank stands over all of it, so a channel
+    // falling steeply doesn't spill onto its own bank from the cell above.
+    let mut beside: FastMap<usize, f64> = FastMap::default();
     let mut feed = Vec::new();
     for &ci in &order {
         let c = &courses[ci];
@@ -996,6 +996,10 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
                         continue;
                     }
                     let nb = j as usize * g.w + i as usize;
+                    if d < 1.5 {
+                        let b = beside.entry(nb).or_insert(z[idx]);
+                        *b = b.max(z[idx]);
+                    }
                     let target = z[idx] + 2.0 + d * g.cell * SIDE;
                     let e = valley.entry(nb).or_insert((target, d, z[idx], lifted));
                     if target < e.0 {
@@ -1023,7 +1027,8 @@ pub fn carve_rivers(world: &World, g: Raster, height: &mut [f64], land: &[bool],
             continue;
         }
         height[k] = if d < 1.5 {
-            height[k].clamp(z + 10.0, target)
+            let low = beside.get(&k).copied().unwrap_or(z).max(z) + 10.0;
+            height[k].clamp(low, target.max(low))
         } else if lifted {
             height[k].clamp(z + 2.0 + (d - 1.5) * g.cell * 0.002, target)
         } else {

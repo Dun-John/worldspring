@@ -41,8 +41,8 @@
       label: 'Size & land',
       open: true,
       sliders: [
-        ['width_mi', 'Map width', 300, 3000, 50, (v) => `${v.toLocaleString()} mi`],
-        ['height_mi', 'Map height', 200, 3000, 50, (v) => `${v.toLocaleString()} mi`],
+        ['width_mi', 'Map width', 150, 3000, 50, (v) => `${v.toLocaleString()} mi`],
+        ['height_mi', 'Map height', 100, 3000, 50, (v) => `${v.toLocaleString()} mi`],
         ['land_fraction', 'Land', 0.1, 0.8, 0.01, (v) => `${Math.round(v * 100)}%`],
       ],
     },
@@ -83,6 +83,13 @@
       ],
     },
   ];
+  /** What a setting means where its label doesn't say it all. Mountains, rivers and volcanoes
+   * keep their size in miles, so a small map is a region of a world, not a small continent. */
+  const TIPS: Partial<Record<Num, string>> = {
+    plate_count: 'Plates on a 1,200 × 900 mi map: a smaller map sees a piece of them, a bigger one more',
+    max_elev_ft: 'The most a peak can reach: land far from a mountain belt (often all of a small map) stays lower',
+    volcanoes: 'On a small map they are spaced closer and kept smaller',
+  };
   const WINDS: [WorldParams['wind'], string][] = [
     ['belts', 'Realistic'],
     ['from_west', 'From the west'],
@@ -142,7 +149,7 @@
       </summary>
       <div class="ws-group-body">
         {#each g.sliders as [key, label, min, max, step, fmt] (key)}
-          <label class="slider" class:moot={moot(key)} title={moot(key) ? 'Your sketch draws the coastline' : undefined}>
+          <label class="slider" class:moot={moot(key)} title={moot(key) ? 'Your sketch draws the coastline' : TIPS[key]}>
             <span class="name">{#if isChanged(key) && !moot(key)}<i class="dot" title="Changed"></i>{/if}{label}</span>
             <output>{moot(key) ? 'Set by your sketch' : fmt(p[key] as number)}</output>
             <input type="range" {min} {max} {step} bind:value={draft.p[key]} disabled={moot(key)} />

@@ -19,10 +19,19 @@ use super::flood::{neighbors, priority_flood, receivers};
 pub const DRY: f32 = -30_000.0;
 pub const NO_LAKE: u32 = u32::MAX;
 
-/// Discharge (mm·cells) at which a stream is mapped as a river, before `river_density`.
+/// Discharge at which a stream is mapped as a river, before `river_density`. Discharge is
+/// counted in mm over the default map's cells (`core::tile::REF_CELL_FT`, ~1.4 sq mi), so a
+/// river drains as much country on any map.
 pub const RIVER_Q: f64 = 90_000.0;
 pub(crate) const MIN_LAKE_CELLS: usize = 12;
+/// A lake covers at least this much, as well as `MIN_LAKE_CELLS`.
+const MIN_LAKE_SQ_MI: f64 = 4.0;
 const MIN_LAKE_DEPTH_FT: f64 = 60.0;
+
+/// The discharge mapped as a river at a `river_density`.
+pub fn river_q(river_density: f64) -> f64 {
+    RIVER_Q / river_density
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,7 +77,7 @@ pub enum Mouth {
 pub struct River {
     /// Cells from source to mouth (the mouth cell may be ocean or lake).
     pub cells: Vec<u32>,
-    /// Discharge at each cell (mm·cells).
+    /// Discharge at each cell (mm over default cells, see `RIVER_Q`).
     pub q: Vec<f32>,
     pub mouth: Mouth,
     /// Chain this one flows into, for tributaries.
@@ -88,8 +97,14 @@ pub struct Hydro {
 /// lakes (always lakes; a salt one has no outflow, one a river is drawn out of is fresh, and
 /// none dries to a salt flat) and rivers (which lose no water in dry country).
 #[allow(clippy::too_many_arguments)]
-pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Climate, sea: f64, river_density: f64, feed: &[(usize, f64)], drawn: Drawn) -> Hydro {
+pub fn build(w: usize, h: usize, cell_ft: f64, height: &mut [f64], land: &[bool], clim: &Climate, sea: f64, river_density: f64, feed: &[(usize, f64)], drawn: Drawn) -> Hydro {
     let n = w * h;
+    // A cell against the default map's: its share of a default cell's area, and the dry
+    // country's losses per mile.
+    let k_cell = crate::core::tile::cell_scale(cell_ft);
+    let (area, loss) = (k_cell * k_cell, libm::pow(0.985, k_cell));
+    let cell_sq_mi = (cell_ft / 5280.0) * (cell_ft / 5280.0);
+    let min_cells = MIN_LAKE_CELLS.max(libm::ceil(MIN_LAKE_SQ_MI / cell_sq_mi) as usize);
     let outlet: Vec<bool> = land.iter().map(|l| !l).collect();
     let fl = priority_flood(w, h, height, &outlet, 0.01);
 
@@ -116,7 +131,7 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
         }
         let depth = comp.iter().map(|&c| fl.filled[c as usize] - height[c as usize]).fold(0.0, f64::max);
         let drawn_as = comp.iter().find_map(|&c| drawn.of.get(c as usize).copied().filter(|&l| l != NO_LAKE));
-        if drawn_as.is_some() || (comp.len() >= MIN_LAKE_CELLS && depth >= MIN_LAKE_DEPTH_FT) {
+        if drawn_as.is_some() || (comp.len() >= min_cells && depth >= MIN_LAKE_DEPTH_FT) {
             let level = comp.iter().map(|&c| fl.filled[c as usize]).fold(f64::INFINITY, f64::min);
             let id = lakes.len() as u32;
             for &c in &comp {
@@ -135,7 +150,7 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
     let (rec, _) = receivers(w, h, &fl.filled);
 
     // Water balance. `raw` ignores losses (catchment supply); `q` includes them.
-    let pet: Vec<f64> = clim.temp.iter().map(|&t| (350.0 + 55.0 * t as f64).max(0.0)).collect();
+    let pet: Vec<f64> = clim.temp.iter().map(|&t| (350.0 + 55.0 * t as f64).max(0.0) * area).collect();
     let salt = |l: &Lake| l.stroke.is_some_and(|st| drawn.lakes.iter().any(|d| d.0 == st && d.1));
     let drains = |l: &Lake| l.stroke.is_some_and(|st| drawn.lakes.iter().any(|d| d.0 == st && d.2));
     let closed: Vec<bool> = lakes.iter().map(salt).collect();
@@ -148,14 +163,14 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
     for &i in fl.order.iter().rev() {
         let i = i as usize;
         let p = clim.precip[i] as f64;
-        let runoff = (p - 0.65 * pet[i]).max(0.0);
+        let runoff = (p * area - 0.65 * pet[i]).max(0.0);
         q[i] += runoff;
         raw[i] += runoff;
         if lake_of[i] != NO_LAKE {
             // (A drawn salt lake loses all its water.)
             q[i] = if closed[lake_of[i] as usize] { 0.0 } else { (q[i] - pet[i]).max(0.0) };
         } else if p < 400.0 && !drawn.courses.get(i).is_some_and(|&c| c) {
-            q[i] *= 0.985; // transmission loss in dry country
+            q[i] *= loss; // transmission loss in dry country
         }
         let r = rec[i] as usize;
         if r != i && land[r] {
@@ -202,7 +217,7 @@ pub fn build(w: usize, h: usize, height: &mut [f64], land: &[bool], clim: &Clima
         }
     }
 
-    let rivers = extract_rivers(w, h, land, &lake_of, &rec, &q, RIVER_Q / river_density);
+    let rivers = extract_rivers(w, h, land, &lake_of, &rec, &q, river_q(river_density));
     Hydro { water, discharge: q.iter().map(|&v| v as f32).collect(), lake_of, lakes, rivers }
 }
 
