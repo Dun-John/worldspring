@@ -105,7 +105,7 @@ interface Roll {
   variant: number;
   vary: number;
 }
-const roll = (): Roll => ({ rot: Math.random() * Math.PI * 2, variant: Math.floor(Math.random() * 8), vary: 0.85 + Math.random() * 0.3 });
+const roll = (): Roll => ({ rot: Math.random() * Math.PI * 2, variant: Math.floor(Math.random() * 16), vary: 0.85 + Math.random() * 0.3 });
 
 export class ScatterTool implements PointerTool, Placer {
   /** A brush stroke's objects so far, by id. */

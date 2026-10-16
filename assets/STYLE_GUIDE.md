@@ -14,7 +14,9 @@ battlemap zoom.
 1. **Straight down,** orthographic, seen from directly above. No perspective, no visible sides except what a
    dome or bevel suggests. **Exception:** upright things that only read from the side are drawn from a high
    angle, with screen up kept up even in rotated sites (`screenAxes(light)`): headstones, glowing fungus,
-   crystals, the skull pile, urn, hanging lantern, candelabrum, iron maiden and stocks. "Higher" means nearer
+   crystals, the skull pile, urn, hanging lantern, candelabrum, iron maiden and stocks; on the battlemap also the
+   notice board, signpost, lamp post and the market cross's cross (`upright` in `atlas.ts`; left out of
+   `TURNED` and `TURNABLE` in `BattlemapLayer.ts`, so never drawn turned). "Higher" means nearer
    straight down, about 60 degrees (heights at half, round sections as fat ovals: `hk` 0.5, `dk` 0.87), never
    side-on.
 2. **Warm light from the north-west** (upper left of the screen). Lit edges go toward cream and yellow,

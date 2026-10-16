@@ -1,6 +1,7 @@
 // Sprite gallery (`?gallery=1`): every piece of art the map draws, labelled, to choose what to
 // redraw. `&kinds=15,16` shows only those battlemap kinds (and no furniture or props), `&sq=96` draws
-// them at that many px a square (default 48). `&items=bed,chair` shows only those furniture and props
+// them at that many px a square (default 48), `&ground=948c80` on that colour with their shadows as the battlemap casts
+// them. `&items=bed,chair` shows only those furniture and props
 // (each in both orientations; no battlemap objects), `&sq=` then sizing their squares (default 44). Battlemap objects come from the atlas (all variants); building furniture and
 // underground props are drawn by InteriorLayer exactly as in the app, one per little room. `&turn=1` shows how
 // things look turned by hand instead: battlemap props that may turn (`TURNABLE`, and the other candidates) at four
@@ -10,8 +11,8 @@ import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/wor
 import type { KindInfo } from '../gen/client';
 import type { Interior, InteriorItem, UnderCatalog } from '../gen/protocol';
 import { BATTLE_GROUPS, ITEM_GROUPS } from '../editor/itemGroups';
-import { buildAtlas, PX, VARIANTS } from '../render/atlas';
-import { drawnTurned, TURNABLE } from '../render/BattlemapLayer';
+import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
+import { drawnTurned, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
 import { ORIENTED } from '../render/furniture';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
@@ -105,6 +106,7 @@ export async function runGallery(target: HTMLElement) {
   const only = query.get('kinds')?.split(',').map(Number);
   const pick = query.get('items')?.split(',');
   const sq = Number(query.get('sq')) || 48;
+  const ground = query.has('ground') ? parseInt(query.get('ground') || '948c80', 16) : null;
   if (query.has('turn')) {
     turning(app, catalog, root, head, () => y, (v) => (y = v), width, sq);
     const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
@@ -129,10 +131,12 @@ export async function runGallery(target: HTMLElement) {
     return;
   }
   if (!pick) {
-    head(`Battlemap objects (atlas, ${catalog.length} kinds × ${VARIANTS} variants)`);
+    head(`Battlemap objects (atlas, ${catalog.length} kinds × ${VARIANTS} variants; market stalls 16, four to a row)`);
     const atlas = buildAtlas(app.renderer, catalog);
     const scale = sq / PX;
-    const cell = Math.max(104, Math.ceil((sq / 48) * 104));
+    // On the ground, every frame at full size (as on the battlemap), with the ground round it.
+    const widest = Math.max(...catalog.filter((info) => !only || only.includes(info.id)).map((info) => atlas.frames[info.id][0].width));
+    const cell = Math.max(104, Math.ceil((sq / 48) * 104), ground === null ? 0 : Math.ceil(widest * scale + 64 * scale));
     const cellW = 4 * cell + 24;
     const per = Math.max(1, Math.floor((width - 32) / cellW));
     let rowH = 0;
@@ -144,17 +148,24 @@ export async function runGallery(target: HTMLElement) {
           rowH = 0;
         }
         const x0 = 16 + (k % per) * cellW;
-        for (let v = 0; v < VARIANTS; v++) {
+        const rows = Math.ceil(looks(info.id) / VARIANTS);
+        for (let v = 0; v < looks(info.id); v++) {
           const s = new Sprite(atlas.frames[info.id][v]);
-          s.scale.set(Math.min(scale, (cell - 4) / s.texture.width));
+          const fit = Math.min(scale, (cell - 4) / s.texture.width);
+          const [cx, cy] = [x0 + cell / 2 + (v % VARIANTS) * cell, y + cell / 2 + Math.floor(v / VARIANTS) * cell];
+          if (ground !== null) {
+            root.addChild(new Graphics().rect(cx - cell / 2 + 2, cy - cell / 2 + 2, cell - 4, cell - 4).fill(ground));
+            if (info.height_ft >= 1.5 && !info.hazard && !OWN_SHADOW.has(info.name)) root.addChild(dropShadow(atlas, info, cx, cy, fit));
+          }
+          s.scale.set(fit);
           s.anchor.set(0.5);
-          s.position.set(x0 + cell / 2 + v * cell, y + cell / 2);
+          s.position.set(cx, cy);
           root.addChild(s);
         }
         const t = new Text({ text: `${info.id} ${info.name.replace(/_/g, ' ')} (r ${info.radius})`, style: LABEL });
-        t.position.set(x0, y + cell + 2);
+        t.position.set(x0, y + rows * cell + 2);
         root.addChild(t);
-        rowH = cell + 2;
+        rowH = Math.max(rowH, rows * cell + 2);
       });
     y += rowH + 50;
   }
@@ -194,6 +205,19 @@ export async function runGallery(target: HTMLElement) {
   app.renderer.resize(width, y);
 }
 
+/** An object's drop shadow as the battlemap casts it (`BattlemapLayer`): a soft blob to the SE (from the foot of
+ * an upright thing), smaller and fainter for sparse plants, at `fit` screen px per atlas px. */
+function dropShadow(atlas: ReturnType<typeof buildAtlas>, info: KindInfo, cx: number, cy: number, fit: number): Sprite {
+  const [size, strength] = SPARSE.get(info.name) ?? [1, 1];
+  const off = Math.min(1.3, 0.15 + info.height_ft / 45) * PX * 0.7;
+  const sh = new Sprite(atlas.shadow);
+  sh.anchor.set(0.5);
+  sh.scale.set(((info.radius * PX * size * 2.1) / 128) * fit);
+  sh.alpha = (info.height_ft >= 5 ? 0.6 : 0.35) * strength;
+  sh.position.set(cx + off * fit, cy + ((UPRIGHT_FOOT[info.id] ?? 0) + off) * fit);
+  return sh;
+}
+
 /** Trees and plants (by id): they look the same any way round, so they never turn. */
 const PLANTS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 18, 19]);
 
@@ -219,16 +243,7 @@ function turning(app: Application, catalog: KindInfo[], root: Container, head: (
       const [cx, cy] = [x0 + cell / 2 + q * cell, y + cell / 2];
       root.addChild(new Graphics().rect(cx - cell / 2 + 2, cy - cell / 2 + 2, cell - 4, cell - 4).fill(0x7f9152));
       // The shadow as the battlemap casts it: always to the SE, whatever the turn.
-      if (info.height_ft >= 1.5) {
-        const off = Math.min(1.3, 0.15 + info.height_ft / 45) * PX * 0.7;
-        const r = info.radius * PX;
-        const sh = new Sprite(atlas.shadow);
-        sh.anchor.set(0.5);
-        sh.scale.set(((r * 2.1) / 128) * fit);
-        sh.alpha = info.height_ft >= 5 ? 0.6 : 0.35;
-        sh.position.set(cx + off * fit, cy + off * fit);
-        root.addChild(sh);
-      }
+      if (info.height_ft >= 1.5 && !OWN_SHADOW.has(info.name)) root.addChild(dropShadow(atlas, info, cx, cy, fit));
       const s = new Sprite(tex);
       s.anchor.set(0.5);
       s.scale.set(fit);

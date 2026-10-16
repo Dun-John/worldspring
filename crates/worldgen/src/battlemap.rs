@@ -161,6 +161,13 @@ pub enum Kind {
     Campfire,
     Firewood,
     Bedroll,
+    /// Squares and streets.
+    WaterTrough,
+    NoticeBoard,
+    Signpost,
+    Stocks,
+    LampPost,
+    MarketCross,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -206,7 +213,7 @@ const fn hz(id: Kind, name: &'static str, radius: f32, difficult: bool, effect: 
     }
 }
 
-pub const CATALOG: [KindInfo; 45] = [
+pub const CATALOG: [KindInfo; 51] = [
     k(Kind::TreeDeciduous, "deciduous tree", 1.4, true, true, 2, false, 35.0, false),
     k(Kind::TreeConifer, "conifer", 1.1, true, true, 2, false, 45.0, false),
     k(Kind::TreePalm, "palm", 1.2, true, false, 1, false, 30.0, false),
@@ -252,16 +259,22 @@ pub const CATALOG: [KindInfo; 45] = [
     KindInfo { hazard: Some(Hazard { name: "campfire", effect: "1d6 fire on entering or starting a turn in it" }), ..k(Kind::Campfire, "campfire", 0.55, false, false, 0, true, 1.5, true) },
     k(Kind::Firewood, "firewood stack", 0.7, false, false, 1, true, 3.0, true),
     k(Kind::Bedroll, "bedroll", 0.55, false, false, 0, false, 0.5, true),
+    k(Kind::WaterTrough, "water trough", 0.75, false, false, 1, true, 2.5, true),
+    k(Kind::NoticeBoard, "notice board", 0.6, true, false, 1, false, 7.0, true),
+    k(Kind::Signpost, "signpost", 0.55, false, false, 0, false, 9.0, true),
+    k(Kind::Stocks, "stocks", 0.75, true, false, 1, false, 3.5, true),
+    k(Kind::LampPost, "lamp post", 0.5, false, false, 0, false, 10.0, true),
+    k(Kind::MarketCross, "market cross", 1.0, false, false, 1, true, 15.0, true),
 ];
 
 /// Every kind, by id - 1.
-const KINDS: [Kind; 45] = [
+const KINDS: [Kind; 51] = [
     Kind::TreeDeciduous, Kind::TreeConifer, Kind::TreePalm, Kind::TreeJungle, Kind::TreeAcacia, Kind::TreeDead, Kind::TreeWillow, Kind::Bush,
     Kind::Thicket, Kind::FallenLog, Kind::Stump, Kind::Boulder, Kind::RockSmall, Kind::RockPile, Kind::Reeds, Kind::Cactus, Kind::TallGrass,
     Kind::Flowers, Kind::Mushrooms, Kind::Bones, Kind::Snowdrift, Kind::IceSpire, Kind::BasaltPillar, Kind::Obsidian, Kind::Brambles, Kind::Bog,
     Kind::Quicksand, Kind::ThinIce, Kind::LavaPool, Kind::SteamVent, Kind::Scree, Kind::Sinkhole, Kind::Barrel, Kind::Crate, Kind::Cart,
     Kind::MarketStall, Kind::Well, Kind::Haystack, Kind::Headstone, Kind::RuinWall, Kind::Statue, Kind::Tent, Kind::Campfire, Kind::Firewood,
-    Kind::Bedroll,
+    Kind::Bedroll, Kind::WaterTrough, Kind::NoticeBoard, Kind::Signpost, Kind::Stocks, Kind::LampPost, Kind::MarketCross,
 ];
 
 /// The kind with a catalog id.
@@ -1858,7 +1871,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             continue;
         }
         let h = hash2(seed ^ 0x5a11, (p[0] * 2.0) as i64, (p[1] * 2.0) as i64);
-        let o = Object { kind, variant: (h >> 20) as u8 & 7, x: x as f32, y: y as f32, rot, scale: 1.0, sprite: 0, turned: false };
+        // A stall's look is its awning and its goods, rolled apart (sixteen).
+        let looks = if kind == Kind::MarketStall { 15 } else { 7 };
+        let o = Object { kind, variant: (h >> 20) as u8 & looks, x: x as f32, y: y as f32, rot, scale: 1.0, sprite: 0, turned: false };
         // The plaza's margin keeps stalls off buildings; across a chunk edge the neighbour's
         // squares are plaza too.
         let r = info(kind as u16).radius;

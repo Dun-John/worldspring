@@ -712,8 +712,8 @@ Returns `{kind: "s:<asset>", asset}`.
 
 `kind` is a built-in kind (id or name) or an uploaded sprite. `rot_deg` turns it clockwise: it is drawn turned
 for props that can turn (not trees, plants or pools) and for uploaded sprites; without it the object keeps the
-way it is drawn by default. `scale` is 0.2–5 (default 1). `variant` (0–7) picks a built-in kind's look (default
-by chance). Positions must be on the map. Objects stand on the outdoor battlemap: one put down where a building
+way it is drawn by default. `scale` is 0.2–5 (default 1). `variant` (0–15) picks a built-in kind's look: most
+have four (taken modulo 4), a market stall sixteen (its awning and its goods); default by chance. Positions must be on the map. Objects stand on the outdoor battlemap: one put down where a building
 stands is under its roof. Furniture, props and traps in a building's rooms or underground go in its design
 (`set_site_design`).
 

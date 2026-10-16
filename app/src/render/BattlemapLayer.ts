@@ -22,7 +22,7 @@ import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
-import { buildAtlas, PX, VARIANTS, type Atlas } from './atlas';
+import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
 import { banner, drawGate, drawWalls, drawWallTower, topGrid } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
@@ -244,7 +244,7 @@ export class BattlemapLayer {
       const size = this.sprites[asset]?.size ?? 1;
       return { texture, rotation: o.rot, scale: (size * PX * o.scale) / Math.max(texture.width, texture.height) };
     }
-    const texture = atlas.frames[o.kind]?.[o.variant % VARIANTS];
+    const texture = atlas.frames[o.kind]?.[o.variant % looks(o.kind)];
     if (!texture) return null;
     return { texture, rotation: drawnTurned(this.catalog[o.kind - 1], !!o.turned) ? o.rot : 0, scale: o.scale };
   }
@@ -746,7 +746,7 @@ export class BattlemapLayer {
       const inf = kindRules(o.kind, this.catalog, c.sprites);
       if (!inf) continue;
       const custom = o.kind >= SPRITE_KIND ? c.sprites[o.kind - SPRITE_KIND] : null;
-      const tex = custom ? customTexture(custom.asset) : atlas.frames[o.kind]?.[variant % VARIANTS];
+      const tex = custom ? customTexture(custom.asset) : atlas.frames[o.kind]?.[variant % looks(o.kind)];
       if (!tex) {
         waiting ||= !!custom;
         continue;
@@ -754,15 +754,17 @@ export class BattlemapLayer {
       const hazard = 'hazard' in inf ? inf.hazard : null;
       if (this.player && dmOnlyHazard(hazard?.effect)) continue;
       const isTall = inf.height_ft >= 5;
-      if (inf.height_ft >= 1.5 && !hazard) {
+      if (inf.height_ft >= 1.5 && !hazard && (custom || !OWN_SHADOW.has((inf as KindInfo).name))) {
         const [size, strength] = (!custom && SPARSE.get((inf as KindInfo).name)) || [1, 1];
         const r = inf.radius * PX * o.scale * size;
         const off = Math.min(1.3, 0.15 + inf.height_ft / 45) * PX * 0.7;
+        // Upright things drawn from a high angle cast it from their foot.
+        const foot = custom ? 0 : (UPRIGHT_FOOT[o.kind] ?? 0) * o.scale;
         shadows.addParticle(
           new Particle({
             texture: atlas.shadow,
             x: o.x * PX + off,
-            y: o.y * PX + off,
+            y: o.y * PX + foot + off,
             anchorX: 0.5,
             anchorY: 0.5,
             scaleX: (r * 2.1) / 128,
@@ -945,7 +947,7 @@ function sharedAtlas(renderer: Renderer, catalog: KindInfo[]): Atlas {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll']);
+const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough']);
 /** Props drawn at their `rot` only when turned by hand (`Placed.turned`), by catalog name: those whose
  * NW-lit look still reads turned (approved in the gallery, `?gallery=1&turn=1`). Trees, plants,
  * pools and hazards never turn. */
@@ -957,13 +959,18 @@ export function drawnTurned(inf: KindInfo | undefined, turned: boolean): boolean
   if (!inf) return false;
   return inf.id === 10 || inf.id === 20 || inf.id === 40 || TURNED.has(inf.name) || (turned && TURNABLE.has(inf.name));
 }
-/** Sparse plants (blades or fronds with ground between them): a smaller, fainter shadow than a solid
- * crown, as [size, strength] factors. */
-const SPARSE = new Map([
+/** Sparse plants (blades or fronds with ground between them) and thin upright things (posts drawn from a
+ * high angle): a smaller, fainter shadow than a solid crown, as [size, strength] factors. */
+export const SPARSE = new Map([
   ['tall grass', [0.75, 0.45]],
   ['reeds', [0.75, 0.45]],
   ['palm', [0.85, 0.6]],
+  ['signpost', [0.6, 0.55]],
+  ['lamp post', [0.55, 0.55]],
+  ['notice board', [0.85, 0.7]],
 ]);
+/** Props that draw their own shadow into their picture, so get no drop shadow. */
+export const OWN_SHADOW = new Set(['market cross']);
 
 const STONE = 0x9c968b;
 const STONE_TOP = 0xb3ada2;
