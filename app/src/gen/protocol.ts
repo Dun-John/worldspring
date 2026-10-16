@@ -337,14 +337,16 @@ export interface BuildingEdit {
 }
 
 export type CrossingKind = 'bridge' | 'ford' | 'ferry';
+export type CrossingMaterial = 'timber' | 'stone';
 
 /** A crossing put down by hand (`worldgen::world::Crossing`): from `a` to `b` (world ft, bank to
- * bank), `width` ft across. */
+ * bank), `width` ft across; a bridge of old stone has `material` (absent: timber). */
 export interface Crossing {
   kind: CrossingKind;
   a: [number, number];
   b: [number, number];
   width: number;
+  material?: CrossingMaterial;
 }
 
 /** Limits on a crossing (`Crossing::WIDTH`, `LENGTH`; a ferry needs room for two 24-ft jetties). */

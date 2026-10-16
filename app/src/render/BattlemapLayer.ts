@@ -24,6 +24,7 @@ import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, PX, VARIANTS, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
+import { banner, drawGate, drawWalls, drawWallTower, topGrid } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
 import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
@@ -61,8 +62,9 @@ interface ChunkView {
   shown: { data: Uint16Array; dirty: boolean } | null;
   /** The roof mesh's vertex buffers (a mesh does not free its geometry). */
   roofGeometry: Geometry | null;
-  /** The grid over bridge and pier decks, shown and hidden with the ground's. */
-  deckGrid: Graphics;
+  /** The grids over bridge and pier decks, wall walks and tower tops, shown and hidden with the
+   * ground's. */
+  grids: Graphics[];
   /** Bridge and pier decks (and their grid): opaque whenever the ground is drawn. */
   decks: Container;
   atmo: Mesh<Geometry, Shader> | null;
@@ -557,7 +559,7 @@ export class BattlemapLayer {
   /** Show the 5-ft grid (over the ground and bridge and pier decks) or not. */
   setGrid(on: boolean) {
     this.frame.uniforms.uGrid = on ? 1 : 0;
-    for (const ch of this.chunks.values()) ch.deckGrid.visible = on;
+    for (const ch of this.chunks.values()) for (const g of ch.grids) g.visible = on;
   }
 
   /** Returns the battlemap chunks still wanted. */
@@ -826,10 +828,14 @@ export class BattlemapLayer {
       } else continue;
       deckGrid(gridG, s);
     }
-    gridG.visible = this.frame.uniforms.uGrid > 0;
-    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4));
+    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9));
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1));
-    for (const part of [roofMesh, daisG, battleG, bridgeG, gridG, structG, towerG]) {
+    // The grid on the wall walks (over the walls) and the tower tops (over the towers).
+    const walkGridG = new Graphics();
+    const topGridG = new Graphics();
+    for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : walkGridG, s);
+    for (const gr of [gridG, walkGridG, topGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
+    for (const part of [roofMesh, daisG, battleG, bridgeG, gridG, structG, walkGridG, towerG, topGridG]) {
       if (!part) continue;
       this.prewarm(part);
       yield;
@@ -840,11 +846,11 @@ export class BattlemapLayer {
       for (const [key, pc] of customs) if ((i === 1 && key.endsWith('/0')) || (i === 3 && key.endsWith('/1'))) holder.addChild(pc);
       if (i === 0) holder.addChild(daisG);
       if (i === 2) {
-        holder.addChild(structG);
+        holder.addChild(structG, walkGridG);
         if (roofMesh) holder.addChild(roofMesh);
         holder.addChild(battleG);
       }
-      if (i === 3) holder.addChild(towerG);
+      if (i === 3) holder.addChild(towerG, topGridG);
       this.layers[i].addChild(holder);
       return holder;
     });
@@ -890,7 +896,7 @@ export class BattlemapLayer {
       base,
       shown: null,
       roofGeometry,
-      deckGrid: gridG,
+      grids: [gridG, walkGridG, topGridG],
       decks,
       atmo,
       atmoUniforms,
@@ -962,55 +968,18 @@ const SPARSE = new Map([
 const STONE = 0x9c968b;
 const STONE_TOP = 0xb3ada2;
 
-/** Unit direction and length of a polyline segment. */
-function segDir(pts: number[], i: number): [number, number, number] {
-  const dx = pts[i * 2 + 2] - pts[i * 2];
-  const dy = pts[i * 2 + 3] - pts[i * 2 + 1];
-  const l = Math.hypot(dx, dy) || 1;
-  return [dx / l, dy / l, l];
-}
-
 /**
- * Walls, towers and ways underground as clean vectors over the ground (their squares keep
- * their tactical height; the ground under them is drawn flat): drop shadows, curtain walls with
- * a parapet walk, and round towers. Bridges and piers are drawn apart (`bridges.ts`).
+ * Walls, gatehouses, towers and ways underground as clean vectors over the ground (their squares
+ * keep their tactical height; the ground under them is drawn flat): `walls.ts` draws the first
+ * three. Bridges and piers are drawn apart (`bridges.ts`).
  */
 function drawStructures(shapes: Shape[]): Graphics {
   const g = new Graphics();
-  const off = PX * 0.45;
-  // Shadows.
-  for (const s of shapes) {
-    const shifted = s.pts.map((v) => v + off);
-    if (s.kind === 0) g.poly(shifted, false).stroke({ width: s.size, color: 0x000000, alpha: 0.3, cap: 'butt', join: 'round' });
-    else if (s.kind === 1) g.circle(shifted[0], shifted[1], s.size).fill({ color: 0x000000, alpha: 0.3 });
-  }
-  // Curtain walls: ink, stone, and a lighter wall walk with merlons along the outer edge.
-  for (const s of shapes.filter((s) => s.kind === 0)) {
-    g.poly(s.pts, false).stroke({ width: s.size + 5, color: ROOF_INK, cap: 'round', join: 'round' });
-  }
-  for (const s of shapes.filter((s) => s.kind === 0)) {
-    g.poly(s.pts, false).stroke({ width: s.size, color: STONE, cap: 'round', join: 'round' });
-  }
-  for (const s of shapes.filter((s) => s.kind === 0)) {
-    g.poly(s.pts, false).stroke({ width: s.size * 0.45, color: STONE_TOP, cap: 'round', join: 'round' });
-  }
   const walls = shapes.filter((s) => s.kind === 0);
-  for (const s of walls) {
-    for (let i = 0; i + 1 < s.pts.length / 2; i++) {
-      const [ux, uy, l] = segDir(s.pts, i);
-      for (let a = PX * 0.4; a + PX * 0.2 < l; a += PX * 0.8) {
-        const [x, y] = [s.pts[i * 2] + ux * a - uy * s.size * 0.36, s.pts[i * 2 + 1] + uy * a + ux * s.size * 0.36];
-        g.rect(x - PX * 0.12, y - PX * 0.12, PX * 0.24, PX * 0.24);
-      }
-    }
-  }
-  if (walls.length) g.fill(0x6f6a61);
-  // Towers.
-  for (const s of shapes.filter((s) => s.kind === 1)) {
-    g.circle(s.pts[0], s.pts[1], s.size).fill(STONE).stroke({ width: 3, color: ROOF_INK });
-    g.circle(s.pts[0], s.pts[1], s.size * 0.62).fill(STONE_TOP).stroke({ width: 1.5, color: 0x5d584f });
-  }
-  for (const s of shapes.filter((s) => s.kind === 4)) drawEntrance(g, s);
+  if (walls.length) drawWalls(g, walls);
+  for (const s of shapes) if (s.kind === 9) drawGate(g, s);
+  for (const s of shapes) if (s.kind === 1) drawWallTower(g, s);
+  for (const s of shapes) if (s.kind === 4) drawEntrance(g, s);
   return g;
 }
 
@@ -1465,14 +1434,6 @@ function drawKeep(g: Graphics, pts: number[], tower: number) {
     roundTower(g, ...P(s, t), onDonjon ? rt * 1.15 : rt, lift * (onDonjon ? 2.2 : 1.3), onDonjon);
   });
   if (D === 0) banner(g, ...P(...corners[great]));
-}
-
-/** A banner streaming east on the wind from a pole at (x, y). */
-function banner(g: Graphics, x: number, y: number) {
-  g.moveTo(x, y).lineTo(x + PX * 0.2, y - PX * 1.8).stroke({ width: 2.5, color: 0x3b2f25 });
-  g.poly([x + PX * 0.2, y - PX * 1.8, x + PX * 1.7, y - PX * 1.5, x + PX * 1.4, y - PX * 1.25, x + PX * 1.75, y - PX * 0.95, x + PX * 0.15, y - PX * 1.05])
-    .fill(0x9b2226)
-    .stroke({ width: 1.5, color: ROOF_INK });
 }
 
 /** A flat stone roof with a parapet and merlons (a keep: `drawKeep`). */

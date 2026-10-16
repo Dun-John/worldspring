@@ -62,6 +62,14 @@ battlemap zoom.
 - **Trees:** the leafy trees (deciduous, jungle, acacia, willow), bushes and thickets keep the soft overlapping
   round canopy (`canopy()`); conifers, palms and dead trees in the detailed style. Brambles sit between the tall
   grass and the trees. Some old drawings stay by choice (the ruined wall, the outdoor rubble).
+- **Structures** (`render/walls.ts`, `render/bridges.ts`): the stone ramp above, bold ink, soft shadows. Curtain
+  walls are a flagged walk between two coping bands notched with crenels (merlons as notches in one inked band, never
+  separate tabs: those read as a dashed line). Towers are flat fighting tops in a notched coping ring, with flags in
+  staggered courses (no crossing lines: a spider's web), a stair hatch and its timber lid, and a banner on gate
+  towers. A gatehouse is the paved passage between its towers: an arch at each end, portcullis slots, doors standing
+  half open with their swings marked, the wall walk overhead drawn see-through with dashed edges, and a winch on
+  some. Ruins lose merlons and spill rubble. Old stone bridges have rough flags, a continuous rubble coping
+  (jogging separate blocks read as a zipper), rounded cutwaters, and moss in small dark patches on the stone only.
 - **References:** when there is a reference image (the forge, the crystal, the ore vein), match its shapes,
   proportions and colour, translated into these rules.
 

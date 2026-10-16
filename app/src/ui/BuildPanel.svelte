@@ -10,7 +10,7 @@
   // or ferry) by clicking one bank, then the other; clicking one picks it to change or take away.
   // Castle: an outline (a rectangle or a convex polygon), then the side its gate is in; Wall: a
   // line of corners (a ring if closed), gates on the corners clicked twice.
-  import { CROSSING_WIDTH, MAX_FLOORS, ROOFS, TINTS, type BuildingFuncs, type CrossingKind } from '../gen/protocol';
+  import { CROSSING_WIDTH, MAX_FLOORS, ROOFS, TINTS, type BuildingFuncs, type CrossingKind, type CrossingMaterial } from '../gen/protocol';
   import { ROOF_TINTS } from '../gen/battlePrep';
   import type { BuildSettings, BuildShape } from '../editor/build';
   import type { CrossSettings } from '../editor/crossing';
@@ -70,11 +70,15 @@
   }: Props = $props();
 
   const KINDS: { key: CrossingKind; label: string; icon: IconName; kbd: string; look: string; width: number }[] = [
-    { key: 'bridge', label: 'Bridge', icon: 'bridge', kbd: '1', look: 'A timber deck clear of the water, walked like a road.', width: 12 },
+    { key: 'bridge', label: 'Bridge', icon: 'bridge', kbd: '1', look: 'A deck clear of the water, walked like a road.', width: 12 },
     { key: 'ford', label: 'Ford', icon: 'ford', kbd: '2', look: 'The bed brought up to wading depth, stepping stones across.', width: 10 },
     { key: 'ferry', label: 'Ferry', icon: 'ferry', kbd: '3', look: 'A jetty out from each bank, a raft on a rope between. At least 68 ft.', width: 12 },
   ];
-  const kindLook = $derived(KINDS.find((k) => k.key === cross.kind)?.look ?? '');
+  const MATERIALS: { key: CrossingMaterial; label: string; look: string }[] = [
+    { key: 'timber', label: 'Timber', look: 'A timber deck clear of the water, walked like a road.' },
+    { key: 'stone', label: 'Old stone', look: 'An old stone bridge on piers, mossy and worn, walked like a road.' },
+  ];
+  const kindLook = $derived(cross.kind === 'bridge' ? (MATERIALS.find((m) => m.key === cross.material)?.look ?? '') : (KINDS.find((k) => k.key === cross.kind)?.look ?? ''));
   const widthMin = CROSSING_WIDTH[0];
   const widthMax = CROSSING_WIDTH[1];
 
@@ -197,11 +201,18 @@
         <button
           class:on={cross.kind === k.key}
           aria-pressed={cross.kind === k.key}
-          onclick={() => (cross = { kind: k.key, width: crossEditing ? cross.width : k.width })}
+          onclick={() => (cross = { ...cross, kind: k.key, width: crossEditing ? cross.width : k.width })}
           title="{k.label} ({k.kbd})"><Icon name={k.icon} size={16} />{k.label}</button
         >
       {/each}
     </div>
+    {#if cross.kind === 'bridge'}
+      <div class="ws-seg" role="radiogroup" aria-label="Built of">
+        {#each MATERIALS as m (m.key)}
+          <button class:on={cross.material === m.key} aria-pressed={cross.material === m.key} onclick={() => (cross = { ...cross, material: m.key })}>{m.label}</button>
+        {/each}
+      </div>
+    {/if}
     {#if !near}
       <div class="zoom">
         <span class="grow">Zoom in to put one down.</span>

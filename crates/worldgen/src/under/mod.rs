@@ -271,11 +271,15 @@ pub fn sewer_section(p: P) -> P {
 }
 
 /// Ways underground in a city: a sewer grate on a street in every section the paved streets
-/// run far enough into, catacomb stairs in each graveyard and beside each mausoleum and
-/// catacomb house.
+/// run far enough into (never under a tower or in a gate's passage), catacomb stairs in each
+/// graveyard and beside each mausoleum and catacomb house.
 pub fn city_entrances(l: &Layout, t0: &T0, seed: u64) -> Vec<Entrance> {
     let mut out = Vec::new();
     let segs = street_segments(l);
+    // Clear of the towers and the gatehouses between them (a gate's passage reaches 26 ft from
+    // each of its towers, 11 ft either side of the wall).
+    let towers = crate::interior::towers(l);
+    let clear = |q: P| towers.iter().all(|&(t, r, gate)| town::geom::dist(q, t) >= r + if gate { 22.0 } else { 5.0 });
     if !segs.is_empty() {
         let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         for (a, b, _) in &segs {
@@ -304,7 +308,7 @@ pub fn city_entrances(l: &Layout, t0: &T0, seed: u64) -> Vec<Entrance> {
                     let ab = sub(*b, *a);
                     let t = (town::geom::dot(sub(c, *a), ab) / town::geom::dot(ab, ab).max(1e-9)).clamp(0.0, 1.0);
                     for q in [add(*a, mul(ab, t)), m] {
-                        if inside(q) && !wet(t0, q) {
+                        if inside(q) && !wet(t0, q) && clear(q) {
                             cands.push((town::geom::dist(q, c), q));
                         }
                     }

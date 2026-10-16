@@ -370,14 +370,14 @@ pub struct VectorShape {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeKind {
-    /// Curtain wall centre line.
+    /// Curtain wall segment, then `[flags, 0]` (`WALL_BARE_A`, `WALL_BARE_B`, `WALL_RUINED`).
     Wall = 0,
-    /// Wall or gate tower (one point).
+    /// Wall or gate tower: its centre, then `[flags, 0]` (`WALL_GATE`, `WALL_RUINED`).
     Tower = 1,
     /// Bridge or pier deck outline, its first edge along the span; size is the style (0 pier,
-    /// 1 timber bridge, 2 stone bridge).
+    /// 1 timber bridge, 2 stone bridge, 3 old stone bridge).
     Deck = 2,
-    /// Road bridge centre line.
+    /// Road bridge centre line, then `[material, 0]` (0 timber, 1 old stone).
     RoadBridge = 3,
     /// A way underground: the opening and a point one square in along the passage; size is
     /// the `UnderKind` (0 dungeon, 1 crypt, 2 cave, 3 mine, 4 lava tube, 5 sewer, 6 catacombs).
@@ -395,6 +395,67 @@ pub enum ShapeKind {
     /// the depth of a tread); size is the width it covers (squares). Every chunk it crosses has
     /// it: the ground draws the treads square across it.
     Stairs = 8,
+    /// A gatehouse over the passage between two gate towers: their centres; size is the style
+    /// (0 standing, 1 a ruin's).
+    Gate = 9,
+}
+
+/// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands
+/// bare (no tower on it), a gate tower, a ruin's works.
+const WALL_BARE_A: u8 = 1;
+const WALL_BARE_B: u8 = 2;
+const WALL_GATE: u8 = 1;
+const WALL_RUINED: u8 = 4;
+
+/// The gates in a layout's walls as pairs of gate towers (world ft; `towers` as
+/// `interior::towers` gives them): two gate towers 36 to 54 ft apart (a passage at least 6 ft
+/// wide between them), each beyond the other's wall (the towers of two gates side by side face
+/// each other along one stretch). Paired in order, each with its nearest; a pure function of the
+/// layout, so every chunk finds the same.
+fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
+    let gates: Vec<[f64; 2]> = towers.iter().filter(|t| t.2).map(|t| t.0).collect();
+    // Which way the wall runs from each gate tower, where a stretch of it ends there.
+    let away: Vec<Option<[f64; 2]>> = gates
+        .iter()
+        .map(|&g| {
+            let at = |p: [f64; 2]| (p[0] - g[0]) * (p[0] - g[0]) + (p[1] - g[1]) * (p[1] - g[1]) < 0.25;
+            l.walls.iter().filter(|w| w.len() >= 2).find_map(|w| {
+                let n = w.len();
+                if at(w[0]) {
+                    Some([w[1][0] - g[0], w[1][1] - g[1]])
+                } else if at(w[n - 1]) {
+                    Some([w[n - 2][0] - g[0], w[n - 2][1] - g[1]])
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+    let mut used = vec![false; gates.len()];
+    let mut out = Vec::new();
+    for i in 0..gates.len() {
+        if used[i] {
+            continue;
+        }
+        let mut best: Option<(f64, usize)> = None;
+        for j in i + 1..gates.len() {
+            let v = [gates[j][0] - gates[i][0], gates[j][1] - gates[i][1]];
+            let d = crate::core::sqrt(v[0] * v[0] + v[1] * v[1]);
+            let beyond = |a: Option<[f64; 2]>, s: f64| a.is_none_or(|a| s * (a[0] * v[0] + a[1] * v[1]) < 0.0);
+            if used[j] || !(36.0..=54.0).contains(&d) || (away[i].is_none() && away[j].is_none()) || !beyond(away[i], 1.0) || !beyond(away[j], -1.0) {
+                continue;
+            }
+            if best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, j));
+            }
+        }
+        if let Some((_, j)) = best {
+            used[i] = true;
+            used[j] = true;
+            out.push((gates[i], gates[j]));
+        }
+    }
+    out
 }
 
 /// Object mix per biome: (kind, count per 100 squares, allowed in shallow water).
@@ -622,6 +683,8 @@ struct CrossingShape {
     raft: Option<([f64; 2], f64, f64)>,
     /// Merged into another, or given way to it (`merge_bridges`).
     dropped: bool,
+    /// A bridge of old stone (else timber): put down so by hand.
+    stone: bool,
 }
 
 /// Stepping stones along a ford, this far apart (ft).
@@ -661,7 +724,7 @@ fn crossing_shape(x: &crate::lod::roads::RiverCrossing, tile: &TerrainOut) -> Cr
     };
     let (a, b) = ([x.at[0] - u[0] * (back + extra), x.at[1] - u[1] * (back + extra)], [x.at[0] + u[0] * (fwd + extra), x.at[1] + u[1] * (fwd + extra)]);
     let raft = (kind == ShapeKind::Ferry).then(|| raft_on(a, b, size));
-    CrossingShape { kind, a, b, size, raft, dropped: false }
+    CrossingShape { kind, a, b, size, raft, dropped: false, stone: false }
 }
 
 /// A ferry's raft (centre, length, width ft) on its rope from a to b: a quadratic whose control
@@ -724,7 +787,7 @@ fn hand_crossing(c: &crate::world::Crossing, t0: &T0) -> (CrossingShape, f32) {
             t0.ground_at(c.a[0], c.a[1], 5.0).min(t0.ground_at(c.b[0], c.b[1], 5.0)) as f32
         };
     }
-    (CrossingShape { kind, a, b, size: c.width, raft, dropped: false }, top)
+    (CrossingShape { kind, a, b, size: c.width, raft, dropped: false, stone: c.material == crate::world::CrossingMaterial::Stone }, top)
 }
 
 /// Bridge decks that overlap (a road crossing a meander twice, two roads at a confluence)
@@ -882,6 +945,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut statues: Vec<[f64; 2]> = Vec::new();
     // Props a layout sets out itself (a camp's tents and fire).
     let mut props: Vec<crate::town::Prop> = Vec::new();
+    // Gates' passages (their towers' centres, world ft): kept clear of generated objects.
+    let mut gates: Vec<([f64; 2], [f64; 2])> = Vec::new();
     // Camps' clearings, levelled (outline, height ft).
     let mut yards: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
     // Ground before anything is raised on it (walls stand on the ground, not on roofs).
@@ -1224,22 +1289,47 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 raise(seg[0], seg[1], 4.0, URBAN_WALL, &mut urb_h, &mut hh, &mut lift);
             }
         }
-        // The same structures as vectors, each drawn by the one chunk that owns its middle.
-        for w in &l.walls {
-            for seg in w.windows(2) {
+        // The same structures as vectors, each drawn by the one chunk that owns its middle. Walls
+        // and towers carry a point of flags (`WALL_*`): a wall's ends standing bare (no tower on
+        // them: where a ruin's stretch fell), a gate tower, a ruin's works.
+        let towers = crate::interior::towers(&l);
+        let ruined = !l.buildings.is_empty() && l.buildings.iter().all(|b| b.structure == crate::town::Structure::Ruin);
+        let ruin_bit = if ruined { WALL_RUINED } else { 0 };
+        let near = |p: [f64; 2], q: [f64; 2], r: f64| (p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]) <= r * r;
+        let bare = |p: [f64; 2], wi: usize| {
+            !towers.iter().any(|t| near(p, t.0, t.1 + 1.0)) && !l.walls.iter().enumerate().any(|(k, w)| k != wi && (near(p, w[0], 1.0) || near(p, w[w.len() - 1], 1.0)))
+        };
+        for (wi, w) in l.walls.iter().enumerate() {
+            let n = w.len();
+            for (k, seg) in w.windows(2).enumerate() {
                 if owns([0.5 * (seg[0][0] + seg[1][0]), 0.5 * (seg[0][1] + seg[1][1])]) {
-                    shapes.push(VectorShape { kind: ShapeKind::Wall, size: (8.0 / SQUARE_FT) as f32, pts: vec![local(&seg[0]), local(&seg[1])] });
+                    let ends = if k == 0 && bare(seg[0], wi) { WALL_BARE_A } else { 0 } | if k + 2 == n && bare(seg[1], wi) { WALL_BARE_B } else { 0 };
+                    let flags = [(ends | ruin_bit) as f32, 0.0];
+                    shapes.push(VectorShape { kind: ShapeKind::Wall, size: (8.0 / SQUARE_FT) as f32, pts: vec![local(&seg[0]), local(&seg[1]), flags] });
                 }
             }
         }
-        for (t, r) in crate::interior::towers(&l).into_iter().map(|(t, r, _)| (t, r)) {
+        for &(t, r, gate) in &towers {
             if owns(t) {
-                shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(&t)] });
+                let flags = [(if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, 0.0];
+                shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(&t), flags] });
             }
         }
-        // Deck style: 0 pier, 1 a village or town's timber bridge, 2 a city's stone bridge.
-        let style = if l.tier >= crate::t0::settle::Tier::City { 2.0 } else { 1.0 };
-        for (d, size) in l.bridges.iter().map(|d| (d, style)).chain(l.piers.iter().map(|d| (d, 0.0))) {
+        for (g, h) in gateways(&l, &towers) {
+            gates.push((g, h));
+            if owns([0.5 * (g[0] + h[0]), 0.5 * (g[1] + h[1])]) {
+                shapes.push(VectorShape { kind: ShapeKind::Gate, size: ruined as u8 as f32, pts: vec![local(&g), local(&h)] });
+            }
+        }
+        // Deck style: 0 pier, 1 a village or town's timber bridge, 2 a city's stone bridge, 3 an
+        // old stone bridge (some of either, by where the deck stands).
+        let city = l.tier >= crate::t0::settle::Tier::City;
+        let style = |d: &Vec<[f64; 2]>| {
+            let c = crate::town::geom::centroid(d);
+            let old = unit(hash3(seed, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 0x01d5)) < if city { 0.35 } else { 0.30 };
+            if old { 3.0 } else if city { 2.0 } else { 1.0 }
+        };
+        for (d, size) in l.bridges.iter().map(|d| (d, style(d))).chain(l.piers.iter().map(|d| (d, 0.0))) {
             if owns(crate::town::geom::centroid(d)) {
                 shapes.push(VectorShape { kind: ShapeKind::Deck, size, pts: d.iter().map(local).collect() });
             }
@@ -1371,6 +1461,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         if let Some(raft) = c.raft {
             pts.push(local(&raft.0));
         }
+        if c.kind == ShapeKind::RoadBridge {
+            // Old stone on some, more often on the greater roads (by where it crosses); else timber.
+            let rate = [0.45, 0.35, 0.15][x.class as usize];
+            let old = unit(hash3(seed, crate::core::round(x.at[0]) as i64, crate::core::round(x.at[1]) as i64, 0x0b5d)) < rate;
+            pts.push([old as u8 as f32, 0.0]);
+        }
         shapes.push(VectorShape { kind: c.kind, size: (c.size / SQUARE_FT) as f32, pts });
     }
     // Those put down by hand: drawn by the chunk owning their middle; a ford's stones (along
@@ -1403,6 +1499,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let mut pts = vec![local(&c.a), local(&c.b)];
             if let Some(raft) = c.raft {
                 pts.push(local(&raft.0));
+            }
+            if c.kind == ShapeKind::RoadBridge {
+                pts.push([c.stone as u8 as f32, 0.0]);
             }
             shapes.push(VectorShape { kind: c.kind, size: (c.size / SQUARE_FT) as f32, pts });
         }
@@ -1801,6 +1900,33 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Enforcement only edits the interior (≥ 7 squares from the edge); copy it back.
     for k in 0..n {
         chunk.halo_height[(k / SQ + 1) * HS + k % SQ + 1] = chunk.height[k];
+    }
+    // Nothing generated stands on a wall or a tower, or in a gate's passage (a cart under the
+    // portcullis).
+    {
+        let urban = &chunk.urban;
+        chunk.objects.retain(|o| {
+            // Its footprint touches no wall or tower square (it would be drawn over them).
+            let r = info(o.kind as u16).radius * o.scale;
+            let span = |v: f32| ((v - r).max(0.0) as usize, ((v + r).max(0.0) as usize).min(SQ - 1));
+            let ((x0, x1), (y0, y1)) = (span(o.x), span(o.y));
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let (dx, dy) = (o.x - o.x.clamp(x as f32, x as f32 + 1.0), o.y - o.y.clamp(y as f32, y as f32 + 1.0));
+                    if dx * dx + dy * dy < r * r && matches!(urban[y * SQ + x], URBAN_WALL | URBAN_TOWER) {
+                        return false;
+                    }
+                }
+            }
+            let p = [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
+            !gates.iter().any(|&(g, h)| {
+                let u = unit2([h[0] - g[0], h[1] - g[1]]);
+                let len = crate::core::sqrt((h[0] - g[0]) * (h[0] - g[0]) + (h[1] - g[1]) * (h[1] - g[1]));
+                let (dx, dy) = (p[0] - g[0], p[1] - g[1]);
+                let (along, across) = (dx * u[0] + dy * u[1], -dx * u[1] + dy * u[0]);
+                along > 12.0 && along < len - 12.0 && across.abs() < 14.0
+            })
+        });
     }
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);

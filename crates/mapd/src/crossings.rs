@@ -1,7 +1,7 @@
 //! MCP tools for crossings put down by hand (`Edits::crossings`): bridges, fords and ferries.
 
 use serde_json::{Value, json};
-use worldgen::world::{Crossing, CrossingKind};
+use worldgen::world::{Crossing, CrossingKind, CrossingMaterial};
 
 use crate::Shared;
 use crate::notebook::new_id;
@@ -10,13 +10,14 @@ use crate::tools::{schema, text};
 pub fn list() -> Vec<Value> {
     let point = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x_ft, y_ft]" });
     vec![
-        json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (bridges, fords, ferries): id, kind, ends (world ft), width and length.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } }),
-        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry on the map from one bank to the other (world ft), drawn on the battlemap over what is there: a bridge's plank deck clear of the water (walkable), a ford's bed brought up to wading depth under stepping stones, a ferry's jetties out from each point with a raft on a rope between. 10 to 2000 ft long (a ferry at least 68), 5 to 40 ft wide. With id, changes that crossing (fields left out stay). Returns its id (v:...).", "inputSchema": schema(json!({
+        json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (bridges, fords, ferries): id, kind, ends (world ft), width, length and a bridge's material.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry on the map from one bank to the other (world ft), drawn on the battlemap over what is there: a bridge's deck clear of the water (walkable; timber planks, or old stone with material \"stone\"), a ford's bed brought up to wading depth under stepping stones, a ferry's jetties out from each point with a raft on a rope between. 10 to 2000 ft long (a ferry at least 68), 5 to 40 ft wide. With id, changes that crossing (fields left out stay). Returns its id (v:...).", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A crossing to change" },
             "kind": { "type": "string", "enum": ["bridge", "ford", "ferry"] },
             "from": point,
             "to": point,
             "width_ft": { "type": "number", "description": "Deck, ford or raft width (default 12)" },
+            "material": { "type": "string", "enum": ["timber", "stone"], "description": "A bridge's: timber planks (default) or old stone" },
         }), &[]) }),
         json!({ "name": "remove_crossings", "title": "Take crossings away", "description": "Take crossings put down by hand off the map, by id (v:...).", "inputSchema": schema(json!({ "ids": { "type": "array", "items": { "type": "string" } } }), &["ids"]) }),
     ]
@@ -33,7 +34,11 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 }
 
 fn describe(id: &str, c: &Crossing) -> Value {
-    json!({ "id": id, "kind": c.kind.name(), "from": c.a, "to": c.b, "width_ft": c.width, "length_ft": c.length().round() })
+    let mut v = json!({ "id": id, "kind": c.kind.name(), "from": c.a, "to": c.b, "width_ft": c.width, "length_ft": c.length().round() });
+    if c.kind == CrossingKind::Bridge {
+        v["material"] = json!(c.material.name());
+    }
+    v
 }
 
 fn list_crossings(app: &Shared) -> Result<Value, String> {
@@ -58,6 +63,12 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         Some("ferry") => Some(CrossingKind::Ferry),
         Some(k) => return Err(format!("kind: bridge, ford or ferry, not {k}")),
     };
+    let material = match a["material"].as_str() {
+        None => None,
+        Some("timber") => Some(CrossingMaterial::Timber),
+        Some("stone") => Some(CrossingMaterial::Stone),
+        Some(m) => return Err(format!("material: timber or stone, not {m}")),
+    };
     let (from, to, width) = (point(a, "from")?, point(a, "to")?, a["width_ft"].as_f64());
     let id = a["id"].as_str().map(str::to_string);
     let [w, h] = app.worker.with(|ex| Ok([ex.world.geom.map_w_ft, ex.world.geom.map_h_ft])).await?;
@@ -70,7 +81,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             None => {
                 let (Some(kind), Some(a), Some(b)) = (kind, from, to) else { return Err("a new crossing needs kind, from and to".into()) };
-                (new_id("v"), Crossing { kind, a, b, width: 12.0 })
+                (new_id("v"), Crossing { kind, a, b, width: 12.0, material: CrossingMaterial::Timber })
             }
         };
         if let Some(k) = kind {
@@ -79,6 +90,8 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         c.a = from.unwrap_or(c.a);
         c.b = to.unwrap_or(c.b);
         c.width = width.unwrap_or(c.width);
+        // Only a bridge has a material.
+        c.material = if c.kind == CrossingKind::Bridge { material.unwrap_or(c.material) } else { CrossingMaterial::Timber };
         if let Some(p) = c.problem(w, h) {
             return Err(p);
         }

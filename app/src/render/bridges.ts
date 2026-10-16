@@ -1,18 +1,19 @@
 // Bridges and piers on the battlemap, drawn in code like the atlas (assets/STYLE_GUIDE.md): a
-// city's stone bridge with parapets, refuges and cutwaters; everywhere else a worn timber
-// bridge of uneven planks with a post-and-rail fence; piers as the same planks on pilings.
+// city's stone bridge with parapets, refuges and cutwaters; an old stone bridge, mossy and worn,
+// on some roads and in some towns and cities; everywhere else a worn timber bridge of uneven
+// planks with a post-and-rail fence; piers as the same planks on pilings.
 import type { Graphics } from 'pixi.js';
 import type { Shape } from '../gen/battlePrep';
 import { PX } from './atlas';
 
-const INK = 0x1d1a14;
-const FT = PX / 5;
+export const INK = 0x1d1a14;
+export const FT = PX / 5;
 /** Towards the light (north-west, the upper left of the screen). */
-const LX = -Math.SQRT1_2;
-const LY = -Math.SQRT1_2;
-const PLUM = 0x4a2f3a;
+export const LX = -Math.SQRT1_2;
+export const LY = -Math.SQRT1_2;
+export const PLUM = 0x4a2f3a;
 /** Wood as the props draw it (the fallen log, carts): dark, mid, light. */
-const WOOD = [0x5e4024, 0x7d5a3c, 0xb08a5a];
+export const WOOD = [0x5e4024, 0x7d5a3c, 0xb08a5a];
 /** Plank tones, [mid, lit edge]: warm browns, one a little greyed with age. */
 const PLANKS: [number, number][] = [
   [0x8a6238, 0xb08a5a],
@@ -21,16 +22,22 @@ const PLANKS: [number, number][] = [
   [0x80664a, 0xa88d6a],
 ];
 /** Stone: dark, mid, light, sunlit. */
-const STONE = [0x6e675c, 0x9a9182, 0xc4baa6, 0xe4dccb];
+export const STONE = [0x6e675c, 0x9a9182, 0xc4baa6, 0xe4dccb];
+/** Old stone, weathered a shade darker and warmer: dark, mid, light, sunlit. */
+const OLD_STONE = [0x5f584b, 0x8a8170, 0xaea38b, 0xd2c6a8];
+/** Moss: dark, mid, light. */
+export const MOSS = [0x4f7a32, 0x6f9a3e, 0xa8c45a];
+/** Ivy leaves: dark, mid, light (the temperate leaf ramp). */
+const IVY = [0x2f5a2c, 0x4f8a38, 0x8fbf4a];
 
 /** `a` blended `t` of the way towards `b`. */
-function mix(a: number, b: number, t: number): number {
+export function mix(a: number, b: number, t: number): number {
   const ch = (s: number) => Math.round(((a >> s) & 255) * (1 - t) + ((b >> s) & 255) * t);
   return (ch(16) << 16) | (ch(8) << 8) | ch(0);
 }
 
 /** A stable random per bridge, from where it is. */
-function rngAt(x: number, y: number): () => number {
+export function rngAt(x: number, y: number): () => number {
   let seed = (Math.round(x * 7.1) * 73856093) ^ (Math.round(y * 3.3) * 19349663);
   return () => {
     seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) + 0x6d2b79f5) | 0;
@@ -67,17 +74,20 @@ export function drawDeck(g: Graphics, s: Shape) {
   const f: Frame = { ox: x0, oy: y0, ux: (x1 - x0) / len, uy: (y1 - y0) / len, vx: (x3 - x0) / wid, vy: (y3 - y0) / wid, len, wid };
   const style = Math.round(s.size / PX);
   if (style === 2) stoneBridge(g, f, rngAt(x0 + x1, y0 + y1));
+  else if (style === 3) oldStoneBridge(g, f, rngAt(x0 + x1, y0 + y1));
   else timber(g, f, rngAt(x0 + x1, y0 + y1), style === 1);
 }
 
-/** A road bridge (`ShapeKind::RoadBridge`): its centre line, `size` wide. */
+/** A road bridge (`ShapeKind::RoadBridge`): its centre line, `size` wide, then `[material, 0]`
+ * (0 timber, 1 old stone). */
 export function drawRoadBridge(g: Graphics, s: Shape) {
   const [x0, y0, x1, y1] = s.pts;
   const len = Math.hypot(x1 - x0, y1 - y0) || 1;
   const [ux, uy] = [(x1 - x0) / len, (y1 - y0) / len];
   const [vx, vy] = [-uy, ux];
   const f: Frame = { ox: x0 - vx * s.size * 0.5, oy: y0 - vy * s.size * 0.5, ux, uy, vx, vy, len, wid: s.size };
-  timber(g, f, rngAt(x0 + x1, y0 + y1), true);
+  if (s.pts.length >= 6 && Math.round(s.pts[4] / PX) === 1) oldStoneBridge(g, f, rngAt(x0 + x1, y0 + y1));
+  else timber(g, f, rngAt(x0 + x1, y0 + y1), true);
 }
 
 /** A frame `len` long and `wid` wide whose first end's middle is (x, y), along unit (ux, uy). */
@@ -432,6 +442,186 @@ function stoneBridge(g: Graphics, f: Frame, rnd: () => number) {
       const m = n * 0.62;
       const [dx, dy] = [LX * n * 0.18, LY * n * 0.18];
       g.poly([...at(a - m, b - m), ...at(a + m, b - m), ...at(a + m, b + m), ...at(a - m, b + m)].map((v, i) => v + (i % 2 ? dy : dx))).fill(STONE[2]);
+    }
+  }
+}
+
+/**
+ * An old stone bridge, mossy and worn: rough flags of mixed sizes across the deck, some sunken or
+ * cracked, grass in the joints; a parapet of rubble coping, its joints uneven, a stone gone here
+ * and there, moss and a little ivy on it; rounded cutwaters with a wet band at the waterline;
+ * worn stumps of newels (one may be gone). Refuges only on a wide deck.
+ */
+function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
+  const at = (a: number, b: number) => atF(f, a, b);
+  const { len, wid } = f;
+  const S = OLD_STONE;
+  const tp = FT * 2;
+  const land = Math.min(FT * 12, len * 0.2);
+  const nPiers = Math.max(0, Math.round((len - 2 * land) / (FT * 26)));
+  const piers = Array.from({ length: nPiers }, (_, k) => land + ((len - 2 * land) * (k + 1)) / (nPiers + 1) + (rnd() - 0.5) * FT * 2);
+  const [hw, bay, pr] = [FT * 3.4, wid > FT * 15 ? FT * 2 : 0, FT * 7];
+  // One side's outer edge (refuges and all): `out` -1 for the b = 0 side, 1 for the b = wid side.
+  const edge = (out: number, inset: number): number[] => {
+    const b = (d: number) => (out < 0 ? -d + inset : wid + d - inset);
+    const pts: number[] = [...at(0, b(0))];
+    if (bay > 0) {
+      for (const c of piers) pts.push(...at(c - hw * 1.2, b(0)), ...at(c - hw * 0.6 + inset * 0.5, b(bay)), ...at(c + hw * 0.6 - inset * 0.5, b(bay)), ...at(c + hw * 1.2, b(0)));
+    }
+    pts.push(...at(len, b(0)));
+    return pts;
+  };
+  const backwards = (pts: number[]) => pts.flatMap((_, i) => (i % 2 ? [] : [pts[pts.length - 2 - i], pts[pts.length - 1 - i]]));
+  const deck = [...edge(-1, 0), ...backwards(edge(1, 0))];
+  // A rounded cutwater as two halves either side of its nose, out from one side.
+  const cutwater = (c: number, out: number): number[][] => {
+    const b = (d: number) => (out < 0 ? -d : wid + d);
+    const arc = (t0: number, t1: number) => {
+      const pts: number[] = [];
+      for (let k = 0; k <= 4; k++) {
+        const t = t0 + ((t1 - t0) * k) / 4;
+        pts.push(...at(c - hw * Math.cos(t), b(pr * 0.3 + pr * 0.62 * Math.sin(t))));
+      }
+      return pts;
+    };
+    return [
+      [...at(c - hw, b(-FT)), ...arc(0, Math.PI / 2), ...at(c, b(-FT))],
+      [...at(c, b(-FT)), ...arc(Math.PI / 2, Math.PI), ...at(c + hw, b(-FT))],
+    ];
+  };
+  const sh = FT * 3;
+  g.poly(deck.map((v) => v + sh)).fill({ color: 0x000000, alpha: 0.3 });
+  for (const c of piers) for (const out of [-1, 1]) for (const p of cutwater(c, out)) g.poly(p.map((v) => v + sh)).fill({ color: 0x000000, alpha: 0.3 });
+  // Cutwaters: a wake, two worn facets lit or shaded, a wet dark band and moss at the waterline.
+  for (const c of piers) {
+    for (const out of [-1, 1]) {
+      const b = (d: number) => (out < 0 ? -d : wid + d);
+      g.moveTo(...at(c - hw - FT * 0.6, b(pr * 0.3))).quadraticCurveTo(...at(c, b(pr * 1.35)), ...at(c + hw + FT * 0.6, b(pr * 0.3)));
+      g.stroke({ width: 1.6, color: 0xe6f4ec, alpha: 0.35 });
+      const [left, right] = cutwater(c, out);
+      for (const [p, na] of [[left, -1], [right, 1]] as const) {
+        const lit = facing(f, na * pr * 0.7, out * hw);
+        g.poly(p).fill(lit > 0.3 ? S[2] : lit > -0.3 ? S[1] : mix(S[0], PLUM, 0.2));
+      }
+      // The rim: the left half's arc, then the right's (each without its base corners).
+      const rim = [...left.slice(2, left.length - 2), ...right.slice(4, right.length - 2)];
+      g.poly(rim, false).stroke({ width: FT * 0.7, color: 0x2f3a33, alpha: 0.45, join: 'round' });
+      g.poly([...left.slice(0, left.length - 2), ...right.slice(4)]).stroke({ width: 2.2, color: INK, join: 'round' });
+      if (rnd() < 0.5) {
+        const t = 0.6 + rnd() * 1.9;
+        const [mx, my] = at(c - hw * Math.cos(t) * 0.75, b(pr * 0.3 + pr * 0.45 * Math.sin(t)));
+        const r = FT * (0.35 + rnd() * 0.25);
+        g.ellipse(mx, my, r * 1.3, r).fill({ color: MOSS[0], alpha: 0.9 });
+      }
+    }
+  }
+  // The deck: rough flags of mixed sizes, a few sunken or cracked, grass in the joints.
+  g.poly(deck).fill(0x8f8673);
+  const joints: number[][] = [];
+  const tufts: [number, number][] = [];
+  for (let a = 0; a < len; ) {
+    const a1 = Math.min(len, a + FT * (2.4 + rnd() * 1.6));
+    joints.push([...at(a1, 0), ...at(a1, wid)]);
+    for (let b = -rnd() * FT * 3; b < wid; ) {
+      const b1 = b + FT * (2.6 + rnd() * 2.4);
+      if (b1 < wid && b1 > 0) joints.push([...at(a + FT * 0.05, b1), ...at(a1 - FT * 0.05, b1)]);
+      const r = rnd();
+      const [c0, c1] = [Math.max(0, b) + FT * 0.2, Math.min(wid, b1) - FT * 0.2];
+      if (r < 0.3 && c1 > c0) {
+        g.poly([...at(a + FT * 0.2, c0), ...at(a1 - FT * 0.2, c0), ...at(a1 - FT * 0.2, c1), ...at(a + FT * 0.2, c1)]).fill(r < 0.12 ? 0x9e957f : r < 0.24 ? 0x857c69 : 0x7a7160);
+      }
+      // A crack across a flag now and then.
+      if (r > 0.86 && c1 > c0) joints.push([...at(a + (a1 - a) * 0.2, c0 + (c1 - c0) * rnd()), ...at(a + (a1 - a) * 0.55, c0 + (c1 - c0) * rnd()), ...at(a + (a1 - a) * 0.8, c0 + (c1 - c0) * rnd())]);
+      if (rnd() < 0.12 && b1 > 0 && b1 < wid) tufts.push(at(a + (a1 - a) * (0.2 + rnd() * 0.6), b1));
+      b = b1;
+    }
+    a = a1;
+  }
+  for (const j of joints) g.poly(j, false);
+  g.stroke({ width: 1.4, color: 0x625a4b, alpha: 0.85, join: 'round' });
+  if (wid > FT * 9) {
+    for (const d of [-FT * 2.4, FT * 2.4]) g.moveTo(...at(0, wid / 2 + d)).lineTo(...at(len, wid / 2 + d));
+    g.stroke({ width: FT * 1.2, color: PLUM, alpha: 0.12 });
+  }
+  for (const [x, y] of tufts) {
+    for (let k = 0; k < 3; k++) {
+      const t = -Math.PI / 2 + (k - 1) * 0.6 + (rnd() - 0.5) * 0.3;
+      g.moveTo(x, y).lineTo(x + Math.cos(t) * FT * 0.7, y + Math.sin(t) * FT * 0.7);
+    }
+  }
+  g.stroke({ width: 2, color: MOSS[1], cap: 'round' });
+  // Parapets: their shadow on the deck, then one band of rubble coping (ink, stone, a sunlit
+  // edge), its stones' joints at uneven spacing; here and there a stone gone from the top.
+  const rails = [edge(-1, tp * 0.5), edge(1, tp * 0.5)];
+  for (const p of rails) g.poly(p.map((v) => v + FT * 0.8), false);
+  g.stroke({ width: tp, color: 0x000000, alpha: 0.25, join: 'round' });
+  for (const p of rails) g.poly(p, false);
+  g.stroke({ width: tp + 4, color: INK, join: 'round' });
+  for (const p of rails) g.poly(p, false);
+  g.stroke({ width: tp, color: S[1], join: 'round' });
+  for (const p of rails) g.poly(p.map((v, i) => v + (i % 2 ? LY : LX) * tp * 0.12), false);
+  g.stroke({ width: tp * 0.5, color: S[2], join: 'round' });
+  const gaps: number[][] = [];
+  const mossy: [number, number, number][] = [];
+  const ivy: [number, number, number, number][] = [];
+  rails.forEach((p, side) => {
+    // The outward normal, away from the deck.
+    const [nx, ny] = side === 0 ? [-f.vx, -f.vy] : [f.vx, f.vy];
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      const [x0, y0] = [p[i], p[i + 1]];
+      const l = Math.hypot(p[i + 2] - x0, p[i + 3] - y0) || 1;
+      const [ux, uy] = [(p[i + 2] - x0) / l, (p[i + 3] - y0) / l];
+      const half = tp * 0.5;
+      const q = (a: number, d: number): [number, number] => [x0 + ux * a + nx * d, y0 + uy * a + ny * d];
+      for (let s = FT * (0.6 + rnd() * 1.5); s < l - FT * 0.6; s += FT * (1.3 + rnd() * 1.7)) {
+        // A joint across the coping, a little skewed.
+        const k = (rnd() - 0.5) * FT * 0.35;
+        g.moveTo(...q(s + k, -half)).lineTo(...q(s - k, half));
+        if (rnd() < 0.035 && s > FT * 3 && s < l - FT * 4) {
+          const w = FT * (1.2 + rnd() * 0.8);
+          gaps.push([...q(s, -half * 0.55), ...q(s + w, -half * 0.55), ...q(s + w, half * 0.75), ...q(s, half * 0.75)]);
+        }
+        if (rnd() < 0.08) mossy.push([...q(s + FT * 0.6, (rnd() - 0.3) * half * 0.8), FT * (0.25 + rnd() * 0.2)]);
+        if (rnd() < 0.035) ivy.push([...q(s + FT * 0.5, half), nx, ny]);
+      }
+    }
+  });
+  g.stroke({ width: 1.4, color: S[0] });
+  // A stone gone from the coping: the rough core shows, a step down.
+  for (const b of gaps) g.poly(b).fill(mix(S[0], PLUM, 0.2)).stroke({ width: 1.4, color: INK, join: 'round' });
+  for (const [x, y, r] of mossy) {
+    g.ellipse(x, y, r * 1.3, r).fill({ color: MOSS[0], alpha: 0.9 });
+    g.ellipse(x - r * 0.3, y - r * 0.25, r * 0.6, r * 0.45).fill({ color: MOSS[1], alpha: 0.9 });
+  }
+  // Ivy trailing down the outer face: a few small dark leaves hugging the stone.
+  for (const [x, y, nx, ny] of ivy) {
+    for (let k = 0; k < 4; k++) {
+      const d = FT * (0.1 + rnd() * 0.8);
+      const sx = (rnd() - 0.5) * FT * 1.4;
+      const [lx, ly] = [x + nx * d - ny * sx, y + ny * d + nx * sx];
+      const r = FT * (0.28 + rnd() * 0.14);
+      g.circle(lx, ly, r).fill(IVY[0]).stroke({ width: 1, color: INK, alpha: 0.7 });
+      g.circle(lx + LX * r * 0.3, ly + LY * r * 0.3, r * 0.45).fill(IVY[1]);
+    }
+  }
+  // Worn stumps of newels at the corners; one may be gone.
+  const lost = rnd() < 0.3 ? Math.floor(rnd() * 4) : -1;
+  let corner = 0;
+  for (const a of [tp * 0.6, len - tp * 0.6]) {
+    for (const b of [tp * 0.5, wid - tp * 0.5]) {
+      if (corner++ === lost) continue;
+      const n = tp * 0.85;
+      const pts: number[] = [];
+      for (let m = 0; m < 8; m++) {
+        const t = (m / 8) * Math.PI * 2 + Math.PI / 8;
+        const r = n * (1.12 + (rnd() - 0.5) * 0.2);
+        pts.push(...at(a + Math.cos(t) * r, b + Math.sin(t) * r));
+      }
+      g.poly(pts.map((v) => v + FT * 0.6)).fill({ color: 0x000000, alpha: 0.25 });
+      g.poly(pts).fill(S[1]).stroke({ width: 2.2, color: INK, join: 'round' });
+      const [cx, cy] = at(a, b);
+      g.circle(cx + LX * n * 0.2, cy + LY * n * 0.2, n * 0.55).fill(S[2]);
+      if (rnd() < 0.5) g.circle(...at(a + n * 0.4, b + n * 0.3), n * 0.35).fill(MOSS[1]);
     }
   }
 }

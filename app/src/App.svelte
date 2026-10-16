@@ -44,7 +44,7 @@
   import { defaultDesign, SiteDesigner, type DesignSettings } from './editor/site/designer';
   import { belowGround } from './editor/site/model';
   import { BuildTool, buildOptions, defaultBuild, settingsOf, type BuildSettings, type Pt } from './editor/build';
-  import { CrossingTool, crossingProblem, defaultCross, type CrossSettings } from './editor/crossing';
+  import { CrossingTool, crossingOf, crossingProblem, defaultCross, type CrossSettings } from './editor/crossing';
   import { ClearAreaTool, type ClearShape } from './editor/clearArea';
   import { WorksTool, defaultWorks, type WorksSettings } from './editor/works';
   import type { BuildMode } from './ui/BuildPanel.svelte';
@@ -1605,7 +1605,7 @@
 
   /** Both banks clicked: a new crossing there, or the one being changed moved there. */
   function crossPlaced(a: Pt, b: Pt) {
-    const c: Crossing = { kind: cross.kind, a, b, width: cross.width };
+    const c: Crossing = crossingOf(cross, a, b);
     const problem = crossingProblem(c);
     if (problem) return toast(problem);
     const editing = crossEditing && edits.crossings?.[crossEditing] ? crossEditing : null;
@@ -1618,14 +1618,14 @@
     const c = edits.crossings?.[id];
     if (!c) return;
     crossEditing = id;
-    cross = { kind: c.kind, width: c.width };
+    cross = { kind: c.kind, width: c.width, material: c.material ?? 'timber' };
   }
 
-  /** The crossing being changed gets the menu's kind and width (its ends stay). */
+  /** The crossing being changed gets the menu's kind, width and material (its ends stay). */
   function saveCrossing() {
     const c = crossEditing ? edits.crossings?.[crossEditing] : null;
     if (!c || !crossEditing) return;
-    const next: Crossing = { ...c, kind: cross.kind, width: cross.width };
+    const next: Crossing = crossingOf(cross, c.a, c.b);
     const problem = crossingProblem(next);
     if (problem) return toast(problem);
     applyEdits({ ...edits, crossings: { ...(edits.crossings ?? {}), [crossEditing]: next } }, { tool: 'place_crossing', id: crossEditing, kind: next.kind, changed: true }, 'user');
@@ -2983,7 +2983,7 @@
       if (buildMode !== 'crossing') return setBuildMode('crossing');
       const order = ['bridge', 'ford', 'ferry'] as const;
       const kind = order[(order.indexOf(cross.kind) + 1) % order.length];
-      cross = { kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
+      cross = { ...cross, kind, width: crossEditing ? cross.width : kind === 'ford' ? 10 : 12 };
     },
     buildWorks: (m) => setBuildMode(m),
     buildShape: (k) => {

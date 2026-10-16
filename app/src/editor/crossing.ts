@@ -3,7 +3,7 @@
 // crossing put down earlier picks it (to change or take away) when nothing is being placed.
 // Escape drops the first click. Right-drag pans meanwhile.
 import type { Graphics } from 'pixi.js';
-import { CROSSING_LENGTH, CROSSING_WIDTH, FERRY_MIN_FT, type Crossing, type CrossingKind, type Edits } from '../gen/protocol';
+import { CROSSING_LENGTH, CROSSING_WIDTH, FERRY_MIN_FT, type Crossing, type CrossingKind, type CrossingMaterial, type Edits } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 
@@ -14,9 +14,17 @@ export interface CrossSettings {
   kind: CrossingKind;
   /** ft. */
   width: number;
+  /** A bridge's (kept while another kind is picked). */
+  material: CrossingMaterial;
 }
 
-export const defaultCross = (): CrossSettings => ({ kind: 'bridge', width: 12 });
+export const defaultCross = (): CrossSettings => ({ kind: 'bridge', width: 12, material: 'timber' });
+
+/** A crossing from the menu's choices: a bridge of old stone says so, timber and the other
+ * kinds carry no material (as the world file keeps them). */
+export function crossingOf(s: CrossSettings, a: Pt, b: Pt): Crossing {
+  return { kind: s.kind, a, b, width: s.width, ...(s.kind === 'bridge' && s.material === 'stone' ? { material: 'stone' as const } : {}) };
+}
 
 /** A ferry's jetties (ft), out from each end (`battlemap::JETTY_FT`, `JETTY_WIDTH_FT`). */
 const JETTY_FT = 24;

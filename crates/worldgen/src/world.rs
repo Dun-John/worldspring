@@ -12,7 +12,7 @@ use crate::core::{
 };
 
 /// Bump whenever generator output changes for an unchanged world file.
-pub const GEN_VERSION: u32 = 59;
+pub const GEN_VERSION: u32 = 60;
 
 /// Prevailing winds: latitude belts (trades, westerlies, polar easterlies) or one direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -541,8 +541,9 @@ impl PatchEdit {
 }
 
 /// A crossing put down by hand: from `a` to `b` (world ft, bank to bank), `width` ft across.
-/// A bridge's deck spans the water (planks clear of it); a ford brings the bed up to wading
-/// depth under stepping stones; a ferry runs a raft on a rope between two jetties.
+/// A bridge's deck spans the water (planks clear of it, or old stone: `material`); a ford brings
+/// the bed up to wading depth under stepping stones; a ferry runs a raft on a rope between two
+/// jetties.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Crossing {
     pub kind: CrossingKind,
@@ -550,6 +551,31 @@ pub struct Crossing {
     pub b: [f64; 2],
     #[serde(default = "crossing_width")]
     pub width: f64,
+    /// What a bridge is built of (timber when absent: older files, and the file of a world with
+    /// none stays as it was).
+    #[serde(default, skip_serializing_if = "CrossingMaterial::is_timber")]
+    pub material: CrossingMaterial,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CrossingMaterial {
+    #[default]
+    Timber,
+    Stone,
+}
+
+impl CrossingMaterial {
+    fn is_timber(&self) -> bool {
+        *self == CrossingMaterial::Timber
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CrossingMaterial::Timber => "timber",
+            CrossingMaterial::Stone => "stone",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
