@@ -33,7 +33,7 @@ export async function buildUrl(w: WorldFile, gen: number | null, search = ''): P
 /** Generators that make every town and site anew (their numbers, names, streets, buildings and
  * dungeons): what a world made before one has on them names other places after it, and is set
  * aside when the world is upgraded across it (`upgradeEdits`). */
-const RENUMBERED = [58, 59];
+const RENUMBERED = [58, 59, 60];
 
 /** Upgrading a world made with generator `from` to this one crosses a generator that makes every
  * town and site anew: that one (the newest such), else null. */

@@ -537,7 +537,10 @@ pub fn changed_rects(a: &Layout, b: &Layout) -> Vec<[f64; 4]> {
         for (pts, class, w) in &l.roads {
             add(1, *class as f64 * 1000.0 + w, pts);
         }
-        for (tag, list) in [(2, &l.walls), (3, &l.streets), (4, &l.plazas), (5, &l.fields), (6, &l.districts), (7, &l.blocks), (8, &l.bridges), (9, &l.piers), (10, &l.monuments)] {
+        for p in &l.plazas {
+            add(4, p.kind as u8 as f64, &p.pts);
+        }
+        for (tag, list) in [(2, &l.walls), (3, &l.streets), (5, &l.fields), (6, &l.districts), (7, &l.blocks), (8, &l.bridges), (9, &l.piers), (10, &l.monuments)] {
             for pts in list {
                 add(tag, 0.0, pts);
             }

@@ -1010,8 +1010,16 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             stamp(&y.0, URBAN_YARD, &mut urb_h);
             yards.push(y.clone());
         }
-        for p in &l.plazas {
+        for pl in &l.plazas {
+            let p = &pl.pts;
             stamp(p, URBAN_PLAZA, &mut urb_h);
+            // A quay takes cargo, no well or market.
+            if pl.kind == crate::town::PlazaKind::Quay {
+                if overlaps(bbox(p)) {
+                    quay_cargo(p, seed, &mut stalls);
+                }
+                continue;
+            }
             if !l.site {
                 wells.push(crate::town::geom::centroid(p));
                 if l.tier >= crate::t0::settle::Tier::Town && overlaps(bbox(p)) {
@@ -1047,7 +1055,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                         plaza_features(p, &l.monuments, &[], &lanes, seed, true, &mut features);
                     }
                     let keep: Vec<([f64; 2], f64)> = features[ffirst..].iter().map(|f| (f.0, f.1)).collect();
-                    market_blocks(p, &l.monuments, &keep, seed, &mut stalls);
+                    if let Some(m) = Market::of(pl.kind) {
+                        market_blocks(p, &l.monuments, &keep, m, seed, &mut stalls);
+                    }
                     if !patterned {
                         plaza_features(p, &l.monuments, &stalls[first..], &lanes, seed, false, &mut features);
                     }
@@ -1126,7 +1136,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                                 && (1..=SQ).contains(&j)
                                 && [h, h - 1, h + 1, h - HS, h + HS].iter().any(|&q| moved[q])
                                 && hand_st.get(h).is_none_or(|r| r.as_ref().is_none_or(|r| d < r.d))
-                                && !l.plazas.iter().any(|p| crate::town::geom::contains(p, center(i, j)))
+                                && !l.plazas.iter().any(|p| crate::town::geom::contains(&p.pts, center(i, j)))
                             {
                                 if hand_st.is_empty() {
                                     hand_st = vec![None; HS * HS];
@@ -1152,7 +1162,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 if i1 < 0.0 || j1 < 0.0 {
                     continue;
                 }
-                let plazas: Vec<&Vec<[f64; 2]>> = l.plazas.iter().filter(|p| {
+                let plazas: Vec<&Vec<[f64; 2]>> = l.plazas.iter().map(|p| &p.pts).filter(|p| {
                     let q = bbox(p);
                     q.0 <= b.2 && q.2 >= b.0 && q.1 <= b.3 && q.3 >= b.1
                 }).collect();
@@ -2428,15 +2438,15 @@ fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, se
             return;
         }
     }
-    let rest: Vec<usize> = if shaped.is_empty() { Vec::new() } else { cells.iter().copied().filter(|&k| !shaped[k]).collect() };
+    // Last resort: any dry square inside the chunk off the shaping (never one in the water: lifted,
+    // it stood up as a spike; never near the border: the knoll would stop at the seam).
+    let last: Vec<usize> = cells.iter().copied().filter(|&k| dry(c, k) && interior(k)).collect();
     let pool: &[usize] = if !good.is_empty() {
         &good
     } else if !town.is_empty() {
         &town
-    } else if shaped.is_empty() {
-        cells
-    } else if !rest.is_empty() {
-        &rest
+    } else if !last.is_empty() {
+        &last
     } else {
         return;
     };
@@ -2475,6 +2485,68 @@ pub enum PlazaFeature {
     Cross = 3,
 }
 
+/// How a market fills its square: half-extents (ft, ranges) of the part round the well it keeps
+/// to, the share of its cells left open, the spacing of stalls along a block's edge (ft) and the
+/// share of stalls left out.
+#[derive(Clone, Copy)]
+struct Market {
+    hu: (f64, f64),
+    hv: (f64, f64),
+    open: f64,
+    spacing: f64,
+    drop: f64,
+}
+
+impl Market {
+    fn of(kind: crate::town::PlazaKind) -> Option<Market> {
+        use crate::town::PlazaKind as K;
+        match kind {
+            K::Market => Some(Market { hu: (110.0, 150.0), hv: (80.0, 110.0), open: 0.12, spacing: 9.2, drop: 0.04 }),
+            // Few stalls: wide lanes, many open cells, gaps along the rows.
+            K::MarketSparse => Some(Market { hu: (100.0, 140.0), hv: (70.0, 100.0), open: 0.4, spacing: 11.5, drop: 0.2 }),
+            // A market day's huddle round the well.
+            K::MarketDay => Some(Market { hu: (55.0, 80.0), hv: (40.0, 60.0), open: 0.12, spacing: 9.2, drop: 0.06 }),
+            _ => None,
+        }
+    }
+}
+
+/// Cargo along a quay: stacks of crates and barrels, now and then a cart, every 22 to 45 ft down
+/// its middle. A pure function of the quay (world ft).
+fn quay_cargo(poly: &[[f64; 2]], seed: u64, out: &mut Vec<([f64; 2], f32, Kind)>) {
+    use crate::town::geom::{add, centroid, contains, dot, main_axis, mul, sub};
+    let c = centroid(poly);
+    let mut rng = Pcg32::new(hash2(seed ^ 0x9a1e, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64), 17);
+    let eu = main_axis(poly);
+    let ev = [-eu[1], eu[0]];
+    let (mut u0, mut u1) = (f64::MAX, f64::MIN);
+    for q in poly {
+        let u = dot(sub(*q, c), eu);
+        (u0, u1) = (u0.min(u), u1.max(u));
+    }
+    let mut u = u0 + rng.range(6.0, 20.0);
+    while u < u1 - 6.0 {
+        let base = add(c, mul(eu, u));
+        if rng.next_f64() < 0.12 {
+            // Sprites face south (+y) unturned: a cart lies along the quay.
+            let rot = (libm::atan2(eu[1], eu[0]) - std::f64::consts::FRAC_PI_2) as f32;
+            if contains(poly, base) {
+                out.push((base, rot, Kind::Cart));
+            }
+        } else {
+            for _ in 0..1 + rng.below(3) {
+                let p = add(base, add(mul(eu, rng.range(-4.0, 4.0)), mul(ev, rng.range(-2.5, 2.5))));
+                let kind = if rng.next_f64() < 0.55 { Kind::Crate } else { Kind::Barrel };
+                let rot = rng.range(0.0, std::f64::consts::TAU) as f32;
+                if contains(poly, p) {
+                    out.push((p, rot, kind));
+                }
+            }
+        }
+        u += rng.range(22.0, 45.0);
+    }
+}
+
 /// A town plaza's market as a little town of its own: jittered seeds inside a wobbly oval round
 /// the well make Voronoi cells, each pulled back from its neighbours so lanes run between them
 /// (streets for players and passers-by). Each block's outline is rounded and wobbled, and its
@@ -2483,7 +2555,7 @@ pub enum PlazaFeature {
 /// square, as does any cell holding a monument; stalls keep clear of the features (`keep`: centre
 /// and radius, laid out first on a city's square). A pure function of the plaza (world ft), so
 /// every chunk lays out the same market.
-fn market_blocks(poly: &[[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 2], f64)], seed: u64, out: &mut Vec<([f64; 2], f32, Kind)>) {
+fn market_blocks(poly: &[[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 2], f64)], mk: Market, seed: u64, out: &mut Vec<([f64; 2], f32, Kind)>) {
     use crate::town::geom::{add, area, centroid, clip_plain, contains, dist, dot, len, main_axis, mul, sub};
     let c = centroid(poly);
     let mut rng = Pcg32::new(hash2(seed ^ 0x3a2c, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64), 11);
@@ -2500,7 +2572,7 @@ fn market_blocks(poly: &[[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 
         (u0, u1, v0, v1) = (u0.min(u), u1.max(u), v0.min(v), v1.max(v));
     }
     // On a great square the market keeps to a block round the well; the rest stays open.
-    let (hu, hv) = (rng.range(110.0, 150.0), rng.range(80.0, 110.0));
+    let (hu, hv) = (rng.range(mk.hu.0, mk.hu.1), rng.range(mk.hv.0, mk.hv.1));
     (u0, u1, v0, v1) = (u0.max(-hu), u1.min(hu), v0.max(-hv), v1.min(hv));
     if u1 - u0 < 40.0 || v1 - v0 < 30.0 {
         return;
@@ -2536,7 +2608,7 @@ fn market_blocks(poly: &[[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 
     for (i, &s) in seeds.iter().enumerate() {
         // Open squares: the well's cell and a few others (decided first, so the rng runs the
         // same whatever the cell's shape).
-        let open = Some(i) == well || rng.next_f64() < 0.12;
+        let open = Some(i) == well || rng.next_f64() < mk.open;
         let mut cell = bounds.clone();
         for (j, &o) in seeds.iter().enumerate() {
             if i == j || dist(s, o) > 3.0 * pitch {
@@ -2572,7 +2644,7 @@ fn market_blocks(poly: &[[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 
         let m = outline.len();
         let seg: Vec<f64> = (0..m).map(|e| dist(outline[e], outline[(e + 1) % m])).collect();
         let total: f64 = seg.iter().sum();
-        let count = (total / 9.2).floor() as usize;
+        let count = (total / mk.spacing).floor() as usize;
         if count < 3 {
             continue;
         }
@@ -2586,7 +2658,7 @@ fn market_blocks(poly: &[[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 
                 acc += seg[e];
                 e += 1;
             }
-            if gap.is_some_and(|g| k == g || k == (g + 1) % count) || rng.next_f64() < 0.04 {
+            if gap.is_some_and(|g| k == g || k == (g + 1) % count) || rng.next_f64() < mk.drop {
                 continue;
             }
             let (a, b) = (outline[e], outline[(e + 1) % m]);

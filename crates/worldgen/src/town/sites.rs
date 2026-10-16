@@ -200,7 +200,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             if let Some(c) = created {
                 castle_site(world, t0, c, center, &mut rng, &mut works);
                 buildings = std::mem::take(&mut works.buildings);
-                plazas.append(&mut works.plazas);
+                plazas.extend(works.plazas.drain(..).map(|p| p.pts));
             }
         }
         PoiKind::Wall => {
@@ -288,7 +288,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
         gates: Vec::new(),
         streets: Vec::new(),
         roads: Vec::new(),
-        plazas,
+        plazas: plazas.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Yard }).collect(),
         fields: Vec::new(),
         districts: Vec::new(),
         blocks: Vec::new(),
@@ -496,7 +496,7 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     // The bailey inside the curtain: open ground (no trees or boulders), built on only by hand.
     let bailey = inset(&block, &vec![10.0; block.len()]);
     if bailey.len() >= 3 {
-        l.plazas.push(bailey);
+        l.plazas.push(super::Plaza { pts: bailey, kind: super::PlazaKind::Yard });
     }
     // The keep (pushed last) is the castle; the yard's buildings by size.
     let n = l.buildings.len();

@@ -258,7 +258,7 @@ fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], fun
         }
         // (A castle's bailey may be built on.)
         let bailey = l.site && !l.castles.is_empty();
-        if !bailey && l.plazas.iter().any(|p| polys_overlap(&inner, p)) {
+        if !bailey && l.plazas.iter().any(|p| polys_overlap(&inner, &p.pts)) {
             return Err(format!("that is on {}", if l.site { "the yard" } else { "a square (a market, quay or green)" }));
         }
         let streets = l.roads.iter().map(|(pts, _, w)| (pts, 0.5 * w)).chain(l.walls.iter().map(|w| (w, 4.5)));
@@ -530,7 +530,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
             return Err("that crosses a wall".to_string());
         }
         if castle {
-            if l.plazas.iter().any(|p| polys_overlap(pts, p)) {
+            if l.plazas.iter().any(|p| polys_overlap(pts, &p.pts)) {
                 return Err(format!("that is on {}", if l.site { "a yard" } else { "a square (a market, quay or green)" }));
             }
             // Paved streets and alleys (class 3) may run under a castle's yard; roads, approaches

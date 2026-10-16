@@ -332,7 +332,7 @@ fn towns_meet_roads_and_water() {
                 for j in 0..=n {
                     let p = geom::lerp(seg[0], seg[1], j as f64 / n as f64);
                     assert!(!in_channel(&ch, p, 0.0), "settlement {i}: steps in the river at {p:?}");
-                    assert!(!l.plazas.iter().any(|q| geom::contains(q, p)), "settlement {i}: steps in a plaza at {p:?}");
+                    assert!(!l.plazas.iter().any(|q| geom::contains(&q.pts, p)), "settlement {i}: steps in a plaza at {p:?}");
                 }
                 for (pts, class, w) in l.roads.iter().filter(|r| r.1 >= 3 && r.2 != 17.0) {
                     for r in pts.windows(2) {
@@ -1838,7 +1838,8 @@ fn agent_edits_guarantee() {
     let on_road = geom::circle(rp, 12.0, 12);
     assert!(agent::building_spot(world, t0, &on_road, None, "c:99", None).is_err(), "a building on a road is allowed");
     let ci = agent::layout_of(world, t0, &city).unwrap();
-    let plaza = &town::layout(world, t0, ci).plazas[0];
+    let l = town::layout(world, t0, ci);
+    let plaza = &l.plazas.iter().find(|p| p.kind != town::PlazaKind::Quay).expect("a city with a square").pts;
     let on_plaza = geom::circle(geom::centroid(plaza), 8.0, 12);
     assert!(agent::building_spot(world, t0, &on_plaza, None, "c:99", None).is_err_and(|e| e.contains("square")), "a building on a market square is allowed");
 

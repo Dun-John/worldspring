@@ -146,7 +146,8 @@ pub struct Layout {
     /// class 0–2), paved streets (3: the strip between a block and its patch edge, one per
     /// side), and paved main streets and streets over bridges (4). (points, class, width ft)
     pub roads: Vec<(Vec<P>, u8, f64)>,
-    pub plazas: Vec<Vec<P>>,
+    /// Open spaces: market and other squares, quays, greens, yards.
+    pub plazas: Vec<Plaza>,
     pub fields: Vec<Vec<P>>,
     /// Built-up patches (streets are the ground inside these that no building covers).
     pub districts: Vec<Vec<P>>,
@@ -192,6 +193,38 @@ pub struct Stair {
     pub width: f64,
     pub rise: f32,
     pub flight: u32,
+}
+
+/// What an open space is for, which decides how the battlemap dresses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlazaKind {
+    /// A market square: stalls in blocks round the well (busy: most of the square).
+    Market,
+    /// A market with few stalls and wide lanes.
+    MarketSparse,
+    /// A market day's huddle of stalls round the well; the rest of the square open.
+    MarketDay,
+    /// A square without a market: the well and the square's features only (cities and up).
+    Civic,
+    /// A quay along the water: cargo, no well or stalls.
+    Quay,
+    /// A village green.
+    Green,
+    /// A site's or castle's yard: paved, nothing set out.
+    Yard,
+}
+
+impl PlazaKind {
+    pub fn is_market(self) -> bool {
+        matches!(self, PlazaKind::Market | PlazaKind::MarketSparse | PlazaKind::MarketDay)
+    }
+}
+
+/// An open space (world ft): its outline and what it is for.
+#[derive(Clone, Debug)]
+pub struct Plaza {
+    pub pts: Vec<P>,
+    pub kind: PlazaKind,
 }
 
 /// A battlemap object placed by a layout: where (world ft), facing (rad), kind, variant, size.
@@ -951,6 +984,13 @@ impl Site<'_> {
     fn wet(&self, p: P) -> bool {
         self.wet_standing(p) || self.near_river(p, 0.0)
     }
+    /// Planned below the level of the sea or lake beside it (in the shore band, where the cell
+    /// isn't wet): the drawn ground there is banked up to the shore, not the ground planned.
+    fn below_shore(&self, p: P) -> bool {
+        let w = self.world(p);
+        let (level, _) = self.t0.sample_lake(w[0], w[1]);
+        level > crate::t0::hydro::DRY && (level as f64) > self.height(p)
+    }
     fn near_river(&self, p: P, margin: f64) -> bool {
         if self.river.is_empty() {
             return false;
@@ -1287,7 +1327,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for st in &mut l.stairs {
         st.pts.iter_mut().for_each(tw);
     }
-    for poly in l.walls.iter_mut().chain(&mut l.streets).chain(&mut l.plazas).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.bridges).chain(&mut l.piers) {
+    for poly in l.walls.iter_mut().chain(&mut l.streets).chain(l.plazas.iter_mut().map(|p| &mut p.pts)).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.bridges).chain(&mut l.piers) {
         poly.iter_mut().for_each(tw);
     }
     l.towers.iter_mut().chain(&mut l.gates).chain(&mut l.gate_towers).for_each(tw);
@@ -1311,7 +1351,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);
     }
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flatten()) {
+    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())) {
         bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
     }
     l.bbox = if bb[0] <= bb[2] { bb } else { [center[0], center[1], center[0], center[1]] };
@@ -1568,7 +1608,8 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
     // centre's cell is an s × L rectangle (watabou's market square).
     let polar = |d: f64, a: f64| [d * libm::cos(a), d * libm::sin(a)];
     let pa = roll(0, 1) * std::f64::consts::TAU;
-    let plaza_s = spacing * (0.55 + 0.25 * roll(0, 2));
+    // (Each side √¾ of what it was: squares about three quarters of the old area.)
+    let plaza_s = spacing * 0.866 * (0.55 + 0.25 * roll(0, 2));
     let plaza_l = plaza_s * (1.0 + 0.5 * roll(0, 3));
     let rhombus = !site.near_river([0.0, 0.0], plaza_l);
     let mut seeds: Vec<(P, bool)> = Vec::new();
@@ -2349,7 +2390,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             }
             let quay = vec![a, b, sub(b, mul(out, 14.0)), sub(a, mul(out, 14.0))];
             if !site.wet(centroid(&quay)) && !site.near_river(centroid(&quay), 10.0) {
-                l.plazas.push(quay);
+                l.plazas.push(Plaza { pts: quay, kind: PlazaKind::Quay });
             }
             if ward[i] != Some(Ward::Docks) {
                 continue;
@@ -2506,7 +2547,20 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     };
                     l.monuments.push(plinth);
                 }
-                l.plazas.push(block)
+                // What the square is for: a market, busy, sparse or for a market day; a city's
+                // may be a civic square with no market at all.
+                let kr = plan.roll(i, 44);
+                let civic = if s.tier >= Tier::City { 0.25 } else { 0.0 };
+                let kind = if kr < civic {
+                    PlazaKind::Civic
+                } else if kr < civic + 0.4 * (1.0 - civic) {
+                    PlazaKind::Market
+                } else if kr < civic + 0.75 * (1.0 - civic) {
+                    PlazaKind::MarketSparse
+                } else {
+                    PlazaKind::MarketDay
+                };
+                l.plazas.push(Plaza { pts: block, kind })
             }
             Ward::Farm => farm(site, &block, &mut prng, l),
             // The gate faces the centre (the plaza, if the citadel backs onto it).
@@ -3505,7 +3559,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
     // The green.
     let green = circle([0.0, 0.0], rng.range(35.0, 55.0), 12);
     if !site.wet([0.0, 0.0]) {
-        l.plazas.push(green.clone());
+        l.plazas.push(Plaza { pts: green.clone(), kind: PlazaKind::Green });
     }
     let reach = r * 1.3;
     // Main lanes: the roads through the village.

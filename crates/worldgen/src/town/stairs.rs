@@ -68,7 +68,8 @@ pub struct Profile {
     /// The street's width when it has no pieces.
     pub width: f64,
     /// Station positions along `line` (every 5 ft from its start, and its end), ground height,
-    /// grade, and level (where steps never go: water, bridges, plazas, alleys meeting it).
+    /// grade, and level (where steps never go: water and ground below it, bridges, plazas, alleys
+    /// meeting it).
     pub s: Vec<f64>,
     pub h: Vec<f64>,
     pub g: Vec<f64>,
@@ -171,10 +172,11 @@ pub(super) fn profiles(site: &Site, pos: &[P], pieces: &Pieces, l: &Layout, g_mi
             meet.entry(g).or_default().push((Owner::Road(r), s[0], s[1], 0.5 * w));
         }
     }
-    let plazas: Vec<([f64; 4], &Vec<P>)> = l.plazas.iter().map(|p| (bbox(p, PLAZA_CLEAR), p)).collect();
+    let plazas: Vec<([f64; 4], &Vec<P>)> = l.plazas.iter().map(|p| (bbox(&p.pts, PLAZA_CLEAR), &p.pts)).collect();
     let bridges: Vec<([f64; 4], &Vec<P>)> = l.bridges.iter().map(|p| (bbox(p, 0.0), p)).collect();
     let level_at = |p: P| {
         site.wet(p)
+            || site.below_shore(p)
             || site.near_river(p, 10.0)
             || bridges.iter().any(|(bb, poly)| inside(bb, p) && contains(poly, p))
             || plazas.iter().any(|(bb, poly)| inside(bb, p) && (contains(poly, p) || (0..poly.len()).any(|k| seg_dist(p, poly[k], poly[(k + 1) % poly.len()]) < PLAZA_CLEAR)))

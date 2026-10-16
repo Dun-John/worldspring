@@ -65,11 +65,11 @@ fn main() {
             let c = town::geom::centroid(d);
             println!("    {what} at fx {:.6} fy {:.6}", c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
         }
-        let mut plazas: Vec<&Vec<[f64; 2]>> = l.plazas.iter().collect();
-        plazas.sort_by(|a, b| town::geom::area(b).abs().total_cmp(&town::geom::area(a).abs()));
+        let mut plazas: Vec<&town::Plaza> = l.plazas.iter().collect();
+        plazas.sort_by(|a, b| town::geom::area(&b.pts).abs().total_cmp(&town::geom::area(&a.pts).abs()));
         for p in plazas.iter().take(2) {
-            let c = town::geom::centroid(p);
-            println!("    plaza ({:.0} sq ft) at fx {:.6} fy {:.6}", town::geom::area(p).abs(), c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
+            let c = town::geom::centroid(&p.pts);
+            println!("    plaza {:?} ({:.0} sq ft) at fx {:.6} fy {:.6}", p.kind, town::geom::area(&p.pts).abs(), c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
         }
         for b in l.buildings.iter().filter(|b| b.name.is_some()).take(6) {
             println!("    {} — {}", b.name.as_ref().unwrap(), b.label());
@@ -114,7 +114,7 @@ fn svg(l: &town::Layout) -> String {
         let _ = write!(s, r##"<path d="{}" fill="#d9d2a6" stroke="#b8ad7c" stroke-width="2"/>"##, path(f, true));
     }
     for p in &l.plazas {
-        let _ = write!(s, r##"<path d="{}" fill="#e2d9c0" stroke="none"/>"##, path(p, true));
+        let _ = write!(s, r##"<path d="{}" fill="#e2d9c0" stroke="none"/>"##, path(&p.pts, true));
     }
     for st in &l.streets {
         let _ = write!(s, r##"<path d="{}" fill="none" stroke="#c9b894" stroke-width="10" stroke-linecap="round"/>"##, path(st, false));
