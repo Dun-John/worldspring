@@ -2,9 +2,10 @@
   // Edit › Streets: the town in view laid out anew by hand (the ward editor). Its patches are drawn
   // over the map; a corner dragged, or the brushes, move them (applied on release); a patch
   // picked can be given another ward, lot size, joined to a neighbour's district or laid out
-  // again; the town's walls put up or taken down. Each change is one step to undo.
-  import { LOT_SIZES, TOWN_WARDS, type LotSize, type TownPatch, type TownPlan, type TownRequest, type TownWard } from '../gen/protocol';
-  import { WARD_COLOURS, type TownMode } from '../editor/town';
+  // again, a temple's kept as a close round it; a corner where streets meet picked can be given a
+  // square; the town's walls put up or taken down. Each change is one step to undo.
+  import { LOT_SIZES, SQUARE_KINDS, TOWN_WARDS, type LotSize, type SquareKind, type TownCorner, type TownPatch, type TownPlan, type TownRequest, type TownWard } from '../gen/protocol';
+  import { SQUARE_COLOURS, WARD_COLOURS, type TownMode } from '../editor/town';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -18,6 +19,8 @@
     /** The brush's size, in patch widths. */
     size: number;
     selected: TownPatch | null;
+    /** The corner picked (its square), if any. */
+    corner: TownCorner | null;
     /** Waiting for a neighbour to be picked to join. */
     merging: boolean;
     /** A change is being made. */
@@ -31,10 +34,10 @@
     onZoomIn: () => void;
   }
 
-  let { plan, name, note, mode, size = $bindable(), selected, merging, busy, near, peek = false, onMode, onChange, onMerge, onZoomIn }: Props = $props();
+  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, peek = false, onMode, onChange, onMerge, onZoomIn }: Props = $props();
 
   const MODES: { key: TownMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
-    { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a patch to set its ward; drag a corner to move it.' },
+    { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a patch to set its ward, a ringed corner for a square where streets meet; drag a corner to move it.' },
     { key: 'displace', label: 'Displace', icon: 'move', kbd: 'Q', hint: 'Drag: the corners in the ring go with you, those in its middle all the way.' },
     { key: 'liquify', label: 'Liquify', icon: 'liquify', kbd: 'L', hint: 'Drag: the corners under the ring are smudged along.' },
     { key: 'bloat', label: 'Bloat', icon: 'bloat', kbd: 'O', hint: 'Press and drag: the patches round where you pressed swell, the further you drag the more.' },
@@ -59,6 +62,13 @@
     empty: 'Open ground',
   };
   const LOT_LABEL: Record<LotSize, string> = { small: 'Small', medium: 'Medium', large: 'Large', huge: 'Huge' };
+  const SQUARE_LABEL: Record<SquareKind | 'none', string> = {
+    crossroads: 'Widened crossroads',
+    well: 'Well square',
+    fountain: 'Fountain square',
+    green: 'Small green',
+    none: 'No square',
+  };
   const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
   const ft = (v: number) => `${Math.round(v).toLocaleString('en')} ft`;
 
@@ -66,6 +76,7 @@
   const brush = $derived(mode !== 'select' && mode !== 'equalize');
   const generatedWard = $derived(selected ? (selected.ward_generated ?? selected.ward) : 'empty');
   const set = (req: TownRequest['patches'], what: string) => selected && onChange({ patches: req }, what);
+  const generatedSquare = $derived(corner ? (corner.square_generated ?? corner.square ?? 'none') : 'none');
 </script>
 
 <div class="town">
@@ -134,6 +145,37 @@
           <button class="ws-btn" disabled={busy} onclick={() => set([{ patch: selected.patch, reroll: true }], 'reroll')} title="Its streets and buildings laid out another way"><Icon name="dice" size={16} /> Lay out again</button>
           <button class="ws-btn" disabled={busy} onclick={() => set([{ patch: selected.patch, as_generated: true }], 'patch')} title="Ward, lots, district and layout as generated"><Icon name="reset" size={16} /> As generated</button>
         </div>
+        {#if selected.ward === 'temple'}
+          <label class="switch" title={selected.close ? undefined : selected.close_refused}>
+            <span class="grow">Close round the temple<span class="ws-muted"> · {selected.close || !selected.close_refused ? 'open ground round the temple and its hedged churchyard, the houses round it kept' : selected.close_refused}</span></span>
+            <input type="checkbox" class="ws-switch" checked={!!selected.close} disabled={busy || (!selected.close && !!selected.close_refused)} onchange={(e) => set([{ patch: selected.patch, close: (e.currentTarget as HTMLInputElement).checked }], 'close')} />
+          </label>
+        {/if}
+      </section>
+    {/if}
+    {#if corner}
+      <section class="card" aria-label="Corner">
+        <div class="title">
+          <span class="dot" style:background={corner.square ? hex(SQUARE_COLOURS[corner.square]) : 'transparent'}></span>
+          <span class="grow"><b>{corner.square ? SQUARE_LABEL[corner.square] : corner.junction ? 'Where streets meet' : 'A corner'}</b></span>
+        </div>
+        {#if corner.junction || corner.square}
+          <label class="ws-field">
+            Square
+            <select class="ws-input" value={corner.square ?? 'none'} disabled={busy} onchange={(e) => onChange({ squares: [{ corner: corner.corner, kind: (e.currentTarget as HTMLSelectElement).value as SquareKind | 'none' }] }, 'square')}>
+              {#each [...SQUARE_KINDS, 'none' as const] as k (k)}
+                <option value={k}>{SQUARE_LABEL[k]}{k === generatedSquare ? ' (as generated)' : ''}</option>
+              {/each}
+            </select>
+          </label>
+          {#if corner.square_generated !== undefined}
+            <div class="row">
+              <button class="ws-btn" disabled={busy} onclick={() => onChange({ squares: [{ corner: corner.corner, kind: 'auto' }] }, 'square')}><Icon name="reset" size={16} /> As generated</button>
+            </div>
+          {/if}
+        {:else}
+          <div class="ws-hint">No square opens here: {corner.square_refused ?? 'it needs three streets or more meeting between built-up patches, inside the walls and off the water'}.</div>
+        {/if}
       </section>
     {/if}
     <label class="switch">
@@ -147,6 +189,9 @@
       <div class="row">
         <button class="ws-btn" disabled={busy} onclick={() => onChange({ reset: 'corners' }, 'corners')}>Corners as generated</button>
         <button class="ws-btn" disabled={busy} onclick={() => onChange({ reset: 'patches' }, 'wards')}>Wards as generated</button>
+        {#if plan.corners.some((c) => c.square_generated !== undefined)}
+          <button class="ws-btn" disabled={busy} onclick={() => onChange({ reset: 'squares' }, 'squares')}>Squares as generated</button>
+        {/if}
         <button class="ws-btn" disabled={busy} onclick={() => onChange({ reset: 'all' }, 'all')}><Icon name="reset" size={16} /> All as generated</button>
       </div>
     {/if}

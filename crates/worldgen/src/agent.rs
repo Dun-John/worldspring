@@ -401,9 +401,13 @@ pub fn building_edit(world: &World, t0: &T0, id: &str, change: &BuildingChange) 
     let base = town::base_layout(world, t0, li);
     let g = base.building(bi as usize).ok_or_else(|| format!("no such building: {id}"))?;
     let at = geom::centroid(&g.poly);
-    let mut e = world.file.edits.buildings.get(id).filter(|e| town::edit_applies(g, e)).cloned().unwrap_or_default();
+    let mut e = world.file.edits.buildings.get(id).filter(|e| town::edit_applies(g, town::generated_layout(world, t0, li).building(bi as usize), e)).cloned().unwrap_or_default();
     if e.removed {
         return Err(format!("{id} was removed: restore it first (restore_building)"));
+    }
+    // (An outline drawn before a square or close cut the building back stays set aside.)
+    if !town::edit_stands(g, &e) {
+        e.poly.clear();
     }
     e.at = at;
     let keep = |v: &Option<String>| v.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s != "auto");

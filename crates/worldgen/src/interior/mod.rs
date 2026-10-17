@@ -1859,7 +1859,9 @@ fn connect(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [usize; 
                     }
                 }
             }
-            let deep = (0..n).filter(|&r| hops[r] != usize::MAX && hops[r] >= 3).find_map(|r| {
+            // (A room that can't be brought nearer itself has the room it is reached through brought
+            // nearer, or the one that is reached through, on toward the way in.)
+            let nearer = |r: usize| {
                 shared
                     .iter()
                     .filter_map(|(&(a, b), e)| {
@@ -1867,6 +1869,25 @@ fn connect(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [usize; 
                         (hops[o as usize] + 1 < hops[r]).then_some(((a, b), hops[o as usize], e))
                     })
                     .min_by_key(|x| x.1)
+            };
+            let deep = (0..n).filter(|&r| hops[r] != usize::MAX && hops[r] >= 3).find_map(|r| {
+                nearer(r).or_else(|| {
+                    let mut x = r;
+                    while hops[x] >= 3 {
+                        x = doors
+                            .iter()
+                            .filter_map(|d| {
+                                let [a, b] = d.rooms;
+                                let o = if a == x as i16 { b } else if b == x as i16 { a } else { return None };
+                                (o >= 0 && hops[o as usize] + 1 == hops[x]).then_some(o as usize)
+                            })
+                            .min()?;
+                        if let Some(e) = nearer(x) {
+                            return Some(e);
+                        }
+                    }
+                    None
+                })
             });
             let Some(((a, b), _, edges)) = deep else { break };
             let &(x, y, vert) = &edges[edges.len() / 2];

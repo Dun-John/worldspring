@@ -36,6 +36,36 @@ fn main() {
         let c = town::geom::centroid(&b);
         println!("graveyard in #{} at fx {:.6} fy {:.6}", l.index, c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
     }
+    // Open spaces of every settlement by kind, and where the first few of each are; squares where
+    // streets meet that reach past their bound (90 ft from their middle) or under a building, and
+    // closes with a building on them besides the temple and its churchyard.
+    let mut kinds: std::collections::BTreeMap<&str, Vec<(usize, [f64; 2])>> = Default::default();
+    let (mut wide, mut under) = (0, 0);
+    for i in 0..n {
+        let l = town::layout(&world, &t0, i);
+        for p in &l.plazas {
+            let c = town::geom::centroid(&p.pts);
+            kinds.entry(p.kind.name()).or_default().push((i, c));
+            if l.tier >= Tier::Town && (town::squares::CORNER_KINDS.contains(&p.kind) || p.kind == town::PlazaKind::TempleClose) {
+                let corner = p.kind != town::PlazaKind::TempleClose;
+                if corner && p.pts.iter().any(|q| town::geom::dist(*q, c) > 90.0) {
+                    wide += 1;
+                    println!("  wide {} in #{i} at fx {:.6} fy {:.6}", p.kind.name(), c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
+                }
+                let on = |b: &town::Building| !corner && town::geom::contains(&p.pts, town::geom::centroid(&b.poly));
+                // (Half a foot in from its walls: one sharing a patch edge with the square touches it.)
+                if l.buildings.iter().any(|b| !on(b) && overlap(&town::geom::inset(&b.poly, &vec![0.5; b.poly.len()]), &p.pts)) {
+                    under += 1;
+                    println!("  {} over a building in #{i} at fx {:.6} fy {:.6}", p.kind.name(), c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
+                }
+            }
+        }
+    }
+    println!("squares too wide: {wide}; over buildings: {under}");
+    for (kind, at) in &kinds {
+        let first: Vec<String> = at.iter().take(3).map(|(i, c)| format!("#{i} fx {:.6} fy {:.6}", c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft)).collect();
+        println!("{kind}: {} ({})", at.len(), first.join("; "));
+    }
     for i in picks {
         let s = &t0.settlements[i];
         let start = Instant::now();
@@ -65,9 +95,10 @@ fn main() {
             let c = town::geom::centroid(d);
             println!("    {what} at fx {:.6} fy {:.6}", c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
         }
-        let mut plazas: Vec<&town::Plaza> = l.plazas.iter().collect();
+        // Its open spaces (quays aside), the biggest first.
+        let mut plazas: Vec<&town::Plaza> = l.plazas.iter().filter(|p| p.kind != town::PlazaKind::Quay).collect();
         plazas.sort_by(|a, b| town::geom::area(&b.pts).abs().total_cmp(&town::geom::area(&a.pts).abs()));
-        for p in plazas.iter().take(2) {
+        for p in plazas.iter().take(6) {
             let c = town::geom::centroid(&p.pts);
             println!("    plaza {:?} ({:.0} sq ft) at fx {:.6} fy {:.6}", p.kind, town::geom::area(&p.pts).abs(), c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
         }
@@ -114,7 +145,8 @@ fn svg(l: &town::Layout) -> String {
         let _ = write!(s, r##"<path d="{}" fill="#d9d2a6" stroke="#b8ad7c" stroke-width="2"/>"##, path(f, true));
     }
     for p in &l.plazas {
-        let _ = write!(s, r##"<path d="{}" fill="#e2d9c0" stroke="none"/>"##, path(&p.pts, true));
+        let fill = if p.kind.is_lawn() { "#b9cf98" } else { "#e2d9c0" };
+        let _ = write!(s, r##"<path d="{}" fill="{fill}" stroke="none"/>"##, path(&p.pts, true));
     }
     for st in &l.streets {
         let _ = write!(s, r##"<path d="{}" fill="none" stroke="#c9b894" stroke-width="10" stroke-linecap="round"/>"##, path(st, false));
@@ -151,4 +183,15 @@ thread_local! {
 
 fn river_lines(_l: &town::Layout) -> Vec<([f64; 2], [f64; 2], f64)> {
     RIVERS.with(|r| r.borrow().clone())
+}
+
+/// Two polygons overlap: a corner of one inside the other, or edges crossing.
+fn overlap(a: &[[f64; 2]], b: &[[f64; 2]]) -> bool {
+    use town::geom::{contains, cross, sub};
+    let crosses = |p: [f64; 2], q: [f64; 2], r: [f64; 2], s: [f64; 2]| {
+        let (d1, d2) = (cross(sub(q, p), sub(r, p)), cross(sub(q, p), sub(s, p)));
+        let (d3, d4) = (cross(sub(s, r), sub(p, r)), cross(sub(s, r), sub(q, r)));
+        d1 * d2 < 0.0 && d3 * d4 < 0.0
+    };
+    a.iter().any(|p| contains(b, *p)) || b.iter().any(|p| contains(a, *p)) || (0..a.len()).any(|i| (0..b.len()).any(|j| crosses(a[i], a[(i + 1) % a.len()], b[j], b[(j + 1) % b.len()])))
 }

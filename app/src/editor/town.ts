@@ -6,12 +6,15 @@
 // the drag goes), Relax (toward the middle of their neighbours, as the brush is scrubbed) and
 // Equalize (each patch passed over toward a regular polygon, worked out by the generator).
 //
+// A corner clicked without moving it is picked (its square where streets meet, if one opens
+// there); the squares are drawn round their corners, and a click inside one picks it too.
+//
 // Nothing is laid out while dragging: the corners and edges move, and on release the moves go to
 // the app as one change. Each corner goes only as far as keeps every patch round it convex (as
 // the generator moves them), and no further than a patch's width from where it was planned;
 // corners on the water or a river never move.
 import type { Graphics } from 'pixi.js';
-import type { TownPlan, TownWard } from '../gen/protocol';
+import type { SquareKind, TownPlan, TownWard } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 
@@ -35,6 +38,14 @@ export const WARD_COLOURS: Record<TownWard, number> = {
   empty: 0xc9c9c9,
 };
 
+/** Each square's tint round its corner: paving, or a lawn for a green. */
+export const SQUARE_COLOURS: Record<SquareKind, number> = {
+  crossroads: 0xe8c98a,
+  well: 0x7fb2d6,
+  fountain: 0x5aa0e0,
+  green: 0x6fbf5a,
+};
+
 /** A brush's corners within the middle half of its ring move all the way (Displace). */
 const SOFT = 0.5;
 /** Grabbing a corner: within this many screen px. */
@@ -49,6 +60,10 @@ export interface TownHost {
   radius(): number;
   /** The patch picked, if any. */
   selected(): number | null;
+  /** The corner picked, if any. */
+  selectedCorner(): number | null;
+  /** A corner clicked (not moved): picked. */
+  corner(v: number): void;
   /** Corners moved (world ft): one change. */
   moved(moves: { corner: number; to: Pt }[]): void;
   /** Patches brushed with Equalize: one change. */
@@ -63,7 +78,7 @@ const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 const lerp = (a: Pt, b: Pt, t: number): Pt => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 
 type Drag =
-  | { kind: 'corner'; v: number }
+  | { kind: 'corner'; v: number; start: Pt; live: boolean }
   | { kind: 'brush'; mode: TownMode; start: Pt; last: Pt; base: Map<number, Pt>; weight: Map<number, number> }
   | { kind: 'equalize'; patches: Set<number> };
 
@@ -74,6 +89,10 @@ export class TownTool implements PointerTool {
   private planned = new Map<number, Pt>();
   private pinned = new Set<number>();
   private gate = new Set<number>();
+  /** Squares where streets meet: by corner, their kind and how far out they are cut (ft). */
+  private squares = new Map<number, { kind: SquareKind; r: number }>();
+  /** Corners where a square can open. */
+  private junctions = new Set<number>();
   /** Patches by id: their corners; each corner's patches; corners next to each corner. */
   private faces = new Map<number, number[]>();
   private ward = new Map<number, TownWard>();
@@ -106,6 +125,8 @@ export class TownTool implements PointerTool {
     this.planned.clear();
     this.pinned.clear();
     this.gate.clear();
+    this.squares.clear();
+    this.junctions.clear();
     this.faces.clear();
     this.ward.clear();
     this.vf.clear();
@@ -118,6 +139,8 @@ export class TownTool implements PointerTool {
       this.planned.set(c.corner, c.planned ?? c.at);
       if (c.pinned) this.pinned.add(c.corner);
       if (c.gate) this.gate.add(c.corner);
+      if (c.square) this.squares.set(c.corner, { kind: c.square, r: c.square_ft ?? 30 });
+      if (c.junction) this.junctions.add(c.corner);
     }
     const seen = new Set<string>();
     const link = (a: number, b: number) => {
@@ -152,6 +175,17 @@ export class TownTool implements PointerTool {
   patchAt(x: number, y: number): number | null {
     for (const [p, corners] of this.faces) if (inside([x, y], corners.map((v) => this.at(v)))) return p;
     return null;
+  }
+
+  /** The corner whose square (x, y) is in, if any. */
+  squareAt(x: number, y: number): number | null {
+    let best: number | null = null;
+    let bestD = Infinity;
+    for (const [v, sq] of this.squares) {
+      const d = dist(this.at(v), [x, y]);
+      if (d < sq.r && d < bestD) [best, bestD] = [v, d];
+    }
+    return best;
   }
 
   /** The movable corner nearest (x, y) within `r` ft. */
@@ -227,7 +261,7 @@ export class TownTool implements PointerTool {
         this.host.hint('That corner is on the water or a river: it stays put');
         return true;
       }
-      this.drag = { kind: 'corner', v };
+      this.drag = { kind: 'corner', v, start: p, live: false };
       return true;
     }
     if (mode === 'equalize') {
@@ -256,6 +290,9 @@ export class TownTool implements PointerTool {
     if (!d) return;
     this.version++;
     if (d.kind === 'corner') {
+      // (A click picks the corner: it moves once the pointer has.)
+      if (!d.live && dist(p, d.start) * this.ppf < 4) return;
+      d.live = true;
       this.target.set(d.v, this.clamp(d.v, p));
       this.settle();
       return;
@@ -324,7 +361,8 @@ export class TownTool implements PointerTool {
     this.target = new Map();
     this.shown = new Map();
     if (!moves.length) {
-      if (d.kind === 'corner' && dist([x, y], this.pos.get(d.v)!) > 1) this.host.hint('That corner can’t go there: the patches round it must stay convex');
+      if (d.kind === 'corner' && !d.live) this.host.corner(d.v);
+      else if (d.kind === 'corner' && dist([x, y], this.pos.get(d.v)!) > 1) this.host.hint('That corner can’t go there: the patches round it must stay convex');
       return;
     }
     this.pending = shown;
@@ -359,7 +397,7 @@ export class TownTool implements PointerTool {
   }
 
   drawKey(): string {
-    return `${this.version}|${this.host.mode()}|${this.host.selected()}|${this.host.radius()}`;
+    return `${this.version}|${this.host.mode()}|${this.host.selected()}|${this.host.selectedCorner()}|${this.host.radius()}`;
   }
 
   dblclick(): boolean {
@@ -390,6 +428,14 @@ export class TownTool implements PointerTool {
       const colour = WARD_COLOURS[this.ward.get(p) ?? 'empty'];
       g.poly(pts.flatMap(scr)).fill({ color: colour, alpha: p === sel ? 0.34 : 0.14 });
     }
+    // Squares where streets meet, round their corners.
+    const selCorner = this.host.selectedCorner();
+    for (const [v, sq] of this.squares) {
+      const p = this.at(v);
+      if (!inView(p)) continue;
+      const [sx, sy] = scr(p);
+      g.circle(sx, sy, sq.r * ppf).fill({ color: SQUARE_COLOURS[sq.kind], alpha: 0.45 }).stroke({ width: 1.5, color: 0x1c1917, alpha: 0.6 });
+    }
     // Edges: dark under light, so they show on any ground.
     const touched = (v: number) => this.shown.has(v) || !!this.pending?.has(v);
     for (const pass of [0, 1]) {
@@ -411,9 +457,13 @@ export class TownTool implements PointerTool {
       }
       g.stroke({ width: 2, color: ink, alpha: 0.9 });
     }
-    // The patch picked, outlined.
+    // The patch picked, outlined; the corner picked, ringed (as wide as its square).
     const picked = sel !== null ? this.faces.get(sel) : undefined;
     if (picked) g.poly(picked.map((v) => this.at(v)).flatMap(scr)).stroke({ width: 3, color: 0xfde047 });
+    if (selCorner !== null && this.pos.has(selCorner)) {
+      const [sx, sy] = scr(this.at(selCorner));
+      g.circle(sx, sy, Math.max(8, (this.squares.get(selCorner)?.r ?? 0) * ppf)).stroke({ width: 3, color: 0xfde047 });
+    }
     // Corners, once patches are big enough to tell them apart: movable ones round, those
     // moved by hand orange, those on the water locked (a grey square).
     if (plan.max_move_ft * ppf >= 40) {
@@ -429,6 +479,11 @@ export class TownTool implements PointerTool {
         const moved = dist(this.planned.get(v)!, p) > 0.5;
         const w = weight?.get(v);
         const r = this.gate.has(v) ? 4.5 : 3;
+        // Where a square can open: a ring round the corner.
+        if (this.junctions.has(v) && !this.squares.has(v)) {
+          g.circle(sx, sy, r + 4.5).stroke({ width: 3.5, color: 0x1c1917, alpha: 0.85 });
+          g.circle(sx, sy, r + 4.5).stroke({ width: 1.5, color: 0xfde68a, alpha: 1 });
+        }
         g.circle(sx, sy, r).fill({ color: w ? ink : moved ? 0xfb923c : 0xffffff, alpha: w ? 0.35 + 0.65 * w : 1 }).stroke({ width: 1, color: 0x1c1917 });
       }
     }

@@ -1047,23 +1047,42 @@ farms outside the walls) cut into lots. The ward editor changes that layout with
   that district: same ward and lots, no street between; not across a main street), or a new roll (`reroll`: its
   lots and buildings drawn again). A `castle` ward builds a curtain wall with towers, a gatehouse facing the town's
   middle and a keep that is the castle.
+- **Squares** open where three streets or more meet between built-up patches (a corner's `junction`, inside the
+  walls and off the water): the lots at the corner of every block round it are trimmed back, and the ground they
+  leave is a `crossroads` (widened, with a signpost, lamps, a trough), a `well` square (the well on a plinth), a
+  `fountain` square or a small `green` (the biome's trees, a path before the houses; its lanes stop at its edge). A
+  temple's patch can have a **close**: open ground in the middle of its block with the temple, a standing cross
+  before it and a hedged churchyard behind it, inside a ring of houses a lot deep along its streets, cut back to face
+  it (only where the town's temple stands on that patch, the temple and churchyard fit inside the ring, houses stand
+  along at least 65% of its street fronts, and no square opens at its corners). The close's temple keeps the old
+  temple's id, name, notes and NPCs; changes made to the old building (storeys, footprint, roof…) are set aside, as it
+  no longer stands where it did. Each town is generated with a few (a town sometimes one, a city one or two, a
+  metropolis two or three, each a different kind); set others or take them away by hand.
 - **Walls** go up round a town that had none, or come down (the strip they stood on is a street round the town;
   the gates stay where the roads come in).
 - **What stays:** the town's plan (gates, main streets, districts and their names, the towers along each wall).
   Only the patches touched are built again. A building that comes out as it was generated keeps its id
   (`b:<layout>:<id>`) and everything decided about it; new ones get ids of 1,000,000 and up (by patch; in
   a patch rolled again, 100,000,000 and up, by patch and roll), so a change to one ward never renumbers another's
-  and a roll's buildings never take the last roll's ids. A business the town lost with the buildings taken away goes to a
-  new building where one fits; `functions_lost` lists the ones that found none. Renames, notes, NPCs and building
-  changes on buildings that keep their ids stay with them.
+  and a roll's buildings never take the last roll's ids (except a business, which keeps its id and name). A lot
+  trimmed back by a square or a close keeps its building's id and the changes made to it (storeys, roof, function);
+  an outline drawn for it by hand is set aside (`buildings_set_aside` says so). A business the town lost with the
+  buildings taken away goes to a new building about a patch from where it stood, else to the nearest home there,
+  which takes the business's id and name (a home's own id goes, as a building taken away does); `functions_lost`
+  lists the ones that found none. Renames, notes, NPCs and building changes on buildings that keep their ids stay
+  with them.
 - Villages have no wards (they grow along their roads). Draw roads before editing towns: a road drawn into a town
   lays it out anew (from the sketch) and sets its ward edits aside.
 
 ### `get_town_plan`
 A town's plan: `patches` (`patch`, `at`, `corners`, `ward`, `ward_generated` when set by hand, `in_town`,
 `district` with its id, `neighbours`, `lots`, `merged_with`, `reroll`, `lots_like` for a patch sharing another's
-lots), `corners` (`corner`, `at`, `planned` when moved, `pinned`, `gate`, `wall`), `max_move_ft`, `walls`
-(`built`, `generated`), `edited`, `set_aside`.
+lots, `close` for a temple's with a close as built, `close_generated` when set by hand, `close_refused`: why one
+can't be set there, or why the one set isn't built), `corners` (`corner`, `at`, `planned` when moved, `pinned`,
+`gate`, `wall`, `junction` where a square can open, `square_refused` where streets meet but none can (a close's
+corner), `square` and `square_ft` (how far out from the corner its chords are cut, on average) for the one there,
+`square_generated` when set by hand: a kind or `none`), `max_move_ft`, `walls` (`built`, `generated`), `edited`,
+`set_aside`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -1076,11 +1095,13 @@ lots), `corners` (`corner`, `at`, `planned` when moved, `pinned`, `gate`, `wall`
 
 ### `edit_town`
 Change a town's layout. Every field is optional; they apply in this order: `reset`, `moves`, `equalize`,
-`relax`, `patches`, `walls`. The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`, and the
-ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken_away`), `walls` (`built`, `towers`,
-`gates`), `functions_lost`, `unmerged` (merges dropped because a ward no longer allows them), `rects` (where the
-map is drawn again). `added` and `taken_away` count buildings by id and footprint (a patch laid out again keeps
-reusing its new buildings' ids).
+`relax`, `patches`, `squares`, `walls`. The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`,
+and the ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken_away`), `walls` (`built`, `towers`,
+`gates`), `squares` (the kinds of its open spaces, quays aside), `functions_lost`, `unmerged` (merges dropped because
+a ward no longer allows them), `rects` (where the map is drawn again). A square set by hand where the wards no
+longer leave three streets goes with the change that took them. `added` and `taken_away` count buildings by id
+and footprint (a patch laid out again keeps reusing its new buildings' ids). A square set or taken away changes only
+the lots at its corner: they are trimmed back to it, or come back whole.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -1088,9 +1109,10 @@ reusing its new buildings' ids).
 | `moves` | `[{corner, to \| by \| as_generated}]` | | `to: [x_ft, y_ft]`, or `by: [dx_ft, dy_ft]` from where it stands now; `as_generated` puts it back |
 | `equalize` | `[patch]` | | Pull each patch toward a regular polygon (its corners move) |
 | `relax` | `{at, radius_ft, amount}` | | Each corner within `radius_ft` of `at` toward the middle of its neighbours, by `amount` (0–1, default 0.5) at the centre, less toward the edge |
-| `patches` | `[{patch, ward, lots, merge_with, reroll, as_generated}]` | | `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `"auto"` puts a field back |
+| `patches` | `[{patch, ward, lots, merge_with, reroll, close, as_generated}]` | | `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `"auto"` puts a field back |
+| `squares` | `[{corner, kind}]` | | `kind`: crossroads, well, fountain, green, `"none"` (no square there) or `"auto"` (as generated); a square opens only at a `junction` |
 | `walls` | `true` \| `false` \| `"auto"` | | Walls up, down, or as generated |
-| `reset` | `"all"` \| `"corners"` \| `"patches"` | | Back to as generated |
+| `reset` | `"all"` \| `"corners"` \| `"patches"` \| `"squares"` | | Back to as generated |
 | `dry_run` | boolean | `false` | Report without changing anything |
 
 ```json
@@ -1105,6 +1127,9 @@ reusing its new buildings' ids).
 | `it is on the water or a river: it stays put` | A pinned corner |
 | `that is N ft from where it was laid out: at most M` | Past one patch's spacing |
 | `patch q is not next to patch p` / `a main street runs between them` / `only wards built on lots merge` | A merge refused |
+| `no square opens there: …` | A square asked for at a corner that is not a junction (fewer than three streets, the wall, a gate, the water, or an unbuilt patch round it) |
+| `only a temple's patch has a close` / `no temple stands on that patch…` / `a square opens at its corner` / `no room for a close there…` (the temple and churchyard don't fit, or houses would line under 65% of the block's streets) | A close refused |
+| `a temple's close is at that corner` | A square refused at a close's corner |
 | `the town was laid out anew: …` | The edit was made before a sketch change moved the town or its patches |
 
 ## Shaping the ground

@@ -278,34 +278,18 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
         _ => 80.0,
     };
     let mut l = Layout {
-        index,
-        center,
-        radius,
-        tier: Tier::Village,
-        on_water: false,
         walls,
         towers,
-        gates: Vec::new(),
-        streets: Vec::new(),
-        roads: Vec::new(),
         plazas: plazas.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Yard }).collect(),
-        fields: Vec::new(),
-        districts: Vec::new(),
-        blocks: Vec::new(),
         buildings,
-        bridges: Vec::new(),
-        piers: Vec::new(),
         gate_towers,
-        extra_towers: Vec::new(),
-        monuments: Vec::new(),
-        quarters: Vec::new(),
         castles,
         bbox: if bb[0] <= bb[2] { bb } else { [center[0] - 40.0, center[1] - 40.0, center[0] + 40.0, center[1] + 40.0] },
         site: true,
         entrances,
         yards,
         props,
-        stairs: Vec::new(),
+        ..Layout::empty(index, center, radius, Tier::Village)
     };
     l.number();
     l
@@ -378,36 +362,7 @@ pub fn apply_looks(b: &mut Building, roof: Option<&str>, tint: Option<&str>, str
 
 /// An empty layout to build a castle's or wall's works on (local coordinates).
 fn scratch(index: u32) -> Layout {
-    Layout {
-        index,
-        center: [0.0, 0.0],
-        radius: 80.0,
-        tier: Tier::Village,
-        on_water: false,
-        walls: Vec::new(),
-        towers: Vec::new(),
-        gates: Vec::new(),
-        streets: Vec::new(),
-        roads: Vec::new(),
-        plazas: Vec::new(),
-        fields: Vec::new(),
-        districts: Vec::new(),
-        blocks: Vec::new(),
-        buildings: Vec::new(),
-        bridges: Vec::new(),
-        piers: Vec::new(),
-        gate_towers: Vec::new(),
-        extra_towers: Vec::new(),
-        monuments: Vec::new(),
-        quarters: Vec::new(),
-        castles: Vec::new(),
-        bbox: [0.0; 4],
-        site: true,
-        entrances: Vec::new(),
-        yards: Vec::new(),
-        props: Vec::new(),
-        stairs: Vec::new(),
-    }
+    Layout { site: true, ..Layout::empty(index, [0.0, 0.0], 80.0, Tier::Village) }
 }
 
 /// The open ground round a site, as its buildings stand on it (local coordinates): dry

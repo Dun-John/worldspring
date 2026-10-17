@@ -195,6 +195,38 @@ pub fn shaped_heights(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) 
     Some(out)
 }
 
+/// A simple polygon as triangles (ear clipping); a convex one as itself.
+fn ears(poly: &[[f64; 2]]) -> Vec<Vec<[f64; 2]>> {
+    use crate::town::geom::{area, cross, sub};
+    let n = poly.len();
+    let ccw = area(poly) > 0.0;
+    let turn = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+        let t = cross(sub(b, a), sub(c, b));
+        if ccw { t } else { -t }
+    };
+    if n < 3 || (0..n).all(|i| turn(poly[(i + n - 1) % n], poly[i], poly[(i + 1) % n]) >= 0.0) {
+        return vec![poly.to_vec()];
+    }
+    let inside = |p: [f64; 2], a: [f64; 2], b: [f64; 2], c: [f64; 2]| turn(a, b, p) > 0.0 && turn(b, c, p) > 0.0 && turn(c, a, p) > 0.0;
+    let mut idx: Vec<usize> = (0..n).collect();
+    let mut out = Vec::new();
+    while idx.len() > 3 {
+        let m = idx.len();
+        let Some(k) = (0..m).find(|&k| {
+            let (a, b, c) = (poly[idx[(k + m - 1) % m]], poly[idx[k]], poly[idx[(k + 1) % m]]);
+            turn(a, b, c) > 0.0 && !idx.iter().any(|&j| ![idx[(k + m - 1) % m], idx[k], idx[(k + 1) % m]].contains(&j) && inside(poly[j], a, b, c))
+        }) else {
+            break;
+        };
+        out.push(vec![poly[idx[(k + m - 1) % m]], poly[idx[k]], poly[idx[(k + 1) % m]]]);
+        idx.remove(k);
+    }
+    if idx.len() == 3 {
+        out.push(idx.iter().map(|&j| poly[j]).collect());
+    }
+    out
+}
+
 /// Decks (world ft polygons) where network roads bridge rivers: along the road, over the
 /// channel at the crossing's angle with a landing each side, as wide as the road plus 4 ft.
 fn road_bridges(tile: &TerrainOut) -> Vec<Vec<[f64; 2]>> {
@@ -248,9 +280,13 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             for f in &l.fields {
                 push(f, 2);
             }
-            // A village green is the ground round it, as on the battlemap; a town's plaza is paved.
-            for p in l.plazas.iter().filter(|_| l.tier != crate::t0::settle::Tier::Village) {
-                push(&p.pts, 1);
+            // A green (a village's or a town's) and a temple's close are the ground round them, as
+            // on the battlemap; a town's squares are paved.
+            // (A square where streets meet need not be convex: drawn as triangles.)
+            for p in l.plazas.iter().filter(|p| l.tier != crate::t0::settle::Tier::Village && !p.kind.is_lawn()) {
+                for tri in ears(&p.pts) {
+                    push(&tri, 1);
+                }
             }
             // A camp: its clearing, and its tents (as the battlemap's sprites lie).
             for (y, _) in &l.yards {

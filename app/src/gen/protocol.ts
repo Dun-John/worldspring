@@ -241,12 +241,14 @@ export interface Plateau {
 /** A town's layout changed by hand (`worldgen::world::TownEdit`): `at` is the town's centre (the
  * edit is set aside if the town is laid out elsewhere); corners of its patches moved (`v` the
  * plan's corner, `from` where it was planned), patches set (`p` the plan's patch, `at` its middle
- * as planned), walls on or off. */
+ * as planned; `close`: a temple's kept as a close or not), walls on or off, squares set where
+ * streets meet (`v` the corner, `at` where it was planned; `kind` a `SQUARE_KINDS` or "none"). */
 export interface TownEdit {
   at: [number, number];
   corners?: { v: number; from: [number, number]; to: [number, number] }[];
-  patches?: { p: number; at: [number, number]; ward?: string; lots?: string; merge_with?: number; reroll?: number }[];
+  patches?: { p: number; at: [number, number]; ward?: string; lots?: string; merge_with?: number; reroll?: number; close?: boolean }[];
   walls?: boolean;
+  squares?: { v: number; at: [number, number]; kind: string }[];
 }
 
 /** What a patch of a town can be given (`worldgen::world::TOWN_WARDS`; `empty`: open ground). */
@@ -255,6 +257,9 @@ export type TownWard = (typeof TOWN_WARDS)[number];
 /** Lot sizes, smallest first (`worldgen::world::LOT_SIZES`). */
 export const LOT_SIZES = ['small', 'medium', 'large', 'huge'] as const;
 export type LotSize = (typeof LOT_SIZES)[number];
+/** Squares a corner where streets meet can be given (`worldgen::world::SQUARE_KINDS`). */
+export const SQUARE_KINDS = ['crossroads', 'well', 'fountain', 'green'] as const;
+export type SquareKind = (typeof SQUARE_KINDS)[number];
 
 /** A patch of a town as the ward editor sees it (`town::wards::plan_json`): its corners (plan
  * corner ids), ward as it is now (and as generated, if set by hand), district, neighbours. */
@@ -274,6 +279,11 @@ export interface TownPatch {
   lots?: LotSize;
   reroll?: number;
   merged_with?: number;
+  /** A temple's patch kept as a close round the temple (and as generated, if set by hand). */
+  close?: boolean;
+  close_generated?: boolean;
+  /** Why a close can't be set on this temple's patch. */
+  close_refused?: string;
 }
 
 /** A corner of a town's patches: where it stands now (world ft), where it was planned (if moved). */
@@ -285,6 +295,15 @@ export interface TownCorner {
   pinned?: boolean;
   gate?: boolean;
   wall?: boolean;
+  /** Streets meet here: a square can open. */
+  junction?: boolean;
+  /** Streets meet here but no square can open, and why. */
+  square_refused?: string;
+  /** The square there, and how far out it is cut (ft). */
+  square?: SquareKind;
+  square_ft?: number;
+  /** As generated, when set by hand ('none': no square). */
+  square_generated?: SquareKind | 'none';
 }
 
 /** A town's plan for the ward editor (Ask op `townplan`). */
@@ -306,9 +325,10 @@ export interface TownRequest {
   moves?: { corner: number; to?: [number, number]; by?: [number, number]; as_generated?: boolean }[];
   equalize?: number[];
   relax?: { at: [number, number]; radius_ft: number; amount?: number };
-  patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; as_generated?: boolean }[];
+  patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; close?: boolean | 'auto'; as_generated?: boolean }[];
+  squares?: { corner: number; kind: SquareKind | 'none' | 'auto' }[];
   walls?: boolean | 'auto';
-  reset?: 'all' | 'corners' | 'patches';
+  reset?: 'all' | 'corners' | 'patches' | 'squares';
 }
 
 /** What a change to a town does (`town::wards::change`). */
@@ -316,6 +336,8 @@ export interface TownReport {
   corners: { asked: number; moved: number; part_way: number; stayed: number };
   buildings: { before: number; after: number; added: number; taken_away: number };
   walls: { built: boolean; towers: number; gates: number };
+  /** Its open spaces' kinds (quays aside). */
+  squares: string[];
   /** The rectangles (x0, y0, x1, y1 ft) to draw again. */
   rects: Rect[];
   functions_lost?: string[];

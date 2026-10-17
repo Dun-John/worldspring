@@ -21,18 +21,19 @@ use serde_json::{Value, json};
 use super::catalog::{self, CATALOG, Ward};
 use super::geom::*;
 use super::mesh::Mesh;
-use super::{Building, Layout, Structure, TownPlan};
+use super::{Building, Layout, PlazaKind, Structure, TownPlan};
 use crate::World;
 use crate::core::hash::{FastMap, FastSet, Fnv64};
 use crate::core::rng::{Pcg32, hash3, unit};
 use crate::t0::T0;
 use crate::t0::settle::Tier;
-use crate::world::{CornerMove, LOT_SIZES, PatchEdit, TOWN_WARDS, TownEdit};
+use crate::world::{CornerMove, LOT_SIZES, PatchEdit, SQUARE_KINDS, SquareEdit, TOWN_WARDS, TownEdit};
 
 /// Ids of the buildings a town edit adds: `NEW_ID + patch × PER_PATCH + k` (k in the order its
 /// patch builds them); in a patch rolled again (`reroll` r ≥ 1), `ROLLED_ID + (patch × ROLLS +
 /// (r − 1) mod ROLLS) × PER_PATCH + k`, so a roll's buildings never take the last roll's ids
-/// (and what was said about them is set aside).
+/// (and what was said about them is set aside), except a business, which keeps its id and name
+/// wherever it goes (`functions`).
 pub const NEW_ID: u32 = 1_000_000;
 pub const PER_PATCH: u32 = 10_000;
 pub const ROLLED_ID: u32 = 100_000_000;
@@ -54,6 +55,10 @@ pub(super) struct Changes {
     /// (patch, the neighbour whose district it joins).
     pub merge: Vec<(usize, usize)>,
     pub walls: Option<bool>,
+    /// Squares where streets meet set by hand (corner → kind; `None`: no square there).
+    pub squares: BTreeMap<usize, Option<PlazaKind>>,
+    /// Temple patches kept as a close round the temple, or not.
+    pub close: BTreeMap<usize, bool>,
 }
 
 impl Changes {
@@ -107,6 +112,14 @@ fn parse_ward(name: &str) -> Result<Option<Ward>, String> {
     }))
 }
 
+/// A square's kind by name (`SQUARE_KINDS`; "none": no square).
+fn parse_square(name: &str) -> Result<Option<PlazaKind>, String> {
+    if name == "none" {
+        return Ok(None);
+    }
+    super::squares::corner_kind(name).map(Some).ok_or_else(|| format!("a square is one of {} or none", SQUARE_KINDS.join(", ")))
+}
+
 fn lot_factor(name: &str) -> Result<f64, String> {
     LOT_SIZES.iter().position(|l| *l == name).map(|k| LOT_FACTOR[k]).ok_or_else(|| format!("lots must be one of {}", LOT_SIZES.join(", ")))
 }
@@ -125,6 +138,57 @@ fn corner_ok(plan: &TownPlan, v: usize, from: P, to: P) -> Result<(), String> {
         return Err(format!("that is {:.0} ft from where it was laid out: at most {:.0}", d, plan.spacing));
     }
     Ok(())
+}
+
+/// Whether corner `v` is one to set a square at (`at`: where it was planned, local ft).
+fn square_here(plan: &TownPlan, v: usize, at: P) -> Result<(), String> {
+    if v >= plan.mesh.pos.len() || plan.vf[v].is_empty() {
+        return Err("no such corner".into());
+    }
+    if dist(plan.mesh.pos[v], at) > TownEdit::SAME_AT_FT {
+        return Err("the town was laid out anew: that corner is somewhere else now".into());
+    }
+    Ok(())
+}
+
+/// Why no square opens at corner `v` with these wards.
+const NO_SQUARE: &str = "no square opens there: it needs three streets or more meeting between patches built on lots, inside the walls and off the water";
+
+/// Why a close can't be set on a temple's patch.
+const NO_CLOSE: &str = "no temple stands on that patch to have a close round it";
+
+/// Why a close can't be set on a temple's patch with a square at a corner.
+const SQUARE_THERE: &str = "a square opens at its corner";
+
+/// Why no square opens at a corner of a close.
+const AT_CLOSE: &str = "a temple's close is at that corner: its houses face the close, not the streets";
+
+/// Why a close set on a temple's patch isn't laid out.
+const NO_ROOM: &str = "no room for a close there: the temple and churchyard must fit, with houses along at least 65% of the block's streets";
+
+/// The patches of `mesh` (corners as they stand) whose close layout `l` opens (by where its
+/// temples' closes stand; `center`: the town's middle, world ft).
+fn built_closes(l: &Layout, mesh: &Mesh, center: P) -> Vec<usize> {
+    let mut out: Vec<usize> = l
+        .plazas
+        .iter()
+        .filter(|pz| pz.kind == PlazaKind::TempleClose)
+        .filter_map(|pz| {
+            let c = sub(centroid(&pz.pts), center);
+            (0..mesh.faces.len()).find(|&f| mesh.faces[f].len() >= 3 && contains(&mesh.face_pts(f), c))
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Whether the town as generated has a temple on patch `p` (its middle on the patch as planned).
+fn has_temple(world: &World, t0: &T0, plan: &TownPlan, index: usize, p: usize) -> bool {
+    let Some(fi) = catalog::index_of("temple") else { return false };
+    let s = &t0.settlements[index];
+    let face: Vec<P> = plan.mesh.face_pts(p).iter().map(|q| add(*q, [s.x, s.y])).collect();
+    super::generated_layout(world, t0, index).buildings.iter().any(|b| b.func == Some(fi as u16) && contains(&face, centroid(&b.poly)))
 }
 
 /// Whether patch `p` is one to set (`at`: its middle as planned, local ft).
@@ -201,6 +265,18 @@ pub(super) fn changes(plan: &TownPlan, e: &TownEdit, center: P) -> (Changes, Vec
         }
         if let Some(q) = pe.merge_with {
             merges.push((p, q as usize));
+        }
+        if let Some(on) = pe.close {
+            ch.close.insert(p, on);
+        }
+    }
+    for se in &e.squares {
+        let v = se.v as usize;
+        match square_here(plan, v, local(se.at)).and_then(|()| parse_square(&se.kind)) {
+            Ok(k) => {
+                ch.squares.insert(v, k);
+            }
+            Err(why) => aside.push(format!("square at corner {v}: {why}")),
         }
     }
     // Merges once every ward is set (a patch joins a neighbour as that one now is).
@@ -311,8 +387,17 @@ fn hash_edit(world: &World, e: &TownEdit) -> u64 {
         }
         h.write(&p.merge_with.map_or(u32::MAX, |q| q).to_le_bytes());
         h.write(&p.reroll.to_le_bytes());
+        h.write(&[p.close.map_or(2, |c| c as u8)]);
     }
     h.write(&[e.walls.map_or(2, |w| w as u8), 0xfe]);
+    for q in &e.squares {
+        h.write(&q.v.to_le_bytes());
+        for x in &q.at {
+            h.write(&x.to_le_bytes());
+        }
+        h.write(q.kind.as_bytes());
+        h.write(&[0xff]);
+    }
     h.finish()
 }
 
@@ -342,10 +427,12 @@ pub fn with_edit(world: &World, t0: &T0, index: usize, e: &TownEdit) -> Rc<Layou
 // Ids: what came out as generated keeps its id.
 
 /// Give the buildings of a town laid out anew (`id`: the patch each stands on) their ids: one
-/// with a footprint the generated layout `generated` has takes that building's id and what was
-/// decided about it; the rest are new (`NEW_ID`), with functions the town lost, homes and storeys
-/// of their own. Leaves the buildings in id order.
-pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layout, l: &mut Layout) {
+/// with a footprint the generated layout `generated` has, or lying mostly on one (a lot trimmed
+/// back by a square), takes that building's id and what was decided about it; the rest are new
+/// (`NEW_ID`), with functions the town lost (none further than `spacing` and a half from where
+/// they stood: about a patch away), homes and storeys of their own. Leaves the buildings in id
+/// order.
+pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layout, spacing: f64, l: &mut Layout) {
     let rolls: FastMap<u32, u32> = edit.patches.iter().filter(|p| p.reroll > 0).map(|p| (p.p, p.reroll)).collect();
     const CELL: f64 = 2.0;
     let cell = |p: P| (crate::core::floor(p[0] / CELL) as i64, crate::core::floor(p[1] / CELL) as i64);
@@ -357,6 +444,8 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     let mut used = vec![false; generated.buildings.len()];
     let mut next: BTreeMap<u32, u32> = BTreeMap::new();
     let mut fresh: Vec<usize> = Vec::new();
+    // (Each building's patch, while its id still is that.)
+    let patch: Vec<u32> = l.buildings.iter().map(|b| b.id).collect();
     for (k, b) in l.buildings.iter_mut().enumerate() {
         let (cx, cy) = cell(centroid(&b.poly));
         let hit = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (cx + dx, cy + dy))).filter_map(|c| grid.get(&c)).flatten().map(|&g| g as usize).find(|&g| !used[g] && same(&generated.buildings[g].poly, &b.poly));
@@ -378,15 +467,85 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
             }
         }
     }
-    let lost: Vec<usize> = generated.buildings.iter().zip(&used).filter(|(_, u)| !**u).filter_map(|(b, _)| b.func.map(|f| f as usize)).collect();
-    functions(world, t0, l, &fresh, lost);
+    // A new building lying mostly on one generated that none took, of the same structure (half
+    // of each on the other: a lot trimmed back by a square or a close) is that building, cut down;
+    // not in a patch whose lots were rolled, sized anew or given another ward (a roll never takes
+    // another's ids).
+    let reach = 1.5 * spacing;
+    let relotted: Vec<u32> = edit.patches.iter().filter(|p| p.reroll > 0 || p.lots.is_some() || p.ward.is_some()).map(|p| p.p).collect();
+    for k in fresh.clone() {
+        let b = &l.buildings[k];
+        if b.func.is_some() || relotted.contains(&patch[k]) {
+            continue;
+        }
+        let (at, whole) = (centroid(&b.poly), area(&b.poly).abs());
+        let hit = (0..generated.buildings.len())
+            .filter(|&g| !used[g] && generated.buildings[g].structure == b.structure && dist(centroid(&generated.buildings[g].poly), at) < 80.0)
+            .map(|g| (super::overlap(&b.poly, &generated.buildings[g].poly), g))
+            .filter(|&(a, g)| a >= 0.5 * whole && a >= 0.5 * area(&generated.buildings[g].poly).abs())
+            .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1)));
+        if let Some((_, g)) = hit {
+            used[g] = true;
+            let (o, b) = (&generated.buildings[g], &mut l.buildings[k]);
+            (b.id, b.func, b.residential, b.floors, b.structure, b.roof, b.tint) = (o.id, o.func, o.residential, o.floors, o.structure, o.roof, o.tint);
+            b.name = o.name.clone();
+            fresh.retain(|&j| j != k);
+        }
+    }
+    // A building laid out for a purpose (a close's temple) takes the place, id and name of one the
+    // town lost with that purpose (the nearest, about a patch away at most; notes and people there
+    // follow it); else of one kept as generated on its patch, which is a home again with the new
+    // one's id.
+    let mut lost: Vec<(usize, P, u32, Option<String>)> =
+        generated.buildings.iter().zip(&used).filter(|(_, u)| !**u).filter_map(|(b, _)| b.func.map(|f| (f as usize, centroid(&b.poly), b.id, b.name.clone()))).collect();
+    // (Nearest pairs first, so each takes its own patch's before a neighbour's.)
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for &k in &fresh {
+        let Some(f) = l.buildings[k].func else { continue };
+        let at = centroid(&l.buildings[k].poly);
+        pairs.extend((0..lost.len()).filter(|&i| lost[i].0 == f as usize && dist(lost[i].1, at) <= reach).map(|i| (dist(lost[i].1, at), k, i)));
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let (mut placed, mut gone) = (Vec::new(), vec![false; lost.len()]);
+    for (_, k, i) in pairs {
+        if placed.contains(&k) || gone[i] {
+            continue;
+        }
+        (l.buildings[k].id, l.buildings[k].name) = (lost[i].2, lost[i].3.clone());
+        placed.push(k);
+        gone[i] = true;
+    }
+    let mut i = 0;
+    lost.retain(|_| {
+        i += 1;
+        !gone[i - 1]
+    });
+    fresh.retain(|k| !placed.contains(k));
+    for k in fresh.clone() {
+        let Some(f) = l.buildings[k].func else { continue };
+        if let Some(j) = (0..l.buildings.len()).find(|&j| !fresh.contains(&j) && patch[j] == patch[k] && l.buildings[j].func == Some(f) && l.buildings[j].structure == Structure::Roofed) {
+            let new_id = l.buildings[k].id;
+            (l.buildings[k].id, l.buildings[k].name) = (l.buildings[j].id, l.buildings[j].name.take());
+            let b = &mut l.buildings[j];
+            b.id = new_id;
+            b.func = None;
+            b.residential = catalog::residential_for(b.ward, area(&b.poly).abs() > 2500.0) as u8;
+            fresh.retain(|&x| x != k);
+            fresh.push(j);
+        }
+    }
+    functions(world, t0, l, &fresh, lost, reach);
     l.buildings.sort_by_key(|b| b.id);
 }
 
 /// What the new buildings of a town laid out anew are: a castle's keep is the castle; functions
-/// the town lost go to the new buildings that suit them best (as `assign_functions` picks, with
-/// noise per building); the rest are homes. Names and storeys as the town's own.
-fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: Vec<usize>) {
+/// the town lost (each with where it stood, its id and name) go to the new buildings within
+/// `reach` of where it stood that suit them best (as `assign_functions` picks, with noise per
+/// building), else to the nearest home within `reach`, else nowhere (`functions_lost` lists it);
+/// the building that takes one takes the lost one's id and name too (its notes and people follow
+/// it; a home's own id goes, as a building taken away does). The rest are homes. Names and storeys
+/// as the town's own.
+fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: Vec<(usize, P, u32, Option<String>)>, reach: f64) {
     let stream = world.stream("town.edit");
     let index = super::rng_key(t0, l.index as usize);
     let noise = |id: u32, salt: i64| unit(hash3(stream, index, id as i64, salt));
@@ -400,21 +559,23 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
             && b.floors == 4
         {
             b.func = Some(c as u16);
-            if let Some(i) = lost.iter().position(|&f| f == c) {
+            if let Some(i) = lost.iter().position(|x| x.0 == c) {
                 lost.remove(i);
             }
         }
     }
-    lost.sort_by_key(|&fi| (!CATALOG[fi].big, fi));
+    lost.sort_by(|a, b| (!CATALOG[a.0].big, a.0).cmp(&(!CATALOG[b.0].big, b.0)).then(a.1[0].total_cmp(&b.1[0])).then(a.1[1].total_cmp(&b.1[1])));
+    let mut adopted: Vec<usize> = Vec::new();
     let areas: Vec<f64> = fresh.iter().map(|&k| area(&l.buildings[k].poly).abs()).collect();
     let max_area = areas.iter().cloned().fold(1.0, f64::max);
     let mut taken: Vec<bool> = fresh.iter().map(|&k| l.buildings[k].func.is_some()).collect();
-    for fi in lost {
+    let mut named: Vec<usize> = Vec::new();
+    for (fi, was, was_id, was_name) in lost {
         let f = &CATALOG[fi];
         let mut best: Option<(f64, usize)> = None;
         for (j, &k) in fresh.iter().enumerate() {
             let b = &l.buildings[k];
-            if taken[j] || b.structure != Structure::Roofed {
+            if taken[j] || b.structure != Structure::Roofed || dist(centroid(&b.poly), was) > reach {
                 continue;
             }
             let ward_score = f.wards.iter().position(|w| *w == b.ward).map_or(0.0, |p| 10.0 - 2.0 * p as f64);
@@ -426,14 +587,48 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
                 best = Some((score, j));
             }
         }
-        let Some((_, j)) = best else { continue };
+        let Some((_, j)) = best else {
+            // None new will do (a close taken away, its temple with it): the nearest home of the
+            // function's own wards about a patch from where it stood takes it on, else the nearest
+            // home there, else it stays lost (a graveyard too: a home is no open ground).
+            if f.key == "graveyard" {
+                continue;
+            }
+            let homes = |own: bool| {
+                (0..l.buildings.len())
+                    .filter(|k| !fresh.contains(k) && !adopted.contains(k))
+                    .filter(|&k| {
+                        let b = &l.buildings[k];
+                        b.func.is_none() && b.structure == Structure::Roofed && (!own || f.wards.contains(&b.ward)) && area(&b.poly).abs() >= 500.0 && dist(centroid(&b.poly), was) <= reach
+                    })
+                    .min_by(|&a, &b| dist(centroid(&l.buildings[a].poly), was).total_cmp(&dist(centroid(&l.buildings[b].poly), was)).then(a.cmp(&b)))
+            };
+            let home = homes(true).or_else(|| homes(false));
+            if let Some(k) = home {
+                let b = &mut l.buildings[k];
+                (b.func, b.id) = (Some(fi as u16), was_id);
+                if was_name.is_some() {
+                    b.name = was_name;
+                    named.push(k);
+                }
+                adopted.push(k);
+            }
+            continue;
+        };
         taken[j] = true;
         let b = &mut l.buildings[fresh[j]];
         b.func = Some(fi as u16);
+        b.id = was_id;
+        if was_name.is_some() {
+            b.name = was_name;
+            named.push(fresh[j]);
+        }
         if f.key == "graveyard" {
             b.structure = Structure::Open;
         }
     }
+    let fresh: Vec<usize> = fresh.iter().copied().chain(adopted).collect();
+    let fresh = &fresh[..];
     let tier = l.tier;
     let center = l.center;
     // (A new business is named unlike any other in the town: a new keep isn't the citadel's twin.)
@@ -445,10 +640,14 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
         match b.func {
             Some(fi) => {
                 let f = &CATALOG[fi as usize];
-                if let Some(n) = &b.name {
+                // (One that took a lost building's place keeps its name.)
+                let keep = named.contains(&k);
+                if let Some(n) = &b.name
+                    && !keep
+                {
                     names.remove(n);
                 }
-                for salt in 0..8 {
+                for salt in (0..8).filter(|_| !keep) {
                     let mut rng = Pcg32::new(hash3(stream, index, id as i64, 0x4e + salt), 43);
                     b.name = super::sites::trade_name(Some(fi), &mut rng, t0, center);
                     if b.name.as_ref().is_none_or(|n| !names.contains(n)) {
@@ -619,8 +818,9 @@ fn town_of<'a>(t0: &'a T0, world: &World, index: usize) -> Result<(&'a crate::t0
 }
 
 /// A town's plan as the ward editor sees it: its patches (corners, ward as planned and as set,
-/// lot size, district, neighbours) and corners (where each stands now, where it was planned,
-/// pinned, gate, wall), how far a corner may move, the walls, and what of its edit is set aside.
+/// lot size, district, neighbours, a temple's close) and corners (where each stands now, where it
+/// was planned, pinned, gate, wall, whether a square can open there and the one that does), how far
+/// a corner may move, the walls, and what of its edit is set aside.
 pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> {
     let (s, plan) = town_of(t0, world, index)?;
     let center = [s.x, s.y];
@@ -636,6 +836,11 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
     aside.extend(more);
     let mesh = moved_mesh(&plan, &ch.moves);
     let (ward, group) = ch.wards(&plan);
+    // The closes as built (where their temple and churchyard fit), now and as generated.
+    let now = super::base_layout(world, t0, index);
+    let built = built_closes(&now, &mesh, center);
+    let generated = built_closes(&super::generated_layout(world, t0, index), &plan.mesh, center);
+    let (squares, closes) = super::squares::spots(&plan, &ch, &ward, &group, &|p| built.contains(&p));
     let world_pt = |p: P| round1(add(p, center));
     let listed = |p: usize| plan.mesh.faces[p].len() >= 3 && plan.face_ok[p] && !plan.wet[p] && (p < plan.n_inner || plan.ward[p].is_some() || ward[p].is_some());
     let mut district: FastMap<usize, usize> = FastMap::default();
@@ -680,6 +885,22 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
                 v["merged_with"] = json!(q);
             }
         }
+        let (close, planned) = (closes.contains(&p), generated.contains(&p));
+        if close {
+            v["close"] = json!(true);
+        } else if ward[p] == Some(Ward::Temple) {
+            // Whether one can be set, and why not.
+            if !plan.closes.contains(&p) && !has_temple(world, t0, &plan, index, p) {
+                v["close_refused"] = json!(NO_CLOSE);
+            } else if mesh.faces[p].iter().any(|u| squares.iter().any(|s| s.0 == *u)) {
+                v["close_refused"] = json!(SQUARE_THERE);
+            } else if !now.close_room.contains(&(p as u32)) {
+                v["close_refused"] = json!(NO_ROOM);
+            }
+        }
+        if close != planned {
+            v["close_generated"] = json!(planned);
+        }
         patches.push(v);
     }
     let gate = |v: usize| plan.gates.contains(&v);
@@ -708,6 +929,22 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
             if wall[v] {
                 c["wall"] = json!(true);
             }
+            if super::squares::junction(&plan, &ward, &group, v) {
+                if super::squares::at_close(&plan, v, &closes) {
+                    c["square_refused"] = json!(AT_CLOSE);
+                } else {
+                    c["junction"] = json!(true);
+                }
+            }
+            let now = squares.iter().find(|s| s.0 == v).map(|s| s.1);
+            if let Some(k) = now {
+                c["square"] = json!(k.name());
+                c["square_ft"] = json!(crate::core::round(super::squares::cut_reach(&plan, &mesh, v, k)));
+            }
+            let planned = plan.squares.iter().find(|s| s.0 == v).map(|s| s.1);
+            if now != planned {
+                c["square_generated"] = json!(planned.map_or("none", |k| k.name()));
+            }
             c
         })
         .collect();
@@ -725,7 +962,8 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
 
 /// A change asked of a town (`edit_town`): corners moved one by one (`to`, or `by` from where it
 /// stands now), brushes (`equalize` patches toward regular polygons, `relax` corners toward their
-/// neighbours round a point), patches set, walls, and parts put back as generated.
+/// neighbours round a point), patches set, squares set where streets meet, walls, and parts put
+/// back as generated.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct TownRequest {
@@ -737,10 +975,12 @@ pub struct TownRequest {
     pub relax: Option<RelaxRequest>,
     #[serde(default)]
     pub patches: Vec<PatchRequest>,
+    #[serde(default)]
+    pub squares: Vec<SquareRequest>,
     /// true, false or "auto" (as generated).
     #[serde(default)]
     pub walls: Option<Value>,
-    /// "all", "corners" or "patches": back to as generated.
+    /// "all", "corners", "patches" or "squares": back to as generated.
     #[serde(default)]
     pub reset: Option<String>,
 }
@@ -787,8 +1027,19 @@ pub struct PatchRequest {
     pub merge_with: Option<Value>,
     #[serde(default)]
     pub reroll: bool,
+    /// A temple's patch kept as a close round the temple: true, false or "auto".
+    #[serde(default)]
+    pub close: Option<Value>,
     #[serde(default)]
     pub as_generated: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SquareRequest {
+    pub corner: u32,
+    /// A square (`SQUARE_KINDS`), "none" or "auto".
+    pub kind: String,
 }
 
 /// Town `index` changed as asked: the town edit it then has (`None`: as generated) and what the
@@ -804,16 +1055,19 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     let (ch, _) = changes(&plan, &e, center);
     let mut moves: BTreeMap<usize, P> = ch.moves.iter().copied().collect();
     e.patches.retain(|pe| patch_here(&plan, pe.p as usize, local(pe.at)).is_ok());
+    e.squares.retain(|se| square_here(&plan, se.v as usize, local(se.at)).is_ok() && parse_square(&se.kind).is_ok());
     match req.reset.as_deref() {
         None => {}
         Some("all") => {
             moves.clear();
             e.patches.clear();
             e.walls = None;
+            e.squares.clear();
         }
         Some("corners") => moves.clear(),
         Some("patches") => e.patches.clear(),
-        Some(r) => return Err(format!("reset: all, corners or patches, not {r}")),
+        Some("squares") => e.squares.clear(),
+        Some(r) => return Err(format!("reset: all, corners, patches or squares, not {r}")),
     }
     let mut asked: Vec<usize> = Vec::new();
     // Corners one by one.
@@ -929,7 +1183,64 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
         if pr.reroll {
             pe.reroll += 1;
         }
+        match &pr.close {
+            None => {}
+            Some(Value::String(a)) if a == "auto" => pe.close = None,
+            Some(Value::Bool(on)) => {
+                let w = match pe.ward.as_deref() {
+                    Some(n) => parse_ward(n).map_err(|why| format!("patch {p}: {why}"))?,
+                    None => plan.ward[p],
+                };
+                if *on && w != Some(Ward::Temple) {
+                    return Err(format!("patch {p}: only a temple's patch has a close"));
+                }
+                if *on && !plan.closes.contains(&p) && !has_temple(world, t0, &plan, index, p) {
+                    return Err(format!("patch {p}: {NO_CLOSE}"));
+                }
+                pe.close = (*on != plan.closes.contains(&p)).then_some(*on);
+            }
+            Some(_) => return Err(format!("patch {p}: close: true, false or \"auto\"")),
+        }
     }
+    // A close asked for where a square opens at its corner is refused.
+    for pr in req.patches.iter().filter(|pr| matches!(pr.close, Some(Value::Bool(true)))) {
+        let (ch, _) = changes(&plan, &e, center);
+        let (ward, group) = ch.wards(&plan);
+        let sq = super::squares::spots(&plan, &ch, &ward, &group, &|_| false).0;
+        if plan.mesh.faces[pr.patch as usize].iter().any(|u| sq.iter().any(|s| s.0 == *u)) {
+            return Err(format!("patch {}: {SQUARE_THERE}", pr.patch));
+        }
+    }
+    // Squares, once every ward is set (one opens only where three streets meet between lots).
+    for sr in &req.squares {
+        let v = sr.corner as usize;
+        if v >= plan.mesh.pos.len() || plan.vf[v].is_empty() {
+            return Err(format!("corner {v}: no such corner"));
+        }
+        e.squares.retain(|se| se.v != sr.corner);
+        if sr.kind == "auto" {
+            continue;
+        }
+        let k = parse_square(&sr.kind).map_err(|why| format!("corner {v}: {why}"))?;
+        if k == plan.squares.iter().find(|s| s.0 == v).map(|s| s.1) {
+            continue;
+        }
+        if k.is_some() {
+            let (ch, _) = changes(&plan, &e, center);
+            let (ward, group) = ch.wards(&plan);
+            if !super::squares::junction(&plan, &ward, &group, v) {
+                return Err(format!("corner {v}: {NO_SQUARE}"));
+            }
+            // The closes as built now, and those asked for with this change.
+            let now = built_closes(&super::base_layout(world, t0, index), &moved_mesh(&plan, &ch.moves), center);
+            let asked = |p: usize| now.contains(&p) || req.patches.iter().any(|pr| pr.patch as usize == p && matches!(pr.close, Some(Value::Bool(true))));
+            if super::squares::at_close(&plan, v, &super::squares::spots(&plan, &ch, &ward, &group, &asked).1) {
+                return Err(format!("corner {v}: {AT_CLOSE}"));
+            }
+        }
+        e.squares.push(SquareEdit { v: sr.corner, at: q64(world_pt(plan.mesh.pos[v])), kind: sr.kind.clone() });
+    }
+    e.squares.sort_by_key(|se| se.v);
     match &req.walls {
         None => {}
         Some(Value::Bool(b)) => e.walls = (*b != plan.walled).then_some(*b),
@@ -957,6 +1268,12 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             }
         }
     }
+    // A square set by hand where the wards no longer leave three streets goes too.
+    {
+        let (ch, _) = changes(&plan, &e, center);
+        let (ward, group) = ch.wards(&plan);
+        e.squares.retain(|se| se.kind == "none" || super::squares::junction(&plan, &ward, &group, se.v as usize));
+    }
     e.patches.retain(|pe| !pe.is_noop());
     e.patches.sort_by_key(|pe| pe.p);
     let (ch, aside) = changes(&plan, &e, center);
@@ -967,6 +1284,11 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     let before = super::base_layout(world, t0, index);
     let after = if e.is_noop() { super::generated_layout(world, t0, index) } else { with_edit(world, t0, index, &e) };
     let mesh = moved_mesh(&plan, &ch.moves);
+    // A close asked for that isn't laid out (no room: `NO_ROOM`) is refused.
+    let laid = built_closes(&after, &mesh, center);
+    if let Some(pr) = req.patches.iter().find(|pr| matches!(pr.close, Some(Value::Bool(true))) && !laid.contains(&(pr.patch as usize))) {
+        return Err(format!("patch {}: {NO_ROOM}", pr.patch));
+    }
     asked.sort();
     asked.dedup();
     let (mut held, mut part, mut stayed) = (0, 0, Vec::new());
@@ -1001,6 +1323,7 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
         "corners": { "asked": asked.len(), "moved": held, "part_way": part, "stayed": asked.len() - held - part },
         "buildings": { "before": before.buildings.len(), "after": after.buildings.len(), "added": ia.difference(&ib).count(), "taken_away": ib.difference(&ia).count() },
         "walls": { "built": ch.walls.unwrap_or(plan.walled), "towers": crate::interior::towers(&after).len(), "gates": after.gates.len() },
+        "squares": after.plazas.iter().filter(|p| !matches!(p.kind, PlazaKind::Quay | PlazaKind::Yard)).map(|p| p.kind.name()).collect::<Vec<_>>(),
         "rects": changed_rects(&before, &after).iter().map(|r| r.map(crate::core::round)).collect::<Vec<_>>(),
     });
     if !stayed.is_empty() {

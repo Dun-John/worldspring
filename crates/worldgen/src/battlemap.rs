@@ -87,6 +87,8 @@ pub const URBAN_TOWER: u8 = 8;
 pub const URBAN_ENTRANCE: u8 = 9;
 /// Packed earth trodden bare (a camp's clearing).
 pub const URBAN_YARD: u8 = 10;
+/// A lawn in town (a green, a temple's close): the ground's own, with no wild scatter.
+pub const URBAN_PARK: u8 = 11;
 /// Wall-walk and tower-top heights above the ground (ft).
 const WALL_FT: f32 = 20.0;
 const TOWER_FT: f32 = 30.0;
@@ -951,6 +953,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut wells: Vec<[f64; 2]> = Vec::new();
     // Market stalls in blocks on town plazas (world ft, rotation, kind).
     let mut stalls: Vec<([f64; 2], f32, Kind)> = Vec::new();
+    // Props set out on squares by what they are for (world ft, rotation, kind, variant).
+    let mut dressing: Vec<([f64; 2], f32, Kind, u8)> = Vec::new();
+    // Temples' churchyards in closes (their headstones are the close's dressing).
+    let mut churchyards: Vec<Vec<[f64; 2]>> = Vec::new();
     // Round raised features on town squares: (centre, radius ft, kind, steps angle).
     let mut features: Vec<([f64; 2], f64, PlazaFeature, f64)> = Vec::new();
     let mut in_town = vec![false; HS * HS];
@@ -967,7 +973,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let (hx0, hy0) = (ox - SQUARE_FT, oy - SQUARE_FT);
     let span = HS as f64 * SQUARE_FT;
     let center = |i: usize, j: usize| [hx0 + (i as f64 + 0.5) * SQUARE_FT, hy0 + (j as f64 + 0.5) * SQUARE_FT];
-    let bbox = |poly: &[[f64; 2]]| poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    let bbox = bounds;
     // Halo squares a polygon's bbox may cover.
     let range = |b: (f64, f64, f64, f64)| {
         let i0 = (((b.0 - hx0) / SQUARE_FT - 0.5).floor().max(0.0)) as usize;
@@ -1024,17 +1030,26 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             yards.push(y.clone());
         }
         for pl in &l.plazas {
+            use crate::town::PlazaKind as K;
             let p = &pl.pts;
-            stamp(p, URBAN_PLAZA, &mut urb_h);
+            // A town's green and a temple's close are lawns; a village's green keeps the ground
+            // round it as it is.
+            let lawn = pl.kind.is_lawn() && l.tier >= crate::t0::settle::Tier::Town;
+            stamp(p, if lawn { URBAN_PARK } else { URBAN_PLAZA }, &mut urb_h);
             // A quay takes cargo, no well or market.
-            if pl.kind == crate::town::PlazaKind::Quay {
+            if pl.kind == K::Quay {
                 if overlaps(bbox(p)) {
                     quay_cargo(p, seed, &mut stalls);
                 }
                 continue;
             }
+            // The main square and a village's green have a well at the heart; the other squares
+            // are dressed by what they are for (`dress_square`).
+            let main = pl.kind.is_market() || pl.kind == K::Civic || (pl.kind == K::Green && !lawn);
             if !l.site {
-                wells.push(crate::town::geom::centroid(p));
+                if main {
+                    wells.push(crate::town::geom::centroid(p));
+                }
                 if l.tier >= crate::t0::settle::Tier::Town && overlaps(bbox(p)) {
                     let first = stalls.len();
                     // Lanes the features keep off: the town's streets and roads, and the
@@ -1060,20 +1075,39 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                             lanes.push((a, e, 12.0));
                         }
                     }
+                    let ffirst = features.len();
+                    if !main {
+                        dress_square(pl, &l, t0, &lanes, seed, &mut features, &mut dressing);
+                        continue;
+                    }
                     // A city's squares are laid out first, in a pattern round the well, and the
                     // market fits round them; a town's features go where the market leaves room.
                     let patterned = l.tier >= crate::t0::settle::Tier::City;
-                    let ffirst = features.len();
                     if patterned {
-                        plaza_features(p, &l.monuments, &[], &lanes, seed, true, &mut features);
+                        plaza_features(p, &l.monuments, &[], &lanes, seed, true, pl.kind == K::Civic, &mut features);
                     }
-                    let keep: Vec<([f64; 2], f64)> = features[ffirst..].iter().map(|f| (f.0, f.1)).collect();
+                    let mut keep: Vec<([f64; 2], f64)> = features[ffirst..].iter().map(|f| (f.0, f.1)).collect();
+                    let mut room = Room::new(p, &l, &lanes, &keep, seed ^ 0xd3a1);
+                    room.taken.push((crate::town::geom::centroid(p), 6.0));
+                    // A market cross by the well, which the stalls keep clear of.
+                    let cross = main_cross(pl, &mut room, seed);
+                    if let Some(x) = cross {
+                        keep.push((x.0, cross_ft()));
+                        dressing.push(x);
+                    }
                     if let Some(m) = Market::of(pl.kind) {
                         market_blocks(p, &l.monuments, &keep, m, seed, &mut stalls);
                     }
                     if !patterned {
-                        plaza_features(p, &l.monuments, &stalls[first..], &lanes, seed, false, &mut features);
+                        // (Clear of the market cross as of a monument.)
+                        let mut stands = l.monuments.clone();
+                        stands.extend(cross.map(|x| crate::town::geom::circle(x.0, cross_ft(), 8)));
+                        plaza_features(p, &stands, &stalls[first..], &lanes, seed, false, false, &mut features);
                     }
+                    // Then round its edge: notices, troughs, lamps; a civic square's stocks.
+                    room.taken.extend(features[ffirst..].iter().map(|f| (f.0, f.1 + 2.0)));
+                    room.taken.extend(stalls[first..].iter().map(|s| (s.0, info(s.2 as u16).radius as f64 * SQUARE_FT + 3.0)));
+                    dress_main(pl, &l, &mut room, seed, &mut dressing);
                 }
             }
         }
@@ -1235,6 +1269,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 crate::town::Structure::Roofed => {}
                 crate::town::Structure::Open => {
                     stamp(&b.poly, URBAN_GRAVEYARD, &mut urb_h);
+                    // A close's churchyard has its rows laid along it (`dress_square`).
+                    let c = crate::town::geom::centroid(&b.poly);
+                    if l.plazas.iter().any(|p| p.kind == crate::town::PlazaKind::TempleClose && crate::town::geom::contains(&p.pts, c)) {
+                        churchyards.push(b.poly.clone());
+                    }
                     continue;
                 }
                 crate::town::Structure::Ruin => {
@@ -1794,7 +1833,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         })
         .collect();
     place_objects(&mut chunk, &biome, &slope, &road_near, seed, gsx, gsy);
-    place_town_props(&mut chunk, seed, gsx, gsy);
+    let rowless: Vec<bool> = if churchyards.is_empty() {
+        Vec::new()
+    } else {
+        (0..n).map(|k| churchyards.iter().any(|y| crate::town::geom::contains(y, [ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT]))).collect()
+    };
+    place_town_props(&mut chunk, seed, gsx, gsy, &rowless);
     // Ruins: broken wall segments along the old outlines, rubble inside. Keyed by world
     // position so a ruin across a chunk border breaks the same way in both chunks.
     let wseed = hash2(seed, 0x2a11, 5);
@@ -1887,7 +1931,22 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             chunk.objects.push(o);
         }
     }
-    // A well at the heart of every plaza and green.
+    // What a square is dressed with: each in the chunk holding it, on open ground (paving, a lawn,
+    // a street through the square), never on a roof, a road or the water (its layout keeps clear
+    // of buildings); a market cross a little larger than its place, to read as a cross from afar.
+    for (p, rot, kind, variant) in dressing {
+        let (x, y) = ((p[0] - ox) / SQUARE_FT, (p[1] - oy) / SQUARE_FT);
+        if x < 0.0 || y < 0.0 || x >= SQ as f64 || y >= SQ as f64 {
+            continue;
+        }
+        let k = y as usize * SQ + x as usize;
+        if chunk.building[k] != 0 || chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || chunk.water_level[k] > chunk.height[k] || !matches!(chunk.urban[k], URBAN_PLAZA | URBAN_STREET | URBAN_PARK | URBAN_GRAVEYARD) {
+            continue;
+        }
+        let scale = if kind == Kind::MarketCross { MARKET_CROSS_SCALE } else { 1.0 };
+        chunk.objects.push(Object { kind, variant, x: x as f32, y: y as f32, rot, scale, sprite: 0, turned: false });
+    }
+    // A well at the heart of every main square and village green.
     for w in wells {
         let (i, j) = (((w[0] - ox) / SQUARE_FT).floor(), ((w[1] - oy) / SQUARE_FT).floor());
         if i >= 0.0 && j >= 0.0 && (i as usize) < SQ && (j as usize) < SQ {
@@ -1897,11 +1956,65 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
+    // Nothing generated stands on a wall or a tower, or in a gate's passage (a cart under the
+    // portcullis); nor does what the guarantee adds below (`keep_off`: those squares, the ones next
+    // to a wall or a tower, and a square's raised features with the walk round them).
+    // (A footprint `r` ft round reaching into a gate's passage.)
+    let in_gate = |p: [f64; 2], r: f64| {
+        gates.iter().any(|&(g, h)| {
+            let u = unit2([h[0] - g[0], h[1] - g[1]]);
+            let len = crate::core::sqrt((h[0] - g[0]) * (h[0] - g[0]) + (h[1] - g[1]) * (h[1] - g[1]));
+            let (dx, dy) = (p[0] - g[0], p[1] - g[1]);
+            let (along, across) = (dx * u[0] + dy * u[1], -dx * u[1] + dy * u[0]);
+            along > 12.0 - r && along < len - 12.0 + r && across.abs() < 14.0 + r
+        })
+    };
+    let blocked = |urban: &[u8], o: &Object| on_wall(urban, o) || in_gate([ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT], (info(o.kind as u16).radius * o.scale) as f64 * SQUARE_FT);
+    {
+        let urban = &chunk.urban;
+        chunk.objects.retain(|o| !blocked(urban, o));
+    }
+    // A close's churchyard and its hedge (a square round it): nothing added, no knoll over it.
+    let churchyard: Vec<bool> = if churchyards.is_empty() {
+        Vec::new()
+    } else {
+        (0..n)
+            .map(|k| {
+                let p = [ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT];
+                churchyards.iter().any(|y| crate::town::geom::contains(y, p) || (0..y.len()).any(|e| crate::town::geom::seg_dist(p, y[e], y[(e + 1) % y.len()]) < 1.5 * SQUARE_FT))
+            })
+            .collect()
+    };
+    let keep_off: Vec<bool> = (0..n)
+        .map(|k| {
+            let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+            let wall = |x: i64, y: i64| x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && matches!(chunk.urban[y as usize * SQ + x as usize], URBAN_WALL | URBAN_TOWER);
+            let p = [ox + (x as f64 + 0.5) * SQUARE_FT, oy + (y as f64 + 0.5) * SQUARE_FT];
+            (-1..=1).any(|dy| (-1..=1).any(|dx| wall(x + dx, y + dy))) || in_gate(p, 2.5) || features.iter().any(|f| crate::town::geom::dist(p, f.0) < f.1 + 4.0) || churchyard.get(k).is_some_and(|&y| y)
+        })
+        .collect();
     // Where the ground is shaped, the guarantee's draws are keyed by cell (a mound in one corner
     // moves nothing elsewhere) and plateaus get no knolls (`shaped`: empty when nothing is).
     let shaped: Vec<bool> = if shaper.is_some() { (0..n).map(|k| plat_w[(k / SQ + 1) * HS + k % SQ + 1] >= 0.5).collect() } else { Vec::new() };
     let before = if shaped.is_empty() { Vec::new() } else { chunk.height.clone() };
-    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped);
+    let set_out = chunk.objects.len();
+    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off);
+    // What it added that reaches a wall, a tower or a gate's passage (a cart by it) stands in the
+    // middle of its square, smaller (a crate on paving), or goes.
+    for k in (set_out..chunk.objects.len()).rev() {
+        if !blocked(&chunk.urban, &chunk.objects[k]) {
+            continue;
+        }
+        let o = &mut chunk.objects[k];
+        let q = (o.y.max(0.0) as usize).min(SQ - 1) * SQ + (o.x.max(0.0) as usize).min(SQ - 1);
+        (o.scale, o.x, o.y) = (0.85, o.x.floor() + 0.5, o.y.floor() + 0.5);
+        if chunk.surface[q].is_road() {
+            o.kind = Kind::Crate;
+        }
+        if blocked(&chunk.urban, &chunk.objects[k]) {
+            chunk.objects.remove(k);
+        }
+    }
     // Enforcement knolls may have spilled onto a road bed or a building; those keep their
     // level (on a street or plaza a raised terrace or dais is fine), as does a plateau.
     let mut touched = false;
@@ -1914,7 +2027,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     for k in 0..n {
         let h = (k / SQ + 1) * HS + k % SQ + 1;
         let bed = road_bed[h];
-        if (chunk.road_halo[h] != 0 || chunk.building[k] != 0) && chunk.height[k] != bed {
+        if (chunk.road_halo[h] != 0 || chunk.building[k] != 0 || churchyard.get(k).is_some_and(|&y| y)) && chunk.height[k] != bed {
             chunk.height[k] = bed;
             touched = true;
         }
@@ -1926,36 +2039,27 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     for k in 0..n {
         chunk.halo_height[(k / SQ + 1) * HS + k % SQ + 1] = chunk.height[k];
     }
-    // Nothing generated stands on a wall or a tower, or in a gate's passage (a cart under the
-    // portcullis).
-    {
-        let urban = &chunk.urban;
-        chunk.objects.retain(|o| {
-            // Its footprint touches no wall or tower square (it would be drawn over them).
-            let r = info(o.kind as u16).radius * o.scale;
-            let span = |v: f32| ((v - r).max(0.0) as usize, ((v + r).max(0.0) as usize).min(SQ - 1));
-            let ((x0, x1), (y0, y1)) = (span(o.x), span(o.y));
-            for y in y0..=y1 {
-                for x in x0..=x1 {
-                    let (dx, dy) = (o.x - o.x.clamp(x as f32, x as f32 + 1.0), o.y - o.y.clamp(y as f32, y as f32 + 1.0));
-                    if dx * dx + dy * dy < r * r && matches!(urban[y * SQ + x], URBAN_WALL | URBAN_TOWER) {
-                        return false;
-                    }
-                }
-            }
-            let p = [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
-            !gates.iter().any(|&(g, h)| {
-                let u = unit2([h[0] - g[0], h[1] - g[1]]);
-                let len = crate::core::sqrt((h[0] - g[0]) * (h[0] - g[0]) + (h[1] - g[1]) * (h[1] - g[1]));
-                let (dx, dy) = (p[0] - g[0], p[1] - g[1]);
-                let (along, across) = (dx * u[0] + dy * u[1], -dx * u[1] + dy * u[0]);
-                along > 12.0 && along < len - 12.0 && across.abs() < 14.0
-            })
-        });
-    }
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);
     chunk
+}
+
+/// Whether an object's footprint disc touches a square of the chunk for which `hit` holds.
+fn touches_square(o: &Object, hit: impl Fn(usize) -> bool) -> bool {
+    let r = info(o.kind as u16).radius * o.scale;
+    let span = |v: f32| ((v - r).max(0.0) as usize, ((v + r).max(0.0) as usize).min(SQ - 1));
+    let ((x0, x1), (y0, y1)) = (span(o.x), span(o.y));
+    (y0..=y1).any(|y| {
+        (x0..=x1).any(|x| {
+            let (dx, dy) = (o.x - o.x.clamp(x as f32, x as f32 + 1.0), o.y - o.y.clamp(y as f32, y as f32 + 1.0));
+            dx * dx + dy * dy < r * r && hit(y * SQ + x)
+        })
+    })
+}
+
+/// Whether an object's footprint touches a wall or tower square (it would be drawn over them).
+fn on_wall(urban: &[u8], o: &Object) -> bool {
+    touches_square(o, |k| matches!(urban[k], URBAN_WALL | URBAN_TOWER))
 }
 
 /// Objects put down and taken away by hand (`Edits::objects`, `Edits::cleared`): generated
@@ -2198,14 +2302,48 @@ fn clear_of_roads(c: &Chunk, k: usize) -> bool {
     })
 }
 
-/// The squares of `all` clear of roads, else those off the road bed, else all of them.
-fn off_road_first(c: &Chunk, all: Vec<usize>) -> Vec<usize> {
-    let clear: Vec<usize> = all.iter().copied().filter(|&k| placeable(c, k) && clear_of_roads(c, k)).collect();
+/// The squares of `all` clear of roads (and off what is set out there already, a square's raised
+/// features and their steps), else those off the road bed, else all of them; never one in
+/// `keep_off` (walls, towers, gate passages and the squares next to them; raised features).
+fn off_road_first(c: &Chunk, all: Vec<usize>, keep_off: &[bool]) -> Vec<usize> {
+    // Squares under an object's footprint, within the bounds of `all`.
+    let (x0, y0, x1, y1) = all.iter().fold((SQ, SQ, 0, 0), |a, &k| (a.0.min(k % SQ), a.1.min(k / SQ), a.2.max(k % SQ), a.3.max(k / SQ)));
+    let w = (x1 + 1).saturating_sub(x0);
+    let mut busy = vec![false; w * (y1 + 1).saturating_sub(y0)];
+    for o in &c.objects {
+        let r = c.info(o).radius * o.scale;
+        if o.x + r < x0 as f32 || o.y + r < y0 as f32 || o.x - r > (x1 + 1) as f32 || o.y - r > (y1 + 1) as f32 {
+            continue;
+        }
+        for y in (o.y - r).max(y0 as f32) as usize..=((o.y + r) as usize).min(y1) {
+            for x in (o.x - r).max(x0 as f32) as usize..=((o.x + r) as usize).min(x1) {
+                let (dx, dy) = (o.x - (x as f32 + 0.5), o.y - (y as f32 + 0.5));
+                if dx * dx + dy * dy < (r + 0.5) * (r + 0.5) {
+                    busy[(y - y0) * w + x - x0] = true;
+                }
+            }
+        }
+    }
+    let open = |k: usize| !busy[(k / SQ - y0) * w + k % SQ - x0];
+    let daises: Vec<([f64; 2], f64)> = c
+        .structures
+        .iter()
+        .filter(|s| s.kind == ShapeKind::Dais)
+        .map(|s| {
+            let (d, (dx, dy)) = ([s.pts[0][0] as f64, s.pts[0][1] as f64], ((s.pts[1][0] - s.pts[0][0]) as f64, (s.pts[1][1] - s.pts[0][1]) as f64));
+            (d, crate::core::sqrt(dx * dx + dy * dy) + 1.0)
+        })
+        .collect();
+    let off_dais = |k: usize| {
+        let (x, y) = ((k % SQ) as f64 + 0.5, (k / SQ) as f64 + 0.5);
+        daises.iter().all(|&(d, r)| (x - d[0]) * (x - d[0]) + (y - d[1]) * (y - d[1]) > r * r)
+    };
+    let clear: Vec<usize> = all.iter().copied().filter(|&k| placeable(c, k) && clear_of_roads(c, k) && off_dais(k) && open(k) && !keep_off[k]).collect();
     if !clear.is_empty() {
         return clear;
     }
-    let off_road: Vec<usize> = all.iter().copied().filter(|&k| placeable(c, k)).collect();
-    if off_road.is_empty() { all } else { off_road }
+    let off_road: Vec<usize> = all.iter().copied().filter(|&k| placeable(c, k) && !keep_off[k]).collect();
+    if off_road.is_empty() { all.into_iter().filter(|&k| !keep_off[k]).collect() } else { off_road }
 }
 
 /// The 32x32 windows (top-left squares) whose dry ground is all one tier, leaving out mostly-water
@@ -2241,12 +2379,133 @@ fn flat_windows(c: &Chunk) -> Vec<(usize, usize)> {
     out
 }
 
+/// On an open square, the squares of `cells` by its edge (a house or street within two squares),
+/// where a stack of crates stands against a front rather than out on the paving; else all.
+fn by_fronts(c: &Chunk, cells: Vec<usize>) -> Vec<usize> {
+    if cells.iter().filter(|&&k| c.urban[k] == URBAN_PLAZA).count() * 2 <= cells.len() {
+        return cells;
+    }
+    let edge: Vec<usize> = cells
+        .iter()
+        .copied()
+        .filter(|&k| {
+            let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+            (-2..=2).any(|dy| {
+                (-2..=2).any(|dx| {
+                    let (i, j) = (x + dx, y + dy);
+                    i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 && {
+                        let q = j as usize * SQ + i as usize;
+                        c.building[q] != 0 || c.urban[q] == URBAN_STREET
+                    }
+                })
+            })
+        })
+        .collect();
+    if edge.is_empty() { cells } else { edge }
+}
+
+/// The 32x32 windows `enforce` fills: those mostly dry with fewer than three cover objects and
+/// buildings in them (every building with a square in a window, as `tests/vital.rs` counts); with
+/// `feature`, those with no hazard or prop in them. What doesn't change while objects are added
+/// (wet squares, the buildings in each window) is worked out once; the objects as they come.
+struct Windows {
+    feature: bool,
+    /// Objects counted so far (objects are only added while `enforce` fills windows).
+    counted: usize,
+    /// Counted objects by square, and its summed-area table; the summed-area table of wet squares.
+    at: Vec<u32>,
+    cover: Vec<u32>,
+    wet: Vec<u32>,
+    /// Buildings in each window, once counted (up to three; `u8::MAX`: not yet).
+    blds: Vec<u8>,
+}
+
+impl Windows {
+    const W: usize = 32;
+
+    fn new(c: &Chunk, feature: bool) -> Self {
+        let mut wet = vec![0u32; (SQ + 1) * (SQ + 1)];
+        for y in 0..SQ {
+            for x in 0..SQ {
+                let k = y * SQ + x;
+                let (i, up, left, diag) = ((y + 1) * (SQ + 1) + x + 1, y * (SQ + 1) + x + 1, (y + 1) * (SQ + 1) + x, y * (SQ + 1) + x);
+                wet[i] = (c.water_level[k] > c.height[k]) as u32 + wet[up] + wet[left] - wet[diag];
+            }
+        }
+        let n = SQ - Self::W + 1;
+        Windows { feature, counted: 0, at: vec![0; SQ * SQ], cover: vec![0; (SQ + 1) * (SQ + 1)], wet, blds: vec![u8::MAX; n * n] }
+    }
+
+    fn sum(t: &[u32], x: usize, y: usize) -> u32 {
+        let w = Self::W;
+        t[(y + w) * (SQ + 1) + x + w] + t[y * (SQ + 1) + x] - t[y * (SQ + 1) + x + w] - t[(y + w) * (SQ + 1) + x]
+    }
+
+    /// The first thin window (by row, then column) that `skip` passes over.
+    fn first(&mut self, c: &Chunk, skip: impl Fn((usize, usize)) -> bool) -> Option<(usize, usize)> {
+        let w = Self::W;
+        if c.objects.len() > self.counted {
+            for o in c.objects[self.counted..].iter().filter(|o| if self.feature { c.info(o).feature } else { c.info(o).cover >= 1 }) {
+                // (One centred off the chunk, past its top or left edge, is not in it.)
+                let (x, y) = (o.x as usize, o.y as usize);
+                if o.x >= 0.0 && o.y >= 0.0 && x < SQ && y < SQ {
+                    self.at[y * SQ + x] += 1;
+                }
+            }
+            self.counted = c.objects.len();
+            for y in 0..SQ {
+                for x in 0..SQ {
+                    let (i, up, left, diag) = ((y + 1) * (SQ + 1) + x + 1, y * (SQ + 1) + x + 1, (y + 1) * (SQ + 1) + x, y * (SQ + 1) + x);
+                    self.cover[i] = self.at[y * SQ + x] + self.cover[up] + self.cover[left] - self.cover[diag];
+                }
+            }
+        }
+        let need = if self.feature { 1 } else { 3 };
+        let n = SQ - w + 1;
+        for wy in 0..n {
+            for wx in 0..n {
+                let have = Self::sum(&self.cover, wx, wy) as usize;
+                if (Self::sum(&self.wet, wx, wy) as usize) * 2 >= w * w || have >= need || skip((wx, wy)) {
+                    continue;
+                }
+                if !self.feature {
+                    let q = wy * n + wx;
+                    if self.blds[q] == u8::MAX {
+                        let mut seen: Vec<u16> = Vec::new();
+                        'scan: for y in wy..wy + w {
+                            for x in wx..wx + w {
+                                let b = c.building[y * SQ + x];
+                                if b != 0 && !seen.contains(&b) {
+                                    seen.push(b);
+                                    if seen.len() >= need {
+                                        break 'scan;
+                                    }
+                                }
+                            }
+                        }
+                        self.blds[q] = seen.len() as u8;
+                    }
+                    if have + self.blds[q] as usize >= need {
+                        continue;
+                    }
+                }
+                return Some((wx, wy));
+            }
+        }
+        None
+    }
+}
+
 /// `shaped`: empty for ground as generated (one stream for the chunk); else every draw is keyed
 /// by its own cell (global), and squares marked (on a plateau) get no knoll or built feature.
-fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool]) {
+#[allow(clippy::too_many_arguments)]
+fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], keep_off: &[bool]) {
     let mut chunk_rng = Pcg32::new(hash3(seed, gsx, gsy, 0xe4f), 9);
     let keyed = !shaped.is_empty();
     let cell_rng = |phase: i64, x: i64, y: i64| Pcg32::new(hash3(seed, x, y, 0xe4f ^ (phase << 16)), 9);
+    // What goes down for cover, and as a feature: the town's own, else the biome's.
+    let cover_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| if !matches!(c.urban[k], 0 | URBAN_PARK) { town_cover(c.urban[k], rng) } else { fallback_cover(biome[k], rng) };
+    let feature_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| if !matches!(c.urban[k], 0 | URBAN_PARK) { town_cover(c.urban[k], rng) } else { fallback_feature(biome[k], rng) };
 
     // Elevation: every 16x16 cell spans at least two tiers.
     let mut deferred = false;
@@ -2301,7 +2560,8 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
     }
 
 
-    // Cover: every 8x8 cell has at least one cover object.
+    // Cover: every 8x8 cell has at least one cover object (but open squares: there the windows and
+    // the gap below see to it, so crates aren't strewn one to a cell over the paving).
     for cy in 0..SQ / COVER_CELL {
         for cx in 0..SQ / COVER_CELL {
             let (x0, y0) = ((cx * COVER_CELL) as f32, (cy * COVER_CELL) as f32);
@@ -2312,7 +2572,10 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 continue;
             }
             let all: Vec<usize> = (0..COVER_CELL * COVER_CELL).map(square).filter(|&k| dry(c, k)).collect();
-            let cells = off_road_first(c, all);
+            if all.iter().filter(|&&k| c.urban[k] == URBAN_PLAZA).count() * 2 > all.len() {
+                continue;
+            }
+            let cells = off_road_first(c, all, keep_off);
             if cells.is_empty() {
                 continue;
             }
@@ -2323,16 +2586,43 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
             } else {
                 &mut chunk_rng
             };
-            let k = cells[rng.below(cells.len() as u32) as usize];
-            let kind = if c.urban[k] != 0 { town_cover(c.urban[k], rng) } else { fallback_cover(biome[k], rng) };
-            push_at(c, kind, k, rng);
+            place_in(c, &cells, rng, &cover_kind);
         }
     }
 
-    // Max gap: no dry square farther than MAX_COVER_GAP from cover.
-    for _ in 0..64 {
+    // Every 32x32 window that is mostly dry holds three cover objects or buildings: a window
+    // whose cells' cover lies outside it (by water, or in a corner of each cell) gets more in its
+    // middle.
+    let mut tried: Vec<(usize, usize)> = Vec::new();
+    let mut windows = Windows::new(c, false);
+    for _ in 0..32 {
+        let Some((wx, wy)) = windows.first(c, |w| tried.iter().filter(|t| **t == w).count() >= 2) else { break };
+        let span = if tried.contains(&(wx, wy)) { (0, 32) } else { (8, 16) };
+        tried.push((wx, wy));
+        let all: Vec<usize> = (0..span.1 * span.1).map(|q| (wy + span.0 + q / span.1) * SQ + wx + span.0 + q % span.1).filter(|&k| dry(c, k) && c.building[k] == 0).collect();
+        if all.is_empty() {
+            continue;
+        }
+        let cells = by_fronts(c, off_road_first(c, all, keep_off));
+        if cells.is_empty() {
+            continue;
+        }
+        let mut own;
+        let rng = if keyed {
+            own = cell_rng(7 + span.0 as i64, gsx + wx as i64, gsy + wy as i64);
+            &mut own
+        } else {
+            &mut chunk_rng
+        };
+        place_in(c, &cells, rng, &cover_kind);
+    }
+
+    // Max gap: no dry square farther than MAX_COVER_GAP from cover (a square with no room for any
+    // near it, off walls, gates and raised features, is given up).
+    let mut given_up: Vec<usize> = Vec::new();
+    for _ in 0..160 {
         let dist = cover_distance(c);
-        let far = (0..SQ * SQ).filter(|&k| dry(c, k) && dist[k] > MAX_COVER_GAP).max_by_key(|&k| (dist[k], std::cmp::Reverse(k)));
+        let far = (0..SQ * SQ).filter(|&k| dry(c, k) && dist[k] > MAX_COVER_GAP && !given_up.contains(&k)).max_by_key(|&k| (dist[k], std::cmp::Reverse(k)));
         match far {
             Some(k) => {
                 let mut own;
@@ -2343,9 +2633,21 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                     &mut chunk_rng
                 };
                 // On a road, put the cover on the nearest verge instead.
-                let k = if !placeable(c, k) { nearest_verge(c, k).unwrap_or(k) } else { k };
-                let kind = if c.urban[k] != 0 { town_cover(c.urban[k], rng) } else { fallback_cover(biome[k], rng) };
-                push_at(c, kind, k, rng);
+                let k = if !placeable(c, k) || keep_off[k] {
+                    match nearest_verge(c, k, keep_off) {
+                        Some(v) => v,
+                        None => {
+                            given_up.push(k);
+                            continue;
+                        }
+                    }
+                } else {
+                    k
+                };
+                let kind = cover_kind(c, k, rng);
+                if !push_at(c, kind, k, rng) {
+                    given_up.push(k);
+                }
             }
             None => break,
         }
@@ -2364,7 +2666,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 }
                 let all: Vec<usize> =
                     (0..TIER_CELL * TIER_CELL).map(|q| (cy * TIER_CELL + q / TIER_CELL) * SQ + cx * TIER_CELL + q % TIER_CELL).filter(|&k| dry(c, k)).collect();
-                let cells = off_road_first(c, all);
+                let cells = off_road_first(c, all, keep_off);
                 if cells.is_empty() {
                     continue;
                 }
@@ -2375,10 +2677,45 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 } else {
                     &mut chunk_rng
                 };
-                let k = cells[rng.below(cells.len() as u32) as usize];
-                let kind = if c.urban[k] != 0 { town_cover(c.urban[k], rng) } else { fallback_feature(biome[k], rng) };
-                push_at(c, kind, k, rng);
+                place_in(c, &cells, rng, &feature_kind);
             }
+        }
+        // And in every mostly dry 32x32 window (whose cells' props may lie outside it).
+        let mut tried: Vec<(usize, usize)> = Vec::new();
+        let mut windows = Windows::new(c, true);
+        for _ in 0..32 {
+            let Some((wx, wy)) = windows.first(c, |w| tried.iter().filter(|t| **t == w).count() >= 2) else { break };
+            let span = if tried.contains(&(wx, wy)) { (0, 32) } else { (8, 16) };
+            tried.push((wx, wy));
+            let all: Vec<usize> = (0..span.1 * span.1).map(|q| (wy + span.0 + q / span.1) * SQ + wx + span.0 + q % span.1).filter(|&k| dry(c, k) && c.building[k] == 0).collect();
+            let cells = off_road_first(c, all, keep_off);
+            if cells.is_empty() {
+                continue;
+            }
+            let mut own;
+            let rng = if keyed {
+                own = cell_rng(9 + span.0 as i64, gsx + wx as i64, gsy + wy as i64);
+                &mut own
+            } else {
+                &mut chunk_rng
+            };
+            place_in(c, &cells, rng, &feature_kind);
+        }
+    }
+}
+
+/// Something (`kind_of` the square) put down on one of `cells`, from a random one on, the first
+/// where it fits off the buildings (at most 16 tried).
+fn place_in(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, kind_of: &dyn Fn(&Chunk, usize, &mut Pcg32) -> Kind) {
+    if cells.is_empty() {
+        return;
+    }
+    let start = rng.below(cells.len() as u32) as usize;
+    for q in 0..cells.len().min(16) {
+        let k = cells[(start + q) % cells.len()];
+        let kind = kind_of(c, k, rng);
+        if push_at(c, kind, k, rng) {
+            return;
         }
     }
 }
@@ -2392,8 +2729,8 @@ fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, se
         let (x, y) = (k % SQ, k / SQ);
         x >= 7 && y >= 7 && x < SQ - 7 && y < SQ - 7 && !shaped.get(k).is_some_and(|&s| s)
     };
-    // Open country and fields take a natural knoll; streets and plazas a built feature.
-    let good: Vec<usize> = cells.iter().copied().filter(|&k| placeable(c, k) && interior(k) && matches!(c.urban[k], 0 | URBAN_FIELD)).collect();
+    // Open country, fields and lawns take a natural knoll; streets and plazas a built feature.
+    let good: Vec<usize> = cells.iter().copied().filter(|&k| placeable(c, k) && interior(k) && matches!(c.urban[k], 0 | URBAN_FIELD | URBAN_PARK)).collect();
     let town: Vec<usize> = cells.iter().copied().filter(|&k| placeable(c, k) && interior(k)).collect();
     // Paved ground (streets, plazas) gets a round built feature (a dais, a fountain, a
     // planter, a market cross) clear of stalls and props, rather than a knoll.
@@ -2562,6 +2899,525 @@ fn quay_cargo(poly: &[[f64; 2]], seed: u64, out: &mut Vec<([f64; 2], f32, Kind)>
     }
 }
 
+/// A polygon's bounds (world ft): x0, y0, x1, y1.
+fn bounds(poly: &[[f64; 2]]) -> (f64, f64, f64, f64) {
+    poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])))
+}
+
+/// A prop's footprint radius (ft).
+fn foot(kind: Kind) -> f64 {
+    info(kind as u16).radius as f64 * SQUARE_FT
+}
+
+/// Room for props on an open space (world ft): spots on the battlemap's squares inside it, each
+/// kept clear of the lanes across it (streets and roads: centre line, half width), the buildings
+/// round it (and on it: a temple on its close), its monuments and what is set out on it already
+/// (centre, radius).
+struct Room<'a> {
+    poly: &'a [[f64; 2]],
+    c: [f64; 2],
+    lanes: Vec<([f64; 2], [f64; 2], f64)>,
+    blds: Vec<&'a [[f64; 2]]>,
+    taken: Vec<([f64; 2], f64)>,
+    /// The spots, each with how far it is inside the outline, and (worked out when first asked:
+    /// NaN till then) how far it is clear of the lanes (past their half width) and of buildings
+    /// (ft; below 0 inside one).
+    grid: Vec<([f64; 2], f64, std::cell::Cell<f64>, std::cell::Cell<f64>)>,
+    seed: u64,
+}
+
+impl<'a> Room<'a> {
+    fn new(poly: &'a [[f64; 2]], l: &'a crate::town::Layout, lanes: &[([f64; 2], [f64; 2], f64)], taken: &[([f64; 2], f64)], seed: u64) -> Room<'a> {
+        use crate::town::geom::{centroid, contains, dist};
+        let (x0, y0, x1, y1) = bounds(poly);
+        let near = |b: (f64, f64, f64, f64), m: f64| b.0 <= x1 + m && b.2 >= x0 - m && b.1 <= y1 + m && b.3 >= y0 - m;
+        let lanes = lanes.iter().copied().filter(|&(a, b, w)| near((a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])), w + 15.0)).collect();
+        let blds = l.buildings.iter().map(|b| b.poly.as_slice()).filter(|b| near(bounds(b), 15.0)).collect();
+        let mut taken = taken.to_vec();
+        for m in l.monuments.iter().filter(|m| near(bounds(m), 0.0)) {
+            let mc = centroid(m);
+            taken.push((mc, m.iter().map(|q| dist(*q, mc)).fold(0.0, f64::max) + 3.0));
+        }
+        let mut room = Room { poly, c: centroid(poly), lanes, blds, taken, grid: Vec::new(), seed };
+        // Square centres (by their global index on the world's 5-ft grid, as every chunk lays its
+        // squares).
+        let cell = |v: f64| crate::core::floor(v / SQUARE_FT) as i64;
+        for j in cell(y0)..=cell(y1) {
+            for i in cell(x0)..=cell(x1) {
+                let p = [(i as f64 + 0.5) * SQUARE_FT, (j as f64 + 0.5) * SQUARE_FT];
+                if contains(poly, p) {
+                    room.grid.push((p, room.depth(p), std::cell::Cell::new(f64::NAN), std::cell::Cell::new(f64::NAN)));
+                }
+            }
+        }
+        room
+    }
+
+    /// How far `p` is from the lanes, past their half width (ft).
+    fn lane_gap(&self, p: [f64; 2]) -> f64 {
+        self.lanes.iter().map(|&(a, b, w)| crate::town::geom::seg_dist(p, a, b) - w).fold(f64::MAX, f64::min)
+    }
+
+    /// How far `p` is from the buildings (ft; -1 inside one).
+    fn bld_gap(&self, p: [f64; 2]) -> f64 {
+        use crate::town::geom::{contains, seg_dist};
+        self.blds.iter().map(|b| if contains(b, p) { -1.0 } else { (0..b.len()).map(|e| seg_dist(p, b[e], b[(e + 1) % b.len()])).fold(f64::MAX, f64::min) }).fold(f64::MAX, f64::min)
+    }
+
+    /// How far `p` lies inside the outline (ft; 0 outside it).
+    fn depth(&self, p: [f64; 2]) -> f64 {
+        use crate::town::geom::{contains, seg_dist};
+        if !contains(self.poly, p) {
+            return 0.0;
+        }
+        let m = self.poly.len();
+        (0..m).map(|e| seg_dist(p, self.poly[e], self.poly[(e + 1) % m])).fold(f64::MAX, f64::min)
+    }
+
+    /// Whether a prop `r` ft round fits at `p` (off the lanes too, with `lanes`).
+    fn free(&self, p: [f64; 2], r: f64, lanes: bool) -> bool {
+        let nan = || std::cell::Cell::new(f64::NAN);
+        self.fits(&(p, self.depth(p), nan(), nan()), r, lanes)
+    }
+
+    /// `free` for a spot of the grid (the cheap tests first; the gaps worked out once).
+    fn fits(&self, (p, depth, lane, bld): &([f64; 2], f64, std::cell::Cell<f64>, std::cell::Cell<f64>), r: f64, lanes: bool) -> bool {
+        let gap = |c: &std::cell::Cell<f64>, f: &dyn Fn([f64; 2]) -> f64| {
+            if c.get().is_nan() {
+                c.set(f(*p));
+            }
+            c.get()
+        };
+        *depth >= r + 1.0
+            && self.taken.iter().all(|&(q, s)| (p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]) >= (r + s + 2.0) * (r + s + 2.0))
+            && (!lanes || gap(lane, &|p| self.lane_gap(p)) >= r + 1.0)
+            && gap(bld, &|p| self.bld_gap(p)) >= r + 3.0
+    }
+
+    /// A little noise by spot (0–1), pure in the spot.
+    fn jit(&self, p: [f64; 2], salt: i64) -> f64 {
+        unit(hash3(self.seed, crate::core::round(p[0] * 2.0) as i64, crate::core::round(p[1] * 2.0) as i64, salt))
+    }
+
+    /// The free spot for a prop `r` ft round that scores best, taken; none if nothing fits.
+    fn best(&mut self, r: f64, lanes: bool, score: impl Fn(&Room, [f64; 2]) -> f64) -> Option<[f64; 2]> {
+        let mut best: Option<(f64, [f64; 2])> = None;
+        for spot in &self.grid {
+            if self.fits(spot, r, lanes) {
+                let (p, s) = (spot.0, score(self, spot.0));
+                if best.is_none_or(|b| s > b.0) {
+                    best = Some((s, p));
+                }
+            }
+        }
+        let p = best?.1;
+        self.taken.push((p, r));
+        Some(p)
+    }
+
+    /// Lamp posts of one look round the square, spread apart: each at about `at` ft from the middle
+    /// (or `at` ft in from the edge, with `edge`), as far as it can be from the others.
+    fn lamps(&mut self, n: i64, at: f64, edge: bool, look: u8, out: &mut Vec<([f64; 2], f32, Kind, u8)>) {
+        use crate::town::geom::dist;
+        let mut lamps: Vec<[f64; 2]> = Vec::new();
+        for k in 0..n {
+            let spread = |r: &Room, p: [f64; 2]| {
+                let off = if edge { r.depth(p) - at } else { dist(p, r.c) - at };
+                -0.4 * off.abs() + 0.15 * lamps.iter().map(|q| dist(*q, p)).fold(150.0, f64::min) + r.jit(p, 70 + k)
+            };
+            if let Some(p) = self.best(foot(Kind::LampPost) + 2.0, true, spread) {
+                lamps.push(p);
+                out.push((p, 0.0, Kind::LampPost, look));
+            }
+        }
+    }
+
+    /// The direction (rad) of the outline's edge nearest `p`.
+    fn along(&self, p: [f64; 2]) -> f32 {
+        use crate::town::geom::seg_dist;
+        let m = self.poly.len();
+        let e = (0..m).min_by(|&a, &b| seg_dist(p, self.poly[a], self.poly[(a + 1) % m]).total_cmp(&seg_dist(p, self.poly[b], self.poly[(b + 1) % m]))).unwrap_or(0);
+        let (a, b) = (self.poly[e], self.poly[(e + 1) % m]);
+        libm::atan2(b[1] - a[1], b[0] - a[0]) as f32
+    }
+}
+
+/// A lamp post's look for a square's set (one look for all): lit iron or two lanterns on a rich
+/// square, else any but the unlit one, now and then that.
+fn lamp_look(rng: &mut Pcg32, rich: bool) -> u8 {
+    if rich {
+        [0, 2][rng.below(2) as usize]
+    } else if rng.next_f64() < 0.15 {
+        3
+    } else {
+        rng.below(3) as u8
+    }
+}
+
+/// A market cross by the well of a main square, 22 to 40 ft out along its long axis: on some
+/// markets (a buttercross, mostly) and every civic square, its one landmark (taken in `room`).
+/// Pure in the plaza.
+fn main_cross(pl: &crate::town::Plaza, room: &mut Room, seed: u64) -> Option<([f64; 2], f32, Kind, u8)> {
+    use crate::town::PlazaKind as K;
+    use crate::town::geom::{add, main_axis, mul};
+    let c = room.c;
+    let mut rng = Pcg32::new(hash2(seed ^ 0xc205, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64), 23);
+    let chance = match pl.kind {
+        K::Market | K::MarketSparse => 0.45,
+        K::MarketDay => 0.3,
+        _ => 1.0,
+    };
+    if rng.next_f64() >= chance {
+        return None;
+    }
+    let look = if pl.kind.is_market() { [1, 1, 0, 3][rng.below(4) as usize] } else { [0, 3, 2][rng.below(3) as usize] };
+    let u = main_axis(&pl.pts);
+    let side = if rng.next_f64() < 0.5 { 1.0 } else { -1.0 };
+    // (A civic square's, its landmark, also further out or across the axis where a street
+    // crosses the middle.)
+    let (ds, axes): (&[f64], &[[f64; 2]]) = if pl.kind == K::Civic { (&[28.0, 34.0, 22.0, 40.0, 50.0, 60.0], &[u, [-u[1], u[0]]]) } else { (&[28.0, 34.0, 22.0, 40.0], &[u]) };
+    for &a in axes {
+        for &d in ds {
+            for s in [side, -side] {
+                let p = add(c, mul(a, d * s));
+                if room.free(p, cross_ft() + 3.0, true) {
+                    room.taken.push((p, cross_ft()));
+                    return Some((p, 0.0, Kind::MarketCross, look));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A main square's edge, once its market and features are laid out (taken in `room`): a notice
+/// board (a civic square two), a trough or two along the edge, a city's lamp posts spread round it
+/// (one look for all), and a civic square's stocks or pillory (a market day's now and then). Pure
+/// in the plaza.
+fn dress_main(pl: &crate::town::Plaza, l: &crate::town::Layout, room: &mut Room, seed: u64, out: &mut Vec<([f64; 2], f32, Kind, u8)>) {
+    use crate::town::PlazaKind as K;
+    let c = room.c;
+    let mut rng = Pcg32::new(hash2(seed ^ 0xd3a1, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64), 29);
+    let civic = pl.kind == K::Civic;
+    let city = l.tier >= crate::t0::settle::Tier::City;
+    // Just inside the edge (`want` ft in), here or there.
+    let edge = |want: f64, salt: i64| move |r: &Room, p: [f64; 2]| -(r.depth(p) - want).abs() + 3.0 * r.jit(p, salt);
+    for k in 0..1 + civic as i64 {
+        if let Some(p) = room.best(foot(Kind::NoticeBoard), true, edge(6.0, 10 + k)) {
+            out.push((p, 0.0, Kind::NoticeBoard, rng.below(4) as u8));
+        }
+    }
+    let trough = if city { [1, 3][rng.below(2) as usize] } else { [0, 2, 1][rng.below(3) as usize] };
+    for k in 0..1 + (rng.next_f64() < 0.5) as i64 {
+        if let Some(p) = room.best(foot(Kind::WaterTrough), true, edge(7.0, 20 + k)) {
+            out.push((p, room.along(p), Kind::WaterTrough, trough));
+        }
+    }
+    if city {
+        let look = lamp_look(&mut rng, civic || l.tier == crate::t0::settle::Tier::Metropolis);
+        room.lamps(4 + rng.below(3) as i64, 5.0, true, look, out);
+    }
+    if (civic && rng.next_f64() < 0.6) || (pl.kind == K::MarketDay && rng.next_f64() < 0.25) {
+        let look = if civic { [0, 2, 3][rng.below(3) as usize] } else { [0, 3][rng.below(2) as usize] };
+        if let Some(p) = room.best(foot(Kind::Stocks), true, edge(10.0, 40)) {
+            out.push((p, 0.0, Kind::Stocks, look));
+        }
+    }
+}
+
+/// The biome of the land at `p` (world ft): where the map there is the sea's or a lake's (a
+/// town on the shore), the nearest land's round it, out to about a T0 cell, else grassland.
+fn land_biome(t0: &T0, p: [f64; 2]) -> Biome {
+    let at = |q: [f64; 2]| Biome::from_u8(t0.sample_biome(q[0], q[1], t0.biome_warp(q[0], q[1]))[0]);
+    let wet = |b: Biome| matches!(b, Biome::Ocean | Biome::Lake);
+    std::iter::once(p)
+        .chain([300.0, 1000.0, 2500.0, 4500.0, 7000.0].into_iter().flat_map(|r| {
+            (0..8).map(move |k| {
+                let t = std::f64::consts::TAU * k as f64 / 8.0;
+                [p[0] + r * libm::cos(t), p[1] + r * libm::sin(t)]
+            })
+        }))
+        .map(at)
+        .find(|&b| !wet(b))
+        .unwrap_or(Biome::Grassland)
+}
+
+/// How much larger than its place a square's market cross is drawn (its steps and cross read from
+/// afar; the squares keep room for it).
+const MARKET_CROSS_SCALE: f32 = 1.35;
+
+/// A square's market cross's footprint radius (ft), as drawn.
+fn cross_ft() -> f64 {
+    MARKET_CROSS_SCALE as f64 * foot(Kind::MarketCross)
+}
+
+/// What grows on a town's green or close in a biome: its trees, shrubs and small plants (palms
+/// in the desert, acacias on the savanna, conifers in the north, none of a kind where the biome
+/// has none), and whether its trees are few (one or two broadleaves on the steppe's grass).
+fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static [Kind], bool) {
+    use Kind::*;
+    match b {
+        Biome::TemperateForest => (&[TreeDeciduous], &[Bush], &[Flowers, Mushrooms], false),
+        Biome::TemperateRainforest => (&[TreeDeciduous, TreeConifer], &[Bush, Thicket], &[Mushrooms], false),
+        Biome::Grassland => (&[TreeDeciduous], &[Bush], &[Flowers, TallGrass], false),
+        Biome::Steppe => (&[TreeDeciduous], &[Bush], &[TallGrass], true),
+        Biome::Savanna => (&[TreeAcacia], &[Bush], &[TallGrass], false),
+        Biome::Jungle => (&[TreePalm, TreeJungle], &[Bush, Thicket], &[Flowers], false),
+        Biome::HotDesert | Biome::SaltFlat => (&[TreePalm], &[Cactus], &[], false),
+        Biome::Taiga | Biome::Alpine | Biome::Tundra | Biome::ColdDesert | Biome::Ice => (&[TreeConifer], &[Bush], &[], false),
+        Biome::Swamp => (&[TreeWillow], &[Bush], &[Reeds], false),
+        Biome::Blight | Biome::Ashland | Biome::Volcanic => (&[TreeDead], &[], &[], false),
+        Biome::Ocean | Biome::Lake => (&[TreeDeciduous], &[Bush], &[], false),
+    }
+}
+
+/// The other open spaces dressed by what they are for (`town::squares`), each a pure function of
+/// its plaza (world ft) and the layout round it, so every chunk sets out the same:
+/// - a widened crossroads: a signpost as near its middle as the lanes leave room (a city's, now
+///   and then, a market cross in the middle for the traffic to go round), a lamp or two, a trough,
+///   a notice board, a stack of barrels or crates;
+/// - a well square: the well on a stepped plinth in the middle, troughs by it, lamps, a notice
+///   board, sometimes stocks;
+/// - a fountain square: a fountain in the middle (raised a tier, as the main square's; a well on
+///   its plinth where the square is too small), lamp posts spread round it, one look for all;
+/// - a green: a well, a cross or a great tree in the middle, the biome's trees round its edge clear
+///   of the lanes, its shrubs and plants, sometimes stocks;
+/// - a temple's close: a standing cross before the temple, a hedge round its churchyard behind it
+///   and headstones in rows square to it, the biome's trees round the close.
+fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, lanes: &[([f64; 2], [f64; 2], f64)], seed: u64, features: &mut Vec<([f64; 2], f64, PlazaFeature, f64)>, out: &mut Vec<([f64; 2], f32, Kind, u8)>) {
+    use crate::town::PlazaKind as K;
+    use crate::town::geom::{add, area, centroid, contains, dist, len, lerp, mul, sub};
+    let poly = &pl.pts;
+    let mut room = Room::new(poly, l, lanes, &[], seed ^ 0xd2e5);
+    let c = room.c;
+    let mut rng = Pcg32::new(hash2(seed ^ 0xd2e5, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64), 19);
+    let city = l.tier >= crate::t0::settle::Tier::City;
+    let reach = poly.iter().map(|q| dist(*q, c)).fold(0.0, f64::max);
+    let outward = |p: [f64; 2]| libm::atan2(p[1] - c[1], p[0] - c[0]) as f32;
+    let (trees, shrubs, plants, few) = greenery(land_biome(t0, c));
+    let pick = |rng: &mut Pcg32, kinds: &[Kind]| kinds[rng.below(kinds.len() as u32) as usize];
+    // Scores: nearest the middle; at a distance from it; just inside the edge.
+    let middle = |salt: i64| move |r: &Room, p: [f64; 2]| -dist(p, r.c) + 2.0 * r.jit(p, salt);
+    let ring = |at: f64, salt: i64| move |r: &Room, p: [f64; 2]| -(dist(p, r.c) - at).abs() + 3.0 * r.jit(p, salt);
+    let edge = |want: f64, salt: i64| move |r: &Room, p: [f64; 2]| -(r.depth(p) - want).abs() + 3.0 * r.jit(p, salt);
+    let cover = |room: &mut Room, rng: &mut Pcg32, out: &mut Vec<([f64; 2], f32, Kind, u8)>, salt: i64| {
+        let kind = if rng.next_f64() < 0.5 { Kind::Barrel } else { Kind::Crate };
+        if let Some(p) = room.best(foot(kind) + 1.0, true, edge(5.0, salt)) {
+            out.push((p, rng.range(0.0, std::f64::consts::TAU) as f32, kind, rng.below(4) as u8));
+        }
+    };
+    // A well on a stepped round plinth in the middle.
+    let well = |room: &mut Room, rng: &mut Pcg32, out: &mut Vec<([f64; 2], f32, Kind, u8)>, features: &mut Vec<([f64; 2], f64, PlazaFeature, f64)>| {
+        if !room.free(c, 7.0, false) {
+            return false;
+        }
+        features.push((c, 6.0, PlazaFeature::Dais, rng.range(0.0, std::f64::consts::TAU)));
+        room.taken.push((c, 9.0));
+        out.push((c, 0.0, Kind::Well, rng.below(4) as u8));
+        true
+    };
+    // Trees of the biome spread round a lawn, `inset` ft in from its edge.
+    let grove = |room: &mut Room, rng: &mut Pcg32, out: &mut Vec<([f64; 2], f32, Kind, u8)>, n: i64, inset: f64| {
+        let mut at: Vec<[f64; 2]> = Vec::new();
+        let n = if few { n.min(1 + rng.below(2) as i64) } else { n };
+        for k in 0..if trees.is_empty() { 0 } else { n } {
+            let kind = pick(rng, trees);
+            let spread = |r: &Room, p: [f64; 2]| -0.5 * (r.depth(p) - inset).abs() + 0.2 * at.iter().map(|q| dist(*q, p)).fold(100.0, f64::min) + 2.0 * r.jit(p, 10 + k);
+            if let Some(p) = room.best(foot(kind), true, spread) {
+                at.push(p);
+                out.push((p, 0.0, kind, rng.below(4) as u8));
+            }
+        }
+    };
+    let start = out.len();
+    match pl.kind {
+        K::Crossroads => {
+            if city && rng.next_f64() < 0.35 && room.free(c, cross_ft(), false) {
+                room.taken.push((c, cross_ft()));
+                out.push((c, 0.0, Kind::MarketCross, [0, 1, 3][rng.below(3) as usize]));
+            } else if let Some(p) = room.best(foot(Kind::Signpost) + 1.0, true, middle(1)) {
+                out.push((p, 0.0, Kind::Signpost, [1, 3][rng.below(2) as usize]));
+            }
+            let look = lamp_look(&mut rng, false);
+            room.lamps(if city { 2 } else { (rng.next_f64() < 0.6) as i64 }, 0.6 * reach, false, look, out);
+            // A trough where there's room, a notice board on some (on every one without a trough).
+            let trough = room.best(foot(Kind::WaterTrough), true, ring(0.55 * reach, 20));
+            if let Some(p) = trough {
+                out.push((p, outward(p) + std::f32::consts::FRAC_PI_2, Kind::WaterTrough, rng.below(4) as u8));
+            }
+            if (trough.is_none() || rng.next_f64() < 0.5)
+                && let Some(p) = room.best(foot(Kind::NoticeBoard), true, edge(4.0, 30))
+            {
+                out.push((p, 0.0, Kind::NoticeBoard, rng.below(4) as u8));
+            }
+            // At least two things to see: else by the edge, where the streets meet the houses, a
+            // signpost (if none yet), a lamp post, a notice board.
+            let signed = out[start..].iter().any(|o| matches!(o.2, Kind::Signpost | Kind::MarketCross));
+            for (salt, kind) in [(45, Kind::Signpost), (46, Kind::LampPost), (47, Kind::NoticeBoard)] {
+                if out.len() - start >= 2 || (kind == Kind::Signpost && signed) {
+                    continue;
+                }
+                if let Some(p) = room.best(foot(kind) + 1.0, false, edge(3.0, salt)) {
+                    let v = match kind {
+                        Kind::Signpost => [1, 3][rng.below(2) as usize],
+                        Kind::LampPost => look,
+                        _ => rng.below(4) as u8,
+                    };
+                    out.push((p, 0.0, kind, v));
+                }
+            }
+            for k in 0..1 + rng.below(2) as i64 {
+                cover(&mut room, &mut rng, out, 40 + k);
+            }
+        }
+        K::WellSquare => {
+            well(&mut room, &mut rng, out, features);
+            let trough = if city { [1, 3][rng.below(2) as usize] } else { [0, 2, 3][rng.below(3) as usize] };
+            for k in 0..1 + (rng.next_f64() < 0.5) as i64 {
+                if let Some(p) = room.best(foot(Kind::WaterTrough), false, ring(15.0, 10 + k)) {
+                    out.push((p, outward(p) + std::f32::consts::FRAC_PI_2, Kind::WaterTrough, trough));
+                }
+            }
+            let look = lamp_look(&mut rng, false);
+            room.lamps(if city { 2 } else { (rng.next_f64() < 0.5) as i64 }, 0.65 * reach, false, look, out);
+            if rng.next_f64() < 0.4
+                && let Some(p) = room.best(foot(Kind::NoticeBoard), true, edge(4.0, 30))
+            {
+                out.push((p, 0.0, Kind::NoticeBoard, rng.below(4) as u8));
+            }
+            if rng.next_f64() < if city { 0.15 } else { 0.25 }
+                && let Some(p) = room.best(foot(Kind::Stocks), true, edge(6.0, 31))
+            {
+                out.push((p, 0.0, Kind::Stocks, rng.below(4) as u8));
+            }
+            cover(&mut room, &mut rng, out, 40);
+        }
+        K::FountainSquare => {
+            let fr = (0.3 * reach).clamp(7.0, 12.0);
+            if room.free(c, fr + 2.0, false) {
+                features.push((c, fr, PlazaFeature::Fountain, rng.range(0.0, std::f64::consts::TAU)));
+                room.taken.push((c, fr + 4.0));
+            } else {
+                well(&mut room, &mut rng, out, features);
+            }
+            let look = lamp_look(&mut rng, city);
+            room.lamps(3 + city as i64, fr + 0.5 * (reach - fr), false, look, out);
+            if rng.next_f64() < 0.3
+                && let Some(p) = room.best(foot(Kind::NoticeBoard), true, edge(4.0, 30))
+            {
+                out.push((p, 0.0, Kind::NoticeBoard, rng.below(4) as u8));
+            }
+        }
+        K::Green => {
+            let mid = rng.next_f64();
+            if mid < 0.4 && well(&mut room, &mut rng, out, features) {
+            } else if mid < 0.65 && room.free(c, cross_ft(), false) {
+                room.taken.push((c, cross_ft() + 2.0));
+                out.push((c, 0.0, Kind::MarketCross, [0, 2][rng.below(2) as usize]));
+            } else if !trees.is_empty() && room.free(c, 9.0, true) {
+                // A great tree in the middle.
+                room.taken.push((c, 9.0));
+                out.push((c, 0.0, pick(&mut rng, trees), rng.below(4) as u8));
+            }
+            grove(&mut room, &mut rng, out, ((area(poly).abs() / 3000.0) as i64).clamp(2, 6), 10.0);
+            for k in 0..if shrubs.is_empty() { 0 } else { 1 + rng.below(3) as i64 } {
+                let kind = pick(&mut rng, shrubs);
+                if let Some(p) = room.best(foot(kind), true, edge(4.0, 20 + k)) {
+                    out.push((p, rng.range(0.0, std::f64::consts::TAU) as f32, kind, rng.below(4) as u8));
+                }
+            }
+            for k in 0..if plants.is_empty() { 0 } else { 2 + rng.below(3) as i64 } {
+                let kind = pick(&mut rng, plants);
+                if let Some(p) = room.best(foot(kind), true, |r: &Room, p: [f64; 2]| r.jit(p, 30 + k)) {
+                    out.push((p, rng.range(0.0, std::f64::consts::TAU) as f32, kind, rng.below(4) as u8));
+                }
+            }
+            if rng.next_f64() < 0.3
+                && let Some(p) = room.best(foot(Kind::Stocks), true, edge(6.0, 40))
+            {
+                out.push((p, 0.0, Kind::Stocks, rng.below(4) as u8));
+            }
+        }
+        K::TempleClose => {
+            // The temple and its churchyard: what stands on the close, roofed and open.
+            let on = |s: crate::town::Structure| {
+                l.buildings.iter().filter(|b| b.structure == s).map(|b| &b.poly).find(|b| {
+                    let (x0, y0, x1, y1) = bounds(b);
+                    contains(poly, [0.5 * (x0 + x1), 0.5 * (y0 + y1)])
+                })
+            };
+            let temple = on(crate::town::Structure::Roofed);
+            let tc = temple.map_or(c, |t| centroid(t));
+            if let Some(t) = temple.filter(|t| t.len() >= 3) {
+                // A standing cross before its front: of the hall's sides, the one toward the middle
+                // of the town (as the close was laid out).
+                let u = sub(t[1], t[0]);
+                let u = mul(u, 1.0 / len(u).max(1e-9));
+                let to = sub(l.center, tc);
+                let front = [u, mul(u, -1.0), [-u[1], u[0]], [u[1], -u[0]]].into_iter().max_by(|a, b| crate::town::geom::dot(*a, to).total_cmp(&crate::town::geom::dot(*b, to))).unwrap_or(u);
+                let ext = t.iter().map(|q| crate::town::geom::dot(sub(*q, tc), front)).fold(0.0, f64::max);
+                let at = add(tc, mul(front, ext + 2.0 + cross_ft()));
+                room.taken.push((at, cross_ft() + 2.0));
+                out.push((at, 0.0, Kind::MarketCross, [0, 2][rng.below(2) as usize]));
+            }
+            if let Some(g) = on(crate::town::Structure::Open).filter(|g| g.len() == 4) {
+                // A hedge round the churchyard 3 ft out, with a gap for its gate on the temple's side.
+                let gc = centroid(g);
+                let mid = |e: usize| lerp(g[e], g[(e + 1) % 4], 0.5);
+                let gate = (0..4).min_by(|&a, &b| dist(mid(a), tc).total_cmp(&dist(mid(b), tc))).unwrap_or(0);
+                for e in 0..4 {
+                    let (a, b) = (g[e], g[(e + 1) % 4]);
+                    let steps = (dist(a, b) / 5.0).floor().max(1.0) as usize;
+                    for k in 0..=steps {
+                        let q = lerp(a, b, k as f64 / steps as f64);
+                        if e == gate && dist(q, mid(e)) < 6.0 {
+                            continue;
+                        }
+                        let d = sub(q, gc);
+                        let p = add(q, mul(d, 3.0 / len(d).max(1e-9)));
+                        out.push((p, rng.range(0.0, std::f64::consts::TAU) as f32, Kind::Bush, rng.below(4) as u8));
+                    }
+                }
+                // Headstones in rows square to the churchyard, a path kept from its gate across.
+                let (e0, e1) = (sub(g[1], g[0]), sub(g[3], g[0]));
+                let (l0, l1) = (len(e0), len(e1));
+                let (u0, u1) = (mul(e0, 1.0 / l0.max(1e-9)), mul(e1, 1.0 / l1.max(1e-9)));
+                let (gm, way) = (mid(gate), sub(gc, mid(gate)));
+                let way = mul(way, 1.0 / len(way).max(1e-9));
+                let mut a = 4.5;
+                while a <= l0 - 4.5 {
+                    let mut b = 4.5;
+                    while b <= l1 - 4.5 {
+                        let p = add(g[0], add(mul(u0, a), mul(u1, b)));
+                        let off = sub(p, gm);
+                        let across = (off[0] * way[1] - off[1] * way[0]).abs();
+                        if across > 3.5 && room.jit(p, 50) < 0.85 {
+                            out.push((p, 0.0, Kind::Headstone, rng.below(4) as u8));
+                        }
+                        b += 8.0;
+                    }
+                    a += 5.0;
+                }
+                room.taken.push((gc, g.iter().map(|q| dist(*q, gc)).fold(0.0, f64::max) + 4.0));
+            }
+            let perimeter: f64 = (0..poly.len()).map(|e| dist(poly[e], poly[(e + 1) % poly.len()])).sum();
+            grove(&mut room, &mut rng, out, ((perimeter / 50.0) as i64).clamp(3, 8), 8.0);
+        }
+        _ => {}
+    }
+    // Every square has its focus, however little room it leaves: a signpost at a crossroads, a
+    // well at a well or fountain square, a tree or a well on a green.
+    if out.len() == start {
+        let kind = match pl.kind {
+            K::Crossroads => Kind::Signpost,
+            K::Green if !trees.is_empty() => trees[0],
+            _ => Kind::Well,
+        };
+        let p = room.best(foot(kind), false, middle(90)).unwrap_or(c);
+        out.push((p, 0.0, kind, rng.below(4) as u8));
+    }
+}
+
 /// A town plaza's market as a little town of its own: jittered seeds inside a wobbly oval round
 /// the well make Voronoi cells, each pulled back from its neighbours so lanes run between them
 /// (streets for players and passers-by). Each block's outline is rounded and wobbled, and its
@@ -2712,7 +3568,9 @@ fn market_blocks(poly: &[[f64; 2]], monuments: &[Vec<[f64; 2]>], keep: &[([f64; 
 /// the axis, four trees round the well, or fountains on the long axis and crosses (or daises) on
 /// the short one. Every symmetric group goes in whole or not at all. Open paving must still span
 /// two tiers in every 32-square window (`enforce`), so where some part of the square is more than
-/// 70 ft from a raised feature, more trees go in, mirrored across both axes.
+/// 70 ft from a raised feature, more trees go in, mirrored across both axes. A civic square
+/// (`civic`) has no pattern, its market cross for a landmark: its trees go by its edges.
+#[allow(clippy::too_many_arguments)]
 fn plaza_features(
     poly: &[[f64; 2]],
     monuments: &[Vec<[f64; 2]>],
@@ -2720,6 +3578,7 @@ fn plaza_features(
     lanes: &[([f64; 2], [f64; 2], f64)],
     seed: u64,
     patterned: bool,
+    civic: bool,
     out: &mut Vec<([f64; 2], f64, PlazaFeature, f64)>,
 ) {
     use crate::town::geom::{add, area, centroid, contains, dist, dot, main_axis, mul, seg_dist, sub};
@@ -2802,7 +3661,8 @@ fn plaza_features(
     let (r_tree, r_fountain, r_cross, r_dais) = (rng.range(6.0, 8.0), rng.range(9.0, 12.0), rng.range(5.0, 6.5), rng.range(7.0, 9.0));
     let minor = if rng.next_f64() < 0.6 { (PlazaFeature::Cross, r_cross) } else { (PlazaFeature::Dais, r_dais) };
     let style = rng.below(3);
-    for attempt in 0..3 {
+    // (A civic square has its cross for a landmark (`main_cross`) and trees by its edges, no more.)
+    for attempt in (0..3).filter(|_| !civic) {
         match (style + attempt) % 3 {
             // A fountain either side of the well on the long axis.
             0 => {
@@ -2856,6 +3716,8 @@ fn plaza_features(
     }
     let reach = |out: &[([f64; 2], f64, PlazaFeature, f64)], p: [f64; 2]| out[first..].iter().map(|f| (f.0[0] - p[0]).abs().max((f.0[1] - p[1]).abs())).fold(f64::MAX, f64::min);
     let mut given_up: Vec<[f64; 2]> = Vec::new();
+    let m = poly.len();
+    let by_edge = |p: [f64; 2]| (0..m).map(|e| seg_dist(p, poly[e], poly[(e + 1) % m])).fold(f64::MAX, f64::min) <= r_tree + 14.0;
     for _ in 0..16 {
         let worst = samples
             .iter()
@@ -2864,7 +3726,7 @@ fn plaza_features(
             .filter(|&(d, _)| d > 70.0)
             .max_by(|a, b| a.0.total_cmp(&b.0));
         let Some((_, s)) = worst else { break };
-        let mut spots: Vec<[f64; 2]> = (0..81).map(|q| [s[0] + ((q % 9) as f64 - 4.0) * 8.0, s[1] + ((q / 9) as f64 - 4.0) * 8.0]).collect();
+        let mut spots: Vec<[f64; 2]> = (0..81).map(|q| [s[0] + ((q % 9) as f64 - 4.0) * 8.0, s[1] + ((q / 9) as f64 - 4.0) * 8.0]).filter(|&p| !civic || by_edge(p)).collect();
         spots.sort_by(|a, b| dist(*a, s).total_cmp(&dist(*b, s)));
         let placed = spots.into_iter().any(|p| {
             let d = sub(p, c);
@@ -2884,8 +3746,9 @@ fn plaza_features(
     }
 }
 
-/// Nearest dry, non-road square within a few squares (by ring), for roadside placements.
-fn nearest_verge(c: &Chunk, k: usize) -> Option<usize> {
+/// Nearest dry, non-road square within a few squares (by ring), for roadside placements (off
+/// `keep_off`).
+fn nearest_verge(c: &Chunk, k: usize, keep_off: &[bool]) -> Option<usize> {
     let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
     // The nearest square clear of the road, else the nearest one just off it.
     let mut verge = None;
@@ -2901,7 +3764,7 @@ fn nearest_verge(c: &Chunk, k: usize) -> Option<usize> {
                 }
                 let nk = ny as usize * SQ + nx as usize;
                 let road_bed = c.road_halo[(nk / SQ + 1) * HS + nk % SQ + 1] != 0;
-                if !road_bed && c.building[nk] == 0 && c.water_level[nk] <= c.height[nk] {
+                if !road_bed && !keep_off[nk] && c.building[nk] == 0 && c.water_level[nk] <= c.height[nk] {
                     if clear_of_roads(c, nk) {
                         return Some(nk);
                     }
@@ -2913,7 +3776,7 @@ fn nearest_verge(c: &Chunk, k: usize) -> Option<usize> {
     verge
 }
 
-/// Cover in town (streets, plazas) or on fields.
+/// Cover in town (streets, plazas) or on fields (a lawn takes the biome's own).
 fn town_cover(urban: u8, rng: &mut Pcg32) -> Kind {
     let opts: &[Kind] = match urban {
         URBAN_FIELD => &[Kind::Haystack],
@@ -2928,7 +3791,8 @@ fn town_cover(urban: u8, rng: &mut Pcg32) -> Kind {
 /// Street life: barrels and crates against walls, haystacks in fields (market stalls stand in
 /// blocks: `market_blocks`).
 /// Keyed by global square so the result does not depend on which chunk asks.
-fn place_town_props(c: &mut Chunk, seed: u64, gsx: i64, gsy: i64) {
+/// `rowless`: graveyard squares whose headstones are laid otherwise (empty: none).
+fn place_town_props(c: &mut Chunk, seed: u64, gsx: i64, gsy: i64, rowless: &[bool]) {
     let pseed = hash2(seed, 0x70e5, 3);
     for k in 0..SQ * SQ {
         let urb = c.urban[k];
@@ -2945,7 +3809,7 @@ fn place_town_props(c: &mut Chunk, seed: u64, gsx: i64, gsy: i64) {
         let kind = match urb {
             URBAN_STREET if by_wall && r < 0.035 => Some(if (h >> 20) & 1 == 0 { Kind::Barrel } else { Kind::Crate }),
             // Headstones in rows (every other square, most of them).
-            URBAN_GRAVEYARD if (gsx + i as i64) % 2 == 0 && (gsy + j as i64) % 3 == 0 && r < 0.8 => Some(Kind::Headstone),
+            URBAN_GRAVEYARD if (gsx + i as i64) % 2 == 0 && (gsy + j as i64) % 3 == 0 && r < 0.8 && !rowless.get(k).is_some_and(|&x| x) => Some(Kind::Headstone),
             URBAN_FIELD if r < 0.004 => Some(Kind::Haystack),
             _ => None,
         };
@@ -2956,7 +3820,8 @@ fn place_town_props(c: &mut Chunk, seed: u64, gsx: i64, gsy: i64) {
     }
 }
 
-fn push_at(c: &mut Chunk, kind: Kind, k: usize, rng: &mut Pcg32) {
+/// Put a `kind` down in square `k`, unless no way of it fits off the buildings (false).
+fn push_at(c: &mut Chunk, kind: Kind, k: usize, rng: &mut Pcg32) -> bool {
     let mut o = Object {
         kind,
         variant: rng.below(8) as u8,
@@ -2967,17 +3832,32 @@ fn push_at(c: &mut Chunk, kind: Kind, k: usize, rng: &mut Pcg32) {
         sprite: 0,
         turned: false,
     };
-    // Tall props draw above roofs, so they must not reach over a building (or past the chunk
-    // edge, where a neighbour's building may stand): try it smaller and centred, else a crate.
-    if info(kind as u16).height_ft >= 5.0 && !clear_of_buildings(c, &o) {
+    // Nothing reaches over a building; tall props draw above roofs, so not past the chunk edge
+    // either (where a neighbour's building may stand): try it smaller and centred, a tall one
+    // else as a crate, else nothing.
+    let tall = info(kind as u16).height_ft >= 5.0;
+    let fits = |c: &Chunk, o: &Object| if info(o.kind as u16).height_ft >= 5.0 { clear_of_buildings(c, o) } else { off_buildings(c, o) };
+    if !fits(c, &o) {
         o.x = (k % SQ) as f32 + 0.5;
         o.y = (k / SQ) as f32 + 0.5;
         o.scale = 0.85;
-        if !clear_of_buildings(c, &o) {
+        if !fits(c, &o) {
+            if !tall {
+                return false;
+            }
             o.kind = Kind::Crate;
+            if !off_buildings(c, &o) {
+                return false;
+            }
         }
     }
     c.objects.push(o);
+    true
+}
+
+/// Whether an object's footprint disc touches no building square of the chunk.
+fn off_buildings(c: &Chunk, o: &Object) -> bool {
+    !touches_square(o, |k| c.building[k] != 0)
 }
 
 /// Whether an object's footprint disc stays inside the chunk and off building squares.

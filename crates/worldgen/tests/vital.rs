@@ -589,10 +589,10 @@ fn settlement_catalog_guarantees() {
     }
 }
 
-/// Battlemap guarantee: in sampled land chunks across seeds and biomes (and in town), every
-/// 32×32-square window has ≥ 3 cover objects or buildings, ≥ 2 elevation tiers, and a hazard/prop or atmosphere; and no
-/// dry square is more than MAX_COVER_GAP squares from cover. Mostly-water windows (any depth) and bridge
-/// decks are exempt.
+/// Battlemap guarantee: in sampled land chunks across seeds and biomes (and in town, on its squares of every
+/// kind), every 32×32-square window has ≥ 3 cover objects or buildings, ≥ 2 elevation tiers, and a hazard/prop or
+/// atmosphere; and no dry square is more than MAX_COVER_GAP squares from cover. Mostly-water windows (any depth) and
+/// bridge decks are exempt.
 #[test]
 fn battlemap_guarantee() {
     use worldgen::battlemap::{self, SQ};
@@ -614,6 +614,12 @@ fn battlemap_guarantee() {
             }
             if let Some(s) = st.iter().find(|s| s.tier == Tier::Village) {
                 sites.push((s.x, s.y));
+            }
+            // A square of each kind besides the main one (`town::squares`), where a town has one.
+            use worldgen::town::PlazaKind as K;
+            for kind in [K::Crossroads, K::WellSquare, K::FountainSquare, K::Green, K::TempleClose] {
+                let at = (0..st.len()).filter(|&i| st[i].tier >= Tier::Town).find_map(|i| worldgen::town::layout(&ex.world, &ex.t0, i).plazas.iter().find(|p| p.kind == kind).map(|p| worldgen::town::geom::centroid(&p.pts)));
+                sites.extend(at.map(|c| (c[0], c[1])));
             }
         }
         for attempt in 0..400 {
@@ -1839,7 +1845,7 @@ fn agent_edits_guarantee() {
     assert!(agent::building_spot(world, t0, &on_road, None, "c:99", None).is_err(), "a building on a road is allowed");
     let ci = agent::layout_of(world, t0, &city).unwrap();
     let l = town::layout(world, t0, ci);
-    let plaza = &l.plazas.iter().find(|p| p.kind != town::PlazaKind::Quay).expect("a city with a square").pts;
+    let plaza = &l.plazas.iter().find(|p| p.kind.is_market() || p.kind == town::PlazaKind::Civic).expect("a city with a square").pts;
     let on_plaza = geom::circle(geom::centroid(plaza), 8.0, 12);
     assert!(agent::building_spot(world, t0, &on_plaza, None, "c:99", None).is_err_and(|e| e.contains("square")), "a building on a market square is allowed");
 

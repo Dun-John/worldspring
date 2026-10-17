@@ -486,6 +486,18 @@ pub struct TownEdit {
     /// Walls built or not (left out: as generated). Gates stay where the roads come in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub walls: Option<bool>,
+    /// Squares where streets meet, set by hand.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub squares: Vec<SquareEdit>,
+}
+
+/// A square set by hand at a corner where streets meet (`v`, the plan's vertex; `at` where it was
+/// planned, world ft): its kind (`SQUARE_KINDS`), or "none" for no square there.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SquareEdit {
+    pub v: u32,
+    pub at: [f64; 2],
+    pub kind: String,
 }
 
 /// A patch corner (`v`, the plan's vertex) moved from where it was planned (`from`, world ft) to
@@ -499,7 +511,7 @@ pub struct CornerMove {
 
 /// A patch (`p`, the plan's face; `at` its middle as planned) set by hand: its ward
 /// (`TOWN_WARDS`), lot size (`LOT_SIZES`), merged into a neighbour's district, rolled again
-/// (`reroll` counts the rolls).
+/// (`reroll` counts the rolls), a temple's patch kept as a close round the temple or not.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct PatchEdit {
     pub p: u32,
@@ -512,6 +524,8 @@ pub struct PatchEdit {
     pub merge_with: Option<u32>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub reroll: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<bool>,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -524,19 +538,22 @@ pub const TOWN_WARDS: [&str; 13] = ["plaza", "castle", "temple", "merchant", "cr
 /// Lot sizes, smallest first: each a target lot area (ft²) times the ward's own.
 pub const LOT_SIZES: [&str; 4] = ["small", "medium", "large", "huge"];
 
+/// Squares a corner where streets meet can be given by hand (`town::squares::CORNER_KINDS`).
+pub const SQUARE_KINDS: [&str; 4] = ["crossroads", "well", "fountain", "green"];
+
 impl TownEdit {
     /// How far (ft) a town, corner or patch may stand from where its edit says it was planned.
     pub const SAME_AT_FT: f64 = 1.0;
 
     /// Whether it changes nothing.
     pub fn is_noop(&self) -> bool {
-        self.corners.is_empty() && self.patches.iter().all(PatchEdit::is_noop) && self.walls.is_none()
+        self.corners.is_empty() && self.patches.iter().all(PatchEdit::is_noop) && self.walls.is_none() && self.squares.is_empty()
     }
 }
 
 impl PatchEdit {
     pub fn is_noop(&self) -> bool {
-        self.ward.is_none() && self.lots.is_none() && self.merge_with.is_none() && self.reroll == 0
+        self.ward.is_none() && self.lots.is_none() && self.merge_with.is_none() && self.reroll == 0 && self.close.is_none()
     }
 }
 

@@ -16,6 +16,7 @@ pub mod catalog;
 pub mod geom;
 pub mod mesh;
 pub mod sites;
+pub mod squares;
 pub mod stairs;
 pub mod wards;
 
@@ -182,6 +183,9 @@ pub struct Layout {
     pub props: Vec<Prop>,
     /// Flights of steps on steep streets (cities and up; `stairs`).
     pub stairs: Vec<Stair>,
+    /// The temples' patches a close fits on (its temple and churchyard, ringed by houses along at
+    /// least 65% of the block's streets: `squares::ringed`), for the ward editor.
+    pub close_room: Vec<u32>,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -208,15 +212,46 @@ pub enum PlazaKind {
     Civic,
     /// A quay along the water: cargo, no well or stalls.
     Quay,
-    /// A village green.
+    /// A green: a village's, round its well; in a town, a lawn where streets meet (`squares`).
     Green,
     /// A site's or castle's yard: paved, nothing set out.
     Yard,
+    /// A temple's close: the middle of its block, open round the temple and its churchyard, houses
+    /// along its streets.
+    TempleClose,
+    /// A well square where streets meet (`squares`).
+    WellSquare,
+    /// A fountain square where streets meet.
+    FountainSquare,
+    /// A crossroads widened where streets meet (a signpost, a lamp, a trough).
+    Crossroads,
 }
 
 impl PlazaKind {
     pub fn is_market(self) -> bool {
         matches!(self, PlazaKind::Market | PlazaKind::MarketSparse | PlazaKind::MarketDay)
+    }
+
+    /// Grass rather than paving (in towns: a green, a temple's close).
+    pub fn is_lawn(self) -> bool {
+        matches!(self, PlazaKind::Green | PlazaKind::TempleClose)
+    }
+
+    /// Its name as agents and the ward editor give it.
+    pub fn name(self) -> &'static str {
+        match self {
+            PlazaKind::Market => "market",
+            PlazaKind::MarketSparse => "market_sparse",
+            PlazaKind::MarketDay => "market_day",
+            PlazaKind::Civic => "civic",
+            PlazaKind::Quay => "quay",
+            PlazaKind::Green => "green",
+            PlazaKind::Yard => "yard",
+            PlazaKind::TempleClose => "temple_close",
+            PlazaKind::WellSquare => "well",
+            PlazaKind::FountainSquare => "fountain",
+            PlazaKind::Crossroads => "crossroads",
+        }
     }
 }
 
@@ -270,6 +305,41 @@ impl Layout {
     /// The building with this id.
     pub fn building(&self, id: usize) -> Option<&Building> {
         self.building_index(id).map(|i| &self.buildings[i])
+    }
+
+    /// A layout with nothing laid out yet.
+    pub(crate) fn empty(index: u32, center: P, radius: f64, tier: Tier) -> Layout {
+        Layout {
+            index,
+            center,
+            radius,
+            tier,
+            on_water: false,
+            walls: Vec::new(),
+            towers: Vec::new(),
+            gates: Vec::new(),
+            streets: Vec::new(),
+            roads: Vec::new(),
+            plazas: Vec::new(),
+            fields: Vec::new(),
+            districts: Vec::new(),
+            blocks: Vec::new(),
+            buildings: Vec::new(),
+            bridges: Vec::new(),
+            piers: Vec::new(),
+            gate_towers: Vec::new(),
+            extra_towers: Vec::new(),
+            monuments: Vec::new(),
+            quarters: Vec::new(),
+            castles: Vec::new(),
+            bbox: [0.0; 4],
+            site: false,
+            entrances: Vec::new(),
+            yards: Vec::new(),
+            props: Vec::new(),
+            stairs: Vec::new(),
+            close_room: Vec::new(),
+        }
     }
 
     /// The way underground with this id.
@@ -447,9 +517,31 @@ fn edits_fingerprint(world: &World, index: u32) -> Option<u64> {
     any.then(|| h.finish())
 }
 
-/// Whether the building edited still stands where it was edited (else the edit is set aside).
-pub fn edit_applies(b: &Building, e: &crate::world::BuildingEdit) -> bool {
-    dist(centroid(&b.poly), e.at) <= crate::world::BuildingEdit::SAME_AT_FT
+/// Whether the building edited still stands where it was edited (else the edit is set aside):
+/// there (`edit_stands`), or it is the building generated there (`generated`: the one generated
+/// with its id), cut back (a lot trimmed by a square or a close: half of it, or of what is left,
+/// on it), whose outline drawn by hand is then set aside (the rest of the edit holds).
+pub fn edit_applies(b: &Building, generated: Option<&Building>, e: &crate::world::BuildingEdit) -> bool {
+    edit_stands(b, e) || generated.is_some_and(|g| near_edit(&g.poly, e) && overlap(&b.poly, &g.poly) >= 0.5 * area(&g.poly).abs().min(area(&b.poly).abs()))
+}
+
+/// Whether the building edited stands just where it was edited (its outline drawn by hand, if
+/// any, holds).
+pub fn edit_stands(b: &Building, e: &crate::world::BuildingEdit) -> bool {
+    near_edit(&b.poly, e)
+}
+
+fn near_edit(poly: &[P], e: &crate::world::BuildingEdit) -> bool {
+    dist(centroid(poly), e.at) <= crate::world::BuildingEdit::SAME_AT_FT
+}
+
+/// The area (sq ft) of `a` lying on convex polygon `b`.
+pub(crate) fn overlap(a: &[P], b: &[P]) -> f64 {
+    let mut part = a.to_vec();
+    for (n, c) in edge_lines(b) {
+        part = clip_plain(&part, n, c);
+    }
+    if part.len() < 3 { 0.0 } else { area(&part).abs() }
 }
 
 /// The layout with its building edits applied: buildings taken away leave the list (the others
@@ -457,9 +549,10 @@ pub fn edit_applies(b: &Building, e: &crate::world::BuildingEdit) -> bool {
 fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
     let mut l = base.clone();
     let mut removed: FastSet<u32> = FastSet::default();
+    let generated = generated_layout(world, t0, l.index as usize);
     for (id, e) in building_edits(world, l.index) {
         let Some(i) = l.building_index(id as usize) else { continue };
-        if !edit_applies(&l.buildings[i], e) {
+        if !edit_applies(&l.buildings[i], generated.building(id as usize), e) {
             continue;
         }
         if e.removed {
@@ -479,7 +572,7 @@ fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
         if let Some(f) = e.floors {
             b.floors = f.max(1);
         }
-        if e.poly.len() >= 3 {
+        if e.poly.len() >= 3 && edit_stands(b, e) {
             b.poly = e.poly.clone();
         }
         sites::apply_looks(b, e.roof.as_deref(), e.tint.as_deref(), e.structure.as_deref());
@@ -512,7 +605,8 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, &'static str)> {
         }
         match base_layout(world, t0, li).building(id) {
             None => out.push((k.clone(), "no such building")),
-            Some(b) if !edit_applies(b, e) => out.push((k.clone(), "the town was laid out anew: another building stands at this id")),
+            Some(b) if !edit_applies(b, generated_layout(world, t0, li).building(id), e) => out.push((k.clone(), "the town was laid out anew: another building stands at this id")),
+            Some(b) if e.poly.len() >= 3 && !edit_stands(b, e) => out.push((k.clone(), "a square or close cut the building back: its outline drawn by hand is set aside")),
             _ => {}
         }
     }
@@ -1259,36 +1353,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     let center = [s.x, s.y];
     let r = urban_radius(s.tier, s.population);
     let (site, road_ends, mut rng) = prepare(world, t0, index);
-    let mut l = Layout {
-        index: index as u32,
-        center,
-        radius: r,
-        tier: s.tier,
-        on_water: false,
-        walls: Vec::new(),
-        towers: Vec::new(),
-        gates: Vec::new(),
-        streets: Vec::new(),
-        roads: Vec::new(),
-        plazas: Vec::new(),
-        fields: Vec::new(),
-        districts: Vec::new(),
-        blocks: Vec::new(),
-        buildings: Vec::new(),
-        bridges: Vec::new(),
-        piers: Vec::new(),
-        gate_towers: Vec::new(),
-        extra_towers: Vec::new(),
-        monuments: Vec::new(),
-        quarters: Vec::new(),
-        castles: Vec::new(),
-        bbox: [0.0; 4],
-        site: false,
-        entrances: Vec::new(),
-        yards: Vec::new(),
-        props: Vec::new(),
-        stairs: Vec::new(),
-    };
+    let mut l = Layout::empty(index as u32, center, r, s.tier);
+    // (How far apart the plan's patches are: how far a function the edit lost may move.)
+    let mut spacing = 0.0;
     if s.tier == Tier::Village {
         village(&site, s, r, &road_ends, &mut rng, &mut l);
     } else {
@@ -1297,6 +1364,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
             None => Rc::new(plan_town(&site, s, r, &road_ends, &mut rng)),
         };
         let ch = edit.map(|e| wards::changes(&plan, e, center).0).unwrap_or_default();
+        spacing = plan.spacing;
         let hand = build_town(&site, s, r, &plan, &ch, &mut l, survey);
         walls_off_river(&site, &mut l, &hand);
     }
@@ -1344,7 +1412,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         tw(&mut t.0);
     }
     if let Some(e) = edit {
-        wards::inherit(world, t0, e, &generated_layout(world, t0, index), &mut l);
+        wards::inherit(world, t0, e, &generated_layout(world, t0, index), spacing, &mut l);
     }
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {
@@ -1562,6 +1630,10 @@ struct TownPlan {
     base_seed: u64,
     /// Named districts and their patches.
     quarters: Vec<(Quarter, Vec<usize>)>,
+    /// The town's other open spaces (`squares::plan`): squares where streets meet (corner,
+    /// kind), and temple patches kept as a close round their temple.
+    squares: Vec<(usize, PlazaKind)>,
+    closes: Vec<usize>,
 }
 
 impl TownPlan {
@@ -2191,7 +2263,7 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         })
         .collect();
     let quarters = quarters(s, &QuarterInput { cells: &cells, ward: &ward, n_inner, plaza, castle: castle_face, gates: &gate_pts, crossings: &crossings, edge_w: &edge_w, landing: &landing });
-    TownPlan {
+    let mut plan = TownPlan {
         spacing,
         mesh,
         vf,
@@ -2217,7 +2289,12 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         pseed,
         base_seed,
         quarters,
-    }
+        squares: Vec::new(),
+        closes: Vec::new(),
+    };
+    // Its other open spaces, on the plan as it stands.
+    (plan.squares, plan.closes) = squares::plan(&plan, site, s.tier);
+    plan
 }
 
 /// Build a planned town with the ward editor's changes (`wards::Changes`; none: as planned):
@@ -2425,15 +2502,11 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         }
     }
 
-    // Blocks → alleys → lots → buildings.
-    for i in 0..total {
-        let Some(w) = ward[i] else { continue };
+    // How far each side of a patch its block stands back (streets, quays, the wall's strip).
+    let insets = |i: usize, w: Ward| -> Vec<f64> {
         let c = &cells[i];
         let m = c.pts.len();
-        if i < n_inner {
-            l.districts.push(c.pts.clone());
-        }
-        let d: Vec<f64> = (0..m)
+        (0..m)
             .map(|e| {
                 let (va, vb) = edge_v(i, e);
                 let main = plan.main_edge(va, vb);
@@ -2464,7 +2537,126 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 let wall = (walled || plan.walled) && i < n_inner && (!plan.inner(nb) || wet[nb as usize]);
                 (if main { 12.0 } else { 7.0 }) + if wall { 18.0 } else { 0.0 }
             })
-            .collect();
+            .collect()
+    };
+
+    // Street lines bounding patch `i`'s block (outward normal, offset; `d`: its insets): lots need
+    // frontage on one.
+    let street_lines = |i: usize, d: &[f64]| -> Vec<(P, f64)> {
+        let c = &cells[i];
+        let m = c.pts.len();
+        let ccw = area(&c.pts) > 0.0;
+        (0..m)
+            .filter(|&e| d[e] > 0.0)
+            .filter_map(|e| {
+                let (a, b) = (c.pts[e], c.pts[(e + 1) % m]);
+                let ev = sub(b, a);
+                let el = len(ev);
+                (el > 1e-9).then(|| {
+                    let nrm = if ccw { [ev[1] / el, -ev[0] / el] } else { [-ev[1] / el, ev[0] / el] };
+                    (nrm, dot(a, nrm) - d[e])
+                })
+            })
+            .collect()
+    };
+
+    // Roads into the city and the ground before each gate stay open: the sprawl outside the
+    // walls grows up to them, not over them.
+    let mut keep_clear: Vec<(P, P, f64)> = l.roads.iter().filter(|r| r.1 != 3).flat_map(|(pts, _, w)| pts.windows(2).map(move |s| (s[0], s[1], 0.5 * w + 3.0))).collect();
+    let within = OUTSKIRTS * r * 1.1;
+    let c = site.center;
+    for (ri, k) in site.t0.roads.segments_near([c[0] - within, c[1] - within, c[0] + within, c[1] + within], 0.0) {
+        let rc = &site.t0.roads.roads[ri as usize];
+        let k = k as usize;
+        let m = ((rc.s[k + 1] - rc.s[k]) / 25.0).ceil().clamp(1.0, 400.0) as usize;
+        let pts: Vec<P> = (0..=m).map(|j| sub(rc.eval(k, j as f64 / m as f64, 5.0, site.t0.cell_ft).p, c)).collect();
+        for s in pts.windows(2) {
+            if len(s[0]) < within {
+                keep_clear.push((s[0], s[1], 0.5 * rc.class.width_ft() + 4.0));
+            }
+        }
+    }
+    const CLEAR_CELL: f64 = 80.0;
+    let mut clear_grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
+    for (i, &(a, b, h)) in keep_clear.iter().enumerate() {
+        let (x0, x1) = (crate::core::floor((a[0].min(b[0]) - h) / CLEAR_CELL) as i64, crate::core::floor((a[0].max(b[0]) + h) / CLEAR_CELL) as i64);
+        let (y0, y1) = (crate::core::floor((a[1].min(b[1]) - h) / CLEAR_CELL) as i64, crate::core::floor((a[1].max(b[1]) + h) / CLEAR_CELL) as i64);
+        for cy in y0..=y1 {
+            for cx in x0..=x1 {
+                clear_grid.entry((cx, cy)).or_default().push(i as u32);
+            }
+        }
+    }
+    let gates = l.gates.clone();
+    let clear_of = |b: &Building| {
+        if gates.iter().any(|g| b.poly.iter().any(|p| dist(*p, *g) < 40.0) || contains(&b.poly, *g)) {
+            return false;
+        }
+        let (x0, y0, x1, y1) = b.poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+        for cy in crate::core::floor(y0 / CLEAR_CELL) as i64..=crate::core::floor(y1 / CLEAR_CELL) as i64 {
+            for cx in crate::core::floor(x0 / CLEAR_CELL) as i64..=crate::core::floor(x1 / CLEAR_CELL) as i64 {
+                for &i in clear_grid.get(&(cx, cy)).into_iter().flatten() {
+                    let (a, bb, h) = keep_clear[i as usize];
+                    if poly_seg_dist(&b.poly, a, bb) < h {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    };
+
+    // Patch `i`'s lots as ward `w` (its district's, or as rolled again or sized by hand): their
+    // sizes and the stream that cuts them; a close's houses on lots as a common ward's (a ring a
+    // lot deep: a temple's own are too big for one).
+    let lots_of = |i: usize, w: Ward, close: bool| {
+        let key = if group[i] != usize::MAX { group[i] } else { i };
+        let roll = ch.reroll.get(&i).copied().unwrap_or(0);
+        let salt = |h: u64| if roll == 0 { h } else { hash3(h, roll as i64, 0x7e70, 1) };
+        let mut dp = District::roll(w, salt(hash2(plan.base_seed, key as i64, 0xd15)));
+        match ch.lots.get(&i) {
+            Some(f) => dp.min_sq = District::base(w) * f,
+            None if close => dp.min_sq *= District::base(Ward::Common) / District::base(Ward::Temple),
+            None => {}
+        }
+        (dp, Pcg32::new(salt(hash2(plan.base_seed, i as i64, 0x107)), 47))
+    };
+
+    // The other open spaces (`squares`): squares where streets meet (the lots at their corners
+    // trimmed back once laid out, so nothing else moves), temples' closes where they fit: their
+    // temple and churchyard, with houses round them (the block laid out aside to see) most of the
+    // way round.
+    let (li, lc, lr, lt) = (l.index, l.center, l.radius, l.tier);
+    let fits = |p: usize| {
+        let d = insets(p, Ward::Temple);
+        let b = inset(&cells[p].pts, &d);
+        if b.len() < 3 || site.grade(&b) > 0.18 {
+            return false;
+        }
+        let fronts = street_lines(p, &d);
+        let (dp, mut prng) = lots_of(p, Ward::Temple, true);
+        let mut aside = Layout::empty(li, lc, lr, lt);
+        build_block(site, &b, &mut fronts.clone(), Ward::Temple, &dp, &mut prng, &mut aside, None);
+        if !squares::close(site, &b, &fronts, plan.roll(p, 65), 0, 0, &mut aside) {
+            return false;
+        }
+        aside.buildings.retain(|b| clear_of(b));
+        aside.plazas.last().is_some_and(|o| squares::ringed(&b, &fronts, &o.pts, &aside.buildings) >= 0.65)
+    };
+    let room: Vec<bool> = (0..cells.len()).map(|p| ward.get(p) == Some(&Some(Ward::Temple)) && fits(p)).collect();
+    let (spots, closes) = squares::spots(plan, ch, ward, group, &|p| room.get(p).is_some_and(|&r| r));
+    let cuts = squares::cuts(plan, &mesh, &spots);
+    l.close_room = (0..cells.len()).filter(|&p| room[p]).map(|p| p as u32).collect();
+
+    // Blocks → alleys → lots → buildings.
+    for i in 0..total {
+        let Some(w) = ward[i] else { continue };
+        let c = &cells[i];
+        let m = c.pts.len();
+        if i < n_inner {
+            l.districts.push(c.pts.clone());
+        }
+        let d = insets(i, w);
         // Paved streets inside the town: each side of a street paves the strip between its
         // patch edge and its block (quays and the waterfront are plazas already).
         if i < n_inner && !matches!(w, Ward::Farm | Ward::Plaza | Ward::Park) {
@@ -2494,35 +2686,15 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         if block.len() < 3 {
             continue;
         }
-        // Street lines bounding the block (outward normal, offset): lots need frontage on one.
-        let ccw = area(&c.pts) > 0.0;
-        let mut streets: Vec<(P, f64)> = (0..m)
-            .filter(|&e| d[e] > 0.0)
-            .filter_map(|e| {
-                let (a, b) = (c.pts[e], c.pts[(e + 1) % m]);
-                let ev = sub(b, a);
-                let el = len(ev);
-                (el > 1e-9).then(|| {
-                    let nrm = if ccw { [ev[1] / el, -ev[0] / el] } else { [-ev[1] / el, ev[0] / el] };
-                    (nrm, dot(a, nrm) - d[e])
-                })
-            })
-            .collect();
-        let key = if group[i] != usize::MAX { group[i] } else { i };
+        let mut streets = street_lines(i, &d);
         // Too steep to build a street front on: the block is a terraced garden.
         let w = if matches!(w, Ward::Merchant | Ward::Craft | Ward::Common | Ward::Noble | Ward::Slum | Ward::Docks | Ward::Temple) && block.len() >= 3 && site.grade(&block) > 0.18 {
             Ward::Park
         } else {
             w
         };
-        // Rolled again by hand: its own streams.
-        let roll = ch.reroll.get(&i).copied().unwrap_or(0);
-        let salt = |h: u64| if roll == 0 { h } else { hash3(h, roll as i64, 0x7e70, 1) };
-        let mut dp = District::roll(w, salt(hash2(plan.base_seed, key as i64, 0xd15)));
-        if let Some(f) = ch.lots.get(&i) {
-            dp.min_sq = District::base(w) * f;
-        }
-        let mut prng = Pcg32::new(salt(hash2(plan.base_seed, i as i64, 0x107)), 47);
+        // (Rolled again by hand: its own streams.)
+        let (dp, mut prng) = lots_of(i, w, w == Ward::Temple && closes.contains(&i));
         if !matches!(w, Ward::Plaza | Ward::Farm | Ward::Park) {
             l.blocks.push(block.clone());
         }
@@ -2578,7 +2750,25 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 let reach = c.pts.iter().map(|q| dist(*q, centroid(&c.pts))).fold(0.0, f64::max);
                 build_block(site, &block, &mut streets, w, &dp, &mut prng, l, Some((&anchors, reach)))
             }
-            _ => build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None),
+            // A temple's close (`fits` saw that it does): the block's lots, then the temple and its
+            // churchyard in the middle, the houses round them cut back to face them.
+            Ward::Temple if closes.contains(&i) => {
+                let (alleys, fronts) = (l.roads.len(), streets.clone());
+                build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None);
+                let laid = squares::close(site, &block, &fronts, plan.roll(i, 65), first, alleys, l);
+                debug_assert!(laid, "a close that fits is laid out");
+            }
+            _ => {
+                build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None);
+                // A temple's patch with no lots that would do keeps its temple, alone.
+                if w == Ward::Temple && l.buildings.len() == first {
+                    squares::lone_temple(site, &block, plan.roll(i, 65), l);
+                }
+            }
+        }
+        // A square where streets meet trims the lots at its corner of the block.
+        for cut in &cuts {
+            cut.trim(i, &mut l.buildings, first);
         }
         for b in &mut l.buildings[first..] {
             b.id = i as u32;
@@ -2591,51 +2781,20 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             hand_walls.extend(walls_at..l.walls.len());
         }
     }
-    // Roads into the city and the ground before each gate stay open: the sprawl outside the
-    // walls grows up to them, not over them.
-    let mut keep_clear: Vec<(P, P, f64)> = l.roads.iter().filter(|r| r.1 != 3).flat_map(|(pts, _, w)| pts.windows(2).map(move |s| (s[0], s[1], 0.5 * w + 3.0))).collect();
-    let within = OUTSKIRTS * r * 1.1;
-    let c = site.center;
-    for (ri, k) in site.t0.roads.segments_near([c[0] - within, c[1] - within, c[0] + within, c[1] + within], 0.0) {
-        let rc = &site.t0.roads.roads[ri as usize];
-        let k = k as usize;
-        let m = ((rc.s[k + 1] - rc.s[k]) / 25.0).ceil().clamp(1.0, 400.0) as usize;
-        let pts: Vec<P> = (0..=m).map(|j| sub(rc.eval(k, j as f64 / m as f64, 5.0, site.t0.cell_ft).p, c)).collect();
-        for s in pts.windows(2) {
-            if len(s[0]) < within {
-                keep_clear.push((s[0], s[1], 0.5 * rc.class.width_ft() + 4.0));
+    // The squares the chords enclose; a green's lanes stop at its edge (a lawn, not paving), where
+    // a path runs before the houses fronting it (laid once the lanes are cut).
+    let (mut greens, mut green_paths): (Vec<Vec<P>>, Vec<(Vec<P>, f64)>) = (Vec::new(), Vec::new());
+    for cut in &cuts {
+        if let Some(pts) = cut.outline() {
+            if cut.kind == PlazaKind::Green {
+                greens.push(pts.clone());
+                green_paths.extend(cut.edge_paths(5.0));
             }
+            l.plazas.push(Plaza { pts, kind: cut.kind });
         }
     }
-    const CLEAR_CELL: f64 = 80.0;
-    let mut clear_grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
-    for (i, &(a, b, h)) in keep_clear.iter().enumerate() {
-        let (x0, x1) = (crate::core::floor((a[0].min(b[0]) - h) / CLEAR_CELL) as i64, crate::core::floor((a[0].max(b[0]) + h) / CLEAR_CELL) as i64);
-        let (y0, y1) = (crate::core::floor((a[1].min(b[1]) - h) / CLEAR_CELL) as i64, crate::core::floor((a[1].max(b[1]) + h) / CLEAR_CELL) as i64);
-        for cy in y0..=y1 {
-            for cx in x0..=x1 {
-                clear_grid.entry((cx, cy)).or_default().push(i as u32);
-            }
-        }
-    }
-    let gates = l.gates.clone();
-    l.buildings.retain(|b| {
-        if gates.iter().any(|g| b.poly.iter().any(|p| dist(*p, *g) < 40.0) || contains(&b.poly, *g)) {
-            return false;
-        }
-        let (x0, y0, x1, y1) = b.poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
-        for cy in crate::core::floor(y0 / CLEAR_CELL) as i64..=crate::core::floor(y1 / CLEAR_CELL) as i64 {
-            for cx in crate::core::floor(x0 / CLEAR_CELL) as i64..=crate::core::floor(x1 / CLEAR_CELL) as i64 {
-                for &i in clear_grid.get(&(cx, cy)).into_iter().flatten() {
-                    let (a, bb, h) = keep_clear[i as usize];
-                    if poly_seg_dist(&b.poly, a, bb) < h {
-                        return false;
-                    }
-                }
-            }
-        }
-        true
-    });
+    // Off the roads into the city and the ground before each gate (`clear_of`).
+    l.buildings.retain(|b| clear_of(b));
     // Steps on steep streets, judged before the streets are cut at the water (wet ground is
     // level), so every piece is still as recorded.
     if s.tier >= stairs::STAIR_TIER || survey.is_some() {
@@ -2648,7 +2807,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             out.extend(profiles);
         }
     }
-    // Paved streets stop at the water's edge unless a bridge carries them.
+    // Paved streets stop at the water's edge unless a bridge carries them (and lanes at a green).
     let bridges = l.bridges.clone();
     let on_water = |p: P| site.wet(p) && !bridges.iter().any(|b| contains(b, p));
     let mut clipped: Vec<(Vec<P>, u8, f64)> = Vec::new();
@@ -2657,6 +2816,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             clipped.push((pts, class, w));
             continue;
         }
+        let on_water = |q: P| on_water(q) || (class == 3 && greens.iter().any(|g| contains(g, q)));
         let mut run: Vec<P> = Vec::new();
         for seg in pts.windows(2) {
             let n = (dist(seg[0], seg[1]) / 5.0).ceil().max(1.0) as usize;
@@ -2682,6 +2842,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             clipped.push((run, class, w));
         }
     }
+    clipped.extend(green_paths.into_iter().map(|(pts, w)| (pts, 3, w)));
     l.roads = clipped;
     // Districts keep the patches and names they were planned with; their outlines and labels
     // follow the moved corners.
@@ -3361,7 +3522,7 @@ fn blunt(poly: &[P], min_deg: f64, depth: f64) -> Vec<P> {
 }
 
 /// Half the width of an alley cut through a block (ft).
-const ALLEY_HALF_FT: f64 = 8.0;
+pub(super) const ALLEY_HALF_FT: f64 = 8.0;
 
 /// A lot edge of useful length lies on the line (normal `n`, offset `c`).
 fn fronts(lot: &[P], n: P, c: f64) -> bool {
@@ -4039,6 +4200,15 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         taken[keep] = true;
         if let Some(k) = needs.iter().position(|&fi| fi == castle) {
             needs.remove(k);
+        }
+    }
+    // What the layout built for a purpose (a temple on its close) is that already.
+    for (bi, b) in l.buildings.iter().enumerate() {
+        if let Some(f) = b.func.filter(|_| !taken[bi]) {
+            taken[bi] = true;
+            if let Some(k) = needs.iter().position(|&fi| fi == f as usize) {
+                needs.remove(k);
+            }
         }
     }
     for fi in needs {

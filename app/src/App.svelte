@@ -1195,7 +1195,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, busy: townBusy, note: townNote }), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToScreen(x, y);
@@ -1457,12 +1457,15 @@
   let townPlan = $state.raw<TownPlan | null>(null);
   let townNote = $state('');
   let townPatch = $state<number | null>(null);
+  /** The corner picked (a square where streets meet), if any: picked instead of a patch. */
+  let townCorner = $state<number | null>(null);
   let townMerging = $state(false);
   let townBusy = $state(false);
   /** What the plan shown was read for: the town and its edit. */
   let townRead = '';
   let townAsked = 0;
   const townSelected = $derived(townPlan?.patches.find((p) => p.patch === townPatch) ?? null);
+  const townCornerPicked = $derived(townPlan?.corners.find((c) => c.corner === townCorner) ?? null);
   const townName = $derived(townIndex >= 0 && settlements[townIndex] ? (renames[settlements[townIndex].id] ?? settlements[townIndex].name) : null);
   const townNear = $derived(!!townPlan && townPlan.max_move_ft / (hud?.ftPerPx ?? 99) >= 40);
 
@@ -1472,6 +1475,13 @@
       mode: () => townMode,
       radius: () => townSize * (townPlan?.max_move_ft ?? 300),
       selected: () => townPatch,
+      selectedCorner: () => townCorner,
+      corner: (v) => {
+        townCorner = v;
+        townPatch = null;
+        townMerging = false;
+        showTownCorner(v);
+      },
       moved: (moves) => void townChange({ moves }, 'corners'),
       equalize: (patches) => void townChange({ equalize: patches }, 'equalize'),
       hint: (t) => toast(t),
@@ -1484,6 +1494,7 @@
     townTool = null;
     townMerging = false;
     townPatch = null;
+    townCorner = null;
   }
 
   // The town in view (by the middle of the map), while the tab is open.
@@ -1494,6 +1505,7 @@
     if (i !== untrack(() => townIndex)) {
       townIndex = i;
       townPatch = null;
+      townCorner = null;
       townMerging = false;
     }
   });
@@ -1526,11 +1538,12 @@
     } else {
       townPlan = r;
       if (townPatch !== null && !r.patches.some((p) => p.patch === townPatch)) townPatch = null;
+      if (townCorner !== null && !r.corners.some((c) => c.corner === townCorner)) townCorner = null;
     }
     townTool?.setPlan(townPlan);
   }
 
-  /** A click on the map with the tab open: a patch picked, or the neighbour to join. */
+  /** A click on the map with the tab open: a square or a patch picked, or the neighbour to join. */
   function townPick(x: number, y: number) {
     const p = townTool?.patchAt(x, y) ?? null;
     if (townMerging && townSelected) {
@@ -1540,7 +1553,17 @@
       void townChange({ patches: [{ patch: townSelected.patch, merge_with: p }] }, 'merge');
       return;
     }
-    townPatch = p;
+    townCorner = townTool?.squareAt(x, y) ?? null;
+    townPatch = townCorner === null ? p : null;
+    if (townCorner !== null) showTownCorner(townCorner);
+  }
+
+  /** On a phone, the corner picked is brought up out from under the sheet (into the top third). */
+  function showTownCorner(v: number) {
+    const at = townPlan?.corners.find((c) => c.corner === v)?.at;
+    if (!shell.phone || !at) return;
+    const [, y0, , y1] = view.cam.viewRect();
+    if (at[1] > y0 + 0.4 * (y1 - y0)) view.flyTo({ cx: view.cam.cx, cy: view.cam.cy + at[1] - (y0 + 0.3 * (y1 - y0)), zoom: view.cam.zoom });
   }
 
   /** A change asked of the town in view: made (one step to undo), or why not. */
@@ -3030,7 +3053,7 @@
       () => (crossEditing ? ((crossEditing = null), true) : false),
       () => !!townTool?.reset(),
       () => (townMerging ? ((townMerging = false), true) : false),
-      () => (townOn && townPatch !== null ? ((townPatch = null), true) : false),
+      () => (townOn && (townPatch !== null || townCorner !== null) ? ((townPatch = null), (townCorner = null), true) : false),
       () => (placeArmed ? (disarmPlace(), true) : false),
       () => (pickTool ? ((pickTool = null), syncTool(), true) : false),
       () => (designer ? (go('edit', 'sites'), true) : false),
@@ -3354,6 +3377,7 @@
             mode={townMode}
             bind:size={townSize}
             selected={townSelected}
+            corner={townCornerPicked}
             merging={townMerging}
             busy={townBusy}
             near={townNear}
