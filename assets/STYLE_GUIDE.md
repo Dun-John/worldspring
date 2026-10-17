@@ -15,9 +15,9 @@ battlemap zoom.
    dome or bevel suggests. **Exception:** upright things that only read from the side are drawn from a high
    angle, with screen up kept up even in rotated sites (`screenAxes(light)`): headstones, glowing fungus,
    crystals, the skull pile, urn, hanging lantern, candelabrum, iron maiden and stocks; on the battlemap also the
-   notice board, signpost, lamp post and the market cross's cross (`upright` in `atlas.ts`; left out of
-   `TURNED` and `TURNABLE` in `BattlemapLayer.ts`, so never drawn turned). "Higher" means nearer
-   straight down, about 60 degrees (heights at half, round sections as fat ovals: `hk` 0.5, `dk` 0.87), never
+   notice board, signpost, lamp post, the market cross's cross, topiary and garden statues (`upright` in
+   `atlas.ts`; left out of `TURNED` and `TURNABLE` in `BattlemapLayer.ts`, so never drawn turned). "Higher" means
+   nearer straight down, about 60 degrees (heights at half, round sections as fat ovals: `hk` 0.5, `dk` 0.87), never
    side-on.
 2. **Warm light from the north-west** (upper left of the screen). Lit edges go toward cream and yellow,
    the shaded side toward warm plum and blue-brown, never toward grey or black.
@@ -45,6 +45,8 @@ battlemap zoom.
 
 - **Size against the 5-ft square.** Life-sized: a body about 5.5 ft (1.1 squares) inside its 1x2 spot, a pail
   about 1.5 ft across, a lantern small, weapons on a rack no longer than real ones. Oversized props get sent back.
+  Monuments are the exception: statues and the market cross are drawn a little over life size (1.2 to 1.3
+  times), as monuments are made.
 - **Read at a glance.** Each batch goes through a blind critique (below). Watch for accidental faces (two spots
   and a mark: an ore vein read as a skull, cushion tufts as eyes and a mouth), wheel- or target-like rings, and
   spidery or star-shaped arms; break them up asymmetrically or change the view.

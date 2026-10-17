@@ -246,7 +246,7 @@ export class BattlemapLayer {
     }
     const texture = atlas.frames[o.kind]?.[o.variant % looks(o.kind)];
     if (!texture) return null;
-    return { texture, rotation: drawnTurned(this.catalog[o.kind - 1], !!o.turned) ? o.rot : 0, scale: o.scale };
+    return { texture, rotation: drawnRotation(this.catalog[o.kind - 1], !!o.turned, o.rot), scale: o.scale };
   }
 
   /** What is in the hand, drawn where it would land (world ft): one sprite over the objects,
@@ -754,12 +754,15 @@ export class BattlemapLayer {
       const hazard = 'hazard' in inf ? inf.hazard : null;
       if (this.player && dmOnlyHazard(hazard?.effect)) continue;
       const isTall = inf.height_ft >= 5;
+      const rotation = custom ? o.rot : drawnRotation(inf as KindInfo, turned, o.rot);
       if (inf.height_ft >= 1.5 && !hazard && (custom || !OWN_SHADOW.has((inf as KindInfo).name))) {
         const [size, strength] = (!custom && SPARSE.get((inf as KindInfo).name)) || [1, 1];
         const r = inf.radius * PX * o.scale * size;
-        const off = Math.min(1.3, 0.15 + inf.height_ft / 45) * PX * 0.7;
-        // Upright things drawn from a high angle cast it from their foot.
+        // Upright things drawn from a high angle cast it from their foot; long ones a long shadow along
+        // them (still falling SE, whatever their turn), a bridge's further off (it stands over the water).
         const foot = custom ? 0 : (UPRIGHT_FOOT[o.kind] ?? 0) * o.scale;
+        const long = !custom && LONG_SHADOW.get((inf as KindInfo).name);
+        const off = Math.min(1.3, 0.15 + inf.height_ft / 45) * PX * 0.7 * (long ? long[2] : 1);
         shadows.addParticle(
           new Particle({
             texture: atlas.shadow,
@@ -767,8 +770,9 @@ export class BattlemapLayer {
             y: o.y * PX + foot + off,
             anchorX: 0.5,
             anchorY: 0.5,
-            scaleX: (r * 2.1) / 128,
-            scaleY: (r * 2.1) / 128,
+            scaleX: long ? (long[0] * PX * o.scale) / 128 : (r * 2.1) / 128,
+            scaleY: long ? (long[1] * PX * o.scale) / 128 : (r * 2.1) / 128,
+            rotation: long ? rotation : 0,
             alpha: (isTall ? 0.6 : 0.35) * strength,
           }),
         );
@@ -783,7 +787,6 @@ export class BattlemapLayer {
         pc.addParticle(new Particle({ texture: tex, x: o.x * PX, y: o.y * PX, anchorX: 0.5, anchorY: 0.5, scaleX: k, scaleY: k, rotation: o.rot }));
         continue;
       }
-      const rotation = drawnTurned(inf as KindInfo, turned) ? o.rot : 0;
       (isTall ? tall : low).addParticle(
         new Particle({ texture: tex, x: o.x * PX, y: o.y * PX, anchorX: 0.5, anchorY: 0.5, scaleX: o.scale, scaleY: o.scale, rotation }),
       );
@@ -947,7 +950,16 @@ function sharedAtlas(renderer: Renderer, catalog: KindInfo[]): Atlas {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough']);
+const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge']);
+/** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
+ * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
+ * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
+ * footbridge toward its west end: -45° to 135°. */
+const HALF_TURN = new Map([
+  ['hedge', -135],
+  ['flowerbed', -90],
+  ['footbridge', -45],
+]);
 /** Props drawn at their `rot` only when turned by hand (`Placed.turned`), by catalog name: those whose
  * NW-lit look still reads turned (approved in the gallery, `?gallery=1&turn=1`). Trees, plants,
  * pools and hazards never turn. */
@@ -959,6 +971,17 @@ export function drawnTurned(inf: KindInfo | undefined, turned: boolean): boolean
   if (!inf) return false;
   return inf.id === 10 || inf.id === 20 || inf.id === 40 || TURNED.has(inf.name) || (turned && TURNABLE.has(inf.name));
 }
+
+/** The turn a built-in kind is drawn at (radians): none, `rot`, or `rot` folded by a half turn into its
+ * `HALF_TURN` range, so the side drawn lit stays within a quarter turn of the light in the NW. (The drop
+ * shadow is drawn at the same turn; play mode's footprint takes `rot` as saved, the same squares.) */
+export function drawnRotation(inf: KindInfo | undefined, turned: boolean, rot: number): number {
+  if (!inf || !drawnTurned(inf, turned)) return 0;
+  const from = HALF_TURN.get(inf.name);
+  if (from === undefined) return rot;
+  const lo = (from * Math.PI) / 180;
+  return ((((rot - lo) % Math.PI) + Math.PI) % Math.PI) + lo;
+}
 /** Sparse plants (blades or fronds with ground between them) and thin upright things (posts drawn from a
  * high angle): a smaller, fainter shadow than a solid crown, as [size, strength] factors. */
 export const SPARSE = new Map([
@@ -968,6 +991,15 @@ export const SPARSE = new Map([
   ['signpost', [0.6, 0.55]],
   ['lamp post', [0.55, 0.55]],
   ['notice board', [0.85, 0.7]],
+  ['topiary', [0.75, 0.8]],
+  ['garden statue', [0.85, 0.8]],
+  ['footbridge', [1, 1.3]],
+]);
+/** Long things: a shadow drawn out along them, [length, width] in squares at scale 1, and how much further
+ * than usual it falls. */
+export const LONG_SHADOW = new Map([
+  ['hedge', [1.35, 0.72, 1]],
+  ['footbridge', [3.1, 0.85, 1.6]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
 export const OWN_SHADOW = new Set(['market cross']);

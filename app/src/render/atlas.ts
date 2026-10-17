@@ -14,7 +14,8 @@ export const VARIANTS = 4;
 const LOOKS: Record<number, number> = { 36: 16 };
 /** How many looks a kind has: an object's variant picks `variant % looks(kind)`. */
 export const looks = (id: number): number => LOOKS[id] ?? VARIANTS;
-const ATLAS_W = 2048;
+/** Atlas width: wide enough that the height stays within 4096 too (many phones' largest texture). */
+const ATLAS_W = 4096;
 /** Mip levels kept (full size down to 1/8), and the empty gap round every frame, on a grid of the same
  * size, so that even the smallest level never blends two frames. */
 const MIP_LEVELS = 4;
@@ -1861,29 +1862,7 @@ function tent(g: Graphics, r: number, rnd: () => number, v: number) {
 function pavilion(g: Graphics, r: number, rnd: () => number) {
   const [a, b] = [0xe2d6b4, 0x8a2e26];
   const R = r * 0.86;
-  const n = 12;
-  for (let i = 0; i < n; i++) {
-    const t0 = (i / n) * Math.PI * 2;
-    const t1 = ((i + 1) / n) * Math.PI * 2;
-    const tm = (t0 + t1) / 2;
-    // Each panel sags a little between its ribs.
-    g.moveTo(0, 0)
-      .lineTo(Math.cos(t0) * R, Math.sin(t0) * R)
-      .quadraticCurveTo(Math.cos(tm) * R * 0.94, Math.sin(tm) * R * 0.94, Math.cos(t1) * R, Math.sin(t1) * R)
-      .closePath()
-      .fill(shade(i % 2 ? b : a, 0.9 + 0.22 * lit(tm)));
-    g.moveTo(Math.cos(tm) * R * 0.25, Math.sin(tm) * R * 0.25).lineTo(Math.cos(tm) * R * 0.85, Math.sin(tm) * R * 0.85).stroke({ width: 1, color: shade(i % 2 ? b : a, 0.75), alpha: 0.6 });
-  }
-  for (let i = 0; i < n; i++) {
-    const t = (i / n) * Math.PI * 2;
-    g.moveTo(0, 0).lineTo(Math.cos(t) * R, Math.sin(t) * R);
-  }
-  g.stroke({ width: 1.4, color: INK, alpha: 0.6 });
-  // Scalloped valance round the rim.
-  for (let i = 0; i < n * 2; i++) {
-    const t = ((i + 0.5) / (n * 2)) * Math.PI * 2;
-    g.circle(Math.cos(t) * R, Math.sin(t) * R, R * 0.08).fill(shade(i % 2 ? b : a, 0.85 + 0.2 * lit(t))).stroke({ width: 1, color: INK });
-  }
+  stripedCanopy(g, R, 12, a, b);
   // The door: a dark slit with its flap tied back.
   g.poly([R, -R * 0.16, R, R * 0.16, R * 0.72, 0]).fill(0x2a2018).stroke({ width: 2, color: INK, join: 'round' });
   g.poly([R, -R * 0.16, R * 1.1, -R * 0.36, R * 0.84, -R * 0.1]).fill(a).stroke({ width: 1.5, color: INK, join: 'round' });
@@ -1891,6 +1870,64 @@ function pavilion(g: Graphics, r: number, rnd: () => number) {
   g.circle(-R * 0.03, -R * 0.03, R * 0.045).fill(0xfff1c0);
   const f = 0.3 + rnd() * 0.3;
   g.poly([0, 0, R * 0.5, -R * 0.12 - f * 8, R * 0.42, R * 0.06]).fill(b).stroke({ width: 1.5, color: INK, join: 'round' });
+}
+
+/** A canvas canopy from above round (0, 0), radius `R`: `n` panels in two colours sagging between the ribs
+ * (lit from the NW), a seam down each, inked ribs, a scalloped valance round the rim. On a canopy raised on
+ * posts (a bandstand's: `drop` > 0) the panels' corners start at angle `ph`, so its eaves follow the stage's
+ * polygon, and the valance is one band of darker canvas hanging `drop` px out past them, scalloped. */
+function stripedCanopy(g: Graphics, R: number, n: number, a: number, b: number, drop = 0, ph = 0) {
+  const at = (i: number, k: number): [number, number] => [Math.cos(ph + (i / n) * Math.PI * 2) * k, Math.sin(ph + (i / n) * Math.PI * 2) * k];
+  if (drop) {
+    // The valance: from corner to corner, three scallops to a side, hanging out past the eaves.
+    const c0 = at(0, R + drop * 0.9);
+    g.moveTo(...c0);
+    for (let i = 0; i < n; i++) {
+      const [p, q] = [at(i, R + drop * 0.9), at(i + 1, R + drop * 0.9)];
+      const mid = ph + ((i + 0.5) / n) * Math.PI * 2;
+      for (let k = 0; k < 3; k++) {
+        const [u0, u1] = [k / 3, (k + 1) / 3];
+        const [x1, y1] = [p[0] + (q[0] - p[0]) * u1, p[1] + (q[1] - p[1]) * u1];
+        const [mx, my] = [p[0] + (q[0] - p[0]) * (u0 + u1) * 0.5, p[1] + (q[1] - p[1]) * (u0 + u1) * 0.5];
+        g.quadraticCurveTo(mx + Math.cos(mid) * drop * 1.1, my + Math.sin(mid) * drop * 1.1, x1, y1);
+      }
+    }
+    g.closePath().fill(shade(b, 0.62)).stroke({ width: 1.5, color: INK, join: 'round' });
+  }
+  // (A canopy with few panels sags further between them, so its eaves curve in rather than out.)
+  const sag = drop ? 0.9 : 0.94;
+  for (let i = 0; i < n; i++) {
+    const t0 = ph + (i / n) * Math.PI * 2;
+    const t1 = ph + ((i + 1) / n) * Math.PI * 2;
+    const tm = (t0 + t1) / 2;
+    // Each panel sags a little between its ribs.
+    g.moveTo(0, 0)
+      .lineTo(Math.cos(t0) * R, Math.sin(t0) * R)
+      .quadraticCurveTo(Math.cos(tm) * R * sag, Math.sin(tm) * R * sag, Math.cos(t1) * R, Math.sin(t1) * R)
+      .closePath()
+      .fill(shade(i % 2 ? b : a, 0.9 + 0.22 * lit(tm)));
+    g.moveTo(Math.cos(tm) * R * 0.25, Math.sin(tm) * R * 0.25).lineTo(Math.cos(tm) * R * 0.85, Math.sin(tm) * R * 0.85).stroke({ width: 1, color: shade(i % 2 ? b : a, 0.75), alpha: 0.6 });
+  }
+  for (let i = 0; i < n; i++) {
+    const t = ph + (i / n) * Math.PI * 2;
+    g.moveTo(0, 0).lineTo(Math.cos(t) * R, Math.sin(t) * R);
+  }
+  g.stroke({ width: 1.4, color: INK, alpha: 0.6 });
+  if (drop) {
+    // The eaves, inked.
+    for (let i = 0; i < n; i++) {
+      const [t0, t1] = [ph + (i / n) * Math.PI * 2, ph + ((i + 1) / n) * Math.PI * 2];
+      const tm = (t0 + t1) / 2;
+      g.moveTo(Math.cos(t0) * R, Math.sin(t0) * R).quadraticCurveTo(Math.cos(tm) * R * sag, Math.sin(tm) * R * sag, Math.cos(t1) * R, Math.sin(t1) * R);
+    }
+    g.stroke({ width: 2, color: INK, join: 'round' });
+    return;
+  }
+  // Scalloped valance round the rim.
+  for (let i = 0; i < n * 2; i++) {
+    const t = ((i + 0.5) / (n * 2)) * Math.PI * 2;
+    g.circle(Math.cos(t) * R, Math.sin(t) * R, R * 0.08).fill(shade(i % 2 ? b : a, 0.85 + 0.2 * lit(t))).stroke({ width: 1, color: INK });
+  }
 }
 
 /** Tent: an A-frame in three canvases, or a round pavilion. */
@@ -2032,7 +2069,7 @@ function quad4(a: [number, number], b: [number, number], c: [number, number], d:
 
 /** Where an upright thing drawn from a high angle stands in its frame: its foot, px below the centre, by kind
  * id (its drop shadow falls from there: `BattlemapLayer`). Things seen from straight above stand at the centre. */
-export const UPRIGHT_FOOT: Record<number, number> = { 47: 1.7 * FT, 48: 1.85 * FT, 49: 1.1 * FT, 50: 2.15 * FT };
+export const UPRIGHT_FOOT: Record<number, number> = { 47: 1.7 * FT, 48: 1.85 * FT, 49: 1.1 * FT, 50: 2.15 * FT, 57: 1.3 * FT, 60: 2.3 * FT };
 
 /** The high-angle view of upright things (as the headstone; the style guide's `hk` 0.5, `dk` 0.87): a ground
  * point `x` across and `d` deep (toward the viewer) and `h` up, in feet, to frame pixels, the foot at (0, `foot`). */
@@ -2375,10 +2412,20 @@ function streetLantern(g: Graphics, P: (x: number, d: number, h: number) => [num
   g.circle(apex[0], apex[1] - 1.5, 2).stroke({ width: 1, color: IRON[2] });
 }
 
-/** An iron rod from `a` to `b` (an ink line under a lit one). */
-function rod(g: Graphics, a: [number, number], b: [number, number], w = 2.4) {
-  g.moveTo(...a).lineTo(...b).stroke({ width: w + 2.4, color: INK, cap: 'round' });
-  g.moveTo(...a).lineTo(...b).stroke({ width: w, color: IRON[2], cap: 'round' });
+/** An iron rod from `a` to `b` (an ink line under a lit one), or one of another `color`. */
+function rod(g: Graphics, a: [number, number], b: [number, number], w = 2.4, color = IRON[2]) {
+  inked(g, () => g.moveTo(...a).lineTo(...b), w, color);
+}
+
+/** A stroke inked: the path `trace` draws, stroked in ink 2.4 px wider, then in `color` over it. */
+function inked(g: Graphics, trace: () => void, w: number, color: number) {
+  for (const [width, c] of [
+    [w + 2.4, INK],
+    [w, color],
+  ] as const) {
+    trace();
+    g.stroke({ width, color: c, cap: 'round', join: 'round' });
+  }
 }
 
 /** Lamp post, from a high angle: an iron post on a stone foot with a lantern on top, glowing (v0); a timber
@@ -2443,12 +2490,12 @@ function lampPost(g: Graphics, r: number, rnd: () => number, v: number) {
 /** A cross's shadow on the steps below it (SE, from the light in the NW), from (x, y): the shaft `len` px,
  * the arms across it near the end in proportion, a ring round the crossing on a wheel cross. */
 function crossShadow(g: Graphics, x: number, y: number, len: number, wheel: boolean) {
-  const sh = { color: 0x2a1a20, alpha: 0.2 };
+  const sh = { color: 0x2a1a20, alpha: 0.38 };
   const [ux, uy] = [Math.SQRT1_2, Math.SQRT1_2];
   const at = (u: number, k: number) => [x + ux * u - uy * k, y + uy * u + ux * k];
-  const w = len * 0.07;
-  const c = len * 0.74;
-  const arm = len * 0.28;
+  const w = len * 0.085;
+  const c = len * 0.72;
+  const arm = len * 0.3;
   g.poly([...at(0, -w), ...at(c - w, -w), ...at(c - w, -arm), ...at(c + w, -arm), ...at(c + w, -w), ...at(len, -w), ...at(len, w), ...at(c + w, w), ...at(c + w, arm), ...at(c - w, arm), ...at(c - w, w), ...at(0, w)]).fill(sh);
   if (wheel) {
     const [rx, ry] = at(c, 0);
@@ -2457,37 +2504,51 @@ function crossShadow(g: Graphics, x: number, y: number, len: number, wheel: bool
 }
 
 /** A stone cross standing up, from a high angle (as the headstone's cross), its foot at (0, `foot`) and
- * `k` times life size: the tops of its arms and head lit behind the front face, a groove down the shaft and
- * across the arms, the lower right in shade; a ring round the crossing on a wheel cross. */
+ * `k` times life size: stout, so it still reads as a cross on a square seen from far up; the tops of its arms
+ * and head lit behind the front face, a groove down the shaft and across the arms, the lower right in shade;
+ * a ring round the crossing on a wheel cross. */
 function standingCross(g: Graphics, foot: number, k: number, tones: readonly number[], wheel: boolean) {
   const P0 = upright(foot);
   const P = (x: number, d: number, h: number) => P0(x * k, d * k, h * k);
-  const [sw, arm, a0, a1, head] = [0.36, 1.5, 5.9, 6.9, 8.4];
+  const [sw, arm, a0, a1, head] = [0.6, 1.8, 5.9, 7.55, 9.4];
   const face = (d: number) => [
     ...P(-sw, d, 0), ...P(sw, d, 0), ...P(sw, d, a0), ...P(arm, d, a0), ...P(arm, d, a1), ...P(sw, d, a1), ...P(sw, d, head),
     ...P(-sw, d, head), ...P(-sw, d, a1), ...P(-arm, d, a1), ...P(-arm, d, a0), ...P(-sw, d, a0),
   ];
-  const ink = { width: Math.max(1.2, 2 * k), color: INK, join: 'round' as const };
-  g.poly(face(-0.6)).fill(tones[2]).stroke(ink);
+  const ink = { width: Math.max(1.2, 3 * k), color: INK, join: 'round' as const };
+  g.poly(face(-0.7)).fill(tones[2]).stroke(ink);
   if (wheel) {
     // Dark between the ring and the arms, so the ring stands out.
     const [cx, cy] = P(0, 0, (a0 + a1) / 2);
-    const [rx, ry] = [1.3 * FT * k, 1.3 * FT * k * 0.72];
+    const [rx, ry] = [1.65 * FT * k, 1.65 * FT * k * 0.72];
     g.poly(oval(cx, cy, rx, ry, 0, 24)).fill(shade(tones[0], 0.45));
   }
   g.poly(face(0)).fill(tones[1]).stroke(ink);
   if (wheel) {
     // The ring, bold, standing proud of the arms: inked, lit along its upper edge.
     const [cx, cy] = P(0, 0, (a0 + a1) / 2);
-    const [rx, ry] = [1.3 * FT * k, 1.3 * FT * k * 0.72];
+    const [rx, ry] = [1.65 * FT * k, 1.65 * FT * k * 0.72];
     g.poly(oval(cx, cy, rx, ry, 0, 28)).stroke({ width: 0.3 * FT * k + 3.5, color: INK });
     g.poly(oval(cx, cy, rx, ry, 0, 28)).stroke({ width: 0.3 * FT * k, color: tones[1] });
     g.moveTo(cx - rx * 0.8, cy - ry * 0.6).quadraticCurveTo(cx, cy - ry * 1.2, cx + rx * 0.8, cy - ry * 0.6).stroke({ width: 0.1 * FT * k, color: tones[2], cap: 'round' });
   }
   if (k < 0.5) return;
-  g.poly([...P(sw * 0.1, 0, 0.2), ...P(sw, 0, 0.2), ...P(sw, 0, a0 - 0.2), ...P(sw * 0.1, 0, a0 - 0.2)]).fill({ color: tones[0], alpha: 0.4 });
+  // The shade side: the east half of the shaft and the underside of the east arm.
+  g.poly([...P(sw * 0.1, 0, 0.2), ...P(sw, 0, 0.2), ...P(sw, 0, a0 - 0.2), ...P(sw * 0.1, 0, a0 - 0.2)]).fill({ color: shade(tones[0], 0.8), alpha: 0.6 });
+  g.poly([...P(sw, 0, a0 + 0.1), ...P(arm - 0.1, 0, a0 + 0.1), ...P(arm - 0.1, 0, (a0 + a1) / 2), ...P(sw, 0, (a0 + a1) / 2)]).fill({ color: shade(tones[0], 0.8), alpha: 0.5 });
   g.moveTo(...P(0, 0, 0.6)).lineTo(...P(0, 0, head - 0.4)).moveTo(...P(-arm + 0.35, 0, (a0 + a1) / 2)).lineTo(...P(arm - 0.35, 0, (a0 + a1) / 2));
-  g.stroke({ width: 2, color: shade(tones[0], 0.85), cap: 'round' });
+  g.stroke({ width: 2.6, color: shade(tones[0], 0.85), cap: 'round' });
+}
+
+/** A regular polygon's corners: `n` of them round (0, 0) at radius `R`, the first at angle `ph`. */
+function ngon(R: number, n: number, ph: number): number[][] {
+  return Array.from({ length: n }, (_, i) => [Math.cos(ph + (i / n) * Math.PI * 2) * R, Math.sin(ph + (i / n) * Math.PI * 2) * R]);
+}
+
+/** A regular polygon's radius at angle `a` (circumradius `R`, `n` sides, a corner at `ph`), as `around` takes it. */
+function polyR(R: number, n: number, ph: number) {
+  const span = (Math.PI * 2) / n;
+  return (a: number) => (R * Math.cos(Math.PI / n)) / Math.cos(((((a - ph) % span) + span) % span) - Math.PI / n);
 }
 
 /** Market cross: stepped octagonal treads seen from above (lit on the NW, a joint here and there), a socket
@@ -2496,30 +2557,26 @@ function standingCross(g: Graphics, foot: number, k: number, tones: readonly num
  * one, a step cracked, moss and flowers left at its foot (v2); a wheel cross on square steps (v3). */
 function marketCross(g: Graphics, r: number, rnd: () => number, v: number) {
   const st = v === 2 ? STONE[3] : STONE[0];
-  const ngon = (R: number, n: number, ph: number) => Array.from({ length: n }, (_, i) => [Math.cos(ph + (i / n) * Math.PI * 2) * R, Math.sin(ph + (i / n) * Math.PI * 2) * R]);
   const sides = v === 3 ? 4 : 8;
   const ph = v === 3 ? Math.PI / 4 + (rnd() - 0.5) * 0.1 : Math.PI / 8;
-  const tier = (R: number, ink: number) => {
+  const tier = (R: number, ink: number, dk = 1) => {
     const pts = ngon(R, sides, ph);
-    g.poly(pts.flat()).fill(st[1]).stroke({ width: ink, color: INK, join: 'round' });
+    g.poly(pts.flat()).fill(shade(st[1], dk)).stroke({ width: ink, color: INK, join: 'round' });
     // Each edge's band: lit toward the light, shaded away from it.
     const d = Math.min(0.42 * FT, R * 0.14);
     for (let i = 0; i < sides; i++) {
       const [a, b] = [pts[i], pts[(i + 1) % sides]];
       const k = (R - d) / R;
       const mid = Math.atan2(a[1] + b[1], a[0] + b[0]);
-      g.poly([a[0], a[1], b[0], b[1], b[0] * k, b[1] * k, a[0] * k, a[1] * k]).fill(shade(st[1], 0.95 + 0.17 * lit(mid)));
+      g.poly([a[0], a[1], b[0], b[1], b[0] * k, b[1] * k, a[0] * k, a[1] * k]).fill(shade(st[1], dk * (0.95 + 0.17 * lit(mid))));
     }
     g.poly(pts.flat()).stroke({ width: ink, color: INK, join: 'round' });
   };
   const steps = v === 1 ? [r * 0.97, r * 0.84] : v === 3 ? [r * 1.02, r * 0.78, r * 0.55] : [r * 0.95, r * 0.73, r * 0.51];
-  steps.forEach((R, i) => tier(R, i ? 2 : 2.5));
-  // A joint across each tread here and there (the polygon's radius at angle `a`, for a circumradius `R`).
-  const edge = (R: number, a: number) => {
-    const span = (Math.PI * 2) / sides;
-    const t = (((a - ph) % span) + span) % span;
-    return (R * Math.cos(Math.PI / sides)) / Math.cos(t - Math.PI / sides);
-  };
+  // The bottom step darker, so the steps stand off the paving round them.
+  steps.forEach((R, i) => tier(R, i ? 2 : 3, i ? 1 : 0.8));
+  // A joint across each tread here and there.
+  const edge = (R: number, a: number) => polyR(R, sides, ph)(a);
   for (let i = 0; i + 1 < steps.length; i++) {
     for (let k = 0; k < 3; k++) {
       const a = ph + 0.4 + k * 2.3 + i * 1.1;
@@ -2534,14 +2591,14 @@ function marketCross(g: Graphics, r: number, rnd: () => number, v: number) {
     // open hall under the eaves; the roof over them: eight planes up to a peak, each lit as it faces the
     // light, slates lapped along the eaves; a little cross on the peak.
     const R = r * 0.62;
-    g.poly(ngon(R * 1.16, 8, ph).flat()).fill(0x3e342c).stroke({ width: 2, color: INK, join: 'round' });
+    g.poly(ngon(R * 1.16, 8, ph).flat()).fill(0x221a14).stroke({ width: 2, color: INK, join: 'round' });
     for (const [x, y] of ngon(r * 0.76, 8, ph)) {
       const c = 0.42 * FT;
       g.rect(x - c + 2, y - c + 2, c * 2, c * 2).fill({ color: 0x2a1a20, alpha: 0.35 });
       bevel(g, x - c, y - c, x + c, y + c, 2, st, 1.8);
     }
     const pts = ngon(R, 8, ph);
-    g.poly(pts.flat().map((p) => p + 4)).fill({ color: 0x2a1a20, alpha: 0.35 });
+    g.poly(pts.flat().map((p) => p + 5)).fill({ color: 0x140c08, alpha: 0.55 });
     for (let i = 0; i < 8; i++) {
       const [a, b] = [pts[i], pts[(i + 1) % 8]];
       const mid = Math.atan2(a[1] + b[1], a[0] + b[0]);
@@ -2580,12 +2637,1286 @@ function marketCross(g: Graphics, r: number, rnd: () => number, v: number) {
     const fr = (steps[1] + steps[2]) * 0.5;
     for (let i = 0; i < 3; i++) g.circle(Math.cos(fa) * fr + i * 4 - 4, Math.sin(fa) * fr + (i % 2) * 3 - 1, 2.4).fill([0xe0533d, 0xf2c94c, 0xf6efe0][i]).stroke({ width: 0.8, color: INK });
   }
-  // The socket stone, the cross's shadow falling short down the steps, then the cross standing on it.
+  // The socket stone, the cross's shadow falling short down the steps, then the cross standing on it (a
+  // little over life size, standing a little forward on its socket, so it reads from far up).
   const s0 = steps[steps.length - 1] * 0.5;
   bevel(g, -s0, -s0, s0, s0, 3, st.map((c) => shade(c, 1.04)), 2);
-  crossShadow(g, 0, 0, r * 0.62, v === 3);
-  standingCross(g, 0, 1, v === 2 ? cross.map((c) => shade(c, 0.9)) : cross, v === 3);
-  if (v === 2) moss(g, -0.3 * FT, -5.2 * FT * 0.5, 0.22 * FT, rnd);
+  const [foot, k] = [0.6 * FT, 1.2];
+  crossShadow(g, 0, foot, r * 0.8, v === 3);
+  standingCross(g, foot, k, v === 2 ? cross.map((c) => shade(c, 0.9)) : cross, v === 3);
+  if (v === 2) moss(g, -0.35 * FT * k, foot - 5 * FT * k * 0.5, 0.26 * FT, rnd);
+}
+
+// Parks and gardens.
+
+/** `n` points round (0, 0) at radius `R(a)`, from angle `ph`. */
+function around(n: number, R: (a: number) => number, ph = 0): number[] {
+  const pts: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = ph + (i / n) * Math.PI * 2;
+    pts.push(Math.cos(a) * R(a), Math.sin(a) * R(a));
+  }
+  return pts;
+}
+
+/** A closed curve through the middles of a polygon's edges, its corners pulling it round (a smoothed
+ * outline); fill or stroke it after. */
+function smooth(g: Graphics, pts: number[]) {
+  const n = pts.length / 2;
+  const mid = (i: number): [number, number] => {
+    const [a, b] = [i % n, (i + 1) % n];
+    return [(pts[a * 2] + pts[b * 2]) / 2, (pts[a * 2 + 1] + pts[b * 2 + 1]) / 2];
+  };
+  g.moveTo(...mid(n - 1));
+  for (let i = 0; i < n; i++) g.quadraticCurveTo(pts[i * 2], pts[i * 2 + 1], ...mid(i));
+  g.closePath();
+}
+
+/** The band between two outlines of as many points (a rim seen from above), each piece lit as it faces the
+ * light, both outlines inked. */
+function rimBand(g: Graphics, outer: number[], inner: number[], tone: number, ink = 2.2, light = 0.2) {
+  g.poly(outer).fill(tone);
+  const n = outer.length / 2;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const mid = Math.atan2(outer[i * 2 + 1] + outer[j * 2 + 1], outer[i * 2] + outer[j * 2]);
+    g.poly([outer[i * 2], outer[i * 2 + 1], outer[j * 2], outer[j * 2 + 1], inner[j * 2], inner[j * 2 + 1], inner[i * 2], inner[i * 2 + 1]]).fill(shade(tone, 0.9 + light * lit(mid)));
+  }
+  g.poly(outer).stroke({ width: ink, color: INK, join: 'round' });
+  g.poly(inner).stroke({ width: Math.max(1.2, ink * 0.6), color: INK, join: 'round' });
+}
+
+/** Water seen from above inside the outline `R(a)` (a basin, a pond): deeper toward the middle, the shadow
+ * of its rim or bank along the NW side, two ripples and a glint; murky water green and still. */
+function water(g: Graphics, R: (a: number) => number, rnd: () => number, murky = false) {
+  const t = murky ? [0x2e4a2a, 0x4a6a3c, 0x6e8a58] : [0x22566a, 0x3a7f8a, 0x6ab0a8];
+  const s = (R(0) + R(Math.PI / 2) + R(Math.PI) + R(Math.PI * 1.5)) / 4;
+  g.poly(around(64, R)).fill(t[1]);
+  g.poly(around(48, (a) => R(a) * 0.66).map((p) => p + s * 0.05)).fill({ color: t[0], alpha: 0.4 });
+  g.poly(around(36, (a) => R(a) * 0.36).map((p) => p + s * 0.08)).fill({ color: t[0], alpha: 0.35 });
+  // The rim's shadow: a crescent inside its NW side, widest facing the light.
+  const crescent: number[] = [];
+  const [a0, a1] = [Math.PI * 0.62, Math.PI * 1.88];
+  for (let i = 0; i <= 24; i++) {
+    const a = a0 + ((a1 - a0) * i) / 24;
+    crescent.push(Math.cos(a) * R(a), Math.sin(a) * R(a));
+  }
+  for (let i = 24; i >= 0; i--) {
+    const a = a0 + ((a1 - a0) * i) / 24;
+    const k = Math.max(0, R(a) - s * 0.13 * Math.sin(((a - a0) / (a1 - a0)) * Math.PI));
+    crescent.push(Math.cos(a) * k, Math.sin(a) * k);
+  }
+  g.poly(crescent).fill({ color: 0x123848, alpha: murky ? 0.3 : 0.4 });
+  if (murky) {
+    for (let i = 0; i < 7; i++) {
+      const a = rnd() * Math.PI * 2;
+      const d = R(a) * 0.75 * Math.sqrt(rnd());
+      g.poly(blob(Math.cos(a) * d, Math.sin(a) * d, s * (0.05 + 0.05 * rnd()), 7, 0.5, rnd)).fill({ color: 0x8a9a52, alpha: 0.7 });
+    }
+    return;
+  }
+  for (let i = 0; i < 2; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = R(a) * (0.3 + 0.3 * rnd());
+    const [x, y, w] = [Math.cos(a) * d, Math.sin(a) * d, s * (0.12 - i * 0.03)];
+    g.moveTo(x - w, y).quadraticCurveTo(x, y - w * 0.35, x + w, y).stroke({ width: 1.5, color: t[2], alpha: 0.9, cap: 'round' });
+  }
+  const ga = Math.PI * 1.25;
+  g.poly(oval(Math.cos(ga) * R(ga) * 0.5, Math.sin(ga) * R(ga) * 0.5, s * 0.1, s * 0.045, -0.5, 10)).fill({ color: 0xe6f4ec, alpha: 0.75 });
+}
+
+/** Rings where falling water meets the pool below: short white arcs round a circle of radius `R`. */
+function dripRing(g: Graphics, R: number, n: number, rnd: () => number) {
+  for (let i = 0; i < n; i++) {
+    const a = ((i + rnd() * 0.5) / n) * Math.PI * 2;
+    g.moveTo(Math.cos(a) * R, Math.sin(a) * R).arc(0, 0, R, a, a + (Math.PI * 2 * 0.45) / n);
+  }
+  g.stroke({ width: 2, color: 0xe6f4ec, alpha: 0.75, cap: 'round' });
+}
+
+/** A jet from above: white spray thrown out every way from (x, y), droplets round it. */
+function jet(g: Graphics, x: number, y: number, s: number, rnd: () => number) {
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2 + rnd() * 0.3;
+    const l = s * (0.7 + 0.3 * rnd());
+    g.moveTo(x + Math.cos(a) * s * 0.15, y + Math.sin(a) * s * 0.15).lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l);
+  }
+  g.stroke({ width: 2.2, color: 0xf2fafa, alpha: 0.85, cap: 'round' });
+  for (let i = 0; i < 8; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = s * (0.8 + 0.5 * rnd());
+    g.circle(x + Math.cos(a) * d, y + Math.sin(a) * d, 1.3).fill({ color: 0xf2fafa, alpha: 0.8 });
+  }
+  g.circle(x, y, s * 0.28).fill(0xf6fcfc).stroke({ width: 1.2, color: 0x6ab0a8 });
+}
+
+/** A round stone bowl from above at (0, 0): its rim (outer radius `R`) lit toward the light, water inside. */
+function bowl(g: Graphics, R: number, tones: readonly number[], rnd: () => number) {
+  g.circle(R * 0.12, R * 0.14, R).fill({ color: 0x0e2a34, alpha: 0.35 });
+  rimBand(g, around(36, () => R), around(36, () => R * 0.74), tones[2], 2);
+  water(g, () => R * 0.74, rnd);
+}
+
+/** Fountain (a garden's; a square's big raised basin is drawn with the square): a round stone basin, an
+ * upper bowl on a pedestal throwing up a jet (v0); a quatrefoil basin round an urn pouring four ways (v1);
+ * three tiers in an octagonal basin (v2); an old one, its water gone low, still and green below a stained
+ * band, its rim cracked and a stone come away, the bowl broken off its pedestal, moss (v3). */
+function fountain(g: Graphics, r: number, rnd: () => number, v: number) {
+  const st = STONE[[0, 2, 0, 3][v]];
+  const R0 = r * 0.93;
+  const rim = r * 0.15;
+  const shape = v === 1 ? (a: number) => R0 * (0.8 + 0.2 * Math.abs(Math.cos(2 * a))) : v === 2 ? polyR(R0, 8, Math.PI / 8) : () => R0;
+  const inner = (a: number) => shape(a) - rim;
+  rimBand(g, around(64, shape), around(64, inner), st[2], 2.5, v === 3 ? 0.4 : 0.2);
+  // Joints across the rim: at the octagon's corners, the quatrefoil's cusps and lobes, else every tenth.
+  const joints = v === 2 ? 8 : v === 1 ? 8 : 10;
+  for (let i = 0; i < joints; i++) {
+    const a = (v === 2 ? Math.PI / 8 : 0.2) + (i / joints) * Math.PI * 2;
+    g.moveTo(Math.cos(a) * (inner(a) + 1.5), Math.sin(a) * (inner(a) + 1.5)).lineTo(Math.cos(a) * (shape(a) - 1.5), Math.sin(a) * (shape(a) - 1.5));
+  }
+  g.stroke(v === 3 ? { width: 2.2, color: shade(st[0], 0.6) } : { width: 1.3, color: shade(st[0], 0.85) });
+  if (v === 3) {
+    // Gone low: the basin's inside stained and dry down to the waterline, streaks down it, green water
+    // lying low, and the rim's shadow falling deep across the NW side.
+    g.poly(around(64, inner)).fill(st[1]);
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2 + rnd() * 0.3;
+      const k = 0.88 + 0.05 * rnd();
+      g.moveTo(Math.cos(a) * inner(a) * 0.99, Math.sin(a) * inner(a) * 0.99).lineTo(Math.cos(a) * inner(a) * k, Math.sin(a) * inner(a) * k);
+    }
+    g.stroke({ width: 1.6, color: st[0], alpha: 0.8, cap: 'round' });
+    water(g, (a) => inner(a) * 0.8, rnd, true);
+    g.poly(around(64, (a) => inner(a) * 0.8)).stroke({ width: 1.2, color: 0x3e3a2a, alpha: 0.8 });
+    // The old waterline: an olive-brown stain round the basin a little above the water.
+    g.poly(around(64, (a) => inner(a) * 0.85)).stroke({ width: 3, color: 0x6a5a2e });
+    const shadow: number[] = [];
+    for (let i = 0; i <= 24; i++) {
+      const a = Math.PI * (0.62 + (1.26 * i) / 24);
+      shadow.push(Math.cos(a) * inner(a), Math.sin(a) * inner(a));
+    }
+    for (let i = 24; i >= 0; i--) {
+      const a = Math.PI * (0.62 + (1.26 * i) / 24);
+      const k = inner(a) - r * 0.26 * Math.sin((i / 24) * Math.PI);
+      shadow.push(Math.cos(a) * k, Math.sin(a) * k);
+    }
+    g.poly(shadow).fill({ color: 0x1a2418, alpha: 0.4 });
+  } else water(g, inner, rnd);
+  g.poly(around(64, inner)).stroke({ width: 1.5, color: INK, join: 'round' });
+  if (v === 0) {
+    g.circle(r * 0.06, r * 0.08, r * 0.38).fill({ color: 0x0e2a34, alpha: 0.25 });
+    dripRing(g, r * 0.42, 9, rnd);
+    bowl(g, r * 0.34, st, rnd);
+    jet(g, 0, 0, r * 0.2, rnd);
+  } else if (v === 1) {
+    // Four streams arching out of the urn into the lobes, rings where they land.
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2;
+      const [c, s] = [Math.cos(a), Math.sin(a)];
+      const [x0, y0, x1, y1] = [c * r * 0.18, s * r * 0.18, c * r * 0.52, s * r * 0.52];
+      const [mx, my] = [c * r * 0.36 - s * r * 0.04, s * r * 0.36 + c * r * 0.04];
+      g.moveTo(x0, y0).quadraticCurveTo(mx, my, x1, y1).stroke({ width: 5, color: 0x5e9ea4, alpha: 0.7, cap: 'round' });
+      g.moveTo(x0, y0).quadraticCurveTo(mx, my, x1, y1).stroke({ width: 2.4, color: 0xf2fafa, alpha: 0.9, cap: 'round' });
+      g.circle(x1, y1, r * 0.06).stroke({ width: 1.5, color: 0xe6f4ec, alpha: 0.8 });
+      g.circle(x1, y1, r * 0.1).stroke({ width: 1.2, color: 0xe6f4ec, alpha: 0.5 });
+    }
+    // The urn from above: its swell lit toward the light, the lip round its dark mouth, bubbling.
+    g.circle(r * 0.05, r * 0.06, r * 0.27).fill({ color: 0x0e2a34, alpha: 0.3 });
+    g.circle(0, 0, r * 0.26).fill(st[1]).stroke({ width: 2, color: INK });
+    g.circle(-r * 0.05, -r * 0.05, r * 0.19).fill(st[2]);
+    g.circle(0, 0, r * 0.17).fill(st[3]).stroke({ width: 1.5, color: INK });
+    g.circle(0, 0, r * 0.11).fill(0x2a6070).stroke({ width: 1, color: shade(st[0], 0.7) });
+    g.circle(-r * 0.02, -r * 0.02, r * 0.05).fill({ color: 0xf2fafa, alpha: 0.9 });
+    // A lily pad in one lobe.
+    const [lx, ly, ls] = [-r * 0.6, r * 0.08, r * 0.09];
+    g.moveTo(lx, ly).arc(lx, ly, ls, 0.5, Math.PI * 2 - 0.1).closePath().fill(0x5e8a3a).stroke({ width: 1, color: 0x2a3a18 });
+  } else if (v === 2) {
+    g.circle(r * 0.08, r * 0.1, r * 0.5).fill({ color: 0x0e2a34, alpha: 0.2 });
+    dripRing(g, r * 0.56, 11, rnd);
+    bowl(g, r * 0.48, st, rnd);
+    dripRing(g, r * 0.3, 7, rnd);
+    bowl(g, r * 0.24, st.map((c) => shade(c, 1.05)), rnd);
+    jet(g, 0, 0, r * 0.12, rnd);
+  } else {
+    // A stone gone from the rim (a dark gap, the stone lying outside), a crack, moss on the north rim,
+    // brown leaves on the water; the pedestal still standing, broken off short, a piece of its bowl leaning
+    // at its foot.
+    const ga = Math.PI * 0.3;
+    const gap = [ga - 0.2, ga + 0.2].flatMap((a) => [Math.cos(a) * (shape(a) - 1), Math.sin(a) * (shape(a) - 1)]);
+    const gin = [ga + 0.2, ga - 0.2].flatMap((a) => [Math.cos(a) * (inner(a) + 1), Math.sin(a) * (inner(a) + 1)]);
+    g.poly([...gap, ...gin]).fill(0x3e3a32).stroke({ width: 1.5, color: INK, join: 'round' });
+    stone(g, Math.cos(ga) * r * 1.0, Math.sin(ga) * r * 1.0 - 4, r * 0.13, st, rnd, 6);
+    const ca = Math.PI * 1.1;
+    g.moveTo(Math.cos(ca) * inner(ca), Math.sin(ca) * inner(ca)).lineTo(Math.cos(ca + 0.05) * (inner(ca) + rim * 0.5), Math.sin(ca + 0.05) * (inner(ca) + rim * 0.5)).lineTo(Math.cos(ca - 0.02) * shape(ca), Math.sin(ca - 0.02) * shape(ca));
+    g.stroke({ width: 1.6, color: INK, join: 'round' });
+    moss(g, -r * 0.3, -r * 0.82, r * 0.16, rnd);
+    moss(g, -r * 0.78, -r * 0.3, r * 0.12, rnd);
+    for (let i = 0; i < 3; i++) {
+      const a = Math.PI * (0.1 + i * 0.55) + rnd() * 0.3;
+      leaf(g, Math.cos(a) * r * 0.48, Math.sin(a) * r * 0.48, rnd() * Math.PI * 2, r * 0.18, r * 0.06, [0x6a4a28, 0x7e5a32, 0x5e4426][i], 0.4);
+    }
+    // The pedestal: a round column broken off short, its shadow on the water, the east side in shade, the
+    // break a jagged lit top.
+    const pr = r * 0.22;
+    g.poly(oval(pr * 0.7, pr * 0.8, pr * 1.1, pr * 0.8, 0.7, 14)).fill({ color: 0x0e1a14, alpha: 0.4 });
+    g.circle(0, 0, pr).fill(st[1]).stroke({ width: 2.2, color: INK });
+    g.moveTo(Math.cos(-Math.PI / 4) * pr, Math.sin(-Math.PI / 4) * pr).arc(0, 0, pr, -Math.PI / 4, Math.PI * 0.75).closePath().fill({ color: st[0], alpha: 0.8 });
+    // The break: a jagged face, lit on its NW side, darker toward the SE, a crack across it.
+    const top = Array.from({ length: 7 }, (_, i) => {
+      const a = 0.3 + (i / 7) * Math.PI * 2;
+      const k = pr * (i % 2 ? 0.46 + 0.06 * rnd() : 0.64 + 0.1 * rnd());
+      return [Math.cos(a) * k - pr * 0.1, Math.sin(a) * k - pr * 0.1];
+    }).flat();
+    g.poly(top).fill(st[2]).stroke({ width: 1.4, color: INK, join: 'round' });
+    g.poly(top.map((p) => p * 0.5 - pr * 0.1)).fill({ color: st[3], alpha: 0.45 });
+    g.moveTo(-pr * 0.4, -pr * 0.12).lineTo(-pr * 0.1, -pr * 0.2).lineTo(pr * 0.06, -pr * 0.04).lineTo(pr * 0.28, pr * 0.02).stroke({ width: 1.3, color: shade(st[0], 0.7), join: 'round' });
+    // A piece of the bowl lying at its SE foot: a curved slab of stone, its outer edge lit.
+    const [bx, by, br] = [r * 0.32, r * 0.3, r * 0.2];
+    const [s0, s1] = [Math.PI * 1.05, Math.PI * 1.7];
+    g.moveTo(bx + Math.cos(s0) * br, by + Math.sin(s0) * br)
+      .arc(bx, by, br, s0, s1)
+      .lineTo(bx + Math.cos(s1) * br * 0.45, by + Math.sin(s1) * br * 0.45)
+      .arc(bx, by, br * 0.45, s1, s0, true)
+      .closePath()
+      .fill(st[0])
+      .stroke({ width: 1.8, color: INK, join: 'round' });
+    g.moveTo(bx + Math.cos(s0 + 0.08) * br * 0.94, by + Math.sin(s0 + 0.08) * br * 0.94).arc(bx, by, br * 0.94, s0 + 0.08, s1 - 0.08).stroke({ width: 2.2, color: st[2], cap: 'round' });
+    footGrass(g, -r * 0.88, r * 0.42, r * 0.14, rnd);
+  }
+}
+
+/** A duck on the water at (x, y), heading `a`: its body, the wake spreading behind it, its head and bill; a
+ * mallard drake or a white duck. */
+function duck(g: Graphics, x: number, y: number, a: number, s: number, white: boolean) {
+  const [c, sn] = [Math.cos(a), Math.sin(a)];
+  const at = (u: number, w: number): [number, number] => [x + c * u - sn * w, y + sn * u + c * w];
+  g.moveTo(...at(-s * 0.9, -s * 0.2)).lineTo(...at(-s * 2.6, -s * 1.1)).moveTo(...at(-s * 0.9, s * 0.2)).lineTo(...at(-s * 2.6, s * 1.1));
+  g.stroke({ width: 1.5, color: 0xe6f4ec, alpha: 0.7, cap: 'round' });
+  const body = white ? [0xd8d4c8, 0xf6f2e8] : [0x6e604c, 0x9a8a70];
+  g.poly(oval(...at(-s * 0.1, 0), s, s * 0.6, a, 14)).fill(body[0]).stroke({ width: 1.5, color: INK });
+  g.poly(oval(...at(-s * 0.2, -s * 0.08), s * 0.7, s * 0.36, a, 12)).fill(body[1]);
+  g.poly([...at(s * 1.25, -s * 0.12), ...at(s * 1.7, 0), ...at(s * 1.25, s * 0.12)]).fill(0xe0a030).stroke({ width: 1, color: INK, join: 'round' });
+  g.circle(...at(s * 0.95, 0), s * 0.38).fill(white ? 0xf6f2e8 : 0x2e6a3a).stroke({ width: 1.5, color: INK });
+  if (!white) g.circle(...at(s * 0.62, 0), s * 0.36).stroke({ width: 1.2, color: 0xf6f2e8 });
+}
+
+/** Pond: a muddy bank fading into the ground, still water deeper toward the middle; lily pads with a flower
+ * or two and stones on the bank (v0); reeds and cattails crowding one side (v1); a formal pool in a stone
+ * coping lit along the north and west, koi under lily pads (v2); a duck pond, the ducks' wakes behind them
+ * and a feather on the bank (v3). */
+function pond(g: Graphics, r: number, rnd: () => number, v: number) {
+  const pad = (x: number, y: number, s: number, flower: number | null) => {
+    const n = rnd() * Math.PI * 2;
+    g.moveTo(x, y).arc(x, y, s, n + 0.4, n + Math.PI * 2 - 0.4).closePath().fill(0x5e8a3a).stroke({ width: 1.2, color: 0x2a3a18 });
+    g.circle(x - s * 0.3, y - s * 0.3, s * 0.35).fill({ color: 0x86b052, alpha: 0.8 });
+    if (flower !== null) {
+      for (let p = 0; p < 6; p++) {
+        const pa = (p / 6) * Math.PI * 2;
+        g.poly(oval(x + Math.cos(pa) * s * 0.35, y + Math.sin(pa) * s * 0.35, s * 0.36, s * 0.16, pa, 8)).fill(shade(flower, 1 + 0.12 * lit(pa))).stroke({ width: 0.8, color: shade(flower, 0.55) });
+      }
+      g.circle(x, y, s * 0.16).fill(0xf2c94c);
+    }
+  };
+  if (v === 2) {
+    // A formal pool: the coping's blocks lit along the north and west, clear water, koi, lily pads.
+    const [W, H, d] = [r * 0.9, r * 0.6, r * 0.13];
+    bevel(g, -W, -H, W, H, d, STONE[1].map((c) => shade(c, 1.08)), 2.5);
+    for (let x = -W + r * 0.32; x < W - d; x += r * 0.34) g.moveTo(x, -H + 1).lineTo(x, -H + d).moveTo(x + r * 0.15, H - d).lineTo(x + r * 0.15, H - 1);
+    for (let y = -H + r * 0.3; y < H - d; y += r * 0.36) g.moveTo(-W + 1, y).lineTo(-W + d, y).moveTo(W - d, y + r * 0.1).lineTo(W - 1, y + r * 0.1);
+    g.stroke({ width: 1.2, color: shade(STONE[1][0], 0.85) });
+    const [w, h] = [W - d, H - d];
+    water(g, (a) => Math.min(w / Math.max(1e-6, Math.abs(Math.cos(a))), h / Math.max(1e-6, Math.abs(Math.sin(a)))), rnd);
+    g.rect(-w, -h, w * 2, h * 2).stroke({ width: 1.5, color: INK });
+    for (const [x, y, a, c] of [
+      [-r * 0.35, -r * 0.1, 0.3, 0xe8742a],
+      [r * 0.1, r * 0.22, Math.PI + 0.4, 0xf2efe6],
+      [r * 0.45, -r * 0.18, Math.PI * 0.85, 0xe8742a],
+    ] as const) {
+      const [cs, sn] = [Math.cos(a), Math.sin(a)];
+      const at = (u: number, k: number): [number, number] => [x + cs * u - sn * k, y + sn * u + cs * k];
+      g.poly([...at(-r * 0.08, 0), ...at(-r * 0.14, -r * 0.045), ...at(-r * 0.14, r * 0.045)]).fill({ color: c, alpha: 0.85 });
+      g.poly(oval(...at(0, 0), r * 0.085, r * 0.032, a, 12)).fill({ color: c, alpha: 0.9 }).stroke({ width: 1, color: shade(c, 0.55), alpha: 0.8 });
+      if (c === 0xf2efe6) g.circle(...at(r * 0.02, 0), r * 0.02).fill(0xe8742a);
+    }
+    pad(-r * 0.55, r * 0.3, r * 0.09, 0xf6efe0);
+    pad(-r * 0.4, r * 0.38, r * 0.07, null);
+    pad(r * 0.62, r * 0.32, r * 0.08, null);
+    return;
+  }
+  const [p1, p2] = [rnd() * Math.PI * 2, rnd() * Math.PI * 2];
+  const R = (a: number) => r * 0.72 * (1 + 0.09 * Math.sin(2 * a + p1) + 0.06 * Math.sin(3 * a + p2)) * (v === 1 ? 1 + 0.08 * Math.cos(2 * a) : 1);
+  fade(g, around(48, (a) => R(a) * 1.16), 0x4a3e26, 0.4);
+  smooth(g, around(40, (a) => R(a) * 1.07));
+  g.fill(0x76643e);
+  smooth(g, around(40, (a) => R(a) * 1.07));
+  g.stroke({ width: 1.2, color: 0x4a3e26, alpha: 0.7 });
+  water(g, R, rnd);
+  g.poly(around(64, R)).stroke({ width: 2, color: 0x24403c, join: 'round' });
+  // Grass at the water's edge here and there.
+  for (let i = 0; i < 5; i++) {
+    const a = rnd() * Math.PI * 2;
+    footGrass(g, Math.cos(a) * R(a) * 1.08, Math.sin(a) * R(a) * 1.08, r * 0.09, rnd);
+  }
+  if (v === 0) {
+    for (let i = 0; i < 6; i++) {
+      const a = p1 + i * 1.1;
+      const d = R(a) * (0.35 + 0.4 * rnd());
+      pad(Math.cos(a) * d, Math.sin(a) * d, r * (0.06 + 0.03 * rnd()), i < 2 ? 0xe89ab0 : null);
+    }
+    for (let i = 0; i < 3; i++) {
+      const a = p2 + i * 0.5;
+      stone(g, Math.cos(a) * R(a) * 1.1, Math.sin(a) * R(a) * 1.1, r * (0.07 + 0.03 * rnd()), STONE[i % 2], rnd, 7);
+    }
+  } else if (v === 1) {
+    // Reeds crowding one side, cattails standing out of them.
+    const greens = [0x5e8a48, 0x7aa456, 0x9cc070];
+    for (let i = 0; i < 5; i++) {
+      const a = p1 + (i - 2) * 0.32;
+      const [x, y] = [Math.cos(a) * R(a) * 0.98, Math.sin(a) * R(a) * 0.98];
+      const rr = r * (0.2 + 0.05 * rnd());
+      const tips = boughs(12, rnd).map(([t, k]): [number, number] => [t, k * (0.65 + 0.35 * rnd())]);
+      whorl(g, x, y, rr, tips, 0.35);
+      g.fill(greens[0]).stroke({ width: 1.5, color: shade(greens[0], 0.45), join: 'round' });
+      whorl(g, x - rr * 0.08, y - rr * 0.08, rr * 0.7, tips, 0.35);
+      g.fill(greens[1]);
+      whorl(g, x - rr * 0.14, y - rr * 0.14, rr * 0.38, boughs(8, rnd), 0.4);
+      g.fill(greens[2]);
+      for (let k = 0; k < 2; k++) {
+        const ca = rnd() * Math.PI * 2;
+        const [cx, cy] = [x + Math.cos(ca) * rr * 0.45, y + Math.sin(ca) * rr * 0.45];
+        g.poly(oval(cx, cy, r * 0.05, r * 0.024, ca)).fill(0x6e4428).stroke({ width: 1.5, color: 0x3a2414 });
+        g.poly(oval(cx - 1, cy - 1, r * 0.03, r * 0.01, ca)).fill(0x9a6a40);
+      }
+    }
+    for (let i = 0; i < 3; i++) {
+      const a = p1 + Math.PI + (i - 1) * 0.7;
+      const d = R(a) * 0.55;
+      pad(Math.cos(a) * d, Math.sin(a) * d, r * 0.07, null);
+    }
+  } else {
+    for (let i = 0; i < 3; i++) {
+      const a = p1 + i * 2.1;
+      const d = R(a) * (0.3 + 0.2 * i);
+      duck(g, Math.cos(a) * d, Math.sin(a) * d, rnd() * Math.PI * 2, r * 0.07, i === 1);
+    }
+    const fa = p2 + 1;
+    leaf(g, Math.cos(fa) * R(fa) * 1.035, Math.sin(fa) * R(fa) * 1.035, fa + Math.PI / 2, r * 0.1, r * 0.03, 0xf2efe6);
+    stone(g, Math.cos(p2) * R(p2) * 1.08, Math.sin(p2) * R(p2) * 1.08, r * 0.08, STONE[2], rnd, 7);
+  }
+}
+
+/** A plank from above, along x from `x0` to `x1` and `y0` to `y1`: inked, lit along its north edge, a line
+ * of grain. */
+function plank(g: Graphics, x0: number, y0: number, x1: number, y1: number, tones: readonly number[], rnd: () => number) {
+  g.rect(x0, y0, x1 - x0, y1 - y0).fill(tones[1]).stroke({ width: 2, color: INK, join: 'round' });
+  g.rect(x0 + 1, y0 + 1, x1 - x0 - 2, Math.min(3, (y1 - y0) * 0.3)).fill(tones[2]);
+  const y = y0 + (y1 - y0) * (0.55 + 0.2 * rnd());
+  g.moveTo(x0 + (x1 - x0) * 0.12, y).lineTo(x0 + (x1 - x0) * (0.45 + 0.2 * rnd()), y).stroke({ width: 1, color: tones[0], alpha: 0.7, cap: 'round' });
+}
+
+/** Bench, along x, its front toward +y: two planks on timber trestles (v0); a park bench with a slatted back
+ * and iron scroll ends (v1); a stone slab on two blocks with moss on it (v2); a split log on two stumps
+ * (v3). */
+function bench(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  const L = 2.45 * FT;
+  if (v === 0) {
+    for (const x of [-L + 0.5 * FT, L - 0.5 * FT]) g.rect(x - 0.2 * FT, -0.95 * FT, 0.4 * FT, 1.9 * FT).fill(WOOD[0]).stroke({ width: 2, color: INK });
+    plank(g, -L, -0.72 * FT, L, -0.04 * FT, WOOD, rnd);
+    plank(g, -L + 2, 0.04 * FT, L - 1, 0.72 * FT, WOOD, rnd);
+  } else if (v === 1) {
+    // The back leans away to the north: its slats seen from above, paler, its shadow on the seat; the
+    // iron ends sweep from the back down into scrolled arms at the front.
+    g.rect(-L, -1.05 * FT, L * 2, 0.5 * FT).fill({ color: 0x2a1a10, alpha: 0.45 });
+    for (const [y0, y1] of [
+      [-0.62 * FT, -0.12 * FT],
+      [-0.06 * FT, 0.38 * FT],
+      [0.44 * FT, 0.86 * FT],
+    ]) {
+      plank(g, -L, y0, L, y1, WOOD, rnd);
+    }
+    for (const [y0, y1] of [
+      [-1.62 * FT, -1.38 * FT],
+      [-1.3 * FT, -1.06 * FT],
+    ]) {
+      plank(g, -L, y0, L, y1, WOOD.map((c) => shade(c, 1.18)), rnd);
+    }
+    for (const side of [-1, 1]) {
+      const x = side * (L + 1);
+      rod(g, [x, -1.7 * FT], [x, 0.8 * FT], 2.6);
+      inked(g, () => g.moveTo(x, 0.8 * FT).quadraticCurveTo(x, 1.15 * FT, x + side * 0.28 * FT, 1.1 * FT).quadraticCurveTo(x + side * 0.42 * FT, 0.95 * FT, x + side * 0.2 * FT, 0.86 * FT), 2.6, IRON[2]);
+    }
+  } else if (v === 2) {
+    const st = STONE[1];
+    for (const x of [-L + 0.6 * FT, L - 0.6 * FT]) bevel(g, x - 0.42 * FT, -1.0 * FT, x + 0.42 * FT, 1.0 * FT, 3, st, 2);
+    bevel(g, -L, -0.78 * FT, L, 0.78 * FT, 4, st.map((c) => shade(c, 1.08)), 2.5);
+    g.moveTo(-L * 0.1, -0.78 * FT + 2).lineTo(-L * 0.05, -0.2 * FT).lineTo(L * 0.05, 0.1 * FT).stroke({ width: 1.4, color: shade(st[0], 0.8), join: 'round' });
+    moss(g, L * 0.62, -0.45 * FT, 0.32 * FT, rnd);
+  } else {
+    const bark = BARK[0];
+    // Two short logs laid across under the ends, their cut ends showing front and back.
+    for (const x of [-L + 0.7 * FT, L - 0.7 * FT]) {
+      g.roundRect(x - 0.36 * FT, -1.0 * FT, 0.72 * FT, 2.0 * FT, 0.3 * FT).fill(bark[1]).stroke({ width: 2, color: INK });
+      g.moveTo(x - 0.15 * FT, -0.75 * FT).lineTo(x - 0.15 * FT, 0.75 * FT).stroke({ width: 1.5, color: bark[2], alpha: 0.7 });
+      for (const y of [-1.0 * FT, 1.0 * FT]) endGrain(g, x, y, 0.34 * FT, 0.2 * FT, bark);
+    }
+    // The half log: bark showing along its rounded sides, the split face flat on top.
+    g.roundRect(-L, -0.5 * FT, L * 2, 1.0 * FT, 0.3 * FT).fill(bark[1]).stroke({ width: 2.2, color: INK, join: 'round' });
+    for (let i = 0; i < 8; i++) {
+      const x = -L + 0.4 * FT + rnd() * (L * 2 - 0.8 * FT);
+      const y = (i % 2 ? 1 : -1) * 0.4 * FT;
+      g.moveTo(x, y).lineTo(x + 5 + rnd() * 6, y).stroke({ width: 1.5, color: shade(bark[0], 0.7), cap: 'round' });
+    }
+    g.roundRect(-L + 3, -0.3 * FT, L * 2 - 6, 0.6 * FT, 0.2 * FT).fill(0xc89a68).stroke({ width: 1.2, color: shade(bark[0], 0.8) });
+    g.moveTo(-L + 0.5 * FT, -0.05 * FT).quadraticCurveTo(0, 0.12 * FT, L - 0.6 * FT, -0.08 * FT).stroke({ width: 1, color: 0x9a6a40, alpha: 0.8 });
+    g.moveTo(-L + 0.8 * FT, -0.2 * FT).lineTo(-L * 0.2, -0.18 * FT).stroke({ width: 1, color: 0xe0b47a, alpha: 0.9 });
+  }
+}
+
+/** A flower seen from above: five petals inked together, lit on the NW, a small eye. */
+function flower5(g: Graphics, x: number, y: number, s: number, petal: number, eye: number, ph: number) {
+  const petals = [0, 1, 2, 3, 4].map((p) => ph + (p / 5) * Math.PI * 2);
+  for (const pa of petals) g.circle(x + Math.cos(pa) * s * 0.5, y + Math.sin(pa) * s * 0.5, s * 0.5 + 1).fill(INK);
+  for (const pa of petals) g.circle(x + Math.cos(pa) * s * 0.5, y + Math.sin(pa) * s * 0.5, s * 0.5).fill(shade(petal, 1 + 0.15 * lit(pa)));
+  g.circle(x, y, s * 0.22).fill(eye);
+}
+
+/** A rose bush from above: soft round lobes of dark leaves (lit toward the light), two or three roses on
+ * it, each a curled bloom. */
+function roseBush(g: Graphics, x: number, y: number, s: number, petal: number, rnd: () => number) {
+  const lobes: [number, number, number][] = [[x, y, s * 0.55]];
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + rnd() * 0.8;
+    const d = s * (0.4 + 0.15 * rnd());
+    lobes.push([x + Math.cos(a) * d, y + Math.sin(a) * d, s * (0.4 + 0.12 * rnd())]);
+  }
+  for (const [lx, ly, lr] of lobes) g.circle(lx, ly, lr + 1.8).fill(INK);
+  for (const [lx, ly, lr] of lobes) g.circle(lx, ly, lr).fill(0x2e4a24);
+  for (const [lx, ly, lr] of lobes) g.circle(lx - lr * 0.18, ly - lr * 0.18, lr * 0.72).fill(0x46682e);
+  for (const [lx, ly, lr] of lobes) g.circle(lx - lr * 0.32, ly - lr * 0.32, lr * 0.32).fill({ color: 0x6a8c3e, alpha: 0.85 });
+  for (let i = 0; i < 2 + Math.floor(rnd() * 2); i++) {
+    const a = rnd() * Math.PI * 2;
+    const [rx, ry] = [x + Math.cos(a) * s * 0.42, y + Math.sin(a) * s * 0.42];
+    g.circle(rx, ry, s * 0.34).fill(petal).stroke({ width: 1.3, color: INK });
+    g.moveTo(rx + s * 0.18, ry).arc(rx, ry, s * 0.18, 0, Math.PI * 1.5).stroke({ width: 1.3, color: shade(petal, 0.6), cap: 'round' });
+    g.circle(rx - s * 0.12, ry - s * 0.12, s * 0.08).fill({ color: 0xffffff, alpha: 0.5 });
+  }
+}
+
+/** Dark soil in an outline, crumbs of lighter earth. */
+function soil(g: Graphics, pts: number[], rnd: () => number, s: number) {
+  g.poly(pts).fill(0x4a3626).stroke({ width: 1.5, color: 0x2a1c12, join: 'round' });
+  const xs = pts.filter((_, i) => i % 2 === 0);
+  const ys = pts.filter((_, i) => i % 2 === 1);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  for (let i = 0; i < 14; i++) g.circle(x0 + (x1 - x0) * (0.1 + 0.8 * rnd()), y0 + (y1 - y0) * (0.1 + 0.8 * rnd()), s * (0.02 + 0.02 * rnd())).fill({ color: 0x6a5038, alpha: 0.8 });
+}
+
+/** Flowerbed, along x: a round bed of roses inside a clipped box edging (v0); tulips in rows, red and
+ * yellow, in a timber kerb (v1); a raised bed in a stone kerb, lavender behind and marigolds in front (v2);
+ * a square knot of box, four beds of flowers between its diagonals, a clipped ball in the middle (v3). */
+function flowerbed(g: Graphics, r: number, rnd: () => number, v: number) {
+  if (v === 0) {
+    // The edging: one band of clipped box, lumpy, lit on its NW side, leaves picked out.
+    const R = r * 0.92;
+    const n = 30;
+    const jit = Array.from({ length: n }, () => rnd() - 0.5);
+    const band = (k: number, amp: number, d = 0) => jit.flatMap((j, i) => [Math.cos((i / n) * Math.PI * 2) * (R * k + j * amp) + d, Math.sin((i / n) * Math.PI * 2) * (R * k + j * amp) + d]);
+    smooth(g, band(1, 3.5));
+    g.fill(0x2e4a24).stroke({ width: 2.2, color: INK, join: 'round' });
+    smooth(g, band(0.96, 3, -1.2));
+    g.fill(0x46682e);
+    for (let i = 0; i < 26; i++) {
+      const a = rnd() * Math.PI * 2;
+      const d = R * (0.86 + 0.08 * rnd());
+      g.circle(Math.cos(a) * d, Math.sin(a) * d, 1.6 + rnd() * 1.4).fill({ color: lit(a) > 0 ? 0x6e9440 : 0x24401c, alpha: 0.8 });
+    }
+    soil(g, band(0.8, 2.5), rnd, r);
+    // Rose bushes at odd places and sizes, red and pink.
+    const ph = rnd() * Math.PI * 2;
+    for (let i = 0; i < 5; i++) {
+      const a = ph + (i / 5) * Math.PI * 2 + (rnd() - 0.5) * 0.8;
+      const d = R * (i === 4 ? 0.12 : 0.36 + 0.18 * rnd());
+      roseBush(g, Math.cos(a) * d, Math.sin(a) * d, r * (0.17 + 0.07 * rnd()), i % 2 ? 0xe88aa0 : 0xc8323a, rnd);
+    }
+    return;
+  }
+  if (v === 3) {
+    // The knot: a square of clipped box with its diagonals, four beds of one flower each between them.
+    const S = r * 0.8;
+    const beds: [number[], number][] = [
+      [[-S, -S, S, -S, 0, 0], 0xd8323a],
+      [[S, -S, S, S, 0, 0], 0xf6efe0],
+      [[S, S, -S, S, 0, 0], 0xf2c94c],
+      [[-S, S, -S, -S, 0, 0], 0x7a7ad8],
+    ];
+    for (const [tri, color] of beds) {
+      soil(g, tri, rnd, r);
+      const [cx, cy] = [(tri[0] + tri[2]) / 3, (tri[1] + tri[3]) / 3];
+      for (let i = 0; i < 9; i++) {
+        const [u, w] = [rnd(), rnd()];
+        const [a, b] = u + w > 1 ? [1 - u, 1 - w] : [u, w];
+        const x = tri[0] + (tri[2] - tri[0]) * a + (0 - tri[0]) * b;
+        const y = tri[1] + (tri[3] - tri[1]) * a + (0 - tri[1]) * b;
+        flower5(g, x * 0.86 + cx * 0.14, y * 0.86 + cy * 0.14, r * 0.1, color, color === 0xf2c94c ? 0xc8702a : 0xf2c94c, rnd());
+      }
+    }
+    const boxLine = (pts: number[], close: boolean) => {
+      for (const [width, color] of [
+        [r * 0.17 + 3, INK],
+        [r * 0.17, 0x2e4a24],
+        [r * 0.08, 0x46682e],
+      ] as const) {
+        g.poly(pts, close).stroke({ width, color, join: 'round', cap: 'round' });
+      }
+    };
+    boxLine([-S, -S, S, S], false);
+    boxLine([S, -S, -S, S], false);
+    boxLine([-S, -S, S, -S, S, S, -S, S], true);
+    g.moveTo(-S + 2, -S - r * 0.04).lineTo(S - 2, -S - r * 0.04).moveTo(-S - r * 0.04, -S + 2).lineTo(-S - r * 0.04, S - 2).stroke({ width: 2, color: 0x6a8c3e, cap: 'round' });
+    g.circle(0, 0, r * 0.17).fill(0x2e4a24).stroke({ width: 2, color: INK });
+    g.circle(-r * 0.03, -r * 0.04, r * 0.12).fill(0x46682e);
+    g.circle(-r * 0.06, -r * 0.07, r * 0.06).fill(0x6a8c3e);
+    return;
+  }
+  const [W, H] = v === 1 ? [r * 0.95, r * 0.5] : [r * 0.92, r * 0.56];
+  const d = v === 1 ? 4 : 7;
+  bevel(g, -W, -H, W, H, d, v === 1 ? WOOD : STONE[0], 2.2);
+  if (v === 2) {
+    for (const x of [-W * 0.45, W * 0.15, W * 0.7]) g.moveTo(x, -H + 1).lineTo(x, -H + d).moveTo(x - 6, H - d).lineTo(x - 6, H - 1);
+    g.stroke({ width: 1.2, color: shade(STONE[0][0], 0.85) });
+  }
+  soil(g, [-W + d, -H + d, W - d, -H + d, W - d, H - d, -W + d, H - d], rnd, r);
+  if (v === 1) {
+    // Tulips in loose rows (a few gone): long leaves out to the sides, the cup seen a little from the side
+    // (they only read so), three petal tips at its mouth.
+    const [cols, sx, sy] = [6, ((W - d) * 2) / 6, ((H - d) * 2) / 3];
+    for (let row = 0; row < 3; row++) {
+      for (let c = 0; c < cols; c++) {
+        if (rnd() < 0.15) continue;
+        const x = -W + d + (c + 0.5) * sx + (rnd() - 0.5) * 0.55 * sx;
+        const y = -H + d + (row + 0.5) * sy + (rnd() - 0.5) * 0.4 * sy;
+        const a = (rnd() < 0.5 ? 0 : Math.PI) + (rnd() - 0.5) * 0.9;
+        leaf(g, x, y + 2, a, r * 0.2, r * 0.04, 0x5a8a3a, 0.4);
+        leaf(g, x, y + 2, a + Math.PI + (rnd() - 0.5) * 0.6, r * 0.17, r * 0.04, 0x4e7a32, 0.4);
+        const petal = row === 1 ? 0xf2c94c : 0xd8323a;
+        const [w, h] = [r * 0.055, r * 0.085];
+        g.poly([x - w, y - h * 0.15, x - w * 0.95, y - h * 0.8, x - w * 0.35, y - h * 0.45, x, y - h * 0.95, x + w * 0.35, y - h * 0.45, x + w * 0.95, y - h * 0.8, x + w, y - h * 0.15, x + w * 0.7, y + h * 0.3, x, y + h * 0.42, x - w * 0.7, y + h * 0.3])
+          .fill(petal)
+          .stroke({ width: 1.2, color: INK, join: 'round' });
+        g.moveTo(x, y - h * 0.5).lineTo(x, y + h * 0.3).stroke({ width: 1, color: shade(petal, 0.65) });
+        g.poly(oval(x - w * 0.5, y - h * 0.1, w * 0.18, h * 0.3, 0, 8)).fill({ color: 0xffffff, alpha: 0.4 });
+      }
+    }
+    return;
+  }
+  // Lavender: spiky purple clumps in the back row, marigolds in front.
+  for (let i = 0; i < 5; i++) {
+    const [x, y] = [-W + d + ((i + 0.5) / 5) * (W - d) * 2, -H * 0.28];
+    const rr = r * (0.2 + 0.03 * rnd());
+    const tips = boughs(11, rnd).map(([t, k]): [number, number] => [t, k * (0.7 + 0.3 * rnd())]);
+    whorl(g, x, y, rr, tips, 0.4);
+    g.fill(0x5a6aa0).stroke({ width: 1.4, color: 0x2e3260, join: 'round' });
+    whorl(g, x - rr * 0.1, y - rr * 0.1, rr * 0.65, tips, 0.4);
+    g.fill(0x8a86c8);
+    for (const [t, k] of tips.slice(0, 6)) g.circle(x + Math.cos(t) * rr * k * 0.8, y + Math.sin(t) * rr * k * 0.8, 1.6).fill(0xc0b8ec);
+  }
+  for (let i = 0; i < 6; i++) {
+    const [x, y] = [-W + d + ((i + 0.5) / 6) * (W - d) * 2, H * 0.42];
+    tuft(g, x, y, 5, r * 0.11, r * 0.03, [0x46682e, 0x5a7e36], rnd);
+    flower5(g, x + (rnd() - 0.5) * 3, y - 2, r * 0.11, 0xe8902a, 0x8a4a1a, rnd());
+  }
+}
+
+/** Hedge, along x: a section a little over five feet long, clipped nearly square at its ends, so sections
+ * placed five feet apart overlap and read as one hedge; a lumpy top lit along its north side, leaves picked
+ * out, a darker foot along the south. Clipped box (v0), dark yew (v1), hawthorn in flower (v2), overgrown
+ * with shoots sticking out (v3). */
+function hedge(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  const tones = [
+    [0x28461e, 0x40642a, 0x64903c],
+    [0x1a3628, 0x2a4e36, 0x46704c],
+    [0x2c4a20, 0x46682c, 0x6a923e],
+    [0x34502a, 0x557a32, 0x88a846],
+  ][v];
+  const [L, W] = [0.66 * PX, 0.3 * PX];
+  const lump = v === 3 ? 2.6 : 1.6;
+  const j = () => (rnd() - 0.5) * 2 * lump;
+  const pts: number[] = [];
+  for (let i = 0; i <= 10; i++) pts.push(-L + 1 + ((L - 1) * 2 * i) / 10, -W + j());
+  for (const k of [-0.45, 0, 0.45]) pts.push(L + j() * 0.4, k * W);
+  for (let i = 10; i >= 0; i--) pts.push(-L + 1 + ((L - 1) * 2 * i) / 10, W + j() * 0.5);
+  for (const k of [0.45, 0, -0.45]) pts.push(-L + j() * 0.4, k * W);
+  smooth(g, pts);
+  g.fill(tones[0]).stroke({ width: 2, color: INK, join: 'round' });
+  smooth(g, pts.map((p, i) => (i % 2 ? p * 0.8 - 2 : p * 0.96 - 1)));
+  g.fill(tones[1]);
+  smooth(g, pts.map((p, i) => (i % 2 ? p * 0.35 - W * 0.42 : p * 0.9 - 1.5)));
+  g.fill({ color: tones[2], alpha: 0.85 });
+  g.moveTo(-L + 4, W - 2.5).lineTo(L - 4, W - 2.5).stroke({ width: 2.4, color: shade(tones[0], 0.7), alpha: 0.9, cap: 'round' });
+  // Leaves: light ones on the lit side of the top, dark ones toward the shade.
+  for (let i = 0; i < 38; i++) {
+    const x = -L + 4 + rnd() * (L * 2 - 8);
+    const y = -W + 4 + rnd() * (W * 2 - 8);
+    const light = y < -W * 0.1 ? rnd() < 0.8 : rnd() < 0.25;
+    g.circle(x, y, 1.5 + rnd() * 1.6).fill({ color: light ? shade(tones[2], 1.12) : tones[0], alpha: 0.75 });
+  }
+  if (v === 2) {
+    // Blossom in clusters of three.
+    for (let i = 0; i < 6; i++) {
+      const x = -L + 8 + ((i + rnd() * 0.7) / 6) * (L * 2 - 16);
+      const y = -W + 6 + rnd() * (W * 2 - 12);
+      for (let k = 0; k < 3; k++) flower5(g, x + Math.cos(k * 2.1) * 3.4, y + Math.sin(k * 2.1) * 3, 3.8, i % 3 ? 0xf6efe0 : 0xf0b8c8, 0xd8b040, rnd());
+    }
+  }
+  if (v === 3) {
+    // Shoots grown out past the clipped line, uneven: two together near one end, a gap, a few more; each a
+    // curved stem with two to four leaves, some lying along the hedge.
+    const at = [-0.7, -0.55, 0.2 + 0.2 * rnd(), 0.65, -0.1].slice(0, 3 + Math.floor(rnd() * 3));
+    at.forEach((f, i) => {
+      const side = i % 3 === 1 ? 1 : -1;
+      const x0 = f * L;
+      const y0 = side * (W - 3);
+      const len = (0.12 + 0.12 * rnd()) * PX;
+      const a = side * (Math.PI / 2) + (rnd() - 0.5) * 1.6;
+      const bend = (rnd() - 0.5) * 1.2;
+      const [x1, y1] = [x0 + Math.cos(a + bend) * len, y0 + Math.sin(a + bend) * len];
+      const [mx, my] = [x0 + Math.cos(a) * len * 0.6, y0 + Math.sin(a) * len * 0.6];
+      g.moveTo(x0, y0).quadraticCurveTo(mx, my, x1, y1).stroke({ width: 1.6, color: 0x4a3a20, cap: 'round' });
+      const n = 2 + Math.floor(rnd() * 3);
+      for (let k = 0; k < n; k++) {
+        const t = 0.4 + (0.6 * (k + 1)) / n;
+        const [lx, ly] = [x0 + (mx - x0) * t * 1.2, y0 + (my - y0) * t * 1.2];
+        leaf(g, k === n - 1 ? x1 : lx, k === n - 1 ? y1 : ly, a + bend * t + (k % 2 ? 1.1 : -1.1) * (k === n - 1 ? 0 : 1), (0.08 + 0.04 * rnd()) * PX, 2.8, tones[k === n - 1 ? 2 : 1]);
+      }
+    });
+  }
+}
+
+/** A clipped ball of leaves at (x, y): inked, lit toward the light, leaves picked out. */
+function clippedBall(g: Graphics, x: number, y: number, s: number, tones: readonly number[], rnd: () => number) {
+  g.circle(x, y, s).fill(tones[0]).stroke({ width: 2, color: INK });
+  g.circle(x - s * 0.1, y - s * 0.12, s * 0.84).fill(tones[1]);
+  g.circle(x - s * 0.3, y - s * 0.32, s * 0.42).fill({ color: tones[2], alpha: 0.85 });
+  for (let i = 0; i < Math.round(s * 0.8); i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = s * 0.82 * Math.sqrt(rnd());
+    const [dx, dy] = [Math.cos(a) * d, Math.sin(a) * d];
+    g.circle(x + dx, y + dy, 1.3 + rnd() * 1.2).fill({ color: dx + dy < 0 ? shade(tones[2], 1.12) : tones[0], alpha: 0.7 });
+  }
+}
+
+/** Topiary, from a high angle (it reads by its shape from the side): a clipped ball on a stem in a
+ * terracotta pot (v0); a cone (v1); a cone clipped into a spiral (v2); three balls on one stem (v3). */
+function topiary(g: Graphics, r: number, rnd: () => number, v: number) {
+  const P = upright(UPRIGHT_FOOT[57]);
+  const tones = [0x22401c, 0x386026, 0x5c8a34];
+  // A ground point round the foot: on a circle of radius `R` ft, at angle `t` (+y toward the viewer).
+  const ring = (R: number, t: number, h: number) => P(Math.cos(t) * R, Math.sin(t) * R, h);
+  const half = (R: number, h: number, t0: number, t1: number) => Array.from({ length: 13 }, (_, i) => ring(R, t0 + ((t1 - t0) * i) / 12, h)).flat();
+  if (v === 0) {
+    // The pot: its body down to the front of its foot, the rim seen from above with the earth in it.
+    const pot = [0x8a4a2e, 0xb8683e, 0xd88a5a];
+    g.poly([...ring(0.95, Math.PI, 1.6), ...half(0.72, 0, Math.PI, 0), ...ring(0.95, 0, 1.6), ...half(0.95, 1.6, 0, Math.PI)]).fill(pot[1]).stroke({ width: 2, color: INK, join: 'round' });
+    g.poly([...ring(0.95, Math.PI, 1.6), ...half(0.72, 0, Math.PI, Math.PI * 0.62), ...half(0.95, 1.6, Math.PI * 0.62, Math.PI)]).fill({ color: pot[2], alpha: 0.6 });
+    g.poly(half(0.95, 1.6, 0, Math.PI * 2)).fill(pot[2]).stroke({ width: 1.8, color: INK, join: 'round' });
+    g.poly(half(0.75, 1.6, 0, Math.PI * 2)).fill(0x3e2c1e);
+    rod(g, P(0, 0, 1.6), P(0, 0, 3.4), 2.4, BARK[0][1]);
+    clippedBall(g, ...P(0, 0, 4.5), 1.4 * FT, tones, rnd);
+    return;
+  }
+  // Earth round the foot, grass at its edge.
+  g.poly(half(1.8, 0, 0, Math.PI * 2)).fill(0x4a3828).stroke({ width: 1.2, color: 0x2a1c12 });
+  footGrass(g, ...P(-1.6, 0.4, 0), r * 0.2, rnd);
+  footGrass(g, ...P(1.5, 0.7, 0), r * 0.16, rnd);
+  if (v === 3) {
+    rod(g, P(0, 0, 0), P(0, 0, 5.8), 2.6, BARK[0][1]);
+    for (const [h, s] of [
+      [1.4, 1.3],
+      [3.7, 1.0],
+      [5.6, 0.7],
+    ]) {
+      clippedBall(g, ...P(0, 0, h), s * FT, tones, rnd);
+    }
+    return;
+  }
+  // A cone: its shaded east side, its lit west side, leaves picked out; on a spiral, the groove winding up.
+  const [R, top] = [1.55, 6.6];
+  const apex = P(0, 0, top);
+  const at = (t: number, h: number) => ring(R * (1 - h / top), t, h);
+  g.poly([...apex, ...half(R, 0.1, 0, Math.PI)]).fill(tones[1]).stroke({ width: 2, color: INK, join: 'round' });
+  g.poly([...apex, ...half(R, 0.1, 0, Math.PI * 0.4)]).fill({ color: tones[0], alpha: 0.75 });
+  g.poly([...apex, ...half(R, 0.1, Math.PI * 0.72, Math.PI)]).fill({ color: tones[2], alpha: 0.7 });
+  for (let i = 0; i < 26; i++) {
+    const h = rnd() * top * 0.85;
+    const t = rnd() * Math.PI;
+    const [x, y] = at(t, h);
+    g.circle(x, y, 1.3 + rnd() * 1.1).fill({ color: t > Math.PI * 0.55 ? shade(tones[2], 1.12) : tones[0], alpha: 0.7 });
+  }
+  if (v === 2) {
+    for (let k = 0; k < 5; k++) {
+      const h0 = 0.4 + k * 1.25;
+      const path = Array.from({ length: 13 }, (_, i) => {
+        const t = Math.PI - (Math.PI * i) / 12;
+        return at(t, h0 + (i / 12) * 0.75);
+      });
+      g.poly(path.flat(), false).stroke({ width: 3.6, color: shade(tones[0], 0.7), cap: 'round', join: 'round' });
+      g.poly(path.map(([x, y]) => [x, y - 2.6]).flat(), false).stroke({ width: 1.6, color: tones[2], cap: 'round', join: 'round' });
+    }
+  }
+  g.poly([...apex, ...half(R, 0.1, 0, Math.PI)]).stroke({ width: 2, color: INK, join: 'round' });
+}
+
+/** A roof from above over the polygon `pts` (round (0, 0)): a plane to each side up to the peak, lit as it
+ * faces the light, courses of shingles lapped along it, hips from the peak to the corners. Planes left out
+ * (`gone`) show the timbers under them instead: rafters down the hips, purlins across. */
+function hipRoof(g: Graphics, pts: number[][], tone: number, gone: Set<number> = new Set()) {
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    if (gone.has(i)) continue;
+    const [a, b] = [pts[i], pts[(i + 1) % n]];
+    const mid = Math.atan2(a[1] + b[1], a[0] + b[0]);
+    const t = shade(tone, 0.84 + 0.28 * lit(mid));
+    g.poly([0, 0, a[0], a[1], b[0], b[1]]).fill(t);
+    [0.38, 0.56, 0.74, 0.92].forEach((f, row) => {
+      const [x0, y0, x1, y1] = [a[0] * f, a[1] * f, b[0] * f, b[1] * f];
+      g.moveTo(x0, y0).lineTo(x1, y1);
+      // Shingles: short joints up from each course toward the peak, staggered row by row.
+      const k = Math.max(2, Math.round(Math.hypot(x1 - x0, y1 - y0) / 9));
+      for (let s = 0; s < k; s++) {
+        const u = (s + 0.25 + (row % 2) * 0.5) / k;
+        const [x, y] = [x0 + (x1 - x0) * u, y0 + (y1 - y0) * u];
+        g.moveTo(x, y).lineTo((x * (f - 0.15)) / f, (y * (f - 0.15)) / f);
+      }
+    });
+    g.stroke({ width: 1.1, color: shade(t, 0.7), cap: 'round' });
+  }
+  for (const i of gone) {
+    const [a, b] = [pts[i], pts[(i + 1) % n]];
+    inked(g, () => [0.45, 0.75].forEach((f) => g.moveTo(a[0] * f, a[1] * f).lineTo(b[0] * f, b[1] * f)), 1.8, WOOD[1]);
+  }
+  if (gone.size) {
+    inked(g, () => pts.forEach(([x, y]) => g.moveTo(0, 0).lineTo(x, y)), 2.2, WOOD[1]);
+  } else {
+    for (const [x, y] of pts) g.moveTo(0, 0).lineTo(x, y);
+    g.stroke({ width: 2.4, color: shade(tone, 0.55) });
+  }
+  for (let i = 0; i < n; i++) {
+    if (gone.has(i)) continue;
+    const [a, b] = [pts[i], pts[(i + 1) % n]];
+    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
+  }
+  g.stroke({ width: 2.5, color: INK, cap: 'round' });
+}
+
+/** A finial at (x, y): a gilt ball, lit on the NW. */
+function finial(g: Graphics, x: number, y: number, s: number) {
+  g.circle(x, y, s).fill(0xc9a24a).stroke({ width: 1.8, color: INK });
+  g.circle(x - s * 0.3, y - s * 0.3, s * 0.4).fill(0xfff1c0);
+}
+
+/** A dome from above (radius `R`): its east side in shade, a crescent of light on its NW shoulder, eight
+ * straight ribs from the crown to the eaves, a painted cornice round its foot, a lantern on top (a drum
+ * with windows, its cap, a gilt finial). */
+function dome(g: Graphics, R: number, tones: readonly number[], cornice: number) {
+  g.circle(0, 0, R + 3).fill(INK);
+  g.circle(0, 0, R + 1).fill(cornice);
+  g.circle(0, 0, R * 0.92).fill(tones[0]);
+  g.circle(-R * 0.1, -R * 0.1, R * 0.8).fill(tones[1]);
+  g.circle(-R * 0.18, -R * 0.18, R * 0.68).fill(tones[2]);
+  g.circle(-R * 0.04, -R * 0.04, R * 0.62).fill(tones[1]);
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+    g.moveTo(Math.cos(a) * R * 0.26, Math.sin(a) * R * 0.26).lineTo(Math.cos(a) * R * 0.9, Math.sin(a) * R * 0.9);
+  }
+  g.stroke({ width: 2.2, color: shade(tones[0], 0.72), cap: 'round' });
+  g.circle(0, 0, R * 0.92).stroke({ width: 1.5, color: INK });
+  g.circle(R * 0.03, R * 0.04, R * 0.15).fill({ color: 0x0e1a14, alpha: 0.3 });
+  g.circle(0, 0, R * 0.13).fill(cornice).stroke({ width: 1.6, color: INK });
+  g.circle(0, 0, R * 0.075).fill(tones[1]).stroke({ width: 1.2, color: INK });
+  finial(g, 0, 0, R * 0.04);
+}
+
+/** Steps up to a platform at its south edge (`y0`): treads `w` px wide, each a little wider and lower. */
+function stepsDown(g: Graphics, y0: number, w: number, n: number, depth: number, tones: readonly number[]) {
+  for (let k = n - 1; k >= 0; k--) {
+    const hw = w / 2 + k * 3;
+    g.rect(-hw, y0 - 4, hw * 2, depth * (k + 1) + 4).fill(shade(tones[1], 1 - k * 0.06)).stroke({ width: 1.8, color: INK, join: 'round' });
+    g.moveTo(-hw + 1, y0 + depth * k + 1).lineTo(hw - 1, y0 + depth * k + 1).stroke({ width: 1.5, color: tones[2] });
+  }
+}
+
+/** Gazebo, from above: an octagonal shingled roof with a gilt finial over steps at its south side (v0); a
+ * white open pavilion, its balustrade round a painted floor under a copper dome gone green (v1); a pergola,
+ * timber beams and rafters with climbing roses over a paved floor and a bench (v2); an old one fallen in,
+ * half its roof gone to the rafters over the boards, ivy on it (v3). */
+function gazebo(g: Graphics, r: number, rnd: () => number, v: number) {
+  const oct = (R: number) => ngon(R, 8, Math.PI / 8);
+  if (v === 2) {
+    const S = r * 0.82;
+    const st = STONE[1];
+    g.rect(-S, -S, S * 2, S * 2).fill(st[2]).stroke({ width: 2, color: INK });
+    for (let k = 1; k < 5; k++) g.moveTo(-S, -S + (S * 2 * k) / 5).lineTo(S, -S + (S * 2 * k) / 5);
+    for (let k = 0; k < 5; k++) for (let i = 1; i < 4; i++) g.moveTo(-S + (S * 2 * (i + (k % 2) * 0.5)) / 4, -S + (S * 2 * k) / 5).lineTo(-S + (S * 2 * (i + (k % 2) * 0.5)) / 4, -S + (S * 2 * (k + 1)) / 5);
+    g.stroke({ width: 1.2, color: shade(st[0], 0.9) });
+    bench(g, r, rnd, 0);
+    // The timbers' shadows on the floor, then the posts, the two beams and the rafters across them.
+    const [B, rafters] = [r * 0.68, 8];
+    const xs = Array.from({ length: rafters }, (_, i) => -r * 0.72 + (i * r * 1.44) / (rafters - 1));
+    for (const x of xs) g.moveTo(x + 6, -r * 0.82 + 6).lineTo(x + 6, r * 0.82 + 6);
+    for (const y of [-B, B]) g.moveTo(-r * 0.86 + 6, y + 6).lineTo(r * 0.86 + 6, y + 6);
+    g.stroke({ width: 5, color: 0x2a1a10, alpha: 0.22 });
+    for (const [x, y] of [
+      [-B, -B],
+      [B, -B],
+      [B, B],
+      [-B, B],
+    ]) {
+      bevel(g, x - 6, y - 6, x + 6, y + 6, 2, WOOD, 2);
+    }
+    for (const y of [-B, B]) plank(g, -r * 0.86, y - 4.5, r * 0.86, y + 4.5, WOOD, rnd);
+    for (const x of xs) {
+      g.rect(x - 3, -r * 0.82, 6, r * 1.64).fill(WOOD[2]).stroke({ width: 1.8, color: INK, join: 'round' });
+      g.moveTo(x - 1.5, -r * 0.8).lineTo(x - 1.5, r * 0.8).stroke({ width: 1, color: WOOD[3], alpha: 0.7 });
+    }
+    // Climbing roses over two corners and along a beam: leafy clumps (as a canopy), roses in them.
+    for (const [x, y, s] of [
+      [-B, -B, r * 0.26],
+      [B, B, r * 0.3],
+      [r * 0.15, -B, r * 0.2],
+    ]) {
+      const parts: [number, number, number][] = [[x, y, s * 0.5]];
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + rnd() * 0.6;
+        const d = s * (0.35 + 0.2 * rnd());
+        parts.push([x + Math.cos(a) * d, y + Math.sin(a) * d, s * (0.36 + 0.12 * rnd())]);
+      }
+      for (const [px, py, pr] of parts) g.circle(px, py, pr + 2).fill(INK);
+      for (const [px, py, pr] of parts) g.circle(px, py, pr).fill(0x2e4a24);
+      for (const [px, py, pr] of parts) g.circle(px - pr * 0.18, py - pr * 0.18, pr * 0.76).fill(0x46682e);
+      for (const [px, py, pr] of parts) g.circle(px - pr * 0.34, py - pr * 0.34, pr * 0.38).fill({ color: 0x6a8c3e, alpha: 0.9 });
+      for (let i = 0; i < 5; i++) {
+        const a = rnd() * Math.PI * 2;
+        const d = s * 0.7 * Math.sqrt(rnd());
+        flower5(g, x + Math.cos(a) * d, y + Math.sin(a) * d, 4.2, i % 2 ? 0xe88aa0 : 0xc8323a, 0xf2c94c, rnd());
+      }
+    }
+    return;
+  }
+  if (v === 1) {
+    // Hexagonal floor, its balustrade, posts at the corners, the dome over the middle.
+    const hex = (R: number) => ngon(R, 6, 0);
+    stepsDown(g, r * 0.76, r * 0.42, 2, r * 0.09, [0xc8c2b4, 0xe6e0d2, 0xf8f4ea]);
+    const floor = hex(r * 0.9);
+    g.poly(floor.flat()).fill(0xd6cfc0).stroke({ width: 2.5, color: INK, join: 'round' });
+    for (let k = -6; k <= 6; k++) {
+      const w = r * 0.9 - (Math.abs(k) * r * 0.12) / Math.sqrt(3) - 1;
+      g.moveTo(-w, k * r * 0.12).lineTo(w, k * r * 0.12);
+    }
+    g.stroke({ width: 1, color: 0xb4ac9c });
+    g.poly(floor.flat()).stroke({ width: 2.5, color: INK, join: 'round' });
+    const rail = hex(r * 0.82);
+    for (let i = 0; i < 6; i++) {
+      // (The south side, corner 1 to 2, is open for the steps.)
+      if (i === 1) continue;
+      const [a, b] = [rail[i], rail[(i + 1) % 6]];
+      for (let k = 1; k < 7; k++) {
+        const [x, y] = [a[0] + ((b[0] - a[0]) * k) / 7, a[1] + ((b[1] - a[1]) * k) / 7];
+        g.circle(x, y, 2.2).fill(0xf6f2e8).stroke({ width: 1, color: INK });
+      }
+    }
+    // The rail round, open at the steps (the side facing south, from corner 1 to corner 2).
+    const open = [...rail.slice(2), ...rail.slice(0, 2)].flat();
+    inked(g, () => g.poly(open, false), 3.6, 0xf6f2e8);
+    for (const [x, y] of rail) g.rect(x - 4, y - 4, 8, 8).fill(0xf6f2e8).stroke({ width: 1.5, color: INK });
+    g.circle(r * 0.08, r * 0.1, r * 0.62).fill({ color: 0x1a2a30, alpha: 0.25 });
+    dome(g, r * 0.6, [0x2e6a58, 0x4e8e76, 0x8ac4a8], 0xf2eee4);
+    return;
+  }
+  // v0 and v3: octagonal, on a timber floor with steps at the south side.
+  stepsDown(g, r * 0.74, r * 0.4, 2, r * 0.1, STONE[0]);
+  if (v === 3) {
+    const floor = oct(r * 0.86);
+    g.poly(floor.flat()).fill(WOOD[1]).stroke({ width: 2.5, color: INK, join: 'round' });
+    const apo = r * 0.86 * Math.cos(Math.PI / 8);
+    for (let k = -6; k <= 6; k++) {
+      const w = Math.min(apo, apo * Math.SQRT2 - Math.abs(k * r * 0.12)) - 1;
+      g.moveTo(-w, k * r * 0.12).lineTo(w, k * r * 0.12);
+    }
+    g.stroke({ width: 1, color: WOOD[0] });
+    g.poly(floor.flat()).stroke({ width: 2.5, color: INK, join: 'round' });
+    // Fallen shingles and a broken rafter on the boards.
+    for (let i = 0; i < 6; i++) {
+      const [x, y] = [r * (0.1 + 0.4 * rnd()), r * (-0.2 + 0.6 * rnd())];
+      const a = rnd() * Math.PI;
+      g.poly(oval(x, y, 4.5, 2.6, a, 6)).fill(0x6a4a30).stroke({ width: 1, color: INK });
+    }
+    rod(g, [r * 0.15, r * 0.5], [r * 0.6, r * 0.2], 3, WOOD[1]);
+  }
+  hipRoof(g, oct(r * 0.88), v === 3 ? 0x6e5a42 : 0x7e5a3a, v === 3 ? new Set([0, 1, 2, 7]) : new Set());
+  if (v === 3) {
+    // Ivy over the broken edge, moss on the planes left.
+    for (const [x, y, s] of [
+      [r * 0.62, -r * 0.18, r * 0.16],
+      [-r * 0.1, r * 0.58, r * 0.14],
+      [-r * 0.5, -r * 0.4, r * 0.12],
+    ]) {
+      g.poly(blob(x, y, s, 9, 0.5, rnd)).fill(0x34502a).stroke({ width: 1.5, color: INK, join: 'round' });
+      for (let i = 0; i < 5; i++) {
+        const a = rnd() * Math.PI * 2;
+        g.circle(x + Math.cos(a) * s * 0.5, y + Math.sin(a) * s * 0.5, s * 0.22).fill(0x5a7e36);
+      }
+    }
+    g.circle(0, 0, r * 0.06).fill(WOOD[0]).stroke({ width: 1.5, color: INK });
+    return;
+  }
+  finial(g, 0, 0, r * 0.07);
+}
+
+/** Bandstand, from above: a raised octagonal stage on a stone base, a railing of balusters round it open at
+ * the steps on the south side; a red roof over it (v0); open to the sky, chairs in a half ring with music
+ * stands, a big drum, the conductor's box, bunting on the rail (v1); a green ogee dome on iron with a gilt
+ * finial and pennant (v2); a canopy of striped canvas, scalloped round its edge (v3). */
+function bandstand(g: Graphics, r: number, rnd: () => number, v: number) {
+  const ph = Math.PI / 8;
+  const octPts = (R: number) => ngon(R, 8, ph).flat();
+  const st = STONE[0];
+  stepsDown(g, r * 0.8, r * 0.36, 3, r * 0.06, st);
+  rimBand(g, octPts(r * 0.9), octPts(r * 0.8), st[2], 2.5);
+  // The deck: boards along x, clipped to the octagon by hand.
+  const deck = octPts(r * 0.8);
+  g.poly(deck).fill(WOOD[2]);
+  const apo = r * 0.8 * Math.cos(Math.PI / 8);
+  for (let y = -apo + 7; y < apo; y += 7) {
+    const w = Math.min(apo, apo * Math.SQRT2 - Math.abs(y)) - 1;
+    g.moveTo(-w, y).lineTo(w, y);
+  }
+  g.stroke({ width: 1, color: WOOD[1] });
+  g.poly(deck).stroke({ width: 1.8, color: INK, join: 'round' });
+  const iron = v === 2;
+  const railTone = iron ? IRON[1] : 0xf2eee4;
+  const rail = octPts(r * 0.74);
+  const pts: [number, number][] = Array.from({ length: 8 }, (_, i) => [rail[i * 2], rail[i * 2 + 1]]);
+  // The south side (corners 1 to 2) is open for the steps. (Under a canopy's valance the rail is hidden.)
+  for (let i = 0; i < 8; i++) {
+    if (i === 1 || v === 3) continue;
+    const [a, b] = [pts[i], pts[(i + 1) % 8]];
+    for (let k = 1; k < 8; k++) {
+      const [x, y] = [a[0] + ((b[0] - a[0]) * k) / 8, a[1] + ((b[1] - a[1]) * k) / 8];
+      g.circle(x, y, 2).fill(railTone).stroke({ width: 1, color: INK });
+    }
+  }
+  const run = [...pts.slice(2), ...pts.slice(0, 2)].flat();
+  if (v !== 3) {
+    inked(g, () => g.poly(run, false), 3.6, railTone);
+    for (const [x, y] of pts) g.rect(x - 4.5, y - 4.5, 9, 9).fill(railTone).stroke({ width: 1.5, color: INK });
+  }
+  if (v === 1) {
+    // Bunting along the rail on the north side.
+    for (const i of [4, 5, 6]) {
+      const [a, b] = [pts[i], pts[(i + 1) % 8]];
+      for (let k = 0; k < 4; k++) {
+        const [t0, t1] = [k / 4 + 0.03, (k + 1) / 4 - 0.03];
+        const [x0, y0, x1, y1] = [a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0, a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1];
+        const [mx, my] = [(x0 + x1) / 2, (y0 + y1) / 2];
+        const [nx, ny] = [-mx / Math.hypot(mx, my), -my / Math.hypot(mx, my)];
+        g.poly([x0, y0, x1, y1, mx + nx * 9, my + ny * 9]).fill([0xc8323a, 0xf2c94c, 0x3a6ab0, 0xf6efe0][(k + i) % 4]).stroke({ width: 1.2, color: INK, join: 'round' });
+      }
+    }
+    // Chairs in a half ring facing the conductor's box at the front, a stand before each, the big drum
+    // at the back.
+    for (let i = 0; i < 7; i++) {
+      const a = Math.PI * 1.1 + (i / 6) * Math.PI * 0.8;
+      const [x, y] = [Math.cos(a) * r * 0.48, Math.sin(a) * r * 0.48];
+      const [c, s] = [Math.cos(a), Math.sin(a)];
+      const at = (u: number, w: number) => [x + c * u - s * w, y + s * u + c * w];
+      g.poly([...at(-6, -6), ...at(6, -6), ...at(6, 6), ...at(-6, 6)]).fill(WOOD[1]).stroke({ width: 1.5, color: INK, join: 'round' });
+      g.poly([...at(5, -7), ...at(9, -7), ...at(9, 7), ...at(5, 7)]).fill(WOOD[0]).stroke({ width: 1.5, color: INK, join: 'round' });
+      const [sx, sy] = [Math.cos(a) * r * 0.32, Math.sin(a) * r * 0.32];
+      // A stand: its iron desk across, a sheet of music open on it.
+      rod(g, [sx - s * 7, sy + c * 7], [sx + s * 7, sy - c * 7], 3, IRON[1]);
+      g.moveTo(sx - s * 4.5, sy + c * 4.5).lineTo(sx + s * 4.5, sy - c * 4.5).stroke({ width: 2.6, color: 0xf6efe0 });
+    }
+    g.circle(r * 0.03, -r * 0.47, r * 0.15).fill({ color: 0x1a1008, alpha: 0.3 });
+    g.circle(0, -r * 0.5, r * 0.14).fill(0x8a2e26).stroke({ width: 2, color: INK });
+    g.circle(0, -r * 0.5, r * 0.11).fill(0xeee4cc).stroke({ width: 1.2, color: INK });
+    g.circle(-r * 0.03, -r * 0.53, r * 0.04).fill({ color: 0xffffff, alpha: 0.6 });
+    bevel(g, -r * 0.09, r * 0.14, r * 0.09, r * 0.3, 2, WOOD, 2);
+    return;
+  }
+  g.circle(r * 0.1, r * 0.12, r * 0.66).fill({ color: 0x1a2a30, alpha: 0.25 });
+  if (v === 0) {
+    hipRoof(g, ngon(r * 0.66, 8, ph), 0xa04a36);
+    finial(g, 0, 0, r * 0.06);
+    rod(g, [-r * 0.12, -r * 0.02], [r * 0.12, -r * 0.02], 1.6);
+    g.poly([r * 0.12, -r * 0.02, r * 0.07, -r * 0.06, r * 0.07, r * 0.02]).fill(IRON[2]).stroke({ width: 1, color: INK });
+  } else if (v === 2) {
+    dome(g, r * 0.54, [0x2e6a58, 0x4e8e76, 0x8ac4a8], 0x2e3a3a);
+  } else {
+    // A canvas canopy in eight broad stripes on its posts, its valance hanging out past the rim, a small
+    // finial at the peak.
+    stripedCanopy(g, r * 0.68, 8, 0xe2d6b4, 0xa8382e, r * 0.06, Math.PI / 8);
+    finial(g, 0, 0, r * 0.05);
+  }
+}
+
+/** A square block from a high angle (`P`), `w` ft each side of its middle, from `h0` to `h1` ft up: its
+ * front face and its top, inked. Turned corner-on (`diamond`): two faces, the lit west one and the shaded east. */
+function block(g: Graphics, P: (x: number, d: number, h: number) => [number, number], w: number, h0: number, h1: number, tones: readonly number[], diamond = false) {
+  const ink = { width: 2, color: INK, join: 'round' as const };
+  if (diamond) {
+    g.poly(quad4(P(-w, 0, h0), P(0, w, h0), P(0, w, h1), P(-w, 0, h1))).fill(tones[1]).stroke(ink);
+    g.poly(quad4(P(0, w, h0), P(w, 0, h0), P(w, 0, h1), P(0, w, h1))).fill(tones[0]).stroke(ink);
+    g.poly(quad4(P(-w, 0, h1), P(0, -w, h1), P(w, 0, h1), P(0, w, h1))).fill(tones[2]).stroke(ink);
+    return;
+  }
+  g.poly(quad4(P(-w, w, h0), P(w, w, h0), P(w, w, h1), P(-w, w, h1))).fill(tones[1]).stroke(ink);
+  g.poly(quad4(P(-w, -w, h1), P(w, -w, h1), P(w, w, h1), P(-w, w, h1))).fill(tones[2]).stroke(ink);
+}
+
+/** Garden statue, from a high angle (a figure only reads from the side) on a moulded pedestal: a robed
+ * figure in marble holding up a wreath (v0); a stone urn spilling flowers and ivy (v1); a warrior in bronze
+ * gone green, spear and round shield (v2); an obelisk on stepped plinths (v3). */
+function gardenStatue(g: Graphics, r: number, rnd: () => number, v: number) {
+  // A little over life size, as statues set up to be seen are.
+  const P0 = upright(UPRIGHT_FOOT[60]);
+  const K = 1.3;
+  const P = (x: number, d: number, h: number) => P0(x * K, d * K, h * K);
+  const st = STONE[0];
+  footGrass(g, ...P(-1.5, 0.9, 0), r * 0.2, rnd);
+  footGrass(g, ...P(1.4, 1.2, 0), r * 0.16, rnd);
+  if (v === 3) {
+    block(g, P, 1.55, 0, 0.6, st, true);
+    block(g, P, 1.15, 0.6, 1.3, st.map((c) => shade(c, 1.05)), true);
+    // The shaft, corner-on and tapering: the lit west face, the shaded east one, carved signs down the
+    // west; then the pyramid on top, all four faces seen from above.
+    const [s0, s1, h0, h1, apex] = [0.72, 0.42, 1.3, 9.4, 10.6];
+    const ink = { width: 2, color: INK, join: 'round' as const };
+    g.poly(quad4(P(-s0, 0, h0), P(0, s0, h0), P(0, s1, h1), P(-s1, 0, h1))).fill(st[2]).stroke(ink);
+    g.poly(quad4(P(0, s0, h0), P(s0, 0, h0), P(s1, 0, h1), P(0, s1, h1))).fill(st[1]).stroke(ink);
+    for (let k = 0; k < 6; k++) {
+      const h = h0 + 1 + k * 1.2;
+      const f = 1 - (h - h0) / (h1 - h0);
+      const s = s1 + (s0 - s1) * f;
+      g.moveTo(...P(-s * 0.62, s * 0.38, h)).lineTo(...P(-s * 0.38, s * 0.62, h - 0.15));
+    }
+    g.stroke({ width: 1.6, color: st[0], cap: 'round' });
+    const top = P(0, 0, apex);
+    const faces: [[number, number], [number, number], number][] = [
+      [P(-s1, 0, h1), P(0, -s1, h1), st[3]],
+      [P(0, -s1, h1), P(s1, 0, h1), st[2]],
+      [P(-s1, 0, h1), P(0, s1, h1), st[2]],
+      [P(0, s1, h1), P(s1, 0, h1), st[0]],
+    ];
+    for (const [a, b, c] of faces) g.poly([...a, ...b, ...top]).fill(c).stroke(ink);
+    moss(g, ...P(-1.1, 0.4, 0.6), 0.3 * FT * K, rnd);
+    return;
+  }
+  // The pedestal: a base, the die, a cornice.
+  block(g, P, 1.3, 0, 0.5, st);
+  block(g, P, 1.0, 0.5, 2.7, st.map((c) => shade(c, 1.04)));
+  g.poly(quad4(P(-0.7, 1.0, 1.0), P(0.7, 1.0, 1.0), P(0.7, 1.0, 2.2), P(-0.7, 1.0, 2.2))).stroke({ width: 1.2, color: st[0] });
+  block(g, P, 1.22, 2.7, 3.1, st.map((c) => shade(c, 1.08)));
+  if (v === 1) {
+    // The urn: a profile turned round its axis (foot, stem, swelling body, neck, lip), handles, the earth
+    // in its mouth and the flowers and ivy spilling over.
+    const prof: [number, number][] = [[0.5, 3.1], [0.5, 3.35], [0.22, 3.55], [0.22, 3.85], [0.72, 4.3], [0.92, 4.9], [0.8, 5.5], [0.55, 5.85], [0.84, 6.1]];
+    const out = [...prof.map(([x, h]) => P(x, 0, h)), ...prof.reverse().map(([x, h]) => P(-x, 0, h))].flat();
+    const tones = st.map((c) => shade(c, 1.1));
+    for (const side of [-1, 1]) {
+      inked(g, () => g.moveTo(...P(side * 0.85, 0, 5.3)).quadraticCurveTo(...P(side * 1.35, 0, 5.4), ...P(side * 0.8, 0, 4.6)), 2.5, tones[1]);
+    }
+    g.poly(out).fill(tones[1]).stroke({ width: 2, color: INK, join: 'round' });
+    g.poly([...P(-0.6, 0, 4.4), ...P(-0.8, 0, 4.9), ...P(-0.7, 0, 5.4), ...P(-0.35, 0, 5.4), ...P(-0.4, 0, 4.6)]).fill({ color: tones[2], alpha: 0.8 });
+    g.poly([...P(0.4, 0, 4.5), ...P(0.85, 0, 4.9), ...P(0.75, 0, 5.4), ...P(0.5, 0, 5.4)]).fill({ color: tones[0], alpha: 0.5 });
+    g.moveTo(...P(-0.85, 0, 4.9)).lineTo(...P(0.85, 0, 4.9)).stroke({ width: 1.2, color: tones[0] });
+    const rim = (k: number) => Array.from({ length: 16 }, (_, i) => P(Math.cos((i / 16) * Math.PI * 2) * 0.84 * k, Math.sin((i / 16) * Math.PI * 2) * 0.84 * k, 6.1)).flat();
+    g.poly(rim(1)).fill(tones[2]).stroke({ width: 1.8, color: INK, join: 'round' });
+    g.poly(rim(0.78)).fill(0x3e2c1e);
+    for (const [x, d] of [
+      [-0.45, -0.2],
+      [0.35, -0.3],
+      [0, 0.25],
+      [0.5, 0.2],
+    ]) {
+      clippedBall(g, ...P(x, d, 6.4), 0.42 * FT * K, [0x2e4a24, 0x46682e, 0x6a8c3e], rnd);
+    }
+    for (const [x, h] of [
+      [-0.75, 5.6],
+      [0.8, 5.2],
+    ]) {
+      for (let k = 0; k < 3; k++) leaf(g, ...P(x + (rnd() - 0.5) * 0.3, 0.3, h - k * 0.5), Math.PI / 2 + (rnd() - 0.5) * 0.8, 0.3 * FT * K, 2.2, 0x46682e);
+    }
+    for (let k = 0; k < 4; k++) flower5(g, ...P(-0.5 + k * 0.35, (k % 2) * 0.25 - 0.1, 6.7), 4, k % 2 ? 0xc8323a : 0xe88aa0, 0xf2c94c, rnd());
+    return;
+  }
+  // A figure: a robe or tunic to the shoulders, its folds, the head; arms.
+  const tones = v === 0 ? [0xb8b4ac, 0xdcd8d0, 0xf4f2ec] : [0x2e5e50, 0x4e8a74, 0x7ab49a];
+  const ink = { width: 2, color: INK, join: 'round' as const };
+  const [h0, sh, head] = [3.1, 7.0, 7.7];
+  g.poly(oval(...P(0, 0, h0), 0.85 * FT * K, 0.85 * FT * K * 0.87 * 0.5, 0, 14)).fill(tones[0]).stroke(ink);
+  if (v === 2) {
+    // The spear behind, upright in the right hand.
+    rod(g, P(0.8, 0, h0 + 0.2), P(0.8, 0, 10.4), 2, tones[1]);
+    g.poly([...P(0.8, 0, 11.1), ...P(0.62, 0, 10.4), ...P(0.8, 0, 10.1), ...P(0.98, 0, 10.4)]).fill(tones[2]).stroke({ width: 1.5, color: INK, join: 'round' });
+  }
+  const body = [P(-0.7, 0, h0), P(0.7, 0, h0), P(0.62, 0, 5.2), P(0.58, 0, 6.6), P(0.42, 0, sh), P(-0.42, 0, sh), P(-0.58, 0, 6.6), P(-0.62, 0, 5.2)].flat();
+  g.poly(body).fill(tones[1]).stroke(ink);
+  g.poly([...P(0.05, 0, h0), ...P(0.7, 0, h0), ...P(0.62, 0, 5.2), ...P(0.58, 0, 6.6), ...P(0.3, 0, sh), ...P(0.1, 0, 5.4)]).fill({ color: tones[0], alpha: 0.55 });
+  for (const x of [-0.35, 0, 0.32]) g.moveTo(...P(x * 0.6, 0, 5.6)).quadraticCurveTo(...P(x + 0.08, 0, 4.4), ...P(x, 0, h0 + 0.1));
+  g.stroke({ width: 1.3, color: shade(tones[0], 0.85), cap: 'round' });
+  if (v === 2) g.moveTo(...P(-0.6, 0, 5.3)).lineTo(...P(0.6, 0, 5.3)).stroke({ width: 2.2, color: tones[0] });
+  // The head (a crested helm on the warrior), lit on the NW.
+  const [hx, hy] = P(0, 0, head);
+  g.circle(hx, hy, 0.48 * FT * K).fill(tones[1]).stroke(ink);
+  g.circle(hx - 1.5, hy - 1.8, 0.24 * FT * K).fill(tones[2]);
+  if (v === 2) {
+    inked(g, () => g.moveTo(...P(-0.35, 0, head + 0.65)).quadraticCurveTo(...P(0.1, 0, head + 1.4), ...P(0.55, 0, head + 0.5)), 2.6, 0xa8382e);
+    // The shield on the left arm, its boss.
+    const [sx, sy] = P(-0.55, 0.35, 5.2);
+    g.poly(oval(sx, sy, 0.8 * FT * K, 0.8 * FT * K * 0.92, 0, 18)).fill(tones[1]).stroke(ink);
+    g.poly(oval(sx, sy, 0.6 * FT * K, 0.6 * FT * K * 0.92, 0, 18)).stroke({ width: 1.5, color: tones[0] });
+    g.circle(sx, sy, 0.2 * FT * K).fill(tones[2]).stroke({ width: 1.2, color: INK });
+    rod(g, P(0.42, 0, 6.8), P(0.8, 0, 5.6), 3, tones[1]);
+    for (let k = 0; k < 3; k++) g.circle(...P(-0.2 + k * 0.3, 0.05, 4 + k * 0.9), 2.2).fill({ color: 0x8ac4a8, alpha: 0.7 });
+    return;
+  }
+  // Both arms raised, holding a laurel wreath up over the head: a thick ring of bronze leaves.
+  for (const side of [-1, 1]) inked(g, () => g.moveTo(...P(side * 0.42, 0, 6.8)).quadraticCurveTo(...P(side * 0.75, 0, 8.0), ...P(side * 0.5, 0, 9.2)), 3, tones[1]);
+  const [wx, wy] = P(0, 0, 9.7);
+  const wr = 0.62 * FT * K;
+  const laurel = [0x3e6040, 0x5e8a54, 0x8ab478];
+  inked(g, () => g.circle(wx, wy, wr), 4, laurel[0]);
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    const k = i % 2 ? 1.18 : 0.82;
+    leaf(g, wx + Math.cos(a) * wr * k, wy + Math.sin(a) * wr * k * 0.95, a + Math.PI / 2 + (i % 2 ? 0.5 : -0.5), 6.5, 2.4, laurel[1 + (Math.cos(a) + Math.sin(a) < 0 ? 1 : 0)]);
+  }
+  for (const side of [-1, 1]) g.circle(...P(side * 0.5, 0, 9.25), 2.6).fill(tones[1]).stroke({ width: 1.2, color: INK });
+}
+
+/** Footbridge, along x from bank to bank, arching over the water (its shadow is cast with the battlemap's,
+ * drawn out along it): the deck lit toward its western end as it rises to the light, in shade toward the
+ * eastern. Timber planks with handrails on posts (v0); an old humpback in warm stone, flagged in staggered
+ * rows, its parapets of blocks flaring at the ends (v1); natural boards with white-painted rails and lattice
+ * (v2); two logs side by side with a rope rail (v3). */
+function footbridge(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  const [L, W] = [1.5 * PX, (v === 3 ? 0.3 : 0.36) * PX];
+  // Light over the deck: brighter toward the west end, darker toward the east, by steps.
+  const halves = (y0: number, y1: number, k = 0.2) => {
+    const n = 8;
+    for (let i = 0; i < n; i++) {
+      const [x0, x1] = [-L + 2 + ((L * 2 - 4) * i) / n, -L + 2 + ((L * 2 - 4) * (i + 1)) / n];
+      const t = ((i + 0.5) / n) * 2 - 1;
+      g.rect(x0, y0, x1 - x0, y1 - y0).fill({ color: t < 0 ? 0xfff1cf : 0x1a1008, alpha: k * Math.abs(t) });
+    }
+  };
+  if (v === 3) {
+    for (const [y0, y1] of [
+      [-W, -1],
+      [1, W],
+    ]) {
+      const bark = BARK[1];
+      g.roundRect(-L, y0, L * 2, y1 - y0, (y1 - y0) / 2).fill(bark[1]).stroke({ width: 2.2, color: INK });
+      g.roundRect(-L + 4, y0 + 3, L * 2 - 8, (y1 - y0) * 0.3, 2).fill({ color: bark[2], alpha: 0.7 });
+      for (let i = 0; i < 9; i++) {
+        const x = -L + 10 + rnd() * (L * 2 - 20);
+        const y = y0 + (y1 - y0) * (0.4 + 0.4 * rnd());
+        g.moveTo(x, y).lineTo(x + 6 + rnd() * 8, y).stroke({ width: 1.4, color: shade(bark[0], 0.7), cap: 'round' });
+      }
+      for (const x of [-L + (y1 - y0) * 0.3, L - (y1 - y0) * 0.3]) endGrain(g, x, (y0 + y1) / 2, (y1 - y0) * 0.3, (y1 - y0) * 0.48, bark);
+    }
+    halves(-W, W);
+    // A rope rail on three posts along the north side.
+    const posts = [-L * 0.85, 0, L * 0.85];
+    for (const x of posts) g.circle(x, -W - 4, 4).fill(WOOD[1]).stroke({ width: 1.8, color: INK });
+    for (let i = 0; i < 2; i++) {
+      const [a, b] = [posts[i], posts[i + 1]];
+      inked(g, () => g.moveTo(a, -W - 4).quadraticCurveTo((a + b) / 2, -W + 6, b, -W - 4), 1.8, 0xc8a870);
+    }
+    return;
+  }
+  if (v === 1) {
+    const st = [0x7a6448, 0xa88e68, 0xcab48a, 0xe8d6b0];
+    // Flags in three rows along the deck, the joints of each row staggered from the next.
+    g.rect(-L, -W, L * 2, W * 2).fill(st[2]).stroke({ width: 2, color: INK });
+    const [y0, y1] = [-W + 6, W - 6];
+    for (let row = 0; row < 3; row++) {
+      const [a, b] = [y0 + ((y1 - y0) * row) / 3, y0 + ((y1 - y0) * (row + 1)) / 3];
+      if (row) g.moveTo(-L + 2, a).lineTo(L - 2, a + (rnd() - 0.5) * 1.5);
+      for (let x = -L + 6 + row * 7 + rnd() * 6; x < L - 6; x += 15 + rnd() * 8) g.moveTo(x, a + 1).lineTo(x + (rnd() - 0.5) * 2, b - 1);
+    }
+    g.stroke({ width: 1.3, color: shade(st[0], 0.85) });
+    for (let i = 0; i < 6; i++) g.rect(-L + 8 + rnd() * (L * 2 - 24), y0 + rnd() * (y1 - y0 - 4), 9, 3).fill({ color: st[3], alpha: 0.5 });
+    // The hump: the west half lit as it rises toward the light, the east half in shade, a pale crown line
+    // across the top.
+    g.rect(-L + 2, -W + 2, L - 2, W * 2 - 4).fill({ color: 0xfff1cf, alpha: 0.22 });
+    g.rect(0, -W + 2, L - 2, W * 2 - 4).fill({ color: 0x2a1a10, alpha: 0.24 });
+    g.moveTo(0, -W + 3).lineTo(0, W - 3).stroke({ width: 2.2, color: st[3], alpha: 0.9 });
+    // The parapets: a low band of blocks of the same stone along each side, splaying out at the ends.
+    for (const side of [-1, 1]) {
+      const y = side * (W - 3.5);
+      const run = (x0: number, y0: number, x1: number, y1: number, n: number) => {
+        const [dx, dy] = [(x1 - x0) / n, (y1 - y0) / n];
+        const len = Math.hypot(dx, dy);
+        const [nx, ny] = [(-dy / len) * 3.5, (dx / len) * 3.5];
+        for (let k = 0; k < n; k++) {
+          const [ax, ay, bx, by] = [x0 + dx * k, y0 + dy * k, x0 + dx * (k + 1), y0 + dy * (k + 1)];
+          const tone = shade(st[1], (k + (side > 0 ? 1 : 0)) % 2 ? 0.94 : 1.04);
+          g.poly([ax - nx, ay - ny, bx - nx, by - ny, bx + nx, by + ny, ax + nx, ay + ny]).fill(tone).stroke({ width: 1.5, color: INK, join: 'round' });
+          g.moveTo(ax - nx * 0.8, ay - ny * 0.8).lineTo(bx - nx * 0.8, by - ny * 0.8).stroke({ width: 1.2, color: st[3], alpha: 0.8 });
+        }
+      };
+      run(-L - 2, y + side * 8, -L + 14, y, 2);
+      run(-L + 14, y, L - 14, y, 10);
+      run(L - 14, y, L + 2, y + side * 8, 2);
+    }
+    moss(g, -L * 0.55, -W, 6, rnd);
+    moss(g, L * 0.7, W - 1, 5, rnd);
+    return;
+  }
+  // Timber: planks across, rails on posts along both sides (painted white, with a lattice, on v2).
+  const deck = v === 2 ? WOOD.map((c) => shade(c, 1.06)) : WOOD;
+  g.rect(-L, -W, L * 2, W * 2).fill(deck[1]).stroke({ width: 2.2, color: INK });
+  for (let x = -L + 8; x < L - 2; x += 8) g.moveTo(x, -W + 1).lineTo(x, W - 1);
+  g.stroke({ width: 1.2, color: deck[0] });
+  for (let i = 0; i < 6; i++) {
+    const x = -L + 10 + rnd() * (L * 2 - 20);
+    g.circle(x, -W + 6, 0.9).fill(IRON[0]);
+    g.circle(x, W - 6, 0.9).fill(IRON[0]);
+  }
+  halves(-W, W);
+  const white = 0xf6f2e8;
+  const posts = v === 2 ? [-L + 5, 0, L - 5] : [-L + 4, -L / 3, L / 3, L - 4];
+  for (const side of [-1, 1]) {
+    const y = side * (W - 4);
+    if (v === 2) {
+      // The lattice between the posts, inked, then the white rail over it (its ends cut square).
+      for (const [width, color] of [
+        [3.6, INK],
+        [1.6, white],
+      ] as const) {
+        for (let i = 0; i + 1 < posts.length; i++) {
+          const [a, b] = [posts[i], posts[i + 1]];
+          for (let k = 0; k < 3; k++) {
+            const [x0, x1] = [a + 4 + ((b - a - 8) * k) / 3, a + 4 + ((b - a - 8) * (k + 1)) / 3];
+            g.moveTo(x0, y - 5.5).lineTo(x1, y + 5.5).moveTo(x0, y + 5.5).lineTo(x1, y - 5.5);
+          }
+        }
+        g.stroke({ width, color, cap: 'butt' });
+      }
+    }
+    rod(g, [-L + 2, y], [L - 2, y], v === 2 ? 3 : 3.2, v === 2 ? white : WOOD[2]);
+    for (const x of posts) {
+      const ps = v === 2 ? 5 : 3.5;
+      g.rect(x - ps, y - ps, ps * 2, ps * 2).fill(v === 2 ? white : WOOD[0]).stroke({ width: 1.6, color: INK });
+      if (v === 2) g.circle(x, y, 2).fill(0xc9a24a).stroke({ width: 1, color: INK });
+    }
+  }
+  for (const x of [-L - 1, L + 1]) {
+    for (const y of [-W + 2, W - 2]) stone(g, x, y, 4 + rnd() * 1.5, STONE[1], rnd, 6);
+  }
 }
 
 const DRAW: Record<number, Draw> = {
@@ -2644,6 +3975,17 @@ const DRAW: Record<number, Draw> = {
   49: stocks,
   50: lampPost,
   51: marketCross,
+  // Parks and gardens.
+  52: fountain,
+  53: pond,
+  54: bench,
+  55: flowerbed,
+  56: hedge,
+  57: topiary,
+  58: gazebo,
+  59: bandstand,
+  60: gardenStatue,
+  61: footbridge,
   38: haystack,
   13: smallRocks,
   14: rockPile,
@@ -2668,7 +4010,7 @@ const DRAW: Record<number, Draw> = {
 };
 
 /** Room in the frame beyond the footprint (squares, by kind id) for tall things drawn from a high angle. */
-const ROOM: Record<number, number> = { 48: 0.6, 50: 0.62 };
+const ROOM: Record<number, number> = { 48: 0.6, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
 
 export function frameRadiusPx(info: KindInfo): number {
   // Radius in atlas px at scale 1 plus room for outlines.

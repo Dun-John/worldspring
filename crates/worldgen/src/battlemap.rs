@@ -170,6 +170,17 @@ pub enum Kind {
     Stocks,
     LampPost,
     MarketCross,
+    /// Parks and gardens.
+    Fountain,
+    Pond,
+    Bench,
+    Flowerbed,
+    Hedge,
+    Topiary,
+    Gazebo,
+    Bandstand,
+    GardenStatue,
+    Footbridge,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -215,7 +226,7 @@ const fn hz(id: Kind, name: &'static str, radius: f32, difficult: bool, effect: 
     }
 }
 
-pub const CATALOG: [KindInfo; 51] = [
+pub const CATALOG: [KindInfo; 61] = [
     k(Kind::TreeDeciduous, "deciduous tree", 1.4, true, true, 2, false, 35.0, false),
     k(Kind::TreeConifer, "conifer", 1.1, true, true, 2, false, 45.0, false),
     k(Kind::TreePalm, "palm", 1.2, true, false, 1, false, 30.0, false),
@@ -267,16 +278,27 @@ pub const CATALOG: [KindInfo; 51] = [
     k(Kind::Stocks, "stocks", 0.75, true, false, 1, false, 3.5, true),
     k(Kind::LampPost, "lamp post", 0.5, false, false, 0, false, 10.0, true),
     k(Kind::MarketCross, "market cross", 1.0, false, false, 1, true, 15.0, true),
+    k(Kind::Fountain, "fountain", 1.0, true, false, 1, false, 5.0, true),
+    k(Kind::Pond, "pond", 2.0, false, false, 0, true, 0.0, true),
+    k(Kind::Bench, "bench", 0.55, false, false, 1, true, 3.0, true),
+    k(Kind::Flowerbed, "flowerbed", 1.0, false, false, 0, true, 1.0, true),
+    k(Kind::Hedge, "hedge", 0.6, true, true, 2, false, 6.0, true),
+    k(Kind::Topiary, "topiary", 0.55, true, false, 1, false, 6.0, true),
+    k(Kind::Gazebo, "gazebo", 1.6, false, false, 1, false, 12.0, true),
+    k(Kind::Bandstand, "bandstand", 2.0, false, false, 1, false, 14.0, true),
+    k(Kind::GardenStatue, "garden statue", 0.7, true, false, 2, false, 10.0, true),
+    k(Kind::Footbridge, "footbridge", 1.6, false, false, 0, false, 3.0, true),
 ];
 
 /// Every kind, by id - 1.
-const KINDS: [Kind; 51] = [
+const KINDS: [Kind; 61] = [
     Kind::TreeDeciduous, Kind::TreeConifer, Kind::TreePalm, Kind::TreeJungle, Kind::TreeAcacia, Kind::TreeDead, Kind::TreeWillow, Kind::Bush,
     Kind::Thicket, Kind::FallenLog, Kind::Stump, Kind::Boulder, Kind::RockSmall, Kind::RockPile, Kind::Reeds, Kind::Cactus, Kind::TallGrass,
     Kind::Flowers, Kind::Mushrooms, Kind::Bones, Kind::Snowdrift, Kind::IceSpire, Kind::BasaltPillar, Kind::Obsidian, Kind::Brambles, Kind::Bog,
     Kind::Quicksand, Kind::ThinIce, Kind::LavaPool, Kind::SteamVent, Kind::Scree, Kind::Sinkhole, Kind::Barrel, Kind::Crate, Kind::Cart,
     Kind::MarketStall, Kind::Well, Kind::Haystack, Kind::Headstone, Kind::RuinWall, Kind::Statue, Kind::Tent, Kind::Campfire, Kind::Firewood,
-    Kind::Bedroll, Kind::WaterTrough, Kind::NoticeBoard, Kind::Signpost, Kind::Stocks, Kind::LampPost, Kind::MarketCross,
+    Kind::Bedroll, Kind::WaterTrough, Kind::NoticeBoard, Kind::Signpost, Kind::Stocks, Kind::LampPost, Kind::MarketCross, Kind::Fountain, Kind::Pond,
+    Kind::Bench, Kind::Flowerbed, Kind::Hedge, Kind::Topiary, Kind::Gazebo, Kind::Bandstand, Kind::GardenStatue, Kind::Footbridge,
 ];
 
 /// The kind with a catalog id.

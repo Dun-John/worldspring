@@ -39,6 +39,8 @@ export interface ColorMesh {
 
 /** What play mode needs to know of an object kind (`battlemap::KindInfo`). */
 export interface KindTactics {
+  /** Built-in kinds' catalog name. */
+  name?: string;
   height_ft: number;
   radius: number;
   blocks_sight: boolean;
@@ -282,6 +284,10 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
   };
 }
 
+/** Long things laid along their turn (by catalog name): the rectangle that blocks, [half length, half
+ * width] in squares at scale 1 (a hedge a section a square long, as runs are set five feet apart). */
+const LONG_FOOTPRINT = new Map([['hedge', [0.49, 0.29]]]);
+
 /**
  * Per square: what blocks sight and movement and what is difficult ground (`play/vision`
  * flags): buildings, curtain walls and towers; water and lava underfoot; objects (trunks and
@@ -301,6 +307,20 @@ function tacticalFlags(data: Uint8Array, surface: Uint8Array, raised: Uint8Array
     const v = (inf.blocks_sight ? OPAQUE : 0) | (inf.blocks_move ? BLOCKS : 0) | (inf.difficult ? DIFFICULT : 0);
     if (!v) continue;
     const [x, y, scale] = [objs[o + 2], objs[o + 3], objs[o + 5]];
+    const long = objs[o] < SPRITE_KIND && inf.name !== undefined ? LONG_FOOTPRINT.get(inf.name) : undefined;
+    if (long) {
+      // Every square the piece is drawn across (points over its rectangle a tenth of a square apart), so
+      // pieces set end to end block an unbroken line, slanted too.
+      const [c, s] = [Math.cos(objs[o + 4]), Math.sin(objs[o + 4])];
+      const [hl, hw] = [long[0] * scale, long[1] * scale];
+      for (let u = -hl; u <= hl + 1e-6; u += Math.min(0.1, hl)) {
+        for (let w = -hw; w <= hw + 1e-6; w += Math.min(0.1, hw)) {
+          const [i, j] = [Math.floor(x + c * u - s * w), Math.floor(y + s * u + c * w)];
+          if (i >= 0 && j >= 0 && i < SQ && j < SQ) f[j * SQ + i] |= v;
+        }
+      }
+      continue;
+    }
     const reach = Math.max(0.5, inf.radius * scale * (v & (OPAQUE | BLOCKS) ? 0.5 : 0.8));
     for (let j = Math.max(0, Math.floor(y - reach)); j <= Math.min(SQ - 1, Math.floor(y + reach)); j++) {
       for (let i = Math.max(0, Math.floor(x - reach)); i <= Math.min(SQ - 1, Math.floor(x + reach)); i++) {

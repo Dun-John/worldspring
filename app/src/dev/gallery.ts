@@ -12,7 +12,7 @@ import type { KindInfo } from '../gen/client';
 import type { Interior, InteriorItem, UnderCatalog } from '../gen/protocol';
 import { BATTLE_GROUPS, ITEM_GROUPS } from '../editor/itemGroups';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
-import { drawnTurned, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
+import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
 import { ORIENTED } from '../render/furniture';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
@@ -209,17 +209,19 @@ export async function runGallery(target: HTMLElement) {
  * an upright thing), smaller and fainter for sparse plants, at `fit` screen px per atlas px. */
 function dropShadow(atlas: ReturnType<typeof buildAtlas>, info: KindInfo, cx: number, cy: number, fit: number): Sprite {
   const [size, strength] = SPARSE.get(info.name) ?? [1, 1];
-  const off = Math.min(1.3, 0.15 + info.height_ft / 45) * PX * 0.7;
+  const long = LONG_SHADOW.get(info.name);
+  const off = Math.min(1.3, 0.15 + info.height_ft / 45) * PX * 0.7 * (long ? long[2] : 1);
   const sh = new Sprite(atlas.shadow);
   sh.anchor.set(0.5);
-  sh.scale.set(((info.radius * PX * size * 2.1) / 128) * fit);
+  if (long) sh.scale.set(((long[0] * PX) / 128) * fit, ((long[1] * PX) / 128) * fit);
+  else sh.scale.set(((info.radius * PX * size * 2.1) / 128) * fit);
   sh.alpha = (info.height_ft >= 5 ? 0.6 : 0.35) * strength;
   sh.position.set(cx + off * fit, cy + ((UPRIGHT_FOOT[info.id] ?? 0) + off) * fit);
   return sh;
 }
 
-/** Trees and plants (by id): they look the same any way round, so they never turn. */
-const PLANTS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 18, 19]);
+/** Trees and plants (by id), and topiary (drawn upright): never turned by hand. */
+const PLANTS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 18, 19, 57]);
 
 /** `&turn=1`: battlemap props that may be turned by hand, at four turns on grass with their shadows
  * (✓: in `TURNABLE`), then furniture and props with a back, at each side (as the designer turns
