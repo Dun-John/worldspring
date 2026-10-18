@@ -149,6 +149,8 @@ pub struct Layout {
     pub roads: Vec<(Vec<P>, u8, f64)>,
     /// Open spaces: market and other squares, quays, greens, yards.
     pub plazas: Vec<Plaza>,
+    /// Parks: formal gardens and commons, each a block of its own.
+    pub parks: Vec<Park>,
     pub fields: Vec<Vec<P>>,
     /// Built-up patches (streets are the ground inside these that no building covers).
     pub districts: Vec<Vec<P>>,
@@ -262,6 +264,99 @@ pub struct Plaza {
     pub kind: PlazaKind,
 }
 
+/// How a park is laid out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParkKind {
+    /// A formal garden: cross axes and a walk round it, a basin in the middle, hedged parterres.
+    Formal,
+    /// A common: winding gravel paths to a hub, a pond on the low ground, clumps of trees.
+    Common,
+}
+
+impl ParkKind {
+    /// Its name as agents and the ward editor give it.
+    pub fn name(self) -> &'static str {
+        match self {
+            ParkKind::Formal => "formal",
+            ParkKind::Common => "common",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<ParkKind> {
+        [ParkKind::Formal, ParkKind::Common].into_iter().find(|k| k.name() == name)
+    }
+}
+
+/// A park (world ft): a whole block, no lots on it (`battlemap::park_layout` lays it out). With
+/// it, which of its sides face a street (`fronts`, by edge: its ways in), the ground it is planned
+/// on (where a common's pond, stream and raised tier go), and the key its looks are rolled from (its
+/// patch and how many times it was laid out again by hand, so a corner moved changes no look).
+#[derive(Clone, Debug)]
+pub struct Park {
+    pub pts: Vec<P>,
+    pub kind: ParkKind,
+    pub fronts: Vec<bool>,
+    pub ground: ParkGround,
+    pub key: u64,
+}
+
+/// The points of a 20-ft grid about the town's centre inside a polygon (local ft).
+fn lattice(poly: &[P]) -> Vec<P> {
+    let (x0, y0, x1, y1) = poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    let f = |v: f64| crate::core::floor(v / 20.0) as i64;
+    let (i0, j0, i1, j1) = (f(x0), f(y0), f(x1), f(y1));
+    (j0..=j1).flat_map(|j| (i0..=i1).map(move |i| [(i as f64 + 0.5) * 20.0, (j as f64 + 0.5) * 20.0])).filter(|&p| contains(poly, p)).collect()
+}
+
+/// The ground a park is planned on, every `PARK_GROUND_FT` over its bounds from `origin` (world ft):
+/// heights (ft) and whether the water is there (or a river within 80 ft).
+#[derive(Clone, Debug)]
+pub struct ParkGround {
+    pub origin: P,
+    pub nx: usize,
+    pub ny: usize,
+    pub h: Vec<f32>,
+    pub wet: Vec<bool>,
+    /// On the water or a river's channel itself.
+    pub water: Vec<bool>,
+}
+
+/// `ParkGround`'s spacing (ft).
+pub const PARK_GROUND_FT: f64 = 20.0;
+
+impl ParkGround {
+    /// The planned ground at `p` (world ft), bilinear, clamped to the grid.
+    pub fn at(&self, p: P) -> f64 {
+        let u = ((p[0] - self.origin[0]) / PARK_GROUND_FT).clamp(0.0, (self.nx - 1) as f64);
+        let v = ((p[1] - self.origin[1]) / PARK_GROUND_FT).clamp(0.0, (self.ny - 1) as f64);
+        let (i, j) = ((crate::core::floor(u) as usize).min(self.nx.saturating_sub(2)), (crate::core::floor(v) as usize).min(self.ny.saturating_sub(2)));
+        let (fu, fv) = (u - i as f64, v - j as f64);
+        let at = |a: usize, b: usize| self.h[(b.min(self.ny - 1)) * self.nx + a.min(self.nx - 1)] as f64;
+        let top = at(i, j) + (at(i + 1, j) - at(i, j)) * fu;
+        let bottom = at(i, j + 1) + (at(i + 1, j + 1) - at(i, j + 1)) * fu;
+        top + (bottom - top) * fv
+    }
+
+    /// Whether any of the grid's points within `r` ft of `p` is on the water.
+    pub fn wet_near(&self, p: P, r: f64) -> bool {
+        (0..self.ny).any(|j| (0..self.nx).any(|i| self.wet[j * self.nx + i] && dist(self.point(i, j), p) <= r))
+    }
+
+    /// Whether the water itself (not a river's banks) is within `r` ft of `p` (by the grid's points).
+    pub fn water_near(&self, p: P, r: f64) -> bool {
+        let reach = r + PARK_GROUND_FT;
+        let lo = |v: f64, o: f64| crate::core::floor((v - reach - o) / PARK_GROUND_FT).max(0.0) as usize;
+        let hi = |v: f64, o: f64, n: usize| (crate::core::ceil((v + reach - o) / PARK_GROUND_FT).max(0.0) as usize).min(n.saturating_sub(1));
+        let (i0, j0, i1, j1) = (lo(p[0], self.origin[0]), lo(p[1], self.origin[1]), hi(p[0], self.origin[0], self.nx), hi(p[1], self.origin[1], self.ny));
+        (j0..=j1).any(|j| (i0..=i1).any(|i| self.water[j * self.nx + i] && dist(self.point(i, j), p) <= reach))
+    }
+
+    /// The grid's point (i, j) (world ft).
+    pub fn point(&self, i: usize, j: usize) -> P {
+        [self.origin[0] + i as f64 * PARK_GROUND_FT, self.origin[1] + j as f64 * PARK_GROUND_FT]
+    }
+}
+
 /// A battlemap object placed by a layout: where (world ft), facing (rad), kind, variant, size.
 #[derive(Clone, Copy, Debug)]
 pub struct Prop {
@@ -321,6 +416,7 @@ impl Layout {
             streets: Vec::new(),
             roads: Vec::new(),
             plazas: Vec::new(),
+            parks: Vec::new(),
             fields: Vec::new(),
             districts: Vec::new(),
             blocks: Vec::new(),
@@ -1214,6 +1310,77 @@ impl Site<'_> {
         let pts = (0..m).flat_map(|k| [poly[k], lerp(poly[k], poly[(k + 1) % m], 0.5)]).chain(std::iter::once(centroid(poly)));
         pts.map(|p| self.height(p)).fold((f64::MAX, f64::MIN), |(lo, hi), h| (lo.min(h), hi.max(h)))
     }
+    /// The share of a polygon on the water or a river's channel (points every 20 ft inside it).
+    /// (The points are on a 20-ft grid about the town's centre: a corner moved shifts none of them.)
+    fn wet_share(&self, poly: &[P]) -> f64 {
+        let pts = lattice(poly);
+        let wet = pts.iter().filter(|&&p| self.wet(p) || self.near_river(p, 10.0)).count();
+        if pts.is_empty() { 1.0 } else { wet as f64 / pts.len() as f64 }
+    }
+    /// The share of a polygon within 80 ft of a river (its drawn banks, which the plan's ground doesn't
+    /// see, may stand well over it).
+    fn river_share(&self, poly: &[P]) -> f64 {
+        let pts = lattice(poly);
+        let near = pts.iter().filter(|&&p| self.near_river(p, 80.0)).count();
+        if pts.is_empty() { 0.0 } else { near as f64 / pts.len() as f64 }
+    }
+    /// The grade from the lowest to the highest dry point of a 20-ft grid inside a polygon (as a
+    /// common's layout judges a slope).
+    fn fall(&self, poly: &[P]) -> f64 {
+        let hs: Vec<(P, f64)> = lattice(poly).into_iter().filter(|&p| !self.wet(p) && !self.near_river(p, 10.0)).map(|p| (p, self.height(p))).collect();
+        let lo = hs.iter().copied().min_by(|a, b| a.1.total_cmp(&b.1));
+        let hi = hs.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1));
+        match (lo, hi) {
+            (Some(lo), Some(hi)) if dist(lo.0, hi.0) > 20.0 => (hi.1 - lo.1) / dist(lo.0, hi.0),
+            _ => 0.0,
+        }
+    }
+    /// The steepest grade between neighbouring dry points of a 20-ft grid about the town's centre
+    /// inside a polygon (a cliff across it, where its mean grade may be gentle).
+    fn max_grade(&self, poly: &[P]) -> f64 {
+        let at = |i: i64, j: i64| -> Option<f64> {
+            let p = [(i as f64 + 0.5) * 20.0, (j as f64 + 0.5) * 20.0];
+            (contains(poly, p) && !self.wet(p) && !self.near_river(p, 10.0)).then(|| self.height(p))
+        };
+        let (x0, y0, x1, y1) = poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+        let f = |v: f64| crate::core::floor(v / 20.0) as i64;
+        let (i0, j0, i1, j1) = (f(x0), f(y0), f(x1), f(y1));
+        let mut worst: f64 = 0.0;
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let Some(h) = at(i, j) else { continue };
+                for (di, dj) in [(1, 0), (0, 1)] {
+                    if let Some(g) = at(i + di, j + dj) {
+                        worst = worst.max((g - h).abs() / 20.0);
+                    }
+                }
+            }
+        }
+        worst
+    }
+    /// Lowest and highest dry ground over a polygon (as `relief`, the water's points left out).
+    fn dry_relief(&self, poly: &[P]) -> (f64, f64) {
+        let m = poly.len();
+        (0..m)
+            .flat_map(|k| [poly[k], lerp(poly[k], poly[(k + 1) % m], 0.5)])
+            .chain(std::iter::once(centroid(poly)))
+            .filter(|&p| !self.wet(p) && !self.near_river(p, 10.0))
+            .map(|p| self.height(p))
+            .fold((f64::MAX, f64::MIN), |(lo, hi), h| (lo.min(h), hi.max(h)))
+    }
+    /// `grade` from the dry points only (a sea's floor or a river's channel by a waterfront block is
+    /// no slope).
+    fn dry_grade(&self, poly: &[P]) -> f64 {
+        let m = poly.len();
+        let c = centroid(poly);
+        let width = 2.0 * poly.iter().map(|p| dist(*p, c)).fold(0.0, f64::max);
+        let hs: Vec<f64> = (0..m).flat_map(|k| [poly[k], lerp(poly[k], poly[(k + 1) % m], 0.5)]).chain(std::iter::once(c)).filter(|&p| !self.wet(p) && !self.near_river(p, 10.0)).map(|p| self.height(p)).collect();
+        if hs.len() < 3 {
+            return 0.0;
+        }
+        let (lo, hi) = hs.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &h| (lo.min(h), hi.max(h)));
+        (hi - lo) / width.max(1.0)
+    }
     /// Mean grade across a polygon: its relief over its width.
     fn grade(&self, poly: &[P]) -> f64 {
         let c = centroid(poly);
@@ -1411,6 +1578,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for t in &mut l.extra_towers {
         tw(&mut t.0);
     }
+    for pk in &mut l.parks {
+        pk.pts.iter_mut().chain([&mut pk.ground.origin]).for_each(tw);
+    }
     if let Some(e) = edit {
         wards::inherit(world, t0, e, &generated_layout(world, t0, index), spacing, &mut l);
     }
@@ -1419,7 +1589,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);
     }
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())) {
+    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())) {
         bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
     }
     l.bbox = if bb[0] <= bb[2] { bb } else { [center[0], center[1], center[0], center[1]] };
@@ -1634,7 +1804,21 @@ struct TownPlan {
     /// kind), and temple patches kept as a close round their temple.
     squares: Vec<(usize, PlazaKind)>,
     closes: Vec<usize>,
+    /// Patches too steep to build on (parks), and a rich city's palace garden.
+    steep: Vec<bool>,
+    palace: Option<usize>,
+    /// Why a patch can't be a park (`PARK_WET`, `PARK_SHUT`, `PARK_OUT`, `PARK_SMALL`, `PARK_CLIFF`),
+    /// where it can't.
+    park_refused: Vec<Option<&'static str>>,
 }
+
+/// Why a patch can't be laid out as a park (generated or set by hand).
+pub(super) const PARK_WET: &str = "too much of that patch is on the water for a park (more than 15%)";
+pub(super) const PARK_SHUT: &str = "no street comes to that patch: a park needs a way in from a street";
+pub(super) const PARK_OUT: &str = "parks are laid out inside the town";
+pub(super) const PARK_SMALL: &str = "that patch is too small for a park (its block under 9,000 sq ft or 60 ft across)";
+pub(super) const PARK_CLIFF: &str = "a cliff crosses that patch: too steep for a park";
+pub(super) const PARK_SLIVER: &str = "too small for a park once its streets are cut: built on as a common ward's";
 
 impl TownPlan {
     fn usable(&self, i: usize) -> bool {
@@ -2114,11 +2298,96 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         let (a, b) = edge_v(i, e);
         main_edge(a, b)
     });
+    // Where a park may be (generated or set by hand): inside the town, with a street to come in from
+    // (a side on a dry patch of the town), its block (10 ft in) 9,000 sq ft or more and 60 ft across,
+    // no cliff across it (no grade over 0.6 between points 20 ft apart), mostly dry (15% of it on the
+    // water at most).
+    let park_refused: Vec<Option<&'static str>> = (0..total)
+        .map(|i| {
+            let block = || inset(&cells[i].pts, &vec![10.0; cells[i].pts.len()]);
+            if i >= n_inner || cells[i].pts.len() < 3 {
+                Some(PARK_OUT)
+            } else if !cells[i].labels.iter().any(|&j| j >= 0 && usable(j as usize)) {
+                Some(PARK_SHUT)
+            } else if block().len() < 3 || area(&block()).abs() < 9000.0 || obb(&block()).short < 60.0 {
+                Some(PARK_SMALL)
+            } else if site.max_grade(&cells[i].pts) > 0.6 {
+                Some(PARK_CLIFF)
+            } else if site.wet_share(&cells[i].pts) > 0.15 {
+                Some(PARK_WET)
+            } else {
+                None
+            }
+        })
+        .collect();
+    // Too steep to build a street front on (the dry ground across a patch's block falling more than
+    // 18 in 100, no more than 40): a park, a common on the slope (not the market square or a castle),
+    // where a park may be, but not by a river (a gorge's drawn banks stand over the plan). Two at most, none beside another; any other steep block is a terraced
+    // garden of a few houses, as before (`build_town`).
+    let mut steep = vec![false; total];
+    for i in 0..n_inner {
+        if (0..total).filter(|&j| steep[j]).count() >= 2 || neighbors(i).iter().any(|&j| steep[j]) {
+            continue;
+        }
+        let grade = || site.dry_grade(&inset(&cells[i].pts, &vec![7.0; cells[i].pts.len()]));
+        if usable(i)
+            && !matches!(ward[i], Some(Ward::Plaza | Ward::Castle))
+            && park_refused[i].is_none()
+            && (0.18..=0.4).contains(&grade())
+            && site.river_share(&cells[i].pts) <= 0.15
+        {
+            steep[i] = true;
+            ward[i] = Some(Ward::Park);
+        }
+    }
+    free.retain(|&i| ward[i].is_none());
+    // Parks: a metropolis has one to three, a city most often one, a town now and then a small
+    // one (a green; a village keeps its own), those on slopes counted. Each a whole patch on level
+    // ground, off the gates, set back from the main streets and the middle of the town, apart from
+    // one another; the first of a city's by its castle and nobles where it can be. A metropolis's or
+    // a capital city's first is its palace garden (formal), on a slope or not.
+    let quota = match s.tier {
+        Tier::Town => (roll(0, 70) < 0.25) as usize,
+        Tier::City => (roll(0, 70) < 0.7) as usize,
+        Tier::Metropolis => 1 + ((roll(0, 70) * 3.0) as usize).min(2),
+        Tier::Village => 0,
+    };
+    let rich = s.tier >= Tier::City && (s.capital || s.tier == Tier::Metropolis);
+    let sloped: Vec<usize> = (0..total).filter(|&i| steep[i]).collect();
+    let parks = if rich { quota.saturating_sub(sloped.len()).max(1) } else { quota.saturating_sub(sloped.len()) };
+    let mut chosen: Vec<usize> = Vec::new();
+    // (A metropolis's first is the patch it has always had for its park, where a park can be.)
     if s.tier == Tier::Metropolis
+        && parks > 0
         && let Some(&p) = free.iter().find(|&&i| ward[i].is_none() && len(sites[i]) > 0.5 * r)
+        && park_refused[p].is_none()
     {
         ward[p] = Some(Ward::Park);
+        chosen.push(p);
     }
+    for k in chosen.len()..parks {
+        let near_rich = |i: usize| neighbors(i).iter().any(|&j| matches!(ward[j], Some(Ward::Castle | Ward::Noble)));
+        let score = |i: usize| {
+            let size = area(&cells[i].pts).abs() / (spacing * spacing);
+            let off = len(centroid(&cells[i].pts)) / r;
+            let fit = if s.tier == Tier::Town { -0.6 * size } else { 0.3 * size.min(1.5) };
+            roll(i, 71) + fit + if k == 0 && s.tier >= Tier::City && near_rich(i) { 0.6 } else { 0.0 } - 0.5 * on_main(i) as u8 as f64 - 3.0 * site.dry_grade(&cells[i].pts) - 0.4 * (off - 0.6).abs()
+        };
+        let pick = free
+            .iter()
+            .copied()
+            .filter(|&i| ward[i].is_none() && cells[i].pts.len() >= 3 && !gate_patch(i) && area(&cells[i].pts).abs() > 0.3 * spacing * spacing && site.dry_grade(&cells[i].pts) < 0.15)
+            .filter(|&i| park_refused[i].is_none())
+            // (Not on a slope down to a river: its drawn banks stand well over the plan's ground.)
+            .filter(|&i| site.river_share(&cells[i].pts) <= 0.15 || site.fall(&cells[i].pts) <= 0.1)
+            .filter(|&i| chosen.iter().chain(&sloped).all(|&j| dist(centroid(&cells[i].pts), centroid(&cells[j].pts)) > 2.2 * spacing))
+            .max_by(|&a, &b| score(a).total_cmp(&score(b)).then(b.cmp(&a)));
+        if let Some(p) = pick {
+            ward[p] = Some(Ward::Park);
+            chosen.push(p);
+        }
+    }
+    let palace = chosen.first().copied().filter(|_| rich);
     for &i in &free {
         if ward[i].is_some() {
             continue;
@@ -2291,6 +2560,9 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         quarters,
         squares: Vec::new(),
         closes: Vec::new(),
+        steep,
+        palace,
+        park_refused,
     };
     // Its other open spaces, on the plan as it stands.
     (plan.squares, plan.closes) = squares::plan(&plan, site, s.tier);
@@ -2659,24 +2931,27 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         let d = insets(i, w);
         // Paved streets inside the town: each side of a street paves the strip between its
         // patch edge and its block (quays and the waterfront are plazas already).
-        if i < n_inner && !matches!(w, Ward::Farm | Ward::Plaza | Ward::Park) {
-            let ccw = area(&c.pts) > 0.0;
+        // (A park's streets too: it is a block like any other, laid out as a garden.)
+        // A side's paved strip (its line, between its corners), if it has one: not on the water's side,
+        // nor where the river cuts across the strip. (A park's ways in are on these sides alone.)
+        let ccw = area(&c.pts) > 0.0;
+        let strip = |e: usize| -> Option<(P, P)> {
+            let (a, b) = (c.pts[e], c.pts[(e + 1) % m]);
+            let nb = c.labels[e];
+            let el = dist(a, b);
+            if d[e] <= 0.0 || el < 1.0 || (nb >= 0 && wet[nb as usize]) || site.near_river(lerp(a, b, 0.5), 2.0) {
+                return None;
+            }
+            let ev = mul(sub(b, a), 1.0 / el);
+            let inward = if ccw { [-ev[1], ev[0]] } else { [ev[1], -ev[0]] };
+            let o = mul(inward, 0.5 * d[e]);
+            let (pp, q) = (add(a, o), add(b, o));
+            let n = (el / 5.0).ceil() as usize;
+            (!(0..=n).any(|j| site.near_river(lerp(pp, q, j as f64 / n as f64), 0.5 * d[e]))).then_some((pp, q))
+        };
+        if i < n_inner && !matches!(w, Ward::Farm | Ward::Plaza) {
             for e in 0..m {
-                let (a, b) = (c.pts[e], c.pts[(e + 1) % m]);
-                let nb = c.labels[e];
-                let el = dist(a, b);
-                if d[e] <= 0.0 || el < 1.0 || (nb >= 0 && wet[nb as usize]) || site.near_river(lerp(a, b, 0.5), 2.0) {
-                    continue;
-                }
-                let ev = mul(sub(b, a), 1.0 / el);
-                let inward = if ccw { [-ev[1], ev[0]] } else { [ev[1], -ev[0]] };
-                let o = mul(inward, 0.5 * d[e]);
-                // Not where the river cuts across the strip.
-                let (pp, q) = (add(a, o), add(b, o));
-                let n = (el / 5.0).ceil() as usize;
-                if (0..=n).any(|j| site.near_river(lerp(pp, q, j as f64 / n as f64), 0.5 * d[e])) {
-                    continue;
-                }
+                let Some((pp, q)) = strip(e) else { continue };
                 let (va, vb) = edge_v(i, e);
                 pieces.edge(va, vb, pp, q, d[e] + 1.0, false, l.roads.len());
                 l.roads.push((vec![pp, q], 3, d[e] + 1.0));
@@ -2687,12 +2962,10 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             continue;
         }
         let mut streets = street_lines(i, &d);
-        // Too steep to build a street front on: the block is a terraced garden.
-        let w = if matches!(w, Ward::Merchant | Ward::Craft | Ward::Common | Ward::Noble | Ward::Slum | Ward::Docks | Ward::Temple) && block.len() >= 3 && site.grade(&block) > 0.18 {
-            Ward::Park
-        } else {
-            w
-        };
+        // Too steep to build a street front on (and not a common on the slope): the block is a
+        // terraced garden of a few houses.
+        let sparse = matches!(w, Ward::Merchant | Ward::Craft | Ward::Common | Ward::Noble | Ward::Slum | Ward::Docks | Ward::Temple) && block.len() >= 3 && site.grade(&block) > 0.18;
+        let w = if sparse { Ward::Park } else { w };
         // (Rolled again by hand: its own streams.)
         let (dp, mut prng) = lots_of(i, w, w == Ward::Temple && closes.contains(&i));
         if !matches!(w, Ward::Plaza | Ward::Farm | Ward::Park) {
@@ -2735,6 +3008,41 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 l.plazas.push(Plaza { pts: block, kind })
             }
             Ward::Farm => farm(site, &block, &mut prng, l),
+            Ward::Park if sparse => build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None),
+            // (A block left too small for a park once its streets are cut, 6,000 sq ft or 40 ft
+            // across: built on as a common ward's, `PARK_SLIVER`.)
+            Ward::Park if area(&block).abs() < 6000.0 || obb(&block).short < 40.0 => {
+                let (dp, mut prng) = lots_of(i, Ward::Common, false);
+                l.blocks.push(block.clone());
+                build_block(site, &block, &mut streets, Ward::Common, &dp, &mut prng, l, None)
+            }
+            // A park: as set by hand, else a formal garden by the castle (palace grounds), most
+            // often by the nobles, now and then in a capital or a metropolis (its first always), a
+            // common elsewhere (a town's always, and one on a slope). Its ways in are on its sides
+            // along a street (not the water's).
+            Ward::Park => {
+                let rich = s.capital || s.tier == Tier::Metropolis;
+                let by = |w: Ward| (0..m).any(|e| c.labels[e] >= 0 && ward[c.labels[e] as usize] == Some(w));
+                let t = plan.roll(i, 72);
+                // (Formal only on ground level enough to lay out as a terrace: 6 ft of relief at most.)
+                let (lo, hi) = site.dry_relief(&block);
+                let level = hi - lo <= 6.0;
+                let formal = level && (plan.palace == Some(i) || (!plan.steep[i] && s.tier >= Tier::City && (by(Ward::Castle) || (by(Ward::Noble) && t < 0.6) || (rich && t < 0.35))));
+                let kind = ch.park.get(&i).copied().unwrap_or(if formal { ParkKind::Formal } else { ParkKind::Common });
+                let lines: Vec<(P, f64)> = street_lines(i, &d)
+                    .into_iter()
+                    .filter(|&(n, off)| {
+                        (0..m).any(|e| {
+                            let mid = lerp(c.pts[e], c.pts[(e + 1) % m], 0.5);
+                            (dot(mid, n) - off - d[e]).abs() < 0.5 && strip(e).is_some() && i < n_inner
+                        })
+                    })
+                    .collect();
+                let nb = block.len();
+                let fronts = (0..nb).map(|e| lines.iter().any(|&(n, off)| (dot(lerp(block[e], block[(e + 1) % nb], 0.5), n) - off).abs() < 1.0)).collect();
+                let key = hash3(plan.pseed, i as i64, ch.reroll.get(&i).copied().unwrap_or(0) as i64, 0x9a4c);
+                l.parks.push(park(site, &block, kind, fronts, key));
+            }
             // The gate faces the centre (the plaza, if the citadel backs onto it).
             Ward::Castle => castle(site, &block, [0.0, 0.0], w, &dp, &mut prng, l, true, true),
             Ward::Slum if i >= n_inner => {
@@ -2851,7 +3159,13 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         .iter()
         .map(|(q, members)| {
             let patches: Vec<Vec<P>> = members.iter().map(|&i| cells[i].pts.clone()).collect();
-            let label = label_curve(&patches).0;
+            let mut label = label_curve(&patches).0;
+            // (Not across a park's middle, its basin or its hub: over one of its sides.)
+            if let Some(pk) = label.get(label.len() / 2).and_then(|&m| l.parks.iter().find(|pk| contains(&pk.pts, m))) {
+                let o = obb(&pk.pts);
+                let shift = mul([-o.axis[1], o.axis[0]], 0.3 * o.short);
+                label.iter_mut().for_each(|p| *p = add(*p, shift));
+            }
             Quarter { name: q.name.clone(), kind: q.kind, patches, label }
         })
         .collect();
@@ -3466,6 +3780,7 @@ fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P, f64)>, wa
             }
             // Frontage: a street or alley line one of the lot's edges lies on.
             let Some(&(n, c)) = streets.iter().find(|(n, c)| fronts(&lot, *n, *c)) else { continue };
+            // (A terraced garden on a steep block: a house here and there.)
             if ward == Ward::Park && rng.next_f64() > 0.15 {
                 continue;
             }
@@ -3648,6 +3963,27 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
         }
         l.fields.push(f);
     }
+}
+
+/// A park on `block` (local ft) with the ground it is planned on: every `PARK_GROUND_FT` over its
+/// bounds (on the world's grid of that spacing, so a corner moved changes no sample).
+fn park(site: &Site, block: &[P], kind: ParkKind, fronts: Vec<bool>, key: u64) -> Park {
+    let (x0, y0, x1, y1) = block.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    let s = PARK_GROUND_FT;
+    let snap = |v: f64, c: f64| crate::core::floor((v + c) / s) * s - c;
+    let origin = [snap(x0, site.center[0]), snap(y0, site.center[1])];
+    let (nx, ny) = (((x1 - origin[0]) / s) as usize + 2, ((y1 - origin[1]) / s) as usize + 2);
+    let pts: Vec<P> = (0..ny).flat_map(|j| (0..nx).map(move |i| [origin[0] + i as f64 * s, origin[1] + j as f64 * s])).collect();
+    // (Wet: on the water or by a river, whose valley the drawn ground cuts otherwise than planned.)
+    let ground = ParkGround {
+        origin,
+        nx,
+        ny,
+        h: pts.iter().map(|&p| site.height(p) as f32).collect(),
+        wet: pts.iter().map(|&p| site.wet(p) || site.near_river(p, 80.0)).collect(),
+        water: pts.iter().map(|&p| site.wet(p)).collect(),
+    };
+    Park { pts: block.to_vec(), kind, fronts, ground, key }
 }
 
 fn split_field(poly: &[P], max_area: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, depth: u32) {

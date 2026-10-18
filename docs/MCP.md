@@ -315,7 +315,7 @@ The road network:
 The 640-ft battlemap chunk (128 × 128 five-foot squares) that contains a place, for running a fight there. It
 lists:
 - the elevation range, surfaces and buildings (`stairs`: a flight of steps on a steep city street, paved, walkable,
-  no movement cost; also where ground shaped by hand makes a city street climb steeply);
+  no movement cost; also where ground shaped by hand makes a city street climb steeply; `gravel`: a park's paths);
 - each kind of object in the chunk, with its 5e rules: cover, whether it blocks movement or sight, difficult
   terrain, hazards and their effects;
 - the objects within `radius_squares` of the place, by grid square (`near_focus`), each with its centre
@@ -1046,7 +1046,24 @@ farms outside the walls) cut into lots. The ward editor changes that layout with
   `medium`, `large`, `huge`: the target lot area, times the ward's usual), a merge with a neighbour (it joins
   that district: same ward and lots, no street between; not across a main street), or a new roll (`reroll`: its
   lots and buildings drawn again). A `castle` ward builds a curtain wall with towers, a gatehouse facing the town's
-  middle and a keep that is the castle.
+  middle and a keep that is the castle. A `park` ward is a whole block laid out as a garden, no lots on it: a
+  **formal** garden (cross walks from street to street and a walk round it, a fountain where they meet, hedged
+  parterres with beds, topiary, raised planters or bosquets of trees, statues in pairs at the walks' ends, benches)
+  or a **common** (winding gravel paths from its streets to a hub with a fountain or statue, a pond on its low
+  ground with reeds and a walk round it, sometimes a stream into it with a footbridge, a gazebo or bandstand on a
+  rise, clumps of trees, benches); `park` sets which (left out, `auto`: formal by the castle and the nobles, now
+  and then in a capital or a metropolis, where the ground is level enough for a terrace, a common elsewhere), and
+  `reroll` lays it out another way (moving its corners keeps its looks). A formal garden whose ground varies 8 ft
+  or less is laid level, eased to its streets (cut or filled no more than a quarter of the way in, to 8 ft); one
+  set by hand on ground that varies more follows the ground. Its ways in are on its sides along a street. A park
+  goes only on a patch inside the town, its block 9,000 sq ft or more and 60 ft across, no cliff across it, 15% of
+  it on the water at most, with a street along one side at least (`park_refused` says why not). Each town is
+  generated with its parks: a metropolis one to three, the first on the patch it always kept open and its palace
+  garden, as a capital city's, formal where the ground is level enough; a city most often one; a town about one in
+  four, a small common. A patch too steep to build on inside the town (its grade 0.18 to 0.4) is a common on the
+  slope (no pond or rise: a gazebo on its top with a bench looking down), planned as a `park` ward and counted
+  among them, two at most, none beside another; any other steep block is a terraced garden with a house here and
+  there, as before.
 - **Squares** open where three streets or more meet between built-up patches (a corner's `junction`, inside the
   walls and off the water): the lots at the corner of every block round it are trimmed back, and the ground they
   leave is a `crossroads` (widened, with a signpost, lamps, a trough), a `well` square (the well on a plinth), a
@@ -1078,11 +1095,13 @@ farms outside the walls) cut into lots. The ward editor changes that layout with
 A town's plan: `patches` (`patch`, `at`, `corners`, `ward`, `ward_generated` when set by hand, `in_town`,
 `district` with its id, `neighbours`, `lots`, `merged_with`, `reroll`, `lots_like` for a patch sharing another's
 lots, `close` for a temple's with a close as built, `close_generated` when set by hand, `close_refused`: why one
-can't be set there, or why the one set isn't built), `corners` (`corner`, `at`, `planned` when moved, `pinned`,
-`gate`, `wall`, `junction` where a square can open, `square_refused` where streets meet but none can (a close's
-corner), `square` and `square_ft` (how far out from the corner its chords are cut, on average) for the one there,
-`square_generated` when set by hand: a kind or `none`), `max_move_ft`, `walls` (`built`, `generated`), `edited`,
-`set_aside`.
+can't be set there, or why the one set isn't built, `park` for a park's patch: `formal` or `common` as laid out,
+`park_by_hand` when set by hand, `park_refused`: why the patch can't be made a park, `ward_planned` for a park's
+patch built on as a common ward's, too small once its streets were cut), `corners` (`corner`, `at`,
+`planned` when moved, `pinned`, `gate`, `wall`, `junction` where a square can open, `square_refused` where streets
+meet but none can (a close's corner), `square` and `square_ft` (how far out from the corner its chords are cut,
+on average) for the one there, `square_generated` when set by hand: a kind or `none`), `max_move_ft`, `walls`
+(`built`, `generated`), `edited`, `set_aside`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -1097,7 +1116,7 @@ corner), `square` and `square_ft` (how far out from the corner its chords are cu
 Change a town's layout. Every field is optional; they apply in this order: `reset`, `moves`, `equalize`,
 `relax`, `patches`, `squares`, `walls`. The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`,
 and the ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken_away`), `walls` (`built`, `towers`,
-`gates`), `squares` (the kinds of its open spaces, quays aside), `functions_lost`, `unmerged` (merges dropped because
+`gates`), `squares` (the kinds of its open spaces, quays aside), `parks` (how each is laid out), `functions_lost`, `unmerged` (merges dropped because
 a ward no longer allows them), `rects` (where the map is drawn again). A square set by hand where the wards no
 longer leave three streets goes with the change that took them. `added` and `taken_away` count buildings by id
 and footprint (a patch laid out again keeps reusing its new buildings' ids). A square set or taken away changes only
@@ -1109,7 +1128,7 @@ the lots at its corner: they are trimmed back to it, or come back whole.
 | `moves` | `[{corner, to \| by \| as_generated}]` | | `to: [x_ft, y_ft]`, or `by: [dx_ft, dy_ft]` from where it stands now; `as_generated` puts it back |
 | `equalize` | `[patch]` | | Pull each patch toward a regular polygon (its corners move) |
 | `relax` | `{at, radius_ft, amount}` | | Each corner within `radius_ft` of `at` toward the middle of its neighbours, by `amount` (0–1, default 0.5) at the centre, less toward the edge |
-| `patches` | `[{patch, ward, lots, merge_with, reroll, close, as_generated}]` | | `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `"auto"` puts a field back |
+| `patches` | `[{patch, ward, lots, merge_with, reroll, close, park, as_generated}]` | | `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `park`: `formal` or `common`, a park's patch only; `"auto"` puts a field back |
 | `squares` | `[{corner, kind}]` | | `kind`: crossroads, well, fountain, green, `"none"` (no square there) or `"auto"` (as generated); a square opens only at a `junction` |
 | `walls` | `true` \| `false` \| `"auto"` | | Walls up, down, or as generated |
 | `reset` | `"all"` \| `"corners"` \| `"patches"` \| `"squares"` | | Back to as generated |
@@ -1130,6 +1149,8 @@ the lots at its corner: they are trimmed back to it, or come back whole.
 | `no square opens there: …` | A square asked for at a corner that is not a junction (fewer than three streets, the wall, a gate, the water, or an unbuilt patch round it) |
 | `only a temple's patch has a close` / `no temple stands on that patch…` / `a square opens at its corner` / `no room for a close there…` (the temple and churchyard don't fit, or houses would line under 65% of the block's streets) | A close refused |
 | `a temple's close is at that corner` | A square refused at a close's corner |
+| `only a park's patch is laid out as a garden…` | `park` asked of a patch whose ward isn't `park` |
+| `too much of that patch is on the water for a park…` / `no street comes to that patch…` / `parks are laid out inside the town` / `that patch is too small for a park…` / `a cliff crosses that patch…` | The `park` ward refused on that patch (`park_refused`) |
 | `the town was laid out anew: …` | The edit was made before a sketch change moved the town or its patches |
 
 ## Shaping the ground

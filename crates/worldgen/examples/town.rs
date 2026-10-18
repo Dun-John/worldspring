@@ -62,6 +62,38 @@ fn main() {
         }
     }
     println!("squares too wide: {wide}; over buildings: {under}");
+    // Parks by tier (settlements, parks, formal, common) and the biggest of each kind.
+    let mut parks: std::collections::BTreeMap<String, [usize; 4]> = Default::default();
+    let mut biggest: [Option<(f64, usize, [f64; 2])>; 2] = [None, None];
+    let mut planned = 0;
+    for i in 0..n {
+        let l = town::layout(&world, &t0, i);
+        let row = parks.entry(format!("{:?}", l.tier)).or_default();
+        row[0] += 1;
+        // (Patches planned as parks, those on slopes too steep to build on among them.)
+        if l.tier >= Tier::Town {
+            planned += town::wards::plan_json(&world, &t0, i).map_or(0, |v| v["patches"].as_array().map_or(0, |ps| ps.iter().filter(|p| p.get("ward_generated").unwrap_or(&p["ward"]) == "park").count()));
+        }
+        for p in &l.parks {
+            let formal = p.kind == town::ParkKind::Formal;
+            row[1] += 1;
+            row[if formal { 2 } else { 3 }] += 1;
+            let a = town::geom::area(&p.pts).abs();
+            let slot = &mut biggest[(!formal) as usize];
+            if slot.is_none_or(|b| a > b.0) {
+                *slot = Some((a, i, town::geom::centroid(&p.pts)));
+            }
+        }
+    }
+    for (tier, [s, p, f, c]) in &parks {
+        println!("parks in {tier}: {s} settlements, {p} parks ({f} formal, {c} common)");
+    }
+    println!("patches planned as parks: {planned}");
+    for (kind, b) in ["formal", "common"].iter().zip(&biggest) {
+        if let Some((a, i, c)) = b {
+            println!("biggest {kind} park: #{i} {a:.0} sq ft at fx {:.6} fy {:.6}", c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
+        }
+    }
     for (kind, at) in &kinds {
         let first: Vec<String> = at.iter().take(3).map(|(i, c)| format!("#{i} fx {:.6} fy {:.6}", c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft)).collect();
         println!("{kind}: {} ({})", at.len(), first.join("; "));

@@ -15,7 +15,11 @@
 //!  .. roads: same layout, vertices as (x, y in tile units, bed width ft, class).
 //!  .. site polygons (levels >= SITE_MIN_LEVEL): n u32, n_verts u32, starts u32[n + 1],
 //!     attrs u32[n] (kind | ward << 8 | floors << 16 | has-function << 24; kind 0 building,
-//!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard, 6 deck: bridge or pier, 7 monument),
+//!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard, 6 deck: bridge or pier, 7 monument,
+//!     8 a camp's clearing, 9 a tent (or a park's gazebo), 11 a park's water (its pond as a fan
+//!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
+//!     parterre, 14 a tree's (or topiary's) crown, 15 a flowerbed; a park's raised features as
+//!     monuments; all of a park's in the tile holding its middle),
 //!     verts f32[n_verts * 2] (tile units).
 //!     A polygon belongs to
 //!     the tile containing its centroid.
@@ -253,8 +257,11 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
     let mut lines: Vec<Vec<[f64; 4]>> = Vec::new();
     if key.level >= SITE_MIN_LEVEL {
         let owns = |p: [f64; 2]| p[0] >= ox && p[0] < ox + size && p[1] >= oy && p[1] < oy + size;
+        // (A park's polygons all belong to the tile holding the park's middle, so they are drawn in
+        // order: `whole` while one is pushed.)
+        let whole = std::cell::Cell::new(None::<bool>);
         let mut push = |poly: &[[f64; 2]], attr: u32| {
-            if poly.len() < 3 || !owns(crate::town::geom::centroid(poly)) {
+            if poly.len() < 3 || !whole.get().unwrap_or_else(|| owns(crate::town::geom::centroid(poly))) {
                 return;
             }
             for p in poly {
@@ -287,6 +294,62 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 for tri in ears(&p.pts) {
                     push(&tri, 1);
                 }
+            }
+            // Parks as their battlemaps lay them out (the lawn is the ground, as a green's): gravel
+            // paths and rounds, the pond and the stream, a formal garden's parterres and its basins,
+            // planters and daises, the gazebo or bandstand, the trees' crowns and the beds (once
+            // buildings are drawn).
+            for pk in l.parks.iter().filter(|_| key.level >= BUILDING_MIN_LEVEL) {
+                let pc = crate::town::geom::centroid(&pk.pts);
+                if !owns(pc) {
+                    continue;
+                }
+                whole.set(Some(true));
+                let lay = crate::battlemap::park_layout(pk, crate::battlemap::land_biome(t0, pc), l.tier >= crate::t0::settle::Tier::City, world.stream("battlemap"));
+                for (pts, w) in &lay.paths {
+                    for q in pts.windows(2) {
+                        let d = crate::town::geom::sub(q[1], q[0]);
+                        let l = crate::town::geom::len(d);
+                        if l > 0.5 {
+                            push(&crate::town::rect(crate::town::geom::lerp(q[0], q[1], 0.5), crate::town::geom::mul(d, 1.0 / l), l + 0.5 * w, *w), 12);
+                        }
+                    }
+                }
+                for &(c, r) in &lay.rounds {
+                    push(&crate::town::geom::circle(c, r, 14), 12);
+                }
+                // (The pond fanned from its middle: its outline is star-shaped about it, not convex.)
+                if let Some(pond) = &lay.pond {
+                    let mut fan = vec![pond.centre];
+                    fan.extend(pond.pts.iter().copied());
+                    fan.push(pond.pts[0]);
+                    push(&fan, 11);
+                }
+                for s in lay.stream.windows(2) {
+                    let d = crate::town::geom::sub(s[1].0, s[0].0);
+                    let l = crate::town::geom::len(d);
+                    if l > 0.5 {
+                        push(&crate::town::rect(crate::town::geom::lerp(s[0].0, s[1].0, 0.5), crate::town::geom::mul(d, 1.0 / l), l + 2.0, crate::park::STREAM_FT), 11);
+                    }
+                }
+                for q in &lay.parterres {
+                    push(q, 13);
+                }
+                for &(c, r, _) in &lay.features {
+                    push(&crate::town::geom::circle(c, r + 1.0, 12), 7);
+                }
+                for &(at, rot, kind, _, scale) in &lay.props {
+                    let inf = crate::battlemap::info(kind as u16);
+                    let r = inf.radius as f64 * crate::battlemap::SQUARE_FT * scale as f64;
+                    if (inf.height_ft >= 15.0 && inf.blocks_move) || kind == crate::battlemap::Kind::Topiary {
+                        push(&crate::town::geom::circle(at, 0.85 * r, 8), 14);
+                    } else if kind == crate::battlemap::Kind::Flowerbed {
+                        push(&crate::town::rect(at, [libm::cos(rot as f64), libm::sin(rot as f64)], 1.6 * r, 0.9 * r), 15);
+                    } else if matches!(kind, crate::battlemap::Kind::Gazebo | crate::battlemap::Kind::Bandstand) {
+                        push(&crate::town::geom::circle(at, 0.8 * r, 8), 9);
+                    }
+                }
+                whole.set(None);
             }
             // A camp: its clearing, and its tents (as the battlemap's sprites lie).
             for (y, _) in &l.yards {

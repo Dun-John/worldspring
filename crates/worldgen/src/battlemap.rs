@@ -24,6 +24,9 @@ use crate::t0::T0;
 use crate::t0::biome::Biome;
 use crate::t0::roads::CrossingKind;
 
+/// A park laid out (`town::Park`): what a park's chunks and tiles draw.
+pub use crate::park::layout as park_layout;
+
 pub const SQ: usize = TILE_N / 2;
 /// Squares per edge including a one-square halo ring (for seamless rendering gradients).
 pub const HS: usize = SQ + 2;
@@ -64,6 +67,8 @@ pub enum Surface {
     Field,
     /// A flight of steps on a steep paved street (cities and up).
     Stairs,
+    /// A park's gravel paths.
+    Gravel,
 }
 
 impl Surface {
@@ -87,8 +92,10 @@ pub const URBAN_TOWER: u8 = 8;
 pub const URBAN_ENTRANCE: u8 = 9;
 /// Packed earth trodden bare (a camp's clearing).
 pub const URBAN_YARD: u8 = 10;
-/// A lawn in town (a green, a temple's close): the ground's own, with no wild scatter.
+/// A lawn in town (a green, a temple's close, a park): the ground's own, with no wild scatter.
 pub const URBAN_PARK: u8 = 11;
+/// A park's gravel paths and rounds (kept clear of what the guarantee adds).
+pub const URBAN_PATH: u8 = 12;
 /// Wall-walk and tower-top heights above the ground (ft).
 const WALL_FT: f32 = 20.0;
 const TOWER_FT: f32 = 30.0;
@@ -345,7 +352,7 @@ pub struct Chunk {
     pub tier: Vec<i16>,
     pub surface: Vec<Surface>,
     /// Bits: 1 cliff to the east, 2 cliff to the south, 4 slope edge east, 8 slope edge south,
-    /// 16 difficult terrain.
+    /// 16 difficult terrain, 32 a park's pond or stream or the ground by it.
     pub edges: Vec<u8>,
     pub objects: Vec<Object>,
     pub atmosphere: Atmosphere,
@@ -988,6 +995,24 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut props: Vec<crate::town::Prop> = Vec::new();
     // Gates' passages (their towers' centres, world ft): kept clear of generated objects.
     let mut gates: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    // Parks (`park_layout`): which squares are a park's (1 a common, 2 a formal garden) and which
+    // park (an index into `park_biomes`, from 1: the biome its lawn takes, the same in every chunk),
+    // their ponds, streams (centre line and water's level), raised tiers (middle, top radius), swells
+    // (middle, radius, rise), formal terraces (outline, level), sunk parterres, what they set out,
+    // ground the guarantee keeps clear, and each park's outline, benches' look and paths (for the
+    // benches the guarantee adds).
+    let mut park_h = vec![0u8; HS * HS];
+    let mut park_ix = vec![0u8; HS * HS];
+    let mut park_biomes: Vec<Biome> = Vec::new();
+    let mut swells: Vec<crate::park::Swell> = Vec::new();
+    let mut terraces: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
+    let mut park_keep: Vec<([f64; 2], [f64; 2], f64)> = Vec::new();
+    let mut ponds: Vec<crate::park::Pond> = Vec::new();
+    let mut streams: Vec<Vec<([f64; 2], f32)>> = Vec::new();
+    let mut mounds: Vec<([f64; 2], f64)> = Vec::new();
+    let mut sunk: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut park_props: Vec<([f64; 2], f32, Kind, u8, f32)> = Vec::new();
+    let mut park_meta: Vec<ParkMeta> = Vec::new();
     // Camps' clearings, levelled (outline, height ft).
     let mut yards: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
     // Ground before anything is raised on it (walls stand on the ground, not on roofs).
@@ -1132,6 +1157,69 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     dress_main(pl, &l, &mut room, seed, &mut dressing);
                 }
             }
+        }
+        // Parks: a lawn (a formal garden's mown), gravel paths and rounds on it; its pond, stream
+        // and raised tier, round features raised a tier and what it sets out (laid out whole by
+        // every chunk it reaches, so they agree).
+        for pk in &l.parks {
+            let b = bbox(&pk.pts);
+            if !overlaps((b.0 - 20.0, b.1 - 20.0, b.2 + 20.0, b.3 + 20.0)) {
+                continue;
+            }
+            let pb = land_biome(t0, crate::town::geom::centroid(&pk.pts));
+            let lay = park_layout(pk, pb, l.tier >= crate::t0::settle::Tier::City, seed);
+            stamp(&pk.pts, URBAN_PARK, &mut urb_h);
+            park_biomes.push(pb);
+            let (i0, j0, i1, j1) = range(b);
+            if i1 >= 0.0 && j1 >= 0.0 {
+                let mark = if pk.kind == crate::town::ParkKind::Formal { 2 } else { 1 };
+                for j in j0..=j1 as usize {
+                    for i in i0..=i1 as usize {
+                        if crate::town::geom::contains(&pk.pts, center(i, j)) {
+                            park_h[j * HS + i] = mark;
+                            park_ix[j * HS + i] = park_biomes.len().min(255) as u8;
+                        }
+                    }
+                }
+            }
+            // A square is gravel where a path's or a round's edge reaches past its middle (a path a
+            // little wider than drawn, so a slanting one stays joined), but under a gazebo.
+            let reserved = |p: [f64; 2]| lay.reserved.iter().any(|&(c, r)| crate::town::geom::dist(p, c) < r);
+            let segs = lay.paths.iter().flat_map(|(pts, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w + 0.6)));
+            for (a, e, half) in segs.chain(lay.rounds.iter().map(|&(c, r)| (c, c, r))) {
+                let (i0, j0, i1, j1) = range((a[0].min(e[0]) - half, a[1].min(e[1]) - half, a[0].max(e[0]) + half, a[1].max(e[1]) + half));
+                if i1 < 0.0 || j1 < 0.0 {
+                    continue;
+                }
+                for j in j0..=j1 as usize {
+                    for i in i0..=i1 as usize {
+                        let h = j * HS + i;
+                        if urb_h[h] == URBAN_PARK && park_h[h] != 0 && crate::town::geom::seg_dist(center(i, j), a, e) < half && !reserved(center(i, j)) {
+                            urb_h[h] = URBAN_PATH;
+                        }
+                    }
+                }
+            }
+            ponds.extend(lay.pond.clone());
+            if !lay.stream.is_empty() {
+                streams.push(lay.stream.clone());
+            }
+            mounds.extend(lay.mound);
+            swells.extend(lay.swells.iter().copied());
+            terraces.extend(lay.level.map(|v| (pk.pts.clone(), v)));
+            park_keep.extend(lay.keep.iter().copied());
+            sunk.extend(lay.sunk.iter().cloned());
+            park_meta.push(ParkMeta {
+                poly: pk.pts.clone(),
+                bench: lay.bench,
+                segs: lay.paths.iter().flat_map(|(pts, _)| pts.windows(2).map(|q| (q[0], q[1]))).collect(),
+                rounds: lay.rounds.clone(),
+                axis: lay.axis,
+            });
+            for &(c, r, kind) in &lay.features {
+                features.push((c, r, kind, unit(hash3(seed, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 0x9a5)) * std::f64::consts::TAU));
+            }
+            park_props.extend(lay.props.iter().copied());
         }
         for f in &l.fields {
             stamp(f, URBAN_FIELD, &mut urb_h);
@@ -1752,8 +1840,51 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
+    // Parks' ground where their features stand, each square by its place alone (chunks agree): a
+    // common's swells (easing out over their radius); a formal garden laid level (eased to the
+    // streets over 24 ft in, cut or filled no more than a quarter of the way in, to 8 ft), its raised
+    // features then standing on the terrace.
+    let at_ease = |h: usize| road_h[h] == 0 && bld_h[h] == 0;
+    let mut terraced = vec![false; if terraces.is_empty() { 0 } else { HS * HS }];
+    for sw in &swells {
+        let (c, r) = (sw.at, sw.reach());
+        let (i0, j0, i1, j1) = range((c[0] - r, c[1] - r, c[0] + r, c[1] + r));
+        if i1 < 0.0 || j1 < 0.0 {
+            continue;
+        }
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let h = j * HS + i;
+                if at_ease(h) && hw[h] <= hh[h] {
+                    hh[h] += sw.lift(center(i, j));
+                }
+            }
+        }
+    }
+    for (pts, level) in &terraces {
+        let (i0, j0, i1, j1) = range(bbox(pts));
+        if i1 < 0.0 || j1 < 0.0 {
+            continue;
+        }
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let h = j * HS + i;
+                let din = crate::park::depth(pts, center(i, j));
+                if din > 0.0 && at_ease(h) && hw[h] <= hh[h] {
+                    // (Cut or filled no more than a quarter of the way in, to 8 ft: where the ground
+                    // drawn strays from the plan, the terrace eases to it.)
+                    let cap = (0.25 * din).min(8.0) as f32;
+                    let target = level.clamp(hh[h] - cap, hh[h] + cap);
+                    hh[h] += (target - hh[h]) * smoothstep(0.0, 24.0, din) as f32;
+                    hw[h] = hw[h].min(hh[h] - 4.0);
+                    terraced[h] = true;
+                }
+            }
+        }
+    }
     // Plaza features stand a tier above the paving (a fountain's rim, a planter, a cross's
-    // steps): every square whose centre lies within the round.
+    // steps), a formal garden's above its terrace: every square whose centre lies within the round.
+    let floor = if terraced.is_empty() { Vec::new() } else { hh.clone() };
     for &(fc, r, _, _) in &features {
         let b = (fc[0] - r, fc[1] - r, fc[0] + r, fc[1] + r);
         if !overlaps(b) {
@@ -1767,7 +1898,151 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             for i in i0..=i1 as usize {
                 let h = j * HS + i;
                 if crate::town::geom::dist(center(i, j), fc) <= r && road_h[h] == 0 && bld_h[h] == 0 {
-                    hh[h] = road_bed[h] + (TIER_FT * 1.05) as f32;
+                    hh[h] = if terraced.get(h).is_some_and(|&t| t) { floor[h] } else { road_bed[h] } + (TIER_FT * 1.05) as f32;
+                }
+            }
+        }
+    }
+    // Then by how far it is from the water's edge, a pond dug to its level (0.3 ft deep at its rim,
+    // 0.2 ft deeper a foot in, to 3.5), its banks from 0.3 ft above the water (rising a tenth of a
+    // foot a foot) eased out to the ground round it over its band, and no steeper than 0.35 from there
+    // out to 30 ft past it, the water's level held a square past the rim (further out, well under the
+    // ground: no wet shore drawn); a stream's bed below its water's level along it, its banks cut back
+    // no steeper than three in ten for 40 ft and banked up where the ground beside it lies low; a
+    // formal garden's parterres sunk inside their hedges; a raised tier 6 ft up, easing out over 20 ft
+    // (no steeper than one in two).
+    // (A park's own water and the two squares round it: `edges` bit 32, where the ground's drawing
+    // keeps its dry fringe off the water's bed.)
+    let mut park_wet = vec![false; HS * HS];
+    for pond in &ponds {
+        let (pts, level) = (&pond.pts, pond.level);
+        let b = bbox(pts);
+        let r = pond.band;
+        const CONE: f64 = crate::park::POND_CONE;
+        let (i0, j0, i1, j1) = range((b.0 - r - CONE, b.1 - r - CONE, b.2 + r + CONE, b.3 + r + CONE));
+        if i1 < 0.0 || j1 < 0.0 {
+            continue;
+        }
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let h = j * HS + i;
+                let p = center(i, j);
+                let edge = (0..pts.len()).map(|e| crate::town::geom::seg_dist(p, pts[e], pts[(e + 1) % pts.len()])).fold(f64::MAX, f64::min);
+                let inside = crate::town::geom::contains(pts, p);
+                // (Past the band, other water's ground is left as it is.)
+                if !at_ease(h) || (!inside && (edge >= r + CONE || (edge >= r && hw[h] > hh[h] - 1.0))) {
+                    continue;
+                }
+                park_wet[h] |= inside || edge <= 2.0 * SQUARE_FT;
+                // (Its own water there, whatever level a sea or river nearby would give it.)
+                if inside {
+                    hh[h] = level - (0.3 + 0.2 * edge).min(3.5) as f32;
+                    hw[h] = level;
+                } else {
+                    hh[h] = crate::park::pond_bank(hh[h] as f64, edge, level as f64, r) as f32;
+                    // (Within the band, 4 ft under the ground, never the land's no-water level: the
+                    // water's surface between squares then meets the ground along the rim, not in
+                    // steps at the squares.)
+                    hw[h] = if edge <= SQUARE_FT {
+                        level
+                    } else if edge < r {
+                        hh[h] - 4.0
+                    } else {
+                        hw[h].min(hh[h] - 4.0)
+                    };
+                }
+            }
+        }
+    }
+    for pts in &streams {
+        let half = 0.5 * crate::park::STREAM_FT;
+        const BANK: f64 = crate::park::STREAM_BANK;
+        let b = pts.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, q| (a.0.min(q.0[0]), a.1.min(q.0[1]), a.2.max(q.0[0]), a.3.max(q.0[1])));
+        let r = half + BANK;
+        let (i0, j0, i1, j1) = range((b.0 - r, b.1 - r, b.2 + r, b.3 + r));
+        if i1 < 0.0 || j1 < 0.0 {
+            continue;
+        }
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let h = j * HS + i;
+                let p = center(i, j);
+                if !at_ease(h) || hw[h] > hh[h] {
+                    continue;
+                }
+                // The nearest point of its line, and the water's level there.
+                let mut best: Option<(f64, f32)> = None;
+                for s in pts.windows(2) {
+                    let (q, t) = crate::park::project(s[0].0, s[1].0, p);
+                    let d = crate::town::geom::dist(p, q);
+                    if best.is_none_or(|x| d < x.0) {
+                        best = Some((d, s[0].1 + (s[1].1 - s[0].1) * t as f32));
+                    }
+                }
+                let Some((d, wl)) = best.filter(|x| x.0 < r) else { continue };
+                park_wet[h] |= d < half + 2.0 * SQUARE_FT;
+                // (The highest its water stands within a square and a half more than that: the water of
+                // the square beside it upstream, on a falling stream.)
+                let reach = d + 1.5 * SQUARE_FT;
+                let mut up = wl;
+                for s in pts.windows(2) {
+                    let (q, t) = crate::park::project(s[0].0, s[1].0, p);
+                    let dq = crate::town::geom::dist(p, q);
+                    let ab = crate::town::geom::dist(s[0].0, s[1].0).max(1e-9);
+                    if dq < reach {
+                        let dt = crate::core::sqrt(reach * reach - dq * dq) / ab;
+                        for tt in [(t - dt).max(0.0), (t + dt).min(1.0)] {
+                            up = up.max(s[0].1 + (s[1].1 - s[0].1) * tt as f32);
+                        }
+                    }
+                }
+                if d < half {
+                    hh[h] = hh[h].min(wl - (0.4 + 0.8 * (1.0 - d / half)) as f32);
+                    hw[h] = wl;
+                } else {
+                    // (Cut back three in ten, and banked up where the ground beside it lies low: its
+                    // water never stands above its banks.)
+                    hh[h] = hh[h].min(crate::park::stream_bank(wl as f64, d - half) as f32);
+                    // (0.3 ft over the water beside it out to 15 ft from its edge, then down a tenth of
+                    // a foot a foot.)
+                    if d < half + 25.0 {
+                        hh[h] = hh[h].max(up + (0.3 - 0.1 * (d - half - 15.0).max(0.0)) as f32);
+                    }
+                    hw[h] = if d < half + SQUARE_FT { wl.min(hh[h] - 0.1) } else { hh[h] - 4.0 };
+                }
+            }
+        }
+    }
+    for q in &sunk {
+        let (i0, j0, i1, j1) = range(bbox(q));
+        if i1 < 0.0 || j1 < 0.0 {
+            continue;
+        }
+        let (a, b) = crate::park::SUNK_BANK;
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let h = j * HS + i;
+                let din = crate::park::depth(q, center(i, j));
+                if din > 0.0 && at_ease(h) && hw[h] <= hh[h] {
+                    let w = 0.5 * ((din - a) / (b - a)).clamp(0.0, 1.0) + 0.5 * smoothstep(a, b, din);
+                    hh[h] -= (crate::park::SUNK_FT * w) as f32;
+                    hw[h] = hw[h].min(hh[h] - 4.0);
+                }
+            }
+        }
+    }
+    for &(c, r) in &mounds {
+        let reach = r + 20.0;
+        let (i0, j0, i1, j1) = range((c[0] - reach, c[1] - reach, c[0] + reach, c[1] + reach));
+        if i1 < 0.0 || j1 < 0.0 {
+            continue;
+        }
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let h = j * HS + i;
+                let d = crate::town::geom::dist(center(i, j), c);
+                if at_ease(h) && d < reach && hw[h] <= hh[h] {
+                    hh[h] += (6.0 * (1.0 - smoothstep(r, reach, d))) as f32;
                 }
             }
         }
@@ -1777,6 +2052,20 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let height = interior(&hh);
     let water_level = interior(&hw);
     let dominant = dominant_biome(&biome, &water_level, &height);
+    // (A park's path doesn't go on under the water, nor over a step steeper than a cliff's grade
+    // to a square beside it: it stops at the edge, but where the step is a raised feature's.)
+    let on_feature = |h: usize| features.iter().any(|f| crate::town::geom::dist(center(h % HS, h / HS), f.0) <= f.1);
+    let cliff = |h: usize| [1, HS].iter().any(|&o| [h + o, h - o].iter().any(|&nh| (hh[nh] - hh[h]).abs() > 2.75 && !on_feature(nh)));
+    let urban: Vec<u8> = (0..n)
+        .map(|k| {
+            let h = (k / SQ + 1) * HS + k % SQ + 1;
+            match urb_h[h] {
+                _ if ent_h[h] => URBAN_ENTRANCE,
+                URBAN_PATH if hw[h] > hh[h] || cliff(h) => URBAN_PARK,
+                u => u,
+            }
+        })
+        .collect();
 
     let mut chunk = Chunk {
         key: *key,
@@ -1792,7 +2081,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         road_halo: road_h,
         building: (0..n).map(|k| bld_h[(k / SQ + 1) * HS + k % SQ + 1]).collect(),
         buildings: refs,
-        urban: (0..n).map(|k| if ent_h[(k / SQ + 1) * HS + k % SQ + 1] { URBAN_ENTRANCE } else { urb_h[(k / SQ + 1) * HS + k % SQ + 1] }).collect(),
+        urban,
         building_polys: polys,
         roof_lift: lift,
         structures: shapes,
@@ -1817,7 +2106,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         };
         if depth <= 0.0 {
             // The ground's own kind, under any keep-clear mark.
-            match urb_h[(k / SQ + 1) * HS + k % SQ + 1] {
+            // (A path's square cut at a cliff is the park's lawn.)
+            let mark = match urb_h[(k / SQ + 1) * HS + k % SQ + 1] {
+                URBAN_PATH if chunk.urban[k] != URBAN_PATH => URBAN_PARK,
+                u => u,
+            };
+            match mark {
                 // A village green and a graveyard keep the ground round them (no odd patch
                 // in a forest); a town's plaza is paved.
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
@@ -1828,6 +2122,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 URBAN_DECK => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_RUIN | URBAN_YARD => chunk.surface[k] = Surface::Dirt,
                 URBAN_WALL | URBAN_TOWER => chunk.surface[k] = Surface::Rock,
+                URBAN_PATH => chunk.surface[k] = Surface::Gravel,
+                // (A formal garden's lawn is mown grass, whatever grows round the town; a common's is
+                // the ground of the land round its middle, whatever the shore beside it.)
+                URBAN_PARK if park_h[(k / SQ + 1) * HS + k % SQ + 1] == 2 => chunk.surface[k] = Surface::Grass,
+                URBAN_PARK if park_ix[(k / SQ + 1) * HS + k % SQ + 1] != 0 => {
+                    chunk.surface[k] = surface_for(park_biomes[park_ix[(k / SQ + 1) * HS + k % SQ + 1] as usize - 1], slope[k]);
+                }
                 _ => {}
             }
         }
@@ -1968,6 +2269,25 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let scale = if kind == Kind::MarketCross { MARKET_CROSS_SCALE } else { 1.0 };
         chunk.objects.push(Object { kind, variant, x: x as f32, y: y as f32, rot, scale, sprite: 0, turned: false });
     }
+    // What a park sets out: each in the chunk holding it, on its lawn (what stands in a gravel round
+    // or across a stream on the gravel or the water too, reeds in the water), never on a roof, a road
+    // or reaching over a building.
+    for (p, rot, kind, variant, scale) in park_props {
+        let (x, y) = ((p[0] - ox) / SQUARE_FT, (p[1] - oy) / SQUARE_FT);
+        if x < 0.0 || y < 0.0 || x >= SQ as f64 || y >= SQ as f64 {
+            continue;
+        }
+        let k = y as usize * SQ + x as usize;
+        let wet_ok = matches!(kind, Kind::Reeds | Kind::Footbridge);
+        let gravel_ok = matches!(kind, Kind::Fountain | Kind::GardenStatue | Kind::Footbridge);
+        if chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || (!wet_ok && chunk.water_level[k] > chunk.height[k]) || !(chunk.urban[k] == URBAN_PARK || (gravel_ok && chunk.urban[k] == URBAN_PATH)) {
+            continue;
+        }
+        let o = Object { kind, variant, x: x as f32, y: y as f32, rot, scale, sprite: 0, turned: false };
+        if off_buildings(&chunk, &o) {
+            chunk.objects.push(o);
+        }
+    }
     // A well at the heart of every main square and village green.
     for w in wells {
         let (i, j) = (((w[0] - ox) / SQUARE_FT).floor(), ((w[1] - oy) / SQUARE_FT).floor());
@@ -2012,15 +2332,151 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
             let wall = |x: i64, y: i64| x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && matches!(chunk.urban[y as usize * SQ + x as usize], URBAN_WALL | URBAN_TOWER);
             let p = [ox + (x as f64 + 0.5) * SQUARE_FT, oy + (y as f64 + 0.5) * SQUARE_FT];
-            (-1..=1).any(|dy| (-1..=1).any(|dx| wall(x + dx, y + dy))) || in_gate(p, 2.5) || features.iter().any(|f| crate::town::geom::dist(p, f.0) < f.1 + 4.0) || churchyard.get(k).is_some_and(|&y| y)
+            (-1..=1).any(|dy| (-1..=1).any(|dx| wall(x + dx, y + dy)))
+                || in_gate(p, 2.5)
+                || features.iter().any(|f| crate::town::geom::dist(p, f.0) < f.1 + 4.0)
+                || churchyard.get(k).is_some_and(|&y| y)
+                || chunk.urban[k] == URBAN_PATH
+                || park_keep.iter().any(|&(a, b, r)| crate::town::geom::seg_dist(p, a, b) < r + 2.5)
         })
         .collect();
+    // The parks' squares (empty: none here): the low bits 1 a common's, 2 a formal garden's (what
+    // the guarantee puts down there is a park's); 4 by a pond or stream (no knoll: its banks stay
+    // eased, by the band and 8 ft more); 8 gravel at a path's or round's edge, clear of features,
+    // where cover may go when the lawn is out of reach (a big round's middle); 16 off the parks but
+    // within 8 squares of one (no knoll or feature off a lawn there).
+    let park: Vec<u8> = if park_h.iter().all(|&v| v == 0) {
+        Vec::new()
+    } else {
+        let half = 0.5 * crate::park::STREAM_FT;
+        let rmax: Vec<f64> = ponds.iter().map(|pd| pd.pts.iter().map(|&q| crate::town::geom::dist(q, pd.centre)).fold(0.0, f64::max)).collect();
+        let mut marks: Vec<u8> = (0..n)
+            .map(|k| {
+                let kind = park_h[(k / SQ + 1) * HS + k % SQ + 1];
+                if kind == 0 {
+                    return 0;
+                }
+                let (x, y) = (k % SQ, k / SQ);
+                let p = [ox + (x as f64 + 0.5) * SQUARE_FT, oy + (y as f64 + 0.5) * SQUARE_FT];
+                let by_pond = ponds.iter().zip(&rmax).any(|(pd, &rmax)| {
+                    let reach = pd.band + 8.0;
+                    crate::town::geom::dist(p, pd.centre) < rmax + reach
+                        && (crate::town::geom::contains(&pd.pts, p) || (0..pd.pts.len()).any(|e| crate::town::geom::seg_dist(p, pd.pts[e], pd.pts[(e + 1) % pd.pts.len()]) < reach))
+                });
+                let by_stream = streams.iter().any(|s| s.windows(2).any(|w| crate::town::geom::seg_dist(p, w[0].0, w[1].0) < half + crate::park::STREAM_BANK + 8.0));
+                let lawn = |dx: i64, dy: i64| {
+                    let (i, j) = (x as i64 + dx, y as i64 + dy);
+                    i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 && chunk.urban[j as usize * SQ + i as usize] == URBAN_PARK
+                };
+                let edge = chunk.urban[k] == URBAN_PATH
+                    && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| lawn(dx, dy))
+                    && !features.iter().any(|f| crate::town::geom::dist(p, f.0) < f.1 + 4.0)
+                    && !in_gate(p, 2.5);
+                kind | if by_pond || by_stream { 4 } else { 0 } | if edge { 8 } else { 0 }
+            })
+            .collect();
+        // (16: off the parks, within 8 squares of one, either way.)
+        let near: Vec<bool> = (0..n)
+            .map(|k| {
+                let x = k % SQ;
+                (x.saturating_sub(8)..=(x + 8).min(SQ - 1)).any(|i| marks[k - x + i] & 3 != 0)
+            })
+            .collect();
+        for k in 0..n {
+            let (x, y) = (k % SQ, k / SQ);
+            if marks[k] & 3 == 0 && (y.saturating_sub(8)..=(y + 8).min(SQ - 1)).any(|j| near[j * SQ + x]) {
+                marks[k] |= 16;
+            }
+        }
+        marks
+    };
     // Where the ground is shaped, the guarantee's draws are keyed by cell (a mound in one corner
     // moves nothing elsewhere) and plateaus get no knolls (`shaped`: empty when nothing is).
     let shaped: Vec<bool> = if shaper.is_some() { (0..n).map(|k| plat_w[(k / SQ + 1) * HS + k % SQ + 1] >= 0.5).collect() } else { Vec::new() };
     let before = if shaped.is_empty() { Vec::new() } else { chunk.height.clone() };
     let set_out = chunk.objects.len();
-    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off);
+    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &park);
+    // A bench the guarantee put in a park is one of the park's, facing its nearest path, or the
+    // middle of the gravel round it stands at; one out on the lawn, more than 12 ft from either, is a
+    // shrub instead. Its flowerbeds lie square to a formal garden's axis.
+    for o in chunk.objects[set_out..].iter_mut().filter(|o| matches!(o.kind, Kind::Bench | Kind::Flowerbed)) {
+        let p = [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
+        let Some(m) = park_meta.iter().find(|m| crate::town::geom::contains(&m.poly, p)) else { continue };
+        if o.kind == Kind::Flowerbed {
+            if let Some(a) = m.axis {
+                // (The quarter turn of the axis nearest its own.)
+                let q = std::f32::consts::FRAC_PI_2;
+                o.rot = a + q * crate::core::round(((o.rot - a) / q) as f64) as f32;
+            }
+            continue;
+        }
+        o.variant = m.bench;
+        let path = m.segs.iter().map(|&(a, b)| crate::park::project(a, b, p).0).map(|q| (crate::town::geom::dist(q, p), q));
+        let round = m.rounds.iter().map(|&(c, r)| ((crate::town::geom::dist(c, p) - r).abs(), c));
+        match path.chain(round).min_by(|a, b| a.0.total_cmp(&b.0)) {
+            Some((d, q)) if d <= 12.0 => {
+                if crate::town::geom::dist(q, p) > 1.0 {
+                    o.rot = crate::park::facing(crate::town::geom::sub(q, p));
+                }
+            }
+            _ => (o.kind, o.variant) = (Kind::Bush, o.variant % 4),
+        }
+    }
+    // A path square the guarantee left at a step steeper than a cliff's grade (a knoll beside it)
+    // is the park's lawn: the path stops at the edge (but at a raised feature's step).
+    if !park.is_empty() {
+        // (Raised features' rounds, centre and radius squared plus half a square, in squares.)
+        let raised: Vec<([f32; 2], f32)> = chunk
+            .structures
+            .iter()
+            .filter(|s| s.kind == ShapeKind::Dais)
+            .map(|s| {
+                let (dx, dy) = (s.pts[1][0] - s.pts[0][0], s.pts[1][1] - s.pts[0][1]);
+                let r = crate::core::sqrt((dx * dx + dy * dy) as f64) as f32 + 0.5;
+                (s.pts[0], r * r)
+            })
+            .collect();
+        let feature = |k: usize| {
+            let (x, y) = ((k % SQ) as f32 + 0.5, (k / SQ) as f32 + 0.5);
+            raised.iter().any(|&(c, r2)| (x - c[0]) * (x - c[0]) + (y - c[1]) * (y - c[1]) <= r2)
+        };
+        let cut: Vec<usize> = (0..n)
+            .filter(|&k| chunk.urban[k] == URBAN_PATH)
+            .filter(|&k| {
+                let (x, y) = (k % SQ, k / SQ);
+                [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {
+                    let (i, j) = (x as i64 + dx, y as i64 + dy);
+                    i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 && {
+                        let nk = j as usize * SQ + i as usize;
+                        (chunk.height[nk] - chunk.height[k]).abs() > 2.75 && !feature(nk) && !feature(k)
+                    }
+                })
+            })
+            .collect();
+        for k in cut {
+            let h = (k / SQ + 1) * HS + k % SQ + 1;
+            chunk.urban[k] = URBAN_PARK;
+            chunk.surface[k] = match (park_h[h], park_ix[h]) {
+                (2, _) => Surface::Grass,
+                (_, ix) if ix != 0 => surface_for(park_biomes[ix as usize - 1], slope[k]),
+                _ => chunk.surface[k],
+            };
+        }
+    }
+    // What it added in a park stands wholly on its lawn: one reaching over the edge (a statue over the
+    // street) stands in the middle of its square, smaller, or is a bush there (the cover kept).
+    let p = |o: &Object| [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
+    let over = |o: &Object, poly: &[[f64; 2]]| crate::park::depth(poly, p(o)) < (info(o.kind as u16).radius * o.scale) as f64 * SQUARE_FT;
+    for o in chunk.objects[set_out..].iter_mut().filter(|o| matches!(o.kind, Kind::GardenStatue | Kind::Topiary | Kind::Flowerbed | Kind::Bench)) {
+        if let Some(m) = park_meta.iter().find(|m| crate::town::geom::contains(&m.poly, p(o)))
+            && over(o, &m.poly)
+        {
+            (o.scale, o.x, o.y) = (0.85, o.x.floor() + 0.5, o.y.floor() + 0.5);
+            if over(o, &m.poly) {
+                (o.kind, o.variant) = (Kind::Bush, o.variant % 4);
+            }
+        }
+    }
     // What it added that reaches a wall, a tower or a gate's passage (a cart by it) stands in the
     // middle of its square, smaller (a crate on paving), or goes.
     for k in (set_out..chunk.objects.len()).rev() {
@@ -2063,6 +2519,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);
+    for k in 0..n {
+        if park_wet[(k / SQ + 1) * HS + k % SQ + 1] {
+            chunk.edges[k] |= 32;
+        }
+    }
     chunk
 }
 
@@ -2518,16 +2979,37 @@ impl Windows {
     }
 }
 
+/// A park as the guarantee's finishing touches need it: its outline, its benches' look, its paths
+/// (segments) and gravel rounds, and a formal garden's axis.
+struct ParkMeta {
+    poly: Vec<[f64; 2]>,
+    bench: u8,
+    segs: Vec<([f64; 2], [f64; 2])>,
+    rounds: Vec<([f64; 2], f64)>,
+    axis: Option<f32>,
+}
+
 /// `shaped`: empty for ground as generated (one stream for the chunk); else every draw is keyed
 /// by its own cell (global), and squares marked (on a plateau) get no knoll or built feature.
+/// `park`: the parks' squares (1 a common's, 2 a formal garden's; empty: none).
 #[allow(clippy::too_many_arguments)]
-fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], keep_off: &[bool]) {
+fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], keep_off: &[bool], park: &[u8]) {
     let mut chunk_rng = Pcg32::new(hash3(seed, gsx, gsy, 0xe4f), 9);
     let keyed = !shaped.is_empty();
     let cell_rng = |phase: i64, x: i64, y: i64| Pcg32::new(hash3(seed, x, y, 0xe4f ^ (phase << 16)), 9);
-    // What goes down for cover, and as a feature: the town's own, else the biome's.
-    let cover_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| if !matches!(c.urban[k], 0 | URBAN_PARK) { town_cover(c.urban[k], rng) } else { fallback_cover(biome[k], rng) };
-    let feature_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| if !matches!(c.urban[k], 0 | URBAN_PARK) { town_cover(c.urban[k], rng) } else { fallback_feature(biome[k], rng) };
+    // What goes down for cover, and as a feature: a park's own, the town's, else the biome's.
+    let in_park = |k: usize| park.get(k).copied().unwrap_or(0) & 3;
+    let mut room: Option<Vec<u8>> = None;
+    let cover_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| match in_park(k) {
+        0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
+        0 => fallback_cover(biome[k], rng),
+        p => park_cover(p & 3 == 2, biome[k], false, rng),
+    };
+    let feature_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| match in_park(k) {
+        0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
+        0 => fallback_feature(biome[k], rng),
+        p => park_cover(p & 3 == 2, biome[k], true, rng),
+    };
 
     // Elevation: every 16x16 cell spans at least two tiers.
     let mut deferred = false;
@@ -2542,9 +3024,10 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
             if cells.iter().any(|&k| dry(c, k) && c.tier[k] != t0) {
                 continue;
             }
-            // Mostly open plaza paving: left to the windows below.
+            // Mostly open plaza paving, or a park's: left to the windows below (a knoll or a feature
+            // where a window is flat, not one to every cell).
             let dry_n = cells.iter().filter(|&&k| dry(c, k)).count();
-            if cells.iter().filter(|&&k| dry(c, k) && c.urban[k] == URBAN_PLAZA).count() * 2 >= dry_n {
+            if cells.iter().filter(|&&k| dry(c, k) && (c.urban[k] == URBAN_PLAZA || in_park(k) != 0)).count() * 2 >= dry_n {
                 deferred = true;
                 continue;
             }
@@ -2558,17 +3041,31 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
             } else {
                 &mut chunk_rng
             };
-            raise(c, &cells, rng, gsx, gsy, sea, shaped);
+            raise(c, &cells, rng, gsx, gsy, sea, shaped, park, &mut room);
         }
     }
     // Plaza paving answers to the guarantee itself rather than cell by cell: every 32x32 window
     // spans two tiers. A square's own features (laid out sparingly in a pattern on a city's
     // square: `plaza_features`) usually see to that; a window still flat gets one in its middle,
     // or anywhere in it if that fails.
+    // (In a park, the window is any flat one, by lot, and its middle tried is half again as wide:
+    // knolls taken from the first window on, row by row, stood in rows. A window where nothing could
+    // be raised doesn't count against the 48.)
     let mut tried: Vec<(usize, usize)> = Vec::new();
-    for _ in 0..if deferred { 32 } else { 0 } {
-        let Some(&(wx, wy)) = flat_windows(c).iter().find(|w| tried.iter().filter(|t| *t == *w).count() < 2) else { break };
-        let span = if tried.contains(&(wx, wy)) { (0, 32) } else { (8, 16) };
+    let (mut raised, mut tries) = (0, 0);
+    while deferred && raised < 48 && tries < 96 {
+        tries += 1;
+        let open: Vec<(usize, usize)> = flat_windows(c).into_iter().filter(|w| tried.iter().filter(|t| *t == w).count() < 2).collect();
+        let Some(&first) = open.first() else { break };
+        let in_park = |w: &(usize, usize)| (0..32 * 32).filter(|&q| in_park((w.1 + q / 32) * SQ + w.0 + q % 32) != 0).count() * 2 >= 32 * 32;
+        // (By each window's own lot, keyed by where it lies: a mound shaped elsewhere moves no choice.)
+        let lot = |w: &(usize, usize)| hash3(seed, gsx + w.0 as i64, gsy + w.1 as i64, 0x9a7 + raised as i64);
+        let (wx, wy) = if in_park(&first) { *open.iter().min_by_key(|w| (lot(w), **w)).expect("a window") } else { first };
+        let span = match (tried.contains(&(wx, wy)), in_park(&(wx, wy))) {
+            (true, _) => (0, 32),
+            (false, true) => (4, 24),
+            (false, false) => (8, 16),
+        };
         tried.push((wx, wy));
         let cells: Vec<usize> = (0..span.1 * span.1).map(|q| (wy + span.0 + q / span.1) * SQ + wx + span.0 + q % span.1).collect();
         let mut own;
@@ -2578,7 +3075,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
         } else {
             &mut chunk_rng
         };
-        raise(c, &cells, rng, gsx, gsy, sea, shaped);
+        raised += raise(c, &cells, rng, gsx, gsy, sea, shaped, park, &mut room) as usize;
     }
 
 
@@ -2615,12 +3112,15 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
     // Every 32x32 window that is mostly dry holds three cover objects or buildings: a window
     // whose cells' cover lies outside it (by water, or in a corner of each cell) gets more in its
     // middle.
-    let mut tried: Vec<(usize, usize)> = Vec::new();
+    // (Only what is put down counts against the 64: a window with nowhere for anything doesn't.)
+    let mut tried = vec![0u8; (SQ - 31) * (SQ - 31)];
     let mut windows = Windows::new(c, false);
-    for _ in 0..32 {
-        let Some((wx, wy)) = windows.first(c, |w| tried.iter().filter(|t| **t == w).count() >= 2) else { break };
-        let span = if tried.contains(&(wx, wy)) { (0, 32) } else { (8, 16) };
-        tried.push((wx, wy));
+    let (mut filled, mut tries) = (0, 0);
+    while filled < 64 && tries < 4096 {
+        tries += 1;
+        let Some((wx, wy)) = windows.first(c, |w| tried[w.1 * (SQ - 31) + w.0] >= 2) else { break };
+        let span = if tried[wy * (SQ - 31) + wx] > 0 { (0, 32) } else { (8, 16) };
+        tried[wy * (SQ - 31) + wx] += 1;
         let all: Vec<usize> = (0..span.1 * span.1).map(|q| (wy + span.0 + q / span.1) * SQ + wx + span.0 + q % span.1).filter(|&k| dry(c, k) && c.building[k] == 0).collect();
         if all.is_empty() {
             continue;
@@ -2636,7 +3136,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
         } else {
             &mut chunk_rng
         };
-        place_in(c, &cells, rng, &cover_kind);
+        filled += place_in(c, &cells, rng, &cover_kind) as usize;
     }
 
     // Max gap: no dry square farther than MAX_COVER_GAP from cover (a square with no room for any
@@ -2655,18 +3155,23 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                     &mut chunk_rng
                 };
                 // On a road, put the cover on the nearest verge instead.
-                let k = if !placeable(c, k) || keep_off[k] {
+                let (k, edge) = if !placeable(c, k) || keep_off[k] {
                     match nearest_verge(c, k, keep_off) {
-                        Some(v) => v,
-                        None => {
-                            given_up.push(k);
-                            continue;
-                        }
+                        Some(v) => (v, false),
+                        // (In a park's gravel round, its nearest edge: a statue in a formal garden, a
+                        // bench on a common, off the path's middle.)
+                        None => match gravel_edge(c, k, park) {
+                            Some(v) => (v, true),
+                            None => {
+                                given_up.push(k);
+                                continue;
+                            }
+                        },
                     }
                 } else {
-                    k
+                    (k, false)
                 };
-                let kind = cover_kind(c, k, rng);
+                let kind = if edge { if in_park(k) & 3 == 2 { Kind::GardenStatue } else { Kind::Bench } } else { cover_kind(c, k, rng) };
                 if !push_at(c, kind, k, rng) {
                     given_up.push(k);
                 }
@@ -2703,12 +3208,14 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
             }
         }
         // And in every mostly dry 32x32 window (whose cells' props may lie outside it).
-        let mut tried: Vec<(usize, usize)> = Vec::new();
+        let mut tried = vec![0u8; (SQ - 31) * (SQ - 31)];
         let mut windows = Windows::new(c, true);
-        for _ in 0..32 {
-            let Some((wx, wy)) = windows.first(c, |w| tried.iter().filter(|t| **t == w).count() >= 2) else { break };
-            let span = if tried.contains(&(wx, wy)) { (0, 32) } else { (8, 16) };
-            tried.push((wx, wy));
+        let (mut filled, mut tries) = (0, 0);
+        while filled < 64 && tries < 4096 {
+            tries += 1;
+            let Some((wx, wy)) = windows.first(c, |w| tried[w.1 * (SQ - 31) + w.0] >= 2) else { break };
+            let span = if tried[wy * (SQ - 31) + wx] > 0 { (0, 32) } else { (8, 16) };
+            tried[wy * (SQ - 31) + wx] += 1;
             let all: Vec<usize> = (0..span.1 * span.1).map(|q| (wy + span.0 + q / span.1) * SQ + wx + span.0 + q % span.1).filter(|&k| dry(c, k) && c.building[k] == 0).collect();
             let cells = off_road_first(c, all, keep_off);
             if cells.is_empty() {
@@ -2721,100 +3228,88 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
             } else {
                 &mut chunk_rng
             };
-            place_in(c, &cells, rng, &feature_kind);
+            filled += place_in(c, &cells, rng, &feature_kind) as usize;
         }
     }
 }
 
 /// Something (`kind_of` the square) put down on one of `cells`, from a random one on, the first
-/// where it fits off the buildings (at most 16 tried).
-fn place_in(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, kind_of: &dyn Fn(&Chunk, usize, &mut Pcg32) -> Kind) {
+/// where it fits off the buildings (at most 16 tried). Whether it did.
+fn place_in(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, kind_of: &dyn Fn(&Chunk, usize, &mut Pcg32) -> Kind) -> bool {
     if cells.is_empty() {
-        return;
+        return false;
     }
     let start = rng.below(cells.len() as u32) as usize;
     for q in 0..cells.len().min(16) {
         let k = cells[(start + q) % cells.len()];
         let kind = kind_of(c, k, rng);
         if push_at(c, kind, k, rng) {
-            return;
+            return true;
         }
     }
+    false
 }
 
 /// Make a flat stretch (`cells`) span two tiers: a natural knoll on open ground, a round built
-/// feature on paving, at a dry spot far enough inside the chunk that it is never clipped at the
-/// chunk border (chunks are generated independently).
-/// Squares marked in `shaped` (a plateau) are left alone.
-fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool]) {
+/// feature on paving and in a formal garden (a raised planter or a basin there), at a dry spot far
+/// enough inside the chunk that it is never clipped at the chunk border (chunks are generated
+/// independently).
+/// Squares marked in `shaped` (a plateau) are left alone; `park` as `enforce` has it; `room` the
+/// lawns' room (`lawn_room`) while nothing has been raised since it was worked out.
+/// Whether anything was raised.
+#[allow(clippy::too_many_arguments)]
+fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], room: &mut Option<Vec<u8>>) -> bool {
+    let raised = raise_on(c, cells, rng, gsx, gsy, sea, shaped, park, room);
+    if raised {
+        *room = None;
+    }
+    raised
+}
+
+#[allow(clippy::too_many_arguments)]
+fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], room_cache: &mut Option<Vec<u8>>) -> bool {
     let interior = |k: usize| {
         let (x, y) = (k % SQ, k / SQ);
         x >= 7 && y >= 7 && x < SQ - 7 && y < SQ - 7 && !shaped.get(k).is_some_and(|&s| s)
     };
-    // Open country, fields and lawns take a natural knoll; streets and plazas a built feature.
-    let good: Vec<usize> = cells.iter().copied().filter(|&k| placeable(c, k) && interior(k) && matches!(c.urban[k], 0 | URBAN_FIELD | URBAN_PARK)).collect();
-    let town: Vec<usize> = cells.iter().copied().filter(|&k| placeable(c, k) && interior(k)).collect();
+    let garden = |k: usize| park.get(k).is_some_and(|&p| p & 3 == 2);
+    // A lawn's (a green's, a close's, a park's) knoll is a gentle hillock, broad where there is room,
+    // all of it on the lawn (no house or street lifted, off the water's edge and a park's pond's or
+    // stream's banks, inside the chunk).
+    let lawn = |c: &Chunk, k: usize| matches!(c.urban[k], URBAN_PARK | URBAN_PATH);
+    let room = if cells.iter().any(|&k| lawn(c, k)) { room_cache.get_or_insert_with(|| lawn_room(c, park)).clone() } else { Vec::new() };
+    // Open country, fields and lawns take a natural knoll; streets, plazas and formal gardens a
+    // built feature.
+    // (Off a park's lawn, a knoll or feature stays 8 squares away from it: its slopes would rise on
+    // the lawn and its paths. `park` bit 16.)
+    let by_park = |k: usize| park.get(k).is_some_and(|&p| p & 19 != 0);
+    let good: Vec<usize> = cells
+        .iter()
+        .copied()
+        .filter(|&k| placeable(c, k) && interior(k) && matches!(c.urban[k], 0 | URBAN_FIELD | URBAN_PARK) && !garden(k) && (c.urban[k] != URBAN_PARK || room[k] >= 7))
+        .filter(|&k| c.urban[k] == URBAN_PARK || !by_park(k))
+        .collect();
+    let town: Vec<usize> = cells.iter().copied().filter(|&k| placeable(c, k) && interior(k) && (lawn(c, k) || !by_park(k))).collect();
+    // Last resort: any dry square inside the chunk off the shaping (never one in the water: lifted,
+    // it stood up as a spike; never near the border: the knoll would stop at the seam).
+    let last: Vec<usize> = cells.iter().copied().filter(|&k| dry(c, k) && interior(k) && (lawn(c, k) || !by_park(k))).collect();
     // Paved ground (streets, plazas) gets a round built feature (a dais, a fountain, a
     // planter, a market cross) clear of stalls and props, rather than a knoll.
     if good.is_empty() && !town.is_empty() {
-        let mut taken = vec![false; SQ * SQ];
-        for o in &c.objects {
-            let r = info(o.kind as u16).radius * o.scale + 0.5;
-            for y in (o.y - r).max(0.0) as usize..=((o.y + r) as usize).min(SQ - 1) {
-                for x in (o.x - r).max(0.0) as usize..=((o.x + r) as usize).min(SQ - 1) {
-                    taken[y * SQ + x] = true;
-                }
-            }
-        }
-        let base = c.tier[town[0]];
-        let free = |k: usize| placeable(c, k) && interior(k) && matches!(c.urban[k], URBAN_STREET | URBAN_PLAZA) && !taken[k] && c.tier[k] == base;
-        // Squares (offsets) within a round of radius r squares about a square's centre.
-        let disc = |r: f64| -> Vec<(i64, i64)> {
-            let n = r.floor() as i64;
-            (-n..=n).flat_map(|dy| (-n..=n).map(move |dx| (dx, dy))).filter(|&(dx, dy)| ((dx * dx + dy * dy) as f64) <= r * r).collect()
-        };
-        let mut placed = None;
-        'size: for r in [2.3, 1.5, 1.0, 0.5] {
-            let offs = disc(r);
-            let start = rng.below(town.len() as u32) as usize;
-            for q in 0..town.len() {
-                let k = town[(start + q) % town.len()];
-                let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
-                let ok = offs.iter().all(|&(dx, dy)| {
-                    let (i, j) = (x + dx, y + dy);
-                    i >= 0 && j >= 0 && (i as usize) < SQ && (j as usize) < SQ && free(j as usize * SQ + i as usize)
-                });
-                if ok {
-                    placed = Some((k, r, offs));
-                    break 'size;
-                }
-            }
-        }
-        if let Some((k, r, offs)) = placed {
-            let top = ((base as f64 + 1.2) * TIER_FT + sea) as f32;
-            let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
-            for (dx, dy) in offs {
-                c.height[(y + dy) as usize * SQ + (x + dx) as usize] = top;
-            }
-            let kind = if r < 1.5 {
+        let free = |c: &Chunk, k: usize| placeable(c, k) && interior(k) && (matches!(c.urban[k], URBAN_STREET | URBAN_PLAZA) || (garden(k) && c.urban[k] == URBAN_PARK));
+        let kind = |k: usize, r: f64, rng: &mut Pcg32| {
+            if garden(k) {
+                if r < 1.5 || rng.next_f64() < 0.7 { PlazaFeature::Planter } else { PlazaFeature::Fountain }
+            } else if r < 1.5 {
                 if rng.next_f64() < 0.5 { PlazaFeature::Cross } else { PlazaFeature::Dais }
             } else {
                 [PlazaFeature::Dais, PlazaFeature::Fountain, PlazaFeature::Planter, PlazaFeature::Cross][rng.below(4) as usize]
-            };
-            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
-            let rv = r as f32 + 0.45;
-            let ang = rng.range(0.0, std::f64::consts::TAU) as f32;
-            c.structures.push(VectorShape { kind: ShapeKind::Dais, size: kind as u8 as f32, pts: vec![[cx, cy], [cx + rv * ang.cos(), cy + rv * ang.sin()]] });
-            if kind == PlazaFeature::Planter {
-                c.objects.push(Object { kind: Kind::TreeDeciduous, variant: rng.below(8) as u8, x: cx, y: cy, rot: 0.0, scale: 0.9, sprite: 0, turned: false });
             }
-            retier(c, sea);
-            return;
+        };
+        if built_feature(c, &town, rng, sea, &free, &kind) {
+            return true;
         }
     }
-    // Last resort: any dry square inside the chunk off the shaping (never one in the water: lifted,
-    // it stood up as a spike; never near the border: the knoll would stop at the seam).
-    let last: Vec<usize> = cells.iter().copied().filter(|&k| dry(c, k) && interior(k)).collect();
     let pool: &[usize] = if !good.is_empty() {
         &good
     } else if !town.is_empty() {
@@ -2822,17 +3317,79 @@ fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, se
     } else if !last.is_empty() {
         &last
     } else {
-        return;
+        return false;
     };
-    let spot = pool[rng.below(pool.len() as u32) as usize];
+    let mut spot = pool[rng.below(pool.len() as u32) as usize];
+    // (On a lawn with no room for a whole knoll, the square with the most room round it.)
+    if lawn(c, spot) && room[spot] < 7 {
+        let most = pool.iter().filter(|&&k| lawn(c, k)).map(|&k| room[k]).max().unwrap_or(0);
+        let best: Vec<usize> = pool.iter().copied().filter(|&k| lawn(c, k) && room[k] == most).collect();
+        spot = best[rng.below(best.len() as u32) as usize];
+        // (None but by the water's edge, a house or a road: no knoll here, the window round it tried
+        // whole instead. In a park, a knoll cut off at its edge would rise in a step there: one needs
+        // room for most of its slopes, else on its lawn a rocky outcrop with a boulder (a common's, where
+        // one fits) or a raised planter with a tree.)
+        let in_park = |k: usize| park.get(k).is_some_and(|&p| p & 3 != 0);
+        if in_park(spot) && most < 6 {
+            // (Its own park's lawn: a formal garden's beside a common's is another's.)
+            let kind = park[spot] & 3;
+            let lawns: Vec<usize> = pool.iter().copied().filter(|&k| park[k] & 3 == kind && c.urban[k] == URBAN_PARK).collect();
+            let free = |c: &Chunk, k: usize| placeable(c, k) && interior(k) && c.urban[k] == URBAN_PARK && park[k] & 3 == kind && park[k] & 4 == 0;
+            if lawns.is_empty() {
+                return false;
+            }
+            return (!garden(spot) && outcrop(c, &lawns, rng, sea, &free)) || built_feature(c, &lawns, rng, sea, &free, &|_, _, _| PlazaFeature::Planter);
+        }
+        if most < 2 {
+            return false;
+        }
+    }
     let (sx, sy) = ((spot % SQ) as f64 + 0.5, (spot / SQ) as f64 + 0.5);
-    let rise = TIER_FT * rng.range(1.2, 2.0);
+    if lawn(c, spot) {
+        // (Its reach, `r × elong × swell`, inside the room round it: 8.6 squares broad, 6 small; with
+        // no room even for that, it is kept to the lawn's own squares.)
+        let broad = room.get(spot).is_some_and(|&r| r >= 10);
+        let f = Relief {
+            cx: sx + gsx as f64,
+            cy: sy + gsy as f64,
+            r: if broad { rng.range(4.5, 6.0) } else { rng.range(3.5, 4.2) },
+            h: TIER_FT * if broad { rng.range(1.25, 1.45) } else { rng.range(1.1, 1.2) },
+            steep: rng.range(0.0, 0.1),
+            dir: {
+                let a = rng.range(0.0, std::f64::consts::TAU);
+                (libm::cos(a), libm::sin(a))
+            },
+            elong: rng.range(1.0, 1.2),
+            wobble: [(rng.range(0.0, 0.1), rng.range(0.0, 6.28)), (rng.range(0.0, 0.06), rng.range(0.0, 6.28)), (0.0, 0.0)],
+        };
+        // (A park's dry lawn rises whatever the water's level below it, as `lawn_room` has it.)
+        let water: Vec<f32> = (0..SQ * SQ)
+            .map(|k| if park.get(k).is_some_and(|&p| p & 3 != 0) && c.water_level[k] <= c.height[k] { c.water_level[k].min(c.height[k] - 1.5) } else { c.water_level[k] })
+            .collect();
+        if room.get(spot).is_some_and(|&r| r >= 7) {
+            apply_relief(&f, &mut c.height, &water, gsx, gsy, SQ);
+        } else {
+            let before = c.height.clone();
+            apply_relief(&f, &mut c.height, &water, gsx, gsy, SQ);
+            for k in 0..SQ * SQ {
+                if !matches!(c.urban[k], URBAN_PARK | URBAN_PATH) || c.building[k] != 0 || c.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 {
+                    c.height[k] = before[k];
+                }
+            }
+        }
+        c.height[spot] = c.height[spot].max(((c.tier[spot] as f64 + 1.2) * TIER_FT + sea) as f32);
+        retier(c, sea);
+        return true;
+    }
+    // (A rounded knoll, a tier and a little more: never a flat-topped mesa. Its reach, `r × elong ×
+    // swell`, under 7 squares: inside the margin it stands off the chunk's edge.)
+    let rise = TIER_FT * rng.range(1.2, 1.5);
     let f = Relief {
         cx: sx + gsx as f64,
         cy: sy + gsy as f64,
-        r: rng.range(2.5, 3.5),
+        r: rng.range(3.0, 3.6),
         h: rise,
-        steep: rng.range(0.4, 0.9),
+        steep: rng.range(0.1, 0.4),
         dir: {
             let a = rng.range(0.0, std::f64::consts::TAU);
             (libm::cos(a), libm::sin(a))
@@ -2844,6 +3401,238 @@ fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, se
     // Guarantee even if the relief was clipped: lift the spot itself a full tier.
     c.height[spot] = c.height[spot].max(((c.tier[spot] as f64 + 1.2) * TIER_FT + sea) as f32);
     retier(c, sea);
+    true
+}
+
+/// A round built feature raised a tier (`kind` by the square and its radius in squares) on one of
+/// `cands`, the largest round that fits (2.3, 1.5, 1 or half a square) on `free` squares of the first
+/// one's tier clear of what stands there; a planter with a tree in it. Whether one was.
+fn built_feature(c: &mut Chunk, cands: &[usize], rng: &mut Pcg32, sea: f64, free: &dyn Fn(&Chunk, usize) -> bool, kind: &dyn Fn(usize, f64, &mut Pcg32) -> PlazaFeature) -> bool {
+    let mut taken = vec![false; SQ * SQ];
+    for o in &c.objects {
+        let r = info(o.kind as u16).radius * o.scale + 0.5;
+        for y in (o.y - r).max(0.0) as usize..=((o.y + r) as usize).min(SQ - 1) {
+            for x in (o.x - r).max(0.0) as usize..=((o.x + r) as usize).min(SQ - 1) {
+                taken[y * SQ + x] = true;
+            }
+        }
+    }
+    let base = c.tier[cands[0]];
+    let fits = |k: usize| free(c, k) && !taken[k] && c.tier[k] == base;
+    // Squares (offsets) within a round of radius r squares about a square's centre.
+    let disc = |r: f64| -> Vec<(i64, i64)> {
+        let n = r.floor() as i64;
+        (-n..=n).flat_map(|dy| (-n..=n).map(move |dx| (dx, dy))).filter(|&(dx, dy)| ((dx * dx + dy * dy) as f64) <= r * r).collect()
+    };
+    let mut placed = None;
+    'size: for r in [2.3, 1.5, 1.0, 0.5] {
+        let offs = disc(r);
+        let start = rng.below(cands.len() as u32) as usize;
+        for q in 0..cands.len() {
+            let k = cands[(start + q) % cands.len()];
+            let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+            let ok = offs.iter().all(|&(dx, dy)| {
+                let (i, j) = (x + dx, y + dy);
+                i >= 0 && j >= 0 && (i as usize) < SQ && (j as usize) < SQ && fits(j as usize * SQ + i as usize)
+            });
+            if ok {
+                placed = Some((k, r, offs));
+                break 'size;
+            }
+        }
+    }
+    let Some((k, r, offs)) = placed else { return false };
+    let top = ((base as f64 + 1.2) * TIER_FT + sea) as f32;
+    let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+    let kind = kind(k, r, rng);
+    for &(dx, dy) in &offs {
+        c.height[(y + dy) as usize * SQ + (x + dx) as usize] = top;
+    }
+    let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+    let rv = r as f32 + 0.45;
+    let ang = rng.range(0.0, std::f64::consts::TAU);
+    c.structures.push(VectorShape { kind: ShapeKind::Dais, size: kind as u8 as f32, pts: vec![[cx, cy], [cx + rv * libm::cos(ang) as f32, cy + rv * libm::sin(ang) as f32]] });
+    if kind == PlazaFeature::Planter {
+        c.objects.push(Object { kind: Kind::TreeDeciduous, variant: rng.below(8) as u8, x: cx, y: cy, rot: 0.0, scale: 0.9, sprite: 0, turned: false });
+    }
+    retier(c, sea);
+    true
+}
+
+/// A rocky outcrop on a common's lawn, on one of `cands` where its round (1.5, 1 or half a square,
+/// eased out a square and a half more, a little out of round) lies on `free` squares a square or
+/// more off the gravel: the ground rising in a dome to a tier over its foot, bare rock within half a square of its
+/// round's edge, a boulder on its top and two or three rock piles about it; nothing else that blocks
+/// the way within two squares of its round. Away from another (12 squares) where it can be. With no
+/// room for one, a lone boulder on a knob of rock a square across. Whether one was.
+fn outcrop(c: &mut Chunk, cands: &[usize], rng: &mut Pcg32, sea: f64, free: &dyn Fn(&Chunk, usize) -> bool) -> bool {
+    let off_gravel = |c: &Chunk, k: usize| {
+        let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+        (-1..=1).all(|dy| (-1..=1).all(|dx| {
+            let (i, j) = (x + dx, y + dy);
+            !(i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64) || c.urban[j as usize * SQ + i as usize] != URBAN_PATH
+        }))
+    };
+    let lone = |c: &Chunk, k: usize| {
+        let (x, y) = ((k % SQ) as f32 + 0.5, (k / SQ) as f32 + 0.5);
+        !c.objects.iter().any(|o| o.kind == Kind::Boulder && o.scale > 1.0 && (o.x - x) * (o.x - x) + (o.y - y) * (o.y - y) < 144.0)
+    };
+    let base = c.tier[cands[0]];
+    // (Its round on one tier; out to all the dome reaches and a square more (the most its outline
+    // swells), the park's lawn: no street, square, quay, gravel, water or bank, and nothing standing
+    // where its boulder goes.)
+    let fits = |c: &Chunk, k: usize, r: f64, reach: f64| {
+        let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+        let out = reach * 1.25 + 1.0;
+        let n = crate::core::ceil(out) as i64;
+        let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+        let bare = c.objects.iter().all(|o| {
+            let gap = (r + 0.6) as f32 + info(o.kind as u16).radius * o.scale;
+            (o.x - cx) * (o.x - cx) + (o.y - cy) * (o.y - cy) >= gap * gap
+        });
+        bare && (-n..=n).all(|dy| (-n..=n).all(|dx| {
+            let (i, j) = (x + dx, y + dy);
+            let d2 = (dx * dx + dy * dy) as f64;
+            d2 > out * out
+                || (i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 && {
+                    let q = j as usize * SQ + i as usize;
+                    free(c, q) && off_gravel(c, q) && (d2 > r * r || c.tier[q] == base)
+                })
+        }))
+    };
+    // (Its boulder blocks the way: nothing else that does stands within two squares of its round, so
+    // no square is shut in between them.)
+    let clear = |c: &Chunk, k: usize, r: f64| {
+        let (x, y) = ((k % SQ) as f32 + 0.5, (k / SQ) as f32 + 0.5);
+        c.objects.iter().all(|o| {
+            let reach = (r + 2.0) as f32 + info(o.kind as u16).radius * o.scale;
+            !info(o.kind as u16).blocks_move || (o.x - x) * (o.x - x) + (o.y - y) * (o.y - y) >= reach * reach
+        })
+    };
+    let start = rng.below(cands.len() as u32) as usize;
+    let mut placed = None;
+    // (Room for its round and a broad ease round it first, apart from another; else a narrower ease.
+    // Their sizes rolled, so a row of them along a strip of lawn isn't one size over and over.)
+    let sizes = [[1.5, 1.0, 0.5], [1.0, 1.5, 0.5], [1.0, 0.5, 1.5]][rng.below(3) as usize];
+    'look: for (spaced, ease) in [(true, 1.5), (false, 1.5), (false, 0.5)] {
+        for r in sizes {
+            for q in 0..cands.len() {
+                let k = cands[(start + q) % cands.len()];
+                if (!spaced || lone(c, k)) && fits(c, k, r, r + ease) && clear(c, k, r) {
+                    placed = Some((k, r, ease));
+                    break 'look;
+                }
+            }
+        }
+    }
+    let Some((k, r, ease)) = placed else {
+        // (No room for one: a lone boulder on a knob of rock a square across, the knob hidden under it,
+        // where the lawn runs three squares round it (and no gravel a square past that) and nothing
+        // stands within a square and a half.)
+        let knob = (0..cands.len()).map(|q| cands[(start + q) % cands.len()]).find(|&k| {
+            let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+            (-3..=3).all(|dy| (-3..=3).all(|dx| {
+                let (i, j) = (x + dx, y + dy);
+                i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 && {
+                    let q = j as usize * SQ + i as usize;
+                    free(c, q) && off_gravel(c, q)
+                }
+            })) && clear(c, k, 0.0)
+                && c.objects.iter().all(|o| {
+                    let gap = 1.5 + info(o.kind as u16).radius * o.scale;
+                    (o.x - cx) * (o.x - cx) + (o.y - cy) * (o.y - cy) >= gap * gap
+                })
+        });
+        let Some(k) = knob else { return false };
+        c.height[k] = c.height[k].max(((c.tier[k] as f64 + 1.2) * TIER_FT + sea) as f32);
+        c.surface[k] = Surface::Rock;
+        let (cx, cy) = ((k % SQ) as f32 + 0.5, (k / SQ) as f32 + 0.5);
+        c.objects.push(Object { kind: Kind::Boulder, variant: rng.below(8) as u8, x: cx, y: cy, rot: rng.range(0.0, std::f64::consts::TAU) as f32, scale: rng.range(1.35, 1.5) as f32, sprite: 0, turned: false });
+        retier(c, sea);
+        return true;
+    };
+    let (x, y) = ((k % SQ) as f64 + 0.5, (k / SQ) as f64 + 0.5);
+    let top = ((base as f64 + 1.2) * TIER_FT + sea) as f32;
+    let (a, b) = (rng.range(0.0, std::f64::consts::TAU), rng.range(0.0, std::f64::consts::TAU));
+    let reach = r + ease;
+    let n = crate::core::ceil(reach * 1.25) as i64;
+    for dy in -n..=n {
+        for dx in -n..=n {
+            let (i, j) = (k as i64 % SQ as i64 + dx, k as i64 / SQ as i64 + dy);
+            if i < 0 || j < 0 || i >= SQ as i64 || j >= SQ as i64 {
+                continue;
+            }
+            let q = j as usize * SQ + i as usize;
+            let (px, py) = (i as f64 + 0.5 - x, j as f64 + 0.5 - y);
+            let d = crate::core::sqrt(px * px + py * py);
+            let th = libm::atan2(py, px);
+            let wob = 1.0 + 0.15 * libm::sin(2.0 * th + a) + 0.1 * libm::sin(3.0 * th + b);
+            let t = d / (reach * wob);
+            if t >= 1.0 || !free(c, q) {
+                continue;
+            }
+            let ease = (t * t * (3.0 - 2.0 * t)) as f32;
+            c.height[q] = c.height[q].max(top - (top - c.height[q]) * ease);
+            if d <= (r - 0.5) * wob {
+                c.surface[q] = Surface::Rock;
+            }
+        }
+    }
+    let (cx, cy) = ((x + rng.range(-0.2, 0.2)) as f32, (y + rng.range(-0.2, 0.2)) as f32);
+    c.objects.push(Object { kind: Kind::Boulder, variant: rng.below(8) as u8, x: cx, y: cy, rot: rng.range(0.0, std::f64::consts::TAU) as f32, scale: ((r + 0.6) / 0.9 * rng.range(0.9, 1.05)) as f32, sprite: 0, turned: false });
+    for m in 0..2 + rng.below(2) {
+        let t = a + std::f64::consts::TAU * (m as f64 + rng.range(0.0, 0.4)) / 3.0;
+        let d = r + rng.range(0.1, 0.6);
+        let kind = if rng.next_f64() < 0.6 { Kind::RockPile } else { Kind::RockSmall };
+        let (ox, oy) = (x + d * libm::cos(t), y + d * libm::sin(t));
+        if ox > 0.5 && oy > 0.5 && ox < SQ as f64 - 0.5 && oy < SQ as f64 - 0.5 {
+            c.objects.push(Object { kind, variant: rng.below(4) as u8, x: ox as f32, y: oy as f32, rot: rng.range(0.0, std::f64::consts::TAU) as f32, scale: rng.range(0.6, 0.9) as f32, sprite: 0, turned: false });
+        }
+    }
+    retier(c, sea);
+    true
+}
+
+/// How far (squares, by the most of either way, to 12) each square is from one a lawn's knoll
+/// mustn't touch: off the lawn and its gravel, a building, a road, ground within a foot of the water
+/// below it (in a park, the water), a park's pond's or stream's banks (`park` bit 4, as `enforce`
+/// has it), and the chunk's edge.
+fn lawn_room(c: &Chunk, park: &[u8]) -> Vec<u8> {
+    let mut d = vec![u8::MAX; SQ * SQ];
+    let mut queue = std::collections::VecDeque::new();
+    for k in 0..SQ * SQ {
+        let (x, y) = (k % SQ, k / SQ);
+        let edge = x == 0 || y == 0 || x == SQ - 1 || y == SQ - 1;
+        // (In a park only its water counts: the ground of a river's flat may stand a foot over the
+        // water's level all across it.)
+        let banks = park.get(k).is_some_and(|&p| p & 4 != 0);
+        let shore = c.water_level[k] > c.height[k] - if park.get(k).is_some_and(|&p| p & 3 != 0) { 0.0 } else { 1.0 };
+        if edge || banks || shore || !matches!(c.urban[k], URBAN_PARK | URBAN_PATH) || c.building[k] != 0 || c.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 {
+            d[k] = if edge && matches!(c.urban[k], URBAN_PARK | URBAN_PATH) { 1 } else { 0 };
+            queue.push_back(k);
+        }
+    }
+    while let Some(k) = queue.pop_front() {
+        if d[k] >= 12 {
+            continue;
+        }
+        let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= SQ as i64 || ny >= SQ as i64 {
+                    continue;
+                }
+                let n = ny as usize * SQ + nx as usize;
+                if d[n] > d[k] + 1 {
+                    d[n] = d[k] + 1;
+                    queue.push_back(n);
+                }
+            }
+        }
+    }
+    d
 }
 
 /// Round raised features on town squares (the battlemap draws each).
@@ -3149,7 +3938,7 @@ fn dress_main(pl: &crate::town::Plaza, l: &crate::town::Layout, room: &mut Room,
 
 /// The biome of the land at `p` (world ft): where the map there is the sea's or a lake's (a
 /// town on the shore), the nearest land's round it, out to about a T0 cell, else grassland.
-fn land_biome(t0: &T0, p: [f64; 2]) -> Biome {
+pub(crate) fn land_biome(t0: &T0, p: [f64; 2]) -> Biome {
     let at = |q: [f64; 2]| Biome::from_u8(t0.sample_biome(q[0], q[1], t0.biome_warp(q[0], q[1]))[0]);
     let wet = |b: Biome| matches!(b, Biome::Ocean | Biome::Lake);
     std::iter::once(p)
@@ -3176,7 +3965,7 @@ fn cross_ft() -> f64 {
 /// What grows on a town's green or close in a biome: its trees, shrubs and small plants (palms
 /// in the desert, acacias on the savanna, conifers in the north, none of a kind where the biome
 /// has none), and whether its trees are few (one or two broadleaves on the steppe's grass).
-fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static [Kind], bool) {
+pub(crate) fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static [Kind], bool) {
     use Kind::*;
     match b {
         Biome::TemperateForest => (&[TreeDeciduous], &[Bush], &[Flowers, Mushrooms], false),
@@ -3768,6 +4557,29 @@ fn plaza_features(
     }
 }
 
+/// The nearest square (within 8) at a park's gravel edge (`park` bit 8) that is off the buildings.
+fn gravel_edge(c: &Chunk, k: usize, park: &[u8]) -> Option<usize> {
+    if park.is_empty() {
+        return None;
+    }
+    let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+    for r in 0..=8i64 {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let (nx, ny) = (x + dx, y + dy);
+                if (dx.abs() != r && dy.abs() != r) || nx < 0 || ny < 0 || nx >= SQ as i64 || ny >= SQ as i64 {
+                    continue;
+                }
+                let nk = ny as usize * SQ + nx as usize;
+                if park[nk] & 8 != 0 && c.building[nk] == 0 && c.water_level[nk] <= c.height[nk] {
+                    return Some(nk);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Nearest dry, non-road square within a few squares (by ring), for roadside placements (off
 /// `keep_off`).
 fn nearest_verge(c: &Chunk, k: usize, keep_off: &[bool]) -> Option<usize> {
@@ -3796,6 +4608,21 @@ fn nearest_verge(c: &Chunk, k: usize, keep_off: &[bool]) -> Option<usize> {
         }
     }
     verge
+}
+
+/// What the guarantee puts down in a park for cover (or, with `feature`, to see): a formal garden's
+/// topiary and statues (beds); a common's shrubs and the biome's trees (wildflowers, tall grass).
+/// No benches: a bench stands by a path (the park's own, or the max gap's at a round's edge).
+fn park_cover(formal: bool, b: Biome, feature: bool, rng: &mut Pcg32) -> Kind {
+    let (trees, shrubs, _, _) = greenery(b);
+    let shrub = shrubs.first().copied().unwrap_or(Kind::Bush);
+    let opts: Vec<Kind> = match (formal, feature) {
+        (true, false) => vec![Kind::Topiary, Kind::Topiary, Kind::GardenStatue],
+        (true, true) => vec![Kind::Flowerbed],
+        (false, false) => vec![shrub, shrub, trees.first().copied().unwrap_or(Kind::TreeDeciduous)],
+        (false, true) => vec![Kind::Flowers, Kind::TallGrass],
+    };
+    opts[rng.below(opts.len() as u32) as usize]
 }
 
 /// Cover in town (streets, plazas) or on fields (a lawn takes the biome's own).
@@ -3864,13 +4691,11 @@ fn push_at(c: &mut Chunk, kind: Kind, k: usize, rng: &mut Pcg32) -> bool {
         o.y = (k / SQ) as f32 + 0.5;
         o.scale = 0.85;
         if !fits(c, &o) {
-            if !tall {
-                return false;
-            }
-            o.kind = Kind::Crate;
-            if !off_buildings(c, &o) {
-                return false;
-            }
+            // (On a park's lawn or gravel, a bush; else a crate, or in a lane one square wide, barrels.)
+            let park = matches!(c.urban[k], URBAN_PARK | URBAN_PATH);
+            let tries: &[Kind] = if park { &[Kind::Bush] } else if tall { &[Kind::Crate, Kind::Barrel] } else { &[Kind::Barrel] };
+            let Some(&small) = tries.iter().find(|&&kd| kd != kind && off_buildings(c, &Object { kind: kd, ..o })) else { return false };
+            o.kind = small;
         }
     }
     c.objects.push(o);

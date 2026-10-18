@@ -21,13 +21,13 @@ use serde_json::{Value, json};
 use super::catalog::{self, CATALOG, Ward};
 use super::geom::*;
 use super::mesh::Mesh;
-use super::{Building, Layout, PlazaKind, Structure, TownPlan};
+use super::{Building, Layout, ParkKind, PlazaKind, Structure, TownPlan};
 use crate::World;
 use crate::core::hash::{FastMap, FastSet, Fnv64};
 use crate::core::rng::{Pcg32, hash3, unit};
 use crate::t0::T0;
 use crate::t0::settle::Tier;
-use crate::world::{CornerMove, LOT_SIZES, PatchEdit, SQUARE_KINDS, SquareEdit, TOWN_WARDS, TownEdit};
+use crate::world::{CornerMove, LOT_SIZES, PARK_KINDS, PatchEdit, SQUARE_KINDS, SquareEdit, TOWN_WARDS, TownEdit};
 
 /// Ids of the buildings a town edit adds: `NEW_ID + patch × PER_PATCH + k` (k in the order its
 /// patch builds them); in a patch rolled again (`reroll` r ≥ 1), `ROLLED_ID + (patch × ROLLS +
@@ -59,6 +59,8 @@ pub(super) struct Changes {
     pub squares: BTreeMap<usize, Option<PlazaKind>>,
     /// Temple patches kept as a close round the temple, or not.
     pub close: BTreeMap<usize, bool>,
+    /// Parks laid out as a formal garden or a common, set by hand.
+    pub park: BTreeMap<usize, ParkKind>,
 }
 
 impl Changes {
@@ -120,6 +122,11 @@ fn parse_square(name: &str) -> Result<Option<PlazaKind>, String> {
     super::squares::corner_kind(name).map(Some).ok_or_else(|| format!("a square is one of {} or none", SQUARE_KINDS.join(", ")))
 }
 
+/// A park's kind by name (`PARK_KINDS`).
+fn parse_park(name: &str) -> Result<ParkKind, String> {
+    ParkKind::parse(name).ok_or_else(|| format!("a park is one of {} (or auto)", PARK_KINDS.join(", ")))
+}
+
 fn lot_factor(name: &str) -> Result<f64, String> {
     LOT_SIZES.iter().position(|l| *l == name).map(|k| LOT_FACTOR[k]).ok_or_else(|| format!("lots must be one of {}", LOT_SIZES.join(", ")))
 }
@@ -163,6 +170,9 @@ const SQUARE_THERE: &str = "a square opens at its corner";
 /// Why no square opens at a corner of a close.
 const AT_CLOSE: &str = "a temple's close is at that corner: its houses face the close, not the streets";
 
+/// Why a garden can't be set on a patch.
+const NOT_PARK: &str = "only a park's patch is laid out as a garden: give it the park ward first";
+
 /// Why a close set on a temple's patch isn't laid out.
 const NO_ROOM: &str = "no room for a close there: the temple and churchyard must fit, with houses along at least 65% of the block's streets";
 
@@ -181,6 +191,18 @@ fn built_closes(l: &Layout, mesh: &Mesh, center: P) -> Vec<usize> {
     out.sort();
     out.dedup();
     out
+}
+
+/// The patches of `mesh` (corners as they stand) that layout `l` lays out as parks, and how (by
+/// where each park's middle stands; `center`: the town's middle, world ft).
+fn built_parks(l: &Layout, mesh: &Mesh, center: P) -> BTreeMap<usize, ParkKind> {
+    l.parks
+        .iter()
+        .filter_map(|pk| {
+            let c = sub(centroid(&pk.pts), center);
+            (0..mesh.faces.len()).find(|&f| mesh.faces[f].len() >= 3 && contains(&mesh.face_pts(f), c)).map(|f| (f, pk.kind))
+        })
+        .collect()
 }
 
 /// Whether the town as generated has a temple on patch `p` (its middle on the patch as planned).
@@ -268,6 +290,13 @@ pub(super) fn changes(plan: &TownPlan, e: &TownEdit, center: P) -> (Changes, Vec
         }
         if let Some(on) = pe.close {
             ch.close.insert(p, on);
+        }
+        match pe.park.as_deref().map(parse_park) {
+            Some(Ok(k)) => {
+                ch.park.insert(p, k);
+            }
+            Some(Err(why)) => aside.push(format!("patch {p}: {why}")),
+            None => {}
         }
     }
     for se in &e.squares {
@@ -388,6 +417,8 @@ fn hash_edit(world: &World, e: &TownEdit) -> u64 {
         h.write(&p.merge_with.map_or(u32::MAX, |q| q).to_le_bytes());
         h.write(&p.reroll.to_le_bytes());
         h.write(&[p.close.map_or(2, |c| c as u8)]);
+        h.write(p.park.as_deref().unwrap_or("-").as_bytes());
+        h.write(&[0xff]);
     }
     h.write(&[e.walls.map_or(2, |w| w as u8), 0xfe]);
     for q in &e.squares {
@@ -739,6 +770,11 @@ pub fn changed_rects(a: &Layout, b: &Layout) -> Vec<[f64; 4]> {
         for p in &l.plazas {
             add(4, p.kind as u8 as f64, &p.pts);
         }
+        for p in &l.parks {
+            // (Its kind, key and sides on a street, hashed to a value a float holds exactly.)
+            let h = p.fronts.iter().fold(hash3(p.key, p.kind as u8 as i64, 0, 0x16), |h, &f| hash3(h, f as i64, 0, 0x16));
+            add(16, (h >> 12) as f64, &p.pts);
+        }
         for (tag, list) in [(2, &l.walls), (3, &l.streets), (5, &l.fields), (6, &l.districts), (7, &l.blocks), (8, &l.bridges), (9, &l.piers), (10, &l.monuments)] {
             for pts in list {
                 add(tag, 0.0, pts);
@@ -840,6 +876,7 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
     let now = super::base_layout(world, t0, index);
     let built = built_closes(&now, &mesh, center);
     let generated = built_closes(&super::generated_layout(world, t0, index), &plan.mesh, center);
+    let parks = built_parks(&now, &mesh, center);
     let (squares, closes) = super::squares::spots(&plan, &ch, &ward, &group, &|p| built.contains(&p));
     let world_pt = |p: P| round1(add(p, center));
     let listed = |p: usize| plan.mesh.faces[p].len() >= 3 && plan.face_ok[p] && !plan.wet[p] && (p < plan.n_inner || plan.ward[p].is_some() || ward[p].is_some());
@@ -900,6 +937,26 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
         }
         if close != planned {
             v["close_generated"] = json!(planned);
+        }
+        // A park: how it is laid out, and whether that was set by hand.
+        if let Some(k) = parks.get(&p) {
+            v["park"] = json!(k.name());
+        }
+        if ward[p] == Some(Ward::Park) && ch.park.contains_key(&p) {
+            v["park_by_hand"] = json!(true);
+        }
+        if ward[p] != Some(Ward::Park)
+            && plan.ward[p] != Some(Ward::Park)
+            && let Some(why) = plan.park_refused[p]
+        {
+            v["park_refused"] = json!(why);
+        }
+        // (A park's patch whose block came out too small once its streets were cut: built on as a
+        // common ward's, and said so.)
+        if ward[p] == Some(Ward::Park) && !parks.contains_key(&p) && p < plan.n_inner {
+            v["ward"] = json!(ward_name(Some(Ward::Common)));
+            v["ward_planned"] = json!(ward_name(Some(Ward::Park)));
+            v["park_refused"] = json!(super::PARK_SLIVER);
         }
         patches.push(v);
     }
@@ -1030,6 +1087,9 @@ pub struct PatchRequest {
     /// A temple's patch kept as a close round the temple: true, false or "auto".
     #[serde(default)]
     pub close: Option<Value>,
+    /// A park's patch laid out as a garden (`PARK_KINDS`) or "auto".
+    #[serde(default)]
+    pub park: Option<String>,
     #[serde(default)]
     pub as_generated: bool,
 }
@@ -1163,6 +1223,13 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             Some("auto") => pe.ward = None,
             Some(w) => {
                 let parsed = parse_ward(w).map_err(|why| format!("patch {p}: {why}"))?;
+                // (A park only where one can be laid out: mostly dry, with a way in.)
+                if parsed == Some(Ward::Park)
+                    && plan.ward[p] != Some(Ward::Park)
+                    && let Some(why) = plan.park_refused[p]
+                {
+                    return Err(format!("patch {p}: {why}"));
+                }
                 pe.ward = (parsed != plan.ward[p]).then(|| w.to_string());
             }
             None => {}
@@ -1200,6 +1267,28 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
                 pe.close = (*on != plan.closes.contains(&p)).then_some(*on);
             }
             Some(_) => return Err(format!("patch {p}: close: true, false or \"auto\"")),
+        }
+        match pr.park.as_deref() {
+            None => {}
+            Some("auto") => pe.park = None,
+            Some(k) => {
+                parse_park(k).map_err(|why| format!("patch {p}: {why}"))?;
+                let w = match pe.ward.as_deref() {
+                    Some(n) => parse_ward(n).map_err(|why| format!("patch {p}: {why}"))?,
+                    None => plan.ward[p],
+                };
+                if w != Some(Ward::Park) {
+                    return Err(format!("patch {p}: {NOT_PARK}"));
+                }
+                pe.park = Some(k.to_string());
+            }
+        }
+    }
+    // A park's garden goes with the park (a patch given another ward).
+    for pe in &mut e.patches {
+        let w = pe.ward.as_deref().map_or(Ok(plan.ward[pe.p as usize]), parse_ward);
+        if pe.park.is_some() && w != Ok(Some(Ward::Park)) {
+            pe.park = None;
         }
     }
     // A close asked for where a square opens at its corner is refused.
@@ -1324,6 +1413,7 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
         "buildings": { "before": before.buildings.len(), "after": after.buildings.len(), "added": ia.difference(&ib).count(), "taken_away": ib.difference(&ia).count() },
         "walls": { "built": ch.walls.unwrap_or(plan.walled), "towers": crate::interior::towers(&after).len(), "gates": after.gates.len() },
         "squares": after.plazas.iter().filter(|p| !matches!(p.kind, PlazaKind::Quay | PlazaKind::Yard)).map(|p| p.kind.name()).collect::<Vec<_>>(),
+        "parks": after.parks.iter().map(|p| p.kind.name()).collect::<Vec<_>>(),
         "rects": changed_rects(&before, &after).iter().map(|r| r.map(crate::core::round)).collect::<Vec<_>>(),
     });
     if !stayed.is_empty() {

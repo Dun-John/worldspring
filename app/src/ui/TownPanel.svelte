@@ -2,9 +2,10 @@
   // Edit › Streets: the town in view laid out anew by hand (the ward editor). Its patches are drawn
   // over the map; a corner dragged, or the brushes, move them (applied on release); a patch
   // picked can be given another ward, lot size, joined to a neighbour's district or laid out
-  // again, a temple's kept as a close round it; a corner where streets meet picked can be given a
-  // square; the town's walls put up or taken down. Each change is one step to undo.
-  import { LOT_SIZES, SQUARE_KINDS, TOWN_WARDS, type LotSize, type SquareKind, type TownCorner, type TownPatch, type TownPlan, type TownRequest, type TownWard } from '../gen/protocol';
+  // again, a temple's kept as a close round it, a park's laid out as a formal garden or a common; a
+  // corner where streets meet picked can be given a square; the town's walls put up or taken down.
+  // Each change is one step to undo.
+  import { LOT_SIZES, PARK_KINDS, SQUARE_KINDS, TOWN_WARDS, type LotSize, type ParkKind, type SquareKind, type TownCorner, type TownPatch, type TownPlan, type TownRequest, type TownWard } from '../gen/protocol';
   import { SQUARE_COLOURS, WARD_COLOURS, type TownMode } from '../editor/town';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
@@ -62,6 +63,11 @@
     empty: 'Open ground',
   };
   const LOT_LABEL: Record<LotSize, string> = { small: 'Small', medium: 'Medium', large: 'Large', huge: 'Huge' };
+  const PARK_LABEL: Record<ParkKind, string> = { formal: 'Formal garden', common: 'Common' };
+  const PARK_HINT: Record<ParkKind, string> = {
+    formal: 'cross walks, a fountain, hedged beds, statues and topiary',
+    common: 'winding paths, a pond, trees, a gazebo or a bandstand',
+  };
   const SQUARE_LABEL: Record<SquareKind | 'none', string> = {
     crossroads: 'Widened crossroads',
     well: 'Well square',
@@ -121,19 +127,32 @@
           Ward
           <select class="ws-input" value={selected.ward} disabled={busy} onchange={(e) => set([{ patch: selected.patch, ward: (e.currentTarget as HTMLSelectElement).value as TownWard }], 'ward')}>
             {#each TOWN_WARDS as w (w)}
-              <option value={w}>{WARD_LABEL[w]}{w === generatedWard ? ' (as generated)' : ''}</option>
+              <option value={w} disabled={w === 'park' && !!selected.park_refused} title={w === 'park' ? selected.park_refused : undefined}>{WARD_LABEL[w]}{w === generatedWard ? ' (as generated)' : ''}{w === 'park' && selected.park_refused ? ' (not here)' : ''}</option>
             {/each}
           </select>
         </label>
-        <div class="ws-field">
-          Lots
-          <div class="ws-seg" role="radiogroup" aria-label="Lots">
-            <button class:on={!selected.lots} aria-pressed={!selected.lots} disabled={busy} onclick={() => set([{ patch: selected.patch, lots: 'auto' }], 'lots')} title="As its ward has them">Auto</button>
-            {#each LOT_SIZES as l (l)}
-              <button class:on={selected.lots === l} aria-pressed={selected.lots === l} disabled={busy} onclick={() => set([{ patch: selected.patch, lots: l }], 'lots')}>{LOT_LABEL[l]}</button>
-            {/each}
+        {#if selected.ward === 'park'}
+          <div class="ws-field">
+            Laid out as
+            <div class="ws-seg" role="radiogroup" aria-label="Laid out as">
+              <button class:on={!selected.park_by_hand} aria-pressed={!selected.park_by_hand} disabled={busy} onclick={() => set([{ patch: selected.patch, park: 'auto' }], 'park')} title="As the town has it: formal by the castle and the nobles, a common elsewhere">Auto</button>
+              {#each PARK_KINDS as k (k)}
+                <button class:on={!!selected.park_by_hand && selected.park === k} aria-pressed={!!selected.park_by_hand && selected.park === k} disabled={busy} onclick={() => set([{ patch: selected.patch, park: k }], 'park')}>{PARK_LABEL[k]}</button>
+              {/each}
+            </div>
+            {#if selected.park}<span class="ws-muted">{PARK_LABEL[selected.park]}: {PARK_HINT[selected.park]}</span>{/if}
           </div>
-        </div>
+        {:else}
+          <div class="ws-field">
+            Lots
+            <div class="ws-seg" role="radiogroup" aria-label="Lots">
+              <button class:on={!selected.lots} aria-pressed={!selected.lots} disabled={busy} onclick={() => set([{ patch: selected.patch, lots: 'auto' }], 'lots')} title="As its ward has them">Auto</button>
+              {#each LOT_SIZES as l (l)}
+                <button class:on={selected.lots === l} aria-pressed={selected.lots === l} disabled={busy} onclick={() => set([{ patch: selected.patch, lots: l }], 'lots')}>{LOT_LABEL[l]}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
         <div class="row">
           {#if selected.merged_with !== undefined}
             <button class="ws-btn" disabled={busy} onclick={() => set([{ patch: selected.patch, merge_with: 'none' }], 'merge')} title="Its own district again">Leave the district</button>

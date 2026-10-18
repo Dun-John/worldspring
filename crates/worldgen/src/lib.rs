@@ -11,6 +11,7 @@ pub mod gazetteer;
 pub mod ground;
 pub mod interior;
 pub mod lod;
+pub mod park;
 pub mod payload;
 pub mod pipeline;
 pub mod town;

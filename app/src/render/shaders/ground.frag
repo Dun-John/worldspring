@@ -5,7 +5,8 @@
 // shore, lava glow, flights of steps (treads square across their streets), and the 5-ft grid.
 // Gameplay tiers stay per-square in the data.
 //
-// uData:    u8 (surface, edge bits, tier & 255, 0) per square (texelFetch).
+// uData:    u8 (surface, edge bits, tier & 255, building) per square (texelFetch); edge bit 32
+//           marks a park's pond or stream and the ground by it.
 // uHeights: f16 (h - uBase, water - uBase) per square center, with a one-square halo ring
 //           (130 × 130), so gradients at chunk edges use the neighbours' real heights.
 
@@ -25,11 +26,13 @@ uniform float uGrid;
 uniform float uPxPerSq;
 uniform vec2 uNoiseOff;
 uniform float uSea;
+// Whether the chunk has a park's gravel (else its smoothing is skipped).
+uniform float uGravel;
 
 const float N = 128.0;
 const vec3 INK = vec3(0.12, 0.10, 0.08);
 
-const vec3 SURF[20] = vec3[20](
+const vec3 SURF[21] = vec3[21](
     vec3(0.40, 0.54, 0.25), // grass
     vec3(0.31, 0.35, 0.19), // forest floor
     vec3(0.64, 0.60, 0.36), // dry grass
@@ -49,7 +52,8 @@ const vec3 SURF[20] = vec3[20](
     vec3(0.55, 0.40, 0.25), // planks
     vec3(0.58, 0.50, 0.38), // under a building (roofs are drawn as vectors)
     vec3(0.66, 0.62, 0.36), // field
-    vec3(0.62, 0.59, 0.53)  // stairs (dressed stone)
+    vec3(0.62, 0.59, 0.53), // stairs (dressed stone)
+    vec3(0.76, 0.71, 0.60)  // gravel (a park's paths)
 );
 
 
@@ -136,6 +140,11 @@ vec3 surfaceColor(int s, vec2 w) {
         vec2 g = fract(c) - 0.5;
         float slab = smoothstep(0.5, 0.44, max(abs(g.x), abs(g.y)));
         col = mix(col * 0.8, col * (0.94 + 0.12 * hash21(floor(c))), slab);
+    } else if (s == 20) {
+        // Gravel: fine pebbles, light and dark, a little raked.
+        float peb = hash21(floor(w * 9.0));
+        col = mix(col, col * (0.86 + 0.28 * peb), 0.55);
+        col = mix(col, col * 0.84, smoothstep(0.6, 0.85, vnoise(w * 1.6)) * 0.35);
     } else if (s == 18) {
         // Crop rows.
         float row = abs(fract(w.y * 0.9 + 0.2 * vnoise(w * 0.3)) - 0.5);
@@ -232,18 +241,66 @@ void main() {
         // In town the ground beside a road is the paved street, not dirt.
         surf = natural == 9 && paved ? 14 : natural;
     }
+    // A park's gravel paths: smooth edges from the squares' bilinear coverage (as a road's), not
+    // their steps; beside one, the ground of a neighbouring square that isn't gravel.
+    float gravel = -1.0;
+    if (!onRoad && uGravel > 0.5) {
+        vec2 g = q - 0.5 + warp * 0.3;
+        ivec2 gi = ivec2(floor(g));
+        int s00 = int(dataAt(gi).r + 0.5);
+        int s10 = int(dataAt(gi + ivec2(1, 0)).r + 0.5);
+        int s01 = int(dataAt(gi + ivec2(0, 1)).r + 0.5);
+        int s11 = int(dataAt(gi + ivec2(1, 1)).r + 0.5);
+        vec4 on = vec4(s00 == 20, s10 == 20, s01 == 20, s11 == 20);
+        if (dot(on, vec4(1.0)) > 0.0) {
+            // (A tent 1.5 squares round over the 4 x 4 squares about the point: a slanting path's
+            // steps smooth out.)
+            float sum = 0.0;
+            float wsum = 0.0;
+            for (int j = -1; j <= 2; j++) {
+                for (int i = -1; i <= 2; i++) {
+                    vec2 dd = g - (vec2(gi + ivec2(i, j)) + 0.5) + 0.5;
+                    float wt = max(0.0, 1.5 - abs(dd.x)) * max(0.0, 1.5 - abs(dd.y));
+                    sum += wt * float(int(dataAt(gi + ivec2(i, j)).r + 0.5) == 20);
+                    wsum += wt;
+                }
+            }
+            gravel = sum / max(wsum, 1e-3) + (vnoise(w * 2.7) - 0.5) * 0.14;
+            if (gravel > 0.5) {
+                surf = 20;
+            } else if (surf == 20) {
+                surf = s00 != 20 ? s00 : (s10 != 20 ? s10 : (s01 != 20 ? s01 : s11));
+            }
+        }
+    }
     vec2 f = fract(q);
     vec4 d = dataAt(sq);
     float own = d.b;
-
     vec2 hw = heightsAt(q);
     float h = hw.x;
     float depth = hw.y - h;
+    // By a park's pond or stream (edge bit 32) the ground follows the water's edge, not the squares:
+    // dry ground the warped lookup gave the water's bed takes the land's of its own square or one
+    // round it (not a path's gravel, drawn smooth above); water it gave land takes the bed.
+    if ((int(d.g + 0.5) & 32) != 0) {
+        bool bed = surf == 10 || surf == 11;
+        if (depth <= 0.0 && bed) {
+            int land = int(d.r + 0.5);
+            for (int k = 0; k < 9 && (land == 10 || land == 11 || land == 20); k++) {
+                land = int(dataAt(sq + ivec2(k % 3 - 1, k / 3 - 1)).r + 0.5);
+            }
+            surf = land == 10 || land == 11 || land == 20 ? 0 : land;
+        } else if (depth > 0.0 && !bed) {
+            surf = 10;
+        }
+    }
 
     vec3 col = surfaceColor(surf, w);
-    // Worn verge: the road edge darkens slightly into the surrounding ground.
+    // Worn verge: the road edge darkens slightly into the surrounding ground (a gravel path's
+    // edge, a little).
     float verge = smoothstep(0.3, 0.5, cov) * (1.0 - smoothstep(0.5, 0.62, cov));
     col = mix(col, col * 0.72, verge * 0.6);
+    if (gravel > 0.0) col = mix(col, col * 0.8, smoothstep(0.3, 0.5, gravel) * (1.0 - smoothstep(0.5, 0.64, gravel)) * 0.7);
 
     // Hillshade from square heights (NW light).
     float hx = heightsAt(q + vec2(0.5, 0.0)).x - heightsAt(q - vec2(0.5, 0.0)).x;

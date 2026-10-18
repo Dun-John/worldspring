@@ -246,7 +246,7 @@ export interface Plateau {
 export interface TownEdit {
   at: [number, number];
   corners?: { v: number; from: [number, number]; to: [number, number] }[];
-  patches?: { p: number; at: [number, number]; ward?: string; lots?: string; merge_with?: number; reroll?: number; close?: boolean }[];
+  patches?: { p: number; at: [number, number]; ward?: string; lots?: string; merge_with?: number; reroll?: number; close?: boolean; park?: string }[];
   walls?: boolean;
   squares?: { v: number; at: [number, number]; kind: string }[];
 }
@@ -260,6 +260,9 @@ export type LotSize = (typeof LOT_SIZES)[number];
 /** Squares a corner where streets meet can be given (`worldgen::world::SQUARE_KINDS`). */
 export const SQUARE_KINDS = ['crossroads', 'well', 'fountain', 'green'] as const;
 export type SquareKind = (typeof SQUARE_KINDS)[number];
+/** How a park can be laid out (`worldgen::world::PARK_KINDS`). */
+export const PARK_KINDS = ['formal', 'common'] as const;
+export type ParkKind = (typeof PARK_KINDS)[number];
 
 /** A patch of a town as the ward editor sees it (`town::wards::plan_json`): its corners (plan
  * corner ids), ward as it is now (and as generated, if set by hand), district, neighbours. */
@@ -284,6 +287,13 @@ export interface TownPatch {
   close_generated?: boolean;
   /** Why a close can't be set on this temple's patch. */
   close_refused?: string;
+  /** A park's patch: how it is laid out, and whether that was set by hand. */
+  park?: ParkKind;
+  park_by_hand?: boolean;
+  /** Why the patch can't be made a park (too wet, no street to it, outside the town, too small, a cliff). */
+  park_refused?: string;
+  /** A park's patch built on as another ward (its block too small once its streets were cut). */
+  ward_planned?: TownWard;
 }
 
 /** A corner of a town's patches: where it stands now (world ft), where it was planned (if moved). */
@@ -325,7 +335,7 @@ export interface TownRequest {
   moves?: { corner: number; to?: [number, number]; by?: [number, number]; as_generated?: boolean }[];
   equalize?: number[];
   relax?: { at: [number, number]; radius_ft: number; amount?: number };
-  patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; close?: boolean | 'auto'; as_generated?: boolean }[];
+  patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; close?: boolean | 'auto'; park?: ParkKind | 'auto'; as_generated?: boolean }[];
   squares?: { corner: number; kind: SquareKind | 'none' | 'auto' }[];
   walls?: boolean | 'auto';
   reset?: 'all' | 'corners' | 'patches' | 'squares';
@@ -336,8 +346,9 @@ export interface TownReport {
   corners: { asked: number; moved: number; part_way: number; stayed: number };
   buildings: { before: number; after: number; added: number; taken_away: number };
   walls: { built: boolean; towers: number; gates: number };
-  /** Its open spaces' kinds (quays aside). */
+  /** Its open spaces' kinds (quays aside), and its parks'. */
   squares: string[];
+  parks: ParkKind[];
   /** The rectangles (x0, y0, x1, y1 ft) to draw again. */
   rects: Rect[];
   functions_lost?: string[];
@@ -786,7 +797,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -823,6 +834,15 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         rgb = [0.72, 0.62, 0.47];
         a = 0.7;
       } else if (kind === 9) rgb = [0.86, 0.8, 0.66];
+      // A park's water (a pond fanned from its middle, a stream; not outlined), gravel, parterres
+      // (hedged beds), trees' crowns and flowerbeds.
+      else if (kind === 11) rgb = [0.42, 0.6, 0.64];
+      else if (kind === 12) rgb = [0.85, 0.81, 0.69];
+      else if (kind === 13) {
+        rgb = [0.42, 0.55, 0.33];
+        a = 0.7;
+      } else if (kind === 14) rgb = [0.33, 0.46, 0.26];
+      else if (kind === 15) rgb = [0.74, 0.5, 0.46];
       else {
         const base = WARD_RGB[ward] ?? WARD_RGB[6];
         const shade = 0.94 + 0.12 * (((i * 2654435761) >>> 0) / 4294967296);

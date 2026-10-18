@@ -142,6 +142,7 @@ const SURFACES = [
   'building',
   'field (crops)',
   'stairs',
+  'gravel path',
 ];
 /** The most flights of steps' axes one chunk's ground draws treads for (`ground.frag`; `battlemap::MAX_STAIR_AXES`). */
 const STAIR_AXES = 64;
@@ -717,6 +718,8 @@ export class BattlemapLayer {
       uSea: { value: c.sea, type: 'f32' },
       uStairs: { value: stairs, type: 'vec4<f32>', size: STAIR_AXES * 2 },
       uStairN: { value: nStairs, type: 'f32' },
+      // (Gravel here, or park ground by the edge, whose neighbour's gravel the halo may hold.)
+      uGravel: { value: c.surface.includes(20) || parkEdge(c.raised) ? 1 : 0, type: 'f32' },
     });
     const ground = new Mesh({
       geometry: this.quad,
@@ -946,6 +949,19 @@ function sharedAtlas(renderer: Renderer, catalog: KindInfo[]): Atlas {
   const key = catalog.map((k) => k.name).join('|');
   if (!atlasCache || atlasCache.key !== key || atlasCache.renderer !== renderer) atlasCache = { key, renderer, atlas: buildAtlas(renderer, catalog) };
   return atlasCache.atlas;
+}
+
+/** Whether a park's ground (`URBAN_PARK`, `URBAN_PATH`) lies along a chunk's edge (`raised`: per square, the
+ * lift and the urban kind). */
+function parkEdge(raised: Uint8Array | null): boolean {
+  if (!raised) return false;
+  for (let i = 0; i < SQ; i++) {
+    for (const k of [i, (SQ - 1) * SQ + i, i * SQ, i * SQ + SQ - 1]) {
+      const u = raised[k * 2 + 1];
+      if (u === 11 || u === 12) return true;
+    }
+  }
+  return false;
 }
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined

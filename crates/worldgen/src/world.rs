@@ -511,7 +511,8 @@ pub struct CornerMove {
 
 /// A patch (`p`, the plan's face; `at` its middle as planned) set by hand: its ward
 /// (`TOWN_WARDS`), lot size (`LOT_SIZES`), merged into a neighbour's district, rolled again
-/// (`reroll` counts the rolls), a temple's patch kept as a close round the temple or not.
+/// (`reroll` counts the rolls), a temple's patch kept as a close round the temple or not, a
+/// park's laid out as a formal garden or a common (`PARK_KINDS`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct PatchEdit {
     pub p: u32,
@@ -526,6 +527,8 @@ pub struct PatchEdit {
     pub reroll: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub park: Option<String>,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -541,6 +544,9 @@ pub const LOT_SIZES: [&str; 4] = ["small", "medium", "large", "huge"];
 /// Squares a corner where streets meet can be given by hand (`town::squares::CORNER_KINDS`).
 pub const SQUARE_KINDS: [&str; 4] = ["crossroads", "well", "fountain", "green"];
 
+/// How a park can be laid out by hand (`town::ParkKind`).
+pub const PARK_KINDS: [&str; 2] = ["formal", "common"];
+
 impl TownEdit {
     /// How far (ft) a town, corner or patch may stand from where its edit says it was planned.
     pub const SAME_AT_FT: f64 = 1.0;
@@ -553,7 +559,7 @@ impl TownEdit {
 
 impl PatchEdit {
     pub fn is_noop(&self) -> bool {
-        self.ward.is_none() && self.lots.is_none() && self.merge_with.is_none() && self.reroll == 0 && self.close.is_none()
+        self.ward.is_none() && self.lots.is_none() && self.merge_with.is_none() && self.reroll == 0 && self.close.is_none() && self.park.is_none()
     }
 }
 
