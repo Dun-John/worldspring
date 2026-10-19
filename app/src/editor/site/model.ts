@@ -317,6 +317,8 @@ export function splitRooms(d: SiteDesign, li: number, walls: Edge[]): number[] {
       }
       if (sizes.length < 2) continue;
       const keep = sizes.indexOf(Math.max(...sizes));
+      // (A room cut in two keeps no shape.)
+      delete lv.rooms[r].shape;
       const index = sizes.map((_, p) => (p === keep ? r : (lv.rooms.push({ kind: lv.rooms[r].kind, raise_ft: lv.rooms[r].raise_ft }), lv.rooms.length - 1)));
       for (const p of index) if (p !== r) made.push(p);
       for (let k = 0; k < nx * ny; k++) if (piece[k] >= 0) cells[k] = index[piece[k]];

@@ -19,9 +19,11 @@ fn main() {
         let t = std::time::Instant::now();
         let it = interior::generate(&world, &t0, si, bi).unwrap();
         let ms = t.elapsed().as_secs_f64() * 1e3;
-        println!("== {} {:?} ({}x{} squares, {} levels, {ms:.2} ms)", it.function, it.name, it.nx, it.ny, it.levels.len());
+        let outline = if it.outlines.is_empty() { String::new() } else { format!(", drawn inside a {}-sided outline", it.outlines.iter().map(|o| o.len().to_string()).collect::<Vec<_>>().join("+")) };
+        println!("== {} {:?} ({}x{} squares, {} levels{outline}, {ms:.2} ms)", it.function, it.name, it.nx, it.ny, it.levels.len());
         for lv in &it.levels {
-            println!("-- {} (z {}): {}", lv.name, lv.z, lv.rooms.iter().map(|r| format!("{}={}", r.kind, r.squares)).collect::<Vec<_>>().join(", "));
+            let room = |r: &interior::Room| format!("{}{}={}", r.kind, interior::shape::name(r.shape).map(|s| format!(" ({s})")).unwrap_or_default(), r.squares);
+            println!("-- {} (z {}): {}", lv.name, lv.z, lv.rooms.iter().map(room).collect::<Vec<_>>().join(", "));
             let mut grid: Vec<Vec<char>> = (0..it.ny).map(|j| (0..it.nx).map(|i| {
                 let c = lv.cells[j * it.nx + i];
                 if c < 0 { ' ' } else { (b'a' + (c as u8 % 26)) as char }

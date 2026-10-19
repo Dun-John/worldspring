@@ -9,7 +9,14 @@
 // uField: 4 texels per square, linear: r floor (blurred mask), g liquid (blurred), b raised
 //         floor (blurred, raise / 10 ft). Built sites (uSquare): nearest, the floor unblurred;
 //         their walls are measured from the squares instead, keeping square corners.
-// uCells: one texel per square, nearest: r material, b variation, a floor.
+// uCells: one texel per square, nearest: r material, g shape (0 none, a shaped room's slot + 1
+//         in uShapes, 255 a cavern breaking in), b variation, a floor.
+// uShapes: shaped rooms (round, octagon, apses, chamfered: `roomShapes.ts`), one column each:
+//         row 0 the box round its squares (x0, y0, x1, y1), row 1 shape, material, variation.
+//         Their squares are left out of uField and the squares' walls; the floor is drawn from
+//         the shape near them (it may stand up to half a square off the squares).
+// uCave: caverns breaking into a built level, linear: their floor (and the squares opening into
+//         them) blurred as a cave's, drawn with rough rock walls.
 
 in vec2 vUV;
 in vec2 vLocal;
@@ -19,6 +26,8 @@ out vec4 finalColor;
 uniform sampler2D uNoise;
 uniform sampler2D uField;
 uniform sampler2D uCells;
+uniform sampler2D uShapes;
+uniform sampler2D uCave;
 
 uniform vec2 uN;
 uniform vec2 uLight;
@@ -31,6 +40,9 @@ uniform float uGridAlpha;
 // Where this grid sits among its neighbours (squares; a city's sewer sections, so their
 // textures run on across the edges), else 0.
 uniform vec2 uOrigin;
+// Shaped rooms on the level (0: none), caverns breaking in (0 or 1).
+uniform float uShapeCount;
+uniform float uCaverns;
 uniform vec4 uColor;
 
 const vec3 INK = vec3(0.10, 0.085, 0.07);
@@ -73,13 +85,20 @@ vec3 rockMass(vec2 p, float depth) {
     return c * mix(1.0, 0.5, smoothstep(0.0, 2.5, depth));
 }
 
+// A square drawn from the squares: no shape on it (0, or 254: one next to it).
+bool fromSquares(float g) {
+    float c = g * 255.0;
+    return c < 0.5 || abs(c - 254.0) < 0.5;
+}
+
 // Built sites: signed distance (squares, + on the floor) to the nearest square of the other
 // kind (rock or floor; off the grid is rock), measured square-wise (the larger of the x and
 // y gaps), so the wall, its coping and its shadow all keep square corners; and the way from
 // the rock toward the floor. Exact within two squares (deeper rock reads as two).
 void boxField(vec2 q, out float d, out vec2 n) {
     ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
-    bool fl = texelFetch(uCells, s, 0).a > 0.5;
+    vec4 own = texelFetch(uCells, s, 0);
+    bool fl = own.a > 0.5 && fromSquares(own.g);
     float best = 2.0;
     vec2 way = vec2(0.0);
     for (int j = -2; j <= 2; j++) {
@@ -88,7 +107,9 @@ void boxField(vec2 q, out float d, out vec2 n) {
             if (max(abs(i), abs(j)) == 2 && best < 1.0) continue;
             ivec2 c = s + ivec2(i, j);
             bool inside = all(greaterThanEqual(c, ivec2(0))) && all(lessThan(c, ivec2(uN)));
-            bool f = inside && texelFetch(uCells, c, 0).a > 0.5;
+            // (A shaped room's squares are drawn from its shape.)
+            vec4 t = inside ? texelFetch(uCells, c, 0) : vec4(0.0);
+            bool f = t.a > 0.5 && fromSquares(t.g);
             if (f == fl) continue;
             vec2 lo = vec2(c);
             vec2 gap = max(max(lo - q, q - lo - 1.0), 0.0);
@@ -101,6 +122,59 @@ void boxField(vec2 q, out float d, out vec2 n) {
     }
     d = fl ? best : -best;
     n = length(way) > 1e-5 ? normalize(fl ? way : -way) : vec2(0.0);
+}
+
+// Shapes: signed distance (squares, + inside) to a box, an ellipse (about its middle; close to
+// the edge, as the walls need), an apse (its round end at low y), and to each shape in its box.
+float boxIn(vec2 p, vec2 lo, vec2 hi) {
+    vec2 d = min(p - lo, hi - p);
+    if (d.x >= 0.0 && d.y >= 0.0) return min(d.x, d.y);
+    return -length(max(-d, 0.0));
+}
+
+float ellipseIn(vec2 p, vec2 r) {
+    float k0 = length(p / r);
+    float k1 = length(p / (r * r));
+    return k0 < 1e-4 ? min(r.x, r.y) : (1.0 - k0) * k0 / k1;
+}
+
+float apseIn(vec2 p, vec2 lo, vec2 hi) {
+    vec2 sz = hi - lo;
+    float r = min(sz.x * 0.5, sz.y - 1.0);
+    if (r < 1.0) return boxIn(p, lo, hi);
+    float rect = boxIn(p, vec2(lo.x, lo.y + r), hi);
+    float end = min(ellipseIn(p - vec2(lo.x + sz.x * 0.5, lo.y + r), vec2(sz.x * 0.5, r)), lo.y + r - p.y);
+    return max(rect, end);
+}
+
+// 1 round, 2 octagon, 3-6 apse north, east, south, west, 7 chamfered (`interior/shape.rs`).
+float shapeIn(int code, vec2 p, vec2 lo, vec2 hi) {
+    vec2 c = 0.5 * (lo + hi);
+    vec2 hs = 0.5 * (hi - lo);
+    if (code == 1) {
+        float r = min(hs.x, hs.y);
+        vec2 e = abs(p - c) - (hs - r);
+        return -(length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - r);
+    }
+    if (code == 2 || code == 7) {
+        float side = 2.0 * min(hs.x, hs.y);
+        float cut = code == 2 ? 0.29289322 * side : (side >= 3.0 ? 0.75 : 0.5);
+        vec2 d = abs(p - c);
+        return min(boxIn(p, lo, hi), (hs.x + hs.y - cut - d.x - d.y) * 0.70710678);
+    }
+    if (code == 3) return apseIn(p, lo, hi);
+    if (code == 5) return apseIn(vec2(p.x, -p.y), vec2(lo.x, -hi.y), vec2(hi.x, -lo.y));
+    if (code == 6) return apseIn(p.yx, lo.yx, hi.yx);
+    if (code == 4) return apseIn(vec2(p.y, -p.x), vec2(lo.y, -hi.x), vec2(hi.y, -lo.x));
+    return boxIn(p, lo, hi);
+}
+
+// Shaped room `slot` (1-based): its box and look (shape, material, variation).
+void shapeSlot(int slot, out vec2 lo, out vec2 hi, out vec3 look) {
+    vec4 b = floor(texelFetch(uShapes, ivec2(slot - 1, 0), 0) * 255.0 + 0.5);
+    lo = b.xy;
+    hi = b.zw;
+    look = floor(texelFetch(uShapes, ivec2(slot - 1, 1), 0).rgb * 255.0 + 0.5);
 }
 
 vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
@@ -187,29 +261,97 @@ void main() {
         d += uRough * ((fbm(p * 0.8 + 3.0) - 0.5) * 0.75 + (vnoise(p * 3.7) - 0.5) * 0.25 + (vnoise(p * 9.0) - 0.5) * 0.08);
         n = length(grad) > 1e-4 ? normalize(grad) : vec2(0.0);
     }
+    // Near shaped rooms and caverns: the floor drawn from them too (the farther in wins).
+    int won = 0;
+    vec3 look = vec3(0.0);
+    float rough = uRough;
+    // (Where the floor's edge casts its shadow from: the floor there.)
+    vec2 qs = q + uLight * 0.45;
+    float lit = field(qs).r;
+    ivec2 s0 = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
+    // (Only on a shape's squares or those next to one: uCells.g is 0 elsewhere.)
+    if ((uShapeCount > 0.5 || uCaverns > 0.5) && texelFetch(uCells, s0, 0).g > 0.5 / 255.0) {
+        // The shapes round (four at most), a cavern among them.
+        int slots[4] = int[4](0, 0, 0, 0);
+        int found = 0;
+        bool cave = false;
+        for (int j = -1; j <= 1; j++) {
+            for (int i = -1; i <= 1; i++) {
+                ivec2 c = s0 + ivec2(i, j);
+                if (any(lessThan(c, ivec2(0))) || any(greaterThanEqual(c, ivec2(uN)))) continue;
+                int g = int(texelFetch(uCells, c, 0).g * 255.0 + 0.5);
+                if (g == 255) cave = true;
+                if (g == 0 || g >= 254 || found == 4) continue;
+                bool seen = false;
+                for (int m = 0; m < 4; m++) seen = seen || (m < found && slots[m] == g);
+                if (!seen) {
+                    slots[found] = g;
+                    found++;
+                }
+            }
+        }
+        for (int k = 0; k < 4; k++) {
+            if (k >= found) break;
+            int slot = slots[k];
+            vec2 lo;
+            vec2 hi;
+            vec3 lk;
+            shapeSlot(slot, lo, hi, lk);
+            int code = int(lk.x);
+            float ds = shapeIn(code, q, lo, hi);
+            lit = max(lit, smoothstep(-0.05, 0.05, shapeIn(code, qs, lo, hi)));
+            if (ds > d) {
+                float e = 0.03;
+                vec2 gs = vec2(shapeIn(code, q + vec2(e, 0.0), lo, hi) - shapeIn(code, q - vec2(e, 0.0), lo, hi), shapeIn(code, q + vec2(0.0, e), lo, hi) - shapeIn(code, q - vec2(0.0, e), lo, hi));
+                d = ds;
+                n = length(gs) > 1e-6 ? normalize(gs) : vec2(0.0);
+                won = slot;
+                look = lk;
+            }
+        }
+        if (cave) {
+            float e = 0.25;
+            float c0 = texture(uCave, q / uN).r;
+            vec2 gc = vec2(texture(uCave, (q + vec2(e, 0.0)) / uN).r - texture(uCave, (q - vec2(e, 0.0)) / uN).r, texture(uCave, (q + vec2(0.0, e)) / uN).r - texture(uCave, (q - vec2(0.0, e)) / uN).r) / (2.0 * e);
+            float dc = (c0 - 0.5) / max(length(gc), 0.35);
+            dc += (fbm(p * 0.8 + 3.0) - 0.5) * 0.75 + (vnoise(p * 3.7) - 0.5) * 0.25 + (vnoise(p * 9.0) - 0.5) * 0.08;
+            lit = max(lit, smoothstep(0.35, 0.6, texture(uCave, qs / uN).r));
+            if (dc > d) {
+                d = dc;
+                n = length(gc) > 1e-4 ? normalize(gc) : vec2(0.0);
+                won = 255;
+                rough = 1.0;
+            }
+        }
+    }
     float aa = max(fwidth(d), 1e-4);
 
     vec3 col;
     float alpha;
-    float rim = mix(0.16, 0.3, uRough);
+    float rim = mix(0.16, 0.3, rough);
     if (d < 0.0) {
         // Rock: the wall's top edge lit from the NW, then the rock mass.
         vec3 r = rockMass(p, -d);
-        float lit = clamp(0.55 + 0.6 * dot(n, uLight), 0.25, 1.15);
-        vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * lit;
-        if (uRough < 0.2) {
+        float face = clamp(0.55 + 0.6 * dot(n, uLight), 0.25, 1.15);
+        vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * face;
+        if (rough < 0.2) {
             // Dressed stone coping on built walls.
             vec2 b = q * vec2(1.6, 1.6);
             vec2 g = fract(b + 0.5 * mod(floor(b.yx), 2.0));
             float joint = 1.0 - smoothstep(0.0, 0.06, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
-            lip = mix(vec3(0.56, 0.53, 0.48) * (0.85 + 0.25 * hash21(floor(b))) * lit, INK, joint * 0.5);
+            lip = mix(vec3(0.56, 0.53, 0.48) * (0.85 + 0.25 * hash21(floor(b))) * face, INK, joint * 0.5);
         }
         col = mix(lip, r, smoothstep(-rim, -rim - 0.12, d));
         alpha = mix(1.0, 0.9, smoothstep(-rim, -rim - 0.5, d));
     } else {
         ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
         vec4 cell = texelFetch(uCells, s, 0) * 255.0;
-        if (cell.a < 0.5) {
+        if (won > 0 && won < 255) {
+            // A shaped room's floor, wherever its shape reaches.
+            cell = vec4(look.y, 0.0, look.z, 255.0);
+        } else if (won == 255) {
+            cell = vec4(0.0, 255.0, cell.b, 255.0);
+        } else if (cell.a < 0.5) {
             // A smoothed edge reaching into a rock square: the floor next to it.
             cell = texelFetch(uCells, clamp(s + ivec2(round(n)), ivec2(0), ivec2(uN) - 1), 0) * 255.0;
         }
@@ -231,7 +373,7 @@ void main() {
                 col = mix(col, col * 0.55, (1.0 - smoothstep(pr, pr + 0.07, length(dv - uLight * 0.05))) * 0.6);
                 col = mix(col, col * (1.05 + 0.25 * shade), stone);
             }
-            float foot = (1.0 - smoothstep(0.05, 0.6, d)) * uRough;
+            float foot = (1.0 - smoothstep(0.05, 0.6, d)) * rough;
             float rub = smoothstep(0.45, 0.75, vnoise(p * 4.5 + 13.0));
             col = mix(col, mix(col * 0.6, col * 1.2, vnoise(p * 9.0)), foot * rub * 0.8);
         }
@@ -244,7 +386,7 @@ void main() {
         col *= mix(1.0, 0.72, smoothstep(0.1, 0.3, field(q + uLight * 0.35).b - t));
         // Against the walls: ambient occlusion and the shadow cast from the NW.
         col *= 0.6 + 0.4 * smoothstep(0.0, 0.75, d);
-        col *= mix(0.66, 1.0, smoothstep(0.35, 0.6, field(q + uLight * 0.45).r));
+        col *= mix(0.66, 1.0, smoothstep(0.35, 0.6, lit));
         // Liquid down the channel.
         float l = here.g;
         if (uLiquid > 0.5) {

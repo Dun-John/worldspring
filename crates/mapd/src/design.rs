@@ -12,7 +12,7 @@ use crate::tools::{arg_str, schema, text};
 
 const BUILDING_FORMAT: &str = "A building's plan (b:<layout>:<id>, any roofed building): a header 'building · <w> x <h> squares · <n> levels · stairs x,y wxh · cellars <n>' (the stair block, the same squares on every level it reaches: move or resize it here; cellars: how many levels below ground, 0 to 3, each new one a storeroom under the whole building that the stairs reach, the deepest filled in first; a 'level -2' block digs down to it too), then its levels by storey, 'level -2: Lower cellar', 'level -1: Cellar', 'level 0: Ground floor', 'level 1: …' (an open roof and a keep's tower tops are the storeys above), each with 'rooms:', 'grid:' ('.' is outside the walls), 'doors: x,y e|s|w|n [secret|front|back]' (on the edge of square x,y east, south, west or north; one front door on the ground floor, onto the street side; back doors to the outside on the ground floor only; 'auto' keeps the doors to the outside and adds inner doors wherever a room is shut off) and 'items: <furniture> x,y [wxh] [back n|e|s|w] [variant 0-3]' (back: the side it stands against, for furniture that faces one side such as shelves, beds, hearths, altars, left out to let it find its wall; variant: one of its looks, left out to pick by position; furniture kinds: bed, table, chair, bar, hearth, shelf, bookcase, chest, barrel, crate, workbench, spiral_stair, …; indoor props: sacks, rubble, timber, bones, skeleton, skulls, urn, coffin, effigy, brazier, candles, sconce, lantern, banner, chains, cobweb, bedroll, tools, powder, hoard, offering, glyph, dais, well, fountain, iron_maiden, stocks, rat_nest, trap; an uploaded sprite as s:<asset id>, with the rules list_sprites gives it). The levels above ground follow the building's storeys: they can't be added or taken away here (change its storeys with update_building, which fits a saved design to them: the floors it keeps as designed, new ones as generated). A building with a trapdoor to the sewers or stairs down to a keep's deep dungeons keeps at least one cellar: those ways are on its deepest. Names, notes and NPCs on its levels follow them when cellars are dug or filled in. Walls are where rooms meet: a room split in two by a line of squares of another room, or two rooms made one, changes the walls. A building's design is set aside (the generated interior stands) when its footprint or storeys change.";
 
-const FORMAT: &str = "The plan, levels numbered from 1 at the top: 'level <n>: <name>', then 'rooms: a=<kind>; b=<kind>+5 \"<name>\"' (symbol = room; +5 a floor raised 5 ft; a name in quotes), 'grid:' and one row per line (one character per 5-ft square, '.' rock, x across from 0, y down from 0), 'doors: x,y e; x,y s secret' (between square x,y and the one east or south of it; 'auto' adds doors wherever a room is shut off), 'items: <kind> x,y [wxh] [back n|e|s|w] [variant 0-3]; …' (back: the side it stands against, for props that face one side such as statues, altars, things hung on a wall, left out to let it find its wall; variant: one of its looks, left out to pick by position; props, an uploaded sprite as s:<asset id>, and the ways: exit on the top level at the entry, down on every level but the deepest, up below each down on the same square).";
+const FORMAT: &str = "The plan, levels numbered from 1 at the top: 'level <n>: <name>', then 'rooms: a=<kind>; b=<kind>+5 (round) \"<name>\"' (symbol = room; +5 a floor raised 5 ft; a shape in brackets, drawn only: round, octagon, apse n|e|s|w, chamfered, cavern (underground), its squares those whose middles lie inside the shape in the box round them, else drawn square (fit_shapes fits them); a name in quotes), 'grid:' and one row per line (one character per 5-ft square, '.' rock, x across from 0, y down from 0), 'doors: x,y e; x,y s secret' (between square x,y and the one east or south of it; 'auto' adds doors wherever a room is shut off), 'items: <kind> x,y [wxh] [back n|e|s|w] [variant 0-3]; …' (back: the side it stands against, for props that face one side such as statues, altars, things hung on a wall, left out to let it find its wall; variant: one of its looks, left out to pick by position; props, an uploaded sprite as s:<asset id>, and the ways: exit on the top level at the entry, down on every level but the deepest, up below each down on the same square).";
 
 pub fn list() -> Vec<Value> {
     vec![
@@ -21,6 +21,7 @@ pub fn list() -> Vec<Value> {
             "id": { "type": "string" },
             "text": { "type": "string", "description": "The plan, or the parts of it to change" },
             "furnish": { "type": "boolean", "default": false, "description": "Fill rooms that have no props (a building's: no furniture) from their kind's kit" },
+            "fit_shapes": { "type": "boolean", "default": false, "description": "Fit the squares of rooms given a shape to it, as the app's designer does (squares outside it go to rock, a building's to the room beside them); one that can't be fitted without breaking a rule stays as written, drawn square. The reply's fit_shapes lists those, with why, and the items fitting took away" },
             "dry_run": { "type": "boolean", "default": false, "description": "Check it without saving" },
         }), &["id", "text"]) }),
         json!({ "name": "reset_site_design", "title": "Site as generated", "description": "Drop a site's or a building's design: it is generated again as it was.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]) }),
@@ -85,13 +86,48 @@ async fn get(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
 async fn set(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
     let id = arg_str(a, "id")?;
     let src = arg_str(a, "text")?;
-    let (furnish, dry) = (a["furnish"].as_bool().unwrap_or(false), a["dry_run"].as_bool().unwrap_or(false));
+    let (furnish, dry, fit) = (a["furnish"].as_bool().unwrap_or(false), a["dry_run"].as_bool().unwrap_or(false), a["fit_shapes"].as_bool().unwrap_or(false));
     let id2 = id.clone();
-    let (d, names, problems, shift) = app
+    let (d, names, problems, shift, fitted) = app
         .worker
         .with(move |ex| {
             let base = design::design_of(&ex.world, &ex.t0, &id2, false)?;
             let (mut d, names) = design::from_text(&src, &base)?;
+            // What fitting the shapes did: rooms refused (left as written, drawn square) and why,
+            // and the items it took away.
+            let mut fitted: Vec<String> = Vec::new();
+            if fit {
+                let n = d.levels.len();
+                for li in 0..n {
+                    let tag = if d.is_building() { format!("level {}", d.levels[li].z) } else { format!("level {}", n - li) };
+                    for ri in 0..d.levels[li].rooms.len() {
+                        let shape = d.levels[li].rooms[ri].shape;
+                        if !worldgen::interior::shape::geometric(shape) {
+                            continue;
+                        }
+                        let had = d.levels[li].items.clone();
+                        match d.set_shape_checked(&ex.world, &ex.t0, &id2, li, ri, shape) {
+                            // (A refusal may name the level again, from the problem it found.)
+                            Err(e) => fitted.push(format!("{tag}: not fitted, drawn square: {}", e.replacen(&format!("{tag}: "), "", 1))),
+                            Ok(()) => {
+                                let now = &d.levels[li].items;
+                                let nx = d.nx as usize;
+                                let cells = design::decode(&d.levels[li].cells, nx * d.ny as usize).unwrap_or_default();
+                                // (Why: a square of it left empty (underground, rock), else a doorway or two rooms.)
+                                let emptied = |f: &design::DesignItem| (f.y..f.y + f.h.max(1)).any(|j| (f.x..f.x + f.w.max(1)).any(|i| cells.get(j as usize * nx + i as usize).is_none_or(|&c| c < 0)));
+                                for f in had.iter().filter(|f| !now.contains(f)) {
+                                    let why = match (emptied(f), d.is_building()) {
+                                        (true, true) => "on a square left empty",
+                                        (true, false) => "in the rock",
+                                        (false, _) => "in a doorway moved or across two rooms",
+                                    };
+                                    fitted.push(format!("{tag}: the {} at {},{} went ({why} once the {} was fitted)", f.kind, f.x, f.y, d.levels[li].rooms[ri].kind));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if furnish {
                 let (it, _) = d.problems(&ex.world, &ex.t0, &id2)?;
                 for (li, lv) in it.levels.iter().enumerate() {
@@ -108,7 +144,7 @@ async fn set(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
             }
             let (_, problems) = d.problems(&ex.world, &ex.t0, &id2)?;
             let shift = d.below_ground() as isize - base.below_ground() as isize;
-            Ok((d, names, problems, shift))
+            Ok((d, names, problems, shift, fitted))
         })
         .await?;
     let refused: Vec<&str> = problems.iter().filter(|p| p.blocking).map(|p| p.text.as_str()).collect();
@@ -116,7 +152,10 @@ async fn set(app: &Shared, a: &Value) -> Result<Vec<Value>, String> {
         return Err(format!("not saved: {}", refused.join("; ")));
     }
     let plan = design::to_text(&d, &|li, ri| names.iter().find(|n| n.0 == li && n.1 == ri).map(|n| n.2.clone()))?;
-    let out = summary(&id, &d, true, &problems);
+    let mut out = summary(&id, &d, true, &problems);
+    if fit {
+        out["fit_shapes"] = json!(fitted);
+    }
     if dry {
         return Ok(reply(json!({ "dry_run": true, "would_save": out }), plan));
     }

@@ -615,6 +615,7 @@ fn site(
         entry_level,
         stairs: [0; 4],
         sprites: Vec::new(),
+        outlines: Vec::new(),
     })
 }
 
@@ -624,6 +625,8 @@ fn site(
 struct RoomDef {
     kind: &'static str,
     raise: f32,
+    /// Drawn round, octagonal… (`interior::shape`); kept only while its squares fit it.
+    shape: u8,
 }
 
 struct Plan {
@@ -670,7 +673,7 @@ impl Plan {
     }
 
     fn room(&mut self, kind: &'static str, raise: f32) -> i16 {
-        self.rooms.push(RoomDef { kind, raise });
+        self.rooms.push(RoomDef { kind, raise, shape: 0 });
         (self.rooms.len() - 1) as i16
     }
 
@@ -755,7 +758,15 @@ impl Plan {
     }
 
     fn finish(self, nx: usize, ny: usize, z: i8, name: String, elevation_ft: f32) -> Level {
-        let mut rooms: Vec<Room> = self.rooms.iter().map(|r| Room { kind: r.kind, squares: 0, raise_ft: r.raise, center: [0.0; 2] }).collect();
+        let mut rooms: Vec<Room> = self
+            .rooms
+            .iter()
+            .enumerate()
+            .map(|(ri, r)| {
+                let shape = if r.shape != 0 && crate::interior::shape::fits(&self.cells, nx, ri as i16, r.shape) { r.shape } else { 0 };
+                Room { kind: r.kind, squares: 0, raise_ft: r.raise, center: [0.0; 2], shape }
+            })
+            .collect();
         let mut sum = vec![[0.0f64; 2]; rooms.len()];
         for k in 0..nx * ny {
             let r = self.cells[k];

@@ -14,6 +14,7 @@
   import { cellarsOf } from '../editor/site/model';
   import { INSIDE_GROUPS, itemGroup, looks, turnsInside } from '../editor/itemGroups';
   import { InteriorLayer } from '../render/InteriorLayer';
+  import { APSE_N, CAVERN, CHAMFERED, isApse, OCTAGON, ROUND } from '../render/roomShapes';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
   import InHand from './InHand.svelte';
@@ -88,6 +89,15 @@
   const problems = $derived(now.problems);
   const blocking = $derived(problems.filter((p) => p.blocking).length);
   const tool = $derived(tools.find((t) => t.key === settings.mode));
+  // A room's shapes (an apse goes away from its doors; Turn moves it round).
+  const SHAPES = [
+    { code: 0, label: 'Square corners' },
+    { code: ROUND, label: 'Round' },
+    { code: OCTAGON, label: 'Octagonal' },
+    { code: APSE_N, label: 'With an apse' },
+    { code: CHAMFERED, label: 'Corners cut' },
+    { code: CAVERN, label: 'Cavern breaking in' },
+  ];
   // The picker: a building's furniture and indoor props, or a site's props; then your pictures.
   type Piece = { kind: string; name: string; cover: number; blocks: boolean; height_ft: number; hazard: string | null; w: number; h: number };
   const pieces = $derived.by((): Piece[] => {
@@ -223,6 +233,20 @@
             Name
             <input class="ws-input" value={renames[roomId] ?? ''} placeholder={cap(room.kind)} onchange={(e) => onRename(roomId, e.currentTarget.value.trim())} />
           </label>
+        </div>
+        <div class="ws-row">
+          <label class="ws-field grow">
+            Shape
+            <select class="ws-input" value={isApse(room.shape) ? APSE_N : (room.shape ?? 0)} onchange={(e) => {
+                // (Shown as the room is until the change is taken: a refused one leaves it so.)
+                const want = +e.currentTarget.value;
+                e.currentTarget.value = String(isApse(room.shape) ? APSE_N : (room.shape ?? 0));
+                designer.setShape(ri, want);
+              }} title="Drawn so; play keeps to the squares, which are fitted to the shape">
+              {#each SHAPES.filter((s) => !building || s.code !== CAVERN) as s (s.code)}<option value={s.code}>{s.label}</option>{/each}
+            </select>
+          </label>
+          {#if isApse(room.shape)}<button class="ws-btn" onclick={() => designer.turnApse(ri)} title="The apse a side round">Turn the apse</button>{/if}
         </div>
         {#if !building}
           <div class="ws-field">

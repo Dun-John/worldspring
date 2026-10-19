@@ -6,6 +6,7 @@ import { layoutOfId } from '../editor/reanchor';
 import type { Feature, Interior, WorldFile } from '../gen/protocol';
 import type { InteriorLayer } from '../render/InteriorLayer';
 import type { MapView, PointerTool } from '../render/MapView';
+import { drawnDoorsOf } from '../render/roomShapes';
 import { SECTION_N, type Sewers } from '../render/Sewers';
 import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scene, type Vision } from './channel';
 import { PlayLayer } from './PlayLayer';
@@ -1108,15 +1109,25 @@ export class PlayController implements PointerTool {
     return best;
   }
 
-  /** The door whose middle is near a grid point (inside), and the section it is in. */
+  /** The door near a grid point (inside): its square edge's middle, or the door as drawn (on a
+   * curved or slanted wall); and the section it is in. */
   private doorAt(place: Place, gx: number, gy: number): { k: number; sec: Section } | null {
     const sec = this.sectionAt(place, gx, gy);
     if (!sec) return null;
     const doors = sec.it.levels[sec.level]?.doors ?? [];
+    const drawn = sec.it.levels[sec.level] ? drawnDoorsOf(sec.it, sec.level) : null;
+    const [x, y] = [gx - sec.ox, gy - sec.oy];
+    // (From a point to a segment.)
+    const toSeg = (a: [number, number], b: [number, number]) => {
+      const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+      const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / Math.max(dx * dx + dy * dy, 1e-9)));
+      return Math.hypot(a[0] + dx * t - x, a[1] + dy * t - y);
+    };
     let best = -1;
     let bestD = 0.5;
     doors.forEach((d, k) => {
-      const dist = Math.hypot((d.a[0] + d.b[0]) / 2 + sec.ox - gx, (d.a[1] + d.b[1]) / 2 + sec.oy - gy);
+      const m = drawn?.[k];
+      const dist = Math.min(Math.hypot((d.a[0] + d.b[0]) / 2 - x, (d.a[1] + d.b[1]) / 2 - y), m?.moved ? toSeg(m.a, m.b) : Infinity);
       if (dist < bestD) [best, bestD] = [k, dist];
     });
     return best >= 0 ? { k: best, sec } : null;
@@ -1133,18 +1144,22 @@ export class PlayController implements PointerTool {
     if (i < 0 || j < 0 || i >= nx || j >= ny) return;
     const room = lv.cells[j * nx + i];
     if (room < 0) return;
-    const bits = new Uint8Array(nx * ny);
-    for (let k = 0; k < nx * ny; k++) {
-      if (lv.cells[k] === room) {
+    // (A building's with a ring of squares round its grid: its walls as drawn can stand beyond it.)
+    const m = place.it ? 1 : 0;
+    const [w, h] = [nx + 2 * m, ny + 2 * m];
+    const cell = (a: number, b: number) => (a >= 0 && b >= 0 && a < nx && b < ny ? lv.cells[b * nx + a] : -1);
+    const bits = new Uint8Array(w * h);
+    for (let k = 0; k < w * h; k++) {
+      const [a, b] = [(k % w) - m, Math.floor(k / w) - m];
+      if (cell(a, b) === room) {
         bits[k] = 1;
         continue;
       }
-      if (lv.cells[k] >= 0 || !reveal) continue;
+      if (cell(a, b) >= 0 || !reveal) continue;
       // Rock or outside next to the room: its wall.
-      const [a, b] = [k % nx, Math.floor(k / nx)];
-      for (let dy = -1; dy <= 1 && !bits[k]; dy++) for (let dx = -1; dx <= 1; dx++) if (a + dx >= 0 && b + dy >= 0 && a + dx < nx && b + dy < ny && lv.cells[(b + dy) * nx + a + dx] === room) bits[k] = 1;
+      for (let dy = -1; dy <= 1 && !bits[k]; dy++) for (let dx = -1; dx <= 1; dx++) if (cell(a + dx, b + dy) === room) bits[k] = 1;
     }
-    this.dispatch({ t: 'fogbits', loc: place.loc, reveal, x0: ox, y0: oy, w: nx, h: ny, bits });
+    this.dispatch({ t: 'fogbits', loc: place.loc, reveal, x0: ox - m, y0: oy - m, w, h, bits });
   }
 
   // ---------------------------------------------------------------------------------------

@@ -47,7 +47,10 @@ fn main() {
                     .iter()
                     .enumerate()
                     .filter(|(_, r)| r.squares > 0)
-                    .map(|(i, r)| format!("{}={}{}", (b'a' + (i % 26) as u8) as char, r.kind, if r.raise_ft > 0.0 { format!("+{}", r.raise_ft) } else { String::new() }))
+                    .map(|(i, r)| {
+                        let shape = worldgen::interior::shape::name(r.shape).map(|s| format!(" ({s})")).unwrap_or_default();
+                        format!("{}={}{}{shape}", (b'a' + (i % 26) as u8) as char, r.kind, if r.raise_ft > 0.0 { format!("+{}", r.raise_ft) } else { String::new() })
+                    })
                     .collect();
                 kinds.dedup();
                 println!("-- {} (z {}, {} items): {}", lv.name, lv.z, lv.furniture.len(), kinds.join(", "));

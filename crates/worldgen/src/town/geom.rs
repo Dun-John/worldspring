@@ -229,6 +229,28 @@ pub fn clean(poly: &[P]) -> Vec<P> {
     pts
 }
 
+/// The convex hull of points, anticlockwise (in axes with y up), without collinear points.
+pub fn hull(mut pts: Vec<P>) -> Vec<P> {
+    pts.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    pts.dedup();
+    if pts.len() < 3 {
+        return pts;
+    }
+    let mut out: Vec<P> = Vec::with_capacity(pts.len() + 1);
+    for pass in 0..2 {
+        let start = out.len();
+        let it: Box<dyn Iterator<Item = &P>> = if pass == 0 { Box::new(pts.iter()) } else { Box::new(pts.iter().rev()) };
+        for &p in it {
+            while out.len() >= start + 2 && cross(sub(out[out.len() - 1], out[out.len() - 2]), sub(p, out[out.len() - 1])) <= 0.0 {
+                out.pop();
+            }
+            out.push(p);
+        }
+        out.pop();
+    }
+    out
+}
+
 /// Regular polygon approximating a circle.
 pub fn circle(c: P, r: f64, n: usize) -> Vec<P> {
     (0..n)

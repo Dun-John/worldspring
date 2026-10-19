@@ -3,19 +3,29 @@
 // Pure data, so a city's sewer sections can be prepared in a worker (`underField.worker.ts`)
 // while the view moves.
 import type { Interior } from '../gen/protocol';
+import { CAVERN, fromSquares, shapeIndex } from './roomShapes';
 
 /** Field texels per square. */
 export const FIELD_RES = 4;
 
 export interface UnderField {
   /** Field texture (w x h, RGBA: floor, liquid, raised) and per-square cells (nx x ny, RGBA:
-   * material, -, room hash, 255). */
+   * material, shape (0 none, its slot + 1 in `shapes`, 254 none but one next to it, 255 a cavern),
+   * room hash, 255). A shaped room's squares are left out of the floor (its doorways stay in): the
+   * shader draws it from its shape. */
   w: number;
   h: number;
   data: Uint8Array;
   cells: Uint8Array;
   /** 0 none, 1 sewage, 2 lava. */
   liquidKind: number;
+  /** Shaped rooms (`roomShapes.ts`), two texels each in a (count x 2) texture: x0, y0, x1, y1
+   * (squares), then shape, material, room hash, 255. One blank slot when there are none. */
+  shapes: Uint8Array;
+  shapeCount: number;
+  /** Caverns breaking in: their floor (and the squares opening into them) blurred as a cave's
+   * (w x h, RGBA, red), else null. */
+  cave: Uint8Array | null;
 }
 
 /** Sites with square corners: built (dressed stone), unlike sewers (which follow their
@@ -136,6 +146,7 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
   }
   const cells = new Uint8Array(nx * ny * 4);
   const paths = lv.paths ?? [];
+  const { index, shapes: slots, caverns } = shapeIndex(lv, nx, ny);
   let anyRaised = false;
   for (let j = 0; j < ny; j++) {
     for (let i = 0; i < nx; i++) {
@@ -143,12 +154,13 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
       const r = lv.cells[k];
       if (r < 0) continue;
       const room = lv.rooms[r];
-      cells[k * 4] = materialOf(it.function, room.kind, it.theme);
+      cells[k * 4] = room.shape === CAVERN ? 0 : materialOf(it.function, room.kind, it.theme);
+      cells[k * 4 + 1] = index[k];
       cells[k * 4 + 2] = (r * 37) & 255;
       cells[k * 4 + 3] = 255;
-      // Floors that follow lines (sewers under streets) are painted from the lines below;
-      // anything else fills its squares.
-      const square = !paths.length || room.kind !== 'sewer tunnel';
+      // Floors that follow lines (sewers under streets) are painted from the lines below; shaped
+      // rooms from their shapes; anything else fills its squares.
+      const square = (!paths.length || room.kind !== 'sewer tunnel') && fromSquares(index[k]);
       const lift = Math.min(1, room.raise_ft / 10);
       if (lift > 0) anyRaised = true;
       for (let y = j * R; y < (j + 1) * R; y++) {
@@ -215,5 +227,31 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
     data[o + 2] = (f3[k] * 255 + 0.5) | 0;
     data[o + 3] = 255;
   }
-  return { w, h, data, cells, liquidKind };
+  // (Rock beside a shape too: the shader looks round there, the shape reaching into it.)
+  for (let k = 0; k < nx * ny; k++) cells[k * 4 + 1] = index[k];
+  // Shaped rooms' boxes and looks.
+  const n = Math.max(1, slots.length);
+  const shapes = new Uint8Array(n * 2 * 4);
+  slots.forEach(({ box, shape, room }, s) => {
+    shapes.set([box[0], box[1], box[2], box[3]], s * 4);
+    shapes.set([shape, materialOf(it.function, lv.rooms[room].kind, it.theme), (room * 37) & 255, 255], (n + s) * 4);
+  });
+  // Caverns: their floor and the squares opening into them, blurred as a cave's.
+  let cave: Uint8Array | null = null;
+  if (caverns) {
+    const mask = new Float32Array(w * h);
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const k = j * nx + i;
+        if (lv.cells[k] < 0) continue;
+        const near = (a: number, b: number) => a >= 0 && b >= 0 && a < nx && b < ny && index[b * nx + a] === CAVERN;
+        if (!(index[k] === CAVERN || near(i - 1, j) || near(i + 1, j) || near(i, j - 1) || near(i, j + 1))) continue;
+        for (let y = j * R; y < (j + 1) * R; y++) mask.fill(1, y * w + i * R, y * w + (i + 1) * R);
+      }
+    }
+    const b = blur(mask, w, h, 0.42 * R, clamp);
+    cave = new Uint8Array(w * h * 4);
+    for (let k = 0; k < w * h; k++) cave[k * 4] = (b[k] * 255 + 0.5) | 0;
+  }
+  return { w, h, data, cells, liquidKind, shapes, shapeCount: slots.length, cave };
 }

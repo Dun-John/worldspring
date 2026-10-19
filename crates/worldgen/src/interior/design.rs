@@ -12,7 +12,7 @@
 
 use serde_json::Value;
 
-use super::{Door, FURNITURE, Interior, Item, Level, Room, STOREY_FT, Shell, Sprites, battlements, building_item, cellar_links, design_kind, finish_rooms, furnish_rooms, room_kind, sprite_asset, wall_runs, windows};
+use super::{shape, Door, FURNITURE, Interior, Item, Level, Room, STOREY_FT, Shell, Sprites, battlements, building_item, cellar_links, design_kind, finish_rooms, furnish_rooms, room_kind, sprite_asset, wall_runs, windows};
 use crate::World;
 use crate::core::hash::fnv64;
 use crate::core::rng::{Pcg32, hash3};
@@ -119,7 +119,7 @@ pub fn from_interior(it: &Interior, fingerprint: String) -> SiteDesign {
                 elevation_ft: lv.elevation_ft,
                 natural: false,
                 cells: encode(&lv.cells),
-                rooms: lv.rooms.iter().map(|r| DesignRoom { kind: r.kind.into(), raise_ft: r.raise_ft.max(0.0) as u16 }).collect(),
+                rooms: lv.rooms.iter().map(|r| DesignRoom { kind: r.kind.into(), raise_ft: r.raise_ft.max(0.0) as u16, shape: r.shape }).collect(),
                 doors,
                 items: lv.furniture.iter().filter(|f| !link(f)).map(|f| DesignItem { kind: design_kind(it, f), x: f.x, y: f.y, w: f.w, h: f.h, back: f.back, variant: f.variant }).collect(),
                 z: lv.z,
@@ -163,10 +163,15 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
             *c = -1;
         }
     }
+    // (A shape is kept while the room's squares fit it; a building has no caverns.)
     let mut rooms: Vec<Room> = lv
         .rooms
         .iter()
-        .map(|r| Room { kind: room_kind(&r.kind).unwrap_or(CHAMBER), squares: 0, raise_ft: r.raise_ft as f32, center: [0.0; 2] })
+        .enumerate()
+        .map(|(ri, r)| {
+            let shape = if shape::geometric(r.shape) && shape::fits(&cells, nx, ri as i16, r.shape) { r.shape } else { 0 };
+            Room { kind: room_kind(&r.kind).unwrap_or(CHAMBER), squares: 0, raise_ft: r.raise_ft as f32, center: [0.0; 2], shape }
+        })
         .collect();
     finish_rooms(&mut rooms, &cells, nx);
     let mut doors: Vec<Door> = Vec::new();
@@ -261,6 +266,7 @@ pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::B
         levels,
         stairs,
         sprites: sprites.table(),
+        outlines: sh.outlines(),
     };
     (it, want)
 }
@@ -495,6 +501,7 @@ pub fn problems_as(world: &World, t0: &T0, id: &str, d: &SiteDesign, floors: Opt
     }
     let (it, want) = build(d, t0, &l, li, b, &sh, &world.file.edits.sprites);
     out.extend(check(&it, &sh, &want));
+    out.extend(d.unfitted(&it));
     Ok((it, out))
 }
 
@@ -609,7 +616,7 @@ pub fn set_cellars(d: &mut SiteDesign, n: usize) -> bool {
                 elevation_ft: ground_ft + STOREY_FT * z as f32,
                 natural: false,
                 cells: encode(&floor),
-                rooms: vec![DesignRoom { kind: "storeroom".into(), raise_ft: 0 }],
+                rooms: vec![DesignRoom { kind: "storeroom".into(), ..Default::default() }],
                 doors: Vec::new(),
                 items: Vec::new(),
                 z,

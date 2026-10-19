@@ -15,6 +15,7 @@ import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
 import { noiseSource } from './noise';
 import { SQUARE_SITES, underField, type UnderField } from './underField';
+import { drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetParts, shapedPlanOf, shapeIndex, undergroundWalls, WALL_HALF, wallTangent, within, type Pt } from './roomShapes';
 import undergroundFragment from './shaders/underground.frag?raw';
 import vertex from './shaders/terrain.vert?raw';
 
@@ -85,6 +86,17 @@ function floorColor(kind: string, z: number, natural = false, raise = 0): number
   return 0xa87a4f;
 }
 const STONE = (c: number) => c === 0x9d978c || c === 0x8f8a80 || c === 0xa8a296;
+
+/** A floor square's pattern in its colour: planks along x on wood, flagstone joints on stone. */
+function floorPattern(i: number, j: number, c: number): [Pt, Pt][] {
+  if (!STONE(c)) return [1, 2, 3].map((k): [Pt, Pt] => [[i, j + k / 4], [i + 1, j + k / 4]]);
+  const odd = ((j % 2) + 2) % 2;
+  return [
+    [[i, j + 0.5], [i + 1, j + 0.5]],
+    [[i + odd * 0.5 + 0.25, j], [i + odd * 0.5 + 0.25, j + 0.5]],
+    [[i + (1 - odd) * 0.5 + 0.25, j + 0.5], [i + (1 - odd) * 0.5 + 0.25, j + 1]],
+  ];
+}
 
 /** Furniture fill by kind. */
 function itemColor(kind: string): number {
@@ -477,11 +489,14 @@ export class InteriorLayer {
     this.freeUnder();
     let f = this.fields.get(this.level);
     if (!f) this.fields.set(this.level, (f = underField(it, this.level, this.tile)));
-    const { w, h, data, cells, liquidKind } = f;
+    const { w, h, data, cells, liquidKind, shapes, shapeCount, cave } = f;
     // Built sites keep square corners: walls measured from the squares, the field unsmoothed.
     const square = SQUARE_SITES.has(it.function);
     const fieldSrc = new BufferImageSource({ resource: data, width: w, height: h, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: square ? 'nearest' : 'linear', addressMode: 'clamp-to-edge' });
     const cellSrc = new BufferImageSource({ resource: cells, width: nx, height: ny, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' });
+    // Shaped rooms' boxes and looks; caverns breaking in (a blank texel when there are none).
+    const shapeSrc = new BufferImageSource({ resource: shapes, width: Math.max(1, shapeCount), height: 2, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' });
+    const caveSrc = new BufferImageSource({ resource: cave ?? new Uint8Array(4), width: cave ? w : 1, height: cave ? h : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // Light from the NW of the screen, in grid axes.
     const [lx, ly] = [-Math.SQRT1_2, -Math.SQRT1_2];
     const rough = it.function === 'cave' ? 1 : it.function === 'lava tube' ? 0.85 : it.function === 'mine' ? 0.45 : square ? 0 : 0.06;
@@ -497,12 +512,14 @@ export class InteriorLayer {
       // Sewer sections: their place among the others (wrapped, to keep the GPU's sums small;
       // a seam once every 256 sections, far wider than any city).
       uOrigin: { value: new Float32Array(this.tile ? [wrap(it.origin[0] / 5), wrap(it.origin[1] / 5)] : [0, 0]), type: 'vec2<f32>' },
+      uShapeCount: { value: shapeCount, type: 'f32' },
+      uCaverns: { value: cave ? 1 : 0, type: 'f32' },
     });
-    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uNoise: noiseSource(), under: uniforms } });
+    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uShapes: shapeSrc, uCave: caveSrc, uNoise: noiseSource(), under: uniforms } });
     const mesh = new Mesh({ geometry: quad(), shader });
     mesh.scale.set(nx, ny);
     this.plan.addChild(mesh);
-    this.under = { uniforms, sources: [fieldSrc, cellSrc], shader };
+    this.under = { uniforms, sources: [fieldSrc, cellSrc, shapeSrc, caveSrc], shader };
   }
 
   private draw() {
@@ -518,83 +535,84 @@ export class InteriorLayer {
     this.plan.addChild(g);
     const { nx, ny } = it;
     const colorOf = (r: number) => floorColor(lv.rooms[r].kind, lv.z, lv.natural, lv.rooms[r].raise_ft);
-    if (!this.underground) {
-    // Floors.
-    for (let j = 0; j < ny; j++) {
-      for (let i = 0; i < nx; i++) {
-        const r = lv.cells[j * nx + i];
-        if (r < 0) continue;
-        g.rect(i, j, 1, 1).fill(colorOf(r));
-      }
-    }
-    // Floor texture: planks along x on wood, flagstone joints on stone; then the 5-ft grid.
-    for (let j = 0; j < ny; j++) {
-      for (let i = 0; i < nx; i++) {
-        const r = lv.cells[j * nx + i];
-        if (r < 0) continue;
-        const c = colorOf(r);
-        if (STONE(c)) {
-          g.moveTo(i, j + 0.5).lineTo(i + 1, j + 0.5).moveTo(i + ((j % 2) * 0.5 + 0.25), j).lineTo(i + ((j % 2) * 0.5 + 0.25), j + 0.5);
-          g.moveTo(i + (((j + 1) % 2) * 0.5 + 0.25), j + 0.5).lineTo(i + (((j + 1) % 2) * 0.5 + 0.25), j + 1);
-        } else {
-          for (let k = 1; k < 4; k++) g.moveTo(i, j + k / 4).lineTo(i + 1, j + k / 4);
+    // A footprint off the grid's rectangle, or shaped rooms: drawn to the walls as they stand.
+    const sp = this.underground ? null : shapedPlanOf(it, this.level);
+    const parts = sp?.real ? sp.parts : null;
+    if (sp) {
+      drawShapedFloors(g, sp, lv, colorOf, floorPattern);
+    } else if (!this.underground) {
+      // Floors; their texture (planks along x on wood, flagstone joints on stone); the 5-ft grid.
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const r = lv.cells[j * nx + i];
+          if (r >= 0) g.rect(i, j, 1, 1).fill(colorOf(r));
         }
       }
-    }
-    g.stroke({ width: 0.03, color: 0x000000, alpha: 0.25 });
-    for (let j = 0; j < ny; j++) {
-      for (let i = 0; i < nx; i++) {
-        if (lv.cells[j * nx + i] >= 0) g.rect(i, j, 1, 1);
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const r = lv.cells[j * nx + i];
+          if (r >= 0) for (const [a, b] of floorPattern(i, j, colorOf(r))) g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
+        }
       }
+      g.stroke({ width: 0.03, color: 0x000000, alpha: 0.25 });
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          if (lv.cells[j * nx + i] >= 0) g.rect(i, j, 1, 1);
+        }
+      }
+      g.stroke({ width: 0.04, color: 0x000000, alpha: 0.35 });
     }
-    g.stroke({ width: 0.04, color: 0x000000, alpha: 0.35 });
-    // Raised floors (arena stands): an inked edge where they drop to a lower room.
-    for (let j = 0; j < ny; j++) {
-      for (let i = 0; i < nx; i++) {
-        const r = lv.cells[j * nx + i];
-        if (r < 0 || lv.rooms[r].raise_ft <= 0) continue;
-        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-          const q = i + di >= 0 && i + di < nx && j + dj >= 0 && j + dj < ny ? lv.cells[(j + dj) * nx + i + di] : -1;
-          if (q >= 0 && lv.rooms[q].raise_ft < lv.rooms[r].raise_ft) {
-            const [x0, y0, x1, y1] = di === 1 ? [i + 1, j, i + 1, j + 1] : di === -1 ? [i, j, i, j + 1] : dj === 1 ? [i, j + 1, i + 1, j + 1] : [i, j, i + 1, j];
-            g.moveTo(x0, y0).lineTo(x1, y1);
+    if (!this.underground) {
+      // Raised floors (arena stands): an inked edge where they drop to a lower room.
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const r = lv.cells[j * nx + i];
+          if (r < 0 || lv.rooms[r].raise_ft <= 0) continue;
+          for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const q = i + di >= 0 && i + di < nx && j + dj >= 0 && j + dj < ny ? lv.cells[(j + dj) * nx + i + di] : -1;
+            if (q >= 0 && lv.rooms[q].raise_ft < lv.rooms[r].raise_ft) {
+              const [x0, y0, x1, y1] = di === 1 ? [i + 1, j, i + 1, j + 1] : di === -1 ? [i, j, i, j + 1] : dj === 1 ? [i, j + 1, i + 1, j + 1] : [i, j, i + 1, j];
+              g.moveTo(x0, y0).lineTo(x1, y1);
+            }
           }
         }
       }
-    }
-    g.stroke({ width: 0.18, color: INK });
+      g.stroke({ width: 0.18, color: INK });
     }
     // Stairs: treads across the block, an arrow up or down (tower tops are reached only by
-    // the towers' spiral stairs).
+    // the towers' spiral stairs). A block the outer wall as drawn cuts (a building too small for
+    // it to stand clear) goes over the wall, so it can be seen and used.
     const [sx, sy, sw, sh] = it.stairs;
-    if (lv.has_stairs) {
-    g.rect(sx, sy, sw, sh).fill(0x7a6a58);
-    const along = sw >= sh;
-    const steps = Math.max(sw, sh) * 3;
-    for (let k = 1; k < steps; k++) {
-      const t = k / steps;
-      if (along) g.moveTo(sx + t * sw, sy).lineTo(sx + t * sw, sy + sh);
-      else g.moveTo(sx, sy + t * sh).lineTo(sx + sw, sy + t * sh);
-    }
-    g.stroke({ width: 0.05, color: INK, alpha: 0.7 });
-    g.rect(sx, sy, sw, sh).stroke({ width: 0.08, color: INK });
-    const up = this.level + 1 < it.levels.length && it.levels[this.level + 1].has_stairs;
-    const down = this.level > 0 && it.levels[this.level - 1].has_stairs;
-    const arrow = (dir: 1 | -1) => {
-      const cx = sx + sw / 2;
-      const cy = sy + sh / 2;
-      const len = (along ? sw : sh) * 0.35;
-      const [ax, ay] = along ? [dir, 0] : [0, dir];
-      const off = up && down ? (dir === 1 ? 0.18 : -0.18) : 0;
-      const [ox, oy] = along ? [0, off] : [off, 0];
-      g.moveTo(cx - ax * len + ox, cy - ay * len + oy).lineTo(cx + ax * len + ox, cy + ay * len + oy);
-      g.moveTo(cx + ax * len + ox, cy + ay * len + oy).lineTo(cx + ax * (len - 0.25) - ay * 0.18 + ox, cy + ay * (len - 0.25) + ax * 0.18 + oy);
-      g.moveTo(cx + ax * len + ox, cy + ay * len + oy).lineTo(cx + ax * (len - 0.25) + ay * 0.18 + ox, cy + ay * (len - 0.25) - ax * 0.18 + oy);
+    const stairsCut = !!parts && [[sx, sy], [sx + sw, sy], [sx, sy + sh], [sx + sw, sy + sh]].some((c) => insetParts(c as Pt, parts) < WALL_HALF - 1e-3);
+    const drawStairs = (g: Graphics) => {
+      g.rect(sx, sy, sw, sh).fill(0x7a6a58);
+      const along = sw >= sh;
+      const steps = Math.max(sw, sh) * 3;
+      for (let k = 1; k < steps; k++) {
+        const t = k / steps;
+        if (along) g.moveTo(sx + t * sw, sy).lineTo(sx + t * sw, sy + sh);
+        else g.moveTo(sx, sy + t * sh).lineTo(sx + sw, sy + t * sh);
+      }
+      g.stroke({ width: 0.05, color: INK, alpha: 0.7 });
+      g.rect(sx, sy, sw, sh).stroke({ width: 0.08, color: INK });
+      const up = this.level + 1 < it.levels.length && it.levels[this.level + 1].has_stairs;
+      const down = this.level > 0 && it.levels[this.level - 1].has_stairs;
+      const arrow = (dir: 1 | -1) => {
+        const cx = sx + sw / 2;
+        const cy = sy + sh / 2;
+        const len = (along ? sw : sh) * 0.35;
+        const [ax, ay] = along ? [dir, 0] : [0, dir];
+        const off = up && down ? (dir === 1 ? 0.18 : -0.18) : 0;
+        const [ox, oy] = along ? [0, off] : [off, 0];
+        g.moveTo(cx - ax * len + ox, cy - ay * len + oy).lineTo(cx + ax * len + ox, cy + ay * len + oy);
+        g.moveTo(cx + ax * len + ox, cy + ay * len + oy).lineTo(cx + ax * (len - 0.25) - ay * 0.18 + ox, cy + ay * (len - 0.25) + ax * 0.18 + oy);
+        g.moveTo(cx + ax * len + ox, cy + ay * len + oy).lineTo(cx + ax * (len - 0.25) + ay * 0.18 + ox, cy + ay * (len - 0.25) - ax * 0.18 + oy);
+      };
+      if (up) arrow(1);
+      if (down) arrow(-1);
+      g.stroke({ width: 0.09, color: 0xf2e6c8 });
     };
-    if (up) arrow(1);
-    if (down) arrow(-1);
-    g.stroke({ width: 0.09, color: 0xf2e6c8 });
-    }
+    if (lv.has_stairs && !stairsCut) drawStairs(g);
     // Furniture, as sprites from the item atlas (or drawn here without a renderer).
     // (Underground, the shader paints sewage and lava channels.)
     const atlas = InteriorLayer.renderer ? ItemAtlas.for(InteriorLayer.renderer) : null;
@@ -624,6 +642,13 @@ export class InteriorLayer {
     if (atlas) {
       atlas.flush();
       this.plan.addChild(items);
+      // (Inside an outer wall drawn off the squares, nothing shows beyond it.)
+      if (parts) {
+        const mask = new Graphics();
+        for (const p of parts) mask.poly(p.flatMap((q) => q)).fill(0xffffff);
+        this.plan.addChild(mask);
+        items.mask = mask;
+      }
       // Walls and doors go over the furniture.
       g = new Graphics();
       this.plan.addChild(g);
@@ -631,22 +656,75 @@ export class InteriorLayer {
       items.destroy();
     }
     // Walls: exterior thick, interior thinner; windows as light slots; doors as leaves. On an
-    // open roof the outer wall is a parapet with merlons.
+    // open roof the outer wall is a parapet with merlons. Drawn to a shaped plan, doors and windows
+    // stand on the walls as drawn (through a thick wall, with the floor to them).
+    const drawn = drawnDoorsOf(it, this.level);
+    const panes = sp && lv.z >= 0 ? drawnWindows(sp, lv) : [];
+    let parapet: { a: Pt; b: Pt; out: Pt }[] | null = null;
     if (this.underground) {
-      // The shader draws walls against the rock; between rooms of a built level, masonry.
-      for (const w of lv.walls) if (!w.exterior) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]);
+      // The shader draws walls against the rock; between rooms of a built level, masonry (where
+      // shaped rooms meet, only along their shapes).
+      const masonry = undergroundWalls(lv, nx, ny);
+      for (const [a, b] of masonry) g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
       g.stroke({ width: 0.3, color: 0x6f6a61, cap: 'square' });
-      for (const w of lv.walls) if (!w.exterior) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]);
+      for (const [a, b] of masonry) g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
       g.stroke({ width: 0.08, color: INK, alpha: 0.6, cap: 'square' });
-      // Built sites: the outer walls inked straight, square at the corners.
+      // Built sites: the outer walls inked straight, square at the corners (but round shaped rooms
+      // and caverns, which the shader draws).
       if (SQUARE_SITES.has(it.function)) {
-        for (const w of lv.walls) if (w.exterior) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]);
+        if (lv.rooms.some((r) => r.shape)) {
+          const { index } = shapeIndex(lv, nx, ny);
+          const box = (i: number, j: number) => i >= 0 && j >= 0 && i < nx && j < ny && lv.cells[j * nx + i] >= 0 && fromSquares(index[j * nx + i]);
+          const rock = (i: number, j: number) => i < 0 || j < 0 || i >= nx || j >= ny || lv.cells[j * nx + i] < 0;
+          for (let j = 0; j <= ny; j++) {
+            for (let i = 0; i <= nx; i++) {
+              if (i < nx && ((box(i, j - 1) && rock(i, j)) || (rock(i, j - 1) && box(i, j)))) g.moveTo(i, j).lineTo(i + 1, j);
+              if (j < ny && ((box(i - 1, j) && rock(i, j)) || (rock(i - 1, j) && box(i, j)))) g.moveTo(i, j).lineTo(i, j + 1);
+            }
+          }
+        } else {
+          for (const w of lv.walls) if (w.exterior) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]);
+        }
         g.stroke({ width: 0.08, color: INK, alpha: 0.85, cap: 'square', join: 'miter' });
       }
+    } else if (sp && drawn) {
+      // The solid wall over the furniture; the walls; then the floor through thick walls to doors
+      // and windows, over them.
+      drawMass(g, sp, INK);
+      // (The players' view: no gap for a secret door they haven't found.)
+      const hidden = (k: number) => this.style.player && lv.doors[k].kind === 'secret' && !!this.style.doors && !this.style.doors(locKey(it.id, this.level), k).found && !this.style.doors(locKey(it.id, this.level), k).open;
+      const gapped = drawn.map((d, k) => (hidden(k) ? { ...d, inner: undefined, outer: undefined, threshold: undefined } : d));
+      const kept = drawShapedWalls(g, sp, lv, gapped, panes, lv.roof ? 0.45 : 0.28, 0.45, INK);
+      parapet = sp.real ? kept : null;
+      if (!sp.real) for (const w of lv.walls) if (w.exterior) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]).stroke({ width: 0.45, color: INK, cap: 'square' });
+      for (const d of gapped) if (d.threshold && d.room !== undefined) drawOpening(g, d.threshold, colorOf(d.room), INK);
+      for (const w of panes) if (w.splay) drawOpening(g, w.splay, colorOf(w.room), INK);
     } else {
       for (const w of lv.walls) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]).stroke({ width: w.exterior || lv.roof ? 0.45 : 0.28, color: INK, cap: 'square' });
     }
-    if (lv.roof) {
+    if (lv.has_stairs && stairsCut) drawStairs(g);
+    if (lv.roof && parapet) {
+      // Merlons along the parapet, a square apart.
+      let run = 0.75;
+      for (const p of parapet) {
+        const len = Math.hypot(p.b[0] - p.a[0], p.b[1] - p.a[1]);
+        const [ux, uy] = [(p.b[0] - p.a[0]) / len, (p.b[1] - p.a[1]) / len];
+        for (; run < len; run += 1) {
+          const [cx, cy] = [p.a[0] + ux * run, p.a[1] + uy * run];
+          // (Square to the wall, across a corner at one; where that would reach past the wall's
+          // outer face (a sharp corner), moved in a little, else square to its side and moved in, else none.)
+          const corners = (c: Pt, [tx, ty]: Pt) => [-1, 1].flatMap((s) => [-1, 1].map((u): Pt => [c[0] + tx * 0.22 * s - ty * 0.22 * u, c[1] + ty * 0.22 * s + tx * 0.22 * u]));
+          const fits = (c: Pt, t: Pt) => corners(c, t).every((q) => insetParts(q, sp!.parts) >= -WALL_HALF - 1e-3);
+          const placed = [wallTangent([cx, cy], sp!.parts), [ux, uy] as Pt].map((t) => ({ t, at: within([cx, cy], t, 0.22, 0.22, sp!.parts) })).find((m) => Math.hypot(m.at[0] - cx, m.at[1] - cy) <= 0.2 && fits(m.at, m.t));
+          if (!placed) continue;
+          const [mx, my] = placed.at;
+          const [tx, ty] = placed.t;
+          g.poly([mx - tx * 0.22 - ty * 0.22, my - ty * 0.22 + tx * 0.22, mx + tx * 0.22 - ty * 0.22, my + ty * 0.22 + tx * 0.22, mx + tx * 0.22 + ty * 0.22, my + ty * 0.22 - tx * 0.22, mx - tx * 0.22 + ty * 0.22, my - ty * 0.22 - tx * 0.22]);
+        }
+        run -= len;
+      }
+      g.fill(0x6f6a61);
+    } else if (lv.roof) {
       for (const w of lv.walls) {
         if (!w.exterior) continue;
         const len = Math.abs(w.b[0] - w.a[0]) + Math.abs(w.b[1] - w.a[1]);
@@ -661,8 +739,13 @@ export class InteriorLayer {
       g.fill(0x6f6a61);
     }
     // Windows: a pale slot across the exterior wall (a filled rect: fine strokes on the
-    // scaled plan render unreliably).
-    if (lv.z >= 0) {
+    // scaled plan render unreliably); drawn to a shaped plan, on the outer wall as drawn.
+    if (lv.z >= 0 && sp) {
+      for (const { at: [cx, cy], tangent: [tx, ty] } of panes) {
+        g.poly([cx - tx * 0.3 - ty * 0.09, cy - ty * 0.3 + tx * 0.09, cx + tx * 0.3 - ty * 0.09, cy + ty * 0.3 + tx * 0.09, cx + tx * 0.3 + ty * 0.09, cy + ty * 0.3 - tx * 0.09, cx - tx * 0.3 + ty * 0.09, cy - ty * 0.3 - tx * 0.09]);
+      }
+      if (panes.length) g.fill(0xbcd6e0);
+    } else if (lv.z >= 0) {
       for (const [x0, y0, x1, y1] of lv.windows) {
         const vert = x0 === x1;
         if (vert) g.rect(x0 - 0.09, Math.min(y0, y1) + 0.2, 0.18, 0.6);
@@ -672,10 +755,12 @@ export class InteriorLayer {
     }
     const doorState = this.style.doors;
     const loc = locKey(it.id, this.level);
-    lv.doors.forEach((d, k) => {
-      if (doorState) this.drawPlayDoor(g, d, doorState(loc, k));
+    // (Doors as drawn: on a shaped room's wall, or the outer wall as drawn.)
+    const shown = lv.doors.map((d, k) => (drawn ? { ...d, a: drawn[k].a, b: drawn[k].b } : d));
+    shown.forEach((d, k) => {
+      if (doorState) this.drawPlayDoor(g, d, doorState(loc, k), !!drawn?.[k].moved);
     });
-    for (const d of doorState ? [] : lv.doors) {
+    for (const [k, d] of (doorState ? [] : shown).entries()) {
       if (d.kind === 'secret') {
         // For the DM: a dashed purple line where the wall hides a door.
         const [ax, ay] = d.a;
@@ -684,15 +769,27 @@ export class InteriorLayer {
         g.stroke({ width: 0.14, color: 0x9333ea, alpha: 0.85 });
         continue;
       }
-      const front = d.kind === 'front';
+      const wood = d.kind === 'front' ? 0x5a3a1a : 0x7a5530;
+      if (drawn?.[k].moved) {
+        // Off the square edge (on a shaped room's wall, or the outer wall as drawn): a leaf a
+        // quarter open from its hinge, swung into the room.
+        const len = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]);
+        const [ux, uy] = [(d.b[0] - d.a[0]) / len, (d.b[1] - d.a[1]) / len];
+        const [vx, vy] = [-uy, ux];
+        const th = Math.atan2(vy, vx);
+        g.moveTo(d.a[0], d.a[1]).lineTo(d.b[0], d.b[1]).stroke({ width: 0.12, color: wood });
+        g.moveTo(d.a[0], d.a[1]).lineTo(d.a[0] + (vx * 0.9 + ux * 0.1) * len, d.a[1] + (vy * 0.9 + uy * 0.1) * len).stroke({ width: 0.1, color: wood });
+        g.arc(d.a[0], d.a[1], 0.9 * len, th - 0.2, th).stroke({ width: 0.03, color: INK, alpha: 0.5 });
+        continue;
+      }
       const [ax, ay] = d.a;
       const [bx, by] = d.b;
       // A door leaf hinged at `a`, swung a quarter open into the square on one side.
       const vert = ax === bx;
       const lx = vert ? ax + 0.9 : ax + 0.1;
       const ly = vert ? ay + 0.1 : ay + 0.9;
-      g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 0.12, color: front ? 0x5a3a1a : 0x7a5530 });
-      g.moveTo(ax, ay).lineTo(lx, ly).stroke({ width: 0.1, color: front ? 0x5a3a1a : 0x7a5530 });
+      g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 0.12, color: wood });
+      g.moveTo(ax, ay).lineTo(lx, ly).stroke({ width: 0.1, color: wood });
       g.arc(ax, ay, 0.9, vert ? 0 : Math.PI / 2 - 0.2, vert ? 0.2 : Math.PI / 2).stroke({ width: 0.03, color: INK, alpha: 0.5 });
     }
     // Room labels in screen space.
@@ -712,12 +809,14 @@ export class InteriorLayer {
 
   /** A door in play: shut (a slab across the gap) or open (the leaf swung back); a secret door
    * the players have not found is wall to them and a dashed line to the DM. */
-  private drawPlayDoor(g: Graphics, d: InteriorLevel['doors'][number], st: DoorState) {
+  private drawPlayDoor(g: Graphics, d: InteriorLevel['doors'][number], st: DoorState, moved = false) {
     const [ax, ay] = d.a;
     const [bx, by] = d.b;
     const secret = d.kind === 'secret';
     if (secret && !st.found && !st.open) {
       if (this.style.player) {
+        // (On a shaped room's wall the wall is drawn whole there already.)
+        if (moved) return;
         if (this.underground) {
           g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 0.3, color: 0x6f6a61, cap: 'square' });
           g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 0.08, color: INK, alpha: 0.6, cap: 'square' });

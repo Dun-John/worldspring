@@ -413,8 +413,9 @@ export interface DesignLevel {
   natural: boolean;
   /** Room per square, run-length encoded: room (-1 rock), count, … */
   cells: number[];
-  /** By index (empty ones stay, so room names hold). */
-  rooms: { kind: string; raise_ft: number }[];
+  /** By index (empty ones stay, so room names hold). `shape`: drawn round, octagonal… (`render/
+   * roomShapes.ts` `SHAPES`; absent or 0 square), while its squares fit the shape. */
+  rooms: { kind: string; raise_ft: number; shape?: number }[];
   /** x, y, side (0 east, 1 south; a building's also 2 west, 3 north), flags (1 secret; a
    * building's door to the outside: 2 front, 4 back). */
   doors: [number, number, number, number][];
@@ -581,6 +582,10 @@ export interface Interior {
   stairs: [number, number, number, number];
   /** Uploaded pictures standing on its floors (`InteriorItem.sprite` is index + 1). */
   sprites?: { asset: string; name: string }[];
+  /** A building whose footprint is not the grid's rectangle: its outer wall as drawn (its middle on
+   * the footprint), convex parts whose union is the footprint (grid units, clockwise on screen),
+   * within half a square of its squares. */
+  outlines?: [number, number][][];
 }
 
 export interface InteriorLevel {
@@ -588,7 +593,9 @@ export interface InteriorLevel {
   name: string;
   elevation_ft: number;
   cells: number[];
-  rooms: { kind: string; squares: number; raise_ft: number; center: [number, number] }[];
+  /** `shape`: drawn round, octagonal, with an apse, chamfered or as a cavern (`roomShapes.ts`;
+   * absent square). Only ever set while the room's squares are the shape's. */
+  rooms: { kind: string; squares: number; raise_ft: number; center: [number, number]; shape?: number }[];
   walls: { a: [number, number]; b: [number, number]; exterior: boolean }[];
   doors: { a: [number, number]; b: [number, number]; kind: string; rooms: [number, number] }[];
   windows: [number, number, number, number][];

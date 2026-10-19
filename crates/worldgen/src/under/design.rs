@@ -80,12 +80,19 @@ fn is_zero(z: &i8) -> bool {
 fn is_false(b: &bool) -> bool {
     !*b
 }
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct DesignRoom {
     pub kind: String,
     /// Raised floor (a ledge), ft.
     pub raise_ft: u16,
+    /// Drawn round, octagonal, with an apse, chamfered or as a cavern (`interior::shape`; 0
+    /// square): built so while its squares fit the shape.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub shape: u8,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -263,6 +270,7 @@ impl SiteDesign {
                         .map(|r| DesignRoom {
                             kind: r.kind.into(),
                             raise_ft: r.raise_ft.max(0.0) as u16,
+                            shape: r.shape,
                         })
                         .collect(),
                     doors,
@@ -384,6 +392,7 @@ impl SiteDesign {
             entry_level: n.saturating_sub(1),
             stairs: [0; 4],
             sprites: sprites.table(),
+            outlines: Vec::new(),
         }
     }
 
@@ -391,7 +400,8 @@ impl SiteDesign {
     fn plan(&self, lv: &DesignLevel, kind: UnderKind, nx: usize, ny: usize, sprites: &mut Sprites) -> Plan {
         let mut p = Plan::new(nx, ny, 0, lv.natural);
         for r in &lv.rooms {
-            p.room(room_kind(&r.kind).unwrap_or(CHAMBER), r.raise_ft as f32);
+            let ri = p.room(room_kind(&r.kind).unwrap_or(CHAMBER), r.raise_ft as f32);
+            p.rooms[ri as usize].shape = r.shape;
         }
         let rooms = p.rooms.len() as i16;
         p.cells = decode(&lv.cells, nx * ny).unwrap_or_else(|| vec![-1; nx * ny]);
@@ -445,6 +455,7 @@ impl SiteDesign {
         let mut out = self.shape_problems();
         let it = self.build(id, 0, 0, &world.file.edits.sprites);
         out.extend(check(&it, Some(self.entry)));
+        out.extend(self.unfitted(&it));
         Ok((it, out))
     }
 
@@ -523,6 +534,178 @@ impl SiteDesign {
                 ..Default::default()
             });
         }
+    }
+
+    /// Rooms given a shape that `it` (what the design builds) draws square: their squares don't
+    /// fill it (or a building's cavern). Noted, not refused.
+    pub fn unfitted(&self, it: &Interior) -> Vec<Problem> {
+        let building = self.is_building();
+        let n = self.levels.len();
+        let mut out = Vec::new();
+        for (li, (lv, built)) in self.levels.iter().zip(&it.levels).enumerate() {
+            for (ri, r) in lv.rooms.iter().enumerate() {
+                // (A cavern on natural rock: nothing to break into.)
+                let natural_cavern = !building && lv.natural && r.shape == crate::interior::shape::CAVERN;
+                let Some(room) = built.rooms.get(ri).filter(|b| b.squares > 0 && r.shape != 0 && (b.shape != r.shape || natural_cavern)) else { continue };
+                let k = built.cells.iter().position(|&c| c == ri as i16).unwrap_or(0);
+                let (x, y) = (k % it.nx, k / it.nx);
+                let tag = if building { lv.name.clone() } else { depth_tag(n, li) };
+                let shape = crate::interior::shape::name(r.shape).unwrap_or("shaped");
+                if natural_cavern {
+                    let text = format!("{tag}: the {} at {x},{y} is natural rock already: a cavern breaking in shows only on a built level", room.kind);
+                    out.push(Problem { level: li, at: Some([x as u16, y as u16]), text, blocking: false });
+                    continue;
+                }
+                let why = if building && r.shape == crate::interior::shape::CAVERN { "a building's rooms can't be caverns".to_string() } else { format!("its squares don't fill its shape ({shape}); to fit them, choose the shape again, or give the room just the squares whose middles lie inside the shape") };
+                out.push(Problem { level: li, at: Some([x as u16, y as u16]), text: format!("{tag}: the {} at {x},{y} is drawn square: {why}", room.kind), blocking: false });
+            }
+        }
+        out
+    }
+
+    /// `set_shape`, held to the rules (`problems`, as site or building `id` of `world`): refused,
+    /// with nothing changed, when the change breaks one more than the design already did (each
+    /// kind of problem counted, whatever its numbers: a stretch already cut off may change size).
+    pub fn set_shape_checked(&mut self, world: &World, t0: &T0, id: &str, level: usize, room: usize, shape: u8) -> Result<(), String> {
+        let blocking = |d: &SiteDesign| -> Result<Vec<(String, String)>, String> {
+            Ok(d.problems(world, t0, id)?.1.into_iter().filter(|p| p.blocking).map(|p| (p.text.chars().filter(|c| !c.is_ascii_digit()).collect(), p.text)).collect())
+        };
+        let had = blocking(self)?;
+        let mut next = self.clone();
+        next.set_shape(level, room, shape)?;
+        let now = blocking(&next)?;
+        let count = |v: &[(String, String)], k: &str| v.iter().filter(|p| p.0 == k).count();
+        if let Some(p) = now.iter().find(|p| count(&now, &p.0) > count(&had, &p.0)) {
+            let kind = &self.levels[level].rooms[room].kind;
+            return Err(format!("the {kind} can't take that shape: {}", p.1));
+        }
+        *self = next;
+        Ok(())
+    }
+
+    /// Room `room` of level `level` given `shape` (`interior::shape`), its squares made the
+    /// shape's in the box round them: squares outside it go back to rock (a building's to the
+    /// room beside them); rock inside it joins the room (a building's only within its walls: where
+    /// another level has floor). Other rooms keep theirs. Refused, with nothing changed, when the
+    /// squares can't be made the shape's (another room or the walls in the way).
+    pub fn set_shape(&mut self, level: usize, room: usize, shape: u8) -> Result<(), String> {
+        use crate::interior::shape;
+        let (nx, ny) = (self.nx as usize, self.ny as usize);
+        let building = self.is_building();
+        if building && shape == shape::CAVERN {
+            return Err("a building's rooms can't be caverns".into());
+        }
+        if shape != shape::SQUARE && shape::name(shape).is_none() {
+            return Err(format!("no such shape: {shape}"));
+        }
+        // (A building's squares within its walls: floor on some level.)
+        let walls: Vec<bool> = if building {
+            let mut w = vec![false; nx * ny];
+            for lv in &self.levels {
+                for (k, c) in decode(&lv.cells, nx * ny).unwrap_or_default().iter().enumerate() {
+                    w[k] |= *c >= 0;
+                }
+            }
+            w
+        } else {
+            Vec::new()
+        };
+        let lv = self.levels.get_mut(level).ok_or_else(|| format!("no level {level}"))?;
+        let kind = lv.rooms.get(room).ok_or_else(|| format!("no room {room} on that level"))?.kind.clone();
+        let mut cells = decode(&lv.cells, nx * ny).ok_or("the level's squares don't add up")?;
+        let before = cells.clone();
+        // Squares given away: underground, a doorway goes to the room across its door (the way in
+        // reaching on to the shape), the rest to rock; a building's to a room beside it with no
+        // shape of its own (one with a shape would no longer fit it).
+        let shaped: Vec<bool> = lv.rooms.iter().map(|r| shape::geometric(r.shape)).collect();
+        let skip = |r: i16| shaped.get(r as usize).copied().unwrap_or(false);
+        let spare = |c: &[i16], k: usize| if building { shape::neighbour_room(c, nx, ny, k, room as i16, &skip) } else { -1 };
+        shape::fit(&mut cells, nx, room as i16, shape, &spare, &|k| !building || walls[k]);
+        let name = shape::name(shape).unwrap_or("shaped");
+        let made = match shape {
+            shape::OCTAGON => "octagonal".to_string(),
+            shape::CAVERN => "a cavern".to_string(),
+            _ if name.starts_with("apse") => "to end in an apse".to_string(),
+            _ => name.to_string(),
+        };
+        if !shape::fits(&cells, nx, room as i16, shape) {
+            let why = if building { "the walls or another room are in the way" } else { "another room is in the way" };
+            return Err(format!("the {kind} can't be made {made}: {why}"));
+        }
+        // Underground, a way in through a corner gone to rock is carried on to the shape: the
+        // room beyond the door takes the squares between (the fewest), the door moves to its end.
+        let mut moved: Vec<[u16; 4]> = Vec::new();
+        let mut doorways: Vec<usize> = Vec::new();
+        if !building {
+            let me = room as i16;
+            for d in &lv.doors {
+                let Some((a, b)) = door_squares(d[0], d[1], d[2], nx, ny) else { continue };
+                let (k, m) = if before[a] == me { (a, b) } else if before[b] == me { (b, a) } else { continue };
+                let other = cells[m];
+                if cells[k] >= 0 || other < 0 || other == me || skip(other) {
+                    continue;
+                }
+                // Through the room's old squares now rock, to one beside the shape.
+                let mut from = vec![usize::MAX; nx * ny];
+                from[k] = k;
+                let mut queue = std::collections::VecDeque::from([k]);
+                let mut end = None;
+                while let Some(q) = queue.pop_front() {
+                    if let Some(u) = neighbours(q, nx, ny).find(|&u| cells[u] == me) {
+                        end = Some((q, u));
+                        break;
+                    }
+                    for u in neighbours(q, nx, ny) {
+                        if from[u] == usize::MAX && before[u] == me && cells[u] < 0 {
+                            from[u] = q;
+                            queue.push_back(u);
+                        }
+                    }
+                }
+                let Some((t, u)) = end else { continue };
+                let mut q = t;
+                loop {
+                    cells[q] = other;
+                    if q == k {
+                        break;
+                    }
+                    q = from[q];
+                }
+                doorways.push(u);
+                let (p, r) = (t.min(u), t.max(u));
+                let door = [(p % nx) as u16, (p / nx) as u16, (r == p + nx) as u16, d[3]];
+                if !moved.iter().chain(&lv.doors).any(|o| o[..3] == door[..3]) {
+                    moved.push(door);
+                }
+            }
+        }
+        // The ways stay on floor; props left in the rock, in a doorway moved, or across two rooms
+        // now, go.
+        let rock = |k: usize| (cells[k] < 0 && before[k] >= 0) || doorways.contains(&k);
+        let on = |f: &DesignItem| {
+            let squares: Vec<usize> = (f.y as usize..(f.y + f.h) as usize).flat_map(|j| (f.x as usize..(f.x + f.w) as usize).map(move |i| (i, j))).filter(|&(i, j)| i < nx && j < ny).map(|(i, j)| j * nx + i).collect();
+            let touched = squares.iter().any(|&k| cells[k] != before[k] || doorways.contains(&k));
+            touched && (squares.iter().any(|&k| rock(k)) || squares.iter().any(|&k| cells[k] != cells[squares[0]]))
+        };
+        if let Some(f) = lv.items.iter().find(|f| WAYS.contains(&f.kind.as_str()) && on(f)) {
+            return Err(format!("the {kind} can't be made {made}: the way {} at {},{} would be in the rock or a doorway", f.kind, f.x, f.y));
+        }
+        lv.items.retain(|f| !on(f));
+        lv.rooms[room].shape = shape;
+        lv.cells = encode(&cells);
+        lv.doors.extend(moved);
+        // Doors that no longer lie between two rooms go.
+        lv.doors.retain(|d| {
+            if !building {
+                return door_squares(d[0], d[1], d[2], nx, ny).is_some_and(|(a, b)| cells[a] >= 0 && cells[b] >= 0 && cells[a] != cells[b]);
+            }
+            // (A building's door to the outside stays one, given from its room's square.)
+            crate::interior::design::door_at(d[0], d[1], d[2], nx, ny).is_some_and(|(a, b, _, _)| {
+                let other = b.map_or(-1, |b| cells[b]);
+                cells[a] >= 0 && other != cells[a] && (other >= 0 || d[3] & 6 != 0)
+            })
+        });
+        Ok(())
     }
 }
 
@@ -833,7 +1016,8 @@ pub fn design_of(world: &World, t0: &T0, id: &str, original: bool) -> Result<Sit
 }
 
 /// For the editor (WASM): the design given (else the site's own, `design_of`), changed by
-/// `action` (`{"doors": level|null}`, `{"furnish": {level, room, seed}}`, `{"original": true}`;
+/// `action` (`{"doors": level|null}`, `{"furnish": {level, room, seed}}`, `{"original": true}`,
+/// `{"shape": {level, room, shape}}`: a room's shape by name or code, its squares fitted to it;
 /// a building's `{"refit": true}`: fitted to its storeys as they are now, `{"refit": n}`: to n
 /// storeys, `{"cellars": n}`: n levels below ground), with the site it
 /// builds and its problems: `{design, interior, problems}` (a saved design that no longer fits
@@ -871,6 +1055,13 @@ pub fn design_json(world: &World, t0: &T0, id: &str, design: Option<&str>, actio
         }
         if action.get("doors").is_some() {
             d.add_doors(action["doors"].as_u64().map(|l| l as usize));
+        }
+        if let Some(f) = action.get("shape") {
+            let shape = match &f["shape"] {
+                Value::String(n) => crate::interior::shape::parse(n).ok_or_else(|| format!("no such shape: {n}"))?,
+                v => v.as_u64().filter(|&c| c <= 255).ok_or("a shape is a name or its code")? as u8,
+            };
+            d.set_shape_checked(world, t0, id, f["level"].as_u64().unwrap_or(0) as usize, f["room"].as_u64().unwrap_or(0) as usize, shape)?;
         }
         if let Some(f) = action.get("furnish") {
             d.furnish(
@@ -936,8 +1127,9 @@ pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) ->
             .filter(|(r, _)| used[*r])
             .map(|(r, room)| {
                 let raise = if room.raise_ft > 0 { format!("+{}", room.raise_ft) } else { String::new() };
+                let shape = crate::interior::shape::name(room.shape).map(|s| format!(" ({s})")).unwrap_or_default();
                 let named = name(li, r).map(|t| format!(" \"{t}\"")).unwrap_or_default();
-                format!("{}={}{raise}{named}", SYMBOLS[r] as char, room.kind)
+                format!("{}={}{raise}{shape}{named}", SYMBOLS[r] as char, room.kind)
             })
             .collect();
         s.push_str(&format!("rooms: {}\ngrid:\n", legend.join("; ")));
@@ -1143,7 +1335,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
         if let Some(legend) = b.rooms {
             let mut rooms: Vec<Option<DesignRoom>> = Vec::new();
             for entry in legend.split(';').map(str::trim).filter(|e| !e.is_empty()) {
-                let (sym, rest) = entry.split_once('=').ok_or_else(|| format!("{tag}: room '{entry}': write it as a=kind"))?;
+                let (sym, rest) = entry.split_once('=').ok_or_else(|| format!("{tag}: room '{entry}': write it as a=kind, a=kind+5, a=kind (round) or a=kind \"name\""))?;
                 let sym = sym.trim();
                 let r = (sym.len() == 1).then(|| SYMBOLS.iter().position(|&c| c == sym.as_bytes()[0])).flatten().ok_or_else(|| {
                     format!(
@@ -1155,6 +1347,16 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                     Some((k, n)) => (k.trim(), Some(n.trim_end_matches('"').trim().to_string())),
                     None => (rest.trim(), None),
                 };
+                // "kind+5 (round)": the shape last, in brackets.
+                // (Brackets naming no shape stay part of the kind: "hall (east)"; a shape goes last.)
+                let (body, shape) = match body.strip_suffix(')').and_then(|b| b.rsplit_once('(')).and_then(|(k, sh)| crate::interior::shape::parse(sh).map(|c| (k.trim(), c))) {
+                    Some((_, crate::interior::shape::CAVERN)) if building => return Err(format!("{tag}: room '{entry}': a building's rooms can't be caverns")),
+                    Some(found) => found,
+                    None => (body, 0),
+                };
+                if let Some(sh) = body.split('(').skip(1).filter_map(|g| g.split_once(')')).map(|g| g.0).find(|g| crate::interior::shape::parse(g).is_some()) {
+                    return Err(format!("{tag}: room '{entry}': the shape ({}) goes last, after the kind and any other brackets", sh.trim()));
+                }
                 let (kind, raise) = match body.rsplit_once('+') {
                     Some((k, v)) if v.trim().parse::<u16>().is_ok() => (k.trim(), v.trim().parse::<u16>().unwrap_or(0)),
                     _ => (body, 0),
@@ -1166,6 +1368,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                 rooms[r] = Some(DesignRoom {
                     kind: known.unwrap_or(CHAMBER).into(),
                     raise_ft: raise.min(30),
+                    shape,
                 });
                 // A kind of room the generators don't know becomes a chamber by that name.
                 if let Some(nm) = named.filter(|n| !n.is_empty()).or_else(|| known.is_none().then(|| kind.to_string())) {
@@ -1179,7 +1382,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                 .map(|(r, x)| {
                     x.or_else(|| old.get(r).cloned()).unwrap_or(DesignRoom {
                         kind: CHAMBER.into(),
-                        raise_ft: 0,
+                        ..Default::default()
                     })
                 })
                 .collect();

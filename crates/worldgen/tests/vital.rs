@@ -860,6 +860,20 @@ fn interiors_guarantee() {
             checked += 1;
         }
     }
+    // Every wizard's tower is round inside: its outer wall drawn round, its rooms round.
+    let mut round = 0;
+    for p in t0.pois.iter().enumerate().filter(|(_, p)| p.kind == worldgen::t0::settle::PoiKind::Tower).map(|(p, _)| t0.settlements.len() + p) {
+        let l = town::layout(&world, &t0, p);
+        for b in l.buildings.iter().filter(|b| b.structure == Structure::Roofed && b.func.is_none() && b.residential as usize == town::catalog::WIZARD_TOWER) {
+            let it = interior::generate(&world, &t0, p, b.id as usize).unwrap();
+            assert!(it.outlines.len() == 1 && it.outlines[0].len() >= 8, "{}: a wizard's tower not drawn round", it.id);
+            for lv in &it.levels {
+                assert!(lv.rooms.iter().all(|r| r.squares == 0 || r.shape == interior::shape::ROUND), "{} {}: a wizard's tower's room not round", it.id, lv.name);
+            }
+            round += 1;
+        }
+    }
+    assert!(round >= 3, "too few wizard's towers checked ({round})");
     designed_building(&world, &t0, by_tier(Tier::Town).expect("a town"));
     assert!(checked > 500, "too few interiors ({checked})");
     assert!(drinking > 10, "too few inns and taverns checked ({drinking})");
@@ -905,7 +919,7 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
                 cells[k] = study;
             }
         }
-        d.levels[g].rooms.push(DesignRoom { kind: "study".into(), raise_ft: 0 });
+        d.levels[g].rooms.push(DesignRoom { kind: "study".into(), ..Default::default() });
         d.levels[g].cells = design::encode(&cells);
         d.add_doors(Some(g));
         if !ok(&d, &id) {
@@ -946,7 +960,23 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
                 }
             }
         }
-        if back && moved {
+        // The study drawn round (else octagonal, else chamfered): the squares outside the shape go
+        // to the rooms beside it.
+        let mut shaped = false;
+        for want in [interior::shape::ROUND, interior::shape::OCTAGON, interior::shape::CHAMFERED] {
+            let mut t = d.clone();
+            if t.set_shape_checked(world, t0, &id, g, study as usize, want).is_err() {
+                continue;
+            }
+            // Taken: drawn so, every rule kept.
+            let (it, problems) = t.problems(world, t0, &id).unwrap();
+            assert!(problems.iter().all(|p| !p.blocking), "{id}: the study made {want} breaks a rule: {problems:?}");
+            assert_eq!(it.levels[g].rooms[study as usize].shape, want, "{id}: the study made {want} is drawn square");
+            d = t;
+            shaped = true;
+            break;
+        }
+        if back && moved && shaped {
             done = Some((id, d, b.floors));
             break;
         }
@@ -992,7 +1022,7 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
     let it = interior::generate_id(&w2, t0, &id).unwrap();
     assert_eq!(serde_json::to_string(&it).unwrap(), serde_json::to_string(&built).unwrap(), "{id}: the world doesn't build the design");
     let g = &it.levels[it.entry_level];
-    assert!(g.rooms.iter().any(|r| r.kind == "study") && g.doors.iter().any(|d| d.kind == "back"), "{id}: the study and its back door");
+    assert!(g.rooms.iter().any(|r| r.kind == "study" && r.shape != 0) && g.doors.iter().any(|d| d.kind == "back"), "{id}: the study, drawn shaped, and its back door");
     check_interior(&w2, t0, &town::layout(&w2, t0, si), si, &id, &buckets);
     // A new footprint: the design no longer fits, the generated interior stands.
     let b = l.building(id.rsplit(':').next().unwrap().parse().unwrap()).unwrap();
@@ -1092,6 +1122,59 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
     let ms = t.elapsed().as_secs_f64() * 1e3;
     let (nx, ny) = (it.nx, it.ny);
     let tag = format!("{bi} ({})", it.function);
+    // Shapes are only drawn: a room keeps one while its squares are the shape's. The outer wall
+    // drawn round a footprint off the grid (`outlines`: on the footprint, pushed out where squares
+    // reach past it) leaves every square's middle a tenth of a square inside its inner face, keeps
+    // within a square of them, and never cuts a generated stair block.
+    for lv in &it.levels {
+        for (ri, r) in lv.rooms.iter().enumerate() {
+            assert!(r.shape == 0 || interior::shape::fits(&lv.cells, nx, ri as i16, r.shape), "{tag} {}: the {} is drawn shaped ({}) off its squares", lv.name, r.kind, r.shape);
+        }
+    }
+    if !it.outlines.is_empty() {
+        // How far a point lies inside the outline (its parts' best), negative outside.
+        let inset = |x: f32, y: f32| {
+            it.outlines
+                .iter()
+                .map(|o| {
+                    (0..o.len())
+                        .map(|k| {
+                            let (a, b) = (o[k], o[(k + 1) % o.len()]);
+                            ((b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0])) / (b[0] - a[0]).hypot(b[1] - a[1]).max(1e-9)
+                        })
+                        .fold(f32::MAX, f32::min)
+                })
+                .fold(f32::MIN, f32::max)
+        };
+        for lv in &it.levels {
+            for k in (0..nx * ny).filter(|&k| lv.cells[k] >= 0) {
+                let d = inset((k % nx) as f32 + 0.5, (k / nx) as f32 + 0.5);
+                assert!(d >= interior::WALL_HALF as f32 + 0.1 - 1e-3, "{tag} {}: square {},{} only {d:.2} inside its outer wall", lv.name, k % nx, k / nx);
+            }
+            // (Unless no square of the building is clear of the wall.)
+            let st = it.stairs;
+            let room = (0..nx * ny).any(|k| {
+                let (i, j) = ((k % nx) as f32, (k / nx) as f32);
+                lv.cells[k] >= 0 && [(i, j), (i + 1.0, j), (i, j + 1.0), (i + 1.0, j + 1.0)].iter().all(|c| inset(c.0, c.1) >= interior::WALL_HALF as f32 - 1e-3)
+            });
+            if lv.has_stairs && room && !world.file.edits.designs.contains_key(id) {
+                for (x, y) in [(st[0], st[1]), (st[0] + st[2], st[1]), (st[0], st[1] + st[3]), (st[0] + st[2], st[1] + st[3])] {
+                    let d = inset(x as f32, y as f32);
+                    assert!(d >= interior::WALL_HALF as f32 - 1e-3, "{tag} {}: the outer wall cuts the stairs {st:?} ({d:.2} in)", lv.name);
+                }
+            }
+        }
+        let g = &it.levels[it.entry_level];
+        for v in it.outlines.iter().flatten() {
+            let near = (0..nx * ny).filter(|&k| g.cells[k] >= 0).map(|k| {
+                let (i, j) = ((k % nx) as f32, (k / nx) as f32);
+                let (dx, dy) = ((i - v[0]).max(v[0] - i - 1.0).max(0.0), (j - v[1]).max(v[1] - j - 1.0).max(0.0));
+                (dx * dx + dy * dy).sqrt()
+            });
+            let d = near.fold(f32::MAX, f32::min);
+            assert!(d <= 1.0, "{tag}: its outer wall stands {d:.2} squares off its floor at {v:?}");
+        }
+    }
     // (Generated ones; a design may have no cellar.)
     assert!(it.levels.len() >= 2 || world.file.edits.designs.contains_key(id), "{tag}: only {} level", it.levels.len());
     // A building's interior as a design builds it again exactly, and keeps the designer's rules.
@@ -1304,7 +1387,7 @@ fn underground_guarantee() {
     t0.apply_edits(&world);
     let t0 = t0;
     let (mut worst_ms, mut kinds) = (0.0f64, std::collections::BTreeMap::<&str, usize>::new());
-    let mut designed = 0;
+    let (mut designed, mut shaped_rooms) = (0, 0);
     // Squares reached from `start` over floor, stepping between rooms only through doors (any
     // step on a natural level), never onto `blocked`.
     let flood = |lv: &Level, nx: usize, ny: usize, start: usize, blocked: &dyn Fn(usize) -> bool| {
@@ -1484,12 +1567,58 @@ fn underground_guarantee() {
                     }
                     for (r, room) in lv.rooms.iter_mut().enumerate() {
                         if !used(r) {
-                            *room = design::DesignRoom { kind: design::CHAMBER.into(), raise_ft: 0 };
+                            *room = design::DesignRoom { kind: design::CHAMBER.into(), ..Default::default() };
                         }
                     }
                 }
                 assert!(names.is_empty() && back == same, "{tag}: its text reads back as something else");
                 designed += 1;
+                // Shaped rooms come back as well: every third room given a shape in turn (its squares
+                // fitted to it; one whose squares can't be is built square), as built and as text.
+                use worldgen::interior::shape;
+                let mut shaped = d.clone();
+                let mut turn = 0;
+                for li2 in 0..shaped.levels.len() {
+                    for ri in (0..shaped.levels[li2].rooms.len()).step_by(3) {
+                        let code = [shape::ROUND, shape::OCTAGON, shape::APSE_N, shape::APSE_E, shape::APSE_S, shape::APSE_W, shape::CHAMFERED, shape::CAVERN][turn % 8];
+                        turn += 1;
+                        // (Refused where another room or a rule is in the way: nothing changes; taken,
+                        // the site keeps every rule.)
+                        // (Checked the cheap way round: the change alone, then held to the rules.)
+                        let mut next = shaped.clone();
+                        if next.set_shape(li2, ri, code).is_err() {
+                            assert!(next == shaped, "{tag}: a shape refused, yet the design changed");
+                            continue;
+                        }
+                        if next.problems(&world, &t0, &it.id).unwrap().1.iter().all(|p| !p.blocking) {
+                            shaped = next;
+                        } else {
+                            let before = shaped.clone();
+                            assert!(shaped.set_shape_checked(&world, &t0, &it.id, li2, ri, code).is_err() && shaped == before, "{tag}: a shape that breaks a rule is taken");
+                        }
+                    }
+                }
+                let built = shaped.build(&it.id, it.settlement, it.building, &Default::default());
+                let mut kept = shaped.clone();
+                for (lv, b) in kept.levels.iter_mut().zip(&built.levels) {
+                    for (ri, (r, br)) in lv.rooms.iter_mut().zip(&b.rooms).enumerate() {
+                        if br.shape != r.shape {
+                            assert!(br.squares == 0 || !shape::fits(&b.cells, it.nx, ri as i16, r.shape), "{tag}: a room fitting its shape built square");
+                            r.shape = 0;
+                        } else if r.shape != 0 {
+                            shaped_rooms += 1;
+                        }
+                    }
+                }
+                // (Doors in any order: a doorway moved round a shape's corner comes last in the design.)
+                let doors_sorted = |mut d: design::SiteDesign| {
+                    d.levels.iter_mut().for_each(|lv| lv.doors.sort());
+                    d
+                };
+                let (fa, fb) = (doors_sorted(design::SiteDesign::from_interior(&built)), doors_sorted(kept.clone()));
+                assert!(fa == fb, "{tag}: its shaped rooms don't come back from what it builds");
+                let text = design::to_text(&kept, &|_, _| None).unwrap_or_else(|e| panic!("{tag}: {e}"));
+                assert!(design::from_text(&text, &kept).unwrap_or_else(|e| panic!("{tag}: {e}\n{text}")).0 == kept, "{tag}: its shaped rooms' text reads back as something else");
             }
             // A created site is what it was asked to be.
             if let Some(c) = li.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|c| world.file.edits.created.get(c)) {
@@ -1543,6 +1672,7 @@ fn underground_guarantee() {
     }
     assert!(worst_ms < 300.0, "slowest underground site took {worst_ms:.1} ms");
     assert!(designed > 0, "no site to design");
+    assert!(shaped_rooms > 100, "too few shaped rooms built ({shaped_rooms})");
     designed_site(&world, &t0);
     designed_cellars(&world, &t0);
 }
@@ -1637,7 +1767,7 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
         .collect();
     let level = |doors: &str| {
         format!(
-            "site dungeon · {} levels\nlevel {n}\nitems: {}; down {x},{y}\nlevel {}: Level {} · the vault\nrooms: a=landing; b=secret vault \"The Hoard\"\ngrid:\n{grid}doors: {doors}\nitems: chest {},{} variant 2 back e\n",
+            "site dungeon · {} levels\nlevel {n}\nitems: {}; down {x},{y}\nlevel {}: Level {} · the vault\nrooms: a=landing (cavern); b=secret vault (round) \"The Hoard\"\ngrid:\n{grid}doors: {doors}\nitems: chest {},{} variant 2 back e\n",
             n + 1,
             items.join("; "),
             n + 1,
@@ -1658,6 +1788,22 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     let text = design::to_text(&d, &|_, _| None).unwrap();
     assert!(text.contains(&format!("chest {},{} back e variant 2", x + 5, y)), "{id}: the chest in the text plan:\n{text}");
     assert!(design::from_text(&text, &base).unwrap().0 == d, "{id}: the text plan doesn't read back:\n{text}");
+    // Shapes: the landing a cavern breaking in; the vault round in the plan but drawn square (its
+    // squares fill their box: noted), until the designer fits it to an octagon (its corners rock).
+    use worldgen::interior::shape;
+    assert_eq!((it.levels[0].rooms[0].shape, it.levels[0].rooms[1].shape), (shape::CAVERN, 0), "{id}: the landing's and vault's shapes as built");
+    assert!(problems.iter().any(|p| !p.blocking && p.text.contains("drawn square")), "{id}: the vault drawn square, not noted: {problems:?}");
+    assert!(text.contains("a=landing (cavern); b=secret vault (round)"), "{id}: the shapes in the text plan:\n{text}");
+    let v: serde_json::Value = serde_json::from_str(&design::design_json(world, t0, &id, Some(&serde_json::to_string(&d).unwrap()), Some(r#"{"shape":{"level":0,"room":1,"shape":"octagon"}}"#))).unwrap();
+    let d: design::SiteDesign = serde_json::from_value(v["design"].clone()).unwrap();
+    assert!(v["problems"].as_array().unwrap().iter().all(|p| p["blocking"] == false), "{id}: the octagonal vault: {}", v["problems"]);
+    assert_eq!(v["interior"]["levels"][0]["rooms"][1]["shape"], shape::OCTAGON, "{id}: the vault not drawn octagonal");
+    let vault = design::decode(&d.levels[0].cells, nx * ny).unwrap().iter().filter(|&&c| c == 1).count();
+    assert_eq!(vault, 21, "{id}: the octagonal vault's squares");
+    let text = design::to_text(&d, &|_, _| None).unwrap();
+    assert!(text.contains("b=secret vault (octagon)") && design::from_text(&text, &base).unwrap().0 == d, "{id}: the octagonal vault's text plan doesn't read back:\n{text}");
+    let built = d.problems(world, t0, &id).unwrap().0;
+    assert!(design::SiteDesign::from_interior(&built).levels[0].rooms == d.levels[0].rooms, "{id}: the shapes don't come back from what the design builds");
     // Broken: the vault shut off; the way in moved; the way up off the way down.
     let (shut, _) = design::from_text(&level(""), &base).unwrap();
     assert!(shut.problems(world, t0, &id).unwrap().1.iter().any(|p| p.blocking && p.level == 0 && p.text.contains("can't be reached")), "{id}: a room shut off");
@@ -1701,6 +1847,7 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     assert_eq!(w2.hash, world.hash, "designs are edits: the world hash stays");
     let it2 = worldgen::interior::generate_id(&w2, t0, &id).unwrap();
     assert_eq!(it2.levels.len(), n + 1, "{id}: the world builds the design");
+    assert_eq!(it2.levels[0].rooms[1].shape, shape::OCTAGON, "{id}: the world doesn't build the vault octagonal");
     let w3 = World::from_json(&serde_json::to_string(&w2.file).unwrap()).unwrap();
     // (serde_json reads a long float back to within a unit in its last place, the design's origin
     // among them: the same but for that.)

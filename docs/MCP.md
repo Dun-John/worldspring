@@ -897,8 +897,16 @@ level 2: Level 2 · the deep
 - Levels are numbered from **1 at the top**. (Their rename ids, `l:<site>:<i>`, count from the bottom.)
 - `rooms:` a symbol per room (`a`–`z`, `A`–`Z`, `0`–`9`, then `#$%&+?@<>~^*!`): its kind (as the generator names
   rooms: `guard room`, `crypt of the old lords`, `boss chamber`, `cavern`…), `+5`/`+10` for a raised floor,
-  and a name in quotes (it becomes the room's rename). A kind the generator doesn't know becomes a chamber named
-  as written.
+  a shape in brackets, and a name in quotes (it becomes the room's rename): `c=sanctum+5 (round) "The Well of
+  Stars"`. A kind the generator doesn't know becomes a chamber named as written (brackets that name no shape
+  are part of it: `a=hall (east)`).
+- Shapes are drawn only: `round` (a circle, or round-ended in a longer room), `octagon`, `apse n`/`e`/`s`/`w` (a
+  round end on that side of the grid: `n` toward y 0), `chamfered` (corners cut), and `cavern` (rough rock
+  breaking into a built level; underground only). Everything played stays on the squares, so a shaped room's
+  squares must be the shape's: those whose middle lies inside it, in the box round the room's squares (a round
+  room 7 squares across leaves out each corner square and the two beside it). A room whose squares don't fit
+  its shape is drawn square, and the reply notes it. In the app's designer, choosing a shape fits the squares to
+  it; `set_site_design` with `fit_shapes` does the same.
 - `grid:` one row per line, one character per 5-ft square (`.` rock); `x` counts across from 0, `y` down from 0.
   Rows may be short (the rest is rock).
 - `doors:` `x,y e` is a door between square x,y and the one east of it, `x,y s` the one south; `secret` makes it
@@ -925,6 +933,7 @@ another sketch or generator) is set aside: the generated site stands, and the re
 | `id` | string | required | The site. |
 | `text` | string | required | The plan, or the parts to change. |
 | `furnish` | boolean | optional | Fill rooms with no props from their kind's kit (a boss chamber gets its dais, pillars and hoard). |
+| `fit_shapes` | boolean | optional | Fit the squares of rooms given a shape to it, as the designer does (squares outside it go to rock, a building's to the room beside it); one that can't be fitted without breaking a rule stays as written and is drawn square. The reply's `fit_shapes` lists those, with why, and any items fitting took away (on a square left empty, in the rock underground, in a doorway moved, or across two rooms). |
 | `dry_run` | boolean | optional | Check it and return what would be saved, without saving. |
 
 ```json

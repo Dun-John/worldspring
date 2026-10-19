@@ -21,6 +21,7 @@ import type { Graphics } from 'pixi.js';
 import type { DesignProblem, InteriorItem, SiteDesign, UnderCatalog } from '../../gen/protocol';
 import type { Camera } from '../../render/camera';
 import type { MapView, PointerTool } from '../../render/MapView';
+import { APSE_E, APSE_N, APSE_S, APSE_W, isApse } from '../../render/roomShapes';
 import { FINGER_PX, WheelTurn, type BarAt, type HandState, type HeldView, type Placer } from '../placing';
 import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, fits, isBuilding, type Item, mergeRooms, moveProp, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
 
@@ -81,6 +82,11 @@ export class SiteDesigner implements PointerTool, Placer {
   private past: SiteDesign[] = [];
   private future: SiteDesign[] = [];
   private queue: Promise<void> = Promise.resolve();
+  /** The level as it was before a room was last given a shape here (`li`, `ri`), and as that left
+   * it (`after`): while nothing else has changed it, the next shape for that room is fitted from
+   * the squares it had before, so turning an apse round (or going back to square corners)
+   * returns to where it started. */
+  private shapeBase: { li: number; ri: number; level: SiteDesign['levels'][number]; after: string } | null = null;
   /** A stroke (squares painted so far) or a rectangle (its corners), being drawn. */
   private stroke: Set<number> | null = null;
   private last: Sq | null = null;
@@ -262,6 +268,65 @@ export class SiteDesigner implements PointerTool, Placer {
       const r = d.levels[li]?.rooms[ri];
       if (!r) return false;
       Object.assign(r, room);
+    });
+  }
+
+  /** The room drawn in a shape (`roomShapes.ts`), its squares fitted to it: squares outside the
+   * shape go back to rock (a building's to the room beside them). An apse goes on the side away
+   * from the room's doors. Refused (a hint) when the shape doesn't fit or would break a rule. */
+  setShape(ri: number, shape: number) {
+    const li = this.level;
+    const base = this.shapeFrom(li, ri);
+    if (!base || !this.draft) return;
+    const d = plain(this.draft);
+    d.levels[li] = plain(base);
+    this.fitShape(li, ri, base, [isApse(shape) ? apseAway(d, li, ri) : shape]);
+  }
+
+  /** A room's apse moved round to the next side that takes it (north, east, south, west). */
+  turnApse(ri: number) {
+    const li = this.level;
+    const s = this.draft?.levels[li]?.rooms[ri]?.shape;
+    const base = this.shapeFrom(li, ri);
+    if (!isApse(s) || !base) return;
+    this.fitShape(li, ri, base, [1, 2, 3].map((k) => APSE_N + ((s! - APSE_N + k) % 4)));
+  }
+
+  /** The level to fit room `ri`'s next shape from: as it was before its last shape here, if
+   * nothing else has changed since; else as it is. */
+  private shapeFrom(li: number, ri: number): SiteDesign['levels'][number] | null {
+    const now = this.draft?.levels[li];
+    if (!now) return null;
+    const b = this.shapeBase;
+    return b && b.li === li && b.ri === ri && b.after === JSON.stringify(now) ? b.level : now;
+  }
+
+  /** Room `ri` of level `li` given the first of `codes` that the generator takes, fitted from
+   * `base`; undoable. */
+  private fitShape(li: number, ri: number, base: SiteDesign['levels'][number], codes: number[]) {
+    this.queue = this.queue.then(async () => {
+      if (!this.draft) return;
+      let refusal = '';
+      for (const code of codes) {
+        const next = plain(this.draft);
+        next.levels[li] = plain(base);
+        const reply = await this.ask(next, { shape: { level: li, room: ri, shape: code } });
+        if ('error' in reply) {
+          refusal ||= reply.error;
+          continue;
+        }
+        this.past.push(this.draft);
+        if (this.past.length > 200) this.past.shift();
+        this.future = [];
+        this.shapeBase = { li, ri, level: plain(base), after: JSON.stringify(reply.design.levels[li]) };
+        // (Pieces left in the rock, in a doorway or across two rooms go: say which.)
+        const now = reply.design.levels[li].items;
+        const gone = base.items.filter((f) => !now.some((o) => o.kind === f.kind && o.x === f.x && o.y === f.y));
+        await this.take(reply.design, reply.problems, reply.interior);
+        if (gone.length) this.host.hint(`Taken away as the room was fitted to its shape: ${gone.map((f) => `${this.host.piece(f.kind)?.name ?? f.kind} at ${f.x},${f.y}`).join(', ')}`);
+        return;
+      }
+      this.host.hint(refusal);
     });
   }
 
@@ -1007,6 +1072,32 @@ export class SiteDesigner implements PointerTool, Placer {
       g.circle(cx, cy, Math.max(6, cam.ppf * 4)).stroke({ width: 2.5, color: p.blocking ? 0xdc2626 : 0xd97706 });
     }
   }
+}
+
+/** The apse for room `ri` of level `li` on the side of its box away from its doors (their middle);
+ * north when it has none. */
+function apseAway(d: SiteDesign, li: number, ri: number): number {
+  const lv = d.levels[li];
+  const cells = decode(lv.cells, d.nx * d.ny);
+  const nx = d.nx;
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let k = 0; k < cells.length; k++) {
+    if (cells[k] !== ri) continue;
+    const [i, j] = [k % nx, Math.floor(k / nx)];
+    [x0, y0, x1, y1] = [Math.min(x0, i), Math.min(y0, j), Math.max(x1, i + 1), Math.max(y1, j + 1)];
+  }
+  if (x0 > x1) return APSE_N;
+  const mids: [number, number][] = [];
+  for (const [x, y, side] of lv.doors) {
+    const other = side === 0 ? [x + 1, y] : side === 1 ? [x, y + 1] : side === 2 ? [x - 1, y] : [x, y - 1];
+    const mine = cells[y * nx + x] === ri || (other[0] >= 0 && other[1] >= 0 && other[0] < nx && other[1] < d.ny && cells[other[1] * nx + other[0]] === ri);
+    if (mine) mids.push(side === 0 ? [x + 1, y + 0.5] : side === 1 ? [x + 0.5, y + 1] : side === 2 ? [x, y + 0.5] : [x + 0.5, y]);
+  }
+  if (!mids.length) return APSE_N;
+  const [mx, my] = [mids.reduce((a, m) => a + m[0], 0) / mids.length - (x0 + x1) / 2, mids.reduce((a, m) => a + m[1], 0) / mids.length - (y0 + y1) / 2];
+  // (Measured against the box's size: a long room's doors are far from its middle along it.)
+  const [ax, ay] = [mx / Math.max(1, x1 - x0), my / Math.max(1, y1 - y0)];
+  return Math.abs(ax) > Math.abs(ay) ? (ax > 0 ? APSE_W : APSE_E) : ay > 0 ? APSE_N : APSE_S;
 }
 
 /** A deep copy (of plain JSON data). */
