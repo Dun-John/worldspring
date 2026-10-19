@@ -23,6 +23,13 @@ inherits = "release"
 lto = true
 codegen-units = 1
 
+# `npm run wasm -- --quick`: the same code built fast for checking work in progress (no LTO, many
+# codegen units, incremental, no wasm-opt). Slower to run and bigger; never published.
+[profile.wasm-quick]
+inherits = "release"
+codegen-units = 256
+incremental = true
+
 # Generation is too slow unoptimized; keep dev builds usable.
 [profile.dev]
 opt-level = 2

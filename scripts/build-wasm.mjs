@@ -1,5 +1,7 @@
 // Build worldgen-wasm: cargo (wasm profile) → wasm-bindgen (web + nodejs) → wasm-opt.
 // Web output goes to app/src/gen/pkg; the nodejs build (for det-wasm.mjs) to target/wasm-node.
+// --quick: the wasm-quick profile and no wasm-opt, for checking work in progress (never published:
+// a plain build after it rebuilds, the stamp names the profile).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -11,13 +13,15 @@ const win = process.platform === 'win32';
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: root, stdio: 'inherit', shell: win, ...opts });
 const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
 
-run('cargo', ['build', '-p', 'worldgen-wasm', '--profile', 'wasm', '--target', 'wasm32-unknown-unknown']);
+const quick = process.argv.includes('--quick');
+const profile = quick ? 'wasm-quick' : 'wasm';
+run('cargo', ['build', '-p', 'worldgen-wasm', '--profile', profile, '--target', 'wasm32-unknown-unknown']);
 // Features rustc's wasm32 target emits (plus simd128 from .cargo/config.toml). Not --all-features:
 // that lets wasm-opt use newer encodings some engines reject.
 const WASM_FEATURES = ['--enable-simd', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', '--enable-reference-types', '--enable-multivalue'];
 // Semantics-preserving only (no --fast-math): determinism must survive optimization.
 const OPT_ARGS = ['-O3', ...WASM_FEATURES];
-const wasm = join(root, 'target/wasm32-unknown-unknown/wasm/worldgen_wasm.wasm');
+const wasm = join(root, `target/wasm32-unknown-unknown/${profile}/worldgen_wasm.wasm`);
 const outputs = [
   ['app/src/gen/pkg', 'web'],
   ['target/wasm-node', 'nodejs'],
@@ -27,6 +31,7 @@ const outputs = [
 // (the stamp also keeps the dev server from reloading on a build that changed nothing).
 const stampPath = join(root, 'target/wasm-pkg.stamp');
 const stampOf = () => JSON.stringify({
+  profile,
   wasm: sha256(wasm),
   bindgen: execFileSync('wasm-bindgen', ['--version'], { encoding: 'utf8', shell: win }).trim(),
   opt: OPT_ARGS,
@@ -89,7 +94,7 @@ function wasmOpt(file) {
   }
   run(npmWasmOpt, [...OPT_ARGS, file, '-o', file]);
 }
-const canOpt = native !== null || existsSync(npmWasmOpt);
+const canOpt = !quick && (native !== null || existsSync(npmWasmOpt));
 
 for (const o of outputs) run('wasm-bindgen', [wasm, '--out-dir', o.dir, '--target', o.target]);
 // wasm-bindgen's web and nodejs modules are the same bytes (only the JS glue differs): optimize once.
@@ -102,6 +107,6 @@ if (canOpt) {
 }
 // The nodejs glue is CommonJS; the repo root is "type": "module".
 writeFileSync(join(root, 'target/wasm-node/package.json'), '{"type": "commonjs"}\n');
-if (canOpt) writeFileSync(stampPath, stampOf());
+if (canOpt || quick) writeFileSync(stampPath, stampOf());
 else rmSync(stampPath, { force: true });
-console.log(canOpt ? 'wasm built and optimized' : 'wasm built (wasm-opt not installed; run npm install in app/)');
+console.log(quick ? 'wasm built quick (unoptimized; run npm run wasm before a commit)' : canOpt ? 'wasm built and optimized' : 'wasm built (wasm-opt not installed; run npm install in app/)');

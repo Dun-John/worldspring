@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "wasm": "node scripts/build-wasm.mjs",
+    "wasm:quick": "node scripts/build-wasm.mjs --quick",
     "dev": "npm --prefix app run dev",
     "build": "npm run wasm && npm --prefix app run build",
     "det": "node scripts/det-wasm.mjs",
