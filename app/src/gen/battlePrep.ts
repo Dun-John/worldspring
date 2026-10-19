@@ -17,12 +17,18 @@ export interface Roof {
   battlements: boolean;
   /** Corner-tower side (px) of a keep's battlements; 0 for none. */
   tower: number;
+  /** A castle's keep with no pieces: how its top is drawn (as a piece's `top`); else 0. */
+  top: number;
   /** Sloping up from every side to the middle (round towers). */
   cone: boolean;
   /** Index into `ROOF_TINTS` chosen by hand; -1: picked. */
   tint: number;
   /** A hash of where it stands (for the tint). */
   idx: number;
+  /** A keep's pieces (`battlemap::part_code`: 0 body, 1 round tower, 2 square tower, 3
+   * forebuilding, 4 wing), how each is topped (0 open battlements, 1 a lead roof, 2 slate:
+   * `town::keep_tops`), px; empty for any other building. */
+  parts: { kind: number; top: number; pts: number[] }[];
 }
 
 export interface Shape {
@@ -184,7 +190,11 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
       const battlements = (roof & 3) === 1;
       const cone = (roof & 3) === 2;
       const tint = (roof >> 2) - 1;
-      const tower = dv.getUint8(o + 3) * PX;
+      // (255: a keep of pieces, listed after its outline; else the corner towers' side, a castle's
+      // keep with no pieces its top in the high two bits.)
+      const towerByte = dv.getUint8(o + 3);
+      const tower = towerByte === 255 ? 0 : (towerByte & 63) * PX;
+      const top = towerByte === 255 ? 0 : towerByte >> 6;
       o += 4;
       const pts: number[] = [];
       // (Its first corner on the map, in quarter squares: the same in every chunk it is in,
@@ -194,7 +204,22 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
         pts.push(dv.getFloat32(o, true) * PX, dv.getFloat32(o + 4, true) * PX);
         o += 8;
       }
-      roofs.push({ pts, floors, battlements, tower, cone, tint, idx: at });
+      const parts: Roof['parts'] = [];
+      if (towerByte === 255) {
+        const np = dv.getUint8(o);
+        o += 1;
+        for (let q = 0; q < np; q++) {
+          const [code, n] = [dv.getUint8(o), dv.getUint8(o + 1)];
+          o += 2;
+          const pp: number[] = [];
+          for (let v = 0; v < n; v++) {
+            pp.push(dv.getFloat32(o, true) * PX, dv.getFloat32(o + 4, true) * PX);
+            o += 8;
+          }
+          parts.push({ kind: code & 15, top: code >> 4, pts: pp });
+        }
+      }
+      roofs.push({ pts, floors, battlements, tower, top, cone, tint, idx: at, parts });
     }
     // Walls, towers and decks, drawn as vectors (see `battlemap::pack`).
     const nShapes = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
@@ -236,8 +261,9 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     hdata[k * 4 + 3] = r & 0x80 ? 0x3c00 : (r & 0x7f) === 1 ? 0x3800 : 0; // 1.0 / 0.5 / 0.0
   }
   const data = new Uint8Array(n * 4);
+  const shown = groundUnder(surface, raised);
   for (let k = 0; k < n; k++) {
-    data[k * 4] = surface[k];
+    data[k * 4] = shown[k];
     data[k * 4 + 1] = edges[k];
     data[k * 4 + 2] = tier[k] & 255;
     // Building id (1..255, wrapping) for per-building roof colour and wall edges.
@@ -282,6 +308,47 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     shapes,
     sprites,
   };
+}
+
+/** Surface 17: under a building. */
+const UNDER_BUILDING = 17;
+
+/**
+ * The surfaces the ground is drawn with: a square under a building, a wall or a tower shows the
+ * ground of the nearest square that isn't (roofs, walls and towers are drawn as vectors on their
+ * outlines, so the squares one doesn't quite cover — round a tower, along a slanted wall, either
+ * side of a curtain — show the ground round them, not a plate or a fringe of stone). Play and hover
+ * keep the squares' own surfaces.
+ */
+function groundUnder(surface: Uint8Array, raised: Uint8Array | null): Uint8Array {
+  const out = surface.slice();
+  // (`raised`: lift and urban code per square; 7 a wall, 8 a tower.)
+  const under = (k: number) => surface[k] === UNDER_BUILDING || (!!raised && raised[k * 2] > 0 && (raised[k * 2 + 1] === 7 || raised[k * 2 + 1] === 8));
+  let frontier: number[] = [];
+  for (let k = 0; k < SQ * SQ; k++) if (!under(k)) frontier.push(k);
+  if (frontier.length === SQ * SQ) return out;
+  const seen = new Uint8Array(SQ * SQ);
+  for (const k of frontier) seen[k] = 1;
+  // Breadth first from the open ground, a step at a time (a square takes its first-reached
+  // neighbour's: west, east, north, south in that order).
+  while (frontier.length) {
+    const next: number[] = [];
+    for (const k of frontier) {
+      const [i, j] = [k % SQ, Math.floor(k / SQ)];
+      for (const [di, dj] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+        const [a, b] = [i + di, j + dj];
+        if (a < 0 || b < 0 || a >= SQ || b >= SQ) continue;
+        const q = b * SQ + a;
+        if (seen[q]) continue;
+        seen[q] = 1;
+        out[q] = out[k];
+        next.push(q);
+      }
+    }
+    frontier = next;
+  }
+  // (A chunk all under one building keeps the building's.)
+  return out;
 }
 
 /** Long things laid along their turn (by catalog name): the rectangle that blocks, [half length, half

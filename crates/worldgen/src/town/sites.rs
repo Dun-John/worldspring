@@ -44,6 +44,8 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     };
     let mut buildings: Vec<Building> = Vec::new();
     let mut plazas: Vec<Vec<P>> = Vec::new();
+    // (A castle's bailey: an open yard of grass.)
+    let mut baileys: Vec<Vec<P>> = Vec::new();
     let mut entrances: Vec<super::Entrance> = Vec::new();
     let mut yards: Vec<(Vec<P>, f32)> = Vec::new();
     let mut props: Vec<super::Prop> = Vec::new();
@@ -78,6 +80,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             roof: None,
             tint: None,
             id: 0,
+            parts: Vec::new(),
         });
     };
     match p.kind {
@@ -200,7 +203,9 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             if let Some(c) = created {
                 castle_site(world, t0, c, center, &mut rng, &mut works);
                 buildings = std::mem::take(&mut works.buildings);
-                plazas.extend(works.plazas.drain(..).map(|p| p.pts));
+                for p in works.plazas.drain(..) {
+                    if p.kind == super::PlazaKind::Bailey { baileys.push(p.pts) } else { plazas.push(p.pts) }
+                }
             }
         }
         PoiKind::Wall => {
@@ -243,19 +248,19 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             plazas.push(rect(at(20.0, 88.0), dir, 70.0, 40.0));
         }
     }
-    let super::Layout { mut walls, mut towers, mut gate_towers, mut castles, .. } = works;
+    let super::Layout { mut walls, mut towers, mut gate_towers, mut castles, mut square_towers, mut mottes, .. } = works;
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
     let reach = |q: &P, r: f64| [[q[0] - r, q[1] - r], [q[0] + r, q[1] + r]];
     let tower_reach = towers.iter().flat_map(|t| reach(t, 11.0)).chain(gate_towers.iter().flat_map(|t| reach(t, 15.0)));
-    for q in buildings.iter().flat_map(|b| b.poly.iter()).chain(plazas.iter().flatten()).chain(yards.iter().flat_map(|y| y.0.iter())).chain(walls.iter().flatten()).copied().chain(tower_reach) {
+    for q in buildings.iter().flat_map(|b| b.poly.iter()).chain(plazas.iter().flatten()).chain(baileys.iter().flatten()).chain(yards.iter().flat_map(|y| y.0.iter())).chain(walls.iter().flatten()).copied().chain(tower_reach) {
         let q = &q;
         let w = add(*q, center);
         bb = [bb[0].min(w[0]), bb[1].min(w[1]), bb[2].max(w[0]), bb[3].max(w[1])];
     }
     for b in &mut buildings {
-        b.poly.iter_mut().for_each(|q| *q = add(*q, center));
+        b.poly.iter_mut().chain(b.parts.iter_mut().flat_map(|p| p.poly.iter_mut())).for_each(|q| *q = add(*q, center));
     }
-    for poly in &mut plazas {
+    for poly in plazas.iter_mut().chain(&mut baileys) {
         poly.iter_mut().for_each(|q| *q = add(*q, center));
     }
     for e in &mut entrances {
@@ -271,6 +276,12 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     for c in &mut castles {
         c.0 = add(c.0, center);
     }
+    for t in &mut square_towers {
+        t.0 = add(t.0, center);
+    }
+    for m in &mut mottes {
+        m.at = add(m.at, center);
+    }
     // A castle is picked anywhere in its walls; a wall on its line (`gazetteer::query`).
     let radius = match p.kind {
         PoiKind::Castle => created.map_or(80.0, |c| c.poly.iter().map(|q| dist(*q, center)).fold(0.0, f64::max)),
@@ -280,10 +291,12 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let mut l = Layout {
         walls,
         towers,
-        plazas: plazas.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Yard }).collect(),
+        plazas: plazas.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Yard }).chain(baileys.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Bailey })).collect(),
         buildings,
         gate_towers,
         castles,
+        square_towers,
+        mottes,
         bbox: if bb[0] <= bb[2] { bb } else { [center[0] - 40.0, center[1] - 40.0, center[0] + 40.0, center[1] + 40.0] },
         site: true,
         entrances,
@@ -315,6 +328,7 @@ fn drawn(c: &crate::world::Created, poly: Vec<P>, pad_ft: f32, rng: &mut Pcg32, 
         roof: None,
         tint: None,
         id: 0,
+        parts: Vec::new(),
     };
     apply_looks(&mut b, c.roof.as_deref(), c.tint.as_deref(), c.structure.as_deref());
     b
@@ -382,11 +396,15 @@ impl<'a> Open<'a> {
     }
     /// Standing water or a river channel at `q` (local).
     fn wet(&self, q: P) -> bool {
+        self.near_water(q, 2.0)
+    }
+    /// Standing water at `q` (local) or a river channel within `margin` ft of it.
+    fn near_water(&self, q: P, margin: f64) -> bool {
         let w = add(q, self.center);
         if self.shore.wet(w) {
             return true;
         }
-        let c = crate::lod::rivers::clear_of_rivers(&self.t0.rivers, w[0], w[1], 2.0, self.t0.cell_ft);
+        let c = crate::lod::rivers::clear_of_rivers(&self.t0.rivers, w[0], w[1], margin, self.t0.cell_ft);
         (c.0 - w[0]).abs() + (c.1 - w[1]).abs() > 0.01
     }
 }
@@ -402,6 +420,15 @@ impl Ground for Open<'_> {
     }
     fn pad(&self, poly: &[P]) -> f32 {
         (poly.iter().map(|q| self.shore.ground(add(*q, self.center))).sum::<f64>() / poly.len() as f64) as f32
+    }
+    fn height(&self, p: P) -> f64 {
+        self.shore.ground(add(p, self.center))
+    }
+    fn wet(&self, p: P) -> bool {
+        Open::wet(self, p)
+    }
+    fn near_water(&self, p: P, margin: f64) -> bool {
+        Open::near_water(self, p, margin.max(2.0))
     }
 }
 
@@ -447,12 +474,10 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     let ground = Open::new(world, t0, center, &c.poly);
     let dp = District::roll(Ward::Castle, hash2(world.stream("castle"), rng.next_u32() as i64, 0));
     let keep = c.keep.unwrap_or(true);
-    castle(&ground, &block, toward, Ward::Castle, &dp, rng, l, keep, c.yard_buildings.unwrap_or(true));
-    // The bailey inside the curtain: open ground (no trees or boulders), built on only by hand.
-    let bailey = inset(&block, &vec![10.0; block.len()]);
-    if bailey.len() >= 3 {
-        l.plazas.push(super::Plaza { pts: bailey, kind: super::PlazaKind::Yard });
-    }
+    // (The curtain on the outline drawn; the keep, and an inner curtain in a big one, on the high
+    // ground. Its bailey an open yard of grass, built on only by hand.)
+    let set = super::castle::Setting { follow: false, capital: false, wall_up: false, planned: false };
+    castle(&ground, &block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), rng, l, keep, c.yard_buildings.unwrap_or(true));
     // The keep (pushed last) is the castle; the yard's buildings by size.
     let n = l.buildings.len();
     let kept = keep && l.buildings.last().is_some_and(|b| b.floors == 4 && b.residential == 4 && b.func.is_none());

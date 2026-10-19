@@ -592,7 +592,8 @@ fn settlement_catalog_guarantees() {
 /// Battlemap guarantee: in sampled land chunks across seeds and biomes (and in town, on its squares of every
 /// kind), every 32×32-square window has ≥ 3 cover objects or buildings, ≥ 2 elevation tiers, and a hazard/prop or
 /// atmosphere; and no dry square is more than MAX_COVER_GAP squares from cover. Mostly-water windows (any depth) and
-/// bridge decks are exempt.
+/// bridge decks are exempt. In a castle's yard its curtains, towers and buildings are its cover: a window of it holding
+/// any of them needs no more, and its squares may be YARD_COVER_GAP from cover (`cover_gap`, `works_cover`).
 #[test]
 fn battlemap_guarantee() {
     use worldgen::battlemap::{self, SQ};
@@ -689,7 +690,7 @@ fn battlemap_guarantee() {
             let wet: Vec<bool> = (0..SQ * SQ).map(|k| c.water_level[k] > c.height[k]).collect();
             let dist = battlemap::cover_distance(&c);
             for k in 0..SQ * SQ {
-                assert!(!dry[k] || dist[k] <= battlemap::MAX_COVER_GAP, "seed {seed} {key:?}: square {k} is {} squares from cover", dist[k]);
+                assert!(!dry[k] || dist[k] <= battlemap::cover_gap(&c, k), "seed {seed} {key:?}: square {k} is {} squares from cover", dist[k]);
             }
             for wy in 0..=SQ - W {
                 for wx in 0..=SQ - W {
@@ -721,7 +722,7 @@ fn battlemap_guarantee() {
                     let cover = blds.len() + c.objects.iter().filter(|o| battlemap::info(o.kind as u16).cover >= 1 && in_w(o.x, o.y)).count();
                     let feature = c.atmosphere != battlemap::Atmosphere::None
                         || c.objects.iter().any(|o| battlemap::info(o.kind as u16).feature && in_w(o.x, o.y));
-                    assert!(cover >= 3, "seed {seed} {key:?} window ({wx},{wy}): only {cover} cover objects");
+                    assert!(cover >= 3 || battlemap::works_cover(&c, wx, wy), "seed {seed} {key:?} window ({wx},{wy}): only {cover} cover objects");
                     assert!(tmax > tmin, "seed {seed} {key:?} window ({wx},{wy}): single elevation tier");
                     assert!(feature, "seed {seed} {key:?} window ({wx},{wy}): no hazard, prop or atmosphere");
                 }
@@ -881,6 +882,309 @@ fn interiors_guarantee() {
     assert!(cells > 50, "too few prison cells checked ({cells})");
     // The M5 budget (an interior opens within 300 ms); typical is well under 1 ms.
     assert!(worst_ms < 300.0, "slowest interior took {worst_ms:.1} ms");
+}
+
+//// Every city's castle in seeds 1 to 8 holds together (`castle_works`), an inner curtain in about
+/// half of them, each at least `GATES_APART` (90 ft) from its outer gate.
+#[test]
+fn castles_guarantee() {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::{self, geom};
+    let (mut castles, mut inner) = (0, 0);
+    for seed in 1..=8 {
+        let w = World::from_json(&world_json(seed)).unwrap();
+        let t = worldgen::t0::T0::generate(&w);
+        for si in (0..t.settlements.len()).filter(|&i| t.settlements[i].tier >= Tier::City) {
+            let l = town::layout(&w, &t, si);
+            if l.castles.is_empty() {
+                continue;
+            }
+            castle_works(&w, &t, &l, si);
+            castle_ground(&w, &t, &l, si, &l.plazas.iter().find(|p| p.kind == town::PlazaKind::Bailey).expect("a bailey").pts);
+            castles += 1;
+            if l.castles.len() > 1 {
+                inner += 1;
+                // The gates: pairs of gate towers 52 ft apart in the castle; the inner one the nearest
+                // the inner bailey's middle.
+                let g: Vec<[f64; 2]> = l.gate_towers.iter().copied().filter(|p| l.castles.iter().any(|(c, r)| geom_dist(*p, *c) <= r + 1.0)).collect();
+                let mut mids = Vec::new();
+                for a in 0..g.len() {
+                    for b in a + 1..g.len() {
+                        if (geom_dist(g[a], g[b]) - 52.0).abs() < 0.5 {
+                            mids.push(geom::lerp(g[a], g[b], 0.5));
+                        }
+                    }
+                }
+                let ci = l.castles[1].0;
+                let (k, m) = mids.iter().enumerate().min_by(|a, b| geom_dist(*a.1, ci).total_cmp(&geom_dist(*b.1, ci))).expect("an inner gate");
+                let gap = mids.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, o)| geom_dist(*o, *m)).fold(f64::MAX, f64::min);
+                assert!(gap >= 89.0, "#{si} (seed {seed}): the inner gate {gap:.0} ft from the outer one");
+                // The inner curtain stands the outer bailey's width (40 ft at least) inside the outer
+                // one all along, not only at its corners.
+                let bailey = &l.plazas.iter().find(|p| p.kind == town::PlazaKind::Bailey).expect("a bailey").pts;
+                let n = bailey.len();
+                let depth = |p: [f64; 2]| (0..n).map(|k| geom::seg_dist(p, bailey[k], bailey[(k + 1) % n])).fold(f64::MAX, f64::min);
+                for w in l.walls.iter().filter(|w| w.iter().all(|p| geom::contains(bailey, *p) && depth(*p) > 20.0)) {
+                    for s in w.windows(2) {
+                        let steps = (geom_dist(s[0], s[1]) / 5.0).ceil().max(1.0) as usize;
+                        for j in 0..=steps {
+                            let p = geom::lerp(s[0], s[1], j as f64 / steps as f64);
+                            assert!(depth(p) >= 40.0, "#{si} (seed {seed}): the inner curtain {:.0} ft from the outer at {p:?}", depth(p));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(castles >= 40, "too few castles checked ({castles})");
+    assert!(inner * 10 >= castles * 3 && inner * 10 <= castles * 7, "{inner} of {castles} castles with an inner curtain");
+}
+
+/// A town's castle keeps to its ground: no town gate opens straight into its bailey and no street or
+/// road runs through it but the castle's own way to its gate; its bailey is closed all round, by its
+/// curtain, the town wall or a tower, but where the water or a river's channel is; and no curtain
+/// runs alongside the town wall within 30 ft of it for more than 30 ft (where the town wall is the
+/// castle's, it has none of its own). `ring`: its bailey.
+fn castle_ground(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout, si: usize, ring: &[[f64; 2]]) {
+    use worldgen::town::geom;
+    let n = ring.len();
+    let depth = |p: [f64; 2]| {
+        let d = (0..n).map(|k| geom::seg_dist(p, ring[k], ring[(k + 1) % n])).fold(f64::MAX, f64::min);
+        if geom::contains(ring, p) { d } else { -d }
+    };
+    // Points every 5 ft along a polyline, and the way it runs there.
+    let along = |pts: &[[f64; 2]]| -> Vec<([f64; 2], [f64; 2])> {
+        let mut v = Vec::new();
+        for s in pts.windows(2) {
+            let d = geom_dist(s[0], s[1]);
+            if d < 1e-6 {
+                continue;
+            }
+            let u = geom::mul(geom::sub(s[1], s[0]), 1.0 / d);
+            let m = (d / 5.0).ceil() as usize;
+            v.extend((0..=m).map(|k| (geom::lerp(s[0], s[1], k as f64 / m as f64), u)));
+        }
+        v
+    };
+    let crosses = |a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]| {
+        let (o1, o2) = (geom::cross(geom::sub(b, a), geom::sub(c, a)), geom::cross(geom::sub(b, a), geom::sub(d, a)));
+        let (o3, o4) = (geom::cross(geom::sub(d, c), geom::sub(a, c)), geom::cross(geom::sub(d, c), geom::sub(b, c)));
+        o1 * o2 < 0.0 && o3 * o4 < 0.0
+    };
+    let towers = worldgen::interior::towers(l);
+    let segs: Vec<([f64; 2], [f64; 2])> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
+    // The castle's gates: pairs of gate towers a passage apart in it (one set in the town by hand has
+    // its towers among `extra_towers`); its own way, from its outer gate.
+    let g: Vec<[f64; 2]> = l.gate_towers.iter().copied().chain(l.extra_towers.iter().filter(|t| t.1).map(|t| t.0)).filter(|p| l.castles.iter().any(|(c, r)| geom_dist(*p, *c) <= r + 1.0)).collect();
+    let mut gates = Vec::new();
+    for a in 0..g.len() {
+        for b in a + 1..g.len() {
+            if (geom_dist(g[a], g[b]) - 52.0).abs() < 0.5 {
+                gates.push(geom::lerp(g[a], g[b], 0.5));
+            }
+        }
+    }
+    let outer = gates.iter().copied().min_by(|a, b| depth(*a).abs().total_cmp(&depth(*b).abs())).expect("a castle gate");
+    let own = |r: &(Vec<[f64; 2]>, u8, f64)| r.1 == 3 && (r.2 - 10.0).abs() < 1e-9 && geom_dist(r.0[0], outer) < 12.0;
+    // No town gate opens into the bailey: from its middle no straight way into it crosses no wall or tower.
+    for &tg in l.gates.iter().filter(|q| depth(**q) > -60.0) {
+        for k in 0..36 {
+            let a = k as f64 * std::f64::consts::TAU / 36.0;
+            for r in [15.0, 25.0, 35.0, 45.0] {
+                let p = [tg[0] + r * a.cos(), tg[1] + r * a.sin()];
+                let open = depth(p) > 4.0 && !segs.iter().any(|s| crosses(tg, p, s.0, s.1) || geom::seg_dist(p, s.0, s.1) < 4.5) && !towers.iter().any(|t| geom::seg_dist(t.0, tg, p) < t.1);
+                assert!(!open, "#{si}: the town gate at {tg:?} opens into the bailey (to {p:?})");
+            }
+        }
+    }
+    // No street or road through the bailey but its own way.
+    for st in l.streets.iter().chain(l.roads.iter().filter(|r| !own(r)).map(|r| &r.0)) {
+        let inside = along(st).iter().filter(|x| depth(x.0) > 3.0).count() as f64 * 5.0;
+        assert!(inside <= 15.0, "#{si}: a street runs {inside:.0} ft inside the bailey");
+    }
+    // Closed all round, but by the water.
+    let by_river = |p: [f64; 2]| {
+        let c = worldgen::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 6.0, t0.cell_ft);
+        (c.0 - p[0]).abs() + (c.1 - p[1]).abs() > 0.01
+    };
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
+    let mut closed = ring.to_vec();
+    closed.push(ring[0]);
+    let mut open = 0.0;
+    for (p, _) in along(&closed) {
+        let shut = segs.iter().any(|s| geom::seg_dist(p, s.0, s.1) <= 10.0) || towers.iter().any(|t| geom_dist(t.0, p) < t.1 + 6.0) || gates.iter().any(|m| geom_dist(*m, p) < 30.0);
+        let wet = t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice) || by_river(p);
+        open = if shut || wet { 0.0 } else { open + 5.0 };
+        assert!(open <= 15.0, "#{si}: the bailey is open on dry ground at {p:?}");
+    }
+    // No curtain just inside the town wall: the castle's walls are those on its rings (the outer
+    // bailey's, or wholly inside it, an inner curtain's), the town's the rest.
+    let on_ring = |p: [f64; 2]| depth(p).abs() < 1.5;
+    let (mut ours, mut town) = (Vec::new(), Vec::new());
+    for w in &l.walls {
+        let pts = along(w);
+        let on = pts.iter().filter(|x| on_ring(x.0)).count();
+        if w.iter().all(|p| depth(*p) > 20.0) || on * 10 >= pts.len() * 8 {
+            ours.push(w);
+        } else {
+            town.extend(w.windows(2).map(|s| (s[0], s[1])));
+        }
+    }
+    for w in ours {
+        let mut run = 0.0;
+        for (p, u) in along(w) {
+            let beside = town.iter().any(|&(a, b)| {
+                let d = geom_dist(a, b);
+                d > 1.0 && geom::cross(u, geom::mul(geom::sub(b, a), 1.0 / d)).abs() < 0.26 && (3.0..30.0).contains(&geom::seg_dist(p, a, b))
+            });
+            run = if beside { run + 5.0 } else { 0.0 };
+            assert!(run <= 35.0, "#{si}: a curtain runs within 30 ft of the town wall for {run:.0} ft at {p:?}");
+        }
+    }
+}
+
+/// A castle holds together: its own towers and gatehouses (within its curtains) stand clear of each
+/// other, nothing built stands on its walls or towers, and play mode can walk in through its gates
+/// to every building in it and all but a few squares of its baileys (`castle_reach`); its keep (the
+/// castle) is made of convex pieces whose union is its footprint, stands clear of the curtain, and
+/// inside has a room in each of its towers on every floor (round in a round tower) with a spiral
+/// stair in its middle, reached through one way in at most (the rest of the tower its wall), and
+/// keeps every rule interiors keep (`check_interior`).
+fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout, si: usize) {
+    use worldgen::interior;
+    use worldgen::town::{self, PartKind, Structure, geom};
+    let towers = interior::towers(l);
+    let ours = |p: [f64; 2]| l.castles.iter().any(|(c, r)| geom_dist(p, *c) <= r + 1.0);
+    // (A square tower reaches further across its corners.)
+    let reach = |t: &([f64; 2], f64)| if l.square_tower(t.0).is_some() { t.1 * std::f64::consts::SQRT_2 } else { t.1 };
+    for (a, ta) in towers.iter().enumerate().filter(|(_, t)| ours(t.0)) {
+        for tb in towers[a + 1..].iter().filter(|t| ours(t.0)) {
+            assert!(geom_dist(ta.0, tb.0) >= reach(&(ta.0, ta.1)) + reach(&(tb.0, tb.1)) - 3.0, "#{si}: towers at {:?} and {:?} stand on each other", ta.0, tb.0);
+        }
+    }
+    let near_wall = |p: &[[f64; 2]]| l.walls.iter().flat_map(|w| w.windows(2)).any(|s| p.iter().any(|q| geom::seg_dist(*q, s[0], s[1]) < 4.0) || geom::contains(p, s[0]));
+    let fi = town::catalog::index_of("castle").unwrap() as u16;
+    let mut keeps = 0;
+    for b in l.buildings.iter().filter(|b| b.func == Some(fi) || !b.parts.is_empty()) {
+        let tag = format!("#{si} b:{si}:{}", b.id);
+        assert!(!near_wall(&b.poly), "{tag}: the keep stands on a wall");
+        assert!(towers.iter().all(|t| !geom::contains(&b.poly, t.0)), "{tag}: a tower stands in the keep");
+        if b.parts.is_empty() {
+            continue;
+        }
+        keeps += 1;
+        assert!(b.parts[0].kind == PartKind::Body, "{tag}: its first piece is not its body");
+        for p in &b.parts {
+            let n = p.poly.len();
+            let turns: Vec<f64> = (0..n).map(|k| geom::cross(geom::sub(p.poly[(k + 1) % n], p.poly[k]), geom::sub(p.poly[(k + 2) % n], p.poly[(k + 1) % n]))).collect();
+            assert!(turns.iter().all(|&t| t >= -1e-6) || turns.iter().all(|&t| t <= 1e-6), "{tag}: a piece is not convex");
+            // (Its corners' mean: `centroid` on a small piece far out in world ft is not exact.)
+            let c = geom::mul(p.poly.iter().fold([0.0, 0.0], |a, q| geom::add(a, *q)), 1.0 / n as f64);
+            assert!(geom::contains(&b.poly, c), "{tag}: a piece lies outside its footprint");
+        }
+        let whole: f64 = geom::area(&b.poly).abs();
+        let biggest = b.parts.iter().map(|p| geom::area(&p.poly).abs()).fold(0.0, f64::max);
+        assert!(whole >= biggest - 1.0, "{tag}: its footprint is smaller than its body");
+        if b.structure != Structure::Roofed {
+            continue;
+        }
+        let it = interior::generate(world, t0, si, b.id as usize).expect("a keep can be entered");
+        let rounds = b.parts.iter().filter(|p| p.kind == PartKind::Tower { round: true }).count();
+        let all = b.parts.iter().filter(|p| matches!(p.kind, PartKind::Tower { .. })).count();
+        let (nx, ny) = (it.nx, it.ny);
+        // Each tower's outline in grid units, its room's square (its spiral stair's) at its middle.
+        let grid = |q: [f64; 2]| {
+            let d = geom::sub(q, it.origin);
+            [geom::dot(d, it.axis) / 5.0, geom::dot(d, it.across) / 5.0]
+        };
+        let rings: Vec<Vec<[f64; 2]>> = b.parts.iter().filter(|p| matches!(p.kind, PartKind::Tower { .. })).map(|p| p.poly.iter().map(|q| grid(*q)).collect()).collect();
+        for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
+            let rooms = lv.rooms.iter().filter(|r| matches!(r.kind, "guard post" | "tower room" | "tower top") && r.squares > 0).count();
+            let round = lv.rooms.iter().filter(|r| matches!(r.kind, "guard post" | "tower room" | "tower top") && r.shape == interior::shape::ROUND).count();
+            let spirals: Vec<(usize, usize)> = lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| (f.x as usize, f.y as usize)).collect();
+            assert!(rooms == all && round == rounds && spirals.len() == all, "{tag} {}: {rooms} tower rooms ({round} round), {} spiral stairs for {all} towers ({rounds} round)", lv.name, spirals.len());
+            for ring in &rings {
+                let Some(&(sx, sy)) = spirals.iter().find(|s| geom::contains(ring, [s.0 as f64 + 0.5, s.1 as f64 + 0.5])) else { panic!("{tag} {}: a tower without its spiral stair", lv.name) };
+                let room = lv.cells[sy * nx + sx];
+                // Its wall unbroken but for one way in.
+                let ways = (0..nx * ny).filter(|&k| lv.cells[k] >= 0 && lv.cells[k] != room && geom::contains(ring, [(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5])).count();
+                assert!(ways <= 1, "{tag} {}: {ways} squares of floor in a tower's wall", lv.name);
+                // Reached (but its top, from its stair).
+                let door = lv.doors.iter().any(|d| d.rooms.contains(&room));
+                assert!(door || lv.name == "Tower tops", "{tag} {}: a tower's room has no way in", lv.name);
+            }
+        }
+        assert!(it.outlines.len() >= b.parts.len(), "{tag}: {} outline parts for {} pieces", it.outlines.len(), b.parts.len());
+        check_interior(world, t0, l, si, &format!("b:{si}:{}", b.id), &building_buckets(l));
+    }
+    // (A castle laid out by a town or drawn by hand keeps its keep.)
+    assert!(keeps >= 1 || !l.buildings.iter().any(|b| b.func == Some(fi)), "#{si}: its keep is not made of pieces");
+    for b in l.buildings.iter().filter(|b| b.parts.is_empty() && b.ward == town::catalog::Ward::Castle && geom_dist(geom::centroid(&b.poly), l.castles[0].0) < l.castles[0].1) {
+        assert!(!near_wall(&b.poly), "#{si} b:{si}:{}: a building stands on the curtain", b.id);
+    }
+    castle_reach(l, si);
+}
+
+/// Play mode walks into a castle: on its 5-ft squares, blocked as play mode blocks them (a building
+/// on a square's middle, a wall within 5.5 ft, a tower within its reach and 1.5 ft), from the
+/// streets and the ground round it every building in its bailey has a square beside it reached (its
+/// middle within a square and a half of a wall), and
+/// all but 3% of its bailey's open squares are (slivers between a range and the curtain may not
+/// be).
+fn castle_reach(l: &worldgen::town::Layout, si: usize) {
+    use worldgen::town::{PlazaKind, geom};
+    let Some(bailey) = l.plazas.iter().find(|p| p.kind == PlazaKind::Bailey).map(|p| &p.pts) else { panic!("#{si}: a castle without its bailey") };
+    let (cc, cr) = l.castles[0];
+    let s = 5.0;
+    let (x0, y0) = (((cc[0] - cr - 60.0) / s).floor() * s, ((cc[1] - cr - 60.0) / s).floor() * s);
+    let n = ((2.0 * cr + 120.0) / s).ceil() as usize;
+    let mid = |k: usize| [x0 + ((k % n) as f64 + 0.5) * s, y0 + ((k / n) as f64 + 0.5) * s];
+    let near = |q: &[[f64; 2]], p: [f64; 2], m: f64| q.iter().any(|v| (v[0] - p[0]).abs() < m + 200.0 && (v[1] - p[1]).abs() < m + 200.0);
+    let bs: Vec<&worldgen::town::Building> = l.buildings.iter().filter(|b| near(&b.poly, cc, cr)).collect();
+    let blocked: Vec<bool> = (0..n * n)
+        .map(|k| {
+            let p = mid(k);
+            bs.iter().any(|b| geom::contains(&b.poly, p))
+                || l.walls.iter().any(|w| w.windows(2).any(|q| geom::seg_dist(p, q[0], q[1]) <= 5.5))
+                || l.towers.iter().any(|t| match l.square_tower(*t) {
+                    Some(u) => {
+                        let d = geom::sub(p, *t);
+                        geom::dot(d, u).abs() <= 12.5 && geom::cross(u, d).abs() <= 12.5
+                    }
+                    None => geom_dist(p, *t) <= 12.5,
+                })
+                || l.gate_towers.iter().any(|t| geom_dist(p, *t) <= 16.5)
+                || l.extra_towers.iter().any(|t| geom_dist(p, t.0) <= if t.1 { 16.5 } else { 12.5 })
+        })
+        .collect();
+    let mut seen = vec![false; n * n];
+    let mut q = std::collections::VecDeque::new();
+    for k in 0..n * n {
+        let (i, j) = (k % n, k / n);
+        let p = mid(k);
+        let street = !geom::contains(bailey, p) && l.roads.iter().any(|(pts, _, w)| pts.windows(2).any(|q| geom::seg_dist(p, q[0], q[1]) <= 0.5 * w));
+        if !blocked[k] && (i == 0 || j == 0 || i == n - 1 || j == n - 1 || street) {
+            seen[k] = true;
+            q.push_back(k);
+        }
+    }
+    while let Some(k) = q.pop_front() {
+        let (i, j) = (k % n, k / n);
+        for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+            if a < n && b < n && !blocked[b * n + a] && !seen[b * n + a] {
+                seen[b * n + a] = true;
+                q.push_back(b * n + a);
+            }
+        }
+    }
+    let open: Vec<usize> = (0..n * n).filter(|&k| !blocked[k] && geom::contains(bailey, mid(k))).collect();
+    let sealed = open.iter().filter(|&&k| !seen[k]).count();
+    assert!(sealed * 100 <= 3 * open.len(), "#{si}: {sealed} of the bailey's {} open squares can't be reached", open.len());
+    for b in bs.iter().filter(|b| b.ward == worldgen::town::catalog::Ward::Castle && geom::contains(bailey, geom::centroid(&b.poly))) {
+        let m = b.poly.len();
+        let by = (0..n * n).any(|k| seen[k] && (0..m).any(|e| geom::seg_dist(mid(k), b.poly[e], b.poly[(e + 1) % m]) < 7.5));
+        assert!(by, "#{si} b:{si}:{}: a building in the castle can't be reached", b.id);
+    }
 }
 
 /// A building's interior designed by hand (the designer's changes: a room split in two by a wall,
@@ -1165,6 +1469,24 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
             }
         }
         let g = &it.levels[it.entry_level];
+        // (A keep's towers in grid units: a square of wall round each one's room.)
+        let own = id.strip_prefix(&format!("b:{si}:")).and_then(|k| k.parse::<usize>().ok()).and_then(|k| l.building(k));
+        let towers: Vec<Vec<[f64; 2]>> = own
+            .map(|b| {
+                b.parts
+                    .iter()
+                    .filter(|p| matches!(p.kind, worldgen::town::PartKind::Tower { .. }))
+                    .map(|p| p.poly.iter().map(|q| {
+                        let d = geom::sub(*q, it.origin);
+                        [geom::dot(d, it.axis) / 5.0, geom::dot(d, it.across) / 5.0]
+                    }).collect())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let by_tower = |v: &[f32; 2]| {
+            let p = [v[0] as f64, v[1] as f64];
+            towers.iter().any(|t| geom::contains(t, p) || (0..t.len()).any(|k| geom::seg_dist(p, t[k], t[(k + 1) % t.len()]) <= 1.0))
+        };
         for v in it.outlines.iter().flatten() {
             let near = (0..nx * ny).filter(|&k| g.cells[k] >= 0).map(|k| {
                 let (i, j) = ((k % nx) as f32, (k / nx) as f32);
@@ -1172,7 +1494,9 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
                 (dx * dx + dy * dy).sqrt()
             });
             let d = near.fold(f32::MAX, f32::min);
-            assert!(d <= 1.0, "{tag}: its outer wall stands {d:.2} squares off its floor at {v:?}");
+            // (A keep's tower: a square of wall round its room.)
+            let most = if by_tower(v) { 1.5 } else { 1.0 };
+            assert!(d <= most, "{tag}: its outer wall stands {d:.2} squares off its floor at {v:?}");
         }
     }
     // (Generated ones; a design may have no cellar.)
@@ -1313,12 +1637,15 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
             assert!(!open || reached, "{tag} {}: the {} is unreachable", lv.name, room.kind);
         }
         // Floors with corridors: no room is reached through more than one other room (a
-        // guardroom is a way through, as for cells).
+        // guardroom is a way through, as for cells; so is the public room the front door opens
+        // into, as `connect` lays it out: a taproom, a reading room, a great hall, counted from
+        // as well on a floor with a corridor).
+        let entry = lv.doors.iter().find(|d| d.kind == "front").and_then(|d| d.rooms.iter().copied().find(|&r| r >= 0));
         let circ = |r: usize| matches!(lv.rooms[r].kind, "hall" | "corridor" | "landing" | "great hall" | "mess hall" | "guardroom");
         if lv.rooms.len() >= 8 && (0..lv.rooms.len()).any(circ) {
             let mut hops = vec![usize::MAX; lv.rooms.len()];
             let mut q = std::collections::VecDeque::new();
-            for r in (0..lv.rooms.len()).filter(|&r| circ(r)) {
+            for r in (0..lv.rooms.len()).filter(|&r| circ(r) || entry == Some(r as i16)) {
                 hops[r] = 0;
                 q.push_back(r);
             }
@@ -1882,6 +2209,7 @@ fn agent_edits_guarantee() {
     let base = World::new(file.clone()).unwrap();
     let t0 = worldgen::t0::T0::generate(&base);
     ward_edits(&base, &t0);
+    ward_castles_by_the_wall(&base, &t0);
     ground_edits(&base);
     let sea = base.params().sea_level_ft;
     // Dry open land two miles from a town, clear of every layout.
@@ -2256,7 +2584,16 @@ fn agent_edits_guarantee() {
     let fi = town::catalog::index_of("castle").unwrap() as u16;
     let k = l.buildings.iter().find(|b| b.func == Some(fi)).expect("the castle has no keep");
     assert_eq!(k.name.as_deref(), Some(keep.name.as_str()), "the keep is not named as the castle");
-    assert!(!l.walls.is_empty() && l.towers.len() >= 3 && l.gate_towers.len() == 2 && l.castles.len() == 1, "the castle's curtain: {} walls, {} towers, {} gate towers", l.walls.len(), l.towers.len(), l.gate_towers.len());
+    // (A big one has an inner curtain too: a gatehouse and a `castles` entry each.)
+    assert!(
+        !l.walls.is_empty() && l.towers.len() >= 3 && l.gate_towers.len() == 2 * l.castles.len() && (1..=2).contains(&l.castles.len()),
+        "the castle's curtain: {} walls, {} towers, {} gate towers, {} curtains",
+        l.walls.len(),
+        l.towers.len(),
+        l.gate_towers.len(),
+        l.castles.len()
+    );
+    castle_works(world, t0, &l, li);
     assert!(l.walls.iter().flatten().all(|p| geom::contains(&keep.poly, *p)), "the curtain stands outside the outline drawn");
     let buckets = building_buckets(&l);
     let ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed).map(|b| format!("b:{li}:{}", b.id)).chain((0..interior::towers(&l).len()).map(|k| format!("t:{li}:{k}"))).collect();
@@ -2564,7 +2901,7 @@ fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     assert!(l.buildings.windows(2).all(|w| w[0].id < w[1].id), "building ids out of order");
     assert_eq!(l.quarters.iter().map(|q| &q.name).collect::<Vec<_>>(), g.quarters.iter().map(|q| &q.name).collect::<Vec<_>>(), "district names changed");
     assert!(l.towers == g.towers && l.gate_towers == g.gate_towers, "the wall's towers changed");
-    assert!(!l.extra_towers.is_empty() && l.castles.len() == g.castles.len() + 1, "no castle on the patch: {} extra towers, {} castles", l.extra_towers.len(), l.castles.len());
+    assert!(!l.extra_towers.is_empty() && l.castles.len() > g.castles.len(), "no castle on the patch: {} extra towers, {} castles", l.extra_towers.len(), l.castles.len());
     assert_eq!(worldgen::interior::towers(&l).len(), g.towers.len() + g.gate_towers.len() + l.extra_towers.len());
     let fi = town::catalog::index_of("castle").unwrap() as u16;
     let keep = l.buildings.iter().find(|b| b.id >= wards::NEW_ID && b.func == Some(fi) && geom_dist(geom::centroid(&b.poly), pc) < spacing).expect("the new castle has no keep");
@@ -2624,14 +2961,20 @@ fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     let held = town::layout(&we, &te, li);
     assert!(Rc::ptr_eq(&town::layout(&w5, &t5, li), &held), "a wall was laid out again by a town edit that moved nothing it reads");
 
-    // Walls taken down: the gates and every building stay, only castle curtains stand.
+    // Walls taken down: the gates and every building stay (but a castle's, whose ranges may stand
+    // otherwise where the town wall was its wall), ids and all, no id twice; only castle curtains
+    // stand.
     let (edit2, _) = wards::change(&world, t0, ci, &serde_json::from_str(r#"{"walls":false}"#).unwrap()).unwrap();
     let mut e2 = e.clone();
     e2.towns.insert(wards::key(ci), edit2.unwrap());
     let w2 = World::new(WorldFile { edits: e2, ..base.file.clone() }).unwrap();
     let l2 = town::layout(&w2, t0, ci);
     assert_eq!(l2.gates, l.gates, "the gates moved with the walls down");
-    assert!(l2.buildings.iter().map(|b| b.id).eq(l.buildings.iter().map(|b| b.id)), "buildings changed with the walls down");
+    let rest = |l: &town::Layout| l.buildings.iter().filter(|b| b.ward != town::catalog::Ward::Castle).map(|b| (b.id, b.poly.clone())).collect::<Vec<_>>();
+    assert!(rest(&l2) == rest(&l), "buildings changed with the walls down");
+    let mut ids: Vec<u32> = l2.buildings.iter().map(|b| b.id).collect();
+    ids.sort_unstable();
+    assert!(ids.windows(2).all(|w| w[0] != w[1]), "a building id twice with the walls down");
     assert!(l2.walls.iter().flatten().all(|p| l2.castles.iter().any(|(c, r)| geom_dist(*p, *c) <= r + 30.0)), "a town wall still stands");
     assert!(l2.towers.len() < l.towers.len() && l2.gate_towers.len() < l.gate_towers.len(), "the wall towers still stand");
 
@@ -2657,6 +3000,52 @@ fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     }
     let village = (0..n).find(|&i| t0.settlements[i].tier == Tier::Village).unwrap();
     assert!(wards::plan_json(base, t0, village).is_err(), "a village has wards");
+}
+
+/// Castles set in the ward editor by the town wall (the patches nearest it in the largest walled town
+/// with no castle of its own, two of them, walls up and taken down): each keeps to its ground
+/// (`castle_ground`), and taking the wall down moves no other building, its id and outline the same.
+fn ward_castles_by_the_wall(base: &World, t0: &worldgen::t0::T0) {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::{self, geom, wards};
+    use worldgen::world::Edits;
+    let n = t0.settlements.len();
+    let mut towns: Vec<usize> = (0..n).filter(|&i| t0.settlements[i].tier == Tier::Town).collect();
+    towns.sort_by_key(|&i| (std::cmp::Reverse(t0.settlements[i].population), i));
+    let (ti, plan) = towns
+        .into_iter()
+        .map(|i| (i, wards::plan_json(base, t0, i).unwrap()))
+        .find(|(_, p)| p["walls"]["generated"] == true && p["patches"].as_array().unwrap().iter().all(|q| q["ward"] != "castle"))
+        .expect("a walled town with no castle");
+    let g = town::layout(base, t0, ti);
+    let at = |v: &serde_json::Value| [v["at"][0].as_f64().unwrap(), v["at"][1].as_f64().unwrap()];
+    let to_wall = |p: [f64; 2]| g.walls.iter().flat_map(|w| w.windows(2)).map(|s| geom::seg_dist(p, s[0], s[1])).fold(f64::MAX, f64::min);
+    let mut near: Vec<&serde_json::Value> = plan["patches"].as_array().unwrap().iter().filter(|p| p["in_town"] == true && matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant" | "patriciate" | "slum"))).collect();
+    near.sort_by(|a, b| to_wall(at(a)).total_cmp(&to_wall(at(b))));
+    let mut picked: Vec<&serde_json::Value> = Vec::new();
+    for p in near {
+        if picked.len() < 2 && picked.iter().all(|q| geom_dist(at(q), at(p)) > 250.0) {
+            picked.push(p);
+        }
+    }
+    assert!(picked.len() == 2, "too few patches by the wall of #{ti}");
+    for patch in picked {
+        let laid = |walls: &str| {
+            let req = format!(r#"{{"patches":[{{"patch":{},"ward":"castle"}}]{walls}}}"#, patch["patch"]);
+            let (edit, _) = wards::change(base, t0, ti, &serde_json::from_str(&req).unwrap()).expect("the change");
+            let mut e = Edits::default();
+            e.towns.insert(wards::key(ti), edit.expect("an edit"));
+            let w = World::new(WorldFile { edits: e, ..base.file.clone() }).unwrap();
+            (town::layout(&w, t0, ti), w)
+        };
+        let ((up, wu), (down, wd)) = (laid(""), laid(r#","walls":false"#));
+        for (l, w) in [(&up, &wu), (&down, &wd)] {
+            let ring = &l.plazas.iter().filter(|p| p.kind == town::PlazaKind::Bailey).min_by(|a, b| geom_dist(geom::centroid(&a.pts), at(patch)).total_cmp(&geom_dist(geom::centroid(&b.pts), at(patch)))).expect("a bailey").pts;
+            castle_ground(w, t0, l, ti, ring);
+        }
+        let rest = |l: &town::Layout| l.buildings.iter().filter(|b| b.ward != town::catalog::Ward::Castle).map(|b| (b.id, b.poly.clone())).collect::<Vec<_>>();
+        assert!(rest(&down) == rest(&up), "#{ti} patch {}: buildings changed with the walls down round a castle set by hand", patch["patch"]);
+    }
 }
 
 /// Ground shaped by hand (`Edits.ground`, `Edits.plateaus`) at the largest settlement: a sheer

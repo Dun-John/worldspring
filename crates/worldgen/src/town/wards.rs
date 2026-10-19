@@ -527,8 +527,13 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     // town lost with that purpose (the nearest, about a patch away at most; notes and people there
     // follow it); else of one kept as generated on its patch, which is a home again with the new
     // one's id.
-    let mut lost: Vec<(usize, P, u32, Option<String>)> =
-        generated.buildings.iter().zip(&used).filter(|(_, u)| !**u).filter_map(|(b, _)| b.func.map(|f| (f as usize, centroid(&b.poly), b.id, b.name.clone()))).collect();
+    let mut lost: Vec<(usize, P, u32, Option<String>, bool)> = generated
+        .buildings
+        .iter()
+        .zip(&used)
+        .filter(|(_, u)| !**u)
+        .filter_map(|(b, _)| b.func.map(|f| (f as usize, centroid(&b.poly), b.id, b.name.clone(), b.ward == Ward::Castle)))
+        .collect();
     // (Nearest pairs first, so each takes its own patch's before a neighbour's.)
     let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
     for &k in &fresh {
@@ -575,8 +580,10 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
 /// building), else to the nearest home within `reach`, else nowhere (`functions_lost` lists it);
 /// the building that takes one takes the lost one's id and name too (its notes and people follow
 /// it; a home's own id goes, as a building taken away does). The rest are homes. Names and storeys
-/// as the town's own.
-fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: Vec<(usize, P, u32, Option<String>)>, reach: f64) {
+/// as the town's own. While a castle stands in the town laid out anew, what a castle lost stays in
+/// a castle's buildings and the town's in the town's: how many ranges a castle has (more where the
+/// town wall is its wall) moves no other building's id.
+fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: Vec<(usize, P, u32, Option<String>, bool)>, reach: f64) {
     let stream = world.stream("town.edit");
     let index = super::rng_key(t0, l.index as usize);
     let noise = |id: u32, salt: i64| unit(hash3(stream, index, id as i64, salt));
@@ -601,12 +608,15 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
     let max_area = areas.iter().cloned().fold(1.0, f64::max);
     let mut taken: Vec<bool> = fresh.iter().map(|&k| l.buildings[k].func.is_some()).collect();
     let mut named: Vec<usize> = Vec::new();
-    for (fi, was, was_id, was_name) in lost {
+    let castle_here = fresh.iter().any(|&k| l.buildings[k].ward == Ward::Castle);
+    for (fi, was, was_id, was_name, was_castle) in lost {
         let f = &CATALOG[fi];
+        // (A castle's to a castle's building while one stands; the town's never to one.)
+        let in_castle = was_castle && castle_here;
         let mut best: Option<(f64, usize)> = None;
         for (j, &k) in fresh.iter().enumerate() {
             let b = &l.buildings[k];
-            if taken[j] || b.structure != Structure::Roofed || dist(centroid(&b.poly), was) > reach {
+            if taken[j] || b.structure != Structure::Roofed || dist(centroid(&b.poly), was) > reach || (b.ward == Ward::Castle && !was_castle) || (in_castle && b.ward != Ward::Castle) {
                 continue;
             }
             let ward_score = f.wards.iter().position(|w| *w == b.ward).map_or(0.0, |p| 10.0 - 2.0 * p as f64);
@@ -622,7 +632,7 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
             // None new will do (a close taken away, its temple with it): the nearest home of the
             // function's own wards about a patch from where it stood takes it on, else the nearest
             // home there, else it stays lost (a graveyard too: a home is no open ground).
-            if f.key == "graveyard" {
+            if f.key == "graveyard" || in_castle {
                 continue;
             }
             let homes = |own: bool| {
@@ -1412,7 +1422,7 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
         "corners": { "asked": asked.len(), "moved": held, "part_way": part, "stayed": asked.len() - held - part },
         "buildings": { "before": before.buildings.len(), "after": after.buildings.len(), "added": ia.difference(&ib).count(), "taken_away": ib.difference(&ia).count() },
         "walls": { "built": ch.walls.unwrap_or(plan.walled), "towers": crate::interior::towers(&after).len(), "gates": after.gates.len() },
-        "squares": after.plazas.iter().filter(|p| !matches!(p.kind, PlazaKind::Quay | PlazaKind::Yard)).map(|p| p.kind.name()).collect::<Vec<_>>(),
+        "squares": after.plazas.iter().filter(|p| !matches!(p.kind, PlazaKind::Quay | PlazaKind::Yard | PlazaKind::Bailey)).map(|p| p.kind.name()).collect::<Vec<_>>(),
         "parks": after.parks.iter().map(|p| p.kind.name()).collect::<Vec<_>>(),
         "rects": changed_rects(&before, &after).iter().map(|r| r.map(crate::core::round)).collect::<Vec<_>>(),
     });

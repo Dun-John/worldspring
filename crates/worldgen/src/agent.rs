@@ -257,8 +257,7 @@ fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], fun
             return Err(format!("that overlaps {}", building_name(world, &l, b)));
         }
         // (A castle's bailey may be built on.)
-        let bailey = l.site && !l.castles.is_empty();
-        if !bailey && l.plazas.iter().any(|p| polys_overlap(&inner, &p.pts)) {
+        if l.plazas.iter().any(|p| p.kind != town::PlazaKind::Bailey && polys_overlap(&inner, &p.pts)) {
             return Err(format!("that is on {}", if l.site { "the yard" } else { "a square (a market, quay or green)" }));
         }
         let streets = l.roads.iter().map(|(pts, _, w)| (pts, 0.5 * w)).chain(l.walls.iter().map(|w| (w, 4.5)));
@@ -1237,6 +1236,23 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
             "width_ft": r1(o.short),
             "area_sq_ft": geom::area(&b.poly).abs().round(),
         });
+        // A keep's pieces (its footprint is their union).
+        if !b.parts.is_empty() {
+            v["footprint"]["pieces"] = b
+                .parts
+                .iter()
+                .map(|p| {
+                    let kind = match p.kind {
+                        town::PartKind::Body => "body",
+                        town::PartKind::Tower { round: true } => "round tower",
+                        town::PartKind::Tower { round: false } => "square tower",
+                        town::PartKind::Forebuilding => "forebuilding",
+                        town::PartKind::Wing => "wing",
+                    };
+                    json!({ "kind": kind, "poly": p.poly.iter().map(|q| [r1(q[0]), r1(q[1])]).collect::<Vec<_>>() })
+                })
+                .collect();
+        }
         v["structure"] = json!(match b.structure {
             town::Structure::Roofed => "roofed",
             town::Structure::Open => "open",

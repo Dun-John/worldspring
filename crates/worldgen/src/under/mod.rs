@@ -1055,7 +1055,9 @@ fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate: Option<usi
     };
     for b in &l.buildings {
         let (c, bi) = (town::geom::centroid(&b.poly), b.id);
-        if (c[0] / s_ft - here[0] - 0.5).abs() > 0.8 || (c[1] / s_ft - here[1] - 0.5).abs() > 0.8 {
+        // (A keep's escape tunnel may reach a street up to 400 ft off: `keep_escape`.)
+        let near = if crate::interior::has_deep_dungeon(b) { 0.8 + 400.0 / s_ft } else { 0.8 };
+        if (c[0] / s_ft - here[0] - 0.5).abs() > near || (c[1] / s_ft - here[1] - 0.5).abs() > near {
             continue;
         }
         if let Some(q) = sewer_link_of(t0, l, b)

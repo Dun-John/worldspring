@@ -290,7 +290,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             // A green (a village's or a town's) and a temple's close are the ground round them, as
             // on the battlemap; a town's squares are paved.
             // (A square where streets meet need not be convex: drawn as triangles.)
-            for p in l.plazas.iter().filter(|p| l.tier != crate::t0::settle::Tier::Village && !p.kind.is_lawn()) {
+            // (A castle's bailey is its block's, not paved.)
+            for p in l.plazas.iter().filter(|p| l.tier != crate::t0::settle::Tier::Village && !p.kind.is_lawn() && p.kind != crate::town::PlazaKind::Bailey) {
                 for tri in ears(&p.pts) {
                     push(&tri, 1);
                 }
@@ -379,7 +380,29 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         crate::town::Structure::Ruin => 4,
                         crate::town::Structure::Open => 5,
                     };
-                    push(&b.poly, kind | (b.ward as u32) << 8 | (b.floors as u32) << 16 | (b.func.is_some() as u32) << 24);
+                    let attr = kind | (b.ward as u32) << 8 | (b.floors as u32) << 16 | (b.func.is_some() as u32) << 24;
+                    // A keep of pieces: each piece (convex, outlined), its towers over its body;
+                    // each with its kind + 1 (bits 25-28: 1 body, 2 round tower, 3 square tower, 4
+                    // forebuilding, 5 wing) and how it is topped (bits 29-30: `town::keep_tops`).
+                    if !b.parts.is_empty() {
+                        let c = crate::town::geom::centroid(&b.poly);
+                        whole.set(Some(owns(c)));
+                        let tops = crate::town::keep_tops(b, world.stream("keep.tops"));
+                        for (p, &top) in b.parts.iter().zip(&tops) {
+                            use crate::town::PartKind as K;
+                            let code = match p.kind {
+                                K::Body => 1u32,
+                                K::Tower { round: true } => 2,
+                                K::Tower { round: false } => 3,
+                                K::Forebuilding => 4,
+                                K::Wing => 5,
+                            };
+                            push(&p.poly, attr | code << 25 | (top as u32) << 29);
+                        }
+                        whole.set(None);
+                        continue;
+                    }
+                    push(&b.poly, attr);
                     // A keep's round corner towers (as the battlemap draws them), standing a
                     // little proud of its walls; each tile keeps the ones it owns.
                     if let Some(t) = crate::interior::battlements(b)
@@ -407,12 +430,23 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 lines.push(w.iter().map(|p| [p[0], p[1], 9.0, 0.0]).collect());
             }
             for t in &l.towers {
+                // (A square tower: a stroke as wide as it, along its sides.)
+                if let Some(u) = l.square_tower(*t) {
+                    let (a, b) = (crate::town::geom::sub(*t, crate::town::geom::mul(u, 11.0)), crate::town::geom::add(*t, crate::town::geom::mul(u, 11.0)));
+                    lines.push(vec![[a[0], a[1], 22.0, 3.0], [b[0], b[1], 22.0, 3.0]]);
+                    continue;
+                }
                 lines.push(vec![[t[0], t[1], 22.0, 1.0], [t[0] + 0.01, t[1], 22.0, 1.0]]);
             }
             for t in &l.gate_towers {
                 lines.push(vec![[t[0], t[1], 30.0, 1.0], [t[0] + 0.01, t[1], 30.0, 1.0]]);
             }
             for &(t, gate) in &l.extra_towers {
+                if let Some(u) = l.square_tower(t).filter(|_| !gate) {
+                    let (a, b) = (crate::town::geom::sub(t, crate::town::geom::mul(u, 11.0)), crate::town::geom::add(t, crate::town::geom::mul(u, 11.0)));
+                    lines.push(vec![[a[0], a[1], 22.0, 3.0], [b[0], b[1], 22.0, 3.0]]);
+                    continue;
+                }
                 let w = if gate { 30.0 } else { 22.0 };
                 lines.push(vec![[t[0], t[1], w, 1.0], [t[0] + 0.01, t[1], w, 1.0]]);
             }

@@ -309,6 +309,7 @@ pub(super) fn close(site: &Site, block: &[P], streets: &[(P, f64)], t: f64, firs
         match best.filter(|kept| area(kept).abs() >= 150.0_f64.max(0.2 * whole) && obb(kept).short >= 16.0 && !wedge(kept)) {
             Some(kept) => {
                 l.buildings[k].poly = kept;
+                l.buildings[k].parts.clear();
                 k += 1;
             }
             None => {
@@ -361,7 +362,7 @@ pub(super) fn lone_temple(site: &Site, block: &[P], t: f64, l: &mut Layout) {
 /// A temple's own building on `poly`: its hall or churchyard (function `func`), roofed or open.
 fn temple_part(site: &Site, poly: Vec<P>, func: usize, structure: Structure) -> Building {
     let pad_ft = site.pad(&poly);
-    Building { poly, ward: Ward::Temple, func: Some(func as u16), residential: 0, name: None, floors: 1, pad_ft, structure, roof: None, tint: None, id: 0 }
+    Building { poly, ward: Ward::Temple, func: Some(func as u16), residential: 0, name: None, floors: 1, pad_ft, structure, roof: None, tint: None, id: 0, parts: Vec::new() }
 }
 
 /// How well the close `open` on `block` is ringed: the share of the block's street fronts
@@ -540,6 +541,7 @@ impl Cut {
                 let kept = if hi <= line { Vec::new() } else { clean(&clip_plain(poly, mul(n, -1.0), -line)) };
                 if kept.len() >= 3 && area(&kept).abs() >= (0.5 * area(poly).abs()).max(150.0) && obb(&kept).short >= 12.0 && !wedge(&kept) {
                     bs[k].poly = kept;
+                    bs[k].parts.clear();
                     k += 1;
                 } else {
                     bs.remove(k);

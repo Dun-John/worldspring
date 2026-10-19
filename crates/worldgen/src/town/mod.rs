@@ -12,6 +12,7 @@
 //! catalog: required ones first (an inn in every village,
 //! the whole catalog in a metropolis), then residential.
 
+mod castle;
 pub mod catalog;
 pub mod geom;
 pub mod mesh;
@@ -24,6 +25,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
 use std::rc::Rc;
 
+use castle::castle;
+pub use castle::{keep_tops, plain_keep_top};
 use catalog::{CATALOG, Naming, RESIDENTIAL, Ward};
 use geom::*;
 use mesh::Mesh;
@@ -56,6 +59,42 @@ pub struct Building {
     /// Its id (`b:<layout>:<id>`): its place in the layout as generated, kept when buildings
     /// before it are taken away (`Layout::building`).
     pub id: u32,
+    /// A keep's pieces (world ft, each convex): its body first, then wings, a forebuilding and its
+    /// towers; `poly` is their union. Empty for every other building, and once its outline is
+    /// drawn by hand.
+    pub parts: Vec<Part>,
+}
+
+/// A piece of a building's footprint (`Building::parts`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Part {
+    pub poly: Vec<P>,
+    pub kind: PartKind,
+}
+
+/// What a piece of a keep is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartKind {
+    /// The main block (a great tower, a hall, a shell keep's ring).
+    Body,
+    /// A tower standing out from the body's walls, round or square.
+    Tower { round: bool },
+    /// A lower block before the entrance.
+    Forebuilding,
+    /// A range joined to the body (an L or a T).
+    Wing,
+}
+
+/// A mound raised under a keep (world ft): its flat top round `at` out to `top_r`, easing down to
+/// the ground by `foot_r`, its top `top` ft high (the keep's pad); a path up it along `way` (unit,
+/// toward the court's gate), where the shell keep has its gate.
+#[derive(Clone, Copy, Debug)]
+pub struct Motte {
+    pub at: P,
+    pub top_r: f64,
+    pub foot_r: f64,
+    pub top: f32,
+    pub way: P,
 }
 
 /// A roof chosen for a building drawn by hand.
@@ -171,8 +210,14 @@ pub struct Layout {
     pub monuments: Vec<Vec<P>>,
     /// Named districts (towns and up).
     pub quarters: Vec<Quarter>,
-    /// Castle curtains: centre and radius (world ft), so their towers know which way is in.
+    /// Castle curtains: centre and radius (world ft), so their towers know which way is in (an
+    /// inner bailey's after its castle's outer one).
     pub castles: Vec<(P, f64)>,
+    /// Towers of `towers` built square (a castle's): their centre and the way their sides run
+    /// (unit); every other tower is round.
+    pub square_towers: Vec<(P, P)>,
+    /// Mounds raised under shell keeps.
+    pub mottes: Vec<Motte>,
     /// Bounding box of everything (world ft): x0, y0, x1, y1.
     pub bbox: [f64; 4],
     /// A point-of-interest site (ruin, tower, roadside inn), not a settlement.
@@ -216,7 +261,7 @@ pub enum PlazaKind {
     Quay,
     /// A green: a village's, round its well; in a town, a lawn where streets meet (`squares`).
     Green,
-    /// A site's or castle's yard: paved, nothing set out.
+    /// A site's yard: paved, nothing set out.
     Yard,
     /// A temple's close: the middle of its block, open round the temple and its churchyard, houses
     /// along its streets.
@@ -227,6 +272,9 @@ pub enum PlazaKind {
     FountainSquare,
     /// A crossroads widened where streets meet (a signpost, a lamp, a trough).
     Crossroads,
+    /// A castle's bailey, inside its curtain: an open yard of grass (no wild trees or boulders),
+    /// built on only by hand.
+    Bailey,
 }
 
 impl PlazaKind {
@@ -253,6 +301,7 @@ impl PlazaKind {
             PlazaKind::WellSquare => "well",
             PlazaKind::FountainSquare => "fountain",
             PlazaKind::Crossroads => "crossroads",
+            PlazaKind::Bailey => "bailey",
         }
     }
 }
@@ -402,6 +451,11 @@ impl Layout {
         self.building_index(id).map(|i| &self.buildings[i])
     }
 
+    /// The way the sides of the tower standing at `t` run, if it is square (`square_towers`).
+    pub fn square_tower(&self, t: P) -> Option<P> {
+        self.square_towers.iter().find(|s| (s.0[0] - t[0]).abs() + (s.0[1] - t[1]).abs() < 1e-6).map(|s| s.1)
+    }
+
     /// A layout with nothing laid out yet.
     pub(crate) fn empty(index: u32, center: P, radius: f64, tier: Tier) -> Layout {
         Layout {
@@ -428,6 +482,8 @@ impl Layout {
             monuments: Vec::new(),
             quarters: Vec::new(),
             castles: Vec::new(),
+            square_towers: Vec::new(),
+            mottes: Vec::new(),
             bbox: [0.0; 4],
             site: false,
             entrances: Vec::new(),
@@ -640,6 +696,30 @@ pub(crate) fn overlap(a: &[P], b: &[P]) -> f64 {
     if part.len() < 3 { 0.0 } else { area(&part).abs() }
 }
 
+/// `to` as `from` moved and turned (the same corners in the same order, each within half a foot of
+/// where the move puts it): the move, for any point.
+fn rigid(from: &[P], to: &[P]) -> Option<impl Fn(P) -> P> {
+    if from.len() != to.len() || from.is_empty() {
+        return None;
+    }
+    let n = from.len() as f64;
+    let mean = |v: &[P]| mul(v.iter().fold([0.0, 0.0], |a, p| add(a, *p)), 1.0 / n);
+    let (cf, ct) = (mean(from), mean(to));
+    let (mut c, mut s) = (0.0, 0.0);
+    for (f, t) in from.iter().zip(to) {
+        let (a, b) = (sub(*f, cf), sub(*t, ct));
+        c += dot(a, b);
+        s += cross(a, b);
+    }
+    let h = crate::core::sqrt(c * c + s * s);
+    let (c, s) = if h > 1e-9 { (c / h, s / h) } else { (1.0, 0.0) };
+    let f = move |p: P| {
+        let d = sub(p, cf);
+        add(ct, [c * d[0] - s * d[1], s * d[0] + c * d[1]])
+    };
+    from.iter().zip(to).all(|(p, t)| dist(f(*p), *t) <= 0.5).then_some(f)
+}
+
 /// The layout with its building edits applied: buildings taken away leave the list (the others
 /// keep their ids); a new function is named as a drawn building's would be (seeded by id).
 fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
@@ -669,6 +749,11 @@ fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
             b.floors = f.max(1);
         }
         if e.poly.len() >= 3 && edit_stands(b, e) {
+            // (Moved or turned, a keep keeps its pieces with it; drawn otherwise, it has none.)
+            match rigid(&b.poly, &e.poly) {
+                Some(f) => b.parts.iter_mut().flat_map(|p| p.poly.iter_mut()).for_each(|q| *q = f(*q)),
+                None => b.parts.clear(),
+            }
             b.poly = e.poly.clone();
         }
         sites::apply_looks(b, e.roof.as_deref(), e.tint.as_deref(), e.structure.as_deref());
@@ -1554,7 +1639,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     // Local → world.
     let tw = |p: &mut P| *p = add(*p, center);
     for b in &mut l.buildings {
-        b.poly.iter_mut().for_each(tw);
+        b.poly.iter_mut().chain(b.parts.iter_mut().flat_map(|p| p.poly.iter_mut())).for_each(tw);
     }
     for (pts, _, _) in &mut l.roads {
         pts.iter_mut().for_each(tw);
@@ -1577,6 +1662,12 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     }
     for t in &mut l.extra_towers {
         tw(&mut t.0);
+    }
+    for t in &mut l.square_towers {
+        tw(&mut t.0);
+    }
+    for m in &mut l.mottes {
+        tw(&mut m.at);
     }
     for pk in &mut l.parks {
         pk.pts.iter_mut().chain([&mut pk.ground.origin]).for_each(tw);
@@ -2626,6 +2717,39 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         l.towers.extend(towers);
         l.gate_towers.extend(gate_towers);
     }
+    // The town wall as it is laid along its runs (whether it stands or has been taken down), less
+    // the stretches `walls_off_river` cuts at the river: a castle's side along it is that wall
+    // (`castle`, `castle_wall_edge`); and its towers, which a castle's gate and way keep clear of.
+    let mut town_segs: Vec<(P, P)> = Vec::new();
+    let mut town_towers: Vec<(P, f64)> = Vec::new();
+    if walled || plan.walled {
+        for (chain, closed, along) in &plan.wall_runs {
+            let (pieces, towers, gate_towers, _) = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect::<Vec<_>>(), *closed, Some(along));
+            town_towers.extend(towers.iter().map(|t| (*t, 11.0)).chain(gate_towers.iter().map(|t| (*t, 15.0))));
+            for w in pieces {
+                for s in w.windows(2) {
+                    let n = crate::core::ceil(dist(s[0], s[1]) / 5.0).max(1.0) as usize;
+                    let mut from: Option<P> = None;
+                    for j in 0..n {
+                        let (a, b) = (lerp(s[0], s[1], j as f64 / n as f64), lerp(s[0], s[1], (j + 1) as f64 / n as f64));
+                        let dry = !site.near_river(lerp(a, b, 0.5), 3.0);
+                        match (dry, from) {
+                            (true, None) => from = Some(a),
+                            (false, Some(f)) => {
+                                town_segs.push((f, a));
+                                from = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(f) = from {
+                        town_segs.push((f, s[1]));
+                    }
+                }
+            }
+        }
+    }
+    let gate_pts: Vec<P> = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
     for path in &plan.paths {
         l.streets.push(path.iter().map(|&v| mesh.pos[v]).collect());
         let mut drawn: Vec<P> = Vec::new();
@@ -2774,11 +2898,57 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         }
     }
 
+    // A side of a castle's patch along which the town wall is the castle's own (`castle`): the wall
+    // laid along the whole of it, no main street running between it and the castle and no town gate
+    // on it but at its ends (the castle's corner there is cut back from the gate: `castle`); those
+    // stay the town's, outside the castle: its curtain stands back as on any other side.
+    // (The streets and roads laid so far: main streets, approaches, streets bent to a bridge.)
+    let street_segs: Vec<(P, P)> = l.roads.iter().filter(|r| r.1 != 3).flat_map(|r| r.0.windows(2).map(|q| (q[0], q[1])).collect::<Vec<_>>()).collect();
+    let castle_wall_edge = |i: usize, e: usize| -> bool {
+        let c = &cells[i];
+        let m = c.pts.len();
+        let (va, vb) = edge_v(i, e);
+        let (a, b) = (c.pts[e], c.pts[(e + 1) % m]);
+        let el = dist(a, b);
+        if el < 1.0 || gate_pts.iter().any(|g| seg_dist(*g, a, b) < 60.0 && dist(*g, a).min(dist(*g, b)) > 60.0) {
+            return false;
+        }
+        let u = mul(sub(b, a), 1.0 / el);
+        let n = crate::core::ceil(el / 5.0) as usize;
+        // (A main street along it runs between where its paved strip does, inside the wall; where
+        // a stream cuts the strip away it lies on the wall's own line, and the strip is grass.)
+        if plan.main_edge(va, vb) {
+            let inward = if area(&c.pts) > 0.0 { [-u[1], u[0]] } else { [u[1], -u[0]] };
+            let o = mul(inward, 15.0);
+            if !(0..=n).any(|j| site.near_river(lerp(add(a, o), add(b, o), j as f64 / n as f64), 15.0)) {
+                return false;
+            }
+        }
+        // (Through a gate at its end the wall has its passage; where a stream crosses it, its
+        // water gap, but where a street crosses the stream there into the patch.)
+        let bridged = street_segs.iter().any(|&(q, r)| {
+            let (o1, o2) = (cross(sub(b, a), sub(q, a)), cross(sub(b, a), sub(r, a)));
+            let (o3, o4) = (cross(sub(r, q), sub(a, q)), cross(sub(r, q), sub(b, q)));
+            o1 * o2 < 0.0 && o3 * o4 < 0.0
+        });
+        (0..=n).all(|j| {
+            let p = lerp(a, b, j as f64 / n as f64);
+            gate_pts.iter().any(|g| dist(*g, p) < 45.0)
+                || (!bridged && site.near_river(p, 6.0))
+                || town_segs.iter().any(|&(q, r)| {
+                let ql = dist(q, r);
+                ql > 0.5 && cross(u, mul(sub(r, q), 1.0 / ql)).abs() < 0.12 && seg_dist(p, q, r) <= 3.0
+            })
+        })
+    };
     // How far each side of a patch its block stands back (streets, quays, the wall's strip).
     let insets = |i: usize, w: Ward| -> Vec<f64> {
         let c = &cells[i];
         let m = c.pts.len();
-        (0..m)
+        // (A castle's sides on the town wall: and how far each would stand back off it.)
+        let mut on_wall = vec![false; m];
+        let mut back = vec![0.0; m];
+        let mut d: Vec<f64> = (0..m)
             .map(|e| {
                 let (va, vb) = edge_v(i, e);
                 let main = plan.main_edge(va, vb);
@@ -2807,9 +2977,35 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 }
                 // (A planned wall taken down leaves its strip as a street round the town.)
                 let wall = (walled || plan.walled) && i < n_inner && (!plan.inner(nb) || wet[nb as usize]);
-                (if main { 12.0 } else { 7.0 }) + if wall { 18.0 } else { 0.0 }
+                back[e] = (if main { 12.0 } else { 7.0 }) + if wall { 18.0 } else { 0.0 };
+                // A castle's side on the town wall: that wall is the castle's there (`castle`; with
+                // the wall taken down, a curtain of its own on that side).
+                if w == Ward::Castle && wall && castle_wall_edge(i, e) {
+                    on_wall[e] = true;
+                    return 0.0;
+                }
+                back[e]
             })
-            .collect()
+            .collect();
+        // A castle's side on the town wall beside one standing back from nearly the same line: the
+        // curtain would leave the wall at a slant, a second wall just inside it. It stands back too.
+        while w == Ward::Castle {
+            let dir = |e: usize| {
+                let v = sub(c.pts[(e + 1) % m], c.pts[e]);
+                mul(v, 1.0 / len(v).max(1e-9))
+            };
+            let slant = (0..m).find(|&e| {
+                on_wall[e]
+                    && [(e + m - 1) % m, (e + 1) % m].iter().any(|&f| {
+                        let (cs, sn) = (dot(dir(e), dir(f)), cross(dir(e), dir(f)).abs());
+                        d[f] > 0.0 && cs > 0.0 && d[f] * cs > 25.0 * sn
+                    })
+            });
+            let Some(e) = slant else { break };
+            on_wall[e] = false;
+            d[e] = back[e];
+        }
+        d
     };
 
     // Street lines bounding patch `i`'s block (outward normal, offset; `d`: its insets): lots need
@@ -2921,6 +3117,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     l.close_room = (0..cells.len()).filter(|&p| room[p]).map(|p| p as u32).collect();
 
     // Blocks → alleys → lots → buildings.
+    // Castles' ways from their gates to the streets (nothing built on them by a later patch).
+    let mut castle_ways: Vec<Vec<P>> = Vec::new();
     for i in 0..total {
         let Some(w) = ward[i] else { continue };
         let c = &cells[i];
@@ -3044,7 +3242,20 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 l.parks.push(park(site, &block, kind, fronts, key));
             }
             // The gate faces the centre (the plaza, if the citadel backs onto it).
-            Ward::Castle => castle(site, &block, [0.0, 0.0], w, &dp, &mut prng, l, true, true),
+            Ward::Castle => {
+                // (The town wall as laid near it: the sides along it are that wall, as `insets` sets
+                // them.)
+                let (x0, y0, x1, y1) = c.pts.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+                let on_wall: Vec<(P, P)> = town_segs
+                    .iter()
+                    .copied()
+                    .filter(|(a, b)| a[0].max(b[0]) >= x0 - 80.0 && a[0].min(b[0]) <= x1 + 80.0 && a[1].max(b[1]) >= y0 - 80.0 && a[1].min(b[1]) <= y1 + 80.0)
+                    .collect();
+                let set = castle::Setting { follow: true, capital: s.capital, wall_up: walled, planned: plan.ward[i] == Some(Ward::Castle) };
+                let roads_at = l.roads.len();
+                castle(site, &block, [0.0, 0.0], w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
+                castle_ways.extend(l.roads[roads_at..].iter().map(|r| r.0.clone()));
+            }
             Ward::Slum if i >= n_inner => {
                 // Sprawl thins out away from the city: lots are kept with a probability that
                 // falls with distance from the corners this patch shares with the city.
@@ -3101,8 +3312,9 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             l.plazas.push(Plaza { pts, kind: cut.kind });
         }
     }
-    // Off the roads into the city and the ground before each gate (`clear_of`).
-    l.buildings.retain(|b| clear_of(b));
+    // Off the roads into the city and the ground before each gate (`clear_of`), and off a castle's
+    // way to its gate.
+    l.buildings.retain(|b| clear_of(b) && (b.ward == Ward::Castle || castle_ways.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(&b.poly, s[0], s[1]) >= 5.0))));
     // Steps on steep streets, judged before the streets are cut at the water (wet ground is
     // level), so every piece is still as recorded.
     if s.tier >= stairs::STAIR_TIER || survey.is_some() {
@@ -3504,6 +3716,12 @@ impl District {
 trait Ground {
     fn buildable(&self, poly: &[P]) -> bool;
     fn pad(&self, poly: &[P]) -> f32;
+    /// The ground's height at a point (ft).
+    fn height(&self, p: P) -> f64;
+    /// On the water or a river's channel.
+    fn wet(&self, p: P) -> bool;
+    /// On the water or within `margin` ft of a river's channel.
+    fn near_water(&self, p: P, margin: f64) -> bool;
 }
 
 impl Ground for Site<'_> {
@@ -3513,71 +3731,14 @@ impl Ground for Site<'_> {
     fn pad(&self, poly: &[P]) -> f32 {
         Site::pad(self, poly)
     }
-}
-
-/// A castle on `block` (convex): a curtain wall 6 ft in from its edge with towers on every
-/// corner but the gate, a gatehouse in the middle of the side nearest `gate_toward`; with
-/// `keep`, the keep (4 storeys: the largest rectangle that fits well inside the yard), and
-/// with `yard`, buildings lining the inside of the curtain, clear of the keep.
-#[allow(clippy::too_many_arguments)]
-fn castle<G: Ground>(site: &G, block: &[P], gate_toward: P, w: Ward, dp: &District, prng: &mut Pcg32, l: &mut Layout, keep: bool, yard: bool) {
-    let curtain = inset(block, &vec![6.0; block.len()]);
-    if curtain.len() >= 3 {
-        let n = curtain.len();
-        let gate_e = (0..n)
-            .min_by(|&x, &y| dist(lerp(curtain[x], curtain[(x + 1) % n], 0.5), gate_toward).total_cmp(&dist(lerp(curtain[y], curtain[(y + 1) % n], 0.5), gate_toward)))
-            .unwrap_or(0);
-        // Walk the curtain from the far end of the gate edge back to its start, with a
-        // gatehouse in the middle of the gate edge.
-        let gate_mid = lerp(curtain[gate_e], curtain[(gate_e + 1) % n], 0.5);
-        let mut ring: Vec<(P, bool)> = vec![(gate_mid, true)];
-        for k in 1..=n {
-            ring.push((curtain[(gate_e + k) % n], false));
-        }
-        ring.push((gate_mid, true));
-        let (pieces, towers, gate_towers) = wall_pieces(&ring, false);
-        l.walls.extend(pieces);
-        l.towers.extend(towers);
-        l.gate_towers.extend(gate_towers);
-        let cc = centroid(&curtain);
-        l.castles.push((cc, curtain.iter().map(|p| dist(*p, cc)).fold(0.0, f64::max)));
+    fn height(&self, p: P) -> f64 {
+        Site::height(self, p)
     }
-    let court = inset(block, &vec![22.0; block.len()]);
-    if court.len() < 3 {
-        return;
+    fn wet(&self, p: P) -> bool {
+        Site::wet(self, p)
     }
-    // The keep: the largest rectangle that fits well inside the yard.
-    let zone = inset(block, &vec![50.0; block.len()]);
-    let keep = if keep && zone.len() >= 3 {
-        let o = obb(&zone);
-        let c = centroid(&zone);
-        let mut f = 0.75;
-        let mut k = rect(c, o.axis, o.long * f, o.short * f);
-        for _ in 0..8 {
-            if k.iter().all(|p| contains(&zone, *p)) {
-                break;
-            }
-            f *= 0.85;
-            k = rect(c, o.axis, o.long * f, o.short * f);
-        }
-        k.iter().all(|p| contains(&zone, *p)).then_some(k)
-    } else {
-        None
-    };
-    // Buildings line the inside of the curtain, clear of the keep.
-    let first = l.buildings.len();
-    if yard {
-        let mut inner_lines = edge_lines(&court);
-        build_block(site, &court, &mut inner_lines, w, dp, prng, l, None);
-    }
-    if let Some(keep) = keep {
-        let mut kept: Vec<Building> = l.buildings.drain(first..).collect();
-        kept.retain(|b| !overlaps(&b.poly, &keep));
-        l.buildings.extend(kept);
-        if site.buildable(&keep) {
-            let pad = site.pad(&keep);
-            l.buildings.push(Building { poly: keep, ward: w, func: None, residential: 4, name: None, floors: 4, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
-        }
+    fn near_water(&self, p: P, margin: f64) -> bool {
+        self.wet_standing(p) || self.near_river(p, margin)
     }
 }
 
@@ -3799,7 +3960,7 @@ fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P, f64)>, wa
                 continue;
             }
             let pad = site.pad(&poly);
-            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
+            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
         }
     }
 }
@@ -3958,7 +4119,7 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
             let house = rect(add(add(a, mul(u, 0.5 * w + 6.0)), mul(inward, 0.5 * dp + 6.0)), u, w, dp);
             if house.iter().all(|p| contains(&f, *p)) && site.buildable(&house) {
                 let pad = site.pad(&house);
-                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
+                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
             }
         }
         l.fields.push(f);
@@ -4146,7 +4307,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
                     let house = rect(add(p, mul(n, side * back)), u, w, d);
                     if clear(&house, l) && site.buildable(&house) {
                         let pad = site.pad(&house);
-                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
+                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
                     }
                 }
                 let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
@@ -4167,7 +4328,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
         let house = rect(c, [-libm::sin(a), libm::cos(a)], rng.range(22.0, 34.0), rng.range(16.0, 22.0));
         if clear(&house, l) && site.buildable(&house) {
             let pad = site.pad(&house);
-            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
+            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
         }
     }
     // Fields: Voronoi cells seeded along the lanes and on a jittered ring, split into plots
@@ -4383,7 +4544,19 @@ fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> 
     let mut walls: Vec<Vec<P>> = Vec::new();
     for (wi, w) in std::mem::take(&mut l.walls).into_iter().enumerate() {
         let by_hand = hand.contains(&wi);
-        let bank = |l: &mut Layout, t: P| if by_hand { l.extra_towers.push((t, false)) } else { l.towers.push(t) };
+        // (In a castle, none beside a tower that stays, nor on one of its ranges: they would stand
+        // on each other.)
+        let crowded = |l: &Layout, t: P| {
+            l.castles.iter().any(|c| dist(t, c.0) <= c.1 + 30.0)
+                && (l.towers.iter().chain(&l.gate_towers).copied().chain(l.extra_towers.iter().map(|e| e.0)).any(|o| dist(o, t) < 34.0 && !tower_wet(o))
+                    || l.buildings.iter().any(|b| b.ward == Ward::Castle && poly_seg_dist(&b.poly, t, t) < 13.0))
+        };
+        let bank = |l: &mut Layout, t: P| {
+            if crowded(l, t) {
+                return;
+            }
+            if by_hand { l.extra_towers.push((t, false)) } else { l.towers.push(t) }
+        };
         let mut cur: Vec<P> = Vec::new();
         for (k, seg) in w.windows(2).enumerate() {
             let (a, b) = (seg[0], seg[1]);
@@ -4430,6 +4603,9 @@ fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> 
     l.towers.retain(|t| !tower_wet(*t));
     l.gate_towers.retain(|t| !tower_wet(*t));
     l.extra_towers.retain(|t| !tower_wet(t.0));
+    // (A square tower gone with the rest.)
+    let (towers, extra) = (&l.towers, &l.extra_towers);
+    l.square_towers.retain(|s| towers.iter().chain(extra.iter().map(|e| &e.0)).any(|t| (t[0] - s.0[0]).abs() + (t[1] - s.0[1]).abs() < 1e-6));
 }
 
 /// Point and unit direction `at` ft along a polyline.
@@ -4519,7 +4695,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
-            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0 });
+            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
         }
     }
     // Big functions first so they get the big lots.

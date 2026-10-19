@@ -716,7 +716,7 @@ fn seam_split(out: &mut ParkLayout, from: usize) {
 
 /// Whether a hedge piece's footprint (play's, 2.45 by 1.45 ft each way at full size, and 0.1 ft to
 /// spare: the chunk stores its place as a float) lies wholly in the chunk holding its middle.
-fn seam_inside(pr: &(P, f32, Kind, u8, f32)) -> bool {
+pub(crate) fn seam_inside(pr: &(P, f32, Kind, u8, f32)) -> bool {
     let (d, s) = ([libm::cos(pr.1 as f64), libm::sin(pr.1 as f64)], pr.4 as f64);
     let (l, w) = (mul(d, 2.45 * s + 0.1), mul(perp(d), 1.45 * s + 0.1));
     let chunk = |p: P| (crate::core::floor(p[0] / CHUNK_FT) as i64, crate::core::floor(p[1] / CHUNK_FT) as i64);

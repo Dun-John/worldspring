@@ -850,7 +850,13 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         a = 0.7;
       } else if (kind === 14) rgb = [0.33, 0.46, 0.26];
       else if (kind === 15) rgb = [0.74, 0.5, 0.46];
-      else {
+      else if ((attr >>> 25) & 15) {
+        // A keep's piece (`payload::pack_sites`): towers and the body's hall under slate, a wing or
+        // forebuilding by its top (`town::keep_tops`): open battlements stone, a roof lead or slate.
+        const piece = ((attr >>> 25) & 15) - 1;
+        const top = (attr >>> 29) & 3;
+        rgb = piece === 3 || piece === 4 ? (top === 0 ? [0.62, 0.6, 0.55] : top === 1 ? [0.4, 0.42, 0.44] : [0.38, 0.42, 0.47]) : piece === 0 ? [0.42, 0.45, 0.49] : [0.36, 0.4, 0.45];
+      } else {
         const base = WARD_RGB[ward] ?? WARD_RGB[6];
         const shade = 0.94 + 0.12 * (((i * 2654435761) >>> 0) / 4294967296);
         rgb = hasFunc ? [base[0] * 0.86, base[1] * 0.74, base[2] * 0.66] : [base[0] * shade, base[1] * shade, base[2] * shade];

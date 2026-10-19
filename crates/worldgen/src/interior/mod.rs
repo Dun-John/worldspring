@@ -360,6 +360,8 @@ pub fn battlements(b: &town::Building) -> Option<f64> {
         _ => {}
     }
     match arch_of(b) {
+        // (A keep built of pieces: its towers are pieces of its own, not the grid's corners.)
+        Arch::Keep if !b.parts.is_empty() || !corner_towers(b) => Some(0.0),
         Arch::Keep => {
             let o = geom::obb(&b.poly);
             let (nx, ny) = (crate::core::round(o.long / SQUARE_FT) as usize, crate::core::round(o.short / SQUARE_FT) as usize);
@@ -368,6 +370,15 @@ pub fn battlements(b: &town::Building) -> Option<f64> {
         Arch::Tower => Some(0.0),
         _ => None,
     }
+}
+
+/// A keep with no pieces of its own has a tower on each corner of its grid, but a castle's keep
+/// drawn round its towers by hand (its pieces gone: a footprint far from its grid's rectangle),
+/// whose corners those don't fit.
+fn corner_towers(b: &town::Building) -> bool {
+    let castle = b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "castle");
+    let o = geom::obb(&b.poly);
+    !castle || geom::area(&b.poly).abs() >= 0.95 * o.long * o.short
 }
 
 /// The level index of an open roof (battlements) on keeps and towers.
@@ -736,7 +747,18 @@ pub struct Shell<'a> {
     /// Squares the outer wall as drawn doesn't cut: inside its inner face (all of them without an
     /// outline). Stairs stand on these.
     pub whole: Vec<bool>,
+    /// A keep's outer wall as drawn, one convex part per piece of it (`Building::parts`), grid
+    /// units; then `outline` is empty.
+    pub outline_parts: Vec<Vec<P>>,
+    /// A keep's towers: the squares of each one's room (round about the tower's middle, or square,
+    /// a square of wall round it), whether round, and the square in its middle (its spiral stair).
+    pub towers: Vec<(Vec<usize>, bool, usize)>,
+    /// Each tower's ways in (`towers`' order): the squares of the building's under its wall beside
+    /// its room, the one way in on each floor kept by the room it opens onto (`layout_level`).
+    pub tower_doors: Vec<Vec<usize>>,
     neighbours: Vec<&'a Vec<P>>,
+    /// A keep's footprint (world ft): the squares in it no room has are its walls, not open ground.
+    own: Vec<P>,
 }
 
 /// Half the outer wall's width as drawn (squares): a square is whole when it lies this far inside
@@ -745,6 +767,9 @@ pub const WALL_HALF: f64 = 0.225;
 
 impl<'a> Shell<'a> {
     pub fn of(l: &'a Layout, b: &town::Building) -> Shell<'a> {
+        if !b.parts.is_empty() {
+            return Shell::of_parts(l, b);
+        }
         let o = geom::obb(&b.poly);
         let (u, v) = (o.axis, [-o.axis[1], o.axis[0]]);
         let (a0, a1) = geom::extent(&b.poly, u);
@@ -769,33 +794,153 @@ impl<'a> Shell<'a> {
                 }
             }
         }
-        let c0 = geom::centroid(&b.poly);
-        let reach = b.poly.iter().map(|p| geom::dist(*p, c0)).fold(0.0, f64::max) + 40.0;
-        let neighbours: Vec<&Vec<P>> = l
-            .buildings
-            .iter()
-            .filter(|o| o.id != b.id && o.structure == Structure::Roofed && o.poly.iter().any(|p| geom::dist(*p, c0) < reach + 60.0))
-            .map(|o| &o.poly)
-            .collect();
+        let neighbours = neighbours_of(l, b);
         let outline = outline_of(&b.poly, &inside, nx, origin, u, v);
-        let mut sh = Shell { nx, ny, origin, u, v, inside, outline, whole: Vec::new(), neighbours };
+        let mut sh = Shell { nx, ny, origin, u, v, inside, outline, whole: Vec::new(), outline_parts: Vec::new(), towers: Vec::new(), tower_doors: Vec::new(), neighbours, own: Vec::new() };
         sh.whole = sh.whole_by(WALL_HALF);
         sh
     }
 
+    /// A keep's grid (`Building::parts`): along its body, its squares whole squares from the
+    /// body's first corner (the pieces are laid on them: `town::castle`), reaching over every
+    /// piece. Inside: the squares whose middle lies in the body, a wing or a forebuilding, and each
+    /// tower's room (its box less a square of wall each side, round in a round tower); the rest of
+    /// a tower is wall, but the squares of the body under it beside its room: its ways in, one kept
+    /// on each floor (`tower_doors`). Its outer wall as drawn is a part per piece, each edge pushed out as far as
+    /// the squares drawn inside that piece need (`part_outline`).
+    fn of_parts(l: &'a Layout, b: &town::Building) -> Shell<'a> {
+        let body = &b.parts[0].poly;
+        let o = geom::obb(body);
+        let (u, v) = (o.axis, [-o.axis[1], o.axis[0]]);
+        let (a0, a1) = geom::extent(&b.poly, u);
+        let (b0, b1) = geom::extent(&b.poly, v);
+        let (ru, rv) = (dot(body[0], u), dot(body[0], v));
+        let from = |r: f64, lo: f64| r - crate::core::ceil((r - lo) / SQUARE_FT - 1e-6) * SQUARE_FT;
+        let (u0, v0) = (from(ru, a0), from(rv, b0));
+        let nx = (crate::core::ceil((a1 - u0) / SQUARE_FT - 1e-6) as usize).max(2);
+        let ny = (crate::core::ceil((b1 - v0) / SQUARE_FT - 1e-6) as usize).max(2);
+        let origin = add(mul(u, u0), mul(v, v0));
+        let grid = |p: P| {
+            let d = sub(p, origin);
+            [dot(d, u) / SQUARE_FT, dot(d, v) / SQUARE_FT]
+        };
+        // Each piece in grid units, wound anticlockwise in grid axes.
+        let parts: Vec<Vec<P>> = b
+            .parts
+            .iter()
+            .map(|p| {
+                let mut g: Vec<P> = p.poly.iter().map(|q| grid(*q)).collect();
+                if geom::area(&g) < 0.0 {
+                    g.reverse();
+                }
+                g
+            })
+            .collect();
+        let middle = |k: usize| [(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5];
+        let mut inside = vec![false; nx * ny];
+        // The piece each square is drawn inside (the one it lies deepest in; a tower's room its
+        // tower).
+        let mut owner = vec![usize::MAX; nx * ny];
+        for k in 0..nx * ny {
+            let best = (0..parts.len())
+                .filter(|&pi| !matches!(b.parts[pi].kind, town::PartKind::Tower { .. }))
+                .map(|pi| (pi, inset_by(&parts[pi], middle(k))))
+                .max_by(|x, y| x.1.total_cmp(&y.1).then(y.0.cmp(&x.0)));
+            if let Some((pi, _)) = best.filter(|x| x.1 > 0.0) {
+                inside[k] = true;
+                owner[k] = pi;
+            }
+        }
+        let mut towers = Vec::new();
+        let mut tower_doors = Vec::new();
+        let in_tower = |k: usize| b.parts.iter().enumerate().any(|(pi, p)| matches!(p.kind, town::PartKind::Tower { .. }) && geom::contains(&parts[pi], middle(k)));
+        for (pi, part) in b.parts.iter().enumerate() {
+            let town::PartKind::Tower { round } = part.kind else { continue };
+            let g = &parts[pi];
+            let c = mul(g.iter().fold([0.0, 0.0], |a, q| add(a, *q)), 1.0 / g.len() as f64);
+            let (x0, x1) = g.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[0]), a.1.max(q[0])));
+            let d = crate::core::round(x1 - x0) as i64;
+            let (bx, by) = (crate::core::round(c[0] - 0.5 * d as f64) as i64 + 1, crate::core::round(c[1] - 0.5 * d as f64) as i64 + 1);
+            let w = (d - 2).max(1) as usize;
+            if bx < 0 || by < 0 || bx as usize + w > nx || by as usize + w > ny {
+                continue;
+            }
+            let rb = [bx as usize, by as usize, w, w];
+            let cells = if round { shape::shape_cells(rb, shape::ROUND) } else { vec![true; w * w] };
+            let squares: Vec<usize> = (0..w * w).filter(|&k| cells[k]).map(|k| (rb[1] + k / w) * nx + rb[0] + k % w).collect();
+            for &k in &squares {
+                inside[k] = true;
+                owner[k] = pi;
+            }
+            // Its wall: the building's squares under it, but those beside its room and beside the
+            // building outside every tower (its ways in, one kept on each floor).
+            let side = |k: usize| {
+                let (i, j) = (k % nx, k / nx);
+                [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)].into_iter().filter(|&(a, b)| a < nx && b < ny).map(move |(a, b)| b * nx + a)
+            };
+            let mut doors = Vec::new();
+            for k in 0..nx * ny {
+                if !inside[k] || squares.contains(&k) || !geom::contains(&parts[pi], middle(k)) {
+                    continue;
+                }
+                if side(k).any(|q| squares.contains(&q)) && side(k).any(|q| inside[q] && !in_tower(q)) {
+                    doors.push(k);
+                } else {
+                    inside[k] = false;
+                }
+            }
+            // Its spiral stair: the square nearest its middle that no door can open beside (none of
+            // its sides on a square of the building outside the tower).
+            let mid = [rb[0] as f64 + 0.5 * w as f64, rb[1] as f64 + 0.5 * w as f64];
+            let inner = |k: usize| {
+                let (i, j) = (k % nx, k / nx);
+                [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)].iter().all(|&(a, b)| a >= nx || b >= ny || !inside[b * nx + a] || squares.contains(&(b * nx + a)))
+            };
+            let near = |k: usize| geom::dist(middle(k), mid);
+            let best = |all: bool| squares.iter().copied().filter(|&k| all || inner(k)).min_by(|&a, &b| near(a).total_cmp(&near(b)).then(a.cmp(&b)));
+            let Some(spiral) = best(false).or_else(|| best(true)) else { continue };
+            towers.push((squares, round, spiral));
+            tower_doors.push(doors);
+        }
+        let outline_parts: Vec<Vec<P>> = (0..parts.len())
+            .filter_map(|pi| {
+                let own: Vec<P> = (0..nx * ny).filter(|&k| inside[k] && owner[k] == pi).map(middle).collect();
+                let reach: Vec<usize> = (0..nx * ny).filter(|&k| geom::contains(&parts[pi], middle(k))).collect();
+                part_outline(&parts[pi], &own, &reach, nx)
+            })
+            .collect();
+        let mut sh = Shell { nx, ny, origin, u, v, inside, outline: Vec::new(), whole: Vec::new(), outline_parts, towers, tower_doors, neighbours: neighbours_of(l, b), own: b.poly.clone() };
+        sh.whole = sh.whole_by(WALL_HALF);
+        sh
+    }
+
+    /// How far grid point `c` lies inside the outer wall as drawn (its parts' best; f64::MAX
+    /// without one).
+    fn inset(&self, c: P) -> f64 {
+        if !self.outline.is_empty() {
+            return inset_by(&self.outline, c);
+        }
+        self.outline_parts.iter().map(|o| inset_by(o, c)).fold(if self.outline_parts.is_empty() { f64::MAX } else { f64::MIN }, f64::max)
+    }
+
     /// Squares inside, lying at least `t` (squares) inside the outer wall as drawn.
     pub fn whole_by(&self, t: f64) -> Vec<bool> {
+        let walled = !self.outline.is_empty() || !self.outline_parts.is_empty();
         (0..self.nx * self.ny)
             .map(|k| {
                 let (i, j) = ((k % self.nx) as f64, (k / self.nx) as f64);
-                self.inside[k] && (self.outline.is_empty() || [[i, j], [i + 1.0, j], [i + 1.0, j + 1.0], [i, j + 1.0]].iter().all(|c| inset_by(&self.outline, *c) >= t))
+                self.inside[k] && (!walled || [[i, j], [i + 1.0, j], [i + 1.0, j + 1.0], [i, j + 1.0]].iter().all(|c| self.inset(*c) >= t))
             })
             .collect()
     }
 
     /// The outer wall as drawn (`Interior::outlines`): its convex parts, whose union is the
-    /// footprint (one, or none for the grid's rectangle), grid units, wound clockwise on screen.
+    /// footprint (one, a keep's one per piece, or none for the grid's rectangle), grid units, wound
+    /// clockwise on screen.
     pub fn outlines(&self) -> Vec<Vec<[f32; 2]>> {
+        if !self.outline_parts.is_empty() {
+            return self.outline_parts.iter().map(|o| o.iter().map(|p| [p[0] as f32, p[1] as f32]).collect()).collect();
+        }
         if self.outline.is_empty() {
             return Vec::new();
         }
@@ -807,11 +952,67 @@ impl<'a> Shell<'a> {
         add(self.origin, add(mul(self.u, x * SQUARE_FT), mul(self.v, y * SQUARE_FT)))
     }
 
-    /// Square (i, j) (maybe off the grid) is open ground: inside no neighbouring building.
+    /// Square (i, j) (maybe off the grid) is open ground: inside no neighbouring building (nor, for
+    /// a keep, in its own walls).
     pub fn ext_free(&self, i: isize, j: isize) -> bool {
         let p = self.world_at(i as f64 + 0.5, j as f64 + 0.5);
-        !self.neighbours.iter().any(|poly| geom::contains(poly, p))
+        !self.neighbours.iter().any(|poly| geom::contains(poly, p)) && (self.own.is_empty() || !geom::contains(&self.own, p))
     }
+}
+
+/// The roofed buildings near `b` (a door must not open into one).
+fn neighbours_of<'a>(l: &'a Layout, b: &town::Building) -> Vec<&'a Vec<P>> {
+    let c0 = geom::centroid(&b.poly);
+    let reach = b.poly.iter().map(|p| geom::dist(*p, c0)).fold(0.0, f64::max) + 40.0;
+    l.buildings.iter().filter(|o| o.id != b.id && o.structure == Structure::Roofed && o.poly.iter().any(|p| geom::dist(*p, c0) < reach + 60.0)).map(|o| &o.poly).collect()
+}
+
+/// A piece of a keep's outer wall as drawn (`pts`: convex, grid units, anticlockwise in grid axes):
+/// each edge pushed out as far as the squares drawn inside this piece (`own`: their middles) need
+/// to lie `WALL_HALF` + 0.1 in from it, cut back to within half a square of the squares whose middle
+/// it holds (`reach`), as `outline_of` does for a whole footprint. None for a piece holding none.
+fn part_outline(pts: &[P], own: &[P], reach: &[usize], nx: usize) -> Option<Vec<P>> {
+    if reach.is_empty() {
+        return None;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in pts {
+        (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
+    }
+    let mut out: Vec<P> = vec![[x0 - 5.0, y0 - 5.0], [x1 + 5.0, y0 - 5.0], [x1 + 5.0, y1 + 5.0], [x0 - 5.0, y1 + 5.0]];
+    for k in 0..pts.len() {
+        let (a, b) = (pts[k], pts[(k + 1) % pts.len()]);
+        let e = sub(b, a);
+        let l = geom::len(e);
+        if l < 1e-9 {
+            continue;
+        }
+        let o = [e[1] / l, -e[0] / l];
+        let least = own.iter().map(|c| geom::cross(e, sub(*c, a)) / l).fold(f64::MAX, f64::min);
+        let push = (WALL_HALF + 0.1 - least).max(0.0);
+        out = geom::clip_plain(&out, o, dot(a, o) + push);
+    }
+    let mut corners: Vec<P> = Vec::new();
+    for &k in reach {
+        let (i, j) = ((k % nx) as f64, (k / nx) as f64);
+        corners.extend([[i - 0.5, j - 0.5], [i + 1.5, j - 0.5], [i + 1.5, j + 1.5], [i - 0.5, j + 1.5]]);
+    }
+    let hull = geom::hull(corners);
+    for k in 0..hull.len() {
+        let (a, b) = (hull[k], hull[(k + 1) % hull.len()]);
+        let e = sub(b, a);
+        out = geom::clip_plain(&out, [e[1], -e[0]], dot(a, [e[1], -e[0]]));
+    }
+    let mut pts: Vec<P> = Vec::with_capacity(out.len());
+    for p in out {
+        if pts.last().is_none_or(|l| (l[0] - p[0]).abs() + (l[1] - p[1]).abs() > 1e-4) {
+            pts.push(p);
+        }
+    }
+    while pts.len() > 1 && (pts[0][0] - pts[pts.len() - 1][0]).abs() + (pts[0][1] - pts[pts.len() - 1][1]).abs() <= 1e-4 {
+        pts.pop();
+    }
+    (pts.len() >= 3).then_some(pts)
 }
 
 /// A footprint's outer wall as drawn (grid units, the wall's middle on the footprint, each edge
@@ -944,9 +1145,15 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Buildi
     if open_roof {
         zs.push(ROOF);
     }
-    // A keep's corner towers rise a storey above its battlements.
-    let t = keep_tower_squares(nx, ny);
-    if arch == Arch::Keep && t > 0 && open_roof {
+    // A keep's corner towers rise a storey above its battlements (a keep built of pieces: its own
+    // towers, `Shell::towers`).
+    let t = if b.parts.is_empty() && corner_towers(b) { keep_tower_squares(nx, ny) } else { 0 };
+    let towers: Option<Vec<Vec<usize>>> = (arch == Arch::Keep && !b.parts.is_empty()).then(|| sh.towers.iter().map(|t| t.0.clone()).collect());
+    // (With their ways in.)
+    let rings: Option<Vec<(Vec<usize>, Vec<usize>)>> = towers.as_ref().map(|t| t.iter().cloned().zip(sh.tower_doors.iter().cloned()).collect());
+    // (A castle's keep reshaped by hand off its grid: no towers on its grid's corners either.)
+    let rings = rings.or_else(|| (arch == Arch::Keep && !corner_towers(b)).then(Vec::new));
+    if arch == Arch::Keep && (t > 0 || towers.as_ref().is_some_and(|t| !t.is_empty())) && open_roof {
         zs.push(TOWER_TOP);
     }
     let entry_level = 1;
@@ -957,11 +1164,19 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Buildi
     let mut ground_pre: Option<Level> = None;
     // (On squares the outer wall as drawn doesn't cut; in a building too small for that, as far
     // in from it as they go.)
-    let mut stairs = place_stairs(&sh.whole, nx, ny, front, arch);
+    // (Off a keep's towers and their ways in: their spiral stairs are theirs.)
+    let off_towers = |mut m: Vec<bool>| {
+        for k in towers.iter().flatten().flatten().chain(sh.tower_doors.iter().flatten()) {
+            m[*k] = false;
+        }
+        m
+    };
+    let whole = off_towers(sh.whole.clone());
+    let mut stairs = place_stairs(&whole, nx, ny, front, arch);
     let on = |st: [usize; 4], m: &[bool]| (st[1]..st[1] + st[3]).all(|j| (st[0]..st[0] + st[2]).all(|i| m[j * nx + i]));
-    if !on(stairs, &sh.whole) {
+    if !on(stairs, &whole) {
         for t in [0.1, 0.0, f64::MIN] {
-            let m = sh.whole_by(t);
+            let m = off_towers(sh.whole_by(t));
             stairs = place_stairs(&m, nx, ny, front, arch);
             if on(stairs, &m) {
                 break;
@@ -970,7 +1185,7 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Buildi
     }
     if is_pub(arch) {
         let prog = program(arch, 0, floors == 1, key);
-        let lvl = layout_level(&inside, nx, ny, &prog, [0, 0, 0, 0], front, true, arch, &ext_free, &mut rng);
+        let lvl = layout_level(&inside, nx, ny, &prog, [0, 0, 0, 0], front, true, arch, rings.as_deref(), &ext_free, &mut rng);
         // (Clear of the outer wall as drawn if they can be; in the taproom whatever.)
         if let Some(st) = pub_stairs(&lvl, nx, ny, &sh.whole, true).or_else(|| pub_stairs(&lvl, nx, ny, &sh.whole, false)).or_else(|| pub_stairs(&lvl, nx, ny, inside, true)) {
             stairs = st;
@@ -984,8 +1199,8 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Buildi
         let prog = program(arch, z.min(ROOF), top, key);
         let mut lvl = match (&ground_pre, z) {
             (Some(g), 0) => g.clone(),
-            (_, TOWER_TOP) => tower_tops(&inside, nx, ny, keep_tower_squares(nx, ny), stairs, &mut rng),
-            _ => layout_level(&inside, nx, ny, &prog, stairs, front, z == 0, arch, &ext_free, &mut rng),
+            (_, TOWER_TOP) => tower_tops(&inside, nx, ny, t, towers.as_deref().unwrap_or_default(), stairs, &mut rng),
+            _ => layout_level(&inside, nx, ny, &prog, stairs, front, z == 0, arch, rings.as_deref(), &ext_free, &mut rng),
         };
         // The roof is one storey above the top floor, the tower tops one above that.
         let zf = match z {
@@ -1006,6 +1221,19 @@ fn build(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Buildi
             for (i, j) in [(0, 0), (nx - 1, 0), (0, ny - 1), (nx - 1, ny - 1)] {
                 if lvl.cells[j * nx + i] >= 0 {
                     push_item(&mut lvl.furniture, "spiral_stair", i, j);
+                }
+            }
+        }
+        // A keep built of pieces: a spiral stair in the middle of each of its towers; their rooms
+        // round in round towers.
+        if arch == Arch::Keep && zf >= 0 {
+            for (sq, round, mid) in &sh.towers {
+                let r = lvl.cells[*mid];
+                if r >= 0 {
+                    push_item(&mut lvl.furniture, "spiral_stair", mid % nx, mid / nx);
+                    if *round && sq.iter().all(|&k| lvl.cells[k] == r) && shape::fits(&lvl.cells, nx, r, shape::ROUND) {
+                        lvl.rooms[r as usize].shape = shape::ROUND;
+                    }
                 }
             }
         }
@@ -1092,10 +1320,24 @@ fn pub_stairs(lvl: &Level, nx: usize, ny: usize, whole: &[bool], against: bool) 
 }
 
 /// The tops of a keep's four corner towers: a battlemented square each (no main stairs), on
-/// the footprint (a corner the footprint cuts off has no tower, nor its spiral stair).
-fn tower_tops(inside: &[bool], nx: usize, ny: usize, t: usize, st: [usize; 4], rng: &mut Pcg32) -> Level {
+/// the footprint (a corner the footprint cuts off has no tower, nor its spiral stair); a keep
+/// built of pieces, its own towers' (`towers`: their squares).
+fn tower_tops(inside: &[bool], nx: usize, ny: usize, t: usize, towers: &[Vec<usize>], st: [usize; 4], rng: &mut Pcg32) -> Level {
     let mut cells = vec![-1i16; nx * ny];
     let mut rooms = Vec::new();
+    for sq in towers {
+        let id = rooms.len() as i16;
+        rooms.push(Room { kind: "tower top", squares: 0, raise_ft: 0.0, center: [0.0; 2], shape: 0 });
+        for &k in sq {
+            cells[k] = id;
+        }
+    }
+    if !towers.is_empty() {
+        finish_rooms(&mut rooms, &cells, nx);
+        let mut lvl = connect(cells, rooms, nx, ny, st, 0, false, None, &|_, _| true, rng);
+        lvl.has_stairs = false;
+        return lvl;
+    }
     for ((cx, cy), (ki, kj)) in [(0, 0), (nx - t, 0), (0, ny - t), (nx - t, ny - t)].into_iter().zip([(0, 0), (nx - 1, 0), (0, ny - 1), (nx - 1, ny - 1)]) {
         if !inside[kj * nx + ki] {
             continue;
@@ -1169,7 +1411,7 @@ struct R {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: [usize; 4], front: usize, ground: bool, arch: Arch, ext_free: &dyn Fn(isize, isize) -> bool, rng: &mut Pcg32) -> Level {
+fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: [usize; 4], front: usize, ground: bool, arch: Arch, towers: Option<&[(Vec<usize>, Vec<usize>)]>, ext_free: &dyn Fn(isize, isize) -> bool, rng: &mut Pcg32) -> Level {
     // A large keep's dungeon floor: guardrooms, a prison block, stores and the stair down to
     // the deep dungeons, on corridors (a small keep keeps its cell block).
     let keep_dungeon;
@@ -1271,7 +1513,7 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
     if prog.cells
         && nx >= 7
         && ny >= 5
-        && let Some((cells, mut rooms)) = cell_block(inside, nx, ny, st, prog.rooms[0].0)
+        && let Some((cells, mut rooms)) = cell_block(inside, nx, ny, st, prog.rooms[0].0).filter(|(c, _)| rooms_whole(c, nx, ny))
     {
         let (cells, mut rooms2) = compact(cells, std::mem::take(&mut rooms));
         finish_rooms(&mut rooms2, &cells, nx);
@@ -1394,8 +1636,28 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
     }
     rooms
     };
-    // Keeps: a tower in each corner, a room of its own on every floor above the cellar.
-    let t = if arch == Arch::Keep { keep_tower_squares(nx, ny) } else { 0 };
+    // Keeps: a tower in each corner, a room of its own on every floor above the cellar (a keep
+    // built of pieces: in each of its towers).
+    let t = if arch == Arch::Keep && towers.is_none() { keep_tower_squares(nx, ny) } else { 0 };
+    let ways: Vec<usize> = towers.unwrap_or_default().iter().flat_map(|t| t.1.iter().copied()).collect();
+    let first_tower = rooms.len();
+    let mut tower_ids: Vec<(i16, &Vec<usize>, &Vec<usize>)> = Vec::new();
+    for (sq, doors) in towers.unwrap_or_default() {
+        let kind: &'static str = if ground { "guard post" } else { "tower room" };
+        let id = rooms.len() as i16;
+        rooms.push(Room { kind, squares: 0, raise_ft: 0.0, center: [0.0; 2], shape: 0 });
+        for &k in sq {
+            let (i, j) = (k % nx, k / nx);
+            if inside[k] && !(i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3]) {
+                cells[k] = id;
+            }
+        }
+        // Its ways in are wall until the rooms round it are settled (below).
+        for &k in doors {
+            cells[k] = -1;
+        }
+        tower_ids.push((id, sq, doors));
+    }
     if t > 0 {
         let kind: &'static str = if ground { "guard post" } else { "tower room" };
         for (cx, cy) in [(0, 0), (nx - t, 0), (0, ny - t), (nx - t, ny - t)] {
@@ -1413,6 +1675,42 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
     // Rooms split into pieces by the footprint shape keep their largest piece; the others
     // join the neighbour they share the longest wall with. Empty rooms are dropped.
     let mut cells = merge_fragments(cells, nx, ny);
+    // A keep built of pieces: a sliver a square wide left between its pieces' walls (and its
+    // towers') is part of the room it opens off, not a room of its own.
+    if towers.is_some() {
+        let on_stairs = |k: usize| (k % nx) >= st[0] && (k % nx) < st[0] + st[2] && (k / nx) >= st[1] && (k / nx) < st[1] + st[3];
+        for r in 0..first_tower.min(rooms.len()) as i16 {
+            let mine: Vec<usize> = (0..nx * ny).filter(|&k| cells[k] == r).collect();
+            if mine.is_empty() || mine.len() > 8 || mine.iter().any(|&k| on_stairs(k)) {
+                continue;
+            }
+            let (i0, i1) = mine.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % nx), a.1.max(k % nx)));
+            let (j0, j1) = mine.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / nx), a.1.max(k / nx)));
+            if i0 != i1 && j0 != j1 {
+                continue;
+            }
+            let mut shared: Vec<(i16, usize)> = Vec::new();
+            for &k in &mine {
+                let (i, j) = (k % nx, k / nx);
+                for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                    if a < nx && b < ny {
+                        let o = cells[b * nx + a];
+                        if o >= 0 && o != r && (o as usize) < first_tower {
+                            match shared.iter_mut().find(|x| x.0 == o) {
+                                Some(x) => x.1 += 1,
+                                None => shared.push((o, 1)),
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(&(o, _)) = shared.iter().max_by(|x, y| x.1.cmp(&y.1).then(y.0.cmp(&x.0))) {
+                for &k in &mine {
+                    cells[k] = o;
+                }
+            }
+        }
+    }
     // A room that is nothing but the stair block is the stairwell of its neighbour.
     for r in 0..rooms.len() as i16 {
         let mine: Vec<usize> = (0..nx * ny).filter(|&k| cells[k] == r).collect();
@@ -1427,6 +1725,230 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
                     cells[k] = nb;
                 }
             }
+        }
+    }
+    // A keep's towers: each one's way in on this floor, through its wall from the room beside it
+    // nearest the circulation (a hall or corridor, else a room beside one); where that room is no
+    // nearer than that, a passage on from it to the nearest hall or corridor through the rooms
+    // between (the way in theirs). Its other ways are wall here.
+    if !tower_ids.is_empty() {
+        let side = |k: usize| {
+            let (i, j) = (k % nx, k / nx);
+            [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)].into_iter().filter(|&(a, b)| a < nx && b < ny).map(move |(a, b)| b * nx + a)
+        };
+        let on_stairs = |k: usize| (k % nx) >= st[0] && (k % nx) < st[0] + st[2] && (k / nx) >= st[1] && (k / nx) < st[1] + st[3];
+        let mut carved = false;
+        for &(id, sq, doors) in &tower_ids {
+            let circ = |r: i16| r >= 0 && matches!(rooms[r as usize].kind, "hall" | "corridor" | "landing" | "great hall" | "mess hall" | "guardroom");
+            // How many rooms from the circulation each room is, by the walls they share.
+            let mut hops: Vec<usize> = vec![usize::MAX; rooms.len()];
+            let mut q: std::collections::VecDeque<usize> = (0..rooms.len()).filter(|&r| circ(r as i16) && cells.contains(&(r as i16))).collect();
+            for &r in &q {
+                hops[r] = 0;
+            }
+            while let Some(r) = q.pop_front() {
+                for k in (0..nx * ny).filter(|&k| cells[k] == r as i16) {
+                    for n in side(k) {
+                        let o = cells[n];
+                        if o >= 0 && (o as usize) < first_tower && hops[o as usize] == usize::MAX {
+                            hops[o as usize] = hops[r] + 1;
+                            q.push_back(o as usize);
+                        }
+                    }
+                }
+            }
+            let opens = |k: usize| side(k).filter(|q| !ways.contains(q) && !sq.contains(q)).map(|q| cells[q]).find(|&r| r >= 0 && (r as usize) < first_tower);
+            let rank = |k: usize| opens(k).map_or(usize::MAX, |r| hops[r as usize]);
+            let Some(k) = doors.iter().copied().filter(|&k| side(k).any(|q| cells[q] == id) && opens(k).is_some()).min_by_key(|&k| (rank(k), k)) else { continue };
+            let r = opens(k).unwrap_or(-1);
+            let passage = (rank(k) >= 2).then(|| {
+                let mut from = vec![usize::MAX; nx * ny];
+                let mut q = std::collections::VecDeque::from([k]);
+                from[k] = k;
+                while let Some(c) = q.pop_front() {
+                    if c != k && circ(cells[c]) {
+                        let mut path = Vec::new();
+                        let mut x = from[c];
+                        while x != k {
+                            path.push(x);
+                            x = from[x];
+                        }
+                        return (path.len() <= 8).then_some((cells[c], path));
+                    }
+                    for n in side(c) {
+                        if from[n] == usize::MAX && cells[n] >= 0 && (cells[n] as usize) < first_tower && !ways.contains(&n) && !on_stairs(n) {
+                            from[n] = c;
+                            q.push_back(n);
+                        }
+                    }
+                }
+                None
+            });
+            match passage.flatten() {
+                Some((hall, path)) => {
+                    for c in path.into_iter().chain([k]) {
+                        cells[c] = hall;
+                    }
+                    carved = true;
+                }
+                None => cells[k] = r,
+            }
+        }
+        if carved {
+            cells = merge_fragments(cells, nx, ny);
+        }
+    }
+    // On a floor of eight rooms or more with a hall or corridor (not a keep's), no room more than two
+    // rooms from it by the walls they share: a passage carved to such a room from the nearest hall or
+    // corridor square through the rooms between (theirs the hall's, 16 squares at most), the
+    // farthest room first; a room the passage cuts in two keeps its largest piece, and any other
+    // piece of 12 squares or more is a room of its own of the same kind (the rest made whole again).
+    if arch != Arch::Keep && first_tower == rooms.len() {
+        let circ = |rooms: &[Room], r: i16| r >= 0 && matches!(rooms[r as usize].kind, "hall" | "corridor" | "landing" | "great hall" | "mess hall" | "guardroom");
+        let side = |k: usize| {
+            let (i, j) = (k % nx, k / nx);
+            [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)].into_iter().filter(|&(a, b)| a < nx && b < ny).map(move |(a, b)| b * nx + a)
+        };
+        let on_stairs = |k: usize| (k % nx) >= st[0] && (k % nx) < st[0] + st[2] && (k / nx) >= st[1] && (k / nx) < st[1] + st[3];
+        let mut carved = false;
+        for _ in 0..8 {
+            let live: Vec<bool> = (0..rooms.len()).map(|r| cells.contains(&(r as i16))).collect();
+            if live.iter().filter(|&&l| l).count() < 8 || !(0..rooms.len()).any(|r| live[r] && circ(&rooms, r as i16)) {
+                break;
+            }
+            let mut hops: Vec<usize> = vec![usize::MAX; rooms.len()];
+            let mut q: std::collections::VecDeque<usize> = (0..rooms.len()).filter(|&r| live[r] && circ(&rooms, r as i16)).collect();
+            for &r in &q {
+                hops[r] = 0;
+            }
+            while let Some(r) = q.pop_front() {
+                for k in (0..nx * ny).filter(|&k| cells[k] == r as i16) {
+                    for n in side(k) {
+                        let o = cells[n];
+                        if o >= 0 && hops[o as usize] == usize::MAX {
+                            hops[o as usize] = hops[r] + 1;
+                            q.push_back(o as usize);
+                        }
+                    }
+                }
+            }
+            let Some(far) = (0..rooms.len()).filter(|&r| hops[r] != usize::MAX && hops[r] >= 3).max_by_key(|&r| (hops[r], std::cmp::Reverse(r))) else { break };
+            // From the far room's squares to the nearest square of a hall or corridor, turning as
+            // little as it can (a step 10, a turn 3 more: straight runs, not a staircase).
+            let state = |k: usize, d: usize| k * 5 + d;
+            let mut cost = vec![u32::MAX; nx * ny * 5];
+            let mut back = vec![usize::MAX; nx * ny * 5];
+            let mut heap = std::collections::BinaryHeap::new();
+            for k in (0..nx * ny).filter(|&k| cells[k] == far as i16) {
+                cost[state(k, 4)] = 0;
+                heap.push(std::cmp::Reverse((0u32, state(k, 4))));
+            }
+            let mut found = None;
+            while let Some(std::cmp::Reverse((c, st_))) = heap.pop() {
+                if c > cost[st_] {
+                    continue;
+                }
+                let (k, d) = (st_ / 5, st_ % 5);
+                if circ(&rooms, cells[k]) {
+                    found = Some(st_);
+                    break;
+                }
+                let (i, j) = (k % nx, k / nx);
+                for (nd, (a, b)) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)].into_iter().enumerate() {
+                    if a >= nx || b >= ny {
+                        continue;
+                    }
+                    let n = b * nx + a;
+                    if cells[n] < 0 || on_stairs(n) || cells[n] == far as i16 {
+                        continue;
+                    }
+                    let nc = c + 10 + if d != 4 && d != nd { 3 } else { 0 };
+                    if nc < cost[state(n, nd)] {
+                        cost[state(n, nd)] = nc;
+                        back[state(n, nd)] = st_;
+                        heap.push(std::cmp::Reverse((nc, state(n, nd))));
+                    }
+                }
+            }
+            let Some(end_state) = found else { break };
+            let end = end_state / 5;
+            let mut path = Vec::new();
+            let mut x = back[end_state];
+            while x != usize::MAX && cells[x / 5] != far as i16 {
+                path.push(x / 5);
+                x = back[x];
+            }
+            if path.len() > 16 {
+                break;
+            }
+            let hall = cells[end];
+            let mut cut: Vec<i16> = Vec::new();
+            for c in path {
+                if !cut.contains(&cells[c]) {
+                    cut.push(cells[c]);
+                }
+                cells[c] = hall;
+            }
+            // (Each room cut: its pieces, the largest kept; the others, with those of other rooms
+            // they touch, a room of their own of the biggest one's kind where 12 squares or more.)
+            let mut off: Vec<(i16, Vec<usize>)> = Vec::new();
+            for r in cut {
+                let mut pieces: Vec<Vec<usize>> = Vec::new();
+                let mut seen = vec![false; nx * ny];
+                for k0 in (0..nx * ny).filter(|&k| cells[k] == r) {
+                    if seen[k0] {
+                        continue;
+                    }
+                    seen[k0] = true;
+                    let mut piece = vec![k0];
+                    let mut i = 0;
+                    while i < piece.len() {
+                        for n in side(piece[i]) {
+                            if cells[n] == r && !seen[n] {
+                                seen[n] = true;
+                                piece.push(n);
+                            }
+                        }
+                        i += 1;
+                    }
+                    pieces.push(piece);
+                }
+                pieces.sort_by_key(|p| (std::cmp::Reverse(p.len()), p[0]));
+                off.extend(pieces.into_iter().skip(1).map(|p| (r, p)));
+            }
+            let mut group: Vec<usize> = (0..off.len()).collect();
+            let touch = |a: &[usize], b: &[usize]| a.iter().any(|&k| side(k).any(|n| b.contains(&n)));
+            for i in 0..off.len() {
+                for j in i + 1..off.len() {
+                    if touch(&off[i].1, &off[j].1) {
+                        let (gi, gj) = (group[i], group[j]);
+                        for g in group.iter_mut() {
+                            if *g == gj {
+                                *g = gi;
+                            }
+                        }
+                    }
+                }
+            }
+            for g in 0..off.len() {
+                let members: Vec<usize> = (0..off.len()).filter(|&i| group[i] == g).collect();
+                if members.iter().map(|&i| off[i].1.len()).sum::<usize>() < 12 {
+                    continue;
+                }
+                let big = members.iter().copied().max_by_key(|&i| (off[i].1.len(), std::cmp::Reverse(i))).unwrap_or(g);
+                let id = rooms.len() as i16;
+                let from = off[big].0 as usize;
+                rooms.push(Room { kind: rooms[from].kind, squares: 0, raise_ft: rooms[from].raise_ft, center: [0.0; 2], shape: 0 });
+                for &i in &members {
+                    for &k in &off[i].1 {
+                        cells[k] = id;
+                    }
+                }
+            }
+            carved = true;
+        }
+        if carved {
+            cells = merge_fragments(cells, nx, ny);
         }
     }
     let (cells, mut rooms) = compact(cells, rooms);
@@ -1822,6 +2344,34 @@ fn bsp(r: R, rooms: &[(&'static str, f64)], st: [usize; 4], rng: &mut Pcg32, out
     };
     bsp(a, &rooms[..k], st, rng, out, base);
     bsp(b, &rooms[k..], st, rng, out, base + k);
+}
+
+/// Every room is one piece (its squares joined side to side): a cell block laid on a footprint it
+/// doesn't fit (a keep drawn round its towers by hand) can leave a corridor in two.
+fn rooms_whole(cells: &[i16], nx: usize, ny: usize) -> bool {
+    let mut seen = vec![false; nx * ny];
+    let mut rooms_seen: Vec<i16> = Vec::new();
+    for k0 in 0..nx * ny {
+        if cells[k0] < 0 || seen[k0] {
+            continue;
+        }
+        if rooms_seen.contains(&cells[k0]) {
+            return false;
+        }
+        rooms_seen.push(cells[k0]);
+        let mut stack = vec![k0];
+        seen[k0] = true;
+        while let Some(k) = stack.pop() {
+            let (i, j) = (k % nx, k / nx);
+            for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                if a < nx && b < ny && !seen[b * nx + a] && cells[b * nx + a] == cells[k0] {
+                    seen[b * nx + a] = true;
+                    stack.push(b * nx + a);
+                }
+            }
+        }
+    }
+    true
 }
 
 fn merge_fragments(mut cells: Vec<i16>, nx: usize, ny: usize) -> Vec<i16> {
@@ -2609,7 +3159,9 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
             }
         }
     }
-    let u = dirs.first().copied().unwrap_or([1.0, 0.0]);
+    // (A square tower's grid along its sides.)
+    let square = if gate { None } else { l.square_tower(at) };
+    let u = square.or_else(|| dirs.first().copied()).unwrap_or([1.0, 0.0]);
     let v = [-u[1], u[0]];
     // A square grid centred on the tower (its centre in the middle of a square), reaching three
     // squares of wall walk beyond the tower each side.
@@ -2617,7 +3169,12 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
     let n = 2 * half + 1;
     let origin = sub(at, mul(add(u, v), (half as f64 + 0.5) * SQUARE_FT));
     let centre = |i: usize, j: usize| add(origin, add(mul(u, (i as f64 + 0.5) * SQUARE_FT), mul(v, (j as f64 + 0.5) * SQUARE_FT)));
-    let in_tower: Vec<bool> = (0..n * n).map(|q| geom::dist(centre(q % n, q / n), at) <= r + 1.5).collect();
+    let in_tower: Vec<bool> = (0..n * n)
+        .map(|q| {
+            let d = sub(centre(q % n, q / n), at);
+            if square.is_some() { dot(d, u).abs() <= r && dot(d, v).abs() <= r } else { geom::dist(centre(q % n, q / n), at) <= r + 1.5 }
+        })
+        .collect();
     // Wall-walk squares: a 4-connected run of squares along each way the wall goes, traced
     // from the tower's centre (so it always meets the tower along an edge), outside the tower.
     let mut walk_of: Vec<i16> = vec![-1; n * n];

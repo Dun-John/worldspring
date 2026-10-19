@@ -94,6 +94,39 @@ fn main() {
             println!("biggest {kind} park: #{i} {a:.0} sq ft at fx {:.6} fy {:.6}", c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
         }
     }
+    // Castles: their curtains (an inner one in a big castle), square towers, and their keeps by the
+    // pieces they are made of (B body, o round tower, # square tower, F forebuilding, W wing).
+    let (mut castles, mut inner, mut square, mut mottes) = (0, 0, 0, 0);
+    let mut keeps: std::collections::BTreeMap<String, usize> = Default::default();
+    for i in 0..n {
+        let l = town::layout(&world, &t0, i);
+        if l.castles.is_empty() || l.buildings.iter().all(|b| b.ward != town::catalog::Ward::Castle) {
+            continue;
+        }
+        castles += 1;
+        inner += (l.castles.len() > 1) as usize;
+        square += (!l.square_towers.is_empty()) as usize;
+        mottes += l.mottes.len();
+        let keep = l.buildings.iter().find(|b| !b.parts.is_empty());
+        let sig: String = keep.map_or("none".into(), |k| {
+            k.parts
+                .iter()
+                .map(|p| match p.kind {
+                    town::PartKind::Body => 'B',
+                    town::PartKind::Tower { round: true } => 'o',
+                    town::PartKind::Tower { round: false } => '#',
+                    town::PartKind::Forebuilding => 'F',
+                    town::PartKind::Wing => 'W',
+                })
+                .collect()
+        });
+        *keeps.entry(sig).or_default() += 1;
+        if let Some(k) = keep {
+            let c = town::geom::centroid(&k.poly);
+            println!("  castle #{i}: keep b:{i}:{} at fx {:.6} fy {:.6}", k.id, c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft);
+        }
+    }
+    println!("castles: {castles} ({inner} with an inner curtain, {square} with square towers, {mottes} mottes); keeps: {keeps:?}");
     for (kind, at) in &kinds {
         let first: Vec<String> = at.iter().take(3).map(|(i, c)| format!("#{i} fx {:.6} fy {:.6}", c[0] / world.geom.map_w_ft, c[1] / world.geom.map_h_ft)).collect();
         println!("{kind}: {} ({})", at.len(), first.join("; "));

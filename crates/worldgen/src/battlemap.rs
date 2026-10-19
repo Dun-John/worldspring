@@ -33,6 +33,10 @@ pub const HS: usize = SQ + 2;
 pub const SQUARE_FT: f64 = 5.0;
 pub const TIER_FT: f64 = 5.0;
 pub const MAX_COVER_GAP: i32 = 6;
+/// In a castle's yard, whose curtains, towers and buildings are its cover: no dry square of it more
+/// than this from cover, and a window of it (most of its squares) holding any of them needs no more
+/// (`cover_gap`, `works_cover`).
+pub const YARD_COVER_GAP: i32 = 12;
 const COVER_CELL: usize = 8;
 const TIER_CELL: usize = 16;
 /// Micro-relief feature grid (squares).
@@ -373,8 +377,12 @@ pub struct Chunk {
     /// Footprint of each building in `buildings` (chunk-local squares) and its storeys; the
     /// renderer draws roofs from these rather than from the square grid.
     /// With each: storeys, roof (style 0 pitched, 1 battlements, 2 cone | (tint + 1) << 2) and
-    /// corner-tower side (squares).
+    /// corner-tower side (squares; a castle's keep with no pieces its top in the high two bits,
+    /// `town::plain_keep_top`; 255 a keep of pieces).
     pub building_polys: Vec<(Vec<[f32; 2]>, u8, u8, u8)>,
+    /// A keep's pieces with its footprint in `building_polys` (`part_code`, outline; chunk-local
+    /// squares); empty for every other building.
+    pub building_parts: Vec<Vec<(u8, Vec<[f32; 2]>)>>,
     /// Height above the ground per halo square of what is drawn as a vector on top (roofs,
     /// walls, towers, bridge and pier decks; 0 elsewhere): tiers include it, the rendered
     /// ground does not.
@@ -383,6 +391,9 @@ pub struct Chunk {
     pub structures: Vec<VectorShape>,
     /// Uploaded sprites the chunk's objects use.
     pub sprites: Vec<ChunkSprite>,
+    /// A castle's yard per square (bits 1 a bailey, 2 a garden yard's, 4 on a motte above its toe;
+    /// empty: none here): where the guarantee counts its walls, towers and buildings as cover.
+    pub yard: Vec<u8>,
 }
 
 impl Chunk {
@@ -450,11 +461,28 @@ const WALL_BARE_A: u8 = 1;
 const WALL_BARE_B: u8 = 2;
 const WALL_GATE: u8 = 1;
 const WALL_RUINED: u8 = 4;
+/// A square tower (`Layout::square_towers`); the flags' second value is the way its sides run
+/// (radians).
+const WALL_SQUARE: u8 = 8;
+
+/// A keep piece's code in the payload: 0 body, 1 round tower, 2 square tower, 3 forebuilding, 4
+/// wing (its top, `town::keep_tops`, in the high four bits).
+fn part_code(kind: crate::town::PartKind) -> u8 {
+    use crate::town::PartKind as K;
+    match kind {
+        K::Body => 0,
+        K::Tower { round: true } => 1,
+        K::Tower { round: false } => 2,
+        K::Forebuilding => 3,
+        K::Wing => 4,
+    }
+}
 
 /// The gates in a layout's walls as pairs of gate towers (world ft; `towers` as
 /// `interior::towers` gives them): two gate towers 36 to 54 ft apart (a passage at least 6 ft
 /// wide between them), each beyond the other's wall (the towers of two gates side by side face
-/// each other along one stretch). Paired in order, each with its nearest; a pure function of the
+/// each other along one stretch) and the walls running on from them opposite ways (a castle's
+/// outer and inner gates are not one gatehouse). Paired in order, each with its nearest; a pure function of the
 /// layout, so every chunk finds the same.
 fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
     let gates: Vec<[f64; 2]> = towers.iter().filter(|t| t.2).map(|t| t.0).collect();
@@ -486,7 +514,13 @@ fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([
             let v = [gates[j][0] - gates[i][0], gates[j][1] - gates[i][1]];
             let d = crate::core::sqrt(v[0] * v[0] + v[1] * v[1]);
             let beyond = |a: Option<[f64; 2]>, s: f64| a.is_none_or(|a| s * (a[0] * v[0] + a[1] * v[1]) < 0.0);
-            if used[j] || !(36.0..=54.0).contains(&d) || (away[i].is_none() && away[j].is_none()) || !beyond(away[i], 1.0) || !beyond(away[j], -1.0) {
+            // (The wall runs on from each the opposite way: not two gates of two curtains, one
+            // behind the other.)
+            let apart = match (away[i], away[j]) {
+                (Some(a), Some(b)) => a[0] * b[0] + a[1] * b[1] < 0.0,
+                _ => true,
+            };
+            if used[j] || !(36.0..=54.0).contains(&d) || (away[i].is_none() && away[j].is_none()) || !beyond(away[i], 1.0) || !beyond(away[j], -1.0) || !apart {
                 continue;
             }
             if best.is_none_or(|(bd, _)| d < bd) {
@@ -975,6 +1009,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut hand_st: Vec<Option<HandStreet>> = Vec::new();
     let mut refs: Vec<(u32, u32)> = Vec::new();
     let mut polys: Vec<(Vec<[f32; 2]>, u8, u8, u8)> = Vec::new();
+    let mut poly_parts: Vec<Vec<(u8, Vec<[f32; 2]>)>> = Vec::new();
     let mut shapes: Vec<VectorShape> = Vec::new();
     let local = |p: &[f64; 2]| [((p[0] - ox) / SQUARE_FT) as f32, ((p[1] - oy) / SQUARE_FT) as f32];
     let chunk_ft = SQ as f64 * SQUARE_FT;
@@ -1015,6 +1050,45 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut park_meta: Vec<ParkMeta> = Vec::new();
     // Camps' clearings, levelled (outline, height ft).
     let mut yards: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
+    // A shell keep's motte: the ground raised to its top round the keep, easing down to the ground
+    // round it (never lowered); a gravel path up it to the shell's gate (`Motte::way`).
+    // Castles' baileys: grass (squares marked).
+    let mut motte_path = vec![false; HS * HS];
+    let mut bailey_h = vec![false; HS * HS];
+    // (What the guarantee may set out where: 1 a bailey's, 2 a garden yard's; 4 on a motte (but its
+    // toe), nothing.)
+    let mut bailey_kind = vec![0u8; HS * HS];
+    // A bailey's dressing (`dress_bailey`: world ft, rotation, kind, look, scale).
+    let mut bailey_props: Vec<([f64; 2], f32, Kind, u8, f32)> = Vec::new();
+    let mut bailey_ways: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    for l in crate::town::layouts_near(world, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT]) {
+        for m in &l.mottes {
+            let (a, b) = (crate::town::geom::add(m.at, crate::town::geom::mul(m.way, m.top_r - 8.0)), crate::town::geom::add(m.at, crate::town::geom::mul(m.way, m.foot_r + 6.0)));
+            for j in 0..HS {
+                for i in 0..HS {
+                    let p = [ox + (i as f64 - 0.5) * SQUARE_FT, oy + (j as f64 - 0.5) * SQUARE_FT];
+                    if crate::town::geom::seg_dist(p, a, b) < 4.0 {
+                        motte_path[j * HS + i] = true;
+                    }
+                    let d = crate::town::geom::dist(p, m.at);
+                    // (The mound, but its toe, where the guarantee's cover may stand round it: what
+                    // stands on a square by it not reaching past its last 8 ft.)
+                    if d < m.foot_r - 4.0 {
+                        bailey_kind[j * HS + i] |= 4;
+                    }
+                    if d >= m.foot_r {
+                        continue;
+                    }
+                    let t = ((d - m.top_r) / (m.foot_r - m.top_r)).clamp(0.0, 1.0);
+                    let k = (1.0 - t * t * (3.0 - 2.0 * t)) as f32;
+                    let h = j * HS + i;
+                    if hw[h] <= hh[h] {
+                        hh[h] = hh[h].max(hh[h] + (m.top - hh[h]) * k);
+                    }
+                }
+            }
+        }
+    }
     // Ground before anything is raised on it (walls stand on the ground, not on roofs).
     let ground_h = hh.clone();
     let (hx0, hy0) = (ox - SQUARE_FT, oy - SQUARE_FT);
@@ -1083,6 +1157,22 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             // round it as it is.
             let lawn = pl.kind.is_lawn() && l.tier >= crate::t0::settle::Tier::Town;
             stamp(p, if lawn { URBAN_PARK } else { URBAN_PLAZA }, &mut urb_h);
+            // A castle's bailey: an open yard of grass, dressed sparingly (`dress_bailey`).
+            if pl.kind == K::Bailey {
+                let (i0, j0, i1, j1) = range(bbox(p));
+                if overlaps(bbox(p)) && i1 >= 0.0 && j1 >= 0.0 {
+                    let garden = dress_bailey(pl, &l, t0, seed, &mut bailey_props, &mut bailey_ways);
+                    for j in j0..=j1 as usize {
+                        for i in i0..=i1 as usize {
+                            if crate::town::geom::contains(p, center(i, j)) {
+                                bailey_h[j * HS + i] = true;
+                                bailey_kind[j * HS + i] |= if garden { 2 } else { 1 };
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             // A quay takes cargo, no well or market.
             if pl.kind == K::Quay {
                 if overlaps(bbox(p)) {
@@ -1406,12 +1496,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                             pad += crate::ground::pad_shift(&world.file.edits, t0, &b.poly, b.pad_ft);
                             refs.push((l.index, b.id));
                             let battlements = crate::interior::battlements(b);
+                            // (A castle's keep with no pieces: its top in the high two bits.)
+                            let top = if battlements.is_some() { crate::town::plain_keep_top(b, world.stream("keep.tops")) } else { 0 };
                             polys.push((
                                 b.poly.iter().map(|p| [((p[0] - ox) / SQUARE_FT) as f32, ((p[1] - oy) / SQUARE_FT) as f32]).collect(),
                                 b.floors,
                                 roof_byte(b, battlements.is_some()),
-                                crate::core::round(battlements.unwrap_or(0.0) / SQUARE_FT) as u8,
+                                crate::core::round(battlements.unwrap_or(0.0) / SQUARE_FT) as u8 | top << 6,
                             ));
+                            // (Each piece's code, how it is topped above it: `town::keep_tops`.)
+                            let tops = crate::town::keep_tops(b, world.stream("keep.tops"));
+                            poly_parts.push(b.parts.iter().zip(&tops).map(|(p, &top)| (part_code(p.kind) | top << 4, p.poly.iter().map(local).collect())).collect());
                             id = refs.len().min(u16::MAX as usize) as u16;
                         }
                         let h = j * HS + i;
@@ -1423,8 +1518,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
         // Walls (8 ft thick) and towers (22 ft across; 30 at gates): raised stone.
-        let raise = |a: [f64; 2], b: [f64; 2], half: f64, val: u8, urb_h: &mut Vec<u8>, hh: &mut Vec<f32>, lift: &mut Vec<f32>| {
-            let bb = (a[0].min(b[0]) - half, a[1].min(b[1]) - half, a[0].max(b[0]) + half, a[1].max(b[1]) + half);
+        // (`square`: a square tower, its sides along it.)
+        let raise = |a: [f64; 2], b: [f64; 2], half: f64, val: u8, square: Option<[f64; 2]>, urb_h: &mut Vec<u8>, hh: &mut Vec<f32>, lift: &mut Vec<f32>| {
+            let reach = if square.is_some() { half * std::f64::consts::SQRT_2 } else { half };
+            let bb = (a[0].min(b[0]) - reach, a[1].min(b[1]) - reach, a[0].max(b[0]) + reach, a[1].max(b[1]) + reach);
             if !overlaps(bb) {
                 return;
             }
@@ -1439,7 +1536,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                         continue;
                     }
                     // Every square the drawn wall or tower touches stands on it.
-                    if crate::town::geom::seg_dist(center(i, j), a, b) <= half + 1.5 {
+                    let on = match square {
+                        Some(u) => {
+                            let d = crate::town::geom::sub(center(i, j), a);
+                            crate::town::geom::dot(d, u).abs() <= half + 1.5 && crate::town::geom::cross(u, d).abs() <= half + 1.5
+                        }
+                        None => crate::town::geom::seg_dist(center(i, j), a, b) <= half + 1.5,
+                    };
+                    if on {
                         urb_h[h] = val;
                         hh[h] = ground_h[h] + if val == URBAN_TOWER { TOWER_FT } else { WALL_FT };
                         lift[h] = hh[h] - ground_h[h];
@@ -1448,17 +1552,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         };
         for t in &l.towers {
-            raise(*t, *t, 11.0, URBAN_TOWER, &mut urb_h, &mut hh, &mut lift);
+            raise(*t, *t, 11.0, URBAN_TOWER, l.square_tower(*t), &mut urb_h, &mut hh, &mut lift);
         }
         for t in &l.gate_towers {
-            raise(*t, *t, 15.0, URBAN_TOWER, &mut urb_h, &mut hh, &mut lift);
+            raise(*t, *t, 15.0, URBAN_TOWER, None, &mut urb_h, &mut hh, &mut lift);
         }
         for &(t, gate) in &l.extra_towers {
-            raise(t, t, if gate { 15.0 } else { 11.0 }, URBAN_TOWER, &mut urb_h, &mut hh, &mut lift);
+            raise(t, t, if gate { 15.0 } else { 11.0 }, URBAN_TOWER, if gate { None } else { l.square_tower(t) }, &mut urb_h, &mut hh, &mut lift);
         }
         for w in &l.walls {
             for seg in w.windows(2) {
-                raise(seg[0], seg[1], 4.0, URBAN_WALL, &mut urb_h, &mut hh, &mut lift);
+                raise(seg[0], seg[1], 4.0, URBAN_WALL, None, &mut urb_h, &mut hh, &mut lift);
             }
         }
         // The same structures as vectors, each drawn by the one chunk that owns its middle. Walls
@@ -1483,7 +1587,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         for &(t, r, gate) in &towers {
             if owns(t) {
-                let flags = [(if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, 0.0];
+                // (A square tower: its flag, and the way its sides run as an angle.)
+                let square = if gate { None } else { l.square_tower(t) };
+                let flags = match square {
+                    Some(u) => [(WALL_SQUARE | ruin_bit) as f32, libm::atan2(u[1], u[0]) as f32],
+                    None => [(if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, 0.0],
+                };
                 shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(&t), flags] });
             }
         }
@@ -2083,9 +2192,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         buildings: refs,
         urban,
         building_polys: polys,
+        building_parts: poly_parts,
         roof_lift: lift,
         structures: shapes,
         sprites: Vec::new(),
+        yard: Vec::new(),
     };
     retier(&mut chunk, sea);
 
@@ -2112,6 +2223,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 u => u,
             };
             match mark {
+                // A castle's bailey: grass where anything grows (else the ground's own); a path up
+                // a motte, gravel.
+                URBAN_PLAZA if motte_path[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Gravel,
+                URBAN_PLAZA if bailey_h[(k / SQ + 1) * HS + k % SQ + 1] => {
+                    if matches!(chunk.surface[k], Surface::ForestFloor | Surface::Mud | Surface::Grass) {
+                        chunk.surface[k] = Surface::Grass;
+                    }
+                }
                 // A village green and a graveyard keep the ground round them (no odd patch
                 // in a forest); a town's plaza is paved.
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
@@ -2288,6 +2407,21 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             chunk.objects.push(o);
         }
     }
+    // What a bailey is dressed with: each in the chunk holding it, on the bailey, off the roofs.
+    for (p, rot, kind, variant, scale) in bailey_props {
+        let (x, y) = ((p[0] - ox) / SQUARE_FT, (p[1] - oy) / SQUARE_FT);
+        if x < 0.0 || y < 0.0 || x >= SQ as f64 || y >= SQ as f64 {
+            continue;
+        }
+        let k = y as usize * SQ + x as usize;
+        if chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || chunk.water_level[k] > chunk.height[k] || chunk.urban[k] != URBAN_PLAZA || bailey_kind[(k / SQ + 1) * HS + k % SQ + 1] & 3 == 0 {
+            continue;
+        }
+        let o = Object { kind, variant, x: x as f32, y: y as f32, rot, scale, sprite: 0, turned: false };
+        if off_buildings(&chunk, &o) {
+            chunk.objects.push(o);
+        }
+    }
     // A well at the heart of every main square and village green.
     for w in wells {
         let (i, j) = (((w[0] - ox) / SQUARE_FT).floor(), ((w[1] - oy) / SQUARE_FT).floor());
@@ -2338,8 +2472,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 || churchyard.get(k).is_some_and(|&y| y)
                 || chunk.urban[k] == URBAN_PATH
                 || park_keep.iter().any(|&(a, b, r)| crate::town::geom::seg_dist(p, a, b) < r + 2.5)
+                || bailey_kind[(y as usize + 1) * HS + x as usize + 1] & 4 != 0
+                || (bailey_kind[(y as usize + 1) * HS + x as usize + 1] & 3 != 0 && bailey_ways.iter().any(|&(a, b)| crate::town::geom::seg_dist(p, a, b) < 8.0))
         })
         .collect();
+    // (The baileys' squares, as `bailey_kind` has them; empty: none here.)
+    let bailey: Vec<u8> = if bailey_kind.iter().all(|&v| v == 0) { Vec::new() } else { (0..n).map(|k| bailey_kind[(k / SQ + 1) * HS + k % SQ + 1]).collect() };
     // The parks' squares (empty: none here): the low bits 1 a common's, 2 a formal garden's (what
     // the guarantee puts down there is a park's); 4 by a pond or stream (no knoll: its banks stay
     // eased, by the band and 8 ft more); 8 gravel at a path's or round's edge, clear of features,
@@ -2395,7 +2533,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let shaped: Vec<bool> = if shaper.is_some() { (0..n).map(|k| plat_w[(k / SQ + 1) * HS + k % SQ + 1] >= 0.5).collect() } else { Vec::new() };
     let before = if shaped.is_empty() { Vec::new() } else { chunk.height.clone() };
     let set_out = chunk.objects.len();
-    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &park);
+    chunk.yard = bailey.clone();
+    enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &park, &bailey);
     // A bench the guarantee put in a park is one of the park's, facing its nearest path, or the
     // middle of the gravel round it stands at; one out on the lawn, more than 12 ft from either, is a
     // shrub instead. Its flowerbeds lie square to a formal garden's axis.
@@ -2901,6 +3040,10 @@ struct Windows {
     wet: Vec<u32>,
     /// Buildings in each window, once counted (up to three; `u8::MAX`: not yet).
     blds: Vec<u8>,
+    /// The summed-area tables of a castle's yard's squares and of walls, towers and buildings
+    /// (empty: no yard here, or `feature`): `works_cover`.
+    yard: Vec<u32>,
+    works: Vec<u32>,
 }
 
 impl Windows {
@@ -2916,7 +3059,19 @@ impl Windows {
             }
         }
         let n = SQ - Self::W + 1;
-        Windows { feature, counted: 0, at: vec![0; SQ * SQ], cover: vec![0; (SQ + 1) * (SQ + 1)], wet, blds: vec![u8::MAX; n * n] }
+        let (mut yard, mut works) = (Vec::new(), Vec::new());
+        if !feature && !c.yard.is_empty() {
+            (yard, works) = (vec![0u32; (SQ + 1) * (SQ + 1)], vec![0u32; (SQ + 1) * (SQ + 1)]);
+            for y in 0..SQ {
+                for x in 0..SQ {
+                    let k = y * SQ + x;
+                    let (i, up, left, diag) = ((y + 1) * (SQ + 1) + x + 1, y * (SQ + 1) + x + 1, (y + 1) * (SQ + 1) + x, y * (SQ + 1) + x);
+                    yard[i] = (c.yard[k] & 3 != 0) as u32 + yard[up] + yard[left] - yard[diag];
+                    works[i] = (c.building[k] != 0 || matches!(c.urban[k], URBAN_WALL | URBAN_TOWER)) as u32 + works[up] + works[left] - works[diag];
+                }
+            }
+        }
+        Windows { feature, counted: 0, at: vec![0; SQ * SQ], cover: vec![0; (SQ + 1) * (SQ + 1)], wet, blds: vec![u8::MAX; n * n], yard, works }
     }
 
     fn sum(t: &[u32], x: usize, y: usize) -> u32 {
@@ -2948,7 +3103,12 @@ impl Windows {
         for wy in 0..n {
             for wx in 0..n {
                 let have = Self::sum(&self.cover, wx, wy) as usize;
-                if (Self::sum(&self.wet, wx, wy) as usize) * 2 >= w * w || have >= need || skip((wx, wy)) {
+                let wet = Self::sum(&self.wet, wx, wy) as usize;
+                if wet * 2 >= w * w || have >= need || skip((wx, wy)) {
+                    continue;
+                }
+                // (A castle's yard holding its curtains, towers or buildings: `works_cover`.)
+                if !self.yard.is_empty() && Self::sum(&self.works, wx, wy) > 0 && Self::sum(&self.yard, wx, wy) as usize * 2 >= w * w - wet {
                     continue;
                 }
                 if !self.feature {
@@ -2993,19 +3153,24 @@ struct ParkMeta {
 /// by its own cell (global), and squares marked (on a plateau) get no knoll or built feature.
 /// `park`: the parks' squares (1 a common's, 2 a formal garden's; empty: none).
 #[allow(clippy::too_many_arguments)]
-fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], keep_off: &[bool], park: &[u8]) {
+fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], keep_off: &[bool], park: &[u8], bailey: &[u8]) {
     let mut chunk_rng = Pcg32::new(hash3(seed, gsx, gsy, 0xe4f), 9);
     let keyed = !shaped.is_empty();
     let cell_rng = |phase: i64, x: i64, y: i64| Pcg32::new(hash3(seed, x, y, 0xe4f ^ (phase << 16)), 9);
     // What goes down for cover, and as a feature: a park's own, the town's, else the biome's.
     let in_park = |k: usize| park.get(k).copied().unwrap_or(0) & 3;
     let mut room: Option<Vec<u8>> = None;
+    // (A castle's bailey: `yard_kind`.)
+    let yard = |k: usize| bailey.get(k).copied().unwrap_or(0) & 3;
+    let yard_major = |cells: &[usize]| !bailey.is_empty() && cells.iter().filter(|&&k| yard(k) != 0).count() * 2 > cells.len();
     let cover_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| match in_park(k) {
+        _ if yard(k) != 0 => yard_kind(c, k, yard(k) == 2, biome[k], false, rng),
         0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
         0 => fallback_cover(biome[k], rng),
         p => park_cover(p & 3 == 2, biome[k], false, rng),
     };
     let feature_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| match in_park(k) {
+        _ if yard(k) != 0 => yard_kind(c, k, yard(k) == 2, biome[k], true, rng),
         0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
         0 => fallback_feature(biome[k], rng),
         p => park_cover(p & 3 == 2, biome[k], true, rng),
@@ -3041,7 +3206,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
             } else {
                 &mut chunk_rng
             };
-            raise(c, &cells, rng, gsx, gsy, sea, shaped, park, &mut room);
+            raise(c, &cells, rng, gsx, gsy, sea, shaped, park, bailey, &mut room);
         }
     }
     // Plaza paving answers to the guarantee itself rather than cell by cell: every 32x32 window
@@ -3075,7 +3240,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
         } else {
             &mut chunk_rng
         };
-        raised += raise(c, &cells, rng, gsx, gsy, sea, shaped, park, &mut room) as usize;
+        raised += raise(c, &cells, rng, gsx, gsy, sea, shaped, park, bailey, &mut room) as usize;
     }
 
 
@@ -3136,15 +3301,20 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
         } else {
             &mut chunk_rng
         };
-        filled += place_in(c, &cells, rng, &cover_kind) as usize;
+        let before = c.objects.len();
+        if place_in(c, &cells, rng, &cover_kind) {
+            filled += 1;
+            yard_group(c, before, rng, keep_off, bailey);
+        }
     }
 
-    // Max gap: no dry square farther than MAX_COVER_GAP from cover (a square with no room for any
-    // near it, off walls, gates and raised features, is given up).
+    // Max gap: no dry square farther than MAX_COVER_GAP from cover (YARD_COVER_GAP in a castle's
+    // yard: `cover_gap`; a square with no room for any near it, off walls, gates and raised
+    // features, is given up).
     let mut given_up: Vec<usize> = Vec::new();
     for _ in 0..160 {
         let dist = cover_distance(c);
-        let far = (0..SQ * SQ).filter(|&k| dry(c, k) && dist[k] > MAX_COVER_GAP && !given_up.contains(&k)).max_by_key(|&k| (dist[k], std::cmp::Reverse(k)));
+        let far = (0..SQ * SQ).filter(|&k| dry(c, k) && dist[k] > cover_gap(c, k) && !given_up.contains(&k)).max_by_key(|&k| (dist[k] - cover_gap(c, k), std::cmp::Reverse(k)));
         match far {
             Some(k) => {
                 let mut own;
@@ -3172,8 +3342,11 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                     (k, false)
                 };
                 let kind = if edge { if in_park(k) & 3 == 2 { Kind::GardenStatue } else { Kind::Bench } } else { cover_kind(c, k, rng) };
+                let before = c.objects.len();
                 if !push_at(c, kind, k, rng) {
                     given_up.push(k);
+                } else {
+                    yard_group(c, before, rng, keep_off, bailey);
                 }
             }
             None => break,
@@ -3193,6 +3366,10 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 }
                 let all: Vec<usize> =
                     (0..TIER_CELL * TIER_CELL).map(|q| (cy * TIER_CELL + q / TIER_CELL) * SQ + cx * TIER_CELL + q % TIER_CELL).filter(|&k| dry(c, k)).collect();
+                // (Not one to every cell of a castle's yard: the windows below see to it there.)
+                if yard_major(&all) {
+                    continue;
+                }
                 let cells = off_road_first(c, all, keep_off);
                 if cells.is_empty() {
                     continue;
@@ -3217,7 +3394,8 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
             let span = if tried[wy * (SQ - 31) + wx] > 0 { (0, 32) } else { (8, 16) };
             tried[wy * (SQ - 31) + wx] += 1;
             let all: Vec<usize> = (0..span.1 * span.1).map(|q| (wy + span.0 + q / span.1) * SQ + wx + span.0 + q % span.1).filter(|&k| dry(c, k) && c.building[k] == 0).collect();
-            let cells = off_road_first(c, all, keep_off);
+            // (In a castle's yard, by the buildings and the streets at first.)
+            let cells = if span.0 > 0 && yard_major(&all) { by_fronts(c, off_road_first(c, all, keep_off)) } else { off_road_first(c, all, keep_off) };
             if cells.is_empty() {
                 continue;
             }
@@ -3229,6 +3407,41 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 &mut chunk_rng
             };
             filled += place_in(c, &cells, rng, &feature_kind) as usize;
+        }
+    }
+}
+
+/// What the guarantee put down at `c.objects[at]` in a castle's yard, grouped: a store or two
+/// beside it (barrels and crates by a cart or a stack of them, firewood by firewood, a barrel by a
+/// trough), not strewn one by one.
+fn yard_group(c: &mut Chunk, at: usize, rng: &mut Pcg32, keep_off: &[bool], bailey: &[u8]) {
+    let Some(o) = c.objects.get(at) else { return };
+    let (x, y) = (o.x as i64, o.y as i64);
+    let yard = |k: usize| bailey.get(k).copied().unwrap_or(0) & 3 != 0;
+    if x < 0 || y < 0 || x >= SQ as i64 || y >= SQ as i64 || !yard(y as usize * SQ + x as usize) {
+        return;
+    }
+    let with: &[Kind] = match o.kind {
+        Kind::Cart => &[Kind::Barrel, Kind::Crate],
+        Kind::Crate | Kind::Barrel => &[Kind::Crate, Kind::Barrel],
+        Kind::Firewood => &[Kind::Firewood],
+        Kind::WaterTrough => &[Kind::Barrel],
+        Kind::Haystack => &[Kind::Firewood],
+        _ => &[],
+    };
+    let mut n = 0;
+    for (dx, dy) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1)] {
+        if n >= with.len() {
+            break;
+        }
+        let (i, j) = (x + dx, y + dy);
+        if i < 0 || j < 0 || i >= SQ as i64 || j >= SQ as i64 {
+            continue;
+        }
+        let k = j as usize * SQ + i as usize;
+        let busy = c.objects.iter().any(|q| q.x as i64 == i && q.y as i64 == j);
+        if yard(k) && placeable(c, k) && !keep_off[k] && !busy && push_at(c, with[n], k, rng) {
+            n += 1;
         }
     }
 }
@@ -3258,8 +3471,8 @@ fn place_in(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, kind_of: &dyn Fn(&C
 /// lawns' room (`lawn_room`) while nothing has been raised since it was worked out.
 /// Whether anything was raised.
 #[allow(clippy::too_many_arguments)]
-fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], room: &mut Option<Vec<u8>>) -> bool {
-    let raised = raise_on(c, cells, rng, gsx, gsy, sea, shaped, park, room);
+fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], bailey: &[u8], room: &mut Option<Vec<u8>>) -> bool {
+    let raised = raise_on(c, cells, rng, gsx, gsy, sea, shaped, park, bailey, room);
     if raised {
         *room = None;
     }
@@ -3267,11 +3480,13 @@ fn raise(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, se
 }
 
 #[allow(clippy::too_many_arguments)]
-fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], room_cache: &mut Option<Vec<u8>>) -> bool {
+fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64, sea: f64, shaped: &[bool], park: &[u8], bailey: &[u8], room_cache: &mut Option<Vec<u8>>) -> bool {
+    // (Never on a motte: it is its own rise. `bailey` bit 4.)
     let interior = |k: usize| {
         let (x, y) = (k % SQ, k / SQ);
-        x >= 7 && y >= 7 && x < SQ - 7 && y < SQ - 7 && !shaped.get(k).is_some_and(|&s| s)
+        x >= 7 && y >= 7 && x < SQ - 7 && y < SQ - 7 && !shaped.get(k).is_some_and(|&s| s) && !bailey.get(k).is_some_and(|&b| b & 4 != 0)
     };
+    let yard = |k: usize| bailey.get(k).copied().unwrap_or(0) & 3;
     let garden = |k: usize| park.get(k).is_some_and(|&p| p & 3 == 2);
     // A lawn's (a green's, a close's, a park's) knoll is a gentle hillock, broad where there is room,
     // all of it on the lawn (no house or street lifted, off the water's edge and a park's pond's or
@@ -3298,7 +3513,10 @@ fn raise_on(c: &mut Chunk, cells: &[usize], rng: &mut Pcg32, gsx: i64, gsy: i64,
     if good.is_empty() && !town.is_empty() {
         let free = |c: &Chunk, k: usize| placeable(c, k) && interior(k) && (matches!(c.urban[k], URBAN_STREET | URBAN_PLAZA) || (garden(k) && c.urban[k] == URBAN_PARK));
         let kind = |k: usize, r: f64, rng: &mut Pcg32| {
-            if garden(k) {
+            // (A castle's yard: a raised planter, in a garden yard now and then a fountain.)
+            if yard(k) != 0 {
+                if yard(k) == 2 && r >= 1.5 && rng.next_f64() < 0.3 { PlazaFeature::Fountain } else { PlazaFeature::Planter }
+            } else if garden(k) {
                 if r < 1.5 || rng.next_f64() < 0.7 { PlazaFeature::Planter } else { PlazaFeature::Fountain }
             } else if r < 1.5 {
                 if rng.next_f64() < 0.5 { PlazaFeature::Cross } else { PlazaFeature::Dais }
@@ -3982,6 +4200,265 @@ pub(crate) fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static 
     }
 }
 
+/// A castle's bailey: whether it is one of the castles with a garden yard (rolled per castle), and
+/// how it is dressed (world ft: place, turn, kind, look, scale), a pure function of its outer
+/// bailey (`pl`) and its castle in `l`, so every chunk sets out the same. Nothing stands in the
+/// way from a gate to the next gate or to the keep, on a motte, or close by a wall, a tower or
+/// another building:
+/// - by most ranges, a store's group against its yard side (barrels, crates, a cart, firewood, a
+///   trough);
+/// - inside each gate, to one side of the way, a cart, a trough or barrels;
+/// (The ways from gate to gate and to the keep go in `ways`: the guarantee keeps off them too.)
+/// - a well in the keep's court;
+/// - in a garden yard, a plot by the keep (flowerbeds square to it, topiary at its corners, a
+///   bench on each long side facing in, now and then a fountain at its middle, a short hedge
+///   behind it, each piece wholly inside one chunk) and a few of the biome's trees planted in the
+///   yard, spaced out.
+fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed: u64, out: &mut Vec<([f64; 2], f32, Kind, u8, f32)>, ways: &mut Vec<([f64; 2], [f64; 2])>) -> bool {
+    use crate::town::geom::{add, centroid, contains, cross, dist, dot, len, lerp, mul, seg_dist, sub};
+    let ring = &pl.pts;
+    let rn = ring.len();
+    if rn < 3 {
+        return false;
+    }
+    let c0 = centroid(ring);
+    let key = hash3(seed ^ 0xba11, crate::core::round(c0[0]) as i64, crate::core::round(c0[1]) as i64, 7);
+    let roll = |k: i64| unit(hash2(key, k, 0x5d));
+    let garden = roll(0) < 0.45;
+    let depth = |p: [f64; 2]| {
+        let d = (0..rn).map(|k| seg_dist(p, ring[k], ring[(k + 1) % rn])).fold(f64::MAX, f64::min);
+        if contains(ring, p) { d } else { -d }
+    };
+    let poly_d = |poly: &[[f64; 2]], p: [f64; 2]| {
+        if contains(poly, p) {
+            return 0.0;
+        }
+        let m = poly.len();
+        (0..m).map(|k| seg_dist(p, poly[k], poly[(k + 1) % m])).fold(f64::MAX, f64::min)
+    };
+    // The castle's buildings, walls and towers round the bailey.
+    let reach = ring.iter().map(|p| dist(*p, c0)).fold(0.0, f64::max) + 60.0;
+    let near = |p: &[f64; 2]| dist(*p, c0) < reach;
+    let blds: Vec<&crate::town::Building> = l.buildings.iter().filter(|b| b.poly.iter().any(near)).collect();
+    let walls: Vec<([f64; 2], [f64; 2])> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).filter(|s| near(&s.0) || near(&s.1)).collect();
+    let towers: Vec<([f64; 2], f64)> = l
+        .towers
+        .iter()
+        .map(|t| (*t, if l.square_tower(*t).is_some() { 15.6 } else { 11.0 }))
+        .chain(l.gate_towers.iter().map(|t| (*t, 15.0)))
+        .chain(l.extra_towers.iter().map(|t| (t.0, if t.1 { 15.0 } else { 11.0 })))
+        .filter(|t| near(&t.0))
+        .collect();
+    let keep = blds.iter().find(|b| !b.parts.is_empty() && contains(ring, centroid(&b.poly)));
+    let ranges: Vec<&&crate::town::Building> =
+        blds.iter().filter(|b| b.parts.is_empty() && b.ward == crate::town::catalog::Ward::Castle && contains(ring, centroid(&b.poly))).collect();
+    let mottes: Vec<&crate::town::Motte> = l.mottes.iter().filter(|m| contains(ring, m.at)).collect();
+    // The gates: pairs of gate towers a passage apart (the outer one on the ring, an inner one
+    // inside it), their middles and the way in (toward the keep). (A castle set in the town by hand
+    // has its towers among `extra_towers`.)
+    let gt: Vec<[f64; 2]> = l.gate_towers.iter().copied().chain(l.extra_towers.iter().filter(|t| t.1).map(|t| t.0)).filter(|t| depth(*t) > -20.0).collect();
+    let to = keep.map_or(c0, |k| centroid(&k.poly));
+    let mut gates: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    for a in 0..gt.len() {
+        for b in a + 1..gt.len() {
+            if (dist(gt[a], gt[b]) - 52.0).abs() < 0.5 {
+                let m = lerp(gt[a], gt[b], 0.5);
+                let u = mul(sub(gt[b], gt[a]), 1.0 / 52.0);
+                let n = [-u[1], u[0]];
+                gates.push((m, if dot(sub(to, m), n) >= 0.0 { n } else { mul(n, -1.0) }));
+            }
+        }
+    }
+    gates.sort_by(|a, b| depth(a.0).total_cmp(&depth(b.0)).then(a.0[0].total_cmp(&b.0[0])).then(a.0[1].total_cmp(&b.0[1])));
+    // The ways: gate to gate, the last to the keep.
+    let mut lanes: Vec<([f64; 2], [f64; 2])> = gates.windows(2).map(|g| (g[0].0, g[1].0)).collect();
+    if let (Some(g), Some(k)) = (gates.last(), keep) {
+        lanes.push((g.0, centroid(&k.poly)));
+    }
+    ways.extend(lanes.iter().copied());
+    let inner_walls: Vec<([f64; 2], [f64; 2])> = walls.iter().copied().filter(|s| depth(s.0) > 20.0 && depth(s.1) > 20.0).collect();
+    // The keep's court: inside the inner curtain if there is one (the way to its middle crosses
+    // none of it).
+    let ci = l.castles.get(1).map_or(c0, |c| c.0);
+    let in_court = |p: [f64; 2]| {
+        inner_walls.is_empty()
+            || !inner_walls.iter().any(|&(a, b)| {
+                let (o1, o2) = (cross(sub(ci, p), sub(a, p)), cross(sub(ci, p), sub(b, p)));
+                let (o3, o4) = (cross(sub(b, a), sub(p, a)), cross(sub(b, a), sub(ci, a)));
+                o1 * o2 < 0.0 && o3 * o4 < 0.0
+            })
+    };
+    let mut placed: Vec<([f64; 2], f64)> = Vec::new();
+    // Room for something `r` ft round at `p`: in the bailey, clear of buildings (but `own`, by a
+    // little), walls, towers, the ways and gates, mottes and what is set out already.
+    let free = |placed: &[([f64; 2], f64)], p: [f64; 2], r: f64, own: Option<usize>| {
+        depth(p) >= r + 8.0
+            && blds.iter().enumerate().all(|(i, b)| poly_d(&b.poly, p) >= r + if own == Some(i) { 1.5 } else { 6.0 })
+            && walls.iter().all(|&(a, b)| seg_dist(p, a, b) >= r + 10.0)
+            && towers.iter().all(|&(t, tr)| dist(p, t) >= tr + r + 8.0)
+            && lanes.iter().all(|&(a, b)| seg_dist(p, a, b) >= r + 14.0)
+            && gates.iter().all(|&(g, _)| dist(p, g) >= r + 20.0)
+            && mottes.iter().all(|m| dist(p, m.at) >= m.foot_r + r + 6.0)
+            && placed.iter().all(|&(q, qr)| dist(p, q) >= r + qr + 2.0)
+    };
+    let along = |d: [f64; 2]| libm::atan2(d[1], d[0]) as f32;
+    let look = |a: i64, b: i64| (hash2(key, a, b) >> 20) as u8 & 7;
+    // By the ranges, a store's group against the yard side.
+    for (ri, b) in ranges.iter().enumerate() {
+        if roll(10 + ri as i64) >= 0.7 || b.poly.len() != 4 {
+            continue;
+        }
+        let bi = blds.iter().position(|o| std::ptr::eq(*o, **b));
+        // (Its long side deepest in the bailey.)
+        let side = (0..4).filter(|&e| dist(b.poly[e], b.poly[(e + 1) % 4]) >= dist(b.poly[(e + 1) % 4], b.poly[(e + 2) % 4]) - 0.5).max_by(|&x, &y| {
+            depth(lerp(b.poly[x], b.poly[(x + 1) % 4], 0.5)).total_cmp(&depth(lerp(b.poly[y], b.poly[(y + 1) % 4], 0.5))).then(y.cmp(&x))
+        });
+        let Some(e) = side else { continue };
+        let (a, q) = (b.poly[e], b.poly[(e + 1) % 4]);
+        let el = dist(a, q);
+        let u = mul(sub(q, a), 1.0 / el.max(1e-9));
+        let n0 = [-u[1], u[0]];
+        let n = if dot(sub(lerp(a, q, 0.5), centroid(&b.poly)), n0) >= 0.0 { n0 } else { mul(n0, -1.0) };
+        let group: &[Kind] = match (roll(30 + ri as i64) * 5.0) as usize {
+            0 => &[Kind::Barrel, Kind::Crate],
+            1 => &[Kind::Cart],
+            2 => &[Kind::Firewood, Kind::Firewood],
+            3 => &[Kind::Crate, Kind::Barrel, Kind::Crate],
+            _ => &[Kind::WaterTrough],
+        };
+        let t = 0.2 + 0.6 * roll(50 + ri as i64);
+        for (gi, &kind) in group.iter().enumerate() {
+            let rad = info(kind as u16).radius as f64 * SQUARE_FT;
+            let p = add(add(a, mul(u, (el * t + gi as f64 * 6.0).min(el - rad))), mul(n, rad + 2.0));
+            if free(&placed, p, rad, bi) {
+                placed.push((p, rad));
+                out.push((p, along(u), kind, look(70 + ri as i64, gi as i64), 1.0));
+            }
+        }
+    }
+    // Inside each gate, to one side of the way in.
+    for (gi, &(g, n)) in gates.iter().enumerate() {
+        let s = if roll(90 + gi as i64) < 0.5 { [-n[1], n[0]] } else { [n[1], -n[0]] };
+        let kind = [Kind::Cart, Kind::WaterTrough, Kind::Barrel][(roll(95 + gi as i64) * 3.0) as usize % 3];
+        let rad = info(kind as u16).radius as f64 * SQUARE_FT;
+        for (fwd, aside) in [(18.0, 26.0), (26.0, 30.0), (14.0, 34.0)] {
+            let p = add(add(g, mul(n, fwd)), mul(s, aside));
+            if free(&placed, p, rad, None) {
+                placed.push((p, rad));
+                out.push((p, along(n), kind, look(99, gi as i64), 1.0));
+                break;
+            }
+        }
+    }
+    // Spots on a 15-ft grid in the bailey, whole multiples of world ft (the same in every chunk).
+    let (x0, y0, x1, y1) = ring.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    const GRID: f64 = 15.0;
+    let mut spots: Vec<[f64; 2]> = Vec::new();
+    let mut y = crate::core::ceil(y0 / GRID) * GRID;
+    while y <= y1 {
+        let mut x = crate::core::ceil(x0 / GRID) * GRID;
+        while x <= x1 {
+            if depth([x, y]) > 20.0 {
+                spots.push([x, y]);
+            }
+            x += GRID;
+        }
+        y += GRID;
+    }
+    let to_keep = |p: [f64; 2]| keep.map_or(dist(p, c0), |k| poly_d(&k.poly, p));
+    let room = |p: [f64; 2]| {
+        let b = blds.iter().map(|b| poly_d(&b.poly, p)).fold(f64::MAX, f64::min);
+        let w = walls.iter().map(|&(a, q)| seg_dist(p, a, q)).fold(f64::MAX, f64::min);
+        b.min(w).min(80.0)
+    };
+    // A well in the keep's court: by the keep, with room round it.
+    let well_r = info(Kind::Well as u16).radius as f64 * SQUARE_FT + 6.0;
+    let well = spots
+        .iter()
+        .copied()
+        .filter(|&p| in_court(p) && room(p) >= 25.0 && free(&placed, p, well_r, None))
+        .min_by(|&a, &b| (to_keep(a) - room(a)).total_cmp(&(to_keep(b) - room(b))).then(a[1].total_cmp(&b[1])).then(a[0].total_cmp(&b[0])));
+    if let Some(p) = well {
+        placed.push((p, well_r));
+        out.push((p, 0.0, Kind::Well, (key >> 24) as u8 & 7, 1.0));
+    }
+    if !garden {
+        return false;
+    }
+    // The garden plot by the keep, square to the nearest stretch of curtain.
+    let (pw, pd) = (35.0 + 15.0 * roll(200), 25.0 + 10.0 * roll(201));
+    let plot = spots
+        .iter()
+        .copied()
+        .filter_map(|c| {
+            let k = (0..rn).min_by(|&x, &y| seg_dist(c, ring[x], ring[(x + 1) % rn]).total_cmp(&seg_dist(c, ring[y], ring[(y + 1) % rn])).then(x.cmp(&y)))?;
+            let e = sub(ring[(k + 1) % rn], ring[k]);
+            let u = mul(e, 1.0 / len(e).max(1e-9));
+            let v = [-u[1], u[0]];
+            let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(a, b)| add(c, add(mul(u, a * 0.5 * pw), mul(v, b * 0.5 * pd))));
+            let ok = in_court(c)
+                && free(&placed, c, 0.5 * pd + 4.0, None)
+                && (0..4).all(|k| (0..=4).all(|j| free(&placed, lerp(corners[k], corners[(k + 1) % 4], j as f64 / 4.0), 12.0, None)));
+            ok.then_some((c, u, v))
+        })
+        .min_by(|a, b| to_keep(a.0).total_cmp(&to_keep(b.0)).then(a.0[1].total_cmp(&b.0[1])).then(a.0[0].total_cmp(&b.0[0])));
+    if let Some((c, u, v)) = plot {
+        let rot = along(u);
+        // Flowerbeds in a grid, its middle left for a fountain now and then.
+        let fountain = roll(210) < 0.35 && pw >= 40.0;
+        let cols = if pw >= 45.0 { 3 } else { 2 };
+        for i in 0..cols {
+            for j in 0..2 {
+                if fountain && cols == 3 && i == 1 {
+                    continue;
+                }
+                let (s, t) = ((i as f64 + 0.5) / cols as f64 - 0.5, (j as f64 + 0.5) / 2.0 - 0.5);
+                let p = add(c, add(mul(u, s * (pw - 10.0)), mul(v, t * (pd - 10.0))));
+                out.push((p, rot, Kind::Flowerbed, look(220 + i as i64, j as i64), 1.0));
+            }
+        }
+        if fountain {
+            out.push((c, rot, Kind::Fountain, (key >> 28) as u8 & 7, 1.0));
+        }
+        // Topiary at its corners; a bench on each long side facing in.
+        for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            let p = add(c, add(mul(u, a * (0.5 * pw - 2.5)), mul(v, b * (0.5 * pd - 2.5))));
+            out.push((p, 0.0, Kind::Topiary, (key >> 32) as u8 & 7, 1.0));
+        }
+        for b in [-1.0, 1.0] {
+            out.push((add(c, mul(v, b * (0.5 * pd + 3.0))), crate::park::facing(mul(v, -b)), Kind::Bench, (key >> 36) as u8 & 7, 1.0));
+        }
+        // A short hedge behind it, open at both ends, each piece wholly inside one chunk.
+        let side = if roll(230) < 0.5 { 1.0 } else { -1.0 };
+        let pieces = crate::core::floor((pw - 5.0) / 5.0) as i64;
+        for k in 0..pieces {
+            let p = add(c, add(mul(u, (k as f64 + 0.5) * 5.0 - 0.5 * pieces as f64 * 5.0), mul(v, side * (0.5 * pd + 9.0))));
+            let pr = (p, rot, Kind::Hedge, (key >> 40) as u8 & 3, 1.0);
+            if crate::park::seam_inside(&pr) && free(&placed, p, 3.0, None) {
+                out.push(pr);
+            }
+        }
+        placed.push((c, 0.5 * pw.max(pd) + 14.0));
+    }
+    // A few planted trees, spaced out over the yard (the biome's own).
+    let tree = greenery(land_biome(t0, c0)).0.first().copied().unwrap_or(Kind::TreeDeciduous);
+    let want = 3 + (roll(300) * 4.0) as usize;
+    let mut cand: Vec<[f64; 2]> = spots.iter().copied().filter(|&p| room(p) >= 14.0).collect();
+    cand.sort_by_key(|p| (hash2(key, crate::core::round(p[0]) as i64, crate::core::round(p[1]) as i64), crate::core::round(p[0]) as i64, crate::core::round(p[1]) as i64));
+    let mut trees: Vec<[f64; 2]> = Vec::new();
+    for p in cand {
+        if trees.len() >= want {
+            break;
+        }
+        if free(&placed, p, 8.0, None) && trees.iter().all(|q| dist(*q, p) >= 40.0) {
+            placed.push((p, 8.0));
+            out.push((p, 0.0, tree, look(310, trees.len() as i64), 1.0));
+            trees.push(p);
+        }
+    }
+    true
+}
+
 /// The other open spaces dressed by what they are for (`town::squares`), each a pure function of
 /// its plaza (world ft) and the layout round it, so every chunk sets out the same:
 /// - a widened crossroads: a signpost as near its middle as the lanes leave room (a city's, now
@@ -4625,6 +5102,34 @@ fn park_cover(formal: bool, b: Biome, feature: bool, rng: &mut Pcg32) -> Kind {
     opts[rng.below(opts.len() as u32) as usize]
 }
 
+/// What the guarantee sets out in a castle's bailey, as cover or (`feature`) a prop: by a building
+/// (within three squares), stores (barrels, crates, firewood); out in the yard a cart, a trough or a
+/// haystack (in a garden yard, one of the biome's trees planted for the haystack), as a prop a
+/// trough or a cart.
+fn yard_kind(c: &Chunk, k: usize, garden: bool, b: Biome, feature: bool, rng: &mut Pcg32) -> Kind {
+    // (By a wall or a tower, small stores: nothing reaching it.)
+    let by_building = within(k, 3, |q| c.building[q] != 0 || matches!(c.urban[q], URBAN_WALL | URBAN_TOWER));
+    let tree = greenery(b).0.first().copied().unwrap_or(Kind::TreeDeciduous);
+    let opts: &[Kind] = match (by_building, garden, feature) {
+        (true, _, _) => &[Kind::Barrel, Kind::Crate, Kind::Firewood],
+        (false, true, false) => &[Kind::Cart, Kind::WaterTrough, tree],
+        (false, false, false) => &[Kind::Cart, Kind::WaterTrough, Kind::Haystack],
+        (false, _, true) => &[Kind::WaterTrough, Kind::Cart],
+    };
+    opts[rng.below(opts.len() as u32) as usize]
+}
+
+/// Whether any square within `r` (each way) of square `k` is one `of`.
+fn within(k: usize, r: i64, of: impl Fn(usize) -> bool) -> bool {
+    let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+    (-r..=r).any(|dy| {
+        (-r..=r).any(|dx| {
+            let (i, j) = (x + dx, y + dy);
+            i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 && of(j as usize * SQ + i as usize)
+        })
+    })
+}
+
 /// Cover in town (streets, plazas) or on fields (a lawn takes the biome's own).
 fn town_cover(urban: u8, rng: &mut Pcg32) -> Kind {
     let opts: &[Kind] = match urban {
@@ -4726,6 +5231,31 @@ fn clear_of_buildings(c: &Chunk, o: &Object) -> bool {
     true
 }
 
+/// How far square `k` may be from cover (`cover_distance`): `MAX_COVER_GAP`, in a castle's yard
+/// `YARD_COVER_GAP`.
+pub fn cover_gap(c: &Chunk, k: usize) -> i32 {
+    if c.yard.get(k).is_some_and(|&y| y & 3 != 0) { YARD_COVER_GAP } else { MAX_COVER_GAP }
+}
+
+/// Whether the 32x32 window at (`wx`, `wy`) is a castle's yard's (half its squares not under water
+/// at least) holding its cover: a wall, a tower or a building on any of its squares.
+pub fn works_cover(c: &Chunk, wx: usize, wy: usize) -> bool {
+    const W: usize = 32;
+    if c.yard.is_empty() {
+        return false;
+    }
+    let (mut yard, mut wet, mut works) = (0, 0, false);
+    for y in wy..wy + W {
+        for x in wx..wx + W {
+            let k = y * SQ + x;
+            yard += (c.yard[k] & 3 != 0) as usize;
+            wet += (c.water_level[k] > c.height[k]) as usize;
+            works |= c.building[k] != 0 || matches!(c.urban[k], URBAN_WALL | URBAN_TOWER);
+        }
+    }
+    works && yard * 2 >= W * W - wet
+}
+
 /// Chebyshev-ish BFS distance (squares) from every square to the nearest cover object.
 pub fn cover_distance(c: &Chunk) -> Vec<i32> {
     let mut dist = vec![i32::MAX; SQ * SQ];
@@ -4811,8 +5341,9 @@ fn compute_edges(c: &mut Chunk) {
 ///   building u16[SQ²]: index + 1 of the building on each square (0 = none)
 ///   buildings: count u32, then per building: n u8, floors u8, roof u8 (style: 0 hip,
 ///   1 battlements, 2 cone; | (tint + 1) << 2, 0 = picked),
-///   corner-tower side u8 (squares), then n × (x, y) f32 in
-///   chunk squares (heights above are the ground; roofs are drawn from these outlines)
+///   corner-tower side u8 (squares; 255: a keep of pieces), then n × (x, y) f32 in
+///   chunk squares (heights above are the ground; roofs are drawn from these outlines); a keep
+///   of pieces then has its pieces: count u8, then per piece `part_code` u8, n u8, n × (x, y) f32
 ///   structures: count u32, then per shape: kind u8 (`ShapeKind`), n u8, 0, 0, size f32,
 ///   then n × (x, y) f32 in chunk squares (drawn as vectors; decks are not in the road halo; a
 ///   flight of steps' third point is its start up the flight and its tread, in squares)
@@ -4856,11 +5387,24 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
         out.extend_from_slice(&b.to_le_bytes());
     }
     out.extend_from_slice(&(c.building_polys.len() as u32).to_le_bytes());
-    for (poly, floors, roof, tower) in &c.building_polys {
-        out.extend_from_slice(&[poly.len().min(255) as u8, *floors, *roof, *tower]);
+    for (k, (poly, floors, roof, tower)) in c.building_polys.iter().enumerate() {
+        let parts = c.building_parts.get(k).filter(|p| !p.is_empty());
+        out.extend_from_slice(&[poly.len().min(255) as u8, *floors, *roof, if parts.is_some() { 255 } else { *tower }]);
         for p in poly.iter().take(255) {
             out.extend_from_slice(&p[0].to_le_bytes());
             out.extend_from_slice(&p[1].to_le_bytes());
+        }
+        // A keep's pieces (its corner-tower byte 255): count u8, then per piece code u8, n u8, n ×
+        // (x, y) f32.
+        if let Some(parts) = parts {
+            out.push(parts.len().min(255) as u8);
+            for (code, pts) in parts.iter().take(255) {
+                out.extend_from_slice(&[*code, pts.len().min(255) as u8]);
+                for p in pts.iter().take(255) {
+                    out.extend_from_slice(&p[0].to_le_bytes());
+                    out.extend_from_slice(&p[1].to_le_bytes());
+                }
+            }
         }
     }
     out.extend_from_slice(&(c.structures.len() as u32).to_le_bytes());

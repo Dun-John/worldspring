@@ -175,7 +175,7 @@ One feature in detail. What comes back depends on the feature:
 | Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground; flights of steps on steep streets as generated (`stairs`: each flight's middle `x_ft`/`y_ft`, `length_ft`, `rise_ft`, the highest first, up to 40; cities and up); `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
 | Sites | The layout: buildings, and ways underground with their `u:` ids; `settlement`: the town it stands in, or `null` |
 | Buildings and underground sites | Levels and rooms |
-| Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`; `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
+| Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`, and a castle's keep its `pieces` (`kind`: body, round tower, square tower, forebuilding, wing; `poly`), whose union `poly` is (drawing a new outline makes it one piece); `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
 | Anything in a layout | `settlement` (and in a site's layout `site`): see Conventions. A building drawn by hand (`b:<layout>:0`) used to give its own site as `settlement`; it now gives the town it stands in (or `null`), and its site as `site` |
 | Places with NPCs or plots | `npcs`, `plots`: those at the place, at anything in its layout, at their levels and rooms; for a settlement also at its sites |
 | A building drawn by hand | `notes`, `hidden`, `npcs` and `plots` are the same under its `c:` id and its building id |
@@ -501,11 +501,25 @@ Rules:
 
 ### Castles and walls
 `create_feature` with `kind: "castle"` or `"wall"` takes a shape instead of a place. A **castle** is an outline
-(`poly`, convex, 3–32 corners, 80 to 600 ft across; or `rect` about its middle): a curtain wall just inside it with a
-tower on every corner and along long runs, a gatehouse on one side (`gate`: the side from corner `gate` to the next;
-else the side facing the nearest road), the keep (the castle itself, named as the site; `keep: false` for none) and
-buildings along the inside of the walls (the biggest the barracks, then stables and a smithy;
-`yard_buildings: false` for none). The bailey inside is open ground; buildings can be drawn in it. With
+(`poly`, convex, 3–32 corners, 80 to 600 ft across; or `rect` about its middle): a curtain wall just inside it, a
+tower on every corner and along long runs (round, or square in some castles), a gatehouse on one side (`gate`: the
+side from corner `gate` to the next; else the side facing the nearest road), in a big one (80,000 sq ft or more and
+200 ft across) an inner curtain with its own gatehouse round the keep's high ground, leaving an outer bailey at
+least 48 ft wide all round and the inner curtain at least 80 ft from the outer gate, its gate at least 90 ft from
+that one; the keep (the castle itself, named as the site;
+`keep: false` for none) on the highest ground that holds it, made of pieces: a great tower with corner towers, a hall
+with a forebuilding, an L or a T with towers at its outer corners, or a round shell keep on a motte (a mound eased up
+from the ground, a gravel path up it to the shell's gate; a tower keep alone where nothing else fits), its flat tops
+drawn as open battlements (a wall walk of stone flags in the merlons, a broad one's middle dark lead) or, every top of
+1,100 sq ft or more and in some keeps the smaller ones too, hipped roofs of lead or slate; and ranges of
+stone buildings under slate against the inside of the curtain, clear of the way from gate to gate (the biggest the
+barracks, then stables and a smithy; `yard_buildings: false` for none). The bailey inside is an open yard of grass, no
+wild trees or rocks, set out sparingly: stores by the ranges, a cart, a trough or barrels inside each gate, a well in
+the keep's court, a little cover out in the open yard (haystacks, carts, troughs, firewood; small stores by a wall or
+a building: its curtains, towers and buildings are the yard's cover, so the ground near them needs none), nothing on a
+motte or in the way from gate to gate and to the keep; in some castles a garden yard: a plot
+by the keep (flowerbeds, topiary at its corners, benches, a short hedge, now and then a fountain) and a few planted
+trees. Buildings can be drawn in it. With
 `structure: "ruin"` the walls are broken, some towers fallen and every building a roofless shell.
 
 A **wall** is a line (`pts`, 2–64 corners, each side at least 10 ft, at most 3,000 ft in all; `closed: true` joins
@@ -1054,8 +1068,23 @@ farms outside the walls) cut into lots. The ward editor changes that layout with
 - **Patches** take another ward (`empty` leaves the ground open, for buildings of your own), a lot size (`small`,
   `medium`, `large`, `huge`: the target lot area, times the ward's usual), a merge with a neighbour (it joins
   that district: same ward and lots, no street between; not across a main street), or a new roll (`reroll`: its
-  lots and buildings drawn again). A `castle` ward builds a curtain wall with towers, a gatehouse facing the town's
-  middle and a keep that is the castle. A `park` ward is a whole block laid out as a garden, no lots on it: a
+  lots and buildings drawn again). A `castle` ward builds a castle as one drawn by hand is built (see *Castles and
+  walls*), but its curtain follows the brow of the ground (where it falls away from the top, keeping at least half
+  the block, and 16 ft back from a river; a corner sharper than 40 degrees cut back where it is 60 ft across), the
+  town wall is its wall on a side where that wall runs the whole way as built (a stream's water gap in it too), with
+  no main street running between
+  (a main street on the wall's own line with no paved strip inside it doesn't count) and no town gate on it but at
+  its end (the castle's corner cut back from that gate, which opens onto the town), and ranges stand against it there
+  too; elsewhere its curtain stands back with the wall's street between, never within 30 ft of the town wall
+  alongside it; it keeps clear of the roads through its patch (a road found running through its ring cuts the patch
+  back, its larger side kept); its towers stand 12 ft clear of the town's (a town tower crowding one of a castle the
+  town planned goes, else the castle's); its gatehouse is on a side by a street outside it, at least 90 ft from a
+  town gate where one fits (facing the town's middle among those; a way to the nearest street where the curtain stands
+  back up a hill, out from the gate first where the straight way is blocked, else round the buildings in the way, the
+  gate moved where no way can be laid, and
+  nothing built on it later), and the inner curtain is a capital's wherever one fits, or a big castle's (170,000 sq ft
+  or more: about half). Taking the town wall down changes only the castle's own buildings: what the patch's own
+  buildings did (a smithy, an inn) moves to the town's buildings near it, never to a castle's range. A `park` ward is a whole block laid out as a garden, no lots on it: a
   **formal** garden (cross walks from street to street and a walk round it, a fountain where they meet, hedged
   parterres with beds, topiary, raised planters or bosquets of trees, statues in pairs at the walks' ends, benches)
   or a **common** (winding gravel paths from its streets to a hub with a fountain or statue, a pond on its low

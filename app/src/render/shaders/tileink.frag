@@ -21,7 +21,10 @@ void main() {
     float h = clamp(t, 0.0, 1.0);
     float d = length(pa - ba * h);
     float cover = 1.0 - smoothstep(vHalf - 0.5, vHalf + 0.5, d);
-    if (vStyle > 2.5) {
+    if (vStyle > 3.5) {
+        // A square tower: square ends.
+        if (t < 0.0 || t > 1.0) discard;
+    } else if (vStyle > 2.5) {
         // Steps: square ends, a hatch across the line every 2.5 ft (or 3 px), fading in as
         // the treads open up.
         if (t < 0.0 || t > 1.0) discard;

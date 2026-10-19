@@ -21,6 +21,8 @@ const BARE_A = 1;
 const BARE_B = 2;
 const GATE = 1;
 const RUINED = 4;
+/** A square tower (a castle's): its sides run at the angle after the flags. */
+const SQUARE = 8;
 
 const flagsOf = (s: Shape, at: number) => (s.pts.length > at ? Math.round(s.pts[at] / PX) : 0);
 /** How much a direction faces the light, -1 .. 1. */
@@ -195,6 +197,7 @@ export function drawWalls(g: Graphics, walls: Shape[]) {
 export function drawWallTower(g: Graphics, s: Shape) {
   const [x, y, r] = [s.pts[0], s.pts[1], s.size];
   const flags = flagsOf(s, 2);
+  if (flags & SQUARE) return drawSquareTower(g, s);
   const [gate, ruined] = [!!(flags & GATE), !!(flags & RUINED)];
   const rnd = rngAt(x * 1.3 + y * 0.31, y * 0.7 - x * 0.17);
   rnd();
@@ -302,6 +305,94 @@ export function drawWallTower(g: Graphics, s: Shape) {
   blocks(g, fallen, stoneTone(rnd));
   // A gate tower flies the banner.
   if (gate && !ruined) banner(g, x - ex * rf * 0.4, y - ey * rf * 0.4);
+}
+
+/** A square tower's frame: its middle, half side and the way its sides run (`SQUARE`). */
+function squareFrame(s: Shape) {
+  const t = s.pts.length > 3 ? s.pts[3] / PX : 0;
+  return { x: s.pts[0], y: s.pts[1], h: s.size, ux: Math.cos(t), uy: Math.sin(t) };
+}
+
+/**
+ * A square wall tower seen from above (a castle's: `SQUARE`): its shadow, the stone block in its
+ * shaded and lit faces, a flagged fighting top inside a parapet of merlons, the stair's hatch with
+ * its lid; a ruin's with merlons gone, cracks, moss and fallen stones.
+ */
+function drawSquareTower(g: Graphics, s: Shape) {
+  const { x, y, h, ux, uy } = squareFrame(s);
+  const ruined = !!(flagsOf(s, 2) & RUINED);
+  const rnd = rngAt(x * 1.3 + y * 0.31, y * 0.7 - x * 0.17);
+  const at = (a: number, b: number): [number, number] => [x + ux * a - uy * b, y + uy * a + ux * b];
+  const quad = (a0: number, a1: number, b0: number, b1: number) => [...at(a0, b0), ...at(a1, b0), ...at(a1, b1), ...at(a0, b1)];
+  // Shadow, cast SE.
+  const D = PX * 1.1;
+  g.poly(quad(-h, h, -h, h).map((v) => v + D)).fill({ color: 0x000000, alpha: 0.28 });
+  g.poly(quad(-h, h, -h, h)).fill(STONE[1]).stroke({ width: 3, color: INK, join: 'round' });
+  // The fighting top: flags in courses inside the parapet.
+  const f = h - PARAPET;
+  g.poly(quad(-f, f, -f, f)).fill(WALK);
+  const row = FT * 2.8;
+  for (let b = -f + row * (0.3 + rnd() * 0.7); b < f; b += row) {
+    g.moveTo(...at(-f, b)).lineTo(...at(f, b));
+    for (let a = -f + FT * (0.5 + rnd() * 2); a < f; a += FT * (2.4 + rnd() * 1.4)) g.moveTo(...at(a, b)).lineTo(...at(a, Math.min(f, b + row)));
+  }
+  g.stroke({ width: 1.2, color: STONE[0], alpha: 0.4 });
+  // The parapet's shade across the top on the side away from the light.
+  const lx = ux * LX + uy * LY;
+  const ly = -uy * LX + ux * LY;
+  g.poly(lx < 0 ? quad(-f, -f + FT * 0.8, -f, f) : quad(f - FT * 0.8, f, -f, f)).fill({ color: PLUM, alpha: 0.18 });
+  g.poly(ly < 0 ? quad(-f, f, -f, -f + FT * 0.8) : quad(-f, f, f - FT * 0.8, f)).fill({ color: PLUM, alpha: 0.18 });
+  // The stair's hatch in a corner, its lid lying open beside it.
+  const [hl, hw] = [Math.min(FT * 4.5, f * 0.6), FT * 1.6];
+  const ca = f - hl / 2 - FT * 0.8;
+  const cb = f - hw - FT * 0.8;
+  g.poly(quad(ca - hl / 2, ca + hl / 2, cb - hw, cb + hw)).fill(0x221d19);
+  for (let k = 0; k < 4; k++) {
+    const a = ca + hl / 2 - (k + 1) * hl * 0.21;
+    g.poly(quad(a, a + hl * 0.21, cb - hw + 1.5, cb + hw - 1.5)).fill(mix(STONE[1], 0x221d19, k * 0.24)).stroke({ width: 1, color: 0x221d19, alpha: 0.6 });
+  }
+  g.poly(quad(ca - hl / 2, ca + hl / 2, cb - hw, cb + hw)).stroke({ width: 2.4, color: INK, join: 'round' });
+  const lid = quad(ca - hl / 2, ca + hl / 2, cb - hw - FT * 0.3 - hw * 2, cb - hw - FT * 0.3);
+  g.poly(lid.map((v) => v + FT * 0.25)).fill({ color: 0x000000, alpha: 0.25 });
+  g.poly(lid).fill(WOOD[1]).stroke({ width: 1.8, color: INK, join: 'round' });
+  // The parapet: coping round the top, crenels notched through it (a ruin's broken in places).
+  g.poly(quad(-h, h, -h, h));
+  g.poly(quad(-f, f, -f, f)).cut();
+  g.fill(STONE[2]);
+  const fallen: number[][] = [];
+  const step = FT * 4;
+  const sides: [number, number, number, number][] = [
+    [-h, -h, 1, 0],
+    [h, -h, 0, 1],
+    [h, h, -1, 0],
+    [-h, h, 0, -1],
+  ];
+  const lostSide = ruined ? Math.floor(rnd() * 4) : -1;
+  for (const [si, [a0, b0, da, db]] of sides.entries()) {
+    const n = Math.max(2, Math.round((2 * h) / step));
+    for (let k = 0; k < n; k++) {
+      const gone = ruined && (si === lostSide || rnd() < 0.25);
+      if (gone && rnd() < 0.5) fallen.push(...rubble(...at(a0 + da * (k + 0.5) * ((2 * h) / n) - db * 0, b0 + db * (k + 0.5) * ((2 * h) / n)), 1, FT * 0.6, rnd));
+      const t0 = (k + (gone ? 0.05 : 0.6)) * ((2 * h) / n);
+      const t1 = (k + 0.95) * ((2 * h) / n);
+      // Inward from this side.
+      const [ia, ib] = [-db, da];
+      const p0 = [a0 + da * t0, b0 + db * t0];
+      const p1 = [a0 + da * t1, b0 + db * t1];
+      g.poly([...at(p0[0] + ia * 1.5, p0[1] + ib * 1.5), ...at(p1[0] + ia * 1.5, p1[1] + ib * 1.5), ...at(p1[0] + ia * (PARAPET - 1.5), p1[1] + ib * (PARAPET - 1.5)), ...at(p0[0] + ia * (PARAPET - 1.5), p0[1] + ib * (PARAPET - 1.5))]);
+    }
+  }
+  g.fill(mix(STONE[0], PLUM, 0.3)).stroke({ width: 1.2, color: INK, alpha: 0.8, join: 'round' });
+  g.poly(quad(-f, f, -f, f)).stroke({ width: 1.8, color: INK, join: 'round' });
+  g.poly(quad(-h, h, -h, h)).stroke({ width: 3, color: INK, join: 'round' });
+  if (ruined) {
+    fallen.push(...rubble(x, y, 5, f * 0.4, rnd));
+    for (let k = 0; k < 4; k++) {
+      const [mx, my] = at((rnd() - 0.5) * f * 1.4, (rnd() - 0.5) * f * 1.4);
+      g.ellipse(mx, my, FT * 0.6, FT * 0.45).fill({ color: MOSS[1], alpha: 0.8 });
+    }
+  }
+  blocks(g, fallen, stoneTone(rnd));
 }
 
 /**
@@ -460,7 +551,15 @@ export function banner(g: Graphics, x: number, y: number) {
 /** The 5-ft grid over a wall's walk or a tower's top (shown with the ground's): lines on the square
  * boundaries, clipped to the walk (a quad) or the top (a round). */
 export function topGrid(g: Graphics, s: Shape) {
-  if (s.kind === 1) {
+  if (s.kind === 1 && flagsOf(s, 2) & SQUARE) {
+    // A square tower's top: its square's lines, clipped to it.
+    const { x, y, h, ux, uy } = squareFrame(s);
+    const f = h - PARAPET;
+    const q = [-1, -1, 1, -1, 1, 1, -1, 1].map((v) => v * f);
+    const pts: number[] = [];
+    for (let k = 0; k < 4; k++) pts.push(x + ux * q[k * 2] - uy * q[k * 2 + 1], y + uy * q[k * 2] + ux * q[k * 2 + 1]);
+    gridIn(g, pts);
+  } else if (s.kind === 1) {
     const [cx, cy] = [s.pts[0], s.pts[1]];
     const r = s.size - PARAPET;
     for (const axis of [0, 1]) {
@@ -477,24 +576,28 @@ export function topGrid(g: Graphics, s: Shape) {
     const len = Math.hypot(x1 - x0, y1 - y0) || 1;
     const w = s.size / 2 - PARAPET;
     const [vx, vy] = [(-(y1 - y0) / len) * w, ((x1 - x0) / len) * w];
-    const q = [x0 - vx, y0 - vy, x1 - vx, y1 - vy, x1 + vx, y1 + vy, x0 + vx, y0 + vy];
-    // Where the line `axis` = `at` crosses the walk's outline, as the span along the other axis.
-    for (const axis of [0, 1]) {
-      const vals = [q[axis], q[axis + 2], q[axis + 4], q[axis + 6]];
-      for (let k = Math.ceil(Math.min(...vals) / PX); k * PX <= Math.max(...vals); k++) {
-        let [lo, hi] = [Infinity, -Infinity];
-        for (let i = 0; i < 4; i++) {
-          const [a, b] = [i * 2, ((i + 1) % 4) * 2];
-          const [p, r] = [q[a + axis], q[b + axis]];
-          if ((p - k * PX) * (r - k * PX) > 0 || p === r) continue;
-          const o = q[a + 1 - axis] + ((k * PX - p) / (r - p)) * (q[b + 1 - axis] - q[a + 1 - axis]);
-          [lo, hi] = [Math.min(lo, o), Math.max(hi, o)];
-        }
-        if (!(hi > lo)) continue;
-        if (axis === 0) g.moveTo(k * PX, lo).lineTo(k * PX, hi);
-        else g.moveTo(lo, k * PX).lineTo(hi, k * PX);
-      }
-    }
+    gridIn(g, [x0 - vx, y0 - vy, x1 - vx, y1 - vy, x1 + vx, y1 + vy, x0 + vx, y0 + vy]);
   } else return;
   g.stroke({ width: 1, color: INK, alpha: 0.45, pixelLine: true });
+}
+
+/** The 5-ft grid's lines where they cross a convex quad. */
+function gridIn(g: Graphics, q: number[]) {
+  // Where the line `axis` = `at` crosses the walk's outline, as the span along the other axis.
+  for (const axis of [0, 1]) {
+    const vals = [q[axis], q[axis + 2], q[axis + 4], q[axis + 6]];
+    for (let k = Math.ceil(Math.min(...vals) / PX); k * PX <= Math.max(...vals); k++) {
+      let [lo, hi] = [Infinity, -Infinity];
+      for (let i = 0; i < 4; i++) {
+        const [a, b] = [i * 2, ((i + 1) % 4) * 2];
+        const [p, r] = [q[a + axis], q[b + axis]];
+        if ((p - k * PX) * (r - k * PX) > 0 || p === r) continue;
+        const o = q[a + 1 - axis] + ((k * PX - p) / (r - p)) * (q[b + 1 - axis] - q[a + 1 - axis]);
+        [lo, hi] = [Math.min(lo, o), Math.max(hi, o)];
+      }
+      if (!(hi > lo)) continue;
+      if (axis === 0) g.moveTo(k * PX, lo).lineTo(k * PX, hi);
+      else g.moveTo(lo, k * PX).lineTo(hi, k * PX);
+    }
+  }
 }

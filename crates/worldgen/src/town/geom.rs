@@ -260,3 +260,100 @@ pub fn circle(c: P, r: f64, n: usize) -> Vec<P> {
         })
         .collect()
 }
+
+/// The outline of the union of overlapping convex polygons (each wound either way), anticlockwise
+/// (in axes with y up): the pieces of their edges outside every other one (an edge another runs
+/// along the same way kept once, two running opposite ways along each other dropped), joined end
+/// to end. None unless they make one loop (apart, or round a hole).
+pub fn union_outline(parts: &[Vec<P>]) -> Option<Vec<P>> {
+    const EPS: f64 = 1e-6;
+    let parts: Vec<Vec<P>> = parts.iter().filter(|p| p.len() >= 3).map(|p| if area(p) < 0.0 { p.iter().rev().copied().collect() } else { p.clone() }).collect();
+    let edges = |q: &Vec<P>| (0..q.len()).map(|k| (q[k], q[(k + 1) % q.len()])).collect::<Vec<_>>();
+    // How far `p` lies inside convex `q` (its least distance in from an edge; negative outside).
+    let depth = |q: &Vec<P>, p: P| edges(q).iter().map(|&(a, b)| cross(sub(b, a), sub(p, a)) / len(sub(b, a)).max(1e-12)).fold(f64::MAX, f64::min);
+    let mut segs: Vec<(P, P)> = Vec::new();
+    for (i, p) in parts.iter().enumerate() {
+        for (a, b) in edges(p) {
+            let ab = sub(b, a);
+            let l2 = dot(ab, ab);
+            if l2 < EPS {
+                continue;
+            }
+            // Where it meets the others' edges, and where their corners lie on it.
+            let mut ts = vec![0.0, 1.0];
+            for (j, q) in parts.iter().enumerate() {
+                if j == i {
+                    continue;
+                }
+                for (c, d) in edges(q) {
+                    let cd = sub(d, c);
+                    let den = cross(ab, cd);
+                    if den.abs() > EPS {
+                        let t = cross(sub(c, a), cd) / den;
+                        let u = cross(sub(c, a), ab) / den;
+                        if t > 0.0 && t < 1.0 && (-EPS..=1.0 + EPS).contains(&u) {
+                            ts.push(t);
+                        }
+                    }
+                    for v in [c, d] {
+                        let t = dot(sub(v, a), ab) / l2;
+                        if t > 0.0 && t < 1.0 && cross(ab, sub(v, a)).abs() / crate::core::sqrt(l2) < 1e-4 {
+                            ts.push(t);
+                        }
+                    }
+                }
+            }
+            ts.sort_by(f64::total_cmp);
+            for w in ts.windows(2) {
+                if w[1] - w[0] < 1e-9 {
+                    continue;
+                }
+                let mid = lerp(a, b, 0.5 * (w[0] + w[1]));
+                let keep = parts.iter().enumerate().all(|(j, q)| {
+                    if j == i {
+                        return true;
+                    }
+                    let d = depth(q, mid);
+                    if d > 1e-4 {
+                        return false;
+                    }
+                    if d < -1e-4 {
+                        return true;
+                    }
+                    // On one of its edges: kept by the first of two running the same way.
+                    !edges(q).iter().any(|&(c, e)| {
+                        let ce = sub(e, c);
+                        seg_dist(mid, c, e) < 1e-4 && (dot(ce, ab) < 0.0 || j < i)
+                    })
+                });
+                if keep {
+                    segs.push((lerp(a, b, w[0]), lerp(a, b, w[1])));
+                }
+            }
+        }
+    }
+    if segs.is_empty() {
+        return None;
+    }
+    // Joined end to end: each piece's end is the next one's start.
+    let n = segs.len();
+    let mut used = vec![false; n];
+    let mut out = vec![segs[0].0];
+    let mut cur = 0;
+    used[0] = true;
+    for _ in 1..n {
+        let end = segs[cur].1;
+        let next = (0..n).filter(|&k| !used[k]).min_by(|&x, &y| dist(segs[x].0, end).total_cmp(&dist(segs[y].0, end)))?;
+        if dist(segs[next].0, end) > 1e-3 {
+            return None;
+        }
+        out.push(segs[next].0);
+        used[next] = true;
+        cur = next;
+    }
+    if dist(segs[cur].1, segs[0].0) > 1e-3 {
+        return None;
+    }
+    let out = clean(&out);
+    (out.len() >= 3 && area(&out) > 0.0).then_some(out)
+}
