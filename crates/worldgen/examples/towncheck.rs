@@ -1,0 +1,1412 @@
+//! QA: castles, play reach, interiors and the street editor, swept over whole worlds. Counts what
+//! should never happen, with the worst places (world ft) to go and look (`TOP=n` lists more):
+//! - `castles`: every town's castle as generated. Town gates opening into a bailey; streets and
+//!   roads inside a bailey (the castle's own way to its gate excepted) or across a curtain; dry
+//!   stretches of a bailey's ring with no wall, tower or gate on them; curtains doubling the town
+//!   wall (3 to 30 ft from it along 30 ft or more) and 30 to 45 ft strips between them with no
+//!   street in them; towers overlapping, castle towers within 12 ft of town towers, castle
+//!   buildings on towers, walls, streets or other buildings; gate ways blocked or laid through
+//!   buildings; the outer gate's distance to the nearest street or way; the outer bailey's width
+//!   and the inner curtain's distance to the outer gate; castles with no keep; mottes with
+//!   objects on them (from the battlemap); and a few more (spikes, keep tops left open, ids twice).
+//! - `reach`: each castle's battlemap round it, flooded as play mode blocks movement (buildings,
+//!   walls, towers, blocking objects, a hedge every square it is drawn across) from the window's
+//!   edge and its streets, so from outside the outer gate: castle buildings cut off, outer gates
+//!   not reached, bailey squares sealed (and the largest pocket); the same for every park.
+//! - `interiors`: vital's `check_interior` over every enterable building and wall or gate tower,
+//!   failures grouped by function; and the corridor rule on its own (no room more than two rooms
+//!   from a corridor), with the stricter old reading (a hall or corridor only, not the front room).
+//!   `--keeps`: keeps only.
+//! - `editor`: castles set in the street editor (`wards::change`) on the patches nearest the
+//!   town wall (up to 3 a town, `PLACES=n` a world, default 20), with the walls on and off, each
+//!   run through the castle checks; every non-castle building's id, outline, ward, function, kind,
+//!   name and floors the same with the walls off as on; and every town castle's town with its
+//!   walls taken down.
+//! - `hash` (not in `all`): a hash per settlement layout (`L:`) and per building or tower interior
+//!   (`b:`/`t:`), marked `C` in a settlement with a castle, one per line on stdout (everything
+//!   else goes to stderr): run it on two trees and diff to see what changed.
+//!
+//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|editor|hash|all]... [seed|world.json...] [--keeps]
+//! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
+//! it `interiors` (`--keeps` takes a second).
+mod common;
+
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+use worldgen::battlemap::{Chunk, Kind, SQ, SQUARE_FT, URBAN_STREET, URBAN_TOWER, URBAN_WALL};
+use worldgen::core::tile::TileKey;
+use worldgen::pipeline::Executor;
+use worldgen::t0::T0;
+use worldgen::town::catalog::Ward;
+use worldgen::town::geom::{add, area, centroid, contains, cross, dist, dot, len, lerp, mul, seg_dist, sub};
+use worldgen::town::{self, Layout, PlazaKind};
+use worldgen::{World, interior};
+
+type P = [f64; 2];
+
+/// `hash`: only the hashes go to stdout.
+static QUIET: AtomicBool = AtomicBool::new(false);
+macro_rules! say {
+    ($($t:tt)*) => {
+        if QUIET.load(Ordering::Relaxed) { eprintln!($($t)*) } else { println!($($t)*) }
+    };
+}
+
+fn top() -> usize {
+    std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4)
+}
+
+// ---- Reports: counts with their worst cases, and measures (a least or greatest value). ----
+
+enum Row {
+    Count { n: usize, worst: Vec<(f64, String)> },
+    Measure { lowest: bool, v: Option<(f64, String)> },
+}
+
+#[derive(Default)]
+struct Report {
+    rows: Vec<(String, Row)>,
+}
+
+impl Report {
+    fn row(&mut self, label: &str, make: impl FnOnce() -> Row) -> &mut Row {
+        let i = match self.rows.iter().position(|r| r.0 == label) {
+            Some(i) => i,
+            None => {
+                self.rows.push((label.to_string(), make()));
+                self.rows.len() - 1
+            }
+        };
+        &mut self.rows[i].1
+    }
+    /// Counts listed (as zero until something is added), in this order.
+    fn counts(&mut self, labels: &[&str]) {
+        for l in labels {
+            self.row(l, || Row::Count { n: 0, worst: Vec::new() });
+        }
+    }
+    fn add(&mut self, label: &str, size: f64, what: String) {
+        if let Row::Count { n, worst } = self.row(label, || Row::Count { n: 0, worst: Vec::new() }) {
+            *n += 1;
+            worst.push((size, what));
+        }
+    }
+    /// Adds `k` to a count with nothing to list (how many were looked at).
+    fn tally(&mut self, label: &str, k: usize) {
+        if let Row::Count { n, .. } = self.row(label, || Row::Count { n: 0, worst: Vec::new() }) {
+            *n += k;
+        }
+    }
+    /// A least (`lowest`) or greatest value and where.
+    fn measure(&mut self, label: &str, lowest: bool, v: f64, at: String) {
+        if let Row::Measure { v: cur, .. } = self.row(label, || Row::Measure { lowest, v: None }) {
+            if cur.as_ref().is_none_or(|c| if lowest { v < c.0 } else { v > c.0 }) {
+                *cur = Some((v, at));
+            }
+        }
+    }
+    fn print(&mut self) {
+        let top = top();
+        for (label, row) in &mut self.rows {
+            match row {
+                Row::Count { n, worst } => {
+                    say!("    {label}: {n}");
+                    worst.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    for (_, w) in worst.iter().take(top) {
+                        say!("        {w}");
+                    }
+                }
+                Row::Measure { v: Some((v, at)), .. } => say!("    {label}: {v:.1} ({at})"),
+                Row::Measure { v: None, .. } => say!("    {label}: -"),
+            }
+        }
+    }
+    /// Sums counts (and keeps the best measures) into `all`, the report over every world.
+    fn merge_into(&self, all: &mut Report, world: &str) {
+        for (label, row) in &self.rows {
+            match row {
+                Row::Count { n, .. } => all.tally(label, *n),
+                Row::Measure { lowest, v: Some((v, at)) } => all.measure(label, *lowest, *v, format!("{world} {at}")),
+                Row::Measure { lowest, v: None } => {
+                    all.row(label, || Row::Measure { lowest: *lowest, v: None });
+                }
+            }
+        }
+    }
+}
+
+// ---- Geometry. ----
+
+/// Distance from `p` to a closed polygon's edges.
+fn edge_dist(poly: &[P], p: P) -> f64 {
+    let n = poly.len();
+    (0..n).map(|k| seg_dist(p, poly[k], poly[(k + 1) % n])).fold(f64::MAX, f64::min)
+}
+
+/// How far inside a polygon `p` lies (negative outside).
+fn depth(poly: &[P], p: P) -> f64 {
+    let d = edge_dist(poly, p);
+    if contains(poly, p) { d } else { -d }
+}
+
+/// Points every ~`step` ft along a polyline, each with the way its piece runs.
+fn samples(w: &[P], step: f64) -> Vec<(P, P)> {
+    let mut v = Vec::new();
+    for s in w.windows(2) {
+        let l = dist(s[0], s[1]);
+        if l < 1e-6 {
+            continue;
+        }
+        let u = mul(sub(s[1], s[0]), 1.0 / l);
+        let n = (l / step).ceil().max(1.0) as usize;
+        v.extend((0..=n).map(|k| (lerp(s[0], s[1], k as f64 / n as f64), u)));
+    }
+    v
+}
+
+fn segx(a: P, b: P, c: P, d: P) -> bool {
+    let (o1, o2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
+    let (o3, o4) = (cross(sub(d, c), sub(a, c)), cross(sub(d, c), sub(b, c)));
+    o1 * o2 < 0.0 && o3 * o4 < 0.0
+}
+
+fn seg_seg(a: P, b: P, c: P, d: P) -> f64 {
+    if segx(a, b, c, d) {
+        return 0.0;
+    }
+    seg_dist(a, c, d).min(seg_dist(b, c, d)).min(seg_dist(c, a, b)).min(seg_dist(d, a, b))
+}
+
+/// Distance from a segment to a closed polygon's edges.
+fn seg_poly(a: P, b: P, poly: &[P]) -> f64 {
+    let n = poly.len();
+    (0..n).map(|k| seg_seg(a, b, poly[k], poly[(k + 1) % n])).fold(f64::MAX, f64::min)
+}
+
+fn poly_overlap(a: &[P], b: &[P]) -> bool {
+    let (n, m) = (a.len(), b.len());
+    a.iter().any(|p| contains(b, *p)) || b.iter().any(|p| contains(a, *p)) || (0..n).any(|i| (0..m).any(|j| segx(a[i], a[(i + 1) % n], b[j], b[(j + 1) % m])))
+}
+
+/// A footprint shrunk by `d` toward its centroid (cheap; for convex-ish footprints).
+fn shrink(a: &[P], d: f64) -> Vec<P> {
+    let c = centroid(a);
+    a.iter().map(|p| add(c, mul(sub(*p, c), ((len(sub(*p, c)) - d) / len(sub(*p, c)).max(1e-9)).max(0.0)))).collect()
+}
+
+fn bbox(pts: &[P]) -> [f64; 4] {
+    pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])])
+}
+
+fn at(p: P) -> String {
+    format!("({:.0}, {:.0})", p[0], p[1])
+}
+
+// ---- A world: its executor, battlemap chunks kept as made. ----
+
+struct Ctx {
+    ex: Executor,
+    chunks: HashMap<(u32, u32), Rc<Chunk>>,
+}
+
+impl Ctx {
+    fn chunk(&mut self, kx: u32, ky: u32) -> Rc<Chunk> {
+        if let Some(c) = self.chunks.get(&(kx, ky)) {
+            return c.clone();
+        }
+        let c = Rc::new(self.ex.battlemap(TileKey::surface(self.ex.world.geom.max_level, kx, ky)));
+        self.chunks.insert((kx, ky), c.clone());
+        c
+    }
+
+    /// The battlemap squares of the chunks round a rectangle (world ft), with what blocks
+    /// movement as play mode has it: buildings, walls and towers, and blocking objects (a hedge
+    /// every square its piece is drawn across, anything else the squares within half its
+    /// footprint), each only in its own chunk.
+    fn window(&mut self, r: [f64; 4]) -> Win {
+        let size = self.ex.world.geom.tile_size_ft(self.ex.world.geom.max_level);
+        let k = |v: f64| (v / size).floor().max(0.0) as u32;
+        let (kx0, ky0, kx1, ky1) = (k(r[0]), k(r[1]), k(r[2]), k(r[3]));
+        let (cw, ch) = ((kx1 - kx0 + 1) as usize, (ky1 - ky0 + 1) as usize);
+        let (nx, ny) = (cw * SQ, ch * SQ);
+        let mut w = Win { ox: kx0 as f64 * size, oy: ky0 as f64 * size, nx, ny, block: vec![false; nx * ny], street: vec![false; nx * ny], objects: Vec::new() };
+        for cj in 0..ch {
+            for ci in 0..cw {
+                let c = self.chunk(kx0 + ci as u32, ky0 + cj as u32);
+                let idx = |i: usize, j: usize| (cj * SQ + j) * nx + ci * SQ + i;
+                for q in 0..SQ * SQ {
+                    let a = idx(q % SQ, q / SQ);
+                    w.block[a] |= c.building[q] != 0 || matches!(c.urban[q], URBAN_WALL | URBAN_TOWER);
+                    w.street[a] = c.urban[q] == URBAN_STREET;
+                }
+                let mut set = |i: i64, j: i64| {
+                    if i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 {
+                        w.block[idx(i as usize, j as usize)] = true;
+                    }
+                };
+                for o in &c.objects {
+                    let inf = c.info(o);
+                    let (x, y) = (o.x as f64, o.y as f64);
+                    let p = [w.ox + (ci * SQ) as f64 * SQUARE_FT + x * SQUARE_FT, w.oy + (cj * SQ) as f64 * SQUARE_FT + y * SQUARE_FT];
+                    w.objects.push((p, c.name(o).to_string()));
+                    if !inf.blocks_move {
+                        continue;
+                    }
+                    if o.sprite == 0 && o.kind == Kind::Hedge {
+                        let (cs, sn) = (libm::cos(o.rot as f64), libm::sin(o.rot as f64));
+                        let (hl, hw) = (0.49 * o.scale as f64, 0.29 * o.scale as f64);
+                        let mut u = -hl;
+                        while u <= hl + 1e-6 {
+                            let mut v = -hw;
+                            while v <= hw + 1e-6 {
+                                set((x + cs * u - sn * v).floor() as i64, (y + sn * u + cs * v).floor() as i64);
+                                v += 0.1f64.min(hw);
+                            }
+                            u += 0.1f64.min(hl);
+                        }
+                        continue;
+                    }
+                    let reach = (inf.radius as f64 * o.scale as f64 * 0.5).max(0.5);
+                    for j in (y - reach).floor() as i64..=(y + reach).floor() as i64 {
+                        for i in (x - reach).floor() as i64..=(x + reach).floor() as i64 {
+                            let (dx, dy) = (i as f64 + 0.5 - x, j as f64 + 0.5 - y);
+                            if dx * dx + dy * dy <= reach * reach {
+                                set(i, j);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        w
+    }
+}
+
+struct Win {
+    ox: f64,
+    oy: f64,
+    nx: usize,
+    ny: usize,
+    block: Vec<bool>,
+    street: Vec<bool>,
+    /// Every object (world ft) by name.
+    objects: Vec<(P, String)>,
+}
+
+impl Win {
+    fn centre(&self, k: usize) -> P {
+        [self.ox + ((k % self.nx) as f64 + 0.5) * SQUARE_FT, self.oy + ((k / self.nx) as f64 + 0.5) * SQUARE_FT]
+    }
+    fn index(&self, p: P) -> Option<usize> {
+        let (i, j) = (((p[0] - self.ox) / SQUARE_FT).floor(), ((p[1] - self.oy) / SQUARE_FT).floor());
+        (i >= 0.0 && j >= 0.0 && (i as usize) < self.nx && (j as usize) < self.ny).then(|| j as usize * self.nx + i as usize)
+    }
+    /// Open squares reached, square to square, from the open squares `from` picks.
+    fn flood(&self, from: impl Fn(usize) -> bool) -> Vec<bool> {
+        let mut seen = vec![false; self.nx * self.ny];
+        let mut q = VecDeque::new();
+        for k in (0..self.nx * self.ny).filter(|&k| !self.block[k] && from(k)) {
+            seen[k] = true;
+            q.push_back(k);
+        }
+        while let Some(k) = q.pop_front() {
+            for n in self.around(k) {
+                if !seen[n] && !self.block[n] {
+                    seen[n] = true;
+                    q.push_back(n);
+                }
+            }
+        }
+        seen
+    }
+    fn around(&self, k: usize) -> impl Iterator<Item = usize> {
+        let (x, y, nx, ny) = (k % self.nx, k / self.nx, self.nx, self.ny);
+        [(x > 0).then(|| k - 1), (x + 1 < nx).then(|| k + 1), (y > 0).then(|| k - nx), (y + 1 < ny).then(|| k + nx)].into_iter().flatten()
+    }
+    fn edge(&self, k: usize) -> bool {
+        let (x, y) = (k % self.nx, k / self.nx);
+        x == 0 || y == 0 || x == self.nx - 1 || y == self.ny - 1
+    }
+    /// The sizes of the pockets the squares `sealed` picks make (largest first) and where each starts.
+    fn pockets(&self, sealed: &[bool]) -> Vec<(usize, P)> {
+        let mut seen = vec![false; sealed.len()];
+        let mut out = Vec::new();
+        for s in 0..sealed.len() {
+            if !sealed[s] || seen[s] {
+                continue;
+            }
+            seen[s] = true;
+            let (mut stack, mut n) = (vec![s], 0);
+            while let Some(k) = stack.pop() {
+                n += 1;
+                for m in self.around(k) {
+                    if sealed[m] && !seen[m] {
+                        seen[m] = true;
+                        stack.push(m);
+                    }
+                }
+            }
+            out.push((n, self.centre(s)));
+        }
+        out.sort_by(|a, b| b.0.cmp(&a.0));
+        out
+    }
+}
+
+// ---- Castles. ----
+
+/// A castle's bailey and its walls as the checks see them.
+struct Castle<'a> {
+    ring: Vec<P>,
+    /// Walls on the ring (the outer curtain), wholly inside it (an inner curtain), and the rest (the town's).
+    outer: Vec<&'a [P]>,
+    inner: Vec<&'a [P]>,
+    town: Vec<&'a [P]>,
+    /// The castle's gate towers (a town's own castle's in `gate_towers`, one set in the street editor's in `extra_towers`).
+    gate_towers: Vec<P>,
+    /// Gate middles: pairs of its gate towers 52 ft apart.
+    gates: Vec<P>,
+    /// The gate nearest the ring.
+    outer_gate: Option<P>,
+}
+
+impl<'a> Castle<'a> {
+    fn of(l: &'a Layout) -> Option<Castle<'a>> {
+        let ring = l.plazas.iter().find(|p| p.kind == PlazaKind::Bailey)?.pts.clone();
+        let (mut outer, mut inner, mut town) = (Vec::new(), Vec::new(), Vec::new());
+        for w in &l.walls {
+            let s = samples(w, 5.0);
+            let on = s.iter().filter(|x| edge_dist(&ring, x.0) < 1.5).count();
+            if w.iter().all(|p| depth(&ring, *p) > 20.0) {
+                inner.push(w.as_slice());
+            } else if on * 10 >= s.len() * 8 {
+                outer.push(w.as_slice());
+            } else {
+                town.push(w.as_slice());
+            }
+        }
+        let gate_towers: Vec<P> = l.gate_towers.iter().copied().chain(l.extra_towers.iter().filter(|t| t.1).map(|t| t.0)).filter(|p| depth(&ring, *p) > -20.0).collect();
+        let mut gates = Vec::new();
+        for a in 0..gate_towers.len() {
+            for b in a + 1..gate_towers.len() {
+                if (dist(gate_towers[a], gate_towers[b]) - 52.0).abs() < 0.5 {
+                    gates.push(lerp(gate_towers[a], gate_towers[b], 0.5));
+                }
+            }
+        }
+        let outer_gate = gates.iter().copied().min_by(|a, b| depth(&ring, *a).abs().total_cmp(&depth(&ring, *b).abs()));
+        Some(Castle { ring, outer, inner, town, gate_towers, gates, outer_gate })
+    }
+    /// The castle's own way from its gate to a street (class 3, 10 ft wide, from a gate).
+    fn is_way(&self, r: &(Vec<P>, u8, f64)) -> bool {
+        r.1 == 3 && (r.2 - 10.0).abs() < 1e-9 && self.gates.iter().any(|m| dist(r.0[0], *m) < 12.0)
+    }
+    fn curtains(&self) -> impl Iterator<Item = &&'a [P]> {
+        self.outer.iter().chain(self.inner.iter())
+    }
+}
+
+/// Whether a building is a keep (of pieces, or the castle's catalog entry).
+fn is_keep(b: &town::Building) -> bool {
+    !b.parts.is_empty() || (b.func.is_some() && b.func.map(|f| f as usize) == town::catalog::index_of("castle"))
+}
+
+const CASTLE_COUNTS: [&str; 24] = [
+    "castles with no bailey",
+    "castles with no outer gate (no pair of gate towers)",
+    "castles with no keep",
+    "capitals with no inner curtain",
+    "town gates opening into a bailey",
+    "town gates by a castle with fewer than 2 towers",
+    "main streets inside a bailey",
+    "roads inside a bailey (its own way excepted)",
+    "streets or roads crossing a curtain",
+    "baileys open on dry ground (a run of more than 15 ft)",
+    "castles with a curtain 3-30 ft from the town wall along 30 ft+",
+    "castles with a 30-45 ft strip by the town wall",
+    "castles with a 30-45 ft strip by the town wall and no street in it",
+    "castles with towers within 2 ft of each other",
+    "castles with a castle tower within 12 ft of a town tower",
+    "castle buildings on towers",
+    "castle buildings within 4 ft of a wall",
+    "castle buildings overlapping a building",
+    "castle buildings on a street or road",
+    "town buildings in a bailey",
+    "gate ways through or within 5 ft of buildings",
+    "gate ways across walls, towers or water",
+    "outer gates over 20 ft from a street or way",
+    "outer baileys under 48 ft wide, or inner curtains under 80 ft from the outer gate",
+];
+const CASTLE_MORE: [&str; 5] = [
+    "bailey spikes (corners under 35 deg, sides 40 ft+)",
+    "keep pieces of 1,100 sq ft+ with a flat top left open",
+    "duplicate building ids",
+    "motte paths through a building or wall",
+    "objects on a motte above its toe",
+];
+
+/// The castle checks on one layout with a castle (`tag` names it).
+fn castle_checks(world: &World, t0: &T0, l: &Layout, tag: &str, capital: bool, r: &mut Report) {
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    r.tally("castles", 1);
+    let Some(c) = Castle::of(l) else {
+        r.add("castles with no bailey", 1.0, format!("{tag}: no bailey"));
+        return;
+    };
+    let ring = &c.ring;
+    let inner = l.castles.len() > 1;
+    r.tally("castles with an inner curtain", inner as usize);
+    if capital && !inner {
+        r.add("capitals with no inner curtain", area(ring).abs(), format!("{tag}: a capital's castle with no inner curtain, bailey {:.0} sq ft", area(ring).abs()));
+    }
+    if !l.buildings.iter().any(|b| b.ward == Ward::Castle && is_keep(b)) {
+        r.add("castles with no keep", area(ring).abs(), format!("{tag}: no keep in a bailey of {:.0} sq ft at {}", area(ring).abs(), at(centroid(ring))));
+    }
+    let towers = interior::towers(l);
+    // How far a tower reaches from its middle (a square one to its corners).
+    let reach = |t: &(P, f64, bool)| if !t.2 && l.square_tower(t.0).is_some() { t.1 * std::f64::consts::SQRT_2 } else { t.1 };
+    let walls: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
+    let Some(om) = c.outer_gate else {
+        r.add("castles with no outer gate (no pair of gate towers)", 1.0, format!("{tag}: no outer gate, bailey at {}", at(centroid(ring))));
+        return;
+    };
+    // The outer bailey's width and the inner curtain's distance to the outer gate.
+    if inner {
+        let s: Vec<P> = c.inner.iter().flat_map(|w| samples(w, 2.5)).map(|x| x.0).collect();
+        let ring_gap = s.iter().map(|p| depth(ring, *p)).fold(f64::MAX, f64::min);
+        // (Also against the outer curtain as laid, and the town wall where it is the castle's.)
+        let others: Vec<(P, P)> = l.walls.iter().filter(|w| !c.inner.iter().any(|x| std::ptr::eq(*x, w.as_slice()))).flat_map(|w| w.windows(2).map(|q| (q[0], q[1]))).collect();
+        let wall_gap = s.iter().map(|p| others.iter().map(|q| seg_dist(*p, q.0, q.1)).fold(f64::MAX, f64::min)).fold(f64::MAX, f64::min);
+        let gate_gap = s.iter().map(|p| dist(*p, om)).fold(f64::MAX, f64::min);
+        r.measure("least outer bailey width (to its ring)", true, ring_gap, tag.into());
+        r.measure("least outer bailey width (to any other wall)", true, wall_gap, tag.into());
+        r.measure("least inner curtain distance to the outer gate", true, gate_gap, tag.into());
+        if ring_gap < 48.0 || wall_gap < 46.0 || gate_gap < 80.0 {
+            r.add(
+                "outer baileys under 48 ft wide, or inner curtains under 80 ft from the outer gate",
+                80.0 - gate_gap.min(ring_gap),
+                format!("{tag}: outer bailey {ring_gap:.1} ft wide ({wall_gap:.1} to a wall), inner curtain {gate_gap:.1} ft from the outer gate at {}", at(om)),
+            );
+        }
+    }
+    // The outer gate to the nearest street or road (its own way included).
+    let to_street = l.roads.iter().map(|x| &x.0).chain(l.streets.iter()).flat_map(|s| s.windows(2).map(|w| seg_dist(om, w[0], w[1]))).fold(f64::MAX, f64::min);
+    r.measure("greatest outer gate distance to a street or way", false, to_street, tag.into());
+    if to_street > 20.0 {
+        r.add("outer gates over 20 ft from a street or way", to_street, format!("{tag}: outer gate at {} {to_street:.1} ft from any street", at(om)));
+    }
+    // Gate ways: clear of buildings, walls, towers and water.
+    for way in l.roads.iter().filter(|x| c.is_way(x)) {
+        r.tally("gate ways", 1);
+        let (mut near, mut other): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+        for s in way.0.windows(2) {
+            let (a, b) = (s[0], s[1]);
+            for bd in &l.buildings {
+                let d = seg_poly(a, b, &bd.poly);
+                if contains(&bd.poly, a) || contains(&bd.poly, b) || d < 5.0 {
+                    near.push(format!("b:{}:{} ({:?}) {d:.1} ft", l.index, bd.id, bd.ward));
+                }
+            }
+            if walls.iter().any(|q| segx(a, b, q.0, q.1)) {
+                other.push("crosses a wall".into());
+            }
+            for t in &towers {
+                // (Its own gate towers stand either side of its start.)
+                if seg_dist(t.0, a, b) < reach(t) + 3.0 && !(t.2 && dist(t.0, way.0[0]) < 27.0) {
+                    other.push(format!("tower at {} {:.1} ft off", at(t.0), seg_dist(t.0, a, b)));
+                }
+            }
+            let n = (0..=10).filter(|k| wet(lerp(a, b, *k as f64 / 10.0))).count();
+            if n > 0 {
+                other.push(format!("{n}/11 points wet"));
+            }
+        }
+        near.dedup();
+        let length: f64 = way.0.windows(2).map(|s| dist(s[0], s[1])).sum();
+        if !near.is_empty() {
+            r.add("gate ways through or within 5 ft of buildings", near.len() as f64, format!("{tag}: the {length:.0}-ft way from {} by {}", at(way.0[0]), near.join(", ")));
+        }
+        if !other.is_empty() {
+            r.add("gate ways across walls, towers or water", other.len() as f64, format!("{tag}: the {length:.0}-ft way from {}: {}", at(way.0[0]), other.join("; ")));
+        }
+    }
+    // Buildings: ids, town buildings in the bailey, castle buildings on walls, towers, buildings, streets.
+    let mut ids: Vec<u32> = l.buildings.iter().map(|b| b.id).collect();
+    ids.sort();
+    let n_ids = ids.len();
+    ids.dedup();
+    if ids.len() < n_ids {
+        r.add("duplicate building ids", (n_ids - ids.len()) as f64, format!("{tag}: {} ids twice", n_ids - ids.len()));
+    }
+    for b in l.buildings.iter().filter(|b| b.ward != Ward::Castle && contains(ring, centroid(&b.poly))) {
+        r.add("town buildings in a bailey", 1.0, format!("{tag}: b:{}:{} ({:?}) at {}", l.index, b.id, b.ward, at(centroid(&b.poly))));
+    }
+    let ways: Vec<(&Vec<P>, f64, String)> =
+        l.roads.iter().filter(|x| !c.is_way(x)).map(|x| (&x.0, x.2, format!("class {} road", x.1))).chain(l.streets.iter().map(|s| (s, 18.0, "main street".to_string()))).collect();
+    for (bi, b) in l.buildings.iter().enumerate().filter(|(_, b)| b.ward == Ward::Castle) {
+        let name = format!("b:{}:{}", l.index, b.id);
+        let wd = walls.iter().map(|s| if contains(&b.poly, s.0) { -1.0 } else { seg_poly(s.0, s.1, &b.poly) }).fold(f64::MAX, f64::min);
+        r.measure("least castle building distance to a wall", true, wd, format!("{tag} {name}"));
+        if wd < 4.0 {
+            r.add("castle buildings within 4 ft of a wall", 4.0 - wd, format!("{tag}: {name} {wd:.1} ft from a wall at {}", at(centroid(&b.poly))));
+        }
+        for t in &towers {
+            let hit = match l.square_tower(t.0).filter(|_| !t.2) {
+                Some(u) => {
+                    let v = [-u[1], u[0]];
+                    let sq: Vec<P> = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter().map(|(x, y)| add(t.0, add(mul(u, x * t.1), mul(v, y * t.1)))).collect();
+                    poly_overlap(&sq, &b.poly)
+                }
+                None => -depth(&b.poly, t.0) < t.1,
+            };
+            if hit {
+                r.add("castle buildings on towers", t.1 + depth(&b.poly, t.0), format!("{tag}: {name} on the tower at {}", at(t.0)));
+            }
+        }
+        // (Each pair once; castle buildings against each other too.)
+        for (_, o) in l.buildings.iter().enumerate().filter(|(oi, o)| *oi != bi && (o.ward != Ward::Castle || *oi > bi)) {
+            if poly_overlap(&shrink(&b.poly, 0.5), &shrink(&o.poly, 0.5)) {
+                r.add("castle buildings overlapping a building", 1.0, format!("{tag}: {name} overlaps b:{}:{} ({:?}) at {}", l.index, o.id, o.ward, at(centroid(&b.poly))));
+            }
+        }
+        for (pts, w, what) in &ways {
+            let d = pts.windows(2).map(|s| if contains(&b.poly, s[0]) { 0.0 } else { seg_poly(s[0], s[1], &b.poly) }).fold(f64::MAX, f64::min);
+            if d < 0.5 * w - 1.0 {
+                r.add("castle buildings on a street or road", 0.5 * w - d, format!("{tag}: {name} under a {what} ({d:.1} ft from its line) at {}", at(centroid(&b.poly))));
+            }
+        }
+    }
+    // Curtains alongside the town wall: 3-30 ft from it, or 30-45 ft (a strip), along 30 ft or more.
+    let tsegs: Vec<(P, P)> = c.town.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
+    let (mut narrow, mut broad, mut bare): (Option<String>, Option<String>, Option<String>) = (None, None, None);
+    for w in c.curtains() {
+        let (mut run_n, mut run_b) = (0, 0);
+        for (p, u) in samples(w, 5.0) {
+            // The nearest town wall running the same way (within 15 deg), beside the point.
+            let near = tsegs
+                .iter()
+                .filter_map(|&(a, b)| {
+                    let tl = dist(a, b);
+                    let t = dot(sub(p, a), sub(b, a)) / (tl * tl);
+                    (tl > 1.0 && cross(u, mul(sub(b, a), 1.0 / tl)).abs() < 0.26 && t > 0.0 && t < 1.0).then(|| (seg_dist(p, a, b), lerp(a, b, t)))
+                })
+                .min_by(|x, y| x.0.total_cmp(&y.0));
+            let d = near.map_or(f64::MAX, |x| x.0);
+            run_n = if d > 3.0 && d <= 30.0 { run_n + 1 } else { 0 };
+            run_b = if d > 30.0 && d < 45.0 { run_b + 1 } else { 0 };
+            if run_n == 7 && narrow.is_none() {
+                narrow = Some(format!("{tag}: curtain {d:.0} ft from the town wall along 30 ft+ near {}", at(p)));
+            }
+            if run_b == 7 {
+                let mid = lerp(p, near.unwrap().1, 0.5);
+                let street =
+                    l.roads.iter().map(|x| (&x.0, x.2)).chain(l.streets.iter().map(|s| (s, 18.0))).any(|(s, w)| s.windows(2).any(|q| seg_dist(mid, q[0], q[1]) < 0.5 * w + 4.0));
+                broad.get_or_insert_with(|| format!("{tag}: a {d:.0}-ft strip between curtain and town wall near {}", at(p)));
+                if !street {
+                    bare.get_or_insert_with(|| format!("{tag}: a {d:.0}-ft strip with no street between curtain and town wall near {}", at(p)));
+                }
+            }
+        }
+    }
+    for (label, what) in [
+        ("castles with a curtain 3-30 ft from the town wall along 30 ft+", narrow),
+        ("castles with a 30-45 ft strip by the town wall", broad),
+        ("castles with a 30-45 ft strip by the town wall and no street in it", bare),
+    ] {
+        if let Some(w) = what {
+            r.add(label, 1.0, w);
+        }
+    }
+    // The ring closed all round (a wall within 10 ft, a tower or a gate) but on or by water.
+    let mut closed = ring.clone();
+    closed.push(ring[0]);
+    let (mut open, mut run, mut longest, mut first) = (0.0, 0.0f64, 0.0f64, None);
+    for (p, _) in samples(&closed, 5.0) {
+        let wd = walls.iter().map(|&(a, b)| seg_dist(p, a, b)).fold(f64::MAX, f64::min);
+        let shut = wd <= 10.0 || towers.iter().any(|t| dist(t.0, p) < t.1 + 6.0) || c.gates.iter().any(|m| dist(*m, p) < 30.0);
+        let by_water = || {
+            wet(p)
+                || (0..8).any(|k| {
+                    let a = k as f64 * 0.785;
+                    wet(add(p, [12.0 * libm::cos(a), 12.0 * libm::sin(a)]))
+                })
+        };
+        if shut || by_water() {
+            run = 0.0;
+        } else {
+            open += 5.0;
+            run += 5.0;
+            longest = longest.max(run);
+            first.get_or_insert(p);
+        }
+    }
+    r.measure("greatest dry open length of a bailey's ring", false, open, tag.into());
+    if longest > 15.0 {
+        r.add("baileys open on dry ground (a run of more than 15 ft)", open, format!("{tag}: open {open:.0} ft on dry ground (longest {longest:.0}), from {}", at(first.unwrap())));
+    }
+    // Towers on or beside each other near the castle: castle (C: on a curtain, or a castle gate's)
+    // against town (T: on the town wall).
+    let on = |ws: &[&[P]], p: P| ws.iter().any(|w| w.windows(2).any(|s| seg_dist(p, s[0], s[1]) < 2.0));
+    let label = |t: &(P, f64, bool)| {
+        let gate = c.gate_towers.iter().any(|q| dist(*q, t.0) < 1e-6);
+        let castle = gate || on(&c.outer, t.0) || on(&c.inner, t.0);
+        let town = on(&c.town, t.0) && !gate;
+        match (castle, town) {
+            (true, false) => "C",
+            (false, true) => "T",
+            (true, true) => "CT",
+            _ => "?",
+        }
+    };
+    let near_castle: Vec<&(P, f64, bool)> = towers.iter().filter(|t| depth(ring, t.0) > -60.0).collect();
+    let (mut beside, mut crowded): (Option<(f64, String)>, Option<(f64, String)>) = (None, None);
+    for (a, ta) in near_castle.iter().enumerate() {
+        for tb in &near_castle[a + 1..] {
+            let (la, lb) = (label(ta), label(tb));
+            let d = dist(ta.0, tb.0);
+            if (la == "T" && lb == "T") || (ta.2 && tb.2 && (d - 52.0).abs() < 0.5) {
+                continue;
+            }
+            let clear = d - reach(ta) - reach(tb);
+            let what = format!("{tag}: towers at {} ({la}) and {} ({lb}) {clear:.1} ft clear", at(ta.0), at(tb.0));
+            if (la == "T") != (lb == "T") && la != "?" && lb != "?" {
+                r.measure("least clearance, castle tower to town tower", true, clear, tag.into());
+                if clear < 12.0 && beside.as_ref().is_none_or(|b| clear < b.0) {
+                    beside = Some((clear, what));
+                }
+            } else {
+                r.measure("least clearance between castle towers", true, clear, tag.into());
+                if clear < 2.0 && crowded.as_ref().is_none_or(|b| clear < b.0) {
+                    crowded = Some((clear, what));
+                }
+            }
+        }
+    }
+    if let Some((clear, w)) = beside {
+        r.add("castles with a castle tower within 12 ft of a town tower", 12.0 - clear, w);
+    }
+    if let Some((clear, w)) = crowded {
+        r.add("castles with towers within 2 ft of each other", 2.0 - clear, w);
+    }
+    // Town gates by the castle: their towers (where the town has its wall), and whether they open
+    // straight into the bailey.
+    for g in l.gates.iter().filter(|g| depth(ring, **g) > -60.0) {
+        let n = l.gate_towers.iter().filter(|t| dist(**t, *g) < 30.0).count();
+        if n < 2 && !c.town.is_empty() {
+            r.add("town gates by a castle with fewer than 2 towers", 1.0, format!("{tag}: the town gate at {} has {n} towers", at(*g)));
+        }
+        let cd = c.curtains().flat_map(|w| w.windows(2)).map(|q| seg_dist(*g, q[0], q[1])).fold(f64::MAX, f64::min);
+        r.measure("least town gate distance to a curtain", true, cd, tag.into());
+        let into = (0..36).flat_map(|k| [15.0, 25.0, 35.0, 45.0].map(|rr| (k, rr))).map(|(k, rr)| {
+            let a = k as f64 * std::f64::consts::TAU / 36.0;
+            add(*g, [rr * libm::cos(a), rr * libm::sin(a)])
+        });
+        let into = into.into_iter().find(|p| {
+            depth(ring, *p) > 4.0 && !walls.iter().any(|s| segx(*g, *p, s.0, s.1) || seg_dist(*p, s.0, s.1) < 4.5) && !towers.iter().any(|t| seg_dist(t.0, *g, *p) < t.1)
+        });
+        if let Some(p) = into {
+            r.add("town gates opening into a bailey", 1.0, format!("{tag}: the town gate at {} opens into the bailey (to {})", at(*g), at(p)));
+        }
+    }
+    // Streets and roads inside the bailey, or across its curtains.
+    let csegs: Vec<(P, P)> = c.curtains().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
+    for (pts, _, what) in &ways {
+        let inside = samples(pts, 5.0).iter().filter(|x| depth(ring, x.0) > 3.0).count() as f64 * 5.0;
+        if inside > 15.0 {
+            let label = if what == "main street" { "main streets inside a bailey" } else { "roads inside a bailey (its own way excepted)" };
+            r.add(label, inside, format!("{tag}: a {what} runs {inside:.0} ft inside the bailey, from {}", at(pts[0])));
+        }
+        for s in pts.windows(2) {
+            if let Some(q) = csegs.iter().find(|q| segx(s[0], s[1], q.0, q.1)) {
+                r.add("streets or roads crossing a curtain", 1.0, format!("{tag}: a {what} crosses a curtain near {}", at(q.0)));
+            }
+        }
+    }
+    // Spikes: a ring corner sharper than 35 deg between sides of 40 ft or more.
+    let ccw = area(ring) > 0.0;
+    let rn = ring.len();
+    for k in 0..rn {
+        let (pv, cn, nx) = (ring[(k + rn - 1) % rn], ring[k], ring[(k + 1) % rn]);
+        let (a, b) = (sub(pv, cn), sub(nx, cn));
+        let (la, lb) = (len(a), len(b));
+        if la < 40.0 || lb < 40.0 {
+            continue;
+        }
+        let deg = libm::acos((dot(a, b) / (la * lb)).clamp(-1.0, 1.0)).to_degrees();
+        if (cross(sub(cn, pv), sub(nx, cn)) > 0.0) == ccw && deg < 35.0 {
+            r.add("bailey spikes (corners under 35 deg, sides 40 ft+)", 35.0 - deg, format!("{tag}: a {deg:.0}-deg corner at {}, sides {la:.0} and {lb:.0} ft", at(cn)));
+        }
+    }
+    // Keep tops: a flat top of 1,100 sq ft or more is roofed.
+    for b in l.buildings.iter().filter(|b| b.ward == Ward::Castle && !b.parts.is_empty()) {
+        for (p, &top) in b.parts.iter().zip(&town::keep_tops(b, world.stream("keep.tops"))) {
+            let flat = match p.kind {
+                town::PartKind::Body if p.poly.len() == 4 => {
+                    let (x, y) = (dist(p.poly[0], p.poly[1]), dist(p.poly[1], p.poly[2]));
+                    let (long, wide) = (x.max(y), x.min(y));
+                    (long > 1.35 * wide).then(|| wide * wide.min(0.42 * long))
+                }
+                town::PartKind::Forebuilding | town::PartKind::Wing => Some(area(&p.poly).abs()),
+                _ => None,
+            };
+            if let Some(f) = flat.filter(|f| *f >= 1100.0 && top == 0) {
+                r.add("keep pieces of 1,100 sq ft+ with a flat top left open", f, format!("{tag}: b:{}:{} a {:?} of {f:.0} sq ft", l.index, b.id, p.kind));
+            }
+        }
+    }
+    // Mottes: the path up clear of buildings and walls.
+    for m in &l.mottes {
+        let (a, b) = (add(m.at, mul(m.way, m.top_r - 8.0)), add(m.at, mul(m.way, m.foot_r + 6.0)));
+        let hit =
+            l.buildings.iter().filter(|bd| bd.parts.is_empty()).any(|bd| contains(&bd.poly, b) || seg_poly(a, b, &bd.poly) == 0.0) || walls.iter().any(|s| segx(a, b, s.0, s.1));
+        if hit {
+            r.add("motte paths through a building or wall", 1.0, format!("{tag}: the path up the motte at {}", at(m.at)));
+        }
+    }
+}
+
+/// Objects on a motte above its toe (the last 8 ft of its foot), from the battlemap.
+fn motte_objects(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
+    for m in &l.mottes {
+        let w = ctx.window([m.at[0] - m.foot_r, m.at[1] - m.foot_r, m.at[0] + m.foot_r, m.at[1] + m.foot_r]);
+        r.tally("mottes", 1);
+        let (mut above, mut toe) = (Vec::new(), 0);
+        for (p, name) in &w.objects {
+            let d = dist(*p, m.at);
+            if d < m.foot_r - 8.0 {
+                above.push(format!("{name} at {}", at(*p)));
+            } else if d < m.foot_r {
+                toe += 1;
+            }
+        }
+        r.tally("objects on a motte's toe (its last 8 ft)", toe);
+        if !above.is_empty() {
+            r.add("objects on a motte above its toe", above.len() as f64, format!("{tag}: the motte at {}: {}", at(m.at), above.join(", ")));
+        }
+    }
+}
+
+fn castles(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["castles", "castles with an inner curtain", "gate ways"]);
+    r.counts(&CASTLE_COUNTS);
+    r.counts(&CASTLE_MORE);
+    r.counts(&["mottes", "objects on a motte's toe (its last 8 ft)"]);
+    let n = town::layout_count(&ctx.ex.t0);
+    for li in 0..n {
+        let l = town::layout(&ctx.ex.world, &ctx.ex.t0, li);
+        if l.castles.is_empty() || l.site {
+            continue;
+        }
+        let capital = li < ctx.ex.t0.settlements.len() && ctx.ex.t0.settlements[li].capital;
+        let tag = format!("L{li} {:?}", l.tier);
+        castle_checks(&ctx.ex.world, &ctx.ex.t0, &l, &tag, capital, r);
+        motte_objects(ctx, &l, &tag, r);
+    }
+}
+
+// ---- Play reach. ----
+
+fn reach(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&[
+        "castles flooded",
+        "castle buildings checked",
+        "castle buildings cut off",
+        "outer gates not reached",
+        "bailey squares open",
+        "bailey squares sealed",
+        "baileys over 3% sealed",
+    ]);
+    r.counts(&["parks flooded", "park squares open", "park squares sealed", "parks with sealed squares"]);
+    let n = town::layout_count(&ctx.ex.t0);
+    for li in 0..n {
+        let l = town::layout(&ctx.ex.world, &ctx.ex.t0, li);
+        if !l.castles.is_empty() && !l.site {
+            castle_reach(ctx, &l, &format!("L{li} {:?}", l.tier), r);
+        }
+        for (pi, park) in l.parks.iter().enumerate() {
+            let b = bbox(&park.pts);
+            let w = ctx.window([b[0] - 60.0, b[1] - 60.0, b[2] + 60.0, b[3] + 60.0]);
+            let in_park: Vec<bool> = (0..w.nx * w.ny).map(|k| contains(&park.pts, w.centre(k))).collect();
+            let seen = w.flood(|k| !in_park[k] || w.edge(k));
+            let sealed: Vec<bool> = (0..w.nx * w.ny).map(|k| in_park[k] && !w.block[k] && !seen[k]).collect();
+            let n_sealed = sealed.iter().filter(|s| **s).count();
+            r.tally("parks flooded", 1);
+            r.tally("park squares open", (0..w.nx * w.ny).filter(|&k| in_park[k] && !w.block[k]).count());
+            r.tally("park squares sealed", n_sealed);
+            if n_sealed > 0 {
+                let p = w.pockets(&sealed);
+                r.add(
+                    "parks with sealed squares",
+                    n_sealed as f64,
+                    format!("L{li} park {pi} ({:?}): {n_sealed} squares sealed, the largest pocket {} at {}", park.kind, p[0].0, at(p[0].1)),
+                );
+            }
+        }
+    }
+}
+
+fn castle_reach(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
+    let Some(c) = Castle::of(l) else { return };
+    let (cc, cr) = l.castles[0];
+    let w = ctx.window([cc[0] - cr - 60.0, cc[1] - cr - 60.0, cc[0] + cr + 60.0, cc[1] + cr + 60.0]);
+    // From outside: the window's edge and its streets.
+    let seen = w.flood(|k| w.street[k] || w.edge(k));
+    let bailey: Vec<bool> = (0..w.nx * w.ny).map(|k| contains(&c.ring, w.centre(k))).collect();
+    let open = (0..w.nx * w.ny).filter(|&k| bailey[k] && !w.block[k]).count();
+    let sealed: Vec<bool> = (0..w.nx * w.ny).map(|k| bailey[k] && !w.block[k] && !seen[k]).collect();
+    let n_sealed = sealed.iter().filter(|s| **s).count();
+    r.tally("castles flooded", 1);
+    r.tally("bailey squares open", open);
+    r.tally("bailey squares sealed", n_sealed);
+    if n_sealed > 0 {
+        let p = w.pockets(&sealed);
+        r.measure("largest sealed pocket in a bailey (squares)", false, p[0].0 as f64, format!("{tag} at {}", at(p[0].1)));
+        if n_sealed * 100 > 3 * open {
+            r.add("baileys over 3% sealed", n_sealed as f64, format!("{tag}: {n_sealed} of {open} squares sealed, the largest pocket {} at {}", p[0].0, at(p[0].1)));
+        }
+    }
+    if let Some(g) = c.outer_gate {
+        let reached = w.index(g).is_some_and(|k| seen[k] || w.around(k).any(|m| seen[m]));
+        if !reached {
+            r.add("outer gates not reached", 1.0, format!("{tag}: the outer gate at {}", at(g)));
+        }
+    }
+    // Castle buildings in the bailey: some open square within 6 ft of the outline reached.
+    for b in l.buildings.iter().filter(|b| b.ward == Ward::Castle && b.poly.iter().all(|p| depth(&c.ring, *p) > -10.0)) {
+        let bb = bbox(&b.poly);
+        let (i0, j0) = (w.index([bb[0] - 6.0, bb[1] - 6.0]), w.index([bb[2] + 6.0, bb[3] + 6.0]));
+        let (Some(k0), Some(k1)) = (i0, j0) else { continue };
+        let near: Vec<usize> = (k0 / w.nx..=k1 / w.nx)
+            .flat_map(|j| (k0 % w.nx..=k1 % w.nx).map(move |i| j * w.nx + i))
+            .filter(|&k| {
+                let p = w.centre(k);
+                !contains(&b.poly, p) && edge_dist(&b.poly, p) < 6.0
+            })
+            .collect();
+        if near.is_empty() {
+            continue;
+        }
+        r.tally("castle buildings checked", 1);
+        if !near.iter().any(|&k| seen[k] && !w.block[k]) {
+            r.add(
+                "castle buildings cut off",
+                1.0,
+                format!("{tag}: b:{}:{} ({}) at {}", l.index, b.id, b.func.map_or("home", |f| town::catalog::CATALOG[f as usize].name), at(centroid(&b.poly))),
+            );
+        }
+    }
+}
+
+// ---- Interiors. ----
+
+/// A layout's roofed buildings by 100-ft bucket, for "does this door open into a neighbour's wall".
+fn building_buckets(l: &Layout) -> HashMap<(i64, i64), Vec<usize>> {
+    let mut buckets: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (k, b) in l.buildings.iter().enumerate().filter(|(_, b)| b.structure == town::Structure::Roofed) {
+        let r = bbox(&b.poly);
+        for by in (r[1] / 100.0).floor() as i64..=(r[3] / 100.0).floor() as i64 {
+            for bx in (r[0] / 100.0).floor() as i64..=(r[2] / 100.0).floor() as i64 {
+                buckets.entry((bx, by)).or_default().push(k);
+            }
+        }
+    }
+    buckets
+}
+
+const CIRCULATION: [&str; 6] = ["hall", "corridor", "landing", "great hall", "mess hall", "guardroom"];
+
+/// The corridor rule on a floor of 8 rooms or more with a hall or corridor: the most rooms a room is
+/// from one (through the doors; `front`: the room the front door opens into counted as one too),
+/// with the way to it. `None` where the rule doesn't apply.
+fn corridor_hops(lv: &interior::Level, front: bool) -> Option<(usize, String)> {
+    let entry = lv.doors.iter().find(|d| d.kind == "front").and_then(|d| d.rooms.iter().copied().find(|&r| r >= 0));
+    let circ = |r: usize| CIRCULATION.contains(&lv.rooms[r].kind);
+    if lv.rooms.len() < 8 || !(0..lv.rooms.len()).any(circ) {
+        return None;
+    }
+    let n = lv.rooms.len();
+    let (mut hops, mut from) = (vec![usize::MAX; n], vec![usize::MAX; n]);
+    let mut q = VecDeque::new();
+    for r in (0..n).filter(|&r| circ(r) || (front && entry == Some(r as i16))) {
+        hops[r] = 0;
+        q.push_back(r);
+    }
+    while let Some(r) = q.pop_front() {
+        for d in &lv.doors {
+            let [a, b] = d.rooms;
+            let other = if a == r as i16 {
+                b
+            } else if b == r as i16 {
+                a
+            } else {
+                continue;
+            };
+            if other >= 0 && hops[other as usize] == usize::MAX {
+                hops[other as usize] = hops[r] + 1;
+                from[other as usize] = r;
+                q.push_back(other as usize);
+            }
+        }
+    }
+    let worst = (0..n).filter(|&r| lv.rooms[r].squares > 0 && hops[r] != usize::MAX).max_by_key(|&r| (hops[r], std::cmp::Reverse(r)))?;
+    let mut path = vec![lv.rooms[worst].kind.to_string()];
+    let mut k = worst;
+    while from[k] != usize::MAX {
+        k = from[k];
+        path.push(format!("{}{}", lv.rooms[k].kind, if entry == Some(k as i16) { " (front)" } else { "" }));
+    }
+    path.reverse();
+    Some((hops[worst], path.join(" > ")))
+}
+
+/// The rules every interior keeps (vital's `check_interior`), each broken one as a line.
+fn check_interior(world: &World, t0: &T0, l: &Layout, si: usize, id: &str, it: &interior::Interior, buckets: &HashMap<(i64, i64), Vec<usize>>) -> Vec<String> {
+    let mut bad: Vec<String> = Vec::new();
+    macro_rules! must {
+        ($c:expr, $($t:tt)*) => {
+            if !$c {
+                bad.push(format!($($t)*));
+            }
+        };
+    }
+    let (nx, ny) = (it.nx, it.ny);
+    for lv in &it.levels {
+        for (ri, r) in lv.rooms.iter().enumerate() {
+            must!(r.shape == 0 || interior::shape::fits(&lv.cells, nx, ri as i16, r.shape), "{}: the {} drawn shaped ({}) off its squares", lv.name, r.kind, r.shape);
+        }
+    }
+    if !it.outlines.is_empty() {
+        let inset = |x: f32, y: f32| {
+            it.outlines
+                .iter()
+                .map(|o| {
+                    (0..o.len())
+                        .map(|k| {
+                            let (a, b) = (o[k], o[(k + 1) % o.len()]);
+                            ((b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0])) / (b[0] - a[0]).hypot(b[1] - a[1]).max(1e-9)
+                        })
+                        .fold(f32::MAX, f32::min)
+                })
+                .fold(f32::MIN, f32::max)
+        };
+        let half = interior::WALL_HALF as f32;
+        for lv in &it.levels {
+            if let Some(k) = (0..nx * ny).find(|&k| lv.cells[k] >= 0 && inset((k % nx) as f32 + 0.5, (k / nx) as f32 + 0.5) < half + 0.1 - 1e-3) {
+                bad.push(format!("{}: square {},{} only {:.2} inside its outer wall", lv.name, k % nx, k / nx, inset((k % nx) as f32 + 0.5, (k / nx) as f32 + 0.5)));
+            }
+            let st = it.stairs;
+            let room = (0..nx * ny).any(|k| {
+                let (i, j) = ((k % nx) as f32, (k / nx) as f32);
+                lv.cells[k] >= 0 && [(i, j), (i + 1.0, j), (i, j + 1.0), (i + 1.0, j + 1.0)].iter().all(|c| inset(c.0, c.1) >= half - 1e-3)
+            });
+            if lv.has_stairs && room && !world.file.edits.designs.contains_key(id) {
+                let d = [(st[0], st[1]), (st[0] + st[2], st[1]), (st[0], st[1] + st[3]), (st[0] + st[2], st[1] + st[3])]
+                    .iter()
+                    .map(|&(x, y)| inset(x as f32, y as f32))
+                    .fold(f32::MAX, f32::min);
+                must!(d >= half - 1e-3, "{}: the outer wall cuts the stairs {st:?} ({d:.2} in)", lv.name);
+            }
+        }
+        let g = &it.levels[it.entry_level];
+        // (A keep's towers in grid units: a square of wall round each one's room.)
+        let own = id.strip_prefix(&format!("b:{si}:")).and_then(|k| k.parse::<usize>().ok()).and_then(|k| l.building(k));
+        let towers: Vec<Vec<P>> = own
+            .map(|b| {
+                b.parts
+                    .iter()
+                    .filter(|p| matches!(p.kind, town::PartKind::Tower { .. }))
+                    .map(|p| {
+                        p.poly
+                            .iter()
+                            .map(|q| {
+                                let d = sub(*q, it.origin);
+                                [dot(d, it.axis) / 5.0, dot(d, it.across) / 5.0]
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let by_tower = |v: &[f32; 2]| {
+            let p = [v[0] as f64, v[1] as f64];
+            towers.iter().any(|t| contains(t, p) || (0..t.len()).any(|k| seg_dist(p, t[k], t[(k + 1) % t.len()]) <= 1.0))
+        };
+        for v in it.outlines.iter().flatten() {
+            let d = (0..nx * ny)
+                .filter(|&k| g.cells[k] >= 0)
+                .map(|k| {
+                    let (i, j) = ((k % nx) as f32, (k / nx) as f32);
+                    let (dx, dy) = ((i - v[0]).max(v[0] - i - 1.0).max(0.0), (j - v[1]).max(v[1] - j - 1.0).max(0.0));
+                    (dx * dx + dy * dy).sqrt()
+                })
+                .fold(f32::MAX, f32::min);
+            if d > if by_tower(v) { 1.5 } else { 1.0 } {
+                bad.push(format!("its outer wall stands {d:.2} squares off its floor at {v:?}"));
+                break;
+            }
+        }
+    }
+    must!(it.levels.len() >= 2 || world.file.edits.designs.contains_key(id), "only {} level", it.levels.len());
+    if id.starts_with("b:") {
+        match interior::design::design_of(world, t0, id, false) {
+            Ok((d, _)) => match interior::design::problems(world, t0, id, &d) {
+                Ok((built, problems)) => {
+                    must!(problems.is_empty(), "as a design: {problems:?}");
+                    must!(serde_json::to_string(&built).unwrap() == serde_json::to_string(it).unwrap(), "built again from its design, it differs");
+                }
+                Err(e) => bad.push(format!("as a design: {e}")),
+            },
+            Err(e) => bad.push(format!("no design: {e}")),
+        }
+    }
+    let chapels = it.levels.iter().flat_map(|lv| lv.rooms.iter()).filter(|r| r.kind == "chapel").count();
+    must!(chapels <= 1, "{chapels} chapels");
+    let spirals: Vec<Vec<(u16, u16)>> = it.levels.iter().map(|lv| lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| (f.x, f.y)).collect()).collect();
+    if let Some(first) = spirals.iter().find(|v| !v.is_empty()) {
+        must!(spirals.iter().filter(|v| !v.is_empty()).all(|v| v == first), "spiral stairs move between levels");
+        must!(spirals.iter().filter(|v| !v.is_empty()).count() >= 2, "spiral stairs on one level only");
+    }
+    for lv in &it.levels {
+        for (ri, _) in lv.rooms.iter().enumerate().filter(|(_, r)| r.kind == "cell") {
+            let sq: Vec<usize> = (0..nx * ny).filter(|&k| lv.cells[k] == ri as i16).collect();
+            if sq.is_empty() {
+                continue;
+            }
+            let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % nx), a.1.max(k % nx)));
+            let (y0, y1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / nx), a.1.max(k / nx)));
+            must!(x1 - x0 < 3 && y1 - y0 < 3, "{}: a {}x{} ft cell", lv.name, 5 * (x1 - x0 + 1), 5 * (y1 - y0 + 1));
+            let doors: Vec<i16> = lv.doors.iter().filter(|d| d.rooms.contains(&(ri as i16))).map(|d| if d.rooms[0] == ri as i16 { d.rooms[1] } else { d.rooms[0] }).collect();
+            must!(!doors.is_empty(), "{}: a cell with no door", lv.name);
+            must!(doors.iter().all(|&o| o < 0 || lv.rooms[o as usize].kind != "cell"), "{}: a cell entered through another cell", lv.name);
+        }
+    }
+    const DRINKING: [&str; 10] = ["Inn", "Tavern", "Alehouse", "Fine dining", "Brewery", "Winery", "Distillery", "Gambling den", "Smugglers' den", "Caravanserai"];
+    if DRINKING.contains(&it.function) {
+        let g = &it.levels[it.entry_level];
+        let bars = g.furniture.iter().filter(|f| f.kind == "bar").count();
+        let tables = g.furniture.iter().filter(|f| f.kind == "table" || f.kind == "booth_table").count();
+        must!(bars >= 1 && tables >= 2, "{bars} bars and {tables} tables on the ground floor");
+        let public = |r: i16| r >= 0 && matches!(g.rooms[r as usize].kind, "common room" | "taproom");
+        match g.doors.iter().find(|d| d.kind == "front") {
+            Some(front) => must!(public(front.rooms[0]), "the front door opens into the {}", g.rooms.get(front.rooms[0].max(0) as usize).map_or("?", |r| r.kind)),
+            None => bad.push("no front door".into()),
+        }
+        let stair_room = g.cells[it.stairs[1] * nx + it.stairs[0]];
+        must!(public(stair_room), "the stairs are in the {}", g.rooms[stair_room.max(0) as usize].kind);
+    }
+    let st = it.stairs;
+    let on_stairs = |i: usize, j: usize| i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3];
+    let door_sq = |d: &interior::Door| -> [(isize, isize); 2] {
+        let (x0, y0, x1) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize, d.a[0].max(d.b[0]) as isize);
+        if x0 == x1 { [(x0 - 1, y0), (x0, y0)] } else { [(x0, y0 - 1), (x0, y0)] }
+    };
+    let inb = |(i, j): (isize, isize)| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny;
+    for lv in &it.levels {
+        if lv.has_stairs {
+            let out = (st[1]..st[1] + st[3]).any(|j| (st[0]..st[0] + st[2]).any(|i| lv.cells[j * nx + i] < 0));
+            must!(!out, "{}: stairs outside the building", lv.name);
+        }
+        let fronts = lv.doors.iter().filter(|d| d.kind == "front").count();
+        must!(fronts == if lv.z == 0 { 1 } else { 0 }, "{}: {fronts} front doors", lv.name);
+        if let Some(d) = lv.doors.iter().find(|d| d.kind == "front") {
+            match door_sq(d).into_iter().find(|&(i, j)| !inb((i, j)) || lv.cells[j as usize * nx + i as usize] < 0) {
+                Some(outside) => {
+                    let p = interior::to_world(it, outside.0 as f64 + 0.5, outside.1 as f64 + 0.5);
+                    let own = id.strip_prefix(&format!("b:{si}:")).and_then(|k| k.parse::<usize>().ok());
+                    let hit = buckets
+                        .get(&((p[0] / 100.0).floor() as i64, (p[1] / 100.0).floor() as i64))
+                        .into_iter()
+                        .flatten()
+                        .find(|&&k| Some(k) != own && contains(&l.buildings[k].poly, p));
+                    must!(hit.is_none(), "the front door opens into building {}", hit.unwrap());
+                }
+                None => bad.push(format!("{}: the front door isn't on an outside wall", lv.name)),
+            }
+        }
+        let mut blocked = vec![false; nx * ny];
+        let mut misplaced = None;
+        for f in &lv.furniture {
+            for j in f.y as usize..(f.y + f.h) as usize {
+                for i in f.x as usize..(f.x + f.w) as usize {
+                    if lv.has_stairs && on_stairs(i, j) {
+                        misplaced.get_or_insert(format!("{}: {} on the stairs", lv.name, f.name));
+                    }
+                    if lv.doors.iter().any(|d| door_sq(d).contains(&(i as isize, j as isize))) {
+                        misplaced.get_or_insert(format!("{}: {} in a doorway", lv.name, f.name));
+                    }
+                    if f.blocks_move {
+                        blocked[j * nx + i] = true;
+                    }
+                }
+            }
+        }
+        bad.extend(misplaced);
+        let door_between = |a: (usize, usize), b: (usize, usize)| {
+            lv.doors.iter().any(|d| {
+                let s = door_sq(d);
+                s.contains(&(a.0 as isize, a.1 as isize)) && s.contains(&(b.0 as isize, b.1 as isize))
+            })
+        };
+        let mut starts: Vec<usize> =
+            if lv.has_stairs { vec![st[1] * nx + st[0]] } else { lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).collect() };
+        if starts.is_empty() && lv.z == 0 {
+            starts =
+                lv.doors.iter().filter(|d| d.rooms[1] < 0).flat_map(door_sq).filter(|&p| inb(p)).map(|(i, j)| j as usize * nx + i as usize).filter(|&k| lv.cells[k] >= 0).collect();
+        }
+        let mut seen = vec![false; nx * ny];
+        let mut stack = starts.clone();
+        for &k in &starts {
+            seen[k] = true;
+        }
+        while let Some(k) = stack.pop() {
+            let (i, j) = (k % nx, k / nx);
+            for (di, dj) in [(1isize, 0isize), (-1, 0), (0, 1), (0, -1)] {
+                let (a, b) = (i as isize + di, j as isize + dj);
+                if !inb((a, b)) {
+                    continue;
+                }
+                let q = b as usize * nx + a as usize;
+                if seen[q] || lv.cells[q] < 0 || blocked[q] || (lv.cells[q] != lv.cells[k] && !door_between((i, j), (a as usize, b as usize))) {
+                    continue;
+                }
+                seen[q] = true;
+                stack.push(q);
+            }
+        }
+        for d in &lv.doors {
+            must!(door_sq(d).into_iter().filter(|&p| inb(p)).any(|(i, j)| seen[j as usize * nx + i as usize]), "{}: a {} door is cut off", lv.name, d.kind);
+        }
+        for (ri, room) in lv.rooms.iter().enumerate() {
+            let open = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && !blocked[k]);
+            let reached = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && seen[k]);
+            must!(!open || reached, "{}: the {} is unreachable", lv.name, room.kind);
+        }
+        if let Some((hops, path)) = corridor_hops(lv, true).filter(|h| h.0 > 2) {
+            bad.push(format!("{}: {} rooms from a corridor ({path})", lv.name, hops - 1));
+        }
+    }
+    bad
+}
+
+fn interiors(ctx: &mut Ctx, keeps: bool, r: &mut Report) {
+    r.counts(&["building interiors checked", "tower interiors checked", "interiors breaking a rule", "functions with interiors breaking a rule"]);
+    r.counts(&["floors the corridor rule applies to", "floors with a room over 2 rooms from a corridor", "the same, the front room not counted as a corridor"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    // Per function: checked, failing.
+    let mut by_func: BTreeMap<&'static str, (usize, usize)> = BTreeMap::new();
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        let buckets = building_buckets(&l);
+        let mut ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && (!keeps || is_keep(b))).map(|b| format!("b:{li}:{}", b.id)).collect();
+        if !keeps {
+            ids.extend((0..interior::towers(&l).len()).map(|k| format!("t:{li}:{k}")));
+        }
+        for id in ids {
+            let Some(it) = interior::generate_id(world, t0, &id) else { continue };
+            r.tally(if id.starts_with('b') { "building interiors checked" } else { "tower interiors checked" }, 1);
+            let bad = check_interior(world, t0, &l, li, &id, &it, &buckets);
+            let e = by_func.entry(it.function).or_default();
+            e.0 += 1;
+            if !bad.is_empty() {
+                e.1 += 1;
+                r.add("interiors breaking a rule", bad.len() as f64, format!("{id} ({}): {}", it.function, bad.join("; ")));
+            }
+            for lv in &it.levels {
+                if let Some((hops, _)) = corridor_hops(lv, true) {
+                    r.tally("floors the corridor rule applies to", 1);
+                    if hops > 2 {
+                        r.add("floors with a room over 2 rooms from a corridor", hops as f64, format!("{id} ({}) {}", it.function, lv.name));
+                    }
+                }
+                if let Some((hops, path)) = corridor_hops(lv, false).filter(|h| h.0 > 2) {
+                    r.add("the same, the front room not counted as a corridor", hops as f64, format!("{id} ({}) {}: {} rooms ({path})", it.function, lv.name, hops - 1));
+                }
+            }
+        }
+    }
+    for (f, (n, b)) in by_func.iter().filter(|f| f.1.1 > 0) {
+        r.add("functions with interiors breaking a rule", *b as f64, format!("{f}: {b} of {n}"));
+    }
+}
+
+// ---- The street editor. ----
+
+/// Castles set in the street editor at the town wall, walls on and off.
+fn editor(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&[
+        "placements",
+        "placements with no castle",
+        "placements with any non-castle building changed",
+        "non-castle buildings changed or gone, walls off against on",
+        "new non-castle ids with the walls off",
+        "towns with a castle, walls taken down",
+        "their non-castle buildings changed or gone",
+    ]);
+    r.counts(&["castles", "castles with an inner curtain", "gate ways"]);
+    r.counts(&CASTLE_COUNTS);
+    r.counts(&CASTLE_MORE[..4]);
+    let places: usize = std::env::var("PLACES").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let (base, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let with = |ci: usize, edit: worldgen::world::TownEdit| {
+        let mut file = base.file.clone();
+        file.edits.towns.insert(town::wards::key(ci), edit);
+        World::new(file).unwrap()
+    };
+    let n = t0.settlements.len();
+    let mut placed = 0;
+    for ci in (0..n).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town) {
+        let g = town::layout(base, t0, ci);
+        // Every town castle's town with its walls taken down: no other building changes.
+        if !g.castles.is_empty() && !g.walls.is_empty() {
+            if let Ok((Some(edit), _)) = town::wards::change(base, t0, ci, &serde_json::from_str(r#"{"walls":false}"#).unwrap()) {
+                let off = town::layout(&with(ci, edit), t0, ci);
+                r.tally("towns with a castle, walls taken down", 1);
+                same_buildings(&g, &off, &format!("#{ci} (its castle, walls down)"), "their non-castle buildings changed or gone", r);
+            }
+        }
+        if placed >= places || !g.castles.is_empty() || g.walls.is_empty() {
+            continue;
+        }
+        let Ok(plan) = town::wards::plan_json(base, t0, ci) else { continue };
+        // The patches in town nearest the town wall (by their middle), up to 3, 250 ft apart.
+        let pt = |v: &serde_json::Value| [v["at"][0].as_f64().unwrap(), v["at"][1].as_f64().unwrap()];
+        let to_wall = |p: P| g.walls.iter().flat_map(|w| w.windows(2)).map(|s| seg_dist(p, s[0], s[1])).fold(f64::MAX, f64::min);
+        let mut near: Vec<&serde_json::Value> = plan["patches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["in_town"] == true && matches!(p["ward"].as_str(), Some("common" | "craft" | "merchant" | "patriciate" | "slum")))
+            .collect();
+        near.sort_by(|a, b| to_wall(pt(a)).total_cmp(&to_wall(pt(b))));
+        let mut picked: Vec<&serde_json::Value> = Vec::new();
+        for p in near {
+            if picked.len() < 3 && picked.iter().all(|q| dist(pt(q), pt(p)) > 250.0) {
+                picked.push(p);
+            }
+        }
+        for patch in picked {
+            let mut both = Vec::new();
+            for walls in ["", r#","walls":false"#] {
+                let req = format!(r#"{{"patches":[{{"patch":{},"ward":"castle"}}]{walls}}}"#, patch["patch"]);
+                let Ok((Some(edit), _)) = town::wards::change(base, t0, ci, &serde_json::from_str(&req).unwrap()) else { continue };
+                let world = with(ci, edit);
+                let l = town::layout(&world, t0, ci);
+                let tag = format!("#{ci} p{} walls {}", patch["patch"], if walls.is_empty() { "on" } else { "off" });
+                if l.castles.is_empty() {
+                    r.add("placements with no castle", 1.0, format!("{tag}: no castle"));
+                } else {
+                    castle_checks(&world, t0, &l, &tag, false, r);
+                }
+                both.push(l);
+            }
+            if both.len() == 2 {
+                placed += 1;
+                r.tally("placements", 1);
+                let tag = format!("#{ci} p{}", patch["patch"]);
+                let changed = same_buildings(&both[0], &both[1], &tag, "non-castle buildings changed or gone, walls off against on", r);
+                let new = both[1].buildings.iter().filter(|y| y.ward != Ward::Castle && !both[0].buildings.iter().any(|x| x.id == y.id)).count();
+                if new > 0 {
+                    r.add("new non-castle ids with the walls off", new as f64, format!("{tag}: {new} new ids"));
+                }
+                if changed + new > 0 {
+                    r.add("placements with any non-castle building changed", (changed + new) as f64, format!("{tag}: {changed} changed or gone, {new} new"));
+                }
+            }
+        }
+    }
+}
+
+/// Non-castle buildings of `a` by id in `b`: the same outline, ward, function, kind, name and floors.
+/// Returns how many changed or went.
+fn same_buildings(a: &Layout, b: &Layout, tag: &str, label: &str, r: &mut Report) -> usize {
+    let by_id: HashMap<u32, &town::Building> = b.buildings.iter().map(|y| (y.id, y)).collect();
+    let mut n = 0;
+    for x in a.buildings.iter().filter(|x| x.ward != Ward::Castle) {
+        let what = match by_id.get(&x.id) {
+            Some(y) if y.poly == x.poly && y.ward == x.ward && y.func == x.func && y.residential == x.residential && y.name == x.name && y.floors == x.floors => continue,
+            Some(y) => format!("{:?}/{:?} -> {:?}/{:?}, moved {:.1} ft", x.ward, x.func, y.ward, y.func, dist(centroid(&x.poly), centroid(&y.poly))),
+            None => "gone".into(),
+        };
+        n += 1;
+        r.add(label, 1.0, format!("{tag}: id {} {what} at {}", x.id, at(centroid(&x.poly))));
+    }
+    n
+}
+
+// ---- Hashes. ----
+
+fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
+    use worldgen::core::hash::fnv64;
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        let castle = if !l.castles.is_empty() || l.buildings.iter().any(|b| b.ward == Ward::Castle) { "C" } else { "-" };
+        println!("{label} L:{li} {:016x} {castle} {}", fnv64(format!("{l:?}").as_bytes()), l.buildings.len());
+        r.tally("layouts hashed", 1);
+        let mut ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed).map(|b| format!("b:{li}:{}", b.id)).collect();
+        ids.extend((0..interior::towers(&l).len()).map(|k| format!("t:{li}:{k}")));
+        for id in ids {
+            match interior::generate_id(world, t0, &id) {
+                Some(it) => println!("{label} {id} {:016x} {castle} {}", fnv64(serde_json::to_string(&it).unwrap().as_bytes()), it.function.replace(' ', "_")),
+                None => println!("{label} {id} none {castle}"),
+            }
+            r.tally("interiors hashed", 1);
+        }
+    }
+}
+
+fn main() {
+    const MODES: [&str; 6] = ["castles", "reach", "interiors", "editor", "hash", "all"];
+    let args = common::args();
+    let keeps = args.pos.iter().any(|a| a == "--keeps");
+    let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
+    for a in args.pos.iter().filter(|a| !MODES.contains(&a.as_str()) && *a != "--keeps" && !common::is_world(a)) {
+        eprintln!("{a}: not a mode, a seed or a world file, ignored");
+    }
+    if modes.is_empty() || modes.contains(&"all") {
+        modes.retain(|m| *m != "all");
+        for m in ["castles", "reach", "interiors", "editor"] {
+            if !modes.contains(&m) {
+                modes.push(m);
+            }
+        }
+    }
+    QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
+    let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
+    let worlds = if worlds.is_empty() { vec!["1".into(), "2".into(), "3".into()] } else { worlds };
+    let mut all: BTreeMap<&str, Report> = BTreeMap::new();
+    let start = Instant::now();
+    for arg in &worlds {
+        let t = Instant::now();
+        let mut ctx = Ctx { ex: Executor::new(common::world(arg)), chunks: HashMap::new() };
+        let label = common::label(arg);
+        say!("{label}: {} settlements, T0 {:.1} s", ctx.ex.t0.settlements.len(), t.elapsed().as_secs_f64());
+        for &mode in &modes {
+            let t = Instant::now();
+            let mut r = Report::default();
+            match mode {
+                "castles" => castles(&mut ctx, &mut r),
+                "reach" => reach(&mut ctx, &mut r),
+                "interiors" => interiors(&mut ctx, keeps, &mut r),
+                "editor" => editor(&mut ctx, &mut r),
+                _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
+            }
+            say!("  {mode} ({:.1} s)", t.elapsed().as_secs_f64());
+            r.print();
+            r.merge_into(all.entry(mode).or_default(), &label);
+        }
+    }
+    if worlds.len() > 1 {
+        say!("all {} worlds ({:.1} s)", worlds.len(), start.elapsed().as_secs_f64());
+        for &mode in &modes {
+            if mode != "hash" {
+                say!("  {mode}");
+                all.get_mut(mode).unwrap().print();
+            }
+        }
+    }
+}
