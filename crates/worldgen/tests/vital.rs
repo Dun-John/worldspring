@@ -826,8 +826,8 @@ fn world_sea(ex: &Executor) -> f64 {
 
 /// Interiors (M5): every enterable building and wall/gate tower in a sample of settlements (the capital, a city,
 /// a town, a village, a wizard's tower) opens with at least two levels, stairs on the same
-/// squares on every level, one front door on the ground floor, no furniture on a doorway or
-/// the stairs, and every door and room reachable from the front door across open floor
+/// squares on every level, one front door on the ground floor, no furniture on a doorway (but a
+/// low dais, walked over) or the stairs, and every door and room reachable from the front door across open floor
 /// (stairs join the levels); inns, taverns, breweries and the like have a bar and at least two
 /// tables on the ground floor. Each interior generates within the 300 ms budget.
 #[test]
@@ -842,7 +842,7 @@ fn interiors_guarantee() {
     if let Some(p) = t0.pois.iter().position(|p| p.kind == worldgen::t0::settle::PoiKind::Tower) {
         picks.push(t0.settlements.len() + p);
     }
-    let (mut checked, mut worst_ms, mut drinking, mut towers, mut cells) = (0, 0.0f64, 0, 0, 0);
+    let (mut checked, mut worst_ms, mut drinking, mut towers, mut cells, mut thrones_looked) = (0, 0.0f64, 0, 0, 0, 0);
     for si in picks {
         let l = town::layout(&world, &t0, si);
         // Buildings, then wall and gate towers.
@@ -859,8 +859,19 @@ fn interiors_guarantee() {
             drinking += drinks as usize;
             cells += n;
             checked += 1;
+            // Thrones only in a castle's buildings and a palace.
+            if let Some(b) = id.strip_prefix(&format!("b:{si}:")).and_then(|k| k.parse::<usize>().ok()).and_then(|k| l.building(k)) {
+                let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
+                let throned = b.keep || b.ward == town::catalog::Ward::Castle || key == Some("castle") || key == Some("palace");
+                let it = interior::generate_id(&world, &t0, &id).unwrap();
+                for lv in &it.levels {
+                    assert!(throned || !lv.furniture.iter().any(|f| matches!(f.kind, "throne" | "throne_dais")), "{id} ({}) {}: a throne outside a castle or a palace", it.function, lv.name);
+                }
+                thrones_looked += 1;
+            }
         }
     }
+    assert!(thrones_looked > 500, "too few buildings looked at for thrones ({thrones_looked})");
     // Every wizard's tower is round inside: its outer wall drawn round, its rooms round.
     let mut round = 0;
     for p in t0.pois.iter().enumerate().filter(|(_, p)| p.kind == worldgen::t0::settle::PoiKind::Tower).map(|(p, _)| t0.settlements.len() + p) {
@@ -1051,8 +1062,9 @@ fn castle_ground(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layou
 /// to every building in it and all but a few squares of its baileys (`castle_reach`); its keep (the
 /// castle) is made of convex pieces whose union is its footprint, stands clear of the curtain, and
 /// inside has a room in each of its towers on every floor (round in a round tower) with a spiral
-/// stair in its middle, reached through one way in at most (the rest of the tower its wall), and
-/// keeps every rule interiors keep (`check_interior`).
+/// stair in its middle, reached through one way in at most (the rest of the tower its wall), keeps
+/// every rule interiors keep (`check_interior`), and has its great hall furnished as a whole: the
+/// throne dais at its far end, nothing shutting a square of it off.
 fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout, si: usize, open_halls: &mut usize, closed_halls: &mut usize) {
     use worldgen::interior;
     use worldgen::town::{self, PartKind, Structure, geom};
@@ -1172,6 +1184,44 @@ fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout
         }
         assert!(it.outlines.len() >= b.parts.len(), "{tag}: {} outline parts for {} pieces", it.outlines.len(), b.parts.len());
         check_interior(world, t0, l, si, &format!("b:{si}:{}", b.id), &building_buckets(l));
+        // Its great hall furnished as a whole (`interior::hall`): its throne dais at the far end of
+        // the hall (from the screens to the dais end), and no square of its floor shut off by what
+        // stands on it.
+        let plans = interior::hall_plans(world, t0, si, b.id as usize);
+        let plan = plans.iter().find(|p| it.levels[p.level].rooms[p.room as usize].kind == "great hall").unwrap_or_else(|| panic!("{tag} ({}): its great hall not furnished as one", kind.name()));
+        let lv = &it.levels[plan.level];
+        let f = plan.frame;
+        let dais = lv.furniture.iter().find(|d| d.kind == "throne_dais" && lv.cells[d.y as usize * nx + d.x as usize] == plan.room).unwrap_or_else(|| panic!("{tag} ({}): no throne dais in its hall", kind.name()));
+        let far = [(dais.x, dais.y), (dais.x + dais.w - 1, dais.y + dais.h - 1)].iter().map(|&(x, y)| f.local(x as isize, y as isize).0).max().unwrap();
+        assert!(far >= f.len as isize - 3, "{tag} ({}): the throne dais {} rows from the far end of its hall", kind.name(), f.len as isize - 1 - far);
+        let mut blocked = vec![false; nx * ny];
+        for it in lv.furniture.iter().filter(|it| it.blocks_move) {
+            for j in it.y as usize..(it.y + it.h) as usize {
+                for i in it.x as usize..(it.x + it.w) as usize {
+                    blocked[j * nx + i] = true;
+                }
+            }
+        }
+        let door_sq = |d: &interior::Door| {
+            let (x0, y0, x1) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize, d.a[0].max(d.b[0]) as isize);
+            if x0 == x1 { [(x0 - 1, y0), (x0, y0)] } else { [(x0, y0 - 1), (x0, y0)] }
+        };
+        let ways: Vec<usize> = lv.doors.iter().flat_map(door_sq).filter(|&(i, j)| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny).map(|(i, j)| j as usize * nx + i as usize).filter(|&k| lv.cells[k] == plan.room).collect();
+        let mut seen = vec![false; nx * ny];
+        let mut stack = ways[..1.min(ways.len())].to_vec();
+        for &k in &stack {
+            seen[k] = true;
+        }
+        while let Some(k) = stack.pop() {
+            let (i, j) = (k % nx, k / nx);
+            for (a, c) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                if a < nx && c < ny && !seen[c * nx + a] && lv.cells[c * nx + a] == plan.room && !blocked[c * nx + a] {
+                    seen[c * nx + a] = true;
+                    stack.push(c * nx + a);
+                }
+            }
+        }
+        assert!(ways.iter().all(|&k| seen[k]) && (0..nx * ny).all(|k| lv.cells[k] != plan.room || blocked[k] || seen[k]), "{tag} ({}): its hall's furniture shuts part of it off", kind.name());
     }
     // (A castle laid out by a town or drawn by hand keeps its keep.)
     assert!(keeps >= 1 || !l.buildings.iter().any(|b| b.func == Some(fi)), "#{si}: its keep is not made of pieces");
@@ -1639,7 +1689,8 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
             for j in f.y as usize..(f.y + f.h) as usize {
                 for i in f.x as usize..(f.x + f.w) as usize {
                     assert!(!lv.has_stairs || !on_stairs(i, j), "{tag} {}: {} on the stairs", lv.name, f.name);
-                    assert!(!lv.doors.iter().any(|d| door_sq(d).contains(&(i as isize, j as isize))), "{tag} {}: {} in a doorway", lv.name, f.name);
+                    // (A platform, walked over, may lie in a doorway.)
+                    assert!(interior::hall::is_platform(f.kind) || !lv.doors.iter().any(|d| door_sq(d).contains(&(i as isize, j as isize))), "{tag} {}: {} in a doorway", lv.name, f.name);
                     if f.blocks_move {
                         blocked[j * nx + i] = true;
                     }
@@ -2244,9 +2295,9 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     // Furnished: props go where they leave everything reachable.
     let mut f = d.clone();
     let had = f.levels[0].items.len();
-    f.furnish(0, 0, 7);
+    f.furnish(world, t0, &id, 0, 0, 7);
     f.levels[0].rooms[0].kind = "armory".into();
-    f.furnish(0, 0, 7);
+    f.furnish(world, t0, &id, 0, 0, 7);
     assert!(f.levels[0].items.len() > had, "{id}: the armory got nothing");
     assert!(f.problems(world, t0, &id).unwrap().1.iter().all(|p| !p.blocking), "{id}: furnishing broke it");
     // A design travels as an edit op (the app's, an agent's) and comes back as it was.

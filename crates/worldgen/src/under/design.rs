@@ -507,11 +507,12 @@ impl SiteDesign {
         }
     }
 
-    /// Room `room` of level `level` furnished from its kit (a boss chamber's set piece) where
-    /// that fits round what is already there; `seed` picks the arrangement.
-    pub fn furnish(&mut self, level: usize, room: usize, seed: u64) {
+    /// Room `room` of level `level` of site `id` furnished from its kit (a boss chamber's set
+    /// piece; a building's, `interior::design::furnish`) where that fits round what is already
+    /// there; `seed` picks the arrangement.
+    pub fn furnish(&mut self, world: &World, t0: &T0, id: &str, level: usize, room: usize, seed: u64) {
         if self.is_building() {
-            return crate::interior::design::furnish(self, level, room, seed);
+            return crate::interior::design::furnish(self, world, t0, id, level, room, seed);
         }
         let (nx, ny) = (self.nx as usize, self.ny as usize);
         let kind = self.under_kind().unwrap_or(UnderKind::Dungeon);
@@ -1065,6 +1066,9 @@ pub fn design_json(world: &World, t0: &T0, id: &str, design: Option<&str>, actio
         }
         if let Some(f) = action.get("furnish") {
             d.furnish(
+                world,
+                t0,
+                id,
                 f["level"].as_u64().unwrap_or(0) as usize,
                 f["room"].as_u64().unwrap_or(0) as usize,
                 f["seed"].as_u64().unwrap_or(0),

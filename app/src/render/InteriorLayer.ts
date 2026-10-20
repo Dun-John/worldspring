@@ -8,7 +8,7 @@ import { OPEN_BELOW, ROOF_SLOPE, type Interior, type InteriorItem, type Interior
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
-import { drawFurniture, drawUnderProp, houseOf, looksOf, ORIENTED, UNDER_DRAWN, VARIED } from './furniture';
+import { drawFurniture, drawUnderProp, houseOf, looksOf, ORIENTED, PLATFORMS, UNDER_DRAWN, VARIED } from './furniture';
 import { ITEM_PX, ItemAtlas } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
@@ -60,7 +60,12 @@ const quad = () =>
     indexBuffer: new Uint32Array([0, 1, 2, 0, 2, 3]),
   }));
 
-/** Floor colour by room kind. */
+/** The piece on square (i, j) of a level: what stands on a platform before the platform. */
+function itemAt(lv: InteriorLevel, i: number, j: number): InteriorItem | undefined {
+  const on = (f: InteriorItem) => i >= f.x && i < f.x + f.w && j >= f.y && j < f.y + f.h;
+  return lv.furniture.find((f) => on(f) && !PLATFORMS.has(f.kind)) ?? lv.furniture.find(on);
+}
+
 /** One of `n` variants (four for most) for an item at grid square (x, y). */
 function itemVariant(x: number, y: number, n = 4): number {
   const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
@@ -70,6 +75,7 @@ function itemVariant(x: number, y: number, n = 4): number {
 /** Banners, whose look is a house: one per building unless set. */
 const BANNERS = new Set(['wall_banner', 'standing_banner']);
 
+/** Floor colour by room kind. */
 function floorColor(kind: string, z: number, natural = false, raise = 0): number {
   if (natural) {
     if (kind === 'boss chamber') return 0x7d7064;
@@ -436,7 +442,7 @@ export class InteriorLayer {
     const out: Move[] = [];
     const at = this.toWorld(i + 0.5, j + 0.5);
     const level = (li: number, dir: 'up' | 'down', what?: string): Move => ({ kind: 'level', label: `${cap(what ?? `go ${dir}`)} to ${this.levelName(li)}`, level: li, from: it.id, at });
-    const item = lv.furniture.find((f) => i >= f.x && i < f.x + f.w && j >= f.y && j < f.y + f.h);
+    const item = itemAt(lv, i, j);
     const link = lv.links?.find((k) => k.x === i && k.y === j);
     // (A renamed site goes by its name.)
     const named = link && InteriorLayer.names[link.to];
@@ -609,7 +615,7 @@ export class InteriorLayer {
     const room = lv.cells[j * it.nx + i];
     if (room < 0) return null;
     const onStairs = i >= it.stairs[0] && i < it.stairs[0] + it.stairs[2] && j >= it.stairs[1] && j < it.stairs[1] + it.stairs[3];
-    const item = lv.furniture.find((f) => i >= f.x && i < f.x + f.w && j >= f.y && j < f.y + f.h);
+    const item = itemAt(lv, i, j);
     let object: SquareInfo['object'] = null;
     if (item) {
       const linked = lv.links?.some((k) => k.x === i && k.y === j);
@@ -781,7 +787,8 @@ export class InteriorLayer {
     // (Underground, the shader paints sewage and lava channels.)
     const atlas = InteriorLayer.renderer ? ItemAtlas.for(InteriorLayer.renderer) : null;
     const items = new Container();
-    for (const f of lv.furniture) {
+    // (A platform under what stands on it.)
+    for (const f of [...lv.furniture].sort((a, b) => +PLATFORMS.has(b.kind) - +PLATFORMS.has(a.kind))) {
       if (this.underground && (f.kind === 'sewage' || f.kind === 'lava')) continue;
       // Marks where a tunnel leaves the section: the next section is drawn on from there.
       if (this.tile && f.kind === 'continues') continue;

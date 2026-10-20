@@ -3,7 +3,7 @@
 // are run-length encoded in the design; `Level` holds one level decoded while it changes.
 // Walls, doors' rooms and the rules a site must keep are worked out by the generator (Ask op
 // `design`), never here.
-import type { DesignLevel, SiteDesign } from '../../gen/protocol';
+import { PLATFORMS, type DesignLevel, type SiteDesign } from '../../gen/protocol';
 
 /** Items that are ways: in from the surface, up and down a level. */
 export const WAYS = ['exit', 'up', 'down'];
@@ -87,25 +87,29 @@ export function cycleDoor(d: SiteDesign, li: number, x: number, y: number, side:
 
 /** The prop at a square (not a way), if any. */
 export function propAt(d: SiteDesign, li: number, x: number, y: number): number {
-  return d.levels[li].items.findIndex((f) => !WAYS.includes(f.kind) && covers(f, x, y));
+  // (What stands on a platform before the platform.)
+  const items = d.levels[li].items;
+  const on = items.findIndex((f) => !WAYS.includes(f.kind) && !PLATFORMS.has(f.kind) && covers(f, x, y));
+  return on >= 0 ? on : items.findIndex((f) => !WAYS.includes(f.kind) && covers(f, x, y));
 }
 
-/** Whether a piece fits at x, y (w × h squares) on a level: `bad` off the grid, off the floor, on
- * another piece (but `ignore`, the one being moved) or on a building's stair block; `doorway` where it
- * fits but stands in a doorway, which the design check will complain of (in a building any piece,
- * underground one that `blocks` the way); else `ok`. */
-export function fits(d: SiteDesign, li: number, x: number, y: number, w: number, h: number, ignore = -1, blocks = true): 'ok' | 'doorway' | 'bad' {
+/** Whether a piece (of `kind`) fits at x, y (w × h squares) on a level: `bad` off the grid, off the floor,
+ * on another piece (but `ignore`, the one being moved; a piece may stand on a platform, `PLATFORMS`, and a
+ * platform go under pieces, not on another platform) or on a building's stair block; `doorway` where it fits but
+ * stands in a doorway, which the design check will complain of (in a building any piece but a platform, walked
+ * over; underground one that `blocks` the way); else `ok`. */
+export function fits(d: SiteDesign, li: number, x: number, y: number, w: number, h: number, ignore = -1, blocks = true, kind = ''): 'ok' | 'doorway' | 'bad' {
   const lv = d.levels[li];
   if (!lv || x < 0 || y < 0 || x + w > d.nx || y + h > d.ny) return 'bad';
   const cells = decode(lv.cells, d.nx * d.ny);
   const st = isBuilding(d) && lv.has_stairs ? d.stairs : undefined;
   for (let j = y; j < y + h; j++) {
     for (let i = x; i < x + w; i++) {
-      if (cells[j * d.nx + i] < 0 || lv.items.some((f, k) => k !== ignore && covers(f, i, j))) return 'bad';
+      if (cells[j * d.nx + i] < 0 || lv.items.some((f, k) => k !== ignore && covers(f, i, j) && PLATFORMS.has(f.kind) === PLATFORMS.has(kind))) return 'bad';
       if (st && i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3]) return 'bad';
     }
   }
-  if (!isBuilding(d) && !blocks) return 'ok';
+  if (isBuilding(d) ? PLATFORMS.has(kind) : !blocks) return 'ok';
   for (const [dx, dy, side] of lv.doors) {
     const e = doorEdge(dx, dy, side);
     if ([e.a, e.b].some(([i, j]) => i >= x && i < x + w && j >= y && j < y + h)) return 'doorway';
@@ -115,7 +119,7 @@ export function fits(d: SiteDesign, li: number, x: number, y: number, w: number,
 
 /** Put a piece down where it fits (in a doorway too: the check says so); false if it doesn't. */
 export function addProp(d: SiteDesign, li: number, item: Item): boolean {
-  if (fits(d, li, item.x, item.y, item.w, item.h) === 'bad') return false;
+  if (fits(d, li, item.x, item.y, item.w, item.h, -1, true, item.kind) === 'bad') return false;
   d.levels[li].items.push(item);
   return true;
 }
@@ -124,7 +128,7 @@ export function addProp(d: SiteDesign, li: number, item: Item): boolean {
  * before); false if it doesn't fit there. */
 export function moveProp(d: SiteDesign, li: number, index: number, next: Item): boolean {
   const lv = d.levels[li];
-  if (!lv?.items[index] || fits(d, li, next.x, next.y, next.w, next.h, index) === 'bad') return false;
+  if (!lv?.items[index] || fits(d, li, next.x, next.y, next.w, next.h, index, true, next.kind) === 'bad') return false;
   lv.items[index] = next;
   return true;
 }

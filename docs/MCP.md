@@ -1046,7 +1046,24 @@ level -1: Cellar
   garrison on the floors above; no storey on the squares of the one below; tower rooms of their own kinds (an
   `oratory` among them). A shell keep's yard (and what is open over it) is drawn round, and so is the gallery
   round it on the floor above. Where `open to below` meets a gallery, passage or landing the wall is a
-  railing: it stops a step, not the eye.
+  railing: it stops a step, not the eye. A small tower keep (a body under 7 squares long or 5 across) has its
+  stair against the end wall in a landing across it, an entrance hall over the stores, the great hall above
+  and a room or two by the landing on each floor over it.
+- Great halls are furnished as one composition about the axis from the end they are entered at to the far
+  end: a castle's (its throne dais of stone steps and gilt thrones in a capital, a pair, and in rich cities,
+  else of timber, now and then with a lesser chair), a town hall's, a guild's, a harbor master's or an
+  auction house's (a `low_dais` with a `chair_of_office` at its middle), a noble estate's (a timber
+  `low_dais` carrying the `high_table`, the chair of office behind its middle), a barracks' mess hall and
+  any other hall (a guard post's, an orphanage's...: tables only). The dais stands on the axis against the
+  far wall, a low dais as wide as the tables' lanes (a door on the far wall may open onto it: it is walked
+  over), a throne dais a row in from the wall where a door opens there behind it (the way round it); a
+  `carpet_runner` up the axis to it; long tables with benches both sides, pillar pairs where a column is free
+  by the long walls (off the rows of the hearth, of what hangs on the walls and of the doors there, out of
+  every door's way, the way by the wall kept clear), standing banners and braziers either side of a throne,
+  a castle's high table before the dais or beside it, wall banners and tapestries along the long walls, all mirrored across the axis; the hearth on a
+  long wall. Every banner in a castle's buildings flies the castle's one house; an open hall's minstrels'
+  gallery holds a `musicians_corner`. Thrones stand only in castles and palaces; `furnish` in a design
+  furnishes a room as the generator would in that building (its great hall as a whole, in its style).
 - `grid:` as for a site, `.` outside the walls.
 - `doors:` `x,y e|s|w|n` is a door on the east, south, west or north edge of square x,y; `secret` makes a door
   between rooms a secret door; on an outside wall `front` (one, on the ground floor) or `back`. `doors: auto`
@@ -1055,8 +1072,10 @@ level -1: Cellar
   `oven`, `shelf`, `bookcase`, `chest`, `wardrobe`, `barrel`, `crate`, `workbench`, `forge`, `anvil`, `altar`,
   `pew`, `statue`, `rug`, `couch`, `desk`, `cage`, `spiral_stair`… (the designer's furniture list shows them
   all, with cover and whether they block movement); for great halls and ballrooms (the designer's "Great hall"
-  group; nothing generated puts them down yet): `throne_dais` (w×2 against a wall, difficult ground, half
-  cover), `chair_of_office`, `high_table`, `carpet_runner` and `dance_floor` (walked over), `tapestry` and
+  group): `throne_dais` (w×2 against a wall, difficult ground, half cover), `low_dais` (a platform 1 ft
+  high, difficult ground: the one piece another may stand on, a chair of office or a high table on it; it
+  may lie in a doorway),
+  `chair_of_office`, `high_table`, `carpet_runner` and `dance_floor` (walked over), `tapestry` and
   `wall_banner` (hung on the wall they stand against, walked under), `standing_banner` (blocks movement, not
   sight), `font`, `cloister_well`, `harpsichord`, `musicians_corner` (difficult ground), `refreshment_table`;
   indoor props, with the rules they have underground:
@@ -1072,7 +1091,7 @@ level -1: Cellar
   gilt thrones and a cloth of estate on the wall, 3-5 on a plain timber platform with oak thrones); a
   `wall_banner` and a `standing_banner` 0-7, a house's colours (the same number on both, so a hall's banners
   can share one house; a banner with no variant flies its building's own house, so every banner left to
-  itself in one building matches). A look past a piece's last is refused.
+  itself in one building matches); a `low_dais` 0 stone, 1 timber. A look past a piece's last is refused.
 - Room kinds as the generator names rooms in buildings: `main room`, `kitchen`, `bedroom`, `common room`,
   `storeroom`, `shop`, `workshop`, `forge`, `nave`, `great hall`, `guardroom`, `study`, `library`… A kind it
   doesn't know becomes a chamber named as written.

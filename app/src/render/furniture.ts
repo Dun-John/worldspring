@@ -2,7 +2,7 @@
 // corners and slightly uneven edges, ink outlines, lit from the screen's NW (given in grid axes). Drawn
 // into the item atlas once per look (InteriorLayer.itemKey), in squares at the item's grid position.
 import type { Graphics } from 'pixi.js';
-import type { InteriorItem } from '../gen/protocol';
+import { PLATFORMS, type InteriorItem } from '../gen/protocol';
 
 const INK = 0x1d1a14;
 /** Ink outline and inner line widths, in squares (about 3 and 1.6 px at 64 px a square). */
@@ -1727,6 +1727,35 @@ function throneDais(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: 
   }
 }
 
+/** Low dais, its back to the far wall (w×h): a single low step other pieces stand on (`PLATFORMS`), of a piece with
+ * the throne dais's platform, no carpet: `v` 0 dressed stone as the throne dais's steps, laid in blocks; 1 the throne
+ * dais's timber platform, pale boards laid front to back, its front beam dark and pegged. Its riser shows dark on
+ * the sides away from the light and it casts a clear drop shadow, so it reads as raised off the floor. */
+function lowDais(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, back: [number, number]) {
+  const { along, len, rect, at } = frame(f, back);
+  const wid = along ? f.h : f.w;
+  const stone = v % 2 === 0;
+  const r = rect(0.04, 0.04, len - 0.04, wid - 0.04);
+  castShadow(g, quad(r, rnd, 0), light, stone ? 0.24 : 0.3);
+  if (stone) {
+    board(g, r, [0x6a6256, 0xaca290, 0xc8bea8], light, rnd, along, 0.1, 0);
+    // (Its blocks: joints across it about a square apart, a joint along its middle where it is deep.)
+    const n = Math.max(1, Math.round(len));
+    for (let k = 1; k < n; k++) {
+      const u = (len * k) / n + (rnd() - 0.5) * 0.08;
+      g.moveTo(...at(u, 0.16)).lineTo(...at(u, wid - 0.16));
+    }
+    if (wid >= 2) g.moveTo(...at(0.16, wid / 2)).lineTo(...at(len - 0.16, wid / 2));
+    g.stroke({ width: LINE, color: 0x7c7468, alpha: 0.9 });
+  } else {
+    const face = board(g, r, [0x4e3420, 0xa67c4c, 0xc49a66], light, rnd, !along, 0.12, 1);
+    planks(g, face, !along, Math.max(4, Math.round(len * 3)), 0x6a4a2c, rnd);
+    const front = wid - 0.04;
+    g.poly(quad(rect(0.04, front - 0.12, len - 0.04, front), rnd, 0.003)).fill(OAK[0]).stroke({ width: LINE, color: INK });
+    for (let u = 0.25; u < len - 0.1; u += Math.max(0.5, (len - 0.5) / Math.round((len - 0.5) / 0.7))) g.circle(...at(u, front - 0.06), 0.02).fill(OAK[2]).stroke({ width: 0.008, color: INK });
+  }
+}
+
 /** Chair of office, its back to the wall, on a small square step (stone or timber): a high-backed carved chair seen
  * from above as a chair is, its thick back with ball finials and a carved gilt cartouche, two arms running forward
  * to scrolled ends past the seat's front, the cushion in a guild's colour between them, the step showing in front;
@@ -2741,12 +2770,15 @@ function cloisterWell(g: Graphics, f: InteriorItem, light: Light, v: number, rnd
  * pew's away from the altar, a booth seat's away from its table. */
 export const ORIENTED = new Set([
   'shelf', 'bookcase', 'hearth', 'oven', 'forge', 'workbench', 'counter', 'bar', 'keg_rack', 'bed', 'couch', 'sideboard', 'pew', 'booth_seat', 'altar', 'statue', 'throne', 'alchemy_bench', 'weapon_rack', 'stage',
-  'throne_dais', 'chair_of_office', 'high_table', 'tapestry', 'wall_banner', 'musicians_corner',
+  'throne_dais', 'chair_of_office', 'high_table', 'tapestry', 'wall_banner', 'musicians_corner', 'low_dais',
 ]);
+
+/** Platforms other pieces stand on, drawn under them. */
+export { PLATFORMS };
 
 /** Furniture with other than four looks (`interior::item_looks`): the throne dais's three seatings in stone and
  * gilt, then on timber; a banner's house (`HOUSES`). */
-const LOOKS: Record<string, number> = { throne_dais: 6, wall_banner: HOUSES.length, standing_banner: HOUSES.length };
+const LOOKS: Record<string, number> = { throne_dais: 6, wall_banner: HOUSES.length, standing_banner: HOUSES.length, low_dais: 2 };
 
 /** How many looks a piece of furniture has (`Item::variant` 0 to this - 1). */
 export const looksOf = (kind: string): number => LOOKS[kind] ?? 4;
@@ -2756,6 +2788,7 @@ export function lookName(kind: string, v: number): string {
   if (kind === 'wall_banner' || kind === 'standing_banner') return HOUSES[v % HOUSES.length].name;
   if (kind === 'throne_dais') return `${['One throne', 'Two thrones', 'A throne and a lesser chair'][v % 3]}, ${v < 3 ? 'stone and gilt' : 'timber'}`;
   if (kind === 'tapestry') return ['A stag hunt', 'A unicorn', 'Ships by a castle', 'A rider and a castle'][v % 4];
+  if (kind === 'low_dais') return ['Stone', 'Timber'][v % 2];
   return `Look ${v + 1}`;
 }
 
@@ -2768,7 +2801,7 @@ export const VARIED = new Set([
   'vat', 'cauldron', 'alchemy_bench', 'weapon_rack', 'rack', 'cage', 'winch', 'telescope', 'barricade',
   'trapdoor', 'spiral_stair', 'link_down',
   'throne_dais', 'carpet_runner', 'chair_of_office', 'high_table', 'tapestry', 'wall_banner', 'standing_banner', 'font', 'cloister_well',
-  'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table',
+  'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'low_dais',
 ]);
 
 /** Draws `f` if it is building furniture drawn here; false otherwise. */
@@ -2926,6 +2959,9 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       break;
     case 'throne_dais':
       throneDais(g, f, light, v, rnd, back ?? [0, -1]);
+      break;
+    case 'low_dais':
+      lowDais(g, f, light, v, rnd, back ?? [0, -1]);
       break;
     case 'carpet_runner':
       carpetRunner(g, f, v, rnd);

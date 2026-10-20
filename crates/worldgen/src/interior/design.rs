@@ -280,10 +280,10 @@ fn door_squares(d: &Door) -> [(isize, isize); 2] {
 /// The rules every building interior keeps (generated ones are held to them in tests/vital.rs):
 /// one ground floor with one front door; doors to the outside only there, onto open ground; the
 /// stair block on floor on every level it reaches; squares only inside the footprint; no item
-/// off the floor, on another, on the stairs or in a doorway; every room and door reached from
-/// the stairs (above them, from the spiral stairs; a ground floor without either, from its doors
-/// to the outside) around whatever blocks movement; the ways to other sites (`want`) in place on
-/// the deepest cellar (a building with such a way has a cellar).
+/// off the floor, on another, on the stairs or in a doorway (but a platform, walked over); every
+/// room and door reached from the stairs (above them, from the spiral stairs; a ground floor
+/// without either, from its doors to the outside) around whatever blocks movement; the ways to
+/// other sites (`want`) in place on the deepest cellar (a building with such a way has a cellar).
 pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
     let (nx, ny) = (it.nx, it.ny);
     let mut out = Vec::new();
@@ -333,20 +333,25 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
         let mut blocked = vec![false; nx * ny];
         let doorway: Vec<(isize, isize)> = lv.doors.iter().flat_map(door_squares).collect();
         let mut bad: Option<((usize, usize), String)> = None;
+        // (A low dais is a platform: one piece may stand on each of its squares, `hall::is_platform`;
+        // walked over, it may lie in a doorway.)
+        let mut under = vec![false; nx * ny];
         for f in &lv.furniture {
+            let platform = super::hall::is_platform(f.kind);
             for j in f.y as usize..(f.y + f.h) as usize {
                 for i in f.x as usize..(f.x + f.w) as usize {
                     if i >= nx || j >= ny {
                         continue;
                     }
                     let k = j * nx + i;
+                    let on = if platform { under[k] } else { held[k] };
                     let why = if lv.cells[k] < 0 || !walkable(lv.rooms[lv.cells[k] as usize].kind) {
                         Some("is not on the floor")
-                    } else if held[k] {
+                    } else if on {
                         Some("stands on something else")
                     } else if lv.has_stairs && on_stairs(i, j) {
                         Some("is on the stairs")
-                    } else if doorway.contains(&(i as isize, j as isize)) {
+                    } else if !platform && doorway.contains(&(i as isize, j as isize)) {
                         Some("is in a doorway")
                     } else {
                         None
@@ -356,7 +361,11 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
                     {
                         bad = Some(((i, j), format!("the {} at {i},{j} {w}", f.name)));
                     }
-                    held[k] = true;
+                    if platform {
+                        under[k] = true;
+                    } else {
+                        held[k] = true;
+                    }
                     blocked[k] |= f.blocks_move;
                 }
             }
@@ -510,21 +519,30 @@ pub fn problems_as(world: &World, t0: &T0, id: &str, d: &SiteDesign, floors: Opt
     Ok((it, out))
 }
 
-/// Room `room` of level `level` furnished by its kind's rules where that fits round what is
-/// already there; `seed` picks the arrangement.
-pub fn furnish(d: &mut SiteDesign, level: usize, room: usize, seed: u64) {
+/// Room `room` of level `level` of building `id`'s design furnished by its kind's rules where that
+/// fits round what is already there, as generated: thrones only in a castle's or a palace's, its
+/// great hall (or mess hall) furnished as a whole in the building's style (`hall`); `seed` picks the
+/// arrangement.
+pub fn furnish(d: &mut SiteDesign, world: &World, t0: &T0, id: &str, level: usize, room: usize, seed: u64) {
     if level >= d.levels.len() {
         return;
     }
     let (nx, ny) = (d.nx as usize, d.ny as usize);
+    let st = stairs_of(d);
     let mut lvl = level_of(d, level, None, &mut Sprites::new(no_sprites()));
     let had = lvl.furniture.len();
-    let mut rng = Pcg32::new(hash3(seed, level as i64, room as i64, 0xf0), 77);
-    furnish_rooms(&mut lvl, nx, ny, stairs_of(d), Some(room as i16), None, &mut rng);
-    // (`furnish_rooms` keeps what was there first, in order.)
+    let (thrones, styled) = building_of(world, t0, id).ok().and_then(|(li, l, bi)| l.building(bi as usize).map(|b| super::hall_kind(world, t0, li, b))).map_or((false, None), |k| (k.1, k.2));
+    let hall = styled.filter(|s| lvl.rooms.get(room).is_some_and(|r| r.kind == s.0 && r.squares > 0)).and_then(|s| super::hall_frame(&lvl, nx, ny, room as i16, st).map(|f| (f, s.1)));
+    if let Some((f, style)) = hall {
+        super::furnish_styled(&mut lvl, nx, ny, st, room as i16, f, style, None, hash3(seed, level as i64, room as i64, 0x4a11));
+    } else {
+        let mut rng = Pcg32::new(hash3(seed, level as i64, room as i64, 0xf0), 77);
+        furnish_rooms(&mut lvl, nx, ny, st, Some(room as i16), None, &[], thrones, &mut rng);
+    }
+    // (`furnish_rooms` and `furnish_hall` keep what was there first, in order.)
     let lv = &mut d.levels[level];
     for f in &lvl.furniture[had..] {
-        lv.items.push(DesignItem { kind: f.kind.into(), x: f.x, y: f.y, w: f.w, h: f.h, ..Default::default() });
+        lv.items.push(DesignItem { kind: f.kind.into(), x: f.x, y: f.y, w: f.w, h: f.h, back: f.back, variant: f.variant });
     }
 }
 
@@ -636,10 +654,11 @@ pub fn set_cellars(d: &mut SiteDesign, n: usize) -> bool {
 
 /// Room and item kinds a building's design can be given (for the editor's menus).
 pub fn catalog() -> Value {
-    // A piece's usual size: as the first room that has it puts it down (the great hall's pieces no room
-    // has yet: as they are drawn best).
+    // A piece's usual size: as the first room that has it puts it down (the great hall's pieces, laid
+    // out by `hall`: as they are drawn best).
     let unplaced = |kind: &str| match kind {
         "throne_dais" => (4, 2),
+        "low_dais" => (3, 2),
         "high_table" => (4, 1),
         "carpet_runner" => (1, 5),
         "tapestry" | "refreshment_table" => (3, 1),

@@ -346,7 +346,7 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
     {
         for li in 0..d.levels.len() {
             for ri in 0..d.levels[li].rooms.len() {
-                d.furnish(li, ri, 7);
+                d.furnish(&ex.world, &ex.t0, &id, li, ri, 7);
             }
         }
         d.add_doors(None);
@@ -366,7 +366,7 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         && let Ok(mut d) = design::design_of(&ex.world, &ex.t0, &id, true)
     {
         for li in 0..d.levels.len() {
-            d.furnish(li, 0, 7);
+            d.furnish(&ex.world, &ex.t0, &id, li, 0, 7);
         }
         let text = design::to_text(&d, &|_, _| None).unwrap_or_default();
         let json = design::design_json(&ex.world, &ex.t0, &id, Some(&serde_json::to_string(&d).unwrap_or_default()), Some(&format!(r#"{{"refit":{}}}"#, floors + 1)));

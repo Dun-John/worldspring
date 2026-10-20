@@ -61,7 +61,9 @@ battlemap zoom.
   (bookcases half depth with book spines showing, shelves tiered); a bookcase may stand in the middle of a room.
   Tables are bare (but for the high table and the refreshment table, clothed and laid). Hinges and fittings small.
   Things hung on a wall (banners, tapestries, a cloth of estate) are drawn falling out into the room from a rod
-  along it, as the tattered banner is.
+  along it, as the tattered banner is. A low dais is a single low step of the throne dais's materials (dressed
+  stone in blocks, or its timber boards and pegged front beam), no carpet; its dark riser and drop shadow show it
+  raised; what stands on it drawn over it.
 - **Water** has an organic, lobed edge with no grey rim or ink outline: pale shallows to a deeper middle, flat
   ripple rings, one glint. Thin ice is only its crack (the rest transparent).
 - **Hazards:** those only the DM sees (traps, pressure plates) are bold red markers, easy to spot; those players

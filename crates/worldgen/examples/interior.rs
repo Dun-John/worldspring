@@ -1,9 +1,29 @@
 //! Dev tool: print building interiors as text (one letter per room, # stairs, @ spiral stairs, *
-//! furniture; a hall's height left open (`open to below`) `:`, a roof's slopes `^`; the railings
-//! where a gallery or passage looks down into an open hall listed).
+//! furniture, a great hall's pieces by their own capitals (`MARKS`, listed); a hall's height left
+//! open (`open to below`) `:`, a roof's slopes `^`; the railings where a gallery or passage looks
+//! down into an open hall listed).
 //! `cargo run --release -p worldgen --example interior -- [seed] [settlement] [function...]`
 use worldgen::interior;
 use worldgen::{World, WorldFile};
+
+/// A great hall's pieces drawn by their own marks (`*` for the rest; a piece on a low dais over it).
+const MARKS: &[(&str, char)] = &[
+    ("throne_dais", 'T'),
+    ("low_dais", 'D'),
+    ("chair_of_office", 'C'),
+    ("high_table", 'H'),
+    ("carpet_runner", '='),
+    ("long_table", 'L'),
+    ("bench", 'B'),
+    ("hearth", 'F'),
+    ("pillar", 'O'),
+    ("standing_banner", 'S'),
+    ("brazier", 'X'),
+    ("wall_banner", 'W'),
+    ("tapestry", 'Y'),
+    ("musicians_corner", 'M'),
+    ("throne", '!'),
+];
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
@@ -12,6 +32,7 @@ fn main() {
     let t0 = worldgen::t0::T0::generate(&world);
     let si: usize = a.get(2).and_then(|s| s.parse().ok()).unwrap_or_else(|| (0..t0.settlements.len()).max_by_key(|&i| t0.settlements[i].population).unwrap());
     let wanted: Vec<String> = a.iter().skip(3).cloned().collect();
+    println!("marks: {}", MARKS.iter().map(|m| format!("{} {}", m.1, m.0)).collect::<Vec<_>>().join(", "));
     let l = worldgen::town::layout(&world, &t0, si);
     for want in &wanted {
         let Some(bi) = want.parse::<usize>().ok().or_else(|| l.buildings.iter().position(|b| b.label().to_lowercase() == *want)) else {
@@ -37,15 +58,20 @@ fn main() {
                 }
             }).collect()).collect();
             if std::env::var("NOFURN").is_err() {
-                for f in lv.furniture.iter().filter(|f| f.kind != "spiral_stair") {
+                // (A low dais first, what stands on it over it.)
+                let mut pieces: Vec<&interior::Item> = lv.furniture.iter().filter(|f| f.kind != "spiral_stair").collect();
+                pieces.sort_by_key(|f| f.kind != "low_dais");
+                for f in pieces {
+                    let mark = MARKS.iter().find(|m| m.0 == f.kind).map_or('*', |m| m.1);
                     for j in f.y..f.y + f.h {
                         for i in f.x..f.x + f.w {
-                            grid[j as usize][i as usize] = '*';
+                            grid[j as usize][i as usize] = mark;
                         }
                     }
                 }
             }
-            println!("  furniture: {}", lv.furniture.iter().map(|f| format!("{}@{},{} {}x{}", f.kind, f.x, f.y, f.w, f.h)).collect::<Vec<_>>().join(" "));
+            let look = |f: &interior::Item| f.variant.map(|v| format!(" v{v}")).unwrap_or_default() + &f.back.map(|b| format!(" {}", ["N", "E", "S", "W"][b as usize % 4])).unwrap_or_default();
+            println!("  furniture: {}", lv.furniture.iter().map(|f| format!("{}@{},{} {}x{}{}", f.kind, f.x, f.y, f.w, f.h, look(f))).collect::<Vec<_>>().join(" "));
             for j in it.stairs[1]..it.stairs[1] + it.stairs[3] {
                 for i in it.stairs[0]..it.stairs[0] + it.stairs[2] {
                     if lv.has_stairs {

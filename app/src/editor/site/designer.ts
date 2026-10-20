@@ -14,11 +14,12 @@
 //
 // Props and furniture are placed as placing.ts describes: the chosen piece's ghost follows the
 // pointer (red where it can't go, amber in a doorway); a click on a piece picks it up (also with
-// another chosen: nothing can go there, so its ghost shows red under the piece's outline), a click
-// puts it down again (one change); T turns a quarter, Delete takes it away. A side turned to by
+// another chosen: nothing can go there, so its ghost shows red under the piece's outline; but a
+// platform, a low dais, takes the chosen piece where it fits on it), a click puts it down again
+// (one change); T turns a quarter, Delete takes it away. A side turned to by
 // hand is kept only where the piece wouldn't face it by itself.
 import type { Graphics } from 'pixi.js';
-import type { DesignProblem, InteriorItem, SiteDesign, UnderCatalog } from '../../gen/protocol';
+import { PLATFORMS, type DesignProblem, type InteriorItem, type SiteDesign, type UnderCatalog } from '../../gen/protocol';
 import type { Camera } from '../../render/camera';
 import type { MapView, PointerTool } from '../../render/MapView';
 import { APSE_E, APSE_N, APSE_S, APSE_W, isApse } from '../../render/roomShapes';
@@ -699,7 +700,7 @@ export class SiteDesigner implements PointerTool, Placer {
     if (e.pointerType === 'mouse' || e.button !== 0) return false;
     this.touch = true;
     const sq = this.square(x, y);
-    const at = sq && !this.holding ? propAt(this.draft!, this.level, sq[0], sq[1]) : -1;
+    const at = sq && !this.holding ? this.pickable(sq) : -1;
     if (at >= 0) this.pickUp(at, sq!);
     else if (this.hand() !== 'empty') this.spot = this.grid(x, y);
     else this.host.hint('Choose a piece to put down, or tap one to pick it up');
@@ -752,12 +753,26 @@ export class SiteDesigner implements PointerTool, Placer {
     if (!p || !this.props()) return null;
     const [i, j] = [Math.floor(p[0]), Math.floor(p[1])];
     if (this.holding) return { ...this.holding.now, x: i - this.holding.grab[0], y: j - this.holding.grab[1] };
+    return this.chosen(i, j);
+  }
+
+  /** The chosen piece with its top-left square at i, j. */
+  private chosen(i: number, j: number): Item | null {
     const s = this.host.settings();
     if (!s.prop) return null;
     const f: Item = { kind: s.prop, x: i, y: j, w: Math.max(1, s.pw), h: Math.max(1, s.ph) };
     if (s.back !== null) f.back = s.back;
     if (s.variant !== null) f.variant = s.variant;
     return f;
+  }
+
+  /** The piece a click or tap on square `sq` picks up (-1 none): not a platform (a low dais) the
+   * chosen piece fits onto there, which the click puts it on. */
+  private pickable(sq: Sq): number {
+    const d = this.draft!;
+    const at = propAt(d, this.level, sq[0], sq[1]);
+    const g = at >= 0 && !this.holding && this.props() ? this.chosen(sq[0], sq[1]) : null;
+    return g && PLATFORMS.has(d.levels[this.level].items[at].kind) && !PLATFORMS.has(g.kind) && this.fit(g) !== 'bad' ? -1 : at;
   }
 
   /** A design's piece as the map draws it (an uploaded picture by its place in the site's list). */
@@ -790,7 +805,7 @@ export class SiteDesigner implements PointerTool, Placer {
   /** Whether the piece fits where it is (the held one aside). */
   private fit(f: Item): 'ok' | 'doorway' | 'bad' {
     const h = this.holding;
-    return fits(this.draft!, this.level, f.x, f.y, f.w, f.h, h && h.li === this.level ? h.index : -1, this.host.piece(f.kind)?.blocks ?? true);
+    return fits(this.draft!, this.level, f.x, f.y, f.w, f.h, h && h.li === this.level ? h.index : -1, this.host.piece(f.kind)?.blocks ?? true, f.kind);
   }
 
   /** The ghost, its chip or bar, and the piece a click would pick up, as the hand and pointer are. */
@@ -805,9 +820,10 @@ export class SiteDesigner implements PointerTool, Placer {
     this.under = -1;
     const g = this.ghost();
     const p = this.pointer;
-    const sq = !this.touch && p && d ? [Math.floor(p[0]), Math.floor(p[1])] : null;
-    // A click on a piece picks it up (an empty hand, or a piece chosen: nothing can go there).
-    if (d && sq && !this.holding && this.props()) this.under = propAt(d, this.level, sq[0], sq[1]);
+    const sq: Sq | null = !this.touch && p && d ? [Math.floor(p[0]), Math.floor(p[1])] : null;
+    // A click on a piece picks it up (an empty hand, or a piece chosen: nothing can go there, but onto
+    // a platform it fits on).
+    if (d && sq && !this.holding && this.props()) this.under = this.pickable(sq);
     const u = this.under >= 0 ? d?.levels[this.level].items[this.under] : undefined;
     this.ghostShown = null;
     if (!g) {
@@ -854,9 +870,8 @@ export class SiteDesigner implements PointerTool, Placer {
   /** A click in Props: the held piece put down, else the piece clicked picked up, else the chosen
    * piece put down. */
   private click(sq: Sq) {
-    const d = this.draft!;
     if (this.holding) return void this.drop();
-    const at = propAt(d, this.level, sq[0], sq[1]);
+    const at = this.pickable(sq);
     if (at >= 0) {
       this.pickUp(at, sq);
       return this.refresh();
