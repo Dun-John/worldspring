@@ -636,9 +636,20 @@ pub fn set_cellars(d: &mut SiteDesign, n: usize) -> bool {
 
 /// Room and item kinds a building's design can be given (for the editor's menus).
 pub fn catalog() -> Value {
-    // A piece's usual size: as the first room that has it puts it down.
+    // A piece's usual size: as the first room that has it puts it down (the great hall's pieces no room
+    // has yet: as they are drawn best).
+    let unplaced = |kind: &str| match kind {
+        "throne_dais" => (4, 2),
+        "high_table" => (4, 1),
+        "carpet_runner" => (1, 5),
+        "tapestry" | "refreshment_table" => (3, 1),
+        "cloister_well" | "musicians_corner" => (2, 2),
+        "dance_floor" => (5, 5),
+        "harpsichord" => (1, 2),
+        _ => (1, 1),
+    };
     let size = |kind: &str| {
-        super::ROOM_KINDS.iter().flat_map(|r| super::furnishing(r).iter()).find(|e| e.0 == kind).map_or((1, 1), |e| match e.1 {
+        super::ROOM_KINDS.iter().flat_map(|r| super::furnishing(r).iter()).find(|e| e.0 == kind).map_or(unplaced(kind), |e| match e.1 {
             super::Place::Wall(l, d) | super::Place::Center(l, d) => (l, d),
             super::Place::Seated | super::Place::Booth => (1, 1),
         })

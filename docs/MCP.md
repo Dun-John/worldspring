@@ -1054,7 +1054,12 @@ level -1: Cellar
 - `items:` furniture by kind or name: `bed`, `table`, `chair`, `long_table`, `bar`, `counter`, `hearth`,
   `oven`, `shelf`, `bookcase`, `chest`, `wardrobe`, `barrel`, `crate`, `workbench`, `forge`, `anvil`, `altar`,
   `pew`, `statue`, `rug`, `couch`, `desk`, `cage`, `spiral_stair`… (the designer's furniture list shows them
-  all, with cover and whether they block movement); indoor props, with the rules they have underground:
+  all, with cover and whether they block movement); for great halls and ballrooms (the designer's "Great hall"
+  group; nothing generated puts them down yet): `throne_dais` (w×2 against a wall, difficult ground, half
+  cover), `chair_of_office`, `high_table`, `carpet_runner` and `dance_floor` (walked over), `tapestry` and
+  `wall_banner` (hung on the wall they stand against, walked under), `standing_banner` (blocks movement, not
+  sight), `font`, `cloister_well`, `harpsichord`, `musicians_corner` (difficult ground), `refreshment_table`;
+  indoor props, with the rules they have underground:
   `sacks`, `rubble`, `timber`, `bones`, `skeleton`, `skulls`, `urn`, `coffin`, `effigy`, `brazier`,
   `candles`, `sconce`, `lantern`, `banner`, `chains`, `cobweb`, `bedroll`, `tools`, `powder`, `hoard`,
   `offering`, `glyph`, `dais`, `well`, `fountain`, `iron_maiden`, `stocks`, `rat_nest`, `trap`; and uploaded
@@ -1062,7 +1067,12 @@ level -1: Cellar
   rules: cover, blocking movement; one that blocks movement blocks sight from 6 ft up (a sprite that blocks
   sight but not movement doesn't indoors), one that doesn't is difficult ground when marked so. `back` and
   `variant` as for a site: `shelf 5,5 2x1 back s` stands with its back to the south wall; a sprite's picture is
-  turned to put its top (north) edge against that side.
+  turned to put its top (north) edge against that side. A few pieces have more than four looks: a
+  `throne_dais` 0-5 (one throne, a pair, a throne and a lesser chair: 0-2 on two stone steps under a carpet with
+  gilt thrones and a cloth of estate on the wall, 3-5 on a plain timber platform with oak thrones); a
+  `wall_banner` and a `standing_banner` 0-7, a house's colours (the same number on both, so a hall's banners
+  can share one house; a banner with no variant flies its building's own house, so every banner left to
+  itself in one building matches). A look past a piece's last is refused.
 - Room kinds as the generator names rooms in buildings: `main room`, `kitchen`, `bedroom`, `common room`,
   `storeroom`, `shop`, `workshop`, `forge`, `nave`, `great hall`, `guardroom`, `study`, `library`… A kind it
   doesn't know becomes a chamber named as written.

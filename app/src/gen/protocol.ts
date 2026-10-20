@@ -420,7 +420,7 @@ export interface DesignLevel {
    * building's door to the outside: 2 front, 4 back). */
   doors: [number, number, number, number][];
   /** Props and the ways (`exit`, `up`, `down`), in order; a building's furniture. `back`: the
-   * side it stands against (0 north 1 east 2 south 3 west), `variant`: one of its looks (0-3);
+   * side it stands against (0 north 1 east 2 south 3 west), `variant`: one of its looks (0-3, more for a few);
    * absent: found from the walls, picked by position. */
   items: { kind: string; x: number; y: number; w: number; h: number; back?: number; variant?: number }[];
   /** A building's: storey (-1 cellar, 0 ground floor), an open roof, the stairs reach it. */
@@ -637,7 +637,7 @@ export interface InteriorItem {
   /** Set in a design: the side its back is against (0 north 1 east 2 south 3 west); absent: found
    * from the walls. */
   back?: number;
-  /** Set in a design: one of its looks (0-3); absent: picked by position. */
+  /** Set in a design: one of its looks (0-3; more for a few: `looksOf`); absent: picked by position. */
   variant?: number;
 }
 

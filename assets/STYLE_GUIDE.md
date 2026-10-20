@@ -14,9 +14,10 @@ battlemap zoom.
 1. **Straight down,** orthographic, seen from directly above. No perspective, no visible sides except what a
    dome or bevel suggests. **Exception:** upright things that only read from the side are drawn from a high
    angle, with screen up kept up even in rotated sites (`screenAxes(light)`): headstones, glowing fungus,
-   crystals, the skull pile, urn, hanging lantern, candelabrum, iron maiden and stocks; on the battlemap also the
-   notice board, signpost, lamp post, the market cross's cross, topiary and garden statues (`upright` in
-   `atlas.ts`; left out of `TURNED` and `TURNABLE` in `BattlemapLayer.ts`, so never drawn turned). "Higher" means
+   crystals, the skull pile, urn, hanging lantern, candelabrum, iron maiden and stocks, the standing banner and the
+   musicians' corner's harp; on the battlemap also the notice board, signpost, lamp post, the market cross's
+   cross, topiary and garden statues (`upright` in `atlas.ts`; left out of `TURNED` and `TURNABLE` in
+   `BattlemapLayer.ts`, so never drawn turned). "Higher" means
    nearer straight down, about 60 degrees (heights at half, round sections as fat ovals: `hk` 0.5, `dk` 0.87), never
    side-on.
 2. **Warm light from the north-west** (upper left of the screen). Lit edges go toward cream and yellow,
@@ -58,7 +59,9 @@ battlemap zoom.
   one or two big chunks), never a neat pyramid.
 - **Furniture** is strictly top-down. Wall pieces stand clear of the wall's ink with an open front toward the room
   (bookcases half depth with book spines showing, shelves tiered); a bookcase may stand in the middle of a room.
-  Tables are bare. Hinges and fittings small.
+  Tables are bare (but for the high table and the refreshment table, clothed and laid). Hinges and fittings small.
+  Things hung on a wall (banners, tapestries, a cloth of estate) are drawn falling out into the room from a rod
+  along it, as the tattered banner is.
 - **Water** has an organic, lobed edge with no grey rim or ink outline: pale shallows to a deeper middle, flat
   ripple rings, one glint. Thin ice is only its crack (the rest transparent).
 - **Hazards:** those only the DM sees (traps, pressure plates) are bold red markers, easy to spot; those players

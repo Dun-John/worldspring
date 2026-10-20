@@ -1892,6 +1892,7 @@
       kind: inBuilding ? 'storeroom' : (t?.rooms.find((k) => k !== t.first && k !== t.passage) ?? 'chamber'),
       ...(inBuilding ? { prop: 'table', pw: 2, ph: 1 } : { prop: 'chest', pw: 1, ph: 1 }),
       back: null,
+      variant: null,
     };
     designer = d;
     view.designing = id;
@@ -1984,7 +1985,7 @@
   let held = $state.raw<HeldView>(null);
   // (Told on every pointer move: only a change is taken.)
   const setHeld = (h: HeldView) => {
-    if (h?.name !== held?.name || h?.turn !== held?.turn || h?.turns !== held?.turns || h?.auto !== held?.auto || h?.size !== held?.size) held = h;
+    if (h?.name !== held?.name || h?.turn !== held?.turn || h?.turns !== held?.turns || h?.auto !== held?.auto || h?.size !== held?.size || h?.kind !== held?.kind || h?.variant !== held?.variant) held = h;
   };
   let placeBarAt = $state<{ x: number; y: number; r: number } | null>(null);
   /** What places things by hand in the open tab: Objects, or Rooms on Props. */
@@ -2067,7 +2068,7 @@
     scatterArmed?.tool.refresh();
   });
   $effect(() => {
-    void [designSettings.mode, designSettings.prop, designSettings.pw, designSettings.ph, designSettings.back];
+    void [designSettings.mode, designSettings.prop, designSettings.pw, designSettings.ph, designSettings.back, designSettings.variant];
     untrack(() => designer)?.refresh();
   });
 

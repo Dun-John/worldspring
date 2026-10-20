@@ -41,11 +41,13 @@ export interface DesignSettings {
   ph: number;
   /** The side it is turned to stand against (0 north 1 east 2 south 3 west); null: its own. */
   back: number | null;
+  /** The look it is given (`Item::variant`); null: its own (by position; a banner the building's house). */
+  variant: number | null;
   /** Doors added wherever a room dug would be shut off. */
   autoDoors: boolean;
 }
 
-export const defaultDesign = (): DesignSettings => ({ mode: 'room', kind: 'chamber', width: 1, prop: 'chest', pw: 1, ph: 1, back: null, autoDoors: true });
+export const defaultDesign = (): DesignSettings => ({ mode: 'room', kind: 'chamber', width: 1, prop: 'chest', pw: 1, ph: 1, back: null, variant: null, autoDoors: true });
 
 /** What the designer needs from the app. */
 export interface DesignHost {
@@ -754,6 +756,7 @@ export class SiteDesigner implements PointerTool, Placer {
     if (!s.prop) return null;
     const f: Item = { kind: s.prop, x: i, y: j, w: Math.max(1, s.pw), h: Math.max(1, s.ph) };
     if (s.back !== null) f.back = s.back;
+    if (s.variant !== null) f.variant = s.variant;
     return f;
   }
 
@@ -798,7 +801,7 @@ export class SiteDesigner implements PointerTool, Placer {
     if (this.holding && this.holding.li !== this.level) this.holding = null;
     const name = (f: Item) => this.host.piece(f.kind)?.name ?? f.kind;
     const h = this.holding;
-    this.host.held(h ? { name: cap(name(h.now)), turn: '', turns: h.now.w !== h.now.h || (h.now.back ?? this.autoBack(h.now)) !== null, auto: h.now.back !== undefined, size: `${h.now.w}×${h.now.h}` } : null);
+    this.host.held(h ? { name: cap(name(h.now)), turn: '', turns: h.now.w !== h.now.h || (h.now.back ?? this.autoBack(h.now)) !== null, auto: h.now.back !== undefined, size: `${h.now.w}×${h.now.h}`, kind: h.now.kind, variant: h.now.variant ?? null } : null);
     this.under = -1;
     const g = this.ghost();
     const p = this.pointer;
@@ -937,6 +940,18 @@ export class SiteDesigner implements PointerTool, Placer {
       const { back: _, ...now } = this.holding.now;
       this.holding = { ...this.holding, now };
     } else this.host.settings().back = null;
+    this.refresh();
+    return true;
+  }
+
+  /** The look of what is in the hand (the held piece, else the chosen one): `v`, or null for its own. */
+  setLook(v: number | null): boolean {
+    if (!this.props()) return false;
+    if (this.holding) {
+      const { variant: _, ...now } = this.holding.now;
+      this.holding = { ...this.holding, now: v === null ? now : { ...now, variant: v } };
+    } else if (this.hand() === 'chosen') this.host.settings().variant = v;
+    else return false;
     this.refresh();
     return true;
   }

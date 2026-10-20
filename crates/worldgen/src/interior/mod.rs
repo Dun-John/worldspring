@@ -486,7 +486,37 @@ pub const FURNITURE: &[(&str, &str, u8, bool, f32)] = &[
     ("winch", "portcullis winch", 1, true, 4.0),
     ("sideboard", "sideboard", 1, true, 3.5),
     ("stage", "stage", 0, false, 2.0),
+    // Great halls and ballrooms (no generator puts them down yet). The dais's steps are climbed, so it
+    // is difficult ground like the underground dais; things hung on a wall or laid on the floor are
+    // walked over; a standing banner is gone round but seen past.
+    ("throne_dais", "throne dais", 1, false, 2.5),
+    ("carpet_runner", "carpet runner", 0, false, 0.0),
+    ("chair_of_office", "chair of office", 1, true, 5.0),
+    ("high_table", "high table", 1, true, 3.0),
+    ("tapestry", "tapestry", 0, false, 0.0),
+    ("wall_banner", "wall banner", 0, false, 0.0),
+    ("standing_banner", "standing banner", 0, true, 5.5),
+    ("font", "font", 1, true, 3.5),
+    ("cloister_well", "cloister well", 1, true, 3.5),
+    ("dance_floor", "inlaid dance floor", 0, false, 0.0),
+    ("harpsichord", "harpsichord", 1, true, 3.0),
+    ("musicians_corner", "musicians' corner", 0, false, 3.0),
+    ("refreshment_table", "refreshment table", 1, true, 3.0),
 ];
+
+/// The house colours a hall's banners fly (`Item::variant` of a wall or standing banner: the same
+/// index on both, so a castle's banners can share one house).
+pub const HOUSES: u8 = 8;
+
+/// Furniture with other than four looks (`Item::variant` 0 to looks - 1): the throne dais's are
+/// three seatings (one throne, a pair, a throne and a lesser chair) in stone and gilt (0-2), then
+/// on a timber platform (3-5); a banner's are its house's colours.
+const LOOKS: &[(&str, u8)] = &[("throne_dais", 6), ("wall_banner", HOUSES), ("standing_banner", HOUSES)];
+
+/// How many looks an item kind has (`Item::variant`): four but for `LOOKS`.
+pub fn item_looks(kind: &str) -> u8 {
+    LOOKS.iter().find(|l| l.0 == kind).map_or(4, |l| l.1)
+}
 
 /// (kind, display name, cover, blocks movement, height ft).
 fn item_info(kind: &'static str) -> (&'static str, u8, bool, f32) {

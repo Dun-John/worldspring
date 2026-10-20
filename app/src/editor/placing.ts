@@ -40,8 +40,8 @@ export type BarAt = { x: number; y: number; r: number; holding: boolean; turns: 
 
 /** A piece picked up, as the panel's "in hand" row shows it: its name, its turn ('45°'; '' where
  * none is shown), whether it shows a turn, whether its turn was given by hand (Auto shown), and its
- * size ('1.10×', '2×1'). */
-export type HeldView = { name: string; turn: string; turns: boolean; auto: boolean; size: string } | null;
+ * size ('1.10×', '2×1'); inside also its kind and the look given it (null: its own). */
+export type HeldView = { name: string; turn: string; turns: boolean; auto: boolean; size: string; kind?: string; variant?: number | null } | null;
 
 /** A finger's reach on the map (screen px): a tap or drag this near the ghost or a piece is on it. */
 export const FINGER_PX = 22;

@@ -105,7 +105,7 @@ pub struct DesignItem {
     /// The side its back is against, 0 north 1 east 2 south 3 west; absent: found from the walls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub back: Option<u8>,
-    /// One of its looks, 0-3; absent: picked by position.
+    /// One of its looks, 0-3 (more for some: `interior::item_looks`); absent: picked by position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant: Option<u8>,
 }
@@ -114,7 +114,7 @@ impl DesignItem {
     /// The built item with this one's facing and look (a `back` past 3 is read as none).
     pub fn posed(&self, mut it: Item) -> Item {
         it.back = self.back.filter(|&b| b < 4);
-        it.variant = self.variant.map(|v| v.min(3));
+        it.variant = self.variant.map(|v| v.min(crate::interior::item_looks(it.kind) - 1));
         it
     }
 }
@@ -1162,7 +1162,7 @@ pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) ->
             .map(|f| {
                 let size = if f.w > 1 || f.h > 1 { format!(" {}x{}", f.w, f.h) } else { String::new() };
                 let back = f.back.filter(|&b| b < 4).map(|b| format!(" back {}", SIDES[b as usize])).unwrap_or_default();
-                let variant = f.variant.map(|v| format!(" variant {}", v.min(3))).unwrap_or_default();
+                let variant = f.variant.map(|v| format!(" variant {}", v.min(crate::interior::item_looks(&f.kind) - 1))).unwrap_or_default();
                 format!("{} {},{}{size}{back}{variant}", f.kind, f.x, f.y)
             })
             .collect();
@@ -1447,7 +1447,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             lv.items.clear();
             for e in list.split(';').map(str::trim).filter(|e| !e.is_empty()) {
                 let words: Vec<&str> = e.split_whitespace().collect();
-                let how = || format!("{tag}: item '{e}': write it as kind x,y [wxh] [back n|e|s|w] [variant 0-3]");
+                let how = || format!("{tag}: item '{e}': write it as kind x,y [wxh] [back n|e|s|w] [variant 0-3, more for some]");
                 // The kind is the words before the last x,y; size, back and variant come after it.
                 let Some(at) = words.iter().rposition(|w| coords(w).is_some()).filter(|&at| at > 0) else { return Err(how()) };
                 let (x, y) = coords(words[at]).ok_or_else(how)?;
@@ -1456,7 +1456,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                 while let Some(&w) = rest.next() {
                     match w {
                         "back" => back = Some(rest.next().and_then(|v| SIDES.iter().position(|s| s == v)).ok_or_else(how)? as u8),
-                        "variant" => variant = Some(rest.next().and_then(|v| v.parse::<u8>().ok()).filter(|&v| v < 4).ok_or_else(how)?),
+                        "variant" => variant = Some(rest.next().and_then(|v| v.parse::<u8>().ok()).ok_or_else(how)?),
                         _ => size = Some(w.split_once('x').and_then(|(w, h)| Some((w.parse::<u16>().ok()?, h.parse::<u16>().ok()?))).ok_or_else(how)?),
                     }
                 }
@@ -1466,6 +1466,9 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                     Some(_) => name.as_str(),
                     None => if building { furniture_kind(&name) } else { item_kind(&name) }.ok_or_else(|| format!("{tag}: no such item: {name}"))?,
                 };
+                if let Some(v) = variant.filter(|&v| v >= crate::interior::item_looks(kind)) {
+                    return Err(format!("{tag}: item '{e}': {name} has looks 0-{} (variant {v})", crate::interior::item_looks(kind) - 1));
+                }
                 let (w, h) = if !building && (WAYS.contains(&kind) || kind == "lava") { (1, 1) } else { size.unwrap_or((1, 1)) };
                 lv.items.push(DesignItem {
                     kind: kind.into(),

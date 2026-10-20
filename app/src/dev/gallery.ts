@@ -2,7 +2,7 @@
 // redraw. `&kinds=15,16` shows only those battlemap kinds (and no furniture or props), `&sq=96` draws
 // them at that many px a square (default 48), `&ground=948c80` on that colour with their shadows as the battlemap casts
 // them. `&items=bed,chair` shows only those furniture and props
-// (each in both orientations; no battlemap objects), `&sq=` then sizing their squares (default 44). Battlemap objects come from the atlas (all variants); building furniture and
+// (each in both orientations; no battlemap objects; `&looks=1` every look of each; `&floor=wood` on boards; `&nolabels=1` unlabelled, for blind crops), `&sq=` then sizing their squares (default 44). Battlemap objects come from the atlas (all variants); building furniture and
 // underground props are drawn by InteriorLayer exactly as in the app, one per little room. `&turn=1` shows how
 // things look turned by hand instead: battlemap props that may turn (`TURNABLE`, and the other candidates) at four
 // turns on grass with their shadows, and furniture and props with a back at each of their four sides.
@@ -10,7 +10,7 @@ import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions }
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { KindInfo } from '../gen/client';
 import type { Interior, InteriorItem, UnderCatalog } from '../gen/protocol';
-import { BATTLE_GROUPS, ITEM_GROUPS } from '../editor/itemGroups';
+import { BATTLE_GROUPS, ITEM_GROUPS, looks as insideLooks } from '../editor/itemGroups';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
 import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
 import { ORIENTED } from '../render/furniture';
@@ -27,6 +27,9 @@ const FURNITURE: [string, number, number][] = [
   ['altar', 2, 1], ['statue', 1, 1], ['pillar', 1, 1], ['sarcophagus', 1, 2], ['bell', 2, 2], ['throne', 1, 1], ['rug', 2, 3], ['rug', 2, 2], ['rug', 2, 1],
   ['bath', 1, 2], ['bath', 2, 2], ['bucket', 1, 1], ['trapdoor', 1, 1], ['winch', 1, 1], ['telescope', 2, 2], ['barricade', 2, 1],
   ['stage', 3, 2], ['spiral_stair', 1, 1], ['link_down', 1, 1],
+  ['throne_dais', 4, 2], ['throne_dais', 3, 2], ['chair_of_office', 1, 1], ['high_table', 4, 1], ['carpet_runner', 1, 5], ['carpet_runner', 2, 4],
+  ['tapestry', 3, 1], ['tapestry', 2, 1], ['wall_banner', 1, 1], ['standing_banner', 1, 1], ['font', 1, 1], ['cloister_well', 2, 2],
+  ['dance_floor', 5, 5], ['dance_floor', 4, 3], ['harpsichord', 1, 2], ['musicians_corner', 2, 2], ['refreshment_table', 3, 1], ['refreshment_table', 2, 1],
 ];
 
 /** Underground props (`under::item` and the ways in and out), with their sizes in squares. */
@@ -50,27 +53,29 @@ const HEAD: TextStyleOptions = { fontFamily: 'Georgia, serif', fontSize: 22, fil
 const ITEM_SQ = 44;
 const SLOT = 4;
 
-/** One room per item in a grid of `cols` (each SLOT squares, rock between them); an item may give the
- * side its back is against (0-3) and its label. */
-function sampler(id: string, fn: string, items: [string, number, number, number?, string?][], cols: number): { it: Interior; spots: [string, number, number][] } {
+/** One room per item in a grid of `cols` (each `size` squares, rock between them); an item may give the
+ * side its back is against (0-3), its label and its look. */
+function sampler(id: string, fn: string, items: [string, number, number, number?, string?, number?][], cols: number, size = SLOT): { it: Interior; spots: [string, number, number][] } {
   const rows = Math.ceil(items.length / cols);
-  const [nx, ny] = [cols * (SLOT + 1) + 1, rows * (SLOT + 1) + 1];
+  const [nx, ny] = [cols * (size + 1) + 1, rows * (size + 1) + 1];
   const cells = new Array<number>(nx * ny).fill(-1);
   const furniture: InteriorItem[] = [];
   const rooms: Interior['levels'][number]['rooms'] = [];
   const spots: [string, number, number][] = [];
-  items.forEach(([kind, w, h, back, label], k) => {
-    const [x0, y0] = [1 + (k % cols) * (SLOT + 1), 1 + Math.floor(k / cols) * (SLOT + 1)];
-    for (let j = 0; j < SLOT; j++) for (let i = 0; i < SLOT; i++) cells[(y0 + j) * nx + x0 + i] = k;
-    rooms.push({ kind: ' ', squares: SLOT * SLOT, raise_ft: 0, center: [x0 + SLOT / 2, y0 + SLOT / 2] });
+  items.forEach(([kind, w, h, back, label, variant], k) => {
+    const [x0, y0] = [1 + (k % cols) * (size + 1), 1 + Math.floor(k / cols) * (size + 1)];
+    for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) cells[(y0 + j) * nx + x0 + i] = k;
+    rooms.push({ kind: ' ', squares: size * size, raise_ft: 0, center: [x0 + size / 2, y0 + size / 2] });
     // Against the room's top wall, centred (props on a wall find the rock behind them).
-    const x = x0 + Math.floor((SLOT - w) / 2);
+    const x = x0 + Math.floor((size - w) / 2);
     // With a side set: in the middle of the room, so only the side makes it face.
-    const y = back === undefined ? y0 : y0 + Math.floor((SLOT - h) / 2);
-    furniture.push({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 3, ...(back === undefined ? {} : { back }) });
-    spots.push([label ?? (w === 1 && h === 1 && kind === 'table' ? 'table (round)' : `${kind.replace(/_/g, ' ')}${w * h > 1 ? ` ${w}×${h}` : ''}`), x0, y0 + SLOT]);
+    const y = back === undefined ? y0 : y0 + Math.floor((size - h) / 2);
+    furniture.push({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 3, ...(back === undefined ? {} : { back }), ...(variant === undefined ? {} : { variant }) });
+    spots.push([label ?? (w === 1 && h === 1 && kind === 'table' ? 'table (round)' : `${kind.replace(/_/g, ' ')}${w * h > 1 ? ` ${w}×${h}` : ''}`), x0, y0 + size]);
   });
-  const level = { z: -1, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };
+  // (`&floor=wood`: rooms above ground, so their floors are boards, not flags.)
+  const z = new URLSearchParams(location.search).get('floor') === 'wood' ? 0 : -1;
+  const level = { z, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };
   return { it: { id, settlement: 0, building: 0, name: null, function: fn, origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] }, spots };
 }
 
@@ -172,18 +177,28 @@ export async function runGallery(target: HTMLElement) {
 
   // Building furniture and underground props, drawn as in the app.
   const SQ = pick ? Number(query.get('sq')) || ITEM_SQ : ITEM_SQ;
-  const chosen = (list: [string, number, number][]) =>
-    pick ? list.filter(([k]) => pick.includes(k)).flatMap(([k, w, h]): [string, number, number][] => (w === h ? [[k, w, h]] : [[k, w, h], [k, h, w]])) : list;
-  const cols = Math.max(4, Math.floor((width - 32) / ((SLOT + 1) * SQ)));
+  // `&looks=1`: every look of each chosen piece, labelled with it.
+  const allLooks = query.has('looks');
+  type Spot = [string, number, number, number?, string?, number?];
+  const chosen = (list: [string, number, number][], underground: boolean): Spot[] =>
+    pick
+      ? list
+          .filter(([k]) => pick.includes(k))
+          .flatMap(([k, w, h]): [string, number, number][] => (w === h ? [[k, w, h]] : [[k, w, h], [k, h, w]]))
+          .flatMap(([k, w, h]): Spot[] => (allLooks ? Array.from({ length: insideLooks(k, underground) }, (_, v): Spot => [k, w, h, undefined, `${k.replace(/_/g, ' ')} ${w}×${h} · ${v}`, v]) : [[k, w, h]]))
+      : list;
+  // Rooms big enough for the biggest piece shown.
+  const slot = Math.max(SLOT, ...(pick ? FURNITURE.filter(([k]) => pick.includes(k)).map(([, w, h]) => Math.max(w, h) + 1) : []));
+  const cols = Math.max(4, Math.floor((width - 32) / ((slot + 1) * SQ)));
   for (const [title, id, fn, items] of [
     ['Building furniture (item atlas)', 'b:gallery', 'house', FURNITURE],
     ['Underground props (item atlas)', 'u:gallery', 'dungeon', UNDER],
   ] as const) {
     if (only) break;
-    const list = chosen(items as unknown as [string, number, number][]);
+    const list = chosen(items as unknown as [string, number, number][], id.startsWith('u'));
     if (!list.length) continue;
     head(title);
-    const { it, spots } = sampler(id, fn, list, cols);
+    const { it, spots } = sampler(id, fn, list, cols, slot);
     const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
     const holder = new Container();
     holder.addChild(layer.container);
@@ -192,7 +207,7 @@ export async function runGallery(target: HTMLElement) {
     // The layer dims the map behind it: none here.
     layer.container.children[0].visible = false;
     root.addChild(holder);
-    for (const [label, gx, gy] of spots) {
+    for (const [label, gx, gy] of query.has('nolabels') ? [] : spots) {
       const t = new Text({ text: label, style: { ...LABEL, fill: id.startsWith('u') ? 0xf3ead8 : 0x2a2219, fontSize: 12 } });
       t.position.set(16 + gx * SQ + 2, y + (gy - 0.95) * SQ);
       root.addChild(t);

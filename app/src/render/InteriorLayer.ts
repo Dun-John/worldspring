@@ -8,7 +8,7 @@ import { OPEN_BELOW, ROOF_SLOPE, type Interior, type InteriorItem, type Interior
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
-import { drawFurniture, drawUnderProp, ORIENTED, UNDER_DRAWN, VARIED } from './furniture';
+import { drawFurniture, drawUnderProp, houseOf, looksOf, ORIENTED, UNDER_DRAWN, VARIED } from './furniture';
 import { ITEM_PX, ItemAtlas } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
@@ -61,14 +61,14 @@ const quad = () =>
   }));
 
 /** Floor colour by room kind. */
-/** One of four scatter variants for an item at grid square (x, y). */
-function itemVariant(x: number, y: number): number {
+/** One of `n` variants (four for most) for an item at grid square (x, y). */
+function itemVariant(x: number, y: number, n = 4): number {
   const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
-  return Math.floor((v - Math.floor(v)) * 4);
+  return Math.floor((v - Math.floor(v)) * n);
 }
 
-/** An item's look: the one set in its design, else picked by position. */
-const lookOf = (f: InteriorItem): number => f.variant ?? itemVariant(f.x, f.y);
+/** Banners, whose look is a house: one per building unless set. */
+const BANNERS = new Set(['wall_banner', 'standing_banner']);
 
 function floorColor(kind: string, z: number, natural = false, raise = 0): number {
   if (natural) {
@@ -1245,6 +1245,12 @@ export class InteriorLayer {
     return this.underground ? this.wallSide(f) : this.backSide(f);
   }
 
+  /** An item's look: the one set in its design, else picked by position (a banner: the building's house). */
+  private lookOf(f: InteriorItem): number {
+    if (f.variant !== undefined) return f.variant;
+    return BANNERS.has(f.kind) && !this.underground ? houseOf(this.interior.id) : itemVariant(f.x, f.y, looksOf(f.kind));
+  }
+
   /** Everything an item's look depends on: what it is and its size; underground also the light, the
    * wall it is set against and its scatter variant. */
   private itemKey(f: InteriorItem): string {
@@ -1254,10 +1260,10 @@ export class InteriorLayer {
     if (shared) {
       const g = { ...f, kind: shared };
       const back = ORIENTED.has(shared) ? this.backSide(g).join(',') : '';
-      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? lookOf(f) : 0}:${back}`;
+      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}`;
     }
     const wall = ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
-    const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) ? lookOf(f) : 0;
+    const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) ? this.lookOf(f) : 0;
     return `u:${base}:${light}:${wall}:${variant}`;
   }
 
@@ -1346,10 +1352,10 @@ export class InteriorLayer {
     const shared = this.sharedKind(kind);
     if (shared) {
       const s = { ...f, kind: shared };
-      if (drawFurniture(g, s, this.light, lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null)) return;
+      if (drawFurniture(g, s, this.light, this.lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null)) return;
     }
     // (Indoor props in a building too.)
-    if ((this.underground || !shared) && drawUnderProp(g, f, this.light, lookOf(f), ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0])) return;
+    if ((this.underground || !shared) && drawUnderProp(g, f, this.light, this.lookOf(f), ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0])) return;
     if (kind === 'sprite') {
       // A picture not loaded yet (or no renderer): a plain square in its place.
       g.rect(x + 0.1, y + 0.1, w - 0.2, h - 0.2).fill({ color: 0x786046, alpha: 0.5 }).stroke({ width: 0.05, color: INK });
@@ -1513,7 +1519,7 @@ export class InteriorLayer {
       g.ellipse(px, py + s * 0.25, s * 0.3, s * 0.55).fill(0xfde68a);
     };
     // Scatter: the same for every placement of one variant (so they can share a look).
-    const variant = lookOf(f);
+    const variant = this.lookOf(f);
     const hash = (k: number) => {
       const v = Math.sin((variant * 127.1 + 311.7 + k * 74.7) * 0.0174533) * 43758.5453;
       return v - Math.floor(v);

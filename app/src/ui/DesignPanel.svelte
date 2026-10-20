@@ -13,6 +13,7 @@
   import { BOSS } from '../editor/site/designer';
   import { cellarsOf } from '../editor/site/model';
   import { INSIDE_GROUPS, itemGroup, looks, turnsInside } from '../editor/itemGroups';
+  import { HOUSES, houseOf, lookName } from '../render/furniture';
   import { InteriorLayer } from '../render/InteriorLayer';
   import { APSE_N, CAVERN, CHAMFERED, isApse, OCTAGON, ROUND } from '../render/roomShapes';
   import Icon from './Icon.svelte';
@@ -53,7 +54,7 @@
     { key: 'corridor', label: 'Corridor', icon: 'corridor', kbd: 'H', hint: 'Paint the level’s passages.' },
     { key: 'rock', label: 'Rock', icon: 'rock', kbd: 'K', hint: 'Fill squares back with rock (props on them go too).' },
     { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none.' },
-    { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the prop down. Click a prop to pick it up (even with another chosen), click again to put it down. T turns the prop pointed at, else what is in your hand; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
+    { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the prop down. Click a prop to pick it up (even with another chosen), click again to put it down. T turns the prop pointed at, else what is in your hand, and Look by the turn buttons picks its look; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Way down', icon: 'stairs', kbd: 'W', hint: 'Click a square for this level’s way down; the way up below follows.' },
   ];
   // A building's: walls are where rooms meet; its floors follow its storeys.
@@ -64,7 +65,7 @@
     { key: 'wall', label: 'Wall', icon: 'wall', kbd: 'L', hint: 'Draw a line along the grid across a room (or click by a grid line): the wall runs on to the room’s walls and splits it in two.' },
     { key: 'merge', label: 'Take a wall away', icon: 'eraser', kbd: 'E', hint: 'Click a wall between two rooms: they become one.' },
     { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. In an outside wall of the ground floor: a back door, again the front door, again none.' },
-    { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the piece down (furniture, a prop or one of your pictures). Click a piece to pick it up (even with another chosen), click again to put it down. T turns the piece pointed at, else what is in your hand; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
+    { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the piece down (furniture, a prop or one of your pictures). Click a piece to pick it up (even with another chosen), click again to put it down. T turns the piece pointed at, else what is in your hand, and Look by the turn buttons picks its look; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Stairs', icon: 'stairs', kbd: 'W', hint: 'Drag out the stair block (1 to 3 squares each way): the same squares on every floor it reaches. Furniture there goes.' },
   ];
   const cap = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
@@ -148,10 +149,17 @@
     const kind = String(id);
     const p = pieces.find((x) => x.kind === kind);
     const n = kind.startsWith('s:') ? Math.max(1, Math.min(6, Math.ceil(sprites[kind.slice(2)]?.size || 1))) : 1;
-    settings = { ...settings, mode: 'prop', prop: kind, pw: p?.w ?? n, ph: p?.h ?? n, back: null };
+    settings = { ...settings, mode: 'prop', prop: kind, pw: p?.w ?? n, ph: p?.h ?? n, back: null, variant: null };
     // (A phone's sheet goes down to its tools: the map shows where it goes.)
     if (shell.phone) shell.snap = 'peek';
   }
+
+  // The Look menu: the held piece's, else the chosen one's (a picture has one look).
+  const lookKind = $derived(held ? (held.kind ?? '') : settings.prop);
+  const lookCount = $derived(lookKind && !lookKind.startsWith('s:') ? looks(lookKind, !building) : 1);
+  const lookNow = $derived(held ? (held.variant ?? null) : settings.variant);
+  const banner = $derived(building && (lookKind === 'wall_banner' || lookKind === 'standing_banner'));
+  const ownLook = $derived(banner ? `This building’s house (${HOUSES[houseOf(designer.id)].name.toLowerCase()})` : 'Its own (by where it is)');
 
   const saveWhy = $derived(blocking ? 'Fix the problems marked ✕ first' : !now.dirty ? 'Nothing new to save' : 'Save the design (Ctrl+S)');
 </script>
@@ -175,6 +183,20 @@
       onAuto={() => designer.turnReset()}
       onEmpty={() => designer.escape()}
     >
+      {#snippet look()}
+        {#if lookCount > 1}
+          <select
+            class="ws-input look"
+            aria-label="Look"
+            title={banner ? 'Look: the house whose colours it flies (left to itself, every banner in this building flies the same)' : 'Look: which of its looks it has'}
+            value={lookNow === null ? '' : String(Math.min(lookNow, lookCount - 1))}
+            onchange={(e) => designer.setLook(e.currentTarget.value === '' ? null : Number(e.currentTarget.value))}
+          >
+            <option value="">{ownLook}</option>
+            {#each { length: lookCount } as _, v (v)}<option value={String(v)}>{lookName(lookKind, v)}</option>{/each}
+          </select>
+        {/if}
+      {/snippet}
       {#snippet size()}
         {#if held}<output>{held.size}</output>
         {:else}
@@ -335,6 +357,9 @@
     display: grid;
     grid-template-columns: repeat(8, 1fr);
     gap: 2px;
+  }
+  .look {
+    max-width: 16em;
   }
   .tools .ws-icon-btn {
     width: auto;

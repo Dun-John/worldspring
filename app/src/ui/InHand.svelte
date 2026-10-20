@@ -21,9 +21,11 @@
     onAuto: () => void;
     onEmpty: () => void;
     size?: Snippet;
+    /** Its look, by the turn buttons (inside, for a piece with several). */
+    look?: Snippet;
   }
 
-  let { name, held, turn, turns, auto, quarter, onTurn, onAuto, onEmpty, size }: Props = $props();
+  let { name, held, turn, turns, auto, quarter, onTurn, onAuto, onEmpty, size, look }: Props = $props();
 </script>
 
 <div class="inhand" role="group" aria-label="In hand">
@@ -36,6 +38,7 @@
     <button class="ws-icon-btn" title={quarter ? 'Turn a quarter clockwise (T)' : 'Turn clockwise (T)'} aria-label="Turn clockwise" onclick={() => onTurn(1)}><Icon name="rotate-cw" size={16} /></button>
   {/if}
   {#if auto}<button class="ws-btn quiet" title={quarter ? 'Face the way it would by itself (Z)' : 'Turn at random again (Z)'} onclick={onAuto}>Auto</button>{/if}
+  {#if look}{@render look()}{/if}
   {#if size}<span class="size">{@render size()}</span>{/if}
 </div>
 
