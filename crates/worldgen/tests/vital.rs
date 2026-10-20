@@ -884,13 +884,14 @@ fn interiors_guarantee() {
     assert!(worst_ms < 300.0, "slowest interior took {worst_ms:.1} ms");
 }
 
-//// Every city's castle in seeds 1 to 8 holds together (`castle_works`), an inner curtain in about
-/// half of them, each at least `GATES_APART` (90 ft) from its outer gate.
+//// Every city's castle in seeds 1 to 8 holds together (`castle_works`: its keep laid out by zones,
+/// about half its halls open two storeys), an inner curtain in about half of them, each at least
+/// `GATES_APART` (90 ft) from its outer gate.
 #[test]
 fn castles_guarantee() {
     use worldgen::t0::settle::Tier;
     use worldgen::town::{self, geom};
-    let (mut castles, mut inner) = (0, 0);
+    let (mut castles, mut inner, mut open_halls, mut closed_halls) = (0, 0, 0, 0);
     for seed in 1..=8 {
         let w = World::from_json(&world_json(seed)).unwrap();
         let t = worldgen::t0::T0::generate(&w);
@@ -899,7 +900,7 @@ fn castles_guarantee() {
             if l.castles.is_empty() {
                 continue;
             }
-            castle_works(&w, &t, &l, si);
+            castle_works(&w, &t, &l, si, &mut open_halls, &mut closed_halls);
             castle_ground(&w, &t, &l, si, &l.plazas.iter().find(|p| p.kind == town::PlazaKind::Bailey).expect("a bailey").pts);
             castles += 1;
             if l.castles.len() > 1 {
@@ -937,6 +938,8 @@ fn castles_guarantee() {
         }
     }
     assert!(castles >= 40, "too few castles checked ({castles})");
+    // About half the keeps with a floor over the hall have it open two storeys.
+    assert!(open_halls * 4 >= open_halls + closed_halls && closed_halls * 4 >= open_halls + closed_halls, "{open_halls} halls open two storeys, {closed_halls} not");
     assert!(inner * 10 >= castles * 3 && inner * 10 <= castles * 7, "{inner} of {castles} castles with an inner curtain");
 }
 
@@ -1050,7 +1053,7 @@ fn castle_ground(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layou
 /// inside has a room in each of its towers on every floor (round in a round tower) with a spiral
 /// stair in its middle, reached through one way in at most (the rest of the tower its wall), and
 /// keeps every rule interiors keep (`check_interior`).
-fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout, si: usize) {
+fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout, si: usize, open_halls: &mut usize, closed_halls: &mut usize) {
     use worldgen::interior;
     use worldgen::town::{self, PartKind, Structure, geom};
     let towers = interior::towers(l);
@@ -1089,30 +1092,83 @@ fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout
             continue;
         }
         let it = interior::generate(world, t0, si, b.id as usize).expect("a keep can be entered");
-        let rounds = b.parts.iter().filter(|p| p.kind == PartKind::Tower { round: true }).count();
-        let all = b.parts.iter().filter(|p| matches!(p.kind, PartKind::Tower { .. })).count();
+        // Laid out by zones on every floor, none fallen back on the shared layout.
+        let fell = interior::hub_fallbacks(world, t0, si, b.id as usize);
+        assert!(fell.is_empty(), "{tag}: floors {fell:?} not laid out by zones");
+        let sh = interior::Shell::of(l, b);
         let (nx, ny) = (it.nx, it.ny);
-        // Each tower's outline in grid units, its room's square (its spiral stair's) at its middle.
-        let grid = |q: [f64; 2]| {
-            let d = geom::sub(q, it.origin);
-            [geom::dot(d, it.axis) / 5.0, geom::dot(d, it.across) / 5.0]
-        };
-        let rings: Vec<Vec<[f64; 2]>> = b.parts.iter().filter(|p| matches!(p.kind, PartKind::Tower { .. })).map(|p| p.poly.iter().map(|q| grid(*q)).collect()).collect();
-        for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
-            let rooms = lv.rooms.iter().filter(|r| matches!(r.kind, "guard post" | "tower room" | "tower top") && r.squares > 0).count();
-            let round = lv.rooms.iter().filter(|r| matches!(r.kind, "guard post" | "tower room" | "tower top") && r.shape == interior::shape::ROUND).count();
-            let spirals: Vec<(usize, usize)> = lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| (f.x as usize, f.y as usize)).collect();
-            assert!(rooms == all && round == rounds && spirals.len() == all, "{tag} {}: {rooms} tower rooms ({round} round), {} spiral stairs for {all} towers ({rounds} round)", lv.name, spirals.len());
-            for ring in &rings {
-                let Some(&(sx, sy)) = spirals.iter().find(|s| geom::contains(ring, [s.0 as f64 + 0.5, s.1 as f64 + 0.5])) else { panic!("{tag} {}: a tower without its spiral stair", lv.name) };
-                let room = lv.cells[sy * nx + sx];
-                // Its wall unbroken but for one way in.
-                let ways = (0..nx * ny).filter(|&k| lv.cells[k] >= 0 && lv.cells[k] != room && geom::contains(ring, [(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5])).count();
-                assert!(ways <= 1, "{tag} {}: {ways} squares of floor in a tower's wall", lv.name);
-                // Reached (but its top, from its stair).
-                let door = lv.doors.iter().any(|d| d.rooms.contains(&room));
-                assert!(door || lv.name == "Tower tops", "{tag} {}: a tower's room has no way in", lv.name);
+        assert_eq!(sh.towers.len(), b.parts.iter().filter(|p| matches!(p.kind, PartKind::Tower { .. })).count(), "{tag}: a tower has no room");
+        // Each tower (`Shell::towers`): a room filling it on the ground floor and every floor up to
+        // its top (two at least), round in a round tower, its spiral stair at its middle, a way in.
+        for (ti, (sq, round, mid)) in sh.towers.iter().enumerate() {
+            let on: Vec<usize> = (0..it.levels.len()).filter(|&li| it.levels[li].z >= 0 && it.levels[li].cells[*mid] >= 0).collect();
+            assert!(on.len() >= 2 && on[0] == it.entry_level && on.windows(2).all(|w| w[1] == w[0] + 1), "{tag}: tower {ti} stands on levels {on:?}");
+            for &li in &on {
+                let lv = &it.levels[li];
+                let room = lv.cells[*mid];
+                assert!(sq.iter().all(|&k| lv.cells[k] == room), "{tag} {}: tower {ti}'s room doesn't fill it", lv.name);
+                assert!((lv.rooms[room as usize].shape == interior::shape::ROUND) == *round, "{tag} {}: tower {ti}'s room is drawn {} round", lv.name, if *round { "not" } else { "" });
+                assert!(lv.furniture.iter().any(|f| f.kind == "spiral_stair" && f.y as usize * nx + f.x as usize == *mid), "{tag} {}: tower {ti} without its spiral stair", lv.name);
+                assert!(lv.doors.iter().any(|d| d.rooms.contains(&room)), "{tag} {}: tower {ti}'s room has no way in", lv.name);
             }
+        }
+        // Laid out by zones (`interior::hub`): its great hall on the ground floor (a great tower's
+        // on the first, over its stores); a hall, L or T keep entered through its screens passage
+        // (or a forebuilding's entrance hall opening onto it); the main stair at the dais end,
+        // behind the hall's high end (in the landing off it, past the hall's middle from the
+        // screens). A hall open two storeys: its height left open above it (no way into it), a
+        // minstrels' gallery over it reached.
+        let kind = interior::hub::keep_kind(b).expect("a keep of pieces");
+        use interior::hub::Kind;
+        let hall_z = if matches!(kind, Kind::Great | Kind::Plain) && b.floors >= 2 { 1 } else { 0 };
+        let li = it.levels.iter().position(|lv| lv.z == hall_z).expect("the hall's floor");
+        let g = &it.levels[li];
+        let hall = g.rooms.iter().position(|r| r.kind == "great hall").unwrap_or_else(|| panic!("{tag} ({}): no great hall on {}", kind.name(), g.name)) as i16;
+        if kind != Kind::ShellKeep {
+            let at = |r: i16| {
+                let sq: Vec<usize> = (0..nx * ny).filter(|&k| g.cells[k] == r).collect();
+                [sq.iter().map(|&k| (k % nx) as f64 + 0.5).sum::<f64>() / sq.len().max(1) as f64, sq.iter().map(|&k| (k / nx) as f64 + 0.5).sum::<f64>() / sq.len().max(1) as f64]
+            };
+            let st = it.stairs;
+            let landing = g.cells[st[1] * nx + st[0]];
+            assert!(g.rooms[landing as usize].kind == "landing" && g.doors.iter().any(|d| d.rooms == [hall.min(landing), hall.max(landing)]), "{tag} ({}): the main stair isn't off the hall's high end", kind.name());
+            if let Some(sc) = g.rooms.iter().position(|r| r.kind == "screens passage") {
+                let (h, s) = (at(hall), at(sc as i16));
+                let p = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
+                assert!(geom::dot(geom::sub(p, h), geom::sub(h, s)) > 0.0, "{tag} ({}): the main stair is at the screens end", kind.name());
+            }
+            if matches!(kind, Kind::Hall | Kind::L | Kind::T) {
+                let front = g.doors.iter().find(|d| d.kind == "front").expect("a front door");
+                let r = front.rooms[0];
+                let screens = |o: i16| g.rooms[o as usize].kind == "screens passage";
+                let into = screens(r) || (g.rooms[r as usize].kind == "entrance hall" && g.doors.iter().any(|d| d.rooms.contains(&r) && d.rooms.iter().any(|&o| o >= 0 && screens(o))));
+                assert!(into, "{tag} ({}): the front door opens into the {}", kind.name(), g.rooms[r as usize].kind);
+            }
+        }
+        if let Some(up) = it.levels.get(li + 1).filter(|lv| lv.rooms.iter().any(|r| r.kind == interior::OPEN_BELOW && r.squares > 0)) {
+            if kind != Kind::ShellKeep {
+                let gallery = up.rooms.iter().position(|r| r.kind == "minstrels' gallery").unwrap_or_else(|| panic!("{tag} {}: an open hall without its gallery", up.name));
+                assert!(up.doors.iter().any(|d| d.rooms.contains(&(gallery as i16))), "{tag} {}: the minstrels' gallery has no way in", up.name);
+                // (Reached from the main stair through passages only, never through a room.)
+                let st = it.stairs;
+                let mut seen = vec![false; up.rooms.len()];
+                let mut stack = vec![up.cells[st[1] * nx + st[0]]];
+                while let Some(a) = stack.pop() {
+                    if a < 0 || seen[a as usize] || !interior::is_circulation(up.rooms[a as usize].kind) {
+                        continue;
+                    }
+                    seen[a as usize] = true;
+                    stack.extend(up.doors.iter().filter(|d| d.rooms.contains(&a)).map(|d| if d.rooms[0] == a { d.rooms[1] } else { d.rooms[0] }));
+                }
+                assert!(seen[gallery], "{tag} {}: the minstrels' gallery is reached only through a room", up.name);
+                // (Its open height over the hall below.)
+                for k in (0..nx * ny).filter(|&k| up.cells[k] >= 0 && up.rooms[up.cells[k] as usize].kind == interior::OPEN_BELOW) {
+                    assert!(g.cells[k] == hall, "{tag} {}: open to below over the {}", up.name, g.rooms[g.cells[k].max(0) as usize].kind);
+                }
+                *open_halls += 1;
+            }
+        } else if kind != Kind::ShellKeep && it.levels.iter().any(|lv| lv.z == hall_z + 1 && lv.z < b.floors as i8) {
+            *closed_halls += 1;
         }
         assert!(it.outlines.len() >= b.parts.len(), "{tag}: {} outline parts for {} pieces", it.outlines.len(), b.parts.len());
         check_interior(world, t0, l, si, &format!("b:{si}:{}", b.id), &building_buckets(l));
@@ -1508,15 +1564,18 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
         assert!(problems.is_empty(), "{tag}: as a design: {problems:?}");
         assert_eq!(serde_json::to_string(&built).unwrap(), serde_json::to_string(&it).unwrap(), "{tag}: built again from its design, it differs");
     }
-    // One chapel per building; spiral stairs on the same square on every level with them.
+    // One chapel per building; each spiral stair on the same square on a run of two levels or more
+    // (a keep's tower rises as high as the piece it stands on, and a storey more).
     let chapels = it.levels.iter().flat_map(|lv| lv.rooms.iter()).filter(|r| r.kind == "chapel").count();
     assert!(chapels <= 1, "{tag}: {chapels} chapels");
     let spirals: Vec<Vec<(u16, u16)>> = it.levels.iter().map(|lv| lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| (f.x, f.y)).collect()).collect();
-    if let Some(first) = spirals.iter().find(|v| !v.is_empty()) {
-        for v in spirals.iter().filter(|v| !v.is_empty()) {
-            assert_eq!(v, first, "{tag}: spiral stairs move between levels");
-        }
-        assert!(spirals.iter().filter(|v| !v.is_empty()).count() >= 2, "{tag}: spiral stairs on one level only");
+    let mut at: Vec<(u16, u16)> = spirals.iter().flatten().copied().collect();
+    at.sort();
+    at.dedup();
+    for s in at {
+        let on: Vec<usize> = (0..spirals.len()).filter(|&li| spirals[li].contains(&s)).collect();
+        assert!(on.len() >= 2, "{tag}: a spiral stair at {s:?} on one level only");
+        assert!(on.windows(2).all(|w| w[1] == w[0] + 1), "{tag}: the spiral stair at {s:?} skips a level");
     }
     // Cells: under 15 ft a side, each with a door onto a corridor or guardroom (never
     // through another cell).
@@ -1631,9 +1690,49 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
             let reached = door_sq(d).into_iter().filter(|&p| inb(p)).any(|(i, j)| seen[j as usize * nx + i as usize]);
             assert!(reached, "{tag} {}: a {} door is cut off", lv.name, d.kind);
         }
+        // Every spiral stair reached from the stairs, and from its room's doors with nothing but a
+        // rug in the way (not a bed one could step over): the way on up to the rooms above it.
+        let mut occupied = vec![false; nx * ny];
+        for f in lv.furniture.iter().filter(|f| f.kind != "rug" && f.kind != "spiral_stair") {
+            for j in f.y as usize..(f.y + f.h) as usize {
+                for i in f.x as usize..(f.x + f.w) as usize {
+                    occupied[j * nx + i] = true;
+                }
+            }
+        }
+        for f in lv.furniture.iter().filter(|f| f.kind == "spiral_stair") {
+            let k0 = f.y as usize * nx + f.x as usize;
+            assert!(seen[k0], "{tag} {}: the spiral stair at ({}, {}) is cut off", lv.name, f.x, f.y);
+            let r = lv.cells[k0];
+            let mut near: Vec<usize> = lv.doors.iter().flat_map(door_sq).filter(|&p| inb(p)).map(|(i, j)| j as usize * nx + i as usize).filter(|&k| lv.cells[k] == r && seen[k]).collect();
+            if near.is_empty() {
+                continue;
+            }
+            let mut got = vec![false; nx * ny];
+            for &k in &near {
+                got[k] = true;
+            }
+            while let Some(k) = near.pop() {
+                let (i, j) = (k % nx, k / nx);
+                for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                    let q = b.wrapping_mul(nx).wrapping_add(a);
+                    if a < nx && b < ny && !got[q] && lv.cells[q] == r && !occupied[q] {
+                        got[q] = true;
+                        near.push(q);
+                    }
+                }
+            }
+            assert!(got[k0], "{tag} {}: furniture shuts the spiral stair at ({}, {}) off from its room's doors", lv.name, f.x, f.y);
+        }
         for (ri, room) in lv.rooms.iter().enumerate() {
             let open = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && !blocked[k]);
             let reached = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && seen[k]);
+            if !interior::walkable(room.kind) {
+                // A hall's height left open, a roof's slopes: no door, no floor, nothing on them.
+                assert!(!reached && !lv.doors.iter().any(|d| d.rooms.contains(&(ri as i16))), "{tag} {}: the {} has a way in", lv.name, room.kind);
+                assert!(!lv.furniture.iter().any(|f| (f.y..f.y + f.h).any(|j| (f.x..f.x + f.w).any(|i| lv.cells[j as usize * nx + i as usize] == ri as i16))), "{tag} {}: something stands on the {}", lv.name, room.kind);
+                continue;
+            }
             assert!(!open || reached, "{tag} {}: the {} is unreachable", lv.name, room.kind);
         }
         // Floors with corridors: no room is reached through more than one other room (a
@@ -1641,7 +1740,7 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
         // into, as `connect` lays it out: a taproom, a reading room, a great hall, counted from
         // as well on a floor with a corridor).
         let entry = lv.doors.iter().find(|d| d.kind == "front").and_then(|d| d.rooms.iter().copied().find(|&r| r >= 0));
-        let circ = |r: usize| matches!(lv.rooms[r].kind, "hall" | "corridor" | "landing" | "great hall" | "mess hall" | "guardroom");
+        let circ = |r: usize| interior::is_way_through(lv.rooms[r].kind);
         if lv.rooms.len() >= 8 && (0..lv.rooms.len()).any(circ) {
             let mut hops = vec![usize::MAX; lv.rooms.len()];
             let mut q = std::collections::VecDeque::new();
@@ -1660,7 +1759,7 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
                 }
             }
             for (ri, room) in lv.rooms.iter().enumerate() {
-                if room.squares > 0 && hops[ri] != usize::MAX {
+                if room.squares > 0 && hops[ri] != usize::MAX && interior::walkable(room.kind) {
                     assert!(hops[ri] <= 2, "{tag} {}: the {} is {} rooms from a corridor", lv.name, room.kind, hops[ri] - 1);
                 }
             }
@@ -2593,7 +2692,7 @@ fn agent_edits_guarantee() {
         l.gate_towers.len(),
         l.castles.len()
     );
-    castle_works(world, t0, &l, li);
+    castle_works(world, t0, &l, li, &mut 0, &mut 0);
     assert!(l.walls.iter().flatten().all(|p| geom::contains(&keep.poly, *p)), "the curtain stands outside the outline drawn");
     let buckets = building_buckets(&l);
     let ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed).map(|b| format!("b:{li}:{}", b.id)).chain((0..interior::towers(&l).len()).map(|k| format!("t:{li}:{k}"))).collect();

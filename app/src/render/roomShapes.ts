@@ -4,7 +4,7 @@
 // Only the drawing follows them: play keeps to the squares, so a curved wall may stand up to half
 // a square off them. Geometry here is in grid units, polygons wound clockwise on screen (y down).
 import type { Graphics } from 'pixi.js';
-import type { Interior, InteriorLevel } from '../gen/protocol';
+import { OPEN_BELOW, ROOF_SLOPE, type Interior, type InteriorLevel } from '../gen/protocol';
 
 export type Pt = [number, number];
 /** A box in grid units: x0, y0, x1, y1. */
@@ -567,6 +567,8 @@ export interface DrawnWindow {
 }
 
 const N4: Pt[] = [[-1, 0], [0, -1], [1, 0], [0, 1]];
+/** Ways about a floor that run round an open height (`shapedPlan`'s ring). */
+const GALLERIES = new Set(['corridor', "minstrels' gallery", 'mural passage']);
 const N8: Pt[] = [...N4, [-1, -1], [1, -1], [1, 1], [-1, 1]];
 const flat = (p: Pt[]) => p.flatMap((q) => q);
 const squareAt = (i: number, j: number): Pt[] => [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]];
@@ -628,6 +630,28 @@ export function shapedPlan(outlines: Pt[][] | undefined, lv: InteriorLevel, nx: 
     // (Cut to the part holding most of it.)
     const pieces = faces.map((q) => clipConvex(p, q)).filter((q) => q.length).sort((x, y) => Math.abs(area2(y)) - Math.abs(area2(x)));
     return pieces[0] ?? null;
+  });
+  // A gallery round a round open height (a shell keep's upper floor): drawn to the circle a square
+  // outside the open height's, its wall to the rooms round it along that circle (its squares, and
+  // play on them, as they are).
+  lv.rooms.forEach((r, ri) => {
+    const b = boxes[ri];
+    if (r.kind !== OPEN_BELOW || r.shape !== ROUND || !b || !polys[ri]) return;
+    const beside = new Map<number, number>();
+    for (let j = b[1]; j < b[3]; j++) {
+      for (let i = b[0]; i < b[2]; i++) {
+        if (cell(i, j) !== ri) continue;
+        for (const [di, dj] of N4) {
+          const q = cell(i + di, j + dj);
+          if (q >= 0 && q !== ri) beside.set(q, (beside.get(q) ?? 0) + 1);
+        }
+      }
+    }
+    const ring = [...beside].sort((x, y) => y[1] - x[1] || x[0] - y[0])[0]?.[0];
+    if (ring === undefined || !GALLERIES.has(lv.rooms[ring].kind) || polys[ring]) return;
+    const disc = shapePolygon([b[0] - 1, b[1] - 1, b[2] + 1, b[3] + 1], ROUND);
+    const cut = disc ? faces.map((q) => clipConvex(disc, q)).filter((q) => q.length).sort((x, y) => Math.abs(area2(y)) - Math.abs(area2(x)))[0] : undefined;
+    if (cut) polys[ring] = cut;
   });
   const isShaped = (r: number) => r >= 0 && !!polys[r]?.length;
   const owner = new Int32Array(W * (ny + 2)).fill(-1);
@@ -718,7 +742,8 @@ export function drawShapedFloors(g: Graphics, sp: ShapedPlan, lv: InteriorLevel,
   for (let j = -1; j <= ny; j++) {
     for (let i = -1; i <= nx; i++) {
       const o = shownAt(sp, i, j);
-      if (o < 0) continue;
+      // (A room with no floor of its own, colour -1: what is under it is drawn apart.)
+      if (o < 0 || color(o) < 0) continue;
       for (const region of clipParts(squareAt(i, j), parts)) g.poly(flat(region)).fill(color(o));
       for (const seg of texture(i, j, color(o))) lines.push({ seg, clip: parts });
     }
@@ -726,7 +751,7 @@ export function drawShapedFloors(g: Graphics, sp: ShapedPlan, lv: InteriorLevel,
   strokeClipped(g, lines, { width: 0.03, color: 0x000000, alpha: 0.25 });
   const own: { seg: [Pt, Pt]; clip: Pt[][] }[] = [];
   polys.forEach((p, r) => {
-    if (!p?.length) return;
+    if (!p?.length || color(r) < 0) return;
     g.poly(flat(p)).fill(color(r));
     const xs = p.map((q) => q[0]);
     const ys = p.map((q) => q[1]);
@@ -739,7 +764,7 @@ export function drawShapedFloors(g: Graphics, sp: ShapedPlan, lv: InteriorLevel,
   for (let j = 0; j < ny; j++) {
     for (let i = 0; i < nx; i++) {
       const r = lv.cells[j * nx + i];
-      if (r < 0) continue;
+      if (r < 0 || color(r) < 0) continue;
       const clip = polys[r]?.length ? [polys[r]!] : parts;
       const c = squareAt(i, j);
       for (let k = 0; k < 4; k++) grid.push({ seg: [c[k], c[(k + 1) % 4]], clip });
@@ -884,9 +909,18 @@ export function drawShapedWalls(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, 
   const own = (i: number, j: number) => owner[(j + 1) * W + i + 1];
   const shapedSq = (i: number, j: number) => i >= 0 && j >= 0 && i < nx && j < ny && lv.cells[j * nx + i] >= 0 && !!polys[lv.cells[j * nx + i]]?.length;
   const doorEdge = new Set(lv.doors.map((d) => `${Math.min(d.a[0], d.b[0])},${Math.min(d.a[1], d.b[1])},${d.a[0] === d.b[0] ? 'v' : 'h'}`));
+  // (A railing over an open hall is drawn apart, not as a wall.)
+  for (const w of lv.walls) {
+    if (!w.rail) continue;
+    const vert = w.a[0] === w.b[0];
+    const [lo, hi] = vert ? [Math.min(w.a[1], w.b[1]), Math.max(w.a[1], w.b[1])] : [Math.min(w.a[0], w.b[0]), Math.max(w.a[0], w.b[0])];
+    for (let t = lo; t < hi; t++) doorEdge.add(vert ? `${w.a[0]},${t},v` : `${t},${w.a[1]},h`);
+  }
   const cut = polys.filter((p): p is Pt[] => !!p?.length);
+  // (A roof's slopes inside a parapet walk end at their eaves, not a wall.)
+  const eave = (o: number) => o >= 0 && lv.rooms[o]?.kind === ROOF_SLOPE;
   // Unit edges between two rooms' squares (the ring's too: the rooms reach the outer wall there),
-  // not a shaped room's, not a doorway; in runs along each line.
+  // not a shaped room's, not a doorway, not a roof's; in runs along each line.
   const runs: [Pt, Pt][] = [];
   for (const vertical of [false, true]) {
     const span = vertical ? ny : nx;
@@ -899,7 +933,7 @@ export function drawShapedWalls(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, 
           t <= span &&
           (() => {
             const [oa, ob] = [own(a[0], a[1]), own(b[0], b[1])];
-            return oa >= 0 && ob >= 0 && oa !== ob && !shapedSq(a[0], a[1]) && !shapedSq(b[0], b[1]) && !doorEdge.has(key);
+            return oa >= 0 && ob >= 0 && oa !== ob && !eave(oa) && !eave(ob) && !shapedSq(a[0], a[1]) && !shapedSq(b[0], b[1]) && !doorEdge.has(key);
           })();
         if (wall) start ??= t;
         else if (start !== null) {
@@ -929,9 +963,9 @@ export function drawShapedWalls(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, 
   };
   drawn = 0;
   // Round each shaped room, but where its doors and embrasures go through it and beyond the outer
-  // wall.
+  // wall (a hall's height left open: its railing is drawn apart).
   polys.forEach((p, r) => {
-    if (!p?.length) return;
+    if (!p?.length || lv.rooms[r].kind === OPEN_BELOW) return;
     // (Open as wide as the door's leaf, the embrasure's mouth.)
     const gaps: { at: Pt; half: number }[] = [
       ...doors.filter((d) => (d.rooms[0] === r || d.rooms[1] === r) && d.inner).map((d) => ({ at: d.inner!, half: Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]) / 2 })),
@@ -1055,7 +1089,22 @@ function planOf(it: Interior, level: number): { plan: ShapedPlan | null; doors: 
         }) : null;
     out = { plan: null, doors };
   } else {
-    const plan = shapedPlan(it.outlines, lv, it.nx, it.ny, footOf(it.levels, it.nx * it.ny));
+    // (A keep's pieces that have ended below this level (a forebuilding, a wing) aren't drawn on it:
+    // only the outline parts holding some of its squares no other part holds; a wing overlapping the
+    // body by a row has only squares the body holds too once it has ended.)
+    let outlines = it.outlines;
+    if (it.outlines && it.outlines.length > 1) {
+      const parts = it.outlines.map((o) => o.map((p) => [p[0], p[1]] as Pt));
+      const holds = new Set<number>();
+      for (let k = 0; k < it.nx * it.ny; k++) {
+        if (lv.cells[k] < 0) continue;
+        const c: Pt = [(k % it.nx) + 0.5, Math.floor(k / it.nx) + 0.5];
+        const inside = parts.flatMap((p, n) => (insetIn(c, p) > 0 ? [n] : []));
+        if (inside.length === 1) holds.add(inside[0]);
+      }
+      outlines = it.outlines.filter((_, p) => holds.has(p));
+    }
+    const plan = shapedPlan(outlines, lv, it.nx, it.ny, footOf(it.levels, it.nx * it.ny));
     out = { plan, doors: plan ? lv.doors.map((d) => doorSegment(plan, lv, d)) : null };
   }
   byLevel.set(level, out);

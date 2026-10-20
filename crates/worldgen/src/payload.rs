@@ -383,7 +383,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     let attr = kind | (b.ward as u32) << 8 | (b.floors as u32) << 16 | (b.func.is_some() as u32) << 24;
                     // A keep of pieces: each piece (convex, outlined), its towers over its body;
                     // each with its kind + 1 (bits 25-28: 1 body, 2 round tower, 3 square tower, 4
-                    // forebuilding, 5 wing) and how it is topped (bits 29-30: `town::keep_tops`).
+                    // forebuilding, 5 wing) and how it is topped (bits 29-31: `town::keep_tops`, its
+                    // donjon's end in bit 31).
                     if !b.parts.is_empty() {
                         let c = crate::town::geom::centroid(&b.poly);
                         whole.set(Some(owns(c)));

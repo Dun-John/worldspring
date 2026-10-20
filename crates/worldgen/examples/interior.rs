@@ -1,4 +1,6 @@
-//! Dev tool: print building interiors as text (one letter per room, # stairs, * furniture).
+//! Dev tool: print building interiors as text (one letter per room, # stairs, @ spiral stairs, *
+//! furniture; a hall's height left open (`open to below`) `:`, a roof's slopes `^`; the railings
+//! where a gallery or passage looks down into an open hall listed).
 //! `cargo run --release -p worldgen --example interior -- [seed] [settlement] [function...]`
 use worldgen::interior;
 use worldgen::{World, WorldFile};
@@ -20,16 +22,22 @@ fn main() {
         let it = interior::generate(&world, &t0, si, bi).unwrap();
         let ms = t.elapsed().as_secs_f64() * 1e3;
         let outline = if it.outlines.is_empty() { String::new() } else { format!(", drawn inside a {}-sided outline", it.outlines.iter().map(|o| o.len().to_string()).collect::<Vec<_>>().join("+")) };
-        println!("== {} {:?} ({}x{} squares, {} levels{outline}, {ms:.2} ms)", it.function, it.name, it.nx, it.ny, it.levels.len());
+        let kind = l.building(bi).and_then(interior::hub::keep_kind).map(|k| format!(", a {}", k.name())).unwrap_or_default();
+        println!("== {} {:?} ({}x{} squares, {} levels{outline}{kind}, {ms:.2} ms)", it.function, it.name, it.nx, it.ny, it.levels.len());
         for lv in &it.levels {
             let room = |r: &interior::Room| format!("{}{}={}", r.kind, interior::shape::name(r.shape).map(|s| format!(" ({s})")).unwrap_or_default(), r.squares);
             println!("-- {} (z {}): {}", lv.name, lv.z, lv.rooms.iter().map(room).collect::<Vec<_>>().join(", "));
             let mut grid: Vec<Vec<char>> = (0..it.ny).map(|j| (0..it.nx).map(|i| {
                 let c = lv.cells[j * it.nx + i];
-                if c < 0 { ' ' } else { (b'a' + (c as u8 % 26)) as char }
+                match lv.rooms.get(c.max(0) as usize).map(|r| r.kind) {
+                    _ if c < 0 => ' ',
+                    Some(interior::OPEN_BELOW) => ':',
+                    Some(interior::ROOF_SLOPE) => '^',
+                    _ => (b'a' + (c as u8 % 26)) as char,
+                }
             }).collect()).collect();
             if std::env::var("NOFURN").is_err() {
-                for f in &lv.furniture {
+                for f in lv.furniture.iter().filter(|f| f.kind != "spiral_stair") {
                     for j in f.y..f.y + f.h {
                         for i in f.x..f.x + f.w {
                             grid[j as usize][i as usize] = '*';
@@ -40,13 +48,22 @@ fn main() {
             println!("  furniture: {}", lv.furniture.iter().map(|f| format!("{}@{},{} {}x{}", f.kind, f.x, f.y, f.w, f.h)).collect::<Vec<_>>().join(" "));
             for j in it.stairs[1]..it.stairs[1] + it.stairs[3] {
                 for i in it.stairs[0]..it.stairs[0] + it.stairs[2] {
-                    grid[j][i] = '#';
+                    if lv.has_stairs {
+                        grid[j][i] = '#';
+                    }
                 }
+            }
+            for f in lv.furniture.iter().filter(|f| f.kind == "spiral_stair") {
+                grid[f.y as usize][f.x as usize] = '@';
             }
             for row in grid {
                 println!("  {}", row.into_iter().collect::<String>());
             }
             println!("  doors: {}", lv.doors.iter().map(|d| format!("{}@({},{})", d.kind, d.a[0], d.a[1])).collect::<Vec<_>>().join(" "));
+            let rails: Vec<String> = lv.walls.iter().filter(|w| w.rail).map(|w| format!("({},{})-({},{})", w.a[0], w.a[1], w.b[0], w.b[1])).collect();
+            if !rails.is_empty() {
+                println!("  railings: {}", rails.join(" "));
+            }
         }
     }
 }

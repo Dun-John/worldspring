@@ -1,7 +1,7 @@
 // Geometry on a location's grid of squares: what the characters can see (rays cast square
 // by square, stopped by walls, closed doors, rock, buildings and tall objects, and hidden by
 // higher ground), lit squares in the dark, ruler paths and shapes.
-import type { Interior } from '../gen/protocol';
+import { OPEN_BELOW, ROOF_SLOPE, type Interior } from '../gen/protocol';
 import type { GridSettings, Shape } from './state';
 
 /** Square flags. */
@@ -41,7 +41,13 @@ export function interiorGrid(it: Interior, li: number, closed: (door: number) =>
   const lv = it.levels[li];
   const { nx, ny } = it;
   const flags = new Uint8Array(nx * ny);
-  for (let k = 0; k < nx * ny; k++) if (lv.cells[k] < 0) flags[k] = SOLID | OPAQUE | BLOCKS;
+  // (A hall's height left open is seen across and down into, not walked; a roof's slopes are
+  // neither.)
+  for (let k = 0; k < nx * ny; k++) {
+    const kind = lv.cells[k] < 0 ? null : lv.rooms[lv.cells[k]].kind;
+    if (kind === null || kind === ROOF_SLOPE) flags[k] = SOLID | OPAQUE | BLOCKS;
+    else if (kind === OPEN_BELOW) flags[k] = BLOCKS;
+  }
   for (const f of lv.furniture) {
     let v = 0;
     if (f.blocks_move) v |= BLOCKS;
@@ -64,7 +70,8 @@ export function interiorGrid(it: Interior, li: number, closed: (door: number) =>
       for (let i = Math.round(Math.min(a[0], b[0])); i < Math.round(Math.max(a[0], b[0])); i++) if (i >= 0 && i < nx && y >= 0 && y <= ny) wh[y * nx + i] = 1;
     }
   };
-  for (const w of lv.walls) line(w.a, w.b);
+  // (Railings over an open hall don't stop the eye; its open height stops a step.)
+  for (const w of lv.walls) if (!w.rail) line(w.a, w.b);
   lv.doors.forEach((d, k) => closed(k) && line(d.a, d.b));
   return {
     flags: (i, j) => (i < 0 || j < 0 || i >= nx || j >= ny ? SOLID | OPAQUE | BLOCKS : flags[j * nx + i]),

@@ -4,7 +4,7 @@
 // surface shows through only faintly; caves get rough, chamfered rock edges. Geometry is in
 // the interior's own 5-ft grid units; the container maps them to the screen every frame.
 import { BufferImageSource, Container, Geometry, GlProgram, Graphics, Mesh, RenderTexture, Shader, Sprite, Text, TextStyle, Texture, UniformGroup, type Renderer } from 'pixi.js';
-import type { Interior, InteriorItem, InteriorLevel } from '../gen/protocol';
+import { OPEN_BELOW, ROOF_SLOPE, type Interior, type InteriorItem, type InteriorLevel } from '../gen/protocol';
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
@@ -15,7 +15,7 @@ import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
 import { noiseSource } from './noise';
 import { SQUARE_SITES, underField, type UnderField } from './underField';
-import { drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetParts, shapedPlanOf, shapeIndex, undergroundWalls, WALL_HALF, wallTangent, within, type Pt } from './roomShapes';
+import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
 import undergroundFragment from './shaders/underground.frag?raw';
 import vertex from './shaders/terrain.vert?raw';
 
@@ -79,9 +79,11 @@ function floorColor(kind: string, z: number, natural = false, raise = 0): number
   if (kind === 'sewer tunnel' || kind === 'service passage') return 0x8a7d6c;
   if (['arena floor'].includes(kind)) return 0xc8b184;
   if (['kitchen', 'baths', 'forge', 'brewhouse'].includes(kind)) return 0x8f8a80;
-  if (kind === 'battlements') return 0xa8a296;
+  // (A roof's squares: the walk's stone, under the roof drawn over them, `drawRoofs`.)
+  if (kind === 'battlements' || kind === 'wall walk' || kind === ROOF_SLOPE) return 0xa8a296;
+  if (kind === OPEN_BELOW) return -1;
   if (kind === 'stands') return 0x8a7a64;
-  if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor'].includes(kind))
+  if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison'].includes(kind))
     return 0x9d978c;
   return 0xa87a4f;
 }
@@ -96,6 +98,161 @@ function floorPattern(i: number, j: number, c: number): [Pt, Pt][] {
     [[i + odd * 0.5 + 0.25, j], [i + odd * 0.5 + 0.25, j + 0.5]],
     [[i + (1 - odd) * 0.5 + 0.25, j + 0.5], [i + (1 - odd) * 0.5 + 0.25, j + 1]],
   ];
+}
+
+/** Rooms open to the sky: their outer wall a parapet, with merlons. */
+const OPEN_TOP = new Set(['battlements', 'wall walk', 'tower top', ROOF_SLOPE]);
+
+/** Rooms that are ways about a floor (`interior::is_circulation`): a railing along a hall's open
+ * height where it meets one. */
+const CIRCULATION = new Set(['hall', 'corridor', 'landing', 'screens passage', 'mural passage', 'entrance hall', 'cloister walk', 'keep yard', 'nave', "minstrels' gallery", 'gate passage']);
+
+/** A hall's (or a yard's) height left open drawn round (`shape` 1): its outline, cut to the walls. */
+function roundVoids(lv: InteriorLevel, sp: ShapedPlan | null): Map<number, Pt[]> {
+  const out = new Map<number, Pt[]>();
+  lv.rooms.forEach((r, ri) => {
+    const p = sp?.polys[ri];
+    if (r.kind === OPEN_BELOW && r.shape === 1 && p?.length) out.set(ri, p);
+  });
+  return out;
+}
+
+/** A roof's slopes (`ROOF_SLOPE` rooms) inside a keep's parapet walk: slate, hipped along its
+ * longer side where its squares fill their box (its ridge and hips drawn); round a round yard left
+ * open (a shell keep's lean-tos), a ring sloping down to it from the walk; else plain. */
+function drawRoofs(g: Graphics, lv: InteriorLevel, nx: number, ny: number, sp: ShapedPlan | null) {
+  const SLATE = 0x56606b;
+  const shade = (c: number, f: number) => {
+    const ch = (s: number) => Math.max(0, Math.min(255, Math.round(((c >> s) & 255) * f)));
+    return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+  };
+  const voids = roundVoids(lv, sp);
+  const boxes = voids.size ? roomBoxes(lv, nx, ny) : [];
+  lv.rooms.forEach((room, ri) => {
+    if (room.kind !== ROOF_SLOPE) return;
+    let [x0, y0, x1, y1, n] = [Infinity, Infinity, -Infinity, -Infinity, 0];
+    for (let k = 0; k < nx * ny; k++) {
+      if (lv.cells[k] !== ri) continue;
+      const [i, j] = [k % nx, Math.floor(k / nx)];
+      [x0, y0, x1, y1, n] = [Math.min(x0, i), Math.min(y0, j), Math.max(x1, i + 1), Math.max(y1, j + 1), n + 1];
+    }
+    if (!n) return;
+    // A ring round a round yard inside it: from the walk's inner edge (the outer wall's inner face
+    // a square in) down to the yard's edge.
+    const yard = [...voids.keys()].find((v) => {
+      const b = boxes[v];
+      return !!b && b[0] > x0 && b[2] < x1 && b[1] > y0 && b[3] < y1;
+    });
+    if (yard !== undefined && sp) {
+      const b = boxes[yard]!;
+      const [cx, cy] = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+      const r0 = Math.min(b[2] - b[0], b[3] - b[1]) / 2;
+      const r1 = sp.real ? Math.min(...sp.parts.map((p) => insetIn([cx, cy], p))) - WALL_HALF - 0.85 : Math.min(x1 - cx, cx - x0, y1 - cy, cy - y0) - 0.15;
+      if (r1 > r0 + 0.4) {
+        const seg = 64;
+        const at = (r: number, a: number): number[] => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+        for (let k = 0; k < seg; k++) {
+          const [a0, a1] = [(k / seg) * 2 * Math.PI, ((k + 1) / seg) * 2 * Math.PI];
+          // (Each piece faces in, down to the yard: lit from the top of the screen as the hipped
+          // roofs are.)
+          g.poly([...at(r1, a0), ...at(r1, a1 + 0.002), ...at(r0, a1 + 0.002), ...at(r0, a0)]).fill(shade(SLATE, 0.975 + 0.175 * Math.sin((a0 + a1) / 2)));
+        }
+        for (let r = r0 + 0.45; r < r1 - 0.1; r += 0.45) g.circle(cx, cy, r);
+        g.stroke({ width: 0.03, color: 0x2f353b, alpha: 0.35 });
+        for (let k = 0; k < 16; k++) {
+          const a = (k / 16) * 2 * Math.PI;
+          g.moveTo(...(at(r0, a) as [number, number])).lineTo(...(at(r1, a) as [number, number]));
+        }
+        g.stroke({ width: 0.04, color: 0x8a9099, alpha: 0.6 });
+        g.circle(cx, cy, r1).stroke({ width: 0.06, color: INK });
+        g.circle(cx, cy, r0).stroke({ width: 0.08, color: INK });
+        return;
+      }
+    }
+    if (n !== (x1 - x0) * (y1 - y0)) {
+      for (let k = 0; k < nx * ny; k++) if (lv.cells[k] === ri) g.rect(k % nx, Math.floor(k / nx), 1, 1);
+      g.fill(SLATE);
+      return;
+    }
+    // Hipped: the ridge along the longer side, half the shorter side in from each end.
+    const along = x1 - x0 >= y1 - y0;
+    const h = (along ? y1 - y0 : x1 - x0) / 2;
+    const [r0, r1]: [number, number][] = along ? [[x0 + h, (y0 + y1) / 2], [x1 - h, (y0 + y1) / 2]] : [[(x0 + x1) / 2, y0 + h], [(x0 + x1) / 2, y1 - h]];
+    const faces: [number[], number][] = along
+      ? [
+          [[x0, y0, x1, y0, ...r1, ...r0], 1.15],
+          [[x0, y1, x1, y1, ...r1, ...r0], 0.8],
+          [[x0, y0, ...r0, x0, y1], 1.0],
+          [[x1, y0, ...r1, x1, y1], 0.9],
+        ]
+      : [
+          [[x0, y0, x0, y1, ...r1, ...r0], 1.15],
+          [[x1, y0, x1, y1, ...r1, ...r0], 0.8],
+          [[x0, y0, ...r0, x1, y0], 1.0],
+          [[x0, y1, ...r1, x1, y1], 0.9],
+        ];
+    for (const [pts, f] of faces) g.poly(pts).fill(shade(SLATE, f));
+    // Courses parallel to the eaves, the hips and the ridge.
+    for (let d = 0.45; d < h - 0.1; d += 0.45) g.rect(x0 + d, y0 + d, x1 - x0 - 2 * d, y1 - y0 - 2 * d);
+    g.stroke({ width: 0.03, color: 0x2f353b, alpha: 0.35 });
+    g.moveTo(x0, y0).lineTo(...r0).lineTo(x0 + (along ? 0 : x1 - x0), y0 + (along ? y1 - y0 : 0));
+    g.moveTo(x1, y1).lineTo(...r1).lineTo(x1 - (along ? 0 : x1 - x0), y1 - (along ? y1 - y0 : 0));
+    g.stroke({ width: 0.05, color: 0x8a9099, alpha: 0.8 });
+    g.moveTo(...r0).lineTo(...r1).stroke({ width: 0.09, color: 0x9aa0a8 });
+    g.rect(x0, y0, x1 - x0, y1 - y0).stroke({ width: 0.06, color: INK });
+  });
+}
+
+/** Railings (`Wall::rail`) along a hall's open height: a timber rail on posts; round a round one
+ * (a shell keep's yard), along its circle where a gallery meets it. */
+function drawRails(g: Graphics, lv: InteriorLevel, nx: number, ny: number, sp: ShapedPlan | null) {
+  const voids = roundVoids(lv, sp);
+  const cell = (p: Pt) => {
+    const [i, j] = [Math.floor(p[0]), Math.floor(p[1])];
+    return i >= 0 && j >= 0 && i < nx && j < ny ? lv.cells[j * nx + i] : -1;
+  };
+  // (Where a rail stands between a round void's square and another, the circle has it.)
+  const onRound = (w: InteriorLevel['walls'][number]) => {
+    const mid: Pt = [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2];
+    const n: Pt = w.a[0] === w.b[0] ? [0.5, 0] : [0, 0.5];
+    return voids.has(cell([mid[0] - n[0], mid[1] - n[1]])) || voids.has(cell([mid[0] + n[0], mid[1] + n[1]]));
+  };
+  const runs: Pt[][] = lv.walls.filter((w) => w.rail && !onRound(w)).map((w) => [w.a, w.b]);
+  for (const [ri, p] of voids) {
+    const pieces = boundaryPieces(p);
+    const gallery = (k: number) => {
+      const q = pieces[k];
+      const r = cell([(q.a[0] + q.b[0]) / 2 + q.out[0] * 0.35, (q.a[1] + q.b[1]) / 2 + q.out[1] * 0.35]);
+      return r >= 0 && r !== ri && CIRCULATION.has(lv.rooms[r].kind);
+    };
+    runs.push(...keptRuns(pieces, gallery));
+  }
+  if (!runs.length) return;
+  const line = () => {
+    for (const run of runs) {
+      g.moveTo(run[0][0], run[0][1]);
+      for (const q of run.slice(1)) g.lineTo(q[0], q[1]);
+    }
+  };
+  line();
+  g.stroke({ width: 0.16, color: 0x3d2a17, cap: 'round', join: 'round' });
+  line();
+  g.stroke({ width: 0.07, color: 0xa47a4a, cap: 'round', join: 'round' });
+  // Posts a square apart.
+  for (const run of runs) {
+    let next = 0;
+    let along = 0;
+    for (let k = 0; k + 1 < run.length; k++) {
+      const [a, b] = [run[k], run[k + 1]];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      for (; next <= along + len + 1e-6; next += 1) {
+        const t = len > 0 ? (next - along) / len : 0;
+        g.circle(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, 0.09);
+      }
+      along += len;
+    }
+  }
+  g.fill(0x3d2a17);
 }
 
 /** Furniture fill by kind. */
@@ -537,6 +694,9 @@ export class InteriorLayer {
     const colorOf = (r: number) => floorColor(lv.rooms[r].kind, lv.z, lv.natural, lv.rooms[r].raise_ft);
     // A footprint off the grid's rectangle, or shaped rooms: drawn to the walls as they stand.
     const sp = this.underground ? null : shapedPlanOf(it, this.level);
+    // A hall open two storeys: the floor below shows through its open height, dimmed (over the
+    // floors drawn here, to a round yard's circle).
+    if (!this.underground) this.drawBelow(g, sp);
     const parts = sp?.real ? sp.parts : null;
     if (sp) {
       drawShapedFloors(g, sp, lv, colorOf, floorPattern);
@@ -545,19 +705,20 @@ export class InteriorLayer {
       for (let j = 0; j < ny; j++) {
         for (let i = 0; i < nx; i++) {
           const r = lv.cells[j * nx + i];
-          if (r >= 0) g.rect(i, j, 1, 1).fill(colorOf(r));
+          if (r >= 0 && colorOf(r) >= 0) g.rect(i, j, 1, 1).fill(colorOf(r));
         }
       }
       for (let j = 0; j < ny; j++) {
         for (let i = 0; i < nx; i++) {
           const r = lv.cells[j * nx + i];
-          if (r >= 0) for (const [a, b] of floorPattern(i, j, colorOf(r))) g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
+          if (r >= 0 && colorOf(r) >= 0) for (const [a, b] of floorPattern(i, j, colorOf(r))) g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
         }
       }
       g.stroke({ width: 0.03, color: 0x000000, alpha: 0.25 });
       for (let j = 0; j < ny; j++) {
         for (let i = 0; i < nx; i++) {
-          if (lv.cells[j * nx + i] >= 0) g.rect(i, j, 1, 1);
+          const r = lv.cells[j * nx + i];
+          if (r >= 0 && colorOf(r) >= 0) g.rect(i, j, 1, 1);
         }
       }
       g.stroke({ width: 0.04, color: 0x000000, alpha: 0.35 });
@@ -578,6 +739,9 @@ export class InteriorLayer {
         }
       }
       g.stroke({ width: 0.18, color: INK });
+      // A roof's slopes inside its parapet walk (after that stroke: one with nothing new would go
+      // round the last shapes drawn).
+      drawRoofs(g, lv, nx, ny, sp);
     }
     // Stairs: treads across the block, an arrow up or down (tower tops are reached only by
     // the towers' spiral stairs). A block the outer wall as drawn cuts (a building too small for
@@ -695,15 +859,25 @@ export class InteriorLayer {
       const hidden = (k: number) => this.style.player && lv.doors[k].kind === 'secret' && !!this.style.doors && !this.style.doors(locKey(it.id, this.level), k).found && !this.style.doors(locKey(it.id, this.level), k).open;
       const gapped = drawn.map((d, k) => (hidden(k) ? { ...d, inner: undefined, outer: undefined, threshold: undefined } : d));
       const kept = drawShapedWalls(g, sp, lv, gapped, panes, lv.roof ? 0.45 : 0.28, 0.45, INK);
-      parapet = sp.real ? kept : null;
+      // (A parapet where the outer wall stands round an open top: a roof's walk, battlements, a
+      // wing's or forebuilding's platform; not round a storey, a tower's room under its cone.)
+      const open = (p: { a: Pt; b: Pt; out: Pt }) => {
+        const [x, y] = [(p.a[0] + p.b[0]) / 2 - p.out[0] * (WALL_HALF + 0.4), (p.a[1] + p.b[1]) / 2 - p.out[1] * (WALL_HALF + 0.4)];
+        const [i, j] = [Math.floor(x), Math.floor(y)];
+        const r = i >= 0 && j >= 0 && i < nx && j < ny ? lv.cells[j * nx + i] : -1;
+        return r >= 0 && OPEN_TOP.has(lv.rooms[r].kind);
+      };
+      parapet = sp.real ? kept.filter(open) : null;
       if (!sp.real) for (const w of lv.walls) if (w.exterior) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]).stroke({ width: 0.45, color: INK, cap: 'square' });
       for (const d of gapped) if (d.threshold && d.room !== undefined) drawOpening(g, d.threshold, colorOf(d.room), INK);
       for (const w of panes) if (w.splay) drawOpening(g, w.splay, colorOf(w.room), INK);
     } else {
-      for (const w of lv.walls) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]).stroke({ width: w.exterior || lv.roof ? 0.45 : 0.28, color: INK, cap: 'square' });
+      for (const w of lv.walls) if (!w.rail) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]).stroke({ width: w.exterior || lv.roof ? 0.45 : 0.28, color: INK, cap: 'square' });
     }
+    // Railings where a gallery or passage looks down into a hall open two storeys.
+    if (!this.underground) drawRails(g, lv, nx, ny, sp);
     if (lv.has_stairs && stairsCut) drawStairs(g);
-    if (lv.roof && parapet) {
+    if (parapet?.length) {
       // Merlons along the parapet, a square apart.
       let run = 0.75;
       for (const p of parapet) {
@@ -798,13 +972,116 @@ export class InteriorLayer {
       // Ring-shaped rooms (arena stands) have their centre in another room: no label.
       const ci = Math.floor(r.center[0]);
       const cj = Math.floor(r.center[1]);
-      if (r.squares < 4 || lv.cells[cj * nx + ci] !== ri || r.kind === 'floor') return;
+      if (r.squares < 4 || lv.cells[cj * nx + ci] !== ri || r.kind === 'floor' || r.kind === OPEN_BELOW || r.kind === ROOF_SLOPE) return;
       // A network of sewers: the tunnels need no name in every section.
       if (this.tile && (r.kind === 'sewer tunnel' || r.kind === 'service passage')) return;
       const text = new Text({ text: this.roomName(this.level, ri), style, anchor: 0.5, resolution: 2 });
       this.labels.addChild(text);
       this.labelSpots.push({ text, x: r.center[0], y: r.center[1], min: Math.sqrt(r.squares) });
     });
+  }
+
+  /** Under a hall's height left open on this level (`OPEN_BELOW`), the nearest level below with a
+   * floor there: its floors and furniture, dimmed, over this level's floors (`floors`), cut to the
+   * open height (a round one's circle). */
+  private drawBelow(floors: Graphics, sp: ShapedPlan | null) {
+    const it = this.interior;
+    const lv = it.levels[this.level];
+    const { nx, ny } = it;
+    const open = (l: InteriorLevel, k: number) => l.cells[k] >= 0 && l.rooms[l.cells[k]].kind === OPEN_BELOW;
+    const from = new Int16Array(nx * ny).fill(-1);
+    let any = false;
+    for (let k = 0; k < nx * ny; k++) {
+      if (!open(lv, k)) continue;
+      for (let li = this.level - 1; li >= 0; li--) {
+        const c = it.levels[li].cells[k];
+        if (c < 0) break;
+        if (!open(it.levels[li], k)) {
+          from[k] = li;
+          any = true;
+          break;
+        }
+      }
+    }
+    if (!any) return;
+    const box = new Container();
+    this.plan.addChildAt(box, this.plan.getChildIndex(floors) + 1);
+    const g = new Graphics();
+    box.addChild(g);
+    // (Its outline: a round one's circle, else its squares.)
+    const voids = roundVoids(lv, sp);
+    const outline = (m: Graphics) => {
+      for (const p of voids.values()) m.poly(p.flatMap((q) => q));
+      for (let k = 0; k < nx * ny; k++) if (from[k] >= 0 && !voids.has(lv.cells[k])) m.rect(k % nx, Math.floor(k / nx), 1, 1);
+    };
+    const mask = new Graphics();
+    // Each square's floor below: its own, and round a round one (its circle reaches past its
+    // squares by up to half a square) the floor below the square of it beside them.
+    const floorAt = (k: number): number | null => {
+      const li = from[k];
+      if (li < 0) return null;
+      const below = it.levels[li];
+      const r = below.cells[k];
+      const c = floorColor(below.rooms[r].kind, below.z, below.natural, below.rooms[r].raise_ft);
+      return c < 0 ? 0x9d978c : c;
+    };
+    const ground = new Map<number, number>();
+    for (let k = 0; k < nx * ny; k++) {
+      const own = floorAt(k);
+      if (own !== null) {
+        ground.set(k, own);
+        continue;
+      }
+      if (!voids.size) continue;
+      const [i, j] = [k % nx, Math.floor(k / nx)];
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+        const q = (j + dj) * nx + i + di;
+        const c = i + di >= 0 && j + dj >= 0 && i + di < nx && j + dj < ny && voids.has(lv.cells[q]) ? floorAt(q) : null;
+        if (c !== null) {
+          ground.set(k, c);
+          break;
+        }
+      }
+    }
+    for (const [k, c] of ground) g.rect(k % nx, Math.floor(k / nx), 1, 1).fill(c);
+    outline(mask);
+    mask.fill(0xffffff);
+    for (const [k, c] of ground) for (const [a, b] of floorPattern(k % nx, Math.floor(k / nx), c)) g.moveTo(a[0], a[1]).lineTo(b[0], b[1]);
+    g.stroke({ width: 0.03, color: 0x000000, alpha: 0.25 });
+    // (Its furniture, each piece as it is drawn on its own level.)
+    const atlas = InteriorLayer.renderer ? ItemAtlas.for(InteriorLayer.renderer) : null;
+    const items = new Container();
+    const levels = new Set<number>();
+    for (let k = 0; k < nx * ny; k++) if (from[k] >= 0) levels.add(from[k]);
+    const keep = this.level;
+    for (const li of levels) {
+      this.level = li;
+      for (const f of it.levels[li].furniture) {
+        let over = false;
+        for (let j = f.y; j < f.y + f.h && !over; j++) for (let i = f.x; i < f.x + f.w && !over; i++) over = i < nx && j < ny && from[j * nx + i] === li;
+        if (!over || (this.style.player && dmOnlyHazard(f.hazard))) continue;
+        if (!atlas || f.sprite) {
+          this.drawItem(g, f);
+          continue;
+        }
+        const frame = atlas.get(this.itemKey(f), (ig) => this.drawItem(ig, f), [f.x, f.y]);
+        if (!frame) continue;
+        const s = new Sprite(frame.texture);
+        s.position.set(f.x + frame.x, f.y + frame.y);
+        s.scale.set(1 / ITEM_PX);
+        items.addChild(s);
+      }
+    }
+    this.level = keep;
+    atlas?.flush();
+    box.addChild(items);
+    box.addChild(mask);
+    box.mask = mask;
+    // Dimmed: it lies a storey down.
+    const dim = new Graphics();
+    outline(dim);
+    dim.fill({ color: 0x1a1612, alpha: 0.42 });
+    box.addChild(dim);
   }
 
   /** A door in play: shut (a slab across the gap) or open (the leaf swung back); a secret door

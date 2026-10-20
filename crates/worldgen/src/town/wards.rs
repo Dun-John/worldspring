@@ -591,10 +591,8 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
     for &k in fresh {
         let b = &mut l.buildings[k];
         if let Some(c) = castle
-            && b.ward == Ward::Castle
+            && b.keep
             && b.func.is_none()
-            && b.residential == 4
-            && b.floors == 4
         {
             b.func = Some(c as u16);
             if let Some(i) = lost.iter().position(|x| x.0 == c) {

@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::rc::Rc;
 
 use castle::castle;
-pub use castle::{keep_tops, plain_keep_top};
+pub use castle::{DONJON_LOW, keep_tops, plain_keep_top};
 use catalog::{CATALOG, Naming, RESIDENTIAL, Ward};
 use geom::*;
 use mesh::Mesh;
@@ -63,6 +63,9 @@ pub struct Building {
     /// towers; `poly` is their union. Empty for every other building, and once its outline is
     /// drawn by hand.
     pub parts: Vec<Part>,
+    /// A castle's keep (`castle::place_keep`): the castle itself, whatever its outline (with its
+    /// pieces or redrawn by hand) or storeys.
+    pub keep: bool,
 }
 
 /// A piece of a building's footprint (`Building::parts`).
@@ -3960,7 +3963,7 @@ fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P, f64)>, wa
                 continue;
             }
             let pad = site.pad(&poly);
-            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
+            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
         }
     }
 }
@@ -4119,7 +4122,7 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
             let house = rect(add(add(a, mul(u, 0.5 * w + 6.0)), mul(inward, 0.5 * dp + 6.0)), u, w, dp);
             if house.iter().all(|p| contains(&f, *p)) && site.buildable(&house) {
                 let pad = site.pad(&house);
-                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
+                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
             }
         }
         l.fields.push(f);
@@ -4307,7 +4310,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
                     let house = rect(add(p, mul(n, side * back)), u, w, d);
                     if clear(&house, l) && site.buildable(&house) {
                         let pad = site.pad(&house);
-                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
+                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
                     }
                 }
                 let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
@@ -4328,7 +4331,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
         let house = rect(c, [-libm::sin(a), libm::cos(a)], rng.range(22.0, 34.0), rng.range(16.0, 22.0));
         if clear(&house, l) && site.buildable(&house) {
             let pad = site.pad(&house);
-            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
+            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
         }
     }
     // Fields: Voronoi cells seeded along the lanes and on a jittered ring, split into plots
@@ -4695,7 +4698,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
-            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new() });
+            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
         }
     }
     // Big functions first so they get the big lots.
@@ -4706,7 +4709,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
     // The keep at the heart of a castle ward (4 storeys, raised by the ward layout) is the
     // castle.
     if let Some(castle) = CATALOG.iter().position(|f| f.key == "castle")
-        && let Some(keep) = l.buildings.iter().position(|b| b.ward == Ward::Castle && b.func.is_none() && b.residential == 4 && b.floors == 4)
+        && let Some(keep) = l.buildings.iter().position(|b| b.keep && b.func.is_none())
     {
         l.buildings[keep].func = Some(castle as u16);
         taken[keep] = true;

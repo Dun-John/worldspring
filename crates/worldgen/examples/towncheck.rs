@@ -17,6 +17,12 @@
 //!   failures grouped by function; and the corridor rule on its own (no room more than two rooms
 //!   from a corridor), with the stricter old reading (a hall or corridor only, not the front room).
 //!   `--keeps`: keeps only.
+//! - `hub`: castle keeps and barracks of 150 squares or more, laid out by zones: floors the zones
+//!   fell back on, the hall's floor, the front door's room, the main stair at the dais end, the great
+//!   chamber and solar by it, the minstrels' gallery reached along passages, windows and furniture on
+//!   open tops, thrones in mess halls, room sizes, storeys alike, tower rooms, landings, the screens
+//!   passage, the service and officers' ends, rooms a square wide, a shell keep's round yard
+//!   (`hub_rules`).
 //! - `editor`: castles set in the street editor (`wards::change`) on the patches nearest the
 //!   town wall (up to 3 a town, `PLACES=n` a world, default 20), with the walls on and off, each
 //!   run through the castle checks; every non-castle building's id, outline, ward, function, kind,
@@ -26,7 +32,7 @@
 //!   (`b:`/`t:`), marked `C` in a settlement with a castle, one per line on stdout (everything
 //!   else goes to stderr): run it on two trees and diff to see what changed.
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|editor|hash|all]... [seed|world.json...] [--keeps]
+//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|editor|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -753,7 +759,7 @@ fn castle_checks(world: &World, t0: &T0, l: &Layout, tag: &str, capital: bool, r
                 town::PartKind::Forebuilding | town::PartKind::Wing => Some(area(&p.poly).abs()),
                 _ => None,
             };
-            if let Some(f) = flat.filter(|f| *f >= 1100.0 && top == 0) {
+            if let Some(f) = flat.filter(|f| *f >= 1100.0 && top & 3 == 0) {
                 r.add("keep pieces of 1,100 sq ft+ with a flat top left open", f, format!("{tag}: b:{}:{} a {:?} of {f:.0} sq ft", l.index, b.id, p.kind));
             }
         }
@@ -917,14 +923,12 @@ fn building_buckets(l: &Layout) -> HashMap<(i64, i64), Vec<usize>> {
     buckets
 }
 
-const CIRCULATION: [&str; 6] = ["hall", "corridor", "landing", "great hall", "mess hall", "guardroom"];
-
 /// The corridor rule on a floor of 8 rooms or more with a hall or corridor: the most rooms a room is
 /// from one (through the doors; `front`: the room the front door opens into counted as one too),
 /// with the way to it. `None` where the rule doesn't apply.
 fn corridor_hops(lv: &interior::Level, front: bool) -> Option<(usize, String)> {
     let entry = lv.doors.iter().find(|d| d.kind == "front").and_then(|d| d.rooms.iter().copied().find(|&r| r >= 0));
-    let circ = |r: usize| CIRCULATION.contains(&lv.rooms[r].kind);
+    let circ = |r: usize| interior::is_way_through(lv.rooms[r].kind);
     if lv.rooms.len() < 8 || !(0..lv.rooms.len()).any(circ) {
         return None;
     }
@@ -952,7 +956,7 @@ fn corridor_hops(lv: &interior::Level, front: bool) -> Option<(usize, String)> {
             }
         }
     }
-    let worst = (0..n).filter(|&r| lv.rooms[r].squares > 0 && hops[r] != usize::MAX).max_by_key(|&r| (hops[r], std::cmp::Reverse(r)))?;
+    let worst = (0..n).filter(|&r| lv.rooms[r].squares > 0 && hops[r] != usize::MAX && interior::walkable(lv.rooms[r].kind)).max_by_key(|&r| (hops[r], std::cmp::Reverse(r)))?;
     let mut path = vec![lv.rooms[worst].kind.to_string()];
     let mut k = worst;
     while from[k] != usize::MAX {
@@ -1066,9 +1070,13 @@ fn check_interior(world: &World, t0: &T0, l: &Layout, si: usize, id: &str, it: &
     let chapels = it.levels.iter().flat_map(|lv| lv.rooms.iter()).filter(|r| r.kind == "chapel").count();
     must!(chapels <= 1, "{chapels} chapels");
     let spirals: Vec<Vec<(u16, u16)>> = it.levels.iter().map(|lv| lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| (f.x, f.y)).collect()).collect();
-    if let Some(first) = spirals.iter().find(|v| !v.is_empty()) {
-        must!(spirals.iter().filter(|v| !v.is_empty()).all(|v| v == first), "spiral stairs move between levels");
-        must!(spirals.iter().filter(|v| !v.is_empty()).count() >= 2, "spiral stairs on one level only");
+    let mut at: Vec<(u16, u16)> = spirals.iter().flatten().copied().collect();
+    at.sort();
+    at.dedup();
+    for s in at {
+        let on: Vec<usize> = (0..spirals.len()).filter(|&li| spirals[li].contains(&s)).collect();
+        must!(on.len() >= 2, "a spiral stair at {s:?} on one level only");
+        must!(on.windows(2).all(|w| w[1] == w[0] + 1), "the spiral stair at {s:?} skips a level");
     }
     for lv in &it.levels {
         for (ri, _) in lv.rooms.iter().enumerate().filter(|(_, r)| r.kind == "cell") {
@@ -1180,9 +1188,47 @@ fn check_interior(world: &World, t0: &T0, l: &Layout, si: usize, id: &str, it: &
         for d in &lv.doors {
             must!(door_sq(d).into_iter().filter(|&p| inb(p)).any(|(i, j)| seen[j as usize * nx + i as usize]), "{}: a {} door is cut off", lv.name, d.kind);
         }
+        // (A spiral stair reached from the stairs, and from its room's doors with nothing but a rug
+        // in the way: the way on up to the rooms above it.)
+        let mut occupied = vec![false; nx * ny];
+        for f in lv.furniture.iter().filter(|f| f.kind != "rug" && f.kind != "spiral_stair") {
+            for j in f.y as usize..(f.y + f.h) as usize {
+                for i in f.x as usize..(f.x + f.w) as usize {
+                    occupied[j * nx + i] = true;
+                }
+            }
+        }
+        for f in lv.furniture.iter().filter(|f| f.kind == "spiral_stair") {
+            let k0 = f.y as usize * nx + f.x as usize;
+            must!(seen[k0], "{}: the spiral stair at ({}, {}) is cut off", lv.name, f.x, f.y);
+            let r = lv.cells[k0];
+            let mut near: Vec<usize> = lv.doors.iter().flat_map(door_sq).filter(|&p| inb(p)).map(|(i, j)| j as usize * nx + i as usize).filter(|&k| lv.cells[k] == r && seen[k]).collect();
+            if near.is_empty() {
+                continue;
+            }
+            let mut got = vec![false; nx * ny];
+            for &k in &near {
+                got[k] = true;
+            }
+            while let Some(k) = near.pop() {
+                let (i, j) = (k % nx, k / nx);
+                for (a, b) in [(i.wrapping_sub(1), j), (i + 1, j), (i, j.wrapping_sub(1)), (i, j + 1)] {
+                    let q = b.wrapping_mul(nx).wrapping_add(a);
+                    if a < nx && b < ny && !got[q] && lv.cells[q] == r && !occupied[q] {
+                        got[q] = true;
+                        near.push(q);
+                    }
+                }
+            }
+            must!(got[k0], "{}: furniture shuts the spiral stair at ({}, {}) off from its room's doors", lv.name, f.x, f.y);
+        }
         for (ri, room) in lv.rooms.iter().enumerate() {
             let open = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && !blocked[k]);
             let reached = (0..nx * ny).any(|k| lv.cells[k] == ri as i16 && seen[k]);
+            if !interior::walkable(room.kind) {
+                must!(!reached && !lv.doors.iter().any(|d| d.rooms.contains(&(ri as i16))), "{}: the {} has a way in", lv.name, room.kind);
+                continue;
+            }
             must!(!open || reached, "{}: the {} is unreachable", lv.name, room.kind);
         }
         if let Some((hops, path)) = corridor_hops(lv, true).filter(|h| h.0 > 2) {
@@ -1230,6 +1276,314 @@ fn interiors(ctx: &mut Ctx, keeps: bool, r: &mut Report) {
     }
     for (f, (n, b)) in by_func.iter().filter(|f| f.1.1 > 0) {
         r.add("functions with interiors breaking a rule", *b as f64, format!("{f}: {b} of {n}"));
+    }
+}
+
+// ---- Buildings laid out by zones. ----
+
+const HUB_COUNTS: [&str; 26] = [
+    "floors the zones fell back on",
+    "breaking an interior rule (as in interiors)",
+    "great or mess halls not one, on their floor",
+    "front doors into the wrong room",
+    "main stairs not at the dais end",
+    "main stairs standing in a room",
+    "great chambers or solars over 2 squares from the main stair",
+    "great chambers or solars under 9 squares",
+    "keeps with no great chamber or solar",
+    "minstrels' galleries not reached along passages",
+    "windows on open tops",
+    "thrones in mess halls",
+    "storeys above the hall with one room size for over half their rooms",
+    "storeys above the hall with half their rooms on the squares of the storey below",
+    "rooms above the hall longer than 2.5:1",
+    "rooms above the hall over 40 squares (a great chamber 60)",
+    "keeps missing a room of their programme",
+    "roofs that don't fill their box",
+    "tower rooms all alike on a floor, or plain 'tower room'",
+    "landings over 12 squares",
+    "screens passages not one straight row",
+    "service ends short of their rooms",
+    "barracks with no officers' end",
+    "rooms a square wide",
+    "shell keeps' yards not round",
+    "levels with furniture on an open top",
+];
+
+/// The squares either side of a door's edge.
+fn door_squares(d: &interior::Door) -> [(isize, isize); 2] {
+    let (x0, y0) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize);
+    if d.a[0] == d.b[0] { [(x0 - 1, y0), (x0, y0)] } else { [(x0, y0 - 1), (x0, y0)] }
+}
+
+/// `hub`: castle keeps and barracks of 150 squares or more, laid out by zones (`interior::hub`),
+/// against the rules their layout keeps (the user's calls): no floor fallen back on the shared
+/// layout; the hall on its floor (a great tower's and a tower keep's on the first); the front door
+/// into the screens passage (or a forebuilding's entrance hall onto it), a great tower's entrance
+/// hall, a barracks' mess hall, a shell keep's gate passage; the main stair at the dais end, off the
+/// hall, landing in passages or landings; the great chamber and solar by it (a square of each within
+/// 2 squares of it), 9 squares or more; a minstrels' gallery reached from the stair through passages; no
+/// windows or furniture on open tops; no throne in a mess hall; rooms of different sizes, no storey
+/// laid out as the one below it; tower rooms of different kinds; passage-sized landings, a straight
+/// screens passage, the service end's rooms, a barracks' officers' end; no room a square wide; a
+/// shell keep's yard round.
+fn hub(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["buildings laid out by zones"]);
+    r.counts(&HUB_COUNTS);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        let mut buckets = None;
+        for b in &l.buildings {
+            let Some(kind) = interior::hub_kind(&l, b) else { continue };
+            let buckets = buckets.get_or_insert_with(|| building_buckets(&l));
+            let id = format!("b:{li}:{}", b.id);
+            let Some(it) = interior::generate_id(world, t0, &id) else { continue };
+            r.tally("buildings laid out by zones", 1);
+            r.tally(&format!("  {}{}", kind.name(), if kind.name().ends_with('s') { "" } else { "s" }), 1);
+            let fell = interior::hub_fallbacks(world, t0, li, b.id as usize);
+            if !fell.is_empty() {
+                r.add("floors the zones fell back on", fell.len() as f64, format!("{id} ({}): z {fell:?}", kind.name()));
+            }
+            let bad = check_interior(world, t0, &l, li, &id, &it, buckets);
+            if !bad.is_empty() {
+                r.add("breaking an interior rule (as in interiors)", bad.len() as f64, format!("{id} ({}): {}", kind.name(), bad.join("; ")));
+            }
+            hub_rules(&l, b, kind, &id, &it, r);
+        }
+    }
+}
+
+fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str, it: &interior::Interior, r: &mut Report) {
+    use interior::hub::Kind;
+    let (nx, ny) = (it.nx, it.ny);
+    let tag = format!("{id} ({})", kind.name());
+    let sh = interior::Shell::of(l, b);
+    let squares = |lv: &interior::Level, ri: usize| -> Vec<usize> { (0..nx * ny).filter(|&k| lv.cells[k] == ri as i16).collect() };
+    let mid = |sq: &[usize]| -> P { [sq.iter().map(|&k| (k % nx) as f64 + 0.5).sum::<f64>() / sq.len().max(1) as f64, sq.iter().map(|&k| (k / nx) as f64 + 0.5).sum::<f64>() / sq.len().max(1) as f64] };
+    let room_at = |lv: &interior::Level, (i, j): (isize, isize)| -> i16 { if i < 0 || j < 0 || i as usize >= nx || j as usize >= ny { -1 } else { lv.cells[j as usize * nx + i as usize] } };
+    let between = |lv: &interior::Level, a: i16, c: i16| lv.doors.iter().any(|d| d.rooms == [a.min(c), a.max(c)]);
+    let open_top = |k: &str| matches!(k, "battlements" | "wall walk") || k == interior::ROOF_SLOPE;
+    let barracks = kind == Kind::Barracks;
+    let hall_kind = if barracks { "mess hall" } else { "great hall" };
+    let hall_z = if matches!(kind, Kind::Great | Kind::Plain) && b.floors >= 2 { 1 } else { 0 };
+    let halls: Vec<(usize, usize)> = it.levels.iter().enumerate().filter(|(_, lv)| lv.z >= 0).flat_map(|(li, lv)| (0..lv.rooms.len()).filter(|&ri| lv.rooms[ri].kind == hall_kind && lv.rooms[ri].squares > 0).map(move |ri| (li, ri))).collect();
+    if halls.len() != 1 || it.levels[halls[0].0].z != hall_z {
+        r.add("great or mess halls not one, on their floor", halls.len() as f64, format!("{tag}: {:?}", halls.iter().map(|h| it.levels[h.0].z).collect::<Vec<_>>()));
+    }
+    let st = it.stairs;
+    let sc: P = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
+    // Every floor: the main stair lands in a passage, a landing, a yard or on a walk.
+    for lv in it.levels.iter().filter(|lv| lv.z >= 0 && lv.has_stairs) {
+        let ri = lv.cells[st[1] * nx + st[0]];
+        if ri >= 0 && !interior::is_way_through(lv.rooms[ri as usize].kind) {
+            r.add("main stairs standing in a room", 1.0, format!("{tag} {}: in the {}", lv.name, lv.rooms[ri as usize].kind));
+        }
+    }
+    // The front door.
+    if let Some(g0) = it.levels.iter().find(|lv| lv.z == 0)
+        && let Some(front) = g0.doors.iter().find(|d| d.kind == "front")
+    {
+        let fr = front.rooms[0];
+        let k = g0.rooms[fr as usize].kind;
+        let ok = match kind {
+            Kind::Hall | Kind::L | Kind::T => k == "screens passage" || (k == "entrance hall" && g0.rooms.iter().enumerate().any(|(o, ro)| ro.kind == "screens passage" && between(g0, fr, o as i16))),
+            Kind::Great | Kind::Plain => k == "entrance hall" || (b.floors < 2 && k == "great hall"),
+            Kind::Barracks => k == "mess hall",
+            Kind::ShellKeep => k == "gate passage",
+        };
+        if !ok {
+            r.add("front doors into the wrong room", 1.0, format!("{tag}: into the {k}"));
+        }
+    }
+    // Windows and furniture on open tops.
+    for lv in &it.levels {
+        for w in &lv.windows {
+            let d = interior::Door { a: [w[0], w[1]], b: [w[2], w[3]], kind: "window", rooms: [-1, -1] };
+            if door_squares(&d).iter().any(|&s| room_at(lv, s) >= 0 && open_top(lv.rooms[room_at(lv, s) as usize].kind)) {
+                r.add("windows on open tops", 1.0, format!("{tag} {}: ({}, {})", lv.name, w[0], w[1]));
+            }
+        }
+        let on_top = lv.furniture.iter().filter(|f| f.kind != "spiral_stair" && lv.cells[f.y as usize * nx + f.x as usize] >= 0 && open_top(lv.rooms[lv.cells[f.y as usize * nx + f.x as usize] as usize].kind)).count();
+        if on_top > 0 {
+            r.add("levels with furniture on an open top", on_top as f64, format!("{tag} {}: {on_top} pieces", lv.name));
+        }
+        for f in lv.furniture.iter().filter(|f| f.kind == "throne") {
+            let c = lv.cells[f.y as usize * nx + f.x as usize];
+            if c >= 0 && lv.rooms[c as usize].kind == "mess hall" {
+                r.add("thrones in mess halls", 1.0, format!("{tag} {}: ({}, {})", lv.name, f.x, f.y));
+            }
+        }
+    }
+    // Rooms: sizes, slivers, tower rooms, storeys alike, landings.
+    let mut below: Option<&interior::Level> = None;
+    for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
+        let mut tower_rooms: Vec<i16> = sh.towers.iter().map(|t| lv.cells[t.2]).filter(|&c| c >= 0).collect();
+        // (A barracks' corner towers: rooms in a 3-square box at a corner of the grid.)
+        if barracks {
+            for (ri, room) in lv.rooms.iter().enumerate() {
+                let sq = squares(lv, ri);
+                let corner = |v: usize, n: usize| v < 3 || v + 3 >= n;
+                if room.squares > 0 && room.squares <= 9 && sq.iter().all(|&k| corner(k % nx, nx) && corner(k / nx, ny)) {
+                    tower_rooms.push(ri as i16);
+                }
+            }
+        }
+        let ordinary = |ri: usize| {
+            let k = lv.rooms[ri].kind;
+            lv.rooms[ri].squares > 0 && interior::walkable(k) && !interior::is_way_through(k) && !tower_rooms.contains(&(ri as i16)) && k != "guard post"
+        };
+        let sizes: Vec<usize> = (0..lv.rooms.len()).filter(|&ri| ordinary(ri)).map(|ri| lv.rooms[ri].squares).collect();
+        if sizes.len() >= 5 && lv.z > hall_z {
+            let most = sizes.iter().map(|s| sizes.iter().filter(|t| *t == s).count()).max().unwrap_or(0);
+            if most * 2 > sizes.len() {
+                r.add("storeys above the hall with one room size for over half their rooms", most as f64 / sizes.len() as f64, format!("{tag} {}: {sizes:?}", lv.name));
+            }
+        }
+        for ri in (0..lv.rooms.len()).filter(|&ri| ordinary(ri) && lv.rooms[ri].squares >= 2) {
+            let mine = |i: usize, j: usize| i < nx && j < ny && lv.cells[j * nx + i] == ri as i16;
+            if !(0..nx * ny).any(|k| mine(k % nx, k / nx) && mine(k % nx + 1, k / nx) && mine(k % nx, k / nx + 1) && mine(k % nx + 1, k / nx + 1)) {
+                r.add("rooms a square wide", lv.rooms[ri].squares as f64, format!("{tag} {}: the {} ({} squares)", lv.name, lv.rooms[ri].kind, lv.rooms[ri].squares));
+            }
+        }
+        let kinds: Vec<&str> = tower_rooms.iter().map(|&c| lv.rooms[c as usize].kind).filter(|&k| k != "tower top").collect();
+        if kinds.contains(&"tower room") || (kinds.len() >= 3 && kinds.iter().all(|k| *k == kinds[0])) {
+            r.add("tower rooms all alike on a floor, or plain 'tower room'", kinds.len() as f64, format!("{tag} {}: {kinds:?}", lv.name));
+        }
+        for (ri, room) in lv.rooms.iter().enumerate().filter(|(_, room)| room.kind == "landing" && room.squares > 12) {
+            r.add("landings over 12 squares", room.squares as f64, format!("{tag} {}: {} squares (room {ri})", lv.name, room.squares));
+        }
+        // Above the hall: ordinary rooms (not halls, passages, galleries or towers) no longer than
+        // 2.5 times their width and of 40 squares at most (a great chamber 60), and half the rooms
+        // or more not on just the squares of a room of the storey below.
+        let upper: Vec<usize> = (0..lv.rooms.len()).filter(|&ri| lv.z > hall_z && !lv.roof && ordinary(ri) && !open_top(lv.rooms[ri].kind)).collect();
+        for &ri in &upper {
+            let (room, sq) = (&lv.rooms[ri], squares(lv, ri));
+            let (xs, ys): (Vec<usize>, Vec<usize>) = sq.iter().map(|&k| (k % nx, k / nx)).unzip();
+            let (w, h) = (xs.iter().max().unwrap() - xs.iter().min().unwrap() + 1, ys.iter().max().unwrap() - ys.iter().min().unwrap() + 1);
+            if 2 * w.max(h) > 5 * w.min(h) {
+                r.add("rooms above the hall longer than 2.5:1", w.max(h) as f64 / w.min(h) as f64, format!("{tag} {}: the {} {w} x {h} ({} squares)", lv.name, room.kind, room.squares));
+            }
+            let cap = if room.kind == "great chamber" { 60 } else { 40 };
+            if room.squares > cap {
+                r.add("rooms above the hall over 40 squares (a great chamber 60)", room.squares as f64, format!("{tag} {}: the {} of {} squares", lv.name, room.kind, room.squares));
+            }
+        }
+        if let Some(lb) = below.filter(|lb| !lb.roof && lb.z + 1 == lv.z && upper.len() >= 2) {
+            let below_sq: Vec<Vec<usize>> = (0..lb.rooms.len()).map(|ri| squares(lb, ri)).collect();
+            let same = upper.iter().filter(|&&ri| below_sq.contains(&squares(lv, ri))).count();
+            if 2 * same >= upper.len() {
+                r.add("storeys above the hall with half their rooms on the squares of the storey below", same as f64 / upper.len() as f64, format!("{tag} {} over {}: {same} of {} rooms", lv.name, lb.name, upper.len()));
+            }
+        }
+        below = Some(lv);
+    }
+    // Roofs: hipped over the box they fill (a shell keep's ring round its yard aside).
+    for lv in it.levels.iter().filter(|_| kind != Kind::ShellKeep) {
+        for (ri, _) in lv.rooms.iter().enumerate().filter(|(_, room)| room.kind == interior::ROOF_SLOPE && room.squares > 0) {
+            let sq = squares(lv, ri);
+            let (xs, ys): (Vec<usize>, Vec<usize>) = sq.iter().map(|&k| (k % nx, k / nx)).unzip();
+            let (w, h) = (xs.iter().max().unwrap() - xs.iter().min().unwrap() + 1, ys.iter().max().unwrap() - ys.iter().min().unwrap() + 1);
+            if w * h != sq.len() {
+                r.add("roofs that don't fill their box", (w * h - sq.len()) as f64, format!("{tag} {}: {} squares in a {w} x {h} box", lv.name, sq.len()));
+            }
+        }
+    }
+    // A keep's programme: the great chamber, the solar, the chapel, a treasury, an armory, a
+    // garrison or stores.
+    if !barracks {
+        let has = |k: &str| it.levels.iter().any(|lv| lv.rooms.iter().any(|ro| ro.kind == k && ro.squares > 0));
+        let missing: Vec<&str> = ["great chamber", "solar", "chapel", "treasury", "armory", "garrison"].into_iter().filter(|k| !has(k) && !(*k == "garrison" && has("storeroom"))).collect();
+        if !missing.is_empty() {
+            r.add("keeps missing a room of their programme", missing.len() as f64, format!("{tag}: no {}", missing.join(", ")));
+        }
+    }
+    if kind == Kind::ShellKeep {
+        for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
+            for (ri, room) in lv.rooms.iter().enumerate().filter(|(_, room)| room.kind == "keep yard" || room.kind == interior::OPEN_BELOW) {
+                if room.shape != interior::shape::ROUND {
+                    r.add("shell keeps' yards not round", 1.0, format!("{tag} {}: the {} (room {ri})", lv.name, room.kind));
+                }
+            }
+        }
+        return;
+    }
+    let Some(&(hl, hall)) = halls.first() else { return };
+    let g = &it.levels[hl];
+    let hall = hall as i16;
+    let first = |k: &str| g.rooms.iter().position(|ro| ro.kind == k && ro.squares > 0).map(|ri| ri as i16);
+    // The low end: the screens passage, else the kitchen.
+    let low = first("screens passage").or_else(|| first("kitchen")).map(|ri| mid(&squares(g, ri as usize)));
+    let landing = g.cells[st[1] * nx + st[0]];
+    let hc = mid(&squares(g, hall as usize));
+    let at_dais = low.is_none_or(|lo| dot(sub(sc, hc), sub(hc, lo)) > 0.0);
+    if landing < 0 || g.rooms[landing as usize].kind != "landing" || !between(g, hall, landing) || !at_dais {
+        r.add("main stairs not at the dais end", 1.0, format!("{tag}: in the {} {}", if landing >= 0 { g.rooms[landing as usize].kind } else { "-" }, if at_dais { "off the hall's high end" } else { "at the low end" }));
+    }
+    if matches!(kind, Kind::Hall | Kind::L | Kind::T) {
+        if let Some(scr) = first("screens passage") {
+            let sq = squares(g, scr as usize);
+            let (xs, ys): (Vec<usize>, Vec<usize>) = sq.iter().map(|&k| (k % nx, k / nx)).unzip();
+            let (w, h) = (xs.iter().max().unwrap() - xs.iter().min().unwrap() + 1, ys.iter().max().unwrap() - ys.iter().min().unwrap() + 1);
+            if w.min(h) > 1 {
+                r.add("screens passages not one straight row", sq.len() as f64, format!("{tag}: {w} x {h}, {} squares", sq.len()));
+            }
+        }
+        if first("kitchen").is_none() || (first("buttery").is_none() && first("pantry").is_none()) {
+            r.add("service ends short of their rooms", 1.0, format!("{tag}: {:?}", g.rooms.iter().filter(|ro| matches!(ro.kind, "kitchen" | "buttery" | "pantry")).map(|ro| (ro.kind, ro.squares)).collect::<Vec<_>>()));
+        }
+    }
+    if barracks {
+        if first("kitchen").is_none() || first("officers' quarters").is_none() {
+            r.add("barracks with no officers' end", 1.0, format!("{tag}: {:?}", g.rooms.iter().filter(|ro| matches!(ro.kind, "kitchen" | "officers' quarters" | "armory")).map(|ro| (ro.kind, ro.squares)).collect::<Vec<_>>()));
+        }
+        return;
+    }
+    // The lord's rooms: by the main stair, of a good size.
+    let mut lords = 0;
+    for lv in it.levels.iter().filter(|lv| lv.z > hall_z) {
+        for (ri, room) in lv.rooms.iter().enumerate().filter(|(_, room)| matches!(room.kind, "great chamber" | "solar") && room.squares > 0) {
+            lords += 1;
+            if room.squares < 9 {
+                r.add("great chambers or solars under 9 squares", 9.0 - room.squares as f64, format!("{tag} {}: the {} of {} squares", lv.name, room.kind, room.squares));
+            }
+            // (Its nearest square's gap to the stair block, in squares.)
+            let gap = squares(lv, ri)
+                .iter()
+                .map(|&k| {
+                    let (i, j) = ((k % nx) as f64, (k / nx) as f64);
+                    let dx = (st[0] as f64 - i - 1.0).max(i - (st[0] + st[2]) as f64).max(0.0);
+                    let dy = (st[1] as f64 - j - 1.0).max(j - (st[1] + st[3]) as f64).max(0.0);
+                    dx.max(dy)
+                })
+                .fold(f64::MAX, f64::min);
+            if gap > 2.0 {
+                r.add("great chambers or solars over 2 squares from the main stair", gap, format!("{tag} {}: the {} {gap:.0} squares from the stair", lv.name, room.kind));
+            }
+        }
+    }
+    if lords == 0 {
+        r.add("keeps with no great chamber or solar", 1.0, tag.clone());
+    }
+    // A hall open two storeys: its gallery reached from the stair through passages only.
+    if let Some(up) = it.levels.get(hl + 1).filter(|up| up.rooms.iter().any(|ro| ro.kind == interior::OPEN_BELOW && ro.squares > 0))
+        && let Some(gal) = up.rooms.iter().position(|ro| ro.kind == "minstrels' gallery")
+    {
+        let start = up.cells[st[1] * nx + st[0]];
+        let mut seen = vec![false; up.rooms.len()];
+        let mut stack = vec![start];
+        while let Some(a) = stack.pop() {
+            if a < 0 || seen[a as usize] || !interior::is_circulation(up.rooms[a as usize].kind) {
+                continue;
+            }
+            seen[a as usize] = true;
+            for d in up.doors.iter().filter(|d| d.rooms.contains(&a)) {
+                stack.push(if d.rooms[0] == a { d.rooms[1] } else { d.rooms[0] });
+            }
+        }
+        if !seen[gal] {
+            r.add("minstrels' galleries not reached along passages", 1.0, format!("{tag} {}: from the {}", up.name, if start >= 0 { up.rooms[start as usize].kind } else { "-" }));
+        }
     }
 }
 
@@ -1345,7 +1699,9 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
     for li in 0..town::layout_count(t0) {
         let l = town::layout(world, t0, li);
         let castle = if !l.castles.is_empty() || l.buildings.iter().any(|b| b.ward == Ward::Castle) { "C" } else { "-" };
-        println!("{label} L:{li} {:016x} {castle} {}", fnv64(format!("{l:?}").as_bytes()), l.buildings.len());
+        // (Without the keep's mark, so that the hashes compare with trees from before it.)
+        let text = format!("{l:?}").replace(", keep: false }", " }").replace(", keep: true }", " }");
+        println!("{label} L:{li} {:016x} {castle} {}", fnv64(text.as_bytes()), l.buildings.len());
         r.tally("layouts hashed", 1);
         let mut ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed).map(|b| format!("b:{li}:{}", b.id)).collect();
         ids.extend((0..interior::towers(&l).len()).map(|k| format!("t:{li}:{k}")));
@@ -1360,7 +1716,7 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 6] = ["castles", "reach", "interiors", "editor", "hash", "all"];
+    const MODES: [&str; 7] = ["castles", "reach", "interiors", "hub", "editor", "hash", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -1369,7 +1725,7 @@ fn main() {
     }
     if modes.is_empty() || modes.contains(&"all") {
         modes.retain(|m| *m != "all");
-        for m in ["castles", "reach", "interiors", "editor"] {
+        for m in ["castles", "reach", "interiors", "hub", "editor"] {
             if !modes.contains(&m) {
                 modes.push(m);
             }
@@ -1392,6 +1748,7 @@ fn main() {
                 "castles" => castles(&mut ctx, &mut r),
                 "reach" => reach(&mut ctx, &mut r),
                 "interiors" => interiors(&mut ctx, keeps, &mut r),
+                "hub" => hub(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }

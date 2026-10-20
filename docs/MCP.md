@@ -993,7 +993,9 @@ The rules (the ones every generated interior is tested against):
 - squares only inside the footprint;
 - no furniture off the floor, on another piece, on the stairs or in a doorway (either side of a door);
 - every room and every door reached from the stairs (on a keep's tower tops, from its spiral stairs), through
-  doors between rooms, around furniture that blocks movement;
+  doors between rooms, around furniture that blocks movement; rooms with no floor, `open to below` (a hall's
+  height left open over it: a hall open two storeys, a shell keep's yard) and `roof` (a roof's slopes inside a
+  keep's parapet walk), have no door and nothing on them, and aren't reached;
 - the deepest cellar has free floor for its ways to other sites, and a building with such a way has a cellar;
 - levels one above another from at most three below ground (a one-storey building without a cellar has no
   stairs: its ground floor is reached from its doors).
@@ -1028,8 +1030,23 @@ level -1: Cellar
 - The header gives the grid, how many levels and the stair block (`stairs x,y wxh`: change it there to move or
   resize the stairs); `cellars <n>` (0 to 3) when it has other than one cellar, to dig or fill in cellars.
 - Levels go by storey: `level -2` a lower cellar, `level -1` the cellar, `level 0` the ground floor, `level 1`
-  and up the floors above (an open roof and a keep's tower tops are the storeys above its top floor). Those
-  above ground follow the building's storeys: a plan can't add or take away floors (`update_building` does).
+  and up the floors above (an open roof and a keep's tower tops are the storeys above its top floor; a keep
+  built of pieces has its top, open battlements or a wall walk round its roof, as the storey above its top
+  floor, each piece only as high as it rises: a forebuilding two storeys and a platform, wings a storey below
+  the body, towers a storey above the piece they stand on). Those above ground follow the building's storeys:
+  a plan can't add or take away floors (`update_building` does).
+- A castle's keep is laid out as real ones were: a hall keep, L or T keep entered through its screens passage
+  (a forebuilding's entrance hall before it), service rooms at that end, the great hall, the main stair in the
+  landing behind its high end; a great tower its hall on the first floor over stores; about half the halls rise
+  two storeys, the floor above them `open to below` with a `minstrels' gallery` over the screens end, reached
+  along a mural passage. Upper floors have a mural passage along one long wall from the landing and the rest
+  divided by cross walls into rooms no longer than 2.5 times their width (40 squares at most), every room on a
+  passage or beside one that is; the great chamber (about twice as wide as deep) by the main stair, the solar
+  beside the landing or beyond the great chamber's cross wall; the chapel, a treasury, an armory and a
+  garrison on the floors above; no storey on the squares of the one below; tower rooms of their own kinds (an
+  `oratory` among them). A shell keep's yard (and what is open over it) is drawn round, and so is the gallery
+  round it on the floor above. Where `open to below` meets a gallery, passage or landing the wall is a
+  railing: it stops a step, not the eye.
 - `grid:` as for a site, `.` outside the walls.
 - `doors:` `x,y e|s|w|n` is a door on the east, south, west or north edge of square x,y; `secret` makes a door
   between rooms a secret door; on an outside wall `front` (one, on the ground floor) or `back`. `doors: auto`

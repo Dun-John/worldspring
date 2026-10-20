@@ -81,6 +81,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             tint: None,
             id: 0,
             parts: Vec::new(),
+            keep: false,
         });
     };
     match p.kind {
@@ -329,6 +330,7 @@ fn drawn(c: &crate::world::Created, poly: Vec<P>, pad_ft: f32, rng: &mut Pcg32, 
         tint: None,
         id: 0,
         parts: Vec::new(),
+        keep: false,
     };
     apply_looks(&mut b, c.roof.as_deref(), c.tint.as_deref(), c.structure.as_deref());
     b
@@ -480,7 +482,7 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     castle(&ground, &block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), rng, l, keep, c.yard_buildings.unwrap_or(true));
     // The keep (pushed last) is the castle; the yard's buildings by size.
     let n = l.buildings.len();
-    let kept = keep && l.buildings.last().is_some_and(|b| b.floors == 4 && b.residential == 4 && b.func.is_none());
+    let kept = keep && l.buildings.last().is_some_and(|b| b.keep && b.func.is_none());
     if kept && let Some(fi) = catalog::index_of("castle") {
         let b = &mut l.buildings[n - 1];
         b.func = Some(fi as u16);

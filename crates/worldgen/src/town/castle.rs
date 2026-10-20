@@ -1553,10 +1553,13 @@ const BIG_TOP: f64 = 1_100.0;
 
 /// How each of a keep's pieces is topped, as the battlemap and tiles draw it (`seed`: the world's
 /// stream for it): 0 open battlements (a wall walk of stone flags in its merlons, a broad one's
-/// middle flat dark lead), 1 a hipped roof of lead, 2 of slate. A forebuilding's or wing's top,
-/// and the donjon's at one end of a long body (a squarer body is all hall roofs: 2); a big top
-/// (`BIG_TOP`) is roofed, a smaller one open but in some keeps (rolled per keep), lead or slate
-/// rolled per keep too. Towers: 2 (their cones and pyramids).
+/// middle flat dark lead), 1 a hipped roof of lead, 2 of slate. A wing's top, and the donjon's at
+/// one end of a long body (a squarer body is all hall roofs: 2); a big top (`BIG_TOP`) is roofed,
+/// a smaller one open but in some keeps (rolled per keep), lead or slate rolled per keep too; a
+/// long body's code has `DONJON_LOW` set when its donjon stands at the end nearer its first corner
+/// (along its longer side from there, as the battlemap measures it), its hall range under hipped
+/// roofs inside a wall walk either way. A forebuilding's top is a walled platform: 0. Towers: 2
+/// (their cones and pyramids).
 pub fn keep_tops(b: &Building, seed: u64) -> Vec<u8> {
     let c = centroid(&b.poly);
     let h = crate::core::rng::hash2(seed, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64);
@@ -1574,15 +1577,20 @@ pub fn keep_tops(b: &Building, seed: u64) -> Vec<u8> {
                     if l <= 1.35 * w {
                         return 2;
                     }
-                    w * w.min(0.42 * l)
+                    let low = if crate::core::rng::unit(crate::core::rng::hash2(h, 3, 4)) < 0.5 { DONJON_LOW } else { 0 };
+                    return (if w * w.min(0.42 * l) >= BIG_TOP || roofed { roof } else { 0 }) | low;
                 }
                 PartKind::Body => return 2,
+                PartKind::Forebuilding => return 0,
                 _ => area(&p.poly).abs(),
             };
             if top >= BIG_TOP || roofed { roof } else { 0 }
         })
         .collect()
 }
+
+/// Set in a long keep body's top code (`keep_tops`): its donjon stands at its first corner's end.
+pub const DONJON_LOW: u8 = 4;
 
 /// How a castle's keep with no pieces (reshaped or drawn by hand) is topped, as `keep_tops` tops a
 /// body: its donjon (a square at one end of a long keep, as the battlemap draws it), else the whole
@@ -1707,6 +1715,7 @@ fn place_keep<G: Ground>(site: &G, court: &[P], spots: &[(P, f64)], axis: P, squ
                     tint: None,
                     id: 0,
                     parts,
+                    keep: true,
                 };
                 return Some((b, motte));
             }
@@ -1810,6 +1819,7 @@ fn ranges<G: Ground>(
                     tint: Some(1),
                     id: 0,
                     parts: Vec::new(),
+                    keep: false,
                 });
                 sides.push(e);
                 t += length + gap;

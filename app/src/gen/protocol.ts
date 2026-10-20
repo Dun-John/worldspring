@@ -588,6 +588,11 @@ export interface Interior {
   outlines?: [number, number][][];
 }
 
+/** Room kinds with no floor (`interior::OPEN_BELOW`, `ROOF_SLOPE`): a hall's height left open over
+ * it (the room below shows through; it stops a step, not the eye) and a roof's slopes. */
+export const OPEN_BELOW = 'open to below';
+export const ROOF_SLOPE = 'roof';
+
 export interface InteriorLevel {
   z: number;
   name: string;
@@ -596,7 +601,9 @@ export interface InteriorLevel {
   /** `shape`: drawn round, octagonal, with an apse, chamfered or as a cavern (`roomShapes.ts`;
    * absent square). Only ever set while the room's squares are the shape's. */
   rooms: { kind: string; squares: number; raise_ft: number; center: [number, number]; shape?: number }[];
-  walls: { a: [number, number]; b: [number, number]; exterior: boolean }[];
+  /** `rail`: a railing where a gallery or passage looks down into a hall open two storeys (it
+   * stops a step, not the eye). */
+  walls: { a: [number, number]; b: [number, number]; exterior: boolean; rail?: boolean }[];
   doors: { a: [number, number]; b: [number, number]; kind: string; rooms: [number, number] }[];
   windows: [number, number, number, number][];
   furniture: InteriorItem[];

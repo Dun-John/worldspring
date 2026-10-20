@@ -466,7 +466,7 @@ const WALL_RUINED: u8 = 4;
 const WALL_SQUARE: u8 = 8;
 
 /// A keep piece's code in the payload: 0 body, 1 round tower, 2 square tower, 3 forebuilding, 4
-/// wing (its top, `town::keep_tops`, in the high four bits).
+/// wing (its top, `town::keep_tops` with its donjon's end, in the high four bits).
 fn part_code(kind: crate::town::PartKind) -> u8 {
     use crate::town::PartKind as K;
     match kind {

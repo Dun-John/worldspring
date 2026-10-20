@@ -12,7 +12,7 @@
 
 use serde_json::Value;
 
-use super::{shape, Door, FURNITURE, Interior, Item, Level, Room, STOREY_FT, Shell, Sprites, battlements, building_item, cellar_links, design_kind, finish_rooms, furnish_rooms, room_kind, sprite_asset, wall_runs, windows};
+use super::{shape, Door, FURNITURE, Interior, Item, Level, Room, STOREY_FT, Shell, Sprites, battlements, building_item, cellar_links, design_kind, finish_rooms, furnish_rooms, room_kind, sprite_asset, walkable, wall_runs, windows};
 use crate::World;
 use crate::core::hash::fnv64;
 use crate::core::rng::{Pcg32, hash3};
@@ -187,7 +187,7 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
             Door { a: p, b: q, kind: if flags & FRONT != 0 { "front" } else { "back" }, rooms: [ra, -1] }
         });
     }
-    let walls = wall_runs(&cells, nx, ny, &doors);
+    let walls = wall_runs(&cells, &rooms, nx, ny, &doors);
     let furniture = lv
         .items
         .iter()
@@ -340,7 +340,7 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
                         continue;
                     }
                     let k = j * nx + i;
-                    let why = if lv.cells[k] < 0 {
+                    let why = if lv.cells[k] < 0 || !walkable(lv.rooms[lv.cells[k] as usize].kind) {
                         Some("is not on the floor")
                     } else if held[k] {
                         Some("stands on something else")
@@ -415,7 +415,12 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
                 put(li, Some((p.0.max(0) as usize, p.1.max(0) as usize)), format!("a {} can't be reached", if d.kind == "door" { "door" } else { d.kind }), true);
             }
         }
-        for (ri, room) in lv.rooms.iter().enumerate() {
+        // (A hall's height left open and a roof's slopes have no floor: no door into them.)
+        if let Some(d) = lv.doors.iter().find(|d| d.rooms.iter().any(|&r| r >= 0 && !walkable(lv.rooms[r as usize].kind))) {
+            let [p, _] = door_squares(d);
+            put(li, Some((p.0.max(0) as usize, p.1.max(0) as usize)), "a door into a room with no floor (open to below, a roof)".into(), true);
+        }
+        for (ri, room) in lv.rooms.iter().enumerate().filter(|(_, r)| walkable(r.kind)) {
             let open = (0..nx * ny).find(|&k| lv.cells[k] == ri as i16 && !blocked[k]);
             if let Some(k) = open
                 && !(0..nx * ny).any(|k| lv.cells[k] == ri as i16 && seen[k])
@@ -515,7 +520,7 @@ pub fn furnish(d: &mut SiteDesign, level: usize, room: usize, seed: u64) {
     let mut lvl = level_of(d, level, None, &mut Sprites::new(no_sprites()));
     let had = lvl.furniture.len();
     let mut rng = Pcg32::new(hash3(seed, level as i64, room as i64, 0xf0), 77);
-    furnish_rooms(&mut lvl, nx, ny, stairs_of(d), Some(room as i16), &mut rng);
+    furnish_rooms(&mut lvl, nx, ny, stairs_of(d), Some(room as i16), None, &mut rng);
     // (`furnish_rooms` keeps what was there first, in order.)
     let lv = &mut d.levels[level];
     for f in &lvl.furniture[had..] {

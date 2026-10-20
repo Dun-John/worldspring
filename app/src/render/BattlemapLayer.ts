@@ -1353,6 +1353,8 @@ function roundTower(g: Graphics, x: number, y: number, r: number, lift: number, 
 
 /** Dark lead (flats and lead roofs), and its rolls. */
 const LEAD = 0x5f656b;
+/** In a keep body's top code (`town::DONJON_LOW`): its donjon at its first corner's end. */
+const DONJON_LOW = 4;
 const LEAD_ROLL = 0x80878d;
 
 /**
@@ -1470,7 +1472,7 @@ function keepTop(g: Graphics, pts: number[], top: number, cap: boolean) {
  * where a piece meets its wall and its stair turret at the donjon's corner farthest from them (none
  * where no corner is clear).
  */
-function drawKeep(g: Graphics, pts: number[], tower: number, cornerTowers = true, avoid: number[][] = [], top = 0) {
+function drawKeep(g: Graphics, pts: number[], tower: number, cornerTowers = true, avoid: number[][] = [], top = 0, low?: boolean) {
   // How far a point stands clear of the other pieces (negative inside one).
   const clearOf = (x: number, y: number) => Math.min(Infinity, ...avoid.map((a) => polyClear(a, x, y)));
   // Long axis u from corner 0, short axis v.
@@ -1493,7 +1495,9 @@ function drawKeep(g: Graphics, pts: number[], tower: number, cornerTowers = true
   const lift = PX * 0.35;
   // The donjon: a square at one end (none on a short keep).
   const D = L > W * 1.35 ? Math.min(W, L * 0.42) : 0;
-  const donjonLow = rnd() < 0.5;
+  // (A keep built of pieces: at the end its top code names, as its interior has it.)
+  const rolled = rnd() < 0.5;
+  const donjonLow = low ?? rolled;
   const [d0, d1] = donjonLow ? [0, D] : [L - D, L];
   const [h0, h1] = donjonLow ? [D, L] : [0, L - D];
   // Shadow of the whole mass, longer from the donjon.
@@ -1724,7 +1728,7 @@ function drawKeepParts(g: Graphics, r: Roof) {
     g.fill(0x57534b);
     g.poly(pts).stroke({ width: 2.5, color: ROOF_INK });
   };
-  for (const p of r.parts) if (p.kind === 3 || p.kind === 4) (p.pts.length === 8 ? keepTop(g, p.pts, p.top, false) : flat(p.pts));
+  for (const p of r.parts) if (p.kind === 3 || p.kind === 4) (p.pts.length === 8 ? keepTop(g, p.pts, p.top & 3, false) : flat(p.pts));
   for (const p of r.parts) {
     if (p.kind !== 0) continue;
     if (p.pts.length === 8)
@@ -1734,7 +1738,8 @@ function drawKeepParts(g: Graphics, r: Roof) {
         0,
         false,
         r.parts.filter((o) => o !== p).map((o) => o.pts),
-        p.top,
+        p.top & 3,
+        (p.top & DONJON_LOW) !== 0,
       );
     else drawShellKeep(g, p.pts);
   }
