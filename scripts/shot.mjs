@@ -6,21 +6,21 @@
 //   "do": an expression run after positioning the camera (then "wait" ms, default 1500).
 // Env: SHOT_WIN=w,h sets the window size, SHOT_DPR=2 renders at that device pixel ratio (sharper art),
 // SHOT_PHONE=w,h[,dpr] emulates a phone (that viewport, touch input, mobile layout; e.g. 390,844,3).
+// Each run gets its own Chrome on a free DevTools port (SHOT_PORT=n to pin one), so runs can go side by side.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const [prefix = 'shot', url = 'http://localhost:5173/', viewsJson = '[{"name":"continent"}]'] = process.argv.slice(2);
 const views = JSON.parse(viewsJson);
-const port = 9334;
 const chromePath = [process.env.CHROME_PATH, 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/google-chrome']
   .filter(Boolean)
   .find((p) => existsSync(p));
 const profile = mkdtempSync(join(tmpdir(), 'pfm-shot-'));
 const chrome = spawn(chromePath, [
   `--user-data-dir=${profile}`,
-  `--remote-debugging-port=${port}`,
+  `--remote-debugging-port=${process.env.SHOT_PORT ?? 0}`,
   '--no-first-run',
   '--no-default-browser-check',
   '--disable-backgrounding-occluded-windows',
@@ -52,6 +52,14 @@ const evaluate = async (expression) =>
   (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }))?.result?.value;
 
 try {
+  // Chrome writes the port it took to DevToolsActivePort in its profile.
+  let port;
+  for (let i = 0; i < 60 && !port; i++) {
+    try {
+      port = Number(readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]) || undefined;
+    } catch {}
+    if (!port) await sleep(250);
+  }
   for (let i = 0; i < 60 && !ws; i++) {
     try {
       const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();

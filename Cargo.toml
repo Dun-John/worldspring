@@ -30,6 +30,14 @@ inherits = "release"
 codegen-units = 256
 incremental = true
 
+# `--profile fast`: the release build made quick to rebuild for checking work in progress (incremental, many
+# codegen units: ~10 s after a one-line edit, not ~2.5 min; the code runs ~1.7x slower). Same output; vital and
+# anything timed run on release.
+[profile.fast]
+inherits = "release"
+incremental = true
+codegen-units = 256
+
 # Generation is too slow unoptimized; keep dev builds usable.
 [profile.dev]
 opt-level = 2
