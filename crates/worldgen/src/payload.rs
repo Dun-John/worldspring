@@ -403,6 +403,47 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         whole.set(None);
                         continue;
                     }
+                    // The capital's palace round its court: a range along each side, the court a lawn
+                    // with its gravel walks and its fountain, as on the battlemap (all in the tile
+                    // holding its middle).
+                    if let Some(court) = crate::town::palace::is_palace(b).then(|| crate::interior::court_plan(world, t0, &l, b)).flatten() {
+                        whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
+                        let q = &court.court;
+                        push(q, 13);
+                        // Its forecourt paved, its low wall round it, the gate between two piers.
+                        if let Some(fc) = &court.forecourt {
+                            push(&fc.yard, 1);
+                            let (wall, pier) = (crate::interior::FORE_WALL_FT, crate::interior::FORE_PIER_FT);
+                            for &(a, e) in &fc.walls {
+                                lines.push(vec![[a[0], a[1], wall, 0.0], [e[0], e[1], wall, 0.0]]);
+                            }
+                            for p in &fc.piers {
+                                let (a, e) = (crate::town::geom::sub(*p, crate::town::geom::mul(fc.along, 0.5 * pier)), crate::town::geom::add(*p, crate::town::geom::mul(fc.along, 0.5 * pier)));
+                                lines.push(vec![[a[0], a[1], pier, 3.0], [e[0], e[1], pier, 3.0]]);
+                            }
+                        }
+                        for (kind, sq, _) in &court.pieces {
+                            match *kind {
+                                "garden_path" => push(sq, 12),
+                                "fountain" => push(&crate::town::geom::circle(crate::town::geom::mean(sq), 0.5 * crate::town::geom::dist(sq[0], sq[1]), 12), 7),
+                                _ => {}
+                            }
+                        }
+                        for k in 0..4 {
+                            push(&[b.poly[k], b.poly[(k + 1) % 4], q[(k + 1) % 4], q[k]], attr);
+                        }
+                        whole.set(None);
+                        continue;
+                    }
+                    // A manor: its main range and its cross wing over the family end, each outlined
+                    // (all in the tile holding its middle).
+                    if let Some((main, wing)) = crate::interior::cross_wing_of(world, t0, &l, b) {
+                        whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
+                        push(&main, attr);
+                        push(&wing, attr);
+                        whole.set(None);
+                        continue;
+                    }
                     push(&b.poly, attr);
                     // A keep's round corner towers (as the battlemap draws them), standing a
                     // little proud of its walls; each tile keeps the ones it owns.

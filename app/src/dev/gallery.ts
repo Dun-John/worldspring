@@ -5,14 +5,18 @@
 // (each in both orientations; no battlemap objects; `&looks=1` every look of each; `&floor=wood` on boards; `&nolabels=1` unlabelled, for blind crops), `&sq=` then sizing their squares (default 44). Battlemap objects come from the atlas (all variants); building furniture and
 // underground props are drawn by InteriorLayer exactly as in the app, one per little room. `&turn=1` shows how
 // things look turned by hand instead: battlemap props that may turn (`TURNABLE`, and the other candidates) at four
-// turns on grass with their shadows, and furniture and props with a back at each of their four sides.
+// turns on grass with their shadows, and furniture and props with a back at each of their four sides. Last, a
+// palace's forecourt as the battlemap draws it (garden wall, gate piers, open gates, gravel walks; `&items=forecourt`
+// alone, at `&sq=` px a square, default 64).
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
+import type { Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
 import type { Interior, InteriorItem, UnderCatalog } from '../gen/protocol';
 import { BATTLE_GROUPS, ITEM_GROUPS, looks as insideLooks } from '../editor/itemGroups';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
 import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
+import { drawForecourtGate, drawGardenWalls, drawGatePier, drawGravelWalk } from '../render/walls';
 import { ORIENTED } from '../render/furniture';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
@@ -30,6 +34,7 @@ const FURNITURE: [string, number, number][] = [
   ['throne_dais', 4, 2], ['throne_dais', 3, 2], ['low_dais', 3, 2], ['chair_of_office', 1, 1], ['high_table', 4, 1], ['carpet_runner', 1, 5], ['carpet_runner', 2, 4],
   ['tapestry', 3, 1], ['tapestry', 2, 1], ['wall_banner', 1, 1], ['standing_banner', 1, 1], ['font', 1, 1], ['cloister_well', 2, 2],
   ['dance_floor', 5, 5], ['dance_floor', 4, 3], ['harpsichord', 1, 2], ['musicians_corner', 2, 2], ['refreshment_table', 3, 1], ['refreshment_table', 2, 1],
+  ['garden_path', 1, 4], ['garden_path', 3, 2],
 ];
 
 /** Underground props (`under::item` and the ways in and out), with their sizes in squares. */
@@ -54,24 +59,35 @@ const ITEM_SQ = 44;
 const SLOT = 4;
 
 /** One room per item in a grid of `cols` (each `size` squares, rock between them); an item may give the
- * side its back is against (0-3), its label and its look. */
+ * side its back is against (0-3), its label and its look. Items too big for a room follow in rows of
+ * their own, in rooms big enough for the biggest of them. */
 function sampler(id: string, fn: string, items: [string, number, number, number?, string?, number?][], cols: number, size = SLOT): { it: Interior; spots: [string, number, number][] } {
-  const rows = Math.ceil(items.length / cols);
-  const [nx, ny] = [cols * (size + 1) + 1, rows * (size + 1) + 1];
+  const fits = (w: number, h: number) => w <= size && h <= size;
+  const small = items.filter(([, w, h]) => fits(w, h)).length;
+  const big = Math.max(size, ...items.filter(([, w, h]) => !fits(w, h)).map(([, w, h]) => Math.max(w, h) + 1));
+  const bigCols = Math.max(1, Math.floor((cols * (size + 1)) / (big + 1)));
+  const rows = Math.ceil(small / cols);
+  const bigRows = Math.ceil((items.length - small) / bigCols);
+  const [nx, ny] = [Math.max(cols * (size + 1), bigCols * (big + 1)) + 1, rows * (size + 1) + bigRows * (big + 1) + 1];
   const cells = new Array<number>(nx * ny).fill(-1);
   const furniture: InteriorItem[] = [];
   const rooms: Interior['levels'][number]['rooms'] = [];
   const spots: [string, number, number][] = [];
+  let [ks, kb] = [0, 0];
   items.forEach(([kind, w, h, back, label, variant], k) => {
-    const [x0, y0] = [1 + (k % cols) * (size + 1), 1 + Math.floor(k / cols) * (size + 1)];
-    for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) cells[(y0 + j) * nx + x0 + i] = k;
-    rooms.push({ kind: ' ', squares: size * size, raise_ft: 0, center: [x0 + size / 2, y0 + size / 2] });
+    // Its room: the next in the grid, or past the grid in the big rooms' rows.
+    const room = fits(w, h) ? size : big;
+    const n = fits(w, h) ? ks++ : kb++;
+    const per = fits(w, h) ? cols : bigCols;
+    const [x0, y0] = [1 + (n % per) * (room + 1), 1 + (fits(w, h) ? 0 : rows * (size + 1)) + Math.floor(n / per) * (room + 1)];
+    for (let j = 0; j < room; j++) for (let i = 0; i < room; i++) cells[(y0 + j) * nx + x0 + i] = k;
+    rooms.push({ kind: ' ', squares: room * room, raise_ft: 0, center: [x0 + room / 2, y0 + room / 2] });
     // Against the room's top wall, centred (props on a wall find the rock behind them).
-    const x = x0 + Math.floor((size - w) / 2);
+    const x = x0 + Math.floor((room - w) / 2);
     // With a side set: in the middle of the room, so only the side makes it face.
-    const y = back === undefined ? y0 : y0 + Math.floor((size - h) / 2);
+    const y = back === undefined ? y0 : y0 + Math.floor((room - h) / 2);
     furniture.push({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 3, ...(back === undefined ? {} : { back }), ...(variant === undefined ? {} : { variant }) });
-    spots.push([label ?? (w === 1 && h === 1 && kind === 'table' ? 'table (round)' : `${kind.replace(/_/g, ' ')}${w * h > 1 ? ` ${w}×${h}` : ''}`), x0, y0 + size]);
+    spots.push([label ?? (w === 1 && h === 1 && kind === 'table' ? 'table (round)' : `${kind.replace(/_/g, ' ')}${w * h > 1 ? ` ${w}×${h}` : ''}`), x0, y0 + room]);
   });
   // (`&floor=wood`: rooms above ground, so their floors are boards, not flags.)
   const z = new URLSearchParams(location.search).get('floor') === 'wood' ? 0 : -1;
@@ -215,9 +231,79 @@ export async function runGallery(target: HTMLElement) {
     y += it.ny * SQ + 40;
   }
 
+  // A palace's forecourt as the battlemap draws it (`&items=forecourt` alone).
+  if (!only && (!pick || pick.includes('forecourt') || pick.includes('garden_path'))) {
+    head('Forecourt: low garden wall, gate piers, open gates (iron, timber), gravel walks (battlemap)');
+    y = forecourt(root, y, width, query.has('nolabels'), Number(query.get('sq')) || PX);
+  }
+
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
   app.stage.addChild(bg, root);
   app.renderer.resize(width, y);
+}
+
+/** Ground colours (`ground.frag`): grass, and a plaza's paving (its cobbles). */
+const GRASS = 0x668a40;
+const PAVING = 0x948c80;
+
+/** A forecourt's corner on the battlemap's ground, at `sq` px a square, drawn by `walls.ts` from shapes
+ * as `battlePrep` gives them (px): two stretches of garden wall meeting at a corner, a gate between its
+ * piers standing open, gravel walks 3×2 and 1×4; on grass and on paving, square to the map, turned and
+ * at 45 degrees.
+ * Returns the y below it. */
+function forecourt(root: Container, y0: number, width: number, nolabels: boolean, sq: number): number {
+  const [W, H] = [10, 8];
+  const [pw, ph] = [W * sq, H * sq];
+  const panels: [string, number, number, number][] = [
+    ['iron gate, on grass', GRASS, 0, 0],
+    ['iron gate, on paving, turned', PAVING, 0, -0.35],
+    ['iron gate, on grass, at 45 degrees', GRASS, 0, Math.PI / 4],
+    ['timber gate, on paving', PAVING, 1, 0],
+    ['timber gate, on grass, turned', GRASS, 1, 0.35],
+    ['timber gate, on paving, at 45 degrees', PAVING, 1, -Math.PI / 4],
+  ];
+  const per = Math.max(1, Math.floor((width - 8) / (pw + 24)));
+  panels.forEach(([label, ground, style, turn], k) => {
+    const [ox, oy] = [16 + (k % per) * (pw + 24), y0 + Math.floor(k / per) * (ph + 30)];
+    const g = new Graphics();
+    g.rect(0, 0, W * PX, H * PX).fill(ground);
+    // A point (squares) of the panel, turned about its middle (the light stays in the north-west).
+    const [c, sn] = [Math.cos(turn), Math.sin(turn)];
+    const P = (x: number, y: number): [number, number] => [(W / 2 + (x - W / 2) * c - (y - H / 2) * sn) * PX, (H / 2 + (x - W / 2) * sn + (y - H / 2) * c) * PX];
+    const shape = (kind: number, size: number, pts: number[]): Shape => ({ kind, size, pts });
+    // The front wall along y 5.4 (the forecourt to the north of it), the side wall up from its corner;
+    // the gate 3 squares across, as `town::palace::GATE_SQ`.
+    const gap = 3;
+    const [fy, pier] = [5.4, 0.7];
+    const [a, b] = [3.9 + pier, 3.9 + pier + gap];
+    const walls = [
+      shape(10, 0.4 * PX, [...P(1.2, 0.5), ...P(1.2, fy)]),
+      shape(10, 0.4 * PX, [...P(1.2, fy), ...P(a - 2 * pier, fy)]),
+      shape(10, 0.4 * PX, [...P(b + 2 * pier, fy), ...P(9.6, fy)]),
+    ];
+    const piers = [a - pier, b + pier].map((x) => shape(11, pier * PX, [...P(x, fy), turn * PX, 0]));
+    const gate = shape(12, style * PX, [...P(a, fy), ...P(b, fy), ...P((a + b) / 2, fy - 2)]);
+    const walk = (x0: number, y0: number, x1: number, y1: number) => shape(13, 0, [...P(x0, y0), ...P(x1, y0), ...P(x1, y1), ...P(x0, y1)]);
+    // As the battlemap layers them: walks on the ground, then the walls, the piers, the gate.
+    drawGravelWalk(g, walk((a + b) / 2 - 0.5, 1.4, (a + b) / 2 + 0.5, 5.1));
+    drawGravelWalk(g, walk(2, 0.8, 4.2, 2.6));
+    drawGardenWalls(g, walls);
+    for (const s of piers) drawGatePier(g, s);
+    drawForecourtGate(g, gate);
+    // (Clipped to its panel.)
+    const panel = new Container();
+    const clip = new Graphics().rect(0, 0, W * PX, H * PX).fill(0xffffff);
+    panel.addChild(g, clip);
+    g.mask = clip;
+    panel.scale.set(sq / PX);
+    panel.position.set(ox, oy);
+    root.addChild(panel);
+    if (nolabels) return;
+    const t = new Text({ text: label, style: LABEL });
+    t.position.set(ox, oy + ph + 4);
+    root.addChild(t);
+  });
+  return y0 + Math.ceil(panels.length / per) * (ph + 30) + 30;
 }
 
 /** An object's drop shadow as the battlemap casts it (`BattlemapLayer`): a soft blob to the SE (from the foot of

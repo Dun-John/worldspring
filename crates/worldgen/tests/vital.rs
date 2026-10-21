@@ -846,9 +846,12 @@ fn interiors_guarantee() {
     for si in picks {
         let l = town::layout(&world, &t0, si);
         // Buildings, then wall and gate towers.
-        let ids: Vec<String> = (0..l.buildings.len())
-            .filter(|&bi| l.buildings[bi].structure == Structure::Roofed)
-            .map(|bi| format!("b:{si}:{bi}"))
+        // (By id: the lots a palace took in leave theirs unused.)
+        let ids: Vec<String> = l
+            .buildings
+            .iter()
+            .filter(|b| b.structure == Structure::Roofed)
+            .map(|b| format!("b:{si}:{}", b.id))
             .chain((0..interior::towers(&l).len()).map(|k| format!("t:{si}:{k}")))
             .collect();
         towers += interior::towers(&l).len();
@@ -862,7 +865,7 @@ fn interiors_guarantee() {
             // Thrones only in a castle's buildings and a palace.
             if let Some(b) = id.strip_prefix(&format!("b:{si}:")).and_then(|k| k.parse::<usize>().ok()).and_then(|k| l.building(k)) {
                 let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
-                let throned = b.keep || b.ward == town::catalog::Ward::Castle || key == Some("castle") || key == Some("palace");
+                let throned = b.keep.is_some() || b.ward == town::catalog::Ward::Castle || key == Some("castle") || key == Some("palace");
                 let it = interior::generate_id(&world, &t0, &id).unwrap();
                 for lv in &it.levels {
                     assert!(throned || !lv.furniture.iter().any(|f| matches!(f.kind, "throne" | "throne_dais")), "{id} ({}) {}: a throne outside a castle or a palace", it.function, lv.name);
@@ -2126,8 +2129,9 @@ fn underground_guarantee() {
         }
         assert!(n_sec > 0, "layout {li}: no sewer sections");
         // Keeps' deep dungeons, and the cellars that open into the sewers.
-        for bi in 0..l.buildings.len() {
-            if interior::has_deep_dungeon(&l.buildings[bi]) {
+        for (k, b) in l.buildings.iter().enumerate() {
+            let bi = b.id;
+            if interior::has_deep_dungeon(&l.buildings[k]) {
                 let id = format!("k:{li}:{bi}");
                 let t = std::time::Instant::now();
                 let it = interior::generate_id(&world, &t0, &id).unwrap_or_else(|| panic!("{id}: no deep dungeons"));
@@ -2135,7 +2139,7 @@ fn underground_guarantee() {
                 *kinds.entry("deep dungeons").or_default() += 1;
                 check(&format!("{id} (deep dungeons)"), &it, &l, None);
             }
-            if worldgen::under::sewer_link_of(&t0, &l, &l.buildings[bi]).is_some() {
+            if worldgen::under::sewer_link_of(&t0, &l, &l.buildings[k]).is_some() {
                 let id = format!("b:{li}:{bi}");
                 let it = interior::generate_id(&world, &t0, &id).unwrap();
                 assert!(it.levels[0].links.iter().any(|k| k.to.starts_with("w:")), "{id}: no way into the sewers");

@@ -60,6 +60,13 @@ pub fn centroid(poly: &[P]) -> P {
     mul(c, 1.0 / (6.0 * a))
 }
 
+/// The mean of a polygon's corners: a box's middle, exact far from the origin (where `centroid`'s
+/// products lose feet on a small one).
+pub fn mean(poly: &[P]) -> P {
+    let s = poly.iter().fold([0.0, 0.0], |acc, p| add(acc, *p));
+    mul(s, 1.0 / poly.len().max(1) as f64)
+}
+
 pub fn contains(poly: &[P], p: P) -> bool {
     let n = poly.len();
     let mut inside = false;

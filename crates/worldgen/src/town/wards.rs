@@ -591,7 +591,7 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
     for &k in fresh {
         let b = &mut l.buildings[k];
         if let Some(c) = castle
-            && b.keep
+            && b.keep.is_some()
             && b.func.is_none()
         {
             b.func = Some(c as u16);

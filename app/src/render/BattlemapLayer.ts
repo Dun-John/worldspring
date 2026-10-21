@@ -24,7 +24,7 @@ import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
-import { banner, drawGate, drawWalls, drawWallTower, topGrid } from './walls';
+import { banner, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, topGrid } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
 import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
@@ -62,8 +62,8 @@ interface ChunkView {
   shown: { data: Uint16Array; dirty: boolean } | null;
   /** The roof mesh's vertex buffers (a mesh does not free its geometry). */
   roofGeometry: Geometry | null;
-  /** The grids over bridge and pier decks, wall walks and tower tops, shown and hidden with the
-   * ground's. */
+  /** The grids over bridge and pier decks, wall walks, tower tops and gravel walks, shown and hidden
+   * with the ground's. */
   grids: Graphics[];
   /** Bridge and pier decks (and their grid): opaque whenever the ground is drawn. */
   decks: Container;
@@ -815,9 +815,12 @@ export class BattlemapLayer {
       }));
       roofMesh = new Mesh({ geometry, shader: new Shader({ glProgram: this.colorMeshProgram, resources: {} }) });
     }
-    // Daises sit on the ground, under every prop.
+    // Daises and a court's gravel walks sit on the ground, under every prop.
     const daisG = new Graphics();
-    for (const s of c.shapes) if (s.kind === 5) drawDais(daisG, s);
+    for (const s of c.shapes) {
+      if (s.kind === 5) drawDais(daisG, s);
+      else if (s.kind === 13) drawGravelWalk(daisG, s);
+    }
     const battleG = new Graphics();
     for (const r of c.battlements) drawBattlements(battleG, r);
     // Bridges and piers, the grid over their decks (shown with the ground's), then walls with
@@ -836,14 +839,16 @@ export class BattlemapLayer {
       } else continue;
       deckGrid(gridG, s);
     }
-    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9));
+    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12)));
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1));
-    // The grid on the wall walks (over the walls) and the tower tops (over the towers).
+    // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
+    // walks (over them, on the ground).
     const walkGridG = new Graphics();
     const topGridG = new Graphics();
-    for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : walkGridG, s);
-    for (const gr of [gridG, walkGridG, topGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
-    for (const part of [roofMesh, daisG, battleG, bridgeG, gridG, structG, walkGridG, towerG, topGridG]) {
+    const pathGridG = new Graphics();
+    for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 13 ? pathGridG : walkGridG, s);
+    for (const gr of [gridG, walkGridG, topGridG, pathGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
+    for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, walkGridG, towerG, topGridG]) {
       if (!part) continue;
       this.prewarm(part);
       yield;
@@ -852,7 +857,7 @@ export class BattlemapLayer {
       const holder = new Container();
       holder.addChild(o);
       for (const [key, pc] of customs) if ((i === 1 && key.endsWith('/0')) || (i === 3 && key.endsWith('/1'))) holder.addChild(pc);
-      if (i === 0) holder.addChild(daisG);
+      if (i === 0) holder.addChild(daisG, pathGridG);
       if (i === 2) {
         holder.addChild(structG, walkGridG);
         if (roofMesh) holder.addChild(roofMesh);
@@ -904,7 +909,7 @@ export class BattlemapLayer {
       base,
       shown: null,
       roofGeometry,
-      grids: [gridG, walkGridG, topGridG],
+      grids: [gridG, walkGridG, topGridG, pathGridG],
       decks,
       atmo,
       atmoUniforms,
@@ -1026,7 +1031,8 @@ const STONE_TOP = 0xb3ada2;
 /**
  * Walls, gatehouses, towers and ways underground as clean vectors over the ground (their squares
  * keep their tactical height; the ground under them is drawn flat): `walls.ts` draws the first
- * three. Bridges and piers are drawn apart (`bridges.ts`).
+ * three, and a forecourt's garden wall, gate piers and gate. Bridges and piers are drawn apart
+ * (`bridges.ts`).
  */
 function drawStructures(shapes: Shape[]): Graphics {
   const g = new Graphics();
@@ -1035,6 +1041,11 @@ function drawStructures(shapes: Shape[]): Graphics {
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
   for (const s of shapes) if (s.kind === 1) drawWallTower(g, s);
   for (const s of shapes) if (s.kind === 4) drawEntrance(g, s);
+  // A forecourt's low garden wall, its gate's piers, then the open leaves.
+  const garden = shapes.filter((s) => s.kind === 10);
+  if (garden.length) drawGardenWalls(g, garden);
+  for (const s of shapes) if (s.kind === 11) drawGatePier(g, s);
+  for (const s of shapes) if (s.kind === 12) drawForecourtGate(g, s);
   return g;
 }
 

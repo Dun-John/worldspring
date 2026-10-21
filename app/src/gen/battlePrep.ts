@@ -27,7 +27,8 @@ export interface Roof {
   idx: number;
   /** A keep's pieces (`battlemap::part_code`: 0 body, 1 round tower, 2 square tower, 3
    * forebuilding, 4 wing), how each is topped (0 open battlements, 1 a lead roof, 2 slate:
-   * `town::keep_tops`), px; empty for any other building. */
+   * `town::keep_tops`), px; a palace's court (5, `COURT_PART`: its corners each by the footprint's in
+   * the same place); empty for any other building. */
   parts: { kind: number; top: number; pts: number[] }[];
 }
 
@@ -455,17 +456,40 @@ class MeshBuilder {
  * every roof (battlemented ones included) first. */
 function roofMesh(roofs: Roof[]): ColorMesh {
   const g = new MeshBuilder();
-  for (const { pts, floors } of roofs) {
-    const off = PX * (0.25 + 0.3 * floors);
-    g.poly(
-      pts.map((v) => v + off),
-      0x000000,
-      0.28,
-    );
+  for (const roof of roofs) {
+    const off = PX * (0.25 + 0.3 * roof.floors);
+    for (const pts of courtRanges(roof) ?? [roof.pts]) {
+      g.poly(
+        pts.map((v) => v + off),
+        0x000000,
+        0.28,
+      );
+    }
   }
   for (const roof of roofs) {
     if (roof.battlements || roof.pts.length < 6) continue;
     const tint = ROOF_TINTS[roof.tint >= 0 && roof.tint < ROOF_TINTS.length ? roof.tint : (Math.imul(roof.idx, 2654435761) >>> 16) % ROOF_TINTS.length];
+    // A palace round its court: a hipped range along each side, the court open to the sky.
+    const ranges = courtRanges(roof);
+    if (ranges) {
+      for (const part of ranges) hipRoof(g, part, tint);
+      for (const part of ranges) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
+      g.outline(roof.pts, 2.5, ROOF_INK);
+      g.outline(roof.parts.find((p) => p.kind === COURT)!.pts, 2.5, ROOF_INK);
+      continue;
+    }
+    // A manor: its main range hipped along it, its cross wing over the family end hipped across it
+    // (a cross gable), drawn over the range's end and inked round.
+    const range = roof.parts.find((p) => p.kind === MAIN_RANGE);
+    const wing = roof.parts.find((p) => p.kind === CROSS_WING);
+    if (range && wing) {
+      const along = longestDir(range.pts);
+      for (const part of convexParts(range.pts)) hipRoof(g, part, tint);
+      for (const part of convexParts(wing.pts)) hipRoof(g, part, tint, [-along[1], along[0]]);
+      g.outline(wing.pts, 1.6, shadeHex(tint, 0.5), 0.8);
+      g.outline(roof.pts, 2.5, ROOF_INK);
+      continue;
+    }
     // Footprints drawn by hand may be concave: a roof on each convex part, valleys between.
     const parts = convexParts(roof.pts);
     for (const part of parts) {
@@ -476,6 +500,37 @@ function roofMesh(roofs: Roof[]): ColorMesh {
     g.outline(roof.pts, 2.5, ROOF_INK);
   }
   return g.build();
+}
+
+/** A palace's court among its pieces (`battlemap::COURT_PART`); a manor's cross wing and main range
+ * (`battlemap::CROSS_WING_PART`, `MAIN_RANGE_PART`). */
+const COURT = 5;
+const CROSS_WING = 6;
+const MAIN_RANGE = 7;
+
+/** The way a polygon's longest edge runs (unit). */
+function longestDir(pts: number[]): [number, number] {
+  const m = pts.length / 2;
+  let [ux, uy, best] = [1, 0, 0];
+  for (let i = 0; i < m; i++) {
+    const dx = pts[((i + 1) % m) * 2] - pts[i * 2];
+    const dy = pts[((i + 1) % m) * 2 + 1] - pts[i * 2 + 1];
+    const l = Math.hypot(dx, dy);
+    if (l > best) [ux, uy, best] = [dx / l, dy / l, l];
+  }
+  return [ux, uy];
+}
+
+/** A palace round its court: the ranges along its sides, each between a side of its footprint and
+ * the court's side by it (null for any other roof). */
+function courtRanges(roof: Roof): number[][] | null {
+  const court = roof.parts.find((p) => p.kind === COURT);
+  if (!court || roof.pts.length !== 8 || court.pts.length !== 8) return null;
+  const [o, c] = [roof.pts, court.pts];
+  return [0, 1, 2, 3].map((i) => {
+    const j = (i + 1) % 4;
+    return [o[i * 2], o[i * 2 + 1], o[j * 2], o[j * 2 + 1], c[j * 2], c[j * 2 + 1], c[i * 2], c[i * 2 + 1]];
+  });
 }
 
 /** Sloping up from every side to the middle: each face shaded by how it faces the NW light,
@@ -578,8 +633,9 @@ export function convexParts(pts: number[]): number[][] {
   return parts.map(at);
 }
 
-/** A hip roof on a convex footprint: shaded slopes, shingle courses, ridge and hips. */
-function hipRoof(g: MeshBuilder, pts: number[], tint: number) {
+/** A hip roof on a convex footprint: shaded slopes, shingle courses, ridge and hips; its ridge along
+ * `dir` (unit) if given, else along the longest edge. */
+function hipRoof(g: MeshBuilder, pts: number[], tint: number, dir?: [number, number]) {
   const m = pts.length / 2;
   let cx = 0;
   let cy = 0;
@@ -590,19 +646,7 @@ function hipRoof(g: MeshBuilder, pts: number[], tint: number) {
   cx /= m;
   cy /= m;
   // Ridge along the longest edge's direction.
-  let ux = 1;
-  let uy = 0;
-  let best = 0;
-  for (let i = 0; i < m; i++) {
-    const dx = pts[((i + 1) % m) * 2] - pts[i * 2];
-    const dy = pts[((i + 1) % m) * 2 + 1] - pts[i * 2 + 1];
-    const l = Math.hypot(dx, dy);
-    if (l > best) {
-      best = l;
-      ux = dx / l;
-      uy = dy / l;
-    }
-  }
+  const [ux, uy] = dir ?? longestDir(pts);
   let [lo, hi, plo, phi] = [Infinity, -Infinity, Infinity, -Infinity];
   for (let i = 0; i < m; i++) {
     const a = (pts[i * 2] - cx) * ux + (pts[i * 2 + 1] - cy) * uy;

@@ -592,8 +592,8 @@ export interface Interior {
  * it (the room below shows through; it stops a step, not the eye) and a roof's slopes. */
 export const OPEN_BELOW = 'open to below';
 export const ROOF_SLOPE = 'roof';
-/** Pieces others stand on (`interior::hall::is_platform`): the one kind another piece may overlap. */
-export const PLATFORMS = new Set(['low_dais']);
+/** Pieces others stand on (`interior::hall::is_platform`): the kinds another piece may overlap (a low dais, a court's gravel walk). */
+export const PLATFORMS = new Set(['low_dais', 'garden_path']);
 
 export interface InteriorLevel {
   z: number;

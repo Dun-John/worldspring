@@ -17,6 +17,7 @@ pub mod catalog;
 pub mod geom;
 pub mod mesh;
 pub mod sites;
+pub mod palace;
 pub mod squares;
 pub mod stairs;
 pub mod wards;
@@ -26,7 +27,7 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::rc::Rc;
 
 use castle::castle;
-pub use castle::{DONJON_LOW, keep_tops, plain_keep_top};
+pub use castle::{DONJON_LOW, KeepKind, keep_tops, plain_keep_top};
 use catalog::{CATALOG, Naming, RESIDENTIAL, Ward};
 use geom::*;
 use mesh::Mesh;
@@ -63,9 +64,9 @@ pub struct Building {
     /// towers; `poly` is their union. Empty for every other building, and once its outline is
     /// drawn by hand.
     pub parts: Vec<Part>,
-    /// A castle's keep (`castle::place_keep`): the castle itself, whatever its outline (with its
-    /// pieces or redrawn by hand) or storeys.
-    pub keep: bool,
+    /// A castle's keep (`castle::place_keep`), of the kind it was laid out as: the castle itself,
+    /// whatever its outline (with its pieces or redrawn by hand) or storeys.
+    pub keep: Option<KeepKind>,
 }
 
 /// A piece of a building's footprint (`Building::parts`).
@@ -236,6 +237,8 @@ pub struct Layout {
     /// The temples' patches a close fits on (its temple and churchyard, ringed by houses along at
     /// least 65% of the block's streets: `squares::ringed`), for the ward editor.
     pub close_room: Vec<u32>,
+    /// The capital's palace's forecourt before its front door (`palace::approach`).
+    pub forecourts: Vec<palace::Forecourt>,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -433,9 +436,19 @@ pub struct Entrance {
 impl Layout {
     /// Ids from list places (at the end of generating).
     fn number(&mut self) {
+        self.number_buildings();
+        self.number_entrances();
+    }
+
+    /// Buildings' ids from their places in the list.
+    fn number_buildings(&mut self) {
         for (i, b) in self.buildings.iter_mut().enumerate() {
             b.id = i as u32;
         }
+    }
+
+    /// Ways underground's ids from their places in the list.
+    fn number_entrances(&mut self) {
         for (i, e) in self.entrances.iter_mut().enumerate() {
             e.id = i as u32;
         }
@@ -494,6 +507,7 @@ impl Layout {
             props: Vec::new(),
             stairs: Vec::new(),
             close_room: Vec::new(),
+            forecourts: Vec::new(),
         }
     }
 
@@ -1638,6 +1652,11 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     l.on_water = on_water;
     if edit.is_none() {
         assign_functions(&site, s, on_water, &mut rng, &mut l);
+        // (Ids from their places now: the lots a palace takes in leave theirs unused, every other
+        // building keeps its own.)
+        l.number_buildings();
+        palace::merge(&site, &mut l, [0.0, 0.0], s.capital, &[]);
+        palace::approach(&site, &mut l, [0.0, 0.0], s.capital, &[], None);
     }
     // Local → world.
     let tw = |p: &mut P| *p = add(*p, center);
@@ -1675,8 +1694,15 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for pk in &mut l.parks {
         pk.pts.iter_mut().chain([&mut pk.ground.origin]).for_each(tw);
     }
+    for f in &mut l.forecourts {
+        f.front.iter_mut().chain(&mut f.yard).chain(&mut f.way).for_each(tw);
+    }
     if let Some(e) = edit {
-        wards::inherit(world, t0, e, &generated_layout(world, t0, index), spacing, &mut l);
+        let generated = generated_layout(world, t0, index);
+        let kept = palace::follow(&site, &mut l, &generated, center, s.capital);
+        wards::inherit(world, t0, e, &generated, spacing, &mut l);
+        palace::merge(&site, &mut l, center, s.capital, &kept);
+        palace::approach(&site, &mut l, center, s.capital, &kept, Some(&generated));
     }
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {
@@ -1689,7 +1715,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     l.bbox = if bb[0] <= bb[2] { bb } else { [center[0], center[1], center[0], center[1]] };
     match edit {
         Some(_) => wards::inherit_entrances(&generated_layout(world, t0, index), &mut l),
-        None => l.number(),
+        None => l.number_entrances(),
     }
     l
 }
@@ -3963,7 +3989,7 @@ fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P, f64)>, wa
                 continue;
             }
             let pad = site.pad(&poly);
-            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
+            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
         }
     }
 }
@@ -4122,7 +4148,7 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
             let house = rect(add(add(a, mul(u, 0.5 * w + 6.0)), mul(inward, 0.5 * dp + 6.0)), u, w, dp);
             if house.iter().all(|p| contains(&f, *p)) && site.buildable(&house) {
                 let pad = site.pad(&house);
-                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
+                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
             }
         }
         l.fields.push(f);
@@ -4310,7 +4336,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
                     let house = rect(add(p, mul(n, side * back)), u, w, d);
                     if clear(&house, l) && site.buildable(&house) {
                         let pad = site.pad(&house);
-                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
+                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
                     }
                 }
                 let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
@@ -4331,7 +4357,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
         let house = rect(c, [-libm::sin(a), libm::cos(a)], rng.range(22.0, 34.0), rng.range(16.0, 22.0));
         if clear(&house, l) && site.buildable(&house) {
             let pad = site.pad(&house);
-            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
+            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
         }
     }
     // Fields: Voronoi cells seeded along the lanes and on a jittered ring, split into plots
@@ -4698,7 +4724,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
-            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: false });
+            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
         }
     }
     // Big functions first so they get the big lots.
@@ -4709,7 +4735,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
     // The keep at the heart of a castle ward (4 storeys, raised by the ward layout) is the
     // castle.
     if let Some(castle) = CATALOG.iter().position(|f| f.key == "castle")
-        && let Some(keep) = l.buildings.iter().position(|b| b.keep && b.func.is_none())
+        && let Some(keep) = l.buildings.iter().position(|b| b.keep.is_some() && b.func.is_none())
     {
         l.buildings[keep].func = Some(castle as u16);
         taken[keep] = true;
@@ -4787,7 +4813,36 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
             }
         }
     }
+    // A city's palace (about two in five; a metropolis has its own, `CATALOG`): the biggest home of
+    // its noble quarter, 3 storeys, an older palace round its great hall (`interior::hub`). Its own
+    // stream, so that nothing else in the town is named or built otherwise.
+    if let Some(fi) = catalog::index_of("palace")
+        && tier == Tier::City
+        && unit(hash2(s.seed, 0x9a1a, 1)) < CITY_PALACES
+        && !l.buildings.iter().any(|b| b.func == Some(fi as u16))
+    {
+        let size = |b: &Building| area(&b.poly).abs();
+        let home = |b: &Building| b.func.is_none() && b.keep.is_none() && b.ward == Ward::Noble && b.structure == Structure::Roofed && size(b) >= 2500.0;
+        if let Some(i) = (0..l.buildings.len()).filter(|&i| home(&l.buildings[i])).max_by(|&a, &b| size(&l.buildings[a]).total_cmp(&size(&l.buildings[b])).then(b.cmp(&a))) {
+            let mut prng = Pcg32::new(hash2(s.seed, 0x9a1b, 1), 47);
+            let b = &mut l.buildings[i];
+            (b.func, b.floors, b.name) = (Some(fi as u16), 3, None);
+            for _ in 0..12 {
+                match business_name(&CATALOG[fi], &mut prng, &mut namer, culture) {
+                    Some(n) if used.insert(n.clone()) => {
+                        b.name = Some(n);
+                        break;
+                    }
+                    None => break,
+                    _ => {}
+                }
+            }
+        }
+    }
 }
+
+/// The share of cities with a palace of their own.
+const CITY_PALACES: f64 = 0.4;
 
 /// A business's name in its function's style (`None` for plain ones: warehouses, graveyards).
 pub fn business_name(f: &catalog::Func, rng: &mut Pcg32, namer: &mut Namer, culture: usize) -> Option<String> {

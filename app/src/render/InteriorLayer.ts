@@ -85,18 +85,24 @@ function floorColor(kind: string, z: number, natural = false, raise = 0): number
   if (kind === 'sewer tunnel' || kind === 'service passage') return 0x8a7d6c;
   if (['arena floor'].includes(kind)) return 0xc8b184;
   if (['kitchen', 'baths', 'forge', 'brewhouse'].includes(kind)) return 0x8f8a80;
+  // (A palace's court a lawn (its gravel walks laid on it), its ballroom's parquet the lightest wood.)
+  if (kind === 'courtyard') return LAWN;
+  if (kind === 'ballroom') return 0xbb8d5c;
   // (A roof's squares: the walk's stone, under the roof drawn over them, `drawRoofs`.)
   if (kind === 'battlements' || kind === 'wall walk' || kind === ROOF_SLOPE) return 0xa8a296;
   if (kind === OPEN_BELOW) return -1;
   if (kind === 'stands') return 0x8a7a64;
-  if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison'].includes(kind))
+  if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison', 'throne room', 'banqueting hall', 'royal chapel', 'stair hall', "servants' hall"].includes(kind))
     return 0x9d978c;
   return 0xa87a4f;
 }
-const STONE = (c: number) => c === 0x9d978c || c === 0x8f8a80 || c === 0xa8a296;
+const STONE = (c: number) => c === 0x9d978c || c === 0x8f8a80 || c === 0xa8a296 || c === 0x958f83;
+/** A court's lawn (`floorColor`). */
+const LAWN = 0x7f9a56;
 
-/** A floor square's pattern in its colour: planks along x on wood, flagstone joints on stone. */
+/** A floor square's pattern in its colour: planks along x on wood, flagstone joints on stone, none on a lawn. */
 function floorPattern(i: number, j: number, c: number): [Pt, Pt][] {
+  if (c === LAWN) return [];
   if (!STONE(c)) return [1, 2, 3].map((k): [Pt, Pt] => [[i, j + k / 4], [i + 1, j + k / 4]]);
   const odd = ((j % 2) + 2) % 2;
   return [
@@ -111,7 +117,7 @@ const OPEN_TOP = new Set(['battlements', 'wall walk', 'tower top', ROOF_SLOPE]);
 
 /** Rooms that are ways about a floor (`interior::is_circulation`): a railing along a hall's open
  * height where it meets one. */
-const CIRCULATION = new Set(['hall', 'corridor', 'landing', 'screens passage', 'mural passage', 'entrance hall', 'cloister walk', 'keep yard', 'nave', "minstrels' gallery", 'gate passage']);
+const CIRCULATION = new Set(['hall', 'corridor', 'landing', 'screens passage', 'mural passage', 'entrance hall', 'cloister walk', 'keep yard', 'nave', "minstrels' gallery", 'gate passage', 'courtyard', 'long gallery', 'stair hall']);
 
 /** A hall's (or a yard's) height left open drawn round (`shape` 1): its outline, cut to the walls. */
 function roundVoids(lv: InteriorLevel, sp: ShapedPlan | null): Map<number, Pt[]> {

@@ -30,7 +30,7 @@ const BY_GROUP: Record<string, string[]> = {
   'Kitchen & craft': ['hearth', 'oven', 'forge', 'anvil', 'workbench', 'cauldron', 'alchemy_bench', 'vat', 'bucket', 'bath', 'telescope'],
   'Great hall': [
     'throne_dais', 'low_dais', 'chair_of_office', 'high_table', 'carpet_runner', 'tapestry', 'wall_banner', 'standing_banner', 'font', 'cloister_well',
-    'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table',
+    'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'garden_path',
   ],
   'Worship & tombs': ['altar', 'statue', 'sarcophagus', 'urn', 'coffin', 'effigy', 'niche', 'offering', 'glyph', 'bell', 'fountain'],
   'Light & fire': ['brazier', 'candles', 'sconce', 'lantern', 'campfire'],

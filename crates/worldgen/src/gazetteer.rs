@@ -55,6 +55,9 @@ pub enum Hit {
 fn building_hit(t0: &T0, layouts: &[Rc<town::Layout>], l: &town::Layout, b: &town::Building) -> Hit {
     let c = geom::centroid(&b.poly);
     let size = b.poly.iter().map(|p| geom::dist(*p, c)).fold(0.0, f64::max) * 2.0;
+    // (The capital's palace's on its front range, over its entrance hall: not on its court's
+    // fountain.)
+    let c = l.forecourts.iter().find(|f| f.palace == b.id).map_or(c, |f| geom::sub(geom::mul(geom::add(f.front[0], f.front[1]), 0.5), geom::mul(f.out, 17.5)));
     let (district_id, district) = district_at(t0, layouts, l, c).unzip();
     Hit::Building {
         id: format!("b:{}:{}", l.index, b.id),

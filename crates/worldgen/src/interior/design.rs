@@ -531,10 +531,19 @@ pub fn furnish(d: &mut SiteDesign, world: &World, t0: &T0, id: &str, level: usiz
     let st = stairs_of(d);
     let mut lvl = level_of(d, level, None, &mut Sprites::new(no_sprites()));
     let had = lvl.furniture.len();
-    let (thrones, styled) = building_of(world, t0, id).ok().and_then(|(li, l, bi)| l.building(bi as usize).map(|b| super::hall_kind(world, t0, li, b))).map_or((false, None), |k| (k.1, k.2));
-    let hall = styled.filter(|s| lvl.rooms.get(room).is_some_and(|r| r.kind == s.0 && r.squares > 0)).and_then(|s| super::hall_frame(&lvl, nx, ny, room as i16, st).map(|f| (f, s.1)));
+    let found = building_of(world, t0, id).ok().and_then(|(li, l, bi)| l.building(bi as usize).cloned().map(|b| (li, l, b)));
+    let (thrones, styled) = found.as_ref().map(|(li, _, b)| super::hall_kind(world, t0, *li, b)).map_or((false, Vec::new()), |k| (k.1, k.2));
+    let styled = styled.into_iter().find(|s| lvl.rooms.get(room).is_some_and(|r| r.kind == s.0 && r.squares > 0));
+    // (A hall laid out by zones in its zones' frame, as generated; else one found in its squares, a
+    // chapel's along its length toward the east.)
+    let zoned = styled.and_then(|s| found.as_ref().and_then(|(li, l, b)| super::zone_hall_frame(world, t0, l, *li, b, d.levels[level].z, &lvl, room as i16, s.0)));
+    let hall = styled.and_then(|s| match &zoned {
+        Some((f, _)) => Some(((*f, false), s.1)),
+        None if s.1 == super::hall::Style::Chapel => super::chapel_frame(&lvl, nx, ny, room as i16, st, d.axis, [-d.axis[1], d.axis[0]], None).map(|f| (f, s.1)),
+        None => super::hall_frame(&lvl, nx, ny, room as i16, st).map(|f| (f, s.1)),
+    });
     if let Some((f, style)) = hall {
-        super::furnish_styled(&mut lvl, nx, ny, st, room as i16, f, style, None, hash3(seed, level as i64, room as i64, 0x4a11));
+        super::furnish_styled(&mut lvl, nx, ny, st, room as i16, f, style, zoned.as_ref().map(|z| z.1.as_slice()), hash3(seed, level as i64, room as i64, 0x4a11));
     } else {
         let mut rng = Pcg32::new(hash3(seed, level as i64, room as i64, 0xf0), 77);
         furnish_rooms(&mut lvl, nx, ny, st, Some(room as i16), None, &[], thrones, &mut rng);

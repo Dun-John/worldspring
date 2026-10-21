@@ -7,8 +7,10 @@
 //! by its walls; the hearth centred on a long wall; banners in rows and tapestries on the long
 //! walls, mirrored. A mess hall has its tables and hearth only. Every piece that blocks the way is
 //! put down only where the hall stays whole: its doors and stairs joined, no square of its floor
-//! shut off (`Hall::open`). Kept general (a frame, a style): throne rooms, ballrooms, naves and
-//! refectories are to be furnished with it too.
+//! shut off (`Hall::open`). Kept general (a frame, a style): a palace's throne room (its throne dais,
+//! no tables), banqueting hall (the high table on a low dais) and ballroom (the dance floor, the
+//! musicians and the harpsichords at its far end, refreshment tables) too; naves and refectories are
+//! to be furnished with it.
 
 use super::{Item, Level, building_item, entry_squares};
 use crate::core::rng::{Pcg32, hash3};
@@ -17,8 +19,10 @@ use crate::core::rng::{Pcg32, hash3};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Style {
     /// A castle's great hall: its throne dais (`dais`: its look, `super::item_looks`), standing
-    /// banners and braziers flanking it, the high table before it, banners of `house`.
-    Castle { dais: u8, house: u8 },
+    /// banners and braziers flanking it, the high table before it, banners of `house`; `banquet`: it
+    /// serves as the banqueting hall (an older palace's), its high table had whatever the long
+    /// tables then lose.
+    Castle { dais: u8, house: u8, banquet: bool },
     /// A town hall's, a guild's, a harbor master's or an auction house's: a low dais (of stone, else
     /// timber) with a chair of office at its middle.
     Civic { stone: bool },
@@ -28,14 +32,36 @@ pub enum Style {
     /// A mess hall (and any other hall: a guard post's, an orphanage's): long tables and benches and
     /// the hearth only; banners of a castle's `house` in a castle's.
     Mess { house: Option<u8> },
+    /// A palace's throne room: its throne dais (`dais`: its look) against the far wall, standing
+    /// banners and braziers flanking it, the runner up to it, pillars, banners of `house` and
+    /// tapestries; no tables.
+    Throne { dais: u8, house: u8 },
+    /// A palace's banqueting hall: a low stone dais across its far end carrying the high table, long
+    /// tables and benches down both sides, the hearth, banners of `house`.
+    Banquet { house: u8 },
+    /// A palace's ballroom: the inlaid dance floor in its middle, the musicians' corner on the axis
+    /// at its far end with a harpsichord each side, refreshment tables by its long walls at the door
+    /// end, pillars and tapestries.
+    Ballroom,
+    /// A palace's audience chamber (the presence chamber): the chair of state on a low stone dais
+    /// centred on its far wall, standing banners of `house` either side, the runner up to it from the
+    /// way in, banners and tapestries on the long walls; no tables.
+    Presence { house: u8 },
+    /// A long gallery: pieces along its long walls only, a square deep (statues, benches, tapestries
+    /// between them, mirrored), the walk down its middle clear from end to end.
+    Gallery,
+    /// A chapel along its axis: the altar on a stone step against the far wall (east where it can
+    /// be), two blocks of pews facing it either side of the aisle up the middle, the runner up the
+    /// aisle, the font by the way in.
+    Chapel,
 }
 
 impl Style {
     fn house(self) -> Option<u8> {
         match self {
-            Style::Castle { house, .. } | Style::Estate { house } => Some(house),
+            Style::Castle { house, .. } | Style::Estate { house } | Style::Throne { house, .. } | Style::Banquet { house } | Style::Presence { house } => Some(house),
             Style::Mess { house } => house,
-            Style::Civic { .. } => None,
+            Style::Civic { .. } | Style::Ballroom | Style::Gallery | Style::Chapel => None,
         }
     }
 }
@@ -64,9 +90,10 @@ impl Frame {
     }
 }
 
-/// A platform others stand on (`low_dais`): the one item another may overlap.
+/// A platform others stand on (a low dais; a court's gravel walk, laid on its lawn): the items another
+/// may overlap; walked over, they may lie in a doorway.
 pub fn is_platform(kind: &str) -> bool {
-    kind == "low_dais"
+    matches!(kind, "low_dais" | "garden_path")
 }
 
 /// The side code of `Item::back` (0 north, 1 east, 2 south, 3 west) for a step in grid axes.
@@ -249,6 +276,100 @@ impl Hall {
         }
     }
 
+    /// A long gallery's pieces (`Style::Gallery`), along its long walls from the end it is entered
+    /// at, mirrored: a statue, a gap, a bench two squares long, a gap, a tapestry two squares long, a
+    /// gap, and so on, each where both walls are whole beside it, a square deep: nothing across the
+    /// walk down its middle, the ends left clear.
+    fn gallery(&mut self, rng: &mut Pcg32) {
+        let (l, w) = (self.f.len as isize, self.f.wid as isize);
+        if w < 3 || l < 3 {
+            return;
+        }
+        let side = (0, -1);
+        let scene = rng.below(4) as u8;
+        let pattern: [(&str, isize); 3] = [("statue", 1), ("bench", 2), ("tapestry", 2)];
+        let (mut s, mut n) = (1, 0);
+        while s < l - 1 {
+            let (kind, ls) = pattern[n % pattern.len()];
+            let fits = (s..s + ls).all(|q| q < l - 1 && self.walled(q, 0, side) && self.walled(q, w - 1, (0, 1)));
+            let v = (kind == "tapestry").then(|| (scene + (n / pattern.len()) as u8) % 4);
+            if fits && self.pair(kind, s, 0, ls as usize, 1, Some(side), v, false) {
+                s += ls + 1;
+                n += 1;
+                continue;
+            }
+            s += 1;
+        }
+    }
+
+    /// A chapel's pieces (`Style::Chapel`): the step (a low stone dais) across its far end, two rows
+    /// deep in one 8 long or more, as wide as the chapel (else narrower, else as the altar), the altar
+    /// on it on the axis against the far wall, a statue each side of it in one 6 wide or more; pews a
+    /// square deep in two blocks either side of the aisle up the middle, on every row from the second
+    /// to the one before the step's (a square clear by each long wall in one 7 wide or more), all
+    /// facing the altar; the runner up the aisle to the step; the font in a corner at the end it is
+    /// entered at. False where the altar has no room at the far end.
+    fn chapel(&mut self, rng: &mut Pcg32) -> bool {
+        let (l, w) = (self.f.len as isize, self.f.wid as isize);
+        if l < 3 || w < 2 {
+            return false;
+        }
+        let far = (1, 0);
+        let (cl, cr) = if w % 2 == 1 { (w / 2, w / 2) } else { (w / 2 - 1, w / 2) };
+        let aw = cr - cl + 1;
+        // (The step and the altar against the far wall where it is whole behind the altar (the room
+        // past it, if any, on squares the outer wall as drawn cuts into): else the pews and the rest
+        // only.)
+        let deep = if l >= 8 { 2 } else { 1 };
+        let mut step = None;
+        if (cl..=cr).all(|t| self.at(l, t).is_none_or(|k| !self.deck[k])) {
+            for (dd, dw) in [(deep, w), (deep, w - 2), (1, w), (1, w - 2), (1, aw)] {
+                let s0 = l - dd;
+                if dw < aw || s0 < 2 {
+                    continue;
+                }
+                let m = self.mark();
+                if self.put("low_dais", s0, (w - dw) / 2, dd as usize, dw as usize, Some(far), Some(0), false) {
+                    if self.put("altar", l - 1, cl, 1, aw as usize, Some(far), None, true) {
+                        step = Some(s0);
+                        break;
+                    }
+                    self.undo(m);
+                }
+            }
+        }
+        let altar = step.is_some();
+        let s0 = step.unwrap_or(l);
+        if altar && w >= 6 {
+            self.pair("statue", l - 1, cl - 2, 1, 1, Some(far), None, true);
+        }
+        // The pews, their backs to the way in.
+        let wall = (w >= 7) as isize;
+        let last = if s0 - 2 >= 2 { s0 - 2 } else { s0 - 1 };
+        for s in 1..=last {
+            for t0 in [wall, wall + 1] {
+                if cl - t0 >= 1 && self.pair("pew", s, t0, 1, (cl - t0) as usize, Some((-1, 0)), None, false) {
+                    break;
+                }
+            }
+        }
+        // The runner up the aisle: the rows free on it that reach the step.
+        let free = |h: &Hall, s: isize| (cl..=cr).all(|t| h.at(s, t).is_some_and(|k| (h.ok[k] || h.foot[k]) && h.held[k] == 0));
+        let mut a = s0 - 1;
+        while a > 0 && free(self, a - 1) {
+            a -= 1;
+        }
+        if free(self, s0 - 1) && s0 - a >= 2 {
+            self.put("carpet_runner", a, cl, (s0 - a) as usize, aw as usize, None, Some(rng.below(4) as u8), false);
+        }
+        for (s, t) in [(0, 0), (0, w - 1), (1, 0), (1, w - 1)] {
+            if self.put("font", s, t, 1, 1, None, None, false) {
+                break;
+            }
+        }
+        altar
+    }
+
     /// `tables` for one lane over `rows`.
     fn lane(&mut self, lane: &[isize; 3], rows: (isize, isize)) {
         let w = self.f.wid as isize;
@@ -354,9 +475,24 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     let entries = entry_squares(lvl, nx, ny, st, ri);
     let mut h = Hall { nx, ny, f, room, ok, held: vec![0; nx * ny], foot, door, deck, blocked: vec![false; nx * ny], entries, items: Vec::new() };
     let (l, w) = (f.len as isize, f.wid as isize);
+    // (A long gallery and a chapel: their own compositions.)
+    if style == Style::Gallery {
+        h.gallery(&mut rng);
+        lvl.furniture.extend(h.items);
+        return true;
+    }
+    if style == Style::Chapel {
+        let ok = h.chapel(&mut rng);
+        lvl.furniture.extend(h.items);
+        return ok;
+    }
     let mess = matches!(style, Style::Mess { .. });
+    // (A throne room's, an audience chamber's and a ballroom's floor clear of tables; a throne in a
+    // castle's hall or a palace's throne room.)
+    let bare = matches!(style, Style::Throne { .. } | Style::Ballroom | Style::Presence { .. });
+    let throne = matches!(style, Style::Castle { .. } | Style::Throne { .. });
     if l < 3 || w < 2 {
-        return mess;
+        return mess || style == Style::Ballroom;
     }
     // The axis: the middle column, or the two middle ones.
     let (cl, cr) = if w % 2 == 1 { (w / 2, w / 2) } else { (w / 2 - 1, w / 2) };
@@ -379,7 +515,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     // (A column clear by each long wall in a hall 7 wide or more; a mess hall's tables along its
     // walls too.)
     let wall = (cl >= 3 && !mess) as isize;
-    while c - wall >= 1 {
+    while c - wall >= 1 && !bare {
         if c - wall >= 2 {
             lanes.push([c, c - 1, if c - 2 >= wall { c - 2 } else { -1 }]);
             c -= 4;
@@ -400,16 +536,18 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     // (Its first row, first column, width; its back row.)
     let mut dais: Option<(isize, isize, usize)> = None;
     let mut back = 0;
-    if !mess {
-        let (kind, deep) = if matches!(style, Style::Castle { .. }) { ("throne_dais", 2) } else { ("low_dais", 2) };
+    if !mess && style != Style::Ballroom {
+        let (kind, deep) = if throne { ("throne_dais", 2) } else { ("low_dais", 2) };
         let most = match style {
-            Style::Castle { .. } => 5,
-            Style::Estate { .. } => (w - 2 * outer_col).max(5) as usize,
+            Style::Castle { .. } | Style::Throne { .. } => 5,
+            Style::Estate { .. } | Style::Banquet { .. } => (w - 2 * outer_col).max(5) as usize,
+            Style::Presence { .. } => if w % 2 == 0 { 4 } else { 3 },
             _ => (w - 2 * outer_col).max(if w % 2 == 0 { 4 } else { 3 }) as usize,
         };
         let look = match style {
-            Style::Castle { dais, .. } => dais,
+            Style::Castle { dais, .. } | Style::Throne { dais, .. } => dais,
             Style::Civic { stone } => (!stone) as u8,
+            Style::Banquet { .. } | Style::Presence { .. } => 0,
             _ => 1,
         };
         let mut widths: Vec<usize> = (1..=most.min(w as usize - 2).max(1)).rev().filter(|d| d % 2 == w as usize % 2).collect();
@@ -423,7 +561,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
         let sizes: Vec<(usize, usize)> = [deep, 1].into_iter().flat_map(|d| widths.iter().map(move |&w| (d, w))).collect();
         let mut tries: Vec<(usize, usize, isize)> = sizes.iter().flat_map(|&(d, w)| [0, -1, -2, 1].map(|g| (d, w, g))).collect();
         let near = tries.len();
-        if matches!(style, Style::Castle { .. }) {
+        if throne {
             tries.extend(sizes.iter().flat_map(|&(d, w)| [1, 2].map(|g| (d, w, g))));
         }
         for (i, &(deep, dw, g)) in tries.iter().enumerate() {
@@ -465,7 +603,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     if let Some((s0, t0, dw)) = dais {
         let dw = dw as isize;
         match style {
-            Style::Castle { house, .. } => {
+            Style::Castle { house, .. } | Style::Throne { house, .. } => {
                 // Standing banners either side of it, braziers beyond them (by its back row, else
                 // its front one).
                 for (kind, off, v) in [("standing_banner", 1, Some(house)), ("brazier", 2, None)] {
@@ -477,16 +615,27 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
                 }
             }
             Style::Civic { stone } => chair(&mut h, &[back, s0], if stone { 0 } else { 1 }),
-            Style::Estate { .. } => {
-                // The high table along its front, the chair of office behind its middle (the dais's
-                // ends left clear, the way up to it).
+            Style::Presence { house } => {
+                // The chair of state on its middle, standing banners either side of it.
+                chair(&mut h, &[back, s0], 0);
+                for s in [back, s0] {
+                    if h.pair("standing_banner", s, t0 - 1, 1, 1, None, Some(house), false) {
+                        break;
+                    }
+                }
+            }
+            Style::Estate { .. } | Style::Banquet { .. } => {
+                // The high table along its front, an estate's chair of office behind its middle (the
+                // dais's ends left clear, the way up to it).
                 let tl = if dw >= 4 { dw - 2 } else { dw };
-                chair(&mut h, &[back], 1);
+                if let Style::Estate { .. } = style {
+                    chair(&mut h, &[back], 1);
+                }
                 if back > s0 {
                     h.put("high_table", s0, (w - tl) / 2, 1, tl as usize, Some(far), Some(rng.below(4) as u8), true);
                 }
             }
-            Style::Mess { .. } => {}
+            Style::Mess { .. } | Style::Ballroom | Style::Gallery | Style::Chapel => {}
         }
     }
     // The rows before the far end: the tables', then a row clear before the dais (and before a
@@ -514,52 +663,140 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
             h.put("carpet_runner", a, cl, (end - a + 1) as usize, mid, None, Some(rng.below(4) as u8), false);
         }
     }
-    // Tables: the lanes (above), a bench each side of a table.
-    if rows.1 - rows.0 + 1 >= 2 || s_end >= 3 {
-        h.tables(&lanes, rows, if mess { rows } else { (0, s_end - 1) });
-    }
-    // The hearth as near the middle of a long wall before the dais as the tables leave room for (an
-    // outer wall first), with a tapestry across from it.
-    let mut sides = [(0isize, (0isize, -1isize)), (w - 1, (0, 1))];
-    let outer = |h: &Hall, t: isize, d: (isize, isize)| {
-        let (i, j) = h.f.grid(s_end / 2, t + d.1);
-        i < 0 || j < 0 || i as usize >= nx || j as usize >= ny || lvl.cells[j as usize * nx + i as usize] < 0
-    };
-    let (o_hi, o_lo) = (outer(&h, w - 1, (0, 1)), outer(&h, 0, (0, -1)));
-    if (o_hi && !o_lo) || (o_hi == o_lo && rng.below(2) == 1) {
-        sides.swap(0, 1);
-    }
-    let mut hearth: Option<(isize, isize)> = None;
-    'hearth: for d in [0isize, -1, 1, -2, 2] {
-        let s = (s_end - 1) / 2 + d;
-        for &(t, dir) in &sides {
-            if s >= 1 && s + 1 < s_end && (s..s + 2).all(|q| h.walled(q, t, dir)) && h.put("hearth", s, t, 2, 1, Some(dir), None, false) {
-                hearth = Some((s, t));
-                break 'hearth;
-            }
+    // A ballroom: the musicians' corner on the axis against the far wall with a harpsichord each side
+    // of it, the dance floor in the middle (a way two squares wide left round it), refreshment tables
+    // by the long walls at the door end.
+    if style == Style::Ballroom {
+        let v = Some(rng.below(4) as u8);
+        let mt = if w % 2 == 0 { 2 } else { 1 };
+        let t0 = (w - mt) / 2;
+        if (t0..t0 + mt).all(|t| h.walled(l - 1, t, far)) && h.put("musicians_corner", l - 2, t0, 2, mt as usize, Some(far), v, false) && t0 >= 2 {
+            h.pair("harpsichord", l - 2, t0 - 2, 2, 1, Some(far), None, false);
         }
-    }
-    if let Some((s, t)) = hearth.filter(|_| !mess) {
-        let (ot, od) = if t == 0 { (w - 1, (0, 1)) } else { (0, (0, -1)) };
-        if (s..s + 2).all(|q| h.walled(q, ot, od)) {
-            h.put("tapestry", s, ot, 2, 1, Some(od), Some(rng.below(4) as u8), false);
+        // (A square's way each side in a narrow one.)
+        let dw = if w >= 8 { (w - 4).min(6) } else { w - 2 };
+        let dw = dw - (dw - w).rem_euclid(2);
+        let dl = (l - 4).min(30 / dw.max(1)).min(6);
+        if dw >= 2 && dl >= 2 {
+            h.put("dance_floor", 1 + (l - 3 - dl) / 2, (w - dw) / 2, dl as usize, dw as usize, None, v, false);
+        }
+        for len in [3usize, 2] {
+            if h.pair("refreshment_table", 1, 0, len, 1, Some(side), None, false) {
+                break;
+            }
         }
     }
     // A castle's high table: before the dais in two halves either side of the way up the axis, or
-    // beside it, its back to the far wall.
-    if let (Style::Castle { .. }, Some((s0, t0, _))) = (style, dais) {
+    // beside it, its back to the far wall (`again`: a banqueting hall's laid out again, its halves
+    // before the dais in a short hall too, shorter where its walls leave no room).
+    let castle = matches!(style, Style::Castle { .. });
+    let banquet = matches!(style, Style::Castle { banquet: true, .. });
+    let high = |h: &mut Hall, rng: &mut Pcg32, again: bool| -> bool {
+        let Some((s0, t0, _)) = dais else { return false };
         let v = Some(rng.below(4) as u8);
         let hl = (cl - 1).min(3);
-        if !(high_front && hl >= 2 && h.pair("high_table", s0 - 1, cl - hl, 1, hl as usize, Some(far), v, false)) {
-            'beside: for len in [3isize, 2] {
-                for s in [back, s0] {
-                    for t in (0..=t0 - 1 - len).rev() {
-                        if h.pair("high_table", s, t, 1, len as usize, Some(far), v, false) {
-                            break 'beside;
-                        }
+        let least = if again { 2 } else { hl };
+        if (high_front || again && n_rows >= 3) && hl >= 2 && (least..=hl).rev().any(|n| h.pair("high_table", s0 - 1, cl - n, 1, n as usize, Some(far), v, false)) {
+            return true;
+        }
+        for len in [3isize, 2] {
+            for s in [back, s0] {
+                for t in (0..=t0 - 1 - len).rev() {
+                    if h.pair("high_table", s, t, 1, len as usize, Some(far), v, false) {
+                        return true;
                     }
                 }
             }
+        }
+        // (Laid out again: where the walls give no room for both halves, one across the axis before
+        // the dais, else one before it by the way up to it, else beside it.)
+        if again && n_rows >= 3 {
+            let w = h.f.wid as isize;
+            // (Across the axis: the runner up to the dais a row shorter, ending at it.)
+            let m = h.mark();
+            let runner = h.items.iter().position(|it| it.kind == "carpet_runner");
+            let mut run: Option<(isize, Option<u8>)> = None;
+            let mut taken: Option<Item> = None;
+            if let Some(ri) = runner {
+                let it = h.items.remove(ri);
+                let inside = |s: isize| {
+                    let (i, j) = h.f.grid(s, cl);
+                    i >= it.x as isize && j >= it.y as isize && i < (it.x + it.w) as isize && j < (it.y + it.h) as isize
+                };
+                let a = (0..s0).find(|&s| inside(s)).unwrap_or(s0);
+                for y in it.y as usize..(it.y + it.h) as usize {
+                    for x in it.x as usize..(it.x + it.w) as usize {
+                        h.held[y * h.nx + x] = 0;
+                    }
+                }
+                run = Some((a, it.variant));
+                taken = Some(it);
+            }
+            for len in [3isize, 2, 1] {
+                if (w - len) % 2 == 0 && h.put("high_table", s0 - 1, (w - len) / 2, 1, len as usize, Some(far), v, false) {
+                    if let Some((a, rv)) = run.filter(|r| s0 - 1 - r.0 >= 2) {
+                        h.put("carpet_runner", a, cl, (s0 - 1 - a) as usize, (cr - cl + 1) as usize, None, rv, false);
+                    }
+                    return true;
+                }
+            }
+            // (Else the runner as it was.)
+            h.undo(m);
+            if let (Some(ri), Some(it)) = (runner, taken) {
+                h.items.insert(ri, it);
+            }
+            for len in [3isize, 2] {
+                let spots = [(s0 - 1, cl - len), (s0 - 1, cr + 1)].into_iter().chain([back, s0].into_iter().flat_map(|s| (0..w).map(move |t| (s, t))));
+                for (s, t) in spots {
+                    if t >= 0 && (t + len <= cl || t > cr) && h.put("high_table", s, t, 1, len as usize, Some(far), v, false) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    };
+    // (A great hall that serves as the banqueting hall has its high table: where the tables leave
+    // it no room, laid out again with the high table first.)
+    let start = h.mark();
+    for first in [false, true] {
+        if first {
+            h.undo(start.clone());
+            high(&mut h, &mut rng, true);
+        }
+        // Tables: the lanes (above), a bench each side of a table.
+        if !bare && (rows.1 - rows.0 + 1 >= 2 || s_end >= 3) {
+            h.tables(&lanes, rows, if mess { rows } else { (0, s_end - 1) });
+        }
+        // The hearth as near the middle of a long wall before the dais as the tables leave room for
+        // (an outer wall first), with a tapestry across from it.
+        let mut sides = [(0isize, (0isize, -1isize)), (w - 1, (0, 1))];
+        let outer = |h: &Hall, t: isize, d: (isize, isize)| {
+            let (i, j) = h.f.grid(s_end / 2, t + d.1);
+            i < 0 || j < 0 || i as usize >= nx || j as usize >= ny || lvl.cells[j as usize * nx + i as usize] < 0
+        };
+        let (o_hi, o_lo) = (outer(&h, w - 1, (0, 1)), outer(&h, 0, (0, -1)));
+        if (o_hi && !o_lo) || (o_hi == o_lo && rng.below(2) == 1) {
+            sides.swap(0, 1);
+        }
+        let mut hearth: Option<(isize, isize)> = None;
+        'hearth: for d in [0isize, -1, 1, -2, 2] {
+            let s = (s_end - 1) / 2 + d;
+            for &(t, dir) in &sides {
+                if s >= 1 && s + 1 < s_end && (s..s + 2).all(|q| h.walled(q, t, dir)) && h.put("hearth", s, t, 2, 1, Some(dir), None, false) {
+                    hearth = Some((s, t));
+                    break 'hearth;
+                }
+            }
+        }
+        if let Some((s, t)) = hearth.filter(|_| !mess) {
+            let (ot, od) = if t == 0 { (w - 1, (0, 1)) } else { (0, (0, -1)) };
+            if (s..s + 2).all(|q| h.walled(q, ot, od)) {
+                h.put("tapestry", s, ot, 2, 1, Some(od), Some(rng.below(4) as u8), false);
+            }
+        }
+        if first || !castle || high(&mut h, &mut rng, false) || !banquet {
+            break;
         }
     }
     // Banners in rows and tapestries on the long walls, mirrored, to the dais's end: a banner, a gap,
@@ -593,14 +830,19 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     // by a long wall (the row between them and the wall clear, both sides), nor in a door's way (no
     // door's square on that row by the wall, none next to a pillar: the square straight in from it).
     if !mess && w >= 7 {
-        let p = outer_col - 1;
-        if p >= 1 && wall == 1 {
+        // (A hall bare of tables: a column in from the walls, two in a wide one, the column between it
+        // and the wall the way.)
+        // (Whatever stands or hangs between a pillar and its wall, the wall's column too, keeps it off
+        // that row.)
+        let p = if bare { if w >= 9 { 2 } else { 1 } } else { outer_col - 1 };
+        let lo = 0;
+        if p >= 1 && (bare || wall == 1) && !matches!(style, Style::Presence { .. }) {
             let by_door = |h: &Hall, s: isize, t: isize| {
                 let (i, j) = h.f.grid(s, t);
                 [(i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)].iter().any(|&(a, b)| a >= 0 && b >= 0 && (a as usize) < h.nx && (b as usize) < h.ny && h.door[b as usize * h.nx + a as usize])
             };
             let way = |h: &Hall, s: isize| {
-                (0..p).chain(w - p..w).all(|t| h.at(s, t).is_some_and(|k| h.held[k] == 0 && !h.door[k])) && !by_door(h, s, p) && !by_door(h, s, w - 1 - p)
+                (lo..p).chain(w - p..w - lo).all(|t| h.at(s, t).is_some_and(|k| h.held[k] == 0 && !h.door[k])) && !by_door(h, s, p) && !by_door(h, s, w - 1 - p)
             };
             let mut s = rows.0 + 1;
             while s < rows.1 {
@@ -609,7 +851,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
         }
     }
     lvl.furniture.extend(h.items);
-    mess || dais.is_some()
+    mess || style == Style::Ballroom || dais.is_some()
 }
 
 /// The musicians' corner on a minstrels' gallery (room `ri`): two squares deep where the gallery is,

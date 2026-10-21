@@ -35,7 +35,7 @@ fn main() {
     println!("marks: {}", MARKS.iter().map(|m| format!("{} {}", m.1, m.0)).collect::<Vec<_>>().join(", "));
     let l = worldgen::town::layout(&world, &t0, si);
     for want in &wanted {
-        let Some(bi) = want.parse::<usize>().ok().or_else(|| l.buildings.iter().position(|b| b.label().to_lowercase() == *want)) else {
+        let Some(bi) = want.parse::<usize>().ok().or_else(|| l.buildings.iter().find(|b| b.label().to_lowercase() == *want).map(|b| b.id as usize)) else {
             println!("no {want}");
             continue;
         };
@@ -43,7 +43,7 @@ fn main() {
         let it = interior::generate(&world, &t0, si, bi).unwrap();
         let ms = t.elapsed().as_secs_f64() * 1e3;
         let outline = if it.outlines.is_empty() { String::new() } else { format!(", drawn inside a {}-sided outline", it.outlines.iter().map(|o| o.len().to_string()).collect::<Vec<_>>().join("+")) };
-        let kind = l.building(bi).and_then(interior::hub::keep_kind).map(|k| format!(", a {}", k.name())).unwrap_or_default();
+        let kind = l.building(bi).and_then(|b| interior::hub_kind(&t0, &l, b)).map(|k| format!(", a {}", k.name())).unwrap_or_default();
         println!("== {} {:?} ({}x{} squares, {} levels{outline}{kind}, {ms:.2} ms)", it.function, it.name, it.nx, it.ny, it.levels.len());
         for lv in &it.levels {
             let room = |r: &interior::Room| format!("{}{}={}", r.kind, interior::shape::name(r.shape).map(|s| format!(" ({s})")).unwrap_or_default(), r.squares);

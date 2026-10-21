@@ -2801,7 +2801,7 @@ export const VARIED = new Set([
   'vat', 'cauldron', 'alchemy_bench', 'weapon_rack', 'rack', 'cage', 'winch', 'telescope', 'barricade',
   'trapdoor', 'spiral_stair', 'link_down',
   'throne_dais', 'carpet_runner', 'chair_of_office', 'high_table', 'tapestry', 'wall_banner', 'standing_banner', 'font', 'cloister_well',
-  'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'low_dais',
+  'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'low_dais', 'garden_path',
 ]);
 
 /** Draws `f` if it is building furniture drawn here; false otherwise. */
@@ -2999,8 +2999,123 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
     case 'refreshment_table':
       refreshmentTable(g, f, light, v, rnd);
       break;
+    case 'garden_path':
+      gravelWalk(g, f, light, rnd);
+      break;
   }
   return true;
+}
+
+/** Gravel walk across a court's lawn (`gravelPatch`), along its long side. */
+function gravelWalk(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
+  const { along, len, at } = frame(f);
+  gravelPatch(g, at, len, along ? f.h : f.w, 1, rnd, light);
+}
+
+/** Gravel: the parks' paths' colour (`ground.frag`, gravel), its darker edge, a mottle each way, and
+ * pebbles dark, warm and pale. */
+const GRAVEL = { mid: 0xc2b599, edge: 0xa39477, light: 0xd4c9ae, shade: 0xb2a487, peb: [0x8c7f6a, 0xa8977a, 0xdcd1b6] };
+
+/**
+ * A gravel walk, as the parks' paths are gravelled: cream gravel mottled in soft patches, a sparse
+ * scatter of bigger pebbles in three tones (each with its shadow), the long sides soft and a little
+ * uneven in a darker gravel (never inked), lit along the side toward the light and shaded along
+ * the other. Fills its rectangle end to end (walks meet the fountain and each other there); its long
+ * sides only wobble inward. `at(s, t)` is the point `s` squares along it (0..len) and `t` across
+ * (0..wid), `unit` the size of a square where it draws (1 in a building, PX on the battlemap) and
+ * `light` the way toward the light in the same axes, so a building and the battlemap draw the same.
+ */
+export function gravelPatch(g: Graphics, at: (s: number, t: number) => [number, number], len: number, wid: number, unit: number, rnd: () => number, light: Light = [-Math.SQRT1_2, -Math.SQRT1_2]) {
+  if (len <= 0 || wid <= 0) return;
+  const pt = (s: number, t: number) => at(Math.min(len, Math.max(0, s)), Math.min(wid, Math.max(0, t)));
+  // The long sides' uneven line, inward of the edge by `e` at each step along.
+  const n = Math.max(2, Math.round(len * 4));
+  const ins: number[][] = Array.from({ length: n + 1 }, () => [0.006 + rnd() * 0.035, 0.006 + rnd() * 0.035]);
+  const side = (t0: number, dir: number, d: number, k: number) => pt((len * k) / n, t0 + dir * (ins[k][t0 ? 1 : 0] + d));
+  const band = (t0: number, dir: number, d0: number, d1: number) => {
+    const pts: number[] = [];
+    for (let k = 0; k <= n; k++) pts.push(...side(t0, dir, d0, k));
+    for (let k = n; k >= 0; k--) pts.push(...side(t0, dir, d1, k));
+    return pts;
+  };
+  // The body, its long sides uneven.
+  const body: number[] = [];
+  for (let k = 0; k <= n; k++) body.push(...side(0, 1, 0, k));
+  for (let k = n; k >= 0; k--) body.push(...side(wid, -1, 0, k));
+  g.poly(body).fill(GRAVEL.mid);
+  // Mottle: soft patches a shade lighter and darker (each a few nested rounds, so its edge fades),
+  // kept inside.
+  const blobs = Math.max(2, Math.round(len * wid * 1.6));
+  for (let k = 0; k < blobs; k++) {
+    const r = Math.min(wid * 0.32, 0.18 + rnd() * 0.2);
+    const [s, t] = [r + rnd() * Math.max(0, len - 2 * r), r * 0.8 + 0.06 + rnd() * Math.max(0, wid - 1.6 * r - 0.12)];
+    const turn = rnd() * Math.PI;
+    const rs = Array.from({ length: 9 }, () => 0.75 + rnd() * 0.35);
+    for (const f of [1, 0.78, 0.55]) {
+      const pts: number[] = [];
+      for (let m = 0; m < 9; m++) {
+        const a = turn + (m / 9) * Math.PI * 2;
+        pts.push(...pt(s + Math.cos(a) * r * rs[m] * f * 1.25, t + Math.sin(a) * r * rs[m] * f * 0.8));
+      }
+      g.poly(pts).fill({ color: k % 2 ? GRAVEL.light : GRAVEL.shade, alpha: 0.2 });
+    }
+  }
+  // The long sides: the darker edge, soft (two bands), then lit or shaded inside it as the side faces.
+  const [o0, o1] = [at(0, 0), at(0, 1)];
+  const [nx, ny] = [o0[0] - o1[0], o0[1] - o1[1]];
+  const facing = (nx * light[0] + ny * light[1]) / (Math.hypot(nx, ny) || 1);
+  for (const [t0, dir, lit] of [
+    [0, 1, facing],
+    [wid, -1, -facing],
+  ]) {
+    const w = Math.min(0.12, wid * 0.14);
+    g.poly(band(t0, dir, 0, w)).fill({ color: GRAVEL.edge, alpha: 0.3 });
+    g.poly(band(t0, dir, 0, w * 0.45)).fill({ color: GRAVEL.edge, alpha: 0.4 });
+    if (lit > 0.2) g.poly(band(t0, dir, w, w + Math.min(0.09, wid * 0.1))).fill({ color: 0xf4ead0, alpha: 0.4 * lit });
+    else if (lit < -0.2) g.poly(band(t0, dir, w * 0.6, w + Math.min(0.14, wid * 0.14))).fill({ color: 0x4a2f3a, alpha: 0.13 * -lit });
+  }
+  // Grains: a sparse scatter, a little set in.
+  const [lx, ly] = light;
+  const lh = Math.hypot(lx, ly) || 1;
+  // (Toward the light in the walk's own axes, so a pebble's shadow falls away from it.)
+  const [p0, ps, pt1] = [at(0, 0), at(1, 0), at(0, 1)];
+  const [su, sv] = [((ps[0] - p0[0]) * lx + (ps[1] - p0[1]) * ly) / (unit * lh), ((pt1[0] - p0[0]) * lx + (pt1[1] - p0[1]) * ly) / (unit * lh)];
+  const pebble = (s: number, t: number, r: number, tone: number, alpha: number) => {
+    const pts: number[] = [];
+    const turn = rnd() * Math.PI;
+    const k = 1 + rnd() * 0.45;
+    for (let m = 0; m < 6; m++) {
+      const a = turn + (m / 6) * Math.PI * 2;
+      const rr = r * (0.72 + rnd() * 0.4);
+      pts.push(Math.cos(a) * rr * k, Math.sin(a) * rr);
+    }
+    const [c, sn] = [Math.cos(turn), Math.sin(turn)];
+    const shape = (ds: number, dt: number, f: number) => {
+      const out: number[] = [];
+      for (let m = 0; m < 6; m++) out.push(...pt(s + ds + (pts[m * 2] * c - pts[m * 2 + 1] * sn) * f, t + dt + (pts[m * 2] * sn + pts[m * 2 + 1] * c) * f));
+      return out;
+    };
+    g.poly(shape(-su * r * 0.45, -sv * r * 0.45, 1)).fill({ color: 0x4a2f3a, alpha: 0.22 * alpha });
+    g.poly(shape(0, 0, 1)).fill({ color: tone, alpha });
+    if (tone !== GRAVEL.peb[0]) g.poly(shape(su * r * 0.3, sv * r * 0.3, 0.45)).fill({ color: 0xfff1cf, alpha: 0.25 * alpha });
+  };
+  const m = 0.07;
+  // Small grains on a jittered lattice, then bigger pebbles, fewer.
+  const cell = 0.2;
+  for (let s = 0; s < len; s += cell) {
+    for (let t = m; t < wid - m; t += cell) {
+      if (rnd() < 0.45) continue;
+      const tone = GRAVEL.peb[Math.floor(rnd() * 3)];
+      pebble(s + cell * (0.15 + rnd() * 0.7), t + cell * rnd() * 0.9, 0.022 + rnd() * 0.014, tone, 0.75);
+    }
+  }
+  const big = Math.round(len * wid * (6 + rnd()));
+  for (let k = 0; k < big; k++) {
+    const r = 0.035 + rnd() * 0.03;
+    const s = r + rnd() * Math.max(0, len - 2 * r);
+    const t = m + r + rnd() * Math.max(0, wid - 2 * (m + r));
+    pebble(s, t, r, GRAVEL.peb[k % 3], 0.95);
+  }
 }
 
 /** Stairs up out of a level: a stone-framed flight rising toward the top of its square, each step higher

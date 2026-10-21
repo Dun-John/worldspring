@@ -30,6 +30,16 @@
 //!   axis, the tables, benches, pillars, banners, tapestries, braziers and high tables mirrored
 //!   across it, nothing shut off, an open hall's musicians on its gallery; no throne outside a
 //!   castle or a palace; every banner in a castle's buildings of one house (`hall_rules`).
+//! - `palaces`: palaces and noble estates laid out by zones (`interior::hub`: the capital's palace
+//!   round its court, other cities' older palaces round their great halls, hall houses and manors):
+//!   floors the zones fell back on, vital's `check_interior` (every room reached, the corridor rule),
+//!   the rooms of each one's programme, rooms of sound proportions (no longer than 2.5:1 but a long
+//!   gallery, filling 60% of their box, a hall, a court or a chapel the only rooms over 60 squares,
+//!   none a square wide); the capital's palace laid out as one, its front door on its axis, its front
+//!   range (the ground floor's) and every floor above mirrored across its axis, its state rooms one into
+//!   the next from the landing round to the throne room both ways (the audience chamber's side and the
+//!   ballroom's) through doors mirrored across the axis, its throne dais on the axis, its forecourt and
+//!   its paved way off the water (`palace_rules`); a chapel's altar at the end away from its doors.
 //! - `editor`: castles set in the street editor (`wards::change`) on the patches nearest the
 //!   town wall (up to 3 a town, `PLACES=n` a world, default 20), with the walls on and off, each
 //!   run through the castle checks, and its keep and barracks through the `hub` and `halls` rules;
@@ -39,7 +49,7 @@
 //!   (`b:`/`t:`), marked `C` in a settlement with a castle, one per line on stdout (everything
 //!   else goes to stderr): run it on two trees and diff to see what changed.
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|editor|hash|all]... [seed|world.json...] [--keeps]
+//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|palaces|editor|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -1346,7 +1356,7 @@ fn hub(ctx: &mut Ctx, r: &mut Report) {
         let l = town::layout(world, t0, li);
         let mut buckets = None;
         for b in &l.buildings {
-            if interior::hub_kind(&l, b).is_none() {
+            if !interior::hub_kind(t0, &l, b).is_some_and(|k| k.is_keep()) {
                 continue;
             }
             let buckets = buckets.get_or_insert_with(|| building_buckets(&l));
@@ -1359,7 +1369,7 @@ fn hub(ctx: &mut Ctx, r: &mut Report) {
 /// beside its id).
 #[allow(clippy::too_many_arguments)]
 fn keep_rules(world: &World, t0: &T0, l: &Layout, li: usize, b: &town::Building, tag: &str, buckets: &HashMap<(i64, i64), Vec<usize>>, r: &mut Report) {
-    let Some(kind) = interior::hub_kind(l, b) else { return };
+    let Some(kind) = interior::hub_kind(t0, l, b).filter(|k| k.is_keep()) else { return };
     let id = format!("b:{li}:{}", b.id);
     let Some(it) = interior::generate_id(world, t0, &id) else { return };
     r.tally("buildings laid out by zones", 1);
@@ -1437,6 +1447,7 @@ fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str
             Kind::Great | Kind::Plain => k == "entrance hall" || (b.floors < 2 && k == "great hall"),
             Kind::Barracks => k == "mess hall",
             Kind::ShellKeep => k == "gate passage",
+            Kind::Palace | Kind::OldPalace | Kind::HallHouse | Kind::Manor => true,
         };
         if !ok {
             r.add("front doors into the wrong room", 1.0, format!("{tag}: into the {k}"));
@@ -1652,9 +1663,10 @@ fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str
 
 // ---- Great halls furnished as wholes. ----
 
-const HALL_COUNTS: [&str; 17] = [
-    "castle halls with no throne dais",
-    "town, guild and estate halls of 5 x 3 or more with no dais",
+const HALL_COUNTS: [&str; 25] = [
+    "castle halls and throne rooms with no throne dais",
+    "town, guild, estate, banqueting halls and audience chambers of 5 x 3 or more with no dais",
+    "estates' halls laid out by zones with no dais",
     "daises not at the far end",
     "daises off the axis",
     "halls of 6 x 5 or more with no carpet runner (castle, town, guild, estate)",
@@ -1662,9 +1674,16 @@ const HALL_COUNTS: [&str; 17] = [
     "hall pieces with no mirror across the axis",
     "halls with a square shut off",
     "chairs of office not on a dais",
-    "estates' high tables not on their dais",
-    "mess halls with a dais, a throne, a high table or a chair of office",
+    "estates' and banqueting halls' high tables not on their dais",
+    "mess halls and ballrooms with a dais, a throne, a high table or a chair of office",
     "open halls with no musicians on the gallery",
+    "long galleries under 3 squares across",
+    "long gallery pieces off its long walls or across its walk",
+    "long galleries with their walk cut",
+    "chapels with no altar on the axis at the far end",
+    "chapel pews facing other than the altar",
+    "chapel pews across the aisle",
+    "audience chambers with no chair of state on their dais",
     "thrones outside castles and palaces",
     "castles flying more than one house",
     "banners in a castle not of its house's colours given",
@@ -1674,7 +1693,7 @@ const HALL_COUNTS: [&str; 17] = [
 
 /// One of a castle's buildings (its keep, or in its ward).
 fn of_castle(b: &town::Building) -> bool {
-    b.keep || b.ward == Ward::Castle || is_keep(b)
+    b.keep.is_some() || b.ward == Ward::Castle || is_keep(b)
 }
 
 /// `halls`: the great halls furnished as wholes (`interior::hall_plans`) and the thrones and banners
@@ -1715,8 +1734,9 @@ fn layout_halls(world: &World, t0: &T0, l: &Layout, li: usize, tag: &str, only: 
                 }
             }
         }
+        let zoned = interior::hub_kind(t0, l, b).is_some();
         for plan in interior::hall_plans(world, t0, li, b.id as usize) {
-            hall_rules(&it, &plan, &format!("{tag} {id} ({})", it.function), r);
+            hall_rules(&it, &plan, &format!("{tag} {id} ({})", it.function), zoned, r);
         }
     }
     if houses.len() > 1 {
@@ -1728,8 +1748,11 @@ fn layout_halls(world: &World, t0: &T0, l: &Layout, li: usize, tag: &str, only: 
 /// elsewhere, none in a mess hall) at the far end of its frame on the axis, a chair of office on it, an
 /// estate's high table on it; the runner on the axis; every table, bench, pillar, banner, tapestry,
 /// brazier and high table mirrored across the axis (but a tapestry across from the hearth); no square
-/// of its floor shut off by what blocks the way; an open hall's gallery with its musicians.
-fn hall_rules(it: &interior::Interior, plan: &interior::HallPlan, tag: &str, r: &mut Report) {
+/// of its floor shut off by what blocks the way; an open hall's gallery with its musicians; an
+/// audience chamber's chair of state on its dais. A long gallery's pieces along its long walls, its
+/// walk clear; a chapel's altar at its far end on the axis, its pews facing it either side of the
+/// aisle. `zoned`: the building is laid out by zones (an estate's hall has its dais there).
+fn hall_rules(it: &interior::Interior, plan: &interior::HallPlan, tag: &str, zoned: bool, r: &mut Report) {
     use interior::hall::Style;
     let (nx, ny) = (it.nx, it.ny);
     let lv = &it.levels[plan.level];
@@ -1740,6 +1763,12 @@ fn hall_rules(it: &interior::Interior, plan: &interior::HallPlan, tag: &str, r: 
         Style::Civic { .. } => "town or guild",
         Style::Estate { .. } => "estate",
         Style::Mess { .. } => "mess",
+        Style::Throne { .. } => "throne room",
+        Style::Banquet { .. } => "banqueting",
+        Style::Ballroom => "ballroom",
+        Style::Presence { .. } => "audience chamber",
+        Style::Gallery => "long gallery",
+        Style::Chapel => "chapel",
     };
     r.tally("halls furnished as wholes", 1);
     r.tally(&format!("  {name} halls"), 1);
@@ -1759,12 +1788,63 @@ fn hall_rules(it: &interior::Interior, plan: &interior::HallPlan, tag: &str, r: 
     };
     let w = f.wid as isize;
     let off_axis = |b: (isize, isize, isize, isize)| ((b.2 + b.3) as f64 * 0.5 - (w - 1) as f64 * 0.5).abs() > 0.01;
-    let mess = matches!(style, Style::Mess { .. });
-    let dais_kind = if matches!(style, Style::Castle { .. }) { "throne_dais" } else { "low_dais" };
+    // A long gallery: 3 squares across or more, its pieces a square deep against its long walls, a
+    // way down its middle from end to end.
+    if style == Style::Gallery {
+        if f.wid < 3 {
+            r.add("long galleries under 3 squares across", f.wid as f64, format!("{tag}: {} x {}", f.len, f.wid));
+        }
+        for p in &items {
+            let b = local(p);
+            if !(b.2 == b.3 && (b.2 == 0 || b.2 == w - 1)) {
+                r.add("long gallery pieces off its long walls or across its walk", 1.0, format!("{tag}: the {} at ({}, {})", p.name, p.x, p.y));
+            }
+        }
+        let blocked_at = |s: isize, t: isize| items.iter().any(|p| p.blocks_move && local(p).0 <= s && s <= local(p).1 && local(p).2 <= t && t <= local(p).3);
+        let cut = (0..f.len as isize).filter(|&s| (1..w - 1).any(|t| blocked_at(s, t))).count();
+        if f.wid >= 3 && cut > 0 {
+            r.add("long galleries with their walk cut", cut as f64, format!("{tag}: {cut} rows"));
+        }
+        return;
+    }
+    // A chapel: the altar on the axis at its far end (the end away from its way in: the end wall
+    // a door opens in, its main door, else its doors on the mean; either where that is midway),
+    // the pews facing it (their backs to the way in) and clear of the aisle.
+    if style == Style::Chapel {
+        let mid = 0.5 * (f.len as f64 - 1.0);
+        let m = interior::way_in(lv, nx, ny, ri, it.stairs, f).unwrap_or(mid);
+        let far = |b: (isize, isize, isize, isize)| (m <= mid + 0.01 && b.1 >= f.len as isize - 1) || (m >= mid - 0.01 && b.0 <= 0);
+        match items.iter().find(|p| p.kind == "altar") {
+            Some(a) if far(local(a)) && !off_axis(local(a)) => {}
+            _ => r.add("chapels with no altar on the axis at the far end", 1.0, format!("{tag}: a {} x {} frame, entered at {m:.1}", f.len, f.wid)),
+        }
+        // (The way in: the frame's -s step, as `Item::back` codes it.)
+        let (gi, gj) = (-f.ds.0, -f.ds.1);
+        let way_in = match (gi, gj) {
+            (0, -1) => 0,
+            (1, 0) => 1,
+            (0, 1) => 2,
+            _ => 3,
+        };
+        let (cl, cr) = if w % 2 == 1 { (w / 2, w / 2) } else { (w / 2 - 1, w / 2) };
+        for p in items.iter().filter(|p| p.kind == "pew") {
+            if p.back != Some(way_in) {
+                r.add("chapel pews facing other than the altar", 1.0, format!("{tag}: the pew at ({}, {})", p.x, p.y));
+            }
+            let b = local(p);
+            if b.2 <= cr && b.3 >= cl {
+                r.add("chapel pews across the aisle", 1.0, format!("{tag}: the pew at ({}, {})", p.x, p.y));
+            }
+        }
+        return;
+    }
+    let mess = matches!(style, Style::Mess { .. } | Style::Ballroom | Style::Gallery | Style::Chapel);
+    let throne = matches!(style, Style::Castle { .. } | Style::Throne { .. });
+    let dais_kind = if throne { "throne_dais" } else { "low_dais" };
     let daises: Vec<&&interior::Item> = items.iter().filter(|it| it.kind == dais_kind).collect();
     if mess {
         if items.iter().any(|it| matches!(it.kind, "throne_dais" | "low_dais" | "throne" | "high_table" | "chair_of_office")) {
-            r.add("mess halls with a dais, a throne, a high table or a chair of office", 1.0, tag.clone());
+            r.add("mess halls and ballrooms with a dais, a throne, a high table or a chair of office", 1.0, tag.clone());
         }
     } else if let Some(d) = daises.first() {
         let b = local(d);
@@ -1774,8 +1854,14 @@ fn hall_rules(it: &interior::Interior, plan: &interior::HallPlan, tag: &str, r: 
         if off_axis(b) {
             r.add("daises off the axis", 1.0, format!("{tag}: across {}-{} of {}", b.2, b.3, f.wid));
         }
-    } else if roomy || matches!(style, Style::Castle { .. }) {
-        r.add(if matches!(style, Style::Castle { .. }) { "castle halls with no throne dais" } else { "town, guild and estate halls of 5 x 3 or more with no dais" }, 1.0, format!("{tag}: a {} x {} frame", f.len, f.wid));
+    } else if roomy || throne {
+        r.add(if throne { "castle halls and throne rooms with no throne dais" } else { "town, guild, estate, banqueting halls and audience chambers of 5 x 3 or more with no dais" }, 1.0, format!("{tag}: a {} x {} frame", f.len, f.wid));
+        if zoned && matches!(style, Style::Estate { .. }) && roomy {
+            r.add("estates' halls laid out by zones with no dais", 1.0, format!("{tag}: a {} x {} frame", f.len, f.wid));
+        }
+    }
+    if matches!(style, Style::Presence { .. }) && !daises.is_empty() && !items.iter().any(|c| c.kind == "chair_of_office" && daises.iter().any(|d| d.x <= c.x && c.x < d.x + d.w && d.y <= c.y && c.y < d.y + d.h)) {
+        r.add("audience chambers with no chair of state on their dais", 1.0, tag.clone());
     }
     let on_dais = |it: &interior::Item| {
         daises.iter().any(|d| {
@@ -1788,10 +1874,20 @@ fn hall_rules(it: &interior::Interior, plan: &interior::HallPlan, tag: &str, r: 
             r.add("chairs of office not on a dais", 1.0, format!("{tag}: ({}, {})", c.x, c.y));
         }
     }
-    if matches!(style, Style::Estate { .. }) {
+    if matches!(style, Style::Estate { .. } | Style::Banquet { .. }) {
         for t in items.iter().filter(|it| it.kind == "high_table") {
             if !on_dais(t) {
-                r.add("estates' high tables not on their dais", 1.0, format!("{tag}: ({}, {})", t.x, t.y));
+                r.add("estates' and banqueting halls' high tables not on their dais", 1.0, format!("{tag}: ({}, {})", t.x, t.y));
+            }
+        }
+    }
+    // A ballroom's dance floor and musicians on the axis.
+    if style == Style::Ballroom && big {
+        for kind in ["dance_floor", "musicians_corner"] {
+            match items.iter().find(|it| it.kind == kind) {
+                Some(it) if off_axis(local(it)) => r.add("ballrooms' dance floors or musicians off the axis", 1.0, format!("{tag}: the {}", it.name)),
+                Some(_) => {}
+                None => r.add("ballrooms of 6 x 5 or more with no dance floor or musicians", 1.0, format!("{tag}: no {kind} in a {} x {} frame", f.len, f.wid)),
             }
         }
     }
@@ -1803,13 +1899,13 @@ fn hall_rules(it: &interior::Interior, plan: &interior::HallPlan, tag: &str, r: 
             None => {}
         }
     }
-    if big && !items.iter().any(|it| it.kind == "long_table") {
+    if big && !matches!(style, Style::Throne { .. } | Style::Ballroom | Style::Presence { .. }) && !items.iter().any(|it| it.kind == "long_table") {
         r.add("halls of 6 x 5 or more with no tables", 1.0, format!("{tag} ({name}): a {} x {} frame", f.len, f.wid));
     }
     // Mirrors.
-    let mirrored = ["long_table", "bench", "pillar", "wall_banner", "tapestry", "standing_banner", "brazier", "high_table"];
+    let mirrored = ["long_table", "bench", "pillar", "wall_banner", "tapestry", "standing_banner", "brazier", "high_table", "harpsichord", "refreshment_table"];
     let hearths: Vec<(isize, isize, isize, isize)> = items.iter().filter(|it| it.kind == "hearth").map(|it| local(it)).collect();
-    for it in items.iter().filter(|it| mirrored.contains(&it.kind) && !(matches!(style, Style::Estate { .. }) && it.kind == "high_table")) {
+    for it in items.iter().filter(|it| mirrored.contains(&it.kind) && !(matches!(style, Style::Estate { .. } | Style::Banquet { .. }) && it.kind == "high_table")) {
         let b = local(it);
         let m = (b.0, b.1, w - 1 - b.3, w - 1 - b.2);
         let found = items.iter().any(|o| o.kind == it.kind && local(o) == m) || (it.kind == "tapestry" && hearths.contains(&m));
@@ -1873,13 +1969,407 @@ fn hall_rules(it: &interior::Interior, plan: &interior::HallPlan, tag: &str, r: 
             r.add("halls with a square shut off", shut as f64, format!("{tag}: {shut} squares"));
         }
     }
-    // An open hall's gallery: its musicians.
-    if matches!(style, Style::Castle { .. })
+    // An open hall's gallery: its musicians (a castle's, a palace's, an estate's).
+    if matches!(style, Style::Castle { .. } | Style::Estate { .. })
         && let Some(up) = it.levels.get(plan.level + 1).filter(|up| up.rooms.iter().any(|ro| ro.kind == interior::OPEN_BELOW && ro.squares > 0))
         && let Some(g) = up.rooms.iter().position(|ro| ro.kind == "minstrels' gallery")
         && !up.furniture.iter().any(|it| it.kind == "musicians_corner" && up.cells[it.y as usize * nx + it.x as usize] == g as i16)
     {
         r.add("open halls with no musicians on the gallery", 1.0, format!("{tag}: {}", up.name));
+    }
+}
+
+// ---- Palaces and noble estates. ----
+
+const PALACE_COUNTS: [&str; 31] = [
+    "capital palaces not round a court",
+    "capital palaces' courts under 7 squares across or deep",
+    "capital palaces' fronts an even number of squares across",
+    "capital palaces with no walled forecourt",
+    "capital forecourts' gates on no street and with no way on to one",
+    "capital forecourts' and their ways' squares over water",
+    "capital palaces' royal floors whose great chamber or bedchamber isn't the biggest room but the gallery",
+    "capital palaces' royal floors' wardrobes over 15 squares",
+    "older palaces' great halls with no high table",
+    "city palaces as big as their realm's capital's or bigger",
+    "capital palaces' state floor not guard room, audience chamber, throne room",
+    "capital palaces' guard rooms under 12 squares or over 40",
+    "palaces' rooms of their programme twice on a floor (great chamber, bedchamber)",
+    "long galleries under 3 squares across (palaces)",
+    "older palaces with a ballroom or a banqueting hall",
+    "manors without a kitchen of 12 squares, a buttery and a pantry of 6",
+    "manors' great halls over 35% of the ground floor",
+    "floors the zones fell back on",
+    "breaking an interior rule (as in interiors)",
+    "missing a room of their programme",
+    "capital palaces laid out as older ones",
+    "capital palaces' front door off the axis",
+    "capital palaces' floors not mirrored across the axis (the ground floor's front range)",
+    "capital palaces' state rooms not one into the next (the landing round to the throne room)",
+    "capital palaces' state rooms' doors not mirrored across the axis",
+    "throne rooms' dais off the palace's axis",
+    "throne rooms with no throne dais",
+    "rooms longer than 2.5:1 (but long galleries)",
+    "rooms filling under 60% of their box",
+    "rooms over 60 squares (but halls, state rooms, courts, galleries, chapels)",
+    "rooms a square wide",
+];
+
+/// `palaces`: every palace and noble estate laid out by zones (`palace_rules`).
+fn palaces(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["palaces and estates laid out by zones"]);
+    r.counts(&PALACE_COUNTS);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    // (The capital's palace's floor and the biggest other palace's (sq ft), with where it stands.)
+    let (mut capital, mut city) = (None::<f64>, None::<(f64, String)>);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        let mut buckets = None;
+        for b in &l.buildings {
+            if town::palace::is_palace(b) && b.structure == town::Structure::Roofed {
+                let a = town::geom::area(&b.poly).abs();
+                if t0.settlements.get(li).is_some_and(|s| s.capital) {
+                    capital = Some(capital.map_or(a, |c| c.max(a)));
+                } else if city.as_ref().is_none_or(|c| a > c.0) {
+                    city = Some((a, format!("b:{li}:{}", b.id)));
+                }
+            }
+            let Some(kind) = interior::hub_kind(t0, &l, b).filter(|k| !k.is_keep()) else { continue };
+            let buckets = buckets.get_or_insert_with(|| building_buckets(&l));
+            palace_rules(world, t0, &l, li, b, kind, buckets, r);
+        }
+    }
+    if let (Some(c), Some((a, id))) = (capital, city)
+        && a >= c
+    {
+        r.add("city palaces as big as their realm's capital's or bigger", a / c, format!("{id}: {a:.0} sq ft, the capital's {c:.0}"));
+    }
+}
+
+/// The rules a palace or a noble estate laid out by zones keeps (`palaces`).
+#[allow(clippy::too_many_arguments)]
+fn palace_rules(world: &World, t0: &T0, l: &Layout, li: usize, b: &town::Building, kind: interior::hub::Kind, buckets: &HashMap<(i64, i64), Vec<usize>>, r: &mut Report) {
+    use interior::hub::Kind;
+    let id = format!("b:{li}:{}", b.id);
+    let Some(it) = interior::generate_id(world, t0, &id) else { return };
+    r.tally("palaces and estates laid out by zones", 1);
+    r.tally(&format!("  {}s", kind.name()), 1);
+    let tag = format!("{id} ({})", kind.name());
+    let (nx, ny) = (it.nx, it.ny);
+    let fell = interior::hub_fallbacks(world, t0, li, b.id as usize);
+    if !fell.is_empty() {
+        r.add("floors the zones fell back on", fell.len() as f64, format!("{tag}: z {fell:?}"));
+    }
+    let bad = check_interior(world, t0, l, li, &id, &it, buckets);
+    if !bad.is_empty() {
+        r.add("breaking an interior rule (as in interiors)", bad.len() as f64, format!("{tag}: {}", bad.join("; ")));
+    }
+    // The programme.
+    let has = |k: &str| it.levels.iter().any(|lv| lv.rooms.iter().any(|ro| ro.kind == k && ro.squares > 0));
+    let plan = interior::zone_plan_of(world, t0, li, b.id as usize);
+    let court = plan.as_ref().and_then(|p| p.palace()).is_some_and(|z| z.3);
+    let squares = interior::Shell::of(l, b).inside.iter().filter(|&&i| i).count();
+    let want: Vec<&str> = match kind {
+        Kind::Palace => {
+            let mut w = vec!["entrance hall", "guardroom", "throne room", "audience chamber", "ballroom", "banqueting hall", "royal chapel", "kitchen", "antechamber"];
+            if b.floors >= 3 {
+                w.push("long gallery");
+            }
+            if court {
+                w.push("courtyard");
+            }
+            w
+        }
+        Kind::OldPalace => {
+            let mut w = vec!["great hall", "guardroom", "chapel", "audience chamber", "solar", "kitchen"];
+            if b.floors >= 3 {
+                w.push("long gallery");
+            }
+            w
+        }
+        Kind::Manor => {
+            let mut w = vec!["great hall", "kitchen", "parlor", "stair hall", "great chamber", "solar"];
+            if squares >= 260 {
+                w.push("chapel");
+            }
+            w
+        }
+        _ => vec!["great hall", "kitchen", "parlor", "solar"],
+    };
+    let missing: Vec<&str> = want.iter().copied().filter(|k| !has(k)).collect();
+    if !missing.is_empty() {
+        r.add("missing a room of their programme", missing.len() as f64, format!("{tag}: no {}", missing.join(", ")));
+    }
+    // Rooms of sound proportions.
+    let big = |k: &str| matches!(k, "great hall" | "banqueting hall" | "throne room" | "ballroom" | "audience chamber" | "courtyard" | "royal chapel" | "chapel" | "entrance hall" | "long gallery");
+    for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
+        for (ri, ro) in lv.rooms.iter().enumerate() {
+            if ro.squares == 0 || !interior::walkable(ro.kind) || (interior::is_circulation(ro.kind) && ro.kind != "long gallery") {
+                continue;
+            }
+            let sq: Vec<usize> = (0..nx * ny).filter(|&k| lv.cells[k] == ri as i16).collect();
+            let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % nx), a.1.max(k % nx)));
+            let (y0, y1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / nx), a.1.max(k / nx)));
+            let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+            let named = format!("{tag} {}: the {} ({} squares, {w} x {h})", lv.name, ro.kind, sq.len());
+            if ro.kind != "long gallery" && 2 * w.max(h) > 5 * w.min(h) {
+                r.add("rooms longer than 2.5:1 (but long galleries)", w.max(h) as f64 / w.min(h) as f64, named.clone());
+            }
+            if sq.len() * 5 < w * h * 3 {
+                r.add("rooms filling under 60% of their box", sq.len() as f64 / (w * h) as f64, named.clone());
+            }
+            if sq.len() > 60 && !big(ro.kind) {
+                r.add("rooms over 60 squares (but halls, state rooms, courts, galleries, chapels)", sq.len() as f64, named.clone());
+            }
+            let wide = sq.iter().any(|&k| k % nx + 1 < nx && [k + 1, k + nx, k + nx + 1].iter().all(|q| sq.contains(q)));
+            if !wide && sq.len() >= 2 {
+                r.add("rooms a square wide", sq.len() as f64, named);
+            }
+        }
+    }
+    // Long galleries 3 squares across or more; a palace's great chamber and bedchamber once a floor.
+    for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
+        for (ri, _) in lv.rooms.iter().enumerate().filter(|(_, ro)| ro.kind == "long gallery" && ro.squares > 0) {
+            let sq: Vec<usize> = (0..nx * ny).filter(|&k| lv.cells[k] == ri as i16).collect();
+            let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % nx), a.1.max(k % nx)));
+            let (y0, y1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / nx), a.1.max(k / nx)));
+            let across = (x1 - x0 + 1).min(y1 - y0 + 1);
+            if across < 3 {
+                r.add("long galleries under 3 squares across (palaces)", across as f64, format!("{tag} {}: {} x {}", lv.name, x1 - x0 + 1, y1 - y0 + 1));
+            }
+        }
+        if matches!(kind, Kind::Palace | Kind::OldPalace) {
+            for k in ["great chamber", "bedchamber"] {
+                let n = lv.rooms.iter().filter(|ro| ro.kind == k && ro.squares > 0).count();
+                if n > 1 {
+                    r.add("palaces' rooms of their programme twice on a floor (great chamber, bedchamber)", n as f64, format!("{tag} {}: {n} {k}s", lv.name));
+                }
+            }
+        }
+    }
+    match kind {
+        Kind::OldPalace => {
+            if has("ballroom") || has("banqueting hall") {
+                r.add("older palaces with a ballroom or a banqueting hall", 1.0, tag.clone());
+            }
+            // (Its great hall serves as the banqueting hall: its high table.)
+            for lv in &it.levels {
+                for (ri, _) in lv.rooms.iter().enumerate().filter(|(_, ro)| ro.kind == "great hall" && ro.squares > 0) {
+                    if !lv.furniture.iter().any(|f| f.kind == "high_table" && lv.cells[f.y as usize * nx + f.x as usize] == ri as i16) {
+                        r.add("older palaces' great halls with no high table", 1.0, format!("{tag} {}", lv.name));
+                    }
+                }
+            }
+        }
+        Kind::Manor => {
+            // A hall with a service wing: kitchen, buttery and pantry of sound size, the hall a third
+            // of the ground floor or so.
+            if let Some(g) = it.levels.iter().find(|lv| lv.z == 0) {
+                let size = |k: &str| g.rooms.iter().filter(|ro| ro.kind == k).map(|ro| ro.squares as usize).max().unwrap_or(0);
+                if size("kitchen") < 12 || size("buttery") < 6 || size("pantry") < 6 {
+                    r.add("manors without a kitchen of 12 squares, a buttery and a pantry of 6", 1.0, format!("{tag}: kitchen {}, buttery {}, pantry {}", size("kitchen"), size("buttery"), size("pantry")));
+                }
+                let all: usize = g.rooms.iter().map(|ro| ro.squares as usize).sum();
+                let hall = size("great hall");
+                if hall * 100 > 35 * all {
+                    r.add("manors' great halls over 35% of the ground floor", hall as f64 / all as f64, format!("{tag}: {hall} of {all} squares"));
+                }
+            }
+        }
+        _ => {}
+    }
+    if kind != Kind::Palace {
+        return;
+    }
+    // The capital's palace: laid out as one, mirrored across its axis.
+    let Some((f, (front, _, _, _))) = plan.as_ref().and_then(|p| p.palace().map(|z| (p.frame(), z))) else {
+        r.add("capital palaces laid out as older ones", 1.0, format!("{tag}: {}", plan.as_ref().map_or("no plan", |p| p.kind().name())));
+        return;
+    };
+    if plan.as_ref().and_then(|p| p.palace()).is_some_and(|z| z.3) {
+        r.tally("  capital palaces round a court", 1);
+    } else {
+        r.add("capital palaces not round a court", 1.0, tag.clone());
+    }
+    if let Some((_, back, side, true)) = plan.as_ref().and_then(|p| p.palace()) {
+        let (across, deep) = (f.wid - 2 * side, back - front);
+        if across < 7 || deep < 7 {
+            r.add("capital palaces' courts under 7 squares across or deep", across.min(deep) as f64, format!("{tag}: {across} x {deep}"));
+        }
+    }
+    if f.wid % 2 == 0 {
+        r.add("capital palaces' fronts an even number of squares across", f.wid as f64, tag.clone());
+    }
+    if interior::court_plan(world, t0, l, b).is_none_or(|c| c.forecourt.is_none()) {
+        r.add("capital palaces with no walled forecourt", 1.0, tag.clone());
+    }
+    // (Its gate on a street, else a paved way on to one.)
+    if let Some(fc) = l.forecourts.iter().find(|fc| fc.palace == b.id && fc.yard.len() == 4) {
+        let m = [0.5 * (fc.yard[0][0] + fc.yard[3][0]), 0.5 * (fc.yard[0][1] + fc.yard[3][1])];
+        let on = l.roads.iter().any(|(pts, _, w)| pts.windows(2).any(|s| town::geom::seg_dist(m, s[0], s[1]) <= 0.5 * w + 1.0));
+        if fc.way.is_empty() && !on {
+            r.add("capital forecourts' gates on no street and with no way on to one", 1.0, tag.clone());
+        }
+        // (Its yard and its paved way on dry ground: the squares whose middles are in the yard or
+        // within 6 ft of the way's centre line, on the water.)
+        let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
+        let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+        let bb = bbox(&fc.yard.iter().chain(&fc.way).copied().collect::<Vec<P>>());
+        let (mut yard, mut way) = (0usize, 0usize);
+        for j in (libm::floor(bb[1] / 5.0) as i64 - 2)..=(libm::floor(bb[3] / 5.0) as i64 + 2) {
+            for i in (libm::floor(bb[0] / 5.0) as i64 - 2)..=(libm::floor(bb[2] / 5.0) as i64 + 2) {
+                let c = [i as f64 * 5.0 + 2.5, j as f64 * 5.0 + 2.5];
+                if town::geom::contains(&fc.yard, c) {
+                    yard += wet(c) as usize;
+                } else if fc.way.windows(2).any(|s| town::geom::seg_dist(c, s[0], s[1]) < 6.0) {
+                    way += wet(c) as usize;
+                }
+            }
+        }
+        if yard + way > 0 {
+            r.add("capital forecourts' and their ways' squares over water", (yard + way) as f64, format!("{tag}: yard {yard}, way {way}"));
+        }
+    }
+    // The royal floor: the great chamber and the bedchamber its biggest rooms but the gallery, the
+    // wardrobes small.
+    if let Some(lv) = it.levels.iter().find(|lv| lv.name == "Royal floor") {
+        let size = |k: &str| lv.rooms.iter().filter(|ro| ro.kind == k).map(|ro| ro.squares as usize).max().unwrap_or(0);
+        let royal = size("great chamber").min(size("bedchamber"));
+        let other = lv.rooms.iter().filter(|ro| !matches!(ro.kind, "great chamber" | "bedchamber" | "long gallery") && !interior::is_circulation(ro.kind) && interior::walkable(ro.kind)).map(|ro| ro.squares as usize).max().unwrap_or(0);
+        if royal <= other {
+            r.add("capital palaces' royal floors whose great chamber or bedchamber isn't the biggest room but the gallery", royal as f64, format!("{tag}: {royal} squares, another {other}"));
+        }
+        if let Some(w) = lv.rooms.iter().filter(|ro| ro.kind == "wardrobe" && ro.squares > 15).map(|ro| ro.squares).max() {
+            r.add("capital palaces' royal floors' wardrobes over 15 squares", w as f64, format!("{tag}: {w} squares"));
+        }
+    }
+    // Its guard rooms of sound size; on the state floor the throne room reached from the landing
+    // only through a guard room, then the audience chamber (or the ballroom across the axis), then a
+    // guard room again.
+    for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
+        for ro in lv.rooms.iter().filter(|ro| ro.kind == "guardroom" && ro.squares > 0) {
+            if ro.squares < 12 || ro.squares > 40 {
+                r.add("capital palaces' guard rooms under 12 squares or over 40", ro.squares as f64, format!("{tag} {}", lv.name));
+            }
+        }
+    }
+    if let Some(lv) = it.levels.iter().find(|lv| lv.z == 1) {
+        let room_of = |k: &str| (0..lv.rooms.len()).find(|&ri| lv.rooms[ri].kind == k && lv.rooms[ri].squares > 0).map(|ri| ri as i16);
+        let state = |k: &str| matches!(k, "landing" | "guardroom" | "antechamber" | "audience chamber" | "ballroom" | "throne room");
+        // (The rooms reached from the landing through state rooms, but those of kinds `skip`.)
+        let reach = |skip: &[&str]| {
+            let mut seen = vec![false; lv.rooms.len()];
+            let mut stack: Vec<i16> = room_of("landing").into_iter().collect();
+            for &s in &stack {
+                seen[s as usize] = true;
+            }
+            while let Some(a) = stack.pop() {
+                for d in lv.doors.iter().filter(|d| d.rooms.contains(&a)) {
+                    let o = if d.rooms[0] == a { d.rooms[1] } else { d.rooms[0] };
+                    if o >= 0 && !seen[o as usize] && state(lv.rooms[o as usize].kind) && !skip.contains(&lv.rooms[o as usize].kind) {
+                        seen[o as usize] = true;
+                        stack.push(o);
+                    }
+                }
+            }
+            seen
+        };
+        let throne = room_of("throne room");
+        let guarded = throne.is_some_and(|t| lv.doors.iter().any(|d| d.rooms.contains(&t) && d.rooms.iter().any(|&o| o >= 0 && lv.rooms[o as usize].kind == "guardroom")));
+        let ok = guarded
+            && room_of("audience chamber").is_some_and(|a| !reach(&["guardroom"])[a as usize])
+            && throne.is_some_and(|t| !reach(&["audience chamber", "ballroom"])[t as usize] && reach(&[])[t as usize]);
+        if !ok {
+            r.add("capital palaces' state floor not guard room, audience chamber, throne room", 1.0, tag.clone());
+        }
+    }
+    let w = f.wid as isize;
+    let mirror = |(i, j): (isize, isize)| {
+        let (s, t) = f.local(i, j);
+        f.grid(s, w - 1 - t)
+    };
+    let cell = |lv: &interior::Level, (i, j): (isize, isize)| if i < 0 || j < 0 || i as usize >= nx || j as usize >= ny { -1 } else { lv.cells[j as usize * nx + i as usize] };
+    if let Some(g0) = it.levels.iter().find(|lv| lv.z == 0)
+        && let Some(d) = g0.doors.iter().find(|d| d.kind == "front")
+    {
+        let sq = door_squares(d);
+        let inner = sq.iter().copied().find(|&p| cell(g0, p) >= 0).unwrap_or(sq[0]);
+        let (_, t) = f.local(inner.0, inner.1);
+        if (2 * t - (w - 1)).abs() > 1 {
+            r.add("capital palaces' front door off the axis", 1.0, format!("{tag}: across {t} of {w}"));
+        }
+    }
+    for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
+        // (Each square's room and its mirror's: one room to one room.)
+        let (mut to, mut from): (HashMap<i16, i16>, HashMap<i16, i16>) = (HashMap::new(), HashMap::new());
+        let mut broken = 0;
+        for k in 0..nx * ny {
+            let p = ((k % nx) as isize, (k / nx) as isize);
+            let (s, _) = f.local(p.0, p.1);
+            if lv.z == 0 && s >= front as isize {
+                continue;
+            }
+            let (a, m) = (lv.cells[k], cell(lv, mirror(p)));
+            if (a < 0) != (m < 0) {
+                broken += 1;
+                continue;
+            }
+            if a < 0 {
+                continue;
+            }
+            if *to.entry(a).or_insert(m) != m || *from.entry(m).or_insert(a) != a {
+                broken += 1;
+            }
+        }
+        if broken > 0 {
+            r.add("capital palaces' floors not mirrored across the axis (the ground floor's front range)", broken as f64, format!("{tag} {}: {broken} squares", lv.name));
+        }
+    }
+    // The state floor: from the landing round to the throne room through the state rooms, both ways.
+    if let Some(lv) = it.levels.iter().find(|lv| lv.z == 1) {
+        let state = |k: &str| matches!(k, "landing" | "guardroom" | "antechamber" | "audience chamber" | "ballroom" | "throne room");
+        let room_of = |k: &str| (0..lv.rooms.len()).find(|&ri| lv.rooms[ri].kind == k && lv.rooms[ri].squares > 0).map(|ri| ri as i16);
+        let reach = |skip: Option<i16>| {
+            let mut seen = vec![false; lv.rooms.len()];
+            let mut stack: Vec<i16> = room_of("landing").into_iter().collect();
+            for &s in &stack {
+                seen[s as usize] = true;
+            }
+            while let Some(a) = stack.pop() {
+                for d in lv.doors.iter().filter(|d| d.rooms.contains(&a)) {
+                    let o = if d.rooms[0] == a { d.rooms[1] } else { d.rooms[0] };
+                    if o >= 0 && !seen[o as usize] && Some(o) != skip && state(lv.rooms[o as usize].kind) {
+                        seen[o as usize] = true;
+                        stack.push(o);
+                    }
+                }
+            }
+            seen
+        };
+        let throne = room_of("throne room");
+        let ok = throne.is_some_and(|t| ["audience chamber", "ballroom"].iter().all(|side| room_of(side).is_some_and(|s| reach(room_of(if *side == "ballroom" { "audience chamber" } else { "ballroom" }))[t as usize] && reach(None)[s as usize])));
+        if !ok {
+            r.add("capital palaces' state rooms not one into the next (the landing round to the throne room)", 1.0, format!("{tag} {}", lv.name));
+        }
+        for d in lv.doors.iter().filter(|d| d.rooms.iter().all(|&ro| ro >= 0 && state(lv.rooms[ro as usize].kind))) {
+            let sq = door_squares(d);
+            let m = [mirror(sq[0]), mirror(sq[1])];
+            if !lv.doors.iter().any(|o| {
+                let q = door_squares(o);
+                (q[0] == m[0] && q[1] == m[1]) || (q[0] == m[1] && q[1] == m[0])
+            }) {
+                r.add("capital palaces' state rooms' doors not mirrored across the axis", 1.0, format!("{tag} {}: the door at ({}, {})", lv.name, d.a[0], d.a[1]));
+            }
+        }
+        match lv.furniture.iter().find(|it| it.kind == "throne_dais") {
+            Some(dais) => {
+                let (a, c) = (f.local(dais.x as isize, dais.y as isize), f.local((dais.x + dais.w) as isize - 1, (dais.y + dais.h) as isize - 1));
+                if a.1 + c.1 != w - 1 {
+                    r.add("throne rooms' dais off the palace's axis", 1.0, format!("{tag}: across {}-{} of {w}", a.1.min(c.1), a.1.max(c.1)));
+                }
+            }
+            None => r.add("throne rooms with no throne dais", 1.0, tag.clone()),
+        }
     }
 }
 
@@ -2005,8 +2495,12 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
     for li in 0..town::layout_count(t0) {
         let l = town::layout(world, t0, li);
         let castle = if !l.castles.is_empty() || l.buildings.iter().any(|b| b.ward == Ward::Castle) { "C" } else { "-" };
-        // (Without the keep's mark, so that the hashes compare with trees from before it.)
-        let text = format!("{l:?}").replace(", keep: false }", " }").replace(", keep: true }", " }");
+        // (Without the keep's mark, nor an empty list of forecourts, so that the hashes compare with
+        // trees from before them.)
+        let mut text = format!("{l:?}").replace(", keep: false }", " }").replace(", keep: true }", " }").replace(", keep: None }", " }").replace(", forecourts: [] }", " }");
+        for k in ["Great", "Hall", "L", "T", "Shell", "Plain"] {
+            text = text.replace(&format!(", keep: Some({k}) }}"), " }");
+        }
         println!("{label} L:{li} {:016x} {castle} {}", fnv64(text.as_bytes()), l.buildings.len());
         r.tally("layouts hashed", 1);
         let mut ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed).map(|b| format!("b:{li}:{}", b.id)).collect();
@@ -2022,7 +2516,7 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 8] = ["castles", "reach", "interiors", "hub", "halls", "editor", "hash", "all"];
+    const MODES: [&str; 9] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "editor", "hash", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -2031,7 +2525,7 @@ fn main() {
     }
     if modes.is_empty() || modes.contains(&"all") {
         modes.retain(|m| *m != "all");
-        for m in ["castles", "reach", "interiors", "hub", "halls", "editor"] {
+        for m in ["castles", "reach", "interiors", "hub", "halls", "palaces", "editor"] {
             if !modes.contains(&m) {
                 modes.push(m);
             }
@@ -2056,6 +2550,7 @@ fn main() {
                 "interiors" => interiors(&mut ctx, keeps, &mut r),
                 "hub" => hub(&mut ctx, &mut r),
                 "halls" => halls(&mut ctx, &mut r),
+                "palaces" => palaces(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }

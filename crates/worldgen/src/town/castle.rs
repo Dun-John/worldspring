@@ -1408,9 +1408,9 @@ fn to_wall(l: &Layout, p: P, from: P) -> P {
     best.map_or(p, |b| b.1)
 }
 
-// The kinds of keep.
+/// The kinds of keep (`Building::keep`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KeepKind {
+pub enum KeepKind {
     /// A great tower, nearly square, with a tower on each corner.
     Great,
     /// A long hall with a forebuilding before its door and towers at its far end.
@@ -1715,7 +1715,7 @@ fn place_keep<G: Ground>(site: &G, court: &[P], spots: &[(P, f64)], axis: P, squ
                     tint: None,
                     id: 0,
                     parts,
-                    keep: true,
+                    keep: Some(kind),
                 };
                 return Some((b, motte));
             }
@@ -1819,7 +1819,7 @@ fn ranges<G: Ground>(
                     tint: Some(1),
                     id: 0,
                     parts: Vec::new(),
-                    keep: false,
+                    keep: None,
                 });
                 sides.push(e);
                 t += length + gap;

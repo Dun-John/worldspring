@@ -1049,12 +1049,63 @@ level -1: Cellar
   railing: it stops a step, not the eye. A small tower keep (a body under 7 squares long or 5 across) has its
   stair against the end wall in a landing across it, an entrance hall over the stores, the great hall above
   and a room or two by the landing on each floor over it.
+- Palaces and noble estates are laid out by zones too. The capital's palace is a grand palace symmetric about
+  its axis, its front door on it: round a `courtyard` (open to the sky: a lawn, a fountain in its middle,
+  `garden_path` gravel walks along the axis and across it, benches beside them; the battlemap draws the court
+  the same; 7 squares across or more each way) where it is 17 squares across and 20 deep or more (always, as
+  generated, whatever ward its patch is set to), else a front range and a back range; before its front a
+  forecourt (2 to 6 squares deep) with a low garden wall round it and a gate on the axis between two piers,
+  3 squares wide, its iron or timber leaves standing open, and a paved way as wide as the gate on to the
+  nearest street where the gate doesn't open onto one. On the ground floor the
+  `entrance hall` with the grand stair on the axis, a `guardroom` either side and a room in each corner, the
+  service wing (`servants' hall`, pantry, kitchen) down one side of the court and the `royal chapel` down the
+  other, the `banqueting hall` across the back between the buttery and a vestry; on the state floor the
+  stair's landing, a `salon` over the entrance, guard rooms and `antechamber`s, the `audience chamber` and the
+  `ballroom` down the sides and the `throne room` across the back (a guard room before it), the state rooms
+  opening one into the next from the landing round to the throne room both ways; above, the `long gallery` (3
+  squares across or more) across the front and the royal apartments round a corridor that rings the court (the
+  great chamber and the bedchamber the floor's biggest rooms but the gallery, at the side ranges' front ends,
+  across the back where the side ranges are narrow; small wardrobes beside them, studies, guest chambers, a
+  library),
+  servants' quarters and stores in the attic. Other palaces (a metropolis's that is not the capital's, and
+  about two cities in five have one: the biggest noble home, three storeys; always smaller than the least a
+  capital's is) are older ones round their great hall, a big keep without the defences: its great hall their
+  banqueting hall too, the throne dais at its high end and the high table before it; a guard room by the entrance, a guard room and a chapel
+  off the dais end, the audience chamber and the solar by the stair, a long gallery down the top storey, a
+  treasury. A
+  noble estate of 40 squares or more (8 squares long, on a lot near enough a rectangle; other estates are laid
+  out as other houses are) is a hall house (the hall between a small service end and a parlour by
+  the stair, chambers and the solar above) or, from 130 squares, a manor (a service wing at the low end deep
+  enough for a kitchen, a buttery and a pantry, the hall 30% of the ground floor at most, a cross wing for the
+  family at the high end with a parlour, a `stair hall` and a study, a chapel from 260 squares; the great
+  chamber and the solar above, chambers, guest chambers, a library; the map and the battlemap roof its cross
+  wing apart, its ridge across the main range's); passages in an estate are corridors.
+- A palace (and only a palace) takes in the homes of its ward beside it on its block for a bigger footprint, as
+  long as the whole crosses no street or alley: it stands on the largest rectangle they hold, square to its
+  own lot. Where that gives the capital no footprint round a court it clears more of its block: the homes and
+  the open ground there beside its lot. The capital's front is the side it stands round its court from, an odd
+  number of squares across (an even side loses a square), with room for its forecourt (drawn back from it by
+  up to 4 squares for one 4 deep), with its way on to a street, nearest a street; the end of a street that
+  runs up to the front stops at the forecourt's outer wall. The lots taken in are gone with their ids; every
+  other building keeps its own, and the palace keeps its id and name; nothing overlaps it. A town laid out
+  anew keeps its palace's footprint where the lots under it are homes of its ward again (any homes, the
+  capital's, whatever its patch is laid out as: its patch's streets stop at it and at its forecourt, the homes
+  on its forecourt and its way gone).
 - Great halls are furnished as one composition about the axis from the end they are entered at to the far
   end: a castle's (its throne dais of stone steps and gilt thrones in a capital, a pair, and in rich cities,
   else of timber, now and then with a lesser chair), a town hall's, a guild's, a harbor master's or an
   auction house's (a `low_dais` with a `chair_of_office` at its middle), a noble estate's (a timber
   `low_dais` carrying the `high_table`, the chair of office behind its middle), a barracks' mess hall and
-  any other hall (a guard post's, an orphanage's...: tables only). The dais stands on the axis against the
+  any other hall (a guard post's, an orphanage's...: tables only); a palace's throne room (the capital's pair of
+  thrones on a stone and gilt dais, standing banners and braziers beside it, the runner up to it, pillars,
+  banners and tapestries, no tables), its banqueting hall (a stone `low_dais` carrying the `high_table`, long
+  tables both sides) and its ballroom (the `dance_floor` in the middle, the `musicians_corner` on the axis at
+  the far end with a `harpsichord` each side, `refreshment_table`s by the long walls at the door end), its
+  audience chamber (the chair of state on a stone `low_dais` centred on the far wall, standing banners either
+  side, the runner up to it), its long gallery (statues, benches and tapestries along its long walls only, the
+  walk down its middle clear) and its chapel (the altar on a stone step against the far wall, east where it
+  can be, pews in two blocks facing it either side of the aisle, the font by the way in); an older
+  palace's great hall has a throne dais as a castle's. The dais stands on the axis against the
   far wall, a low dais as wide as the tables' lanes (a door on the far wall may open onto it: it is walked
   over), a throne dais a row in from the wall where a door opens there behind it (the way round it); a
   `carpet_runner` up the axis to it; long tables with benches both sides, pillar pairs where a column is free
@@ -1063,7 +1114,8 @@ level -1: Cellar
   a castle's high table before the dais or beside it, wall banners and tapestries along the long walls, all mirrored across the axis; the hearth on a
   long wall. Every banner in a castle's buildings flies the castle's one house; an open hall's minstrels'
   gallery holds a `musicians_corner`. Thrones stand only in castles and palaces; `furnish` in a design
-  furnishes a room as the generator would in that building (its great hall as a whole, in its style).
+  furnishes a room as the generator would in that building (its great hall as a whole, in its style, in the
+  frame its zones gave it where the room is as generated).
 - `grid:` as for a site, `.` outside the walls.
 - `doors:` `x,y e|s|w|n` is a door on the east, south, west or north edge of square x,y; `secret` makes a door
   between rooms a secret door; on an outside wall `front` (one, on the ground floor) or `back`. `doors: auto`
