@@ -7,7 +7,8 @@
 // things look turned by hand instead: battlemap props that may turn (`TURNABLE`, and the other candidates) at four
 // turns on grass with their shadows, and furniture and props with a back at each of their four sides. Last, a
 // palace's forecourt as the battlemap draws it (garden wall, gate piers, open gates, gravel walks; `&items=forecourt`
-// alone, at `&sq=` px a square, default 64).
+// alone, at `&sq=` px a square, default 64); and a temple's pieces in each god's look (`&items=temple` alone,
+// default 56).
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { Shape } from '../gen/battlePrep';
@@ -17,7 +18,7 @@ import { BATTLE_GROUPS, ITEM_GROUPS, looks as insideLooks } from '../editor/item
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
 import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
 import { drawForecourtGate, drawGardenWalls, drawGatePier, drawGravelWalk } from '../render/walls';
-import { ORIENTED } from '../render/furniture';
+import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
 
@@ -35,6 +36,7 @@ const FURNITURE: [string, number, number][] = [
   ['tapestry', 3, 1], ['tapestry', 2, 1], ['wall_banner', 1, 1], ['standing_banner', 1, 1], ['font', 1, 1], ['cloister_well', 2, 2],
   ['dance_floor', 5, 5], ['dance_floor', 4, 3], ['harpsichord', 1, 2], ['musicians_corner', 2, 2], ['refreshment_table', 3, 1], ['refreshment_table', 2, 1],
   ['garden_path', 1, 4], ['garden_path', 3, 2],
+  ['god_statue', 1, 1], ['god_statue', 2, 1], ['candle_stand', 1, 1], ['carved_screen', 1, 1], ['carved_screen', 2, 1], ['carved_screen', 3, 1], ['screen_gate', 1, 1], ['screen_gate', 2, 1], ['side_altar', 1, 1], ['side_altar', 2, 1],
 ];
 
 /** Underground props (`under::item` and the ways in and out), with their sizes in squares. */
@@ -229,6 +231,28 @@ export async function runGallery(target: HTMLElement) {
       root.addChild(t);
     }
     y += it.ny * SQ + 40;
+  }
+
+  // A temple's pieces in each god's look, a row a god (`&items=temple` alone, at `&sq=` px a square).
+  if (!only && (!pick || pick.includes('temple'))) {
+    head("Temple pieces by the god's kind: statue, candle stand, carved screen and its gate, side altar");
+    const tsq = pick ? Number(query.get('sq')) || 56 : ITEM_SQ;
+    const pieces: [string, number, number][] = [['god_statue', 1, 1], ['god_statue', 2, 1], ['candle_stand', 1, 1], ['carved_screen', 2, 1], ['screen_gate', 1, 1], ['side_altar', 1, 1], ['side_altar', 2, 1]];
+    const list: Spot[] = GOD_NAMES.flatMap((name, v) => pieces.map(([k, w, h]): Spot => [k, w, h, undefined, `${k.replace(/_/g, ' ')} ${w}×${h} · ${name}`, v]));
+    const { it, spots } = sampler('b:temple', 'temple', list, pieces.length, 3);
+    const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
+    const holder = new Container();
+    holder.addChild(layer.container);
+    holder.scale.set(tsq);
+    holder.position.set(16, y);
+    layer.container.children[0].visible = false;
+    root.addChild(holder);
+    for (const [label, gx, gy] of query.has('nolabels') ? [] : spots) {
+      const t = new Text({ text: label, style: { ...LABEL, fontSize: 10 } });
+      t.position.set(16 + gx * tsq + 2, y + (gy - 0.95) * tsq);
+      root.addChild(t);
+    }
+    y += it.ny * tsq + 40;
   }
 
   // A palace's forecourt as the battlemap draws it (`&items=forecourt` alone).

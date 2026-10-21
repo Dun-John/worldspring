@@ -40,16 +40,31 @@
 //!   the next from the landing round to the throne room both ways (the audience chamber's side and the
 //!   ballroom's) through doors mirrored across the axis, its throne dais on the axis, its forecourt and
 //!   its paved way off the water (`palace_rules`); a chapel's altar at the end away from its doors.
+//! - `temples`: temples, shrines and monasteries (`interior::hub`'s `temple` and `monastery`,
+//!   `town::temple`): floors fallen back on; a big temple's footprint a cross ending in a round apse,
+//!   a small one's a hall ending in one; each programme's rooms (a big one's nave, sanctuary in its
+//!   apse, two side chapels, a vestry; a small one's single hall), the front door into the nave, the
+//!   altar rails; the god's statue on the axis at the far end, the altar before it, candle stands
+//!   mirrored; a big nave's arcades, the crossing's piers, the carved screen with its gate clear; pews
+//!   mirrored facing the altar; the font; side altars; the god's look on every piece; a shrine of one
+//!   room; a monastery round its cloister on its merged footprint: its church along a long side, the
+//!   chapter house (an octagon), refectory, dorter, scriptorium and kitchen round the walk, the garth open
+//!   on the map with nothing scattered in it, its well and walks, the arcade, the refectory furnished
+//!   (`temple_rules`). Temples too small for a hall with an apse and monasteries with no cloister listed.
 //! - `editor`: castles set in the street editor (`wards::change`) on the patches nearest the
 //!   town wall (up to 3 a town, `PLACES=n` a world, default 20), with the walls on and off, each
 //!   run through the castle checks, and its keep and barracks through the `hub` and `halls` rules;
 //!   every non-castle building's id, outline, ward, function, kind, name and floors the same with
-//!   the walls off as on; and every town castle's town with its walls taken down.
-//! - `hash` (not in `all`): a hash per settlement layout (`L:`) and per building or tower interior
-//!   (`b:`/`t:`), marked `C` in a settlement with a castle, one per line on stdout (everything
-//!   else goes to stderr): run it on two trees and diff to see what changed.
+//!   the walls off as on; and every town castle's town with its walls taken down. Every monastery's
+//!   town edited round it (its patch's lots made small, rerolled; the walls taken down, else a far
+//!   patch rerolled): no building on another's ground (`Layout::grounds`), as generated or after the
+//!   edit, and a front door on every building within 150 ft of it.
+//! - `hash` (not in `all`): a hash per settlement layout (`L:`), per building of it (`B:`, with what it
+//!   is) and per building or tower interior (`b:`/`t:`), marked `C` in a settlement with a castle, one
+//!   per line on stdout (everything else goes to stderr): run it on two trees and diff to see what
+//!   changed.
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|palaces|editor|hash|all]... [seed|world.json...] [--keeps]
+//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|palaces|temples|editor|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -432,9 +447,9 @@ impl<'a> Castle<'a> {
     }
 }
 
-/// Whether a building is a keep (of pieces, or the castle's catalog entry).
+/// Whether a building is a keep (of pieces, not a temple's: or the castle's catalog entry).
 fn is_keep(b: &town::Building) -> bool {
-    !b.parts.is_empty() || (b.func.is_some() && b.func.map(|f| f as usize) == town::catalog::index_of("castle"))
+    (!b.parts.is_empty() && !town::temple::shaped(b)) || (b.func.is_some() && b.func.map(|f| f as usize) == town::catalog::index_of("castle"))
 }
 
 const CASTLE_COUNTS: [&str; 24] = [
@@ -1146,7 +1161,7 @@ fn check_interior(world: &World, t0: &T0, l: &Layout, si: usize, id: &str, it: &
                         .get(&((p[0] / 100.0).floor() as i64, (p[1] / 100.0).floor() as i64))
                         .into_iter()
                         .flatten()
-                        .find(|&&k| Some(k) != own && contains(&l.buildings[k].poly, p));
+                        .find(|&&k| Some(l.buildings[k].id as usize) != own && contains(&l.buildings[k].poly, p));
                     must!(hit.is_none(), "the front door opens into building {}", hit.unwrap());
                 }
                 None => bad.push(format!("{}: the front door isn't on an outside wall", lv.name)),
@@ -1447,7 +1462,7 @@ fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str
             Kind::Great | Kind::Plain => k == "entrance hall" || (b.floors < 2 && k == "great hall"),
             Kind::Barracks => k == "mess hall",
             Kind::ShellKeep => k == "gate passage",
-            Kind::Palace | Kind::OldPalace | Kind::HallHouse | Kind::Manor => true,
+            Kind::Palace | Kind::OldPalace | Kind::HallHouse | Kind::Manor | Kind::Church | Kind::TempleHall | Kind::Monastery => true,
         };
         if !ok {
             r.add("front doors into the wrong room", 1.0, format!("{tag}: into the {k}"));
@@ -1769,6 +1784,8 @@ fn hall_rules(it: &interior::Interior, plan: &interior::HallPlan, tag: &str, zon
         Style::Presence { .. } => "audience chamber",
         Style::Gallery => "long gallery",
         Style::Chapel => "chapel",
+        // (A temple's, a shrine's and a monastery's: the `temples` rules.)
+        Style::Nave { .. } | Style::Sanctuary { .. } | Style::SideChapel { .. } | Style::Shrine { .. } | Style::Refectory => return,
     };
     r.tally("halls furnished as wholes", 1);
     r.tally(&format!("  {name} halls"), 1);
@@ -2034,7 +2051,7 @@ fn palaces(ctx: &mut Ctx, r: &mut Report) {
                     city = Some((a, format!("b:{li}:{}", b.id)));
                 }
             }
-            let Some(kind) = interior::hub_kind(t0, &l, b).filter(|k| !k.is_keep()) else { continue };
+            let Some(kind) = interior::hub_kind(t0, &l, b).filter(|k| !k.is_keep() && !k.is_faith()) else { continue };
             let buckets = buckets.get_or_insert_with(|| building_buckets(&l));
             palace_rules(world, t0, &l, li, b, kind, buckets, r);
         }
@@ -2393,6 +2410,7 @@ fn editor(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&HUB_COUNTS);
     r.counts(&["halls furnished as wholes"]);
     r.counts(&HALL_COUNTS);
+    r.counts(&MONASTERY_EDIT_COUNTS);
     let places: usize = std::env::var("PLACES").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
     let (base, t0) = (&ctx.ex.world, &ctx.ex.t0);
     let with = |ci: usize, edit: worldgen::world::TownEdit| {
@@ -2468,6 +2486,75 @@ fn editor(ctx: &mut Ctx, r: &mut Report) {
             }
         }
     }
+    monastery_edits(base, t0, r);
+}
+
+/// `monastery_edits`' counts, in order.
+const MONASTERY_EDIT_COUNTS: [&str; 4] = [
+    "monastery edits",
+    "buildings on another's ground (`Layout::grounds`), as generated",
+    "buildings on another's ground after an edit",
+    "buildings by a monastery with no front door after an edit",
+];
+
+/// Every monastery's town edited round it (`wards::change`: its patch's lots made small, its patch
+/// rerolled, and a far edit: the walls taken down, else the patch farthest from it rerolled): no
+/// building on another's ground (`Layout::grounds`, by more than a foot), and every building within
+/// 150 ft of it with a front door.
+fn monastery_edits(base: &World, t0: &T0, r: &mut Report) {
+    let on_ground = |l: &Layout, tag: &str, label: &str, r: &mut Report| {
+        for (id, g) in &l.grounds {
+            let (small, gb) = (shrink(g, 1.0), bbox(g));
+            for b in l.buildings.iter().filter(|b| b.id != *id) {
+                let bb = bbox(&b.poly);
+                if bb[0] > gb[2] || bb[2] < gb[0] || bb[1] > gb[3] || bb[3] < gb[1] || !poly_overlap(&shrink(&b.poly, 1.0), &small) {
+                    continue;
+                }
+                r.add(label, 1.0, format!("{tag}: building {} on the ground of {id} at {}", b.id, at(centroid(&b.poly))));
+            }
+        }
+    };
+    let patch_at = |plan: &serde_json::Value, p: P, far: bool| -> Option<u64> {
+        let at = |v: &serde_json::Value| [v["at"][0].as_f64().unwrap(), v["at"][1].as_f64().unwrap()];
+        let by = plan["patches"].as_array()?.iter().filter(|q| q["in_town"] == true);
+        let q = if far { by.max_by(|a, b| dist(at(a), p).total_cmp(&dist(at(b), p))) } else { by.min_by(|a, b| dist(at(a), p).total_cmp(&dist(at(b), p))) };
+        q?["patch"].as_u64()
+    };
+    for li in 0..town::layout_count(t0) {
+        let g = town::layout(base, t0, li);
+        on_ground(&g, &format!("#{li}"), "buildings on another's ground (`Layout::grounds`), as generated", r);
+        let mons: Vec<&town::Building> = g.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "monastery")).collect();
+        if mons.is_empty() {
+            continue;
+        }
+        let Ok(plan) = town::wards::plan_json(base, t0, li) else { continue };
+        for m in mons {
+            let c = centroid(&m.poly);
+            let Some(own) = patch_at(&plan, c, false) else { continue };
+            let mut reqs = vec![format!(r#"{{"patches":[{{"patch":{own},"lots":"small"}}]}}"#), format!(r#"{{"patches":[{{"patch":{own},"reroll":true}}]}}"#)];
+            if !g.walls.is_empty() {
+                reqs.push(r#"{"walls":false}"#.to_string());
+            } else if let Some(far) = patch_at(&plan, c, true).filter(|&q| q != own) {
+                reqs.push(format!(r#"{{"patches":[{{"patch":{far},"reroll":true}}]}}"#));
+            }
+            for req in reqs {
+                let Ok((Some(edit), _)) = town::wards::change(base, t0, li, &serde_json::from_str(&req).unwrap()) else { continue };
+                let mut file = base.file.clone();
+                file.edits.towns.insert(town::wards::key(li), edit);
+                let world = World::new(file).unwrap();
+                let l = town::layout(&world, t0, li);
+                r.tally("monastery edits", 1);
+                let tag = format!("b:{li}:{} {req}", m.id);
+                on_ground(&l, &tag, "buildings on another's ground after an edit", r);
+                for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && dist(centroid(&b.poly), c) < 150.0) {
+                    let Some(it) = interior::generate(&world, t0, li, b.id as usize) else { continue };
+                    if !it.levels.iter().any(|lv| lv.doors.iter().any(|d| d.kind == "front")) {
+                        r.add("buildings by a monastery with no front door after an edit", 1.0, format!("{tag}: b:{li}:{} at {}", b.id, at(centroid(&b.poly))));
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Non-castle buildings of `a` by id in `b`: the same outline, ward, function, kind, name and floors.
@@ -2487,6 +2574,459 @@ fn same_buildings(a: &Layout, b: &Layout, tag: &str, label: &str, r: &mut Report
     n
 }
 
+// ---- Temples, shrines and monasteries. ----
+
+/// The `temples` rules' counts, in order.
+const TEMPLE_COUNTS: [&str; 34] = [
+    "temples left on their lots (too small for a hall with an apse)",
+    "temples, shrines and monasteries laid out by zones: floors fallen back on",
+    "big temples whose footprint is no cross with a round apse",
+    "small temples whose footprint is no hall with a round apse",
+    "temples missing a room of their programme (or its apse)",
+    "temples' front doors not into the nave",
+    "temples with no altar rail between the nave and the sanctuary or a side chapel",
+    "temples' god's statues not on the axis at the far end",
+    "temples with no altar before the god's statue",
+    "temples whose candle stands by the altar are missing or not mirrored",
+    "big temples whose arcades are missing or not mirrored",
+    "big temples whose crossing lacks its four piers",
+    "big temples with no carved screen across the nave from pier to gate before the crossing, or its gate shut or missing",
+    "temples whose pews are missing, not mirrored (but by the stairs) or not facing the altar",
+    "temples with no font",
+    "side chapels with no side altar against the far wall",
+    "vestries with nothing in them",
+    "temples' pieces not in their god's look",
+    "shrines not of one room",
+    "shrines with no god's statue or altar",
+    "monasteries not round a cloister (kept their lot)",
+    "monasteries missing a room round the walk",
+    "monasteries' rooms opening neither onto the walk nor onto a room that does",
+    "monasteries whose chapter house is not drawn as an octagon",
+    "monasteries whose church is not along a long side",
+    "monasteries whose garth is not open to the sky on the map",
+    "monasteries with objects scattered in the garth",
+    "monasteries with no cloister well or walks in the garth",
+    "monasteries whose refectory has no high table or long tables",
+    "monasteries with another building on their footprint, or no arcade round the garth",
+    "temple, shrine and monastery rooms the designer's Furnish lays out otherwise than generation",
+    "temples, shrines and monasteries whose front door opens onto ground that reaches no street (in 50 ft)",
+    "temple, shrine and monastery rooms with squares their furniture shuts off",
+    "monasteries with a crypt beyond their church (and the foot of its stairs)",
+];
+
+/// `temples`: temples, shrines and monasteries as laid out (`interior::hub`'s `temple` and
+/// `monastery`, `town::temple`): no floor fallen back on the shared layout; a big temple's
+/// footprint a cross (its transept wider than its body both ways) ending in an apse beyond the body,
+/// a small one's a hall ending in one; the rooms of each programme (a big one's nave, sanctuary in
+/// its apse, two side chapels and a vestry; a small one's single hall in its apse), the front door
+/// into the nave, an altar rail between the nave and the sanctuary and each side chapel; the god's
+/// statue on the axis at the far end, the altar before it, candle stands mirrored by it; a big nave's
+/// arcades mirrored, the crossing's four piers, the carved screen on the row before the crossing
+/// mirrored with its gate on the axis clear; pews mirrored, facing the altar; the font; each side
+/// chapel's altar against its far wall; the vestry furnished; every temple piece in the god's look
+/// (`town::temple::god_look`); a shrine of one room with the god's statue and an altar; a monastery
+/// round its cloister on its merged footprint (nothing else on it), its church along a long side, the
+/// chapter house (drawn as an octagon), refectory, dorter, scriptorium and kitchen round the walk (each
+/// opening onto it or onto a room that does), the garth open to the sky on the map with nothing
+/// scattered in it but its well, its cloister well and walks inside, the arcade round it, the refectory
+/// furnished as a whole (its high table and long tables); every front door onto ground that reaches a
+/// street on the battlemap (within 50 ft), every square of every room no piece blocks reached from
+/// its doors and stairs; a monastery's crypt under its church only.
+fn temples(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&TEMPLE_COUNTS);
+    let n = town::layout_count(&ctx.ex.t0);
+    for li in 0..n {
+        let l = town::layout(&ctx.ex.world, &ctx.ex.t0, li);
+        for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed) {
+            let key = b.func.map(|f| town::catalog::CATALOG[f as usize].key);
+            if !matches!(key, Some("temple" | "shrine" | "monastery")) {
+                continue;
+            }
+            temple_rules(ctx, &l, li, b, key.unwrap_or_default(), r);
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn temple_rules(ctx: &mut Ctx, l: &Layout, li: usize, b: &town::Building, key: &str, r: &mut Report) {
+    use interior::hall::Style;
+    use interior::hub::Kind;
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let id = format!("b:{li}:{}", b.id);
+    let kind = interior::hub_kind(t0, l, b);
+    let tag = format!("{id} ({})", kind.map_or(key, |k| k.name()));
+    let at_b = at(centroid(&b.poly));
+    r.tally(&format!("  {}s", if key == "shrine" && kind.is_some() { "shrine hall" } else { kind.map_or(key, |k| k.name()) }), 1);
+    if key == "temple" && kind.is_none() {
+        r.add(TEMPLE_COUNTS[0], area(&b.poly).abs(), format!("{tag} at {at_b}: {:.0} sq ft", area(&b.poly).abs()));
+    }
+    if key == "monastery" && kind != Some(Kind::Monastery) {
+        r.add(TEMPLE_COUNTS[20], area(&b.poly).abs(), format!("{tag} at {at_b}: {:.0} sq ft", area(&b.poly).abs()));
+    }
+    let fell = interior::hub_fallbacks(world, t0, li, b.id as usize);
+    if !fell.is_empty() {
+        r.add(TEMPLE_COUNTS[1], fell.len() as f64, format!("{tag}: z {fell:?}"));
+    }
+    let Some(it) = interior::generate_id(world, t0, &id) else { return };
+    let (nx, ny) = (it.nx, it.ny);
+    let Some(gi) = it.levels.iter().position(|lv| lv.z == 0) else { return };
+    let g = &it.levels[gi];
+    let room_at = |lv: &interior::Level, (i, j): (isize, isize)| if i < 0 || j < 0 || i as usize >= nx || j as usize >= ny { -1 } else { lv.cells[j as usize * nx + i as usize] };
+    // The front door's outside on the battlemap: open ground reached from a street (or 50 ft off).
+    if let Some(d) = g.doors.iter().find(|d| d.kind == "front")
+        && let Some(o) = door_squares(d).into_iter().find(|&p| room_at(g, p) < 0)
+    {
+        let p = interior::to_world(&it, o.0 as f64 + 0.5, o.1 as f64 + 0.5);
+        let bb = bbox(&b.poly);
+        let w = ctx.window([bb[0] - 50.0, bb[1] - 50.0, bb[2] + 50.0, bb[3] + 50.0]);
+        let seen = w.flood(|k| w.street[k] || w.edge(k));
+        let ok = w.index(p).is_some_and(|k| (!w.block[k] && seen[k]) || (w.block[k] && w.around(k).any(|m| seen[m] && !contains(&b.poly, w.centre(m)))));
+        if !ok {
+            r.add(TEMPLE_COUNTS[31], 1.0, format!("{tag}: its door's outside at {}", at(p)));
+        }
+    }
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    // Every square of every room no piece blocks reached from the stairs and the front door, through
+    // doors.
+    for (li, lv) in it.levels.iter().enumerate() {
+        let mut blocked = vec![false; nx * ny];
+        for f in lv.furniture.iter().filter(|f| f.blocks_move) {
+            for j in f.y as usize..(f.y + f.h) as usize {
+                for i in f.x as usize..(f.x + f.w) as usize {
+                    blocked[j * nx + i] = true;
+                }
+            }
+        }
+        let st = it.stairs;
+        let mut starts: Vec<usize> = Vec::new();
+        if lv.has_stairs {
+            starts.extend((st[1]..st[1] + st[3]).flat_map(|j| (st[0]..st[0] + st[2]).map(move |i| j * nx + i)).filter(|&k| lv.cells[k] >= 0));
+        }
+        if li == it.entry_level {
+            for d in lv.doors.iter().filter(|d| d.kind == "front") {
+                starts.extend(door_squares(d).into_iter().filter(|&p| room_at(lv, p) >= 0).map(|p| p.1 as usize * nx + p.0 as usize));
+            }
+        }
+        starts.extend(lv.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize));
+        let door_between = |a: usize, c: usize| lv.doors.iter().any(|d| {
+            let s = door_squares(d);
+            let sq = |k: usize| ((k % nx) as isize, (k / nx) as isize);
+            s.contains(&sq(a)) && s.contains(&sq(c))
+        });
+        let mut seen = vec![false; nx * ny];
+        let mut stack = starts.clone();
+        starts.iter().for_each(|&k| seen[k] = true);
+        while let Some(k) = stack.pop() {
+            let (i, j) = ((k % nx) as isize, (k / nx) as isize);
+            for (a, c) in [(i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)] {
+                if a < 0 || c < 0 || a as usize >= nx || c as usize >= ny {
+                    continue;
+                }
+                let q = c as usize * nx + a as usize;
+                if seen[q] || lv.cells[q] < 0 || blocked[q] || (lv.cells[q] != lv.cells[k] && !door_between(k, q)) {
+                    continue;
+                }
+                seen[q] = true;
+                stack.push(q);
+            }
+        }
+        for (ri, rm) in lv.rooms.iter().enumerate().filter(|(_, rm)| interior::walkable(rm.kind) && rm.squares > 0) {
+            let shut = (0..nx * ny).filter(|&k| lv.cells[k] == ri as i16 && !blocked[k] && !seen[k]).count();
+            if shut > 0 {
+                r.add(TEMPLE_COUNTS[32], shut as f64, format!("{tag} {}: the {} has {shut} squares shut off", lv.name, rm.kind));
+            }
+        }
+    }
+    let kinds: Vec<&str> = g.rooms.iter().filter(|rm| rm.squares > 0).map(|rm| rm.kind).collect();
+    let count = |k: &str| kinds.iter().filter(|&&x| x == k).count();
+    let plans = interior::hall_plans(world, t0, li, b.id as usize);
+    let god = town::temple::god_look(b);
+    // The designer's Furnish on each room furnished as a whole, cleared: what generation gave it (the
+    // pieces, their places, backs and the god's looks; the looks rolled aside).
+    if let Ok((d, _)) = interior::design::design_of(world, t0, &id, false) {
+        let faith = |s: Style| matches!(s, Style::Nave { .. } | Style::Sanctuary { .. } | Style::SideChapel { .. } | Style::Shrine { .. } | Style::Refectory);
+        for p in plans.iter().filter(|p| faith(p.style)) {
+            let Some(cells) = worldgen::under::design::decode(&d.levels[p.level].cells, nx * ny) else { continue };
+            let mine = |x: u16, y: u16| cells[y as usize * nx + x as usize] == p.room;
+            let mut dd = d.clone();
+            dd.levels[p.level].items.retain(|f| !mine(f.x, f.y));
+            dd.furnish(world, t0, &id, p.level, p.room as usize, 7);
+            let look = |k: &str, v: Option<u8>| if matches!(k, "god_statue" | "candle_stand" | "carved_screen" | "screen_gate" | "side_altar" | "low_dais") { v } else { None };
+            let mut got: Vec<(String, u16, u16, u16, u16, Option<u8>, Option<u8>)> = dd.levels[p.level].items.iter().filter(|f| mine(f.x, f.y)).map(|f| (f.kind.clone(), f.x, f.y, f.w, f.h, f.back, look(&f.kind, f.variant))).collect();
+            let mut want: Vec<(String, u16, u16, u16, u16, Option<u8>, Option<u8>)> = it.levels[p.level].furniture.iter().filter(|f| mine(f.x, f.y)).map(|f| (f.kind.to_string(), f.x, f.y, f.w, f.h, f.back, look(f.kind, f.variant))).collect();
+            got.sort();
+            want.sort();
+            if got != want {
+                let kind = it.levels[p.level].rooms[p.room as usize].kind;
+                r.add(TEMPLE_COUNTS[30], 1.0, format!("{tag} {}: the {kind}: {} pieces, generated {}", it.levels[p.level].name, got.len(), want.len()));
+            }
+        }
+    }
+    // (Every temple piece in the god's look.)
+    let wrong: Vec<String> = it.levels.iter().flat_map(|lv| lv.furniture.iter()).filter(|f| matches!(f.kind, "god_statue" | "candle_stand" | "carved_screen" | "screen_gate" | "side_altar") && f.variant != Some(god)).map(|f| format!("{} v{:?}", f.kind, f.variant)).collect();
+    if !wrong.is_empty() {
+        r.add(TEMPLE_COUNTS[17], wrong.len() as f64, format!("{tag}: god {god}: {}", wrong.join(", ")));
+    }
+    // (A piece's box in a frame: s0..s1, t0..t1.)
+    let local = |f: &interior::hall::Frame, it: &interior::Item| {
+        let (a, c) = (f.local(it.x as isize, it.y as isize), f.local((it.x + it.w) as isize - 1, (it.y + it.h) as isize - 1));
+        (a.0.min(c.0), a.0.max(c.0), a.1.min(c.1), a.1.max(c.1))
+    };
+    let in_room = |lv: &interior::Level, it: &interior::Item, ri: i16| lv.cells[it.y as usize * nx + it.x as usize] == ri;
+    // (Pieces of `kind` in room `ri` mirrored across frame `f`'s axis, every one: their boxes.)
+    let mirrored = |lv: &interior::Level, f: &interior::hall::Frame, ri: i16, kind: &str| -> (usize, bool) {
+        let boxes: Vec<(isize, isize, isize, isize)> = lv.furniture.iter().filter(|it| it.kind == kind && in_room(lv, it, ri)).map(|it| local(f, it)).collect();
+        let w = f.wid as isize;
+        let ok = boxes.iter().all(|&(s0, s1, a, c)| boxes.contains(&(s0, s1, w - 1 - c, w - 1 - a)));
+        (boxes.len(), ok)
+    };
+    if key == "shrine" {
+        if kinds.len() != 1 {
+            r.add(TEMPLE_COUNTS[18], kinds.len() as f64, format!("{tag} at {at_b}: {}", kinds.join(", ")));
+        }
+        let has = |k: &str| g.furniture.iter().any(|f| f.kind == k);
+        if !has("god_statue") || !has("altar") {
+            r.add(TEMPLE_COUNTS[19], 1.0, format!("{tag} at {at_b}: {} squares", g.rooms.iter().map(|rm| rm.squares).sum::<usize>()));
+        }
+        return;
+    }
+    if key == "temple" {
+        let Some(kind) = kind else { return };
+        let big = kind == Kind::Church;
+        // The footprint: a cross ending in an apse (a hall ending in one).
+        let body = b.parts.iter().find(|p| p.kind == town::PartKind::Body);
+        let apse = b.parts.iter().find(|p| p.kind == town::PartKind::Apse);
+        let wing = b.parts.iter().find(|p| p.kind == town::PartKind::Wing);
+        let shape_ok = match (body, apse) {
+            (Some(bd), Some(ap)) if bd.poly.len() == 4 => {
+                let (es, et) = (sub(bd.poly[1], bd.poly[0]), sub(bd.poly[3], bd.poly[0]));
+                let (le, lt) = (len(es), len(et));
+                let proj = |p: P| (dot(sub(p, bd.poly[0]), es) / le, dot(sub(p, bd.poly[0]), et) / lt);
+                // (The apse beyond the body's end; the transept past the body both ways.)
+                let tip = ap.poly.iter().map(|q| proj(*q).0).fold(f64::MIN, f64::max);
+                let round = tip >= le + 0.4 * lt - 1.0 && ap.poly.len() >= 10;
+                let cross = wing.is_some_and(|w| {
+                    let ts: Vec<f64> = w.poly.iter().map(|q| proj(*q).1).collect();
+                    ts.iter().copied().fold(f64::MAX, f64::min) < -4.0 && ts.iter().copied().fold(f64::MIN, f64::max) > lt + 4.0
+                });
+                round && (cross == big) && b.poly.len() >= if big { 20 } else { 12 }
+            }
+            _ => false,
+        };
+        if !shape_ok {
+            r.add(TEMPLE_COUNTS[if big { 2 } else { 3 }], 1.0, format!("{tag} at {at_b}: {} pieces, outline of {}", b.parts.len(), b.poly.len()));
+        }
+        // The programme.
+        let apse_kept = |k: &str| g.rooms.iter().any(|rm| rm.kind == k && (3..=6).contains(&rm.shape));
+        let missing: Vec<&str> = if big {
+            [("nave", 1), ("sanctuary", 1), ("side chapel", 2), ("vestry", 1)].iter().filter(|(k, n)| count(k) != *n).map(|(k, _)| *k).chain((!apse_kept("sanctuary")).then_some("the sanctuary's apse")).collect()
+        } else {
+            [("nave", 1)].iter().filter(|(k, n)| count(k) != *n || kinds.len() != 1).map(|(k, _)| *k).chain((!apse_kept("nave")).then_some("the hall's apse")).collect()
+        };
+        if !missing.is_empty() {
+            r.add(TEMPLE_COUNTS[4], missing.len() as f64, format!("{tag} at {at_b}: {} (has {})", missing.join(", "), kinds.join(", ")));
+        }
+        if let Some(fr) = g.doors.iter().find(|d| d.kind == "front")
+            && g.rooms[fr.rooms[0] as usize].kind != "nave"
+        {
+            r.add(TEMPLE_COUNTS[5], 1.0, format!("{tag}: into the {}", g.rooms[fr.rooms[0] as usize].kind));
+        }
+        if big {
+            // (A rail on the edge between the nave and each of them.)
+            let railed = |k: &str| {
+                g.rooms.iter().enumerate().filter(|(_, rm)| rm.kind == k && rm.squares > 0).all(|(ri, _)| {
+                    g.walls.iter().any(|w| {
+                        let d = interior::Door { a: w.a, b: [if w.a[0] == w.b[0] { w.a[0] } else { w.a[0] + 1.0 }, if w.a[1] == w.b[1] { w.a[1] } else { w.a[1] + 1.0 }], kind: "rail", rooms: [-1, -1] };
+                        let [p, q] = door_squares(&d);
+                        let (rp, rq) = (room_at(g, p), room_at(g, q));
+                        w.rail && ((rp == ri as i16 && rq >= 0 && g.rooms[rq as usize].kind == "nave") || (rq == ri as i16 && rp >= 0 && g.rooms[rp as usize].kind == "nave"))
+                    })
+                })
+            };
+            if !railed("sanctuary") || !railed("side chapel") {
+                r.add(TEMPLE_COUNTS[6], 1.0, format!("{tag} at {at_b}"));
+            }
+        }
+        // The god's end: in the sanctuary's frame (a hall's in its nave's).
+        let god_plan = plans.iter().find(|p| matches!(p.style, Style::Sanctuary { .. }) || matches!(p.style, Style::Nave { cross: None, .. }));
+        match god_plan {
+            Some(p) => {
+                let lv = &it.levels[p.level];
+                let f = &p.frame;
+                let w = f.wid as isize;
+                let statue = lv.furniture.iter().find(|it| it.kind == "god_statue" && in_room(lv, it, p.room)).map(|it| local(f, it));
+                match statue {
+                    Some((s0, _, a, c)) if a + c == w - 1 && s0 >= f.len as isize - 3 => {
+                        let altar = lv.furniture.iter().filter(|it| it.kind == "altar" && in_room(lv, it, p.room)).map(|it| local(f, it)).any(|(as0, _, aa, ac)| aa + ac == w - 1 && as0 < s0 && as0 >= s0 - 2);
+                        if !altar {
+                            r.add(TEMPLE_COUNTS[8], 1.0, format!("{tag} at {at_b}"));
+                        }
+                    }
+                    other => r.add(TEMPLE_COUNTS[7], 1.0, format!("{tag} at {at_b}: {other:?} in a {} x {} frame", f.len, f.wid)),
+                }
+                let (n, ok) = mirrored(lv, f, p.room, "candle_stand");
+                if n < 2 || !ok {
+                    r.add(TEMPLE_COUNTS[9], 1.0, format!("{tag} at {at_b}: {n} candle stands"));
+                }
+            }
+            None => r.add(TEMPLE_COUNTS[7], 1.0, format!("{tag} at {at_b}: no frame furnished")),
+        }
+        // The nave.
+        if let Some(p) = plans.iter().find(|p| matches!(p.style, Style::Nave { .. })) {
+            let lv = &it.levels[p.level];
+            let f = &p.frame;
+            let w = f.wid as isize;
+            if let Style::Nave { cross: Some((c0, c1)), .. } = p.style {
+                let (c0, c1) = (c0 as isize, c1 as isize);
+                let pillars: Vec<(isize, isize, isize, isize)> = lv.furniture.iter().filter(|it| it.kind == "pillar" && in_room(lv, it, p.room)).map(|it| local(f, it)).collect();
+                let arcade = pillars.iter().filter(|q| q.0 < c0).count();
+                let (_, mirror) = mirrored(lv, f, p.room, "pillar");
+                if arcade < 4 || !mirror {
+                    r.add(TEMPLE_COUNTS[10], 1.0, format!("{tag} at {at_b}: {arcade} pillars before the crossing"));
+                }
+                if pillars.iter().filter(|q| q.0 == c0 || q.0 == c1).count() < 4 {
+                    r.add(TEMPLE_COUNTS[11], 1.0, format!("{tag} at {at_b}"));
+                }
+                // (The screen on the row before the crossing, from the piers' line to the gate on the
+                // axis, mirrored; its gate clear.)
+                let (n, ok) = mirrored(lv, f, p.room, "carved_screen");
+                let (cl, cr) = if w % 2 == 1 { (w / 2, w / 2) } else { (w / 2 - 1, w / 2) };
+                let pier = if w >= 11 { 2 } else { 1 };
+                let boxes: Vec<(isize, isize, isize, isize)> = lv.furniture.iter().filter(|it| it.kind == "carved_screen" && in_room(lv, it, p.room)).map(|it| local(f, it)).collect();
+                let on_row = boxes.iter().all(|q| q.0 == c0 - 1) && boxes.iter().any(|q| q.2 == pier && q.3 == cl - 1);
+                let gate = (cl..=cr).all(|t| {
+                    let (i, j) = f.grid(c0 - 1, t);
+                    let on = |it: &&interior::Item| (i as u16) >= it.x && (i as u16) < it.x + it.w && (j as u16) >= it.y && (j as u16) < it.y + it.h;
+                    !lv.furniture.iter().filter(on).any(|it| it.blocks_move) && lv.furniture.iter().filter(on).any(|it| it.kind == "screen_gate")
+                });
+                if n < 2 || !ok || !on_row || !gate {
+                    r.add(TEMPLE_COUNTS[12], 1.0, format!("{tag} at {at_b}: {n} pieces"));
+                }
+            }
+            // Pews, mirrored, their backs to the door's end.
+            let back = {
+                let d = (-f.ds.0, -f.ds.1);
+                match d {
+                    (0, -1) => 0,
+                    (1, 0) => 1,
+                    (0, 1) => 2,
+                    _ => 3,
+                }
+            };
+            // (Mirrored but beside the stairs and their foot, which may take one side.)
+            let st = it.stairs;
+            let by_stairs: Vec<isize> = (st[1] as isize - 1..=(st[1] + st[3]) as isize).flat_map(|j| (st[0] as isize - 1..=(st[0] + st[2]) as isize).map(move |i| f.local(i, j).0)).collect();
+            let pews: Vec<(isize, isize, isize, isize)> = lv.furniture.iter().filter(|it| it.kind == "pew" && in_room(lv, it, p.room)).map(|it| local(f, it)).collect();
+            let n = pews.len();
+            let ok = pews.iter().all(|&(s0, s1, a, c)| by_stairs.contains(&s0) || pews.contains(&(s0, s1, w - 1 - c, w - 1 - a)));
+            let facing = lv.furniture.iter().filter(|it| it.kind == "pew" && in_room(lv, it, p.room)).all(|it| it.back == Some(back));
+            if n < 2 || !ok || !facing {
+                r.add(TEMPLE_COUNTS[13], 1.0, format!("{tag} at {at_b}: {n} pews"));
+            }
+            if !lv.furniture.iter().any(|it| it.kind == "font" && in_room(lv, it, p.room)) {
+                r.add(TEMPLE_COUNTS[14], 1.0, format!("{tag} at {at_b}"));
+            }
+        }
+        if big {
+            for p in plans.iter().filter(|p| matches!(p.style, Style::SideChapel { .. })) {
+                let lv = &it.levels[p.level];
+                let ok = lv.furniture.iter().filter(|it| it.kind == "side_altar" && in_room(lv, it, p.room)).any(|it| local(&p.frame, it).1 == p.frame.len as isize - 1);
+                if !ok {
+                    r.add(TEMPLE_COUNTS[15], 1.0, format!("{tag} at {at_b}"));
+                }
+            }
+            if count("side chapel") != plans.iter().filter(|p| matches!(p.style, Style::SideChapel { .. })).count() {
+                r.add(TEMPLE_COUNTS[15], 1.0, format!("{tag} at {at_b}: a chapel not furnished as a whole"));
+            }
+            for (ri, _) in g.rooms.iter().enumerate().filter(|(_, rm)| rm.kind == "vestry" && rm.squares > 0) {
+                if !g.furniture.iter().any(|it| in_room(g, it, ri as i16)) {
+                    r.add(TEMPLE_COUNTS[16], 1.0, format!("{tag} at {at_b}"));
+                }
+            }
+        }
+        return;
+    }
+    // A monastery round its cloister.
+    if kind != Some(Kind::Monastery) {
+        return;
+    }
+    // (The crypt: under the church, the stairs' foot and the way beside them; no more squares than
+    // those and four.)
+    if let Some(ri) = g.rooms.iter().position(|rm| rm.kind == "nave") {
+        let church = (0..nx * ny).filter(|&k| g.cells[k] == ri as i16).count();
+        for lv in it.levels.iter().filter(|lv| lv.z < 0) {
+            let under = (0..nx * ny).filter(|&k| lv.cells[k] >= 0).count();
+            let off = (0..nx * ny).filter(|&k| lv.cells[k] >= 0 && g.cells[k] != ri as i16).count();
+            if off > 4 {
+                r.add(TEMPLE_COUNTS[33], 1.0, format!("{tag} at {at_b}: {under} squares under it, {off} not under the church ({church})"));
+            }
+        }
+    }
+    let need = ["nave", "entrance hall", "cloister walk", "garth", "chapter house", "refectory", "dorter", "scriptorium", "kitchen"];
+    let missing: Vec<&str> = need.iter().copied().filter(|k| count(k) == 0).collect();
+    if !missing.is_empty() {
+        r.add(TEMPLE_COUNTS[21], missing.len() as f64, format!("{tag} at {at_b}: {}", missing.join(", ")));
+    }
+    // (The rooms each one has a door to.)
+    let doors_of = |ri: i16| -> Vec<i16> { g.doors.iter().filter(|d| d.rooms.contains(&ri)).map(|d| if d.rooms[0] == ri { d.rooms[1] } else { d.rooms[0] }).filter(|&o| o >= 0).collect() };
+    let is = |ri: i16, k: &str| ri >= 0 && g.rooms[ri as usize].kind == k;
+    for k in ["chapter house", "refectory", "dorter", "scriptorium", "kitchen"] {
+        for (ri, _) in g.rooms.iter().enumerate().filter(|(_, rm)| rm.kind == k && rm.squares > 0) {
+            let ok = doors_of(ri as i16).iter().any(|&o| is(o, "cloister walk") || doors_of(o).iter().any(|&q| is(q, "cloister walk")));
+            if !ok {
+                r.add(TEMPLE_COUNTS[22], 1.0, format!("{tag} at {at_b}: the {k}"));
+            }
+        }
+    }
+    if !g.rooms.iter().any(|rm| rm.kind == "chapter house" && matches!(rm.shape, interior::shape::OCTAGON | interior::shape::CHAMFERED)) {
+        r.add(TEMPLE_COUNTS[23], 1.0, format!("{tag} at {at_b}"));
+    }
+    // (The church: the nave's squares a band the footprint's whole length along one side.)
+    if let Some(ri) = g.rooms.iter().position(|rm| rm.kind == "nave") {
+        let sq: Vec<usize> = (0..nx * ny).filter(|&k| g.cells[k] == ri as i16).collect();
+        let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % nx), a.1.max(k % nx)));
+        let (y0, y1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / nx), a.1.max(k / nx)));
+        let long = nx.max(ny);
+        let along = (x1 - x0 + 1 == long && (y0 == 0 || y1 == ny - 1) && nx >= ny) || (y1 - y0 + 1 == long && (x0 == 0 || x1 == nx - 1) && ny >= nx);
+        if !along || sq.len() != (x1 - x0 + 1) * (y1 - y0 + 1) {
+            r.add(TEMPLE_COUNTS[24], 1.0, format!("{tag} at {at_b}"));
+        }
+    }
+    match interior::court_plan(world, t0, l, b) {
+        None => r.add(TEMPLE_COUNTS[25], 1.0, format!("{tag} at {at_b}")),
+        Some(c) => {
+            let bb = bbox(&c.court);
+            let w = ctx.window([bb[0], bb[1], bb[2], bb[3]]);
+            let inside: Vec<String> = w.objects.iter().filter(|(p, name)| contains(&c.court, *p) && name.as_str() != "well").map(|(p, name)| format!("{name} at {}", at(*p))).collect();
+            if !inside.is_empty() {
+                r.add(TEMPLE_COUNTS[26], inside.len() as f64, format!("{tag}: {}", inside.join(", ")));
+            }
+        }
+    }
+    let garth = g.rooms.iter().position(|rm| rm.kind == "garth").map(|ri| ri as i16);
+    let pieces = |k: &str| garth.is_some_and(|ri| g.furniture.iter().any(|it| it.kind == k && in_room(g, it, ri)));
+    if !pieces("cloister_well") || !pieces("garden_path") {
+        r.add(TEMPLE_COUNTS[27], 1.0, format!("{tag} at {at_b}"));
+    }
+    let refectory = plans.iter().find(|p| p.style == Style::Refectory);
+    let fed = refectory.is_some_and(|p| {
+        let lv = &it.levels[p.level];
+        lv.furniture.iter().any(|it| it.kind == "high_table" && in_room(lv, it, p.room)) && lv.furniture.iter().any(|it| it.kind == "long_table" && in_room(lv, it, p.room))
+    });
+    if !fed {
+        r.add(TEMPLE_COUNTS[28], 1.0, format!("{tag} at {at_b}"));
+    }
+    let crowded = l.buildings.iter().filter(|o| o.id != b.id && dist(centroid(&o.poly), centroid(&b.poly)) < 200.0 && poly_overlap(&o.poly, &shrink(&b.poly, 1.0))).count();
+    let arcade = garth.is_some_and(|gr| g.walls.iter().any(|w| w.rail && {
+        let d = interior::Door { a: w.a, b: [if w.a[0] == w.b[0] { w.a[0] } else { w.a[0] + 1.0 }, if w.a[1] == w.b[1] { w.a[1] } else { w.a[1] + 1.0 }], kind: "rail", rooms: [-1, -1] };
+        let [p, q] = door_squares(&d);
+        room_at(g, p) == gr || room_at(g, q) == gr
+    }));
+    if crowded > 0 || !arcade {
+        r.add(TEMPLE_COUNTS[29], crowded as f64, format!("{tag} at {at_b}: {crowded} buildings on it{}", if arcade { "" } else { ", no arcade" }));
+    }
+}
+
 // ---- Hashes. ----
 
 fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
@@ -2495,14 +3035,18 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
     for li in 0..town::layout_count(t0) {
         let l = town::layout(world, t0, li);
         let castle = if !l.castles.is_empty() || l.buildings.iter().any(|b| b.ward == Ward::Castle) { "C" } else { "-" };
-        // (Without the keep's mark, nor an empty list of forecourts, so that the hashes compare with
-        // trees from before them.)
-        let mut text = format!("{l:?}").replace(", keep: false }", " }").replace(", keep: true }", " }").replace(", keep: None }", " }").replace(", forecourts: [] }", " }");
+        // (Without the keep's mark, nor an empty list of forecourts or grounds, so that the hashes
+        // compare with trees from before them.)
+        let mut text = format!("{l:?}").replace(", grounds: [] }", " }").replace(", keep: false }", " }").replace(", keep: true }", " }").replace(", keep: None }", " }").replace(", forecourts: [] }", " }");
         for k in ["Great", "Hall", "L", "T", "Shell", "Plain"] {
             text = text.replace(&format!(", keep: Some({k}) }}"), " }");
         }
         println!("{label} L:{li} {:016x} {castle} {}", fnv64(text.as_bytes()), l.buildings.len());
         r.tally("layouts hashed", 1);
+        // (Each building's own, with what it is: which buildings a change of the layout's is in.)
+        for b in &l.buildings {
+            println!("{label} B:{li}:{} {:016x} {castle} {}", b.id, fnv64(format!("{b:?}").as_bytes()), b.label().replace(' ', "_"));
+        }
         let mut ids: Vec<String> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed).map(|b| format!("b:{li}:{}", b.id)).collect();
         ids.extend((0..interior::towers(&l).len()).map(|k| format!("t:{li}:{k}")));
         for id in ids {
@@ -2516,7 +3060,7 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 9] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "editor", "hash", "all"];
+    const MODES: [&str; 10] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "editor", "hash", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -2525,7 +3069,7 @@ fn main() {
     }
     if modes.is_empty() || modes.contains(&"all") {
         modes.retain(|m| *m != "all");
-        for m in ["castles", "reach", "interiors", "hub", "halls", "palaces", "editor"] {
+        for m in ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "editor"] {
             if !modes.contains(&m) {
                 modes.push(m);
             }
@@ -2551,6 +3095,7 @@ fn main() {
                 "hub" => hub(&mut ctx, &mut r),
                 "halls" => halls(&mut ctx, &mut r),
                 "palaces" => palaces(&mut ctx, &mut r),
+                "temples" => temples(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }

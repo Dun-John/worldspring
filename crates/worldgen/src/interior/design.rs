@@ -324,7 +324,7 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
             let at = Some((inn.0.max(0) as usize, inn.1.max(0) as usize));
             if lv.z != 0 {
                 put(li, at, "a door to the outside above or below the ground floor".into(), true);
-            } else if !sh.ext_free(out_sq.0, out_sq.1) {
+            } else if !sh.open_ground(out_sq.0, out_sq.1) {
                 put(li, at, format!("the {} door opens into the building next door", d.kind), true);
             }
         }
@@ -533,6 +533,8 @@ pub fn furnish(d: &mut SiteDesign, world: &World, t0: &T0, id: &str, level: usiz
     let had = lvl.furniture.len();
     let found = building_of(world, t0, id).ok().and_then(|(li, l, bi)| l.building(bi as usize).cloned().map(|b| (li, l, b)));
     let (thrones, styled) = found.as_ref().map(|(li, _, b)| super::hall_kind(world, t0, *li, b)).map_or((false, Vec::new()), |k| (k.1, k.2));
+    // (A temple's, a shrine's or a monastery's rooms open to every square, as generated.)
+    let faith = found.as_ref().is_some_and(|(_, _, b)| town::temple::is_faith(b));
     let styled = styled.into_iter().find(|s| lvl.rooms.get(room).is_some_and(|r| r.kind == s.0 && r.squares > 0));
     // (A hall laid out by zones in its zones' frame, as generated; else one found in its squares, a
     // chapel's along its length toward the east.)
@@ -544,9 +546,23 @@ pub fn furnish(d: &mut SiteDesign, world: &World, t0: &T0, id: &str, level: usiz
     });
     if let Some((f, style)) = hall {
         super::furnish_styled(&mut lvl, nx, ny, st, room as i16, f, style, zoned.as_ref().map(|z| z.1.as_slice()), hash3(seed, level as i64, room as i64, 0x4a11));
+        // (A shrine whose god's statue fits nowhere in its frame: by its rules, as generated.)
+        if let super::hall::Style::Shrine { god } = style
+            && !lvl.furniture[had..].iter().any(|it| it.kind == "god_statue")
+        {
+            lvl.furniture.truncate(had);
+            // (Rolled as generation rolls it: by the building, its floor and the room.)
+            let roll = found.as_ref().map_or(seed, |(li, _, b)| hash3(world.stream("interior.hall"), town::rng_key(t0, *li), b.id as i64, d.levels[level].z as i64));
+            let mut rng = Pcg32::new(hash3(roll, room as i64, 0x5f1, 0), 77);
+            let floor = found.as_ref().map(|(_, l, b)| Shell::of(l, b).whole_by(-0.4)).filter(|f| f.len() == nx * ny);
+            furnish_rooms(&mut lvl, nx, ny, st, Some(room as i16), floor.as_deref(), &[], thrones, faith, &mut rng);
+            for it in lvl.furniture[had..].iter_mut().filter(|it| matches!(it.kind, "god_statue" | "candle_stand")) {
+                it.variant = Some(god);
+            }
+        }
     } else {
         let mut rng = Pcg32::new(hash3(seed, level as i64, room as i64, 0xf0), 77);
-        furnish_rooms(&mut lvl, nx, ny, st, Some(room as i16), None, &[], thrones, &mut rng);
+        furnish_rooms(&mut lvl, nx, ny, st, Some(room as i16), None, &[], thrones, faith, &mut rng);
     }
     // (`furnish_rooms` and `furnish_hall` keep what was there first, in order.)
     let lv = &mut d.levels[level];

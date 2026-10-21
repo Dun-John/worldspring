@@ -487,6 +487,12 @@ pub const COURT_PART: u8 = 5;
 /// (`interior::cross_wing_of`): roofed apart, the wing's ridge across the range's (a cross gable).
 pub const CROSS_WING_PART: u8 = 6;
 pub const MAIN_RANGE_PART: u8 = 7;
+/// A temple's apse (`town::temple`): with its body (0, the nave and choir) and its transept (4, a
+/// wing), roofed as a cross, the apse's half cone on the body's end.
+pub const APSE_PART: u8 = 8;
+/// A monastery's church (`interior::Court::church`): its corners from its west end along its length;
+/// roofed higher than its ranges, a bell-cote on its west end.
+pub const CHURCH_PART: u8 = 9;
 
 /// A keep piece's code in the payload: 0 body, 1 round tower, 2 square tower, 3 forebuilding, 4
 /// wing (its top, `town::keep_tops` with its donjon's end, in the high four bits).
@@ -498,6 +504,7 @@ fn part_code(kind: crate::town::PartKind) -> u8 {
         K::Tower { round: false } => 2,
         K::Forebuilding => 3,
         K::Wing => 4,
+        K::Apse => APSE_PART,
     }
 }
 
@@ -1494,7 +1501,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let mut fore_piers: Vec<([f64; 2], [f64; 2])> = Vec::new();
         let mut fore_gates: Vec<[[f64; 2]; 3]> = Vec::new();
         let mut walks: Vec<[[f64; 2]; 4]> = Vec::new();
-        for b in l.buildings.iter().filter(|b| crate::town::palace::is_palace(b)) {
+        for b in l.buildings.iter().filter(|b| crate::town::palace::merges(b)) {
             let bb = bbox(&b.poly);
             if !overlaps((bb.0 - 40.0, bb.1 - 40.0, bb.2 + 40.0, bb.3 + 40.0)) {
                 continue;
@@ -1570,12 +1577,14 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     match *kind {
                         "garden_path" => walks.push(*q),
                         "fountain" => park_props.push((m, 0.0, Kind::Fountain, 0, (0.5 * crate::town::geom::dist(q[0], q[1]) / SQUARE_FT).max(0.75) as f32)),
+                        // (A monastery's garth: its cloister well in its middle, its size there.)
+                        "cloister_well" => park_props.push((m, 0.0, Kind::Well, 0, (0.8 * crate::town::geom::dist(q[0], q[1]).min(crate::town::geom::dist(q[1], q[2])) / SQUARE_FT).max(0.8) as f32)),
                         "bench" => dressing.push((m, crate::park::facing(back.map_or([0.0, 1.0], |d| [-d[0], -d[1]])), Kind::Bench, 0)),
                         _ => {}
                     }
                 }
             }
-            let court = court.map(|c| c.court);
+            let (court, church) = court.map_or((None, None), |c| (Some(c.court), c.church));
             for j in j0..=j1 as usize {
                 for i in i0..=i1 as usize {
                     if crate::town::geom::contains(&b.poly, center(i, j)) && !court.as_ref().is_some_and(|q| crate::town::geom::contains(q, center(i, j))) {
@@ -1595,6 +1604,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                             let tops = crate::town::keep_tops(b, world.stream("keep.tops"));
                             let mut parts: Vec<(u8, Vec<[f32; 2]>)> = b.parts.iter().zip(&tops).map(|(p, &top)| (part_code(p.kind) | top << 4, p.poly.iter().map(local).collect())).collect();
                             parts.extend(court.as_ref().map(|q| (COURT_PART, q.iter().map(local).collect())));
+                            parts.extend(church.as_ref().map(|q| (CHURCH_PART, q.iter().map(local).collect())));
                             // (A manor: its main range and its cross wing, roofed apart.)
                             if let Some((main, wing)) = crate::interior::cross_wing_of(world, t0, &l, b) {
                                 parts.push((MAIN_RANGE_PART, main.iter().map(local).collect()));

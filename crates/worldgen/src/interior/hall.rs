@@ -9,8 +9,9 @@
 //! put down only where the hall stays whole: its doors and stairs joined, no square of its floor
 //! shut off (`Hall::open`). Kept general (a frame, a style): a palace's throne room (its throne dais,
 //! no tables), banqueting hall (the high table on a low dais) and ballroom (the dance floor, the
-//! musicians and the harpsichords at its far end, refreshment tables) too; naves and refectories are
-//! to be furnished with it.
+//! musicians and the harpsichords at its far end, refreshment tables) too; a temple's nave, sanctuary
+//! and side chapels and a shrine (the god's statue, the altar before it, candle stands: `Style::Nave`)
+//! and a monastery's refectory (the high table on a low dais for the abbot, the long tables).
 
 use super::{Item, Level, building_item, entry_squares};
 use crate::core::rng::{Pcg32, hash3};
@@ -54,6 +55,26 @@ pub enum Style {
     /// be), two blocks of pews facing it either side of the aisle up the middle, the runner up the
     /// aisle, the font by the way in.
     Chapel,
+    /// A temple's nave, its god's pieces of look `god` (`super::GOD_LOOKS`). A big temple's from the
+    /// door to the sanctuary's rail with `cross`, the crossing's first and last rows: its arcades (a
+    /// pillar pair on the line between each aisle and the nave every second row, the crossing's four
+    /// piers), the carved screen across the nave on the row before the crossing from the piers' line to
+    /// its open gate on the axis (the runner through it; candle stands either side of the gate beyond it), pews either side of the aisle up the middle
+    /// between the arcades, facing the sanctuary, the runner up the axis, the font by the door. A small
+    /// temple's single hall: its far end the god's (`Style::Sanctuary`'s pieces), then the pews, the
+    /// runner and the font.
+    Nave { god: u8, cross: Option<(u8, u8)> },
+    /// A big temple's sanctuary in its apse: the god's statue on the axis as far toward the apse as it
+    /// stands, the altar before it on a stone step, a candle stand either side of the altar on the step
+    /// and either side of the statue.
+    Sanctuary { god: u8 },
+    /// A side chapel: its side altar against the far wall (toward the apse), a candle stand by it.
+    SideChapel { god: u8 },
+    /// A shrine of one room: its far end as a sanctuary's, a pew or two.
+    Shrine { god: u8 },
+    /// A monastery's refectory: a low timber dais across its far end carrying the high table, the
+    /// abbot's chair behind it, long tables and benches down both sides, the hearth; nothing hung.
+    Refectory,
 }
 
 impl Style {
@@ -61,7 +82,7 @@ impl Style {
         match self {
             Style::Castle { house, .. } | Style::Estate { house } | Style::Throne { house, .. } | Style::Banquet { house } | Style::Presence { house } => Some(house),
             Style::Mess { house } => house,
-            Style::Civic { .. } | Style::Ballroom | Style::Gallery | Style::Chapel => None,
+            Style::Civic { .. } | Style::Ballroom | Style::Gallery | Style::Chapel | Style::Nave { .. } | Style::Sanctuary { .. } | Style::SideChapel { .. } | Style::Shrine { .. } | Style::Refectory => None,
         }
     }
 }
@@ -128,6 +149,10 @@ struct Hall {
     blocked: Vec<bool>,
     entries: Vec<usize>,
     items: Vec<Item>,
+    /// The room ends in an apse (`super::shape`): its last row a curve's.
+    apse: bool,
+    /// The stair block's squares.
+    stair: Vec<bool>,
 }
 
 impl Hall {
@@ -370,6 +395,209 @@ impl Hall {
         altar
     }
 
+    /// The runner up the axis toward row `end`: the longest run of free rows on it that reaches the
+    /// last free row up to `end`, from row `from` on (two rows or more).
+    fn runner(&mut self, from: isize, end: isize, rng: &mut Pcg32) {
+        let look = rng.below(4) as u8;
+        self.runner_of(from, end, look);
+    }
+
+    /// `runner` in look `look`.
+    fn runner_of(&mut self, from: isize, end: isize, look: u8) {
+        let w = self.f.wid as isize;
+        let (cl, cr) = if w % 2 == 1 { (w / 2, w / 2) } else { (w / 2 - 1, w / 2) };
+        let free = |h: &Hall, s: isize| (cl..=cr).all(|t| h.at(s, t).is_some_and(|k| (h.ok[k] || h.foot[k]) && h.held[k] == 0));
+        // (To the last free row before `end`: a door's square stays clear.)
+        let mut end = end;
+        while end > from && !free(self, end) {
+            end -= 1;
+        }
+        let mut a = end;
+        while a > from && free(self, a - 1) {
+            a -= 1;
+        }
+        if free(self, end) && end - a >= 1 {
+            self.put("carpet_runner", a, cl, (end - a + 1) as usize, (cr - cl + 1) as usize, None, Some(look), false);
+        }
+    }
+
+    /// The font in a corner at the door's end.
+    fn font(&mut self) {
+        let w = self.f.wid as isize;
+        for (s, t) in [(0, 0), (0, w - 1), (1, 0), (1, w - 1)] {
+            if self.put("font", s, t, 1, 1, None, None, false) {
+                break;
+            }
+        }
+    }
+
+    /// The god's end of a temple's room (`Style::Sanctuary`): the god's statue (look `god`) on the
+    /// axis on the farthest row it stands on, against the far wall or a row in from the apse's tip, the altar
+    /// two rows before it (the priest's way between them) on a stone step reaching to the statue a
+    /// square wider each side, a candle stand either side of the altar on the step and either side of
+    /// the statue where they stand; in a short room the altar on the row before the statue (on a step
+    /// a square wider each side, else as wide, else on none). The altar's row, None where they don't
+    /// fit.
+    fn god_end(&mut self, god: u8) -> Option<isize> {
+        let (l, w) = (self.f.len as isize, self.f.wid as isize);
+        let far = (1, 0);
+        let (cl, cr) = if w % 2 == 1 { (w / 2, w / 2) } else { (w / 2 - 1, w / 2) };
+        let aw = (cr - cl + 1) as usize;
+        let last = if self.apse { l - 2 } else { l + 1 };
+        for gap in [1, 0] {
+            for ss in (2 + gap..last + 1).rev() {
+                let m = self.mark();
+                if !self.put("god_statue", ss, cl, 1, aw, Some(far), Some(god), false) {
+                    continue;
+                }
+                let sa = ss - 1 - gap;
+                let mut placed = false;
+                for dw in [aw + 2, aw] {
+                    let m2 = self.mark();
+                    if self.put("low_dais", sa, (w - dw as isize) / 2, 1 + gap as usize, dw, Some(far), Some(0), false) && self.put("altar", sa, cl, 1, aw, Some(far), None, true) {
+                        if dw > aw {
+                            self.pair("candle_stand", sa, cl - 1, 1, 1, None, Some(god), true);
+                        }
+                        placed = true;
+                        break;
+                    }
+                    self.undo(m2);
+                }
+                if gap > 0 && !placed {
+                    self.undo(m);
+                    continue;
+                }
+                if !placed && !self.put("altar", sa, cl, 1, aw, Some(far), None, false) {
+                    self.undo(m);
+                    continue;
+                }
+                if !placed {
+                    self.pair("candle_stand", sa, cl - 1, 1, 1, None, Some(god), false);
+                }
+                self.pair("candle_stand", ss, cl - 1, 1, 1, None, Some(god), false);
+                return Some(sa);
+            }
+        }
+        None
+    }
+
+    /// Pews a square deep in two blocks either side of the aisle up the middle, from row 1 to `last`,
+    /// over columns `cols` (and their mirror: the vessel between the arcades, else the aisles), else
+    /// from a square clear by each long wall in a room 7 wide or more to the axis, all facing the far
+    /// end.
+    fn pews(&mut self, last: isize, cols: Option<(isize, isize)>) {
+        let w = self.f.wid as isize;
+        let cl = if w % 2 == 1 { w / 2 } else { w / 2 - 1 };
+        let wall = (w >= 7) as isize;
+        let tries: Vec<(isize, isize)> = match cols {
+            Some(c) => vec![c],
+            None => vec![(wall, cl), (wall + 1, cl)],
+        };
+        for s in 1..=last {
+            let mut done = false;
+            for &(t0, t1) in &tries {
+                if t1 - t0 >= 1 && self.pair("pew", s, t0, 1, (t1 - t0) as usize, Some((-1, 0)), None, false) {
+                    done = true;
+                    break;
+                }
+            }
+            // (Where the stairs or their foot take one side: a pew on the other.)
+            if !done && let Some(&(t0, t1)) = tries.first().filter(|c| c.1 - c.0 >= 1) {
+                let stairs = |h: &Hall, a: isize, b: isize| (a..b).any(|t| h.at(s, t).is_some_and(|k| h.foot[k] || h.stair[k]));
+                let (m0, m1) = (w - t1, w - t0);
+                if stairs(self, m0, m1) {
+                    self.put("pew", s, t0, 1, (t1 - t0) as usize, Some((-1, 0)), None, false);
+                } else if stairs(self, t0, t1) {
+                    self.put("pew", s, m0, 1, (t1 - t0) as usize, Some((-1, 0)), None, false);
+                }
+            }
+        }
+    }
+
+    /// A temple's rooms and a shrine (`Style::Nave`, `Sanctuary`, `SideChapel`, `Shrine`). False where
+    /// the god's statue and the altar (a side chapel's altar, a big nave's screen) have no room.
+    fn faith(&mut self, style: Style, rng: &mut Pcg32) -> bool {
+        let (l, w) = (self.f.len as isize, self.f.wid as isize);
+        if l < 2 || w < 1 {
+            return false;
+        }
+        let far = (1, 0);
+        let (cl, cr) = if w % 2 == 1 { (w / 2, w / 2) } else { (w / 2 - 1, w / 2) };
+        match style {
+            Style::Nave { god, cross: Some((c0, c1)) } => {
+                let (c0, c1) = (c0 as isize, c1 as isize);
+                let p = if w >= 11 { 2 } else { 1 };
+                // (The arcades and the crossing's piers.)
+                let mut s = 1;
+                while s < c0 - 1 {
+                    self.pair("pillar", s, p, 1, 1, None, None, false);
+                    s += 2;
+                }
+                for s in [c0, c1] {
+                    self.pair("pillar", s, p, 1, 1, None, None, false);
+                }
+                // (The screen across the vessel on the row before the crossing, from the piers' line to
+                // its open gate on the axis (the runner's), drawn along its edge toward the crossing; candle
+                // stands either side of the gate beyond it where the vessel is wider than the gate.
+                // The pews in the vessel where it is wider than the aisle up its middle, else in the
+                // aisles.)
+                let n = cl - 1 - p;
+                let m = self.mark();
+                let screen = self.pair("carved_screen", c0 - 1, p, 1, (cl - p) as usize, Some(far), Some(god), false) && self.put("screen_gate", c0 - 1, cl, 1, (cr - cl + 1) as usize, Some(far), Some(god), false);
+                if !screen {
+                    self.undo(m);
+                }
+                if screen && n >= 1 {
+                    self.pair("candle_stand", c0, cl - 1, 1, 1, None, Some(god), false);
+                }
+                let (t0, t1) = if n >= 1 { (p + 1, cl) } else { (0, p) };
+                self.pews(c0 - 2, Some((t0, t1)));
+                // (The runner up to the gate and on through it.)
+                let look = rng.below(4) as u8;
+                if screen {
+                    self.runner_of(1, c0 - 2, look);
+                    self.runner_of(c0, l - 1, look);
+                } else {
+                    self.runner_of(1, l - 1, look);
+                }
+                self.font();
+                screen
+            }
+            Style::Nave { god, cross: None } => {
+                let Some(sa) = self.god_end(god) else { return false };
+                self.pews(sa - 2, None);
+                self.runner(1, sa - 1, rng);
+                self.font();
+                true
+            }
+            Style::Sanctuary { god } => self.god_end(god).is_some(),
+            Style::Shrine { god } => {
+                // (A pew or two each side before the altar: two rows at most.)
+                let Some(sa) = self.god_end(god) else { return false };
+                self.pews((sa - 2).min(2), None);
+                true
+            }
+            Style::SideChapel { god } => {
+                // (Across the far wall where it is two squares wide or less, else on the middle; a
+                // candle stand beside it, else on the row before it.)
+                let aw = if w <= 2 { w } else { cr - cl + 1 };
+                let t0 = (w - aw) / 2;
+                if !(t0..t0 + aw).all(|t| self.walled(l - 1, t, far)) || !self.put("side_altar", l - 1, t0, 1, aw as usize, Some(far), Some(god), false) {
+                    return false;
+                }
+                if !(t0 >= 1 && self.pair("candle_stand", l - 1, t0 - 1, 1, 1, None, Some(god), false)) {
+                    for t in 0..w {
+                        if self.put("candle_stand", l - 2, t, 1, 1, None, Some(god), false) {
+                            break;
+                        }
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// `tables` for one lane over `rows`.
     fn lane(&mut self, lane: &[isize; 3], rows: (isize, isize)) {
         let w = self.f.wid as isize;
@@ -473,7 +701,9 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
         }
     }
     let entries = entry_squares(lvl, nx, ny, st, ri);
-    let mut h = Hall { nx, ny, f, room, ok, held: vec![0; nx * ny], foot, door, deck, blocked: vec![false; nx * ny], entries, items: Vec::new() };
+    let stair: Vec<bool> = (0..nx * ny).map(|k| (st[0]..st[0] + st[2]).contains(&(k % nx)) && (st[1]..st[1] + st[3]).contains(&(k / nx))).collect();
+    let apse = lvl.rooms.get(ri as usize).is_some_and(|r| (super::shape::APSE_N..=super::shape::APSE_W).contains(&r.shape));
+    let mut h = Hall { nx, ny, f, room, ok, held: vec![0; nx * ny], foot, door, deck, blocked: vec![false; nx * ny], entries, items: Vec::new(), apse, stair };
     let (l, w) = (f.len as isize, f.wid as isize);
     // (A long gallery and a chapel: their own compositions.)
     if style == Style::Gallery {
@@ -486,7 +716,15 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
         lvl.furniture.extend(h.items);
         return ok;
     }
+    if matches!(style, Style::Nave { .. } | Style::Sanctuary { .. } | Style::SideChapel { .. } | Style::Shrine { .. }) {
+        let ok = h.faith(style, &mut rng);
+        lvl.furniture.extend(h.items);
+        return ok;
+    }
     let mess = matches!(style, Style::Mess { .. });
+    // (A refectory's tables as a mess hall's, down its axis too, its dais and high table at its far
+    // end; no runner, nothing hung.)
+    let refectory = style == Style::Refectory;
     // (A throne room's, an audience chamber's and a ballroom's floor clear of tables; a throne in a
     // castle's hall or a palace's throne room.)
     let bare = matches!(style, Style::Throne { .. } | Style::Ballroom | Style::Presence { .. });
@@ -503,7 +741,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     let mut lanes: Vec<[isize; 3]> = Vec::new();
     // (The next lane's first column toward t = 0: past the runner, or past a mess hall's lane down
     // the axis and a way beside it.)
-    let mut c = if !mess {
+    let mut c = if !mess && !refectory {
         cl - 1
     } else if w >= 3 {
         // (Down the axis: a table on the middle column, or two side by side on the middle two.)
@@ -514,7 +752,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     };
     // (A column clear by each long wall in a hall 7 wide or more; a mess hall's tables along its
     // walls too.)
-    let wall = (cl >= 3 && !mess) as isize;
+    let wall = (cl >= 3 && !mess && !refectory) as isize;
     while c - wall >= 1 && !bare {
         if c - wall >= 2 {
             lanes.push([c, c - 1, if c - 2 >= wall { c - 2 } else { -1 }]);
@@ -540,7 +778,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
         let (kind, deep) = if throne { ("throne_dais", 2) } else { ("low_dais", 2) };
         let most = match style {
             Style::Castle { .. } | Style::Throne { .. } => 5,
-            Style::Estate { .. } | Style::Banquet { .. } => (w - 2 * outer_col).max(5) as usize,
+            Style::Estate { .. } | Style::Banquet { .. } | Style::Refectory => (w - 2 * outer_col).max(5) as usize,
             Style::Presence { .. } => if w % 2 == 0 { 4 } else { 3 },
             _ => (w - 2 * outer_col).max(if w % 2 == 0 { 4 } else { 3 }) as usize,
         };
@@ -624,18 +862,18 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
                     }
                 }
             }
-            Style::Estate { .. } | Style::Banquet { .. } => {
-                // The high table along its front, an estate's chair of office behind its middle (the
-                // dais's ends left clear, the way up to it).
+            Style::Estate { .. } | Style::Banquet { .. } | Style::Refectory => {
+                // The high table along its front, an estate's chair of office behind its middle (an
+                // abbot's in a refectory; the dais's ends left clear, the way up to it).
                 let tl = if dw >= 4 { dw - 2 } else { dw };
-                if let Style::Estate { .. } = style {
+                if matches!(style, Style::Estate { .. } | Style::Refectory) {
                     chair(&mut h, &[back], 1);
                 }
                 if back > s0 {
                     h.put("high_table", s0, (w - tl) / 2, 1, tl as usize, Some(far), Some(rng.below(4) as u8), true);
                 }
             }
-            Style::Mess { .. } | Style::Ballroom | Style::Gallery | Style::Chapel => {}
+            _ => {}
         }
     }
     // The rows before the far end: the tables', then a row clear before the dais (and before a
@@ -651,7 +889,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     };
     // The runner up the axis from the door's end to the dais: the longest run of free rows on the
     // middle columns that reaches it.
-    if !mess && dais.is_some() {
+    if !mess && !refectory && dais.is_some() {
         let mid = (cr - cl + 1) as usize;
         let free = |h: &Hall, s: isize| (cl..=cr).all(|t| h.at(s, t).is_some_and(|k| (h.ok[k] || h.foot[k]) && h.held[k] == 0));
         let end = s_end - 1;
@@ -789,7 +1027,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
                 }
             }
         }
-        if let Some((s, t)) = hearth.filter(|_| !mess) {
+        if let Some((s, t)) = hearth.filter(|_| !mess && !refectory) {
             let (ot, od) = if t == 0 { (w - 1, (0, 1)) } else { (0, (0, -1)) };
             if (s..s + 2).all(|q| h.walled(q, ot, od)) {
                 h.put("tapestry", s, ot, 2, 1, Some(od), Some(rng.below(4) as u8), false);
@@ -804,6 +1042,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     let house = style.house();
     let scene = rng.below(4) as u8;
     let pattern: &[(&str, isize)] = match (style, house) {
+        (Style::Refectory, _) => &[],
         (Style::Mess { .. }, Some(_)) => &[("wall_banner", 1)],
         (Style::Mess { .. }, None) => &[],
         (_, None) => &[("tapestry", 2)],

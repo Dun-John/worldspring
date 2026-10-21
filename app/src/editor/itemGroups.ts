@@ -32,7 +32,7 @@ const BY_GROUP: Record<string, string[]> = {
     'throne_dais', 'low_dais', 'chair_of_office', 'high_table', 'carpet_runner', 'tapestry', 'wall_banner', 'standing_banner', 'font', 'cloister_well',
     'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'garden_path',
   ],
-  'Worship & tombs': ['altar', 'statue', 'sarcophagus', 'urn', 'coffin', 'effigy', 'niche', 'offering', 'glyph', 'bell', 'fountain'],
+  'Worship & tombs': ['altar', 'side_altar', 'god_statue', 'candle_stand', 'carved_screen', 'screen_gate', 'statue', 'sarcophagus', 'urn', 'coffin', 'effigy', 'niche', 'offering', 'glyph', 'bell', 'fountain'],
   'Light & fire': ['brazier', 'candles', 'sconce', 'lantern', 'campfire'],
   'Prison & grim': ['cage', 'chains', 'iron_maiden', 'stocks', 'rack'],
   'Cave & nature': ['stalagmite', 'rock_column', 'boulder', 'crystal', 'fungus', 'mushroom', 'web', 'guano', 'moss', 'pool', 'nest', 'ice', 'ice_sheet', 'basalt', 'obsidian', 'sulfur', 'glass_pool'],

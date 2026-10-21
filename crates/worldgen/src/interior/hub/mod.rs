@@ -1,5 +1,5 @@
 //! The zone engine for big interiors: a castle's keep (and a big barracks, a palace, a noble
-//! estate) laid out as real ones were, not as a grid of rooms. Its body is cut into zones along its
+//! estate, a temple, a monastery) laid out as real ones were, not as a grid of rooms. Its body is cut into zones along its
 //! long axis, from the low end (where it is entered) to the high end: the service end (kitchen,
 //! buttery, pantry), the screens passage across the body (the front door at one end of it), the
 //! great hall (the body's full width when it is 6 to 9 squares across, else a strip of chambers
@@ -33,7 +33,8 @@
 //! keep every room within a room of a way about the floor); each kind of building is a programme of
 //! its own on them: the hall house (`keep`: keeps of pieces and tower keeps; a barracks' mess hall,
 //! `barracks`; noble estates and older palaces, `estate`), the shell keep (`shell`), the small tower
-//! keep (`small`) and the capital's palace, symmetric round its court (`palace`).
+//! keep (`small`), the capital's palace, symmetric round its court (`palace`), a temple (a cross, or a
+//! hall ending in its apse: `temple`) and a monastery round its cloister (`monastery`).
 
 use super::{Hints, Item, Room, Shell};
 use crate::core::rng::{Pcg32, hash3};
@@ -46,8 +47,10 @@ mod keep;
 mod kit;
 mod palace;
 pub(crate) use palace::courted;
+mod monastery;
 mod shell;
 mod small;
+mod temple;
 
 use kit::Lay;
 
@@ -80,6 +83,13 @@ pub enum Kind {
     /// A big noble estate: the hall between a service wing and a cross wing for the family with its
     /// stair hall (a chapel in the richest).
     Manor,
+    /// A big temple, a cross (`town::temple`): its nave with pillared aisles, the crossing, side
+    /// chapels in the transept's arms, a vestry, the sanctuary in its apse (`temple`).
+    Church,
+    /// A small temple: a single hall with its apse (`temple`).
+    TempleHall,
+    /// A monastery round its cloister garth (`monastery`).
+    Monastery,
 }
 
 impl Kind {
@@ -96,12 +106,20 @@ impl Kind {
             Kind::OldPalace => "great-hall palace",
             Kind::HallHouse => "hall house",
             Kind::Manor => "manor",
+            Kind::Church => "cross-plan temple",
+            Kind::TempleHall => "hall temple",
+            Kind::Monastery => "monastery",
         }
     }
 
     /// A castle's keep or a barracks (the `hub` rules'), not a palace or a noble estate.
     pub fn is_keep(self) -> bool {
-        !matches!(self, Kind::Palace | Kind::OldPalace | Kind::HallHouse | Kind::Manor)
+        !matches!(self, Kind::Palace | Kind::OldPalace | Kind::HallHouse | Kind::Manor | Kind::Church | Kind::TempleHall | Kind::Monastery)
+    }
+
+    /// A temple's or a monastery's (`temple`, `monastery`).
+    pub fn is_faith(self) -> bool {
+        matches!(self, Kind::Church | Kind::TempleHall | Kind::Monastery)
     }
 }
 
@@ -126,8 +144,16 @@ pub fn keep_kind(b: &town::Building) -> Option<Kind> {
 /// a castle's keep (of pieces, else as a tower keep), a barracks of 150 squares or more, a palace (the
 /// capital's, `capital`, symmetric round a court; another an older one round its great hall) and a
 /// noble estate of `estate::LEAST` squares or more outside a castle (a hall house, a manor from
-/// `estate::MANOR`) on a lot near enough a rectangle (`estate::FILL` of its grid: zones run along it).
+/// `estate::MANOR`) on a lot near enough a rectangle (`estate::FILL` of its grid: zones run along it),
+/// a temple in pieces (`town::temple`: a cross, else a hall with its apse; a town's shrine too) and a monastery on a
+/// rectangle big enough for its cloister (`monastery::fits`).
 pub fn kind_of(b: &town::Building, key: Option<&str>, inside: &[bool], capital: bool) -> Option<Kind> {
+    if matches!(key, Some("temple" | "shrine")) {
+        return town::temple::shaped(b).then(|| if b.parts.iter().any(|p| p.kind == PartKind::Wing) { Kind::Church } else { Kind::TempleHall });
+    }
+    if key == Some("monastery") {
+        return monastery::fits(b).then_some(Kind::Monastery);
+    }
     let (n, inside) = (inside.len().max(1), inside.iter().filter(|&&i| i).count());
     let castle = key == Some("castle") || b.keep.is_some();
     // (An estate long enough for its zones along it (a service end, the screens, the hall, the dais
@@ -302,6 +328,10 @@ pub struct Plan {
     pal: Option<palace::Zones>,
     /// A rich manor: its chapel in the cross wing.
     rich: bool,
+    /// A temple's zones (`temple`).
+    tem: Option<temple::Zones>,
+    /// A monastery's zones (`monastery`).
+    mon: Option<monastery::Zones>,
 }
 
 /// Room kinds by relative size, for a floor's rooms to take biggest first.
@@ -342,6 +372,7 @@ pub fn plan(b: &town::Building, sh: &Shell, key: Option<&str>, corner: usize, to
                 }
                 Some(PartKind::Forebuilding) => Piece::Fore,
                 Some(PartKind::Tower { .. }) => Piece::Tower,
+                Some(PartKind::Apse) => Piece::Body,
                 None => Piece::Out,
             }
         };
@@ -371,6 +402,12 @@ pub fn plan(b: &town::Building, sh: &Shell, key: Option<&str>, corner: usize, to
     // house of `keep`.)
     if kind == Kind::ShellKeep {
         return shell::plan(b, sh, piece, seed, &grid_p);
+    }
+    if matches!(kind, Kind::Church | Kind::TempleHall) {
+        return temple::plan(b, sh, kind, seed, &grid_p);
+    }
+    if kind == Kind::Monastery {
+        return monastery::plan(b, sh, seed, near, ground);
     }
     if kind == Kind::Palace
         && let Some(p) = palace::plan(b, sh, piece.clone(), seed, near, ground, front)
@@ -405,6 +442,51 @@ impl Plan {
         self.pal.as_ref().map(|z| (z.front, z.back, z.side, z.court))
     }
 
+    /// A plan by zones with none of a keep's: its kind, grid, frame, pieces, stairs, storeys.
+    #[allow(clippy::too_many_arguments)]
+    fn bare(kind: Kind, nx: usize, ny: usize, f: Frame, piece: Vec<Piece>, stairs: [usize; 4], floors: i8, seed: u64) -> Plan {
+        Plan {
+            kind,
+            nx,
+            ny,
+            f,
+            piece,
+            service: 0,
+            screens: false,
+            dz: 0,
+            hall_t: (0, f.wid),
+            land_t: (0, 0),
+            stairs,
+            hall_z: 0,
+            open: false,
+            floors,
+            wing_floors: 1,
+            fore_floors: 1,
+            pieces: false,
+            top: Vec::new(),
+            wing_tops: Vec::new(),
+            wings: Vec::new(),
+            fore: Vec::new(),
+            tower_top: Vec::new(),
+            tower_sq: Vec::new(),
+            overlap: Vec::new(),
+            ring: None,
+            seed,
+            pending: Vec::new(),
+            chapel: false,
+            ends: [true, true],
+            side: -1,
+            oratory: false,
+            last: Vec::new(),
+            bay: None,
+            small: false,
+            pal: None,
+            rich: false,
+            tem: None,
+            mon: None,
+        }
+    }
+
     /// The levels: z, its storeys and its top (a keep of pieces), else its storeys (the top and
     /// tower tops as other buildings have them: `None` from `level`).
     pub fn reaches(&self) -> i8 {
@@ -431,6 +513,12 @@ impl Plan {
         }
         if self.pal.is_some() {
             return Some(self.palace_level(z, blank));
+        }
+        if self.tem.is_some() {
+            return self.temple_level(z, blank);
+        }
+        if self.mon.is_some() {
+            return self.monastery_level(z, blank);
         }
         self.hall_level(z, blank, rng)
     }

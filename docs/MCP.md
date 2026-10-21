@@ -175,7 +175,7 @@ One feature in detail. What comes back depends on the feature:
 | Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground; flights of steps on steep streets as generated (`stairs`: each flight's middle `x_ft`/`y_ft`, `length_ft`, `rise_ft`, the highest first, up to 40; cities and up); `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
 | Sites | The layout: buildings, and ways underground with their `u:` ids; `settlement`: the town it stands in, or `null` |
 | Buildings and underground sites | Levels and rooms |
-| Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`, and a castle's keep its `pieces` (`kind`: body, round tower, square tower, forebuilding, wing; `poly`), whose union `poly` is (drawing a new outline makes it one piece); `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
+| Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`, and a castle's keep its `pieces` (`kind`: body, round tower, square tower, forebuilding, wing; `poly`), a temple its own (body, transept, apse), whose union `poly` is (drawing a new outline makes it one piece); `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
 | Anything in a layout | `settlement` (and in a site's layout `site`): see Conventions. A building drawn by hand (`b:<layout>:0`) used to give its own site as `settlement`; it now gives the town it stands in (or `null`), and its site as `site` |
 | Places with NPCs or plots | `npcs`, `plots`: those at the place, at anything in its layout, at their levels and rooms; for a settlement also at its sites |
 | A building drawn by hand | `notes`, `hidden`, `npcs` and `plots` are the same under its `c:` id and its building id |
@@ -1080,8 +1080,39 @@ level -1: Cellar
   family at the high end with a parlour, a `stair hall` and a study, a chapel from 260 squares; the great
   chamber and the solar above, chambers, guest chambers, a library; the map and the battlemap roof its cross
   wing apart, its ridge across the main range's); passages in an estate are corridors.
-- A palace (and only a palace) takes in the homes of its ward beside it on its block for a bigger footprint, as
-  long as the whole crosses no street or alley: it stands on the largest rectangle they hold, square to its
+- Temples, shrines and monasteries are laid out by zones too. A temple stands on the largest rectangle its lot
+  holds, its door at the end whose way out reaches a street, the end nearer one first (else its apse toward the
+  east), the lot's ground round it open (its own: no neighbour's door opens onto it). The front door of every
+  temple, shrine and monastery opens onto ground that reaches a street (with no street near, as a hamlet's
+  shrine, onto open ground clear of its neighbours, on a side no house stands against if it has one); a shrine
+  shut in a block's middle changes places with the nearest home that has a way out.
+  On one 13 squares by 9 or more it is a cross: the `nave` (5 squares wide or more, an aisle each side of its
+  arcades) from the door through the crossing to the `sanctuary`, the transept's arms two squares out each way
+  (three from 13 across), a `side chapel` in each arm's end toward the apse, a `vestry` in the other end of
+  one arm and the stairs down to the crypt in the other's; the sanctuary across the body's end, rounded by the
+  apse (`apse` shape). An altar rail parts the sanctuary and each side chapel from the nave (a railing: it
+  stops a step, not the eye), its gate on the axis. On a smaller one (8 by 5 or more) it is a single hall
+  ending in its apse, the stairs down along a wall by the door; a smaller lot keeps its rectangle, laid out as
+  other buildings are. The map and the battlemap draw a cross's nave under one ridge to the apse's half cone,
+  the transept across it and a squat tower's spire over the crossing; a hall under its ridge and the apse's
+  half cone. A shrine is one `shrine` room, its stairs from a corner by the front wall; in a town or a city, on
+  a lot 8 squares by 5 or more, a small hall ending in its apse (5 squares wide, 10 long at most), drawn as a
+  small temple's. A monastery takes in
+  the homes beside it for a footprint round a cloister (as a palace does; else clearing more of its block, its
+  alleys too, on ground fit for a terrace), up to 8,000 sq ft, 12 squares by 12 or more; a town laid out anew
+  keeps it whatever its patch is laid out as. Its church is a single hall along one long side; across the
+  cloister walk (a way about the floor) from it the open `garth` (gravel walks across it to the
+  `cloister_well` in its middle; the battlemap draws it the same, nothing else on it), an arcade between them;
+  round the walk the `entrance hall` from the front door, the `scriptorium`, the `kitchen` by the
+  `refectory`, the `chapter house` (drawn as an octagon) beside the church and the `dorter`; above, the
+  church's height open, nothing over the cloister, a library, an infirmary, chambers and the novices' dorter
+  one into the next from the landing; below, the crypt under the church only, its stairs down from the entrance
+  hall. The map and the battlemap draw the church a storey higher than its ranges, a bell-cote on its west
+  end. Every room of a temple, shrine or monastery is furnished so that each square of it nothing stands on is
+  reached from its doors. A monastery with no room for a cloister is laid out as other buildings
+  are.
+- A palace (and a monastery, for its cloister) takes in the homes of its ward (a monastery's, any homes) beside
+  it on its block for a bigger footprint, as long as the whole crosses no street or alley: it stands on the largest rectangle they hold, square to its
   own lot. Where that gives the capital no footprint round a court it clears more of its block: the homes and
   the open ground there beside its lot. The capital's front is the side it stands round its court from, an odd
   number of squares across (an even side loses a square), with room for its forecourt (drawn back from it by
@@ -1090,7 +1121,7 @@ level -1: Cellar
   other building keeps its own, and the palace keeps its id and name; nothing overlaps it. A town laid out
   anew keeps its palace's footprint where the lots under it are homes of its ward again (any homes, the
   capital's, whatever its patch is laid out as: its patch's streets stop at it and at its forecourt, the homes
-  on its forecourt and its way gone).
+  on its forecourt and its way gone); a monastery's as the capital's. A temple is shaped again from its lot.
 - Great halls are furnished as one composition about the axis from the end they are entered at to the far
   end: a castle's (its throne dais of stone steps and gilt thrones in a capital, a pair, and in rich cities,
   else of timber, now and then with a lesser chair), a town hall's, a guild's, a harbor master's or an
@@ -1105,7 +1136,17 @@ level -1: Cellar
   side, the runner up to it), its long gallery (statues, benches and tapestries along its long walls only, the
   walk down its middle clear) and its chapel (the altar on a stone step against the far wall, east where it
   can be, pews in two blocks facing it either side of the aisle, the font by the way in); an older
-  palace's great hall has a throne dais as a castle's. The dais stands on the axis against the
+  palace's great hall has a throne dais as a castle's. A temple's rooms are furnished so too, every piece of
+  its god's kind (`variant`, by the god in its name): its nave (a big one's arcades a pillar pair every second
+  row, the crossing's four piers, the `carved_screen` across the nave on the row before the crossing, from the
+  piers' line to its open `screen_gate` on the axis (a thin partition drawn along its edge toward the
+  crossing), `candle_stand`s either side of the gate beyond it; pews either side of the aisle up the middle
+  facing the altar, the runner up the axis through the gate, the font by the door), its sanctuary (the `god_statue` on the axis toward the apse,
+  the altar two rows before it on a stone step, candle stands either side), each side chapel (its `side_altar`
+  against the far wall, a candle stand by it), a small temple's hall (its far end as a sanctuary, then the
+  pews), a shrine (as a sanctuary, a pew or two each side) and a monastery's church (as a small temple's hall) and
+  refectory (a timber `low_dais` across its far end carrying the high table, the abbot's chair behind it, long
+  tables and benches down its axis and both sides). The dais stands on the axis against the
   far wall, a low dais as wide as the tables' lanes (a door on the far wall may open onto it: it is walked
   over), a throne dais a row in from the wall where a door opens there behind it (the way round it); a
   `carpet_runner` up the axis to it; long tables with benches both sides, pillar pairs where a column is free
@@ -1130,7 +1171,11 @@ level -1: Cellar
   `chair_of_office`, `high_table`, `carpet_runner` and `dance_floor` (walked over), `tapestry` and
   `wall_banner` (hung on the wall they stand against, walked under), `standing_banner` (blocks movement, not
   sight), `font`, `cloister_well`, `harpsichord`, `musicians_corner` (difficult ground), `refreshment_table`;
-  indoor props, with the rules they have underground:
+  a temple's (the designer's "Worship & tombs" group): `god_statue` (total cover, blocks movement and sight),
+  `candle_stand` (blocks movement, not sight), `carved_screen` (three-quarters cover, blocks movement and
+  sight), `screen_gate` (the screen's open gate, walked through as open floor), `side_altar`, each with a look per kind of god (`variant` 0 the Sun and the Morning Lord, 1 the
+  Dawn, 2 the Moon and the Veiled Lady, 3 the Deep Sea, 4 the Storm, 5 the Forge, 6 the Harvest and the
+  Hearth, 7 the Seven and the Watcher); indoor props, with the rules they have underground:
   `sacks`, `rubble`, `timber`, `bones`, `skeleton`, `skulls`, `urn`, `coffin`, `effigy`, `brazier`,
   `candles`, `sconce`, `lantern`, `banner`, `chains`, `cobweb`, `bedroll`, `tools`, `powder`, `hoard`,
   `offering`, `glyph`, `dais`, `well`, `fountain`, `iron_maiden`, `stocks`, `rat_nest`, `trap`; and uploaded

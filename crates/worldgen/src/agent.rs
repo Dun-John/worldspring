@@ -1247,7 +1247,9 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
                         town::PartKind::Tower { round: true } => "round tower",
                         town::PartKind::Tower { round: false } => "square tower",
                         town::PartKind::Forebuilding => "forebuilding",
+                        town::PartKind::Wing if town::temple::is_temple(b) => "transept",
                         town::PartKind::Wing => "wing",
+                        town::PartKind::Apse => "apse",
                     };
                     json!({ "kind": kind, "poly": p.poly.iter().map(|q| [r1(q[0]), r1(q[1])]).collect::<Vec<_>>() })
                 })

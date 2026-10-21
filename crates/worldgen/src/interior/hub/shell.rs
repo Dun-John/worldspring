@@ -174,6 +174,8 @@ pub(super) fn plan(b: &town::Building, sh: &Shell, piece: Vec<Piece>, seed: u64,
         bay: None,
         small: false,
         pal: None,
+        tem: None,
+        mon: None,
         rich: false,
     })
 }

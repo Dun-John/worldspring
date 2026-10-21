@@ -200,6 +200,18 @@ pub fn shaped_heights(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) 
 }
 
 /// A simple polygon as triangles (ear clipping); a convex one as itself.
+/// A monastery church's bell-cote (`interior::Court::church`: its corners from its west end along
+/// it): a square 6 ft across on its ridge, its middle 6 ft in from the west end (world ft).
+pub fn bell_cote(c: &[[f64; 2]; 4]) -> Vec<[f64; 2]> {
+    use crate::town::geom::{add, dist, lerp, mul, sub};
+    let w = lerp(c[0], c[3], 0.5);
+    let along = mul(sub(lerp(c[1], c[2], 0.5), w), 1.0 / dist(c[0], c[1]).max(1e-9));
+    let across = [-along[1], along[0]];
+    let m = add(w, mul(along, 6.0));
+    let r = 3.0;
+    vec![add(m, add(mul(along, -r), mul(across, -r))), add(m, add(mul(along, r), mul(across, -r))), add(m, add(mul(along, r), mul(across, r))), add(m, add(mul(along, -r), mul(across, r)))]
+}
+
 fn ears(poly: &[[f64; 2]]) -> Vec<Vec<[f64; 2]>> {
     use crate::town::geom::{area, cross, sub};
     let n = poly.len();
@@ -385,6 +397,16 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     // each with its kind + 1 (bits 25-28: 1 body, 2 round tower, 3 square tower, 4
                     // forebuilding, 5 wing) and how it is topped (bits 29-31: `town::keep_tops`, its
                     // donjon's end in bit 31).
+                    // A temple of pieces (`town::temple`): its body, transept and apse, each outlined
+                    // (all in the tile holding its middle).
+                    if crate::town::temple::shaped(b) {
+                        whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
+                        for p in &b.parts {
+                            push(&p.poly, attr);
+                        }
+                        whole.set(None);
+                        continue;
+                    }
                     if !b.parts.is_empty() {
                         let c = crate::town::geom::centroid(&b.poly);
                         whole.set(Some(owns(c)));
@@ -397,6 +419,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                                 K::Tower { round: false } => 3,
                                 K::Forebuilding => 4,
                                 K::Wing => 5,
+                                K::Apse => 1,
                             };
                             push(&p.poly, attr | code << 25 | (top as u32) << 29);
                         }
@@ -406,7 +429,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     // The capital's palace round its court: a range along each side, the court a lawn
                     // with its gravel walks and its fountain, as on the battlemap (all in the tile
                     // holding its middle).
-                    if let Some(court) = crate::town::palace::is_palace(b).then(|| crate::interior::court_plan(world, t0, &l, b)).flatten() {
+                    // (A monastery's cloister likewise: its garth, its walks and its well.)
+                    if let Some(court) = crate::town::palace::merges(b).then(|| crate::interior::court_plan(world, t0, &l, b)).flatten() {
                         whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
                         let q = &court.court;
                         push(q, 13);
@@ -426,11 +450,18 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                             match *kind {
                                 "garden_path" => push(sq, 12),
                                 "fountain" => push(&crate::town::geom::circle(crate::town::geom::mean(sq), 0.5 * crate::town::geom::dist(sq[0], sq[1]), 12), 7),
+                                "cloister_well" => push(&crate::town::geom::circle(crate::town::geom::mean(sq), 0.35 * crate::town::geom::dist(sq[0], sq[1]).min(crate::town::geom::dist(sq[1], sq[2])), 10), 7),
                                 _ => {}
                             }
                         }
                         for k in 0..4 {
                             push(&[b.poly[k], b.poly[(k + 1) % 4], q[(k + 1) % 4], q[k]], attr);
+                        }
+                        // A monastery's church over its range (piece 6: roofed higher, darker), its
+                        // bell-cote on its west end (piece 7).
+                        if let Some(c) = &court.church {
+                            push(c, attr | 6 << 25);
+                            push(&bell_cote(c), attr | 7 << 25);
                         }
                         whole.set(None);
                         continue;

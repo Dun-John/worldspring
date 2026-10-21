@@ -1083,7 +1083,8 @@ fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout
     let near_wall = |p: &[[f64; 2]]| l.walls.iter().flat_map(|w| w.windows(2)).any(|s| p.iter().any(|q| geom::seg_dist(*q, s[0], s[1]) < 4.0) || geom::contains(p, s[0]));
     let fi = town::catalog::index_of("castle").unwrap() as u16;
     let mut keeps = 0;
-    for b in l.buildings.iter().filter(|b| b.func == Some(fi) || !b.parts.is_empty()) {
+    // (A temple's pieces are no keep's: `town::temple`.)
+    for b in l.buildings.iter().filter(|b| b.func == Some(fi) || (!b.parts.is_empty() && !town::temple::shaped(b))) {
         let tag = format!("#{si} b:{si}:{}", b.id);
         assert!(!near_wall(&b.poly), "{tag}: the keep stands on a wall");
         assert!(towers.iter().all(|t| !geom::contains(&b.poly, t.0)), "{tag}: a tower stands in the keep");
@@ -1678,7 +1679,7 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
             let outside = sq.into_iter().find(|&(i, j)| i < 0 || j < 0 || i >= nx as isize || j >= ny as isize || lv.cells[j as usize * nx + i as usize] < 0).expect("door on an outside wall");
             let p = interior::to_world(&it, outside.0 as f64 + 0.5, outside.1 as f64 + 0.5);
             let own = id.strip_prefix(&format!("b:{si}:")).and_then(|k| k.parse::<usize>().ok());
-            let hit = buckets.get(&((p[0] / 100.0).floor() as i64, (p[1] / 100.0).floor() as i64)).into_iter().flatten().find(|&&k| Some(k) != own && geom::contains(&l.buildings[k].poly, p));
+            let hit = buckets.get(&((p[0] / 100.0).floor() as i64, (p[1] / 100.0).floor() as i64)).into_iter().flatten().find(|&&k| Some(l.buildings[k].id as usize) != own && geom::contains(&l.buildings[k].poly, p));
             assert!(hit.is_none(), "{tag}: the front door opens into building {}", hit.unwrap());
         }
         // Squares either side of each door.

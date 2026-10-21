@@ -107,7 +107,7 @@ fn main() {
         inner += (l.castles.len() > 1) as usize;
         square += (!l.square_towers.is_empty()) as usize;
         mottes += l.mottes.len();
-        let keep = l.buildings.iter().find(|b| !b.parts.is_empty());
+        let keep = l.buildings.iter().find(|b| !b.parts.is_empty() && !town::temple::shaped(b));
         let sig: String = keep.map_or("none".into(), |k| {
             k.parts
                 .iter()
@@ -117,6 +117,7 @@ fn main() {
                     town::PartKind::Tower { round: false } => '#',
                     town::PartKind::Forebuilding => 'F',
                     town::PartKind::Wing => 'W',
+                    town::PartKind::Apse => 'A',
                 })
                 .collect()
         });

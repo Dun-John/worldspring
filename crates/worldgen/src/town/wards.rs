@@ -498,6 +498,18 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
             }
         }
     }
+    // A temple's lot giving the temple as generated on it (`temple::gives`) is that temple.
+    for k in fresh.clone() {
+        let at = centroid(&l.buildings[k].poly);
+        let hit = (0..generated.buildings.len()).find(|&g| !used[g] && super::temple::shaped(&generated.buildings[g]) && dist(centroid(&generated.buildings[g].poly), at) < 80.0 && super::temple::gives(&l.buildings[k].poly, &generated.buildings[g]));
+        if let Some(g) = hit {
+            used[g] = true;
+            let (o, b) = (&generated.buildings[g], &mut l.buildings[k]);
+            (b.id, b.func, b.residential, b.floors, b.structure, b.roof, b.tint) = (o.id, o.func, o.residential, o.floors, o.structure, o.roof, o.tint);
+            b.name = o.name.clone();
+            fresh.retain(|&j| j != k);
+        }
+    }
     // A new building lying mostly on one generated that none took, of the same structure (half
     // of each on the other: a lot trimmed back by a square or a close) is that building, cut down;
     // not in a patch whose lots were rolled, sized anew or given another ward (a roll never takes

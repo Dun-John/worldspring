@@ -20,6 +20,7 @@ pub mod sites;
 pub mod palace;
 pub mod squares;
 pub mod stairs;
+pub mod temple;
 pub mod wards;
 
 use std::cell::RefCell;
@@ -61,8 +62,8 @@ pub struct Building {
     /// before it are taken away (`Layout::building`).
     pub id: u32,
     /// A keep's pieces (world ft, each convex): its body first, then wings, a forebuilding and its
-    /// towers; `poly` is their union. Empty for every other building, and once its outline is
-    /// drawn by hand.
+    /// towers; a temple's: its body, its transept, its apse (`temple`); `poly` is their union. Empty
+    /// for every other building, and once its outline is drawn by hand.
     pub parts: Vec<Part>,
     /// A castle's keep (`castle::place_keep`), of the kind it was laid out as: the castle itself,
     /// whatever its outline (with its pieces or redrawn by hand) or storeys.
@@ -76,7 +77,7 @@ pub struct Part {
     pub kind: PartKind,
 }
 
-/// What a piece of a keep is.
+/// What a piece of a keep (or a temple: `temple`) is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PartKind {
     /// The main block (a great tower, a hall, a shell keep's ring).
@@ -85,8 +86,10 @@ pub enum PartKind {
     Tower { round: bool },
     /// A lower block before the entrance.
     Forebuilding,
-    /// A range joined to the body (an L or a T).
+    /// A range joined to the body (an L or a T; a temple's transept across it).
     Wing,
+    /// A temple's round end (`temple`): a half circle on the body's end, a square of the body with it.
+    Apse,
 }
 
 /// A mound raised under a keep (world ft): its flat top round `at` out to `top_r`, easing down to
@@ -239,6 +242,10 @@ pub struct Layout {
     pub close_room: Vec<u32>,
     /// The capital's palace's forecourt before its front door (`palace::approach`).
     pub forecourts: Vec<palace::Forecourt>,
+    /// The ground a temple's or a monastery's lots held (world ft), by its id: a temple's lot it stands
+    /// on in pieces (`temple::shape_all`), a monastery's own lot and those it took in (`palace::merge`).
+    /// What of it the building leaves open is its own: no other building's door opens onto it.
+    pub grounds: Vec<(u32, Vec<P>)>,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -508,6 +515,7 @@ impl Layout {
             stairs: Vec::new(),
             close_room: Vec::new(),
             forecourts: Vec::new(),
+            grounds: Vec::new(),
         }
     }
 
@@ -713,6 +721,12 @@ pub(crate) fn overlap(a: &[P], b: &[P]) -> f64 {
     if part.len() < 3 { 0.0 } else { area(&part).abs() }
 }
 
+/// Whether outline `b` stands on lot `a` (world ft), either of them other than convex too: the more of
+/// the two ways `overlap` measures what they share, more than a square foot.
+pub(crate) fn on_lot(a: &[P], b: &[P]) -> bool {
+    overlap(b, a).max(overlap(a, b)) > 1.0
+}
+
 /// `to` as `from` moved and turned (the same corners in the same order, each within half a foot of
 /// where the move puts it): the move, for any point.
 fn rigid(from: &[P], to: &[P]) -> Option<impl Fn(P) -> P> {
@@ -766,6 +780,8 @@ fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
             b.floors = f.max(1);
         }
         if e.poly.len() >= 3 && edit_stands(b, e) {
+            // (Its lots' ground as generated no longer its own.)
+            l.grounds.retain(|g| g.0 != id);
             // (Moved or turned, a keep keeps its pieces with it; drawn otherwise, it has none.)
             match rigid(&b.poly, &e.poly) {
                 Some(f) => b.parts.iter_mut().flat_map(|p| p.poly.iter_mut()).for_each(|q| *q = f(*q)),
@@ -1396,6 +1412,16 @@ impl Site<'_> {
         let (lo, hi) = self.relief(poly);
         hi - lo < 6.0 && self.dry_outline(poly, 10.0)
     }
+    /// `buildable` for a big building raised on a terrace (a monastery round its cloister): its ground
+    /// rising up to 10 ft across it.
+    fn terraced(&self, poly: &[P]) -> bool {
+        let c = centroid(poly);
+        if self.wet(c) || self.near_river(c, 12.0) {
+            return false;
+        }
+        let (lo, hi) = self.relief(poly);
+        hi - lo < 10.0 && self.dry_outline(poly, 10.0)
+    }
     /// No point of the outline (every `step` ft or less) on water: a channel at least `step`
     /// wide cannot cross the polygon unseen.
     fn dry_outline(&self, poly: &[P], step: f64) -> bool {
@@ -1697,12 +1723,23 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for f in &mut l.forecourts {
         f.front.iter_mut().chain(&mut f.yard).chain(&mut f.way).for_each(tw);
     }
+    for (_, g) in &mut l.grounds {
+        g.iter_mut().for_each(tw);
+    }
+    // Temples on their lots in pieces (world ft, so that a town laid out anew shapes them alike), a shrine
+    // shut in a block's middle moved first to a home with a way out.
+    if edit.is_none() {
+        temple::reach_streets(&mut l, None);
+        temple::shape_all(&mut l, None);
+    }
     if let Some(e) = edit {
         let generated = generated_layout(world, t0, index);
         let kept = palace::follow(&site, &mut l, &generated, center, s.capital);
         wards::inherit(world, t0, e, &generated, spacing, &mut l);
         palace::merge(&site, &mut l, center, s.capital, &kept);
         palace::approach(&site, &mut l, center, s.capital, &kept, Some(&generated));
+        temple::reach_streets(&mut l, Some(&generated));
+        temple::shape_all(&mut l, Some(&generated));
     }
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {

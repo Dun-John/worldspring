@@ -86,13 +86,13 @@ function floorColor(kind: string, z: number, natural = false, raise = 0): number
   if (['arena floor'].includes(kind)) return 0xc8b184;
   if (['kitchen', 'baths', 'forge', 'brewhouse'].includes(kind)) return 0x8f8a80;
   // (A palace's court a lawn (its gravel walks laid on it), its ballroom's parquet the lightest wood.)
-  if (kind === 'courtyard') return LAWN;
+  if (kind === 'courtyard' || kind === 'garth') return LAWN;
   if (kind === 'ballroom') return 0xbb8d5c;
   // (A roof's squares: the walk's stone, under the roof drawn over them, `drawRoofs`.)
   if (kind === 'battlements' || kind === 'wall walk' || kind === ROOF_SLOPE) return 0xa8a296;
   if (kind === OPEN_BELOW) return -1;
   if (kind === 'stands') return 0x8a7a64;
-  if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison', 'throne room', 'banqueting hall', 'royal chapel', 'stair hall', "servants' hall"].includes(kind))
+  if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison', 'throne room', 'banqueting hall', 'royal chapel', 'stair hall', "servants' hall", 'side chapel', 'shrine', 'chapter house', 'cloister walk', 'refectory'].includes(kind))
     return 0x9d978c;
   return 0xa87a4f;
 }
@@ -215,8 +215,9 @@ function drawRoofs(g: Graphics, lv: InteriorLevel, nx: number, ny: number, sp: S
   });
 }
 
-/** Railings (`Wall::rail`) along a hall's open height: a timber rail on posts; round a round one
- * (a shell keep's yard), along its circle where a gallery meets it. */
+/** Railings (`Wall::rail`) along a hall's open height and a temple's altar rails: a timber rail on posts;
+ * round a round open height (a shell keep's yard), along its circle where a gallery meets it; a
+ * cloister's arcade round its garth in stone on columns. */
 function drawRails(g: Graphics, lv: InteriorLevel, nx: number, ny: number, sp: ShapedPlan | null) {
   const voids = roundVoids(lv, sp);
   const cell = (p: Pt) => {
@@ -229,7 +230,15 @@ function drawRails(g: Graphics, lv: InteriorLevel, nx: number, ny: number, sp: S
     const n: Pt = w.a[0] === w.b[0] ? [0.5, 0] : [0, 0.5];
     return voids.has(cell([mid[0] - n[0], mid[1] - n[1]])) || voids.has(cell([mid[0] + n[0], mid[1] + n[1]]));
   };
-  const runs: Pt[][] = lv.walls.filter((w) => w.rail && !onRound(w)).map((w) => [w.a, w.b]);
+  // (A cloister's arcade between its walk and its garth: stone, on columns.)
+  const arcade = (w: InteriorLevel['walls'][number]) => {
+    const mid: Pt = [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2];
+    const n: Pt = w.a[0] === w.b[0] ? [0.5, 0] : [0, 0.5];
+    return [cell([mid[0] - n[0], mid[1] - n[1]]), cell([mid[0] + n[0], mid[1] + n[1]])].some((r) => r >= 0 && lv.rooms[r].kind === 'garth');
+  };
+  const rails = lv.walls.filter((w) => w.rail && !onRound(w));
+  const runs: Pt[][] = rails.filter((w) => !arcade(w)).map((w) => [w.a, w.b]);
+  const stone: Pt[][] = rails.filter(arcade).map((w) => [w.a, w.b]);
   for (const [ri, p] of voids) {
     const pieces = boundaryPieces(p);
     const gallery = (k: number) => {
@@ -239,31 +248,46 @@ function drawRails(g: Graphics, lv: InteriorLevel, nx: number, ny: number, sp: S
     };
     runs.push(...keptRuns(pieces, gallery));
   }
-  if (!runs.length) return;
-  const line = () => {
-    for (const run of runs) {
+  const line = (list: Pt[][]) => {
+    for (const run of list) {
       g.moveTo(run[0][0], run[0][1]);
       for (const q of run.slice(1)) g.lineTo(q[0], q[1]);
     }
   };
-  line();
-  g.stroke({ width: 0.16, color: 0x3d2a17, cap: 'round', join: 'round' });
-  line();
-  g.stroke({ width: 0.07, color: 0xa47a4a, cap: 'round', join: 'round' });
-  // Posts a square apart.
-  for (const run of runs) {
-    let next = 0;
-    let along = 0;
-    for (let k = 0; k + 1 < run.length; k++) {
-      const [a, b] = [run[k], run[k + 1]];
-      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      for (; next <= along + len + 1e-6; next += 1) {
-        const t = len > 0 ? (next - along) / len : 0;
-        g.circle(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, 0.09);
+  // Posts (columns) a square apart along runs, from each run's start.
+  const posts = (list: Pt[][], r: number, first: number) => {
+    for (const run of list) {
+      let next = first;
+      let along = 0;
+      for (let k = 0; k + 1 < run.length; k++) {
+        const [a, b] = [run[k], run[k + 1]];
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        for (; next <= along + len + 1e-6; next += 1) {
+          const t = len > 0 ? (next - along) / len : 0;
+          g.circle(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, r);
+        }
+        along += len;
       }
-      along += len;
     }
+  };
+  if (stone.length) {
+    // The arcade: a low stone wall, its coping lit, slim columns on it a square apart (at the squares'
+    // middles), their capitals pale.
+    line(stone);
+    g.stroke({ width: 0.2, color: 0x4a4540, cap: 'butt', join: 'round' });
+    line(stone);
+    g.stroke({ width: 0.12, color: 0xb4ad9e, cap: 'butt', join: 'round' });
+    posts(stone, 0.1, 0.5);
+    g.fill(0x6e675c);
+    posts(stone, 0.055, 0.5);
+    g.fill(0xd8d0bc);
   }
+  if (!runs.length) return;
+  line(runs);
+  g.stroke({ width: 0.16, color: 0x3d2a17, cap: 'round', join: 'round' });
+  line(runs);
+  g.stroke({ width: 0.07, color: 0xa47a4a, cap: 'round', join: 'round' });
+  posts(runs, 0.09, 0);
   g.fill(0x3d2a17);
 }
 

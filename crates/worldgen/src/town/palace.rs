@@ -1,5 +1,5 @@
-//! Palaces' footprints: a palace (and only a palace) takes in the lots beside its own for a big
-//! footprint (`merge`): the homes of its ward on the same block, wall to wall with it, as long as the
+//! Palaces' and monasteries' footprints: a palace (and a monastery, for its cloister round its garth:
+//! `interior::hub`'s `monastery`) takes in the lots beside its own for a big footprint (`merge`): the homes of its ward on the same block, wall to wall with it, as long as the
 //! hull of them all crosses no street or alley and covers no other building; it then stands on the
 //! largest rectangle that hull holds, square to its own lot (a capital's with a side an odd number
 //! of squares across for its front, for its axis), on ground fit to build on. The lots taken in are gone (their ids
@@ -7,15 +7,18 @@
 //! its id and name. What the hull holds outside the rectangle is the palace's open ground. The
 //! capital's always stands round a court: where the lots beside it give no footprint big enough, it
 //! clears more of its block, taking in the homes and the open ground there (`clear_ground`). Every
-//! other palace stays smaller than the least a capital's is. The capital's then gets its front and
+//! other palace stays smaller than the least a capital's is; a monastery grows to `MONASTERY_FT2`, on a
+//! rectangle 12 squares by 12 or more (`MONASTERY_SIDES`; clearing its block, its alleys too, on ground
+//! fit for a terrace where the lots beside it give none). The capital's then gets its front and
 //! the forecourt before it, walled, its gate on the axis, a paved way on to the street (`approach`).
 //! A town laid out anew by hand keeps its palace's footprint as generated wherever what stands under
-//! it now is its own lot and homes clear of the streets (the capital's whatever its patch is laid out
-//! as, open ground too, its front as generated: `follow`, `approach`); else it is grown again. Nothing overlaps a palace, by the area two outlines share
+//! it now is its own lot and homes clear of the streets (the capital's and a monastery's whatever its
+//! patch is laid out as, open ground too, the capital's front as generated: `follow`, `approach`);
+//! else it is grown again. Nothing overlaps a palace, by the area two outlines share
 //! (`super::overlap`), however little.
 
 use super::geom::{Labeled, add, area, centroid, clip, contains, dist, dot, hull, mul, obb, sub};
-use super::{Building, Layout, P, Site, Structure, Ward, catalog, overlap, poly_seg_dist};
+use super::{Building, Layout, P, Site, Structure, Ward, catalog, on_lot, overlap, poly_seg_dist};
 
 /// The footprint a palace grows to (sq ft): a capital's round a court, another's round its hall.
 const CAPITAL_FT2: f64 = 15000.0;
@@ -23,12 +26,12 @@ const CITY_FT2: f64 = 6000.0;
 /// The sides a palace's rectangle may have (ft): its short side `least` to `most_short`, its long one
 /// `long` to `most_long`; its floor `most_area` at most.
 #[derive(Clone, Copy)]
-struct Sides {
-    least: f64,
-    long: f64,
-    most_short: f64,
-    most_long: f64,
-    most_area: f64,
+pub(super) struct Sides {
+    pub(super) least: f64,
+    pub(super) long: f64,
+    pub(super) most_short: f64,
+    pub(super) most_long: f64,
+    pub(super) most_area: f64,
 }
 /// The capital's: 17 squares by 19 at least, 30 by 40 at most; round a court (`courts`: its ranges,
 /// `interior::hub::palace`: a front range deep enough for the long gallery 3 squares wide before its
@@ -40,6 +43,12 @@ const CAPITAL_LEAST: Sides = Sides { least: 55.0, long: 65.0, most_short: 150.0,
 /// Another's: 6 squares by 6 to 16 by 30, a hall house as big as its zones suit (`interior::hub::keep`),
 /// its floor 240 squares at most: well under the least a capital's is (17 by 19, 323).
 const CITY_SIDES: Sides = Sides { least: 30.0, long: 30.0, most_short: 80.0, most_long: 150.0, most_area: CITY_FT2 };
+/// A monastery's: 12 squares by 12 to 22 by 26, its ranges round its cloister (`interior::hub`'s
+/// `monastery`), its floor `MONASTERY_FT2` and a little more at most.
+const MONASTERY_SIDES: Sides = Sides { least: 60.0, long: 60.0, most_short: 110.0, most_long: 130.0, most_area: 1.2 * MONASTERY_FT2 };
+/// The footprint a monastery grows to (sq ft), and the most lots it takes in.
+const MONASTERY_FT2: f64 = 8000.0;
+const MONASTERY_MOST: usize = 5;
 /// The area (sq ft) two outlines may share and not overlap: none but rounding's.
 const TOUCH: f64 = 0.01;
 /// The most lots a palace takes in.
@@ -50,10 +59,20 @@ pub fn is_palace(b: &Building) -> bool {
     b.func.is_some_and(|f| catalog::CATALOG[f as usize].key == "palace")
 }
 
+/// Whether a building is a monastery.
+pub fn is_monastery(b: &Building) -> bool {
+    b.func.is_some_and(|f| catalog::CATALOG[f as usize].key == "monastery")
+}
+
+/// Whether a building takes in the lots beside it (`merge`): a palace or a monastery.
+pub fn merges(b: &Building) -> bool {
+    is_palace(b) || is_monastery(b)
+}
+
 /// The largest rectangle (axes `u`, `v`) inside convex polygon `poly` (world ft), its sides whole
 /// multiples of 5 ft (`odd`: an odd number of them along `u`), its sides within `sides` (`Sides`), as
 /// its four corners, anticlockwise in axes with y up when `ccw`.
-fn largest_rect(poly: &[P], u: P, odd: bool, sides: Sides, ccw: bool) -> Option<(Vec<P>, f64)> {
+pub(super) fn largest_rect(poly: &[P], u: P, odd: bool, sides: Sides, ccw: bool) -> Option<(Vec<P>, f64)> {
     let Sides { least, long, most_short, most_long, most_area } = sides;
     let v = [-u[1], u[0]];
     let local: Vec<P> = poly.iter().map(|p| [dot(*p, u), dot(*p, v)]).collect();
@@ -139,7 +158,7 @@ fn takes(o: &Building) -> bool {
 /// homes it takes in and its corners (anticlockwise in axes with y up when `ccw`). Its own lot's
 /// ground it does not cover is open ground.
 #[allow(clippy::too_many_arguments)]
-fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, gone: &[u32]) -> Option<(Vec<usize>, Vec<P>)> {
+fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, gone: &[u32], sizes: &[(usize, usize)], alleys: bool) -> Option<(Vec<usize>, Vec<P>)> {
     const SQ: f64 = 5.0;
     const N: usize = 96;
     let v = [-u[1], u[0]];
@@ -191,10 +210,12 @@ fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, 
             block_out(poly, &mut free);
         }
     }
-    // (Clear of the streets and roads, the town wall and its towers.)
+    // (Clear of the streets and roads (a monastery's: but the alleys inside its block, `alleys`, which it
+    // cuts: `is_alley`), the town wall and its towers.)
     let lanes: Vec<(P, P, f64)> = l
         .roads
         .iter()
+        .filter(|r| !(alleys && is_alley(r, block)))
         .flat_map(|(pts, _, w)| pts.windows(2).map(move |s| (s[0], s[1], 0.5 * w + 1.0)))
         .chain(l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1], 8.0))))
         .filter(|&(a, b, _)| super::geom::seg_dist(c0, a, b) < reach + 100.0)
@@ -221,13 +242,10 @@ fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, 
     let fits_at = |i0: usize, j0: usize, w: usize, d: usize| count(&sum, i0, j0, i0 + w, j0 + d) == w * d && count(&lots, i0.saturating_sub(1), j0.saturating_sub(1), (i0 + w + 1).min(N), (j0 + d + 1).min(N)) > 0;
     // Its sizes, biggest first (to the footprint it grows to), the squarer first.
     // (Either way about: an odd side for its front, round a court behind it.)
-    let front = |a: usize, b: usize| a % 2 == 1 && courted(a, b);
-    let mut sizes: Vec<(usize, usize)> = (17..=31).flat_map(|w| (17..=31).map(move |d| (w, d))).filter(|&(w, d)| (front(w, d) || front(d, w)) && (w * d) as f64 * SQ * SQ <= CAPITAL_FT2).collect();
-    sizes.sort_by_key(|&(w, d)| (std::cmp::Reverse(w * d), w.abs_diff(d), w));
     let mid = 0.5 * N as f64;
     let rect = |i0: usize, j0: usize, w: usize, d: usize| vec![at(i0 as f64, j0 as f64), at((i0 + w) as f64, j0 as f64), at((i0 + w) as f64, (j0 + d) as f64), at(i0 as f64, (j0 + d) as f64)];
     let local = |poly: &[P]| -> Vec<P> { poly.iter().map(|p| sub(*p, off)).collect() };
-    for (w, d) in sizes {
+    for &(w, d) in sizes {
         // (Each place it fits: how far its middle is from its lot's, how many homes it takes in.)
         let mut fits: Vec<(f64, usize, usize, usize)> = Vec::new();
         for j0 in 0..=N - d {
@@ -244,17 +262,47 @@ fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, 
         fits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then((a.2, a.3).cmp(&(b.2, b.3))));
         for &(_, _, i0, j0) in &fits {
             let mut r = rect(i0, j0, w, d);
-            if !site.buildable(&local(&r)) {
+            if !(if alleys { site.terraced(&local(&r)) } else { site.buildable(&local(&r)) }) {
                 continue;
             }
             if (area(&r) > 0.0) != ccw {
                 r.reverse();
             }
             let taken: Vec<usize> = homes.iter().copied().filter(|&k| on(&r, &l.buildings[k].poly)).collect();
+            // (A monastery's on no other building at all, its squares' slivers summed (as `follow`
+            // keeps it), nor stranding a neighbour.)
+            if alleys && (l.buildings.iter().any(|b| b.id != p.id && !gone.contains(&b.id) && !takes(b) && dist(centroid(&b.poly), c0) < reach + 200.0 && on(&r, &b.poly)) || strands(l, &r, block, p.id, &taken)) {
+                continue;
+            }
             return Some((taken, r));
         }
     }
     None
+}
+
+/// The capital's palace's sizes (squares: across its front, deep) when it clears its block
+/// (`clear_ground`): round a court, an odd number of squares across its front, up to `CAPITAL_FT2`,
+/// biggest first, the squarer first.
+fn capital_sizes() -> Vec<(usize, usize)> {
+    const SQ: f64 = 5.0;
+    let front = |a: usize, b: usize| a % 2 == 1 && courted(a, b);
+    let mut sizes: Vec<(usize, usize)> = (17..=31).flat_map(|w| (17..=31).map(move |d| (w, d))).filter(|&(w, d)| (front(w, d) || front(d, w)) && (w * d) as f64 * SQ * SQ <= CAPITAL_FT2).collect();
+    sizes.sort_by_key(|&(w, d)| (std::cmp::Reverse(w * d), w.abs_diff(d), w));
+    sizes
+}
+
+/// A monastery's sizes (squares) when it clears its block (`clear_ground`, where the lots beside it
+/// give no footprint round a cloister): `MONASTERY_SIDES`, nearest `MONASTERY_FT2` first, the squarer
+/// first.
+fn monastery_sizes() -> Vec<(usize, usize)> {
+    const SQ: f64 = 5.0;
+    let n = |x: f64| crate::core::round(x / SQ) as usize;
+    let (lo, hi, short, long) = (n(MONASTERY_SIDES.least), n(MONASTERY_SIDES.most_long), n(MONASTERY_SIDES.most_short), n(MONASTERY_SIDES.long));
+    let mut sizes: Vec<(usize, usize)> =
+        (lo..=hi).flat_map(|w| (lo..=hi).map(move |d| (w, d))).filter(|&(w, d)| w.max(d) >= long && w.min(d) <= short && (w * d) as f64 * SQ * SQ <= MONASTERY_SIDES.most_area).collect();
+    let target = MONASTERY_FT2 / (SQ * SQ);
+    sizes.sort_by_key(|&(w, d)| (crate::core::round(((w * d) as f64 - target).abs()) as i64, w.abs_diff(d), w, d));
+    sizes
 }
 
 /// The capital's palace's forecourt (`approach`): paved ground walled round before its front door,
@@ -598,26 +646,38 @@ pub(super) fn approach(site: &Site, l: &mut Layout, off: P, capital: bool, kept:
     }
 }
 
-/// Each palace of layout `l` (world ft; `off`: the settlement's centre, the site's origin) given its
-/// footprint: the lots beside it taken in (`merge`'s rules), the largest rectangle the whole holds.
-/// `capital`: the capital's (round a court: bigger, an odd number of squares across).
+/// Each palace and monastery of layout `l` (world ft; `off`: the settlement's centre, the site's
+/// origin) given its footprint: the lots beside it taken in (`merge`'s rules), the largest rectangle
+/// the whole holds. `capital`: the capital's (its palace round a court: bigger, an odd number of
+/// squares across). A monastery with no rectangle big enough for its cloister keeps its lot.
 pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[u32]) {
     let local = |poly: &[P]| -> Vec<P> { poly.iter().map(|p| sub(*p, off)).collect() };
     let palaces: Vec<usize> = (0..l.buildings.len())
-        .filter(|&i| is_palace(&l.buildings[i]) && l.buildings[i].structure == Structure::Roofed && l.buildings[i].ward != Ward::Castle && l.buildings[i].parts.is_empty() && !skip.contains(&l.buildings[i].id))
+        .filter(|&i| merges(&l.buildings[i]) && l.buildings[i].structure == Structure::Roofed && l.buildings[i].ward != Ward::Castle && l.buildings[i].parts.is_empty() && !skip.contains(&l.buildings[i].id))
         .collect();
     let mut gone: Vec<u32> = Vec::new();
     for pi in palaces {
         let p = l.buildings[pi].clone();
-        let target = if capital { CAPITAL_FT2 } else { CITY_FT2 };
+        let monk = is_monastery(&p);
+        let capital = capital && !monk;
+        let most = if monk { MONASTERY_MOST } else { MOST };
+        // (Ground fit to build on: a monastery's on a terrace, `Site::terraced`.)
+        let fit = |r: &[P]| if monk { site.terraced(&local(r)) } else { site.buildable(&local(r)) };
+        let target = if monk {
+            MONASTERY_FT2
+        } else if capital {
+            CAPITAL_FT2
+        } else {
+            CITY_FT2
+        };
         let ccw = area(&p.poly) > 0.0;
         let u = obb(&p.poly).axis;
         // (The streets and alleys near it: nothing it takes in may reach across one.)
         let c0 = centroid(&p.poly);
         let lanes: Vec<(P, P, f64)> = l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |s| (s[0], s[1], *w))).filter(|&(a, b, _)| super::geom::seg_dist(c0, a, b) < 400.0).collect();
         let clear = |h: &[P]| lanes.iter().all(|&(a, b, w)| poly_seg_dist(h, a, b) >= 0.5 * w - 1.0);
-        // (A home of its ward it may take in.)
-        let home = |o: &Building| takes(o) && o.ward == p.ward && !gone.contains(&o.id);
+        // (A home of its ward it may take in; a monastery any home.)
+        let home = |o: &Building| takes(o) && (monk || o.ward == p.ward) && !gone.contains(&o.id);
         let rect_of = |set: &[usize], l: &Layout, sides: Sides| -> Option<(Vec<P>, f64, Vec<P>)> {
             let mut pts: Vec<P> = p.poly.clone();
             for &k in set {
@@ -638,13 +698,14 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
                     return None;
                 }
                 let more: Vec<usize> = (0..l.buildings.len())
-                    .filter(|&j| j != pi && !with.contains(&j) && !gone.contains(&l.buildings[j].id) && l.buildings[j].structure != Structure::Open)
+                    // (A monastery stands on no graveyard either.)
+                    .filter(|&j| j != pi && !with.contains(&j) && !gone.contains(&l.buildings[j].id) && (monk || l.buildings[j].structure != Structure::Open))
                     .filter(|&j| dist(centroid(&l.buildings[j].poly), c0) < 400.0 && on(&h, &l.buildings[j].poly))
                     .collect();
                 if more.is_empty() {
                     return Some((with, r, ar));
                 }
-                if with.len() + more.len() > MOST || !more.iter().all(|&j| home(&l.buildings[j])) {
+                if with.len() + more.len() > most || !more.iter().all(|&j| home(&l.buildings[j])) {
                     return None;
                 }
                 with.extend(more);
@@ -655,7 +716,7 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
             let mut set: Vec<usize> = Vec::new();
             // (A capital's own lot may be too small for its ranges: no rectangle until it takes in more.)
             let (mut rect, mut best) = rect_of(&set, l, sides).map_or((None, 0.0), |(r, ar, _)| (Some(r), ar));
-            while best < target && set.len() < MOST {
+            while best < target && set.len() < most {
                 let members: Vec<Vec<P>> = std::iter::once(p.poly.clone()).chain(set.iter().map(|&k| l.buildings[k].poly.clone())).collect();
                 let mut pick: Option<(f64, Vec<usize>, Vec<P>)> = None;
                 for (k, o) in l.buildings.iter().enumerate() {
@@ -665,7 +726,7 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
                     let Some((with, r, ar)) = grow(&set, k, l, sides) else { continue };
                     // (Worth taking: the rectangle grows by much of the lots' own floor.)
                     let added: f64 = with.iter().filter(|j| !set.contains(j)).map(|&j| area(&l.buildings[j].poly).abs()).sum();
-                    if ar - best < 0.4 * added || !site.buildable(&local(&r)) {
+                    if ar - best < 0.4 * added || !fit(&r) {
                         continue;
                     }
                     // (The smallest that reaches the footprint it grows to, else the biggest.)
@@ -682,19 +743,38 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
             // (Its own lot's rectangle, where it takes in none: square to its axis all the same, where
             // that keeps most of its floor; a capital's where it keeps 60%, for its symmetry; another's
             // whatever it keeps where its lot is bigger than it may be.)
-            if set.is_empty() && best < if capital { 0.6 } else { 0.8 } * area(&p.poly).abs() && (capital || area(&p.poly).abs() <= CITY_FT2) {
+            if !monk && set.is_empty() && best < if capital { 0.6 } else { 0.8 } * area(&p.poly).abs() && (capital || area(&p.poly).abs() <= CITY_FT2) {
                 return None;
             }
-            site.buildable(&local(&rect)).then_some((set, rect))
+            fit(&rect).then_some((set, rect))
         };
         // (A capital's round a court: on the lots beside it, else clearing its block; else, where
         // nothing round a court can be had at all, a front and a back range.)
-        let found = if capital {
-            attempt(CAPITAL_SIDES).filter(|f| courts(&f.1)).or_else(|| clear_ground(site, l, &p, u, ccw, off, &gone)).or_else(|| attempt(CAPITAL_LEAST))
+        // (A monastery that clears its block stands across its alleys: `cut_alleys`.)
+        let mut cleared = false;
+        let found = if monk {
+            attempt(MONASTERY_SIDES).or_else(|| {
+                cleared = true;
+                clear_ground(site, l, &p, u, ccw, off, &gone, &monastery_sizes(), true)
+            })
+        } else if capital {
+            attempt(CAPITAL_SIDES).filter(|f| courts(&f.1)).or_else(|| clear_ground(site, l, &p, u, ccw, off, &gone, &capital_sizes(), false)).or_else(|| attempt(CAPITAL_LEAST))
         } else {
             attempt(CITY_SIDES)
         };
         let Some((set, rect)) = found else { continue };
+        // (A monastery's: the alleys of its block it stands across cut back to it.)
+        // Its own lot and those it took in its ground (`Layout::grounds`).
+        if monk {
+            if cleared {
+                cut_alleys(l, &rect);
+            }
+            let id = p.id;
+            l.grounds.push((id, p.poly.clone()));
+            for &k in &set {
+                l.grounds.push((id, l.buildings[k].poly.clone()));
+            }
+        }
         let b = &mut l.buildings[pi];
         b.pad_ft = site.pad(&local(&rect));
         b.poly = rect;
@@ -703,6 +783,61 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
     if !gone.is_empty() {
         l.buildings.retain(|b| !gone.contains(&b.id));
     }
+}
+
+/// Whether a monastery on rectangle `rect` (world ft; `id`, taking in the homes `taken`), cutting the
+/// alleys of its block `block` it stands across (`cut_alleys`), leaves another building that stood by
+/// a lane (the middle of a side of it within 15 ft of its side, where its door goes) farther from every
+/// lane than it was (by 2 ft).
+fn strands(l: &Layout, rect: &[P], block: &[P], id: u32, taken: &[usize]) -> bool {
+    let c = centroid(rect);
+    let reach = rect.iter().map(|q| dist(*q, c)).fold(0.0, f64::max) + 60.0;
+    let cut: Vec<usize> = (0..l.roads.len()).filter(|&k| is_alley(&l.roads[k], block) && l.roads[k].0.windows(2).any(|s| poly_seg_dist(rect, s[0], s[1]) < 0.5 * l.roads[k].2 - 1.0)).collect();
+    if cut.is_empty() {
+        return false;
+    }
+    let pieces: Vec<(Vec<P>, f64)> = cut.iter().flat_map(|&k| cut_out(&l.roads[k].0, rect, 0.5 * l.roads[k].2 + 0.05).into_iter().map(move |p| (p, l.roads[k].2))).collect();
+    // (How near a lane the middle of a side of `poly` comes: where a door goes, `interior`'s front.)
+    let near = |poly: &[P], pts: &[P], w: f64| {
+        let n = poly.len();
+        (0..n).map(|k| super::geom::lerp(poly[k], poly[(k + 1) % n], 0.5)).flat_map(|m| pts.windows(2).map(move |s| super::geom::seg_dist(m, s[0], s[1]) - 0.5 * w)).fold(f64::MAX, f64::min)
+    };
+    let lanes: Vec<usize> = (0..l.roads.len()).filter(|&k| l.roads[k].0.iter().any(|q| dist(*q, c) < reach + 200.0)).collect();
+    l.buildings.iter().enumerate().filter(|(k, o)| o.id != id && !taken.contains(k) && o.structure == Structure::Roofed && dist(centroid(&o.poly), c) < reach).any(|(_, o)| {
+        let before = lanes.iter().map(|&k| near(&o.poly, &l.roads[k].0, l.roads[k].2)).fold(f64::MAX, f64::min);
+        if before > 15.0 {
+            return false;
+        }
+        let after = lanes.iter().filter(|k| !cut.contains(k)).map(|&k| near(&o.poly, &l.roads[k].0, l.roads[k].2)).chain(pieces.iter().map(|(p, w)| near(&o.poly, p, *w))).fold(f64::MAX, f64::min);
+        after > before + 2.0
+    })
+}
+
+/// Whether road `r` is an alley inside block `block` (`build_block`'s, between its lots): a narrow
+/// lane every point of which lies inside the block, off its edge.
+fn is_alley(r: &(Vec<P>, u8, f64), block: &[P]) -> bool {
+    let (pts, class, w) = r;
+    *class == 3 && *w <= 2.0 * super::ALLEY_HALF_FT + 1.5 && pts.windows(2).all(|s| {
+        let m = super::geom::lerp(s[0], s[1], 0.5);
+        contains(block, m) && (0..block.len()).all(|k| super::geom::seg_dist(m, block[k], block[(k + 1) % block.len()]) > 2.0)
+    })
+}
+
+/// The alleys of layout `l` that reach across rectangle `rect` (a monastery's footprint where it cleared
+/// its block: `is_alley` in the block holding its middle; more than a foot into it, as no lane may lie
+/// by a building) cut back to it, the pieces left a foot long or more.
+fn cut_alleys(l: &mut Layout, rect: &[P]) {
+    let c = centroid(rect);
+    let Some(block) = l.blocks.iter().find(|b| contains(b, c)).cloned() else { return };
+    let mut out: Vec<(Vec<P>, u8, f64)> = Vec::new();
+    for r in std::mem::take(&mut l.roads) {
+        if is_alley(&r, &block) && r.0.windows(2).any(|s| poly_seg_dist(rect, s[0], s[1]) < 0.5 * r.2 - 1.0) {
+            out.extend(cut_out(&r.0, rect, 0.5 * r.2 + 0.05).into_iter().map(|p| (p, r.1, r.2)));
+        } else {
+            out.push(r);
+        }
+    }
+    l.roads = out;
 }
 
 /// Polyline `pts` with what of it a street `half` ft either side of it lays on convex polygon
@@ -824,19 +959,25 @@ fn clear_open(l: &mut Layout, hull: &[P]) {
 }
 
 /// A town laid out anew by hand (`l`, world ft, before it takes the generated layout's ids:
-/// `wards::inherit`; `off`: the site's origin): each palace of the generated layout `generated`
+/// `wards::inherit`; `off`: the site's origin): each palace (and monastery) of the generated layout `generated`
 /// stands again on its footprint as generated where everything under that now is a home of its
 /// ward (the capital's: any home, as it clears its block; the lots it took in, laid out again) and
 /// it reaches across no street (the capital's whatever its patch is laid out as: the streets of its
 /// patch that would cross it, or its forecourt as generated, stop at them; the homes on its
 /// forecourt gone; on open ground too, the squares, parks, fields and monuments there cut back:
-/// `clear_open`): the first of them given its footprint (so that it takes the palace's id,
-/// function and name; on open ground, the palace as generated), the rest gone. The palaces' ids
-/// kept so.
+/// `clear_open`; a monastery's as the capital's, on ground fit for a terrace): the first of them given
+/// its footprint (so that it takes the palace's id, function and name; on open ground, the palace as
+/// generated), the rest gone. The palaces' (and monasteries') ids kept so.
 pub(super) fn follow(site: &Site, l: &mut Layout, generated: &Layout, off: P, capital: bool) -> Vec<u32> {
     let mut kept = Vec::new();
-    for gp in generated.buildings.iter().filter(|b| is_palace(b) && b.structure == Structure::Roofed && b.ward != Ward::Castle && b.parts.is_empty()) {
-        let under: Vec<usize> = (0..l.buildings.len()).filter(|&k| on(&gp.poly, &l.buildings[k].poly)).collect();
+    for gp in generated.buildings.iter().filter(|b| merges(b) && b.structure == Structure::Roofed && b.ward != Ward::Castle && b.parts.is_empty()) {
+        // (A monastery kept as the capital's palace is, whatever its patch is laid out as.)
+        let capital = capital || is_monastery(gp);
+        // (What stands under it, measured about the site's origin as it was grown: no rounding of
+        // world ft taken for a sliver.)
+        let at_origin = |poly: &[P]| -> Vec<P> { poly.iter().map(|p| sub(*p, off)).collect() };
+        let own = at_origin(&gp.poly);
+        let under: Vec<usize> = (0..l.buildings.len()).filter(|&k| on(&own, &at_origin(&l.buildings[k].poly))).collect();
         let home = |o: &Building| takes(o) && (capital || o.ward == gp.ward);
         let c0 = centroid(&gp.poly);
         let crossing: Vec<usize> = (0..l.roads.len())
@@ -848,7 +989,7 @@ pub(super) fn follow(site: &Site, l: &mut Layout, generated: &Layout, off: P, ca
         // (The capital's: across its patch's streets, not a main street or a road.)
         let clear = crossing.is_empty() || capital && gp.poly.len() == 4 && crossing.iter().all(|&ri| l.roads[ri].1 == 3);
         let local: Vec<P> = gp.poly.iter().map(|p| sub(*p, off)).collect();
-        if (under.is_empty() && !capital) || !clear || !under.iter().all(|&k| home(&l.buildings[k])) || !site.buildable(&local) {
+        if (under.is_empty() && !capital) || !clear || !under.iter().all(|&k| home(&l.buildings[k])) || !(if is_monastery(gp) { site.terraced(&local) } else { site.buildable(&local) }) {
             continue;
         }
         let mut pieces: Vec<(Vec<P>, u8, f64)> = Vec::new();
@@ -881,6 +1022,7 @@ pub(super) fn follow(site: &Site, l: &mut Layout, generated: &Layout, off: P, ca
             }
         };
         let mut gone = under.iter().skip(1).copied().collect::<Vec<usize>>();
+
         // (The capital's forecourt as generated cleared again: the homes on it and its way gone, its
         // patch's streets stopping at it.)
         if let Some(fc) = fc {
@@ -902,11 +1044,19 @@ pub(super) fn follow(site: &Site, l: &mut Layout, generated: &Layout, off: P, ca
             l.roads.extend(pieces);
         }
         (l.buildings[k0].poly, l.buildings[k0].pad_ft) = (gp.poly.clone(), site.pad(&local));
+        // (A monastery's ground as generated, `Layout::grounds`: the homes on it gone, as `merge` took
+        // them in; a piece another building stands on left out.)
+        let ground: Vec<Vec<P>> = generated.grounds.iter().filter(|g| g.0 == gp.id && is_monastery(gp)).map(|g| g.1.clone()).collect();
+        let on_ground = |o: &Building, g: &[P]| on_lot(&at_origin(g), &at_origin(&o.poly));
+        let more: Vec<usize> = (0..l.buildings.len()).filter(|&k| k != k0 && !gone.contains(&k) && takes(&l.buildings[k]) && ground.iter().any(|g| on_ground(&l.buildings[k], g))).collect();
+        gone.extend(more);
         let mut k = 0;
         l.buildings.retain(|_| {
             k += 1;
             !gone.contains(&(k - 1))
         });
+        let k0 = k0 - gone.iter().filter(|&&k| k < k0).count();
+        l.grounds.extend(ground.into_iter().filter(|g| !l.buildings.iter().enumerate().any(|(k, o)| k != k0 && on_ground(o, g))).map(|g| (gp.id, g)));
         kept.push(gp.id);
     }
     kept

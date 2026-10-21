@@ -596,6 +596,33 @@ function roomPolygon(lv: InteriorLevel, nx: number, ri: number, box: Box): Pt[] 
   return p;
 }
 
+/** The convex hull of convex polygons `ps` (wound as they are), where they cover it (every point of it,
+ * a tenth of a square apart, in one of them): their union is convex; else null. */
+function convexWhole(ps: Pt[][]): Pt[] | null {
+  const pts = ps.flat().slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (pts.length < 3) return null;
+  const cross = (o: Pt, a: Pt, b: Pt) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const half = (list: Pt[]) => {
+    const h: Pt[] = [];
+    for (const q of list) {
+      while (h.length >= 2 && cross(h[h.length - 2], h[h.length - 1], q) <= 1e-9) h.pop();
+      h.push(q);
+    }
+    h.pop();
+    return h;
+  };
+  const hull = wound([...half(pts), ...half(pts.slice().reverse())]);
+  if (hull.length < 3) return null;
+  const xs = hull.map((q) => q[0]);
+  const ys = hull.map((q) => q[1]);
+  for (let y = Math.min(...ys); y <= Math.max(...ys); y += 0.1) {
+    for (let x = Math.min(...xs); x <= Math.max(...xs); x += 0.1) {
+      if (insetIn([x, y], hull) > 0.02 && !ps.some((q) => insetIn([x, y], q) >= -0.02)) return null;
+    }
+  }
+  return hull;
+}
+
 /** A building level's drawing plan; null when it is drawn on its squares as they are (a
  * footprint that is the grid's rectangle, no shaped rooms). `foot`: the squares that are floor on
  * some level (`footOf`): without an outline, only those are solid wall where no room is. */
@@ -627,8 +654,14 @@ export function shapedPlan(outlines: Pt[][] | undefined, lv: InteriorLevel, nx: 
     // A round room filling a round building (a wizard's tower) is its inner face: the wall an even
     // ring, whatever the grid.
     if (real && r.shape === ROUND && parts.length === 1 && roundIsh(parts[0]) && faces[0].length && fills(faces[0], ri)) return faces[0];
-    // (Cut to the part holding most of it.)
+    // (Cut to the part holding most of it; where the parts it lies in make one convex whole (a temple's
+    // hall and its apse), to that whole.)
     const pieces = faces.map((q) => clipConvex(p, q)).filter((q) => q.length).sort((x, y) => Math.abs(area2(y)) - Math.abs(area2(x)));
+    if (pieces.length > 1) {
+      const whole = convexWhole(faces.filter((q) => clipConvex(p, q).length));
+      const cut = whole ? clipConvex(p, whole) : [];
+      if (cut.length) return cut;
+    }
     return pieces[0] ?? null;
   });
   // A gallery round a round open height (a shell keep's upper floor): drawn to the circle a square

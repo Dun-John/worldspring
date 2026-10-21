@@ -140,6 +140,8 @@ pub(super) fn plan(b: &town::Building, sh: &Shell, piece: Vec<Piece>, seed: u64,
         bay: None,
         small: false,
         pal: Some(z),
+        tem: None,
+        mon: None,
         rich: false,
     })
 }
@@ -238,7 +240,7 @@ impl Plan {
     }
 
     /// A room of kind `kind` over the body's squares s0..s1, t0..t1.
-    fn put_box(&self, lay: &mut Lay, kind: &'static str, s0: usize, s1: usize, t0: usize, t1: usize) -> i16 {
+    pub(super) fn put_box(&self, lay: &mut Lay, kind: &'static str, s0: usize, s1: usize, t0: usize, t1: usize) -> i16 {
         let r = lay.room(kind);
         self.fill(lay, s0, s1, t0, t1, r);
         r
@@ -326,7 +328,7 @@ impl Plan {
     }
 
     /// A door between the rooms at frame squares `a` and `b` (side by side) whatever else does.
-    fn join(&self, lay: &mut Lay, a: (isize, isize), b: (isize, isize)) {
+    pub(super) fn join(&self, lay: &mut Lay, a: (isize, isize), b: (isize, isize)) {
         let (Some(ka), Some(kb)) = (self.at(a.0, a.1), self.at(b.0, b.1)) else { return };
         let (ra, rb) = (lay.cells[ka], lay.cells[kb]);
         if ra < 0 || rb < 0 || ra == rb {
