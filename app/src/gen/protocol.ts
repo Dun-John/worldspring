@@ -417,7 +417,8 @@ export interface DesignLevel {
    * roomShapes.ts` `SHAPES`; absent or 0 square), while its squares fit the shape. */
   rooms: { kind: string; raise_ft: number; shape?: number }[];
   /** x, y, side (0 east, 1 south; a building's also 2 west, 3 north), flags (1 secret; a
-   * building's door to the outside: 2 front, 4 back). */
+   * building's door to the outside: 2 front, 4 back; underground, bits 4-6: `(lock & 7) << 4`, a
+   * lock's colour 1-7). */
   doors: [number, number, number, number][];
   /** Props and the ways (`exit`, `up`, `down`), in order; a building's furniture. `back`: the
    * side it stands against (0 north 1 east 2 south 3 west), `variant`: one of its looks (0-3, more for a few);
@@ -608,7 +609,7 @@ export interface InteriorLevel {
    * way open between them: `InteriorLayer.drawArcade`). */
   walls: { a: [number, number]; b: [number, number]; exterior: boolean; rail?: boolean; arcade?: boolean }[];
 
-  doors: { a: [number, number]; b: [number, number]; kind: string; rooms: [number, number] }[];
+  doors: { a: [number, number]; b: [number, number]; kind: string; rooms: [number, number]; lock?: number }[];
   windows: [number, number, number, number][];
   furniture: InteriorItem[];
   /** An open roof (battlements). */
@@ -641,7 +642,8 @@ export interface InteriorItem {
   /** Set in a design: the side its back is against (0 north 1 east 2 south 3 west); absent: found
    * from the walls. */
   back?: number;
-  /** Set in a design: one of its looks (0-3; more for a few: `looksOf`); absent: picked by position. */
+  /** Set in a design: one of its looks (0-3; more for a few: `looksOf`); absent: picked by position.
+   * A `key`'s is its colour (1-7, the lock's `lock`). */
   variant?: number;
 }
 

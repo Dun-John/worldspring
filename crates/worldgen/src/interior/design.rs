@@ -185,9 +185,9 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
             continue;
         }
         doors.push(if rb >= 0 {
-            Door { a: p, b: q, kind: if flags & SECRET != 0 { "secret" } else { "door" }, rooms: [ra.min(rb), ra.max(rb)] }
+            Door { a: p, b: q, kind: if flags & SECRET != 0 { "secret" } else { "door" }, rooms: [ra.min(rb), ra.max(rb)], lock: 0 }
         } else {
-            Door { a: p, b: q, kind: if flags & FRONT != 0 { "front" } else if flags & ARCH != 0 { "arch" } else { "back" }, rooms: [ra, -1] }
+            Door { a: p, b: q, kind: if flags & FRONT != 0 { "front" } else if flags & ARCH != 0 { "arch" } else { "back" }, rooms: [ra, -1], lock: 0 }
         });
     }
     let walls = wall_runs(&cells, &rooms, nx, ny, &doors);

@@ -3409,6 +3409,8 @@ const LOOKS: Record<string, number> = {
   side_altar: 8,
   // A guild's arms, or the town's (`ARMS`).
   guild_arms: ARMS.length,
+  // A key's colour (1-7 opens the lock of that colour; `interior::Door::lock`).
+  key: 8,
 };
 
 /** How many looks a piece of furniture has (`Item::variant` 0 to this - 1). */
@@ -3422,6 +3424,7 @@ export function lookName(kind: string, v: number): string {
   if (kind === 'low_dais') return ['Stone', 'Timber'][v % 2];
   if (['god_statue', 'candle_stand', 'carved_screen', 'screen_gate', 'side_altar'].includes(kind)) return GOD_NAMES[v % GOD_NAMES.length];
   if (kind === 'guild_arms') return ARMS[v % ARMS.length].name;
+  if (kind === 'key') return ['No colour', 'Red', 'Orange', 'Yellow', 'Green', 'Blue', 'Purple', 'White'][v % 8];
   if (kind === 'strongbox') return ['Black iron', 'Walnut, iron-strapped', 'Iron, brass studs', 'Oak, iron-strapped'][v % 4];
   if (kind === 'counting_desk') return ['Oak, green baize', 'Walnut, green baize', 'Oak, red leather', 'Walnut, red leather'][v % 4];
   if (kind === 'job_board') return ['Notices', 'A wanted bill', 'A painted header', 'A map'][v % 4];

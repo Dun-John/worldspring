@@ -76,21 +76,93 @@ export function rectSquares(d: SiteDesign, x0: number, y0: number, x1: number, y
   return out;
 }
 
-/** A door on an edge: none → door → secret door → none. */
-export function cycleDoor(d: SiteDesign, li: number, x: number, y: number, side: number) {
+/** A door's flag bits: 1 secret; a lock's colour (1-7) in bits 4-6 (`(lock & 7) << 4`, as the generator reads them). */
+export const SECRET = 1;
+export const lockOf = (flags: number) => (flags >> 4) & 7;
+const withLock = (flags: number, lock: number) => (flags & ~(7 << 4)) | (lock << 4);
+
+/** A door on an edge. With no `lock`: none → door → secret door → none (a lock on it stays as it was). With a
+ * lock's colour 1-7: none → a door with that lock; a door gets that lock, or loses it if it has it already. */
+export function cycleDoor(d: SiteDesign, li: number, x: number, y: number, side: number, lock = 0) {
   const lv = d.levels[li];
   const at = lv.doors.findIndex((e) => e[0] === x && e[1] === y && e[2] === side);
-  if (at < 0) lv.doors.push([x, y, side, 0]);
-  else if (lv.doors[at][3] === 0) lv.doors[at] = [x, y, side, 1];
+  if (at < 0) lv.doors.push([x, y, side, withLock(0, lock)]);
+  else if (lock) lv.doors[at][3] = withLock(lv.doors[at][3], lockOf(lv.doors[at][3]) === lock ? 0 : lock);
+  else if (!(lv.doors[at][3] & SECRET)) lv.doors[at][3] |= SECRET;
   else lv.doors.splice(at, 1);
 }
 
 /** The prop at a square (not a way), if any. */
 export function propAt(d: SiteDesign, li: number, x: number, y: number): number {
-  // (What stands on a platform before the platform.)
+  // (What stands on a platform before the platform; a span before the terrain under it; terrain last.)
   const items = d.levels[li].items;
-  const on = items.findIndex((f) => !WAYS.includes(f.kind) && !PLATFORMS.has(f.kind) && covers(f, x, y));
-  return on >= 0 ? on : items.findIndex((f) => !WAYS.includes(f.kind) && covers(f, x, y));
+  const at = (ok: (k: string) => boolean) => items.findIndex((f) => ok(f.kind) && covers(f, x, y));
+  for (const ok of [(k: string) => !WAYS.includes(k) && !PLATFORMS.has(k) && !TERRAIN.has(k), (k: string) => !WAYS.includes(k) && !TERRAIN.has(k), (k: string) => !WAYS.includes(k)]) {
+    const on = at(ok);
+    if (on >= 0) return on;
+  }
+  return -1;
+}
+
+// Underground terrain (`under::kit::TERRAIN`, `SPANS`): lies on the floor, its full w × h; a span lies over it. A square
+// holds one item, or one terrain and one span.
+export const TERRAIN = new Set(['water_shallow', 'water_deep', 'chasm', 'rubble_slope']);
+export const SPANS = new Set(['rope_bridge', 'stepping_stone']);
+const stacks = (a: string, b: string) => (TERRAIN.has(a) && SPANS.has(b)) || (SPANS.has(a) && TERRAIN.has(b));
+
+/** Squares (indices) merged into rectangles, greedily: along a row as far as they go, then down while the whole run is there. */
+export function mergeRects(squares: Iterable<number>, nx: number): { x: number; y: number; w: number; h: number }[] {
+  const left = new Set(squares);
+  const out: { x: number; y: number; w: number; h: number }[] = [];
+  for (const k of [...left].sort((a, b) => a - b)) {
+    if (!left.has(k)) continue;
+    const [x, y] = [k % nx, Math.floor(k / nx)];
+    let w = 1;
+    while (x + w < nx && left.has(k + w)) w++;
+    let h = 1;
+    while ([...Array(w).keys()].every((i) => left.has((y + h) * nx + x + i))) h++;
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) left.delete((y + j) * nx + x + i);
+    out.push({ x, y, w, h });
+  }
+  return out;
+}
+
+/** Terrain (`kind` a terrain or a span; '' clears both) painted over the squares of a level: onto floor with nothing
+ * else on it, replacing what its layer held there (a piece is cut round the squares, its rest kept as rectangles;
+ * pieces of the same kind it touches are merged into it). False if nothing changed. */
+export function paintTerrain(d: SiteDesign, li: number, squares: Iterable<number>, kind: string): boolean {
+  const nx = d.nx;
+  const lv = d.levels[li];
+  const cells = decode(lv.cells, nx * d.ny);
+  const mine = (k: string) => (kind ? (SPANS.has(kind) ? SPANS : TERRAIN).has(k) : TERRAIN.has(k) || SPANS.has(k));
+  const sq = (f: Item) => rectSquares(d, f.x, f.y, f.x + f.w - 1, f.y + f.h - 1);
+  const busy = new Set(lv.items.filter((f) => !TERRAIN.has(f.kind) && !SPANS.has(f.kind)).flatMap(sq));
+  const want = new Set([...squares].filter((k) => k >= 0 && k < cells.length && cells[k] >= 0 && (!kind || !busy.has(k))));
+  const next: Item[] = [];
+  const pool = new Set(want);
+  let changed = false;
+  for (const f of lv.items) {
+    const own = mine(f.kind) ? sq(f) : [];
+    if (!own.some((k) => want.has(k))) {
+      next.push(f);
+      continue;
+    }
+    if (f.kind === kind) {
+      // (The same kind already there: joined to the new, unless it is all there is.)
+      for (const k of own) pool.add(k);
+      continue;
+    }
+    changed = true;
+    for (const r of mergeRects(own.filter((k) => !want.has(k)), nx)) next.push({ ...f, ...r });
+  }
+  if (kind) {
+    for (const k of want) if (!lv.items.some((f) => f.kind === kind && covers(f, k % nx, Math.floor(k / nx)))) changed = true;
+    if (!changed) return false;
+    for (const r of mergeRects(pool, nx)) next.push({ kind, ...r });
+  }
+  if (!changed) return false;
+  lv.items = next;
+  return true;
 }
 
 /** Whether a piece (of `kind`) fits at x, y (w × h squares) on a level: `bad` off the grid, off the floor,
@@ -105,7 +177,7 @@ export function fits(d: SiteDesign, li: number, x: number, y: number, w: number,
   const st = isBuilding(d) && lv.has_stairs ? d.stairs : undefined;
   for (let j = y; j < y + h; j++) {
     for (let i = x; i < x + w; i++) {
-      if (cells[j * d.nx + i] < 0 || lv.items.some((f, k) => k !== ignore && covers(f, i, j) && PLATFORMS.has(f.kind) === PLATFORMS.has(kind))) return 'bad';
+      if (cells[j * d.nx + i] < 0 || lv.items.some((f, k) => k !== ignore && covers(f, i, j) && PLATFORMS.has(f.kind) === PLATFORMS.has(kind) && !stacks(f.kind, kind))) return 'bad';
       if (st && i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3]) return 'bad';
     }
   }

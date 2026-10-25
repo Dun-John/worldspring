@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{BOSS, KEEP_DUNGEON, LEVEL_FT, MAX_LEVELS, PROPS, Plan, THEMES, UNDERCROFT, UnderKind, furnish_room, item, kit, lava, neighbours};
+use super::{BOSS, KEEP_DUNGEON, LEVEL_FT, MAX_LEVELS, PROPS, Plan, SPANS, TERRAIN, THEMES, UNDERCROFT, UnderKind, blocked_squares, furnish_room, item, kit, lava, neighbours};
 use crate::World;
 use crate::core::rng::{Pcg32, hash3};
 use crate::interior::design::{BUILDING, furniture_kind};
@@ -59,7 +59,8 @@ pub struct DesignLevel {
     /// simply not there.
     pub rooms: Vec<DesignRoom>,
     /// Doors: x, y, side (0: between the square and the one east of it, 1: south; a building's
-    /// also 2 west, 3 north), flags (1 secret; a building's door to the outside: 2 front, 4 back, 8 arch).
+    /// also 2 west, 3 north), flags (1 secret; a building's door to the outside: 2 front, 4 back, 8 arch;
+    /// a locked door's colour, 1-7, shifted 4 up: `(lock & 7) << 4`).
     pub doors: Vec<[u16; 4]>,
     /// Everything standing on the floor, the ways in, up and down too (kinds `exit`, `up`,
     /// `down`), in order.
@@ -253,10 +254,10 @@ impl SiteDesign {
                     .doors
                     .iter()
                     .map(|d| {
-                        let secret = (d.kind == "secret") as u16;
+                        let flags = (d.kind == "secret") as u16 | ((d.lock & 7) as u16) << 4;
                         let (x, y) = (d.a[0].min(d.b[0]) as u16, d.a[1].min(d.b[1]) as u16);
                         // A horizontal edge lies between the squares above and below it.
-                        if d.a[1] == d.b[1] { [x, y - 1, 1, secret] } else { [x - 1, y, 0, secret] }
+                        if d.a[1] == d.b[1] { [x, y - 1, 1, flags] } else { [x - 1, y, 0, flags] }
                     })
                     .collect();
                 DesignLevel {
@@ -410,15 +411,18 @@ impl SiteDesign {
                 *c = -1;
             }
         }
-        for &[x, y, side, secret] in &lv.doors {
+        for &[x, y, side, flags] in &lv.doors {
             let Some((a, b)) = door_squares(x, y, side, nx, ny) else { continue };
             let (ra, rb) = (p.cells[a], p.cells[b]);
             if ra < 0 || rb < 0 || ra == rb {
                 continue;
             }
             p.door(a, b);
-            if secret != 0 {
+            if flags & 1 != 0 {
                 p.secret.insert((a, b));
+            }
+            if (flags >> 4) & 7 != 0 {
+                p.locks.insert((a, b), ((flags >> 4) & 7) as u8);
             }
         }
         let (down_name, up_name) = kind.ways();
@@ -795,7 +799,8 @@ fn flood(cells: &[i16], nx: usize, ny: usize, start: usize, natural: bool, doors
 /// level's one way in (under the entrance, `entry`, if given); one way down from each level
 /// but the deepest, on the square of the one way up on the level below; every item on floor,
 /// none on another; every square reached from the way onto its level, around whatever blocks
-/// movement. A site without one boss chamber on its deepest level is noted, not refused.
+/// movement. A site without one boss chamber on its deepest level is noted, not refused, and so
+/// are keys out of order (`key_order`).
 pub fn check(it: &Interior, entry: Option<[u16; 2]>) -> Vec<Problem> {
     let (nx, ny) = (it.nx, it.ny);
     let n = it.levels.len();
@@ -862,10 +867,12 @@ pub fn check(it: &Interior, entry: Option<[u16; 2]>) -> Vec<Problem> {
             put(li, Some(down[1]), format!("{} ways down (one only)", down.len()), true);
         }
         // Items on floor, none on another.
-        let mut held = vec![false; nx * ny];
-        let mut blocks = vec![false; nx * ny];
+        // (A square holds one item, or terrain with a span over it: `held` bits 1 terrain, 2 span, 4 anything else.)
+        let mut held = vec![0u8; nx * ny];
+        let blocks = blocked_squares(&lv.furniture, nx, ny);
         let mut clash = None;
         for f in &lv.furniture {
+            let bit = if TERRAIN.contains(&f.kind) { 1 } else if SPANS.contains(&f.kind) { 2 } else { 4 };
             for j in f.y as usize..(f.y + f.h) as usize {
                 for i in f.x as usize..(f.x + f.w) as usize {
                     if i >= nx || j >= ny {
@@ -875,11 +882,10 @@ pub fn check(it: &Interior, entry: Option<[u16; 2]>) -> Vec<Problem> {
                     if lv.cells[k] < 0 {
                         put(li, Some(k), format!("the {} at {i},{j} is in the rock", f.name), true);
                     }
-                    if held[k] && clash.is_none() {
-                        clash = Some((k, f.name));
+                    if held[k] & (bit | 4) != 0 || bit == 4 && held[k] != 0 {
+                        clash.get_or_insert((k, f.name));
                     }
-                    held[k] = true;
-                    blocks[k] |= f.blocks_move;
+                    held[k] |= bit;
                 }
             }
         }
@@ -948,6 +954,133 @@ pub fn check(it: &Interior, entry: Option<[u16; 2]>) -> Vec<Problem> {
         [0] => {}
         [li] => put(*li, None, "the boss chamber is not on the deepest level".into(), false),
         _ => put(boss[1], None, format!("{} boss chambers", boss.len()), false),
+    }
+    out.extend(key_order(it));
+    out
+}
+
+/// The two squares a level's door lies between (smaller first).
+pub(crate) fn door_pair(d: &crate::interior::Door, nx: usize) -> (usize, usize) {
+    let (x, y) = (d.a[0].min(d.b[0]) as usize, d.a[1].min(d.b[1]) as usize);
+    if d.a[1] == d.b[1] { (y.saturating_sub(1) * nx + x, y * nx + x) } else { (y * nx + x.saturating_sub(1), y * nx + x) }
+}
+
+/// The keys' order: from the way in, a locked door is a wall until its key (a `key` item, its
+/// `variant` the lock's colour) has been reached, across the levels by their ways down and up;
+/// in the end every square reached without the locks must be reached with them, and every lock
+/// has one key. Notes, not refusals (the DM can always open a door); generated sites keep it
+/// (tests/vital.rs).
+pub fn key_order(it: &Interior) -> Vec<Problem> {
+    let (nx, ny) = (it.nx, it.ny);
+    let n = it.levels.len();
+    let mut out = Vec::new();
+    let mut put = |level: usize, at: Option<usize>, text: String| {
+        out.push(Problem { level, at: at.map(|k| [(k % nx) as u16, (k / nx) as u16]), text: format!("{}: {text}", depth_tag(n, level)), blocking: false });
+    };
+    let keys: Vec<(usize, usize, u8)> = (0..n)
+        .flat_map(|li| it.levels[li].furniture.iter().filter(|f| f.kind == "key").map(move |f| (li, f.y as usize * nx + f.x as usize, f.variant.unwrap_or(0))))
+        .collect();
+    let locks: Vec<(usize, (usize, usize), u8)> = (0..n).flat_map(|li| it.levels[li].doors.iter().filter(|d| d.lock != 0).map(move |d| (li, door_pair(d, nx), d.lock))).collect();
+    if keys.is_empty() && locks.is_empty() {
+        return out;
+    }
+    for &(li, k, c) in &keys {
+        if !(1..=7).contains(&c) {
+            put(li, Some(k), format!("the key at {},{} has no colour (variant 1-7)", k % nx, k / nx));
+        } else if !locks.iter().any(|l| l.2 == c) {
+            put(li, Some(k), format!("the key at {},{} opens no lock ({c})", k % nx, k / nx));
+        }
+    }
+    for c in 1..=7u8 {
+        let (Some(&(li, (a, _), _)), held) = (locks.iter().find(|l| l.2 == c), keys.iter().filter(|k| k.2 == c).count()) else { continue };
+        match held {
+            0 => put(li, Some(a), format!("lock {c} at {},{} has no key", a % nx, a / nx)),
+            1 => {}
+            m => put(li, Some(a), format!("lock {c} at {},{} has {m} keys (one only)", a % nx, a / nx)),
+        }
+    }
+    // Squares reached with the locks `open`, from the way in.
+    let at = |li: usize, kind: &str| it.levels[li].furniture.iter().filter(|f| f.kind == kind).map(|f| f.y as usize * nx + f.x as usize).collect::<Vec<_>>();
+    let starts = if at(n - 1, "exit").is_empty() { at(n - 1, "up") } else { at(n - 1, "exit") };
+    let blocks: Vec<Vec<bool>> = it
+        .levels
+        .iter()
+        .map(|lv| blocked_squares(&lv.furniture, nx, ny))
+        .collect();
+    let doors: Vec<crate::core::hash::FastMap<(usize, usize), u8>> = it.levels.iter().map(|lv| lv.doors.iter().map(|d| (door_pair(d, nx), d.lock)).collect()).collect();
+    let (downs, ups): (Vec<Vec<usize>>, Vec<Vec<usize>>) = ((0..n).map(|li| at(li, "down")).collect(), (0..n).map(|li| at(li, "up")).collect());
+    let flood = |open: &[bool; 8]| {
+        let mut seen = vec![vec![false; nx * ny]; n];
+        let mut stack: Vec<(usize, usize)> = Vec::new();
+        for &k in &starts {
+            if it.levels[n - 1].cells[k] >= 0 && !seen[n - 1][k] {
+                seen[n - 1][k] = true;
+                stack.push((n - 1, k));
+            }
+        }
+        while let Some((li, k)) = stack.pop() {
+            let lv = &it.levels[li];
+            let mut next: Vec<(usize, usize)> = Vec::new();
+            for q in neighbours(k, nx, ny) {
+                if lv.cells[q] < 0 || blocks[li][q] {
+                    continue;
+                }
+                if !lv.natural && lv.cells[q] != lv.cells[k] {
+                    match doors[li].get(&(k.min(q), k.max(q))) {
+                        Some(&c) if c == 0 || open[c as usize & 7] => {}
+                        _ => continue,
+                    }
+                }
+                next.push((li, q));
+            }
+            // (Down onto the way up below, up onto the way down above.)
+            if li > 0 && downs[li].contains(&k) && it.levels[li - 1].cells[k] >= 0 {
+                next.push((li - 1, k));
+            }
+            if li + 1 < n && ups[li].contains(&k) && it.levels[li + 1].cells[k] >= 0 {
+                next.push((li + 1, k));
+            }
+            for (l2, q) in next {
+                if !seen[l2][q] {
+                    seen[l2][q] = true;
+                    stack.push((l2, q));
+                }
+            }
+        }
+        seen
+    };
+    let mut open = [false; 8];
+    let seen = loop {
+        let seen = flood(&open);
+        let mut more = false;
+        for &(li, k, c) in &keys {
+            if seen[li][k] && !open[c as usize & 7] {
+                open[c as usize & 7] = true;
+                more = true;
+            }
+        }
+        if !more {
+            break seen;
+        }
+    };
+    let all = flood(&[true; 8]);
+    for li in 0..n {
+        let lost: Vec<usize> = (0..nx * ny).filter(|&k| all[li][k] && !seen[li][k]).collect();
+        if let Some(&k) = lost.first() {
+            let mut shut: Vec<String> = locks.iter().filter(|l| l.0 == li && !open[l.2 as usize & 7]).map(|l| format!("lock {} at {},{}", l.2, l.1.0 % nx, l.1.0 / nx)).collect();
+            if shut.is_empty() {
+                // (Cut off by a lock on another level: say which, and where its key lies if that is below it.)
+                shut = locks
+                    .iter()
+                    .filter(|l| !open[l.2 as usize & 7])
+                    .map(|l| {
+                        let deeper = keys.iter().any(|q| q.2 == l.2 && q.0 < l.0);
+                        format!("lock {} on {}{}", l.2, depth_tag(n, l.0), if deeper { ", whose key lies on a level below it" } else { "" })
+                    })
+                    .collect();
+            }
+            put(li, Some(k), format!("{} square{} can't be reached before their key ({})", lost.len(), if lost.len() == 1 { "" } else { "s" }, if shut.is_empty() { "a lock on another level".into() } else { shut.join(", ") }));
+        }
     }
     out
 }
@@ -1148,14 +1281,18 @@ pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) ->
             .doors
             .iter()
             .map(|d| {
-                let flag = match d[3] {
+                let flag = match d[3] & 15 {
                     0 => "",
                     f if f & 1 != 0 => " secret",
                     f if f & 2 != 0 => " front",
                     f if f & 8 != 0 => " arch",
                     _ => " back",
                 };
-                format!("{},{} {}{flag}", d[0], d[1], ["e", "s", "w", "n"][d[2].min(3) as usize])
+                let lock = match (d[3] >> 4) & 7 {
+                    0 => String::new(),
+                    c => format!(" locked {c}"),
+                };
+                format!("{},{} {}{flag}{lock}", d[0], d[1], ["e", "s", "w", "n"][d[2].min(3) as usize])
             })
             .collect();
         if !lv.natural || !doors.is_empty() {
@@ -1420,10 +1557,29 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             let auto = list.trim() == "auto";
             lv.doors.retain(|d| building && auto && d[3] & 6 != 0);
             if !auto {
-                let how = if building { "x,y e|s|w|n [secret|front|back]" } else { "x,y e|s [secret]" };
+                let how = if building { "x,y e|s|w|n [secret|front|back]" } else { "x,y e|s [secret] [locked 1-7]" };
                 for e in list.split(';').map(str::trim).filter(|e| !e.is_empty()) {
                     let mut w = e.split_whitespace();
-                    let (xy, side, flag) = (w.next().unwrap_or(""), w.next().unwrap_or(""), w.next());
+                    let (xy, side) = (w.next().unwrap_or(""), w.next().unwrap_or(""));
+                    let mut flag = w.next();
+                    // (Underground, `locked N`: the lock's colour, after `secret` if both.)
+                    let mut lock = 0u16;
+                    if !building {
+                        let rest: Vec<&str> = std::iter::once(flag).flatten().chain(w.by_ref()).collect();
+                        flag = None;
+                        let mut i = 0;
+                        while i < rest.len() {
+                            match rest[i] {
+                                "locked" => {
+                                    lock = rest.get(i + 1).and_then(|c| c.parse::<u16>().ok()).filter(|c| (1..=7).contains(c)).ok_or_else(|| format!("{tag}: door '{e}': locked 1-7 (the lock's colour)"))?;
+                                    i += 1;
+                                }
+                                f if flag.is_none() && lock == 0 => flag = Some(f),
+                                f => return Err(format!("{tag}: door '{e}': '{f}'? write it as {how}")),
+                            }
+                            i += 1;
+                        }
+                    }
                     let (x, y) = coords(xy).ok_or_else(|| format!("{tag}: door '{e}': write it as {how}"))?;
                     let side = match side {
                         "e" => 0,
@@ -1445,7 +1601,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                         Some("arch") if building => 8,
                         Some(f) => return Err(format!("{tag}: door '{e}': '{f}'? write it as {how}")),
                     };
-                    lv.doors.push([x, y, side, flags]);
+                    lv.doors.push([x, y, side, flags | lock << 4]);
                 }
             }
         }

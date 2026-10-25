@@ -76,7 +76,13 @@
 //!   per line on stdout (everything else goes to stderr): run it on two trees and diff to see what
 //!   changed.
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|palaces|temples|editor|hash|all]... [seed|world.json...] [--keeps]
+//! - `under` (not in `all`): every underground site of every layout (`u:` ways down, up to 4 sewer sections a layout,
+//!   keep dungeons `k:`): a hash per site on stdout (`U <seed> <id> <hash> <theme> <levels>`; everything else goes
+//!   with the other rows) and totals of sites, levels, rooms, doors, secret doors, loops (doors beyond a spanning
+//!   tree of a level's rooms), shortcut loops (each saving 4+ hops) and the hops they save, and `u:` sites breaking `under::design::check`. TERRAIN=1 also lays the terrain tools
+//!   (`under::chasm`, `under::water`) on a copy of each site and counts what they laid and what they left unreached.
+//!
+//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -1484,7 +1490,7 @@ fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str
     // Windows and furniture on open tops.
     for lv in &it.levels {
         for w in &lv.windows {
-            let d = interior::Door { a: [w[0], w[1]], b: [w[2], w[3]], kind: "window", rooms: [-1, -1] };
+            let d = interior::Door { a: [w[0], w[1]], b: [w[2], w[3]], kind: "window", rooms: [-1, -1], lock: 0 };
             if door_squares(&d).iter().any(|&s| room_at(lv, s) >= 0 && open_top(lv.rooms[room_at(lv, s) as usize].kind)) {
                 r.add("windows on open tops", 1.0, format!("{tag} {}: ({}, {})", lv.name, w[0], w[1]));
             }
@@ -2864,7 +2870,7 @@ fn temple_rules(ctx: &mut Ctx, l: &Layout, li: usize, b: &town::Building, key: &
             let railed = |k: &str| {
                 g.rooms.iter().enumerate().filter(|(_, rm)| rm.kind == k && rm.squares > 0).all(|(ri, _)| {
                     g.walls.iter().any(|w| {
-                        let d = interior::Door { a: w.a, b: [if w.a[0] == w.b[0] { w.a[0] } else { w.a[0] + 1.0 }, if w.a[1] == w.b[1] { w.a[1] } else { w.a[1] + 1.0 }], kind: "rail", rooms: [-1, -1] };
+                        let d = interior::Door { a: w.a, b: [if w.a[0] == w.b[0] { w.a[0] } else { w.a[0] + 1.0 }, if w.a[1] == w.b[1] { w.a[1] } else { w.a[1] + 1.0 }], kind: "rail", rooms: [-1, -1], lock: 0 };
                         let [p, q] = door_squares(&d);
                         let (rp, rq) = (room_at(g, p), room_at(g, q));
                         w.rail && ((rp == ri as i16 && rq >= 0 && g.rooms[rq as usize].kind == "nave") || (rq == ri as i16 && rp >= 0 && g.rooms[rp as usize].kind == "nave"))
@@ -3046,7 +3052,7 @@ fn temple_rules(ctx: &mut Ctx, l: &Layout, li: usize, b: &town::Building, key: &
     }
     let crowded = l.buildings.iter().filter(|o| o.id != b.id && dist(centroid(&o.poly), centroid(&b.poly)) < 200.0 && poly_overlap(&o.poly, &shrink(&b.poly, 1.0))).count();
     let arcade = garth.is_some_and(|gr| g.walls.iter().any(|w| w.rail && {
-        let d = interior::Door { a: w.a, b: [if w.a[0] == w.b[0] { w.a[0] } else { w.a[0] + 1.0 }, if w.a[1] == w.b[1] { w.a[1] } else { w.a[1] + 1.0 }], kind: "rail", rooms: [-1, -1] };
+        let d = interior::Door { a: w.a, b: [if w.a[0] == w.b[0] { w.a[0] } else { w.a[0] + 1.0 }, if w.a[1] == w.b[1] { w.a[1] } else { w.a[1] + 1.0 }], kind: "rail", rooms: [-1, -1], lock: 0 };
         let [p, q] = door_squares(&d);
         room_at(g, p) == gr || room_at(g, q) == gr
     }));
@@ -3531,8 +3537,202 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
     }
 }
 
+/// `under`: every underground site of every layout (`u:` ways down, a few sewer sections each, keep dungeons
+/// `k:`) with a hash of its serialized interior on stdout (`U <label> <id> <hash> <theme> <levels>`), and the
+/// totals: sites, levels, rooms, doors, secret doors, loops (doors beyond a spanning tree of each level's
+/// rooms), shortcut loops (each saving 4 or more hops: `shortcut_loops`) and the hops they save, and the sites failing `under::design::check`; locks, keys (and those on a level above their lock's), sites
+/// whose keys are out of order (`under::design::key_order`), and built sites and their locks by size (`keep`, `sewer` for `k:`, `w:`).
+fn under(ctx: &mut Ctx, r: &mut Report, label: &str) {
+    use worldgen::core::hash::fnv64;
+    use worldgen::under::{self, UnderKind};
+    r.counts(&["sites", "levels", "rooms", "doors", "secret doors", "loops", "shortcut loops", "hops they save", "sites breaking a rule", "locks", "keys", "keys on an earlier level", "sites with keys out of order"]);
+    for s in ["small", "medium", "large", "huge", "keep", "sewer"] {
+        r.counts(&[&format!("sites {s}"), &format!("locks {s}")]);
+    }
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        let mut ids: Vec<String> = Vec::new();
+        let mut sections: Vec<[i64; 2]> = Vec::new();
+        for (k, e) in l.entrances.iter().enumerate() {
+            if e.kind == UnderKind::Sewer {
+                let o = under::sewer_section(e.at);
+                let q = [(o[0] / under::SEWER_SECTION_FT) as i64, (o[1] / under::SEWER_SECTION_FT) as i64];
+                if sections.len() < 4 && !sections.contains(&q) {
+                    sections.push(q);
+                    ids.push(format!("w:{li}:{}:{}", q[0], q[1]));
+                }
+            } else {
+                ids.push(format!("u:{li}:{k}"));
+            }
+        }
+        ids.extend(l.buildings.iter().filter(|b| interior::has_deep_dungeon(b)).map(|b| format!("k:{li}:{}", b.id)));
+        for id in ids {
+            let Some(it) = interior::generate_id(world, t0, &id) else {
+                println!("U {label} {id} none");
+                continue;
+            };
+            println!("U {label} {id} {:016x} {} {}", fnv64(serde_json::to_string(&it).unwrap().as_bytes()), it.theme.unwrap_or("-").replace(' ', "_"), it.levels.len());
+            r.tally("sites", 1);
+            r.tally("levels", it.levels.len());
+            for lv in &it.levels {
+                r.tally("rooms", lv.rooms.len());
+                r.tally("doors", lv.doors.len());
+                r.tally("secret doors", lv.doors.iter().filter(|d| d.kind == "secret").count());
+                // (Union-find over the rooms: a door joining rooms already joined is a loop.)
+                let mut up: Vec<usize> = (0..lv.rooms.len()).collect();
+                fn root(up: &mut [usize], mut i: usize) -> usize {
+                    while up[i] != i {
+                        up[i] = up[up[i]];
+                        i = up[i];
+                    }
+                    i
+                }
+                for d in &lv.doors {
+                    let [a, b] = d.rooms;
+                    if a < 0 || b < 0 || a as usize >= up.len() || b as usize >= up.len() {
+                        continue;
+                    }
+                    let (ra, rb) = (root(&mut up, a as usize), root(&mut up, b as usize));
+                    if ra == rb {
+                        r.tally("loops", 1);
+                    } else {
+                        up[ra] = rb;
+                    }
+                }
+                if !lv.natural {
+                    let (n, saved) = shortcut_loops(lv, it.nx, it.ny);
+                    r.tally("shortcut loops", n);
+                    r.tally("hops they save", saved);
+                }
+            }
+            // Locks and keys (levels run bottom to top: an earlier level is a later index).
+            let locks: Vec<(usize, u8)> = it.levels.iter().enumerate().flat_map(|(li, lv)| lv.doors.iter().filter(|d| d.lock != 0).map(move |d| (li, d.lock))).collect();
+            let keys: Vec<(usize, u8)> = it.levels.iter().enumerate().flat_map(|(li, lv)| lv.furniture.iter().filter(|f| f.kind == "key").map(move |f| (li, f.variant.unwrap_or(0)))).collect();
+            r.tally("locks", locks.len());
+            r.tally("keys", keys.len());
+            r.tally("keys on an earlier level", keys.iter().filter(|k| locks.iter().any(|l| l.1 == k.1 && l.0 < k.0)).count());
+            let size = under::site_size(&it).map(|s| s.name()).unwrap_or(if id.starts_with('k') { "keep" } else { "sewer" });
+            if it.levels.iter().all(|lv| !lv.natural) {
+                // (Built sites only: caves, mines and lava tubes have no doors.)
+                r.tally(&format!("sites {size}"), 1);
+                r.tally(&format!("locks {size}"), locks.len());
+            }
+            r.measure("most locks in a site", false, locks.len() as f64, id.clone());
+            let order = under::design::key_order(&it);
+            if !order.is_empty() {
+                r.add("sites with keys out of order", order.len() as f64, format!("{id} ({}): {}", it.theme.unwrap_or("-"), order.into_iter().map(|p| p.text).collect::<Vec<_>>().join("; ")));
+            }
+            // (Its rules are a designed `u:` site's; sewer sections and keep dungeons have more than one way in.)
+            let bad: Vec<String> = if id.starts_with('u') { under::design::check(&it, None).into_iter().filter(|p| p.blocking).map(|p| p.text).collect() } else { Vec::new() };
+            if !bad.is_empty() {
+                r.add("sites breaking a rule", bad.len() as f64, format!("{id} ({}): {}", it.theme.unwrap_or("-"), bad.join("; ")));
+            }
+            if std::env::var("TERRAIN").is_ok() {
+                under_terrain(it, &id, r);
+            }
+        }
+    }
+}
+
+/// A built level's shortcut loops and the hops they save: doors in turn, each counted (and then taken away, so a
+/// loop counts once) if the way round without it is 4 or more hops longer (on foot: a square 1, a door 8, a hop 8).
+fn shortcut_loops(lv: &interior::Level, nx: usize, ny: usize) -> (usize, usize) {
+    let pair = |d: &interior::Door| {
+        let (x, y) = (d.a[0].min(d.b[0]) as usize, d.a[1].min(d.b[1]) as usize);
+        if d.a[1] == d.b[1] { (y.saturating_sub(1) * nx + x, y * nx + x) } else { (y * nx + x.saturating_sub(1), y * nx + x) }
+    };
+    let mut open: std::collections::HashSet<(usize, usize)> = lv.doors.iter().map(pair).collect();
+    let walk = |open: &std::collections::HashSet<(usize, usize)>, from: usize, to: usize| {
+        let mut cost = vec![u32::MAX; nx * ny];
+        let mut heap = std::collections::BinaryHeap::new();
+        cost[from] = 0;
+        heap.push(std::cmp::Reverse((0u32, from)));
+        while let Some(std::cmp::Reverse((c, k))) = heap.pop() {
+            if k == to {
+                return Some(c);
+            }
+            if c > cost[k] {
+                continue;
+            }
+            let (i, j) = (k % nx, k / nx);
+            for m in [(i > 0).then(|| k - 1), (i + 1 < nx).then(|| k + 1), (j > 0).then(|| k - nx), (j + 1 < ny).then(|| k + nx)].into_iter().flatten() {
+                let (a, b) = (lv.cells[k], lv.cells[m]);
+                if b < 0 || (a != b && !open.contains(&(k.min(m), k.max(m)))) {
+                    continue;
+                }
+                let nc = c + if a == b { 1 } else { 8 };
+                if nc < cost[m] {
+                    cost[m] = nc;
+                    heap.push(std::cmp::Reverse((nc, m)));
+                }
+            }
+        }
+        None
+    };
+    let (mut n, mut saved) = (0, 0);
+    for d in &lv.doors {
+        let e = pair(d);
+        if e.1 >= nx * ny || lv.cells[e.0] < 0 || lv.cells[e.1] < 0 {
+            continue;
+        }
+        open.remove(&e);
+        match walk(&open, e.0, e.1) {
+            Some(c) if c >= 8 + 32 => {
+                n += 1;
+                saved += (c - 8) as usize / 8;
+            }
+            _ => {
+                open.insert(e);
+            }
+        }
+    }
+    (n, saved)
+}
+
+/// `under` with TERRAIN set: the terrain tools on a copy of the site, every level (a chasm across the biggest room, or
+/// the whole level if natural; then water, wet and flooded by turns; rope bridges and stepping stones by turns): what
+/// they laid, the squares left unreached (0 expected) and the rules the site then breaks.
+fn under_terrain(mut it: interior::Interior, id: &str, r: &mut Report) {
+    use worldgen::under::{self, Ground, Span, Wetness};
+    r.counts(&["terrain: levels", "terrain: unreached squares", "terrain: sites breaking a rule", "terrain: sites with keys out of order"]);
+    let (nx, ny) = (it.nx, it.ny);
+    let seed = worldgen::core::hash::fnv64(id.as_bytes());
+    let t = std::time::Instant::now();
+    for (li, lv) in it.levels.iter_mut().enumerate() {
+        let s = worldgen::core::rng::hash2(seed, li as i64, 0);
+        let biggest = (!lv.natural).then(|| (0..lv.rooms.len()).max_by_key(|&q| (lv.rooms[q].squares, std::cmp::Reverse(q))).map(|q| q as i16)).flatten();
+        let span = if li % 2 == 0 { Span::Bridge } else { Span::Stones };
+        let items = under::chasm(&Ground::of_level(lv, nx, ny), biggest, span, s ^ 1);
+        lv.furniture.extend(items);
+        let items = under::water(&Ground::of_level(lv, nx, ny), if (li + seed as usize).is_multiple_of(2) { Wetness::Wet } else { Wetness::Flooded }, s);
+        lv.furniture.extend(items);
+        r.tally("terrain: levels", 1);
+        r.tally("terrain: unreached squares", Ground::of_level(lv, nx, ny).unreached());
+        for f in &lv.furniture {
+            let sq = (f.w * f.h) as usize;
+            match f.kind {
+                "water_shallow" | "water_deep" | "chasm" | "rope_bridge" | "stepping_stone" => r.tally(&format!("terrain: {} squares", f.kind), sq),
+                _ => {}
+            }
+            if f.kind == "rope_bridge" {
+                r.tally("terrain: rope bridges", 1);
+            }
+        }
+    }
+    r.measure("terrain: slowest site (ms)", false, t.elapsed().as_secs_f64() * 1e3, id.to_string());
+    let bad: Vec<String> = if id.starts_with('u') { under::design::check(&it, None).into_iter().filter(|p| p.blocking).map(|p| p.text).collect() } else { Vec::new() };
+    if !bad.is_empty() {
+        r.add("terrain: sites breaking a rule", bad.len() as f64, format!("{id}: {}", bad.join("; ")));
+    }
+    let order = under::design::key_order(&it);
+    if !order.is_empty() {
+        r.add("terrain: sites with keys out of order", order.len() as f64, format!("{id}: {}", order.into_iter().map(|p| p.text).collect::<Vec<_>>().join("; ")));
+    }
+}
+
 fn main() {
-    const MODES: [&str; 12] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "hash", "all"];
+    const MODES: [&str; 13] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -3571,6 +3771,7 @@ fn main() {
                 "civic" => civic(&mut ctx, &mut r),
                 "inns" => inns(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
+                "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }
             say!("  {mode} ({:.1} s)", t.elapsed().as_secs_f64());

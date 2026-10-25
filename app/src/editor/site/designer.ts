@@ -5,7 +5,9 @@
 // `interior::design::check`).
 //
 // On the map, underground: paint a room, dig a rectangle room or a corridor, fill squares back
-// with rock; click a wall for a door (again: a secret door, again: none); put props down; click a
+// with rock; click a wall for a door (again: a secret door, again: none; with a lock's colour chosen, a door
+// with that lock, again: unlocked); drag out water, chasms, rope bridges, stepping stones or rubble slopes (or clear
+// them); put props down (a key too: its look is the colour of the lock it opens); click a
 // square for the level's way down. In a building: paint squares into a room, draw a wall line to
 // split a room, click a wall to take it away (two rooms made one), doors as underground (in an
 // outside wall: a back door, then the front door), furniture, indoor props and uploaded pictures,
@@ -24,9 +26,10 @@ import type { Camera } from '../../render/camera';
 import type { MapView, PointerTool } from '../../render/MapView';
 import { APSE_E, APSE_N, APSE_S, APSE_W, isApse } from '../../render/roomShapes';
 import { FINGER_PX, WheelTurn, type BarAt, type HandState, type HeldView, type Placer } from '../placing';
-import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, fits, isBuilding, type Item, mergeRooms, moveProp, paint, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
+import { lockColor } from '../../render/InteriorLayer';
+import { addLevel, addProp, addRoom, BOSS, cycleDoor, cycleOuterDoor, decode, doorPlace, type Edge, fits, isBuilding, type Item, mergeRooms, moveProp, paint, paintTerrain, propAt, rectSquares, removeLevel, setStairs, setWayDown, splitRooms, storeysOf, cellarsOf, belowGround, wallLine, WAYS } from './model';
 
-export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'prop' | 'stairs' | 'wall' | 'merge';
+export type DesignMode = 'select' | 'room' | 'rect' | 'corridor' | 'rock' | 'door' | 'terrain' | 'prop' | 'stairs' | 'wall' | 'merge';
 
 /** The designer menu's choices. */
 export interface DesignSettings {
@@ -46,9 +49,13 @@ export interface DesignSettings {
   variant: number | null;
   /** Doors added wherever a room dug would be shut off. */
   autoDoors: boolean;
+  /** The door tool's lock: 0 none (plain and secret doors), 1-7 a lock of that colour (`Door::lock`). */
+  lock: number;
+  /** What the terrain tool paints (`TERRAIN`, `SPANS`); '' clears it. */
+  terrain: string;
 }
 
-export const defaultDesign = (): DesignSettings => ({ mode: 'room', kind: 'chamber', width: 1, prop: 'chest', pw: 1, ph: 1, back: null, variant: null, autoDoors: true });
+export const defaultDesign = (): DesignSettings => ({ mode: 'room', kind: 'chamber', width: 1, prop: 'chest', pw: 1, ph: 1, back: null, variant: null, autoDoors: true, lock: 0, terrain: 'water_shallow' });
 
 /** What the designer needs from the app. */
 export interface DesignHost {
@@ -466,7 +473,7 @@ export class SiteDesigner implements PointerTool, Placer {
       if (!sq) return true;
       this.stroke = new Set(this.brush(sq));
       this.last = sq;
-    } else if ((mode === 'rect' || (mode === 'stairs' && this.building)) && sq) {
+    } else if ((mode === 'rect' || mode === 'terrain' || (mode === 'stairs' && this.building)) && sq) {
       this.rect = { from: sq, to: sq };
     } else if (mode === 'wall') {
       const g = this.grid(x, y);
@@ -542,6 +549,16 @@ export class SiteDesigner implements PointerTool, Placer {
     if (this.rect) {
       const { from, to } = this.rect;
       this.rect = null;
+      if (s.mode === 'terrain') {
+        const squares = rectSquares(d, from[0], from[1], to[0], to[1]);
+        const terrain = s.terrain;
+        return void this.change((n) => {
+          if (!paintTerrain(n, li, squares, terrain)) {
+            this.host.hint(terrain ? 'Terrain goes on bare floor' : 'No terrain there');
+            return false;
+          }
+        });
+      }
       if (s.mode === 'stairs') {
         const [x0, y0] = [Math.min(from[0], to[0]), Math.min(from[1], to[1])];
         const [w, h] = [Math.abs(to[0] - from[0]) + 1, Math.abs(to[1] - from[1]) + 1];
@@ -575,7 +592,7 @@ export class SiteDesigner implements PointerTool, Placer {
         const ka = e[1] * d.nx + e[0];
         const kb = ka + (e[2] === 0 ? 1 : d.nx);
         if (cells[ka] < 0 || cells[kb] < 0 || cells[ka] === cells[kb]) return this.host.hint('Doors go in walls between two rooms');
-        return void this.change((n) => cycleDoor(n, li, e[0], e[1], e[2]));
+        return void this.change((n) => cycleDoor(n, li, e[0], e[1], e[2], s.lock));
       }
       case 'prop':
         return this.click(sq);
@@ -1023,7 +1040,7 @@ export class SiteDesigner implements PointerTool, Placer {
     const s = this.host.settings();
     const scr = (gx: number, gy: number) => cam.worldToScreen(...layer.toWorld(gx, gy));
     const quad = (x0: number, y0: number, x1: number, y1: number) => [...scr(x0, y0), ...scr(x1, y0), ...scr(x1, y1), ...scr(x0, y1)];
-    const ink = s.mode === 'rock' ? 0x7f1d1d : 0xf97316;
+    const ink = s.mode === 'rock' || (s.mode === 'terrain' && !s.terrain) ? 0x7f1d1d : s.mode === 'door' && s.lock && !this.building ? lockColor(s.lock) : 0xf97316;
     if (this.stroke) for (const k of this.stroke) g.poly(quad(k % d.nx, Math.floor(k / d.nx), (k % d.nx) + 1, Math.floor(k / d.nx) + 1)).fill({ color: ink, alpha: 0.35 });
     if (this.rect) {
       const { from, to } = this.rect;

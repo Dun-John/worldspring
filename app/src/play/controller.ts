@@ -186,7 +186,7 @@ export class PlayController implements PointerTool {
     kind: 'door' | 'token' | 'place' | 'measure' | 'shape' | 'fog' | 'ping' | 'box' | 'none';
     x: number;
     y: number;
-    door?: { k: number; loc: string };
+    door?: { k: number; loc: string; lock: number; secret: boolean };
     /** Dragged tokens and their offsets from the pointer (world ft). */
     group?: { id: string; dx: number; dy: number }[];
     /** World point pressed (a selection box's corner). */
@@ -837,7 +837,8 @@ export class PlayController implements PointerTool {
         }
         const door = this.doorAt(place, gx, gy);
         if (door) {
-          this.press = { kind: 'door', x: gx, y: gy, door: { k: door.k, loc: door.sec.doorLoc } };
+          const d = door.sec.it.levels[door.sec.level].doors[door.k];
+          this.press = { kind: 'door', x: gx, y: gy, door: { k: door.k, loc: door.sec.doorLoc, lock: d.lock ?? 0, secret: d.kind === 'secret' } };
           return true;
         }
         // Shift-drag on open ground: a selection box.
@@ -938,7 +939,12 @@ export class PlayController implements PointerTool {
       case 'door':
         if (still && p.door) {
           const st = this.door(p.door.loc, p.door.k);
-          this.dispatch({ t: 'door', key: `${p.door.loc}#${p.door.k}`, state: { ...st, open: !st.open, found: st.found || !st.open } });
+          const key = `${p.door.loc}#${p.door.k}`;
+          if (p.door.lock && !st.unlocked && !st.open) {
+            // A locked door: the first click unlocks it (still shut), the next opens it. A secret one
+            // is found first (right button).
+            if (!p.door.secret || st.found) this.dispatch({ t: 'door', key, state: { ...st, unlocked: true } });
+          } else this.dispatch({ t: 'door', key, state: { ...st, open: !st.open, found: st.found || !st.open } });
         }
         break;
       case 'token': {
@@ -1066,7 +1072,16 @@ export class PlayController implements PointerTool {
   /** Right button: a secret door found (or not), a shape taken away. */
   private rightClick(place: Place, gx: number, gy: number): boolean {
     const door = this.doorAt(place, gx, gy);
-    if (door && door.sec.it.levels[door.sec.level].doors[door.k].kind === 'secret') {
+    const dd = door ? door.sec.it.levels[door.sec.level].doors[door.k] : null;
+    if (door && dd?.lock) {
+      // An unlocked, shut door locks again (a secret one once found; right click again hides it).
+      const st = this.door(door.sec.doorLoc, door.k);
+      if (st.unlocked && !st.open && (dd.kind !== 'secret' || st.found)) {
+        this.dispatch({ t: 'door', key: `${door.sec.doorLoc}#${door.k}`, state: { ...st, unlocked: false } });
+        return true;
+      }
+    }
+    if (door && dd?.kind === 'secret') {
       const st = this.door(door.sec.doorLoc, door.k);
       this.dispatch({ t: 'door', key: `${door.sec.doorLoc}#${door.k}`, state: { ...st, found: !st.found, open: st.found ? false : st.open } });
       return true;

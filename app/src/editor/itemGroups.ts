@@ -20,7 +20,7 @@ export const BATTLE_GROUPS: [string, number[]][] = [
 /** The groups of furniture and props inside, in the order the picker shows them. */
 export const INSIDE_GROUPS = [
   'Beds & seating', 'Tables & counters', 'Storage', 'Kitchen & craft', 'Great hall', 'Guild & civic', 'Stables & yard', 'Worship & tombs', 'Light & fire', 'Prison & grim',
-  'Cave & nature', 'Mine & works', 'Remains & clutter', 'Traps & hazards', 'Ways & fixtures',
+  'Cave & nature', 'Mine & works', 'Remains & clutter', 'Traps & hazards', 'Locks & keys', 'Terrain', 'Ways & fixtures',
 ];
 
 const BY_GROUP: Record<string, string[]> = {
@@ -41,6 +41,8 @@ const BY_GROUP: Record<string, string[]> = {
   'Mine & works': ['timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'winch'],
   'Remains & clutter': ['bones', 'skeleton', 'skulls', 'rubble', 'debris', 'cobweb', 'banner', 'rug', 'rat_nest', 'scorched'],
   'Traps & hazards': ['trap', 'pit', 'cave_in', 'vent', 'lava'],
+  'Locks & keys': ['key'],
+  Terrain: ['water_shallow', 'water_deep', 'chasm', 'rubble_slope', 'rope_bridge', 'stepping_stone'],
   'Ways & fixtures': ['exit', 'up', 'down', 'tunnel', 'ladder', 'pipe', 'well', 'trapdoor', 'spiral_stair', 'link_down', 'pillar', 'barricade'],
 };
 
@@ -60,6 +62,7 @@ export function turnsInside(kind: string, underground: boolean, w = 1, h = 1): b
 
 /** How many looks a piece inside has to choose from (as `InteriorLayer.itemKey` reads them). */
 export function looks(kind: string, underground: boolean): number {
+  if (kind === 'key') return looksOf(kind);
   const shared = sharedKind(kind, underground);
   if (shared) return VARIED.has(shared) ? looksOf(shared) : 1;
   return SCATTERED.has(kind) || UNDER_DRAWN.has(kind) ? 4 : 1;

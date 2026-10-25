@@ -33,6 +33,10 @@ export interface TacticalGrid {
 /** Hidden hazards (traps, sinkholes: their rules say "hidden") are for the DM's eyes only. */
 export const dmOnlyHazard = (rules: string | null | undefined) => !!rules && rules.startsWith('hidden');
 
+/** Underground terrain that blocks movement (deep water, chasms) and what one walks on over it. */
+const GAPS = new Set(['water_deep', 'chasm']);
+const SPANS = new Set(['rope_bridge', 'stepping_stone']);
+
 /**
  * A level of a building or site: rooms, walls, and doors that are shut (`closed`, by index
  * into the level's doors; secret doors are shut until opened).
@@ -48,13 +52,20 @@ export function interiorGrid(it: Interior, li: number, closed: (door: number) =>
     if (kind === null || kind === ROOF_SLOPE) flags[k] = SOLID | OPAQUE | BLOCKS;
     else if (kind === OPEN_BELOW) flags[k] = BLOCKS;
   }
+  // (Deep water and chasms block movement, not sight, unless a rope bridge or stepping stones lie over
+  // them: `kit::blocked_squares`. Spans never clear anything else.)
+  const gap = new Uint8Array(nx * ny);
   for (const f of lv.furniture) {
+    const terrain = f.blocks_move && GAPS.has(f.kind);
     let v = 0;
-    if (f.blocks_move) v |= BLOCKS;
+    if (f.blocks_move && !terrain) v |= BLOCKS;
+    if (terrain) for (let j = f.y; j < f.y + f.h && j < ny; j++) for (let i = f.x; i < f.x + f.w && i < nx; i++) gap[j * nx + i] = 1;
     if (f.blocks_move && f.height_ft >= 6) v |= OPAQUE;
     if (!f.blocks_move && (f.height_ft >= 1 || f.hazard)) v |= DIFFICULT;
     for (let j = f.y; j < f.y + f.h && j < ny; j++) for (let i = f.x; i < f.x + f.w && i < nx; i++) flags[j * nx + i] |= v;
   }
+  for (const f of lv.furniture) if (SPANS.has(f.kind)) for (let j = f.y; j < f.y + f.h && j < ny; j++) for (let i = f.x; i < f.x + f.w && i < nx; i++) gap[j * nx + i] = 0;
+  for (let k = 0; k < gap.length; k++) if (gap[k]) flags[k] |= BLOCKS;
   if (lv.has_stairs && !/^[uwk]:/.test(it.id)) {
     const [sx, sy, sw, sh] = it.stairs;
     for (let j = sy; j < sy + sh; j++) for (let i = sx; i < sx + sw; i++) if (i < nx && j < ny) flags[j * nx + i] |= DIFFICULT;

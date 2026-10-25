@@ -149,6 +149,10 @@ pub struct Door {
     pub kind: &'static str,
     /// Rooms on either side (-1 outside).
     pub rooms: [i16; 2],
+    /// Locked (underground): 0 not, else the colour of the lock (1-7), opened by the key
+    /// (`key` item) of the same colour (its `variant`).
+    #[serde(skip_serializing_if = "is_zero_u8")]
+    pub lock: u8,
 }
 
 #[derive(Serialize, Debug, Clone, Copy)]
@@ -594,6 +598,8 @@ pub const GOD_LOOKS: u8 = 8;
 /// timber (1); a temple's pieces are its god's (`GOD_LOOKS`).
 const LOOKS: &[(&str, u8)] = &[
     ("throne_dais", 6),
+    // (A key's look is the colour of the lock it opens, 1-7.)
+    ("key", 8),
     ("wall_banner", HOUSES),
     ("standing_banner", HOUSES),
     ("low_dais", 2),
@@ -3864,7 +3870,7 @@ fn connect_with(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [us
         let (x, y, vert) = hinted.unwrap_or((x, y, vert));
         door_edges.insert((x, y, vert));
         let (p, q) = edge_seg(x, y, vert);
-        doors.push(Door { a: p, b: q, kind: "door", rooms: [a, b] });
+        doors.push(Door { a: p, b: q, kind: "door", rooms: [a, b], lock: 0 });
     }
     // A room still more than one room from the circulation (here a great or mess hall, and a
     // guardroom, the guards' way through a keep, count too) gets a door to its neighbour
@@ -3922,7 +3928,7 @@ fn connect_with(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [us
             let &(x, y, vert) = &edges[edges.len() / 2];
             if door_edges.insert((x, y, vert)) {
                 let (p, q) = edge_seg(x, y, vert);
-                doors.push(Door { a: p, b: q, kind: "door", rooms: [a, b] });
+                doors.push(Door { a: p, b: q, kind: "door", rooms: [a, b], lock: 0 });
             } else {
                 break;
             }
@@ -3969,7 +3975,7 @@ fn connect_with(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [us
                 2 => ([i as f32, (j + 1) as f32], [(i + 1) as f32, (j + 1) as f32]),
                 _ => ([i as f32, j as f32], [i as f32, (j + 1) as f32]),
             };
-            doors.push(Door { a: p, b: q, kind: "front", rooms: [r, -1] });
+            doors.push(Door { a: p, b: q, kind: "front", rooms: [r, -1], lock: 0 });
         }
         // (Open archways onto the street: each edge named, its room's, onto open ground.)
         for (r, edges) in hints.map_or(&[][..], |h| &h.arch[..]) {
@@ -3984,7 +3990,7 @@ fn connect_with(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [us
                     2 => ([i as f32, (j + 1) as f32], [(i + 1) as f32, (j + 1) as f32]),
                     _ => ([i as f32, j as f32], [i as f32, (j + 1) as f32]),
                 };
-                doors.push(Door { a: p, b: q, kind: "arch", rooms: [*r, -1] });
+                doors.push(Door { a: p, b: q, kind: "arch", rooms: [*r, -1], lock: 0 });
             }
         }
     }

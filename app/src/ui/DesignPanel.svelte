@@ -11,10 +11,10 @@
   import type { HeldView } from '../editor/placing';
   import type { DesignMode, DesignSettings, SiteDesigner } from '../editor/site/designer';
   import { BOSS } from '../editor/site/designer';
-  import { cellarsOf } from '../editor/site/model';
+  import { cellarsOf, SPANS, TERRAIN } from '../editor/site/model';
   import { INSIDE_GROUPS, itemGroup, looks, turnsInside } from '../editor/itemGroups';
   import { HOUSES, houseOf, lookName } from '../render/furniture';
-  import { InteriorLayer } from '../render/InteriorLayer';
+  import { InteriorLayer, lockColor } from '../render/InteriorLayer';
   import { APSE_N, CAVERN, CHAMFERED, isApse, OCTAGON, ROUND } from '../render/roomShapes';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
@@ -53,7 +53,8 @@
     { key: 'rect', label: 'Rectangle', icon: 'square', kbd: 'X', hint: 'Drag out a new room of the kind below.' },
     { key: 'corridor', label: 'Corridor', icon: 'corridor', kbd: 'H', hint: 'Paint the level’s passages.' },
     { key: 'rock', label: 'Rock', icon: 'rock', kbd: 'K', hint: 'Fill squares back with rock (props on them go too).' },
-    { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none.' },
+    { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. With a lock colour chosen below, a door with that lock; again, unlocked. Put its key down from Props › Locks & keys.' },
+    { key: 'terrain', label: 'Terrain', icon: 'waves', kbd: 'A', hint: 'Drag out a rectangle of what is chosen below on bare floor. Bridges and stepping stones go over water and chasms; Clear takes terrain away. Deep water and chasms block the way until a bridge or stones cross them.' },
     { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the prop down. Click a prop to pick it up (even with another chosen), click again to put it down. T turns the prop pointed at, else what is in your hand, and Look by the turn buttons picks its look; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Way down', icon: 'stairs', kbd: 'W', hint: 'Click a square for this level’s way down; the way up below follows.' },
   ];
@@ -67,6 +68,12 @@
     { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. In an outside wall of the ground floor: a back door, again the front door, again none.' },
     { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the piece down (furniture, a prop or one of your pictures). Click a piece to pick it up (even with another chosen), click again to put it down. T turns the piece pointed at, else what is in your hand, and Look by the turn buttons picks its look; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Stairs', icon: 'stairs', kbd: 'W', hint: 'Drag out the stair block (1 to 3 squares each way): the same squares on every floor it reaches. Furniture there goes.' },
+  ];
+  // The door tool's locks (colours as `Door::lock` and a key's look) and the terrain tool's choices.
+  const LOCKS = [1, 2, 3, 4, 5, 6, 7];
+  const TERRAINS: [string, string][][] = [
+    [['water_shallow', 'Shallow water'], ['water_deep', 'Deep water'], ['chasm', 'Chasm'], ['rubble_slope', 'Rubble slope']],
+    [['rope_bridge', 'Rope bridge'], ['stepping_stone', 'Stepping stones'], ['', 'Clear']],
   ];
   const cap = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
 
@@ -149,7 +156,7 @@
     const kind = String(id);
     const p = pieces.find((x) => x.kind === kind);
     const n = kind.startsWith('s:') ? Math.max(1, Math.min(6, Math.ceil(sprites[kind.slice(2)]?.size || 1))) : 1;
-    settings = { ...settings, mode: 'prop', prop: kind, pw: p?.w ?? n, ph: p?.h ?? n, back: null, variant: null };
+    settings = { ...settings, mode: 'prop', prop: kind, pw: p?.w ?? n, ph: p?.h ?? n, back: null, variant: kind === 'key' ? 1 : null };
     // (A phone's sheet goes down to its tools: the map shows where it goes.)
     if (shell.phone) shell.snap = 'peek';
   }
@@ -166,7 +173,7 @@
 
 <div class="design">
   {#if !peek}<div class="site">Designing <b>{name}</b> <span class="ws-muted">· {building ? (lv?.name ?? '') : `level ${level + 1} of ${draft?.levels.length ?? 1}`}</span></div>{/if}
-  <div class="tools" role="toolbar" aria-label="Design tools">
+  <div class="tools" role="toolbar" aria-label="Design tools" style:--tools={tools.length}>
     {#each tools as t (t.key)}
       <button class="ws-icon-btn" aria-pressed={settings.mode === t.key} title="{t.label} ({t.kbd})" aria-label={t.label} onclick={() => (settings = { ...settings, mode: t.key })}><Icon name={t.icon} /></button>
     {/each}
@@ -192,8 +199,9 @@
             value={lookNow === null ? '' : String(Math.min(lookNow, lookCount - 1))}
             onchange={(e) => designer.setLook(e.currentTarget.value === '' ? null : Number(e.currentTarget.value))}
           >
-            <option value="">{ownLook}</option>
-            {#each { length: lookCount } as _, v (v)}<option value={String(v)}>{lookName(lookKind, v)}</option>{/each}
+            <!-- (A key's look is its colour, 1-7: one with none would open nothing.) -->
+            {#if lookKind !== 'key'}<option value="">{ownLook}</option>{/if}
+            {#each { length: lookCount } as _, v (v)}{#if lookKind !== 'key' || v > 0}<option value={String(v)}>{lookName(lookKind, v)}</option>{/if}{/each}
           </select>
         {/if}
       {/snippet}
@@ -234,6 +242,32 @@
     {/if}
     {#if settings.mode === 'room' || settings.mode === 'rect' || settings.mode === 'corridor' || settings.mode === 'stairs' || settings.mode === 'wall'}
       <label class="switch"><span class="grow">Add doors where a room would be shut off</span><input type="checkbox" class="ws-switch" bind:checked={settings.autoDoors} /></label>
+    {/if}
+    {#if settings.mode === 'door' && !building}
+      <div class="ws-field">
+        Lock
+        <div class="ws-seg">
+          <button class:on={settings.lock === 0} title="Plain and secret doors" onclick={() => (settings.lock = 0)}>None</button>
+          {#each LOCKS as c (c)}
+            <button class:on={settings.lock === c} title="{lookName('key', c)} lock: its key is the {lookName('key', c).toLowerCase()} one" aria-label="{lookName('key', c)} lock" onclick={() => (settings.lock = c)}>
+              <span class="swatch" style:background={'#' + lockColor(c).toString(16).padStart(6, '0')}></span>
+            </button>
+          {/each}
+        </div>
+        {#if settings.lock}<span class="ws-hint">{lookName('key', settings.lock)}: click a door to lock it with this colour, again to unlock it. One key of the same colour opens it.</span>{/if}
+      </div>
+    {/if}
+    {#if settings.mode === 'terrain' && !building}
+      <div class="ws-field">
+        Paint
+        {#each TERRAINS as row, r (r)}
+          <div class="ws-seg">
+            {#each row as [k, label] (k)}<button class:on={settings.terrain === k} onclick={() => (settings.terrain = k)}>{label}</button>{/each}
+          </div>
+        {/each}
+        {#if settings.terrain && SPANS.has(settings.terrain)}<span class="ws-hint">Lies over water or a chasm (or bare floor): walkable.</span>
+        {:else if settings.terrain && TERRAIN.has(settings.terrain)}<span class="ws-hint">{settings.terrain === 'water_deep' || settings.terrain === 'chasm' ? 'Blocks movement, not sight.' : 'Walkable, difficult going.'}</span>{/if}
+      </div>
     {/if}
     {#if settings.mode === 'prop'}
       <ItemPicker {items} groups={[...INSIDE_GROUPS, 'Other']} chosen={[settings.prop]} context={building ? 'building' : 'underground'} {thumbs} {picture} onPick={pickProp} />
@@ -355,11 +389,18 @@
   }
   .tools {
     display: grid;
-    grid-template-columns: repeat(8, 1fr);
+    grid-template-columns: repeat(var(--tools, 8), 1fr);
     gap: 2px;
   }
   .look {
     max-width: 16em;
+  }
+  .swatch {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid #1d1a14;
   }
   .tools .ws-icon-btn {
     width: auto;

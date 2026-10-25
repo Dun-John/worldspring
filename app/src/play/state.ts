@@ -54,6 +54,8 @@ export interface DoorState {
   open?: boolean;
   /** A secret door the players know about. */
   found?: boolean;
+  /** A locked door the DM has unlocked (it stays shut until opened; afterwards it is a plain door). */
+  unlocked?: boolean;
 }
 
 export interface LocSettings {

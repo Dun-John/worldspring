@@ -3021,7 +3021,7 @@
     designMode: (m) => {
       // (Rock and corridors are underground; wall lines and taking walls away, in buildings.)
       const inBuilding = designer?.building ?? false;
-      if (inBuilding ? m === 'corridor' || m === 'rock' : m === 'wall' || m === 'merge') return;
+      if (inBuilding ? m === 'corridor' || m === 'rock' || m === 'terrain' : m === 'wall' || m === 'merge') return;
       designSettings = { ...designSettings, mode: m };
     },
     townMode: (m) => {

@@ -45,6 +45,41 @@ export function sharedKind(kind: string, underground: boolean): string | undefin
 /** Props scattered differently per placement: one of four variants, picked by position. */
 export const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
 const INK = 0x1d1a14;
+
+/** A lock's colour 1-7 (`Door.lock`) and its key's (`Item.variant`); 0 a key with no colour. Placeholders until the sprite batch. */
+export const LOCK_COLORS = [0x9a958b, 0xd8412f, 0xe8892a, 0xe8cc2a, 0x3fae52, 0x2f86d8, 0x9a56d4, 0xf0ece0];
+export const lockColor = (n: number) => LOCK_COLORS[n >= 0 && n < LOCK_COLORS.length ? n : 0];
+
+/** Underground terrain (`kit::TERRAIN`) drawn on the floor under everything else, and the spans over it (`kit::SPANS`). */
+const TERRAIN_KINDS = new Set(['water_shallow', 'water_deep', 'chasm', 'rubble_slope']);
+const SPAN_KINDS = new Set(['rope_bridge', 'stepping_stone']);
+const hash2 = (i: number, j: number, k: number) => {
+  const v = Math.sin(i * 127.1 + j * 311.7 + k * 74.7) * 43758.5453;
+  return v - Math.floor(v);
+};
+
+/** A small padlock (shut, or open with the shackle lifted) in a lock's colour, centred on (cx, cy). */
+function padlock(g: Graphics, cx: number, cy: number, color: number, open: boolean) {
+  const lift = open ? 0.07 : 0;
+  const top = cy - 0.03 - lift;
+  g.arc(cx, top, 0.085, Math.PI, Math.PI * 2).stroke({ width: 0.075, color: INK });
+  g.arc(cx, top, 0.085, Math.PI, Math.PI * 2).stroke({ width: 0.04, color: 0xd5d8dc });
+  if (!open) g.moveTo(cx - 0.085, top).lineTo(cx - 0.085, cy).stroke({ width: 0.04, color: 0xd5d8dc });
+  g.moveTo(cx + 0.085, top).lineTo(cx + 0.085, cy).stroke({ width: 0.04, color: 0xd5d8dc });
+  g.roundRect(cx - 0.14, cy - 0.01, 0.28, 0.22, 0.04).fill(color).stroke({ width: 0.035, color: INK });
+  g.circle(cx, cy + 0.08, 0.025).fill(INK);
+}
+
+/** A small key (ring, shaft, two teeth) in a key's colour, centred on (cx, cy). */
+function keyGlyph(g: Graphics, cx: number, cy: number, color: number) {
+  const draw = (extra: number, c: number) => {
+    g.circle(cx - 0.2, cy, 0.1).stroke({ width: 0.06 + extra, color: c });
+    g.moveTo(cx - 0.1, cy).lineTo(cx + 0.27, cy).stroke({ width: 0.06 + extra, color: c, cap: 'round' });
+    g.moveTo(cx + 0.15, cy).lineTo(cx + 0.15, cy + 0.12).moveTo(cx + 0.26, cy).lineTo(cx + 0.26, cy + 0.12).stroke({ width: 0.055 + extra, color: c, cap: 'round' });
+  };
+  draw(0.05, INK);
+  draw(0, color);
+}
 const COVER = ['no cover', 'half cover', 'three-quarters cover', 'total cover'];
 
 // Underground levels are painted by a shader (`underground.frag`) from a smooth floor field
@@ -855,9 +890,14 @@ export class InteriorLayer {
     // (Underground, the shader paints sewage and lava channels.)
     const atlas = InteriorLayer.renderer ? ItemAtlas.for(InteriorLayer.renderer) : null;
     const items = new Container();
+    // Water, chasms and rubble lie on the floor, the rope bridges and stepping stones over them (vector, not atlas: they can be big).
+    for (const pass of [TERRAIN_KINDS, SPAN_KINDS]) for (const f of lv.furniture) if (pass.has(f.kind)) this.drawTerrain(g, f);
     // (A platform under what stands on it.)
     for (const f of [...lv.furniture].sort((a, b) => +PLATFORMS.has(b.kind) - +PLATFORMS.has(a.kind))) {
       if (this.underground && (f.kind === 'sewage' || f.kind === 'lava')) continue;
+      if (TERRAIN_KINDS.has(f.kind) || SPAN_KINDS.has(f.kind)) continue;
+      // (A key is for the DM's eyes only.)
+      if (this.style.player && f.kind === 'key') continue;
       // Marks where a tunnel leaves the section: the next section is drawn on from there.
       if (this.tile && f.kind === 'continues') continue;
       if (this.style.player && dmOnlyHazard(f.hazard)) continue;
@@ -1044,6 +1084,15 @@ export class InteriorLayer {
       g.moveTo(ax, ay).lineTo(lx, ly).stroke({ width: 0.1, color: wood });
       g.arc(ax, ay, 0.9, vert ? 0 : Math.PI / 2 - 0.2, vert ? 0.2 : Math.PI / 2).stroke({ width: 0.03, color: INK, alpha: 0.5 });
     }
+    // A lock on a door, for the DM only (open once unlocked; none on an open door).
+    if (!this.style.player) {
+      shown.forEach((d, k) => {
+        if (!d.lock) return;
+        const st = doorState ? doorState(loc, k) : null;
+        if (st?.open) return;
+        padlock(g, (d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2 - 0.05, lockColor(d.lock), !!st?.unlocked);
+      });
+    }
     // Room labels in screen space.
     const style = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 12, fontStyle: 'italic', fill: '#f5ecd6', stroke: { color: '#2a1f14', width: 3, join: 'round' } });
     lv.rooms.forEach((r, ri) => {
@@ -1137,7 +1186,7 @@ export class InteriorLayer {
       for (const f of it.levels[li].furniture) {
         let over = false;
         for (let j = f.y; j < f.y + f.h && !over; j++) for (let i = f.x; i < f.x + f.w && !over; i++) over = i < nx && j < ny && from[j * nx + i] === li;
-        if (!over || (this.style.player && dmOnlyHazard(f.hazard))) continue;
+        if (!over || (this.style.player && (dmOnlyHazard(f.hazard) || f.kind === 'key'))) continue;
         if (!atlas || f.sprite) {
           this.drawItem(g, f);
           continue;
@@ -1341,7 +1390,7 @@ export class InteriorLayer {
       return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}`;
     }
     const wall = ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
-    const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) ? this.lookOf(f) : 0;
+    const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) || f.kind === 'key' ? this.lookOf(f) : 0;
     return `u:${base}:${light}:${wall}:${variant}`;
   }
 
@@ -1422,8 +1471,86 @@ export class InteriorLayer {
     return sides[0];
   }
 
+  /** Water, a chasm, rubble, a rope bridge or stepping stones over their full w x h (placeholders until the sprite batch). */
+  private drawTerrain(g: Graphics, f: InteriorItem) {
+    const { x, y, w, h, kind } = f;
+    switch (kind) {
+      case 'water_shallow':
+        g.rect(x, y, w, h).fill({ color: 0x6fb8b0, alpha: 0.55 });
+        for (let j = 0; j < h; j++) {
+          for (let i = 0; i < w; i++) {
+            const [px, py] = [x + i + 0.2 + hash2(x + i, y + j, 1) * 0.5, y + j + 0.25 + hash2(x + i, y + j, 2) * 0.5];
+            g.moveTo(px, py).lineTo(px + 0.25, py);
+          }
+        }
+        g.stroke({ width: 0.03, color: 0xe4f6f2, alpha: 0.6 });
+        break;
+      case 'water_deep':
+        g.rect(x, y, w, h).fill({ color: 0x1b4a78, alpha: 0.92 });
+        for (let j = 0; j < h; j++) {
+          for (let i = 0; i < w; i++) {
+            const [px, py] = [x + i + 0.2 + hash2(x + i, y + j, 3) * 0.4, y + j + 0.3 + hash2(x + i, y + j, 4) * 0.4];
+            g.moveTo(px, py).lineTo(px + 0.3, py);
+          }
+        }
+        g.stroke({ width: 0.03, color: 0x4f8ab8, alpha: 0.5 });
+        break;
+      case 'chasm':
+        g.rect(x, y, w, h).fill(0x060505);
+        g.rect(x + 0.04, y + 0.04, w - 0.08, h - 0.08).stroke({ width: 0.08, color: 0x6a6358 });
+        break;
+      case 'rubble_slope':
+        g.rect(x, y, w, h).fill({ color: 0x8a857c, alpha: 0.38 });
+        for (let j = 0; j < h; j++) {
+          for (let i = 0; i < w; i++) {
+            for (let k = 0; k < 4; k++) {
+              const [px, py] = [x + i + 0.1 + hash2(x + i, y + j, 10 + k) * 0.8, y + j + 0.1 + hash2(x + i, y + j, 20 + k) * 0.8];
+              g.circle(px, py, 0.04 + hash2(x + i, y + j, 30 + k) * 0.05).fill(k % 2 ? 0x5e5a53 : 0xb4afa5);
+            }
+          }
+        }
+        break;
+      case 'rope_bridge': {
+        // Planks across the way it runs (its long side), a rope along each edge.
+        const along = w >= h;
+        const [len, span] = along ? [w, h] : [h, w];
+        const at = (a: number, b: number): [number, number] => (along ? [x + a, y + b] : [x + b, y + a]);
+        const [r0, r1] = [0.12, span - 0.12];
+        const [a0, a1] = [at(0, r0), at(len, r1)];
+        g.rect(Math.min(a0[0], a1[0]), Math.min(a0[1], a1[1]), Math.abs(a1[0] - a0[0]), Math.abs(a1[1] - a0[1])).fill(0x8f6a3c);
+        for (let t = 0.25; t < len; t += 0.5) {
+          const [s0, s1] = [at(t, r0), at(t, r1)];
+          g.moveTo(s0[0], s0[1]).lineTo(s1[0], s1[1]);
+        }
+        g.stroke({ width: 0.04, color: INK, alpha: 0.7 });
+        for (const b of [r0, r1]) {
+          const [s0, s1] = [at(0, b), at(len, b)];
+          g.moveTo(s0[0], s0[1]).lineTo(s1[0], s1[1]);
+        }
+        g.stroke({ width: 0.07, color: 0xd8c08a });
+        break;
+      }
+      case 'stepping_stone':
+        for (let j = 0; j < h; j++) {
+          for (let i = 0; i < w; i++) {
+            const [px, py] = [x + i + 0.5 + (hash2(x + i, y + j, 5) - 0.5) * 0.2, y + j + 0.5 + (hash2(x + i, y + j, 6) - 0.5) * 0.2];
+            g.circle(px, py, 0.26).fill(0x8d8a84).stroke({ width: 0.04, color: INK, alpha: 0.8 });
+          }
+        }
+        break;
+    }
+    // (The 5-ft grid across, as the floor's own is covered.)
+    if (kind.startsWith('water') || kind === 'chasm') {
+      for (let i = 1; i < w; i++) g.moveTo(x + i, y).lineTo(x + i, y + h);
+      for (let j = 1; j < h; j++) g.moveTo(x, y + j).lineTo(x + w, y + j);
+      g.stroke({ width: 0.02, color: 0x000000, alpha: 0.18 });
+    }
+  }
+
   private drawItem(g: Graphics, f: InteriorItem) {
     const { x, y, w, h, kind } = f;
+    if (TERRAIN_KINDS.has(kind) || SPAN_KINDS.has(kind)) return this.drawTerrain(g, f);
+    if (kind === 'key') return keyGlyph(g, x + 0.5, y + 0.5, lockColor(this.lookOf(f)));
     const c = itemColor(kind);
     const inset = 0.08;
     // Building furniture, and underground props that share its drawing.
