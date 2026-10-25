@@ -468,8 +468,10 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     const CELL: f64 = 2.0;
     let cell = |p: P| (crate::core::floor(p[0] / CELL) as i64, crate::core::floor(p[1] / CELL) as i64);
     let mut grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
+    // (A town hall's lot as generated: under its belfry, its body (`belfry`).)
+    let lot = |b: &'_ Building| -> Vec<P> { super::belfry::of(b).map_or_else(|| b.poly.clone(), |_| b.parts[0].poly.clone()) };
     for (k, b) in generated.buildings.iter().enumerate() {
-        grid.entry(cell(centroid(&b.poly))).or_default().push(k as u32);
+        grid.entry(cell(centroid(&lot(b)))).or_default().push(k as u32);
     }
     let same = |a: &[P], b: &[P]| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| dist(*p, *q) < 0.01);
     let mut used = vec![false; generated.buildings.len()];
@@ -479,7 +481,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     let patch: Vec<u32> = l.buildings.iter().map(|b| b.id).collect();
     for (k, b) in l.buildings.iter_mut().enumerate() {
         let (cx, cy) = cell(centroid(&b.poly));
-        let hit = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (cx + dx, cy + dy))).filter_map(|c| grid.get(&c)).flatten().map(|&g| g as usize).find(|&g| !used[g] && same(&generated.buildings[g].poly, &b.poly));
+        let hit = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (cx + dx, cy + dy))).filter_map(|c| grid.get(&c)).flatten().map(|&g| g as usize).find(|&g| !used[g] && same(&lot(&generated.buildings[g]), &b.poly));
         match hit {
             Some(g) => {
                 used[g] = true;

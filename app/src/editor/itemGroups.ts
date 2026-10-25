@@ -19,7 +19,7 @@ export const BATTLE_GROUPS: [string, number[]][] = [
 
 /** The groups of furniture and props inside, in the order the picker shows them. */
 export const INSIDE_GROUPS = [
-  'Beds & seating', 'Tables & counters', 'Storage', 'Kitchen & craft', 'Great hall', 'Worship & tombs', 'Light & fire', 'Prison & grim',
+  'Beds & seating', 'Tables & counters', 'Storage', 'Kitchen & craft', 'Great hall', 'Guild & civic', 'Stables & yard', 'Worship & tombs', 'Light & fire', 'Prison & grim',
   'Cave & nature', 'Mine & works', 'Remains & clutter', 'Traps & hazards', 'Ways & fixtures',
 ];
 
@@ -32,6 +32,8 @@ const BY_GROUP: Record<string, string[]> = {
     'throne_dais', 'low_dais', 'chair_of_office', 'high_table', 'carpet_runner', 'tapestry', 'wall_banner', 'standing_banner', 'font', 'cloister_well',
     'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'garden_path',
   ],
+  'Guild & civic': ['council_table', 'counting_desk', 'strongbox', 'job_board', 'guild_arms'],
+  'Stables & yard': ['stable_stall'],
   'Worship & tombs': ['altar', 'side_altar', 'god_statue', 'candle_stand', 'carved_screen', 'screen_gate', 'statue', 'sarcophagus', 'urn', 'coffin', 'effigy', 'niche', 'offering', 'glyph', 'bell', 'fountain'],
   'Light & fire': ['brazier', 'candles', 'sconce', 'lantern', 'campfire'],
   'Prison & grim': ['cage', 'chains', 'iron_maiden', 'stocks', 'rack'],

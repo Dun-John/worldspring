@@ -1245,6 +1245,7 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
                     let kind = match p.kind {
                         town::PartKind::Body => "body",
                         town::PartKind::Tower { round: true } => "round tower",
+                        town::PartKind::Tower { round: false } if town::belfry::of(b).is_some() => "belfry",
                         town::PartKind::Tower { round: false } => "square tower",
                         town::PartKind::Forebuilding => "forebuilding",
                         town::PartKind::Wing if town::temple::is_temple(b) => "transept",

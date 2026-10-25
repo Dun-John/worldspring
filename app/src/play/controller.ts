@@ -1215,7 +1215,7 @@ export class PlayController implements PointerTool {
     const lv = it.levels[to.level];
     const out: [number, number][] = lv.furniture.filter((f) => f.kind === 'exit').map((f) => to.toWorld(f.x + 0.5, f.y + 0.5));
     for (const d of lv.doors) {
-      if (d.kind !== 'front' && d.kind !== 'back') continue;
+      if (d.kind !== 'front' && d.kind !== 'back' && d.kind !== 'arch') continue;
       const [ox, oy] = this.outsideOf(it, to.level, d);
       const [mx, my] = [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2];
       out.push(to.toWorld(mx * 2 - ox, my * 2 - oy));
@@ -1234,7 +1234,7 @@ export class PlayController implements PointerTool {
     const lv = it.levels[level];
     const ground = interiorPlace(it, level, null);
     const out: [number, number][] = lv.furniture.filter((f) => f.kind === 'exit').map((f) => ground.toWorld(f.x + 0.5, f.y + 0.5));
-    for (const d of lv.doors) if (d.kind === 'front' || d.kind === 'back') out.push(ground.toWorld(...this.outsideOf(it, level, d)));
+    for (const d of lv.doors) if (d.kind === 'front' || d.kind === 'back' || d.kind === 'arch') out.push(ground.toWorld(...this.outsideOf(it, level, d)));
     return out;
   }
 

@@ -8,7 +8,7 @@
 // turns on grass with their shadows, and furniture and props with a back at each of their four sides. Last, a
 // palace's forecourt as the battlemap draws it (garden wall, gate piers, open gates, gravel walks; `&items=forecourt`
 // alone, at `&sq=` px a square, default 64); and a temple's pieces in each god's look (`&items=temple` alone,
-// default 56).
+// default 56). `&items=civic` shows the guild and civic pieces and the stable stall.
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { Shape } from '../gen/battlePrep';
@@ -37,7 +37,11 @@ const FURNITURE: [string, number, number][] = [
   ['dance_floor', 5, 5], ['dance_floor', 4, 3], ['harpsichord', 1, 2], ['musicians_corner', 2, 2], ['refreshment_table', 3, 1], ['refreshment_table', 2, 1],
   ['garden_path', 1, 4], ['garden_path', 3, 2],
   ['god_statue', 1, 1], ['god_statue', 2, 1], ['candle_stand', 1, 1], ['carved_screen', 1, 1], ['carved_screen', 2, 1], ['carved_screen', 3, 1], ['screen_gate', 1, 1], ['screen_gate', 2, 1], ['side_altar', 1, 1], ['side_altar', 2, 1],
+  ['strongbox', 1, 1], ['counting_desk', 2, 1], ['job_board', 2, 1], ['stable_stall', 1, 2], ['guild_arms', 1, 1], ['guild_arms', 2, 1], ['council_table', 4, 2], ['council_table', 6, 2],
 ];
+
+/** Named sets for `&items=`: the guild and civic batch. */
+const SETS: Record<string, string[]> = { civic: ['strongbox', 'counting_desk', 'job_board', 'stable_stall', 'guild_arms', 'council_table'] };
 
 /** Underground props (`under::item` and the ways in and out), with their sizes in squares. */
 const UNDER: [string, number, number][] = [
@@ -127,7 +131,7 @@ export async function runGallery(target: HTMLElement) {
   // Battlemap objects: every atlas frame, all variants, at about 48 px a square.
   const query = new URLSearchParams(location.search);
   const only = query.get('kinds')?.split(',').map(Number);
-  const pick = query.get('items')?.split(',');
+  const pick = query.get('items')?.split(',').flatMap((k) => SETS[k] ?? [k]);
   const sq = Number(query.get('sq')) || 48;
   const ground = query.has('ground') ? parseInt(query.get('ground') || '948c80', 16) : null;
   if (query.has('turn')) {

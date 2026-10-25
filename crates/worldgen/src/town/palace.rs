@@ -11,9 +11,15 @@
 //! rectangle 12 squares by 12 or more (`MONASTERY_SIDES`; clearing its block, its alleys too, on ground
 //! fit for a terrace where the lots beside it give none). The capital's then gets its front and
 //! the forecourt before it, walled, its gate on the axis, a paved way on to the street (`approach`).
+//! A coaching inn grows likewise round its yard (`interior::hub`'s `inn`, decision 4): every
+//! caravanserai and a town's biggest inn on a street (a city's two, a metropolis' three:
+//! `coaching_inns`) take in the homes of their ward beside them to `INN_FT2` (`CARAVAN_FT2`) on a
+//! rectangle of `interior::hub::YARD` squares or more with a side on a street, else clear their
+//! block's homes for one; their lots are their ground (`Layout::grounds`), as a monastery's.
 //! A town laid out anew by hand keeps its palace's footprint as generated wherever what stands under
 //! it now is its own lot and homes clear of the streets (the capital's and a monastery's whatever its
-//! patch is laid out as, open ground too, the capital's front as generated: `follow`, `approach`);
+//! patch is laid out as, open ground too, the capital's front as generated; a coaching inn's on any
+//! homes outside a castle's ward, never on open ground: `follow`, `approach`);
 //! else it is grown again. Nothing overlaps a palace, by the area two outlines share
 //! (`super::overlap`), however little.
 
@@ -49,6 +55,15 @@ const MONASTERY_SIDES: Sides = Sides { least: 60.0, long: 60.0, most_short: 110.
 /// The footprint a monastery grows to (sq ft), and the most lots it takes in.
 const MONASTERY_FT2: f64 = 8000.0;
 const MONASTERY_MOST: usize = 5;
+/// A coaching inn's (`is_coaching`): 11 squares by 12 to 18 by 22, round its yard; the footprint an inn
+/// grows to and a caravanserai's (sq ft), and the most lots either takes in.
+const INN_SIDES: Sides = Sides { least: 55.0, long: 60.0, most_short: 90.0, most_long: 110.0, most_area: 1.25 * INN_FT2 };
+const CARAVAN_SIDES: Sides = Sides { least: 55.0, long: 60.0, most_short: 90.0, most_long: 110.0, most_area: 1.2 * CARAVAN_FT2 };
+const INN_FT2: f64 = 4000.0;
+const CARAVAN_FT2: f64 = 5500.0;
+const INN_MOST: usize = 4;
+/// The least floor (sq ft) an inn grows round a yard from: `interior::hub::INN_LEAST` squares.
+const INN_FROM: f64 = 1500.0;
 /// The area (sq ft) two outlines may share and not overlap: none but rounding's.
 const TOUCH: f64 = 0.01;
 /// The most lots a palace takes in.
@@ -64,9 +79,28 @@ pub fn is_monastery(b: &Building) -> bool {
     b.func.is_some_and(|f| catalog::CATALOG[f as usize].key == "monastery")
 }
 
-/// Whether a building takes in the lots beside it (`merge`): a palace or a monastery.
-pub fn merges(b: &Building) -> bool {
-    is_palace(b) || is_monastery(b)
+/// Whether a building is an inn or a caravanserai.
+pub fn is_inn(b: &Building) -> bool {
+    b.func.is_some_and(|f| matches!(catalog::CATALOG[f as usize].key, "inn" | "caravanserai"))
+}
+
+/// Whether a building is a coaching inn (`interior::hub`'s `inn`: round a galleried yard): an inn or
+/// a caravanserai on a rectangle of `interior::hub::YARD` squares or more (its lots merged, `merge`:
+/// every caravanserai, a town's biggest inn, a city's two, a metropolis' three: so only one with its
+/// ground in layout `l`, `Layout::grounds`; not one drawn by hand, nor one whose outline was).
+pub fn is_coaching(l: &Layout, b: &Building) -> bool {
+    if !l.grounds.iter().any(|g| g.0 == b.id) || b.poly.len() != 4 || !b.parts.is_empty() || b.keep.is_some() || b.structure != Structure::Roofed || !is_inn(b) {
+        return false;
+    }
+    let o = obb(&b.poly);
+    let (long, short) = crate::interior::hub::YARD;
+    o.long >= 5.0 * long as f64 - 1.0 && o.short >= 5.0 * short as f64 - 1.0 && area(&b.poly).abs() >= 0.97 * o.long * o.short
+}
+
+/// Whether a building takes in the lots beside it (`merge`) or did: a palace, a monastery, a coaching
+/// inn.
+pub fn merges(l: &Layout, b: &Building) -> bool {
+    is_palace(b) || is_monastery(b) || is_coaching(l, b)
 }
 
 /// The largest rectangle (axes `u`, `v`) inside convex polygon `poly` (world ft), its sides whole
@@ -295,12 +329,18 @@ fn capital_sizes() -> Vec<(usize, usize)> {
 /// give no footprint round a cloister): `MONASTERY_SIDES`, nearest `MONASTERY_FT2` first, the squarer
 /// first.
 fn monastery_sizes() -> Vec<(usize, usize)> {
+    sizes_of(MONASTERY_SIDES, MONASTERY_FT2)
+}
+
+/// The sizes (squares) a footprint of sides `sides` may clear its block for, nearest `ft2` first, the
+/// squarer first (`monastery_sizes`; a coaching inn's).
+fn sizes_of(sides: Sides, ft2: f64) -> Vec<(usize, usize)> {
     const SQ: f64 = 5.0;
     let n = |x: f64| crate::core::round(x / SQ) as usize;
-    let (lo, hi, short, long) = (n(MONASTERY_SIDES.least), n(MONASTERY_SIDES.most_long), n(MONASTERY_SIDES.most_short), n(MONASTERY_SIDES.long));
+    let (lo, hi, short, long) = (n(sides.least), n(sides.most_long), n(sides.most_short), n(sides.long));
     let mut sizes: Vec<(usize, usize)> =
-        (lo..=hi).flat_map(|w| (lo..=hi).map(move |d| (w, d))).filter(|&(w, d)| w.max(d) >= long && w.min(d) <= short && (w * d) as f64 * SQ * SQ <= MONASTERY_SIDES.most_area).collect();
-    let target = MONASTERY_FT2 / (SQ * SQ);
+        (lo..=hi).flat_map(|w| (lo..=hi).map(move |d| (w, d))).filter(|&(w, d)| w.max(d) >= long && w.min(d) <= short && (w * d) as f64 * SQ * SQ <= sides.most_area).collect();
+    let target = ft2 / (SQ * SQ);
     sizes.sort_by_key(|&(w, d)| (crate::core::round(((w * d) as f64 - target).abs()) as i64, w.abs_diff(d), w, d));
     sizes
 }
@@ -650,21 +690,35 @@ pub(super) fn approach(site: &Site, l: &mut Layout, off: P, capital: bool, kept:
 /// origin) given its footprint: the lots beside it taken in (`merge`'s rules), the largest rectangle
 /// the whole holds. `capital`: the capital's (its palace round a court: bigger, an odd number of
 /// squares across). A monastery with no rectangle big enough for its cloister keeps its lot.
-pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[u32]) {
+pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, tier: crate::t0::settle::Tier, skip: &[u32]) {
     let local = |poly: &[P]| -> Vec<P> { poly.iter().map(|p| sub(*p, off)).collect() };
-    let palaces: Vec<usize> = (0..l.buildings.len())
-        .filter(|&i| merges(&l.buildings[i]) && l.buildings[i].structure == Structure::Roofed && l.buildings[i].ward != Ward::Castle && l.buildings[i].parts.is_empty() && !skip.contains(&l.buildings[i].id))
+    let mut palaces: Vec<usize> = (0..l.buildings.len())
+        .filter(|&i| (is_palace(&l.buildings[i]) || is_monastery(&l.buildings[i])) && l.buildings[i].structure == Structure::Roofed && l.buildings[i].ward != Ward::Castle && l.buildings[i].parts.is_empty() && !skip.contains(&l.buildings[i].id))
         .collect();
+    palaces.extend(coaching_inns(l, tier, skip));
     let mut gone: Vec<u32> = Vec::new();
     for pi in palaces {
         let p = l.buildings[pi].clone();
         let monk = is_monastery(&p);
-        let capital = capital && !monk;
-        let most = if monk { MONASTERY_MOST } else { MOST };
+        // (A coaching inn: its ward's homes as a palace's, its ground kept as a monastery's.)
+        let inn = is_inn(&p);
+        let cara = inn && p.func.is_some_and(|f| catalog::CATALOG[f as usize].key == "caravanserai");
+        let capital = capital && !monk && !inn;
+        let most = if monk {
+            MONASTERY_MOST
+        } else if inn {
+            INN_MOST
+        } else {
+            MOST
+        };
         // (Ground fit to build on: a monastery's on a terrace, `Site::terraced`.)
         let fit = |r: &[P]| if monk { site.terraced(&local(r)) } else { site.buildable(&local(r)) };
         let target = if monk {
             MONASTERY_FT2
+        } else if cara {
+            CARAVAN_FT2
+        } else if inn {
+            INN_FT2
         } else if capital {
             CAPITAL_FT2
         } else {
@@ -676,6 +730,13 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
         let c0 = centroid(&p.poly);
         let lanes: Vec<(P, P, f64)> = l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |s| (s[0], s[1], *w))).filter(|&(a, b, _)| super::geom::seg_dist(c0, a, b) < 400.0).collect();
         let clear = |h: &[P]| lanes.iter().all(|&(a, b, w)| poly_seg_dist(h, a, b) >= 0.5 * w - 1.0);
+        // (A side's middle within 8 ft of a street's edge.)
+        let fronts = |r: &[P]| {
+            (0..r.len()).any(|k| {
+                let m = mul(add(r[k], r[(k + 1) % r.len()]), 0.5);
+                lanes.iter().any(|&(a, b, w)| super::geom::seg_dist(m, a, b) < 0.5 * w + 8.0)
+            })
+        };
         // (A home of its ward it may take in; a monastery any home.)
         let home = |o: &Building| takes(o) && (monk || o.ward == p.ward) && !gone.contains(&o.id);
         let rect_of = |set: &[usize], l: &Layout, sides: Sides| -> Option<(Vec<P>, f64, Vec<P>)> {
@@ -743,7 +804,11 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
             // (Its own lot's rectangle, where it takes in none: square to its axis all the same, where
             // that keeps most of its floor; a capital's where it keeps 60%, for its symmetry; another's
             // whatever it keeps where its lot is bigger than it may be.)
-            if !monk && set.is_empty() && best < if capital { 0.6 } else { 0.8 } * area(&p.poly).abs() && (capital || area(&p.poly).abs() <= CITY_FT2) {
+            if !monk && set.is_empty() && best < if capital { 0.6 } else { 0.8 } * area(&p.poly).abs() && (capital || inn || area(&p.poly).abs() <= CITY_FT2) {
+                return None;
+            }
+            // (A coaching inn's front on a street, for its carriage arch and its door.)
+            if inn && !fronts(&rect) {
                 return None;
             }
             fit(&rect).then_some((set, rect))
@@ -757,6 +822,11 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
                 cleared = true;
                 clear_ground(site, l, &p, u, ccw, off, &gone, &monastery_sizes(), true)
             })
+        } else if inn {
+            // (Where the lots beside it give no yard, clearing the homes of its block as a monastery
+            // does: on a street all the same.)
+            let (sides, ft2) = if cara { (CARAVAN_SIDES, CARAVAN_FT2) } else { (INN_SIDES, INN_FT2) };
+            attempt(sides).or_else(|| clear_ground(site, l, &p, u, ccw, off, &gone, &sizes_of(sides, ft2), false).filter(|f| fronts(&f.1)))
         } else if capital {
             attempt(CAPITAL_SIDES).filter(|f| courts(&f.1)).or_else(|| clear_ground(site, l, &p, u, ccw, off, &gone, &capital_sizes(), false)).or_else(|| attempt(CAPITAL_LEAST))
         } else {
@@ -765,7 +835,7 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
         let Some((set, rect)) = found else { continue };
         // (A monastery's: the alleys of its block it stands across cut back to it.)
         // Its own lot and those it took in its ground (`Layout::grounds`).
-        if monk {
+        if monk || inn {
             if cleared {
                 cut_alleys(l, &rect);
             }
@@ -783,6 +853,32 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, skip: &[
     if !gone.is_empty() {
         l.buildings.retain(|b| !gone.contains(&b.id));
     }
+}
+
+/// The inns of layout `l` that grow round a yard (`merge`, by index): every caravanserai; of the inns
+/// of `INN_FROM` sq ft or more, roofed, of one piece, on a street (a side within 8 ft of one), the
+/// biggest (the most floor, then the lowest id): a town's one, a city's two, a metropolis' three, less
+/// those kept as generated (`skip`, `follow`). None in a village.
+fn coaching_inns(l: &Layout, tier: crate::t0::settle::Tier, skip: &[u32]) -> Vec<usize> {
+    use crate::t0::settle::Tier;
+    let n: usize = match tier {
+        Tier::Village => 0,
+        Tier::Town => 1,
+        Tier::City => 2,
+        Tier::Metropolis => 3,
+    };
+    let ok = |b: &Building| b.structure == Structure::Roofed && b.ward != Ward::Castle && b.parts.is_empty() && b.keep.is_none() && !skip.contains(&b.id);
+    let key = |b: &Building| b.func.map(|f| catalog::CATALOG[f as usize].key);
+    let mut out: Vec<usize> = (0..l.buildings.len()).filter(|&i| ok(&l.buildings[i]) && key(&l.buildings[i]) == Some("caravanserai")).collect();
+    let kept = l.buildings.iter().filter(|b| skip.contains(&b.id) && key(b) == Some("inn")).count();
+    let street = |b: &Building| {
+        let c = centroid(&b.poly);
+        l.roads.iter().any(|(pts, _, w)| pts.windows(2).any(|s| super::geom::seg_dist(c, s[0], s[1]) < 300.0 && poly_seg_dist(&b.poly, s[0], s[1]) < 0.5 * w + 8.0))
+    };
+    let mut inns: Vec<usize> = (0..l.buildings.len()).filter(|&i| ok(&l.buildings[i]) && key(&l.buildings[i]) == Some("inn") && area(&l.buildings[i].poly).abs() >= INN_FROM && street(&l.buildings[i])).collect();
+    inns.sort_by(|&a, &b| area(&l.buildings[b].poly).abs().total_cmp(&area(&l.buildings[a].poly).abs()).then(l.buildings[a].id.cmp(&l.buildings[b].id)));
+    out.extend(inns.into_iter().take(n.saturating_sub(kept)));
+    out
 }
 
 /// Whether a monastery on rectangle `rect` (world ft; `id`, taking in the homes `taken`), cutting the
@@ -970,15 +1066,17 @@ fn clear_open(l: &mut Layout, hull: &[P]) {
 /// generated), the rest gone. The palaces' (and monasteries') ids kept so.
 pub(super) fn follow(site: &Site, l: &mut Layout, generated: &Layout, off: P, capital: bool) -> Vec<u32> {
     let mut kept = Vec::new();
-    for gp in generated.buildings.iter().filter(|b| merges(b) && b.structure == Structure::Roofed && b.ward != Ward::Castle && b.parts.is_empty()) {
-        // (A monastery kept as the capital's palace is, whatever its patch is laid out as.)
-        let capital = capital || is_monastery(gp);
+    for gp in generated.buildings.iter().filter(|b| merges(generated, b) && b.structure == Structure::Roofed && b.ward != Ward::Castle && b.parts.is_empty()) {
+        // (A monastery kept as the capital's palace is, whatever its patch is laid out as; a coaching
+        // inn likewise, but on homes outside a castle's ward, never on open ground.)
+        let coach = is_coaching(generated, gp);
+        let capital = capital || is_monastery(gp) || coach;
         // (What stands under it, measured about the site's origin as it was grown: no rounding of
         // world ft taken for a sliver.)
         let at_origin = |poly: &[P]| -> Vec<P> { poly.iter().map(|p| sub(*p, off)).collect() };
         let own = at_origin(&gp.poly);
         let under: Vec<usize> = (0..l.buildings.len()).filter(|&k| on(&own, &at_origin(&l.buildings[k].poly))).collect();
-        let home = |o: &Building| takes(o) && (capital || o.ward == gp.ward);
+        let home = |o: &Building| takes(o) && ((capital && !(coach && o.ward == Ward::Castle)) || o.ward == gp.ward);
         let c0 = centroid(&gp.poly);
         let crossing: Vec<usize> = (0..l.roads.len())
             .filter(|&ri| {
@@ -989,7 +1087,7 @@ pub(super) fn follow(site: &Site, l: &mut Layout, generated: &Layout, off: P, ca
         // (The capital's: across its patch's streets, not a main street or a road.)
         let clear = crossing.is_empty() || capital && gp.poly.len() == 4 && crossing.iter().all(|&ri| l.roads[ri].1 == 3);
         let local: Vec<P> = gp.poly.iter().map(|p| sub(*p, off)).collect();
-        if (under.is_empty() && !capital) || !clear || !under.iter().all(|&k| home(&l.buildings[k])) || !(if is_monastery(gp) { site.terraced(&local) } else { site.buildable(&local) }) {
+        if (under.is_empty() && (!capital || coach)) || !clear || !under.iter().all(|&k| home(&l.buildings[k])) || !(if is_monastery(gp) { site.terraced(&local) } else { site.buildable(&local) }) {
             continue;
         }
         let mut pieces: Vec<(Vec<P>, u8, f64)> = Vec::new();
@@ -1046,7 +1144,7 @@ pub(super) fn follow(site: &Site, l: &mut Layout, generated: &Layout, off: P, ca
         (l.buildings[k0].poly, l.buildings[k0].pad_ft) = (gp.poly.clone(), site.pad(&local));
         // (A monastery's ground as generated, `Layout::grounds`: the homes on it gone, as `merge` took
         // them in; a piece another building stands on left out.)
-        let ground: Vec<Vec<P>> = generated.grounds.iter().filter(|g| g.0 == gp.id && is_monastery(gp)).map(|g| g.1.clone()).collect();
+        let ground: Vec<Vec<P>> = generated.grounds.iter().filter(|g| g.0 == gp.id && (is_monastery(gp) || coach)).map(|g| g.1.clone()).collect();
         let on_ground = |o: &Building, g: &[P]| on_lot(&at_origin(g), &at_origin(&o.poly));
         let more: Vec<usize> = (0..l.buildings.len()).filter(|&k| k != k0 && !gone.contains(&k) && takes(&l.buildings[k]) && ground.iter().any(|g| on_ground(&l.buildings[k], g))).collect();
         gone.extend(more);
@@ -1057,6 +1155,10 @@ pub(super) fn follow(site: &Site, l: &mut Layout, generated: &Layout, off: P, ca
         });
         let k0 = k0 - gone.iter().filter(|&&k| k < k0).count();
         l.grounds.extend(ground.into_iter().filter(|g| !l.buildings.iter().enumerate().any(|(k, o)| k != k0 && on_ground(o, g))).map(|g| (gp.id, g)));
+        // (A coaching inn's footprint its ground at the least: `is_coaching`.)
+        if coach && !l.grounds.iter().any(|g| g.0 == gp.id) {
+            l.grounds.push((gp.id, gp.poly.clone()));
+        }
         kept.push(gp.id);
     }
     kept

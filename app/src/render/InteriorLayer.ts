@@ -84,15 +84,17 @@ function floorColor(kind: string, z: number, natural = false, raise = 0): number
   if (kind === 'boss chamber') return 0x8d8579;
   if (kind === 'sewer tunnel' || kind === 'service passage') return 0x8a7d6c;
   if (['arena floor'].includes(kind)) return 0xc8b184;
-  if (['kitchen', 'baths', 'forge', 'brewhouse'].includes(kind)) return 0x8f8a80;
+  if (['kitchen', 'scullery', 'baths', 'forge', 'brewhouse'].includes(kind)) return 0x8f8a80;
   // (A palace's court a lawn (its gravel walks laid on it), its ballroom's parquet the lightest wood.)
   if (kind === 'courtyard' || kind === 'garth') return LAWN;
+  // (A coaching inn's yard and its arch cobbled.)
+  if (kind === 'inn yard') return 0x958f83;
   if (kind === 'ballroom') return 0xbb8d5c;
   // (A roof's squares: the walk's stone, under the roof drawn over them, `drawRoofs`.)
   if (kind === 'battlements' || kind === 'wall walk' || kind === ROOF_SLOPE) return 0xa8a296;
   if (kind === OPEN_BELOW) return -1;
   if (kind === 'stands') return 0x8a7a64;
-  if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison', 'throne room', 'banqueting hall', 'royal chapel', 'stair hall', "servants' hall", 'side chapel', 'shrine', 'chapter house', 'cloister walk', 'refectory'].includes(kind))
+  if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison', 'throne room', 'banqueting hall', 'royal chapel', 'stair hall', "servants' hall", 'side chapel', 'shrine', 'chapter house', 'cloister walk', 'refectory', 'arcade', 'strongroom', 'warded vault', 'trophy hall'].includes(kind))
     return 0x9d978c;
   return 0xa87a4f;
 }
@@ -291,7 +293,43 @@ function drawRails(g: Graphics, lv: InteriorLevel, nx: number, ny: number, sp: S
   g.fill(0x3d2a17);
 }
 
+/** A town hall's open arcade (`Wall::arcade`) along its front: stone piers on the outer wall's line
+ * (`ARCADE_PIERS` squares apart from end to end, as the cloister's columns are drawn), the way open
+ * between them under the arches (a faint line at their face). */
+function drawArcade(g: Graphics, lv: InteriorLevel, nx: number, ny: number, real: boolean) {
+  const runs = lv.walls.filter((w) => w.arcade);
+  if (!runs.length) return;
+  const cell = (x: number, y: number) => {
+    const [i, j] = [Math.floor(x), Math.floor(y)];
+    return i >= 0 && j >= 0 && i < nx && j < ny ? lv.cells[j * nx + i] : -1;
+  };
+  const piers: Pt[] = [];
+  for (const w of runs) {
+    const len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]);
+    if (len < 1e-6) continue;
+    const [ux, uy] = [(w.b[0] - w.a[0]) / len, (w.b[1] - w.a[1]) / len];
+    // (Out: the side with no room; on the outline's middle line where there is one.)
+    const mid: Pt = [(w.a[0] + w.b[0]) / 2, (w.a[1] + w.b[1]) / 2];
+    let [ox, oy] = [-uy, ux];
+    if (cell(mid[0] + ox * 0.5, mid[1] + oy * 0.5) >= 0) [ox, oy] = [-ox, -oy];
+    const off = real ? WALL_HALF : 0;
+    const [ax, ay, bx, by] = [w.a[0] + ox * off, w.a[1] + oy * off, w.b[0] + ox * off, w.b[1] + oy * off];
+    g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 0.05, color: 0x4a4540, alpha: 0.45 });
+    const n = Math.max(1, Math.round(len / ARCADE_PIERS));
+    for (let k = 0; k <= n; k++) piers.push([ax + ((bx - ax) * k) / n, ay + ((by - ay) * k) / n]);
+  }
+  const r = 0.2;
+  for (const [x, y] of piers) g.rect(x - r, y - r, 2 * r, 2 * r);
+  g.fill(0x8f877a).stroke({ width: 0.06, color: INK });
+  for (const [x, y] of piers) g.rect(x - r * 0.55, y - r * 0.55, 1.1 * r, 1.1 * r);
+  g.fill(0xc9c1ae);
+}
+
+/** The squares between a town hall's arcade piers (`drawArcade`). */
+const ARCADE_PIERS = 2;
+
 /** Furniture fill by kind. */
+
 function itemColor(kind: string): number {
   switch (kind) {
     case 'bed':
@@ -492,11 +530,11 @@ export class InteriorLayer {
     // A building's front door (or a back door): out into the street.
     if (!this.underground && this.level === it.entry_level) {
       const door = lv.doors.find((d) => {
-        if (d.kind !== 'front' && d.kind !== 'back') return false;
+        if (d.kind !== 'front' && d.kind !== 'back' && d.kind !== 'arch') return false;
         const [mx, my] = [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2];
         return Math.abs(gx - mx) < 0.9 && Math.abs(gy - my) < 0.9;
       });
-      if (door) out.push({ kind: 'surface', label: `Leave by the ${door.kind} door`, at: this.toWorld(...this.outside(door)) });
+      if (door) out.push({ kind: 'surface', label: door.kind === 'arch' ? 'Leave by the carriage arch' : `Leave by the ${door.kind} door`, at: this.toWorld(...this.outside(door)) });
     }
     return out;
   }
@@ -909,10 +947,11 @@ export class InteriorLayer {
       for (const d of gapped) if (d.threshold && d.room !== undefined) drawOpening(g, d.threshold, colorOf(d.room), INK);
       for (const w of panes) if (w.splay) drawOpening(g, w.splay, colorOf(w.room), INK);
     } else {
-      for (const w of lv.walls) if (!w.rail) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]).stroke({ width: w.exterior || lv.roof ? 0.45 : 0.28, color: INK, cap: 'square' });
+      for (const w of lv.walls) if (!w.rail && !w.arcade) g.moveTo(w.a[0], w.a[1]).lineTo(w.b[0], w.b[1]).stroke({ width: w.exterior || lv.roof ? 0.45 : 0.28, color: INK, cap: 'square' });
     }
     // Railings where a gallery or passage looks down into a hall open two storeys.
     if (!this.underground) drawRails(g, lv, nx, ny, sp);
+    if (!this.underground) drawArcade(g, lv, nx, ny, !!sp?.real);
     if (lv.has_stairs && stairsCut) drawStairs(g);
     if (parapet?.length) {
       // Merlons along the parapet, a square apart.
@@ -969,9 +1008,11 @@ export class InteriorLayer {
     // (Doors as drawn: on a shaped room's wall, or the outer wall as drawn.)
     const shown = lv.doors.map((d, k) => (drawn ? { ...d, a: drawn[k].a, b: drawn[k].b } : d));
     shown.forEach((d, k) => {
-      if (doorState) this.drawPlayDoor(g, d, doorState(loc, k), !!drawn?.[k].moved);
+      // (A carriage arch an opening, no leaves.)
+      if (doorState && d.kind !== 'arch') this.drawPlayDoor(g, d, doorState(loc, k), !!drawn?.[k].moved);
     });
     for (const [k, d] of (doorState ? [] : shown).entries()) {
+      if (d.kind === 'arch') continue;
       if (d.kind === 'secret') {
         // For the DM: a dashed purple line where the wall hides a door.
         const [ax, ay] = d.a;
@@ -1347,7 +1388,7 @@ export class InteriorLayer {
       const [dx, dy] = best ? [best.x + best.w / 2 - rx, best.y + best.h / 2 - ry] : [0, 0];
       return f.w >= f.h ? [0, dy > 0.5 ? -1 : 1] : [dx > 0.5 ? -1 : 1, 0];
     }
-    return this.backWall(f, f.kind === 'bed');
+    return this.backWall(f, f.kind === 'bed' || f.kind === 'stable_stall');
   }
 
   /** The side of a building's item that stands against a wall (unit step in grid axes): one along a

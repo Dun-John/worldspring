@@ -493,6 +493,10 @@ pub const APSE_PART: u8 = 8;
 /// A monastery's church (`interior::Court::church`): its corners from its west end along its length;
 /// roofed higher than its ranges, a bell-cote on its west end.
 pub const CHURCH_PART: u8 = 9;
+/// A city's arcaded town hall's open front (`interior::arcade_front`), or a coaching inn's carriage
+/// arch's mouth (`interior::arch_front`): its corners along the front from the first square to the
+/// last, then a square in.
+pub const ARCADE_PART: u8 = 10;
 
 /// A keep piece's code in the payload: 0 body, 1 round tower, 2 square tower, 3 forebuilding, 4
 /// wing (its top, `town::keep_tops` with its donjon's end, in the high four bits).
@@ -1501,7 +1505,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let mut fore_piers: Vec<([f64; 2], [f64; 2])> = Vec::new();
         let mut fore_gates: Vec<[[f64; 2]; 3]> = Vec::new();
         let mut walks: Vec<[[f64; 2]; 4]> = Vec::new();
-        for b in l.buildings.iter().filter(|b| crate::town::palace::merges(b)) {
+        for b in l.buildings.iter().filter(|b| crate::town::palace::merges(&l, b)) {
             let bb = bbox(&b.poly);
             if !overlaps((bb.0 - 40.0, bb.1 - 40.0, bb.2 + 40.0, bb.3 + 40.0)) {
                 continue;
@@ -1559,7 +1563,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             // `interior::court_plan`.)
             let court = courts.iter().position(|c| c.0 == b.id).map(|k| courts.swap_remove(k).1);
             if let Some(c) = &court {
-                stamp(&c.court, URBAN_PARK, &mut urb_h);
+                // (A coaching inn's yard cobbled as the street.)
+                stamp(&c.court, if c.paved { URBAN_PLAZA } else { URBAN_PARK }, &mut urb_h);
                 let (ci0, cj0, ci1, cj1) = range(bbox(&c.court));
                 if ci1 >= 0.0 && cj1 >= 0.0 {
                     for j in cj0..=cj1 as usize {
@@ -1580,6 +1585,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                         // (A monastery's garth: its cloister well in its middle, its size there.)
                         "cloister_well" => park_props.push((m, 0.0, Kind::Well, 0, (0.8 * crate::town::geom::dist(q[0], q[1]).min(crate::town::geom::dist(q[1], q[2])) / SQUARE_FT).max(0.8) as f32)),
                         "bench" => dressing.push((m, crate::park::facing(back.map_or([0.0, 1.0], |d| [-d[0], -d[1]])), Kind::Bench, 0)),
+                        // (A coaching inn's yard: its trough along its box, its barrels, its cart.)
+                        "water_trough" | "cart" | "barrels" => {
+                            let (a, e) = (crate::town::geom::sub(q[1], q[0]), crate::town::geom::sub(q[3], q[0]));
+                            let long = if crate::town::geom::dot(a, a) >= crate::town::geom::dot(e, e) { a } else { e };
+                            let kind = match *kind {
+                                "water_trough" => Kind::WaterTrough,
+                                "cart" => Kind::Cart,
+                                _ => Kind::Barrel,
+                            };
+                            dressing.push((m, crate::park::facing([-long[1], long[0]]), kind, 0));
+                        }
                         _ => {}
                     }
                 }
@@ -1610,6 +1626,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                                 parts.push((MAIN_RANGE_PART, main.iter().map(local).collect()));
                                 parts.push((CROSS_WING_PART, wing.iter().map(local).collect()));
                             }
+                            // (A city's town hall on its arcade: its piers along the front.)
+                            // (A coaching inn's carriage arch likewise: its piers either side of it.)
+                            if let Some(front) = crate::interior::arcade_front(world, t0, &l, b).or_else(|| crate::interior::arch_front(world, t0, &l, b)) {
+                                parts.push((ARCADE_PART, front.iter().map(local).collect()));
+                            }
+
                             poly_parts.push(parts);
                             id = refs.len().min(u16::MAX as usize) as u16;
                         }
@@ -4385,7 +4407,7 @@ fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed:
         .chain(l.extra_towers.iter().map(|t| (t.0, if t.1 { 15.0 } else { 11.0 })))
         .filter(|t| near(&t.0))
         .collect();
-    let keep = blds.iter().find(|b| !b.parts.is_empty() && contains(ring, centroid(&b.poly)));
+    let keep = blds.iter().find(|b| !b.parts.is_empty() && crate::town::belfry::of(b).is_none() && contains(ring, centroid(&b.poly)));
     let ranges: Vec<&&crate::town::Building> =
         blds.iter().filter(|b| b.parts.is_empty() && b.ward == crate::town::catalog::Ward::Castle && contains(ring, centroid(&b.poly))).collect();
     let mottes: Vec<&crate::town::Motte> = l.mottes.iter().filter(|m| contains(ring, m.at)).collect();

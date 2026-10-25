@@ -59,6 +59,18 @@
 //!   town edited round it (its patch's lots made small, rerolled; the walls taken down, else a far
 //!   patch rerolled): no building on another's ground (`Layout::grounds`), as generated or after the
 //!   edit, and a front door on every building within 150 ft of it.
+//! - `inns`: inns and caravanserais of `hub::inn::LEAST` squares or more laid out by zones: floors
+//!   fallen back on, `check_interior` (the drinking rules: the bar and tables in the taproom, the front
+//!   door into it, the stairs in it; every room reached), the programme (taproom, snug, private dining
+//!   room, kitchen, scullery, storeroom; above, best chamber, guest rooms, dormitory, innkeeper's
+//!   quarters: on one storey reasoned absent; the snug, the scullery and the private dining room on a
+//!   service range too narrow for them listed apart), rooms no longer than 2.5:1, rooms per kind;
+//!   those under the threshold and those over it no frame fits listed (`PLAN=b:L:id` prints a plan).
+//!   Coaching inns (`town::palace::is_coaching`) round their yard: the yard reached from the street
+//!   through an arch 2 squares wide, every stables onto it, every room upstairs off the gallery or a
+//!   corridor, no other building on their ground, the front door and the arch within 20 ft of a
+//!   street; those not round a yard, and every yard listed with where it is (`editor` edits each
+//!   one's patch as a monastery's: still round a yard after).
 //! - `hash` (not in `all`): a hash per settlement layout (`L:`), per building of it (`B:`, with what it
 //!   is) and per building or tower interior (`b:`/`t:`), marked `C` in a settlement with a castle, one
 //!   per line on stdout (everything else goes to stderr): run it on two trees and diff to see what
@@ -1463,6 +1475,7 @@ fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str
             Kind::Barracks => k == "mess hall",
             Kind::ShellKeep => k == "gate passage",
             Kind::Palace | Kind::OldPalace | Kind::HallHouse | Kind::Manor | Kind::Church | Kind::TempleHall | Kind::Monastery => true,
+            _ => true,
         };
         if !ok {
             r.add("front doors into the wrong room", 1.0, format!("{tag}: into the {k}"));
@@ -2051,7 +2064,7 @@ fn palaces(ctx: &mut Ctx, r: &mut Report) {
                     city = Some((a, format!("b:{li}:{}", b.id)));
                 }
             }
-            let Some(kind) = interior::hub_kind(t0, &l, b).filter(|k| !k.is_keep() && !k.is_faith()) else { continue };
+            let Some(kind) = interior::hub_kind(t0, &l, b).filter(|k| !k.is_keep() && !k.is_faith() && !k.is_civic() && !k.is_inn()) else { continue };
             let buckets = buckets.get_or_insert_with(|| building_buckets(&l));
             palace_rules(world, t0, &l, li, b, kind, buckets, r);
         }
@@ -2490,8 +2503,10 @@ fn editor(ctx: &mut Ctx, r: &mut Report) {
 }
 
 /// `monastery_edits`' counts, in order.
-const MONASTERY_EDIT_COUNTS: [&str; 4] = [
+const MONASTERY_EDIT_COUNTS: [&str; 6] = [
     "monastery edits",
+    "coaching inn edits",
+    "coaching inns no longer round a yard after an edit of their own patch or a far one",
     "buildings on another's ground (`Layout::grounds`), as generated",
     "buildings on another's ground after an edit",
     "buildings by a monastery with no front door after an edit",
@@ -2523,7 +2538,7 @@ fn monastery_edits(base: &World, t0: &T0, r: &mut Report) {
     for li in 0..town::layout_count(t0) {
         let g = town::layout(base, t0, li);
         on_ground(&g, &format!("#{li}"), "buildings on another's ground (`Layout::grounds`), as generated", r);
-        let mons: Vec<&town::Building> = g.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "monastery")).collect();
+        let mons: Vec<&town::Building> = g.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && (b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "monastery") || town::palace::is_coaching(&g, b))).collect();
         if mons.is_empty() {
             continue;
         }
@@ -2543,8 +2558,21 @@ fn monastery_edits(base: &World, t0: &T0, r: &mut Report) {
                 file.edits.towns.insert(town::wards::key(li), edit);
                 let world = World::new(file).unwrap();
                 let l = town::layout(&world, t0, li);
-                r.tally("monastery edits", 1);
                 let tag = format!("b:{li}:{} {req}", m.id);
+                if town::palace::is_coaching(&g, m) {
+                    r.tally("coaching inn edits", 1);
+                    if !l.buildings.iter().any(|b| b.id == m.id && town::palace::is_coaching(&l, b) && interior::zone_plan_of(&world, t0, li, b.id as usize).and_then(|p| p.yard()).is_some()) {
+                        let now = l.buildings.iter().find(|b| b.id == m.id);
+                        let why = match now {
+                            None => "gone".to_string(),
+                            Some(b) if !town::palace::is_coaching(&l, b) => format!("not merged ({:?}, {} corners, as generated: {})", b.func.map(|f| town::catalog::CATALOG[f as usize].key), b.poly.len(), b.poly == m.poly),
+                            Some(b) => format!("no yard frame (as generated: {})", b.poly == m.poly),
+                        };
+                        r.add("coaching inns no longer round a yard after an edit of their own patch or a far one", 1.0, format!("{tag} at {}: {why}", at(c)));
+                    }
+                } else {
+                    r.tally("monastery edits", 1);
+                }
                 on_ground(&l, &tag, "buildings on another's ground after an edit", r);
                 for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && dist(centroid(&b.poly), c) < 150.0) {
                     let Some(it) = interior::generate(&world, t0, li, b.id as usize) else { continue };
@@ -3029,6 +3057,450 @@ fn temple_rules(ctx: &mut Ctx, l: &Layout, li: usize, b: &town::Building, key: &
 
 // ---- Hashes. ----
 
+/// The `civic` rules' counts, listed even when none.
+const CIVIC_COUNTS: [&str; 11] = [
+    "civic buildings laid out by zones: floors fallen back on",
+    "civic buildings breaking an interior rule (as in interiors)",
+    "civic buildings missing a room of their programme",
+    "civic halls with no low dais and chair of office at the far end",
+    "civic rooms over 2.5:1 (ways about the floor aside)",
+    "arcades not on the street front (no open side, or the front door not into it)",
+    "civic buildings missing a room of their programme, one storey (reasoned absent)",
+    "civic buildings below the threshold (as other halls)",
+    "city town halls with no belfry (why)",
+    "belfries breaking a rule (zones, a room and its spiral stair on every floor to the top, the bell)",
+    "civic rooms without their piece (council table, strongbox, counting desk, job board, stalls)",
+];
+
+/// The pieces a room kind must hold (A2): in a council chamber its council table (else the long
+/// table stands in), in a strongroom and a warded vault a strongbox, in a counting house the counting
+/// desk, in a job-board room the job board, in stables the stalls.
+const ROOM_PIECES: [(&str, &str); 6] = [
+    ("council chamber", "council_table"),
+    ("strongroom", "strongbox"),
+    ("warded vault", "strongbox"),
+    ("counting house", "counting_desk"),
+    ("job-board room", "job_board"),
+    ("stables", "stable_stall"),
+];
+
+/// Interior `it`'s pieces by the rooms that must hold them (`ROOM_PIECES`): each room of those kinds
+/// tallied, a room without its piece listed; every guild's arms tallied (on the hall's dais apart).
+fn room_pieces(it: &worldgen::interior::Interior, tag: &str, r: &mut Report) {
+    for lv in &it.levels {
+        for (ri, room) in lv.rooms.iter().enumerate() {
+            if room.squares == 0 {
+                continue;
+            }
+            let held = |kind: &str| lv.furniture.iter().filter(|f| f.kind == kind && lv.cells[f.y as usize * it.nx + f.x as usize] == ri as i16).count();
+            for (rk, piece) in ROOM_PIECES {
+                if room.kind != rk {
+                    continue;
+                }
+                let n = held(piece);
+                r.tally(&format!("  rooms: {rk}"), 1);
+                r.tally(&format!("    {rk}: {piece} pieces"), n);
+                if n == 0 {
+                    r.tally(&format!("    {rk}: without one"), 1);
+                    let stand = if rk == "council chamber" && held("long_table") > 0 { ", a long table stands in" } else { "" };
+                    r.add(CIVIC_COUNTS[10], room.squares as f64, format!("{tag} {}: {rk} of {} squares{stand}", lv.name, room.squares));
+                }
+            }
+            let arms = held("guild_arms");
+            if arms > 0 {
+                r.tally(if room.kind == "great hall" { "  guild's arms in halls" } else { "  guild's arms in other rooms" }, arms);
+            }
+            if room.kind == "great hall" && held("job_board") > 0 {
+                r.tally("  job boards in halls", 1);
+            }
+        }
+    }
+}
+
+/// A belfried town hall's interior `it` (its body's top floor `floors - 1`): the spiral stair on the
+/// top floor's landing, then the tower's room on each floor above to `floors - 1 + STOREYS` (a
+/// belfry stair, at the top the belfry), the spiral stair in it, the bell at the top; the problems.
+fn belfry_rules(it: &worldgen::interior::Interior, floors: i8) -> Vec<String> {
+    let top = floors - 1 + town::belfry::STOREYS;
+    let mut bad = Vec::new();
+    if !it.levels.iter().find(|lv| lv.z == floors - 1).is_some_and(|lv| lv.furniture.iter().any(|f| f.kind == "spiral_stair")) {
+        bad.push(format!("z {}: no spiral stair up", floors - 1));
+    }
+    for z in floors..=top {
+        let Some(lv) = it.levels.iter().find(|lv| lv.z == z) else {
+            bad.push(format!("no level {z}"));
+            continue;
+        };
+        let want = if z == top { "belfry" } else { "belfry stair" };
+        let Some(ri) = lv.rooms.iter().position(|r| r.kind == want && r.squares > 0) else {
+            bad.push(format!("z {z}: no {want}"));
+            continue;
+        };
+        let inr = |f: &worldgen::interior::Item| lv.cells[f.y as usize * it.nx + f.x as usize] == ri as i16;
+        if !lv.furniture.iter().any(|f| f.kind == "spiral_stair" && inr(f)) {
+            bad.push(format!("z {z}: no spiral stair"));
+        }
+        if z == top && !lv.furniture.iter().any(|f| f.kind == "bell" && inr(f)) {
+            bad.push(format!("z {z}: no bell"));
+        }
+        if lv.has_stairs || lv.rooms.iter().filter(|r| r.squares > 0).count() != 1 {
+            bad.push(format!("z {z}: not the tower's alone"));
+        }
+
+    }
+    if it.levels.iter().any(|lv| lv.z > top) {
+        bad.push("levels above the bell loft".to_string());
+    }
+    bad
+}
+
+/// Town halls and the four guilds laid out by zones (`interior::hub::civic`): no floor fallen back
+/// on, every interior rule, every room of the programme (the council chamber, the strongroom, the
+/// archive, the guild's own; on a single storey some may be absent), the hall's low dais and chair
+/// of office at the far end of its frame (with the `halls` rules over it), rooms no longer than
+/// 2.5:1, an arcade open along the street front with the front door into it.
+fn civic(ctx: &mut Ctx, r: &mut Report) {
+    use interior::hub::Kind;
+    r.counts(&["civic buildings", "  laid out by zones"]);
+    r.counts(&CIVIC_COUNTS);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    const KEYS: [&str; 5] = ["town_hall", "merchant_guild", "craft_guild", "adventurers_guild", "mages_guild"];
+    let key_of = |b: &town::Building| b.func.map(|f| town::catalog::CATALOG[f as usize].key).filter(|k| KEYS.contains(k));
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        let mut buckets = None;
+        // (Belfries: on every city's or metropolis's town hall one goes on, else why not.)
+        if l.tier >= worldgen::t0::settle::Tier::City {
+            for b in l.buildings.iter().filter(|b| town::belfry::is_town_hall(b)) {
+                let id = format!("b:{li}:{}", b.id);
+                if town::belfry::of(b).is_some() {
+                    r.tally("belfries", 1);
+                    // (BELFRY_AT=1: where each stands, world ft.)
+                    if std::env::var("BELFRY_AT").is_ok() {
+                        let c = centroid(&b.poly);
+                        say!("belfry {id} at {:.0} {:.0} ({}, {} floors)", c[0], c[1], interior::hub_kind(t0, &l, b).map_or("-", |k| k.name()), b.floors);
+                    }
+                    let fell = interior::hub_kind(t0, &l, b).is_none();
+                    let bad = if fell { vec!["not laid out by zones".to_string()] } else { interior::generate_id(world, t0, &id).map(|it| belfry_rules(&it, b.floors.max(1) as i8)).unwrap_or_default() };
+                    if !bad.is_empty() {
+                        r.add(CIVIC_COUNTS[9], bad.len() as f64, format!("{id}: {}", bad.join("; ")));
+                    }
+                    continue;
+                }
+                let why = if !town::belfry::eligible(b) { "not roofed, a castle's or in pieces".to_string() } else { format!("{:?}", town::belfry::raise(&l, b).err()) };
+                r.tally(&format!("  no belfry: {why}"), 1);
+                r.add(CIVIC_COUNTS[8], 1.0, format!("{id}: {why}"));
+            }
+        }
+        // (Stables' stalls.)
+        for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "stables")) {
+            let id = format!("b:{li}:{}", b.id);
+            if let Some(it) = interior::generate_id(world, t0, &id) {
+                room_pieces(&it, &format!("{id} (stables)"), r);
+            }
+        }
+        for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed) {
+            let Some(key) = key_of(b) else { continue };
+            r.tally("civic buildings", 1);
+            r.tally(&format!("  {key}s"), 1);
+            let id = format!("b:{li}:{}", b.id);
+            let Some(kind) = interior::hub_kind(t0, &l, b) else {
+                let n = interior::Shell::of(&l, b).inside.iter().filter(|&&i| i).count();
+                r.add(CIVIC_COUNTS[7], n as f64, format!("{id} ({key}): {n} squares"));
+                continue;
+            };
+            r.tally("  laid out by zones", 1);
+            r.tally(&format!("    {}s", kind.name()), 1);
+            let Some(it) = interior::generate_id(world, t0, &id) else { continue };
+            let tag = format!("{id} ({})", kind.name());
+            room_pieces(&it, &tag, r);
+
+            if std::env::var("PLAN").is_ok_and(|p| p.trim() == id) {
+                for lv in &it.levels {
+                    say!("-- {} (z {}): {}", lv.name, lv.z, lv.rooms.iter().map(|r| format!("{}={}", r.kind, r.squares)).collect::<Vec<_>>().join(", "));
+                    for j in 0..it.ny {
+                        let row: String = (0..it.nx)
+                            .map(|i| {
+                                let c = lv.cells[j * it.nx + i];
+                                let st = it.stairs;
+                                if lv.has_stairs && i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3] {
+                                    '#'
+                                } else if c < 0 {
+                                    ' '
+                                } else {
+                                    (b'a' + (c as u8 % 26)) as char
+                                }
+                            })
+                            .collect();
+                        say!("  {row}");
+                    }
+                    let pieces: Vec<String> = lv.furniture.iter().filter(|f| std::env::var("ALL").is_ok() || matches!(f.kind, "low_dais" | "chair_of_office" | "pillar")).map(|f| format!("{}@{},{}", f.kind, f.x, f.y)).collect();
+                    say!("  pieces: {}", pieces.join(" "));
+                }
+                for p in interior::hall_plans(world, t0, li, b.id as usize) {
+                    say!("  hall frame: level {} room {} o {:?} ds {:?} dt {:?} {}x{}", p.level, p.room, p.frame.o, p.frame.ds, p.frame.dt, p.frame.len, p.frame.wid);
+                }
+            }
+            let fell = interior::hub_fallbacks(world, t0, li, b.id as usize);
+            if !fell.is_empty() {
+                r.add(CIVIC_COUNTS[0], fell.len() as f64, format!("{tag}: z {fell:?}"));
+            }
+            let buckets = buckets.get_or_insert_with(|| building_buckets(&l));
+            let bad = check_interior(world, t0, &l, li, &id, &it, buckets);
+            if !bad.is_empty() {
+                r.add(CIVIC_COUNTS[1], bad.len() as f64, format!("{tag}: {}", bad.join("; ")));
+            }
+            // (The programme.)
+            let mut want = vec!["great hall", "council chamber", "strongroom", "archive"];
+            want.extend(match kind {
+                Kind::MerchantGuild => vec!["counting house", "sample room"],
+                Kind::CraftGuild => vec!["masterpiece gallery", "workshop"],
+                Kind::AdventurersGuild => vec!["job-board room", "trophy hall", "armory", "bunk room"],
+                Kind::MagesGuild => vec!["library", "laboratory", "warded vault"],
+                Kind::ArcadeHall => vec!["arcade"],
+                _ => vec![],
+            });
+            let above = it.levels.iter().filter(|lv| lv.z >= 0 && !lv.roof).count();
+            let missing: Vec<&str> = want.iter().copied().filter(|k| !it.levels.iter().any(|lv| lv.rooms.iter().any(|r| r.kind == *k && r.squares > 0))).collect();
+            if !missing.is_empty() {
+                let row = if above <= 1 && !missing.contains(&"great hall") { CIVIC_COUNTS[6] } else { CIVIC_COUNTS[2] };
+                r.add(row, missing.len() as f64, format!("{tag}, {above} storeys: no {}", missing.join(", ")));
+            }
+            // (The hall's dais and chair of office in its frame's last two rows.)
+            let plans = interior::hall_plans(world, t0, li, b.id as usize);
+            let dais = plans.iter().any(|p| {
+                let lv = &it.levels[p.level];
+                let f = p.frame;
+                let (i0, j0) = f.grid(f.len as isize - 2, 0);
+                let (i1, j1) = f.grid(f.len as isize - 1, f.wid as isize - 1);
+                let far = |x: u16, y: u16| {
+                    let (x, y) = (x as isize, y as isize);
+                    x >= i0.min(i1) && x <= i0.max(i1) && y >= j0.min(j1) && y <= j0.max(j1)
+                };
+                lv.rooms.get(p.room as usize).is_some_and(|r| r.kind == "great hall")
+                    && lv.furniture.iter().any(|f| f.kind == "low_dais" && far(f.x, f.y))
+                    && lv.furniture.iter().any(|f| f.kind == "chair_of_office" && far(f.x, f.y))
+            });
+            if !dais {
+                r.add(CIVIC_COUNTS[3], 1.0, tag.clone());
+            }
+            // (Proportions: every room one stands in but a way about the floor, by its box.)
+            for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
+                for (ri, room) in lv.rooms.iter().enumerate() {
+                    if room.squares < 4 || interior::is_circulation(room.kind) || !interior::walkable(room.kind) {
+                        continue;
+                    }
+                    let sq: Vec<usize> = (0..it.nx * it.ny).filter(|&k| lv.cells[k] == ri as i16).collect();
+                    let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % it.nx), a.1.max(k % it.nx)));
+                    let (y0, y1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / it.nx), a.1.max(k / it.nx)));
+                    let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+                    if 2 * w.max(h) > 5 * w.min(h) {
+                        r.add(CIVIC_COUNTS[4], w.max(h) as f64 / w.min(h) as f64, format!("{tag} {}: {} {w}x{h}", lv.name, room.kind));
+                    }
+                }
+            }
+            // (An arcade: open along the street front, the front door into it.)
+            if kind == Kind::ArcadeHall {
+                let ok = it.levels.iter().find(|lv| lv.z == 0).is_some_and(|lv| {
+                    let arc = lv.rooms.iter().position(|r| r.kind == "arcade").map(|a| a as i16);
+                    // (Open along 4 squares or more of the front.)
+                    let open: f32 = lv.walls.iter().filter(|w| w.arcade).map(|w| (w.b[0] - w.a[0]).abs() + (w.b[1] - w.a[1]).abs()).sum();
+                    r.tally("  arcade fronts' open squares", open as usize);
+                    arc.is_some_and(|a| open >= 4.0 && lv.doors.iter().any(|d| d.kind == "front" && d.rooms.contains(&a)))
+                });
+                if !ok {
+                    r.add(CIVIC_COUNTS[5], 1.0, tag.clone());
+                }
+            }
+        }
+        // (The `halls` rules over their halls.)
+        layout_halls(world, t0, &l, li, &format!("#{li}"), &|b| key_of(b).is_some() && interior::hub_kind(t0, &l, b).is_some(), r);
+    }
+}
+
+const INN_COUNTS: [&str; 15] = [
+    "inns laid out by zones: floors fallen back on",
+    "inns breaking an interior rule (as in interiors)",
+    "inns missing a room of their programme",
+    "inns missing a guest floor's rooms, one storey (reasoned absent)",
+    "inns missing a snug, scullery or private dining room, a front 9 or less (reasoned absent)",
+    "inn rooms over 2.5:1 (ways about the floor aside)",
+    "inns over the threshold no frame fits (as small inns)",
+    "inns below the threshold (as small inns)",
+    "coaching inns whose yard no arch 2 squares wide opens onto from the street",
+    "coaching inns with stables not opening onto the yard",
+    "coaching inn rooms upstairs off neither the gallery nor a corridor",
+    "coaching inns with another building on their ground",
+    "coaching inns whose front door or arch opens 20 ft or more from a street",
+    "coaching inns (merged, `town::palace::is_coaching`) not round a yard",
+    "coaching inns round a yard (where, by the yard open to the sky: squares)",
+];
+
+/// Inns and caravanserais (`interior::hub::inn`): the rules in the header's `inns`.
+fn inns(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["inns and caravanserais", "  laid out by zones"]);
+    r.counts(&INN_COUNTS);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let letter = |x: i16| if x < 0 { '-' } else { (b'a' + (x as u8 % 26)) as char };
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        let mut buckets = None;
+        for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed) {
+            let Some(key) = b.func.map(|f| town::catalog::CATALOG[f as usize].key).filter(|k| matches!(*k, "inn" | "caravanserai")) else { continue };
+            r.tally("inns and caravanserais", 1);
+            r.tally(&format!("  {key}s"), 1);
+            let id = format!("b:{li}:{}", b.id);
+            let Some(kind) = interior::hub_kind(t0, &l, b) else {
+                let sh = interior::Shell::of(&l, b);
+                let n = sh.inside.iter().filter(|&&i| i).count();
+                let row = if n >= interior::hub::INN_LEAST { 6 } else { 7 };
+                // (Its box and how full it is: a slanted or ragged lot's under 80%.)
+                let (mut x0, mut x1, mut y0, mut y1) = (usize::MAX, 0, usize::MAX, 0);
+                for k in (0..sh.nx * sh.ny).filter(|&k| sh.inside[k]) {
+                    (x0, x1, y0, y1) = (x0.min(k % sh.nx), x1.max(k % sh.nx), y0.min(k / sh.nx), y1.max(k / sh.nx));
+                }
+                let (bw, bh) = (x1.wrapping_sub(x0).wrapping_add(1), y1.wrapping_sub(y0).wrapping_add(1));
+                let full = 100 * n / (bw * bh).max(1);
+                r.add(INN_COUNTS[row], n as f64, format!("{id} ({key}): {n} squares, box {bw}x{bh} {full}% full, {} floors", b.floors));
+                continue;
+            };
+            r.tally("  laid out by zones", 1);
+            r.tally(&format!("    {}s", kind.name()), 1);
+            r.tally(&format!("    {} storeys", b.floors.max(1)), 1);
+            let Some(it) = interior::generate_id(world, t0, &id) else { continue };
+            let tag = format!("{id} ({})", kind.name());
+            if std::env::var("PLAN").is_ok_and(|p| p.trim() == id) {
+                for lv in &it.levels {
+                    say!("-- {} (z {}): {}", lv.name, lv.z, lv.rooms.iter().enumerate().map(|(k, r)| format!("{}={}{}", letter(k as i16), r.kind, r.squares)).collect::<Vec<_>>().join(", "));
+                    for j in 0..it.ny {
+                        let row: String = (0..it.nx)
+                            .map(|i| {
+                                let st = it.stairs;
+                                if lv.has_stairs && i >= st[0] && i < st[0] + st[2] && j >= st[1] && j < st[1] + st[3] { '#' } else if lv.cells[j * it.nx + i] < 0 { ' ' } else { letter(lv.cells[j * it.nx + i]) }
+                            })
+                            .collect();
+                        say!("  {row}");
+                    }
+                    let doors: Vec<String> = lv.doors.iter().map(|d| format!("{}{}{}", letter(d.rooms[0]), letter(d.rooms[1]), if d.kind == "front" { "!" } else { "" })).collect();
+                    say!("  doors: {}", doors.join(" "));
+                    let pieces: Vec<String> = lv.furniture.iter().map(|f| format!("{}@{},{}", f.kind, f.x, f.y)).collect();
+                    say!("  pieces: {}", pieces.join(" "));
+                }
+            }
+            let fell = interior::hub_fallbacks(world, t0, li, b.id as usize);
+            if !fell.is_empty() {
+                r.add(INN_COUNTS[0], fell.len() as f64, format!("{tag}: z {fell:?}"));
+            }
+            let buckets = buckets.get_or_insert_with(|| building_buckets(&l));
+            let bad = check_interior(world, t0, &l, li, &id, &it, buckets);
+            if !bad.is_empty() {
+                r.add(INN_COUNTS[1], bad.len() as f64, format!("{tag}: {}", bad.join("; ")));
+            }
+            // (The programme: the ground floor's, then the guest floors'.)
+            let has = |k: &str| it.levels.iter().any(|lv| lv.rooms.iter().any(|r| r.kind == k && r.squares > 0));
+            let ground = ["taproom", "snug", "private dining room", "kitchen", "scullery", "storeroom"];
+            let upper = ["best chamber", "guest room", "dormitory", "innkeeper's quarters"];
+            let above = it.levels.iter().filter(|lv| lv.z >= 0 && !lv.roof).count();
+            let wid = interior::zone_plan_of(world, t0, li, b.id as usize).map(|p| p.frame().wid);
+            let (mut miss, mut narrow, mut one) = (Vec::new(), Vec::new(), Vec::new());
+            for k in ground.iter().chain(&upper).copied().filter(|k| !has(k)) {
+                if upper.contains(&k) && above <= 1 {
+                    one.push(k);
+                } else if matches!(k, "snug" | "scullery" | "private dining room") && wid.is_some_and(|w| w <= 9) {
+                    narrow.push(k);
+                } else {
+                    miss.push(k);
+                }
+            }
+            for (row, list) in [(2, &miss), (3, &one), (4, &narrow)] {
+                if !list.is_empty() {
+                    r.add(INN_COUNTS[row], list.len() as f64, format!("{tag}, {above} storeys, front {wid:?}: no {}", list.join(", ")));
+                }
+            }
+            if kind == interior::hub::Kind::Caravanserai {
+                r.tally(if has("stables") { "  caravanserais with stables" } else { "  caravanserais without stables (no room)" }, 1);
+            }
+            // (A coaching inn's yard: reached from the street through its arch, its stables onto it,
+            // every room upstairs off the gallery, nothing on its ground, its doors on a street.)
+            if town::palace::is_coaching(&l, b) {
+                let yard = interior::zone_plan_of(world, t0, li, b.id as usize).and_then(|p| p.yard());
+                let Some(((ys0, ys1, yt0, yt1), _)) = yard else {
+                    r.add(INN_COUNTS[13], 1.0, format!("{tag}: {} floors at {}", b.floors, at(centroid(&b.poly))));
+                    continue;
+                };
+                r.tally(&format!("  coaching inns round a yard: {:?} {key}s", l.tier), 1);
+                r.add(INN_COUNTS[14], (ys1 - ys0) as f64 * (yt1 - yt0) as f64, format!("{tag}: {:?}, yard open {}x{}, {} floors at {}", l.tier, ys1 - ys0, yt1 - yt0, b.floors, at(centroid(&b.poly))));
+                r.tally(&format!("    yards open {}x{}", ys1 - ys0, yt1 - yt0), 1);
+                let g = it.levels.iter().find(|lv| lv.z == 0).expect("ground floor");
+                let yr = g.rooms.iter().position(|rm| rm.kind == "inn yard").map(|k| k as i16);
+                let arches = g.doors.iter().filter(|d| d.kind == "arch" && Some(d.rooms[0]) == yr).count();
+                if arches < 2 {
+                    r.add(INN_COUNTS[8], 1.0, format!("{tag}: {arches} arch edges"));
+                }
+                for (ri, _) in g.rooms.iter().enumerate().filter(|(_, rm)| rm.kind == "stables" && rm.squares > 0) {
+                    if !g.doors.iter().any(|d| d.rooms.contains(&(ri as i16)) && yr.is_some_and(|y| d.rooms.contains(&y))) {
+                        r.add(INN_COUNTS[9], 1.0, format!("{tag}: stables {ri}"));
+                    }
+                }
+                for lv in it.levels.iter().filter(|lv| lv.z >= 1) {
+                    let way = |x: i16| x >= 0 && matches!(lv.rooms[x as usize].kind, "yard gallery" | "corridor");
+                    for (ri, rm) in lv.rooms.iter().enumerate().filter(|(_, rm)| rm.squares > 0 && matches!(rm.kind, "best chamber" | "guest room" | "dormitory" | "innkeeper's quarters")) {
+                        if !lv.doors.iter().any(|d| d.rooms.contains(&(ri as i16)) && (way(d.rooms[0]) || way(d.rooms[1]))) {
+                            r.add(INN_COUNTS[10], 1.0, format!("{tag} {}: {} {ri}", lv.name, rm.kind));
+                        }
+                    }
+                }
+                for (_, gr) in l.grounds.iter().filter(|g| g.0 == b.id) {
+                    for o in l.buildings.iter().filter(|o| o.id != b.id && poly_overlap(&shrink(&o.poly, 1.0), &shrink(gr, 1.0))) {
+                        r.add(INN_COUNTS[11], 1.0, format!("{tag}: b:{li}:{} at {}", o.id, at(centroid(&o.poly))));
+                    }
+                }
+                let sh = interior::Shell::of(&l, b);
+                let street = |p: [f64; 2]| l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |q| seg_dist(p, q[0], q[1]) - 0.5 * w)).fold(f64::MAX, f64::min);
+                for d in g.doors.iter().filter(|d| matches!(d.kind, "front" | "arch")) {
+                    let m = sh.world_at(0.5 * (d.a[0] + d.b[0]) as f64, 0.5 * (d.a[1] + d.b[1]) as f64);
+                    if street(m) >= 20.0 {
+                        r.add(INN_COUNTS[12], street(m), format!("{tag}: {} door {:.0} ft from a street at {}", d.kind, street(m), at(m)));
+                    }
+                }
+            }
+            // (Rooms per kind, their proportions by their boxes, and the pieces that make them what
+            // they are.)
+            for lv in it.levels.iter().filter(|lv| lv.z >= 0) {
+                for (ri, room) in lv.rooms.iter().enumerate() {
+                    if room.squares == 0 {
+                        continue;
+                    }
+                    r.tally(&format!("  rooms: {}", room.kind), 1);
+                    let piece = match room.kind {
+                        "best chamber" => Some("bed"),
+                        "dormitory" => Some("cot"),
+                        "snug" => Some("table"),
+                        "private dining room" => Some("long_table"),
+                        "stables" => Some("stable_stall"),
+                        _ => None,
+                    };
+                    if let Some(piece) = piece
+                        && !lv.furniture.iter().any(|f| f.kind == piece && lv.cells[f.y as usize * it.nx + f.x as usize] == ri as i16)
+                    {
+                        r.tally(&format!("    {} without a {piece}", room.kind), 1);
+                    }
+                    if room.squares < 4 || interior::is_circulation(room.kind) || !interior::walkable(room.kind) {
+                        continue;
+                    }
+                    let sq: Vec<usize> = (0..it.nx * it.ny).filter(|&k| lv.cells[k] == ri as i16).collect();
+                    let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % it.nx), a.1.max(k % it.nx)));
+                    let (y0, y1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / it.nx), a.1.max(k / it.nx)));
+                    let (w, h) = (x1 - x0 + 1, y1 - y0 + 1);
+                    if 2 * w.max(h) > 5 * w.min(h) {
+                        r.add(INN_COUNTS[5], w.max(h) as f64 / w.min(h) as f64, format!("{tag} {}: {} {w}x{h}", lv.name, room.kind));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
     use worldgen::core::hash::fnv64;
     let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
@@ -3060,7 +3532,7 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 10] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "editor", "hash", "all"];
+    const MODES: [&str; 12] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "hash", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -3069,7 +3541,7 @@ fn main() {
     }
     if modes.is_empty() || modes.contains(&"all") {
         modes.retain(|m| *m != "all");
-        for m in ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "editor"] {
+        for m in ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor"] {
             if !modes.contains(&m) {
                 modes.push(m);
             }
@@ -3096,6 +3568,8 @@ fn main() {
                 "halls" => halls(&mut ctx, &mut r),
                 "palaces" => palaces(&mut ctx, &mut r),
                 "temples" => temples(&mut ctx, &mut r),
+                "civic" => civic(&mut ctx, &mut r),
+                "inns" => inns(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }

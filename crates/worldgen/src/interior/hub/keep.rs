@@ -341,6 +341,9 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
         pal: None,
         tem: None,
         mon: None,
+        civ: None,
+        inn: None,
+        spiral: None,
         rich: kind == Kind::Manor && sh.inside.iter().filter(|&&i| i).count() >= estate::RICH,
     })
 }

@@ -407,8 +407,26 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         whole.set(None);
                         continue;
                     }
+                    // A town hall's belfry (`town::belfry`): the hall as any building, then the tower's
+                    // long shadow down its roof (piece 10, the tower two storeys over it and its spire's
+                    // point beyond), the tower under its verdigris spire (piece 8), the open bell lantern
+                    // on top (piece 9).
+                    if let Some(t) = crate::town::belfry::of(b) {
+                        use crate::town::geom::{add, hull, mean, mul, sub};
+                        whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
+                        push(&b.parts[0].poly, attr);
+                        let c = mean(&t.poly);
+                        let mut sh: Vec<[f64; 2]> = t.poly.iter().flat_map(|&p| [p, add(p, [11.0, 11.0])]).collect();
+                        sh.push(add(c, [21.0, 21.0]));
+                        push(&hull(sh), attr | 10 << 25);
+                        push(&t.poly, attr | 8 << 25);
+                        push(&t.poly.iter().map(|&p| add(c, mul(sub(p, c), 0.3))).collect::<Vec<[f64; 2]>>(), attr | 9 << 25);
+                        whole.set(None);
+                        continue;
+                    }
                     if !b.parts.is_empty() {
                         let c = crate::town::geom::centroid(&b.poly);
+
                         whole.set(Some(owns(c)));
                         let tops = crate::town::keep_tops(b, world.stream("keep.tops"));
                         for (p, &top) in b.parts.iter().zip(&tops) {
@@ -430,10 +448,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     // with its gravel walks and its fountain, as on the battlemap (all in the tile
                     // holding its middle).
                     // (A monastery's cloister likewise: its garth, its walks and its well.)
-                    if let Some(court) = crate::town::palace::merges(b).then(|| crate::interior::court_plan(world, t0, &l, b)).flatten() {
+                    if let Some(court) = crate::town::palace::merges(&l, b).then(|| crate::interior::court_plan(world, t0, &l, b)).flatten() {
                         whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
                         let q = &court.court;
-                        push(q, 13);
+                        // (A coaching inn's yard cobbled, its trough, barrels and cart left to the
+                        // battlemap.)
+                        push(q, if court.paved { 1 } else { 13 });
                         // Its forecourt paved, its low wall round it, the gate between two piers.
                         if let Some(fc) = &court.forecourt {
                             push(&fc.yard, 1);
@@ -456,6 +476,11 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         }
                         for k in 0..4 {
                             push(&[b.poly[k], b.poly[(k + 1) % 4], q[(k + 1) % 4], q[k]], attr);
+                        }
+                        // (A coaching inn's carriage arch: the yard's cobbles out through its mouth to
+                        // the street.)
+                        for (_, sq, _) in court.pieces.iter().filter(|p| p.0 == "arch") {
+                            push(sq, 1);
                         }
                         // A monastery's church over its range (piece 6: roofed higher, darker), its
                         // bell-cote on its west end (piece 7).

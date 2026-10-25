@@ -71,26 +71,57 @@ export function interiorGrid(it: Interior, li: number, closed: (door: number) =>
     }
   };
   // (Railings over an open hall don't stop the eye; its open height stops a step.)
-  for (const w of lv.walls) if (!w.rail) line(w.a, w.b);
-  lv.doors.forEach((d, k) => closed(k) && line(d.a, d.b));
+  // (A town hall's open arcade: open between its piers, which stand on the squares' corners.)
+  for (const w of lv.walls) if (!w.rail && !w.arcade) line(w.a, w.b);
+  // (A coaching inn's carriage arch never shut.)
+  lv.doors.forEach((d, k) => d.kind !== 'arch' && closed(k) && line(d.a, d.b));
+  // The street outside a carriage arch or an open arcade (a strip `APRON` squares deep in front of it, off the
+  // floor): open ground, walked onto and seen across (a token put there is out in the street).
+  const R = APRON;
+  const [ex, ey] = [nx + 2 * R, ny + 2 * R];
+  const apron = new Uint8Array(ex * ey);
+  const floor = (i: number, j: number) => i >= 0 && j >= 0 && i < nx && j < ny && lv.cells[j * nx + i] >= 0;
+  const open = (a: [number, number], b: [number, number]) => {
+    const vert = a[0] === b[0];
+    const [p, q0, q1] = vert ? [Math.round(a[0]), Math.round(Math.min(a[1], b[1])), Math.round(Math.max(a[1], b[1]))] : [Math.round(a[1]), Math.round(Math.min(a[0], b[0])), Math.round(Math.max(a[0], b[0]))];
+    for (let q = q0; q < q1; q++) {
+      // (The square across the edge that is off the floor.)
+      const [i0, j0, i1, j1] = vert ? [p - 1, q, p, q] : [q, p - 1, q, p];
+      const out0 = !floor(i0, j0);
+      const [oi, oj] = out0 ? [i0, j0] : !floor(i1, j1) ? [i1, j1] : [NaN, NaN];
+      if (Number.isNaN(oi)) continue;
+      // (A strip APRON squares deep straight out from the opening, so it can't lie over the house
+      // across a narrow alley.)
+      const [ni, nj] = vert ? [out0 ? -1 : 1, 0] : [0, out0 ? -1 : 1];
+      for (let k = 0; k < R; k++) {
+        const [i, j] = [oi + ni * k, oj + nj * k];
+        if (i >= -R && j >= -R && i < nx + R && j < ny + R && !floor(i, j)) apron[(j + R) * ex + i + R] = 1;
+      }
+    }
+  };
+  for (const d of lv.doors) if (d.kind === 'arch') open(d.a, d.b);
+  for (const w of lv.walls) if (w.arcade) open(w.a, w.b);
+  const aproned = apron.some((v) => v === 1);
+  const at = (i: number, j: number) => {
+    if (i >= -R && j >= -R && i < nx + R && j < ny + R && apron[(j + R) * ex + i + R]) return 0;
+    return i < 0 || j < 0 || i >= nx || j >= ny ? SOLID | OPAQUE | BLOCKS : flags[j * nx + i];
+  };
   return {
-    flags: (i, j) => (i < 0 || j < 0 || i >= nx || j >= ny ? SOLID | OPAQUE | BLOCKS : flags[j * nx + i]),
+    flags: at,
     elev: () => NaN,
     fill: (x0, y0, w, h, out, elev) => {
       elev.fill(NaN);
-      for (let j = 0; j < h; j++) {
-        const gj = y0 + j;
-        for (let i = 0; i < w; i++) {
-          const gi = x0 + i;
-          out[j * w + i] = gi < 0 || gj < 0 || gi >= nx || gj >= ny ? SOLID | OPAQUE | BLOCKS : flags[gj * nx + gi];
-        }
-      }
+      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) out[j * w + i] = at(x0 + i, y0 + j);
     },
     wallW: (i, j) => i >= 0 && i <= nx && j >= 0 && j < ny && wv[j * (nx + 1) + i] === 1,
     wallN: (i, j) => i >= 0 && i < nx && j >= 0 && j <= ny && wh[j * nx + i] === 1,
-    bounds: [0, 0, nx, ny],
+    bounds: aproned ? [-R, -R, nx + R, ny + R] : [0, 0, nx, ny],
   };
 }
+
+/** How far the street outside a carriage arch or an open arcade is open in a building's grid
+ * (squares). */
+export const APRON = 2;
 
 /** Squares set in a window of a location's grid. */
 export interface Bitmap {

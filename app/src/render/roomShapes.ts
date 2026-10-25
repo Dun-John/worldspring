@@ -1017,12 +1017,22 @@ export function drawShapedWalls(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, 
   if (drawn) g.stroke({ width: interior, color, cap: 'butt', join: 'round' });
   if (!sp.real) return [];
   drawn = 0;
-  // The outer wall: each part's edges but where they run inside another part, open at the doors out.
+  // The outer wall: each part's edges but where they run inside another part, open at the doors out
+  // and along a town hall's open arcade (its piers drawn apart: `InteriorLayer.drawArcade`).
   const gaps = doors.filter((d) => d.out && d.outer).map((d) => d.outer!);
+  const arcades = lv.walls.filter((w) => w.arcade);
+  const onArcade = (m: Pt) =>
+    arcades.some((w) => {
+      const [ex, ey] = [w.b[0] - w.a[0], w.b[1] - w.a[1]];
+      const l2 = ex * ex + ey * ey || 1;
+      const t = ((m[0] - w.a[0]) * ex + (m[1] - w.a[1]) * ey) / l2;
+      return t > 0 && t < 1 && Math.abs((m[0] - w.a[0]) * ey - (m[1] - w.a[1]) * ex) / Math.sqrt(l2) < 0.6;
+    });
   const kept: { a: Pt; b: Pt; out: Pt }[] = [];
   parts.forEach((part, k) => {
     const pieces = boundaryPieces(part);
-    const keep = (i: number) => !near(midOf(pieces[i]), gaps) && !parts.some((o, m) => m !== k && insetIn(midOf(pieces[i]), o) > 1e-4);
+    const keep = (i: number) => !near(midOf(pieces[i]), gaps) && !onArcade(midOf(pieces[i])) && !parts.some((o, m) => m !== k && insetIn(midOf(pieces[i]), o) > 1e-4);
+
     const all = pieces.every((_, i) => keep(i));
     // (Whole: drawn closed, its corners joined.)
     if (all) {

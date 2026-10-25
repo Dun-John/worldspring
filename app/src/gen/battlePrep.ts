@@ -480,6 +480,22 @@ function roofMesh(roofs: Roof[]): ColorMesh {
       g.outline(roof.parts.find((p) => p.kind === COURT)!.pts, 2.5, ROOF_INK);
       const church = roof.parts.find((p) => p.kind === CHURCH);
       if (church && church.pts.length === 8) churchRoof(g, church.pts, tint);
+      // (A coaching inn round its yard: its carriage arch's mouth on the street front.)
+      archMouth(g, roof);
+      continue;
+    }
+    // (A city's town hall on its arcade: the piers along its front, the roof's eave over them.)
+    arcadePiers(g, roof);
+    // A city's town hall's belfry (`town::belfry`): the hall hipped, the tower over its corner
+    // (`belfryTop`).
+    const belfry = roof.parts.find((p) => p.kind === SQUARE_TOWER);
+    const hall = roof.parts.find((p) => p.kind === BODY);
+    if (belfry && hall && belfry.pts.length === 8) {
+      const hp = convexParts(hall.pts);
+      for (const part of hp) hipRoof(g, part, tint);
+      if (hp.length > 1) for (const part of hp) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
+      g.outline(hall.pts, 2.5, ROOF_INK);
+      belfryTop(g, belfry.pts);
       continue;
     }
     // A temple of pieces: the nave's ridge along its body to the apse, the apse a half cone, the
@@ -521,6 +537,171 @@ const MAIN_RANGE = 7;
 /** A temple's pieces (`town::temple`): its body (nave and choir), its transept, its apse
  * (`battlemap::APSE_PART`). */
 const BODY = 0;
+/** The convex hull of points (anticlockwise in screen axes; monotone chain). */
+function hull(p: [number, number][]): [number, number][] {
+  const s = [...p].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cr = (o: [number, number], a: [number, number], b: [number, number]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo: [number, number][] = [];
+  for (const q of s) {
+    while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop();
+    lo.push(q);
+  }
+  const up: [number, number][] = [];
+  for (const q of s.reverse()) {
+    while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop();
+    up.push(q);
+  }
+  return [...lo.slice(0, -1), ...up.slice(0, -1)];
+}
+
+/** A town hall's belfry (`battlemap::part_code`: a square tower). */
+
+const SQUARE_TOWER = 2;
+/** A city's arcaded town hall's open front, or a coaching inn's carriage arch's mouth
+ * (`battlemap::ARCADE_PART`): its corners along the front, then a square in. */
+const ARCADE = 10;
+
+/** The piers of a town hall's open arcade along its front (`ARCADE`), stone, 2 squares apart from end to
+ * end, standing out past the eave drawn over them, the shade of the arcade between them. */
+function arcadePiers(g: MeshBuilder, roof: Roof) {
+  const front = roof.parts.find((p) => p.kind === ARCADE);
+  if (!front || front.pts.length !== 8) return;
+  const [ax, ay, bx, by, cx, cy] = front.pts;
+  const len = Math.hypot(bx - ax, by - ay);
+  if (len < PX) return;
+  const [ux, uy] = [(bx - ax) / len, (by - ay) / len];
+  // (Out: away from the square in.)
+  let [nx, ny] = [-uy, ux];
+  if (nx * (cx - bx) + ny * (cy - by) > 0) [nx, ny] = [-nx, -ny];
+  const shade = PX * 0.32;
+  g.line(ax + nx * shade * 0.5, ay + ny * shade * 0.5, bx + nx * shade * 0.5, by + ny * shade * 0.5, shade, 0x000000, 0.28);
+  const n = Math.max(1, Math.round(len / (2 * PX)));
+  const r = PX * 0.24;
+  for (let k = 0; k <= n; k++) {
+    const t = (len * k) / n;
+    const [px, py] = [ax + ux * t + nx * r * 0.6, ay + uy * t + ny * r * 0.6];
+    const sq = [px - ux * r - nx * r, py - uy * r - ny * r, px + ux * r - nx * r, py + uy * r - ny * r, px + ux * r + nx * r, py + uy * r + ny * r, px - ux * r + nx * r, py - uy * r + ny * r];
+    g.poly(
+      sq.map((v) => v + PX * 0.12),
+      0x000000,
+      0.3,
+    );
+    g.poly(sq, 0xb4ad9e);
+    g.outline(sq, 1.5, 0x4a4540);
+  }
+}
+
+/** A town hall's belfry (`SQUARE_TOWER`, its four corners) over the hall's roof: its long shadow
+ * (two storeys over the hall and a steep spire's point beyond), the top of its stone walls, a steep
+ * spire of verdigris copper, the open bell lantern on top (stone posts, the dark between them, the
+ * bell gilt). */
+function belfryTop(g: MeshBuilder, pts: number[]) {
+  let [cx, cy] = [0, 0];
+  for (let i = 0; i < 8; i += 2) [cx, cy] = [cx + pts[i] / 4, cy + pts[i + 1] / 4];
+  const off = PX * 2.2;
+  const sq: [number, number][] = [];
+  for (let i = 0; i < 8; i += 2) sq.push([pts[i], pts[i + 1]], [pts[i] + off, pts[i + 1] + off]);
+  sq.push([cx + PX * 4.2, cy + PX * 4.2]);
+  g.poly(hull(sq).flat(), 0x000000, 0.32);
+  // (Its walls' top, stone, round the spire's eaves.)
+  g.poly(pts, 0xb3aa98);
+  g.outline(pts, 2.5, ROOF_INK);
+  const at = (f: number) => pts.map((v, i) => (i % 2 ? cy : cx) + (v - (i % 2 ? cy : cx)) * f);
+  const spire = at(0.86);
+  // The spire's faces: the lit one pale, the far ones deep (a steep pitch), courses and hips.
+  const tint = 0x5c9a88;
+  const ccw = signedArea(spire) > 0;
+  for (let i = 0; i < 4; i++) {
+    const [ax, ay, bx, by] = [spire[i * 2], spire[i * 2 + 1], spire[((i + 1) % 4) * 2], spire[((i + 1) % 4) * 2 + 1]];
+    const l = Math.hypot(bx - ax, by - ay) || 1;
+    let [nx, ny] = [(by - ay) / l, -(bx - ax) / l];
+    if (ccw) [nx, ny] = [-nx, -ny];
+    const lit = (-(nx + ny) / Math.SQRT2 + 1) / 2;
+    g.poly([ax, ay, bx, by, cx, cy], shadeHex(tint, 0.5 + 0.75 * lit));
+    for (let k = 1; k < 7; k++) {
+      const t = k / 7;
+      g.line(ax + (cx - ax) * t, ay + (cy - ay) * t, bx + (cx - bx) * t, by + (cy - by) * t, 1, shadeHex(tint, 0.45), 0.4);
+    }
+  }
+  for (let i = 0; i < 8; i += 2) g.line(spire[i], spire[i + 1], cx, cy, 2, shadeHex(tint, 0.35), 0.9);
+  g.outline(spire, 2, ROOF_INK, 0.9);
+  // The open lantern on top: a stone post at each corner, the dark of its arches between, the bell.
+  const lant = at(0.3);
+  g.poly(lant.map((v) => v + PX * 0.18), 0x000000, 0.3);
+  g.poly(lant, 0x2a2622);
+  // (A post: corner P, a third of the way to each corner beside it.)
+  const post = (i: number) => {
+    const [px, py, qx, qy, rx, ry] = [lant[i], lant[i + 1], lant[(i + 2) % 8], lant[(i + 3) % 8], lant[(i + 6) % 8], lant[(i + 7) % 8]];
+    const r = 0.3;
+    const [dx, dy, ex, ey] = [(qx - px) * r, (qy - py) * r, (rx - px) * r, (ry - py) * r];
+    return [px, py, px + dx, py + dy, px + dx + ex, py + dy + ey, px + ex, py + ey];
+  };
+  for (let i = 0; i < 8; i += 2) {
+    const p = post(i);
+    g.poly(p, 0xd6cbb2);
+    g.outline(p, 1.2, ROOF_INK, 0.8);
+  }
+  const br = Math.hypot(lant[2] - lant[0], lant[3] - lant[1]) * 0.22;
+  const bell: number[] = [];
+  for (let k = 0; k < 10; k++) bell.push(cx + br * Math.cos((k * Math.PI) / 5), cy + br * Math.sin((k * Math.PI) / 5));
+  g.poly(bell, 0xc9a13e);
+  g.outline(bell, 1.2, 0x5a4318, 0.9);
+  g.outline(lant, 1.6, ROOF_INK);
+}
+
+/** A coaching inn's carriage arch (`ARCADE`: its front along the street, then a square in), the roof
+ * kept over it: the yard's cobbles out through its mouth onto the street, the dark of the arch under
+ * the eave, a stone jamb either side and the arch's ring of stone. */
+function archMouth(g: MeshBuilder, roof: Roof) {
+  const front = roof.parts.find((p) => p.kind === ARCADE);
+  if (!front || front.pts.length !== 8) return;
+  const [ax, ay, bx, by, cx, cy] = front.pts;
+  const len = Math.hypot(bx - ax, by - ay);
+  if (len < PX) return;
+  const [ux, uy] = [(bx - ax) / len, (by - ay) / len];
+  // (Out: away from the square in.)
+  let [nx, ny] = [-uy, ux];
+  if (nx * (cx - bx) + ny * (cy - by) > 0) [nx, ny] = [-nx, -ny];
+  const p = (t: number, d: number): [number, number] => [ax + ux * t + nx * d, ay + uy * t + ny * d];
+  const quad = (t0: number, t1: number, d0: number, d1: number) => [...p(t0, d0), ...p(t1, d0), ...p(t1, d1), ...p(t0, d1)];
+  const jamb = PX * 0.3;
+  // The cobbles out from the mouth to the street, a stone each in rows.
+  const out = PX * 0.95;
+  g.poly(quad(jamb, len - jamb, -PX * 0.05, out), 0x6f695e);
+  for (let row = 0; row < 4; row++) {
+    const d = PX * (0.05 + row * 0.23);
+    const shift = row % 2 ? PX * 0.12 : 0;
+    for (let t = jamb + PX * 0.08 + shift; t < len - jamb - PX * 0.12; t += PX * 0.24) {
+      g.poly(quad(t, t + PX * 0.17, d, d + PX * 0.16), (row + Math.round(t / PX)) % 3 ? 0x8c8579 : 0x80796d);
+    }
+  }
+  // The arch's dark under the eave: square at the jambs, rounded to its crown in the middle.
+  const dark: number[] = [];
+  const n = 12;
+  for (let k = 0; k <= n; k++) {
+    const t = jamb + ((len - 2 * jamb) * k) / n;
+    const s = Math.sin((Math.PI * k) / n);
+    dark.push(...p(t, -PX * (0.4 + 0.5 * Math.sqrt(s))));
+  }
+  dark.push(...p(len - jamb, PX * 0.02), ...p(jamb, PX * 0.02));
+  g.poly(dark, 0x1f1b18, 0.92);
+  // (Its ring of stone along the curve.)
+  for (let k = 0; k < n; k++) {
+    const [x0, y0, x1, y1] = [dark[k * 2], dark[k * 2 + 1], dark[k * 2 + 2], dark[k * 2 + 3]];
+    g.line(x0, y0, x1, y1, PX * 0.09, 0xc9bfa9, 1);
+  }
+  // The jambs either side, stone, proud of the wall.
+  for (const [t0, t1] of [
+    [0, jamb],
+    [len - jamb, len],
+  ]) {
+    const j = quad(t0, t1, -PX * 0.5, PX * 0.22);
+    g.poly(j.map((v) => v + PX * 0.08), 0x000000, 0.3);
+    g.poly(j, 0xc4baa5);
+    g.outline(j, 1.5, 0x4a4540);
+  }
+}
+
 const WING = 4;
 const APSE = 8;
 /** A monastery's church (`battlemap::CHURCH_PART`): its corners from its west end along it. */

@@ -12,6 +12,7 @@
 //! catalog: required ones first (an inn in every village,
 //! the whole catalog in a metropolis), then residential.
 
+pub mod belfry;
 mod castle;
 pub mod catalog;
 pub mod geom;
@@ -770,6 +771,11 @@ fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
         if let Some(f) = &e.func {
             let (func, residential) = sites::func_of(f, false);
             if (func, residential) != (b.func, b.residential) {
+                // (A town hall's belfry gone with its function: the hall's footprint as it was.)
+                if belfry::of(b).is_some() && func != b.func {
+                    b.poly = b.parts[0].poly.clone();
+                    b.parts.clear();
+                }
                 b.func = func;
                 b.residential = residential;
                 let mut rng = Pcg32::new(hash2(world.stream("town.edit"), rng_key(t0, l.index as usize), id as i64), 43);
@@ -1681,7 +1687,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         // (Ids from their places now: the lots a palace takes in leave theirs unused, every other
         // building keeps its own.)
         l.number_buildings();
-        palace::merge(&site, &mut l, [0.0, 0.0], s.capital, &[]);
+        palace::merge(&site, &mut l, [0.0, 0.0], s.capital, s.tier, &[]);
         palace::approach(&site, &mut l, [0.0, 0.0], s.capital, &[], None);
     }
     // Local → world.
@@ -1731,15 +1737,17 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     if edit.is_none() {
         temple::reach_streets(&mut l, None);
         temple::shape_all(&mut l, None);
+        belfry::raise_all(&mut l, None);
     }
     if let Some(e) = edit {
         let generated = generated_layout(world, t0, index);
         let kept = palace::follow(&site, &mut l, &generated, center, s.capital);
         wards::inherit(world, t0, e, &generated, spacing, &mut l);
-        palace::merge(&site, &mut l, center, s.capital, &kept);
+        palace::merge(&site, &mut l, center, s.capital, s.tier, &kept);
         palace::approach(&site, &mut l, center, s.capital, &kept, Some(&generated));
         temple::reach_streets(&mut l, Some(&generated));
         temple::shape_all(&mut l, Some(&generated));
+        belfry::raise_all(&mut l, Some(&generated));
     }
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {

@@ -25,8 +25,9 @@ pub enum Style {
     /// tables then lose.
     Castle { dais: u8, house: u8, banquet: bool },
     /// A town hall's, a guild's, a harbor master's or an auction house's: a low dais (of stone, else
-    /// timber) with a chair of office at its middle.
-    Civic { stone: bool },
+    /// timber) with a chair of office at its middle, the house's `arms` (`super::arms_look`) on the
+    /// wall behind it either side of the chair; an adventurers' (arms 2) its job board on a long wall.
+    Civic { stone: bool, arms: Option<u8> },
     /// A noble estate's hall: a low timber dais carrying the high table, a chair of office at its
     /// middle behind it; banners of the family's `house`.
     Estate { house: u8 },
@@ -784,7 +785,7 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
         };
         let look = match style {
             Style::Castle { dais, .. } | Style::Throne { dais, .. } => dais,
-            Style::Civic { stone } => (!stone) as u8,
+            Style::Civic { stone, .. } => (!stone) as u8,
             Style::Banquet { .. } | Style::Presence { .. } => 0,
             _ => 1,
         };
@@ -852,7 +853,28 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
                     }
                 }
             }
-            Style::Civic { stone } => chair(&mut h, &[back, s0], if stone { 0 } else { 1 }),
+            Style::Civic { stone, arms } => {
+                chair(&mut h, &[back, s0], if stone { 0 } else { 1 });
+                // (The arms on the far wall the dais stands against, beside the chair's columns.)
+                if let Some(a) = arms
+                    && back == l - 1
+                {
+                    for t in [cl - 1, cl - 2] {
+                        if t >= 0 && h.pair("guild_arms", back, t, 1, 1, Some(far), Some(a), true) {
+                            break;
+                        }
+                    }
+                }
+                if arms == Some(2) {
+                    'board: for s in 1..(l / 2).max(2) {
+                        for (t, d) in [(0, side), (w - 1, (0, 1))] {
+                            if h.put("job_board", s, t, 2, 1, Some(d), None, false) {
+                                break 'board;
+                            }
+                        }
+                    }
+                }
+            }
             Style::Presence { house } => {
                 // The chair of state on its middle, standing banners either side of it.
                 chair(&mut h, &[back, s0], 0);

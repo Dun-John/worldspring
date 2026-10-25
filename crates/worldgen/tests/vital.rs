@@ -1084,7 +1084,7 @@ fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout
     let fi = town::catalog::index_of("castle").unwrap() as u16;
     let mut keeps = 0;
     // (A temple's pieces are no keep's: `town::temple`.)
-    for b in l.buildings.iter().filter(|b| b.func == Some(fi) || (!b.parts.is_empty() && !town::temple::shaped(b))) {
+    for b in l.buildings.iter().filter(|b| b.func == Some(fi) || (!b.parts.is_empty() && !town::temple::shaped(b) && town::belfry::of(b).is_none())) {
         let tag = format!("#{si} b:{si}:{}", b.id);
         assert!(!near_wall(&b.poly), "{tag}: the keep stands on a wall");
         assert!(towers.iter().all(|t| !geom::contains(&b.poly, t.0)), "{tag}: a tower stands in the keep");
@@ -3049,7 +3049,7 @@ fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     let mut kept = 0;
     for b in g.buildings.iter().filter(|b| far(geom::centroid(&b.poly))) {
         let o = l.building(b.id as usize).unwrap_or_else(|| panic!("b:{ci}:{} is gone", b.id));
-        assert!(o.poly == b.poly && o.func == b.func && o.name == b.name && o.floors == b.floors, "b:{ci}:{} changed", b.id);
+        assert!(o.poly == b.poly && o.func == b.func && o.name == b.name && o.floors == b.floors, "b:{ci}:{} changed: poly {} {} func {} name {} floors {}", b.id, o.poly.len(), b.poly.len(), o.func == b.func, o.name == b.name, o.floors == b.floors);
         kept += 1;
     }
     assert!(kept > g.buildings.len() / 2, "too few buildings far from the change ({kept} of {})", g.buildings.len());

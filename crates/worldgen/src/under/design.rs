@@ -59,7 +59,7 @@ pub struct DesignLevel {
     /// simply not there.
     pub rooms: Vec<DesignRoom>,
     /// Doors: x, y, side (0: between the square and the one east of it, 1: south; a building's
-    /// also 2 west, 3 north), flags (1 secret; a building's door to the outside: 2 front, 4 back).
+    /// also 2 west, 3 north), flags (1 secret; a building's door to the outside: 2 front, 4 back, 8 arch).
     pub doors: Vec<[u16; 4]>,
     /// Everything standing on the floor, the ways in, up and down too (kinds `exit`, `up`,
     /// `down`), in order.
@@ -1152,6 +1152,7 @@ pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) ->
                     0 => "",
                     f if f & 1 != 0 => " secret",
                     f if f & 2 != 0 => " front",
+                    f if f & 8 != 0 => " arch",
                     _ => " back",
                 };
                 format!("{},{} {}{flag}", d[0], d[1], ["e", "s", "w", "n"][d[2].min(3) as usize])
@@ -1441,6 +1442,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                         Some("secret") => 1,
                         Some("front") if building => 2,
                         Some("back") if building => 4,
+                        Some("arch") if building => 8,
                         Some(f) => return Err(format!("{tag}: door '{e}': '{f}'? write it as {how}")),
                     };
                     lv.doors.push([x, y, side, flags]);

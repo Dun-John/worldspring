@@ -1,5 +1,5 @@
 //! The zone engine for big interiors: a castle's keep (and a big barracks, a palace, a noble
-//! estate, a temple, a monastery) laid out as real ones were, not as a grid of rooms. Its body is cut into zones along its
+//! estate, a temple, a monastery, a town hall, a guild, a big inn) laid out as real ones were, not as a grid of rooms. Its body is cut into zones along its
 //! long axis, from the low end (where it is entered) to the high end: the service end (kitchen,
 //! buttery, pantry), the screens passage across the body (the front door at one end of it), the
 //! great hall (the body's full width when it is 6 to 9 squares across, else a strip of chambers
@@ -34,7 +34,10 @@
 //! its own on them: the hall house (`keep`: keeps of pieces and tower keeps; a barracks' mess hall,
 //! `barracks`; noble estates and older palaces, `estate`), the shell keep (`shell`), the small tower
 //! keep (`small`), the capital's palace, symmetric round its court (`palace`), a temple (a cross, or a
-//! hall ending in its apse: `temple`) and a monastery round its cloister (`monastery`).
+//! hall ending in its apse: `temple`), a monastery round its cloister (`monastery`), and a town hall
+//! or a guildhall (its hall with its dais, the council chamber, strongroom and archive behind; a
+//! city's town hall on an open arcade: `civic`), an inn or a caravanserai (its taproom across the
+//! front, the kitchen, scullery and stores behind, guest floors off a corridor: `inn`).
 
 use super::{Hints, Item, Room, Shell};
 use crate::core::rng::{Pcg32, hash3};
@@ -42,7 +45,13 @@ use crate::town::{self, PartKind, geom::{self, P}};
 use super::Level;
 
 mod barracks;
+mod civic;
 mod estate;
+mod inn;
+/// The least ground-floor squares an inn is laid out by zones with (`inn::LEAST`).
+pub const INN_LEAST: usize = inn::LEAST;
+/// The least footprint a coaching inn stands round its yard on (`inn::YARD`).
+pub const YARD: (usize, usize) = inn::YARD;
 mod keep;
 mod kit;
 mod palace;
@@ -90,6 +99,20 @@ pub enum Kind {
     TempleHall,
     /// A monastery round its cloister garth (`monastery`).
     Monastery,
+    /// A town hall with its hall on the ground floor (`civic`).
+    TownHall,
+    /// A city's town hall on an open arcade, its council hall above (`civic`).
+    ArcadeHall,
+    /// The merchants', a craft, the adventurers' and the mages' guildhalls (`civic`).
+    MerchantGuild,
+    CraftGuild,
+    AdventurersGuild,
+    MagesGuild,
+    /// An inn of `inn::LEAST` squares or more: its taproom across the front, the service range
+    /// behind, guest floors off a corridor (`inn`).
+    Inn,
+    /// A caravanserai as big: an inn's programme with its stables (`inn`).
+    Caravanserai,
 }
 
 impl Kind {
@@ -109,12 +132,30 @@ impl Kind {
             Kind::Church => "cross-plan temple",
             Kind::TempleHall => "hall temple",
             Kind::Monastery => "monastery",
+            Kind::TownHall => "town hall",
+            Kind::ArcadeHall => "arcaded town hall",
+            Kind::MerchantGuild => "merchants' guildhall",
+            Kind::CraftGuild => "craft guildhall",
+            Kind::AdventurersGuild => "adventurers' lodge",
+            Kind::MagesGuild => "mages' conclave",
+            Kind::Inn => "zoned inn",
+            Kind::Caravanserai => "zoned caravanserai",
         }
     }
 
     /// A castle's keep or a barracks (the `hub` rules'), not a palace or a noble estate.
     pub fn is_keep(self) -> bool {
-        !matches!(self, Kind::Palace | Kind::OldPalace | Kind::HallHouse | Kind::Manor | Kind::Church | Kind::TempleHall | Kind::Monastery)
+        !matches!(self, Kind::Palace | Kind::OldPalace | Kind::HallHouse | Kind::Manor | Kind::Church | Kind::TempleHall | Kind::Monastery) && !self.is_civic() && !self.is_inn()
+    }
+
+    /// An inn's or a caravanserai's (`inn`).
+    pub fn is_inn(self) -> bool {
+        matches!(self, Kind::Inn | Kind::Caravanserai)
+    }
+
+    /// A town hall's or a guild's (`civic`).
+    pub fn is_civic(self) -> bool {
+        matches!(self, Kind::TownHall | Kind::ArcadeHall | Kind::MerchantGuild | Kind::CraftGuild | Kind::AdventurersGuild | Kind::MagesGuild)
     }
 
     /// A temple's or a monastery's (`temple`, `monastery`).
@@ -140,14 +181,23 @@ pub fn keep_kind(b: &town::Building) -> Option<Kind> {
     })
 }
 
-/// What kind of building `plan` lays out by zones, if any (`inside`: which squares of its grid are its):
+/// What kind of building `plan` lays out by zones, if any (`sh`: its grid):
 /// a castle's keep (of pieces, else as a tower keep), a barracks of 150 squares or more, a palace (the
 /// capital's, `capital`, symmetric round a court; another an older one round its great hall) and a
 /// noble estate of `estate::LEAST` squares or more outside a castle (a hall house, a manor from
 /// `estate::MANOR`) on a lot near enough a rectangle (`estate::FILL` of its grid: zones run along it),
 /// a temple in pieces (`town::temple`: a cross, else a hall with its apse; a town's shrine too) and a monastery on a
-/// rectangle big enough for its cloister (`monastery::fits`).
-pub fn kind_of(b: &town::Building, key: Option<&str>, inside: &[bool], capital: bool) -> Option<Kind> {
+/// rectangle big enough for its cloister (`monastery::fits`); a town hall or a guild big enough
+/// (`civic::kind`; `city`: in a city or a metropolis), an inn or a caravanserai big enough
+/// (`inn::kind`); `sh`: its grid.
+pub fn kind_of(b: &town::Building, key: Option<&str>, sh: &Shell, capital: bool, city: bool) -> Option<Kind> {
+    if matches!(key, Some("town_hall" | "merchant_guild" | "craft_guild" | "adventurers_guild" | "mages_guild")) {
+        return civic::kind(b, key, sh, city);
+    }
+    if matches!(key, Some("inn" | "caravanserai")) {
+        return inn::kind(b, key, sh);
+    }
+    let inside = &sh.inside;
     if matches!(key, Some("temple" | "shrine")) {
         return town::temple::shaped(b).then(|| if b.parts.iter().any(|p| p.kind == PartKind::Wing) { Kind::Church } else { Kind::TempleHall });
     }
@@ -332,6 +382,12 @@ pub struct Plan {
     tem: Option<temple::Zones>,
     /// A monastery's zones (`monastery`).
     mon: Option<monastery::Zones>,
+    /// A town hall's or a guild's zones (`civic`).
+    civ: Option<civic::Zones>,
+    /// An inn's or a caravanserai's zones (`inn`).
+    inn: Option<inn::Zones>,
+    /// A town hall's belfry's spiral stair (`civic`; its squares `tower_sq`, its top `tower_top`).
+    spiral: Option<usize>,
 }
 
 /// Room kinds by relative size, for a floor's rooms to take biggest first.
@@ -345,9 +401,15 @@ type Kinds = Vec<(&'static str, f64)>;
 /// ground (`Shell::ext_free`); `front`: the middle of a capital's palace's front as the town laid it
 /// out (grid units: `town::palace::approach`).
 #[allow(clippy::too_many_arguments)]
-pub fn plan(b: &town::Building, sh: &Shell, key: Option<&str>, corner: usize, tops: &[u8], seed: u64, near: &dyn Fn(P) -> f64, ground: &dyn Fn(isize, isize) -> bool, capital: bool, front: Option<P>) -> Option<Plan> {
+pub fn plan(b: &town::Building, sh: &Shell, key: Option<&str>, corner: usize, tops: &[u8], seed: u64, near: &dyn Fn(P) -> f64, ground: &dyn Fn(isize, isize) -> bool, (capital, city): (bool, bool), front: Option<P>) -> Option<Plan> {
     let (nx, ny) = (sh.nx, sh.ny);
-    let kind = kind_of(b, key, &sh.inside, capital)?;
+    let kind = kind_of(b, key, sh, capital, city)?;
+    if kind.is_civic() {
+        return civic::plan(sh, kind, b.floors.max(1) as i8, seed, near, ground);
+    }
+    if kind.is_inn() {
+        return inn::plan(sh, kind, b.floors.max(1) as i8, seed, near, ground);
+    }
     // Each square's piece.
     let mut piece = vec![Piece::Out; nx * ny];
     let mut wing_of: Vec<usize> = Vec::new();
@@ -484,14 +546,24 @@ impl Plan {
             rich: false,
             tem: None,
             mon: None,
+            civ: None,
+            inn: None,
+            spiral: None,
         }
     }
 
     /// The levels: z, its storeys and its top (a keep of pieces), else its storeys (the top and
     /// tower tops as other buildings have them: `None` from `level`).
     pub fn reaches(&self) -> i8 {
-        if self.pieces { self.floors } else { self.floors - 1 }
+        if self.pieces {
+            self.floors
+        } else if let Some((_, top)) = self.belfry() {
+            top.max(self.floors - 1)
+        } else {
+            self.floors - 1
+        }
     }
+
 
     /// Floor `z` laid out by zones, or None where the shared code lays it out (the cellar; a
     /// barracks' and a redrawn keep's roof).
@@ -519,6 +591,12 @@ impl Plan {
         }
         if self.mon.is_some() {
             return self.monastery_level(z, blank);
+        }
+        if self.civ.is_some() {
+            return self.civic_level(z, blank, rng);
+        }
+        if self.inn.is_some() {
+            return self.inn_level(z, blank, rng);
         }
         self.hall_level(z, blank, rng)
     }

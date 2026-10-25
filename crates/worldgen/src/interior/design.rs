@@ -28,6 +28,8 @@ pub const CHAMBER: &str = "chamber";
 pub const SECRET: u16 = 1;
 pub const FRONT: u16 = 2;
 pub const BACK: u16 = 4;
+/// An open archway onto the street (a coaching inn's carriage arch: no leaves).
+pub const ARCH: u16 = 8;
 /// Items that are ways to other sites, put back at build time (never in a design).
 const LINKS: [&str; 2] = ["trapdoor", "link_down"];
 
@@ -99,6 +101,7 @@ pub fn from_interior(it: &Interior, fingerprint: String) -> SiteDesign {
                         "secret" => SECRET,
                         "front" => FRONT,
                         "back" => BACK,
+                        "arch" => ARCH,
                         _ => 0,
                     };
                     let (x, y) = (d.a[0].min(d.b[0]), d.a[1].min(d.b[1]));
@@ -184,7 +187,7 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
         doors.push(if rb >= 0 {
             Door { a: p, b: q, kind: if flags & SECRET != 0 { "secret" } else { "door" }, rooms: [ra.min(rb), ra.max(rb)] }
         } else {
-            Door { a: p, b: q, kind: if flags & FRONT != 0 { "front" } else { "back" }, rooms: [ra, -1] }
+            Door { a: p, b: q, kind: if flags & FRONT != 0 { "front" } else if flags & ARCH != 0 { "arch" } else { "back" }, rooms: [ra, -1] }
         });
     }
     let walls = wall_runs(&cells, &rooms, nx, ny, &doors);

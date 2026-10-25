@@ -604,8 +604,10 @@ export interface InteriorLevel {
    * absent square). Only ever set while the room's squares are the shape's. */
   rooms: { kind: string; squares: number; raise_ft: number; center: [number, number]; shape?: number }[];
   /** `rail`: a railing where a gallery or passage looks down into a hall open two storeys (it
-   * stops a step, not the eye). */
-  walls: { a: [number, number]; b: [number, number]; exterior: boolean; rail?: boolean }[];
+   * stops a step, not the eye); `arcade`: a town hall's open arcade along its front (piers with the
+   * way open between them: `InteriorLayer.drawArcade`). */
+  walls: { a: [number, number]; b: [number, number]; exterior: boolean; rail?: boolean; arcade?: boolean }[];
+
   doors: { a: [number, number]; b: [number, number]; kind: string; rooms: [number, number] }[];
   windows: [number, number, number, number][];
   furniture: InteriorItem[];
@@ -862,10 +864,17 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       else if ((attr >>> 25) & 15) {
         // A keep's piece (`payload::pack_sites`): towers and the body's hall under slate, a wing or
         // forebuilding by its top (`town::keep_tops`): open battlements stone, a roof lead or slate; a
-        // monastery's church (5) its ranges' colour deepened, its bell-cote (6) slate.
+        // monastery's church (5) its ranges' colour deepened, its bell-cote (6) slate; a town hall's
+        // belfry (7) under its verdigris spire, its open bell lantern (8) pale stone, its long shadow
+        // (9) down the hall's roof.
         const piece = ((attr >>> 25) & 15) - 1;
         const top = (attr >>> 29) & 3;
-        if (piece === 5) {
+        if (piece === 7) rgb = [0.36, 0.6, 0.53];
+        else if (piece === 8) rgb = [0.86, 0.8, 0.66];
+        else if (piece === 9) {
+          rgb = [0, 0, 0];
+          a = 0.3;
+        } else if (piece === 5) {
           const base = WARD_RGB[ward] ?? WARD_RGB[6];
           rgb = [base[0] * 0.7, base[1] * 0.58, base[2] * 0.52];
         } else rgb = piece === 3 || piece === 4 ? (top === 0 ? [0.62, 0.6, 0.55] : top === 1 ? [0.4, 0.42, 0.44] : [0.38, 0.42, 0.47]) : piece === 0 ? [0.42, 0.45, 0.49] : [0.36, 0.4, 0.45];
@@ -874,7 +883,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         const shade = 0.94 + 0.12 * (((i * 2654435761) >>> 0) / 4294967296);
         rgb = hasFunc ? [base[0] * 0.86, base[1] * 0.74, base[2] * 0.66] : [base[0] * shade, base[1] * shade, base[2] * shade];
       }
-      const ink = outlined(kind);
+      // (A belfry's shadow not inked.)
+      const ink = outlined(kind) && ((attr >>> 25) & 15) !== 10;
       // Fan triangles (0, k, k+1): the edge k..k+1 is always the polygon's; 0..1 only for the
       // first triangle, k+1..0 only for the last.
       for (let k = 1; k + 1 < m; k++) {

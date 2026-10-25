@@ -837,7 +837,7 @@ impl Plan {
                     k += 1;
                 }
                 let (a, b) = if horizontal { ([start as f32, line as f32], [end as f32, line as f32]) } else { ([line as f32, start as f32], [line as f32, end as f32]) };
-                walls.push(Wall { a, b, exterior: ext, rail: false });
+                walls.push(Wall { a, b, exterior: ext, rail: false, arcade: false });
                 k += 1;
             }
         }
