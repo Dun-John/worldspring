@@ -1326,20 +1326,14 @@ export class InteriorLayer {
     const n = Math.max(4, Math.round(len * 5));
     const ts = Array.from({ length: n }, (_, k) => 0.06 + ((len - 0.12) * (k + 0.5)) / n);
     if (raised) {
-      // Raised: stone jambs either side, the dark slot it was pulled up into across the way (a lighter lip on the
-      // side away from the light), and the grate's lowest bars poking out of it. The doorway floor stays clean.
-      const slot = quadAt(0.02, len - 0.02, -0.13, 0.13);
-      g.poly(slot).fill(0x0c0907);
-      g.poly(quadAt(0.02, len - 0.02, 0.1, 0.13)).fill(0x8a8272);
-      g.poly(slot).stroke({ width: 0.045, color: INK, join: 'miter' });
+      // Raised: stone jambs either side, a thin inked groove in the wall line it was pulled up into, and the grate's
+      // lowest bar tips showing in it. The doorway floor between the jambs stays plainly open.
+      const slot = quadAt(0.1, len - 0.1, -0.045, 0.045);
+      g.poly(slot).fill(0x0c0907).stroke({ width: 0.03, color: INK, join: 'miter' });
       const bars = Math.max(3, Math.min(4, Math.round(len * 3.2)));
-      const tips = Array.from({ length: bars }, (_, k) => 0.1 + ((len - 0.2) * (k + 0.5)) / bars);
-      for (const t of tips) g.moveTo(...P(t, -0.02)).lineTo(...P(t, 0.2));
-      g.stroke({ width: 0.1, color: INK, cap: 'butt' });
-      for (const t of tips) g.moveTo(...P(t, -0.02)).lineTo(...P(t, 0.18));
-      g.stroke({ width: 0.058, color: IRON[1], cap: 'butt' });
-      for (const t of tips) g.moveTo(...P(t - 0.016, 0.0)).lineTo(...P(t - 0.016, 0.17));
-      g.stroke({ width: 0.016, color: IRON[2], cap: 'butt' });
+      const tips = Array.from({ length: bars }, (_, k) => 0.2 + ((len - 0.4) * (k + 0.5)) / bars);
+      for (const t of tips) g.moveTo(...P(t, -0.035)).lineTo(...P(t, 0.035));
+      g.stroke({ width: 0.05, color: IRON[1], cap: 'butt' });
       for (const [t0, t1] of [[-0.07, 0.07], [len - 0.07, len + 0.07]]) {
         g.poly(quadAt(t0, t1, -0.17, 0.17)).fill(0xa49c8a).stroke({ width: 0.045, color: INK, join: 'miter' });
         g.poly(quadAt(t0 + 0.035, t1 - 0.035, -0.12, 0.12)).fill(0xc2baa8);

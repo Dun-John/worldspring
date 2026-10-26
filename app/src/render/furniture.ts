@@ -6620,11 +6620,11 @@ function collapsedWall(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
     const e = Math.sin((k / steps) * Math.PI);
     fan.push(...at((k / steps) * len, Math.min(wid - 0.04, (0.45 + 0.5 * e) * wid * (0.9 + 0.1 * rnd()))));
   }
-  g.poly(fan).fill({ color: 0xe6dec8, alpha: 0.8 });
+  g.poly(fan).fill({ color: 0xaaa392, alpha: 0.5 });
   // The breach: a jagged dark gap in the wall, a few chips run out from it.
   const breach: number[] = [];
   for (let k = 0; k <= steps; k++) breach.push(...at((k / steps) * len, 0));
-  for (let k = steps; k >= 0; k--) breach.push(...at((k / steps) * len, k % 2 ? 0.05 + 0.04 * rnd() : 0.13 + 0.07 * rnd()));
+  for (let k = steps; k >= 0; k--) breach.push(...at((k / steps) * len, k % 2 ? 0.04 + 0.05 * rnd() : 0.15 + 0.16 * rnd() * (k % 4 ? 1 : 1.6)));
   g.poly(breach).fill(INK);
   const [lx, ly] = light;
   for (let i = 0; i < Math.round(2 + len * wid); i++) {
@@ -6655,24 +6655,35 @@ function collapsedWall(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
     const [cx, cy] = at(Math.min(len - l * 0.6, Math.max(l * 0.6, u)), sv);
     const [c, sn] = [Math.cos(turn), Math.sin(turn)];
     const corner = (a: number, b: number, dx = 0, dy = 0): [number, number] => [cx + dx + a * c - b * sn, cy + dy + a * sn + b * c];
-    const box = (dx = 0, dy = 0) => [...corner(-l / 2, -w / 2, dx, dy), ...corner(l / 2, -w / 2, dx, dy), ...corner(l / 2, w / 2, dx, dy), ...corner(-l / 2, w / 2, dx, dy)];
+    // A chipped outline of 5-7 corners: one corner knocked off, the rest nudged, an edge or two notched.
+    const base: [number, number][] = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+    const knock = Math.floor(rnd() * 4);
+    const shape: [number, number][] = [];
+    base.forEach(([sa, sb], i) => {
+      const [na, nb] = base[(i + 1) % 4];
+      const [pa, pb] = base[(i + 3) % 4];
+      const J = () => (rnd() - 0.5) * 0.14;
+      if (i === knock) {
+        shape.push([(sa + (pa - sa) * 0.42) * (l / 2), (sb + (pb - sb) * 0.42) * (w / 2)], [(sa + (na - sa) * 0.42) * (l / 2), (sb + (nb - sb) * 0.42) * (w / 2)]);
+      } else shape.push([(sa + J()) * (l / 2), (sb + J()) * (w / 2)]);
+      if (i !== knock && (i + knock) % 2 === 1 && rnd() < 0.7) shape.push([((sa + na) / 2 + J()) * (l / 2) - (sb - nb ? 0 : 0), ((sb + nb) / 2) * (w / 2) * (0.82 + 0.08 * rnd()) + (sb + nb ? 0 : 0)]);
+    });
+    const box = (dx = 0, dy = 0) => shape.flatMap(([a, b]) => corner(a, b, dx, dy));
     const h = w * 0.3;
     // The side, let down away from the light, then the top.
     castShadow(g, box(), light, 0.2);
     g.poly(box(-lx * h, -ly * h)).fill(DRESSED[0]).stroke({ width: OUT, color: INK, join: 'round' });
-    for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) g.moveTo(...corner((a * l) / 2, (b * w) / 2)).lineTo(...corner((a * l) / 2, (b * w) / 2, -lx * h, -ly * h));
+    for (const [a, b] of shape) g.moveTo(...corner(a, b)).lineTo(...corner(a, b, -lx * h, -ly * h));
     g.stroke({ width: OUT * 0.8, color: INK });
     g.poly(box()).fill(DRESSED[1]).stroke({ width: OUT, color: INK, join: 'round' });
     // The edges toward the light.
-    const edges: [number, number, number, number, number, number][] = [
-      [-1, -1, 1, -1, sn, -c],
-      [1, -1, 1, 1, c, sn],
-      [1, 1, -1, 1, -sn, c],
-      [-1, 1, -1, -1, -c, -sn],
-    ];
-    for (const [a0, b0, a1, b1, nx, ny] of edges) {
-      if (nx * lx + ny * ly > 0.3) g.moveTo(...corner((a0 * l) / 2 * 0.86, (b0 * w) / 2 * 0.86)).lineTo(...corner((a1 * l) / 2 * 0.86, (b1 * w) / 2 * 0.86));
-    }
+    shape.forEach(([a0, b0], k) => {
+      const [a1, b1] = shape[(k + 1) % shape.length];
+      const [ea, eb] = [a1 - a0, b1 - b0];
+      const el = Math.hypot(ea, eb) || 1;
+      const [nx, ny] = [(eb / el) * c - (-ea / el) * sn, (eb / el) * sn + (-ea / el) * c];
+      if (nx * lx + ny * ly > 0.3) g.moveTo(...corner(a0 * 0.86, b0 * 0.86)).lineTo(...corner(a1 * 0.86, b1 * 0.86));
+    });
     g.stroke({ width: 0.03, color: DRESSED[2], cap: 'round' });
   }
 }
