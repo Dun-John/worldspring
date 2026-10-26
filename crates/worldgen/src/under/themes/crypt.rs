@@ -67,6 +67,9 @@ pub(crate) fn crypt(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
         p.loops = 0.5;
         p.secrets = 2 + (area >= 1.3) as usize;
     }
+    if matches!(theme.key, "crypt" | "ossuary") {
+        p.secrets = 2 + (area >= 1.3) as usize;
+    }
     let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(3);
     // The way in: a room round the arrival (the grid's first crossing).
     let s = if depth == 0 && theme.key == "crypt" { 5 } else { 3 };
@@ -408,7 +411,7 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     let passage = p.room(theme.passage, 0.0);
     let (ax, ay) = (arrive % nx, arrive / nx);
     let odd = |n: usize| n | 1;
-    let sc = |n: usize| ((n as f64) * area.sqrt()).round() as usize;
+    let sc = |n: usize| ((n as f64) * crate::core::sqrt(area)).round() as usize;
     // The run goes the way there is more room.
     let fwd = if ax < nx / 2 { Side::E } else { Side::W };
     let mut g = Grower::new(nx, ny, passage, Some(ay));
@@ -475,11 +478,11 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     // Big sites: a second run across each passage between halls, a passage either way to a burial hall (more grows
     // off them).
     for c in leads {
+        let before = g.pieces.len();
         let Some(&n) = g.deck(&mut p, c, Side::N, "", Template::Corridor, 1, pick(3, 5, rng), 0, true).first() else { continue };
-        let laid = g.pieces.len();
         let (a, d) = (odd(pick(5, sc(7).max(5), rng)), pick(5, sc(6).max(5), rng));
         if [(a, d), (5, 5), (3, 4)].iter().all(|&(a, d)| g.deck(&mut p, n, Side::N, "burial hall", Template::Rect, a, d, 0, true).is_empty()) {
-            while g.pieces.len() > laid - 2 {
+            while g.pieces.len() > before {
                 g.undo_last(&mut p);
             }
         }

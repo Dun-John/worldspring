@@ -35,7 +35,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         let Some(narthex) = narthex else { return fallback(p, last) };
         let cross = rng.next_f64() < 0.45;
         // (Bigger sites: a longer, wider nave, a bigger sanctum and crossing.)
-        let sc = |n: usize| ((n as f64) * area.sqrt()).round() as usize;
+        let sc = |n: usize| ((n as f64) * crate::core::sqrt(area)).round() as usize;
         let (sd, sa) = (pick(5, sc(7), rng), odd(pick(5, sc(7), rng)));
         let cw = if cross { odd(pick(5, sc(7), rng)) } else { 0 };
         let room_left = nx.saturating_sub(x0 + nw + 2 + sd + cw);
@@ -152,7 +152,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
 /// bigger on bigger sites (`area`).
 fn specs(theme: &Theme, skip: &[&str], wide: bool, area: f64) -> Vec<Spec> {
     let mut out = Vec::new();
-    let up = |n: usize| ((n as f64) * area.sqrt().max(1.0)).round() as usize;
+    let up = |n: usize| ((n as f64) * crate::core::sqrt(area).max(1.0)).round() as usize;
     for &kind in theme.kinds.iter().filter(|k| !skip.contains(k)) {
         out.push(Spec { kind, t: Template::Rect, across: (3, up(5)), deep: (3, up(5)) });
         let t = match kind {

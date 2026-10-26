@@ -22,7 +22,7 @@ pub(crate) fn prison(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
     let (ax, ay) = (arrive % nx, arrive / nx);
     let pick = |lo: usize, hi: usize, rng: &mut Pcg32| lo + rng.below((hi.max(lo) - lo + 1) as u32) as usize;
     let odd = |n: usize| n | 1;
-    let sc = |n: usize| ((n as f64) * area.sqrt()).round() as usize;
+    let sc = |n: usize| ((n as f64) * crate::core::sqrt(area)).round() as usize;
     let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(4);
     let mut g;
     let mut boss = None;

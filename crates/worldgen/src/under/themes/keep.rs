@@ -114,7 +114,7 @@ pub(crate) fn undercroft(nx: usize, ny: usize, arrive: usize, last: bool, theme:
     let near = vec![core];
     // Culverts out across the section's grid: towards its far corner and the two others, rooms along them.
     let (ax, ay) = (arrive % nx, arrive / nx);
-    let (fx, fy) = (if ax < nx / 2 { nx - 8 } else { 7 }, if ay < ny / 2 { ny - 8 } else { 7 });
+    let (fx, fy) = (if ax < nx / 2 { nx.saturating_sub(8) } else { 7 }, if ay < ny / 2 { ny.saturating_sub(8) } else { 7 });
     for to in [(fx, fy), (fx, ay), (ax, fy)] {
         g.reach(&mut p, core, to, &["overflow chamber", "old vault", "overflow chamber"], cw, rng);
     }

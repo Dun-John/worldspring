@@ -650,7 +650,7 @@ pub(crate) fn dead_end(p: &Plan, ny: usize) -> Option<i16> {
 /// How many times a medium site's rooms a site gets, its grid `area` times a medium one's: more than its area on big
 /// sites, so they fill their grids.
 pub(crate) fn fill(area: f64) -> f64 {
-    if area > 1.0 { area * area.sqrt() } else { area }
+    if area > 1.0 { area * crate::core::sqrt(area) } else { area }
 }
 
 /// A level the grower couldn't start (no room round the arrival): one square, the way on.

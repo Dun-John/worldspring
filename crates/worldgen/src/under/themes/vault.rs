@@ -22,7 +22,7 @@ pub(crate) fn vault(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     // The great halls (pillared) and a cistern: deep water; more and longer halls on bigger sites.
     let mut halls: Vec<i16> = Vec::new();
     let mut near = vec![core];
-    let sc = |n: usize| ((n as f64) * area.sqrt().max(1.0)).round() as usize;
+    let sc = |n: usize| ((n as f64) * crate::core::sqrt(area).max(1.0)).round() as usize;
     for _ in 0..1 + (area >= 1.0 && rng.next_f64() < 0.6) as usize + (area >= 1.3) as usize + (area >= 2.0) as usize {
         let size = (odd(pick(7, 9, rng)), pick(9, sc(13), rng));
         if let Some(h) = g.attach(&mut p, &near, "flooded hall", Template::Rect, size, cw, rng).or_else(|| g.attach(&mut p, &near, "flooded hall", Template::Rect, (7, 8), cw, rng)) {
