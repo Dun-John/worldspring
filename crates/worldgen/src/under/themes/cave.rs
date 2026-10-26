@@ -16,7 +16,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 
 /// The squares round square `k` (8 ways), inside the grid.
-fn around(k: usize, nx: usize, ny: usize) -> impl Iterator<Item = usize> {
+pub(crate) fn around(k: usize, nx: usize, ny: usize) -> impl Iterator<Item = usize> {
     let (i, j) = ((k % nx) as isize, (k / nx) as isize);
     (-1..=1isize)
         .flat_map(move |dj| (-1..=1isize).map(move |di| (i + di, j + dj)))
@@ -462,7 +462,7 @@ pub(crate) fn caverns(p: &mut Plan, ny: usize, region: &[bool], c: &Caverns, rng
 }
 
 /// The squares of room `r` and each one's steps in from its edge (1 on a square beside another room or rock).
-fn depths(p: &Plan, ny: usize, r: i16) -> Vec<(usize, u32)> {
+pub(crate) fn depths(p: &Plan, ny: usize, r: i16) -> Vec<(usize, u32)> {
     let nx = p.nx;
     let mut e = vec![0u32; nx * ny];
     let mut q = VecDeque::new();
@@ -485,14 +485,14 @@ fn depths(p: &Plan, ny: usize, r: i16) -> Vec<(usize, u32)> {
 }
 
 /// Water bands (`Plan::water`): dry, shallow, deep whatever the noise.
-const DRY: [f32; 2] = [2.0, 2.0];
-const SHALLOW: [f32; 2] = [0.0, 2.0];
-const DEEP: [f32; 2] = [0.0, 0.0];
+pub(crate) const DRY: [f32; 2] = [2.0, 2.0];
+pub(crate) const SHALLOW: [f32; 2] = [0.0, 2.0];
+pub(crate) const DEEP: [f32; 2] = [0.0, 0.0];
 
 /// A lake over room `r`: deep in the middle, round it a ring of wading shallows or, on one side, a dry shore ledge
 /// with shallows inside it (the deep reaching the rock on the other side); with `island`, its middle left dry (for the
 /// `boss`: a bigger one, the rest deep). The island's squares, if any.
-fn lake(p: &Plan, ny: usize, w: &mut [[f32; 2]], r: i16, island: bool, boss: bool, rng: &mut Pcg32) -> Vec<usize> {
+pub(crate) fn lake(p: &Plan, ny: usize, w: &mut [[f32; 2]], r: i16, island: bool, boss: bool, rng: &mut Pcg32) -> Vec<usize> {
     let nx = p.nx;
     let sq = depths(p, ny, r);
     let deepest = sq.iter().map(|s| s.1).max().unwrap_or(0);

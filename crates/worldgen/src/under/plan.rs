@@ -63,6 +63,9 @@ pub(crate) struct Plan {
     /// Open gaps (square pairs, also in `doors`): where a cave-in broke through a wall (`themes::breach`), drawn as
     /// openings with no leaves (`Door` kind "arch"), never locked nor hidden.
     pub(crate) gaps: FastSet<(usize, usize)>,
+    /// A mine's lift shaft, the same on every level (`themes::mine`): its 2 x 2 squares' top-left corner, whether it
+    /// lies north of the haulage way (its landing between them), and whether the cage stands at the top (else the foot).
+    pub(crate) lift: Option<(usize, bool, bool)>,
 }
 
 impl Plan {
@@ -93,6 +96,7 @@ impl Plan {
             bridge: Vec::new(),
             lock_first: Vec::new(),
             gaps: FastSet::default(),
+            lift: None,
         }
     }
 

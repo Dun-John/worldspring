@@ -154,6 +154,13 @@ const EXTRA_ROOMS: &[&str] = &[
     "pump room",
     "collapsed stope",
     "shaft head",
+    "adit",
+    "lift landing",
+    "winze",
+    "tool store",
+    "ore bins",
+    "foreman's office",
+    "bunk room",
     "corridor",
     "cavern",
     "nave",
@@ -1043,8 +1050,14 @@ pub fn key_order(it: &Interior) -> Vec<Problem> {
                 if lv.cells[q] < 0 || blocks[li][q] {
                     continue;
                 }
-                if !lv.natural && lv.cells[q] != lv.cells[k] {
-                    match doors[li].get(&(k.min(q), k.max(q))) {
+                // (On a natural level one steps anywhere but through a door still locked: a mine's powder store.)
+                let door = doors[li].get(&(k.min(q), k.max(q)));
+                if lv.natural {
+                    if door.is_some_and(|&c| c != 0 && !open[c as usize & 7]) {
+                        continue;
+                    }
+                } else if lv.cells[q] != lv.cells[k] {
+                    match door {
                         Some(&c) if c == 0 || open[c as usize & 7] => {}
                         _ => continue,
                     }

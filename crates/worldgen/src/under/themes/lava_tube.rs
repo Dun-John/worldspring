@@ -1,10 +1,11 @@
-//! Lava tubes: a meandering tube with side pockets; the lower tube carries a lava channel.
+//! Lava tubes: a meandering tube with side pockets (cave chambers grown beside it); the lower tube carries a lava
+//! channel.
 
 use crate::core::rng::Pcg32;
 use crate::under::*;
-use super::cave::natural_level;
+use super::cave::{Caverns, around, caverns, natural_level};
 
-/// A meandering lava tube with side pockets; the lower tube carries a lava channel.
+/// A meandering lava tube with side pockets grown off it; the lower tube carries a lava channel.
 pub(crate) fn lava_tube(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool, theme: &Theme, rng: &mut Pcg32) -> Plan {
     let n = nx * ny;
     let mut open = vec![false; n];
@@ -34,27 +35,39 @@ pub(crate) fn lava_tube(nx: usize, ny: usize, arrive: usize, depth: usize, last:
         carve(&mut open, ax, j);
         carve(&mut open, ax + toward, j);
     }
-    // Side pockets.
+    open[arrive] = true;
+    // (The tube's chambers of the first two kinds, the pockets of the rest.)
+    let (tube, pockets) = theme.kinds.split_at(2.min(theme.kinds.len()));
+    let mut p = natural_level(nx, ny, arrive, last, open, tube, theme.ledge, rng);
+    // Side pockets: cave chambers grown in the rock beside the tube at a few places along it (`cave::caverns`), joined
+    // to it by short tunnels; kept off the boss chamber and the ways in and out.
+    let near = |p: &Plan, m: usize| p.cells[m] >= 0 && p.rooms[p.cells[m] as usize].kind == BOSS || m == arrive || Some(m) == p.down;
+    let shy: Vec<bool> = (0..n).map(|k| near(&p, k) || around(k, nx, ny).any(|m| near(&p, m) || around(m, nx, ny).any(|t| near(&p, t)))).collect();
+    let mut region = vec![false; n];
     for _ in 0..3 + rng.below(3) {
         let i = x0 + rng.below((x1 - x0).max(1) as u32) as isize;
         let side = if rng.next_f64() < 0.5 { 1.0 } else { -1.0 };
         let (c, w) = (centre(i as f64), half(i as f64));
-        let r = rng.range(1.8, 3.2);
-        let pc = c + side * (w + r + 0.5);
-        for j in (pc - r).floor() as isize..=(pc + r).ceil() as isize {
-            for di in -(r.ceil() as isize)..=r.ceil() as isize {
-                if ((di * di) as f64 + (j as f64 - pc) * (j as f64 - pc)) <= r * r {
-                    carve(&mut open, i + di, j);
-                }
+        let r = rng.range(4.0, 6.5);
+        let pc = c + side * (w + r - 0.5);
+        for k in 0..n {
+            let (dx, dy) = ((k % nx) as f64 - i as f64, (k / nx) as f64 - pc);
+            if dx * dx + dy * dy <= r * r && p.cells[k] < 0 && !shy[k] {
+                region[k] = true;
             }
         }
-        let (lo, hi) = (c.min(pc).round() as isize, c.max(pc).round() as isize);
-        for j in lo..=hi {
-            carve(&mut open, i, j);
+    }
+    let kinds = if pockets.is_empty() { tube } else { pockets };
+    let cv = Caverns { kinds, ledge: "", spacing: 7.0, seeds: &[], raise: 0.0, squeeze: 0.3, loops: 0.3, reach: 6, dead_end: false };
+    let grown = caverns(&mut p, ny, &region, &cv, rng);
+    // (Rubble slopes up into a pocket off a raised stretch of the tube.)
+    for j in grown.joins.iter().filter(|j| j.a < 0 || j.b < 0) {
+        let raised = j.squares.iter().any(|&k| neighbours(k, nx, ny).any(|m| p.cells[m] >= 0 && !grown.rooms.contains(&p.cells[m]) && p.rooms[p.cells[m] as usize].raise > 0.0));
+        if raised {
+            let slope: Vec<crate::interior::Item> = j.squares.iter().filter(|&&k| !p.taken[k]).map(|&k| item("rubble_slope", k % nx, k / nx, 1, 1)).collect();
+            p.put_all(slope);
         }
     }
-    open[arrive] = true;
-    let mut p = natural_level(nx, ny, arrive, last, open, theme.kinds, theme.ledge, rng);
     // The lower tube: a lava channel down its middle (never on the ways in, out or the
     // boss chamber's floor).
     if depth > 0 {

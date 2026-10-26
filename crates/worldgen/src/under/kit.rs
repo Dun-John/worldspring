@@ -328,6 +328,12 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "collapsed stope" => &[("rubble", 1, 1, Any, 3, 6), ("boulder", 2, 2, Any, 0, 2), ("cave_in", 1, 1, Any, 1, 1), ("skeleton", 1, 2, Any, 0, 1)],
         "pump room" => &[("pool", 2, 2, Any, 1, 1), ("barrel", 1, 1, Edge, 1, 2), ("winch", 1, 1, Edge, 0, 1)],
         "shaft head" => &[("winch", 1, 1, Edge, 0, 1), ("lantern", 1, 1, Edge, 0, 1)],
+        "adit" => &[("timber", 1, 1, Edge, 2, 5), ("lantern", 1, 1, Edge, 1, 2), ("tools", 1, 1, Edge, 0, 1)],
+        "lift landing" => &[("lantern", 1, 1, Edge, 0, 1), ("timber", 1, 1, Edge, 0, 1), ("crate", 1, 1, Edge, 0, 1)],
+        "winze" => &[("timber", 1, 1, Edge, 1, 2), ("lantern", 1, 1, Edge, 0, 1)],
+        "tool store" => &[("tools", 1, 1, Edge, 2, 4), ("crate", 1, 1, Edge, 1, 2), ("barrel", 1, 1, Edge, 0, 1), ("lantern", 1, 1, Edge, 0, 1)],
+        "ore bins" => &[("ore_cart", 1, 1, Any, 1, 2), ("rubble", 1, 1, Any, 1, 3), ("crate", 1, 1, Edge, 1, 2), ("sacks", 1, 1, Edge, 0, 1)],
+        "foreman's office" => &[("desk", 2, 1, Edge, 1, 1), ("chest", 1, 1, Edge, 1, 1), ("lantern", 1, 1, Edge, 1, 1), ("crate", 1, 1, Edge, 0, 1)],
         // Prisons.
         // Labyrinths and collapsed fortresses; cave-ins (`themes::breach`).
         "maze gate" => &[("statue", 1, 1, Edge, 1, 2), ("sconce", 1, 1, Edge, 1, 2), ("bones", 1, 1, Any, 0, 1)],
@@ -441,14 +447,7 @@ pub(crate) fn furnish(p: &mut Plan, nx: usize, ny: usize, kind: UnderKind, rng: 
     if let Some(d) = p.down {
         p.taken[d] = true;
     }
-    // Rails down the haulage way, before anything stands on it.
-    if kind == UnderKind::Mine {
-        let rails: Vec<usize> =
-            (0..nx * ny).filter(|&k| p.cells[k] >= 0 && p.rooms[p.cells[k] as usize].kind == "haulage way" && k >= nx && p.cells[k - nx] == p.cells[k] && !p.taken[k]).collect();
-        for k in rails {
-            p.put(item("rail", k % nx, k / nx, 1, 1));
-        }
-    }
+    // (A mine's rails and ore carts are its planner's, `themes::mine`.)
     let rooms: Vec<(i16, &'static str)> = p.rooms.iter().enumerate().map(|(i, r)| (i as i16, r.kind)).collect();
     for (ri, rkind) in rooms {
         furnish_room(p, nx, ny, ri, rkind, kind, rng);

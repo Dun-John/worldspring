@@ -10,8 +10,9 @@
 //!   hideout's cave front. Cult sanctums are rings round a ritual chamber, their gates offset.
 //! - Caves are cellular automata grown around a winding spine, kept to the part reachable from
 //!   the arrival, split into chambers (some raised as ledges).
-//! - Mines are a haulage way with side drifts and stopes, a shaft to the next level.
-//! - Lava tubes are a meandering tube with side pockets; the lower tube carries a lava channel.
+//! - Mines are an adit and a railed haulage way, drifts along curved ore veins with stopes, a winze and a lift shaft.
+//! - Lava tubes are a meandering tube with side pockets (cave chambers grown off it); the lower tube carries a lava
+//!   channel.
 //! - Sewers run under a city's paved streets, section by section (`SEWER_SECTION_FT` squares
 //!   of the world, each entered from a street grate): the tunnels are the ground under the
 //!   streets, a sewage channel down the wider runs, service passages joining runs that meet
@@ -722,7 +723,7 @@ fn site(
             Planner::Tomb => tomb(nx, ny, a, d, last, theme, area, rng),
             Planner::Vault => vault(nx, ny, a, d, last, theme, area, rng),
             Planner::Cave => cave(nx, ny, a, last, theme, rng),
-            Planner::Mine => mine(nx, ny, a, last, rng),
+            Planner::Mine => mine(nx, ny, a, d, last, plans.last().and_then(|q| q.lift), rng),
             Planner::LavaTube => lava_tube(nx, ny, a, d, last, theme, rng),
         };
         // The ways in: the surface on the top level (if it opens there), the way up below.
