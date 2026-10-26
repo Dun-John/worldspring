@@ -213,10 +213,12 @@ pub const PROPS: &[(&str, &str, u8, bool, f32, Option<&str>)] = &[
     ("rubble_slope", "rubble slope", 1, false, 2.0, Some("difficult terrain")),
     ("rope_bridge", "rope bridge", 0, false, 0.0, None),
     ("stepping_stone", "stepping stones", 0, false, 0.0, Some("difficult terrain")),
+    // (A dwarven hall's stone bridge: dressed slabs over a chasm, walked like floor; the chasm is laid round it.)
+    ("stone_bridge", "stone bridge", 0, false, 0.0, None),
 ];
 
-/// Items that lie on the floor under a span: water, chasms, rubble slopes.
-pub const TERRAIN: [&str; 4] = ["water_shallow", "water_deep", "chasm", "rubble_slope"];
+/// Items that lie on the floor under a span: water, chasms, rubble slopes; and a stone bridge's deck.
+pub const TERRAIN: [&str; 5] = ["water_shallow", "water_deep", "chasm", "rubble_slope", "stone_bridge"];
 /// Items one walks on over deep water or a chasm.
 pub const SPANS: [&str; 2] = ["rope_bridge", "stepping_stone"];
 
@@ -401,7 +403,7 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "dormitory" => &[("cot", 1, 2, Edge, 3, 6), ("chest", 1, 1, Edge, 1, 2), ("candles", 1, 1, Any, 0, 1)],
         "robing room" => &[("chest", 1, 1, Edge, 1, 3), ("bookshelf", 1, 2, Edge, 0, 1), ("table", 1, 2, Any, 0, 1), ("rug", 2, 3, Any, 0, 1), ("candles", 1, 1, Any, 1, 1)],
         "sacrifice pit" => &[("pit", 2, 2, Any, 1, 1), ("chains", 1, 1, Edge, 1, 3), ("bones", 1, 1, Any, 1, 3), ("candles", 1, 1, Any, 1, 2), ("altar", 2, 1, Edge, 0, 1)],
-        "ring passage" => &[("sconce", 1, 1, Edge, 1, 4), ("candles", 1, 1, Any, 0, 2), ("trap", 1, 1, Any, 0, 1)],
+        // (The rings, `themes::cult::RING`, stay clear: no kit.)
         // Flooded vaults.
         "flooded stair" => &[("pool", 2, 2, Any, 1, 2), ("debris", 1, 1, Any, 0, 2), ("moss", 1, 1, Any, 1, 2)],
         "sunken chapel" => &[("altar", 2, 1, Edge, 1, 1), ("pool", 2, 2, Any, 1, 2), ("statue", 1, 1, Edge, 0, 1), ("moss", 1, 1, Any, 1, 2)],
@@ -960,7 +962,12 @@ pub(crate) fn guard(p: &mut Plan, above: &mut [Plan], nx: usize, ny: usize, d: u
         let (a, b) = walls.swap_remove(rng.below(walls.len() as u32) as usize);
         if !near(p, ny, a, b, 4) {
             p.door(a, b);
-            if rng.next_f64() < 0.3 && p.secret.len() < p.secrets {
+            // (Through a cave-in's side: one more gap, never a door.)
+            let caved = [a, b].iter().any(|&k| p.rooms[p.cells[k] as usize].kind == "cave-in");
+            if caved {
+                p.gaps.insert((a, b));
+            }
+            if rng.next_f64() < 0.3 && !caved && p.secret.len() < p.secrets {
                 p.secret.insert((a, b));
             }
             made += 1;
@@ -1098,8 +1105,14 @@ fn shortcuts(p: &mut Plan, nx: usize, ny: usize, passage: i16, wide: bool, rooms
         }
         used.extend([a, b]);
         made += 1;
+        // (Where it breaks into a cave-in: a gap, never a door.)
+        let open: Vec<(usize, usize)> = new.iter().copied().filter(|e| [e.0, e.1].iter().any(|&k| p.rooms[p.cells[k] as usize].kind == "cave-in")).collect();
+        p.gaps.extend(open.iter().copied());
         if rng.next_f64() < 0.4 && p.secret.len() < p.secrets {
-            p.secret.insert(new[rng.below(new.len() as u32) as usize]);
+            let e = new[rng.below(new.len() as u32) as usize];
+            if !open.contains(&e) {
+                p.secret.insert(e);
+            }
         }
     }
 }

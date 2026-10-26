@@ -6,7 +6,7 @@
 //! room; the deepest ends in the boss chamber, a dead end (on a one-level hideout the captain's quarters are it).
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, Piece, ROOMS_GROWING, Side, Spec, Template, boss_room, fallback, fill, first_room, rooms};
+use crate::under::grow::{Grower, Piece, ROOMS_GROWING, Side, Spec, Template, boss_room, fallback, fill, fill_out, fill_share, first_room, rooms};
 use crate::under::themes::keep::finish;
 use crate::under::themes::warren::{blob, burrow, cavern, den, edge, lay, step};
 use crate::under::*;
@@ -91,6 +91,7 @@ pub(crate) fn bandit(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         }
         let left = target.saturating_sub(rooms(&p, passage) + 1);
         g.grow(&mut p, &specs, left, false, rng);
+        fill_out(&mut g, &mut p, ny, fill_share(area), FILL, 1, rng);
         // Farthest in, the captain's quarters (the boss chamber on a one-level hideout) behind a door locked first, the
         // loot store beyond; then the secret tunnel back to the cave.
         let kind = if last { BOSS } else { "captain's quarters" };
@@ -117,6 +118,7 @@ pub(crate) fn bandit(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         g.cap = ROOMS_GROWING;
         let left = target.saturating_sub(1);
         g.grow(&mut p, &specs, left, false, rng);
+        fill_out(&mut g, &mut p, ny, fill_share(area), FILL, 1, rng);
         if rng.next_f64() < 0.5 {
             pocket(&mut p, &g, ny, rng);
         }
@@ -129,6 +131,9 @@ pub(crate) fn bandit(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
     finish(&mut p, ny, passage, 1, last, boss, &[], &[]);
     p
 }
+
+/// What spreads a big hideout over its grid (`fill_out`).
+const FILL: &[&str] = &["bunk room", "storeroom", "kitchen", "armory"];
 
 /// What grows behind the cave: the theme's dug rooms (rect, shored), small or bigger; short tunnels.
 fn specs(area: f64) -> Vec<Spec> {

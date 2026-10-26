@@ -141,8 +141,6 @@ pub struct Theme {
     passage: &'static str,
     /// Room count: at least, and up to this many more (a medium site).
     rooms: (usize, u32),
-    /// Fill a big grid: more and larger rooms (a keep's sprawling dungeons, dwarven halls).
-    sprawl: bool,
     /// Corridors this many squares wide.
     corridor: usize,
     /// Natural levels: a raised chamber.
@@ -197,8 +195,8 @@ pub enum Planner {
 }
 
 #[allow(clippy::too_many_arguments)]
-const fn built(key: &'static str, kind: UnderKind, first: &'static str, kinds: &'static [&'static str], passage: &'static str, rooms: (usize, u32), sprawl: bool, corridor: usize) -> Theme {
-    Theme { key, kind, first, kinds, passage, rooms, sprawl, corridor, ledge: "", planner: Planner::Mixed, water: Wetness::Dry }
+const fn built(key: &'static str, kind: UnderKind, first: &'static str, kinds: &'static [&'static str], passage: &'static str, rooms: (usize, u32), corridor: usize) -> Theme {
+    Theme { key, kind, first, kinds, passage, rooms, corridor, ledge: "", planner: Planner::Mixed, water: Wetness::Dry }
 }
 
 const fn natural(key: &'static str, kind: UnderKind, kinds: &'static [&'static str], ledge: &'static str) -> Theme {
@@ -207,46 +205,46 @@ const fn natural(key: &'static str, kind: UnderKind, kinds: &'static [&'static s
         UnderKind::LavaTube => Planner::LavaTube,
         _ => Planner::Cave,
     };
-    Theme { key, kind, first: "", kinds, passage: "", rooms: (0, 1), sprawl: false, corridor: 1, ledge, planner, water: Wetness::Dry }
+    Theme { key, kind, first: "", kinds, passage: "", rooms: (0, 1), corridor: 1, ledge, planner, water: Wetness::Dry }
 }
 
 /// Every theme a site can be given; each kind's first is the one it had before themes.
 pub const THEMES: &[Theme] = &[
-    Theme { planner: Planner::Mixed, ..built("dungeon", UnderKind::Dungeon, "entry hall", &["guard room", "barracks", "storeroom", "cell block", "torture chamber", "shrine", "armory", "well room", "pit room", "prison"], "corridor", (8, 5), false, 1) },
+    Theme { planner: Planner::Mixed, ..built("dungeon", UnderKind::Dungeon, "entry hall", &["guard room", "barracks", "storeroom", "cell block", "torture chamber", "shrine", "armory", "well room", "pit room", "prison"], "corridor", (8, 5), 1) },
     Theme {
         planner: Planner::Prison,
-        ..built("prison", UnderKind::Dungeon, "gatehouse", &["cell block", "cell block", "prison", "oubliette", "torture chamber", "guard room", "warden's office", "mess hall", "interrogation room"], "cell corridor", (10, 5), false, 1)
+        ..built("prison", UnderKind::Dungeon, "gatehouse", &["cell block", "cell block", "prison", "oubliette", "torture chamber", "guard room", "warden's office", "mess hall", "interrogation room"], "cell corridor", (10, 5), 1)
     },
-    Theme { planner: Planner::Temple, ..built("temple", UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "ossuary", "chapel of rest"], "processional way", (7, 4), false, 2) },
-    Theme { planner: Planner::Wizard, ..built("wizard_lair", UnderKind::Dungeon, "foyer", &["library", "laboratory", "summoning circle", "specimen vault", "study", "menagerie", "golem workshop", "scrying room"], "hall", (7, 4), false, 1) },
+    Theme { planner: Planner::Temple, ..built("temple", UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "ossuary", "chapel of rest"], "processional way", (7, 4), 2) },
+    Theme { planner: Planner::Wizard, ..built("wizard_lair", UnderKind::Dungeon, "foyer", &["library", "laboratory", "summoning circle", "specimen vault", "study", "menagerie", "golem workshop", "scrying room"], "hall", (7, 4), 1) },
     Theme {
         planner: Planner::Bandit,
-        ..built("bandit_hideout", UnderKind::Dungeon, "hidden entry", &["common room", "bunk room", "loot store", "armory", "kitchen", "captain's quarters", "storeroom", "lookout"], "tunnel", (9, 4), false, 1)
+        ..built("bandit_hideout", UnderKind::Dungeon, "hidden entry", &["common room", "bunk room", "loot store", "armory", "kitchen", "captain's quarters", "storeroom", "lookout"], "tunnel", (9, 4), 1)
     },
-    Theme { planner: Planner::Dwarven, ..built("dwarven_hall", UnderKind::Dungeon, "gate hall", &["great hall", "forge", "brewery", "armory", "barracks", "treasury", "ancestor hall", "storeroom", "mushroom farm"], "gallery", (9, 5), true, 2) },
+    Theme { planner: Planner::Dwarven, ..built("dwarven_hall", UnderKind::Dungeon, "gate hall", &["great hall", "forge", "brewery", "armory", "barracks", "treasury", "ancestor hall", "storeroom", "mushroom farm"], "gallery", (9, 5), 2) },
     Theme {
         planner: Planner::Warren,
-        ..built("goblin_warren", UnderKind::Dungeon, "warren mouth", &["den", "den", "nest", "cook pit", "refuse pit", "wolf pen", "shaman's hut", "storeroom"], "crawlway", (12, 6), false, 1)
+        ..built("goblin_warren", UnderKind::Dungeon, "warren mouth", &["den", "den", "nest", "cook pit", "refuse pit", "wolf pen", "shaman's hut", "storeroom"], "crawlway", (12, 6), 1)
     },
     Theme {
         planner: Planner::Vault,
         water: Wetness::Flooded,
-        ..built("flooded_vault", UnderKind::Dungeon, "flooded stair", &["flooded hall", "cistern", "old vault", "sunken chapel", "treasury", "drowned barracks"], "flooded passage", (8, 4), false, 1)
+        ..built("flooded_vault", UnderKind::Dungeon, "flooded stair", &["flooded hall", "cistern", "old vault", "sunken chapel", "treasury", "drowned barracks"], "flooded passage", (8, 4), 1)
     },
     Theme {
         planner: Planner::Cult,
-        ..built("cult_sanctum", UnderKind::Dungeon, "cellar", &["ritual chamber", "dormitory", "robing room", "sacrifice pit", "cell", "shrine", "storeroom"], "ring passage", (10, 4), false, 1)
+        ..built("cult_sanctum", UnderKind::Dungeon, "cellar", &["ritual chamber", "dormitory", "robing room", "sacrifice pit", "cell", "shrine", "storeroom"], RING, (10, 4), 1)
     },
-    Theme { planner: Planner::Labyrinth, ..built("labyrinth", UnderKind::Dungeon, "maze gate", &["bone pit", "treasure nook", "trapped end", "heart of the maze"], "maze passage", (6, 3), false, 1) },
+    Theme { planner: Planner::Labyrinth, ..built("labyrinth", UnderKind::Dungeon, "maze gate", &["bone pit", "treasure nook", "trapped end", "heart of the maze"], "maze passage", (6, 3), 1) },
     // (Drawn for a generated site only under a ruin, `resolve`.)
     Theme {
         planner: Planner::Fortress,
-        ..built(FORTRESS, UnderKind::Dungeon, "broken gatehouse", &["pillared hall", "barracks", "armory", "storeroom", "guard room", "mess hall", "tower cellar", "shrine"], "corridor", (9, 4), false, 1)
+        ..built(FORTRESS, UnderKind::Dungeon, "broken gatehouse", &["pillared hall", "barracks", "armory", "storeroom", "guard room", "mess hall", "tower cellar", "shrine"], "corridor", (9, 4), 1)
     },
-    Theme { planner: Planner::Crypt, ..built("crypt", UnderKind::Crypt, "antechamber", &["burial hall", "ossuary", "tomb", "chapel of rest", "embalming room", "reliquary", "sealed tomb", "catacomb gallery"], "passage", (7, 4), false, 1) },
-    Theme { planner: Planner::Tomb, ..built("tomb", UnderKind::Crypt, "antechamber", &["tomb", "sealed tomb", "false tomb", "treasury", "guardian hall", "burial hall", "embalming room"], "passage", (5, 3), false, 2) },
-    Theme { planner: Planner::Crypt, ..built("ossuary", UnderKind::Crypt, "stair foot", &["ossuary", "ossuary", "bone chapel", "charnel pit", "skull gallery", "burial niches"], "catacomb passage", (8, 4), false, 1) },
-    Theme { planner: Planner::Crypt, ..built("catacombs", UnderKind::Catacombs, "stair foot", &["burial niches", "burial niches", "ossuary", "catacomb gallery", "charnel pit", "bone chapel", "reliquary", "flooded gallery"], "catacomb passage", (9, 5), false, 1) },
+    Theme { planner: Planner::Crypt, ..built("crypt", UnderKind::Crypt, "antechamber", &["burial hall", "ossuary", "tomb", "chapel of rest", "embalming room", "reliquary", "sealed tomb", "catacomb gallery"], "passage", (7, 4), 1) },
+    Theme { planner: Planner::Tomb, ..built("tomb", UnderKind::Crypt, "antechamber", &["tomb", "sealed tomb", "false tomb", "treasury", "guardian hall", "burial hall", "embalming room"], "passage", (5, 3), 2) },
+    Theme { planner: Planner::Crypt, ..built("ossuary", UnderKind::Crypt, "stair foot", &["ossuary", "ossuary", "bone chapel", "charnel pit", "skull gallery", "burial niches"], "catacomb passage", (8, 4), 1) },
+    Theme { planner: Planner::Crypt, ..built("catacombs", UnderKind::Catacombs, "stair foot", &["burial niches", "burial niches", "ossuary", "catacomb gallery", "charnel pit", "bone chapel", "reliquary", "flooded gallery"], "catacomb passage", (9, 5), 1) },
     natural("cave", UnderKind::Cave, &["cavern", "grotto", "crystal grotto", "fungus grotto", "pool chamber", "bat roost"], "ledge"),
     natural("fungal", UnderKind::Cave, &["fungus forest", "spore grotto", "fungus grotto", "mycelium hall"], "ledge"),
     natural("crystal", UnderKind::Cave, &["crystal cavern", "geode", "crystal grotto", "cavern"], "crystal shelf"),
@@ -259,7 +257,7 @@ pub const THEMES: &[Theme] = &[
     Theme {
         planner: Planner::Temple,
         water: Wetness::Flooded,
-        ..built(SUNKEN_TEMPLE, UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "sunken chapel", "chapel of rest"], "processional way", (7, 4), false, 2)
+        ..built(SUNKEN_TEMPLE, UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "sunken chapel", "chapel of rest"], "processional way", (7, 4), 2)
     },
 ];
 
@@ -286,13 +284,12 @@ const KEEP_DUNGEON: Theme = Theme { planner: Planner::Keep, ..built(
     &["cell block", "prison", "oubliette", "torture chamber", "guard room", "armory", "storeroom", "barracks", "well room", "crypt of the old lords", "secret vault", "shrine"],
     "corridor",
     (11, 6),
-    true,
     1,
 ) };
 /// Below a city's sewers.
 const UNDERCROFT: Theme = Theme {
     planner: Planner::Undercroft,
-    ..built("undercroft", UnderKind::Sewer, "drain chamber", &["cistern", "overflow chamber", "smugglers' cache", "old vault", "rat warren", "flooded hall"], "culvert", (9, 5), false, 1)
+    ..built("undercroft", UnderKind::Sewer, "drain chamber", &["cistern", "overflow chamber", "smugglers' cache", "old vault", "rat warren", "flooded hall"], "culvert", (9, 5), 1)
 };
 
 /// A theme by key (`Created::theme`).
@@ -785,6 +782,13 @@ fn site(
             let seed = hash3(rng.next_u32() as u64, d as i64, 0, 0xc4a5);
             let items = chasm_in(&Ground::of_plan(&p), Some(r), Span::Bridge, seed, rope);
             p.put_all(items);
+            // (The stone bridge's deck: its squares with the chasm beside them, end to end.)
+            let gulf: crate::core::hash::FastSet<usize> = p.items.iter().filter(|f| f.kind == "chasm").flat_map(|f| (f.y as usize..(f.y + f.h) as usize).flat_map(move |j| (f.x as usize..(f.x + f.w) as usize).map(move |i| j * nx + i))).collect();
+            let over: Vec<usize> = p.bridge.iter().copied().filter(|&k| neighbours(k, nx, ny).any(|m| gulf.contains(&m))).collect();
+            if let (Some(&a), Some(&b)) = (over.iter().min(), over.iter().max()) {
+                let (x0, x1, y0, y1) = (a % nx, b % nx, a / nx, b / nx);
+                p.put(item("stone_bridge", x0.min(x1), y0.min(y1), x0.abs_diff(x1) + 1, y0.abs_diff(y1) + 1));
+            }
         }
         furnish(&mut p, nx, ny, kind, rng);
         arrive = p.down.or(arrive);

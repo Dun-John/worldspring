@@ -54,6 +54,8 @@ pub(crate) struct Plan {
     /// A chasm to lay across a room once the locks and keys are in (`kit::chasm_in`): the room, and whether rope bridges
     /// are strung over it (else it is crossed where its planner kept squares `taken`: a stone bridge).
     pub(crate) chasm: Option<(i16, bool)>,
+    /// The stone bridge's squares (kept off the chasm): a `stone_bridge` is laid over those the chasm runs past.
+    pub(crate) bridge: Vec<usize>,
     /// Doors its planner would have locked first (a bandit captain's): `kit::guard` takes them before any other while
     /// the site has locks to give, even with one room beyond.
     pub(crate) lock_first: Vec<(usize, usize)>,
@@ -87,6 +89,7 @@ impl Plan {
             loops: 1.0,
             secrets: usize::MAX,
             chasm: None,
+            bridge: Vec::new(),
             lock_first: Vec::new(),
             gaps: FastSet::default(),
         }

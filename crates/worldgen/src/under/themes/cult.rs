@@ -6,9 +6,13 @@
 //! deepest level the chamber is the boss chamber, a dead end; on the levels above, the stairs down lie elsewhere.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, Piece, ROOMS_GROWING, Side, Spec, Template, fill, first_room, mask, rooms, way_down};
+use crate::under::grow::{Grower, Piece, ROOMS_GROWING, Side, Spec, Template, fill, fill_out, fill_share, first_room, mask, rooms, way_down};
 use crate::under::themes::keep::CELL;
 use crate::under::*;
+
+/// The cult's passages (the theme's passage kind): the rings, their gates, what is dug or grown off them. Kept clear
+/// (no kit) and floored apart from the rooms between, so each ring and its gate stands out.
+pub(crate) const RING: &str = "ring corridor";
 
 /// The chamber at a level's heart (the boss chamber on the deepest).
 const CHAMBER_KIND: &str = "ritual chamber";
@@ -201,6 +205,7 @@ pub(crate) fn cult(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
         (g.cap, g.spread) = (cap, area > 1.0);
         g.pieces.extend(ring_pieces());
         g.grow(&mut p, &specs, target, false, rng);
+        fill_out(&mut g, &mut p, ny, fill_share(area), FILL, 1, rng);
     } else if depth > 0 {
         // A landing at the stairs, a passage dug to the outer ring; rooms off both.
         let Some((mut g, _)) = first_room(&mut p, passage, "landing", Template::Rect, (3, 3), None, 0) else { return mixed(nx, ny, arrive, depth, last, theme, area, rng) };
@@ -209,6 +214,7 @@ pub(crate) fn cult(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
         (g.cap, g.spread) = (cap, area > 1.0);
         g.pieces.extend(ring_pieces());
         g.grow(&mut p, &specs, target, false, rng);
+        fill_out(&mut g, &mut p, ny, fill_share(area), FILL, 1, rng);
     } else {
         // The top level: a plain cellar (or a crypt's front) round the way in, kept apart from the cult.
         let crypt = rng.next_f64() < 0.4;
@@ -236,12 +242,24 @@ pub(crate) fn cult(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
                 break;
             }
         }
+        // (None dug through to the rings: a passage straight from what is reached to the outer ring, through rooms
+        // between if it must, never the chamber; the secret door at its start.)
+        let ring = sq(cx - hx, cy - hy);
+        let dist = p.distances(p.up, ny, None);
+        if dist[ring] < 0 {
+            let reached: Vec<bool> = dist.iter().map(|&d| d >= 0).collect();
+            let goal: Vec<bool> = (0..nx * ny).map(|k| p.cells[k] == passage && !reached[k] && ((k % nx) as isize - cx).abs() <= hx && ((k / nx) as isize - cy).abs() <= hy).collect();
+            if let Some(e) = tunnel(&mut p, ny, &reached, &goal, chamber, passage) {
+                p.secret.insert(e);
+            }
+        }
         // Rooms off the outer ring, kept apart from the front.
         let shut = halo(&mut p, ny, &|r| fronts.contains(&r));
         let mut g = Grower::new(nx, ny, passage, None);
         (g.cap, g.spread) = (cap, area > 1.0);
         g.pieces.extend(ring_pieces());
         g.grow(&mut p, &specs, target, false, rng);
+        fill_out(&mut g, &mut p, ny, fill_share(area), FILL, 1, rng);
         unhalo(&mut p, &shut);
     }
     p.passage = Some((passage, false));
@@ -255,6 +273,9 @@ pub(crate) fn cult(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     p
 }
 
+/// What spreads a big sanctum over its grid (`fill_out`).
+const FILL: &[&str] = &["dormitory", "storeroom", "shrine", "dormitory"];
+
 /// What grows off the outer ring: dormitories, cells, stores, a shrine; short passages.
 fn specs(area: f64) -> Vec<Spec> {
     let up = |n: usize| ((n as f64) * crate::core::sqrt(area).max(1.0)).round() as usize;
@@ -266,6 +287,47 @@ fn specs(area: f64) -> Vec<Spec> {
     }
     out.push(Spec { kind: "", t: Template::Corridor, across: (1, 1), deep: (2, 4) });
     out
+}
+
+/// A passage by the fewest squares from any square `from` marks to one `to` marks (through rock, the passage and other
+/// rooms, never room `avoid` nor the rock rim): rock dug as `passage`, a door wherever it changes room. Its first door
+/// (from the side it set out from), if it found a way.
+fn tunnel(p: &mut Plan, ny: usize, from: &[bool], to: &[bool], avoid: i16, passage: i16) -> Option<(usize, usize)> {
+    let nx = p.nx;
+    let mut came = vec![usize::MAX; nx * ny];
+    let mut q: std::collections::VecDeque<usize> = (0..nx * ny).filter(|&k| from[k]).collect();
+    let mut end = None;
+    while let Some(k) = q.pop_front() {
+        if !from[k] && to[k] {
+            end = Some(k);
+            break;
+        }
+        for m in neighbours(k, nx, ny) {
+            let (i, j) = (m % nx, m / nx);
+            if from[m] || came[m] != usize::MAX || i < 1 || j < 1 || i + 2 > nx || j + 2 > ny || p.cells[m] == avoid {
+                continue;
+            }
+            came[m] = k;
+            q.push_back(m);
+        }
+    }
+    let mut path = vec![end?];
+    while !from[*path.last()?] {
+        path.push(came[*path.last()?]);
+    }
+    path.reverse();
+    let mut first = None;
+    for w in path.windows(2) {
+        let (k0, k1) = (w[0], w[1]);
+        if p.cells[k1] < 0 {
+            p.cells[k1] = passage;
+        }
+        if p.cells[k0] != p.cells[k1] {
+            p.door(k0, k1);
+            first.get_or_insert((k0.min(k1), k0.max(k1)));
+        }
+    }
+    first
 }
 
 /// Mark the rock round the floor of rooms `of` picks (8 ways) as `HALO`: what grows next keeps a square off them.

@@ -2,7 +2,9 @@
 //! drawn as a cavern (`CAVERN`), joined to every piece of a room it touches by an open gap (`Plan::gaps`) one to three
 //! squares wide, a rubble slope spilling over each gap and tumbled blocks (`collapsed_wall`) on the room side. Run before
 //! the locks and keys (`kit::guard` then locks round it). It never takes the ways in and out nor a square of the boss
-//! chamber, and is undone unless every square stays reachable and none is reached only through the boss chamber.
+//! chamber nor of a chasm hall (its stone bridge), and is undone unless every square stays reachable and none is reached
+//! only through the boss chamber. What stood on the squares it takes goes (statues, pillars), and so do the doors into
+//! it: each piece of a room it touches opens on it by its gap alone (the boss chamber keeps its door).
 //! Under ruins about half the levels get one, under living castles and cities about one site in ten (`site`); the
 //! collapsed fortress (`themes::fortress`) lays its own, more and bigger the deeper.
 
@@ -18,6 +20,9 @@ pub(crate) fn breach(p: &mut Plan, ny: usize, seed: u64, r: f64) -> bool {
     }
     let mut rng = Pcg32::new(seed, 97);
     let boss = |p: &Plan, k: usize| p.cells[k] >= 0 && p.rooms[p.cells[k] as usize].kind == BOSS;
+    // (Nor a chasm hall: its stone bridge is kept clear of the chasm laid later.)
+    let chasm = p.chasm.map(|c| c.0);
+    let off = |p: &Plan, k: usize| boss(p, k) || chasm.is_some_and(|r| p.cells[k] == r);
     // (The ways in and out, and their links, stay as they are.)
     let mut keep = vec![false; n];
     keep[p.up] = true;
@@ -31,7 +36,7 @@ pub(crate) fn breach(p: &mut Plan, ny: usize, seed: u64, r: f64) -> bool {
         keep[l.y as usize * nx + l.x as usize] = true;
     }
     let inner = |k: usize| k % nx >= 1 && k / nx >= 1 && k % nx + 2 <= nx && k / nx + 2 <= ny;
-    let floor: Vec<usize> = (0..n).filter(|&k| p.cells[k] >= 0 && !boss(p, k) && !keep[k] && inner(k)).collect();
+    let floor: Vec<usize> = (0..n).filter(|&k| p.cells[k] >= 0 && !off(p, k) && !keep[k] && inner(k)).collect();
     if floor.is_empty() {
         return false;
     }
@@ -44,7 +49,7 @@ pub(crate) fn breach(p: &mut Plan, ny: usize, seed: u64, r: f64) -> bool {
         let (y0, y1) = ((cy - ey).max(1), (cy + ey).min(ny as isize - 2));
         let (bw, bh) = ((x1 - x0 + 1) as usize, (y1 - y0 + 1) as usize);
         // The automaton: a random fill inside the ellipse, smoothed (open where 5 of the 9 squares round are).
-        let ok = |i: isize, j: isize| !keep[j as usize * nx + i as usize] && !boss(p, j as usize * nx + i as usize);
+        let ok = |i: isize, j: isize| !keep[j as usize * nx + i as usize] && !off(p, j as usize * nx + i as usize);
         let mut open = vec![false; bw * bh];
         for j in 0..bh {
             for i in 0..bw {
@@ -87,14 +92,41 @@ pub(crate) fn breach(p: &mut Plan, ny: usize, seed: u64, r: f64) -> bool {
             continue;
         }
         sq.sort_unstable();
-        let saved = (p.cells.clone(), p.doors.clone(), p.secret.clone(), p.portcullis.clone(), p.rooms.len(), p.items.len(), p.taken.clone());
+        let saved = (p.cells.clone(), p.doors.clone(), p.secret.clone(), p.portcullis.clone(), p.rooms.len(), p.items.clone(), p.taken.clone(), p.blocked.clone(), p.lock_first.clone());
+        let at_boss: Vec<bool> = (0..n).map(|k| boss(p, k)).collect();
         let cr = super::warren::cavern(p, "cave-in");
         for &k in &sq {
             p.cells[k] = cr;
         }
-        // (Doors the cave swallowed whole go.)
+        // (Doors into it go, the boss chamber's but: each piece of a room it touches gets its gap below.)
         for set in [&mut p.doors, &mut p.secret, &mut p.portcullis] {
-            set.retain(|&(a, b)| !(cave[a] && cave[b]));
+            set.retain(|&(a, b)| !(cave[a] || cave[b]) || !(cave[a] && cave[b]) && (at_boss[a] || at_boss[b]));
+        }
+        let doors = &p.doors;
+        p.lock_first.retain(|e| doors.contains(e));
+        // (What stood on its squares goes, the ways but, which it never takes; and their squares are free again.)
+        let on = |it: &Item| (it.y as usize..(it.y + it.h) as usize).any(|j| (it.x as usize..(it.x + it.w) as usize).any(|i| cave[j * nx + i]));
+        let gone: Vec<Item> = p.items.iter().filter(|it| on(it)).cloned().collect();
+        if !gone.is_empty() {
+            p.items.retain(|it| !on(it));
+            for it in &gone {
+                for j in it.y as usize..(it.y + it.h) as usize {
+                    for i in it.x as usize..(it.x + it.w) as usize {
+                        p.taken[j * nx + i] = false;
+                    }
+                }
+            }
+            for it in &p.items {
+                for j in it.y as usize..(it.y + it.h) as usize {
+                    for i in it.x as usize..(it.x + it.w) as usize {
+                        p.taken[j * nx + i] = true;
+                    }
+                }
+            }
+            p.blocked = blocked_squares(&p.items, nx, ny);
+        }
+        for &k in &sq {
+            p.taken[k] = false;
         }
         // The pieces of rooms it touches (4 ways within their room), each opened onto it by one gap.
         let mut piece = vec![u32::MAX; n];
@@ -143,6 +175,7 @@ pub(crate) fn breach(p: &mut Plan, ny: usize, seed: u64, r: f64) -> bool {
                 }
             }
             for (a, b) in at {
+                // (Never hidden nor barred: the pair was dropped from those with the doors into the cave.)
                 p.door(a, b);
                 p.gaps.insert((a.min(b), a.max(b)));
                 gaps.push((a, b));
@@ -158,8 +191,7 @@ pub(crate) fn breach(p: &mut Plan, ny: usize, seed: u64, r: f64) -> bool {
         if gaps.is_empty() || (0..n).any(|k| p.cells[k] >= 0 && !p.blocked[k] && (dist[k] < 0 || (!shut[k] && round[k] < 0))) {
             (p.cells, p.doors, p.secret, p.portcullis) = (saved.0, saved.1, saved.2, saved.3);
             p.rooms.truncate(saved.4);
-            p.items.truncate(saved.5);
-            p.taken = saved.6;
+            (p.items, p.taken, p.blocked, p.lock_first) = (saved.5, saved.6, saved.7, saved.8);
             for &(a, b) in &gaps {
                 p.gaps.remove(&(a.min(b), a.max(b)));
             }

@@ -23,7 +23,7 @@ pub(super) use bandit::bandit;
 pub(super) use breach::breach;
 pub(super) use cave::cave;
 pub(super) use crypt::{crypt, tomb};
-pub(super) use cult::cult;
+pub(super) use cult::{RING, cult};
 pub(super) use dwarven::dwarven;
 pub(super) use fortress::fortress;
 pub(super) use labyrinth::labyrinth;

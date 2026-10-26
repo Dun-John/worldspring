@@ -653,6 +653,77 @@ pub(crate) fn fill(area: f64) -> f64 {
     if area > 1.0 { area * crate::core::sqrt(area) } else { area }
 }
 
+/// The share of its grid (inside the rock rim) a level's floor spans, by its bounding box; and that box (x0, y0, x1, y1).
+pub(crate) fn spanned(p: &Plan, ny: usize) -> (f64, (usize, usize, usize, usize)) {
+    let nx = p.nx;
+    let (mut x0, mut y0, mut x1, mut y1) = (nx, ny, 0, 0);
+    // (Rooms only: a planner's marks past the last room, `HALO`, are rock.)
+    for k in (0..nx * ny).filter(|&k| p.cells[k] >= 0 && (p.cells[k] as usize) < p.rooms.len()) {
+        let (i, j) = (k % nx, k / nx);
+        (x0, y0, x1, y1) = (x0.min(i), y0.min(j), x1.max(i), y1.max(j));
+    }
+    if x1 < x0 {
+        return (0.0, (0, 0, 0, 0));
+    }
+    (((x1 + 1 - x0) * (y1 + 1 - y0)) as f64 / ((nx - 2) * (ny - 2)) as f64, (x0, y0, x1, y1))
+}
+
+/// How much of its grid a big site's level should span (`fill_out`): most of a huge one's, two thirds of a large one's.
+pub(crate) fn fill_share(area: f64) -> f64 {
+    if area >= 2.2 {
+        0.85
+    } else if area >= 1.5 {
+        0.7
+    } else {
+        0.0
+    }
+}
+
+/// Grow to fill: while the level's floor spans less than `want` of its grid, a run of corridors and rooms (`kinds` in
+/// turn, `Grower::reach`) out towards the widest band of rock left beside it, from one of the open pieces nearest;
+/// done when no band takes a run. The rooms laid.
+pub(crate) fn fill_out(g: &mut Grower, p: &mut Plan, ny: usize, want: f64, kinds: &[&'static str], cw: usize, rng: &mut Pcg32) -> usize {
+    let nx = p.nx;
+    let mut made = 0;
+    for _ in 0..16 {
+        let (share, (x0, y0, x1, y1)) = spanned(p, ny);
+        if share >= want || share == 0.0 {
+            break;
+        }
+        let (bw, bh) = (x1 + 1 - x0, y1 + 1 - y0);
+        // (Bands west, east, north, south: how deep, how much rock; a run aims 3 squares in from the grid's edge.)
+        let mut bands: Vec<(usize, usize)> = [x0.saturating_sub(1) * bh, (nx - 2).saturating_sub(x1) * bh, y0.saturating_sub(1) * bw, (ny - 2).saturating_sub(y1) * bw].into_iter().enumerate().map(|(i, a)| (a, i)).collect();
+        bands.sort_by_key(|&(a, i)| (std::cmp::Reverse(a), i));
+        let mut laid = false;
+        for (_, side) in bands {
+            let deep = [x0.saturating_sub(1), (nx - 2).saturating_sub(x1), y0.saturating_sub(1), (ny - 2).saturating_sub(y1)][side];
+            if deep < 3 {
+                continue;
+            }
+            let (along_x, along_y) = (x0 + rng.below(bw as u32) as usize, y0 + rng.below(bh as u32) as usize);
+            let to = [(3, along_y), (nx - 4, along_y), (along_x, 3), (along_x, ny - 4)][side];
+            let far = |f: &Piece| ((2 * f.x + f.w) / 2).abs_diff(to.0) + ((2 * f.y + f.h) / 2).abs_diff(to.1);
+            let mut near: Vec<(usize, usize)> = (0..g.pieces.len()).filter(|&i| g.pieces[i].open).map(|i| (far(&g.pieces[i]), i)).collect();
+            near.sort_unstable();
+            for &(_, i) in near.iter().take(5) {
+                let rooms = g.reach(p, i, to, kinds, cw, rng);
+                if !rooms.is_empty() {
+                    made += rooms.len();
+                    laid = true;
+                    break;
+                }
+            }
+            if laid {
+                break;
+            }
+        }
+        if !laid {
+            break;
+        }
+    }
+    made
+}
+
 /// A level the grower couldn't start (no room round the arrival): one square, the way on.
 pub(crate) fn fallback(mut p: Plan, last: bool) -> Plan {
     let r = p.room(if last { BOSS } else { "landing" }, 0.0);

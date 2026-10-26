@@ -6,7 +6,7 @@
 //! third level down, bigger the deeper, joined by rubble gaps. The deepest ends in the boss chamber, a dead end.
 
 use crate::core::rng::{Pcg32, hash3};
-use crate::under::grow::{ROOMS_MAX, Side, Spec, Template, boss_room, fallback, fill, first_room, rooms};
+use crate::under::grow::{ROOMS_MAX, Side, Spec, Template, boss_room, fallback, fill, fill_out, fill_share, first_room, rooms};
 use crate::under::themes::breach::breach;
 use crate::under::themes::keep::finish;
 use crate::under::*;
@@ -61,6 +61,8 @@ pub(crate) fn fortress(nx: usize, ny: usize, arrive: usize, depth: usize, last: 
         g.grow(&mut p, &specs, left, false, rng);
         g
     };
+    // (Big sites: spread over the grid.)
+    fill_out(&mut g, &mut p, ny, fill_share(area), &["barracks", "storeroom", "guard room", "armory"], cw, rng);
     // Round tower cellars off the rooms nearest the corners (kept only near their corner).
     let tw = if area >= 1.6 { 7 } else { 5 };
     for (cx, cy) in [(0, 0), (nx, 0), (0, ny), (nx, ny)] {

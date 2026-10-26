@@ -67,6 +67,7 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
                 let row = c.y + c.h / 2;
                 for i in c.x..c.x + c.w {
                     p.taken[row * nx + i] = true;
+                    p.bridge.push(row * nx + i);
                 }
             }
             p.chasm = Some((room, !stone));

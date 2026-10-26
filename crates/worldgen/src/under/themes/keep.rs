@@ -23,12 +23,10 @@ pub(crate) fn keep(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     let passage = p.room(theme.passage, 0.0);
     let pick = |lo: usize, hi: usize, rng: &mut Pcg32| lo + rng.below((hi.max(lo) - lo + 1) as u32) as usize;
     let cw = theme.corridor;
-    let mut target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(4);
-    if theme.sprawl {
-        target = target.max(nx * ny / 140).min(40);
-    }
+    // (Keeps sprawl: more and larger rooms on a big grid.)
+    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(4).max(nx * ny / 140).min(40);
     let Some((mut g, core)) = hub(&mut p, passage, theme.first, Template::Rect, arrive, rng) else { return fallback(p, last) };
-    g.spread = theme.sprawl;
+    g.spread = true;
     let mut boss = None;
     let mut pools: Vec<(i16, (f64, f64), bool)> = Vec::new();
     let mut pillared = Vec::new();
