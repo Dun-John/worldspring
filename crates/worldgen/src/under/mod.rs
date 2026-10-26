@@ -171,6 +171,12 @@ pub enum Planner {
     Bandit,
     /// Ring passages round a round ritual chamber, rooms between them, the gates offset (`themes::cult`).
     Cult,
+    /// A maze of 1-square passages on a lattice, dead-end side rooms, the stairs down (or the boss) in the heart room
+    /// (`themes::labyrinth`).
+    Labyrinth,
+    /// A fort's halls (broken gatehouse, pillared hall, barracks, round tower cellars) with caverns breaking through,
+    /// more cavern the deeper (`themes::fortress`).
+    Fortress,
     /// Grown room by room, the top level mirrored: narthex, nave, chapels, apse sanctum (`themes::temple`).
     Temple,
     /// Grown round a guard ring: cell blocks off it, the offices; solitary cells and oubliettes below (`themes::prison`).
@@ -231,6 +237,12 @@ pub const THEMES: &[Theme] = &[
         planner: Planner::Cult,
         ..built("cult_sanctum", UnderKind::Dungeon, "cellar", &["ritual chamber", "dormitory", "robing room", "sacrifice pit", "cell", "shrine", "storeroom"], "ring passage", (10, 4), false, 1)
     },
+    Theme { planner: Planner::Labyrinth, ..built("labyrinth", UnderKind::Dungeon, "maze gate", &["bone pit", "treasure nook", "trapped end", "heart of the maze"], "maze passage", (6, 3), false, 1) },
+    // (Drawn for a generated site only under a ruin, `resolve`.)
+    Theme {
+        planner: Planner::Fortress,
+        ..built(FORTRESS, UnderKind::Dungeon, "broken gatehouse", &["pillared hall", "barracks", "armory", "storeroom", "guard room", "mess hall", "tower cellar", "shrine"], "corridor", (9, 4), false, 1)
+    },
     Theme { planner: Planner::Crypt, ..built("crypt", UnderKind::Crypt, "antechamber", &["burial hall", "ossuary", "tomb", "chapel of rest", "embalming room", "reliquary", "sealed tomb", "catacomb gallery"], "passage", (7, 4), false, 1) },
     Theme { planner: Planner::Tomb, ..built("tomb", UnderKind::Crypt, "antechamber", &["tomb", "sealed tomb", "false tomb", "treasury", "guardian hall", "burial hall", "embalming room"], "passage", (5, 3), false, 2) },
     Theme { planner: Planner::Crypt, ..built("ossuary", UnderKind::Crypt, "stair foot", &["ossuary", "ossuary", "bone chapel", "charnel pit", "skull gallery", "burial niches"], "catacomb passage", (8, 4), false, 1) },
@@ -253,6 +265,18 @@ pub const THEMES: &[Theme] = &[
 
 /// A temple sunk in wet ground: flooded halls.
 pub const SUNKEN_TEMPLE: &str = "sunken_temple";
+/// A fort's halls with caves eating in: drawn for generated sites under ruins only.
+pub const FORTRESS: &str = "collapsed_fortress";
+
+/// How old the place over a site is, for its cave-ins (`themes::breach`): under a ruin (or a lone way down in the
+/// wilds) about half the levels get one; under a living town, keep or city about one site in ten; a site made by hand
+/// never.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Age {
+    Ruin,
+    Living,
+    Made,
+}
 
 /// Under a large keep: prisons, stores, old crypts and a way out.
 const KEEP_DUNGEON: Theme = Theme { planner: Planner::Keep, ..built(
@@ -331,11 +355,11 @@ fn ranges(kind: UnderKind) -> ((usize, usize), (SiteSize, SiteSize), (u8, u8)) {
 
 /// Choose what `spec` leaves open (size, levels, theme) for a site of `kind`: a generated
 /// site keeps its kind's usual theme half the time.
-fn resolve(kind: UnderKind, spec: SiteSpec, rng: &mut Pcg32) -> (SiteSize, usize, &'static Theme) {
+fn resolve(kind: UnderKind, spec: SiteSpec, ruin: bool, rng: &mut Pcg32) -> (SiteSize, usize, &'static Theme) {
     let (_, (s0, s1), (l0, l1)) = ranges(kind);
     let size = spec.size.unwrap_or_else(|| SiteSize::ALL[s0 as usize + rng.below((s1 as usize - s0 as usize + 1) as u32) as usize]);
     let levels = spec.levels.map(|l| l.clamp(1, MAX_LEVELS)).unwrap_or_else(|| l0 + rng.below((l1 - l0 + 1) as u32) as u8) as usize;
-    let own: Vec<&'static Theme> = THEMES.iter().filter(|t| t.kind == kind && t.key != SUNKEN_TEMPLE).collect();
+    let own: Vec<&'static Theme> = THEMES.iter().filter(|t| t.kind == kind && t.key != SUNKEN_TEMPLE && (ruin || t.key != FORTRESS)).collect();
     let theme = match spec.theme.and_then(|i| THEMES.get(i as usize)).filter(|t| t.kind == kind) {
         Some(t) => t,
         None if own.len() > 1 && rng.next_f64() >= 0.5 => own[1 + rng.below(own.len() as u32 - 1) as usize],
@@ -504,8 +528,12 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
     }
     let mut rng = Pcg32::new(hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, e.kind as i64), 91);
     // A created site's own choices (size, levels, theme); the rest from the rng.
-    let spec = layout.checked_sub(t0.settlements.len()).and_then(|p| t0.created_site(p)).map(|c| c.spec).unwrap_or_default();
-    let (size, depth, theme) = resolve(e.kind, spec, &mut rng);
+    let made = layout.checked_sub(t0.settlements.len()).and_then(|p| t0.created_site(p));
+    let spec = made.map(|c| c.spec).unwrap_or_default();
+    // (A ruin: no roof standing over it, out in the wilds.)
+    let ruin = layout >= t0.settlements.len() && l.buildings.iter().all(|b| b.structure == town::Structure::Ruin);
+    let age = if made.is_some() { Age::Made } else if ruin { Age::Ruin } else { Age::Living };
+    let (size, depth, theme) = resolve(e.kind, spec, ruin, &mut rng);
     // A temple on wet ground lies sunken, and about 1 in 4 of the rest (unless its maker chose the theme).
     // (A hash of the site, not the rng: the draws after it stay as they were.)
     let share = crate::core::rng::unit(hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, 0x5e4c)) < 0.25;
@@ -520,7 +548,8 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
     let origin = sub(e.at, add(mul(axis, (entry.0 as f64 + 0.5) * SQUARE_FT), mul(across, (entry.1 as f64 + 0.5) * SQUARE_FT)));
     let frame = Frame { origin, axis, across, nx, ny };
     let surface = t0.sample(e.at[0], e.at[1], 20.0) as f32;
-    site(t0, &l, e.kind, format!("u:{layout}:{k}"), (layout as u32, k as u32), frame, depth, Some(entry.1 * nx + entry.0), surface, (theme, s * s), &mut rng)
+    let caves = (age, hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, 0xb4ea));
+    site(t0, &l, e.kind, format!("u:{layout}:{k}"), (layout as u32, k as u32), frame, depth, Some(entry.1 * nx + entry.0), surface, (theme, s * s), caves, &mut rng)
 }
 
 /// The sewers under section (`sx`, `sy`) of the world (`SEWER_SECTION_FT` squares), id
@@ -547,7 +576,8 @@ pub fn sewer_site(world: &World, t0: &T0, layout: usize, sx: i64, sy: i64) -> Op
     let mut rng = Pcg32::new(hash3(world.stream("under.sewer"), town::rng_key(t0, layout), sx, sy), 91);
     let surface = t0.sample(origin[0] + 0.5 * s, origin[1] + 0.5 * s, 20.0) as f32;
     let frame = Frame { origin, axis: [1.0, 0.0], across: [0.0, 1.0], nx: n, ny: n };
-    site(t0, &l, UnderKind::Sewer, format!("w:{layout}:{sx}:{sy}"), (layout as u32, 0), frame, 2, grate, surface, (&UNDERCROFT, 1.0), &mut rng)
+    let caves = (Age::Living, hash3(world.stream("under.sewer"), town::rng_key(t0, layout), sx, sy ^ 0xb4ea));
+    site(t0, &l, UnderKind::Sewer, format!("w:{layout}:{sx}:{sy}"), (layout as u32, 0), frame, 2, grate, surface, (&UNDERCROFT, 1.0), caves, &mut rng)
 }
 
 /// Kinds of house whose cellar has a way into the sewers (when it stands on a street).
@@ -632,7 +662,8 @@ pub fn keep_dungeon(world: &World, t0: &T0, layout: usize, bi: usize) -> Option<
     let mut rng = Pcg32::new(hash3(world.stream("under.keep"), town::rng_key(t0, layout), bi as i64, 0), 93);
     let depth = if nx * ny > 6000 { 3 } else { 2 };
     let surface = cellar.elevation_ft;
-    site(t0, &l, UnderKind::KeepDungeon, id, (layout as u32, bi as u32), frame, depth, Some(entry), surface, (&KEEP_DUNGEON, 1.0), &mut rng)
+    let caves = (Age::Living, hash3(world.stream("under.keep"), town::rng_key(t0, layout), bi as i64, 0xb4ea));
+    site(t0, &l, UnderKind::KeepDungeon, id, (layout as u32, bi as u32), frame, depth, Some(entry), surface, (&KEEP_DUNGEON, 1.0), caves, &mut rng)
 }
 
 /// Where a site's grid lies: corner (world ft), unit axes, size in squares.
@@ -660,6 +691,7 @@ fn site(
     entry: Option<usize>,
     surface: f32,
     (theme, area): (&'static Theme, f64),
+    (age, caves): (Age, u64),
     rng: &mut Pcg32,
 ) -> Option<Interior> {
     let (nx, ny) = (f.nx, f.ny);
@@ -680,6 +712,8 @@ fn site(
             Planner::Warren => warren(nx, ny, a, d, last, theme, area, rng),
             Planner::Bandit => bandit(nx, ny, a, d, last, theme, area, rng),
             Planner::Cult => cult(nx, ny, a, d, last, theme, area, rng),
+            Planner::Labyrinth => labyrinth(nx, ny, a, d, last, theme, area, rng),
+            Planner::Fortress => fortress(nx, ny, a, d, last, theme, area, rng),
             Planner::Temple => temple(nx, ny, a, d, last, theme, area, rng),
             Planner::Prison => prison(nx, ny, a, d, last, theme, area, rng),
             // (A keep's dungeons are big when three levels deep.)
@@ -717,6 +751,19 @@ fn site(
         }
         if let Some(dn) = p.down {
             p.put(Item::new("down", down_name, dn % nx, dn / nx, 1, 1, 0, false, 0.0, None));
+        }
+        // A cave-in by age (from a hash of the site, not the rng: sites without one come out as before). Under a ruin
+        // about half the levels, under a living place one site in ten (on one of its levels; a city's undercroft, not
+        // its sewers); never in a made site, a labyrinth, a collapsed fortress (its own), caves, mines or lava tubes.
+        let level = |salt: i64| crate::core::rng::unit(hash3(caves, d as i64, salt, 0xb4ea));
+        let chance = match age {
+            Age::Ruin => level(0) < 0.5,
+            Age::Living => crate::core::rng::unit(hash3(caves, 0, 1, 0xb4ea)) < 0.1 && (if kind == UnderKind::Sewer { d == 1 } else { (caves % depth as u64) as usize == d }),
+            Age::Made => false,
+        };
+        if chance && !matches!(theme.planner, Planner::Labyrinth | Planner::Fortress | Planner::Cave | Planner::Mine | Planner::LavaTube) && !(kind == UnderKind::Sewer && d == 0) {
+            let r = 4.5 * crate::core::sqrt(area).clamp(0.8, 1.3) * (0.85 + 0.3 * level(2));
+            breach(&mut p, ny, hash3(caves, d as i64, 3, 0xb4ea), r);
         }
         if p.passage.is_some() {
             // (A keep's dungeons are big when three levels deep.)

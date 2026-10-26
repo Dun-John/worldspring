@@ -57,6 +57,9 @@ pub(crate) struct Plan {
     /// Doors its planner would have locked first (a bandit captain's): `kit::guard` takes them before any other while
     /// the site has locks to give, even with one room beyond.
     pub(crate) lock_first: Vec<(usize, usize)>,
+    /// Open gaps (square pairs, also in `doors`): where a cave-in broke through a wall (`themes::breach`), drawn as
+    /// openings with no leaves (`Door` kind "arch"), never locked nor hidden.
+    pub(crate) gaps: FastSet<(usize, usize)>,
 }
 
 impl Plan {
@@ -85,6 +88,7 @@ impl Plan {
             secrets: usize::MAX,
             chasm: None,
             lock_first: Vec::new(),
+            gaps: FastSet::default(),
         }
     }
 
@@ -246,7 +250,7 @@ impl Plan {
                         if self.doors.contains(&(ka.min(kb), ka.max(kb))) {
                             let (p0, p1) = if horizontal { ([i as f32, j as f32], [i as f32 + 1.0, j as f32]) } else { ([i as f32, j as f32], [i as f32, j as f32 + 1.0]) };
                             let e = (ka.min(kb), ka.max(kb));
-                            let kind = if self.secret.contains(&e) { "secret" } else if self.portcullis.contains(&e) { "portcullis" } else { "door" };
+                            let kind = if self.gaps.contains(&e) { "arch" } else if self.secret.contains(&e) { "secret" } else if self.portcullis.contains(&e) { "portcullis" } else { "door" };
                             let lock = self.locks.get(&(ka.min(kb), ka.max(kb))).copied().unwrap_or(0);
                             doors.push(Door { a: p0, b: p1, kind, rooms: [ra, rb], lock });
                             continue;

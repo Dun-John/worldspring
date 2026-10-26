@@ -167,6 +167,8 @@ const EXTRA_ROOMS: &[&str] = &[
     "stair hall",
     "pillared gallery",
     "chasm hall",
+    "cave-in",
+    "landing",
 ];
 /// Items that are ways: in from the surface, up and down a level.
 pub const WAYS: [&str; 3] = ["exit", "up", "down"];
@@ -265,7 +267,7 @@ impl SiteDesign {
                     .doors
                     .iter()
                     .map(|d| {
-                        let flags = (d.kind == "secret") as u16 | ((d.lock & 7) as u16) << 4 | if d.kind == "portcullis" { PORTCULLIS } else { 0 };
+                        let flags = (d.kind == "secret") as u16 | ((d.kind == "arch") as u16) << 3 | ((d.lock & 7) as u16) << 4 | if d.kind == "portcullis" { PORTCULLIS } else { 0 };
                         let (x, y) = (d.a[0].min(d.b[0]) as u16, d.a[1].min(d.b[1]) as u16);
                         // A horizontal edge lies between the squares above and below it.
                         if d.a[1] == d.b[1] { [x, y - 1, 1, flags] } else { [x - 1, y, 0, flags] }
@@ -431,6 +433,8 @@ impl SiteDesign {
             p.door(a, b);
             if flags & 1 != 0 {
                 p.secret.insert((a, b));
+            } else if flags & 8 != 0 {
+                p.gaps.insert((a.min(b), a.max(b)));
             } else if flags & PORTCULLIS != 0 {
                 p.portcullis.insert((a, b));
             }
@@ -1613,7 +1617,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                         Some("portcullis") => PORTCULLIS,
                         Some("front") if building => 2,
                         Some("back") if building => 4,
-                        Some("arch") if building => 8,
+                        Some("arch") => 8,
                         Some(f) => return Err(format!("{tag}: door '{e}': '{f}'? write it as {how}")),
                     };
                     lv.doors.push([x, y, side, flags | lock << 4]);

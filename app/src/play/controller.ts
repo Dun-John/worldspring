@@ -1230,7 +1230,8 @@ export class PlayController implements PointerTool {
     const lv = it.levels[to.level];
     const out: [number, number][] = lv.furniture.filter((f) => f.kind === 'exit').map((f) => to.toWorld(f.x + 0.5, f.y + 0.5));
     for (const d of lv.doors) {
-      if (d.kind !== 'front' && d.kind !== 'back' && d.kind !== 'arch') continue;
+      // (An arch to the outside: a carriage arch, not a gap a cave-in broke between rooms underground.)
+      if (d.kind !== 'front' && d.kind !== 'back' && !(d.kind === 'arch' && d.rooms.includes(-1))) continue;
       const [ox, oy] = this.outsideOf(it, to.level, d);
       const [mx, my] = [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2];
       out.push(to.toWorld(mx * 2 - ox, my * 2 - oy));

@@ -327,6 +327,17 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "pump room" => &[("pool", 2, 2, Any, 1, 1), ("barrel", 1, 1, Edge, 1, 2), ("winch", 1, 1, Edge, 0, 1)],
         "shaft head" => &[("winch", 1, 1, Edge, 0, 1), ("lantern", 1, 1, Edge, 0, 1)],
         // Prisons.
+        // Labyrinths and collapsed fortresses; cave-ins (`themes::breach`).
+        "maze gate" => &[("statue", 1, 1, Edge, 1, 2), ("sconce", 1, 1, Edge, 1, 2), ("bones", 1, 1, Any, 0, 1)],
+        "maze passage" => &[("trap", 1, 1, Any, 1, 3), ("bones", 1, 1, Any, 0, 2), ("skeleton", 1, 2, Any, 0, 1), ("cobweb", 1, 1, Edge, 0, 2)],
+        "bone pit" => &[("bones", 1, 1, Any, 2, 4), ("skeleton", 1, 2, Any, 1, 2), ("skulls", 1, 1, Edge, 0, 1)],
+        "treasure nook" => &[("chest", 1, 1, Edge, 1, 2), ("hoard", 1, 1, Any, 0, 1), ("trap", 1, 1, Any, 1, 2)],
+        "trapped end" => &[("trap", 1, 1, Any, 1, 3), ("pit", 2, 2, Any, 0, 1), ("skeleton", 1, 2, Any, 0, 1)],
+        "heart of the maze" => &[("statue", 1, 1, Edge, 1, 4), ("brazier", 1, 1, Edge, 1, 2), ("bones", 1, 1, Any, 0, 2)],
+        "broken gatehouse" => &[("collapsed_wall", 1, 1, Edge, 1, 2), ("rubble", 1, 1, Any, 1, 3), ("weapon_rack", 1, 1, Edge, 0, 1)],
+        "pillared hall" => &[("banner", 1, 1, Edge, 1, 3), ("statue", 1, 1, Edge, 0, 2), ("rubble", 1, 1, Any, 0, 2), ("long_table", 1, 3, Any, 0, 1)],
+        "tower cellar" => &[("barrel", 1, 1, Edge, 1, 3), ("crate", 1, 1, Edge, 0, 2), ("rubble", 1, 1, Any, 0, 1), ("sconce", 1, 1, Edge, 0, 1)],
+        "cave-in" => &[("rubble", 1, 1, Any, 2, 4), ("boulder", 2, 2, Any, 0, 1), ("stalagmite", 1, 1, Any, 0, 2), ("skeleton", 1, 2, Any, 0, 1)],
         "gatehouse" => &[("weapon_rack", 1, 1, Edge, 1, 2), ("table", 1, 1, Any, 0, 1), ("sconce", 1, 1, Edge, 1, 2), ("chest", 1, 1, Edge, 0, 1)],
         "warden's office" => &[("desk", 2, 1, Edge, 1, 1), ("chest", 1, 1, Edge, 1, 1), ("bookshelf", 1, 2, Edge, 0, 1), ("sconce", 1, 1, Edge, 1, 1)],
         "mess hall" => &[("long_table", 1, 3, Any, 1, 2), ("barrel", 1, 1, Edge, 1, 2), ("sacks", 1, 1, Edge, 0, 2), ("sconce", 1, 1, Edge, 1, 1)],
@@ -840,7 +851,7 @@ pub(crate) fn guard(p: &mut Plan, above: &mut [Plan], nx: usize, ny: usize, d: u
             let e = (a.min(c), a.max(c));
             let (k, m) = e;
             let door = p.cells[k] != p.cells[m];
-            if p.secret.contains(&e) || k == p.up || m == p.up || p.taken[k] || p.taken[m] || (!door && (p.cells[k] != passage || at_door[k] || at_door[m] || !narrow(k, m) || !narrow(m, k))) {
+            if p.secret.contains(&e) || p.gaps.contains(&e) || k == p.up || m == p.up || p.taken[k] || p.taken[m] || (!door && (p.cells[k] != passage || at_door[k] || at_door[m] || !narrow(k, m) || !narrow(m, k))) {
                 continue;
             }
             if outs.iter().any(|&w| beyond(c, w) && p.down != Some(w)) {

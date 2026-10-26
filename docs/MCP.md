@@ -476,7 +476,7 @@ have nothing underground, so they take none of them. Themes by kind of site:
 
 | Kind | Themes (the first is the usual one) |
 |---|---|
-| dungeon | `dungeon`, `prison`, `temple`, `wizard_lair`, `bandit_hideout`, `dwarven_hall`, `goblin_warren`, `flooded_vault`, `cult_sanctum`, `sunken_temple` |
+| dungeon | `dungeon`, `prison`, `temple`, `wizard_lair`, `bandit_hideout`, `dwarven_hall`, `goblin_warren`, `flooded_vault`, `cult_sanctum`, `labyrinth`, `collapsed_fortress`, `sunken_temple` |
 | crypt | `crypt`, `tomb`, `ossuary` |
 | catacombs | `catacombs` |
 | cave | `cave`, `fungal`, `crystal`, `ice`, `flooded`, `beast_den` |
@@ -485,7 +485,11 @@ have nothing underground, so they take none of them. Themes by kind of site:
 
 A theme sets the rooms (a prison's guard ring, cell blocks and warden's office, a dwarven hall's forges and great hall), how many
 there are, corridor width and the floor. Every site, whatever its theme, size and depth, ends in one boss chamber on
-its deepest level, and every square is reachable.
+its deepest level, and every square is reachable. A `labyrinth` is a maze of 5-ft passages with the stairs down
+(or the boss) in its heart room; a `collapsed_fortress` is a fort's halls with caverns breaking in, more the deeper (the
+world's own sites take it only under ruins). Old sites cave in: under ruins about half the levels, under living towns,
+keeps and cities about one site in ten, a cavern breaks across the rooms, joined to them by open gaps (`arch` in a
+plan's doors) with rubble; created and designed sites never do, nor labyrinths, caves, mines and lava tubes.
 
 Rules:
 - the place must be on the map and on dry land;

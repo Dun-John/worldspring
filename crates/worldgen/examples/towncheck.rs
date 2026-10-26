@@ -3587,6 +3587,15 @@ fn under(ctx: &mut Ctx, r: &mut Report, label: &str) {
             println!("U {label} {id} {:016x} {} {}{top}", fnv64(serde_json::to_string(&it).unwrap().as_bytes()), it.theme.unwrap_or("-").replace(' ', "_"), it.levels.len());
             r.tally("sites", 1);
             r.tally("levels", it.levels.len());
+            // Cave-ins by the age of the place above (levels with open gaps; a collapsed fortress's own left out).
+            if theme != "collapsed_fortress" && it.levels.iter().all(|lv| !lv.natural) {
+                let class = if id.starts_with('u') && li >= t0.settlements.len() { "ruin" } else { "living" };
+                let caved = it.levels.iter().filter(|lv| lv.doors.iter().any(|d| d.kind == "arch")).count();
+                r.tally(&format!("built sites {class}"), 1);
+                r.tally(&format!("built levels {class}"), it.levels.len());
+                r.tally(&format!("caved sites {class}"), (caved > 0) as usize);
+                r.tally(&format!("caved levels {class}"), caved);
+            }
             for lv in &it.levels {
                 r.tally("rooms", lv.rooms.len());
                 r.tally("doors", lv.doors.len());

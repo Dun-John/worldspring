@@ -49,7 +49,7 @@ export function materialOf(site: string, kind: string, theme?: string): number {
   if (kind === 'boss chamber') return 5;
   if (theme === 'cult_sanctum') return 6;
   if (theme === 'temple' || theme === 'sunken_temple' || theme === 'wizard_lair') return 7;
-  if (theme === 'dwarven_hall') return 8;
+  if (theme === 'dwarven_hall' || theme === 'labyrinth') return 8;
   if (site === 'lava tube') return 1;
   if (site === 'mine') return 2;
   if (site === 'crypt' || site === 'catacombs') return 6;
