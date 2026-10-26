@@ -4,7 +4,8 @@
 // built sites), a lit inked rim where the wall meets the floor, deep textured rock beyond,
 // ambient occlusion and NW-light shadows on the floor, floors by material (cave rock, basalt,
 // mine earth, sewer brick, flagstones), animated sewage or lava channels, ledges as smooth
-// contours with their shadows, and the 5-ft grid.
+// contours with their shadows, terrain (water with slow ripples, chasms, rubble slopes), and the
+// 5-ft grid.
 //
 // uField: 4 texels per square, linear: r floor (blurred mask), g liquid (blurred), b raised
 //         floor (blurred, raise / 10 ft). Built sites (uSquare): nearest, the floor unblurred;
@@ -17,6 +18,9 @@
 //         the shape near them (it may stand up to half a square off the squares).
 // uCave: caverns breaking into a built level, linear: their floor (and the squares opening into
 //         them) blurred as a cave's, drawn with rough rock walls.
+// uTerrain: terrain (`kit::TERRAIN`), linear, 4 texels per square: r water (shallow, and under
+//         deep water), g deep water, b chasm, a rubble slope; each blurred, spread into the rock
+//         beside it (so it meets the walls). Read only where uHasTerrain.
 
 in vec2 vUV;
 in vec2 vLocal;
@@ -28,6 +32,7 @@ uniform sampler2D uField;
 uniform sampler2D uCells;
 uniform sampler2D uShapes;
 uniform sampler2D uCave;
+uniform sampler2D uTerrain;
 
 uniform vec2 uN;
 uniform vec2 uLight;
@@ -43,6 +48,7 @@ uniform vec2 uOrigin;
 // Shaped rooms on the level (0: none), caverns breaking in (0 or 1).
 uniform float uShapeCount;
 uniform float uCaverns;
+uniform float uHasTerrain;
 uniform vec4 uColor;
 
 const vec3 INK = vec3(0.10, 0.085, 0.07);
@@ -244,9 +250,116 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
     return c;
 }
 
+// Slow ripples on water (0-1): light streaks wavering where two drifting noises cross, and now
+// and then a drip's rings spreading. `px`: squares a pixel.
+float ripples(vec2 p, float px) {
+    float n1 = vnoise(p * 1.9 + vec2(uTime * 0.11, uTime * 0.05));
+    float n2 = vnoise(p * 2.3 + vec2(-uTime * 0.07, uTime * 0.09) + 17.0);
+    float streak = (1.0 - smoothstep(0.0, 0.035, abs(n1 - n2))) * smoothstep(0.35, 0.7, vnoise(p * 0.6 + uTime * 0.02));
+    // A drip in some cells of two squares, its two rings spreading and fading.
+    vec2 sc = p * 0.5;
+    vec2 id = floor(sc);
+    float ph = fract(uTime * 0.16 + hash21(id + 1.9));
+    float dist = length(fract(sc) - (0.35 + 0.3 * vec2(hash21(id + 3.7), hash21(id + 8.1))));
+    float lw = max(0.018, px * 0.6);
+    float rings = (1.0 - smoothstep(0.0, lw, abs(dist - ph * 0.3))) + 0.6 * (1.0 - smoothstep(0.0, lw, abs(dist - ph * 0.18)));
+    rings *= (1.0 - ph) * step(0.55, hash21(id + 5.3));
+    return clamp(streak * 0.55 + rings * 0.8, 0.0, 1.0);
+}
+
+// One stone of scree to each cell of a grid `s` a square (where a cell's hash is under
+// `cover`): two tones, its NW half lit, its shadow to the SE, inked.
+vec3 screeStone(vec3 col, vec2 p, float s, float seed, float cover, float px) {
+    vec2 sc = p * s;
+    vec2 id = floor(sc);
+    float h = hash21(id + seed);
+    if (h >= cover) return col;
+    vec2 dv = fract(sc) - (0.4 + 0.2 * vec2(hash21(id + seed + 1.3), hash21(id + seed + 2.7)));
+    float a = atan(dv.y, dv.x);
+    float r = (0.21 + 0.1 * hash21(id + seed + 4.1)) * (1.0 + 0.16 * sin(a * 3.0 + h * 40.0) + 0.07 * sin(a * 5.0 + h * 17.0));
+    float len = length(dv);
+    float pw = px * s;
+    col = mix(col, col * 0.5, (1.0 - smoothstep(r - pw, r + 0.07, length(dv + uLight * 0.1))) * 0.7);
+    vec3 stone = vec3(0.60, 0.57, 0.52) * (0.78 + 0.34 * hash21(id + seed + 5.5));
+    stone *= mix(0.66, 1.12, smoothstep(-0.2, 0.2, dot(dv, uLight) / max(r, 1e-3) + 0.3));
+    col = mix(col, stone, 1.0 - smoothstep(r - pw, r + pw, len));
+    return mix(col, INK, (1.0 - smoothstep(0.0, max(pw * 1.2, 0.05), abs(len - r))) * 0.8);
+}
+
+// Terrain on the floor (uTerrain): shallow water over the floor, deep water, a chasm, a rubble
+// slope, each from its mask's iso-0.5 bank (roughened by noise, more in rock than in dressed stone).
+vec3 terrain(vec3 col, vec2 q, vec2 p, float px) {
+    vec4 t = texture(uTerrain, q / uN);
+    if (max(max(t.r, t.g), max(t.b, t.a)) < 0.02) return col;
+    float e = 0.25;
+    vec4 gx = (texture(uTerrain, (q + vec2(e, 0.0)) / uN) - texture(uTerrain, (q - vec2(e, 0.0)) / uN)) / (2.0 * e);
+    vec4 gy = (texture(uTerrain, (q + vec2(0.0, e)) / uN) - texture(uTerrain, (q - vec2(0.0, e)) / uN)) / (2.0 * e);
+    vec4 gl = sqrt(gx * gx + gy * gy);
+    float wob = (fbm(p * 1.1 + 11.0) - 0.5) * mix(0.12, 0.34, uRough);
+    vec4 d = (t - 0.5) / max(gl, vec4(0.35)) + wob * vec4(1.0, 1.0, 0.8, 1.6);
+    float aa = max(px * 0.5, 1e-3);
+    if (t.r > 0.02) {
+        // Shallow water: the floor seen through it, tinted and dimmer toward the middle; wet
+        // stone round it, a light line at the edge, inked.
+        float ds = d.x;
+        float inside = smoothstep(-aa, aa, ds);
+        col *= mix(1.0, 0.78, (1.0 - smoothstep(0.0, 0.2, -ds)) * (1.0 - inside));
+        vec3 w = col * vec3(0.55, 0.74, 0.76) + vec3(0.04, 0.10, 0.11);
+        w *= mix(1.0, 0.84, smoothstep(0.05, 0.7, ds));
+        w += ripples(p, px) * vec3(0.30, 0.36, 0.36);
+        col = mix(col, w, inside);
+        col = mix(col, vec3(0.80, 0.90, 0.88), (1.0 - smoothstep(0.0, max(aa * 2.0, 0.025), abs(ds - 0.05))) * 0.4 * inside);
+        col = mix(col, INK, (1.0 - smoothstep(0.0, aa * 2.0, abs(ds))) * 0.5);
+    }
+    if (t.g > 0.02) {
+        // Deep water: dark, lighter where it shelves up to its edge, shadowed under the NW
+        // bank; ripples; a wet glint along its rim, inked.
+        float dd = d.y;
+        float inside = smoothstep(-aa, aa, dd);
+        vec3 w = vec3(0.06, 0.17, 0.25) * (0.85 + 0.3 * vnoise(p * 0.7 + vec2(uTime * 0.03, 0.0)));
+        w = mix(vec3(0.17, 0.36, 0.41), w, smoothstep(0.0, 0.45, dd));
+        w *= mix(0.62, 1.0, smoothstep(0.3, 0.6, texture(uTerrain, (q + uLight * 0.4) / uN).g));
+        w += ripples(p, px) * vec3(0.30, 0.45, 0.50);
+        col = mix(col, w, inside);
+        col = mix(col, vec3(0.62, 0.80, 0.84), (1.0 - smoothstep(0.0, max(aa * 2.0, 0.03), abs(dd - 0.08))) * 0.55);
+        col = mix(col, INK, (1.0 - smoothstep(0.0, aa * 2.4, abs(dd))) * 0.8);
+    }
+    if (t.b > 0.02) {
+        // A chasm: a lip of rock round it lit as it faces the NW light, the rock face below it
+        // (strata along the edge) falling into black; inked bold at the drop.
+        float dc = d.z;
+        float inside = smoothstep(-aa, aa, dc);
+        vec2 nc = vec2(gx.b, gy.b);
+        nc = length(nc) > 1e-4 ? normalize(nc) : vec2(0.0);
+        float face = clamp(0.55 + 0.7 * dot(nc, uLight), 0.2, 1.2);
+        float lipW = 0.11 + 0.08 * vnoise(p * 2.7 + 5.0);
+        float lip = (1.0 - smoothstep(lipW - aa, lipW + aa, -dc)) * (1.0 - inside);
+        vec3 lipCol = vec3(0.60, 0.57, 0.52) * (0.85 + 0.3 * vnoise(p * 4.0)) * mix(0.8, 1.15, smoothstep(-0.5, 0.5, dot(nc, uLight)));
+        col = mix(col, lipCol, lip * 0.9);
+        col = mix(col, INK, (1.0 - smoothstep(0.0, aa * 1.6, abs(dc + lipW))) * 0.55);
+        vec3 rf = rockMass(p * 1.7, 0.0) * 2.0 * face;
+        rf = mix(rf, rf * 0.5, seam(fract(dc * 4.0 + 0.6 * vnoise(p * 1.5)), 0.06));
+        col = mix(col, mix(rf, vec3(0.012, 0.01, 0.008), smoothstep(0.08, 0.75, dc)), inside);
+        col = mix(col, INK, (1.0 - smoothstep(0.0, aa * 2.4, abs(dc))) * 0.95);
+    }
+    if (t.a > 0.02) {
+        // A rubble slope: dust over the floor, then scree, small stones spilling out past the
+        // big ones at its edge.
+        float dr = d.w;
+        float cover = smoothstep(-0.25, 0.3, dr);
+        col = mix(col, vec3(0.50, 0.47, 0.42) * (0.8 + 0.35 * vnoise(p * 5.0)), cover * 0.5);
+        col = screeStone(col, p + 0.71, 4.3, 21.0, smoothstep(-0.45, 0.1, dr) * 0.55, px);
+        col = screeStone(col, p + 0.37, 2.7, 9.0, cover * 0.7, px);
+        col = screeStone(col, p, 1.7, 0.0, cover * 0.6, px);
+    }
+    return col;
+}
+
 void main() {
     vec2 q = vUV * uN;
     vec2 p = q + uOrigin;
+    // (Squares a pixel.)
+    float px = length(fwidth(q));
     vec4 here = field(q);
     float d;
     vec2 n;
@@ -384,6 +497,8 @@ void main() {
         float lips = (1.0 - smoothstep(0.0, tw * 1.5, abs(t - 0.25))) + (1.0 - smoothstep(0.0, tw * 1.5, abs(t - 0.75)));
         col = mix(col, INK, clamp(lips, 0.0, 1.0) * 0.8);
         col *= mix(1.0, 0.72, smoothstep(0.1, 0.3, field(q + uLight * 0.35).b - t));
+        // Water, chasms, rubble slopes.
+        if (uHasTerrain > 0.5) col = terrain(col, q, p, px);
         // Against the walls: ambient occlusion and the shadow cast from the NW.
         col *= 0.6 + 0.4 * smoothstep(0.0, 0.75, d);
         col *= mix(0.66, 1.0, smoothstep(0.35, 0.6, lit));
@@ -416,7 +531,9 @@ void main() {
         if (uGhost < 0.5) {
             vec2 gq = min(fract(q), 1.0 - fract(q));
             float gw = length(fwidth(q));
-            col = mix(col, INK, (1.0 - smoothstep(0.0, gw, min(gq.x, gq.y))) * uGridAlpha);
+            // (Light over what is nearly black: a chasm, deep water.)
+            vec3 gc = mix(vec3(0.45, 0.43, 0.40), INK, smoothstep(0.05, 0.16, dot(col, vec3(0.3, 0.59, 0.11))));
+            col = mix(col, gc, (1.0 - smoothstep(0.0, gw, min(gq.x, gq.y))) * uGridAlpha);
         }
         alpha = 1.0;
     }

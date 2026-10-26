@@ -1,5 +1,6 @@
 // The textures an underground level is painted from (`underground.frag`): a smooth floor field
-// (4 texels a square, blurred), liquids and raised floors likewise, and per-square materials.
+// (4 texels a square, blurred), liquids and raised floors likewise, per-square materials, and
+// terrain (water, chasms, rubble slopes) likewise.
 // Pure data, so a city's sewer sections can be prepared in a worker (`underField.worker.ts`)
 // while the view moves.
 import type { Interior } from '../gen/protocol';
@@ -26,7 +27,13 @@ export interface UnderField {
   /** Caverns breaking in: their floor (and the squares opening into them) blurred as a cave's
    * (w x h, RGBA, red), else null. */
   cave: Uint8Array | null;
+  /** Terrain (`kit::TERRAIN`) as soft masks, blurred (w x h, RGBA: shallow water (deep water
+   * too: it lies in water), deep water, chasm, rubble slope), else null. */
+  terrain: Uint8Array | null;
 }
+
+/** Underground terrain kinds, by their channel in `UnderField.terrain`. */
+export const TERRAIN_CHANNEL: Record<string, number> = { water_shallow: 0, water_deep: 1, chasm: 2, rubble_slope: 3 };
 
 /** Sites with square corners: built (dressed stone), unlike sewers (which follow their
  * streets) and natural rock. */
@@ -253,5 +260,54 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
     cave = new Uint8Array(w * h * 4);
     for (let k = 0; k < w * h; k++) cave[k * 4] = (b[k] * 255 + 0.5) | 0;
   }
-  return { w, h, data, cells, liquidKind, shapes, shapeCount: slots.length, cave };
+  return { w, h, data, cells, liquidKind, shapes, shapeCount: slots.length, cave, terrain: terrainField(it, level, clamp) };
+}
+
+/** Terrain's masks (`UnderField.terrain`): each kind's squares, spread into the rock next to
+ * them (so water and chasms run right up to the walls), blurred for soft banks. */
+function terrainField(it: Interior, level: number, clamp: boolean): Uint8Array | null {
+  const lv = it.levels[level];
+  const { nx, ny } = it;
+  const items = lv.furniture.filter((f) => TERRAIN_CHANNEL[f.kind] !== undefined);
+  if (!items.length) return null;
+  const sq = new Uint8Array(nx * ny * 4);
+  for (const f of items) {
+    const c = TERRAIN_CHANNEL[f.kind];
+    for (let j = Math.max(0, f.y); j < Math.min(ny, f.y + f.h); j++) {
+      for (let i = Math.max(0, f.x); i < Math.min(nx, f.x + f.w); i++) {
+        sq[(j * nx + i) * 4 + c] = 1;
+        // (Deep water lies in water: the shallows' mask runs under it.)
+        if (c === 1) sq[(j * nx + i) * 4] = 1;
+      }
+    }
+  }
+  // Rock squares take what the floor beside them has.
+  const spread = sq.slice();
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      if (lv.cells[j * nx + i] >= 0) continue;
+      for (let b = Math.max(0, j - 1); b <= Math.min(ny - 1, j + 1); b++) {
+        for (let a = Math.max(0, i - 1); a <= Math.min(nx - 1, i + 1); a++) {
+          if (lv.cells[b * nx + a] < 0) continue;
+          for (let c = 0; c < 4; c++) spread[(j * nx + i) * 4 + c] |= sq[(b * nx + a) * 4 + c];
+        }
+      }
+    }
+  }
+  const R = FIELD_RES;
+  const [w, h] = [nx * R, ny * R];
+  const out = new Uint8Array(w * h * 4);
+  for (let c = 0; c < 4; c++) {
+    if (!items.some((f) => TERRAIN_CHANNEL[f.kind] === c || (c === 0 && f.kind === 'water_deep'))) continue;
+    const mask = new Float32Array(w * h);
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        if (!spread[(j * nx + i) * 4 + c]) continue;
+        for (let y = j * R; y < (j + 1) * R; y++) mask.fill(1, y * w + i * R, y * w + (i + 1) * R);
+      }
+    }
+    const b = blur(mask, w, h, (c === 2 ? 0.24 : 0.3) * R, clamp);
+    for (let k = 0; k < w * h; k++) out[k * 4 + c] = (b[k] * 255 + 0.5) | 0;
+  }
+  return out;
 }

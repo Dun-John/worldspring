@@ -8,7 +8,10 @@
 // turns on grass with their shadows, and furniture and props with a back at each of their four sides. Last, a
 // palace's forecourt as the battlemap draws it (garden wall, gate piers, open gates, gravel walks; `&items=forecourt`
 // alone, at `&sq=` px a square, default 64); and a temple's pieces in each god's look (`&items=temple` alone,
-// default 56). `&items=civic` shows the guild and civic pieces and the stable stall.
+// default 56). `&items=civic` shows the guild and civic pieces and the stable stall. `&items=terrain` (alone, at
+// `&sq=` px a square, default 34) shows underground terrain as the floor shader paints it: a room each of shallow
+// water, deep water, a chasm and a rubble slope, a pool crossed by a rope bridge and stepping stones, and a chasm
+// bridged, in a dungeon's flagstones and again in a cave.
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { Shape } from '../gen/battlePrep';
@@ -99,6 +102,43 @@ function sampler(id: string, fn: string, items: [string, number, number, number?
   const z = new URLSearchParams(location.search).get('floor') === 'wood' ? 0 : -1;
   const level = { z, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };
   return { it: { id, settlement: 0, building: 0, name: null, function: fn, origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] }, spots };
+}
+
+/** Underground terrain (`&items=terrain`): a room each (7 x 6, the terrain against its top wall) of shallow
+ * water, deep water, a chasm and a rubble slope; then a pool (deep in shallow) crossed by a rope bridge and
+ * stepping stones, and a chasm with a rope bridge over it. `fn`: 'dungeon' (flagstones, square) or 'cave'. */
+function terrainRooms(fn: 'dungeon' | 'cave'): Interior {
+  const item = (kind: string, x: number, y: number, w: number, h: number): InteriorItem => ({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 0 });
+  const rooms: [number, number, InteriorItem[]][] = [
+    [7, 6, [item('water_shallow', 1, 0, 5, 3)]],
+    [7, 6, [item('water_deep', 1, 0, 5, 3)]],
+    [7, 6, [item('chasm', 1, 0, 5, 3)]],
+    [7, 6, [item('rubble_slope', 1, 0, 5, 3)]],
+    [9, 7, [item('water_shallow', 0, 1, 9, 5), item('water_deep', 1, 2, 7, 3), item('rope_bridge', 0, 3, 9, 1), item('stepping_stone', 6, 1, 1, 1), item('stepping_stone', 6, 2, 1, 1), item('stepping_stone', 7, 4, 1, 1), item('stepping_stone', 6, 5, 1, 1)]],
+    [7, 7, [item('chasm', 0, 2, 7, 3), item('rope_bridge', 3, 1, 1, 5)]],
+  ];
+  // Two rows: the four kinds, then the crossings.
+  const rows = [rooms.slice(0, 4), rooms.slice(4)];
+  const nx = Math.max(...rows.map((r) => r.reduce((a, [w]) => a + w + 1, 1)));
+  const heights = rows.map((r) => Math.max(...r.map(([, h]) => h)));
+  const ny = heights.reduce((a, h) => a + h + 1, 1);
+  const cells = new Array<number>(nx * ny).fill(-1);
+  const furniture: InteriorItem[] = [];
+  const list: Interior['levels'][number]['rooms'] = [];
+  let y0 = 1;
+  rows.forEach((row, r) => {
+    let x0 = 1;
+    for (const [w, h, items] of row) {
+      const k = list.length;
+      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) cells[(y0 + j) * nx + x0 + i] = k;
+      list.push({ kind: ' ', squares: w * h, raise_ft: 0, center: [x0 + w / 2, y0 + h / 2] });
+      for (const f of items) furniture.push({ ...f, x: f.x + x0, y: f.y + y0 });
+      x0 += w + 1;
+    }
+    y0 += heights[r] + 1;
+  });
+  const level = { z: -1, name: '', elevation_ft: 0, cells, rooms: list, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: fn === 'cave' };
+  return { id: `u:terrain-${fn}`, settlement: 0, building: 0, name: null, function: fn, origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] };
 }
 
 export async function runGallery(target: HTMLElement) {
@@ -257,6 +297,26 @@ export async function runGallery(target: HTMLElement) {
       root.addChild(t);
     }
     y += it.ny * tsq + 40;
+  }
+
+  // Underground terrain as the shader paints it (`&items=terrain` alone).
+  if (!only && (!pick || pick.includes('terrain'))) {
+    const tsq = pick ? Number(query.get('sq')) || 34 : ITEM_SQ;
+    for (const [title, fn] of [
+      ['Terrain in a dungeon: shallow water, deep water, chasm, rubble slope; a pool and a chasm crossed', 'dungeon'],
+      ['Terrain in a cave', 'cave'],
+    ] as const) {
+      head(title);
+      const it = terrainRooms(fn);
+      const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: null });
+      const holder = new Container();
+      holder.addChild(layer.container);
+      holder.scale.set(tsq);
+      holder.position.set(16, y);
+      layer.container.children[0].visible = false;
+      root.addChild(holder);
+      y += it.ny * tsq + 40;
+    }
   }
 
   // A palace's forecourt as the battlemap draws it (`&items=forecourt` alone).

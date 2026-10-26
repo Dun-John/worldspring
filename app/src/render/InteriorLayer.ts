@@ -755,7 +755,7 @@ export class InteriorLayer {
     this.freeUnder();
     let f = this.fields.get(this.level);
     if (!f) this.fields.set(this.level, (f = underField(it, this.level, this.tile)));
-    const { w, h, data, cells, liquidKind, shapes, shapeCount, cave } = f;
+    const { w, h, data, cells, liquidKind, shapes, shapeCount, cave, terrain } = f;
     // Built sites keep square corners: walls measured from the squares, the field unsmoothed.
     const square = SQUARE_SITES.has(it.function);
     const fieldSrc = new BufferImageSource({ resource: data, width: w, height: h, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: square ? 'nearest' : 'linear', addressMode: 'clamp-to-edge' });
@@ -763,6 +763,8 @@ export class InteriorLayer {
     // Shaped rooms' boxes and looks; caverns breaking in (a blank texel when there are none).
     const shapeSrc = new BufferImageSource({ resource: shapes, width: Math.max(1, shapeCount), height: 2, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' });
     const caveSrc = new BufferImageSource({ resource: cave ?? new Uint8Array(4), width: cave ? w : 1, height: cave ? h : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
+    // Water, chasms and rubble slopes (a blank texel when there are none).
+    const terrainSrc = new BufferImageSource({ resource: terrain ?? new Uint8Array(4), width: terrain ? w : 1, height: terrain ? h : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // Light from the NW of the screen, in grid axes.
     const [lx, ly] = [-Math.SQRT1_2, -Math.SQRT1_2];
     const rough = it.function === 'cave' ? 1 : it.function === 'lava tube' ? 0.85 : it.function === 'mine' ? 0.45 : square ? 0 : 0.06;
@@ -780,12 +782,13 @@ export class InteriorLayer {
       uOrigin: { value: new Float32Array(this.tile ? [wrap(it.origin[0] / 5), wrap(it.origin[1] / 5)] : [0, 0]), type: 'vec2<f32>' },
       uShapeCount: { value: shapeCount, type: 'f32' },
       uCaverns: { value: cave ? 1 : 0, type: 'f32' },
+      uHasTerrain: { value: terrain ? 1 : 0, type: 'f32' },
     });
-    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uShapes: shapeSrc, uCave: caveSrc, uNoise: noiseSource(), under: uniforms } });
+    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uShapes: shapeSrc, uCave: caveSrc, uTerrain: terrainSrc, uNoise: noiseSource(), under: uniforms } });
     const mesh = new Mesh({ geometry: quad(), shader });
     mesh.scale.set(nx, ny);
     this.plan.addChild(mesh);
-    this.under = { uniforms, sources: [fieldSrc, cellSrc, shapeSrc, caveSrc], shader };
+    this.under = { uniforms, sources: [fieldSrc, cellSrc, shapeSrc, caveSrc, terrainSrc], shader };
   }
 
   private draw() {
@@ -890,8 +893,9 @@ export class InteriorLayer {
     // (Underground, the shader paints sewage and lava channels.)
     const atlas = InteriorLayer.renderer ? ItemAtlas.for(InteriorLayer.renderer) : null;
     const items = new Container();
-    // Water, chasms and rubble lie on the floor, the rope bridges and stepping stones over them (vector, not atlas: they can be big).
-    for (const pass of [TERRAIN_KINDS, SPAN_KINDS]) for (const f of lv.furniture) if (pass.has(f.kind)) this.drawTerrain(g, f);
+    // Water, chasms and rubble lie on the floor (underground the shader paints them, from
+    // `underField`), the rope bridges and stepping stones over them (vector, not atlas: they can be big).
+    for (const pass of this.underground ? [SPAN_KINDS] : [TERRAIN_KINDS, SPAN_KINDS]) for (const f of lv.furniture) if (pass.has(f.kind)) this.drawTerrain(g, f);
     // (A platform under what stands on it.)
     for (const f of [...lv.furniture].sort((a, b) => +PLATFORMS.has(b.kind) - +PLATFORMS.has(a.kind))) {
       if (this.underground && (f.kind === 'sewage' || f.kind === 'lava')) continue;
@@ -1471,7 +1475,8 @@ export class InteriorLayer {
     return sides[0];
   }
 
-  /** Water, a chasm, rubble, a rope bridge or stepping stones over their full w x h (placeholders until the sprite batch). */
+  /** Water, a chasm, rubble, a rope bridge or stepping stones over their full w x h (water, chasms
+   * and rubble only where the underground shader isn't drawing: thumbnails, rooms above ground). */
   private drawTerrain(g: Graphics, f: InteriorItem) {
     const { x, y, w, h, kind } = f;
     switch (kind) {

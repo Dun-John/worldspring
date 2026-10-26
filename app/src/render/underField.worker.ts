@@ -13,6 +13,6 @@ export interface FieldRequest {
 self.onmessage = (e: MessageEvent<FieldRequest>) => {
   const { id, it, level, clamp } = e.data;
   const f = underField(it, level, clamp);
-  const moved = [f.data.buffer, f.cells.buffer, f.shapes.buffer, ...(f.cave ? [f.cave.buffer] : [])];
+  const moved = [f.data.buffer, f.cells.buffer, f.shapes.buffer, ...(f.cave ? [f.cave.buffer] : []), ...(f.terrain ? [f.terrain.buffer] : [])];
   (self as unknown as Worker).postMessage({ id, f }, moved);
 };
