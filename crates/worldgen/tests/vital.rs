@@ -2274,6 +2274,10 @@ fn designed_site(world: &World, t0: &worldgen::t0::T0) {
     assert!(design::from_text(&text, &base).unwrap().0 == d, "{id}: the text plan doesn't read back:\n{text}");
     // Terrain: a chasm across the vault (the chest beyond it) crossed by a rope bridge; without the bridge, cut off.
     assert!(text.contains(&format!("chasm {},{} 1x5; rope_bridge {},{}", x + 4, y - 2, x + 4, y + 1)), "{id}: the chasm and bridge in the text plan:\n{text}");
+    // A stone bridge is a span like it: laid over the chasm, no clash, and the chest still reached.
+    let mut stone = d.clone();
+    stone.levels[0].items.iter_mut().filter(|f| f.kind == "rope_bridge").for_each(|f| f.kind = "stone_bridge".to_string());
+    assert!(stone.problems(world, t0, &id).unwrap().1.iter().all(|p| !p.blocking), "{id}: a stone bridge over the chasm clashes or cuts off");
     let mut fallen = d.clone();
     fallen.levels[0].items.retain(|f| f.kind != "rope_bridge");
     assert!(fallen.problems(world, t0, &id).unwrap().1.iter().any(|p| p.blocking && p.text.contains("can't be reached")), "{id}: the chasm cut nothing off");

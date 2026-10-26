@@ -217,10 +217,10 @@ pub const PROPS: &[(&str, &str, u8, bool, f32, Option<&str>)] = &[
     ("stone_bridge", "stone bridge", 0, false, 0.0, None),
 ];
 
-/// Items that lie on the floor under a span: water, chasms, rubble slopes; and a stone bridge's deck.
-pub const TERRAIN: [&str; 5] = ["water_shallow", "water_deep", "chasm", "rubble_slope", "stone_bridge"];
-/// Items one walks on over deep water or a chasm.
-pub const SPANS: [&str; 2] = ["rope_bridge", "stepping_stone"];
+/// Items that lie on the floor under a span: water, chasms, rubble slopes.
+pub const TERRAIN: [&str; 4] = ["water_shallow", "water_deep", "chasm", "rubble_slope"];
+/// Items one walks on over deep water or a chasm (a dwarven hall's stone bridge too).
+pub const SPANS: [&str; 3] = ["rope_bridge", "stepping_stone", "stone_bridge"];
 
 /// The squares `items` block (`nx` × `ny`): whatever blocks movement, but deep water or a chasm with a span over it.
 pub fn blocked_squares(items: &[Item], nx: usize, ny: usize) -> Vec<bool> {
