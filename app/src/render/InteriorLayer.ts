@@ -1683,31 +1683,51 @@ export class InteriorLayer {
         break;
       }
       case 'stone_bridge': {
-        // Dressed slabs across the way it runs (its long side), a low parapet along both edges (capped
-        // blocks, inked), the ends lying on the banks; the 5-ft grid faint over the deck.
+        // A solid span: big slabs in the hall floor's flagstone tone across the way it runs (its long side), a thick
+        // dark parapet wall with capstones along both edges, a soft shadow cast on the chasm beside each; the ends
+        // lie on the banks; the 5-ft grid faint over the deck.
         const along = w >= h;
         const [len, span] = along ? [w, h] : [h, w];
         const at = (a: number, b: number): [number, number] => (along ? [x + a, y + b] : [x + b, y + a]);
         const quad = (a0: number, b0: number, a1: number, b1: number) => [...at(a0, b0), ...at(a1, b0), ...at(a1, b1), ...at(a0, b1)];
-        const wall = 0.2;
-        const per = 2;
-        for (let k = 0; k < Math.round(len * per); k++) {
-          for (let r = 0; r < 2 * span; r++) {
-            const off = (k + r) % 2 ? 0.05 : 0;
-            const [a0, a1] = [k / per + 0.015 + off * 0.5, (k + 1) / per - 0.015];
-            const [b0, b1] = [wall + (r * (span - 2 * wall)) / (2 * span), wall + (r + 1) * (span - 2 * wall) / (2 * span)];
-            const tone = hash2(x * 5 + k, y * 3 + r, 41);
-            g.poly(quad(a0, b0, a1, b1)).fill(tone < 0.33 ? 0xa39e92 : tone < 0.66 ? 0x9a958a : 0xaaa598).stroke({ width: 0.02, color: INK, alpha: 0.7, join: 'round' });
+        const wall = Math.min(0.34, span * 0.3);
+        // The shadow on the chasm, darkest at the wall, fading out.
+        for (const side of [0, 1]) {
+          for (let k = 0; k < 5; k++) {
+            const d = 0.1 + k * 0.1;
+            const [b0, b1] = side ? [span, span + d + 0.08] : [-d - 0.08, 0];
+            g.poly(quad(0.06 + k * 0.03, b0, len - 0.06 - k * 0.03, b1)).fill({ color: 0x000000, alpha: 0.16 });
           }
         }
-        for (const b0 of [0, span - wall]) {
-          g.poly(quad(0, b0, len, b0 + wall)).fill(0x77726a).stroke({ width: 0.035, color: INK, join: 'round' });
-          for (let t = 0; t < len; t += 0.5) g.poly(quad(t + 0.02, b0 + 0.02, t + 0.48, b0 + wall - 0.02)).fill(0x8f8a7f).stroke({ width: 0.015, color: INK, alpha: 0.6 });
-          g.poly(quad(0.02, b0 + (b0 ? 0.02 : wall - 0.05), len - 0.02, b0 + (b0 ? 0.05 : wall - 0.02))).fill({ color: 0xc4bfb2, alpha: 0.8 });
+        // The deck: slabs a foot and a half long, rows staggered.
+        const rows = Math.max(1, Math.round((span - 2 * wall) / 0.5));
+        const rh = (span - 2 * wall) / rows;
+        const SL = [0x8f8a7f, 0x948f84, 0x898478, 0x98938a];
+        for (let r = 0; r < rows; r++) {
+          const shift = r % 2 ? 0.45 : 0;
+          for (let a = -shift; a < len; a += 0.9) {
+            const [a0, a1] = [Math.max(0, a) + 0.015, Math.min(len, a + 0.9) - 0.015];
+            if (a1 - a0 < 0.1) continue;
+            const [b0, b1] = [wall + r * rh, wall + (r + 1) * rh];
+            g.poly(quad(a0, b0, a1, b1)).fill(SL[Math.floor(hash2(x * 5 + Math.round(a * 4), y * 3 + r, 41) * SL.length)]);
+            g.poly(quad(a0 + 0.03, b0 + 0.03, a1 - 0.03, b0 + 0.09)).fill({ color: 0xb0aaa0, alpha: 0.5 });
+            g.poly(quad(a0, b0, a1, b1)).stroke({ width: 0.03, color: INK, alpha: 0.85, join: 'round' });
+          }
+        }
+        // The parapets: dark thick walls, capstones along the top, inked.
+        for (const side of [0, 1]) {
+          const b0 = side ? span - wall : 0;
+          g.poly(quad(0, b0, len, b0 + wall)).fill(0x2f2c28).stroke({ width: 0.05, color: INK, join: 'round' });
+          const [c0, c1] = [b0 + wall * 0.2, b0 + wall * 0.8];
+          for (let t = 0; t < len; t += 0.5) {
+            const [t0, t1] = [t + 0.025, Math.min(len, t + 0.5) - 0.025];
+            g.poly(quad(t0, c0, t1, c1)).fill(hash2(x + Math.round(t * 2), y + side, 43) < 0.5 ? 0x58534b : 0x625d54).stroke({ width: 0.025, color: INK, alpha: 0.9, join: 'round' });
+            g.poly(quad(t0 + 0.02, c0 + 0.02, t1 - 0.02, c0 + 0.07)).fill({ color: 0x8d877b, alpha: 0.6 });
+          }
         }
         for (let t = 1; t < len; t++) g.moveTo(...at(t, wall)).lineTo(...at(t, span - wall));
         for (let b = 1; b < span; b++) g.moveTo(...at(0, b)).lineTo(...at(len, b));
-        g.stroke({ width: 0.02, color: INK, alpha: 0.3 });
+        g.stroke({ width: 0.02, color: INK, alpha: 0.25 });
         break;
       }
       case 'stepping_stone':
