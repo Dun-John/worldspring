@@ -903,7 +903,7 @@ pub(crate) fn guard(p: &mut Plan, above: &mut [Plan], nx: usize, ny: usize, d: u
             dug += 1;
             // Some walled off by secret doors.
             let new: Vec<(usize, usize)> = made.into_iter().filter(|e| !doors.contains(e)).collect();
-            if !new.is_empty() && rng.next_f64() < 0.5 {
+            if !new.is_empty() && rng.next_f64() < 0.5 && p.secret.len() + new.len() <= p.secrets {
                 p.secret.extend(new);
             }
         }
@@ -927,7 +927,10 @@ pub(crate) fn guard(p: &mut Plan, above: &mut [Plan], nx: usize, ny: usize, d: u
             }
         }
     }
-    let most = (1 + level_rooms / 8).saturating_sub(dug / 2);
+    let mut most = (1 + level_rooms / 8).saturating_sub(dug / 2);
+    if p.loops < 1.0 {
+        most = (most as f64 * p.loops).round() as usize;
+    }
     let mut made = 0;
     for _ in 0..24 {
         if made >= most || walls.is_empty() {
@@ -936,7 +939,7 @@ pub(crate) fn guard(p: &mut Plan, above: &mut [Plan], nx: usize, ny: usize, d: u
         let (a, b) = walls.swap_remove(rng.below(walls.len() as u32) as usize);
         if !near(p, ny, a, b, 4) {
             p.door(a, b);
-            if rng.next_f64() < 0.3 {
+            if rng.next_f64() < 0.3 && p.secret.len() < p.secrets {
                 p.secret.insert((a, b));
             }
             made += 1;
@@ -995,7 +998,10 @@ const SHORTCUT_ROCK: usize = 8;
 /// through another room (`dig`), by a way in or out, or joining two parts the locks keep apart.
 fn shortcuts(p: &mut Plan, nx: usize, ny: usize, passage: i16, wide: bool, rooms: usize, rng: &mut Pcg32) {
     let n = nx * ny;
-    let most = (1 + rooms / 6).min(4);
+    let mut most = (1 + rooms / 6).min(4);
+    if p.loops < 1.0 {
+        most = (most as f64 * p.loops).round() as usize;
+    }
     let locked: Vec<(usize, usize)> = p.locks.keys().copied().collect();
     let shut = |q: (usize, usize)| locked.contains(&q);
     let kept = parts(p, ny, &shut).1;
@@ -1071,7 +1077,7 @@ fn shortcuts(p: &mut Plan, nx: usize, ny: usize, passage: i16, wide: bool, rooms
         }
         used.extend([a, b]);
         made += 1;
-        if rng.next_f64() < 0.4 {
+        if rng.next_f64() < 0.4 && p.secret.len() < p.secrets {
             p.secret.insert(new[rng.below(new.len() as u32) as usize]);
         }
     }

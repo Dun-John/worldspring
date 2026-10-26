@@ -7,7 +7,7 @@
 //! deeper it goes.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, colonnade, dead_end, fallback, flood_room, way_down};
+use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, colonnade, dead_end, fallback, fill, flood_room, way_down};
 use crate::under::*;
 
 #[allow(clippy::too_many_arguments)]
@@ -18,7 +18,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
     let (ax, ay) = (arrive % nx, arrive / nx);
     let pick = |lo: usize, hi: usize, rng: &mut Pcg32| lo + rng.below((hi - lo + 1) as u32) as usize;
     let odd = |n: usize| n | 1;
-    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * area).round() as usize).max(4);
+    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(4);
     let mut boss: Option<i16> = None;
     // The halls to flood deep in a sunken temple, and the rooms kept dry.
     let mut halls: Vec<i16> = Vec::new();
@@ -27,6 +27,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         // Narthex, nave, (crossing), sanctum along the axis through the way in.
         g = Grower::new(nx, ny, passage, Some(ay));
         g.cap = ROOMS_GROWING;
+        g.spread = true;
         let (nw, nh) = (pick(4, 5, rng), odd(pick(5, 7, rng)).min(odd(ny.saturating_sub(4)).max(3)));
         let x0 = ax.saturating_sub(1).max(1);
         let y0 = ay.saturating_sub(nh / 2).max(1);
@@ -39,14 +40,16 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         let cw = if cross { odd(pick(5, sc(7), rng)) } else { 0 };
         let room_left = nx.saturating_sub(x0 + nw + 2 + sd + cw);
         let nave_h = if ny >= 30 { odd(pick(7, sc(9).min(11), rng)) } else { 7 };
-        let nave_len = pick(sc(10), sc(18), rng).min(room_left).max(6);
+        // (Big sites: at least half the way across.)
+        let least = if area > 1.0 { room_left / 2 } else { 0 };
+        let nave_len = pick(sc(12), sc(20), rng).max(least).min(room_left).max(6);
         let nave = g.deck(&mut p, narthex, Side::E, "nave", Template::Rect, nave_h, nave_len, 0, true);
         let mut end = narthex;
         if let Some(&nave) = nave.first() {
             end = nave;
             halls.push(g.pieces[nave].room);
             // Side chapels in pairs down the nave's long walls.
-            let pairs = pick(1, sc(3), rng).min(nave_len / 5).max(1);
+            let pairs = pick(sc(2).saturating_sub(1).max(1), sc(3), rng).min(nave_len / 5).max(1);
             for c in 0..pairs {
                 let along = ((c + 1) * nave_len / (pairs + 1)) as isize - (nave_len / 2) as isize;
                 let t = [Template::Rect, Template::Round, Template::Octagon, Template::Apse][rng.below(4) as usize];
@@ -84,7 +87,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         }
         // Then more rooms in pairs, to the theme's count.
         let have = p.rooms.iter().enumerate().filter(|&(r, _)| r as i16 != passage).count();
-        let specs = specs(theme, &["sanctum", "ossuary"], wide);
+        let specs = specs(theme, &["sanctum", "ossuary"], wide, area);
         g.grow(&mut p, &specs, target.saturating_sub(have), true, rng);
     } else {
         // A hall round the way down from above, its axis through it; a mirrored core grown off it, then the rest.
@@ -97,13 +100,14 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         let t = if holds { t } else { Template::Rect };
         g = Grower::new(nx, ny, passage, Some(y + s / 2));
         g.cap = ROOMS_GROWING;
+        g.spread = true;
         let Some(core) = g.seed(&mut p, "landing", t, x, y, s, s).or_else(|| g.seed(&mut p, "landing", Template::Rect, ax, ay, 1, 1)) else {
             return fallback(p, last);
         };
         if s >= 7 {
             halls.push(g.pieces[core].room);
         }
-        let specs = specs(theme, &["sanctum"], wide);
+        let specs = specs(theme, &["sanctum"], wide, area);
         let rooms = target.saturating_sub(1);
         let made = g.grow(&mut p, &specs, rooms.div_ceil(2), true, rng);
         g.grow(&mut p, &specs, rooms.saturating_sub(made + 1), false, rng);
@@ -144,21 +148,23 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
     p
 }
 
-/// What grows on a temple's levels: the theme's rooms (but `skip`), each as a room of a few shapes, and corridors.
-fn specs(theme: &Theme, skip: &[&str], wide: bool) -> Vec<Spec> {
+/// What grows on a temple's levels: the theme's rooms (but `skip`), each as a room of a few shapes, and corridors;
+/// bigger on bigger sites (`area`).
+fn specs(theme: &Theme, skip: &[&str], wide: bool, area: f64) -> Vec<Spec> {
     let mut out = Vec::new();
+    let up = |n: usize| ((n as f64) * area.sqrt().max(1.0)).round() as usize;
     for &kind in theme.kinds.iter().filter(|k| !skip.contains(k)) {
-        out.push(Spec { kind, t: Template::Rect, across: (3, 5), deep: (3, 5) });
+        out.push(Spec { kind, t: Template::Rect, across: (3, up(5)), deep: (3, up(5)) });
         let t = match kind {
             "ritual pool" | "shrine" => Template::Round,
             "reliquary" | "ossuary" => Template::Octagon,
             "chapel of rest" | "sunken chapel" => Template::Apse,
             _ => Template::Rect,
         };
-        out.push(Spec { kind, t, across: (4, 6), deep: (4, 5) });
+        out.push(Spec { kind, t, across: (4, up(6)), deep: (4, up(5)) });
     }
     let w = if wide { 2 } else { 1 };
-    out.push(Spec { kind: theme.passage, t: Template::Corridor, across: (w, w), deep: (3, 6) });
+    out.push(Spec { kind: theme.passage, t: Template::Corridor, across: (w, w), deep: (3, up(6)) });
     out.push(Spec { kind: theme.passage, t: Template::Corridor, across: (w, w), deep: (2, 4) });
     out
 }

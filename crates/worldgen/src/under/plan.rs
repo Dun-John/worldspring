@@ -47,6 +47,10 @@ pub(crate) struct Plan {
     pub(crate) water: Vec<[f32; 2]>,
     /// Line the passage's narrow galleries with burial niches when furnished (`kit::furnish`).
     pub(crate) niches: bool,
+    /// The share of its usual loops `kit::guard` adds (doors through shared walls, shortcuts): 1 but on catacombs.
+    pub(crate) loops: f64,
+    /// Most secret doors the level gets once its planner's are in (`kit::guard` adds none past it).
+    pub(crate) secrets: usize,
 }
 
 impl Plan {
@@ -71,6 +75,8 @@ impl Plan {
             shortcuts: Vec::new(),
             water: Vec::new(),
             niches: false,
+            loops: 1.0,
+            secrets: usize::MAX,
         }
     }
 

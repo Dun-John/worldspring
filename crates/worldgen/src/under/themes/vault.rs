@@ -6,7 +6,7 @@
 
 use super::keep::hub;
 use crate::core::rng::Pcg32;
-use crate::under::grow::{ROOMS_MAX, Spec, Template, boss_room, colonnade, dead_end, fallback, flood_room, grate, rooms, way_down};
+use crate::under::grow::{ROOMS_MAX, Spec, Template, boss_room, colonnade, dead_end, fallback, fill, flood_room, grate, rooms, way_down};
 use crate::under::*;
 
 #[allow(clippy::too_many_arguments)]
@@ -16,13 +16,15 @@ pub(crate) fn vault(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     let pick = |lo: usize, hi: usize, rng: &mut Pcg32| lo + rng.below((hi.max(lo) - lo + 1) as u32) as usize;
     let odd = |n: usize| n | 1;
     let cw = theme.corridor;
-    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * area).round() as usize).max(4);
+    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(4);
     let Some((mut g, core)) = hub(&mut p, passage, theme.first, Template::Rect, arrive, rng) else { return fallback(p, last) };
-    // The great halls (pillared) and a cistern: deep water.
+    g.spread = true;
+    // The great halls (pillared) and a cistern: deep water; more and longer halls on bigger sites.
     let mut halls: Vec<i16> = Vec::new();
     let mut near = vec![core];
-    for _ in 0..1 + (area >= 1.0 && rng.next_f64() < 0.6) as usize + (area >= 1.3) as usize {
-        let size = (odd(pick(7, 9, rng)), pick(9, 13, rng));
+    let sc = |n: usize| ((n as f64) * area.sqrt().max(1.0)).round() as usize;
+    for _ in 0..1 + (area >= 1.0 && rng.next_f64() < 0.6) as usize + (area >= 1.3) as usize + (area >= 2.0) as usize {
+        let size = (odd(pick(7, 9, rng)), pick(9, sc(13), rng));
         if let Some(h) = g.attach(&mut p, &near, "flooded hall", Template::Rect, size, cw, rng).or_else(|| g.attach(&mut p, &near, "flooded hall", Template::Rect, (7, 8), cw, rng)) {
             halls.push(g.pieces[h].room);
             near.push(h);
@@ -50,7 +52,7 @@ pub(crate) fn vault(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
         s("drowned barracks", Template::Rect, (3, 4), (3, 4)),
         s("cistern", Template::Round, (5, 5), (5, 5)),
         s("flooded hall", Template::Rect, (5, 7), (6, 9)),
-        s(theme.passage, Template::Corridor, (cw, cw), (3, 6)),
+        s(theme.passage, Template::Corridor, (cw, cw), (3, sc(6))),
         s(theme.passage, Template::Corridor, (cw, cw), (2, 4)),
     ];
     let have = rooms(&p, passage);

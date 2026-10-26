@@ -5,17 +5,20 @@
 //! walls when furnished: `Plan::niches`) meeting at small junction chambers in a rough grid from the way in, a few
 //! bigger rooms on the grid (bone chapel, ossuary, charnel pit, a crypt's burial hall at the end of its spine) and more
 //! off the galleries (sealed tombs behind hidden doors, burial niches, reliquary, embalming room). Crypts are small
-//! and ordered (mirrored on the level's axis); ossuaries bigger; catacombs the biggest grids, some crossings bare, and
-//! sometimes a flooded gallery (shallow, a little deep in the middle, a wading ledge round it). Mostly dry.
+//! and ordered (mirrored on the level's axis); ossuaries bigger; catacombs the biggest grids, laid less regularly
+//! (columns and rows a square off, some galleries off their crossings' middles, crossings left out, few loops and
+//! secret doors), some crossings bare, and sometimes a flooded gallery (shallow, a little deep in the middle, a wading
+//! ledge round it). Mostly dry. Big crypts and huge ossuaries reach the level's edges.
 //!
 //! Tombs (a barrow, after Dyson's Axehead Mound): a run mirrored on the axis through the way in: the entrance passage,
 //! an antechamber, the pillared guardian hall with side chambers in pairs (one a false tomb), a short passage on to
 //! the burial chamber at the end (on the deepest level the boss chamber, a dead end, behind a hidden door or an iron
 //! grate at times; locks fall where `kit::guard` puts them). Deeper levels go on with the run: a landing, a pillared
-//! burial hall with its side chambers, a tomb at the end holding the way down.
+//! burial hall with its side chambers, a tomb at the end holding the way down. Bigger barrows have more halls down
+//! the run, a second run across each passage between them.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, colonnade, dead_end, fallback, flood_room, mask, way_down};
+use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, colonnade, dead_end, fallback, fill, flood_room, mask, way_down};
 use crate::under::*;
 
 /// A small chamber where galleries meet.
@@ -27,7 +30,8 @@ fn pick(lo: usize, hi: usize, rng: &mut Pcg32) -> usize {
 
 /// How a theme's galleries are laid: the grid's pitch (squares between crossings), how far it reaches (columns in all,
 /// rows either side of the way in; 0 as far as the level goes), crossings kept, extra galleries (loops), crossings
-/// with no chamber, mirrored, big rooms on the grid.
+/// with no chamber, mirrored, big rooms on the grid, jittered (columns and rows a square off their places, some
+/// galleries a square off their crossings' middles).
 struct Grid {
     pitch: usize,
     cols: usize,
@@ -37,6 +41,7 @@ struct Grid {
     bare: f64,
     mirror: bool,
     bigs: usize,
+    jitter: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -46,12 +51,23 @@ pub(crate) fn crypt(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     p.niches = true;
     let (ax, ay) = (arrive % nx, arrive / nx);
     let big = area >= 1.0;
+    // (Big crypts and huge ossuaries: out to the level's edges.)
     let grid = match theme.key {
-        "crypt" => Grid { pitch: pick(6, 7, rng), cols: 3 + big as usize + depth.min(1), rows: 1, keep: 1.0, loops: 0.5, bare: 0.0, mirror: true, bigs: 1 },
-        "ossuary" => Grid { pitch: pick(6, 7, rng), cols: 4 + big as usize, rows: 1 + big as usize, keep: 0.9, loops: 0.35, bare: 0.15, mirror: false, bigs: 1 + (area >= 1.3) as usize },
-        _ => Grid { pitch: pick(6, 8, rng), cols: 0, rows: 0, keep: 0.85, loops: 0.4, bare: 0.3, mirror: false, bigs: 1 + big as usize + (area >= 1.6) as usize },
+        "crypt" if area > 1.0 => Grid { pitch: pick(6, 7, rng), cols: 0, rows: 1 + (area >= 2.0) as usize, keep: 1.0, loops: 0.5, bare: 0.0, mirror: true, bigs: 1, jitter: false },
+        "crypt" => Grid { pitch: pick(6, 7, rng), cols: 3 + big as usize + depth.min(1), rows: 1, keep: 1.0, loops: 0.5, bare: 0.0, mirror: true, bigs: 1, jitter: false },
+        "ossuary" => {
+            let edge = area >= 2.0;
+            Grid { pitch: pick(6, 7, rng), cols: if edge { 0 } else { 4 + big as usize }, rows: if edge { 0 } else { 1 + big as usize }, keep: 0.9, loops: 0.35, bare: 0.15, mirror: false, bigs: 1 + (area >= 1.3) as usize, jitter: false }
+        }
+        // (Catacombs: fewer loops, less regular: crossings and galleries a square off, more crossings left out.)
+        _ => Grid { pitch: pick(6, 8, rng), cols: 0, rows: 0, keep: 0.8, loops: 0.08, bare: 0.3, mirror: false, bigs: 1 + big as usize + (area >= 1.6) as usize, jitter: true },
     };
-    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * area).round() as usize).max(3);
+    if grid.jitter {
+        // (About half the loops `kit::guard` would add, and few secret doors.)
+        p.loops = 0.5;
+        p.secrets = 2 + (area >= 1.3) as usize;
+    }
+    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(3);
     // The way in: a room round the arrival (the grid's first crossing).
     let s = if depth == 0 && theme.key == "crypt" { 5 } else { 3 };
     let x0 = ax.saturating_sub(s / 2).clamp(1, nx.saturating_sub(s + 1).max(1));
@@ -89,6 +105,7 @@ pub(crate) fn crypt(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     for f in g.pieces.iter_mut().filter(|f| f.room >= 0 && p.rooms[f.room as usize].kind == "sealed tomb") {
         if let Some((a, b)) = f.door
             && rng.next_f64() < 0.6
+            && p.secret.len() < p.secrets
         {
             p.secret.insert((a.min(b), a.max(b)));
             f.open = false;
@@ -146,6 +163,27 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
     let (r_lo, r_hi) = span(cy0, ny, grid.rows, true);
     let (w, h) = ((c_hi - c_lo + 1) as usize, (r_hi - r_lo + 1) as usize);
     let at = |c: isize, r: isize| (r - r_lo) as usize * w + (c - c_lo) as usize;
+    // Where each column (row) of crossings lies: `pitch` apart; jittered, each a square off its place or not, the next
+    // at most a square further off (neighbours a pitch apart give or take a square), inside the ring of rock.
+    let line = |lo: isize, hi: isize, c0: usize, n: usize, rng: &mut Pcg32| -> Vec<usize> {
+        let mut o = vec![0isize; (hi - lo + 1) as usize];
+        if grid.jitter {
+            for dir in [1isize, -1] {
+                let (mut prev, mut c) = (0isize, dir);
+                while (lo..=hi).contains(&c) {
+                    let at0 = c0 as isize + c * pp;
+                    let v = (prev + rng.below(3) as isize - 1).clamp(-1, 1).clamp(2 - at0, n as isize - 3 - at0);
+                    o[(c - lo) as usize] = v;
+                    prev = v;
+                    c += dir;
+                }
+            }
+        }
+        (lo..=hi).map(|c| (c0 as isize + c * pp + o[(c - lo) as usize]) as usize).collect()
+    };
+    let xs = line(c_lo, c_hi, cx0, nx, rng);
+    let ys = line(r_lo, r_hi, cy0, ny, rng);
+    let pos = |(c, r): (isize, isize)| (xs[(c - c_lo) as usize], ys[(r - r_lo) as usize]);
     let inside = |c: isize, r: isize| (c_lo..=c_hi).contains(&c) && (r_lo..=r_hi).contains(&r);
     // (Mirrored: drawn for the rows on and above the axis, copied below.)
     let mirror = |r: isize| if grid.mirror { -r } else { r };
@@ -180,7 +218,7 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
     while !front.is_empty() {
         let e = front.swap_remove(rng.below(front.len() as u32) as usize);
         let (c, r) = e.1;
-        if !inside(c, r) || !half(r) || !kept[at(c, r)] || seen[at(c, r)] {
+        if !inside(c, r) || !half(r) || seen[at(c, r)] {
             continue;
         }
         seen[at(c, r)] = true;
@@ -196,6 +234,22 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
                 }
             }
         }
+    }
+    // Crossings left out at the tree's ends go (again till none is); those it passes through stay, bare.
+    loop {
+        let mut deg = vec![0usize; w * h];
+        for &(a, b) in &edges {
+            deg[at(a.0, a.1)] += 1;
+            deg[at(b.0, b.1)] += 1;
+        }
+        let gone: Vec<usize> = (0..w * h).filter(|&k| seen[k] && !kept[k] && deg[k] <= 1 && k != at(0, 0)).collect();
+        if gone.is_empty() {
+            break;
+        }
+        for k in gone {
+            seen[k] = false;
+        }
+        edges.retain(|&(a, b)| seen[at(a.0, a.1)] && seen[at(b.0, b.1)]);
     }
     if grid.mirror {
         for r in r_lo..0 {
@@ -236,6 +290,9 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
     halfs[at(0, 0)] = h0;
     piece[at(0, 0)] = 0;
     let bare: Vec<bool> = (0..w * h).map(|_| rng.next_f64() < grid.bare).collect();
+    // (Square-cornered crossings: a gallery may meet them a square off their middle.)
+    let mut junc = vec![false; w * h];
+    junc[at(0, 0)] = true;
     let big_draws: Vec<usize> = (0..bigs.len()).map(|_| rng.below(bigk.len() as u32) as usize).collect();
     for r in r_lo..=r_hi {
         for c in c_lo..=c_hi {
@@ -243,14 +300,14 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
             if !seen[k] || (c, r) == (0, 0) {
                 continue;
             }
-            let (cx, cy) = ((cx0 as isize + c * pp) as usize, (cy0 as isize + r * pp) as usize);
+            let (cx, cy) = pos((c, r));
             let mirrored = grid.mirror && r > 0 && inside(c, -r);
             let (kind, t, hb) = if let Some(b) = bigs.iter().position(|&q| q == (c, r)) {
                 let (kind, t) = bigk[big_draws[b]];
                 // (As big as the pitch and the ring of rock round the level allow.)
                 let room = [cx - 1, cy - 1, p.nx - 2 - cx, ny - 2 - cy].into_iter().min().unwrap_or(0);
                 (kind, t, (grid.pitch - 4).min(3).min(room))
-            } else if bare[if mirrored { at(c, -r) } else { k }] || p.rooms.len() + 12 >= ROOMS_GROWING {
+            } else if bare[if mirrored { at(c, -r) } else { k }] || !kept[k] || p.rooms.len() + 12 >= ROOMS_GROWING {
                 ("", Template::Corridor, 0)
             } else {
                 (JUNCTION, Template::Rect, 1)
@@ -264,6 +321,7 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
             halfs[k] = hb;
             if kind == JUNCTION {
                 junctions.push(g.pieces[i].room);
+                junc[k] = true;
             }
         }
     }
@@ -275,11 +333,13 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
         }
         // (Its west or north end first.)
         let ((ka, a), (kb, b)) = if a < b { ((ka, a), (kb, b)) } else { ((kb, b), (ka, a)) };
-        let (cx, cy) = ((cx0 as isize + a.0 * pp) as usize, (cy0 as isize + a.1 * pp) as usize);
+        let ((cx, cy), (bx, by)) = (pos(a), pos(b));
         let across = b.0 == a.0 + 1;
         let (ha, hb) = (halfs[ka], halfs[kb]);
-        let len = grid.pitch - ha - hb - 1;
-        let (x, y, gw, gh) = if across { (cx + ha + 1, cy, len, 1) } else { (cx, cy + ha + 1, 1, len) };
+        let len = if across { bx - cx } else { by - cy } - ha - hb - 1;
+        // (Jittered: some galleries between two junctions a square off their middles.)
+        let off = if grid.jitter && junc[ka] && junc[kb] && ha >= 1 && hb >= 1 && rng.next_f64() < 0.35 { if rng.next_f64() < 0.5 { 1 } else { usize::MAX } } else { 0 };
+        let (x, y, gw, gh) = if across { (cx + ha + 1, cy.wrapping_add(off), len, 1) } else { (cx.wrapping_add(off), cy + ha + 1, 1, len) };
         if len == 0 || g.seed(p, "", Template::Corridor, x, y, gw, gh).is_none() {
             continue;
         }
@@ -353,6 +413,7 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     let fwd = if ax < nx / 2 { Side::E } else { Side::W };
     let mut g = Grower::new(nx, ny, passage, Some(ay));
     g.cap = ROOMS_GROWING;
+    g.spread = true;
     let start = if depth == 0 {
         let len = pick(3, 5, rng);
         let x0 = if fwd == Side::E { ax.max(1) } else { (ax + 1).saturating_sub(len).max(1) };
@@ -375,14 +436,32 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     {
         at = a;
     }
-    let hall_kind = if depth == 0 { "guardian hall" } else { "burial hall" };
-    let (hw, hd) = (odd(pick(5, sc(7).max(5), rng)), pick(6, sc(10).max(6), rng));
-    let hall = run(&mut p, &mut g, at, hall_kind, Template::Rect, &[(hw, hd), (5, 6), (5, 5)]);
-    if let Some(hall) = hall {
+    // The halls down the run: one, more on bigger sites (a short passage between).
+    let many = 1 + (area > 1.0) as usize + (area >= 2.0) as usize;
+    let mut leads = Vec::new();
+    for h in 0..many {
+        let mut lead = None;
+        if h > 0 {
+            let Some(&c) = g.deck(&mut p, at, fwd, "", Template::Corridor, 1, pick(2, 3, rng), 0, true).first() else { break };
+            lead = Some(c);
+        }
+        let hall_kind = if depth == 0 && h == 0 { "guardian hall" } else { "burial hall" };
+        let (hw, hd) = (odd(pick(5, sc(7).max(5), rng)), pick(6, sc(10).max(6), rng));
+        let from = lead.unwrap_or(at);
+        let Some(hall) = run(&mut p, &mut g, from, hall_kind, Template::Rect, &[(hw, hd), (5, 6), (5, 5)]) else {
+            if lead.is_some() {
+                g.undo_last(&mut p);
+            }
+            break;
+        };
+        if let Some(c) = lead {
+            g.pieces[c].open = false;
+            leads.push(c);
+        }
         at = hall;
         // Side chambers in pairs off the hall's long walls (the antechamber's too on the top level).
         let f = g.pieces[hall];
-        let pairs = (f.w.max(f.h) / 5).clamp(1, 2);
+        let pairs = (f.w.max(f.h) / 5).clamp(1, 2 + (area > 1.0) as usize);
         for c in 0..pairs {
             let along = ((c + 1) * f.w / (pairs + 1)) as isize - (f.w / 2) as isize;
             let kind = ["tomb", "treasury", "embalming room"][rng.below(3) as usize];
@@ -390,6 +469,18 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
             for i in g.deck(&mut p, hall, Side::N, kind, Template::Rect, a, d, along, true) {
                 g.pieces[i].open = false;
                 sides.push((g.pieces[i].room, i));
+            }
+        }
+    }
+    // Big sites: a second run across each passage between halls, a passage either way to a burial hall (more grows
+    // off them).
+    for c in leads {
+        let Some(&n) = g.deck(&mut p, c, Side::N, "", Template::Corridor, 1, pick(3, 5, rng), 0, true).first() else { continue };
+        let laid = g.pieces.len();
+        let (a, d) = (odd(pick(5, sc(7).max(5), rng)), pick(5, sc(6).max(5), rng));
+        if [(a, d), (5, 5), (3, 4)].iter().all(|&(a, d)| g.deck(&mut p, n, Side::N, "burial hall", Template::Rect, a, d, 0, true).is_empty()) {
+            while g.pieces.len() > laid - 2 {
+                g.undo_last(&mut p);
             }
         }
     }
@@ -434,7 +525,7 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     }
     // More burial chambers in pairs, to the theme's count.
     let have = (0..p.rooms.len()).filter(|&r| r as i16 != passage).count();
-    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * area).round() as usize).max(4);
+    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(4);
     let specs = [
         Spec { kind: "tomb", t: Template::Rect, across: (3, 4), deep: (3, 4) },
         Spec { kind: "sealed tomb", t: Template::Rect, across: (3, 3), deep: (3, 3) },

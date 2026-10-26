@@ -6,7 +6,7 @@
 //! deep water in the middle), torture and guard rooms; the deepest ends in the boss chamber, a dead end. Mostly dry.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Template, boss_room, grate, rooms, specs, dead_end, fallback, flood_room, way_down};
+use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Template, boss_room, grate, rooms, specs, dead_end, fallback, fill, flood_room, way_down};
 use crate::under::*;
 
 /// A cell (and a solitary one), the row it opens off.
@@ -23,13 +23,14 @@ pub(crate) fn prison(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
     let pick = |lo: usize, hi: usize, rng: &mut Pcg32| lo + rng.below((hi.max(lo) - lo + 1) as u32) as usize;
     let odd = |n: usize| n | 1;
     let sc = |n: usize| ((n as f64) * area.sqrt()).round() as usize;
-    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * area).round() as usize).max(4);
+    let target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(4);
     let mut g;
     let mut boss = None;
     let mut wet = None;
     if depth == 0 {
         g = Grower::new(nx, ny, passage, Some(ay));
         g.cap = ROOMS_GROWING;
+        g.spread = true;
         // The gatehouse at the way in.
         let (gw, gh) = (pick(3, 4, rng), odd(pick(3, 5, rng)));
         let x0 = ax.saturating_sub(1).max(1);
@@ -62,7 +63,7 @@ pub(crate) fn prison(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
                 p.portcullis.insert(way_in);
             }
             // Cell blocks: a mirrored pair off the north and south of the ring, another east on bigger sites.
-            let long = pick(5, sc(9).max(5), rng);
+            let long = pick(sc(6).max(5), sc(10).max(5), rng);
             let rw = if area >= 1.0 && rng.next_f64() < 0.5 { 2 } else { 1 };
             let cell = if rng.next_f64() < 0.5 { (1, 2) } else { (2, 2) };
             let mut blocks = g.cell_block(&mut p, n, Side::N, 0, (ROW, rw, long), (CELL, cell.0, cell.1), true, true);
@@ -70,6 +71,24 @@ pub(crate) fn prison(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
                 // (Its grate only when it is the only block: a few grates a level.)
                 let gate = blocks.is_empty();
                 blocks.extend(g.cell_block(&mut p, e, Side::E, 0, (ROW, 1, pick(4, sc(8).max(4), rng)), (CELL, cell.0, cell.1), gate, true));
+            }
+            // Big sites: a wing on from the east block's end, a passage with a mirrored pair of blocks off it and one
+            // more on east.
+            if area > 1.3
+                && let Some(&east) = blocks.iter().find(|&&b| g.centred(b))
+            {
+                let len = pick(2, 4, rng);
+                if let Some(&c) = g.deck(&mut p, east, Side::E, "", Template::Corridor, 1, len, 0, true).first() {
+                    let wing = pick(sc(5).max(5), sc(8).max(5), rng);
+                    let mut more = g.cell_block(&mut p, c, Side::N, 0, (ROW, rw, wing), (CELL, cell.0, cell.1), false, true);
+                    more.extend(g.cell_block(&mut p, c, Side::E, 0, (ROW, 1, pick(4, sc(7).max(4), rng)), (CELL, cell.0, cell.1), false, true));
+                    if more.is_empty() {
+                        g.undo_last(&mut p);
+                    } else {
+                        g.pieces[c].open = false;
+                        blocks.extend(more);
+                    }
+                }
             }
             near = vec![e, n, s, w];
             near.extend(blocks);
@@ -93,15 +112,19 @@ pub(crate) fn prison(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         let y = ay.saturating_sub(s / 2).clamp(1, ny.saturating_sub(s + 1).max(1));
         g = Grower::new(nx, ny, passage, None);
         g.cap = ROOMS_GROWING;
+        g.spread = true;
         let Some(core) = g.seed(&mut p, "guard room", Template::Rect, x, y, s, s).or_else(|| g.seed(&mut p, "guard room", Template::Rect, ax, ay, 1, 1)) else {
             return fallback(p, last);
         };
         let cw = theme.corridor;
         let (s0, long) = (rng.below(4) as usize, pick(4, 7, rng));
         let mut put = Vec::new();
+        // (One block of solitary cells; two on big sites.)
+        let want = 1 + (area > 1.3) as usize;
         for k in 0..4 {
-            put = g.cell_block(&mut p, core, Side::ALL[(s0 + k) % 4], 0, (ROW, 1, long), (SOLITARY, 1, 2), true, false);
-            if !put.is_empty() {
+            let b = g.cell_block(&mut p, core, Side::ALL[(s0 + k) % 4], 0, (ROW, 1, long), (SOLITARY, 1, 2), put.is_empty(), false);
+            put.extend(b);
+            if put.len() >= want {
                 break;
             }
         }

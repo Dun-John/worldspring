@@ -8,10 +8,10 @@
 //! Undercroft (`undercroft`, below a sewer section): the drain chamber at the way down from the sewers, cisterns
 //! (pillared; sometimes flooded, deep water with a wading ledge round it), overflow chambers, a smugglers' cache
 //! (sometimes behind a hidden door), an old vault, a rat warren, sometimes a flooded hall crossed by a bridge or
-//! stepping stones; culverts among them.
+//! stepping stones; culverts among them, and long culverts out across the section's grid with chambers along them.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Template, boss_room, grate, rooms, specs, colonnade, dead_end, fallback, flood_room, way_down};
+use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Template, boss_room, grate, rooms, specs, colonnade, dead_end, fallback, fill, flood_room, way_down};
 use crate::under::*;
 
 const CELL: &str = "cell";
@@ -23,11 +23,12 @@ pub(crate) fn keep(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     let passage = p.room(theme.passage, 0.0);
     let pick = |lo: usize, hi: usize, rng: &mut Pcg32| lo + rng.below((hi.max(lo) - lo + 1) as u32) as usize;
     let cw = theme.corridor;
-    let mut target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * area).round() as usize).max(4);
+    let mut target = (((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(4);
     if theme.sprawl {
         target = target.max(nx * ny / 140).min(40);
     }
     let Some((mut g, core)) = hub(&mut p, passage, theme.first, Template::Rect, arrive, rng) else { return fallback(p, last) };
+    g.spread = theme.sprawl;
     let mut boss = None;
     let mut pools: Vec<(i16, (f64, f64), bool)> = Vec::new();
     let mut pillared = Vec::new();
@@ -104,11 +105,19 @@ pub(crate) fn undercroft(nx: usize, ny: usize, arrive: usize, last: bool, theme:
     let passage = p.room(theme.passage, 0.0);
     let pick = |lo: usize, hi: usize, rng: &mut Pcg32| lo + rng.below((hi.max(lo) - lo + 1) as u32) as usize;
     let cw = theme.corridor;
-    let target = (theme.rooms.0 + rng.below(theme.rooms.1) as usize).max(4);
+    // (Twice the theme's rooms, spread over the section's whole grid.)
+    let target = 2 * (theme.rooms.0 + rng.below(theme.rooms.1) as usize).max(4);
     let t = if rng.next_f64() < 0.5 { Template::Round } else { Template::Rect };
     let Some((mut g, core)) = hub(&mut p, passage, theme.first, t, arrive, rng) else { return fallback(p, last) };
+    g.spread = true;
     let (mut pools, mut pillared): (Vec<(i16, (f64, f64), bool)>, Vec<(i16, usize)>) = (Vec::new(), Vec::new());
     let near = vec![core];
+    // Culverts out across the section's grid: towards its far corner and the two others, rooms along them.
+    let (ax, ay) = (arrive % nx, arrive / nx);
+    let (fx, fy) = (if ax < nx / 2 { nx - 8 } else { 7 }, if ay < ny / 2 { ny - 8 } else { 7 });
+    for to in [(fx, fy), (fx, ay), (ax, fy)] {
+        g.reach(&mut p, core, to, &["overflow chamber", "old vault", "overflow chamber"], cw, rng);
+    }
     // Cisterns: pillared halls, sometimes flooded (deep, a wading ledge round), else puddled.
     for i in 0..pick(1, 2, rng) {
         let (a, d) = (7 + 2 * rng.below(2) as usize, pick(7, 11, rng));
@@ -148,7 +157,9 @@ pub(crate) fn undercroft(nx: usize, ny: usize, arrive: usize, last: bool, theme:
     {
         pools.push((g.pieces[c].room, (-1.0, 0.2), false));
     }
-    let specs = specs(&["overflow chamber", "old vault", "rat warren", "cistern", "smugglers' cache"], cw, ((4, 7), (4, 6)));
+    let mut specs = specs(&["overflow chamber", "old vault", "rat warren", "cistern", "smugglers' cache"], cw, ((4, 7), (4, 6)));
+    // (Long culverts out across the grid.)
+    specs.push(crate::under::grow::Spec { kind: "", t: Template::Corridor, across: (cw, cw), deep: (6, 14) });
     let have = rooms(&p, passage);
     g.grow(&mut p, &specs, target.saturating_sub(have), false, rng);
     g.cap = ROOMS_MAX;

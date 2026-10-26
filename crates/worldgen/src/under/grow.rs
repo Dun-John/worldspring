@@ -109,6 +109,9 @@ pub(crate) struct Grower {
     /// At most this many rooms on the level (a design's text names 75: `design::SYMBOLS`); cells keep `CELLS_LEAVE`
     /// of them for other rooms.
     pub(crate) cap: usize,
+    /// Grow towards the whole level (bigger sites fill their grid): most tries aim at a random square and grow from
+    /// the open piece nearest it, out of its side facing it.
+    pub(crate) spread: bool,
     nx: usize,
     ny: usize,
 }
@@ -133,7 +136,7 @@ struct Place {
 
 impl Grower {
     pub(crate) fn new(nx: usize, ny: usize, passage: i16, axis: Option<usize>) -> Grower {
-        Grower { pieces: Vec::new(), axis, passage, cap: usize::MAX, nx, ny }
+        Grower { pieces: Vec::new(), axis, passage, cap: usize::MAX, spread: false, nx, ny }
     }
 
     /// Whether a box's template squares all lie on rock inside the ring of rock round the level.
@@ -277,8 +280,7 @@ impl Grower {
             if open.is_empty() {
                 break;
             }
-            let from = open[rng.below(open.len() as u32) as usize];
-            let side = Side::ALL[rng.below(4) as usize];
+            let (from, side) = if self.spread && rng.next_f64() < 0.7 { self.aim(p, &open, rng) } else { (open[rng.below(open.len() as u32) as usize], Side::ALL[rng.below(4) as usize]) };
             // (A kind the level has already drawn again less often.)
             let mut s = specs[rng.below(specs.len() as u32) as usize];
             for _ in 0..3 {
@@ -324,6 +326,38 @@ impl Grower {
         made
     }
 
+    /// Where a spreading try grows from: a random square of the level (in the rock, mostly), the open piece nearest it
+    /// (one of the nearest three), and that piece's side facing it.
+    fn aim(&self, p: &Plan, open: &[usize], rng: &mut Pcg32) -> (usize, Side) {
+        // (Drawn again, a few times, while it lies within 3 squares of a room: out into the rock.)
+        let mut t = (0, 0);
+        for _ in 0..4 {
+            t = (1 + rng.below(self.nx as u32 - 2) as usize, 1 + rng.below(self.ny as u32 - 2) as usize);
+            let (x0, y0) = (t.0.saturating_sub(3), t.1.saturating_sub(3));
+            if (y0..(t.1 + 4).min(self.ny)).all(|j| (x0..(t.0 + 4).min(self.nx)).all(|i| p.cells[j * self.nx + i] < 0)) {
+                break;
+            }
+        }
+        let (tx, ty) = (t.0 as isize, t.1 as isize);
+        let centre = |i: usize| {
+            let f = &self.pieces[i];
+            ((2 * f.x + f.w) as isize / 2, (2 * f.y + f.h) as isize / 2)
+        };
+        let mut near: Vec<(isize, usize)> = open
+            .iter()
+            .map(|&i| {
+                let (cx, cy) = centre(i);
+                ((cx - tx).abs() + (cy - ty).abs(), i)
+            })
+            .collect();
+        near.sort_unstable();
+        let from = near[rng.below(near.len().min(3) as u32) as usize].1;
+        let (cx, cy) = centre(from);
+        let (dx, dy) = (tx - cx, ty - cy);
+        let side = if dx.abs() >= dy.abs() { if dx >= 0 { Side::E } else { Side::W } } else if dy >= 0 { Side::S } else { Side::N };
+        (from, side)
+    }
+
     /// `deck` with sizes drawn from a spec's ranges and an offset along the wall; a room grown along the axis from a
     /// piece centred on it is centred too (odd across).
     fn random_deck(&mut self, p: &mut Plan, from: usize, side: Side, s: &Spec, mirror: bool, rng: &mut Pcg32) -> Vec<usize> {
@@ -347,8 +381,45 @@ impl Grower {
 
 /// Kits of rooms for prisons, keeps and undercrofts: rows of cells off a straight block, rooms put where they fit.
 impl Grower {
+    /// A run of corridors (`cw` wide) and rooms (one of `kinds` in turn, 4-6 squares) from piece `from` out towards
+    /// square `to`, a step at a time out of the side facing it (else the other way towards it) till it lies near or
+    /// nothing more fits. The rooms laid.
+    pub(crate) fn reach(&mut self, p: &mut Plan, from: usize, to: (usize, usize), kinds: &[&'static str], cw: usize, rng: &mut Pcg32) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut at = from;
+        for step in 0..12 {
+            let f = self.pieces[at];
+            let (cx, cy) = ((2 * f.x + f.w) as isize / 2, (2 * f.y + f.h) as isize / 2);
+            let (dx, dy) = (to.0 as isize - cx, to.1 as isize - cy);
+            if dx.abs() + dy.abs() < 10 {
+                break;
+            }
+            let h = if dx >= 0 { Side::E } else { Side::W };
+            let v = if dy >= 0 { Side::S } else { Side::N };
+            let sides = if dx.abs() >= dy.abs() { [h, v] } else { [v, h] };
+            let kind = kinds[step % kinds.len()];
+            let mut next = None;
+            for side in sides {
+                let far = if side.across_x() { dy.unsigned_abs() } else { dx.unsigned_abs() };
+                let len = (6 + rng.below(9) as usize).min(far.saturating_sub(3)).max(2);
+                let Some(&c) = self.deck(p, at, side, "", Template::Corridor, cw, len, 0, false).first() else { continue };
+                let (a, d) = (4 + rng.below(3) as usize, 4 + rng.below(3) as usize);
+                if let Some(&r) = self.deck(p, c, side, kind, Template::Rect, a, d, 0, false).first() {
+                    self.pieces[c].open = false;
+                    next = Some(r);
+                    break;
+                }
+                self.undo_last(p);
+            }
+            let Some(r) = next else { break };
+            out.push(r);
+            at = r;
+        }
+        out
+    }
+
     /// Take back the last piece laid (its squares were rock, its door goes; a room's def too).
-    fn undo_last(&mut self, p: &mut Plan) {
+    pub(crate) fn undo_last(&mut self, p: &mut Plan) {
         let Some(f) = self.pieces.pop() else { return };
         for j in f.y..f.y + f.h {
             for i in f.x..f.x + f.w {
@@ -574,6 +645,12 @@ pub(crate) fn dead_end(p: &Plan, ny: usize) -> Option<i16> {
         })
         .max_by_key(|&k| (dist[k], std::cmp::Reverse(k)))
         .map(|k| p.cells[k])
+}
+
+/// How many times a medium site's rooms a site gets, its grid `area` times a medium one's: more than its area on big
+/// sites, so they fill their grids.
+pub(crate) fn fill(area: f64) -> f64 {
+    if area > 1.0 { area * area.sqrt() } else { area }
 }
 
 /// A level the grower couldn't start (no room round the arrival): one square, the way on.

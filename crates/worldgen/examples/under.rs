@@ -5,7 +5,8 @@
 //! each). TEXT=1 prints the design's text form instead (`under::design::to_text`, what agents read and write with
 //! get/set_site_design). MAKE=theme[:size[:levels]][,...] adds created sites of those themes on dry land (as the vital
 //! test does) and prints only them (e.g. MAKE=temple:large:3,sunken_temple).
-//! LEVEL=n prints only level n (1 the top); ROOMS=1 leaves the furniture out. `keep` / `undercroft` print a keep's deep dungeons (`k:`) / a sewer
+//! LEVEL=n prints only level n (1 the top); ROOMS=1 leaves the furniture out; BBOX=1 prints, instead of the plans, the share
+//! of the grid each level's rooms span (their bounding box). `keep` / `undercroft` print a keep's deep dungeons (`k:`) / a sewer
 //! section with a grate and its undercroft below (`w:`).
 //! Terrain tools on the printed site, after generation (`under::water`/`chasm`/`rubble_slope`; generation untouched):
 //! WATER=wet|flooded, CHASM=level|room (the biggest room's), SPAN=bridge|stones (default bridge), RUBBLE=1 (a slope in
@@ -118,6 +119,25 @@ fn main() {
             );
             if !unreached.is_empty() {
                 println!("terrain: unreached squares per level (deepest first) {unreached:?}");
+            }
+            // BBOX=1: per level, the share of the grid its rooms' bounding box covers (top first), no plan.
+            if std::env::var("BBOX").is_ok() {
+                let shares: Vec<String> = it
+                    .levels
+                    .iter()
+                    .rev()
+                    .map(|lv| {
+                        let (mut x0, mut y0, mut x1, mut y1) = (it.nx, it.ny, 0, 0);
+                        for (k, _) in lv.cells.iter().enumerate().filter(|(_, c)| **c >= 0) {
+                            let (i, j) = (k % it.nx, k / it.nx);
+                            (x0, y0, x1, y1) = (x0.min(i), y0.min(j), x1.max(i), y1.max(j));
+                        }
+                        let (w, h) = ((x1 + 1).saturating_sub(x0), (y1 + 1).saturating_sub(y0));
+                        format!("{:.2} ({w}x{h}, {} rooms)", (w * h) as f64 / ((it.nx - 2) * (it.ny - 2)) as f64, lv.rooms.len())
+                    })
+                    .collect();
+                println!("   bbox {}", shares.join(" | "));
+                continue;
             }
             if std::env::var("TEXT").is_ok() {
                 let d = worldgen::under::design::SiteDesign::from_interior(&it);
