@@ -189,6 +189,8 @@ function terrainRooms(fn: 'dungeon' | 'cave'): Interior {
     [7, 6, [item('rubble_slope', 1, 0, 5, 3)]],
     [9, 7, [item('water_shallow', 0, 1, 9, 5), item('water_deep', 1, 2, 7, 3), item('rope_bridge', 0, 3, 9, 1), item('stepping_stone', 6, 1, 1, 1), item('stepping_stone', 6, 2, 1, 1), item('stepping_stone', 7, 4, 1, 1), item('stepping_stone', 6, 5, 1, 1)]],
     [7, 7, [item('chasm', 0, 2, 7, 3), item('rope_bridge', 3, 1, 1, 5)]],
+    [7, 7, [item('chasm', 0, 2, 7, 3), item('stone_bridge', 0, 3, 7, 1)]],
+    [7, 7, [item('chasm', 2, 0, 3, 7), item('stone_bridge', 3, 0, 1, 7)]],
   ];
   // Two rows: the four kinds, then the crossings.
   const rows = [rooms.slice(0, 4), rooms.slice(4)];

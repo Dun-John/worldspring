@@ -40,8 +40,9 @@ export const TERRAIN_CHANNEL: Record<string, number> = { water_shallow: 0, water
 export const SQUARE_SITES = new Set(['dungeon', 'crypt', 'catacombs', 'deep dungeons']);
 
 /** Floor material for the shader: 0 cave rock, 1 basalt, 2 mine earth, 3 sewer brick,
- * 4 flagstones, 5 boss flagstones, 6 crypt flagstones, 7 marble, 8 hewn blocks, 9 ice. */
+ * 4 flagstones, 5 boss flagstones, 6 crypt flagstones, 7 marble, 8 hewn blocks, 9 ice, 10 the cult's dark ring flagstones. */
 export function materialOf(site: string, kind: string, theme?: string): number {
+  if (kind === 'ring corridor') return 10;
   if (kind === 'sewer tunnel' || kind === 'service passage') return 3;
   if (theme === 'ice') return 9;
   if (site === 'cave') return 0;

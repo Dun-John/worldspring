@@ -73,7 +73,7 @@
   const LOCKS = [1, 2, 3, 4, 5, 6, 7];
   const TERRAINS: [string, string][][] = [
     [['water_shallow', 'Shallow water'], ['water_deep', 'Deep water'], ['chasm', 'Chasm'], ['rubble_slope', 'Rubble slope']],
-    [['rope_bridge', 'Rope bridge'], ['stepping_stone', 'Stepping stones'], ['', 'Clear']],
+    [['rope_bridge', 'Rope bridge'], ['stone_bridge', 'Stone bridge'], ['stepping_stone', 'Stepping stones'], ['', 'Clear']],
   ];
   const cap = (k: string) => k.charAt(0).toUpperCase() + k.slice(1);
 

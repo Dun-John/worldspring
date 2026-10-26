@@ -42,7 +42,7 @@ const BY_GROUP: Record<string, string[]> = {
   'Remains & clutter': ['bones', 'skeleton', 'skulls', 'rubble', 'collapsed_wall', 'debris', 'cobweb', 'banner', 'rug', 'rat_nest', 'scorched'],
   'Traps & hazards': ['trap', 'pit', 'cave_in', 'vent', 'lava'],
   'Locks & keys': ['key'],
-  Terrain: ['water_shallow', 'water_deep', 'chasm', 'rubble_slope', 'rope_bridge', 'stepping_stone'],
+  Terrain: ['water_shallow', 'water_deep', 'chasm', 'rubble_slope', 'rope_bridge', 'stone_bridge', 'stepping_stone'],
   'Ways & fixtures': ['exit', 'up', 'down', 'tunnel', 'ladder', 'pipe', 'well', 'trapdoor', 'spiral_stair', 'link_down', 'pillar', 'barricade'],
 };
 

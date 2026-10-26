@@ -38,7 +38,7 @@ export const dmOnlyHazard = (rules: string | null | undefined) => !!rules && rul
 
 /** Underground terrain that blocks movement (deep water, chasms) and what one walks on over it. */
 const GAPS = new Set(['water_deep', 'chasm']);
-const SPANS = new Set(['rope_bridge', 'stepping_stone']);
+const SPANS = new Set(['rope_bridge', 'stone_bridge', 'stepping_stone']);
 
 /**
  * A level of a building or site: rooms, walls, and doors that are shut (`closed`, by index

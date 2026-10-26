@@ -52,7 +52,7 @@ export const lockColor = (n: number) => LOCK_COLORS[n >= 0 && n < LOCK_COLORS.le
 
 /** Underground terrain (`kit::TERRAIN`) drawn on the floor under everything else, and the spans over it (`kit::SPANS`). */
 const TERRAIN_KINDS = new Set(['water_shallow', 'water_deep', 'chasm', 'rubble_slope']);
-const SPAN_KINDS = new Set(['rope_bridge', 'stepping_stone']);
+const SPAN_KINDS = new Set(['rope_bridge', 'stone_bridge', 'stepping_stone']);
 const hash2 = (i: number, j: number, k: number) => {
   const v = Math.sin(i * 127.1 + j * 311.7 + k * 74.7) * 43758.5453;
   return v - Math.floor(v);
@@ -1680,6 +1680,34 @@ export class InteriorLayer {
         for (let t = 1; t < len; t++) g.moveTo(...at(t, 0.04)).lineTo(...at(t, span - 0.04));
         for (let b = 1; b < span; b++) g.moveTo(...at(0.12, b)).lineTo(...at(len - 0.12, b));
         g.stroke({ width: 0.02, color: INK, alpha: 0.35 });
+        break;
+      }
+      case 'stone_bridge': {
+        // Dressed slabs across the way it runs (its long side), a low parapet along both edges (capped
+        // blocks, inked), the ends lying on the banks; the 5-ft grid faint over the deck.
+        const along = w >= h;
+        const [len, span] = along ? [w, h] : [h, w];
+        const at = (a: number, b: number): [number, number] => (along ? [x + a, y + b] : [x + b, y + a]);
+        const quad = (a0: number, b0: number, a1: number, b1: number) => [...at(a0, b0), ...at(a1, b0), ...at(a1, b1), ...at(a0, b1)];
+        const wall = 0.2;
+        const per = 2;
+        for (let k = 0; k < Math.round(len * per); k++) {
+          for (let r = 0; r < 2 * span; r++) {
+            const off = (k + r) % 2 ? 0.05 : 0;
+            const [a0, a1] = [k / per + 0.015 + off * 0.5, (k + 1) / per - 0.015];
+            const [b0, b1] = [wall + (r * (span - 2 * wall)) / (2 * span), wall + (r + 1) * (span - 2 * wall) / (2 * span)];
+            const tone = hash2(x * 5 + k, y * 3 + r, 41);
+            g.poly(quad(a0, b0, a1, b1)).fill(tone < 0.33 ? 0xa39e92 : tone < 0.66 ? 0x9a958a : 0xaaa598).stroke({ width: 0.02, color: INK, alpha: 0.7, join: 'round' });
+          }
+        }
+        for (const b0 of [0, span - wall]) {
+          g.poly(quad(0, b0, len, b0 + wall)).fill(0x77726a).stroke({ width: 0.035, color: INK, join: 'round' });
+          for (let t = 0; t < len; t += 0.5) g.poly(quad(t + 0.02, b0 + 0.02, t + 0.48, b0 + wall - 0.02)).fill(0x8f8a7f).stroke({ width: 0.015, color: INK, alpha: 0.6 });
+          g.poly(quad(0.02, b0 + (b0 ? 0.02 : wall - 0.05), len - 0.02, b0 + (b0 ? 0.05 : wall - 0.02))).fill({ color: 0xc4bfb2, alpha: 0.8 });
+        }
+        for (let t = 1; t < len; t++) g.moveTo(...at(t, wall)).lineTo(...at(t, span - wall));
+        for (let b = 1; b < span; b++) g.moveTo(...at(0, b)).lineTo(...at(len, b));
+        g.stroke({ width: 0.02, color: INK, alpha: 0.3 });
         break;
       }
       case 'stepping_stone':

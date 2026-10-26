@@ -234,7 +234,7 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         c += vec3(0.15) * smoothstep(0.94, 0.99, vnoise(p * 8.0));
     } else {
         // Flagstones: rows of irregular stones; boss chambers larger and darker, crypts dusty.
-        float scale = mat == 5 ? 0.7 : 1.0;
+        float scale = mat == 5 ? 0.7 : mat == 10 ? 0.85 : 1.0;
         vec2 f = q * vec2(1.0, 1.35) * scale;
         float row = floor(f.y);
         f.x += 0.5 * mod(row, 2.0) + 0.17 * sin(row * 3.1);
@@ -243,7 +243,7 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         float edge = min(min(g.x, 1.0 - g.x) * 1.35, min(g.y, 1.0 - g.y));
         edge += 0.04 * (vnoise(p * 6.0) - 0.5);
         float mortar = 1.0 - smoothstep(0.02, 0.07, edge);
-        vec3 stone = mat == 5 ? vec3(0.44, 0.39, 0.37) : mat == 6 ? vec3(0.60, 0.56, 0.48) : vec3(0.58, 0.55, 0.50);
+        vec3 stone = mat == 5 ? vec3(0.44, 0.39, 0.37) : mat == 6 ? vec3(0.60, 0.56, 0.48) : mat == 10 ? vec3(0.30, 0.28, 0.30) : vec3(0.58, 0.55, 0.50);
         c = stone * (0.8 + 0.32 * hash21(cell + var)) * (0.9 + 0.15 * vnoise(p * 3.0));
         c = mix(c, INK * 1.6, mortar * 0.75);
     }

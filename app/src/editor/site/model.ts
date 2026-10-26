@@ -113,7 +113,7 @@ export function propAt(d: SiteDesign, li: number, x: number, y: number): number 
 // Underground terrain (`under::kit::TERRAIN`, `SPANS`): lies on the floor, its full w × h; a span lies over it. A square
 // holds one item, or one terrain and one span.
 export const TERRAIN = new Set(['water_shallow', 'water_deep', 'chasm', 'rubble_slope']);
-export const SPANS = new Set(['rope_bridge', 'stepping_stone']);
+export const SPANS = new Set(['rope_bridge', 'stone_bridge', 'stepping_stone']);
 const stacks = (a: string, b: string) => (TERRAIN.has(a) && SPANS.has(b)) || (SPANS.has(a) && TERRAIN.has(b));
 
 /** Squares (indices) merged into rectangles, greedily: along a row as far as they go, then down while the whole run is there. */
