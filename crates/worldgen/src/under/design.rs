@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use super::{BOSS, KEEP_DUNGEON, LEVEL_FT, MAX_LEVELS, PROPS, Plan, SPANS, TERRAIN, THEMES, UNDERCROFT, UnderKind, blocked_squares, furnish_room, item, kit, lava, neighbours};
 use crate::World;
 use crate::core::rng::{Pcg32, hash3};
-use crate::interior::design::{BUILDING, furniture_kind};
+use crate::interior::design::{BUILDING, PORTCULLIS, furniture_kind};
 use crate::interior::{Interior, Item, SQUARE_FT, Sprites, design_kind, sprite_asset};
 use crate::t0::T0;
 use crate::town;
@@ -60,7 +60,7 @@ pub struct DesignLevel {
     pub rooms: Vec<DesignRoom>,
     /// Doors: x, y, side (0: between the square and the one east of it, 1: south; a building's
     /// also 2 west, 3 north), flags (1 secret; a building's door to the outside: 2 front, 4 back, 8 arch;
-    /// a locked door's colour, 1-7, shifted 4 up: `(lock & 7) << 4`).
+    /// a locked door's colour, 1-7, shifted 4 up: `(lock & 7) << 4`; 128 a portcullis, between two rooms).
     pub doors: Vec<[u16; 4]>,
     /// Everything standing on the floor, the ways in, up and down too (kinds `exit`, `up`,
     /// `down`), in order.
@@ -254,7 +254,7 @@ impl SiteDesign {
                     .doors
                     .iter()
                     .map(|d| {
-                        let flags = (d.kind == "secret") as u16 | ((d.lock & 7) as u16) << 4;
+                        let flags = (d.kind == "secret") as u16 | ((d.lock & 7) as u16) << 4 | if d.kind == "portcullis" { PORTCULLIS } else { 0 };
                         let (x, y) = (d.a[0].min(d.b[0]) as u16, d.a[1].min(d.b[1]) as u16);
                         // A horizontal edge lies between the squares above and below it.
                         if d.a[1] == d.b[1] { [x, y - 1, 1, flags] } else { [x - 1, y, 0, flags] }
@@ -420,6 +420,8 @@ impl SiteDesign {
             p.door(a, b);
             if flags & 1 != 0 {
                 p.secret.insert((a, b));
+            } else if flags & PORTCULLIS != 0 {
+                p.portcullis.insert((a, b));
             }
             if (flags >> 4) & 7 != 0 {
                 p.locks.insert((a, b), ((flags >> 4) & 7) as u8);
@@ -1288,6 +1290,7 @@ pub fn to_text(d: &SiteDesign, name: &dyn Fn(usize, usize) -> Option<String>) ->
                     f if f & 8 != 0 => " arch",
                     _ => " back",
                 };
+                let flag = if d[3] & PORTCULLIS != 0 && d[3] & 15 == 0 { " portcullis" } else { flag };
                 let lock = match (d[3] >> 4) & 7 {
                     0 => String::new(),
                     c => format!(" locked {c}"),
@@ -1557,7 +1560,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             let auto = list.trim() == "auto";
             lv.doors.retain(|d| building && auto && d[3] & 6 != 0);
             if !auto {
-                let how = if building { "x,y e|s|w|n [secret|front|back]" } else { "x,y e|s [secret] [locked 1-7]" };
+                let how = if building { "x,y e|s|w|n [secret|portcullis|front|back]" } else { "x,y e|s [secret|portcullis] [locked 1-7]" };
                 for e in list.split(';').map(str::trim).filter(|e| !e.is_empty()) {
                     let mut w = e.split_whitespace();
                     let (xy, side) = (w.next().unwrap_or(""), w.next().unwrap_or(""));
@@ -1596,6 +1599,7 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                     let flags = match flag {
                         None => 0,
                         Some("secret") => 1,
+                        Some("portcullis") => PORTCULLIS,
                         Some("front") if building => 2,
                         Some("back") if building => 4,
                         Some("arch") if building => 8,

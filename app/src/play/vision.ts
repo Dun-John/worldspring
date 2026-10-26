@@ -22,6 +22,9 @@ export interface TacticalGrid {
   wallW(i: number, j: number): boolean;
   /** ... on its north edge (the line y = j). */
   wallN(i: number, j: number): boolean;
+  /** Bars on the west / north edge of square (i, j): a shut portcullis, which stops a step but not the eye. */
+  barW?(i: number, j: number): boolean;
+  barN?(i: number, j: number): boolean;
   /** x0, y0, x1, y1 (squares; exclusive), or null where unbounded. */
   bounds: [number, number, number, number] | null;
   /** Fill a window's flags and heights at once (faster than square by square), if it can. */
@@ -39,7 +42,7 @@ const SPANS = new Set(['rope_bridge', 'stepping_stone']);
 
 /**
  * A level of a building or site: rooms, walls, and doors that are shut (`closed`, by index
- * into the level's doors; secret doors are shut until opened).
+ * into the level's doors; secret doors are shut until opened; a shut portcullis stops a step, not the eye).
  */
 export function interiorGrid(it: Interior, li: number, closed: (door: number) => boolean): TacticalGrid {
   const lv = it.levels[li];
@@ -72,20 +75,21 @@ export function interiorGrid(it: Interior, li: number, closed: (door: number) =>
   }
   const wv = new Uint8Array((nx + 1) * ny);
   const wh = new Uint8Array(nx * (ny + 1));
-  const line = (a: [number, number], b: [number, number]) => {
+  // (Shut portcullises: bars on the edge, 1 in `wv`/`wh` is a wall, 2 bars.)
+  const line = (a: [number, number], b: [number, number], v = 1) => {
     if (a[0] === b[0]) {
       const x = Math.round(a[0]);
-      for (let j = Math.round(Math.min(a[1], b[1])); j < Math.round(Math.max(a[1], b[1])); j++) if (j >= 0 && j < ny && x >= 0 && x <= nx) wv[j * (nx + 1) + x] = 1;
+      for (let j = Math.round(Math.min(a[1], b[1])); j < Math.round(Math.max(a[1], b[1])); j++) if (j >= 0 && j < ny && x >= 0 && x <= nx) wv[j * (nx + 1) + x] ||= v;
     } else {
       const y = Math.round(a[1]);
-      for (let i = Math.round(Math.min(a[0], b[0])); i < Math.round(Math.max(a[0], b[0])); i++) if (i >= 0 && i < nx && y >= 0 && y <= ny) wh[y * nx + i] = 1;
+      for (let i = Math.round(Math.min(a[0], b[0])); i < Math.round(Math.max(a[0], b[0])); i++) if (i >= 0 && i < nx && y >= 0 && y <= ny) wh[y * nx + i] ||= v;
     }
   };
   // (Railings over an open hall don't stop the eye; its open height stops a step.)
   // (A town hall's open arcade: open between its piers, which stand on the squares' corners.)
   for (const w of lv.walls) if (!w.rail && !w.arcade) line(w.a, w.b);
-  // (A coaching inn's carriage arch never shut.)
-  lv.doors.forEach((d, k) => d.kind !== 'arch' && closed(k) && line(d.a, d.b));
+  // (A coaching inn's carriage arch never shut; a shut portcullis is bars, seen through.)
+  lv.doors.forEach((d, k) => d.kind !== 'arch' && closed(k) && line(d.a, d.b, d.kind === 'portcullis' ? 2 : 1));
   // The street outside a carriage arch or an open arcade (a strip `APRON` squares deep in front of it, off the
   // floor): open ground, walked onto and seen across (a token put there is out in the street).
   const R = APRON;
@@ -126,6 +130,8 @@ export function interiorGrid(it: Interior, li: number, closed: (door: number) =>
     },
     wallW: (i, j) => i >= 0 && i <= nx && j >= 0 && j < ny && wv[j * (nx + 1) + i] === 1,
     wallN: (i, j) => i >= 0 && i < nx && j >= 0 && j <= ny && wh[j * nx + i] === 1,
+    barW: (i, j) => i >= 0 && i <= nx && j >= 0 && j < ny && wv[j * (nx + 1) + i] === 2,
+    barN: (i, j) => i >= 0 && i < nx && j >= 0 && j <= ny && wh[j * nx + i] === 2,
     bounds: aproned ? [-R, -R, nx + R, ny + R] : [0, 0, nx, ny],
   };
 }

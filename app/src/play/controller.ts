@@ -1581,6 +1581,8 @@ function gather(grid: TacticalGrid | null, start: [number, number], n: number, t
       if (seen.has(key)) continue;
       // Not through a wall or a shut door.
       if (grid && (di === 1 ? grid.wallW(a, j) : di === -1 ? grid.wallW(i, j) : dj === 1 ? grid.wallN(i, b) : grid.wallN(i, j))) continue;
+      // (Nor through a shut portcullis.)
+      if (grid?.barW && (di === 1 ? grid.barW(a, j) : di === -1 ? grid.barW(i, j) : dj === 1 ? grid.barN!(i, b) : grid.barN!(i, j))) continue;
       seen.add(key);
       // Through rock and walls no further (but a start on rock may step off it).
       if (!ok(a, b) && ok(i, j)) continue;

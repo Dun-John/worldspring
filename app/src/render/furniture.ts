@@ -6605,6 +6605,69 @@ function daisThrone(g: Graphics, f: InteriorItem, light: Light, rnd: () => numbe
   throne(g, sub, light, rnd, back);
 }
 
+/** Collapsed wall: dressed blocks tumbled out of a broken wall (`back`, the side it fell from) into the room, the
+ * biggest heaped against the wall, smaller ones and chips further out, in a fan of grey dust. */
+function collapsedWall(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
+  const { along, len, at } = frame(f, back);
+  const wid = along ? f.h : f.w;
+  const DRESSED = [0x5a554c, 0x9a9384, 0xc2baa8];
+  // The dust: a fan out from the wall, thickest by it.
+  const fan: number[] = [];
+  const steps = Math.max(8, Math.round(len * 8));
+  for (let k = 0; k <= steps; k++) fan.push(...at((k / steps) * len, 0.02));
+  for (let k = steps; k >= 0; k--) {
+    const e = Math.sin((k / steps) * Math.PI);
+    fan.push(...at((k / steps) * len, Math.min(wid - 0.03, (0.4 + 0.58 * e) * wid * (0.88 + 0.12 * rnd()))));
+  }
+  g.poly(fan).fill({ color: 0xb4ab98, alpha: 0.5 });
+  // The breach: a ragged dark gap along the wall.
+  const breach: number[] = [];
+  for (let k = 0; k <= steps; k++) breach.push(...at((k / steps) * len, 0));
+  for (let k = steps; k >= 0; k--) breach.push(...at((k / steps) * len, 0.1 + 0.1 * rnd()));
+  g.poly(breach).fill({ color: INK, alpha: 0.75 });
+  // Chips and grit, furthest out first.
+  for (let i = 0; i < 30 * len * wid; i++) {
+    const [px, py] = at(len * (0.04 + 0.92 * rnd()), wid * (0.2 + 0.78 * Math.sqrt(rnd())));
+    const r = 0.015 + 0.022 * rnd();
+    g.poly([px - r, py, px, py - r * 0.8, px + r * 0.9, py + r * 0.2, px, py + r]).fill(i % 3 ? DRESSED[0] : DRESSED[1]).stroke({ width: 0.008, color: INK, alpha: 0.6 });
+  }
+  // The blocks: [u, s, long side, short side, turn]: small ones out in the room, middling, then the big ones
+  // heaped against the wall (drawn last, on top).
+  const blocks: [number, number, number, number, number][] = [];
+  const row = (n: number, s0: number, s1: number, l0: number, l1: number, tilt: number) => {
+    for (let k = 0; k < n; k++) {
+      const u = len * ((k + 0.15 + 0.7 * rnd()) / n);
+      const l = l0 + (l1 - l0) * rnd();
+      blocks.push([u, s0 + (s1 - s0) * rnd(), l, l * (0.55 + 0.15 * rnd()), (rnd() - 0.5) * tilt]);
+    }
+  };
+  row(Math.max(3, Math.round(len * wid * 3)), wid * 0.6, wid * 0.9, 0.1, 0.17, 2.4);
+  row(Math.max(2, Math.round(len * 2.2)), wid * 0.36, wid * 0.62, 0.22, 0.3, 1.6);
+  row(Math.max(2, Math.round(len * 1.8)), 0.2, Math.max(0.3, wid * 0.32), 0.42, 0.54, 0.9);
+  const [lx, ly] = light;
+  for (const [u, sv, l, w, turn] of blocks) {
+    const [cx, cy] = at(Math.min(len - l * 0.45, Math.max(l * 0.45, u)), sv);
+    const [c, sn] = [Math.cos(turn), Math.sin(turn)];
+    const corner = (a: number, b: number, dx = 0, dy = 0): [number, number] => [cx + dx + a * c - b * sn, cy + dy + a * sn + b * c];
+    const box = (dx = 0, dy = 0, k = 1) => [...corner((-l / 2) * k, (-w / 2) * k, dx, dy), ...corner((l / 2) * k, (-w / 2) * k, dx, dy), ...corner((l / 2) * k, (w / 2) * k, dx, dy), ...corner((-l / 2) * k, (w / 2) * k, dx, dy)];
+    // A dressed block seen from high up: its shaded side (the block let down away from the light), then its
+    // top, two flat tones and a dark edge.
+    const h = w * 0.32;
+    if (l > 0.2) castShadow(g, box(), light, 0.2);
+    g.poly(box(-lx * h, -ly * h)).fill(DRESSED[0]).stroke({ width: OUT, color: INK, join: 'round' });
+    for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) g.moveTo(...corner((a * l) / 2, (b * w) / 2)).lineTo(...corner((a * l) / 2, (b * w) / 2, -lx * h, -ly * h));
+    g.stroke({ width: OUT * 0.8, color: INK });
+    g.poly(box()).fill(DRESSED[1]).stroke({ width: OUT * 0.8, color: INK, join: 'round' });
+    if (l > 0.2) {
+      // A lit face toward the light, a chipped corner, a crack on the biggest.
+      g.poly(box(lx * 0.02, ly * 0.02, 0.7)).fill({ color: DRESSED[2], alpha: 0.55 });
+      const k = rnd() < 0.5 ? 1 : -1;
+      g.poly([...corner((k * l) / 2, w / 2), ...corner((k * l) / 2 - k * 0.1, w / 2), ...corner((k * l) / 2, w / 2 - 0.08)]).fill(DRESSED[0]);
+      if (l > 0.4) g.moveTo(...corner(-l * 0.05, -w * 0.45)).lineTo(...corner(l * 0.04, 0)).lineTo(...corner(-l * 0.02, w * 0.3)).stroke({ width: 0.016, color: DRESSED[0], join: 'round' });
+    }
+  }
+}
+
 /** Dry fountain: a broad eight-sided stone basin, dry — its floor cracked and dusty, dead leaves blown in, a green
  * stain where the water stood — and in the middle a tiered pedestal: a chipped lower bowl, a column rising from it
  * to a small upper bowl, a finial on top, its shadow across the basin. */
@@ -6725,6 +6788,7 @@ export const UNDER_DRAWN = new Set([
   'bones', 'skeleton', 'skulls', 'coffin', 'effigy', 'niche', 'urn', 'offering',
   'campfire', 'rubble', 'debris', 'timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'lantern', 'powder', 'bedroll', 'sacks',
   'brazier', 'candles', 'chains', 'sconce', 'banner', 'iron_maiden', 'stocks', 'hoard', 'dais', 'fountain', 'glyph',
+  'collapsed_wall',
 ]);
 
 /** Draws underground prop `f` if it is drawn here; false otherwise. `wall` is the rock side for props
@@ -6913,6 +6977,9 @@ export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: num
       break;
     case 'dais':
       daisThrone(g, f, light, rnd, w);
+      break;
+    case 'collapsed_wall':
+      collapsedWall(g, f, light, rnd, w);
       break;
     case 'fountain':
       dryFountain(g, f, light, rnd);

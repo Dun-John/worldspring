@@ -39,7 +39,7 @@ const BY_GROUP: Record<string, string[]> = {
   'Prison & grim': ['cage', 'chains', 'iron_maiden', 'stocks', 'rack'],
   'Cave & nature': ['stalagmite', 'rock_column', 'boulder', 'crystal', 'fungus', 'mushroom', 'web', 'guano', 'moss', 'pool', 'nest', 'ice', 'ice_sheet', 'basalt', 'obsidian', 'sulfur', 'glass_pool'],
   'Mine & works': ['timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'winch'],
-  'Remains & clutter': ['bones', 'skeleton', 'skulls', 'rubble', 'debris', 'cobweb', 'banner', 'rug', 'rat_nest', 'scorched'],
+  'Remains & clutter': ['bones', 'skeleton', 'skulls', 'rubble', 'collapsed_wall', 'debris', 'cobweb', 'banner', 'rug', 'rat_nest', 'scorched'],
   'Traps & hazards': ['trap', 'pit', 'cave_in', 'vent', 'lava'],
   'Locks & keys': ['key'],
   Terrain: ['water_shallow', 'water_deep', 'chasm', 'rubble_slope', 'rope_bridge', 'stepping_stone'],

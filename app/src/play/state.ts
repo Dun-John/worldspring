@@ -51,6 +51,7 @@ export interface Shape {
 }
 
 export interface DoorState {
+  /** Open (a portcullis: raised). */
   open?: boolean;
   /** A secret door the players know about. */
   found?: boolean;

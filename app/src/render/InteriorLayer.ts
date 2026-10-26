@@ -22,8 +22,8 @@ import vertex from './shaders/terrain.vert?raw';
 const SQUARE_FT = 5;
 /** Underground props drawn against the wall beside them (their look depends on its side). */
 export const ON_WALL = new Set(['tunnel', 'cobweb', 'ore_vein', 'niche', 'chains', 'sconce', 'banner', 'pipe', 'ladder']);
-/** Underground props with a back against a wall (a dais's throne). */
-export const BACKED = new Set(['dais']);
+/** Underground props with a back against a wall (a dais's throne; a collapsed wall, the wall it fell from). */
+export const BACKED = new Set(['dais', 'collapsed_wall']);
 /** An item's `back` (0 north 1 east 2 south 3 west) as a unit step in grid axes. */
 const FACES: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 /** The side set on an item in its design, if any. */
@@ -46,7 +46,7 @@ export function sharedKind(kind: string, underground: boolean): string | undefin
 export const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
 const INK = 0x1d1a14;
 
-/** A lock's colour 1-7 (`Door.lock`) and its key's (`Item.variant`); 0 a key with no colour. Placeholders until the sprite batch. */
+/** A lock's colour 1-7 (`Door.lock`) and its key's (`Item.variant`); 0 a key with no colour. */
 export const LOCK_COLORS = [0x9a958b, 0xd8412f, 0xe8892a, 0xe8cc2a, 0x3fae52, 0x2f86d8, 0x9a56d4, 0xf0ece0];
 export const lockColor = (n: number) => LOCK_COLORS[n >= 0 && n < LOCK_COLORS.length ? n : 0];
 
@@ -58,27 +58,78 @@ const hash2 = (i: number, j: number, k: number) => {
   return v - Math.floor(v);
 };
 
-/** A small padlock (shut, or open with the shackle lifted) in a lock's colour, centred on (cx, cy). */
+/** A colour scaled toward black (`f` < 1) or white (`f` > 1). */
+function tone(color: number, f: number): number {
+  const ch = (k: number) => {
+    const c = (color >> k) & 255;
+    return Math.round(f < 1 ? c * f : c + (255 - c) * (f - 1)) & 255;
+  };
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+}
+/** Iron: dark, mid, light. */
+const IRON = [0x34383e, 0x6c737c, 0xaab2bb];
+
+/** A padlock about half a square tall on a door, centred on (cx, cy): a body in the lock's colour (lit top,
+ * shaded foot, keyhole), a steel shackle, inked; open, the shackle lifted with one leg out of the body. */
 function padlock(g: Graphics, cx: number, cy: number, color: number, open: boolean) {
-  const lift = open ? 0.07 : 0;
-  const top = cy - 0.03 - lift;
-  g.arc(cx, top, 0.085, Math.PI, Math.PI * 2).stroke({ width: 0.075, color: INK });
-  g.arc(cx, top, 0.085, Math.PI, Math.PI * 2).stroke({ width: 0.04, color: 0xd5d8dc });
-  if (!open) g.moveTo(cx - 0.085, top).lineTo(cx - 0.085, cy).stroke({ width: 0.04, color: 0xd5d8dc });
-  g.moveTo(cx + 0.085, top).lineTo(cx + 0.085, cy).stroke({ width: 0.04, color: 0xd5d8dc });
-  g.roundRect(cx - 0.14, cy - 0.01, 0.28, 0.22, 0.04).fill(color).stroke({ width: 0.035, color: INK });
-  g.circle(cx, cy + 0.08, 0.025).fill(INK);
+  const [bw, bh, r] = [0.36, 0.27, 0.105];
+  const top = cy - 0.06;
+  const lift = open ? 0.1 : 0;
+  const arcY = top - 0.06 - lift;
+  const shackle = (width: number, c: number) => {
+    g.moveTo(cx + r, top + 0.02).lineTo(cx + r, arcY).arc(cx, arcY, r, 0, Math.PI, true).lineTo(cx - r, open ? arcY + 0.05 : top + 0.02).stroke({ width, color: c, cap: 'round' });
+  };
+  shackle(0.095, INK);
+  shackle(0.055, 0xc9ced4);
+  g.arc(cx, arcY, r, Math.PI * 1.1, Math.PI * 1.45).stroke({ width: 0.018, color: 0xf4f6f8, cap: 'round' });
+  // The body: two flat tones (lit upper face, shaded foot) and an ink edge.
+  g.roundRect(cx - bw / 2, top, bw, bh, 0.06).fill(tone(color, 0.72));
+  g.roundRect(cx - bw / 2 + 0.02, top + 0.015, bw - 0.04, bh * 0.62, 0.05).fill(color);
+  g.moveTo(cx - bw / 2 + 0.06, top + 0.04).lineTo(cx + bw / 2 - 0.08, top + 0.04).stroke({ width: 0.022, color: tone(color, 1.45), cap: 'round' });
+  g.roundRect(cx - bw / 2, top, bw, bh, 0.06).stroke({ width: 0.035, color: INK });
+  // The keyhole.
+  g.circle(cx, top + 0.11, 0.034).fill(INK);
+  g.poly([cx - 0.018, top + 0.12, cx + 0.018, top + 0.12, cx + 0.03, top + 0.205, cx - 0.03, top + 0.205]).fill(INK);
 }
 
-/** A small key (ring, shaft, two teeth) in a key's colour, centred on (cx, cy). */
+/** A key about 0.7 square across, centred on (cx, cy): an iron key (ring bow, shaft, two-toothed bit) lying
+ * aslant, a tag in its colour tied to the bow, and a faint ring of its colour round it so the DM finds it. */
 function keyGlyph(g: Graphics, cx: number, cy: number, color: number) {
-  const draw = (extra: number, c: number) => {
-    g.circle(cx - 0.2, cy, 0.1).stroke({ width: 0.06 + extra, color: c });
-    g.moveTo(cx - 0.1, cy).lineTo(cx + 0.27, cy).stroke({ width: 0.06 + extra, color: c, cap: 'round' });
-    g.moveTo(cx + 0.15, cy).lineTo(cx + 0.15, cy + 0.12).moveTo(cx + 0.26, cy).lineTo(cx + 0.26, cy + 0.12).stroke({ width: 0.055 + extra, color: c, cap: 'round' });
+  g.circle(cx, cy, 0.47).fill({ color, alpha: 0.13 }).stroke({ width: 0.035, color, alpha: 0.6 });
+  const [c, s] = [Math.cos(-0.45) * 1.3, Math.sin(-0.45) * 1.3];
+  const R = (u: number, v: number): [number, number] => [cx + 0.02 + u * c - v * s, cy + u * s + v * c];
+  // The tag, hung from the bow on a string, under the key.
+  const [tx, ty] = R(-0.2, 0.2);
+  const ta = 0.5;
+  const T = (u: number, v: number): [number, number] => [tx + (u * Math.cos(ta) - v * Math.sin(ta)) * 1.25, ty + (u * Math.sin(ta) + v * Math.cos(ta)) * 1.25];
+  g.moveTo(...R(-0.2, 0.06)).lineTo(...T(-0.09, 0)).stroke({ width: 0.018, color: INK });
+  const tag = [...T(-0.1, 0), ...T(-0.04, -0.07), ...T(0.13, -0.07), ...T(0.13, 0.07), ...T(-0.04, 0.07)];
+  g.poly(tag).fill(tone(color, 0.75));
+  g.poly([...T(-0.07, -0.01), ...T(-0.03, -0.055), ...T(0.11, -0.055), ...T(0.11, 0.02), ...T(-0.03, 0.02)]).fill(color);
+  g.poly(tag).stroke({ width: 0.025, color: INK, join: 'round' });
+  g.circle(...T(-0.035, 0), 0.016).fill(INK);
+  // The key: ink under, iron over, a lit line along the top.
+  const shape = (wd: number, col: number) => {
+    g.circle(...R(-0.2, 0), 0.105 * 1.3).stroke({ width: wd, color: col });
+    g.moveTo(...R(-0.1, 0)).lineTo(...R(0.3, 0)).stroke({ width: wd, color: col, cap: 'round' });
+    g.moveTo(...R(0.2, 0)).lineTo(...R(0.2, 0.11)).moveTo(...R(0.29, 0)).lineTo(...R(0.29, 0.13)).stroke({ width: wd * 0.95, color: col, cap: 'square' });
   };
-  draw(0.05, INK);
-  draw(0, color);
+  shape(0.12, INK);
+  shape(0.068, IRON[1]);
+  g.arc(...R(-0.2, 0), 0.105 * 1.3, -0.45 + Math.PI * 1.05, -0.45 + Math.PI * 1.6).stroke({ width: 0.024, color: IRON[2] });
+  g.moveTo(...R(-0.08, -0.014)).lineTo(...R(0.27, -0.014)).stroke({ width: 0.022, color: IRON[2], cap: 'round' });
+}
+
+/** A rough round outline of `n` points round (cx, cy), radius about `r`, the same for the same seed. */
+function blob(cx: number, cy: number, r: number, seed: number, n = 9): number[] {
+  const out: number[] = [];
+  const ph = hash2(seed, 3, 7) * Math.PI * 2;
+  for (let k = 0; k < n; k++) {
+    const a = ph + (k / n) * Math.PI * 2;
+    const rr = r * (0.84 + 0.3 * hash2(seed, k, 11));
+    out.push(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr * 0.9);
+  }
+  return out;
 }
 const COVER = ['no cover', 'half cover', 'three-quarters cover', 'total cover'];
 
@@ -1057,6 +1108,11 @@ export class InteriorLayer {
     });
     for (const [k, d] of (doorState ? [] : shown).entries()) {
       if (d.kind === 'arch') continue;
+      // (Out of play a portcullis is drawn down.)
+      if (d.kind === 'portcullis') {
+        this.drawPortcullis(g, d, false);
+        continue;
+      }
       if (d.kind === 'secret') {
         // For the DM: a dashed purple line where the wall hides a door.
         const [ax, ay] = d.a;
@@ -1094,7 +1150,7 @@ export class InteriorLayer {
         if (!d.lock) return;
         const st = doorState ? doorState(loc, k) : null;
         if (st?.open) return;
-        padlock(g, (d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2 - 0.05, lockColor(d.lock), !!st?.unlocked);
+        padlock(g, (d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2, lockColor(d.lock), !!st?.unlocked);
       });
     }
     // Room labels in screen space.
@@ -1218,6 +1274,7 @@ export class InteriorLayer {
   /** A door in play: shut (a slab across the gap) or open (the leaf swung back); a secret door
    * the players have not found is wall to them and a dashed line to the DM. */
   private drawPlayDoor(g: Graphics, d: InteriorLevel['doors'][number], st: DoorState, moved = false) {
+    if (d.kind === 'portcullis') return this.drawPortcullis(g, d, !!st.open);
     const [ax, ay] = d.a;
     const [bx, by] = d.b;
     const secret = d.kind === 'secret';
@@ -1249,6 +1306,55 @@ export class InteriorLayer {
     const len = Math.hypot(bx - ax, by - ay) * 0.95;
     g.moveTo(ax, ay).lineTo(ax + Math.cos(open) * len, ay + Math.sin(open) * len).stroke({ width: 0.12, color: wood });
     g.arc(ax, ay, len, open, closed).stroke({ width: 0.03, color: INK, alpha: 0.5 });
+  }
+
+  /** A portcullis in a doorway: dark grooves in both jambs, and down (shut) an iron grate across the gap, its
+   * uprights spiked at the foot, seen from high up; raised, only the grooves and the dark slot it drops from. */
+  private drawPortcullis(g: Graphics, d: InteriorLevel['doors'][number], raised: boolean) {
+    const [ax, ay] = d.a;
+    const len = Math.hypot(d.b[0] - ax, d.b[1] - ay);
+    if (len < 1e-6) return;
+    const [ux, uy] = [(d.b[0] - ax) / len, (d.b[1] - ay) / len];
+    // (Across the doorway: the spikes and the grate's shadow fall away from the light.)
+    const flip = -uy * this.light[0] + ux * this.light[1] > 0 ? -1 : 1;
+    const [vx, vy] = [-uy * flip, ux * flip];
+    const P = (t: number, v: number): [number, number] => [ax + ux * t + vx * v, ay + uy * t + vy * v];
+    const quadAt = (t0: number, t1: number, v0: number, v1: number) => [...P(t0, v0), ...P(t1, v0), ...P(t1, v1), ...P(t0, v1)];
+    // The grooves in the jambs, and the slot overhead it is let down from.
+    g.poly(quadAt(-0.06, 0.08, -0.16, 0.16)).fill({ color: INK, alpha: 0.9 });
+    g.poly(quadAt(len - 0.08, len + 0.06, -0.16, 0.16)).fill({ color: INK, alpha: 0.9 });
+    const n = Math.max(4, Math.round(len * 5));
+    const ts = Array.from({ length: n }, (_, k) => 0.06 + ((len - 0.12) * (k + 0.5)) / n);
+    if (raised) {
+      // Raised: the dark slot across the way, the grate's spiked feet just showing in it.
+      g.poly(quadAt(0.06, len - 0.06, -0.06, 0.06)).fill({ color: INK, alpha: 0.75 });
+      for (const t of ts) g.poly([...P(t - 0.035, -0.02), ...P(t + 0.035, -0.02), ...P(t, 0.05)]);
+      g.fill(IRON[1]);
+      return;
+    }
+    // A shadow on the floor beside it, then the grate: uprights across two rails, ink under iron.
+    g.poly(quadAt(0.04, len - 0.04, 0.08, 0.3)).fill({ color: INK, alpha: 0.2 });
+    const bars = (w: number, c: number) => {
+      for (const t of ts) g.moveTo(...P(t, -0.21)).lineTo(...P(t, 0.18));
+      g.stroke({ width: w, color: c, cap: 'butt' });
+    };
+    const rails = (w: number, c: number) => {
+      for (const v of [-0.12, 0.08]) g.moveTo(...P(0.0, v)).lineTo(...P(len, v));
+      g.stroke({ width: w, color: c, cap: 'butt' });
+    };
+    bars(0.1, INK);
+    rails(0.1, INK);
+    bars(0.055, IRON[1]);
+    rails(0.058, IRON[0]);
+    for (const v of [-0.12, 0.08]) g.moveTo(...P(0.03, v - 0.014)).lineTo(...P(len - 0.03, v - 0.014));
+    g.stroke({ width: 0.016, color: IRON[2], alpha: 0.9 });
+    for (const t of ts) g.moveTo(...P(t - 0.014, -0.19)).lineTo(...P(t - 0.014, 0.16));
+    g.stroke({ width: 0.012, color: IRON[2], alpha: 0.7 });
+    // The spikes at the uprights' feet.
+    for (const t of ts) g.poly([...P(t - 0.05, 0.17), ...P(t + 0.05, 0.17), ...P(t, 0.32)]);
+    g.fill(IRON[1]).stroke({ width: 0.018, color: INK, join: 'miter' });
+    for (const t of ts) g.circle(...P(t, -0.12), 0.022);
+    g.fill(IRON[2]);
   }
 
   /** The side (0 north 1 east 2 south 3 west) an item would stand against where it is, if nothing
@@ -1516,32 +1622,74 @@ export class InteriorLayer {
         }
         break;
       case 'rope_bridge': {
-        // Planks across the way it runs (its long side), a rope along each edge.
+        // Broad planks across the way it runs (its long side) with gaps between, a rope rail along each
+        // edge tied to a post at each end (the ends lie on the banks); the 5-ft grid drawn faintly over the deck.
         const along = w >= h;
         const [len, span] = along ? [w, h] : [h, w];
         const at = (a: number, b: number): [number, number] => (along ? [x + a, y + b] : [x + b, y + a]);
-        const [r0, r1] = [0.12, span - 0.12];
-        const [a0, a1] = [at(0, r0), at(len, r1)];
-        g.rect(Math.min(a0[0], a1[0]), Math.min(a0[1], a1[1]), Math.abs(a1[0] - a0[0]), Math.abs(a1[1] - a0[1])).fill(0x8f6a3c);
-        for (let t = 0.25; t < len; t += 0.5) {
-          const [s0, s1] = [at(t, r0), at(t, r1)];
-          g.moveTo(s0[0], s0[1]).lineTo(s1[0], s1[1]);
+        const box = (a0: number, b0: number, a1: number, b1: number, j: number[]) => [...at(a0 + j[0], b0), ...at(a1 + j[1], b0), ...at(a1 + j[2], b1), ...at(a0 + j[3], b1)];
+        const [r0, r1] = [0.1, span - 0.1];
+        const PL: [number, number][] = [
+          [0x8a6238, 0xb08a5a],
+          [0x7d5a3c, 0xa8825a],
+          [0x93693e, 0xbc9262],
+          [0x80664a, 0xa88d6a],
+        ];
+        const per = 2;
+        for (let k = 0; k < Math.round(len * per); k++) {
+          const a0 = k / per + 0.03;
+          const a1 = (k + 1) / per - 0.03;
+          const hs = (n: number) => (hash2(x * 7 + k, y * 13 + k, n) - 0.5) * 0.04;
+          const j = [hs(1), hs(2), hs(3), hs(4)];
+          const [base, lit] = PL[Math.floor(hash2(x + k, y - k, 5) * PL.length)];
+          const [b0, b1] = [0.04 + hs(6), span - 0.04 + hs(7)];
+          g.poly(box(a0, b0, a1, b1, j)).fill(lit);
+          g.poly(box(a0 + (a1 - a0) * 0.3, b0, a1, b1, j)).fill(base);
+          g.poly(box(a1 - (a1 - a0) * 0.16, b0, a1, b1, j)).fill(0x5e4024);
+          g.poly(box(a0, b0, a1, b1, j)).stroke({ width: 0.025, color: INK, join: 'round' });
         }
-        g.stroke({ width: 0.04, color: INK, alpha: 0.7 });
-        for (const b of [r0, r1]) {
-          const [s0, s1] = [at(0, b), at(len, b)];
-          g.moveTo(s0[0], s0[1]).lineTo(s1[0], s1[1]);
+        // The posts on the banks, then the ropes (ink under, hemp over, a twist marked along them).
+        const posts: [number, number][] = [];
+        for (const a of [0.08, len - 0.08]) for (const b of [r0, r1]) posts.push(at(a, b));
+        for (const [px, py] of posts) g.circle(px + 0.04, py + 0.05, 0.11).fill({ color: INK, alpha: 0.3 });
+        for (const b of [r0, r1]) g.moveTo(...at(0.08, b)).lineTo(...at(len - 0.08, b));
+        g.stroke({ width: 0.085, color: INK, cap: 'round' });
+        for (const b of [r0, r1]) g.moveTo(...at(0.08, b)).lineTo(...at(len - 0.08, b));
+        g.stroke({ width: 0.045, color: 0xc9a46a, cap: 'round' });
+        for (const b of [r0, r1]) for (let t = 0.2; t < len - 0.15; t += 0.14) g.moveTo(...at(t - 0.03, b - 0.02)).lineTo(...at(t + 0.03, b + 0.02));
+        g.stroke({ width: 0.014, color: 0x7a5a2e });
+        for (const [px, py] of posts) {
+          g.circle(px, py, 0.1).fill(0x6a4a2a).stroke({ width: 0.03, color: INK });
+          g.circle(px - 0.02, py - 0.02, 0.06).fill(0x9a7448);
+          g.circle(px - 0.02, py - 0.02, 0.025).fill(0x5e4024);
         }
-        g.stroke({ width: 0.07, color: 0xd8c08a });
+        // (The 5-ft grid over the deck.)
+        for (let t = 1; t < len; t++) g.moveTo(...at(t, 0.04)).lineTo(...at(t, span - 0.04));
+        for (let b = 1; b < span; b++) g.moveTo(...at(0.12, b)).lineTo(...at(len - 0.12, b));
+        g.stroke({ width: 0.02, color: INK, alpha: 0.35 });
         break;
       }
       case 'stepping_stone':
+        // A flat-topped boulder a square: a wet dark ring at the water line, the stone inked, its top lit from
+        // the north-west.
         for (let j = 0; j < h; j++) {
           for (let i = 0; i < w; i++) {
-            const [px, py] = [x + i + 0.5 + (hash2(x + i, y + j, 5) - 0.5) * 0.2, y + j + 0.5 + (hash2(x + i, y + j, 6) - 0.5) * 0.2];
-            g.circle(px, py, 0.26).fill(0x8d8a84).stroke({ width: 0.04, color: INK, alpha: 0.8 });
+            const seed = (x + i) * 31 + (y + j) * 17;
+            const [px, py] = [x + i + 0.5 + (hash2(x + i, y + j, 5) - 0.5) * 0.12, y + j + 0.5 + (hash2(x + i, y + j, 6) - 0.5) * 0.12];
+            const r = 0.3 + hash2(x + i, y + j, 8) * 0.05;
+            g.poly(blob(px + 0.03, py + 0.04, r * 1.22, seed)).fill({ color: 0x14242a, alpha: 0.4 });
+            g.poly(blob(px, py, r * 1.32, seed + 1, 12)).stroke({ width: 0.018, color: 0xd8ece8, alpha: 0.35 });
+            const body = blob(px, py, r, seed);
+            g.poly(body).fill(0x5d5850).stroke({ width: 0.035, color: INK, join: 'round' });
+            g.poly(blob(px - 0.035, py - 0.04, r * 0.78, seed)).fill(0x8f897e);
+            g.poly(blob(px - 0.075, py - 0.085, r * 0.38, seed + 2, 7)).fill({ color: 0xb8b1a3, alpha: 0.9 });
+            g.moveTo(px + r * 0.15, py - r * 0.1).lineTo(px + r * 0.35, py + r * 0.25).stroke({ width: 0.015, color: 0x4a463f, cap: 'round' });
           }
         }
+        // (The 5-ft grid over them.)
+        for (let i = 1; i < w; i++) g.moveTo(x + i, y).lineTo(x + i, y + h);
+        for (let j = 1; j < h; j++) g.moveTo(x, y + j).lineTo(x + w, y + j);
+        if (w > 1 || h > 1) g.stroke({ width: 0.02, color: INK, alpha: 0.3 });
         break;
     }
     // (The 5-ft grid across, as the floor's own is covered.)

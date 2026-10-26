@@ -53,7 +53,7 @@
     { key: 'rect', label: 'Rectangle', icon: 'square', kbd: 'X', hint: 'Drag out a new room of the kind below.' },
     { key: 'corridor', label: 'Corridor', icon: 'corridor', kbd: 'H', hint: 'Paint the level’s passages.' },
     { key: 'rock', label: 'Rock', icon: 'rock', kbd: 'K', hint: 'Fill squares back with rock (props on them go too).' },
-    { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. With a lock colour chosen below, a door with that lock; again, unlocked. Put its key down from Props › Locks & keys.' },
+    { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. With Portcullis chosen below, an iron grate (shut, it stops a step but not the eye), again none. With a lock colour chosen below, a door with that lock; again, unlocked. Put its key down from Props › Locks & keys.' },
     { key: 'terrain', label: 'Terrain', icon: 'waves', kbd: 'A', hint: 'Drag out a rectangle of what is chosen below on bare floor. Bridges and stepping stones go over water and chasms; Clear takes terrain away. Deep water and chasms block the way until a bridge or stones cross them.' },
     { key: 'prop', label: 'Props', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the prop down. Click a prop to pick it up (even with another chosen), click again to put it down. T turns the prop pointed at, else what is in your hand, and Look by the turn buttons picks its look; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Way down', icon: 'stairs', kbd: 'W', hint: 'Click a square for this level’s way down; the way up below follows.' },
@@ -65,7 +65,7 @@
     { key: 'rect', label: 'Rectangle', icon: 'square', kbd: 'X', hint: 'Drag out a new room of the kind below, inside the walls.' },
     { key: 'wall', label: 'Wall', icon: 'wall', kbd: 'L', hint: 'Draw a line along the grid across a room (or click by a grid line): the wall runs on to the room’s walls and splits it in two.' },
     { key: 'merge', label: 'Take a wall away', icon: 'eraser', kbd: 'E', hint: 'Click a wall between two rooms: they become one.' },
-    { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none. In an outside wall of the ground floor: a back door, again the front door, again none.' },
+    { key: 'door', label: 'Door', icon: 'door', kbd: 'O', hint: 'Click a wall between two rooms: a door, again a secret door, again none (with Portcullis chosen below, an iron grate, again none). In an outside wall of the ground floor: a back door, again the front door, again none.' },
     { key: 'prop', label: 'Furniture', icon: 'chest', kbd: 'F or Q', hint: 'Click to put the piece down (furniture, a prop or one of your pictures). Click a piece to pick it up (even with another chosen), click again to put it down. T turns the piece pointed at, else what is in your hand, and Look by the turn buttons picks its look; Delete takes it away, Esc empties the hand. On a touch screen, tap to move it, then ✓.' },
     { key: 'stairs', label: 'Stairs', icon: 'stairs', kbd: 'W', hint: 'Drag out the stair block (1 to 3 squares each way): the same squares on every floor it reaches. Furniture there goes.' },
   ];
@@ -242,6 +242,15 @@
     {/if}
     {#if settings.mode === 'room' || settings.mode === 'rect' || settings.mode === 'corridor' || settings.mode === 'stairs' || settings.mode === 'wall'}
       <label class="switch"><span class="grow">Add doors where a room would be shut off</span><input type="checkbox" class="ws-switch" bind:checked={settings.autoDoors} /></label>
+    {/if}
+    {#if settings.mode === 'door'}
+      <div class="ws-field">
+        Kind
+        <div class="ws-seg">
+          <button class:on={!settings.portcullis} title="Doors (again: a secret door)" onclick={() => (settings.portcullis = false)}>Door</button>
+          <button class:on={!!settings.portcullis} title="An iron grate: shut, it stops a step but not the eye; in play the DM raises and lowers it" onclick={() => (settings.portcullis = true)}>Portcullis</button>
+        </div>
+      </div>
     {/if}
     {#if settings.mode === 'door' && !building}
       <div class="ws-field">

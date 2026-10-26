@@ -145,7 +145,8 @@ pub struct Door {
     /// The door's square edge (grid units).
     pub a: [f32; 2],
     pub b: [f32; 2],
-    /// "front", "door", "back", "arch" (an open archway: no leaves, never shut).
+    /// "front", "door", "back", "secret", "arch" (an open archway: no leaves, never shut),
+    /// "portcullis" (an iron grate raised and lowered: shut, it stops a step but not the eye).
     pub kind: &'static str,
     /// Rooms on either side (-1 outside).
     pub rooms: [i16; 2],
@@ -626,7 +627,7 @@ fn item_info(kind: &'static str) -> (&'static str, u8, bool, f32) {
 pub const INDOOR_PROPS: &[&str] = &[
     "sacks", "rubble", "timber", "bones", "skeleton", "skulls", "urn", "coffin", "effigy", "brazier", "candles", "sconce",
     "lantern", "banner", "chains", "cobweb", "bedroll", "tools", "powder", "hoard", "offering", "glyph", "dais", "well",
-    "fountain", "iron_maiden", "stocks", "rat_nest", "trap",
+    "fountain", "iron_maiden", "stocks", "rat_nest", "trap", "collapsed_wall",
 ];
 
 /// An item a building's design puts down, by kind or name: furniture (`FURNITURE`), else an

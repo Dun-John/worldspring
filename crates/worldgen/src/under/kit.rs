@@ -203,6 +203,8 @@ pub const PROPS: &[(&str, &str, u8, bool, f32, Option<&str>)] = &[
     ("bed", "bed", 0, false, 2.0, None),
     // (DM-only: opens the locked door of its colour, `variant` 1-7; `Door::lock`.)
     ("key", "key", 0, false, 0.0, None),
+    // (Tumbled blocks from a broken wall, spilling into the room from the wall behind it; put down by hand.)
+    ("collapsed_wall", "collapsed wall", 1, false, 3.0, Some("difficult terrain")),
     // Terrain (`TERRAIN`): lies on the floor, its full w × h; spans (`SPANS`) lie over it. Deep water and chasms block
     // movement, not sight (height 0), unless a span covers them.
     ("water_shallow", "shallow water", 0, false, 0.0, Some("difficult terrain; 2 ft deep")),

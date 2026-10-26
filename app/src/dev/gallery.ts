@@ -11,12 +11,14 @@
 // default 56). `&items=civic` shows the guild and civic pieces and the stable stall. `&items=terrain` (alone, at
 // `&sq=` px a square, default 34) shows underground terrain as the floor shader paints it: a room each of shallow
 // water, deep water, a chasm and a rubble slope, a pool crossed by a rope bridge and stepping stones, and a chasm
-// bridged, in a dungeon's flagstones and again in a cave.
+// bridged, in a dungeon's flagstones and again in a cave. `&items=dungeon4` (alone, default 48) shows the dungeon set as the DM
+// sees it in play: portcullises down and raised, locks shut and open, keys in three colours, collapsed walls.
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
 import type { Interior, InteriorItem, UnderCatalog } from '../gen/protocol';
+import type { DoorState } from '../play/state';
 import { BATTLE_GROUPS, ITEM_GROUPS, looks as insideLooks } from '../editor/itemGroups';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
 import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
@@ -58,7 +60,7 @@ const UNDER: [string, number, number][] = [
   ['effigy', 1, 2], ['coffin', 1, 2], ['niche', 1, 1], ['offering', 1, 1], ['chains', 1, 1], ['sconce', 1, 1], ['banner', 1, 1],
   ['iron_maiden', 1, 1], ['stocks', 2, 1], ['cage', 2, 2], ['rack', 1, 2], ['weapon_rack', 1, 1], ['chest', 1, 1], ['hoard', 1, 1],
   ['dais', 3, 2], ['fountain', 2, 2], ['statue', 1, 1], ['pillar', 1, 1], ['sacks', 1, 1], ['bookshelf', 1, 2], ['rug', 2, 3],
-  ['table', 1, 2], ['crate', 1, 1], ['barrel', 1, 1], ['altar', 2, 1], ['glyph', 2, 2],
+  ['table', 1, 2], ['crate', 1, 1], ['barrel', 1, 1], ['altar', 2, 1], ['glyph', 2, 2], ['collapsed_wall', 2, 1],
 ];
 
 const LABEL: TextStyleOptions = { fontFamily: 'Georgia, serif', fontSize: 13, fill: 0x2a2219 };
@@ -102,6 +104,77 @@ function sampler(id: string, fn: string, items: [string, number, number, number?
   const z = new URLSearchParams(location.search).get('floor') === 'wood' ? 0 : -1;
   const level = { z, name: '', elevation_ft: 0, cells, rooms, walls: [], doors: [], windows: [], furniture, roof: false, has_stairs: false, natural: false };
   return { it: { id, settlement: 0, building: 0, name: null, function: fn, origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] }, spots };
+}
+
+/** The dungeon set (`&items=dungeon4`): pairs of rooms with a door between them as the DM sees them in play
+ * (portcullis down, raised, locked; locked doors shut and unlocked), keys in three colours, and collapsed walls
+ * of each size against a wall. Returns the level, the doors' states and the labels' spots. */
+function dungeonSet(): { it: Interior; states: DoorState[]; spots: [string, number, number][] } {
+  type Pair = [string, string, number, DoorState, boolean];
+  // (Label, door kind, lock colour, its state, the rooms one above the other.)
+  const pairs: Pair[] = [
+    ['portcullis down', 'portcullis', 0, {}, false],
+    ['portcullis raised', 'portcullis', 0, { open: true }, false],
+    ['portcullis, red lock', 'portcullis', 1, {}, false],
+    ['portcullis, blue lock off', 'portcullis', 5, { unlocked: true }, false],
+    ['door, yellow lock', 'door', 3, {}, false],
+    ['door, green lock off', 'door', 4, { unlocked: true }, false],
+    ['portcullis down (N-S)', 'portcullis', 0, {}, true],
+    ['portcullis raised (N-S)', 'portcullis', 0, { open: true }, true],
+    ['door, purple lock (N-S)', 'door', 6, {}, true],
+    ['door, white lock off (N-S)', 'door', 7, { unlocked: true }, true],
+  ];
+  const item = (kind: string, x: number, y: number, w: number, h: number, extra: Partial<InteriorItem> = {}): InteriorItem => ({ kind, name: kind, x, y, w, h, cover: 0, blocks_move: false, height_ft: 0, ...extra });
+  // (Room size, its piece, label.)
+  const singles: [number, InteriorItem, string][] = [
+    [3, item('key', 1, 1, 1, 1, { variant: 1 }), 'key, red'],
+    [3, item('key', 1, 1, 1, 1, { variant: 5 }), 'key, blue'],
+    [3, item('key', 1, 1, 1, 1, { variant: 3 }), 'key, yellow'],
+    [4, item('collapsed_wall', 1, 0, 1, 1), 'collapsed wall 1×1'],
+    [4, item('collapsed_wall', 1, 0, 2, 1), 'collapsed wall 2×1'],
+    [4, item('collapsed_wall', 1, 0, 2, 2), 'collapsed wall 2×2'],
+    [4, item('collapsed_wall', 0, 1, 1, 2, { back: 3 }), 'collapsed wall 1×2 (west)'],
+    [4, item('collapsed_wall', 1, 2, 2, 2, { back: 2 }), 'collapsed wall 2×2 (south)'],
+  ];
+  const [nx, ny] = [43, 18];
+  const cells = new Array<number>(nx * ny).fill(-1);
+  const rooms: Interior['levels'][number]['rooms'] = [];
+  const walls: Interior['levels'][number]['walls'] = [];
+  const doors: Interior['levels'][number]['doors'] = [];
+  const furniture: InteriorItem[] = [];
+  const states: DoorState[] = [];
+  const spots: [string, number, number][] = [];
+  const room = (x0: number, y0: number, w: number, h: number) => {
+    const k = rooms.length;
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) cells[(y0 + j) * nx + x0 + i] = k;
+    rooms.push({ kind: ' ', squares: w * h, raise_ft: 0, center: [x0 + w / 2, y0 + h / 2] });
+    return k;
+  };
+  pairs.forEach(([label, kind, lock, st, vertical], n) => {
+    // Six pairs side by side (7 squares each) in the first row, the rest under them (4 squares each).
+    const [x0, y0] = vertical ? [1 + (n - 6) * 4, 5] : [1 + n * 7, 1];
+    const [w, h] = [3, 3];
+    const a = room(x0, y0, w, h);
+    const b = vertical ? room(x0, y0 + 3, w, h) : room(x0 + 3, y0, w, h);
+    if (vertical) {
+      walls.push({ a: [x0, y0 + 3], b: [x0 + 1, y0 + 3], exterior: false }, { a: [x0 + 2, y0 + 3], b: [x0 + 3, y0 + 3], exterior: false });
+      doors.push({ a: [x0 + 1, y0 + 3], b: [x0 + 2, y0 + 3], kind, rooms: [a, b], ...(lock ? { lock } : {}) });
+    } else {
+      walls.push({ a: [x0 + 3, y0], b: [x0 + 3, y0 + 1], exterior: false }, { a: [x0 + 3, y0 + 2], b: [x0 + 3, y0 + 3], exterior: false });
+      doors.push({ a: [x0 + 3, y0 + 1], b: [x0 + 3, y0 + 2], kind, rooms: [a, b], ...(lock ? { lock } : {}) });
+    }
+    states.push(st);
+    spots.push([label, x0, vertical ? y0 + 6 : y0 + 3]);
+  });
+  singles.forEach(([size, f, label], n) => {
+    // Keys beside the upright pairs, collapsed walls in a row under them.
+    const [x, y] = n < 3 ? [17 + n * 4, 6] : [1 + (n - 3) * 5, 13];
+    room(x, y, size, size);
+    furniture.push({ ...f, x: f.x + x, y: f.y + y });
+    spots.push([label, x, y + size]);
+  });
+  const level = { z: -1, name: '', elevation_ft: 0, cells, rooms, walls, doors, windows: [], furniture, roof: false, has_stairs: false, natural: false };
+  return { it: { id: 'u:dungeon-set', settlement: 0, building: 0, name: null, function: 'dungeon', origin: [0, 0], axis: [1, 0], across: [0, 1], nx, ny, levels: [level], entry_level: 0, stairs: [0, 0, 0, 0] }, states, spots };
 }
 
 /** Underground terrain (`&items=terrain`): a room each (7 x 6, the terrain against its top wall) of shallow
@@ -317,6 +390,26 @@ export async function runGallery(target: HTMLElement) {
       root.addChild(holder);
       y += it.ny * tsq + 40;
     }
+  }
+
+  // The dungeon set: portcullises, locks, keys, collapsed walls (`&items=dungeon4` alone, at `&sq=` px a square).
+  if (!only && (!pick || pick.includes('dungeon4'))) {
+    head('Dungeon set: portcullis down and raised, locks shut and open (DM view), keys, collapsed walls');
+    const dsq = pick ? Number(query.get('sq')) || 48 : ITEM_SQ;
+    const { it, states, spots } = dungeonSet();
+    const layer = new InteriorLayer(it, 0, false, false, { player: false, doors: (_loc, k) => states[k] ?? {} });
+    const holder = new Container();
+    holder.addChild(layer.container);
+    holder.scale.set(dsq);
+    holder.position.set(16, y);
+    layer.container.children[0].visible = false;
+    root.addChild(holder);
+    for (const [label, gx, gy] of query.has('nolabels') ? [] : spots) {
+      const t = new Text({ text: label, style: { ...LABEL, fill: 0xf3ead8, fontSize: 11 } });
+      t.position.set(16 + gx * dsq + 2, y + (gy - 0.6) * dsq);
+      root.addChild(t);
+    }
+    y += it.ny * dsq + 40;
   }
 
   // A palace's forecourt as the battlemap draws it (`&items=forecourt` alone).

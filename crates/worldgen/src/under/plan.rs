@@ -34,6 +34,8 @@ pub(crate) struct Plan {
     pub(crate) links: Vec<Link>,
     /// Doors hidden in the wall (square pairs).
     pub(crate) secret: FastSet<(usize, usize)>,
+    /// Portcullises (square pairs): iron grates in the doorway (a design's; no generator lays them yet).
+    pub(crate) portcullis: FastSet<(usize, usize)>,
     /// Locked doors (square pairs): the lock's colour, 1-7 (`Door::lock`).
     pub(crate) locks: FastMap<(usize, usize), u8>,
     /// A built level's passage room and whether its corridors are wide (for loops dug later,
@@ -58,6 +60,7 @@ impl Plan {
             paths: Vec::new(),
             links: Vec::new(),
             secret: FastSet::default(),
+            portcullis: FastSet::default(),
             locks: FastMap::default(),
             passage: None,
             shortcuts: Vec::new(),
@@ -221,7 +224,8 @@ impl Plan {
                         let (ka, kb) = (a.1 as usize * nx + a.0 as usize, b.1 as usize * nx + b.0 as usize);
                         if self.doors.contains(&(ka.min(kb), ka.max(kb))) {
                             let (p0, p1) = if horizontal { ([i as f32, j as f32], [i as f32 + 1.0, j as f32]) } else { ([i as f32, j as f32], [i as f32, j as f32 + 1.0]) };
-                            let kind = if self.secret.contains(&(ka.min(kb), ka.max(kb))) { "secret" } else { "door" };
+                            let e = (ka.min(kb), ka.max(kb));
+                            let kind = if self.secret.contains(&e) { "secret" } else if self.portcullis.contains(&e) { "portcullis" } else { "door" };
                             let lock = self.locks.get(&(ka.min(kb), ka.max(kb))).copied().unwrap_or(0);
                             doors.push(Door { a: p0, b: p1, kind, rooms: [ra, rb], lock });
                             continue;

@@ -76,19 +76,25 @@ export function rectSquares(d: SiteDesign, x0: number, y0: number, x1: number, y
   return out;
 }
 
-/** A door's flag bits: 1 secret; a lock's colour (1-7) in bits 4-6 (`(lock & 7) << 4`, as the generator reads them). */
+/** A door's flag bits: 1 secret; a lock's colour (1-7) in bits 4-6 (`(lock & 7) << 4`, as the generator reads them);
+ * 128 a portcullis (an iron grate: shut, it stops a step but not the eye). */
 export const SECRET = 1;
+export const PORTCULLIS = 128;
 export const lockOf = (flags: number) => (flags >> 4) & 7;
 const withLock = (flags: number, lock: number) => (flags & ~(7 << 4)) | (lock << 4);
 
 /** A door on an edge. With no `lock`: none → door → secret door → none (a lock on it stays as it was). With a
- * lock's colour 1-7: none → a door with that lock; a door gets that lock, or loses it if it has it already. */
-export function cycleDoor(d: SiteDesign, li: number, x: number, y: number, side: number, lock = 0) {
+ * lock's colour 1-7: none → a door with that lock; a door gets that lock, or loses it if it has it already.
+ * With `portcullis`: none → a portcullis (with the lock, if any); a door → a portcullis; a portcullis → none, or with
+ * a lock chosen it gets that lock or loses it. A portcullis clicked as a plain door becomes one. */
+export function cycleDoor(d: SiteDesign, li: number, x: number, y: number, side: number, lock = 0, portcullis = false) {
   const lv = d.levels[li];
   const at = lv.doors.findIndex((e) => e[0] === x && e[1] === y && e[2] === side);
-  if (at < 0) lv.doors.push([x, y, side, withLock(0, lock)]);
+  const gate = at >= 0 && (lv.doors[at][3] & PORTCULLIS) !== 0;
+  if (at < 0) lv.doors.push([x, y, side, withLock(portcullis ? PORTCULLIS : 0, lock)]);
+  else if (portcullis !== gate) lv.doors[at][3] = (lv.doors[at][3] & ~(SECRET | PORTCULLIS)) | (portcullis ? PORTCULLIS : 0);
   else if (lock) lv.doors[at][3] = withLock(lv.doors[at][3], lockOf(lv.doors[at][3]) === lock ? 0 : lock);
-  else if (!(lv.doors[at][3] & SECRET)) lv.doors[at][3] |= SECRET;
+  else if (!portcullis && !(lv.doors[at][3] & SECRET)) lv.doors[at][3] |= SECRET;
   else lv.doors.splice(at, 1);
 }
 

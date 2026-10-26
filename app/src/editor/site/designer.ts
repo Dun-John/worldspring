@@ -5,7 +5,7 @@
 // `interior::design::check`).
 //
 // On the map, underground: paint a room, dig a rectangle room or a corridor, fill squares back
-// with rock; click a wall for a door (again: a secret door, again: none; with a lock's colour chosen, a door
+// with rock; click a wall for a door (again: a secret door, again: none; a portcullis instead if chosen; with a lock's colour chosen, a door
 // with that lock, again: unlocked); drag out water, chasms, rope bridges, stepping stones or rubble slopes (or clear
 // them); put props down (a key too: its look is the colour of the lock it opens); click a
 // square for the level's way down. In a building: paint squares into a room, draw a wall line to
@@ -51,11 +51,13 @@ export interface DesignSettings {
   autoDoors: boolean;
   /** The door tool's lock: 0 none (plain and secret doors), 1-7 a lock of that colour (`Door::lock`). */
   lock: number;
+  /** The door tool puts portcullises (iron grates) instead of doors. */
+  portcullis: boolean;
   /** What the terrain tool paints (`TERRAIN`, `SPANS`); '' clears it. */
   terrain: string;
 }
 
-export const defaultDesign = (): DesignSettings => ({ mode: 'room', kind: 'chamber', width: 1, prop: 'chest', pw: 1, ph: 1, back: null, variant: null, autoDoors: true, lock: 0, terrain: 'water_shallow' });
+export const defaultDesign = (): DesignSettings => ({ mode: 'room', kind: 'chamber', width: 1, prop: 'chest', pw: 1, ph: 1, back: null, variant: null, autoDoors: true, lock: 0, portcullis: false, terrain: 'water_shallow' });
 
 /** What the designer needs from the app. */
 export interface DesignHost {
@@ -592,7 +594,7 @@ export class SiteDesigner implements PointerTool, Placer {
         const ka = e[1] * d.nx + e[0];
         const kb = ka + (e[2] === 0 ? 1 : d.nx);
         if (cells[ka] < 0 || cells[kb] < 0 || cells[ka] === cells[kb]) return this.host.hint('Doors go in walls between two rooms');
-        return void this.change((n) => cycleDoor(n, li, e[0], e[1], e[2], s.lock));
+        return void this.change((n) => cycleDoor(n, li, e[0], e[1], e[2], s.lock, !!s.portcullis));
       }
       case 'prop':
         return this.click(sq);
@@ -626,7 +628,7 @@ export class SiteDesigner implements PointerTool, Placer {
     const [ra, rb] = [room(e.a), room(e.b)];
     const at = doorPlace(d, cells, e);
     if (!at || ra === rb) return this.host.hint('Doors go in walls: between two rooms, or to the outside');
-    if (ra >= 0 && rb >= 0) return void this.change((n) => cycleDoor(n, li, at[0], at[1], at[2]));
+    if (ra >= 0 && rb >= 0) return void this.change((n) => cycleDoor(n, li, at[0], at[1], at[2], 0, !!this.host.settings().portcullis));
     if ((d.levels[li].z ?? 0) !== 0) return this.host.hint('Doors to the outside go on the ground floor');
     return void this.change((n) => cycleOuterDoor(n, li, at[0], at[1], at[2]));
   }
