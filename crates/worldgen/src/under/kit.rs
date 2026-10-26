@@ -332,6 +332,9 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "interrogation room" => &[("table", 1, 1, Any, 1, 1), ("chains", 1, 1, Edge, 1, 3), ("brazier", 1, 1, Edge, 1, 1), ("cage", 2, 2, Edge, 0, 1)],
         "cell corridor" => &[("chains", 1, 1, Edge, 1, 3), ("sconce", 1, 1, Edge, 1, 3), ("trap", 1, 1, Any, 0, 1)],
         // Temples.
+        "nave" => &[("sconce", 1, 1, Edge, 1, 3), ("banner", 1, 1, Edge, 0, 2), ("statue", 1, 1, Edge, 0, 2), ("candles", 1, 1, Any, 0, 1)],
+        "side chapel" => &[("altar", 2, 1, Edge, 1, 1), ("candles", 1, 1, Any, 1, 1), ("statue", 1, 1, Edge, 0, 1), ("offering", 1, 1, Edge, 0, 1)],
+        "crossing" => &[("candles", 1, 1, Any, 0, 2), ("brazier", 1, 1, Edge, 0, 2), ("sconce", 1, 1, Edge, 0, 2)],
         "narthex" => &[("statue", 1, 1, Edge, 1, 2), ("candles", 1, 1, Any, 1, 1), ("fountain", 2, 2, Any, 0, 1), ("sconce", 1, 1, Edge, 1, 1)],
         "sanctum" => &[("altar", 2, 1, Edge, 1, 1), ("statue", 1, 1, Edge, 1, 2), ("candles", 1, 1, Any, 1, 3), ("brazier", 1, 1, Edge, 1, 2), ("rug", 2, 3, Any, 0, 1), ("pillar", 1, 1, Any, 0, 2)],
         "vestry" => &[("bookshelf", 1, 2, Edge, 1, 1), ("chest", 1, 1, Edge, 1, 2), ("candles", 1, 1, Any, 0, 1), ("table", 1, 2, Any, 0, 1)],
@@ -1036,7 +1039,7 @@ fn shortcuts(p: &mut Plan, nx: usize, ny: usize, passage: i16, wide: bool, rooms
     }
 }
 
-// Terrain: water, chasms and rubble slopes (tools for the themed planners; nothing generated calls them yet).
+// Terrain: water, chasms and rubble slopes (tools for the themed planners: temples flood with `water_at`).
 
 /// A level as the terrain tools see it: its floor, the steps between squares, what is already there.
 pub struct Ground {
@@ -1066,7 +1069,6 @@ impl Ground {
     }
 
     /// A level being laid out.
-    #[allow(dead_code)] // (For the themed planners of phases 16-18: none calls the terrain tools yet.)
     pub(crate) fn of_plan(p: &Plan) -> Ground {
         let step = |a: usize, b: usize| if !p.passable(a, b) { 0 } else if p.locks.contains_key(&(a, b)) { 2 } else { 1 };
         let free = (0..p.cells.len()).map(|k| p.cells[k] >= 0 && !p.taken[k]).collect();
@@ -1148,6 +1150,17 @@ pub enum Wetness {
     Flooded,
 }
 
+impl Wetness {
+    /// The noise heights over which a square is shallow and deep water (`water_at`; over 1: never).
+    pub fn bands(self) -> (f64, f64) {
+        match self {
+            Wetness::Dry => (2.0, 2.0),
+            Wetness::Wet => (0.62, 0.72),
+            Wetness::Flooded => (0.42, 0.56),
+        }
+    }
+}
+
 /// What carries one across a chasm: a rope bridge (straight, one square wide) or stepping stones.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Span {
@@ -1182,7 +1195,8 @@ impl Layer {
     /// Make every square reached before the terrain reachable again, from the way onto the level and from each side of
     /// each locked door, locks shut (so each stretch a lock closes off stays whole and the keys' order holds): on the
     /// crossing over the fewest gap squares, then the fewest steps, deep water turns shallow (two squares or fewer) or
-    /// gets stepping stones; a chasm gets a rope bridge where the crossing runs straight and `bridge`, else stones.
+    /// gets stepping stones; deep water (wider) and a chasm get a rope bridge where the crossing runs straight and
+    /// `bridge`, else stones.
     fn repair(&mut self, g: &Ground, bridge: bool) {
         let n = g.cells.len();
         for from in std::iter::once(g.start).chain(g.locked.iter().copied()) {
@@ -1233,7 +1247,7 @@ impl Layer {
                 for &q in &path {
                     match self.t[q] {
                         DEEP if path.len() <= 2 => self.t[q] = SHALLOW,
-                        CHASM if bridge && straight => self.span[q] = BRIDGE,
+                        DEEP | CHASM if bridge && straight => self.span[q] = BRIDGE,
                         _ => self.span[q] = STONES,
                     }
                 }
@@ -1302,17 +1316,28 @@ fn noise(seed: u64, i: usize, j: usize, cell: f64) -> f64 {
 /// The items (shallow and deep water, stepping stones) are merged into rectangles, to be put down in bulk
 /// (`Plan::put_all`, or onto a level's furniture).
 pub fn water(g: &Ground, wet: Wetness, seed: u64) -> Vec<Item> {
-    let (shallow, deep) = match wet {
-        Wetness::Dry => return Vec::new(),
-        Wetness::Wet => (0.62, 0.72),
-        Wetness::Flooded => (0.42, 0.56),
-    };
+    let bands = wet.bands();
+    if bands.0 > 1.0 {
+        return Vec::new();
+    }
+    water_at(g, seed, Span::Stones, &|_| bands)
+}
+
+/// `water` with bands of its own per square: `at(k)` the noise heights (0..1) over which square k is shallow and deep
+/// water (over 1: never), so a planner floods its big halls deep and the rest shallow, keeps ledges dry along walls
+/// (`grow::flood_room`). The repair lays a rope bridge over deep water where the crossing runs straight and `span`
+/// says bridge, else stepping stones (or wades two squares or fewer).
+pub fn water_at(g: &Ground, seed: u64, span: Span, at: &dyn Fn(usize) -> (f64, f64)) -> Vec<Item> {
     let mut l = Layer::new(g.cells.len());
     for k in (0..g.cells.len()).filter(|&k| g.free[k]) {
+        let (shallow, deep) = at(k);
+        if shallow > 1.0 {
+            continue;
+        }
         let h = noise(seed, k % g.nx, k / g.nx, 6.0);
         l.t[k] = if h >= deep { DEEP } else if h >= shallow { SHALLOW } else { 0 };
     }
-    l.repair(g, false);
+    l.repair(g, span == Span::Bridge);
     l.items(g.nx)
 }
 

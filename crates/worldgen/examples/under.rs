@@ -1,8 +1,11 @@
 //! Dev tool: print underground sites as text plans (one letter per room, `.` rock; `E` the way
 //! in, `v`/`^` ways down/up, `*` items, `~` lava, `!` hazards), with timings.
-//! `cargo run --release -p worldgen --example under -- [seed] [kind...]` (kinds: dungeon, crypt,
-//! cave, mine, lava_tube; default all, the first site of each). TEXT=1 prints the design's text
-//! form instead (`under::design::to_text`, what agents read and write with get/set_site_design).
+//! `cargo run --release -p worldgen --example under -- [seed] [kind|theme...]` (kinds: dungeon, crypt,
+//! cave, mine, lava_tube; themes: `under::THEMES` keys, e.g. temple, sunken_temple; default all, the first site of
+//! each). TEXT=1 prints the design's text form instead (`under::design::to_text`, what agents read and write with
+//! get/set_site_design). MAKE=theme[:size[:levels]][,...] adds created sites of those themes on dry land (as the vital
+//! test does) and prints only them (e.g. MAKE=temple:large:3,sunken_temple).
+//! LEVEL=n prints only level n (1 the top).
 //! Terrain tools on the printed site, after generation (`under::water`/`chasm`/`rubble_slope`; generation untouched):
 //! WATER=wet|flooded, CHASM=level|room (the biggest room's), SPAN=bridge|stones (default bridge), RUBBLE=1 (a slope in
 //! the biggest room). Letters: `-` shallow water, `=` deep water, `#` chasm, `+` rope bridge, `:` stepping stones,
@@ -13,33 +16,97 @@ fn main() {
     let a: Vec<String> = std::env::args().collect();
     let seed: u32 = a.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
     let wanted: Vec<String> = a.iter().skip(2).cloned().collect();
-    let world = World::new(WorldFile { seed, ..Default::default() }).unwrap();
-    let t0 = worldgen::t0::T0::generate(&world);
+    let mut world = World::new(WorldFile { seed, ..Default::default() }).unwrap();
+    let mut t0 = worldgen::t0::T0::generate(&world);
+    let made = std::env::var("MAKE").unwrap_or_default();
+    if !made.is_empty() {
+        let sea = world.params().sea_level_ft;
+        let g = &world.geom;
+        let spots: Vec<[f64; 2]> = (0..90 * 60)
+            .map(|k| [(k % 90) as f64 / 90.0 * g.map_w_ft + 1_000.0, (k / 90) as f64 / 60.0 * g.map_h_ft + 1_000.0])
+            .filter(|p| {
+                let h = t0.sample(p[0], p[1], 20.0);
+                h > sea + 20.0 && (t0.sample_water(p[0], p[1]) as f64) < h && town::layouts_near(&world, &t0, [p[0] - 300.0, p[1] - 300.0, p[0] + 300.0, p[1] + 300.0]).is_empty()
+            })
+            .collect();
+        let mut file = world.file.clone();
+        let asks: Vec<&str> = made.split(',').collect();
+        for (i, ask) in asks.iter().enumerate() {
+            let mut f = ask.split(':');
+            let theme = f.next().unwrap_or("temple");
+            let t = worldgen::under::THEMES.iter().find(|t| t.key == theme).unwrap_or_else(|| panic!("no theme {theme}"));
+            let p = spots[(i * 7919 + seed as usize * 131) % spots.len()];
+            file.edits.created.push(worldgen::world::Created {
+                id: format!("c:{i}"),
+                kind: "entrance".into(),
+                x: p[0],
+                y: p[1],
+                name: ask.to_string(),
+                under: Some(t.kind.key().into()),
+                size: f.next().map(|s| s.to_string()),
+                levels: f.next().and_then(|s| s.parse().ok()),
+                theme: Some(theme.into()),
+                ..Default::default()
+            });
+        }
+        world = World::new(file).unwrap();
+        t0.apply_edits(&world);
+    }
+    let first = if made.is_empty() { 0 } else { t0.settlements.len() };
+    let only_level: Option<usize> = std::env::var("LEVEL").ok().and_then(|v| v.parse().ok());
     let mut seen = std::collections::BTreeSet::new();
     let mut seen_n = std::collections::BTreeMap::new();
-    for li in 0..town::layout_count(&t0) {
+    let themes: Vec<&str> = worldgen::under::THEMES.iter().map(|t| t.key).collect();
+    let by_theme = wanted.iter().any(|w| themes.contains(&w.as_str()));
+    for li in first..town::layout_count(&t0) {
+        if !made.is_empty() && t0.created_site(li - first).is_none() {
+            continue;
+        }
         let l = town::layout(&world, &t0, li);
         for (k, e) in l.entrances.iter().enumerate() {
             let kind = e.kind.name().replace(' ', "_");
-            // SKIP=n: the n+1-th site of each kind instead of the first.
-            let skip: usize = std::env::var("SKIP").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
-            let count = seen_n.entry(kind.clone()).or_insert(0usize);
-            *count += 1;
-            if !wanted.is_empty() && !wanted.contains(&kind) || *count != skip + 1 || !seen.insert(kind.clone()) {
+            if !by_theme && !wanted.is_empty() && !wanted.contains(&kind) {
                 continue;
             }
             let t = std::time::Instant::now();
-            let mut it = interior::generate_id(&world, &t0, &format!("u:{li}:{k}")).unwrap();
+            let Some(mut it) = interior::generate_id(&world, &t0, &format!("u:{li}:{k}")) else { continue };
             let ms = t.elapsed().as_secs_f64() * 1e3;
+            // (By theme: each theme asked for; MAKE: every site made.)
+            let key = if by_theme { it.theme.unwrap_or("-").to_string() } else { kind.clone() };
+            if by_theme && !wanted.contains(&key) {
+                continue;
+            }
+            // SKIP=n: the n+1-th site of each kind instead of the first.
+            let skip: usize = std::env::var("SKIP").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let count = seen_n.entry(key.clone()).or_insert(0usize);
+            *count += 1;
+            if made.is_empty() && (*count != skip + 1 || !seen.insert(key.clone())) {
+                continue;
+            }
             let unreached = terrain(&mut it, worldgen::core::rng::hash3(seed as u64, li as i64, k as i64, 0x7e44));
             println!(
-                "== {} u:{li}:{k} ({}x{}, {} levels, {ms:.1} ms) at fx {:.6} fy {:.6}",
+                "== {} {} u:{li}:{k} ({}x{}, {} levels, {ms:.1} ms) at fx {:.6} fy {:.6}",
                 it.function,
+                it.theme.unwrap_or("-"),
                 it.nx,
                 it.ny,
                 it.levels.len(),
                 e.at[0] / world.geom.map_w_ft,
                 e.at[1] / world.geom.map_h_ft
+            );
+            // (A line of totals: locks, keys, portcullises, secret doors, water and spans in squares.)
+            let doors = |k: &str| it.levels.iter().flat_map(|lv| &lv.doors).filter(|d| d.kind == k).count();
+            let sq = |k: &str| it.levels.iter().flat_map(|lv| &lv.furniture).filter(|f| f.kind == k).map(|f| (f.w * f.h) as usize).sum::<usize>();
+            println!(
+                "   locks {}, keys {}, portcullises {}, secret doors {}; squares: shallow {}, deep {}, bridge {}, stones {}",
+                it.levels.iter().flat_map(|lv| &lv.doors).filter(|d| d.lock != 0).count(),
+                sq("key"),
+                doors("portcullis"),
+                doors("secret"),
+                sq("water_shallow"),
+                sq("water_deep"),
+                sq("rope_bridge"),
+                sq("stepping_stone")
             );
             if !unreached.is_empty() {
                 println!("terrain: unreached squares per level (deepest first) {unreached:?}");
@@ -49,7 +116,11 @@ fn main() {
                 println!("{}", worldgen::under::design::to_text(&d, &|_, _| None).unwrap_or_else(|e| e));
                 continue;
             }
-            for lv in it.levels.iter().rev() {
+            let n = it.levels.len();
+            for (li2, lv) in it.levels.iter().enumerate().rev() {
+                if only_level.is_some_and(|w| w != n - li2) {
+                    continue;
+                }
                 let mut kinds: Vec<String> = lv
                     .rooms
                     .iter()

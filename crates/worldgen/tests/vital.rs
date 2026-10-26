@@ -1943,17 +1943,8 @@ fn underground_guarantee() {
                 assert_eq!(at(&it.levels[li2 - 1], "up"), down, "{tag} {}: the way down and the way up below differ", lv.name);
             }
             // Everything is reached, around blocking furniture too.
-            let blocks: Vec<bool> = {
-                let mut b = vec![false; nx * ny];
-                for f in lv.furniture.iter().filter(|f| f.blocks_move) {
-                    for j in f.y..f.y + f.h {
-                        for i in f.x..f.x + f.w {
-                            b[j as usize * nx + i as usize] = true;
-                        }
-                    }
-                }
-                b
-            };
+            // (Deep water and chasms block but where a rope bridge or stepping stones cross them.)
+            let blocks: Vec<bool> = worldgen::under::blocked_squares(&lv.furniture, nx, ny);
             assert!(!blocks[start] && lv.cells[start] >= 0, "{tag} {}: the way in is not open floor", lv.name);
             for f in &lv.furniture {
                 for j in f.y..f.y + f.h {

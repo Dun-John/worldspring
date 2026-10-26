@@ -79,7 +79,8 @@
 //! - `under` (not in `all`): every underground site of every layout (`u:` ways down, up to 4 sewer sections a layout,
 //!   keep dungeons `k:`): a hash per site on stdout (`U <seed> <id> <hash> <theme> <levels>`; everything else goes
 //!   with the other rows) and totals of sites, levels, rooms, doors, secret doors, loops (doors beyond a spanning
-//!   tree of a level's rooms), shortcut loops (each saving 4+ hops) and the hops they save, and `u:` sites breaking `under::design::check`. TERRAIN=1 also lays the terrain tools
+//!   tree of a level's rooms), shortcut loops (each saving 4+ hops) and the hops they save, and `u:` sites breaking `under::design::check`;
+//!   portcullises and the water squares generators laid. THEME=temple,sunken_temple keeps only sites of those themes. TERRAIN=1 also lays the terrain tools
 //!   (`under::chasm`, `under::water`) on a copy of each site and counts what they laid and what they left unreached.
 //!
 //! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
@@ -3568,10 +3569,18 @@ fn under(ctx: &mut Ctx, r: &mut Report, label: &str) {
         }
         ids.extend(l.buildings.iter().filter(|b| interior::has_deep_dungeon(b)).map(|b| format!("k:{li}:{}", b.id)));
         for id in ids {
+            let t = std::time::Instant::now();
             let Some(it) = interior::generate_id(world, t0, &id) else {
                 println!("U {label} {id} none");
                 continue;
             };
+            // THEME=a,b: only sites of those themes.
+            if let Ok(th) = std::env::var("THEME")
+                && !th.split(',').any(|t| Some(t) == it.theme)
+            {
+                continue;
+            }
+            r.measure("slowest site (ms)", false, t.elapsed().as_secs_f64() * 1e3, id.clone());
             println!("U {label} {id} {:016x} {} {}", fnv64(serde_json::to_string(&it).unwrap().as_bytes()), it.theme.unwrap_or("-").replace(' ', "_"), it.levels.len());
             r.tally("sites", 1);
             r.tally("levels", it.levels.len());
@@ -3579,6 +3588,10 @@ fn under(ctx: &mut Ctx, r: &mut Report, label: &str) {
                 r.tally("rooms", lv.rooms.len());
                 r.tally("doors", lv.doors.len());
                 r.tally("secret doors", lv.doors.iter().filter(|d| d.kind == "secret").count());
+                r.tally("portcullises", lv.doors.iter().filter(|d| d.kind == "portcullis").count());
+                for f in lv.furniture.iter().filter(|f| matches!(f.kind, "water_shallow" | "water_deep" | "rope_bridge" | "stepping_stone")) {
+                    r.tally(&format!("{} squares", f.kind), (f.w * f.h) as usize);
+                }
                 // (Union-find over the rooms: a door joining rooms already joined is a loop.)
                 let mut up: Vec<usize> = (0..lv.rooms.len()).collect();
                 fn root(up: &mut [usize], mut i: usize) -> usize {

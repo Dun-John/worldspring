@@ -34,7 +34,7 @@ pub(crate) struct Plan {
     pub(crate) links: Vec<Link>,
     /// Doors hidden in the wall (square pairs).
     pub(crate) secret: FastSet<(usize, usize)>,
-    /// Portcullises (square pairs): iron grates in the doorway (a design's; no generator lays them yet).
+    /// Portcullises (square pairs): iron grates in the doorway (a design's, or a temple's sanctum gate).
     pub(crate) portcullis: FastSet<(usize, usize)>,
     /// Locked doors (square pairs): the lock's colour, 1-7 (`Door::lock`).
     pub(crate) locks: FastMap<(usize, usize), u8>,
@@ -42,6 +42,9 @@ pub(crate) struct Plan {
     /// `kit::guard`), with the room pairs a loop may join.
     pub(crate) passage: Option<(i16, bool)>,
     pub(crate) shortcuts: Vec<(i16, i16)>,
+    /// Water to lay once the locks and keys are in (`kit::water_at`): per square the noise heights over which it is
+    /// shallow and deep (`grow::flood_room`); empty: a dry level.
+    pub(crate) water: Vec<[f32; 2]>,
 }
 
 impl Plan {
@@ -64,6 +67,7 @@ impl Plan {
             locks: FastMap::default(),
             passage: None,
             shortcuts: Vec::new(),
+            water: Vec::new(),
         }
     }
 

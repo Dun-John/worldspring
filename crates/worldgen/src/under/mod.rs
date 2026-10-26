@@ -27,11 +27,12 @@
 use serde::Serialize;
 
 pub mod design;
+mod grow;
 mod kit;
 mod plan;
 mod themes;
 
-pub use kit::{Ground, PROPS, SPANS, Span, TERRAIN, Wetness, blocked_squares, chasm, rubble_slope, water};
+pub use kit::{Ground, PROPS, SPANS, Span, TERRAIN, Wetness, blocked_squares, chasm, rubble_slope, water, water_at};
 use kit::*;
 use plan::*;
 use themes::*;
@@ -146,6 +147,8 @@ pub struct Theme {
     ledge: &'static str,
     /// What lays out its levels.
     planner: Planner,
+    /// How much water stands in it (laid by its planner: `Plan::water`).
+    water: Wetness,
 }
 
 /// Which planner (`themes`) lays out a theme's levels.
@@ -153,6 +156,8 @@ pub struct Theme {
 pub enum Planner {
     /// Rooms, a spanning tree plus loops, dug corridors (`themes::dungeon`).
     Built,
+    /// Grown room by room, the top level mirrored: narthex, nave, chapels, apse sanctum (`themes::temple`).
+    Temple,
     Cave,
     Mine,
     LavaTube,
@@ -160,7 +165,7 @@ pub enum Planner {
 
 #[allow(clippy::too_many_arguments)]
 const fn built(key: &'static str, kind: UnderKind, first: &'static str, kinds: &'static [&'static str], passage: &'static str, rooms: (usize, u32), sprawl: bool, corridor: usize) -> Theme {
-    Theme { key, kind, first, kinds, passage, rooms, sprawl, corridor, ledge: "", planner: Planner::Built }
+    Theme { key, kind, first, kinds, passage, rooms, sprawl, corridor, ledge: "", planner: Planner::Built, water: Wetness::Dry }
 }
 
 const fn natural(key: &'static str, kind: UnderKind, kinds: &'static [&'static str], ledge: &'static str) -> Theme {
@@ -169,14 +174,14 @@ const fn natural(key: &'static str, kind: UnderKind, kinds: &'static [&'static s
         UnderKind::LavaTube => Planner::LavaTube,
         _ => Planner::Cave,
     };
-    Theme { key, kind, first: "", kinds, passage: "", rooms: (0, 1), sprawl: false, corridor: 1, ledge, planner }
+    Theme { key, kind, first: "", kinds, passage: "", rooms: (0, 1), sprawl: false, corridor: 1, ledge, planner, water: Wetness::Dry }
 }
 
 /// Every theme a site can be given; each kind's first is the one it had before themes.
 pub const THEMES: &[Theme] = &[
     built("dungeon", UnderKind::Dungeon, "entry hall", &["guard room", "barracks", "storeroom", "cell block", "torture chamber", "shrine", "armory", "well room", "pit room", "prison"], "corridor", (8, 5), false, 1),
     built("prison", UnderKind::Dungeon, "gatehouse", &["cell block", "cell block", "prison", "oubliette", "torture chamber", "guard room", "warden's office", "mess hall", "interrogation room"], "cell corridor", (10, 5), false, 1),
-    built("temple", UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "ossuary", "chapel of rest"], "processional way", (7, 4), false, 2),
+    Theme { planner: Planner::Temple, ..built("temple", UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "ossuary", "chapel of rest"], "processional way", (7, 4), false, 2) },
     built("wizard_lair", UnderKind::Dungeon, "foyer", &["library", "laboratory", "summoning circle", "specimen vault", "study", "menagerie", "golem workshop", "scrying room"], "hall", (7, 4), false, 1),
     built("bandit_hideout", UnderKind::Dungeon, "hidden entry", &["common room", "bunk room", "loot store", "armory", "kitchen", "captain's quarters", "storeroom", "lookout"], "tunnel", (7, 3), false, 1),
     built("dwarven_hall", UnderKind::Dungeon, "gate hall", &["great hall", "forge", "brewery", "armory", "barracks", "treasury", "ancestor hall", "storeroom", "mushroom farm"], "gallery", (9, 5), true, 2),
@@ -194,7 +199,16 @@ pub const THEMES: &[Theme] = &[
     natural("beast_den", UnderKind::Cave, &["lair", "nest chamber", "gnawing chamber", "bat roost", "cavern"], "ledge"),
     natural("mine", UnderKind::Mine, &[], ""),
     natural("lava_tube", UnderKind::LavaTube, &["lava tube", "tube gallery", "side pocket", "obsidian gallery"], "basalt shelf"),
+    // (Never drawn for a generated site: a temple on wet ground becomes it, `generate`.)
+    Theme {
+        planner: Planner::Temple,
+        water: Wetness::Flooded,
+        ..built(SUNKEN_TEMPLE, UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "sunken chapel", "chapel of rest"], "processional way", (7, 4), false, 2)
+    },
 ];
+
+/// A temple sunk in wet ground: flooded halls.
+pub const SUNKEN_TEMPLE: &str = "sunken_temple";
 
 /// Under a large keep: prisons, stores, old crypts and a way out.
 const KEEP_DUNGEON: Theme = built(
@@ -274,7 +288,7 @@ fn resolve(kind: UnderKind, spec: SiteSpec, rng: &mut Pcg32) -> (SiteSize, usize
     let (_, (s0, s1), (l0, l1)) = ranges(kind);
     let size = spec.size.unwrap_or_else(|| SiteSize::ALL[s0 as usize + rng.below((s1 as usize - s0 as usize + 1) as u32) as usize]);
     let levels = spec.levels.map(|l| l.clamp(1, MAX_LEVELS)).unwrap_or_else(|| l0 + rng.below((l1 - l0 + 1) as u32) as u8) as usize;
-    let own: Vec<&'static Theme> = THEMES.iter().filter(|t| t.kind == kind).collect();
+    let own: Vec<&'static Theme> = THEMES.iter().filter(|t| t.kind == kind && t.key != SUNKEN_TEMPLE).collect();
     let theme = match spec.theme.and_then(|i| THEMES.get(i as usize)).filter(|t| t.kind == kind) {
         Some(t) => t,
         None if own.len() > 1 && rng.next_f64() >= 0.5 => own[1 + rng.below(own.len() as u32 - 1) as usize],
@@ -298,6 +312,21 @@ pub fn street_segments(l: &Layout) -> Vec<(P, P, f64)> {
 /// Water stands over the ground here.
 fn wet(t0: &T0, p: P) -> bool {
     t0.sample_water(p[0], p[1]) as f64 > t0.sample(p[0], p[1], 5.0)
+}
+
+/// Wet ground: a swamp, standing water (a lake, the sea) within about 80 ft, or a river within 120 ft of its bank.
+pub fn wet_ground(t0: &T0, p: P) -> bool {
+    const R: f64 = 80.0;
+    const D: f64 = R * std::f64::consts::FRAC_1_SQRT_2;
+    let ring = [[0.0, 0.0], [R, 0.0], [-R, 0.0], [0.0, R], [0.0, -R], [D, D], [D, -D], [-D, D], [-D, -D]];
+    if ring.iter().any(|o| wet(t0, add(p, *o))) {
+        return true;
+    }
+    let (x, y) = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 120.0, t0.cell_ft);
+    if (x - p[0]).abs() + (y - p[1]).abs() > 0.5 {
+        return true;
+    }
+    t0.sample_biome(p[0], p[1], t0.biome_warp(p[0], p[1]))[0] == crate::t0::biome::Biome::Swamp as u8
 }
 
 /// Corner (world ft) of the sewer section holding a point.
@@ -430,6 +459,8 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
     // A created site's own choices (size, levels, theme); the rest from the rng.
     let spec = layout.checked_sub(t0.settlements.len()).and_then(|p| t0.created_site(p)).map(|c| c.spec).unwrap_or_default();
     let (size, depth, theme) = resolve(e.kind, spec, &mut rng);
+    // A temple on wet ground lies sunken (unless its maker chose the theme).
+    let theme = if spec.theme.is_none() && theme.key == "temple" && wet_ground(t0, e.at) { THEMES.iter().find(|t| t.key == SUNKEN_TEMPLE).unwrap_or(theme) } else { theme };
     let ((bx, by), _, _) = ranges(e.kind);
     let s = size.scale();
     let (nx, ny) = ((bx as f64 * s).round() as usize, (by as f64 * s).round() as usize);
@@ -595,6 +626,7 @@ fn site(
             // (A city's own sewers, not from a theme: its top level follows the streets.)
             _ if kind == UnderKind::Sewer && d == 0 => sewer(t0, l, f.origin, nx, ny, arrive, last)?,
             Planner::Built => dungeon(nx, ny, a, d, last, theme, area, rng),
+            Planner::Temple => temple(nx, ny, a, d, last, theme, area, rng),
             Planner::Cave => cave(nx, ny, a, last, theme, rng),
             Planner::Mine => mine(nx, ny, a, last, rng),
             Planner::LavaTube => lava_tube(nx, ny, a, d, last, theme, rng),
@@ -630,6 +662,14 @@ fn site(
             let size = if kind == UnderKind::KeepDungeon { if depth >= 3 { 1.69 } else { 1.0 } } else { area };
             let (first, lk) = locks.get_or_insert_with(|| (d, Locks::new(size, rng)));
             guard(&mut p, &mut plans[*first..], nx, ny, d, depth, lk, rng);
+        }
+        if !p.water.is_empty() {
+            // (Its planner's water, once the locks and keys are in: off doorways, every square still reached.)
+            p.reserve_doors();
+            let (w, seed) = (std::mem::take(&mut p.water), hash3(rng.next_u32() as u64, d as i64, 0, 0x3a7e));
+            let span = if rng.next_f64() < 0.5 { Span::Bridge } else { Span::Stones };
+            let items = water_at(&Ground::of_plan(&p), seed, span, &|k| (w[k][0] as f64, w[k][1] as f64));
+            p.put_all(items);
         }
         furnish(&mut p, nx, ny, kind, rng);
         arrive = p.down.or(arrive);

@@ -156,6 +156,9 @@ const EXTRA_ROOMS: &[&str] = &[
     "shaft head",
     "corridor",
     "cavern",
+    "nave",
+    "side chapel",
+    "crossing",
 ];
 /// Items that are ways: in from the surface, up and down a level.
 pub const WAYS: [&str; 3] = ["exit", "up", "down"];
