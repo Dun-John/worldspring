@@ -278,12 +278,12 @@ vec3 screeStone(vec3 col, vec2 p, float s, float seed, float cover, float px) {
     float a = atan(dv.y, dv.x);
     float r = (0.21 + 0.1 * hash21(id + seed + 4.1)) * (1.0 + 0.16 * sin(a * 3.0 + h * 40.0) + 0.07 * sin(a * 5.0 + h * 17.0));
     float len = length(dv);
-    float pw = px * s;
-    col = mix(col, col * 0.5, (1.0 - smoothstep(r - pw, r + 0.07, length(dv + uLight * 0.1))) * 0.7);
-    vec3 stone = vec3(0.60, 0.57, 0.52) * (0.78 + 0.34 * hash21(id + seed + 5.5));
+    float pw = min(px * s, 0.06);
+    col = mix(col, col * 0.5, (1.0 - smoothstep(r - pw, r + 0.07, length(dv + uLight * 0.1))) * 0.4);
+    vec3 stone = vec3(0.70, 0.67, 0.62) * (0.82 + 0.3 * hash21(id + seed + 5.5));
     stone *= mix(0.66, 1.12, smoothstep(-0.2, 0.2, dot(dv, uLight) / max(r, 1e-3) + 0.3));
     col = mix(col, stone, 1.0 - smoothstep(r - pw, r + pw, len));
-    return mix(col, INK, (1.0 - smoothstep(0.0, max(pw * 1.2, 0.05), abs(len - r))) * 0.8);
+    return mix(col, INK, (1.0 - smoothstep(0.0, max(pw * 1.2, 0.05), abs(len - r))) * 0.55);
 }
 
 // Terrain on the floor (uTerrain): shallow water over the floor, deep water, a chasm, a rubble
@@ -347,10 +347,9 @@ vec3 terrain(vec3 col, vec2 q, vec2 p, float px) {
         // big ones at its edge.
         float dr = d.w;
         float cover = smoothstep(-0.25, 0.3, dr);
-        col = mix(col, vec3(0.50, 0.47, 0.42) * (0.8 + 0.35 * vnoise(p * 5.0)), cover * 0.5);
-        col = screeStone(col, p + 0.71, 4.3, 21.0, smoothstep(-0.45, 0.1, dr) * 0.55, px);
-        col = screeStone(col, p + 0.37, 2.7, 9.0, cover * 0.7, px);
-        col = screeStone(col, p, 1.7, 0.0, cover * 0.6, px);
+        col = mix(col, vec3(0.56, 0.53, 0.48) * (0.85 + 0.25 * vnoise(p * 5.0)), cover * 0.3);
+        col = screeStone(col, p + 0.37, 2.6, 9.0, smoothstep(-0.45, 0.1, dr) * 0.3, px);
+        col = screeStone(col, p, 1.5, 0.0, cover * 0.4, px);
     }
     return col;
 }

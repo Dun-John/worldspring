@@ -191,7 +191,8 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
         doors.push(if rb >= 0 {
             Door { a: p, b: q, kind: if flags & SECRET != 0 { "secret" } else if flags & PORTCULLIS != 0 { "portcullis" } else { "door" }, rooms: [ra.min(rb), ra.max(rb)], lock: 0 }
         } else {
-            Door { a: p, b: q, kind: if flags & FRONT != 0 { "front" } else if flags & ARCH != 0 { "arch" } else { "back" }, rooms: [ra, -1], lock: 0 }
+            // (A portcullis out here is kept as one, for `check` to refuse: it is a gate between rooms.)
+            Door { a: p, b: q, kind: if flags & FRONT != 0 { "front" } else if flags & ARCH != 0 { "arch" } else if flags & PORTCULLIS != 0 { "portcullis" } else { "back" }, rooms: [ra, -1], lock: 0 }
         });
     }
     let walls = wall_runs(&cells, &rooms, nx, ny, &doors);
@@ -329,7 +330,9 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
             let out_sq = if inb(p) && lv.cells[p.1 as usize * nx + p.0 as usize] >= 0 { q } else { p };
             let inn = if out_sq == p { q } else { p };
             let at = Some((inn.0.max(0) as usize, inn.1.max(0) as usize));
-            if lv.z != 0 {
+            if d.kind == "portcullis" {
+                put(li, at, "a portcullis on the outside wall (it goes between two rooms; use a door)".into(), true);
+            } else if lv.z != 0 {
                 put(li, at, "a door to the outside above or below the ground floor".into(), true);
             } else if !sh.open_ground(out_sq.0, out_sq.1) {
                 put(li, at, format!("the {} door opens into the building next door", d.kind), true);

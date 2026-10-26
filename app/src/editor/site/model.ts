@@ -83,16 +83,16 @@ export const PORTCULLIS = 128;
 export const lockOf = (flags: number) => (flags >> 4) & 7;
 const withLock = (flags: number, lock: number) => (flags & ~(7 << 4)) | (lock << 4);
 
-/** A door on an edge. With no `lock`: none → door → secret door → none (a lock on it stays as it was). With a
- * lock's colour 1-7: none → a door with that lock; a door gets that lock, or loses it if it has it already.
- * With `portcullis`: none → a portcullis (with the lock, if any); a door → a portcullis; a portcullis → none, or with
- * a lock chosen it gets that lock or loses it. A portcullis clicked as a plain door becomes one. */
+/** A door on an edge. With a lock's colour 1-7 chosen: none → a door (a portcullis with the tool) with that lock; any
+ * door there, of either kind, gets that lock or loses it if it has it already. With no lock chosen: the plain-door tool
+ * goes none → door → secret door → none and turns a portcullis into a plain door; the portcullis tool goes none →
+ * portcullis → none and turns a door into a portcullis (a lock on it stays as it was). */
 export function cycleDoor(d: SiteDesign, li: number, x: number, y: number, side: number, lock = 0, portcullis = false) {
   const lv = d.levels[li];
   const at = lv.doors.findIndex((e) => e[0] === x && e[1] === y && e[2] === side);
   const gate = at >= 0 && (lv.doors[at][3] & PORTCULLIS) !== 0;
   if (at < 0) lv.doors.push([x, y, side, withLock(portcullis ? PORTCULLIS : 0, lock)]);
-  else if (portcullis !== gate) lv.doors[at][3] = (lv.doors[at][3] & ~(SECRET | PORTCULLIS)) | (portcullis ? PORTCULLIS : 0);
+  else if (!lock && portcullis !== gate) lv.doors[at][3] = (lv.doors[at][3] & ~(SECRET | PORTCULLIS)) | (portcullis ? PORTCULLIS : 0);
   else if (lock) lv.doors[at][3] = withLock(lv.doors[at][3], lockOf(lv.doors[at][3]) === lock ? 0 : lock);
   else if (!portcullis && !(lv.doors[at][3] & SECRET)) lv.doors[at][3] |= SECRET;
   else lv.doors.splice(at, 1);
