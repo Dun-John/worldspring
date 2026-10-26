@@ -1163,6 +1163,8 @@ export class InteriorLayer {
       const ci = Math.floor(r.center[0]);
       const cj = Math.floor(r.center[1]);
       if (r.squares < 4 || lv.cells[cj * nx + ci] !== ri || r.kind === 'floor' || r.kind === OPEN_BELOW || r.kind === ROOF_SLOPE) return;
+      // The small crossings of galleries (3x3 junctions) need no name each.
+      if (r.kind === 'junction' && r.squares <= 9) return;
       // A network of sewers: the tunnels need no name in every section.
       if (this.tile && (r.kind === 'sewer tunnel' || r.kind === 'service passage')) return;
       const text = new Text({ text: this.roomName(this.level, ri), style, anchor: 0.5, resolution: 2 });

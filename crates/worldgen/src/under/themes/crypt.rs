@@ -85,11 +85,13 @@ pub(crate) fn crypt(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     let want = target.saturating_sub(rooms(&p));
     g.grow(&mut p, &specs, want, false, rng);
     // Sealed tombs: most behind a hidden door.
-    for f in g.pieces.iter().filter(|f| f.room >= 0 && p.rooms[f.room as usize].kind == "sealed tomb") {
+    // (Those behind one are closed to growth: nothing may hang off a tomb only a hidden door leads to.)
+    for f in g.pieces.iter_mut().filter(|f| f.room >= 0 && p.rooms[f.room as usize].kind == "sealed tomb") {
         if let Some((a, b)) = f.door
             && rng.next_f64() < 0.6
         {
             p.secret.insert((a.min(b), a.max(b)));
+            f.open = false;
         }
     }
     let mut boss = None;
@@ -405,7 +407,10 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     let kind = if last { BOSS } else { "tomb" };
     let (ba, bd) = (odd(pick(5, sc(7).max(5), rng)), pick(5, sc(7).max(5), rng));
     let mut end = None;
-    for (t, a, d) in [(Template::Apse, ba, bd), (Template::Apse, 5, 5), (Template::Rect, 3, 3)] {
+    // (Above the deepest, half the time a plain hall rather than an apse, so levels differ.)
+    let plain = !last && rng.next_f64() < 0.5;
+    let ends = if plain { [(Template::Rect, ba, bd), (Template::Apse, 5, 5), (Template::Rect, 3, 3)] } else { [(Template::Apse, ba, bd), (Template::Apse, 5, 5), (Template::Rect, 3, 3)] };
+    for (t, a, d) in ends {
         if let Some(&e) = g.deck(&mut p, at, fwd, kind, t, a, d, 0, true).first() {
             g.pieces[e].open = false;
             end = Some(e);
@@ -422,7 +427,7 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
             let r = rng.next_f64();
             if last && r < 0.5 {
                 p.secret.insert((a.min(b), a.max(b)));
-            } else if r < 0.75 {
+            } else if r < if last { 0.75 } else { 0.28 } {
                 p.portcullis.insert((a.min(b), a.max(b)));
             }
         }

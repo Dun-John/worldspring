@@ -45,7 +45,8 @@ pub(crate) fn prison(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
             }
             None => gate,
         };
-        let mut s = odd(pick(3, sc(7).max(3), rng));
+        // (About 4 by 4: 5 square, else 3.)
+        let mut s = 5;
         let mut ring = None;
         while s >= 3 && ring.is_none() {
             ring = guard_ring(&mut p, &mut g, from, s);

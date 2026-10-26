@@ -154,7 +154,9 @@ impl Grower {
         for k in (0..b.w * b.h).filter(|&k| b.m[k]) {
             p.cells[(b.y + k / b.w) * self.nx + b.x + k % b.w] = room;
         }
-        if let Some((a, c)) = door {
+        if let Some((a, c)) = door
+            && p.cells[a] != p.cells[c]
+        {
             p.door(a, c);
         }
         self.pieces.push(Piece { room, x: b.x, y: b.y, w: b.w, h: b.h, door, open: true });
@@ -435,7 +437,10 @@ impl Grower {
             cells += self.line(p, rows[1], cell, (a, d), false);
         }
         if cells == 0 {
-            // (A row with no cells is just a room: let it be.)
+            // (A row with no cells: take it back, with its mirror.)
+            for _ in 0..rows.len() {
+                self.undo_last(p);
+            }
             return Vec::new();
         }
         for &r in rows.iter().filter(|_| gate) {
@@ -565,7 +570,7 @@ pub(crate) fn dead_end(p: &Plan, ny: usize) -> Option<i16> {
     (0..p.cells.len())
         .filter(|&k| {
             let r = p.cells[k];
-            r >= 0 && r != passage && r != p.cells[p.up] && doors[r as usize] == 1 && dist[k] >= 0
+            r >= 0 && r != passage && r != p.cells[p.up] && doors[r as usize] == 1 && dist[k] >= 0 && !matches!(p.rooms[r as usize].kind, "cell" | "solitary cell" | "cell row")
         })
         .max_by_key(|&k| (dist[k], std::cmp::Reverse(k)))
         .map(|k| p.cells[k])

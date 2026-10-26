@@ -7,7 +7,7 @@
 //! deeper it goes.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, Side, Spec, Template, boss_room, colonnade, dead_end, fallback, flood_room, way_down};
+use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, colonnade, dead_end, fallback, flood_room, way_down};
 use crate::under::*;
 
 #[allow(clippy::too_many_arguments)]
@@ -26,6 +26,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
     if depth == 0 {
         // Narthex, nave, (crossing), sanctum along the axis through the way in.
         g = Grower::new(nx, ny, passage, Some(ay));
+        g.cap = ROOMS_GROWING;
         let (nw, nh) = (pick(4, 5, rng), odd(pick(5, 7, rng)).min(odd(ny.saturating_sub(4)).max(3)));
         let x0 = ax.saturating_sub(1).max(1);
         let y0 = ay.saturating_sub(nh / 2).max(1);
@@ -95,6 +96,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         let holds = (x..x + s).contains(&ax) && (y..y + s).contains(&ay) && m[(ay - y) * s + ax - x];
         let t = if holds { t } else { Template::Rect };
         g = Grower::new(nx, ny, passage, Some(y + s / 2));
+        g.cap = ROOMS_GROWING;
         let Some(core) = g.seed(&mut p, "landing", t, x, y, s, s).or_else(|| g.seed(&mut p, "landing", Template::Rect, ax, ay, 1, 1)) else {
             return fallback(p, last);
         };
@@ -106,6 +108,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         let made = g.grow(&mut p, &specs, rooms.div_ceil(2), true, rng);
         g.grow(&mut p, &specs, rooms.saturating_sub(made + 1), false, rng);
         if last {
+            g.cap = ROOMS_MAX;
             boss = boss_room(&mut p, &mut g, ny, rng);
         }
     }
