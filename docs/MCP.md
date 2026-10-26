@@ -483,7 +483,7 @@ have nothing underground, so they take none of them. Themes by kind of site:
 | mine | `mine` |
 | lava_tube | `lava_tube` |
 
-A theme sets the rooms (a prison's cell blocks and warden's office, a dwarven hall's forges and great hall), how many
+A theme sets the rooms (a prison's guard ring, cell blocks and warden's office, a dwarven hall's forges and great hall), how many
 there are, corridor width and the floor. Every site, whatever its theme, size and depth, ends in one boss chamber on
 its deepest level, and every square is reachable.
 

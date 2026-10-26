@@ -80,7 +80,7 @@
 //!   keep dungeons `k:`): a hash per site on stdout (`U <seed> <id> <hash> <theme> <levels>`; everything else goes
 //!   with the other rows) and totals of sites, levels, rooms, doors, secret doors, loops (doors beyond a spanning
 //!   tree of a level's rooms), shortcut loops (each saving 4+ hops) and the hops they save, and `u:` sites breaking `under::design::check`;
-//!   portcullises and the water squares generators laid. THEME=temple,sunken_temple keeps only sites of those themes. TERRAIN=1 also lays the terrain tools
+//!   portcullises and the water squares generators laid. THEME=temple,sunken_temple keeps only sites of those themes (`keep`, `undercroft`: keep dungeons, sewer sections). TERRAIN=1 also lays the terrain tools
 //!   (`under::chasm`, `under::water`) on a copy of each site and counts what they laid and what they left unreached.
 //!
 //! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
@@ -3574,14 +3574,17 @@ fn under(ctx: &mut Ctx, r: &mut Report, label: &str) {
                 println!("U {label} {id} none");
                 continue;
             };
-            // THEME=a,b: only sites of those themes.
+            // THEME=a,b: only sites of those themes (`keep` keep dungeons, `undercroft` sewer sections).
+            let theme = it.theme.unwrap_or(if id.starts_with('k') { "keep" } else if id.starts_with('w') { "undercroft" } else { "-" });
             if let Ok(th) = std::env::var("THEME")
-                && !th.split(',').any(|t| Some(t) == it.theme)
+                && !th.split(',').any(|t| t == theme)
             {
                 continue;
             }
             r.measure("slowest site (ms)", false, t.elapsed().as_secs_f64() * 1e3, id.clone());
-            println!("U {label} {id} {:016x} {} {}", fnv64(serde_json::to_string(&it).unwrap().as_bytes()), it.theme.unwrap_or("-").replace(' ', "_"), it.levels.len());
+            // (A sewer section's own level too: the undercroft below it may change alone.)
+            let top = if id.starts_with('w') { format!(" top {:016x}", fnv64(serde_json::to_string(it.levels.last().unwrap()).unwrap().as_bytes())) } else { String::new() };
+            println!("U {label} {id} {:016x} {} {}{top}", fnv64(serde_json::to_string(&it).unwrap().as_bytes()), it.theme.unwrap_or("-").replace(' ', "_"), it.levels.len());
             r.tally("sites", 1);
             r.tally("levels", it.levels.len());
             for lv in &it.levels {

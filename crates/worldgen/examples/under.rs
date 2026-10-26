@@ -5,7 +5,8 @@
 //! each). TEXT=1 prints the design's text form instead (`under::design::to_text`, what agents read and write with
 //! get/set_site_design). MAKE=theme[:size[:levels]][,...] adds created sites of those themes on dry land (as the vital
 //! test does) and prints only them (e.g. MAKE=temple:large:3,sunken_temple).
-//! LEVEL=n prints only level n (1 the top).
+//! LEVEL=n prints only level n (1 the top); ROOMS=1 leaves the furniture out. `keep` / `undercroft` print a keep's deep dungeons (`k:`) / a sewer
+//! section with a grate and its undercroft below (`w:`).
 //! Terrain tools on the printed site, after generation (`under::water`/`chasm`/`rubble_slope`; generation untouched):
 //! WATER=wet|flooded, CHASM=level|room (the biggest room's), SPAN=bridge|stones (default bridge), RUBBLE=1 (a slope in
 //! the biggest room). Letters: `-` shallow water, `=` deep water, `#` chasm, `+` rope bridge, `:` stepping stones,
@@ -63,16 +64,23 @@ fn main() {
             continue;
         }
         let l = town::layout(&world, &t0, li);
-        for (k, e) in l.entrances.iter().enumerate() {
-            let kind = e.kind.name().replace(' ', "_");
+        // (The ways down, then `keep`: keeps' deep dungeons, `undercroft`: sewer sections with grates.)
+        let mut sites: Vec<(String, [f64; 2], String)> = l.entrances.iter().enumerate().map(|(k, e)| (format!("u:{li}:{k}"), e.at, e.kind.name().replace(' ', "_"))).collect();
+        if wanted.iter().any(|w| w == "keep") {
+            sites.extend(l.buildings.iter().filter(|b| interior::has_deep_dungeon(b)).map(|b| (format!("k:{li}:{}", b.id), town::geom::centroid(&b.poly), "keep".to_string())));
+        }
+        if wanted.iter().any(|w| w == "undercroft") {
+            sites.extend(l.entrances.iter().filter(|e| e.kind == worldgen::under::UnderKind::Sewer).map(|e| (worldgen::under::sewer_id(li, e.at), e.at, "undercroft".to_string())));
+        }
+        for (id, at, kind) in sites {
             if !by_theme && !wanted.is_empty() && !wanted.contains(&kind) {
                 continue;
             }
             let t = std::time::Instant::now();
-            let Some(mut it) = interior::generate_id(&world, &t0, &format!("u:{li}:{k}")) else { continue };
+            let Some(mut it) = interior::generate_id(&world, &t0, &id) else { continue };
             let ms = t.elapsed().as_secs_f64() * 1e3;
             // (By theme: each theme asked for; MAKE: every site made.)
-            let key = if by_theme { it.theme.unwrap_or("-").to_string() } else { kind.clone() };
+            let key = if by_theme && !matches!(kind.as_str(), "keep" | "undercroft") { it.theme.unwrap_or("-").to_string() } else { kind.clone() };
             if by_theme && !wanted.contains(&key) {
                 continue;
             }
@@ -83,16 +91,16 @@ fn main() {
             if made.is_empty() && (*count != skip + 1 || !seen.insert(key.clone())) {
                 continue;
             }
-            let unreached = terrain(&mut it, worldgen::core::rng::hash3(seed as u64, li as i64, k as i64, 0x7e44));
+            let unreached = terrain(&mut it, worldgen::core::rng::hash3(seed as u64, li as i64, worldgen::core::hash::fnv64(id.as_bytes()) as i64, 0x7e44));
             println!(
-                "== {} {} u:{li}:{k} ({}x{}, {} levels, {ms:.1} ms) at fx {:.6} fy {:.6}",
+                "== {} {} {id} ({}x{}, {} levels, {ms:.1} ms) at fx {:.6} fy {:.6}",
                 it.function,
                 it.theme.unwrap_or("-"),
                 it.nx,
                 it.ny,
                 it.levels.len(),
-                e.at[0] / world.geom.map_w_ft,
-                e.at[1] / world.geom.map_h_ft
+                at[0] / world.geom.map_w_ft,
+                at[1] / world.geom.map_h_ft
             );
             // (A line of totals: locks, keys, portcullises, secret doors, water and spans in squares.)
             let doors = |k: &str| it.levels.iter().flat_map(|lv| &lv.doors).filter(|d| d.kind == k).count();
@@ -143,7 +151,9 @@ fn main() {
                             .collect()
                     })
                     .collect();
-                for f in &lv.furniture {
+                // (ROOMS=1: rooms and ways only, no furniture.)
+                let bare = std::env::var("ROOMS").is_ok();
+                for f in lv.furniture.iter().filter(|f| !bare || matches!(f.kind, "exit" | "down" | "up" | "water_shallow" | "water_deep" | "rope_bridge" | "stepping_stone")) {
                     let c = match f.kind {
                         "exit" => 'E',
                         "down" => 'v',

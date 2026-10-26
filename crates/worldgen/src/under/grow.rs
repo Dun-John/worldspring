@@ -106,9 +106,20 @@ pub(crate) struct Grower {
     pub(crate) axis: Option<usize>,
     /// The level's passage (corridor pieces' room).
     pub(crate) passage: i16,
+    /// At most this many rooms on the level (a design's text names 75: `design::SYMBOLS`); cells keep `CELLS_LEAVE`
+    /// of them for other rooms.
+    pub(crate) cap: usize,
     nx: usize,
     ny: usize,
 }
+
+/// Rooms a level may have (a design's text names them by `design::SYMBOLS`), and while growing (some left for the
+/// boss chamber).
+pub(crate) const ROOMS_MAX: usize = crate::under::design::SYMBOLS.len();
+pub(crate) const ROOMS_GROWING: usize = ROOMS_MAX - 3;
+
+/// Rooms the cells leave for others under the grower's cap.
+const CELLS_LEAVE: usize = 30;
 
 /// A box placed: corner, size, template squares, room shape, the side it grew out to.
 struct Place {
@@ -122,7 +133,7 @@ struct Place {
 
 impl Grower {
     pub(crate) fn new(nx: usize, ny: usize, passage: i16, axis: Option<usize>) -> Grower {
-        Grower { pieces: Vec::new(), axis, passage, nx, ny }
+        Grower { pieces: Vec::new(), axis, passage, cap: usize::MAX, nx, ny }
     }
 
     /// Whether a box's template squares all lie on rock inside the ring of rock round the level.
@@ -207,6 +218,9 @@ impl Grower {
             Some(_) => return Vec::new(),
             None => None,
         };
+        if t != Template::Corridor && p.rooms.len() + 1 + twin.is_some() as usize > self.cap {
+            return Vec::new();
+        }
         let mut out = vec![self.lay(p, &b, kind, t, Some(door))];
         if let Some((b2, d2)) = twin {
             out.push(self.lay(p, &b2, kind, t, Some(d2)));
@@ -329,6 +343,110 @@ impl Grower {
     }
 }
 
+/// Kits of rooms for prisons, keeps and undercrofts: rows of cells off a straight block, rooms put where they fit.
+impl Grower {
+    /// Take back the last piece laid (its squares were rock, its door goes; a room's def too).
+    fn undo_last(&mut self, p: &mut Plan) {
+        let Some(f) = self.pieces.pop() else { return };
+        for j in f.y..f.y + f.h {
+            for i in f.x..f.x + f.w {
+                if p.cells[j * self.nx + i] == f.room {
+                    p.cells[j * self.nx + i] = -1;
+                }
+            }
+        }
+        if let Some((a, b)) = f.door {
+            p.doors.remove(&(a.min(b), a.max(b)));
+        }
+        if f.room != self.passage {
+            p.rooms.pop();
+        }
+    }
+
+    /// Put room `kind` (template `t`, `across` by `deep` squares) where it fits, not mirrored: off a wall of one of the
+    /// `near` pieces still open, else of any open piece (from a random one on), straight through the wall or at the
+    /// end of a corridor `cw` wide grown first (`cw` 0: never). Its piece.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn attach(&mut self, p: &mut Plan, near: &[usize], kind: &'static str, t: Template, (across, deep): (usize, usize), cw: usize, rng: &mut Pcg32) -> Option<usize> {
+        let n = self.pieces.len();
+        let start = if n == 0 { 0 } else { rng.below(n as u32) as usize };
+        let mut order: Vec<usize> = near.iter().copied().filter(|&i| self.pieces[i].open).collect();
+        order.extend((0..n).map(|k| (start + k) % n).filter(|i| self.pieces[*i].open && !near.contains(i)));
+        let s0 = rng.below(4) as usize;
+        let clen = 2 + rng.below(3) as usize;
+        for via in [false, true] {
+            if via && cw == 0 {
+                break;
+            }
+            for &i in &order {
+                for k in 0..4 {
+                    let side = Side::ALL[(s0 + k) % 4];
+                    let f = self.pieces[i];
+                    let wall = if side.across_x() { f.w } else { f.h } as isize;
+                    for along in [0, -(wall / 3), wall / 3] {
+                        if !via {
+                            if let Some(&r) = self.deck(p, i, side, kind, t, across, deep, along, false).first() {
+                                return Some(r);
+                            }
+                            continue;
+                        }
+                        let Some(&c) = self.deck(p, i, side, "", Template::Corridor, cw, clen, along, false).first() else { continue };
+                        if let Some(&r) = self.deck(p, c, side, kind, t, across, deep, 0, false).first() {
+                            self.pieces[c].open = false;
+                            return Some(r);
+                        }
+                        self.undo_last(p);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Small rooms (`kind`, `a` squares along the wall, `d` deep) lined along both long walls of piece `row`, as many as
+    /// fit, mirrored with it when asked (`deck`); each closed to more growth. How many were put.
+    pub(crate) fn line(&mut self, p: &mut Plan, row: usize, kind: &'static str, (a, d): (usize, usize), mirror: bool) -> usize {
+        let f = self.pieces[row];
+        let (len, sides) = if f.w > f.h { (f.w, [Side::N, Side::S]) } else { (f.h, [Side::W, Side::E]) };
+        let mut put = 0;
+        for side in sides {
+            let mut t = 0;
+            while t + a <= len && p.rooms.len() + CELLS_LEAVE < self.cap {
+                let along = t as isize - (len as isize - a as isize).div_euclid(2);
+                for c in self.deck(p, row, side, kind, Template::Rect, a, d, along, mirror) {
+                    self.pieces[c].open = false;
+                    put += 1;
+                }
+                t += a;
+            }
+        }
+        put
+    }
+
+    /// A cell block: a straight row (`row` kind, `rw` wide, `len` long) grown out of side `side` of piece `from`
+    /// (`along` off the middle of its wall), cells (`cell`, `a` by `d`) along both its long walls, an iron grate at its
+    /// mouth (`gate`); mirrored when asked. The rows put (none if it has no cells).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn cell_block(&mut self, p: &mut Plan, from: usize, side: Side, along: isize, (row, rw, len): (&'static str, usize, usize), (cell, a, d): (&'static str, usize, usize), gate: bool, mirror: bool) -> Vec<usize> {
+        let rows = self.deck(p, from, side, row, Template::Rect, rw, len, along, mirror);
+        let Some(&first) = rows.first() else { return rows };
+        let mut cells = self.line(p, first, cell, (a, d), mirror);
+        if rows.len() > 1 && !mirror {
+            cells += self.line(p, rows[1], cell, (a, d), false);
+        }
+        if cells == 0 {
+            // (A row with no cells is just a room: let it be.)
+            return Vec::new();
+        }
+        for &r in rows.iter().filter(|_| gate) {
+            if let Some((x, y)) = self.pieces[r].door {
+                p.portcullis.insert((x.min(y), x.max(y)));
+            }
+        }
+        rows
+    }
+}
+
 /// The way down on a level: the square nearest the middle of the room farthest on foot from the arrival (not the
 /// passage, the arrival's room, nor one of `skip`), off its doorways; the farthest square if there is no such room.
 pub(crate) fn way_down(p: &Plan, ny: usize, skip: &[i16]) -> usize {
@@ -403,4 +521,83 @@ pub(crate) fn flood_room(p: &mut Plan, ny: usize, room: i16, (shallow, deep): (f
         let edge = neighbours(k, nx, ny).any(|m| p.cells[m] != room);
         p.water[k] = [shallow as f32, if ledge && edge { 2.0 } else { deep as f32 }];
     }
+}
+
+/// The boss chamber grown off the open piece farthest from the arrival that has room for it (an apse at its far end),
+/// closed to more growth.
+pub(crate) fn boss_room(p: &mut Plan, g: &mut Grower, ny: usize, rng: &mut Pcg32) -> Option<i16> {
+    let nx = p.nx;
+    let dist = p.distances(p.up, ny, None);
+    let mut order: Vec<(i32, usize)> = (0..g.pieces.len())
+        .filter(|&i| g.pieces[i].open || g.pieces[i].room == g.passage)
+        .map(|i| {
+            let f = &g.pieces[i];
+            let k = (f.y + f.h / 2) * nx + f.x + f.w / 2;
+            (if p.cells[k] == f.room { dist[k] } else { dist[f.y * nx + f.x].max(0) }, i)
+        })
+        .collect();
+    order.sort_by_key(|&(d, i)| (std::cmp::Reverse(d), i));
+    let (a, d) = (7 + 2 * rng.below(2) as usize, 7 + rng.below(3) as usize);
+    for (_, i) in order {
+        for side in Side::ALL {
+            for (t, a, d) in [(Template::Apse, a, d), (Template::Rect, 7, 7), (Template::Rect, 5, 6)] {
+                let mirror = !matches!(side, Side::N | Side::S) && g.centred(i);
+                if let Some(&b) = g.deck(p, i, side, BOSS, t, a, d, 0, mirror).first() {
+                    g.pieces[b].open = false;
+                    return Some(g.pieces[b].room);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The room with one door farthest on foot from the arrival (not the passage nor the arrival's).
+pub(crate) fn dead_end(p: &Plan, ny: usize) -> Option<i16> {
+    let passage = p.passage.map_or(-1, |q| q.0);
+    let mut doors = vec![0; p.rooms.len()];
+    for &(a, b) in &p.doors {
+        for k in [a, b] {
+            doors[p.cells[k] as usize] += 1;
+        }
+    }
+    let dist = p.distances(p.up, ny, None);
+    (0..p.cells.len())
+        .filter(|&k| {
+            let r = p.cells[k];
+            r >= 0 && r != passage && r != p.cells[p.up] && doors[r as usize] == 1 && dist[k] >= 0
+        })
+        .max_by_key(|&k| (dist[k], std::cmp::Reverse(k)))
+        .map(|k| p.cells[k])
+}
+
+/// A level the grower couldn't start (no room round the arrival): one square, the way on.
+pub(crate) fn fallback(mut p: Plan, last: bool) -> Plan {
+    let r = p.room(if last { BOSS } else { "landing" }, 0.0);
+    p.cells[p.up] = r;
+    p
+}
+
+/// An iron grate in the doorway a piece was grown through.
+pub(crate) fn grate(p: &mut Plan, f: &Piece) {
+    if let Some((a, b)) = f.door {
+        p.portcullis.insert((a.min(b), a.max(b)));
+    }
+}
+
+/// How many rooms a level has (not its passage, cells nor cell rows).
+pub(crate) fn rooms(p: &Plan, passage: i16) -> usize {
+    (0..p.rooms.len()).filter(|&r| r as i16 != passage && !matches!(p.rooms[r].kind, "cell" | "solitary cell" | "cell row")).count()
+}
+
+/// What grows among the kits: these rooms, each small or up to `big` (across, deep), and corridors `w` wide.
+pub(crate) fn specs(kinds: &[&'static str], w: usize, big: ((usize, usize), (usize, usize))) -> Vec<Spec> {
+    let mut out = Vec::new();
+    for &kind in kinds {
+        out.push(Spec { kind, t: Template::Rect, across: (3, 5), deep: (3, 5) });
+        out.push(Spec { kind, t: Template::Rect, across: big.0, deep: big.1 });
+    }
+    out.push(Spec { kind: "", t: Template::Corridor, across: (w, w), deep: (3, 6) });
+    out.push(Spec { kind: "", t: Template::Corridor, across: (w, w), deep: (2, 4) });
+    out
 }

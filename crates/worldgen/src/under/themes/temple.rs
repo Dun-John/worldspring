@@ -7,7 +7,7 @@
 //! deeper it goes.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, Side, Spec, Template, colonnade, flood_room, way_down};
+use crate::under::grow::{Grower, Side, Spec, Template, boss_room, colonnade, dead_end, fallback, flood_room, way_down};
 use crate::under::*;
 
 #[allow(clippy::too_many_arguments)]
@@ -160,54 +160,6 @@ fn specs(theme: &Theme, skip: &[&str], wide: bool) -> Vec<Spec> {
     out
 }
 
-/// The boss chamber grown off the open piece farthest from the arrival that has room for it (an apse at its far end),
-/// closed to more growth.
-fn boss_room(p: &mut Plan, g: &mut Grower, ny: usize, rng: &mut Pcg32) -> Option<i16> {
-    let nx = p.nx;
-    let dist = p.distances(p.up, ny, None);
-    let mut order: Vec<(i32, usize)> = (0..g.pieces.len())
-        .filter(|&i| g.pieces[i].open || g.pieces[i].room == g.passage)
-        .map(|i| {
-            let f = &g.pieces[i];
-            let k = (f.y + f.h / 2) * nx + f.x + f.w / 2;
-            (if p.cells[k] == f.room { dist[k] } else { dist[f.y * nx + f.x].max(0) }, i)
-        })
-        .collect();
-    order.sort_by_key(|&(d, i)| (std::cmp::Reverse(d), i));
-    let (a, d) = (7 + 2 * rng.below(2) as usize, 7 + rng.below(3) as usize);
-    for (_, i) in order {
-        for side in Side::ALL {
-            for (t, a, d) in [(Template::Apse, a, d), (Template::Rect, 7, 7), (Template::Rect, 5, 6)] {
-                let mirror = !matches!(side, Side::N | Side::S) && g.centred(i);
-                if let Some(&b) = g.deck(p, i, side, BOSS, t, a, d, 0, mirror).first() {
-                    g.pieces[b].open = false;
-                    return Some(g.pieces[b].room);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// The room with one door farthest on foot from the arrival (not the passage nor the arrival's).
-fn dead_end(p: &Plan, ny: usize) -> Option<i16> {
-    let passage = p.passage.map_or(-1, |q| q.0);
-    let mut doors = vec![0; p.rooms.len()];
-    for &(a, b) in &p.doors {
-        for k in [a, b] {
-            doors[p.cells[k] as usize] += 1;
-        }
-    }
-    let dist = p.distances(p.up, ny, None);
-    (0..p.cells.len())
-        .filter(|&k| {
-            let r = p.cells[k];
-            r >= 0 && r != passage && r != p.cells[p.up] && doors[r as usize] == 1 && dist[k] >= 0
-        })
-        .max_by_key(|&k| (dist[k], std::cmp::Reverse(k)))
-        .map(|k| p.cells[k])
-}
-
 /// A sunken temple's water: deep in the big halls (half of them with dry ledges along their walls), shallow pools
 /// elsewhere, more on each level down; the boss chamber dry.
 fn flood(p: &mut Plan, ny: usize, depth: usize, halls: &[i16], boss: Option<i16>, rng: &mut Pcg32) {
@@ -227,11 +179,4 @@ fn flood(p: &mut Plan, ny: usize, depth: usize, halls: &[i16], boss: Option<i16>
             flood_room(p, ny, r, (0.52 - more, 2.0), false);
         }
     }
-}
-
-/// A level the grower couldn't start (no room round the arrival): one square, the way on.
-fn fallback(mut p: Plan, last: bool) -> Plan {
-    let r = p.room(if last { BOSS } else { "landing" }, 0.0);
-    p.cells[p.up] = r;
-    p
 }

@@ -330,6 +330,10 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "warden's office" => &[("desk", 2, 1, Edge, 1, 1), ("chest", 1, 1, Edge, 1, 1), ("bookshelf", 1, 2, Edge, 0, 1), ("sconce", 1, 1, Edge, 1, 1)],
         "mess hall" => &[("long_table", 1, 3, Any, 1, 2), ("barrel", 1, 1, Edge, 1, 2), ("sacks", 1, 1, Edge, 0, 2), ("sconce", 1, 1, Edge, 1, 1)],
         "interrogation room" => &[("table", 1, 1, Any, 1, 1), ("chains", 1, 1, Edge, 1, 3), ("brazier", 1, 1, Edge, 1, 1), ("cage", 2, 2, Edge, 0, 1)],
+        "guard post" => &[("table", 1, 1, Any, 1, 1), ("weapon_rack", 1, 1, Edge, 1, 2), ("sconce", 1, 1, Edge, 1, 2), ("chest", 1, 1, Edge, 0, 1)],
+        "cell" => &[("chains", 1, 1, Edge, 0, 1), ("bedroll", 1, 2, Any, 0, 1), ("bones", 1, 1, Any, 0, 1)],
+        "solitary cell" => &[("chains", 1, 1, Edge, 1, 1), ("bones", 1, 1, Any, 0, 1)],
+        "cell row" => &[("sconce", 1, 1, Edge, 0, 2), ("chains", 1, 1, Edge, 0, 1)],
         "cell corridor" => &[("chains", 1, 1, Edge, 1, 3), ("sconce", 1, 1, Edge, 1, 3), ("trap", 1, 1, Any, 0, 1)],
         // Temples.
         "nave" => &[("sconce", 1, 1, Edge, 1, 3), ("banner", 1, 1, Edge, 0, 2), ("statue", 1, 1, Edge, 0, 2), ("candles", 1, 1, Any, 0, 1)],

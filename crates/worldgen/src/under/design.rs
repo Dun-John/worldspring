@@ -159,6 +159,10 @@ const EXTRA_ROOMS: &[&str] = &[
     "nave",
     "side chapel",
     "crossing",
+    "guard post",
+    "cell row",
+    "cell",
+    "solitary cell",
 ];
 /// Items that are ways: in from the surface, up and down a level.
 pub const WAYS: [&str; 3] = ["exit", "up", "down"];

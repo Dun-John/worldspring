@@ -158,6 +158,12 @@ pub enum Planner {
     Built,
     /// Grown room by room, the top level mirrored: narthex, nave, chapels, apse sanctum (`themes::temple`).
     Temple,
+    /// Grown round a guard ring: cell blocks off it, the offices; solitary cells and oubliettes below (`themes::prison`).
+    Prison,
+    /// Grown from the landing with prison and store kits: a cell wing, stores, the old lords' crypt (`themes::keep`).
+    Keep,
+    /// Grown from the drain chamber with store kits: cisterns (some flooded), caches, a rat warren (`themes::keep`).
+    Undercroft,
     Cave,
     Mine,
     LavaTube,
@@ -180,7 +186,10 @@ const fn natural(key: &'static str, kind: UnderKind, kinds: &'static [&'static s
 /// Every theme a site can be given; each kind's first is the one it had before themes.
 pub const THEMES: &[Theme] = &[
     built("dungeon", UnderKind::Dungeon, "entry hall", &["guard room", "barracks", "storeroom", "cell block", "torture chamber", "shrine", "armory", "well room", "pit room", "prison"], "corridor", (8, 5), false, 1),
-    built("prison", UnderKind::Dungeon, "gatehouse", &["cell block", "cell block", "prison", "oubliette", "torture chamber", "guard room", "warden's office", "mess hall", "interrogation room"], "cell corridor", (10, 5), false, 1),
+    Theme {
+        planner: Planner::Prison,
+        ..built("prison", UnderKind::Dungeon, "gatehouse", &["cell block", "cell block", "prison", "oubliette", "torture chamber", "guard room", "warden's office", "mess hall", "interrogation room"], "cell corridor", (10, 5), false, 1)
+    },
     Theme { planner: Planner::Temple, ..built("temple", UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "ossuary", "chapel of rest"], "processional way", (7, 4), false, 2) },
     built("wizard_lair", UnderKind::Dungeon, "foyer", &["library", "laboratory", "summoning circle", "specimen vault", "study", "menagerie", "golem workshop", "scrying room"], "hall", (7, 4), false, 1),
     built("bandit_hideout", UnderKind::Dungeon, "hidden entry", &["common room", "bunk room", "loot store", "armory", "kitchen", "captain's quarters", "storeroom", "lookout"], "tunnel", (7, 3), false, 1),
@@ -211,7 +220,7 @@ pub const THEMES: &[Theme] = &[
 pub const SUNKEN_TEMPLE: &str = "sunken_temple";
 
 /// Under a large keep: prisons, stores, old crypts and a way out.
-const KEEP_DUNGEON: Theme = built(
+const KEEP_DUNGEON: Theme = Theme { planner: Planner::Keep, ..built(
     "keep",
     UnderKind::KeepDungeon,
     "landing",
@@ -220,9 +229,12 @@ const KEEP_DUNGEON: Theme = built(
     (11, 6),
     true,
     1,
-);
+) };
 /// Below a city's sewers.
-const UNDERCROFT: Theme = built("undercroft", UnderKind::Sewer, "drain chamber", &["cistern", "overflow chamber", "smugglers' cache", "old vault", "rat warren", "flooded hall"], "culvert", (9, 5), false, 1);
+const UNDERCROFT: Theme = Theme {
+    planner: Planner::Undercroft,
+    ..built("undercroft", UnderKind::Sewer, "drain chamber", &["cistern", "overflow chamber", "smugglers' cache", "old vault", "rat warren", "flooded hall"], "culvert", (9, 5), false, 1)
+};
 
 /// A theme by key (`Created::theme`).
 pub fn theme(key: &str) -> Option<usize> {
@@ -627,6 +639,10 @@ fn site(
             _ if kind == UnderKind::Sewer && d == 0 => sewer(t0, l, f.origin, nx, ny, arrive, last)?,
             Planner::Built => dungeon(nx, ny, a, d, last, theme, area, rng),
             Planner::Temple => temple(nx, ny, a, d, last, theme, area, rng),
+            Planner::Prison => prison(nx, ny, a, d, last, theme, area, rng),
+            // (A keep's dungeons are big when three levels deep.)
+            Planner::Keep => keep(nx, ny, a, d, last, theme, if depth >= 3 { 1.69 } else { 1.0 }, rng),
+            Planner::Undercroft => undercroft(nx, ny, a, last, theme, rng),
             Planner::Cave => cave(nx, ny, a, last, theme, rng),
             Planner::Mine => mine(nx, ny, a, last, rng),
             Planner::LavaTube => lava_tube(nx, ny, a, d, last, theme, rng),
