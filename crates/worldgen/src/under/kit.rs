@@ -424,6 +424,7 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "frozen pool" => &[("ice_sheet", 2, 2, Any, 2, 4), ("ice", 1, 1, Any, 1, 3)],
         "icicle gallery" => &[("ice", 1, 1, Any, 4, 7), ("ice_sheet", 2, 2, Any, 0, 2)],
         "ice shelf" => &[("ice", 1, 1, Any, 1, 2), ("ice_sheet", 2, 2, Any, 0, 1)],
+        "island" => &[("chest", 1, 1, Any, 1, 1), ("hoard", 1, 1, Any, 0, 1), ("altar", 2, 1, Any, 0, 1), ("candles", 1, 1, Any, 0, 1)],
         "flooded cavern" => &[("pool", 2, 2, Any, 2, 4), ("stalagmite", 1, 1, Any, 1, 3), ("moss", 1, 1, Any, 1, 3)],
         "sump" => &[("pool", 2, 2, Any, 2, 3), ("debris", 1, 1, Any, 0, 2), ("moss", 1, 1, Any, 1, 2)],
         "lair" => &[("bones", 1, 1, Any, 3, 6), ("skeleton", 1, 2, Any, 1, 2), ("nest", 1, 1, Any, 1, 2), ("boulder", 2, 2, Any, 0, 1)],
@@ -1372,7 +1373,7 @@ fn rects(grid: &[u8], code: u8, nx: usize) -> Vec<(usize, usize, usize, usize)> 
 }
 
 /// Value noise in 0..1 at square (i, j): lattice hashes `cell` squares apart, smoothed, and an octave at half that.
-fn noise(seed: u64, i: usize, j: usize, cell: f64) -> f64 {
+pub(crate) fn noise(seed: u64, i: usize, j: usize, cell: f64) -> f64 {
     let (mut sum, mut amp, mut c) = (0.0, 1.0, cell);
     for o in 0..2 {
         let (x, y) = ((i as f64 + 0.5) / c, (j as f64 + 0.5) / c);

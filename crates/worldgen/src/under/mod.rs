@@ -189,6 +189,8 @@ pub enum Planner {
     Tomb,
     /// Great flooded halls and cisterns, vaults among flooded passages (`themes::vault`).
     Vault,
+    /// Chambers of uneven size grown together, a square of rock between them, joined by squeezes and short tunnels;
+    /// raised ledges, water by theme, islands, a chasm now and then (`themes::cave`).
     Cave,
     Mine,
     LavaTube,
@@ -777,10 +779,11 @@ fn site(
             p.put_all(items);
         }
         if let Some((r, rope)) = p.chasm {
-            // (A chasm across a room, once the locks and keys are in: crossed by rope bridges or its stone bridge.)
+            // (A chasm across a room (a cave's: across the level), once the locks and keys are in: crossed by rope bridges
+            // or its stone bridge.)
             p.reserve_doors();
             let seed = hash3(rng.next_u32() as u64, d as i64, 0, 0xc4a5);
-            let items = chasm_in(&Ground::of_plan(&p), Some(r), Span::Bridge, seed, rope);
+            let items = chasm_in(&Ground::of_plan(&p), (r >= 0).then_some(r), Span::Bridge, seed, rope);
             p.put_all(items);
             // (The stone bridge's deck: its squares with the chasm beside them, end to end.)
             let gulf: crate::core::hash::FastSet<usize> = p.items.iter().filter(|f| f.kind == "chasm").flat_map(|f| (f.y as usize..(f.y + f.h) as usize).flat_map(move |j| (f.x as usize..(f.x + f.w) as usize).map(move |i| j * nx + i))).collect();

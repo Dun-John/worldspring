@@ -169,6 +169,7 @@ const EXTRA_ROOMS: &[&str] = &[
     "chasm hall",
     "cave-in",
     "landing",
+    "island",
 ];
 /// Items that are ways: in from the surface, up and down a level.
 pub const WAYS: [&str; 3] = ["exit", "up", "down"];

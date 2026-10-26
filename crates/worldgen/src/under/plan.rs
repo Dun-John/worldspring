@@ -51,8 +51,9 @@ pub(crate) struct Plan {
     pub(crate) loops: f64,
     /// Most secret doors the level gets once its planner's are in (`kit::guard` adds none past it).
     pub(crate) secrets: usize,
-    /// A chasm to lay across a room once the locks and keys are in (`kit::chasm_in`): the room, and whether rope bridges
-    /// are strung over it (else it is crossed where its planner kept squares `taken`: a stone bridge).
+    /// A chasm to lay across a room once the locks and keys are in (`kit::chasm_in`): the room (-1: across the level),
+    /// and whether rope bridges are strung over it (else it is crossed where its planner kept squares `taken`: a stone
+    /// bridge).
     pub(crate) chasm: Option<(i16, bool)>,
     /// The stone bridge's squares (kept off the chasm): a `stone_bridge` is laid over those the chasm runs past.
     pub(crate) bridge: Vec<usize>,
@@ -178,21 +179,60 @@ impl Plan {
             return false;
         }
         if it.blocks_move {
-            let mut blocked = self.blocked.clone();
-            for &k in &squares {
-                blocked[k] = true;
+            if squares.len() == 1 && self.ring_safe(squares[0], ny) {
+                self.blocked[squares[0]] = true;
+            } else {
+                let mut blocked = self.blocked.clone();
+                for &k in &squares {
+                    blocked[k] = true;
+                }
+                let dist = self.distances(self.up, ny, Some(&blocked));
+                if (0..nx * ny).any(|k| self.cells[k] >= 0 && !blocked[k] && dist[k] < 0) {
+                    return false;
+                }
+                self.blocked = blocked;
             }
-            let dist = self.distances(self.up, ny, Some(&blocked));
-            if (0..nx * ny).any(|k| self.cells[k] >= 0 && !blocked[k] && dist[k] < 0) {
-                return false;
-            }
-            self.blocked = blocked;
         }
         for &k in &squares {
             self.taken[k] = true;
         }
         self.items.push(it);
         true
+    }
+
+    /// Whether blocking square `k` keeps every square reached (the quick way, as `place`'s search would find): the
+    /// open squares one steps to from `k` all join up round the ring of eight about it.
+    fn ring_safe(&self, k: usize, ny: usize) -> bool {
+        let nx = self.nx;
+        let (i, j) = ((k % nx) as isize, (k / nx) as isize);
+        // (The ring from north, clockwise; the steps to `k` at 0, 2, 4, 6.)
+        const RING: [(isize, isize); 8] = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)];
+        let at = |d: usize| {
+            let (x, y) = (i + RING[d].0, j + RING[d].1);
+            (x >= 0 && y >= 0 && x < nx as isize && y < ny as isize).then(|| y as usize * nx + x as usize)
+        };
+        let open = |d: usize| at(d).filter(|&q| self.cells[q] >= 0 && !self.blocked[q]);
+        let goes = |d: usize| d % 2 == 0 && open(d).is_some_and(|q| self.passable(k, q));
+        let n = (0..8).filter(|&d| goes(d)).count();
+        if n <= 1 {
+            return true;
+        }
+        // The arcs of open squares round the ring, each step between neighbours passable: one holds every way out.
+        let link = |d: usize| matches!((open(d), open((d + 1) % 8)), (Some(a), Some(b)) if self.passable(a, b));
+        let Some(start) = (0..8).find(|&d| !link(d)) else { return true };
+        let mut arcs = 0;
+        let mut inside = false;
+        for s in 1..=8 {
+            let d = (start + s) % 8;
+            if goes(d) && !inside {
+                arcs += 1;
+                inside = true;
+            }
+            if !link(d) {
+                inside = false;
+            }
+        }
+        arcs <= 1
     }
 
     /// Doorways stay clear.
