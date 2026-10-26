@@ -14,8 +14,8 @@ use crate::core::rng::Pcg32;
 use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Template, boss_room, grate, rooms, specs, colonnade, dead_end, fallback, fill, flood_room, way_down};
 use crate::under::*;
 
-const CELL: &str = "cell";
-const ROW: &str = "cell row";
+pub(super) const CELL: &str = "cell";
+pub(super) const ROW: &str = "cell row";
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn keep(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool, theme: &Theme, area: f64, rng: &mut Pcg32) -> Plan {
@@ -186,7 +186,7 @@ pub(super) fn hub(p: &mut Plan, passage: i16, kind: &'static str, t: Template, a
 }
 
 /// A cell block off one of the `near` pieces (else any open one), on whichever side it fits. Its rows.
-fn cell_block(p: &mut Plan, g: &mut Grower, near: &[usize], row: (&'static str, usize, usize), cell: (&'static str, usize, usize), rng: &mut Pcg32) -> Vec<usize> {
+pub(super) fn cell_block(p: &mut Plan, g: &mut Grower, near: &[usize], row: (&'static str, usize, usize), cell: (&'static str, usize, usize), rng: &mut Pcg32) -> Vec<usize> {
     let s0 = rng.below(4) as usize;
     let mut order: Vec<usize> = near.to_vec();
     order.extend((0..g.pieces.len()).filter(|i| !near.contains(i) && g.pieces[*i].open));
@@ -205,7 +205,7 @@ fn cell_block(p: &mut Plan, g: &mut Grower, near: &[usize], row: (&'static str, 
 /// cell), pillars down the `pillared` halls (room, inset from the long walls), the pools laid (room, shallow and deep
 /// heights, ledge).
 #[allow(clippy::too_many_arguments)]
-fn finish(p: &mut Plan, ny: usize, passage: i16, cw: usize, last: bool, mut boss: Option<i16>, pools: &[(i16, (f64, f64), bool)], pillared: &[(i16, usize)]) {
+pub(super) fn finish(p: &mut Plan, ny: usize, passage: i16, cw: usize, last: bool, mut boss: Option<i16>, pools: &[(i16, (f64, f64), bool)], pillared: &[(i16, usize)]) {
     if last && boss.is_none() {
         boss = dead_end(p, ny);
         if let Some(b) = boss {

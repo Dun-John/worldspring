@@ -3,11 +3,12 @@
 //! anchored at the entrance and running the way the passage goes in, so it lies under the map
 //! where it is (the surface shows through faintly). Same `Interior` model as buildings.
 //!
-//! - Dungeons are graph-first: rooms placed on the level, a spanning tree plus a few loops
-//!   between them, corridors dug by least-cost paths that never cut through other rooms, doors
-//!   where a corridor meets a room. Temples, prisons, crypts, tombs, flooded vaults, keep
-//!   dungeons and undercrofts are grown room by room (`grow`); crypts, ossuaries and catacombs
-//!   as niche-lined galleries in a grid of junctions.
+//! - Bandit hideouts and goblin warrens are graph-first: rooms placed on the level, a spanning
+//!   tree plus a few loops between them, corridors dug by least-cost paths that never cut through
+//!   other rooms, doors where a corridor meets a room. Dungeons, dwarven halls, wizards' lairs,
+//!   temples, prisons, crypts, tombs, flooded vaults, keep dungeons and undercrofts are grown room
+//!   by room (`grow`); crypts, ossuaries and catacombs as niche-lined galleries in a grid of
+//!   junctions.
 //! - Caves are cellular automata grown around a winding spine, kept to the part reachable from
 //!   the arrival, split into chambers (some raised as ledges).
 //! - Mines are a haulage way with side drifts and stopes, a shaft to the next level.
@@ -158,6 +159,14 @@ pub struct Theme {
 pub enum Planner {
     /// Rooms, a spanning tree plus loops, dug corridors (`themes::dungeon`).
     Built,
+    /// Grown room by room with mixed kits, a mirrored core on the top level: guard rooms, cells, stores (`themes::mixed`).
+    Mixed,
+    /// Axial halls: gate hall, a pillared gallery with side wings, the great hall; a chasm one level in two
+    /// (`themes::dwarven`).
+    Dwarven,
+    /// A round stair hall at each level's heart, mirrored spokes to round rooms; the summoning circle deepest
+    /// (`themes::wizard`).
+    Wizard,
     /// Grown room by room, the top level mirrored: narthex, nave, chapels, apse sanctum (`themes::temple`).
     Temple,
     /// Grown round a guard ring: cell blocks off it, the offices; solitary cells and oubliettes below (`themes::prison`).
@@ -193,15 +202,15 @@ const fn natural(key: &'static str, kind: UnderKind, kinds: &'static [&'static s
 
 /// Every theme a site can be given; each kind's first is the one it had before themes.
 pub const THEMES: &[Theme] = &[
-    built("dungeon", UnderKind::Dungeon, "entry hall", &["guard room", "barracks", "storeroom", "cell block", "torture chamber", "shrine", "armory", "well room", "pit room", "prison"], "corridor", (8, 5), false, 1),
+    Theme { planner: Planner::Mixed, ..built("dungeon", UnderKind::Dungeon, "entry hall", &["guard room", "barracks", "storeroom", "cell block", "torture chamber", "shrine", "armory", "well room", "pit room", "prison"], "corridor", (8, 5), false, 1) },
     Theme {
         planner: Planner::Prison,
         ..built("prison", UnderKind::Dungeon, "gatehouse", &["cell block", "cell block", "prison", "oubliette", "torture chamber", "guard room", "warden's office", "mess hall", "interrogation room"], "cell corridor", (10, 5), false, 1)
     },
     Theme { planner: Planner::Temple, ..built("temple", UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "ossuary", "chapel of rest"], "processional way", (7, 4), false, 2) },
-    built("wizard_lair", UnderKind::Dungeon, "foyer", &["library", "laboratory", "summoning circle", "specimen vault", "study", "menagerie", "golem workshop", "scrying room"], "hall", (7, 4), false, 1),
+    Theme { planner: Planner::Wizard, ..built("wizard_lair", UnderKind::Dungeon, "foyer", &["library", "laboratory", "summoning circle", "specimen vault", "study", "menagerie", "golem workshop", "scrying room"], "hall", (7, 4), false, 1) },
     built("bandit_hideout", UnderKind::Dungeon, "hidden entry", &["common room", "bunk room", "loot store", "armory", "kitchen", "captain's quarters", "storeroom", "lookout"], "tunnel", (7, 3), false, 1),
-    built("dwarven_hall", UnderKind::Dungeon, "gate hall", &["great hall", "forge", "brewery", "armory", "barracks", "treasury", "ancestor hall", "storeroom", "mushroom farm"], "gallery", (9, 5), true, 2),
+    Theme { planner: Planner::Dwarven, ..built("dwarven_hall", UnderKind::Dungeon, "gate hall", &["great hall", "forge", "brewery", "armory", "barracks", "treasury", "ancestor hall", "storeroom", "mushroom farm"], "gallery", (9, 5), true, 2) },
     built("goblin_warren", UnderKind::Dungeon, "warren mouth", &["den", "den", "nest", "cook pit", "refuse pit", "wolf pen", "shaman's hut", "storeroom"], "crawlway", (12, 6), false, 1),
     Theme {
         planner: Planner::Vault,
@@ -652,6 +661,9 @@ fn site(
             // (A city's own sewers, not from a theme: its top level follows the streets.)
             _ if kind == UnderKind::Sewer && d == 0 => sewer(t0, l, f.origin, nx, ny, arrive, last)?,
             Planner::Built => dungeon(nx, ny, a, d, last, theme, area, rng),
+            Planner::Mixed => mixed(nx, ny, a, d, last, theme, area, rng),
+            Planner::Dwarven => dwarven(nx, ny, a, d, last, theme, area, rng),
+            Planner::Wizard => wizard(nx, ny, a, d, last, theme, area, rng),
             Planner::Temple => temple(nx, ny, a, d, last, theme, area, rng),
             Planner::Prison => prison(nx, ny, a, d, last, theme, area, rng),
             // (A keep's dungeons are big when three levels deep.)
@@ -702,6 +714,13 @@ fn site(
             let (w, seed) = (std::mem::take(&mut p.water), hash3(rng.next_u32() as u64, d as i64, 0, 0x3a7e));
             let span = if rng.next_f64() < 0.5 { Span::Bridge } else { Span::Stones };
             let items = water_at(&Ground::of_plan(&p), seed, span, &|k| (w[k][0] as f64, w[k][1] as f64));
+            p.put_all(items);
+        }
+        if let Some((r, rope)) = p.chasm {
+            // (A chasm across a room, once the locks and keys are in: crossed by rope bridges or its stone bridge.)
+            p.reserve_doors();
+            let seed = hash3(rng.next_u32() as u64, d as i64, 0, 0xc4a5);
+            let items = chasm_in(&Ground::of_plan(&p), Some(r), Span::Bridge, seed, rope);
             p.put_all(items);
         }
         furnish(&mut p, nx, ny, kind, rng);

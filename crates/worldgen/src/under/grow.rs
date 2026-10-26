@@ -683,3 +683,60 @@ pub(crate) fn specs(kinds: &[&'static str], w: usize, big: ((usize, usize), (usi
     out.push(Spec { kind: "", t: Template::Corridor, across: (w, w), deep: (2, 4) });
     out
 }
+
+/// A level's first room round the arrival (`kind`, template `t`, else a rect; `w` by `h` squares, `h` odd), the arrival
+/// `back` squares in from its wall facing away from `dir` (E or W; None: centred on it): the grower to go on with
+/// (spreading, its axis the room's middle row) and its piece; None if not even one square fits.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn first_room(p: &mut Plan, passage: i16, kind: &'static str, t: Template, (w, h): (usize, usize), dir: Option<Side>, back: usize) -> Option<(Grower, usize)> {
+    let nx = p.nx;
+    let ny = p.cells.len() / nx;
+    let (ax, ay) = (p.up % nx, p.up / nx);
+    let x = match dir {
+        Some(Side::E) => ax.saturating_sub(back),
+        Some(Side::W) => (ax + back + 1).saturating_sub(w),
+        _ => ax.saturating_sub(w / 2),
+    };
+    let x = x.clamp(1, nx.saturating_sub(w + 1).max(1));
+    let y = ay.saturating_sub(h / 2).clamp(1, ny.saturating_sub(h + 1).max(1));
+    let holds = |t: Template| (x..x + w).contains(&ax) && (y..y + h).contains(&ay) && mask(t, x, y, w, h, Side::E).0[(ay - y) * w + ax - x];
+    let mut g = Grower::new(nx, ny, passage, Some(y + h / 2));
+    g.cap = ROOMS_GROWING;
+    g.spread = true;
+    let t = if holds(t) { t } else { Template::Rect };
+    let first = match holds(t).then(|| g.seed(p, kind, t, x, y, w, h)).flatten() {
+        Some(f) => f,
+        None => {
+            g.axis = Some(ay);
+            g.seed(p, kind, Template::Rect, ax, ay, 1, 1)?
+        }
+    };
+    Some((g, first))
+}
+
+impl Grower {
+    /// From piece `from`, when its middle lies more than `slack` rows off the grid's middle row, a passage `cw` wide
+    /// north or south towards it ending in a room (`kind`, `t`, `s` squares square) centred on its far end, the axis
+    /// moved to that room's middle row (so a level entered near its edge still has room for its mirrored halls). The
+    /// piece to go on from: that room, else `from`.
+    pub(crate) fn to_middle(&mut self, p: &mut Plan, from: usize, cw: usize, (kind, t, s): (&'static str, Template, usize), slack: usize) -> usize {
+        let f = self.pieces[from];
+        let (mid, at) = (self.ny / 2, f.y + f.h / 2);
+        if at.abs_diff(mid) <= slack {
+            return from;
+        }
+        let side = if at < mid { Side::S } else { Side::N };
+        let off = at.abs_diff(mid).saturating_sub(f.h / 2 + s / 2);
+        for len in [off, off * 2 / 3, off / 2] {
+            let Some(&c) = self.deck(p, from, side, "", Template::Corridor, cw, len.max(2), 0, false).first() else { continue };
+            if let Some(&r) = self.deck(p, c, side, kind, t, s, s, 0, false).first() {
+                self.pieces[c].open = false;
+                let r2 = self.pieces[r];
+                self.axis = Some(r2.y + r2.h / 2);
+                return r;
+            }
+            self.undo_last(p);
+        }
+        from
+    }
+}

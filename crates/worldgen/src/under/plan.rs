@@ -51,6 +51,9 @@ pub(crate) struct Plan {
     pub(crate) loops: f64,
     /// Most secret doors the level gets once its planner's are in (`kit::guard` adds none past it).
     pub(crate) secrets: usize,
+    /// A chasm to lay across a room once the locks and keys are in (`kit::chasm_in`): the room, and whether rope bridges
+    /// are strung over it (else it is crossed where its planner kept squares `taken`: a stone bridge).
+    pub(crate) chasm: Option<(i16, bool)>,
 }
 
 impl Plan {
@@ -77,6 +80,7 @@ impl Plan {
             niches: false,
             loops: 1.0,
             secrets: usize::MAX,
+            chasm: None,
         }
     }
 

@@ -1,6 +1,6 @@
 //! Built levels, graph-first: rooms placed on the level, a spanning tree between them (loops and locks after, in
-//! `kit::guard`), corridors dug by least-cost paths, doors where a corridor meets a room (dungeons, crypts,
-//! catacombs, keep dungeons, undercrofts).
+//! `kit::guard`), corridors dug by least-cost paths, doors where a corridor meets a room (bandit hideouts, goblin
+//! warrens).
 
 use crate::core::rng::Pcg32;
 use crate::under::*;

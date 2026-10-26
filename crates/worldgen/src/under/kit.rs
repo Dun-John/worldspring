@@ -1389,6 +1389,12 @@ pub fn water_at(g: &Ground, seed: u64, span: Span, at: &dyn Fn(usize) -> (f64, f
 /// side, crossed straight by rope bridges (one per 14 squares of its length, 3 or more apart) or stepping stones as
 /// `span` says; then one repair (`Layer::repair`) so it cuts nothing off.
 pub fn chasm(g: &Ground, room: Option<i16>, span: Span, seed: u64) -> Vec<Item> {
+    chasm_in(g, room, span, seed, true)
+}
+
+/// A chasm as `chasm` lays it; without `crossings` none are picked (the planner kept a way over it off the free
+/// squares: a stone bridge), the repair alone bridging whatever it still cuts off.
+pub(crate) fn chasm_in(g: &Ground, room: Option<i16>, span: Span, seed: u64, crossings: bool) -> Vec<Item> {
     let (nx, ny) = (g.nx, g.ny);
     let inside = |k: usize| g.cells[k] >= 0 && room.is_none_or(|r| g.cells[k] == r);
     let squares: Vec<usize> = (0..nx * ny).filter(|&k| inside(k)).collect();
@@ -1422,7 +1428,7 @@ pub fn chasm(g: &Ground, room: Option<i16>, span: Span, seed: u64) -> Vec<Item> 
             runs.push((t, s, e));
         }
     }
-    let count = 1 + (t1 - t0) / 14;
+    let count = if crossings { 1 + (t1 - t0) / 14 } else { 0 };
     let mut picked: Vec<usize> = Vec::new();
     for b in 0..count {
         let want = t0 as f64 + (b as f64 + 0.5) * (t1 - t0 + 1) as f64 / count as f64;
