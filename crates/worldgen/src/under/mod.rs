@@ -3,9 +3,11 @@
 //! anchored at the entrance and running the way the passage goes in, so it lies under the map
 //! where it is (the surface shows through faintly). Same `Interior` model as buildings.
 //!
-//! - Dungeons and crypts are graph-first: rooms placed on the level, a spanning tree plus a few
-//!   loops between them, corridors dug by least-cost paths that never cut through other rooms,
-//!   doors where a corridor meets a room.
+//! - Dungeons are graph-first: rooms placed on the level, a spanning tree plus a few loops
+//!   between them, corridors dug by least-cost paths that never cut through other rooms, doors
+//!   where a corridor meets a room. Temples, prisons, crypts, tombs, flooded vaults, keep
+//!   dungeons and undercrofts are grown room by room (`grow`); crypts, ossuaries and catacombs
+//!   as niche-lined galleries in a grid of junctions.
 //! - Caves are cellular automata grown around a winding spine, kept to the part reachable from
 //!   the arrival, split into chambers (some raised as ledges).
 //! - Mines are a haulage way with side drifts and stopes, a shaft to the next level.
@@ -164,6 +166,12 @@ pub enum Planner {
     Keep,
     /// Grown from the drain chamber with store kits: cisterns (some flooded), caches, a rat warren (`themes::keep`).
     Undercroft,
+    /// Niche-lined galleries in a grid of junctions, bigger rooms on and off it (`themes::crypt`).
+    Crypt,
+    /// A barrow's mirrored run: passage, antechamber, guardian hall, side chambers, the burial chamber (`themes::crypt`).
+    Tomb,
+    /// Great flooded halls and cisterns, vaults among flooded passages (`themes::vault`).
+    Vault,
     Cave,
     Mine,
     LavaTube,
@@ -195,11 +203,15 @@ pub const THEMES: &[Theme] = &[
     built("bandit_hideout", UnderKind::Dungeon, "hidden entry", &["common room", "bunk room", "loot store", "armory", "kitchen", "captain's quarters", "storeroom", "lookout"], "tunnel", (7, 3), false, 1),
     built("dwarven_hall", UnderKind::Dungeon, "gate hall", &["great hall", "forge", "brewery", "armory", "barracks", "treasury", "ancestor hall", "storeroom", "mushroom farm"], "gallery", (9, 5), true, 2),
     built("goblin_warren", UnderKind::Dungeon, "warren mouth", &["den", "den", "nest", "cook pit", "refuse pit", "wolf pen", "shaman's hut", "storeroom"], "crawlway", (12, 6), false, 1),
-    built("flooded_vault", UnderKind::Dungeon, "flooded stair", &["flooded hall", "cistern", "old vault", "sunken chapel", "treasury", "drowned barracks"], "flooded passage", (8, 4), false, 1),
-    built("crypt", UnderKind::Crypt, "antechamber", &["burial hall", "ossuary", "tomb", "chapel of rest", "embalming room", "reliquary", "sealed tomb", "catacomb gallery"], "passage", (7, 4), false, 1),
-    built("tomb", UnderKind::Crypt, "antechamber", &["tomb", "sealed tomb", "false tomb", "treasury", "guardian hall", "burial hall", "embalming room"], "passage", (5, 3), false, 2),
-    built("ossuary", UnderKind::Crypt, "stair foot", &["ossuary", "ossuary", "bone chapel", "charnel pit", "skull gallery", "burial niches"], "catacomb passage", (8, 4), false, 1),
-    built("catacombs", UnderKind::Catacombs, "stair foot", &["burial niches", "burial niches", "ossuary", "catacomb gallery", "charnel pit", "bone chapel", "reliquary", "flooded gallery"], "catacomb passage", (9, 5), false, 1),
+    Theme {
+        planner: Planner::Vault,
+        water: Wetness::Flooded,
+        ..built("flooded_vault", UnderKind::Dungeon, "flooded stair", &["flooded hall", "cistern", "old vault", "sunken chapel", "treasury", "drowned barracks"], "flooded passage", (8, 4), false, 1)
+    },
+    Theme { planner: Planner::Crypt, ..built("crypt", UnderKind::Crypt, "antechamber", &["burial hall", "ossuary", "tomb", "chapel of rest", "embalming room", "reliquary", "sealed tomb", "catacomb gallery"], "passage", (7, 4), false, 1) },
+    Theme { planner: Planner::Tomb, ..built("tomb", UnderKind::Crypt, "antechamber", &["tomb", "sealed tomb", "false tomb", "treasury", "guardian hall", "burial hall", "embalming room"], "passage", (5, 3), false, 2) },
+    Theme { planner: Planner::Crypt, ..built("ossuary", UnderKind::Crypt, "stair foot", &["ossuary", "ossuary", "bone chapel", "charnel pit", "skull gallery", "burial niches"], "catacomb passage", (8, 4), false, 1) },
+    Theme { planner: Planner::Crypt, ..built("catacombs", UnderKind::Catacombs, "stair foot", &["burial niches", "burial niches", "ossuary", "catacomb gallery", "charnel pit", "bone chapel", "reliquary", "flooded gallery"], "catacomb passage", (9, 5), false, 1) },
     natural("cave", UnderKind::Cave, &["cavern", "grotto", "crystal grotto", "fungus grotto", "pool chamber", "bat roost"], "ledge"),
     natural("fungal", UnderKind::Cave, &["fungus forest", "spore grotto", "fungus grotto", "mycelium hall"], "ledge"),
     natural("crystal", UnderKind::Cave, &["crystal cavern", "geode", "crystal grotto", "cavern"], "crystal shelf"),
@@ -208,7 +220,7 @@ pub const THEMES: &[Theme] = &[
     natural("beast_den", UnderKind::Cave, &["lair", "nest chamber", "gnawing chamber", "bat roost", "cavern"], "ledge"),
     natural("mine", UnderKind::Mine, &[], ""),
     natural("lava_tube", UnderKind::LavaTube, &["lava tube", "tube gallery", "side pocket", "obsidian gallery"], "basalt shelf"),
-    // (Never drawn for a generated site: a temple on wet ground becomes it, `generate`.)
+    // (Never drawn for a generated site: a temple on wet ground becomes it, and about 1 in 4 of the rest, `generate`.)
     Theme {
         planner: Planner::Temple,
         water: Wetness::Flooded,
@@ -471,8 +483,10 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
     // A created site's own choices (size, levels, theme); the rest from the rng.
     let spec = layout.checked_sub(t0.settlements.len()).and_then(|p| t0.created_site(p)).map(|c| c.spec).unwrap_or_default();
     let (size, depth, theme) = resolve(e.kind, spec, &mut rng);
-    // A temple on wet ground lies sunken (unless its maker chose the theme).
-    let theme = if spec.theme.is_none() && theme.key == "temple" && wet_ground(t0, e.at) { THEMES.iter().find(|t| t.key == SUNKEN_TEMPLE).unwrap_or(theme) } else { theme };
+    // A temple on wet ground lies sunken, and about 1 in 4 of the rest (unless its maker chose the theme).
+    // (A hash of the site, not the rng: the draws after it stay as they were.)
+    let share = crate::core::rng::unit(hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, 0x5e4c)) < 0.25;
+    let theme = if spec.theme.is_none() && theme.key == "temple" && (share || wet_ground(t0, e.at)) { THEMES.iter().find(|t| t.key == SUNKEN_TEMPLE).unwrap_or(theme) } else { theme };
     let ((bx, by), _, _) = ranges(e.kind);
     let s = size.scale();
     let (nx, ny) = ((bx as f64 * s).round() as usize, (by as f64 * s).round() as usize);
@@ -643,6 +657,9 @@ fn site(
             // (A keep's dungeons are big when three levels deep.)
             Planner::Keep => keep(nx, ny, a, d, last, theme, if depth >= 3 { 1.69 } else { 1.0 }, rng),
             Planner::Undercroft => undercroft(nx, ny, a, last, theme, rng),
+            Planner::Crypt => crypt(nx, ny, a, d, last, theme, area, rng),
+            Planner::Tomb => tomb(nx, ny, a, d, last, theme, area, rng),
+            Planner::Vault => vault(nx, ny, a, d, last, theme, area, rng),
             Planner::Cave => cave(nx, ny, a, last, theme, rng),
             Planner::Mine => mine(nx, ny, a, last, rng),
             Planner::LavaTube => lava_tube(nx, ny, a, d, last, theme, rng),

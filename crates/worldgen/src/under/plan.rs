@@ -45,6 +45,8 @@ pub(crate) struct Plan {
     /// Water to lay once the locks and keys are in (`kit::water_at`): per square the noise heights over which it is
     /// shallow and deep (`grow::flood_room`); empty: a dry level.
     pub(crate) water: Vec<[f32; 2]>,
+    /// Line the passage's narrow galleries with burial niches when furnished (`kit::furnish`).
+    pub(crate) niches: bool,
 }
 
 impl Plan {
@@ -68,6 +70,7 @@ impl Plan {
             passage: None,
             shortcuts: Vec::new(),
             water: Vec::new(),
+            niches: false,
         }
     }
 

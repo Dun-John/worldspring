@@ -158,7 +158,7 @@ pub(crate) fn undercroft(nx: usize, ny: usize, arrive: usize, last: bool, theme:
 }
 
 /// A level's first room (`kind`, `t`, 3-5 squares) round the arrival, the grower to go on with, and its piece.
-fn hub(p: &mut Plan, passage: i16, kind: &'static str, t: Template, arrive: usize, rng: &mut Pcg32) -> Option<(Grower, usize)> {
+pub(super) fn hub(p: &mut Plan, passage: i16, kind: &'static str, t: Template, arrive: usize, rng: &mut Pcg32) -> Option<(Grower, usize)> {
     let nx = p.nx;
     let ny = p.cells.len() / nx;
     let (ax, ay) = (arrive % nx, arrive / nx);

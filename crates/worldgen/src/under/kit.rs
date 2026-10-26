@@ -292,6 +292,7 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "reliquary" => &[("altar", 2, 1, Edge, 1, 1), ("chest", 1, 1, Edge, 1, 2), ("offering", 1, 1, Any, 1, 2), ("candles", 1, 1, Any, 1, 2)],
         "passage" | "catacomb passage" => &[("trap", 1, 1, Any, 0, 2), ("cobweb", 1, 1, Edge, 1, 3), ("skulls", 1, 1, Edge, 0, 1)],
         "stair foot" => &[("urn", 1, 1, Edge, 0, 2), ("candles", 1, 1, Any, 0, 1), ("cobweb", 1, 1, Edge, 0, 2)],
+        "junction" => &[("bones", 1, 1, Any, 0, 1), ("urn", 1, 1, Edge, 0, 1), ("candles", 1, 1, Any, 0, 1), ("cobweb", 1, 1, Edge, 0, 1)],
         "burial niches" => &[("niche", 1, 1, Edge, 4, 9), ("bones", 1, 1, Any, 0, 2), ("cobweb", 1, 1, Edge, 0, 2)],
         "charnel pit" => &[("pit", 2, 2, Any, 1, 1), ("skulls", 1, 1, Edge, 1, 3), ("bones", 1, 1, Any, 2, 4)],
         "bone chapel" => &[("altar", 2, 1, Edge, 1, 1), ("skulls", 1, 1, Edge, 2, 5), ("candles", 1, 1, Any, 1, 3), ("urn", 1, 1, Edge, 1, 2)],
@@ -430,6 +431,39 @@ pub(crate) fn furnish(p: &mut Plan, nx: usize, ny: usize, kind: UnderKind, rng: 
     let rooms: Vec<(i16, &'static str)> = p.rooms.iter().enumerate().map(|(i, r)| (i as i16, r.kind)).collect();
     for (ri, rkind) in rooms {
         furnish_room(p, nx, ny, ri, rkind, kind, rng);
+    }
+    if p.niches {
+        line_niches(p, nx, ny);
+    }
+}
+
+/// Burial niches down the narrow galleries (squares of the passage with walls on two opposite sides), on the two
+/// walls by turns.
+fn line_niches(p: &mut Plan, nx: usize, ny: usize) {
+    let Some((passage, _)) = p.passage else { return };
+    // (A lock in a gallery splits the passage: the part beyond is a room of its kind, `guard`.)
+    let kind = p.rooms[passage as usize].kind;
+    for k in 0..nx * ny {
+        let r = p.cells[k];
+        if r < 0 || p.rooms[r as usize].kind != kind || p.taken[k] {
+            continue;
+        }
+        let (i, j) = (k % nx, k / nx);
+        let wall = |di: isize, dj: isize| {
+            let (x, y) = (i as isize + di, j as isize + dj);
+            x < 0 || y < 0 || x >= nx as isize || y >= ny as isize || p.cells[y as usize * nx + x as usize] != r
+        };
+        // (Its back: 0 north, 1 east, 2 south, 3 west.)
+        let sides = if wall(0, -1) && wall(0, 1) {
+            [0, 2]
+        } else if wall(-1, 0) && wall(1, 0) {
+            [3, 1]
+        } else {
+            continue;
+        };
+        let mut it = item("niche", i, j, 1, 1);
+        it.back = Some(sides[(i + j) % 2]);
+        p.place(it, Some(r), ny);
     }
 }
 

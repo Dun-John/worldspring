@@ -3639,8 +3639,24 @@ fn under(ctx: &mut Ctx, r: &mut Report, label: &str) {
             if !order.is_empty() {
                 r.add("sites with keys out of order", order.len() as f64, format!("{id} ({}): {}", it.theme.unwrap_or("-"), order.into_iter().map(|p| p.text).collect::<Vec<_>>().join("; ")));
             }
-            // (Its rules are a designed `u:` site's; sewer sections and keep dungeons have more than one way in.)
-            let bad: Vec<String> = if id.starts_with('u') { under::design::check(&it, None).into_iter().filter(|p| p.blocking).map(|p| p.text).collect() } else { Vec::new() };
+            // (Its rules are a designed `u:` site's. A keep dungeon is entered by the stairs up to the keep, an undercroft
+            // by its way up to the sewer section above: each checked as if that were its way in from the surface, the
+            // sewer section's own level left out.)
+            let bad: Vec<String> = if id.starts_with('u') {
+                under::design::check(&it, None).into_iter().filter(|p| p.blocking).map(|p| p.text).collect()
+            } else {
+                let mut c = it.clone();
+                if id.starts_with('w') {
+                    c.levels.pop();
+                    c.entry_level = c.levels.len().saturating_sub(1);
+                }
+                if let Some(top) = c.levels.last_mut() {
+                    for f in top.furniture.iter_mut().filter(|f| f.kind == "up") {
+                        f.kind = "exit";
+                    }
+                }
+                if c.levels.is_empty() { Vec::new() } else { under::design::check(&c, None).into_iter().filter(|p| p.blocking).map(|p| p.text).collect() }
+            };
             if !bad.is_empty() {
                 r.add("sites breaking a rule", bad.len() as f64, format!("{id} ({}): {}", it.theme.unwrap_or("-"), bad.join("; ")));
             }

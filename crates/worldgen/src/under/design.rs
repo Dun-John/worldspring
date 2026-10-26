@@ -163,6 +163,7 @@ const EXTRA_ROOMS: &[&str] = &[
     "cell row",
     "cell",
     "solitary cell",
+    "junction",
 ];
 /// Items that are ways: in from the surface, up and down a level.
 pub const WAYS: [&str; 3] = ["exit", "up", "down"];
