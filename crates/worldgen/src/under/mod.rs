@@ -3,12 +3,11 @@
 //! anchored at the entrance and running the way the passage goes in, so it lies under the map
 //! where it is (the surface shows through faintly). Same `Interior` model as buildings.
 //!
-//! - Bandit hideouts and goblin warrens are graph-first: rooms placed on the level, a spanning
-//!   tree plus a few loops between them, corridors dug by least-cost paths that never cut through
-//!   other rooms, doors where a corridor meets a room. Dungeons, dwarven halls, wizards' lairs,
-//!   temples, prisons, crypts, tombs, flooded vaults, keep dungeons and undercrofts are grown room
-//!   by room (`grow`); crypts, ossuaries and catacombs as niche-lined galleries in a grid of
-//!   junctions.
+//! - Dungeons, dwarven halls, wizards' lairs, temples, prisons, crypts, tombs, flooded vaults, keep
+//!   dungeons, undercrofts and the bandits' cellars are grown room by room (`grow`); crypts,
+//!   ossuaries and catacombs as niche-lined galleries in a grid of junctions. Goblin warrens are
+//!   burrowed: twisting crawlways out to roundish dens (drawn as caverns), as is a bandit
+//!   hideout's cave front. Cult sanctums are rings round a ritual chamber, their gates offset.
 //! - Caves are cellular automata grown around a winding spine, kept to the part reachable from
 //!   the arrival, split into chambers (some raised as ledges).
 //! - Mines are a haulage way with side drifts and stopes, a shaft to the next level.
@@ -157,8 +156,6 @@ pub struct Theme {
 /// Which planner (`themes`) lays out a theme's levels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Planner {
-    /// Rooms, a spanning tree plus loops, dug corridors (`themes::dungeon`).
-    Built,
     /// Grown room by room with mixed kits, a mirrored core on the top level: guard rooms, cells, stores (`themes::mixed`).
     Mixed,
     /// Axial halls: gate hall, a pillared gallery with side wings, the great hall; a chasm one level in two
@@ -167,6 +164,13 @@ pub enum Planner {
     /// A round stair hall at each level's heart, mirrored spokes to round rooms; the summoning circle deepest
     /// (`themes::wizard`).
     Wizard,
+    /// Burrows: twisting crawlways out to roundish dens, drawn as caverns (`themes::warren`).
+    Warren,
+    /// A cave front (entry, common room, lookout) with dug rooms grown behind it, the captain's locked
+    /// (`themes::bandit`).
+    Bandit,
+    /// Ring passages round a round ritual chamber, rooms between them, the gates offset (`themes::cult`).
+    Cult,
     /// Grown room by room, the top level mirrored: narthex, nave, chapels, apse sanctum (`themes::temple`).
     Temple,
     /// Grown round a guard ring: cell blocks off it, the offices; solitary cells and oubliettes below (`themes::prison`).
@@ -188,7 +192,7 @@ pub enum Planner {
 
 #[allow(clippy::too_many_arguments)]
 const fn built(key: &'static str, kind: UnderKind, first: &'static str, kinds: &'static [&'static str], passage: &'static str, rooms: (usize, u32), sprawl: bool, corridor: usize) -> Theme {
-    Theme { key, kind, first, kinds, passage, rooms, sprawl, corridor, ledge: "", planner: Planner::Built, water: Wetness::Dry }
+    Theme { key, kind, first, kinds, passage, rooms, sprawl, corridor, ledge: "", planner: Planner::Mixed, water: Wetness::Dry }
 }
 
 const fn natural(key: &'static str, kind: UnderKind, kinds: &'static [&'static str], ledge: &'static str) -> Theme {
@@ -209,13 +213,23 @@ pub const THEMES: &[Theme] = &[
     },
     Theme { planner: Planner::Temple, ..built("temple", UnderKind::Dungeon, "narthex", &["sanctum", "shrine", "vestry", "priests' cells", "ritual pool", "reliquary", "ossuary", "chapel of rest"], "processional way", (7, 4), false, 2) },
     Theme { planner: Planner::Wizard, ..built("wizard_lair", UnderKind::Dungeon, "foyer", &["library", "laboratory", "summoning circle", "specimen vault", "study", "menagerie", "golem workshop", "scrying room"], "hall", (7, 4), false, 1) },
-    built("bandit_hideout", UnderKind::Dungeon, "hidden entry", &["common room", "bunk room", "loot store", "armory", "kitchen", "captain's quarters", "storeroom", "lookout"], "tunnel", (7, 3), false, 1),
+    Theme {
+        planner: Planner::Bandit,
+        ..built("bandit_hideout", UnderKind::Dungeon, "hidden entry", &["common room", "bunk room", "loot store", "armory", "kitchen", "captain's quarters", "storeroom", "lookout"], "tunnel", (9, 4), false, 1)
+    },
     Theme { planner: Planner::Dwarven, ..built("dwarven_hall", UnderKind::Dungeon, "gate hall", &["great hall", "forge", "brewery", "armory", "barracks", "treasury", "ancestor hall", "storeroom", "mushroom farm"], "gallery", (9, 5), true, 2) },
-    built("goblin_warren", UnderKind::Dungeon, "warren mouth", &["den", "den", "nest", "cook pit", "refuse pit", "wolf pen", "shaman's hut", "storeroom"], "crawlway", (12, 6), false, 1),
+    Theme {
+        planner: Planner::Warren,
+        ..built("goblin_warren", UnderKind::Dungeon, "warren mouth", &["den", "den", "nest", "cook pit", "refuse pit", "wolf pen", "shaman's hut", "storeroom"], "crawlway", (12, 6), false, 1)
+    },
     Theme {
         planner: Planner::Vault,
         water: Wetness::Flooded,
         ..built("flooded_vault", UnderKind::Dungeon, "flooded stair", &["flooded hall", "cistern", "old vault", "sunken chapel", "treasury", "drowned barracks"], "flooded passage", (8, 4), false, 1)
+    },
+    Theme {
+        planner: Planner::Cult,
+        ..built("cult_sanctum", UnderKind::Dungeon, "cellar", &["ritual chamber", "dormitory", "robing room", "sacrifice pit", "cell", "shrine", "storeroom"], "ring passage", (10, 4), false, 1)
     },
     Theme { planner: Planner::Crypt, ..built("crypt", UnderKind::Crypt, "antechamber", &["burial hall", "ossuary", "tomb", "chapel of rest", "embalming room", "reliquary", "sealed tomb", "catacomb gallery"], "passage", (7, 4), false, 1) },
     Theme { planner: Planner::Tomb, ..built("tomb", UnderKind::Crypt, "antechamber", &["tomb", "sealed tomb", "false tomb", "treasury", "guardian hall", "burial hall", "embalming room"], "passage", (5, 3), false, 2) },
@@ -660,10 +674,12 @@ fn site(
         let mut p = match theme.planner {
             // (A city's own sewers, not from a theme: its top level follows the streets.)
             _ if kind == UnderKind::Sewer && d == 0 => sewer(t0, l, f.origin, nx, ny, arrive, last)?,
-            Planner::Built => dungeon(nx, ny, a, d, last, theme, area, rng),
             Planner::Mixed => mixed(nx, ny, a, d, last, theme, area, rng),
             Planner::Dwarven => dwarven(nx, ny, a, d, last, theme, area, rng),
             Planner::Wizard => wizard(nx, ny, a, d, last, theme, area, rng),
+            Planner::Warren => warren(nx, ny, a, d, last, theme, area, rng),
+            Planner::Bandit => bandit(nx, ny, a, d, last, theme, area, rng),
+            Planner::Cult => cult(nx, ny, a, d, last, theme, area, rng),
             Planner::Temple => temple(nx, ny, a, d, last, theme, area, rng),
             Planner::Prison => prison(nx, ny, a, d, last, theme, area, rng),
             // (A keep's dungeons are big when three levels deep.)

@@ -158,7 +158,7 @@ export type SiteSize = 'small' | 'medium' | 'large' | 'huge';
 export const SITE_SIZES: SiteSize[] = ['small', 'medium', 'large', 'huge'];
 /** Themes by kind of site underground (`worldgen::under::THEMES`; each kind's first is its usual one). */
 export const THEMES: Record<string, string[]> = {
-  dungeon: ['dungeon', 'prison', 'temple', 'wizard_lair', 'bandit_hideout', 'dwarven_hall', 'goblin_warren', 'flooded_vault', 'sunken_temple'],
+  dungeon: ['dungeon', 'prison', 'temple', 'wizard_lair', 'bandit_hideout', 'dwarven_hall', 'goblin_warren', 'flooded_vault', 'cult_sanctum', 'sunken_temple'],
   crypt: ['crypt', 'tomb', 'ossuary'],
   catacombs: ['catacombs'],
   cave: ['cave', 'fungal', 'crystal', 'ice', 'flooded', 'beast_den'],

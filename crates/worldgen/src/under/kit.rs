@@ -384,6 +384,13 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "wolf pen" => &[("nest", 1, 1, Any, 1, 2), ("bones", 1, 1, Any, 2, 4), ("chains", 1, 1, Edge, 1, 2), ("cage", 2, 2, Edge, 0, 1)],
         "shaman's hut" => &[("glyph", 2, 2, Any, 0, 1), ("skulls", 1, 1, Edge, 1, 2), ("candles", 1, 1, Any, 1, 2), ("bones", 1, 1, Any, 1, 1), ("offering", 1, 1, Edge, 1, 1)],
         "crawlway" => &[("rubble", 1, 1, Any, 0, 2), ("bones", 1, 1, Any, 0, 1), ("trap", 1, 1, Any, 0, 1)],
+        // Cult sanctums.
+        "cellar" => &[("barrel", 1, 1, Edge, 2, 4), ("crate", 1, 1, Edge, 1, 3), ("sacks", 1, 1, Edge, 1, 2), ("keg_rack", 1, 2, Edge, 0, 1), ("cobweb", 1, 1, Edge, 0, 2)],
+        "ritual chamber" => &[("glyph", 2, 2, Any, 1, 1), ("candles", 1, 1, Any, 2, 4), ("brazier", 1, 1, Edge, 1, 2), ("altar", 2, 1, Edge, 0, 1), ("statue", 1, 1, Edge, 0, 2)],
+        "dormitory" => &[("cot", 1, 2, Edge, 3, 6), ("chest", 1, 1, Edge, 1, 2), ("candles", 1, 1, Any, 0, 1)],
+        "robing room" => &[("chest", 1, 1, Edge, 1, 3), ("bookshelf", 1, 2, Edge, 0, 1), ("table", 1, 2, Any, 0, 1), ("rug", 2, 3, Any, 0, 1), ("candles", 1, 1, Any, 1, 1)],
+        "sacrifice pit" => &[("pit", 2, 2, Any, 1, 1), ("chains", 1, 1, Edge, 1, 3), ("bones", 1, 1, Any, 1, 3), ("candles", 1, 1, Any, 1, 2), ("altar", 2, 1, Edge, 0, 1)],
+        "ring passage" => &[("sconce", 1, 1, Edge, 1, 4), ("candles", 1, 1, Any, 0, 2), ("trap", 1, 1, Any, 0, 1)],
         // Flooded vaults.
         "flooded stair" => &[("pool", 2, 2, Any, 1, 2), ("debris", 1, 1, Any, 0, 2), ("moss", 1, 1, Any, 1, 2)],
         "sunken chapel" => &[("altar", 2, 1, Edge, 1, 1), ("pool", 2, 2, Any, 1, 2), ("statue", 1, 1, Edge, 0, 1), ("moss", 1, 1, Any, 1, 2)],
@@ -842,7 +849,8 @@ pub(crate) fn guard(p: &mut Plan, above: &mut [Plan], nx: usize, ny: usize, d: u
             let rooms: Vec<bool> = rep.iter().map(|r| r.is_some_and(|k| beyond(c, k))).collect();
             let deeper = p.down.is_some_and(|w| beyond(c, w));
             let weight = rooms.iter().filter(|&&r| r).count() as f64 + if deeper { below } else { 0.0 };
-            if weight >= 2.0 && weight >= 0.15 * total {
+            let first = p.lock_first.contains(&e);
+            if weight >= 2.0 && weight >= 0.15 * total || first && weight >= 1.0 {
                 cands.push((e, rooms, deeper, weight / total));
             }
         }
@@ -858,7 +866,7 @@ pub(crate) fn guard(p: &mut Plan, above: &mut [Plan], nx: usize, ny: usize, d: u
                 if picked.contains(&i) || !picked.iter().all(|&j| apart(i, j)) {
                     continue;
                 }
-                let score = (cands[i].3 - 0.4).abs() + 0.2 * rng.next_f64();
+                let score = (cands[i].3 - 0.4).abs() + 0.2 * rng.next_f64() - if p.lock_first.contains(&cands[i].0) { 10.0 } else { 0.0 };
                 if best.is_none_or(|(b, _)| score < b) {
                     best = Some((score, i));
                 }
@@ -875,6 +883,8 @@ pub(crate) fn guard(p: &mut Plan, above: &mut [Plan], nx: usize, ny: usize, d: u
             if p.cells[k] == p.cells[m] {
                 let seen = reach(p, ny, p.up, &|q| q == (k, m));
                 let (old, new) = (p.cells[k], p.room(p.rooms[passage as usize].kind, 0.0));
+                // (Drawn as the passage is: a warren's crawlway stays a cavern.)
+                p.rooms[new as usize].shape = p.rooms[passage as usize].shape;
                 for q in 0..n {
                     if !seen[q] && p.cells[q] == old {
                         p.cells[q] = new;

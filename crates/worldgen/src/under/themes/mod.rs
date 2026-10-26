@@ -1,8 +1,9 @@
 //! One planner per kind of level (`Theme::planner`): each lays out one level as a `Plan`.
 
+mod bandit;
 mod cave;
 mod crypt;
-mod dungeon;
+mod cult;
 mod dwarven;
 mod lava_tube;
 mod keep;
@@ -12,11 +13,13 @@ mod prison;
 mod sewer;
 mod temple;
 mod vault;
+mod warren;
 mod wizard;
 
+pub(super) use bandit::bandit;
 pub(super) use cave::cave;
 pub(super) use crypt::{crypt, tomb};
-pub(super) use dungeon::dungeon;
+pub(super) use cult::cult;
 pub(super) use dwarven::dwarven;
 pub(super) use lava_tube::lava_tube;
 pub(super) use keep::{keep, undercroft};
@@ -26,4 +29,5 @@ pub(super) use prison::prison;
 pub(super) use sewer::sewer;
 pub(super) use temple::temple;
 pub(super) use vault::vault;
+pub(super) use warren::warren;
 pub(super) use wizard::wizard;
