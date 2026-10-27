@@ -322,7 +322,7 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "basalt shelf" => &[("basalt", 1, 1, Any, 1, 2), ("sulfur", 1, 1, Any, 0, 2)],
         "side pocket" | "obsidian gallery" => &[("obsidian", 1, 1, Any, 2, 4), ("basalt", 1, 1, Any, 0, 2), ("vent", 1, 1, Any, 0, 1), ("sulfur", 1, 1, Any, 1, 3), ("glass_pool", 2, 2, Any, 0, 1)],
         // Mines.
-        "haulage way" => &[("ore_cart", 1, 1, Any, 1, 2), ("timber", 1, 1, Edge, 4, 10), ("lantern", 1, 1, Edge, 2, 4), ("tools", 1, 1, Edge, 0, 2)],
+        "haulage way" => &[("timber", 1, 1, Edge, 4, 10), ("lantern", 1, 1, Edge, 2, 4), ("tools", 1, 1, Edge, 0, 2)],
         "drift" => &[("timber", 1, 1, Edge, 0, 3), ("ore_vein", 1, 1, Edge, 1, 3), ("cave_in", 1, 1, Any, 0, 1), ("tools", 1, 1, Edge, 0, 1)],
         "stope" | "ore chamber" => &[("ore_vein", 1, 1, Edge, 2, 4), ("ore_cart", 1, 1, Any, 0, 1), ("rubble", 1, 1, Any, 1, 3), ("timber", 1, 1, Edge, 1, 3), ("tools", 1, 1, Edge, 0, 1), ("lantern", 1, 1, Edge, 0, 1)],
         "collapsed stope" => &[("rubble", 1, 1, Any, 3, 6), ("boulder", 2, 2, Any, 0, 2), ("cave_in", 1, 1, Any, 1, 1), ("skeleton", 1, 2, Any, 0, 1)],

@@ -164,6 +164,104 @@ impl Dig {
     }
 }
 
+/// The rails' squares, in order along each piece of the adit and haulage way: from one end to the other (the two
+/// squares of it farthest apart, but from the mouth on the top level), straight on where the way lets them and
+/// turning only where it must (so a two-wide way gets one row, a one-wide stretch its squares, and each square is
+/// beside the one before).
+fn rail_line(p: &Plan, nx: usize, ny: usize) -> Vec<usize> {
+    let n = nx * ny;
+    let on = |k: usize| {
+        let r = p.cells[k];
+        r >= 0 && matches!(p.rooms[r as usize].kind, "adit" | "haulage way")
+    };
+    // (The square a step from `k` heading `d`: north, east, south, west.)
+    let step = |k: usize, d: usize| -> Option<usize> {
+        let (x, y) = (k % nx, k / nx);
+        let m = match d {
+            0 if y > 0 => k - nx,
+            1 if x + 1 < nx => k + 1,
+            2 if y + 1 < ny => k + nx,
+            3 if x > 0 => k - 1,
+            _ => return None,
+        };
+        on(m).then_some(m)
+    };
+    let far = |from: usize| -> (usize, Vec<u32>) {
+        let mut dist = vec![u32::MAX; n];
+        dist[from] = 0;
+        let mut q = std::collections::VecDeque::from([from]);
+        let mut best = from;
+        while let Some(k) = q.pop_front() {
+            if dist[k] > dist[best] || dist[k] == dist[best] && k < best {
+                best = k;
+            }
+            for d in 0..4 {
+                if let Some(m) = step(k, d)
+                    && dist[m] == u32::MAX
+                {
+                    dist[m] = dist[k] + 1;
+                    q.push_back(m);
+                }
+            }
+        }
+        (best, dist)
+    };
+    let mut done = vec![false; n];
+    let mut line = Vec::new();
+    for s in std::iter::once(p.up).chain(0..n) {
+        if !on(s) || done[s] {
+            continue;
+        }
+        let (a, _) = if s == p.up { (s, Vec::new()) } else { far(s) };
+        let (b, dist) = far(a);
+        for k in 0..n {
+            done[k] |= dist[k] != u32::MAX;
+        }
+        if a == b {
+            continue;
+        }
+        // The cheapest way from a to b by (square, heading): 10 a step, 25 more a turn (heading 4: none yet).
+        let mut cost = vec![u32::MAX; n * 5];
+        let mut from = vec![usize::MAX; n * 5];
+        let mut heap = std::collections::BinaryHeap::new();
+        cost[a * 5 + 4] = 0;
+        heap.push(std::cmp::Reverse((0u32, a * 5 + 4)));
+        while let Some(std::cmp::Reverse((c, st))) = heap.pop() {
+            if c > cost[st] {
+                continue;
+            }
+            let (k, h) = (st / 5, st % 5);
+            for d in 0..4 {
+                let Some(m) = step(k, d) else { continue };
+                let c2 = c + 10 + if h != 4 && h != d { 25 } else { 0 };
+                if c2 < cost[m * 5 + d] {
+                    cost[m * 5 + d] = c2;
+                    from[m * 5 + d] = st;
+                    heap.push(std::cmp::Reverse((c2, m * 5 + d)));
+                }
+            }
+        }
+        let Some(mut st) = (0..4).map(|d| b * 5 + d).filter(|&st| cost[st] != u32::MAX).min_by_key(|&st| (cost[st], st)) else { continue };
+        let mut path = vec![b];
+        while from[st] != usize::MAX {
+            st = from[st];
+            path.push(st / 5);
+        }
+        path.reverse();
+        // (An end square round the corner of a two-wide way's end: dropped, so the line ends straight.)
+        let bent = |a: usize, b: usize, c: usize| b.wrapping_sub(a) != c.wrapping_sub(b);
+        let m = path.len();
+        if m >= 3 && bent(path[m - 3], path[m - 2], path[m - 1]) {
+            path.pop();
+        }
+        if path.len() >= 3 && a != p.up && bent(path[0], path[1], path[2]) {
+            path.remove(0);
+        }
+        line.extend(path);
+    }
+    line
+}
+
 /// One level of a mine. `lift`: the lift shaft from the level above (None on the top level: laid out here).
 pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, lift: Option<(usize, bool, bool)>, rng: &mut Pcg32) -> Plan {
     let n = nx * ny;
@@ -601,23 +699,45 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
             }
         }
     }
-    // Ore carts on the rails, then the rails: the lower row of the adit and the haulage way where both rows run.
-    let railed = |p: &Plan, k: usize| {
-        let r = p.cells[k];
-        r >= 0 && k >= nx && k + nx < n && matches!(p.rooms[r as usize].kind, "adit" | "haulage way") && p.cells[k - nx] == r && p.cells[k + nx] != r
-    };
-    let line: Vec<usize> = (0..n).filter(|&k| railed(&p, k) && !p.taken[k]).collect();
-    if !line.is_empty() {
+    // The rails: one line down the adit and the haulage way from end to end, ore carts on it; the rails on every
+    // square of it left free (a doorway's too: they don't block it).
+    let line = rail_line(&p, nx, ny);
+    let free: Vec<usize> = line.iter().copied().filter(|&k| !p.taken[k]).collect();
+    if !free.is_empty() {
         for _ in 0..1 + rng.below(2) + top as u32 {
-            let k = line[rng.below(line.len() as u32) as usize];
+            let k = free[rng.below(free.len() as u32) as usize];
             p.place(item("ore_cart", k % nx, k / nx, 1, 1), None, ny);
         }
     }
-    for &k in &line {
-        if !p.taken[k] {
-            p.put(item("rail", k % nx, k / nx, 1, 1));
+    // (A doorway's squares are taken only to keep them clear; the ways on and off the level are kept for their own.)
+    let mut open = vec![false; n];
+    for &(a, b) in &p.doors {
+        open[a] = true;
+        open[b] = true;
+    }
+    for it in &p.items {
+        for j in it.y as usize..(it.y + it.h) as usize {
+            for i in it.x as usize..(it.x + it.w) as usize {
+                open[j * nx + i] = false;
+            }
         }
     }
+    open[arrive] = false;
+    if let Some(k) = p.down {
+        open[k] = false;
+    }
+    let mut on = vec![false; n];
+    for &k in &line {
+        on[k] = !p.taken[k] || open[k];
+    }
+    let carts: Vec<usize> = p.items.iter().filter(|it| it.kind == "ore_cart").map(|it| it.y as usize * nx + it.x as usize).collect();
+    // (None left alone between the ways on and off the level.)
+    let rails: Vec<Item> = line
+        .iter()
+        .filter(|&&k| on[k] && neighbours(k, nx, ny).any(|m| on[m] || carts.contains(&m)))
+        .map(|&k| item("rail", k % nx, k / nx, 1, 1))
+        .collect();
+    p.put_all(rails);
     // The vein shows in the drift's walls where it runs rich.
     for &(r, x, j) in &rich {
         for k in [j as usize * nx + x as usize - 1, j as usize * nx + x as usize + 1] {

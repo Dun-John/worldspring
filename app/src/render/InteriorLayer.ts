@@ -8,7 +8,7 @@ import { OPEN_BELOW, ROOF_SLOPE, type Interior, type InteriorItem, type Interior
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
-import { drawFurniture, drawUnderProp, houseOf, looksOf, ORIENTED, PLATFORMS, UNDER_DRAWN, VARIED } from './furniture';
+import { drawFurniture, drawUnderProp, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED } from './furniture';
 import { ITEM_PX, ItemAtlas } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
@@ -137,6 +137,8 @@ const COVER = ['no cover', 'half cover', 'three-quarters cover', 'total cover'];
 // (`underField.ts`).
 const underProgram = GlProgram.from({ vertex, fragment: undergroundFragment, name: 'underground' });
 let underQuad: Geometry | null = null;
+/** Each level's rail and ore cart squares, by its items (`railLinks`), and how many items it had then. */
+const RAIL_SQUARES = new WeakMap<InteriorItem[], { n: number; at: Map<number, string> }>();
 const quad = () =>
   (underQuad ??= new Geometry({
     attributes: {
@@ -1514,7 +1516,35 @@ export class InteriorLayer {
     }
     const wall = ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
     const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) || f.kind === 'key' ? this.lookOf(f) : 0;
-    return `u:${base}:${light}:${wall}:${variant}`;
+    const links = f.kind === 'rail' || f.kind === 'ore_cart' ? `:r${this.railLinks(f)}` : '';
+    return `u:${base}:${light}:${wall}:${variant}${links}`;
+  }
+
+  /** The sides (north 1, east 2, south 4, west 8) a rail or an ore cart joins the rails beside it: a rail its
+   * neighbouring rails, and an ore cart standing on the line (where a rail runs into it from a side without two other
+   * rails already; a cart parked beside the line joins none). */
+  private railLinks(f: InteriorItem): number {
+    if (f.kind !== 'rail' && f.kind !== 'ore_cart') return 0;
+    const { nx, ny } = this.interior;
+    const here = this.interior.levels[this.level];
+    const items = here?.furniture.includes(f) ? here.furniture : (this.interior.levels.find((l) => l.furniture.includes(f))?.furniture ?? []);
+    let on = RAIL_SQUARES.get(items);
+    if (!on || on.n !== items.length) {
+      const at = new Map<number, string>();
+      for (const g of items) if ((g.kind === 'rail' || g.kind === 'ore_cart') && g.w === 1 && g.h === 1) at.set(g.y * nx + g.x, g.kind);
+      on = { n: items.length, at };
+      RAIL_SQUARES.set(items, on);
+    }
+    const sq = on.at;
+    const kind = (i: number, j: number) => (i < 0 || j < 0 || i >= nx || j >= ny ? undefined : sq.get(j * nx + i));
+    const SIDES = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    const railsBy = (i: number, j: number) => SIDES.reduce((b, [dx, dy], s) => (kind(i + dx, j + dy) === 'rail' ? b | (1 << s) : b), 0);
+    const two = (b: number) => (b & (b - 1)) !== 0;
+    if (f.kind === 'rail') {
+      const b = railsBy(f.x, f.y);
+      return two(b) ? b : SIDES.reduce((b, [dx, dy], s) => (kind(f.x + dx, f.y + dy) === 'ore_cart' ? b | (1 << s) : b), b);
+    }
+    return SIDES.reduce((b, [dx, dy], s) => (kind(f.x + dx, f.y + dy) === 'rail' && !two(railsBy(f.x + dx, f.y + dy)) ? b | (1 << s) : b), 0);
   }
 
   /** The rock side of a wall-mounted prop's square (unit step), if any (the side set in its design
@@ -1774,7 +1804,7 @@ export class InteriorLayer {
       if (drawFurniture(g, s, this.light, this.lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null)) return;
     }
     // (Indoor props in a building too.)
-    if ((this.underground || !shared) && drawUnderProp(g, f, this.light, this.lookOf(f), ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0])) return;
+    if ((this.underground || !shared) && drawUnderProp(g, f, this.light, this.lookOf(f), ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0], this.railLinks(f))) return;
     if (kind === 'sprite') {
       // A picture not loaded yet (or no renderer): a plain square in its place.
       g.rect(x + 0.1, y + 0.1, w - 0.2, h - 0.2).fill({ color: 0x786046, alpha: 0.5 }).stroke({ width: 0.05, color: INK });
@@ -2130,8 +2160,17 @@ export class InteriorLayer {
         g.moveTo(x + 0.35, y + 0.42).lineTo(x + 0.65, y + 0.42).moveTo(x + 0.35, y + 0.58).lineTo(x + 0.65, y + 0.58).stroke({ width: 0.02, color: INK, alpha: 0.4 });
         return true;
       case 'rail':
-        g.moveTo(x + 0.5, y + 0.15).lineTo(x + 0.5, y + 0.85).stroke({ width: 0.12, color: 0x5e4028 });
-        g.moveTo(x, y + 0.3).lineTo(x + 1, y + 0.3).moveTo(x, y + 0.7).lineTo(x + 1, y + 0.7).stroke({ width: 0.06, color: 0x6b6f75 });
+        // (A sleeper across each stretch of track halfway, its two rails; a beam where the line ends.)
+        for (const r of railRuns(x, y, this.railLinks(f))) {
+          const u = Math.min(0.5, r.to / 2);
+          g.moveTo(...r.at(u, -0.35)).lineTo(...r.at(u, 0.35)).stroke({ width: 0.12, color: 0x5e4028 });
+          for (const o of [-0.2, 0.2]) {
+            g.moveTo(...r.at(0, o));
+            for (let k = 1; k <= 8; k++) g.lineTo(...r.at((r.to * k) / 8, o));
+            g.stroke({ width: 0.06, color: 0x6b6f75 });
+          }
+          if (r.stop) g.moveTo(...r.at(r.to, -0.33)).lineTo(...r.at(r.to, 0.33)).stroke({ width: 0.1, color: 0x7a5530 });
+        }
         return true;
       case 'ore_cart':
         block(x + 0.12, y + 0.2, 0.76, 0.6, 0x4a4440, 1.2);

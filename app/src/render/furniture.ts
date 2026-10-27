@@ -5889,22 +5889,110 @@ function timberProp(g: Graphics, f: InteriorItem, light: Light, rnd: () => numbe
   }
 }
 
-/** Rails: two iron rails across the square, edge to edge so neighbours join, on two wooden sleepers in a strip of
- * gravel. */
-function rails(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
-  const { x, y } = f;
-  g.rect(x, y + 0.14, 1, 0.72).fill({ color: 0x5a554c, alpha: 0.35 });
-  for (let i = 0; i < 14; i++) g.circle(x + rnd(), y + 0.16 + rnd() * 0.68, 0.01 + 0.01 * rnd()).fill({ color: 0x8a857a, alpha: 0.6 });
-  for (const u of [0.25, 0.75]) {
-    const sl = quad([x + u - 0.07, y + 0.16, x + u + 0.07, y + 0.84], rnd, 0.006);
-    g.poly(sl).fill(DARK_WOOD[1]).stroke({ width: 0.016, color: INK });
-    g.moveTo(x + u - 0.02, y + 0.2).lineTo(x + u - 0.015, y + 0.8).stroke({ width: 0.008, color: DARK_WOOD[0] });
+/** A stretch of track across a rail's square: `at(u, o)` is the point a fraction `u` along it from where it starts,
+ * `o` squares off its middle line; `to` how far along it runs (1: to the far side) and `stop` whether it ends at a
+ * buffer beam there. */
+export type RailRun = { at: (u: number, o: number) => [number, number]; len: number; to: number; stop: boolean };
+
+/** The stretches of track across a rail's square at `x`, `y` that join it to the rails beside it (`links`: north 1,
+ * east 2, south 4, west 8): straight across between opposite sides, a quarter turn between two sides that meet
+ * (round the corner between them, its middle line half a square out), the straight through a junction with a stub
+ * to a branch's side, and from a lone neighbour most of the way across to a buffer beam. None: across, west to
+ * east. */
+export function railRuns(x: number, y: number, links: number): RailRun[] {
+  const SIDE: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  const has = (i: number) => ((links >> i) & 1) === 1;
+  const [cx, cy] = [x + 0.5, y + 0.5];
+  // (Straight from side `a` toward the opposite side, its offsets to the left of the way it runs.)
+  const straight = (a: number, to = 1, stop = false): RailRun => {
+    const [sx, sy] = SIDE[a];
+    const [dx, dy] = [-sx, -sy];
+    return { at: (u, o) => [cx + sx * 0.5 + dx * u - dy * o, cy + sy * 0.5 + dy * u + dx * o], len: 1, to, stop };
+  };
+  const count = [0, 1, 2, 3].filter(has).length;
+  if (count === 0) return [straight(3)];
+  if (count === 1) return [straight([0, 1, 2, 3].find(has)!, 0.8, true)];
+  const ns = has(0) && has(2);
+  const ew = has(1) && has(3);
+  if (count === 2 && !ns && !ew) {
+    // A quarter turn round the corner where the two sides meet.
+    const [a, b] = [0, 1, 2, 3].filter(has);
+    const [kx, ky] = [cx + (SIDE[a][0] + SIDE[b][0]) * 0.5, cy + (SIDE[a][1] + SIDE[b][1]) * 0.5];
+    const t0 = Math.atan2(-SIDE[b][1], -SIDE[b][0]);
+    let t1 = Math.atan2(-SIDE[a][1], -SIDE[a][0]);
+    if (t1 - t0 > Math.PI) t1 -= Math.PI * 2;
+    if (t0 - t1 > Math.PI) t1 += Math.PI * 2;
+    const turn = Math.sign(t1 - t0);
+    // (Offsets to the left of the way it runs: out from the corner when it turns clockwise on screen.)
+    return [{ at: (u, o) => { const t = t0 + (t1 - t0) * u; const r = 0.5 - turn * o; return [kx + Math.cos(t) * r, ky + Math.sin(t) * r]; }, len: Math.PI / 4, to: 1, stop: false }];
   }
-  for (const s of [0.3, 0.7]) {
-    g.rect(x, y + s - 0.035, 1, 0.07).fill(INK);
-    g.rect(x, y + s - 0.022, 1, 0.044).fill(IRON[1]);
-    g.rect(x, y + s - 0.022 + (light[1] > 0 ? 0.026 : 0), 1, 0.018).fill(IRON[2]);
-    for (const u of [0.25, 0.75]) g.circle(x + u, y + s + 0.05, 0.012).fill(IRON[0]);
+  const runs: RailRun[] = [];
+  if (ew) runs.push(straight(3));
+  if (ns) runs.push(straight(0));
+  // A branch off the straight: a stub from its side to the near rail.
+  for (const i of [0, 1, 2, 3]) if (has(i) && !has((i + 2) % 4)) runs.push(straight(i, 0.3, false));
+  return runs;
+}
+
+/** Rails: two iron rails on wooden sleepers in a strip of gravel, along each of the piece's stretches of track
+ * (`railRuns`) so neighbours join, edge to edge; a buffer beam where the line ends. */
+function rails(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, links = 0) {
+  const runs = railRuns(f.x, f.y, links);
+  const pts = (r: RailRun, o: number, u0 = 0, u1 = r.to) => {
+    const n = Math.max(2, Math.ceil(((u1 - u0) * r.len) / 0.06) + 1);
+    return Array.from({ length: n }, (_, i) => r.at(u0 + ((u1 - u0) * i) / (n - 1), o));
+  };
+  const line = (ps: [number, number][]) => {
+    g.moveTo(...ps[0]);
+    for (const p of ps.slice(1)) g.lineTo(...p);
+  };
+  // (Unit steps along the run and across it at `u`.)
+  const frame = (r: RailRun, u: number): [[number, number], [number, number]] => {
+    const [p, q] = [r.at(u, 0), r.at(u, 1)];
+    const [nx, ny] = [q[0] - p[0], q[1] - p[1]];
+    return [[ny, -nx], [nx, ny]];
+  };
+  // A rect `a` along and `b` across, round the point `u` along, `o` off.
+  const box = (r: RailRun, u: number, o: number, a: number, b: number, j: number) => {
+    const [c, [tx, ty], [nx, ny]] = [r.at(u, o), ...frame(r, u)];
+    const n = () => (rnd() - 0.5) * 2 * j;
+    return [[-1, -1], [1, -1], [1, 1], [-1, 1]].flatMap(([s, t]) => [c[0] + tx * a * s + nx * b * t + n(), c[1] + ty * a * s + ny * b * t + n()]);
+  };
+  // The gravel bed (past the buffer a little), stones strewn on it.
+  for (const r of runs) {
+    const u1 = r.stop ? r.to + 0.06 : r.to === 0.3 ? 0.5 : r.to;
+    g.poly([...pts(r, -0.36, 0, u1), ...pts(r, 0.36, 0, u1).reverse()].flat()).fill({ color: 0x5a554c, alpha: 0.35 });
+    for (let i = 0; i < Math.round(14 * u1 * r.len); i++) g.circle(...r.at(rnd() * u1, (rnd() * 2 - 1) * 0.34), 0.01 + 0.01 * rnd()).fill({ color: 0x8a857a, alpha: 0.6 });
+  }
+  // Sleepers, every half square.
+  for (const r of runs) {
+    for (const u of [0.25, 0.75]) {
+      if (u > r.to) continue;
+      g.poly(box(r, u, 0, 0.07, 0.34, 0.006)).fill(DARK_WOOD[1]).stroke({ width: 0.016, color: INK });
+      line([r.at(u - 0.02 / r.len, -0.3), r.at(u - 0.015 / r.len, 0.3)]);
+      g.stroke({ width: 0.008, color: DARK_WOOD[0] });
+    }
+  }
+  // The rails: inked iron, the edge toward the light lit, spikes into each sleeper.
+  for (const r of runs) {
+    const [, [nx, ny]] = frame(r, r.to / 2);
+    const lit = nx * light[0] + ny * light[1] > 0 ? 1 : -1;
+    for (const o of [-0.2, 0.2]) {
+      line(pts(r, o));
+      g.stroke({ width: 0.07, color: INK });
+      line(pts(r, o));
+      g.stroke({ width: 0.044, color: IRON[1] });
+      line(pts(r, o + lit * 0.013));
+      g.stroke({ width: 0.018, color: IRON[2] });
+      for (const u of [0.25, 0.75]) if (u <= r.to) g.circle(...r.at(u, o + 0.05), 0.012).fill(IRON[0]);
+    }
+  }
+  // Buffer beams: a baulk of timber across the rails' ends, iron plates where they meet it.
+  for (const r of runs.filter((r) => r.stop)) {
+    g.poly(box(r, r.to + 0.02, 0, 0.055, 0.33, 0.006)).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    line([r.at(r.to + 0.02 - 0.03, -0.3), r.at(r.to + 0.02 - 0.03, 0.3)]);
+    g.stroke({ width: 0.012, color: WOOD[2] });
+    for (const o of [-0.2, 0.2]) g.poly(box(r, r.to - 0.04, o, 0.025, 0.045, 0)).fill(IRON[0]).stroke({ width: 0.01, color: INK });
   }
 }
 
@@ -6812,8 +6900,9 @@ export const UNDER_DRAWN = new Set([
 ]);
 
 /** Draws underground prop `f` if it is drawn here; false otherwise. `wall` is the rock side for props
- * against a wall, and the back for those that have one (the dais). */
-export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: number, wall: [number, number]): boolean {
+ * against a wall, and the back for those that have one (the dais); `links` the sides a rail or an ore cart joins
+ * the rails beside it (`railRuns`). */
+export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: number, wall: [number, number], links = 0): boolean {
   if (!UNDER_DRAWN.has(f.kind)) return false;
   const rnd = rng(v * 7919 + f.w * 131 + f.h * 17 + f.kind.length * 1009 + f.kind.charCodeAt(0) * 3);
   const w: [number, number] = wall[0] || wall[1] ? wall : [0, -1];
@@ -6948,9 +7037,10 @@ export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: num
       timberProp(g, f, light, rnd);
       break;
     case 'rail':
-      rails(g, f, light, rnd);
+      rails(g, f, light, rnd, links);
       break;
     case 'ore_cart':
+      if (links) rails(g, f, light, rng(v * 7919 + 77), links);
       oreCart(g, f, light, rnd);
       break;
     case 'ore_vein':
