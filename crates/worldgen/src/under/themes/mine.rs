@@ -1,5 +1,6 @@
 //! Mines: an adit in from the hillside and a railed haulage way, drifts along curved ore veins with stopes where a
-//! vein runs rich (some fallen in), a winze down to the next level (the way down) and a lift shaft with its winch and
+//! vein runs rich (some fallen in), crosscuts between the veins, side drifts off them (most ending in a stope) and
+//! bypasses that leave a vein and rejoin it (loops), a winze down to the next level (the way down) and a lift shaft with its winch and
 //! cage on the same squares of every level. By the adit a miners' station, its powder store locked (the key elsewhere
 //! on the level); now and then a drift broken into a natural cave (`cave::caverns`), joined by rubble; the deepest level
 //! now and then partly flooded (shallow water in the drifts, a deep sump with a way round). The boss in a dead end off
@@ -296,6 +297,7 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
     let mut drifts: Vec<i16> = Vec::new();
     let mut rich: Vec<(i16, isize, isize)> = Vec::new();
     let mut stopes: Vec<(i16, bool)> = Vec::new();
+    let mut lines: Vec<(i16, Vec<(isize, isize)>)> = Vec::new();
     let rs = rng.next_u32() as u64;
     for (v, &cx) in veins_x.iter().enumerate() {
         let drift = g.p.room("drift", 0.0);
@@ -326,6 +328,7 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
             line.push((x, j));
             prev = x;
         }
+        lines.push((drift, line.clone()));
         ends.push((v as isize, line[0].0, line[0].1));
         ends.push((v as isize, line[line.len() - 1].0, line[line.len() - 1].1));
         // Stopes where the vein runs rich: a ragged chamber off the drift, now and then fallen in.
@@ -333,29 +336,33 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
         let mut last_stope = -100;
         for j in j0 + 3..=j1 - 3 {
             let r = richness(j);
-            if r < 0.55 || r < richness(j - 1) || r < richness(j + 1) || j - last_stope < 6 || (j - y0).abs() <= 2 || (j - y0 - 1).abs() <= 2 {
+            if r < 0.45 || r < richness(j - 1) || r < richness(j + 1) || j - last_stope < 5 || (j - y0).abs() <= 2 || (j - y0 - 1).abs() <= 2 {
                 continue;
             }
             last_stope = j;
             let x = x_at(j);
             rich.push((drift, x, j));
-            let side: isize = if rng.next_f64() < 0.5 { 1 } else { -1 };
-            let (rx, ry) = (rng.range(2.0, 3.6), rng.range(1.8, 3.0));
-            let ccx = x as f64 + side as f64 * (rx * 0.6 + 0.5);
-            let fallen = rng.next_f64() < 0.3;
-            let kind = if fallen { "collapsed stope" } else if rng.next_f64() < 0.7 { "stope" } else { "ore chamber" };
-            let st = g.p.room(kind, 0.0);
-            let ns = rng.next_u32() as u64;
-            for jj in j - 4..=j + 4 {
-                for ii in (ccx - rx - 1.0) as isize..=(ccx + rx + 1.0) as isize {
-                    let (dx, dy) = ((ii as f64 - ccx) / rx, (jj - j) as f64 / ry);
-                    let wobble = 0.35 * (noise(ns, ii.max(0) as usize, jj.max(0) as usize, 2.0) - 0.5);
-                    if dx * dx + dy * dy <= 1.0 + wobble {
-                        g.cut(ii, jj, st);
+            // (Now and then rich enough for a stope on both sides.)
+            let first: isize = if rng.next_f64() < 0.5 { 1 } else { -1 };
+            let both = rng.next_f64() < 0.35;
+            for side in [first, -first].into_iter().take(1 + both as usize) {
+                let (rx, ry) = (rng.range(2.4, 4.4), rng.range(2.0, 3.4));
+                let ccx = x as f64 + side as f64 * (rx * 0.6 + 0.5);
+                let fallen = rng.next_f64() < 0.3;
+                let kind = if fallen { "collapsed stope" } else if rng.next_f64() < 0.7 { "stope" } else { "ore chamber" };
+                let st = g.p.room(kind, 0.0);
+                let ns = rng.next_u32() as u64;
+                for jj in j - 4..=j + 4 {
+                    for ii in (ccx - rx - 1.0) as isize..=(ccx + rx + 1.0) as isize {
+                        let (dx, dy) = ((ii as f64 - ccx) / rx, (jj - j) as f64 / ry);
+                        let wobble = 0.35 * (noise(ns, ii.max(0) as usize, jj.max(0) as usize, 2.0) - 0.5);
+                        if dx * dx + dy * dy <= 1.0 + wobble {
+                            g.cut(ii, jj, st);
+                        }
                     }
                 }
+                stopes.push((st, fallen));
             }
-            stopes.push((st, fallen));
         }
     }
     // The winze (not on the deepest level): a little chamber beyond the far vein's far end, out of the lift's way; the
@@ -386,6 +393,12 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
             g.p.down = (0..n).filter(|&k| dist[k] > 0 && g.p.cells[k] != landing).max_by_key(|&k| (dist[k], usize::MAX - k));
         }
     }
+    // Denser workings: crosscuts between neighbouring veins, side drifts off each vein (some ending in a stope),
+    // bypasses that leave a vein and come back to it further on (loops), drifts off the haulage way. Dug only through
+    // rock clear of the station, the lift, the winzes and (deepest level) the boss's end of the far vein.
+    let fe = ends.iter().copied().find(|&(v, _, j)| v == far_vein as isize && (j * 2 > ny as isize) == south);
+    let ok = |i: isize, j: isize| !(near_lift(i, j) || (last && fe.is_some_and(|(_, x, e)| (i - x).abs() <= 8 && if south { j >= e - 3 } else { j <= e + 3 })));
+    workings(&mut g, &lines, (y0, haul), &ok, &mut drifts, &mut stopes, rng);
     // The boss (deepest level): the deep vein, a chamber off the far vein's far end touching nothing else.
     let mut boss: Option<i16> = None;
     if last {
@@ -467,8 +480,10 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
             i >= 4 && j >= 4 && i + 4 < nx && j + 4 < ny
         };
         let mut best: Vec<usize> = (0..n).filter(|&k| inner(k) && !shy[k] && far[k] >= 6).collect();
-        if best.is_empty() {
-            best = (0..n).filter(|&k| inner(k) && !shy[k] && far[k] >= 5).collect();
+        for least in [5, 4] {
+            if best.is_empty() {
+                best = (0..n).filter(|&k| inner(k) && !shy[k] && far[k] >= least).collect();
+            }
         }
         if !best.is_empty() {
             let c = best[rng.below(best.len() as u32) as usize];
@@ -481,7 +496,15 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
                 })
                 .collect();
             let cv = Caverns { kinds: &CAVE, ledge: "", spacing: 8.0, seeds: &[], raise: 0.0, squeeze: 0.3, loops: 0.4, reach: 6, dead_end: false, solid: &[] };
+            // (The boss hidden from the growth, so no chamber is reached through it.)
+            let hid: Vec<usize> = (0..n).filter(|&k| boss.is_some() && g.p.cells[k] == boss.unwrap_or(-1)).collect();
+            for &k in &hid {
+                g.p.cells[k] = -1;
+            }
             let grown = caverns(&mut g.p, ny, &region, &cv, rng);
+            for &k in &hid {
+                g.p.cells[k] = boss.unwrap_or(-1);
+            }
             for j in &grown.joins {
                 if j.a < 0 || j.b < 0 {
                     broke.extend(j.squares.iter().copied());
@@ -621,7 +644,9 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
         }
     }
     // The break into the cave: rubble over the joins, a collapsed wall on the drift's side.
-    let broke: Vec<usize> = broke.into_iter().filter(|&k| p.cells[k] >= 0 && !p.taken[k]).collect();
+    let mut broke: Vec<usize> = broke.into_iter().filter(|&k| p.cells[k] >= 0 && !p.taken[k]).collect();
+    broke.sort_unstable();
+    broke.dedup();
     if let Some(&k) = broke.first() {
         let side = neighbours(k, nx, ny).find(|&m| p.cells[m] >= 0 && !p.taken[m] && !CAVE.contains(&p.rooms[p.cells[m] as usize].kind));
         p.put_all(broke.iter().map(|&k| item("rubble_slope", k % nx, k / nx, 1, 1)).collect::<Vec<_>>());
@@ -675,9 +700,8 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
             }
         }
         let size = |r: i16| p.cells.iter().filter(|&&c| c == r).count();
-        if let Some(&(r, _)) = stopes.iter().filter(|s| !s.1 && size(s.0) >= 12).max_by_key(|s| (size(s.0), -s.0))
-            && depths(&p, ny, r).iter().any(|s| s.1 >= 2)
-        {
+        // (The biggest stope with deep enough a middle.)
+        if let Some(&(r, _)) = stopes.iter().filter(|s| !s.1 && size(s.0) >= 12 && depths(&p, ny, s.0).iter().any(|d| d.1 >= 2)).max_by_key(|s| (size(s.0), -s.0)) {
             p.rooms[r as usize].kind = "sump";
             lake(&p, ny, &mut wet, r, false, false, rng);
         }
@@ -736,4 +760,235 @@ fn grow_boss(g: &Dig, seed: usize, (cx, cy): (f64, f64)) -> Vec<usize> {
         }
     }
     out
+}
+
+/// Rooms a new working may open into.
+fn open(p: &Plan, r: i16) -> bool {
+    r >= 0 && matches!(p.rooms[r as usize].kind, "drift" | "stope" | "ore chamber" | "haulage way")
+}
+
+/// Dig `path` (4-joined squares in order) as `room` if each square is rock that may be dug (`ok`) and only its first
+/// `ends.0` and last `ends.1` squares touch other floor (and only rooms a working may open into). With `part`, the
+/// good beginning instead, if at least that long (a dead end). The squares dug.
+fn bore(g: &mut Dig, path: &[(isize, isize)], room: i16, ends: (usize, usize), part: Option<usize>, ok: &dyn Fn(isize, isize) -> bool) -> Vec<usize> {
+    let (nx, ny) = (g.nx, g.ny);
+    let ks: Vec<Option<usize>> = path.iter().map(|&(i, j)| g.at(i, j)).collect();
+    let mut good = 0;
+    for (t, &k) in ks.iter().enumerate() {
+        let Some(k) = k else { break };
+        let (i, j) = path[t];
+        let edge = t < ends.0 || t + ends.1 >= path.len();
+        let fine = g.p.cells[k] < 0
+            && !g.keep[k]
+            && ok(i, j)
+            && around(k, nx, ny).all(|m| g.p.cells[m] < 0 || g.p.cells[m] == room || ks.contains(&Some(m)) || (edge && open(&g.p, g.p.cells[m])));
+        if !fine {
+            break;
+        }
+        good = t + 1;
+    }
+    let take = match part {
+        _ if good == path.len() => good,
+        Some(least) if good >= least => good,
+        _ => return Vec::new(),
+    };
+    let out: Vec<usize> = ks[..take].iter().flatten().copied().collect();
+    for &k in &out {
+        g.p.cells[k] = room;
+    }
+    out
+}
+
+/// A line of squares from (x, y) heading (dx, dy) until the square ahead is floor `stop` allows (the line) or `most`
+/// squares were laid (None); a sideways jog now and then (4-joined).
+fn toward(g: &Dig, (mut x, mut y): (isize, isize), (dx, dy): (isize, isize), most: usize, jog: f64, stop: &dyn Fn(i16) -> bool, rng: &mut Pcg32) -> Option<Vec<(isize, isize)>> {
+    let mut out: Vec<(isize, isize)> = Vec::new();
+    let ahead = |x: isize, y: isize| g.at(x + dx, y + dy).is_some_and(|k| stop(g.p.cells[k]));
+    let mut since = 0;
+    while out.len() < most {
+        out.push((x, y));
+        if ahead(x, y) {
+            return Some(out);
+        }
+        if since > 1 && rng.next_f64() < jog {
+            let s = if rng.next_f64() < 0.5 { 1 } else { -1 };
+            (x, y) = (x + dy * s, y + dx * s);
+            out.push((x, y));
+            since = 0;
+            if ahead(x, y) {
+                return Some(out);
+            }
+        }
+        (x, y) = (x + dx, y + dy);
+        since += 1;
+    }
+    None
+}
+
+/// A stope round (cx, cy) at the end of `drift`: rock squares in a ragged oval touching no floor but its own and the
+/// drift's. How many squares it took.
+fn stope_at(g: &mut Dig, (cx, cy): (f64, f64), (rx, ry): (f64, f64), drift: i16, st: i16, ok: &dyn Fn(isize, isize) -> bool, ns: u64) -> usize {
+    let (nx, ny) = (g.nx, g.ny);
+    let mut want: Vec<usize> = Vec::new();
+    for jj in (cy - ry - 1.0) as isize..=(cy + ry + 1.0) as isize {
+        for ii in (cx - rx - 1.0) as isize..=(cx + rx + 1.0) as isize {
+            let (dx, dy) = ((ii as f64 - cx) / rx, (jj as f64 - cy) / ry);
+            let wobble = 0.35 * (noise(ns, ii.max(0) as usize, jj.max(0) as usize, 2.0) - 0.5);
+            if dx * dx + dy * dy <= 1.0 + wobble
+                && let Some(k) = g.at(ii, jj)
+                && g.p.cells[k] < 0
+                && !g.keep[k]
+                && ok(ii, jj)
+                && around(k, nx, ny).all(|m| g.p.cells[m] < 0 || g.p.cells[m] == drift || g.p.cells[m] == st)
+            {
+                want.push(k);
+            }
+        }
+    }
+    for &k in &want {
+        g.p.cells[k] = st;
+    }
+    want.len()
+}
+
+/// A side drift from (x, y) heading (dx, dy) into the rock, `len` squares or as far as it may go (4 at least), now and
+/// then opening into a stope at its end; it goes in `drifts`, the stope in `stopes`. The drift's squares.
+#[allow(clippy::too_many_arguments)]
+fn spur(g: &mut Dig, (x, y): (isize, isize), (dx, dy): (isize, isize), len: u32, stope: f64, ok: &dyn Fn(isize, isize) -> bool, drifts: &mut Vec<i16>, stopes: &mut Vec<(i16, bool)>, rng: &mut Pcg32) -> Vec<usize> {
+    let mut path: Vec<(isize, isize)> = Vec::new();
+    let (mut px, mut py) = (x, y);
+    for _ in 0..len {
+        path.push((px, py));
+        if path.len() > 2 && rng.next_f64() < 0.15 {
+            let s = if rng.next_f64() < 0.5 { 1 } else { -1 };
+            (px, py) = (px + dy * s, py + dx * s);
+            path.push((px, py));
+        }
+        (px, py) = (px + dx, py + dy);
+    }
+    let room = g.p.room("drift", 0.0);
+    let dug = bore(g, &path, room, (2, 0), Some(4), ok);
+    if dug.is_empty() {
+        return dug;
+    }
+    drifts.push(room);
+    if rng.next_f64() < stope {
+        let end = *dug.last().unwrap();
+        let (ex, ey) = ((end % g.nx) as f64, (end / g.nx) as f64);
+        let (rx, ry) = if dx != 0 { (rng.range(2.2, 3.8), rng.range(1.8, 3.0)) } else { (rng.range(2.0, 3.4), rng.range(2.0, 3.4)) };
+        let fallen = rng.next_f64() < 0.2;
+        let st = g.p.room(if fallen { "collapsed stope" } else if rng.next_f64() < 0.7 { "stope" } else { "ore chamber" }, 0.0);
+        let ns = rng.next_u32() as u64;
+        let at = (ex + dx as f64 * (rx + 0.5), ey + dy as f64 * (ry + 0.5));
+        if stope_at(g, at, (rx, ry), room, st, ok, ns) >= 4 {
+            stopes.push((st, fallen));
+        }
+    }
+    dug
+}
+
+/// The workings between and beside the veins (see `mine`): new drifts go in `drifts`, new stopes in `stopes`.
+fn workings(g: &mut Dig, lines: &[(i16, Vec<(isize, isize)>)], (y0, haul): (isize, i16), ok: &dyn Fn(isize, isize) -> bool, drifts: &mut Vec<i16>, stopes: &mut Vec<(i16, bool)>, rng: &mut Pcg32) {
+    let (nx, ny) = (g.nx, g.ny as isize);
+    let clear_of_haul = |j: isize| j < y0 - 3 || j > y0 + 4;
+    let x_of = |line: &[(isize, isize)], j: isize| line.iter().find(|q| q.1 == j).map(|q| q.0);
+    let mut order: Vec<usize> = (0..lines.len()).collect();
+    order.sort_by_key(|&v| lines[v].1[lines[v].1.len() / 2].0);
+    // Bypasses: out of a vein a few squares, along it and back in (a loop or two a vein).
+    for (_, line) in lines {
+        let len = line.len() as isize;
+        let (mut made, want) = (0, 1 + (len > 30) as usize);
+        for _ in 0..10 {
+            if made >= want {
+                break;
+            }
+            let (x, j) = line[3 + rng.below((len - 6).max(1) as u32) as usize];
+            let s: isize = if rng.next_f64() < 0.5 { 1 } else { -1 };
+            let (out, along) = (2 + rng.below(4) as isize, 6 + rng.below(6) as isize);
+            let t: isize = if j * 2 < ny { 1 } else { -1 };
+            if !clear_of_haul(j) || !clear_of_haul(j + t * along) {
+                continue;
+            }
+            let mut path: Vec<(isize, isize)> = (1..=out).map(|d| (x + s * d, j)).collect();
+            let (mut px, mut py) = (x + s * out, j);
+            for _ in 0..along {
+                py += t;
+                if rng.next_f64() < 0.15 {
+                    let qx = px + if rng.next_f64() < 0.5 { 1 } else { -1 };
+                    if (qx - x) * s >= 2 {
+                        path.push((px, py));
+                        px = qx;
+                    }
+                }
+                path.push((px, py));
+            }
+            let Some(back) = toward(g, (px - s, py), (-s, 0), 10, 0.0, &|r| open(&g.p, r), rng) else { continue };
+            path.extend(back);
+            let room = g.p.room("drift", 0.0);
+            if !bore(g, &path, room, (2, 2), None, ok).is_empty() {
+                drifts.push(room);
+                made += 1;
+            }
+        }
+    }
+    // Crosscuts: between each two neighbouring veins, at a few heights off the haulage way (loops with it); a spur or
+    // two up or down off each.
+    let mut cuts: Vec<Vec<usize>> = Vec::new();
+    for w in order.windows(2) {
+        let (la, (db, lb)) = (&lines[w[0]].1, (lines[w[1]].0, &lines[w[1]].1));
+        let want = 2 + rng.below(2) as usize + (ny > 45) as usize;
+        let mut made = 0;
+        for _ in 0..14 {
+            if made >= want {
+                break;
+            }
+            let j = 3 + rng.below((ny - 6) as u32) as isize;
+            let (Some(xa), Some(_)) = (x_of(la, j), x_of(lb, j)) else { continue };
+            if !clear_of_haul(j) {
+                continue;
+            }
+            let Some(path) = toward(g, (xa + 1, j), (1, 0), 60, 0.12, &|r| r == db, rng) else { continue };
+            let room = g.p.room("drift", 0.0);
+            let dug = bore(g, &path, room, (2, 2), None, ok);
+            if !dug.is_empty() {
+                drifts.push(room);
+                cuts.push(dug);
+                made += 1;
+            }
+        }
+    }
+    for cut in &cuts {
+        for _ in 0..1 + (cut.len() > 12) as usize + rng.below(2) as usize {
+            if cut.len() < 8 {
+                break;
+            }
+            let k = cut[3 + rng.below(cut.len() as u32 - 6) as usize];
+            let t: isize = if rng.next_f64() < 0.5 { 1 } else { -1 };
+            let (x, j) = ((k % nx) as isize, (k / nx) as isize);
+            spur(g, (x, j + t), (0, t), 4 + rng.below(7), 0.7, ok, drifts, stopes, rng);
+        }
+    }
+    // Off each vein: side drifts (dead ends, most opening into a stope).
+    for (_, line) in lines {
+        let len = line.len() as isize;
+        for _ in 0..3 + (len / 5) as usize {
+            let (x, j) = line[3 + rng.below((len - 6).max(1) as u32) as usize];
+            let s: isize = if rng.next_f64() < 0.5 { 1 } else { -1 };
+            if !clear_of_haul(j) {
+                continue;
+            }
+            spur(g, (x + s, j), (s, 0), 5 + rng.below(9), 0.7, ok, drifts, stopes, rng);
+        }
+    }
+    // Off the haulage way: drifts up or down into the rock between the veins.
+    let row: Vec<usize> = (0..g.p.cells.len()).filter(|&k| g.p.cells[k] == haul).collect();
+    for _ in 0..2 + rng.below(2) + (nx / 40) as u32 {
+        if row.is_empty() {
+            break;
+        }
+        let k = row[rng.below(row.len() as u32) as usize];
+        let (x, j) = ((k % nx) as isize, (k / nx) as isize);
+        let t: isize = if g.p.cells[k - nx] != haul { -1 } else if g.p.cells[k + nx] != haul { 1 } else { continue };
+        spur(g, (x, j + t), (0, t), 6 + rng.below(7), 0.6, ok, drifts, stopes, rng);
+    }
 }
