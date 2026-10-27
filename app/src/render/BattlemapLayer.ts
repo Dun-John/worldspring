@@ -1316,7 +1316,7 @@ const SLATE = 0x5d6670;
  */
 function roundTower(g: Graphics, x: number, y: number, r: number, lift: number, flat: boolean) {
   g.circle(x + lift, y + lift, r).fill({ color: 0x000000, alpha: 0.32 });
-  if (flat) return void roundTop(g, x, y, r, rngAt(x, y));
+  if (flat) return void roundTop(g, x, y, r, rngAt(x, y), false, [], true);
   g.circle(x, y, r).fill(0x8f897d).stroke({ width: 2.5, color: ROOF_INK });
   const n = 16;
   const rr = r * 0.92;
@@ -1345,7 +1345,7 @@ const LEAD_ROLL = 0x80878d;
  * cap house under a slate pyramid in the middle; 1 or 2 a hipped roof of lead (its rolls up the
  * slopes) or slate (its courses) inside the wall walk. Its parapet (`parapetRing`) and outline last.
  */
-function keepTop(g: Graphics, pts: number[], top: number, cap: boolean) {
+function keepTop(g: Graphics, pts: number[], top: number, cap: boolean, plain: number[] = []) {
   const [p0x, p0y] = [pts[0], pts[1]];
   let [ax, ay] = [pts[2] - p0x, pts[3] - p0y];
   let [bx, by] = [pts[6] - p0x, pts[7] - p0y];
@@ -1425,7 +1425,7 @@ function keepTop(g: Graphics, pts: number[], top: number, cap: boolean) {
     g.moveTo(...P(s1, a)).lineTo(...P(s0, a)).lineTo(...P(s0, b));
     g.stroke({ width: PX * 0.35, color: 0x000000, alpha: 0.22 });
   }
-  parapetRing(g, pts, rnd, top === 0 ? 0 : ww - PARAPET);
+  parapetRing(g, pts, rnd, top === 0 ? 0 : ww - PARAPET, [], plain);
 }
 
 /**
@@ -1529,7 +1529,7 @@ function drawKeep(g: Graphics, pts: number[], tower: number, cornerTowers = true
     g.poly(dj).fill(0x8f897d);
     // Its top (`keepTop`): open battlements round a flat of dark lead with a cap house, or a roof
     // (the banner on its ridge).
-    keepTop(g, dj, top, true);
+    keepTop(g, dj, top, true, [donjonLow ? 1 : 3]);
     const pw = PX * 1.3;
     if (top !== 0) banner(g, ...P((d0 + d1) / 2, W / 2));
     // The stair turret on the roof, the banner above it (among other pieces, at the flats' corner
@@ -1602,12 +1602,12 @@ function drawShellKeep(g: Graphics, pts: number[]) {
     for (let k = 0; k < 40; k++) out.push(cx + Math.cos((k / 40) * Math.PI * 2) * r, cy + Math.sin((k / 40) * Math.PI * 2) * r);
     return out;
   };
-  g.poly(ring(R).map((v) => v + PX * 1.2)).fill({ color: 0x000000, alpha: 0.3 });
-  g.poly(ring(R)).fill(WALK);
+  g.circle(cx + PX * 1.2, cy + PX * 1.2, R).fill({ color: 0x000000, alpha: 0.3 });
+  g.circle(cx, cy, R).fill(WALK);
   const walk = R - PX * 1.2;
   const lean = walk - PX * 3.2;
   // Lean-to roofs: sloping in from the walk to the yard, shaded as they face.
-  const n = 16;
+  const n = 48;
   for (let k = 0; k < n; k++) {
     const [a0, a1] = [(k / n) * Math.PI * 2, ((k + 1) / n) * Math.PI * 2];
     const am = (a0 + a1) / 2;
@@ -1616,7 +1616,7 @@ function drawShellKeep(g: Graphics, pts: number[]) {
     g.poly(q).fill(shadeColor(SLATE, faceLight(-Math.cos(am), -Math.sin(am))));
   }
   for (const f of [0.33, 0.66]) g.poly(ring(lean + (walk - lean) * f)).stroke({ width: 1, color: 0x2f353b, alpha: 0.4 });
-  for (let k = 0; k < n; k += 2) {
+  for (let k = 0; k < n; k += 6) {
     const a = (k / n) * Math.PI * 2;
     g.moveTo(cx + Math.cos(a) * lean, cy + Math.sin(a) * lean).lineTo(cx + Math.cos(a) * walk, cy + Math.sin(a) * walk);
   }
@@ -1635,8 +1635,8 @@ function drawShellKeep(g: Graphics, pts: number[]) {
   const rnd = rngAt(cx, cy);
   roundWalk(g, cx, cy, walk, R - PARAPET, rnd);
   roundParapet(g, cx, cy, R, rnd() * Math.PI, rnd);
-  g.poly(ring(R)).stroke({ width: 3, color: ROOF_INK });
-  g.poly(ring(walk)).stroke({ width: 1.8, color: ROOF_INK });
+  g.circle(cx, cy, R).stroke({ width: 3, color: ROOF_INK });
+  g.circle(cx, cy, walk).stroke({ width: 1.8, color: ROOF_INK });
   // The gate: a passage through the wall and the lean-tos to the yard, its doors at the outer face,
   // a turret either side.
   const ga = Math.atan2(pts[1] - cy, pts[0] - cx);
@@ -1764,7 +1764,7 @@ function drawBattlements(g: Graphics, r: Roof) {
     const d = Math.hypot(pts[i * 2] - cx, pts[i * 2 + 1] - cy);
     [lo, hi] = [Math.min(lo, d), Math.max(hi, d)];
   }
-  if (m >= 8 && lo > hi * 0.9 && hi > PARAPET * 2.5) return void roundTop(g, cx, cy, hi, rnd);
+  if (m >= 8 && lo > hi * 0.9 && hi > PARAPET * 2.5) return void roundTop(g, cx, cy, hi, rnd, false, [], true);
   flagFloor(g, pts, rnd);
   if (m === 4) {
     const [a, b] = [Math.hypot(pts[2] - pts[0], pts[3] - pts[1]), Math.hypot(pts[4] - pts[2], pts[5] - pts[3])];

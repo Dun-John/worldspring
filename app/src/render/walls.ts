@@ -97,6 +97,8 @@ function crenelFill(g: Graphics, crenels: number[][]) {
  * how far a line `d` in starts (`k0 * d`) and ends short (`k1 * d`) of its corners, whether it
  * faces the light. */
 interface Side {
+  /** The outline's side this runs along. */
+  i: number;
   at: At;
   len: number;
   k0: number;
@@ -129,6 +131,7 @@ function sidesOf(pts: number[], open: number[] = []): Side[] {
     const [p, q] = [raw[(k + raw.length - 1) % raw.length], raw[(k + 1) % raw.length]];
     return [
       {
+        i: e.i,
         at: (a: number, d: number): [number, number] => [e.ax + e.ux * a + e.nx * d, e.ay + e.uy * a + e.ny * d],
         len: e.len,
         k0: open.includes(p.i) ? 0 : half(p, e),
@@ -199,9 +202,10 @@ export function flagFloor(g: Graphics, pts: number[], rnd: () => number) {
  * style: inside the outline a band of coping lit on its edge toward the light, crenels notched
  * through it, inked along the walk and round the outline; the shade of the lit sides' parapets
  * on what lies inside; `walk` px of wall walk inside the parapet given, its flags' joints across
- * it. Sides in `open` (by index) have none (where a higher piece stands against them).
+ * it. Sides in `open` (by index) have none (where a higher piece stands against them); sides in
+ * `plain` a coping with no crenels (a wall between two flat tops: one wall, not a fence).
  */
-export function parapetRing(g: Graphics, pts: number[], rnd: () => number, walk = 0, open: number[] = []) {
+export function parapetRing(g: Graphics, pts: number[], rnd: () => number, walk = 0, open: number[] = [], plain: number[] = []) {
   const sides = sidesOf(pts, open);
   const band = (s: Side, d0: number, d1: number) => [...s.at(s.k0 * d0, d0), ...s.at(s.len - s.k1 * d0, d0), ...s.at(s.len - s.k1 * d1, d1), ...s.at(s.k0 * d1, d1)];
   const P = PARAPET;
@@ -225,7 +229,7 @@ export function parapetRing(g: Graphics, pts: number[], rnd: () => number, walk 
   }
   g.stroke({ width: FT * 0.3, color: STONE[3], alpha: 0.8 });
   const crenels: number[][] = [];
-  for (const s of sides) crenelRun(s.at, s.k0 * P, s.len - s.k1 * P, P, 0, rnd, crenels);
+  for (const s of sides) if (!plain.includes(s.i)) crenelRun(s.at, s.k0 * P, s.len - s.k1 * P, P, 0, rnd, crenels);
   for (const s of sides) g.moveTo(...s.at(s.k0 * P, P)).lineTo(...s.at(s.len - s.k1 * P, P));
   g.stroke({ width: 1.8, color: INK });
   crenelFill(g, crenels);
@@ -288,7 +292,7 @@ export function cornerHatch(g: Graphics, pts: number[], room: number) {
  * the ring's lit and shaded faces. Its shadow is the caller's. Returns where the hatch faces and
  * where a ruin's parapet broke.
  */
-export function roundTop(g: Graphics, x: number, y: number, r: number, rnd: () => number, ruined = false, fallen: number[][] = []) {
+export function roundTop(g: Graphics, x: number, y: number, r: number, rnd: () => number, ruined = false, fallen: number[][] = [], smooth = false) {
   const ring: number[] = [];
   const n = 22;
   for (let k = 0; k < n; k++) {
@@ -296,7 +300,9 @@ export function roundTop(g: Graphics, x: number, y: number, r: number, rnd: () =
     const rr = r * (1 + (rnd() - 0.5) * 0.035);
     ring.push(x + Math.cos(t) * rr, y + Math.sin(t) * rr);
   }
-  g.poly(ring).fill(STONE[1]).stroke({ width: 3, color: INK, join: 'round' });
+  // (`smooth`, a keep's turret or a tower's top that is no wall's: a true circle, so its coping joins the walls it stands on.)
+  if (smooth) g.circle(x, y, r).fill(STONE[1]).stroke({ width: 3, color: INK });
+  else g.poly(ring).fill(STONE[1]).stroke({ width: 3, color: INK, join: 'round' });
   // The fighting top: flags inside the parapet, their joints, the parapet's shade on the lit side.
   const rf = r - PARAPET;
   g.circle(x, y, rf).fill(WALK);
