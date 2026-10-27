@@ -331,6 +331,7 @@ pub(super) fn castle<G: Ground>(
             square,
             gap,
             &mut others,
+            set.follow,
         );
         if streets.is_empty() || street_dist(g) <= 20.0 {
             break (g, gin);
@@ -369,7 +370,9 @@ pub(super) fn castle<G: Ground>(
         let away = sub(cc, outer_gate);
         let u = mul(away, 1.0 / len(away).max(1e-9));
         let reach = ray_exit(&ring, cc, u);
-        tries.extend([0.3, 0.2, 0.1, 0.0, 0.15, 0.05].iter().map(|f| (add(cc, mul(u, f * reach)), true)));
+        // (A sized castle's (`inner` set) two more between.)
+        let fs: &[f64] = if set.inner.is_some() { &[0.3, 0.2, 0.1, 0.0, 0.15, 0.05] } else { &[0.3, 0.2, 0.1, 0.0] };
+        tries.extend(fs.iter().map(|f| (add(cc, mul(u, f * reach)), true)));
         // (A capital's where it fits at all: if no bailey broad across the gate's side leaves room,
         // one broad before the gate.)
         let cones: &[bool] = if set.capital { &[true, false] } else { &[true] };
@@ -386,7 +389,7 @@ pub(super) fn castle<G: Ground>(
     if let Some(inner) = &inner {
         let walled_in = vec![false; inner.len()];
         let apart = |p: P| dist(p, outer_gate) >= GATES_APART;
-        let (g, gin) = curtain(l, inner, &walled_in, true, &|p: P| dist(p, outer_gate), &apart, square, 4.0, &mut others);
+        let (g, gin) = curtain(l, inner, &walled_in, true, &|p: P| dist(p, outer_gate), &apart, square, 4.0, &mut others, set.follow);
         gates.push(g);
         // The way from gate to gate along the outer bailey.
         let (a, b) = (add(outer_gate, mul(outer_in, 30.0)), sub(g, mul(gin, 30.0)));
@@ -468,8 +471,9 @@ pub(super) fn castle<G: Ground>(
             }
         }
         ranges(site, &ring, &walled, inner.as_deref(), &gates, &by_ring, &inner_towers, &lanes, &clear, motte, w, RANGE, from, prng, l);
-        // (A town's sized to them: free-standing buildings in the yard as well.)
-        if set.inner.is_some() {
+        // (A town's castle sized to them, or one it planned on its whole patch: free-standing
+        // buildings in the yard as well.)
+        if set.follow && (set.inner.is_some() || set.planned) {
             l.castle_yard = yard_buildings(site, &ring, inner.as_deref(), &gates, &by_ring, &inner_towers, &lanes, &clear, motte, w, from, l);
         }
     }
@@ -1027,9 +1031,10 @@ fn inner_ring<G: Ground>(site: &G, ring: &[P], o: P, top: f64, flat: bool, gate:
 /// already standing (`others`, which gets them: `TOWERS_CLEAR` from a gate tower, `gap` from any
 /// other). The sides `walled` (along a town wall) get no
 /// curtain while that wall stands (`up`): the rest runs from that wall round to it again; no gate
-/// is on one either way. Returns the gate and the way in there (unit).
+/// is on one either way (a stub left by a gap in it dropped where `stubs`). Returns the gate and the
+/// way in there (unit).
 #[allow(clippy::too_many_arguments)]
-fn curtain(l: &mut Layout, ring: &[P], walled: &[bool], up: bool, score: &dyn Fn(P) -> f64, ok: &dyn Fn(P) -> bool, square: bool, gap: f64, others: &mut Vec<(P, f64)>) -> (P, P) {
+fn curtain(l: &mut Layout, ring: &[P], walled: &[bool], up: bool, score: &dyn Fn(P) -> f64, ok: &dyn Fn(P) -> bool, square: bool, gap: f64, others: &mut Vec<(P, f64)>, stubs: bool) -> (P, P) {
     let n = ring.len();
     let edge = |e: usize| (ring[e], ring[(e + 1) % n]);
     // (A town wall all round: none is.)
@@ -1131,12 +1136,13 @@ fn curtain(l: &mut Layout, ring: &[P], walled: &[bool], up: bool, score: &dyn Fn
     let mut pieces = Vec::new();
     let mut towers = Vec::new();
     let mut gate_towers = Vec::new();
-    // (Not a stub under 30 ft from the town wall ending in the open, as by a water gap in it.)
+    // (A town's castle (`stubs`): not a stub under 30 ft from the town wall ending in the open, as by a
+    // water gap in it.)
     let standing: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
     let open_end = |p: P| !standing.iter().any(|&(a, b)| seg_dist(p, a, b) < 12.0);
     for (line, ends) in lines {
         let span: f64 = line.windows(2).map(|s| dist(s[0].0, s[1].0)).sum();
-        if ends && span < 30.0 && !line.iter().any(|q| q.1) && line.len() >= 2 && (open_end(line[0].0) || open_end(line[line.len() - 1].0)) {
+        if stubs && ends && span < 30.0 && !line.iter().any(|q| q.1) && line.len() >= 2 && (open_end(line[0].0) || open_end(line[line.len() - 1].0)) {
             continue;
         }
         let (mut p, t, g) = wall_pieces(&line, false);
@@ -1916,7 +1922,13 @@ fn yard_buildings<G: Ground>(
     let (x0, y0, x1, y1) = ring.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
     let step = 6.0;
     let (nx, ny) = (crate::core::ceil((x1 - x0) / step) as usize, crate::core::ceil((y1 - y0) / step) as usize);
-    let roads: Vec<(P, P, f64)> = l.roads.iter().flat_map(|(pts, _, rw)| pts.windows(2).map(move |s| (s[0], s[1], *rw))).collect();
+    // (The roads and the town's main streets, 18 ft wide.)
+    let roads: Vec<(P, P, f64)> = l
+        .roads
+        .iter()
+        .flat_map(|(pts, _, rw)| pts.windows(2).map(move |s| (s[0], s[1], *rw)))
+        .chain(l.streets.iter().flat_map(|pts| pts.windows(2).map(|s| (s[0], s[1], 18.0))))
+        .collect();
     let walls: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
     let mut placed = 0;
     for &(key, l0, l1, d0, d1) in YARD.iter().take(want) {
@@ -2020,13 +2032,13 @@ pub(super) fn cut_bound(block: &[P], patch: &[P], walls: &[(P, P)], toward: P, h
     if n < 3 || block.len() < 3 || area(&pp) < target + LEFT_AREA + 2_000.0 {
         return Err(CUT_SMALL);
     }
-    // (A side on the wall and its block's corners, within 30 ft of its ends along the sides off it:
+    // (A side on the wall and its block's corners, within 12 ft of its ends along the sides off it:
     // on the castle's side.)
     let fixed: Vec<P> = (0..n)
         .filter(|&k| walls.iter().any(|&(a, b)| dist(a, pp[k]) < 0.5 || dist(b, pp[k]) < 0.5))
         .flat_map(|k| {
             let (prev, next) = (pp[(k + n - 1) % n], pp[(k + 1) % n]);
-            let step = |q: P| add(pp[k], mul(sub(q, pp[k]), 30.0_f64.min(dist(q, pp[k])) / dist(q, pp[k]).max(1e-9)));
+            let step = |q: P| add(pp[k], mul(sub(q, pp[k]), 12.0_f64.min(dist(q, pp[k])) / dist(q, pp[k]).max(1e-9)));
             [pp[k], step(prev), step(next)]
         })
         .collect();
@@ -2073,8 +2085,8 @@ pub(super) fn cut_bound(block: &[P], patch: &[P], walls: &[(P, P)], toward: P, h
             continue;
         }
         let part = kept_at(s);
-        // (Not where the wall's side keeps it half as big again: the castle has the whole patch.)
-        if pushed && area(&part) > 1.5 * target {
+        // (Not where the wall's side keeps it twice as big: the castle has the whole patch.)
+        if pushed && area(&part) > 2.0 * target {
             why = why.max(CUT_WALL);
             continue;
         }

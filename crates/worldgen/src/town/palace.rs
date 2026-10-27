@@ -689,13 +689,17 @@ pub(super) fn approach(site: &Site, l: &mut Layout, off: P, capital: bool, kept:
 /// Each palace and monastery of layout `l` (world ft; `off`: the settlement's centre, the site's
 /// origin) given its footprint: the lots beside it taken in (`merge`'s rules), the largest rectangle
 /// the whole holds. `capital`: the capital's (its palace round a court: bigger, an odd number of
-/// squares across). A monastery with no rectangle big enough for its cloister keeps its lot.
-pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, tier: crate::t0::settle::Tier, skip: &[u32]) {
+/// squares across). A monastery with no rectangle big enough for its cloister keeps its lot. A town
+/// laid out anew by hand (`generated`: as generated) takes in no lots for an inn that took in none
+/// as generated (on lots laid out again a hair apart, it might find some).
+pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, tier: crate::t0::settle::Tier, skip: &[u32], generated: Option<&Layout>) {
     let local = |poly: &[P]| -> Vec<P> { poly.iter().map(|p| sub(*p, off)).collect() };
     let mut palaces: Vec<usize> = (0..l.buildings.len())
         .filter(|&i| (is_palace(&l.buildings[i]) || is_monastery(&l.buildings[i])) && l.buildings[i].structure == Structure::Roofed && l.buildings[i].ward != Ward::Castle && l.buildings[i].parts.is_empty() && !skip.contains(&l.buildings[i].id))
         .collect();
-    palaces.extend(coaching_inns(l, tier, skip));
+    let plain = |i: &usize| generated.is_some_and(|g| g.buildings.iter().any(|b| b.id == l.buildings[*i].id && is_inn(b) && !g.grounds.iter().any(|x| x.0 == b.id)));
+    let inns: Vec<usize> = coaching_inns(l, tier, skip).into_iter().filter(|i| !plain(i)).collect();
+    palaces.extend(inns);
     let mut gone: Vec<u32> = Vec::new();
     for pi in palaces {
         let p = l.buildings[pi].clone();

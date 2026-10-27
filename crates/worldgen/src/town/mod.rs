@@ -1699,7 +1699,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         // (Ids from their places now: the lots a palace takes in leave theirs unused, every other
         // building keeps its own.)
         l.number_buildings();
-        palace::merge(&site, &mut l, [0.0, 0.0], s.capital, s.tier, &[]);
+        palace::merge(&site, &mut l, [0.0, 0.0], s.capital, s.tier, &[], None);
         palace::approach(&site, &mut l, [0.0, 0.0], s.capital, &[], None);
     }
     // Local → world.
@@ -1755,7 +1755,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         let generated = generated_layout(world, t0, index);
         let kept = palace::follow(&site, &mut l, &generated, center, s.capital);
         wards::inherit(world, t0, e, &generated, spacing, &mut l);
-        palace::merge(&site, &mut l, center, s.capital, s.tier, &kept);
+        palace::merge(&site, &mut l, center, s.capital, s.tier, &kept, Some(&generated));
         palace::approach(&site, &mut l, center, s.capital, &kept, Some(&generated));
         temple::reach_streets(&mut l, Some(&generated));
         temple::shape_all(&mut l, Some(&generated));
@@ -4781,15 +4781,20 @@ fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> 
     for (wi, w) in std::mem::take(&mut l.walls).into_iter().enumerate() {
         let by_hand = hand.contains(&wi);
         // (In a castle, none beside a tower that stays, nor on one of its ranges: they would stand
-        // on each other.)
-        let crowded = |l: &Layout, t: P| {
+        // on each other. A town's castle's range there goes instead, but its keep: no curtain
+        // ending in the open by the water.)
+        let fill = !by_hand && l.castle_patch.is_some();
+        let crowded = |l: &Layout, t: P, ranges: bool| {
             l.castles.iter().any(|c| dist(t, c.0) <= c.1 + 30.0)
                 && (l.towers.iter().chain(&l.gate_towers).copied().chain(l.extra_towers.iter().map(|e| e.0)).any(|o| dist(o, t) < 34.0 && !tower_wet(o))
-                    || l.buildings.iter().any(|b| b.ward == Ward::Castle && poly_seg_dist(&b.poly, t, t) < 13.0))
+                    || l.buildings.iter().any(|b| b.ward == Ward::Castle && (ranges || b.keep.is_some()) && poly_seg_dist(&b.poly, t, t) < 13.0))
         };
         let bank = |l: &mut Layout, t: P| {
-            if crowded(l, t) {
+            if crowded(l, t, !fill) {
                 return;
+            }
+            if crowded(l, t, true) {
+                l.buildings.retain(|b| !(b.ward == Ward::Castle && b.keep.is_none() && poly_seg_dist(&b.poly, t, t) < 13.0));
             }
             if by_hand { l.extra_towers.push((t, false)) } else { l.towers.push(t) }
         };
