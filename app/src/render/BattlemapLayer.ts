@@ -23,8 +23,8 @@ import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
-import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge } from './bridges';
-import { banner, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, topGrid } from './walls';
+import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
+import { banner, cornerHatch, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
 import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
@@ -1299,28 +1299,6 @@ function drawMausoleum(g: Graphics, at: At, quad: Quad, rnd: () => number) {
   }
 }
 
-/** Merlons along a closed outline (inset toward its centre). */
-function merlons(g: Graphics, pts: number[], cx: number, cy: number, size: number) {
-  const m = pts.length / 2;
-  for (let i = 0; i < m; i++) {
-    const ax = pts[i * 2];
-    const ay = pts[i * 2 + 1];
-    const bx = pts[((i + 1) % m) * 2];
-    const by = pts[((i + 1) % m) * 2 + 1];
-    const len = Math.hypot(bx - ax, by - ay);
-    if (len < 1e-6) continue;
-    const [ux, uy] = [(bx - ax) / len, (by - ay) / len];
-    // Inward normal.
-    let [nx, ny] = [-uy, ux];
-    if ((cx - ax) * nx + (cy - ay) * ny < 0) [nx, ny] = [-nx, -ny];
-    for (let t = size; t + size * 0.5 < len; t += size * 2) {
-      const x = ax + ux * t + nx * size * 0.5;
-      const y = ay + uy * t + ny * size * 0.5;
-      g.rect(x - size * 0.5, y - size * 0.5, size, size);
-    }
-  }
-}
-
 /** `c` scaled by `k` per channel (shading a lit or shadowed face). */
 function shadeColor(c: number, k: number) {
   const f = (v: number) => Math.max(0, Math.min(255, Math.round(v * k)));
@@ -1334,20 +1312,12 @@ const SLATE = 0x5d6670;
 
 /**
  * A round tower seen from above: its shadow, a stone ring, and a conical slate roof in lit and
- * shadowed wedges with a finial (or a crenellated top when `flat`).
+ * shadowed wedges with a finial (or, when `flat`, a wall tower's crenellated fighting top).
  */
 function roundTower(g: Graphics, x: number, y: number, r: number, lift: number, flat: boolean) {
   g.circle(x + lift, y + lift, r).fill({ color: 0x000000, alpha: 0.32 });
+  if (flat) return void roundTop(g, x, y, r, rngAt(x, y));
   g.circle(x, y, r).fill(0x8f897d).stroke({ width: 2.5, color: ROOF_INK });
-  if (flat) {
-    g.circle(x, y, r * 0.72).fill(0x9a958a).stroke({ width: 1.5, color: 0x57534b });
-    for (let k = 0; k < 10; k++) {
-      const a = (k / 10) * Math.PI * 2;
-      g.circle(x + Math.cos(a) * r * 0.86, y + Math.sin(a) * r * 0.86, r * 0.12);
-    }
-    g.fill(0x57534b);
-    return;
-  }
   const n = 16;
   const rr = r * 0.92;
   for (let k = 0; k < n; k++) {
@@ -1370,10 +1340,10 @@ const LEAD_ROLL = 0x80878d;
 
 /**
  * The top of a four-cornered piece of a keep (`town::keep_tops`), from corner 0 along its longer
- * side: `top` 0 open battlements, a wall walk of stone flags inside the merlons (a broad one's
+ * side: `top` 0 open battlements, a wall walk of stone flags inside the parapet (a broad one's
  * middle a flat of dark lead with its rolls), a stair hatch in a corner or (`cap`, the donjon) a
  * cap house under a slate pyramid in the middle; 1 or 2 a hipped roof of lead (its rolls up the
- * slopes) or slate (its courses) inside the wall walk. Its merlons and outline last.
+ * slopes) or slate (its courses) inside the wall walk. Its parapet (`parapetRing`) and outline last.
  */
 function keepTop(g: Graphics, pts: number[], top: number, cap: boolean) {
   const [p0x, p0y] = [pts[0], pts[1]];
@@ -1389,23 +1359,18 @@ function keepTop(g: Graphics, pts: number[], top: number, cap: boolean) {
   const rect = (s0: number, s1: number, t0: number, t1: number) => poly([s0, t0], [s1, t0], [s1, t1], [s0, t1]);
   const [cx, cy] = P(L / 2, W / 2);
   const ww = PX * 1.15;
+  const rnd = rngAt(cx, cy);
   if (top === 0) {
-    // Stone flags in courses along the walk, their joints staggered.
-    g.poly(rect(0, L, 0, W)).fill(0x9d988c);
-    const f = PX * 0.7;
-    for (let t = f; t < W - PX * 0.1; t += f) g.moveTo(...P(0, t)).lineTo(...P(L, t));
-    for (let t = 0, row = 0; t < W; t += f, row++) for (let s = (row % 2) * f * 0.5 + f; s < L - PX * 0.1; s += f * 1.4) g.moveTo(...P(s, t)).lineTo(...P(s, Math.min(W, t + f)));
-    g.stroke({ width: 1, color: 0x6f6a61, alpha: 0.5 });
+    // Stone flags in courses, their joints staggered.
+    flagFloor(g, pts, rnd);
     const pw = PX * 1.6;
-    if (L > PX * 7 && W > PX * 7) {
+    const leaded = L > PX * 7 && W > PX * 7;
+    if (leaded) {
       const lead = rect(pw, L - pw, pw, W - pw);
       g.poly(lead).fill(LEAD).stroke({ width: 1.5, color: 0x3d4146 });
       for (let s = pw + PX * 1.2; s < L - pw - PX * 0.3; s += PX * 1.2) g.moveTo(...P(s, pw)).lineTo(...P(s, W - pw));
       g.stroke({ width: 2, color: LEAD_ROLL, alpha: 0.6 });
     }
-    // (The parapet's shadow on the walk along its north-west sides.)
-    g.moveTo(...P(L - PX * 0.5, PX * 0.5)).lineTo(...P(PX * 0.5, PX * 0.5)).lineTo(...P(PX * 0.5, W - PX * 0.5));
-    g.stroke({ width: PX * 0.4, color: 0x000000, alpha: 0.22 });
     if (cap) {
       const c = Math.min(L, W) * 0.17;
       const [cs, ct] = [L / 2, W / 2];
@@ -1422,18 +1387,10 @@ function keepTop(g: Graphics, pts: number[], top: number, cap: boolean) {
       ];
       for (const [e0, e1, nx, ny] of pyr) g.poly([...P(...e0), ...P(...e1), ...apex]).fill(shadeColor(SLATE, faceLight(nx, ny))).stroke({ width: 1.2, color: 0x2f353b, alpha: 0.7 });
       g.circle(...apex, PX * 0.14).fill(0xc9a227).stroke({ width: 1, color: ROOF_INK });
-    } else {
-      // A stair hatch in its far corner: a dark opening, its lid of boards laid back.
-      const h = PX * 0.8;
-      const [hs, ht] = [L - ww - PX * 0.9, W - ww - PX * 0.9];
-      g.poly(rect(hs - h / 2, hs + h / 2, ht - h / 2, ht + h / 2)).fill(0x2a2621).stroke({ width: 1, color: ROOF_INK });
-      g.poly(rect(hs - h / 2 - h, hs - h / 2, ht - h / 2, ht + h / 2)).fill(0x7a5a3a).stroke({ width: 1, color: ROOF_INK });
-    }
+    } else cornerHatch(g, pts, leaded ? pw : Math.min(L, W) / 2);
   } else {
-    // The wall walk, and a hipped roof inside it along the piece's length.
-    g.poly(rect(0, L, 0, W)).fill(0x9a958a);
-    for (let s = PX; s < L; s += PX) g.moveTo(...P(s, 0)).lineTo(...P(s, ww)).moveTo(...P(s, W - ww)).lineTo(...P(s, W));
-    g.stroke({ width: 1, color: 0x6f6a61, alpha: 0.55 });
+    // The wall walk (its joints with the parapet), and a hipped roof inside it along the piece's length.
+    g.poly(rect(0, L, 0, W)).fill(WALK);
     const base = top === 1 ? LEAD : SLATE;
     const [s0, s1, a, b] = [ww, L - ww, ww, W - ww];
     const h = Math.min((b - a) / 2, (s1 - s0) / 2);
@@ -1468,9 +1425,7 @@ function keepTop(g: Graphics, pts: number[], top: number, cap: boolean) {
     g.moveTo(...P(s1, a)).lineTo(...P(s0, a)).lineTo(...P(s0, b));
     g.stroke({ width: PX * 0.35, color: 0x000000, alpha: 0.22 });
   }
-  merlons(g, pts, cx, cy, PX * 0.45);
-  g.fill(0x57534b);
-  g.poly(pts).stroke({ width: 2.5, color: ROOF_INK });
+  parapetRing(g, pts, rnd, top === 0 ? 0 : ww - PARAPET);
 }
 
 /**
@@ -1516,9 +1471,7 @@ function drawKeep(g: Graphics, pts: number[], tower: number, cornerTowers = true
   if (D > 0) g.poly(rect(d0, d1, 0, W).map((v) => v + PX * 2.2)).fill({ color: 0x000000, alpha: 0.22 });
   // Wall walk round the hall range.
   const ww = PX * 1.15;
-  g.poly(rect(h0, h1, 0, W)).fill(0x9a958a);
-  for (let s = h0 + PX; s < h1; s += PX) g.moveTo(...P(s, 0)).lineTo(...P(s, ww)).moveTo(...P(s, W - ww)).lineTo(...P(s, W));
-  g.stroke({ width: 1, color: 0x6f6a61, alpha: 0.55 });
+  g.poly(rect(h0, h1, 0, W)).fill(WALK);
   // Hipped slate roofs inside the walk.
   const [s0, s1, t0, t1] = [h0 + (donjonLow ? 0 : ww), h1 - (donjonLow ? ww : 0), ww, W - ww];
   const bands = Math.max(1, Math.min(2, Math.round((t1 - t0) / (PX * 10))));
@@ -1560,10 +1513,9 @@ function drawKeep(g: Graphics, pts: number[], tower: number, cornerTowers = true
   // The walk's inner NW edges shade the roofs set below it.
   g.moveTo(...P(s1, t0)).lineTo(...P(s0, t0)).lineTo(...P(s0, t1));
   g.stroke({ width: PX * 0.35, color: 0x000000, alpha: 0.22 });
+  // Its parapet and walk (none against the donjon: its side 3 at the low end, else 1).
   const range = rect(h0, h1, 0, W);
-  merlons(g, range, ...P((h0 + h1) / 2, W / 2), PX * 0.45);
-  g.fill(0x57534b);
-  g.poly(range).stroke({ width: 2.5, color: ROOF_INK });
+  parapetRing(g, range, rngAt(...P((h0 + h1) / 2, W / 2)), ww - PARAPET, D > 0 ? [donjonLow ? 3 : 1] : []);
   // Bartizans midway along the range's long walls (none where another piece meets the wall).
   if (h1 - h0 > PX * 18) {
     for (const t of [0, W]) {
@@ -1636,7 +1588,7 @@ function squareTowerRoof(g: Graphics, pts: number[], lift: number) {
 }
 
 /**
- * A shell keep from above (`drawKeepParts`): a round curtain with its wall walk and merlons, lean-to
+ * A shell keep from above (`drawKeepParts`): a round curtain with its wall walk and parapet, lean-to
  * slate roofs against its inside round an open, flagged yard with a well; its gate at its first
  * corner (toward the bailey's gate, where the path comes up the motte).
  */
@@ -1651,7 +1603,7 @@ function drawShellKeep(g: Graphics, pts: number[]) {
     return out;
   };
   g.poly(ring(R).map((v) => v + PX * 1.2)).fill({ color: 0x000000, alpha: 0.3 });
-  g.poly(ring(R)).fill(0x9a958a);
+  g.poly(ring(R)).fill(WALK);
   const walk = R - PX * 1.2;
   const lean = walk - PX * 3.2;
   // Lean-to roofs: sloping in from the walk to the yard, shaded as they face.
@@ -1679,11 +1631,12 @@ function drawShellKeep(g: Graphics, pts: number[]) {
   g.circle(cx - PX * 0.3, cy - PX * 0.3, lean).stroke({ width: PX * 0.6, color: 0x000000, alpha: 0.15 });
   g.circle(cx, cy, PX * 0.55).fill(0x5d6670).stroke({ width: 2, color: ROOF_INK });
   g.circle(cx, cy, PX * 0.3).fill(0x1d2a33);
-  // The curtain's walk and merlons.
-  merlons(g, ring(R), cx, cy, PX * 0.45);
-  g.fill(0x57534b);
+  // The curtain's walk and parapet, as a wall tower's.
+  const rnd = rngAt(cx, cy);
+  roundWalk(g, cx, cy, walk, R - PARAPET, rnd);
+  roundParapet(g, cx, cy, R, rnd() * Math.PI, rnd);
   g.poly(ring(R)).stroke({ width: 3, color: ROOF_INK });
-  g.poly(ring(walk)).stroke({ width: 1.5, color: 0x6f6a61 });
+  g.poly(ring(walk)).stroke({ width: 1.8, color: ROOF_INK });
   // The gate: a passage through the wall and the lean-tos to the yard, its doors at the outer face,
   // a turret either side.
   const ga = Math.atan2(pts[1] - cy, pts[0] - cx);
@@ -1711,13 +1664,13 @@ function drawShellKeep(g: Graphics, pts: number[]) {
  * square ones under slate pyramids.
  */
 function drawKeepParts(g: Graphics, r: Roof) {
-  // A flat roof of dark grey lead inside its parapet walk, lead rolls across it along its length.
+  // A flat roof of dark grey lead inside its flagged walk and parapet, lead rolls across it along its length.
   const flat = (pts: number[]) => {
     const m = pts.length / 2;
     let [cx, cy] = [0, 0];
     for (let i = 0; i < m; i++) [cx, cy] = [cx + pts[i * 2] / m, cy + pts[i * 2 + 1] / m];
-    g.poly(pts).fill(0x9a958a);
-    g.poly(pts).stroke({ width: PX * 0.72, color: 0x6f6a61, alignment: 1 });
+    const rnd = rngAt(cx, cy);
+    flagFloor(g, pts, rnd);
     const lead = pts.map((v, k) => (k % 2 ? cy + (v - cy) * 0.7 : cx + (v - cx) * 0.7));
     g.poly(lead).fill(LEAD).stroke({ width: 1.5, color: 0x3d4146 });
     if (m === 4) {
@@ -1735,9 +1688,7 @@ function drawKeepParts(g: Graphics, r: Roof) {
       g.moveTo(lead[2], lead[3]).lineTo(lead[0], lead[1]).lineTo(lead[6], lead[7]);
       g.stroke({ width: PX * 0.4, color: 0x000000, alpha: 0.25 });
     }
-    merlons(g, pts, cx, cy, PX * 0.45);
-    g.fill(0x57534b);
-    g.poly(pts).stroke({ width: 2.5, color: ROOF_INK });
+    parapetRing(g, pts, rnd);
   };
   for (const p of r.parts) if (p.kind === 3 || p.kind === 4) (p.pts.length === 8 ? keepTop(g, p.pts, p.top & 3, false) : flat(p.pts));
   for (const p of r.parts) {
@@ -1786,7 +1737,11 @@ function polyClear(pts: number[], x: number, y: number): number {
   return inside ? -d : d;
 }
 
-/** A flat stone roof with a parapet and merlons (a keep: `drawKeep`). */
+/**
+ * A flat stone roof inside battlements as the curtain's (a keep: `drawKeep`): a flagged top in a
+ * parapet with its crenels, a stair hatch in a corner; a round one (a wizard's tower, an
+ * observatory: many corners about its middle) a wall tower's round fighting top.
+ */
 function drawBattlements(g: Graphics, r: Roof) {
   const { pts, tower } = r;
   const m = pts.length / 2;
@@ -1803,11 +1758,17 @@ function drawBattlements(g: Graphics, r: Roof) {
     cx += pts[i * 2] / m;
     cy += pts[i * 2 + 1] / m;
   }
-  const merlon = PX * 0.45;
-  g.poly(pts).fill(0x9a958a);
-  // The parapet: a darker band just inside the outline, merlons on it.
-  g.poly(pts).stroke({ width: merlon * 1.6, color: 0x6f6a61, alignment: 1 });
-  merlons(g, pts, cx, cy, merlon);
-  g.fill(0x57534b);
-  g.poly(pts).stroke({ width: 2.5, color: ROOF_INK });
+  const rnd = rngAt(cx, cy);
+  let [lo, hi] = [Infinity, 0];
+  for (let i = 0; i < m; i++) {
+    const d = Math.hypot(pts[i * 2] - cx, pts[i * 2 + 1] - cy);
+    [lo, hi] = [Math.min(lo, d), Math.max(hi, d)];
+  }
+  if (m >= 8 && lo > hi * 0.9 && hi > PARAPET * 2.5) return void roundTop(g, cx, cy, hi, rnd);
+  flagFloor(g, pts, rnd);
+  if (m === 4) {
+    const [a, b] = [Math.hypot(pts[2] - pts[0], pts[3] - pts[1]), Math.hypot(pts[4] - pts[2], pts[5] - pts[3])];
+    cornerHatch(g, pts, Math.min(a, b) / 2);
+  }
+  parapetRing(g, pts, rnd);
 }
