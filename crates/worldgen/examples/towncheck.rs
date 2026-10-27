@@ -3347,6 +3347,60 @@ fn belfry_rules(it: &worldgen::interior::Interior, floors: i8) -> Vec<String> {
     bad
 }
 
+/// `piers`: dock piers (not part of `all`). Per town with piers: how many, how many are shorter than
+/// the 105 ft a sea pier gets (cut back on a river), and the narrowest open channel between piers that
+/// face each other across the water (outline to outline); pairs closer than 40 ft, piers overlapping
+/// another, and piers within 30 ft of a bridge deck.
+fn piers(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["towns with piers", "piers", "piers shorter than 105 ft", "facing pairs", "facing pairs under 40 ft", "piers overlapping another", "piers within 30 ft of a bridge"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.piers.is_empty() {
+            continue;
+        }
+        let tag = format!("L{li} {:?}", l.tier);
+        r.tally("towns with piers", 1);
+        r.tally("piers", l.piers.len());
+        let axis = |p: &Vec<[f64; 2]>| {
+            let d = [p[1][0] - p[0][0], p[1][1] - p[0][1]];
+            let n = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-9);
+            ([d[0] / n, d[1] / n], n)
+        };
+        for (i, a) in l.piers.iter().enumerate() {
+            let (ua, la) = axis(a);
+            if la < 104.0 {
+                r.tally("piers shorter than 105 ft", 1);
+            }
+            if l.bridges.iter().any(|b| town::geom::poly_gap(a, b) < 30.0) {
+                r.add("piers within 30 ft of a bridge", 1.0, format!("{tag} pier {i}, {la:.0} ft long"));
+            }
+            for (j, b) in l.piers.iter().enumerate().skip(i + 1) {
+                let (ca, cb) = (centroid(a), centroid(b));
+                let d = [cb[0] - ca[0], cb[1] - ca[1]];
+                let dn = (d[0] * d[0] + d[1] * d[1]).sqrt().max(1e-9);
+                let (ub, _) = axis(b);
+                let gap = town::geom::poly_gap(a, b);
+                if gap == 0.0 {
+                    r.add("piers overlapping another", 1.0, format!("{tag} piers {i} {j} at {:.0} {:.0}, {la:.0} and {:.0} ft long", ca[0], ca[1], axis(b).1));
+                }
+                // Facing: roughly end to end along their length, not side by side.
+                if (ua[0] * ub[0] + ua[1] * ub[1]).abs() > 0.5 && ((d[0] * ua[0] + d[1] * ua[1]) / dn).abs() > 0.7 && dn < 400.0 {
+                    r.tally("facing pairs", 1);
+                    if gap < 40.0 {
+                        r.add("facing pairs under 40 ft", gap, format!("{tag} piers {i} {j} gap {gap:.0}"));
+                    }
+                    r.measure("narrowest open channel between facing piers (ft)", true, gap, format!("{tag} piers {i} {j}"));
+                    // (River piers are cut short of 105 ft; sea, lake and harbour ones are not.)
+                    if la < 104.0 && axis(b).1 < 104.0 {
+                        r.measure("  of those, both cut short (river, wharf): narrowest (ft)", true, gap, format!("{tag} piers {i} {j}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Town halls and the four guilds laid out by zones (`interior::hub::civic`): no floor fallen back
 /// on, every interior rule, every room of the programme (the council chamber, the strongroom, the
 /// archive, the guild's own; on a single storey some may be absent), the hall's low dais and chair
@@ -3965,7 +4019,7 @@ fn under_terrain(mut it: interior::Interior, id: &str, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 13] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "all"];
+    const MODES: [&str; 14] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -4003,6 +4057,7 @@ fn main() {
                 "temples" => temples(&mut ctx, &mut r),
                 "civic" => civic(&mut ctx, &mut r),
                 "inns" => inns(&mut ctx, &mut r),
+                "piers" => piers(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),

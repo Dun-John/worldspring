@@ -2976,6 +2976,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // Quays and landings: city patches on the sea or a lake get a paved quay along the shore;
     // dock patches get piers every ~80 ft, square to the shore, starting at the quay. A pier is
     // built only over open water and clear of other piers.
+    let mut pier_dirs: Vec<P> = Vec::new();
     for i in 0..n_inner {
         if !usable(i) {
             continue;
@@ -3020,16 +3021,37 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     continue;
                 }
                 let base = add(edge_pt, mul(out, t - 4.0));
-                let tip = add(base, mul(out, 105.0));
-                let over_water = (1..=8).all(|j| site.wet(add(base, mul(out, 105.0 * j as f64 / 8.0))));
+                // On a river a pier reaches a third of the way across at most (the village wharf's
+                // rule), and leaves an open channel to the piers facing it from the other bank.
+                let mid = add(base, mul(out, 20.0));
+                let river = if site.wet_standing(mid) { None } else { site.nearest_river(mid).filter(|_| site.near_river(mid, 0.0)) };
+                let mut length: f64 = 105.0;
+                if let Some((_, _, hw)) = river {
+                    length = length.min(0.66 * hw + 4.0);
+                    if length < 24.0 {
+                        continue;
+                    }
+                }
+                let tip = add(base, mul(out, length));
+                let over_water = (1..=8).all(|j| site.wet(add(base, mul(out, length * j as f64 / 8.0))));
                 let clear = l.piers.iter().all(|pp| {
                     let pc = centroid(pp);
                     seg_dist(pc, base, tip) > 16.0
                 });
-                let pier = rect(add(base, mul(out, 52.5)), out, 105.0, 10.0);
-                let free = !site.deck_on_road(&pier) && !l.bridges.iter().any(|d| overlaps_or_crosses(d, &pier));
+                let pier = rect(add(base, mul(out, 0.5 * length)), out, length, 10.0);
+                let mut free = !site.deck_on_road(&pier) && !l.bridges.iter().any(|d| overlaps_or_crosses(d, &pier));
+                if let (true, Some((_, _, hw))) = (free, river) {
+                    let channel = hw.max(40.0);
+                    // Clear of every pier (both banks), of facing piers by the channel, of bridges
+                    // and their approaches, fords and ferries by 30 ft.
+                    free = l.piers.iter().all(|pp| poly_gap(pp, &pier) > 0.0)
+                        && l.piers.iter().zip(&pier_dirs).all(|(pp, &pd)| dot(pd, out) >= 0.0 || poly_gap(pp, &pier) >= channel)
+                        && l.bridges.iter().all(|d| poly_gap(d, &pier) >= 30.0)
+                        && !(0..=8).any(|j| site.near_network_road(add(base, mul(out, length * j as f64 / 8.0)), 36.0));
+                }
                 if over_water && clear && free {
                     l.piers.push(pier);
+                    pier_dirs.push(out);
                 }
             }
         }

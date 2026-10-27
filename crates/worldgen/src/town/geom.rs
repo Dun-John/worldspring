@@ -88,6 +88,23 @@ pub fn seg_dist(p: P, a: P, b: P) -> f64 {
     dist(p, add(a, mul(ab, t)))
 }
 
+/// The least distance between the outlines of two polygons (0 where they cross).
+pub fn poly_gap(a: &[P], b: &[P]) -> f64 {
+    let o = |p: P, q: P, r: P| cross(sub(q, p), sub(r, p));
+    let mut best = f64::MAX;
+    for i in 0..a.len() {
+        let (p, q) = (a[i], a[(i + 1) % a.len()]);
+        for j in 0..b.len() {
+            let (r, t) = (b[j], b[(j + 1) % b.len()]);
+            if o(p, q, r) * o(p, q, t) < 0.0 && o(r, t, p) * o(r, t, q) < 0.0 {
+                return 0.0;
+            }
+            best = best.min(seg_dist(p, r, t)).min(seg_dist(q, r, t)).min(seg_dist(r, p, q)).min(seg_dist(t, p, q));
+        }
+    }
+    best
+}
+
 /// A polygon whose edges carry a label (edge i runs from vertex i to i + 1).
 #[derive(Clone, Debug)]
 pub struct Labeled {
