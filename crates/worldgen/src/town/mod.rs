@@ -226,6 +226,10 @@ pub struct Layout {
     pub square_towers: Vec<(P, P)>,
     /// Mounds raised under shell keeps.
     pub mottes: Vec<Motte>,
+    /// The town's castle patch and its market square's (the patch the main streets lead to), as
+    /// built.
+    pub castle_patch: Option<u32>,
+    pub plaza_patch: Option<u32>,
     /// Bounding box of everything (world ft): x0, y0, x1, y1.
     pub bbox: [f64; 4],
     /// A point-of-interest site (ruin, tower, roadside inn), not a settlement.
@@ -508,6 +512,8 @@ impl Layout {
             castles: Vec::new(),
             square_towers: Vec::new(),
             mottes: Vec::new(),
+            castle_patch: None,
+            plaza_patch: None,
             bbox: [0.0; 4],
             site: false,
             entrances: Vec::new(),
@@ -1914,6 +1920,13 @@ fn voronoi(sites: &[P], boundary: &[P]) -> Vec<Labeled> {
 
 /// Outskirts (farmland) reach this many urban radii from the centre.
 const OUTSKIRTS: f64 = 2.15;
+/// A city's castle patch: room for a castle (its block 18 ft in: at least this many sq ft, and this
+/// many ft across), and what a patch on the town wall gains (ft) against the height of one inside.
+/// (Below zero: towns stand on gentle ground, mostly a little higher at the edge; so about two
+/// castles in five stand inside the town, on 24 worlds.)
+const CASTLE_MIN_AREA: f64 = 20_000.0;
+const CASTLE_MIN_SHORT: f64 = 120.0;
+const WALL_BIAS_FT: f64 = -0.4;
 
 /// What a town decides before anything is built on it (`plan_town`): its patch mesh (smoothed
 /// along the wall and the main streets), walls, gates, main streets, bridges, wards and named
@@ -2279,13 +2292,45 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
     for (chain, closed) in &chains {
         mesh.smooth_chain(&vf, chain, *closed, &|v| gates.contains(&v) || pinned[v], 3);
     }
-    // Citadel: the highest city patch on the wall (so it shares the city wall), reshaped
-    // toward a regular polygon.
+    // Citadel: the highest city patch with room for a castle, inside the town (a full curtain of
+    // its own) or on its wall (sharing the city wall; `WALL_BIAS_FT`), not by the market square nor
+    // at a gate; reshaped toward a regular polygon.
     let plaza_face = rhombus.then_some(0).filter(|&i| usable(i));
+    let labels = mesh.labels.clone();
+    let next_to = |i: usize, j: usize| i == j || labels[j].contains(&(i as i32));
     let castle_face = if s.tier >= Tier::City {
+        // (Its block as `build_town` will have it, near enough: 18 ft in, from the river its quay.)
+        let roomy = |i: usize| {
+            let pts = mesh.face_pts(i);
+            let d: Vec<f64> = (0..pts.len())
+                .map(|e| {
+                    let mid = lerp(pts[e], pts[(e + 1) % pts.len()], 0.5);
+                    if site.near_river(mid, 2.0) { site.nearest_river(mid).map_or(20.0, |r| r.2) + 16.0 } else { 18.0 }
+                })
+                .collect();
+            let block = inset(&pts, &d);
+            block.len() >= 3 && area(&block).abs() >= CASTLE_MIN_AREA && obb(&block).short >= CASTLE_MIN_SHORT
+        };
+        // On the wall: a side of it is the wall's (one touching it at a corner alone would stand
+        // aslant just inside it), and none where the wall runs by the water (its quay leaves the
+        // curtain just inside that wall); inside: no corner on it.
+        let wall_sides = |i: usize, shore: bool| {
+            let f = &mesh.faces[i];
+            (0..f.len()).any(|e| {
+                let nb = labels[i][e];
+                ring.contains(&f[e]) && ring.contains(&f[(e + 1) % f.len()]) && (nb < 0 || nb as usize >= n_inner) && (nb >= 0 && wet[nb as usize]) == shore
+            })
+        };
+        let wall_side = |i: usize| wall_sides(i, false) && !wall_sides(i, true);
+        let inside = |i: usize| !mesh.faces[i].iter().any(|v| ring.contains(v));
+        let score = |i: usize| {
+            let f = &mesh.faces[i];
+            let ground = (site.height(sites[i]) + f.iter().map(|&v| site.height(mesh.pos[v])).sum::<f64>()) / (f.len() + 1) as f64;
+            ground + if inside(i) { 0.0 } else { WALL_BIAS_FT }
+        };
         (0..n_inner)
-            .filter(|&i| usable(i) && Some(i) != plaza_face && len(sites[i]) > 0.25 * r && mesh.faces[i].iter().any(|v| ring.contains(v)))
-            .max_by(|&a, &b| site.height(sites[a]).total_cmp(&site.height(sites[b])).then(b.cmp(&a)))
+            .filter(|&i| usable(i) && (wall_side(i) || inside(i)) && !plaza_face.is_some_and(|pz| next_to(i, pz)) && !mesh.faces[i].iter().any(|v| gates.contains(v)) && roomy(i))
+            .max_by(|&a, &b| score(a).total_cmp(&score(b)).then(b.cmp(&a)))
     } else {
         None
     };
@@ -2294,8 +2339,14 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
     }
 
     // Street graph over city patch edges (never along the river channel); main streets run
-    // from each gate to the plaza.
-    let plaza = plaza_face.or_else(|| (0..n_inner).filter(|&i| usable(i)).min_by(|&a, &b| len(sites[a]).total_cmp(&len(sites[b]))));
+    // from each gate to the plaza (the most central patch, if no market square was laid out:
+    // never the castle's nor one beside it).
+    let plaza = plaza_face.or_else(|| {
+        (0..n_inner)
+            .filter(|&i| usable(i) && !castle_face.is_some_and(|cf| next_to(i, cf)))
+            .min_by(|&a, &b| len(sites[a]).total_cmp(&len(sites[b])))
+    });
+    debug_assert!(castle_face.is_none() || castle_face != plaza, "the castle is never on the market square");
     // Vertices in the river channel; streets cross only by explicit links between the banks
     // (each link is a bridge along the street).
     let in_river = |v: usize| site.near_river(mesh.pos[v], 0.0);
@@ -2342,7 +2393,12 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
             }
             let (pa, pb) = (mesh.pos[a], mesh.pos[b]);
             let grade = (site.height(pa) - site.height(pb)).abs() / dist(pa, pb).max(1.0);
-            let w = dist(pa, pb) * (1.0 + 40.0 * grade * grade);
+            // (Along the castle's sides at twice the cost: the main streets go round it.)
+            let castle_side = castle_face.is_some_and(|cf| {
+                let f = &mesh.faces[cf];
+                (0..f.len()).any(|k| (f[k], f[(k + 1) % f.len()]) == (a, b) || (f[k], f[(k + 1) % f.len()]) == (b, a))
+            });
+            let w = dist(pa, pb) * (1.0 + 40.0 * grade * grade) * if castle_side { 2.0 } else { 1.0 };
             adj.entry((a as i64, 0)).or_default().push(((b as i64, 0), w));
             adj.entry((b as i64, 0)).or_default().push(((a as i64, 0), w));
         }
@@ -2749,6 +2805,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let (ward, group) = (&ward, &group);
     let walled = ch.walls.unwrap_or(plan.walled);
     let usable = |i: usize| plan.usable(i);
+    l.castle_patch = (0..n_inner).find(|&i| ward[i] == Some(Ward::Castle)).map(|i| i as u32);
+    l.plaza_patch = plan.plaza.map(|i| i as u32);
     // The streets as they are laid, for the steps on them.
     let mut pieces = stairs::Pieces::default();
 
@@ -3207,7 +3265,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         // A side's paved strip (its line, between its corners), if it has one: not on the water's side,
         // nor where the river cuts across the strip. (A park's ways in are on these sides alone.)
         let ccw = area(&c.pts) > 0.0;
-        let strip = |e: usize| -> Option<(P, P)> {
+        let strip = |e: usize, d: &[f64]| -> Option<(P, P)> {
             let (a, b) = (c.pts[e], c.pts[(e + 1) % m]);
             let nb = c.labels[e];
             let el = dist(a, b);
@@ -3221,17 +3279,24 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             let n = (el / 5.0).ceil() as usize;
             (!(0..=n).any(|j| site.near_river(lerp(pp, q, j as f64 / n as f64), 0.5 * d[e]))).then_some((pp, q))
         };
-        if i < n_inner && !matches!(w, Ward::Farm | Ward::Plaza) {
+        let mut paved = |d: &[f64], l: &mut Layout| {
             for e in 0..m {
-                let Some((pp, q)) = strip(e) else { continue };
+                let Some((pp, q)) = strip(e, d) else { continue };
                 let (va, vb) = edge_v(i, e);
                 pieces.edge(va, vb, pp, q, d[e] + 1.0, false, l.roads.len());
                 l.roads.push((vec![pp, q], 3, d[e] + 1.0));
             }
+        };
+        // (A castle's once its block is known to be there: never a patch of paved strips alone.)
+        if i < n_inner && !matches!(w, Ward::Farm | Ward::Plaza | Ward::Castle) {
+            paved(&d, l);
         }
         let block = inset(&c.pts, &d);
         if block.len() < 3 {
             continue;
+        }
+        if i < n_inner && w == Ward::Castle {
+            paved(&d, l);
         }
         let mut streets = street_lines(i, &d);
         // Too steep to build a street front on (and not a common on the slope): the block is a
@@ -3306,7 +3371,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     .filter(|&(n, off)| {
                         (0..m).any(|e| {
                             let mid = lerp(c.pts[e], c.pts[(e + 1) % m], 0.5);
-                            (dot(mid, n) - off - d[e]).abs() < 0.5 && strip(e).is_some() && i < n_inner
+                            (dot(mid, n) - off - d[e]).abs() < 0.5 && strip(e, &d).is_some() && i < n_inner
                         })
                     })
                     .collect();
@@ -3325,10 +3390,32 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     .copied()
                     .filter(|(a, b)| a[0].max(b[0]) >= x0 - 80.0 && a[0].min(b[0]) <= x1 + 80.0 && a[1].max(b[1]) >= y0 - 80.0 && a[1].min(b[1]) <= y1 + 80.0)
                     .collect();
+                // A castle inside the town (no corner on the wall): a full curtain of its own, its gate
+                // toward the market square.
+                let inside = !plan.mesh.faces[i].iter().any(|v| plan.wall_runs.iter().any(|(chain, _, _)| chain.contains(v)));
+                let on_wall = if inside { Vec::new() } else { on_wall };
+                let toward = match plan.plaza {
+                    Some(pz) if inside && pz != i => centroid(&cells[pz].pts),
+                    _ => [0.0, 0.0],
+                };
                 let set = castle::Setting { follow: true, capital: s.capital, wall_up: walled, planned: plan.ward[i] == Some(Ward::Castle) };
                 let roads_at = l.roads.len();
-                castle(site, &block, [0.0, 0.0], w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
+                let laid = castle(site, &block, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
                 castle_ways.extend(l.roads[roads_at..].iter().map(|r| r.0.clone()));
+                // No room for its curtain after all: the patch is a noble ward's (its insets, streets and lots).
+                if laid.is_none() {
+                    let d = insets(i, Ward::Noble);
+                    let block = inset(&c.pts, &d);
+                    if block.len() >= 3 {
+                        l.roads.truncate(roads_at);
+                        if let Some(b) = l.blocks.last_mut() {
+                            *b = block.clone();
+                        }
+                        let mut streets = street_lines(i, &d);
+                        let (dp, mut prng) = lots_of(i, Ward::Noble, false);
+                        build_block(site, &block, &mut streets, Ward::Noble, &dp, &mut prng, l, None);
+                    }
+                }
             }
             Ward::Slum if i >= n_inner => {
                 // Sprawl thins out away from the city: lots are kept with a probability that

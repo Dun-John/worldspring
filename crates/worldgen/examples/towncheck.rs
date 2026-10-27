@@ -93,7 +93,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use worldgen::battlemap::{Chunk, Kind, SQ, SQUARE_FT, URBAN_STREET, URBAN_TOWER, URBAN_WALL};
+use worldgen::battlemap::{Chunk, Kind, SQ, SQUARE_FT, Surface, URBAN_STREET, URBAN_TOWER, URBAN_WALL};
 use worldgen::core::tile::TileKey;
 use worldgen::pipeline::Executor;
 use worldgen::t0::T0;
@@ -121,6 +121,8 @@ fn top() -> usize {
 enum Row {
     Count { n: usize, worst: Vec<(f64, String)> },
     Measure { lowest: bool, v: Option<(f64, String)> },
+    /// Every value seen (its least, median and greatest printed).
+    Values { v: Vec<(f64, String)> },
 }
 
 #[derive(Default)]
@@ -165,6 +167,12 @@ impl Report {
             }
         }
     }
+    /// A value toward a spread (least, median, greatest).
+    fn value(&mut self, label: &str, v: f64, at: String) {
+        if let Row::Values { v: vals } = self.row(label, || Row::Values { v: Vec::new() }) {
+            vals.push((v, at));
+        }
+    }
     fn print(&mut self) {
         let top = top();
         for (label, row) in &mut self.rows {
@@ -178,6 +186,12 @@ impl Report {
                 }
                 Row::Measure { v: Some((v, at)), .. } => say!("    {label}: {v:.1} ({at})"),
                 Row::Measure { v: None, .. } => say!("    {label}: -"),
+                Row::Values { v } if v.is_empty() => say!("    {label}: -"),
+                Row::Values { v } => {
+                    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let (lo, mid, hi) = (&v[0], &v[v.len() / 2], &v[v.len() - 1]);
+                    say!("    {label}: least {:.1} ({}), median {:.1}, greatest {:.1} ({}), of {}", lo.0, lo.1, mid.0, hi.0, hi.1, v.len());
+                }
             }
         }
     }
@@ -189,6 +203,12 @@ impl Report {
                 Row::Measure { lowest, v: Some((v, at)) } => all.measure(label, *lowest, *v, format!("{world} {at}")),
                 Row::Measure { lowest, v: None } => {
                     all.row(label, || Row::Measure { lowest: *lowest, v: None });
+                }
+                Row::Values { v } => {
+                    all.row(label, || Row::Values { v: Vec::new() });
+                    for (x, at) in v {
+                        all.value(label, *x, format!("{world} {at}"));
+                    }
                 }
             }
         }
@@ -852,16 +872,76 @@ fn castles(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&CASTLE_COUNTS);
     r.counts(&CASTLE_MORE);
     r.counts(&["mottes", "objects on a motte's toe (its last 8 ft)"]);
+    r.counts(&CASTLE_SPOTS);
     let n = town::layout_count(&ctx.ex.t0);
     for li in 0..n {
         let l = town::layout(&ctx.ex.world, &ctx.ex.t0, li);
-        if l.castles.is_empty() || l.site {
+        if l.site {
+            continue;
+        }
+        castle_spot(ctx, &l, &format!("L{li} {:?}", l.tier), r);
+        if l.castles.is_empty() {
             continue;
         }
         let capital = li < ctx.ex.t0.settlements.len() && ctx.ex.t0.settlements[li].capital;
         let tag = format!("L{li} {:?}", l.tier);
         castle_checks(&ctx.ex.world, &ctx.ex.t0, &l, &tag, capital, r);
         motte_objects(ctx, &l, &tag, r);
+    }
+}
+
+const CASTLE_SPOTS: [&str; 7] = [
+    "town castles (planned or set)",
+    "castles on the market square's patch",
+    "town castles with no bailey",
+    "interior castles (no bailey corner within 50 ft of the town wall)",
+    "bailey squares",
+    "bailey squares paved (street or cobbles)",
+    "baileys over 5% paved",
+];
+
+/// A town's castle patch: not the market square's, with a bailey; inside the town or on its wall;
+/// its bailey not paved; the bailey's size against its keep's.
+fn castle_spot(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
+    let Some(cp) = l.castle_patch else { return };
+    r.tally("town castles (planned or set)", 1);
+    let c = l.center;
+    if l.plaza_patch == Some(cp) {
+        r.add("castles on the market square's patch", 1.0, format!("{tag}: patch {cp} (town at {})", at(c)));
+    }
+    let Some(castle) = Castle::of(l) else {
+        r.add("town castles with no bailey", 1.0, format!("{tag}: patch {cp} (town at {})", at(c)));
+        return;
+    };
+    let ring = &castle.ring;
+    let mid = centroid(ring);
+    let near_wall = ring.iter().any(|p| castle.town.iter().any(|w| w.windows(2).any(|s| seg_dist(*p, s[0], s[1]) < 50.0)));
+    if !near_wall {
+        r.add("interior castles (no bailey corner within 50 ft of the town wall)", 1.0, format!("{tag}: bailey at {}", at(mid)));
+    }
+    let keep: f64 = l.buildings.iter().filter(|b| b.ward == Ward::Castle && is_keep(b) && contains(ring, centroid(&b.poly))).map(|b| area(&b.poly).abs()).fold(0.0, f64::max);
+    if keep > 0.0 {
+        r.value("bailey area / keep area", area(ring).abs() / keep, format!("{tag} at {}", at(mid)));
+    }
+    let w = ctx.window(bbox(ring));
+    let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
+    let (kx0, ky0) = ((w.ox / size) as u32, (w.oy / size) as u32);
+    let (mut inside, mut paved) = (0, 0);
+    for k in 0..w.nx * w.ny {
+        let p = w.centre(k);
+        if !contains(ring, p) {
+            continue;
+        }
+        let (i, j) = (k % w.nx, k / w.nx);
+        let ch = ctx.chunk(kx0 + (i / SQ) as u32, ky0 + (j / SQ) as u32);
+        inside += 1;
+        let q = (j % SQ) * SQ + i % SQ;
+        paved += (ch.urban[q] == URBAN_STREET || ch.surface[q] == Surface::Cobble) as usize;
+    }
+    r.tally("bailey squares", inside);
+    r.tally("bailey squares paved (street or cobbles)", paved);
+    if paved * 20 > inside {
+        r.add("baileys over 5% paved", paved as f64 / inside.max(1) as f64, format!("{tag}: {paved} of {inside} squares at {}", at(mid)));
     }
 }
 
@@ -3519,6 +3599,12 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
         let mut text = format!("{l:?}").replace(", grounds: [] }", " }").replace(", keep: false }", " }").replace(", keep: true }", " }").replace(", keep: None }", " }").replace(", forecourts: [] }", " }");
         for k in ["Great", "Hall", "L", "T", "Shell", "Plain"] {
             text = text.replace(&format!(", keep: Some({k}) }}"), " }");
+        }
+        // (Nor the castle's and the market's patches, recorded later.)
+        if let Some(a) = text.find(", castle_patch: ")
+            && let Some(b) = text[a..].find(", bbox: ")
+        {
+            text.replace_range(a..a + b, "");
         }
         println!("{label} L:{li} {:016x} {castle} {}", fnv64(text.as_bytes()), l.buildings.len());
         r.tally("layouts hashed", 1);

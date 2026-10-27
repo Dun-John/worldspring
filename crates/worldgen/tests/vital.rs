@@ -911,6 +911,11 @@ fn castles_guarantee() {
         let t = worldgen::t0::T0::generate(&w);
         for si in (0..t.settlements.len()).filter(|&i| t.settlements[i].tier >= Tier::City) {
             let l = town::layout(&w, &t, si);
+            // A castle the town planned stands on its own patch, never the market square's, and is built.
+            if let Some(cp) = l.castle_patch {
+                assert!(l.plaza_patch != Some(cp), "#{si} (seed {seed}): the castle on the market square's patch {cp}");
+                assert!(!l.castles.is_empty(), "#{si} (seed {seed}): the castle planned on patch {cp} has no curtain");
+            }
             if l.castles.is_empty() {
                 continue;
             }
