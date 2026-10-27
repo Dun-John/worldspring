@@ -162,7 +162,7 @@ pub(super) fn castle<G: Ground>(
         }
         let to = sub(centroid(&outer), g);
         let u = mul(to, 1.0 / len(to).max(1e-9));
-        let reach = l.gate_towers.iter().filter(|t| dist(**t, g) < 60.0).map(|t| dot(sub(*t, g), u) + 25.0).fold(50.0, f64::max);
+        let reach = laid.1.iter().filter(|t| t.1 > 12.0 && dist(t.0, g) < 60.0).map(|t| dot(sub(t.0, g), u) + 25.0).fold(50.0, f64::max);
         outer = clip_plain(&outer, mul(u, -1.0), -(dot(g, u) + reach));
     }
     // Roads across the castle's ground (an approach road to a gate, a street bent to its bridge;
@@ -438,6 +438,7 @@ pub(super) fn castle<G: Ground>(
             .iter()
             .map(|t| (*t, 11.0))
             .chain(l.gate_towers[..g0].iter().map(|t| (*t, 15.0)))
+            .chain(laid.1.iter().copied())
             .chain(l.extra_towers.iter().map(|t| (t.0, if t.1 { 15.0 } else { 11.0 })))
             .filter(|(t, _)| inset_depth(&ring, *t) > -40.0)
             .chain(l.towers[t0..].iter().map(|t| (*t, if l.square_tower(*t).is_some() { 15.6 } else { 11.0 })))

@@ -2805,7 +2805,6 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let (ward, group) = (&ward, &group);
     let walled = ch.walls.unwrap_or(plan.walled);
     let usable = |i: usize| plan.usable(i);
-    l.castle_patch = (0..n_inner).find(|&i| ward[i] == Some(Ward::Castle)).map(|i| i as u32);
     l.plaza_patch = plan.plaza.map(|i| i as u32);
     // The streets as they are laid, for the steps on them.
     let mut pieces = stairs::Pieces::default();
@@ -3295,6 +3294,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         if block.len() < 3 {
             continue;
         }
+        let roads_at = l.roads.len();
         if i < n_inner && w == Ward::Castle {
             paved(&d, l);
         }
@@ -3399,11 +3399,13 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     _ => [0.0, 0.0],
                 };
                 let set = castle::Setting { follow: true, capital: s.capital, wall_up: walled, planned: plan.ward[i] == Some(Ward::Castle) };
-                let roads_at = l.roads.len();
+                let ways_at = l.roads.len();
                 let laid = castle(site, &block, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
-                castle_ways.extend(l.roads[roads_at..].iter().map(|r| r.0.clone()));
                 // No room for its curtain after all: the patch is a noble ward's (its insets, streets and lots).
-                if laid.is_none() {
+                if laid.is_some() {
+                    l.castle_patch = Some(i as u32);
+                    castle_ways.extend(l.roads[ways_at..].iter().map(|r| r.0.clone()));
+                } else {
                     let d = insets(i, Ward::Noble);
                     let block = inset(&c.pts, &d);
                     if block.len() >= 3 {

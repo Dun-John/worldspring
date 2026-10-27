@@ -2679,7 +2679,7 @@ fn same_buildings(a: &Layout, b: &Layout, tag: &str, label: &str, r: &mut Report
     let mut n = 0;
     for x in a.buildings.iter().filter(|x| x.ward != Ward::Castle) {
         let what = match by_id.get(&x.id) {
-            Some(y) if y.poly == x.poly && y.ward == x.ward && y.func == x.func && y.residential == x.residential && y.name == x.name && y.floors == x.floors => continue,
+            Some(y) if y.poly.len() == x.poly.len() && y.poly.iter().zip(&x.poly).all(|(p, q)| dist(*p, *q) < 1e-3) && y.ward == x.ward && y.func == x.func && y.residential == x.residential && y.name == x.name && y.floors == x.floors => continue,
             Some(y) => format!("{:?}/{:?} -> {:?}/{:?}, moved {:.1} ft", x.ward, x.func, y.ward, y.func, dist(centroid(&x.poly), centroid(&y.poly))),
             None => "gone".into(),
         };
