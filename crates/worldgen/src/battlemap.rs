@@ -2431,7 +2431,44 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             tile.road_mask.get(sidx(i, j)).is_some_and(|&r| r != 0) || (inside && chunk.urban[j as usize * SQ + i as usize] == URBAN_STREET)
         })
         .collect();
-    place_objects(&mut chunk, &biome, &slope, &road_near, seed, gsx, gsy);
+    // A castle's baileys take the land's own scatter (trees, bushes, rocks) on their open squares:
+    // bit 4 (mottes) stays bare, and a square's width is kept round curtains, towers and roofs
+    // (`place_objects` also keeps clear of the ways and the gate mouths by each thing's reach).
+    let yard_ok: Vec<bool> = if bailey_kind.iter().all(|&v| v == 0) {
+        Vec::new()
+    } else {
+        (0..n)
+            .map(|k| {
+                let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+                let h = |dx: i64, dy: i64| ((y + dy + 1) as usize) * HS + (x + dx + 1) as usize;
+                chunk.urban[k] == URBAN_PLAZA
+                    && bailey_kind[h(0, 0)] & 3 != 0
+                    && bailey_kind[h(0, 0)] & 4 == 0
+                    && (-1..=1).all(|dy| (-1..=1).all(|dx| !matches!(urb_h[h(dx, dy)], URBAN_WALL | URBAN_TOWER) && bailey_kind[h(dx, dy)] & 4 == 0))
+            })
+            .collect()
+    };
+    let yard = Yard { ok: &yard_ok, ways: &bailey_ways, gates: &gates, ox, oy };
+    place_objects(&mut chunk, &biome, &slope, &road_near, &yard, seed, gsx, gsy);
+    // The land's scatter in a bailey gives way to what the bailey is dressed with (every prop of
+    // the layout, not only this chunk's, so a seam cuts nothing differently).
+    if !yard_ok.is_empty() {
+        let kept: Vec<Object> = chunk
+            .objects
+            .iter()
+            .filter(|o| {
+                if !yard_ok[(o.y as usize).min(SQ - 1) * SQ + (o.x as usize).min(SQ - 1)] {
+                    return true;
+                }
+                let r = (info(o.kind as u16).radius * o.scale) as f64 * SQUARE_FT;
+                let p = [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT];
+                !bailey_props.iter().any(|(q, _, kd, _, sc)| crate::town::geom::dist(p, *q) < r + (info(*kd as u16).radius * *sc) as f64 * SQUARE_FT + 3.0)
+                    && !wells.iter().any(|q| crate::town::geom::dist(p, *q) < r + 12.0)
+            })
+            .copied()
+            .collect();
+        chunk.objects = kept;
+    }
     let rowless: Vec<bool> = if churchyards.is_empty() {
         Vec::new()
     } else {
@@ -2966,7 +3003,16 @@ fn retier(c: &mut Chunk, sea: f64) {
 /// Side of `place_objects`' road grid: the chunk and two squares round it.
 const RN: usize = SQ + 4;
 
-fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[bool], seed: u64, gsx: i64, gsy: i64) {
+/// The bailey squares scatter may use (empty `ok`: none here), with the ways and gates it keeps clear.
+struct Yard<'a> {
+    ok: &'a [bool],
+    ways: &'a [([f64; 2], [f64; 2])],
+    gates: &'a [([f64; 2], [f64; 2])],
+    ox: f64,
+    oy: f64,
+}
+
+fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[bool], yard: &Yard, seed: u64, gsx: i64, gsy: i64) {
     let grove_seed = hash2(seed, 0x6007, 2);
     // Each (biome, kind) pair has its own jittered global lattice; objects belong to the
     // chunk that contains them, so placement is identical whichever chunk is asked.
@@ -3002,8 +3048,21 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[boo
                     continue;
                 }
                 let k = iy as usize * SQ + ix as usize;
-                if biome[k] != b || c.surface[k].is_road() || c.building[k] != 0 || c.urban[k] != 0 {
+                if biome[k] != b || c.surface[k].is_road() || c.building[k] != 0 {
                     continue;
+                }
+                if c.urban[k] != 0 {
+                    if !yard.ok.get(k).is_some_and(|&v| v) {
+                        continue;
+                    }
+                    // In a bailey: off the ways (8 ft and the footprint's reach) and the gate mouths.
+                    let reach_ft = (info(kind as u16).radius as f64 * 1.25) * SQUARE_FT;
+                    let w = [yard.ox + (px - gsx as f64) * SQUARE_FT, yard.oy + (py - gsy as f64) * SQUARE_FT];
+                    if yard.ways.iter().any(|&(a, b)| crate::town::geom::seg_dist(w, a, b) < 8.0 + reach_ft)
+                        || yard.gates.iter().any(|&(g, hh)| crate::town::geom::seg_dist(w, g, hh) < 14.0 + reach_ft)
+                    {
+                        continue;
+                    }
                 }
                 // Canopies and boulders keep clear of buildings (roofs stay visible), and
                 // nothing overhangs a road or street: no square of one within the footprint.
