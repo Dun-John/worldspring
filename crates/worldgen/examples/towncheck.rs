@@ -1779,7 +1779,7 @@ fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str
             continue;
         };
         let into = door.unwrap_or(at);
-        if dais.is_some_and(|d| dot(sub(into, hc), sub(d, hc)) > 0.0) {
+        if dais.is_some_and(|d| dot(sub(into, hc), sub(d, hc)) >= 0.0) {
             let by: Vec<&str> = path.iter().map(|&ri| g.rooms[ri as usize].kind).collect();
             r.add("entry route reaches hall at dais end", 1.0, format!("{tag}: from the {what} by {}", by.join(" > ")));
         }

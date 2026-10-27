@@ -165,12 +165,15 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
     let hall_min = if estate { 3 } else { 4 };
     let deep_service = len >= 14 || (estate && wid >= 10 && len >= 11);
     let (mut service, mut screens) = if kind == Kind::Barracks { (if len >= 14 { 3 } else { 2 }, false) } else { (if deep_service { 3 } else { 2 }, true) };
+    // (A hall keep's service end no deeper than its forebuilding's last row: its screens passage there.)
+    let mut fore_hi = isize::MAX;
     if kind == Kind::Hall {
         // (The screens passage where the forebuilding meets the body, as near 3 rows in as it can.)
         let fs: Vec<isize> = (0..nx * ny).filter(|&k| piece[k] == Piece::Fore).map(|k| f.local((k % nx) as isize, (k / nx) as isize).0).collect();
         let (lo, hi) = (fs.iter().copied().min().unwrap_or(0).max(2), fs.iter().copied().max().unwrap_or(3));
         if lo <= hi {
             service = (3isize.clamp(lo, hi)) as usize;
+            fore_hi = hi;
         }
     }
     let rows = |service: usize, screens: bool| dz as isize - service as isize - screens as isize;
@@ -195,7 +198,7 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
     // (A service end too small for a kitchen and a buttery or pantry (10 squares): a row deeper,
     // where the hall keeps 4 rows.)
     let held = |n: usize| (0..n).map(|s| (0..wid).filter(|&t| body_at(s as isize, t as isize).is_some()).count()).sum::<usize>();
-    if kind != Kind::Hall && screens && service >= 2 && held(service) < 10 && rows(service + 1, screens) >= hall_min {
+    if (kind != Kind::Hall || (service as isize) < fore_hi) && screens && service >= 2 && held(service) < 10 && rows(service + 1, screens) >= hall_min {
         service += 1;
     }
     // (A manor turned from the street: its screens passage open to the ground outside at an end.)
@@ -245,14 +248,18 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
     if matches!(kind, Kind::Great | Kind::Plain) && service == 0 {
         screens = false;
     }
+    let mut no_end = None;
     if matches!(kind, Kind::Hall | Kind::Great | Kind::L | Kind::T | Kind::Plain) && screens && service == 0 && wid >= 6 {
         let w = wid as isize;
         let whole = |s: isize, t: isize| body_at(s, t).is_some_and(|k| sh.whole[k]);
         if let Some(tc) = (1..4).map(|d| w - d).find(|&tc| whole(1, tc) && whole(2, tc) && body_at(1, tc - 1).is_some() && body_at(0, tc - 1).is_some()) {
-            lord = Some(stairs);
-            stairs = block(1, tc);
-            low = Some([0, 3, (tc - 1) as usize, wid]);
-            hall_t.1 = hall_t.1.min(tc as usize - 1);
+            // (But where a service end of 2 rows, the landing in its corner, leaves the hall more
+            // floor, all the body's width behind it: that, if the landing fits there.)
+            let floor = |s0: isize, t1: isize| (s0..dz as isize).map(|s| (0..t1).filter(|&t| body_at(s, t).is_some()).count()).sum::<usize>();
+            if kind != Kind::Hall && rows(2, true) >= 3 && floor(3, w) > floor(1, tc - 1) {
+                service = 2;
+            }
+            no_end = Some(tc);
         }
     }
     if matches!(kind, Kind::Hall | Kind::Great | Kind::L | Kind::T | Kind::Plain) && screens && service >= 2 {
@@ -273,14 +280,17 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
         };
         // (The squares the service end keeps for its rooms beside the landing: too few for a kitchen
         // and a buttery or pantry (10), the near corner where it leaves more, else a row deeper where
-        // that leaves them and the hall its rows (but a hall keep's, at its forebuilding).)
-        let left = |sv: isize, off: isize, far: bool| (0..sv).map(|s| (0..w).filter(|&t| (if far { t < off } else { t > off }) && body_at(s, t).is_some()).count()).sum::<usize>();
+        // that leaves them and the hall its rows (a hall keep's, by its forebuilding); a column of
+        // one square, a tower's notch, not counted.)
+        let left = |sv: isize, off: isize, far: bool| {
+            (0..w).filter(|&t| if far { t < off } else { t > off }).map(|t| (0..sv).filter(|&s| body_at(s, t).is_some()).count()).filter(|&h| h >= 2).sum::<usize>()
+        };
         let pick = |sv: isize| {
             let first = kind == Kind::Hall || street_front == front_min;
             [first, !first].into_iter().filter_map(|far| place(sv, far).map(|g| (g, far, left(sv, g.1, far)))).fold(None, |best: Option<(([usize; 4], isize), bool, usize)>, x| if best.as_ref().is_none_or(|b| b.2 < 10 && x.2 > b.2) { Some(x) } else { best })
         };
         let mut got = pick(service as isize);
-        if kind != Kind::Hall && got.as_ref().is_none_or(|g| g.2 < 10) && rows(service + 1, screens) >= hall_min {
+        if (kind != Kind::Hall || (service as isize) < fore_hi) && got.as_ref().is_none_or(|g| g.2 < 10) && rows(service + 1, screens) >= hall_min {
             if let Some(g) = pick(service as isize + 1).filter(|g| g.2 >= 10) {
                 service += 1;
                 got = Some(g);
@@ -289,8 +299,23 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
         if let Some(((block, off), far, _)) = got {
             lord = Some(stairs);
             stairs = block;
-            low = Some(if far { [0, service, off as usize, wid] } else { [0, service, 0, off as usize + 1] });
+            let mut lo = if far { [0, service, off as usize, wid] } else { [0, service, 0, off as usize + 1] };
+            // (A column of the service end left beyond the landing: the landing's too, where it then
+            // keeps to 12 squares.)
+            let n = |c: [usize; 4]| (0..c[1]).map(|s| (c[2]..c[3]).filter(|&t| body_at(s as isize, t as isize).is_some()).count()).sum::<usize>();
+            let wider = [0, service, 0, wid];
+            if (if far { lo[2] == 1 } else { lo[3] + 1 == wid }) && n(wider) <= 12 {
+                lo = wider;
+            }
+            low = Some(lo);
         }
+    }
+    if let Some(tc) = no_end.filter(|_| low.is_none()) {
+        service = 0;
+        lord = Some(stairs);
+        stairs = block(1, tc);
+        low = Some([0, 3, (tc - 1) as usize, wid]);
+        hall_t.1 = hall_t.1.min(tc as usize - 1);
     }
     let floors = b.floors.max(1) as i8;
     let hall_z = if matches!(kind, Kind::Great | Kind::Plain) && floors >= 2 { 1 } else { 0 };
@@ -650,7 +675,7 @@ impl Plan {
     pub(super) fn lords_in_towers(&mut self, lay: &mut Lay, towers: &mut [(usize, &'static str)]) {
         let nx = self.nx;
         let st = self.lord_stair();
-        let stc = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
+        let stc = self.lord_mid();
         let low = self.low_end();
         let gap = |sq: &[usize]| {
             sq.iter()
@@ -713,6 +738,16 @@ impl Plan {
         Some((k.1 * self.nx + k.0, self.hall_z, top))
     }
 
+    /// The middle of the stair the lord's rooms go by (grid): a castle keep's private stair's square,
+    /// else the lord's stair's block.
+    pub(super) fn lord_mid(&self) -> P {
+        if let Some((k, _, _)) = self.private_stair() {
+            return [(k % self.nx) as f64 + 0.5, (k / self.nx) as f64 + 0.5];
+        }
+        let st = self.lord_stair();
+        [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64]
+    }
+
     /// The hall's low end (grid): the middle of the screens passage, else of the service end; None
     /// without either.
     pub(super) fn low_end(&self) -> Option<P> {
@@ -730,7 +765,7 @@ impl Plan {
     pub(super) fn solar(&mut self, lay: &mut Lay) {
         let (nx, ny) = (self.nx, self.ny);
         let st = self.lord_stair();
-        let stc = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
+        let stc = self.lord_mid();
         let low = self.low_end();
         let shape = |sq: &[usize]| {
             let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % nx), a.1.max(k % nx)));
@@ -1305,6 +1340,8 @@ impl Plan {
         let (l, w, dz) = (self.f.len as isize, self.f.wid as isize, self.dz as isize);
         let (tl0, tl1) = (self.land_t.0 as isize, self.land_t.1 as isize);
         let row = dz - 1;
+        // (A castle keep's low end: its rows, to its way along the last.)
+        let sb = self.low.map_or(0, |lo| lo[1] as isize + 1);
         let turn = |pt: isize| if pt == 0 { (0, tl1) } else { (tl0, w) };
         // (A castle keep's on down to its landing at the low end's row: `onto_low`.)
         let Some((pt, e)) = self.passage_side(&[w - 1, 0], row, 0, &turn, flip) else { return self.corridor_floor(lay, rng, need) };
@@ -1396,16 +1433,18 @@ impl Plan {
             // rows at least (beside the solar 4, 5 by a narrow great chamber); a solar alone, 16
             // squares or so.)
             let gd = if want_gc { crate::core::round(gw as f64 / (1.3 + 0.6 * rng.next_f64())) as isize } else { crate::core::round(16.0 / sw as f64) as isize };
-            let mut gd = gd.min((60 / gw.max(1)).max(2)).max(if !band_solar { 3 } else if gw <= 4 { 5 } else { 4 }).max((2 * sw + 4) / 5).min(row);
+            // (A castle keep's past its low end's rows: `sb`.)
+            let avail = row - sb;
+            let mut gd = gd.min((60 / gw.max(1)).max(2)).max(if !band_solar { 3 } else if gw <= 4 { 5 } else { 4 }).max((2 * sw + 4) / 5).min(avail);
             // (Too small for both of 9 squares: the solar's, the great chamber a floor up; a great
             // chamber alone, all the body below the cross passage.)
             let (sw, gw) = if band_solar && gw > 0 && (sw.min(gw) * gd < 9) { (wm, 0) } else { (sw, gw) };
             if gw > 0 && sw == 0 && gw * gd < 9 {
-                gd = row;
+                gd = avail;
             }
             // (Leaving no strip under 3 rows below it.)
-            if row - gd > 0 && row - gd < 3 {
-                gd = if gd - (3 - (row - gd)) >= 3 { row - 3 } else if (gw + sw) * row <= 60 { row } else { gd };
+            if avail - gd > 0 && avail - gd < 3 {
+                gd = if gd - (3 - (avail - gd)) >= 3 { avail - 3 } else if (gw + sw) * avail <= 60 { avail } else { gd };
             }
             top = row - gd;
             // (The great chamber's columns, from the passage's wall; the solar's beyond.)
@@ -1426,7 +1465,11 @@ impl Plan {
                     }
                 }
                 self.keep_whole(lay, r);
-                self.pending.retain(|k| *k != kind);
+                // (A castle keep's that the floor's ways left under 9 squares still to be placed: a
+                // tower's, or the storey above's.)
+                if self.low.is_none() || lay.count(r) >= 9 {
+                    self.pending.retain(|k| *k != kind);
+                }
                 lords.push(r);
             }
             if let [gc, sol] = lords[..] {
@@ -1453,7 +1496,19 @@ impl Plan {
         // (past where the passage ends, a tower's notch, beside it too), divided off the passage (or,
         // laid out again, off its end by the cross passage).
         let way = if more >= 2 { 1 } else if pt == 0 { 2 } else { 3 };
-        let mut rest = self.partition(lay, [0, top, 0, w], way, need.saturating_sub(free.len()).max(1), &mut lines, rng);
+        // (A castle keep's low end divided apart: the rooms beside its landing, off the landing's
+        // side, or off the way along the low end's row where that runs on past the landing
+        // (`onto_low`); one, or two on every other try at the floor.)
+        let mut s0 = 0;
+        if let Some([_, s1, t0, t1]) = self.low
+            && sb <= top
+        {
+            let full = pt < t0 as isize || pt >= t1 as isize;
+            let (end, way) = if full { (s1 as isize, 1) } else { (sb, if t0 == 0 { 2 } else { 3 }) };
+            free.extend(self.partition(lay, [0, end, 0, w], way, 1 + more % 2, &mut lines, rng));
+            s0 = sb;
+        }
+        let mut rest = self.partition(lay, [s0, top, 0, w], way, need.saturating_sub(free.len()).max(1), &mut lines, rng);
         // (No room for the solar by the landing: the room of 9 squares or more nearest it.)
         if !solar {
             let high = |r: i16| (0..self.nx * self.ny).filter(|&k| lay.cells[k] == r).map(|k| self.f.local((k % self.nx) as isize, (k / self.nx) as isize).0).max().unwrap_or(-1);

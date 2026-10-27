@@ -1192,7 +1192,7 @@ fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout
                 assert!(from >= 0 && from != hall, "{tag} ({}): the {what} opens straight into the hall", kind.name());
                 let (before, door) = way_in(from).unwrap_or_else(|| panic!("{tag} ({}): no way from the {what} into the hall", kind.name()));
                 if let Some(d) = dais {
-                    assert!(geom::dot(geom::sub(door, hc), geom::sub(d, hc)) <= 0.0, "{tag} ({}): the way in from the {what} reaches the hall at its dais end", kind.name());
+                    assert!(geom::dot(geom::sub(door, hc), geom::sub(d, hc)) < 0.0, "{tag} ({}): the way in from the {what} reaches the hall at its dais end or its middle", kind.name());
                 }
                 if let Some(s) = screens {
                     assert!(before == s, "{tag} ({}): the way in from the {what} comes into the hall from the {}, not the screens passage", kind.name(), g.rooms[before as usize].kind);
