@@ -478,7 +478,7 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     let keep = c.keep.unwrap_or(true);
     // (The curtain on the outline drawn; the keep, and an inner curtain in a big one, on the high
     // ground. Its bailey an open yard of grass, built on only by hand.)
-    let set = super::castle::Setting { follow: false, capital: false, wall_up: false, planned: false };
+    let set = super::castle::Setting { follow: false, capital: false, wall_up: false, planned: false, inner: None, hall: false };
     castle(&ground, &block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), rng, l, keep, c.yard_buildings.unwrap_or(true));
     // The keep (pushed last) is the castle; the yard's buildings by size.
     let n = l.buildings.len();

@@ -890,8 +890,16 @@ fn castles(ctx: &mut Ctx, r: &mut Report) {
     }
 }
 
-const CASTLE_SPOTS: [&str; 7] = [
+const CASTLE_SPOTS: [&str; 15] = [
     "town castles (planned or set)",
+    "castle patches cut, a noble block left",
+    "cuts skipped: patch too small",
+    "cuts skipped: a side on the wall",
+    "cuts skipped: leftover too small or narrow",
+    "cuts skipped: castle's part too narrow or sharp",
+    "cuts undone: no keep or a sharp ring in the castle's part",
+    "castles with free-standing yard buildings",
+    "free-standing yard buildings",
     "castles on the market square's patch",
     "town castles with no bailey",
     "interior castles (no bailey corner within 50 ft of the town wall)",
@@ -906,9 +914,20 @@ fn castle_spot(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
     let Some(cp) = l.castle_patch else { return };
     r.tally("town castles (planned or set)", 1);
     let c = l.center;
+    // (Where: the bailey's middle, else the town's.)
+    let c = Castle::of(l).map_or(c, |k| centroid(&k.ring));
+    let cut = ["", "castle patches cut, a noble block left", "cuts skipped: patch too small", "cuts skipped: a side on the wall", "cuts skipped: leftover too small or narrow", "cuts skipped: castle's part too narrow or sharp", "cuts undone: no keep or a sharp ring in the castle's part"];
+    if let Some(k) = cut.get(l.castle_cut as usize).filter(|k| !k.is_empty()) {
+        r.add(k, 1.0, format!("{tag}: patch {cp}, castle at {}", at(c)));
+    }
+    if l.castle_yard > 0 {
+        r.add("castles with free-standing yard buildings", l.castle_yard as f64, format!("{tag}: {}, castle at {}", l.castle_yard, at(c)));
+        r.tally("free-standing yard buildings", l.castle_yard as usize);
+    }
     if l.plaza_patch == Some(cp) {
         r.add("castles on the market square's patch", 1.0, format!("{tag}: patch {cp} (town at {})", at(c)));
     }
+    let c = l.center;
     let Some(castle) = Castle::of(l) else {
         r.add("town castles with no bailey", 1.0, format!("{tag}: patch {cp} (town at {})", at(c)));
         return;
