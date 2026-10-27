@@ -1950,6 +1950,15 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         {
             push_item(&mut lvl.furniture, "spiral_stair", sp % nx, sp / nx);
         }
+        // A castle keep's private stair: its spiral stair at the dais end from the hall's floor up
+        // to the lord's rooms (`hub::Plan::private_stair`).
+        if let Some((sp, z0, z1)) = plan.as_ref().and_then(|p| p.private_stair())
+            && hubbed.is_some()
+            && (z0..=z1).contains(&z)
+            && lvl.cells[sp] >= 0
+        {
+            push_item(&mut lvl.furniture, "spiral_stair", sp % nx, sp / nx);
+        }
         // A keep built of pieces: a spiral stair in the middle of each of its towers; their rooms
         // round in round towers.
         if arch == Arch::Keep && zf >= 0 {
@@ -3751,6 +3760,12 @@ pub struct Hints {
     /// Open archways onto the street (doors of kind "arch", no leaves): from this room through these
     /// outside edges (as `front`'s), where they open onto open ground (a coaching inn's carriage arch).
     pub arch: Vec<(i16, Vec<(usize, usize, usize)>)>,
+    /// Squares (grid) no door opens beside, as the stairs' (a castle keep's private spiral stair).
+    pub clear: Vec<usize>,
+    /// Ways about the floor that get no door between them, though they meet (a castle keep's hall
+    /// and the landing or the forebuilding's entrance hall beside its low end: reached by its
+    /// screens passage).
+    pub apart: Vec<(i16, i16)>,
 }
 
 impl Hints {
@@ -3762,6 +3777,8 @@ impl Hints {
             onto: self.onto.iter().map(|&(a, b)| (m(a), m(b))).filter(|&(a, b)| a >= 0 && b >= 0).collect(),
             front: self.front.as_ref().map(|(r, e)| (m(*r), e.clone())).filter(|(r, _)| *r >= 0),
             link: self.link.iter().map(|&(a, b)| (m(a).min(m(b)), m(a).max(m(b)))).filter(|&(a, b)| a >= 0 && a != b).collect(),
+            clear: self.clear.clone(),
+            apart: self.apart.iter().map(|&(a, b)| (m(a).min(m(b)), m(a).max(m(b)))).filter(|&(a, b)| a >= 0 && a != b).collect(),
             arch: self.arch.iter().map(|(r, e)| (m(*r), e.clone())).filter(|(r, _)| *r >= 0).collect(),
         }
     }
@@ -3843,9 +3860,9 @@ fn connect_with(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [us
                 served[r] = true;
             }
         }
-        // Circulation spaces open into each other.
+        // Circulation spaces open into each other (but those kept apart).
         for &(a, b) in shared.keys() {
-            if circ(a as usize) && circ(b as usize) {
+            if circ(a as usize) && circ(b as usize) && !hints.is_some_and(|h| h.apart.contains(&(a, b))) {
                 onto.insert((a, b));
             }
         }
@@ -3857,12 +3874,16 @@ fn connect_with(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [us
         if !onto.contains(&(a, b)) && !in_tree && !forced && rng.next_f64() > loops {
             continue;
         }
+        if !forced && hints.is_some_and(|h| h.apart.contains(&(a, b))) {
+            continue;
+        }
         // A doorway off the stairs where the wall allows it.
         let clear: Vec<&(usize, usize, bool)> = edges
             .iter()
             .filter(|&&(x, y, vert)| {
                 let (nx2, ny2) = if vert { (x + 1, y) } else { (x, y + 1) };
-                !on_stairs(x, y) && !on_stairs(nx2, ny2)
+                let kept = |i: usize, j: usize| hints.is_some_and(|h| h.clear.contains(&(j * nx + i)));
+                !on_stairs(x, y) && !on_stairs(nx2, ny2) && !kept(x, y) && !kept(nx2, ny2)
             })
             .collect();
         let &(x, y, vert) = if clear.is_empty() { &edges[edges.len() / 2] } else { clear[clear.len() / 2] };

@@ -1431,15 +1431,17 @@ fn interiors(ctx: &mut Ctx, keeps: bool, r: &mut Report) {
 
 // ---- Buildings laid out by zones. ----
 
-const HUB_COUNTS: [&str; 28] = [
+const HUB_COUNTS: [&str; 30] = [
     "floors the zones fell back on",
     "breaking an interior rule (as in interiors)",
     "great or mess halls not one, on their floor",
     "front doors into the wrong room",
-    "main stairs not at the dais end",
+    "entry route reaches hall at dais end",
+    "main stairs or front doors not into the hall through its screens passage",
+    "private stairs not from the dais end up to the lord's floor",
     "main stairs standing in a room",
-    "great chambers or solars over 2 squares from the main stair",
-    "solars nearer the hall's low end than the main stair (their middles)",
+    "great chambers or solars over 2 squares from the lord's stair",
+    "solars nearer the hall's low end than the lord's stair (their middles)",
     "great chambers or solars under 9 squares",
     "keeps with no great chamber or solar",
     "minstrels' galleries not reached along passages",
@@ -1462,6 +1464,45 @@ const HUB_COUNTS: [&str; 28] = [
     "levels with furniture on an open top",
 ];
 
+/// The way from room `from` into room `hall` on a floor, fewest doors first: the rooms on it (from
+/// `from` to `hall`) and the middle of the door it enters `hall` by (None where it starts in it).
+fn way_into(lv: &interior::Level, from: i16, hall: i16) -> Option<(Vec<i16>, Option<P>)> {
+    if from < 0 {
+        return None;
+    }
+    let n = lv.rooms.len();
+    let mut prev: Vec<Option<(i16, usize)>> = vec![None; n];
+    let mut seen = vec![false; n];
+    let mut q = VecDeque::from([from]);
+    seen[from as usize] = true;
+    while let Some(a) = q.pop_front() {
+        if a == hall {
+            let mut path = vec![a];
+            let mut door = None;
+            let mut c = a;
+            while let Some((p, di)) = prev[c as usize] {
+                if door.is_none() {
+                    let d = &lv.doors[di];
+                    door = Some([0.5 * (d.a[0] + d.b[0]) as f64, 0.5 * (d.a[1] + d.b[1]) as f64]);
+                }
+                path.push(p);
+                c = p;
+            }
+            path.reverse();
+            return Some((path, door));
+        }
+        for (di, d) in lv.doors.iter().enumerate().filter(|(_, d)| d.rooms.contains(&a) && d.rooms.iter().all(|&o| o >= 0)) {
+            let o = if d.rooms[0] == a { d.rooms[1] } else { d.rooms[0] };
+            if !seen[o as usize] {
+                seen[o as usize] = true;
+                prev[o as usize] = Some((a, di));
+                q.push_back(o);
+            }
+        }
+    }
+    None
+}
+
 /// The squares either side of a door's edge.
 fn door_squares(d: &interior::Door) -> [(isize, isize); 2] {
     let (x0, y0) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize);
@@ -1472,9 +1513,13 @@ fn door_squares(d: &interior::Door) -> [(isize, isize); 2] {
 /// against the rules their layout keeps (the user's calls): no floor fallen back on the shared
 /// layout; the hall on its floor (a great tower's and a tower keep's on the first); the front door
 /// into the screens passage (or a forebuilding's entrance hall onto it), a great tower's entrance
-/// hall, a barracks' mess hall, a shell keep's gate passage; the main stair at the dais end, off the
-/// hall, landing in passages or landings; the great chamber and solar by it (a square of each within
-/// 2 squares of it, a solar's middle nearer it than the hall's low end), 9 squares or more; a
+/// hall, a barracks' mess hall, a shell keep's gate passage; the main stair landing in passages or
+/// landings, at the low end: the front door (a hall on the ground floor) and the main stair reach
+/// the hall through its screens passage, entering it on the half away from its dais (the user's
+/// call, 2026-10-27); the lord's private spiral stair from a room off the hall at the dais end up to
+/// the floor above; the great chamber and solar by the lord's stair (the private one, else the main:
+/// a square of each within 2 squares of it, a solar's middle nearer it than the hall's low end), 9
+/// squares or more; a
 /// minstrels' gallery reached from the stair through passages; no windows or furniture on open tops;
 /// no throne in a mess hall; rooms of different sizes, no longer than 2.5:1, filling 60% of the floor
 /// in their box, no storey laid out as the one below it (a forebuilding's storeys aside); tower rooms
@@ -1510,6 +1555,8 @@ fn keep_rules(world: &World, t0: &T0, l: &Layout, li: usize, b: &town::Building,
     let named = format!("{tag}{id}");
     // (`PLAN=<tag and id>`: its text plan, one letter a room.)
     if std::env::var("PLAN").is_ok_and(|p| p.trim() == named.trim()) {
+        let c = centroid(&b.poly);
+        say!("-- {named} ({}) at ({:.0}, {:.0}) ft", kind.name(), c[0], c[1]);
         for lv in &it.levels {
             say!("-- {} (z {}): {}", lv.name, lv.z, lv.rooms.iter().map(|r| format!("{}={}", r.kind, r.squares)).collect::<Vec<_>>().join(", "));
             for j in 0..it.ny {
@@ -1714,12 +1761,52 @@ fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str
     let first = |k: &str| g.rooms.iter().position(|ro| ro.kind == k && ro.squares > 0).map(|ri| ri as i16);
     // The low end: the screens passage, else the kitchen.
     let low = first("screens passage").or_else(|| first("kitchen")).map(|ri| mid(&squares(g, ri as usize)));
-    let landing = g.cells[st[1] * nx + st[0]];
     let hc = mid(&squares(g, hall as usize));
-    let at_dais = low.is_none_or(|lo| dot(sub(sc, hc), sub(hc, lo)) > 0.0);
-    if landing < 0 || g.rooms[landing as usize].kind != "landing" || !between(g, hall, landing) || !at_dais {
-        r.add("main stairs not at the dais end", 1.0, format!("{tag}: in the {} {}", if landing >= 0 { g.rooms[landing as usize].kind } else { "-" }, if at_dais { "off the hall's high end" } else { "at the low end" }));
+    // The way in: from the main stair, and from the front door where the hall is on the ground
+    // floor, into the hall through its screens passage (where it has one) on the half away from its
+    // dais.
+    let dais: Option<P> = g.furniture.iter().find(|f| matches!(f.kind, "throne_dais" | "low_dais") && g.cells[f.y as usize * nx + f.x as usize] == hall).map(|f| [f.x as f64 + 0.5 * f.w as f64, f.y as f64 + 0.5 * f.h as f64]);
+    let screens = first("screens passage");
+    let mut starts = vec![("main stair", g.cells[st[1] * nx + st[0]], sc)];
+    if g.z == 0
+        && let Some(front) = g.doors.iter().find(|d| d.kind == "front")
+    {
+        starts.push(("front door", front.rooms[0], [0.5 * (front.a[0] + front.b[0]) as f64, 0.5 * (front.a[1] + front.b[1]) as f64]));
     }
+    for (what, from, at) in starts {
+        let Some((path, door)) = way_into(g, from, hall) else {
+            r.add("entry route reaches hall at dais end", 1.0, format!("{tag}: no way from the {what} into the hall"));
+            continue;
+        };
+        let into = door.unwrap_or(at);
+        if dais.is_some_and(|d| dot(sub(into, hc), sub(d, hc)) > 0.0) {
+            let by: Vec<&str> = path.iter().map(|&ri| g.rooms[ri as usize].kind).collect();
+            r.add("entry route reaches hall at dais end", 1.0, format!("{tag}: from the {what} by {}", by.join(" > ")));
+        }
+        if screens.is_some_and(|s| path.len() < 2 || path[path.len() - 2] != s) {
+            r.add("main stairs or front doors not into the hall through its screens passage", 1.0, format!("{tag}: from the {what} by the {}", if path.len() >= 2 { g.rooms[path[path.len() - 2] as usize].kind } else { "hall itself" }));
+        }
+    }
+    // The lord's private stair: a spiral stair on the hall's floor (not a tower's: at a grid corner or
+    // a piece tower's middle) in a room the hall opens into at the dais end, up to the floor above.
+    let towered = |k: usize| sh.towers.iter().any(|t| t.2 == k) || [0, nx - 1, nx * (ny - 1), nx * ny - 1].contains(&k);
+    let private: Option<usize> = g.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).find(|&k| !towered(k));
+    let above = it.levels.iter().find(|lv| lv.z == g.z + 1 && !lv.roof);
+    match private {
+        Some(k) => {
+            let pr = g.cells[k];
+            let up = above.is_some_and(|lv| lv.cells[k] >= 0 && lv.furniture.iter().any(|f| f.kind == "spiral_stair" && f.y as usize * nx + f.x as usize == k));
+            let at_dais = dais.is_none_or(|d| dot(sub([(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5], hc), sub(d, hc)) > 0.0);
+            if pr < 0 || pr == hall || !between(g, pr, hall) || !up || !at_dais {
+                r.add("private stairs not from the dais end up to the lord's floor", 1.0, format!("{tag}: in the {}{}{}", if pr >= 0 { g.rooms[pr as usize].kind } else { "-" }, if up { "" } else { ", not up" }, if at_dais { "" } else { ", at the low end" }));
+            }
+        }
+        None if screens.is_some() && above.is_some() => r.add("private stairs not from the dais end up to the lord's floor", 1.0, format!("{tag}: none")),
+        None => {}
+    }
+    // (The stair the lord's rooms go by, as a block: the private one, else the main.)
+    let st = private.map_or(st, |k| [k % nx, k / nx, 1, 1]);
+    let sc: P = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
     if matches!(kind, Kind::Hall | Kind::L | Kind::T) {
         if let Some(scr) = first("screens passage") {
             let sq = squares(g, scr as usize);
@@ -1739,7 +1826,7 @@ fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str
         }
         return;
     }
-    // The lord's rooms: by the main stair, of a good size; a solar's middle nearer the stair than the
+    // The lord's rooms: by the lord's stair, of a good size; a solar's middle nearer the stair than the
     // hall's low end's (the screens passage's, else the kitchen's).
     let mut lords = 0;
     for lv in it.levels.iter().filter(|lv| lv.z > hall_z) {
@@ -1759,13 +1846,13 @@ fn hub_rules(l: &Layout, b: &town::Building, kind: interior::hub::Kind, id: &str
                 })
                 .fold(f64::MAX, f64::min);
             if gap > 2.0 {
-                r.add("great chambers or solars over 2 squares from the main stair", gap, format!("{tag} {}: the {} {gap:.0} squares from the stair", lv.name, room.kind));
+                r.add("great chambers or solars over 2 squares from the lord's stair", gap, format!("{tag} {}: the {} {gap:.0} squares from the stair", lv.name, room.kind));
             }
             if let Some(lo) = low.filter(|_| room.kind == "solar") {
                 let c = mid(&squares(lv, ri));
                 let (ds, dl) = (dist(c, sc), dist(c, lo));
                 if ds > dl {
-                    r.add("solars nearer the hall's low end than the main stair (their middles)", ds - dl, format!("{tag} {}: {ds:.1} from the stair, {dl:.1} from the low end", lv.name));
+                    r.add("solars nearer the hall's low end than the lord's stair (their middles)", ds - dl, format!("{tag} {}: {ds:.1} from the stair, {dl:.1} from the low end", lv.name));
                 }
             }
         }

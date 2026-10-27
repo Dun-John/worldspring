@@ -1135,10 +1135,14 @@ fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout
         }
         // Laid out by zones (`interior::hub`): its great hall on the ground floor (a great tower's
         // on the first, over its stores); a hall, L or T keep entered through its screens passage
-        // (or a forebuilding's entrance hall opening onto it); the main stair at the dais end,
-        // behind the hall's high end (in the landing off it, past the hall's middle from the
-        // screens). A hall open two storeys: its height left open above it (no way into it), a
-        // minstrels' gallery over it reached.
+        // (or a forebuilding's entrance hall opening onto it). Entered at its low end (the user's
+        // call, 2026-10-27): from the main stair, and from the front door where the hall is on the
+        // ground floor, the way into the hall (fewest doors) comes through its screens passage where
+        // it has one, and enters it on the half away from its throne dais, never behind it; the
+        // lord's private spiral stair in a room the hall opens into at the dais end, up to the floor
+        // above (where its hall has a screens passage and a floor over it). A hall open two
+        // storeys: its height left open above it (no way into it), a minstrels' gallery over it
+        // reached.
         let kind = interior::hub::keep_kind(b).expect("a keep of pieces");
         use interior::hub::Kind;
         let hall_z = if matches!(kind, Kind::Great | Kind::Plain) && b.floors >= 2 { 1 } else { 0 };
@@ -1151,12 +1155,61 @@ fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout
                 [sq.iter().map(|&k| (k % nx) as f64 + 0.5).sum::<f64>() / sq.len().max(1) as f64, sq.iter().map(|&k| (k / nx) as f64 + 0.5).sum::<f64>() / sq.len().max(1) as f64]
             };
             let st = it.stairs;
-            let landing = g.cells[st[1] * nx + st[0]];
-            assert!(g.rooms[landing as usize].kind == "landing" && g.doors.iter().any(|d| d.rooms == [hall.min(landing), hall.max(landing)]), "{tag} ({}): the main stair isn't off the hall's high end", kind.name());
-            if let Some(sc) = g.rooms.iter().position(|r| r.kind == "screens passage") {
-                let (h, s) = (at(hall), at(sc as i16));
-                let p = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
-                assert!(geom::dot(geom::sub(p, h), geom::sub(h, s)) > 0.0, "{tag} ({}): the main stair is at the screens end", kind.name());
+            let hc = at(hall);
+            let dais = g.furniture.iter().find(|f| f.kind == "throne_dais" && g.cells[f.y as usize * nx + f.x as usize] == hall).map(|f| [f.x as f64 + 0.5 * f.w as f64, f.y as f64 + 0.5 * f.h as f64]);
+            let screens = g.rooms.iter().position(|r| r.kind == "screens passage" && r.squares > 0).map(|s| s as i16);
+            // (The way from a room into the hall, fewest doors first: the room it comes from and the
+            // middle of the door it enters by.)
+            let way_in = |from: i16| -> Option<(i16, [f64; 2])> {
+                let mut prev: Vec<Option<(i16, usize)>> = vec![None; g.rooms.len()];
+                let mut q = std::collections::VecDeque::from([from]);
+                let mut seen = vec![false; g.rooms.len()];
+                seen[from as usize] = true;
+                while let Some(a) = q.pop_front() {
+                    if a == hall {
+                        let (p, di) = prev[a as usize]?;
+                        let d = &g.doors[di];
+                        return Some((p, [0.5 * (d.a[0] + d.b[0]) as f64, 0.5 * (d.a[1] + d.b[1]) as f64]));
+                    }
+                    for (di, d) in g.doors.iter().enumerate().filter(|(_, d)| d.rooms.contains(&a) && d.rooms.iter().all(|&o| o >= 0)) {
+                        let o = if d.rooms[0] == a { d.rooms[1] } else { d.rooms[0] };
+                        if !seen[o as usize] {
+                            seen[o as usize] = true;
+                            prev[o as usize] = Some((a, di));
+                            q.push_back(o);
+                        }
+                    }
+                }
+                None
+            };
+            let mut starts = vec![("main stair", g.cells[st[1] * nx + st[0]])];
+            if g.z == 0
+                && let Some(front) = g.doors.iter().find(|d| d.kind == "front")
+            {
+                starts.push(("front door", front.rooms[0]));
+            }
+            for (what, from) in starts {
+                assert!(from >= 0 && from != hall, "{tag} ({}): the {what} opens straight into the hall", kind.name());
+                let (before, door) = way_in(from).unwrap_or_else(|| panic!("{tag} ({}): no way from the {what} into the hall", kind.name()));
+                if let Some(d) = dais {
+                    assert!(geom::dot(geom::sub(door, hc), geom::sub(d, hc)) <= 0.0, "{tag} ({}): the way in from the {what} reaches the hall at its dais end", kind.name());
+                }
+                if let Some(s) = screens {
+                    assert!(before == s, "{tag} ({}): the way in from the {what} comes into the hall from the {}, not the screens passage", kind.name(), g.rooms[before as usize].kind);
+                }
+            }
+            // (The private stair: a spiral stair not a tower's, at a grid corner or a piece tower's
+            // middle.)
+            let towered = |k: usize| sh.towers.iter().any(|t| t.2 == k) || [0, nx - 1, nx * (ny - 1), nx * ny - 1].contains(&k);
+            let private = g.furniture.iter().filter(|f| f.kind == "spiral_stair").map(|f| f.y as usize * nx + f.x as usize).find(|&k| !towered(k));
+            if let Some(up) = it.levels.get(li + 1).filter(|lv| lv.z == g.z + 1 && !lv.roof && screens.is_some()) {
+                let k = private.unwrap_or_else(|| panic!("{tag} ({}): no private stair from the hall's dais end", kind.name()));
+                let r = g.cells[k];
+                assert!(r >= 0 && r != hall && g.doors.iter().any(|d| d.rooms == [hall.min(r), hall.max(r)]), "{tag} ({}): the private stair isn't in a room off the hall", kind.name());
+                if let Some(d) = dais {
+                    assert!(geom::dot(geom::sub([(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5], hc), geom::sub(d, hc)) > 0.0, "{tag} ({}): the private stair isn't at the dais end", kind.name());
+                }
+                assert!(up.cells[k] >= 0 && up.furniture.iter().any(|f| f.kind == "spiral_stair" && f.y as usize * nx + f.x as usize == k), "{tag} ({}): the private stair doesn't rise to {}", kind.name(), up.name);
             }
             if matches!(kind, Kind::Hall | Kind::L | Kind::T) {
                 let front = g.doors.iter().find(|d| d.kind == "front").expect("a front door");

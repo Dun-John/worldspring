@@ -334,6 +334,14 @@ pub struct Plan {
     land_t: (usize, usize),
     /// The main stair block (grid: x, y, w, h).
     pub stairs: [usize; 4],
+    /// A castle keep's private stair at the dais end (grid block, as `stairs`): the lord's way from
+    /// the dais end of the hall up to the great chamber and the solar, a spiral stair on its last
+    /// square (`private_stair`); the lord's rooms go by it. None elsewhere: by the main stair.
+    pub lord: Option<[usize; 4]>,
+    /// A castle keep's landing at the low end (body frame: s0, s1, t0, t1), the main stair in it,
+    /// opening onto the screens passage's far end: the hall entered at its low end from the stair as
+    /// from the front door.
+    pub low: Option<[usize; 4]>,
     /// The floor the hall is on; whether it is open two storeys (a void above it).
     pub hall_z: i8,
     pub open: bool,
@@ -519,6 +527,8 @@ impl Plan {
             hall_t: (0, f.wid),
             land_t: (0, 0),
             stairs,
+            lord: None,
+            low: None,
             hall_z: 0,
             open: false,
             floors,

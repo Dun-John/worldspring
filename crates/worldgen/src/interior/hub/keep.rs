@@ -1,8 +1,9 @@
 //! The hall house's programme: a castle's keep (of pieces, or redrawn by hand as a tower keep) and a
 //! big barracks (`barracks`): the body's frame and zones (`plan`), the hall's floor with its service
 //! end, screens passage and dais end, the stores under a first-floor hall, the floors above it (the
-//! lord's rooms by the main stair, a hall open two storeys), wings, a forebuilding, the tops and the
-//! towers' rooms.
+//! lord's rooms by the main stair; a castle keep's by its private stair at the dais end, its main
+//! stair at the low end; a hall open two storeys), wings, a forebuilding, the tops and the towers'
+//! rooms.
 
 use super::{barracks, estate};
 use super::kit::{Lay, cuts, depth, side};
@@ -127,8 +128,9 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
         return super::small::plan(b, sh, piece, f, seed, street_front == front_min);
     }
     let body_at = |s: isize, t: isize| at(s, t).filter(|&k| piece[k] == Piece::Body);
-    // The landing in the middle of the dais end; the main stair in it, along the axis, a square in
-    // from the end wall (clear of the outer wall as drawn), its free side toward the hall's door.
+    // The landing in the middle of the dais end; the main stair in it (a castle keep's private stair:
+    // below), along the axis, a square in from the end wall (clear of the outer wall as drawn), its
+    // free side toward the hall's door.
     // (A narrow estate's landing against its far wall, its parlour all the rest of the end.)
     let estate = matches!(kind, Kind::OldPalace | Kind::HallHouse | Kind::Manor);
     let (lw, tl0) = if estate && wid < 7 { (2, wid - 2) } else { (2 + wid % 2, (wid - 2 - wid % 2) / 2) };
@@ -203,7 +205,7 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
     }) {
         return None;
     }
-    let hall_t = if wid <= 9 { (0, wid) } else { (0, (wid - 3).min(9).max(tl0 + lw)) };
+    let mut hall_t = if wid <= 9 { (0, wid) } else { (0, (wid - 3).min(9).max(tl0 + lw)) };
     // (A manor's service wing deep enough for a kitchen of 12 squares and a buttery and a pantry of
     // 6, and for a near-square kitchen (3 to 5 rows), where the hall keeps its least rows; its hall
     // 30% of its ground floor at most, the rows past that to its cross wing.)
@@ -222,8 +224,74 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
             (ss, st, dz) = (s0, t0, s0 as usize);
         }
     }
-    let (a, bq) = (f.grid(ss, st), f.grid(ss + 1, st));
-    let stairs = [a.0.min(bq.0) as usize, a.1.min(bq.1) as usize, (a.0 - bq.0).unsigned_abs() + 1, (a.1 - bq.1).unsigned_abs() + 1];
+    let block = |s: isize, t: isize| {
+        let (a, bq) = (f.grid(s, t), f.grid(s + 1, t));
+        [a.0.min(bq.0) as usize, a.1.min(bq.1) as usize, (a.0 - bq.0).unsigned_abs() + 1, (a.1 - bq.1).unsigned_abs() + 1]
+    };
+    let mut stairs = block(ss, st);
+    // A castle's keep: the main stair at the low end, so that the hall is entered at its low end from
+    // the stair as from the front door, never past the dais: in a landing in the service end's
+    // corner off the screens passage's far end (the front door's at its near end: a hall keep's
+    // forebuilding's side, else the street's), clear of the outer wall as drawn, with a column
+    // beside it to step off onto the screens passage: along the axis on the service end's last two
+    // rows where it has 3, else across the last. (A hall with no service end, its screens passage
+    // along the end wall: along the axis beside the hall's first two rows, the hall that much
+    // narrower, the landing on along the end wall, the screens passage's far end.) Where the dais
+    // end's stair stood, the lord's private stair (`lord`).
+    let (mut lord, mut low) = (None, None);
+    // (A great tower's or a tower keep's hall with no service end: no screens passage either, the
+    // hall entered from the main stair's landing as a small tower keep's is, its dais at the other
+    // end: `hall_frame`.)
+    if matches!(kind, Kind::Great | Kind::Plain) && service == 0 {
+        screens = false;
+    }
+    if matches!(kind, Kind::Hall | Kind::Great | Kind::L | Kind::T | Kind::Plain) && screens && service == 0 && wid >= 6 {
+        let w = wid as isize;
+        let whole = |s: isize, t: isize| body_at(s, t).is_some_and(|k| sh.whole[k]);
+        if let Some(tc) = (1..4).map(|d| w - d).find(|&tc| whole(1, tc) && whole(2, tc) && body_at(1, tc - 1).is_some() && body_at(0, tc - 1).is_some()) {
+            lord = Some(stairs);
+            stairs = block(1, tc);
+            low = Some([0, 3, (tc - 1) as usize, wid]);
+            hall_t.1 = hall_t.1.min(tc as usize - 1);
+        }
+    }
+    if matches!(kind, Kind::Hall | Kind::Great | Kind::L | Kind::T | Kind::Plain) && screens && service >= 2 {
+        let w = wid as isize;
+        let whole = |s: isize, t: isize| body_at(s, t).is_some_and(|k| sh.whole[k]);
+        // (On a service end `sv` rows deep, in its `far` corner: the block, and the column stepped
+        // off it.)
+        let place = |sv: isize, far: bool| {
+            let (cols, d) = if far { ([w - 1, w - 2, w - 3, w - 4, w - 5], -1) } else { ([0, 1, 2, 3, 4], 1) };
+            let fits = |sq: [(isize, isize); 2], off: isize| sq.iter().all(|&(s, t)| whole(s, t)) && body_at(sv - 1, off).is_some() && body_at(sv, off).is_some();
+            let along = (sv >= 3).then(|| cols.into_iter().find(|&tc| fits([(sv - 2, tc), (sv - 1, tc)], tc + d)).map(|tc| (block(sv - 2, tc), tc + d))).flatten();
+            along.or_else(|| {
+                cols.into_iter().find(|&tc| fits([(sv - 1, tc), (sv - 1, tc + d)], tc + 2 * d)).map(|tc| {
+                    let (a, bq) = (f.grid(sv - 1, tc), f.grid(sv - 1, tc + d));
+                    ([a.0.min(bq.0) as usize, a.1.min(bq.1) as usize, (a.0 - bq.0).unsigned_abs() + 1, (a.1 - bq.1).unsigned_abs() + 1], tc + 2 * d)
+                })
+            })
+        };
+        // (The squares the service end keeps for its rooms beside the landing: too few for a kitchen
+        // and a buttery or pantry (10), the near corner where it leaves more, else a row deeper where
+        // that leaves them and the hall its rows (but a hall keep's, at its forebuilding).)
+        let left = |sv: isize, off: isize, far: bool| (0..sv).map(|s| (0..w).filter(|&t| (if far { t < off } else { t > off }) && body_at(s, t).is_some()).count()).sum::<usize>();
+        let pick = |sv: isize| {
+            let first = kind == Kind::Hall || street_front == front_min;
+            [first, !first].into_iter().filter_map(|far| place(sv, far).map(|g| (g, far, left(sv, g.1, far)))).fold(None, |best: Option<(([usize; 4], isize), bool, usize)>, x| if best.as_ref().is_none_or(|b| b.2 < 10 && x.2 > b.2) { Some(x) } else { best })
+        };
+        let mut got = pick(service as isize);
+        if kind != Kind::Hall && got.as_ref().is_none_or(|g| g.2 < 10) && rows(service + 1, screens) >= hall_min {
+            if let Some(g) = pick(service as isize + 1).filter(|g| g.2 >= 10) {
+                service += 1;
+                got = Some(g);
+            }
+        }
+        if let Some(((block, off), far, _)) = got {
+            lord = Some(stairs);
+            stairs = block;
+            low = Some(if far { [0, service, off as usize, wid] } else { [0, service, 0, off as usize + 1] });
+        }
+    }
     let floors = b.floors.max(1) as i8;
     let hall_z = if matches!(kind, Kind::Great | Kind::Plain) && floors >= 2 { 1 } else { 0 };
     // About half the keeps' halls rise two storeys (where there is a floor over the hall, and one
@@ -315,6 +383,8 @@ fn plan_as(b: &town::Building, sh: &Shell, kind: Kind, piece: Vec<Piece>, wing_o
         hall_t,
         land_t: (tl0, tl0 + lw),
         stairs,
+        lord,
+        low,
         hall_z,
         open,
         floors,
@@ -388,6 +458,11 @@ impl Plan {
                     kinds.splice(0..0, [("kitchen", 2.0), ("buttery", 1.8)]);
                 } else if !barracks && !lay.rooms.iter().any(|r| r.kind == "buttery" || r.kind == "pantry") {
                     kinds.insert(0, ("pantry", 1.9));
+                }
+                // (A castle keep's service end its landing left no room for a kitchen: the kitchen
+                // the floor's first.)
+                if self.low.is_some() && self.service > 0 && !lay.rooms.iter().enumerate().any(|(r, ro)| ro.kind == "kitchen" && lay.count(r as i16) > 0) {
+                    kinds.insert(0, ("kitchen", 2.0));
                 }
                 fill = if barracks {
                     barracks::HALL_FILL
@@ -465,7 +540,7 @@ impl Plan {
         }
         Self::assign(&mut lay, &free, kinds, fill);
         // (A hall with no service end: its kitchen, where it has room, cut for a buttery too.)
-        if z == self.hall_z && self.service == 0 && !barracks && !lay.rooms.iter().any(|r| r.kind == "buttery" || r.kind == "pantry") {
+        if z == self.hall_z && (self.service == 0 || self.low.is_some()) && !barracks && !lay.rooms.iter().any(|r| r.kind == "buttery" || r.kind == "pantry") {
             if let Some(k) = (0..lay.rooms.len() as i16).find(|&r| lay.rooms[r as usize].kind == "kitchen" && lay.count(r) >= 9) {
                 self.cut(&mut lay, k, 5, 4, "buttery");
             }
@@ -495,6 +570,9 @@ impl Plan {
             self.near_links(&mut lay);
         }
         self.last = lay.cells.clone();
+        if let Some((sp, _, _)) = self.private_stair().filter(|p| (p.1..=p.2).contains(&z)) {
+            lay.hints.clear.push(sp);
+        }
         let halls: Vec<crate::interior::hall::Frame> = (z == self.hall_z).then(|| self.hall_frame()).into_iter().collect();
         if self.estate() {
             self.estate_names(&mut lay.rooms, z == 0);
@@ -502,13 +580,13 @@ impl Plan {
         Some(Laid { cells: lay.cells, rooms: lay.rooms, hints: lay.hints, public, name, roof, items: lay.items, towers, corners, halls })
     }
 
-    /// The great chamber of good size by the main stair (9 to 60 squares, a square within 2 of it,
+    /// The great chamber of good size by the lord's stair (`lord_stair`; 9 to 60 squares, a square within 2 of it,
     /// of sound proportions): one too small made one with a room beside it where the two make one
     /// such, else changing places with the room of the storey nearest the stair that is one, of a
     /// kind any room may be.
     pub(super) fn great_chamber(&mut self, lay: &mut Lay) {
         let (nx, ny) = (self.nx, self.ny);
-        let st = self.stairs;
+        let st = self.lord_stair();
         let stc = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
         let gap = |sq: &[usize]| {
             sq.iter()
@@ -567,11 +645,11 @@ impl Plan {
 
     /// A great chamber or a solar the body's rooms don't hold where it is due (none still to be
     /// placed, or one under 9 squares): the room of a tower standing on the storey, 9 squares or
-    /// more by the main stair (a square within 2 of it; a solar's middle nearer the stair than the
+    /// more by the lord's stair (a square within 2 of it; a solar's middle nearer the stair than the
     /// hall's low end), the nearest; the body's small one a chamber.
     pub(super) fn lords_in_towers(&mut self, lay: &mut Lay, towers: &mut [(usize, &'static str)]) {
         let nx = self.nx;
-        let st = self.stairs;
+        let st = self.lord_stair();
         let stc = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
         let low = self.low_end();
         let gap = |sq: &[usize]| {
@@ -616,6 +694,25 @@ impl Plan {
         }
     }
 
+    /// The stair the lord's rooms go by (grid block): a castle keep's private stair at the dais end,
+    /// else the main stair.
+    pub(super) fn lord_stair(&self) -> [usize; 4] {
+        self.lord.unwrap_or(self.stairs)
+    }
+
+    /// A castle keep's private stair: its spiral stair's square (grid; the one of its block farther
+    /// from the hall) and the storeys it serves, the hall's up to the last under the top. None
+    /// where the keep has no storey over its hall.
+    pub fn private_stair(&self) -> Option<(usize, i8, i8)> {
+        let b = self.lord?;
+        let top = self.floors - 1;
+        if top <= self.hall_z {
+            return None;
+        }
+        let k = (0..b[3]).flat_map(|j| (0..b[2]).map(move |i| (b[0] + i, b[1] + j))).max_by_key(|&(i, j)| self.f.local(i as isize, j as isize).0)?;
+        Some((k.1 * self.nx + k.0, self.hall_z, top))
+    }
+
     /// The hall's low end (grid): the middle of the screens passage, else of the service end; None
     /// without either.
     pub(super) fn low_end(&self) -> Option<P> {
@@ -624,7 +721,7 @@ impl Plan {
         (!sq.is_empty()).then(|| [sq.iter().map(|q| q.0 as f64 + 0.5).sum::<f64>() / sq.len() as f64, sq.iter().map(|q| q.1 as f64 + 0.5).sum::<f64>() / sq.len() as f64])
     }
 
-    /// The solar where the lord's rooms go: by the main stair at the dais end (a square within 2 of
+    /// The solar where the lord's rooms go: by the lord's stair at the dais end (a square within 2 of
     /// it, its middle nearer the stair than the hall's low end), 9 squares or more, of sound
     /// proportions. A solar not so (or none yet, where one is due on this storey: it is still to be
     /// placed) changes places with the room of the storey nearest the stair that is, of a kind any
@@ -632,7 +729,7 @@ impl Plan {
     /// a forebuilding); with none, a great chamber big enough for both is cut in two.
     pub(super) fn solar(&mut self, lay: &mut Lay) {
         let (nx, ny) = (self.nx, self.ny);
-        let st = self.stairs;
+        let st = self.lord_stair();
         let stc = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
         let low = self.low_end();
         let shape = |sq: &[usize]| {
@@ -777,6 +874,11 @@ impl Plan {
     pub(super) fn hall_frame(&self) -> crate::interior::hall::Frame {
         let h0 = self.service + self.screens as usize;
         let (ht0, ht1) = self.hall_t;
+        // (A small tower keep's hall entered from its landing at the high end, and a great tower's
+        // with neither a service end nor screens: its dais at the other.)
+        if self.small || (matches!(self.kind, Kind::Great | Kind::Plain) && self.service == 0 && !self.screens) {
+            return crate::interior::hall::Frame { o: self.f.grid(self.dz as isize - 1, ht0 as isize), ds: (-self.f.ds.0, -self.f.ds.1), dt: self.f.dt, len: self.dz - h0, wid: ht1 - ht0 };
+        }
         crate::interior::hall::Frame { o: self.f.grid(h0 as isize, ht0 as isize), ds: self.f.ds, dt: self.f.dt, len: self.dz - h0, wid: ht1 - ht0 }
     }
 
@@ -816,9 +918,9 @@ impl Plan {
         (k, musts)
     }
 
-    /// The dais end: the landing in its middle (the main stair in it), a room each side (`akind` on
-    /// the front side, `bkind` on the far one) where it is 2 squares across. Returns the rooms each
-    /// side and the landing.
+    /// The dais end: the landing in its middle (the main stair in it, a castle keep's private one), a
+    /// room each side (`akind` on the front side, `bkind` on the far one) where it is 2 squares
+    /// across. Returns the rooms each side and the landing.
     pub(super) fn dais(&self, lay: &mut Lay, akind: &'static str, bkind: &'static str) -> (Option<i16>, Option<i16>, i16) {
         let (l, w) = (self.f.len, self.f.wid);
         let (tl0, tl1) = self.land_t;
@@ -853,20 +955,21 @@ impl Plan {
 
     /// The service end's rooms across its columns (`kinds`, by weight): each 4 squares or more (the
     /// kitchen 6) and 2 columns across, as near their weights as that allows; fewer kinds where they
-    /// won't fit (the lightest dropped first). The columns where each ends.
+    /// won't fit (the lightest dropped first). The columns where each ends. (Beside a castle keep's
+    /// landing at the low end: across the columns it leaves.)
     pub(super) fn service_cols(&self, kinds: &mut Vec<(&'static str, f64)>) -> Vec<usize> {
-        let w = self.f.wid;
+        let (lo, w) = self.service_span();
         let col: Vec<usize> = (0..w).map(|t| (0..self.service).filter(|&s| self.body(s as isize, t as isize).is_some()).count()).collect();
         let sum = |a: usize, b: usize| col[a..b].iter().sum::<usize>();
         // (The kitchen 6 squares, 5 where the end holds fewer than 10.)
-        let small = sum(0, w) < 10;
+        let small = sum(lo, w) < 10;
         let least = |k: &(&'static str, f64)| if k.0 == "kitchen" { 6 - small as usize } else { 4 };
         loop {
             let total: f64 = kinds.iter().map(|k| k.1).sum();
-            let all = sum(0, w);
+            let all = sum(lo, w);
             let n = kinds.len();
             let mut ends = Vec::new();
-            let mut t = 0;
+            let mut t = lo;
             let mut acc = 0.0;
             for (m, k) in kinds.iter().enumerate() {
                 acc += k.1;
@@ -879,7 +982,7 @@ impl Plan {
                 let want = all as f64 * acc / total;
                 let t1 = (t + 2..=w.saturating_sub(2 * left))
                     .filter(|&t1| sum(t, t1) >= least(k) && sum(t1, w) >= rest)
-                    .min_by(|&a, &b| (sum(0, a) as f64 - want).abs().total_cmp(&(sum(0, b) as f64 - want).abs()).then(a.cmp(&b)));
+                    .min_by(|&a, &b| (sum(lo, a) as f64 - want).abs().total_cmp(&(sum(lo, b) as f64 - want).abs()).then(a.cmp(&b)));
                 let Some(t1) = t1 else { break };
                 ends.push(t1);
                 t = t1;
@@ -896,11 +999,38 @@ impl Plan {
         }
     }
 
+    /// The service end's columns (from, to): all but a castle keep's landing at the low end.
+    pub(super) fn service_span(&self) -> (usize, usize) {
+        match self.low {
+            Some([_, _, t0, t1]) if t0 == 0 => (t1, self.f.wid),
+            Some([_, _, t0, _]) => (0, t0),
+            None => (0, self.f.wid),
+        }
+    }
+
+    /// The landing at a castle keep's low end, the main stair in it (`Plan::low`); on the hall's
+    /// floor (`hall`, its screens passage) no door between it and the hall where they meet and it
+    /// meets the screens passage: the hall entered by its screens passage.
+    pub(super) fn low_landing(&self, lay: &mut Lay, hall: Option<(i16, i16)>) -> Option<i16> {
+        let [s0, s1, t0, t1] = self.low?;
+        let r = lay.room("landing");
+        self.fill(lay, s0, s1, t0, t1, r);
+        if let Some((h, sc)) = hall {
+            let nx = self.nx;
+            let meets = sc >= 0 && (0..lay.cells.len()).any(|k| lay.cells[k] == r && [k.wrapping_sub(1), k + 1, k.wrapping_sub(nx), k + nx].iter().any(|&q| q < lay.cells.len() && (q % nx).abs_diff(k % nx) <= 1 && lay.cells[q] == sc));
+            if meets {
+                lay.hints.apart.push((r.min(h), r.max(h)));
+            }
+        }
+        Some(r)
+    }
+
     /// The hall's floor: service end, screens passage, hall (a strip of chambers beside a hall not
     /// as wide as the body), the dais end; the front door (on the ground floor) at the screens
     /// passage's end, the forebuilding's entrance or the mess hall's side. A barracks' officers'
     /// quarters, at the end away from the kitchen, run down the mess hall's side where a corner
-    /// tower takes most of the end.
+    /// tower takes most of the end. A castle keep's main stair in its landing at the low end, off the
+    /// screens passage; its dais end the private stair's (`private_end`).
     pub(super) fn hall_floor(&self, lay: &mut Lay, ground: bool, rng: &mut Pcg32) -> Vec<i16> {
         let w = self.f.wid;
         let barracks = self.kind == Kind::Barracks;
@@ -917,7 +1047,10 @@ impl Plan {
         if let Some(m) = self.bay.filter(|_| self.service > 0) {
             // (Entered from the end: the kitchen and the pantry each side of the mess hall's bay.)
             self.bay_service(lay, hall, m);
-        } else if self.service > 0 {
+        } else if self.service > 0 && !self.low.is_some_and(|_| {
+            let (t0, t1) = self.service_span();
+            self.squares(0, self.service as isize, t0 as isize, t1 as isize) < 5
+        }) {
             let mut kinds: Vec<(&'static str, f64)> = if barracks {
                 barracks::SERVICE.to_vec()
             } else if self.estate() {
@@ -929,7 +1062,7 @@ impl Plan {
             };
             let ends = self.service_cols(&mut kinds);
             let next = if self.screens { self.service as isize } else { h0 as isize };
-            let mut t = 0;
+            let mut t = self.service_span().0;
             for (&(kind, _), &t1) in kinds.iter().zip(&ends) {
                 let r = lay.room(kind);
                 self.fill(lay, 0, self.service, t, t1, r);
@@ -939,6 +1072,13 @@ impl Plan {
                     self.door(lay, (self.service as isize - 1, c), (next, c));
                 }
                 t = t1;
+            }
+        }
+        // (A castle keep's landing at the low end: with the service end's squares no room took, where
+        // its landing left too few for a kitchen.)
+        if let Some(r) = self.low_landing(lay, Some((hall, sc))) {
+            for k in self.open_squares(lay, 0, self.service as isize, (0, w as isize), -1) {
+                lay.cells[k] = r;
             }
         }
         // The hall's door on its axis.
@@ -958,7 +1098,9 @@ impl Plan {
             } else {
                 w
             };
-            free.extend(self.strip(lay, h0, self.dz, ht1, t1, Self::rooms_in(self.dz - h0, rng), rng));
+            // (Past a castle keep's landing at the low end, where it lies beside the hall.)
+            let s0 = self.low.filter(|lo| lo[1] > h0).map_or(h0, |lo| lo[1]);
+            free.extend(self.strip(lay, s0, self.dz, ht1, t1, Self::rooms_in(self.dz - s0, rng), rng));
         }
         if barracks {
             self.officers(lay, hall, h0);
@@ -969,7 +1111,16 @@ impl Plan {
             if self.estate() && self.squares(self.dz as isize, l, 0, tl0 as isize) < self.squares(self.dz as isize, l, tl1 as isize, w as isize) {
                 (a, b) = (b, a);
             }
-            self.dais(lay, a, b);
+            let (ra, rb, landing) = self.dais(lay, a, b);
+            if self.lord.is_some() {
+                self.private_end(lay, hall, (ra, rb, landing), a);
+            }
+        }
+        if self.lord.is_some() {
+            if ground {
+                lay.entry = Some((sc, hall));
+            }
+            return free;
         }
         let mut tl0 = self.land_t.0 as isize;
         // (A hall of 3 rows: its door to the landing beside the middle columns, the dais's, the
@@ -989,6 +1140,39 @@ impl Plan {
             lay.entry = Some((sc, hall));
         }
         free
+    }
+
+    /// A castle keep's dais end on the hall's floor (`dais`'s rooms and landing): the private stair's
+    /// landing made part of the room beside it (the parlor's side first, but where the other doesn't
+    /// meet the hall (beside a narrower hall); with neither, the whole end one room of `akind`),
+    /// each room there opening into the hall by its outer corner, clear of the dais: no way into the
+    /// hall behind the throne.
+    fn private_end(&self, lay: &mut Lay, hall: i16, (ra, rb, landing): (Option<i16>, Option<i16>, i16), akind: &'static str) {
+        let (dz, l, w) = (self.dz, self.f.len, self.f.wid);
+        let meets = |lay: &Lay, r: i16| (self.hall_t.0..self.hall_t.1).any(|t| self.body(dz as isize, t as isize).is_some_and(|k| lay.cells[k] == r));
+        let into = rb.filter(|&r| !meets(lay, r)).or(ra).or(rb).unwrap_or_else(|| {
+            self.fill(lay, dz, l, 0, w, landing);
+            lay.rooms[landing as usize].kind = akind;
+            landing
+        });
+        for c in lay.cells.iter_mut() {
+            if *c == landing {
+                *c = into;
+            }
+        }
+        let (ht0, ht1) = (self.hall_t.0 as isize, self.hall_t.1 as isize);
+        let s = dz as isize;
+        let mut done = Vec::new();
+        for t in [ht0, ht1 - 1] {
+            let Some(k) = self.body(s, t) else { continue };
+            let r = lay.cells[k];
+            if r < 0 || r == hall || done.contains(&r) || self.body(s - 1, t).is_none_or(|q| lay.cells[q] != hall) {
+                continue;
+            }
+            self.door(lay, (s - 1, t), (s, t));
+            lay.hints.link.push((r.min(hall), r.max(hall)));
+            done.push(r);
+        }
     }
 
     /// The front door's hint: into the forebuilding's entrance hall, the screens passage's ends, or
@@ -1013,7 +1197,8 @@ impl Plan {
             }
             edges.sort();
             lay.hints.front = Some((r, edges.into_iter().map(|e| e.1).collect()));
-            // (Its door into the screens passage.)
+            // (Its door into the screens passage, none into the hall.)
+            lay.hints.apart.push((r.min(hall), r.max(hall)));
             for &(s, t) in &local {
                 if self.body(s, t + 1).is_some_and(|k| lay.cells[k] == screens) {
                     self.door(lay, (s, t), (s, t + 1));
@@ -1049,16 +1234,24 @@ impl Plan {
     }
 
     /// A great tower's ground floor: the entrance hall down the axis from the door at the low end
-    /// to the main stair at the far end, stores, a well room and an armory each side.
+    /// (across the low end to the main stair in its corner there, else on to it at the far end),
+    /// stores, a well room and an armory each side.
     pub(super) fn stores_floor(&self, lay: &mut Lay, rng: &mut Pcg32) -> Vec<i16> {
         let (l, w) = (self.f.len, self.f.wid);
         let (tl0, tl1) = self.land_t;
         let hall = lay.room("entrance hall");
         self.fill(lay, 0, l, tl0, tl1, hall);
+        // (The stores' rows each side: past the entrance hall's way across to the main stair.)
+        let mut from = [0, 0];
+        if let Some([_, s1, t0, t1]) = self.low {
+            let (c0, c1, n) = if t0 == 0 { (0, tl0.max(t1), 0) } else { (tl1.min(t0), w, 1) };
+            self.fill(lay, 0, s1, c0, c1, hall);
+            from[n] = s1;
+        }
         let mut free = Vec::new();
-        for (t0, t1) in [(0, tl0), (tl1, w)] {
-            if t1 - t0 >= 2 {
-                free.extend(self.strip(lay, 0, l, t0, t1, Self::rooms_in(l, rng).min(3), rng));
+        for ((t0, t1), s0) in [(0, tl0), (tl1, w)].into_iter().zip(from) {
+            if t1 - t0 >= 2 && l - s0 >= 2 {
+                free.extend(self.strip(lay, s0, l, t0, t1, Self::rooms_in(l - s0, rng).min(3), rng));
             } else {
                 self.fill(lay, 0, l, t0, t1, hall);
             }
@@ -1097,7 +1290,9 @@ impl Plan {
 
     /// An upper floor: the landing at the dais end; a cross passage under it from one long wall
     /// (the other from the storey below's where both will do, or on the `more`th try at it the
-    /// other) and a mural passage on down that wall; rooms each side of the landing; the rest of the body divided by cross walls into rooms
+    /// other) and a mural passage on down that wall (a castle keep's: down its main stair's wall, on
+    /// to its landing at the low end, `onto_low`); rooms each side of the landing; the rest of the
+    /// body divided by cross walls into rooms
     /// of sensible proportions (`partition`), as many as the floor must hold (`need`) at least. The
     /// lord's floor has the great chamber across the body off the cross passage by the passage's
     /// wall, about twice as wide as it is deep (ended at a cross wall in a wide body, a wardrobe or
@@ -1111,9 +1306,10 @@ impl Plan {
         let (tl0, tl1) = (self.land_t.0 as isize, self.land_t.1 as isize);
         let row = dz - 1;
         let turn = |pt: isize| if pt == 0 { (0, tl1) } else { (tl0, w) };
+        // (A castle keep's on down to its landing at the low end's row: `onto_low`.)
         let Some((pt, e)) = self.passage_side(&[w - 1, 0], row, 0, &turn, flip) else { return self.corridor_floor(lay, rng, need) };
         // (A long body whose long walls are broken soon below the cross passage: the corridor.)
-        if row >= 10 && e > row - 4 {
+        if (row >= 10 && e > row - 4) || self.low.is_some_and(|lo| e > lo[1] as isize) {
             return self.corridor_floor(lay, rng, need);
         }
         self.side = pt;
@@ -1125,11 +1321,14 @@ impl Plan {
         self.fill(lay, e as usize, row as usize, pt as usize, pt as usize + 1, passage);
         // (A long gallery: the passage down the long wall 2 or 3 squares wide.)
         let gw = if !gallery { 1 } else if w >= 14 { 4 } else { 3 };
+        let mut way = passage;
         if gw > 1 {
             let g = lay.room("long gallery");
             let (c0, c1) = if pt == 0 { (0, gw) } else { (w - gw, w) };
             self.fill(lay, e as usize, row as usize, c0 as usize, c1 as usize, g);
+            way = g;
         }
+        self.onto_low(lay, way, pt);
         // (The landing's sides: by the passage's wall, and across from it from the cross passage's
         // row; the rooms' columns beside the passage.)
         let (near, far) = if pt == 0 { ((0, tl0), (tl1, w)) } else { ((tl1, w), (0, tl0)) };
@@ -1139,7 +1338,7 @@ impl Plan {
         let want_gc = lord && self.pending.contains(&"great chamber");
         // A column of the landing (one the stair isn't in) to a room beside it: the solar's where
         // the far side is too narrow for it, else now and then either side's.
-        let st = self.stairs;
+        let st = self.lord_stair();
         let on_stairs = |k: usize| (k % self.nx) >= st[0] && (k % self.nx) < st[0] + st[2] && (k / self.nx) >= st[1] && (k / self.nx) < st[1] + st[3];
         let open_col = |c: isize| tl1 - tl0 >= 2 && !(dz..l).any(|s| self.at(s, c).is_some_and(on_stairs));
         let (far_c, near_c) = if pt == 0 { (tl1 - 1, tl0) } else { (tl0, tl1 - 1) };
@@ -1268,6 +1467,20 @@ impl Plan {
         free
     }
 
+    /// A castle keep's landing at the low end on a floor above the hall's (`low_landing`), and the
+    /// way about the floor (`way`, laid down the long wall `pt` to the landing's row or past it) on
+    /// along the row beyond the landing from that wall across to the landing's far column.
+    pub(super) fn onto_low(&self, lay: &mut Lay, way: i16, pt: isize) {
+        let Some([_, s1, t0, t1]) = self.low else { return };
+        self.low_landing(lay, None);
+        let (a, b) = if pt < t0 as isize { (0, t1) } else if pt >= t1 as isize { (t0, self.f.wid) } else { (t0, t1) };
+        for t in a..b {
+            if let Some(k) = self.body(s1 as isize, t as isize).filter(|&k| lay.cells[k] < 0) {
+                lay.cells[k] = way;
+            }
+        }
+    }
+
     /// An upper floor whose long walls are both broken by the dais end: the landing at the dais
     /// end, a corridor on from it down the axis (ending at rooms across the low end in a long
     /// body), rooms each side divided by cross walls (`partition`); the lord's rooms the biggest.
@@ -1276,9 +1489,15 @@ impl Plan {
         let (tl0, _) = self.land_t;
         let mut free = Vec::new();
         let mut lines = Vec::new();
-        let e = if dz >= 11 { 3 + rng.below(2) as usize } else { 0 };
+        // (A castle keep's from its landing at the low end's row, across to it.)
+        let e = if let Some(lo) = self.low { lo[1] } else if dz >= 11 { 3 + rng.below(2) as usize } else { 0 };
         let corridor = lay.room("corridor");
         self.fill(lay, e, dz, tl0, tl0 + 1, corridor);
+        if let Some([_, s1, t0, t1]) = self.low {
+            let (a, b) = if t0 == 0 { (0, tl0 + 1) } else { (tl0, t1) };
+            self.fill(lay, s1, s1 + 1, a, b, corridor);
+            self.low_landing(lay, None);
+        }
         for (t0, t1) in [(0, tl0), (tl0 + 1, w)] {
             if t1 - t0 >= 2 {
                 free.extend(self.partition(lay, [e as isize, dz as isize, t0 as isize, t1 as isize], if t0 == 0 { 3 } else { 2 }, need.div_ceil(2), &mut lines, rng));
@@ -1293,7 +1512,8 @@ impl Plan {
         free.extend(a.into_iter().chain(b));
         // (The lord's rooms, where they are still to be placed: the biggest by the stair.)
         let mut lords: Vec<&'static str> = self.pending.iter().copied().filter(|k| matches!(*k, "great chamber" | "solar")).collect();
-        let stc = [self.stairs[0] as f64 + 0.5 * self.stairs[2] as f64, self.stairs[1] as f64 + 0.5 * self.stairs[3] as f64];
+        let st = self.lord_stair();
+        let stc = [st[0] as f64 + 0.5 * st[2] as f64, st[1] as f64 + 0.5 * st[3] as f64];
         let mut near: Vec<(f64, i16)> = free
             .iter()
             .filter(|&&r| lay.count(r) >= 9)
@@ -1338,6 +1558,8 @@ impl Plan {
         self.fill(lay, g0 as usize, g1 as usize, 0, w as usize, gallery);
         let mut free = Vec::new();
         let mut lines = Vec::new();
+        // (A castle keep's landing at the low end: onto the gallery.)
+        self.low_landing(lay, None);
         if g0 >= 2 {
             // (Their walls off those of the service end below; each opening onto the gallery in the
             // middle of its side of it. Laid out again (as the rooms below), one room over it all
@@ -1345,6 +1567,10 @@ impl Plan {
             let mut kinds = if w >= 7 { vec![("buttery", 1.0), ("kitchen", 1.6), ("pantry", 1.0)] } else { vec![("kitchen", 1.6), ("buttery", 1.0)] };
             lines.extend(self.service_cols(&mut kinds).into_iter().map(|t| (false, t as isize)));
             let whole: Vec<usize> = self.open_squares(lay, 0, g0, (0, w), -1);
+            if self.low.is_some() {
+                let (sp0, sp1) = self.service_span();
+                lines.extend([(false, sp0 as isize), (false, sp1 as isize)]);
+            }
             let rooms = if more > 0 && whole.len() <= 40 && self.sound(&whole, 4) {
                 let r = lay.room("chamber");
                 for &k in &whole {
