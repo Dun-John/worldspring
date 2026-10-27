@@ -5,7 +5,7 @@ import { GenClient, type Ready } from '../gen/client';
 import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT } from '../gen/protocol';
 import { BattlemapLayer, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
-import { InteriorLayer, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
+import { InteriorLayer, setUndergroundGrid, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
 import { Labels } from './Labels';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
@@ -331,6 +331,7 @@ export class MapView {
 
   setGrid(on: boolean) {
     this.gridOn = on;
+    setUndergroundGrid(on);
     this.battle?.setGrid(on);
   }
 

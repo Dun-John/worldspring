@@ -42,6 +42,7 @@ uniform float uSquare;
 uniform float uLiquid;
 uniform float uGhost;
 uniform float uGridAlpha;
+uniform float uGrid;
 // Where this grid sits among its neighbours (squares; a city's sewer sections, so their
 // textures run on across the edges), else 0.
 uniform vec2 uOrigin;
@@ -217,35 +218,43 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         vec2 g = fract(q);
         c = mix(vec3(0.80, 0.78, 0.74), vec3(0.60, 0.58, 0.56), mod(cell.x + cell.y, 2.0)) * (0.94 + 0.08 * hash21(cell));
         c = mix(c, c * 0.72, seam(fbm(p * 0.9 + cell * 0.37), 0.015));
-        float joint = 1.0 - smoothstep(0.0, 0.03, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
-        c = mix(c, INK * 1.8, joint * 0.5);
+        float joint = 1.0 - smoothstep(0.0, 0.02, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
+        c = mix(c, INK * 1.8, joint * 0.3);
     } else if (mat == 8) {
         // Hewn rock: big blocks two squares long in running bond, tight joints.
         vec2 b = q * vec2(0.5, 1.0);
         b.x += 0.5 * mod(floor(b.y), 2.0);
         vec2 g = fract(b);
         c = vec3(0.52, 0.49, 0.45) * (0.85 + 0.2 * hash21(floor(b))) * (0.92 + 0.12 * vnoise(p * 2.0));
-        float joint = 1.0 - smoothstep(0.0, 0.04, min(min(g.x, 1.0 - g.x) * 2.0, min(g.y, 1.0 - g.y)));
-        c = mix(c, INK * 1.5, joint * 0.7);
+        float joint = 1.0 - smoothstep(0.0, 0.025, min(min(g.x, 1.0 - g.x) * 2.0, min(g.y, 1.0 - g.y)));
+        c = mix(c, INK * 1.5, joint * 0.4);
     } else if (mat == 9) {
         // Ice: pale blue, cracked, glinting.
         c = vec3(0.74, 0.84, 0.90) * (0.88 + 0.16 * fbm(p * 0.5));
         c = mix(c, vec3(0.50, 0.64, 0.78), seam(vnoise(p * 1.3 + 2.0), 0.02));
         c += vec3(0.15) * smoothstep(0.94, 0.99, vnoise(p * 8.0));
     } else {
-        // Flagstones: rows of irregular stones; boss chambers larger and darker, crypts dusty.
-        float scale = mat == 5 ? 0.7 : mat == 10 ? 0.85 : 1.0;
-        vec2 f = q * vec2(1.0, 1.35) * scale;
-        float row = floor(f.y);
-        f.x += 0.5 * mod(row, 2.0) + 0.17 * sin(row * 3.1);
-        vec2 cell = floor(f);
-        vec2 g = fract(f);
-        float edge = min(min(g.x, 1.0 - g.x) * 1.35, min(g.y, 1.0 - g.y));
-        edge += 0.04 * (vnoise(p * 6.0) - 0.5);
-        float mortar = 1.0 - smoothstep(0.02, 0.07, edge);
+        // Flagstones laid to the squares: one stone a square, or a square split in two along its
+        // half line (which way and whether, by square). Boss chambers darker, crypts dusty.
+        vec2 sq = floor(q);
+        vec2 g = fract(q);
+        float h = hash21(sq + 3.7);
+        vec2 stoneId = sq;
+        vec2 e = vec2(0.5);
+        if (h > 0.4) {
+            // Split across x (two stones side by side) or across y (one above the other).
+            bool alongX = h < 0.7;
+            float side = step(0.5, alongX ? g.x : g.y);
+            stoneId = sq + (alongX ? vec2(side * 0.5 + 0.25, 0.0) : vec2(0.0, side * 0.5 + 0.25));
+            e = alongX ? vec2(abs(g.x - 0.5), 1.0) : vec2(1.0, abs(g.y - 0.5));
+        }
+        float edge = min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y));
+        if (h > 0.4) edge = min(edge, min(e.x, e.y));
+        edge += 0.025 * (vnoise(p * 6.0) - 0.5);
+        float mortar = 1.0 - smoothstep(0.012, 0.04, edge);
         vec3 stone = mat == 5 ? vec3(0.44, 0.39, 0.37) : mat == 6 ? vec3(0.60, 0.56, 0.48) : mat == 10 ? vec3(0.30, 0.28, 0.30) : vec3(0.58, 0.55, 0.50);
-        c = stone * (0.8 + 0.32 * hash21(cell + var)) * (0.9 + 0.15 * vnoise(p * 3.0));
-        c = mix(c, INK * 1.6, mortar * 0.75);
+        c = stone * (0.8 + 0.32 * hash21(stoneId * 1.7 + var)) * (0.9 + 0.15 * vnoise(p * 3.0));
+        c = mix(c, INK * 1.6, mortar * 0.35);
     }
     return c;
 }
@@ -527,12 +536,14 @@ void main() {
             col = mix(col, INK, (1.0 - smoothstep(0.0, lw * 2.0, abs(l - 0.5))) * 0.55);
         }
         // The 5-ft grid.
-        if (uGhost < 0.5) {
+        if (uGhost < 0.5 && uGrid > 0.0) {
             vec2 gq = min(fract(q), 1.0 - fract(q));
             float gw = length(fwidth(q));
             // (Light over what is nearly black: a chasm, deep water.)
             vec3 gc = mix(vec3(0.45, 0.43, 0.40), INK, smoothstep(0.05, 0.16, dot(col, vec3(0.3, 0.59, 0.11))));
-            col = mix(col, gc, (1.0 - smoothstep(0.0, gw, min(gq.x, gq.y))) * uGridAlpha);
+            // Like the surface grid: 0.4-1.2 px soft line.
+            float gpx = min(gq.x, gq.y) / max(gw, 1e-5);
+            col = mix(col, gc, (1.0 - smoothstep(0.4, 1.2, gpx)) * uGridAlpha);
         }
         alpha = 1.0;
     }

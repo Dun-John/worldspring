@@ -513,6 +513,12 @@ export interface InteriorStyle {
   doors: ((loc: string, index: number) => DoorState) | null;
 }
 
+let undergroundGrid = true;
+/** The battlemap grid toggle, for underground floors too. */
+export function setUndergroundGrid(on: boolean) {
+  undergroundGrid = on;
+}
+
 export class InteriorLayer {
   /** The world's renames, for level and room names (`l:`/`r:` ids); set by `MapView`. */
   static names: Record<string, string> = {};
@@ -691,7 +697,10 @@ export class InteriorLayer {
       c.rotation = Math.atan2(it.axis[1], it.axis[0]);
       c.scale.set(s);
     }
-    if (this.under) this.under.uniforms.uniforms.uTime = performance.now() / 1000;
+    if (this.under) {
+      this.under.uniforms.uniforms.uTime = performance.now() / 1000;
+      this.under.uniforms.uniforms.uGrid = undergroundGrid ? 1 : 0;
+    }
     this.dim.width = cam.width;
     this.dim.height = cam.height;
     for (const l of this.labelSpots) {
@@ -829,7 +838,8 @@ export class InteriorLayer {
       uSquare: { value: square ? 1 : 0, type: 'f32' },
       uLiquid: { value: liquidKind, type: 'f32' },
       uGhost: { value: this.ghost ? 1 : 0, type: 'f32' },
-      uGridAlpha: { value: lv.natural ? 0.08 : 0.15, type: 'f32' },
+      uGridAlpha: { value: lv.natural ? 0.2 : 0.28, type: 'f32' },
+      uGrid: { value: undergroundGrid ? 1 : 0, type: 'f32' },
       // Sewer sections: their place among the others (wrapped, to keep the GPU's sums small;
       // a seam once every 256 sections, far wider than any city).
       uOrigin: { value: new Float32Array(this.tile ? [wrap(it.origin[0] / 5), wrap(it.origin[1] / 5)] : [0, 0]), type: 'vec2<f32>' },
