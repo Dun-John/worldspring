@@ -39,27 +39,35 @@ pub(crate) fn lava_tube(nx: usize, ny: usize, arrive: usize, depth: usize, last:
     // (The tube's chambers of the first two kinds, the pockets of the rest.)
     let (tube, pockets) = theme.kinds.split_at(2.min(theme.kinds.len()));
     let mut p = natural_level(nx, ny, arrive, last, open, tube, theme.ledge, rng);
-    // Side pockets: cave chambers grown in the rock beside the tube at a few places along it (`cave::caverns`), joined
-    // to it by short tunnels; kept off the boss chamber and the ways in and out.
+    // Side pockets: cave chambers grown in the rock beside the tube at a few stretches along it (`cave::caverns`),
+    // some two or three chambers deep, joined to it by short tunnels; kept off the boss chamber (hidden from the
+    // growth, so no pocket is reached through it) and the ways in and out.
     let near = |p: &Plan, m: usize| p.cells[m] >= 0 && p.rooms[p.cells[m] as usize].kind == BOSS || m == arrive || Some(m) == p.down;
     let shy: Vec<bool> = (0..n).map(|k| near(&p, k) || around(k, nx, ny).any(|m| near(&p, m) || around(m, nx, ny).any(|t| near(&p, t)))).collect();
     let mut region = vec![false; n];
-    for _ in 0..3 + rng.below(3) {
+    for _ in 0..2 + nx / 30 + rng.below(2) as usize {
         let i = x0 + rng.below((x1 - x0).max(1) as u32) as isize;
         let side = if rng.next_f64() < 0.5 { 1.0 } else { -1.0 };
         let (c, w) = (centre(i as f64), half(i as f64));
-        let r = rng.range(4.0, 6.5);
-        let pc = c + side * (w + r - 0.5);
+        let r = rng.range(6.0, 10.0);
+        let pc = c + side * (w + 0.7 * r);
         for k in 0..n {
-            let (dx, dy) = ((k % nx) as f64 - i as f64, (k / nx) as f64 - pc);
+            let (dx, dy) = (((k % nx) as f64 - i as f64) / 1.6, (k / nx) as f64 - pc);
             if dx * dx + dy * dy <= r * r && p.cells[k] < 0 && !shy[k] {
                 region[k] = true;
             }
         }
     }
     let kinds = if pockets.is_empty() { tube } else { pockets };
-    let cv = Caverns { kinds, ledge: "", spacing: 7.0, seeds: &[], raise: 0.0, squeeze: 0.3, loops: 0.3, reach: 6, dead_end: false };
+    let boss: Vec<(usize, i16)> = (0..n).filter(|&k| p.cells[k] >= 0 && p.rooms[p.cells[k] as usize].kind == BOSS).map(|k| (k, p.cells[k])).collect();
+    for &(k, _) in &boss {
+        p.cells[k] = -1;
+    }
+    let cv = Caverns { kinds, ledge: "", spacing: 9.0, seeds: &[], raise: 0.0, squeeze: 0.3, loops: 0.3, reach: 6, dead_end: false, solid: &[] };
     let grown = caverns(&mut p, ny, &region, &cv, rng);
+    for &(k, r) in &boss {
+        p.cells[k] = r;
+    }
     // (Rubble slopes up into a pocket off a raised stretch of the tube.)
     for j in grown.joins.iter().filter(|j| j.a < 0 || j.b < 0) {
         let raised = j.squares.iter().any(|&k| neighbours(k, nx, ny).any(|m| p.cells[m] >= 0 && !grown.rooms.contains(&p.cells[m]) && p.rooms[p.cells[m] as usize].raise > 0.0));

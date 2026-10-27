@@ -171,7 +171,8 @@ impl Plan {
     }
 
     /// Place an item if its squares are free floor (of `room`, if given) and, if it blocks,
-    /// every other floor square stays reachable from the arrival.
+    /// every other floor square stays reachable from the arrival, and every square outside the boss
+    /// chamber stays reachable without passing through it (the boss stays a dead end).
     pub(crate) fn place(&mut self, it: Item, room: Option<i16>, ny: usize) -> bool {
         let nx = self.nx;
         let (x, y, w, h) = (it.x as usize, it.y as usize, it.w as usize, it.h as usize);
@@ -183,18 +184,15 @@ impl Plan {
             return false;
         }
         if it.blocks_move {
-            if squares.len() == 1 && self.ring_safe(squares[0], ny) {
-                self.blocked[squares[0]] = true;
-            } else {
-                let mut blocked = self.blocked.clone();
-                for &k in &squares {
-                    blocked[k] = true;
-                }
-                let dist = self.distances(self.up, ny, Some(&blocked));
-                if (0..nx * ny).any(|k| self.cells[k] >= 0 && !blocked[k] && dist[k] < 0) {
-                    return false;
-                }
-                self.blocked = blocked;
+            // (Round the boss chamber too, unless the item stands in it.)
+            let boss = self.rooms.iter().position(|r| r.kind == BOSS).map_or(-1, |b| b as i16);
+            let boss = if squares.iter().any(|&k| self.cells[k] == boss) { -1 } else { boss };
+            let safe = |avoid: i16| if squares.len() == 1 && self.ring_safe(squares[0], ny, avoid) { true } else { self.joined(&squares, ny, avoid) };
+            if !safe(-1) || boss >= 0 && !safe(boss) {
+                return false;
+            }
+            for &k in &squares {
+                self.blocked[k] = true;
             }
         }
         for &k in &squares {
@@ -204,9 +202,9 @@ impl Plan {
         true
     }
 
-    /// Whether blocking square `k` keeps every square reached (the quick way, as `place`'s search would find): the
-    /// open squares one steps to from `k` all join up round the ring of eight about it.
-    fn ring_safe(&self, k: usize, ny: usize) -> bool {
+    /// Whether blocking square `k` keeps every square reached (the quick way): the open squares one steps to from `k`
+    /// all join up round the ring of eight about it. Squares of room `avoid` count as rock.
+    fn ring_safe(&self, k: usize, ny: usize, avoid: i16) -> bool {
         let nx = self.nx;
         let (i, j) = ((k % nx) as isize, (k / nx) as isize);
         // (The ring from north, clockwise; the steps to `k` at 0, 2, 4, 6.)
@@ -215,7 +213,7 @@ impl Plan {
             let (x, y) = (i + RING[d].0, j + RING[d].1);
             (x >= 0 && y >= 0 && x < nx as isize && y < ny as isize).then(|| y as usize * nx + x as usize)
         };
-        let open = |d: usize| at(d).filter(|&q| self.cells[q] >= 0 && !self.blocked[q]);
+        let open = |d: usize| at(d).filter(|&q| self.cells[q] >= 0 && self.cells[q] != avoid && !self.blocked[q]);
         let goes = |d: usize| d % 2 == 0 && open(d).is_some_and(|q| self.passable(k, q));
         let n = (0..8).filter(|&d| goes(d)).count();
         if n <= 1 {
@@ -237,6 +235,64 @@ impl Plan {
             }
         }
         arcs <= 1
+    }
+
+    /// Whether blocking `squares` keeps every square reached that was (squares of room `avoid` counted as rock): the open
+    /// squares one steps to from them still join up round about. Searched out from each at once, square by square; it
+    /// stops when they have all met, or when one's search runs out first (cut off).
+    fn joined(&self, squares: &[usize], ny: usize, avoid: i16) -> bool {
+        let nx = self.nx;
+        let open = |q: usize| self.cells[q] >= 0 && self.cells[q] != avoid && !self.blocked[q] && !squares.contains(&q);
+        let mut lab = vec![u16::MAX; nx * ny];
+        let mut up: Vec<u16> = Vec::new();
+        let mut q = std::collections::VecDeque::new();
+        for &s in squares {
+            for t in neighbours(s, nx, ny) {
+                if open(t) && self.passable(s, t) && lab[t] == u16::MAX {
+                    lab[t] = up.len() as u16;
+                    up.push(up.len() as u16);
+                    q.push_back(t);
+                }
+            }
+        }
+        fn top(up: &mut [u16], mut x: u16) -> u16 {
+            while up[x as usize] != x {
+                up[x as usize] = up[up[x as usize] as usize];
+                x = up[x as usize];
+            }
+            x
+        }
+        // (Squares waiting per search; a search with none left while others remain is cut off.)
+        let mut left: Vec<u32> = vec![1; up.len()];
+        let mut groups = up.len();
+        while let Some(k) = q.pop_front() {
+            if groups <= 1 {
+                return true;
+            }
+            let g = top(&mut up, lab[k]);
+            left[g as usize] -= 1;
+            for t in neighbours(k, nx, ny) {
+                if !open(t) || !self.passable(k, t) {
+                    continue;
+                }
+                if lab[t] == u16::MAX {
+                    lab[t] = g;
+                    left[g as usize] += 1;
+                    q.push_back(t);
+                } else {
+                    let o = top(&mut up, lab[t]);
+                    if o != g {
+                        up[o as usize] = g;
+                        left[g as usize] += left[o as usize];
+                        groups -= 1;
+                    }
+                }
+            }
+            if left[g as usize] == 0 && groups > 1 {
+                return false;
+            }
+        }
+        groups <= 1
     }
 
     /// Doorways stay clear.

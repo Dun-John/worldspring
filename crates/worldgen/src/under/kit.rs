@@ -1282,18 +1282,24 @@ impl Layer {
                 continue;
             }
             let base = g.reach(from, false, &|k| g.blocked[k]);
+            // (What is reached so far, grown as each crossing is laid.)
+            let mut seen = g.reach(from, false, &|k| g.blocked[k] || self.gap(k));
             for _ in 0..n {
-                let seen = g.reach(from, false, &|k| g.blocked[k] || self.gap(k));
                 if (0..n).all(|k| !base[k] || seen[k] || self.gap(k)) {
                     break;
                 }
-                // (Cost: 1024 a gap square, 1 a step.)
+                // (Cost: 1024 a gap square, 1 a step; from the reached squares at the edge of what is reached, the rest
+                // having nothing to step to that is not.)
                 let mut cost = vec![u32::MAX; n];
                 let mut came = vec![usize::MAX; n];
                 let mut heap = std::collections::BinaryHeap::new();
-                for k in (0..n).filter(|&k| seen[k]) {
-                    cost[k] = 0;
-                    heap.push(std::cmp::Reverse((0u32, k)));
+                for k in 0..n {
+                    if seen[k] {
+                        cost[k] = 0;
+                        if g.steps(k, false).any(|q| !seen[q]) {
+                            heap.push(std::cmp::Reverse((0u32, k)));
+                        }
+                    }
                 }
                 let mut end = None;
                 while let Some(std::cmp::Reverse((c, k))) = heap.pop() {
@@ -1327,6 +1333,19 @@ impl Layer {
                         DEEP if path.len() <= 2 => self.t[q] = SHALLOW,
                         DEEP | CHASM if bridge && straight => self.span[q] = BRIDGE,
                         _ => self.span[q] = STONES,
+                    }
+                }
+                // (The crossing's squares open what lies beyond them.)
+                let mut todo: Vec<usize> = path.iter().copied().filter(|&q| !g.blocked[q] && g.steps(q, false).any(|t| seen[t])).collect();
+                for &q in &todo {
+                    seen[q] = true;
+                }
+                while let Some(k) = todo.pop() {
+                    for q in g.steps(k, false) {
+                        if !seen[q] && !g.blocked[q] && !self.gap(q) {
+                            seen[q] = true;
+                            todo.push(q);
+                        }
                     }
                 }
             }

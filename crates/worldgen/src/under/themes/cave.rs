@@ -45,6 +45,9 @@ pub(crate) struct Caverns<'a> {
     /// Leave the chamber farthest (in joins) from the first seed's (or the floor there before) a dead end with one
     /// join: `Grown::end`.
     pub(crate) dead_end: bool,
+    /// Squares of `region` no chamber grows over (masses of solid rock), though tunnels may cut through them (empty:
+    /// none).
+    pub(crate) solid: &'a [bool],
 }
 
 /// A join between two chambers (`Grown::rooms`; -1: the floor there before): the squares dug through the rock.
@@ -89,7 +92,7 @@ pub(crate) fn caverns(p: &mut Plan, ny: usize, region: &[bool], c: &Caverns, rng
     let near_old: Vec<bool> = (0..n).map(|k| !old[k] && around(k, nx, ny).any(|m| old[m])).collect();
     // (Squares a chamber or tunnel may take; chambers keep off the floor already there.)
     let open: Vec<bool> = (0..n).map(|k| region[k] && !old[k] && (inner(k) || c.seeds.contains(&k))).collect();
-    let free: Vec<bool> = (0..n).map(|k| open[k] && !near_old[k]).collect();
+    let free: Vec<bool> = (0..n).map(|k| open[k] && !near_old[k] && !c.solid.get(k).copied().unwrap_or(false)).collect();
     let pool: Vec<usize> = (0..n).filter(|&k| free[k]).collect();
     if pool.is_empty() {
         return Grown::default();
@@ -226,6 +229,10 @@ pub(crate) fn caverns(p: &mut Plan, ny: usize, region: &[bool], c: &Caverns, rng
     let mut cands: Vec<Cand> = Vec::new();
     let mut walls: Vec<(usize, usize, usize)> = Vec::new();
     for &(a, b, len, x, y) in &raw {
+        // (Past a pair's first join only its wall squares count.)
+        if len > 1 && cands.last().is_some_and(|e| (e.a, e.b) == (a, b)) {
+            continue;
+        }
         let mut path = Vec::new();
         let ea = chain(x, &mut path);
         let eb = chain(y, &mut path);
@@ -533,6 +540,115 @@ pub(crate) fn lake(p: &Plan, ny: usize, w: &mut [[f32; 2]], r: i16, island: bool
 
 /// A pool in room `r`: its lower squares (the noise height under the room's 45th percentile) shallow, its lowest
 /// seventh deep (two in from the edge or more) if `deep`.
+/// The noise (`cave`'s masses of rock) over which a square is solid rock no chamber grows over.
+const SOLID: f64 = 0.62;
+/// A flooded cave's pools: the noise height under which its floor is shallow.
+const POOLS: f64 = 0.46;
+
+/// A flooded cave's stream: deep down a winding way between two chambers far apart (round the arrival's chamber, the
+/// boss's and the raised ones), shallow where it runs at a chamber's edge or through a tunnel (waded round or across
+/// there), with shallow banks a square or two wide.
+fn stream(p: &Plan, ny: usize, w: &mut [[f32; 2]], arrival: i16, boss: Option<i16>, seed: u64, rng: &mut Pcg32) {
+    let nx = p.nx;
+    let n = nx * ny;
+    let ok = |k: usize| {
+        let r = p.cells[k];
+        r >= 0 && r != arrival && Some(r) != boss && p.rooms[r as usize].raise == 0.0
+    };
+    // (Each square's steps in from its room's edge, every room at once.)
+    let mut e = vec![0u32; n];
+    let mut q = VecDeque::new();
+    for k in 0..n {
+        if p.cells[k] >= 0 && (neighbours(k, nx, ny).count() < 4 || neighbours(k, nx, ny).any(|t| p.cells[t] != p.cells[k])) {
+            e[k] = 1;
+            q.push_back(k);
+        }
+    }
+    while let Some(k) = q.pop_front() {
+        for t in neighbours(k, nx, ny) {
+            if p.cells[t] == p.cells[k] && e[t] == 0 {
+                e[t] = e[k] + 1;
+                q.push_back(t);
+            }
+        }
+    }
+    let cells: Vec<usize> = (0..n).filter(|&k| ok(k)).collect();
+    if cells.len() < 40 {
+        return;
+    }
+    // Its ends: the square farthest (walking) from one picked at random, then the one farthest from that.
+    let walk = |from: usize| {
+        let mut d = vec![u32::MAX; n];
+        d[from] = 0;
+        let mut q = VecDeque::from([from]);
+        while let Some(k) = q.pop_front() {
+            for t in neighbours(k, nx, ny) {
+                if d[t] == u32::MAX && ok(t) {
+                    d[t] = d[k] + 1;
+                    q.push_back(t);
+                }
+            }
+        }
+        d
+    };
+    let farthest = |d: &[u32]| cells.iter().copied().filter(|&k| d[k] != u32::MAX).max_by_key(|&k| (d[k], usize::MAX - k)).unwrap();
+    let a = farthest(&walk(cells[rng.below(cells.len() as u32) as usize]));
+    let b = farthest(&walk(a));
+    // The way: least cost, dearer on high noise (it winds) and along a chamber's edge.
+    let mut cost = vec![u32::MAX; n];
+    let mut came = vec![usize::MAX; n];
+    let mut heap = BinaryHeap::from([Reverse((0u32, a))]);
+    cost[a] = 0;
+    while let Some(Reverse((c, k))) = heap.pop() {
+        if c > cost[k] {
+            continue;
+        }
+        if k == b {
+            break;
+        }
+        for t in neighbours(k, nx, ny) {
+            let step = 10 + (40.0 * noise(seed ^ 0x5e3a, t % nx, t / nx, 5.0)) as u32 + if e[t] <= 1 { 25 } else { 0 };
+            if ok(t) && c + step < cost[t] {
+                cost[t] = c + step;
+                came[t] = k;
+                heap.push(Reverse((c + step, t)));
+            }
+        }
+    }
+    if cost[b] == u32::MAX {
+        return;
+    }
+    let mut way = vec![b];
+    while *way.last().unwrap() != a {
+        way.push(came[*way.last().unwrap()]);
+    }
+    let wide = |k: usize| noise(seed ^ 0x77b1, k % nx, k / nx, 6.0) > 0.5;
+    for &k in &way {
+        for t in around(k, nx, ny).chain(std::iter::once(k)) {
+            if ok(t) && w[t] == DRY {
+                w[t] = SHALLOW;
+            }
+        }
+        if wide(k) {
+            for t in around(k, nx, ny).flat_map(|m| around(m, nx, ny)) {
+                if ok(t) && w[t] == DRY {
+                    w[t] = SHALLOW;
+                }
+            }
+        }
+    }
+    for &k in &way {
+        if e[k] >= 2 {
+            w[k] = DEEP;
+            for t in neighbours(k, nx, ny) {
+                if wide(t) && e[t] >= 3 && ok(t) {
+                    w[t] = DEEP;
+                }
+            }
+        }
+    }
+}
+
 fn pool(p: &Plan, ny: usize, w: &mut [[f32; 2]], r: i16, h: &dyn Fn(usize) -> f64, deep: bool) {
     let sq = depths(p, ny, r);
     let mut hs: Vec<f64> = sq.iter().map(|s| h(s.0)).collect();
@@ -556,22 +672,27 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
     let n = nx * ny;
     let mut p = Plan::new(nx, ny, arrive, true);
     // The region: in from the grid's edge by one to four squares (a ragged outline), less a few masses of rock; all
-    // round the arrival.
+    // round the arrival. Bigger masses of solid rock no chamber grows over lie between groups of chambers: tunnels
+    // dug through them join the groups.
     let rs = rng.next_u32() as u64;
+    let near_arrival = |k: usize| {
+        let (di, dj) = ((k % nx).abs_diff(arrive % nx), (k / nx).abs_diff(arrive / nx));
+        di * di + dj * dj <= 20
+    };
     let region: Vec<bool> = (0..n)
         .map(|k| {
             let (i, j) = (k % nx, k / nx);
             let edge = i.min(j).min(nx - 1 - i).min(ny - 1 - j) as f64;
-            let (di, dj) = (i.abs_diff(arrive % nx), j.abs_diff(arrive / nx));
-            di * di + dj * dj <= 20 || (edge >= 1.0 + 3.5 * noise(rs, i, j, 6.0) && noise(rs ^ 0x9e37, i, j, 7.0) < 0.74)
+            near_arrival(k) || (edge >= 1.0 + 3.5 * noise(rs, i, j, 6.0) && noise(rs ^ 0x9e37, i, j, 7.0) < 0.74)
         })
         .collect();
+    let solid: Vec<bool> = (0..n).map(|k| !near_arrival(k) && noise(rs ^ 0x7f4a, k % nx, k / nx, 13.0) > SOLID).collect();
     let raise = match theme.key {
         "flooded" => 0.2,
         "beast_den" => 0.3,
         _ => 0.25,
     };
-    let c = Caverns { kinds: theme.kinds, ledge: theme.ledge, spacing: 11.0, seeds: &[arrive], raise, squeeze: 0.3, loops: 0.45, reach: 7, dead_end: last };
+    let c = Caverns { kinds: theme.kinds, ledge: theme.ledge, spacing: 11.0, seeds: &[arrive], raise, squeeze: 0.3, loops: 0.45, reach: 9, dead_end: last, solid: &solid };
     let g = caverns(&mut p, ny, &region, &c, rng);
     if p.cells[arrive] < 0 || (last && g.end.is_none()) {
         // (Never on a grid big enough for a few chambers: the open squares as a natural level.)
@@ -627,11 +748,17 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
     let h = |k: usize| noise(hs, k % nx, k / nx, 7.0);
     let mut w = vec![DRY; n];
     let down_room = p.down.map(|k| p.cells[k]);
-    let size = |p: &Plan, r: i16| p.cells.iter().filter(|&&c| c == r).count();
-    let low = |p: &Plan, r: i16| {
-        let sq: Vec<usize> = (0..n).filter(|&k| p.cells[k] == r).collect();
-        sq.iter().map(|&k| h(k)).sum::<f64>() / sq.len().max(1) as f64
-    };
+    // (Each room's squares and mean noise height: the low ground.)
+    let mut sizes = vec![0usize; p.rooms.len()];
+    let mut sum_h = vec![0.0f64; p.rooms.len()];
+    for k in 0..n {
+        if p.cells[k] >= 0 {
+            sizes[p.cells[k] as usize] += 1;
+            sum_h[p.cells[k] as usize] += h(k);
+        }
+    }
+    let size = |r: i16| sizes[r as usize];
+    let low = |r: i16| sum_h[r as usize] / sizes[r as usize].max(1) as f64;
     // (Chambers water may fill: on the floor, not the arrival's, the boss's nor the way down's.)
     let mut wet: Vec<i16> = g.rooms.iter().copied().filter(|&r| p.rooms[r as usize].raise == 0.0 && r as usize != a && Some(r) != boss && Some(r) != down_room).collect();
     let mut lakes: Vec<i16> = Vec::new();
@@ -645,23 +772,17 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
     };
     match theme.key {
         "flooded" => {
-            // Most of the floor shallow, deep channels along stretches of a noise contour (open-ended: few pockets cut off),
-            // dry patches on the high ground.
+            // About half the floor wet: shallow pools on the low ground with dry banks and shingle between, a stream
+            // running deep through the chambers (shallow at their edges and through the narrows, so it is waded round
+            // or crossed), and an underground lake.
             for k in 0..n {
                 let r = p.cells[k];
-                if r < 0 || p.rooms[r as usize].raise > 0.0 || Some(r) == boss {
-                    continue;
+                if r >= 0 && p.rooms[r as usize].raise == 0.0 && Some(r) != boss && h(k) < POOLS {
+                    w[k] = SHALLOW;
                 }
-                let v = h(k);
-                w[k] = if v > 0.7 {
-                    DRY
-                } else if (v - 0.52).abs() < 0.05 && noise(hs ^ 0x51ed, k % nx, k / nx, 9.0) > 0.5 && r as usize != a {
-                    DEEP
-                } else {
-                    SHALLOW
-                };
             }
-            if let Some(&r) = wet.iter().max_by_key(|&&r| (size(&p, r), -r)) {
+            stream(&p, ny, &mut w, a as i16, boss, hs, rng);
+            if let Some(&r) = wet.iter().max_by_key(|&&r| (size(r), -r)) {
                 lakes.push(r);
                 lay_lake(&p, &mut w, r, 0.6, false, rng);
             }
@@ -670,14 +791,14 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
             if rng.next_f64() < 0.35 && !wet.is_empty() {
                 // A lake on the low ground: of the bigger chambers, the lowest.
                 let mut big = wet.clone();
-                big.sort_by_key(|&r| (std::cmp::Reverse(size(&p, r)), r));
+                big.sort_by_key(|&r| (std::cmp::Reverse(size(r)), r));
                 big.truncate(big.len().div_ceil(3));
-                let r = *big.iter().min_by(|&&x, &&y| low(&p, x).total_cmp(&low(&p, y)).then(x.cmp(&y))).unwrap();
+                let r = *big.iter().min_by(|&&x, &&y| low(x).total_cmp(&low(y)).then(x.cmp(&y))).unwrap();
                 lakes.push(r);
                 lay_lake(&p, &mut w, r, 0.5, false, rng);
                 wet.retain(|&x| x != r);
             }
-            wet.sort_by(|&x, &y| low(&p, x).total_cmp(&low(&p, y)).then(x.cmp(&y)));
+            wet.sort_by(|&x, &y| low(x).total_cmp(&low(y)).then(x.cmp(&y)));
             for &r in wet.iter().take(1 + rng.below(2) as usize) {
                 pool(&p, ny, &mut w, r, &h, true);
             }
@@ -697,13 +818,43 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
         lay_lake(&p, &mut w, b, 1.0, true, rng);
         lakes.push(b);
     }
-    // Islands: a room of their own (the boss's, the lake round it then a chamber of the theme's).
-    for (sq, is_boss) in islands {
+    // Islands: a room of their own (the boss's, the lake round it then a chamber of the theme's). The boss keeps one
+    // piece of its island, the biggest; the rest go under the lake (no ford between two pieces, reached through it).
+    for (mut sq, is_boss) in islands {
         let r = p.cells[sq[0]];
         if is_boss {
+            let mut piece = vec![u16::MAX; n];
+            let mut count: Vec<usize> = Vec::new();
+            let on: crate::core::hash::FastSet<usize> = sq.iter().copied().collect();
+            for &s in &sq {
+                if piece[s] != u16::MAX {
+                    continue;
+                }
+                let id = count.len() as u16;
+                piece[s] = id;
+                let mut todo = vec![s];
+                let mut c = 0;
+                while let Some(k) = todo.pop() {
+                    c += 1;
+                    for t in neighbours(k, nx, ny) {
+                        if piece[t] == u16::MAX && on.contains(&t) {
+                            piece[t] = id;
+                            todo.push(t);
+                        }
+                    }
+                }
+                count.push(c);
+            }
+            let keep = (0..count.len()).max_by_key(|&i| (count[i], usize::MAX - i)).unwrap_or(0) as u16;
+            for &k in &sq {
+                if piece[k] != keep {
+                    w[k] = DEEP;
+                }
+            }
+            sq.retain(|&k| piece[k] == keep);
             let lake_room = p.room(theme.kinds[0], 0.0);
             for k in 0..n {
-                if p.cells[k] == r && !sq.contains(&k) {
+                if p.cells[k] == r && piece[k] != keep {
                     p.cells[k] = lake_room;
                 }
             }
@@ -712,6 +863,26 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
             for &k in &sq {
                 p.cells[k] = isle;
             }
+        }
+    }
+    // Rooms named for water hold some (a pool chamber with none is a dry chamber of the theme's; in a cave, a chamber
+    // with a pool its pool chamber).
+    let watery = |kind: &str| matches!(kind, "pool chamber" | "sump" | "flooded cavern");
+    let dry: Vec<&'static str> = theme.kinds.iter().copied().filter(|k| !watery(k)).collect();
+    let mut wet_sq = vec![0usize; p.rooms.len()];
+    let mut all_sq = vec![0usize; p.rooms.len()];
+    for k in 0..n {
+        if p.cells[k] >= 0 {
+            all_sq[p.cells[k] as usize] += 1;
+            wet_sq[p.cells[k] as usize] += (w[k] != DRY) as usize;
+        }
+    }
+    for r in 0..p.rooms.len() {
+        let (kind, share) = (p.rooms[r].kind, wet_sq[r] as f64 / all_sq[r].max(1) as f64);
+        if watery(kind) && share < 0.2 {
+            p.rooms[r].kind = if dry.is_empty() { "cavern" } else { dry[r % dry.len()] };
+        } else if !watery(kind) && kind != BOSS && p.rooms[r].raise == 0.0 && share >= 0.3 && theme.kinds.contains(&"pool chamber") && !lakes.contains(&(r as i16)) {
+            p.rooms[r].kind = "pool chamber";
         }
     }
     // Cover: rock columns and stalagmites (crystal clusters, ice) standing in the big chambers, off the edges.
@@ -725,7 +896,7 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
             continue;
         }
         let inner: Vec<usize> = depths(&p, ny, r).into_iter().filter(|s| s.1 >= 3).map(|s| s.0).collect();
-        let squares = size(&p, r);
+        let squares = (0..n).filter(|&k| p.cells[k] == r).count();
         if squares < 50 || inner.is_empty() {
             continue;
         }

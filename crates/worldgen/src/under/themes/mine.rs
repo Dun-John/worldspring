@@ -480,7 +480,7 @@ pub(crate) fn mine(nx: usize, ny: usize, arrive: usize, d: usize, last: bool, li
                     !shy[k] && g.p.cells[k] < 0 && dx * dx + dy * dy <= r * r
                 })
                 .collect();
-            let cv = Caverns { kinds: &CAVE, ledge: "", spacing: 8.0, seeds: &[], raise: 0.0, squeeze: 0.3, loops: 0.4, reach: 6, dead_end: false };
+            let cv = Caverns { kinds: &CAVE, ledge: "", spacing: 8.0, seeds: &[], raise: 0.0, squeeze: 0.3, loops: 0.4, reach: 6, dead_end: false, solid: &[] };
             let grown = caverns(&mut g.p, ny, &region, &cv, rng);
             for j in &grown.joins {
                 if j.a < 0 || j.b < 0 {
