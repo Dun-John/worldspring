@@ -3044,11 +3044,13 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     let channel = hw.max(40.0);
                     // Clear of every pier (both banks), of facing piers by the channel, of bridges
                     // and their approaches, fords and ferries by 30 ft.
-                    free = l.piers.iter().all(|pp| poly_gap(pp, &pier) > 0.0)
-                        && l.piers.iter().zip(&pier_dirs).all(|(pp, &pd)| dot(pd, out) >= 0.0 || poly_gap(pp, &pier) >= channel)
+                    free = l.piers.iter().zip(&pier_dirs).all(|(pp, &pd)| dot(pd, out) >= 0.0 || poly_gap(pp, &pier) >= channel)
                         && l.bridges.iter().all(|d| poly_gap(d, &pier) >= 30.0)
                         && !(0..=8).any(|j| site.near_network_road(add(base, mul(out, length * j as f64 / 8.0)), 36.0));
                 }
+                // No pier on any water touches or crosses another (6 ft between outlines): at a patch
+                // corner the later one is dropped.
+                free = free && l.piers.iter().all(|pp| poly_gap(pp, &pier) >= 6.0);
                 if over_water && clear && free {
                     l.piers.push(pier);
                     pier_dirs.push(out);
