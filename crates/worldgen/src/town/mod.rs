@@ -1951,6 +1951,11 @@ struct TownPlan {
     /// Faces on the water (or too small to keep).
     wet: Vec<bool>,
     face_ok: Vec<bool>,
+    /// Town patch sides facing a patch on the water with water beyond them (corner pairs, lower
+    /// first): a quay on the shore, not the wall.
+    shore: FastSet<(usize, usize)>,
+    /// Town patches on the water amid the town (no run of them to the outskirts): no wall round them.
+    enclosed: Vec<bool>,
     /// Corners that never move (on the water or a river).
     pinned: Vec<bool>,
     walled: bool,
@@ -2024,6 +2029,22 @@ impl TownPlan {
     fn roll(&self, i: usize, stage: i64) -> f64 {
         unit(hash3(self.pseed, i as i64, stage, 0x9a7c))
     }
+}
+
+/// Water (the sea, a lake or a river's channel) on a patch side from `a` to `b` or beyond it, away
+/// from `inside` (its patch's middle): at two neighbouring points of those every 15 ft out to 120 ft
+/// from the side's middle (not a fleck on flat ground at the water's level).
+fn water_beyond(site: &Site, a: P, b: P, inside: P) -> bool {
+    let (mid, el) = (lerp(a, b, 0.5), dist(a, b));
+    if el < 1e-6 {
+        return site.wet(mid);
+    }
+    let mut out = [(a[1] - b[1]) / el, (b[0] - a[0]) / el];
+    if dot(out, sub(mid, inside)) < 0.0 {
+        out = mul(out, -1.0);
+    }
+    let wet: Vec<bool> = (0..=8).map(|k| site.wet(add(mid, mul(out, 15.0 * k as f64)))).collect();
+    wet.windows(2).any(|w| w[0] && w[1])
 }
 
 fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &mut Pcg32) -> TownPlan {
@@ -2140,6 +2161,41 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         .collect();
     let face_ok: Vec<bool> = mesh.faces.iter().map(|f| f.len() >= 3).collect();
     let usable = |i: usize| i < n_inner && !wet[i] && face_ok[i];
+    // A patch is on the water by its middle; a town patch's side facing one is on the shore (a
+    // quay, no wall) only where water lies beyond it. A town patch on the water with no run of
+    // such patches out to the outskirts (a river or lake patch amid the town) is ground the town
+    // encloses: no wall round it.
+    let mut enclosed: Vec<bool> = (0..total).map(|i| i < n_inner && wet[i] && face_ok[i]).collect();
+    let mut open: Vec<usize> = (0..n_inner).filter(|&i| enclosed[i] && mesh.labels[i].iter().any(|&j| !inner(j))).collect();
+    while let Some(i) = open.pop() {
+        if enclosed[i] {
+            enclosed[i] = false;
+            open.extend(mesh.labels[i].iter().filter(|&&j| inner(j) && enclosed[j as usize]).map(|&j| j as usize));
+        }
+    }
+    let mut shore_sides: FastSet<(usize, usize)> = Default::default();
+    for i in (0..n_inner).filter(|&i| usable(i)) {
+        let (face, cen) = (&mesh.faces[i], centroid(&mesh.face_pts(i)));
+        for e in 0..face.len() {
+            let nb = mesh.labels[i][e];
+            let (a, b) = (face[e], face[(e + 1) % face.len()]);
+            if nb >= 0 && wet[nb as usize] && water_beyond(site, mesh.pos[a], mesh.pos[b], cen) {
+                shore_sides.insert((a.min(b), a.max(b)));
+            }
+        }
+    }
+    // (Per patch side: by the water or that enclosed ground, so not on the wall.)
+    let by_water: Vec<Vec<bool>> = (0..total)
+        .map(|i| {
+            let f = &mesh.faces[i];
+            (0..f.len())
+                .map(|e| {
+                    let (nb, a, b) = (mesh.labels[i][e], f[e], f[(e + 1) % f.len()]);
+                    nb >= 0 && wet[nb as usize] && (enclosed[nb as usize] || shore_sides.contains(&(a.min(b), a.max(b))))
+                })
+                .collect()
+        })
+        .collect();
     // Edges on the river channel, and vertices that must not move (water, river).
     let mut river_edge: FastSet<(usize, usize)> = Default::default();
     for face in &mesh.faces {
@@ -2154,7 +2210,9 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
     let is_river_edge = |a: usize, b: usize| river_edge.contains(&(a.min(b), a.max(b)));
     let pinned: Vec<bool> = (0..mesh.pos.len()).map(|v| site.near_river(mesh.pos[v], 0.3 * spacing) || vf[v].iter().any(|&f| wet[f])).collect();
 
-    // Wall ring: edges of city patches that face the outskirts (open where water guards).
+    // Wall ring: edges of city patches that face the outskirts (open where water guards: not on a
+    // side along the river; one the river crosses has its wall cut at the banks, `walls_off_river`).
+    let along_river = |a: usize, b: usize| is_river_edge(a, b) && [0.25, 0.75].iter().all(|&t| site.near_river(lerp(mesh.pos[a], mesh.pos[b], t), 2.0));
     let walled = s.tier >= Tier::City || rng.next_f64() < 0.4;
     let mut edge_next: BTreeMap<usize, usize> = BTreeMap::new();
     for i in (0..n_inner).filter(|&i| usable(i)) {
@@ -2163,9 +2221,8 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         for e in 0..m {
             let nb = lb[e];
             let outside = !inner(nb) || wet[nb as usize];
-            let water_edge = nb >= 0 && wet[nb as usize];
             let (a, b) = (face[e], face[(e + 1) % m]);
-            if outside && !water_edge && !is_river_edge(a, b) {
+            if outside && !by_water[i][e] && !along_river(a, b) {
                 edge_next.insert(a, b);
             }
         }
@@ -2193,7 +2250,8 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
             chain.push(nx);
             cur = nx;
         }
-        if chain.len() >= 3 {
+        // (A run of one side, between the water at both ends, if a long one.)
+        if chain.len() >= 3 || (chain.len() == 2 && dist(mesh.pos[chain[0]], mesh.pos[chain[1]]) >= 50.0) {
             chains.push((chain, closed));
         }
     }
@@ -2328,7 +2386,7 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
             let f = &mesh.faces[i];
             (0..f.len()).any(|e| {
                 let nb = labels[i][e];
-                ring.contains(&f[e]) && ring.contains(&f[(e + 1) % f.len()]) && (nb < 0 || nb as usize >= n_inner) && (nb >= 0 && wet[nb as usize]) == shore
+                ring.contains(&f[e]) && ring.contains(&f[(e + 1) % f.len()]) && (nb < 0 || nb as usize >= n_inner) && by_water[i][e] == shore
             })
         };
         let wall_side = |i: usize| wall_sides(i, false) && !wall_sides(i, true);
@@ -2770,6 +2828,8 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         n_inner,
         wet,
         face_ok,
+        shore: shore_sides,
+        enclosed,
         pinned,
         walled,
         wall_runs,
@@ -2989,8 +3049,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         let m = c.pts.len();
         let cen = centroid(&c.pts);
         for e in 0..m {
-            let nb = c.labels[e];
-            if nb < 0 || !wet[nb as usize] {
+            let (va, vb) = edge_v(i, e);
+            if c.labels[e] < 0 || !plan.shore.contains(&(va.min(vb), va.max(vb))) {
                 continue;
             }
             let (a, b) = (c.pts[e], c.pts[(e + 1) % m]);
@@ -3124,7 +3184,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     return site.nearest_river(mid).map_or(20.0, |r| r.2) + 16.0;
                 }
                 // On the sea or a lake: a 14 ft quay between the block and the water.
-                if nb >= 0 && wet[nb as usize] {
+                if nb >= 0 && plan.shore.contains(&(va.min(vb), va.max(vb))) {
                     return 14.0;
                 }
                 if w == Ward::Farm {
@@ -3141,7 +3201,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     return 0.0;
                 }
                 // (A planned wall taken down leaves its strip as a street round the town.)
-                let wall = (walled || plan.walled) && i < n_inner && (!plan.inner(nb) || wet[nb as usize]);
+                // (Nor round the water the town encloses.)
+                let wall = (walled || plan.walled) && i < n_inner && (!plan.inner(nb) || (wet[nb as usize] && !plan.enclosed[nb as usize]));
                 back[e] = (if main { 12.0 } else { 7.0 }) + if wall { 18.0 } else { 0.0 };
                 // A castle's side on the town wall: that wall is the castle's there (`castle`; with
                 // the wall taken down, a curtain of its own on that side).
