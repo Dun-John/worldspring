@@ -1,6 +1,7 @@
 // Dev tool: the README's pictures (docs/media/), from the running dev server: one zoom from the
 // whole continent down to an inn's battlemap and inside it (zoom.gif, needs ffmpeg), and stills of
-// the continent, a city, a street battlemap, the inn's interior and a dungeon.
+// the continent, a city, a street battlemap, the inn's interior and underground sites (a dungeon,
+// a cave, a mine, a lava tube or a crypt: the biggest of each).
 // Usage: node scripts/readme-media.mjs [url]   (default http://localhost:5173/?seed=1)
 // Each frame is taken once the map has drawn everything in view, so the GIF is smooth however
 // slow the generation is.
@@ -146,24 +147,28 @@ try {
   await sleep(500);
   await settle();
   await shot(join(out, 'city.png'));
-  const dungeon = await evaluate(`(async () => {
+  // The biggest underground site of each kind: a dungeon, a cave, a mine, a lava tube (or a crypt).
+  const unders = await evaluate(`(async () => {
     const m = window.__map, f = m.overlay.features;
     const towns = f.filter((x) => ['metropolis', 'city', 'town', 'village'].includes(x.kind)).length;
     const sites = f.filter((x) => ['ruin', 'tower', 'waystation', 'camp', 'cave', 'mine', 'lava_tube'].includes(x.kind) && !x.id.startsWith('c:'));
-    let best = null;
+    const best = {};
     for (let k = 0; k < sites.length; k++) {
-      if (sites[k].kind !== 'ruin') continue;
       const id = 'u:' + (towns + k) + ':0';
       const it = await m.gen.interior(id);
-      if (it && it.function === 'dungeon' && (!best || it.nx * it.ny > best.n)) best = { id, n: it.nx * it.ny };
+      if (it && (!best[it.function] || it.nx * it.ny > best[it.function].n)) best[it.function] = { id, n: it.nx * it.ny };
     }
-    // (Going in frames the level.)
-    return best && (await m.enterBuilding(best.id)) ? best.id : null;
+    return Object.fromEntries(Object.entries(best).map(([k, v]) => [k, v.id]));
   })()`);
-  if (dungeon) {
+  console.log('underground:', JSON.stringify(unders));
+  const wanted = ['dungeon', 'cave', 'mine', 'lava tube', 'crypt', 'catacombs'].filter((k) => unders[k]).slice(0, 4);
+  for (const kind of wanted) {
+    // (Going in frames the level.)
+    await evaluate('window.__map.exitBuilding()');
+    if (!(await evaluate(`window.__map.enterBuilding(${JSON.stringify(unders[kind])})`))) continue;
     await still();
     await settle();
-    await shot(join(out, 'dungeon.png'));
+    await shot(join(out, `${kind.replace(' ', '-')}.png`));
   }
 
   // Every zoom frame differs from the last, so the size goes by frames and pixels: 10 fps, 560 px

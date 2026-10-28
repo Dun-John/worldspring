@@ -21,7 +21,12 @@ It's free, needs no account, and works on a laptop, tablet or phone with a curre
 | ![A street battlemap](docs/media/battlemap.png) | ![Inside an inn](docs/media/interior.png) |
 | **Battlemaps** everywhere, on a 5-ft grid. | **Inside every building**, floor by floor. |
 
-![A dungeon under a ruin](docs/media/dungeon.png)
+| | |
+|---|---|
+| ![A dungeon under a ruin](docs/media/dungeon.png) | ![A cave of grottoes and mycelium halls](docs/media/cave.png) |
+| **Dungeons** under ruins, crypts and catacombs, level by level. | **Caves** grown from the rock, with pools, ledges and grottoes. |
+| ![A mine along its haulage way](docs/media/mine.png) | ![A lava tube](docs/media/lava-tube.png) |
+| **Mines** along their ore veins, with a station, lift and break-ins. | **Lava tubes** under volcanic ground, with their chambers. |
 
 ## Getting around
 
