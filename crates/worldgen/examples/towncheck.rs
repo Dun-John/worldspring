@@ -9,6 +9,7 @@
 //!   buildings; the outer gate's distance to the nearest street or way; the outer bailey's width
 //!   and the inner curtain's distance to the outer gate; castles with no keep; mottes with
 //!   objects on them (from the battlemap); and a few more (spikes, keep tops left open, ids twice).
+//!   Every town's quays with no water beyond them, and walled towns' rings with no wall on dry ground.
 //! - `reach`: each castle's battlemap round it, flooded as play mode blocks movement (buildings,
 //!   walls, towers, blocking objects, a hedge every square it is drawn across) from the window's
 //!   edge and its streets, so from outside the outer gate: castle buildings cut off, outer gates
@@ -873,6 +874,7 @@ fn castles(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&CASTLE_MORE);
     r.counts(&["mottes", "objects on a motte's toe (its last 8 ft)"]);
     r.counts(&CASTLE_SPOTS);
+    r.counts(&TOWN_RING);
     let n = town::layout_count(&ctx.ex.t0);
     for li in 0..n {
         let l = town::layout(&ctx.ex.world, &ctx.ex.t0, li);
@@ -880,6 +882,7 @@ fn castles(ctx: &mut Ctx, r: &mut Report) {
             continue;
         }
         castle_spot(ctx, &l, &format!("L{li} {:?}", l.tier), r);
+        town_ring(ctx, &l, li, &format!("L{li} {:?}", l.tier), r);
         if l.castles.is_empty() {
             continue;
         }
@@ -887,6 +890,93 @@ fn castles(ctx: &mut Ctx, r: &mut Report) {
         let tag = format!("L{li} {:?}", l.tier);
         castle_checks(&ctx.ex.world, &ctx.ex.t0, &l, &tag, capital, r);
         motte_objects(ctx, &l, &tag, r);
+    }
+}
+
+const TOWN_RING: [&str; 5] = [
+    "walled towns",
+    "town-wall ring sides",
+    "town-wall ring sides with 15 ft+ of dry ground and no wall (gates aside)",
+    "quays",
+    "quays with no water beyond them (a paved strip on dry ground)",
+];
+
+/// A town's quays all on the water; and a walled town's ring (the sides of its patches facing out
+/// of town): every dry stretch of it has the wall on it (a town wall or a castle's curtain there),
+/// but at its gates.
+fn town_ring(ctx: &Ctx, l: &Layout, li: usize, tag: &str, r: &mut Report) {
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    // (The rivers' channels as `town` follows them.)
+    let reach = 2.0 * l.radius + 1000.0;
+    let mut river: Vec<(P, P, f64)> = Vec::new();
+    for (ri, k) in t0.rivers.segments_near(l.center[0] - reach, l.center[1] - reach, l.center[0] + reach, l.center[1] + reach, 0.0) {
+        let rc = &t0.rivers.rivers[ri as usize];
+        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 20.0).ceil().clamp(2.0, 1200.0) as usize;
+        let pts: Vec<(P, f64)> = (0..=n).map(|j| rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft)).map(|c| (c.p, c.w)).collect();
+        river.extend(pts.windows(2).map(|s| (s[0].0, s[1].0, 0.5 * s[0].1.max(s[1].1))));
+    }
+    let by_water = |p: P| {
+        river.iter().any(|&(a, b, hw)| seg_dist(p, a, b) <= hw + 25.0)
+            || wet(p)
+            || [12.0, 25.0].iter().any(|&d| {
+                (0..8).any(|k| {
+                    let a = k as f64 * 0.785;
+                    wet(add(p, [d * libm::cos(a), d * libm::sin(a)]))
+                })
+            })
+    };
+    // (Water beyond a side at `mid`, out to 150 ft: a patch of the sea, a lake or a harbour.)
+    let water_beyond = |mid: P, out: P| [0.0, 30.0, 60.0, 100.0, 150.0].iter().any(|&d| by_water(add(mid, mul(out, d))));
+    for q in l.plazas.iter().filter(|q| q.kind == PlazaKind::Quay && q.pts.len() == 4) {
+        r.tally("quays", 1);
+        let out = mul(sub(q.pts[0], q.pts[3]), 1.0 / dist(q.pts[0], q.pts[3]).max(1e-9));
+        let mid = lerp(q.pts[0], q.pts[1], 0.5);
+        if !water_beyond(mid, out) {
+            r.add("quays with no water beyond them (a paved strip on dry ground)", dist(q.pts[0], q.pts[1]), format!("{tag}: {:.0} ft at {}", dist(q.pts[0], q.pts[1]), at(mid)));
+        }
+    }
+    if l.walls.is_empty() {
+        return;
+    }
+    let Ok(plan) = town::wards::plan_json(world, t0, li) else { return };
+    if plan["walls"]["built"] != true {
+        return;
+    }
+    r.tally("walled towns", 1);
+    let pt = |v: &serde_json::Value| -> P { [v[0].as_f64().unwrap_or(0.0), v[1].as_f64().unwrap_or(0.0)] };
+    let corners: HashMap<u64, P> = plan["corners"].as_array().into_iter().flatten().filter_map(|c| Some((c["corner"].as_u64()?, pt(&c["at"])))).collect();
+    // (Each patch's sides, and whether its corners run anticlockwise.)
+    let mut sides: Vec<(u64, u64, bool)> = Vec::new();
+    for p in plan["patches"].as_array().into_iter().flatten().filter(|p| p["in_town"] == true) {
+        let cs: Vec<u64> = p["corners"].as_array().into_iter().flatten().filter_map(|c| c.as_u64()).collect();
+        let ccw = area(&cs.iter().filter_map(|c| corners.get(c).copied()).collect::<Vec<_>>()) > 0.0;
+        sides.extend((0..cs.len()).map(|k| (cs[k], cs[(k + 1) % cs.len()], ccw)));
+    }
+    let shared: std::collections::HashSet<(u64, u64)> = sides.iter().map(|s| (s.0, s.1)).collect();
+    let walls: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
+    let by_gate = |p: P| l.gates.iter().any(|g| dist(*g, p) < 60.0);
+    for &(a, b, ccw) in sides.iter().filter(|(a, b, _)| !shared.contains(&(*b, *a))) {
+        let (Some(&pa), Some(&pb)) = (corners.get(&a), corners.get(&b)) else { continue };
+        r.tally("town-wall ring sides", 1);
+        let u = mul(sub(pb, pa), 1.0 / dist(pa, pb).max(1e-9));
+        if water_beyond(lerp(pa, pb, 0.5), if ccw { [u[1], -u[0]] } else { [-u[1], u[0]] }) {
+            continue;
+        }
+        let (mut bare, mut run, mut first) = (0.0f64, 0.0, None);
+        for (p, _) in samples(&[pa, pb], 5.0) {
+            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 8.0) {
+                run = 0.0;
+            } else {
+                run += 5.0;
+                bare = bare.max(run);
+                first.get_or_insert(p);
+            }
+        }
+        if bare >= 15.0 {
+            r.add("town-wall ring sides with 15 ft+ of dry ground and no wall (gates aside)", bare, format!("{tag}: {bare:.0} ft from {}", at(first.unwrap_or(pa))));
+        }
     }
 }
 

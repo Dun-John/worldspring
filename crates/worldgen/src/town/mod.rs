@@ -2133,7 +2133,11 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
     mesh.collapse_short_edges((0.3 * spacing).min(100.0));
     let vf = mesh.vertex_faces();
     let inner = |j: i32| j >= 0 && (j as usize) < n_inner;
-    let wet: Vec<bool> = (0..total).map(|i| mesh.faces[i].len() < 3 || site.wet(centroid(&mesh.face_pts(i)))).collect();
+    // (An outer cell left empty, reaching past the outskirts, is water only if its seed is: it
+    // is the country beyond the wall, which stands along it.)
+    let wet: Vec<bool> = (0..total)
+        .map(|i| if mesh.faces[i].len() < 3 { i < n_inner || site.wet(sites[i]) } else { site.wet(centroid(&mesh.face_pts(i))) })
+        .collect();
     let face_ok: Vec<bool> = mesh.faces.iter().map(|f| f.len() >= 3).collect();
     let usable = |i: usize| i < n_inner && !wet[i] && face_ok[i];
     // Edges on the river channel, and vertices that must not move (water, river).

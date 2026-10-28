@@ -193,6 +193,12 @@ pub(super) fn castle<G: Ground>(
                 continue;
             }
             let u = mul(sub(b, a), 1.0 / el);
+            // (Not a stretch only leading up to a corner, wholly beyond the bound along its way:
+            // the cut would shave off the whole side it points along, the town wall's among them.)
+            let (lo, hi) = outer.iter().fold((f64::MAX, f64::MIN), |r, p| (r.0.min(dot(*p, u)), r.1.max(dot(*p, u))));
+            if dot(b, u).min(hi) - dot(a, u).max(lo) <= 0.0 {
+                continue;
+            }
             let nrm = [-u[1], u[0]];
             let nrm = if dot(sub(centroid(&outer), a), nrm) >= 0.0 { nrm } else { mul(nrm, -1.0) };
             let cut = clip_plain(&outer, mul(nrm, -1.0), -(dot(a, nrm) + clear));
