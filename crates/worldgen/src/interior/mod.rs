@@ -1178,10 +1178,15 @@ fn zone_plan(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town::Bu
             .flat_map(|(pts, _, w)| pts.windows(2).map(move |s| geom::seg_dist(p, s[0], s[1]) - 0.5 * w))
             .fold(f64::MAX, f64::min)
     };
+    // (A keep built against its castle's curtain or set into it fronts on the bailey, not the
+    // curtain: no side within 8 ft of the bailey's edge.)
+    let bailey: Option<&Vec<P>> = b.keep.and_then(|_| l.plazas.iter().find(|q| q.kind == town::PlazaKind::Bailey && geom::contains(&q.pts, geom::centroid(&b.poly))).map(|q| &q.pts));
+    let by_curtain = |w: P| bailey.is_some_and(|q| (0..q.len()).any(|k| geom::seg_dist(w, q[k], q[(k + 1) % q.len()]) < 8.0));
     let near = |p: P| {
         let w = sh.world_at(p[0], p[1]);
         let d = street_d(w);
-        if d < 80.0 { d } else { 1e4 + geom::dist(w, l.center) }
+        let d = if d < 80.0 { d } else { 1e4 + geom::dist(w, l.center) };
+        if by_curtain(w) { d + 1e6 } else { d }
     };
     let ext_free = |i: isize, j: isize| sh.ext_free(i, j);
     let seed = hash3(world.stream("interior.hub"), town::rng_key(t0, settlement), b.id as i64, 0x4b);

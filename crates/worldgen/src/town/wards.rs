@@ -620,7 +620,8 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
     let max_area = areas.iter().cloned().fold(1.0, f64::max);
     let mut taken: Vec<bool> = fresh.iter().map(|&k| l.buildings[k].func.is_some()).collect();
     let mut named: Vec<usize> = Vec::new();
-    let castle_here = fresh.iter().any(|&k| l.buildings[k].ward == Ward::Castle);
+    // (Kept as generated or new: a castle with no new building still keeps its own.)
+    let castle_here = l.buildings.iter().any(|b| b.ward == Ward::Castle);
     for (fi, was, was_id, was_name, was_castle) in lost {
         let f = &CATALOG[fi];
         // (A castle's to a castle's building while one stands; the town's never to one.)

@@ -628,7 +628,9 @@ fn castle_checks(world: &World, t0: &T0, l: &Layout, tag: &str, capital: bool, r
         l.roads.iter().filter(|x| !c.is_way(x)).map(|x| (&x.0, x.2, format!("class {} road", x.1))).chain(l.streets.iter().map(|s| (s, 18.0, "main street".to_string()))).collect();
     for (bi, b) in l.buildings.iter().enumerate().filter(|(_, b)| b.ward == Ward::Castle) {
         let name = format!("b:{}:{}", l.index, b.id);
-        let wd = walls.iter().map(|s| if contains(&b.poly, s.0) { -1.0 } else { seg_poly(s.0, s.1, &b.poly) }).fold(f64::MAX, f64::min);
+        // (A keep set into the curtain: the curtain stops at its walls.)
+        let ends_on = |s: &(P, P)| b.keep.is_some() && [s.0, s.1].iter().any(|p| seg_poly(*p, *p, &b.poly) < 0.5);
+        let wd = walls.iter().filter(|s| !ends_on(s)).map(|s| if contains(&b.poly, s.0) { -1.0 } else { seg_poly(s.0, s.1, &b.poly) }).fold(f64::MAX, f64::min);
         r.measure("least castle building distance to a wall", true, wd, format!("{tag} {name}"));
         if wd < 4.0 {
             r.add("castle buildings within 4 ft of a wall", 4.0 - wd, format!("{tag}: {name} {wd:.1} ft from a wall at {}", at(centroid(&b.poly))));

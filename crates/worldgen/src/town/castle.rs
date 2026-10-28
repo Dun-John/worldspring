@@ -317,7 +317,7 @@ pub(super) fn castle<G: Ground>(
             street_dist(p).max(15.0) + 0.2 * dist(p, gate_toward)
         }
     };
-    let (t0, g0) = (l.towers.len(), l.gate_towers.len());
+    let (t0, g0, w0) = (l.towers.len(), l.gate_towers.len(), l.walls.len());
     // (A town's tower beside one of a castle it planned goes, below; else the castle's stands clear.)
     let gap = if set.planned { 4.0 } else { TOWERS_CLEAR };
     // A gate standing back from the streets (up the brow): a way from it to the nearest (`gate_way`);
@@ -438,12 +438,37 @@ pub(super) fn castle<G: Ground>(
     spots.truncate(16);
     // (A small court: its middle.)
     spots.push((c, 0.0));
+    // (A court too narrow for those: a small tower keep anywhere with room round it, the nearest
+    // the middle first.)
+    let mut more: Vec<(P, f64)> = survey.ranked(|p| inset_depth(court, p) >= SMALL_ROOM);
+    more.sort_by(|a, b| dist(a.0, c).total_cmp(&dist(b.0, c)));
+    more.truncate(24);
     let court_gate = *gates.last().unwrap_or(&outer_gate);
+    // (Every tower by the bailey, the town wall's as laid whether standing or not: the same keep
+    // either way.)
+    let near: Vec<(P, f64)> = laid
+        .1
+        .iter()
+        .copied()
+        .filter(|(t, _)| inset_depth(&ring, *t) > -40.0)
+        .chain(l.towers[t0..].iter().map(|t| (*t, if l.square_tower(*t).is_some() { 15.6 } else { 11.0 })))
+        .chain(l.gate_towers[g0..].iter().map(|t| (*t, 15.0)))
+        .chain(towers.iter().copied())
+        .collect();
+    // (The castle's own curtain round the court: not on a side along the town wall.)
+    let own: Vec<bool> = (0..court.len()).map(|e| inner.is_some() || !walled[e]).collect();
+    let curtain: Vec<(P, P)> = l.walls[w0..].iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
     let kept = if keep {
-        place_keep(site, court, &spots, axis, square, &towers, court_gate, prng)
+        place_keep(site, court, &spots, &more, axis, square, &towers, &near, &own, &curtain, &gates, &lanes, court_gate, prng)
     } else {
         None
     };
+    // (A keep set into the curtain: the curtain stops at its walls.)
+    if let Some((k, _)) = &kept {
+        let cut: Vec<Vec<P>> = l.walls[w0..].iter().flat_map(|w| cut_out(w, &k.poly)).collect();
+        l.walls.truncate(w0);
+        l.walls.extend(cut);
+    }
     if yard {
         let clear: Vec<P> = kept.as_ref().map(|k| k.0.poly.clone()).unwrap_or_default();
         let motte = kept.as_ref().and_then(|k| k.1);
@@ -762,6 +787,73 @@ fn ray_hit(poly: &[P], o: P, d: P) -> (f64, usize) {
         }
     }
     if best == f64::MAX { (0.0, 0) } else { (best, at) }
+}
+
+/// The pieces of polyline `line` outside convex `poly` (2 points at least each).
+fn cut_out(line: &[P], poly: &[P]) -> Vec<Vec<P>> {
+    let ccw = area(poly) > 0.0;
+    let m = poly.len();
+    // (The stretch of a segment inside the polygon: its parameters, if any.)
+    let clip = |a: P, b: P| -> Option<(f64, f64)> {
+        let (mut t0, mut t1) = (0.0f64, 1.0f64);
+        let d = sub(b, a);
+        for k in 0..m {
+            let (p, q) = (poly[k], poly[(k + 1) % m]);
+            let e = sub(q, p);
+            let s = if ccw { 1.0 } else { -1.0 };
+            // (Inside: to the left of each edge, anticlockwise.)
+            let num = s * cross(e, sub(a, p));
+            let den = s * cross(e, d);
+            if den.abs() < 1e-12 {
+                if num < 0.0 {
+                    return None;
+                }
+            } else {
+                let t = -num / den;
+                if den > 0.0 {
+                    t0 = t0.max(t);
+                } else {
+                    t1 = t1.min(t);
+                }
+            }
+        }
+        (t1 - t0 > 1e-9).then_some((t0, t1))
+    };
+    let mut out: Vec<Vec<P>> = Vec::new();
+    let mut cur: Vec<P> = Vec::new();
+    for s in line.windows(2) {
+        let (a, b) = (s[0], s[1]);
+        if cur.is_empty() && clip(a, a).is_none() {
+            cur.push(a);
+        }
+        match clip(a, b) {
+            None => {
+                if cur.is_empty() {
+                    cur.push(a);
+                }
+                cur.push(b);
+            }
+            Some((t0, t1)) => {
+                if t0 > 1e-9 {
+                    if cur.is_empty() {
+                        cur.push(a);
+                    }
+                    cur.push(lerp(a, b, t0));
+                }
+                if cur.len() >= 2 {
+                    out.push(std::mem::take(&mut cur));
+                }
+                cur.clear();
+                if t1 < 1.0 - 1e-9 {
+                    cur = vec![lerp(a, b, t1), b];
+                }
+            }
+        }
+    }
+    if cur.len() >= 2 {
+        out.push(cur);
+    }
+    out
 }
 
 /// Rays from `o`: evenly every 5 degrees, and at each corner of `poly` (so a ring keeping to it
@@ -1664,6 +1756,14 @@ const MOTTE_SLOPE: f64 = 36.0;
 
 /// Where a keep can stand: this far in from its curtain (ft).
 const KEEP_ROOM: f64 = 36.0;
+/// Where a small tower keep can stand when no spot `KEEP_ROOM` in holds a keep (ft).
+const SMALL_ROOM: f64 = 18.0;
+/// A keep built against the curtain: this far in from it (ft), and the lane kept open before its
+/// face (ft).
+const AGAINST: f64 = 6.0;
+const KEEP_LANE: f64 = 10.0;
+/// A keep set into the curtain: its outer face this far past the curtain's line (ft).
+const SUNK: f64 = 2.0;
 
 /// The keep: of a kind rolled (a shell keep in a small court now and then), as big as the court
 /// holds clear of its curtain (16 ft) and its towers, on the first of `spots` it fits (the highest
@@ -1671,7 +1771,22 @@ const KEEP_ROOM: f64 = 36.0;
 /// pieces) and a shell keep's motte, its way up and the shell's gate toward the court's gate
 /// (`gate`).
 #[allow(clippy::too_many_arguments)]
-fn place_keep<G: Ground>(site: &G, court: &[P], spots: &[(P, f64)], axis: P, square: bool, towers: &[(P, f64)], gate: P, prng: &mut Pcg32) -> Option<(Building, Option<Motte>)> {
+fn place_keep<G: Ground>(
+    site: &G,
+    court: &[P],
+    spots: &[(P, f64)],
+    more: &[(P, f64)],
+    axis: P,
+    square: bool,
+    towers: &[(P, f64)],
+    by_ring: &[(P, f64)],
+    own: &[bool],
+    curtain: &[(P, P)],
+    gates: &[P],
+    lanes: &[(P, P)],
+    gate: P,
+    prng: &mut Pcg32,
+) -> Option<(Building, Option<Motte>)> {
     const CLEAR: f64 = 16.0;
     let roll = prng.next_f64();
     let rolls: [f64; 6] = std::array::from_fn(|_| prng.next_f64());
@@ -1691,8 +1806,9 @@ fn place_keep<G: Ground>(site: &G, court: &[P], spots: &[(P, f64)], axis: P, squ
     let round = !square;
     let v = [-axis[1], axis[0]];
     let world = |c: P, q: P| add(c, add(mul(axis, q[0]), mul(v, q[1])));
-    // (Else a smaller great tower; in a court too small for one, a tower keep without corner towers.)
-    for (kind, clear_by) in [(first, CLEAR), (KeepKind::Great, CLEAR), (KeepKind::Plain, 8.0)] {
+    // (Else a smaller great tower; in a court too small for one, a tower keep without corner towers,
+    // last off the middle, between the curtain's towers: `more`.)
+    for (kind, clear_by, spots) in [(first, CLEAR, spots), (KeepKind::Great, CLEAR, spots), (KeepKind::Plain, 8.0, spots), (KeepKind::Plain, 8.0, more)] {
         for f in [1.0, 0.86, 0.74, 0.64, 0.55] {
             let fr = keep_frame(kind, f, &rolls, round);
             for &(c, _) in spots {
@@ -1765,6 +1881,73 @@ fn place_keep<G: Ground>(site: &G, court: &[P], spots: &[(P, f64)], axis: P, squ
                     keep: Some(kind),
                 };
                 return Some((b, motte));
+            }
+        }
+    }
+    // (Last, a court too narrow for one standing free: a tower keep built against the curtain, else
+    // set into it (on a side of the castle's own curtain, `own`, its outer face just past the
+    // curtain's line: `castle` cuts the curtain at it), on the sides farthest from the gate first,
+    // the middle of a side first, clear of every tower by the bailey (`by_ring`: the town wall's as
+    // laid too, standing or not) and of the gates and their ways, with a lane before its face.)
+    let n = court.len();
+    let ccw = area(court) > 0.0;
+    let mut sides: Vec<usize> = (0..n).filter(|&e| dist(court[e], court[(e + 1) % n]) >= 30.0).collect();
+    let far = |e: usize| dist(gate, lerp(court[e], court[(e + 1) % n], 0.5));
+    sides.sort_by(|&a, &b| far(b).total_cmp(&far(a)).then(a.cmp(&b)));
+    for (sunk, f) in [false, true].into_iter().flat_map(|k| [1.0, 0.86, 0.74, 0.64, 0.55].map(|f| (k, f))) {
+        let fr = keep_frame(KeepKind::Plain, f, &rolls, round);
+        let body = &fr.parts[0].0;
+        let hl = body.iter().map(|q| q[0]).fold(0.0, f64::max);
+        let hw = body.iter().map(|q| q[1]).fold(0.0, f64::max);
+        for &e in sides.iter().filter(|&&e| !sunk || own[e]) {
+            let (a, b) = (court[e], court[(e + 1) % n]);
+            let el = dist(a, b);
+            let d = mul(sub(b, a), 1.0 / el);
+            let inward = if ccw { [-d[1], d[0]] } else { [d[1], -d[0]] };
+            let steps = crate::core::floor((0.5 * el - hl) / 5.0) as i64;
+            for k in 0..=(2 * steps).max(-1) {
+                let off = 5.0 * ((k + 1) / 2) as f64 * if k % 2 == 1 { 1.0 } else { -1.0 };
+                let c = add(lerp(a, b, 0.5), add(mul(d, off), mul(inward, if sunk { hw - SUNK } else { AGAINST + hw })));
+                let at = |q: P| add(c, add(mul(d, q[0]), mul(inward, q[1])));
+                let mut poly: Vec<P> = body.iter().map(|q| at(*q)).collect();
+                if area(&poly) < 0.0 {
+                    poly.reverse();
+                }
+                let inside = poly.iter().all(|p| inset_depth(court, *p) >= if sunk { -SUNK - 0.5 } else { AGAINST - 0.5 }) && !court.iter().any(|p| contains(&poly, *p));
+                // (Set into the curtain where it stands all along the keep's outer face.)
+                let walled = !sunk || (0..=4).all(|j| {
+                    let p = add(lerp(at([-hl, -hw]), at([hl, -hw]), j as f64 / 4.0), mul(inward, SUNK));
+                    curtain.iter().any(|&(q, r)| seg_dist(p, q, r) < 1.5)
+                });
+                let off_towers = by_ring.iter().all(|(t, r)| inset_depth(&poly, *t) < -(r + 1.0));
+                let off_gates = gates.iter().all(|g| inset_depth(&poly, *g) < -GATE_HALF) && lanes.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 10.0 && !contains(&poly, p));
+                // (The lane before its face: inside the court, off the towers.)
+                let (f0, f1) = (at([-hl, hw]), at([hl, hw]));
+                let mut lane = vec![f0, f1, add(f1, mul(inward, KEEP_LANE)), add(f0, mul(inward, KEEP_LANE))];
+                if area(&lane) < 0.0 {
+                    lane.reverse();
+                }
+                let open = lane.iter().all(|p| inset_depth(court, *p) >= 4.0) && by_ring.iter().all(|(t, r)| inset_depth(&lane, *t) < -(r - 3.0));
+                if !inside || !walled || !off_towers || !off_gates || !open || !site.buildable(&poly) {
+                    continue;
+                }
+                let parts = vec![Part { poly: poly.clone(), kind: PartKind::Body }];
+                let b = Building {
+                    pad_ft: site.pad(&poly),
+                    poly,
+                    ward: Ward::Castle,
+                    func: None,
+                    residential: 4,
+                    name: None,
+                    floors: 4,
+                    structure: Structure::Roofed,
+                    roof: None,
+                    tint: None,
+                    id: 0,
+                    parts,
+                    keep: Some(KeepKind::Plain),
+                };
+                return Some((b, None));
             }
         }
     }
