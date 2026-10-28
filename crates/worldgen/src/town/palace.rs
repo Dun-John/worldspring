@@ -209,17 +209,22 @@ fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, 
             q.iter().chain(std::iter::once(&centroid(&q))).all(|pt| contains(block, *pt))
         })
         .collect();
-    // (The squares a polygon overlaps (of its box on the lattice): not free.)
-    let block_out = |poly: &[P], free: &mut Vec<bool>| {
+    // (The squares of the box of `pts` on the lattice, `pad` squares more all round.)
+    let span = |pts: &[P], pad: f64| {
         let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-        for q in poly {
+        for q in pts {
             let d = sub(*q, o);
             let (x, y) = (dot(d, u) / SQ, dot(d, v) / SQ);
             (x0, x1, y0, y1) = (x0.min(x), x1.max(x), y0.min(y), y1.max(y));
         }
         let at_most = |a: f64| (crate::core::floor(a).max(0.0) as usize).min(N);
-        for j in at_most(y0)..at_most(y1 + 1.0) {
-            for i in at_most(x0)..at_most(x1 + 1.0) {
+        (at_most(x0 - pad)..at_most(x1 + 1.0 + pad), at_most(y0 - pad)..at_most(y1 + 1.0 + pad))
+    };
+    // (The squares a polygon overlaps (of its box on the lattice): not free.)
+    let block_out = |poly: &[P], free: &mut Vec<bool>| {
+        let (is, js) = span(poly, 0.0);
+        for j in js {
+            for i in is.clone() {
                 if free[j * N + i] && overlap(poly, &cell(i, j)) > TOUCH {
                     free[j * N + i] = false;
                 }
@@ -227,7 +232,14 @@ fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, 
         }
     };
     // (Its own lot's squares, for a rectangle beside it.)
-    let lot: Vec<bool> = (0..N * N).map(|k| overlap(&p.poly, &cell(k % N, k / N)) > TOUCH).collect();
+    // (Only those about its box can: a square off it overlaps it nowhere.)
+    let mut lot = vec![false; N * N];
+    let (is, js) = span(&p.poly, 1.0);
+    for j in js {
+        for i in is.clone() {
+            lot[j * N + i] = overlap(&p.poly, &cell(i, j)) > TOUCH;
+        }
+    }
     let mut homes: Vec<usize> = Vec::new();
     for (k, b) in l.buildings.iter().enumerate() {
         if b.id == p.id || gone.contains(&b.id) || dist(centroid(&b.poly), c0) > reach + 200.0 {
@@ -254,10 +266,23 @@ fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, 
         .chain(l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1], 8.0))))
         .filter(|&(a, b, _)| super::geom::seg_dist(c0, a, b) < reach + 100.0)
         .collect();
+    // (Each lane tried only on the squares about its box: those further off are clear of it.)
+    let mut by_lanes = vec![true; N * N];
+    for &(a, b, w) in &lanes {
+        let (is, js) = span(&[a, b], w / SQ + 2.0);
+        for j in js {
+            for i in is.clone() {
+                let k = j * N + i;
+                if free[k] && by_lanes[k] && poly_seg_dist(&cell(i, j), a, b) < w {
+                    by_lanes[k] = false;
+                }
+            }
+        }
+    }
     for (k, f) in free.iter_mut().enumerate() {
         if *f {
             let q = cell(k % N, k / N);
-            *f = lanes.iter().all(|&(a, b, w)| poly_seg_dist(&q, a, b) >= w) && l.towers.iter().all(|t| dist(*t, centroid(&q)) > 20.0);
+            *f = by_lanes[k] && l.towers.iter().all(|t| dist(*t, centroid(&q)) > 20.0);
         }
     }
     // (How many squares of the box from (0, 0) to (i, j) are free.)
@@ -280,35 +305,47 @@ fn clear_ground(site: &Site, l: &Layout, p: &Building, u: P, ccw: bool, off: P, 
     let rect = |i0: usize, j0: usize, w: usize, d: usize| vec![at(i0 as f64, j0 as f64), at((i0 + w) as f64, j0 as f64), at((i0 + w) as f64, (j0 + d) as f64), at(i0 as f64, (j0 + d) as f64)];
     let local = |poly: &[P]| -> Vec<P> { poly.iter().map(|p| sub(*p, off)).collect() };
     for &(w, d) in sizes {
-        // (Each place it fits: how far its middle is from its lot's, how many homes it takes in.)
-        let mut fits: Vec<(f64, usize, usize, usize)> = Vec::new();
+        // (Each place it fits: how far its middle is from its lot's.)
+        let mut fits: Vec<(f64, usize, usize)> = Vec::new();
         for j0 in 0..=N - d {
             for i0 in 0..=N - w {
                 if !fits_at(i0, j0, w, d) {
                     continue;
                 }
-                let r = rect(i0, j0, w, d);
-                let taken = homes.iter().filter(|&&k| on(&r, &l.buildings[k].poly)).count();
                 let m = [i0 as f64 + 0.5 * w as f64 - mid, j0 as f64 + 0.5 * d as f64 - mid];
-                fits.push((m[0] * m[0] + m[1] * m[1], taken, i0, j0));
+                fits.push((m[0] * m[0] + m[1] * m[1], i0, j0));
             }
         }
-        fits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then((a.2, a.3).cmp(&(b.2, b.3))));
-        for &(_, _, i0, j0) in &fits {
-            let mut r = rect(i0, j0, w, d);
-            if !(if alleys { site.terraced(&local(&r)) } else { site.buildable(&local(&r)) }) {
-                continue;
+        fits.sort_by(|a, b| a.0.total_cmp(&b.0).then((a.1, a.2).cmp(&(b.1, b.2))));
+        // The nearest that will do, then the one taking in the fewest homes (counted only for those
+        // that will do: thousands of places, most on ground unfit to build on).
+        let mut g = 0;
+        while g < fits.len() {
+            let e = g + fits[g..].iter().take_while(|f| f.0.total_cmp(&fits[g].0).is_eq()).count();
+            let mut pick: Option<((usize, usize, usize), Vec<usize>, Vec<P>)> = None;
+            for &(_, i0, j0) in &fits[g..e] {
+                let mut r = rect(i0, j0, w, d);
+                if !(if alleys { site.terraced(&local(&r)) } else { site.buildable(&local(&r)) }) {
+                    continue;
+                }
+                let fewest = (homes.iter().filter(|&&k| on(&r, &l.buildings[k].poly)).count(), i0, j0);
+                if (area(&r) > 0.0) != ccw {
+                    r.reverse();
+                }
+                let taken: Vec<usize> = homes.iter().copied().filter(|&k| on(&r, &l.buildings[k].poly)).collect();
+                // (A monastery's on no other building at all, its squares' slivers summed (as `follow`
+                // keeps it), nor stranding a neighbour.)
+                if alleys && (l.buildings.iter().any(|b| b.id != p.id && !gone.contains(&b.id) && !takes(b) && dist(centroid(&b.poly), c0) < reach + 200.0 && on(&r, &b.poly)) || strands(l, &r, block, p.id, &taken)) {
+                    continue;
+                }
+                if pick.as_ref().is_none_or(|x| fewest < x.0) {
+                    pick = Some((fewest, taken, r));
+                }
             }
-            if (area(&r) > 0.0) != ccw {
-                r.reverse();
+            if let Some((_, taken, r)) = pick {
+                return Some((taken, r));
             }
-            let taken: Vec<usize> = homes.iter().copied().filter(|&k| on(&r, &l.buildings[k].poly)).collect();
-            // (A monastery's on no other building at all, its squares' slivers summed (as `follow`
-            // keeps it), nor stranding a neighbour.)
-            if alleys && (l.buildings.iter().any(|b| b.id != p.id && !gone.contains(&b.id) && !takes(b) && dist(centroid(&b.poly), c0) < reach + 200.0 && on(&r, &b.poly)) || strands(l, &r, block, p.id, &taken)) {
-                continue;
-            }
-            return Some((taken, r));
+            g = e;
         }
     }
     None

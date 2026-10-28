@@ -388,13 +388,15 @@ struct Open<'a> {
     t0: &'a T0,
     center: P,
     shore: super::Shore<'a>,
+    /// The river curves sampled near it, shared by every point asked about.
+    rivers: crate::lod::rivers::ClearCache,
 }
 
 impl<'a> Open<'a> {
     /// Round `pts` (world ft).
     fn new(world: &World, t0: &'a T0, center: P, pts: &[P]) -> Open<'a> {
         let r = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
-        Open { t0, center, shore: super::Shore::new(world, t0, r) }
+        Open { t0, center, shore: super::Shore::new(world, t0, r), rivers: Default::default() }
     }
     /// Standing water or a river channel at `q` (local).
     fn wet(&self, q: P) -> bool {
@@ -406,7 +408,7 @@ impl<'a> Open<'a> {
         if self.shore.wet(w) {
             return true;
         }
-        let c = crate::lod::rivers::clear_of_rivers(&self.t0.rivers, w[0], w[1], margin, self.t0.cell_ft);
+        let c = crate::lod::rivers::clear_of_rivers_with(&self.t0.rivers, w[0], w[1], margin, self.t0.cell_ft, &self.rivers);
         (c.0 - w[0]).abs() + (c.1 - w[1]).abs() > 0.01
     }
 }
