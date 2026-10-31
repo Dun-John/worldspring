@@ -1,3 +1,4 @@
+import './render/glPrecision';
 import { CanvasTextMetrics } from 'pixi.js';
 import { mount } from 'svelte';
 import App from './App.svelte';
