@@ -950,6 +950,10 @@ export class BattlemapLayer {
 /** The sprite atlas depends only on the catalog: built once per page and reused by every
  * battlemap layer (worlds reload; warm-up builds it while T0 generates). */
 let atlasCache: { key: string; renderer: Renderer; atlas: Atlas } | null = null;
+/** Forget the atlas: it lives only on the GPU, so a lost context leaves it blank. */
+export function dropSharedAtlas() {
+  atlasCache = null;
+}
 function sharedAtlas(renderer: Renderer, catalog: KindInfo[]): Atlas {
   const key = catalog.map((k) => k.name).join('|');
   if (!atlasCache || atlasCache.key !== key || atlasCache.renderer !== renderer) atlasCache = { key, renderer, atlas: buildAtlas(renderer, catalog) };

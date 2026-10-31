@@ -69,6 +69,11 @@ export class ItemAtlas {
     return a;
   }
 
+  /** Forget the atlas: its pages live only on the GPU, so a lost context leaves them blank. */
+  static drop(renderer: Renderer) {
+    atlases.delete(renderer);
+  }
+
   /** The frame for `key`, drawing it with `draw` (in squares, with its origin at `origin`) the first
    * time. Call `flush` before the frames are shown. */
   get(key: string, draw: (g: Graphics) => void, origin: [number, number] = [0, 0]): ItemFrame | null {

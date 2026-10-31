@@ -2,9 +2,11 @@
 // and per-frame styling (zoom-adaptive hillshade and contour interval).
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
+import type { KindInfo } from '../gen/client';
 import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT } from '../gen/protocol';
-import { BattlemapLayer, type SquareInfo } from './BattlemapLayer';
+import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
+import { ItemAtlas } from './itemAtlas';
 import { InteriorLayer, setUndergroundGrid, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
 import { Labels } from './Labels';
 import { SketchLayer } from './SketchLayer';
@@ -187,6 +189,7 @@ export class MapView {
   /** The zoom-out limit before going down into the sewers (they are drawn near the view only). */
   private sewerMinZoom: number | null = null;
   /** Roof fade: the ground floor of the hovered building at close battlemap zoom. */
+  private catalog: KindInfo[] | null = null;
   private peek: { id: string; layer: InteriorLayer; out: boolean } | null = null;
   private peekBusy = false;
   private lastPeekCheck = 0;
@@ -384,7 +387,11 @@ export class MapView {
     const warmTiles = new TileLayer(stub, this.gen);
     warmTiles.warmup(this.app.renderer);
     warmTiles.destroy();
-    warmUnderground(this.app.renderer);
+    // Adreno's compiler crashes on the underground shader, losing every context on the page: not
+    // for a level nobody may open (so there it compiles, and crashes, only on going underground).
+    if (!this.crashesUnderground()) warmUnderground(this.app.renderer);
+    // The GPU's copies are gone: Pixi uploads again what it has the data for, not what was drawn.
+    this.app.canvas.addEventListener('webglcontextrestored', () => void this.restoreGpu());
     this.gen.onCatalog = (catalog) => {
       const warmBattle = new BattlemapLayer(stub, this.app.renderer, catalog);
       warmBattle.warmup();
@@ -417,6 +424,40 @@ export class MapView {
     };
     this.bindInput();
     this.app.ticker.add(() => this.frame());
+  }
+
+  private crashesUnderground(): boolean {
+    const gl = (this.app.renderer as unknown as { gl?: WebGL2RenderingContext }).gl;
+    const info = gl?.getExtension('WEBGL_debug_renderer_info');
+    return !!gl && !!info && /adreno/i.test(String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)));
+  }
+
+  /** After a lost context (a phone switching apps, a GPU crash): make again what was only ever
+   * on the GPU, the sprites and what is drawn with them, where the map is. */
+  private async restoreGpu() {
+    if (!this.geom || !this.battle || !this.catalog) return;
+    const renderer = this.app.renderer;
+    dropSharedAtlas();
+    ItemAtlas.drop(renderer);
+    const open = this.interior ? { id: this.interior.interior.id, level: this.interior.currentLevel } : null;
+    this.exitBuilding();
+    this.peek?.layer.destroy();
+    this.peek = null;
+    const at = this.app.stage.getChildIndex(this.battle.container);
+    this.battle.destroy();
+    this.app.stage.addChildAt(this.makeBattle(this.geom, this.catalog).container, at);
+    this.lastWantKey = '';
+    // (Not back underground where that's what crashed.)
+    if (open && !(this.crashesUnderground() && /^[uwk]:/.test(open.id))) await this.enterBuilding(open.id, { level: open.level });
+  }
+
+  private makeBattle(geom: Geom, catalog: KindInfo[]) {
+    this.catalog = catalog;
+    this.battle = new BattlemapLayer(geom, this.app.renderer, catalog, this.role === 'player');
+    this.battle.setGrid(this.gridOn);
+    this.battle.sprites = this.edits.sprites ?? {};
+    this.battle.warmup();
+    return this.battle;
   }
 
   /** The town (layout index) whose patches lie round (x, y): the nearest within 2.3 of its
@@ -773,12 +814,9 @@ export class MapView {
       .map((f, index) => ({ x: f.x, y: f.y, r: 12 * Math.sqrt(Number(/pop\. ([\d,]+)/.exec(f.detail ?? '')?.[1]?.replace(/,/g, '') ?? 0)), index, kind: f.kind }))
       .filter((t) => t.kind !== 'village');
     this.districtsAsked.clear();
-    this.battle = new BattlemapLayer(geom, this.app.renderer, catalog, this.role === 'player');
-    this.battle.setGrid(this.gridOn);
-    this.battle.sprites = this.edits.sprites ?? {};
-    this.battle.warmup();
+    const battle = this.makeBattle(geom, catalog);
     this.app.stage.addChild(this.tiles.container);
-    this.app.stage.addChild(this.battle.container);
+    this.app.stage.addChild(battle.container);
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
     this.app.stage.addChild(this.playOver);
