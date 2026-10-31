@@ -300,7 +300,7 @@
     display: flex;
     justify-content: center;
     width: 100%;
-    padding: 6px 0 2px;
+    padding: 12px 0 8px;
     border: none;
     background: none;
     cursor: grab;

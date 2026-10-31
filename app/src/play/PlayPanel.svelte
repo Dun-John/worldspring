@@ -9,6 +9,8 @@
   import type { IconName } from '../ui/icons';
   import { remember, remembered } from '../ui/shell/layout.svelte';
 
+  const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+
   interface Props {
     play: PlayController;
     /** Bumped whenever the play state or the controller changes. */
@@ -112,7 +114,7 @@
 
   {#if !peek}
     {#if v.tool === 'select'}
-      <div class="ws-hint">Drag tokens; click a door to open it. Shift-click or shift-drag selects several; Alt-click pings.</div>
+      <div class="ws-hint">{touch ? 'Drag tokens; tap a door to open it.' : 'Drag tokens; click a door to open it. Shift-click or shift-drag selects several; Alt-click pings.'}</div>
     {:else if v.tool === 'token'}
       <section>
         <div class="ws-row">

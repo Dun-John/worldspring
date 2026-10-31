@@ -302,6 +302,9 @@ kbd.ws-kbd {
   .ws-kbd {
     display: none;
   }
+  input[type='range'] {
+    min-height: 32px;
+  }
 }
 
 .ws-muted {
