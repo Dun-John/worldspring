@@ -236,8 +236,12 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
     } else {
         // Flagstones laid to the squares: one stone a square, or a square split in two along its
         // half line (which way and whether, by square). Boss chambers darker, crypts dusty.
-        vec2 sq = floor(q);
-        vec2 g = fract(q);
+        // (`scale` cancels out, but keep it: without it Adreno's compiler segfaults on this shader,
+        // which kills every WebGL context on the page. Simpler ways of tying this to `mat` don't help.)
+        float scale = mat == 5 ? 0.7 : mat == 10 ? 0.85 : 1.0;
+        vec2 fq = q * scale / scale;
+        vec2 sq = floor(fq);
+        vec2 g = fract(fq);
         float h = hash21(sq + 3.7);
         vec2 stoneId = sq;
         vec2 e = vec2(0.5);

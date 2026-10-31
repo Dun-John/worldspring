@@ -154,6 +154,9 @@ const TIERS: [number, string][] = [
   [0, 'Battlemap'],
 ];
 
+/** A lost context this soon after the last: not reopening what was open (`restoreGpu`). */
+const RESTORE_AGAIN_MS = 30_000;
+
 export class MapView {
   readonly app = new Application();
   readonly cam = new Camera();
@@ -190,6 +193,7 @@ export class MapView {
   private sewerMinZoom: number | null = null;
   /** Roof fade: the ground floor of the hovered building at close battlemap zoom. */
   private catalog: KindInfo[] | null = null;
+  private restoredAt = -Infinity;
   private peek: { id: string; layer: InteriorLayer; out: boolean } | null = null;
   private peekBusy = false;
   private lastPeekCheck = 0;
@@ -387,9 +391,7 @@ export class MapView {
     const warmTiles = new TileLayer(stub, this.gen);
     warmTiles.warmup(this.app.renderer);
     warmTiles.destroy();
-    // Adreno's compiler crashes on the underground shader, losing every context on the page: not
-    // for a level nobody may open (so there it compiles, and crashes, only on going underground).
-    if (!this.crashesUnderground()) warmUnderground(this.app.renderer);
+    warmUnderground(this.app.renderer);
     // The GPU's copies are gone: Pixi uploads again what it has the data for, not what was drawn.
     this.app.canvas.addEventListener('webglcontextrestored', () => void this.restoreGpu());
     this.gen.onCatalog = (catalog) => {
@@ -426,12 +428,6 @@ export class MapView {
     this.app.ticker.add(() => this.frame());
   }
 
-  private crashesUnderground(): boolean {
-    const gl = (this.app.renderer as unknown as { gl?: WebGL2RenderingContext }).gl;
-    const info = gl?.getExtension('WEBGL_debug_renderer_info');
-    return !!gl && !!info && /adreno/i.test(String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)));
-  }
-
   /** After a lost context (a phone switching apps, a GPU crash): make again what was only ever
    * on the GPU, the sprites and what is drawn with them, where the map is. */
   private async restoreGpu() {
@@ -447,8 +443,11 @@ export class MapView {
     this.battle.destroy();
     this.app.stage.addChildAt(this.makeBattle(this.geom, this.catalog).container, at);
     this.lastWantKey = '';
-    // (Not back underground where that's what crashed.)
-    if (open && !(this.crashesUnderground() && /^[uwk]:/.test(open.id))) await this.enterBuilding(open.id, { level: open.level });
+    // (Lost again right after reopening it: leave it shut, it may be what loses the context.)
+    const now = performance.now();
+    const again = now - this.restoredAt < RESTORE_AGAIN_MS;
+    this.restoredAt = now;
+    if (open && !again) await this.enterBuilding(open.id, { level: open.level });
   }
 
   private makeBattle(geom: Geom, catalog: KindInfo[]) {
