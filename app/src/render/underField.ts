@@ -8,14 +8,21 @@ import { CAVERN, fromSquares, shapeIndex } from './roomShapes';
 
 /** Field texels per square. */
 export const FIELD_RES = 4;
+/** Squares round a section of sewers its field is worked out over (`under::SEWER_RIM`): the widest
+ * blur below, so a texel's value comes out the same on both sides of a border. */
+const SEWER_RIM = 5;
+/** Of those, the squares kept in the texture: as far past the edge as the shader looks. */
+const FIELD_PAD = 1;
 
 export interface UnderField {
-  /** Field texture (w x h, RGBA: floor, liquid, raised) and per-square cells (nx x ny, RGBA:
+  /** Field texture (w x h, RGBA: floor, liquid, raised; `pad` squares wider than the grid each
+   * way) and per-square cells (nx x ny, RGBA:
    * material, shape (0 none, its slot + 1 in `shapes`, 254 none but one next to it, 255 a cavern),
    * room hash, 255). A shaped room's squares are left out of the floor (its doorways stay in): the
    * shader draws it from its shape. */
   w: number;
   h: number;
+  pad: number;
   data: Uint8Array;
   cells: Uint8Array;
   /** 0 none, 1 sewage, 2 lava. */
@@ -57,10 +64,8 @@ export function materialOf(site: string, kind: string, theme?: string): number {
   return 4;
 }
 
-/** Separable Gaussian blur of a w × h field (outside counts as 0, or as the nearest edge
- * value with `clamp`: a sewer section's tunnels then run right up to its edge, to meet the
- * next section's). */
-export function blur(src: Float32Array, w: number, h: number, sigma: number, clamp = false): Float32Array {
+/** Separable Gaussian blur of a w × h field (outside counts as 0). */
+export function blur(src: Float32Array, w: number, h: number, sigma: number): Float32Array {
   const r = Math.ceil(sigma * 2.5);
   const k = new Float32Array(2 * r + 1);
   let sum = 0;
@@ -77,7 +82,7 @@ export function blur(src: Float32Array, w: number, h: number, sigma: number, cla
         for (let i = -r; i <= r; i++) a += src[o + x + i] * k[i + r];
       } else {
         for (let i = -r; i <= r; i++) {
-          const xi = clamp ? Math.min(w - 1, Math.max(0, x + i)) : x + i;
+          const xi = x + i;
           if (xi >= 0 && xi < w) a += src[o + xi] * k[i + r];
         }
       }
@@ -87,7 +92,7 @@ export function blur(src: Float32Array, w: number, h: number, sigma: number, cla
   for (let y = 0; y < h; y++) {
     const o = y * w;
     for (let i = -r; i <= r; i++) {
-      const yi = clamp ? Math.min(h - 1, Math.max(0, y + i)) : y + i;
+      const yi = y + i;
       if (yi < 0 || yi >= h) continue;
       const q = yi * w;
       const kk = k[i + r];
@@ -99,7 +104,7 @@ export function blur(src: Float32Array, w: number, h: number, sigma: number, cla
 
 /** `blur` worked out at 1/`f` of the resolution and sampled back up (bilinear): for wide,
  * soft masks, at a fraction of the cost. */
-function blurCoarse(src: Float32Array, w: number, h: number, sigma: number, f: number, clamp = false): Float32Array {
+function blurCoarse(src: Float32Array, w: number, h: number, sigma: number, f: number): Float32Array {
   const [cw, ch] = [Math.ceil(w / f), Math.ceil(h / f)];
   const small = new Float32Array(cw * ch);
   const inv = 1 / (f * f);
@@ -107,7 +112,7 @@ function blurCoarse(src: Float32Array, w: number, h: number, sigma: number, f: n
     const row = Math.floor(y / f) * cw;
     for (let x = 0; x < w; x++) small[row + ((x / f) | 0)] += src[y * w + x] * inv;
   }
-  const b = blur(small, cw, ch, sigma / f, clamp);
+  const b = blur(small, cw, ch, sigma / f);
   const out = new Float32Array(w * h);
   // Where each column samples from (the same for every row).
   const x0s = new Int32Array(w);
@@ -140,14 +145,14 @@ export const LINE_ROOM = 'sewer tunnel';
 
 /** The squares of a level with floor on or beside them: a line's floor is drawn only there (runs
  * dropped from the sewer stay rock). */
-export function nearFloor(lv: InteriorLevel, nx: number, ny: number): Uint8Array {
-  const near = new Uint8Array(nx * ny);
-  for (let j = 0; j < ny; j++) {
-    for (let i = 0; i < nx; i++) {
-      if (lv.cells[j * nx + i] < 0) continue;
-      for (let b = Math.max(0, j - 1); b <= Math.min(ny - 1, j + 1); b++) for (let a = Math.max(0, i - 1); a <= Math.min(nx - 1, i + 1); a++) near[b * nx + a] = 1;
-    }
-  }
+export function nearFloor(lv: InteriorLevel, nx: number, ny: number, pad = 0): Uint8Array {
+  const w = nx + 2 * pad;
+  const near = new Uint8Array(w * (ny + 2 * pad));
+  const mark = (i: number, j: number) => {
+    for (let b = Math.max(-pad, j - 1); b <= Math.min(ny + pad - 1, j + 1); b++) for (let a = Math.max(-pad, i - 1); a <= Math.min(nx + pad - 1, i + 1); a++) near[(b + pad) * w + a + pad] = 1;
+  };
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (lv.cells[j * nx + i] >= 0) mark(i, j);
+  for (const [i, j] of lv.rim ?? []) mark(i, j);
   return near;
 }
 
@@ -213,13 +218,16 @@ export function lineWall(lv: InteriorLevel, nx: number, ny: number, near: Uint8A
   return best;
 }
 
-/** The textures of a level of an underground site. `clamp`: a section of a city's sewers (its
- * tunnels run to the edge, to meet the next section's). */
-export function underField(it: Interior, level: number, clamp: boolean): UnderField {
+/** The textures of a level of an underground site. */
+export function underField(it: Interior, level: number): UnderField {
   const lv = it.levels[level];
   const { nx, ny } = it;
+  const paths = lv.paths ?? [];
   const R = FIELD_RES;
-  const [w, h] = [nx * R, ny * R];
+  // Lines' floors are worked out past the grid, so that blurs near its edge see what lies beyond.
+  const rim = paths.length ? SEWER_RIM : 0;
+  const off = rim * R;
+  const [w, h] = [(nx + 2 * rim) * R, (ny + 2 * rim) * R];
   const floor = new Float32Array(w * h);
   const liquid = new Float32Array(w * h);
   const raised = new Float32Array(w * h);
@@ -232,7 +240,6 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
     }
   }
   const cells = new Uint8Array(nx * ny * 4);
-  const paths = lv.paths ?? [];
   const { index, shapes: slots, caverns } = shapeIndex(lv, nx, ny);
   let anyRaised = false;
   for (let j = 0; j < ny; j++) {
@@ -251,7 +258,7 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
       const lift = Math.min(1, room.raise_ft / 10);
       if (lift > 0) anyRaised = true;
       for (let y = j * R; y < (j + 1) * R; y++) {
-        const o = y * w;
+        const o = (y + off) * w + off;
         for (let x = i * R; x < (i + 1) * R; x++) {
           if (square) floor[o + x] = 1;
           liquid[o + x] = wet[k];
@@ -263,50 +270,63 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
   if (paths.length) {
     // Along the lines: the band within reach, where it borders real floor (runs dropped from
     // the sewer stay rock), so diagonal tunnels are smooth rather than stepped.
-    const near = nearFloor(lv, nx, ny);
+    const near = nearFloor(lv, nx, ny, rim);
+    const across = nx + 2 * rim;
+    const lined = new Float32Array(w * h);
     for (const [x0, y0, x1, y1, r] of paths) {
       const dx = x1 - x0;
       const dy = y1 - y0;
       const len2 = Math.max(dx * dx + dy * dy, 1e-9);
       const r2 = r * r;
-      const tx0 = Math.max(0, Math.floor((Math.min(x0, x1) - r) * R));
-      const ty0 = Math.max(0, Math.floor((Math.min(y0, y1) - r) * R));
-      const tx1 = Math.min(w - 1, Math.ceil((Math.max(x0, x1) + r) * R));
-      const ty1 = Math.min(h - 1, Math.ceil((Math.max(y0, y1) + r) * R));
+      const tx0 = Math.max(0, Math.floor((Math.min(x0, x1) - r + rim) * R));
+      const ty0 = Math.max(0, Math.floor((Math.min(y0, y1) - r + rim) * R));
+      const tx1 = Math.min(w - 1, Math.ceil((Math.max(x0, x1) + r + rim) * R));
+      const ty1 = Math.min(h - 1, Math.ceil((Math.max(y0, y1) + r + rim) * R));
       for (let ty = ty0; ty <= ty1; ty++) {
-        const py = (ty + 0.5) / R;
-        const row = Math.floor(py) * nx;
+        const py = (ty + 0.5) / R - rim;
+        const row = (Math.floor(py) + rim) * across + rim;
         for (let tx = tx0; tx <= tx1; tx++) {
-          const px = (tx + 0.5) / R;
+          const px = (tx + 0.5) / R - rim;
           if (!near[row + Math.floor(px)]) continue;
           const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / len2));
           const ex = px - x0 - t * dx;
           const ey = py - y0 - t * dy;
-          if (ex * ex + ey * ey <= r2) floor[ty * w + tx] = 1;
+          if (ex * ex + ey * ey <= r2) lined[ty * w + tx] = 1;
         }
       }
     }
-    // The sewage channel: the middle of the wider runs, from a wide blur of the floor.
+    // The sewage channel: the middle of the wider runs, from a wide blur of the lines' floor alone
+    // (a passage is the section's own: the next section would work out another channel).
     liquidKind = 1;
-    const wide = blurCoarse(floor, w, h, 1.1 * R, 2, clamp);
-    for (let k = 0; k < w * h; k++) liquid[k] = floor[k] * Math.max(0, Math.min(1, (wide[k] - 0.66) / 0.08));
+    const wide = blurCoarse(lined, w, h, 1.1 * R, 2);
+    for (let k = 0; k < w * h; k++) {
+      liquid[k] = lined[k] * Math.max(0, Math.min(1, (wide[k] - 0.66) / 0.08));
+      if (lined[k]) floor[k] = 1;
+    }
   }
   // Natural rock is rounded; sewers follow their streets; built sites keep square corners
   // (the shader measures their walls from the squares).
-  const f1 = SQUARE_SITES.has(it.function) ? floor : blur(floor, w, h, (lv.natural ? 0.42 : paths.length ? 0.22 : 0.14) * R, clamp);
+  const f1 = SQUARE_SITES.has(it.function) ? floor : blur(floor, w, h, (lv.natural ? 0.42 : paths.length ? 0.22 : 0.14) * R);
   // A lava channel is one square wide, stepping diagonally: blur it wider and lift it so it
   // runs as one flow rather than beads.
   let f2: Float32Array = liquid;
-  if (liquidKind === 1) f2 = blur(liquid, w, h, 0.3 * R, clamp);
-  if (liquidKind === 2) f2 = blur(liquid, w, h, 0.6 * R, clamp).map((v) => Math.min(1, v * 1.7));
-  const f3 = anyRaised ? blur(raised, w, h, 0.3 * R, clamp) : raised;
-  const data = new Uint8Array(w * h * 4);
-  for (let k = 0; k < w * h; k++) {
-    const o = k * 4;
-    data[o] = (f1[k] * 255 + 0.5) | 0;
-    data[o + 1] = (f2[k] * 255 + 0.5) | 0;
-    data[o + 2] = (f3[k] * 255 + 0.5) | 0;
-    data[o + 3] = 255;
+  if (liquidKind === 1) f2 = blur(liquid, w, h, 0.3 * R);
+  if (liquidKind === 2) f2 = blur(liquid, w, h, 0.6 * R).map((v) => Math.min(1, v * 1.7));
+  const f3 = anyRaised ? blur(raised, w, h, 0.3 * R) : raised;
+  // (The texture keeps what the shader reads past the grid's edge.)
+  const pad = rim ? FIELD_PAD : 0;
+  const skip = (rim - pad) * R;
+  const [tw, th] = [w - 2 * skip, h - 2 * skip];
+  const data = new Uint8Array(tw * th * 4);
+  for (let y = 0; y < th; y++) {
+    for (let x = 0; x < tw; x++) {
+      const k = (y + skip) * w + x + skip;
+      const o = (y * tw + x) * 4;
+      data[o] = (f1[k] * 255 + 0.5) | 0;
+      data[o + 1] = (f2[k] * 255 + 0.5) | 0;
+      data[o + 2] = (f3[k] * 255 + 0.5) | 0;
+      data[o + 3] = 255;
+    }
   }
   // (Rock beside a shape too: the shader looks round there, the shape reaching into it.)
   for (let k = 0; k < nx * ny; k++) cells[k * 4 + 1] = index[k];
@@ -320,26 +340,27 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
   // Caverns: their floor and the squares opening into them, blurred as a cave's.
   let cave: Uint8Array | null = null;
   if (caverns) {
-    const mask = new Float32Array(w * h);
+    const [cw, ch] = [nx * R, ny * R];
+    const mask = new Float32Array(cw * ch);
     for (let j = 0; j < ny; j++) {
       for (let i = 0; i < nx; i++) {
         const k = j * nx + i;
         if (lv.cells[k] < 0) continue;
         const near = (a: number, b: number) => a >= 0 && b >= 0 && a < nx && b < ny && index[b * nx + a] === CAVERN;
         if (!(index[k] === CAVERN || near(i - 1, j) || near(i + 1, j) || near(i, j - 1) || near(i, j + 1))) continue;
-        for (let y = j * R; y < (j + 1) * R; y++) mask.fill(1, y * w + i * R, y * w + (i + 1) * R);
+        for (let y = j * R; y < (j + 1) * R; y++) mask.fill(1, y * cw + i * R, y * cw + (i + 1) * R);
       }
     }
-    const b = blur(mask, w, h, 0.42 * R, clamp);
-    cave = new Uint8Array(w * h * 4);
-    for (let k = 0; k < w * h; k++) cave[k * 4] = (b[k] * 255 + 0.5) | 0;
+    const b = blur(mask, cw, ch, 0.42 * R);
+    cave = new Uint8Array(cw * ch * 4);
+    for (let k = 0; k < cw * ch; k++) cave[k * 4] = (b[k] * 255 + 0.5) | 0;
   }
-  return { w, h, data, cells, liquidKind, shapes, shapeCount: slots.length, cave, terrain: terrainField(it, level, clamp) };
+  return { w: tw, h: th, pad, data, cells, liquidKind, shapes, shapeCount: slots.length, cave, terrain: terrainField(it, level) };
 }
 
 /** Terrain's masks (`UnderField.terrain`): each kind's squares, spread into the rock next to
  * them (so water and chasms run right up to the walls), blurred for soft banks. */
-function terrainField(it: Interior, level: number, clamp: boolean): Uint8Array | null {
+function terrainField(it: Interior, level: number): Uint8Array | null {
   const lv = it.levels[level];
   const { nx, ny } = it;
   const items = lv.furniture.filter((f) => TERRAIN_CHANNEL[f.kind] !== undefined);
@@ -380,7 +401,7 @@ function terrainField(it: Interior, level: number, clamp: boolean): Uint8Array |
         for (let y = j * R; y < (j + 1) * R; y++) mask.fill(1, y * w + i * R, y * w + (i + 1) * R);
       }
     }
-    const b = blur(mask, w, h, (c === 2 ? 0.24 : 0.3) * R, clamp);
+    const b = blur(mask, w, h, (c === 2 ? 0.24 : 0.3) * R);
     for (let k = 0; k < w * h; k++) out[k * 4 + c] = (b[k] * 255 + 0.5) | 0;
   }
   return out;

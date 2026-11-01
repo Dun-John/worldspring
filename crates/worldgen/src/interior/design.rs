@@ -225,6 +225,7 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
         has_stairs: lv.has_stairs,
         natural: false,
         paths: Vec::new(),
+        rim: Vec::new(),
         links: Vec::new(),
     };
     if !lv.roof {

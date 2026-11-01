@@ -584,7 +584,7 @@ export class MapView {
     const level = back?.level ?? keep?.level ?? it.entry_level;
     const sewer = id.startsWith('w:') && level === it.entry_level;
     // Underground, the level one arrives on is shaded in a worker first (no stall here).
-    const fields = /^[uwk]:/.test(id) && !(sewer && this.sewers?.layout === Number(id.split(':')[1])) ? new Map([[level, await prepareField(it, level, sewer)]]) : undefined;
+    const fields = /^[uwk]:/.test(id) && !(sewer && this.sewers?.layout === Number(id.split(':')[1])) ? new Map([[level, await prepareField(it, level)]]) : undefined;
     if (!this.geom) return false;
     let layer: InteriorLayer;
     if (sewer) {
@@ -668,7 +668,7 @@ export class MapView {
     const ticket = ++this.shown;
     const level = Math.max(0, Math.min(it.levels.length - 1, layer.currentLevel + it.levels.length - layer.interior.levels.length));
     // (Underground floors are shaded in a worker first; a building's need nothing.)
-    const field = /^[uwk]:/.test(it.id) ? await prepareField(it, level, false) : null;
+    const field = /^[uwk]:/.test(it.id) ? await prepareField(it, level) : null;
     if (ticket !== this.shown || this.interior !== layer || !this.geom) return;
     const next = new InteriorLayer(it, this.geom.sea_level_ft, false, false, this.interiorStyle, false, field ? new Map([[level, field]]) : undefined, level);
     const at = this.app.stage.getChildIndex(layer.container);

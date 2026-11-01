@@ -16,11 +16,20 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
     let centre = |k: usize| [origin[0] + ((k % nx) as f64 + 0.5) * SQUARE_FT, origin[1] + ((k / nx) as f64 + 0.5) * SQUARE_FT];
     let mut is_wet: Vec<Option<bool>> = vec![None; n];
     let r = SEWER_REACH_FT;
+    // The floor just beyond the section, from the streets alone: what the neighbours lay there
+    // (they are never read: a section is worked out by itself).
+    let rim = SEWER_RIM as i64;
+    let (side, tall) = (nx as i64, ny as i64);
+    let outer = (side + 2 * rim) as usize;
+    let at_rim = |i: i64, j: i64| (j + rim) as usize * outer + (i + rim) as usize;
+    let mut beyond = vec![false; outer * (tall + 2 * rim) as usize];
+    let mut dry: Vec<Option<bool>> = vec![None; beyond.len()];
     for (a, b, _) in street_segments(l) {
         let (x0, y0) = (a[0].min(b[0]) - r - origin[0], a[1].min(b[1]) - r - origin[1]);
         let (x1, y1) = (a[0].max(b[0]) + r - origin[0], a[1].max(b[1]) + r - origin[1]);
         let span = nx as f64 * SQUARE_FT;
-        if x1 < 0.0 || y1 < 0.0 || x0 > span || y0 > span {
+        let out = SEWER_RIM as f64 * SQUARE_FT;
+        if x1 < -out || y1 < -out || x0 > span + out || y0 > span + out {
             continue;
         }
         let g = |p: P| [((p[0] - origin[0]) / SQUARE_FT) as f32, ((p[1] - origin[1]) / SQUARE_FT) as f32];
@@ -39,6 +48,26 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
                 if !*is_wet[k].get_or_insert_with(|| wet(t0, centre(k))) {
                     p.cells[k] = tunnel;
                 }
+            }
+        }
+        let (ri0, rj0) = (((x0 / SQUARE_FT).floor() as i64).max(-rim), ((y0 / SQUARE_FT).floor() as i64).max(-rim));
+        let (ri1, rj1) = (((x1 / SQUARE_FT).ceil() as i64).min(side + rim - 1), ((y1 / SQUARE_FT).ceil() as i64).min(tall + rim - 1));
+        for j in rj0..=rj1 {
+            for i in ri0..=ri1 {
+                if (0..side).contains(&i) && (0..tall).contains(&j) || beyond[at_rim(i, j)] {
+                    continue;
+                }
+                let c = [origin[0] + (i as f64 + 0.5) * SQUARE_FT, origin[1] + (j as f64 + 0.5) * SQUARE_FT];
+                if town::geom::seg_dist(c, a, b) <= r && *dry[at_rim(i, j)].get_or_insert_with(|| !wet(t0, c)) {
+                    beyond[at_rim(i, j)] = true;
+                }
+            }
+        }
+    }
+    for j in -rim..tall + rim {
+        for i in -rim..side + rim {
+            if beyond[at_rim(i, j)] {
+                p.rim.push([i as i16, j as i16]);
             }
         }
     }
@@ -165,10 +194,10 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
         // A scrap of tunnel too small for a shaft: no sewer section here.
         p.down?;
     }
-    // Away from the walls: floor on all four sides.
+    // Away from the walls: floor on all four sides (at the section's edge, the floor beyond it).
     let all_floor = |p: &Plan, k: usize| {
-        let (i, j) = (k % nx, k / nx);
-        i > 0 && j > 0 && i + 1 < nx && j + 1 < ny && neighbours(k, nx, ny).all(|m| p.cells[m] >= 0)
+        let (i, j) = ((k % nx) as i64, (k / nx) as i64);
+        [(i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)].iter().all(|&(a, b)| if (0..side).contains(&a) && (0..tall).contains(&b) { p.cells[b as usize * nx + a as usize] >= 0 } else { beyond[at_rim(a, b)] })
     };
     let keep = |p: &Plan, k: usize| k == p.up || Some(k) == p.down;
     // The other grates: ladders up to the street.

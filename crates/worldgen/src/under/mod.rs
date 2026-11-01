@@ -128,6 +128,10 @@ const LEVEL_FT: f32 = 20.0;
 pub const SEWER_SECTION_FT: f64 = 480.0;
 /// How far (ft) the sewer reaches either side of a paved street's line.
 pub const SEWER_REACH_FT: f64 = 6.0;
+/// Squares round a section its plan looks out over (`Level::rim`, and the lines in `Level::paths`):
+/// as far as the drawn floor's widest blur reaches (`underField.ts`), so the two sides of a border
+/// work out the same floor and channel.
+pub const SEWER_RIM: usize = 5;
 
 //// A site's program: built levels (graph-first: dungeons, crypts) take their rooms, passages
 /// and corridor width from it; natural levels (caves) their chamber kinds and ledges.

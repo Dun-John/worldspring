@@ -46,6 +46,9 @@ uniform float uGrid;
 // Where this grid sits among its neighbours (squares; a city's sewer sections, so their
 // textures run on across the edges), else 0.
 uniform vec2 uOrigin;
+// Squares of uField beyond the grid each way (a sewer section's, read past its edge so that its
+// walls and channels run on), else 0.
+uniform float uPad;
 // Shaped rooms on the level (0: none), caverns breaking in (0 or 1).
 uniform float uShapeCount;
 uniform float uCaverns;
@@ -72,7 +75,7 @@ float fbm(vec2 p) {
 }
 
 vec4 field(vec2 q) {
-    return texture(uField, q / uN);
+    return texture(uField, (q + uPad) / (uN + 2.0 * uPad));
 }
 
 // Thin dark seams where noise crosses a level (cracks in rock and stone): about `w` of the
@@ -209,7 +212,8 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         b.x += 0.5 * mod(floor(b.y), 2.0);
         vec2 g = fract(b);
         float mortar = 1.0 - smoothstep(0.0, 0.08, min(min(g.x, 1.0 - g.x) * 0.5, min(g.y, 1.0 - g.y)));
-        c = vec3(0.50, 0.40, 0.33) * (0.82 + 0.3 * hash21(floor(b)));
+        // (Numbered from the world, small: a brick across a section's edge is one brick.)
+        c = vec3(0.50, 0.40, 0.33) * (0.82 + 0.3 * hash21(mod(floor(b) + mod(uOrigin * vec2(2.0, 4.0), 1024.0), 1024.0)));
         c = mix(c, vec3(0.30, 0.29, 0.26), mortar * 0.8);
         c = mix(c, c * vec3(0.7, 0.75, 0.6), smoothstep(0.45, 0.8, fbm(p * 0.5 + 2.0)) * 0.5);
     } else if (mat == 7) {
@@ -479,6 +483,8 @@ void main() {
         } else if (cell.a < 0.5) {
             // A smoothed edge reaching into a rock square: the floor next to it.
             cell = texelFetch(uCells, clamp(s + ivec2(round(n)), ivec2(0), ivec2(uN) - 1), 0) * 255.0;
+            // (That floor may lie past the section's edge: sewers are all brick.)
+            if (cell.a < 0.5 && uPad > 0.5) cell = vec4(3.0, 0.0, 0.0, 255.0);
         }
         int mat = int(cell.r + 0.5);
         col = floorColor(mat, q, p, cell.b);

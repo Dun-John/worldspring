@@ -15,7 +15,7 @@ import type { FieldRequest } from './underField.worker';
 let worker: Worker | null = null;
 const waiting = new Map<number, (f: UnderField) => void>();
 let nextField = 1;
-export function prepareField(it: Interior, level: number, clamp: boolean): Promise<UnderField> {
+export function prepareField(it: Interior, level: number): Promise<UnderField> {
   if (!worker) {
     worker = new Worker(new URL('./underField.worker.ts', import.meta.url), { type: 'module' });
     worker.onmessage = (e: MessageEvent<{ id: number; f: UnderField }>) => {
@@ -26,7 +26,7 @@ export function prepareField(it: Interior, level: number, clamp: boolean): Promi
   const id = nextField++;
   return new Promise((resolve) => {
     waiting.set(id, resolve);
-    worker!.postMessage({ id, it, level, clamp } satisfies FieldRequest);
+    worker!.postMessage({ id, it, level } satisfies FieldRequest);
   });
 }
 
@@ -140,7 +140,7 @@ export class Sewers {
       void this.gen.interior(this.id(sx, sy)).then(async (found) => {
         if (this.dead) return;
         const it = found ?? rockSection(this.layout, sx, sy);
-        const field = await prepareField(it, it.entry_level, true);
+        const field = await prepareField(it, it.entry_level);
         if (!this.dead) this.ready.push({ it, field, rock: !found });
       });
     }

@@ -14,7 +14,7 @@ import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs'
 import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
 import { noiseSource } from './noise';
-import { LINE_ROOM, lineWall, nearFloor, SQUARE_SITES, underField, type UnderField } from './underField';
+import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, SQUARE_SITES, underField, type UnderField } from './underField';
 import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
 import undergroundFragment from './shaders/underground.frag?raw';
 import vertex from './shaders/terrain.vert?raw';
@@ -685,11 +685,11 @@ export class InteriorLayer {
   }
 
   /** Work out the other levels' textures in the background, so changing level doesn't stall. */
-  prefetch(prepare: (it: Interior, level: number, clamp: boolean) => Promise<UnderField>) {
+  prefetch(prepare: (it: Interior, level: number) => Promise<UnderField>) {
     if (!this.underground) return;
     for (let l = 0; l < this.interior.levels.length; l++) {
       if (this.fields.has(l)) continue;
-      void prepare(this.interior, l, this.tile).then((f) => {
+      void prepare(this.interior, l).then((f) => {
         if (!this.dead && !this.fields.has(l)) this.fields.set(l, f);
       });
     }
@@ -829,22 +829,23 @@ export class InteriorLayer {
     const { nx, ny } = it;
     this.freeUnder();
     let f = this.fields.get(this.level);
-    if (!f) this.fields.set(this.level, (f = underField(it, this.level, this.tile)));
-    const { w, h, data, cells, liquidKind, shapes, shapeCount, cave, terrain } = f;
+    if (!f) this.fields.set(this.level, (f = underField(it, this.level)));
+    const { w, h, pad, data, cells, liquidKind, shapes, shapeCount, cave, terrain } = f;
     // Built sites keep square corners: walls measured from the squares, the field unsmoothed.
     const square = SQUARE_SITES.has(it.function);
     const fieldSrc = new BufferImageSource({ resource: data, width: w, height: h, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: square ? 'nearest' : 'linear', addressMode: 'clamp-to-edge' });
     const cellSrc = new BufferImageSource({ resource: cells, width: nx, height: ny, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' });
     // Shaped rooms' boxes and looks; caverns breaking in (a blank texel when there are none).
     const shapeSrc = new BufferImageSource({ resource: shapes, width: Math.max(1, shapeCount), height: 2, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'nearest' });
-    const caveSrc = new BufferImageSource({ resource: cave ?? new Uint8Array(4), width: cave ? w : 1, height: cave ? h : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
+    const caveSrc = new BufferImageSource({ resource: cave ?? new Uint8Array(4), width: cave ? nx * FIELD_RES : 1, height: cave ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // Water, chasms and rubble slopes (a blank texel when there are none).
-    const terrainSrc = new BufferImageSource({ resource: terrain ?? new Uint8Array(4), width: terrain ? w : 1, height: terrain ? h : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
+    const terrainSrc = new BufferImageSource({ resource: terrain ?? new Uint8Array(4), width: terrain ? nx * FIELD_RES : 1, height: terrain ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // Light from the NW of the screen, in grid axes.
     const [lx, ly] = [-Math.SQRT1_2, -Math.SQRT1_2];
     const rough = it.function === 'cave' ? 1 : it.function === 'lava tube' ? 0.85 : it.function === 'mine' ? 0.45 : square ? 0 : 0.06;
     const uniforms = new UniformGroup({
       uN: { value: new Float32Array([nx, ny]), type: 'vec2<f32>' },
+      uPad: { value: pad, type: 'f32' },
       uLight: { value: new Float32Array([lx * it.axis[0] + ly * it.axis[1], lx * it.across[0] + ly * it.across[1]]), type: 'vec2<f32>' },
       uTime: { value: 0, type: 'f32' },
       uRough: { value: rough, type: 'f32' },

@@ -621,6 +621,8 @@ export interface InteriorLevel {
   natural: boolean;
   /** Lines the floor follows (sewers: the streets above): x0, y0, x1, y1, reach (grid). */
   paths?: [number, number, number, number, number][];
+  /** Floor beyond the grid's edge, as squares (sewer sections: `under::SEWER_RIM`). */
+  rim?: [number, number][];
   /** Ways to other sites (cellar trapdoors, stairs to deep dungeons, sewer ladders): the
    * square and the site's id; the other site has a way straight back. */
   links?: { x: number; y: number; to: string }[];

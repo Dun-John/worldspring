@@ -97,6 +97,10 @@ pub struct Level {
     /// x0, y0, x1, y1, reach (grid units).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<[f32; 5]>,
+    /// The floor beyond the grid's edge (sewer sections: the squares of the neighbours within
+    /// `under::SEWER_RIM`, from the streets alone), so a drawn wall runs on across the edge.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rim: Vec<[i16; 2]>,
     /// Ways to other sites from this level (a cellar trapdoor into the sewers, stairs down to a
     /// keep's deep dungeons, ladders up into cellars): each has a link back on the other side.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -4022,7 +4026,7 @@ fn connect_with(cells: Vec<i16>, rooms: Vec<Room>, nx: usize, ny: usize, st: [us
         }
     }
     let walls = wall_runs(&cells, &rooms, nx, ny, &doors);
-    Level { z: 0, name: String::new(), elevation_ft: 0.0, cells, rooms, walls, doors, windows: Vec::new(), furniture: Vec::new(), roof: false, has_stairs: true, natural: false, paths: Vec::new(), links: Vec::new() }
+    Level { z: 0, name: String::new(), elevation_ft: 0.0, cells, rooms, walls, doors, windows: Vec::new(), furniture: Vec::new(), roof: false, has_stairs: true, natural: false, paths: Vec::new(), rim: Vec::new(), links: Vec::new() }
 }
 
 /// Wall runs: every square edge between different rooms (or a room and the outside) that is not

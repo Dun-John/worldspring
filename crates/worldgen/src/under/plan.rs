@@ -30,6 +30,8 @@ pub(crate) struct Plan {
     pub(crate) blocked: Vec<bool>,
     /// Lines the floor follows (`Level::paths`).
     pub(crate) paths: Vec<[f32; 5]>,
+    /// Floor beyond the edge (`Level::rim`).
+    pub(crate) rim: Vec<[i16; 2]>,
     /// Ways to other sites (`Level::links`).
     pub(crate) links: Vec<Link>,
     /// Doors hidden in the wall (square pairs).
@@ -82,6 +84,7 @@ impl Plan {
             taken: vec![false; nx * ny],
             blocked: vec![false; nx * ny],
             paths: Vec::new(),
+            rim: Vec::new(),
             links: Vec::new(),
             secret: FastSet::default(),
             portcullis: FastSet::default(),
@@ -388,6 +391,6 @@ impl Plan {
                 k += 1;
             }
         }
-        Level { z, name, elevation_ft, cells: self.cells, rooms, walls, doors, windows: Vec::new(), furniture: self.items, roof: false, has_stairs: false, natural: self.natural, paths: self.paths, links: self.links }
+        Level { z, name, elevation_ft, cells: self.cells, rooms, walls, doors, windows: Vec::new(), furniture: self.items, roof: false, has_stairs: false, natural: self.natural, paths: self.paths, rim: self.rim, links: self.links }
     }
 }
