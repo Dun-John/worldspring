@@ -13,6 +13,9 @@ export const FIELD_RES = 4;
 const SEWER_RIM = 5;
 /** Of those, the squares kept in the texture: as far past the edge as the shader looks. */
 const FIELD_PAD = 1;
+/** The sewage channel: the blur of the lines' floor (squares) and the level of its edge. */
+const CHANNEL_SIGMA = 1.1;
+const CHANNEL = 0.655;
 
 export interface UnderField {
   /** Field texture (w x h, RGBA: floor, liquid, raised; `pad` squares wider than the grid each
@@ -295,12 +298,15 @@ export function underField(it: Interior, level: number): UnderField {
         }
       }
     }
-    // The sewage channel: the middle of the wider runs, from a wide blur of the lines' floor alone
-    // (a passage is the section's own: the next section would work out another channel).
+    // The sewage channel: the middle of the runs, from a wide blur of the lines' floor alone (a
+    // passage is the section's own: the next section would work out another channel). A straight
+    // run's middle comes to 0.725: the ramp lies well under that so a run never breaks up, and over
+    // the 0.5 at a wall so a walkway stays; a run's end tapers as the blur falls. The squares of it
+    // that count as sewage in play are worked out from the same blur (`themes/sewer.rs`, `CHANNEL`).
     liquidKind = 1;
-    const wide = blurCoarse(lined, w, h, 1.1 * R, 2);
+    const wide = blurCoarse(lined, w, h, CHANNEL_SIGMA * R, 2);
     for (let k = 0; k < w * h; k++) {
-      liquid[k] = lined[k] * Math.max(0, Math.min(1, (wide[k] - 0.66) / 0.08));
+      liquid[k] = lined[k] * Math.max(0, Math.min(1, (wide[k] - (CHANNEL - 0.025)) / 0.05));
       if (lined[k]) floor[k] = 1;
     }
   }

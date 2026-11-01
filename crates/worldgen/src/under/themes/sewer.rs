@@ -1,4 +1,4 @@
-//! A city's sewers: the ground under the paved streets of one section, a sewage channel down the wider runs.
+//! A city's sewers: the ground under the paved streets of one section, a sewage channel down the runs.
 
 use crate::interior::{Item, SQUARE_FT};
 use crate::t0::T0;
@@ -6,7 +6,7 @@ use crate::town::{Layout, geom::P};
 use crate::under::*;
 
 /// The sewers of a section: the ground under the paved streets, joined where runs meet only
-/// outside the section by service passages; a sewage channel down the wider runs, an outfall
+/// outside the section by service passages; a sewage channel down the runs, an outfall
 /// where a tunnel reaches water; the drain shaft down at the far end from the way in (the
 /// grate, else the run nearest the section's middle). None if no street runs here.
 pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate: Option<usize>, last: bool) -> Option<Plan> {
@@ -194,11 +194,6 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
         // A scrap of tunnel too small for a shaft: no sewer section here.
         p.down?;
     }
-    // Away from the walls: floor on all four sides (at the section's edge, the floor beyond it).
-    let all_floor = |p: &Plan, k: usize| {
-        let (i, j) = ((k % nx) as i64, (k / nx) as i64);
-        [(i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)].iter().all(|&(a, b)| if (0..side).contains(&a) && (0..tall).contains(&b) { p.cells[b as usize * nx + a as usize] >= 0 } else { beyond[at_rim(a, b)] })
-    };
     let keep = |p: &Plan, k: usize| k == p.up || Some(k) == p.down;
     // The other grates: ladders up to the street.
     let up = p.up;
@@ -235,12 +230,6 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
             p.links.push(Link { x: (m % nx) as u16, y: (m / nx) as u16, ..link });
         }
     }
-    // Sewage down the middle of the wider runs; walkways along the walls.
-    for k in 0..n {
-        if p.cells[k] == tunnel && !keep(&p, k) && all_floor(&p, k) {
-            p.put(Item::new("sewage", "sewage channel", k % nx, k / nx, 1, 1, 0, false, 0.0, Some("difficult terrain; swallowed: DC 11 Con save or poisoned for 1 hour")));
-        }
-    }
     // An outfall where a run reaches water.
     let mut outfalls = 0;
     for k in 0..n {
@@ -265,5 +254,87 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
         }
         p.put(Item::new("continues", "the sewer runs on (double-click to follow)", i, j, 1, 1, 0, false, 0.0, None));
     }
+    // Sewage down the middle of the runs, where the channel is painted; walkways along the walls.
+    let depth = channel(&p, nx, ny, &beyond);
+    for k in 0..n {
+        if p.cells[k] == tunnel && !p.taken[k] && !keep(&p, k) && depth[k] >= CHANNEL {
+            p.put(Item::new("sewage", "sewage channel", k % nx, k / nx, 1, 1, 0, false, 0.0, Some("difficult terrain; swallowed: DC 11 Con save or poisoned for 1 hour")));
+        }
+    }
     Some(p)
+}
+
+/// Where a square's middle counts as sewage: the edge of the channel `app/src/render/underField.ts` paints.
+const CHANNEL: f32 = 0.655;
+/// The blur the channel comes from, in squares (`CHANNEL_SIGMA` there).
+const CHANNEL_SIGMA: f64 = 1.1;
+
+/// The blur of the lines' floor at each square's middle, the same one the painted channel comes
+/// from: the lines' band (within reach of a line, on or beside floor), `SEWER_RIM` squares past the
+/// section, so it reads the same from both sides of a border. `beyond`: the rim's floor.
+fn channel(p: &Plan, nx: usize, ny: usize, beyond: &[bool]) -> Vec<f32> {
+    const PER: usize = 2; // samples a square
+    let rim = SEWER_RIM;
+    let (across, down) = (nx + 2 * rim, ny + 2 * rim);
+    let mut near = vec![false; across * down];
+    let mut mark = |i: usize, j: usize| {
+        for b in j.saturating_sub(1)..=(j + 1).min(down - 1) {
+            for a in i.saturating_sub(1)..=(i + 1).min(across - 1) {
+                near[b * across + a] = true;
+            }
+        }
+    };
+    for j in 0..down {
+        for i in 0..across {
+            let inside = (rim..rim + nx).contains(&i) && (rim..rim + ny).contains(&j);
+            if if inside { p.cells[(j - rim) * nx + i - rim] >= 0 } else { beyond[j * across + i] } {
+                mark(i, j);
+            }
+        }
+    }
+    let (w, h) = (across * PER, down * PER);
+    let mut lined = vec![false; w * h];
+    let (per, off) = (PER as f32, rim as f32);
+    for &[x0, y0, x1, y1, r] in &p.paths {
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len2 = (dx * dx + dy * dy).max(1e-9);
+        let span = |a: f32, b: f32, n: usize| (((a.min(b) - r + off) * per).floor().max(0.0) as usize, (((a.max(b) + r + off) * per).ceil().max(0.0) as usize).min(n - 1));
+        let (tx0, tx1) = span(x0, x1, w);
+        let (ty0, ty1) = span(y0, y1, h);
+        for ty in ty0..=ty1 {
+            let py = (ty as f32 + 0.5) / per - off;
+            for tx in tx0..=tx1 {
+                let px = (tx as f32 + 0.5) / per - off;
+                if !near[(ty / PER) * across + tx / PER] {
+                    continue;
+                }
+                let t = (((px - x0) * dx + (py - y0) * dy) / len2).clamp(0.0, 1.0);
+                let (ex, ey) = (px - x0 - t * dx, py - y0 - t * dy);
+                if ex * ex + ey * ey <= r * r {
+                    lined[ty * w + tx] = true;
+                }
+            }
+        }
+    }
+    // (Worked out at a square's middle only, which is few squares: the rest is rock.)
+    const REACH: usize = 6;
+    let sigma = CHANNEL_SIGMA * PER as f64;
+    let weight = |o: usize| libm::exp(-(o as f64 - (REACH as f64 - 0.5)) * (o as f64 - (REACH as f64 - 0.5)) / (2.0 * sigma * sigma));
+    let total: f64 = (0..2 * REACH).map(weight).sum();
+    let kernel: Vec<f32> = (0..2 * REACH).map(|o| (weight(o) / total) as f32).collect();
+    let mut depth = vec![0.0; nx * ny];
+    for k in (0..nx * ny).filter(|&k| p.cells[k] >= 0) {
+        let (cx, cy) = ((k % nx + rim) * PER + PER / 2, (k / nx + rim) * PER + PER / 2);
+        let mut sum = 0.0;
+        for b in 0..2 * REACH {
+            let row = (cy + b - REACH) * w + cx - REACH;
+            for a in 0..2 * REACH {
+                if lined[row + a] {
+                    sum += kernel[a] * kernel[b];
+                }
+            }
+        }
+        depth[k] = sum;
+    }
+    depth
 }
