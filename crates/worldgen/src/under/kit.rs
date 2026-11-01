@@ -307,7 +307,7 @@ pub(crate) fn kit(kind: &str) -> &'static [(&'static str, usize, usize, Spot, u3
         "smugglers' cache" => &[("crate", 1, 1, Edge, 2, 5), ("barrel", 1, 1, Edge, 1, 3), ("sacks", 1, 1, Edge, 1, 3), ("chest", 1, 1, Edge, 1, 1), ("bedroll", 1, 2, Any, 0, 2), ("lantern", 1, 1, Edge, 1, 1)],
         "old vault" => &[("chest", 1, 1, Edge, 1, 3), ("pillar", 1, 1, Any, 0, 2), ("statue", 1, 1, Edge, 0, 1), ("cobweb", 1, 1, Edge, 1, 2)],
         "rat warren" => &[("rat_nest", 1, 1, Any, 2, 4), ("bones", 1, 1, Any, 2, 5), ("rubble", 1, 1, Any, 1, 3), ("debris", 1, 1, Any, 0, 2)],
-        "sewer tunnel" => &[("debris", 1, 1, Edge, 3, 7), ("pipe", 1, 1, Edge, 3, 7), ("rat_nest", 1, 1, Edge, 1, 3), ("rubble", 1, 1, Edge, 1, 4), ("bones", 1, 1, Edge, 1, 3), ("barrel", 1, 1, Edge, 0, 2)],
+        "sewer tunnel" => &[("debris", 1, 1, Edge, 3, 7), ("pipe", 1, 1, Edge, 1, 1), ("rat_nest", 1, 1, Edge, 1, 3), ("rubble", 1, 1, Edge, 1, 4), ("bones", 1, 1, Edge, 1, 3), ("barrel", 1, 1, Edge, 0, 2)],
         "service passage" => &[("debris", 1, 1, Any, 0, 1), ("lantern", 1, 1, Edge, 0, 1)],
         // Caves.
         "cavern" => &[("stalagmite", 1, 1, Any, 2, 6), ("boulder", 2, 2, Any, 0, 2), ("rock_column", 1, 1, Any, 0, 2), ("rubble", 1, 1, Any, 0, 2), ("skeleton", 1, 2, Any, 0, 1), ("web", 1, 1, Edge, 0, 1)],
@@ -502,7 +502,7 @@ pub(crate) fn furnish_room(p: &mut Plan, nx: usize, ny: usize, ri: i16, rkind: &
         // Big rooms (a sewer's whole network, a great cavern) get a kit per 80 squares.
         let n = (lo + rng.below(hi - lo + 1)) * (squares.len() as u32 / 80).clamp(1, 12);
         let mut placed = 0;
-        for _ in 0..n * 12 {
+        for _ in 0..n * if what == "pipe" { 80 } else { 12 } {
             if placed >= n {
                 break;
             }
@@ -512,6 +512,19 @@ pub(crate) fn furnish_room(p: &mut Plan, nx: usize, ny: usize, ri: i16, rkind: &
             };
             let k = pool[rng.below(pool.len() as u32) as usize];
             let (w, h) = if rng.next_f64() < 0.5 { (w, h) } else { (h, w) };
+            if rkind == "sewer tunnel" {
+                let (x, y) = (k % nx, k / nx);
+                let near = |kind: &str, d: usize| p.items.iter().any(|o| o.kind == kind && x.abs_diff(o.x as usize).max(y.abs_diff(o.y as usize)) < d);
+                // Ways out stay clear: they are drawn on the tunnel's wall, up to a square or so from their own.
+                if near("ladder", 3) || near("tunnel", 3) {
+                    continue;
+                }
+                // Drain outlets keep 6 squares apart and 3 in from the section's border, so neighbouring sections
+                // (generated alone) are 6 apart too.
+                if what == "pipe" && (x < 3 || y < 3 || x + 3 >= nx || y + 3 >= ny || near("pipe", 6)) {
+                    continue;
+                }
+            }
             if p.place(item(what, k % nx, k / nx, w, h), Some(ri), ny) {
                 placed += 1;
             }

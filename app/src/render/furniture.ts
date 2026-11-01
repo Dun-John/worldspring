@@ -3397,6 +3397,7 @@ export { PLATFORMS };
 /** Furniture with other than four looks (`interior::item_looks`): the throne dais's three seatings in stone and
  * gilt, then on timber; a banner's house (`HOUSES`). */
 const LOOKS: Record<string, number> = {
+  pipe: 3,
   throne_dais: 6,
   wall_banner: HOUSES.length,
   standing_banner: HOUSES.length,
@@ -4226,50 +4227,97 @@ function tunnel(g: Graphics, f: InteriorItem, rnd: () => number, wall: [number, 
 
 /** A ladder against the wall, up to a grate in the street above: two rails, rungs, a square of grey light
  * falling through the grate onto its foot. */
-function ladder(g: Graphics, f: InteriorItem, rnd: () => number, wall: [number, number]) {
+function ladder(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, wall: [number, number], turned = false) {
   const { at, rect } = frame(f, wall);
-  // The grate's light on the floor below it.
-  g.poly(quad(rect(0.2, 0.02, 0.8, 0.62), rnd, 0)).fill({ color: 0xd8dce0, alpha: 0.18 });
-  for (let k = 1; k < 4; k++) g.moveTo(...at(0.2 + k * 0.15, 0.02)).lineTo(...at(0.2 + k * 0.15, 0.62));
-  g.stroke({ width: 0.03, color: 0x14100c, alpha: 0.25 });
+  // The grate's light on the floor below it (a ladder turned to a curving wall has none: a tilted box reads as a pale slab).
+  if (!turned) {
+    g.poly(quad(rect(0.2, 0.02, 0.8, 0.62), rnd, 0)).fill({ color: 0xd8dce0, alpha: 0.18 });
+    for (let k = 1; k < 4; k++) g.moveTo(...at(0.2 + k * 0.15, 0.02)).lineTo(...at(0.2 + k * 0.15, 0.62));
+    g.stroke({ width: 0.03, color: 0x14100c, alpha: 0.25 });
+  }
+  // Lit from the light's side: the rails and rungs get a bright edge toward it and a dark one away.
+  const [lx, ly] = light;
+  const d = 0.014;
+  const line = (x0: number, y0: number, x1: number, y1: number, w: number, color: number, ox = 0, oy = 0) =>
+    g.moveTo(x0 + ox, y0 + oy).lineTo(x1 + ox, y1 + oy).stroke({ width: w, color, cap: 'round' });
   for (const u of [0.32, 0.68]) {
-    g.moveTo(...at(u, -0.22)).lineTo(...at(u, 0.7)).stroke({ width: 0.07, color: INK, cap: 'round' });
-    g.moveTo(...at(u, -0.22)).lineTo(...at(u, 0.7)).stroke({ width: 0.04, color: WOOD[1], cap: 'round' });
+    const [a, b] = [at(u, -0.22), at(u, 0.7)];
+    line(a[0], a[1], b[0], b[1], 0.07, INK);
+    line(a[0], a[1], b[0], b[1], 0.04, WOOD[1]);
+    line(a[0], a[1], b[0], b[1], 0.014, WOOD[2], lx * d, ly * d);
   }
   for (const s0 of [-0.08, 0.14, 0.32, 0.5]) {
-    g.moveTo(...at(0.32, s0)).lineTo(...at(0.68, s0)).stroke({ width: 0.05, color: INK, cap: 'round' });
-    g.moveTo(...at(0.32, s0)).lineTo(...at(0.68, s0)).stroke({ width: 0.028, color: WOOD[2], cap: 'round' });
+    const [a, b] = [at(0.32, s0), at(0.68, s0)];
+    line(a[0], a[1], b[0], b[1], 0.05, INK);
+    line(a[0], a[1], b[0], b[1], 0.028, WOOD[2]);
+    line(a[0], a[1], b[0], b[1], 0.01, WOOD[0], -lx * d, -ly * d);
   }
 }
 
-/** A drain outlet in the wall: a short, wide iron pipe standing out of the rock, its back rounded where it
- * goes into the wall, its sides the width of its mouth, shaded as a cylinder with a band near the end; dark
- * inside, a trickle of muck running from it to a puddle on the floor. */
-function pipe(g: Graphics, f: InteriorItem, rnd: () => number, wall: [number, number]) {
+/** A drain outlet set flush in the wall, seen from above: a round mouth in a rim (0 iron, bolted; 1 brick,
+ * a grate across it; 2 stone, broken away at one side), half in the wall, dark inside with the far side of
+ * the bore catching the light. A stain and a thin trickle of muck run out across the floor to a small puddle. */
+function pipe(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, wall: [number, number]) {
   const { at } = frame(f, wall);
-  const [r, back, mouth] = [0.25, -0.02, 0.16];
-  g.poly(ring(...at(0.5, 0.66), 0.16, rnd, 0.05, 12)).fill({ color: 0x4a5a32, alpha: 0.8 });
-  g.moveTo(...at(0.5, mouth + 0.04)).quadraticCurveTo(...at(0.46, 0.4), ...at(0.5, 0.56)).stroke({ width: 0.06, color: 0x5a6a3a, cap: 'round' });
-  // The body: straight sides the mouth's width, the back a curve bulging into the wall.
-  const body = (k: number) => {
-    const pts: number[] = [...at(0.5 - r * k, mouth)];
-    for (let i = 0; i <= 12; i++) {
-      const t = Math.PI - (i / 12) * Math.PI;
-      pts.push(...at(0.5 + Math.cos(t) * r * k, back - Math.sin(t) * 0.12 * k));
-    }
-    pts.push(...at(0.5 + r * k, mouth));
+  const look = v % 3;
+  const [cu, cs] = [0.5, 0.04];
+  const [rx, ry, ix, iy] = [0.31, 0.19, 0.18, 0.085];
+  const rot = wall[0] !== 0 ? Math.PI / 2 : 0;
+  const tones = look === 0 ? IRON : look === 1 ? [0x5e4234, 0x80604c, 0x9a7a62] : [0x5c5850, 0x7c776c, 0x96917f];
+  const on = (t: number, k: number) => at(cu + Math.cos(t) * (ix + (rx - ix) * k), cs + Math.sin(t) * (iy + (ry - iy) * k));
+  const [end, drift] = [0.4, (rnd() - 0.5) * 0.12];
+  const FILTH = 0x46502e;
+  // The stain, and the puddle spread along the foot of the wall, as flat as the scum on the floor.
+  g.poly(oval(...at(cu + drift * 0.4, 0.24), 0.17, 0.15, rot, 14)).fill({ color: 0x343a26, alpha: 0.5 });
+  const edge: number[] = [];
+  for (let i = 0; i < 14; i++) {
+    const t = (i / 14) * Math.PI * 2;
+    const k = 0.75 + rnd() * 0.45;
+    edge.push(...at(cu + drift + Math.cos(t) * 0.17 * k, end + Math.sin(t) * 0.075 * k));
+  }
+  g.poly(edge).fill(FILTH).stroke({ width: 0.016, color: INK, alpha: 0.45, join: 'round' });
+  g.poly(oval(...at(cu + drift - 0.04, end - 0.015), 0.05, 0.016, rot, 8)).fill({ color: 0x626a46, alpha: 0.9 });
+  // The rim: blocks turned to the light lit, away from it shaded. (Broken: a run of them gone.)
+  const n = look === 1 ? 8 : 24;
+  const [a0, a1] = [1, 5];
+  const gone = (i: number) => look === 2 && i >= a0 && i < a1;
+  const [ox, oy] = at(cu, cs);
+  for (let i = 0; i < n; i++) {
+    if (gone(i)) continue;
+    const [t0, t1] = [(i / n) * Math.PI * 2, ((i + 1) / n) * Math.PI * 2];
+    const [mx, my] = on((t0 + t1) / 2, 1);
+    const lit = ((mx - ox) * light[0] + (my - oy) * light[1]) / Math.max(Math.hypot(mx - ox, my - oy), 1e-6);
+    g.poly([...on(t0, 0), ...on(t0, 1), ...on(t1, 1), ...on(t1, 0)]).fill(tones[lit > 0.35 ? 2 : lit < -0.35 ? 0 : 1]);
+  }
+  // Ink round the rim that is left, with a line across each end of a break.
+  const arc = (i0: number, i1: number) => {
+    const pts: number[] = [];
+    for (let i = i0; i <= i1; i++) pts.push(...on((i / n) * Math.PI * 2, 1));
     return pts;
   };
-  g.poly(body(1)).fill(IRON[0]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.poly(body(0.72)).fill(IRON[1]);
-  g.poly([...at(0.5 - r * 0.6, back), ...at(0.5 - r * 0.3, back), ...at(0.5 - r * 0.3, mouth), ...at(0.5 - r * 0.6, mouth)]).fill({ color: IRON[2], alpha: 0.7 });
-  // A band just behind the mouth.
-  g.poly([...at(0.5 - r * 1.04, mouth - 0.07), ...at(0.5 + r * 1.04, mouth - 0.07), ...at(0.5 + r * 1.04, mouth - 0.03), ...at(0.5 - r * 1.04, mouth - 0.03)]).fill(IRON[0]).stroke({ width: 0.012, color: INK });
-  // The mouth: an ellipse the body's width, dark inside.
-  const rot = wall[0] !== 0 ? Math.PI / 2 : 0;
-  g.poly(oval(...at(0.5, mouth), r, 0.1, rot, 18)).fill(IRON[1]).stroke({ width: OUT, color: INK });
-  g.poly(oval(...at(0.5, mouth), r * 0.72, 0.07, rot, 18)).fill(0x0e0c0a);
-  g.poly(oval(...at(0.5, mouth + 0.03), r * 0.45, 0.025, rot, 12)).fill({ color: 0x5a6a3a, alpha: 0.9 });
+  if (look === 2) {
+    g.poly(arc(a1, n + a0), false).stroke({ width: OUT, color: INK, join: 'round', cap: 'round' });
+    for (const i of [a0, a1]) g.moveTo(...on((i / n) * Math.PI * 2, 0)).lineTo(...on((i / n) * Math.PI * 2, 1)).stroke({ width: LINE, color: INK, cap: 'round' });
+    // Where the rim fell: chips on the floor beside it.
+    for (const [u, s, r] of [[0.86, 0.22, 0.035], [0.78, 0.31, 0.025]]) g.poly(ring(...at(u, s), r, rnd, 0.008, 6)).fill(tones[1]).stroke({ width: 0.016, color: INK });
+  } else {
+    g.poly(arc(0, n - 1)).stroke({ width: OUT, color: INK, join: 'round' });
+  }
+  if (look === 1) {
+    for (let i = 0; i < n; i++) g.moveTo(...on((i / n) * Math.PI * 2, 0)).lineTo(...on((i / n) * Math.PI * 2, 1)).stroke({ width: 0.02, color: INK });
+  }
+  if (look === 0) {
+    for (const t of [0.8, 2.34, 3.93, 5.5]) g.circle(...on(t, 0.5), 0.02).fill(IRON[0]).stroke({ width: 0.014, color: INK });
+  }
+  // The bore: dark, the far side catching the light (the dark shifted toward the light).
+  g.poly(oval(...at(cu, cs), ix, iy, rot, 18)).fill(shade(tones[0], 0.72));
+  g.poly(oval(...at(cu, cs), ix, iy, rot, 18).map((c, i) => c + light[i % 2] * 0.024)).fill(0x0e0c0a);
+  g.poly(oval(...at(cu, cs), ix, iy, rot, 18)).stroke({ width: LINE, color: INK });
+  if (look === 1) {
+    for (const u of [-0.085, 0, 0.085]) g.moveTo(...at(cu + u, cs - iy * 0.95)).lineTo(...at(cu + u, cs + iy * 0.95)).stroke({ width: 0.024, color: IRON[0], cap: 'round' });
+  }
+  // The muck, out over the lip of the mouth and across the floor.
+  g.moveTo(...at(cu, cs + iy * 0.5)).quadraticCurveTo(...at(cu - drift * 0.6, 0.26), ...at(cu + drift, end)).stroke({ width: 0.024, color: FILTH, cap: 'round' });
 }
 
 /** An old well: a ring of fitted stones round dark water with a glint, a rope down into it from a beam
@@ -6902,7 +6950,7 @@ export const UNDER_DRAWN = new Set([
 /** Draws underground prop `f` if it is drawn here; false otherwise. `wall` is the rock side for props
  * against a wall, and the back for those that have one (the dais); `links` the sides a rail or an ore cart joins
  * the rails beside it (`railRuns`). */
-export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: number, wall: [number, number], links = 0): boolean {
+export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: number, wall: [number, number], links = 0, turned = false): boolean {
   if (!UNDER_DRAWN.has(f.kind)) return false;
   const rnd = rng(v * 7919 + f.w * 131 + f.h * 17 + f.kind.length * 1009 + f.kind.charCodeAt(0) * 3);
   const w: [number, number] = wall[0] || wall[1] ? wall : [0, -1];
@@ -6920,10 +6968,10 @@ export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: num
       tunnel(g, f, rnd, w);
       break;
     case 'ladder':
-      ladder(g, f, rnd, w);
+      ladder(g, f, light, rnd, w, turned);
       break;
     case 'pipe':
-      pipe(g, f, rnd, w);
+      pipe(g, f, light, v, rnd, w);
       break;
     case 'well':
       well(g, f, light, rnd);

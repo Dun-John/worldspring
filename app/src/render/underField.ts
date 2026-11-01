@@ -3,7 +3,7 @@
 // terrain (water, chasms, rubble slopes) likewise.
 // Pure data, so a city's sewer sections can be prepared in a worker (`underField.worker.ts`)
 // while the view moves.
-import type { Interior } from '../gen/protocol';
+import type { Interior, InteriorLevel } from '../gen/protocol';
 import { CAVERN, fromSquares, shapeIndex } from './roomShapes';
 
 /** Field texels per square. */
@@ -135,6 +135,84 @@ function blurCoarse(src: Float32Array, w: number, h: number, sigma: number, f: n
   return out;
 }
 
+/** The room whose floor follows the lines. */
+export const LINE_ROOM = 'sewer tunnel';
+
+/** The squares of a level with floor on or beside them: a line's floor is drawn only there (runs
+ * dropped from the sewer stay rock). */
+export function nearFloor(lv: InteriorLevel, nx: number, ny: number): Uint8Array {
+  const near = new Uint8Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      if (lv.cells[j * nx + i] < 0) continue;
+      for (let b = Math.max(0, j - 1); b <= Math.min(ny - 1, j + 1); b++) for (let a = Math.max(0, i - 1); a <= Math.min(nx - 1, i + 1); a++) near[b * nx + a] = 1;
+    }
+  }
+  return near;
+}
+
+/** How far a point is past a line's reach (below 0 inside), and the unit step from the line out to it. */
+function offLine([x0, y0, x1, y1, r]: number[], px: number, py: number): [number, number, number] {
+  const [dx, dy] = [x1 - x0, y1 - y0];
+  const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / Math.max(dx * dx + dy * dy, 1e-9)));
+  const [ex, ey] = [px - x0 - t * dx, py - y0 - t * dy];
+  const e = Math.max(Math.hypot(ex, ey), 1e-9);
+  return [e - r, ex / e, ey / e];
+}
+
+const WALL_RAYS = 64;
+const WALL_STEP = 0.1;
+/** How far a prop looks for its wall (squares). */
+const WALL_REACH = 2.6;
+/** How far a wall's point stays within the section: the next section's floor would cover what hangs over. */
+const WALL_MARGIN = 0.5;
+
+/** The nearest wall of the floor painted from a level's lines to (cx, cy), in grid squares: the point
+ * on it and the unit step from it into the rock. Rays from there find where the floor painted by
+ * `underField` meets rock, so a point inside one line on another's edge is no wall, and floor on squares
+ * (a passage dug beside a tunnel) neither. Null if nothing within reach is a line's edge in the section. */
+export function lineWall(lv: InteriorLevel, nx: number, ny: number, near: Uint8Array, cx: number, cy: number): { x: number; y: number; dx: number; dy: number } | null {
+  const paths = lv.paths ?? [];
+  const onFloor = (px: number, py: number) => {
+    const [i, j] = [Math.floor(px), Math.floor(py)];
+    if (i >= 0 && j >= 0 && i < nx && j < ny) {
+      const k = j * nx + i;
+      const r = lv.cells[k];
+      if (r >= 0 && lv.rooms[r].kind !== LINE_ROOM) return true;
+      if (!near[k]) return false;
+    }
+    return paths.some((l) => offLine(l, px, py)[0] <= 0);
+  };
+  const from = onFloor(cx, cy);
+  let best: { x: number; y: number; dx: number; dy: number } | null = null;
+  let reach = WALL_REACH;
+  for (let a = 0; a < WALL_RAYS; a++) {
+    const [ux, uy] = [Math.cos((a / WALL_RAYS) * Math.PI * 2), Math.sin((a / WALL_RAYS) * Math.PI * 2)];
+    for (let t = WALL_STEP; t < reach; t += WALL_STEP) {
+      if (onFloor(cx + ux * t, cy + uy * t) === from) continue;
+      let [lo, hi] = [t - WALL_STEP, t];
+      for (let b = 0; b < 6; b++) {
+        const m = (lo + hi) / 2;
+        if (onFloor(cx + ux * m, cy + uy * m) === from) lo = m;
+        else hi = m;
+      }
+      const [x, y] = [cx + ux * hi, cy + uy * hi];
+      // On a line's edge? (Else squares: not this wall.)
+      let edge: [number, number, number] | null = null;
+      for (const l of paths) {
+        const o = offLine(l, x, y);
+        if (Math.abs(o[0]) < 0.02 && (!edge || Math.abs(o[0]) < Math.abs(edge[0]))) edge = o;
+      }
+      if (edge && hi < reach && x >= WALL_MARGIN && y >= WALL_MARGIN && x <= nx - WALL_MARGIN && y <= ny - WALL_MARGIN) {
+        reach = hi;
+        best = { x, y, dx: edge[1], dy: edge[2] };
+      }
+      break;
+    }
+  }
+  return best;
+}
+
 /** The textures of a level of an underground site. `clamp`: a section of a city's sewers (its
  * tunnels run to the edge, to meet the next section's). */
 export function underField(it: Interior, level: number, clamp: boolean): UnderField {
@@ -169,7 +247,7 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
       cells[k * 4 + 3] = 255;
       // Floors that follow lines (sewers under streets) are painted from the lines below; shaped
       // rooms from their shapes; anything else fills its squares.
-      const square = (!paths.length || room.kind !== 'sewer tunnel') && fromSquares(index[k]);
+      const square = (!paths.length || room.kind !== LINE_ROOM) && fromSquares(index[k]);
       const lift = Math.min(1, room.raise_ft / 10);
       if (lift > 0) anyRaised = true;
       for (let y = j * R; y < (j + 1) * R; y++) {
@@ -185,13 +263,7 @@ export function underField(it: Interior, level: number, clamp: boolean): UnderFi
   if (paths.length) {
     // Along the lines: the band within reach, where it borders real floor (runs dropped from
     // the sewer stay rock), so diagonal tunnels are smooth rather than stepped.
-    const near = new Uint8Array(nx * ny);
-    for (let j = 0; j < ny; j++) {
-      for (let i = 0; i < nx; i++) {
-        if (lv.cells[j * nx + i] < 0) continue;
-        for (let b = Math.max(0, j - 1); b <= Math.min(ny - 1, j + 1); b++) for (let a = Math.max(0, i - 1); a <= Math.min(nx - 1, i + 1); a++) near[b * nx + a] = 1;
-      }
-    }
+    const near = nearFloor(lv, nx, ny);
     for (const [x0, y0, x1, y1, r] of paths) {
       const dx = x1 - x0;
       const dy = y1 - y0;

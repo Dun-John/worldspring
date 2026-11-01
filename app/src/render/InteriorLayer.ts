@@ -9,12 +9,12 @@ import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
 import { drawFurniture, drawUnderProp, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED } from './furniture';
-import { ITEM_PX, ItemAtlas } from './itemAtlas';
+import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
 import { noiseSource } from './noise';
-import { SQUARE_SITES, underField, type UnderField } from './underField';
+import { LINE_ROOM, lineWall, nearFloor, SQUARE_SITES, underField, type UnderField } from './underField';
 import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
 import undergroundFragment from './shaders/underground.frag?raw';
 import vertex from './shaders/terrain.vert?raw';
@@ -24,6 +24,17 @@ const SQUARE_FT = 5;
 export const ON_WALL = new Set(['tunnel', 'cobweb', 'ore_vein', 'niche', 'chains', 'sconce', 'banner', 'pipe', 'ladder']);
 /** Underground props with a back against a wall (a dais's throne; a collapsed wall, the wall it fell from). */
 export const BACKED = new Set(['dais', 'collapsed_wall']);
+/** A prop on a curving wall: the wall's point (grid), the turn from north to its rock side, that turn
+ * as one of 16 steps, and the light for its look drawn unturned. */
+interface WallAnchor {
+  x: number;
+  y: number;
+  angle: number;
+  step: number;
+  light: [number, number];
+}
+/** Per level, the squares a line's floor can be painted on (`nearFloor`). */
+const NEAR_FLOOR = new WeakMap<InteriorLevel, Uint8Array>();
 /** An item's `back` (0 north 1 east 2 south 3 west) as a unit step in grid axes. */
 const FACES: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 /** The side set on an item in its design, if any. */
@@ -542,6 +553,8 @@ export class InteriorLayer {
   private under: { uniforms: UniformGroup; sources: BufferImageSource[]; shader: Shader; mesh: Mesh<any, any>; level: number } | null = null;
   /** Underground levels' textures, worked out once each (`underField`). */
   private readonly fields = new Map<number, UnderField>();
+  /** Props on a tunnel's wall, worked out once each (`wallAnchor`). */
+  private readonly anchors = new WeakMap<InteriorItem, WallAnchor | null>();
   /** Toward the light (screen NW) in grid axes, rounded to 45 degrees, for items' shading. */
   private light: [number, number] = [-Math.SQRT1_2, -Math.SQRT1_2];
 
@@ -983,10 +996,7 @@ export class InteriorLayer {
       }
       const frame = atlas.get(this.itemKey(f), (ig) => this.drawItem(ig, f), [f.x, f.y]);
       if (!frame) continue;
-      const s = new Sprite(frame.texture);
-      s.position.set(f.x + frame.x, f.y + frame.y);
-      s.scale.set(1 / ITEM_PX);
-      items.addChild(s);
+      items.addChild(this.itemSprite(f, frame));
     }
     if (atlas) {
       atlas.flush();
@@ -1270,10 +1280,7 @@ export class InteriorLayer {
         }
         const frame = atlas.get(this.itemKey(f), (ig) => this.drawItem(ig, f), [f.x, f.y]);
         if (!frame) continue;
-        const s = new Sprite(frame.texture);
-        s.position.set(f.x + frame.x, f.y + frame.y);
-        s.scale.set(1 / ITEM_PX);
-        items.addChild(s);
+        items.addChild(this.itemSprite(f, frame));
       }
     }
     this.level = keep;
@@ -1408,12 +1415,7 @@ export class InteriorLayer {
     if (!node && atlas) {
       const frame = atlas.get(this.itemKey(f), (ig) => this.drawItem(ig, f), [f.x, f.y]);
       atlas.flush();
-      if (frame) {
-        const s = new Sprite(frame.texture);
-        s.position.set(f.x + frame.x, f.y + frame.y);
-        s.scale.set(1 / ITEM_PX);
-        node = s;
-      }
+      if (frame) node = this.itemSprite(f, frame);
     }
     if (!node) {
       const g = new Graphics();
@@ -1501,6 +1503,52 @@ export class InteriorLayer {
     return sharedKind(kind, this.underground);
   }
 
+  /** An item's look from the atlas where it goes; a prop on a tunnel's curving wall stands on that wall,
+   * turned to it (its look is drawn with the wall to the north: `wallAnchor`). */
+  private itemSprite(f: InteriorItem, frame: ItemFrame): Sprite {
+    const s = new Sprite(frame.texture);
+    s.scale.set(1 / ITEM_PX);
+    const a = this.wallAnchor(f);
+    if (a) {
+      s.pivot.set((f.w / 2 - frame.x) * ITEM_PX, -frame.y * ITEM_PX);
+      s.position.set(a.x, a.y);
+      s.rotation = a.angle;
+    } else {
+      s.position.set(f.x + frame.x, f.y + frame.y);
+    }
+    return s;
+  }
+
+  /** Where a prop hangs on the wall of a floor that follows lines (a sewer tunnel): on the wall as
+   * painted, whatever squares it was given, a section's border being no wall. Null elsewhere, for a
+   * side set in a design, and on the squares of a passage dug beside the tunnel: those go by
+   * `wallSide`. Drawn with the wall to the north and turned, so its light is turned back by the
+   * nearest of 16 angles, to stay the screen's NW. (Without an atlas nothing can be turned.) */
+  private wallAnchor(f: InteriorItem): WallAnchor | null {
+    if (!ON_WALL.has(f.kind) || !this.underground || !InteriorLayer.renderer) return null;
+    const lv = this.interior.levels[this.level];
+    if (!lv.paths?.length || setBack(f)) return null;
+    const hit = this.anchors.get(f);
+    if (hit !== undefined) return hit;
+    const { nx, ny } = this.interior;
+    const room = f.x < nx && f.y < ny ? lv.cells[f.y * nx + f.x] : -1;
+    let a: WallAnchor | null = null;
+    if (room >= 0 && lv.rooms[room].kind === LINE_ROOM) {
+      let near = NEAR_FLOOR.get(lv);
+      if (!near) NEAR_FLOOR.set(lv, (near = nearFloor(lv, nx, ny)));
+      const w = lineWall(lv, nx, ny, near, f.x + f.w / 2, f.y + f.h / 2);
+      if (w) {
+        const angle = Math.atan2(w.dx, -w.dy);
+        const step = Math.round(angle / (Math.PI / 8));
+        const [c, s] = [Math.cos((step * Math.PI) / 8), Math.sin((step * Math.PI) / 8)];
+        const [lx, ly] = this.light;
+        a = { x: w.x, y: w.y, angle, step: ((step % 16) + 16) % 16, light: [lx * c + ly * s, -lx * s + ly * c] };
+      }
+    }
+    this.anchors.set(f, a);
+    return a;
+  }
+
   /** The wall a prop hangs on: underground the rock beside it; in a building a wall or the
    * outside beside it. */
   private propWall(f: InteriorItem): [number, number] {
@@ -1524,7 +1572,8 @@ export class InteriorLayer {
       const back = ORIENTED.has(shared) ? this.backSide(g).join(',') : '';
       return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}`;
     }
-    const wall = ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
+    const turned = this.wallAnchor(f);
+    const wall = turned ? `t${turned.step}` : ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
     const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) || f.kind === 'key' ? this.lookOf(f) : 0;
     const links = f.kind === 'rail' || f.kind === 'ore_cart' ? `:r${this.railLinks(f)}` : '';
     return `u:${base}:${light}:${wall}:${variant}${links}`;
@@ -1814,7 +1863,8 @@ export class InteriorLayer {
       if (drawFurniture(g, s, this.light, this.lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null)) return;
     }
     // (Indoor props in a building too.)
-    if ((this.underground || !shared) && drawUnderProp(g, f, this.light, this.lookOf(f), ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0], this.railLinks(f))) return;
+    const turned = this.wallAnchor(f);
+    if ((this.underground || !shared) && drawUnderProp(g, f, turned?.light ?? this.light, this.lookOf(f), turned ? [0, -1] : ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0], this.railLinks(f), !!turned)) return;
     if (kind === 'sprite') {
       // A picture not loaded yet (or no renderer): a plain square in its place.
       g.rect(x + 0.1, y + 0.1, w - 0.2, h - 0.2).fill({ color: 0x786046, alpha: 0.5 }).stroke({ width: 0.05, color: INK });
