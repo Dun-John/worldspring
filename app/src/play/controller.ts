@@ -13,7 +13,7 @@ import { PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
 import { loadSession, putImage, saveSession } from './session';
 import { apply, emptyState, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, type Token, type TokenKind } from './state';
-import { BLOCKS, bitAt, computeVision, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
+import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
 
 export type Tool = 'select' | 'token' | 'measure' | 'shape' | 'fog';
 
@@ -1343,6 +1343,7 @@ export class PlayController implements PointerTool {
     const eyes: Eye[] = here.filter((t) => t.kind === 'character' && t.vision).map((t) => ({ x: t.x, y: t.y, above: 5, range: SIGHT }));
     const lights: Eye[] = here.filter((t) => (t.light ?? 0) > 0).map((t) => ({ x: t.x, y: t.y, above: 5, range: t.light! }));
     const v = computeVision(grid, eyes, lights, settings.dark);
+    if (place.it && !place.sewers && v.w) showNiches(place.it.levels[place.level], place.it.nx, place.it.ny, v);
     this.vision = { loc: place.loc, x0: v.x0, y0: v.y0, w: v.w, h: v.h, bits: v.bits };
     this.channel.send({ t: 'vision', vision: this.vision });
     // What they have seen, they know: it stays clear (dimmed under fog) once out of sight.

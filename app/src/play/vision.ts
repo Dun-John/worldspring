@@ -260,6 +260,23 @@ function cast(L: Local, e: Eye, out: Uint8Array) {
   }
 }
 
+/** A burial niche is cut into the rock behind a wall, and rock is never seen (sight stops at the wall): a niche
+ * on a seen floor square shows the rock square it is cut into, so it can be seen from the corridor. */
+export function showNiches(lv: Interior['levels'][number], nx: number, ny: number, b: Bitmap) {
+  const at = (i: number, j: number) => (i >= b.x0 && j >= b.y0 && i < b.x0 + b.w && j < b.y0 + b.h ? (j - b.y0) * b.w + (i - b.x0) : -1);
+  for (const f of lv.furniture) {
+    if (f.kind !== 'niche' || !b.bits[at(f.x, f.y)]) continue;
+    const dirs = f.back !== undefined ? [[[0, -1], [1, 0], [0, 1], [-1, 0]][f.back]] : [[0, -1], [-1, 0], [1, 0], [0, 1]];
+    for (const [dx, dy] of dirs) {
+      const [i, j] = [f.x + dx, f.y + dy];
+      if (i >= 0 && j >= 0 && i < nx && j < ny && lv.cells[j * nx + i] >= 0) continue;
+      const k = at(i, j);
+      if (k >= 0) b.bits[k] = 1;
+      break;
+    }
+  }
+}
+
 /** What the eyes see together; in the dark, only the squares `lights` reach. */
 export function computeVision(grid: TacticalGrid, eyes: Eye[], lights: Eye[], dark: boolean): Bitmap {
   let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];

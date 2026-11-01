@@ -8,7 +8,7 @@ import { OPEN_BELOW, ROOF_SLOPE, type Interior, type InteriorItem, type Interior
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
-import { drawFurniture, drawUnderProp, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED } from './furniture';
+import { drawFurniture, drawUnderProp, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED } from './furniture';
 import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
@@ -1109,6 +1109,13 @@ export class InteriorLayer {
       }
       g.fill(0x6f6a61);
     }
+    // Burial niches cut into the rock: the wall is open across their mouths.
+    if (this.underground) {
+      for (const f of lv.furniture) {
+        if (f.kind !== 'niche' || f.sprite || this.wallAnchor(f) || !this.rockBehind(f)) continue;
+        nicheMouth(g, f, this.light, this.propWall(f));
+      }
+    }
     // Windows: a pale slot across the exterior wall (a filled rect: fine strokes on the
     // scaled plan render unreliably); drawn to a shaped plan, on the outer wall as drawn.
     if (lv.z >= 0 && sp) {
@@ -1577,7 +1584,8 @@ export class InteriorLayer {
     const wall = turned ? `t${turned.step}` : ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
     const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) || f.kind === 'key' ? this.lookOf(f) : 0;
     const links = f.kind === 'rail' || f.kind === 'ore_cart' ? `:r${this.railLinks(f)}` : '';
-    return `u:${base}:${light}:${wall}:${variant}${links}`;
+    const rock = f.kind === 'niche' && !turned ? `:k${this.rockBehind(f)}` : '';
+    return `u:${base}:${light}:${wall}:${variant}${links}${rock}`;
   }
 
   /** The sides (north 1, east 2, south 4, west 8) a rail or an ore cart joins the rails beside it: a rail its
@@ -1605,6 +1613,21 @@ export class InteriorLayer {
       return two(b) ? b : SIDES.reduce((b, [dx, dy], s) => (kind(f.x + dx, f.y + dy) === 'ore_cart' ? b | (1 << s) : b), b);
     }
     return SIDES.reduce((b, [dx, dy], s) => (kind(f.x + dx, f.y + dy) === 'rail' && !two(railsBy(f.x + dx, f.y + dy)) ? b | (1 << s) : b), 0);
+  }
+
+  /** How many squares of rock (0 to 2) stand behind a wall prop's wall side: a niche cut into the rock goes as deep
+   * as there is rock before the next room's floor. */
+  private rockBehind(f: InteriorItem): number {
+    const [dx, dy] = this.wallSide(f);
+    if (!dx && !dy) return 0;
+    const lv = this.interior.levels[this.level];
+    const { nx, ny } = this.interior;
+    let n = 0;
+    for (; n < 2; n++) {
+      const [i, j] = [f.x + dx * (n + 1), f.y + dy * (n + 1)];
+      if (i >= 0 && j >= 0 && i < nx && j < ny && lv.cells[j * nx + i] >= 0) break;
+    }
+    return n;
   }
 
   /** The rock side of a wall-mounted prop's square (unit step), if any (the side set in its design
@@ -1865,7 +1888,7 @@ export class InteriorLayer {
     }
     // (Indoor props in a building too.)
     const turned = this.wallAnchor(f);
-    if ((this.underground || !shared) && drawUnderProp(g, f, turned?.light ?? this.light, this.lookOf(f), turned ? [0, -1] : ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0], this.railLinks(f), !!turned)) return;
+    if ((this.underground || !shared) && drawUnderProp(g, f, turned?.light ?? this.light, this.lookOf(f), turned ? [0, -1] : ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0], this.railLinks(f), !!turned, kind === 'niche' && !turned ? this.rockBehind(f) : 2)) return;
     if (kind === 'sprite') {
       // A picture not loaded yet (or no renderer): a plain square in its place.
       g.rect(x + 0.1, y + 0.1, w - 0.2, h - 0.2).fill({ color: 0x786046, alpha: 0.5 }).stroke({ width: 0.05, color: INK });

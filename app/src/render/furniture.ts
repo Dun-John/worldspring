@@ -3412,6 +3412,8 @@ const LOOKS: Record<string, number> = {
   guild_arms: ARMS.length,
   // A key's colour (1-7 opens the lock of that colour; `interior::Door::lock`).
   key: 8,
+  // A burial niche: its look `v % 4` (body, bones, slab, empty), the rest only varies the details.
+  niche: 12,
 };
 
 /** How many looks a piece of furniture has (`Item::variant` 0 to this - 1). */
@@ -5647,44 +5649,161 @@ function stoneEffigy(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
   for (const [u, s] of [[0.1, 0.12], [len - 0.12, 0.86], [U(1.4), 0.88]]) g.poly(patch(...at(u, s), 0.07, 0.05, rnd, 0.3, 10)).fill({ color: 0x5a7a3a, alpha: 0.6 });
 }
 
-/** Burial niche: a slot cut back into the rock wall — rock jambs either side coming out of the wall, the hollow
- * darkest at the back and lighter toward its mouth, a lit stone sill along the front; in it a body in a ragged
- * shroud, the skull showing, a bone hanging out over the sill; a cobweb in the corner. */
-function burialNiche(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, wall: [number, number]) {
-  const { rect, at } = frame(f, wall);
-  const ROCK = [0x2e2a26, 0x45413b, 0x5a554d];
-  const d = 0.56;
-  // The hollow: bands from black at the back to dark brown at the mouth.
-  for (let i = 0; i < 6; i++) g.poly(quad(rect(0.14, (i * d) / 6, 0.86, ((i + 1) * d) / 6 + 0.01), rnd, 0)).fill(shade(0x2a241e, 0.25 + i * 0.15));
-  // The shroud and its body.
-  const shroud = [...at(0.32, 0.1), ...at(0.4, 0.07), ...at(0.6, 0.1), ...at(0.78, 0.14), ...at(0.84, 0.2), ...at(0.85, 0.3), ...at(0.79, 0.37), ...at(0.6, 0.42), ...at(0.4, 0.45), ...at(0.32, 0.42)];
-  g.poly(shroud).fill(0x7a746a).stroke({ width: 0.016, color: INK, join: 'round' });
-  g.poly(shroud.map((q, i) => q + (i % 2 ? light[1] : light[0]) * 0.012)).fill({ color: 0x9a948a, alpha: 0.6 });
-  for (const u of [0.42, 0.52, 0.62, 0.72]) g.moveTo(...at(u - 0.02, 0.09 + (u - 0.3) * 0.12)).lineTo(...at(u + 0.02, 0.43 - (u - 0.3) * 0.18));
-  g.stroke({ width: 0.014, color: 0x4a463e });
-  const [ux, uy] = at(0, 0.26);
-  const [vx, vy] = at(1, 0.26);
-  skullTop(g, ...at(0.25, 0.26), Math.atan2(uy - vy, ux - vx), 0.1, light);
-  // Rock jambs either side, out of the wall, their faces toward the hollow in shadow.
-  for (const [u0, u1] of [
-    [0, 0.14],
-    [0.86, 1],
-  ]) {
-    g.poly(quad(rect(u0, 0, u1, d + 0.04), rnd, 0.01)).fill(ROCK[1]).stroke({ width: OUT, color: INK, join: 'round' });
-    g.poly(quad(rect(u0 + 0.02, 0, u1 - 0.02, d), rnd, 0.01)).fill(ROCK[2]);
+/** The mouth of a burial niche that is cut into rock: drawn over the wall line (which runs unbroken under the
+ * niche), a dark floor where the wall is open between two stone jambs, so the pocket reads as reachable. */
+export function nicheMouth(g: Graphics, f: InteriorItem, light: Light, wall: [number, number]) {
+  const { rect } = frame(f, wall);
+  const rnd = rng(f.x * 977 + f.y * 131 + 7);
+  const j = (n: number) => (rnd() - 0.5) * n;
+  const POCKET = [0x211c17, 0x2f2820, 0x40372c];
+  const ROCK = [0x4a453d, 0x6b655b, 0x8c867a];
+  const u0 = 0.15 + j(0.01);
+  const u1 = 0.85 + j(0.01);
+  g.poly(quad(rect(u0 + 0.005, -0.1, u1 - 0.005, 0.07), rnd, 0.004)).fill(POCKET[1]);
+  for (const [a, b] of [[u0 - 0.075, u0 + 0.005], [u1 - 0.005, u1 + 0.075]]) {
+    const r = rect(a, -0.09, b, 0.08);
+    g.poly(quad(r, rnd, 0.006)).fill(ROCK[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    litEdges(g, r, light, 0.025);
+    g.fill({ color: ROCK[2], alpha: 0.9 });
   }
-  // The sill: a lit stone lip along the mouth.
-  g.poly(quad(rect(0.1, d - 0.02, 0.9, d + 0.08), rnd, 0.004)).fill(STONE[2]).stroke({ width: 0.018, color: INK });
-  g.moveTo(...at(0.12, d + 0.065)).lineTo(...at(0.88, d + 0.065)).stroke({ width: 0.012, color: shade(STONE[2], 1.15) });
-  // A bone hanging out over the sill.
-  bone(g, at(0.62, 0.44), at(0.68, 0.72), 0.042, light);
-  // Cobweb in the back corner.
-  const [kx, ky] = at(0.14, 0);
-  const [ax, ay] = at(0.36, 0);
-  const [bx, by] = at(0.14, 0.24);
-  for (const t of [0.35, 0.7, 1]) g.moveTo(kx + (ax - kx) * t, ky + (ay - ky) * t).quadraticCurveTo(kx + ((ax + bx) / 2 - kx) * t * 0.6, ky + ((ay + by) / 2 - ky) * t * 0.6, kx + (bx - kx) * t, ky + (by - ky) * t);
-  g.moveTo(kx, ky).lineTo((ax + bx) / 2, (ay + by) / 2);
-  g.stroke({ width: 0.008, color: 0xe8e4dc, alpha: 0.7 });
+}
+
+/** Burial niche: a slot cut into the rock behind the wall line, so the floor in front stays clear: a dressed stone
+ * frame round a dark pocket about 0.75 of a square deep (`rock` squares of rock stand behind the wall: with none, a
+ * shallow pocket is drawn on the floor). Four looks by `v`: a shrouded body, bare bones, a stone slab sealing it
+ * (cracked in places), empty or holding an urn. */
+function burialNiche(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, wall: [number, number], rock: number) {
+  const { rect, at } = frame(f, wall);
+  const sg = rock > 0 ? -1 : 1;
+  const dd = (rock >= 2 ? 0.74 : rock === 1 ? 0.56 : 0.4) + (rnd() - 0.5) * 0.06;
+  // (u along the wall, k from the wall line into the pocket.)
+  const R = (u0: number, k0: number, u1: number, k1: number) => rect(u0, sg * k0, u1, sg * k1);
+  const A = (u: number, k: number) => at(u, sg * k);
+  const POCKET = [0x211c17, 0x2f2820, 0x40372c];
+  const ROCK = [0x4a453d, 0x6b655b, 0x8c867a];
+  const jw = 0.01 + rnd() * 0.012;
+  const u0 = 0.13 + rnd() * 0.02;
+  const u1 = 0.87 - rnd() * 0.02;
+  // The frame (lit along the sides toward the light), the pocket.
+  const fr = R(u0 - 0.07, 0.07, u1 + 0.07, dd + 0.07);
+  g.poly(quad(fr, rnd, 0.012)).fill(ROCK[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  litEdges(g, fr, light, 0.035);
+  g.fill({ color: ROCK[2], alpha: 0.9 });
+  g.poly(quad(R(u0, 0.0, u1, dd), rnd, jw)).fill(POCKET[1]).stroke({ width: LINE, color: INK, join: 'round' });
+  const inner = R(u0 + 0.02, 0.02, u1 - 0.02, dd - 0.02);
+  g.poly(quad(inner, rnd, 0.008)).fill(POCKET[2]);
+  const kc = dd / 2 + 0.02;
+  const head = rnd() < 0.5 ? 0 : 1;
+  const U = (u: number) => (head ? 1 - u : u);
+  const hw = Math.min(1, (dd / 2 - 0.06) / 0.19);
+  const [ax, ay] = A(0.5, kc);
+  const [bx, by] = A(0.5, kc + 1);
+  const toward = (bx - ax) * light[0] + (by - ay) * light[1] > 0 ? 1 : -1;
+  // The crown of a skull at the head end points out past it.
+  const skull = (u: number, s: number) => {
+    const [hx, hy] = A(U(u), kc);
+    const [tx, ty] = A(U(0), kc);
+    const [ex, ey] = A(U(1), kc);
+    skullTop(g, hx, hy, Math.atan2(ty - ey, tx - ex), s, light);
+  };
+  switch (v % 4) {
+    case 0: {
+      // A body in a ragged shroud, the skull showing in some.
+      const peek = rnd() < 0.5;
+      const ST = [0x5e5646, 0x867c68, 0xa89e86, 0xc0b69c];
+      const prof: [number, number][] = [[0.17, 0.0], [0.2, 0.09], [0.27, 0.12], [0.33, 0.1], [0.38, 0.15], [0.5, 0.19], [0.64, 0.18], [0.76, 0.13], [0.83, 0.08], [0.86, 0.0]];
+      const m = (u: number) => U(peek ? 0.32 + (u - 0.17) * 0.77 : u);
+      const edge = (sign: number) => prof.flatMap(([u, w]) => A(m(u), kc + sign * w * hw));
+      const back = (sign: number) => [...prof].reverse().flatMap(([u, w]) => A(m(u), kc + sign * w * hw));
+      g.poly([...edge(-1), ...back(1)]).fill(ST[1]).stroke({ width: LINE, color: INK, join: 'round' });
+      const half = (sign: number) => [...edge(sign), ...[...prof].reverse().flatMap(([u]) => A(m(u), kc + sign * 0.01))];
+      g.poly(half(toward)).fill({ color: ST[3], alpha: 0.7 });
+      g.poly(half(-toward)).fill({ color: ST[0], alpha: 0.55 });
+      // The wrapping, a few bands across.
+      for (const u of [0.42, 0.54, 0.66, 0.77]) {
+        const j = (rnd() - 0.5) * 0.03;
+        g.moveTo(...A(m(u + j), kc - 0.17 * hw)).lineTo(...A(m(u + 0.025 + j), kc + 0.17 * hw));
+      }
+      g.stroke({ width: 0.016, color: ST[0] });
+      if (peek) skull(0.22, 0.095);
+      // A bone hanging out over the lip in some.
+      if (rnd() < 0.4) bone(g, A(m(0.62), kc + 0.12 * hw), A(m(0.7), 0.05), 0.04, light);
+      break;
+    }
+    case 1: {
+      // Bare bones: the skull, a spine with ribs, the long bones, a pelvis, a few strays.
+      bone(g, A(U(0.3), kc), A(U(0.68), kc), 0.035, light);
+      for (const u of [0.38, 0.47, 0.56]) {
+        const k = 0.15 * hw * (1 - Math.abs(u - 0.47) * 1.4);
+        bone(g, A(U(u), kc - k), A(U(u + 0.02), kc + k), 0.03, light);
+      }
+      bone(g, A(U(0.72), kc - 0.1 * hw), A(U(0.86), kc - 0.13 * hw + (rnd() - 0.5) * 0.06), 0.04, light);
+      bone(g, A(U(0.72), kc + 0.1 * hw), A(U(0.84), kc + 0.15 * hw), 0.04, light);
+      bone(g, A(U(0.36), kc - 0.18 * hw), A(U(0.55), kc - 0.2 * hw), 0.032, light);
+      g.poly(oval(...A(U(0.7), kc), 0.06, 0.09 * hw + 0.02, 0, 10)).fill(BONE[1]).stroke({ width: LINE, color: INK });
+      skull(0.22, 0.1);
+      for (let i = 0; i < 3; i++) g.circle(...A(0.25 + rnd() * 0.5, 0.08 + rnd() * (dd - 0.16)), 0.016).fill(BONE[0]);
+      break;
+    }
+    case 2: {
+      // Sealed with a slab: pale cut stone, a cross, a name plate or a seam, cracks and a chipped corner in some.
+      const SL = [0x5e5a52, 0x8a857a, 0xa8a296];
+      const sl = R(u0 - 0.01, -0.03, u1 + 0.01, dd);
+      g.poly(quad(sl, rnd, 0.01)).fill(SL[1]).stroke({ width: LINE, color: INK, join: 'round' });
+      litEdges(g, sl, light, 0.05);
+      g.fill({ color: SL[2], alpha: 0.95 });
+      const style = Math.floor(rnd() * 3);
+      if (style === 0) {
+        g.moveTo(...A(0.5, 0.18)).lineTo(...A(0.5, dd - 0.1));
+        g.moveTo(...A(0.4, 0.3 + (dd - 0.5) * 0.3)).lineTo(...A(0.6, 0.3 + (dd - 0.5) * 0.3));
+        g.stroke({ width: 0.03, color: SL[0], cap: 'round' });
+      } else if (style === 1) {
+        g.poly(quad(R(0.34, 0.12, 0.66, dd - 0.14), rnd, 0.008)).fill(SL[2]).stroke({ width: 0.016, color: SL[0] });
+        for (const k of [0.3, 0.45, 0.6]) g.moveTo(...A(0.4, k * dd)).lineTo(...A(0.6, k * dd));
+        g.stroke({ width: 0.016, color: SL[0] });
+      } else {
+        g.moveTo(...A(0.5 + (rnd() - 0.5) * 0.3, 0.02)).lineTo(...A(0.5 + (rnd() - 0.5) * 0.3, dd));
+        g.stroke({ width: 0.018, color: SL[0] });
+      }
+      if (rnd() < 0.6) {
+        const c0 = 0.2 + rnd() * 0.6;
+        g.moveTo(...A(c0, 0.0)).lineTo(...A(c0 + 0.05, dd * 0.25)).lineTo(...A(c0 - 0.04, dd * 0.5)).lineTo(...A(c0 + 0.06, dd * 0.75)).lineTo(...A(c0, dd));
+        g.moveTo(...A(c0 + 0.05, dd * 0.25)).lineTo(...A(c0 + 0.17, dd * 0.33));
+        g.stroke({ width: 0.02, color: INK, alpha: 0.85, join: 'round' });
+      }
+      if (rnd() < 0.45) {
+        const cu = rnd() < 0.5 ? u0 + 0.01 : u1 - 0.01;
+        const dir = cu < 0.5 ? 1 : -1;
+        g.poly([...A(cu, dd), ...A(cu + dir * 0.17, dd), ...A(cu + dir * 0.06, dd - 0.15), ...A(cu, dd - 0.1)]).fill(POCKET[0]).stroke({ width: 0.016, color: INK, join: 'round' });
+      }
+      return;
+    }
+    default: {
+      // Empty (a rag, a bone, dust) or holding an urn.
+      if (rnd() < 0.5) {
+        const UR = [0x5a4034, 0x82604a, 0xa88466];
+        const [ux, uy] = A(0.3 + rnd() * 0.4, kc);
+        const r = Math.min(0.15, dd * 0.28);
+        g.circle(ux - light[0] * 0.04, uy - light[1] * 0.04, r + 0.012).fill({ color: 0x000000, alpha: 0.35 });
+        g.circle(ux, uy, r).fill(UR[0]).stroke({ width: LINE, color: INK });
+        g.circle(ux + light[0] * r * 0.28, uy + light[1] * r * 0.28, r * 0.78).fill({ color: UR[1], alpha: 0.95 });
+        g.circle(ux + light[0] * r * 0.4, uy + light[1] * r * 0.4, r * 0.4).fill({ color: UR[2], alpha: 0.9 });
+        g.circle(ux, uy, r * 0.42).stroke({ width: 0.014, color: UR[0] });
+        if (rnd() < 0.5) bone(g, A(0.7 + rnd() * 0.1, kc + 0.12), A(0.84, kc + 0.2), 0.03, light);
+      } else {
+        const RAG = [0x4e463a, 0x6e6552];
+        const [rx, ry] = [0.25 + rnd() * 0.4, kc + (rnd() - 0.5) * 0.1];
+        g.poly([...A(rx, ry - 0.08), ...A(rx + 0.12, ry - 0.12), ...A(rx + 0.22, ry - 0.04), ...A(rx + 0.16, ry + 0.09), ...A(rx + 0.04, ry + 0.07)]).fill(RAG[1]).stroke({ width: 0.016, color: INK, join: 'round' });
+        g.moveTo(...A(rx + 0.04, ry)).lineTo(...A(rx + 0.15, ry - 0.02)).stroke({ width: 0.014, color: RAG[0] });
+        for (let i = 0; i < 4; i++) g.circle(...A(0.2 + rnd() * 0.6, 0.1 + rnd() * (dd - 0.2)), 0.014 + rnd() * 0.012).fill({ color: POCKET[0], alpha: 0.9 });
+        if (rnd() < 0.5) bone(g, A(0.62, kc + 0.12), A(0.78, kc + 0.16), 0.032, light);
+      }
+      break;
+    }
+  }
+  // The wall on the lit side throws its shadow into the pocket.
+  litEdges(g, inner, light, 0.07);
+  g.fill({ color: 0x000000, alpha: 0.4 });
 }
 
 /** Burial urn, from high up (from straight above it is only rings, from the side it stands too tall): seen from
@@ -6950,7 +7069,7 @@ export const UNDER_DRAWN = new Set([
 /** Draws underground prop `f` if it is drawn here; false otherwise. `wall` is the rock side for props
  * against a wall, and the back for those that have one (the dais); `links` the sides a rail or an ore cart joins
  * the rails beside it (`railRuns`). */
-export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: number, wall: [number, number], links = 0, turned = false): boolean {
+export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: number, wall: [number, number], links = 0, turned = false, rock = 2): boolean {
   if (!UNDER_DRAWN.has(f.kind)) return false;
   const rnd = rng(v * 7919 + f.w * 131 + f.h * 17 + f.kind.length * 1009 + f.kind.charCodeAt(0) * 3);
   const w: [number, number] = wall[0] || wall[1] ? wall : [0, -1];
@@ -7064,7 +7183,7 @@ export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: num
       stoneEffigy(g, f, light, rnd);
       break;
     case 'niche':
-      burialNiche(g, f, light, rnd, w);
+      burialNiche(g, f, light, v, rnd, w, rock);
       break;
     case 'urn':
       burialUrn(g, f, light, v, rnd);
