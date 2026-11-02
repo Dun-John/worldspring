@@ -838,6 +838,18 @@ fn project(p: [f64; 2], pts: &[[f64; 2]], s: &[f64]) -> (f64, f64) {
 
 /// A* routes for the links, in order (later routes reuse earlier ones), after the drawn
 /// roads. Returns the best (lowest) class per cell (`u8::MAX` = none) and every route.
+/// Round a Town+ end, roads and tracks (not king's roads) keep clear of each other: the road
+/// trim radius of the biggest possible metropolis, so a change of tier can't move a junction
+/// into the town.
+const ZONE_FT: f64 = 1.1 * 1.5 * 12.0 * 282.842712474619;
+/// The classes that count as a major road to join (those up to this one).
+const MAJOR: RoadClass = RoadClass::Road;
+/// What stepping off the open ground onto a major road inside the zone costs (cells): large, not infinite.
+const JOIN_BAN: f64 = 200.0;
+/// What crossing the zone edge off a major road costs (cells): the long way round that is worth a road of its own.
+const GATE_ROAD: f64 = 2.0;
+const GATE_TRACK: f64 = 1.0;
+
 pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u8>, Vec<Routed>) {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let n = w * h;
@@ -875,8 +887,11 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
             End::Cell(k) => k,
         };
         let (start, goal) = (cell_of(link.a), cell_of(link.b));
-        // Near a town or city at either end, roads keep to themselves (no shared trunk), so
-        // each arrives at its own gate instead of merging outside the walls.
+        // Near a town or city at either end, the king's roads keep to themselves (no shared trunk),
+        // each arriving at its own gate. Roads and tracks keep to a fixed zone round the town
+        // instead: inside it they share only a major road, and leaving the open ground for the
+        // zone costs a gate, so they join a major road outside (see the cost below).
+        let kings = class == RoadClass::KingsRoad;
         let town_ends: Vec<(f64, f64, f64)> = [link.a, link.b]
             .iter()
             .filter_map(|&end| match end {
@@ -884,10 +899,11 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 _ => None,
             })
             .map(|i| {
-                let r = crate::town::urban_radius(settlements[i].tier, settlements[i].population) / cell;
-                ((settlements[i].cell % w) as f64, (settlements[i].cell / w) as f64, r + 1.5)
+                let r = if kings { crate::town::urban_radius(settlements[i].tier, settlements[i].population) / cell + 1.5 } else { ZONE_FT / cell + 1.5 };
+                ((settlements[i].cell % w) as f64, (settlements[i].cell / w) as f64, r)
             })
             .collect();
+        let gate = if class == RoadClass::Road { GATE_ROAD } else { GATE_TRACK };
         let key = RouteKey(start, goal, class, town_ends.iter().map(|t| (t.0.to_bits(), t.1.to_bits(), t.2.to_bits())).collect());
         // The same links so far as the last call: the same routes.
         same = same && memo.get(e).is_some_and(|m| m.0 == key);
@@ -906,9 +922,30 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 let mut c = costs.ground(inp, i, nb, run) * wobble[nb] as f64;
                 c += costs.river(inp, i, nb, mids);
                 let (nx, ny) = ((nb % w) as f64, (nb / w) as f64);
-                let by_town = || town_ends.iter().any(|&(tx, ty, tr)| (nx - tx) * (nx - tx) + (ny - ty) * (ny - ty) <= tr * tr);
-                if road_class[nb] != u8::MAX && !by_town() {
-                    c *= if drawn_only.get(nb).copied().unwrap_or(false) { 0.5 } else { 0.2 };
+                let near = |x: f64, y: f64| town_ends.iter().any(|&(tx, ty, tr)| (x - tx) * (x - tx) + (y - ty) * (y - ty) <= tr * tr);
+                if kings {
+                    if road_class[nb] != u8::MAX && !near(nx, ny) {
+                        c *= if drawn_only.get(nb).copied().unwrap_or(false) { 0.5 } else { 0.2 };
+                    }
+                } else {
+                    let (ix, iy) = ((i % w) as f64, (i / w) as f64);
+                    let major = |k: usize| road_class[k] <= MAJOR as u8;
+                    let (zi, zn) = (near(ix, iy), near(nx, ny));
+                    let on = major(nb) && major(i);
+                    if zn {
+                        if on {
+                            c *= 0.2;
+                        } else if major(nb) && nb != goal && nb != start {
+                            c += JOIN_BAN / run;
+                        }
+                    } else if road_class[nb] != u8::MAX {
+                        c *= if drawn_only.get(nb).copied().unwrap_or(false) { 0.5 } else { 0.2 };
+                    }
+                    // Crossing the zone edge off a major road, or leaving a major road inside the zone
+                    // for a way in of its own, costs a gate.
+                    if !on && i != start && nb != goal && (zi != zn || (zi && major(i))) {
+                        c += gate / run;
+                    }
                 }
                 c
             });
@@ -1824,7 +1861,7 @@ fn drop_shortcuts(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
             .filter_map(|k| ends[k].and_then(|(p, q)| if p == x && !town(q) { Some((q, lens[k])) } else if q == x && !town(p) { Some((p, lens[k])) } else { None }))
             .map(|(y, xy)| xy + link(y, z, i))
             .fold(f64::MAX, f64::min);
-        if detour < 1.3 * lens[i] && roads[i].stroke.is_none() {
+        if detour < 1.3 * lens[i] && roads[i].stroke.is_none() && roads[i].class != RoadClass::KingsRoad {
             gone[i] = true;
         }
     }
@@ -2394,7 +2431,7 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
                     while shared + STEP < olen && line_dist(point_at(&legs[o].pts, os, shared + STEP), &legs[c].pts) < TOL {
                         shared += STEP;
                     }
-                    // (One along the other all the way keeps only its last bit, to where it ends.)
+                            // (One along the other all the way keeps only its last bit, to where it ends.)
                     if shared < 300.0 {
                         continue;
                     }
