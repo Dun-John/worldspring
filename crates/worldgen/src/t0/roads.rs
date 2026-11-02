@@ -396,6 +396,9 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     if drop_lenses(&mut roads, &towns) {
         join_through(&mut roads, &towns, cell, &dry_ft);
     }
+    // (Squaring can lay a branch along another leaving the same junction: one road out to where they part.)
+    unshare(&mut roads, &towns);
+    join_through(&mut roads, &towns, cell, &dry_ft);
 
     // --- 4. Crossings and waystations.
     let mut crossings: Vec<Crossing> = Vec::new();
@@ -868,12 +871,17 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
     // takes a drawn one where it goes its way, but no long way round for it).
     let mut drawn_only: Vec<bool> = vec![false; if pre.routes.is_empty() { 0 } else { n }];
     let mut paths: Vec<Routed> = Vec::new();
+    // The steps major roads take: a step between two major roads' cells is no ride along one.
+    let mut major_steps: crate::core::hash::FastSet<(u32, u32)> = Default::default();
     for (class, cells, stroke) in &pre.routes {
         for &c in cells {
             drawn_only[c as usize] = true;
         }
         for &c in cells {
             road_class[c as usize] = road_class[c as usize].min(*class as u8);
+        }
+        if *class <= MAJOR {
+            major_steps.extend(cells.windows(2).map(|p| (p[0].min(p[1]), p[0].max(p[1]))));
         }
         paths.push((*class, cells.clone(), Some(*stroke)));
     }
@@ -904,6 +912,9 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
             })
             .collect();
         let gate = if class == RoadClass::Road { GATE_ROAD } else { GATE_TRACK };
+        // A town no major road reaches yet: its first way out may step onto one passing it (the
+        // town's own way to it); once one does, the others ride that.
+        let lone = road_class[start] > MAJOR as u8;
         let key = RouteKey(start, goal, class, town_ends.iter().map(|t| (t.0.to_bits(), t.1.to_bits(), t.2.to_bits())).collect());
         // The same links so far as the last call: the same routes.
         same = same && memo.get(e).is_some_and(|m| m.0 == key);
@@ -931,11 +942,14 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                     let (ix, iy) = ((i % w) as f64, (i / w) as f64);
                     let major = |k: usize| road_class[k] <= MAJOR as u8;
                     let (zi, zn) = (near(ix, iy), near(nx, ny));
-                    let on = major(nb) && major(i);
+                    let edge = || major_steps.contains(&((i as u32).min(nb as u32), (i as u32).max(nb as u32)));
+                    // (At its ends a road rides only a major road's own step: a town's roads leave on the
+                    // one that reaches it, not across to another passing by.)
+                    let on = if i != start && nb != goal { major(nb) && major(i) } else { edge() };
                     if zn {
                         if on {
                             c *= 0.2;
-                        } else if major(nb) && nb != goal && nb != start {
+                        } else if major(nb) && nb != goal && nb != start && !(lone && i == start) {
                             c += JOIN_BAN / run;
                         }
                     } else if road_class[nb] != u8::MAX {
@@ -954,6 +968,9 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
             path
         };
         let Some(path) = found else { continue };
+        if class <= MAJOR {
+            major_steps.extend(path.windows(2).map(|p| (p[0].min(p[1]), p[0].max(p[1]))));
+        }
         for &c in &path {
             let c = c as usize;
             road_class[c] = road_class[c].min(class as u8);
