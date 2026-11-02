@@ -49,6 +49,11 @@ export const TERRAIN_CHANNEL: Record<string, number> = { water_shallow: 0, water
  * streets) and natural rock. */
 export const SQUARE_SITES = new Set(['dungeon', 'crypt', 'catacombs', 'deep dungeons']);
 
+/** How rough a site's rock is: how far its walls jut out and bite in (the shader's `uRough`). */
+export function roughness(site: string): number {
+  return site === 'cave' ? 1 : site === 'lava tube' ? 0.85 : site === 'mine' ? 0.45 : SQUARE_SITES.has(site) ? 0 : 0.06;
+}
+
 /** Floor material for the shader: 0 cave rock, 1 basalt, 2 mine earth, 3 sewer brick,
  * 4 flagstones, 5 boss flagstones, 6 crypt flagstones, 7 marble, 8 hewn blocks, 9 ice, 10 the cult's dark ring flagstones. */
 export function materialOf(site: string, kind: string, theme?: string): number {

@@ -4548,16 +4548,22 @@ function caveBoulder(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
  * heart in different directions, each split into flat facets in light and dark tones with a highlight streak, and a
  * few stubby upright prisms standing in the middle, seen from a high angle with their flat six-sided tops showing. */
 function crystal(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
+  // Pale milky quartz: three close greyish tones with only a faint cool tint (no glow, no hairlines).
   const t = [
-    [0x2a6a9a, 0x4a9ac8, 0x8acaea, 0xd8f4ff],
-    [0x4a2a8a, 0x7a5ac0, 0xb08ae8, 0xece0ff],
-    [0x1e6a62, 0x3a9a8e, 0x7ad0c4, 0xd8fff8],
-    [0x2a6a9a, 0x4a9ac8, 0x8acaea, 0xd8f4ff],
-  ][v % 4];
-  const line = 0x14202a;
+    [0x8c9094, 0xa9adb0, 0xc4c7c8],
+    [0x908f94, 0xadacb1, 0xc7c6c9],
+    [0x8b9291, 0xa8afae, 0xc3c8c7],
+    [0x8e9195, 0xabaeb2, 0xc5c7ca],
+  ][v % 4].map((c) => c);
+  t.push(t[2]);
+  const line = INK;
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const { pt, up } = screenAxes(light);
-  for (let i = 0; i < 4; i++) g.circle(cx, cy, 0.3 + i * 0.05).fill({ color: t[2], alpha: 0.05 });
+  // (A cluster's size varies a lot: a few small shards up to a big one.)
+  let accent = false;
+  const sz = 0.55 + 0.6 * rnd();
+  // A small stone base the shards grow from.
+  rock(g, cx - light[0] * 0.02, cy - light[1] * 0.02, 0.2 * sz + 0.06, CAVE_ROCK, light, rnd, 8);
   // One long faceted prism lying outward along angle `a`: two long faces split by an off-centre ridge, a pointed
   // tip of its own two facets, a crack across each long face; the face turned to the light is pale.
   const shard = (a: number, len: number, w: number) => {
@@ -4569,25 +4575,18 @@ function crystal(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () 
     const [B, BL, BR] = [p(-0.04, r), p(-0.04, w), p(-0.04, -w)];
     const [SL, SR, SM] = [p(sh, w * 0.92), p(sh, -w * 0.92), p(sh + w * 0.3, r)];
     const T = p(len, r * 0.5);
-    const tone = (k: number, tip: boolean) => (k === lit ? (tip ? t[3] : t[2]) : tip ? t[1] : t[0]);
+    const tone = (k: number, tip: boolean) => (k === lit ? (tip && !accent ? ((accent = true), t[3]) : t[2]) : tip ? t[1] : t[0]);
     g.poly([...B, ...BL, ...SL, ...SM]).fill(tone(1, false));
     g.poly([...B, ...BR, ...SR, ...SM]).fill(tone(-1, false));
     g.poly([...SL, ...T, ...SM]).fill(tone(1, true));
     g.poly([...SR, ...T, ...SM]).fill(tone(-1, true));
-    const u1 = sh * (0.3 + 0.35 * rnd());
-    const u2 = sh * (0.3 + 0.35 * rnd());
-    g.moveTo(...B).lineTo(...SM).lineTo(...T).moveTo(...SL).lineTo(...SM).lineTo(...SR);
-    g.moveTo(...p(u1, r)).lineTo(...p(u1 + w * 0.5, w)).moveTo(...p(u2, r)).lineTo(...p(u2 - w * 0.4, -w));
-    g.stroke({ width: 0.012, color: line, alpha: 0.75 });
-    g.poly([...BL, ...SL, ...T, ...SR, ...BR]).stroke({ width: 0.026, color: line, join: 'round' });
-    const hk = lit * w * 0.55;
-    g.moveTo(...p(sh * 0.15, hk)).lineTo(...p(sh * 0.85, hk * 0.9)).stroke({ width: 0.018, color: 0xffffff, alpha: 0.6, cap: 'round' });
+    g.poly([...BL, ...SL, ...T, ...SR, ...BR]).stroke({ width: OUT, color: line, join: 'round' });
   };
   // Eight uneven prisms all round, the ones pointing away (screen up) first so the near ones overlap them.
-  const n = 8;
+  const n = 5 + Math.floor(rnd() * 4);
   const ph = rnd() * Math.PI * 2;
   const outs: [number, number, number][] = [];
-  for (let i = 0; i < n; i++) outs.push([ph + ((i + (rnd() - 0.5) * 0.8) / n) * Math.PI * 2, 0.34 + 0.16 * rnd(), 0.085 + 0.035 * rnd()]);
+  for (let i = 0; i < n; i++) { const k = sz * (0.5 + rnd() * 0.8); outs.push([ph + ((i + (rnd() - 0.5) * 0.8) / n) * Math.PI * 2, (0.3 + 0.16 * rnd()) * k, (0.08 + 0.035 * rnd()) * k]); }
   outs.sort((p, q) => (Math.cos(q[0]) * up[0] + Math.sin(q[0]) * up[1]) - (Math.cos(p[0]) * up[0] + Math.sin(p[0]) * up[1]));
   for (const [a, len, w] of outs) shard(a, len, w);
   // Stubby upright hexagonal prisms in the middle, seen from high up: three side faces, a flat hexagonal top.
@@ -4597,19 +4596,16 @@ function crystal(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () 
     [0.12, -0.06, 0.08, 0.07],
   ];
   for (const [a, b, h, w] of stubs) {
-    const base = pt(cx, cy, a, b);
-    const at = (x: number, y: number, z: number) => pt(base[0], base[1], x * w, y * w * 0.45 + z);
+    const base = pt(cx, cy, a * sz, b * sz);
+    const at = (x: number, y: number, z: number) => pt(base[0], base[1], x * w * sz, y * w * sz * 0.45 + z * sz);
     const ring = (z: number) => [at(-1, 0, z), at(-0.5, -1, z), at(0.5, -1, z), at(1, 0, z), at(0.5, 1, z), at(-0.5, 1, z)];
     const [lo, hi] = [ring(0), ring(h)];
     const face = (i: number, j: number, col: number) => g.poly([...lo[i], ...lo[j], ...hi[j], ...hi[i]]).fill(col);
     face(0, 1, t[2]);
     face(1, 2, t[1]);
     face(2, 3, t[0]);
-    g.poly(hi.flat()).fill(t[3]);
-    g.moveTo(...lo[1]).lineTo(...hi[1]).moveTo(...lo[2]).lineTo(...hi[2]).stroke({ width: 0.01, color: line, alpha: 0.75 });
-    g.poly([...lo[0], ...lo[1], ...lo[2], ...lo[3], ...hi[3], ...hi[4], ...hi[5], ...hi[0]]).stroke({ width: 0.024, color: line, join: 'round' });
-    g.poly(hi.flat()).stroke({ width: 0.012, color: line, alpha: 0.75, join: 'round' });
-    g.moveTo(...at(-0.75, -0.3, h * 0.2)).lineTo(...at(-0.75, -0.3, h * 0.85)).stroke({ width: 0.014, color: 0xffffff, alpha: 0.7, cap: 'round' });
+    g.poly(hi.flat()).fill(t[2]);
+    g.poly([...lo[0], ...lo[1], ...lo[2], ...lo[3], ...hi[3], ...hi[4], ...hi[5], ...hi[0]]).stroke({ width: OUT, color: line, join: 'round' });
   }
 }
 
@@ -5150,41 +5146,39 @@ function steamVent(g: Graphics, f: InteriorItem, light: Light, rnd: () => number
   }
 }
 
-/** Sulfur crust: one flat ragged patch of yellow mineral crust grown round a dark vent crack, needle crystals
- * in lemon and ochre on it, rust-orange stains at its edge, a faint haze over the crack. */
+/** Sulfur crust: one flat ragged patch of dull ochre mineral crust round a dark vent crack, inked, with a few
+ * short needle crystals on it and rust stains at its edge. Reads as a crust, not as dots. */
 function sulfurCrust(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  for (let i = 0; i < 6; i++) {
-    const a = rnd() * Math.PI * 2;
-    const d = 0.3 + 0.08 * rnd();
-    g.poly(patch(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.05 + 0.03 * rnd(), 0.04 + 0.02 * rnd(), rnd, 0.3, 9)).fill({ color: 0xc06a20, alpha: 0.45 });
-  }
-  g.poly(patch(cx, cy, 0.36, 0.33, rnd, 0.12, 34)).fill(0xb8982a).stroke({ width: 0.016, color: 0x6a5418, join: 'round' });
-  g.poly(patch(cx + light[0] * 0.02, cy + light[1] * 0.02, 0.29, 0.27, rnd, 0.12, 28)).fill(0xd8c040);
   for (let i = 0; i < 3; i++) {
-    const a = Math.atan2(light[1], light[0]) + (rnd() - 0.5) * 2.4;
-    const d = 0.1 + 0.1 * rnd();
-    g.poly(patch(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.08 + 0.04 * rnd(), 0.06 + 0.03 * rnd(), rnd, 0.3, 10)).fill(0xf0e070);
+    const a = rnd() * Math.PI * 2;
+    const d = 0.3 + 0.06 * rnd();
+    g.poly(patch(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.06 + 0.03 * rnd(), 0.05 + 0.02 * rnd(), rnd, 0.3, 9)).fill({ color: 0x8a5a2a, alpha: 0.5 });
   }
-  // The vent crack: a dark slit, a raised ring of crust round it.
+  const edge = patch(cx, cy, 0.37, 0.33, rnd, 0.14, 26);
+  castShadow(g, edge, light, 0.06);
+  g.poly(edge).fill(0x726232).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(patch(cx + light[0] * 0.025, cy + light[1] * 0.025, 0.28, 0.25, rnd, 0.14, 22)).fill(0x927f42);
+  for (let i = 0; i < 2; i++) {
+    const a = Math.atan2(light[1], light[0]) + (rnd() - 0.5) * 2;
+    const d = 0.1 + 0.1 * rnd();
+    g.poly(patch(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.09 + 0.04 * rnd(), 0.07 + 0.03 * rnd(), rnd, 0.3, 10)).fill(0xa8965a);
+  }
+  // The vent crack: a dark slit in a raised rim of crust.
   const ca = rnd() * Math.PI;
   const [kc, ks] = [Math.cos(ca), Math.sin(ca)];
   const q = (u: number, k: number): [number, number] => [cx + kc * u - ks * k, cy + ks * u + kc * k];
-  g.poly([...q(-0.13, 0), ...q(-0.05, 0.035), ...q(0.03, 0.02), ...q(0.12, 0.03), ...q(0.06, -0.02), ...q(-0.04, -0.03)]).fill(0xf8f0b0).stroke({ width: 0.012, color: 0x8a7420, join: 'round' });
-  g.poly([...q(-0.1, 0), ...q(-0.04, 0.018), ...q(0.03, 0.008), ...q(0.09, 0.014), ...q(0.05, -0.01), ...q(-0.03, -0.014)]).fill(0x1a1608);
-  // Needle crystals: thin pale blades with a dark side, densest round the crack.
-  for (let i = 0; i < 46; i++) {
+  g.poly([...q(-0.14, 0), ...q(-0.05, 0.045), ...q(0.04, 0.03), ...q(0.13, 0.04), ...q(0.06, -0.03), ...q(-0.04, -0.04)]).fill(0xa8965a).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly([...q(-0.1, 0), ...q(-0.04, 0.02), ...q(0.03, 0.01), ...q(0.09, 0.016), ...q(0.05, -0.012), ...q(-0.03, -0.016)]).fill(INK);
+  // A few short needle crystals near the crack.
+  for (let i = 0; i < 9; i++) {
     const a = rnd() * Math.PI * 2;
-    const d = i < 16 ? 0.07 + 0.06 * rnd() : 0.08 + 0.22 * Math.sqrt(rnd());
+    const d = 0.1 + 0.18 * Math.sqrt(rnd());
     const [x, y] = [cx + Math.cos(a) * d, cy + Math.sin(a) * d * 0.94];
-    const b = i < 16 ? a + (rnd() - 0.5) * 0.6 : rnd() * Math.PI * 2;
-    const L = 0.035 + 0.035 * rnd();
-    const [ex, ey] = [x + Math.cos(b) * L, y + Math.sin(b) * L];
-    g.moveTo(x - light[0] * 0.006, y - light[1] * 0.006).lineTo(ex - light[0] * 0.006, ey - light[1] * 0.006).stroke({ width: 0.012, color: 0x8a7420, cap: 'round' });
-    g.moveTo(x, y).lineTo(ex, ey).stroke({ width: 0.009, color: 0xfff6a8, cap: 'round' });
+    const b = a + (rnd() - 0.5) * 1.2;
+    const L = 0.05 + 0.04 * rnd();
+    g.moveTo(x, y).lineTo(x + Math.cos(b) * L, y + Math.sin(b) * L).stroke({ width: 0.016, color: 0xd8c878, cap: 'round' });
   }
-  g.circle(cx, cy, 0.08).fill({ color: 0xf4f8e0, alpha: 0.18 });
-  g.circle(cx - light[0] * 0.08, cy - light[1] * 0.08, 0.11).fill({ color: 0xf4f8e0, alpha: 0.12 });
 }
 
 /** Scorched remains: someone burnt where they fell — a black soot burst on the floor round the body, grey ash
@@ -5675,10 +5669,12 @@ export function nicheMouth(g: Graphics, f: InteriorItem, light: Light, wall: [nu
 function burialNiche(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, wall: [number, number], rock: number) {
   const { rect, at } = frame(f, wall);
   const sg = rock > 0 ? -1 : 1;
-  const dd = (rock >= 2 ? 0.74 : rock === 1 ? 0.56 : 0.4) + (rnd() - 0.5) * 0.06;
+  const dd = (rock >= 2 ? 0.74 : rock === 1 ? 0.56 : 0.34) + (rnd() - 0.5) * 0.06;
   // (u along the wall, k from the wall line into the pocket.)
-  const R = (u0: number, k0: number, u1: number, k1: number) => rect(u0, sg * k0, u1, sg * k1);
-  const A = (u: number, k: number) => at(u, sg * k);
+  // With a room behind the wall, the pocket starts at the masonry band's floor face, not under it.
+  const off = rock > 0 ? 0 : 0.23;
+  const R = (u0: number, k0: number, u1: number, k1: number) => rect(u0, sg * (k0 + off), u1, sg * (k1 + off));
+  const A = (u: number, k: number) => at(u, sg * (k + off));
   const POCKET = [0x211c17, 0x2f2820, 0x40372c];
   const ROCK = [0x4a453d, 0x6b655b, 0x8c867a];
   const jw = 0.01 + rnd() * 0.012;
@@ -6219,59 +6215,72 @@ function oreCart(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) 
   g.rect(cx - iw, cy - ih, iw * 2, ih * 2).stroke({ width: 0.012, color: INK });
 }
 
-/** Ore vein (after a reference picture): a pale grey lump of rock against the wall, speckled, with chunky rounded
- * nuggets of ore bursting out of it — glowing orange gold, copper green or silver — each shaded dark at its root
- * and bright at its tip, a few chips knocked off onto the floor. */
+/** Ore vein: a streak in the rock itself, not an object on it: broken, tapering ribbons in wall-rock tones that fade
+ * out into the wall (no outline round the whole), running along the wall's edge and a little into it, with a few
+ * chunky muted ore fragments set in it (rust-gold, verdigris or tarnished silver) and loose rubble at its foot. */
 function oreVein(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number, wall: [number, number]) {
   const { at } = frame(f, wall);
   const ore = [
-    [0x6a2a0a, 0xc8601a, 0xf0a030, 0xffe08a],
-    [0x1e4a3a, 0x2e8a6a, 0x5ac8a0, 0xc8ffe8],
-    [0x3a4250, 0x7a8698, 0xb8c4d4, 0xffffff],
-    [0x6a2a0a, 0xc8601a, 0xf0a030, 0xffe08a],
+    [0x4a3418, 0x8a6a30, 0xb09450, 0xd8bc70],
+    [0x26403a, 0x4a7868, 0x78a090, 0xa8d4bc],
+    [0x383c42, 0x6e767e, 0x98a0a4, 0xc8ced0],
+    [0x4a3418, 0x8a6a30, 0xb09450, 0xd8bc70],
   ][v % 4];
-  const ROCK = [0x5e6468, 0x8a9296, 0xaab2b4, 0xc8ced0];
-  const [cx, cy] = at(0.5, 0.3);
-  // The rock: a lumpy pale mass out from the wall.
-  const lump: number[] = [];
-  const n = 13;
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    const r = 0.29 * (0.8 + 0.35 * rnd());
-    lump.push(cx + Math.cos(a) * r * 1.15, cy + Math.sin(a) * r);
-  }
-  castShadow(g, lump, light, 0.3);
-  const nug = (a: number, d: number, len: number, w: number) => {
-    const [c, s] = [Math.cos(a), Math.sin(a)];
-    const P = (u: number, k: number): [number, number] => [cx + c * (d + u) - s * k, cy + s * (d + u) + c * k];
-    const shape = oval(...P(len * 0.5, 0), len * 0.55, w, a, 16);
-    g.poly(shape).fill(ore[0]).stroke({ width: OUT, color: INK, join: 'round' });
-    g.poly(oval(...P(len * 0.56, w * 0.1), len * 0.44, w * 0.72, a, 14)).fill(ore[1]);
-    g.poly(oval(...P(len * 0.66, w * 0.2), len * 0.3, w * 0.45, a, 12)).fill(ore[2]);
-    g.poly(oval(...P(len * 0.78, w * 0.28), len * 0.1, w * 0.16, a, 8)).fill(ore[3]);
+  const ROCK = [0x34302a, 0x48433a, 0x5c564b];
+  const u0 = 0.04 + 0.12 * rnd();
+  const u1 = 0.96 - 0.12 * rnd();
+  // A ribbon along a wandering line from u0..u1: width tapers to nothing at both ends, d0 is its mean depth.
+  const ribbon = (ua: number, ub: number, d0: number, wd: number, col: number, alpha: number) => {
+    const n = 10;
+    const hi: number[] = [];
+    const lo: number[] = [];
+    const ph = rnd() * 6;
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      const u = ua + (ub - ua) * t;
+      const c = d0 + 0.05 * Math.sin(ph + t * 5) + 0.03 * (rnd() - 0.5);
+      const w = wd * Math.pow(Math.sin(Math.PI * t), 0.8) * (0.55 + 0.7 * rnd());
+      hi.push(...at(u, c - w * 0.5));
+      lo.unshift(...at(u, c + w * 0.5));
+    }
+    const pts: number[] = [...hi];
+    for (let i = 0; i < lo.length; i += 2) pts.push(lo[i], lo[i + 1]);
+    g.poly(pts).fill({ color: col, alpha });
   };
-  // The rock, then nuggets bursting out of it at uneven angles, bunched to one side, different sizes.
-  g.poly(lump).fill(ROCK[0]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.poly(lump.map((q, i) => (i % 2 ? cy : cx) + (q - (i % 2 ? cy : cx)) * 0.86 + (i % 2 ? light[1] : light[0]) * 0.03)).fill(ROCK[1]);
-  g.poly(patch(cx + light[0] * 0.08, cy + light[1] * 0.08, 0.14, 0.11, rnd, 0.2, 10)).fill(ROCK[2]);
-  for (let i = 0; i < 9; i++) {
-    const [x, y] = [cx + (rnd() - 0.5) * 0.44, cy + (rnd() - 0.5) * 0.36];
-    g.circle(x, y, 0.012 + 0.01 * rnd()).fill(i % 2 ? ROCK[0] : ROCK[3]);
+  // The rock round it, stained: wide faint patches reaching into the wall and out onto its face.
+  ribbon(u0 - 0.04, u1 + 0.04, 0.02, 0.42, ROCK[0], 0.35);
+  ribbon(u0, u1, 0.05, 0.3, ROCK[1], 0.55);
+  // Broken streaks of ore-tinted rock, each tapering: two or three, apart in depth.
+  const parts = 2 + Math.floor(rnd() * 2);
+  for (let i = 0; i < parts; i++) {
+    const ua = u0 + (u1 - u0) * (i / parts) + 0.02;
+    const ub = u0 + (u1 - u0) * ((i + 1) / parts) - 0.02 + 0.05 * rnd();
+    const d0 = 0.0 + 0.09 * rnd();
+    ribbon(ua, ub, d0, 0.12 + 0.05 * rnd(), ore[0], 0.9);
+    ribbon(ua + 0.03, ub - 0.03, d0 - 0.02, 0.06, ore[1], 0.9);
   }
-  const [wx, wy] = at(0.5, 0);
-  const away = Math.atan2(cy - wy, cx - wx);
-  const ph = away + (rnd() < 0.5 ? -1 : 1) * (0.5 + 0.3 * rnd());
-  const nugs: [number, number, number, number][] = [
-    [ph - 0.9, 0.13, 0.26, 0.09],
-    [ph + 0.25, 0.16, 0.22, 0.08],
-    [ph + 1.5 + 0.4 * rnd(), 0.15, 0.17, 0.065],
-  ];
-  for (const [a, d, len, w] of nugs) nug(a, d, len, w);
-  // Chips on the floor in front.
-  for (let i = 0; i < 4; i++) {
-    const [x, y] = at(0.2 + rnd() * 0.6, 0.66 + rnd() * 0.2);
-    rock(g, x, y, 0.025 + 0.015 * rnd(), ROCK, light, rnd, 5);
-    if (i % 2 === 0) g.circle(x + 0.012, y - 0.005, 0.012).fill(ore[2]).stroke({ width: 0.006, color: INK });
+  // The lit side of the streak: a thin pale rock line.
+  ribbon(u0 + 0.05, u1 - 0.1, -0.04, 0.03, ROCK[2], 0.7);
+  // Chunky ore fragments set in the streak: a few angular lumps, three tones, one small lit facet.
+  const flecks = 3 + Math.floor(rnd() * 3);
+  for (let i = 0; i < flecks; i++) {
+    const [x, y] = at(u0 + 0.06 + (u1 - u0 - 0.12) * ((i + 0.3 + 0.4 * rnd()) / flecks), 0.0 + 0.1 * rnd());
+    const r = 0.028 + 0.028 * rnd();
+    const rot = rnd() * Math.PI;
+    const chunk: number[] = [];
+    for (let k = 0; k < 5; k++) {
+      const a = rot + (k / 5) * Math.PI * 2;
+      const rr = r * (0.75 + 0.5 * rnd());
+      chunk.push(x + Math.cos(a) * rr, y + Math.sin(a) * rr * 0.85);
+    }
+    g.poly(chunk).fill(ore[1]).stroke({ width: LINE, color: ore[0], join: 'round' });
+    g.poly([x - r * 0.1, y - r * 0.1, x + light[0] * r * 0.7, y - r * 0.1, x - r * 0.1, y + light[1] * r * 0.7]).fill(ore[2]);
+    if (i === 0) g.circle(x + light[0] * r * 0.35, y + light[1] * r * 0.35, 0.014).fill(ore[3]);
+  }
+  // Loose rubble at the foot.
+  for (let i = 0; i < 3; i++) {
+    const [x, y] = at(0.2 + rnd() * 0.6, 0.2 + rnd() * 0.1);
+    rock(g, x, y, 0.02 + 0.014 * rnd(), i === 1 ? ore : ROCK, light, rnd, 5);
   }
 }
 

@@ -14,7 +14,8 @@ import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs'
 import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
 import { noiseSource } from './noise';
-import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, SQUARE_SITES, underField, type UnderField } from './underField';
+import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, roughness, SQUARE_SITES, TERRAIN_CHANNEL, underField, type UnderField } from './underField';
+import { nearestWall, wallDistance, type WallDistance } from './wallField';
 import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
 import undergroundFragment from './shaders/underground.frag?raw';
 import vertex from './shaders/terrain.vert?raw';
@@ -33,6 +34,25 @@ interface WallAnchor {
   step: number;
   light: [number, number];
 }
+/** A level of smooth rock: its drawn wall, and what a prop on it keeps off (`roughAnchors`). */
+interface RoughWalls {
+  /** Items on the level when this was worked out. */
+  n: number;
+  dist: WallDistance;
+  /** Where wall props are (grid). */
+  taken: [number, number][];
+  /** What stands on the floor, and doors' middles. */
+  solid: InteriorItem[];
+  doors: [number, number][];
+}
+/** How near a prop's wall must be (squares from its middle), and how much farther than the nearest it may go to keep
+ * clear of something; how far props stay apart, and off a door's middle. */
+const ROUGH_REACH = 1.75;
+const ROUGH_DETOUR = 1;
+const PROP_GAP = 0.85;
+const DOOR_GAP = 1;
+/** What a wall prop may lie over: the floor and what is strewn on it. */
+const UNDERFOOT = new Set(['sewage', 'lava', 'rail', 'guano', 'moss', 'rubble', 'debris', 'sulfur']);
 /** Per level, the squares a line's floor can be painted on (`nearFloor`). */
 const NEAR_FLOOR = new WeakMap<InteriorLevel, Uint8Array>();
 /** An item's `back` (0 north 1 east 2 south 3 west) as a unit step in grid axes. */
@@ -45,7 +65,7 @@ const sideOf = ([dx, dy]: [number, number]): number | null => (!dx && !dy ? null
 const SHARED: Record<string, string> = {
   chest: 'chest', barrel: 'barrel', crate: 'crate', table: 'table', rug: 'rug', altar: 'altar', statue: 'statue', pillar: 'pillar',
   cage: 'cage', rack: 'rack', weapon_rack: 'weapon_rack', cot: 'cot', sarcophagus: 'sarcophagus', winch: 'winch', trapdoor: 'trapdoor',
-  bookshelf: 'bookcase',
+  bookshelf: 'bookcase', desk: 'desk', long_table: 'long_table', vat: 'vat', anvil: 'anvil', forge: 'forge', hearth: 'hearth', keg_rack: 'keg_rack',
 };
 /** The kind a building's furniture or an underground prop is drawn as with the furniture's drawing
  * (in a building: everything but the indoor props, drawn as underground); none for the rest. */
@@ -553,7 +573,9 @@ export class InteriorLayer {
   private under: { uniforms: UniformGroup; sources: BufferImageSource[]; shader: Shader; mesh: Mesh<any, any>; level: number } | null = null;
   /** Underground levels' textures, worked out once each (`underField`). */
   private readonly fields = new Map<number, UnderField>();
-  /** Props on a tunnel's wall, worked out once each (`wallAnchor`). */
+  /** Rough walls by level (`roughAnchors`). */
+  private readonly rough = new Map<number, RoughWalls>();
+  /** Props on a curving wall, worked out once each (`wallAnchor`). */
   private readonly anchors = new WeakMap<InteriorItem, WallAnchor | null>();
   /** Toward the light (screen NW) in grid axes, rounded to 45 degrees, for items' shading. */
   private light: [number, number] = [-Math.SQRT1_2, -Math.SQRT1_2];
@@ -842,13 +864,12 @@ export class InteriorLayer {
     const terrainSrc = new BufferImageSource({ resource: terrain ?? new Uint8Array(4), width: terrain ? nx * FIELD_RES : 1, height: terrain ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // Light from the NW of the screen, in grid axes.
     const [lx, ly] = [-Math.SQRT1_2, -Math.SQRT1_2];
-    const rough = it.function === 'cave' ? 1 : it.function === 'lava tube' ? 0.85 : it.function === 'mine' ? 0.45 : square ? 0 : 0.06;
     const uniforms = new UniformGroup({
       uN: { value: new Float32Array([nx, ny]), type: 'vec2<f32>' },
       uPad: { value: pad, type: 'f32' },
       uLight: { value: new Float32Array([lx * it.axis[0] + ly * it.axis[1], lx * it.across[0] + ly * it.across[1]]), type: 'vec2<f32>' },
       uTime: { value: 0, type: 'f32' },
-      uRough: { value: rough, type: 'f32' },
+      uRough: { value: roughness(it.function), type: 'f32' },
       uSquare: { value: square ? 1 : 0, type: 'f32' },
       uLiquid: { value: liquidKind, type: 'f32' },
       uGhost: { value: this.ghost ? 1 : 0, type: 'f32' },
@@ -1511,7 +1532,7 @@ export class InteriorLayer {
     return sharedKind(kind, this.underground);
   }
 
-  /** An item's look from the atlas where it goes; a prop on a tunnel's curving wall stands on that wall,
+  /** An item's look from the atlas where it goes; a prop on a curving wall stands on that wall,
    * turned to it (its look is drawn with the wall to the north: `wallAnchor`). */
   private itemSprite(f: InteriorItem, frame: ItemFrame): Sprite {
     const s = new Sprite(frame.texture);
@@ -1527,15 +1548,24 @@ export class InteriorLayer {
     return s;
   }
 
-  /** Where a prop hangs on the wall of a floor that follows lines (a sewer tunnel): on the wall as
-   * painted, whatever squares it was given, a section's border being no wall. Null elsewhere, for a
-   * side set in a design, and on the squares of a passage dug beside the tunnel: those go by
-   * `wallSide`. Drawn with the wall to the north and turned, so its light is turned back by the
-   * nearest of 16 angles, to stay the screen's NW. (Without an atlas nothing can be turned.) */
+  /** Where a prop hangs on a wall that isn't square: on the wall as painted, whatever squares it was given. Null for
+   * a side set in a design and where no such wall is near: those go by `wallSide`. Drawn with the wall to the north
+   * and turned, so its light is turned back by the nearest of 16 angles, to stay the screen's NW. (Without an atlas
+   * nothing can be turned.) */
   private wallAnchor(f: InteriorItem): WallAnchor | null {
-    if (!ON_WALL.has(f.kind) || !this.underground || !InteriorLayer.renderer) return null;
+    if (!ON_WALL.has(f.kind) || !this.underground || !InteriorLayer.renderer || setBack(f)) return null;
     const lv = this.interior.levels[this.level];
-    if (!lv.paths?.length || setBack(f)) return null;
+    if (lv.paths?.length) return this.lineAnchor(f, lv);
+    if (f.kind === 'niche' || this.tile || SQUARE_SITES.has(this.interior.function)) return null;
+    const walls = this.roughAnchors(lv);
+    let a = this.anchors.get(f);
+    if (a === undefined) this.anchors.set(f, (a = this.roughAnchor(f, lv, walls)));
+    return a;
+  }
+
+  /** On a floor that follows lines (a sewer tunnel): a section's border is no wall, and the squares of a passage dug
+   * beside the tunnel go by `wallSide`. */
+  private lineAnchor(f: InteriorItem, lv: InteriorLevel): WallAnchor | null {
     const hit = this.anchors.get(f);
     if (hit !== undefined) return hit;
     const { nx, ny } = this.interior;
@@ -1545,16 +1575,64 @@ export class InteriorLayer {
       let near = NEAR_FLOOR.get(lv);
       if (!near) NEAR_FLOOR.set(lv, (near = nearFloor(lv, nx, ny)));
       const w = lineWall(lv, nx, ny, near, f.x + f.w / 2, f.y + f.h / 2);
-      if (w) {
-        const angle = Math.atan2(w.dx, -w.dy);
-        const step = Math.round(angle / (Math.PI / 8));
-        const [c, s] = [Math.cos((step * Math.PI) / 8), Math.sin((step * Math.PI) / 8)];
-        const [lx, ly] = this.light;
-        a = { x: w.x, y: w.y, angle, step: ((step % 16) + 16) % 16, light: [lx * c + ly * s, -lx * s + ly * c] };
-      }
+      if (w) a = this.turnedTo(w);
     }
     this.anchors.set(f, a);
     return a;
+  }
+
+  /** A prop on the wall at (x, y), (dx, dy) the unit step into the rock. */
+  private turnedTo({ x, y, dx, dy }: { x: number; y: number; dx: number; dy: number }): WallAnchor {
+    const angle = Math.atan2(dx, -dy);
+    const step = Math.round(angle / (Math.PI / 8));
+    const [c, s] = [Math.cos((step * Math.PI) / 8), Math.sin((step * Math.PI) / 8)];
+    const [lx, ly] = this.light;
+    return { x, y, angle, step: ((step % 16) + 16) % 16, light: [lx * c + ly * s, -lx * s + ly * c] };
+  }
+
+  /** A level of smooth rock's wall props, placed together in the level's order, so that where each goes is the same
+   * however it is reached. Worked out once a level, from the textures it is painted with. */
+  private roughAnchors(lv: InteriorLevel): RoughWalls {
+    const hit = this.rough.get(this.level);
+    if (hit && hit.n === lv.furniture.length) return hit;
+    const it = this.interior;
+    let field = this.fields.get(this.level);
+    if (!field) this.fields.set(this.level, (field = underField(it, this.level)));
+    const placed = (g: InteriorItem) => ON_WALL.has(g.kind) && g.kind !== 'niche' && !setBack(g);
+    const walls: RoughWalls = {
+      n: lv.furniture.length,
+      dist: wallDistance(field, it.nx, it.ny, roughness(it.function)),
+      taken: lv.furniture.filter((g) => ON_WALL.has(g.kind) && !placed(g)).map((g) => [g.x + g.w / 2, g.y + g.h / 2]),
+      solid: lv.furniture.filter((g) => !ON_WALL.has(g.kind) && !UNDERFOOT.has(g.kind) && TERRAIN_CHANNEL[g.kind] === undefined),
+      doors: lv.doors.map((d) => [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2]),
+    };
+    this.rough.set(this.level, walls);
+    for (const g of lv.furniture) {
+      if (!placed(g)) continue;
+      const a = this.roughAnchor(g, lv, walls);
+      this.anchors.set(g, a);
+      walls.taken.push(a ? [a.x, a.y] : [g.x + g.w / 2, g.y + g.h / 2]);
+    }
+    return walls;
+  }
+
+  /** The wall a prop goes on: the nearest place that keeps it clear of other props, doors and what stands on the
+   * floor, else the nearest. By a shaped room (its walls are drawn from its shape) none is known. */
+  private roughAnchor(f: InteriorItem, lv: InteriorLevel, { dist, taken, solid, doors }: RoughWalls): WallAnchor | null {
+    const { nx, ny } = this.interior;
+    const shaped = (x: number, y: number) => {
+      const [i, j] = [Math.floor(x), Math.floor(y)];
+      return i >= 0 && j >= 0 && i < nx && j < ny && dist.shaped[j * nx + i] !== 0;
+    };
+    const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
+    if (shaped(cx, cy)) return null;
+    const under = (g: InteriorItem, x: number, y: number) => x >= g.x && y >= g.y && x <= g.x + g.w && y <= g.y + g.h;
+    const w = nearestWall(dist, cx, cy, ROUGH_REACH, ROUGH_DETOUR, (x, y, ux, uy) => {
+      if (shaped(x, y)) return 2;
+      const [fx, fy] = [x - ux * 0.4, y - uy * 0.4];
+      return taken.some(([a, b]) => Math.hypot(a - x, b - y) < PROP_GAP) || doors.some(([a, b]) => Math.hypot(a - x, b - y) < DOOR_GAP) || solid.some((g) => under(g, x, y) || under(g, fx, fy)) ? 1 : 0;
+    });
+    return w && this.turnedTo(w);
   }
 
   /** The wall a prop hangs on: underground the rock beside it; in a building a wall or the
@@ -1748,7 +1826,7 @@ export class InteriorLayer {
         }
         break;
       case 'rope_bridge': {
-        // Broad planks across the way it runs (its long side) with gaps between, a rope rail along each
+        // Narrow planks (about 1.25 ft) across the way it runs (its long side) with gaps between, a rope rail along each
         // edge tied to a post at each end (the ends lie on the banks); the 5-ft grid drawn faintly over the deck.
         const along = w >= h;
         const [len, span] = along ? [w, h] : [h, w];
@@ -1761,27 +1839,27 @@ export class InteriorLayer {
           [0x93693e, 0xbc9262],
           [0x80664a, 0xa88d6a],
         ];
-        const per = 2;
+        const per = 4;
         for (let k = 0; k < Math.round(len * per); k++) {
-          const a0 = k / per + 0.03;
-          const a1 = (k + 1) / per - 0.03;
-          const hs = (n: number) => (hash2(x * 7 + k, y * 13 + k, n) - 0.5) * 0.04;
+          const a0 = k / per + 0.02;
+          const a1 = (k + 1) / per - 0.02;
+          const hs = (n: number) => (hash2(x * 7 + k, y * 13 + k, n) - 0.5) * 0.02;
           const j = [hs(1), hs(2), hs(3), hs(4)];
           const [base, lit] = PL[Math.floor(hash2(x + k, y - k, 5) * PL.length)];
           const [b0, b1] = [0.04 + hs(6), span - 0.04 + hs(7)];
           g.poly(box(a0, b0, a1, b1, j)).fill(lit);
           g.poly(box(a0 + (a1 - a0) * 0.3, b0, a1, b1, j)).fill(base);
           g.poly(box(a1 - (a1 - a0) * 0.16, b0, a1, b1, j)).fill(0x5e4024);
-          g.poly(box(a0, b0, a1, b1, j)).stroke({ width: 0.025, color: INK, join: 'round' });
+          g.poly(box(a0, b0, a1, b1, j)).stroke({ width: 0.016, color: INK, join: 'round' });
         }
         // The posts on the banks, then the ropes (ink under, hemp over, a twist marked along them).
         const posts: [number, number][] = [];
         for (const a of [0.08, len - 0.08]) for (const b of [r0, r1]) posts.push(at(a, b));
         for (const [px, py] of posts) g.circle(px + 0.04, py + 0.05, 0.11).fill({ color: INK, alpha: 0.3 });
         for (const b of [r0, r1]) g.moveTo(...at(0.08, b)).lineTo(...at(len - 0.08, b));
-        g.stroke({ width: 0.085, color: INK, cap: 'round' });
+        g.stroke({ width: 0.06, color: INK, cap: 'round' });
         for (const b of [r0, r1]) g.moveTo(...at(0.08, b)).lineTo(...at(len - 0.08, b));
-        g.stroke({ width: 0.045, color: 0xc9a46a, cap: 'round' });
+        g.stroke({ width: 0.03, color: 0xc9a46a, cap: 'round' });
         for (const b of [r0, r1]) for (let t = 0.2; t < len - 0.15; t += 0.14) g.moveTo(...at(t - 0.03, b - 0.02)).lineTo(...at(t + 0.03, b + 0.02));
         g.stroke({ width: 0.014, color: 0x7a5a2e });
         for (const [px, py] of posts) {
@@ -1792,7 +1870,7 @@ export class InteriorLayer {
         // (The 5-ft grid over the deck.)
         for (let t = 1; t < len; t++) g.moveTo(...at(t, 0.04)).lineTo(...at(t, span - 0.04));
         for (let b = 1; b < span; b++) g.moveTo(...at(0.12, b)).lineTo(...at(len - 0.12, b));
-        g.stroke({ width: 0.02, color: INK, alpha: 0.35 });
+        g.stroke({ width: 0.02, color: INK, alpha: 0.3 });
         break;
       }
       case 'stone_bridge': {

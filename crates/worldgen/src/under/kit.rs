@@ -500,8 +500,28 @@ pub(crate) fn furnish_room(p: &mut Plan, nx: usize, ny: usize, ri: i16, rkind: &
     let edge: Vec<usize> = squares.iter().copied().filter(|&k| neighbours(k, nx, ny).any(|m| p.cells[m] != ri) || k % nx == 0 || k / nx == 0).collect();
     for &(what, w, h, spot, lo, hi) in kit(rkind) {
         // Big rooms (a sewer's whole network, a great cavern) get a kit per 80 squares.
-        let n = (lo + rng.below(hi - lo + 1)) * (squares.len() as u32 / 80).clamp(1, 12);
+        let mut n = (lo + rng.below(hi - lo + 1)) * (squares.len() as u32 / 80).clamp(1, 12);
+        // Crystals and sulfur grow in clusters of about four, and thinly: half as many, each cluster round a first one.
+        // Ore veins follow a seam: a third as many (rounded at random), in groups along the wall.
+        let clustered = what == "crystal" || what == "sulfur" || what == "ore_vein";
+        if what == "ore_vein" {
+            n = (n + rng.below(3)) / 3;
+        } else if clustered {
+            n = n.div_ceil(2);
+        }
+        // A vein is only ever on rock: a square beside solid rock, never one beside another room or a passage (and none if there is no such square).
+        let rock_edge: Vec<usize>;
+        let edge = if what == "ore_vein" {
+            rock_edge = squares.iter().copied().filter(|&k| neighbours(k, nx, ny).any(|m| p.cells[m] < 0)).collect();
+            if rock_edge.is_empty() {
+                continue;
+            }
+            &rock_edge
+        } else {
+            &edge
+        };
         let mut placed = 0;
+        let mut anchor = usize::MAX;
         for _ in 0..n * if what == "pipe" { 80 } else { 12 } {
             if placed >= n {
                 break;
@@ -510,7 +530,18 @@ pub(crate) fn furnish_room(p: &mut Plan, nx: usize, ny: usize, ri: i16, rkind: &
                 Spot::Edge if !edge.is_empty() => &edge,
                 _ => &squares,
             };
-            let k = pool[rng.below(pool.len() as u32) as usize];
+            let mut k = pool[rng.below(pool.len() as u32) as usize];
+            if clustered && anchor != usize::MAX && placed % 4 != 0 {
+                let (ax, ay) = ((anchor % nx) as isize, (anchor / nx) as isize);
+                let (x, y) = (ax + rng.below(5) as isize - 2, ay + rng.below(5) as isize - 2);
+                if x < 0 || y < 0 || x >= nx as isize || y >= ny as isize || p.cells[y as usize * nx + x as usize] != ri {
+                    continue;
+                }
+                k = y as usize * nx + x as usize;
+                if what == "ore_vein" && !edge.contains(&k) {
+                    continue;
+                }
+            }
             let (w, h) = if rng.next_f64() < 0.5 { (w, h) } else { (h, w) };
             if rkind == "sewer tunnel" {
                 let (x, y) = (k % nx, k / nx);
@@ -526,6 +557,9 @@ pub(crate) fn furnish_room(p: &mut Plan, nx: usize, ny: usize, ri: i16, rkind: &
                 }
             }
             if p.place(item(what, k % nx, k / nx, w, h), Some(ri), ny) {
+                if clustered && placed % 4 == 0 {
+                    anchor = k;
+                }
                 placed += 1;
             }
         }

@@ -5,9 +5,11 @@ import { BufferImageSource } from 'pixi.js';
 
 export const NOISE_SIZE = 512;
 let source: BufferImageSource | null = null;
+let bytes: Uint8Array | null = null;
 
-export function noiseSource(): BufferImageSource {
-  if (source) return source;
+/** The lattice (RGBA): what shaders read through `noiseSource`, for the CPU to make the same sums. */
+export function noiseBytes(): Uint8Array {
+  if (bytes) return bytes;
   const data = new Uint8Array(NOISE_SIZE * NOISE_SIZE * 4);
   for (let k = 0; k < NOISE_SIZE * NOISE_SIZE; k++) {
     // Integer hash (lowbias32) of the lattice index.
@@ -18,8 +20,13 @@ export function noiseSource(): BufferImageSource {
     data[k * 4] = h & 255;
     data[k * 4 + 1] = (h >>> 8) & 255;
   }
+  return (bytes = data);
+}
+
+export function noiseSource(): BufferImageSource {
+  if (source) return source;
   source = new BufferImageSource({
-    resource: data,
+    resource: noiseBytes(),
     width: NOISE_SIZE,
     height: NOISE_SIZE,
     format: 'rgba8unorm',
