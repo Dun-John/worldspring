@@ -9,7 +9,7 @@
 //!   crossing a `none` line.
 //! - the network: trips between neighbouring settlements against the straight line, road length against the
 //!   settlements' minimum spanning tree, junctions outside settlements (arms, shape, stubs), river crossings
-//!   (angle, spacing), roads running beside roads, gates per town and up, settlements by tier;
+//!   (angle, spacing), out-and-backs (near crossings listed), roads running beside roads, gates per town and up, settlements by tier;
 //! - steep streets in towns and up: length by grade per tier and kind of street, and the flights
 //!   of steps the stair rule would make at three thresholds; `TOP=n` lists the steepest flights.
 //! `DUMP=file.json` writes every road and settlement (for drawing over a preview).
@@ -852,6 +852,31 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
         let c = crossings.iter().map(|c| dist(c.0, spots.pos[n])).fold(f64::MAX, f64::min);
         say!("      junction at ({:.0}, {:.0}), {} arms, shape {}: a crossing {:.0} ft away", spots.pos[n][0], spots.pos[n][1], deg[n], shape_of[n], c);
     }
+    // --- Out-and-backs: the road's heading 200 ft before a point and 200 ft after (100 ft at least,
+    // near its ends) differing by over 100°; those within a mile of a river crossing listed.
+    let mut spikes: Vec<(P, f64, usize)> = Vec::new();
+    for (r, q) in pts.iter().enumerate() {
+        let mut line: Vec<P> = Vec::new();
+        for w in q.windows(2) {
+            let n = (dist(w[0], w[1]) / 50.0).ceil().max(1.0) as usize;
+            line.extend((0..n).map(|j| [w[0][0] + (w[1][0] - w[0][0]) * j as f64 / n as f64, w[0][1] + (w[1][1] - w[0][1]) * j as f64 / n as f64]));
+        }
+        line.extend(q.last().copied());
+        let mut last: Option<P> = None;
+        for i in 2..line.len().saturating_sub(2) {
+            let (a, b) = (i.saturating_sub(4), (i + 4).min(line.len() - 1));
+            let deg = angle(sub(line[i], line[a]), sub(line[b], line[i]));
+            if deg > 100.0 && last.is_none_or(|p| dist(p, line[i]) > 400.0) {
+                last = Some(line[i]);
+                spikes.push((line[i], deg, r));
+            }
+        }
+    }
+    let spike_wet: Vec<&(P, f64, usize)> = spikes.iter().filter(|s| crossings.iter().any(|c| dist(c.0, s.0) <= MI)).collect();
+    say!("  out-and-backs (> 100° over 200 ft): {} ({} within a mile of a river crossing)", spikes.len(), spike_wet.len());
+    for s in spike_wet.iter().take(top) {
+        say!("      road {} turns {:.0}° at ({:.0}, {:.0})", s.2, s.1, s.0[0], s.0[1]);
+    }
     // --- Roads running beside roads: share of each class's length (sampled every 200 ft, more than
     // a mile from its ends) within 1,500 ft of another road, where the two share no place within a mile.
     const GRID: f64 = 3000.0;
@@ -913,7 +938,7 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
     json!({
         "trips": trips_all, "trips_dry": trips_dry,
         "length_mi": { "total": total / MI, "king": by_class[0] / MI, "road": by_class[1] / MI, "track": by_class[2] / MI, "mst": mst / MI, "ratio": total / mst.max(1.0) },
-        "junctions": { "n": njunc, "arms": arms_n, "shape_t_cross": shape_n[0], "shape_y": shape_n[1], "shape_other": shape_n[2], "stubs_half_mi": stub_half, "stubs_half_mi_shared": stub_doubled, "stubs_2_mi": stub_two, "x_crossings": x_cross, "near_crossing": near_cross },
+        "junctions": { "n": njunc, "arms": arms_n, "shape_t_cross": shape_n[0], "shape_y": shape_n[1], "shape_other": shape_n[2], "stubs_half_mi": stub_half, "stubs_half_mi_shared": stub_doubled, "stubs_2_mi": stub_two, "x_crossings": x_cross, "near_crossing": near_cross, "out_and_backs": spikes.len(), "out_and_backs_wet": spike_wet.len() },
         "crossings": { "n": crossings.len(), "bridges": kind_n[0], "fords": kind_n[1], "ferries": kind_n[2], "under_45": under(0.707), "under_30": under(0.5), "within_1_mi": within(MI), "within_3_mi": within(3.0 * MI) },
         "beside_pct": beside_pct, "gates": gate_json, "gates_mean": gate_mean, "tiers": tier_n,
     })

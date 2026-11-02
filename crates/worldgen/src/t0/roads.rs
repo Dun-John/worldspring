@@ -2094,15 +2094,17 @@ struct Fit {
 
 /// How branch `b` (running out from the junction) best meets through road `t` (`ts`: its arc):
 /// the nearest reach whose point falls on the road at least 0.1 cell off it, meeting it where it
-/// falls (or slid along it, up to 0.75 cell, to keep clear of river crossings), or at `fixed`
-/// along it. A meeting with no crossing near beats one with, a shorter reach a longer, and no
-/// meeting doubles back, enters water or a settlement, or climbs too steeply.
+/// falls (or slid along it, up to 1.3 cell and first towards where the branch comes from, to keep
+/// clear of river crossings), or at `fixed` along it. A meeting with no crossing near beats one
+/// with, a shorter reach a longer; one slid further than the branch's point stands off the road
+/// (its way in would swing across) comes last; and no meeting doubles back, enters water or a
+/// settlement, or climbs too steeply.
 fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option<f64>, min_reach: f64) -> Option<Fit> {
     let cell = sq.cell;
     let bs = arc(&b.pts);
     let (blen, total) = (bs[bs.len() - 1], ts[ts.len() - 1]);
     let gmax = b.class.max_grade().min(t.class.max_grade());
-    let mut fallback: Option<Fit> = None;
+    let (mut fallback, mut wide): (Option<Fit>, Option<Fit>) = (None, None);
     for f in [0.4, 0.55, 0.7, 0.9, 1.15, 1.5, 2.0, 2.5] {
         let reach = (f * cell).max(min_reach);
         if reach > 0.5 * blen {
@@ -2116,15 +2118,21 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
         // Heading at `p` towards the junction.
         let h = unit2(sub2(point_at(&b.pts, &bs, reach - 0.03 * cell), p));
         let z_p = val_at(&b.z, &bs, reach);
+        // Slid towards where the branch comes from first, at each distance.
+        let tan0 = unit2(sub2(point_at(&t.pts, ts, at0 + 40.0), point_at(&t.pts, ts, at0 - 40.0)));
+        let back = if dot2(h, tan0) > 0.0 { -1.0 } else { 1.0 };
         let slides: &[f64] = if fixed.is_some() { &[0.0] } else { &[0.0, 0.15, -0.15, 0.3, -0.3, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0, 1.3, -1.3] };
         for &d in slides {
-            let at = fixed.unwrap_or(at0 + d * cell);
+            let at = fixed.unwrap_or(at0 + back * d * cell);
             if at < 0.15 * cell || at > total - 0.15 * cell {
                 continue;
             }
             let q = point_at(&t.pts, ts, at);
             let clear = sq.clear(q);
-            if (!clear && fallback.is_some()) || sq.in_town(q) {
+            // Slid so far the way in swings across (over 45°): a longer reach (coming in
+            // straighter) first, then a join nearer a crossing.
+            let skew = fixed.is_none() && (at - at0).abs() > off;
+            if (!clear && fallback.is_some()) || sq.in_town(q) || (skew && (!clear || wide.is_some())) {
                 continue;
             }
             let tan = unit2(sub2(point_at(&t.pts, ts, at + 40.0), point_at(&t.pts, ts, at - 40.0)));
@@ -2143,13 +2151,16 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
                 continue;
             }
             let fit = Fit { reach, at, q, p, curve, z_p, left, clear };
-            if clear {
+            if skew {
+                wide.get_or_insert(fit);
+            } else if clear {
                 return Some(fit);
+            } else {
+                fallback.get_or_insert(fit);
             }
-            fallback.get_or_insert(fit);
         }
     }
-    fallback
+    fallback.or(wide)
 }
 
 /// The branch with its end from `fit.p` replaced by the curve in to `fit.q` (running out from
@@ -2207,6 +2218,7 @@ fn square_junctions(
     ground: &dyn Fn([f64; 2]) -> f64,
     river: &dyn Fn(f64, f64) -> Option<f64>,
 ) {
+    unshare(roads, towns);
     let mut sq = Square { towns, cell, dry, ground, wet: river_hits(roads, cell, river) };
     // Points already squared (or left as they are) are not looked at again.
     let mut settled: std::collections::BTreeSet<(u64, u64)> = Default::default();
@@ -2224,6 +2236,82 @@ fn square_junctions(
             break;
         }
         sq.wet = river_hits(roads, cell, river);
+    }
+}
+
+/// Two roads leaving a junction (away from settlements) along one line, side by side (the grid
+/// routed both along the same cells), become one road out to where they part: the better one
+/// (class, then length) carries both, its first stretch taking the better class, and the other
+/// leaves it there (that junction is squared in its turn). One pair at a time, at most 200.
+fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
+    const TOL: f64 = 150.0;
+    const STEP: f64 = 50.0;
+    let mut tried: std::collections::BTreeSet<(u64, u64)> = Default::default();
+    for _ in 0..200 {
+        let ends = ends_by_point(roads);
+        let mut done = false;
+        for (k, list) in &ends {
+            let j = [f64::from_bits(k.0), f64::from_bits(k.1)];
+            if list.len() < 3 || tried.contains(k) || towns.iter().any(|&(t, r)| dist(t, j) < r) || list.iter().any(|e| roads[e.0].stroke.is_some()) {
+                continue;
+            }
+            let mut ids: Vec<usize> = list.iter().map(|e| e.0).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            if ids.len() != list.len() {
+                continue;
+            }
+            let legs: Vec<RoadPath> = list.iter().map(|&(ri, start)| if start { roads[ri].clone() } else { flipped(&roads[ri]) }).collect();
+            let arcs: Vec<Vec<f64>> = legs.iter().map(|l| arc(&l.pts)).collect();
+            let mut found = None;
+            'pairs: for x in 0..legs.len() {
+                for y in x + 1..legs.len() {
+                    let key = |i: usize| (legs[i].class, -arcs[i][arcs[i].len() - 1]);
+                    let (c, o) = if key(x) <= key(y) { (x, y) } else { (y, x) };
+                    let (os, cs) = (&arcs[o], &arcs[c]);
+                    let (olen, clen) = (os[os.len() - 1], cs[cs.len() - 1]);
+                    let mut shared = 0.0;
+                    while shared + STEP < olen && line_dist(point_at(&legs[o].pts, os, shared + STEP), &legs[c].pts) < TOL {
+                        shared += STEP;
+                    }
+                    // (One along the other all the way keeps only its last bit, to where it ends.)
+                    if shared < 300.0 {
+                        continue;
+                    }
+                    let at = project(point_at(&legs[o].pts, os, shared), &legs[c].pts, cs).0;
+                    if at > 200.0 && at < clen - 300.0 {
+                        found = Some((c, o, shared, at));
+                        break 'pairs;
+                    }
+                }
+            }
+            tried.insert(*k);
+            let Some((c, o, shared, at)) = found else { continue };
+            let (lc, lo) = (&legs[c], &legs[o]);
+            let q = point_at(&lc.pts, &arcs[c], at);
+            let mut pieces = split_road(lc, &arcs[c], &[(at, q)]);
+            pieces[0].class = lc.class.min(lo.class);
+            let os = &arcs[o];
+            let rest: Vec<usize> = (0..lo.pts.len()).filter(|&i| os[i] > shared + 5.0).collect();
+            let mut pts = vec![q];
+            let mut z = vec![val_at(&lc.z, &arcs[c], at)];
+            let mut wander = vec![0.0f32];
+            pts.extend(rest.iter().map(|&i| lo.pts[i]));
+            z.extend(rest.iter().map(|&i| lo.z[i]));
+            wander.extend(rest.iter().map(|&i| lo.wander[i]));
+            pieces.push(RoadPath { class: lo.class, pts, z, wander, stroke: None });
+            let mut gone = vec![list[c].0, list[o].0];
+            gone.sort_unstable_by(|x, y| y.cmp(x));
+            for g in gone {
+                roads.remove(g);
+            }
+            roads.extend(pieces);
+            done = true;
+            break;
+        }
+        if !done {
+            return;
+        }
     }
 }
 
@@ -2302,7 +2390,9 @@ fn square_at(roads: &mut Vec<RoadPath>, j: [f64; 2], list: &[(usize, bool)], sq:
         }
         // Else the lesser (class, then shorter) meets the road far enough from the other.
         let (keep, mv) = if (bx.class, road_len(bx)) <= (by.class, road_len(by)) { (x, y) } else { (y, x) };
-        let away = if fits[mv].at >= fits[keep].at { 1.0 } else { -1.0 };
+        // (On the side the branch comes from.)
+        let from = project(fits[mv].p, &t.pts, &ts).0;
+        let away = if from >= fits[keep].at { 1.0 } else { -1.0 };
         if let Some(f) = fit_branch(sq, &t, &ts, &legs[branches[mv]], Some(fits[keep].at + away * (JUNCTION_GAP + 0.05 * cell)), 0.0) {
             if f.clear || !fits[mv].clear {
                 fits[mv] = f;

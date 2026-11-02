@@ -392,7 +392,8 @@ pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], water: &[f32], dim: usiz
 /// Roads are routed on the T0 grid, where a river is a line; at fine levels it meanders
 /// across a belt. A road running along or slantwise through that belt would cross the
 /// meanders again and again. Where a road runs inside a belt it is pushed out to the side it
-/// came from; if it leaves on the other side it crosses once, square to the belt, midway.
+/// came from; if it leaves on the other side it crosses once, midway, on a gentle S. Its ends
+/// stay where they are (the push eases in from them).
 /// Returns the road resampled every ~200 ft (wander baked in, so 0) if anything moved.
 /// `blocked(x, y)`: standing water, where a road must not be pushed.
 /// Belt samples per river segment (33 along it: centre, normal, half width) and how far the
@@ -460,6 +461,39 @@ impl BeltCache {
     }
 }
 
+/// The meander belt `p` (ft) stands in, `margin` ft round it counted in: (river, signed offset
+/// from its centre line, half width, unit normal), of the nearest centre.
+fn belt_at(rivers: &crate::lod::rivers::RiverNet, cell_ft: f64, cache: &BeltCache, p: [f64; 2], margin: f64) -> Option<(u32, f64, f64, [f64; 2])> {
+    let mut best: Option<(f64, (u32, f64, f64, [f64; 2]))> = None;
+    // Every segment within its pad of `p` (the only ones that count) is listed in p's cell.
+    let ix = cache.index(rivers, cell_ft);
+    let (cx, cy) = ((p[0] / ix.cell).floor() as i64, (p[1] / ix.cell).floor() as i64);
+    let segs: &[(u32, u32)] = if cx >= 0 && cy >= 0 && cx < ix.w && cy < ix.h { &ix.cells[(cy * ix.w + cx) as usize] } else { &[] };
+    for &(ri, k) in segs {
+        let r = &rivers.rivers[ri as usize];
+        let k = k as usize;
+        let (a, b) = (r.pts[k], r.pts[k + 1]);
+        let pad = 0.6 * cell_ft + 2.5 * crate::lod::rivers::width_ft(r.q[k].max(r.q[k + 1]) as f64) + margin;
+        let to_chord = seg_dist(p, a, b);
+        if to_chord > pad {
+            continue;
+        }
+        let belt = cache.get(rivers, ri, k as u32, cell_ft);
+        // No centre here can be nearer than the best so far (a foot to spare for rounding).
+        if best.is_some_and(|x| to_chord - belt.1 - 1.0 > x.0) {
+            continue;
+        }
+        for &(c, nrm, half) in belt.0.iter() {
+            let dd = dist(c, p);
+            if best.is_none_or(|x| dd < x.0) {
+                let d = (p[0] - c[0]) * nrm[0] + (p[1] - c[1]) * nrm[1];
+                best = Some((dd, (ri, d, half, nrm)));
+            }
+        }
+    }
+    best.map(|b| b.1).filter(|&(_, d, half, _)| d.abs() < half + margin)
+}
+
 pub fn unweave(curve: &RoadCurve, rivers: &crate::lod::rivers::RiverNet, cell_ft: f64, blocked: &dyn Fn(f64, f64) -> bool, cache: &BeltCache) -> Option<(Vec<[f64; 2]>, Vec<f32>, Vec<f32>)> {
     const STEP: f64 = 200.0;
     let margin = 0.5 * curve.class.width_ft() + 40.0;
@@ -488,37 +522,7 @@ pub fn unweave(curve: &RoadCurve, rivers: &crate::lod::rivers::RiverNet, cell_ft
     if n < 3 {
         return None;
     }
-    // Nearest belt: (river, signed offset from its centre line, half width, unit normal).
-    let belt_near = |p: [f64; 2]| -> Option<(u32, f64, f64, [f64; 2])> {
-        let mut best: Option<(f64, (u32, f64, f64, [f64; 2]))> = None;
-        // Every segment within its pad of `p` (the only ones that count) is listed in p's cell.
-        let ix = cache.index(rivers, cell_ft);
-        let (cx, cy) = ((p[0] / ix.cell).floor() as i64, (p[1] / ix.cell).floor() as i64);
-        let segs: &[(u32, u32)] = if cx >= 0 && cy >= 0 && cx < ix.w && cy < ix.h { &ix.cells[(cy * ix.w + cx) as usize] } else { &[] };
-        for &(ri, k) in segs {
-            let r = &rivers.rivers[ri as usize];
-            let k = k as usize;
-            let (a, b) = (r.pts[k], r.pts[k + 1]);
-            let pad = 0.6 * cell_ft + 2.5 * crate::lod::rivers::width_ft(r.q[k].max(r.q[k + 1]) as f64) + margin;
-            let to_chord = seg_dist(p, a, b);
-            if to_chord > pad {
-                continue;
-            }
-            let belt = cache.get(rivers, ri, k as u32, cell_ft);
-            // No centre here can be nearer than the best so far (a foot to spare for rounding).
-            if best.is_some_and(|x| to_chord - belt.1 - 1.0 > x.0) {
-                continue;
-            }
-            for &(c, nrm, half) in belt.0.iter() {
-                let dd = dist(c, p);
-                if best.is_none_or(|x| dd < x.0) {
-                    let d = (p[0] - c[0]) * nrm[0] + (p[1] - c[1]) * nrm[1];
-                    best = Some((dd, (ri, d, half, nrm)));
-                }
-            }
-        }
-        best.map(|b| b.1).filter(|&(_, d, half, _)| d.abs() < half + margin)
-    };
+    let belt_near = |p: [f64; 2]| belt_at(rivers, cell_ft, cache, p, margin);
     let mut changed = false;
     for _pass in 0..2 {
         let inside: Vec<Option<(u32, f64, f64, [f64; 2])>> = pts.iter().map(|&p| belt_near(p)).collect();
@@ -549,12 +553,24 @@ pub fn unweave(curve: &RoadCurve, rivers: &crate::lod::rivers::RiverNet, cell_ft
             if entry != exit && sv[i1] - sv[i0] < 2.5 * (half + margin) && square {
                 continue;
             }
-            let mid = (i0 + i1) / 2;
+            // A road that leaves on the other side crosses on an S about twice the belt's width
+            // long (bending clear of the banks, not turning square on them); its ends (a
+            // junction, a town's edge) stay put, the push easing in over 2.5 belt half widths.
+            let (s_mid, run) = (0.5 * (sv[i0] + sv[i1]), sv[i1] - sv[i0]);
+            let w = (2.0 * (half + margin)).min(0.5 * run).max(1.0);
+            let ease = 2.5 * (half + margin);
+            let smooth = |f: f64| f * f * (3.0 - 2.0 * f);
             let mut moved: Vec<(usize, [f64; 2])> = Vec::new();
             for j in i0.max(1)..=i1.min(n - 2) {
                 let (_, d, half, nrm) = inside[j].unwrap();
-                let s = if entry == exit || j <= mid { entry } else { exit };
-                let off = s * (half + margin) - d;
+                let s = if entry == exit { entry } else { entry + (exit - entry) * smooth(0.5 * (((sv[j] - s_mid) / w).clamp(-1.0, 1.0) + 1.0)) };
+                let mut off = s * (half + margin) - d;
+                if i0 == 0 {
+                    off *= smooth(((sv[j] - sv[0]) / ease).min(1.0));
+                }
+                if i1 == n - 1 {
+                    off *= smooth(((sv[n - 1] - sv[j]) / ease).min(1.0));
+                }
                 moved.push((j, [pts[j][0] + nrm[0] * off, pts[j][1] + nrm[1] * off]));
             }
             if moved.iter().any(|(_, q)| blocked(q[0], q[1])) {
