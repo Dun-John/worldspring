@@ -430,11 +430,14 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
 /// Settlement pairs to join, per class: king's roads join cities, roads join towns and up,
 /// tracks join everything. Each class is a relative-neighbourhood graph (no third place
 /// closer to both ends) plus a minimum spanning tree so its members stay connected.
-fn link_edges(settlements: &[Settlement], classes: &[RoadClass]) -> Vec<(usize, usize, RoadClass)> {
+fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell: f64) -> Vec<(usize, usize, RoadClass)> {
     let ns = settlements.len();
     let d = |a: usize, b: usize| {
-        let (sa, sb) = (&settlements[a], &settlements[b]);
-        crate::core::sqrt((sa.x - sb.x) * (sa.x - sb.x) + (sa.y - sb.y) * (sa.y - sb.y))
+        // On the settlements' cells, not where they stand: snapping to water moves a settlement after
+        // the previews, which must not reorder the links (the route memo is keyed on their order).
+        let (ca, cb) = (settlements[a].cell, settlements[b].cell);
+        let (dx, dy) = (((ca % w) as f64 - (cb % w) as f64) * cell, ((ca / w) as f64 - (cb / w) as f64) * cell);
+        crate::core::sqrt(dx * dx + dy * dy)
     };
     fn find(p: &mut [usize], mut x: usize) -> usize {
         while p[x] != x {
@@ -496,7 +499,7 @@ pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) ->
     let beside: Vec<Vec<usize>> = settlements.iter().map(|s| inp.drawn.iter().enumerate().filter(|(_, d)| d.class.is_some() && line_dist(at(s), &d.pts) <= snap).map(|(i, _)| i).collect()).collect();
     let barriers: Vec<&Drawn> = inp.drawn.iter().filter(|d| d.class.is_none()).collect();
     // With generated roads off, only the drawn roads and their spurs.
-    let planned = if inp.world.file.params.generated_roads { link_edges(settlements, classes) } else { Vec::new() };
+    let planned = if inp.world.file.params.generated_roads { link_edges(settlements, classes, inp.w, inp.cell_ft) } else { Vec::new() };
     let mut out: Vec<Link> = planned
         .into_iter()
         .filter(|&(a, b, _)| !beside[a].iter().any(|d| beside[b].contains(d)) && !barriers.iter().any(|d| crosses(at(&settlements[a]), at(&settlements[b]), &d.pts)))
