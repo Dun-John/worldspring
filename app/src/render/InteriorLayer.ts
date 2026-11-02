@@ -2098,7 +2098,6 @@ export class InteriorLayer {
     const [cx, cy] = [x + w / 2, y + h / 2];
     const [lx, ly] = this.light;
     const [sx, sy] = [-lx * 0.14, -ly * 0.14];
-    const wall = () => this.wallSide(f);
     const tone = (c: number, k: number) => {
       const ch = (s: number) => Math.min(255, Math.max(0, Math.round(((c >> s) & 255) * k)));
       return (ch(16) << 16) | (ch(8) << 8) | ch(0);
@@ -2122,250 +2121,19 @@ export class InteriorLayer {
       g.rect(bx, ly < 0 ? by + bh - e : by, bw, e).fill({ color: tone(c, 0.65), alpha: 0.6 });
       g.rect(bx, by, bw, bh).stroke({ width: 0.03, color: INK, alpha: 0.65 });
     };
-    const glow = (px: number, py: number, r: number, c: number, a = 0.18) => {
-      for (const k of [1, 0.66, 0.38]) g.circle(px, py, r * k).fill({ color: c, alpha: a });
-    };
-    const flame = (px: number, py: number, s: number) => {
-      g.ellipse(px, py, s * 0.55, s).fill(0xf59e0b);
-      g.ellipse(px, py + s * 0.25, s * 0.3, s * 0.55).fill(0xfde68a);
-    };
-    // Scatter: the same for every placement of one variant (so they can share a look).
-    const variant = this.lookOf(f);
-    const hash = (k: number) => {
-      const v = Math.sin((variant * 127.1 + 311.7 + k * 74.7) * 0.0174533) * 43758.5453;
-      return v - Math.floor(v);
-    };
-    const steps = (light: number, dark: number, down: boolean) => {
-      block(x + 0.06, y + 0.06, 0.88, 0.88, dark, 0);
-      for (let k = 0; k < 4; k++) {
-        const c = down ? tone(light, 1 - k * 0.18) : tone(dark, 1 + k * 0.18);
-        g.rect(x + 0.1 + k * 0.2, y + 0.1, 0.16, 0.8).fill(c);
-      }
-      const d = down ? 1 : -1;
-      g.moveTo(cx, cy - 0.26 * d).lineTo(cx, cy + 0.26 * d).moveTo(cx - 0.15, cy + 0.11 * d).lineTo(cx, cy + 0.26 * d).lineTo(cx + 0.15, cy + 0.11 * d);
-      g.stroke({ width: 0.08, color: 0xf2e6c8 });
-    };
     switch (kind) {
-      case 'exit':
-        glow(cx, cy, 1.2, 0xfff3d0, 0.12);
-        steps(0xd8cfbd, 0x8a8174, false);
-        return true;
-      case 'up':
-        steps(0xb0a796, 0x6f675b, false);
-        return true;
-      case 'down':
-        steps(0x7a7064, 0x1e1a16, true);
-        return true;
       case 'sewage':
       case 'lava':
         return true;
-      case 'tunnel': {
-        // A low dark opening in the wall.
-        const [dx, dy] = wall();
-        const [ox, oy] = [cx + dx * 0.3, cy + dy * 0.3];
-        g.ellipse(ox, oy, Math.abs(dy) * 0.25 + 0.2, Math.abs(dx) * 0.25 + 0.2).fill(0x0b0907).stroke({ width: 0.04, color: 0x5d584f });
-        return true;
-      }
       case 'trapdoor':
         block(x + 0.12, y + 0.12, 0.76, 0.76, 0x6e4a2c, 0);
         g.moveTo(x + 0.12, cy).lineTo(x + 0.88, cy).stroke({ width: 0.04, color: INK, alpha: 0.6 });
         g.circle(cx, cy + 0.2, 0.07).stroke({ width: 0.03, color: 0x9ca3af });
         return true;
-      case 'pool':
-      case 'glass_pool': {
-        const deep = kind === 'pool' ? 0x24495c : 0x15121a;
-        g.ellipse(cx, cy, w * 0.46, h * 0.44).fill(tone(deep, 0.7));
-        g.ellipse(cx - lx * 0.08, cy - ly * 0.08, w * 0.4, h * 0.38).fill(deep);
-        g.ellipse(cx + lx * w * 0.12, cy + ly * h * 0.12, w * 0.16, h * 0.08).fill({ color: 0xffffff, alpha: kind === 'pool' ? 0.25 : 0.45 });
-        g.ellipse(cx, cy, w * 0.46, h * 0.44).stroke({ width: 0.04, color: INK, alpha: 0.5 });
-        return true;
-      }
-      case 'pit':
-        for (const [k, c] of [[0.48, 0x2a2420], [0.38, 0x15110e], [0.26, 0x060504]] as const) g.ellipse(cx - lx * (0.48 - k) * 0.3, cy - ly * (0.48 - k) * 0.3, w * k, h * k).fill(c);
-        g.ellipse(cx, cy, w * 0.48, h * 0.48).stroke({ width: 0.05, color: INK, alpha: 0.7 });
-        return true;
-      case 'trap':
-        g.rect(x + 0.22, y + 0.22, 0.56, 0.56).stroke({ width: 0.05, color: 0xb91c1c, alpha: 0.65 });
-        g.circle(cx, cy, 0.06).fill({ color: 0xb91c1c, alpha: 0.65 });
-        return true;
-      case 'cave_in':
-        for (let k = 0; k < 4; k++) g.moveTo(x + 0.2 + k * 0.2, y + 0.2).lineTo(x + 0.1 + k * 0.2, y + 0.8);
-        g.stroke({ width: 0.05, color: 0xb91c1c, alpha: 0.55 });
-        return true;
-      case 'stalagmite':
-        ball(cx, cy, 0.34, 0x8a8072, 1.4);
-        g.circle(cx + lx * 0.08, cy + ly * 0.08, 0.1).fill(0xc9bfae);
-        return true;
-      case 'rock_column':
-        ball(cx, cy, 0.44, 0x7d7366, 2.2);
-        for (const k of [0.32, 0.2]) g.circle(cx + lx * 0.04, cy + ly * 0.04, k).stroke({ width: 0.03, color: INK, alpha: 0.35 });
-        return true;
-      case 'boulder': {
-        shadow(cx, cy, Math.min(w, h) * 0.45, 2);
-        const pts: number[] = [];
-        for (let k = 0; k < 9; k++) {
-          const a = (k / 9) * Math.PI * 2;
-          const r = Math.min(w, h) * (0.38 + 0.08 * hash(k));
-          pts.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
-        }
-        g.poly(pts).fill(0x6f675b).stroke({ width: 0.04, color: INK, alpha: 0.7 });
-        g.ellipse(cx + lx * 0.25, cy + ly * 0.25, w * 0.22, h * 0.16).fill({ color: 0xa39886, alpha: 0.7 });
-        g.moveTo(cx - 0.3, cy + 0.1).lineTo(cx + 0.05, cy - 0.05).lineTo(cx + 0.2, cy + 0.3).stroke({ width: 0.03, color: INK, alpha: 0.45 });
-        return true;
-      }
-      case 'crystal':
-        glow(cx, cy, 0.9, 0x7dd3fc, 0.12);
-        for (const [a, l] of [[-0.5, 0.42], [0.3, 0.36], [1.2, 0.3]] as const) {
-          const [ux, uy] = [Math.sin(a), -Math.cos(a)];
-          const [tx, ty] = [cx + ux * l, cy + uy * l];
-          g.poly([cx - uy * 0.09, cy + ux * 0.09, tx, ty, cx + uy * 0.09, cy - ux * 0.09]).fill(0x7dd3fc).stroke({ width: 0.025, color: 0x0c4a6e });
-          g.poly([cx, cy, tx, ty, cx + uy * 0.09, cy - ux * 0.09]).fill({ color: 0xe0f2fe, alpha: 0.6 });
-        }
-        return true;
-      case 'fungus':
-        glow(cx, cy, 0.7, 0x5eead4, 0.1);
-        for (const [dx, dy, r] of [[-0.2, -0.1, 0.09], [0.15, -0.2, 0.07], [0.05, 0.2, 0.1], [-0.15, 0.25, 0.06]]) {
-          g.circle(cx + dx, cy + dy, r).fill(0x14b8a6);
-          g.circle(cx + dx + lx * r * 0.3, cy + dy + ly * r * 0.3, r * 0.5).fill(0x99f6e4);
-        }
-        return true;
-      case 'mushroom':
-        for (const [dx, dy, r, c] of [[-0.12, 0.08, 0.3, 0x7c4a6e], [0.2, -0.15, 0.22, 0x8a5a3c], [0.18, 0.25, 0.15, 0x7c4a6e]] as const) {
-          ball(cx + dx, cy + dy, r, c, 1.6);
-          for (let k = 0; k < 3; k++) g.circle(cx + dx + Math.cos(k * 2.1) * r * 0.5, cy + dy + Math.sin(k * 2.1) * r * 0.5, r * 0.12).fill({ color: 0xf5ecd6, alpha: 0.8 });
-        }
-        return true;
-      case 'web':
-      case 'cobweb': {
-        const [dx, dy] = kind === 'cobweb' ? wall() : [0, 0];
-        const [ox, oy] = [cx + dx * 0.45, cy + dy * 0.45];
-        for (let k = 0; k < 8; k++) {
-          const a = (k / 8) * Math.PI * 2;
-          g.moveTo(ox, oy).lineTo(ox + Math.cos(a) * 0.6, oy + Math.sin(a) * 0.6);
-        }
-        for (const r of [0.18, 0.34, 0.5]) g.circle(ox, oy, r);
-        g.stroke({ width: 0.018, color: 0xf5f5f4, alpha: kind === 'web' ? 0.6 : 0.4 });
-        return true;
-      }
-      case 'guano':
-        for (let k = 0; k < 7; k++) g.ellipse(x + w * (0.15 + 0.7 * hash(k)), y + h * (0.15 + 0.7 * hash(k + 9)), 0.18 + 0.12 * hash(k + 3), 0.12 + 0.08 * hash(k + 5)).fill({ color: 0x3a3226, alpha: 0.7 });
-        return true;
-      case 'moss':
-        for (let k = 0; k < 6; k++) g.circle(x + 0.15 + 0.7 * hash(k), y + 0.15 + 0.7 * hash(k + 7), 0.12 + 0.1 * hash(k + 2)).fill({ color: 0x4d7c3a, alpha: 0.5 });
-        return true;
-      case 'bones':
-      case 'skeleton': {
-        if (kind === 'skeleton') {
-          const [ax, ay, bx, by] = h > w ? [cx, y + 0.3, cx, y + h - 0.3] : [x + 0.3, cy, x + w - 0.3, cy];
-          g.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 0.06, color: 0xe8e0cc });
-          for (let k = 1; k < 5; k++) {
-            const t = 0.2 + k * 0.1;
-            const [px, py] = [ax + (bx - ax) * t, ay + (by - ay) * t];
-            const [nx2, ny2] = h > w ? [0.2, 0] : [0, 0.2];
-            g.moveTo(px - nx2, py - ny2).lineTo(px + nx2, py + ny2);
-          }
-          g.stroke({ width: 0.04, color: 0xe8e0cc });
-          ball(ax, ay, 0.14, 0xe8e0cc, 0.6);
-          return true;
-        }
-        g.moveTo(cx - 0.3, cy - 0.15).lineTo(cx + 0.25, cy + 0.1).moveTo(cx - 0.1, cy + 0.25).lineTo(cx + 0.2, cy - 0.2);
-        g.stroke({ width: 0.075, color: 0xe8e0cc, cap: 'round' });
-        g.circle(cx + 0.25, cy + 0.1, 0.06).circle(cx - 0.3, cy - 0.15, 0.06).fill(0xe8e0cc);
-        return true;
-      }
-      case 'skulls':
-        shadow(cx, cy, 0.38, 1);
-        for (const [dx, dy] of [[-0.15, 0.12], [0.15, 0.12], [0, -0.1], [-0.08, 0.32], [0.18, -0.25]]) {
-          ball(cx + dx, cy + dy, 0.13, 0xe8e0cc, 0);
-          g.circle(cx + dx - 0.04, cy + dy, 0.025).circle(cx + dx + 0.04, cy + dy, 0.025).fill(INK);
-        }
-        return true;
-      case 'campfire':
-        for (let k = 0; k < 7; k++) ball(cx + Math.cos(k * 0.9) * 0.3, cy + Math.sin(k * 0.9) * 0.3, 0.07, 0x6f675b, 0.4);
-        g.circle(cx, cy, 0.2).fill(0x2a2420);
-        g.moveTo(cx - 0.15, cy - 0.1).lineTo(cx + 0.15, cy + 0.1).moveTo(cx - 0.15, cy + 0.1).lineTo(cx + 0.15, cy - 0.1).stroke({ width: 0.05, color: 0x3a2a1c });
-        return true;
-      case 'rubble':
-      case 'debris':
-        for (const [dx, dy, r] of [[-0.18, -0.1, 0.15], [0.16, 0.05, 0.13], [-0.02, 0.22, 0.11], [0.2, -0.22, 0.08]]) ball(cx + dx, cy + dy, r, kind === 'rubble' ? 0x7a7064 : hash(dx * 9) > 0.5 ? 0x5e5236 : 0x4a5a32, 0.8);
-        return true;
-      case 'obsidian':
-        for (const pts of [[cx - 0.3, cy + 0.2, cx - 0.1, cy - 0.3, cx, cy + 0.1], [cx + 0.05, cy + 0.25, cx + 0.3, cy - 0.15, cx + 0.15, cy + 0.3]]) {
-          g.poly(pts.map((v, k) => v + (k % 2 ? sy : sx))).fill({ color: 0x000000, alpha: 0.3 });
-          g.poly(pts).fill(0x111018).stroke({ width: 0.02, color: 0x6b6880 });
-        }
-        g.moveTo(cx - 0.12, cy - 0.15).lineTo(cx - 0.06, cy + 0.02).stroke({ width: 0.025, color: 0xc4c2d8 });
-        return true;
-      case 'vent':
-        glow(cx, cy, 0.9, 0xf97316, 0.12);
-        ball(cx, cy, 0.3, 0x3a3530, 0.6);
-        g.circle(cx, cy, 0.14).fill(0xf97316);
-        g.circle(cx, cy, 0.07).fill(0xfde68a);
-        return true;
-      case 'basalt': {
-        shadow(cx, cy, 0.4, 1.8);
-        const pts: number[] = [];
-        for (let k = 0; k < 6; k++) pts.push(cx + Math.cos((k * Math.PI) / 3) * 0.4, cy + Math.sin((k * Math.PI) / 3) * 0.4);
-        g.poly(pts).fill(0x2f2b2a).stroke({ width: 0.04, color: INK });
-        g.poly(pts.map((v, k) => (k % 2 ? cy + (v - cy) * 0.6 + ly * 0.04 : cx + (v - cx) * 0.6 + lx * 0.04))).fill(0x46413e);
-        return true;
-      }
-      case 'sulfur':
-        for (let k = 0; k < 5; k++) g.circle(x + 0.2 + 0.6 * hash(k), y + 0.2 + 0.6 * hash(k + 4), 0.1 + 0.1 * hash(k + 8)).fill({ color: 0xd9c33a, alpha: 0.75 });
-        return true;
-      case 'scorched':
-        g.ellipse(cx, cy, w * 0.42, h * 0.42).fill({ color: 0x120c08, alpha: 0.7 });
-        g.moveTo(cx - 0.2, cy - 0.3).lineTo(cx + 0.15, cy + 0.3).stroke({ width: 0.05, color: 0x8a8070 });
-        return true;
-      case 'timber':
-        block(x + 0.3, y + 0.3, 0.4, 0.4, 0x7a5530, 2);
-        g.moveTo(x + 0.35, y + 0.42).lineTo(x + 0.65, y + 0.42).moveTo(x + 0.35, y + 0.58).lineTo(x + 0.65, y + 0.58).stroke({ width: 0.02, color: INK, alpha: 0.4 });
-        return true;
-      case 'rail':
-        // (A sleeper across each stretch of track halfway, its two rails; a beam where the line ends.)
-        for (const r of railRuns(x, y, this.railLinks(f))) {
-          const u = Math.min(0.5, r.to / 2);
-          g.moveTo(...r.at(u, -0.35)).lineTo(...r.at(u, 0.35)).stroke({ width: 0.12, color: 0x5e4028 });
-          for (const o of [-0.2, 0.2]) {
-            g.moveTo(...r.at(0, o));
-            for (let k = 1; k <= 8; k++) g.lineTo(...r.at((r.to * k) / 8, o));
-            g.stroke({ width: 0.06, color: 0x6b6f75 });
-          }
-          if (r.stop) g.moveTo(...r.at(r.to, -0.33)).lineTo(...r.at(r.to, 0.33)).stroke({ width: 0.1, color: 0x7a5530 });
-        }
-        return true;
-      case 'ore_cart':
-        block(x + 0.12, y + 0.2, 0.76, 0.6, 0x4a4440, 1.2);
-        for (const [dx, dy] of [[-0.15, -0.05], [0.1, 0.05], [0.0, -0.12], [0.18, -0.1]]) ball(cx + dx, cy + dy, 0.09, 0x8a7a5a, 0);
-        return true;
-      case 'ore_vein': {
-        const [dx, dy] = wall();
-        const [ox, oy] = [cx + dx * 0.38, cy + dy * 0.38];
-        g.moveTo(ox - dy * 0.4, oy - dx * 0.4).lineTo(ox + dy * 0.4, oy + dx * 0.4).stroke({ width: 0.12, color: 0x8a6a2a, alpha: 0.85 });
-        for (let k = 0; k < 4; k++) g.circle(ox + (hash(k) - 0.5) * 0.7 * Math.abs(dy || 1), oy + (hash(k + 3) - 0.5) * 0.7 * Math.abs(dx || 1), 0.035).fill(0xfde68a);
-        return true;
-      }
-      case 'tools':
-        g.moveTo(cx - 0.3, cy + 0.25).lineTo(cx + 0.25, cy - 0.25).stroke({ width: 0.06, color: 0x7a5530, cap: 'round' });
-        g.moveTo(cx + 0.08, cy - 0.38).quadraticCurveTo(cx + 0.3, cy - 0.3, cx + 0.38, cy - 0.08).stroke({ width: 0.07, color: 0x6b6f75, cap: 'round' });
-        g.moveTo(cx - 0.25, cy - 0.2).lineTo(cx + 0.05, cy + 0.3).stroke({ width: 0.05, color: 0x7a5530, cap: 'round' });
-        return true;
-      case 'lantern':
-        glow(cx, cy, 1.4, 0xfcd34d, 0.1);
-        ball(cx, cy, 0.14, 0x3f4448, 1);
-        g.circle(cx, cy, 0.08).fill(0xfde68a);
-        return true;
       case 'winch':
         block(x + 0.1, y + 0.2, 0.8, 0.6, 0x6e4a2c, 1.4);
         g.ellipse(cx, cy, 0.18, 0.28).fill(0x4a4440).stroke({ width: 0.03, color: INK });
         return true;
-      case 'powder':
-        for (const [dx, dy] of [[-0.17, -0.1], [0.17, -0.1], [0, 0.18]]) {
-          ball(cx + dx, cy + dy, 0.17, 0x5e4028, 1);
-          g.moveTo(cx + dx - 0.07, cy + dy - 0.07).lineTo(cx + dx + 0.07, cy + dy + 0.07).moveTo(cx + dx + 0.07, cy + dy - 0.07).lineTo(cx + dx - 0.07, cy + dy + 0.07).stroke({ width: 0.035, color: 0xb91c1c });
-        }
-        return true;
-      case 'bedroll':
       case 'cot': {
         const along = h >= w;
         shadow(cx, cy, Math.max(w, h) * 0.32, 0.6);
@@ -2373,162 +2141,16 @@ export class InteriorLayer {
         g.roundRect(along ? x + 0.2 : x + 0.2, along ? y + 0.2 : y + 0.2, along ? w - 0.4 : 0.35, along ? 0.35 : h - 0.4, 0.1).fill(0xd8cfbd);
         return true;
       }
-      case 'urn':
-        ball(cx, cy, 0.24, 0x9a6a3e, 1.2);
-        g.circle(cx, cy, 0.09).fill(0x2a2018);
-        return true;
-      case 'brazier':
-        glow(cx, cy, 1.5, 0xf59e0b, 0.09);
-        ball(cx, cy, 0.3, 0x3f4448, 1.2);
-        g.circle(cx, cy, 0.18).fill(0x7c2d12);
-        flame(cx, cy - 0.02, 0.14);
-        return true;
-      case 'candles':
-        glow(cx, cy, 0.9, 0xfcd34d, 0.1);
-        ball(cx, cy, 0.12, 0x6b6f75, 1.6);
-        for (const [dx, dy] of [[-0.2, 0], [0.2, 0], [0, -0.18]]) {
-          g.circle(cx + dx, cy + dy, 0.06).fill(0xf5ecd6);
-          flame(cx + dx, cy + dy - 0.03, 0.04);
-        }
-        return true;
       case 'chest':
         block(x + 0.16, y + 0.24, 0.68, 0.52, 0x7a5530, 1);
         g.rect(x + 0.16, cy - 0.04, 0.68, 0.08).fill(0x3f4448);
         g.rect(cx - 0.05, cy - 0.06, 0.1, 0.12).fill(0xd9b36a);
         return true;
-      case 'hoard':
-        glow(cx, cy, 0.9, 0xfacc15, 0.12);
-        for (const [dx, dy] of [[-0.18, 0.05], [0.12, -0.12], [0.1, 0.16], [-0.05, 0.25], [-0.2, -0.2], [0.25, 0.05], [0, 0]]) ball(cx + dx, cy + dy, 0.12, 0xeab308, 0.4);
-        return true;
-      case 'dais':
-        block(x + 0.05, y + 0.05, w - 0.1, h - 0.1, 0xa8a296, 0.8);
-        block(cx - 0.3, cy - 0.3, 0.6, 0.6, 0x7f1d1d, 1.6);
-        g.rect(cx - 0.18, cy - 0.18, 0.36, 0.36).fill(0x991b1b);
-        return true;
-      case 'well':
-      case 'fountain': {
-        const r = Math.min(w, h) * 0.44;
-        shadow(cx, cy, r, 1.2);
-        g.circle(cx, cy, r).fill(0x8a857a).stroke({ width: 0.04, color: INK, alpha: 0.7 });
-        g.circle(cx, cy, r * 0.7).fill(kind === 'well' ? 0x10202a : 0x6f6a61);
-        if (kind === 'fountain') ball(cx, cy, r * 0.25, 0xa8a296, 1);
-        return true;
-      }
       case 'sarcophagus':
-      case 'effigy':
         block(x + 0.08, y + 0.08, w - 0.16, h - 0.16, 0xb8b2a6, 1.4);
         // The figure carved on the lid.
         ball(h > w ? cx : x + 0.3, h > w ? y + 0.3 : cy, 0.11, 0xcfc8ba, 0);
         g.roundRect(h > w ? cx - 0.14 : x + 0.45, h > w ? y + 0.45 : cy - 0.14, h > w ? 0.28 : w - 0.65, h > w ? h - 0.65 : 0.28, 0.08).fill({ color: 0xcfc8ba, alpha: 0.85 });
-        return true;
-      case 'coffin': {
-        const long = h > w;
-        const W = long ? w : h;
-        const poly = long ? [cx, y + 0.08, x + W - 0.1, y + 0.35, cx + 0.22, y + h - 0.08, cx - 0.22, y + h - 0.08, x + 0.1, y + 0.35] : [x + 0.08, cy, x + 0.35, y + 0.1, x + w - 0.08, cy - 0.22, x + w - 0.08, cy + 0.22, x + 0.35, y + W - 0.1];
-        g.poly(poly.map((v, k) => v + (k % 2 ? sy * 1.3 : sx * 1.3))).fill({ color: 0x000000, alpha: 0.32 });
-        g.poly(poly).fill(0x6e4a2c).stroke({ width: 0.035, color: INK, alpha: 0.7 });
-        g.poly(poly.map((v, k) => (k % 2 ? cy + (v - cy) * 0.75 : cx + (v - cx) * 0.75))).fill(0x1e1712);
-        return true;
-      }
-      case 'niche': {
-        const [dx, dy] = wall();
-        const [ox, oy] = [cx + dx * 0.32, cy + dy * 0.32];
-        g.rect(ox - 0.28, oy - 0.28, 0.56, 0.56).fill(0x221d18).stroke({ width: 0.03, color: INK });
-        ball(ox, oy, 0.1, 0xe8e0cc, 0);
-        return true;
-      }
-      case 'chains': {
-        const [dx, dy] = wall();
-        const [ox, oy] = [cx + dx * 0.4, cy + dy * 0.4];
-        for (const s of [-0.22, 0.22]) {
-          const [ax, ay] = [ox + dy * s, oy + dx * s];
-          for (let k = 0; k < 3; k++) g.ellipse(ax - dx * k * 0.12, ay - dy * k * 0.12, 0.05, 0.05).stroke({ width: 0.025, color: 0x6b6f75 });
-          g.circle(ax - dx * 0.36, ay - dy * 0.36, 0.07).stroke({ width: 0.03, color: 0x6b6f75 });
-        }
-        return true;
-      }
-      case 'sconce': {
-        const [dx, dy] = wall();
-        const [ox, oy] = [cx + dx * 0.36, cy + dy * 0.36];
-        glow(ox, oy, 1.6, 0xf59e0b, 0.09);
-        g.rect(ox - 0.06, oy - 0.06, 0.12, 0.12).fill(0x3f4448);
-        flame(ox - dx * 0.08, oy - dy * 0.08, 0.1);
-        return true;
-      }
-      case 'banner': {
-        const [dx, dy] = wall();
-        const [ox, oy] = [cx + dx * 0.4, cy + dy * 0.4];
-        const [px, py] = [dy, dx];
-        const pts = [ox - px * 0.3, oy - py * 0.3, ox + px * 0.3, oy + py * 0.3, ox + px * 0.3 - dx * 0.45, oy + py * 0.3 - dy * 0.45, ox - dx * 0.32, oy - dy * 0.32, ox - px * 0.3 - dx * 0.45, oy - py * 0.3 - dy * 0.45];
-        g.poly(pts).fill(0x7f1d1d).stroke({ width: 0.025, color: INK, alpha: 0.7 });
-        g.circle(ox - dx * 0.2, oy - dy * 0.2, 0.07).fill(0xd9b36a);
-        return true;
-      }
-      case 'pipe': {
-        const [dx, dy] = wall();
-        const [ox, oy] = [cx + dx * 0.38, cy + dy * 0.38];
-        g.circle(ox, oy, 0.2).fill(0x4a4e54).stroke({ width: 0.03, color: INK });
-        g.circle(ox, oy, 0.12).fill(0x14110e);
-        g.moveTo(ox - dx * 0.12, oy - dy * 0.12).lineTo(ox - dx * 0.45, oy - dy * 0.45).stroke({ width: 0.06, color: 0x4f5a3a, alpha: 0.8 });
-        return true;
-      }
-      case 'ladder': {
-        const [dx, dy] = wall();
-        const [ox, oy] = [cx + dx * 0.25, cy + dy * 0.25];
-        const [px, py] = [dy, dx];
-        g.moveTo(ox - px * 0.2 - dx * 0.25, oy - py * 0.2 - dy * 0.25).lineTo(ox - px * 0.2 + dx * 0.25, oy - py * 0.2 + dy * 0.25);
-        g.moveTo(ox + px * 0.2 - dx * 0.25, oy + py * 0.2 - dy * 0.25).lineTo(ox + px * 0.2 + dx * 0.25, oy + py * 0.2 + dy * 0.25);
-        g.stroke({ width: 0.06, color: 0x6e4a2c });
-        for (const t of [-0.15, 0, 0.15]) g.moveTo(ox - px * 0.2 + dx * t, oy - py * 0.2 + dy * t).lineTo(ox + px * 0.2 + dx * t, oy + py * 0.2 + dy * t);
-        g.stroke({ width: 0.04, color: 0x8a6a45 });
-        return true;
-      }
-      case 'nest':
-        // A beast's nest: a ring of sticks and fur round a hollow.
-        g.ellipse(cx, cy, 0.46, 0.42).fill({ color: 0x5e4a30, alpha: 0.9 });
-        for (let k = 0; k < 10; k++) {
-          const a = (k / 10) * Math.PI * 2 + hash(k);
-          g.moveTo(cx + Math.cos(a) * 0.2, cy + Math.sin(a) * 0.2).lineTo(cx + Math.cos(a + 0.6) * 0.46, cy + Math.sin(a + 0.6) * 0.42);
-        }
-        g.stroke({ width: 0.03, color: 0x9a7a4e });
-        g.ellipse(cx - lx * 0.04, cy - ly * 0.04, 0.2, 0.17).fill(0x2a2018);
-        return true;
-      case 'ice':
-        glow(cx, cy, 0.8, 0xe0f2fe, 0.1);
-        for (const [a, l] of [[-0.4, 0.44], [0.5, 0.34], [1.6, 0.3], [2.7, 0.26]] as const) {
-          const [ux, uy] = [Math.sin(a), -Math.cos(a)];
-          const [tx, ty] = [cx + ux * l, cy + uy * l];
-          g.poly([cx - uy * 0.11, cy + ux * 0.11, tx, ty, cx + uy * 0.11, cy - ux * 0.11]).fill(0xcfe8f5).stroke({ width: 0.025, color: 0x5b7f99 });
-          g.poly([cx, cy, tx, ty, cx + uy * 0.11, cy - ux * 0.11]).fill({ color: 0xffffff, alpha: 0.6 });
-        }
-        return true;
-      case 'ice_sheet':
-        g.ellipse(cx, cy, w * 0.47, h * 0.44).fill({ color: 0xd8ecf6, alpha: 0.8 }).stroke({ width: 0.03, color: 0x7fa3b5, alpha: 0.7 });
-        g.moveTo(cx - w * 0.25, cy - h * 0.1).lineTo(cx + w * 0.05, cy + h * 0.05).lineTo(cx + w * 0.2, cy - h * 0.18).stroke({ width: 0.02, color: 0x7fa3b5, alpha: 0.8 });
-        g.ellipse(cx + lx * w * 0.15, cy + ly * h * 0.15, w * 0.14, h * 0.06).fill({ color: 0xffffff, alpha: 0.6 });
-        return true;
-      case 'rat_nest':
-        g.ellipse(cx, cy, 0.38, 0.3).fill({ color: 0x6b5a3a, alpha: 0.85 });
-        for (let k = 0; k < 6; k++) g.moveTo(cx - 0.3 + 0.6 * hash(k), cy - 0.2 + 0.4 * hash(k + 2)).lineTo(cx - 0.3 + 0.6 * hash(k + 5), cy - 0.2 + 0.4 * hash(k + 7));
-        g.stroke({ width: 0.025, color: 0xa08a5a });
-        g.circle(cx, cy, 0.1).fill(0x1e1712);
-        return true;
-      case 'offering':
-        ball(cx, cy, 0.2, 0x8a857a, 1);
-        g.circle(cx, cy, 0.12).fill(0x3a342d);
-        g.circle(cx + 0.03, cy, 0.04).circle(cx - 0.04, cy + 0.03, 0.04).fill(0xeab308);
-        return true;
-      case 'glyph':
-        glow(cx, cy, Math.min(w, h) * 0.6, 0xa78bfa, 0.08);
-        g.circle(cx, cy, Math.min(w, h) * 0.42).stroke({ width: 0.05, color: 0xa78bfa, alpha: 0.7 });
-        g.circle(cx, cy, Math.min(w, h) * 0.3).stroke({ width: 0.03, color: 0xa78bfa, alpha: 0.6 });
-        for (let k = 0; k < 5; k++) {
-          const a = (k / 5) * Math.PI * 2;
-          const b = ((k + 2) / 5) * Math.PI * 2;
-          const r = Math.min(w, h) * 0.3;
-          g.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r).lineTo(cx + Math.cos(b) * r, cy + Math.sin(b) * r);
-        }
-        g.stroke({ width: 0.03, color: 0xa78bfa, alpha: 0.6 });
         return true;
       case 'statue':
         block(x + 0.1, y + 0.1, w - 0.2, h - 0.2, 0x8a857a, 1);
@@ -2536,18 +2158,6 @@ export class InteriorLayer {
         return true;
       case 'pillar':
         ball(cx, cy, Math.min(w, h) * 0.42, 0xa8a296, 2.6);
-        return true;
-      case 'iron_maiden':
-        block(x + 0.15, y + 0.1, 0.7, 0.8, 0x3f4448, 1.8);
-        g.ellipse(cx, cy - 0.12, 0.14, 0.17).fill(0x6b6f75);
-        for (let k = 0; k < 3; k++) g.circle(cx - 0.18 + k * 0.18, cy + 0.22, 0.03).fill(0xb8b2a6);
-        return true;
-      case 'stocks':
-        block(x + 0.08, y + 0.3, w - 0.16, 0.4, 0x7a5530, 1);
-        for (const t of [0.3, 0.5, 0.7]) g.circle(x + w * t, cy, 0.07).fill(0x1e1712);
-        return true;
-      case 'sacks':
-        for (const [dx, dy] of [[-0.15, -0.1], [0.17, -0.05], [0, 0.2]]) ball(cx + dx, cy + dy, 0.19, 0xb0905e, 0.9);
         return true;
       case 'bookshelf': {
         block(x + 0.1, y + 0.1, w - 0.2, h - 0.2, 0x5e4028, 2);

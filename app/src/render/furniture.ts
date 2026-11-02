@@ -4406,10 +4406,12 @@ function trap(g: Graphics, f: InteriorItem, rnd: () => number) {
 function caveIn(g: Graphics, f: InteriorItem, rnd: () => number) {
   const { x, y, w, h } = f;
   const [cx, cy] = [x + w / 2, y + h / 2];
-  for (let i = 0; i < 40; i++) g.circle(x + 0.15 + rnd() * (w - 0.3), y + 0.15 + rnd() * (h - 0.3), 0.012 + 0.012 * rnd()).fill({ color: 0x8a8070, alpha: 0.8 });
+  for (let i = 0; i < 40; i++) g.circle(x + 0.15 + rnd() * (w - 0.3), y + 0.15 + rnd() * (h - 0.3), 0.016 + 0.012 * rnd()).fill(i % 3 ? 0x6e655a : 0x8a8070).stroke({ width: 0.014, color: INK });
   for (let i = 0; i < 5; i++) {
     const [px, py] = [x + 0.2 + rnd() * (w - 0.4), y + 0.2 + rnd() * (h - 0.4)];
-    g.poly(ring(px, py, 0.05 + 0.04 * rnd(), rnd, 0.03, 6)).fill(STONE[1]).stroke({ width: 0.012, color: INK });
+    const r = 0.06 + 0.04 * rnd();
+    g.poly(ring(px, py, r, rnd, 0.03, 6)).fill(CAVE_ROCK[1]).stroke({ width: OUT, color: INK, join: 'round' });
+    g.poly(ring(px - 0.01, py - 0.012, r * 0.55, rnd, 0.02, 6)).fill(CAVE_ROCK[2]);
   }
   for (let i = 0; i < 3; i++) {
     const a = rnd() * Math.PI * 2;
@@ -4421,7 +4423,7 @@ function caveIn(g: Graphics, f: InteriorItem, rnd: () => number) {
       g.lineTo(px, py);
     }
   }
-  g.stroke({ width: 0.015, color: INK, alpha: 0.8 });
+  g.stroke({ width: LINE, color: INK, cap: 'round', join: 'round' });
 }
 
 /** A faceted stone from above: a dark rim on the shaded side, its face, a lit top facet toward the light
@@ -4653,58 +4655,32 @@ function fungus(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () =
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const { pt, right } = screenAxes(light);
   const rot = Math.atan2(right[1], right[0]);
-  const lift = 0.85;
-  const c = v % 2 ? [0x2e1458, 0x7a44c8, 0xb48ae8, 0xf0e4ff] : [0x083e38, 0x12a090, 0x6ee0cc, 0xe0fff8];
-  for (const [k, al] of [
-    [0.95, 0.05],
-    [0.75, 0.07],
-    [0.55, 0.09],
-    [0.35, 0.1],
-  ]) {
-    g.circle(cx, cy, k).fill({ color: c[1], alpha: al });
-  }
-  g.poly(oval(...pt(cx, cy, 0, -0.22), 0.3, 0.12, rot, 18)).fill({ color: 0x14100c, alpha: 0.7 });
-  // [right, back (up the screen), height, cap radius, bend]: back ones first.
-  const shrooms: [number, number, number, number, number][] = [
-    [-0.04, 0.06, 0.5, 0.18, 0.08],
-    [0.2, 0.0, 0.36, 0.14, 0.1],
-    [-0.24, -0.04, 0.3, 0.12, -0.1],
-    [0.04, -0.18, 0.22, 0.11, 0.06],
-    [0.26, -0.22, 0.14, 0.08, 0.08],
-  ].map(([a, d, h, r, bend]) => [a + (rnd() - 0.5) * 0.04, d, h * (0.9 + 0.2 * rnd()), r, bend * (0.8 + 0.4 * rnd())]);
-  for (const [a, d, h, r, bend] of shrooms) {
-    const base = pt(cx, cy, a, d * 0.5 - 0.22);
-    const hh = h * lift;
-    // The stem: a tapering curve bowed sideways by `bend`, built from points along it.
-    const sw = r * 0.26;
-    const along = (t: number): [number, number] => pt(base[0], base[1], bend * Math.sin(Math.PI * t * 0.8) + bend * t * 0.3, hh * t);
-    const left: number[] = [];
-    const rightSide: number[] = [];
-    for (let k = 0; k <= 8; k++) {
-      const t = k / 8;
-      const [px, py] = along(t);
-      const w = sw * (1 - 0.3 * t);
-      left.push(...pt(px, py, -w, 0));
-      rightSide.push(...pt(px, py, w, 0));
+  const c = v % 2 ? [0x3a2f4c, 0x66507e, 0x8a789e, 0xc4bad0] : [0x24433e, 0x3f7a70, 0x68968c, 0xb4cdc4];
+  // [right, up the screen, cap radius]: seen from about 60 degrees up, so the caps are fat ovals; back ones first.
+  const caps: [number, number, number][] = [
+    [-0.06, 0.12, 0.2],
+    [0.2, 0.04, 0.15],
+    [-0.24, -0.06, 0.13],
+    [0.05, -0.16, 0.16],
+    [0.28, -0.22, 0.09],
+  ].map(([a, d, r]) => [a + (rnd() - 0.5) * 0.04, d + (rnd() - 0.5) * 0.03, r * (0.92 + 0.16 * rnd())]);
+  for (const [a, d, r] of caps) {
+    const [x, y] = pt(cx, cy, a, d);
+    // A sliver of pale stem at the foot of the cap (none on the smallest).
+    if (r > 0.1) g.poly(oval(...pt(x, y, 0, -r * 0.62), r * 0.3, r * 0.26, rot, 10)).fill(0xcfc6b0).stroke({ width: LINE, color: INK });
+    g.poly(oval(...pt(x, y, 0.02, -r * 0.3), r * 1.02, r * 0.72, rot, 22)).fill({ color: 0x14100c, alpha: 0.3 });
+    g.poly(oval(x, y, r, r * 0.8, rot, 22)).fill(c[0]).stroke({ width: OUT, color: INK, join: 'round' });
+    g.poly(oval(...pt(x, y, -r * 0.08, r * 0.08), r * 0.8, r * 0.62, rot, 20)).fill(c[1]);
+    g.poly(oval(...pt(x, y, -r * 0.3, r * 0.26), r * 0.36, r * 0.24, rot, 12)).fill({ color: c[2], alpha: 0.85 });
+    if ((a * 7 + d * 3 + v) % 2 > 1) {
+      for (let k = 0; k < 7; k++) {
+        const t = (k / 7) * Math.PI * 2;
+        g.moveTo(...pt(x, y, Math.cos(t) * r * 0.2, Math.sin(t) * r * 0.16)).lineTo(...pt(x, y, Math.cos(t) * r * 0.62, Math.sin(t) * r * 0.5));
+      }
+      g.stroke({ width: 0.014, color: c[0], alpha: 0.6 });
+    } else {
+      for (let k = 0; k < 3; k++) g.circle(...pt(x, y, (rnd() - 0.3) * r * 0.9, (rnd() - 0.3) * r * 0.5), r * 0.07).fill({ color: c[3], alpha: 0.8 });
     }
-    const stem = [...left];
-    for (let k = 8; k >= 0; k--) stem.push(rightSide[k * 2], rightSide[k * 2 + 1]);
-    g.poly(stem).fill(0xe0d8c8).stroke({ width: 0.014, color: INK, join: 'round' });
-    const top = along(1);
-    // The cap from above: a wide oval, the gilled underside showing as a darker crescent below the glowing top.
-    g.poly(oval(...pt(top[0], top[1], 0, -r * 0.08), r, r * 0.66, rot, 22)).fill(c[0]).stroke({ width: 0.016, color: INK });
-    for (let k = 0; k < 9; k++) {
-      const t = Math.PI * (0.15 + (0.7 * k) / 8);
-      g.moveTo(...pt(top[0], top[1], Math.cos(t) * r * 0.55, -r * 0.08 - Math.sin(t) * r * 0.35)).lineTo(...pt(top[0], top[1], Math.cos(t) * r * 0.92, -r * 0.08 - Math.sin(t) * r * 0.6));
-    }
-    g.stroke({ width: 0.008, color: c[2], alpha: 0.7 });
-    g.poly(oval(...pt(top[0], top[1], 0, r * 0.06), r * 0.94, r * 0.58, rot, 22)).fill(c[1]).stroke({ width: 0.014, color: INK });
-    g.poly(oval(...pt(top[0], top[1], -r * 0.22, r * 0.2), r * 0.42, r * 0.24, rot, 14)).fill({ color: c[2], alpha: 0.9 });
-    g.circle(...pt(top[0], top[1], -r * 0.28, r * 0.26), r * 0.09).fill(c[3]);
-  }
-  for (let i = 0; i < 8; i++) {
-    const [px, py] = pt(cx, cy, (rnd() - 0.5) * 0.8, -0.3 + rnd() * 0.65);
-    g.circle(px, py, 0.01 + 0.008 * rnd()).fill({ color: c[3], alpha: 0.9 });
   }
 }
 
@@ -4712,10 +4688,10 @@ function fungus(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () =
  * showing under the edge on the shaded side. */
 function giantMushrooms(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const caps = [
-    [0x5a2a4a, 0x8a4a6e, 0xb06a90],
-    [0x6a3a1a, 0x9a5a2c, 0xc07a44],
-    [0x3a4a6a, 0x5a6a9a, 0x8a9ac0],
-    [0x5a2a4a, 0x8a4a6e, 0xb06a90],
+    [0x4a2e42, 0x76566c, 0x9a7a90],
+    [0x5a3c24, 0x86613f, 0xa88360],
+    [0x34405a, 0x566488, 0x7e8aa8],
+    [0x4a2e42, 0x76566c, 0x9a7a90],
   ][v % 4];
   const parts: [number, number, number][] = [
     [0.38, 0.58, 0.28],
@@ -4775,26 +4751,31 @@ function web(g: Graphics, f: InteriorItem, rnd: () => number) {
 /** Cobwebs in the angle of the wall: a fan of threads from the wall with sagging cross-strands. */
 function cobweb(g: Graphics, f: InteriorItem, rnd: () => number, wall: [number, number]) {
   const { at } = frame(f, wall);
-  const [ox, oy] = at(0.5, 0);
-  const n = 7;
+  const [ox, oy] = at(0.5 + (rnd() - 0.5) * 0.5, 0);
+  const n = 4 + Math.floor(rnd() * 5);
+  const span = 0.55 + 0.3 * rnd();
+  const lean = (rnd() - 0.5) * 0.5;
   const ends: number[][] = [];
   for (let i = 0; i < n; i++) {
-    const a = Math.PI * (0.08 + (0.84 * i) / (n - 1)) + (rnd() - 0.5) * 0.1;
-    const r = 0.5 + 0.1 * rnd();
+    const a = Math.PI * (0.5 - span / 2 + (span * i) / (n - 1)) + lean + (rnd() - 0.5) * 0.12;
+    const r = 0.3 + 0.3 * rnd();
     ends.push(at(0.5 + Math.cos(a) * r, Math.sin(a) * r));
   }
   g.poly([ox, oy, ...ends.flat()]).fill({ color: 0xf5f5f4, alpha: 0.1 });
   for (const [ex, ey] of ends) g.moveTo(ox, oy).lineTo(ex, ey);
   g.stroke({ width: 0.018, color: 0xf5f5f4, alpha: 0.7 });
-  for (const k of [0.3, 0.55, 0.8]) {
+  const rings = [0.3, 0.5, 0.65, 0.8, 0.9].filter(() => rnd() < 0.7).slice(0, 4);
+  if (!rings.length) rings.push(0.5);
+  const sag = 0.7 + 0.25 * rnd();
+  for (const k of rings) {
     g.moveTo(ox + (ends[0][0] - ox) * k, oy + (ends[0][1] - oy) * k);
     for (let i = 1; i < n; i++) {
       const [px, py] = ends[i - 1];
       const [qx, qy] = ends[i];
-      g.quadraticCurveTo(ox + ((px + qx) / 2 - ox) * k * 0.85, oy + ((py + qy) / 2 - oy) * k * 0.85, ox + (qx - ox) * k, oy + (qy - oy) * k);
+      g.quadraticCurveTo(ox + ((px + qx) / 2 - ox) * k * sag, oy + ((py + qy) / 2 - oy) * k * sag, ox + (qx - ox) * k, oy + (qy - oy) * k);
     }
   }
-  g.stroke({ width: 0.012, color: 0xf5f5f4, alpha: 0.6 });
+  g.stroke({ width: 0.014, color: 0xf5f5f4, alpha: 0.6 });
 }
 
 /** Bat guano: one soft splattered pile of dirty brown-ochre droppings, blotched chalky white, small splats
@@ -4916,12 +4897,26 @@ function nestHeap(g: Graphics, f: InteriorItem, light: Light, rnd: () => number,
     for (let i = 0; i < 10; i++) g.poly(oval(cx + (rnd() - 0.5) * 0.8, cy + (rnd() - 0.5) * 0.8, 0.012, 0.007, rnd() * Math.PI, 6)).fill(0x2a2018);
     // A chewed candle stub at the edge.
     const [kx, ky] = [cx + r * 1.1, cy - r * 0.6];
-    g.poly(oval(kx, ky, 0.07, 0.03, 0.5, 10)).fill(0xe8dcb8).stroke({ width: 0.01, color: INK });
+    g.poly(oval(kx, ky, 0.07, 0.03, 0.5, 10)).fill(0xd8ccae).stroke({ width: LINE, color: INK });
     g.circle(kx + 0.05, ky + 0.02, 0.012).fill(0x2a2018);
   }
-  g.poly(spiky(r, beast ? 30 : 26)).fill(beast ? 0x5e4a30 : 0x8a7444).stroke({ width: OUT, color: INK, join: 'round' });
+  if (beast) g.poly(spiky(r, 30)).fill(0x5e4a30).stroke({ width: OUT, color: INK, join: 'round' });
+  else {
+    // A soft loose heap: overlapping unlined lumps, a broken thin edge, a small dark hollow.
+    g.poly(patch(cx + 0.01, cy + 0.02, r * 1.02, r * 0.9, rnd, 0.14, 20)).fill({ color: 0x14100c, alpha: 0.22 });
+    g.poly(patch(cx, cy, r, r * 0.9, rnd, 0.12, 20)).fill(0x6e6048);
+    g.poly(patch(cx - light[0] * 0.03, cy - light[1] * 0.03, r * 0.82, r * 0.72, rnd, 0.16, 18)).fill(0x84745a);
+    g.poly(patch(cx - light[0] * 0.08, cy - light[1] * 0.08, r * 0.45, r * 0.38, rnd, 0.2, 14)).fill({ color: 0xa08e6c, alpha: 0.7 });
+    for (let i = 0; i < 3; i++) {
+      const a0 = rnd() * Math.PI * 2;
+      g.moveTo(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r * 0.9);
+      for (let k = 1; k <= 5; k++) g.lineTo(cx + Math.cos(a0 + k * 0.17) * r * (0.97 + 0.06 * rnd()), cy + Math.sin(a0 + k * 0.17) * r * 0.9 * (0.97 + 0.06 * rnd()));
+    }
+    g.stroke({ width: LINE, color: 0x3a2e1e, alpha: 0.8, cap: 'round' });
+    g.poly(patch(cx + 0.03, cy + 0.04, r * 0.22, r * 0.17, rnd, 0.2, 10)).fill(0x2a2018);
+  }
   // Straws and sticks crossing, their ends sticking out of the outline.
-  for (let i = 0; i < (beast ? 18 : 24); i++) {
+  for (let i = 0; i < (beast ? 18 : 14); i++) {
     const a = rnd() * Math.PI * 2;
     const d = r * (0.5 + 0.5 * rnd());
     const b = a + Math.PI / 2 + (rnd() - 0.5) * 1.2;
@@ -4930,6 +4925,16 @@ function nestHeap(g: Graphics, f: InteriorItem, light: Light, rnd: () => number,
     g.moveTo(px - (Math.cos(b) * L) / 2, py - (Math.sin(b) * L) / 2).lineTo(px + (Math.cos(b) * L) / 2, py + (Math.sin(b) * L) / 2);
   }
   g.stroke({ width: beast ? 0.035 : 0.014, color: beast ? 0x3a2a18 : 0x5a4a2a, cap: 'round' });
+  if (!beast) {
+    // A few short stray straws just outside the heap.
+    for (let i = 0; i < 5; i++) {
+      const a = rnd() * Math.PI * 2;
+      const [px, py] = [cx + Math.cos(a) * r * 1.05, cy + Math.sin(a) * r * 0.95];
+      const b = a + (rnd() - 0.5) * 1.4;
+      g.moveTo(px, py).lineTo(px + Math.cos(b) * 0.09, py + Math.sin(b) * 0.09);
+    }
+    g.stroke({ width: 0.02, color: 0x7a6a48, cap: 'round' });
+  }
   if (beast) {
     // Fur tufts on the ring.
     for (let i = 0; i < 5; i++) {
@@ -4958,19 +4963,19 @@ function nestHeap(g: Graphics, f: InteriorItem, light: Light, rnd: () => number,
     const [px, py] = [cx + Math.cos(a) * r * 0.35, cy + Math.sin(a) * r * 0.35];
     const [co, si] = [Math.cos(a + 0.6), Math.sin(a + 0.6)];
     const q = (u: number, k: number): [number, number] => [px + co * u - si * k, py + si * u + co * k];
-    g.poly([...q(-0.1, -0.07), ...q(0.1, -0.07), ...q(0.1, 0.07), ...q(-0.1, 0.07)]).fill(0x8a4a3a).stroke({ width: 0.01, color: INK });
-    g.moveTo(...q(-0.1, 0)).lineTo(...q(0.1, 0)).stroke({ width: 0.018, color: 0xc07a62 });
+    g.poly([...q(-0.1, -0.07), ...q(0.1, -0.07), ...q(0.1, 0.07), ...q(-0.1, 0.07)]).fill(0x74524a).stroke({ width: 0.014, color: 0x3a2e1e });
+    g.moveTo(...q(-0.1, 0)).lineTo(...q(0.1, 0)).stroke({ width: 0.018, color: 0x9a766a });
     for (let k = -0.06; k <= 0.06; k += 0.03) g.moveTo(...q(0.1, k)).lineTo(...q(0.13, k + 0.01));
-    g.stroke({ width: 0.008, color: 0x8a4a3a });
+    g.stroke({ width: 0.014, color: 0x74524a });
   }
   // Rats: bigger teardrop bodies with long pink tails curling away from the nest.
   for (let i = 0; i < 2; i++) {
     const a = i * 2.8 + rnd() * 0.6;
     const [rx, ry] = [cx + Math.cos(a) * r * 1.05, cy + Math.sin(a) * r * 1.05];
     const [c, s] = [Math.cos(a), Math.sin(a)];
-    g.moveTo(rx + c * 0.08, ry + s * 0.08).quadraticCurveTo(rx + c * 0.26 - s * 0.1, ry + s * 0.26 + c * 0.1, rx + c * 0.3 + s * 0.06, ry + s * 0.3 - c * 0.06).stroke({ width: 0.024, color: 0xd09a8a, cap: 'round' });
+    g.moveTo(rx + c * 0.08, ry + s * 0.08).quadraticCurveTo(rx + c * 0.26 - s * 0.1, ry + s * 0.26 + c * 0.1, rx + c * 0.3 + s * 0.06, ry + s * 0.3 - c * 0.06).stroke({ width: 0.024, color: 0xa88e82, cap: 'round' });
     g.poly([rx - c * 0.13, ry - s * 0.13, rx - s * 0.065, ry + c * 0.065, rx + c * 0.1, ry + s * 0.1, rx + s * 0.065, ry - c * 0.065]).fill(0x6a5e52).stroke({ width: 0.014, color: INK, join: 'round' });
-    for (const k of [1, -1]) g.circle(rx - c * 0.07 - s * k * 0.035, ry - s * 0.07 + c * k * 0.035, 0.018).fill(0xc89a8a);
+    for (const k of [1, -1]) g.circle(rx - c * 0.07 - s * k * 0.035, ry - s * 0.07 + c * k * 0.035, 0.018).fill(0xa08a80);
     g.circle(rx - c * 0.12, ry - s * 0.12, 0.01).fill(INK);
   }
 }
@@ -5024,8 +5029,8 @@ function glassChip(g: Graphics, x: number, y: number, a: number, len: number, w:
     g.moveTo(...p(len * k, sd * w * 0.15)).quadraticCurveTo(...p(len * (k - 0.05), sd * w * 0.55), ...p(len * (k - 0.25), sd * w * 0.65));
   }
   g.stroke({ width: 0.01, color: OBSIDIAN[2], alpha: 0.8 });
-  g.moveTo(...T).lineTo(...M).lineTo(...Bl).moveTo(...M).lineTo(...Br).stroke({ width: 0.01, color: INK, alpha: 0.6 });
-  g.poly([...T, ...L, ...Bl, ...Br, ...R]).stroke({ width: 0.022, color: INK, join: 'miter' });
+  g.moveTo(...T).lineTo(...M).lineTo(...Bl).moveTo(...M).lineTo(...Br).stroke({ width: 0.014, color: INK, alpha: 0.7 });
+  g.poly([...T, ...L, ...Bl, ...Br, ...R]).stroke({ width: OUT, color: INK, join: 'miter' });
   g.moveTo(...(lit ? L : R)).lineTo(...T).stroke({ width: 0.014, color: OBSIDIAN[3], cap: 'round' });
   g.moveTo(...p(len * 0.3, -sd * w * 0.3)).lineTo(...p(len * 0.7, -sd * w * 0.12)).stroke({ width: 0.012, color: 0xffffff, alpha: 0.8, cap: 'round' });
 }
@@ -5034,18 +5039,20 @@ function glassChip(g: Graphics, x: number, y: number, a: number, len: number, w:
 function obsidianShards(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const ph = rnd() * Math.PI * 2;
-  for (let i = 0; i < 9; i++) {
+  for (let i = 0, n = 4 + Math.floor(rnd() * 8); i < n; i++) {
     const a = rnd() * Math.PI * 2;
-    const d = 0.2 + 0.24 * rnd();
-    glassChip(g, cx + Math.cos(a) * d, cy + Math.sin(a) * d, rnd() * Math.PI * 2, 0.04 + 0.03 * rnd(), 0.025, light, rnd);
+    const d = 0.15 + 0.3 * rnd();
+    glassChip(g, cx + Math.cos(a) * d, cy + Math.sin(a) * d, rnd() * Math.PI * 2, 0.04 + 0.04 * rnd(), 0.025 + 0.01 * rnd(), light, rnd);
   }
-  const big: [number, number, number, number, number][] = [
-    [-0.16, -0.12, ph, 0.3, 0.11],
-    [0.18, 0.06, ph + 2.2, 0.26, 0.1],
-    [-0.06, 0.22, ph + 4.1, 0.22, 0.09],
-    [0.16, -0.22, ph + 1.1, 0.15, 0.065],
-    [-0.24, 0.1, ph + 3, 0.12, 0.05],
-  ];
+  // Two to five big blades at random places and angles, sizes drawn fresh each time.
+  const nb = 2 + Math.floor(rnd() * 4);
+  const big: [number, number, number, number, number][] = [];
+  for (let i = 0; i < nb; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = 0.28 * Math.sqrt(rnd());
+    const len = (0.3 - i * 0.04) * (0.6 + 0.6 * rnd());
+    big.push([Math.cos(a) * d, Math.sin(a) * d, ph + i * (1.2 + rnd() * 1.4), len, len * (0.32 + 0.12 * rnd())]);
+  }
   for (const [dx, dy, a, len, w] of big) glassChip(g, cx + dx, cy + dy, a, len, w, light, rnd);
 }
 
@@ -5335,7 +5342,7 @@ function glassPool(g: Graphics, f: InteriorItem, light: Light, rnd: () => number
 const BONE = [0x8a7e64, 0xd8ccb0, 0xf2eada];
 
 /** A bone from a to b, `w` thick: an inked shaft, knobbly ends (two lumps across each), a lit streak. */
-function bone(g: Graphics, a: [number, number], b: [number, number], w: number, light: Light) {
+function bone(g: Graphics, a: [number, number], b: [number, number], w: number, light: Light, ink = 0.03, tone = BONE[1]) {
   const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
   const l = Math.hypot(dx, dy) || 1;
   const [nx, ny] = [-dy / l, dx / l];
@@ -5344,12 +5351,12 @@ function bone(g: Graphics, a: [number, number], b: [number, number], w: number, 
   };
   knobs(a);
   knobs(b);
-  g.fill(BONE[1]).stroke({ width: 0.016, color: INK });
-  g.moveTo(...a).lineTo(...b).stroke({ width: w + 0.03, color: INK, cap: 'round' });
+  g.fill(tone).stroke({ width: ink / 2, color: INK });
+  g.moveTo(...a).lineTo(...b).stroke({ width: w + ink, color: INK, cap: 'round' });
   knobs(a);
   knobs(b);
-  g.fill(BONE[1]);
-  g.moveTo(...a).lineTo(...b).stroke({ width: w, color: BONE[1], cap: 'round' });
+  g.fill(tone);
+  g.moveTo(...a).lineTo(...b).stroke({ width: w, color: tone, cap: 'round' });
   const o = (nx * light[0] + ny * light[1] > 0 ? 1 : -1) * w * 0.22;
   g.moveTo(a[0] + nx * o + dx * 0.15, a[1] + ny * o + dy * 0.15).lineTo(b[0] + nx * o - dx * 0.15, b[1] + ny * o - dy * 0.15).stroke({ width: w * 0.3, color: BONE[2], cap: 'round' });
 }
@@ -5370,40 +5377,51 @@ function skullTop(g: Graphics, x: number, y: number, dir: number, s: number, lig
  * remains and the pile). */
 function scatteredBones(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  for (let i = 0; i < 7; i++) {
+  const T = [0xa89c80, 0xcfc2a2];
+  const at = (r: number): [number, number] => {
     const a = rnd() * Math.PI * 2;
-    const d = 0.1 + 0.3 * rnd();
-    g.circle(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.02 + 0.012 * rnd()).fill(BONE[1]).stroke({ width: 0.01, color: INK });
+    const d = r * Math.sqrt(rnd());
+    return [cx + Math.cos(a) * d, cy + Math.sin(a) * d];
+  };
+  // Knuckle bits.
+  for (let i = 0, n = 3 + Math.floor(rnd() * 5); i < n; i++) {
+    const [x, y] = at(0.42);
+    g.circle(x, y, 0.03 + 0.015 * rnd()).fill(T[1]).stroke({ width: LINE, color: INK });
   }
-  // Ribs: curved bars.
-  for (let i = 0; i < 3; i++) {
-    const [x, y] = [cx - 0.22 + i * 0.07, cy + 0.18 + i * 0.02];
-    for (const [w, col] of [
-      [0.04, INK],
-      [0.022, BONE[1]],
-    ] as const) {
-      g.moveTo(x, y).quadraticCurveTo(x + 0.12, y - 0.1, x + 0.2, y + 0.02).stroke({ width: w, color: col, cap: 'round' });
+  // Ribs: curved bars, a few or none.
+  const ribs = Math.floor(rnd() * 4);
+  if (ribs) {
+    const [rx, ry] = at(0.2);
+    const ra = rnd() * Math.PI * 2;
+    const [c, s] = [Math.cos(ra), Math.sin(ra)];
+    const q = (u: number, k: number): [number, number] => [rx + c * u - s * k, ry + s * u + c * k];
+    for (let i = 0; i < ribs; i++) {
+      const k = (i - ribs / 2) * 0.09;
+      for (const [w, col] of [
+        [0.062, INK],
+        [0.032, T[1]],
+      ] as const) g.moveTo(...q(-0.13, k)).quadraticCurveTo(...q(0, k - 0.14 * (rnd() < 0.5 ? 1 : 0.7)), ...q(0.13, k + 0.02)).stroke({ width: w, color: col, cap: 'round' });
     }
   }
-  // A jawbone: a U.
-  const [jx, jy] = [cx + 0.22, cy + 0.2];
-  for (const [w, col] of [
-    [0.05, INK],
-    [0.03, BONE[1]],
-  ] as const) {
-    g.moveTo(jx - 0.08, jy - 0.06).quadraticCurveTo(jx, jy + 0.14, jx + 0.08, jy - 0.06).stroke({ width: w, color: col, cap: 'round' });
+  // A jawbone: a U, in half the piles.
+  if (rnd() < 0.55) {
+    const [jx, jy] = at(0.3);
+    const ja = rnd() * Math.PI * 2;
+    const [c, s] = [Math.cos(ja), Math.sin(ja)];
+    const q = (u: number, k: number): [number, number] => [jx + c * u - s * k, jy + s * u + c * k];
+    for (const [w, col] of [
+      [0.07, INK],
+      [0.036, T[1]],
+    ] as const) g.moveTo(...q(-0.09, -0.07)).quadraticCurveTo(...q(0.15, 0), ...q(-0.09, 0.07)).stroke({ width: w, color: col, cap: 'round' });
   }
-  const ph = rnd() * Math.PI;
-  const longs: [number, number, number, number, number][] = [
-    [-0.04, -0.2, ph, 0.13, 0.05],
-    [0.18, 0.0, ph + 1.4, 0.12, 0.045],
-    [-0.2, 0.04, ph + 2.3, 0.09, 0.04],
-    [0.04, 0.06, ph + 0.4, 0.08, 0.035],
-  ];
-  for (const [dx, dy, a, l, w] of longs) {
-    const [x, y] = [cx + dx, cy + dy];
+  const nl = 2 + Math.floor(rnd() * 4);
+  for (let i = 0; i < nl; i++) {
+    const [x, y] = at(0.3);
+    const a = rnd() * Math.PI;
+    const l = 0.08 + 0.08 * rnd();
+    const w = 0.05 + 0.02 * rnd();
     castShadow(g, [x - Math.cos(a) * l, y - Math.sin(a) * l, x + Math.cos(a) * l, y + Math.sin(a) * l, x, y + 0.02], light, 0.04);
-    bone(g, [x - Math.cos(a) * l, y - Math.sin(a) * l], [x + Math.cos(a) * l, y + Math.sin(a) * l], w, light);
+    bone(g, [x - Math.cos(a) * l, y - Math.sin(a) * l], [x + Math.cos(a) * l, y + Math.sin(a) * l], w, light, OUT, T[1]);
   }
 }
 
@@ -6791,7 +6809,6 @@ function stocks(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
  * emerald) and a sword's hilt sticking out, glints. */
 function treasureHoard(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  glowPool(g, cx, cy, 0.5, 0xf8d860);
   castShadow(g, patch(cx, cy, 0.3, 0.28, rnd, 0.2, 12), light, 0.2);
   const coin = (x: number, y: number, r: number) => {
     g.circle(x, y, r).fill(GILT[0]).stroke({ width: 0.008, color: 0x5a3e10 });
@@ -7012,7 +7029,7 @@ function ritualCircle(g: Graphics, f: InteriorItem, light: Light, v: number, rnd
   const [ink, glow] = [
     [0xe8e4dc, 0],
     [0x8a1a14, 0],
-    [0xb89aff, 0x8a5aff],
+    [0xa898d8, 0],
     [0xe8e4dc, 0],
   ][v % 4];
   if (glow) for (let i = 0; i < 4; i++) g.circle(cx, cy, R * (1.15 - i * 0.12)).fill({ color: glow, alpha: 0.06 });
