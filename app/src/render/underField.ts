@@ -8,14 +8,19 @@ import { CAVERN, fromSquares, shapeIndex } from './roomShapes';
 
 /** Field texels per square. */
 export const FIELD_RES = 4;
-/** Squares round a section of sewers its field is worked out over (`under::SEWER_RIM`): the widest
- * blur below, so a texel's value comes out the same on both sides of a border. */
+/** Squares round a section of sewers its field is worked out over (`under::SEWER_RIM`): past the
+ * widest blur and the walls a channel looks to, so a texel's value comes out the same on both sides
+ * of a border. */
 const SEWER_RIM = 5;
 /** Of those, the squares kept in the texture: as far past the edge as the shader looks. */
 const FIELD_PAD = 1;
-/** The sewage channel: the blur of the lines' floor (squares) and the level of its edge. */
-const CHANNEL_SIGMA = 1.1;
-const CHANNEL = 0.655;
+/** The dry floor along every wall of a sewer (squares): sewage lies this far from a wall or more.
+ * `under/themes/sewer.rs` counts squares by the same rule (`WALKWAY` there). */
+const WALKWAY = 0.9;
+/** How finely `sewerWalls` follows the walls (squares; `WALL_POINT` there). */
+const WALL_POINT = 0.1;
+/** Width (squares) of the ramp across the channel's edge, for a contour finer than a texel. */
+const CHANNEL_RAMP = 0.25;
 
 export interface UnderField {
   /** Field texture (w x h, RGBA: floor, liquid, raised; `pad` squares wider than the grid each
@@ -110,44 +115,6 @@ export function blur(src: Float32Array, w: number, h: number, sigma: number): Fl
   return out;
 }
 
-/** `blur` worked out at 1/`f` of the resolution and sampled back up (bilinear): for wide,
- * soft masks, at a fraction of the cost. */
-function blurCoarse(src: Float32Array, w: number, h: number, sigma: number, f: number): Float32Array {
-  const [cw, ch] = [Math.ceil(w / f), Math.ceil(h / f)];
-  const small = new Float32Array(cw * ch);
-  const inv = 1 / (f * f);
-  for (let y = 0; y < h; y++) {
-    const row = Math.floor(y / f) * cw;
-    for (let x = 0; x < w; x++) small[row + ((x / f) | 0)] += src[y * w + x] * inv;
-  }
-  const b = blur(small, cw, ch, sigma / f);
-  const out = new Float32Array(w * h);
-  // Where each column samples from (the same for every row).
-  const x0s = new Int32Array(w);
-  const fxs = new Float32Array(w);
-  for (let x = 0; x < w; x++) {
-    const sx = Math.min(cw - 1, Math.max(0, (x + 0.5) / f - 0.5));
-    x0s[x] = Math.floor(sx);
-    fxs[x] = sx - x0s[x];
-  }
-  for (let y = 0; y < h; y++) {
-    const sy = Math.min(ch - 1, Math.max(0, (y + 0.5) / f - 0.5));
-    const y0 = Math.floor(sy);
-    const r0 = y0 * cw;
-    const r1 = Math.min(ch - 1, y0 + 1) * cw;
-    const fy = sy - y0;
-    for (let x = 0; x < w; x++) {
-      const x0 = x0s[x];
-      const x1 = Math.min(cw - 1, x0 + 1);
-      const fx = fxs[x];
-      const top = b[r0 + x0] * (1 - fx) + b[r0 + x1] * fx;
-      const bot = b[r1 + x0] * (1 - fx) + b[r1 + x1] * fx;
-      out[y * w + x] = top * (1 - fy) + bot * fy;
-    }
-  }
-  return out;
-}
-
 /** The room whose floor follows the lines. */
 export const LINE_ROOM = 'sewer tunnel';
 
@@ -179,6 +146,99 @@ const WALL_STEP = 0.1;
 const WALL_REACH = 2.6;
 /** How far a wall's point stays within the section: the next section's floor would cover what hangs over. */
 const WALL_MARGIN = 0.5;
+
+/** Calls `at` with points along the walls of the floor a level's lines paint: every line's outline
+ * where no other line covers it, and the edges of `near` (`pad` squares past the grid) where a line
+ * is cut off. Passages don't count: they open in a wall, and the next section knows nothing of them. */
+function sewerWalls(paths: number[][], near: Uint8Array, nx: number, ny: number, pad: number, at: (x: number, y: number) => void) {
+  const [across, down] = [nx + 2 * pad, ny + 2 * pad];
+  // The lines within reach of each square.
+  const cover: (number[] | undefined)[] = new Array(across * down);
+  paths.forEach((l, n) => {
+    const m = l[4] + 1;
+    const i0 = Math.max(-pad, Math.floor(Math.min(l[0], l[2]) - m));
+    const j0 = Math.max(-pad, Math.floor(Math.min(l[1], l[3]) - m));
+    const i1 = Math.min(nx + pad - 1, Math.floor(Math.max(l[0], l[2]) + m));
+    const j1 = Math.min(ny + pad - 1, Math.floor(Math.max(l[1], l[3]) + m));
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        if (offLine(l, i + 0.5, j + 0.5)[0] > 0.75) continue;
+        const k = (j + pad) * across + i + pad;
+        (cover[k] ??= []).push(n);
+      }
+    }
+  });
+  const square = (x: number, y: number) => {
+    const [i, j] = [Math.floor(x) + pad, Math.floor(y) + pad];
+    return i >= 0 && j >= 0 && i < across && j < down ? j * across + i : -1;
+  };
+  // A point of a line's outline is a wall on the band and inside no line (its end circles' far halves are inside it).
+  const outline = (x: number, y: number) => {
+    const k = square(x, y);
+    if (k >= 0 && near[k] && !(cover[k] ?? []).some((o) => offLine(paths[o], x, y)[0] < -1e-3)) at(x, y);
+  };
+  paths.forEach(([x0, y0, x1, y1, r]) => {
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    if (len > 1e-6) {
+      const [ox, oy] = [(-(y1 - y0) / len) * r, ((x1 - x0) / len) * r];
+      const along = Math.ceil(len / WALL_POINT);
+      for (let a = 0; a <= along; a++) {
+        const [x, y] = [x0 + ((x1 - x0) * a) / along, y0 + ((y1 - y0) * a) / along];
+        outline(x + ox, y + oy);
+        outline(x - ox, y - oy);
+      }
+    }
+    const round = Math.ceil((2 * Math.PI * r) / WALL_POINT);
+    for (let a = 0; a < round; a++) {
+      const t = (a * 2 * Math.PI) / round;
+      const [c, s] = [Math.cos(t) * r, Math.sin(t) * r];
+      outline(x0 + c, y0 + s);
+      outline(x1 + c, y1 + s);
+    }
+  });
+  // Where the band is cut off: each side of a near square against one that isn't.
+  const steps = Math.round(1 / WALL_POINT);
+  for (let j = 0; j + 1 < down; j++) {
+    for (let i = 0; i + 1 < across; i++) {
+      const k = j * across + i;
+      for (const [other, ax, ay] of [[k + 1, 1, 0], [k + across, 0, 1]]) {
+        if (near[k] === near[other]) continue;
+        const [x, y] = ax ? [i + 1 - pad, j - pad] : [i - pad, j + 1 - pad];
+        const over = cover[near[k] ? k : other] ?? [];
+        for (let a = 0; a <= steps; a++) {
+          const [px, py] = [x + (ay * a) / steps, y + (ax * a) / steps];
+          if (over.some((o) => offLine(paths[o], px, py)[0] < 0)) at(px, py);
+        }
+      }
+    }
+  }
+}
+
+/** How much sewage each texel of the field holds (0-1; `lined`: the lines' floor): where it lies at
+ * least `WALKWAY` from every wall. Depth, not a blur: runs meeting don't build up, so the channels of
+ * a crossing merge into a cross with the dry floor turning its corners. */
+function sewerChannel(paths: number[][], near: Uint8Array, lined: Float32Array, nx: number, ny: number, pad: number, w: number, h: number): Float32Array {
+  const R = FIELD_RES;
+  const reach = WALKWAY + CHANNEL_RAMP / 2;
+  const [reach2, span] = [reach * reach, Math.ceil(reach * R)];
+  const close = new Float32Array(w * h).fill(reach2);
+  sewerWalls(paths, near, nx, ny, pad, (x, y) => {
+    const [cx, cy] = [(x + pad) * R - 0.5, (y + pad) * R - 0.5];
+    const [tx0, ty0] = [Math.max(0, Math.round(cx) - span), Math.max(0, Math.round(cy) - span)];
+    const [tx1, ty1] = [Math.min(w - 1, Math.round(cx) + span), Math.min(h - 1, Math.round(cy) + span)];
+    for (let ty = ty0; ty <= ty1; ty++) {
+      const dy = (ty - cy) / R;
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const dx = (tx - cx) / R;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < close[ty * w + tx]) close[ty * w + tx] = d2;
+      }
+    }
+  });
+  const out = new Float32Array(w * h);
+  for (let k = 0; k < w * h; k++) if (lined[k]) out[k] = Math.max(0, Math.min(1, (Math.sqrt(close[k]) - WALKWAY) / CHANNEL_RAMP + 0.5));
+  return out;
+}
 
 /** The nearest wall of the floor painted from a level's lines to (cx, cy), in grid squares: the point
  * on it and the unit step from it into the rock. Rays from there find where the floor painted by
@@ -303,17 +363,12 @@ export function underField(it: Interior, level: number): UnderField {
         }
       }
     }
-    // The sewage channel: the middle of the runs, from a wide blur of the lines' floor alone (a
-    // passage is the section's own: the next section would work out another channel). A straight
-    // run's middle comes to 0.725: the ramp lies well under that so a run never breaks up, and over
-    // the 0.5 at a wall so a walkway stays; a run's end tapers as the blur falls. The squares of it
-    // that count as sewage in play are worked out from the same blur (`themes/sewer.rs`, `CHANNEL`).
+    // The sewage channel down the middle of the runs, from the lines' floor alone (a passage is the
+    // section's own, and stays dry). The squares of it that count as sewage in play follow the same
+    // rule (`themes/sewer.rs`).
     liquidKind = 1;
-    const wide = blurCoarse(lined, w, h, CHANNEL_SIGMA * R, 2);
-    for (let k = 0; k < w * h; k++) {
-      liquid[k] = lined[k] * Math.max(0, Math.min(1, (wide[k] - (CHANNEL - 0.025)) / 0.05));
-      if (lined[k]) floor[k] = 1;
-    }
+    liquid.set(sewerChannel(paths, near, lined, nx, ny, rim, w, h));
+    for (let k = 0; k < w * h; k++) if (lined[k]) floor[k] = 1;
   }
   // Natural rock is rounded; sewers follow their streets; built sites keep square corners
   // (the shader measures their walls from the squares).

@@ -254,27 +254,29 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
         }
         p.put(Item::new("continues", "the sewer runs on (double-click to follow)", i, j, 1, 1, 0, false, 0.0, None));
     }
-    // Sewage down the middle of the runs, where the channel is painted; walkways along the walls.
-    let depth = channel(&p, nx, ny, &beyond);
+    // Sewage down the middle of the runs, where the channel is painted; dry floor along the walls.
+    let sewage = channel(&p, nx, ny, &beyond);
     for k in 0..n {
-        if p.cells[k] == tunnel && !p.taken[k] && !keep(&p, k) && depth[k] >= CHANNEL {
+        if sewage[k] && p.cells[k] == tunnel && !p.taken[k] && !keep(&p, k) {
             p.put(Item::new("sewage", "sewage channel", k % nx, k / nx, 1, 1, 0, false, 0.0, Some("difficult terrain; swallowed: DC 11 Con save or poisoned for 1 hour")));
         }
     }
     Some(p)
 }
 
-/// Where a square's middle counts as sewage: the edge of the channel `app/src/render/underField.ts` paints.
-const CHANNEL: f32 = 0.655;
-/// The blur the channel comes from, in squares (`CHANNEL_SIGMA` there).
-const CHANNEL_SIGMA: f64 = 1.1;
+/// The dry floor along every wall of a sewer (squares): sewage lies this far from a wall or more.
+/// `app/src/render/underField.ts` paints the channel by the same rule (`WALKWAY` there).
+const WALKWAY: f64 = 0.9;
+/// How finely the walls are followed (squares; `WALL_POINT` there).
+const WALL_POINT: f64 = 0.1;
 
-/// The blur of the lines' floor at each square's middle, the same one the painted channel comes
-/// from: the lines' band (within reach of a line, on or beside floor), `SEWER_RIM` squares past the
-/// section, so it reads the same from both sides of a border. `beyond`: the rim's floor.
-fn channel(p: &Plan, nx: usize, ny: usize, beyond: &[bool]) -> Vec<f32> {
-    const PER: usize = 2; // samples a square
+/// Which squares' middles lie in the channel: on a line's floor, at least `WALKWAY` from every wall
+/// of it. The walls (as `sewerWalls` there) are each line's outline where no other line covers it, and
+/// the edges of the band round floor where a line is cut off; `SEWER_RIM` squares past the section, so
+/// the two sides of a border read the same (a passage is no wall). `beyond`: the rim's floor.
+fn channel(p: &Plan, nx: usize, ny: usize, beyond: &[bool]) -> Vec<bool> {
     let rim = SEWER_RIM;
+    let pad = rim as i64;
     let (across, down) = (nx + 2 * rim, ny + 2 * rim);
     let mut near = vec![false; across * down];
     let mut mark = |i: usize, j: usize| {
@@ -292,49 +294,105 @@ fn channel(p: &Plan, nx: usize, ny: usize, beyond: &[bool]) -> Vec<f32> {
             }
         }
     }
-    let (w, h) = (across * PER, down * PER);
-    let mut lined = vec![false; w * h];
-    let (per, off) = (PER as f32, rim as f32);
-    for &[x0, y0, x1, y1, r] in &p.paths {
-        let (dx, dy) = (x1 - x0, y1 - y0);
-        let len2 = (dx * dx + dy * dy).max(1e-9);
-        let span = |a: f32, b: f32, n: usize| (((a.min(b) - r + off) * per).floor().max(0.0) as usize, (((a.max(b) + r + off) * per).ceil().max(0.0) as usize).min(n - 1));
-        let (tx0, tx1) = span(x0, x1, w);
-        let (ty0, ty1) = span(y0, y1, h);
-        for ty in ty0..=ty1 {
-            let py = (ty as f32 + 0.5) / per - off;
-            for tx in tx0..=tx1 {
-                let px = (tx as f32 + 0.5) / per - off;
-                if !near[(ty / PER) * across + tx / PER] {
+    let lines: Vec<[f64; 5]> = p.paths.iter().map(|l| l.map(f64::from)).collect();
+    // How far (x, y) is past a line's reach (below 0 inside).
+    let off = |l: &[f64; 5], x: f64, y: f64| {
+        let (dx, dy) = (l[2] - l[0], l[3] - l[1]);
+        let t = (((x - l[0]) * dx + (y - l[1]) * dy) / (dx * dx + dy * dy).max(1e-9)).clamp(0.0, 1.0);
+        let (ex, ey) = (x - l[0] - t * dx, y - l[1] - t * dy);
+        crate::core::sqrt(ex * ex + ey * ey) - l[4]
+    };
+    // The lines within reach of each square.
+    let mut cover: Vec<Vec<usize>> = vec![Vec::new(); across * down];
+    for (n, l) in lines.iter().enumerate() {
+        let m = l[4] + 1.0;
+        let i0 = ((l[0].min(l[2]) - m).floor() as i64).max(-pad);
+        let j0 = ((l[1].min(l[3]) - m).floor() as i64).max(-pad);
+        let i1 = ((l[0].max(l[2]) + m).floor() as i64).min(nx as i64 + pad - 1);
+        let j1 = ((l[1].max(l[3]) + m).floor() as i64).min(ny as i64 + pad - 1);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                if off(l, i as f64 + 0.5, j as f64 + 0.5) <= 0.75 {
+                    cover[(j + pad) as usize * across + (i + pad) as usize].push(n);
+                }
+            }
+        }
+    }
+    let square = |x: f64, y: f64| {
+        let (i, j) = (x.floor() as i64 + pad, y.floor() as i64 + pad);
+        (i >= 0 && j >= 0 && (i as usize) < across && (j as usize) < down).then(|| j as usize * across + i as usize)
+    };
+    // Squares with a wall within `WALKWAY` of their middle.
+    let mut shore = vec![false; nx * ny];
+    let mut wall = |x: f64, y: f64| {
+        let i0 = ((x - WALKWAY - 0.5).ceil() as i64).max(0);
+        let j0 = ((y - WALKWAY - 0.5).ceil() as i64).max(0);
+        let i1 = ((x + WALKWAY - 0.5).floor() as i64).min(nx as i64 - 1);
+        let j1 = ((y + WALKWAY - 0.5).floor() as i64).min(ny as i64 - 1);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let (dx, dy) = (i as f64 + 0.5 - x, j as f64 + 0.5 - y);
+                if dx * dx + dy * dy < WALKWAY * WALKWAY {
+                    shore[j as usize * nx + i as usize] = true;
+                }
+            }
+        }
+    };
+    for l in &lines {
+        let (x0, y0, x1, y1, r) = (l[0], l[1], l[2], l[3], l[4]);
+        // A point of a line's outline is a wall on the band and inside no line (its end circles' far halves are inside it).
+        let mut outline = |x: f64, y: f64| {
+            if let Some(k) = square(x, y)
+                && near[k]
+                && !cover[k].iter().any(|&o| off(&lines[o], x, y) < -1e-3)
+            {
+                wall(x, y);
+            }
+        };
+        let len = crate::core::sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+        if len > 1e-6 {
+            let (ox, oy) = (-(y1 - y0) / len * r, (x1 - x0) / len * r);
+            let along = (len / WALL_POINT).ceil() as usize;
+            for a in 0..=along {
+                let t = a as f64 / along as f64;
+                let (x, y) = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+                outline(x + ox, y + oy);
+                outline(x - ox, y - oy);
+            }
+        }
+        let tau = 2.0 * core::f64::consts::PI;
+        let round = (tau * r / WALL_POINT).ceil() as usize;
+        for a in 0..round {
+            let t = a as f64 * tau / round as f64;
+            let (c, s) = (libm::cos(t) * r, libm::sin(t) * r);
+            outline(x0 + c, y0 + s);
+            outline(x1 + c, y1 + s);
+        }
+    }
+    // Where the band is cut off: each side of a near square against one that isn't.
+    let steps = (1.0 / WALL_POINT).round() as usize;
+    for j in 0..down - 1 {
+        for i in 0..across - 1 {
+            let k = j * across + i;
+            for (other, ax, ay) in [(k + 1, 1.0, 0.0), (k + across, 0.0, 1.0)] {
+                if near[k] == near[other] {
                     continue;
                 }
-                let t = (((px - x0) * dx + (py - y0) * dy) / len2).clamp(0.0, 1.0);
-                let (ex, ey) = (px - x0 - t * dx, py - y0 - t * dy);
-                if ex * ex + ey * ey <= r * r {
-                    lined[ty * w + tx] = true;
+                let (x, y) = if ax > 0.0 { ((i + 1) as f64 - pad as f64, j as f64 - pad as f64) } else { (i as f64 - pad as f64, (j + 1) as f64 - pad as f64) };
+                let over = if near[k] { k } else { other };
+                for a in 0..=steps {
+                    let (px, py) = (x + ay * a as f64 / steps as f64, y + ax * a as f64 / steps as f64);
+                    if cover[over].iter().any(|&o| off(&lines[o], px, py) < 0.0) {
+                        wall(px, py);
+                    }
                 }
             }
         }
     }
-    // (Worked out at a square's middle only, which is few squares: the rest is rock.)
-    const REACH: usize = 6;
-    let sigma = CHANNEL_SIGMA * PER as f64;
-    let weight = |o: usize| libm::exp(-(o as f64 - (REACH as f64 - 0.5)) * (o as f64 - (REACH as f64 - 0.5)) / (2.0 * sigma * sigma));
-    let total: f64 = (0..2 * REACH).map(weight).sum();
-    let kernel: Vec<f32> = (0..2 * REACH).map(|o| (weight(o) / total) as f32).collect();
-    let mut depth = vec![0.0; nx * ny];
-    for k in (0..nx * ny).filter(|&k| p.cells[k] >= 0) {
-        let (cx, cy) = ((k % nx + rim) * PER + PER / 2, (k / nx + rim) * PER + PER / 2);
-        let mut sum = 0.0;
-        for b in 0..2 * REACH {
-            let row = (cy + b - REACH) * w + cx - REACH;
-            for a in 0..2 * REACH {
-                if lined[row + a] {
-                    sum += kernel[a] * kernel[b];
-                }
-            }
-        }
-        depth[k] = sum;
-    }
-    depth
+    (0..nx * ny)
+        .map(|k| {
+            let (x, y) = ((k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5);
+            !shore[k] && cover[(k / nx + rim) * across + k % nx + rim].iter().any(|&o| off(&lines[o], x, y) <= 0.0)
+        })
+        .collect()
 }
