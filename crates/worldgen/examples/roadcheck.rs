@@ -784,6 +784,7 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
     let attached = |p: P| sts.iter().any(|s| dist([s.x, s.y], p) <= reach(s));
     let junction: Vec<bool> = (0..nroad).map(|n| deg[n] >= 3 && !attached(spots.pos[n])).collect();
     let (mut arms_n, mut shape_n, mut shape_arms) = ([0usize; 3], [0usize; 3], [[0usize; 3]; 3]);
+    let mut shape_of = vec![0usize; nroad];
     for n in (0..nroad).filter(|&n| junction[n]) {
         arms_n[(deg[n] - 3).min(2)] += 1;
         // Arm directions ~0.3 cell out, from each edge at this node.
@@ -808,25 +809,32 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
             }
         }
         let shape = if straight { 0 } else if smallest < 60.0 { 1 } else { 2 };
+        shape_of[n] = shape;
         shape_n[shape] += 1;
         shape_arms[shape][(deg[n] - 3).min(2)] += 1;
     }
-    let (mut stub_half, mut stub_two) = (0usize, 0usize);
-    for &(u, v, l, ..) in &edges {
+    let (mut stub_half, mut stub_two, mut stub_doubled) = (0usize, 0usize, 0usize);
+    for &(u, v, l, r, i0, i1) in &edges {
         if junction[u] && junction[v] {
             stub_half += (l < 0.5 * MI) as usize;
             stub_two += (l < 2.0 * MI) as usize;
+            // (Of the short ones, those along a stretch two roads share: they cross at every point.)
+            if l < 0.5 * MI {
+                let m = along_from(&pts[r], i0, i1, 0.5 * l);
+                stub_doubled += pts.iter().enumerate().any(|(o, q)| o != r && q.windows(2).any(|w| seg_dist(m, w[0], w[1]) < 60.0)) as usize;
+            }
         }
     }
     // Two roads passing through one place (neither ends there).
     let x_cross = (0..nroad)
         .filter(|&n| !attached(spots.pos[n]) && at_node[n].iter().filter(|&&(r, i)| i != 0 && i != pts[r].len() - 1).map(|e| e.0).collect::<std::collections::HashSet<_>>().len() >= 2)
         .count();
-    let near_cross = (0..nroad).filter(|&n| junction[n] && crossings.iter().any(|c| dist(c.0, spots.pos[n]) <= 0.5 * MI)).count();
+    let near: Vec<usize> = (0..nroad).filter(|&n| junction[n] && crossings.iter().any(|c| dist(c.0, spots.pos[n]) <= 0.5 * MI)).collect();
+    let near_cross = near.len();
     let njunc = junction.iter().filter(|j| **j).count();
     say!("  junctions outside settlements: {njunc} (3 arms {}, 4 arms {}, 5+ {})", arms_n[0], arms_n[1], arms_n[2]);
     say!(
-        "    shape: T/cross {} (3 arms {}, 4 arms {}), Y {} (3 arms {}), other {} (3 arms {}); between junctions: < 0.5 mi {stub_half}, < 2 mi {stub_two}; two roads through one place {x_cross}; within 0.5 mi of a river crossing {near_cross}",
+        "    shape: T/cross {} (3 arms {}, 4 arms {}), Y {} (3 arms {}), other {} (3 arms {}); between junctions: < 0.5 mi {stub_half} ({stub_doubled} on shared stretches), < 2 mi {stub_two}; two roads through one place {x_cross}; within 0.5 mi of a river crossing {near_cross}",
         shape_n[0],
         shape_arms[0][0],
         shape_arms[0][1],
@@ -835,6 +843,15 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
         shape_n[2],
         shape_arms[2][0]
     );
+    // (The ones near a crossing, with the junction's shape: 0 T/cross, 1 Y, 2 other.)
+    let top = std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    for &(u, v, l, r, ..) in edges.iter().filter(|e| junction[e.0] && junction[e.1] && e.2 < 0.5 * MI).take(top) {
+        say!("      stub of {l:.0} ft on road {r} from ({:.0}, {:.0}) ({} arms) to ({:.0}, {:.0}) ({} arms)", spots.pos[u][0], spots.pos[u][1], deg[u], spots.pos[v][0], spots.pos[v][1], deg[v]);
+    }
+    for &n in near.iter().take(top) {
+        let c = crossings.iter().map(|c| dist(c.0, spots.pos[n])).fold(f64::MAX, f64::min);
+        say!("      junction at ({:.0}, {:.0}), {} arms, shape {}: a crossing {:.0} ft away", spots.pos[n][0], spots.pos[n][1], deg[n], shape_of[n], c);
+    }
     // --- Roads running beside roads: share of each class's length (sampled every 200 ft, more than
     // a mile from its ends) within 1,500 ft of another road, where the two share no place within a mile.
     const GRID: f64 = 3000.0;
@@ -896,7 +913,7 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
     json!({
         "trips": trips_all, "trips_dry": trips_dry,
         "length_mi": { "total": total / MI, "king": by_class[0] / MI, "road": by_class[1] / MI, "track": by_class[2] / MI, "mst": mst / MI, "ratio": total / mst.max(1.0) },
-        "junctions": { "n": njunc, "arms": arms_n, "shape_t_cross": shape_n[0], "shape_y": shape_n[1], "shape_other": shape_n[2], "stubs_half_mi": stub_half, "stubs_2_mi": stub_two, "x_crossings": x_cross, "near_crossing": near_cross },
+        "junctions": { "n": njunc, "arms": arms_n, "shape_t_cross": shape_n[0], "shape_y": shape_n[1], "shape_other": shape_n[2], "stubs_half_mi": stub_half, "stubs_half_mi_shared": stub_doubled, "stubs_2_mi": stub_two, "x_crossings": x_cross, "near_crossing": near_cross },
         "crossings": { "n": crossings.len(), "bridges": kind_n[0], "fords": kind_n[1], "ferries": kind_n[2], "under_45": under(0.707), "under_30": under(0.5), "within_1_mi": within(MI), "within_3_mi": within(3.0 * MI) },
         "beside_pct": beside_pct, "gates": gate_json, "gates_mean": gate_mean, "tiers": tier_n,
     })

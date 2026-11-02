@@ -9,6 +9,9 @@
 //! 3. Segments between junctions; stretches steeper than the class's maximum grade are
 //!    re-routed on a 4× finer grid under a hard per-step grade limit, which is what produces
 //!    switchbacks. A grade-limited height profile then fixes cut and fill.
+//! 3b. Junctions away from settlements are squared (`square_junctions`): the straightest pair
+//!    of roads runs through, the others meet it square (Ts and crossroads, a fork only where
+//!    no pair runs straight), none closer than half a mile to another or to a river crossing.
 //! 4. Crossings (bridge / ford / ferry) where roads meet rivers; waystations about every
 //!    day's travel along the main roads.
 
@@ -372,7 +375,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
         roads.push(RoadPath { class: *class, pts: pts.iter().map(|p| [p[0] * cell, p[1] * cell]).collect(), z, wander, stroke: *stroke });
     }
 
-    // Junctions outside settlements become Ys.
+    // Junctions outside settlements become Ts and crossroads, clear of river crossings.
     let dry_ft = |x: f64, y: f64| {
         let (i, j) = (crate::core::round(x / cell) as i64, crate::core::round(y / cell) as i64);
         i >= 0 && j >= 0 && (i as usize) < w && (j as usize) < h && passable_fn(inp)(j as usize * w + i as usize)
@@ -382,7 +385,16 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     drop_parallel(&mut roads, &towns);
     drop_shortcuts(&mut roads, &towns);
     join_through(&mut roads, &towns, cell, &dry_ft);
-    merge_junctions(&mut roads, &towns, cell, &dry_ft);
+    let ground_ft = |p: [f64; 2]| hgrid.z([p[0] / cell, p[1] / cell]);
+    let river_ft = |x: f64, y: f64| {
+        let (i, j) = (crate::core::round(x / cell) as i64, crate::core::round(y / cell) as i64);
+        if i < 0 || j < 0 || i as usize >= w || j as usize >= h {
+            return None;
+        }
+        let q = inp.hydro.discharge[j as usize * w + i as usize] as f64;
+        (q >= river_q).then(|| crate::lod::rivers::width_ft(q))
+    };
+    square_junctions(&mut roads, &towns, cell, &dry_ft, &ground_ft, &river_ft);
     drop_parallel(&mut roads, &towns);
     join_through(&mut roads, &towns, cell, &dry_ft);
 
@@ -1767,10 +1779,6 @@ pub fn level_profiles(pts: &[Vec<[f64; 2]>], class: &[RoadClass], terrain: &[Vec
     done.into_iter().map(|z| z.unwrap_or_default()).collect()
 }
 
-/// A road's end at a junction: (road, at its start, index of a point some way along it, that
-/// point, heading from it into the junction).
-type Leg = (usize, bool, usize, [f64; 2], [f64; 2]);
-
 fn unit2(v: [f64; 2]) -> [f64; 2] {
     let l = crate::core::sqrt(v[0] * v[0] + v[1] * v[1]).max(1e-9);
     [v[0] / l, v[1] / l]
@@ -1778,83 +1786,6 @@ fn unit2(v: [f64; 2]) -> [f64; 2] {
 
 fn dot2(a: [f64; 2], b: [f64; 2]) -> f64 {
     a[0] * b[0] + a[1] * b[1]
-}
-
-/// Each road end at junction `j`: its point `reach` ft along it (or before its middle).
-fn legs_at(roads: &[RoadPath], list: &[(usize, bool)], j: [f64; 2], reach: f64) -> Vec<Leg> {
-    list.iter()
-        .map(|&(ri, start)| {
-            let pts: Vec<[f64; 2]> = if start { roads[ri].pts.clone() } else { roads[ri].pts.iter().rev().copied().collect() };
-            let total: f64 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
-            let want = reach.min(0.45 * total);
-            let (mut acc, mut idx) = (0.0, 1);
-            while idx + 1 < pts.len() && acc + dist(pts[idx - 1], pts[idx]) < want {
-                acc += dist(pts[idx - 1], pts[idx]);
-                idx += 1;
-            }
-            let (a, b) = (pts[idx], pts[(idx + 1).min(pts.len() - 1)]);
-            let heading = if idx + 1 < pts.len() { unit2([a[0] - b[0], a[1] - b[1]]) } else { unit2([j[0] - a[0], j[1] - a[1]]) };
-            (ri, start, idx, a, heading)
-        })
-        .collect()
-}
-
-/// The point where roads to `pts` (with weights) joined would be shortest (Weiszfeld), from `from`.
-fn fermat(pts: &[([f64; 2], f64)], from: [f64; 2]) -> [f64; 2] {
-    let mut m = from;
-    for _ in 0..60 {
-        let (mut sx, mut sy, mut sw) = (0.0, 0.0, 0.0);
-        for &(p, w) in pts {
-            let d = dist(m, p).max(1.0);
-            sx += w * p[0] / d;
-            sy += w * p[1] / d;
-            sw += w / d;
-        }
-        m = [sx / sw, sy / sw];
-    }
-    m
-}
-
-/// A cubic from `p0` (leaving along `out`) to a leg's point (arriving along its heading
-/// reversed: the road carries on the way it went), points at least ~60 ft apart (`tidy`
-/// drops closer ones).
-fn leg_curve(p0: [f64; 2], out: [f64; 2], l: &Leg, cell: f64) -> Vec<[f64; 2]> {
-    let p3 = l.3;
-    let span = dist(p0, p3);
-    let (c1, c2) = ([p0[0] + out[0] * 0.4 * span, p0[1] + out[1] * 0.4 * span], [p3[0] + l.4[0] * 0.4 * span, p3[1] + l.4[1] * 0.4 * span]);
-    let n = (span / (0.05 * cell).max(60.0)).ceil().clamp(3.0, 30.0) as usize;
-    (0..=n)
-        .map(|i| {
-            let t = i as f64 / n as f64;
-            let u = 1.0 - t;
-            let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-            [a * p0[0] + b * c1[0] + c * c2[0] + d * p3[0], a * p0[1] + b * c1[1] + c * c2[1] + d * p3[1]]
-        })
-        .collect()
-}
-
-/// Replace a road's end before its leg point with `curve` (from the new end to the leg point),
-/// the level easing from `z_end` there to the road's at the leg point.
-fn reshape_end(r: &mut RoadPath, l: &Leg, curve: &[[f64; 2]], z_end: f32) {
-    if !l.1 {
-        r.pts.reverse();
-        r.z.reverse();
-        r.wander.reverse();
-    }
-    let z_leg = r.z[l.2];
-    let k = curve.len() - 1;
-    let mut pts: Vec<[f64; 2]> = curve[..k].to_vec();
-    let mut z: Vec<f32> = (0..k).map(|i| z_end + (z_leg - z_end) * i as f32 / k.max(1) as f32).collect();
-    let mut wander = vec![0.0f32; k];
-    pts.extend_from_slice(&r.pts[l.2..]);
-    z.extend_from_slice(&r.z[l.2..]);
-    wander.extend_from_slice(&r.wander[l.2..]);
-    (r.pts, r.z, r.wander) = (pts, z, wander);
-    if !l.1 {
-        r.pts.reverse();
-        r.z.reverse();
-        r.wander.reverse();
-    }
 }
 
 /// Where a settlement or junction is.
@@ -1920,9 +1851,8 @@ fn join_through(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f64,
         // (A drawn road and another keep their own names: they stay two.)
         let Some((&(i, si), &(k, sk))) = at.iter().filter(|(key, v)| key.0 != i64::MIN && v.len() == 2 && v[0].0 != v[1].0 && roads[v[0].0].stroke == roads[v[1].0].stroke).map(|(_, v)| (&v[0], &v[1])).next() else { break };
         // Road i ends at the point, road k starts there.
-        let flip = |r: &RoadPath| RoadPath { class: r.class, pts: r.pts.iter().rev().copied().collect(), z: r.z.iter().rev().copied().collect(), wander: r.wander.iter().rev().copied().collect(), stroke: r.stroke };
-        let a = if si { flip(&roads[i]) } else { roads[i].clone() };
-        let b = if sk { roads[k].clone() } else { flip(&roads[k]) };
+        let a = if si { flipped(&roads[i]) } else { roads[i].clone() };
+        let b = if sk { roads[k].clone() } else { flipped(&roads[k]) };
         let joint = a.pts.len() - 1;
         let mut joined = RoadPath { class: a.class.min(b.class), pts: a.pts, z: a.z, wander: a.wander, stroke: a.stroke };
         joined.pts.extend_from_slice(&b.pts[1..]);
@@ -2021,154 +1951,542 @@ fn drop_parallel(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
     });
 }
 
-/// Roads routed on the grid meet at a cell, often at a sharp V: two roads leaving a junction
-/// a few tens of degrees apart, so travel between them doubles back. At junctions away from
-/// settlements, roads leaving less than 100° apart merge as a Y:
-/// - where four or more meet, the two closest merge first into a new stem from the junction
-///   (their fork where roads to the junction and to them would be shortest, the stem weighted
-///   1.6: they part about 37° either side of its line), until three are left;
-/// - of three, the two closest (the branches) merge into the third (the trunk): the junction
-///   moves to that fork, the branches curve in along the trunk's line and the trunk leaves
-///   along it; where all three leave the same side (no trunk) it moves to where they meet at
-///   even angles instead, or (where they fan out from one of them) up that one.
-///
-/// Points on each road are taken 0.6 cell out, else nearer, until every road reaches the fork
-/// head on. Points in ft; a junction stays as it is where the new stretches would cross water
-/// or enter a settlement.
-fn merge_junctions(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f64, dry: &dyn Fn(f64, f64) -> bool) {
+/// How far (ft) a junction keeps from where a road crosses a river, beyond the river's half
+/// width and `WET_STRAY` cells (the channel wanders within its cell).
+const JUNCTION_WET: f64 = 0.5 * 5280.0;
+const WET_STRAY: f64 = 0.6;
+/// Junctions closer than this (ft) along a road are merged.
+const JUNCTION_GAP: f64 = 0.5 * 5280.0;
+/// Two legs within 35° of straight make a through road.
+const THROUGH: f64 = -0.819;
+
+/// What squaring junctions needs: settlements (centre, trim radius), the cell (ft), dry land and
+/// the ground (ft), and where roads cross rivers (with each river's half width).
+struct Square<'a> {
+    towns: &'a [([f64; 2], f64)],
+    cell: f64,
+    dry: &'a dyn Fn(f64, f64) -> bool,
+    ground: &'a dyn Fn([f64; 2]) -> f64,
+    wet: Vec<([f64; 2], f64)>,
+}
+
+impl Square<'_> {
+    /// Far enough from every river crossing.
+    fn clear(&self, p: [f64; 2]) -> bool {
+        self.wet.iter().all(|&(c, hw)| dist(c, p) >= JUNCTION_WET + hw + WET_STRAY * self.cell)
+    }
+    /// Where a road end would count as a settlement's (`end_key`), with some room.
+    fn in_town(&self, p: [f64; 2]) -> bool {
+        self.towns.iter().any(|&(c, r)| dist(c, p) < 1.2 * r + 100.0)
+    }
+    /// A ramp from `z0` to `z1` along `curve` that the class can climb and that stays near the
+    /// ground (the profile is fitted again later; this only keeps a new stretch off a ridge).
+    fn ramp_ok(&self, curve: &[[f64; 2]], z0: f32, z1: f32, gmax: f64) -> bool {
+        let s = arc(curve);
+        let len = s[s.len() - 1].max(1.0);
+        if ((z1 - z0).abs() as f64) > gmax * len + 5.0 {
+            return false;
+        }
+        curve.iter().zip(&s).all(|(c, &u)| ((self.ground)(*c) - (z0 as f64 + (z1 - z0) as f64 * u / len)).abs() <= 25.0 + gmax * u.min(len - u))
+    }
+}
+
+/// Mapped river cells (centres, ft) the roads step onto, each with half its river's width.
+fn river_hits(roads: &[RoadPath], cell: f64, river: &dyn Fn(f64, f64) -> Option<f64>) -> Vec<([f64; 2], f64)> {
+    let mut seen: crate::core::hash::FastSet<(i64, i64)> = Default::default();
+    let mut out = Vec::new();
+    for r in roads {
+        for pair in r.pts.windows(2) {
+            let n = (dist(pair[0], pair[1]) / (0.1 * cell)).ceil().max(1.0) as usize;
+            for k in 0..=n {
+                let t = k as f64 / n as f64;
+                let p = [pair[0][0] + (pair[1][0] - pair[0][0]) * t, pair[0][1] + (pair[1][1] - pair[0][1]) * t];
+                let c = (crate::core::round(p[0] / cell) as i64, crate::core::round(p[1] / cell) as i64);
+                if let Some(width) = river(p[0], p[1]) {
+                    if seen.insert(c) {
+                        out.push(([c.0 as f64 * cell, c.1 as f64 * cell], 0.5 * width));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn sub2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+/// A road the other way round.
+fn flipped(r: &RoadPath) -> RoadPath {
+    let (pts, z, wander) = (r.pts.iter().rev().copied().collect(), r.z.iter().rev().copied().collect(), r.wander.iter().rev().copied().collect());
+    RoadPath { class: r.class, pts, z, wander, stroke: r.stroke }
+}
+
+/// A value per point (`s`: the line's `arc`) at `t` along it.
+fn val_at(v: &[f32], s: &[f64], t: f64) -> f32 {
+    let k = s.partition_point(|&x| x < t).clamp(1, s.len() - 1);
+    let f = ((t - s[k - 1]) / (s[k] - s[k - 1]).max(1e-9)).clamp(0.0, 1.0);
+    v[k - 1] + (v[k] - v[k - 1]) * f as f32
+}
+
+/// A road cut at `cuts` (distance along it, the point there; in order): the pieces, each
+/// starting and ending exactly on its cut points.
+fn split_road(r: &RoadPath, s: &[f64], cuts: &[(f64, [f64; 2])]) -> Vec<RoadPath> {
+    let n = r.pts.len();
+    let mut bounds: Vec<(f64, [f64; 2], f32, f32)> = vec![(0.0, r.pts[0], r.z[0], r.wander[0])];
+    bounds.extend(cuts.iter().map(|&(t, q)| (t, q, val_at(&r.z, s, t), val_at(&r.wander, s, t))));
+    bounds.push((s[n - 1], r.pts[n - 1], r.z[n - 1], r.wander[n - 1]));
+    bounds
+        .windows(2)
+        .map(|b| {
+            let (lo, hi) = (b[0], b[1]);
+            let mid = (0..n).filter(|&k| s[k] > lo.0 + 5.0 && s[k] < hi.0 - 5.0);
+            let pts = std::iter::once(lo.1).chain(mid.clone().map(|k| r.pts[k])).chain(std::iter::once(hi.1)).collect();
+            let z = std::iter::once(lo.2).chain(mid.clone().map(|k| r.z[k])).chain(std::iter::once(hi.2)).collect();
+            let wander = std::iter::once(lo.3).chain(mid.map(|k| r.wander[k])).chain(std::iter::once(hi.3)).collect();
+            RoadPath { class: r.class, pts, z, wander, stroke: r.stroke }
+        })
+        .collect()
+}
+
+/// A branch's way in from `p` (leaving along `h`) to `q` on the road (`n`: the road's normal on
+/// `p`'s side): a cubic to a point a little out from `q` (0.6 of `p`'s offset, at most 0.35 cell),
+/// arriving square, then straight in. Both ends included, points ~60 ft apart or more.
+fn square_curve(p: [f64; 2], h: [f64; 2], q: [f64; 2], n: [f64; 2], cell: f64) -> Vec<[f64; 2]> {
+    let d = (0.6 * dot2(n, sub2(p, q))).min(0.35 * cell);
+    let a = [q[0] + n[0] * d, q[1] + n[1] * d];
+    let span = dist(p, a);
+    let (c1, c2) = ([p[0] + h[0] * 0.4 * span, p[1] + h[1] * 0.4 * span], [a[0] + n[0] * 0.4 * span, a[1] + n[1] * 0.4 * span]);
+    let step = (0.05 * cell).max(60.0);
+    let m = (span / step).ceil().clamp(3.0, 30.0) as usize;
+    let mut out: Vec<[f64; 2]> = (0..=m)
+        .map(|i| {
+            let t = i as f64 / m as f64;
+            let u = 1.0 - t;
+            let (w0, w1, w2, w3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            [w0 * p[0] + w1 * c1[0] + w2 * c2[0] + w3 * a[0], w0 * p[1] + w1 * c1[1] + w2 * c2[1] + w3 * a[1]]
+        })
+        .collect();
+    let k = (d / step).ceil().max(1.0) as usize;
+    out.extend((1..=k).map(|i| {
+        let f = i as f64 / k as f64;
+        [a[0] + (q[0] - a[0]) * f, a[1] + (q[1] - a[1]) * f]
+    }));
+    out
+}
+
+/// Where a branch meets the through road: `reach` ft along the branch (from the junction) it
+/// leaves its line at `p` and curves in to `q`, `at` along the through road, arriving square.
+#[derive(Clone)]
+struct Fit {
+    reach: f64,
+    at: f64,
+    q: [f64; 2],
+    p: [f64; 2],
+    /// From `p` to `q`.
+    curve: Vec<[f64; 2]>,
+    z_p: f32,
+    /// On the left of the through road (as it runs).
+    left: bool,
+    clear: bool,
+}
+
+/// How branch `b` (running out from the junction) best meets through road `t` (`ts`: its arc):
+/// the nearest reach whose point falls on the road at least 0.1 cell off it, meeting it where it
+/// falls (or slid along it, up to 0.75 cell, to keep clear of river crossings), or at `fixed`
+/// along it. A meeting with no crossing near beats one with, a shorter reach a longer, and no
+/// meeting doubles back, enters water or a settlement, or climbs too steeply.
+fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option<f64>, min_reach: f64) -> Option<Fit> {
+    let cell = sq.cell;
+    let bs = arc(&b.pts);
+    let (blen, total) = (bs[bs.len() - 1], ts[ts.len() - 1]);
+    let gmax = b.class.max_grade().min(t.class.max_grade());
+    let mut fallback: Option<Fit> = None;
+    for f in [0.4, 0.55, 0.7, 0.9, 1.15, 1.5, 2.0, 2.5] {
+        let reach = (f * cell).max(min_reach);
+        if reach > 0.5 * blen {
+            break;
+        }
+        let p = point_at(&b.pts, &bs, reach);
+        let (at0, off) = project(p, &t.pts, ts);
+        if off < 0.15 * cell {
+            continue;
+        }
+        // Heading at `p` towards the junction.
+        let h = unit2(sub2(point_at(&b.pts, &bs, reach - 0.03 * cell), p));
+        let z_p = val_at(&b.z, &bs, reach);
+        let slides: &[f64] = if fixed.is_some() { &[0.0] } else { &[0.0, 0.15, -0.15, 0.3, -0.3, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0, 1.3, -1.3] };
+        for &d in slides {
+            let at = fixed.unwrap_or(at0 + d * cell);
+            if at < 0.15 * cell || at > total - 0.15 * cell {
+                continue;
+            }
+            let q = point_at(&t.pts, ts, at);
+            let clear = sq.clear(q);
+            if (!clear && fallback.is_some()) || sq.in_town(q) {
+                continue;
+            }
+            let tan = unit2(sub2(point_at(&t.pts, ts, at + 40.0), point_at(&t.pts, ts, at - 40.0)));
+            let left = tan[0] * (p[1] - q[1]) - tan[1] * (p[0] - q[0]) > 0.0;
+            let n = if left { [-tan[1], tan[0]] } else { [tan[1], -tan[0]] };
+            if dot2(unit2(sub2(q, p)), h) < -0.1 || dot2(n, sub2(p, q)) < 0.12 * cell {
+                continue;
+            }
+            let curve = square_curve(p, h, q, n, cell);
+            let k = curve.len() - 1;
+            // Dry, out of settlements, and on its own side of the road until it meets it.
+            if !curve.iter().all(|c| (sq.dry)(c[0], c[1]) && !sq.in_town(*c)) || !curve[..k - 1].iter().all(|c| dot2(n, sub2(*c, q)) > 5.0) {
+                continue;
+            }
+            if !sq.ramp_ok(&curve, z_p, val_at(&t.z, ts, at), gmax) {
+                continue;
+            }
+            let fit = Fit { reach, at, q, p, curve, z_p, left, clear };
+            if clear {
+                return Some(fit);
+            }
+            fallback.get_or_insert(fit);
+        }
+    }
+    fallback
+}
+
+/// The branch with its end from `fit.p` replaced by the curve in to `fit.q` (running out from
+/// the junction, like `b`), the level easing from `z_q` there to the branch's at `p`.
+fn rejoined(b: &RoadPath, fit: &Fit, z_q: f32) -> RoadPath {
+    let bs = arc(&b.pts);
+    let k = fit.curve.len() - 1;
+    let mut pts: Vec<[f64; 2]> = fit.curve.iter().rev().copied().collect();
+    (pts[0], pts[k]) = (fit.q, fit.p);
+    let mut z: Vec<f32> = (0..=k).map(|i| z_q + (fit.z_p - z_q) * i as f32 / k as f32).collect();
+    let mut wander = vec![0.0f32; k + 1];
+    let rest = (0..b.pts.len()).filter(|&i| bs[i] > fit.reach + 5.0);
+    pts.extend(rest.clone().map(|i| b.pts[i]));
+    z.extend(rest.clone().map(|i| b.z[i]));
+    wander.extend(rest.map(|i| b.wander[i]));
+    RoadPath { class: b.class, pts, z, wander, stroke: b.stroke }
+}
+
+/// Road ends by point (exact): (road, at its start).
+fn ends_by_point(roads: &[RoadPath]) -> std::collections::BTreeMap<(u64, u64), Vec<(usize, bool)>> {
     let key = |p: [f64; 2]| (p[0].to_bits(), p[1].to_bits());
-    // Road ends by junction point: (road, at its start).
     let mut ends: std::collections::BTreeMap<(u64, u64), Vec<(usize, bool)>> = Default::default();
     for (ri, r) in roads.iter().enumerate() {
         if r.pts.len() >= 2 {
             ends.entry(key(r.pts[0])).or_default().push((ri, true));
-            ends.entry(key(*r.pts.last().unwrap())).or_default().push((ri, false));
+            ends.entry(key(r.pts[r.pts.len() - 1])).or_default().push((ri, false));
         }
     }
-    let fits = |m: [f64; 2], j: [f64; 2]| dist(m, j) > 0.03 * cell && dry(m[0], m[1]) && !towns.iter().any(|&(c, r)| dist(c, m) < r);
-    // A road reaches `m` from its leg point without turning back.
-    let ahead = |m: [f64; 2], l: &Leg| dot2(l.4, unit2([m[0] - l.3[0], m[1] - l.3[1]])) > 0.3;
-    let all_dry = |c: &[[f64; 2]]| c.iter().all(|p| dry(p[0], p[1]));
-    for (k, mut list) in ends {
-        let j = [f64::from_bits(k.0), f64::from_bits(k.1)];
-        if list.len() < 3 || towns.iter().any(|&(t, r)| dist(t, j) < r) {
-            continue;
-        }
-        let z_j = {
-            let (ri, start) = list[0];
-            if start { roads[ri].z[0] } else { *roads[ri].z.last().unwrap() }
-        };
-        // Four or more: merge the closest two into a stem, again and again.
-        'pairs: while list.len() >= 4 {
-            for frac in [0.6, 0.4, 0.25] {
-                let legs = legs_at(roads, &list, j, frac * cell);
-                let dir = |l: &Leg| unit2([l.3[0] - j[0], l.3[1] - j[1]]);
-                let mut best: Option<(f64, usize, usize)> = None;
-                for a in 0..legs.len() {
-                    for b in a + 1..legs.len() {
-                        let c = dot2(dir(&legs[a]), dir(&legs[b]));
-                        if best.is_none_or(|x| c > x.0) {
-                            best = Some((c, a, b));
-                        }
-                    }
-                }
-                let Some((c, b1, b2)) = best else { break 'pairs };
-                if c < libm::cos(100f64.to_radians()) {
-                    break 'pairs;
-                }
-                let m = fermat(&[(j, 1.6), (legs[b1].3, 1.0), (legs[b2].3, 1.0)], j);
-                let away = unit2([m[0] - j[0], m[1] - j[1]]);
-                let ok = fits(m, j)
-                    && [b1, b2].iter().all(|&i| ahead(m, &legs[i]) && dot2(unit2([legs[i].3[0] - m[0], legs[i].3[1] - m[1]]), away) > 0.2);
-                if !ok {
-                    continue;
-                }
-                let curves = [leg_curve(m, away, &legs[b1], cell), leg_curve(m, away, &legs[b2], cell)];
-                let n = (dist(j, m) / (0.05 * cell).max(60.0)).ceil().max(1.0) as usize;
-                let stem: Vec<[f64; 2]> = (0..=n).map(|i| [j[0] + (m[0] - j[0]) * i as f64 / n as f64, j[1] + (m[1] - j[1]) * i as f64 / n as f64]).collect();
-                if !all_dry(&curves[0]) || !all_dry(&curves[1]) || !all_dry(&stem) {
-                    continue;
-                }
-                for (i, curve) in [b1, b2].iter().zip(&curves) {
-                    let l = legs[*i];
-                    reshape_end(&mut roads[l.0], &l, curve, z_j);
-                }
-                let class = roads[legs[b1].0].class.min(roads[legs[b2].0].class);
-                let stroke = Some(roads[legs[b1].0].stroke).filter(|s| *s == roads[legs[b2].0].stroke).flatten();
-                roads.push(RoadPath { class, z: vec![z_j; stem.len()], wander: vec![0.0; stem.len()], pts: stem, stroke });
-                list.retain(|e| *e != (legs[b1].0, legs[b1].1) && *e != (legs[b2].0, legs[b2].1));
-                list.push((roads.len() - 1, true));
-                continue 'pairs;
+    ends
+}
+
+/// Junctions away from settlements become the joins of real roads. Grid routes meet at a cell,
+/// often at a sharp V (two roads leaving a few tens of degrees apart, so travel between them
+/// doubles back), and roads sharing a bridge part right on the bank. At each junction:
+/// - the straightest pair of roads (within 35° of straight; the better class first) is the
+///   through road: one line, its bend at the junction rounded (`fillet`), otherwise as it was;
+/// - every other road (a branch) leaves its line some way out and curves in to meet the through
+///   road square, where its point there falls on it (`fit_branch`): the join slides along the
+///   through road towards where the branch comes from, so nothing runs alongside and doubles
+///   back. Joins are kept `JUNCTION_WET` from river crossings (sliding further, or reaching
+///   further out along the branch), so roads sharing a bridge stay one road off it;
+/// - two branches meeting it on opposite sides within `JUNCTION_GAP` of each other meet it at one
+///   point (a crossroads); two on one side that close join each other further out (the lesser
+///   ends on the greater, and that junction is squared in its turn);
+/// - where no pair runs straight (equal roads parting in open ground) the fork stays.
+///
+/// Then junctions closer than `JUNCTION_GAP` along a road are merged into one (and squared again).
+/// Points in ft; nothing is reshaped within a settlement's trim radius, over water or where the
+/// new stretch could not keep to its grade (levels ease in as the profile is fitted later).
+fn square_junctions(
+    roads: &mut Vec<RoadPath>,
+    towns: &[([f64; 2], f64)],
+    cell: f64,
+    dry: &dyn Fn(f64, f64) -> bool,
+    ground: &dyn Fn([f64; 2]) -> f64,
+    river: &dyn Fn(f64, f64) -> Option<f64>,
+) {
+    let mut sq = Square { towns, cell, dry, ground, wet: river_hits(roads, cell, river) };
+    // Points already squared (or left as they are) are not looked at again.
+    let mut settled: std::collections::BTreeSet<(u64, u64)> = Default::default();
+    for round in 0..4 {
+        loop {
+            let ends = ends_by_point(roads);
+            let Some((k, list)) = ends.into_iter().find(|(k, l)| l.len() >= 3 && !settled.contains(k)) else { break };
+            settled.insert(k);
+            let j = [f64::from_bits(k.0), f64::from_bits(k.1)];
+            for q in square_at(roads, j, &list, &sq) {
+                settled.insert((q[0].to_bits(), q[1].to_bits()));
             }
+        }
+        if round == 3 || !close_junctions(roads, &sq) {
             break;
         }
-        if list.len() != 3 {
+        sq.wet = river_hits(roads, cell, river);
+    }
+}
+
+/// Squares one junction (`square_junctions`); returns the points branches now meet the through
+/// road at (none where it is left as it was).
+fn square_at(roads: &mut Vec<RoadPath>, j: [f64; 2], list: &[(usize, bool)], sq: &Square) -> Vec<[f64; 2]> {
+    let cell = sq.cell;
+    let mut ids: Vec<usize> = list.iter().map(|e| e.0).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.len() != list.len() || list.iter().any(|e| roads[e.0].stroke.is_some()) || sq.towns.iter().any(|&(t, r)| dist(t, j) < r) {
+        return Vec::new();
+    }
+    let legs: Vec<RoadPath> = list.iter().map(|&(ri, start)| if start { roads[ri].clone() } else { flipped(&roads[ri]) }).collect();
+    let dir: Vec<[f64; 2]> = legs
+        .iter()
+        .map(|l| {
+            let s = arc(&l.pts);
+            unit2(sub2(point_at(&l.pts, &s, (0.4 * cell).min(0.45 * s[s.len() - 1])), j))
+        })
+        .collect();
+    // The through road: of pairs near straight, the best class, then the straightest.
+    let mut best: Option<((RoadClass, RoadClass, f64), usize, usize)> = None;
+    for a in 0..legs.len() {
+        for b in a + 1..legs.len() {
+            let c = dot2(dir[a], dir[b]);
+            let key = (legs[a].class.max(legs[b].class), legs[a].class.min(legs[b].class), c);
+            if c <= THROUGH && best.is_none_or(|x| key.0 < x.0 .0 || (key.0 == x.0 .0 && (key.1 < x.0 .1 || (key.1 == x.0 .1 && key.2 < x.0 .2)))) {
+                best = Some((key, a, b));
+            }
+        }
+    }
+    let Some((_, a, b)) = best else { return Vec::new() };
+    let mut t = flipped(&legs[a]);
+    let joint = t.pts.len() - 1;
+    t.pts.extend_from_slice(&legs[b].pts[1..]);
+    t.z.extend_from_slice(&legs[b].z[1..]);
+    t.wander.extend_from_slice(&legs[b].wander[1..]);
+    t.class = legs[a].class.min(legs[b].class);
+    t.wander[joint] = 0.0;
+    fillet(&mut t, joint, cell, sq.dry);
+    let ts = arc(&t.pts);
+    let at_j = project(j, &t.pts, &ts).0;
+    let branches: Vec<usize> = (0..legs.len()).filter(|&i| i != a && i != b).collect();
+    let mut fits: Vec<Fit> = Vec::new();
+    for &i in &branches {
+        let Some(f) = fit_branch(sq, &t, &ts, &legs[i], None, 0.0) else { return Vec::new() };
+        fits.push(f);
+    }
+    // Branches near each other: opposite sides meet at one point, one side join further out.
+    // (`feeds[i]`: branch i ends on branch feeds[i] at that one's `p`, which splits it.)
+    let mut feeds: Vec<Option<usize>> = vec![None; fits.len()];
+    let mut order: Vec<usize> = (0..fits.len()).collect();
+    order.sort_by(|&x, &y| fits[x].at.total_cmp(&fits[y].at).then(x.cmp(&y)));
+    for w in 0..order.len().saturating_sub(1) {
+        let (x, y) = (order[w], order[w + 1]);
+        if feeds[x].is_some() || feeds[y].is_some() || (fits[x].at - fits[y].at).abs() >= JUNCTION_GAP || fits[x].at == fits[y].at {
             continue;
         }
-        'reach: for frac in [0.6, 0.4, 0.25] {
-            let legs = legs_at(roads, &list, j, frac * cell);
-            // The branches: the two legs leaving closest together.
-            let dir = |l: &Leg| unit2([l.3[0] - j[0], l.3[1] - j[1]]);
-            let pairs = [(0, 1, 2), (0, 2, 1), (1, 2, 0)];
-            let &(b1, b2, t) = pairs.iter().max_by(|x, y| dot2(dir(&legs[x.0]), dir(&legs[x.1])).total_cmp(&dot2(dir(&legs[y.0]), dir(&legs[y.1])))).unwrap();
-            if dot2(dir(&legs[b1]), dir(&legs[b2])) < libm::cos(100f64.to_radians()) {
-                break 'reach;
-            }
-            let weighted = |tw: f64| fermat(&[(legs[t].3, tw), (legs[b1].3, 1.0), (legs[b2].3, 1.0)], j);
-            // A Y: each branch comes at the merge point from behind it, along the trunk's line.
-            let m = weighted(1.6);
-            let along = unit2([legs[t].3[0] - m[0], legs[t].3[1] - m[1]]);
-            let y = fits(m, j)
-                && [b1, b2].iter().all(|&i| {
-                    let to = unit2([m[0] - legs[i].3[0], m[1] - legs[i].3[1]]);
-                    dot2(to, along) > 0.2 && ahead(m, &legs[i])
-                });
-            // Else a fork at even angles, or up the road they fan out from.
-            let mut fork: Option<usize> = None;
-            let (m, along) = if y {
-                (m, Some(along))
-            } else {
-                let mut m = weighted(1.0);
-                fork = (0..3).find(|&i| dist(m, legs[i].3) < 0.08 * cell);
-                if let Some(i) = fork {
-                    m = legs[i].3;
-                }
-                if !fits(m, j) || !(0..3).all(|i| Some(i) == fork || ahead(m, &legs[i])) {
-                    continue 'reach;
-                }
-                (m, None)
+        let (bx, by) = (&legs[branches[x]], &legs[branches[y]]);
+        if fits[x].left != fits[y].left {
+            // The better road keeps its join; equal ones meet halfway.
+            let at = match bx.class.cmp(&by.class) {
+                Ordering::Less => fits[x].at,
+                Ordering::Greater => fits[y].at,
+                Ordering::Equal => 0.5 * (fits[x].at + fits[y].at),
             };
-            let curves: Vec<Vec<[f64; 2]>> = legs
-                .iter()
-                .enumerate()
-                .map(|(i, l)| {
-                    if Some(i) == fork {
-                        return vec![m];
+            if let (Some(fx), Some(fy)) = (fit_branch(sq, &t, &ts, bx, Some(at), fits[x].reach), fit_branch(sq, &t, &ts, by, Some(at), fits[y].reach)) {
+                if fx.left != fy.left {
+                    (fits[x], fits[y]) = (fx, fy);
+                    continue;
+                }
+            }
+        } else if same_side(sq, &t, &ts, &legs, &branches, &mut fits, &mut feeds, x, y) {
+            continue;
+        }
+        // Else the lesser (class, then shorter) meets the road far enough from the other.
+        let (keep, mv) = if (bx.class, road_len(bx)) <= (by.class, road_len(by)) { (x, y) } else { (y, x) };
+        let away = if fits[mv].at >= fits[keep].at { 1.0 } else { -1.0 };
+        if let Some(f) = fit_branch(sq, &t, &ts, &legs[branches[mv]], Some(fits[keep].at + away * (JUNCTION_GAP + 0.05 * cell)), 0.0) {
+            if f.clear || !fits[mv].clear {
+                fits[mv] = f;
+            }
+        }
+    }
+    // The through road cut where branches meet it.
+    let mut cuts: Vec<(f64, [f64; 2])> = fits.iter().zip(&feeds).filter(|(_, f)| f.is_none()).map(|(f, _)| (f.at, f.q)).collect();
+    cuts.sort_by(|x, y| x.0.total_cmp(&y.0));
+    cuts.dedup_by(|x, y| x.0 == y.0);
+    let mut pieces = split_road(&t, &ts, &cuts);
+    // Each piece's class: the road it mostly was, and the branches' whose traffic now runs along
+    // most of it.
+    let mut lo = 0.0f64;
+    for (k, p) in pieces.iter_mut().enumerate() {
+        let hi = if k < cuts.len() { cuts[k].0 } else { ts[ts.len() - 1] };
+        let over = |x: f64, y: f64| (hi.min(x.max(y)) - lo.max(x.min(y))).max(0.0);
+        let mut class = if over(0.0, at_j) >= 0.5 * (hi - lo) { legs[a].class } else { legs[b].class };
+        for (i, f) in fits.iter().enumerate() {
+            if feeds[i].is_none() && over(f.at, at_j) > 0.5 * (hi - lo) {
+                class = class.min(legs[branches[i]].class);
+            }
+        }
+        p.class = class;
+        lo = hi;
+    }
+    let mut out: Vec<RoadPath> = pieces;
+    let mut met = Vec::new();
+    for (i, f) in fits.iter().enumerate() {
+        let leg = &legs[branches[i]];
+        match feeds[i] {
+            Some(_) => {
+                let z_q = { let m = &legs[branches[feeds[i].unwrap()]]; val_at(&m.z, &arc(&m.pts), fits[feeds[i].unwrap()].reach) };
+                out.push(rejoined(leg, f, z_q));
+            }
+            None => {
+                let z_q = val_at(&t.z, &ts, f.at);
+                let r = rejoined(leg, f, z_q);
+                met.push(f.q);
+                // A branch another feeds into is cut where that one meets it.
+                if let Some(less) = feeds.iter().position(|x| *x == Some(i)) {
+                    let rs = arc(&r.pts);
+                    let at = project(fits[less].q, &r.pts, &rs).0;
+                    out.extend(split_road(&r, &rs, &[(at, fits[less].q)]));
+                } else {
+                    out.push(r);
+                }
+            }
+        }
+    }
+    let mut gone: Vec<usize> = ids;
+    gone.sort_unstable_by(|x, y| y.cmp(x));
+    for i in gone {
+        roads.remove(i);
+    }
+    roads.extend(out);
+    met
+}
+
+/// Two branches meeting the through road on one side, near each other: the lesser (class, then
+/// shorter) ends on the greater, which meets the road and is met far enough out from it (that
+/// junction is squared in its turn). Returns whether they could.
+#[allow(clippy::too_many_arguments)]
+fn same_side(sq: &Square, t: &RoadPath, ts: &[f64], legs: &[RoadPath], branches: &[usize], fits: &mut [Fit], feeds: &mut [Option<usize>], x: usize, y: usize) -> bool {
+    let cell = sq.cell;
+    let (bx, by) = (&legs[branches[x]], &legs[branches[y]]);
+    let (main, less) = if (bx.class, road_len(bx)) <= (by.class, road_len(by)) { (x, y) } else { (y, x) };
+    let Some(fm) = fit_branch(sq, t, ts, &legs[branches[main]], None, fits[main].reach.max(JUNCTION_GAP + 0.1 * cell)) else { return false };
+    let lb = &legs[branches[less]];
+    let ls = arc(&lb.pts);
+    let reach = fits[less].reach;
+    let link = [point_at(&lb.pts, &ls, reach), fm.p];
+    let n = (dist(link[0], link[1]) / (0.05 * cell).max(60.0)).ceil().max(1.0) as usize;
+    let line: Vec<[f64; 2]> = (0..=n).map(|i| i as f64 / n as f64).map(|f| [link[0][0] + (link[1][0] - link[0][0]) * f, link[0][1] + (link[1][1] - link[0][1]) * f]).collect();
+    let z_main = val_at(&legs[branches[main]].z, &arc(&legs[branches[main]].pts), fm.reach);
+    let z_less = val_at(&lb.z, &ls, reach);
+    if fm.clear && line.iter().all(|c| (sq.dry)(c[0], c[1]) && !sq.in_town(*c)) && sq.ramp_ok(&line, z_less, z_main, lb.class.max_grade()) && reach < 0.45 * ls[ls.len() - 1] {
+        fits[main] = fm;
+        fits[less] = Fit { reach, at: f64::NAN, q: link[1], p: link[0], curve: line, z_p: z_less, left: fits[main].left, clear: true };
+        feeds[less] = Some(main);
+        return true;
+    }
+    false
+}
+
+/// Junctions (away from settlements) joined by a road shorter than `JUNCTION_GAP` become one,
+/// halfway along it: each other road there runs on along it to that point. One such pair at a
+/// time, shortest first; returns whether any were merged.
+fn close_junctions(roads: &mut Vec<RoadPath>, sq: &Square) -> bool {
+    let mut merged = false;
+    loop {
+        let ends = ends_by_point(roads);
+        let key = |p: [f64; 2]| (p[0].to_bits(), p[1].to_bits());
+        let junction = |k: &(u64, u64)| ends[k].len() >= 3 && !sq.towns.iter().any(|&(t, r)| dist(t, [f64::from_bits(k.0), f64::from_bits(k.1)]) < r);
+        let mut short: Vec<(f64, usize)> = roads
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.pts.len() >= 2 && r.stroke.is_none())
+            .filter(|(_, r)| {
+                let (a, b) = (key(r.pts[0]), key(r.pts[r.pts.len() - 1]));
+                a != b && junction(&a) && junction(&b)
+            })
+            .map(|(i, r)| (road_len(r), i))
+            .filter(|&(l, _)| l < JUNCTION_GAP)
+            .collect();
+        short.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+        let mut done = false;
+        for (len, i) in short {
+            let r = &roads[i];
+            let (a, b) = (key(r.pts[0]), key(r.pts[r.pts.len() - 1]));
+            // Not where another road joins the same two (merging would make it a loop).
+            let others: Vec<(usize, bool)> = ends[&a].iter().chain(&ends[&b]).copied().filter(|e| e.0 != i).collect();
+            let mut seen: Vec<usize> = others.iter().map(|e| e.0).collect();
+            seen.sort_unstable();
+            if seen.windows(2).any(|w| w[0] == w[1]) || others.iter().any(|e| roads[e.0].stroke.is_some()) {
+                continue;
+            }
+            let s = arc(&r.pts);
+            let m = point_at(&r.pts, &s, 0.5 * len);
+            if !(sq.dry)(m[0], m[1]) || !sq.clear(m) {
+                continue;
+            }
+            let halves = split_road(r, &s, &[(0.5 * len, m)]);
+            // From each end: the road carrying on along it runs on to the middle; the others
+            // end there on a chord from 0.25 cell back (squared again after).
+            let to_mid = [halves[0].clone(), flipped(&halves[1])];
+            let mut gone = vec![i];
+            let mut add = Vec::new();
+            let mut ok = true;
+            for (side, k) in [a, b].iter().enumerate() {
+                let half = &to_mid[side];
+                let o = half.pts[0];
+                let along = unit2(sub2(point_at(&half.pts, &arc(&half.pts), (0.1 * sq.cell).min(0.5 * len)), o));
+                let ins: Vec<(usize, bool, RoadPath)> =
+                    ends[k].iter().filter(|e| e.0 != i).map(|&(ri, start)| (ri, start, if start { flipped(&roads[ri]) } else { roads[ri].clone() })).collect();
+                let into = |x: &RoadPath| {
+                    let s = arc(&x.pts);
+                    let l = s[s.len() - 1];
+                    unit2(sub2(o, point_at(&x.pts, &s, l - (0.3 * sq.cell).min(0.45 * l))))
+                };
+                let main = (0..ins.len()).max_by(|&p, &q| dot2(into(&ins[p].2), along).total_cmp(&dot2(into(&ins[q].2), along)).then(q.cmp(&p))).unwrap_or(0);
+                for (n, (ri, start, mut x)) in ins.into_iter().enumerate() {
+                    if n == main {
+                        x.pts.extend_from_slice(&half.pts[1..]);
+                        x.z.extend_from_slice(&half.z[1..]);
+                        x.wander.extend_from_slice(&half.wander[1..]);
+                    } else {
+                        let s = arc(&x.pts);
+                        let l = s[s.len() - 1];
+                        let back = l - (0.25 * sq.cell).min(0.45 * l);
+                        let (p, zp, zm) = (point_at(&x.pts, &s, back), val_at(&x.z, &s, back), half.z[half.z.len() - 1]);
+                        let keep: Vec<usize> = (0..x.pts.len()).filter(|&q| s[q] < back - 5.0).collect();
+                        let c = (dist(p, m) / (0.05 * sq.cell).max(60.0)).ceil().max(1.0) as usize;
+                        let chord: Vec<[f64; 2]> = (0..=c).map(|q| [p[0] + (m[0] - p[0]) * q as f64 / c as f64, p[1] + (m[1] - p[1]) * q as f64 / c as f64]).collect();
+                        ok &= chord.iter().all(|q| (sq.dry)(q[0], q[1]) && !sq.in_town(*q));
+                        let mut pts: Vec<[f64; 2]> = keep.iter().map(|&q| x.pts[q]).collect();
+                        let mut z: Vec<f32> = keep.iter().map(|&q| x.z[q]).collect();
+                        let mut wander: Vec<f32> = keep.iter().map(|&q| x.wander[q]).collect();
+                        pts.extend_from_slice(&chord);
+                        z.extend((0..=c).map(|q| zp + (zm - zp) * q as f32 / c as f32));
+                        wander.extend(std::iter::repeat_n(0.0, c + 1));
+                        let last = pts.len() - 1;
+                        pts[last] = m;
+                        (x.pts, x.z, x.wander) = (pts, z, wander);
                     }
-                    let out = match along {
-                        Some(a) if i == t => a,
-                        Some(a) => [-a[0], -a[1]],
-                        None => unit2([l.3[0] - m[0], l.3[1] - m[1]]),
-                    };
-                    leg_curve(m, out, l, cell)
-                })
-                .collect();
-            if !curves.iter().all(|c| all_dry(c)) {
-                continue 'reach;
-            }
-            // The junction's level: the fork road's there, else the old junction's.
-            let z_m = match fork {
-                Some(i) => {
-                    let r = &roads[legs[i].0];
-                    if legs[i].1 { r.z[legs[i].2] } else { r.z[r.z.len() - 1 - legs[i].2] }
+                    add.push(if start { flipped(&x) } else { x });
+                    gone.push(ri);
                 }
-                None => z_j,
-            };
-            for (l, curve) in legs.iter().zip(&curves) {
-                reshape_end(&mut roads[l.0], l, curve, z_m);
             }
+            if !ok {
+                continue;
+            }
+            gone.sort_unstable_by(|x, y| y.cmp(x));
+            for g in gone {
+                roads.remove(g);
+            }
+            roads.extend(add);
+            done = true;
             break;
         }
+        if !done {
+            return merged;
+        }
+        merged = true;
     }
 }
 
@@ -2178,7 +2496,7 @@ fn merge_junctions(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f
 pub fn tidy(r: &mut RoadPath) {
     cut_spikes(r);
     let gmax = r.class.max_grade();
-    // The first and last stretch stay as shaped (a Y's merge curve, the way into a gate).
+    // The first and last stretch stay as shaped (a branch's way into a junction, the way into a gate).
     let mut k = 2;
     while k + 2 < r.pts.len() {
         let (a, b, c) = (r.pts[k - 1], r.pts[k], r.pts[k + 1]);
