@@ -780,6 +780,21 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
     for c in crossings.iter().filter(|c| c.1 < 0.5).take(shallow) {
         say!("      crossing at {:.0}° at ({:.0}, {:.0})", c.1.asin().to_degrees(), c.0[0], c.0[1]);
     }
+    // (`RIVERS=x,y,r`: river centre lines within r ft of (x, y), with their width.)
+    if let Some(v) = std::env::var("RIVERS").ok().map(|v| v.split(',').filter_map(|x| x.parse().ok()).collect::<Vec<f64>>()) {
+        for (ri, r) in t0.rivers.rivers.iter().enumerate() {
+            let near: Vec<String> = r.pts.iter().zip(&r.q).filter(|(p, _)| dist(**p, [v[0], v[1]]) < v[2]).map(|(p, q)| format!("({:.0}, {:.0}) w {:.0}", p[0], p[1], worldgen::lod::rivers::width_ft(*q as f64))).collect();
+            if !near.is_empty() {
+                say!("      river {ri}: {}", near.join(" "));
+            }
+        }
+    }
+    // (`CROSS=x,y,r`: the crossings within r ft of (x, y).)
+    if let Some(v) = std::env::var("CROSS").ok().map(|v| v.split(',').filter_map(|x| x.parse().ok()).collect::<Vec<f64>>()) {
+        for c in crossings.iter().filter(|c| dist(c.0, [v[0], v[1]]) < v[2]) {
+            say!("      crossing {:?} at {:.0}° at ({:.0}, {:.0})", c.2, c.1.asin().to_degrees(), c.0[0], c.0[1]);
+        }
+    }
     // --- Junctions outside settlements.
     let mut deg = vec![0usize; nroad];
     for &(u, v, ..) in &edges {
@@ -831,9 +846,13 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
         }
     }
     // Two roads passing through one place (neither ends there).
-    let x_cross = (0..nroad)
+    let x_nodes: Vec<usize> = (0..nroad)
         .filter(|&n| !attached(spots.pos[n]) && at_node[n].iter().filter(|&&(r, i)| i != 0 && i != pts[r].len() - 1).map(|e| e.0).collect::<std::collections::HashSet<_>>().len() >= 2)
-        .count();
+        .collect();
+    let x_cross = x_nodes.len();
+    for &n in x_nodes.iter().take(4) {
+        say!("      two roads through ({:.0}, {:.0})", spots.pos[n][0], spots.pos[n][1]);
+    }
     let near: Vec<usize> = (0..nroad).filter(|&n| junction[n] && crossings.iter().any(|c| dist(c.0, spots.pos[n]) <= 0.5 * MI)).collect();
     let near_cross = near.len();
     let njunc = junction.iter().filter(|j| **j).count();
