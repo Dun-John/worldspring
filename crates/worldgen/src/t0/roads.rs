@@ -406,6 +406,10 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     while drop_triangle(&mut roads, &towns) {
         join_through(&mut roads, &towns, cell, &dry_ft);
     }
+    let small: Vec<bool> = settlements.iter().map(|s| s.tier == crate::t0::settle::Tier::Village).collect();
+    while drop_twin_link(&mut roads, &towns, &small) {
+        join_through(&mut roads, &towns, cell, &dry_ft);
+    }
 
     // --- 4. Crossings and waystations.
     let mut crossings: Vec<Crossing> = Vec::new();
@@ -1941,6 +1945,64 @@ fn drop_triangle(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> bool {
                 let (most, rank) = if link { (TRIANGLE_LINK, ratio - TRIANGLE_LINK) } else { (TRIANGLE_SLACK, ratio) };
                 if lens[i] + round <= TRIANGLE_FT && ratio <= most && best.is_none_or(|(q, _)| rank < q) {
                     best = Some((rank, i));
+                }
+            }
+        }
+    }
+    let Some((_, i)) = best else { return false };
+    roads.remove(i);
+    true
+}
+
+/// A village with two lesser roads that both run out to the same better road, at junctions apart (a
+/// triangle too big for `drop_triangle`), has one road too many: the worse (then longer) of the two
+/// goes when the way round (the other road and the better road between them) is no more than
+/// `TRIANGLE_SLACK` times as long. Returns whether one went.
+fn drop_twin_link(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], small: &[bool]) -> bool {
+    type K = (i64, i64);
+    let ends: Vec<(K, K)> = roads.iter().map(|r| (end_key(r.pts[0], towns), end_key(*r.pts.last().unwrap(), towns))).collect();
+    let lens: Vec<f64> = roads.iter().map(road_len).collect();
+    // Where a point lies along a king's road (ft from its start), if it is on it.
+    let along = |king: &RoadPath, p: [f64; 2]| -> Option<f64> {
+        let mut run = 0.0;
+        for w in king.pts.windows(2) {
+            let l = dist(w[0], w[1]);
+            if l > 0.0 {
+                let t = (((p[0] - w[0][0]) * (w[1][0] - w[0][0]) + (p[1] - w[0][1]) * (w[1][1] - w[0][1])) / (l * l)).clamp(0.0, 1.0);
+                let q = [w[0][0] + t * (w[1][0] - w[0][0]), w[0][1] + t * (w[1][1] - w[0][1])];
+                if dist(q, p) < 60.0 {
+                    return Some(run + t * l);
+                }
+            }
+            run += l;
+        }
+        None
+    };
+    let mut best: Option<(f64, usize)> = None;
+    for t in 0..towns.len() {
+        if !small.get(t).copied().unwrap_or(false) {
+            continue;
+        }
+        let tk: K = (i64::MIN, t as i64);
+        let mine: Vec<usize> = (0..roads.len()).filter(|&i| roads[i].stroke.is_none() && roads[i].class != RoadClass::KingsRoad && ((ends[i].0 == tk) != (ends[i].1 == tk))).collect();
+        // The road's far end, the road itself leaving the village at its start.
+        let far = |i: usize| if ends[i].0 == tk { *roads[i].pts.last().unwrap() } else { roads[i].pts[0] };
+        for &i in &mine {
+            for &k in &mine {
+                if k == i || roads[k].class > roads[i].class || (roads[k].class == roads[i].class && (lens[k], k) > (lens[i], i)) {
+                    continue;
+                }
+                let (pb, pa) = (far(i), far(k));
+                for king in roads.iter().filter(|r| r.class < roads[i].class) {
+                    let (Some(sa), Some(sb)) = (along(king, pa), along(king, pb)) else { continue };
+                    if (sa - sb).abs() < 1.0 {
+                        continue;
+                    }
+                    // The way round over road `k` and the king's road between them.
+                    let ratio = (lens[k] + (sa - sb).abs()) / lens[i];
+                    if ratio <= TRIANGLE_SLACK && best.is_none_or(|(q, _)| ratio < q) {
+                        best = Some((ratio, i));
+                    }
                 }
             }
         }
