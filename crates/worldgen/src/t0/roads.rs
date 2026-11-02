@@ -128,6 +128,8 @@ pub struct Inputs<'a> {
     pub land: &'a [bool],
     pub biome: &'a [u32],
     pub hydro: &'a Hydro,
+    /// The rivers as drawn (their meander belts: where roads cross them).
+    pub rivers: &'a crate::lod::rivers::RiverNet,
     /// The routes `route` found last time (see `RouteKey`), for the next call to reuse.
     pub routes: std::cell::RefCell<Vec<(RouteKey, Option<Vec<u32>>)>>,
     /// What `route` needs of the inputs alone, built on its first call.
@@ -386,15 +388,9 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     drop_shortcuts(&mut roads, &towns);
     join_through(&mut roads, &towns, cell, &dry_ft);
     let ground_ft = |p: [f64; 2]| hgrid.z([p[0] / cell, p[1] / cell]);
-    let river_ft = |x: f64, y: f64| {
-        let (i, j) = (crate::core::round(x / cell) as i64, crate::core::round(y / cell) as i64);
-        if i < 0 || j < 0 || i as usize >= w || j as usize >= h {
-            return None;
-        }
-        let q = inp.hydro.discharge[j as usize * w + i as usize] as f64;
-        (q >= river_q).then(|| crate::lod::rivers::width_ft(q))
-    };
-    square_junctions(&mut roads, &towns, cell, &dry_ft, &ground_ft, &river_ft);
+    let belts = crate::lod::roads::BeltCache::default();
+    let crossings = |line: &[[f64; 2]]| crate::lod::roads::belt_crossings(line, inp.rivers, cell, &belts);
+    square_junctions(&mut roads, &towns, cell, &dry_ft, &ground_ft, &crossings);
     drop_parallel(&mut roads, &towns);
     join_through(&mut roads, &towns, cell, &dry_ft);
 
@@ -1951,29 +1947,32 @@ fn drop_parallel(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
     });
 }
 
-/// How far (ft) a junction keeps from where a road crosses a river, beyond the river's half
-/// width and `WET_STRAY` cells (the channel wanders within its cell).
+/// How far (ft) a junction keeps from where a road crosses a river's meander belt, beyond
+/// `WET_STRAY` times the belt's half width (the channel wanders within it, and a road pushed out
+/// of it crosses where it runs through).
 const JUNCTION_WET: f64 = 0.5 * 5280.0;
-const WET_STRAY: f64 = 0.6;
+const WET_STRAY: f64 = 1.5;
 /// Junctions closer than this (ft) along a road are merged.
 const JUNCTION_GAP: f64 = 0.5 * 5280.0;
 /// Two legs within 35° of straight make a through road.
 const THROUGH: f64 = -0.819;
 
 /// What squaring junctions needs: settlements (centre, trim radius), the cell (ft), dry land and
-/// the ground (ft), and where roads cross rivers (with each river's half width).
+/// the ground (ft), and where roads cross rivers' meander belts (with each belt's half width).
 struct Square<'a> {
     towns: &'a [([f64; 2], f64)],
     cell: f64,
     dry: &'a dyn Fn(f64, f64) -> bool,
     ground: &'a dyn Fn([f64; 2]) -> f64,
+    /// Where a line crosses rivers' meander belts (each with the belt's half width).
+    crossings: &'a dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>,
     wet: Vec<([f64; 2], f64)>,
 }
 
 impl Square<'_> {
     /// Far enough from every river crossing.
     fn clear(&self, p: [f64; 2]) -> bool {
-        self.wet.iter().all(|&(c, hw)| dist(c, p) >= JUNCTION_WET + hw + WET_STRAY * self.cell)
+        self.wet.iter().all(|&(c, hw)| dist(c, p) >= JUNCTION_WET + WET_STRAY * hw)
     }
     /// Where a road end would count as a settlement's (`end_key`), with some room.
     fn in_town(&self, p: [f64; 2]) -> bool {
@@ -1989,28 +1988,6 @@ impl Square<'_> {
         }
         curve.iter().zip(&s).all(|(c, &u)| ((self.ground)(*c) - (z0 as f64 + (z1 - z0) as f64 * u / len)).abs() <= 25.0 + gmax * u.min(len - u))
     }
-}
-
-/// Mapped river cells (centres, ft) the roads step onto, each with half its river's width.
-fn river_hits(roads: &[RoadPath], cell: f64, river: &dyn Fn(f64, f64) -> Option<f64>) -> Vec<([f64; 2], f64)> {
-    let mut seen: crate::core::hash::FastSet<(i64, i64)> = Default::default();
-    let mut out = Vec::new();
-    for r in roads {
-        for pair in r.pts.windows(2) {
-            let n = (dist(pair[0], pair[1]) / (0.1 * cell)).ceil().max(1.0) as usize;
-            for k in 0..=n {
-                let t = k as f64 / n as f64;
-                let p = [pair[0][0] + (pair[1][0] - pair[0][0]) * t, pair[0][1] + (pair[1][1] - pair[0][1]) * t];
-                let c = (crate::core::round(p[0] / cell) as i64, crate::core::round(p[1] / cell) as i64);
-                if let Some(width) = river(p[0], p[1]) {
-                    if seen.insert(c) {
-                        out.push(([c.0 as f64 * cell, c.1 as f64 * cell], 0.5 * width));
-                    }
-                }
-            }
-        }
-    }
-    out
 }
 
 fn sub2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
@@ -2097,14 +2074,16 @@ struct Fit {
 /// falls (or slid along it, up to 1.3 cell and first towards where the branch comes from, to keep
 /// clear of river crossings), or at `fixed` along it. A meeting with no crossing near beats one
 /// with, a shorter reach a longer; one slid further than the branch's point stands off the road
-/// (its way in would swing across) comes last; and no meeting doubles back, enters water or a
-/// settlement, or climbs too steeply.
+/// (its way in would swing across) comes after the others clear of crossings, before any near
+/// one; and no meeting is slid over a river, doubles back, enters water or a settlement, or
+/// climbs too steeply.
 fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option<f64>, min_reach: f64) -> Option<Fit> {
     let cell = sq.cell;
     let bs = arc(&b.pts);
     let (blen, total) = (bs[bs.len() - 1], ts[ts.len() - 1]);
     let gmax = b.class.max_grade().min(t.class.max_grade());
     let (mut fallback, mut wide): (Option<Fit>, Option<Fit>) = (None, None);
+    let t_wet: Vec<f64> = (sq.crossings)(&t.pts).iter().map(|c| project(c.0, &t.pts, ts).0).collect();
     for f in [0.4, 0.55, 0.7, 0.9, 1.15, 1.5, 2.0, 2.5] {
         let reach = (f * cell).max(min_reach);
         if reach > 0.5 * blen {
@@ -2124,7 +2103,8 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
         let slides: &[f64] = if fixed.is_some() { &[0.0] } else { &[0.0, 0.15, -0.15, 0.3, -0.3, 0.5, -0.5, 0.75, -0.75, 1.0, -1.0, 1.3, -1.3] };
         for &d in slides {
             let at = fixed.unwrap_or(at0 + back * d * cell);
-            if at < 0.15 * cell || at > total - 0.15 * cell {
+            // (Not slid over a river: the way in would cross it beside the road.)
+            if at < 0.15 * cell || at > total - 0.15 * cell || (fixed.is_none() && t_wet.iter().any(|&c| (c - at0) * (c - at) < 0.0)) {
                 continue;
             }
             let q = point_at(&t.pts, ts, at);
@@ -2160,7 +2140,7 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
             }
         }
     }
-    fallback.or(wide)
+    wide.or(fallback)
 }
 
 /// The branch with its end from `fit.p` replaced by the curve in to `fit.q` (running out from
@@ -2216,10 +2196,11 @@ fn square_junctions(
     cell: f64,
     dry: &dyn Fn(f64, f64) -> bool,
     ground: &dyn Fn([f64; 2]) -> f64,
-    river: &dyn Fn(f64, f64) -> Option<f64>,
+    crossings: &dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>,
 ) {
+    let river_hits = |roads: &[RoadPath]| -> Vec<([f64; 2], f64)> { roads.iter().flat_map(|r| crossings(&r.pts)).collect() };
     unshare(roads, towns);
-    let mut sq = Square { towns, cell, dry, ground, wet: river_hits(roads, cell, river) };
+    let mut sq = Square { towns, cell, dry, ground, crossings, wet: river_hits(roads) };
     // Points already squared (or left as they are) are not looked at again.
     let mut settled: std::collections::BTreeSet<(u64, u64)> = Default::default();
     for round in 0..4 {
@@ -2235,7 +2216,7 @@ fn square_junctions(
         if round == 3 || !close_junctions(roads, &sq) {
             break;
         }
-        sq.wet = river_hits(roads, cell, river);
+        sq.wet = river_hits(roads);
     }
 }
 

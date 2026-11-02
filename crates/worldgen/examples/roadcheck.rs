@@ -775,6 +775,11 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
         within(MI),
         within(3.0 * MI)
     );
+    // (`SHALLOW=n`: the first n crossings under 30°.)
+    let shallow = std::env::var("SHALLOW").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    for c in crossings.iter().filter(|c| c.1 < 0.5).take(shallow) {
+        say!("      crossing at {:.0}° at ({:.0}, {:.0})", c.1.asin().to_degrees(), c.0[0], c.0[1]);
+    }
     // --- Junctions outside settlements.
     let mut deg = vec![0usize; nroad];
     for &(u, v, ..) in &edges {

@@ -392,7 +392,7 @@ pub fn carve(pieces: &[RoadPiece], heights: &mut [f32], water: &[f32], dim: usiz
 /// Roads are routed on the T0 grid, where a river is a line; at fine levels it meanders
 /// across a belt. A road running along or slantwise through that belt would cross the
 /// meanders again and again. Where a road runs inside a belt it is pushed out to the side it
-/// came from; if it leaves on the other side it crosses once, midway, on a gentle S. Its ends
+/// came from; if it leaves on the other side it crosses once, midway, on a short S. Its ends
 /// stay where they are (the push eases in from them).
 /// Returns the road resampled every ~200 ft (wander baked in, so 0) if anything moved.
 /// `blocked(x, y)`: standing water, where a road must not be pushed.
@@ -494,6 +494,46 @@ fn belt_at(rivers: &crate::lod::rivers::RiverNet, cell_ft: f64, cache: &BeltCach
     best.map(|b| b.1).filter(|&(_, d, half, _)| d.abs() < half + margin)
 }
 
+/// Where a line (ft) crosses the belts rivers meander in (their centre lines): each point with
+/// the belt's half width there, in the order met.
+pub fn belt_crossings(line: &[[f64; 2]], rivers: &crate::lod::rivers::RiverNet, cell_ft: f64, cache: &BeltCache) -> Vec<([f64; 2], f64)> {
+    let ix = cache.index(rivers, cell_ft);
+    let mut out: Vec<([f64; 2], f64)> = Vec::new();
+    for pair in line.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let m = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
+        let (cx, cy) = ((m[0] / ix.cell).floor() as i64, (m[1] / ix.cell).floor() as i64);
+        if cx < 0 || cy < 0 || cx >= ix.w || cy >= ix.h {
+            continue;
+        }
+        let mut here: Vec<(f64, [f64; 2], f64)> = Vec::new();
+        for &(ri, k) in &ix.cells[(cy * ix.w + cx) as usize] {
+            let r = &rivers.rivers[ri as usize];
+            let belt = cache.get(rivers, ri, k, cell_ft);
+            if seg_dist(m, r.pts[k as usize], r.pts[k as usize + 1]) > belt.1 + dist(a, b) + 1.0 {
+                continue;
+            }
+            for w in belt.0.windows(2) {
+                let (c, d) = (w[0].0, w[1].0);
+                let (r0, s0) = ([b[0] - a[0], b[1] - a[1]], [d[0] - c[0], d[1] - c[1]]);
+                let den = r0[0] * s0[1] - r0[1] * s0[0];
+                if den.abs() < 1e-9 {
+                    continue;
+                }
+                let (qx, qy) = (c[0] - a[0], c[1] - a[1]);
+                let (t, u) = ((qx * s0[1] - qy * s0[0]) / den, (qx * r0[1] - qy * r0[0]) / den);
+                // (Half-open on both, so a crossing on a joint counts once.)
+                if (0.0..1.0).contains(&t) && (0.0..1.0).contains(&u) {
+                    here.push((t, [a[0] + r0[0] * t, a[1] + r0[1] * t], w[0].2.max(w[1].2)));
+                }
+            }
+        }
+        here.sort_by(|x, y| x.0.total_cmp(&y.0));
+        out.extend(here.into_iter().map(|h| (h.1, h.2)));
+    }
+    out
+}
+
 pub fn unweave(curve: &RoadCurve, rivers: &crate::lod::rivers::RiverNet, cell_ft: f64, blocked: &dyn Fn(f64, f64) -> bool, cache: &BeltCache) -> Option<(Vec<[f64; 2]>, Vec<f32>, Vec<f32>)> {
     const STEP: f64 = 200.0;
     let margin = 0.5 * curve.class.width_ft() + 40.0;
@@ -553,11 +593,12 @@ pub fn unweave(curve: &RoadCurve, rivers: &crate::lod::rivers::RiverNet, cell_ft
             if entry != exit && sv[i1] - sv[i0] < 2.5 * (half + margin) && square {
                 continue;
             }
-            // A road that leaves on the other side crosses on an S about twice the belt's width
-            // long (bending clear of the banks, not turning square on them); its ends (a
+            // A road that leaves on the other side crosses on a short S, half the belt's width
+            // long (steep enough to cross the meanders near square; the corners are rounded
+            // after), not a step with square turns on both banks; its ends (a
             // junction, a town's edge) stay put, the push easing in over 2.5 belt half widths.
             let (s_mid, run) = (0.5 * (sv[i0] + sv[i1]), sv[i1] - sv[i0]);
-            let w = (2.0 * (half + margin)).min(0.5 * run).max(1.0);
+            let w = (0.25 * (half + margin)).min(0.5 * run).max(1.0);
             let ease = 2.5 * (half + margin);
             let smooth = |f: f64| f * f * (3.0 - 2.0 * f);
             let mut moved: Vec<(usize, [f64; 2])> = Vec::new();
