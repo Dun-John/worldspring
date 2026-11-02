@@ -1463,13 +1463,22 @@ fn designed_building(world: &World, t0: &worldgen::t0::T0, si: usize) {
     let g = d.levels.iter().position(|lv| lv.z == 0).unwrap();
     let cells = design::decode(&d.levels[g].cells, d.nx as usize * d.ny as usize).unwrap();
     let study = d.levels[g].rooms.iter().position(|r| r.kind == "study").unwrap() as i16;
+    // (The study keeps the pieces the room had; a study they fill is cleared first, as a designer would.)
+    let nx = d.nx as usize;
+    let in_study = |f: &design::DesignItem| (f.y..f.y + f.h).any(|y| (f.x..f.x + f.w).any(|x| cells[y as usize * nx + x as usize] == study));
     for kind in ["sacks", "s:k3ttle"] {
-        let nx = d.nx as usize;
-        let put = (0..cells.len()).filter(|&k| cells[k] == study).find_map(|k| {
+        let (back, variant) = if kind == "sacks" { (None, Some(3)) } else { (Some(1), None) };
+        let put = |d: &design::SiteDesign| {
+            (0..cells.len()).filter(|&k| cells[k] == study).find_map(|k| {
+                let mut t = d.clone();
+                t.levels[g].items.push(design::DesignItem { kind: kind.into(), x: (k % nx) as u16, y: (k / nx) as u16, w: 1, h: 1, back, variant });
+                t.problems(&ws, t0, &id).unwrap().1.iter().all(|p| !p.blocking).then_some(t)
+            })
+        };
+        let put = put(&d).or_else(|| {
             let mut t = d.clone();
-            let (back, variant) = if kind == "sacks" { (None, Some(3)) } else { (Some(1), None) };
-            t.levels[g].items.push(design::DesignItem { kind: kind.into(), x: (k % nx) as u16, y: (k / nx) as u16, w: 1, h: 1, back, variant });
-            t.problems(&ws, t0, &id).unwrap().1.iter().all(|p| !p.blocking).then_some(t)
+            t.levels[g].items.retain(|f| !in_study(f));
+            put(&t)
         });
         d = put.unwrap_or_else(|| panic!("{id}: no room in the study for {kind}"));
     }
