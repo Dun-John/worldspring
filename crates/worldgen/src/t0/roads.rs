@@ -127,6 +127,19 @@ pub struct Inputs<'a> {
     pub hydro: &'a Hydro,
     /// The routes `route` found last time (see `RouteKey`), for the next call to reuse.
     pub routes: std::cell::RefCell<Vec<(RouteKey, Option<Vec<u32>>)>>,
+    /// What `route` needs of the inputs alone, built on its first call.
+    pub fixed: std::cell::OnceCell<RouteFixed>,
+}
+
+/// The per-cell tables `route` reads, the same for every call on one `Inputs`.
+pub struct RouteFixed {
+    costs: Costs,
+    /// Open ground, and the same less what `none` lines close (a link's own end stays open).
+    free: Vec<bool>,
+    open: Vec<bool>,
+    /// Smooth cost noise: equal-cost ties on open ground resolve into gentle meanders instead
+    /// of grid-aligned runs.
+    wobble: Vec<f32>,
 }
 
 impl Inputs<'_> {
@@ -253,8 +266,16 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
         adj.entry(b).or_default().push(a);
     }
     // (Where a drawn road begins or ends on another road is a node too.)
+    let mut at_cell: crate::core::hash::FastMap<usize, &Settlement> = Default::default();
+    let mut town_at_cell: crate::core::hash::FastMap<usize, &Settlement> = Default::default();
+    for s in settlements {
+        at_cell.entry(s.cell).or_insert(s);
+        if s.tier >= Tier::Town {
+            town_at_cell.entry(s.cell).or_insert(s);
+        }
+    }
     let step_stroke = |a: u32, b: u32| links[&(a.min(b), a.max(b))].1;
-    let is_node = |c: u32, adj: &std::collections::BTreeMap<u32, Vec<u32>>| adj[&c].len() != 2 || settlements.iter().any(|s| s.cell as u32 == c) || step_stroke(c, adj[&c][0]) != step_stroke(c, adj[&c][1]);
+    let is_node = |c: u32, adj: &std::collections::BTreeMap<u32, Vec<u32>>| adj[&c].len() != 2 || at_cell.contains_key(&(c as usize)) || step_stroke(c, adj[&c][0]) != step_stroke(c, adj[&c][1]);
     let mut used: std::collections::BTreeSet<(u32, u32)> = Default::default();
     let mut segments: Vec<(RoadClass, Vec<u32>, Option<u32>)> = Vec::new();
     for (&start, nbs) in &adj {
@@ -302,7 +323,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
         let mut cells: Vec<[f64; 2]> = seg.iter().map(|&c| [(c as usize % w) as f64, (c as usize / w) as f64]).collect();
         // Ends at a settlement meet it where it actually stands.
         for (end, c) in [(0, seg[0]), (cells.len() - 1, seg[seg.len() - 1])] {
-            if let Some(s) = settlements.iter().find(|s| s.cell == c as usize) {
+            if let Some(&s) = at_cell.get(&(c as usize)) {
                 cells[end] = [s.x / cell, s.y / cell];
             }
         }
@@ -315,7 +336,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
         // Towns and cities are entered at their urban edge (gates); the streets take over.
         for at_start in [true, false] {
             let c = if at_start { seg[0] } else { seg[seg.len() - 1] };
-            if let Some(s) = settlements.iter().find(|s| s.cell == c as usize && s.tier >= Tier::Town) {
+            if let Some(&s) = town_at_cell.get(&(c as usize)) {
                 let r = crate::town::road_trim_radius(s.tier, s.population) / cell;
                 if !at_start {
                     pts.reverse();
@@ -808,14 +829,14 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
     let n = w * h;
     let pre = inp.pre();
     // --- 2. Routing.
-    let costs = Costs::new(inp);
-    // Open ground, and the same less what `none` lines close (a link's own end stays open).
-    let free: Vec<bool> = (0..n).map(|k| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE).collect();
-    let open: Vec<bool> = (0..n).map(|k| free[k] && !pre.blocked.get(k).copied().unwrap_or(false)).collect();
-    // Smooth cost noise: equal-cost ties on open ground resolve into gentle meanders instead
-    // of grid-aligned runs.
-    let mut noise = crate::core::noise::Fbm::new(inp.world.stream("t0.road.cost"), 2, 2.0, 0.5);
-    let wobble: Vec<f32> = (0..n).map(|k| (1.0 + 0.25 * noise.at((k % w) as f64 / 6.0, (k / w) as f64 / 6.0)) as f32).collect();
+    let RouteFixed { costs, free, open, wobble } = inp.fixed.get_or_init(|| {
+        let costs = Costs::new(inp);
+        let free: Vec<bool> = (0..n).map(|k| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE).collect();
+        let open: Vec<bool> = (0..n).map(|k| free[k] && !pre.blocked.get(k).copied().unwrap_or(false)).collect();
+        let mut noise = crate::core::noise::Fbm::new(inp.world.stream("t0.road.cost"), 2, 2.0, 0.5);
+        let wobble: Vec<f32> = (0..n).map(|k| (1.0 + 0.25 * noise.at((k % w) as f64 / 6.0, (k / w) as f64 / 6.0)) as f32).collect();
+        RouteFixed { costs, free, open, wobble }
+    });
     let mut road_class: Vec<u8> = vec![u8::MAX; n];
     // Cells on a drawn road only (routes share them at half cost, not a fifth: a planned road
     // takes a drawn one where it goes its way, but no long way round for it).

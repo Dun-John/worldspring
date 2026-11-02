@@ -149,6 +149,18 @@ pub struct Inputs<'a> {
     pub hydro: &'a Hydro,
     /// Settlements the sketch places (before any of their tier are chosen).
     pub pins: &'a [super::sketch::Pin],
+    /// What each cell offers, worked out on the first `place` (it depends on nothing else here).
+    pub ground: std::cell::OnceCell<Ground>,
+}
+
+/// Per cell: how good a site it is, and what water it stands by.
+pub struct Ground {
+    score: Vec<f64>,
+    coastal: Vec<bool>,
+    lakeside: Vec<bool>,
+    on_river: Vec<bool>,
+    /// Only sea and lake mouths make a harbour (a confluence is a river town).
+    harbour: Vec<bool>,
 }
 
 fn fertility(b: Biome) -> f64 {
@@ -171,20 +183,14 @@ fn fertility(b: Biome) -> f64 {
     }
 }
 
-/// Place settlements of the given tiers, keeping `existing` ones. `roads` (from
-/// `roads::preview`) favours sites on roads and most of all at junctions, so later
-/// tiers grow at the crossroads the earlier tiers' roads made. Pins asking for what their place
-/// can't give (a port away from water, a river town off any river) say so in `conflicts`.
-pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Option<&super::roads::Preview>, conflicts: &mut Vec<super::sketch::Conflict>) -> Vec<Settlement> {
+/// The per-cell context `place` reads (see `Ground`).
+fn ground(inp: &Inputs) -> Ground {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
-    let world = inp.world;
-    let p = world.params();
+    let p = inp.world.params();
     let sea = p.sea_level_ft;
     let n = w * h;
     let big_river = 900_000.0;
     let river_q = super::hydro::river_q(p.river_density);
-    let ore_seed = world.stream("t0.settle.ore");
-
     // Per-cell context.
     let biome_of = |k: usize| Biome::from_u8((inp.biome[k] & 0xff) as u8);
     let slope_of = |k: usize| super::biome::local_slope(w, h, inp.height, k % w, k / w, cell);
@@ -262,6 +268,23 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         let altitude = 1.0 - 0.8 * smoothstep(3_000.0, 8_000.0, above);
         score[k] = fert * (0.35 + 0.65 * flat) * (0.35 + water) * altitude * dry_fix;
     }
+    Ground { score, coastal, lakeside, on_river, harbour }
+}
+
+/// Place settlements of the given tiers, keeping `existing` ones. `roads` (from
+/// `roads::preview`) favours sites on roads and most of all at junctions, so later
+/// tiers grow at the crossroads the earlier tiers' roads made. Pins asking for what their place
+/// can't give (a port away from water, a river town off any river) say so in `conflicts`.
+pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Option<&super::roads::Preview>, conflicts: &mut Vec<super::sketch::Conflict>) -> Vec<Settlement> {
+    let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
+    let world = inp.world;
+    let p = world.params();
+    let sea = p.sea_level_ft;
+    let n = w * h;
+    let ore_seed = world.stream("t0.settle.ore");
+
+    let biome_of = |k: usize| Biome::from_u8((inp.biome[k] & 0xff) as u8);
+    let Ground { score, coastal, lakeside, on_river, harbour, .. } = inp.ground.get_or_init(|| ground(inp));
 
     // How many of each tier, from land area (square miles) and density. At density 0 none are
     // chosen, but the sketch's pins still stand: what is placed by hand wins over the dial.

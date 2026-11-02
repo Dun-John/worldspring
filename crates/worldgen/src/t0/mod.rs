@@ -336,12 +336,12 @@ impl T0 {
         // Staged, so later tiers grow on the roads the earlier ones made: cities, then king's
         // roads between them; towns (favouring those roads and their junctions), then roads;
         // villages (favouring any road).
-        let sinp = settle::Inputs { world, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, pins: &pins };
+        let sinp = settle::Inputs { world, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, pins: &pins, ground: Default::default() };
         // The ground roads are planned on, at any point (the plan's grid every half cell is
         // too coarse for switchbacks to see a narrow valley).
         let planned = |x: f64, y: f64| rivers.valley(ground(x, y), x, y);
         let drawn = roads::drawn(world, w, h, cell);
-        let rinp = roads::Inputs { world, drawn, pre: Default::default(), plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, routes: Default::default() };
+        let rinp = roads::Inputs { world, drawn, pre: Default::default(), plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, routes: Default::default(), fixed: Default::default() };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None, &mut conflicts);
         if world.file.params.generated_roads {
