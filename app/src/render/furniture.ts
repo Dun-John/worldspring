@@ -4882,85 +4882,103 @@ function cavePool(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: ()
   g.poly(oval(cx + light[0] * rx * 0.42, cy + light[1] * ry * 0.42, rx * 0.24, 0.02, la, 14)).fill({ color: 0xffffff, alpha: 0.6 });
 }
 
-/** A heap of straw, twigs and rags (rat nest: a messy spiky heap of shredded straw with frayed striped rags
- * in it, a chewed candle and droppings round it, rats with long pink tails) or a big ring of crossed sticks
- * and fur tufts round a hollow with a bone in it (a beast's nest). */
-function nestHeap(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, beast: boolean) {
+/** A beast's nest: a broad mound of sticks laid round and round a hollow, longer ones straying past its edge, so
+ * its outline is the sticks' own and never a regular ring. Fur lines the hollow, and in it (by look) a gnawed bone,
+ * a clutch of eggs, a wad of fur or a skull. */
+function beastNest(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  const r = beast ? 0.42 : 0.3;
-  const spiky = (rr: number, n: number) => {
-    const pts: number[] = [];
+  const r = 0.42;
+  g.poly(patch(cx - light[0] * 0.05, cy - light[1] * 0.05, r * 1.04, r * 0.98, rnd, 0.1, 22)).fill({ color: 0x14100c, alpha: 0.3 });
+  g.poly(patch(cx, cy, r * 0.96, r * 0.9, rnd, 0.12, 22)).fill(0x46362a);
+  // Sticks: round the mound rather than across it, ink first, the wood over it, the upper layer paler.
+  const sticks = (n: number, at: number, len: number, wood: number) => {
+    const ends: number[][] = [];
     for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      const k = i % 2 ? 0.8 + 0.1 * rnd() : 1.05 + 0.15 * rnd();
-      pts.push(cx + Math.cos(a) * rr * k, cy + Math.sin(a) * rr * k * 0.92);
+      const a = ((i + rnd() * 0.8) / n) * Math.PI * 2;
+      const d = at * (0.86 + 0.28 * rnd());
+      const b = a + Math.PI / 2 + (rnd() - 0.5) * 0.9;
+      const L = len * (0.7 + 0.7 * rnd());
+      const [px, py] = [cx + Math.cos(a) * d, cy + Math.sin(a) * d * 0.94];
+      ends.push([px - (Math.cos(b) * L) / 2, py - (Math.sin(b) * L) / 2, px + (Math.cos(b) * L) / 2, py + (Math.sin(b) * L) / 2]);
     }
-    return pts;
+    for (const [x0, y0, x1, y1] of ends) g.moveTo(x0, y0).lineTo(x1, y1);
+    g.stroke({ width: 0.058, color: INK, cap: 'round' });
+    for (const [x0, y0, x1, y1] of ends) g.moveTo(x0, y0).lineTo(x1, y1);
+    g.stroke({ width: 0.03, color: wood, cap: 'round' });
   };
-  if (!beast) {
-    for (let i = 0; i < 10; i++) g.poly(oval(cx + (rnd() - 0.5) * 0.8, cy + (rnd() - 0.5) * 0.8, 0.012, 0.007, rnd() * Math.PI, 6)).fill(0x2a2018);
-    // A chewed candle stub at the edge.
-    const [kx, ky] = [cx + r * 1.1, cy - r * 0.6];
-    g.poly(oval(kx, ky, 0.07, 0.03, 0.5, 10)).fill(0xd8ccae).stroke({ width: LINE, color: INK });
-    g.circle(kx + 0.05, ky + 0.02, 0.012).fill(0x2a2018);
+  sticks(13, r * 0.9, 0.3, 0x5e4630);
+  sticks(11, r * 0.74, 0.26, 0x7a5c3c);
+  sticks(8, r * 0.62, 0.2, 0x8e6e48);
+  // The hollow, lined with fur, in shadow on the side toward the light.
+  const [hx, hy] = [cx + (rnd() - 0.5) * 0.04, cy + (rnd() - 0.5) * 0.04];
+  g.poly(patch(hx, hy, r * 0.46, r * 0.42, rnd, 0.14, 16)).fill(0x5e5244).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(patch(hx + light[0] * 0.05, hy + light[1] * 0.05, r * 0.36, r * 0.32, rnd, 0.18, 14)).fill(0x3a3026);
+  for (let i = 0; i < 4; i++) {
+    const a = rnd() * Math.PI * 2;
+    g.poly(patch(hx + Math.cos(a) * r * 0.4, hy + Math.sin(a) * r * 0.36, 0.06, 0.04, rnd, 0.4, 9)).fill(0x8a7a6a);
   }
-  if (beast) g.poly(spiky(r, 30)).fill(0x5e4a30).stroke({ width: LINE, color: INK, join: 'round' });
-  else {
-    // A soft loose heap: overlapping unlined lumps, a broken thin edge, a small dark hollow.
-    g.poly(patch(cx + 0.01, cy + 0.02, r * 1.02, r * 0.9, rnd, 0.14, 20)).fill({ color: 0x14100c, alpha: 0.22 });
-    g.poly(patch(cx, cy, r, r * 0.9, rnd, 0.12, 20)).fill(0x6e6048);
-    g.poly(patch(cx - light[0] * 0.03, cy - light[1] * 0.03, r * 0.82, r * 0.72, rnd, 0.16, 18)).fill(0x84745a);
-    g.poly(patch(cx - light[0] * 0.08, cy - light[1] * 0.08, r * 0.45, r * 0.38, rnd, 0.2, 14)).fill({ color: 0xa08e6c, alpha: 0.7 });
-    for (let i = 0; i < 3; i++) {
-      const a0 = rnd() * Math.PI * 2;
-      g.moveTo(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r * 0.9);
-      for (let k = 1; k <= 5; k++) g.lineTo(cx + Math.cos(a0 + k * 0.17) * r * (0.97 + 0.06 * rnd()), cy + Math.sin(a0 + k * 0.17) * r * 0.9 * (0.97 + 0.06 * rnd()));
+  switch (v % 4) {
+    case 0: {
+      const a = rnd() * Math.PI;
+      const [c, s] = [Math.cos(a) * 0.15, Math.sin(a) * 0.15];
+      bone(g, [hx - c, hy - s], [hx + c, hy + s], 0.042, light);
+      break;
     }
-    g.stroke({ width: LINE, color: 0x3a2e1e, alpha: 0.8, cap: 'round' });
-    g.poly(patch(cx + 0.03, cy + 0.04, r * 0.22, r * 0.17, rnd, 0.2, 10)).fill(0x2a2018);
+    case 1:
+      for (const [dx, dy] of [[-0.07, 0.03], [0.07, 0.04], [0, -0.07]]) {
+        g.poly(oval(hx + dx, hy + dy, 0.07, 0.055, rnd() * Math.PI, 12)).fill(0xcabfa6).stroke({ width: LINE, color: INK });
+        g.circle(hx + dx + light[0] * 0.02, hy + dy + light[1] * 0.02, 0.016).fill(0xe6dcc6);
+      }
+      break;
+    case 2:
+      g.poly(patch(hx, hy, 0.12, 0.09, rnd, 0.3, 11)).fill(0x8a7a6a).stroke({ width: LINE, color: INK, join: 'round' });
+      g.poly(patch(hx + light[0] * 0.03, hy + light[1] * 0.03, 0.06, 0.04, rnd, 0.3, 9)).fill(0xa49484);
+      break;
+    default:
+      skullTop(g, hx, hy, rnd() * Math.PI * 2, 0.1, light);
   }
-  // Straws and sticks crossing, their ends sticking out of the outline.
-  for (let i = 0; i < (beast ? 18 : 14); i++) {
+}
+
+/** A rat nest: a soft loose heap of shredded straw with a frayed striped rag in it, a chewed candle and droppings
+ * round it, rats with long pink tails. */
+function ratNest(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
+  const [cx, cy] = [f.x + 0.5, f.y + 0.5];
+  const r = 0.3;
+  for (let i = 0; i < 10; i++) g.poly(oval(cx + (rnd() - 0.5) * 0.8, cy + (rnd() - 0.5) * 0.8, 0.012, 0.007, rnd() * Math.PI, 6)).fill(0x2a2018);
+  // A chewed candle stub at the edge.
+  const [kx, ky] = [cx + r * 1.1, cy - r * 0.6];
+  g.poly(oval(kx, ky, 0.07, 0.03, 0.5, 10)).fill(0xd8ccae).stroke({ width: LINE, color: INK });
+  g.circle(kx + 0.05, ky + 0.02, 0.012).fill(0x2a2018);
+  // A soft loose heap: overlapping unlined lumps, a broken thin edge, a small dark hollow.
+  g.poly(patch(cx + 0.01, cy + 0.02, r * 1.02, r * 0.9, rnd, 0.14, 20)).fill({ color: 0x14100c, alpha: 0.22 });
+  g.poly(patch(cx, cy, r, r * 0.9, rnd, 0.12, 20)).fill(0x6e6048);
+  g.poly(patch(cx - light[0] * 0.03, cy - light[1] * 0.03, r * 0.82, r * 0.72, rnd, 0.16, 18)).fill(0x84745a);
+  g.poly(patch(cx - light[0] * 0.08, cy - light[1] * 0.08, r * 0.45, r * 0.38, rnd, 0.2, 14)).fill({ color: 0xa08e6c, alpha: 0.7 });
+  for (let i = 0; i < 3; i++) {
+    const a0 = rnd() * Math.PI * 2;
+    g.moveTo(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r * 0.9);
+    for (let k = 1; k <= 5; k++) g.lineTo(cx + Math.cos(a0 + k * 0.17) * r * (0.97 + 0.06 * rnd()), cy + Math.sin(a0 + k * 0.17) * r * 0.9 * (0.97 + 0.06 * rnd()));
+  }
+  g.stroke({ width: LINE, color: 0x3a2e1e, alpha: 0.8, cap: 'round' });
+  g.poly(patch(cx + 0.03, cy + 0.04, r * 0.22, r * 0.17, rnd, 0.2, 10)).fill(0x2a2018);
+  // Straws crossing.
+  for (let i = 0; i < 14; i++) {
     const a = rnd() * Math.PI * 2;
     const d = r * (0.5 + 0.5 * rnd());
     const b = a + Math.PI / 2 + (rnd() - 0.5) * 1.2;
-    const L = r * (beast ? 0.5 : 0.35) * (0.7 + 0.6 * rnd());
+    const L = r * 0.35 * (0.7 + 0.6 * rnd());
     const [px, py] = [cx + Math.cos(a) * d, cy + Math.sin(a) * d];
     g.moveTo(px - (Math.cos(b) * L) / 2, py - (Math.sin(b) * L) / 2).lineTo(px + (Math.cos(b) * L) / 2, py + (Math.sin(b) * L) / 2);
   }
-  g.stroke({ width: beast ? 0.035 : 0.014, color: beast ? 0x3a2a18 : 0x5a4a2a, cap: 'round' });
-  if (!beast) {
-    // A few short stray straws just outside the heap.
-    for (let i = 0; i < 5; i++) {
-      const a = rnd() * Math.PI * 2;
-      const [px, py] = [cx + Math.cos(a) * r * 1.05, cy + Math.sin(a) * r * 0.95];
-      const b = a + (rnd() - 0.5) * 1.4;
-      g.moveTo(px, py).lineTo(px + Math.cos(b) * 0.09, py + Math.sin(b) * 0.09);
-    }
-    g.stroke({ width: 0.02, color: 0x7a6a48, cap: 'round' });
+  g.stroke({ width: 0.014, color: 0x5a4a2a, cap: 'round' });
+  // A few short stray straws just outside the heap.
+  for (let i = 0; i < 5; i++) {
+    const a = rnd() * Math.PI * 2;
+    const [px, py] = [cx + Math.cos(a) * r * 1.05, cy + Math.sin(a) * r * 0.95];
+    const b = a + (rnd() - 0.5) * 1.4;
+    g.moveTo(px, py).lineTo(px + Math.cos(b) * 0.09, py + Math.sin(b) * 0.09);
   }
-  if (beast) {
-    // Fur tufts on the ring.
-    for (let i = 0; i < 5; i++) {
-      const a = rnd() * Math.PI * 2;
-      g.poly(patch(cx + Math.cos(a) * r * 0.78, cy + Math.sin(a) * r * 0.78, 0.07, 0.05, rnd, 0.4, 10)).fill(0x8a7a6a);
-    }
-    // The hollow, then a bone across the rim and a shard.
-    g.poly(patch(cx, cy, r * 0.5, r * 0.45, rnd, 0.15, 14)).fill(0x2a2018).stroke({ width: 0.018, color: INK });
-    g.poly(patch(cx, cy, r * 0.38, r * 0.33, rnd, 0.2, 12)).fill(0x5a4a3a);
-    const a = rnd() * Math.PI;
-    const [c, s] = [Math.cos(a), Math.sin(a)];
-    const ends = [
-      [cx - c * 0.2, cy - s * 0.2],
-      [cx + c * 0.2, cy + s * 0.2],
-    ];
-    g.moveTo(ends[0][0], ends[0][1]).lineTo(ends[1][0], ends[1][1]).stroke({ width: 0.056, color: INK, cap: 'round' });
-    for (const [ex, ey] of ends) for (const k of [1, -1]) g.circle(ex - s * k * 0.035, ey + c * k * 0.03, 0.036).fill(INK);
-    g.moveTo(ends[0][0], ends[0][1]).lineTo(ends[1][0], ends[1][1]).stroke({ width: 0.032, color: 0xece2c8, cap: 'round' });
-    for (const [ex, ey] of ends) for (const k of [1, -1]) g.circle(ex - s * k * 0.035, ey + c * k * 0.03, 0.024).fill(0xece2c8);
-    g.poly(oval(cx + 0.1, cy + 0.14, 0.05, 0.02, 1.2, 8)).fill(0xece2c8).stroke({ width: 0.018, color: INK });
-    return;
-  }
+  g.stroke({ width: 0.02, color: 0x7a6a48, cap: 'round' });
   // One rag: a frayed, striped patch of cloth.
   {
     const a = rnd() * Math.PI * 2;
@@ -7178,10 +7196,10 @@ export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: num
       cavePool(g, f, light, v, rnd);
       break;
     case 'nest':
-      nestHeap(g, f, light, rnd, true);
+      beastNest(g, f, light, v, rnd);
       break;
     case 'rat_nest':
-      nestHeap(g, f, light, rnd, false);
+      ratNest(g, f, light, rnd);
       break;
     case 'ice':
       iceFormation(g, f, light, rnd);
