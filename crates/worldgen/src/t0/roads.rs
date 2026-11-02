@@ -390,7 +390,11 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     let ground_ft = |p: [f64; 2]| hgrid.z([p[0] / cell, p[1] / cell]);
     let belts = crate::lod::roads::BeltCache::default();
     let crossings = |line: &[[f64; 2]]| crate::lod::roads::belt_crossings(line, inp.rivers, cell, &belts);
-    square_junctions(&mut roads, &towns, cell, &dry_ft, &ground_ft, &crossings);
+    square_junctions(&mut roads, &towns, cell, &dry_ft, &ground_ft, &crossings, None);
+    let cut = end_at_crossing(&mut roads, &towns);
+    if !cut.is_empty() {
+        square_junctions(&mut roads, &towns, cell, &dry_ft, &ground_ft, &crossings, Some(&cut));
+    }
     drop_parallel(&mut roads, &towns);
     join_through(&mut roads, &towns, cell, &dry_ft);
     if drop_lenses(&mut roads, &towns) {
@@ -399,6 +403,9 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     // (Squaring can lay a branch along another leaving the same junction: one road out to where they part.)
     unshare(&mut roads, &towns);
     join_through(&mut roads, &towns, cell, &dry_ft);
+    while drop_triangle(&mut roads, &towns) {
+        join_through(&mut roads, &towns, cell, &dry_ft);
+    }
 
     // --- 4. Crossings and waystations.
     let mut crossings: Vec<Crossing> = Vec::new();
@@ -1889,6 +1896,143 @@ fn drop_shortcuts(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
     });
 }
 
+/// How round a small loop may be (ft) for one of its lesser roads to go, and how much longer the
+/// way round it may then be.
+const TRIANGLE_FT: f64 = 4.0 * 5280.0;
+const TRIANGLE_SLACK: f64 = 1.6;
+/// The same for a link between two roads into one place.
+const TRIANGLE_LINK: f64 = 3.0;
+
+/// Three roads closing a small loop (two lesser roads into one place and a short link between
+/// them, or a lesser road's two arms out to the same road) read as a ladder's rung: one lesser
+/// road of it goes, a link between two roads into one place first, else the one whose way round
+/// (over roads at least as good) is shortest for its length. Drawn roads and king's roads stay.
+/// Returns whether one went.
+fn drop_triangle(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> bool {
+    let ends: Vec<((i64, i64), (i64, i64))> = roads.iter().map(|r| (end_key(r.pts[0], towns), end_key(*r.pts.last().unwrap(), towns))).collect();
+    let lens: Vec<f64> = roads.iter().map(road_len).collect();
+    let mut at: std::collections::BTreeMap<(i64, i64), Vec<usize>> = Default::default();
+    for (i, e) in ends.iter().enumerate() {
+        if e.0 != e.1 {
+            at.entry(e.0).or_default().push(i);
+            at.entry(e.1).or_default().push(i);
+        }
+    }
+    let far = |i: usize, n: (i64, i64)| if ends[i].0 == n { ends[i].1 } else { ends[i].0 };
+    let mut best: Option<(f64, usize)> = None;
+    for (i, r) in roads.iter().enumerate() {
+        let (a, b) = ends[i];
+        if r.stroke.is_some() || r.class == RoadClass::KingsRoad || a == b || lens[i] > TRIANGLE_FT {
+            continue;
+        }
+        for &k in &at[&a] {
+            let c = far(k, a);
+            if k == i || c == b || roads[k].class > r.class {
+                continue;
+            }
+            for &m in at.get(&c).map(|v| v.as_slice()).unwrap_or(&[]) {
+                if m == i || m == k || far(m, c) != b || roads[m].class > r.class {
+                    continue;
+                }
+                let round = lens[k] + lens[m];
+                let ratio = round / lens[i];
+                // (A link between two roads into one place goes first: the place keeps both ways out.)
+                let link = c.0 == i64::MIN && a.0 != i64::MIN && b.0 != i64::MIN;
+                let (most, rank) = if link { (TRIANGLE_LINK, ratio - TRIANGLE_LINK) } else { (TRIANGLE_SLACK, ratio) };
+                if lens[i] + round <= TRIANGLE_FT && ratio <= most && best.is_none_or(|(q, _)| rank < q) {
+                    best = Some((rank, i));
+                }
+            }
+        }
+    }
+    let Some((_, i)) = best else { return false };
+    roads.remove(i);
+    true
+}
+
+/// A lesser road that crosses a better one and then runs beside it to where that one ends (round
+/// a town, where it may not join it, it crossed over to a join outside) cuts the better road's
+/// corner: it ends where it crosses it instead, a junction there (to be squared clear of rivers).
+/// Returns those junctions.
+fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<[f64; 2]> {
+    const NEAR: f64 = 5280.0;
+    let mut cuts: Vec<[f64; 2]> = Vec::new();
+    let in_town = |p: [f64; 2]| towns.iter().any(|&(c, r)| dist(c, p) < 1.2 * r + 100.0);
+    // Where segment a–b crosses c–d: the fractions along each.
+    let meet = |a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]| {
+        let (r, q) = (sub2(b, a), sub2(d, c));
+        let den = r[0] * q[1] - r[1] * q[0];
+        if den.abs() < 1e-9 {
+            return None;
+        }
+        let w = sub2(c, a);
+        let (u, v) = ((w[0] * q[1] - w[1] * q[0]) / den, (w[0] * r[1] - w[1] * r[0]) / den);
+        ((0.0..1.0).contains(&u) && (0.0..1.0).contains(&v)).then_some((u, v))
+    };
+    for _ in 0..50 {
+        let mut cut: Option<(usize, usize, f64, f64, [f64; 2], bool)> = None;
+        'find: for (i, r) in roads.iter().enumerate() {
+            if r.stroke.is_some() || r.class == RoadClass::KingsRoad || r.pts.len() < 3 {
+                continue;
+            }
+            let rs = arc(&r.pts);
+            for at_end in [true, false] {
+                let e = if at_end { *r.pts.last().unwrap() } else { r.pts[0] };
+                let ek = end_key(e, towns);
+                if ek.0 == i64::MIN {
+                    continue;
+                }
+                for (k, t) in roads.iter().enumerate() {
+                    if k == i || t.class >= r.class || t.pts.len() < 2 || (end_key(t.pts[0], towns) != ek && end_key(*t.pts.last().unwrap(), towns) != ek) {
+                        continue;
+                    }
+                    let ts = arc(&t.pts);
+                    // The crossing nearest that end.
+                    let mut best: Option<(f64, f64, [f64; 2])> = None;
+                    for a in 0..r.pts.len() - 1 {
+                        for b in 0..t.pts.len() - 1 {
+                            if let Some((u, v)) = meet(r.pts[a], r.pts[a + 1], t.pts[b], t.pts[b + 1]) {
+                                let x = [r.pts[a][0] + u * (r.pts[a + 1][0] - r.pts[a][0]), r.pts[a][1] + u * (r.pts[a + 1][1] - r.pts[a][1])];
+                                let (sr, st) = (rs[a] + u * (rs[a + 1] - rs[a]), ts[b] + v * (ts[b + 1] - ts[b]));
+                                let from_end = if at_end { rs[rs.len() - 1] - sr } else { sr };
+                                if from_end >= 100.0 && st >= 100.0 && st <= ts[ts.len() - 1] - 100.0 && best.is_none_or(|q| from_end < q.0) {
+                                    best = Some((from_end, st, x));
+                                }
+                            }
+                        }
+                    }
+                    let Some((from_end, st, x)) = best else { continue };
+                    let sr = if at_end { rs[rs.len() - 1] - from_end } else { from_end };
+                    let (lo, hi) = if at_end { (sr, rs[rs.len() - 1]) } else { (0.0, sr) };
+                    let kept = rs[rs.len() - 1] - from_end;
+                    if kept < 1000.0 || in_town(x) {
+                        continue;
+                    }
+                    // The stretch past the crossing keeps beside the better road.
+                    let rest = sub_line(&r.pts, &rs, lo, hi);
+                    let t_rest = if end_key(t.pts[0], towns) == ek { st } else { ts[ts.len() - 1] - st };
+                    if from_end <= 1.5 * t_rest && rest.iter().all(|p| line_dist(*p, &t.pts) < NEAR) {
+                        cut = Some((i, k, sr, st, x, at_end));
+                        break 'find;
+                    }
+                }
+            }
+        }
+        let Some((i, k, sr, st, x, at_end)) = cut else { break };
+        let (r, t) = (roads[i].clone(), roads[k].clone());
+        let mut pieces = split_road(&r, &arc(&r.pts), &[(sr, x)]);
+        let kept = if at_end { pieces.swap_remove(0) } else { pieces.pop().unwrap() };
+        let halves = split_road(&t, &arc(&t.pts), &[(st, x)]);
+        let (lo, hi) = (i.min(k), i.max(k));
+        roads.remove(hi);
+        roads.remove(lo);
+        roads.push(kept);
+        roads.extend(halves);
+        cuts.push(x);
+    }
+    cuts
+}
+
 /// Roads that only meet each other (two ends at a point outside settlements) become one road,
 /// the bend where they met rounded (a curve from ~0.3 cell before it to as far after, keeping
 /// each side's heading; left as it is where the curve would cross water).
@@ -2141,6 +2285,8 @@ struct Square<'a> {
     /// Where a line crosses rivers' meander belts (each with the belt's half width).
     crossings: &'a dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>,
     wet: Vec<([f64; 2], f64)>,
+    /// Short branches from a settlement may be laid anew to take a junction clear of a river.
+    relay: bool,
 }
 
 impl Square<'_> {
@@ -2262,9 +2408,12 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
     // branch's own crossing further out is no matter: a road leaving one along the bank.)
     let far = |q: [f64; 2], w: &[([f64; 2], f64)], m: f64| w.iter().all(|&(c, hw)| dist(c, q) >= m + WET_STRAY * hw);
     let mut best: Option<(u8, Fit)> = None;
+    // (A short branch from a settlement to a junction at a river crossing may be laid anew from
+    // near the settlement's edge, slid as far as it takes: nothing else would take it clear.)
+    let most = if sq.relay && !sq.clear(b.pts[0]) && sq.in_town(b.pts[b.pts.len() - 1]) { blen } else { 0.5 * blen };
     for f in [0.4, 0.55, 0.7, 0.9, 1.15, 1.5, 2.0, 2.5] {
         let reach = (f * cell).max(min_reach);
-        if reach > 0.5 * blen {
+        if reach > most {
             break;
         }
         let p = point_at(&b.pts, &bs, reach);
@@ -2287,7 +2436,7 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
             }
             let q = point_at(&t.pts, ts, at);
             let slid = if fixed.is_none() { (at - at0).abs() / off } else { 0.0 };
-            let rank = |clear: bool, belt: bool| match (slid > SKEW_MAX, clear, belt) {
+            let rank = |clear: bool, belt: bool| match (slid > SKEW_MAX && most < blen, clear, belt) {
                 (false, true, _) => (slid > 1.0) as u8,
                 (false, false, true) => 2 + (slid > 1.0) as u8,
                 (true, true, _) => 4,
@@ -2309,6 +2458,10 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
             if !curve.iter().all(|c| (sq.dry)(c[0], c[1]) && !sq.in_town(*c)) || !curve[..k - 1].iter().all(|c| dot2(n, sub2(*c, q)) > 5.0) {
                 continue;
             }
+            // (Laid anew, it may not cross the road it meets on the way: the road can bend.)
+            if most == blen && curve[..k - 1].windows(2).any(|w| crosses(w[0], w[1], &t.pts)) {
+                continue;
+            }
             if !sq.ramp_ok(&curve, z_p, val_at(&t.z, ts, at), gmax) {
                 continue;
             }
@@ -2316,7 +2469,7 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
             // that its line keeps on one side of puts the branch over it and back.)
             let wet_in = *wet_in.get_or_insert_with(|| (sq.crossings)(&sub_line(&b.pts, &bs, 0.0, reach)).len());
             let mut wet = (sq.crossings)(&curve);
-            if wet.len() > wet_in {
+            if wet.len() > if most < blen { wet_in } else { 0 } {
                 continue;
             }
             wet.extend_from_slice(&t_wet);
@@ -2390,12 +2543,17 @@ fn square_junctions(
     dry: &dyn Fn(f64, f64) -> bool,
     ground: &dyn Fn([f64; 2]) -> f64,
     crossings: &dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>,
+    only: Option<&[[f64; 2]]>,
 ) {
     let river_hits = |roads: &[RoadPath]| -> Vec<([f64; 2], f64)> { roads.iter().flat_map(|r| crossings(&r.pts)).collect() };
     unshare(roads, towns);
-    let mut sq = Square { towns, cell, dry, ground, crossings, wet: river_hits(roads) };
-    // Points already squared (or left as they are) are not looked at again.
+    let mut sq = Square { towns, cell, dry, ground, crossings, wet: river_hits(roads), relay: only.is_some() };
+    // Points already squared (or left as they are) are not looked at again; with `only`, every
+    // junction but those.
     let mut settled: std::collections::BTreeSet<(u64, u64)> = Default::default();
+    if let Some(only) = only {
+        settled.extend(ends_by_point(roads).into_keys().filter(|k| !only.iter().any(|q| (q[0].to_bits(), q[1].to_bits()) == *k)));
+    }
     for round in 0..4 {
         loop {
             let ends = ends_by_point(roads);

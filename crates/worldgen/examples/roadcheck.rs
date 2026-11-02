@@ -829,6 +829,13 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
             }
         }
         let shape = if straight { 0 } else if smallest < 60.0 { 1 } else { 2 };
+        // `JAT=x,y,r`: each junction within r ft of (x, y), its arms' headings (degrees).
+        if let Some(q) = std::env::var("JAT").ok().map(|v| v.split(',').filter_map(|x| x.parse().ok()).collect::<Vec<f64>>()) {
+            if q.len() == 3 && dist(spots.pos[n], [q[0], q[1]]) < q[2] {
+                let heads: Vec<String> = v.iter().map(|d| format!("{:.0}", d[1].atan2(d[0]).to_degrees())).collect();
+                say!("      JAT junction ({:.0}, {:.0}) {} arms, shape {shape}, headings {}", spots.pos[n][0], spots.pos[n][1], deg[n], heads.join(" "));
+            }
+        }
         shape_of[n] = shape;
         shape_n[shape] += 1;
         shape_arms[shape][(deg[n] - 3).min(2)] += 1;
