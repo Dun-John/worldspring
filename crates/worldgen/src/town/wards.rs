@@ -515,7 +515,8 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     // A new building lying mostly on one generated that none took, of the same structure (half
     // of each on the other: a lot trimmed back by a square or a close) is that building, cut down;
     // not in a patch whose lots were rolled, sized anew or given another ward (a roll never takes
-    // another's ids).
+    // another's ids), and a castle's only a castle's (a range never takes a house's id: how many
+    // ranges it has then moves no other building's).
     let reach = 1.5 * spacing;
     let relotted: Vec<u32> = edit.patches.iter().filter(|p| p.reroll > 0 || p.lots.is_some() || p.ward.is_some()).map(|p| p.p).collect();
     for k in fresh.clone() {
@@ -525,7 +526,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
         }
         let (at, whole) = (centroid(&b.poly), area(&b.poly).abs());
         let hit = (0..generated.buildings.len())
-            .filter(|&g| !used[g] && generated.buildings[g].structure == b.structure && dist(centroid(&generated.buildings[g].poly), at) < 80.0)
+            .filter(|&g| !used[g] && generated.buildings[g].structure == b.structure && (generated.buildings[g].ward == Ward::Castle) == (b.ward == Ward::Castle) && dist(centroid(&generated.buildings[g].poly), at) < 80.0)
             .map(|g| (super::overlap(&b.poly, &generated.buildings[g].poly), g))
             .filter(|&(a, g)| a >= 0.5 * whole && a >= 0.5 * area(&generated.buildings[g].poly).abs())
             .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(&a.1)));
@@ -553,7 +554,8 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     for &k in &fresh {
         let Some(f) = l.buildings[k].func else { continue };
         let at = centroid(&l.buildings[k].poly);
-        pairs.extend((0..lost.len()).filter(|&i| lost[i].0 == f as usize && dist(lost[i].1, at) <= reach).map(|i| (dist(lost[i].1, at), k, i)));
+        let castle = l.buildings[k].ward == Ward::Castle;
+        pairs.extend((0..lost.len()).filter(|&i| lost[i].0 == f as usize && lost[i].4 == castle && dist(lost[i].1, at) <= reach).map(|i| (dist(lost[i].1, at), k, i)));
     }
     pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     let (mut placed, mut gone) = (Vec::new(), vec![false; lost.len()]);

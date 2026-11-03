@@ -433,8 +433,8 @@ fn towns_meet_roads_and_water() {
         assert!(over_water(e1) || over_water(e2), "settlement {i}: the pier at {:?} ends on drawn land", geom::lerp(e1, e2, 0.5));
     }
     // Seed 1's cities stand on flat river and harbour sites: steep streets are found in a world
-    // whose cities have them (seed 7), its cities' flights checked as above.
-    let mut sx = Executor::new(World::from_json(&world_json(7)).unwrap());
+    // whose cities have them (seed 11), its cities' flights checked as above.
+    let mut sx = Executor::new(World::from_json(&world_json(11)).unwrap());
     let mut steep: Vec<(usize, Vec<[f64; 2]>, f32)> = Vec::new();
     for i in (0..sx.t0.settlements.len()).filter(|&i| sx.t0.settlements[i].tier >= town::stairs::STAIR_TIER) {
         let l = town::layout(&sx.world, &sx.t0, i);
@@ -3199,8 +3199,14 @@ fn ward_edits(base: &World, t0: &worldgen::t0::T0) {
     // town changes under it, and left alone by a town edit that moves nothing it reads.
     let lanes = |l: &town::Layout| -> Vec<([f64; 2], [f64; 2])> { l.roads.iter().filter(|r| r.1 != 3).flat_map(|r| r.0.windows(2).map(|q| (q[0], q[1]))).collect() };
     let (before, after) = (lanes(&g), lanes(&l));
-    // (Where the street moved most: near the end of a segment the edit changed.)
-    let (a, b) = after.iter().copied().find(|&(a, b)| geom::dist(a, b) > 40.0 && !before.contains(&(a, b)) && before.iter().all(|&(p, q)| geom::seg_dist(geom::lerp(a, b, 0.85), p, q) > 5.0)).expect("a main street the edit moved");
+    // (Where the street moved most: near the end of a segment the edit changed, on land: a wall
+    // across a bridge stands in the river, broken there.)
+    let off_bridges = |p: [f64; 2]| l.bridges.iter().all(|q| !geom::contains(q, p) && (0..q.len()).all(|i| geom::seg_dist(p, q[i], q[(i + 1) % q.len()]) > 30.0));
+    let (a, b) = after
+        .iter()
+        .copied()
+        .find(|&(a, b)| geom::dist(a, b) > 40.0 && !before.contains(&(a, b)) && before.iter().all(|&(p, q)| geom::seg_dist(geom::lerp(a, b, 0.85), p, q) > 5.0) && off_bridges(geom::lerp(a, b, 0.85)))
+        .expect("a main street the edit moved");
     let m = geom::lerp(a, b, 0.85);
     let d = geom::sub(b, a);
     let nrm = geom::mul([-d[1], d[0]], 1.0 / geom::len(d).max(1e-9));

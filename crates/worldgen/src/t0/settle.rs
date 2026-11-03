@@ -582,6 +582,10 @@ pub fn retier(inp: &Inputs, s: &mut Settlement, tier: Tier) {
             s.reason = Reason::Food;
         }
     }
+    // A city grown on its trade alone lives by its market.
+    if s.reason == Reason::None && tier >= Tier::City && tier > s.planned {
+        s.reason = Reason::Crossroads;
+    }
     let near_river = g.on_river[k] || neighbors(w, h, k).any(|(nb, _)| g.on_river[nb]);
     let (cx, cy) = ((k % w) as f64, (k / w) as f64);
     let ore = fbm(inp.world.stream("t0.settle.ore"), cx / 12.0, cy / 12.0, 3, 2.0, 0.5);
@@ -1046,7 +1050,8 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
                 Reason::Crossing => 0.0,
                 Reason::Ore => if hilly(c) { v } else { 0.0 },
                 Reason::Pass => if s.tier == Tier::Town && saddle(c, reach) { 0.9 } else { 0.0 },
-                Reason::Crossroads => if s.tier == Tier::Town && arms(c, reach).len() >= 3 { 0.75 } else { 0.0 },
+                // (A city's is its market: only the economy gives a city one, `retier`.)
+                Reason::Crossroads => if s.tier >= Tier::City || (s.tier == Tier::Town && arms(c, reach).len() >= 3) { 0.75 } else { 0.0 },
                 Reason::Food => if g.food[k] >= 0.5 { 1.0 } else { 0.0 },
                 _ => v,
             }
@@ -1069,6 +1074,10 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
         }
         if reason == Reason::None && g.food[k] >= 0.5 {
             reason = Reason::Food;
+        }
+        // (A city its trade grew from a town lives by its market: `retier`.)
+        if reason == Reason::None && s.tier >= Tier::City && s.tier > s.planned {
+            reason = Reason::Crossroads;
         }
         s.reason = reason;
         if inp.pins.iter().any(|p| s.pin == Some(p.stroke as u32) && p.kind.is_some()) {

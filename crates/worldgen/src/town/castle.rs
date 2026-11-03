@@ -2064,7 +2064,10 @@ fn ranges<G: Ground>(
                 let c = centroid(&poly);
                 let inside = poly.iter().all(|p| inset_depth(ring, *p) >= back - 1.0)
                     && !ring.iter().any(|p| inset_depth(&poly, *p) > 1.0)
-                    && walls.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 5.5);
+                    && walls.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 5.5)
+                    // (Its yard side two squares clear of any wall's foot: no neck of the bailey
+                    // shut, its end cut off.)
+                    && walls.iter().all(|&(p, q)| super::poly_seg_dist(&poly[2..], p, q) >= 16.0);
                 let clear_inner = inner.is_none_or(|q| poly.iter().all(|p| inset_depth(q, *p) <= -20.0) && !q.iter().any(|p| inset_depth(&poly, *p) > -20.0))
                     && inner_towers.iter().all(|(q, r)| inset_depth(&poly, *q) < -(r + 10.0));
                 let clear_lanes = lanes.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 20.0 && !contains(&poly, p));
