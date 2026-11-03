@@ -1049,6 +1049,15 @@ const ZONE_FT: f64 = 1.1 * 1.5 * 12.0 * 282.842712474619;
 const MAJOR: RoadClass = RoadClass::Road;
 /// What stepping off the open ground onto a major road inside the zone costs (cells): large, not infinite.
 const JOIN_BAN: f64 = 200.0;
+/// Whether segments a-b and c-d cross (properly: not where they only touch).
+fn segments_cross(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
+    let side = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0);
+    let (d1, d2, d3, d4) = (side(a, b, c), side(a, b, d), side(c, d, a), side(c, d, b));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+
+/// How far (miles) the other roads keep off an isolated realm's track, but at its outer end.
+pub const REALM_TRACK_APART_MI: f64 = 20.0;
 /// What crossing the zone edge off a major road costs (cells): the long way round that is worth a road of its own.
 const GATE_ROAD: f64 = 2.0;
 const GATE_TRACK: f64 = 1.0;
@@ -1091,6 +1100,9 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
     // Isolated realms' towns (cell x, y, the radius other roads pay extra inside), and per cell
     // whether a road from outside any realm runs there; each realm's track.
     let avoid = super::settle::REALM_AVOID_MI * 5280.0 / cell;
+    let avoid_track = super::settle::REALM_AVOID_TRACK_MI * 5280.0 / cell;
+    // (How far other roads keep off a realm's track but where it joins them.)
+    let apart_ft = REALM_TRACK_APART_MI * 5280.0;
     let realms: Vec<(f64, f64)> = settlements.iter().filter(|s| s.isolated && s.planned >= Tier::Town).map(|s| ((s.cell % w) as f64, (s.cell / w) as f64)).collect();
     let mut outside: Vec<bool> = vec![false; if realms.is_empty() { 0 } else { n }];
     for (_, cells, _) in &pre.routes {
@@ -1103,6 +1115,8 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
     let mut tracks: std::collections::BTreeMap<usize, Vec<u32>> = Default::default();
     // Where each realm's villages' tracks join it.
     let mut joins: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+    // Each realm's villages' tracks so far (cells).
+    let mut spurs: std::collections::BTreeMap<usize, Vec<Vec<u32>>> = Default::default();
     for (e, link) in links.iter().enumerate() {
         let class = link.class;
         let realm_link = [link.a, link.b].iter().any(|&end| match end {
@@ -1122,16 +1136,62 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
         let goal = match link.b {
             End::Town(i) => Some(settlements[i].cell),
             End::Cell(k) => Some(k),
-            // (The nearest king's road, which its villages lie towards: `settle::place_realms`;
-            // the nearest road where that is much nearer.)
+            // (The nearest king's road, the nearest road where that is much nearer; nearer still
+            // the way its villages lie, so that it leaves past them: `settle::place_realms`.)
             End::Net => {
-                let any = near(&mut (0..outside.len()).filter(|&k| outside[k]));
-                let king = near(&mut (0..outside.len()).filter(|&k| outside[k] && road_class[k] == RoadClass::KingsRoad as u8));
-                let d = |k: usize| crate::core::sqrt(((k % w) as f64 - (from % w) as f64) * ((k % w) as f64 - (from % w) as f64) + ((k / w) as f64 - (from / w) as f64) * ((k / w) as f64 - (from / w) as f64));
-                match (king, any) {
+                let (fx, fy) = ((from % w) as f64, (from / w) as f64);
+                let ri = match link.a {
+                    End::Town(i) => i,
+                    _ => usize::MAX,
+                };
+                let (mut ex, mut ey) = (0.0, 0.0);
+                for (vi, v) in settlements.iter().enumerate() {
+                    if v.isolated && v.planned == Tier::Village && realm_of(settlements, vi) == Some(ri) {
+                        let (vx, vy) = ((v.cell % w) as f64 - fx, (v.cell / w) as f64 - fy);
+                        let m = crate::core::sqrt(vx * vx + vy * vy).max(1e-9);
+                        (ex, ey) = (ex + vx / m, ey + vy / m);
+                    }
+                }
+                let em = crate::core::sqrt(ex * ex + ey * ey);
+                let d = |k: usize| {
+                    let (dx, dy) = ((k % w) as f64 - fx, (k / w) as f64 - fy);
+                    let r = crate::core::sqrt(dx * dx + dy * dy);
+                    let off = if em > 1e-6 && r > 1e-9 { 1.0 - (dx * ex + dy * ey) / (em * r) } else { 0.0 };
+                    r * (1.0 + 0.4 * off)
+                };
+                let toward = |cells: &mut dyn Iterator<Item = usize>| cells.map(|k| (d(k), k)).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|m| m.1);
+                let any = toward(&mut (0..outside.len()).filter(|&k| outside[k]));
+                let king = toward(&mut (0..outside.len()).filter(|&k| outside[k] && road_class[k] == RoadClass::KingsRoad as u8));
+                let natural = match (king, any) {
                     (Some(kc), Some(ac)) if d(kc) <= d(ac) + 15.0 * 5280.0 / cell => Some(kc),
                     _ => any,
-                }
+                };
+                // Near a junction it ends at a node instead (a settlement on the roads there, else
+                // the junction), a branch of its own rather than a way on past it.
+                natural.map(|g| {
+                    let reach = apart_ft / cell;
+                    let by = |k: usize| ((k % w) as f64 - (g % w) as f64) * ((k % w) as f64 - (g % w) as f64) + ((k / w) as f64 - (g / w) as f64) * ((k / w) as f64 - (g / w) as f64) <= reach * reach;
+                    let mut arms: std::collections::BTreeMap<u32, Vec<u32>> = Default::default();
+                    for (_, path, _) in &paths {
+                        for p in path.windows(2) {
+                            if p[0] != p[1] && outside[p[0] as usize] && outside[p[1] as usize] && (by(p[0] as usize) || by(p[1] as usize)) {
+                                for (a, b) in [(p[0], p[1]), (p[1], p[0])] {
+                                    let v = arms.entry(a).or_default();
+                                    if !v.contains(&b) {
+                                        v.push(b);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let junctions: Vec<usize> = arms.iter().filter(|(k, v)| v.len() >= 3 && by(**k as usize)).map(|(&k, _)| k as usize).collect();
+                    if junctions.is_empty() {
+                        return g;
+                    }
+                    let towns: Vec<usize> = settlements.iter().filter(|s| !s.isolated && outside[s.cell] && by(s.cell)).map(|s| s.cell).collect();
+                    let pick = if towns.is_empty() { junctions } else { towns };
+                    near(&mut pick.into_iter()).unwrap_or(g)
+                })
             }
             End::Track(ri) => {
                 // (Joining it outside the town, so only the track reaches its gate.)
@@ -1143,7 +1203,17 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 let apart = |k: usize| {
                     joins.get(&ri).is_none_or(|js: &Vec<usize>| js.iter().all(|&j| ((k % w) as f64 - (j % w) as f64) * ((k % w) as f64 - (j % w) as f64) + ((k / w) as f64 - (j / w) as f64) * ((k / w) as f64 - (j / w) as f64) >= 9.0))
                 };
-                tracks.get(&ri).and_then(|t| near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k) && apart(k))).or_else(|| near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k)))))
+                // (Nor across another of its villages' tracks: each straight to its own join.)
+                let xy = |c: usize| ((c % w) as f64, (c / w) as f64);
+                let clear = |k: usize| {
+                    let (a, b) = (xy(from), xy(k));
+                    spurs.get(&ri).is_none_or(|ss| ss.iter().all(|sp| sp.windows(2).all(|q| !segments_cross(a, b, xy(q[0] as usize), xy(q[1] as usize)))))
+                };
+                tracks.get(&ri).and_then(|t| {
+                    near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k) && apart(k) && clear(k)))
+                        .or_else(|| near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k) && apart(k))))
+                        .or_else(|| near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k))))
+                })
             }
         };
         let Some(goal) = goal else { continue };
@@ -1199,6 +1269,32 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
             let (by0, by1) = ((sy.min(gy) - pad).max(0.0), (sy.max(gy) + pad).min((h - 1) as f64));
             // The box in whole cells (a cell index is inside exactly when it is between these).
             let b = [crate::core::ceil(bx0) as i64, crate::core::floor(bx1) as i64, crate::core::ceil(by0) as i64, crate::core::floor(by1) as i64];
+            // A realm's track keeps off the other roads (cells from them) but near where it joins
+            // them; its villages' tracks off every road but where they join its track (each a spur
+            // of its own, straight to it).
+            let off: Vec<f64> = if matches!(link.b, End::Net) { super::climate::distance_to(w, h, &outside) } else { Vec::new() };
+            let apart = apart_ft / cell;
+            // (A margin over that, so none comes closer just beyond the end.)
+            let keep = 1.25 * apart;
+            let spur = matches!(link.b, End::Track(_));
+            // (And a cell's berth off its realm's other villages' tracks, so none slips across one.)
+            let berth: crate::core::hash::FastSet<usize> = match link.b {
+                End::Track(ri) => spurs
+                    .get(&ri)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .flat_map(|&c| {
+                        let (x, y) = ((c as usize % w) as i64, (c as usize / w) as i64);
+                        (-1i64..=1).flat_map(move |dy| (-1i64..=1).map(move |dx| (x + dx, y + dy)))
+                    })
+                    .filter(|&(x, y)| x >= 0 && y >= 0 && x < w as i64 && y < h as i64)
+                    .map(|(x, y)| y as usize * w + x as usize)
+                    .filter(|&k| k != goal)
+                    .collect(),
+                _ => Default::default(),
+            };
+            let zone = if class == RoadClass::Track { avoid_track } else { avoid };
             let path = search.run(w, start, goal, b, |k| open[k] || (k == goal && free[k]), |i, nb, mids, run| {
                 let mut c = costs.ground(inp, i, nb, run) * wobble[nb] as f64;
                 c += costs.river(inp, i, nb, mids);
@@ -1207,11 +1303,20 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 // Round an isolated realm the others go the long way.
                 if !realm_link {
                     for &(rx, ry) in &realms {
-                        let d2 = ((nx - rx) * (nx - rx) + (ny - ry) * (ny - ry)) / (avoid * avoid);
+                        let d2 = ((nx - rx) * (nx - rx) + (ny - ry) * (ny - ry)) / (zone * zone);
                         if d2 < 1.0 {
                             c *= 1.0 + 12.0 * (1.0 - d2);
                         }
                     }
+                }
+                if let Some(&d) = off.get(nb)
+                    && d < keep
+                    && (nx - gx) * (nx - gx) + (ny - gy) * (ny - gy) > apart * apart
+                {
+                    c *= 1.0 + 8.0 * (1.0 - d / keep);
+                }
+                if spur && ((road_class[nb] != u8::MAX && nb != goal) || berth.contains(&nb)) {
+                    c += JOIN_BAN / run;
                 }
                 if let Some((kx, ky, kr)) = keep_out
                     && road_class[nb] == u8::MAX
@@ -1266,11 +1371,9 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
             }
         } else if let (End::Town(i), End::Net) = (link.a, link.b) {
             tracks.insert(i, path.clone());
-        } else if let End::Track(ri) = link.b
-            && let Some(t) = tracks.get_mut(&ri)
-        {
-            // (A later village may join this one's track instead: a branching tree, no stubs.)
-            t.extend_from_slice(&path);
+        } else if let End::Track(ri) = link.b {
+            // (Each realm village's track a spur of its own to the realm's: no village's joins another's.)
+            spurs.entry(ri).or_default().push(path.clone());
         }
         if class <= MAJOR {
             major_steps.extend(path.windows(2).map(|p| (p[0].min(p[1]), p[0].max(p[1]))));

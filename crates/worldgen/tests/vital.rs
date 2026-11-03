@@ -262,7 +262,9 @@ fn towns_meet_roads_and_water() {
     let mut ex = Executor::new(World::from_json(&world_json(1)).unwrap());
     let (world, t0) = (&ex.world, &ex.t0);
     // Isolated realms (world 1 has some): each walled, with one track and one gate, no other road
-    // within 20 miles; and the hierarchy's own tier counts as without them.
+    // within 20 miles of it or of its track but where that joins them, no town or king's road
+    // within 100 miles, each village's track a spur of its own to the realm's; and the
+    // hierarchy's own tier counts as without them.
     {
         let sts = &t0.settlements;
         let realms: Vec<usize> = (0..sts.len()).filter(|&i| sts[i].isolated && sts[i].tier >= Tier::Town).collect();
@@ -279,9 +281,27 @@ fn towns_meet_roads_and_water() {
             // (Its own: those ending at it or a village of its, or mostly along its routes as found.)
             let mine: Vec<[f64; 2]> = t0.extra.as_ref().unwrap().realm_paths.iter().filter(|p| p.0 == i).flat_map(|p| p.1.iter().copied()).collect();
             let along = |r: &worldgen::lod::roads::RoadCurve| 2 * r.pts.iter().filter(|&&p| mine.iter().any(|&q| geom::dist(p, q) < 1.5 * t0.cell_ft)).count() >= r.pts.len();
+            let paths: Vec<&Vec<[f64; 2]>> = t0.extra.as_ref().unwrap().realm_paths.iter().filter(|p| p.0 == i).map(|p| &p.1).collect();
+            let track = paths.iter().find(|p| geom::dist(p[0], c) < t0.cell_ft).expect("a realm's track");
+            let outer = track[track.len() - 1];
+            let far: Vec<[f64; 2]> = track.iter().copied().filter(|&q| geom::dist(q, outer) > 20.0 * 5280.0).collect();
             for r in rs.iter().filter(|r| !along(r) && !ends(r).iter().any(|&p| own.iter().any(|&o| geom::dist(p, o) < trim))) {
                 let near = r.pts.iter().map(|&p| geom::dist(p, c)).fold(f64::INFINITY, f64::min);
                 assert!(near > 20.0 * 5280.0, "realm {i} at {c:?}: a {:?} passes {near:.0} ft from it", r.class);
+                let by = r.pts.iter().flat_map(|&p| far.iter().map(move |&q| geom::dist(p, q))).fold(f64::INFINITY, f64::min);
+                assert!(by > 18.0 * 5280.0, "realm {i} at {c:?}: a {:?} passes {by:.0} ft from its track", r.class);
+                if r.class == worldgen::t0::roads::RoadClass::KingsRoad {
+                    let gap = r.pts.iter().flat_map(|&p| own.iter().map(move |&o| geom::dist(p, o))).fold(f64::INFINITY, f64::min);
+                    assert!(gap >= 100.0 * 5280.0, "realm {i} at {c:?}: a king's road {gap:.0} ft from it");
+                }
+            }
+            for o in sts.iter().filter(|o| !o.isolated && o.tier >= Tier::Town) {
+                let gap = own.iter().map(|&p| geom::dist(p, [o.x, o.y])).fold(f64::INFINITY, f64::min);
+                assert!(gap >= 100.0 * 5280.0, "realm {i} at {c:?}: a {:?} {gap:.0} ft from it", o.tier);
+            }
+            for sp in paths.iter().filter(|p| geom::dist(p[0], c) >= t0.cell_ft) {
+                let end = sp[sp.len() - 1];
+                assert!(track.iter().any(|&q| geom::dist(q, end) < 1.5 * t0.cell_ft), "realm {i} at {c:?}: a village's track from {:?} ends off the realm's", sp[0]);
             }
             let l = town::layout(world, t0, i);
             assert!(!l.walls.is_empty() && l.gates.len() == 1, "realm {i} at {c:?}: walls {}, gates {}", l.walls.len(), l.gates.len());

@@ -353,17 +353,33 @@ impl T0 {
         // Isolated realms, well off the king's roads between the cities (which no realm changes:
         // they leave realms out), before the towns (nothing grows up beside them).
         let kings = world.file.params.generated_roads.then(|| roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]));
-        settlements = settle::place_realms(&sinp, settlements, kings.as_ref());
         let economy;
         if let Some(usage) = kings {
-            settlements = settle::place(&sinp, settlements, &[T::Town], Some(&usage), &mut conflicts);
-            let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad, roads::RoadClass::Road]);
+            let cities = settlements;
+            // (A realm the roads between the towns pass too close to is given up and another site
+            // found for it, twice at most; then the world has none.)
+            let (mut banned, mut tries): (Vec<usize>, usize) = (Vec::new(), 0);
+            let (towns, usage, found) = loop {
+                let mut found = Vec::new();
+                let mut towns = if tries < 3 { settle::place_realms(&sinp, cities.clone(), Some(&usage), &banned) } else { cities.clone() };
+                towns = settle::place(&sinp, towns, &[T::Town], Some(&usage), &mut found);
+                let preview = roads::preview(&rinp, &towns, &[roads::RoadClass::KingsRoad, roads::RoadClass::Road]);
+                let crowded = settle::realm_crowded(&towns, &preview, w, cell);
+                if crowded.is_empty() {
+                    break (towns, preview, found);
+                }
+                banned.extend(crowded);
+                tries += 1;
+            };
+            conflicts.extend(found);
+            settlements = towns;
             // What the towns and up earn, trading along those roads, sets their tiers.
             economy = economy::run(&sinp, &mut settlements, Some(&usage.paths));
             settlements = settle::place(&sinp, settlements, &[T::Village], Some(&usage), &mut conflicts);
         } else {
             // Placed without regard to roads (and sized without trade), so drawing one never moves
             // or resizes a settlement.
+            settlements = settle::place_realms(&sinp, settlements, None, &[]);
             settlements = settle::place(&sinp, settlements, &[T::Town], None, &mut conflicts);
             economy = economy::run(&sinp, &mut settlements, None);
             settlements = settle::place(&sinp, settlements, &[T::Village], None, &mut conflicts);

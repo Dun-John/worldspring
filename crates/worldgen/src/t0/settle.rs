@@ -850,16 +850,41 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
     out
 }
 
-/// How far (miles) later towns and up keep from any part of an isolated realm.
-pub const REALM_CLEAR_MI: f64 = 45.0;
+/// How far (miles) later towns and up keep from any part of an isolated realm, and the king's
+/// roads and roads between them (`realm_crowded`): out of sight at the continent's view.
+pub const REALM_CLEAR_MI: f64 = 100.0;
 /// How far (miles) later villages keep from any part of an isolated realm.
-pub const REALM_CLEAR_VILLAGE_MI: f64 = 30.0;
-/// How far (miles) round a realm's town other roads pay extra to pass (`roads::route`).
-pub const REALM_AVOID_MI: f64 = 30.0;
+pub const REALM_CLEAR_VILLAGE_MI: f64 = 40.0;
+/// How far (miles) round a realm's town other king's roads and roads pay extra to pass, and
+/// tracks (`roads::route`).
+pub const REALM_AVOID_MI: f64 = 115.0;
+pub const REALM_AVOID_TRACK_MI: f64 = 45.0;
 /// How far (miles) a realm's town keeps from the cities placed before it and from the king's
-/// roads between them as previewed (its villages, at most 11 miles out, a little less).
-const REALM_CITY_MI: f64 = 60.0;
-const REALM_KINGS_MI: f64 = 45.0;
+/// roads between them as previewed: the clearance and its villages' reach (11 miles).
+const REALM_CITY_MI: f64 = REALM_CLEAR_MI + 11.0;
+const REALM_KINGS_MI: f64 = REALM_CLEAR_MI + 11.0;
+/// How far (miles) a realm keeps from a site given up for one (`realm_crowded`).
+const REALM_BANNED_MI: f64 = 60.0;
+
+/// The realms' towns (their indices) that the king's roads and roads between the towns and up
+/// as previewed (`usage`, which the network as built follows) pass closer than the clearance
+/// to: their sites are given up (`place_realms`' `banned`).
+pub fn realm_crowded(settlements: &[Settlement], usage: &super::roads::Preview, w: usize, cell: f64) -> Vec<usize> {
+    let clear = REALM_CLEAR_MI * 5280.0;
+    let realms: Vec<usize> = (0..settlements.len()).filter(|&i| settlements[i].isolated && settlements[i].tier >= Tier::Town).collect();
+    let mut out = Vec::new();
+    for &r in &realms {
+        let parts: Vec<(f64, f64)> = settlements.iter().enumerate().filter(|&(i, s)| i == r || (s.isolated && s.tier == Tier::Village && super::roads::realm_of(settlements, i) == Some(r))).map(|(_, s)| ((s.cell % w) as f64 * cell, (s.cell / w) as f64 * cell)).collect();
+        let near = usage.paths.iter().filter(|(class, _, _)| *class <= super::roads::RoadClass::Road).flat_map(|(_, path, _)| path.iter()).any(|&c| {
+            let (x, y) = ((c as usize % w) as f64 * cell, (c as usize / w) as f64 * cell);
+            parts.iter().any(|&(px, py)| (x - px) * (x - px) + (y - py) * (y - py) < clear * clear)
+        });
+        if near {
+            out.push(settlements[r].cell);
+        }
+    }
+    out
+}
 
 /// Ground a mountain realm stands on: grass or woods (not scree, snow or bare ground).
 fn green(b: Biome) -> bool {
@@ -877,8 +902,8 @@ fn deep_forest(b: Biome) -> bool {
 /// the same forest or valley, on the side its way out leaves by (towards the nearest of the
 /// king's roads previewed, `kings`). About one per 15 cities, the number drawn per world (some
 /// have none); none at settlement density 0. Placed after the metropolises and cities, before
-/// the other tiers, so they keep clear of them (`place`).
-pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>, kings: Option<&super::roads::Preview>) -> Vec<Settlement> {
+/// the other tiers, so they keep clear of them (`place`); none near a site given up (`banned`).
+pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>, kings: Option<&super::roads::Preview>, banned: &[usize]) -> Vec<Settlement> {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let world = inp.world;
     let p = world.params();
@@ -975,12 +1000,14 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>, kings: Option<&supe
         crate::core::sqrt(dx * dx + dy * dy)
     };
     // Well clear of every settlement so far (another realm's more so), of the king's roads
-    // between them and of every pin: a pin in the same place wins.
+    // between them and of every pin: a pin in the same place wins. (Not one added beside the
+    // world's own, which moves nothing: refused or not, it leaves the realms as they were.)
     let clear = |k: usize, out: &[Settlement]| {
         let (x, y) = ((k % w) as f64 * cell, (k / w) as f64 * cell);
         kings_at(k) >= REALM_KINGS_MI * mi
-            && out.iter().all(|s| d_cells(s.cell, k) >= if s.isolated { 100.0 } else { REALM_CITY_MI } * mi)
-            && inp.pins.iter().all(|q| crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) >= 25.0 * 5280.0)
+            && out.iter().all(|s| d_cells(s.cell, k) >= if s.isolated { REALM_CITY_MI + 11.0 } else { REALM_CITY_MI } * mi)
+            && banned.iter().all(|&b| d_cells(b, k) >= REALM_BANNED_MI * mi)
+            && inp.pins.iter().all(|q| q.added || crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) >= 25.0 * 5280.0)
     };
     // The strongest reason at a site (as `place` weighs it for the tier).
     let reason_at = |k: usize, tier: Tier| {

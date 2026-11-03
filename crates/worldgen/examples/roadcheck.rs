@@ -762,6 +762,36 @@ fn realms(world: &worldgen::World, t0: &T0) {
             villages.len(),
             v.join(", ")
         );
+        // Its track (the route from the town) and its villages' spurs: the nearest road not its own
+        // to the track but its outer end (20 miles round where it joins), the spurs, and those
+        // joining anything but the track (cross-links).
+        let rp: Vec<&(usize, Vec<P>)> = t0.extra.as_ref().map(|e| e.realm_paths.iter().filter(|p| p.0 == i).collect()).unwrap_or_default();
+        let main = rp.iter().find(|p| p.1.first().is_some_and(|&q| d(q, c) < t0.cell_ft)).map(|p| p.1.clone()).unwrap_or_default();
+        let spurs: Vec<&Vec<P>> = rp.iter().filter(|p| p.1.first().is_some_and(|&q| d(q, c) >= t0.cell_ft)).map(|p| &p.1).collect();
+        let outer = main.last().copied().unwrap_or(c);
+        let far: Vec<P> = main.iter().copied().filter(|&q| d(q, outer) > 20.0 * MI).collect();
+        let others: Vec<P> = (0..rs.len()).filter(|&r| !own[r]).flat_map(|r| rs[r].pts.iter().copied()).collect();
+        let to_track = far.iter().flat_map(|&q| others.iter().map(move |&o| d(o, q))).fold(f64::INFINITY, f64::min);
+        let on = |q: P, path: &[P]| path.iter().any(|&m| d(m, q) < 1.5 * t0.cell_ft);
+        let cross = spurs
+            .iter()
+            .enumerate()
+            .filter(|&(si, sp)| {
+                let end = sp[sp.len() - 1];
+                let body = &sp[..sp.len().saturating_sub(2)];
+                !on(end, &main) || spurs.iter().enumerate().any(|(sj, o)| sj != si && body.iter().any(|&q| o.iter().any(|&m| d(m, q) < 0.5 * t0.cell_ft)))
+            })
+            .count();
+        say!(
+            "      clearance: town+ {:.1} mi, king's road {:.1} mi, other road to the track (but its end) {:.1} mi; track {:.1} mi to ({:.0}, {:.0}); spurs {}, cross-links {cross}",
+            town_gap / MI,
+            king_gap / MI,
+            to_track / MI,
+            d(outer, c) / MI,
+            outer[0],
+            outer[1],
+            spurs.len()
+        );
     }
 }
 
