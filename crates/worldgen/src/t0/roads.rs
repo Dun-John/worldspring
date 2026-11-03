@@ -532,7 +532,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         join_through(&mut roads, &towns, cell, &dry_ft);
     }
     // (Squaring can lay a branch along another leaving the same junction: one road out to where they part.)
-    unshare(&mut roads, &towns, &ground_ft, &dry_ft, &crossings);
+    unshare(&mut roads, &towns, &ground_ft, &dry_ft, &crossings, false);
     join_through(&mut roads, &towns, cell, &dry_ft);
     while drop_triangle(&mut roads, &towns) {
         join_through(&mut roads, &towns, cell, &dry_ft);
@@ -542,7 +542,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         join_through(&mut roads, &towns, cell, &dry_ft);
     }
     // (A road dropped above can leave two along one line out of where it met them.)
-    unshare(&mut roads, &towns, &ground_ft, &dry_ft, &crossings);
+    unshare(&mut roads, &towns, &ground_ft, &dry_ft, &crossings, false);
     join_through(&mut roads, &towns, cell, &dry_ft);
 
     // --- 4. Crossings and waystations.
@@ -1209,10 +1209,18 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                     let (a, b) = (xy(from), xy(k));
                     spurs.get(&ri).is_none_or(|ss| ss.iter().all(|sp| sp.windows(2).all(|q| !segments_cross(a, b, xy(q[0] as usize), xy(q[1] as usize)))))
                 };
+                // (But a clear line only where it is not much farther: rather a short spur round the
+                // other's join than one alongside the track for miles to its far end.)
+                let (fx, fy) = xy(from);
+                let gap = |k: usize| crate::core::sqrt((xy(k).0 - fx) * (xy(k).0 - fx) + (xy(k).1 - fy) * (xy(k).1 - fy));
                 tracks.get(&ri).and_then(|t| {
-                    near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k) && apart(k) && clear(k)))
-                        .or_else(|| near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k) && apart(k))))
-                        .or_else(|| near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k))))
+                    let best = near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k) && apart(k)));
+                    let straight = near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k) && apart(k) && clear(k)));
+                    match (straight, best) {
+                        (Some(s), Some(b)) if gap(s) <= 1.5 * gap(b) + 2.0 * 5280.0 / cell => Some(s),
+                        (_, Some(b)) => Some(b),
+                        _ => near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k))),
+                    }
                 })
             }
         };
@@ -3244,7 +3252,7 @@ fn square_junctions(
     only: Option<&[[f64; 2]]>,
 ) {
     let river_hits = |roads: &[RoadPath]| -> Vec<([f64; 2], f64)> { roads.iter().flat_map(|r| crossings(&r.pts)).collect() };
-    unshare(roads, towns, ground, dry, crossings);
+    unshare(roads, towns, ground, dry, crossings, true);
     let mut sq = Square { towns, cell, dry, ground, crossings, wet: river_hits(roads), relay: only.is_some() };
     // Points already squared (or left as they are) are not looked at again; with `only`, every
     // junction but those.
@@ -3276,9 +3284,10 @@ fn square_junctions(
 /// and comes back to run along the other (two roads down one valley from a pass, each with its
 /// own switchbacks); of only two roads there, the stretch to where they part goes. One climbing
 /// beside the other out of the junction (a switchback's leg above the other's line) rides it
-/// instead, leaving it where a straight ramp in its grade reaches its own line further on. One
-/// pair at a time, at most 200.
-fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], ground: &dyn Fn([f64; 2]) -> f64, dry: &dyn Fn(f64, f64) -> bool, crossings: &dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>) {
+/// instead, leaving it where a straight ramp in its grade reaches its own line further on; before
+/// squaring (`mixed`) a lesser one beside a better one does too (else squaring takes the lesser
+/// one's line through and bends the better one to it, a hook). One pair at a time, at most 200.
+fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], ground: &dyn Fn([f64; 2]) -> f64, dry: &dyn Fn(f64, f64) -> bool, crossings: &dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>, mixed: bool) {
     const TOL: f64 = 150.0;
     const STEP: f64 = 50.0;
     const LATE: f64 = 4.0 * 5280.0;
@@ -3336,7 +3345,7 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], ground: &dyn Fn
                     }
                     // (Beside it out of the junction, a fine step or so off and a good way: rides
                     // it to the end of that, then leaves it on a ramp to its own line.)
-                    if shared < 300.0 && legs[o].class == legs[c].class {
+                    if shared < 300.0 && (legs[o].class == legs[c].class || mixed) {
                         let beside = |t: f64| near_line(point_at(&legs[o].pts, os, t), &head, BESIDE);
                         let mut end = 0.0;
                         while end + STEP < olen && end < LATE && beside(end + STEP) {

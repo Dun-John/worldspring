@@ -324,6 +324,12 @@ fn main() {
         let steps = stairs(&world, &t0);
         // `DUMP=file.json`: every road (class, drawn stroke, control points) and settlement, for
         // drawing over a preview.
+        // (`NAME=x`: where the features named x are.)
+        if let (Ok(q), Some(e)) = (std::env::var("NAME"), t0.extra.as_ref()) {
+            for f in e.overlay.features.iter().filter(|f| f.name.contains(&q)) {
+                say!("  named {} ({}) at ({:.0}, {:.0})", f.name, f.kind, f.x, f.y);
+            }
+        }
         if let Ok(path) = std::env::var("DUMP") {
             let roads: Vec<Value> = t0.roads.roads.iter().map(|rc| json!({ "class": rc.class as u8, "stroke": rc.stroke, "pts": rc.pts.iter().map(|p| [p[0].round(), p[1].round()]).collect::<Vec<_>>() })).collect();
             let places = t0.extra.as_ref().map(|e| &e.economy.places[..]).unwrap_or(&[]);
@@ -724,6 +730,12 @@ fn realms(world: &worldgen::World, t0: &T0) {
         let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
         let own_pts: Vec<P> = (0..rs.len()).filter(|&r| own[r]).flat_map(|r| rs[r].pts.iter().copied()).collect();
         let wet = own_pts.iter().filter(|p| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice)).count();
+        // (`WET=1`: where.)
+        if std::env::var("WET").is_ok() {
+            for p in own_pts.iter().filter(|p| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice)) {
+                say!("        wet ({:.0}, {:.0}) water {:.0} ground {:.0}", p[0], p[1], t0.sample_water(p[0], p[1]), t0.ground_at(p[0], p[1], lattice));
+            }
+        }
         let river_pts: Vec<P> = t0.rivers.rivers.iter().flat_map(|r| r.pts.iter().copied()).filter(|&p| d(p, c) < 20.0 * MI).collect();
         let along = own_pts.iter().filter(|&&p| river_pts.iter().any(|&q| d(p, q) < 600.0)).count();
         // Each village's bearing off the track's way out (its first route, 5 miles from the town).
