@@ -630,6 +630,16 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         let jitter = world.stream("t0.settle");
         let mut cands: Vec<(f64, usize)> = (0..n).filter(|&k| score[k] > 0.05).map(|k| (score[k] * road_bonus(k, tier) * (0.55 + 0.45 * unit(hash3(jitter, k as i64, tier as i64, 0))), k)).collect();
         cands.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        // The top of a pass on a king's road draws a town to hold it however poor the ground
+        // (rare: few routes top a saddle): those first, the highest first.
+        if tier == Tier::Town
+            && let Some(rp) = roads
+        {
+            let mut tops: Vec<(f64, usize)> = (0..n).filter(|&k| rp.pass[k] && inp.land[k] && score[k] > 0.0).map(|k| (inp.height[k], k)).collect();
+            tops.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+            cands.retain(|c| !rp.pass[c.1]);
+            cands.splice(0..0, tops);
+        }
         let spacing = spacing_mi * 5280.0 / cell;
         // A settlement of this tier at cell `k`, standing at (x, y) ft, drawn from `seed`.
         let make = |k: usize, seed: u64, mut x: f64, mut y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
@@ -801,6 +811,26 @@ pub struct Placed<'a> {
     pub roads: &'a [(super::roads::RoadClass, &'a [[f64; 2]])],
 }
 
+/// How far out (ft) `saddle_at` looks, in steps of a quarter mile.
+const SADDLE_REACH: f64 = 3.0 * 5_280.0;
+
+/// A saddle at `p` on a road running along `u` (unit): its high point along the road (the ground
+/// falls 400 ft along it both ways within 3 miles, rising nowhere more than 60 ft above it) with
+/// the ground rising 300 ft on both sides across it, and 1,000 ft up. The one test for where a
+/// king's trial route tops a pass (`roads::preview`) and for a pass town where it stands.
+pub(crate) fn saddle_at(ground: &dyn Fn(f64, f64) -> f64, p: [f64; 2], u: [f64; 2], sea: f64) -> bool {
+    let h0 = ground(p[0], p[1]);
+    if h0 - sea < 1_000.0 {
+        return false;
+    }
+    let steps = (SADDLE_REACH / 1_320.0) as i64;
+    let at_t = |d: [f64; 2], t: i64| ground(p[0] + d[0] * t as f64 * 1_320.0, p[1] + d[1] * t as f64 * 1_320.0);
+    let falls = |d: [f64; 2]| (1..=steps).all(|t| at_t(d, t) <= h0 + 60.0) && (2..=steps).any(|t| at_t(d, t) <= h0 - 400.0);
+    let rises = |d: [f64; 2]| (1..=steps).any(|t| at_t(d, t) >= h0 + 300.0);
+    let n = [-u[1], u[0]];
+    falls(u) && falls([-u[0], -u[1]]) && rises(n) && rises([-n[0], -n[1]])
+}
+
 /// Checks each settlement's reason where it finally stands (after `snap_to_water` and the roads
 /// are built), not at the cell it was scored on: ore needs hill ground within a mile, a mouth its
 /// river reaching the water within half a mile, a harbour a sheltered bay round the town itself,
@@ -892,8 +922,7 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
         out
     };
     // A pass: the king's road through the town (two ways in, or passing within 600 ft) at a
-    // saddle, its high point along the road (the ground falls 250 ft along it both ways within a
-    // mile, rising nowhere above it) with the ground rising 300 ft on both sides across it, well up.
+    // saddle (`saddle_at`).
     let saddle = |c: [f64; 2], reach: f64| {
         let unit = |d: [f64; 2]| {
             let l = crate::core::sqrt(d[0] * d[0] + d[1] * d[1]).max(1e-6);
@@ -928,14 +957,7 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
                 }
             }
         }
-        ways.iter().any(|&(p, u)| {
-            let h0 = (at.ground)(p[0], p[1]);
-            let at_t = |d: [f64; 2], t: f64| (at.ground)(p[0] + d[0] * t, p[1] + d[1] * t);
-            let falls = |d: [f64; 2]| (1..=4).all(|t| at_t(d, t as f64 * 1_320.0) <= h0 + 30.0) && (2..=4).any(|t| at_t(d, t as f64 * 1_320.0) <= h0 - 250.0);
-            let rises = |d: [f64; 2]| (1..=4).any(|t| at_t(d, t as f64 * 1_320.0) >= h0 + 300.0);
-            let n = [-u[1], u[0]];
-            h0 - sea >= 1_000.0 && falls(u) && falls([-u[0], -u[1]]) && rises(n) && rises([-n[0], -n[1]])
-        })
+        ways.iter().any(|&(p, u)| saddle_at(at.ground, p, u, sea))
     };
     // A road over a river within half a mile: a crossing on a road as built, or one in the town
     // a road runs through (two ways in).

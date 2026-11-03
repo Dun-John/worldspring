@@ -401,7 +401,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
         join_through(&mut roads, &towns, cell, &dry_ft);
     }
     // (Squaring can lay a branch along another leaving the same junction: one road out to where they part.)
-    unshare(&mut roads, &towns);
+    unshare(&mut roads, &towns, &ground_ft, &dry_ft, &crossings);
     join_through(&mut roads, &towns, cell, &dry_ft);
     while drop_triangle(&mut roads, &towns) {
         join_through(&mut roads, &towns, cell, &dry_ft);
@@ -411,7 +411,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
         join_through(&mut roads, &towns, cell, &dry_ft);
     }
     // (A road dropped above can leave two along one line out of where it met them.)
-    unshare(&mut roads, &towns);
+    unshare(&mut roads, &towns, &ground_ft, &dry_ft, &crossings);
     join_through(&mut roads, &towns, cell, &dry_ft);
 
     // --- 4. Crossings and waystations.
@@ -1034,19 +1034,20 @@ pub fn preview(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) 
     let mut usage = vec![0u8; n];
     let mut pass = vec![false; n];
     let mut links: std::collections::BTreeSet<(u32, u32)> = Default::default();
-    // A pass: the route's highest point for 6 cells either way, well up, with the way down at
-    // least 600 ft on both sides within 20 cells.
+    // A pass: where a king's route tops a saddle (`settle::saddle_at`, the test a pass town is
+    // held to where it stands), the route's way through there from two cells either side.
     let sea = inp.world.params().sea_level_ft;
-    for (_, path, _) in &paths {
-        let hs: Vec<f64> = path.iter().map(|&c| inp.height[c as usize]).collect();
-        let m = hs.len();
+    let (w, cell) = (inp.w, inp.cell_ft);
+    let at = |c: u32| [(c as usize % w) as f64 * cell, (c as usize / w) as f64 * cell];
+    for (class, path, _) in &paths {
+        let m = path.len();
         for i in 1..m.saturating_sub(1) {
-            if hs[i] - sea < 1_200.0 || (i.saturating_sub(6)..(i + 7).min(m)).any(|j| hs[j] > hs[i]) {
+            if *class != RoadClass::KingsRoad || inp.height[path[i] as usize] - sea < 1_000.0 {
                 continue;
             }
-            let lo_before = hs[i.saturating_sub(20)..i].iter().copied().fold(f64::MAX, f64::min);
-            let lo_after = hs[i + 1..(i + 21).min(m)].iter().copied().fold(f64::MAX, f64::min);
-            if hs[i] - lo_before >= 600.0 && hs[i] - lo_after >= 600.0 {
+            let (a, b) = (at(path[i.saturating_sub(2)]), at(path[(i + 2).min(m - 1)]));
+            let u = unit2(sub2(b, a));
+            if crate::t0::settle::saddle_at(inp.ground, at(path[i]), u, sea) {
                 pass[path[i] as usize] = true;
             }
         }
@@ -2540,11 +2541,11 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
     // (A short branch from a settlement to a junction at a river crossing may be laid anew from
     // near the settlement's edge, slid as far as it takes: nothing else would take it clear.)
     let most = if sq.relay && !sq.clear(b.pts[0]) && sq.in_town(b.pts[b.pts.len() - 1]) { blen } else { 0.5 * blen };
-    for f in [0.4, 0.55, 0.7, 0.9, 1.15, 1.5, 2.0, 2.5] {
-        let reach = (f * cell).max(min_reach);
-        if reach > most {
-            break;
-        }
+    // (A lesser road out to a settlement near the junction may swing in from further along it,
+    // past its half: one bending off a better road at a narrow fork meets it square that way.)
+    let end_in_town = b.class > t.class && sq.in_town(b.pts[b.pts.len() - 1]);
+    let late: Vec<f64> = if end_in_town && most < blen { (1..=6).map(|k| blen - 0.05 * k as f64 * cell).filter(|&r| r > most && r > 0.4 * cell).rev().collect() } else { Vec::new() };
+    for reach in [0.4, 0.55, 0.7, 0.9, 1.15, 1.5, 2.0, 2.5].iter().map(|f| (f * cell).max(min_reach)).take_while(|&r| r <= most).chain(late) {
         let p = point_at(&b.pts, &bs, reach);
         let (at0, off) = project(p, &t.pts, ts);
         if off < 0.15 * cell {
@@ -2686,7 +2687,7 @@ fn square_junctions(
     only: Option<&[[f64; 2]]>,
 ) {
     let river_hits = |roads: &[RoadPath]| -> Vec<([f64; 2], f64)> { roads.iter().flat_map(|r| crossings(&r.pts)).collect() };
-    unshare(roads, towns);
+    unshare(roads, towns, ground, dry, crossings);
     let mut sq = Square { towns, cell, dry, ground, crossings, wet: river_hits(roads), relay: only.is_some() };
     // Points already squared (or left as they are) are not looked at again; with `only`, every
     // junction but those.
@@ -2716,12 +2717,15 @@ fn square_junctions(
 /// (class, then length) carries both, its first stretch taking the better class, and the other
 /// leaves it there (that junction is squared in its turn). So does one that wanders off first
 /// and comes back to run along the other (two roads down one valley from a pass, each with its
-/// own switchbacks); of only two roads there, the stretch to where they part goes. One pair at a
-/// time, at most 200.
-fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
+/// own switchbacks); of only two roads there, the stretch to where they part goes. One climbing
+/// beside the other out of the junction (a switchback's leg above the other's line) rides it
+/// instead, leaving it where a straight ramp in its grade reaches its own line further on. One
+/// pair at a time, at most 200.
+fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], ground: &dyn Fn([f64; 2]) -> f64, dry: &dyn Fn(f64, f64) -> bool, crossings: &dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>) {
     const TOL: f64 = 150.0;
     const STEP: f64 = 50.0;
     const LATE: f64 = 4.0 * 5280.0;
+    const BESIDE: f64 = 1_900.0;
     let mut tried: std::collections::BTreeSet<(u64, u64)> = Default::default();
     for _ in 0..200 {
         let ends = ends_by_point(roads);
@@ -2773,19 +2777,57 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
                             shared = end;
                         }
                     }
+                    // (Beside it out of the junction, a fine step or so off and a good way: rides
+                    // it to the end of that, then leaves it on a ramp to its own line.)
+                    if shared < 300.0 && legs[o].class == legs[c].class {
+                        let beside = |t: f64| near_line(point_at(&legs[o].pts, os, t), &head, BESIDE);
+                        let mut end = 0.0;
+                        while end + STEP < olen && end < LATE && beside(end + STEP) {
+                            end += STEP;
+                        }
+                        let at = project(point_at(&legs[o].pts, os, end), &legs[c].pts, cs).0;
+                        let q = point_at(&legs[c].pts, cs, at);
+                        // (Its junction where they part clear of river crossings.)
+                        let clear = || crossings(&head).iter().chain(crossings(&legs[o].pts).iter()).all(|&(x, hw)| dist(x, q) >= JUNCTION_WET + WET_STRAY * hw);
+                        if end >= 3_000.0 && at > 200.0 && at < clen - 300.0 && clear() {
+                            let zq = val_at(&legs[c].z, cs, at) as f64;
+                            let gmax = 0.85 * legs[o].class.max_grade();
+                            let mut t = end + 2.0 * STEP;
+                            while t < (end + 3.0 * 5280.0).min(olen - 300.0) {
+                                let p = point_at(&legs[o].pts, os, t);
+                                let (d, zp) = (dist(q, p), val_at(&legs[o].z, os, t) as f64);
+                                let n = (d / 100.0).ceil().max(2.0) as usize;
+                                let ramp: Vec<[f64; 2]> = (0..=n).map(|i| [q[0] + (p[0] - q[0]) * i as f64 / n as f64, q[1] + (p[1] - q[1]) * i as f64 / n as f64]).collect();
+                                let fits = d > 600.0
+                                    && (zp - zq).abs() <= gmax * d
+                                    && at + d <= 1.6 * t + 1_000.0
+                                    && ramp.iter().enumerate().all(|(i, r)| {
+                                        let u = d * i as f64 / n as f64;
+                                        dry(r[0], r[1]) && (ground(*r) - (zq + (zp - zq) * u / d)).abs() <= 25.0 + legs[o].class.max_grade() * u.min(d - u)
+                                    })
+                                    && !ramp[1..n].windows(2).any(|w| crosses(w[0], w[1], &legs[c].pts));
+                                if fits {
+                                    let (z0, z1) = (zq as f32, zp as f32);
+                                    found = Some((c, o, t, at, ramp[1..n].iter().enumerate().map(|(i, r)| (*r, z0 + (z1 - z0) * (i + 1) as f32 / n as f32)).collect()));
+                                    break 'pairs;
+                                }
+                                t += 2.0 * STEP;
+                            }
+                        }
+                    }
                             // (One along the other all the way keeps only its last bit, to where it ends.)
                     if shared < 300.0 {
                         continue;
                     }
                     let at = project(point_at(&legs[o].pts, os, shared), &legs[c].pts, cs).0;
                     if at > 200.0 && at < clen - 300.0 {
-                        found = Some((c, o, shared, at));
+                        found = Some((c, o, shared, at, Vec::new()));
                         break 'pairs;
                     }
                 }
             }
             tried.insert(*k);
-            let Some((c, o, shared, at)) = found else { continue };
+            let Some((c, o, shared, at, ramp)) = found else { continue };
             let (lc, lo) = (&legs[c], &legs[o]);
             let q = point_at(&lc.pts, &arcs[c], at);
             let mut pieces = split_road(lc, &arcs[c], &[(at, q)]);
@@ -2800,6 +2842,9 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
             let mut pts = vec![q];
             let mut z = vec![val_at(&lc.z, &arcs[c], at)];
             let mut wander = vec![0.0f32];
+            pts.extend(ramp.iter().map(|r| r.0));
+            z.extend(ramp.iter().map(|r| r.1));
+            wander.extend(ramp.iter().map(|_| 0.0f32));
             pts.extend(rest.iter().map(|&i| lo.pts[i]));
             z.extend(rest.iter().map(|&i| lo.z[i]));
             wander.extend(rest.iter().map(|&i| lo.wander[i]));
@@ -2883,7 +2928,10 @@ fn square_at(roads: &mut Vec<RoadPath>, j: [f64; 2], list: &[(usize, bool)], sq:
         let ts = arc(&t.pts);
         let fits: Option<Vec<Fit>> = (0..legs.len()).filter(|&i| i != a && i != b).map(|i| fit_branch(sq, &t, &ts, &legs[i], None, 0.0)).collect();
         let fits = fits?;
-        if fits.iter().all(|f| f.wide && f.clear) {
+        // (Not where that makes a better road a branch: it would leave its own line square
+        // and turn back to it, a step; the lesser one meets it as it can.)
+        let worse = legs[a].class.max(legs[b].class);
+        if fits.iter().all(|f| f.wide && f.clear) && (0..legs.len()).filter(|&i| i != a && i != b).all(|i| legs[i].class >= worse) {
             return Some((a, b, t, ts, fits));
         }
         if first.is_none() {
