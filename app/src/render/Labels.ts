@@ -292,7 +292,8 @@ export class Labels {
         if (it.text?.visible || it.dot?.visible) {
           const [sx, sy] = cam.worldToScreen(it.f.x, it.f.y);
           const ox = it.style.pin ? this.pinOffset(it) : 0;
-          it.text?.position.set(sx + ox, sy + (it.style.keep ? (it.oy ?? 0) : 0));
+          const cont = it.style.prio >= 100 && !it.style.keep;
+          it.text?.position.set(sx + ox + (cont ? (it.ox ?? 0) : 0), sy + (it.style.keep || cont ? (it.oy ?? 0) : 0));
           it.dot?.position.set(sx, sy);
         }
       }
@@ -318,6 +319,7 @@ export class Labels {
     // Cities and up first: their symbols always show, and every other label keeps off them
     // (but the continent's name, which shows over them rather than not at all).
     const dots = new Boxes();
+    const dotAt: [number, number][] = [];
     for (const it of band) {
       const { f, style } = it;
       if (!style.keep || this.hidden.has(f.id) || this.conceal?.(f)) continue;
@@ -330,6 +332,7 @@ export class Labels {
       dot.visible = true;
       const r = style.size * 0.4;
       dots.add([sx - r, sy - r, sx + r, sy + r]);
+      dotAt.push([sx, sy]);
       shown.add(it);
     }
     for (const it of band) {
@@ -387,11 +390,41 @@ export class Labels {
         const ey = hw * s + hh * c + pad;
         // Pinned labels grow rightwards from the symbol centred on the spot.
         const ox = style.pin ? this.pinOffset(it) : 0;
-        const box: [number, number, number, number] = [sx + ox - ex, sy - ey, sx + ox + ex, sy + ey];
+        let box: [number, number, number, number] = [sx + ox - ex, sy - ey, sx + ox + ex, sy + ey];
+        // The continent's name slides (along its own direction, then across) to the spot that
+        // covers the fewest cities' dots and the room their names need.
+        if (style.prio >= 100 && dotAt.length) {
+          const cost = (b: Box) => {
+            let n = 0;
+            for (const [dx, dy] of dotAt) if (b[0] < dx + 90 && dx - 90 < b[2] && b[1] < dy + 18 && dy - 18 < b[3]) n++;
+            return n;
+          };
+          let best = cost(box);
+          let bx = 0;
+          let by = 0;
+          const [ux, uy] = [Math.cos(angle), Math.sin(angle)];
+          for (let i = 0; i < 25 && best > 0; i++) {
+            const along = ((i % 5) - 2) * 90;
+            const across = (Math.floor(i / 5) - 2) * 45;
+            const mx = ux * along - uy * across;
+            const my = uy * along + ux * across;
+            const b: Box = [box[0] + mx, box[1] + my, box[2] + mx, box[3] + my];
+            if (b[0] < 0 || b[1] < 0 || b[2] > cam.width || b[3] > cam.height) continue;
+            const c = cost(b) + (Math.abs(along) + Math.abs(across)) / 4000;
+            if (c < best) {
+              best = c;
+              bx = mx;
+              by = my;
+            }
+          }
+          it.ox = bx;
+          it.oy = by;
+          box = [box[0] + bx, box[1] + by, box[2] + bx, box[3] + by];
+        }
         show = !boxes.hits(box) && (style.prio >= 100 || !dots.hits(box));
         if (show) {
           boxes.add(box);
-          text.position.set(sx + ox, sy);
+          text.position.set(sx + ox + (style.prio >= 100 ? (it.ox ?? 0) : 0), sy + (style.prio >= 100 ? (it.oy ?? 0) : 0));
           text.rotation = angle;
         }
       }
