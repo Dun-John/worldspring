@@ -262,7 +262,7 @@ fn towns_meet_roads_and_water() {
     let mut ex = Executor::new(World::from_json(&world_json(1)).unwrap());
     let (world, t0) = (&ex.world, &ex.t0);
     // Isolated realms (world 1 has some): each walled, with one track and one gate, no other road
-    // within 3 miles; and the hierarchy's own tier counts as without them.
+    // within 20 miles; and the hierarchy's own tier counts as without them.
     {
         let sts = &t0.settlements;
         let realms: Vec<usize> = (0..sts.len()).filter(|&i| sts[i].isolated && sts[i].tier >= Tier::Town).collect();
@@ -281,7 +281,7 @@ fn towns_meet_roads_and_water() {
             let along = |r: &worldgen::lod::roads::RoadCurve| 2 * r.pts.iter().filter(|&&p| mine.iter().any(|&q| geom::dist(p, q) < 1.5 * t0.cell_ft)).count() >= r.pts.len();
             for r in rs.iter().filter(|r| !along(r) && !ends(r).iter().any(|&p| own.iter().any(|&o| geom::dist(p, o) < trim))) {
                 let near = r.pts.iter().map(|&p| geom::dist(p, c)).fold(f64::INFINITY, f64::min);
-                assert!(near > 3.0 * 5280.0, "realm {i} at {c:?}: a {:?} passes {near:.0} ft from it", r.class);
+                assert!(near > 20.0 * 5280.0, "realm {i} at {c:?}: a {:?} passes {near:.0} ft from it", r.class);
             }
             let l = town::layout(world, t0, i);
             assert!(!l.walls.is_empty() && l.gates.len() == 1, "realm {i} at {c:?}: walls {}, gates {}", l.walls.len(), l.gates.len());
@@ -3089,9 +3089,10 @@ fn created_sites_survive_a_remade_world() {
     // An added town 5 miles from one of the world's own villages (and no other settlement within
     // 10): that village moves away (the least room kept round a settlement), another is placed in
     // its stead, and every other settlement is drawn as before, each from its own cell, not from
-    // how many were placed before it. One drawn on a town is refused.
+    // how many were placed before it. One drawn on a town is refused. (Not an isolated realm's
+    // village: a pin beside a realm moves the realm.)
     use worldgen::t0::settle::Tier;
-    let near_village = t0.settlements.iter().enumerate().filter(|(_, s)| s.tier == Tier::Village).find_map(|(i, s)| {
+    let near_village = t0.settlements.iter().enumerate().filter(|(_, s)| s.tier == Tier::Village && !s.isolated).find_map(|(i, s)| {
         (0..8).map(|k| (k as f64) * std::f64::consts::TAU / 8.0).map(|a| [s.x + 26_400.0 * libm::cos(a), s.y + 26_400.0 * libm::sin(a)]).find(|p| {
             let h = t0.sample(p[0], p[1], 20.0);
             h > sea + 50.0 && (t0.sample_water(p[0], p[1]) as f64) < h && t0.settlements.iter().enumerate().all(|(j, o)| j == i || geom_dist([o.x, o.y], *p) > 12.0 * 5280.0)
@@ -3121,7 +3122,7 @@ fn created_sites_survive_a_remade_world() {
     assert!(refused && eo.t0.settlements.len() == n, "a town added on a town was placed ({} settlements)", eo.t0.settlements.len());
     // Twelve miles from a lone village (past the least room, within a village's own spacing of
     // 14): the village stays.
-    let past = t0.settlements.iter().filter(|s| s.tier == Tier::Village).find_map(|s| {
+    let past = t0.settlements.iter().filter(|s| s.tier == Tier::Village && !s.isolated).find_map(|s| {
         (0..8).map(|k| (k as f64) * std::f64::consts::TAU / 8.0).map(|a| [s.x + 63_360.0 * libm::cos(a), s.y + 63_360.0 * libm::sin(a)]).find(|p| {
             let h = t0.sample(p[0], p[1], 20.0);
             h > sea + 50.0 && (t0.sample_water(p[0], p[1]) as f64) < h && t0.settlements.iter().filter(|o| geom_dist([o.x, o.y], *p) < 16.0 * 5280.0).count() == 1

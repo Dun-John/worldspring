@@ -710,13 +710,49 @@ fn realms(world: &worldgen::World, t0: &T0) {
         let by = rs.get(by).map(|r| format!("{:?} ({:.0}, {:.0})-({:.0}, {:.0})", r.class, r.pts[0][0], r.pts[0][1], r.pts[r.pts.len() - 1][0], r.pts[r.pts.len() - 1][1])).unwrap_or_default();
         let l = worldgen::town::layout(world, t0, i);
         let v: Vec<String> = villages.iter().map(|&v| format!("({:.0}, {:.0}) {:.1} mi", sts[v].x, sts[v].y, d([sts[v].x, sts[v].y], c) / MI)).collect();
+        // The gap round it: from the town or any of its villages to the nearest town and up not
+        // its own, and to the nearest king's road; and the roads not its own within 2 miles of
+        // the walls.
+        let parts: Vec<P> = std::iter::once(c).chain(villages.iter().map(|&v| [sts[v].x, sts[v].y])).collect();
+        let gap = |p: P| parts.iter().map(|&q| d(p, q)).fold(f64::INFINITY, f64::min);
+        let town_gap = sts.iter().filter(|o| !o.isolated && o.tier >= Tier::Town).map(|o| gap([o.x, o.y])).fold(f64::INFINITY, f64::min);
+        let any_gap = sts.iter().filter(|o| !o.isolated).map(|o| gap([o.x, o.y])).fold(f64::INFINITY, f64::min);
+        let king_gap = rs.iter().filter(|r| r.class == worldgen::t0::roads::RoadClass::KingsRoad).flat_map(|r| r.pts.iter().map(|&p| gap(p))).fold(f64::INFINITY, f64::min);
+        let close = (0..rs.len()).filter(|&r| !own[r] && rs[r].pts.iter().any(|&p| d(p, c) < trim + 2.0 * MI)).count();
+        let b = t0.sample_biome(c[0], c[1], t0.biome_warp(c[0], c[1]));
+        // Its own roads in standing water, and along a river (within 600 ft of its line).
+        let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
+        let own_pts: Vec<P> = (0..rs.len()).filter(|&r| own[r]).flat_map(|r| rs[r].pts.iter().copied()).collect();
+        let wet = own_pts.iter().filter(|p| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice)).count();
+        let river_pts: Vec<P> = t0.rivers.rivers.iter().flat_map(|r| r.pts.iter().copied()).filter(|&p| d(p, c) < 20.0 * MI).collect();
+        let along = own_pts.iter().filter(|&&p| river_pts.iter().any(|&q| d(p, q) < 600.0)).count();
+        // Each village's bearing off the track's way out (its first route, 5 miles from the town).
+        let out_at = t0.extra.as_ref().and_then(|e| e.realm_paths.iter().find(|p| p.0 == i)).and_then(|p| p.1.iter().find(|&&q| d(q, c) >= 5.0 * MI).copied());
+        let bearings: Vec<String> = villages
+            .iter()
+            .map(|&v| match out_at {
+                Some(o) => {
+                    let (a, b) = ([o[0] - c[0], o[1] - c[1]], [sts[v].x - c[0], sts[v].y - c[1]]);
+                    format!("{:.0}", ((a[0] * b[0] + a[1] * b[1]) / (d(o, c) * d([sts[v].x, sts[v].y], c))).clamp(-1.0, 1.0).acos().to_degrees())
+                }
+                None => "-".into(),
+            })
+            .collect();
+        say!("      own road points {}: in water {wet}, along a river {along}; villages off the way out (deg) [{}]", own_pts.len(), bearings.join(" "));
         say!(
-            "    realm #{i} {:?} {} at ({:.0}, {:.0}), {:.0} ft up, pop {}: {} track(s) [{}]; nearest other road {:.1} mi ({by}); walls {} gates {}; villages {} [{}]",
+            "    realm #{i} {:?} {} at ({:.0}, {:.0}), {:.0} ft up, biome {}: gap to town+ {:.1} mi, any {:.1} mi, king's road {:.1} mi, other roads within 2 mi {close}",
             s.tier,
             s.kind.name(),
             c[0],
             c[1],
             t0.sample(c[0], c[1], 0.0),
+            b[0],
+            town_gap / MI,
+            any_gap / MI,
+            king_gap / MI
+        );
+        say!(
+            "      pop {}: {} track(s) [{}]; nearest other road {:.1} mi ({by}); walls {} gates {}; villages {} [{}]",
             s.population,
             tracks.len(),
             ends.join("; "),
@@ -801,6 +837,8 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
         (0..=n).all(|j| !standing(lerp(a, b, j as f64 / n as f64)))
     };
     let (mut all, mut dryf, mut unreach, mut unreach_dry) = (Vec::new(), Vec::new(), 0usize, 0usize);
+    // (The same, from and to places outside the isolated realms, which are cut off by design.)
+    let (mut open_trips, mut unreach_open) = (Vec::new(), 0usize);
     for (si, s) in sts.iter().enumerate() {
         let mut near: Vec<(f64, usize)> = sts.iter().enumerate().filter(|(j, _)| *j != si).map(|(j, o)| (dist([s.x, s.y], [o.x, o.y]), j)).collect();
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -808,6 +846,10 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
         for &(straight, j) in near.iter().take(4) {
             let wet = !dry([s.x, s.y], [sts[j].x, sts[j].y]);
             let nd = d[nroad + j];
+            let open = !s.isolated && !sts[j].isolated;
+            if open {
+                if nd.is_finite() { open_trips.push(nd / straight.max(1.0)) } else { unreach_open += 1 }
+            }
             if nd.is_finite() {
                 all.push(nd / straight.max(1.0));
                 if !wet {
@@ -827,6 +869,8 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
         json!({ "n": v.len(), "unreachable": un, "p50": pct(v, 0.5), "p90": pct(v, 0.9), "p99": pct(v, 0.99), "over_1_5": share(v, 1.5), "over_2": share(v, 2.0) })
     };
     let trips_all = trips("(each settlement to its 4 nearest)", &all, unreach);
+    open_trips.sort_by(|a, b| a.total_cmp(b));
+    trips("(the same, outside realms)", &open_trips, unreach_open);
     let trips_dry = trips("(pairs with a dry straight line)", &dryf, unreach_dry);
     // --- Length against the settlements' minimum spanning tree.
     let mut by_class = [0.0f64; 3];

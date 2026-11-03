@@ -350,11 +350,12 @@ impl T0 {
         let rinp = roads::Inputs { world, drawn, pre: Default::default(), plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, rivers: &rivers, routes: Default::default(), fixed: Default::default() };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None, &mut conflicts);
-        // Isolated realms, before any road is tried (nothing grows up beside them).
-        settlements = settle::place_realms(&sinp, settlements);
+        // Isolated realms, well off the king's roads between the cities (which no realm changes:
+        // they leave realms out), before the towns (nothing grows up beside them).
+        let kings = world.file.params.generated_roads.then(|| roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]));
+        settlements = settle::place_realms(&sinp, settlements, kings.as_ref());
         let economy;
-        if world.file.params.generated_roads {
-            let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
+        if let Some(usage) = kings {
             settlements = settle::place(&sinp, settlements, &[T::Town], Some(&usage), &mut conflicts);
             let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad, roads::RoadClass::Road]);
             // What the towns and up earn, trading along those roads, sets their tiers.

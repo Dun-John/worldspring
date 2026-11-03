@@ -825,8 +825,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 // (One added beside the world's own keeps only the least room round it.)
                 let added = s.pin.is_some_and(|st| inp.pins.iter().any(|p| p.stroke == st as usize && p.added));
                 let need = if s.tier >= tier && !added { spacing } else { 10.0 * 5280.0 / cell };
-                // (Nothing grows up beside an isolated realm.)
-                let need = if s.isolated { need.max(REALM_CLEAR_MI * 5280.0 / cell) } else { need };
+                // (Nothing grows up beside an isolated realm: no town within sight of it.)
+                let need = if s.isolated { need.max(if tier >= Tier::Town { REALM_CLEAR_MI } else { REALM_CLEAR_VILLAGE_MI } * 5280.0 / cell) } else { need };
                 d >= need.max(10.0 * 5280.0 / cell)
             });
             if !ok {
@@ -850,10 +850,21 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
     out
 }
 
-/// How far (miles) later settlements keep from any part of an isolated realm.
-pub const REALM_CLEAR_MI: f64 = 20.0;
+/// How far (miles) later towns and up keep from any part of an isolated realm.
+pub const REALM_CLEAR_MI: f64 = 45.0;
+/// How far (miles) later villages keep from any part of an isolated realm.
+pub const REALM_CLEAR_VILLAGE_MI: f64 = 30.0;
 /// How far (miles) round a realm's town other roads pay extra to pass (`roads::route`).
-pub const REALM_AVOID_MI: f64 = 12.0;
+pub const REALM_AVOID_MI: f64 = 30.0;
+/// How far (miles) a realm's town keeps from the cities placed before it and from the king's
+/// roads between them as previewed (its villages, at most 11 miles out, a little less).
+const REALM_CITY_MI: f64 = 60.0;
+const REALM_KINGS_MI: f64 = 45.0;
+
+/// Ground a mountain realm stands on: grass or woods (not scree, snow or bare ground).
+fn green(b: Biome) -> bool {
+    matches!(b, Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga | Biome::Jungle | Biome::Grassland | Biome::Steppe | Biome::Savanna)
+}
 
 /// A biome a forest realm hides in.
 fn deep_forest(b: Biome) -> bool {
@@ -863,10 +874,11 @@ fn deep_forest(b: Biome) -> bool {
 /// Isolated realms, on top of the tiers' counts: a walled city (rarely a large town) deep in a
 /// large forest (a market) or on a flat spot high in the mountains (a fortress), well clear of
 /// the cities placed so far and of every pin, with 2-4 hidden villages of its own round it in
-/// the same forest or valley. About one per 15 cities, the number drawn per world (some have
-/// none); none at settlement density 0. Placed after the metropolises and cities, before any
-/// road is tried, so later tiers keep clear of them (`place`).
-pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>) -> Vec<Settlement> {
+/// the same forest or valley, on the side its way out leaves by (towards the nearest of the
+/// king's roads previewed, `kings`). About one per 15 cities, the number drawn per world (some
+/// have none); none at settlement density 0. Placed after the metropolises and cities, before
+/// the other tiers, so they keep clear of them (`place`).
+pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>, kings: Option<&super::roads::Preview>) -> Vec<Settlement> {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let world = inp.world;
     let p = world.params();
@@ -903,13 +915,30 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>) -> Vec<Settlement> 
     let open: Vec<bool> = (0..n).map(|k| !(dry(k) && deep_forest(biome_of(k)))).collect();
     let depth = super::climate::distance_to(w, h, &open);
     // Flat enough for a walled town's plan: the ground round the cell as well as the cell itself.
-    let flat = |k: usize, max: f64| {
+    let around = |k: usize, f: &dyn Fn(usize) -> bool| {
         let (x, y) = ((k % w) as i64, (k / w) as i64);
         (-1i64..=1).all(|dy| (-1i64..=1).all(|dx| {
             let (i, j) = (x + dx, y + dy);
-            i >= 0 && j >= 0 && i < w as i64 && j < h as i64 && dry(j as usize * w + i as usize) && slope_of(j as usize * w + i as usize) <= max
+            i >= 0 && j >= 0 && i < w as i64 && j < h as i64 && f(j as usize * w + i as usize)
         }))
     };
+    let flat = |k: usize, max: f64| around(k, &|v| dry(v) && slope_of(v) <= max);
+    // How far (cells) each cell lies from the king's roads previewed (none: far from all).
+    let kings_d: Vec<f64> = match kings {
+        Some(pv) => {
+            let mut on = vec![false; n];
+            for (class, path, _) in &pv.paths {
+                if *class == super::roads::RoadClass::KingsRoad {
+                    for &c in path {
+                        on[c as usize] = true;
+                    }
+                }
+            }
+            if on.iter().any(|&b| b) { super::climate::distance_to(w, h, &on) } else { Vec::new() }
+        }
+        None => Vec::new(),
+    };
+    let kings_at = |k: usize| kings_d.get(k).copied().unwrap_or(f64::INFINITY);
     let margin = 8.0 * mi;
     let inside = |k: usize| {
         let (x, y) = ((k % w) as f64, (k / w) as f64);
@@ -919,10 +948,24 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>) -> Vec<Settlement> 
     // Forest sites: deep in a forest (5 miles and more from its edge), the deeper the better.
     let mut forest: Vec<(f64, usize)> =
         (0..n).filter(|&k| inside(k) && !open[k] && depth[k] >= 5.0 * mi && g.score[k] > 0.05 && !g.coastal[k] && flat(k, 0.10)).map(|k| (depth[k].min(20.0 * mi) * jitter(k, 0), k)).collect();
-    // Mountain sites: 3,000 ft up and more on flat ground, the higher and flatter the better.
+    // Mountain sites: 3,000 ft up and more on flat ground under grass or woods, the higher and
+    // flatter the better, and better still in a basin (the ground rising 300 ft round it 3 miles
+    // out).
+    let basin = |k: usize| {
+        let (x, y) = ((k % w) as f64, (k / w) as f64);
+        let r = 3.0 * mi;
+        let up = (0..16)
+            .filter(|&a| {
+                let ang = std::f64::consts::TAU * a as f64 / 16.0;
+                let (i, j) = (crate::core::round(x + r * libm::cos(ang)), crate::core::round(y + r * libm::sin(ang)));
+                i >= 0.0 && j >= 0.0 && i < w as f64 && j < h as f64 && inp.height[j as usize * w + i as usize] >= inp.height[k] + 300.0
+            })
+            .count();
+        up as f64 / 16.0
+    };
     let mut mountain: Vec<(f64, usize)> = (0..n)
-        .filter(|&k| inside(k) && inp.height[k] - sea >= 3_000.0 && g.score[k] > 0.0 && !g.coastal[k] && flat(k, 0.08))
-        .map(|k| ((inp.height[k] - sea).min(9_000.0) / 1_000.0 * (1.2 - slope_of(k) / 0.08) * jitter(k, 1), k))
+        .filter(|&k| inside(k) && inp.height[k] - sea >= 3_000.0 && g.score[k] > 0.0 && !g.coastal[k] && flat(k, 0.08) && around(k, &|v| green(biome_of(v))))
+        .map(|k| ((inp.height[k] - sea).min(9_000.0) / 1_000.0 * (1.2 - slope_of(k) / 0.08) * (0.6 + 0.8 * basin(k)) * jitter(k, 1), k))
         .collect();
     for c in [&mut forest, &mut mountain] {
         c.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -931,11 +974,12 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>) -> Vec<Settlement> 
         let (dx, dy) = ((a % w) as f64 - (b % w) as f64, (a / w) as f64 - (b / w) as f64);
         crate::core::sqrt(dx * dx + dy * dy)
     };
-    // Well clear of every settlement so far (another realm's more so) and of every pin: a pin in
-    // the same place wins.
+    // Well clear of every settlement so far (another realm's more so), of the king's roads
+    // between them and of every pin: a pin in the same place wins.
     let clear = |k: usize, out: &[Settlement]| {
         let (x, y) = ((k % w) as f64 * cell, (k / w) as f64 * cell);
-        out.iter().all(|s| d_cells(s.cell, k) >= if s.isolated { 90.0 } else { 45.0 } * mi)
+        kings_at(k) >= REALM_KINGS_MI * mi
+            && out.iter().all(|s| d_cells(s.cell, k) >= if s.isolated { 100.0 } else { REALM_CITY_MI } * mi)
             && inp.pins.iter().all(|q| crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) >= 25.0 * 5280.0)
     };
     // The strongest reason at a site (as `place` weighs it for the tier).
@@ -992,12 +1036,24 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>) -> Vec<Settlement> 
         };
         let kind = if woods { SettleKind::Market } else { SettleKind::Fortress };
         out.push(make(k, tier, population, seed, Some(kind)));
-        // Its hidden villages: 4 to 10 miles out, in the same forest or valley (within 1,500 ft
-        // of the town's height), 3 miles apart.
+        // Its hidden villages: 5 to 11 miles out, in the same forest or valley (within 1,500 ft
+        // of the town's height, on grass or woods), 5 miles apart (each named on the map), on the
+        // side the realm's way out leaves by (towards the nearest king's road), so that they join
+        // its track between the town and the world outside, never beyond the town.
         let want = 2 + (hash3(seed, 0x7669_6c, 0, 0) % 3) as usize;
         let hk = inp.height[k];
         let (kx, ky) = ((k % w) as i64, (k / w) as i64);
-        let reach = crate::core::ceil(10.0 * mi) as i64;
+        let exit = {
+            // (Down the distance to the king's roads, over 5 miles round the town.)
+            let probe = |dx: f64, dy: f64| {
+                let (i, j) = (crate::core::round(kx as f64 + dx * 5.0 * mi), crate::core::round(ky as f64 + dy * 5.0 * mi));
+                if i >= 0.0 && j >= 0.0 && i < w as f64 && j < h as f64 { kings_at(j as usize * w + i as usize) } else { f64::INFINITY }
+            };
+            let (gx, gy) = (probe(1.0, 0.0) - probe(-1.0, 0.0), probe(0.0, 1.0) - probe(0.0, -1.0));
+            let m = crate::core::sqrt(gx * gx + gy * gy);
+            if m.is_finite() && m > 1e-9 { Some((-gx / m, -gy / m)) } else { None }
+        };
+        let reach = crate::core::ceil(11.0 * mi) as i64;
         let mut cands: Vec<(f64, usize)> = Vec::new();
         for dy in -reach..=reach {
             for dx in -reach..=reach {
@@ -1007,10 +1063,14 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>) -> Vec<Settlement> 
                 }
                 let v = j as usize * w + i as usize;
                 let d = d_cells(v, k);
-                if d < 4.0 * mi || d > 10.0 * mi || !dry(v) || g.score[v] <= 0.0 || g.coastal[v] || slope_of(v) > 0.15 {
+                if d < 5.0 * mi || d > 11.0 * mi || !dry(v) || g.score[v] <= 0.0 || g.coastal[v] || slope_of(v) > 0.15 {
                     continue;
                 }
-                let fits = if woods { !open[v] && depth[v] >= 1.5 * mi } else { (inp.height[v] - hk).abs() <= 1_500.0 && inp.height[v] - sea >= 2_000.0 };
+                // (Within 70 degrees of the way out.)
+                if exit.is_some_and(|(ex, ey)| (dx as f64 * ex + dy as f64 * ey) < 0.34 * d) {
+                    continue;
+                }
+                let fits = if woods { !open[v] && depth[v] >= 1.5 * mi } else { (inp.height[v] - hk).abs() <= 1_500.0 && inp.height[v] - sea >= 2_000.0 && green(biome_of(v)) };
                 if fits {
                     cands.push((g.score[v] * jitter(v, 2), v));
                 }
@@ -1022,7 +1082,7 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>) -> Vec<Settlement> 
             if placed.len() >= want {
                 break;
             }
-            if placed.iter().any(|&q| d_cells(q, v) < 3.0 * mi) {
+            if placed.iter().any(|&q| d_cells(q, v) < 5.0 * mi) {
                 continue;
             }
             let vseed = hash3(stream, v as i64, 3, 0);
