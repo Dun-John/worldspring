@@ -278,15 +278,6 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
             e.1 = e.1.or(*stroke);
         }
     }
-    // Each stretch's class as built, from its traffic (`economy::Traffic`; a drawn road keeps its
-    // own). The routes above went by the planned classes, so this moves none of them.
-    let planned_class: std::collections::BTreeMap<(u32, u32), u8> = links.iter().map(|(&k, v)| (k, v.0)).collect();
-    for (key, e) in links.iter_mut() {
-        if e.1.is_none() {
-            let flow = traffic.flow.get(key).copied().unwrap_or(0.0);
-            e.0 = traffic.class(RoadClass::from_u8(e.0), flow) as u8;
-        }
-    }
     let mut adj: std::collections::BTreeMap<u32, Vec<u32>> = Default::default();
     for &(a, b) in links.keys() {
         adj.entry(a).or_default().push(b);
@@ -331,12 +322,106 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
                 prev = cur;
                 cur = next;
             }
-            let was = seg.windows(2).map(|p| planned_class[&(p[0].min(p[1]), p[0].max(p[1]))]).min().unwrap_or(class);
+            // (Classed below, from the stretch's traffic as a whole.)
             let flow = seg.windows(2).map(|p| traffic.flow.get(&(p[0].min(p[1]), p[0].max(p[1]))).copied().unwrap_or(0.0)).fold(0.0f32, f32::max);
             let length = seg.windows(2).map(|p| dist([(p[0] as usize % w) as f64, (p[0] as usize / w) as f64], [(p[1] as usize % w) as f64, (p[1] as usize / w) as f64])).sum::<f64>() * cell;
             let mid = seg[seg.len() / 2] as usize;
-            traffic_out.push(SegTraffic { was: RoadClass::from_u8(was), now: RoadClass::from_u8(class), flow, length_ft: length, at: [(mid % w) as f64 * cell, (mid / w) as f64 * cell] });
+            traffic_out.push(SegTraffic { was: RoadClass::from_u8(class), now: RoadClass::from_u8(class), flow, length_ft: length, at: [(mid % w) as f64 * cell, (mid / w) as f64 * cell] });
             segments.push((RoadClass::from_u8(class), seg, stroke));
+        }
+    }
+    // Each stretch's class as built, one from node to node (a drawn road keeps its own). The routes
+    // went by the planned tiers and classes, so this moves none of them; the classes follow the
+    // tiers now (after the economy) and the traffic: the king's roads are the ways along the
+    // stretches between the cities as they now stand (each pair `link_edges` would join), and any
+    // other stretch as busy as a king's road; a quiet one drops (`economy::Traffic::class`).
+    {
+        let city_at = |c: u32| at_cell.get(&(c as usize)).is_some_and(|s| s.tier >= Tier::City);
+        let mut kings = vec![false; segments.len()];
+        let mut nodes: Vec<u32> = segments.iter().flat_map(|(_, seg, _)| [seg[0], seg[seg.len() - 1]]).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        let id = |c: u32| nodes.binary_search(&c).expect("a stretch end");
+        let mut sadj: Vec<Vec<(usize, f64, usize)>> = vec![Vec::new(); nodes.len()];
+        for (i, (class, seg, _)) in segments.iter().enumerate() {
+            let c = traffic_out[i].length_ft * [0.8, 1.0, 1.2][*class as usize];
+            let (a, b) = (id(seg[0]), id(seg[seg.len() - 1]));
+            sadj[a].push((b, c, i));
+            sadj[b].push((a, c, i));
+        }
+        let cities: Vec<(usize, &Settlement)> = settlements.iter().enumerate().filter(|(_, s)| s.tier >= Tier::City).collect();
+        let by_tier: Vec<Settlement> = settlements.iter().map(|s| Settlement { planned: s.tier, ..s.clone() }).collect();
+        let pairs = if cities.len() >= 2 { link_edges(&by_tier, &[RoadClass::KingsRoad], w, cell) } else { Vec::new() };
+        let mut src_of: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+        for &(a, b, _) in &pairs {
+            src_of.entry(a).or_default().push(b);
+        }
+        let mut cost = vec![f64::INFINITY; nodes.len()];
+        let mut via = vec![usize::MAX; nodes.len()];
+        for (&a, targets) in &src_of {
+            let Ok(sa) = nodes.binary_search(&(settlements[a].cell as u32)) else { continue };
+            cost.iter_mut().for_each(|c| *c = f64::INFINITY);
+            via.iter_mut().for_each(|v| *v = usize::MAX);
+            let mut heap = BinaryHeap::new();
+            cost[sa] = 0.0;
+            heap.push(Node { f: 0.0, i: sa as u32 });
+            while let Some(Node { f: c, i: v }) = heap.pop() {
+                let v = v as usize;
+                if c > cost[v] {
+                    continue;
+                }
+                for &(u, e, si) in &sadj[v] {
+                    let nc = c + e;
+                    if nc < cost[u] {
+                        cost[u] = nc;
+                        via[u] = si;
+                        heap.push(Node { f: nc, i: u as u32 });
+                    }
+                }
+            }
+            for &b in targets {
+                let Ok(mut v) = nodes.binary_search(&(settlements[b].cell as u32)) else { continue };
+                if !cost[v].is_finite() {
+                    continue;
+                }
+                while v != sa {
+                    let si = via[v];
+                    kings[si] = true;
+                    let seg = &segments[si].1;
+                    v = if id(seg[0]) == v { id(seg[seg.len() - 1]) } else { id(seg[0]) };
+                }
+            }
+        }
+        for (i, (class, _, stroke)) in segments.iter_mut().enumerate() {
+            if stroke.is_none() {
+                *class = if kings[i] { RoadClass::KingsRoad } else { traffic.class(*class, traffic_out[i].flow) };
+            }
+            traffic_out[i].now = *class;
+        }
+        // A king's road leads somewhere: each end at a city or up or where another king's road goes
+        // on. One that ends anywhere else (a busy stretch between two roads, the way to a city that
+        // shrank) is built a road; pruned until none is left, so the order of the stretches changes
+        // nothing. (A drawn one keeps its class and counts as a king's road.)
+        loop {
+            let mut ends: crate::core::hash::FastMap<u32, u32> = Default::default();
+            for (class, seg, _) in &segments {
+                if *class == RoadClass::KingsRoad {
+                    *ends.entry(seg[0]).or_default() += 1;
+                    *ends.entry(seg[seg.len() - 1]).or_default() += 1;
+                }
+            }
+            let mut changed = false;
+            for (i, (class, seg, stroke)) in segments.iter_mut().enumerate() {
+                let loose = |c: u32| ends[&c] < 2 && !city_at(c);
+                if *class == RoadClass::KingsRoad && stroke.is_none() && (loose(seg[0]) || loose(seg[seg.len() - 1])) {
+                    *class = RoadClass::Road;
+                    traffic_out[i].now = RoadClass::Road;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
         }
     }
 

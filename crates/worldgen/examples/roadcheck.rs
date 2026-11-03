@@ -956,6 +956,18 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
         let c = crossings.iter().map(|c| dist(c.0, spots.pos[n])).fold(f64::MAX, f64::min);
         say!("      junction at ({:.0}, {:.0}), {} arms, shape {}: a crossing {:.0} ft away", spots.pos[n][0], spots.pos[n][1], deg[n], shape_of[n], c);
     }
+    // Dead ends: a road end at no settlement and no other road (those within 0.3 mi of a river
+    // crossing counted apart: a road may end at a ferry or ford).
+    let dead: Vec<usize> = (0..nroad).filter(|&n| deg[n] == 1 && !attached(spots.pos[n])).collect();
+    let dead_wet = dead.iter().filter(|&&n| crossings.iter().any(|c| dist(c.0, spots.pos[n]) <= 0.3 * MI)).count();
+    say!("  dead ends (no settlement, no other road): {} ({} at a river crossing)", dead.len(), dead_wet);
+    for &n in dead.iter().take(top) {
+        let &(r, _) = &at_node[n][0];
+        let s = sts.iter().map(|s| (dist([s.x, s.y], spots.pos[n]), s)).min_by(|a, b| a.0.total_cmp(&b.0));
+        let near_s = s.map(|(d, s)| format!("{:?} at ({:.0}, {:.0}) {:.0} ft away", s.tier, s.x, s.y, d)).unwrap_or_default();
+        let len: f64 = pts[r].windows(2).map(|w| dist(w[0], w[1])).sum();
+        say!("      dead end at ({:.0}, {:.0}): road {r} ({}, {:.1} mi); nearest {near_s}", spots.pos[n][0], spots.pos[n][1], class_names[class[r]], len / MI);
+    }
     // --- Out-and-backs: the road's heading 200 ft before a point and 200 ft after (100 ft at least,
     // near its ends) differing by over 100°; those within a mile of a river crossing listed.
     let mut spikes: Vec<(P, f64, usize)> = Vec::new();
