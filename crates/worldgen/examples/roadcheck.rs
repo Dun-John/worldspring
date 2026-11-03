@@ -324,7 +324,7 @@ fn main() {
         // drawing over a preview.
         if let Ok(path) = std::env::var("DUMP") {
             let roads: Vec<Value> = t0.roads.roads.iter().map(|rc| json!({ "class": rc.class as u8, "stroke": rc.stroke, "pts": rc.pts.iter().map(|p| [p[0].round(), p[1].round()]).collect::<Vec<_>>() })).collect();
-            let towns: Vec<Value> = t0.settlements.iter().map(|st| json!({ "tier": st.tier as u8, "x": st.x.round(), "y": st.y.round() })).collect();
+            let towns: Vec<Value> = t0.settlements.iter().map(|st| json!({ "tier": st.tier as u8, "kind": st.kind.name(), "reason": st.reason.name(), "x": st.x.round(), "y": st.y.round() })).collect();
             std::fs::write(&path, json!({ "cell_ft": t0.cell_ft, "roads": roads, "settlements": towns }).to_string()).expect("DUMP file");
         }
         let (mut counts, mut worst) = (Map::new(), Map::new());
@@ -966,6 +966,18 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
     say!("  gates per town and up: mean {gate_mean:.2}; {}", gate_line.join(", "));
     let tier_n: Vec<usize> = tiers.iter().map(|t| sts.iter().filter(|s| s.tier == *t).count()).collect();
     say!("  settlements by tier: village {}, town {}, city {}, metropolis {}  (network {:.1} s)", tier_n[0], tier_n[1], tier_n[2], tier_n[3], t.elapsed().as_secs_f64());
+    // Why they stand where they are: counts per reason (rows) and tier (village, town, city, metropolis).
+    {
+        use worldgen::t0::settle::Reason;
+        say!("  settlements by reason and tier (village town city metropolis):");
+        for ri in 0..=12u8 {
+            let r = Reason::from_u8(ri);
+            let c: Vec<usize> = tiers.iter().map(|t| sts.iter().filter(|s| s.reason == r && s.tier == *t).count()).collect();
+            if c.iter().sum::<usize>() > 0 {
+                say!("    {:<20} {:>4} {:>4} {:>4} {:>4}", r.name(), c[0], c[1], c[2], c[3]);
+            }
+        }
+    }
     json!({
         "trips": trips_all, "trips_dry": trips_dry,
         "length_mi": { "total": total / MI, "king": by_class[0] / MI, "road": by_class[1] / MI, "track": by_class[2] / MI, "mst": mst / MI, "ratio": total / mst.max(1.0) },

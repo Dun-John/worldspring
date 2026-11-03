@@ -927,11 +927,11 @@ impl T0 {
             }
         }
         // Settlements: count, then per settlement: tier, kind, flags (coastal | river << 1 |
-        // capital << 2), culture as u8; cell u32; x, y f64; population u32; seed u64; the pin's
+        // capital << 2 | reason << 3), culture as u8; cell u32; x, y f64; population u32; seed u64; the pin's
         // stroke u32 (`u32::MAX`: none).
         out.extend_from_slice(&(self.settlements.len() as u32).to_le_bytes());
         for s in &self.settlements {
-            out.extend_from_slice(&[s.tier as u8, s.kind as u8, s.coastal as u8 | (s.river as u8) << 1 | (s.capital as u8) << 2, s.culture]);
+            out.extend_from_slice(&[s.tier as u8, s.kind as u8, s.coastal as u8 | (s.river as u8) << 1 | (s.capital as u8) << 2 | (s.reason as u8) << 3, s.culture]);
             out.extend_from_slice(&(s.cell as u32).to_le_bytes());
             out.extend_from_slice(&s.x.to_le_bytes());
             out.extend_from_slice(&s.y.to_le_bytes());
@@ -1021,6 +1021,7 @@ impl T0 {
             settlements.push(settle::Settlement {
                 tier: settle::Tier::from_u8(tier),
                 kind: settle::SettleKind::from_u8(kind),
+                reason: settle::Reason::from_u8(flags >> 3),
                 cell,
                 x,
                 y,

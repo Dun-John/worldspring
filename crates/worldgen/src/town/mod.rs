@@ -2332,6 +2332,10 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         let mut edge: Vec<usize> = edge_vertices.iter().copied().filter(|v| !gates.contains(v) && !ring.contains(v)).collect();
         edge.sort_by(|&p, &q| dist(mesh.pos[p], *e).total_cmp(&dist(mesh.pos[q], *e)).then(p.cmp(&q)));
         options.extend(edge.into_iter().take(12).map(|v| (way_cost(k, mesh.pos[v]) + 150.0, v)));
+        // (A gate over water would have its street cut off at the shore, so one on dry ground wins.)
+        if options.iter().any(|o| !site.wet(mesh.pos[o.1])) {
+            options.retain(|o| !site.wet(mesh.pos[o.1]));
+        }
         let pick = options.iter().min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|o| o.1);
         match pick {
             Some(g) => {

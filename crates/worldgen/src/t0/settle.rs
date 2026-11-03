@@ -62,10 +62,48 @@ impl SettleKind {
     }
 }
 
+/// Why a place stands where it does (the strongest of the site's reasons; step 5's economy reads it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reason {
+    None = 0,
+    /// Sheltered coast.
+    Harbour,
+    /// A big river meets the sea or a lake.
+    Mouth,
+    /// A river leaves a lake.
+    Outlet,
+    Confluence,
+    /// Where a river becomes too small for boats.
+    Head,
+    /// The lowest point a big river can be bridged.
+    Crossing,
+    Ore,
+    Timber,
+    Fishing,
+    /// A road over high ground (towns and villages).
+    Pass,
+    /// A road junction (towns and villages).
+    Crossroads,
+    /// Farmland within reach.
+    Food,
+}
+
+impl Reason {
+    pub fn from_u8(v: u8) -> Reason {
+        use Reason::*;
+        [None, Harbour, Mouth, Outlet, Confluence, Head, Crossing, Ore, Timber, Fishing, Pass, Crossroads, Food][(v as usize).min(12)]
+    }
+    pub fn name(self) -> &'static str {
+        ["none", "harbour", "mouth", "outlet", "confluence", "head of navigation", "crossing", "ore", "timber", "fishing", "pass", "crossroads", "food"][self as usize]
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Settlement {
     pub tier: Tier,
     pub kind: SettleKind,
+    pub reason: Reason,
     /// T0 cell index and world position (ft).
     pub cell: usize,
     pub x: f64,
@@ -161,6 +199,13 @@ pub struct Ground {
     on_river: Vec<bool>,
     /// Only sea and lake mouths make a harbour (a confluence is a river town).
     harbour: Vec<bool>,
+    /// Per cell, the strength (0-255) of each site reason `Reason::Harbour..=Fishing` (index = the reason).
+    site: Vec<[u8; 10]>,
+    /// Farmland within a day's reach, 0-1.
+    food: Vec<f32>,
+    /// The strongest break-of-bulk or crossing reason, and the strongest industry, 0-1.
+    bulk: Vec<f32>,
+    industry: Vec<f32>,
 }
 
 fn fertility(b: Biome) -> f64 {
@@ -202,6 +247,45 @@ fn ground(inp: &Inputs) -> Ground {
     let mut mouth = vec![0.0f64; n];
     // Only sea and lake mouths make a harbour (a confluence is a river town).
     let mut harbour = vec![false; n];
+    let mut site = vec![[0u8; 10]; n];
+    // Raises one reason's strength round a cell (within 1 cell: the river's bank).
+    let splat = |site: &mut Vec<[u8; 10]>, at: usize, reason: Reason, strength: f64, reach: i64| {
+        let (mx, my) = ((at % w) as i64, (at / w) as i64);
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                let (x, y) = (mx + dx, my + dy);
+                if x >= 0 && y >= 0 && x < w as i64 && y < h as i64 {
+                    let fall = 1.0 - (crate::core::sqrt((dx * dx + dy * dy) as f64) / (reach as f64 + 1.0)).min(1.0);
+                    let v = (strength * fall * 255.0) as u8;
+                    let e = &mut site[y as usize * w + x as usize][reason as usize];
+                    *e = (*e).max(v);
+                }
+            }
+        }
+    };
+    // A river is navigable once as wide as a big river; a king's road bridges up to 250 ft.
+    let nav_q = big_river;
+    let bridge_q = super::hydro::RIVER_Q * libm::pow(250.0 / 14.0, 1.0 / 0.6);
+    for r in &inp.hydro.rivers {
+        let (Some(&first), Some(&q)) = (r.cells.first(), r.q.last()) else { continue };
+        let first = first as usize;
+        if r.cells.len() >= 3 && (inp.hydro.lake_of[first] != NO_LAKE || neighbors(w, h, first).any(|(nb, _)| inp.hydro.lake_of[nb] != NO_LAKE)) {
+            splat(&mut site, first, Reason::Outlet, 0.7, 1);
+        }
+        // (Only a river that reaches the sea or a lake as a big river has a head of navigation worth a town.)
+        if q as f64 >= 3.0 * nav_q && matches!(r.mouth, Mouth::Ocean | Mouth::Lake) {
+            if let Some(i) = r.q.iter().position(|&v| v as f64 >= nav_q)
+                && i > 0
+            {
+                splat(&mut site, r.cells[i] as usize, Reason::Head, 0.9, 1);
+            }
+        }
+        if q as f64 > bridge_q
+            && let Some(i) = r.q.iter().rposition(|&v| (v as f64) <= bridge_q)
+        {
+            splat(&mut site, r.cells[i] as usize, Reason::Crossing, 0.85, 1);
+        }
+    }
     for r in &inp.hydro.rivers {
         let (Some(&last), Some(&q)) = (r.cells.last(), r.q.last()) else { continue };
         let strength = match r.mouth {
@@ -220,6 +304,9 @@ fn ground(inp: &Inputs) -> Ground {
                     let k = y as usize * w + x as usize;
                     let fall = 1.0 - (crate::core::sqrt((dx * dx + dy * dy) as f64) / 3.0).min(1.0);
                     mouth[k] = mouth[k].max(strength * fall);
+                    let reason = if r.mouth == Mouth::Confluence { Reason::Confluence } else { Reason::Mouth };
+                    let e = &mut site[k][reason as usize];
+                    *e = (*e).max((strength * fall * 255.0) as u8);
                     if matches!(r.mouth, Mouth::Ocean | Mouth::Lake) && strength * fall > 0.5 {
                         harbour[k] = true;
                     }
@@ -227,6 +314,32 @@ fn ground(inp: &Inputs) -> Ground {
             }
         }
     }
+    // Farmland within a day's reach: the mean fertility of the cells round (a box sum).
+    let reach = (crate::core::round(3.0 * 5280.0 / cell) as i64).clamp(1, 6);
+    let mut food = vec![0.0f32; n];
+    {
+        let sw = w + 1;
+        let mut sum = vec![0.0f64; sw * (h + 1)];
+        for y in 0..h {
+            let mut row = 0.0;
+            for x in 0..w {
+                let k = y * w + x;
+                row += if inp.land[k] { fertility(biome_of(k)) } else { 0.0 };
+                sum[(y + 1) * sw + x + 1] = sum[y * sw + x + 1] + row;
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let (x0, x1) = ((x as i64 - reach).max(0) as usize, ((x as i64 + reach + 1) as usize).min(w));
+                let (y0, y1) = ((y as i64 - reach).max(0) as usize, ((y as i64 + reach + 1) as usize).min(h));
+                let total = sum[y1 * sw + x1] - sum[y0 * sw + x1] - sum[y1 * sw + x0] + sum[y0 * sw + x0];
+                food[y * w + x] = (total / ((2 * reach + 1) * (2 * reach + 1)) as f64) as f32;
+            }
+        }
+    }
+    let ore_seed = inp.world.stream("t0.settle.ore");
+    let mut bulk = vec![0.0f32; n];
+    let mut industry = vec![0.0f32; n];
     for k in 0..n {
         if !inp.land[k] || inp.hydro.lake_of[k] != NO_LAKE {
             continue;
@@ -245,10 +358,34 @@ fn ground(inp: &Inputs) -> Ground {
         lakeside[k] = lake_n > 0;
         let b = biome_of(k);
         let fert = fertility(b);
+        let above = inp.height[k] - sea;
+        let (cx, cy) = ((k % w) as f64, (k / w) as f64);
+        // Industry: ore in the hills, timber where forest meets a river, fishing grounds.
+        let ore = if above > 2_500.0 { smoothstep(0.1, 0.3, fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5)) } else { 0.0 };
+        let forest = matches!(b, Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga | Biome::Jungle);
+        let timber = if forest && (inp.hydro.discharge[k] as f64 >= river_q || neighbors(w, h, k).any(|(nb, _)| inp.hydro.discharge[nb] as f64 >= river_q)) { 0.6 } else { 0.0 };
+        if ocean_n > 0 {
+            // A bay (a good part of the ground round it is sea) shelters a harbour; a bare coast is fishing.
+            let mut sea_n = 0;
+            for dy in -2i64..=2 {
+                for dx in -2i64..=2 {
+                    let (x, y) = (cx as i64 + dx, cy as i64 + dy);
+                    if x >= 0 && y >= 0 && x < w as i64 && y < h as i64 && !inp.land[y as usize * w + x as usize] {
+                        sea_n += 1;
+                    }
+                }
+            }
+            let shelter = if (6..=16).contains(&sea_n) { 1.0 } else { 0.65 };
+            site[k][Reason::Harbour as usize] = (shelter * 255.0) as u8;
+        }
+        if ocean_n > 0 || lake_n > 0 {
+            site[k][Reason::Fishing as usize] = (0.5 * 255.0) as u8;
+        }
+        site[k][Reason::Ore as usize] = (ore * 255.0) as u8;
+        site[k][Reason::Timber as usize] = (timber * 255.0) as u8;
         if fert <= 0.0 {
             continue;
         }
-        let above = inp.height[k] - sea;
         let flat = 1.0 - smoothstep(0.02, 0.15, slope_of(k));
         let mut water = 0.0f64;
         let q = inp.hydro.discharge[k] as f64;
@@ -265,10 +402,19 @@ fn ground(inp: &Inputs) -> Ground {
         }
         water += 1.4 * mouth[k];
         let dry_fix = if matches!(b, Biome::HotDesert | Biome::ColdDesert) && water < 0.5 { 0.2 } else { 1.0 };
-        let altitude = 1.0 - 0.8 * smoothstep(3_000.0, 8_000.0, above);
+        // Farmland within reach, not the cell's own; a mining or timber place needs no farmland.
+        let fed = 0.3 * fert + 0.7 * (1.4 * food[k] as f64).min(1.0);
+        let fert = fed.max(0.55 * ore).max(0.5 * timber);
+        let altitude = 1.0 - 0.8 * smoothstep(3_000.0, 8_000.0, above) * (1.0 - ore);
         score[k] = fert * (0.35 + 0.65 * flat) * (0.35 + water) * altitude * dry_fix;
     }
-    Ground { score, coastal, lakeside, on_river, harbour }
+    for k in 0..n {
+        let s = &site[k];
+        let m = |rs: &[Reason]| rs.iter().map(|&r| s[r as usize]).max().unwrap_or(0) as f32 / 255.0;
+        bulk[k] = m(&[Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing]);
+        industry[k] = m(&[Reason::Ore, Reason::Timber, Reason::Fishing]);
+    }
+    Ground { score, coastal, lakeside, on_river, harbour, site, food, bulk, industry }
 }
 
 /// Place settlements of the given tiers, keeping `existing` ones. `roads` (from
@@ -281,10 +427,10 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
     let p = world.params();
     let sea = p.sea_level_ft;
     let n = w * h;
-    let ore_seed = world.stream("t0.settle.ore");
 
+    let ore_seed = world.stream("t0.settle.ore");
     let biome_of = |k: usize| Biome::from_u8((inp.biome[k] & 0xff) as u8);
-    let Ground { score, coastal, lakeside, on_river, harbour, .. } = inp.ground.get_or_init(|| ground(inp));
+    let Ground { score, coastal, lakeside, on_river, harbour, site, food, bulk, industry } = inp.ground.get_or_init(|| ground(inp));
 
     // How many of each tier, from land area (square miles) and density. At density 0 none are
     // chosen, but the sketch's pins still stand: what is placed by hand wins over the dial.
@@ -300,8 +446,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
     ];
 
     // Roads: a site on a road is better, a junction much better (within a cell of it).
-    let road_bonus = |k: usize, tier: Tier| -> f64 {
-        let Some(rp) = roads else { return 1.0 };
+    let road_at = |k: usize| -> (bool, bool) {
+        let Some(rp) = roads else { return (false, false) };
         let (x, y) = ((k % w) as i64, (k / w) as i64);
         let (mut on, mut at) = (false, false);
         for dy in -1i64..=1 {
@@ -315,8 +461,20 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 at |= rp.junction[j];
             }
         }
+        (on, at)
+    };
+    let road_bonus = |k: usize, tier: Tier| -> f64 {
+        let (on, at) = road_at(k);
         let (on_b, at_b) = if tier >= Tier::Town { (3.0, 5.0) } else { (2.0, 3.5) };
-        if at { at_b } else if on { on_b } else { 1.0 }
+        // Cities and towns also favour the sites where goods change hands (harbours, mouths,
+        // confluences, heads of navigation, crossings) over plain farmland.
+        let gain = match tier {
+            Tier::Metropolis | Tier::City => 2.0,
+            Tier::Town => 0.8,
+            Tier::Village => 0.25,
+        };
+        let sites = 1.0 + gain * if tier == Tier::Village { bulk[k].max(industry[k]) } else { bulk[k] } as f64;
+        sites * if at { at_b } else if on { on_b } else { 1.0 }
     };
 
     let mut out = existing;
@@ -345,6 +503,34 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             let b = biome_of(k);
             let above = inp.height[k] - sea;
             let ore = fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5);
+            let near_river = on_river[k] || neighbors(w, h, k).any(|(nb, _)| on_river[nb]);
+            // The strongest reason at the site (ties go to the earlier in `Reason`'s order).
+            let mut reason = Reason::None;
+            let mut best = 0.3;
+            let mut consider = |r: Reason, v: f64| {
+                if v > best + 1e-9 {
+                    (reason, best) = (r, v);
+                }
+            };
+            for r in [Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing, Reason::Ore, Reason::Timber, Reason::Fishing] {
+                // (Only a town's site weighs the river's heads, outlets and crossings.)
+                if tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Crossing) {
+                    continue;
+                }
+                consider(r, site[k][r as usize] as f64 / 255.0);
+            }
+            if tier >= Tier::Town {
+                let (on, at) = road_at(k);
+                if on && above > 2_500.0 {
+                    consider(Reason::Pass, 0.8);
+                }
+                if at {
+                    consider(Reason::Crossroads, 0.75);
+                }
+            }
+            if reason == Reason::None && food[k] >= 0.5 {
+                reason = Reason::Food;
+            }
             // A pin stands where it was drawn, not at its cell's centre: one drawn on the coast is
             // coastal when the sea is within reach of that point (the shore it then moves to).
             let pinned_coast = pin.is_some() && {
@@ -360,7 +546,19 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             };
             let mut is_coast = coastal[k] || harbour[k] || pinned_coast;
             let river = on_river[k] || (pin.is_some() && neighbors(w, h, k).any(|(nb, _)| on_river[nb]));
-            let mut kind = if is_coast {
+            let from_reason = match reason {
+                Reason::Harbour | Reason::Mouth if is_coast => Some(if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }),
+                Reason::Outlet | Reason::Confluence | Reason::Head | Reason::Crossing if tier >= Tier::Town && near_river => Some(SettleKind::River),
+                Reason::Ore => Some(SettleKind::Mining),
+                Reason::Timber if tier <= Tier::Town => Some(SettleKind::Lumber),
+                Reason::Fishing if tier <= Tier::Town && is_coast => Some(SettleKind::Fishing),
+                Reason::Pass => Some(SettleKind::Fortress),
+                Reason::Crossroads => Some(SettleKind::Market),
+                _ => None,
+            };
+            let mut kind = if let Some(kind) = from_reason {
+                kind
+            } else if is_coast {
                 if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }
             } else if above > 2_500.0 && ore > 0.1 {
                 SettleKind::Mining
@@ -402,12 +600,13 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             Settlement {
                 tier,
                 kind,
+                reason,
                 cell: k,
                 x,
                 y,
                 population,
                 coastal: is_coast,
-                river: on_river[k],
+                river: on_river[k] || (near_river && kind == SettleKind::River),
                 capital,
                 seed,
                 culture: 0,
