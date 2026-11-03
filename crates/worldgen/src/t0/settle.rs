@@ -118,6 +118,10 @@ pub struct Settlement {
     pub culture: u8,
     /// The sketch stroke that pinned it, if any.
     pub pin: Option<u32>,
+    /// The tier and population it was planned with (`roads::link_edges` and `route` read these, so
+    /// the economy's re-tiering routes nothing again; a loaded world has its final ones here).
+    pub planned: Tier,
+    pub planned_pop: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -196,22 +200,22 @@ pub struct Ground {
     score: Vec<f64>,
     coastal: Vec<bool>,
     lakeside: Vec<bool>,
-    on_river: Vec<bool>,
+    pub(crate) on_river: Vec<bool>,
     /// Only sea and lake mouths make a harbour (a confluence is a river town).
     harbour: Vec<bool>,
     /// Per cell, the strength (0-255) of each site reason `Reason::Harbour..=Fishing` (index = the reason).
-    site: Vec<[u8; 10]>,
+    pub(crate) site: Vec<[u8; 10]>,
     /// Farmland within a day's reach, 0-1.
-    food: Vec<f32>,
+    pub(crate) food: Vec<f32>,
     /// The strongest break-of-bulk or crossing reason, and the strongest industry, 0-1.
-    bulk: Vec<f32>,
-    industry: Vec<f32>,
+    pub(crate) bulk: Vec<f32>,
+    pub(crate) industry: Vec<f32>,
     /// Where the river reasons (but crossings) come from: reason, cell, the cell before it on its river (a
     /// mouth's last land cell; else the cell again) and the river's strength there, 0-1.
     sources: Vec<(Reason, u32, u32, f32)>,
 }
 
-fn fertility(b: Biome) -> f64 {
+pub(crate) fn fertility(b: Biome) -> f64 {
     match b {
         Biome::Grassland => 1.0,
         Biome::TemperateForest => 0.8,
@@ -546,6 +550,46 @@ fn kind_of(reason: Reason, tier: Tier, b: Biome, above: f64, ore: f64, is_coast:
     }
 }
 
+/// The population range of a tier.
+pub fn pop_range(tier: Tier) -> (f64, f64) {
+    match tier {
+        Tier::Metropolis => (25_000.0, 80_000.0),
+        Tier::City => (5_000.0, 25_000.0),
+        Tier::Town => (500.0, 5_000.0),
+        Tier::Village => (50.0, 500.0),
+    }
+}
+
+/// Move a generated settlement to another tier (the economy's re-tiering): a reason its new tier
+/// doesn't weigh gives way to the strongest one it does (a city stands for more than its timber,
+/// fishing, pass or crossroads), and its kind follows.
+pub fn retier(inp: &Inputs, s: &mut Settlement, tier: Tier) {
+    let (w, h) = (inp.w, inp.h);
+    let Some(g) = inp.ground.get() else { return };
+    let k = s.cell;
+    s.tier = tier;
+    let skip = |r: Reason| (tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Pass | Reason::Crossroads)) || (tier >= Tier::City && matches!(r, Reason::Timber | Reason::Fishing | Reason::Pass | Reason::Crossroads));
+    if skip(s.reason) {
+        let mut best = 0.3;
+        s.reason = Reason::None;
+        for r in [Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing, Reason::Ore] {
+            let v = g.site[k][r as usize] as f64 / 255.0;
+            if !skip(r) && v > best + 1e-9 {
+                (s.reason, best) = (r, v);
+            }
+        }
+        if s.reason == Reason::None && g.food[k] >= 0.5 {
+            s.reason = Reason::Food;
+        }
+    }
+    let near_river = g.on_river[k] || neighbors(w, h, k).any(|(nb, _)| g.on_river[nb]);
+    let (cx, cy) = ((k % w) as f64, (k / w) as f64);
+    let ore = fbm(inp.world.stream("t0.settle.ore"), cx / 12.0, cy / 12.0, 3, 2.0, 0.5);
+    let b = Biome::from_u8((inp.biome[k] & 0xff) as u8);
+    s.kind = kind_of(s.reason, tier, b, inp.height[k] - inp.world.params().sea_level_ft, ore, s.coastal, near_river, g.on_river[k], true);
+    s.river = g.on_river[k] || (near_river && s.kind == SettleKind::River);
+}
+
 /// Place settlements of the given tiers, keeping `existing` ones. `roads` (from
 /// `roads::preview`) favours sites on roads and most of all at junctions, so later
 /// tiers grow at the crossroads the earlier tiers' roads made. Pins asking for what their place
@@ -644,12 +688,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         // A settlement of this tier at cell `k`, standing at (x, y) ft, drawn from `seed`.
         let make = |k: usize, seed: u64, mut x: f64, mut y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
-            let (lo, hi) = match tier {
-                Tier::Metropolis => (25_000.0, 80_000.0),
-                Tier::City => (5_000.0, 25_000.0),
-                Tier::Town => (500.0, 5_000.0),
-                Tier::Village => (50.0, 500.0),
-            };
+            let (lo, hi) = pop_range(tier);
             let population = (lo * libm::pow(hi / lo, unit(hash3(seed, 0x706f_70, 0, 0)))) as u32;
             let b = biome_of(k);
             let above = inp.height[k] - sea;
@@ -749,6 +788,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 seed,
                 culture: 0,
                 pin: pin.map(|p| p.stroke as u32),
+                planned: tier,
+                planned_pop: population,
             }
         };
         // Pinned ones first (they count toward the tier's quota), seeded by where they were

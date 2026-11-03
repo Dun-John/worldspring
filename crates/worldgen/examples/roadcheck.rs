@@ -318,13 +318,23 @@ fn main() {
             }
         }
         let net = network(&t0, &standing, &gate_counts);
+        let econ = economy(&t0);
         let drawn = drawn_roads(&world, &t0, &standing);
         let steps = stairs(&world, &t0);
         // `DUMP=file.json`: every road (class, drawn stroke, control points) and settlement, for
         // drawing over a preview.
         if let Ok(path) = std::env::var("DUMP") {
             let roads: Vec<Value> = t0.roads.roads.iter().map(|rc| json!({ "class": rc.class as u8, "stroke": rc.stroke, "pts": rc.pts.iter().map(|p| [p[0].round(), p[1].round()]).collect::<Vec<_>>() })).collect();
-            let towns: Vec<Value> = t0.settlements.iter().map(|st| json!({ "tier": st.tier as u8, "kind": st.kind.name(), "reason": st.reason.name(), "x": st.x.round(), "y": st.y.round() })).collect();
+            let places = t0.extra.as_ref().map(|e| &e.economy.places[..]).unwrap_or(&[]);
+            let towns: Vec<Value> = t0
+                .settlements
+                .iter()
+                .enumerate()
+                .map(|(i, st)| {
+                    let e = places.iter().find(|p| p.index == i).map(|p| json!({ "was": p.was as u8, "wealth": p.wealth, "food": p.food, "industry": p.industry, "gateway": p.gateway, "trade": p.trade }));
+                    json!({ "tier": st.tier as u8, "kind": st.kind.name(), "reason": st.reason.name(), "x": st.x.round(), "y": st.y.round(), "population": st.population, "economy": e })
+                })
+                .collect();
             std::fs::write(&path, json!({ "cell_ft": t0.cell_ft, "roads": roads, "settlements": towns }).to_string()).expect("DUMP file");
         }
         let (mut counts, mut worst) = (Map::new(), Map::new());
@@ -344,7 +354,7 @@ fn main() {
             tally.print(label, key, &mut counts, &mut worst);
         }
         say!("  ({n_layouts} layouts in {layout_s:.1} s)");
-        report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst, "drawn_roads": drawn, "stairs": steps, "network": net }));
+        report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst, "drawn_roads": drawn, "stairs": steps, "network": net, "economy": econ }));
     }
     if args.json {
         println!("{}", Value::Array(report));
@@ -355,6 +365,69 @@ fn main() {
 /// and kind of street: length, length at or above some grades, grade percentiles (by length), and
 /// the flights of steps (count, stepped length) with steps from 0.12, 0.15 (the default) and 0.20,
 /// stopping at 80% of that. Settlements listed with their tier for `TOP`.
+/// The economy pass: tier moves (with the biggest movers and their wealth's parts), the rank-size
+/// curve of the towns and up (log population against log rank: Zipf's rule is a slope of -1), and
+/// the roads' traffic per class (and the stretches whose class it changed).
+fn economy(t0: &T0) -> Value {
+    use worldgen::t0::roads::RoadClass;
+    use worldgen::t0::settle::Tier;
+    let Some(extra) = t0.extra.as_ref() else { return Value::Null };
+    let places = &extra.economy.places;
+    let sts = &t0.settlements;
+    let top = std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    let (up, down): (Vec<_>, Vec<_>) = places.iter().filter(|p| sts[p.index].tier != p.was).partition(|p| sts[p.index].tier > p.was);
+    // Rank-size: least squares of ln(population) on ln(rank).
+    let mut pops: Vec<f64> = sts.iter().filter(|s| s.tier >= Tier::Town).map(|s| s.population as f64).collect();
+    pops.sort_by(|a, b| b.total_cmp(a));
+    let pts: Vec<(f64, f64)> = pops.iter().enumerate().map(|(r, &p)| (((r + 1) as f64).ln(), p.ln())).collect();
+    let nn = pts.len().max(1) as f64;
+    let (mx, my) = (pts.iter().map(|p| p.0).sum::<f64>() / nn, pts.iter().map(|p| p.1).sum::<f64>() / nn);
+    let sxy: f64 = pts.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
+    let sxx: f64 = pts.iter().map(|p| (p.0 - mx) * (p.0 - mx)).sum();
+    let syy: f64 = pts.iter().map(|p| (p.1 - my) * (p.1 - my)).sum();
+    let slope = sxy / sxx.max(1e-9);
+    let r2 = sxy * sxy / (sxx * syy).max(1e-9);
+    say!("  economy: tier moves up {}, down {}; rank-size (towns and up, n {}): slope {slope:.2}, r2 {r2:.2}; populations {}", up.len(), down.len(), pts.len(), [0usize, 1, 4, 9, 19].iter().filter_map(|&r| pops.get(r).map(|p| format!("#{} {:.0}", r + 1, p))).collect::<Vec<_>>().join(", "));
+    let line = |what: &str, p: &worldgen::t0::economy::Place| {
+        let s = &sts[p.index];
+        say!("      {what} #{} at ({:.0}, {:.0}): {:?} -> {:?}, pop {}, wealth {:.2} (food {:.2}, industry {:.2}, gateway {:.2}, trade {:.2}), {}", p.index, s.x, s.y, p.was, s.tier, s.population, p.wealth, p.food, p.industry, p.gateway, p.trade, s.reason.name());
+    };
+    for p in up.iter().take(top) {
+        line("grew", p);
+    }
+    for p in down.iter().take(top) {
+        line("shrank", p);
+    }
+    // Traffic per class as built, and the stretches whose class it changed.
+    let names = ["king's road", "road", "track"];
+    let tr = &extra.traffic;
+    let mut parts = Vec::new();
+    let mut by = Vec::new();
+    for c in 0..3u8 {
+        let segs: Vec<_> = tr.iter().filter(|t| t.now as u8 == c).collect();
+        let len: f64 = segs.iter().map(|t| t.length_ft).sum();
+        let mean = segs.iter().map(|t| t.flow as f64 * t.length_ft).sum::<f64>() / len.max(1.0);
+        let mut f: Vec<f64> = segs.iter().map(|t| t.flow as f64).collect();
+        f.sort_by(|a, b| a.total_cmp(b));
+        parts.push(format!("{} {:.0} mi mean {:.2} p90 {:.2}", names[c as usize], len / MI, mean, pct(&f, 0.9)));
+        by.push(json!({ "class": names[c as usize], "mi": len / MI, "mean_flow": mean }));
+    }
+    let changed = |a: RoadClass, b: RoadClass| tr.iter().filter(|t| t.was == a && t.now == b).collect::<Vec<_>>();
+    let (r_k, k_r, r_t) = (changed(RoadClass::Road, RoadClass::KingsRoad), changed(RoadClass::KingsRoad, RoadClass::Road), changed(RoadClass::Road, RoadClass::Track));
+    let mi_of = |v: &[&worldgen::t0::roads::SegTraffic]| v.iter().map(|t| t.length_ft).sum::<f64>() / MI;
+    say!("  traffic per class (flow-weighted mean, p90 per stretch): {}; king's road threshold {:.2}", parts.join(", "), extra.economy.traffic.kings);
+    say!("    class from traffic: road -> king's road {} ({:.0} mi), king's road -> road {} ({:.0} mi), road -> track {} ({:.0} mi)", r_k.len(), mi_of(&r_k), k_r.len(), mi_of(&k_r), r_t.len(), mi_of(&r_t));
+    let mut big = r_k.clone();
+    big.sort_by(|a, b| b.length_ft.total_cmp(&a.length_ft));
+    for t in big.iter().take(top) {
+        say!("      to king's road at ({:.0}, {:.0}): {:.1} mi, flow {:.2}", t.at[0], t.at[1], t.length_ft / MI, t.flow);
+    }
+    for t in k_r.iter().chain(&r_t).take(top) {
+        say!("      dropped {:?} -> {:?} at ({:.0}, {:.0}): {:.1} mi, flow {:.2}", t.was, t.now, t.at[0], t.at[1], t.length_ft / MI, t.flow);
+    }
+    json!({ "up": up.len(), "down": down.len(), "rank_size_slope": slope, "rank_size_r2": r2, "traffic": by, "road_to_kings": r_k.len(), "kings_to_road": k_r.len(), "road_to_track": r_t.len() })
+}
+
 fn stairs(world: &worldgen::World, t0: &T0) -> Value {
     use worldgen::t0::settle::Tier;
     use worldgen::town::stairs::{self, Kind, StairParams};

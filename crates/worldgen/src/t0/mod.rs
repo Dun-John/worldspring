@@ -6,6 +6,7 @@
 
 pub mod biome;
 pub mod climate;
+pub mod economy;
 pub mod erosion;
 pub mod features;
 pub mod flood;
@@ -114,6 +115,9 @@ pub struct T0Extra {
     pub settlements: Vec<settle::Settlement>,
     pub pois: Vec<settle::Poi>,
     pub crossings: Vec<roads::Crossing>,
+    /// What the towns and up earned, and the roads' traffic.
+    pub economy: economy::Report,
+    pub traffic: Vec<roads::SegTraffic>,
 }
 
 impl T0 {
@@ -344,14 +348,19 @@ impl T0 {
         let rinp = roads::Inputs { world, drawn, pre: Default::default(), plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, rivers: &rivers, routes: Default::default(), fixed: Default::default() };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None, &mut conflicts);
+        let economy;
         if world.file.params.generated_roads {
             let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
             settlements = settle::place(&sinp, settlements, &[T::Town], Some(&usage), &mut conflicts);
             let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad, roads::RoadClass::Road]);
+            // What the towns and up earn, trading along those roads, sets their tiers.
+            economy = economy::run(&sinp, &mut settlements, Some(&usage.paths));
             settlements = settle::place(&sinp, settlements, &[T::Village], Some(&usage), &mut conflicts);
         } else {
-            // Placed without regard to roads, so drawing one never moves a settlement.
+            // Placed without regard to roads (and sized without trade), so drawing one never moves
+            // or resizes a settlement.
             settlements = settle::place(&sinp, settlements, &[T::Town], None, &mut conflicts);
+            economy = economy::run(&sinp, &mut settlements, None);
             settlements = settle::place(&sinp, settlements, &[T::Village], None, &mut conflicts);
         }
         // (A capital pinned where none could be placed leaves the first metropolis the capital.)
@@ -421,7 +430,7 @@ impl T0 {
             (p.x, p.y) = crate::lod::rivers::clear_of_rivers_with(&rivers, p.x, p.y, 150.0, cell, &clear);
         }
         progress("roads", 0.0);
-        let mut network = roads::build(&rinp, &settlements);
+        let mut network = roads::build(&rinp, &settlements, &economy.traffic);
         conflicts.extend(rinp.pre().conflicts.iter().cloned());
         // Roads keep out of the belts the rivers meander in, crossing each one once.
         let belts = crate::lod::roads::BeltCache::default();
@@ -552,7 +561,7 @@ impl T0 {
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
         t0.sketch_sites(world);
-        t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings });
+        t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, economy, traffic: network.traffic });
         t0
     }
 
@@ -1038,6 +1047,9 @@ impl T0 {
                 seed,
                 culture,
                 pin: (pin != u32::MAX).then_some(pin),
+                // (Only generating reads them: nothing is routed again from a loaded world.)
+                planned: settle::Tier::from_u8(tier),
+                planned_pop: population,
             });
         }
         let count = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;

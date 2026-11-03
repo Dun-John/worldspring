@@ -594,6 +594,26 @@ fn settlement_catalog_guarantees() {
     let t0 = worldgen::t0::T0::generate(&world);
     let inn = CATALOG.iter().position(|f| f.key == "inn").unwrap();
     assert!(t0.settlements.len() > 50, "too few settlements ({})", t0.settlements.len());
+    // The economy's re-tiering keeps each tier's count, moves a place a tier at most, keeps the
+    // capital a metropolis, and sizes each place within its tier.
+    {
+        use worldgen::t0::settle::{Tier, pop_range};
+        let places = &t0.extra.as_ref().unwrap().economy.places;
+        assert!(places.len() > 10, "too few towns ranked ({})", places.len());
+        for tier in [Tier::Town, Tier::City, Tier::Metropolis] {
+            let (was, now) = (places.iter().filter(|p| p.was == tier).count(), places.iter().filter(|p| t0.settlements[p.index].tier == tier).count());
+            assert_eq!(was, now, "{tier:?}: {was} placed, {now} after re-tiering");
+        }
+        for p in places {
+            let s = &t0.settlements[p.index];
+            assert!((s.tier as i32 - p.was as i32).abs() <= 1, "settlement {} went from {:?} to {:?}", p.index, p.was, s.tier);
+            assert!(!s.capital || s.tier == Tier::Metropolis, "the capital is a {:?}", s.tier);
+        }
+        for (i, s) in t0.settlements.iter().enumerate() {
+            let (lo, hi) = pop_range(s.tier);
+            assert!(s.population as f64 >= lo - 1.0 && s.population as f64 <= hi, "settlement {i} ({:?}) has {} people", s.tier, s.population);
+        }
+    }
     for i in 0..t0.settlements.len() {
         let l = town::generate(&world, &t0, i);
         let mut have = vec![0usize; CATALOG.len()];
@@ -3065,7 +3085,7 @@ fn created_sites_survive_a_remade_world() {
     });
     let kept = kept.count();
     assert!(kept * 100 >= (n - 1) * 97, "a village pushed away by an added town redrew the others: {kept} of {} drawn alike", n - 1);
-    let town_at = t0.settlements.iter().find(|s| s.tier == Tier::Town).map(|s| [s.x + 2_000.0, s.y]).unwrap();
+    let town_at = t0.settlements.iter().find(|s| s.tier == Tier::Town && s.planned == Tier::Town).map(|s| [s.x + 2_000.0, s.y]).unwrap();
     let eo = added_at(town_at);
     let k = eo.world.file.sketch.strokes.len() - 1;
     let refused = eo.t0.extra.as_ref().unwrap().overlay.conflicts.iter().any(|c| c.stroke == k && c.message.contains("within 3 miles of a town"));
@@ -3680,6 +3700,8 @@ fn sketch_guarantee() {
         let i = t0.settlements.iter().position(|s| s.pin == Some(stroke)).unwrap_or_else(|| panic!("pin {stroke} placed no settlement"));
         let (s, f) = (&t0.settlements[i], towns[i]);
         assert_eq!(f.kind, *tier, "pin {stroke} has the wrong tier");
+        // (The economy ranks pins but neither re-tiers nor resizes them.)
+        assert!(s.tier == s.planned && s.population == s.planned_pop, "the economy changed pin {stroke}");
         if let Some(n) = name {
             assert_eq!(f.name, *n, "pin {stroke} lost its name");
         }
@@ -4066,6 +4088,6 @@ fn sketch_names_and_sites() {
     assert!(long.is_empty(), "with generated roads off, roads not drawn run {long:?} mi");
     assert!(t_none.roads.roads.is_empty(), "with generated roads off and none drawn, there are roads");
     assert!(!t_road.pois.iter().any(|p| p.kind == worldgen::t0::settle::PoiKind::Waystation), "roadside inns made with generated roads off");
-    let places = |t: &worldgen::t0::T0| t.settlements.iter().map(|s| (s.x.round() as i64, s.y.round() as i64, s.tier as u8)).collect::<Vec<_>>();
-    assert_eq!(places(&t_road), places(&t_none), "drawing a road moved settlements with generated roads off");
+    let places = |t: &worldgen::t0::T0| t.settlements.iter().map(|s| (s.x.round() as i64, s.y.round() as i64, s.tier as u8, s.population)).collect::<Vec<_>>();
+    assert_eq!(places(&t_road), places(&t_none), "drawing a road moved or resized settlements with generated roads off");
 }

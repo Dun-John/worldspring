@@ -92,6 +92,19 @@ pub struct Network {
     pub roads: Vec<RoadPath>,
     pub crossings: Vec<Crossing>,
     pub waystations: Vec<Poi>,
+    /// Per stretch between junctions as routed: its traffic and class.
+    pub traffic: Vec<SegTraffic>,
+}
+
+/// A stretch's class as planned and as built, the most goods it carries (`economy::Traffic`),
+/// its length and a point on it (ft).
+#[derive(Clone, Debug)]
+pub struct SegTraffic {
+    pub was: RoadClass,
+    pub now: RoadClass,
+    pub flow: f32,
+    pub length_ft: f64,
+    pub at: [f64; 2],
 }
 
 /// The ground roads are planned on (T0 cell units in, ft out): the T0 surface as the
@@ -246,7 +259,7 @@ impl PartialOrd for Node {
     }
 }
 
-pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
+pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy::Traffic) -> Network {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let p = inp.world.params();
     let river_q = super::hydro::river_q(p.river_density);
@@ -263,6 +276,15 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
             let e = links.entry(key).or_insert((*class as u8, *stroke));
             e.0 = e.0.min(*class as u8);
             e.1 = e.1.or(*stroke);
+        }
+    }
+    // Each stretch's class as built, from its traffic (`economy::Traffic`; a drawn road keeps its
+    // own). The routes above went by the planned classes, so this moves none of them.
+    let planned_class: std::collections::BTreeMap<(u32, u32), u8> = links.iter().map(|(&k, v)| (k, v.0)).collect();
+    for (key, e) in links.iter_mut() {
+        if e.1.is_none() {
+            let flow = traffic.flow.get(key).copied().unwrap_or(0.0);
+            e.0 = traffic.class(RoadClass::from_u8(e.0), flow) as u8;
         }
     }
     let mut adj: std::collections::BTreeMap<u32, Vec<u32>> = Default::default();
@@ -283,6 +305,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     let is_node = |c: u32, adj: &std::collections::BTreeMap<u32, Vec<u32>>| adj[&c].len() != 2 || at_cell.contains_key(&(c as usize)) || step_stroke(c, adj[&c][0]) != step_stroke(c, adj[&c][1]);
     let mut used: std::collections::BTreeSet<(u32, u32)> = Default::default();
     let mut segments: Vec<(RoadClass, Vec<u32>, Option<u32>)> = Vec::new();
+    let mut traffic_out: Vec<SegTraffic> = Vec::new();
     for (&start, nbs) in &adj {
         if !is_node(start, &adj) {
             continue;
@@ -308,6 +331,11 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
                 prev = cur;
                 cur = next;
             }
+            let was = seg.windows(2).map(|p| planned_class[&(p[0].min(p[1]), p[0].max(p[1]))]).min().unwrap_or(class);
+            let flow = seg.windows(2).map(|p| traffic.flow.get(&(p[0].min(p[1]), p[0].max(p[1]))).copied().unwrap_or(0.0)).fold(0.0f32, f32::max);
+            let length = seg.windows(2).map(|p| dist([(p[0] as usize % w) as f64, (p[0] as usize / w) as f64], [(p[1] as usize % w) as f64, (p[1] as usize / w) as f64])).sum::<f64>() * cell;
+            let mid = seg[seg.len() / 2] as usize;
+            traffic_out.push(SegTraffic { was: RoadClass::from_u8(was), now: RoadClass::from_u8(class), flow, length_ft: length, at: [(mid % w) as f64 * cell, (mid / w) as f64 * cell] });
             segments.push((RoadClass::from_u8(class), seg, stroke));
         }
     }
@@ -452,7 +480,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
             }
         }
     }
-    Network { roads, crossings, waystations }
+    Network { roads, crossings, waystations, traffic: traffic_out }
 }
 
 /// Settlement pairs to join, per class: king's roads join cities, roads join towns and up,
@@ -480,7 +508,8 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell:
             continue;
         }
         let max_link = max_mi * 5280.0;
-        let members: Vec<usize> = (0..ns).filter(|&i| settlements[i].tier >= min_tier).collect();
+        // (By the tiers they were planned at: the economy's re-tiering routes nothing again.)
+        let members: Vec<usize> = (0..ns).filter(|&i| settlements[i].planned >= min_tier).collect();
         let add = |a: usize, b: usize, edges: &mut Vec<(usize, usize, RoadClass)>| {
             let (a, b) = (a.min(b), a.max(b));
             if !edges.iter().any(|e| e.0 == a && e.1 == b) {
@@ -561,7 +590,7 @@ pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) ->
             // At its ends the drawn road runs on into the settlement; beside it, a side road of
             // the settlement's own class (no better than the road it leaves) goes to it.
             let end = [d.pts[0], d.pts[d.pts.len() - 1]].iter().any(|&p| dist(p, at(s)) <= snap);
-            let own = match s.tier {
+            let own = match s.planned {
                 Tier::Village => RoadClass::Track,
                 Tier::Town => RoadClass::Road,
                 _ => RoadClass::KingsRoad,
@@ -937,11 +966,11 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
         let town_ends: Vec<(f64, f64, f64)> = [link.a, link.b]
             .iter()
             .filter_map(|&end| match end {
-                End::Town(i) if settlements[i].tier >= Tier::Town => Some(i),
+                End::Town(i) if settlements[i].planned >= Tier::Town => Some(i),
                 _ => None,
             })
             .map(|i| {
-                let r = if kings { crate::town::urban_radius(settlements[i].tier, settlements[i].population) / cell + 1.5 } else { ZONE_FT / cell + 1.5 };
+                let r = if kings { crate::town::urban_radius(settlements[i].planned, settlements[i].planned_pop) / cell + 1.5 } else { ZONE_FT / cell + 1.5 };
                 ((settlements[i].cell % w) as f64, (settlements[i].cell / w) as f64, r)
             })
             .collect();
@@ -1025,6 +1054,8 @@ pub struct Preview {
     pub junction: Vec<bool>,
     /// Per cell: the top of a pass, where a route climbs over high ground between valleys.
     pub pass: Vec<bool>,
+    /// The routes (the economy's trade runs along them).
+    pub paths: Vec<Routed>,
 }
 
 pub fn preview(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) -> Preview {
@@ -1063,7 +1094,7 @@ pub fn preview(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) 
         degree[a as usize] = degree[a as usize].saturating_add(1);
         degree[b as usize] = degree[b as usize].saturating_add(1);
     }
-    Preview { usage, junction: degree.iter().map(|&d| d >= 3).collect(), pass }
+    Preview { usage, junction: degree.iter().map(|&d| d >= 3).collect(), pass, paths }
 }
 
 fn passable_fn<'a>(inp: &'a Inputs) -> impl Fn(usize) -> bool + 'a {
