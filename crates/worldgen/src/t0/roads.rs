@@ -1502,6 +1502,9 @@ pub fn round_corners(pts: &[[f64; 2]], vals: &[f32], r_max: f64, step: f64) -> (
 fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2]) -> bool, a: [f64; 2], b: [f64; 2], gmax: f64, cell: f64, f: f64) -> Option<Vec<[f64; 2]>> {
     let pad = 4.0;
     let (x0, y0) = ((a[0].min(b[0]) - pad).max(0.0), (a[1].min(b[1]) - pad).max(0.0));
+    // (On whole cells, as the junctions are: an end at a settlement's own spot is put back on it
+    // after, so roads still meet at one point.)
+    let (x0, y0) = (crate::core::floor(x0), crate::core::floor(y0));
     let (x1, y1) = ((a[0].max(b[0]) + pad).min((hg.cw - 1) as f64), (a[1].max(b[1]) + pad).min((hg.ch - 1) as f64));
     let (fw, fh) = (((x1 - x0) * f) as usize + 1, ((y1 - y0) * f) as usize + 1);
     let to_world = |i: usize| [x0 + (i % fw) as f64 / f, y0 + (i / fw) as f64 / f];
@@ -1528,7 +1531,18 @@ fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2
                     path.push(cur);
                 }
                 path.reverse();
-                return Some(path.into_iter().map(to_world).collect());
+                let mut out: Vec<[f64; 2]> = path.into_iter().map(to_world).collect();
+                let k = out.len() - 1;
+                (out[0], out[k]) = (a, b);
+                // (Not doubling back from there to the next point.)
+                if out.len() > 2 && dot2(sub2(out[1], a), sub2(out[2], out[1])) < 0.0 {
+                    out.remove(1);
+                }
+                let k = out.len() - 1;
+                if out.len() > 2 && dot2(sub2(out[k - 1], out[k - 2]), sub2(b, out[k - 1])) < 0.0 {
+                    out.remove(k - 1);
+                }
+                return Some(out);
             }
             let (ix, iy) = ((i % fw) as i32, (i / fw) as i32);
             for (dx, dy) in DIRS {
@@ -2377,6 +2391,8 @@ const THROUGH: f64 = -0.819;
 const BENT: f64 = -0.342;
 /// How far a branch's join may slide along the through road, in its offset from it.
 const SKEW_MAX: f64 = 2.5;
+/// How far off the through road (cells) a branch's meeting best starts from (`fit_branch`).
+const WIDE_OFF: f64 = 0.3;
 
 /// What squaring junctions needs: settlements (centre, trim radius), the cell (ft), dry land and
 /// the ground (ft), and where roads cross rivers' meander belts (with each belt's half width).
@@ -2490,6 +2506,8 @@ struct Fit {
     /// On the left of the through road (as it runs).
     left: bool,
     clear: bool,
+    /// From well off the road (`WIDE_OFF`).
+    wide: bool,
 }
 
 /// How branch `b` (running out from the junction) best meets through road `t` (`ts`: its arc):
@@ -2499,8 +2517,11 @@ struct Fit {
 /// river crossings (`JUNCTION_WET`), then out of their meander belts, met where it falls before
 /// slid further than the branch's point stands off the road (its way in swings across); then
 /// slid more than `SKEW_MAX` times that (it runs alongside, a lens of two roads); then in a belt;
-/// then a shorter reach and a shorter slide. No meeting doubles back, crosses more rivers than the
-/// branch did, enters water or a settlement, or climbs too steeply.
+/// then a shorter reach and a shorter slide. One from where the branch stands `WIDE_OFF` or more
+/// off the road (and clear of the branch's own crossings) is taken over one from nearer it unless
+/// it ranks worse than a slide: from nearer, at a narrow fork, the way in turns so short that the
+/// branch still leaves at a slant. No meeting doubles back, crosses more rivers than the branch
+/// did, enters water or a settlement, or climbs too steeply.
 fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option<f64>, min_reach: f64) -> Option<Fit> {
     let cell = sq.cell;
     let bs = arc(&b.pts);
@@ -2511,6 +2532,11 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
     // branch's own crossing further out is no matter: a road leaving one along the bank.)
     let far = |q: [f64; 2], w: &[([f64; 2], f64)], m: f64| w.iter().all(|&(c, hw)| dist(c, q) >= m + WET_STRAY * hw);
     let mut best: Option<(u8, Fit)> = None;
+    // (The best meeting from where the branch stands well off the road: one from nearer it, at a
+    // narrow fork, turns in so short that it still leaves at a slant. Taken unless worse.)
+    let mut wide: Option<(u8, Fit)> = None;
+    // (Nor where it meets the road near where the branch itself crosses a river.)
+    let mut b_wet: Option<Vec<([f64; 2], f64)>> = None;
     // (A short branch from a settlement to a junction at a river crossing may be laid anew from
     // near the settlement's edge, slid as far as it takes: nothing else would take it clear.)
     let most = if sq.relay && !sq.clear(b.pts[0]) && sq.in_town(b.pts[b.pts.len() - 1]) { blen } else { 0.5 * blen };
@@ -2524,6 +2550,7 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
         if off < 0.15 * cell {
             continue;
         }
+        let is_wide = off >= WIDE_OFF * cell;
         // Heading at `p` towards the junction.
         let h = unit2(sub2(point_at(&b.pts, &bs, reach - 0.03 * cell), p));
         let z_p = val_at(&b.z, &bs, reach);
@@ -2546,7 +2573,8 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
                 (true, false, true) => 5,
                 _ => 6 + (slid > 1.0) as u8 + (slid > SKEW_MAX) as u8,
             };
-            if best.as_ref().is_some_and(|b| b.0 <= rank(far(q, &t_wet, JUNCTION_WET), far(q, &t_wet, 300.0))) || sq.in_town(q) {
+            let r0 = rank(far(q, &t_wet, JUNCTION_WET), far(q, &t_wet, 300.0));
+            if best.as_ref().is_some_and(|b| b.0 <= r0) && (!is_wide || wide.as_ref().is_some_and(|b| b.0 <= r0)) || sq.in_town(q) {
                 continue;
             }
             let tan = unit2(sub2(point_at(&t.pts, ts, at + 40.0), point_at(&t.pts, ts, at - 40.0)));
@@ -2578,15 +2606,23 @@ fn fit_branch(sq: &Square, t: &RoadPath, ts: &[f64], b: &RoadPath, fixed: Option
             wet.extend_from_slice(&t_wet);
             let (clear, belt) = (far(q, &wet, JUNCTION_WET), far(q, &wet, 300.0));
             let r = rank(clear, belt);
-            if best.as_ref().is_none_or(|b| r < b.0) {
-                best = Some((r, Fit { reach, at, q, p, curve, z_p, left, clear }));
+            let is_wide = is_wide && far(q, b_wet.get_or_insert_with(|| (sq.crossings)(&b.pts)), JUNCTION_WET);
+            let fit = Fit { reach, at, q, p, curve, z_p, left, clear, wide: is_wide };
+            if is_wide && wide.as_ref().is_none_or(|b| r < b.0) {
                 if r == 0 {
-                    return best.map(|b| b.1);
+                    return Some(fit);
                 }
+                wide = Some((r, fit.clone()));
+            }
+            if best.as_ref().is_none_or(|b| r < b.0) {
+                best = Some((r, fit));
             }
         }
     }
-    best.map(|b| b.1)
+    match (wide, best) {
+        (Some(w), Some(b)) if w.0 <= b.0.max(1) => Some(w.1),
+        (_, b) => b.map(|b| b.1),
+    }
 }
 
 /// The branch with its end from `fit.p` replaced by the curve in to `fit.q` (running out from
@@ -2622,7 +2658,8 @@ fn ends_by_point(roads: &[RoadPath]) -> std::collections::BTreeMap<(u64, u64), V
 /// often at a sharp V (two roads leaving a few tens of degrees apart, so travel between them
 /// doubles back), and roads sharing a bridge part right on the bank. At each junction:
 /// - the straightest pair of roads (within 35° of straight; the better class first) is the
-///   through road: one line, its bend at the junction rounded (`fillet`), otherwise as it was;
+///   through road: one line, its bend at the junction rounded (`fillet`), otherwise as it was
+///   (but a pair as near straight that every branch meets from well off it comes first);
 /// - every other road (a branch) leaves its line some way out and curves in to meet the through
 ///   road square, where its point there falls on it (`fit_branch`): the join slides along the
 ///   through road towards where the branch comes from, so nothing runs alongside and doubles
@@ -2827,7 +2864,14 @@ fn square_at(roads: &mut Vec<RoadPath>, j: [f64; 2], list: &[(usize, bool)], sq:
         }
     }
     pairs.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(Ordering::Equal).then((x.1, x.2).cmp(&(y.1, y.2))));
-    let found = pairs.iter().find_map(|&(_, a, b)| {
+    // (Of pairs as near straight, one its branches meet from well off it, square, comes first:
+    // at a narrow fork the two roads close together are the better through road.)
+    let mut first: Option<(usize, usize, RoadPath, Vec<f64>, Vec<Fit>)> = None;
+    let mut group = None;
+    let found = pairs.iter().find_map(|&(key, a, b)| {
+        if group.is_some_and(|g| g != (key.0, key.1)) {
+            return None;
+        }
         let mut t = flipped(&legs[a]);
         let joint = t.pts.len() - 1;
         t.pts.extend_from_slice(&legs[b].pts[1..]);
@@ -2838,9 +2882,17 @@ fn square_at(roads: &mut Vec<RoadPath>, j: [f64; 2], list: &[(usize, bool)], sq:
         fillet(&mut t, joint, cell, sq.dry);
         let ts = arc(&t.pts);
         let fits: Option<Vec<Fit>> = (0..legs.len()).filter(|&i| i != a && i != b).map(|i| fit_branch(sq, &t, &ts, &legs[i], None, 0.0)).collect();
-        fits.map(|f| (a, b, t, ts, f))
+        let fits = fits?;
+        if fits.iter().all(|f| f.wide && f.clear) {
+            return Some((a, b, t, ts, fits));
+        }
+        if first.is_none() {
+            group = Some((key.0, key.1));
+            first = Some((a, b, t, ts, fits));
+        }
+        None
     });
-    let Some((a, b, t, ts, mut fits)) = found else { return Vec::new() };
+    let Some((a, b, t, ts, mut fits)) = found.or(first) else { return Vec::new() };
     let at_j = project(j, &t.pts, &ts).0;
     let branches: Vec<usize> = (0..legs.len()).filter(|&i| i != a && i != b).collect();
     // Branches near each other: opposite sides meet at one point, one side join further out.
@@ -2953,7 +3005,7 @@ fn same_side(sq: &Square, t: &RoadPath, ts: &[f64], legs: &[RoadPath], branches:
     let z_less = val_at(&lb.z, &ls, reach);
     if fm.clear && line.iter().all(|c| (sq.dry)(c[0], c[1]) && !sq.in_town(*c)) && sq.ramp_ok(&line, z_less, z_main, lb.class.max_grade()) && reach < 0.45 * ls[ls.len() - 1] {
         fits[main] = fm;
-        fits[less] = Fit { reach, at: f64::NAN, q: link[1], p: link[0], curve: line, z_p: z_less, left: fits[main].left, clear: true };
+        fits[less] = Fit { reach, at: f64::NAN, q: link[1], p: link[0], curve: line, z_p: z_less, left: fits[main].left, clear: true, wide: true };
         feeds[less] = Some(main);
         return true;
     }
@@ -3195,3 +3247,4 @@ fn cut_spikes(r: &mut RoadPath) {
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     crate::core::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]))
 }
+
