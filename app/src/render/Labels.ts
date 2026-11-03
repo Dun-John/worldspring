@@ -25,6 +25,9 @@ interface KindStyle {
   pin?: boolean;
   /** A business pin: a coloured disc with a white symbol on the spot, the name beside it. */
   badge?: { color: string; glyph: string };
+  /** Cities and up: the symbol always shows (other labels keep off it), the name beside it,
+   * right or left, where it fits. */
+  keep?: boolean;
 }
 
 type BuildingHit = Extract<Hit, { kind: 'building' }>;
@@ -66,8 +69,8 @@ const STYLES: Record<string, KindStyle> = {
   waterfall: { size: 10, fill: WATER, spacing: 0, italic: true, symbol: '≋', minPx: 60, maxPx: 1e9, prio: 33 },
   river: { size: 11, fill: WATER, spacing: 1, italic: true, minPx: 220, maxPx: 1e9, prio: 30, rotate: true },
   road: { size: 10, fill: '#6b3a24', spacing: 1, italic: true, minPx: 220, maxPx: 1e9, prio: 29, rotate: true },
-  metropolis: { size: 16, fill: INK, spacing: 3, upper: true, bold: true, symbol: '◉', minPx: 16, maxPx: 1e9, prio: 98, pin: true },
-  city: { size: 14, fill: INK, spacing: 2, upper: true, bold: true, symbol: '●', minPx: 18, maxPx: 1e9, prio: 90, pin: true },
+  metropolis: { size: 16, fill: INK, spacing: 3, upper: true, bold: true, symbol: '◉', minPx: 16, maxPx: 1e9, prio: 98, pin: true, keep: true },
+  city: { size: 14, fill: INK, spacing: 2, upper: true, bold: true, symbol: '●', minPx: 18, maxPx: 1e9, prio: 90, pin: true, keep: true },
   town: { size: 12, fill: INK, spacing: 1, symbol: '●', minPx: 24, maxPx: 1e9, prio: 72, pin: true },
   village: { size: 11, fill: INK, spacing: 0, symbol: '•', minPx: 36, maxPx: 1e9, prio: 45, pin: true },
   waystation: { size: 10, fill: '#5a4330', spacing: 0, italic: true, symbol: '⌂', minPx: 60, maxPx: 1e9, prio: 32, pin: true },
@@ -153,6 +156,11 @@ interface Placed {
   glyphW?: number[];
   /** Letter positions (world ft) and angles from the last layout, for panning. */
   at?: [number, number, number][];
+  /** `keep` styles: the symbol on its own (the name in `text`), and the name's offset from
+   * the spot (px) in the last layout. */
+  dot?: Text | null;
+  ox?: number;
+  oy?: number;
 }
 
 /** Point and tangent angle at arc length `s` along a polyline. */
@@ -261,6 +269,7 @@ export class Labels {
 
   /** How far right of the spot a pinned label's centre sits (its symbol on the spot). */
   private pinOffset(it: Placed): number {
+    if (it.style.keep) return it.ox ?? 0;
     const hw = it.half?.[0] ?? 0;
     return it.style.badge ? hw - BADGE_R : hw - it.style.size * 0.4;
   }
@@ -280,10 +289,11 @@ export class Labels {
             g.position.set(sx, sy);
           });
         }
-        if (it.text?.visible) {
+        if (it.text?.visible || it.dot?.visible) {
           const [sx, sy] = cam.worldToScreen(it.f.x, it.f.y);
           const ox = it.style.pin ? this.pinOffset(it) : 0;
-          it.text.position.set(sx + ox, sy);
+          it.text?.position.set(sx + ox, sy + (it.style.keep ? (it.oy ?? 0) : 0));
+          it.dot?.position.set(sx, sy);
         }
       }
     }
@@ -303,9 +313,53 @@ export class Labels {
     // Thousands of features: the zoom band first (cheap), the screen test only within it.
     const ppf = cam.ppf;
     const shown = new Set<Placed>();
-    for (const it of this.byZoom.get(Math.floor(cam.zoom)) ?? []) {
+    const band = this.byZoom.get(Math.floor(cam.zoom)) ?? [];
+    const onScreen = (sx: number, sy: number) => sx > -margin && sy > -margin && sx < cam.width + margin && sy < cam.height + margin;
+    // Cities and up first: their symbols always show, and every other label keeps off them
+    // (but the continent's name, which shows over them rather than not at all).
+    const dots = new Boxes();
+    for (const it of band) {
+      const { f, style } = it;
+      if (!style.keep || this.hidden.has(f.id) || this.conceal?.(f)) continue;
+      const px = f.extent_ft * ppf;
+      if (px < style.minPx || px > style.maxPx) continue;
+      const [sx, sy] = cam.worldToScreen(f.x, f.y);
+      if (!onScreen(sx, sy)) continue;
+      const dot = it.dot ?? this.createDot(it);
+      dot.position.set(sx, sy);
+      dot.visible = true;
+      const r = style.size * 0.4;
+      dots.add([sx - r, sy - r, sx + r, sy + r]);
+      shown.add(it);
+    }
+    for (const it of band) {
       const { f, style } = it;
       if ((style.badge && !this.placesOn) || this.hidden.has(f.id) || this.conceal?.(f)) continue;
+      if (style.keep) {
+        // The name right of the symbol, or else left, below or above it, or none.
+        let placed = false;
+        if (shown.has(it) && (it.text || mayCreate())) {
+          if (!it.text) created++;
+          this.lastCreated = created;
+          const text = it.text ?? this.create(it);
+          const [hw, hh] = (it.half ??= [text.width / 2, text.height / 2]);
+          const [sx, sy] = cam.worldToScreen(f.x, f.y);
+          const r = style.size * 0.4;
+          const [dx, dy] = [r + pad + hw, r + pad + hh];
+          for (const [ox, oy] of [[dx, 0], [-dx, 0], [0, dy], [0, -dy]]) {
+            const box: Box = [sx + ox - hw - pad, sy + oy - hh - pad, sx + ox + hw + pad, sy + oy + hh + pad];
+            if (boxes.hits(box) || dots.hits(box)) continue;
+            boxes.add(box);
+            it.ox = ox;
+            it.oy = oy;
+            text.position.set(sx + ox, sy + oy);
+            placed = true;
+            break;
+          }
+        }
+        if (it.text && it.text.visible !== placed) it.text.visible = placed;
+        continue;
+      }
       if (it.path) {
         if (this.layoutCurved(it, cam, boxes, margin, pad, mayCreate())) created++;
         this.lastCreated = created;
@@ -334,7 +388,7 @@ export class Labels {
         // Pinned labels grow rightwards from the symbol centred on the spot.
         const ox = style.pin ? this.pinOffset(it) : 0;
         const box: [number, number, number, number] = [sx + ox - ex, sy - ey, sx + ox + ex, sy + ey];
-        show = !boxes.hits(box);
+        show = !boxes.hits(box) && (style.prio >= 100 || !dots.hits(box));
         if (show) {
           boxes.add(box);
           text.position.set(sx + ox, sy);
@@ -348,6 +402,7 @@ export class Labels {
     for (const it of this.shown) {
       if (shown.has(it)) continue;
       if (it.text) it.text.visible = false;
+      if (it.dot) it.dot.visible = false;
       if (it.glyphs) it.glyphs.visible = false;
     }
     this.shown = shown;
@@ -427,8 +482,23 @@ export class Labels {
     const { f, style } = it;
     if (style.badge) return this.createBadge(it);
     let label = style.upper ? f.name.toUpperCase() : f.name;
-    if (style.symbol) label = `${style.symbol} ${label}`;
-    const text = new Text({
+    if (style.symbol && !style.keep) label = `${style.symbol} ${label}`;
+    const text = this.letter(label, style);
+    it.text = text;
+    this.container.addChild(text);
+    return text;
+  }
+
+  /** A `keep` style's symbol, on its own. */
+  private createDot(it: Placed): Text {
+    const dot = this.letter(it.style.symbol ?? '●', { ...it.style, spacing: 0 });
+    it.dot = dot;
+    this.container.addChild(dot);
+    return dot;
+  }
+
+  private letter(label: string, style: KindStyle): Text {
+    return new Text({
       text: label,
       style: new TextStyle({
         fontFamily: FONT,
@@ -442,9 +512,6 @@ export class Labels {
       anchor: 0.5,
       resolution: 2,
     });
-    it.text = text;
-    this.container.addChild(text);
-    return text;
   }
 
   /** A business pin: a disc with its symbol, the name to its right; laid out about its centre
@@ -475,10 +542,11 @@ export class Labels {
   /** The feature whose visible label is under a screen point. */
   hit(sx: number, sy: number): Feature | null {
     for (const it of this.shown) {
-      const shown = it.text?.visible ? it.text : it.glyphs?.visible ? it.glyphs : null;
-      if (!shown) continue;
-      const b = shown.getBounds();
-      if (sx >= b.minX && sx <= b.maxX && sy >= b.minY && sy <= b.maxY) return it.f;
+      for (const shown of [it.text?.visible ? it.text : it.glyphs?.visible ? it.glyphs : null, it.dot?.visible ? it.dot : null]) {
+        if (!shown) continue;
+        const b = shown.getBounds();
+        if (sx >= b.minX && sx <= b.maxX && sy >= b.minY && sy <= b.maxY) return it.f;
+      }
     }
     return null;
   }
@@ -553,6 +621,8 @@ export class Labels {
     it.text?.destroy();
     it.text = null;
     it.half = undefined;
+    it.dot?.destroy();
+    it.dot = null;
     it.glyphs?.destroy({ children: true });
     it.glyphs = null;
     this.shown.delete(it);

@@ -2078,6 +2078,11 @@ const TRIANGLE_FT: f64 = 4.0 * 5280.0;
 const TRIANGLE_SLACK: f64 = 1.6;
 /// The same for a link between two roads into one place.
 const TRIANGLE_LINK: f64 = 3.0;
+/// How round a loop of three roads between junctions alone (no place at its corners) may be: a
+/// rung between two roads that meet a third reads as one too many further out (the way round
+/// at most `TRIANGLE_OPEN_SLACK` times as long).
+const TRIANGLE_OPEN_FT: f64 = 6.0 * 5280.0;
+const TRIANGLE_OPEN_SLACK: f64 = 1.5;
 
 /// Three roads closing a small loop (two lesser roads into one place and a short link between
 /// them, or a lesser road's two arms out to the same road) read as a ladder's rung: one lesser
@@ -2098,7 +2103,7 @@ fn drop_triangle(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> bool {
     let mut best: Option<(f64, usize)> = None;
     for (i, r) in roads.iter().enumerate() {
         let (a, b) = ends[i];
-        if r.stroke.is_some() || r.class == RoadClass::KingsRoad || a == b || lens[i] > TRIANGLE_FT {
+        if r.stroke.is_some() || r.class == RoadClass::KingsRoad || a == b || lens[i] > TRIANGLE_OPEN_FT {
             continue;
         }
         for &k in &at[&a] {
@@ -2115,7 +2120,9 @@ fn drop_triangle(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> bool {
                 // (A link between two roads into one place goes first: the place keeps both ways out.)
                 let link = c.0 == i64::MIN && a.0 != i64::MIN && b.0 != i64::MIN;
                 let (most, rank) = if link { (TRIANGLE_LINK, ratio - TRIANGLE_LINK) } else { (TRIANGLE_SLACK, ratio) };
-                if lens[i] + round <= TRIANGLE_FT && ratio <= most && best.is_none_or(|(q, _)| rank < q) {
+                let open = a.0 != i64::MIN && b.0 != i64::MIN && c.0 != i64::MIN;
+                let small = lens[i] + round <= TRIANGLE_FT;
+                if (small || (open && lens[i] + round <= TRIANGLE_OPEN_FT && ratio <= TRIANGLE_OPEN_SLACK)) && ratio <= most && best.is_none_or(|(q, _)| rank < q) {
                     best = Some((rank, i));
                 }
             }

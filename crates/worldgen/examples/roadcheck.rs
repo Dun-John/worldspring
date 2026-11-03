@@ -968,6 +968,30 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
         let len: f64 = pts[r].windows(2).map(|w| dist(w[0], w[1])).sum();
         say!("      dead end at ({:.0}, {:.0}): road {r} ({}, {:.1} mi); nearest {near_s}", spots.pos[n][0], spots.pos[n][1], class_names[class[r]], len / MI);
     }
+    // (`BESIDE=r`: along road r, every 20th point, the nearest other road and how far.)
+    if let Some(r) = std::env::var("BESIDE").ok().and_then(|v| v.parse::<usize>().ok()) {
+        for (k, p) in pts[r].iter().enumerate().step_by(20) {
+            let near = (0..pts.len()).filter(|&o| o != r).map(|o| (pts[o].windows(2).map(|w| seg_dist(*p, w[0], w[1])).fold(f64::MAX, f64::min), o)).min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((d, o)) = near {
+                say!("      {r} pt {k} ({:.0}, {:.0}) {}: nearest road {o} ({}) {d:.0} ft", p[0], p[1], class_names[class[r]], class_names[class[o]]);
+            }
+        }
+    }
+    // (`KENDS=1`: each king's road end that no other king's road touches, with what is there.)
+    if std::env::var("KENDS").is_ok() {
+        for r in (0..pts.len()).filter(|&r| class[r] == 0 && pts[r].len() >= 2) {
+            for p in [pts[r][0], *pts[r].last().unwrap()] {
+                let kings = (0..pts.len()).filter(|&o| o != r && class[o] == 0 && pts[o].windows(2).any(|w| seg_dist(p, w[0], w[1]) < 60.0)).count();
+                if kings > 0 {
+                    continue;
+                }
+                let others: Vec<String> = (0..pts.len()).filter(|&o| o != r && pts[o].windows(2).any(|w| seg_dist(p, w[0], w[1]) < 60.0)).map(|o| format!("{o} {}", class_names[class[o]])).collect();
+                let s = sts.iter().filter(|s| dist([s.x, s.y], p) <= reach(s)).map(|s| format!("{:?} pop {} at ({:.0}, {:.0})", s.tier, s.population, s.x, s.y)).collect::<Vec<_>>().join("; ");
+                let len: f64 = pts[r].windows(2).map(|w| dist(w[0], w[1])).sum();
+                say!("      king's end ({:.0}, {:.0}) road {r} {:.1} mi: settlement [{s}] other roads [{}]", p[0], p[1], len / MI, others.join(", "));
+            }
+        }
+    }
     // --- Out-and-backs: the road's heading 200 ft before a point and 200 ft after (100 ft at least,
     // near its ends) differing by over 100°; those within a mile of a river crossing listed.
     let mut spikes: Vec<(P, f64, usize)> = Vec::new();
