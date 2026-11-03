@@ -206,6 +206,9 @@ pub struct Ground {
     /// The strongest break-of-bulk or crossing reason, and the strongest industry, 0-1.
     bulk: Vec<f32>,
     industry: Vec<f32>,
+    /// Where the river reasons (but crossings) come from: reason, cell, the cell before it on its river (a
+    /// mouth's last land cell; else the cell again) and the river's strength there, 0-1.
+    sources: Vec<(Reason, u32, u32, f32)>,
 }
 
 fn fertility(b: Biome) -> f64 {
@@ -248,6 +251,7 @@ fn ground(inp: &Inputs) -> Ground {
     // Only sea and lake mouths make a harbour (a confluence is a river town).
     let mut harbour = vec![false; n];
     let mut site = vec![[0u8; 10]; n];
+    let mut sources: Vec<(Reason, u32, u32, f32)> = Vec::new();
     // Raises one reason's strength round a cell (within 1 cell: the river's bank).
     let splat = |site: &mut Vec<[u8; 10]>, at: usize, reason: Reason, strength: f64, reach: i64| {
         let (mx, my) = ((at % w) as i64, (at / w) as i64);
@@ -320,6 +324,7 @@ fn ground(inp: &Inputs) -> Ground {
         let len = r.cells.len();
         if len >= 3 && (inp.hydro.lake_of[first] != NO_LAKE || neighbors(w, h, first).any(|(nb, _)| inp.hydro.lake_of[nb] != NO_LAKE)) {
             splat(&mut site, first, Reason::Outlet, 0.7, 1);
+            sources.push((Reason::Outlet, first as u32, first as u32, 0.7));
         }
         let to_water = matches!(r.mouth, Mouth::Ocean | Mouth::Lake);
         if (q as f64) < big_river {
@@ -363,6 +368,7 @@ fn ground(inp: &Inputs) -> Ground {
     }
     for &(_, at) in heads.iter().flatten() {
         splat(&mut site, at, Reason::Head, 0.95, 2);
+        sources.push((Reason::Head, at as u32, at as u32, 0.95));
     }
     for r in &inp.hydro.rivers {
         let (Some(&last), Some(&q)) = (r.cells.last(), r.q.last()) else { continue };
@@ -374,6 +380,9 @@ fn ground(inp: &Inputs) -> Ground {
         if strength <= 0.0 {
             continue;
         }
+        let kind = if r.mouth == Mouth::Confluence { Reason::Confluence } else { Reason::Mouth };
+        let before = if r.mouth == Mouth::Confluence { last } else { r.cells[r.cells.len().saturating_sub(2)] };
+        sources.push((kind, last, before, strength as f32));
         let (mx, my) = ((last as usize % w) as i64, (last as usize / w) as i64);
         for dy in -2i64..=2 {
             for dx in -2i64..=2 {
@@ -494,7 +503,47 @@ fn ground(inp: &Inputs) -> Ground {
         bulk[k] = m(&[Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing]);
         industry[k] = m(&[Reason::Ore, Reason::Timber, Reason::Fishing]);
     }
-    Ground { score, coastal, lakeside, on_river, harbour, site, food, bulk, industry }
+    Ground { score, coastal, lakeside, on_river, harbour, site, food, bulk, industry, sources }
+}
+
+/// What a place lives by: its reason's kind where the place allows, else a cascade on its ground
+/// (`ore`: the ore noise at its cell; `hilly`: hill or mountain ground round it, for a mining
+/// town).
+#[allow(clippy::too_many_arguments)]
+fn kind_of(reason: Reason, tier: Tier, b: Biome, above: f64, ore: f64, is_coast: bool, near_river: bool, on_river: bool, hilly: bool) -> SettleKind {
+    let from_reason = match reason {
+        Reason::Harbour | Reason::Mouth if is_coast => Some(if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }),
+        Reason::Outlet | Reason::Confluence | Reason::Head | Reason::Crossing if tier >= Tier::Town && near_river => Some(SettleKind::River),
+        Reason::Ore => Some(SettleKind::Mining),
+        Reason::Timber if tier <= Tier::Town => Some(SettleKind::Lumber),
+        Reason::Fishing if tier == Tier::Village && is_coast => Some(SettleKind::Fishing),
+        Reason::Pass => Some(SettleKind::Fortress),
+        Reason::Crossroads => Some(SettleKind::Market),
+        _ => None,
+    };
+    if let Some(kind) = from_reason {
+        kind
+    } else if is_coast {
+        if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }
+    } else if above > 2_500.0 && ore > 0.1 && hilly {
+        SettleKind::Mining
+    } else if above > 2_500.0 && tier >= Tier::Town {
+        SettleKind::Fortress
+    } else if on_river && tier >= Tier::Town {
+        SettleKind::River
+    } else if tier >= Tier::City {
+        SettleKind::Market
+    } else if matches!(b, Biome::HotDesert | Biome::ColdDesert) {
+        SettleKind::Oasis
+    } else if matches!(b, Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga | Biome::Jungle) {
+        SettleKind::Lumber
+    } else if matches!(b, Biome::Steppe | Biome::Savanna | Biome::Tundra) {
+        SettleKind::Herding
+    } else if on_river {
+        SettleKind::Fishing
+    } else {
+        SettleKind::Farming
+    }
 }
 
 /// Place settlements of the given tiers, keeping `existing` ones. `roads` (from
@@ -510,7 +559,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
 
     let ore_seed = world.stream("t0.settle.ore");
     let biome_of = |k: usize| Biome::from_u8((inp.biome[k] & 0xff) as u8);
-    let Ground { score, coastal, lakeside, on_river, harbour, site, food, bulk, industry } = inp.ground.get_or_init(|| ground(inp));
+    let Ground { score, coastal, lakeside, on_river, harbour, site, food, bulk, industry, .. } = inp.ground.get_or_init(|| ground(inp));
 
     // How many of each tier, from land area (square miles) and density. At density 0 none are
     // chosen, but the sketch's pins still stand: what is placed by hand wins over the dial.
@@ -583,7 +632,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         cands.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         let spacing = spacing_mi * 5280.0 / cell;
         // A settlement of this tier at cell `k`, standing at (x, y) ft, drawn from `seed`.
-        let make = |k: usize, seed: u64, x: f64, y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
+        let make = |k: usize, seed: u64, mut x: f64, mut y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
             let (lo, hi) = match tier {
                 Tier::Metropolis => (25_000.0, 80_000.0),
@@ -627,6 +676,21 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             if reason == Reason::None && food[k] >= 0.5 {
                 reason = Reason::Food;
             }
+            // A pass's town stands at the top of the pass (the highest such cell by its own), on
+            // the king's road's way over.
+            if reason == Reason::Pass
+                && pin.is_none()
+                && let Some(rp) = roads
+            {
+                let (px, py) = ((k % w) as i64, (k / w) as i64);
+                let top = (-1i64..=1)
+                    .flat_map(|dy| (-1i64..=1).map(move |dx| (px + dx, py + dy)))
+                    .filter(|&(i, j)| i >= 0 && j >= 0 && i < w as i64 && j < h as i64 && rp.pass[j as usize * w + i as usize])
+                    .max_by(|a, b| inp.height[a.1 as usize * w + a.0 as usize].total_cmp(&inp.height[b.1 as usize * w + b.0 as usize]).then(b.cmp(a)));
+                if let Some((i, j)) = top {
+                    (x, y) = (i as f64 * cell, j as f64 * cell);
+                }
+            }
             // A pin stands where it was drawn, not at its cell's centre: one drawn on the coast is
             // coastal when the sea is within reach of that point (the shore it then moves to).
             let pinned_coast = pin.is_some() && {
@@ -642,39 +706,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             };
             let mut is_coast = coastal[k] || harbour[k] || pinned_coast;
             let river = on_river[k] || (pin.is_some() && neighbors(w, h, k).any(|(nb, _)| on_river[nb]));
-            let from_reason = match reason {
-                Reason::Harbour | Reason::Mouth if is_coast => Some(if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }),
-                Reason::Outlet | Reason::Confluence | Reason::Head | Reason::Crossing if tier >= Tier::Town && near_river => Some(SettleKind::River),
-                Reason::Ore => Some(SettleKind::Mining),
-                Reason::Timber if tier <= Tier::Town => Some(SettleKind::Lumber),
-                Reason::Fishing if tier == Tier::Village && is_coast => Some(SettleKind::Fishing),
-                Reason::Pass => Some(SettleKind::Fortress),
-                Reason::Crossroads => Some(SettleKind::Market),
-                _ => None,
-            };
-            let mut kind = if let Some(kind) = from_reason {
-                kind
-            } else if is_coast {
-                if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }
-            } else if above > 2_500.0 && ore > 0.1 {
-                SettleKind::Mining
-            } else if above > 2_500.0 && tier >= Tier::Town {
-                SettleKind::Fortress
-            } else if on_river[k] && tier >= Tier::Town {
-                SettleKind::River
-            } else if tier >= Tier::City {
-                SettleKind::Market
-            } else if matches!(b, Biome::HotDesert | Biome::ColdDesert) {
-                SettleKind::Oasis
-            } else if matches!(b, Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga | Biome::Jungle) {
-                SettleKind::Lumber
-            } else if matches!(b, Biome::Steppe | Biome::Savanna | Biome::Tundra) {
-                SettleKind::Herding
-            } else if on_river[k] {
-                SettleKind::Fishing
-            } else {
-                SettleKind::Farming
-            };
+            let mut kind = kind_of(reason, tier, b, above, ore, is_coast, near_river, on_river[k], true);
             // What the pin says it lives by, where its place allows (a lakeside port stands on
             // its lake's shore).
             if let Some(want) = pin.and_then(|p| p.kind) {
@@ -755,6 +787,228 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         }
     }
     out
+}
+
+/// The ground and roads as they stand once everything is placed, for `verify`.
+pub struct Placed<'a> {
+    /// Standing water (sea or lake) at a point.
+    pub wet: &'a dyn Fn(f64, f64) -> bool,
+    /// The ground's height at a point (ft).
+    pub ground: &'a dyn Fn(f64, f64) -> f64,
+    /// Where roads cross rivers (bridges, fords, ferries).
+    pub crossings: &'a [[f64; 2]],
+    /// Every road: its class and points.
+    pub roads: &'a [(super::roads::RoadClass, &'a [[f64; 2]])],
+}
+
+/// Checks each settlement's reason where it finally stands (after `snap_to_water` and the roads
+/// are built), not at the cell it was scored on: ore needs hill ground within a mile, a mouth its
+/// river reaching the water within half a mile, a harbour a sheltered bay round the town itself,
+/// a crossing a road over the river within half a mile, a pass the king's road over a saddle
+/// through the town. One that fails gives way to the next reason that holds (else the kind
+/// cascade), and its kind follows (a pin's own kind stays).
+pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
+    let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
+    let sea = inp.world.params().sea_level_ft;
+    let Some(g) = inp.ground.get() else { return };
+    let ore_seed = inp.world.stream("t0.settle.ore");
+    let centre = |k: u32| [(k as usize % w) as f64 * cell, (k as usize / w) as f64 * cell];
+    let d2 = |a: [f64; 2], b: [f64; 2]| crate::core::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]));
+    let ray = |a: usize| {
+        let ang = std::f64::consts::TAU * a as f64 / 48.0;
+        [libm::cos(ang), libm::sin(ang)]
+    };
+    // Hill or mountain ground at the town: the ground rising 300 ft above it within a mile,
+    // and the town itself 2,500 ft up (else a 450 ft rise: hills over a valley).
+    let hilly = |c: [f64; 2]| {
+        let h0 = (at.ground)(c[0], c[1]);
+        let mut hi = h0;
+        for j in -4i64..=4 {
+            for i in -4i64..=4 {
+                if i * i + j * j <= 16 {
+                    hi = hi.max((at.ground)(c[0] + i as f64 * 1_320.0, c[1] + j as f64 * 1_320.0));
+                }
+            }
+        }
+        hi - h0 >= 300.0 && (h0 - sea >= 2_500.0 || hi - h0 >= 450.0)
+    };
+    // How sheltered a harbour the water by `c` is (0-1): of the ways out from it, how few reach
+    // open water 1, 2 and 3 miles out (a bare coast looks out on it over half its sweep, a bay
+    // only through its mouth), and the shore curving round the town (water a mile out over at
+    // most a third of the sweep: a straight shore has it over half). None without water within
+    // half a mile.
+    let shelter = |c: [f64; 2]| {
+        let shore = (0..48).any(|a| {
+            let u = ray(a);
+            (1..=26).any(|t| (at.wet)(c[0] + u[0] * t as f64 * 100.0, c[1] + u[1] * t as f64 * 100.0))
+        });
+        if !shore {
+            return 0.0;
+        }
+        let open = (0..48)
+            .filter(|&a| {
+                let u = ray(a);
+                [1.0, 2.0, 3.0].iter().all(|&m| (at.wet)(c[0] + u[0] * m * 5_280.0, c[1] + u[1] * m * 5_280.0))
+            })
+            .count();
+        let mile = (0..48)
+            .filter(|&a| {
+                let u = ray(a);
+                (at.wet)(c[0] + u[0] * 5_280.0, c[1] + u[1] * 5_280.0)
+            })
+            .count();
+        (1.0 - smoothstep(0.2, 0.34, open as f64 / 48.0)).min(1.0 - smoothstep(0.3, 0.4, mile as f64 / 48.0))
+    };
+    // Where a mouth's river reaches its water: along from the cell before, the first wet point.
+    let mouth_at = |k: u32, before: u32| {
+        let (a, b) = (centre(before), centre(k));
+        (0..=24).map(|i| i as f64 / 24.0).map(|t| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]).find(|p| (at.wet)(p[0], p[1])).unwrap_or(b)
+    };
+    // Roads with an end within reach of the town (its ways in): class and a point a mile out.
+    let arms = |c: [f64; 2], reach: f64| -> Vec<(super::roads::RoadClass, [f64; 2])> {
+        let mut out = Vec::new();
+        for &(class, pts) in at.roads {
+            if pts.len() < 2 {
+                continue;
+            }
+            for flip in [false, true] {
+                let p0 = if flip { pts[pts.len() - 1] } else { pts[0] };
+                if d2(p0, c) > reach {
+                    continue;
+                }
+                let mut run = 0.0;
+                let mut far = p0;
+                for i in 1..pts.len() {
+                    let (a, b) = if flip { (pts[pts.len() - i], pts[pts.len() - 1 - i]) } else { (pts[i - 1], pts[i]) };
+                    run += d2(a, b);
+                    far = b;
+                    if run >= 5_280.0 {
+                        break;
+                    }
+                }
+                out.push((class, far));
+            }
+        }
+        out
+    };
+    // A pass: the king's road through the town (two ways in, or passing within 600 ft) at a
+    // saddle, its high point along the road (the ground falls 250 ft along it both ways within a
+    // mile, rising nowhere above it) with the ground rising 300 ft on both sides across it, well up.
+    let saddle = |c: [f64; 2], reach: f64| {
+        let unit = |d: [f64; 2]| {
+            let l = crate::core::sqrt(d[0] * d[0] + d[1] * d[1]).max(1e-6);
+            [d[0] / l, d[1] / l]
+        };
+        // Where the road is highest and which way it runs.
+        let mut ways: Vec<([f64; 2], [f64; 2])> = Vec::new();
+        let kings: Vec<[f64; 2]> = arms(c, reach).into_iter().filter(|a| a.0 == super::roads::RoadClass::KingsRoad).map(|a| a.1).collect();
+        for i in 0..kings.len() {
+            for j in i + 1..kings.len() {
+                let (a, b) = (unit([kings[i][0] - c[0], kings[i][1] - c[1]]), unit([kings[j][0] - c[0], kings[j][1] - c[1]]));
+                if a[0] * b[0] + a[1] * b[1] <= -0.5 {
+                    ways.push((c, unit([a[0] - b[0], a[1] - b[1]])));
+                }
+            }
+        }
+        for &(class, pts) in at.roads {
+            if class != super::roads::RoadClass::KingsRoad {
+                continue;
+            }
+            for k in 1..pts.len() {
+                let (a, b) = (pts[k - 1], pts[k]);
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let l2 = dx * dx + dy * dy;
+                let t = if l2 > 0.0 { (((c[0] - a[0]) * dx + (c[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                let p = [a[0] + t * dx, a[1] + t * dy];
+                if d2(p, c) <= 600.0 {
+                    // (The road's way over a mile either side, not one segment's.)
+                    let (i, j) = (pts[..k].iter().rposition(|&q| d2(q, p) >= 2_640.0).unwrap_or(0), pts[k..].iter().position(|&q| d2(q, p) >= 2_640.0).map_or(pts.len() - 1, |e| k + e));
+                    ways.push((p, unit([pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]])));
+                    break;
+                }
+            }
+        }
+        ways.iter().any(|&(p, u)| {
+            let h0 = (at.ground)(p[0], p[1]);
+            let at_t = |d: [f64; 2], t: f64| (at.ground)(p[0] + d[0] * t, p[1] + d[1] * t);
+            let falls = |d: [f64; 2]| (1..=4).all(|t| at_t(d, t as f64 * 1_320.0) <= h0 + 30.0) && (2..=4).any(|t| at_t(d, t as f64 * 1_320.0) <= h0 - 250.0);
+            let rises = |d: [f64; 2]| (1..=4).any(|t| at_t(d, t as f64 * 1_320.0) >= h0 + 300.0);
+            let n = [-u[1], u[0]];
+            h0 - sea >= 1_000.0 && falls(u) && falls([-u[0], -u[1]]) && rises(n) && rises([-n[0], -n[1]])
+        })
+    };
+    // A road over a river within half a mile: a crossing on a road as built, or one in the town
+    // a road runs through (two ways in).
+    let on_road = |p: [f64; 2], tol: f64| {
+        at.roads.iter().any(|&(_, pts)| {
+            pts.windows(2).any(|q| {
+                let (a, b) = (q[0], q[1]);
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let l2 = dx * dx + dy * dy;
+                let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                d2(p, [a[0] + t * dx, a[1] + t * dy]) <= tol
+            })
+        })
+    };
+    let crossed = |c: [f64; 2], reach: f64| {
+        at.crossings.iter().any(|&p| d2(p, c) <= 2_640.0 && (on_road(p, 400.0) || (d2(p, c) <= reach - 1_200.0 && arms(c, reach).len() >= 2)))
+    };
+    let near_source = |r: Reason, c: [f64; 2], d: f64| g.sources.iter().any(|&(sr, k, before, v)| sr == r && v >= 0.3 && d2(if r == Reason::Mouth { mouth_at(k, before) } else { centre(k) }, c) <= d);
+    for s in settlements.iter_mut() {
+        let c = [s.x, s.y];
+        let k = s.cell;
+        let reach = crate::town::urban_radius(s.tier, s.population) + 1_500.0;
+        // What a reason is worth where the town stands (0: it does not hold there).
+        let worth = |r: Reason| -> f64 {
+            let v = if (r as usize) < 10 { g.site[k][r as usize] as f64 / 255.0 } else { 0.0 };
+            match r {
+                Reason::Harbour => v.min(0.8 * shelter(c)),
+                // (A town stands back from its shore by a third of its radius.)
+                Reason::Mouth => if near_source(Reason::Mouth, c, 3_000.0 + 0.33 * (reach - 1_500.0)) { v } else { 0.0 },
+                Reason::Outlet | Reason::Confluence | Reason::Head => if near_source(r, c, 0.75 * cell) { v } else { 0.0 },
+                // (A village's is a ford or bridge on its road; a city's only the river's bridging point.)
+                Reason::Crossing if crossed(c, reach) => match s.tier {
+                    Tier::Village => 0.55,
+                    Tier::Town => v.max(0.55),
+                    _ => v,
+                },
+                Reason::Crossing => 0.0,
+                Reason::Ore => if hilly(c) { v } else { 0.0 },
+                Reason::Pass => if s.tier == Tier::Town && saddle(c, reach) { 0.9 } else { 0.0 },
+                Reason::Crossroads => if s.tier == Tier::Town && arms(c, reach).len() >= 3 { 0.75 } else { 0.0 },
+                Reason::Food => if g.food[k] >= 0.5 { 1.0 } else { 0.0 },
+                _ => v,
+            }
+        };
+        if s.reason == Reason::None || worth(s.reason) > 0.3 {
+            continue;
+        }
+        let was = s.reason;
+        let mut reason = Reason::None;
+        let mut best = 0.3;
+        for r in [Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing, Reason::Ore, Reason::Timber, Reason::Fishing, Reason::Pass, Reason::Crossroads] {
+            // (The same reasons as `place` weighs for the tier; a village's crossing only on a road over a river.)
+            if r == was || (s.tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Pass | Reason::Crossroads)) || (s.tier >= Tier::City && matches!(r, Reason::Timber | Reason::Fishing | Reason::Pass | Reason::Crossroads)) {
+                continue;
+            }
+            let v = worth(r);
+            if v > best + 1e-9 {
+                (reason, best) = (r, v);
+            }
+        }
+        if reason == Reason::None && g.food[k] >= 0.5 {
+            reason = Reason::Food;
+        }
+        s.reason = reason;
+        if inp.pins.iter().any(|p| s.pin == Some(p.stroke as u32) && p.kind.is_some()) {
+            continue;
+        }
+        let near_river = g.on_river[k] || neighbors(w, h, k).any(|(nb, _)| g.on_river[nb]);
+        let (cx, cy) = ((k % w) as f64, (k / w) as f64);
+        let ore = fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5);
+        let b = Biome::from_u8((inp.biome[k] & 0xff) as u8);
+        s.kind = kind_of(reason, s.tier, b, inp.height[k] - sea, ore, s.coastal, near_river, g.on_river[k], hilly(c));
+    }
 }
 
 /// Move each waterside settlement off its cell centre onto its water: ports and fishing

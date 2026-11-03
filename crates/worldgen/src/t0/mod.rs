@@ -443,6 +443,12 @@ impl T0 {
             // swing at full strength round the joint).
             r.wander.iter_mut().for_each(|w| *w = 0.0);
         }
+        // Each settlement's reason, checked where it now stands and against the roads as built.
+        {
+            let crossings: Vec<[f64; 2]> = network.crossings.iter().map(|c| [c.x, c.y]).collect();
+            let roads: Vec<(roads::RoadClass, &[[f64; 2]])> = network.roads.iter().map(|r| (r.class, &r.pts[..])).collect();
+            settle::verify(&sinp, &mut settlements, &settle::Placed { wet: &wet, ground: &planned, crossings: &crossings, roads: &roads });
+        }
         let (map_w, map_h) = ((w - 1) as f64 * cell, (h - 1) as f64 * cell);
         let road_net = RoadNet::new(
             network

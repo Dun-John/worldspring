@@ -578,6 +578,15 @@ fn line_dist(p: [f64; 2], line: &[[f64; 2]]) -> f64 {
     line.windows(2).map(|w| seg_dist(p, w[0], w[1])).fold(f64::INFINITY, f64::min)
 }
 
+/// Whether `p` is within `tol` of the polyline (`line_dist(p, line) < tol`, skipping segments
+/// whose box is farther off).
+fn near_line(p: [f64; 2], line: &[[f64; 2]], tol: f64) -> bool {
+    line.windows(2).any(|w| {
+        let (a, b) = (w[0], w[1]);
+        p[0] >= a[0].min(b[0]) - tol && p[0] <= a[0].max(b[0]) + tol && p[1] >= a[1].min(b[1]) - tol && p[1] <= a[1].max(b[1]) + tol && seg_dist(p, a, b) < tol
+    })
+}
+
 fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l2 = dx * dx + dy * dy;
@@ -2707,7 +2716,7 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
                     // (One that wanders off first, a loop or a switchback, and comes back to run
                     // along the other a good way from near the junction is laid on it all the same.)
                     let head = sub_line(&legs[c].pts, cs, 0.0, clen.min(2.0 * LATE + 5_000.0));
-                    let near = |t: f64| line_dist(point_at(&legs[o].pts, os, t), &head) < TOL;
+                    let near = |t: f64| near_line(point_at(&legs[o].pts, os, t), &head, TOL);
                     let mut shared = 0.0;
                     while shared + STEP < olen && near(shared + STEP) {
                         shared += STEP;
