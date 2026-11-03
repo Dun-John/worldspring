@@ -2639,10 +2639,13 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             along > 12.0 - r && along < len - 12.0 + r && across.abs() < 14.0 + r
         })
     };
-    let blocked = |urban: &[u8], o: &Object| on_wall(urban, o) || in_gate([ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT], (info(o.kind as u16).radius * o.scale) as f64 * SQUARE_FT);
+    // (Nor does anything in the way stand on a flight of steps.)
+    let on_steps = |surface: &[Surface], o: &Object| info(o.kind as u16).blocks_move && surface[(o.y.max(0.0) as usize).min(SQ - 1) * SQ + (o.x.max(0.0) as usize).min(SQ - 1)] == Surface::Stairs;
+    let blocked = |c: &Chunk, o: &Object| on_wall(&c.urban, o) || on_steps(&c.surface, o) || in_gate([ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT], (info(o.kind as u16).radius * o.scale) as f64 * SQUARE_FT);
     {
-        let urban = &chunk.urban;
-        chunk.objects.retain(|o| !blocked(urban, o));
+        let kept: Vec<bool> = chunk.objects.iter().map(|o| !blocked(&chunk, o)).collect();
+        let mut it = kept.iter();
+        chunk.objects.retain(|_| *it.next().unwrap());
     }
     // A close's churchyard and its hedge (a square round it): nothing added, no knoll over it.
     let churchyard: Vec<bool> = if churchyards.is_empty() {
@@ -2666,6 +2669,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 || churchyard.get(k).is_some_and(|&y| y)
                 || court_h[(y as usize + 1) * HS + x as usize + 1]
                 || chunk.urban[k] == URBAN_PATH
+                || chunk.surface[k] == Surface::Stairs
                 || park_keep.iter().any(|&(a, b, r)| crate::town::geom::seg_dist(p, a, b) < r + 2.5)
                 || bailey_kind[(y as usize + 1) * HS + x as usize + 1] & 4 != 0
                 || (bailey_kind[(y as usize + 1) * HS + x as usize + 1] & 3 != 0 && bailey_ways.iter().any(|&(a, b)| crate::town::geom::seg_dist(p, a, b) < 8.0))
@@ -2814,7 +2818,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // What it added that reaches a wall, a tower or a gate's passage (a cart by it) stands in the
     // middle of its square, smaller (a crate on paving), or goes.
     for k in (set_out..chunk.objects.len()).rev() {
-        if !blocked(&chunk.urban, &chunk.objects[k]) {
+        if !blocked(&chunk, &chunk.objects[k]) {
             continue;
         }
         let o = &mut chunk.objects[k];
@@ -2823,7 +2827,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         if chunk.surface[q].is_road() {
             o.kind = Kind::Crate;
         }
-        if blocked(&chunk.urban, &chunk.objects[k]) {
+        if blocked(&chunk, &chunk.objects[k]) {
             chunk.objects.remove(k);
         }
     }

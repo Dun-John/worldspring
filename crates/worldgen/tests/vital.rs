@@ -277,7 +277,7 @@ fn towns_meet_roads_and_water() {
     };
     // The river channels round a box (the fine curve every ~20 ft), by 100-ft grid cell.
     type Channel = (Vec<([f64; 2], [f64; 2], f64)>, std::collections::HashMap<(i64, i64), Vec<usize>>);
-    let channel = |bb: [f64; 4]| -> Channel {
+    fn channel(t0: &worldgen::t0::T0, bb: [f64; 4]) -> Channel {
         let mut segs = Vec::new();
         for (ri, k) in t0.rivers.segments_near(bb[0] - 400.0, bb[1] - 400.0, bb[2] + 400.0, bb[3] + 400.0, 0.0) {
             let r = &t0.rivers.rivers[ri as usize];
@@ -294,35 +294,22 @@ fn towns_meet_roads_and_water() {
             }
         }
         (segs, grid)
-    };
+    }
     // More than `inset` ft inside a channel.
-    let in_channel = |ch: &Channel, p: [f64; 2], inset: f64| {
+    fn in_channel(ch: &Channel, p: [f64; 2], inset: f64) -> bool {
         ch.1.get(&((p[0] / 100.0).floor() as i64, (p[1] / 100.0).floor() as i64)).into_iter().flatten().any(|&i| {
             let (a, b, hw) = ch.0[i];
             geom::seg_dist(p, a, b) < hw - inset
         })
-    };
-    let (mut roads_checked, mut piers_checked, mut walls_checked) = (0, 0, 0);
-    // A pier is a rectangle; its ends are the midpoints of its two short sides.
-    let ends = |pier: &[[f64; 2]]| {
-        let m = pier.len();
-        let mut sides: Vec<(f64, [f64; 2])> = (0..m).map(|k| (geom::dist(pier[k], pier[(k + 1) % m]), geom::lerp(pier[k], pier[(k + 1) % m], 0.5))).collect();
-        sides.sort_by(|a, b| a.0.total_cmp(&b.0));
-        (sides[0].1, sides[1].1)
-    };
-    // Every pier's ends (villages' too), for the drawn shore below.
-    let mut all_piers: Vec<(usize, [f64; 2], [f64; 2])> = Vec::new();
-    // Flights of steps (settlement, centreline, width, rise), for the drawn ground below.
-    let prm = town::stairs::StairParams::DEFAULT;
-    let mut flights: Vec<(usize, Vec<[f64; 2]>, f32)> = Vec::new();
-    let mut stair_pieces = 0;
-    for (i, s) in t0.settlements.iter().enumerate() {
-        let l = town::layout(world, t0, i);
-        all_piers.extend(l.piers.iter().map(|p| (i, ends(p).0, ends(p).1)));
-        // Steps only in cities and up; each flight long and high enough, on dry land outside
-        // plazas, and clear of the streets crossing it (alleys may open onto it from the side).
+    }
+    // Steps only in cities and up; each flight long and high enough, on dry land outside plazas,
+    // and clear of the streets crossing it (alleys may open onto it from the side). Collects the
+    // flights (settlement, centreline, rise) and counts the pieces.
+    fn check_steps(t0: &worldgen::t0::T0, i: usize, l: &town::Layout, flights: &mut Vec<(usize, Vec<[f64; 2]>, f32)>, pieces: &mut usize) {
+        let prm = town::stairs::StairParams::DEFAULT;
+        let s = &t0.settlements[i];
         assert!(s.tier >= town::stairs::STAIR_TIER || l.stairs.is_empty(), "settlement {i} ({:?}) has steps", s.tier);
-        let ch = if l.stairs.is_empty() { Default::default() } else { channel(l.bbox) };
+        let ch = if l.stairs.is_empty() { Default::default() } else { channel(t0, l.bbox) };
         for (k, st) in l.stairs.iter().enumerate() {
             let length: f64 = st.pts.windows(2).map(|w| geom::dist(w[0], w[1])).sum();
             assert!(length >= prm.min_run - 1e-6 && st.rise as f64 >= prm.min_rise - 1e-3, "settlement {i}: a flight at {:?} only {length:.1} ft long, rising {:.1} ft", st.pts[0], st.rise);
@@ -349,14 +336,33 @@ fn towns_meet_roads_and_water() {
             if k == 0 || l.stairs[k - 1].flight != st.flight {
                 flights.push((i, st.pts.clone(), st.rise));
             }
-            stair_pieces += 1;
+            *pieces += 1;
         }
+    }
+    let (mut roads_checked, mut piers_checked, mut walls_checked) = (0, 0, 0);
+    // A pier is a rectangle; its ends are the midpoints of its two short sides.
+    let ends = |pier: &[[f64; 2]]| {
+        let m = pier.len();
+        let mut sides: Vec<(f64, [f64; 2])> = (0..m).map(|k| (geom::dist(pier[k], pier[(k + 1) % m]), geom::lerp(pier[k], pier[(k + 1) % m], 0.5))).collect();
+        sides.sort_by(|a, b| a.0.total_cmp(&b.0));
+        (sides[0].1, sides[1].1)
+    };
+    // Every pier's ends (villages' too), for the drawn shore below.
+    let mut all_piers: Vec<(usize, [f64; 2], [f64; 2])> = Vec::new();
+    // Flights of steps (settlement, centreline, rise), for the drawn ground below.
+    let prm = town::stairs::StairParams::DEFAULT;
+    let mut flights: Vec<(usize, Vec<[f64; 2]>, f32)> = Vec::new();
+    let mut stair_pieces = 0;
+    for (i, s) in t0.settlements.iter().enumerate() {
+        let l = town::layout(world, t0, i);
+        all_piers.extend(l.piers.iter().map(|p| (i, ends(p).0, ends(p).1)));
+        check_steps(t0, i, &l, &mut flights, &mut stair_pieces);
         if s.tier < Tier::Town {
             continue;
         }
         // Walls end at the banks (water guards the gap), towers stand on land, and every street
         // over a river runs on a bridge.
-        let ch = channel(l.bbox);
+        let ch = channel(t0, l.bbox);
         if !ch.0.is_empty() {
             for w in &l.walls {
                 for seg in w.windows(2) {
@@ -426,31 +432,46 @@ fn towns_meet_roads_and_water() {
     for (i, e1, e2) in all_piers {
         assert!(over_water(e1) || over_water(e2), "settlement {i}: the pier at {:?} ends on drawn land", geom::lerp(e1, e2, 0.5));
     }
+    // Seed 1's cities stand on flat river and harbour sites: steep streets are found in a world
+    // whose cities have them (seed 7), its cities' flights checked as above.
+    let mut sx = Executor::new(World::from_json(&world_json(7)).unwrap());
+    let mut steep: Vec<(usize, Vec<[f64; 2]>, f32)> = Vec::new();
+    for i in (0..sx.t0.settlements.len()).filter(|&i| sx.t0.settlements[i].tier >= town::stairs::STAIR_TIER) {
+        let l = town::layout(&sx.world, &sx.t0, i);
+        check_steps(&sx.t0, i, &l, &mut steep, &mut stair_pieces);
+    }
     // Flights stand on the ground the battlemap draws: dry, and climbing it as steeply as they
     // were judged to (less a little for the sampling).
-    assert!(flights.len() >= 3 && stair_pieces >= flights.len(), "too few flights of steps: {} ({stair_pieces} pieces)", flights.len());
-    for (i, pts, rise) in &flights {
-        let (mut climb, mut length) = (0.0, 0.0);
-        let mut last: Option<f64> = None;
-        for seg in pts.windows(2) {
-            let n = (geom::dist(seg[0], seg[1]) / 5.0).ceil().max(1.0) as usize;
-            for j in 0..=n {
-                let p = geom::lerp(seg[0], seg[1], j as f64 / n as f64);
-                let key = TileKey::surface(g.max_level, (p[0] / size) as u32, (p[1] / size) as u32);
-                let (ox, oy) = g.tile_origin_ft(&key);
-                let k = padded_index(((p[0] - ox) / s).round() as i64, ((p[1] - oy) / s).round() as i64);
-                let tile = ex.terrain(key);
-                assert!(ex.t0.sample_water(p[0], p[1]).max(tile.river_water[k]) <= tile.padded[k], "settlement {i}: steps under water at {p:?}");
-                let h = tile.padded[k] as f64;
-                if let Some(q) = last {
-                    climb += (h - q).abs();
+    assert!(steep.len() >= 3 && stair_pieces >= flights.len() + steep.len(), "too few flights of steps: {} ({stair_pieces} pieces)", steep.len());
+    for (x, fl) in [(&mut ex, &flights), (&mut sx, &steep)] {
+        let g = x.world.geom.clone();
+        let (s, size) = (g.spacing_ft(g.max_level), g.tile_size_ft(g.max_level));
+        for (i, pts, rise) in fl {
+            let (mut climb, mut length) = (0.0, 0.0);
+            let mut last: Option<f64> = None;
+            for seg in pts.windows(2) {
+                let n = (geom::dist(seg[0], seg[1]) / 5.0).ceil().max(1.0) as usize;
+                for j in 0..=n {
+                    let p = geom::lerp(seg[0], seg[1], j as f64 / n as f64);
+                    let key = TileKey::surface(g.max_level, (p[0] / size) as u32, (p[1] / size) as u32);
+                    let (ox, oy) = g.tile_origin_ft(&key);
+                    let k = padded_index(((p[0] - ox) / s).round() as i64, ((p[1] - oy) / s).round() as i64);
+                    let tile = x.terrain(key);
+                    assert!(x.t0.sample_water(p[0], p[1]).max(tile.river_water[k]) <= tile.padded[k], "settlement {i}: steps under water at {p:?}");
+                    let h = tile.padded[k] as f64;
+                    if let Some(q) = last {
+                        climb += (h - q).abs();
+                    }
+                    last = Some(h);
                 }
-                last = Some(h);
+                length += geom::dist(seg[0], seg[1]);
             }
-            length += geom::dist(seg[0], seg[1]);
+            assert!(climb / length >= prm.g_off - 0.03, "settlement {i}: a flight at {:?} climbs only {:.3} on the drawn ground (rise {rise:.1} ft over {length:.0} ft)", pts[0], climb / length);
         }
-        assert!(climb / length >= prm.g_off - 0.03, "settlement {i}: a flight at {:?} climbs only {:.3} on the drawn ground (rise {rise:.1} ft over {length:.0} ft)", pts[0], climb / length);
     }
+    // The steepest flights are seed 7's (its world's geometry the same as seed 1's).
+    assert_eq!(format!("{:?}", sx.world.geom), format!("{g:?}"));
+    let flights = &steep;
     // The battlemap draws the highest flight as steps: most of its centreline (2.5 ft in from its
     // ends) in the chunk holding its middle; steps only on dry street squares, off network roads,
     // and under nothing that blocks the way.
@@ -459,7 +480,7 @@ fn towns_meet_roads_and_water() {
     let mid = geom::lerp(pts[0], pts[pts.len() - 1], 0.5);
     let key = TileKey::surface(g.max_level, (mid[0] / size) as u32, (mid[1] / size) as u32);
     let (ox, oy) = g.tile_origin_ft(&key);
-    let c = ex.battlemap(key);
+    let c = sx.battlemap(key);
     let square = |p: [f64; 2]| {
         let (x, y) = (((p[0] - ox) / SQUARE_FT).floor(), ((p[1] - oy) / SQUARE_FT).floor());
         (x >= 0.0 && y >= 0.0 && x < SQ as f64 && y < SQ as f64).then(|| y as usize * SQ + x as usize)
@@ -502,11 +523,11 @@ fn towns_meet_roads_and_water() {
     let at_square = |c: &bm::Chunk, p: [f64; 2]| c.height[(((p[1] - oy) / SQUARE_FT).floor().clamp(0.0, SQ as f64 - 1.0) as usize) * SQ + ((p[0] - ox) / SQUARE_FT).floor().clamp(0.0, SQ as f64 - 1.0) as usize];
     let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
     let outline = [[b[0] - 10.0, b[1] - 10.0], [b[2] + 10.0, b[1] - 10.0], [b[2] + 10.0, b[3] + 10.0], [b[0] - 10.0, b[3] + 10.0]];
-    ex.world.file.edits.plateaus.insert("h:level".into(), ground::plateau_for(&outline, at_square(&c, mid) as f64, 0.0).unwrap());
-    let levelled = ex.battlemap(key);
+    sx.world.file.edits.plateaus.insert("h:level".into(), ground::plateau_for(&outline, at_square(&c, mid) as f64, 0.0).unwrap());
+    let levelled = sx.battlemap(key);
     let left = line.iter().filter(|&&k| levelled.surface[k] == Surface::Stairs).count();
     assert!(left == 0 && line.iter().all(|&k| levelled.surface[k] == Surface::Cobble), "a plateau over the flight at {mid:?} leaves {left} of its {} squares as steps", line.len());
-    ex.world.file.edits = Default::default();
+    sx.world.file.edits = Default::default();
     let big = ex.t0.settlements.iter().max_by_key(|s| s.population).unwrap().clone();
     assert!(big.tier >= town::stairs::STAIR_TIER, "the largest settlement is not a city");
     let key = TileKey::surface(g.max_level, (big.x / size) as u32, (big.y / size) as u32);

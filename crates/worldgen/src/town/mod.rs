@@ -3490,11 +3490,12 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     .filter(|(a, b)| a[0].max(b[0]) >= x0 - 80.0 && a[0].min(b[0]) <= x1 + 80.0 && a[1].max(b[1]) >= y0 - 80.0 && a[1].min(b[1]) <= y1 + 80.0)
                     .collect();
                 // A castle inside the town (no corner on the wall): a full curtain of its own, its gate
-                // toward the market square.
+                // toward the market square (where it was planned: a corner of the square moved by
+                // hand turns no castle across the town).
                 let inside = !plan.mesh.faces[i].iter().any(|v| plan.wall_runs.iter().any(|(chain, _, _)| chain.contains(v)));
                 let on_wall = if inside { Vec::new() } else { on_wall };
                 let toward = match plan.plaza {
-                    Some(pz) if inside && pz != i => centroid(&cells[pz].pts),
+                    Some(pz) if inside && pz != i => centroid(&mesh.faces[pz].iter().map(|&v| if ch.moves.iter().any(|m| m.0 == v) { plan.mesh.pos[v] } else { mesh.pos[v] }).collect::<Vec<_>>()),
                     _ => [0.0, 0.0],
                 };
                 // Its size: a city's about 35,000 sq ft, a metropolis's 50,000, and 50,000 more for an

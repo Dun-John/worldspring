@@ -182,6 +182,14 @@ impl Plan {
 
     /// `cut`, neither part of `avoid` squares (0: any).
     pub(super) fn cut_avoiding(&self, lay: &mut Lay, r: i16, least: usize, other: usize, kind: &'static str, avoid: usize) -> Option<i16> {
+        self.cut_by(lay, r, least, other, kind, avoid, &[])
+    }
+
+    /// `cut_avoiding`, with the squares of the towers standing on the floor (rooms of their own once
+    /// laid: `super::super::hub_level`): a tower a room from a way only through `r` stays beside a
+    /// part on a way (or beside a room on one).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn cut_by(&self, lay: &mut Lay, r: i16, least: usize, other: usize, kind: &'static str, avoid: usize, towers: &[&Vec<usize>]) -> Option<i16> {
         let (nx, ny) = (self.nx, self.ny);
         let nbrs = |k: usize| [(k % nx > 0).then(|| k - 1), (k % nx + 1 < nx).then_some(k + 1), (k >= nx).then(|| k - nx), (k + nx < nx * ny).then_some(k + nx)].into_iter().flatten();
         let st = self.stairs;
@@ -203,6 +211,24 @@ impl Plan {
             })
         };
         let sq: Vec<usize> = (0..nx * ny).filter(|&k| lay.cells[k] == r).collect();
+        // (Squares on a way or beside a way through, `r` aside: a room from one.)
+        let near_way = |lay: &Lay, sq: &[usize]| on_way(lay, sq) || sq.iter().any(|&k| nbrs(k).any(|q| lay.cells[q] >= 0 && lay.cells[q] != r && crate::interior::is_way_through(lay.rooms[lay.cells[q] as usize].kind)));
+        // (The towers beside `r` with no other room beside them that is a way or a room from one.)
+        let leaning: Vec<&Vec<usize>> = towers
+            .iter()
+            .copied()
+            .filter(|t| {
+                let beside: Vec<i16> = t.iter().flat_map(|&k| nbrs(k)).filter(|q| !t.contains(q)).map(|q| lay.cells[q]).collect();
+                beside.contains(&r)
+                    && !beside.iter().any(|&o| {
+                        o >= 0 && o != r && crate::interior::walkable(lay.rooms[o as usize].kind) && {
+                            let osq: Vec<usize> = (0..nx * ny).filter(|&p| lay.cells[p] == o).collect();
+                            crate::interior::is_way_through(lay.rooms[o as usize].kind) || near_way(lay, &osq)
+                        }
+                    })
+            })
+            .collect();
+        let keeps_near = |a: &Vec<usize>, b: &Vec<usize>| leaning.iter().all(|t| [a, b].iter().any(|part| near_way(lay, part) && t.iter().any(|&k| nbrs(k).any(|q| part.contains(&q)))));
         let (x0, x1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % nx), a.1.max(k % nx)));
         let (y0, y1) = sq.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / nx), a.1.max(k / nx)));
         let along_x = x1 - x0 > y1 - y0;
@@ -215,7 +241,7 @@ impl Plan {
                 let keep_a = on_way(lay, &a) && (!on_way(lay, &b) || a.len() >= b.len());
                 let (k, o) = if keep_a { (&a, &b) } else { (&b, &a) };
                 let near = |p: &Vec<usize>, q: &Vec<usize>| on_way(lay, p) || by_way(lay, p) || on_way(lay, q);
-                (self.sound(k, least) && self.sound(o, other) && near(k, o) && near(o, k) && a.len() != avoid && b.len() != avoid).then(|| ((on_way(lay, k) && on_way(lay, o)) as usize, std::cmp::Reverse(a.len().abs_diff(b.len())), c, keep_a))
+                (self.sound(k, least) && self.sound(o, other) && near(k, o) && near(o, k) && keeps_near(&a, &b) && a.len() != avoid && b.len() != avoid).then(|| ((on_way(lay, k) && on_way(lay, o)) as usize, std::cmp::Reverse(a.len().abs_diff(b.len())), c, keep_a))
             })
             .max_by(|p, q| (p.0, p.1).cmp(&(q.0, q.1)).then(q.2.cmp(&p.2)))?;
         let (_, _, c, keep_a) = best;

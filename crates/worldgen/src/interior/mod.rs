@@ -3034,6 +3034,50 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
             }
             let opens = |k: usize| side(k).filter(|q| !ways.contains(q) && !sq.contains(q)).map(|q| cells[q]).find(|&r| r >= 0 && (r as usize) < first_tower);
             let rank = |k: usize| opens(k).map_or(usize::MAX, |r| hops[r as usize]);
+            // (A tower with no ways set on this floor opens onto any room beside it: where none of
+            // them is within a room of the circulation, a passage from beside it to the nearest
+            // hall or corridor, 16 squares at most, as below.)
+            if doors.is_empty() {
+                let beside: Vec<usize> = sq.iter().flat_map(|&k| side(k)).filter(|&q| !sq.contains(&q) && cells[q] >= 0 && (cells[q] as usize) < first_tower && !on_stairs(q)).collect();
+                if beside.is_empty() || beside.iter().any(|&q| hops[cells[q] as usize] < 2) {
+                    continue;
+                }
+                let mut from = vec![usize::MAX; nx * ny];
+                let mut q: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+                for &b in &beside {
+                    if from[b] == usize::MAX {
+                        from[b] = b;
+                        q.push_back(b);
+                    }
+                }
+                let mut found = None;
+                while let Some(c) = q.pop_front() {
+                    if circ(cells[c]) {
+                        let mut path = Vec::new();
+                        let mut x = from[c];
+                        while from[x] != x {
+                            path.push(x);
+                            x = from[x];
+                        }
+                        path.push(x);
+                        found = (path.len() <= 16).then_some((cells[c], path));
+                        break;
+                    }
+                    for n in side(c) {
+                        if from[n] == usize::MAX && cells[n] >= 0 && (cells[n] as usize) < first_tower && !ways.contains(&n) && !on_stairs(n) && !sq.contains(&n) {
+                            from[n] = c;
+                            q.push_back(n);
+                        }
+                    }
+                }
+                if let Some((hall, path)) = found {
+                    for c in path {
+                        cells[c] = hall;
+                    }
+                    carved = true;
+                }
+                continue;
+            }
             let Some(k) = doors.iter().copied().filter(|&k| side(k).any(|q| cells[q] == id) && opens(k).is_some()).min_by_key(|&k| (rank(k), k)) else { continue };
             let r = opens(k).unwrap_or(-1);
             let passage = (rank(k) >= 2).then(|| {

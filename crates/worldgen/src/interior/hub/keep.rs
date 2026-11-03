@@ -567,7 +567,9 @@ impl Plan {
         // (A hall with no service end: its kitchen, where it has room, cut for a buttery too.)
         if z == self.hall_z && (self.service == 0 || self.low.is_some()) && !barracks && !lay.rooms.iter().any(|r| r.kind == "buttery" || r.kind == "pantry") {
             if let Some(k) = (0..lay.rooms.len() as i16).find(|&r| lay.rooms[r as usize].kind == "kitchen" && lay.count(r) >= 9) {
-                self.cut(&mut lay, k, 5, 4, "buttery");
+                // (Not cutting a tower beside the kitchen off from the ways about the floor.)
+                let standing: Vec<&Vec<usize>> = self.tower_sq.iter().zip(&self.tower_top).filter(|(_, tt)| z <= **tt).map(|(sq, _)| sq).collect();
+                self.cut_by(&mut lay, k, 5, 4, "buttery", 0, &standing);
             }
         }
         // (Above the hall, the great chamber and the solar where the lord's rooms go.)
