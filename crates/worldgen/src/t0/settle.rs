@@ -122,6 +122,9 @@ pub struct Settlement {
     /// the economy's re-tiering routes nothing again; a loaded world has its final ones here).
     pub planned: Tier,
     pub planned_pop: u32,
+    /// Part of an isolated realm (`place_realms`): its walled town or city, or one of its hidden
+    /// villages. No trade, ranking or roads but its own track.
+    pub isolated: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -794,6 +797,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 pin: pin.map(|p| p.stroke as u32),
                 planned: tier,
                 planned_pop: population,
+                isolated: false,
             }
         };
         // Pinned ones first (they count toward the tier's quota), seeded by where they were
@@ -821,6 +825,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 // (One added beside the world's own keeps only the least room round it.)
                 let added = s.pin.is_some_and(|st| inp.pins.iter().any(|p| p.stroke == st as usize && p.added));
                 let need = if s.tier >= tier && !added { spacing } else { 10.0 * 5280.0 / cell };
+                // (Nothing grows up beside an isolated realm.)
+                let need = if s.isolated { need.max(REALM_CLEAR_MI * 5280.0 / cell) } else { need };
                 d >= need.max(10.0 * 5280.0 / cell)
             });
             if !ok {
@@ -839,6 +845,190 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             }
             let s = pinned(pin, &out, conflicts);
             out.push(s);
+        }
+    }
+    out
+}
+
+/// How far (miles) later settlements keep from any part of an isolated realm.
+pub const REALM_CLEAR_MI: f64 = 20.0;
+/// How far (miles) round a realm's town other roads pay extra to pass (`roads::route`).
+pub const REALM_AVOID_MI: f64 = 12.0;
+
+/// A biome a forest realm hides in.
+fn deep_forest(b: Biome) -> bool {
+    matches!(b, Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga | Biome::Jungle)
+}
+
+/// Isolated realms, on top of the tiers' counts: a walled city (rarely a large town) deep in a
+/// large forest (a market) or on a flat spot high in the mountains (a fortress), well clear of
+/// the cities placed so far and of every pin, with 2-4 hidden villages of its own round it in
+/// the same forest or valley. About one per 15 cities, the number drawn per world (some have
+/// none); none at settlement density 0. Placed after the metropolises and cities, before any
+/// road is tried, so later tiers keep clear of them (`place`).
+pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>) -> Vec<Settlement> {
+    let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
+    let world = inp.world;
+    let p = world.params();
+    let sea = p.sea_level_ft;
+    let n = w * h;
+    let mut out = existing;
+    let cities = out.iter().filter(|s| s.tier >= Tier::City && s.pin.is_none()).count();
+    if p.settlement_density <= 0.0 || cities == 0 {
+        return out;
+    }
+    let g = inp.ground.get_or_init(|| ground(inp));
+    let stream = world.stream("t0.realm");
+    // How many: a Poisson draw, a mean of one per 15 cities.
+    let count = {
+        let lambda = cities as f64 / 15.0;
+        let u = unit(hash3(stream, 0, 0, 0));
+        let (mut k, mut pk) = (0usize, libm::exp(-lambda));
+        let mut cum = pk;
+        while u > cum && k < 6 {
+            k += 1;
+            pk *= lambda / k as f64;
+            cum += pk;
+        }
+        k
+    };
+    if count == 0 {
+        return out;
+    }
+    let mi = 5280.0 / cell;
+    let biome_of = |k: usize| Biome::from_u8((inp.biome[k] & 0xff) as u8);
+    let slope_of = |k: usize| super::biome::local_slope(w, h, inp.height, k % w, k / w, cell);
+    let dry = |k: usize| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE;
+    // How deep in its forest each cell lies (cells to the nearest ground that isn't forest).
+    let open: Vec<bool> = (0..n).map(|k| !(dry(k) && deep_forest(biome_of(k)))).collect();
+    let depth = super::climate::distance_to(w, h, &open);
+    // Flat enough for a walled town's plan: the ground round the cell as well as the cell itself.
+    let flat = |k: usize, max: f64| {
+        let (x, y) = ((k % w) as i64, (k / w) as i64);
+        (-1i64..=1).all(|dy| (-1i64..=1).all(|dx| {
+            let (i, j) = (x + dx, y + dy);
+            i >= 0 && j >= 0 && i < w as i64 && j < h as i64 && dry(j as usize * w + i as usize) && slope_of(j as usize * w + i as usize) <= max
+        }))
+    };
+    let margin = 8.0 * mi;
+    let inside = |k: usize| {
+        let (x, y) = ((k % w) as f64, (k / w) as f64);
+        x >= margin && y >= margin && x <= (w - 1) as f64 - margin && y <= (h - 1) as f64 - margin
+    };
+    let jitter = |k: usize, salt: i64| 0.75 + 0.25 * unit(hash3(stream, k as i64, salt, 1));
+    // Forest sites: deep in a forest (5 miles and more from its edge), the deeper the better.
+    let mut forest: Vec<(f64, usize)> =
+        (0..n).filter(|&k| inside(k) && !open[k] && depth[k] >= 5.0 * mi && g.score[k] > 0.05 && !g.coastal[k] && flat(k, 0.10)).map(|k| (depth[k].min(20.0 * mi) * jitter(k, 0), k)).collect();
+    // Mountain sites: 3,000 ft up and more on flat ground, the higher and flatter the better.
+    let mut mountain: Vec<(f64, usize)> = (0..n)
+        .filter(|&k| inside(k) && inp.height[k] - sea >= 3_000.0 && g.score[k] > 0.0 && !g.coastal[k] && flat(k, 0.08))
+        .map(|k| ((inp.height[k] - sea).min(9_000.0) / 1_000.0 * (1.2 - slope_of(k) / 0.08) * jitter(k, 1), k))
+        .collect();
+    for c in [&mut forest, &mut mountain] {
+        c.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    }
+    let d_cells = |a: usize, b: usize| {
+        let (dx, dy) = ((a % w) as f64 - (b % w) as f64, (a / w) as f64 - (b / w) as f64);
+        crate::core::sqrt(dx * dx + dy * dy)
+    };
+    // Well clear of every settlement so far (another realm's more so) and of every pin: a pin in
+    // the same place wins.
+    let clear = |k: usize, out: &[Settlement]| {
+        let (x, y) = ((k % w) as f64 * cell, (k / w) as f64 * cell);
+        out.iter().all(|s| d_cells(s.cell, k) >= if s.isolated { 90.0 } else { 45.0 } * mi)
+            && inp.pins.iter().all(|q| crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) >= 25.0 * 5280.0)
+    };
+    // The strongest reason at a site (as `place` weighs it for the tier).
+    let reason_at = |k: usize, tier: Tier| {
+        let (mut reason, mut best) = (Reason::None, 0.3);
+        for r in [Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing, Reason::Ore, Reason::Timber, Reason::Fishing] {
+            if (tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Crossing)) || (tier >= Tier::City && matches!(r, Reason::Timber | Reason::Fishing)) {
+                continue;
+            }
+            let v = g.site[k][r as usize] as f64 / 255.0;
+            if v > best + 1e-9 {
+                (reason, best) = (r, v);
+            }
+        }
+        if reason == Reason::None && g.food[k] >= 0.5 { Reason::Food } else { reason }
+    };
+    let ore_seed = world.stream("t0.settle.ore");
+    let make = |k: usize, tier: Tier, population: u32, seed: u64, kind: Option<SettleKind>| {
+        let reason = reason_at(k, tier);
+        let near_river = g.on_river[k] || neighbors(w, h, k).any(|(nb, _)| g.on_river[nb]);
+        let (cx, cy) = ((k % w) as f64, (k / w) as f64);
+        let ore = fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5);
+        let kind = kind.unwrap_or_else(|| kind_of(reason, tier, biome_of(k), inp.height[k] - sea, ore, false, near_river, g.on_river[k], true));
+        Settlement {
+            tier,
+            kind,
+            reason,
+            cell: k,
+            x: cx * cell,
+            y: cy * cell,
+            population,
+            coastal: false,
+            river: g.on_river[k] || (near_river && kind == SettleKind::River),
+            capital: false,
+            seed,
+            culture: 0,
+            pin: None,
+            planned: tier,
+            planned_pop: population,
+            isolated: true,
+        }
+    };
+    for r in 0..count as i64 {
+        let woods = unit(hash3(stream, r, 1, 0)) < 0.5;
+        let order: [(bool, &Vec<(f64, usize)>); 2] = if woods { [(true, &forest), (false, &mountain)] } else { [(false, &mountain), (true, &forest)] };
+        let Some((woods, k)) = order.iter().find_map(|&(wd, c)| c.iter().find(|&&(_, k)| clear(k, &out)).map(|&(_, k)| (wd, k))) else { break };
+        let seed = hash3(stream, k as i64, 2, 0);
+        // A city, rarely a large town.
+        let (tier, population) = if unit(hash3(seed, 0x7469_6572, 0, 0)) < 0.2 {
+            (Tier::Town, (3_000.0 + 2_000.0 * unit(hash3(seed, 0x706f_70, 0, 0))) as u32)
+        } else {
+            let (lo, hi) = pop_range(Tier::City);
+            (Tier::City, (lo * libm::pow(hi / lo, 0.6 * unit(hash3(seed, 0x706f_70, 0, 0)))) as u32)
+        };
+        let kind = if woods { SettleKind::Market } else { SettleKind::Fortress };
+        out.push(make(k, tier, population, seed, Some(kind)));
+        // Its hidden villages: 4 to 10 miles out, in the same forest or valley (within 1,500 ft
+        // of the town's height), 3 miles apart.
+        let want = 2 + (hash3(seed, 0x7669_6c, 0, 0) % 3) as usize;
+        let hk = inp.height[k];
+        let (kx, ky) = ((k % w) as i64, (k / w) as i64);
+        let reach = crate::core::ceil(10.0 * mi) as i64;
+        let mut cands: Vec<(f64, usize)> = Vec::new();
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                let (i, j) = (kx + dx, ky + dy);
+                if i < 0 || j < 0 || i >= w as i64 || j >= h as i64 {
+                    continue;
+                }
+                let v = j as usize * w + i as usize;
+                let d = d_cells(v, k);
+                if d < 4.0 * mi || d > 10.0 * mi || !dry(v) || g.score[v] <= 0.0 || g.coastal[v] || slope_of(v) > 0.15 {
+                    continue;
+                }
+                let fits = if woods { !open[v] && depth[v] >= 1.5 * mi } else { (inp.height[v] - hk).abs() <= 1_500.0 && inp.height[v] - sea >= 2_000.0 };
+                if fits {
+                    cands.push((g.score[v] * jitter(v, 2), v));
+                }
+            }
+        }
+        cands.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        let mut placed: Vec<usize> = Vec::new();
+        for &(_, v) in &cands {
+            if placed.len() >= want {
+                break;
+            }
+            if placed.iter().any(|&q| d_cells(q, v) < 3.0 * mi) {
+                continue;
+            }
+            let vseed = hash3(stream, v as i64, 3, 0);
+            let (lo, hi) = pop_range(Tier::Village);
+            out.push(make(v, Tier::Village, (lo * libm::pow(hi / lo, unit(hash3(vseed, 0x706f_70, 0, 0)))) as u32, vseed, None));
+            placed.push(v);
         }
     }
     out
@@ -1080,7 +1270,8 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
             reason = Reason::Crossroads;
         }
         s.reason = reason;
-        if inp.pins.iter().any(|p| s.pin == Some(p.stroke as u32) && p.kind.is_some()) {
+        // (A realm's town keeps its kind: a fortress in the mountains, a market in the forest.)
+        if (s.isolated && s.tier >= Tier::Town) || inp.pins.iter().any(|p| s.pin == Some(p.stroke as u32) && p.kind.is_some()) {
             continue;
         }
         let near_river = g.on_river[k] || neighbors(w, h, k).any(|(nb, _)| g.on_river[nb]);

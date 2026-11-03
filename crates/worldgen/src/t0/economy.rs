@@ -99,9 +99,10 @@ impl PartialOrd for Node {
 pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<&[Routed]>) -> Report {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let n = w * h;
-    // (A town added beside the world's own takes no part: adding one changes no other.)
+    // (A town added beside the world's own takes no part: adding one changes no other; nor does an
+    // isolated realm's.)
     let added = |s: &Settlement| s.pin.is_some_and(|st| inp.pins.iter().any(|p| p.stroke == st as usize && p.added));
-    let towns: Vec<usize> = (0..settlements.len()).filter(|&i| settlements[i].tier >= Tier::Town && !added(&settlements[i])).collect();
+    let towns: Vec<usize> = (0..settlements.len()).filter(|&i| settlements[i].tier >= Tier::Town && !added(&settlements[i]) && !settlements[i].isolated).collect();
     let mut report = Report::default();
     if towns.is_empty() || inp.ground.get().is_none() {
         return report;

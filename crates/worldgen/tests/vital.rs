@@ -261,6 +261,35 @@ fn towns_meet_roads_and_water() {
     use worldgen::town::{self, geom};
     let mut ex = Executor::new(World::from_json(&world_json(1)).unwrap());
     let (world, t0) = (&ex.world, &ex.t0);
+    // Isolated realms (world 1 has some): each walled, with one track and one gate, no other road
+    // within 3 miles; and the hierarchy's own tier counts as without them.
+    {
+        let sts = &t0.settlements;
+        let realms: Vec<usize> = (0..sts.len()).filter(|&i| sts[i].isolated && sts[i].tier >= Tier::Town).collect();
+        assert!(!realms.is_empty(), "world 1 has no isolated realm");
+        for &i in &realms {
+            let s = &sts[i];
+            let c = [s.x, s.y];
+            let trim = town::road_trim_radius(s.tier, s.population) + 1_500.0;
+            let own: Vec<[f64; 2]> = std::iter::once(c).chain(sts.iter().filter(|v| v.isolated && v.tier == Tier::Village && geom::dist([v.x, v.y], c) < 12.0 * 5280.0).map(|v| [v.x, v.y])).collect();
+            let rs = &t0.roads.roads;
+            let ends = |r: &worldgen::lod::roads::RoadCurve| [r.pts[0], r.pts[r.pts.len() - 1]];
+            let tracks = rs.iter().filter(|r| ends(r).iter().any(|&p| geom::dist(p, c) < trim)).count();
+            assert_eq!(tracks, 1, "realm {i} at {c:?}: {tracks} roads reach it");
+            // (Its own: those ending at it or a village of its, or mostly along its routes as found.)
+            let mine: Vec<[f64; 2]> = t0.extra.as_ref().unwrap().realm_paths.iter().filter(|p| p.0 == i).flat_map(|p| p.1.iter().copied()).collect();
+            let along = |r: &worldgen::lod::roads::RoadCurve| 2 * r.pts.iter().filter(|&&p| mine.iter().any(|&q| geom::dist(p, q) < 1.5 * t0.cell_ft)).count() >= r.pts.len();
+            for r in rs.iter().filter(|r| !along(r) && !ends(r).iter().any(|&p| own.iter().any(|&o| geom::dist(p, o) < trim))) {
+                let near = r.pts.iter().map(|&p| geom::dist(p, c)).fold(f64::INFINITY, f64::min);
+                assert!(near > 3.0 * 5280.0, "realm {i} at {c:?}: a {:?} passes {near:.0} ft from it", r.class);
+            }
+            let l = town::layout(world, t0, i);
+            assert!(!l.walls.is_empty() && l.gates.len() == 1, "realm {i} at {c:?}: walls {}, gates {}", l.walls.len(), l.gates.len());
+        }
+        let count = |t: Tier| sts.iter().filter(|s| s.tier == t && !s.isolated).count();
+        let v = count(Tier::Village);
+        assert_eq!([count(Tier::Town), count(Tier::City), count(Tier::Metropolis)], [(v / 5).max(2), (v / 18).max(1), (v / 90).max(1)], "the tiers' counts moved ({v} villages)");
+    }
     let wet = |p: [f64; 2]| {
         if t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], world.geom.spacing_ft(world.geom.first_refine_level - 1)) {
             return true;

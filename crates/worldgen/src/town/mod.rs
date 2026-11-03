@@ -2213,7 +2213,7 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
     // Wall ring: edges of city patches that face the outskirts (open where water guards: not on a
     // side along the river; one the river crosses has its wall cut at the banks, `walls_off_river`).
     let along_river = |a: usize, b: usize| is_river_edge(a, b) && [0.25, 0.75].iter().all(|&t| site.near_river(lerp(mesh.pos[a], mesh.pos[b], t), 2.0));
-    let walled = s.tier >= Tier::City || rng.next_f64() < 0.4;
+    let walled = s.tier >= Tier::City || rng.next_f64() < 0.4 || s.isolated;
     let mut edge_next: BTreeMap<usize, usize> = BTreeMap::new();
     for i in (0..n_inner).filter(|&i| usable(i)) {
         let (face, lb) = (&mesh.faces[i], &mesh.labels[i]);

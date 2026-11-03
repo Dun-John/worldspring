@@ -94,6 +94,9 @@ pub struct Network {
     pub waystations: Vec<Poi>,
     /// Per stretch between junctions as routed: its traffic and class.
     pub traffic: Vec<SegTraffic>,
+    /// Each isolated realm's routes as found (its town's index, the cells' centres in ft): its
+    /// track, then its villages'.
+    pub realm_paths: Vec<(usize, Vec<[f64; 2]>)>,
 }
 
 /// A stretch's class as planned and as built, the most goods it carries (`economy::Traffic`),
@@ -222,6 +225,12 @@ pub struct DrawnRoutes {
 pub enum End {
     Town(usize),
     Cell(usize),
+    /// The nearest cell of the roads routed so far outside any isolated realm (a realm's track
+    /// goes there: `route`).
+    Net,
+    /// The nearest cell of this realm's (settlement index) track outside its town, which its
+    /// hidden villages join.
+    Track(usize),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -266,6 +275,15 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
 
     let edges = links(inp, settlements, &[RoadClass::KingsRoad, RoadClass::Road, RoadClass::Track]);
     let (_, paths) = route(inp, settlements, &edges);
+    // (A realm's routes are the only ones starting at an isolated place: `links`.)
+    let realm_paths: Vec<(usize, Vec<[f64; 2]>)> = paths
+        .iter()
+        .filter_map(|(_, path, _)| {
+            let first = *path.first()?;
+            let i = settlements.iter().position(|s| s.isolated && s.cell as u32 == first)?;
+            Some((realm_of(settlements, i)?, path.iter().map(|&c| [(c as usize % w) as f64 * cell, (c as usize / w) as f64 * cell]).collect()))
+        })
+        .collect();
 
     // --- 3. Segments between junctions (and settlements), from the union of routes: per
     // step, the best class over it and the drawn road it is part of (the first).
@@ -565,7 +583,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
             }
         }
     }
-    Network { roads, crossings, waystations, traffic: traffic_out }
+    Network { roads, crossings, waystations, traffic: traffic_out, realm_paths }
 }
 
 /// Settlement pairs to join, per class: king's roads join cities, roads join towns and up,
@@ -594,7 +612,8 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell:
         }
         let max_link = max_mi * 5280.0;
         // (By the tiers they were planned at: the economy's re-tiering routes nothing again.)
-        let members: Vec<usize> = (0..ns).filter(|&i| settlements[i].planned >= min_tier).collect();
+        // (An isolated realm's places get none: `links` gives them their track.)
+        let members: Vec<usize> = (0..ns).filter(|&i| settlements[i].planned >= min_tier && !settlements[i].isolated).collect();
         let add = |a: usize, b: usize, edges: &mut Vec<(usize, usize, RoadClass)>| {
             let (a, b) = (a.min(b), a.max(b));
             if !edges.iter().any(|e| e.0 == a && e.1 == b) {
@@ -684,7 +703,35 @@ pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) ->
             out.push(Link { a: End::Town(si), b: End::Cell(c as usize), class, stroke });
         }
     }
+    // An isolated realm's one track, last (to the nearest road the others make), then its hidden
+    // villages' tracks to it. (None with generated roads off; none where a drawn road reaches it.)
+    if inp.world.file.params.generated_roads && classes.contains(&RoadClass::Track) {
+        for (ri, r) in settlements.iter().enumerate() {
+            if !r.isolated || r.planned < Tier::Town || !beside[ri].is_empty() {
+                continue;
+            }
+            out.push(Link { a: End::Town(ri), b: End::Net, class: RoadClass::Track, stroke: None });
+            for (vi, v) in settlements.iter().enumerate() {
+                if v.isolated && v.planned == Tier::Village && realm_of(settlements, vi) == Some(ri) {
+                    out.push(Link { a: End::Town(vi), b: End::Track(ri), class: RoadClass::Track, stroke: None });
+                }
+            }
+        }
+    }
     out
+}
+
+/// The realm (its town's index) an isolated village belongs to: the nearest isolated town.
+pub fn realm_of(settlements: &[Settlement], i: usize) -> Option<usize> {
+    let s = &settlements[i];
+    if !s.isolated {
+        return None;
+    }
+    if s.planned >= Tier::Town {
+        return Some(i);
+    }
+    let d = |r: &Settlement| (r.x - s.x) * (r.x - s.x) + (r.y - s.y) * (r.y - s.y);
+    (0..settlements.len()).filter(|&r| settlements[r].isolated && settlements[r].planned >= Tier::Town).min_by(|&a, &b| d(&settlements[a]).total_cmp(&d(&settlements[b])).then(a.cmp(&b)))
 }
 
 /// Distance (cells) from a point to a polyline.
@@ -1036,13 +1083,59 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
     let mut search = Search::new(n);
     let mut memo = inp.routes.borrow_mut();
     let mut same = true;
+    // Isolated realms' towns (cell x, y, the radius other roads pay extra inside), and per cell
+    // whether a road from outside any realm runs there; each realm's track.
+    let avoid = super::settle::REALM_AVOID_MI * 5280.0 / cell;
+    let realms: Vec<(f64, f64)> = settlements.iter().filter(|s| s.isolated && s.planned >= Tier::Town).map(|s| ((s.cell % w) as f64, (s.cell / w) as f64)).collect();
+    let mut outside: Vec<bool> = vec![false; if realms.is_empty() { 0 } else { n }];
+    for (_, cells, _) in &pre.routes {
+        for &c in cells {
+            if let Some(o) = outside.get_mut(c as usize) {
+                *o = true;
+            }
+        }
+    }
+    let mut tracks: std::collections::BTreeMap<usize, Vec<u32>> = Default::default();
     for (e, link) in links.iter().enumerate() {
         let class = link.class;
-        let cell_of = |end: End| match end {
+        let realm_link = [link.a, link.b].iter().any(|&end| match end {
+            End::Town(i) => settlements[i].isolated,
+            End::Net | End::Track(_) => true,
+            End::Cell(_) => false,
+        });
+        let from = match link.a {
             End::Town(i) => settlements[i].cell,
             End::Cell(k) => k,
+            _ => continue,
         };
-        let (start, goal) = (cell_of(link.a), cell_of(link.b));
+        let near = |cells: &mut dyn Iterator<Item = usize>| {
+            let (fx, fy) = ((from % w) as f64, (from / w) as f64);
+            cells.map(|k| (((k % w) as f64 - fx) * ((k % w) as f64 - fx) + ((k / w) as f64 - fy) * ((k / w) as f64 - fy), k)).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|m| m.1)
+        };
+        let goal = match link.b {
+            End::Town(i) => Some(settlements[i].cell),
+            End::Cell(k) => Some(k),
+            End::Net => near(&mut (0..outside.len()).filter(|&k| outside[k])),
+            End::Track(ri) => {
+                // (Joining it outside the town, so only the track reaches its gate.)
+                let s = &settlements[ri];
+                let r = crate::town::road_trim_radius(s.planned, s.planned_pop) / cell + 2.0;
+                let (sx, sy) = ((s.cell % w) as f64, (s.cell / w) as f64);
+                let far = |k: usize| ((k % w) as f64 - sx) * ((k % w) as f64 - sx) + ((k / w) as f64 - sy) * ((k / w) as f64 - sy) > r * r;
+                tracks.get(&ri).and_then(|t| near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k))))
+            }
+        };
+        let Some(goal) = goal else { continue };
+        let start = from;
+        // A hidden village's track keeps off the ground round its realm's town but the town's own
+        // track (one gate).
+        let keep_out = match link.b {
+            End::Track(ri) => {
+                let s = &settlements[ri];
+                Some(((s.cell % w) as f64, (s.cell / w) as f64, crate::town::road_trim_radius(s.planned, s.planned_pop) / cell + 2.0))
+            }
+            _ => None,
+        };
         // Near a town or city at either end, the king's roads keep to themselves (no shared trunk),
         // each arriving at its own gate. Roads and tracks keep to a fixed zone round the town
         // instead: inside it they share only a major road, and leaving the open ground for the
@@ -1082,6 +1175,21 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 c += costs.river(inp, i, nb, mids);
                 let (nx, ny) = ((nb % w) as f64, (nb / w) as f64);
                 let near = |x: f64, y: f64| town_ends.iter().any(|&(tx, ty, tr)| (x - tx) * (x - tx) + (y - ty) * (y - ty) <= tr * tr);
+                // Round an isolated realm the others go the long way.
+                if !realm_link {
+                    for &(rx, ry) in &realms {
+                        let d2 = ((nx - rx) * (nx - rx) + (ny - ry) * (ny - ry)) / (avoid * avoid);
+                        if d2 < 1.0 {
+                            c *= 1.0 + 12.0 * (1.0 - d2);
+                        }
+                    }
+                }
+                if let Some((kx, ky, kr)) = keep_out
+                    && road_class[nb] == u8::MAX
+                    && (nx - kx) * (nx - kx) + (ny - ky) * (ny - ky) <= kr * kr
+                {
+                    c += JOIN_BAN / run;
+                }
                 if kings {
                     if road_class[nb] != u8::MAX && !near(nx, ny) {
                         c *= if drawn_only.get(nb).copied().unwrap_or(false) { 0.5 } else { 0.2 };
@@ -1116,6 +1224,15 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
             path
         };
         let Some(path) = found else { continue };
+        if !realm_link {
+            for &c in &path {
+                if let Some(o) = outside.get_mut(c as usize) {
+                    *o = true;
+                }
+            }
+        } else if let (End::Town(i), End::Net) = (link.a, link.b) {
+            tracks.insert(i, path.clone());
+        }
         if class <= MAJOR {
             major_steps.extend(path.windows(2).map(|p| (p[0].min(p[1]), p[0].max(p[1]))));
         }

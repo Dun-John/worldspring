@@ -318,6 +318,7 @@ fn main() {
             }
         }
         let net = network(&t0, &standing, &gate_counts);
+        realms(&world, &t0);
         let econ = economy(&t0);
         let drawn = drawn_roads(&world, &t0, &standing);
         let steps = stairs(&world, &t0);
@@ -679,6 +680,55 @@ fn along_from(pts: &[P], from: usize, to: usize, reach: f64) -> P {
 /// against the straight line, road length against a minimum spanning tree, junctions outside
 /// settlements (arms, shape, stubs, crossings of two roads), river crossings, roads running beside
 /// roads, gates per town and up, settlements by tier.
+/// Isolated realms: kind, tier, centre, its tracks, villages, the nearest road not its own, walls and gates.
+fn realms(world: &worldgen::World, t0: &T0) {
+    use worldgen::t0::settle::Tier;
+    let sts = &t0.settlements;
+    let d = |a: P, b: P| ((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1])).sqrt();
+    let realms: Vec<usize> = (0..sts.len()).filter(|&i| sts[i].isolated && sts[i].tier >= Tier::Town).collect();
+    say!("  realms: {}", realms.len());
+    for &i in &realms {
+        let s = &sts[i];
+        let c = [s.x, s.y];
+        let villages: Vec<usize> = (0..sts.len()).filter(|&v| sts[v].isolated && sts[v].tier == Tier::Village && d([sts[v].x, sts[v].y], c) < 12.0 * MI).collect();
+        let trim = worldgen::town::road_trim_radius(s.tier, s.population) + 0.3 * MI;
+        let at = |p: P| d(p, c) < trim || villages.iter().any(|&v| d(p, [sts[v].x, sts[v].y]) < 0.3 * MI);
+        let rs = &t0.roads.roads;
+        // Its own roads: those mostly along its routes as found (its track and its villages').
+        let mine: Vec<P> = t0.extra.as_ref().map(|e| e.realm_paths.iter().filter(|p| p.0 == i).flat_map(|p| p.1.iter().copied()).collect()).unwrap_or_default();
+        let own: Vec<bool> = rs.iter().map(|r| at(r.pts[0]) || at(r.pts[r.pts.len() - 1]) || 2 * r.pts.iter().filter(|&&p| mine.iter().any(|&q| d(p, q) < 1.5 * t0.cell_ft)).count() >= r.pts.len()).collect();
+        let tracks: Vec<usize> = (0..rs.len()).filter(|&r| rs[r].pts.len() >= 2 && (d(rs[r].pts[0], c) < trim || d(rs[r].pts[rs[r].pts.len() - 1], c) < trim)).collect();
+        let ends: Vec<String> = tracks
+            .iter()
+            .map(|&r| {
+                let p = &rs[r].pts;
+                let far = if d(p[0], c) < trim { p[p.len() - 1] } else { p[0] };
+                format!("{:?} to ({:.0}, {:.0}) {:.1} mi", rs[r].class, far[0], far[1], d(far, c) / MI)
+            })
+            .collect();
+        let (other, by) = (0..rs.len()).filter(|&r| !own[r]).flat_map(|r| rs[r].pts.iter().map(move |&p| (d(p, c), r))).fold((f64::INFINITY, 0), |a, b| if b.0 < a.0 { b } else { a });
+        let by = rs.get(by).map(|r| format!("{:?} ({:.0}, {:.0})-({:.0}, {:.0})", r.class, r.pts[0][0], r.pts[0][1], r.pts[r.pts.len() - 1][0], r.pts[r.pts.len() - 1][1])).unwrap_or_default();
+        let l = worldgen::town::layout(world, t0, i);
+        let v: Vec<String> = villages.iter().map(|&v| format!("({:.0}, {:.0}) {:.1} mi", sts[v].x, sts[v].y, d([sts[v].x, sts[v].y], c) / MI)).collect();
+        say!(
+            "    realm #{i} {:?} {} at ({:.0}, {:.0}), {:.0} ft up, pop {}: {} track(s) [{}]; nearest other road {:.1} mi ({by}); walls {} gates {}; villages {} [{}]",
+            s.tier,
+            s.kind.name(),
+            c[0],
+            c[1],
+            t0.sample(c[0], c[1], 0.0),
+            s.population,
+            tracks.len(),
+            ends.join("; "),
+            other / MI,
+            l.walls.len(),
+            l.gates.len(),
+            villages.len(),
+            v.join(", ")
+        );
+    }
+}
+
 fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle::Tier, usize)]) -> Value {
     use worldgen::lod::roads::river_crossings;
     use worldgen::t0::roads::{meeting_points, CrossingKind};

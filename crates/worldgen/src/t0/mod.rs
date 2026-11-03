@@ -118,6 +118,8 @@ pub struct T0Extra {
     /// What the towns and up earned, and the roads' traffic.
     pub economy: economy::Report,
     pub traffic: Vec<roads::SegTraffic>,
+    /// Each isolated realm's routes (`roads::Network::realm_paths`).
+    pub realm_paths: Vec<(usize, Vec<[f64; 2]>)>,
 }
 
 impl T0 {
@@ -348,6 +350,8 @@ impl T0 {
         let rinp = roads::Inputs { world, drawn, pre: Default::default(), plan: &plan, ground: &planned, w, h, cell_ft: cell, height: &height, land: &land, biome: &biome, hydro: &hydro, rivers: &rivers, routes: Default::default(), fixed: Default::default() };
         use settle::Tier as T;
         let mut settlements = settle::place(&sinp, Vec::new(), &[T::Metropolis, T::City], None, &mut conflicts);
+        // Isolated realms, before any road is tried (nothing grows up beside them).
+        settlements = settle::place_realms(&sinp, settlements);
         let economy;
         if world.file.params.generated_roads {
             let usage = roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]);
@@ -561,7 +565,7 @@ impl T0 {
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
         t0.sketch_sites(world);
-        t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, economy, traffic: network.traffic });
+        t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, economy, traffic: network.traffic, realm_paths: network.realm_paths });
         t0
     }
 
@@ -942,11 +946,11 @@ impl T0 {
             }
         }
         // Settlements: count, then per settlement: tier, kind, flags (coastal | river << 1 |
-        // capital << 2 | reason << 3), culture as u8; cell u32; x, y f64; population u32; seed u64; the pin's
+        // capital << 2 | reason << 3 | isolated << 7), culture as u8; cell u32; x, y f64; population u32; seed u64; the pin's
         // stroke u32 (`u32::MAX`: none).
         out.extend_from_slice(&(self.settlements.len() as u32).to_le_bytes());
         for s in &self.settlements {
-            out.extend_from_slice(&[s.tier as u8, s.kind as u8, s.coastal as u8 | (s.river as u8) << 1 | (s.capital as u8) << 2 | (s.reason as u8) << 3, s.culture]);
+            out.extend_from_slice(&[s.tier as u8, s.kind as u8, s.coastal as u8 | (s.river as u8) << 1 | (s.capital as u8) << 2 | (s.reason as u8) << 3 | (s.isolated as u8) << 7, s.culture]);
             out.extend_from_slice(&(s.cell as u32).to_le_bytes());
             out.extend_from_slice(&s.x.to_le_bytes());
             out.extend_from_slice(&s.y.to_le_bytes());
@@ -1036,7 +1040,7 @@ impl T0 {
             settlements.push(settle::Settlement {
                 tier: settle::Tier::from_u8(tier),
                 kind: settle::SettleKind::from_u8(kind),
-                reason: settle::Reason::from_u8(flags >> 3),
+                reason: settle::Reason::from_u8((flags >> 3) & 0x0f),
                 cell,
                 x,
                 y,
@@ -1050,6 +1054,7 @@ impl T0 {
                 // (Only generating reads them: nothing is routed again from a loaded world.)
                 planned: settle::Tier::from_u8(tier),
                 planned_pop: population,
+                isolated: flags & 0x80 != 0,
             });
         }
         let count = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
