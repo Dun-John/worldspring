@@ -397,7 +397,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     }
     drop_parallel(&mut roads, &towns);
     join_through(&mut roads, &towns, cell, &dry_ft);
-    if drop_lenses(&mut roads, &towns) {
+    if drop_lenses(&mut roads, &towns, &ground_ft, &dry_ft, &crossings) {
         join_through(&mut roads, &towns, cell, &dry_ft);
     }
     // (Squaring can lay a branch along another leaving the same junction: one road out to where they part.)
@@ -2289,10 +2289,15 @@ fn fillet(r: &mut RoadPath, at: usize, cell: f64, dry: &dyn Fn(f64, f64) -> bool
 
 /// A road that runs within a mile of a way at least as good between its two ends, no more
 /// than 35% longer, only makes a lens of two roads: it goes. So do two roads of one class
-/// running straight on through a crossroads (the other two roads keep it). The best roads
-/// are kept first; drawn roads always. Returns whether any went.
-fn drop_lenses(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> bool {
+/// running straight on through a crossroads (the other two roads keep it), or through a
+/// junction where a side road joins them (a lesser road beside a better one between the same
+/// two junctions): the side road goes on along as little of one of the two as it needs, then
+/// straight to the way (within `BESIDE`) on a ramp in its grade, dry, crossing no road, its
+/// junction clear of river crossings (else the two stay). The best roads are kept first; drawn
+/// roads always. Returns whether any went.
+fn drop_lenses(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], ground: &dyn Fn([f64; 2]) -> f64, dry: &dyn Fn(f64, f64) -> bool, crossings: &dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>) -> bool {
     const NEAR: f64 = 5280.0;
+    const BESIDE: f64 = 2_000.0;
     let mut any = false;
     // (Ones that kept their road once keep it: the network only loses roads.)
     let mut tried: std::collections::BTreeSet<Vec<u64>> = Default::default();
@@ -2304,15 +2309,17 @@ fn drop_lenses(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> bool {
             at.entry(e.0).or_default().push(i);
             at.entry(e.1).or_default().push(i);
         }
-        // Candidates, worst first: single roads, then straight pairs through a crossroads.
-        let mut cands: Vec<(RoadClass, Vec<usize>, (i64, i64), (i64, i64))> = Vec::new();
+        // Candidates, worst first: single roads, then straight pairs through a crossroads or a
+        // side road's junction.
+        // (With the side road joining a pair, and that junction.)
+        let mut cands: Vec<(RoadClass, Vec<usize>, (i64, i64), (i64, i64), Option<(usize, (i64, i64))>)> = Vec::new();
         for (i, r) in roads.iter().enumerate() {
             if r.stroke.is_none() && ends[i].0 != ends[i].1 {
-                cands.push((r.class, vec![i], ends[i].0, ends[i].1));
+                cands.push((r.class, vec![i], ends[i].0, ends[i].1, None));
             }
         }
         for (k, list) in &at {
-            if list.len() < 4 || k.0 == i64::MIN {
+            if list.len() < 3 || k.0 == i64::MIN {
                 continue;
             }
             for (u, &a) in list.iter().enumerate() {
@@ -2321,6 +2328,15 @@ fn drop_lenses(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> bool {
                     if a == b || ra.class != rb.class || ra.stroke.is_some() || rb.stroke.is_some() {
                         continue;
                     }
+                    let side = if list.len() == 3 {
+                        let s = list.iter().copied().find(|&s| s != a && s != b);
+                        match s {
+                            Some(s) if roads[s].class >= ra.class && roads[s].stroke.is_none() && ends[s].0 != ends[s].1 => Some((s, *k)),
+                            _ => continue,
+                        }
+                    } else {
+                        None
+                    };
                     let far = |i: usize| if ends[i].0 == *k { ends[i].1 } else { ends[i].0 };
                     let heading = |i: usize| {
                         let r = &roads[i];
@@ -2330,14 +2346,16 @@ fn drop_lenses(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> bool {
                     if far(a) != far(b) && dot2(heading(a), heading(b)) <= THROUGH {
                         let mut set = vec![a, b];
                         set.sort_unstable();
-                        cands.push((ra.class, set, far(a), far(b)));
+                        cands.push((ra.class, set, far(a), far(b), side));
                     }
                 }
             }
         }
         cands.sort_by(|x, y| y.0.cmp(&x.0).then(x.1.cmp(&y.1)));
-        let mut gone: Option<Vec<usize>> = None;
-        for (class, set, p, q) in cands {
+        // (The side road's new way on: its index, at its start, the points and heights out to
+        // the way, and the way's road cut where it meets it.)
+        let mut gone: Option<(Vec<usize>, Option<(usize, bool, Vec<[f64; 2]>, Vec<f32>, usize, Option<f64>)>)> = None;
+        for (class, set, p, q, side) in cands {
             if !tried.insert(set.iter().map(|&i| lens[i].to_bits()).collect()) {
                 continue;
             }
@@ -2385,12 +2403,117 @@ fn drop_lenses(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> bool {
                 let n = (s[s.len() - 1] / 300.0).ceil().max(1.0) as usize;
                 (0..=n).all(|k| near(point_at(&r.pts, &s, s[s.len() - 1] * k as f64 / n as f64)))
             });
-            if along {
-                gone = Some(set);
+            if !along {
+                continue;
+            }
+            let Some((sd, k)) = side else {
+                gone = Some((set, None));
                 break;
+            };
+            if way.contains(&sd) {
+                continue;
+            }
+            // The side road on along one of the two from the junction (as little as it can) and
+            // then straight to the nearest point of the way.
+            let r = &roads[sd];
+            let start = ends[sd].0 == k;
+            let gmax = r.class.max_grade();
+            let attach = |pp: [f64; 2], zp: f64| -> Option<(usize, Option<f64>, f64, Vec<[f64; 2]>, Vec<f32>)> {
+                let mut best_e: Option<(usize, f64, f64)> = None;
+                for &e in &way {
+                    let (t, d) = project(pp, &roads[e].pts, &arc(&roads[e].pts));
+                    if best_e.is_none_or(|b| d < b.2) {
+                        best_e = Some((e, t, d));
+                    }
+                }
+                let (e, mut t, d) = best_e?;
+                if d > BESIDE {
+                    return None;
+                }
+                let ep = &roads[e].pts;
+                let es = arc(ep);
+                let elen = es[es.len() - 1];
+                // (Near an end of that road, its end: the junction there.)
+                let mid = t > 300.0 && t < elen - 300.0;
+                if !mid {
+                    t = if t <= 300.0 { 0.0 } else { elen };
+                }
+                let qp = if mid { point_at(ep, &es, t) } else if t == 0.0 { ep[0] } else { ep[ep.len() - 1] };
+                let zq = val_at(&roads[e].z, &es, t) as f64;
+                let dq = dist(pp, qp);
+                if dq < 1.0 {
+                    return Some((e, mid.then_some(t), 0.0, vec![qp], vec![zq as f32]));
+                }
+                let n = (dq / 100.0).ceil().max(1.0) as usize;
+                let ramp: Vec<[f64; 2]> = (0..=n).map(|i| [pp[0] + (qp[0] - pp[0]) * i as f64 / n as f64, pp[1] + (qp[1] - pp[1]) * i as f64 / n as f64]).collect();
+                let fits = (zq - zp).abs() <= 0.85 * gmax * dq
+                    && ramp.iter().enumerate().all(|(i, p)| {
+                        let u = dq * i as f64 / n as f64;
+                        dry(p[0], p[1]) && (ground(*p) - (zp + (zq - zp) * u / dq)).abs() <= 25.0 + gmax * u.min(dq - u)
+                    })
+                    && crossings(&ramp).is_empty()
+                    && (0..roads.len()).filter(|i| !set.contains(i) && *i != sd).all(|i| !ramp[..n].windows(2).any(|w| crosses(w[0], w[1], &roads[i].pts)))
+                    && (!mid || crossings(ep).iter().all(|&(x, hw)| dist(x, qp) >= JUNCTION_WET + WET_STRAY * hw));
+                let (z0, z1) = (zp as f32, zq as f32);
+                fits.then(|| (e, mid.then_some(t), dq, ramp[1..].to_vec(), (1..=n).map(|i| z0 + (z1 - z0) * i as f32 / n as f32).collect()))
+            };
+            // (Each of the two from the junction, in 100-ft steps: the first that reaches; the
+            // shorter way of the two.)
+            let mut pick: Option<(f64, Vec<[f64; 2]>, Vec<f32>, usize, Option<f64>)> = None;
+            for &i in &set {
+                let l = if end_key(roads[i].pts[0], towns) == k { roads[i].clone() } else { flipped(&roads[i]) };
+                let s = arc(&l.pts);
+                let len = s[s.len() - 1];
+                let mut tp: f64 = 0.0;
+                loop {
+                    let tp_c = tp.min(len);
+                    let pp = if tp_c >= len { l.pts[l.pts.len() - 1] } else { point_at(&l.pts, &s, tp_c) };
+                    let zp = val_at(&l.z, &s, tp_c);
+                    if let Some((e, cut, dq, ramp, zs)) = attach(pp, zp as f64) {
+                        if pick.as_ref().is_none_or(|p| tp_c + dq < p.0) {
+                            let keep: Vec<usize> = (1..l.pts.len()).filter(|&j| s[j] < tp_c - 5.0).collect();
+                            let mut pts: Vec<[f64; 2]> = keep.iter().map(|&j| l.pts[j]).collect();
+                            let mut z: Vec<f32> = keep.iter().map(|&j| l.z[j]).collect();
+                            if tp_c > 5.0 && dq >= 1.0 {
+                                pts.push(pp);
+                                z.push(zp);
+                            }
+                            pts.extend(ramp);
+                            z.extend(zs);
+                            pick = Some((tp_c + dq, pts, z, e, cut));
+                        }
+                        break;
+                    }
+                    if tp_c >= len {
+                        break;
+                    }
+                    tp += 100.0;
+                }
+            }
+            let Some((_, pts, zs, e, cut)) = pick else { continue };
+            gone = Some((set, Some((sd, start, pts, zs, e, cut))));
+            break;
+        }
+        let Some((mut set, side)) = gone else { break };
+        if let Some((sd, start, pts, zs, e, cut)) = side {
+            let r = &mut roads[sd];
+            if start {
+                r.pts.splice(0..0, pts.iter().rev().copied());
+                r.z.splice(0..0, zs.iter().rev().copied());
+                r.wander.splice(0..0, std::iter::repeat_n(0.0, pts.len()));
+            } else {
+                r.pts.extend(pts.iter().copied());
+                r.z.extend(zs.iter().copied());
+                r.wander.extend(std::iter::repeat_n(0.0, pts.len()));
+            }
+            if let Some(t) = cut {
+                let s = arc(&roads[e].pts);
+                let q = point_at(&roads[e].pts, &s, t);
+                let mut pieces = split_road(&roads[e], &s, &[(t, q)]);
+                roads[e] = pieces.remove(0);
+                roads.extend(pieces);
             }
         }
-        let Some(mut set) = gone else { break };
         set.sort_unstable_by(|x, y| y.cmp(x));
         for i in set {
             roads.remove(i);
