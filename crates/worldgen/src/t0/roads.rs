@@ -2071,9 +2071,12 @@ fn drop_twin_link(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], small: &
 /// A lesser road that crosses a better one and then runs beside it to where that one ends (round
 /// a town, where it may not join it, it crossed over to a join outside) cuts the better road's
 /// corner: it ends where it crosses it instead, a junction there (to be squared clear of rivers).
+/// So does one that runs beside a better feeder out of a settlement or junction and crosses the
+/// road that feeder ends on (a track alongside a town's road to the king's road and over it).
 /// Returns those junctions.
 fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<[f64; 2]> {
     const NEAR: f64 = 5280.0;
+    const FEED_FT: f64 = 3.0 * 5280.0;
     let mut cuts: Vec<[f64; 2]> = Vec::new();
     let in_town = |p: [f64; 2]| towns.iter().any(|&(c, r)| dist(c, p) < 1.2 * r + 100.0);
     // Where segment a–b crosses c–d: the fractions along each.
@@ -2089,6 +2092,13 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
     };
     for _ in 0..50 {
         let mut cut: Option<(usize, usize, f64, f64, [f64; 2], bool)> = None;
+        let keys: Vec<((i64, i64), (i64, i64))> = roads.iter().map(|r| (end_key(r.pts[0], towns), end_key(*r.pts.last().unwrap(), towns))).collect();
+        // Per road, the roads that may pass by each of its ends (their bounds round it).
+        let boxes: Vec<[f64; 4]> = roads.iter().map(|r| r.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])).collect();
+        let by_end: Vec<[Vec<usize>; 2]> = roads
+            .iter()
+            .map(|r| [r.pts[0], *r.pts.last().unwrap()].map(|p| (0..boxes.len()).filter(|&k| p[0] >= boxes[k][0] - 60.0 && p[0] <= boxes[k][2] + 60.0 && p[1] >= boxes[k][1] - 60.0 && p[1] <= boxes[k][3] + 60.0).collect()))
+            .collect();
         'find: for (i, r) in roads.iter().enumerate() {
             if r.stroke.is_some() || r.class == RoadClass::KingsRoad || r.pts.len() < 3 {
                 continue;
@@ -2097,18 +2107,51 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
             for at_end in [true, false] {
                 let e = if at_end { *r.pts.last().unwrap() } else { r.pts[0] };
                 let ek = end_key(e, towns);
-                if ek.0 == i64::MIN {
-                    continue;
-                }
+                let at_town = ek.0 == i64::MIN;
+                // (Or a better road from there ends on the one it crosses, `r` beside that one out
+                // to it: the feeder, its far end, its length.)
+                let head = r.pts.iter().zip(rs.iter()).filter(|&(_, &sr)| (if at_end { rs[rs.len() - 1] - sr } else { sr }) <= FEED_FT + 1_000.0).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, (p, _)| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+                let feeders: Vec<(usize, [f64; 2], f64, &Vec<usize>)> = (0..roads.len())
+                    .filter(|&f| f != i && roads[f].class < r.class && (keys[f].0 == ek) != (keys[f].1 == ek))
+                    .map(|f| {
+                        let e = (keys[f].0 == ek) as usize;
+                        (f, if e == 1 { *roads[f].pts.last().unwrap() } else { roads[f].pts[0] }, road_len(&roads[f]), &by_end[f][e])
+                    })
+                    .collect();
                 for (k, t) in roads.iter().enumerate() {
-                    if k == i || t.class >= r.class || t.pts.len() < 2 || (end_key(t.pts[0], towns) != ek && end_key(*t.pts.last().unwrap(), towns) != ek) {
+                    if k == i || t.class >= r.class || t.pts.len() < 2 {
+                        continue;
+                    }
+                    let direct = !at_town && (keys[k].0 == ek || keys[k].1 == ek);
+                    let near_t: Vec<&(usize, [f64; 2], f64, &Vec<usize>)> = if direct { Vec::new() } else { feeders.iter().filter(|q| q.0 != k && q.3.binary_search(&k).is_ok()).collect() };
+                    if !direct && near_t.is_empty() {
                         continue;
                     }
                     let ts = arc(&t.pts);
+                    // (Where each feeder ends on `t`, which, how long.)
+                    let feeds: Vec<(f64, usize, f64)> = near_t
+                        .iter()
+                        .filter_map(|&&(f, far, lf, _)| {
+                            let (s, d) = project(far, &t.pts, &ts);
+                            (d < 60.0).then_some((s, f, lf))
+                        })
+                        .collect();
+                    if !direct && feeds.is_empty() {
+                        continue;
+                    }
                     // The crossing nearest that end.
                     let mut best: Option<(f64, f64, [f64; 2])> = None;
+                    // (Beside a feeder, within a few miles of that end: those stretches of `t` by it.)
+                    let segs: Vec<usize> = if direct {
+                        (0..t.pts.len() - 1).collect()
+                    } else {
+                        (0..t.pts.len() - 1).filter(|&b| t.pts[b].iter().zip(t.pts[b + 1].iter()).enumerate().all(|(d, (p, q))| p.max(*q) >= head[d] && p.min(*q) <= head[d + 2])).collect()
+                    };
                     for a in 0..r.pts.len() - 1 {
-                        for b in 0..t.pts.len() - 1 {
+                        if !direct && (if at_end { rs[rs.len() - 1] - rs[a + 1] } else { rs[a] }) > FEED_FT {
+                            continue;
+                        }
+                        for &b in &segs {
                             if let Some((u, v)) = meet(r.pts[a], r.pts[a + 1], t.pts[b], t.pts[b + 1]) {
                                 let x = [r.pts[a][0] + u * (r.pts[a + 1][0] - r.pts[a][0]), r.pts[a][1] + u * (r.pts[a + 1][1] - r.pts[a][1])];
                                 let (sr, st) = (rs[a] + u * (rs[a + 1] - rs[a]), ts[b] + v * (ts[b + 1] - ts[b]));
@@ -2128,8 +2171,17 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
                     }
                     // The stretch past the crossing keeps beside the better road.
                     let rest = sub_line(&r.pts, &rs, lo, hi);
-                    let t_rest = if end_key(t.pts[0], towns) == ek { st } else { ts[ts.len() - 1] - st };
-                    if from_end <= 1.5 * t_rest && rest.iter().all(|p| line_dist(*p, &t.pts) < NEAR) {
+                    let beside = if direct {
+                        let t_rest = if end_key(t.pts[0], towns) == ek { st } else { ts[ts.len() - 1] - st };
+                        from_end <= 1.5 * t_rest && rest.iter().all(|p| line_dist(*p, &t.pts) < NEAR)
+                    } else {
+                        // (Not where the way round over the feeder is much the longer.)
+                        feeds.iter().any(|&(s, f, lf)| {
+                            let t_rest = lf + (st - s).abs();
+                            from_end <= 1.5 * t_rest && t_rest <= 1.6 * from_end + 2_000.0 && rest.iter().all(|p| line_dist(*p, &t.pts).min(line_dist(*p, &roads[f].pts)) < NEAR)
+                        })
+                    };
+                    if beside {
                         cut = Some((i, k, sr, st, x, at_end));
                         break 'find;
                     }

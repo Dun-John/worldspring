@@ -816,8 +816,10 @@ const SADDLE_REACH: f64 = 3.0 * 5_280.0;
 
 /// A saddle at `p` on a road running along `u` (unit): its high point along the road (the ground
 /// falls 400 ft along it both ways within 3 miles, rising nowhere more than 60 ft above it) with
-/// the ground rising 300 ft on both sides across it, and 1,000 ft up. The one test for where a
-/// king's trial route tops a pass (`roads::preview`) and for a pass town where it stands.
+/// the ground rising 300 ft on both sides across it, and 1,000 ft up; and close up a notch (steep
+/// flanks within a mile, the road climbing to it both ways within a mile and a half). The one
+/// test for where a king's trial route tops a pass (`roads::preview`) and for a pass town where
+/// it stands.
 pub(crate) fn saddle_at(ground: &dyn Fn(f64, f64) -> f64, p: [f64; 2], u: [f64; 2], sea: f64) -> bool {
     let h0 = ground(p[0], p[1]);
     if h0 - sea < 1_000.0 {
@@ -828,7 +830,13 @@ pub(crate) fn saddle_at(ground: &dyn Fn(f64, f64) -> f64, p: [f64; 2], u: [f64; 
     let falls = |d: [f64; 2]| (1..=steps).all(|t| at_t(d, t) <= h0 + 60.0) && (2..=steps).any(|t| at_t(d, t) <= h0 - 400.0);
     let rises = |d: [f64; 2]| (1..=steps).any(|t| at_t(d, t) >= h0 + 300.0);
     let n = [-u[1], u[0]];
-    falls(u) && falls([-u[0], -u[1]]) && rises(n) && rises([-n[0], -n[1]])
+    // Close up, a notch between heights: steep ground 350 ft above the town on both flanks
+    // within a mile, and the road climbing to it from both ways (the ground 200 ft below it
+    // within a mile and a half), in steps of an eighth of a mile.
+    let near = |d: [f64; 2], m: i64| (1..=m).map(move |t| ground(p[0] + d[0] * t as f64 * 660.0, p[1] + d[1] * t as f64 * 660.0));
+    let flank = |d: [f64; 2]| near(d, 8).any(|z| z >= h0 + 350.0);
+    let climb = |d: [f64; 2]| near(d, 12).any(|z| z <= h0 - 200.0);
+    falls(u) && falls([-u[0], -u[1]]) && rises(n) && rises([-n[0], -n[1]]) && flank(n) && flank([-n[0], -n[1]]) && climb(u) && climb([-u[0], -u[1]])
 }
 
 /// Checks each settlement's reason where it finally stands (after `snap_to_water` and the roads
