@@ -147,10 +147,17 @@ pub(super) fn castle<G: Ground>(
             let u = mul(sub(b, a), 1.0 / el);
             let n = mul([-u[1], u[0]], CURTAIN_IN);
             let mid = lerp(a, b, 0.5);
-            let on_line = town_walls
+            // (How far in from the block's side the wall's line runs there, at most 3 ft: the side
+            // stands back 30 ft from the wall itself, not from the block.)
+            let line_in = town_walls
                 .iter()
-                .any(|&(q, r)| dist(q, r) >= 1.0 && cross(u, mul(sub(r, q), 1.0 / dist(q, r))).abs() < 0.12 && seg_dist(mid, q, r) <= 3.0);
-            if on_line && !along(add(a, n), add(b, n)) { 30.0 } else { CURTAIN_IN }
+                .filter(|&&(q, r)| dist(q, r) >= 1.0 && cross(u, mul(sub(r, q), 1.0 / dist(q, r))).abs() < 0.12 && seg_dist(mid, q, r) <= 3.0)
+                .map(|&(q, r)| [q, r].iter().map(|&p| dot(sub(p, mid), mul(n, 1.0 / CURTAIN_IN))).fold(f64::MIN, f64::max))
+                .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))));
+            match line_in {
+                Some(o) if !along(add(a, n), add(b, n)) => 31.0 + o.clamp(0.0, 4.0),
+                _ => CURTAIN_IN,
+            }
         })
         .collect();
     let mut outer = inset(&block, &d);
@@ -205,6 +212,42 @@ pub(super) fn castle<G: Ground>(
             if cut.len() >= 3 && area(&cut).abs() >= 0.75 * area(&outer).abs() {
                 outer = cut;
             }
+        }
+    }
+    // A stretch of the town wall running beside a side of the bound, outside it and nearer than
+    // 30 ft (where the wall steps out round a corner or a tower): the side stands back 30 ft
+    // from it, a strip a street can take, not a gap a curtain would leave against the wall.
+    for &(q, r) in town_walls {
+        let (ql, n) = (dist(q, r), outer.len());
+        if ql < 1.0 || n < 3 {
+            continue;
+        }
+        let uq = mul(sub(r, q), 1.0 / ql);
+        let close = (0..n).any(|e| {
+            let (a, b) = (outer[e], outer[(e + 1) % n]);
+            let el = dist(a, b);
+            if el < 1.0 || cross(mul(sub(b, a), 1.0 / el), uq).abs() >= 0.26 || along(a, b) {
+                return false;
+            }
+            let ue = mul(sub(b, a), 1.0 / el);
+            let (t0, t1) = (dot(sub(q, a), ue), dot(sub(r, a), ue));
+            let (lo, hi) = (t0.min(t1).max(0.0), t0.max(t1).min(el));
+            if hi - lo < 25.0 {
+                return false;
+            }
+            let on_wall = |t: f64| lerp(q, r, ((t - t0) / (t1 - t0)).clamp(0.0, 1.0));
+            let (pl, ph) = (on_wall(lo), on_wall(hi));
+            let near = seg_dist(pl, a, b).min(seg_dist(ph, a, b));
+            (2.5..32.0).contains(&near) && !contains(&outer, lerp(pl, ph, 0.5))
+        });
+        if !close {
+            continue;
+        }
+        let nrm = [-uq[1], uq[0]];
+        let nrm = if dot(sub(centroid(&outer), q), nrm) >= 0.0 { nrm } else { mul(nrm, -1.0) };
+        let cut = clip_plain(&outer, mul(nrm, -1.0), -(dot(q, nrm) + 32.0));
+        if cut.len() >= 3 && area(&cut).abs() >= 0.75 * area(&outer).abs() {
+            outer = cut;
         }
     }
     if outer.len() < 3 {

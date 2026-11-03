@@ -410,6 +410,9 @@ pub fn build(inp: &Inputs, settlements: &[Settlement]) -> Network {
     while drop_twin_link(&mut roads, &towns, &small) {
         join_through(&mut roads, &towns, cell, &dry_ft);
     }
+    // (A road dropped above can leave two along one line out of where it met them.)
+    unshare(&mut roads, &towns);
+    join_through(&mut roads, &towns, cell, &dry_ft);
 
     // --- 4. Crossings and waystations.
     let mut crossings: Vec<Crossing> = Vec::new();
@@ -505,6 +508,17 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell:
             if ra != rb {
                 parent[ra] = rb;
                 add(a, b, &mut edges);
+            }
+        }
+        // (A town or city farther than that from any other still has a road, to the nearest.)
+        if class != RoadClass::Track {
+            for &a in &members {
+                if edges.iter().any(|e| e.0 == a || e.1 == a) {
+                    continue;
+                }
+                if let Some(&b) = members.iter().filter(|&&b| b != a).min_by(|&&x, &&y| d(a, x).total_cmp(&d(a, y)).then(x.cmp(&y))) {
+                    add(a, b, &mut edges);
+                }
             }
         }
     }
@@ -1000,6 +1014,8 @@ pub struct Preview {
     pub usage: Vec<u8>,
     /// Per cell: a junction (3+ distinct route edges meet there).
     pub junction: Vec<bool>,
+    /// Per cell: the top of a pass, where a route climbs over high ground between valleys.
+    pub pass: Vec<bool>,
 }
 
 pub fn preview(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) -> Preview {
@@ -1007,8 +1023,24 @@ pub fn preview(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) 
     let (_, paths) = route(inp, settlements, &edges);
     let n = inp.w * inp.h;
     let mut usage = vec![0u8; n];
+    let mut pass = vec![false; n];
     let mut links: std::collections::BTreeSet<(u32, u32)> = Default::default();
+    // A pass: the route's highest point for 6 cells either way, well up, with the way down at
+    // least 600 ft on both sides within 20 cells.
+    let sea = inp.world.params().sea_level_ft;
     for (_, path, _) in &paths {
+        let hs: Vec<f64> = path.iter().map(|&c| inp.height[c as usize]).collect();
+        let m = hs.len();
+        for i in 1..m.saturating_sub(1) {
+            if hs[i] - sea < 1_200.0 || (i.saturating_sub(6)..(i + 7).min(m)).any(|j| hs[j] > hs[i]) {
+                continue;
+            }
+            let lo_before = hs[i.saturating_sub(20)..i].iter().copied().fold(f64::MAX, f64::min);
+            let lo_after = hs[i + 1..(i + 21).min(m)].iter().copied().fold(f64::MAX, f64::min);
+            if hs[i] - lo_before >= 600.0 && hs[i] - lo_after >= 600.0 {
+                pass[path[i] as usize] = true;
+            }
+        }
         for &c in path {
             usage[c as usize] = usage[c as usize].saturating_add(1);
         }
@@ -1021,7 +1053,7 @@ pub fn preview(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) 
         degree[a as usize] = degree[a as usize].saturating_add(1);
         degree[b as usize] = degree[b as usize].saturating_add(1);
     }
-    Preview { usage, junction: degree.iter().map(|&d| d >= 3).collect() }
+    Preview { usage, junction: degree.iter().map(|&d| d >= 3).collect(), pass }
 }
 
 fn passable_fn<'a>(inp: &'a Inputs) -> impl Fn(usize) -> bool + 'a {
@@ -2636,17 +2668,25 @@ fn square_junctions(
 /// Two roads leaving a junction (away from settlements) along one line, side by side (the grid
 /// routed both along the same cells), become one road out to where they part: the better one
 /// (class, then length) carries both, its first stretch taking the better class, and the other
-/// leaves it there (that junction is squared in its turn). One pair at a time, at most 200.
+/// leaves it there (that junction is squared in its turn). So does one that wanders off first
+/// and comes back to run along the other (two roads down one valley from a pass, each with its
+/// own switchbacks); of only two roads there, the stretch to where they part goes. One pair at a
+/// time, at most 200.
 fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
     const TOL: f64 = 150.0;
     const STEP: f64 = 50.0;
+    const LATE: f64 = 4.0 * 5280.0;
     let mut tried: std::collections::BTreeSet<(u64, u64)> = Default::default();
     for _ in 0..200 {
         let ends = ends_by_point(roads);
         let mut done = false;
         for (k, list) in &ends {
             let j = [f64::from_bits(k.0), f64::from_bits(k.1)];
-            if list.len() < 3 || tried.contains(k) || towns.iter().any(|&(t, r)| dist(t, j) < r) || list.iter().any(|e| roads[e.0].stroke.is_some()) {
+            if list.len() < 2 || tried.contains(k) || towns.iter().any(|&(t, r)| dist(t, j) < r) || list.iter().any(|e| roads[e.0].stroke.is_some()) {
+                continue;
+            }
+            // (Two ends at a settlement's edge are its ways in, not a spike.)
+            if list.len() == 2 && towns.iter().any(|&(t, r)| dist(t, j) < 2.0 * r + 1_000.0) {
                 continue;
             }
             let mut ids: Vec<usize> = list.iter().map(|e| e.0).collect();
@@ -2664,9 +2704,28 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
                     let (c, o) = if key(x) <= key(y) { (x, y) } else { (y, x) };
                     let (os, cs) = (&arcs[o], &arcs[c]);
                     let (olen, clen) = (os[os.len() - 1], cs[cs.len() - 1]);
+                    // (One that wanders off first, a loop or a switchback, and comes back to run
+                    // along the other a good way from near the junction is laid on it all the same.)
+                    let head = sub_line(&legs[c].pts, cs, 0.0, clen.min(2.0 * LATE + 5_000.0));
+                    let near = |t: f64| line_dist(point_at(&legs[o].pts, os, t), &head) < TOL;
                     let mut shared = 0.0;
-                    while shared + STEP < olen && line_dist(point_at(&legs[o].pts, os, shared + STEP), &legs[c].pts) < TOL {
+                    while shared + STEP < olen && near(shared + STEP) {
                         shared += STEP;
+                    }
+                    if shared < 300.0 {
+                        let mut from = shared + STEP;
+                        while from < LATE && from + STEP < olen && !near(from) {
+                            from += STEP;
+                        }
+                        let mut end = from;
+                        while from < LATE && end + STEP < olen && near(end + STEP) {
+                            end += STEP;
+                        }
+                        // (Not where the other's way there is much the longer.)
+                        let via = project(point_at(&legs[o].pts, os, from), &legs[c].pts, cs).0;
+                        if end - from >= 1_500.0 && via <= 1.5 * from + 500.0 {
+                            shared = end;
+                        }
                     }
                             // (One along the other all the way keeps only its last bit, to where it ends.)
                     if shared < 300.0 {
@@ -2685,6 +2744,11 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
             let q = point_at(&lc.pts, &arcs[c], at);
             let mut pieces = split_road(lc, &arcs[c], &[(at, q)]);
             pieces[0].class = lc.class.min(lo.class);
+            // (Two roads only, out and back along one line: the stretch to where they part
+            // leads nowhere and goes.)
+            if list.len() == 2 {
+                pieces.remove(0);
+            }
             let os = &arcs[o];
             let rest: Vec<usize> = (0..lo.pts.len()).filter(|&i| os[i] > shared + 5.0).collect();
             let mut pts = vec![q];
@@ -2694,6 +2758,9 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) {
             z.extend(rest.iter().map(|&i| lo.z[i]));
             wander.extend(rest.iter().map(|&i| lo.wander[i]));
             pieces.push(RoadPath { class: lo.class, pts, z, wander, stroke: None });
+            if pieces.iter().any(|p| p.pts.len() < 2 || road_len(p) < 1.0) {
+                continue;
+            }
             let mut gone = vec![list[c].0, list[o].0];
             gone.sort_unstable_by(|x, y| y.cmp(x));
             for g in gone {

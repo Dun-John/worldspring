@@ -76,14 +76,14 @@ pub enum Reason {
     Confluence,
     /// Where a river becomes too small for boats.
     Head,
-    /// The lowest point a big river can be bridged.
+    /// The lowest point a big river can be bridged, or a ford or bridge on a road.
     Crossing,
     Ore,
     Timber,
     Fishing,
-    /// A road over high ground (towns and villages).
+    /// The top of a pass on a king's road (towns).
     Pass,
-    /// A road junction (towns and villages).
+    /// A road junction (towns).
     Crossroads,
     /// Farmland within reach.
     Food,
@@ -263,34 +263,112 @@ fn ground(inp: &Inputs) -> Ground {
             }
         }
     };
-    // A river is navigable once as wide as a big river; a king's road bridges up to 250 ft.
-    let nav_q = big_river;
+    // A king's road bridges up to 250 ft.
     let bridge_q = super::hydro::RIVER_Q * libm::pow(250.0 / 14.0, 1.0 / 0.6);
+    // Where tributaries join (the cells their chains end on).
+    let mut joined = vec![false; n];
+    for r in &inp.hydro.rivers {
+        if r.mouth == Mouth::Confluence
+            && let (Some(&last), Some(&q)) = (r.cells.last(), r.q.last())
+            && q as f64 >= river_q * 3.0
+        {
+            joined[last as usize] = true;
+        }
+    }
+    // Boats go up the world's big river systems (those reaching the sea or a lake) as far as a
+    // river carries a good share of what its greater systems carry at their mouths: a threshold
+    // from the world's own discharges, not a fixed one, so most of them have a head.
+    let mut mouths: Vec<f64> = inp.hydro.rivers.iter().filter(|r| matches!(r.mouth, Mouth::Ocean | Mouth::Lake)).map(|r| r.q.iter().fold(0.0f32, |a, &b| a.max(b)) as f64).filter(|&q| q >= big_river).collect();
+    mouths.sort_by(|a, b| b.total_cmp(a));
+    mouths.truncate(8);
+    let nav_q = mouths.get(mouths.len() / 2).map_or(big_river, |&m| (0.25 * m).max(0.5 * big_river));
+    let rivers = &inp.hydro.rivers;
+    // Each chain's system (the chain reaching the sea, a lake or its end) and how many cells its
+    // end lies up from that system's mouth, along the flow.
+    let mut down: Vec<Option<(usize, usize)>> = vec![None; rivers.len()];
+    for c in 0..rivers.len() {
+        let mut path = vec![c];
+        while let Some(&t) = path.last()
+            && down[t].is_none()
+            && path.len() < 256
+        {
+            match rivers[t].into.filter(|&p| p < rivers.len() && !path.contains(&p)) {
+                Some(p) => path.push(p),
+                None => {
+                    down[t] = Some((t, 0));
+                    break;
+                }
+            }
+        }
+        for k in (0..path.len()).rev() {
+            let t = path[k];
+            if down[t].is_some() {
+                continue;
+            }
+            let Some(p) = rivers[t].into else { continue };
+            let Some((root, d)) = down[p] else { continue };
+            let pc = &rivers[p].cells;
+            let at = rivers[t].cells.last().and_then(|e| pc.iter().rposition(|x| x == e)).unwrap_or(pc.len().saturating_sub(1));
+            down[t] = Some((root, d + pc.len().saturating_sub(1 + at)));
+        }
+    }
+    // (A head or crossing this near the mouth is the mouth's town.)
+    let up = (crate::core::round(15.0 * 5280.0 / cell) as usize).max(4);
     for r in &inp.hydro.rivers {
         let (Some(&first), Some(&q)) = (r.cells.first(), r.q.last()) else { continue };
         let first = first as usize;
-        if r.cells.len() >= 3 && (inp.hydro.lake_of[first] != NO_LAKE || neighbors(w, h, first).any(|(nb, _)| inp.hydro.lake_of[nb] != NO_LAKE)) {
+        let len = r.cells.len();
+        if len >= 3 && (inp.hydro.lake_of[first] != NO_LAKE || neighbors(w, h, first).any(|(nb, _)| inp.hydro.lake_of[nb] != NO_LAKE)) {
             splat(&mut site, first, Reason::Outlet, 0.7, 1);
         }
-        // (Only a river that reaches the sea or a lake as a big river has a head of navigation worth a town.)
-        if q as f64 >= 3.0 * nav_q && matches!(r.mouth, Mouth::Ocean | Mouth::Lake) {
-            if let Some(i) = r.q.iter().position(|&v| v as f64 >= nav_q)
-                && i > 0
-            {
-                splat(&mut site, r.cells[i] as usize, Reason::Head, 0.9, 1);
+        let to_water = matches!(r.mouth, Mouth::Ocean | Mouth::Lake);
+        if (q as f64) < big_river {
+            continue;
+        }
+        // The lowest point a big river can be bridged: the last cell under the bridge limit; a
+        // river never too wide for one is crossed below its lowest confluence (whose roads meet
+        // there) or a little above its mouth.
+        let at = if q as f64 > bridge_q {
+            r.q.iter().rposition(|&v| (v as f64) <= bridge_q)
+        } else if to_water || q as f64 >= 2.0 * big_river {
+            (0..len.saturating_sub(up / 2)).rev().find(|&j| j > 0 && joined[r.cells[j - 1] as usize]).or(len.checked_sub(up / 2 + 1))
+        } else {
+            None
+        };
+        if let Some(i) = at
+            && i > 0
+            && i + 2 < len
+        {
+            splat(&mut site, r.cells[i] as usize, Reason::Crossing, 0.95, 2);
+        }
+    }
+    // The head of navigation: in each big system reaching the sea or a lake, the point boats
+    // reach farthest up (where a river big enough for them stops being so), well up from its
+    // mouth. (A chain big from its first cell leaves a lake: boats go on across it.)
+    let mut heads: Vec<Option<(usize, usize)>> = vec![None; rivers.len()];
+    for (c, r) in rivers.iter().enumerate() {
+        let Some((root, d)) = down[c] else { continue };
+        let big = rivers[root].q.iter().any(|&v| v as f64 >= 1.5 * nav_q);
+        if !big || !matches!(rivers[root].mouth, Mouth::Ocean | Mouth::Lake) {
+            continue;
+        }
+        if let Some(i) = r.q.iter().position(|&v| v as f64 >= nav_q)
+            && i > 0
+        {
+            let far = d + r.cells.len() - 1 - i;
+            if far >= up && heads[root].is_none_or(|h| far > h.0) {
+                heads[root] = Some((far, r.cells[i] as usize));
             }
         }
-        if q as f64 > bridge_q
-            && let Some(i) = r.q.iter().rposition(|&v| (v as f64) <= bridge_q)
-        {
-            splat(&mut site, r.cells[i] as usize, Reason::Crossing, 0.85, 1);
-        }
+    }
+    for &(_, at) in heads.iter().flatten() {
+        splat(&mut site, at, Reason::Head, 0.95, 2);
     }
     for r in &inp.hydro.rivers {
         let (Some(&last), Some(&q)) = (r.cells.last(), r.q.last()) else { continue };
         let strength = match r.mouth {
             Mouth::Ocean | Mouth::Lake => 1.0,
-            Mouth::Confluence => 0.6,
+            Mouth::Confluence => 0.5 * smoothstep(0.5 * big_river, 3.0 * big_river, q as f64),
             _ => 0.0,
         } * smoothstep(river_q, big_river * 2.0, q as f64);
         if strength <= 0.0 {
@@ -361,22 +439,24 @@ fn ground(inp: &Inputs) -> Ground {
         let above = inp.height[k] - sea;
         let (cx, cy) = ((k % w) as f64, (k / w) as f64);
         // Industry: ore in the hills, timber where forest meets a river, fishing grounds.
-        let ore = if above > 2_500.0 { smoothstep(0.1, 0.3, fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5)) } else { 0.0 };
+        let ore = smoothstep(1_500.0, 2_500.0, above) * smoothstep(0.3, 0.45, fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5));
         let forest = matches!(b, Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga | Biome::Jungle);
         let timber = if forest && (inp.hydro.discharge[k] as f64 >= river_q || neighbors(w, h, k).any(|(nb, _)| inp.hydro.discharge[nb] as f64 >= river_q)) { 0.6 } else { 0.0 };
         if ocean_n > 0 {
-            // A bay (a good part of the ground round it is sea) shelters a harbour; a bare coast is fishing.
-            let mut sea_n = 0;
-            for dy in -2i64..=2 {
-                for dx in -2i64..=2 {
+            // A bay or inlet (sea on little of the ground round: land on three sides) shelters a
+            // harbour; a bare coast or a headland is only fishing.
+            let (mut sea_n, mut all) = (0, 0);
+            for dy in -4i64..=4 {
+                for dx in -4i64..=4 {
                     let (x, y) = (cx as i64 + dx, cy as i64 + dy);
-                    if x >= 0 && y >= 0 && x < w as i64 && y < h as i64 && !inp.land[y as usize * w + x as usize] {
-                        sea_n += 1;
+                    if dx * dx + dy * dy <= 16 && x >= 0 && y >= 0 && x < w as i64 && y < h as i64 {
+                        all += 1;
+                        sea_n += !inp.land[y as usize * w + x as usize] as i32;
                     }
                 }
             }
-            let shelter = if (6..=16).contains(&sea_n) { 1.0 } else { 0.65 };
-            site[k][Reason::Harbour as usize] = (shelter * 255.0) as u8;
+            let shelter = 1.0 - smoothstep(0.22, 0.36, sea_n as f64 / all.max(1) as f64);
+            site[k][Reason::Harbour as usize] = (0.8 * shelter * 255.0) as u8;
         }
         if ocean_n > 0 || lake_n > 0 {
             site[k][Reason::Fishing as usize] = (0.5 * 255.0) as u8;
@@ -404,7 +484,7 @@ fn ground(inp: &Inputs) -> Ground {
         let dry_fix = if matches!(b, Biome::HotDesert | Biome::ColdDesert) && water < 0.5 { 0.2 } else { 1.0 };
         // Farmland within reach, not the cell's own; a mining or timber place needs no farmland.
         let fed = 0.3 * fert + 0.7 * (1.4 * food[k] as f64).min(1.0);
-        let fert = fed.max(0.55 * ore).max(0.5 * timber);
+        let fert = fed.max(0.6 * ore).max(0.5 * timber);
         let altitude = 1.0 - 0.8 * smoothstep(3_000.0, 8_000.0, above) * (1.0 - ore);
         score[k] = fert * (0.35 + 0.65 * flat) * (0.35 + water) * altitude * dry_fix;
     }
@@ -446,10 +526,10 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
     ];
 
     // Roads: a site on a road is better, a junction much better (within a cell of it).
-    let road_at = |k: usize| -> (bool, bool) {
-        let Some(rp) = roads else { return (false, false) };
+    let road_at = |k: usize| -> (bool, bool, bool) {
+        let Some(rp) = roads else { return (false, false, false) };
         let (x, y) = ((k % w) as i64, (k / w) as i64);
-        let (mut on, mut at) = (false, false);
+        let (mut on, mut at, mut pass) = (false, false, false);
         for dy in -1i64..=1 {
             for dx in -1i64..=1 {
                 let (nx, ny) = (x + dx, y + dy);
@@ -459,12 +539,15 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 let j = ny as usize * w + nx as usize;
                 on |= rp.usage[j] > 0;
                 at |= rp.junction[j];
+                pass |= rp.pass[j];
             }
         }
-        (on, at)
+        (on, at, pass)
     };
+    // A ford or bridge where a road crosses a real river.
+    let ford = |k: usize| inp.hydro.discharge[k] as f64 >= 3.0 * super::hydro::river_q(p.river_density);
     let road_bonus = |k: usize, tier: Tier| -> f64 {
-        let (on, at) = road_at(k);
+        let (on, at, pass) = road_at(k);
         let (on_b, at_b) = if tier >= Tier::Town { (3.0, 5.0) } else { (2.0, 3.5) };
         // Cities and towns also favour the sites where goods change hands (harbours, mouths,
         // confluences, heads of navigation, crossings) over plain farmland.
@@ -474,6 +557,15 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
             Tier::Village => 0.25,
         };
         let sites = 1.0 + gain * if tier == Tier::Village { bulk[k].max(industry[k]) } else { bulk[k] } as f64;
+        // Ore draws miners to towns and villages however poor the ground; a pass, a town to
+        // hold it; a ford on a road, a town or village by it.
+        let ore = site[k][Reason::Ore as usize] as f64 / 255.0;
+        let sites = sites
+            * match tier {
+                Tier::Town => (1.0 + 1.0 * ore) * if pass { 2.5 } else { 1.0 } * if on && ford(k) { 1.3 } else { 1.0 },
+                Tier::Village => (1.0 + 1.0 * ore) * if on && ford(k) { 1.3 } else { 1.0 },
+                _ => 1.0,
+            };
         sites * if at { at_b } else if on { on_b } else { 1.0 }
     };
 
@@ -513,18 +605,22 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 }
             };
             for r in [Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing, Reason::Ore, Reason::Timber, Reason::Fishing] {
-                // (Only a town's site weighs the river's heads, outlets and crossings.)
-                if tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Crossing) {
+                // (Only a town's site weighs the river's heads, outlets and bridging points; a
+                // city stands for more than its fishing or timber.)
+                if (tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Crossing)) || (tier >= Tier::City && matches!(r, Reason::Timber | Reason::Fishing)) {
                     continue;
                 }
                 consider(r, site[k][r as usize] as f64 / 255.0);
             }
-            if tier >= Tier::Town {
-                let (on, at) = road_at(k);
-                if on && above > 2_500.0 {
-                    consider(Reason::Pass, 0.8);
+            if tier <= Tier::Town {
+                let (on, at, pass) = road_at(k);
+                if on && ford(k) {
+                    consider(Reason::Crossing, 0.55);
                 }
-                if at {
+                if pass && tier == Tier::Town {
+                    consider(Reason::Pass, 0.9);
+                }
+                if at && tier == Tier::Town {
                     consider(Reason::Crossroads, 0.75);
                 }
             }
@@ -551,7 +647,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 Reason::Outlet | Reason::Confluence | Reason::Head | Reason::Crossing if tier >= Tier::Town && near_river => Some(SettleKind::River),
                 Reason::Ore => Some(SettleKind::Mining),
                 Reason::Timber if tier <= Tier::Town => Some(SettleKind::Lumber),
-                Reason::Fishing if tier <= Tier::Town && is_coast => Some(SettleKind::Fishing),
+                Reason::Fishing if tier == Tier::Village && is_coast => Some(SettleKind::Fishing),
                 Reason::Pass => Some(SettleKind::Fortress),
                 Reason::Crossroads => Some(SettleKind::Market),
                 _ => None,
