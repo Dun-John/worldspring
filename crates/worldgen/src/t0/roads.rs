@@ -1981,7 +1981,8 @@ fn switchbacks(
         }
         let on_plan = |p: [f64; 2]| hg.z(p);
         let on_cells = |p: [f64; 2]| passable((p[1].round() as usize).min(hg.ch - 1) * hg.cw + (p[0].round() as usize).min(hg.cw - 1));
-        let mut route = fine_route(hg, &on_plan, &on_cells, cells[i], cells[j], SLACK * gmax, &[1.0, 1.8], cell, F)
+        let corr = Corridor::new(hg, &on_plan, &on_cells, cells[i], cells[j], F);
+        let mut route = fine_route_in(&corr, cells[i], cells[j], SLACK * gmax, &[1.0, 1.8], cell)
             .or_else(|| fine_route(hg, ground, dry, cells[i], cells[j], SLACK * gmax, &[1.0, 1.8], cell, F_FINE));
         // A climb that can only hold the grade by adding miles comes out as one long finger (out,
         // a U-turn, back beside itself) or a route far longer than the straight run. Spend the
@@ -1997,7 +1998,7 @@ fn switchbacks(
                 // (Of those left, the one without a finger first, then the shortest.)
                 let mut best: Option<((bool, f64), Vec<[f64; 2]>)> = None;
                 for m in [1.2, 1.4, 1.6, 1.8] {
-                    let Some(r2) = fine_route(hg, &on_plan, &on_cells, cells[i], cells[j], SLACK * gmax, &[m], cell, F) else { continue };
+                    let Some(r2) = fine_route_in(&corr, cells[i], cells[j], SLACK * gmax, &[m], cell) else { continue };
                     let len = route_len(&r2);
                     if climb > 0.97 * gmax * len * cell {
                         continue;
@@ -2203,16 +2204,41 @@ fn finger_span(r: &[[f64; 2]], cell: f64) -> Option<(usize, usize)> {
 /// ≤ 1.8 gmax as a fallback). Returns points in T0 cell units.
 #[allow(clippy::too_many_arguments)]
 fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2]) -> bool, a: [f64; 2], b: [f64; 2], gmax: f64, mults: &[f64], cell: f64, f: f64) -> Option<Vec<[f64; 2]>> {
-    let pad = 4.0;
-    let (x0, y0) = ((a[0].min(b[0]) - pad).max(0.0), (a[1].min(b[1]) - pad).max(0.0));
-    // (On whole cells, as the junctions are: an end at a settlement's own spot is put back on it
-    // after, so roads still meet at one point.)
-    let (x0, y0) = (crate::core::floor(x0), crate::core::floor(y0));
-    let (x1, y1) = ((a[0].max(b[0]) + pad).min((hg.cw - 1) as f64), (a[1].max(b[1]) + pad).min((hg.ch - 1) as f64));
-    let (fw, fh) = (((x1 - x0) * f) as usize + 1, ((y1 - y0) * f) as usize + 1);
+    let corr = Corridor::new(hg, ground, ok, a, b, f);
+    fine_route_in(&corr, a, b, gmax, mults, cell)
+}
+
+/// The fine grid a route between two points is searched on: heights and passability, which
+/// do not depend on the grade limits tried over it.
+struct Corridor {
+    x0: f64,
+    y0: f64,
+    fw: usize,
+    fh: usize,
+    f: f64,
+    hts: Vec<f64>,
+    ok: Vec<bool>,
+}
+
+impl Corridor {
+    fn new(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2]) -> bool, a: [f64; 2], b: [f64; 2], f: f64) -> Corridor {
+        let pad = 4.0;
+        let (x0, y0) = ((a[0].min(b[0]) - pad).max(0.0), (a[1].min(b[1]) - pad).max(0.0));
+        // (On whole cells, as the junctions are: an end at a settlement's own spot is put back on it
+        // after, so roads still meet at one point.)
+        let (x0, y0) = (crate::core::floor(x0), crate::core::floor(y0));
+        let (x1, y1) = ((a[0].max(b[0]) + pad).min((hg.cw - 1) as f64), (a[1].max(b[1]) + pad).min((hg.ch - 1) as f64));
+        let (fw, fh) = (((x1 - x0) * f) as usize + 1, ((y1 - y0) * f) as usize + 1);
+        let to_world = |i: usize| [x0 + (i % fw) as f64 / f, y0 + (i / fw) as f64 / f];
+        let hts: Vec<f64> = (0..fw * fh).map(|i| ground(to_world(i))).collect();
+        let ok: Vec<bool> = (0..fw * fh).map(|i| ok(to_world(i))).collect();
+        Corridor { x0, y0, fw, fh, f, hts, ok }
+    }
+}
+
+fn fine_route_in(corr: &Corridor, a: [f64; 2], b: [f64; 2], gmax: f64, mults: &[f64], cell: f64) -> Option<Vec<[f64; 2]>> {
+    let Corridor { x0, y0, fw, fh, f, ref hts, ref ok } = *corr;
     let to_world = |i: usize| [x0 + (i % fw) as f64 / f, y0 + (i / fw) as f64 / f];
-    let hts: Vec<f64> = (0..fw * fh).map(|i| ground(to_world(i))).collect();
-    let ok: Vec<bool> = (0..fw * fh).map(|i| ok(to_world(i))).collect();
     let idx = |p: [f64; 2]| (((p[1] - y0) * f).round() as usize).min(fh - 1) * fw + (((p[0] - x0) * f).round() as usize).min(fw - 1);
     let (s, t) = (idx(a), idx(b));
     let step = cell / f;
@@ -3594,6 +3620,65 @@ fn ends_by_point(roads: &[RoadPath]) -> std::collections::BTreeMap<(u64, u64), V
     ends
 }
 
+/// `ends_by_point` kept up to date as roads change: only the roads whose end points moved are
+/// taken out of the map and put back (the same map a rebuild gives).
+struct EndIndex {
+    keys: Vec<Option<((u64, u64), (u64, u64))>>,
+    map: std::collections::BTreeMap<(u64, u64), Vec<(usize, bool)>>,
+}
+
+impl EndIndex {
+    fn new(roads: &[RoadPath]) -> EndIndex {
+        EndIndex { keys: roads.iter().map(Self::road_keys).collect(), map: ends_by_point(roads) }
+    }
+
+    fn road_keys(r: &RoadPath) -> Option<((u64, u64), (u64, u64))> {
+        let key = |p: [f64; 2]| (p[0].to_bits(), p[1].to_bits());
+        (r.pts.len() >= 2).then(|| (key(r.pts[0]), key(r.pts[r.pts.len() - 1])))
+    }
+
+    fn refresh(&mut self, roads: &[RoadPath]) {
+        if roads.len() < self.keys.len() {
+            *self = EndIndex::new(roads);
+            return;
+        }
+        for ri in 0..roads.len() {
+            let new = Self::road_keys(&roads[ri]);
+            if ri < self.keys.len() && self.keys[ri] == new {
+                continue;
+            }
+            if ri < self.keys.len() {
+                if let Some((a, b)) = self.keys[ri] {
+                    self.take(a, ri);
+                    self.take(b, ri);
+                }
+                self.keys[ri] = new;
+            } else {
+                self.keys.push(new);
+            }
+            if let Some((a, b)) = new {
+                self.put(a, ri, true);
+                self.put(b, ri, false);
+            }
+        }
+    }
+
+    fn take(&mut self, k: (u64, u64), ri: usize) {
+        if let Some(l) = self.map.get_mut(&k) {
+            l.retain(|e| e.0 != ri);
+            if l.is_empty() {
+                self.map.remove(&k);
+            }
+        }
+    }
+
+    fn put(&mut self, k: (u64, u64), ri: usize, start: bool) {
+        let l = self.map.entry(k).or_default();
+        let at = l.partition_point(|e| (e.0, !e.1) < (ri, !start));
+        l.insert(at, (ri, start));
+    }
+}
+
 /// Junctions away from settlements become the joins of real roads. Grid routes meet at a cell,
 /// often at a sharp V (two roads leaving a few tens of degrees apart, so travel between them
 /// doubles back), and roads sharing a bridge part right on the bank. At each junction:
@@ -3625,7 +3710,22 @@ fn square_junctions(
     crossings: &dyn Fn(&[[f64; 2]]) -> Vec<([f64; 2], f64)>,
     only: Option<&[[f64; 2]]>,
 ) {
-    let river_hits = |roads: &[RoadPath]| -> Vec<([f64; 2], f64)> { roads.iter().flat_map(|r| crossings(&r.pts)).collect() };
+    // (A road's crossings are looked up again only where its line changed.)
+    let mut hits: Vec<(Vec<[f64; 2]>, Vec<([f64; 2], f64)>)> = Vec::new();
+    let mut river_hits = |roads: &[RoadPath]| -> Vec<([f64; 2], f64)> {
+        let mut out = Vec::new();
+        let mut next = Vec::with_capacity(roads.len());
+        for (i, r) in roads.iter().enumerate() {
+            let entry = match hits.get_mut(i) {
+                Some(e) if e.0 == r.pts => std::mem::take(e),
+                _ => (r.pts.clone(), crossings(&r.pts)),
+            };
+            out.extend_from_slice(&entry.1);
+            next.push(entry);
+        }
+        hits = next;
+        out
+    };
     unshare(roads, towns, ground, dry, crossings, true);
     let mut sq = Square { towns, cell, dry, ground, crossings, wet: river_hits(roads), relay: only.is_some() };
     // Points already squared (or left as they are) are not looked at again; with `only`, every
@@ -3634,15 +3734,17 @@ fn square_junctions(
     if let Some(only) = only {
         settled.extend(ends_by_point(roads).into_keys().filter(|k| !only.iter().any(|q| (q[0].to_bits(), q[1].to_bits()) == *k)));
     }
+    let mut index = EndIndex::new(roads);
     for round in 0..4 {
+        index.refresh(roads);
         loop {
-            let ends = ends_by_point(roads);
-            let Some((k, list)) = ends.into_iter().find(|(k, l)| l.len() >= 3 && !settled.contains(k)) else { break };
+            let Some((k, list)) = index.map.iter().find(|(k, l)| l.len() >= 3 && !settled.contains(k)).map(|(k, l)| (*k, l.clone())) else { break };
             settled.insert(k);
             let j = [f64::from_bits(k.0), f64::from_bits(k.1)];
             for q in square_at(roads, j, &list, &sq) {
                 settled.insert((q[0].to_bits(), q[1].to_bits()));
             }
+            index.refresh(roads);
         }
         if round == 3 || !close_junctions(roads, &sq) {
             break;
