@@ -76,10 +76,11 @@ pub fn cross_of(b: &Building) -> Option<Cross> {
 /// The look of a temple's pieces (the god's statue, its candle stands, its screen and side altars:
 /// `interior::GOD_LOOKS`) for the god in its name ("Temple of the Sun"; a shrine's or a monastery's
 /// too), by the god's kind: the Sun and the Morning Lord, the Dawn, the Moon and the Veiled Lady,
-/// the Deep Sea, the Storm, the Forge, the Harvest and the Hearth, the Seven and the Watcher. A name
-/// with no god (renamed, or none): by its id.
+/// the Deep Sea, the Storm, the Forge, the Harvest and the Hearth, the Seven and the Watcher (and
+/// the cultures' own gods with them: `catalog::DEITY`). A name with no god (renamed, or none): by
+/// its id.
 pub fn god_look(b: &Building) -> u8 {
-    const LOOK: [u8; 12] = [1, 0, 6, 3, 5, 2, 7, 7, 6, 4, 2, 0];
+    const LOOK: [u8; 32] = [1, 0, 6, 3, 5, 2, 7, 7, 6, 4, 2, 0, 7, 2, 6, 5, 4, 6, 3, 6, 1, 3, 6, 0, 2, 3, 2, 7, 0, 6, 4, 7];
     let god = b.name.as_deref().and_then(|n| catalog::DEITY.iter().position(|d| n.ends_with(&format!(" of {d}"))));
     god.map_or((b.id % 8) as u8, |g| LOOK[g])
 }

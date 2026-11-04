@@ -236,69 +236,132 @@ pub struct Signs {
     pub rest: &'static [&'static str],
     /// "The ___ Library".
     pub inst: &'static [&'static str],
+    /// The gods its temples and shrines are for (each one of `DEITY`).
+    pub gods: &'static [&'static str],
 }
 
 pub const SIGNS: [Signs; 5] = [
     Signs {
         adj: &[
-            "Drunken", "Grey", "Salty", "Black", "Howling", "Laughing", "Old", "Iron", "Sleeping", "Tarred", "Bearded", "Horned", "Wandering", "Thirsty", "Stout", "Red", "Frozen",
-            "Snoring", "Golden", "Weary", "Merry", "Rusty",
+            "Drunken", "Grey", "Salty", "Black", "Howling", "Laughing", "Iron", "Sleeping", "Tarred", "Bearded", "Horned", "Wandering", "Thirsty", "Stout", "Red", "Frozen",
+            "Snoring", "Golden", "Weary", "Merry", "Rusty", "One-Eyed", "Shaggy", "Brawling", "Singing", "Silver", "White", "Bold", "Grumbling", "Lucky", "Blind", "Sea-Worn",
         ],
         noun: &[
             "Bear", "Wolf", "Raven", "Longship", "Elk", "Seal", "Whale", "Hammer", "Axe", "Boar", "Skald", "Troll", "Walrus", "Herring", "Cauldron", "Horn", "Bearskin", "Crow", "Oar",
-            "Anchor", "Hound", "Goat", "Reindeer", "Mead Hall", "Shield", "Otter", "Eagle", "Hearth", "Sledge", "Lynx",
+            "Anchor", "Hound", "Goat", "Reindeer", "Mead Hall", "Shield", "Otter", "Eagle", "Hearth", "Sledge", "Lynx", "Puffin", "Ram", "Salmon", "Drinking Horn", "Fox",
+            "Badger", "Owl", "Stag", "Gull", "Harpoon", "Rune Stone",
         ],
         rest: &["Rest", "Hearth", "Hall", "Longhouse", "Board", "Fire"],
-        inst: &["Grey", "High", "Old", "Iron", "Frost", "Raven", "Stone", "Storm", "Rune", "Silver"],
+        inst: &["Grey", "High", "Iron", "Frost", "Raven", "Stone", "Storm", "Rune", "Silver", "Northern", "Winter", "Black"],
+        gods: &["the All-Father", "the White Lady", "the Wolf Mother", "the Hammer", "the Thunderer", "the Storm", "the Hearth", "the Deep Sea", "the Watcher", "the Moon"],
     },
     Signs {
         adj: &[
             "Prancing", "Drunken", "Gilded", "Rusty", "Laughing", "Sleeping", "Golden", "Silver", "Crooked", "Wandering", "Jolly", "Salty", "Broken", "Hungry", "Red", "Green",
-            "Blind", "Black", "Merry", "Weary", "Painted", "Howling", "Copper", "Old", "Lucky", "Grinning", "Stout", "Dancing", "Speckled", "Royal",
+            "Blind", "Black", "Merry", "Weary", "Painted", "Howling", "Copper", "Lucky", "Grinning", "Stout", "Dancing", "Speckled", "Royal", "Bashful", "Nodding", "Tipsy",
+            "Wise", "Proud", "Hooded", "Fighting",
         ],
         noun: &[
             "Pony", "Dragon", "Griffin", "Stag", "Boar", "Goose", "Tankard", "Lantern", "Crown", "Barrel", "Hound", "Owl", "Flagon", "Wyvern", "Rooster", "Wheel", "Hart", "Fox",
             "Badger", "Maiden", "Giant", "Unicorn", "Candle", "Shield", "Plough", "Swan", "Bell", "Rose", "Lamb", "Bull", "Pheasant", "Harp", "Mitre", "Wheatsheaf", "Magpie",
-            "Hare", "Otter", "Heron", "Falcon", "Pilgrim", "Ram", "Primrose", "Acorn", "Feathers", "Chequers", "Woolpack",
+            "Hare", "Otter", "Heron", "Falcon", "Pilgrim", "Ram", "Primrose", "Acorn", "Feathers", "Chequers", "Woolpack", "Cauldron", "Weasel", "Jester", "Bishop",
+            "Kingfisher",
         ],
         rest: &["Rest", "Hearth", "Lodge", "Table", "House", "Cellar", "Board", "Arms"],
-        inst: &["Grey", "High", "Old", "Silver", "Dawn", "Iron", "Amber", "Twilight", "Azure", "Radiant", "Ashen", "Verdant", "Stone", "Starlit"],
+        inst: &["Grey", "High", "Silver", "Dawn", "Iron", "Amber", "Twilight", "Azure", "Radiant", "Ashen", "Verdant", "Stone", "Starlit", "Royal", "Elder", "Hallowed"],
+        gods: &["the Dawn", "the Morning Lord", "the Harvest", "the Seven", "the Green Man", "the Lady of the Lake", "the Shepherd", "the Lantern Bearer", "the Hearth", "the Forge", "the Moon", "the Watcher"],
     },
     Signs {
         adj: &[
             "Golden", "Gilded", "Laughing", "Merry", "Painted", "Velvet", "Singing", "Amber", "Crimson", "Silver", "Blue", "Wandering", "Sleeping", "Drunken", "Lucky", "Jolly",
-            "Dancing", "Smiling", "Masked", "Sunlit",
+            "Dancing", "Smiling", "Masked", "Sunlit", "Purple", "Weeping", "Sweet", "Idle", "Proud", "Winking", "Fat", "Noble",
         ],
         noun: &[
             "Grape", "Olive", "Dolphin", "Lion", "Peacock", "Galley", "Amphora", "Gondola", "Lute", "Mask", "Fig", "Lemon", "Sun", "Mermaid", "Goat", "Bull", "Sparrow", "Cypress",
-            "Fountain", "Lantern", "Pearl", "Anchor", "Orange", "Swallow", "Vine", "Octopus", "Harp", "Laurel",
+            "Fountain", "Pearl", "Anchor", "Orange", "Swallow", "Vine", "Octopus", "Harp", "Laurel", "Tuna", "Pomegranate", "Wine Jar", "Heron", "Tortoise", "Seashell", "Crab",
+            "Gull", "Nightingale", "Donkey", "Cockerel", "Mandolin", "Carnival",
         ],
-        rest: &["Table", "House", "Terrace", "Cellar", "Courtyard", "Rest"],
-        inst: &["Golden", "Marble", "Azure", "Radiant", "Laurel", "Old", "High", "Sunlit", "Crimson", "Silver"],
+        rest: &["Table", "House", "Terrace", "Cellar", "Courtyard", "Rest", "Loggia"],
+        inst: &["Golden", "Marble", "Azure", "Radiant", "Laurel", "High", "Sunlit", "Crimson", "Silver", "Ivory", "Gilded", "Coral"],
+        gods: &["the Sun", "the Sea Mother", "the Vintner", "the Unconquered Sun", "the Twin Stars", "the Harvest", "the Veiled Lady", "the Dawn", "the Deep Sea", "the Forge"],
     },
     Signs {
         adj: &[
             "Golden", "Silver", "Thirsty", "Wandering", "Patient", "Sleeping", "Blue", "Painted", "Copper", "Veiled", "Laughing", "Singing", "Jewelled", "Brass", "Dusty", "Seven",
-            "Hidden", "Shaded",
+            "Hidden", "Shaded", "Sun-Kissed", "Crimson", "Proud", "Clever", "Weary", "Gleaming", "Lucky", "Spotted",
         ],
         noun: &[
-            "Camel", "Oasis", "Lamp", "Palm", "Scorpion", "Falcon", "Jackal", "Lantern", "Carpet", "Caravan", "Gazelle", "Saddle", "Well", "Pomegranate", "Dune", "Tent", "Crescent",
-            "Star", "Cistern", "Fig", "Ibis", "Date Palm", "Fountain", "Hawk", "Tiger", "Water Jar",
+            "Camel", "Oasis", "Lamp", "Palm", "Scorpion", "Falcon", "Jackal", "Carpet", "Caravan", "Gazelle", "Saddle", "Well", "Pomegranate", "Dune", "Tent", "Crescent", "Star",
+            "Cistern", "Fig", "Ibis", "Date Palm", "Fountain", "Hawk", "Tiger", "Water Jar", "Peacock", "Lizard", "Oryx", "Hoopoe", "Coffee Pot", "Rose", "Lute", "Serpent", "Ostrich",
+            "Leopard", "Sandal",
         ],
         rest: &["Rest", "House", "Courtyard", "Tent", "Shade", "Well"],
-        inst: &["Golden", "Brass", "Old", "High", "Sun", "Amber", "Copper", "Moon", "Starlit", "Silver"],
+        inst: &["Golden", "Brass", "High", "Sun", "Amber", "Copper", "Moon", "Starlit", "Silver", "Saffron", "Indigo", "Crescent"],
+        gods: &["the Sun", "the Veiled Lady", "the Well Keeper", "the Night Sky", "the Thousand Eyes", "the Moon", "the Watcher", "the Morning Lord", "the Forge"],
     },
     Signs {
         adj: &[
             "Swift", "Red", "White", "Black", "Grey", "Wandering", "Thirsty", "Laughing", "Wild", "Bold", "Blue", "Painted", "Golden", "Howling", "Sleeping", "Lucky", "Spotted",
-            "Dappled",
+            "Dappled", "Restless", "Brave", "Shaggy", "Galloping", "Proud", "Whistling", "Silver", "Hungry",
         ],
         noun: &[
             "Horse", "Mare", "Yurt", "Bow", "Eagle", "Wolf", "Saddle", "Yak", "Hawk", "Stallion", "Arrow", "Camel", "Cookpot", "Sky", "Banner", "Drum", "Ox", "Marmot", "Antelope",
-            "Felt Tent", "Bridle", "Quiver", "Crane", "Foal",
+            "Felt Tent", "Bridle", "Quiver", "Crane", "Foal", "Fox", "Bustard", "Kumis Jug", "Horsehead", "Snow Leopard", "Falcon", "Steppe Wind", "Lasso", "Fiddle", "Goat", "Bear",
         ],
         rest: &["Rest", "Fire", "Yurt", "Tent", "Camp", "Hearth"],
-        inst: &["Blue", "Sky", "Golden", "Old", "High", "White", "Eternal", "Silver", "Wind", "Grey"],
+        inst: &["Blue", "Sky", "Golden", "High", "White", "Eternal", "Silver", "Wind", "Grey", "Great", "Felt", "Horse"],
+        gods: &["the Eternal Sky", "the Earth Mother", "the Wind Rider", "the Ancestors", "the Storm", "the Moon", "the Sun", "the Hearth", "the Watcher"],
     },
 ];
-pub const DEITY: &[&str] = &["the Dawn", "the Morning Lord", "the Harvest", "the Deep Sea", "the Forge", "the Moon", "the Seven", "the Watcher", "the Hearth", "the Storm", "the Veiled Lady", "the Sun"];
+/// Every god a temple may be for, in `temple::god_look`'s order (the first twelve as they were).
+pub const DEITY: &[&str] = &[
+    "the Dawn", "the Morning Lord", "the Harvest", "the Deep Sea", "the Forge", "the Moon", "the Seven", "the Watcher", "the Hearth", "the Storm", "the Veiled Lady", "the Sun",
+    "the All-Father", "the White Lady", "the Wolf Mother", "the Hammer", "the Thunderer", "the Green Man", "the Lady of the Lake", "the Shepherd", "the Lantern Bearer",
+    "the Sea Mother", "the Vintner", "the Unconquered Sun", "the Twin Stars", "the Well Keeper", "the Night Sky", "the Thousand Eyes", "the Eternal Sky", "the Earth Mother",
+    "the Wind Rider", "the Ancestors",
+];
+
+/// The words a business's trade goes by in its name ("Smithy", "Forge"), by catalog key: its
+/// `trade` and others.
+pub fn trades(f: &Func) -> &[&'static str] {
+    match f.key {
+        "inn" => &["Inn", "Lodge", "Hostelry", "Coaching Inn"],
+        "tavern" => &["Tavern", "Taproom", "Alehouse"],
+        "general_store" => &["Goods", "Sundries", "Provisions", "Wares", "Supplies", "Trading Post", "Chandlery"],
+        "apothecary" => &["Remedies", "Apothecary", "Herbs", "Tinctures", "Salves", "Physic"],
+        "tailor" => &["Tailoring", "Clothiers", "Drapery", "Needlework", "Garments"],
+        "bakery" => &["Bakery", "Bakehouse", "Ovens", "Breads"],
+        "butcher" => &["Butchery", "Meats", "Shambles"],
+        "blacksmith" => &["Smithy", "Forge", "Ironworks", "Anvil"],
+        "leatherworker" => &["Tannery", "Leathers", "Hides"],
+        "cooper" => &["Cooperage", "Casks", "Barrels"],
+        "carpenter" => &["Joinery", "Woodworks", "Carpentry"],
+        "cobbler" => &["Boots", "Shoes", "Cobblery"],
+        "potter" => &["Pottery", "Kilns", "Crockery"],
+        "library" => &["Library", "Archive", "Reading Room", "Lore House", "Book Hall"],
+        "bank" => &["Counting House", "Exchange", "Treasury", "Bank", "Strongroom", "Coffers"],
+        "town_hall" => &["Hall", "Moot Hall", "Town House"],
+        "guard_post" => &["Watch House", "Guardhouse", "Watch"],
+        _ => std::slice::from_ref(&f.trade),
+    }
+}
+
+/// What hangs over a shop's door ("The Golden Needle"), by catalog key.
+pub fn shop_signs(key: &str) -> &'static [&'static str] {
+    match key {
+        "apothecary" => &["Mortar", "Phial", "Sprig", "Leech"],
+        "tailor" => &["Needle", "Thimble", "Spool", "Thread"],
+        "general_store" => &["Scales", "Barrel", "Basket", "Lamp"],
+        "blacksmith" => &["Anvil", "Nail", "Bellows", "Tongs"],
+        "bakery" => &["Loaf", "Oven", "Sheaf", "Bun"],
+        "cobbler" => &["Boot", "Last", "Buckle"],
+        "jeweler" => &["Ring", "Gem", "Locket"],
+        "bookseller" => &["Quill", "Book", "Inkpot"],
+        "pawnbroker" => &["Purse", "Strongbox"],
+        "curiosities" => &["Imp", "Cat", "Box"],
+        "alchemist" => &["Alembic", "Retort", "Phial"],
+        "cooper" => &["Hoop", "Cask"],
+        "potter" => &["Jug", "Wheel"],
+        _ => &[],
+    }
+}

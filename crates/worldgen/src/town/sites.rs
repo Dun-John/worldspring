@@ -315,7 +315,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
 fn drawn(c: &crate::world::Created, poly: Vec<P>, pad_ft: f32, rng: &mut Pcg32, t0: &T0, center: P) -> Building {
     let ruin = c.structure.as_deref() == Some("ruin");
     let (func, residential) = func_of(c.func.as_deref().unwrap_or(""), ruin);
-    let name = Some(c.name.trim().to_string()).filter(|n| !n.is_empty()).or_else(|| trade_name(func, rng, t0, center));
+    let name = Some(c.name.trim().to_string()).filter(|n| !n.is_empty()).or_else(|| trade_name(func, rng, t0, center, []));
     let tower = func.is_none() && residential as usize == catalog::WIZARD_TOWER;
     let mut b = Building {
         poly,
@@ -347,12 +347,13 @@ pub fn func_of(key: &str, ruin: bool) -> (Option<u16>, u8) {
     (func.map(|i| i as u16), residential as u8)
 }
 
-/// The name a business would have here (in the nearest settlement's culture); none for a home.
-pub fn trade_name(func: Option<u16>, rng: &mut Pcg32, t0: &T0, center: P) -> Option<String> {
+/// The name a business would have here (in the nearest settlement's culture), its key words and
+/// head noun unlike those of the businesses named `town` (`Locale::beside`); none for a home.
+pub fn trade_name<'a>(func: Option<u16>, rng: &mut Pcg32, t0: &T0, center: P, town: impl IntoIterator<Item = &'a str>) -> Option<String> {
     let f = &catalog::CATALOG[func? as usize];
     let culture = t0.settlements.iter().min_by(|a, b| (a.x - center[0]).hypot(a.y - center[1]).total_cmp(&(b.x - center[0]).hypot(b.y - center[1]))).map_or(0, |s| s.culture as usize);
     let mut namer = crate::t0::names::Namer::new(rng.next_u32() as u64);
-    super::business_name(f, &mut namer, &mut super::Locale::new(culture), None)
+    super::business_name(f, &mut namer, &mut super::Locale::beside(culture, town), None)
 }
 
 /// A roof (`ROOFS`), tint (`TINTS`) and structure (`STRUCTURES`) chosen by hand; each not
@@ -488,7 +489,7 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     if kept && let Some(fi) = catalog::index_of("castle") {
         let b = &mut l.buildings[n - 1];
         b.func = Some(fi as u16);
-        b.name = Some(c.name.trim().to_string()).filter(|s| !s.is_empty()).or_else(|| trade_name(b.func, rng, t0, center));
+        b.name = Some(c.name.trim().to_string()).filter(|s| !s.is_empty()).or_else(|| trade_name(b.func, rng, t0, center, []));
     }
     let yard = if kept { n - 1 } else { n };
     let mut by_size: Vec<usize> = (0..yard).collect();
@@ -500,7 +501,7 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
         b.func = func.map(|f| f as u16);
         b.residential = catalog::residential_for(Ward::Castle, big) as u8;
         b.floors = if func.is_some() { 1 + (rank == 0) as u8 } else { 2 + (rng.next_f64() < 0.4) as u8 };
-        b.name = trade_name(b.func, rng, t0, center);
+        b.name = trade_name(b.func, rng, t0, center, []);
     }
     if c.structure.as_deref() == Some("ruin") {
         ruin_works(l, rng);

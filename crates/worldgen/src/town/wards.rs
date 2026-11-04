@@ -705,7 +705,7 @@ fn functions(world: &World, t0: &T0, l: &mut Layout, fresh: &[usize], mut lost: 
                 }
                 for salt in (0..8).filter(|_| !keep) {
                     let mut rng = Pcg32::new(hash3(stream, index, id as i64, 0x4e + salt), 43);
-                    b.name = super::sites::trade_name(Some(fi), &mut rng, t0, center);
+                    b.name = super::sites::trade_name(Some(fi), &mut rng, t0, center, names.iter().map(String::as_str));
                     if b.name.as_ref().is_none_or(|n| !names.contains(n)) {
                         break;
                     }

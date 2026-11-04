@@ -4,7 +4,9 @@
 //! features, sites, inns and shops), then the counts: filter faults (must be 0), training words
 //! given out as they are (must be 0), businesses in one town sharing a key word (must be 0), and
 //! repeats (the same inn or shop name in two towns of a world, temples aside; a word reused
-//! across a world's settlement names).
+//! across a world's settlement names); per culture, the share of settlements named in English
+//! and of the commonest ending (last two letters); the most businesses in a town on one head
+//! noun (`town::head_noun`, temples aside).
 //! `--world <seed>` instead: that world's caves, mines and lava tubes, each with the theme its
 //! site is built in (a themed name must match it).
 //! `cargo run --profile fast -p worldgen --example namecheck -- [--summary | --world <seed>]`
@@ -13,7 +15,7 @@ use std::collections::BTreeMap;
 use worldgen::core::rng::{Pcg32, hash2};
 use worldgen::t0::names::{self, NameKind, Namer};
 use worldgen::town::catalog::{self, Ward};
-use worldgen::town::{Locale, business_name};
+use worldgen::town::{Locale, business_name, head_noun};
 
 const CULTURES: [&str; 5] = ["north", "west", "south", "dry", "steppe"];
 const GROUPS: [&str; 4] = ["settlements", "land", "sites", "inns+shops"];
@@ -62,6 +64,12 @@ struct Counts {
     /// Repeated inn and shop names, with how often (all seeds).
     repeated: BTreeMap<String, usize>,
     words_strict: usize,
+    /// Per culture: settlements, in English, per ending.
+    settled: [usize; 5],
+    english: [usize; 5],
+    ends: [BTreeMap<String, usize>; 5],
+    /// The most businesses of a town on one head noun.
+    heads: usize,
 }
 
 /// A world's caves, mines and lava tubes: name, kind and the theme their site is built in.
@@ -95,12 +103,17 @@ fn main() {
             let mut out: Vec<Vec<String>> = vec![Vec::new(); GROUPS.len()];
             for _ in 0..60 {
                 let s = namer.name_at(NameKind::Settlement, c, at());
+                n.settled[c] += 1;
+                n.english[c] += names::is_english(&s) as usize;
+                let low = s.to_lowercase();
+                *n.ends[c].entry(low[low.len() - 2..].to_string()).or_default() += 1;
                 for w in names::words(&s).filter(|w| w.len() > 3) {
                     *settle_words.entry(w).or_default() += 1;
                 }
                 out[0].push(s);
             }
-            for k in LAND {
+            // (Kinds of land a culture's region all but never has left out.)
+            for k in LAND.into_iter().filter(|k| !matches!((c, k), (0, NameKind::Jungle | NameKind::Desert) | (2 | 3, NameKind::Glacier | NameKind::Tundra | NameKind::Taiga))) {
                 for _ in 0..3 {
                     out[1].push(namer.name(k, c));
                 }
@@ -129,6 +142,7 @@ fn main() {
                 }
                 loc.lord = Some(tn.person(c));
                 let mut used = std::collections::BTreeSet::new();
+                let mut heads: BTreeMap<String, usize> = BTreeMap::new();
                 for (i, key) in SHOPS.iter().enumerate() {
                     let f = &catalog::CATALOG[catalog::index_of(key).expect("a catalog key")];
                     let before = loc.keys.len();
@@ -138,6 +152,11 @@ fn main() {
                     }
                     if f.naming != catalog::Naming::Institution && used.insert(name.clone()) {
                         *shops.entry(name.clone()).or_default() += 1;
+                    }
+                    if !matches!(*key, "temple" | "shrine") {
+                        let h = heads.entry(head_noun(&name).to_string()).or_default();
+                        *h += 1;
+                        n.heads = n.heads.max(*h);
                     }
                     out[3].push(name);
                 }
@@ -207,6 +226,14 @@ fn main() {
             println!("training word: {t}");
         }
     }
+    let mut per = Vec::new();
+    for c in 0..CULTURES.len() {
+        let (top, k) = n.ends[c].iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0))).map_or(("", 0), |(e, k)| (e.as_str(), *k));
+        let share = |k: usize| 100 * k / n.settled[c].max(1);
+        per.push(format!("{} {}% English, -{top} {}%", CULTURES[c], share(n.english[c]), share(k)));
+    }
+    println!("settlements: {}", per.join(" · "));
+    println!("most businesses in a town on one head noun: {}", n.heads);
     println!(
         "{} names, {} culture words: {} faults, {} training words, {} town key-word clashes, {} inn and shop names repeated across a world's towns, {} settlement words reused in a world",
         n.names,
