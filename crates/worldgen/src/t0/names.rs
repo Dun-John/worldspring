@@ -595,6 +595,10 @@ fn place_fault(word: &str) -> Option<&'static str> {
     if let Some(f) = ban(word) {
         return Some(f);
     }
+    // (A stem and its ending, put together, can end as no tongue here does: "Tikege".)
+    if b.ends_with(b"ek") || b.ends_with(b"ege") {
+        return Some("-ek or -ege");
+    }
     if b.windows(3).any(|t| (t[0] == t[1] || t[1] == t[2]) && t.iter().all(|&x| !matches!(x, b'a' | b'e' | b'i' | b'o' | b'u' | b'y'))) {
         return Some("doubled consonant in a cluster");
     }
