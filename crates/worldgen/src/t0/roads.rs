@@ -65,6 +65,8 @@ pub struct RoadPath {
     pub wander: Vec<f32>,
     /// The sketch's road stroke it follows, if drawn.
     pub stroke: Option<u32>,
+    /// Part of an isolated realm's own track (its way out): where its villages' tracks meet it, it is the through road.
+    pub spine: bool,
 }
 
 /// How a road of `class` crosses a river `width_ft` wide: a track wades a creek under 30 ft, a
@@ -283,6 +285,13 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
             let i = settlements.iter().position(|s| s.isolated && s.cell as u32 == first)?;
             Some((realm_of(settlements, i)?, path.iter().map(|&c| [(c as usize % w) as f64 * cell, (c as usize / w) as f64 * cell]).collect()))
         })
+        .collect();
+
+    // The steps of each isolated realm's own track (its way out, from the realm's town).
+    let spine_steps: std::collections::BTreeSet<(u32, u32)> = paths
+        .iter()
+        .filter(|(_, path, _)| path.first().is_some_and(|&f| settlements.iter().any(|s| s.isolated && s.planned >= Tier::Town && s.cell as u32 == f)))
+        .flat_map(|(_, path, _)| path.windows(2).map(|p| (p[0].min(p[1]), p[0].max(p[1]))))
         .collect();
 
     // --- 3. Segments between junctions (and settlements), from the union of routes: per
@@ -505,7 +514,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
             *wt *= (smoothstep(0.6, 2.2, clear) * (1.0 - 0.85 * smoothstep(0.01, 0.05, slope))) as f32;
         }
         let z = profile(hgrid, &pts, class.max_grade(), cell);
-        roads.push(RoadPath { class: *class, pts: pts.iter().map(|p| [p[0] * cell, p[1] * cell]).collect(), z, wander, stroke: *stroke });
+        roads.push(RoadPath { class: *class, pts: pts.iter().map(|p| [p[0] * cell, p[1] * cell]).collect(), z, wander, stroke: *stroke, spine: seg.len() >= 2 && seg.windows(2).all(|p| spine_steps.contains(&(p[0].min(p[1]), p[0].max(p[1])))) });
     }
 
     // Junctions outside settlements become Ts and crossroads, clear of river crossings.
@@ -1792,7 +1801,8 @@ fn switchbacks(
                 // (The profile can only climb its limit over the length: a route too short for
                 // the climb would be cut and filled.)
                 let climb = (at(cells[i]) - at(cells[j])).abs();
-                let mut shortest: Option<(f64, Vec<[f64; 2]>)> = None;
+                // (Of those left, the one without a finger first, then the shortest.)
+                let mut best: Option<((bool, f64), Vec<[f64; 2]>)> = None;
                 for m in [1.2, 1.4, 1.6, 1.8] {
                     let Some(r2) = fine_route(hg, &on_plan, &on_cells, cells[i], cells[j], SLACK * gmax, &[m], cell, F) else { continue };
                     let len = route_len(&r2);
@@ -1801,19 +1811,35 @@ fn switchbacks(
                     }
                     if !bad(&r2) {
                         route = Some(r2);
-                        shortest = None;
+                        best = None;
                         break;
                     }
-                    if shortest.as_ref().is_none_or(|s| len < s.0) {
-                        shortest = Some((len, r2));
+                    let key = (route_finger(&r2, cell), len);
+                    if best.as_ref().is_none_or(|b| key < b.0) {
+                        best = Some((key, r2));
                     }
                 }
-                // None as good as wanted: the shortest, if it saves a good part of the length.
-                if let Some((len, r2)) = shortest {
-                    if len < 0.8 * route_len(&r) {
+                // None as good as wanted: one that is not a finger where the route is one (however
+                // long), else the shortest, if it saves a good part of the length.
+                if let Some(((finger, len), r2)) = best {
+                    if (route_finger(&r, cell) && !finger) || len < 0.8 * route_len(&r) {
                         route = Some(r2);
                     }
                 }
+            }
+        }
+        // A finger that gains no height is cut across (the chord must be passable and keep to the
+        // stepped grade); the climb that needs its length stays.
+        if let Some(r) = route.as_mut() {
+            for _ in 0..4 {
+                let Some((fi, fj)) = finger_span(r, cell) else { break };
+                let (p, q) = (r[fi], r[fj]);
+                let len = dist(p, q) * cell;
+                let n = (dist(p, q) * 4.0).ceil().max(1.0) as usize;
+                if (at(p) - at(q)).abs() > 1.8 * SLACK * gmax * len || !(0..=n).all(|k| on_cells([p[0] + (q[0] - p[0]) * k as f64 / n as f64, p[1] + (q[1] - p[1]) * k as f64 / n as f64])) {
+                    break;
+                }
+                r.drain(fi + 1..fj);
             }
         }
         match route {
@@ -1935,13 +1961,19 @@ fn route_len(r: &[[f64; 2]]) -> f64 {
 /// along it but within 0.6 mi of each other, with a leg between them longer than 0.6 mi
 /// (compact switchback stacks have short legs between their hairpins).
 fn route_finger(r: &[[f64; 2]], cell: f64) -> bool {
+    finger_span(r, cell).is_some()
+}
+
+/// The first finger of a route (`route_finger`) as the indices of the point it leaves the route
+/// at and the one it comes back to.
+fn finger_span(r: &[[f64; 2]], cell: f64) -> Option<(usize, usize)> {
     const MI: f64 = 5280.0;
     let mut s: Vec<f64> = vec![0.0];
     for w in r.windows(2) {
         s.push(s[s.len() - 1] + dist(w[0], w[1]) * cell);
     }
     if s[s.len() - 1] < 1.5 * MI {
-        return false;
+        return None;
     }
     // Hairpin-like corners (turning over 100 degrees across the nodes 250 ft either side).
     let at = |d: f64| {
@@ -1964,13 +1996,13 @@ fn route_finger(r: &[[f64; 2]], cell: f64) -> bool {
                 marks.extend(corners.iter().copied().filter(|&c| c > s[i] && c < s[j]));
                 marks.push(s[j]);
                 if marks.windows(2).any(|w| w[1] - w[0] > 0.6 * MI) {
-                    return true;
+                    return Some((i, j));
                 }
                 break;
             }
         }
     }
-    false
+    None
 }
 
 /// A* on a grid `f` times finer than T0 inside a corridor, over the `ground` heights at its
@@ -2717,7 +2749,7 @@ fn join_through(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f64,
         let a = if si { flipped(&roads[i]) } else { roads[i].clone() };
         let b = if sk { roads[k].clone() } else { flipped(&roads[k]) };
         let joint = a.pts.len() - 1;
-        let mut joined = RoadPath { class: a.class.min(b.class), pts: a.pts, z: a.z, wander: a.wander, stroke: a.stroke };
+        let mut joined = RoadPath { class: a.class.min(b.class), pts: a.pts, z: a.z, wander: a.wander, stroke: a.stroke, spine: a.spine && b.spine };
         joined.pts.extend_from_slice(&b.pts[1..]);
         joined.z.extend_from_slice(&b.z[1..]);
         joined.wander.extend_from_slice(&b.wander[1..]);
@@ -3108,7 +3140,7 @@ fn sub2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
 /// A road the other way round.
 fn flipped(r: &RoadPath) -> RoadPath {
     let (pts, z, wander) = (r.pts.iter().rev().copied().collect(), r.z.iter().rev().copied().collect(), r.wander.iter().rev().copied().collect());
-    RoadPath { class: r.class, pts, z, wander, stroke: r.stroke }
+    RoadPath { class: r.class, pts, z, wander, stroke: r.stroke, spine: r.spine }
 }
 
 /// A value per point (`s`: the line's `arc`) at `t` along it.
@@ -3133,7 +3165,7 @@ fn split_road(r: &RoadPath, s: &[f64], cuts: &[(f64, [f64; 2])]) -> Vec<RoadPath
             let pts = std::iter::once(lo.1).chain(mid.clone().map(|k| r.pts[k])).chain(std::iter::once(hi.1)).collect();
             let z = std::iter::once(lo.2).chain(mid.clone().map(|k| r.z[k])).chain(std::iter::once(hi.2)).collect();
             let wander = std::iter::once(lo.3).chain(mid.map(|k| r.wander[k])).chain(std::iter::once(hi.3)).collect();
-            RoadPath { class: r.class, pts, z, wander, stroke: r.stroke }
+            RoadPath { class: r.class, pts, z, wander, stroke: r.stroke, spine: r.spine }
         })
         .collect()
 }
@@ -3310,7 +3342,7 @@ fn rejoined(b: &RoadPath, fit: &Fit, z_q: f32) -> RoadPath {
     pts.extend(rest.clone().map(|i| b.pts[i]));
     z.extend(rest.clone().map(|i| b.z[i]));
     wander.extend(rest.map(|i| b.wander[i]));
-    RoadPath { class: b.class, pts, z, wander, stroke: b.stroke }
+    RoadPath { class: b.class, pts, z, wander, stroke: b.stroke, spine: b.spine }
 }
 
 /// Road ends by point (exact): (road, at its start).
@@ -3422,7 +3454,7 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], ground: &dyn Fn
             let mut found = None;
             'pairs: for x in 0..legs.len() {
                 for y in x + 1..legs.len() {
-                    let key = |i: usize| (legs[i].class, -arcs[i][arcs[i].len() - 1]);
+                    let key = |i: usize| (legs[i].class, !legs[i].spine, -arcs[i][arcs[i].len() - 1]);
                     let (c, o) = if key(x) <= key(y) { (x, y) } else { (y, x) };
                     let (os, cs) = (&arcs[o], &arcs[c]);
                     let (olen, clen) = (os[os.len() - 1], cs[cs.len() - 1]);
@@ -3520,7 +3552,7 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], ground: &dyn Fn
             pts.extend(rest.iter().map(|&i| lo.pts[i]));
             z.extend(rest.iter().map(|&i| lo.z[i]));
             wander.extend(rest.iter().map(|&i| lo.wander[i]));
-            pieces.push(RoadPath { class: lo.class, pts, z, wander, stroke: None });
+            pieces.push(RoadPath { class: lo.class, pts, z, wander, stroke: None, spine: lo.spine });
             if pieces.iter().any(|p| p.pts.len() < 2 || road_len(p) < 1.0) {
                 continue;
             }
@@ -3572,7 +3604,8 @@ fn square_at(roads: &mut Vec<RoadPath>, j: [f64; 2], list: &[(usize, bool)], sq:
     for a in 0..legs.len() {
         for b in a + 1..legs.len() {
             let c = dot2(dir[a], dir[b]);
-            let w = (wet[a] || wet[b]) as u8;
+            // (A realm's track through: its villages' spurs leave it, whatever lines up with a spur.)
+            let w = (wet[a] || wet[b]) as u8 + 2 * !(legs[a].spine && legs[b].spine) as u8;
             if c <= THROUGH {
                 pairs.push(((w, 0, legs[a].class.max(legs[b].class), legs[a].class.min(legs[b].class), c), a, b));
             } else if c <= BENT {
@@ -3595,6 +3628,7 @@ fn square_at(roads: &mut Vec<RoadPath>, j: [f64; 2], list: &[(usize, bool)], sq:
         t.z.extend_from_slice(&legs[b].z[1..]);
         t.wander.extend_from_slice(&legs[b].wander[1..]);
         t.class = legs[a].class.min(legs[b].class);
+        t.spine = legs[a].spine && legs[b].spine;
         t.wander[joint] = 0.0;
         fillet(&mut t, joint, cell, sq.dry);
         let ts = arc(&t.pts);
