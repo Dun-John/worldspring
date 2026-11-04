@@ -2755,22 +2755,40 @@ fn drop_twin_link(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], small: &
         }
         None
     };
+    // (Each road's box: a point `along` it lies within 60 ft of that.)
+    let boxes: Vec<[f64; 4]> = roads.iter().map(|r| r.pts.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])).collect();
+    let in_box = |k: usize, p: [f64; 2]| p[0] >= boxes[k][0] - 60.0 && p[0] <= boxes[k][2] + 60.0 && p[1] >= boxes[k][1] - 60.0 && p[1] <= boxes[k][3] + 60.0;
+    // The roads leaving each town (by index), each ending there once.
+    let mut by_town: Vec<Vec<usize>> = vec![Vec::new(); towns.len()];
+    for (i, r) in roads.iter().enumerate() {
+        if r.stroke.is_some() || r.class == RoadClass::KingsRoad || ends[i].0 == ends[i].1 {
+            continue;
+        }
+        for e in [ends[i].0, ends[i].1] {
+            if e.0 == i64::MIN && (e.1 as usize) < towns.len() {
+                by_town[e.1 as usize].push(i);
+            }
+        }
+    }
     let mut best: Option<(f64, usize)> = None;
     for t in 0..towns.len() {
         if !small.get(t).copied().unwrap_or(false) {
             continue;
         }
         let tk: K = (i64::MIN, t as i64);
-        let mine: Vec<usize> = (0..roads.len()).filter(|&i| roads[i].stroke.is_none() && roads[i].class != RoadClass::KingsRoad && ((ends[i].0 == tk) != (ends[i].1 == tk))).collect();
+        let mine = &by_town[t];
         // The road's far end, the road itself leaving the village at its start.
         let far = |i: usize| if ends[i].0 == tk { *roads[i].pts.last().unwrap() } else { roads[i].pts[0] };
-        for &i in &mine {
-            for &k in &mine {
+        for &i in mine {
+            for &k in mine {
                 if k == i || roads[k].class > roads[i].class || (roads[k].class == roads[i].class && (lens[k], k) > (lens[i], i)) {
                     continue;
                 }
                 let (pb, pa) = (far(i), far(k));
-                for king in roads.iter().filter(|r| r.class < roads[i].class) {
+                for (q, king) in roads.iter().enumerate().filter(|(_, r)| r.class < roads[i].class) {
+                    if !in_box(q, pa) || !in_box(q, pb) {
+                        continue;
+                    }
                     let (Some(sa), Some(sb)) = (along(king, pa), along(king, pb)) else { continue };
                     if (sa - sb).abs() < 1.0 {
                         continue;
@@ -2946,12 +2964,14 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
 /// the bend where they met rounded (a curve from ~0.3 cell before it to as far after, keeping
 /// each side's heading; left as it is where the curve would cross water).
 fn join_through(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f64, dry: &dyn Fn(f64, f64) -> bool) {
+    // Each road's end keys (a join keeps the two far ends, so theirs carry over).
+    let mut keys: Vec<Option<((i64, i64), (i64, i64))>> = roads.iter().map(|r| (r.pts.len() >= 2).then(|| (end_key(r.pts[0], towns), end_key(*r.pts.last().unwrap(), towns)))).collect();
     loop {
         let mut at: std::collections::BTreeMap<(i64, i64), Vec<(usize, bool)>> = Default::default();
-        for (i, r) in roads.iter().enumerate() {
-            if r.pts.len() >= 2 {
-                at.entry(end_key(r.pts[0], towns)).or_default().push((i, true));
-                at.entry(end_key(*r.pts.last().unwrap(), towns)).or_default().push((i, false));
+        for (i, k) in keys.iter().enumerate() {
+            if let Some((k0, k1)) = *k {
+                at.entry(k0).or_default().push((i, true));
+                at.entry(k1).or_default().push((i, false));
             }
         }
         // (A drawn road and another keep their own names: they stay two.)
@@ -2967,9 +2987,14 @@ fn join_through(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f64,
         // The ends' wander was tapered away by the curve's ends; mid-road it would jog.
         joined.wander[joint] = 0.0;
         fillet(&mut joined, joint, cell, dry);
+        let (ka, kb) = (keys[i].unwrap(), keys[k].unwrap());
+        let key = (if si { ka.1 } else { ka.0 }, if sk { kb.1 } else { kb.0 });
         let (lo, hi) = (i.min(k), i.max(k));
         roads.remove(hi);
         roads.remove(lo);
+        keys.remove(hi);
+        keys.remove(lo);
+        keys.push((joined.pts.len() >= 2).then_some(key));
         roads.push(joined);
     }
 }
