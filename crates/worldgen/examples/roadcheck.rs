@@ -991,6 +991,19 @@ fn realms(world: &worldgen::World, t0: &T0) {
             for r in &rows {
                 say!("      SPUR {}", r.1);
             }
+            // Each spur as built: its road from the village, length against the chord and the furthest it strays from it.
+            for sp in &spurs {
+                let a = sp[0];
+                let built = t0.roads.roads.iter().filter(|r| r.pts.len() >= 2 && (d(r.pts[0], a) < 0.3 * t0.cell_ft || d(r.pts[r.pts.len() - 1], a) < 0.3 * t0.cell_ft)).max_by(|x, y| x.pts.len().cmp(&y.pts.len()));
+                if let Some(r) = built {
+                    let pts: Vec<P> = if d(r.pts[0], a) < 0.3 * t0.cell_ft { r.pts.clone() } else { r.pts.iter().rev().copied().collect() };
+                    let (p0, p1) = (pts[0], pts[pts.len() - 1]);
+                    let len: f64 = pts.windows(2).map(|q| d(q[0], q[1])).sum();
+                    let ch = d(p0, p1).max(1.0);
+                    let dev = pts.iter().map(|q| ((p1[0] - p0[0]) * (p0[1] - q[1]) - (p0[0] - q[0]) * (p1[1] - p0[1])).abs() / ch).fold(0.0f64, f64::max);
+                    say!("      SPUR-BUILT from ({:.0}, {:.0}) len {:.1} mi chord {:.1} mi ratio {:.3} max stray {:.2} mi", a[0], a[1], len / MI, ch / MI, len / ch, dev / MI);
+                }
+            }
         }
     }
 }

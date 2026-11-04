@@ -494,6 +494,12 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
                 }
             }
         }
+        // A realm village's spur wanders a little more: on flat ground it would run ruler-straight.
+        let spur_end = |c: u32| settlements.iter().any(|v| v.isolated && v.planned == Tier::Village && v.cell as u32 == c);
+        if *class == RoadClass::Track && (spur_end(seg[0]) || spur_end(seg[seg.len() - 1])) {
+            let seed = crate::core::rng::hash2(inp.world.stream("t0.road.spur"), seg[0] as i64, seg[seg.len() - 1] as i64);
+            meander_spur(&mut pts, &mut wander, seed, &|x, y| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && passable_fn(inp)(y as usize * w + x as usize));
+        }
         // Bend with the land instead of running ruler-straight across it.
         let seed = crate::core::rng::hash2(inp.world.stream("t0.road.bends"), seg[0] as i64, seg[seg.len() - 1] as i64);
         follow_terrain(&mut pts, &mut wander, hgrid, *class, cell, seed, &|x, y| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && passable_fn(inp)(y as usize * w + x as usize));
@@ -733,7 +739,7 @@ pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) ->
 /// How far apart (feet) two of a realm's villages' tracks join its track, and how far a join keeps off a
 /// bend of the track sharper than `JOIN_BEND_DEG` (a spur at a bend reads as a fork of the track).
 const JOIN_APART_FT: f64 = 1.5 * 5280.0;
-const JOIN_BEND_DEG: f64 = 45.0;
+const JOIN_BEND_DEG: f64 = 20.0;
 const JOIN_BEND_FT: f64 = 5280.0;
 
 /// The cells of a realm's track (in order) within `JOIN_BEND_FT` of a bend over `JOIN_BEND_DEG`, the turn
@@ -1500,6 +1506,64 @@ pub fn preview(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) 
 
 fn passable_fn<'a>(inp: &'a Inputs) -> impl Fn(usize) -> bool + 'a {
     move |k| inp.land[k] && inp.hydro.lake_of[k] == NO_LAKE
+}
+
+/// Sways a realm village's spur (points in cells) sideways by up to about a third of a mile in waves a few
+/// miles long, none at its ends (it leaves the village and joins the track as it did), none where the
+/// ground there is wet or on a switchback leg. Short spurs sway less.
+fn meander_spur(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, seed: u64, dry: &dyn Fn(i64, i64) -> bool) {
+    const STEP: f64 = 0.08;
+    const TAPER: f64 = 1.0;
+    if pts.len() < 2 {
+        return;
+    }
+    let (mut rp, mut rw): (Vec<[f64; 2]>, Vec<f32>) = (vec![pts[0]], vec![wander[0]]);
+    for k in 1..pts.len() {
+        let (a, b) = (pts[k - 1], pts[k]);
+        let n = (dist(a, b) / STEP).ceil().max(1.0) as usize;
+        for j in 1..=n {
+            let t = j as f64 / n as f64;
+            rp.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+            rw.push(wander[k - 1] + (wander[k] - wander[k - 1]) * t as f32);
+        }
+    }
+    let n = rp.len();
+    if n < 3 {
+        return;
+    }
+    let mut s = vec![0.0; n];
+    for i in 1..n {
+        s[i] = s[i - 1] + dist(rp[i - 1], rp[i]);
+    }
+    let total = s[n - 1];
+    let size = smoothstep(0.2, 1.5, total);
+    let mut out = rp.clone();
+    for i in 1..n - 1 {
+        let ease = smoothstep(0.0, TAPER, s[i].min(total - s[i]));
+        if ease <= 0.0 || rw[i] < 0.5 {
+            continue;
+        }
+        // (Not at a corner of the route: the sideways push would fold it.)
+        let (a, m, b) = (rp[i.saturating_sub(20)], rp[i], rp[(i + 20).min(n - 1)]);
+        let (ux, uy, vx, vy) = (m[0] - a[0], m[1] - a[1], b[0] - m[0], b[1] - m[1]);
+        let cos = (ux * vx + uy * vy) / (crate::core::sqrt(ux * ux + uy * uy) * crate::core::sqrt(vx * vx + vy * vy)).max(1e-9);
+        let ease = ease * smoothstep(0.9, 0.99, cos);
+        if ease <= 0.0 {
+            continue;
+        }
+        let (tx, ty) = (b[0] - a[0], b[1] - a[1]);
+        let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-9);
+        let off = ease * size * 0.6 * gradient2(seed, s[i] / 2.5, 0.37);
+        for f in [1.0, 0.5] {
+            let q = [rp[i][0] - ty / tl * off * f, rp[i][1] + tx / tl * off * f];
+            if dry(crate::core::round(q[0]) as i64, crate::core::round(q[1]) as i64) {
+                out[i] = q;
+                break;
+            }
+        }
+    }
+    *pts = out;
+    *wander = rw;
 }
 
 /// Gives a road (points in cells, with their wander weights) the bends of a real one, baked
