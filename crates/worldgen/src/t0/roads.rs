@@ -1743,7 +1743,7 @@ fn follow_terrain(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, hgrid: &Plan, 
     let mut z: Vec<f64> = rp.iter().map(|p| hz(*p)).collect();
     let grade = |za: f64, zb: f64, a: [f64; 2], b: [f64; 2]| (zb - za) / (dist(a, b) * cell).max(1.0);
     let cost = |g: f64| 100.0 * g * g + if g.abs() > gmax { 1_000.0 * (g.abs() - gmax) * (g.abs() - gmax) } else { 0.0 };
-    for d in [0.08, 0.08, 0.05, 0.05, 0.03, 0.03, 0.02, 0.02, 0.01, 0.01] {
+    for d in [0.08, 0.05, 0.03, 0.02, 0.01, 0.01] {
         for i in 1..n - 1 {
             if room[i] <= 0.0 {
                 continue;
