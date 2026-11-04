@@ -721,6 +721,10 @@ pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) ->
     out
 }
 
+/// How far apart (cells) two of a realm's villages' tracks join its track: near, so that each has a short
+/// spur of its own rather than a far join the track gap between two others would force.
+const JOIN_APART: f64 = 0.9;
+
 /// How far (cells) round a realm's town its villages' tracks keep off, joining its track beyond.
 fn realm_keep_out(s: &Settlement, cell: f64) -> f64 {
     (crate::town::road_trim_radius(s.planned, s.planned_pop) + 1.5 * 5280.0) / cell + 2.0
@@ -1201,7 +1205,7 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 let far = |k: usize| ((k % w) as f64 - sx) * ((k % w) as f64 - sx) + ((k / w) as f64 - sy) * ((k / w) as f64 - sy) > r * r;
                 // (Not beside where another of its villages joined: no stub between two junctions.)
                 let apart = |k: usize| {
-                    joins.get(&ri).is_none_or(|js: &Vec<usize>| js.iter().all(|&j| ((k % w) as f64 - (j % w) as f64) * ((k % w) as f64 - (j % w) as f64) + ((k / w) as f64 - (j / w) as f64) * ((k / w) as f64 - (j / w) as f64) >= 9.0))
+                    joins.get(&ri).is_none_or(|js: &Vec<usize>| js.iter().all(|&j| ((k % w) as f64 - (j % w) as f64) * ((k % w) as f64 - (j % w) as f64) + ((k / w) as f64 - (j / w) as f64) * ((k / w) as f64 - (j / w) as f64) >= JOIN_APART * JOIN_APART))
                 };
                 // (Nor across another of its villages' tracks: each straight to its own join.)
                 let xy = |c: usize| ((c % w) as f64, (c / w) as f64);
@@ -1334,7 +1338,7 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 }
                 // (A hidden village's track keeps off its realm's roads beside where the others
                 // joined them, so that their junctions stay apart.)
-                if road_class[nb] != u8::MAX && nb != goal && !others.is_empty() && others.iter().any(|&j| ((j % w) as f64 - nx) * ((j % w) as f64 - nx) + ((j / w) as f64 - ny) * ((j / w) as f64 - ny) < 9.0) {
+                if road_class[nb] != u8::MAX && nb != goal && !others.is_empty() && others.iter().any(|&j| ((j % w) as f64 - nx) * ((j % w) as f64 - nx) + ((j / w) as f64 - ny) * ((j / w) as f64 - ny) < JOIN_APART * JOIN_APART) {
                     c += JOIN_BAN / run;
                 }
                 if kings {
