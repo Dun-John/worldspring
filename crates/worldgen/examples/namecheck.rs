@@ -85,6 +85,8 @@ struct Counts {
     /// The most sites of a world on one head noun (with it), filler library and bank names.
     site_noun: (usize, String),
     filler: usize,
+    /// The most Counting House, Exchange, Treasury or Bank names in one town.
+    money: usize,
 }
 
 /// The world `seed`'s features as (id, name), generated with the sketch strokes `strokes`
@@ -209,6 +211,7 @@ fn main() {
                 loc.lord = Some(tn.person(c));
                 let mut used = std::collections::BTreeSet::new();
                 let mut heads: BTreeMap<String, usize> = BTreeMap::new();
+                let mut money = 0;
                 for (i, key) in SHOPS.iter().enumerate() {
                     let f = &catalog::CATALOG[catalog::index_of(key).expect("a catalog key")];
                     let before = loc.keys.len();
@@ -223,6 +226,10 @@ fn main() {
                     let second = name.split(' ').nth(1).unwrap_or("");
                     if matches!(*key, "library" | "bank") && name.starts_with("The ") && !name.contains(" of ") && !loc.landmarks.iter().any(|m| m.starts_with(second)) && !second.starts_with("Wharf") && !second.starts_with("Market") && !second.starts_with("Gatehouse") && !second.starts_with("Pilgrims") {
                         filler += 1;
+                    }
+                    if ["Counting House", "Exchange", "Treasury", "Bank"].iter().any(|m| name.contains(m)) {
+                        money += 1;
+                        n.money = n.money.max(money);
                     }
                     if !matches!(*key, "temple" | "shrine") {
                         let h = heads.entry(head_noun(&name).to_string()).or_default();
@@ -307,7 +314,7 @@ fn main() {
         }
         let mut rep: Vec<(&String, &usize)> = n.repeated.iter().collect();
         rep.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-        println!("most repeated inns and shops: {}", rep.iter().take(12).map(|(s, k)| format!("{s} +{k}")).collect::<Vec<_>>().join(" · "));
+        println!("most repeated inns and shops: {}", rep.iter().take(if summary { 12 } else { 100 }).map(|(s, k)| format!("{s} +{k}")).collect::<Vec<_>>().join(" · "));
         for t in n.training.iter().take(20) {
             println!("training word: {t}");
         }
@@ -324,12 +331,13 @@ fn main() {
     println!("settlements: {}", per.join(" · "));
     println!("most businesses in a town on one head noun: {}", n.heads);
     println!(
-        "culture words from the letter model: {}% · culture words hitting the later bans: {} · most sites of a world on one noun: {} ({}) · most filler library and bank names in a world: {}",
+        "culture words from the letter model: {}% · culture words hitting the later bans: {} · most sites of a world on one noun: {} ({}) · most filler library and bank names in a world: {} · most Counting House/Exchange/Treasury/Bank in a town: {}",
         100 * n.from_model / n.made.max(1),
         n.bans.len(),
         n.site_noun.0,
         n.site_noun.1,
-        n.filler
+        n.filler,
+        n.money
     );
     println!(
         "{} names, {} culture words: {} faults, {} training words, {} town key-word clashes, {} inn and shop names repeated across a world's towns, {} settlement words reused in a world",

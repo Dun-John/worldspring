@@ -359,7 +359,7 @@ pub fn shop_signs(key: &str) -> &'static [&'static str] {
     match key {
         "apothecary" => &["Mortar", "Phial", "Sprig", "Leech"],
         "tailor" => &["Needle", "Thimble", "Spool", "Thread"],
-        "general_store" => &["Scales", "Barrel", "Basket", "Lamp"],
+        "general_store" => &["Sack", "Barrel", "Basket", "Lamp"],
         "blacksmith" => &["Anvil", "Nail", "Bellows", "Tongs"],
         "bakery" => &["Loaf", "Oven", "Sheaf", "Bun"],
         "cobbler" => &["Boot", "Last", "Buckle"],

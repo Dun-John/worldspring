@@ -481,6 +481,20 @@ pub fn fault(word: &str, culture: Option<usize>) -> Option<&'static str> {
     if let Some(f) = ban(word) {
         return Some(f);
     }
+    // Endings of no tongue here ("Mijangek", "Yichik", "Tikege"; -ik is the north's, "Dravik").
+    if b.ends_with(b"ek") || b.ends_with(b"ege") || (c != 0 && b.ends_with(b"ik")) {
+        return Some("-ek, -ege or -ik outside its tongue");
+    }
+    // The steppe's long words do not end in two closed syllables running ("Chonsoknur").
+    if c == 4 && syllables(word) >= 3 && !vowel_at(&b, b.len() - 1) {
+        let last = (0..b.len()).rev().find(|&i| plain(b[i]));
+        let before = last.and_then(|l| (0..l).rev().find(|&i| plain(b[i])));
+        if let (Some(l), Some(v)) = (last, before) {
+            if l - v > 2 {
+                return Some("two closed syllables ending a steppe word");
+            }
+        }
+    }
     if (c == 0 || c == 1) && b.ends_with(b"i") {
         return Some("-i in the north or west tongue");
     }
@@ -502,6 +516,10 @@ pub fn ban(word: &str) -> Option<&'static str> {
     let n = b.len();
     if b.starts_with(b"hr") || b.starts_with(b"bj") {
         return Some("Hr- or Bj-");
+    }
+    // ("Brytathy", "Yukhinun", "Yichik": no y right after a starting cluster, nor yu-, yi-.)
+    if (n >= 3 && cons(b[0]) && cons(b[1]) && b[2] == b'y') || b.starts_with(b"yu") || b.starts_with(b"yi") {
+        return Some("a clumsy y at the start");
     }
     if b.starts_with(b"ll") && !b.get(2).is_some_and(|&x| plain(x)) {
         return Some("Ll before a consonant");

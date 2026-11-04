@@ -5153,6 +5153,10 @@ const CITY_PALACES: f64 = 0.4;
 /// The share of town castles (but a capital's, which always has one) sized for an inner bailey.
 const CASTLE_INNER: f64 = 0.45;
 
+/// A bank is named with one of these; a town has at most one (`MONEY_KEY` in its key words).
+const MONEY: [&str; 4] = ["Counting House", "Exchange", "Treasury", "Bank"];
+const MONEY_KEY: &str = "$bank";
+
 /// What a town's businesses are named for (`business_name`): its culture, its landmarks (a river,
 /// the sea, what the town is there for), its lord, and the key words its businesses' names have
 /// taken (no two share one: one Fox, one Harbour, one Aldric in a town).
@@ -5178,6 +5182,9 @@ impl Locale {
         let mut l = Self::new(culture);
         for n in names {
             l.keys.extend(crate::t0::names::words(n));
+            if MONEY.iter().any(|m| n.contains(m)) {
+                l.keys.insert(MONEY_KEY.to_string());
+            }
             *l.heads.entry(head_noun(n).to_string()).or_default() += 1;
             l.named += 1;
         }
@@ -5223,12 +5230,13 @@ pub fn head_noun(name: &str) -> &str {
 /// A shop owner's (or a saint's) name: a culture word of four to seven letters and at most two
 /// syllables ("Hrolf", "Maddo").
 fn owner(namer: &mut Namer, c: usize) -> String {
-    let mut p = namer.person(c);
+    // (Two-syllable words: a far larger space than one-syllable ones, so towns rarely share one.)
+    let mut p = namer.word(c, 2, 2);
     for _ in 0..12 {
         if p.len() <= 7 && crate::t0::names::syllables(&p) <= 2 {
             break;
         }
-        p = namer.person(c);
+        p = namer.word(c, 2, 2);
     }
     p
 }
@@ -5241,9 +5249,16 @@ pub fn business_name(f: &catalog::Func, namer: &mut Namer, loc: &mut Locale, war
     if f.naming == Naming::Plain {
         return None;
     }
+    if f.key == "bank" && loc.keys.contains(MONEY_KEY) {
+        return None;
+    }
     let c = loc.culture;
     let signs = &catalog::SIGNS[c];
     let mut marks = loc.landmarks.clone();
+    // (No "The Pithead Archive": a pithead is no name for a library or a bank.)
+    if matches!(f.key, "library" | "bank") {
+        marks.retain(|m| *m != "Pithead");
+    }
     marks.extend(match ward {
         Some(Ward::Docks) => &["Wharf"][..],
         Some(Ward::Plaza) => &["Market Cross"],
@@ -5263,7 +5278,13 @@ pub fn business_name(f: &catalog::Func, namer: &mut Namer, loc: &mut Locale, war
         // Late tries: a person's name, which is all but always fresh.
         let late = attempt >= 10;
         let (name, keys): (String, Vec<String>) = match f.naming {
-            Naming::Sign if !late && r < 48 => {
+            // An owner's own sign ("Hrolf's Anchor"): a far wider space than adjective and noun.
+            Naming::Sign if !late && r < 20 => {
+                let n = namer.pick(signs.noun);
+                let p = owner(namer, c);
+                (format!("{p}'s {n}"), vec![n.to_string(), p])
+            }
+            Naming::Sign if !late && r < 50 => {
                 let n = namer.pick(signs.noun);
                 (format!("The {} {n}", namer.pick(signs.adj)), vec![n.to_string()])
             }
@@ -5352,6 +5373,9 @@ pub fn business_name(f: &catalog::Func, namer: &mut Namer, loc: &mut Locale, war
         let crowded = !sacred && loc.heads.get(&head).is_some_and(|&k| k > loc.named / 8);
         if (keys.iter().all(|k| !loc.keys.contains(k)) && !crowded) || attempt == 15 {
             loc.keys.extend(keys);
+            if f.key == "bank" {
+                loc.keys.insert(MONEY_KEY.to_string());
+            }
             *loc.heads.entry(head).or_default() += 1;
             loc.named += 1;
             return Some(name);
