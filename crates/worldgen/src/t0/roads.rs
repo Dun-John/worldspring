@@ -1745,6 +1745,8 @@ fn switchbacks(
     // the plan, and a route at the limit leaves no room (the profile would cut and fill by
     // a hundred feet).
     const SLACK: f64 = 0.85;
+    // A route over this many times the straight run is too long.
+    const LONG: f64 = 1.5;
     let at = |p: [f64; 2]| hg.z(p);
     // Steeper than the limit over any quarter of the stretch on the ground itself.
     let steep = |a: [f64; 2], b: [f64; 2]| {
@@ -1777,8 +1779,43 @@ fn switchbacks(
         }
         let on_plan = |p: [f64; 2]| hg.z(p);
         let on_cells = |p: [f64; 2]| passable((p[1].round() as usize).min(hg.ch - 1) * hg.cw + (p[0].round() as usize).min(hg.cw - 1));
-        let route = fine_route(hg, &on_plan, &on_cells, cells[i], cells[j], SLACK * gmax, cell, F)
-            .or_else(|| fine_route(hg, ground, dry, cells[i], cells[j], SLACK * gmax, cell, F_FINE));
+        let mut route = fine_route(hg, &on_plan, &on_cells, cells[i], cells[j], SLACK * gmax, &[1.0, 1.8], cell, F)
+            .or_else(|| fine_route(hg, ground, dry, cells[i], cells[j], SLACK * gmax, &[1.0, 1.8], cell, F_FINE));
+        // A climb that can only hold the grade by adding miles comes out as one long finger (out,
+        // a U-turn, back beside itself) or a route far longer than the straight run. Spend the
+        // grade instead: retry with each leg step allowed 1.2 to 1.8 times the planned grade (the
+        // profile averages the bumps), taking the first route that has neither fault.
+        if let Some(r) = route.clone() {
+            let straight = dist(cells[i], cells[j]) * cell;
+            let bad = |r: &[[f64; 2]]| route_len(r) * cell > LONG * straight || route_finger(r, cell);
+            if bad(&r) {
+                // (The profile can only climb its limit over the length: a route too short for
+                // the climb would be cut and filled.)
+                let climb = (at(cells[i]) - at(cells[j])).abs();
+                let mut shortest: Option<(f64, Vec<[f64; 2]>)> = None;
+                for m in [1.2, 1.4, 1.6, 1.8] {
+                    let Some(r2) = fine_route(hg, &on_plan, &on_cells, cells[i], cells[j], SLACK * gmax, &[m], cell, F) else { continue };
+                    let len = route_len(&r2);
+                    if climb > 0.97 * gmax * len * cell {
+                        continue;
+                    }
+                    if !bad(&r2) {
+                        route = Some(r2);
+                        shortest = None;
+                        break;
+                    }
+                    if shortest.as_ref().is_none_or(|s| len < s.0) {
+                        shortest = Some((len, r2));
+                    }
+                }
+                // None as good as wanted: the shortest, if it saves a good part of the length.
+                if let Some((len, r2)) = shortest {
+                    if len < 0.8 * route_len(&r) {
+                        route = Some(r2);
+                    }
+                }
+            }
+        }
         match route {
             Some(route) => {
                 // Drop collinear fine-grid points; keep the legs and hairpins.
@@ -1889,11 +1926,58 @@ fn round_corners_by(pts: &[[f64; 2]], vals: &[f32], r_max: &dyn Fn(usize) -> f64
     (out, ov)
 }
 
+/// Length of a polyline (cells).
+fn route_len(r: &[[f64; 2]]) -> f64 {
+    r.windows(2).map(|w| dist(w[0], w[1])).sum()
+}
+
+/// Whether a route (cells) runs out and comes back beside itself: two points over 1.5 mi apart
+/// along it but within 0.6 mi of each other, with a leg between them longer than 0.6 mi
+/// (compact switchback stacks have short legs between their hairpins).
+fn route_finger(r: &[[f64; 2]], cell: f64) -> bool {
+    const MI: f64 = 5280.0;
+    let mut s: Vec<f64> = vec![0.0];
+    for w in r.windows(2) {
+        s.push(s[s.len() - 1] + dist(w[0], w[1]) * cell);
+    }
+    if s[s.len() - 1] < 1.5 * MI {
+        return false;
+    }
+    // Hairpin-like corners (turning over 100 degrees across the nodes 250 ft either side).
+    let at = |d: f64| {
+        let k = s.partition_point(|&v| v < d).min(r.len() - 1);
+        r[k]
+    };
+    let corners: Vec<f64> = (1..r.len() - 1)
+        .filter(|&k| {
+            let (p, a, b) = (r[k], at(s[k] - 500.0), at(s[k] + 500.0));
+            let (u, v) = (sub2(p, a), sub2(b, p));
+            let (lu, lv) = (crate::core::sqrt(dot2(u, u)), crate::core::sqrt(dot2(v, v)));
+            lu > 0.0 && lv > 0.0 && dot2(u, v) < -0.17 * lu * lv
+        })
+        .map(|k| s[k])
+        .collect();
+    for i in 0..r.len() {
+        for j in i + 1..r.len() {
+            if s[j] - s[i] >= 1.5 * MI && dist(r[i], r[j]) * cell <= 0.6 * MI {
+                let mut marks = vec![s[i]];
+                marks.extend(corners.iter().copied().filter(|&c| c > s[i] && c < s[j]));
+                marks.push(s[j]);
+                if marks.windows(2).any(|w| w[1] - w[0] > 0.6 * MI) {
+                    return true;
+                }
+                break;
+            }
+        }
+    }
+    false
+}
+
 /// A* on a grid `f` times finer than T0 inside a corridor, over the `ground` heights at its
 /// nodes where `ok` (both at a point in cells); each step's grade must be ≤ gmax (then
 /// ≤ 1.8 gmax as a fallback). Returns points in T0 cell units.
 #[allow(clippy::too_many_arguments)]
-fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2]) -> bool, a: [f64; 2], b: [f64; 2], gmax: f64, cell: f64, f: f64) -> Option<Vec<[f64; 2]>> {
+fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2]) -> bool, a: [f64; 2], b: [f64; 2], gmax: f64, mults: &[f64], cell: f64, f: f64) -> Option<Vec<[f64; 2]>> {
     let pad = 4.0;
     let (x0, y0) = ((a[0].min(b[0]) - pad).max(0.0), (a[1].min(b[1]) - pad).max(0.0));
     // (On whole cells, as the junctions are: an end at a settlement's own spot is put back on it
@@ -1918,7 +2002,7 @@ fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2
             TURN * (1.0 - (ax * bx + ay * by) as f64 / crate::core::sqrt(((ax * ax + ay * ay) * (bx * bx + by * by)) as f64))
         })
         .collect();
-    for limit in [gmax, gmax * 1.8] {
+    for limit in mults.iter().map(|m| gmax * m) {
         let mut g = vec![f64::INFINITY; fw * fh * 16];
         let mut came = vec![u32::MAX; fw * fh * 16];
         let mut done = vec![false; fw * fh * 16];
