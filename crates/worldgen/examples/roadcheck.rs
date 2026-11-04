@@ -936,6 +936,62 @@ fn realms(world: &worldgen::World, t0: &T0) {
             outer[1],
             spurs.len()
         );
+        // Each spur: length, straightness, its join's place along the track, its angle there, and the
+        // distance (along the track) to the nearest bend of the track over 45 degrees.
+        {
+            let mut cum = vec![0.0f64];
+            for q in main.windows(2) {
+                cum.push(cum[cum.len() - 1] + d(q[0], q[1]));
+            }
+            let at = |s: f64| -> P {
+                let k = cum.partition_point(|&v| v < s).clamp(1, main.len().max(2) - 1);
+                let (a, b) = (main[k - 1], main[k]);
+                let t = if cum[k] > cum[k - 1] { ((s - cum[k - 1]) / (cum[k] - cum[k - 1])).clamp(0.0, 1.0) } else { 0.0 };
+                [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+            };
+            let total = cum.last().copied().unwrap_or(0.0);
+            let turn = |s: f64| -> f64 {
+                let (a, b, c2) = (at((s - MI).max(0.0)), at(s), at((s + MI).min(total)));
+                let (h1, h2) = ((b[1] - a[1]).atan2(b[0] - a[0]), (c2[1] - b[1]).atan2(c2[0] - b[0]));
+                let mut t = (h2 - h1).abs().to_degrees();
+                if t > 180.0 {
+                    t = 360.0 - t;
+                }
+                t
+            };
+            let mut bends: Vec<f64> = Vec::new();
+            let mut s = MI;
+            while s < total.min(60.0 * MI) {
+                let t = turn(s);
+                if t > 45.0 && turn(s - 0.25 * MI) <= t && turn(s + 0.25 * MI) < t {
+                    bends.push(s);
+                }
+                s += 0.25 * MI;
+            }
+            let mut rows: Vec<(f64, String)> = Vec::new();
+            for sp in &spurs {
+                let (a, e) = (sp[0], sp[sp.len() - 1]);
+                let len: f64 = sp.windows(2).map(|q| d(q[0], q[1])).sum();
+                let k = (0..main.len()).min_by(|&x, &y| d(main[x], e).total_cmp(&d(main[y], e))).unwrap_or(0);
+                let js = cum[k];
+                let nb = bends.iter().map(|&b| (b - js).abs()).fold(f64::INFINITY, f64::min);
+                let (p0, p1) = (sp[sp.len().saturating_sub(4)], e);
+                let (m0, m1) = (main[k.saturating_sub(3)], main[(k + 3).min(main.len() - 1)]);
+                let (h1, h2) = ((p1[1] - p0[1]).atan2(p1[0] - p0[0]), (m1[1] - m0[1]).atan2(m1[0] - m0[0]));
+                let mut ang = (h1 - h2).abs().to_degrees() % 180.0;
+                if ang > 90.0 {
+                    ang = 180.0 - ang;
+                }
+                rows.push((js, format!("spur from ({:.0}, {:.0}) len {:.1} mi straight-dist {:.1} mi ratio {:.2}; join at {:.1} mi along track, angle {:.0} deg, nearest bend {} mi", a[0], a[1], len / MI, d(a, e) / MI, len / d(a, e).max(1.0), js / MI, ang, if nb.is_finite() { format!("{:.1}", nb / MI) } else { "none".into() })));
+            }
+            rows.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let gaps: Vec<String> = rows.windows(2).map(|r| format!("{:.1}", (r[1].0 - r[0].0) / MI)).collect();
+            say!("      cell {:.0} ft", t0.cell_ft);
+            say!("      SPURS bends(>45deg, first 60 mi) at {:?} mi; join gaps {:?} mi", bends.iter().map(|b| (b / MI * 10.0).round() / 10.0).collect::<Vec<_>>(), gaps);
+            for r in &rows {
+                say!("      SPUR {}", r.1);
+            }
+        }
     }
 }
 

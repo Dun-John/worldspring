@@ -730,9 +730,39 @@ pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) ->
     out
 }
 
-/// How far apart (cells) two of a realm's villages' tracks join its track: near, so that each has a short
-/// spur of its own rather than a far join the track gap between two others would force.
-const JOIN_APART: f64 = 0.9;
+/// How far apart (feet) two of a realm's villages' tracks join its track, and how far a join keeps off a
+/// bend of the track sharper than `JOIN_BEND_DEG` (a spur at a bend reads as a fork of the track).
+const JOIN_APART_FT: f64 = 1.5 * 5280.0;
+const JOIN_BEND_DEG: f64 = 45.0;
+const JOIN_BEND_FT: f64 = 5280.0;
+
+/// The cells of a realm's track (in order) within `JOIN_BEND_FT` of a bend over `JOIN_BEND_DEG`, the turn
+/// measured between chords of that length either side.
+fn track_bends(track: &[u32], w: usize, cell: f64) -> crate::core::hash::FastSet<usize> {
+    let xy = |c: u32| ((c as usize % w) as f64, (c as usize / w) as f64);
+    let mut cum = vec![0.0f64];
+    for q in track.windows(2) {
+        let (a, b) = (xy(q[0]), xy(q[1]));
+        cum.push(cum[cum.len() - 1] + crate::core::sqrt((a.0 - b.0) * (a.0 - b.0) + (a.1 - b.1) * (a.1 - b.1)) * cell);
+    }
+    let at = |s: f64| track[cum.partition_point(|&v| v < s).min(track.len() - 1)];
+    let total = cum[cum.len() - 1];
+    let mut bends: Vec<(f64, f64)> = Vec::new();
+    for (i, &c) in track.iter().enumerate() {
+        let (s0, p) = (cum[i], xy(c));
+        if s0 < JOIN_BEND_FT || s0 + JOIN_BEND_FT > total {
+            continue;
+        }
+        let (a, b) = (xy(at(s0 - JOIN_BEND_FT)), xy(at(s0 + JOIN_BEND_FT)));
+        let (ux, uy, vx, vy) = (p.0 - a.0, p.1 - a.1, b.0 - p.0, b.1 - p.1);
+        let m = crate::core::sqrt(ux * ux + uy * uy) * crate::core::sqrt(vx * vx + vy * vy);
+        if m > 1e-9 && (ux * vx + uy * vy) / m < libm::cos(JOIN_BEND_DEG.to_radians()) {
+            bends.push(p);
+        }
+    }
+    let r = JOIN_BEND_FT / cell;
+    track.iter().filter(|&&c| bends.iter().any(|b| (xy(c).0 - b.0) * (xy(c).0 - b.0) + (xy(c).1 - b.1) * (xy(c).1 - b.1) < r * r)).map(|&c| c as usize).collect()
+}
 
 /// How far (cells) round a realm's town its villages' tracks keep off, joining its track beyond.
 fn realm_keep_out(s: &Settlement, cell: f64) -> f64 {
@@ -1213,8 +1243,10 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 let (sx, sy) = ((s.cell % w) as f64, (s.cell / w) as f64);
                 let far = |k: usize| ((k % w) as f64 - sx) * ((k % w) as f64 - sx) + ((k / w) as f64 - sy) * ((k / w) as f64 - sy) > r * r;
                 // (Not beside where another of its villages joined: no stub between two junctions.)
+                let join_apart = JOIN_APART_FT / cell;
+                let bends = tracks.get(&ri).map(|t| track_bends(t, w, cell)).unwrap_or_default();
                 let apart = |k: usize| {
-                    joins.get(&ri).is_none_or(|js: &Vec<usize>| js.iter().all(|&j| ((k % w) as f64 - (j % w) as f64) * ((k % w) as f64 - (j % w) as f64) + ((k / w) as f64 - (j / w) as f64) * ((k / w) as f64 - (j / w) as f64) >= JOIN_APART * JOIN_APART))
+                    joins.get(&ri).is_none_or(|js: &Vec<usize>| js.iter().all(|&j| ((k % w) as f64 - (j % w) as f64) * ((k % w) as f64 - (j % w) as f64) + ((k / w) as f64 - (j / w) as f64) * ((k / w) as f64 - (j / w) as f64) >= join_apart * join_apart))
                 };
                 // (Nor across another of its villages' tracks: each straight to its own join.)
                 let xy = |c: usize| ((c % w) as f64, (c / w) as f64);
@@ -1227,13 +1259,17 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 let (fx, fy) = xy(from);
                 let gap = |k: usize| crate::core::sqrt((xy(k).0 - fx) * (xy(k).0 - fx) + (xy(k).1 - fy) * (xy(k).1 - fy));
                 tracks.get(&ri).and_then(|t| {
-                    let best = near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k) && apart(k)));
-                    let straight = near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k) && apart(k) && clear(k)));
-                    match (straight, best) {
-                        (Some(s), Some(b)) if gap(s) <= 1.5 * gap(b) + 2.0 * 5280.0 / cell => Some(s),
-                        (_, Some(b)) => Some(b),
-                        _ => near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k))),
-                    }
+                    // (Off a bend of the track where there is a join that is, else anywhere.)
+                    let pick = |bent: bool| {
+                        let ok = |k: usize| far(k) && apart(k) && (!bent || !bends.contains(&k));
+                        let best = near(&mut t.iter().map(|&c| c as usize).filter(|&k| ok(k)));
+                        let straight = near(&mut t.iter().map(|&c| c as usize).filter(|&k| ok(k) && clear(k)));
+                        match (straight, best) {
+                            (Some(s), Some(b)) if gap(s) <= 1.5 * gap(b) + 2.0 * 5280.0 / cell => Some(s),
+                            (_, b) => b,
+                        }
+                    };
+                    pick(true).or_else(|| pick(false)).or_else(|| near(&mut t.iter().map(|&c| c as usize).filter(|&k| far(k))))
                 })
             }
         };
@@ -1347,7 +1383,7 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                 }
                 // (A hidden village's track keeps off its realm's roads beside where the others
                 // joined them, so that their junctions stay apart.)
-                if road_class[nb] != u8::MAX && nb != goal && !others.is_empty() && others.iter().any(|&j| ((j % w) as f64 - nx) * ((j % w) as f64 - nx) + ((j / w) as f64 - ny) * ((j / w) as f64 - ny) < JOIN_APART * JOIN_APART) {
+                if road_class[nb] != u8::MAX && nb != goal && !others.is_empty() && others.iter().any(|&j| ((j % w) as f64 - nx) * ((j % w) as f64 - nx) + ((j / w) as f64 - ny) * ((j / w) as f64 - ny) < (JOIN_APART_FT / cell) * (JOIN_APART_FT / cell)) {
                     c += JOIN_BAN / run;
                 }
                 if kings {
