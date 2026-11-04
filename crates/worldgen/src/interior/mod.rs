@@ -339,11 +339,18 @@ struct LevelProgram {
     /// A cell block: the first room is a strip by the stairs, the rest is corridors lined with
     /// cells under 15 ft a side.
     cells: bool,
+    /// A one-storey home's or workplace's rooms by its size (`layout_level`): the smallest homes
+    /// one room, cottages a main room and a bedroom, bigger ones a kitchen too; a shop's storeroom
+    /// left out on a small floor.
+    by_size: bool,
 }
 
 fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
-    let p = |name: &'static str, rooms: Prog, filler: Option<&'static str>, corridor: bool| LevelProgram { name, rooms: rooms.to_vec(), filler, corridor, cells: false };
-    let cells = |name: &'static str, strip: &'static str| LevelProgram { name, rooms: vec![(strip, 1.0)], filler: None, corridor: false, cells: true };
+    let p = |name: &'static str, rooms: Prog, filler: Option<&'static str>, corridor: bool| LevelProgram { name, rooms: rooms.to_vec(), filler, corridor, cells: false, by_size: false };
+    let cells = |name: &'static str, strip: &'static str| LevelProgram { name, rooms: vec![(strip, 1.0)], filler: None, corridor: false, cells: true, by_size: false };
+    let sized = |name: &'static str, rooms: Prog, filler: Option<&'static str>| LevelProgram { by_size: true, ..p(name, rooms, filler, false) };
+    // (The trades in workshops: a carpenter's, a mason's, a cooper's, a cartwright's.)
+    let trade = matches!(key, Some("carpenter" | "mason" | "cooper" | "cartwright"));
     use Arch::*;
     match (arch, z) {
         (_, z) if z == ROOF => p("Battlements", &[("battlements", 1.0)], None, false),
@@ -366,23 +373,31 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
             if top {
                 p("Observatory", &[("observatory", 1.0)], None, false)
             } else {
-                LevelProgram { name: "Floor", rooms: vec![(rooms[(z as usize - 1) % 4], 1.0)], filler: None, corridor: false, cells: false }
+                LevelProgram { name: "Floor", rooms: vec![(rooms[(z as usize - 1) % 4], 1.0)], filler: None, corridor: false, cells: false, by_size: false }
             }
         }
+        // One storey: a hovel one room with its bed by the hearth, other homes by their size.
+        (House, 0) if top && key == Some("hovel") => p("Ground floor", &[("hearth room", 1.0)], None, false),
+        (House, 0) if top => sized("Ground floor", &[("main room", 3.0), ("kitchen", 1.5), ("bedroom", 1.5)], Some("bedroom")),
         (House, 0) => p("Ground floor", &[("main room", 3.0), ("kitchen", 1.5)], Some("bedroom"), false),
         (House, _) => p("Upper floor", &[("bedroom", 2.0), ("bedroom", 1.5)], Some("bedroom"), false),
         (Tavern, 0) => p("Taproom", &[("common room", 5.0), ("kitchen", 1.5), ("storeroom", 1.0)], None, false),
         (Inn, 0) => p("Taproom", &[("common room", 5.0), ("kitchen", 1.5), ("storeroom", 1.0)], None, false),
         (Inn, _) => p("Guest rooms", &[("guest room", 1.0), ("guest room", 1.0)], Some("guest room"), true),
         (Tavern, _) => p("Upstairs", &[("owner's quarters", 2.0), ("storeroom", 1.0)], Some("guest room"), false),
+        // One storey: a bedroom behind the work room.
+        (Shop, 0) if top => sized("Shop floor", &[("shop", 3.0), ("workshop", 2.0), ("bedroom", 1.5), ("storeroom", 1.0)], None),
         (Shop, 0) => p("Shop floor", &[("shop", 3.0), ("workshop", 2.0), ("storeroom", 1.0)], None, false),
         (Shop, _) => p("Living quarters", &[("living room", 1.5), ("bedroom", 1.5)], Some("bedroom"), false),
+        (Forge, 0) if top => sized("Forge", &[("forge", 4.0), ("bedroom", 1.5), ("storeroom", 1.0)], None),
         (Forge, 0) => p("Forge", &[("forge", 4.0), ("storeroom", 1.0)], None, false),
         (Forge, _) => p("Living quarters", &[("living room", 1.5), ("bedroom", 1.5)], Some("bedroom"), false),
         (Brewery, 0) => p("Brewhouse", &[("taproom", 3.0), ("brewhouse", 4.0), ("storeroom", 1.0)], None, false),
         (Brewery, _) => p("Loft", &[("loft storage", 3.0), ("office", 1.0)], Some("loft storage"), false),
         (Warehouse, 0) if key == Some("stables") => p("Stables", &[("stables", 6.0), ("tack room", 1.0)], None, false),
+        (Warehouse, 0) if top && trade => sized("Floor", &[("warehouse floor", 6.0), ("bedroom", 1.5), ("office", 1.0)], None),
         (Warehouse, 0) => p("Floor", &[("warehouse floor", 6.0), ("office", 1.0)], None, false),
+        (Warehouse, _) if trade => p("Living quarters", &[("living room", 1.5), ("bedroom", 1.5)], Some("bedroom"), false),
         (Warehouse, _) => p("Loft", &[("loft storage", 4.0), ("office", 1.0)], Some("loft storage"), false),
         (Temple, 0) if key == Some("shrine") => p("Shrine", &[("shrine", 1.0)], None, false),
         (Temple, 0) => p("Sanctuary", &[("nave", 5.0), ("sanctuary", 2.0), ("vestry", 1.0)], None, false),
@@ -396,7 +411,7 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
                 Some("courthouse") => "courtroom",
                 _ => "great hall",
             };
-            LevelProgram { name: "Ground floor", rooms: vec![(main, 4.0), ("office", 1.0), ("office", 1.0)], filler: Some("office"), corridor: false, cells: false }
+            LevelProgram { name: "Ground floor", rooms: vec![(main, 4.0), ("office", 1.0), ("office", 1.0)], filler: Some("office"), corridor: false, cells: false, by_size: false }
         }
         (Hall, _) => {
             let filler: &'static str = match key {
@@ -404,7 +419,7 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
                 Some("orphanage" | "adventurers_guild") => "dormitory",
                 _ => "office",
             };
-            LevelProgram { name: "Upper floor", rooms: vec![("meeting room", 2.0), ("archive", 1.0), (filler, 1.0)], filler: Some(filler), corridor: true, cells: false }
+            LevelProgram { name: "Upper floor", rooms: vec![("meeting room", 2.0), ("archive", 1.0), (filler, 1.0)], filler: Some(filler), corridor: true, cells: false, by_size: false }
         }
         (Mansion, 0) => p("Ground floor", &[("great hall", 3.0), ("dining room", 2.0), ("foyer", 1.5), ("kitchen", 1.5), ("parlor", 1.5)], Some("parlor"), false),
         (Mansion, _) => p("Upper floor", &[("master bedroom", 2.0), ("study", 1.2), ("bedroom", 1.5), ("gallery", 1.5)], Some("bedroom"), true),
@@ -734,6 +749,8 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         "keg cellar" | "wine cellar" => &[("keg_rack", Wall(2, 1), 2, 8), ("barrel", Wall(1, 1), 2, 6)],
         "bedroom" | "guest room" | "owner's quarters" | "chamber" => &[("bed", Wall(1, 2), 1, 0), ("chest", Wall(1, 1), 1, 0), ("wardrobe", Wall(1, 1), 1, 0)],
         "master bedroom" | "lord's chamber" | "bedchamber" => &[("bed", Wall(2, 2), 1, 0), ("wardrobe", Wall(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("rug", Center(2, 2), 1, 0)],
+        // A one-room home's: its bed against a wall by the hearth.
+        "hearth room" => &[("bed", Wall(1, 2), 1, 0), ("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0)],
         "main room" | "living room" => &[("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("bench", Wall(2, 1), 1, 0)],
         "shop" => &[("counter", Wall(3, 1), 1, 0), ("shelf", Wall(2, 1), 2, 10), ("display", Center(2, 1), 0, 12)],
         "workshop" => &[("workbench", Wall(2, 1), 1, 8), ("shelf", Wall(2, 1), 1, 0), ("crate", Wall(1, 1), 1, 0)],
@@ -843,7 +860,7 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
 pub const ROOM_KINDS: &[&str] = &[
     "common room", "taproom", "brewhouse", "battlements", "kitchen", "storeroom", "loft storage", "keg cellar",
     "wine cellar", "bedroom", "guest room", "owner's quarters", "chamber", "master bedroom", "lord's chamber",
-    "bedchamber", "main room", "living room", "shop", "workshop", "forge", "warehouse floor", "office", "archive",
+    "bedchamber", "main room", "hearth room", "living room", "shop", "workshop", "forge", "warehouse floor", "office", "archive",
     "study", "meeting room", "library", "reading room", "laboratory", "observatory", "entry hall", "foyer", "nave",
     "sanctuary", "chapel", "vestry", "crypt", "ossuary", "bell loft", "monk's cell", "cell", "holding cell",
     "great hall", "mess hall", "dining room", "parlor", "gallery", "guardroom", "armory", "barrack room", "dormitory",
@@ -1885,7 +1902,9 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         let top = li + 1 == zs.len() || matches!(zs.get(li + 1), Some(&ROOF) | Some(&TOWER_TOP));
         // (A keep of pieces' top as the shared code would have it, if its zones won't do.)
         let pieces_top = plan.as_ref().is_some_and(|p| p.pieces && z == p.reaches() && p.kind != hub::Kind::ShellKeep);
-        let prog = program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, key);
+        // (A hovel's program by its kind: it has no function's key.)
+        let hovel = b.func.is_none() && town::catalog::RESIDENTIAL[b.residential as usize] == "hovel";
+        let prog = program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, if hovel { Some("hovel") } else { key });
         // (Laid out by zones, if it holds together: every room in one piece and reached.)
         let laid = plan.as_mut().and_then(|p| p.level(z));
         let tried = laid.is_some();
@@ -2697,6 +2716,7 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
             filler: Some("storeroom"),
             corridor: true,
             cells: false,
+            by_size: false,
         };
         &keep_dungeon
     } else {
@@ -2712,6 +2732,28 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
     // A small inn or tavern is all taproom (the bar and tables need the space).
     if ground && matches!(arch, Arch::Tavern | Arch::Inn) && area < 40 {
         kinds.truncate(1);
+    }
+    // One-storey homes by size (most are 20 to 80 squares): under 24 squares one room, its bed by
+    // the hearth; under 72 a main room (its hearth the kitchen) and a bedroom; bigger, a kitchen
+    // too. Shops and workshops keep no storeroom under 48 squares, a shop no workshop under 32
+    // (the shop its work room, the bedroom behind it).
+    if prog.by_size && ground {
+        if arch == Arch::House {
+            kinds = if area < 24 {
+                vec![("hearth room", 1.0)]
+            } else if area < 72 {
+                vec![("main room", 2.0), ("bedroom", 1.0)]
+            } else {
+                prog.rooms.clone()
+            };
+        } else {
+            if area < 48 && matches!(kinds.last(), Some(&("storeroom" | "office", _))) {
+                kinds.pop();
+            }
+            if area < 32 {
+                kinds.retain(|k| k.0 != "workshop");
+            }
+        }
     }
     if let Some(f) = prog.filler {
         let fixed_big: f64 = kinds.iter().filter(|k| big_room(k.0)).map(|k| k.1).sum();
@@ -2842,6 +2884,37 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
         kinds = a.into_iter().chain(bb).collect();
     } else {
         bsp(full, &kinds, st, rng, &mut leaves, 0);
+        // A small home's or shop's bedroom (rooms go to leaves by size) off the stairs down: if
+        // they fall in its leaf, the rooms laid the other way round (its leaf at the other end), if
+        // the biggest room still has a way out (the main room's door).
+        if prog.by_size && ground && kinds.len() >= 2 {
+            let area_of = |r: &R| (r.y..r.y + r.h).map(|j| (r.x..r.x + r.w).filter(|&i| inside[j * nx + i]).count()).sum::<usize>();
+            let on_st = |r: &R| r.x < st[0] + st[2] && st[0] < r.x + r.w && r.y < st[1] + st[3] && st[1] < r.y + r.h;
+            let mut by_w: Vec<usize> = (0..kinds.len()).collect();
+            by_w.sort_by(|&p, &q| kinds[q].1.total_cmp(&kinds[p].1).then(p.cmp(&q)));
+            let mut by_a: Vec<usize> = (0..leaves.len()).collect();
+            by_a.sort_by(|&p, &q| area_of(&leaves[q].0).cmp(&area_of(&leaves[p].0)).then(p.cmp(&q)));
+            let rank = by_w.iter().position(|&k| kinds[k].0 == "bedroom");
+            if rank.and_then(|r| by_a.get(r)).is_some_and(|&li| on_st(&leaves[li].0)) {
+                let back: Vec<(&'static str, f64)> = kinds.iter().rev().copied().collect();
+                let mut turned = Vec::new();
+                bsp(full, &back, st, rng, &mut turned, 0);
+                let way_out = |r: &R| {
+                    (r.y..r.y + r.h).any(|j| {
+                        (r.x..r.x + r.w).any(|i| {
+                            inside[j * nx + i]
+                                && [(0isize, -1isize), (1, 0), (0, 1), (-1, 0)].iter().any(|&(di, dj)| {
+                                    let (a, b) = (i as isize + di, j as isize + dj);
+                                    (a < 0 || b < 0 || a >= nx as isize || b >= ny as isize || !inside[b as usize * nx + a as usize]) && ext_free(a, b)
+                                })
+                        })
+                    })
+                };
+                if turned.iter().max_by_key(|l| area_of(&l.0)).is_some_and(|l| way_out(&l.0)) {
+                    leaves = turned;
+                }
+            }
+        }
     }
 
     // Assign program kinds to leaves: the first (public) room to the biggest leaf on the
@@ -2886,6 +2959,18 @@ fn layout_level(inside: &[bool], nx: usize, ny: usize, prog: &LevelProgram, st: 
     for &li in &order {
         if assign[li] == usize::MAX {
             assign[li] = next_kind.next().unwrap_or(by_weight[0]);
+        }
+    }
+    // (And where they still fall in it, a service room's leaf for it if one is clear of them: its
+    // bed and the stairs' way clear.)
+    if prog.by_size && ground {
+        let on_st = |r: &R| r.x < st[0] + st[2] && st[0] < r.x + r.w && r.y < st[1] + st[3] && st[1] < r.y + r.h;
+        let kind = |li: usize| kinds[assign[li]].0;
+        if let Some(bl) = (0..leaves.len()).find(|&li| kind(li) == "bedroom" && on_st(&leaves[li].0)) {
+            let others: Vec<usize> = (0..leaves.len()).filter(|&li| kind(li) != "bedroom" && leaf_area(&leaves[li].0) > 0 && !on_st(&leaves[li].0)).collect();
+            if let Some(o) = others.iter().copied().find(|&li| assign[li] != 0 || hall.is_some()) {
+                assign.swap(bl, o);
+            }
         }
     }
     let mut rooms: Vec<Room> = Vec::new();
@@ -4197,6 +4282,7 @@ fn required(kind: &str, item: &str) -> bool {
             | ("snug", "table")
             | ("private dining room", "long_table")
             | ("best chamber", "bed")
+            | ("bedroom" | "hearth room", "bed")
     )
 }
 
@@ -4321,7 +4407,13 @@ pub(crate) fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4
                 if kind == "council_table" {
                     sizes = if mine.len() >= 40 { vec![(6, 2), (5, 2), (4, 2), (3, 2)] } else { vec![(4, 2), (3, 2)] };
                 }
-                if must && !whole {
+                // (A bedroom's bed a single, 1 by 2, at the least.)
+                let bed = kind == "bed" && room.kind != "best chamber";
+                if must && bed {
+                    if (a, b) != (1, 2) {
+                        sizes.push((1, 2));
+                    }
+                } else if must && !whole {
                     for s in [(2, 1), (1, 1)] {
                         if !sizes.contains(&s) && s.0 * s.1 < a * b {
                             sizes.push(s);
