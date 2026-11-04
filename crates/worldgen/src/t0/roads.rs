@@ -802,6 +802,99 @@ fn near_line(p: [f64; 2], line: &[[f64; 2]], tol: f64) -> bool {
     })
 }
 
+/// A polyline's segments bucketed on a grid (`size` ft) by their boxes grown by `tol`, so a
+/// query looks only at those whose box can hold the point (`near`: the same answer as
+/// `near_line`) or meet a box (`cands`).
+struct NearLine<'a> {
+    line: &'a [[f64; 2]],
+    tol: f64,
+    min: [f64; 2],
+    size: f64,
+    nx: usize,
+    ny: usize,
+    start: Vec<u32>,
+    segs: Vec<u32>,
+}
+
+impl<'a> NearLine<'a> {
+    fn new(line: &'a [[f64; 2]], tol: f64, size: f64) -> Self {
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for p in line {
+            for d in 0..2 {
+                lo[d] = lo[d].min(p[d]);
+                hi[d] = hi[d].max(p[d]);
+            }
+        }
+        let min = [lo[0] - tol, lo[1] - tol];
+        let n = |d: usize| if line.len() < 2 { 0 } else { (crate::core::floor((hi[d] + tol - min[d]) / size) as usize + 1).min(4096) };
+        let (nx, ny) = (n(0), n(1));
+        let mut out = NearLine { line, tol, min, size, nx, ny, start: vec![0; nx * ny + 1], segs: Vec::new() };
+        // (Counted, then filled: each bucket's segments in order.)
+        let span = |out: &NearLine, a: [f64; 2], b: [f64; 2]| {
+            let (x0, y0) = (out.bucket(0, a[0].min(b[0]) - tol), out.bucket(1, a[1].min(b[1]) - tol));
+            let (x1, y1) = (out.bucket(0, a[0].max(b[0]) + tol), out.bucket(1, a[1].max(b[1]) + tol));
+            (x0, x1, y0, y1)
+        };
+        for w in line.windows(2) {
+            let (x0, x1, y0, y1) = span(&out, w[0], w[1]);
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    out.start[y * nx + x + 1] += 1;
+                }
+            }
+        }
+        for i in 0..nx * ny {
+            out.start[i + 1] += out.start[i];
+        }
+        let mut fill: Vec<u32> = out.start[..nx * ny].to_vec();
+        out.segs = vec![0; out.start[nx * ny] as usize];
+        for (k, w) in line.windows(2).enumerate() {
+            let (x0, x1, y0, y1) = span(&out, w[0], w[1]);
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let b = y * nx + x;
+                    out.segs[fill[b] as usize] = k as u32;
+                    fill[b] += 1;
+                }
+            }
+        }
+        out
+    }
+
+    fn bucket(&self, d: usize, v: f64) -> usize {
+        let n = if d == 0 { self.nx } else { self.ny };
+        (crate::core::floor((v - self.min[d]) / self.size).max(0.0) as usize).min(n.saturating_sub(1))
+    }
+
+    /// The segments (in order, each once) whose grown boxes share a bucket with the box `lo`–`hi`.
+    fn cands(&self, lo: [f64; 2], hi: [f64; 2], out: &mut Vec<u32>) {
+        out.clear();
+        if self.nx == 0 || self.ny == 0 {
+            return;
+        }
+        for y in self.bucket(1, lo[1])..=self.bucket(1, hi[1]) {
+            for x in self.bucket(0, lo[0])..=self.bucket(0, hi[0]) {
+                let b = y * self.nx + x;
+                out.extend_from_slice(&self.segs[self.start[b] as usize..self.start[b + 1] as usize]);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+
+    fn near(&self, p: [f64; 2]) -> bool {
+        if self.nx == 0 || self.ny == 0 {
+            return false;
+        }
+        let b = self.bucket(1, p[1]) * self.nx + self.bucket(0, p[0]);
+        let tol = self.tol;
+        self.segs[self.start[b] as usize..self.start[b + 1] as usize].iter().any(|&k| {
+            let (a, b) = (self.line[k as usize], self.line[k as usize + 1]);
+            p[0] >= a[0].min(b[0]) - tol && p[0] <= a[0].max(b[0]) + tol && p[1] >= a[1].min(b[1]) - tol && p[1] <= a[1].max(b[1]) + tol && seg_dist(p, a, b) < tol
+        })
+    }
+}
+
 fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l2 = dx * dx + dy * dy;
@@ -2718,15 +2811,15 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
         let (u, v) = ((w[0] * q[1] - w[1] * q[0]) / den, (w[0] * r[1] - w[1] * r[0]) / den);
         ((0.0..1.0).contains(&u) && (0.0..1.0).contains(&v)).then_some((u, v))
     };
+    // Per road, its end keys and bounds (kept up to date as roads are cut).
+    let key_of = |r: &RoadPath| (end_key(r.pts[0], towns), end_key(*r.pts.last().unwrap(), towns));
+    let box_of = |r: &RoadPath| r.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let mut keys: Vec<((i64, i64), (i64, i64))> = roads.iter().map(key_of).collect();
+    let mut boxes: Vec<[f64; 4]> = roads.iter().map(box_of).collect();
     for _ in 0..50 {
         let mut cut: Option<(usize, usize, f64, f64, [f64; 2], bool)> = None;
-        let keys: Vec<((i64, i64), (i64, i64))> = roads.iter().map(|r| (end_key(r.pts[0], towns), end_key(*r.pts.last().unwrap(), towns))).collect();
-        // Per road, the roads that may pass by each of its ends (their bounds round it).
-        let boxes: Vec<[f64; 4]> = roads.iter().map(|r| r.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])).collect();
-        let by_end: Vec<[Vec<usize>; 2]> = roads
-            .iter()
-            .map(|r| [r.pts[0], *r.pts.last().unwrap()].map(|p| (0..boxes.len()).filter(|&k| p[0] >= boxes[k][0] - 60.0 && p[0] <= boxes[k][2] + 60.0 && p[1] >= boxes[k][1] - 60.0 && p[1] <= boxes[k][3] + 60.0).collect()))
-            .collect();
+        // Whether road `k` may pass by a point (its bounds round it).
+        let by = |k: usize, p: [f64; 2]| p[0] >= boxes[k][0] - 60.0 && p[0] <= boxes[k][2] + 60.0 && p[1] >= boxes[k][1] - 60.0 && p[1] <= boxes[k][3] + 60.0;
         'find: for (i, r) in roads.iter().enumerate() {
             if r.stroke.is_some() || r.class == RoadClass::KingsRoad || r.pts.len() < 3 {
                 continue;
@@ -2739,11 +2832,11 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
                 // (Or a better road from there ends on the one it crosses, `r` beside that one out
                 // to it: the feeder, its far end, its length.)
                 let head = r.pts.iter().zip(rs.iter()).filter(|&(_, &sr)| (if at_end { rs[rs.len() - 1] - sr } else { sr }) <= FEED_FT + 1_000.0).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, (p, _)| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
-                let feeders: Vec<(usize, [f64; 2], f64, &Vec<usize>)> = (0..roads.len())
+                let feeders: Vec<(usize, [f64; 2], f64)> = (0..roads.len())
                     .filter(|&f| f != i && roads[f].class < r.class && (keys[f].0 == ek) != (keys[f].1 == ek))
                     .map(|f| {
                         let e = (keys[f].0 == ek) as usize;
-                        (f, if e == 1 { *roads[f].pts.last().unwrap() } else { roads[f].pts[0] }, road_len(&roads[f]), &by_end[f][e])
+                        (f, if e == 1 { *roads[f].pts.last().unwrap() } else { roads[f].pts[0] }, road_len(&roads[f]))
                     })
                     .collect();
                 for (k, t) in roads.iter().enumerate() {
@@ -2751,7 +2844,7 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
                         continue;
                     }
                     let direct = !at_town && (keys[k].0 == ek || keys[k].1 == ek);
-                    let near_t: Vec<&(usize, [f64; 2], f64, &Vec<usize>)> = if direct { Vec::new() } else { feeders.iter().filter(|q| q.0 != k && q.3.binary_search(&k).is_ok()).collect() };
+                    let near_t: Vec<&(usize, [f64; 2], f64)> = if direct { Vec::new() } else { feeders.iter().filter(|q| q.0 != k && by(k, q.1)).collect() };
                     if !direct && near_t.is_empty() {
                         continue;
                     }
@@ -2759,7 +2852,7 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
                     // (Where each feeder ends on `t`, which, how long.)
                     let feeds: Vec<(f64, usize, f64)> = near_t
                         .iter()
-                        .filter_map(|&&(f, far, lf, _)| {
+                        .filter_map(|&&(f, far, lf)| {
                             let (s, d) = project(far, &t.pts, &ts);
                             (d < 60.0).then_some((s, f, lf))
                         })
@@ -2775,11 +2868,21 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
                     } else {
                         (0..t.pts.len() - 1).filter(|&b| t.pts[b].iter().zip(t.pts[b + 1].iter()).enumerate().all(|(d, (p, q))| p.max(*q) >= head[d] && p.min(*q) <= head[d + 2])).collect()
                     };
+                    // (Of all of `t`, only the stretches whose bounds meet the segment's can cross it.)
+                    let t_index = direct.then(|| NearLine::new(&t.pts, 0.0, 1_000.0));
+                    let mut near_segs: Vec<u32> = Vec::new();
                     for a in 0..r.pts.len() - 1 {
                         if !direct && (if at_end { rs[rs.len() - 1] - rs[a + 1] } else { rs[a] }) > FEED_FT {
                             continue;
                         }
-                        for &b in &segs {
+                        let (pa, pb) = (r.pts[a], r.pts[a + 1]);
+                        if let Some(ix) = &t_index {
+                            ix.cands([pa[0].min(pb[0]), pa[1].min(pb[1])], [pa[0].max(pb[0]), pa[1].max(pb[1])], &mut near_segs);
+                        } else {
+                            near_segs.clear();
+                            near_segs.extend(segs.iter().map(|&b| b as u32));
+                        }
+                        for b in near_segs.iter().map(|&b| b as usize) {
                             if let Some((u, v)) = meet(r.pts[a], r.pts[a + 1], t.pts[b], t.pts[b + 1]) {
                                 let x = [r.pts[a][0] + u * (r.pts[a + 1][0] - r.pts[a][0]), r.pts[a][1] + u * (r.pts[a + 1][1] - r.pts[a][1])];
                                 let (sr, st) = (rs[a] + u * (rs[a + 1] - rs[a]), ts[b] + v * (ts[b + 1] - ts[b]));
@@ -2826,6 +2929,14 @@ fn end_at_crossing(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)]) -> Vec<
         roads.remove(lo);
         roads.push(kept);
         roads.extend(halves);
+        for v in [hi, lo] {
+            keys.remove(v);
+            boxes.remove(v);
+        }
+        for r in &roads[keys.len()..] {
+            keys.push(key_of(r));
+            boxes.push(box_of(r));
+        }
         cuts.push(x);
     }
     cuts
@@ -3561,7 +3672,8 @@ fn unshare(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], ground: &dyn Fn
                     // (One that wanders off first, a loop or a switchback, and comes back to run
                     // along the other a good way from near the junction is laid on it all the same.)
                     let head = sub_line(&legs[c].pts, cs, 0.0, clen.min(2.0 * LATE + 5_000.0));
-                    let near = |t: f64| near_line(point_at(&legs[o].pts, os, t), &head, TOL);
+                    let head_near = NearLine::new(&head, TOL, 4.0 * TOL);
+                    let near = |t: f64| head_near.near(point_at(&legs[o].pts, os, t));
                     let mut shared = 0.0;
                     while shared + STEP < olen && near(shared + STEP) {
                         shared += STEP;
