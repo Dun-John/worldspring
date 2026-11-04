@@ -197,7 +197,14 @@ pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id
         ("lava_tube", _) | ("entrance", Some(UnderKind::LavaTube)) => NameKind::LavaTube,
         _ => NameKind::Ruin,
     };
-    let n = Namer::new(crate::core::hash::fnv64(id.as_bytes()) ^ world.seed).name(nk, culture);
+    let mut namer = Namer::new(crate::core::hash::fnv64(id.as_bytes()) ^ world.seed);
+    // (A mine or a lava tube has the one theme.)
+    namer.theme = match nk {
+        NameKind::Mine => Some("mine"),
+        NameKind::LavaTube => Some("lava_tube"),
+        _ => None,
+    };
+    let n = namer.name(nk, culture);
     Ok((p, if kind == "waystation" { format!("{n} Inn") } else { n }))
 }
 
@@ -281,7 +288,7 @@ fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], fun
             let culture = t0.settlements.iter().min_by(|a, b| (a.x - c[0]).hypot(a.y - c[1]).total_cmp(&(b.x - c[0]).hypot(b.y - c[1]))).map_or(0, |s| s.culture as usize);
             let mut rng = Pcg32::new(crate::core::hash::fnv64(id.as_bytes()) ^ world.seed, 43);
             let mut namer = crate::t0::names::Namer::new(rng.next_u32() as u64);
-            town::business_name(f, &mut rng, &mut namer, culture).unwrap_or_else(|| f.name.to_string())
+            town::business_name(f, &mut namer, &mut town::Locale::new(culture), None).unwrap_or_else(|| f.name.to_string())
         }
         None => {
             let home = func.and_then(|f| crate::world::BUILDING_HOMES.iter().position(|h| *h == f)).unwrap_or(1);

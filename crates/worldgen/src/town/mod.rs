@@ -5086,14 +5086,14 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
     // Names and floors.
     let mut namer = Namer::new(hash2(s.seed, 0x7a3e, 1));
     let mut used: std::collections::BTreeSet<String> = Default::default();
-    let culture = s.culture as usize;
+    let mut loc = Locale::of(s, s.river || !site.river.is_empty(), &mut namer);
     for b in &mut l.buildings {
         let big = area(&b.poly).abs() > 2500.0;
         match b.func {
             Some(fi) => {
                 let f = &CATALOG[fi as usize];
                 for _ in 0..12 {
-                    match business_name(f, rng, &mut namer, culture) {
+                    match business_name(f, &mut namer, &mut loc, Some(b.ward)) {
                         Some(n) if used.insert(n.clone()) => {
                             b.name = Some(n);
                             break;
@@ -5130,11 +5130,10 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         let size = |b: &Building| area(&b.poly).abs();
         let home = |b: &Building| b.func.is_none() && b.keep.is_none() && b.ward == Ward::Noble && b.structure == Structure::Roofed && size(b) >= 2500.0;
         if let Some(i) = (0..l.buildings.len()).filter(|&i| home(&l.buildings[i])).max_by(|&a, &b| size(&l.buildings[a]).total_cmp(&size(&l.buildings[b])).then(b.cmp(&a))) {
-            let mut prng = Pcg32::new(hash2(s.seed, 0x9a1b, 1), 47);
             let b = &mut l.buildings[i];
             (b.func, b.floors, b.name) = (Some(fi as u16), 3, None);
             for _ in 0..12 {
-                match business_name(&CATALOG[fi], &mut prng, &mut namer, culture) {
+                match business_name(&CATALOG[fi], &mut namer, &mut loc, Some(b.ward)) {
                     Some(n) if used.insert(n.clone()) => {
                         b.name = Some(n);
                         break;
@@ -5152,19 +5151,135 @@ const CITY_PALACES: f64 = 0.4;
 /// The share of town castles (but a capital's, which always has one) sized for an inner bailey.
 const CASTLE_INNER: f64 = 0.45;
 
-/// A business's name in its function's style (`None` for plain ones: warehouses, graveyards).
-pub fn business_name(f: &catalog::Func, rng: &mut Pcg32, namer: &mut Namer, culture: usize) -> Option<String> {
-    match f.naming {
-        Naming::Sign => Some(format!("The {} {}", pick(rng, catalog::SIGN_ADJ), pick(rng, catalog::SIGN_NOUN))),
-        Naming::Owner => Some(format!("{}'s {}", namer.word(culture, 1, 2), f.trade)),
-        Naming::Institution => Some(match f.key {
-            "temple" | "shrine" | "monastery" => format!("{} of {}", f.trade, pick(rng, catalog::DEITY)),
-            _ => format!("The {} {}", pick(rng, catalog::INSTITUTION_ADJ), f.trade),
-        }),
-        Naming::Plain => None,
+/// What a town's businesses are named for (`business_name`): its culture, its landmarks (a river,
+/// the sea, what the town is there for), its lord, and the key words its businesses' names have
+/// taken (no two share one: one Fox, one Harbour, one Aldric in a town).
+pub struct Locale {
+    pub culture: usize,
+    pub landmarks: Vec<&'static str>,
+    pub lord: Option<String>,
+    pub keys: std::collections::BTreeSet<String>,
+}
+
+impl Locale {
+    pub fn new(culture: usize) -> Self {
+        Self { culture: culture % catalog::SIGNS.len(), landmarks: Vec::new(), lord: None, keys: Default::default() }
+    }
+
+    /// Settlement `s`'s (`river`: a river runs through it), its lord named by `namer`.
+    pub fn of(s: &Settlement, river: bool, namer: &mut Namer) -> Self {
+        use crate::t0::settle::Reason;
+        let mut l = Self::new(s.culture as usize);
+        if river {
+            l.landmarks.extend(["Bridge", "Ferry", "Riverside", "Weir"]);
+        }
+        if s.coastal {
+            l.landmarks.extend(["Harbour", "Quay", "Seawall", "Lighthouse"]);
+        }
+        l.landmarks.extend(match s.reason {
+            Reason::Pass => &["Summit", "High Road"][..],
+            Reason::Ore => &["Pithead", "Old Mine"],
+            Reason::Crossroads => &["Crossroads", "Waystone"],
+            Reason::Crossing => &["Ford", "Old Bridge"],
+            Reason::Timber => &["Sawmill", "Woodyard"],
+            Reason::Fishing => &["Slipway", "Net Loft"],
+            Reason::Confluence => &["Two Rivers"],
+            Reason::Food => &["Granary", "Haywain"],
+            _ => &[],
+        });
+        l.landmarks.dedup();
+        if s.tier >= Tier::Town {
+            l.lord = Some(namer.person(l.culture));
+        }
+        l
     }
 }
 
-fn pick<'a>(rng: &mut Pcg32, xs: &[&'a str]) -> &'a str {
-    xs[rng.below(xs.len() as u32) as usize]
+/// A business's name in its function's style and its town's culture (`None` for plain ones:
+/// warehouses, graveyards), drawn from `namer`; its key words are recorded in `loc`, and a name
+/// whose key word the town has already used is drawn again. `ward`: where it stands.
+pub fn business_name(f: &catalog::Func, namer: &mut Namer, loc: &mut Locale, ward: Option<Ward>) -> Option<String> {
+    if f.naming == Naming::Plain {
+        return None;
+    }
+    let c = loc.culture;
+    let signs = &catalog::SIGNS[c];
+    let mut marks = loc.landmarks.clone();
+    marks.extend(match ward {
+        Some(Ward::Docks) => &["Wharf"][..],
+        Some(Ward::Plaza) => &["Market Cross"],
+        Some(Ward::Castle | Ward::Military) => &["Gatehouse"],
+        Some(Ward::Temple) => &["Pilgrims'"],
+        _ => &[],
+    });
+    let sacred = matches!(f.key, "temple" | "shrine" | "monastery");
+    let drinks = matches!(f.key, "inn" | "tavern" | "alehouse");
+    for attempt in 0..16 {
+        let r = namer.below(100);
+        // Late tries: a person's name, which is all but always fresh.
+        let late = attempt >= 10;
+        let (name, keys): (String, Vec<String>) = match f.naming {
+            Naming::Sign if !late && r < 45 => {
+                let n = namer.pick(signs.noun);
+                (format!("The {} {n}", namer.pick(signs.adj)), vec![n.to_string()])
+            }
+            Naming::Sign if !late && r < 58 => {
+                let single: Vec<&str> = signs.noun.iter().copied().filter(|n| !n.contains(' ')).collect();
+                let (a, b) = (namer.pick(&single), namer.pick(&single));
+                if a == b {
+                    continue;
+                }
+                (format!("The {a} and {b}"), vec![a.to_string(), b.to_string()])
+            }
+            Naming::Sign if !late && r < 63 && !marks.is_empty() => {
+                let m = namer.pick(&marks);
+                (format!("The {m} {}", f.trade), vec![m.to_string()])
+            }
+            Naming::Sign if !late && r < 70 && drinks && loc.lord.is_some() => {
+                let lord = loc.lord.clone().unwrap_or_default();
+                (format!("The {lord} Arms"), vec![lord])
+            }
+            Naming::Sign if !late && r < 76 => {
+                let n = namer.pick(signs.noun);
+                (format!("The {n}"), vec![n.to_string()])
+            }
+            Naming::Sign => {
+                let p = namer.person(c);
+                let name = if namer.below(4) == 0 { format!("Old {p}'s") } else { format!("{p}'s {}", namer.pick(signs.rest)) };
+                (name, vec![p])
+            }
+            Naming::Owner => {
+                let p = namer.person(c);
+                let name = match namer.below(10) {
+                    0 => format!("Old {p}'s {}", f.trade),
+                    1 if matches!(c, 2 | 3) => format!("House of {p}"),
+                    _ => format!("{p}'s {}", f.trade),
+                };
+                (name, vec![p])
+            }
+            Naming::Institution if sacred && (late || (matches!(c, 0 | 1) && r < 25)) => {
+                let p = namer.person(c);
+                let name = if matches!(c, 0 | 1) { format!("{} of St. {p}", f.trade) } else { format!("{} of {p}", f.trade) };
+                (name, vec![p])
+            }
+            Naming::Institution if sacred => {
+                let d = namer.pick(catalog::DEITY);
+                (format!("{} of {d}", f.trade), vec![d.to_string()])
+            }
+            Naming::Institution if late => {
+                let p = namer.person(c);
+                (format!("The {p} {}", f.trade), vec![p])
+            }
+            Naming::Institution => {
+                let a = namer.pick(signs.inst);
+                (format!("The {a} {}", f.trade), vec![a.to_string()])
+            }
+            Naming::Plain => return None,
+        };
+        if keys.iter().all(|k| !loc.keys.contains(k)) || attempt == 15 {
+            loc.keys.extend(keys);
+            return Some(name);
+        }
+    }
+    None
 }

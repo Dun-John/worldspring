@@ -950,7 +950,19 @@ impl Builder<'_> {
             };
             let k = (cy.round() as usize).min(inp.h - 1) * inp.w + (cx.round() as usize).min(inp.w - 1);
             let elev = self.above_sea(k);
+            // A way down is named for the theme it comes to (as `under::generate` will draw it).
+            use crate::under::UnderKind;
+            let drawn_under = || p.stroke.and_then(|i| inp.world.file.sketch.strokes.get(i as usize)).and_then(|s| s.under.as_deref()).and_then(UnderKind::parse);
+            let under = match p.kind {
+                PoiKind::Cave => Some((UnderKind::Cave, true)),
+                PoiKind::Mine => Some((UnderKind::Mine, false)),
+                PoiKind::LavaTube => Some((UnderKind::LavaTube, true)),
+                PoiKind::Entrance => Some((drawn_under().unwrap_or(UnderKind::Dungeon), true)),
+                _ => None,
+            };
+            self.namer.theme = under.map(|(k, ruin)| crate::under::wild_theme(inp.world, p.seed, k, ruin));
             let id = self.push(kind, nk, cx, cy, 0.0, extent * 5280.0, Some(elev.round()), None);
+            self.namer.theme = None;
             self.radius(SITE_RADIUS_FT);
             if p.kind == PoiKind::Waystation {
                 let f = self.out.features.iter_mut().rev().find(|f| f.id == id).unwrap();

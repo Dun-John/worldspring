@@ -225,13 +225,80 @@ pub fn index_of(key: &str) -> Option<usize> {
 }
 
 // Business-name grammar.
-pub const SIGN_ADJ: &[&str] = &[
-    "Prancing", "Drunken", "Gilded", "Rusty", "Laughing", "Sleeping", "Golden", "Silver", "Crooked", "Wandering", "Jolly", "Salty", "Broken", "Hungry", "Red", "Green",
-    "Blind", "Black", "Merry", "Weary", "Painted", "Howling", "Copper", "Old", "Lucky", "Grinning", "Stout", "Dancing",
+/// A culture's words for its businesses' names (`town::business_name`), in `t0::names::CULTURES`
+/// order.
+pub struct Signs {
+    /// "The Laughing ___".
+    pub adj: &'static [&'static str],
+    /// What hangs on an inn's sign.
+    pub noun: &'static [&'static str],
+    /// "Hrolf's ___": an inn kept by its owner.
+    pub rest: &'static [&'static str],
+    /// "The ___ Library".
+    pub inst: &'static [&'static str],
+}
+
+pub const SIGNS: [Signs; 5] = [
+    Signs {
+        adj: &[
+            "Drunken", "Grey", "Salty", "Black", "Howling", "Laughing", "Old", "Iron", "Sleeping", "Tarred", "Bearded", "Horned", "Wandering", "Thirsty", "Stout", "Red", "Frozen",
+            "Snoring", "Golden", "Weary", "Merry", "Rusty",
+        ],
+        noun: &[
+            "Bear", "Wolf", "Raven", "Longship", "Elk", "Seal", "Whale", "Hammer", "Axe", "Boar", "Skald", "Troll", "Walrus", "Herring", "Cauldron", "Horn", "Bearskin", "Crow", "Oar",
+            "Anchor", "Hound", "Goat", "Reindeer", "Mead Hall", "Shield", "Otter", "Eagle", "Hearth", "Sledge", "Lynx",
+        ],
+        rest: &["Rest", "Hearth", "Hall", "Longhouse", "Board", "Fire"],
+        inst: &["Grey", "High", "Old", "Iron", "Frost", "Raven", "Stone", "Storm", "Rune", "Silver"],
+    },
+    Signs {
+        adj: &[
+            "Prancing", "Drunken", "Gilded", "Rusty", "Laughing", "Sleeping", "Golden", "Silver", "Crooked", "Wandering", "Jolly", "Salty", "Broken", "Hungry", "Red", "Green",
+            "Blind", "Black", "Merry", "Weary", "Painted", "Howling", "Copper", "Old", "Lucky", "Grinning", "Stout", "Dancing", "Speckled", "Royal",
+        ],
+        noun: &[
+            "Pony", "Dragon", "Griffin", "Stag", "Boar", "Goose", "Tankard", "Lantern", "Crown", "Barrel", "Hound", "Owl", "Flagon", "Wyvern", "Rooster", "Wheel", "Hart", "Fox",
+            "Badger", "Maiden", "Giant", "Unicorn", "Candle", "Shield", "Plough", "Swan", "Bell", "Rose", "Lamb", "Bull", "Pheasant", "Harp", "Mitre", "Wheatsheaf", "Magpie",
+            "Hare", "Otter", "Heron", "Falcon", "Pilgrim", "Ram", "Primrose", "Acorn", "Feathers", "Chequers", "Woolpack",
+        ],
+        rest: &["Rest", "Hearth", "Lodge", "Table", "House", "Cellar", "Board", "Arms"],
+        inst: &["Grey", "High", "Old", "Silver", "Dawn", "Iron", "Amber", "Twilight", "Azure", "Radiant", "Ashen", "Verdant", "Stone", "Starlit"],
+    },
+    Signs {
+        adj: &[
+            "Golden", "Gilded", "Laughing", "Merry", "Painted", "Velvet", "Singing", "Amber", "Crimson", "Silver", "Blue", "Wandering", "Sleeping", "Drunken", "Lucky", "Jolly",
+            "Dancing", "Smiling", "Masked", "Sunlit",
+        ],
+        noun: &[
+            "Grape", "Olive", "Dolphin", "Lion", "Peacock", "Galley", "Amphora", "Gondola", "Lute", "Mask", "Fig", "Lemon", "Sun", "Mermaid", "Goat", "Bull", "Sparrow", "Cypress",
+            "Fountain", "Lantern", "Pearl", "Anchor", "Orange", "Swallow", "Vine", "Octopus", "Harp", "Laurel",
+        ],
+        rest: &["Table", "House", "Terrace", "Cellar", "Courtyard", "Rest"],
+        inst: &["Golden", "Marble", "Azure", "Radiant", "Laurel", "Old", "High", "Sunlit", "Crimson", "Silver"],
+    },
+    Signs {
+        adj: &[
+            "Golden", "Silver", "Thirsty", "Wandering", "Patient", "Sleeping", "Blue", "Painted", "Copper", "Veiled", "Laughing", "Singing", "Jewelled", "Brass", "Dusty", "Seven",
+            "Hidden", "Shaded",
+        ],
+        noun: &[
+            "Camel", "Oasis", "Lamp", "Palm", "Scorpion", "Falcon", "Jackal", "Lantern", "Carpet", "Caravan", "Gazelle", "Saddle", "Well", "Pomegranate", "Dune", "Tent", "Crescent",
+            "Star", "Cistern", "Fig", "Ibis", "Date Palm", "Fountain", "Hawk", "Tiger", "Water Jar",
+        ],
+        rest: &["Rest", "House", "Courtyard", "Tent", "Shade", "Well"],
+        inst: &["Golden", "Brass", "Old", "High", "Sun", "Amber", "Copper", "Moon", "Starlit", "Silver"],
+    },
+    Signs {
+        adj: &[
+            "Swift", "Red", "White", "Black", "Grey", "Wandering", "Thirsty", "Laughing", "Wild", "Bold", "Blue", "Painted", "Golden", "Howling", "Sleeping", "Lucky", "Spotted",
+            "Dappled",
+        ],
+        noun: &[
+            "Horse", "Mare", "Yurt", "Bow", "Eagle", "Wolf", "Saddle", "Yak", "Hawk", "Stallion", "Arrow", "Camel", "Cookpot", "Sky", "Banner", "Drum", "Ox", "Marmot", "Antelope",
+            "Felt Tent", "Bridle", "Quiver", "Crane", "Foal",
+        ],
+        rest: &["Rest", "Fire", "Yurt", "Tent", "Camp", "Hearth"],
+        inst: &["Blue", "Sky", "Golden", "Old", "High", "White", "Eternal", "Silver", "Wind", "Grey"],
+    },
 ];
-pub const SIGN_NOUN: &[&str] = &[
-    "Pony", "Dragon", "Griffin", "Stag", "Boar", "Goose", "Tankard", "Lantern", "Anchor", "Crown", "Barrel", "Hound", "Owl", "Kettle", "Wyvern", "Mermaid", "Rooster",
-    "Wheel", "Hart", "Fox", "Badger", "Maiden", "Giant", "Serpent", "Unicorn", "Candle", "Shield", "Oar",
-];
-pub const INSTITUTION_ADJ: &[&str] = &["Grey", "High", "Old", "Silver", "Dawn", "Iron", "Amber", "Twilight", "Azure", "Radiant", "Ashen", "Verdant", "Stone", "Starlit"];
 pub const DEITY: &[&str] = &["the Dawn", "the Morning Lord", "the Harvest", "the Deep Sea", "the Forge", "the Moon", "the Seven", "the Watcher", "the Hearth", "the Storm", "the Veiled Lady", "the Sun"];

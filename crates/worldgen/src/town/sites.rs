@@ -352,7 +352,7 @@ pub fn trade_name(func: Option<u16>, rng: &mut Pcg32, t0: &T0, center: P) -> Opt
     let f = &catalog::CATALOG[func? as usize];
     let culture = t0.settlements.iter().min_by(|a, b| (a.x - center[0]).hypot(a.y - center[1]).total_cmp(&(b.x - center[0]).hypot(b.y - center[1]))).map_or(0, |s| s.culture as usize);
     let mut namer = crate::t0::names::Namer::new(rng.next_u32() as u64);
-    super::business_name(f, rng, &mut namer, culture)
+    super::business_name(f, &mut namer, &mut super::Locale::new(culture), None)
 }
 
 /// A roof (`ROOFS`), tint (`TINTS`) and structure (`STRUCTURES`) chosen by hand; each not

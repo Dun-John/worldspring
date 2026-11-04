@@ -372,6 +372,16 @@ fn resolve(kind: UnderKind, spec: SiteSpec, ruin: bool, rng: &mut Pcg32) -> (Sit
     (size, levels, theme)
 }
 
+/// The theme a generated wild site's way down (`kind`, its only entrance) comes to, as `generate`
+/// draws it, from the site's seed alone (`town::rng_key` of a world's own site): so the site can
+/// be named for it before anything is laid out. `ruin`: no roof stands at the site. (A temple
+/// sunk on wet ground is still its temple here.)
+pub fn wild_theme(world: &World, poi_seed: u64, kind: UnderKind, ruin: bool) -> &'static str {
+    let key = crate::core::rng::hash2(0x7369_7465_706f_6900, 0, poi_seed as i64) as i64;
+    let mut rng = Pcg32::new(hash3(world.stream("under"), key, 0, kind as i64), 91);
+    resolve(kind, SiteSpec::default(), ruin, &mut rng).2.key
+}
+
 /// A `u:` site's size, read back from its grid (None for sewer sections and keep dungeons).
 pub fn site_size(it: &Interior) -> Option<SiteSize> {
     let kind = UnderKind::CREATABLE.into_iter().find(|k| k.name() == it.function).filter(|_| it.id.starts_with("u:"))?;
