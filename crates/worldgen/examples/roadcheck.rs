@@ -317,6 +317,59 @@ fn main() {
                 }
             }
         }
+        // Bends: the heading 750 ft before a point and 750 ft after differing by over 60° (at the
+        // sharpest point, one per 1,500 ft); zigzag where the bend next to it, under 3,000 ft
+        // away, turns the other way; hairpins over 150°; sharp (a V, not a rounded turn) where it
+        // turns over 90° within 300 ft. Per 10 mi of climbing road (over 4% across 500 ft).
+        let (mut bends, mut hairpins, mut sharp, mut zig, mut climb_ft) = (0usize, 0usize, 0usize, 0usize, 0.0f64);
+        let mut hp_at: Vec<(P, f64, bool, bool)> = Vec::new();
+        let sang = |u: P, v: P| libm::atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]).to_degrees();
+        for rc in t0.roads.roads.iter() {
+            for k in 0..rc.pts.len() - 1 {
+                let (s0, z0) = (rc.s[k], rc.z[k]);
+                if let Some(j) = (k..rc.pts.len()).find(|&j| rc.s[j] - s0 >= 500.0) {
+                    if ((rc.z[j] - z0).abs() as f64) > 0.04 * (rc.s[j] - s0) {
+                        climb_ft += rc.s[k + 1] - s0;
+                    }
+                }
+            }
+            let mut q: Vec<P> = Vec::new();
+            for k in 0..rc.pts.len() - 1 {
+                let n = ((rc.s[k + 1] - rc.s[k]) / 50.0).ceil().max(1.0) as usize;
+                q.extend((0..n).map(|j| rc.eval(k, j as f64 / n as f64, 5.0, t0.cell_ft).p));
+            }
+            const L: usize = 15;
+            let turn = |i: usize, l: usize| sang(sub(q[i], q[i - l]), sub(q[i + l], q[i]));
+            let mut ev: Vec<(usize, f64, f64)> = Vec::new();
+            let mut i = L;
+            while i + L < q.len() {
+                if turn(i, L).abs() <= 60.0 {
+                    i += 1;
+                    continue;
+                }
+                let best = (i..(i + L).min(q.len() - L)).max_by(|&x, &y| turn(x, L).abs().total_cmp(&turn(y, L).abs())).unwrap_or(i);
+                let tight = if best >= 6 && best + 6 < q.len() { turn(best, 6).abs() } else { 0.0 };
+                ev.push((best, turn(best, L), tight));
+                i = best + 2 * L;
+            }
+            for (e, &(i, a, t)) in ev.iter().enumerate() {
+                let z = [e.wrapping_sub(1), e + 1].iter().any(|&f| f < ev.len() && ev[f].0.abs_diff(i) < 60 && ev[f].1 * a < 0.0);
+                bends += 1;
+                hairpins += (a.abs() > 150.0) as usize;
+                sharp += (t > 90.0) as usize;
+                zig += z as usize;
+                hp_at.push((q[i], a, t > 90.0, z));
+            }
+        }
+        let per10 = |n: usize| if climb_ft > 0.0 { n as f64 / (climb_ft / (10.0 * MI)) } else { 0.0 };
+        say!(
+            "  bends (> 60° over 750 ft): {bends}, zigzag {zig} ({:.1} per 10 mi of {:.0} mi climbing road), hairpins > 150° {hairpins}, sharp (V, > 90° within 300 ft) {sharp}",
+            per10(zig),
+            climb_ft / MI
+        );
+        for h in hp_at.iter().filter(|h| h.2 || h.1.abs() > 150.0).take(std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4)) {
+            say!("      bend {:.0}° at ({:.0}, {:.0}){}{}", h.1, h.0[0], h.0[1], if h.2 { " sharp" } else { "" }, if h.3 { " zigzag" } else { "" });
+        }
         let net = network(&t0, &standing, &gate_counts);
         realms(&world, &t0);
         let econ = economy(&t0);

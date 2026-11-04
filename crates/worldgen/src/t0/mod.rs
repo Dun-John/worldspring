@@ -468,6 +468,20 @@ impl T0 {
             (r.pts, r.wander) = roads::round_corners(&r.pts, &r.wander, 0.06 * cell, 0.05 * cell);
             r.z = z;
             roads::ease_turns(r, cell, &|x, y| !wet(x, y));
+            // (A track still running into a lake between the cells it was routed on keeps to the
+            // shore, its turns eased again.)
+            if r.class == roads::RoadClass::Track {
+                let mut moved = false;
+                for _ in 0..8 {
+                    if !roads::keep_dry(r, &|x, y| !wet(x, y)) {
+                        break;
+                    }
+                    moved = true;
+                }
+                if moved {
+                    roads::ease_turns(r, cell, &|x, y| !wet(x, y));
+                }
+            }
             // The bends are in the points (`roads::follow_terrain`): no wander on top, which
             // would ignore the rivers and the profile (and, where two roads were joined into one,
             // swing at full strength round the joint).

@@ -1799,8 +1799,9 @@ fn switchbacks(
         }
         i = j;
     }
-    // Corners (hairpins, and where a switchback stretch meets the road) turn on arcs.
-    round_corners(&out, &wander, 0.06, 0.05)
+    // Corners (hairpins, and where a switchback stretch meets the road) turn on arcs; within a
+    // stretch on wider ones, as far as its legs allow (a kink between legs reads as a bend).
+    round_corners_by(&out, &wander, &|k| if wander[k] == 0.0 && k + 1 < wander.len() && wander[k + 1] == 0.0 { 0.6 / F } else { 0.06 }, 0.05)
 }
 
 /// A polyline (cells) with each corner turning more than 15° rounded by a circular arc
@@ -1808,6 +1809,11 @@ fn switchbacks(
 /// a narrow angle: a hairpin becomes a tight U-turn), and points at most `step` apart; `vals`
 /// (one per point) are carried along (interpolated on lines, the corner's on its arc).
 pub fn round_corners(pts: &[[f64; 2]], vals: &[f32], r_max: f64, step: f64) -> (Vec<[f64; 2]>, Vec<f32>) {
+    round_corners_by(pts, vals, &|_| r_max, step)
+}
+
+/// `round_corners` with the largest radius given per corner (by point index).
+fn round_corners_by(pts: &[[f64; 2]], vals: &[f32], r_max: &dyn Fn(usize) -> f64, step: f64) -> (Vec<[f64; 2]>, Vec<f32>) {
     let n = pts.len();
     if n < 3 {
         return (pts.to_vec(), vals.to_vec());
@@ -1826,7 +1832,7 @@ pub fn round_corners(pts: &[[f64; 2]], vals: &[f32], r_max: f64, step: f64) -> (
             }
             let tan_half = libm::tan(0.5 * alpha);
             let t_max = 0.45 * dist(pts[k - 1], pts[k]).min(dist(pts[k], pts[k + 1]));
-            let r = r_max.min(t_max * tan_half);
+            let r = r_max(k).min(t_max * tan_half);
             let t = r / tan_half;
             let bis = unit2([a[0] + b[0], a[1] + b[1]]);
             let c = r / libm::sin(0.5 * alpha);
@@ -1898,22 +1904,35 @@ fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2
     let (s, t) = (idx(a), idx(b));
     let step = cell / f;
     const DIRS: [(i32, i32); 16] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1), (2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2)];
+    // What turning from one heading to another costs (grid steps): enough that the route climbs
+    // in long legs rather than zigzagging every step or two. (The states are a node and the
+    // heading it was reached by, so each turn is costed as made.)
+    const TURN: f64 = 2.5;
+    let turn_cost: Vec<f64> = (0..256)
+        .map(|k| {
+            let ((ax, ay), (bx, by)) = (DIRS[k / 16], DIRS[k % 16]);
+            TURN * (1.0 - (ax * bx + ay * by) as f64 / crate::core::sqrt(((ax * ax + ay * ay) * (bx * bx + by * by)) as f64))
+        })
+        .collect();
     for limit in [gmax, gmax * 1.8] {
-        let mut g = vec![f64::INFINITY; fw * fh];
-        let mut came = vec![u32::MAX; fw * fh];
+        let mut g = vec![f64::INFINITY; fw * fh * 16];
+        let mut came = vec![u32::MAX; fw * fh * 16];
+        let mut done = vec![false; fw * fh * 16];
         let mut heap = BinaryHeap::new();
-        g[s] = 0.0;
-        heap.push(Node { f: 0.0, i: s as u32 });
         let (tx, ty) = ((t % fw) as f64, (t / fw) as f64);
-        while let Some(Node { i, .. }) = heap.pop() {
-            let i = i as usize;
-            if i == t {
+        // (The start leaves in any heading.)
+        let start = u32::MAX - 1;
+        heap.push(Node { f: 0.0, i: start });
+        while let Some(Node { i: st, .. }) = heap.pop() {
+            let (i, d0) = if st == start { (s, usize::MAX) } else { (st as usize / 16, st as usize % 16) };
+            if st != start && i == t {
                 let mut path = vec![t];
-                let mut cur = t;
-                while cur != s {
+                let mut cur = st as usize;
+                while came[cur] != start {
                     cur = came[cur] as usize;
-                    path.push(cur);
+                    path.push(cur / 16);
                 }
+                path.push(s);
                 path.reverse();
                 let mut out: Vec<[f64; 2]> = path.into_iter().map(to_world).collect();
                 let k = out.len() - 1;
@@ -1928,8 +1947,15 @@ fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2
                 }
                 return Some(out);
             }
+            let g0 = if st == start { 0.0 } else { g[st as usize] };
+            if st != start {
+                if done[st as usize] {
+                    continue;
+                }
+                done[st as usize] = true;
+            }
             let (ix, iy) = ((i % fw) as i32, (i / fw) as i32);
-            for (dx, dy) in DIRS {
+            for (d, (dx, dy)) in DIRS.into_iter().enumerate() {
                 let (nx, ny) = (ix + dx, iy + dy);
                 if nx < 0 || ny < 0 || nx >= fw as i32 || ny >= fh as i32 {
                     continue;
@@ -1943,22 +1969,14 @@ fn fine_route(hg: &Plan, ground: &impl Fn([f64; 2]) -> f64, ok: &impl Fn([f64; 2
                 if grade > limit {
                     continue;
                 }
-                // Mild turn cost keeps legs straight; climbing costs a little extra.
-                let prev = came[i];
-                let turn = if prev == u32::MAX {
-                    0.0
-                } else {
-                    let (px, py) = ((prev as usize % fw) as i32, (prev as usize / fw) as i32);
-                    let (ax, ay) = ((ix - px) as f64, (iy - py) as f64);
-                    let cosang = (ax * dx as f64 + ay * dy as f64) / (crate::core::sqrt(ax * ax + ay * ay) * crate::core::sqrt((dx * dx + dy * dy) as f64)).max(1e-9);
-                    0.3 * (1.0 - cosang)
-                };
-                let ng = g[i] + run * (1.0 + 2.0 * grade) + turn * step;
-                if ng < g[nb] {
-                    g[nb] = ng;
-                    came[nb] = i as u32;
+                // Turning costs; climbing costs a little extra.
+                let turn = if d0 == usize::MAX { 0.0 } else { turn_cost[d0 * 16 + d] };
+                let (ns, ng) = (nb * 16 + d, g0 + run * (1.0 + 2.0 * grade) + turn * step);
+                if ng < g[ns] {
+                    g[ns] = ng;
+                    came[ns] = st;
                     let hd = dist([nx as f64, ny as f64], [tx, ty]) * step;
-                    heap.push(Node { f: ng + hd, i: nb as u32 });
+                    heap.push(Node { f: ng + hd, i: ns as u32 });
                 }
             }
         }
@@ -3809,6 +3827,117 @@ pub fn ease_turns(r: &mut RoadPath, cell: f64, dry: &dyn Fn(f64, f64) -> bool) {
         r.wander.splice(i0 + 1..i1, std::iter::repeat_n(0.0, m - 1));
         i = i0 + m;
     }
+}
+
+/// Moves a road (ft) off standing water it still runs into (a lake's water between the cells it
+/// was routed on): each run of wet points (not an end) slides sideways, to the side that needs
+/// less, by as much as its wettest point needs, eased in and out over `EASE` ft; left as it is
+/// where no move within `REACH` ft keeps it dry. One run per call: whether one moved. (The
+/// profile is fitted again afterwards.)
+pub fn keep_dry(r: &mut RoadPath, dry: &dyn Fn(f64, f64) -> bool) -> bool {
+    const REACH: f64 = 1500.0;
+    const EASE: f64 = 600.0;
+    let n = r.pts.len();
+    let wet: Vec<bool> = r.pts.iter().map(|p| !dry(p[0], p[1])).collect();
+    let mut k = 1;
+    while k + 1 < n {
+        if !wet[k] {
+            k += 1;
+            continue;
+        }
+        let i0 = k;
+        while k + 1 < n && wet[k] {
+            k += 1;
+        }
+        let i1 = k - 1;
+        if i1 + 1 >= n - 1 && wet[n - 1] {
+            break;
+        }
+        let normal = |i: usize| {
+            let (a, b) = (r.pts[i - 1], r.pts[(i + 1).min(n - 1)]);
+            let t = unit2([b[0] - a[0], b[1] - a[1]]);
+            [-t[1], t[0]]
+        };
+        // Per side: the offset the wettest point needs.
+        let need = |side: f64| {
+            let mut most = 0.0f64;
+            for i in i0..=i1 {
+                let nrm = normal(i);
+                let d = (1..=(REACH / 50.0) as usize).map(|m| m as f64 * 50.0).find(|&d| dry(r.pts[i][0] + side * nrm[0] * d, r.pts[i][1] + side * nrm[1] * d))?;
+                most = most.max(d);
+            }
+            Some(most + 60.0)
+        };
+        let pick = match (need(1.0), need(-1.0)) {
+            (Some(a), Some(b)) => Some(if a <= b { (1.0, a) } else { (-1.0, b) }),
+            (Some(a), None) => Some((1.0, a)),
+            (None, Some(b)) => Some((-1.0, b)),
+            (None, None) => None,
+        };
+        let Some((side, off)) = pick else {
+            continue;
+        };
+        // Distance along the road from the run, for the easing.
+        let mut s = vec![0.0; n];
+        for i in 1..n {
+            s[i] = s[i - 1] + dist(r.pts[i - 1], r.pts[i]);
+        }
+        let moved: Vec<(usize, f64, [f64; 2])> = (1..n - 1)
+            .filter_map(|i| {
+                let gap = if i < i0 { s[i0] - s[i] } else if i > i1 { s[i] - s[i1] } else { 0.0 };
+                (gap < EASE).then(|| {
+                    // (A point the planned offset leaves wet takes the nearest dry one to it.)
+                    let (f, nrm, p) = (1.0 - smooth01(gap / EASE), normal(i), r.pts[i]);
+                    let at = |d: f64| [p[0] + side * nrm[0] * d, p[1] + side * nrm[1] * d];
+                    let d = (0..=(REACH / 50.0) as usize).flat_map(|m| [off * f + m as f64 * 50.0, off * f - m as f64 * 50.0]).filter(|&d| (0.0..=REACH).contains(&d)).find(|&d| dry(at(d)[0], at(d)[1]));
+                    (i, d.unwrap_or(off * f), nrm)
+                })
+            })
+            .collect();
+        // Offsets smoothed (raised to their neighbours' mean) where that stays dry: no kinks.
+        let place = |m: &[(usize, f64, [f64; 2])]| m.iter().map(|&(i, d, nrm)| (i, [r.pts[i][0] + side * nrm[0] * d, r.pts[i][1] + side * nrm[1] * d])).collect::<Vec<(usize, [f64; 2])>>();
+        let mut smooth = moved.clone();
+        for _ in 0..3 {
+            let prev = smooth.clone();
+            for m in 1..smooth.len().saturating_sub(1) {
+                smooth[m].1 = prev[m].1.max(0.5 * (prev[m - 1].1 + prev[m + 1].1));
+            }
+        }
+        let (rough, smooth) = (place(&moved), place(&smooth));
+        let moved = if smooth.iter().all(|(_, q)| dry(q[0], q[1])) { smooth } else { rough };
+        if moved.iter().all(|(_, q)| dry(q[0], q[1])) {
+            let (lo, hi) = (moved[0].0, moved[moved.len() - 1].0);
+            for (i, q) in moved {
+                r.pts[i] = q;
+            }
+            // Points left jogging there (turning over 45°) go where the chord past them stays dry.
+            let chord_dry = |a: [f64; 2], b: [f64; 2]| {
+                let m = (dist(a, b) / 50.0).ceil().max(1.0) as usize;
+                (0..=m).all(|j| dry(a[0] + (b[0] - a[0]) * j as f64 / m as f64, a[1] + (b[1] - a[1]) * j as f64 / m as f64))
+            };
+            let mut drop = vec![false; n];
+            let mut last = lo - 1;
+            for i in lo..=hi {
+                let (a, b, c) = (r.pts[last], r.pts[i], r.pts[i + 1]);
+                if dot2(unit2(sub2(b, a)), unit2(sub2(c, b))) < libm::cos(45f64.to_radians()) && chord_dry(a, c) {
+                    drop[i] = true;
+                } else {
+                    last = i;
+                }
+            }
+            let keep: Vec<usize> = (0..n).filter(|&i| !drop[i]).collect();
+            r.pts = keep.iter().map(|&i| r.pts[i]).collect();
+            r.z = keep.iter().map(|&i| r.z[i]).collect();
+            r.wander = keep.iter().map(|&i| r.wander[i]).collect();
+            return true;
+        }
+    }
+    false
+}
+
+fn smooth01(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Cuts out-and-back spikes (ft): where a road turns back (over ~155°) and retraces its way
