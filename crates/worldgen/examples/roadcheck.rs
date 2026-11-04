@@ -324,6 +324,7 @@ fn main() {
         let (mut bends, mut hairpins, mut sharp, mut zig, mut climb_ft) = (0usize, 0usize, 0usize, 0usize, 0.0f64);
         let mut hp_at: Vec<(P, f64, bool, bool)> = Vec::new();
         let mut fingers: [Vec<(P, P, f64)>; 2] = [Vec::new(), Vec::new()];
+        let mut stacks: Vec<(P, usize)> = Vec::new();
         let sang = |u: P, v: P| libm::atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]).to_degrees();
         for rc in t0.roads.roads.iter() {
             for k in 0..rc.pts.len() - 1 {
@@ -360,8 +361,42 @@ fn main() {
                 ev.push((best, turn(best, L), tight));
                 i = best + 2 * L;
             }
+            // Stacks: two or more hairpins (> 120° between their legs) in a row, turning alternately, each leg
+            // between them 0.3 to 1.2 mi; not zigzags (nor fingers, over its legs and one more each way).
+            // (A hairpin's turn is the heading change between its legs: each leg's heading over its
+            // middle stretch, from half to all of the way to the bend beside it, at most 3,000 ft.)
+            let pin = |f: usize| {
+                let (i, gap) = (ev[f].0, |g: usize| ev[g].0.abs_diff(ev[f].0) / 2);
+                let mut l = 60usize.min(i).min(q.len() - 1 - i);
+                if f > 0 {
+                    l = l.min(gap(f - 1));
+                }
+                if f + 1 < ev.len() {
+                    l = l.min(gap(f + 1));
+                }
+                l >= L && sang(sub(q[i - l / 2], q[i - l]), sub(q[i + l], q[i + l / 2])).abs() > 120.0
+            };
+            let leg_ok = |f: usize| (ev[f].1 * ev[f + 1].1 < 0.0) && ((ev[f + 1].0 - ev[f].0) as f64 * 50.0 / MI) >= 0.3 && ((ev[f + 1].0 - ev[f].0) as f64 * 50.0 / MI) <= 1.2;
+            let mut in_stack = vec![false; ev.len()];
+            let mut spans: Vec<(usize, usize)> = Vec::new();
+            let mut f = 0;
+            while f < ev.len() {
+                let mut g = f;
+                while pin(f) && g + 1 < ev.len() && pin(g + 1) && leg_ok(g) {
+                    g += 1;
+                }
+                if g > f {
+                    let longest = (f..g).map(|x| ev[x + 1].0 - ev[x].0).max().unwrap_or(0);
+                    in_stack[f..=g].iter_mut().for_each(|v| *v = true);
+                    spans.push((ev[f].0.saturating_sub(longest + 30), ev[g].0 + longest + 30));
+                    stacks.push((q[ev[f].0], g - f + 2));
+                    f = g + 1;
+                } else {
+                    f += 1;
+                }
+            }
             for (e, &(i, a, t)) in ev.iter().enumerate() {
-                let z = [e.wrapping_sub(1), e + 1].iter().any(|&f| f < ev.len() && ev[f].0.abs_diff(i) < 60 && ev[f].1 * a < 0.0);
+                let z = !in_stack[e] && [e.wrapping_sub(1), e + 1].iter().any(|&f| f < ev.len() && !in_stack[f] && ev[f].0.abs_diff(i) < 60 && ev[f].1 * a < 0.0);
                 bends += 1;
                 hairpins += (a.abs() > 150.0) as usize;
                 sharp += (t > 90.0) as usize;
@@ -384,7 +419,7 @@ fn main() {
                     let mut marks: Vec<usize> = vec![i];
                     marks.extend(ev.iter().map(|e| e.0).filter(|&e| e > i && e < j));
                     marks.push(j);
-                    if marks.windows(2).any(|w| (w[1] - w[0]) as f64 > leg) {
+                    if marks.windows(2).any(|w| (w[1] - w[0]) as f64 > leg) && !spans.iter().any(|&(x, y)| x <= i && j <= y) {
                         let tip = (i..=j).max_by(|&x, &y| dist(q[i], q[x]).total_cmp(&dist(q[i], q[y]))).unwrap_or(i);
                         fingers[wide].push((q[i], q[tip], (j - i) as f64 * 50.0 / MI));
                     }
@@ -400,6 +435,15 @@ fn main() {
         );
         for h in hp_at.iter().filter(|h| h.2 || h.1.abs() > 150.0).take(std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4)) {
             say!("      bend {:.0}° at ({:.0}, {:.0}){}{}", h.1, h.0[0], h.0[1], if h.2 { " sharp" } else { "" }, if h.3 { " zigzag" } else { "" });
+        }
+        say!(
+            "  stacks (2+ alternating hairpins > 120°, legs 0.3-1.2 mi): {}, legs {}, most legs {}",
+            stacks.len(),
+            stacks.iter().map(|s| s.1).sum::<usize>(),
+            stacks.iter().map(|s| s.1).max().unwrap_or(0)
+        );
+        for s in stacks.iter().filter(|s| s.1 > 8).take(4) {
+            say!("      stack of {} legs at ({:.0}, {:.0})", s.1, s.0[0], s.0[1]);
         }
         say!("  fingers (out and back beside itself, >= 1.5 mi along within 0.3 mi, not a compact switchback stack): {}; within 0.6 mi {}", fingers[0].len(), fingers[1].len());
         for f in fingers[1].iter().take(std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4)) {
