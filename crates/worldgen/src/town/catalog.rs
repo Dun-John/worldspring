@@ -267,7 +267,7 @@ pub const SIGNS: [Signs; 5] = [
             "Hare", "Otter", "Heron", "Falcon", "Pilgrim", "Ram", "Primrose", "Acorn", "Feathers", "Chequers", "Woolpack", "Cauldron", "Weasel", "Jester", "Bishop",
             "Kingfisher",
         ],
-        rest: &["Rest", "Hearth", "Lodge", "Table", "House", "Cellar", "Board", "Arms"],
+        rest: &["Rest", "Hearth", "Lodge", "Table", "House", "Cellar", "Board"],
         inst: &["Grey", "High", "Silver", "Dawn", "Iron", "Amber", "Twilight", "Azure", "Radiant", "Ashen", "Verdant", "Stone", "Starlit", "Royal", "Elder", "Hallowed"],
         gods: &["the Dawn", "the Morning Lord", "the Harvest", "the Seven", "the Green Man", "the Lady of the Lake", "the Shepherd", "the Lantern Bearer", "the Hearth", "the Forge", "the Moon", "the Watcher"],
     },
@@ -279,7 +279,7 @@ pub const SIGNS: [Signs; 5] = [
         noun: &[
             "Grape", "Olive", "Dolphin", "Lion", "Peacock", "Galley", "Amphora", "Gondola", "Lute", "Mask", "Fig", "Lemon", "Sun", "Mermaid", "Goat", "Bull", "Sparrow", "Cypress",
             "Fountain", "Pearl", "Anchor", "Orange", "Swallow", "Vine", "Octopus", "Harp", "Laurel", "Tuna", "Pomegranate", "Wine Jar", "Heron", "Tortoise", "Seashell", "Crab",
-            "Gull", "Nightingale", "Donkey", "Cockerel", "Mandolin", "Carnival",
+            "Gull", "Nightingale", "Donkey", "Cockerel", "Mandolin",
         ],
         rest: &["Table", "House", "Terrace", "Cellar", "Courtyard", "Rest", "Loggia"],
         inst: &["Golden", "Marble", "Azure", "Radiant", "Laurel", "High", "Sunlit", "Crimson", "Silver", "Ivory", "Gilded", "Coral"],
@@ -295,7 +295,7 @@ pub const SIGNS: [Signs; 5] = [
             "Cistern", "Fig", "Ibis", "Date Palm", "Fountain", "Hawk", "Tiger", "Water Jar", "Peacock", "Lizard", "Oryx", "Hoopoe", "Coffee Pot", "Rose", "Lute", "Serpent", "Ostrich",
             "Leopard", "Sandal",
         ],
-        rest: &["Rest", "House", "Courtyard", "Tent", "Shade", "Well"],
+        rest: &["Rest", "House", "Courtyard", "Tent", "Well"],
         inst: &["Golden", "Brass", "High", "Sun", "Amber", "Copper", "Moon", "Starlit", "Silver", "Saffron", "Indigo", "Crescent"],
         gods: &["the Sun", "the Veiled Lady", "the Well Keeper", "the Night Sky", "the Thousand Eyes", "the Moon", "the Watcher", "the Morning Lord", "the Forge"],
     },
@@ -321,25 +321,33 @@ pub const DEITY: &[&str] = &[
     "the Wind Rider", "the Ancestors",
 ];
 
+/// Arms an inn of the north or the west may bear ("The Masons' Arms").
+pub const INN_ARMS: [&str; 16] = [
+    "King's", "Masons'", "Carpenters'", "Bishop's", "Smiths'", "Coopers'", "Drovers'", "Ploughman's", "Shepherd's", "Farriers'", "Wheelwrights'", "Weavers'", "Bargemen's",
+    "Archers'", "Huntsman's", "Saddlers'",
+];
+
 /// The words a business's trade goes by in its name ("Smithy", "Forge"), by catalog key: its
 /// `trade` and others.
 pub fn trades(f: &Func) -> &[&'static str] {
     match f.key {
         "inn" => &["Inn", "Lodge", "Hostelry", "Coaching Inn"],
         "tavern" => &["Tavern", "Taproom", "Alehouse"],
-        "general_store" => &["Goods", "Sundries", "Provisions", "Wares", "Supplies", "Trading Post", "Chandlery"],
+        "general_store" => &["Goods", "Provisions", "Trading Post", "Chandlery"],
         "apothecary" => &["Remedies", "Apothecary", "Herbs", "Tinctures", "Salves", "Physic"],
         "tailor" => &["Tailoring", "Clothiers", "Drapery", "Needlework", "Garments"],
         "bakery" => &["Bakery", "Bakehouse", "Ovens", "Breads"],
         "butcher" => &["Butchery", "Meats", "Shambles"],
         "blacksmith" => &["Smithy", "Forge", "Ironworks", "Anvil"],
-        "leatherworker" => &["Tannery", "Leathers", "Hides"],
-        "cooper" => &["Cooperage", "Casks", "Barrels"],
+        "leatherworker" => &["Tannery", "Leathers", "Tanner's Yard"],
+        "cooper" => &["Cooperage", "Casks", "Cooper's Yard"],
+        "bowyer" => &["Bows", "Fletchery", "Arrows"],
+        "scribe" => &["Scriptorium", "Scribes"],
         "carpenter" => &["Joinery", "Woodworks", "Carpentry"],
         "cobbler" => &["Boots", "Shoes", "Cobblery"],
         "potter" => &["Pottery", "Kilns", "Crockery"],
-        "library" => &["Library", "Archive", "Reading Room", "Lore House", "Book Hall"],
-        "bank" => &["Counting House", "Exchange", "Treasury", "Bank", "Strongroom", "Coffers"],
+        "library" => &["Library", "Archive", "Scriptorium"],
+        "bank" => &["Counting House", "Exchange", "Treasury", "Bank"],
         "town_hall" => &["Hall", "Moot Hall", "Town House"],
         "guard_post" => &["Watch House", "Guardhouse", "Watch"],
         _ => std::slice::from_ref(&f.trade),

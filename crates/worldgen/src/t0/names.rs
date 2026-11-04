@@ -18,6 +18,8 @@ pub struct Culture {
     codas: &'static [&'static str],
     /// The approved words its letter model learns from (never given out as they are).
     train: &'static [&'static str],
+    /// Curated roots: first parts and last parts run together ("Thor" + "geir").
+    roots: (&'static [&'static str], &'static [&'static str]),
     /// Endings put on a culture word for a place.
     endings: &'static [&'static str],
     /// English place-name pieces in its flavour: first parts and last parts ("Raven" + "holm").
@@ -33,14 +35,18 @@ pub struct Culture {
 /// Cold north, temperate west, warm south, dry lands, open steppe.
 pub const CULTURES: [Culture; 5] = [
     Culture {
-        onsets: &["k", "sk", "th", "v", "h", "gr", "br", "st", "r", "b", "t", "j", "dr", "s", "hr", "sv"],
+        onsets: &["k", "sk", "th", "v", "h", "gr", "br", "st", "r", "b", "t", "j", "dr", "s", "sv"],
         vowels: &["a", "e", "i", "o", "u", "y", "ei", "au"],
-        codas: &["r", "n", "rd", "nd", "ll", "st", "g", "rn", "k", "", ""],
+        codas: &["r", "n", "rd", "nd", "ll", "rn", "k", "", ""],
         train: &[
             "Skeld", "Thorvald", "Hrossey", "Brennvik", "Fjalsted", "Grimmar", "Kaldur", "Vestrey", "Haukrun", "Sigvald", "Torsund", "Brynjar", "Eskil", "Hjaldur", "Skarna",
             "Vidrun", "Jorund", "Starkad", "Halvard", "Dravik", "Sveinar", "Ulfrik", "Kolbrun", "Asmund", "Thyra", "Bjarke", "Folkvar", "Vargrun", "Haldis", "Ragnvald",
         ],
-        endings: &["heim", "vik", "gard", "fell", "by", "stad", "holm", "dal", "sund", "ness", "vang", "rud"],
+        roots: (
+            &["Thor", "Ulf", "Sig", "Rag", "Hal", "Kol", "Sven", "Ask", "Grim", "Vig", "Ein", "Arn", "Bor", "Frey", "Gunn", "Orm", "Tor", "Var", "Skar", "Brand", "Hak", "Leif", "Hel", "Dag", "Os", "Ket", "Sol", "Eld"],
+            &["mund", "rik", "vald", "dis", "geir", "stein", "ulf", "run", "ar", "ald", "olf", "ard", "vor", "heid", "borg", "dur", "mar", "ved", "ka", "va", "is", "ny"],
+        ),
+        endings: &["heim", "vik", "gard", "fell", "by", "stad", "holm", "dal", "sund", "ness", "vang", "berg", "lund", "nes", "tun", "sted", "voll", "ey"],
         pre: &[
             "Raven", "Wolf", "Bear", "Frost", "Elk", "Storm", "Rime", "Grey", "Salt", "Iron", "Black", "White", "Ash", "Thorn", "Whale", "Seal", "Crow", "Hawk", "Stone", "Birch",
             "Pine", "Skerry", "Troll", "Gull", "Horn", "Snow", "Cold", "Fir", "Wind", "Hammer", "Eagle", "Otter", "Shield", "Ember", "Mist",
@@ -58,6 +64,10 @@ pub const CULTURES: [Culture; 5] = [
             "Aldric", "Brannoc", "Caerwen", "Dunmar", "Elwen", "Gwyllan", "Haddow", "Llandry", "Tregarth", "Wendell", "Whitlow", "Glenna", "Corwen", "Rhydder", "Maelor",
             "Tamsin", "Edric", "Carrow", "Haverel", "Lyndon", "Merrick", "Odwin", "Pellam", "Ravell", "Talwyn", "Cador", "Fennick", "Hollis", "Kendal", "Brython",
         ],
+        roots: (
+            &["Al", "Bran", "Cad", "Dun", "El", "Gar", "Hal", "Mer", "Pen", "Tal", "Tre", "Gwen", "Ros", "Car", "Mor", "Bel", "Cor", "Lan", "Od", "Ber", "Wil", "Gil", "Har", "Ced"],
+            &["wen", "ric", "oc", "mar", "wyn", "dor", "ell", "an", "ith", "ard", "in", "el", "ow", "ys", "wald", "ry"],
+        ),
         endings: &["ton", "wick", "ford", "ham", "bury", "dale", "mere", "field", "bridge", "stead", "worth", "ley", "combe", "more", "by", "well"],
         pre: &[
             "Oak", "Ash", "Elm", "Bram", "Thorn", "Mill", "Black", "Red", "White", "Green", "Hart", "Wolf", "Raven", "Stone", "Salt", "Iron", "Gold", "High", "Long", "Broad",
@@ -81,11 +91,15 @@ pub const CULTURES: [Culture; 5] = [
             "Valeria", "Castor", "Mirella", "Avento", "Corvina", "Lucano", "Serrano", "Tavira", "Ostra", "Benevar", "Calvessa", "Dorano", "Marcellin", "Peretta", "Quintar",
             "Rovesa", "Teronna", "Varenza", "Aurelo", "Brisano", "Celano", "Fiora", "Lorenza", "Montaro", "Neviano", "Palestro", "Riona", "Solvena", "Ternio", "Vasca",
         ],
-        endings: &["ia", "um", "ona", "ara", "essa", "ano", "ella", "ino", "era", "enza", "ora", "eto", "ani", "esca"],
+        roots: (
+            &["Val", "Cas", "Mar", "Lu", "Ser", "Tav", "Ben", "Cal", "Dor", "Mon", "Ner", "Pal", "Sol", "Ver", "Ar", "Fab", "Lor", "Ren", "Tor", "Cor", "Ost", "Sal", "Vit", "Lev"],
+            &["ano", "era", "ino", "etta", "ona", "ello", "ara", "esso", "oro", "enzo", "ina", "ato", "ola", "ezzo", "ita"],
+        ),
+        endings: &["ia", "um", "ona", "ara", "essa", "ano", "ella", "ino", "era", "enza", "ora", "eto", "esca", "ata", "ola", "ezza", "ina", "ello"],
         pre: &["Sun", "Gold", "Olive", "Vine", "Lemon", "Salt", "Rose", "Bright", "White", "Amber", "Coral", "Cypress", "Myrtle", "Laurel", "Fig", "Dove"],
         suf: &["haven", "bay", "cliff", "vale", "grove", "hill", "watch", "mere", "shore", "crest", "bridge"],
         adj: &["Sun", "Amber", "Gold", "Azure", "Coral", "Laurel", "Olive", "Crimson", "Bright", "Dawn", "Vine", "Myrtle", "Marble", "Sapphire"],
-        english: 0.05,
+        english: 0.0,
         nature: 0.5,
     },
     Culture {
@@ -96,11 +110,15 @@ pub const CULTURES: [Culture; 5] = [
             "Zahirah", "Qasim", "Sharaz", "Kharim", "Darjan", "Hamadi", "Mirzan", "Rashad", "Tabriq", "Baharun", "Nasira", "Jafira", "Sulaim", "Qarra", "Zaroun", "Khadesh",
             "Sahrin", "Dumaz", "Hirun", "Basrim", "Yazran", "Tamuz", "Ishara", "Nadrim", "Ruzhan", "Shiraqa", "Zafir", "Amunet", "Kesra", "Halabi",
         ],
-        endings: &["abad", "ar", "im", "esh", "ra", "an", "un", "iya", "una", "ash", "is", "ira"],
+        roots: (
+            &["Zah", "Qas", "Shar", "Khar", "Dar", "Ham", "Mir", "Rash", "Tab", "Bah", "Nas", "Jaf", "Sul", "Kes", "Sah", "Dum", "Hir", "Bas", "Yaz", "Tam", "Nad", "Zaf", "Hal", "Sab"],
+            &["im", "ar", "an", "ad", "ira", "un", "aya", "ud", "il", "ab", "at", "ir", "ul", "ida"],
+        ),
+        endings: &["abad", "ar", "im", "esh", "ra", "an", "un", "iya", "una", "ash", "is", "ira", "sar", "at", "ul", "ana", "il", "ad"],
         pre: &["Sand", "Sun", "Salt", "Dust", "Red", "Gold", "Palm", "Brass", "Copper", "Dune", "Amber", "Jackal", "Falcon", "Ochre", "Saffron"],
         suf: &["well", "gate", "wall", "spring", "rock", "tower", "haven", "cross", "hold", "reach", "stone", "pool"],
         adj: &["Red", "Amber", "Dust", "Brass", "Sun", "Scorched", "Golden", "Burning", "Copper", "Ochre", "Saffron", "Bone", "Glass", "Shimmering"],
-        english: 0.04,
+        english: 0.0,
         nature: 0.5,
     },
     Culture {
@@ -111,11 +129,15 @@ pub const CULTURES: [Culture; 5] = [
             "Temur", "Bayan", "Khulan", "Tsogt", "Batu", "Orkhon", "Yesun", "Altan", "Chaghan", "Dorgai", "Kerul", "Mingan", "Naran", "Sukhe", "Toghan", "Ulaan", "Bortai",
             "Ergen", "Khasar", "Ordu", "Tengis", "Burqan", "Selenge", "Yisu", "Chono", "Daran", "Qara", "Jebei", "Munkh", "Sartaq",
         ],
-        endings: &["ur", "gol", "su", "dar", "in", "ol", "hot", "bulag", "tei", "khan", "del", "tu"],
+        roots: (
+            &["Tem", "Bay", "Khul", "Bat", "Or", "Yes", "Alt", "Chag", "Dor", "Ker", "Min", "Nar", "Suk", "Tog", "Ul", "Bor", "Er", "Kha", "Ten", "Bur", "Sel", "Jeb", "Mun", "Sar"],
+            &["ur", "an", "gai", "tai", "ul", "un", "ar", "en", "dai", "mur", "gen", "jin", "lan", "mai", "sun", "ei"],
+        ),
+        endings: &["ur", "gol", "su", "dar", "in", "nur", "tei", "bulag", "dal", "del", "tu", "ge", "tai"],
         pre: &["Horse", "Wind", "Grass", "Sky", "Eagle", "Wolf", "Red", "White", "Blue", "Hawk", "Mare", "Arrow", "Yak", "Felt", "Banner", "Kite"],
         suf: &["ford", "well", "camp", "stone", "hill", "field", "cairn", "moot", "fold", "ring", "mound"],
         adj: &["Blue", "Sky", "Wind", "Grass", "Horse", "Eagle", "Endless", "Wide", "Thunder", "Golden", "White", "Wild", "Whistling", "Silver"],
-        english: 0.04,
+        english: 0.0,
         nature: 0.5,
     },
 ];
@@ -157,7 +179,7 @@ const THEME_WORDS: [(&str, &[&str], &[&str]); 25] = [
     ("flooded", &["Drowned", "Sunken", "Weeping", "Flooded", "Dripping", "Still Water"], &["Caves", "Caverns", "Grotto", "Pools"]),
     ("beast_den", &["Wolf", "Bear", "Fang", "Claw", "Howling", "Gnawbone"], &["Den", "Caves", "Lair", "Hollow"]),
     ("mine", &["Copper", "Iron", "Silver", "Tin", "Lode", "Deep", "Pick", "Lantern", "Coal"], &["Mine", "Delve", "Workings", "Diggings"]),
-    ("lava_tube", &["Ember", "Cinder", "Smoke", "Burnt", "Fire", "Scorch", "Black", "Glass"], &["Tubes", "Lava Tubes", "Burrows", "Vents"]),
+    ("lava_tube", &["Ember", "Cinder", "Smoke", "Burnt", "Fire", "Scorch", "Black", "Glass"], &["Tubes", "Lava Tubes", "Burrows", "Vents", "Flues", "Tunnels"]),
     ("dungeon", &["Iron", "Black", "Grim", "Forgotten", "Deep", "Lost"], &["Dungeon", "Vaults", "Halls", "Depths"]),
     ("prison", &["Chain", "Shackle", "Iron", "Dread", "Lock", "Weeping"], &["Pits", "Cells", "Gaol", "Oubliette"]),
     ("temple", &["Hallowed", "Holy", "Sun", "Moon", "Silent", "Gilded"], &["Temple", "Sanctum", "Halls"]),
@@ -199,6 +221,16 @@ const REAL_NAMES: [&str; 40] = [
     "keith", "brenda", "linda", "sandra", "susan", "donna", "tracy", "carol", "bob", "tom", "tim", "ben", "dan", "sam", "ted", "ian", "jim", "joe", "ken", "ron", "sue",
     "mike",
 ];
+
+/// Runs read badly or as English in a culture word ("Zaztiqai", "Jauthest", "Glaock", "Whock",
+/// "Hushuzair", "Hauskall", "Porrol", "Chukhot").
+const NEW_RUNS: [&str; 20] = ["zt", "zz", "hz", "rgr", "auth", "auj", "aust", "aock", "aime", "orr", "who", "whu", "hush", "haus", "bantam", "otic", "crud", "krud", "hot", "qang"];
+/// Starts that read as English ("Hitisad", "Hidun", "Sirano").
+const JOKE_START: [&str; 6] = ["hit", "hid", "sir", "his", "her", "hum"];
+/// Short English words and names a culture word may be ("The Both Archive").
+const SHORT_WORDS: &str = "both bath moth hath then than them this that with were here rain main more sore bore bone done gone none hide side tide ride road toad load \
+    sand band land hand wand bend lend mend send tend rent tent dent bent sent mist list fist hint mint tint sink link dark bark park mark tusk dusk husk tomb bomb limb lamb \
+    dumb numb bint third fiona tina nina lena anna emma ella sara maria rosa eric ivan omar lisa mona dana nora vera hana tara kara mara rita gina dina lola tony toby mary";
 
 /// The kinds of place where grim names belong.
 fn dangerous(kind: NameKind) -> bool {
@@ -398,10 +430,10 @@ pub fn fault(word: &str, culture: Option<usize>) -> Option<&'static str> {
     if b.windows(4).any(|w| w[0] == w[2] && w[1] == w[3] && plain(w[0]) != plain(w[1])) {
         return Some("syllable said twice");
     }
-    // w after a vowel only at the end or before a vowel or n ("Haddow", not "Cygeawfowm").
+    // w after a vowel only at the end ("Haddow", not "Cygeawfowm", "Tewom").
     for i in 1..b.len() {
-        if b[i] == b'w' && plain(b[i - 1]) && i + 1 < b.len() && !plain(b[i + 1]) && b[i + 1] != b'n' {
-            return Some("w before a consonant");
+        if b[i] == b'w' && plain(b[i - 1]) && i + 1 < b.len() {
+            return Some("w after a vowel inside a word");
         }
     }
     if b.windows(2).any(|p| p == b"iu" || p == b"ui") || (c == 4 && b.ends_with(b"ng")) {
@@ -416,8 +448,38 @@ pub fn fault(word: &str, culture: Option<usize>) -> Option<&'static str> {
             return Some("yi in a word");
         }
     }
-    if (c == 3 || c == 4) && b.windows(2).any(|p| p == b"ou") {
-        return Some("ou in the dry or steppe tongue");
+    if c != 1 && b.windows(2).any(|p| p == b"ou") {
+        return Some("ou outside the west tongue");
+    }
+    // Vowel pairs: only the culture's own ("ei", "au" in the north; "ia", "io" in the south),
+    // one a word, and in a word of three syllables only in the last ("Valeria", not
+    // "Siopenus", "Nugaent", "Muek").
+    let pairs: &[&[u8]] = match c {
+        0 => &[b"au", b"ei"],
+        1 => &[b"ae", b"ea", b"ai"],
+        2 => &[b"ia", b"io", b"au"],
+        3 => &[b"ai"],
+        _ => &[b"ai", b"ei", b"aa"],
+    };
+    let at: Vec<usize> = (0..b.len().saturating_sub(1)).filter(|&i| plain(b[i]) && plain(b[i + 1])).collect();
+    if at.iter().any(|&i| !pairs.contains(&&b[i..i + 2])) || at.len() > 1 {
+        return Some("a vowel pair not of the tongue");
+    }
+    if let Some(&i) = at.first() {
+        if syllables(word) == 3 && b[i + 2..].iter().any(|&x| plain(x)) {
+            return Some("a vowel pair early in a long word");
+        }
+        // ("Fusmia": ia and io after one consonant.)
+        if c == 2 && i >= 2 && !plain(b[i - 1]) && !plain(b[i - 2]) {
+            return Some("a vowel pair after two consonants");
+        }
+        // ("Brucugiar", "Bonruvial": the south's pairs end a word or come before a vowel.)
+        if c == 2 && i + 3 == b.len() {
+            return Some("a vowel pair before a last consonant");
+        }
+    }
+    if let Some(f) = ban(word) {
+        return Some(f);
     }
     if (c == 0 || c == 1) && b.ends_with(b"i") {
         return Some("-i in the north or west tongue");
@@ -426,6 +488,75 @@ pub fn fault(word: &str, culture: Option<usize>) -> Option<&'static str> {
         return Some("a real word");
     }
     None
+}
+
+/// The later bans on a culture word (with an ending on or not): no Hr- or Bj-, Ll only before a
+/// vowel, no -au, -dry, -ian nor hard final pair (-gt, -st), `q` only before a or i, no
+/// `NEW_RUNS`, no English start or word, no two r-clusters a vowel apart ("Trobr-") nor three
+/// r's, no first syllable said back ("Sist", "Rers"), no hiss twice ("Shalaimesh", "Jezzaz").
+pub fn ban(word: &str) -> Option<&'static str> {
+    let b = letters(word);
+    let plain = |x: u8| matches!(x, b'a' | b'e' | b'i' | b'o' | b'u');
+    let cons = |x: u8| !plain(x) && x != b'y';
+    let stop = |x: u8| matches!(x, b'b' | b'c' | b'd' | b'f' | b'g' | b'k' | b'p' | b't');
+    let n = b.len();
+    if b.starts_with(b"hr") || b.starts_with(b"bj") {
+        return Some("Hr- or Bj-");
+    }
+    if b.starts_with(b"ll") && !b.get(2).is_some_and(|&x| plain(x)) {
+        return Some("Ll before a consonant");
+    }
+    if b.ends_with(b"au") || b.ends_with(b"dry") || b.ends_with(b"try") || b.ends_with(b"ian") {
+        return Some("a bad ending");
+    }
+    if n >= 3 && matches!(&b[n - 2..], b"gt" | b"kt" | b"pt" | b"bt" | b"dt" | b"zt" | b"st" | b"ht" | b"gd" | b"kd") {
+        return Some("a hard final pair");
+    }
+    for i in 0..n {
+        if b[i] == b'q' && !matches!(b.get(i + 1), Some(b'a' | b'i')) {
+            return Some("q not before a or i");
+        }
+    }
+    if NEW_RUNS.iter().any(|x| b.windows(x.len()).any(|w| w == x.as_bytes())) {
+        return Some("bad letter run");
+    }
+    if JOKE_START.iter().any(|x| b.starts_with(x.as_bytes())) || SHORT_WORDS.split_whitespace().any(|x| x.as_bytes() == b) {
+        return Some("reads as English");
+    }
+    if b.windows(5).any(|w| stop(w[0]) && w[1] == b'r' && plain(w[2]) && stop(w[3]) && w[4] == b'r') || b.iter().filter(|&&x| x == b'r').count() > 2 {
+        return Some("r-clusters piled up");
+    }
+    if n >= 3 && cons(b[0]) && b[0] == b[2] && plain(b[1]) && b.get(3).is_none_or(|&x| cons(x)) {
+        return Some("first syllable said back");
+    }
+    if b.windows(2).filter(|p| p == b"sh").count() >= 2 || b.iter().filter(|&&x| x == b'z').count() >= 2 {
+        return Some("a hiss twice");
+    }
+    // ("Estedsted", "Ulfulf", "Gwenwen".)
+    if (0..n.saturating_sub(5)).any(|i| b[i + 3..].windows(3).any(|w| w == &b[i..i + 3])) {
+        return Some("a run said twice");
+    }
+    None
+}
+
+/// One letter put in, left out or changed in a training word ("Hadow", "Fiona").
+fn near_training(w: &str) -> bool {
+    let a = letters(w);
+    let near = |t: &[u8]| {
+        if a.len().abs_diff(t.len()) > 1 {
+            return false;
+        }
+        let (mut i, mut j, mut k) = (0usize, a.len(), t.len());
+        while i < j.min(k) && a[i] == t[i] {
+            i += 1;
+        }
+        while j > i && k > i && a[j - 1] == t[k - 1] {
+            j -= 1;
+            k -= 1;
+        }
+        j - i <= 1 && k - i <= 1
+    };
+    a.len() >= 4 && CULTURES.iter().any(|c| c.train.iter().any(|t| near(&letters(t))))
 }
 
 fn bad_run(b: &[u8]) -> bool {
@@ -442,6 +573,9 @@ fn place_fault(word: &str) -> Option<&'static str> {
     let b = letters(word);
     if bad_run(&b) || b.windows(2).any(|p| p == b"tl") {
         return Some("bad letter run");
+    }
+    if let Some(f) = ban(word) {
+        return Some(f);
     }
     if b.windows(3).any(|t| (t[0] == t[1] || t[1] == t[2]) && t.iter().all(|&x| !matches!(x, b'a' | b'e' | b'i' | b'o' | b'u' | b'y'))) {
         return Some("doubled consonant in a cluster");
@@ -514,6 +648,27 @@ pub fn is_english(name: &str) -> bool {
     })
 }
 
+/// A name's head noun, what the place is called: "Camp" of "Hrolf's Camp", "Tower" of "The
+/// Tower of Kald", "Sands" of "The Sands of Zahir".
+pub fn site_noun(n: &str) -> &str {
+    let head = n.split(" of ").next().unwrap_or(n);
+    head.rsplit(' ').next().unwrap_or(head).trim_end_matches("'s")
+}
+
+/// How many features of `kind` a world names with head noun `h`: the rare ones twice, a few
+/// overused ones a little more, any other a site's six times (land's as often as it comes).
+fn noun_cap(kind: NameKind, h: &str) -> Option<u32> {
+    use NameKind::*;
+    const CAPPED: [(&str, u32); 9] = [("Cauldron", 2), ("Wilds", 2), ("Deep", 2), ("Ocean", 3), ("Sands", 3), ("Halls", 4), ("Camp", 5), ("Tower", 5), ("Mine", 5)];
+    if RARE_NOUNS.contains(&h) {
+        return Some(2);
+    }
+    if let Some(&(_, k)) = CAPPED.iter().find(|x| x.0 == h) {
+        return Some(k);
+    }
+    matches!(kind, Ruin | Tower | Camp | Cave | Mine | LavaTube).then_some(6)
+}
+
 /// Site nouns no world has more than two of ("The Glimmer Grotto", "The Weeping Hollow").
 const RARE_NOUNS: [&str; 12] = ["Delve", "Grotto", "Hollow", "Lair", "Diggings", "Workings", "Spire", "Burrows", "Vents", "Deeps", "Oubliette", "Stockade"];
 
@@ -524,7 +679,36 @@ const CAVE_DESC: [&str; 16] = [
 ];
 
 /// Words for a wide sea ("The Sundering Ocean", "The Restless Deep").
-const VAST: [&str; 12] = ["Endless", "Sundering", "Restless", "Boundless", "Wailing", "Shattered", "Western", "Eastern", "Northern", "Southern", "Silent", "Glittering"];
+const VAST: [&str; 12] = ["Endless", "Sundering", "Restless", "Boundless", "Wailing", "Shattered", "Sullen", "Wine-Dark", "Stormy", "Sleepless", "Silent", "Glittering"];
+
+/// Each culture's words for a ruin, a tower and a camp ("Ulfrun Howe", "The Grey Minaret",
+/// "Temur's Yurts"), in `CULTURES` order.
+const RUIN_NOUNS: [&[&str]; 5] = [
+    &["Howe", "Barrow", "Hall", "Keep", "Stones", "Steading"],
+    &["Keep", "Abbey", "Hall", "Stones", "Motte", "Priory"],
+    &["Villa", "Basilica", "Forum", "Colonnade", "Baths", "Keep"],
+    &["Qasr", "Kasbah", "Ribat", "Ziggurat", "Palace", "Walls"],
+    &["Kurgan", "Ovoo", "Stones", "Barrow", "Mound", "Cairn"],
+];
+const TOWER_NOUNS: [&[&str]; 5] = [
+    &["Tower", "Watch", "Beacon", "Broch"],
+    &["Tower", "Spire", "Folly", "Turret"],
+    &["Tower", "Campanile", "Lighthouse", "Belvedere"],
+    &["Tower", "Minaret", "Watchtower", "Burj"],
+    &["Tower", "Lookout", "Watchpost", "Pillar"],
+];
+const CAMP_NOUNS: [&[&str]; 5] = [
+    &["Camp", "Stockade", "Shieling", "Outpost", "Bothy"],
+    &["Camp", "Stockade", "Palisade", "Outpost", "Bivouac"],
+    &["Camp", "Castra", "Bivouac", "Fort", "Outpost"],
+    &["Camp", "Encampment", "Tents", "Fort", "Outpost"],
+    &["Camp", "Yurts", "Encampment", "Tents", "Horse Lines"],
+];
+/// Words for a cave and a lava tube.
+const CAVE_NOUNS: [&str; 10] = ["Caves", "Hollow", "Caverns", "Grotto", "Mouth", "Maw", "Throat", "Galleries", "Chambers", "Hole"];
+const TUBE_NOUNS: [&str; 6] = ["Tubes", "Tunnels", "Flues", "Runs", "Chimneys", "Galleries"];
+/// What a volcano does ("The Smoking Crown").
+const FUME: [&str; 8] = ["Smoking", "Fuming", "Grumbling", "Sleeping", "Burning", "Ashen", "Molten", "Brooding"];
 
 pub struct Namer {
     rng: Pcg32,
@@ -539,11 +723,22 @@ pub struct Namer {
     /// per culture and last two letters: so no adjective, stem or ending runs through a world.
     seen: BTreeMap<String, u32>,
     stems: BTreeMap<String, u32>,
+    stems3: BTreeMap<String, u32>,
     own: BTreeSet<String>,
     settled: [u32; 5],
     ends: BTreeMap<(usize, [u8; 2]), u32>,
-    /// The culture words drawn for the name being made.
+    /// Per culture, how often each of its endings ("-heim") has gone on a settlement; and how
+    /// often each head noun (`site_noun`: "Camp", "Halls") has named a feature.
+    endings: BTreeMap<(usize, &'static str), u32>,
+    heads: BTreeMap<String, u32>,
+    /// The culture words drawn for the name being made, and the ending put on one.
     drawn: Vec<String>,
+    ending: Option<&'static str>,
+    /// Culture words made, and how many of them came from the letter model.
+    pub made: u32,
+    pub from_model: u32,
+    /// When set, the words of each name given out made from culture words (namecheck's).
+    pub log: Option<Vec<String>>,
     /// The underground theme (`under::THEMES` key) of the next site named, when known: its
     /// words ("Rime", "Glimmer") go into the name.
     pub theme: Option<&'static str>,
@@ -567,10 +762,17 @@ impl Namer {
             used: BTreeSet::new(),
             seen: BTreeMap::new(),
             stems: BTreeMap::new(),
+            stems3: BTreeMap::new(),
             own: BTreeSet::new(),
             settled: [0; 5],
             ends: BTreeMap::new(),
+            endings: BTreeMap::new(),
+            heads: BTreeMap::new(),
             drawn: Vec::new(),
+            ending: None,
+            made: 0,
+            from_model: 0,
+            log: None,
             theme: None,
         }
     }
@@ -602,9 +804,17 @@ impl Namer {
         s
     }
 
+    /// Two of the culture's curated roots run together ("Thor" + "geir"), lower case.
+    fn rooted(&mut self, c: &Culture) -> Option<String> {
+        let (a, b) = (self.pick(c.roots.0), self.pick(c.roots.1));
+        let b = if a.ends_with(['a', 'e', 'i', 'o', 'u']) && b.starts_with(['a', 'e', 'i', 'o', 'u']) { &b[1..] } else { b };
+        join(a, b, 3).map(|w| w.to_lowercase())
+    }
+
     /// A culture word of 1–3 syllables (by length: about 3–6, 4–8, 6–10 letters), capitalized:
-    /// from the letter model or a template, sayable (`fault`), never a training word nor
-    /// starting as one does (its first four letters), and only now and then Bj- or Fj-.
+    /// from the letter model (two in five), a template or two curated roots, sayable
+    /// (`fault`), never a training word nor a letter off one, a model's word not starting as
+    /// one does (its first four letters), and only now and then Bj-, Fj- or Hj-.
     pub fn word(&mut self, culture: usize, min_syl: u32, max_syl: u32) -> String {
         let ci = culture % CULTURES.len();
         let c = &CULTURES[ci];
@@ -612,23 +822,31 @@ impl Namer {
         let hi = [6, 8, 10][(max_syl.clamp(1, 3) - 1) as usize];
         let like_training = |w: &str| w.len() >= 4 && CULTURES.iter().any(|c| c.train.iter().any(|t| t.len() >= 4 && t[..4].eq_ignore_ascii_case(&w[..4])));
         for _ in 0..40 {
-            let w = if self.rng.below(10) < 7 {
+            let r = self.rng.below(20);
+            let w = if r < 13 {
                 match markov(ci).walk(&mut self.rng, hi) {
+                    Some(w) if !like_training(&w) => w,
+                    _ => continue,
+                }
+            } else if r < 17 || max_syl < 2 {
+                let syl = min_syl + self.rng.below(max_syl.max(min_syl) - min_syl + 1);
+                self.template(c, syl)
+            } else {
+                match self.rooted(c) {
                     Some(w) => w,
                     None => continue,
                 }
-            } else {
-                let syl = min_syl + self.rng.below(max_syl.max(min_syl) - min_syl + 1);
-                self.template(c, syl)
             };
-            if (w.starts_with("bj") || w.starts_with("fj")) && self.rng.below(6) > 0 {
+            if (w.starts_with("bj") || w.starts_with("fj") || w.starts_with("hj")) && self.rng.below(10) > 0 {
                 continue;
             }
-            if (lo..=hi).contains(&w.len()) && fault(&w, Some(ci)).is_none() && !is_training(&w) && !like_training(&w) {
+            if (lo..=hi).contains(&w.len()) && fault(&w, Some(ci)).is_none() && !is_training(&w) && !near_training(&w) {
                 if self.drawn.len() >= 64 {
                     self.drawn.clear();
                 }
                 self.drawn.push(w.clone());
+                self.made += 1;
+                self.from_model += (r < 13) as u32;
                 return capitalize(&w);
             }
         }
@@ -640,6 +858,7 @@ impl Namer {
             s.push_str(if k % 2 == 0 { self.pick(&cons) } else { self.pick(&vow) });
         }
         self.drawn.push(s.clone());
+        self.made += 1;
         capitalize(&s)
     }
 
@@ -680,6 +899,7 @@ impl Namer {
         let ok = |n: &str| name_fault(n).is_none() && !words(n).any(|w| is_training(&w));
         for i in 0..60 {
             self.drawn.clear();
+            self.ending = None;
             let n = self.candidate(kind, culture);
             if ok(&n) && (i >= 40 || self.fresh(&n, kind, culture)) && !self.used.contains(&n) {
                 self.note(&n, kind, culture);
@@ -689,6 +909,7 @@ impl Namer {
         // Practically unreachable; lengthen the name until unique.
         for k in 0.. {
             self.drawn.clear();
+            self.ending = None;
             let n = format!("{} {}", self.candidate(kind, culture), self.word(culture, 1, 1));
             if (k > 200 || ok(&n)) && !self.used.contains(&n) {
                 self.note(&n, kind, culture);
@@ -706,10 +927,12 @@ impl Namer {
     }
 
     /// Name `n` is not too like the names given before: none of its culture words given out
-    /// before nor its stem twice; a rare site noun (`RARE_NOUNS`) at most twice in a world; a
-    /// settlement's ending (its last two letters) on at most ~30% of its culture's.
+    /// before, nor its stem (first four letters) twice or its first three letters three times;
+    /// a head noun (`site_noun`) no more often than `noun_cap` says; a settlement's ending
+    /// ("-heim") on at most ~10% of its culture's, its last two letters on ~15%.
     fn fresh(&self, n: &str, kind: NameKind, c: usize) -> bool {
-        if self.own_words(n).iter().any(|(w, s)| self.own.contains(w) || self.stems.get(s).is_some_and(|&k| k >= 2)) {
+        let stem3 = |w: &str| w[..w.len().min(3)].to_string();
+        if self.own_words(n).iter().any(|(w, s)| self.own.contains(w) || self.stems.get(s).is_some_and(|&k| k >= 2) || (w.len() >= 5 && self.stems3.get(&stem3(w)).is_some_and(|&k| k >= 3))) {
             return false;
         }
         // ("The Wild Wilds".)
@@ -717,13 +940,15 @@ impl Namer {
         if ws.iter().enumerate().any(|(i, a)| ws[i + 1..].iter().any(|b| a[..4] == b[..4])) {
             return false;
         }
-        let last = words(n).last().unwrap_or_default();
-        if RARE_NOUNS.contains(&last.as_str()) && self.seen.get(&last.to_lowercase()).is_some_and(|&k| k >= 2) {
-            return false;
+        if kind != NameKind::Settlement {
+            let h = site_noun(n);
+            if noun_cap(kind, h).is_some_and(|cap| self.heads.get(h).is_some_and(|&k| k >= cap)) {
+                return false;
+            }
         }
         if kind == NameKind::Settlement {
-            let k = self.ends.get(&(c, ending(n))).copied().unwrap_or(0);
-            if k >= 2 && (k + 1) as f64 > 0.3 * (self.settled[c] + 1) as f64 {
+            let share = |k: u32, p: f64| k >= 2 && (k + 1) as f64 > p * (self.settled[c] + 1) as f64;
+            if share(self.ends.get(&(c, ending(n))).copied().unwrap_or(0), 0.15) || self.ending.is_some_and(|e| share(self.endings.get(&(c, e)).copied().unwrap_or(0), 0.1)) {
                 return false;
             }
         }
@@ -731,9 +956,17 @@ impl Namer {
     }
 
     fn note(&mut self, n: &str, kind: NameKind, c: usize) {
+        if let Some(log) = &mut self.log {
+            let stems: Vec<String> = self.drawn.iter().map(|w| w[..w.len().min(4)].to_string()).collect();
+            log.extend(words(n).filter(|w| stems.iter().any(|s| w.to_lowercase().contains(s.as_str()))));
+        }
         for (w, s) in self.own_words(n) {
             *self.stems.entry(s).or_default() += 1;
+            *self.stems3.entry(w[..w.len().min(3)].to_string()).or_default() += 1;
             self.own.insert(w);
+        }
+        if kind != NameKind::Settlement {
+            *self.heads.entry(site_noun(n).to_string()).or_default() += 1;
         }
         for w in words(n) {
             *self.seen.entry(w.to_lowercase()).or_default() += 1;
@@ -741,6 +974,9 @@ impl Namer {
         if kind == NameKind::Settlement {
             self.settled[c] += 1;
             *self.ends.entry((c, ending(n))).or_default() += 1;
+            if let Some(e) = self.ending {
+                *self.endings.entry((c, e)).or_default() += 1;
+            }
         }
         self.used.insert(n.to_string());
     }
@@ -751,6 +987,18 @@ impl Namer {
         let mut a = "";
         for _ in 0..6 {
             a = if self.rng.below(2) == 0 { self.pick(CULTURES[c].adj) } else { self.pick(&ADJ) };
+            if self.seen.get(&a.to_lowercase()).is_none_or(|&k| k < 2) {
+                break;
+            }
+        }
+        a
+    }
+
+    /// One of `xs`, used at most twice in a world when it can be.
+    fn rare_pick(&mut self, xs: &[&'static str]) -> &'static str {
+        let mut a = "";
+        for _ in 0..6 {
+            a = self.pick(xs);
             if self.seen.get(&a.to_lowercase()).is_none_or(|&k| k < 2) {
                 break;
             }
@@ -791,6 +1039,7 @@ impl Namer {
             if let Some(w) = join(&stem, end, 3)
                 && place_fault(&w).is_none()
             {
+                self.ending = Some(end);
                 return w;
             }
         }
@@ -800,7 +1049,8 @@ impl Namer {
     fn settlement(&mut self, c: usize) -> String {
         let cu = &CULTURES[c];
         let r = self.rng.next_f64();
-        if r < if c == 1 { 0.03 } else { 0.01 } {
+        // (Grim compounds are English: the west's and now and then the north's.)
+        if r < [0.01, 0.03, 0.0, 0.0, 0.0][c] {
             let pre = self.pick(&GRIM_PRE);
             let suf = self.pick(cu.suf);
             return compound(pre, suf, 4);
@@ -831,13 +1081,13 @@ impl Namer {
             return n;
         }
         if c == 2 {
-            match self.rng.below(12) {
+            match self.rng.below(20) {
                 0 | 1 => {
                     // A one-syllable stem of plain vowels: "Corvamare", not "Ciasamare".
                     for _ in 0..6 {
                         let stem = self.word(c, 1, 1);
                         let stem = stem.trim_end_matches(['a', 'e', 'i', 'o', 'u']);
-                        if syllables(stem) == 1 && !stem.contains("ia") && !stem.contains("io") {
+                        if syllables(stem) == 1 && !stem.contains("ia") && !stem.contains("io") && ban(&format!("{stem}amare")).is_none() {
                             return compound(stem, "amare", 3);
                         }
                     }
@@ -883,10 +1133,10 @@ impl Namer {
             && (t != "cave" || self.rng.below(2) == 0)
         {
             let plain = match kind {
-                Cave => "Caves",
-                Mine => "Mine",
-                LavaTube => "Tubes",
-                _ => "Halls",
+                Cave => self.pick(&CAVE_NOUNS),
+                Mine => self.pick(&["Mine", "Shaft", "Pits", "Workings", "Delvings", "Adit"]),
+                LavaTube => self.pick(&TUBE_NOUNS),
+                _ => self.pick(RUIN_NOUNS[c]),
             };
             if let Some(n) = self.themed(t, plain) {
                 return n;
@@ -939,14 +1189,28 @@ impl Namer {
             3 => ["Plain", "Flats", "Reaches"][self.rng.below(3) as usize],
             _ => ["Steppe", "Grasslands", "Plains"][self.rng.below(3) as usize],
         };
-        let vast = self.pick(&VAST);
-        let desc = self.pick(&CAVE_DESC);
+        let vast = self.rare_pick(&VAST);
+        let desc = self.rare_pick(&CAVE_DESC);
         let one = self.word(c, 1, 1);
+        // English run together ("Grasswater", "Ironspine") is the west's and the north's; the
+        // others say it in two words.
+        let runs = c <= 1;
+        let ruin = self.pick(RUIN_NOUNS[c]);
+        let tower = self.pick(TOWER_NOUNS[c]);
+        let camp = self.pick(CAMP_NOUNS[c]);
+        let fume = self.rare_pick(&FUME);
+        let cone = ["Mountain", "Cone", "Crown", "Throne"][self.rng.below(4) as usize];
+        let wood = match c {
+            3 => ["Grove", "Palms", "Thickets"][self.rng.below(3) as usize],
+            2 => ["Wood", "Grove", "Groves"][self.rng.below(3) as usize],
+            _ => "Wood",
+        };
         match (kind, eng, r) {
             (Continent, _, _) => w,
             (Ocean, false, _) => format!("The {w} Ocean"),
             (Ocean, true, 0) => format!("The {adj} Ocean"),
-            (Ocean, true, 1 | 2) => format!("The {vast} Ocean"),
+            (Ocean, true, 1) => format!("The {vast} Ocean"),
+            (Ocean, true, 2) => format!("The {vast} Sea"),
             (Ocean, true, _) => format!("The {vast} Deep"),
             (Sea, false, _) => format!("The {w} Sea"),
             (Sea, true, 0 | 1) => format!("The {adj} Sea"),
@@ -962,7 +1226,7 @@ impl Namer {
             (Island, true, _) => format!("{adj} Isle"),
             (Range, false, 0 | 1) => format!("The {w} Mountains"),
             (Range, false, _) => format!("The {w} Range"),
-            (Range, true, 0 | 1) => {
+            (Range, true, 0 | 1) if runs => {
                 let n = self.pick(&RANGE_NOUN);
                 format!("The {} Mountains", compound(adj, n, 4))
             }
@@ -979,12 +1243,15 @@ impl Namer {
             (Pass, true, _) => format!("The {adj} Gap"),
             (Volcano, false, _) => format!("Mount {w}"),
             (Volcano, true, 0) => format!("The {adj} Cauldron"),
-            (Volcano, true, _) => compound(adj, "fire", 4),
+            (Volcano, true, 1) if runs => compound(adj, "fire", 4),
+            (Volcano, true, 1) => format!("Mount {w}"),
+            (Volcano, true, _) => format!("The {fume} {cone}"),
             (Lake, false, 0 | 1) => format!("Lake {w}"),
             (Lake, false, _) => format!("{w} Mere"),
             (Lake, true, 0) => format!("{adj} Lake"),
             (Lake, true, 1) => format!("The {adj} Mere"),
-            (Lake, true, _) => compound(adj, "water", 4),
+            (Lake, true, _) if c == 1 => compound(adj, "water", 4),
+            (Lake, true, _) => format!("The {adj} Lake"),
             (SaltLake, false, _) => format!("The {w} Salt Lake"),
             (SaltLake, true, _) => format!("The {adj} Salt Lake"),
             (SaltFlat, false, _) => format!("The {w} Salt Flats"),
@@ -993,17 +1260,18 @@ impl Namer {
             (River, false, _) => format!("The {w}"),
             (River, true, 0) => format!("The {adj} River"),
             (River, true, 1) if c == 0 => compound(adj, "beck", 4),
-            (River, true, _) => compound(adj, "water", 4),
+            (River, true, _) if c == 1 => compound(adj, "water", 4),
+            (River, true, _) => format!("The {adj} River"),
             (Waterfall, false, _) => format!("{short} Falls"),
             (Waterfall, true, 0) if c == 0 => compound(adj, "force", 4),
             (Waterfall, true, _) => format!("The {adj} Falls"),
             (Forest, false, 0 | 1) => format!("{w} Forest"),
             (Forest, false, _) => format!("The Forest of {w}"),
-            (Forest, true, 0) => format!("The {}", compound(adj, "wood", 4)),
-            (Forest, true, 1) => format!("The {adj} Weald"),
-            (Forest, true, _) => format!("The {adj} Wood"),
+            (Forest, true, 0) if runs => format!("The {}", compound(adj, "wood", 4)),
+            (Forest, true, 1) if c == 1 => format!("The {adj} Weald"),
+            (Forest, true, _) => format!("The {adj} {wood}"),
             (Jungle, false, _) => format!("The {w} {jungle}"),
-            (Jungle, true, 0 | 1) => format!("The {adj} Wilds"),
+            (Jungle, true, 0) => format!("The {adj} Wilds"),
             (Jungle, true, _) => format!("The {adj} {jungle}"),
             (Taiga, false, 0 | 1) => format!("The {w} Pinewood"),
             (Taiga, false, _) => format!("The {w} {pines}"),
@@ -1015,7 +1283,7 @@ impl Namer {
             (Desert, true, _) => format!("The {adj} Waste"),
             (Swamp, false, 0 | 1) => format!("The {w} Marsh"),
             (Swamp, false, _) => format!("{w} Bog"),
-            (Swamp, true, 0 | 1) => format!("The {}", compound(adj, "fen", 4)),
+            (Swamp, true, 0 | 1) if runs => format!("The {}", compound(adj, "fen", 4)),
             (Swamp, true, _) => format!("The {adj} Marsh"),
             (Plains, false, _) => format!("The {w} {plains}"),
             (Plains, true, _) => format!("The {adj} {plains}"),
@@ -1034,23 +1302,25 @@ impl Namer {
             (Settlement, _, _) => unreachable!(),
             (Ruin, _, 0) => format!("The Ruins of {w}"),
             (Ruin, _, 1) => format!("Old {w}"),
-            (Ruin, _, 2) => format!("{w} Keep"),
-            (Ruin, _, _) => format!("The Fallen {}", ["Temple", "Keep", "Citadel", "Shrine", "Hall"][self.rng.below(5) as usize]),
-            (Tower, _, 0) => format!("{short}'s Tower"),
-            (Tower, _, 1) => format!("The Tower of {short}"),
-            (Tower, _, 2) => format!("The {adj} Spire"),
-            (Tower, _, _) => format!("The {adj} Tower"),
-            (Camp, _, 0) => format!("{short}'s Camp"),
-            (Camp, _, 1) => format!("The {adj} Camp"),
-            (Camp, _, 2) => format!("{short} Camp"),
+            (Ruin, _, 2) if c == 3 => format!("{ruin} {w}"),
+            (Ruin, _, 2) => format!("{w} {ruin}"),
+            (Ruin, _, _) => format!("The Fallen {ruin}"),
+            (Tower, _, 0) => format!("{short}'s {tower}"),
+            (Tower, _, 1) if self.rng.below(2) == 0 => format!("The {tower} of {short}"),
+            (Tower, _, 1 | 2) => format!("The {adj} Spire"),
+            (Tower, _, _) => format!("The {adj} {tower}"),
+            (Camp, _, 0) => format!("{short}'s {camp}"),
+            (Camp, _, 1) => format!("The {adj} {camp}"),
+            (Camp, _, 2) => format!("{short} {camp}"),
             (Camp, _, _) => format!("The {adj} Stockade"),
             (Cave, _, 0) => format!("The {short} Caves"),
             (Cave, _, 1) => format!("The Caves of {one}"),
-            (Cave, _, _) => format!("The {desc} {}", ["Caves", "Hollow", "Caverns", "Grotto"][self.rng.below(4) as usize]),
+            (Cave, _, _) => format!("The {desc} {}", self.pick(&CAVE_NOUNS)),
             (Mine, _, 0 | 1) => format!("{short} Mine"),
             (Mine, _, 2) => format!("{short}'s Diggings"),
             (Mine, _, _) => format!("The {adj} Delve"),
-            (LavaTube, _, 0 | 1) => format!("The {short} Tubes"),
+            (LavaTube, _, 0) => format!("The {short} Tubes"),
+            (LavaTube, _, 1) => format!("The {short} {}", self.pick(&TUBE_NOUNS)),
             (LavaTube, _, _) => format!("The {adj} Lava Tubes"),
         }
     }

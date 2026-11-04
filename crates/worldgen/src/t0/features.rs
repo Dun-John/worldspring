@@ -430,9 +430,22 @@ impl Builder<'_> {
 
     #[allow(clippy::too_many_arguments)]
     fn push(&mut self, kind: &'static str, nk: NameKind, cx: f64, cy: f64, angle: f64, extent_ft: f64, elev_ft: Option<f64>, detail: Option<String>) -> String {
+        let name = self.name_here(nk, cx, cy);
+        self.push_named(kind, name, cx, cy, angle, extent_ft, elev_ft, detail)
+    }
+
+    /// A name for a feature of kind `nk` at grid point (`cx`, `cy`), in the culture there.
+    fn name_here(&mut self, nk: NameKind, cx: f64, cy: f64) -> String {
         let culture = self.culture_at(cx, cy);
+        // (Keyed by the 1,000 ft square it stands in: a settlement nudged a few feet, off a
+        // river, say, keeps its name.)
+        let c = self.inp.cell_ft / 1000.0;
+        self.namer.name_at(nk, culture, [(cx * c) as i64, (cy * c) as i64])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_named(&mut self, kind: &'static str, name: String, cx: f64, cy: f64, angle: f64, extent_ft: f64, elev_ft: Option<f64>, detail: Option<String>) -> String {
         let c = self.inp.cell_ft;
-        let name = self.namer.name_at(nk, culture, [(cx * c) as i64, (cy * c) as i64]);
         let mut id = format!("{kind}:{:x}", hash2(self.inp.world.seed, (cx / 8.0) as i64, (cy / 8.0) as i64) & 0xffff_ffff);
         while !self.ids.insert(id.clone()) {
             id.push('b');
@@ -904,6 +917,50 @@ impl Builder<'_> {
     fn sites(&mut self) {
         let inp = self.inp;
         let c = inp.cell_ft;
+        let poi_kind = |p: &super::settle::Poi| match p.kind {
+            PoiKind::Ruin => ("ruin", NameKind::Ruin, 3.0),
+            PoiKind::Tower => ("tower", NameKind::Tower, 3.0),
+            PoiKind::Camp => ("camp", NameKind::Camp, 2.0),
+            PoiKind::Waystation => ("waystation", NameKind::Settlement, 2.0),
+            PoiKind::Cave => ("cave", NameKind::Cave, 2.0),
+            PoiKind::Mine => ("mine", NameKind::Mine, 2.0),
+            PoiKind::LavaTube => ("lava_tube", NameKind::LavaTube, 2.0),
+            PoiKind::Entrance => ("entrance", NameKind::Ruin, 2.0),
+            PoiKind::Building => ("building", NameKind::Settlement, 0.5),
+            PoiKind::Castle => ("castle", NameKind::Settlement, 1.0),
+            PoiKind::Wall => ("wall", NameKind::Settlement, 1.0),
+        };
+        // A way down is named for the theme it comes to (as `under::generate` will draw it).
+        let theme_of = |p: &super::settle::Poi| {
+            use crate::under::UnderKind;
+            let drawn_under = || p.stroke.and_then(|i| inp.world.file.sketch.strokes.get(i as usize)).and_then(|s| s.under.as_deref()).and_then(UnderKind::parse);
+            let under = match p.kind {
+                PoiKind::Cave => Some((UnderKind::Cave, true)),
+                PoiKind::Mine => Some((UnderKind::Mine, false)),
+                PoiKind::LavaTube => Some((UnderKind::LavaTube, true)),
+                PoiKind::Entrance => Some((drawn_under().unwrap_or(UnderKind::Dungeon), true)),
+                _ => None,
+            };
+            under.map(|(k, ruin)| crate::under::wild_theme(inp.world, p.seed, k, ruin))
+        };
+        let drawn = |stroke: Option<u32>| stroke.and_then(|i| inp.world.file.sketch.strokes.get(i as usize)).and_then(|s| s.name.as_deref()).is_some_and(|n| !n.trim().is_empty());
+        // Names first: the generated settlements and sites in their order, then those pinned or
+        // drawn in the sketch or added by hand (Edit › Places), so that one added or taken away
+        // changes no generated name (the namer's world-wide checks and caps count only what was
+        // named before). One given its name in the sketch takes none from the namer.
+        let ns = inp.settlements.len();
+        let mut names: Vec<String> = vec![String::new(); ns + inp.pois.len()];
+        for hand in [false, true] {
+            for (i, s) in inp.settlements.iter().enumerate().filter(|(_, s)| s.pin.is_some() == hand && !drawn(s.pin)) {
+                names[i] = self.name_here(NameKind::Settlement, s.x / c, s.y / c);
+            }
+            for (i, p) in inp.pois.iter().enumerate().filter(|(_, p)| p.stroke.is_some() == hand && !drawn(p.stroke)) {
+                self.namer.theme = theme_of(p);
+                names[ns + i] = self.name_here(poi_kind(p).1, p.x / c, p.y / c);
+                self.namer.theme = None;
+            }
+        }
+        let mut names = names.into_iter();
         for s in inp.settlements {
             let (cx, cy) = (s.x / c, s.y / c);
             let k = s.cell;
@@ -928,41 +985,17 @@ impl Builder<'_> {
             let elev = self.above_sea(k);
             let culture = self.culture_at(cx, cy) as u8;
             self.out.settlement_cultures.push(culture);
-            self.push(kind, NameKind::Settlement, cx, cy, 0.0, extent, Some(elev.round()), Some(detail));
+            self.push_named(kind, names.next().unwrap_or_default(), cx, cy, 0.0, extent, Some(elev.round()), Some(detail));
             self.radius(crate::town::urban_radius(s.tier, s.population));
             // A pinned settlement keeps the name drawn with it.
             self.drawn_name(s.pin);
         }
         for p in inp.pois {
             let (cx, cy) = (p.x / c, p.y / c);
-            let (kind, nk, extent) = match p.kind {
-                PoiKind::Ruin => ("ruin", NameKind::Ruin, 3.0),
-                PoiKind::Tower => ("tower", NameKind::Tower, 3.0),
-                PoiKind::Camp => ("camp", NameKind::Camp, 2.0),
-                PoiKind::Waystation => ("waystation", NameKind::Settlement, 2.0),
-                PoiKind::Cave => ("cave", NameKind::Cave, 2.0),
-                PoiKind::Mine => ("mine", NameKind::Mine, 2.0),
-                PoiKind::LavaTube => ("lava_tube", NameKind::LavaTube, 2.0),
-                PoiKind::Entrance => ("entrance", NameKind::Ruin, 2.0),
-                PoiKind::Building => ("building", NameKind::Settlement, 0.5),
-                PoiKind::Castle => ("castle", NameKind::Settlement, 1.0),
-                PoiKind::Wall => ("wall", NameKind::Settlement, 1.0),
-            };
+            let (kind, _, extent) = poi_kind(p);
             let k = (cy.round() as usize).min(inp.h - 1) * inp.w + (cx.round() as usize).min(inp.w - 1);
             let elev = self.above_sea(k);
-            // A way down is named for the theme it comes to (as `under::generate` will draw it).
-            use crate::under::UnderKind;
-            let drawn_under = || p.stroke.and_then(|i| inp.world.file.sketch.strokes.get(i as usize)).and_then(|s| s.under.as_deref()).and_then(UnderKind::parse);
-            let under = match p.kind {
-                PoiKind::Cave => Some((UnderKind::Cave, true)),
-                PoiKind::Mine => Some((UnderKind::Mine, false)),
-                PoiKind::LavaTube => Some((UnderKind::LavaTube, true)),
-                PoiKind::Entrance => Some((drawn_under().unwrap_or(UnderKind::Dungeon), true)),
-                _ => None,
-            };
-            self.namer.theme = under.map(|(k, ruin)| crate::under::wild_theme(inp.world, p.seed, k, ruin));
-            let id = self.push(kind, nk, cx, cy, 0.0, extent * 5280.0, Some(elev.round()), None);
-            self.namer.theme = None;
+            let id = self.push_named(kind, names.next().unwrap_or_default(), cx, cy, 0.0, extent * 5280.0, Some(elev.round()), None);
             self.radius(SITE_RADIUS_FT);
             if p.kind == PoiKind::Waystation {
                 let f = self.out.features.iter_mut().rev().find(|f| f.id == id).unwrap();

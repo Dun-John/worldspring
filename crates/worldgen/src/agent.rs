@@ -204,8 +204,20 @@ pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id
         NameKind::LavaTube => Some("lava_tube"),
         _ => None,
     };
-    let n = namer.name(nk, culture);
+    // (Named apart from the world's features, which it never changes: `Namer` is its own.)
+    let mut n = namer.name(nk, culture);
+    for _ in 0..8 {
+        if !named(t0, &n) {
+            break;
+        }
+        n = namer.name(nk, culture);
+    }
     Ok((p, if kind == "waystation" { format!("{n} Inn") } else { n }))
+}
+
+/// Whether one of the world's features (as generated) is named `n`.
+fn named(t0: &T0, n: &str) -> bool {
+    t0.extra.as_ref().is_some_and(|e| e.overlay.features.iter().any(|f| f.name == n))
 }
 
 /// The bounding box (x0, y0, x1, y1) of `pts`.
@@ -565,7 +577,14 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
     in_way.sort_by(|a, b| a.0.cmp(&b.0));
     in_way.dedup_by(|a, b| a.0 == b.0);
     let culture = t0.settlements.iter().min_by(|a, b| (a.x - at[0]).hypot(a.y - at[1]).total_cmp(&(b.x - at[0]).hypot(b.y - at[1]))).map_or(0, |s| s.culture as usize);
-    let word = Namer::new(crate::core::hash::fnv64(id.as_bytes()) ^ world.seed).name(NameKind::Settlement, culture);
+    let mut namer = Namer::new(crate::core::hash::fnv64(id.as_bytes()) ^ world.seed);
+    let mut word = namer.name(NameKind::Settlement, culture);
+    for _ in 0..8 {
+        if !named(t0, &word) {
+            break;
+        }
+        word = namer.name(NameKind::Settlement, culture);
+    }
     Ok(WorksSpot { at, name: format!("{word} {}", if castle { "Castle" } else { "Wall" }), in_way })
 }
 

@@ -1427,8 +1427,11 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
     // Each try draws from its own stream (where it looks, whether it takes the place, the seed),
     // so a try a settlement now blocks (or one more settlement's extra ruin) moves no other site.
     let stream = inp.world.stream("t0.poi");
-    let n_ruins = ((settlements.len() as f64) * 0.35 * p.poi_density).round() as usize;
-    let n_towers = ((settlements.len() as f64) * 0.06 * p.poi_density).round().max(if p.poi_density > 0.0 { 1.0 } else { 0.0 }) as usize;
+    // How many there are, and which settlements mines are worked from, go by the world's own
+    // settlements: one added beside them (`Pin::added`) only keeps sites off its ground.
+    let own: Vec<&Settlement> = settlements.iter().filter(|s| !s.pin.is_some_and(|st| inp.pins.iter().any(|p| p.stroke == st as usize && p.added))).collect();
+    let n_ruins = ((own.len() as f64) * 0.35 * p.poi_density).round() as usize;
+    let n_towers = ((own.len() as f64) * 0.06 * p.poi_density).round().max(if p.poi_density > 0.0 { 1.0 } else { 0.0 }) as usize;
     let mut out: Vec<Poi> = Vec::new();
     let away = |x: f64, y: f64, out: &[Poi], min_s: f64, min_p: f64| {
         settlements.iter().all(|s| dist(s.x, s.y, x, y) >= min_s) && out.iter().all(|q| dist(q.x, q.y, x, y) >= min_p)
@@ -1474,8 +1477,8 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
         }
         r
     };
-    let n_caves = ((settlements.len() as f64) * 0.2 * p.poi_density).round() as usize;
-    let n_mines = ((settlements.len() as f64) * 0.1 * p.poi_density).round() as usize;
+    let n_caves = ((own.len() as f64) * 0.2 * p.poi_density).round() as usize;
+    let n_mines = ((own.len() as f64) * 0.1 * p.poi_density).round() as usize;
     for (kind, count) in [(PoiKind::Cave, n_caves), (PoiKind::Mine, n_mines)] {
         let (mut tries, mut placed) = (0, 0);
         while placed < count && tries < count * 200 + 200 {
@@ -1494,7 +1497,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
                 PoiKind::Cave => relief(k) > 250.0 + 400.0 * rng.next_f64(),
                 // Mines: hills, worked from a settlement a few miles off.
                 _ => {
-                    relief(k) > 150.0 && inp.height[k] > sea + 600.0 && settlements.iter().any(|s| (2.0 * 5280.0..15.0 * 5280.0).contains(&dist(s.x, s.y, x, y)))
+                    relief(k) > 150.0 && inp.height[k] > sea + 600.0 && own.iter().any(|s| (2.0 * 5280.0..15.0 * 5280.0).contains(&dist(s.x, s.y, x, y)))
                 }
             };
             if !ok || !away(x, y, &out, 2.0 * 5280.0, 5.0 * 5280.0) {

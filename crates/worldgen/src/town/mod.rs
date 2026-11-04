@@ -5220,6 +5220,19 @@ pub fn head_noun(name: &str) -> &str {
     n.rsplit(' ').next().unwrap_or(n)
 }
 
+/// A shop owner's (or a saint's) name: a culture word of four to seven letters and at most two
+/// syllables ("Hrolf", "Maddo").
+fn owner(namer: &mut Namer, c: usize) -> String {
+    let mut p = namer.person(c);
+    for _ in 0..12 {
+        if p.len() <= 7 && crate::t0::names::syllables(&p) <= 2 {
+            break;
+        }
+        p = namer.person(c);
+    }
+    p
+}
+
 /// A business's name in its function's style and its town's culture (`None` for plain ones:
 /// warehouses, graveyards), drawn from `namer`; its key words are recorded in `loc`, and a name
 /// whose key word the town has already used, or whose head noun (`head_noun`) is on more than
@@ -5266,12 +5279,16 @@ pub fn business_name(f: &catalog::Func, namer: &mut Namer, loc: &mut Locale, war
                 let m = namer.pick(&marks);
                 (format!("The {m} {trade}"), vec![m.to_string()])
             }
-            Naming::Sign if !late && r < 72 && drinks && loc.lord.is_some() => {
+            Naming::Sign if !late && r < 70 && drinks && loc.lord.is_some() => {
                 let lord = loc.lord.clone().unwrap_or_default();
                 (format!("The {lord} Arms"), vec![lord])
             }
+            Naming::Sign if !late && r < 72 && drinks && c <= 1 => {
+                let a = namer.pick(&catalog::INN_ARMS);
+                (format!("The {a} Arms"), vec![a.to_string()])
+            }
             Naming::Sign => {
-                let p = namer.person(c);
+                let p = owner(namer, c);
                 let rest = namer.pick(signs.rest);
                 let name = if namer.below(5) == 0 { format!("Old {p}'s {rest}") } else { format!("{p}'s {rest}") };
                 (name, vec![p])
@@ -5281,10 +5298,10 @@ pub fn business_name(f: &catalog::Func, namer: &mut Namer, loc: &mut Locale, war
                 (format!("The {} {n}", namer.pick(signs.adj)), vec![n.to_string()])
             }
             Naming::Owner => {
-                let p = namer.person(c);
+                let p = owner(namer, c);
                 let name = match namer.below(10) {
                     0 => format!("Old {p}'s {trade}"),
-                    1 | 2 if matches!(c, 2 | 3) => format!("House of {p}"),
+                    1 if matches!(c, 2 | 3) => format!("House of {p}"),
                     _ => format!("{p}'s {trade}"),
                 };
                 (name, vec![p])
@@ -5298,6 +5315,25 @@ pub fn business_name(f: &catalog::Func, namer: &mut Namer, loc: &mut Locale, war
                 let d = namer.pick(signs.gods);
                 (format!("{} of {d}", f.trade), vec![d.to_string()])
             }
+            // A library or a bank: named for a saint, the lord or a landmark, never filler ("The
+            // Grey Library", "The Both Archive").
+            Naming::Institution if f.key == "bank" && !late && r < 50 && loc.lord.is_some() => {
+                let lord = loc.lord.clone().unwrap_or_default();
+                let name = if r < 25 { format!("The Bank of {lord}") } else { format!("{lord}'s Counting House") };
+                (name, vec![lord])
+            }
+            Naming::Institution if matches!(f.key, "library" | "bank") && !late && r < 75 && !marks.is_empty() => {
+                let m = namer.pick(&marks);
+                (format!("The {m} {trade}"), vec![m.to_string()])
+            }
+            Naming::Institution if matches!(f.key, "library" | "bank") => {
+                let p = owner(namer, c);
+                let name = match (f.key, c) {
+                    ("library", 0 | 1) => format!("The {} of St. {p}", if r % 2 == 0 { "Library" } else { "Scriptorium" }),
+                    _ => format!("The {trade} of {p}"),
+                };
+                (name, vec![p])
+            }
             Naming::Institution if !late && r < 45 => {
                 let a = namer.pick(signs.inst);
                 (format!("The {a} {trade}"), vec![a.to_string()])
@@ -5307,8 +5343,8 @@ pub fn business_name(f: &catalog::Func, namer: &mut Namer, loc: &mut Locale, war
                 (format!("The {m} {trade}"), vec![m.to_string()])
             }
             Naming::Institution => {
-                let p = namer.person(c);
-                (format!("The {p} {trade}"), vec![p])
+                let p = owner(namer, c);
+                (format!("The {trade} of {p}"), vec![p])
             }
             Naming::Plain => return None,
         };

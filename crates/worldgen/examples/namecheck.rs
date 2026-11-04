@@ -7,9 +7,17 @@
 //! across a world's settlement names); per culture, the share of settlements named in English
 //! and of the commonest ending (last two letters); the most businesses in a town on one head
 //! noun (`town::head_noun`, temples aside).
+//! Also: the share of culture words drawn from the letter model, culture words hitting the
+//! later bans (`names::ban`, must be 0), the most sites of a world on one head noun
+//! (`names::site_noun`) and the most filler library and bank names in a world (an adjective or
+//! a made-up word before the trade: must be 0).
 //! `--world <seed>` instead: that world's caves, mines and lava tubes, each with the theme its
 //! site is built in (a themed name must match it).
-//! `cargo run --profile fast -p worldgen --example namecheck -- [--summary | --world <seed>]`
+//! `--hand <seed> [tier]`: that world generated twice, the second time with a settlement (a
+//! village, else `tier`) added by hand
+//! (Edit › Places) and a site drawn in the sketch; how many of the first's names changed (must
+//! be 0) and what the added ones were named.
+//! `cargo run --profile fast -p worldgen --example namecheck -- [--summary | --world <seed> | --hand <seed>]`
 use std::collections::BTreeMap;
 
 use worldgen::core::rng::{Pcg32, hash2};
@@ -70,6 +78,56 @@ struct Counts {
     ends: [BTreeMap<String, usize>; 5],
     /// The most businesses of a town on one head noun.
     heads: usize,
+    /// Culture words made, and from the letter model; culture words given out hitting a ban.
+    made: u64,
+    from_model: u64,
+    bans: Vec<String>,
+    /// The most sites of a world on one head noun (with it), filler library and bank names.
+    site_noun: (usize, String),
+    filler: usize,
+}
+
+/// The world `seed`'s features as (id, name), generated with the sketch strokes `strokes`
+/// (JSON) added.
+fn features(seed: u32, strokes: &str) -> Vec<(String, String, &'static str, [i64; 2])> {
+    let mut file = worldgen::WorldFile { seed, ..Default::default() };
+    file.sketch.strokes = serde_json::from_str(strokes).expect("strokes");
+    let world = worldgen::World::new(file).expect("a world");
+    let t0 = worldgen::t0::T0::generate(&world);
+    t0.extra.expect("generated").overlay.features.into_iter().map(|f| (f.id, f.name, f.kind, [f.x as i64, f.y as i64])).collect()
+}
+
+/// A world's names, then the same world with a settlement added by hand and a site drawn in the
+/// sketch (beside a generated town): the generated names must not change.
+fn hand(seed: u32, tier: &str) {
+    let before = features(seed, "[]");
+    let (fx, fy) = {
+        let world = worldgen::World::new(worldgen::WorldFile { seed, ..Default::default() }).expect("a world");
+        let t0 = worldgen::t0::T0::generate(&world);
+        let s = &t0.settlements[t0.settlements.len() / 2];
+        (s.x, s.y)
+    };
+    let (px, py, sx, sy) = (fx + 6.0 * 5280.0, fy + 2.0 * 5280.0, fx - 3.0 * 5280.0, fy - 4.0 * 5280.0);
+    let strokes = format!(
+        r#"[{{"tool":"pin","pts":[[{px},{py}]],"tier":"{tier}","added":true}},{{"tool":"site","pts":[[{sx},{sy}]],"kind":"tower"}}]"#
+    );
+    let after = features(seed, &strokes);
+    let was: BTreeMap<&str, (&str, [i64; 2])> = before.iter().map(|(id, n, _, at)| (id.as_str(), (n.as_str(), *at))).collect();
+    let mut changed = Vec::new();
+    for (id, n, _, at) in &after {
+        if let Some(&(o, at0)) = was.get(id.as_str())
+            && o != n
+        {
+            let moved = if at0 != *at { format!(" (moved {at0:?} -> {at:?})") } else { String::new() };
+            changed.push(format!("{id}: {o} -> {n}{moved}"));
+        }
+    }
+    let new: Vec<String> = after.iter().filter(|(id, ..)| !was.contains_key(id.as_str())).map(|(_, n, k, _)| format!("{n} ({k})")).collect();
+    let gone = before.iter().filter(|(id, ..)| !after.iter().any(|a| &a.0 == id)).count();
+    for c in changed.iter().take(12) {
+        println!("changed: {c}");
+    }
+    println!("world {seed} with a {tier} added by hand and a site drawn in the sketch: {} names, {} changed, {} gone, added: {}", before.len(), changed.len(), gone, new.join(" · "));
 }
 
 /// A world's caves, mines and lava tubes: name, kind and the theme their site is built in.
@@ -89,6 +147,9 @@ fn main() {
     if let Some(i) = args.iter().position(|a| a == "--world") {
         return world_sites(args.get(i + 1).map_or("1", |s| s.as_str()));
     }
+    if let Some(i) = args.iter().position(|a| a == "--hand") {
+        return hand(args.get(i + 1).map_or(3, |s| s.parse().expect("a seed")), args.get(i + 2).map_or("village", |s| s.as_str()));
+    }
     let summary = args.iter().any(|a| a == "--summary");
     // samples[culture][group]: names from every seed.
     let mut samples: Vec<Vec<Vec<String>>> = vec![vec![Vec::new(); GROUPS.len()]; CULTURES.len()];
@@ -96,6 +157,9 @@ fn main() {
     for seed in 1..=8u64 {
         let mut rng = Pcg32::new(seed, 5);
         let mut namer = Namer::with_sites(hash2(seed, 1, 0), hash2(seed, 2, 0));
+        namer.log = Some(Vec::new());
+        let mut site_nouns: BTreeMap<String, usize> = BTreeMap::new();
+        let mut filler = 0;
         let mut shops: BTreeMap<String, usize> = BTreeMap::new();
         let mut settle_words: BTreeMap<String, usize> = BTreeMap::new();
         for c in 0..CULTURES.len() {
@@ -128,7 +192,9 @@ fn main() {
                     _ => (NameKind::Ruin, Some(DEEP_THEMES[(k / 6) % DEEP_THEMES.len()])),
                 };
                 namer.theme = theme;
-                out[2].push(namer.name_at(kind, c, at()));
+                let s = namer.name_at(kind, c, at());
+                *site_nouns.entry(names::site_noun(&s).to_string()).or_default() += 1;
+                out[2].push(s);
                 namer.theme = None;
             }
             // Towns: one namer each, as `assign_functions`.
@@ -153,6 +219,11 @@ fn main() {
                     if f.naming != catalog::Naming::Institution && used.insert(name.clone()) {
                         *shops.entry(name.clone()).or_default() += 1;
                     }
+                    // (Filler: "The Grey Library", "The Kolvar Exchange"; not "The Harbour Exchange".)
+                    let second = name.split(' ').nth(1).unwrap_or("");
+                    if matches!(*key, "library" | "bank") && name.starts_with("The ") && !name.contains(" of ") && !loc.landmarks.iter().any(|m| m.starts_with(second)) && !second.starts_with("Wharf") && !second.starts_with("Market") && !second.starts_with("Gatehouse") && !second.starts_with("Pilgrims") {
+                        filler += 1;
+                    }
                     if !matches!(*key, "temple" | "shrine") {
                         let h = heads.entry(head_noun(&name).to_string()).or_default();
                         *h += 1;
@@ -160,6 +231,8 @@ fn main() {
                     }
                     out[3].push(name);
                 }
+                n.made += tn.made as u64;
+                n.from_model += tn.from_model as u64;
             }
             // Bare culture words and people's names, against the strict rules.
             for _ in 0..200 {
@@ -195,6 +268,19 @@ fn main() {
             *n.repeated.entry(s).or_default() += k - 1;
         }
         n.word_repeats += settle_words.values().filter(|&&k| k > 1).map(|k| k - 1).sum::<usize>();
+        n.made += namer.made as u64;
+        n.from_model += namer.from_model as u64;
+        for w in namer.log.take().unwrap_or_default() {
+            if let Some(f) = names::ban(&w) {
+                n.bans.push(format!("{w} ({f})"));
+            }
+        }
+        if let Some((s, &k)) = site_nouns.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+            && k > n.site_noun.0
+        {
+            n.site_noun = (k, s.clone());
+        }
+        n.filler = n.filler.max(filler);
     }
     if !summary {
         for (c, groups) in samples.iter().enumerate() {
@@ -225,6 +311,9 @@ fn main() {
         for t in n.training.iter().take(20) {
             println!("training word: {t}");
         }
+        for b in n.bans.iter().take(20) {
+            println!("ban: {b}");
+        }
     }
     let mut per = Vec::new();
     for c in 0..CULTURES.len() {
@@ -234,6 +323,14 @@ fn main() {
     }
     println!("settlements: {}", per.join(" · "));
     println!("most businesses in a town on one head noun: {}", n.heads);
+    println!(
+        "culture words from the letter model: {}% · culture words hitting the later bans: {} · most sites of a world on one noun: {} ({}) · most filler library and bank names in a world: {}",
+        100 * n.from_model / n.made.max(1),
+        n.bans.len(),
+        n.site_noun.0,
+        n.site_noun.1,
+        n.filler
+    );
     println!(
         "{} names, {} culture words: {} faults, {} training words, {} town key-word clashes, {} inn and shop names repeated across a world's towns, {} settlement words reused in a world",
         n.names,
