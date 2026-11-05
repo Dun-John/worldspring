@@ -175,7 +175,7 @@ One feature in detail. What comes back depends on the feature:
 | Settlements | Roads to other settlements, with road miles; districts; notable buildings; ways underground; flights of steps on steep streets as generated (`stairs`: each flight's middle `x_ft`/`y_ft`, `length_ft`, `rise_ft`, the highest first, up to 40; cities and up); `sites`: the sites in it (`id`, `kind`, `name`, and a drawn building's `building` id) |
 | Sites | The layout: buildings, and ways underground with their `u:` ids; `settlement`: the town it stands in, or `null` |
 | Buildings and underground sites | Levels and rooms |
-| Buildings | `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`, and a castle's keep its `pieces` (`kind`: body, round tower, square tower, forebuilding, wing; `poly`), a temple its own (body, transept, apse), whose union `poly` is (drawing a new outline makes it one piece); `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
+| Buildings | `roof_material` and `roof_shape` (as `create_building` takes them; none on battlements or ruins), `footprint`: `poly` (corners in order, ft), `angle_deg` (its long side, clockwise from east, 0–180), `length_ft`, `width_ft`, `area_sq_ft`, and a castle's keep its `pieces` (`kind`: body, round tower, square tower, forebuilding, wing; `poly`), a temple its own (body, transept, apse), whose union `poly` is (drawing a new outline makes it one piece); `structure`; `edited` when changed by hand; a building taken away (`remove_buildings`) comes back as `removed` with what it was |
 | Anything in a layout | `settlement` (and in a site's layout `site`): see Conventions. A building drawn by hand (`b:<layout>:0`) used to give its own site as `settlement`; it now gives the town it stands in (or `null`), and its site as `site` |
 | Places with NPCs or plots | `npcs`, `plots`: those at the place, at anything in its layout, at their levels and rooms; for a settlement also at its sites |
 | A building drawn by hand | `notes`, `hidden`, `npcs` and `plots` are the same under its `c:` id and its building id |
@@ -816,6 +816,8 @@ where a street is within 300 ft, on the grid when unturned, off squares.
 | `floors` | integer | optional | Storeys above ground, 1–8 (default 1; a wizard's tower 4). |
 | `roof` | string | optional | `hip`, `battlements`, `cone` or `auto`. |
 | `tint` | string | optional | `terracotta`, `slate`, `thatch`, `shingle`, `moss` or `auto`. |
+| `material` | string | optional | Roof material: `thatch`, `slate`, `clay_tile`, `shingle`, `turf`, `lead`, `copper`, `glazed_tile`, `flat_clay`, `hide`, `plank`, `whitewash` or `auto` (picked for the town's culture and the building's kind). Wins over `tint`. |
+| `shape` | string | optional | Roof shape: `hip`, `gable`, `cone`, `dome`, `flat`, `round` or `auto`. A flat roof (or a dome on a plain building) has a walkable terrace. A material that cannot take the shape is eased to one it can. |
 | `structure` | string | optional | `roofed` (default) or `ruin`. |
 | `near` | id or object | instead of a footprint | Find the nearest clear lot near this place (see above). |
 | `width_ft`, `depth_ft` | number | with `near` | The lot along the street and back from it, 10–400 ft. |

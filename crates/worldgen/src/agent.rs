@@ -126,8 +126,10 @@ pub fn created_detail(c: &crate::world::Created) -> String {
         let floors = c.floors.map(|f| format!("{f} floor{}", if f == 1 { "" } else { "s" }));
         let roof = c.roof.as_ref().map(|r| if r == "hip" { "hip roof".to_string() } else { r.clone() });
         let tint = c.tint.as_ref().map(|t| format!("{t} roof"));
+        let material = c.material.as_ref().map(|m| format!("{} roof", m.replace('_', " ")));
+        let shape = c.shape.as_ref().map(|r| format!("{r} roof shape"));
         let ruin = (c.structure.as_deref() == Some("ruin")).then(|| "ruined".to_string());
-        let opts: Vec<String> = [what, floors, ruin, roof, tint].into_iter().flatten().collect();
+        let opts: Vec<String> = [what, floors, ruin, roof, tint, material, shape].into_iter().flatten().collect();
         return if opts.is_empty() { "created building".into() } else { format!("created building ({})", opts.join(", ")) };
     }
     if c.kind == "castle" {
@@ -409,6 +411,8 @@ pub struct BuildingChange {
     pub poly: Option<Vec<P>>,
     pub roof: Option<String>,
     pub tint: Option<String>,
+    pub material: Option<String>,
+    pub shape: Option<String>,
     pub structure: Option<String>,
 }
 
@@ -437,6 +441,19 @@ pub fn building_edit(world: &World, t0: &T0, id: &str, change: &BuildingChange) 
     }
     if change.tint.is_some() {
         e.tint = keep(&change.tint);
+    }
+    for (v, list, what) in [(&change.material, &town::roof::MATERIALS[..], "material"), (&change.shape, &town::roof::SHAPES[..], "shape"), (&change.tint, &crate::world::TINTS[..], "tint"), (&change.roof, &crate::world::ROOFS[..], "roof")] {
+        if let Some(v) = keep(v)
+            && !list.contains(&v.as_str())
+        {
+            return Err(format!("{what} must be one of {}, or auto", list.join(", ")));
+        }
+    }
+    if change.material.is_some() {
+        e.material = keep(&change.material);
+    }
+    if change.shape.is_some() {
+        e.shape = keep(&change.shape);
     }
     if change.structure.is_some() {
         let generated = match g.structure {
@@ -1252,6 +1269,12 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         v["name"] = json!(building_name(world, &l, b));
         v["function"] = json!(b.label());
         v["floors"] = json!(b.floors);
+        // The roof's material and shape (battlements and ruins have none of their own).
+        if b.roof != Some(town::RoofStyle::Battlements) && b.structure != town::Structure::Ruin {
+            let k = town::roof::look(&l, b);
+            v["roof_material"] = json!(town::roof::MATERIALS[k.material as usize]);
+            v["roof_shape"] = json!(town::roof::SHAPES[k.shape as usize]);
+        }
         // The footprint: corners in order, and its long side's direction and size.
         let o = geom::obb(&b.poly);
         let r1 = |x: f64| (x * 10.0).round() / 10.0;

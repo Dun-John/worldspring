@@ -154,6 +154,8 @@ export const TINTS: Tint[] = ['terracotta', 'slate', 'thatch', 'shingle', 'moss'
  * old tints' materials keep the tints' colours: `roof::TINT_MATERIAL`). */
 export type RoofMaterial = 'thatch' | 'slate' | 'clay_tile' | 'shingle' | 'turf' | 'lead' | 'copper' | 'glazed_tile' | 'flat_clay' | 'hide' | 'plank' | 'whitewash';
 export const ROOF_MATERIALS: RoofMaterial[] = ['thatch', 'slate', 'clay_tile', 'shingle', 'turf', 'lead', 'copper', 'glazed_tile', 'flat_clay', 'hide', 'plank', 'whitewash'];
+/** The materials the old tints map to (`roof::TINT_MATERIAL`). */
+export const TINT_MATERIAL: Record<Tint, RoofMaterial> = { terracotta: 'clay_tile', slate: 'slate', thatch: 'thatch', shingle: 'shingle', moss: 'turf' };
 export const ROOF_MATERIAL_RGB = [0xa88e56, 0x5c6470, 0xa0543c, 0x7a6656, 0x6e6a48, 0x7c848c, 0x5c9a88, 0x3f6f8f, 0xb89a72, 0x9c8a6c, 0x86684a, 0xe0d8c8];
 /** Roof shapes by id (`worldgen::town::roof::SHAPES`, append-only). */
 export type RoofShape = 'hip' | 'gable' | 'cone' | 'dome' | 'flat' | 'round';

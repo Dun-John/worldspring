@@ -4,7 +4,7 @@
 // dragged from its middle out. Right-drag pans meanwhile. The finished footprint goes to the
 // app, which checks it with the generator (dry land, clear of buildings, roads and walls).
 import type { Graphics } from 'pixi.js';
-import type { Created, RoofStyle, Tint } from '../gen/protocol';
+import { TINT_MATERIAL, type Created, type RoofMaterial, type RoofShape, type RoofStyle } from '../gen/protocol';
 import type { Camera } from '../render/camera';
 import type { PointerTool } from '../render/MapView';
 
@@ -19,27 +19,29 @@ export interface BuildSettings {
   floors: number;
   /** '' as its kind has it. */
   roof: RoofStyle | '';
-  /** '' picked. */
-  tint: Tint | '';
+  /** Roof material and shape; '' picked. */
+  material: RoofMaterial | '';
+  rshape: RoofShape | '';
   ruin: boolean;
   /** '' named for its trade. */
   name: string;
 }
 
-export const defaultBuild = (): BuildSettings => ({ shape: 'rect', func: 'house', floors: 1, roof: '', tint: '', ruin: false, name: '' });
+export const defaultBuild = (): BuildSettings => ({ shape: 'rect', func: 'house', floors: 1, roof: '', material: '', rshape: '', ruin: false, name: '' });
 
 /** A building's options from the menu's choices (as `Created` holds them). */
-export function buildOptions(s: BuildSettings): Pick<Created, 'func' | 'floors' | 'roof' | 'tint' | 'structure'> {
-  const o: Pick<Created, 'func' | 'floors' | 'roof' | 'tint' | 'structure'> = { func: s.func, floors: s.floors };
+export function buildOptions(s: BuildSettings): Pick<Created, 'func' | 'floors' | 'roof' | 'material' | 'shape' | 'structure'> {
+  const o: Pick<Created, 'func' | 'floors' | 'roof' | 'material' | 'shape' | 'structure'> = { func: s.func, floors: s.floors };
   if (s.roof) o.roof = s.roof;
-  if (s.tint) o.tint = s.tint;
+  if (s.material) o.material = s.material;
+  if (s.rshape) o.shape = s.rshape;
   if (s.ruin) o.structure = 'ruin';
   return o;
 }
 
 /** The menu's choices for a building drawn earlier. */
 export function settingsOf(c: Created, shape: BuildShape): BuildSettings {
-  return { shape, func: c.func ?? 'house', floors: c.floors ?? 1, roof: c.roof ?? '', tint: c.tint ?? '', ruin: c.structure === 'ruin', name: c.name };
+  return { shape, func: c.func ?? 'house', floors: c.floors ?? 1, roof: c.roof ?? '', material: c.material ?? (c.tint ? TINT_MATERIAL[c.tint] : ''), rshape: c.shape ?? '', ruin: c.structure === 'ruin', name: c.name };
 }
 
 const GRID = 5;

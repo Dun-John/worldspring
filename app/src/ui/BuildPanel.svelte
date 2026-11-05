@@ -4,14 +4,13 @@
 
 <script lang="ts">
   // Edit › Build: draw a building on the map (a rectangle, any polygon, a round tower), snapped
-  // to the 5-ft grid, and say what it is, its storeys, roof and roof colour. While the tab is
+  // to the 5-ft grid, and say what it is, its storeys, roof shape and material. While the tab is
   // open the map's pointer draws; each footprint drawn becomes a building. Editing one: change
   // its options, or draw again to move or reshape it. Or put a crossing down (a bridge, ford
   // or ferry) by clicking one bank, then the other; clicking one picks it to change or take away.
   // Castle: an outline (a rectangle or a convex polygon), then the side its gate is in; Wall: a
   // line of corners (a ring if closed), gates on the corners clicked twice.
-  import { CROSSING_WIDTH, MAX_FLOORS, ROOFS, TINTS, type BuildingFuncs, type CrossingKind, type CrossingMaterial } from '../gen/protocol';
-  import { ROOF_TINTS } from '../gen/battlePrep';
+  import { CROSSING_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial } from '../gen/protocol';
   import type { BuildSettings, BuildShape } from '../editor/build';
   import type { CrossSettings } from '../editor/crossing';
   import type { ClearShape } from '../editor/clearArea';
@@ -286,11 +285,18 @@
       </div>
     </div>
     <div class="ws-field">
-      Roof colour
-      <div class="tints" role="radiogroup" aria-label="Roof colour">
-        <button class="ws-chip" class:on={settings.tint === ''} role="radio" aria-checked={settings.tint === ''} onclick={() => (settings.tint = '')} title="Picked for it">Auto</button>
-        {#each TINTS as t, i (t)}
-          <button class="swatch" class:on={settings.tint === t} role="radio" aria-checked={settings.tint === t} style:background={hex(ROOF_TINTS[i])} onclick={() => (settings.tint = t)} title={label(t)} aria-label={label(t)}></button>
+      Roof shape
+      <div class="tints" role="radiogroup" aria-label="Roof shape">
+        <button class="ws-chip" class:on={settings.rshape === ''} role="radio" aria-checked={settings.rshape === ''} onclick={() => (settings.rshape = '')} title="Picked for it">Picked</button>
+        {#each ROOF_SHAPES as r (r)}<button class="ws-chip" class:on={settings.rshape === r} role="radio" aria-checked={settings.rshape === r} onclick={() => (settings.rshape = r)}>{label(r)}</button>{/each}
+      </div>
+    </div>
+    <div class="ws-field">
+      Roof material
+      <div class="tints" role="radiogroup" aria-label="Roof material">
+        <button class="ws-chip" class:on={settings.material === ''} role="radio" aria-checked={settings.material === ''} onclick={() => (settings.material = '')} title="Picked for it">Picked</button>
+        {#each ROOF_MATERIALS as m, i (m)}
+          <button class="swatch" class:on={settings.material === m} role="radio" aria-checked={settings.material === m} style:background={hex(ROOF_MATERIAL_RGB[i])} onclick={() => (settings.material = m)} title={label(m)} aria-label={label(m)}></button>
         {/each}
       </div>
     </div>
@@ -345,6 +351,7 @@
   }
   .tints {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
   }

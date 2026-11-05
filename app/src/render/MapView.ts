@@ -87,7 +87,7 @@ function createdDetail(c: Created): string {
   const words = (s: string) => s.replace(/_/g, ' ');
   if (c.kind === 'building') {
     const floors = c.floors && `${c.floors} floor${c.floors === 1 ? '' : 's'}`;
-    const opts = [c.func && words(c.func), floors, c.structure === 'ruin' && 'ruined', c.roof && (c.roof === 'hip' ? 'hip roof' : c.roof), c.tint && `${c.tint} roof`].filter(Boolean);
+    const opts = [c.func && words(c.func), floors, c.structure === 'ruin' && 'ruined', c.roof && (c.roof === 'hip' ? 'hip roof' : c.roof), c.material ? `${words(c.material)} roof` : c.tint && `${c.tint} roof`, c.shape && `${c.shape} shape`].filter(Boolean);
     return `created building${opts.length ? ` (${opts.join(', ')})` : ''}`;
   }
   if (c.kind === 'castle') {

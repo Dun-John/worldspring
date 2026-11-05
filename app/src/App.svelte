@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Npc, Overlay, Placed, Plateau, Plot, SpriteMeta, Stroke, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Npc, Overlay, Placed, Plateau, Plot, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { MI, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
@@ -1697,7 +1698,8 @@
       func: e?.func ?? (await funcKey(hit.function)),
       floors: hit.floors,
       roof: (e?.roof ?? '') as BuildSettings['roof'],
-      tint: (e?.tint ?? '') as BuildSettings['tint'],
+      material: (e?.material ?? (e?.tint ? TINT_MATERIAL[e.tint as Tint] : '')) as BuildSettings['material'],
+      rshape: (e?.shape ?? '') as BuildSettings['rshape'],
       ruin: hit.ward !== 'underground' && (e?.structure === 'ruin' || hit.function.toLowerCase() === 'ruined building'),
       name: '',
     };
@@ -1718,7 +1720,11 @@
     if (build.func !== g.was.func) change.func = build.func;
     if (build.floors !== g.was.floors) change.floors = build.floors;
     if (build.roof !== g.was.roof) change.roof = build.roof || 'auto';
-    if (build.tint !== g.was.tint) change.tint = build.tint || 'auto';
+    if (build.material !== g.was.material) {
+      change.material = build.material || 'auto';
+      if (edits.buildings?.[id]?.tint) change.tint = 'auto';
+    }
+    if (build.rshape !== g.was.rshape) change.shape = build.rshape || 'auto';
     if (build.ruin !== g.was.ruin) change.structure = build.ruin ? 'ruin' : 'roofed';
     if (poly) change.poly = poly;
     const r = await view.gen.buildingEdit(id, change);
@@ -1816,7 +1822,7 @@
     if (genEditing) return void saveGenerated();
     const c = buildEditing ? drawnBuilding(buildEditing) : null;
     if (!c) return;
-    const { roof: _r, tint: _t, structure: _s, ...rest } = c;
+    const { roof: _r, tint: _t, material: _m, shape: _h, structure: _s, ...rest } = c;
     const next: Created = { ...rest, ...buildOptions(build), name: build.name.trim() || c.name };
     const bid = drawnBuildingId(c.id);
     let designs = edits.designs;
