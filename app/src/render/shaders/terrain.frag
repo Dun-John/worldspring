@@ -110,8 +110,9 @@ vec4 symbol(vec2 p, int kind, float aa) {
         // to the SE and, at close zoom, a trunk on some. Crown reach is 2.45 R (dense 2.3 R) from its point.
         bool dense = kind == 3;
         // Groves and clearings: value noise per cell (period 32 = 256 / 8, so it tiles with the cells).
-        float grove = smoothstep(0.3, 0.62, pnoise((c + 0.5) * 0.125, 32.0));
-        if (h.x > (dense ? 0.84 + 0.14 * grove : 0.1 + 0.82 * grove)) return vec4(0.0);
+        // (Ordinary forest stays mostly wooded: groves nearly closed, clearings the exception.)
+        float grove = smoothstep(0.2, 0.55, pnoise((c + 0.5) * 0.125, 32.0));
+        if (h.x > (dense ? 0.84 + 0.14 * grove : 0.3 + 0.65 * grove)) return vec4(0.0);
         float h3 = hash21(c + 31.7);
         vec2 g = hash22(c + 3.7);
         int m = h.y < (dense ? 0.8 : 0.68) ? 1 : h.y < (dense ? 0.97 : 0.93) ? 2 : 3;
