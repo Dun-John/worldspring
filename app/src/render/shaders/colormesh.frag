@@ -221,12 +221,13 @@ void main() {
                         }
                     }
                     vec2 mc = floor(p / 9.0);
-                    if (hash(mc + 41.0) < wear * 0.35) {
+                    // (Only old roofs, and few blobs on them: spread evenly they read as polka dots.)
+                    if (hash(mc + 41.0) < max(0.0, wear - 0.55) * 0.5) {
                         vec2 o = p - (mc + 0.5) * 9.0 - 2.0 * (vec2(hash(mc + 43.0), hash(mc + 47.0)) - 0.5);
                         float r = 1.2 + 0.8 * hash(mc + 53.0);
                         float d = min(length(o), length(o - vec2(0.55, 0.3) * r) + 0.2);
                         float mm = 1.0 - smoothstep(r - 0.35, r + 0.05, d);
-                        if (mossy) c = mix(c, vec3(0.4, 0.43, 0.27) / max(s, 0.5), mm * 0.6);
+                        if (mossy) c = mix(c, vec3(0.4, 0.43, 0.27) / max(s, 0.5), mm * 0.45);
                         else s *= 1.0 - 0.06 * mm;
                     }
                 }
