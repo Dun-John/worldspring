@@ -144,6 +144,21 @@ const SURFACES = [
   'stairs',
   'gravel path',
 ];
+/** Cobbles' tints by settlement (`ground.frag` `uStone`): warm grey, cool grey, buff, reddish
+ * granite, slate, sandstone; none (roads out of town) the plain grey. */
+const STONE_TONES = [
+  [1.03, 1.0, 0.96],
+  [0.96, 0.99, 1.03],
+  [1.06, 1.02, 0.92],
+  [1.06, 0.97, 0.94],
+  [0.94, 0.97, 0.99],
+  [1.05, 1.0, 0.9],
+];
+function stoneTone(stone: number): Float32Array {
+  if (!stone) return new Float32Array([1, 1, 1]);
+  return new Float32Array(STONE_TONES[(Math.imul(stone, 0x9e3779b1) >>> 28) % STONE_TONES.length]);
+}
+
 /** The most flights of steps' axes one chunk's ground draws treads for (`ground.frag`; `battlemap::MAX_STAIR_AXES`). */
 const STAIR_AXES = 64;
 /** `URBAN_*` kinds that stand on the ground (battlemap.rs), as hover labels. */
@@ -720,6 +735,7 @@ export class BattlemapLayer {
       uStairN: { value: nStairs, type: 'f32' },
       // (Gravel here, or park ground by the edge, whose neighbour's gravel the halo may hold.)
       uGravel: { value: c.surface.includes(20) || parkEdge(c.raised) ? 1 : 0, type: 'f32' },
+      uStone: { value: stoneTone(c.stone), type: 'vec3<f32>' },
     });
     const ground = new Mesh({
       geometry: this.quad,

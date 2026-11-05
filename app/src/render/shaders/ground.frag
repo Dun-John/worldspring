@@ -28,6 +28,8 @@ uniform vec2 uNoiseOff;
 uniform float uSea;
 // Whether the chunk has a park's gravel (else its smoothing is skipped).
 uniform float uGravel;
+// The cobbles' tint: the settlement's stone (`stoneTone`).
+uniform vec3 uStone;
 
 const float N = 128.0;
 const vec3 INK = vec3(0.12, 0.10, 0.08);
@@ -94,7 +96,98 @@ vec2 roadAt(vec2 q) {
     return vec2(r.x, r.y / max(r.x, 1e-3));
 }
 
-vec3 surfaceColor(int s, vec2 w) {
+// One cobblestone drawn: e how near its rim (0 its middle, 1 the joint), r the way from its middle
+// (any length), hs its hash, joint the ink of the joint round it. Three close matte tones: a light
+// rim on the NW side, a darker one on the SE, the stone's own between.
+vec3 stoneLook(vec3 col, float e, vec2 r, float hs, float joint) {
+    vec3 st = col * (0.9 + 0.14 * hs);
+    float side = dot(r, vec2(-0.7071)) * inversesqrt(dot(r, r) + 1e-6);
+    float rim = smoothstep(0.5, 0.85, e);
+    st *= 1.0 + rim * (0.16 * smoothstep(0.15, 0.6, side) - 0.3 * smoothstep(0.0, 0.6, -side));
+    return mix(st, INK * 0.8 + col * 0.15, joint * 0.8);
+}
+
+// Cobbles (surface 14). Streets: round and oval stones of varied size, each the nearest of a jittered
+// lattice's points (2 x 2 taps, 2.5 a square) in its own stretched metric. Plazas and market squares
+// (fan): segmental arcs ("Bogenpflaster"), fans 2 squares across laid in a scale pattern, rings of
+// stones a quarter square wide. Both lattices' periods divide the noise offset's 512 squares, so
+// chunks meet seamlessly. Below about 3 px a stone the detail fades to the stones' mean.
+vec3 cobbles(vec3 col, vec2 w, bool fan) {
+    vec3 flat_ = col * 0.85;
+    float px = (fan ? 0.25 : 0.4) * uPxPerSq;
+    float show = smoothstep(3.0, 5.0, px);
+    if (show <= 0.0) return flat_;
+    vec3 stone;
+    if (fan) {
+        // Fans' middles in rows half a fan apart, every other row offset by half; the point is in
+        // the nearest fan of the row below it if that reaches it, else of its own row.
+        vec2 p = w * 0.5;
+        float row = floor(p.y * 2.0) + 1.0;
+        float off = 0.5 * mod(row, 2.0);
+        vec2 c = vec2(floor(p.x - off + 0.5) + off, row * 0.5);
+        if (dot(p - c, p - c) > 0.25) {
+            row -= 1.0;
+            off = 0.5 - off;
+            c = vec2(floor(p.x - off + 0.5) + off, row * 0.5);
+        }
+        // The arcs are rings round the tip of the fan's visible part (half a fan below its middle,
+        // where the two fans in front of it meet), so its round edge is an arc and its rings meet the
+        // fans in front at their edges.
+        vec2 o = p - c - vec2(0.0, 0.5);
+        float len = length(o) + 1e-5;
+        vec2 n = o / len;
+        float rr = len * 8.0;
+        float k = floor(rr);
+        float fr = rr - k;
+        float hf = hash21(mod(c * 2.0, 512.0));
+        // Along the arc, in stones a little longer than a ring is wide, offset ring by ring.
+        float t = atan(o.x, -o.y) * (k + 0.5) / 1.15 + fract(hf * 7.0 + k * 0.37) * 2.0;
+        float ft = fract(t);
+        vec2 g = abs(vec2(fr, ft) - 0.5) * 2.0;
+        g *= g;
+        float e = sqrt(sqrt(dot(g, g)));
+        // Joints about a tenth of a stone, at least a pixel; a bolder one along the fan's round edge.
+        float jw = max(0.5, 0.05 * px);
+        float gap = min((1.0 - e) * 0.5, (0.5 - distance(p, c)) * 8.0 / 1.6);
+        float joint = 1.0 - smoothstep(jw - 0.5, jw + 0.5, gap * px);
+        vec2 r = n * (fr - 0.5) + vec2(-n.y, n.x) * (ft - 0.5);
+        stone = stoneLook(col, e, r, hash21(vec2(floor(t) + 31.0 * k, hf * 97.0)), joint);
+    } else {
+        vec2 p = w * 2.5;
+        vec2 b = floor(p - 0.5);
+        float d1 = 9.0;
+        float d2 = 9.0;
+        vec2 r1 = vec2(0.0);
+        float h1 = 0.0;
+        for (int k = 0; k < 4; k++) {
+            vec2 c = b + vec2(float(k & 1), float(k >> 1));
+            float h = hash21(mod(c, 1280.0));
+            vec2 o = p - (c + 0.5 + (vec2(h, fract(h * 37.1)) - 0.5) * 0.5);
+            // Its own turn, stretch (oval up to 1.45 : 1) and size.
+            float a = h * 41.0;
+            vec2 ax = vec2(cos(a), sin(a));
+            vec2 m = vec2(dot(o, ax) / (1.0 + 0.45 * fract(h * 7.3)), dot(o, vec2(-ax.y, ax.x)));
+            float d = length(m) / (0.85 + 0.3 * fract(h * 3.1));
+            if (d < d1) {
+                d2 = d1;
+                d1 = d;
+                r1 = o;
+                h1 = h;
+            } else {
+                d2 = min(d2, d);
+            }
+        }
+        // Inside its round (a little over half a cell) and off the joint with its neighbour.
+        float gap = min(0.6 - d1, 0.5 * (d2 - d1));
+        float jw = max(0.5, 0.05 * px);
+        float joint = 1.0 - smoothstep(jw - 0.5, jw + 0.5, gap * px);
+        float e = clamp(1.0 - gap / 0.3, 0.0, 1.0);
+        stone = stoneLook(col, e, r1, fract(h1 * 19.7), joint);
+    }
+    return mix(flat_, stone, show);
+}
+
+vec3 surfaceColor(int s, vec2 w, bool fan) {
     vec3 base = SURF[s];
     float m = fbm3(w * 0.45);
     float fine = vnoise(w * 3.1);
@@ -116,12 +209,7 @@ vec3 surfaceColor(int s, vec2 w) {
         float c = abs(vnoise(w * 1.7) - 0.5);
         col = mix(col, col * 0.6, 1.0 - smoothstep(0.0, 0.035, c));
     } else if (s == 14) {
-        // Cobbles: offset rows of rounded setts.
-        vec2 c = w * vec2(2.2, 3.0);
-        c.x += 0.5 * mod(floor(c.y), 2.0);
-        vec2 g = fract(c) - 0.5;
-        float sett = smoothstep(0.5, 0.36, max(abs(g.x) * 0.9, abs(g.y)));
-        col = mix(col * 0.55, col * (0.9 + 0.25 * hash21(floor(c))), sett);
+        col = cobbles(col * uStone, w, fan);
     } else if (s == 15) {
         // Packed earth with two worn cart ruts along the dominant direction of the grain.
         float rut = vnoise(w * vec2(0.8, 4.0)) * vnoise(w * vec2(4.0, 0.8));
@@ -217,7 +305,10 @@ void main() {
     // Organic boundaries between surface types: warp the square lookup.
     vec2 warp = vec2(vnoise(w * 0.9), vnoise(w * 0.9 + 17.0)) - 0.5;
     ivec2 sw = ivec2(floor(q + warp * 0.7));
-    int surf = int(dataAt(sw).r + 0.5);
+    vec4 dw = dataAt(sw);
+    int surf = int(dw.r + 0.5);
+    // A plaza or market square (bit 64): its cobbles laid in fans.
+    bool plaza = (int(dw.g + 0.5) & 64) != 0;
 
     ivec2 sq = ivec2(floor(q));
     // Roads: smooth edges from filtered coverage instead of square steps.
@@ -295,7 +386,7 @@ void main() {
         }
     }
 
-    vec3 col = surfaceColor(surf, w);
+    vec3 col = surfaceColor(surf, w, plaza && !onRoad);
     // Worn verge: the road edge darkens slightly into the surrounding ground (a gravel path's
     // edge, a little).
     float verge = smoothstep(0.3, 0.5, cov) * (1.0 - smoothstep(0.5, 0.62, cov));

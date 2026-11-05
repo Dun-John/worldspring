@@ -399,6 +399,9 @@ pub struct Chunk {
     /// A castle's yard per square (bits 1 a bailey, 2 a garden yard's, 4 on a motte above its toe;
     /// empty: none here): where the guarantee counts its walls, towers and buildings as cover.
     pub yard: Vec<u8>,
+    /// The settlement whose paving the chunk's cobbles are (its index + 1, 0 none): the highest-tier
+    /// layout near the chunk, the nearest of those. The ground picks the stone's colour by it.
+    pub stone: u32,
 }
 
 impl Chunk {
@@ -2353,11 +2356,16 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         structures: shapes,
         sprites: Vec::new(),
         yard: Vec::new(),
+        stone: 0,
     };
     retier(&mut chunk, sea);
 
     // Surfaces. Towns and cities pave their streets; villages have packed earth.
-    let tier_here = crate::town::layouts_near(world, t0, [ox, oy, ox + SQ as f64 * SQUARE_FT, oy + SQ as f64 * SQUARE_FT]).iter().map(|l| l.tier).max();
+    let here = crate::town::layouts_near(world, t0, [ox, oy, ox + SQ as f64 * SQUARE_FT, oy + SQ as f64 * SQUARE_FT]);
+    let tier_here = here.iter().map(|l| l.tier).max();
+    let mid = [ox + SQ as f64 * SQUARE_FT / 2.0, oy + SQ as f64 * SQUARE_FT / 2.0];
+    let away = |l: &crate::town::Layout| (l.center[0] - mid[0]).hypot(l.center[1] - mid[1]);
+    chunk.stone = here.iter().filter(|l| Some(l.tier) == tier_here).min_by(|a, b| away(a).total_cmp(&away(b))).map_or(0, |l| l.index + 1);
     let paved = tier_here.is_some_and(|t| t >= crate::t0::settle::Tier::Town);
     let village = tier_here == Some(crate::t0::settle::Tier::Village);
     for k in 0..n {
@@ -5553,7 +5561,8 @@ fn compute_edges(c: &mut Chunk) {
 }
 
 /// Binary payload for the renderer (little-endian):
-///   0 magic "BATL" | 4 level | 8 x | 12 y | 16 n_objects | 20 atmosphere | 24 sea f32 | 28 reserved
+///   0 magic "BATL" | 4 level | 8 x | 12 y | 16 n_objects | 20 atmosphere | 24 sea f32 | 28 stone u32
+///   (`Chunk::stone`: whose paving the cobbles are, for their colour)
 ///   32 height f32[HS²] | tier i16[SQ²] | surface u8[SQ²] | edges u8[SQ²] | water f32[HS²]
 ///   (height and water include the one-square halo ring)
 ///   objects: (kind u16, variant u8, turned u8 (1: put down by hand and drawn at rot,
@@ -5580,7 +5589,7 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
         out.extend_from_slice(&v.to_le_bytes());
     }
     out.extend_from_slice(&(world.params().sea_level_ft as f32).to_le_bytes());
-    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&c.stone.to_le_bytes());
     // Rendered ground: roofs are drawn as vectors, so their squares show the ground below.
     for (v, l) in c.halo_height.iter().zip(&c.roof_lift) {
         out.extend_from_slice(&(v - l).to_le_bytes());

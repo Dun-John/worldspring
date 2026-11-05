@@ -78,6 +78,8 @@ export interface PreparedChunk {
   nObj: number;
   atmosphere: number;
   sea: number;
+  /** Whose paving the chunk's cobbles are (`battlemap::Chunk::stone`: settlement index + 1, 0 none). */
+  stone: number;
   /** Height offset subtracted before the half-float encoding. */
   base: number;
   /** Ground data texture (surface, edges, tier, building id) and heights texture (half floats). */
@@ -159,6 +161,7 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
   const nObj = dv.getUint32(16, true);
   const atmosphere = dv.getUint32(20, true);
   const sea = dv.getFloat32(24, true);
+  const stone = dv.getUint32(28, true);
   const heights = new Float32Array(buf, 32, nh);
   const tier = new Int16Array(buf, 32 + nh * 4, n);
   const surface = new Uint8Array(buf, 32 + nh * 4 + n * 2, n);
@@ -267,7 +270,8 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
   const shown = groundUnder(surface, raised);
   for (let k = 0; k < n; k++) {
     data[k * 4] = shown[k];
-    data[k * 4 + 1] = edges[k];
+    // (Bit 64: a plaza or market square, `URBAN_PLAZA`, whose cobbles the ground lays in fans.)
+    data[k * 4 + 1] = edges[k] | (raised && raised[k * 2 + 1] === 3 ? 64 : 0);
     data[k * 4 + 2] = tier[k] & 255;
     // Building id (1..255, wrapping) for per-building roof colour and wall edges.
     data[k * 4 + 3] = building[k] ? 1 + ((building[k] - 1) % 255) : 0;
@@ -298,6 +302,7 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     nObj,
     atmosphere,
     sea,
+    stone,
     base,
     data,
     hdata,
