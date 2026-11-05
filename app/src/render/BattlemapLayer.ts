@@ -148,9 +148,9 @@ const SURFACES = [
  * north cool blue-grey granite, west warm grey-buff, south warm honey limestone, dry pale ochre
  * sandstone, steppe khaki fieldstone. Each within about 8% of the grey's value, saturation <= 0.35. */
 const STONE_TONES = [
-  [0.92, 0.97, 1.1],
+  [0.96, 0.97, 1.04],
   [1.01, 1.0, 0.97],
-  [1.08, 1.05, 0.86],
+  [1.07, 1.04, 0.89],
   [1.15, 1.08, 0.95],
   [0.99, 1.0, 0.89],
 ];

@@ -100,35 +100,41 @@ vec2 roadAt(vec2 q) {
 
 // One cobblestone, painted: v its surface's tilt (the way out from its middle, length 0 there to
 // about 1 at its rim), hs its hash, joint the joint round it, aa a pixel in v. Three close flat
-// tones (lit crescent on the NW, mid, shade crescent on the SE), no grain; the joint a darker
-// version of the stone, never ink. About a fifth of the stones get a hand-drawn ink stroke on
-// their SE rim instead of an outline on all. Below about 25 px a square the crescents are a quarter
-// and the joints a fifth softer, so the 5-ft grid wins over them.
+// tones (lit crescent on the NW, mid, shade crescent on the SE), no grain, each stone one of three
+// value steps; the joint a mid-tone a step below the stone, never ink. About a third of the stones
+// get a hand-drawn ink stroke on their SE rim, the rest none. Below about 25 px a square the
+// crescents are a quarter and the joints a fifth softer, so the 5-ft grid wins over them.
 vec3 stoneLook(vec3 col, vec2 v, float hs, float joint, float aa) {
-    vec3 st = col * (0.96 + 0.08 * hs);
+    vec3 st = col * (0.955 + 0.045 * floor(hs * 2.999));
     float side = dot(v, vec2(-0.7071));
     float lit = smoothstep(0.42 - aa, 0.42 + aa, side);
     float shade = smoothstep(0.38 - aa, 0.38 + aa, -side);
     st *= 1.0 + (0.06 * lit - 0.12 * shade) * mix(0.75, 1.0, smoothstep(20.0, 25.0, uPxPerSq));
     joint *= mix(0.8, 1.0, smoothstep(20.0, 28.0, uPxPerSq));
-    vec3 c = mix(st, col * 0.8, joint);
-    float stroke = step(0.8, fract(hs * 13.7)) * smoothstep(0.1, 0.5, -side);
-    return mix(c, INK, joint * stroke * 0.6);
+    vec3 c = mix(st, col * 0.86, joint);
+    float stroke = step(0.667, fract(hs * 13.7)) * smoothstep(0.2, 0.6, -side);
+    return mix(c, INK, joint * stroke * 0.55);
 }
 
-// Cobbles (surface 14). Streets: round and oval stones of varied size (0.75 to 1.3 times about half a
-// square), each an ellipse of its own radius, stretch and turn round a point of a jittered lattice (2 x 2 taps); the
+// Cobbles (surface 14). Streets: round and oval stones of even size (0.85 to 1.15 times about half a
+// square) in loose courses: rows offset by half a stone, gently wobbling, each stone an ellipse of its
+// own radius, stretch and turn (near the course's line) round its jittered point (2 x 2 taps); the
 // joints are the gaps between the ellipses (wider where three meet). Plazas and market squares (fan):
 // segmental arcs ("Bogenpflaster"), fans 3.2 squares across laid in a scale pattern, six rows of
 // rounded setts to a fan (their rows a little wider or narrower fan row by fan row, and hand-wobbled),
-// short radial joints between the setts of a row. Both lattices' periods divide the noise offset's
+// short radial joints between the setts of a row; the rows soft tone steps, only every third arc a
+// thin mid-dark line. Both lattices' periods divide the noise offset's
 // 512 squares, so chunks meet seamlessly. Below a few px a stone the detail fades to the stones'
 // mean, as it does by the paving's edge (fade 0 there).
+// How much the stones show (0 flat paving), for the grid's weight.
+float gStones = 0.0;
+
 vec3 cobbles(vec3 col, vec2 w, bool fan, float fade) {
     vec3 flat_ = col * 0.95;
     float px = (fan ? 0.5333 : 0.5714) * uPxPerSq;
     // (Stones gone by ~5 px, so at town zoom the 5-ft grid reads over the paving.)
     float show = smoothstep(5.0, 10.0, px) * fade;
+    gStones = show;
     if (show <= 0.0) return flat_;
     float jw = max(0.5, 0.035 * px);
     vec3 stone;
@@ -160,34 +166,43 @@ vec3 cobbles(vec3 col, vec2 w, bool fan, float fade) {
         // Along the arc, in setts half again as long as a row is wide, offset row by row.
         float t = atan(o.x, -o.y) * (k + 0.5) / 1.5 + fract(hf * 7.0 + k * 0.37) * 2.0;
         float ft = fract(t);
-        // A sett: a squircle, so the rows read as arcs.
-        vec2 g = abs(vec2(fr, ft) - 0.5) * 2.0;
-        g *= g;
-        float e = sqrt(sqrt(dot(g, g)));
-        float gap = (1.0 - e) * 0.5;
-        float joint = 1.0 - smoothstep(jw - 0.5, jw + 0.5, gap * px);
-        vec2 v = n * (fr - 0.5) * 2.0 + vec2(-n.y, n.x) * (ft - 0.5) * 2.0;
-        stone = stoneLook(col, v, hash21(vec2(floor(t) + 31.0 * k, hf * 97.0)), joint, 2.0 / px);
-        // The fan's round edge a bolder joint (never ink), in the joints' tone, so the arcs read
-        // under the grid.
+        // A sett: joints only across the row (radial, softer under 25 px a square, so no fine
+        // crosshatch with the grid); the rows part by a soft tone step, every third arc a thin
+        // mid-dark line.
+        float joint = (1.0 - smoothstep(jw - 0.5, jw + 0.5, min(ft, 1.0 - ft) * 1.5 * px)) * mix(0.6, 1.0, smoothstep(20.0, 28.0, uPxPerSq));
+        vec2 v = vec2(-n.y, n.x) * (ft - 0.5) * 2.0 + n * (fr - 0.5) * 0.9;
+        vec3 rowCol = col * (1.0 + 0.045 * (mod(k, 2.0) - 0.5));
+        stone = stoneLook(rowCol, v, hash21(vec2(floor(t) + 31.0 * k, hf * 97.0)), joint, 2.0 / px);
+        float ka = floor(rr + 0.5);
+        float arc = step(2.5, mod(ka + 300.0, 3.0)) * (1.0 - smoothstep(0.3, 0.9, abs(rr - ka) * px));
+        // The fan's round edge one of the lines, a little bolder.
         float edge = (rim - distance(p, c)) * 6.0 * px;
-        stone = mix(stone, col * 0.78, 1.0 - smoothstep(jw, jw + 1.0, edge));
+        arc = max(arc, 1.0 - smoothstep(jw, jw + 1.0, edge));
+        stone = mix(stone, col * 0.72, arc * 0.85);
     } else {
         vec2 p = w * 1.75;
-        vec2 b = floor(p - 0.5);
+        float rb = floor(p.y - 0.5);
         float s1 = -9.0;
         float s2 = -9.0;
         vec2 v1 = vec2(0.0);
         float h1 = 0.0;
         for (int k = 0; k < 4; k++) {
-            vec2 c = b + vec2(float(k & 1), float(k >> 1));
+            // Course r (every other one offset by half a stone), its two stones nearest the point.
+            float r = rb + float(k >> 1);
+            float off = 0.5 * mod(r, 2.0);
+            vec2 c = vec2(floor(p.x - off - 0.5) + float(k & 1), r);
             float h = hash21(mod(c, 896.0));
-            vec2 o = p - (c + 0.5 + (vec2(h, fract(h * 37.1)) - 0.5) * 0.4);
-            // Its own turn, stretch (oval up to 1.3 : 1) and radius (0.38 to 0.65 a cell).
-            vec2 ax = normalize(vec2(fract(h * 41.0), fract(h * 23.0)) - 0.5 + 1e-3);
-            float isx = 1.0 / (1.0 + 0.3 * fract(h * 7.3));
+            // (The course's wobble: a wave of 512 / 170 squares, so chunks still meet.)
+            float cx = c.x + 0.5 + off;
+            float wy = 0.12 * sin(cx * (2.0862 / 1.75) + 6.2832 * hash21(vec2(mod(r, 896.0), 3.0)));
+            vec2 o = p - vec2(cx, r + 0.5 + wy) - (vec2(h, fract(h * 37.1)) - 0.5) * vec2(0.24, 0.1);
+            // Its own turn (within 20 degrees of the course), stretch (oval up to 1.15 : 1) and
+            // radius (0.43 to 0.58 a cell).
+            float ang = (fract(h * 41.0) - 0.5) * 0.7;
+            vec2 ax = vec2(cos(ang), sin(ang));
+            float isx = 1.0 / (1.0 + 0.15 * fract(h * 7.3));
             vec2 m = vec2(dot(o, ax) * isx, dot(o, vec2(-ax.y, ax.x)));
-            float rad = 0.5 * (0.75 + 0.55 * fract(h * 3.1));
+            float rad = 0.5 * (0.85 + 0.3 * fract(h * 3.1));
             // How far inside its rim (negative outside it).
             float s = rad - length(m);
             if (s > s1) {
@@ -470,6 +485,10 @@ void main() {
         float soft = 1.0 - smoothstep(0.5, 0.5 + max(1.5 * aa, 0.02), pave);
         col = mix(col, col * 0.88, band * band * (1.0 - tuft));
         col = mix(col, groundColor(nat, w), max(soft, tuft));
+    } else if (pave >= 0.0 && surf == nat) {
+        // The ground a shade darker along the paving's edge, a rim (as a sprite's) so the street's
+        // outline reads from afar.
+        col *= 1.0 - 0.09 * smoothstep(0.2, 0.5, pave);
     }
     // Worn verge: the road edge darkens slightly into the surrounding ground (a gravel path's
     // edge, a little).
@@ -541,9 +560,11 @@ void main() {
     if (uGrid > 0.0) {
         vec2 g = min(f, 1.0 - f) * uPxPerSq;
         float line = 1.0 - smoothstep(0.4, 1.2, min(g.x, g.y));
-        // Bolder over paving, so it reads over the stones' joints.
-        bool hard = surf == 14 || surf == 16 || surf == 19 || surf == 20;
-        col = mix(col, INK, line * (hard ? 0.45 : 0.28) * uGrid);
+        // Bolder over paving, so it reads over the stones' joints (cobbles: as far as their stones
+        // show, flat paving as grass, so faded streets don't look tiled).
+        bool hard = surf == 16 || surf == 19 || surf == 20;
+        float wt = hard ? 0.45 : (surf == 14 ? mix(0.28, 0.45, gStones) : 0.28);
+        col = mix(col, INK, line * wt * uGrid);
     }
 
     finalColor = vec4(col * uAlpha, uAlpha);
