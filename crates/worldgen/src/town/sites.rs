@@ -312,6 +312,10 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let culture = t0.settlements.iter().min_by(|a, b| d2(a).total_cmp(&d2(b))).map_or(0, |s| s.culture);
     l.set_roofs(world, t0, culture);
     l.number();
+    // (A building drawn by hand keeps its outline.)
+    if p.kind != PoiKind::Building {
+        super::round_off(&mut l);
+    }
     l
 }
 

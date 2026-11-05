@@ -258,3 +258,10 @@ export function domeSpots(pts: number[], ft: number): [number, number, number][]
   }
   return out[0][2] >= 2.5 * ft ? out : [];
 }
+
+/** A round roof's eaves (`town::roof::Shape::Round`) on a convex footprint of one piece: the footprint
+ * itself, a ring of `town::roof::ROUND_SIDES` as generated (`town::round_off`); a footprint drawn by
+ * hand, or a lot too small for a ring, roofed round over all of it (never walls out past the eaves). */
+export function roundOutline(pts: number[]): number[] {
+  return pts;
+}

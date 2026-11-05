@@ -5,7 +5,7 @@
 import earcut from 'earcut';
 import { BLOCKS, DIFFICULT, OPAQUE } from '../play/vision';
 import { roofRgb, ROOF_MATERIAL_RGB } from './protocol';
-import { domeSpots, frame, isConvex, ridgeEnds, roofParts, signedArea, straighten } from './roofGeom';
+import { domeSpots, frame, isConvex, ridgeEnds, roofParts, roundOutline as roundEaves, signedArea, straighten } from './roofGeom';
 
 export const SQ = 128;
 export const HS = SQ + 2;
@@ -1277,18 +1277,10 @@ function domeRoof(g: MeshBuilder, pts: number[], tint: number) {
   for (const [x, y, r] of domeSpots(pts, FT)) dome(g, x, y, r / 1.12, tint);
 }
 
-/** A small round home's outline (`ROUND`): an ellipse in its footprint (convex, of one piece); else
- * null. */
+/** A round roof's eaves (`ROUND`, of one convex piece: `roundOutline`); else null. */
 function roundOutline(roof: Roof): number[] | null {
   if (roof.shape !== ROUND || roof.cone || roof.battlements || roof.parts.length || !isConvex(roof.pts)) return null;
-  const { ux, uy, lo, hi, halfW, rx, ry } = frame(roof.pts);
-  const [ex, ey, a, b] = [rx + (ux * (lo + hi)) / 2, ry + (uy * (lo + hi)) / 2, (hi - lo) / 2, halfW];
-  const out: number[] = [];
-  for (let k = 0; k < 20; k++) {
-    const [c, s] = [Math.cos((Math.PI * k) / 10), Math.sin((Math.PI * k) / 10)];
-    out.push(ex + ux * a * c - uy * b * s, ey + uy * a * c + ux * b * s);
-  }
-  return out;
+  return roundEaves(roof.pts);
 }
 
 /** A low round roof (a steppe home's): shaded smoothly round from the NW, patterned in rings, the

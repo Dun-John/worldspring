@@ -5,7 +5,7 @@
 // lines crossing and ridges or hips leaving the footprint (all but `split` must be 0, `overlap` aside).
 // `list`: the first few of each, as map fractions for `shot.mjs`.
 import { readFileSync } from 'node:fs';
-import { domeSpots, frame, hipLines, roofParts, signedArea } from '../app/src/gen/roofGeom.ts';
+import { domeSpots, frame, hipLines, isConvex, roofParts, roundOutline, signedArea } from '../app/src/gen/roofGeom.ts';
 
 const [file, list] = process.argv.slice(2);
 const towns = JSON.parse(readFileSync(file, 'utf8'));
@@ -20,6 +20,32 @@ const note = (k, t, b, extra = '') => {
     const [x, y] = b.poly.reduce((a, p) => [a[0] + p[0] / m, a[1] + p[1] / m], [0, 0]);
     console.log(`${k.padEnd(9)} seed ${t.seed} town ${t.si}${t.ain ? ' (Ain Keshir)' : ''} b ${b.id} fx ${(x / t.w).toFixed(6)} fy ${(y / t.h).toFixed(6)} ${extra}`);
   }
+};
+// Round roofs (shape 5) per culture: how many, how many on a footprint not round (under 12 corners),
+// how many leave more than a square foot of their footprint uncovered.
+const round = {};
+// (Convex `a` clipped to convex `b`, both px.)
+const clip = (a, b) => {
+  let out = a;
+  const m = b.length / 2;
+  const s = Math.sign(signedArea(b));
+  for (let i = 0; i < m && out.length >= 6; i++) {
+    const [ax, ay, bx, by] = [b[i * 2], b[i * 2 + 1], b[((i + 1) % m) * 2], b[((i + 1) % m) * 2 + 1]];
+    const side = (x, y) => s * ((bx - ax) * (y - ay) - (by - ay) * (x - ax));
+    const next = [];
+    const k = out.length / 2;
+    for (let j = 0; j < k; j++) {
+      const [px, py, qx, qy] = [out[j * 2], out[j * 2 + 1], out[((j + 1) % k) * 2], out[((j + 1) % k) * 2 + 1]];
+      const [sp, sq] = [side(px, py), side(qx, qy)];
+      if (sp >= 0) next.push(px, py);
+      if (sp >= 0 !== sq >= 0) {
+        const t = sp / (sp - sq);
+        next.push(px + (qx - px) * t, py + (qy - py) * t);
+      }
+    }
+    out = next;
+  }
+  return out;
 };
 // (As the payload has it: chunk-local squares in f32, then px.)
 const toPx = (poly) => {
@@ -90,6 +116,15 @@ for (const t of towns) {
       if (!ok) { n.mismatch++; note('mismatch', t, b, JSON.stringify(tr.map((d) => d.map((v) => +(v / FT).toFixed(1))))); }
       return;
     }
+    if (b.shape === 5 && !b.cone && isConvex(pts)) {
+      const r = (round[t.culture] ??= { round: 0, notRound: 0, uncovered: 0 });
+      r.round++;
+      if (pts.length / 2 < 12) r.notRound++;
+      const eaves = roundOutline(pts);
+      const lost = (Math.abs(signedArea(pts)) - Math.abs(signedArea(clip(pts, eaves)))) / (FT * FT);
+      if (lost > 1) { r.uncovered++; note('uncovered', t, b, `${lost.toFixed(1)} sq ft`); }
+      return;
+    }
     if (b.cone || b.shape === 4 || b.shape === 2) return;
     n.hipped++;
     const parts = roofParts(pts);
@@ -110,3 +145,4 @@ for (const t of towns) {
   });
 }
 console.log(Object.entries(n).map(([k, v]) => `${k} ${v}`).join(', '));
+for (const [c, r] of Object.entries(round)) console.log(`round roofs, culture ${c}: ${r.round}, footprint not round ${r.notRound}, footprint uncovered ${r.uncovered}`);

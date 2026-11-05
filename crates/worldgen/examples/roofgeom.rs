@@ -3,6 +3,8 @@
 //! its roof terrace keeps (`interior::terrace`), as JSON for `scripts/roofgeom.mjs`, which draws them
 //! with the app's roof maths and counts the faults. `-- find <name>`: where a settlement of the
 //! default world is (map fractions). `-- all`: the 2 biggest towns of every other culture instead.
+//! `-- round`: round roofs (steppe homes): the 4 biggest settlements of every culture and the 8
+//! smallest steppe ones (villages).
 //! `cargo run --profile fast -p worldgen --example roofgeom > out.json`, then `node scripts/roofgeom.mjs out.json`.
 use worldgen::town::{self, Structure};
 use worldgen::world::WorldFile;
@@ -33,9 +35,21 @@ fn main() {
             return;
         }
         let all = args.iter().any(|a| a == "all");
-        let mut dry: Vec<usize> = (0..t0.settlements.len()).filter(|&i| all || t0.settlements[i].culture % 5 == 3).collect();
+        let round = args.iter().any(|a| a == "round");
+        let mut dry: Vec<usize> = (0..t0.settlements.len()).filter(|&i| all || round || t0.settlements[i].culture % 5 == 3).collect();
         dry.sort_by_key(|&i| (std::cmp::Reverse(t0.settlements[i].population), i));
-        if all {
+        if round {
+            let mut taken = [0; 5];
+            let mut small: Vec<usize> = dry.iter().copied().filter(|&i| t0.settlements[i].culture % 5 == 4).collect();
+            small.reverse();
+            small.truncate(8);
+            dry.retain(|&i| {
+                let c = (t0.settlements[i].culture % 5) as usize;
+                taken[c] += 1;
+                taken[c] <= 4
+            });
+            dry.extend(small.into_iter().filter(|i| !dry.contains(i)).collect::<Vec<_>>());
+        } else if all {
             let mut taken = [0; 5];
             dry.retain(|&i| {
                 let c = (t0.settlements[i].culture % 5) as usize;
@@ -45,7 +59,7 @@ fn main() {
         } else {
             dry.truncate(4);
         }
-        if let Some(a) = ain.filter(|a| seed == 1 && !dry.contains(a)) {
+        if let Some(a) = ain.filter(|a| seed == 1 && !round && !dry.contains(a)) {
             dry.push(a);
         }
         for si in dry {
@@ -58,7 +72,7 @@ fn main() {
                 let poly: Vec<[f64; 2]> = b.poly.iter().map(|p| [p[0], p[1]]).collect();
                 bs.push(serde_json::json!({ "id": b.id, "shape": k.shape as u8, "bat": bat, "cone": b.roof == Some(town::RoofStyle::Cone), "parts": b.parts.len(), "poly": poly, "domes": domes }));
             }
-            out.push(serde_json::json!({ "seed": seed, "si": si, "ain": Some(si) == ain && seed == 1, "w": w, "h": h, "b": bs }));
+            out.push(serde_json::json!({ "seed": seed, "si": si, "culture": t0.settlements[si].culture % 5, "ain": Some(si) == ain && seed == 1, "w": w, "h": h, "b": bs }));
         }
     }
     println!("{}", serde_json::Value::Array(out));

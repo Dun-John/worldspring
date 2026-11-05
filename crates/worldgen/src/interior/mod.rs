@@ -388,6 +388,8 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
         }
         // One storey: a hovel one room with its bed by the hearth, other homes by their size.
         (House, 0) if top && key == Some("hovel") => p("Ground floor", &[("hearth room", 1.0)], None, false),
+        // A home on a round footprint (under a round roof: `town::round_off`): a yurt, one round room.
+        (House, 0) if top && key == Some("yurt") => p("Yurt", &[("yurt", 1.0)], None, false),
         (House, 0) if top => sized("Ground floor", &[("main room", 3.0), ("kitchen", 1.5), ("bedroom", 1.5)], Some("bedroom")),
         (House, 0) => p("Ground floor", &[("main room", 3.0), ("kitchen", 1.5)], Some("bedroom"), false),
         (House, _) => p("Upper floor", &[("bedroom", 2.0), ("bedroom", 1.5)], Some("bedroom"), false),
@@ -783,6 +785,8 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         "bedroom" | "guest room" | "owner's quarters" | "chamber" => &[("bed", Wall(1, 2), 1, 0), ("chest", Wall(1, 1), 1, 0), ("wardrobe", Wall(1, 1), 1, 0)],
         "master bedroom" | "lord's chamber" | "bedchamber" => &[("bed", Wall(2, 2), 1, 0), ("wardrobe", Wall(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("rug", Center(2, 2), 1, 0)],
         // A one-room home's: its bed against a wall by the hearth.
+        // A yurt's: its hearth (a pot on the fire) in the middle, beds and a chest round the wall.
+        "yurt" => &[("bed", Wall(1, 2), 1, 0), ("cauldron", Center(1, 1), 1, 0), ("cot", Wall(1, 2), 1, 14), ("chest", Wall(1, 1), 1, 0), ("barrel", Wall(1, 1), 0, 20)],
         "hearth room" => &[("bed", Wall(1, 2), 1, 0), ("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0)],
         "main room" | "living room" => &[("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("bench", Wall(2, 1), 1, 0)],
         "shop" => &[("counter", Wall(3, 1), 1, 0), ("shelf", Wall(2, 1), 2, 10), ("display", Center(2, 1), 0, 12)],
@@ -910,7 +914,7 @@ pub const ROOM_KINDS: &[&str] = &[
     "scriptorium", "cloister walk", "garth", "arcade", "council chamber", "strongroom", "sample room",
     "masterpiece gallery", "job-board room", "trophy hall", "bunk room", "warded vault", "belfry stair", "belfry",
     "stables", "tack room", "snug", "private dining room", "scullery", "best chamber", "innkeeper's quarters",
-    "inn yard", "yard gallery",
+    "inn yard", "yard gallery", "yurt",
 ];
 
 /// A kind of room in a building, by name.
@@ -1942,10 +1946,11 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         let pieces_top = plan.as_ref().is_some_and(|p| p.pieces && z == p.reaches() && p.kind != hub::Kind::ShellKeep);
         // (A hovel's program by its kind: it has no function's key.)
         let hovel = b.func.is_none() && town::catalog::RESIDENTIAL[b.residential as usize] == "hovel";
+        let yurt = arch == Arch::House && b.parts.is_empty() && round_ish(b);
         let prog = if z == ROOF && roof_terrace.is_some() {
             LevelProgram { name: "Roof terrace", rooms: vec![(TERRACE, 1.0)], filler: None, corridor: false, cells: false, by_size: false }
         } else {
-            program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, if hovel { Some("hovel") } else { key })
+            program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, if yurt { Some("yurt") } else if hovel { Some("hovel") } else { key })
         };
         // (Laid out by zones, if it holds together: every room in one piece and reached.)
         let laid = plan.as_mut().and_then(|p| p.level(z));
@@ -4483,6 +4488,7 @@ fn required(kind: &str, item: &str) -> bool {
             | ("private dining room", "long_table")
             | ("best chamber", "bed")
             | ("bedroom" | "hearth room", "bed")
+            | ("yurt", "cauldron" | "bed")
     )
 }
 
@@ -4655,6 +4661,12 @@ pub(crate) fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4
                         // the wall cuts, but a piece a room must have).
                         for k in (1..cands.len()).rev() {
                             cands.swap(k, rng.below(k as u32 + 1) as usize);
+                        }
+                        // (A yurt's hearth as near its middle as it goes.)
+                        if room.kind == "yurt" && matches!(place, Place::Center(..)) {
+                            let m = mine.iter().fold([0.0, 0.0], |a, &(x, y)| [a[0] + x as f64 / mine.len() as f64, a[1] + y as f64 / mine.len() as f64]);
+                            let d = |c: &(usize, usize, usize, usize)| (c.0 as f64 + 0.5 * c.2 as f64 - 0.5 - m[0]).abs() + (c.1 as f64 + 0.5 * c.3 as f64 - 0.5 - m[1]).abs();
+                            cands.sort_by(|a, b| d(a).total_cmp(&d(b)));
                         }
                         for (x, y, w, h) in cands {
                             if !must && (y..y + h).any(|j| (x..x + w).any(|i| cut(j * nx + i))) {

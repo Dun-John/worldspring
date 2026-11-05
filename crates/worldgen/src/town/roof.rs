@@ -229,9 +229,11 @@ pub fn look(l: &Layout, b: &Building) -> Look {
                 (m, Flat)
             }
         }
-        // Steppe: low hide/felt and thatch, round roofs on small homes.
+        // Steppe: low hide/felt and thatch, round roofs on small homes (on a ring their lot holds:
+        // `round_footprint`).
         _ => {
-            if role == Role::Home && small && (compact || u2 < 0.5) {
+            let ring = || b.poly.len() == ROUND_SIDES || round_footprint(&b.poly).is_some();
+            if role == Role::Home && small && (compact || u2 < 0.5) && ring() {
                 (pick(u0, &[(Hide, 7), (Thatch, 3)]), Round)
             } else {
                 let m = match role {
@@ -246,7 +248,7 @@ pub fn look(l: &Layout, b: &Building) -> Look {
                 };
                 let shape = if temple && compact {
                     Dome
-                } else if role == Role::Sacred && u1 < 0.5 {
+                } else if role == Role::Sacred && u1 < 0.5 && ring() {
                     Round
                 } else {
                     pick(u1, &[(Hip, 6), (Gable, 4)])
@@ -292,6 +294,36 @@ pub fn look(l: &Layout, b: &Building) -> Look {
         None => pick(h(11), &[(0u8, 1), (1, 3), (2, 8), (3, 3), (4, 1)]),
     };
     Look { material, shape, wear: wear.clamp(0.0, 255.0) as u8, smoke, shade }
+}
+
+/// Sides of a round roof's footprint (`round_footprint`).
+pub const ROUND_SIDES: usize = 16;
+
+/// A round roof's footprint (`Shape::Round`: a steppe home's, a shrine's) on its lot: a ring of
+/// `ROUND_SIDES` about the lot's widest middle, half a foot inside its sides, wound as the lot is;
+/// `None` on a lot under about 19 ft across (no round roof there: `look`). The walls, the
+/// interior and the roof all follow it (`super::round_off`).
+pub fn round_footprint(lot: &[P]) -> Option<Vec<P>> {
+    if lot.len() < 3 {
+        return None;
+    }
+    let (c, clear) = widest(lot);
+    let r = clear - 0.5;
+    if r < 9.0 {
+        return None;
+    }
+    let u = super::geom::obb(lot).axis;
+    let mut out: Vec<P> = (0..ROUND_SIDES)
+        .map(|k| {
+            let a = std::f64::consts::TAU * (k as f64 + 0.5) / ROUND_SIDES as f64;
+            let (co, si) = (libm::cos(a), libm::sin(a));
+            [c[0] + r * (co * u[0] - si * u[1]), c[1] + r * (co * u[1] + si * u[0])]
+        })
+        .collect();
+    if super::geom::area(lot) < 0.0 {
+        out.reverse();
+    }
+    Some(out)
 }
 
 /// Where a domed roof's domes stand (world ft): each its middle and its drum's radius, all inside the

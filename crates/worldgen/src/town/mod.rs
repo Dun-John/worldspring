@@ -1788,6 +1788,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         temple::shape_all(&mut l, Some(&generated));
         belfry::raise_all(&mut l, Some(&generated));
     }
+    round_off(&mut l);
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);
@@ -1802,6 +1803,26 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         None => l.number_entrances(),
     }
     l
+}
+
+/// Round roofs on round footprints: each building roofed round as generated (`roof::look`: a steppe
+/// home, a shrine; of one piece, its shape not set by hand) stands on the ring its lot holds
+/// (`roof::round_footprint`), if it is still roofed round there; the rest of its lot is open ground.
+/// Last, once every other building stands, so theirs are as they were.
+pub(crate) fn round_off(l: &mut Layout) {
+    for i in 0..l.buildings.len() {
+        let b = &l.buildings[i];
+        let hand = b.shape.is_some() || b.roof.is_some();
+        if b.structure != Structure::Roofed || hand || !b.parts.is_empty() || b.keep.is_some() || roof::look(l, b).shape != roof::Shape::Round {
+            continue;
+        }
+        let Some(poly) = roof::round_footprint(&b.poly) else { continue };
+        let mut round = b.clone();
+        round.poly = poly;
+        if roof::look(l, &round).shape == roof::Shape::Round {
+            l.buildings[i].poly = round.poly;
+        }
+    }
 }
 
 /// What a settlement is laid out from: its ground (`Site`), where its roads arrive (local

@@ -481,7 +481,13 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     let patch: Vec<u32> = l.buildings.iter().map(|b| b.id).collect();
     for (k, b) in l.buildings.iter_mut().enumerate() {
         let (cx, cy) = cell(centroid(&b.poly));
-        let hit = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (cx + dx, cy + dy))).filter_map(|c| grid.get(&c)).flatten().map(|&g| g as usize).find(|&g| !used[g] && same(&lot(&generated.buildings[g]), &b.poly));
+        let near = |(cx, cy): (i64, i64)| (-1..=1).flat_map(move |dy| (-1..=1).map(move |dx| (cx + dx, cy + dy))).filter_map(|c| grid.get(&c)).flatten().map(|&g| g as usize);
+        let hit = near((cx, cy)).find(|&g| !used[g] && same(&lot(&generated.buildings[g]), &b.poly));
+        // (A lot that stood as generated under a round roof: the ring it was given, `round_off`.)
+        let hit = hit.or_else(|| {
+            let ring = super::roof::round_footprint(&b.poly)?;
+            near(cell(centroid(&ring))).find(|&g| !used[g] && same(&lot(&generated.buildings[g]), &ring))
+        });
         match hit {
             Some(g) => {
                 used[g] = true;
