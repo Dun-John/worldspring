@@ -1425,7 +1425,8 @@ impl<'a> Shell<'a> {
             }
         }
         let neighbours = neighbours_of(l, b);
-        let outline = outline_of(&b.poly, &inside, nx, origin, u, v);
+        // (A yurt's ring is its footprint as built: its lattice stands on it, inside no wider.)
+        let outline = outline_of(&b.poly, &inside, nx, origin, u, v, arch_of(b) == Arch::House && round_ish(b));
         let mut sh = Shell { nx, ny, origin, u, v, inside, outline, whole: Vec::new(), outline_parts: Vec::new(), towers: Vec::new(), tower_doors: Vec::new(), owner: Vec::new(), neighbours, own: Vec::new(), reach: None, coaching: town::palace::is_coaching(l, b) };
         sh.whole = sh.whole_by(WALL_HALF);
         sh.reach = sh.reach_of(l, b);
@@ -1693,7 +1694,8 @@ fn part_outline(pts: &[P], own: &[P], reach: &[usize], nx: usize) -> Option<Vec<
 /// isn't the grid's rectangle: the footprint when it is convex (else none: drawn on the squares),
 /// cut back to within half a square of the squares inside it (an acute corner holds none), wound
 /// anticlockwise in grid axes (clockwise on screen), points the cuts left together merged.
-fn outline_of(poly: &[P], inside: &[bool], nx: usize, origin: P, u: P, v: P) -> Vec<P> {
+/// `exact`: the footprint as it is, not pushed out nor cut (a yurt's ring).
+fn outline_of(poly: &[P], inside: &[bool], nx: usize, origin: P, u: P, v: P, exact: bool) -> Vec<P> {
     if inside.iter().all(|&i| i) || !inside.iter().any(|&i| i) {
         return Vec::new();
     }
@@ -1711,6 +1713,9 @@ fn outline_of(poly: &[P], inside: &[bool], nx: usize, origin: P, u: P, v: P) -> 
     }
     if turns.iter().sum::<f64>() < 0.0 {
         pts.reverse();
+    }
+    if exact {
+        return pts;
     }
     // Each edge pushed out as far as its squares need: every square's middle at least a tenth of
     // a square inside the wall's inner face (squares count as inside up to 1.5 ft past the

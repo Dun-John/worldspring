@@ -419,51 +419,51 @@ function yurtRugs(g: Graphics, ring: { c: Pt; r: number; south: Pt }, door: { a:
 }
 const LINE_W = 0.025;
 
-/** A yurt's wall as a lattice (khana): between the outer wall's ink a band of willow, crossed by its
- * laths. `kept`: the outer wall's pieces as drawn (`drawShapedWalls`), gaps at the door. */
-function khana(g: Graphics, kept: { a: Pt; b: Pt; out: Pt }[]) {
-  const runs: { a: Pt; b: Pt; out: Pt }[][] = [];
-  for (const p of kept) {
-    const last = runs[runs.length - 1];
-    const prev = last?.[last.length - 1];
-    if (prev && Math.hypot(prev.b[0] - p.a[0], prev.b[1] - p.a[1]) < 1e-3) last.push(p);
-    else runs.push([p]);
-  }
-  // (A run going on round past where the pieces began: one run.)
-  if (runs.length > 1) {
-    const [first, last] = [runs[0], runs[runs.length - 1]];
-    const e = last[last.length - 1];
-    if (Math.hypot(e.b[0] - first[0].a[0], e.b[1] - first[0].a[1]) < 1e-3) runs[0] = [...(runs.pop() ?? []), ...first];
-  }
-  for (const run of runs) {
-    // Points every 0.2 square along the run, each with its way out.
-    const pts: { at: Pt; out: Pt }[] = [];
-    let s = 0;
-    let next = 0;
-    for (const p of run) {
-      const l = Math.hypot(p.b[0] - p.a[0], p.b[1] - p.a[1]);
-      while (next <= s + l) {
-        const f = l > 0 ? (next - s) / l : 0;
-        pts.push({ at: [p.a[0] + (p.b[0] - p.a[0]) * f, p.a[1] + (p.b[1] - p.a[1]) * f], out: p.out });
-        next += 0.2;
-      }
-      s += l;
+/** A yurt's wall as a lattice (khana) on a true circle about the ring's middle, the ring's radius
+ * (its footprint's corners): a band of the wall's ink, a band of willow inside it, crossed by its
+ * laths, even all round but where its doors out go through. `doors`: the doors through it as drawn. */
+function khana(g: Graphics, ring: { c: Pt; r: number }, doors: { a: Pt; b: Pt; outer?: Pt }[]) {
+  const [[cx, cy], r] = [ring.c, ring.r];
+  const TAU = Math.PI * 2;
+  // (Each door's gap: its angle about the middle, half as wide as its leaves.)
+  const gaps = doors.map((d) => {
+    const m = d.outer ?? [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2];
+    return { at: Math.atan2(m[1] - cy, m[0] - cx), half: Math.asin(Math.min(0.95, Math.min(Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]), 0.95)) / 2 / r) };
+  });
+  // Runs of the circle between the gaps (from one gap's end round to the next's start).
+  const runs: [number, number][] = [];
+  if (!gaps.length) runs.push([0, TAU]);
+  else {
+    const g2 = gaps.map((q) => [q.at - q.half, q.at + q.half]).sort((x, y) => x[0] - y[0]);
+    for (let k = 0; k < g2.length; k++) {
+      const end = k + 1 < g2.length ? g2[k + 1][0] : g2[0][0] + TAU;
+      if (end - g2[k][1] > 0.05) runs.push([g2[k][1], end]);
     }
-    const e = run[run.length - 1];
-    pts.push({ at: e.b, out: e.out });
-    if (pts.length < 2) continue;
-    // The willow band inside the wall's ink, then the laths crossing it, pinned where they cross.
-    const h = KHANA / 2 - 0.05;
-    for (let k = 0; k + 1 < pts.length; k++) {
-      const [p, q] = [pts[k], pts[k + 1]];
-      g.poly([p.at[0] + p.out[0] * h, p.at[1] + p.out[1] * h, q.at[0] + q.out[0] * h, q.at[1] + q.out[1] * h, q.at[0] - q.out[0] * h, q.at[1] - q.out[1] * h, p.at[0] - p.out[0] * h, p.at[1] - p.out[1] * h]);
+  }
+  const at = (t: number, rr: number): [number, number] => [cx + Math.cos(t) * rr, cy + Math.sin(t) * rr];
+  const h = KHANA / 2 - 0.05;
+  const w = h - 0.03;
+  for (const [t0, t1] of runs) {
+    const closed = t1 - t0 >= TAU - 1e-9;
+    // (Points about 0.2 square apart round the run, evenly.)
+    const n = Math.max(2, Math.ceil(((t1 - t0) * r) / 0.2));
+    const ts = Array.from({ length: n + 1 }, (_, k) => t0 + ((t1 - t0) * k) / n);
+    const arc = (rr: number) => ts.flatMap((t) => at(t, rr));
+    const bandOf = (lo: number, hi: number) => (closed ? null : [...arc(hi), ...ts.slice().reverse().flatMap((t) => at(t, lo))]);
+    // The wall's ink, then the willow inside it.
+    for (const [lo, hi, color] of [
+      [r - KHANA / 2, r + KHANA / 2, INK],
+      [r - h, r + h, WILLOW],
+    ] as const) {
+      const b = bandOf(lo, hi);
+      if (b) g.poly(b).fill(color);
+      else g.poly(arc(hi)).fill(color).poly(arc(lo)).cut();
     }
-    g.fill(WILLOW);
-    const w = h - 0.03;
-    for (let k = 0; k + 1 < pts.length; k++) {
-      const [p, q] = [pts[k], pts[k + 1]];
-      g.moveTo(p.at[0] - p.out[0] * w, p.at[1] - p.out[1] * w).lineTo(q.at[0] + q.out[0] * w, q.at[1] + q.out[1] * w);
-      g.moveTo(p.at[0] + p.out[0] * w, p.at[1] + p.out[1] * w).lineTo(q.at[0] - q.out[0] * w, q.at[1] - q.out[1] * w);
+    // The laths crossing it, pinned where they cross.
+    for (let k = 0; k < n; k++) {
+      const [p0, p1, q0, q1] = [at(ts[k], r - w), at(ts[k], r + w), at(ts[k + 1], r - w), at(ts[k + 1], r + w)];
+      g.moveTo(p0[0], p0[1]).lineTo(q1[0], q1[1]);
+      g.moveTo(p1[0], p1[1]).lineTo(q0[0], q0[1]);
     }
     g.stroke({ width: 0.022, color: 0x5e4028, cap: 'round' });
   }
@@ -475,9 +475,9 @@ function yurtDoor(g: Graphics, d: { a: Pt | number[]; b: Pt | number[] }, open: 
   const c = ring.c;
   const len0 = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]) || 1;
   const u: Pt = [(d.b[0] - d.a[0]) / len0, (d.b[1] - d.a[1]) / len0];
-  // (On the wall's line, whatever side of it the doorway was found on.)
+  // (On the lattice's circle, whatever side of it the doorway was found on.)
   const [ox, oy] = [(d.a[0] + d.b[0]) / 2 - c[0], (d.a[1] + d.b[1]) / 2 - c[1]];
-  const k = (ring.r * Math.cos(Math.PI / 16)) / (Math.hypot(ox, oy) || 1);
+  const k = ring.r / (Math.hypot(ox, oy) || 1);
   const [mx, my] = [c[0] + ox * k, c[1] + oy * k];
   const len = Math.min(len0, 0.95);
   const [ax, ay, bx, by] = [mx - (u[0] * len) / 2, my - (u[1] * len) / 2, mx + (u[0] * len) / 2, my + (u[1] * len) / 2];
@@ -1274,9 +1274,9 @@ export class InteriorLayer {
       // (The players' view: no gap for a secret door they haven't found.)
       const hidden = (k: number) => this.style.player && lv.doors[k].kind === 'secret' && !!this.style.doors && !this.style.doors(locKey(it.id, this.level), k).found && !this.style.doors(locKey(it.id, this.level), k).open;
       const gapped = drawn.map((d, k) => (hidden(k) ? { ...d, inner: undefined, outer: undefined, threshold: undefined } : d));
-      // (A yurt's lattice and felt thinner than a built wall.)
-      const kept = drawShapedWalls(g, sp, lv, gapped, panes, lv.roof ? 0.45 : 0.28, ring ? KHANA : 0.45, INK);
-      if (ring) khana(g, kept);
+      // (A yurt's lattice and its ink on a circle: `khana`.)
+      const kept = drawShapedWalls(g, sp, lv, gapped, panes, lv.roof ? 0.45 : 0.28, ring ? 0 : 0.45, INK);
+      if (ring) khana(g, ring, gapped.filter((d) => d.out && d.outer));
       // (A parapet where the outer wall stands round an open top: a roof's walk, battlements, a
       // wing's or forebuilding's platform; not round a storey, a tower's room under its cone.)
       const open = (p: { a: Pt; b: Pt; out: Pt }) => {
@@ -2221,7 +2221,7 @@ export class InteriorLayer {
   private ringFit(f: InteriorItem): Fit | undefined {
     if (this.underground || !IN_RING.has(f.kind)) return undefined;
     const ring = yurtRing(this.interior, this.level);
-    return ring ? { c: ring.c, r: ring.r - WALL_HALF } : undefined;
+    return ring ? { c: ring.c, r: ring.r - KHANA / 2 } : undefined;
   }
 
   private drawItem(g: Graphics, f: InteriorItem) {
