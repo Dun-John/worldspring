@@ -1079,13 +1079,13 @@ function ridgeLine(g: MeshBuilder, ax: number, ay: number, bx: number, by: numbe
     if (l < 1e-6) return;
     const [nx, ny] = [(-(by - ay) / l) * (w / 2), ((bx - ax) / l) * (w / 2)];
     g.line(ax, ay, bx, by, w, shadeHex(tint, f), 1, hip ? 0 : w / 3);
-    for (const k of [1, -1]) g.line(ax + nx * k, ay + ny * k, bx + nx * k, by + ny * k, 1.2, shadeHex(tint, 0.5), edge, hip ? 0 : w / 3);
+    for (const k of [1, -1]) g.line(ax + nx * k, ay + ny * k, bx + nx * k, by + ny * k, 2.2, shadeHex(tint, 0.5), edge, hip ? 0 : w / 3);
   };
-  if (m === 0) band((hip ? 0.45 : 0.95) * FT, 0.96, hip ? 0.45 : 0.85);
-  else if (m === 2 || m === 7) band((hip ? 0.35 : 0.5) * FT, 0.9, 0.8);
-  else if (m === 5 || m === 6) band(0.28 * FT, 1.16, 0.7);
+  if (m === 0) band((hip ? 0.6 : 1.3) * FT, 0.96, hip ? 0.45 : 0.85);
+  else if (m === 2 || m === 7) band((hip ? 0.35 : 0.5) * FT, 0.9, 1);
+  else if (m === 5 || m === 6) band(0.28 * FT, 1.16, 0.9);
   else if (m === 4) g.line(ax, ay, bx, by, 2, shadeHex(tint, 0.62), 0.55);
-  else g.line(ax, ay, bx, by, 1.6, shadeHex(tint, 0.5), 0.8);
+  else g.line(ax, ay, bx, by, 2.6, shadeHex(tint, 0.5), 1);
 }
 
 /** A hip roof on a convex footprint: a face up from each eave to the ridge (shaded by how it faces the
