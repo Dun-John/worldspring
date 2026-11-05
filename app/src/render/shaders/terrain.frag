@@ -94,35 +94,63 @@ float segment(vec2 p, vec2 a, vec2 b) {
     return length(pa - ba * h);
 }
 
-// Map symbol at pattern coordinate p (cells). Returns (fill darkening, ink coverage).
-vec2 symbol(vec2 p, int kind, float aa) {
+// Map symbol at pattern coordinate p (cells). Returns (fill, ink, tone, ground shadow):
+// fill and ink are coverage; tone (dark > 0, lit < 0) and ground shadow come premultiplied by coverage.
+vec4 symbol(vec2 p, int kind, float aa) {
     vec2 c = mod(floor(p), 256.0);
     vec2 f = fract(p);
     vec2 h = hash22(c);
     vec2 o = 0.5 + (h - 0.5) * 0.45;
     vec2 d = f - o;
     if (kind == 1 || kind == 3) {
-        // A lobed tree clump: 3-5 circles on a slightly squashed ring (each wider than the ring, so
-        // the middle is covered), inked outline, SE side shaded away from the NW light, trunk tick.
-        // Stays inside its cell: ring radius R, crown reach 2.35 R, trunk tk below.
+        // Tree clumps: per cell 1, 2 or (rarely) 3 lobed crowns, each kept inside its own part of the
+        // cell (the nearest of m points), so no neighbour search. A crown is 3-5 circles on a slightly
+        // squashed ring (each wider than the ring, so the middle is covered): inked outline, a dark
+        // crescent on the SE side away from the NW light, a lit spot on the NW lobes, a ground shadow
+        // to the SE and, at close zoom, a trunk on some. Crown reach is 2.45 R (dense 2.3 R) from its point.
         bool dense = kind == 3;
-        if (h.x > (dense ? 0.95 : 0.72)) return vec2(0.0);
+        // Groves and clearings: value noise per cell (period 32 = 256 / 8, so it tiles with the cells).
+        float grove = smoothstep(0.3, 0.62, pnoise((c + 0.5) * 0.125, 32.0));
+        if (h.x > (dense ? 0.84 + 0.14 * grove : 0.1 + 0.82 * grove)) return vec4(0.0);
         float h3 = hash21(c + 31.7);
         vec2 g = hash22(c + 3.7);
-        float R = dense ? 0.165 + 0.02 * h.y : 0.11 + 0.05 * h.y;
-        float tk = dense ? 0.05 : 0.07;
-        float room = max(0.0, 0.47 - 2.35 * R - tk * 0.5);
-        vec2 q = f - (vec2(0.5, 0.5 - tk * 0.5) + (g - 0.5) * 2.0 * room);
-        int n = dense ? 4 + int(h3 * 1.999) : 3 + int(h3 * 2.999);
+        int m = h.y < (dense ? 0.8 : 0.68) ? 1 : h.y < (dense ? 0.97 : 0.93) ? 2 : 3;
+        vec2 ctr = vec2(0.5);
+        float sub = 0.0;
+        if (m > 1) {
+            vec2 cs = m == 2 ? vec2(-1.0, 0.0) : vec2(-0.5, 0.8660);
+            vec2 v = normalize(g - 0.5 + 1e-4) * (m == 2 ? 0.25 : 0.27);
+            float best = 1e3;
+            for (int k = 0; k < 3; k++) {
+                if (k < m) {
+                    vec2 e = f - 0.5 - v;
+                    float dd = dot(e, e);
+                    if (dd < best) { best = dd; ctr = 0.5 + v; sub = float(k + 1); }
+                    v = vec2(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x);
+                }
+            }
+        }
+        vec2 k2 = hash22(c + sub * 4.13 + 0.71);
+        float reach;
+        if (m == 1) {
+            reach = dense ? 0.44 + 0.03 * k2.x : 0.34 * (0.7 + 0.6 * k2.x);
+            ctr += (g - 0.5) * 2.0 * max(0.0, 0.48 - reach);
+        } else {
+            reach = (m == 2 ? 0.24 : 0.22) * (0.82 + 0.18 * k2.x);
+        }
+        // Dense crowns nearly fill the cell (fake overlap); they get no trunk, so need less room.
+        float R = reach / (dense ? 2.3 : 2.45);
+        vec2 q = f - ctr + vec2(0.0, 0.1 * R);
+        int n = dense ? 4 + int(h3 * 1.999) : 3 + int(fract(h3 + k2.y * 3.7) * 2.999);
         vec2 cs = n == 3 ? vec2(-0.5, 0.8660) : n == 4 ? vec2(0.0, 1.0) : vec2(0.3090, 0.9511);
-        float a0 = g.x * 6.2831;
+        float a0 = k2.y * 6.2831;
         vec2 v = vec2(cos(a0), sin(a0)) * R;
         float sd = 1e3;
         vec2 dw = vec2(0.0);
         float rw = R;
         for (int k = 0; k < 5; k++) {
             if (k < n) {
-                float rk = R * (1.05 + 0.3 * fract(h3 * 7.31 * float(k + 1) + g.y));
+                float rk = R * (1.05 + 0.3 * fract(h3 * 7.31 * float(k + 1) + k2.x));
                 vec2 dk = q - v * vec2(1.0, 0.85);
                 float e = length(dk) - rk;
                 if (e < sd) { sd = e; dw = dk; rw = rk; }
@@ -130,14 +158,18 @@ vec2 symbol(vec2 p, int kind, float aa) {
             }
         }
         float fill = 1.0 - smoothstep(-aa, 0.0, sd);
-        // Shade: inside the lobe but outside a copy of it shifted towards the NW light.
-        float shade = smoothstep(rw - aa, rw + aa, length(dw + vec2(R * 0.7)));
-        float ink = 1.0 - smoothstep(0.0, aa * 1.2, abs(sd));
-        float trunk = (1.0 - smoothstep(0.0, aa, segment(q, vec2(0.0, R), vec2(0.0, 2.2 * R + tk)))) * (1.0 - fill);
-        return vec2(fill * (1.0 + 0.9 * shade), max(ink, trunk));
+        // Crescent: inside the lobe but outside a copy of it shifted towards the NW light.
+        float shade = smoothstep(rw - aa, rw + aa, length(dw + vec2(rw * 0.6)));
+        float lit = (1.0 - smoothstep(rw * 0.45 - aa, rw * 0.45 + aa, length(dw + vec2(rw * 0.4)))) * step(dot(q - dw, vec2(1.0)), 0.0);
+        float tone = (dense ? 0.35 : 0.0) + shade - 0.7 * lit * (1.0 - shade);
+        float ink = 1.0 - smoothstep(0.0, aa * 1.6, abs(sd));
+        float tw = (dense ? 0.0 : 1.0) * step(fract(h3 * 5.1 + k2.y), 0.55) * (1.0 - smoothstep(40.0, 120.0, uFtPerPx));
+        float trunk = tw * (1.0 - smoothstep(0.0, aa, segment(q, vec2(0.0, R), vec2(0.0, 2.5 * R)))) * (1.0 - fill);
+        float ground = 1.0 - smoothstep(-aa, aa, length((q - vec2(0.28, 0.32) * R) * vec2(1.0, 1.25)) - 1.95 * R);
+        return vec4(fill, 1.2 * max(ink, trunk), tone * fill, ground * (1.0 - fill));
     }
     if (kind == 2) {
-        if (h.x > 0.8) return vec2(0.0);
+        if (h.x > 0.8) return vec4(0.0);
         // Isosceles triangle, apex up, like a conifer.
         vec2 q = vec2(abs(d.x), d.y + 0.05);
         float w = 0.22, top = -0.30, bot = 0.22;
@@ -147,33 +179,33 @@ vec2 symbol(vec2 p, int kind, float aa) {
         float fill = inside * (1.0 - smoothstep(-aa, 0.0, edge));
         float ink = max(inside * (1.0 - smoothstep(0.0, aa * 1.2, abs(edge))), (1.0 - smoothstep(0.0, aa, abs(q.y - bot))) * step(q.x, w));
         float trunk = 1.0 - smoothstep(0.0, aa, segment(d, vec2(0.0, bot - 0.05), vec2(0.0, bot + 0.1)));
-        return vec2(fill, max(ink, trunk));
+        return vec4(fill, max(ink, trunk), 0.0, 0.0);
     }
     if (kind == 4) {
-        if (h.x > 0.6) return vec2(0.0);
+        if (h.x > 0.6) return vec4(0.0);
         float l = segment(f, vec2(0.25, o.y), vec2(0.75, o.y));
         l = min(l, segment(f, vec2(0.35, o.y + 0.16), vec2(0.65, o.y + 0.16)));
-        return vec2(0.0, 1.0 - smoothstep(0.0, aa, l));
+        return vec4(0.0, 1.0 - smoothstep(0.0, aa, l), 0.0, 0.0);
     }
     if (kind == 5 || kind == 6) {
         float p0 = kind == 5 ? 0.35 : 0.12;
-        if (h.x > p0) return vec2(0.0);
+        if (h.x > p0) return vec4(0.0);
         float r = kind == 5 ? 0.06 : 0.09;
-        return vec2(0.0, 1.0 - smoothstep(r - aa, r, length(d)));
+        return vec4(0.0, 1.0 - smoothstep(r - aa, r, length(d)), 0.0, 0.0);
     }
     if (kind == 7) {
-        if (h.x > 0.06) return vec2(0.0);
+        if (h.x > 0.06) return vec4(0.0);
         float l = min(segment(d, vec2(-0.1, 0.08), vec2(-0.04, -0.08)), segment(d, vec2(0.0, 0.08), vec2(0.0, -0.1)));
         l = min(l, segment(d, vec2(0.1, 0.08), vec2(0.04, -0.08)));
-        return vec2(0.0, 1.0 - smoothstep(0.0, aa, l));
+        return vec4(0.0, 1.0 - smoothstep(0.0, aa, l), 0.0, 0.0);
     }
     if (kind == 8) {
-        if (h.x > 0.45) return vec2(0.0);
+        if (h.x > 0.45) return vec4(0.0);
         float a = h.y * 6.2831;
         vec2 dir = vec2(cos(a), sin(a)) * 0.12;
-        return vec2(0.0, 1.0 - smoothstep(0.0, aa, segment(d, -dir, dir)));
+        return vec4(0.0, 1.0 - smoothstep(0.0, aa, segment(d, -dir, dir)), 0.0, 0.0);
     }
-    return vec2(0.0);
+    return vec4(0.0);
 }
 
 void main() {
@@ -221,16 +253,36 @@ void main() {
         vec2 p1 = uPat1.xy + vLocal * uPat1.z;
         float aa0 = max(fwidth(p0.x), 1e-4);
         float aa1 = max(fwidth(p1.x), 1e-4);
+        // Symbol lattices turned ~20 deg so rows don't line up with the screen. The matrix entries are
+        // multiples of 1/256, so a 256-cell shift of the origin stays a whole-cell shift (no tile seams).
+        mat2 turn = mat2(0.9375, -0.34375, 0.34375, 0.9375);
+        vec2 r0 = turn * p0;
+        vec2 r1 = turn * p1;
+        vec2 c0 = mod(floor(r0), 256.0);
+        vec2 c1 = mod(floor(r1), 256.0);
         // Ecotones: only strong blends scatter the neighbouring biome's symbols.
         float mixin = max(0.0, blend - 0.55) * 0.9;
-        // Each octave is only evaluated when the crossfade needs it (uniform branch).
-        vec2 s0 = vec2(0.0);
-        vec2 s1 = vec2(0.0);
-        if (uPatMix < 0.98) s0 = symbol(p0, SYMBOL[hash21(mod(floor(p0), 256.0) + 7.0) < mixin ? b2 : b1], aa0);
-        if (uPatMix > 0.02) s1 = symbol(p1, SYMBOL[hash21(mod(floor(p1), 256.0) + 7.0) < mixin ? b2 : b1], aa1);
-        vec2 s = mix(s0, s1, uPatMix) * uPatAlpha;
-        col = mix(col, col * 0.80, s.x);
-        col = mix(col, INK, s.y * 0.75);
+        // Each octave is only evaluated when the crossfade needs it (uniform branch). The crossfade
+        // drops whole symbols cell by cell instead of fading them, so neither octave shows as ghosts;
+        // the finer octave is drawn over the coarser one.
+        vec4 s0 = vec4(0.0);
+        vec4 s1 = vec4(0.0);
+        if (uPatMix < 0.98) {
+            s0 = symbol(r0, SYMBOL[hash21(c0 + 7.0) < mixin ? b2 : b1], aa0);
+            s0 *= clamp(((1.0 - uPatMix) * 1.1 - 0.05 - hash21(c0 + 13.1)) * 20.0, 0.0, 1.0);
+        }
+        if (uPatMix > 0.02) {
+            s1 = symbol(r1, SYMBOL[hash21(c1 + 7.0) < mixin ? b2 : b1], aa1);
+            s1 *= clamp((uPatMix * 1.1 - 0.05 - hash21(c1 + 13.1)) * 20.0, 0.0, 1.0);
+        }
+        vec4 s = (s0 + s1 * (1.0 - max(s0.x, s0.y))) * uPatAlpha;
+        col *= 1.0 - 0.16 * s.w;
+        // Crown fill: a little darker and more saturated than the ground, then shaded.
+        vec3 crown = col * 0.78;
+        crown = mix(vec3(dot(crown, vec3(0.3, 0.59, 0.11))), crown, 1.3);
+        col = mix(col, crown, s.x);
+        col *= 1.0 - 0.25 * s.z;
+        col = mix(col, INK, min(s.y * 0.75, 0.9));
 
         // Hachures: fine strokes down steep slopes (strokes follow the fall line).
         float steep = smoothstep(0.35, 1.2, slope * uExag);
