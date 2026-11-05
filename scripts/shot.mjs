@@ -51,9 +51,9 @@ function send(method, params = {}) {
 const evaluate = async (expression) =>
   (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }))?.result?.value;
 
+let port;
 try {
   // Chrome writes the port it took to DevToolsActivePort in its profile.
-  let port;
   for (let i = 0; i < 60 && !port; i++) {
     try {
       port = Number(readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]) || undefined;
@@ -117,6 +117,19 @@ try {
   }
   ws.close();
 } finally {
+  // Ask Chrome itself to quit first: killing the spawned process doesn't reach a Windows Chrome started from WSL.
+  if (port) {
+    try {
+      const { webSocketDebuggerUrl } = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+      const browser = new WebSocket(webSocketDebuggerUrl);
+      await new Promise((resolve, reject) => {
+        browser.addEventListener('open', resolve, { once: true });
+        browser.addEventListener('error', reject, { once: true });
+      });
+      browser.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+      await sleep(500);
+    } catch {}
+  }
   chrome.kill();
   await sleep(800);
   try {
