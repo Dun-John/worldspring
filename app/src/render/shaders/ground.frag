@@ -96,32 +96,35 @@ vec2 roadAt(vec2 q) {
     return vec2(r.x, r.y / max(r.x, 1e-3));
 }
 
-// One cobblestone drawn: e how near its rim (0 its middle, 1 the joint), r the way from its middle
-// (any length), hs its hash, joint the ink of the joint round it. Three close matte tones: a light
-// rim on the NW side, a darker one on the SE, the stone's own between.
-vec3 stoneLook(vec3 col, float e, vec2 r, float hs, float joint) {
+// One cobblestone drawn as a low dome: v its surface's tilt (the way out from its middle, length 0
+// there to about 1 at its rim), hs its hash, joint the ink of the joint round it. Matte: lit on the
+// NW side of the dome, shaded on the SE, a little darker all round its rim.
+vec3 stoneLook(vec3 col, vec2 v, float hs, float joint) {
     vec3 st = col * (0.9 + 0.14 * hs);
-    float side = dot(r, vec2(-0.7071)) * inversesqrt(dot(r, r) + 1e-6);
-    float rim = smoothstep(0.5, 0.85, e);
-    st *= 1.0 + rim * (0.16 * smoothstep(0.15, 0.6, side) - 0.3 * smoothstep(0.0, 0.6, -side));
+    float e2 = min(dot(v, v), 1.0);
+    float side = dot(v, vec2(-0.7071));
+    st *= (1.0 - 0.07 * e2) * (1.0 + 0.16 * smoothstep(0.1, 0.75, side) - 0.28 * smoothstep(0.05, 0.8, -side));
     return mix(st, INK * 0.8 + col * 0.15, joint * 0.8);
 }
 
-// Cobbles (surface 14). Streets: round and oval stones of varied size, each the nearest of a jittered
-// lattice's points (2 x 2 taps, 2.5 a square) in its own stretched metric. Plazas and market squares
-// (fan): segmental arcs ("Bogenpflaster"), fans 2 squares across laid in a scale pattern, rings of
-// stones a quarter square wide. Both lattices' periods divide the noise offset's 512 squares, so
-// chunks meet seamlessly. Below about 3 px a stone the detail fades to the stones' mean.
+// Cobbles (surface 14). Streets: round and oval pebbles of varied size, about 3 a square, each an
+// ellipse of its own radius, stretch and turn round a point of a jittered lattice (2 x 2 taps); the
+// joints are the gaps between the ellipses (wider where three meet). Plazas and market squares (fan):
+// segmental arcs ("Bogenpflaster"), fans 3.2 squares across laid in a scale pattern, rows of setts a
+// third of a square, short radial joints between the setts of a row. Both lattices' periods divide
+// the noise offset's 512 squares, so chunks meet seamlessly. Below a few px a stone the detail fades
+// to the stones' mean (the fans sooner).
 vec3 cobbles(vec3 col, vec2 w, bool fan) {
     vec3 flat_ = col * 0.85;
-    float px = (fan ? 0.25 : 0.4) * uPxPerSq;
-    float show = smoothstep(3.0, 5.0, px);
+    float px = (fan ? 0.32 : 0.3333) * uPxPerSq;
+    float show = fan ? smoothstep(4.0, 6.5, px) : smoothstep(3.0, 5.0, px);
     if (show <= 0.0) return flat_;
+    float jw = max(0.5, 0.05 * px);
     vec3 stone;
     if (fan) {
         // Fans' middles in rows half a fan apart, every other row offset by half; the point is in
         // the nearest fan of the row below it if that reaches it, else of its own row.
-        vec2 p = w * 0.5;
+        vec2 p = w * 0.3125;
         float row = floor(p.y * 2.0) + 1.0;
         float off = 0.5 * mod(row, 2.0);
         vec2 c = vec2(floor(p.x - off + 0.5) + off, row * 0.5);
@@ -136,53 +139,57 @@ vec3 cobbles(vec3 col, vec2 w, bool fan) {
         vec2 o = p - c - vec2(0.0, 0.5);
         float len = length(o) + 1e-5;
         vec2 n = o / len;
-        float rr = len * 8.0;
+        float rr = len * 10.0;
         float k = floor(rr);
         float fr = rr - k;
-        float hf = hash21(mod(c * 2.0, 512.0));
-        // Along the arc, in stones a little longer than a ring is wide, offset ring by ring.
-        float t = atan(o.x, -o.y) * (k + 0.5) / 1.15 + fract(hf * 7.0 + k * 0.37) * 2.0;
+        float hf = hash21(mod(c * 2.0, 320.0));
+        // Along the arc, in setts a little longer than a row is wide, offset row by row.
+        float t = atan(o.x, -o.y) * (k + 0.5) / 1.2 + fract(hf * 7.0 + k * 0.37) * 2.0;
         float ft = fract(t);
         vec2 g = abs(vec2(fr, ft) - 0.5) * 2.0;
         g *= g;
         float e = sqrt(sqrt(dot(g, g)));
-        // Joints about a tenth of a stone, at least a pixel; a bolder one along the fan's round edge.
-        float jw = max(0.5, 0.05 * px);
-        float gap = min((1.0 - e) * 0.5, (0.5 - distance(p, c)) * 8.0 / 1.6);
+        // A bolder joint along the fan's round edge.
+        float gap = min((1.0 - e) * 0.5, (0.5 - distance(p, c)) * 10.0 / 1.6);
         float joint = 1.0 - smoothstep(jw - 0.5, jw + 0.5, gap * px);
-        vec2 r = n * (fr - 0.5) + vec2(-n.y, n.x) * (ft - 0.5);
-        stone = stoneLook(col, e, r, hash21(vec2(floor(t) + 31.0 * k, hf * 97.0)), joint);
+        vec2 v = n * (fr - 0.5) * 1.6 + vec2(-n.y, n.x) * (ft - 0.5) * 1.6;
+        stone = stoneLook(col, v, hash21(vec2(floor(t) + 31.0 * k, hf * 97.0)), joint);
     } else {
-        vec2 p = w * 2.5;
+        vec2 p = w * 3.0;
         vec2 b = floor(p - 0.5);
-        float d1 = 9.0;
-        float d2 = 9.0;
-        vec2 r1 = vec2(0.0);
+        float s1 = -9.0;
+        float s2 = -9.0;
+        vec2 v1 = vec2(0.0);
         float h1 = 0.0;
         for (int k = 0; k < 4; k++) {
             vec2 c = b + vec2(float(k & 1), float(k >> 1));
-            float h = hash21(mod(c, 1280.0));
-            vec2 o = p - (c + 0.5 + (vec2(h, fract(h * 37.1)) - 0.5) * 0.5);
-            // Its own turn, stretch (oval up to 1.45 : 1) and size.
+            float h = hash21(mod(c, 1536.0));
+            vec2 o = p - (c + 0.5 + (vec2(h, fract(h * 37.1)) - 0.5) * 0.4);
+            // Its own turn, stretch (oval up to 1.4 : 1) and radius (0.34 to 0.6 a cell).
             float a = h * 41.0;
             vec2 ax = vec2(cos(a), sin(a));
-            vec2 m = vec2(dot(o, ax) / (1.0 + 0.45 * fract(h * 7.3)), dot(o, vec2(-ax.y, ax.x)));
-            float d = length(m) / (0.85 + 0.3 * fract(h * 3.1));
-            if (d < d1) {
-                d2 = d1;
-                d1 = d;
-                r1 = o;
+            float isx = 1.0 / (1.0 + 0.4 * fract(h * 7.3));
+            vec2 m = vec2(dot(o, ax) * isx, dot(o, vec2(-ax.y, ax.x)));
+            float rad = 0.34 + 0.26 * fract(h * 3.1);
+            // How far inside its rim (negative outside it).
+            float s = rad - length(m);
+            if (s > s1) {
+                s2 = s1;
+                s1 = s;
+                // The dome's tilt: the ellipse's own gradient, its length the way to the rim.
+                v1 = (ax * (m.x * isx) + vec2(-ax.y, ax.x) * m.y) / rad;
                 h1 = h;
             } else {
-                d2 = min(d2, d);
+                s2 = max(s2, s);
             }
         }
-        // Inside its round (a little over half a cell) and off the joint with its neighbour.
-        float gap = min(0.6 - d1, 0.5 * (d2 - d1));
-        float jw = max(0.5, 0.05 * px);
+        // Inside its own ellipse and off the joint with an overlapping neighbour, the corner between
+        // the two rounded off.
+        float a2 = 0.5 * (s1 - s2);
+        float hk = max(0.12 - abs(s1 - a2), 0.0) / 0.12;
+        float gap = min(s1, a2) - hk * hk * 0.03;
         float joint = 1.0 - smoothstep(jw - 0.5, jw + 0.5, gap * px);
-        float e = clamp(1.0 - gap / 0.3, 0.0, 1.0);
-        stone = stoneLook(col, e, r1, fract(h1 * 19.7), joint);
+        stone = stoneLook(col, v1, fract(h1 * 19.7), joint);
     }
     return mix(flat_, stone, show);
 }
