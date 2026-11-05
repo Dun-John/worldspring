@@ -4638,10 +4638,10 @@ function drainLight(g: Graphics, f: InteriorItem, rnd: () => number, run: [numbe
   g.stroke({ width: 0.035, color: 0x2a261c, alpha: 0.2 });
 }
 
-/** An iron grille across a sewer channel where runs meet, seen from above: a rail across the channel from kerb to kerb
- * (`span`: how far the channel reaches either side of `c`, its run's line), fixed in the kerbs at either end, the bar
- * heads standing up along it, a shadow away from the light and the muck caught on its upstream side. `run`: the way
- * the sewage runs here (downstream). */
+/** An iron grille across a sewer channel where runs meet, seen from above: a frame bar fixed in each kerb (`span`:
+ * how far the channel reaches either side of `c`, its run's line), two thin rails between them, 5-7 bars along the
+ * flow lit down one side, a shadow away from the light and the muck caught on its upstream side. `run`: the way the
+ * sewage runs here (downstream). */
 function grille(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, run: [number, number], c: [number, number], span: [number, number]) {
   const [cx, cy] = c;
   const [ux, uy] = run;
@@ -4650,23 +4650,29 @@ function grille(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, r
   const band = (a0: number, a1: number, b0: number, b1: number) => [...at(a0, b0), ...at(a1, b0), ...at(a1, b1), ...at(a0, b1)];
   const [lx, ly] = light;
   const [b0, b1] = [-span[0] - 0.12, span[1] + 0.12];
+  const L = 0.2;
   // Muck against it upstream, in a few flat blobs.
   const blobs = Math.max(2, Math.round((b1 - b0) / 0.4));
   for (let i = 0; i < blobs; i++) {
-    const [mx, my] = at(-0.13 - rnd() * 0.05, b0 + 0.2 + ((b1 - b0 - 0.4) * (i + 0.5)) / blobs + (rnd() - 0.5) * 0.1);
+    const [mx, my] = at(-L - 0.06 - rnd() * 0.05, b0 + 0.2 + ((b1 - b0 - 0.4) * (i + 0.5)) / blobs + (rnd() - 0.5) * 0.1);
     g.poly(patch(mx, my, 0.1, 0.07, rnd, 0.25, 10)).fill({ color: 0x6c7046, alpha: 0.8 });
   }
-  // The shadow, then the rail and its fixings in the kerbs.
-  g.poly(band(-0.06, 0.06, b0, b1).map((v, i) => v - (i % 2 ? ly : lx) * 0.07)).fill({ color: 0x000000, alpha: 0.25 });
-  g.poly(band(-0.06, 0.06, b0, b1)).fill(IRON[1]).stroke({ width: OUT, color: INK, join: 'round' });
-  const lit = ux * lx + uy * ly < 0 ? -0.035 : 0.035;
-  g.moveTo(...at(lit, b0 + 0.04)).lineTo(...at(lit, b1 - 0.04)).stroke({ width: 0.025, color: IRON[2] });
-  for (const b of [b0, b1]) g.poly(band(-0.1, 0.1, b - 0.07, b + 0.07)).fill(IRON[0]).stroke({ width: 0.03, color: INK });
-  // The bar heads, about a fifth of a square apart.
-  const n = Math.max(3, Math.round((b1 - b0 - 0.2) / 0.2));
-  for (let k = 0; k <= n; k++) {
-    const [bx, by] = at(0, b0 + 0.1 + ((b1 - b0 - 0.2) * k) / n);
-    g.circle(bx, by, 0.045).fill(IRON[2]).stroke({ width: 0.02, color: INK });
+  // The shadow, faint, away from the light.
+  g.poly(band(-L, L, b0, b1).map((v, i) => v - (i % 2 ? ly : lx) * 0.07)).fill({ color: 0x000000, alpha: 0.18 });
+  // Two thin rails across, kerb to kerb, under the bars.
+  for (const a of [-L * 0.6, L * 0.6]) g.poly(band(a - 0.025, a + 0.025, b0, b1)).fill(IRON[0]).stroke({ width: LINE, color: INK, join: 'round' });
+  // The bars along the flow, lit on the side toward the light.
+  const n = Math.min(7, Math.max(5, Math.round((b1 - b0) / 0.22)));
+  const side = vx * lx + vy * ly < 0 ? -1 : 1;
+  for (let k = 0; k < n; k++) {
+    const b = b0 + 0.1 + ((b1 - b0 - 0.2) * (k + 0.5)) / n;
+    g.poly(band(-L, L, b - 0.032, b + 0.032)).fill(IRON[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.moveTo(...at(-L + 0.03, b + side * 0.014)).lineTo(...at(L - 0.03, b + side * 0.014)).stroke({ width: 0.018, color: IRON[2] });
+  }
+  // The frame bars at the kerbs, set in the stone.
+  for (const b of [b0, b1]) {
+    g.poly(band(-L - 0.04, L + 0.04, b - 0.06, b + 0.06)).fill(IRON[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.moveTo(...at(-L, b + side * 0.025)).lineTo(...at(L, b + side * 0.025)).stroke({ width: 0.02, color: IRON[2] });
   }
 }
 

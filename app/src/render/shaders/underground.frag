@@ -594,7 +594,7 @@ void main() {
                 float ph = (here.a - 0.5) * 3.14159265;
                 vec2 fd = cos(ph) * vec2(0.958, 0.287) + sin(ph) * vec2(-0.287, 0.958);
                 vec2 fp = vec2(dot(p, fd), dot(p, vec2(-fd.y, fd.x)));
-                float calm = (1.0 - smoothstep(0.6, 1.2, fwidth(here.a) / max(px, 1e-4))) * smoothstep(0.54, 0.6, l);
+                float calm = (1.0 - smoothstep(0.3, 0.7, fwidth(here.a) / max(px, 1e-4))) * smoothstep(0.54, 0.6, l);
                 vec2 sc = vec2(fp.x * 0.45 - uTime * 0.13, fp.y * 4.0);
                 sc.x += 5.0 * hash21(vec2(floor(sc.y), 3.1));
                 vec2 sid = floor(sc);
@@ -604,22 +604,44 @@ void main() {
                 stroke *= step(0.55, hash21(sid + 0.7)) * calm * (1.0 - smoothstep(0.06, 0.12, px));
                 // (Foam in steps of 8, the city's stonework in the low bits: `sewerFoam`.)
                 float stw = mod(cell.b + 0.5, 8.0) - 0.5;
-                float fo = uPad > 0.5 && mat == 3 ? (cell.b - stw) / 248.0 : 0.0;
-                liq = mix(liq, mix(liq * 1.25 + vec3(0.03, 0.04, 0.02), vec3(0.74, 0.74, 0.64), fo), stroke * 0.7);
+                // (Blended between squares, so froth has no square edge: four fetches, in the channel only.)
+                float fo = 0.0;
+                if (uPad > 0.5 && mat == 3 && l > 0.48) {
+                    vec2 fq = q - 0.5;
+                    ivec2 f0 = ivec2(floor(fq));
+                    vec2 fw4 = fract(fq);
+                    ivec2 fm = ivec2(uN) - 1;
+                    vec4 fs = vec4(texelFetch(uCells, clamp(f0, ivec2(0), fm), 0).b, texelFetch(uCells, clamp(f0 + ivec2(1, 0), ivec2(0), fm), 0).b,
+                                   texelFetch(uCells, clamp(f0 + ivec2(0, 1), ivec2(0), fm), 0).b, texelFetch(uCells, clamp(f0 + ivec2(1, 1), ivec2(0), fm), 0).b) * 255.0;
+                    fs = max(fs - mod(fs + 0.5, 8.0) + 0.5, 0.0) / 248.0;
+                    fo = mix(mix(fs.x, fs.y, fw4.x), mix(fs.z, fs.w, fw4.x), fw4.y);
+                }
+                // (No strokes in the froth, where the runs' ways meet and they'd break up.)
+                stroke *= 1.0 - smoothstep(0.1, 0.4, fo);
+                liq = mix(liq, liq * 1.25 + vec3(0.03, 0.04, 0.02), stroke * 0.7);
                 // Scum and debris, drifting more slowly (cells 2 x 0.6 squares).
                 vec2 bc = vec2(fp.x * 0.5 - uTime * 0.06, fp.y * 1.6);
                 vec2 bid = floor(bc);
                 float bh = hash21(bid + 2.3);
                 vec2 bv = (fract(bc) - vec2(0.3 + 0.4 * hash21(bid + 5.1), 0.5)) * vec2(2.0, 0.625);
                 float deb = step(0.94, bh);
-                float br = mix(0.17 + 0.06 * hash21(bid + 8.7), 0.09, deb) * (1.0 + 0.2 * sin(bv.x * 23.0 + bh * 9.0) * sin(bv.y * 19.0 + bh * 5.0));
-                float blob = (1.0 - smoothstep(br - max(px, 0.01), br + max(px, 0.01), length(bv * vec2(1.0, 1.0 + deb)))) * step(0.72, bh) * calm;
+                // (Two soft lobes, smooth-joined; debris a single sliver.)
+                float ba = 6.2832 * hash21(bid + 3.7);
+                vec2 bo = vec2(cos(ba), sin(ba));
+                float br = mix(0.12 + 0.04 * hash21(bid + 8.7), 0.09, deb);
+                vec2 be = bv * vec2(1.0, 1.0 + deb);
+                float bd1 = length(be - bo * 0.05 * (1.0 - deb)) - br;
+                float bd2 = length(be + bo * 0.09) - br * 0.68 + deb;
+                float bk = clamp(0.5 + 0.5 * (bd2 - bd1) / 0.06, 0.0, 1.0);
+                float bd = mix(bd2, bd1, bk) - 0.06 * bk * (1.0 - bk);
+                float bew = max(px, 0.015);
+                float blob = (1.0 - smoothstep(-bew, bew, bd)) * step(0.72, bh) * calm;
                 vec2 bg = bv.x * fd + bv.y * vec2(-fd.y, fd.x);
-                vec3 scum = mix(vec3(0.50, 0.49, 0.30), vec3(0.62, 0.60, 0.38), smoothstep(-0.3, 0.6, -dot(bg, uLight) / br));
+                vec3 scum = mix(vec3(0.44, 0.45, 0.31), vec3(0.55, 0.55, 0.40), smoothstep(-0.3, 0.6, -dot(bg, uLight) / br));
                 scum = mix(scum, vec3(0.30, 0.22, 0.14), deb);
-                liq = mix(liq, scum, blob * 0.9);
+                liq = mix(liq, scum, blob * 0.8);
                 // Foam where runs meet, end or fall out (sewer sections' brick only): soft cream
-                // patches merging along the falling water, a few small bubbles at their edges.
+                // patches merging along the falling water, fading out softly.
                 if (fo > 0.0) {
                     // (Value noise from hashes, drifting downstream, roughened by `wob`; no fetches.)
                     vec2 fc = vec2(fp.x * 2.2 - uTime * 0.3, fp.y * 2.8);
@@ -628,21 +650,13 @@ void main() {
                     ff = ff * ff * (3.0 - 2.0 * ff);
                     float fn = mix(mix(hash21(fi), hash21(fi + vec2(1.0, 0.0)), ff.x), mix(hash21(fi + vec2(0.0, 1.0)), hash21(fi + 1.0), ff.x), ff.y);
                     fn = 0.75 * fn + 0.25 * wob;
-                    float fv = fn + 0.9 * fo - 0.95;
+                    float fv = 1.2 * (fn - 0.5) + 1.1 * fo - 0.55;
                     float fw = 0.06 + 0.5 * px;
-                    float fpat = smoothstep(-fw, fw, fv) * smoothstep(0.52, 0.56, l);
+                    float fpat = smoothstep(-fw, fw, fv) * smoothstep(0.52, 0.56, l) * smoothstep(0.0, 0.2, fo);
                     vec3 cream = liq * 1.05 + vec3(0.16, 0.14, 0.10);
                     // (Lit from the upper left: lighter on the side toward the light.)
                     cream += vec3(0.03) * clamp(-dot(fd, uLight) * fv * 4.0, -1.0, 1.0);
                     liq = mix(liq, cream, fpat * 0.85);
-                    // Bubbles: one in a few cells, jittered, only round the patch edges, near in.
-                    vec2 hc = p * 2.5;
-                    vec2 hid = floor(hc);
-                    vec2 hv = fract(hc) - 0.2 - 0.6 * vec2(hash21(hid + 1.1), hash21(hid + 6.6));
-                    float hr = 0.07 + 0.05 * hash21(hid + 9.2);
-                    float bub = (1.0 - smoothstep(hr - 0.03, hr, length(hv))) * step(0.78, hash21(hid + 4.4));
-                    bub *= (1.0 - smoothstep(0.0, 0.12, abs(fv))) * (1.0 - smoothstep(0.03, 0.06, px)) * smoothstep(0.53, 0.58, l);
-                    liq = mix(liq, cream + vec3(0.04), bub * 0.7);
                 }
                 // Kerb stones along the edge (sewer sections): a lighter dressed course in stones
                 // a square or so long, the lip toward the water shaded, chipped here and there.
