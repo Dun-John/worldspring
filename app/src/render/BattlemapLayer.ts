@@ -177,6 +177,8 @@ export class BattlemapLayer {
     uTime: { value: 0, type: 'f32' },
     uGrid: { value: 1, type: 'f32' },
   });
+  /** The roof patterns' scale (`colormesh.frag`: their detail fades out under ~3 px). */
+  private readonly roofFrame = new UniformGroup({ uPxPerSq: { value: 16, type: 'f32' } });
   stats = { chunks: 0, alpha: 0 };
 
   private readonly chunks = new Map<string, ChunkView>();
@@ -323,7 +325,7 @@ export class BattlemapLayer {
     const n = SQ * SQ;
     const nh = HS * HS;
     // ..., one object, road halo, buildings (one, for the roof shader).
-    const buf = new ArrayBuffer(32 + nh * 8 + n * 4 + 20 + nh + n * 2 + 4 + 4 + 3 * 8);
+    const buf = new ArrayBuffer(32 + nh * 8 + n * 4 + 20 + nh + n * 2 + 4 + 7 + 3 * 8);
     const dv = new DataView(buf);
     dv.setUint32(16, 1, true); // one object
     dv.setUint32(20, 1, true); // mist, to compile the atmosphere shader
@@ -332,10 +334,11 @@ export class BattlemapLayer {
     dv.setFloat32(o + 16, 1, true);
     const r = o + 20 + nh + n * 2;
     dv.setUint32(r, 1, true);
+    // (Its header: corners, floors, roof, tower, material, shape, weathering; a triangle after it.)
     dv.setUint8(r + 4, 3);
-    dv.setFloat32(r + 16, 1, true);
-    dv.setFloat32(r + 24, 1, true);
-    dv.setFloat32(r + 28, 1, true);
+    dv.setFloat32(r + 11 + 8, 1, true);
+    dv.setFloat32(r + 11 + 16, 1, true);
+    dv.setFloat32(r + 11 + 20, 1, true);
     // (All stages at once: nothing is on screen yet.)
     const steps = this.build('warmup', 0, 0, prepareChunk(buf, 0, 0, this.catalog), 0, 0);
     while (!steps.next().done);
@@ -634,6 +637,7 @@ export class BattlemapLayer {
     }
 
     const pxPerSq = SQUARE_FT * cam.ppf;
+    this.roofFrame.uniforms.uPxPerSq = pxPerSq;
     for (const [id, p] of this.previews) {
       const [x, y] = id.split('/').map(Number);
       const [sx, sy] = cam.worldToScreen(x * ts, y * ts);
@@ -826,10 +830,11 @@ export class BattlemapLayer {
         attributes: {
           aPos: { buffer: c.roofMesh.pos, format: 'float32x2' },
           aColor: { buffer: c.roofMesh.color, format: 'float32x4' },
+          aRoof: { buffer: c.roofMesh.roof, format: 'float32x4' },
         },
         indexBuffer: c.roofMesh.index,
       }));
-      roofMesh = new Mesh({ geometry, shader: new Shader({ glProgram: this.colorMeshProgram, resources: {} }) });
+      roofMesh = new Mesh({ geometry, shader: new Shader({ glProgram: this.colorMeshProgram, resources: { roofFrame: this.roofFrame } }) });
     }
     // Daises and a court's gravel walks sit on the ground, under every prop.
     const daisG = new Graphics();

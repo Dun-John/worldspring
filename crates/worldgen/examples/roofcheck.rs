@@ -1,7 +1,9 @@
 //! Roofs QA (`town::roof`): per culture, the share of each roof material and shape over its 4
 //! biggest settlements in each of seeds 1-8 (roofed buildings; battlemented ones counted apart), and
 //! the counts of flat roofs, domes and smoke-darkened ones, with the mean weathering.
-//! `cargo run --profile fast -p worldgen --example roofcheck`
+//! `cargo run --profile fast -p worldgen --example roofcheck` (`-- sample`: per culture, the seed
+//! of its biggest town and, per roof shape and material, where one of them stands as map fractions for a battlemap
+//! view, `fx`/`fy`).
 use worldgen::World;
 use worldgen::pipeline::Executor;
 use worldgen::town::roof::{self, MATERIALS, SHAPES};
@@ -11,6 +13,9 @@ use worldgen::world::WorldFile;
 const CULTURES: [&str; 5] = ["north", "west", "south", "dry", "steppe"];
 
 fn main() {
+    if std::env::args().any(|a| a == "sample") {
+        return sample();
+    }
     let mut mat = [[0u32; MATERIALS.len()]; 5];
     let mut shp = [[0u32; SHAPES.len()]; 5];
     let (mut n, mut bat, mut smoke, mut wear, mut towns) = ([0u32; 5], [0u32; 5], [0u32; 5], [0u64; 5], [0u32; 5]);
@@ -53,5 +58,41 @@ fn main() {
         println!("{:<7} towns {:>2} roofs {:>5} (+{} battlements)  wear {:.0}  smoke {}", CULTURES[c], towns[c], n[c], bat[c], wear[c] as f64 / n[c] as f64, smoke[c]);
         println!("        material: {}", mats.join(", "));
         println!("        shape:    {}  (flat {}, domes {})", shps.join(", "), shp[c][4], shp[c][3]);
+    }
+}
+
+fn sample() {
+    let mut done = [false; 5];
+    for seed in 1..=8 {
+        let ex = Executor::new(World::new(WorldFile { seed, ..Default::default() }).unwrap());
+        let (world, t0) = (&ex.world, &ex.t0);
+        let (w, h) = (world.geom.map_w_ft, world.geom.map_h_ft);
+        let mut by_pop: Vec<usize> = (0..t0.settlements.len()).collect();
+        by_pop.sort_by_key(|&i| (std::cmp::Reverse(t0.settlements[i].population), i));
+        for &si in &by_pop {
+            let c = (t0.settlements[si].culture % 5) as usize;
+            if done[c] {
+                continue;
+            }
+            done[c] = true;
+            let l = town::layout(world, t0, si);
+            let s = &t0.settlements[si];
+            println!("{:<7} seed {} pop {} centre fx {:.6} fy {:.6}", CULTURES[c], seed, s.population, s.x / w, s.y / h);
+            let (mut seen, mut seen_m, mut seen_smoke) = ([false; SHAPES.len()], [false; MATERIALS.len()], false);
+            for b in l.buildings.iter().filter(|b| b.structure == Structure::Roofed && worldgen::interior::battlements(b).is_none()) {
+                let k = roof::look(&l, b);
+                let new_smoke = k.smoke && !seen_smoke;
+                if (seen[k.shape as usize] && seen_m[k.material as usize] && !new_smoke) || b.poly.is_empty() {
+                    continue;
+                }
+                (seen[k.shape as usize], seen_m[k.material as usize], seen_smoke) = (true, true, seen_smoke || k.smoke);
+                let n = b.poly.len() as f64;
+                let (x, y) = (b.poly.iter().map(|p| p[0]).sum::<f64>() / n, b.poly.iter().map(|p| p[1]).sum::<f64>() / n);
+                println!("        {:<6} {:<12} wear {:>3}{} fx {:.6} fy {:.6}", SHAPES[k.shape as usize], MATERIALS[k.material as usize], k.wear, if k.smoke { " smoke" } else { "" }, x / w, y / h);
+            }
+        }
+        if done.iter().all(|&d| d) {
+            break;
+        }
     }
 }

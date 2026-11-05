@@ -50,6 +50,8 @@ export interface Shape {
 export interface ColorMesh {
   pos: Float32Array;
   color: Float32Array;
+  /** Per vertex: the roof pattern's coordinates and code (`MeshBuilder.face`): u × d, v, code, d. */
+  roof: Float32Array;
   index: Uint32Array;
 }
 
@@ -421,19 +423,57 @@ function tacticalFlags(data: Uint8Array, surface: Uint8Array, raised: Uint8Array
 export function chunkTransfer(c: PreparedChunk): Transferable[] {
   const t: Transferable[] = [c.flags.buffer, c.data.buffer, c.hdata.buffer, c.heights.buffer, c.tier.buffer, c.surface.buffer, c.objs.buffer];
   if (c.raised) t.push(c.raised.buffer);
-  if (c.roofMesh) t.push(c.roofMesh.pos.buffer, c.roofMesh.color.buffer, c.roofMesh.index.buffer);
+  if (c.roofMesh) t.push(c.roofMesh.pos.buffer, c.roofMesh.color.buffer, c.roofMesh.roof.buffer, c.roofMesh.index.buffer);
   return t;
 }
 
-/** Triangles with a per-vertex straight-alpha colour. */
+/** Chunk pixels per foot. */
+const FT = PX / 5;
+/** The roof pattern code of soot round a smithy's chimney (`colormesh.frag`; materials are 0-11). */
+const SOOT = 12;
+
+/** Triangles with a per-vertex straight-alpha colour; roof faces carry their material's pattern
+ * (`colormesh.frag`), everything else (lines, outlines, shadows) is plain. */
 class MeshBuilder {
   pos: number[] = [];
   color: number[] = [];
+  roof: number[] = [];
   index: number[] = [];
+  /** The roof drawn now: its material (`ROOF_MATERIALS` id), its pattern code (material + 16 ×
+   * weathering 0-15) and an offset along its courses (ft) so neighbours' tiles don't line up. */
+  mat = 3;
+  code = -1;
+  seed = 0;
 
-  private vert(x: number, y: number, c: number, a: number) {
+  /** A vertex (its index): u (ft) is weighted by d, divided back in the shader, so a face converging on
+   * an apex (d 0 there) has its courses' u run along the rays to it. */
+  vert(x: number, y: number, c: number, a: number, u = 0, v = 0, code = -1, d = 1): number {
     this.pos.push(x, y);
     this.color.push(((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, a);
+    this.roof.push(u * d, v, code, d);
+    return this.pos.length / 2 - 1;
+  }
+
+  /** A convex roof face (a fan from its first corner) in the current pattern; per corner u along the
+   * courses and v up the slope from the eave (ft), and d (see `vert`). */
+  face(pts: number[], uvd: number[], c: number, a = 1, code = this.code) {
+    const v0 = this.pos.length / 2;
+    const m = pts.length / 2;
+    for (let i = 0; i < m; i++) this.vert(pts[i * 2], pts[i * 2 + 1], c, a, uvd[i * 3], uvd[i * 3 + 1], code, uvd[i * 3 + 2]);
+    for (let i = 1; i + 1 < m; i++) this.index.push(v0, v0 + i, v0 + i + 1);
+  }
+
+  /** Any simple polygon in the current pattern, its u and v from `uv` (ft). */
+  patch(pts: number[], uv: (x: number, y: number) => [number, number], c: number, a = 1) {
+    const tri = earcut(pts);
+    if (!tri.length) return;
+    const v0 = this.pos.length / 2;
+    for (let i = 0; i < pts.length; i += 2) this.vert(pts[i], pts[i + 1], c, a, ...uv(pts[i], pts[i + 1]), this.code);
+    for (const t of tri) this.index.push(v0 + t);
+  }
+
+  tri(a: number, b: number, c: number) {
+    this.index.push(a, b, c);
   }
 
   poly(pts: number[], c: number, a = 1) {
@@ -466,17 +506,18 @@ class MeshBuilder {
   }
 
   build(): ColorMesh {
-    return { pos: new Float32Array(this.pos), color: new Float32Array(this.color), index: new Uint32Array(this.index) };
+    return { pos: new Float32Array(this.pos), color: new Float32Array(this.color), roof: new Float32Array(this.roof), index: new Uint32Array(this.index) };
   }
 }
 
-/** Hip roofs: shaded slopes, shingle courses, ridge and hips, an inked eave; drop shadows of
- * every roof (battlemented ones included) first. */
+/** Pitched, domed and flat roofs, each face patterned in its material (`colormesh.frag`), ridges,
+ * hips and an inked eave; drop shadows of every roof (battlemented ones included) first. */
 function roofMesh(roofs: Roof[]): ColorMesh {
   const g = new MeshBuilder();
   for (const roof of roofs) {
     const off = PX * (0.25 + 0.3 * roof.floors);
-    for (const pts of courtRanges(roof) ?? [roof.pts]) {
+    const round = roundOutline(roof);
+    for (const pts of courtRanges(roof) ?? [round ?? roof.pts]) {
       g.poly(
         pts.map((v) => v + off),
         0x000000,
@@ -487,11 +528,15 @@ function roofMesh(roofs: Roof[]): ColorMesh {
   for (const roof of roofs) {
     if (roof.battlements || roof.pts.length < 6) continue;
     const tint = roof.tint >= 0 && roof.tint < ROOF_TINTS.length ? ROOF_TINTS[roof.tint] : (ROOF_MATERIAL_RGB[roof.material] ?? ROOF_TINTS[3]);
-    // A palace round its court: a hipped range along each side, the court open to the sky.
+    g.mat = roof.material < ROOF_MATERIAL_RGB.length ? roof.material : 3;
+    g.code = g.mat + 16 * Math.min(15, roof.wear >> 4);
+    g.seed = (((roof.idx * 2654435761) >>> 0) % 509) * 0.73;
+    const flat = roof.shape === FLAT;
+    // A palace round its court: a hipped (or flat) range along each side, the court open to the sky.
     const ranges = courtRanges(roof);
     if (ranges) {
-      for (const part of ranges) hipRoof(g, part, tint);
-      for (const part of ranges) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
+      for (const part of ranges) (flat ? flatRoof : hipRoof)(g, part, tint);
+      if (!flat) for (const part of ranges) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
       g.outline(roof.pts, 2.5, ROOF_INK);
       g.outline(roof.parts.find((p) => p.kind === COURT)!.pts, 2.5, ROOF_INK);
       const church = roof.parts.find((p) => p.kind === CHURCH);
@@ -502,49 +547,84 @@ function roofMesh(roofs: Roof[]): ColorMesh {
     }
     // (A city's town hall on its arcade: the piers along its front, the roof's eave over them.)
     arcadePiers(g, roof);
-    // A city's town hall's belfry (`town::belfry`): the hall hipped, the tower over its corner
-    // (`belfryTop`).
+    // A city's town hall's belfry (`town::belfry`): the hall hipped (or flat), the tower over its
+    // corner (`belfryTop`).
     const belfry = roof.parts.find((p) => p.kind === SQUARE_TOWER);
     const hall = roof.parts.find((p) => p.kind === BODY);
     if (belfry && hall && belfry.pts.length === 8) {
-      const hp = convexParts(hall.pts);
-      for (const part of hp) hipRoof(g, part, tint);
-      if (hp.length > 1) for (const part of hp) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
+      if (flat) flatRoof(g, hall.pts, tint);
+      else {
+        const hp = convexParts(hall.pts);
+        for (const part of hp) hipRoof(g, part, tint);
+        if (hp.length > 1) for (const part of hp) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
+      }
       g.outline(hall.pts, 2.5, ROOF_INK);
       belfryTop(g, belfry.pts);
       continue;
     }
     // A temple of pieces: the nave's ridge along its body to the apse, the apse a half cone, the
-    // transept hipped across it (a big one's crossing under a squat tower's spire).
+    // transept hipped across it (a big one's crossing under a squat tower's spire, or a dome).
     if (roof.parts.some((p) => p.kind === APSE)) {
       templeRoof(g, roof, tint);
       g.outline(roof.pts, 2.5, ROOF_INK);
       continue;
     }
     // A manor: its main range hipped along it, its cross wing over the family end hipped across it
-    // (a cross gable), drawn over the range's end and inked round.
+    // (a cross gable), drawn over the range's end and inked round (both flat behind parapets in the
+    // dry lands).
     const range = roof.parts.find((p) => p.kind === MAIN_RANGE);
     const wing = roof.parts.find((p) => p.kind === CROSS_WING);
     if (range && wing) {
-      const along = longestDir(range.pts);
-      for (const part of convexParts(range.pts)) hipRoof(g, part, tint);
-      for (const part of convexParts(wing.pts)) hipRoof(g, part, tint, [-along[1], along[0]]);
+      if (flat) {
+        flatRoof(g, range.pts, tint);
+        flatRoof(g, wing.pts, tint);
+      } else {
+        const along = longestDir(range.pts);
+        for (const part of convexParts(range.pts)) hipRoof(g, part, tint);
+        for (const part of convexParts(wing.pts)) hipRoof(g, part, tint, [-along[1], along[0]]);
+      }
       g.outline(wing.pts, 1.6, shadeHex(tint, 0.5), 0.8);
       g.outline(roof.pts, 2.5, ROOF_INK);
+      continue;
+    }
+    if (!roof.cone && flat) {
+      flatRoof(g, roof.pts, tint);
+      if (roof.smoke) smoke(g, roof.pts, 0.2);
+      g.outline(roof.pts, 2.5, ROOF_INK);
+      continue;
+    }
+    if (!roof.cone && roof.shape === DOME) {
+      domeRoof(g, roof.pts, tint);
+      g.outline(roof.pts, 2.5, ROOF_INK);
+      continue;
+    }
+    const round = roof.cone ? null : roundOutline(roof);
+    if (round) {
+      roundRoof(g, round, tint);
+      if (roof.smoke) smoke(g, round, 0.5);
+      g.outline(round, 2.5, ROOF_INK);
       continue;
     }
     // Footprints drawn by hand may be concave: a roof on each convex part, valleys between.
     const parts = convexParts(roof.pts);
     for (const part of parts) {
-      // (Shapes 2 cone and 5 round drawn as cones until their own tessellation: `town::roof`.)
-      if (roof.cone || roof.shape === 2 || roof.shape === 5) coneRoof(g, part, tint);
+      if (roof.cone || roof.shape === CONE) coneRoof(g, part, tint);
+      else if (roof.shape === GABLE) gableRoof(g, part, tint);
       else hipRoof(g, part, tint);
     }
+    if (roof.smoke) smoke(g, parts[0], roof.cone || roof.shape === CONE ? 0.5 : 0.28);
     if (parts.length > 1) for (const part of parts) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
     g.outline(roof.pts, 2.5, ROOF_INK);
   }
   return g.build();
 }
+
+/** Roof shapes (`town::roof::Shape`). */
+const GABLE = 1;
+const CONE = 2;
+const DOME = 3;
+const FLAT = 4;
+const ROUND = 5;
 
 /** A palace's court among its pieces (`battlemap::COURT_PART`); a manor's cross wing and main range
  * (`battlemap::CROSS_WING_PART`, `MAIN_RANGE_PART`). */
@@ -632,7 +712,7 @@ function belfryTop(g: MeshBuilder, pts: number[]) {
     const [ax, ay, bx, by] = [spire[i * 2], spire[i * 2 + 1], spire[((i + 1) % 4) * 2], spire[((i + 1) % 4) * 2 + 1]];
     const l = Math.hypot(bx - ax, by - ay) || 1;
     let [nx, ny] = [(by - ay) / l, -(bx - ax) / l];
-    if (ccw) [nx, ny] = [-nx, -ny];
+    if (!ccw) [nx, ny] = [-nx, -ny];
     const lit = (-(nx + ny) / Math.SQRT2 + 1) / 2;
     g.poly([ax, ay, bx, by, cx, cy], shadeHex(tint, 0.5 + 0.75 * lit));
     for (let k = 1; k < 7; k++) {
@@ -726,7 +806,7 @@ const CHURCH = 9;
 
 /** A monastery's church over its range (`CHURCH`: corners 0 and 3 its west end): a storey higher, its
  * shadow cast long on the roofs and the garth beside it, gabled end to end under one heavy ridge (the
- * ranges are hipped below it), its slopes darker than theirs with courses along them, inked round; a
+ * ranges are hipped below it), its slopes darker than theirs and patterned, inked round; a
  * small bell-cote on its ridge by the west end, a square of slate under a pyramid (the cross temples'
  * spire, smaller). */
 function churchRoof(g: MeshBuilder, pts: number[], tint: number) {
@@ -738,18 +818,8 @@ function churchRoof(g: MeshBuilder, pts: number[], tint: number) {
   // (The ridge along the middle from the west gable to the east.)
   const [r0x, r0y, r1x, r1y] = [(x0 + x3) / 2, (y0 + y3) / 2, (x1 + x2) / 2, (y1 + y2) / 2];
   const ccw = signedArea(pts) > 0;
-  g.poly([x0, y0, x1, y1, r1x, r1y, r0x, r0y], faceShade(x0, y0, x1, y1, ccw, deep));
-  g.poly([x2, y2, x3, y3, r0x, r0y, r1x, r1y], faceShade(x2, y2, x3, y3, ccw, deep));
-  const course = shadeHex(deep, 0.6);
-  for (let k = 1; k < 5; k++) {
-    const t = k / 5;
-    for (const [ax, ay, bx, by] of [
-      [x0, y0, x1, y1],
-      [x3, y3, x2, y2],
-    ]) {
-      g.line(ax + (r0x - ax) * t, ay + (r0y - ay) * t, bx + (r1x - bx) * t, by + (r1y - by) * t, 1, course, 0.35);
-    }
-  }
+  const u0 = slope(g, [x0, y0, x1, y1, r1x, r1y, r0x, r0y], x0, y0, x1, y1, faceShade(x0, y0, x1, y1, ccw, deep));
+  slope(g, [x2, y2, x3, y3, r0x, r0y, r1x, r1y], x2, y2, x3, y3, faceShade(x2, y2, x3, y3, ccw, deep), u0);
   g.line(r0x, r0y, r1x, r1y, 3.2, shadeHex(tint, 0.36), 0.95);
   // (The gables at the ends.)
   g.line(x0, y0, x3, y3, 2, shadeHex(tint, 0.45), 0.9);
@@ -762,7 +832,7 @@ function churchRoof(g: MeshBuilder, pts: number[], tint: number) {
   const [vx, vy] = [-ey, ex];
   const sq = [cx - ex * r - vx * r, cy - ey * r - vy * r, cx + ex * r - vx * r, cy + ey * r - vy * r, cx + ex * r + vx * r, cy + ey * r + vy * r, cx - ex * r + vx * r, cy - ey * r + vy * r];
   g.poly(sq.map((v) => v + PX * 0.25), 0x000000, 0.32);
-  coneRoof(g, sq, 0x4e5660);
+  withMat(g, 1, () => coneRoof(g, sq, 0x4e5660));
   g.outline(sq, 2, ROOF_INK, 0.9);
 }
 
@@ -770,8 +840,9 @@ function churchRoof(g: MeshBuilder, pts: number[], tint: number) {
  * slope facing the NW light paler. */
 function faceShade(ax: number, ay: number, bx: number, by: number, ccw: boolean, tint: number): number {
   const l = Math.hypot(bx - ax, by - ay) || 1;
+  // (Outward: a polygon of positive signed area has its inside to the left of a→b in these axes.)
   let [nx, ny] = [(by - ay) / l, -(bx - ax) / l];
-  if (ccw) [nx, ny] = [-nx, -ny];
+  if (!ccw) [nx, ny] = [-nx, -ny];
   const lit = (-(nx + ny) / Math.SQRT2 + 1) / 2;
   return shadeHex(tint, 0.7 + 0.5 * lit);
 }
@@ -797,37 +868,24 @@ function templeRoof(g: MeshBuilder, roof: Roof, tint: number) {
   const [r1x, r1y] = [(x1 + x2) / 2, (y1 + y2) / 2];
   const [r0x, r0y] = [(x0 + x3) / 2 + ex * h, (y0 + y3) / 2 + ey * h];
   const ccw = signedArea(body.pts) > 0;
-  g.poly([x0, y0, x1, y1, r1x, r1y, r0x, r0y], faceShade(x0, y0, x1, y1, ccw, tint));
-  g.poly([x2, y2, x3, y3, r0x, r0y, r1x, r1y], faceShade(x2, y2, x3, y3, ccw, tint));
-  g.poly([x3, y3, x0, y0, r0x, r0y], faceShade(x3, y3, x0, y0, ccw, tint));
-  const course = shadeHex(tint, 0.6);
-  for (let k = 1; k < 5; k++) {
-    const t = k / 5;
-    for (const [ax, ay, bx, by] of [
-      [x0, y0, x1, y1],
-      [x3, y3, x2, y2],
-    ]) {
-      g.line(ax + (r0x - ax) * t, ay + (r0y - ay) * t, bx + (r1x - bx) * t, by + (r1y - by) * t, 1, course, 0.35);
-    }
-  }
-  g.line(r0x, r0y, r1x, r1y, 1.6, shadeHex(tint, 0.5), 0.8);
+  let u0 = slope(g, [x0, y0, x1, y1, r1x, r1y, r0x, r0y], x0, y0, x1, y1, faceShade(x0, y0, x1, y1, ccw, tint));
+  u0 = slope(g, [x2, y2, x3, y3, r0x, r0y, r1x, r1y], x2, y2, x3, y3, faceShade(x2, y2, x3, y3, ccw, tint), u0);
+  u0 = slope(g, [x3, y3, x0, y0, r0x, r0y], x3, y3, x0, y0, faceShade(x3, y3, x0, y0, ccw, tint), u0);
+  ridgeLine(g, r0x, r0y, r1x, r1y, tint);
   // The apse: a half cone about the body's end (its arc: the piece's points but its first and last).
   const a = apse.pts;
   const m = a.length / 2;
   const accw = signedArea(a) > 0;
   for (let i = 1; i + 2 < m; i++) {
     const [ax, ay, bx, by] = [a[i * 2], a[i * 2 + 1], a[(i + 1) * 2], a[(i + 1) * 2 + 1]];
-    g.poly([ax, ay, bx, by, r1x, r1y], faceShade(ax, ay, bx, by, accw, tint));
+    u0 = fanFace(g, ax, ay, bx, by, r1x, r1y, faceShade(ax, ay, bx, by, accw, tint), u0, h);
   }
-  for (let k = 1; k < 4; k++) {
-    const t = k / 4;
-    for (let i = 1; i + 2 < m; i++) {
-      const [ax, ay, bx, by] = [a[i * 2], a[i * 2 + 1], a[(i + 1) * 2], a[(i + 1) * 2 + 1]];
-      g.line(ax + (r1x - ax) * t, ay + (r1y - ay) * t, bx + (r1x - bx) * t, by + (r1y - by) * t, 1, course, 0.35);
-    }
+  for (let i = 1; i + 1 < m; i += 2) ridgeLine(g, a[i * 2], a[i * 2 + 1], r1x, r1y, tint, true);
+  // (A domed one, no transept: the dome over the middle of its body.)
+  if (!wing) {
+    if (roof.shape === DOME) dome(g, (x0 + x1 + x2 + x3) / 4, (y0 + y1 + y2 + y3) / 4, h * 0.95, tint);
+    return;
   }
-  for (let i = 1; i + 1 < m; i += 2) g.line(a[i * 2], a[i * 2 + 1], r1x, r1y, 1.4, shadeHex(tint, 0.5), 0.7);
-  if (!wing) return;
   // The transept across the body, its valleys inked.
   hipRoof(g, wing.pts, tint, [-ey, ex]);
   g.outline(wing.pts, 1.6, shadeHex(tint, 0.5), 0.8);
@@ -840,8 +898,12 @@ function templeRoof(g: MeshBuilder, roof: Roof, tint: number) {
   [cx, cy] = [qx + ex * along, qy + ey * along];
   const r = h * 0.82;
   const [vx, vy] = [-ey, ex];
+  if (roof.shape === DOME) {
+    dome(g, cx, cy, h * 1.05, tint);
+    return;
+  }
   const sq = [cx - ex * r - vx * r, cy - ey * r - vy * r, cx + ex * r - vx * r, cy + ey * r - vy * r, cx + ex * r + vx * r, cy + ey * r + vy * r, cx - ex * r + vx * r, cy - ey * r + vy * r];
-  coneRoof(g, sq, 0x4e5660);
+  withMat(g, 1, () => coneRoof(g, sq, 0x4e5660));
   g.outline(sq, 2, ROOF_INK, 0.9);
 }
 
@@ -870,35 +932,26 @@ function courtRanges(roof: Roof): number[][] | null {
   });
 }
 
-/** Sloping up from every side to the middle: each face shaded by how it faces the NW light,
- * shingle courses round it, hips to the apex and a finial. */
+/** Sloping up from every side to the middle: each face shaded by how it faces the NW light and
+ * patterned in rings, hips to the apex and a finial. */
 function coneRoof(g: MeshBuilder, pts: number[], tint: number) {
   const m = pts.length / 2;
   let [cx, cy] = [0, 0];
-  for (let i = 0; i < m; i++) {
-    cx += pts[i * 2] / m;
-    cy += pts[i * 2 + 1] / m;
-  }
+  for (let i = 0; i < m; i++) [cx, cy] = [cx + pts[i * 2] / m, cy + pts[i * 2 + 1] / m];
   const ccw = signedArea(pts) > 0;
+  // (Its rise: the mean distance in from the eaves, so the rings are level all round.)
+  let rise = 0;
   for (let i = 0; i < m; i++) {
     const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[((i + 1) % m) * 2], pts[((i + 1) % m) * 2 + 1]];
-    const l = Math.hypot(bx - ax, by - ay) || 1;
-    // Outward normal; the light comes from the NW (-x, -y).
-    let [nx, ny] = [(by - ay) / l, -(bx - ax) / l];
-    if (ccw) [nx, ny] = [-nx, -ny];
-    const lit = (-(nx + ny) / Math.SQRT2 + 1) / 2;
-    g.poly([ax, ay, bx, by, cx, cy], shadeHex(tint, 0.7 + 0.5 * lit));
+    rise += Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) / (Math.hypot(bx - ax, by - ay) || 1) / m;
   }
-  const course = shadeHex(tint, 0.6);
-  for (let k = 1; k < 5; k++) {
-    const t = k / 5;
-    const ring: number[] = [];
-    for (let i = 0; i < m; i++) ring.push(pts[i * 2] + (cx - pts[i * 2]) * t, pts[i * 2 + 1] + (cy - pts[i * 2 + 1]) * t);
-    for (let i = 0; i < m; i++) g.line(ring[i * 2], ring[i * 2 + 1], ring[((i + 1) % m) * 2], ring[((i + 1) % m) * 2 + 1], 1, course, 0.35);
+  let u0 = g.seed;
+  for (let i = 0; i < m; i++) {
+    const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[((i + 1) % m) * 2], pts[((i + 1) % m) * 2 + 1]];
+    u0 = fanFace(g, ax, ay, bx, by, cx, cy, faceShade(ax, ay, bx, by, ccw, tint), u0, rise);
   }
-  const ridge = shadeHex(tint, 0.5);
   const every = m > 12 ? 2 : 1;
-  for (let i = 0; i < m; i += every) g.line(pts[i * 2], pts[i * 2 + 1], cx, cy, 1.6, ridge, 0.8);
+  for (let i = 0; i < m; i += every) ridgeLine(g, cx, cy, pts[i * 2], pts[i * 2 + 1], tint, true);
   const r = PX * 0.12;
   const finial: number[] = [];
   for (let k = 0; k < 8; k++) finial.push(cx + r * Math.cos((k * Math.PI) / 4), cy + r * Math.sin((k * Math.PI) / 4));
@@ -970,91 +1023,357 @@ export function convexParts(pts: number[]): number[][] {
   return parts.map(at);
 }
 
-/** A hip roof on a convex footprint: shaded slopes, shingle courses, ridge and hips; its ridge along
- * `dir` (unit) if given, else along the longest edge. */
-function hipRoof(g: MeshBuilder, pts: number[], tint: number, dir?: [number, number]) {
+/** A convex footprint's frame: its ridge's way (unit; `dir`, else along its longest edge), centroid,
+ * extent along the ridge about the centroid, the ridge's line through the middle of its width (a point
+ * on it level with the centroid) and its half width. */
+function frame(pts: number[], dir?: [number, number]) {
   const m = pts.length / 2;
-  let cx = 0;
-  let cy = 0;
-  for (let i = 0; i < m; i++) {
-    cx += pts[i * 2];
-    cy += pts[i * 2 + 1];
-  }
-  cx /= m;
-  cy /= m;
-  // Ridge along the longest edge's direction.
+  let [cx, cy] = [0, 0];
+  for (let i = 0; i < m; i++) [cx, cy] = [cx + pts[i * 2] / m, cy + pts[i * 2 + 1] / m];
   const [ux, uy] = dir ?? longestDir(pts);
   let [lo, hi, plo, phi] = [Infinity, -Infinity, Infinity, -Infinity];
   for (let i = 0; i < m; i++) {
     const a = (pts[i * 2] - cx) * ux + (pts[i * 2 + 1] - cy) * uy;
     const b = -(pts[i * 2] - cx) * uy + (pts[i * 2 + 1] - cy) * ux;
-    lo = Math.min(lo, a);
-    hi = Math.max(hi, a);
-    plo = Math.min(plo, b);
-    phi = Math.max(phi, b);
+    [lo, hi, plo, phi] = [Math.min(lo, a), Math.max(hi, a), Math.min(plo, b), Math.max(phi, b)];
   }
-  const halfW = (phi - plo) / 2;
   const mid = (plo + phi) / 2;
+  return { cx, cy, ux, uy, lo, hi, halfW: (phi - plo) / 2, rx: cx - uy * mid, ry: cy + ux * mid };
+}
+
+/** A roof face whose eave runs a→b, in the current pattern: u along the eave from `u0` (ft), v up the
+ * slope away from it. Returns u0 past its eave (the next face's along the same roof). */
+function slope(g: MeshBuilder, poly: number[], ax: number, ay: number, bx: number, by: number, c: number, u0 = g.seed): number {
+  const l = Math.hypot(bx - ax, by - ay);
+  if (l < 1e-6) return u0;
+  const [ex, ey] = [(bx - ax) / l, (by - ay) / l];
+  const m = poly.length / 2;
+  let [mx, my] = [0, 0];
+  for (let i = 0; i < m; i++) [mx, my] = [mx + poly[i * 2] / m, my + poly[i * 2 + 1] / m];
+  let [nx, ny] = [-ey, ex];
+  if ((mx - ax) * nx + (my - ay) * ny < 0) [nx, ny] = [-nx, -ny];
+  const uvd: number[] = [];
+  for (let i = 0; i < m; i++) {
+    const [dx, dy] = [poly[i * 2] - ax, poly[i * 2 + 1] - ay];
+    uvd.push(u0 + (dx * ex + dy * ey) / FT, (dx * nx + dy * ny) / FT, 1);
+  }
+  g.face(poly, uvd, c);
+  return u0 + l / FT;
+}
+
+/** A face from eave a→b up to an apex c (cones, apses), in the current pattern: its courses in rings
+ * level all round (v up to `rise` px at the apex), u along the eave from `u0` converging on the apex.
+ * Returns u0 past its eave. */
+function fanFace(g: MeshBuilder, ax: number, ay: number, bx: number, by: number, cx: number, cy: number, c: number, u0: number, rise: number): number {
+  const l = Math.hypot(bx - ax, by - ay) / FT;
+  g.face([ax, ay, bx, by, cx, cy], [u0, 0, 1, u0 + l, 0, 1, 0, rise / FT, 0], c);
+  return u0 + l;
+}
+
+/** A ridge (or a hip) from a to b in the roof's material: thatch under a thick capping roll, clay and
+ * glazed tile under ridge tiles, lead and copper under a roll, turf soft, the rest a dark line. */
+function ridgeLine(g: MeshBuilder, ax: number, ay: number, bx: number, by: number, tint: number, hip = false) {
+  const m = g.mat;
+  const band = (w: number, f: number, edge: number) => {
+    const l = Math.hypot(bx - ax, by - ay);
+    if (l < 1e-6) return;
+    const [nx, ny] = [(-(by - ay) / l) * (w / 2), ((bx - ax) / l) * (w / 2)];
+    g.line(ax, ay, bx, by, w, shadeHex(tint, f), 1, hip ? 0 : w / 3);
+    for (const k of [1, -1]) g.line(ax + nx * k, ay + ny * k, bx + nx * k, by + ny * k, 1.2, shadeHex(tint, 0.5), edge, hip ? 0 : w / 3);
+  };
+  if (m === 0) band((hip ? 0.45 : 0.95) * FT, 0.96, hip ? 0.45 : 0.85);
+  else if (m === 2 || m === 7) band((hip ? 0.35 : 0.5) * FT, 0.9, 0.8);
+  else if (m === 5 || m === 6) band(0.28 * FT, 1.16, 0.7);
+  else if (m === 4) g.line(ax, ay, bx, by, 2, shadeHex(tint, 0.62), 0.55);
+  else g.line(ax, ay, bx, by, 1.6, shadeHex(tint, 0.5), 0.8);
+}
+
+/** A hip roof on a convex footprint: a face up from each eave to the ridge (shaded by how it faces the
+ * NW light, patterned in its material), ridge and hips; its ridge along `dir` (unit) if given, else along
+ * the longest edge. */
+function hipRoof(g: MeshBuilder, pts: number[], tint: number, dir?: [number, number]) {
+  const m = pts.length / 2;
+  const { cx, cy, ux, uy, lo, hi, halfW, rx, ry } = frame(pts, dir);
   const r0 = lo + halfW;
   const r1 = Math.max(r0, hi - halfW);
-  // Ridge centre line (offset to the middle of the perpendicular extent).
-  const rx = cx - uy * mid;
-  const ry = cy + ux * mid;
-  g.poly(pts, tint);
-  // The slope facing away from the NW light is darker.
-  let nx = -uy;
-  let ny = ux;
-  if (nx + ny < 0) {
-    nx = -nx;
-    ny = -ny;
+  const ends = [rx + ux * r0, ry + uy * r0, rx + ux * r1, ry + uy * r1];
+  // (Each corner's hip runs to the nearer end of the ridge.)
+  const end = (i: number) => ((pts[i * 2] - cx) * ux + (pts[i * 2 + 1] - cy) * uy < (r0 + r1) / 2 ? 0 : 2);
+  const ccw = signedArea(pts) > 0;
+  let u0 = g.seed;
+  for (let i = 0; i < m; i++) {
+    const j = (i + 1) % m;
+    const [px, py, qx, qy] = [pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1]];
+    const [ei, ej] = [end(i), end(j)];
+    const face = ei === ej ? [px, py, qx, qy, ends[ei], ends[ei + 1]] : [px, py, qx, qy, ends[ej], ends[ej + 1], ends[ei], ends[ei + 1]];
+    u0 = slope(g, face, px, py, qx, qy, faceShade(px, py, qx, qy, ccw, tint), u0);
   }
-  const dark = clipHalf(pts, rx, ry, -nx, -ny);
-  if (dark.length >= 6) g.poly(dark, shadeHex(tint, 0.72));
-  const lit = clipHalf(pts, rx, ry, nx, ny);
-  if (lit.length >= 6) g.poly(lit, shadeHex(tint, 1.18), 0.6);
-  // Shingle courses parallel to the ridge, clipped to the (convex) outline.
-  const course = shadeHex(tint, 0.6);
-  for (let k = 1; k < 6; k++) {
-    const d = (halfW * k) / 6;
-    for (const sgn of [-1, 1]) {
-      const ox = rx + nx * d * sgn;
-      const oy = ry + ny * d * sgn;
-      let t0 = -(hi - lo);
-      let t1 = hi - lo;
-      for (let i = 0; i < m && t0 < t1; i++) {
-        const ax = pts[i * 2];
-        const ay = pts[i * 2 + 1];
-        const ex = pts[((i + 1) % m) * 2] - ax;
-        const ey = pts[((i + 1) % m) * 2 + 1] - ay;
-        // Inward normal: towards the centroid.
-        let inx = -ey;
-        let iny = ex;
-        if ((cx - ax) * inx + (cy - ay) * iny < 0) {
-          inx = -inx;
-          iny = -iny;
-        }
-        const c0 = (ox - ax) * inx + (oy - ay) * iny;
-        const c1 = ux * inx + uy * iny;
-        if (Math.abs(c1) < 1e-9) {
-          if (c0 < 0) t1 = t0;
-        } else if (c1 > 0) t0 = Math.max(t0, -c0 / c1);
-        else t1 = Math.min(t1, -c0 / c1);
-      }
-      if (t1 - t0 > 2) g.line(ox + ux * t0, oy + uy * t0, ox + ux * t1, oy + uy * t1, 1, course, 0.35);
+  ridgeLine(g, ends[0], ends[1], ends[2], ends[3], tint);
+  for (let i = 0; i < m; i++) ridgeLine(g, ends[end(i)], ends[end(i) + 1], pts[i * 2], pts[i * 2 + 1], tint, true);
+}
+
+/** Where a line through o along u (unit) crosses a convex polygon about its centroid c: (t0, t1) along
+ * it (t0 >= t1 if it misses). */
+function chord(pts: number[], ox: number, oy: number, ux: number, uy: number, cx: number, cy: number, reach: number): [number, number] {
+  const m = pts.length / 2;
+  let [t0, t1] = [-reach, reach];
+  for (let i = 0; i < m && t0 < t1; i++) {
+    const [ax, ay] = [pts[i * 2], pts[i * 2 + 1]];
+    const [ex, ey] = [pts[((i + 1) % m) * 2] - ax, pts[((i + 1) % m) * 2 + 1] - ay];
+    // Inward normal: towards the centroid.
+    let [inx, iny] = [-ey, ex];
+    if ((cx - ax) * inx + (cy - ay) * iny < 0) [inx, iny] = [-inx, -iny];
+    const c0 = (ox - ax) * inx + (oy - ay) * iny;
+    const c1 = ux * inx + uy * iny;
+    if (Math.abs(c1) < 1e-9) {
+      if (c0 < 0) t1 = t0;
+    } else if (c1 > 0) t0 = Math.max(t0, -c0 / c1);
+    else t1 = Math.min(t1, -c0 / c1);
+  }
+  return [t0, t1];
+}
+
+/** A gable roof on a convex footprint: two slopes from the eaves along it up to a ridge from end to end,
+ * shaded by how each faces the NW light and patterned; the gable ends inked, a pale verge inside each. */
+function gableRoof(g: MeshBuilder, pts: number[], tint: number, dir?: [number, number]) {
+  const { cx, cy, ux, uy, lo, hi, halfW, rx, ry } = frame(pts, dir);
+  const [nx, ny] = [-uy, ux];
+  for (const sg of [1, -1]) {
+    const half = clipHalf(pts, rx, ry, -sg * nx, -sg * ny);
+    if (half.length < 6) continue;
+    const uvd: number[] = [];
+    for (let i = 0; i < half.length; i += 2) {
+      const [dx, dy] = [half[i] - rx, half[i + 1] - ry];
+      uvd.push(g.seed + (dx * ux + dy * uy) / FT, (halfW - sg * (dx * nx + dy * ny)) / FT, 1);
+    }
+    const lit = (-(sg * nx + sg * ny) / Math.SQRT2 + 1) / 2;
+    g.face(half, uvd, shadeHex(tint, 0.7 + 0.5 * lit));
+  }
+  const [t0, t1] = chord(pts, rx, ry, ux, uy, cx, cy, hi - lo + 1);
+  if (t1 > t0) ridgeLine(g, rx + ux * t0, ry + uy * t0, rx + ux * t1, ry + uy * t1, tint);
+  // The gable ends (edges across the ridge): a pale verge just inside, then ink.
+  const m = pts.length / 2;
+  for (let i = 0; i < m; i++) {
+    const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[((i + 1) % m) * 2], pts[((i + 1) % m) * 2 + 1]];
+    const l = Math.hypot(bx - ax, by - ay);
+    if (l < 1e-6 || Math.abs((bx - ax) * ux + (by - ay) * uy) > 0.6 * l) continue;
+    let [ix, iy] = [-(by - ay) / l, (bx - ax) / l];
+    if ((cx - ax) * ix + (cy - ay) * iy < 0) [ix, iy] = [-ix, -iy];
+    const d = 0.2 * FT;
+    g.line(ax + ix * d, ay + iy * d, bx + ix * d, by + iy * d, 0.3 * FT, shadeHex(tint, 1.18), 0.9);
+    g.line(ax, ay, bx, by, 2.2, ROOF_INK, 1);
+  }
+}
+
+/** A simple polygon moved in by w on every side (mitred corners, capped); null if it turns inside out. */
+function inset(pts: number[], w: number): number[] | null {
+  const m = pts.length / 2;
+  const sg = signedArea(pts) > 0 ? 1 : -1;
+  const nrm = (i: number): [number, number] => {
+    const j = (i + 1) % m;
+    const [ex, ey] = [pts[j * 2] - pts[i * 2], pts[j * 2 + 1] - pts[i * 2 + 1]];
+    const l = Math.hypot(ex, ey) || 1;
+    return [(-sg * ey) / l, (sg * ex) / l];
+  };
+  const out: number[] = [];
+  for (let i = 0; i < m; i++) {
+    const [ax, ay] = nrm((i + m - 1) % m);
+    const [bx, by] = nrm(i);
+    const k = Math.max(0.35, 1 + ax * bx + ay * by);
+    out.push(pts[i * 2] + (w * (ax + bx)) / k, pts[i * 2 + 1] + (w * (ay + by)) / k);
+  }
+  const a = signedArea(out);
+  return a * sg > 0.15 * Math.abs(signedArea(pts)) ? out : null;
+}
+
+/** A flat roof behind a parapet: the parapet's coping round it, the roof's field inside (patterned),
+ * the shadow the parapet casts on it from the NW and the lit inner face of the far side, and a water spout
+ * or two out through the parapet on its lee side. */
+function flatRoof(g: MeshBuilder, pts: number[], tint: number) {
+  const m = pts.length / 2;
+  const { ux, uy, halfW } = frame(pts);
+  const w = Math.min(0.7 * FT, halfW * 0.3);
+  const [ox, oy] = [pts[0], pts[1]];
+  const uv = (x: number, y: number): [number, number] => [g.seed + ((x - ox) * ux + (y - oy) * uy) / FT, (-(x - ox) * uy + (y - oy) * ux) / FT];
+  g.patch(pts, uv, shadeHex(tint, 1.1));
+  const inner = inset(pts, w);
+  if (!inner) return;
+  g.patch(inner, uv, shadeHex(tint, 0.94));
+  const sg = signedArea(inner) > 0 ? 1 : -1;
+  for (let i = 0; i < m; i++) {
+    const [ax, ay, bx, by] = [inner[i * 2], inner[i * 2 + 1], inner[((i + 1) % m) * 2], inner[((i + 1) % m) * 2 + 1]];
+    const l = Math.hypot(bx - ax, by - ay);
+    if (l < 1e-6) continue;
+    // (Out towards the parapet.)
+    const [onx, ony] = [(sg * (by - ay)) / l, (-sg * (bx - ax)) / l];
+    const nw = -(onx + ony) / Math.SQRT2;
+    if (nw > 0.25) {
+      const d = w * 0.9 * nw;
+      g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], 0x000000, 0.2);
+    } else if (nw < -0.25) {
+      const d = w * 0.25;
+      g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], shadeHex(tint, 1.2), 0.55);
     }
   }
-  // Ridge and hips.
-  const ridge = shadeHex(tint, 0.5);
-  const ax = rx + ux * r0;
-  const ay = ry + uy * r0;
-  const bx = rx + ux * r1;
-  const by = ry + uy * r1;
-  g.line(ax, ay, bx, by, 1.6, ridge, 0.8);
+  g.outline(inner, 1.2, shadeHex(tint, 0.55), 0.8);
+  // Water spouts through the lee (S, E) parapet's longest side.
+  const osg = signedArea(pts) > 0 ? 1 : -1;
+  let [best, bi] = [0, -1];
   for (let i = 0; i < m; i++) {
-    const px = pts[i * 2];
-    const py = pts[i * 2 + 1];
-    const along = (px - cx) * ux + (py - cy) * uy;
-    const [ex, ey] = along < (r0 + r1) / 2 ? [ax, ay] : [bx, by];
-    g.line(ex, ey, px, py, 1.6, ridge, 0.8);
+    const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[((i + 1) % m) * 2], pts[((i + 1) % m) * 2 + 1]];
+    const l = Math.hypot(bx - ax, by - ay);
+    if (l > best && l > 1.5 * PX && (osg * (by - ay) - osg * (bx - ax)) / l > 0.6) [best, bi] = [l, i];
   }
+  if (bi < 0) return;
+  const [ax, ay, bx, by] = [pts[bi * 2], pts[bi * 2 + 1], pts[((bi + 1) % m) * 2], pts[((bi + 1) % m) * 2 + 1]];
+  const [ex, ey] = [(bx - ax) / best, (by - ay) / best];
+  const [onx, ony] = [osg * ey, -osg * ex];
+  const n = best > 6 * PX ? 2 : 1;
+  for (let k = 0; k < n; k++) {
+    const t = (best * (k + 1)) / (n + 1);
+    const [px, py] = [ax + ex * t, ay + ey * t];
+    const [hw, i0, o1] = [0.2 * FT, w, 0.8 * FT];
+    const q = [px - ex * hw - onx * i0, py - ey * hw - ony * i0, px + ex * hw - onx * i0, py + ey * hw - ony * i0, px + ex * hw + onx * o1, py + ey * hw + ony * o1, px - ex * hw + onx * o1, py - ey * hw + ony * o1];
+    g.poly(q.map((v) => v + 0.25 * FT), 0x000000, 0.3);
+    g.poly(q, 0x8b6b4a);
+    g.outline(q, 1.1, ROOF_INK, 0.9);
+  }
+}
+
+/** A circle as a polygon. */
+function circle(cx: number, cy: number, r: number, n: number): number[] {
+  const out: number[] = [];
+  for (let k = 0; k < n; k++) out.push(cx + r * Math.cos((2 * Math.PI * k) / n), cy + r * Math.sin((2 * Math.PI * k) / n));
+  return out;
+}
+
+/** The plaster of a dome's drum and the flat roof round it (whitewash keeps its own). */
+const PLASTER = 0xcbbfa6;
+
+/** A dome of radius r about (cx, cy) on its drum: its shadow on the roof round it, the drum's ring,
+ * shaded as a sphere lit from the NW, its courses in rings and its seams in ribs (per material) up to a
+ * finial. */
+function dome(g: MeshBuilder, cx: number, cy: number, r: number, tint: number) {
+  const n = 20;
+  g.poly(circle(cx + r * 0.24, cy + r * 0.24, r * 1.06, n), 0x000000, 0.3);
+  const drum = circle(cx, cy, r * 1.12, n);
+  g.poly(drum, g.mat === 11 ? shadeHex(tint, 1.04) : PLASTER);
+  g.outline(drum, 1.4, ROOF_INK, 0.85);
+  const rings = [1, 0.93, 0.8, 0.6, 0.34, 0];
+  const L = [-0.55, -0.55, 0.63];
+  const at: number[][] = [];
+  for (const p of rings) {
+    const row: number[] = [];
+    const [nz, v] = [Math.sqrt(1 - p * p), (r * (Math.PI / 2 - Math.asin(p))) / FT];
+    for (let j = 0; j <= n; j++) {
+      const th = (2 * Math.PI * j) / n;
+      const [c, s] = [Math.cos(th), Math.sin(th)];
+      const lit = Math.max(0, p * c * L[0] + p * s * L[1] + nz * L[2]);
+      row.push(g.vert(cx + r * p * c, cy + r * p * s, shadeHex(tint, 0.5 + 0.78 * lit), 1, g.seed + (th * r) / FT, v, g.code, p));
+    }
+    at.push(row);
+  }
+  for (let k = 0; k + 1 < rings.length; k++) {
+    for (let j = 0; j < n; j++) {
+      g.tri(at[k][j], at[k][j + 1], at[k + 1][j + 1]);
+      g.tri(at[k][j], at[k + 1][j + 1], at[k + 1][j]);
+    }
+  }
+  // Its ribs (whitewash smooth): from the drum up to the finial, the courses' rings between.
+  if (g.mat !== 11) {
+    const rib = shadeHex(tint, 0.55);
+    for (let j = 0; j < 12; j++) {
+      const th = (Math.PI * j) / 6;
+      g.line(cx + r * Math.cos(th), cy + r * Math.sin(th), cx + r * 0.1 * Math.cos(th), cy + r * 0.1 * Math.sin(th), 1.3, rib, 0.6);
+    }
+  }
+  g.outline(circle(cx, cy, r, n), 2, ROOF_INK, 0.95);
+  g.poly(circle(cx, cy, Math.max(2, r * 0.09), 8), ROOF_INK);
+  g.poly(circle(cx - r * 0.015, cy - r * 0.015, Math.max(1, r * 0.05), 8), 0xb8963e);
+}
+
+/** A domed roof: a flat roof behind its parapet round the drum, one dome over the middle (two along a
+ * long one). */
+function domeRoof(g: MeshBuilder, pts: number[], tint: number) {
+  const code = g.code;
+  const white = g.mat === 11;
+  // (The flat roof round it plaster: flat clay's pattern, or whitewash's.)
+  g.code = (white ? 11 : 8) + (code & ~15);
+  flatRoof(g, pts, white ? tint : PLASTER);
+  g.code = code;
+  const { ux, uy, lo, hi, halfW, rx, ry } = frame(pts);
+  const len = hi - lo;
+  const n = len > 1.75 * 2 * halfW ? 2 : 1;
+  const r = 0.4 * Math.min(len / n, 2 * halfW);
+  for (let k = 0; k < n; k++) {
+    const t = lo + (len * (k + 0.5)) / n;
+    dome(g, rx + ux * t, ry + uy * t, r, tint);
+  }
+}
+
+/** A small round home's outline (`ROUND`): an ellipse in its footprint (convex, of one piece); else
+ * null. */
+function roundOutline(roof: Roof): number[] | null {
+  if (roof.shape !== ROUND || roof.cone || roof.battlements || roof.parts.length || !isConvex(roof.pts)) return null;
+  const { ux, uy, lo, hi, halfW, rx, ry } = frame(roof.pts);
+  const [ex, ey, a, b] = [rx + (ux * (lo + hi)) / 2, ry + (uy * (lo + hi)) / 2, (hi - lo) / 2, halfW];
+  const out: number[] = [];
+  for (let k = 0; k < 20; k++) {
+    const [c, s] = [Math.cos((Math.PI * k) / 10), Math.sin((Math.PI * k) / 10)];
+    out.push(ex + ux * a * c - uy * b * s, ey + uy * a * c + ux * b * s);
+  }
+  return out;
+}
+
+/** A low round roof (a steppe home's): shaded smoothly round from the NW, patterned in rings, the
+ * crown's wooden ring and smoke hole at the top. */
+function roundRoof(g: MeshBuilder, ring: number[], tint: number) {
+  const n = ring.length / 2;
+  let [cx, cy] = [0, 0];
+  for (let i = 0; i < n; i++) [cx, cy] = [cx + ring[i * 2] / n, cy + ring[i * 2 + 1] / n];
+  let rise = 0;
+  for (let i = 0; i < n; i++) rise += Math.hypot(ring[i * 2] - cx, ring[i * 2 + 1] - cy) / n;
+  const shade = (x: number, y: number) => {
+    const l = Math.hypot(x - cx, y - cy) || 1;
+    return shadeHex(tint, 0.82 + 0.34 * ((-((x - cx) + (y - cy)) / l / Math.SQRT2 + 1) / 2));
+  };
+  let u0 = g.seed;
+  for (let i = 0; i < n; i++) {
+    const [ax, ay, bx, by] = [ring[i * 2], ring[i * 2 + 1], ring[((i + 1) % n) * 2], ring[((i + 1) % n) * 2 + 1]];
+    const l = Math.hypot(bx - ax, by - ay) / FT;
+    const a = g.vert(ax, ay, shade(ax, ay), 1, u0, 0, g.code, 1);
+    const b = g.vert(bx, by, shade(bx, by), 1, u0 + l, 0, g.code, 1);
+    g.tri(a, b, g.vert(cx, cy, shadeHex(tint, 1.02), 1, 0, rise / FT, g.code, 0));
+    u0 += l;
+  }
+  const r = rise * 0.2;
+  g.poly(circle(cx, cy, r, 12), 0x8a6a48);
+  g.poly(circle(cx + r * 0.1, cy + r * 0.1, r * 0.62, 12), 0x2a2420);
+  g.outline(circle(cx, cy, r, 12), 1.2, ROOF_INK, 0.9);
+}
+
+/** A smithy's (kiln's, still's) chimney on its ridge `at` of the way along, and the soot round it. */
+function smoke(g: MeshBuilder, pts: number[], at: number) {
+  const { ux, uy, lo, hi, halfW, rx, ry } = frame(pts);
+  const t = lo + (hi - lo) * at;
+  const [x, y] = [rx + ux * t, ry + uy * t];
+  const r = Math.min(4.5 * FT, halfW * 1.2 + FT);
+  const [sx, sy] = [x + 0.5 * FT, y + 0.5 * FT];
+  const soot = circle(sx, sy, r, 12);
+  const uvd: number[] = [];
+  for (let i = 0; i < soot.length; i += 2) uvd.push((soot[i] - sx) / r, (soot[i + 1] - sy) / r, 1);
+  g.face(soot, uvd, 0x221e1b, 1, SOOT);
+  const sq = (h: number, dx = 0) => [x - ux * h + uy * h + dx, y - uy * h - ux * h + dx, x + ux * h + uy * h + dx, y + uy * h - ux * h + dx, x + ux * h - uy * h + dx, y + uy * h + ux * h + dx, x - ux * h - uy * h + dx, y - uy * h + ux * h + dx];
+  g.poly(sq(0.9 * FT, 0.6 * FT), 0x000000, 0.3);
+  g.poly(sq(0.9 * FT), 0x8f877a);
+  g.outline(sq(0.9 * FT), 1.4, ROOF_INK, 0.95);
+  g.poly(sq(0.45 * FT), 0x1e1a16);
+}
+
+/** Draw with another material's pattern (a slate spire on a tiled temple). */
+function withMat(g: MeshBuilder, mat: number, f: () => void) {
+  const [m, c] = [g.mat, g.code];
+  [g.mat, g.code] = [mat, mat + (c >= 0 ? c & ~15 : 0)];
+  f();
+  [g.mat, g.code] = [m, c];
 }
