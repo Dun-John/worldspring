@@ -939,94 +939,111 @@ function bucket(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   for (const x of [ax, bx]) g.circle(x, cy, 0.03).fill(IRON[1]).stroke({ width: 0.018, color: INK });
 }
 
-/** A roof terrace's dome (`interior::furnish_terrace`) from above on its drum: whitewashed plaster,
- * its shadow across the terrace, shaded as a sphere lit from the light, faint ribs up to a finial. */
+/** A roof terrace's dome (`interior::furnish_terrace`) from above on its drum: warm plaster in three
+ * flat tones lit from the light, a few bold segment lines up to a small finial, its shadow beside it. */
 function roofDome(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
   const r = Math.max(f.w, f.h) / 2 + 0.2;
   const [lx, ly] = light;
-  g.poly(oval(cx - lx * r * 0.22, cy - ly * r * 0.22, r * 1.04, r * 1.0, 0, 28)).fill({ color: 0x000000, alpha: 0.28 });
-  g.poly(ring(cx, cy, r, rnd, 0.01, 32)).fill(0xcbbfa6).stroke({ width: OUT, color: INK, join: 'round' });
-  const d = r * 0.88;
-  const tones = [0xb4ad9c, 0xcfc8b6, 0xe2dccb, 0xf0ebdd, 0xfaf6ec];
-  for (let k = 0; k < tones.length; k++) {
-    const t = k / tones.length;
-    g.circle(cx + lx * d * 0.32 * t, cy + ly * d * 0.32 * t, d * (1 - 0.78 * t)).fill(tones[k]);
+  const body = ring(cx, cy, r, rnd, 0.006, 32);
+  castShadow(g, body, light, 0.3);
+  g.poly(body).fill(0x9c8a6e).stroke({ width: OUT, color: INK, join: 'round' });
+  g.circle(cx + lx * r * 0.12, cy + ly * r * 0.12, r * 0.86).fill(0xb8a684);
+  g.circle(cx + lx * r * 0.36, cy + ly * r * 0.36, r * 0.46).fill(0xcebe9c);
+  for (let j = 0; j < 6; j++) {
+    const a = (Math.PI * j) / 3 + 0.5;
+    g.moveTo(cx + Math.cos(a) * r * 0.1, cy + Math.sin(a) * r * 0.1).lineTo(cx + Math.cos(a) * r * 0.97, cy + Math.sin(a) * r * 0.97);
   }
-  for (let j = 0; j < 12; j++) {
-    const a = (Math.PI * j) / 6 + 0.13;
-    g.moveTo(cx + Math.cos(a) * d * 0.96, cy + Math.sin(a) * d * 0.96).lineTo(cx + Math.cos(a) * d * 0.1, cy + Math.sin(a) * d * 0.1);
-  }
-  g.stroke({ width: 0.02, color: 0x8e8878, alpha: 0.45 });
-  g.circle(cx, cy, d).stroke({ width: OUT, color: INK });
-  g.circle(cx, cy, Math.max(0.08, d * 0.07)).fill(INK);
-  g.circle(cx + lx * 0.015, cy + ly * 0.015, Math.max(0.05, d * 0.045)).fill(GILT[1]);
+  g.stroke({ width: LINE, color: INK, cap: 'round' });
+  g.circle(cx, cy, 0.07).fill(0x9c8a6e).stroke({ width: LINE, color: INK });
 }
 
-/** A planter on a roof terrace: a clay (or plank) trough of earth, a clump of herbs and greens
- * spilling over it, a few flowers on some. */
+/** A water jar on a roof terrace from above: a round clay belly lit on the light side, shaded in a
+ * crescent away from it, its mouth (whitewashed on some) open on dark water. */
+function waterJar(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
+  const [cx, cy] = [f.x + 0.5, f.y + 0.5];
+  const [lx, ly] = light;
+  const r = 0.27;
+  const body = ring(cx, cy, r, rnd, 0.006, 20);
+  castShadow(g, body, light, 0.24);
+  g.poly(body).fill(0x7a5640).stroke({ width: LINE, color: INK, join: 'round' });
+  g.circle(cx + lx * 0.045, cy + ly * 0.045, r * 0.82).fill(0xa47a58);
+  g.circle(cx + lx * 0.12, cy + ly * 0.12, r * 0.3).fill(0xc09a76);
+  const lip = v % 2 ? 0xe0d6bc : 0xb88a64;
+  g.circle(cx, cy, 0.12).fill(lip).stroke({ width: LINE, color: INK });
+  g.circle(cx - lx * 0.012, cy - ly * 0.012, 0.075).fill(0x34403e).stroke({ width: 0.018, color: INK });
+}
+
+/** A planter on a roof terrace: a clay (or plank) trough of earth, a few big clumps of herbs and
+ * greens, a few flowers on some. */
 function planter(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
-  const r = [f.x + 0.14, f.y + 0.14, f.x + f.w - 0.14, f.y + f.h - 0.14];
-  castShadow(g, [r[0], r[1], r[2], r[1], r[2], r[3], r[0], r[3]], light, 0.22);
-  const box = v % 2 ? [0x6a321c, 0xa0542e, 0xc87a4c] : WOOD;
+  const r = [f.x + 0.12, f.y + 0.12, f.x + f.w - 0.12, f.y + f.h - 0.12];
+  castShadow(g, [r[0], r[1], r[2], r[1], r[2], r[3], r[0], r[3]], light, 0.2);
+  const box = v % 2 ? [0x8a5a3e, 0xa87252, 0xc0906c] : [0x7a5a3a, 0x9a7448, 0xae8858];
   const face = board(g, r, box, light, rnd, f.w >= f.h, 0.07, 0);
-  const soil = [face[0] + 0.03, face[1] + 0.03, face[2] - 0.03, face[3] - 0.03];
-  g.poly(quad(soil, rnd, 0.01)).fill(0x4a3424);
-  const greens = [0x35512a, 0x557f36, 0x86b452];
-  const n = Math.round(5 * f.w * f.h) + 1;
+  const soil = [face[0] + 0.04, face[1] + 0.04, face[2] - 0.04, face[3] - 0.04];
+  g.poly(quad(soil, rnd, 0.01)).fill(0x6a4c34).stroke({ width: 0.018, color: INK });
+  const greens = [0x4a6a34, 0x6a8a44, 0x8ca85c];
+  const along = f.w >= f.h;
+  const [L, W] = along ? [soil[2] - soil[0], soil[3] - soil[1]] : [soil[3] - soil[1], soil[2] - soil[0]];
+  const n = Math.max(1, Math.round(L / 0.42));
+  const spots: [number, number][] = [];
   for (let i = 0; i < n; i++) {
-    const [px, py] = [soil[0] + 0.05 + rnd() * (soil[2] - soil[0] - 0.1), soil[1] + 0.05 + rnd() * (soil[3] - soil[1] - 0.1)];
-    const s = 0.08 + rnd() * 0.07;
-    g.poly(patch(px, py, s, s * 0.9, rnd, 0.4, 9)).fill(greens[0]).stroke({ width: 0.014, color: INK, alpha: 0.7, join: 'round' });
-    g.poly(patch(px + light[0] * s * 0.22, py + light[1] * s * 0.22, s * 0.7, s * 0.62, rnd, 0.3, 8)).fill(greens[1]);
-    g.circle(px + light[0] * s * 0.42, py + light[1] * s * 0.42, s * 0.24).fill({ color: greens[2], alpha: 0.8 });
+    const u = (L * (i + 0.5)) / n + (rnd() - 0.5) * 0.06;
+    const s = W / 2 + (rnd() - 0.5) * 0.06;
+    spots.push(along ? [soil[0] + u, soil[1] + s] : [soil[0] + s, soil[1] + u]);
+  }
+  for (const [px, py] of spots) {
+    const s = Math.min(W * 0.46, 0.21) * (0.9 + rnd() * 0.15);
+    g.poly(patch(px, py, s, s * 0.92, rnd, 0.3, 9)).fill(greens[0]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.poly(patch(px + light[0] * s * 0.18, py + light[1] * s * 0.18, s * 0.7, s * 0.64, rnd, 0.25, 8)).fill(greens[1]);
+    g.circle(px + light[0] * s * 0.4, py + light[1] * s * 0.4, s * 0.26).fill(greens[2]);
   }
   if (v % 4 >= 2) {
-    const c = [0xd8412f, 0xe8cc2a, 0xf0e8d4][v % 3];
-    for (let i = 0; i < 2 + f.w * f.h; i++) {
-      const [px, py] = [soil[0] + 0.06 + rnd() * (soil[2] - soil[0] - 0.12), soil[1] + 0.06 + rnd() * (soil[3] - soil[1] - 0.12)];
-      g.circle(px, py, 0.035).fill(c).stroke({ width: 0.01, color: INK, alpha: 0.7 });
-    }
+    const c = [0xb04a36, 0xd0b048, 0xe8dcc4][v % 3];
+    for (const [px, py] of spots) g.circle(px - light[0] * 0.07, py - light[1] * 0.07, 0.045).fill(c).stroke({ width: 0.018, color: INK });
   }
 }
 
-/** A washing line along its squares between two posts, sagging a little, linen and dyed cloths
- * pegged along it and hanging to the side, their shadows on the terrace. */
+/** A washing line along its squares between two posts, sagging a little, linen and undyed cloths
+ * pegged along it (one dyed blue) and hanging to the side, their shadows on the terrace. */
 function washingLine(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
   const along = f.w >= f.h;
   const L = along ? f.w : f.h;
   const p = (t: number, s: number): [number, number] => (along ? [f.x + t, f.y + f.h / 2 + s] : [f.x + f.w / 2 + s, f.y + t]);
   const [lx, ly] = light;
-  const colors = [LINEN[1], 0xa8503a, 0x4e6e8a, LINEN[2], 0xc8a050, 0x6f7f4f];
+  const colors = [LINEN[1], 0xc4b08a, LINEN[2], 0xb0a084];
   const cloths: [number, number, number, number][] = [];
-  for (let t = 0.42; ; ) {
-    const w = 0.24 + rnd() * 0.3;
+  for (let t = 0.4; ; ) {
+    const w = 0.32 + rnd() * 0.14;
     if (t + w > L - 0.34) break;
-    cloths.push([t, w, 0.18 + rnd() * 0.16, colors[(v + cloths.length * 2 + Math.floor(rnd() * 2)) % colors.length]]);
-    t += w + 0.05 + rnd() * 0.14;
+    cloths.push([t, w, 0.3 + rnd() * 0.1, colors[(v + cloths.length) % colors.length]]);
+    t += w + 0.06 + rnd() * 0.1;
   }
+  // (One small accent: a blue cloth.)
+  if (cloths.length) cloths[(v + 1) % cloths.length][3] = 0x4e6a84;
   const sag = (t: number) => 0.05 * Math.sin((Math.PI * (t - 0.25)) / (L - 0.5));
   const cloth = (t: number, w: number, d: number, ox = 0, oy = 0) => {
     // (Seen from above, hung over the line: as much of it either side.)
     const [a, b, c, e] = [p(t, sag(t) - d * 0.45), p(t + w, sag(t + w) - d * 0.45), p(t + w - 0.02, sag(t + w) + d * 0.55), p(t + 0.02, sag(t) + d * 0.55 + 0.02)];
     return [a[0] + ox, a[1] + oy, b[0] + ox, b[1] + oy, c[0] + ox, c[1] + oy, e[0] + ox, e[1] + oy];
   };
-  for (const [t, w, d] of cloths) g.poly(cloth(t, w, d, -lx * 0.3, -ly * 0.3)).fill({ color: 0x000000, alpha: 0.16 });
+  for (const [t, w, d] of cloths) g.poly(cloth(t, w, d, -lx * 0.2, -ly * 0.2)).fill({ color: 0x000000, alpha: 0.16 });
   const [a, b] = [p(0.25, 0), p(L - 0.25, 0)];
   const m = p(L / 2, 0.1);
-  g.moveTo(a[0] - lx * 0.3, a[1] - ly * 0.3).quadraticCurveTo(m[0] - lx * 0.3, m[1] - ly * 0.3, b[0] - lx * 0.3, b[1] - ly * 0.3).stroke({ width: 0.02, color: 0x000000, alpha: 0.18 });
-  g.moveTo(...a).quadraticCurveTo(...m, ...b).stroke({ width: 0.024, color: INK });
+  g.moveTo(a[0] - lx * 0.2, a[1] - ly * 0.2).quadraticCurveTo(m[0] - lx * 0.2, m[1] - ly * 0.2, b[0] - lx * 0.2, b[1] - ly * 0.2).stroke({ width: 0.02, color: 0x000000, alpha: 0.18 });
+  g.moveTo(...a).quadraticCurveTo(...m, ...b).stroke({ width: LINE, color: INK });
   for (const [t, w, d, c] of cloths) {
-    g.poly(cloth(t, w, d)).fill(c).stroke({ width: 0.016, color: INK, join: 'round' });
+    g.poly(cloth(t, w, d)).fill(c).stroke({ width: LINE, color: INK, join: 'round' });
     // (The fold where it hangs over the line, a crease down it.)
-    g.moveTo(...p(t + 0.02, sag(t))).lineTo(...p(t + w - 0.02, sag(t + w))).stroke({ width: 0.016, color: shade(c, 0.72), alpha: 0.8 });
-    const [q0, q1] = [p(t + w * 0.5, sag(t + w * 0.5) + 0.03), p(t + w * 0.5 + (rnd() - 0.5) * 0.06, sag(t + w * 0.5) + d * 0.5)];
-    g.moveTo(...q0).lineTo(...q1).stroke({ width: 0.012, color: shade(c, 0.7), alpha: 0.6 });
-    for (const u of [t + 0.03, t + w - 0.03]) g.circle(...p(u, sag(u)), 0.018).fill(WOOD[0]);
+    g.moveTo(...p(t + 0.03, sag(t))).lineTo(...p(t + w - 0.03, sag(t + w))).stroke({ width: 0.018, color: shade(c, 0.72) });
+    const [q0, q1] = [p(t + w * 0.5, sag(t + w * 0.5) + 0.04), p(t + w * 0.5 + (rnd() - 0.5) * 0.06, sag(t + w * 0.5) + d * 0.48)];
+    g.moveTo(...q0).lineTo(...q1).stroke({ width: 0.016, color: shade(c, 0.78) });
+    for (const u of [t + 0.04, t + w - 0.04]) g.circle(...p(u, sag(u)), 0.024).fill(WOOD[0]).stroke({ width: 0.016, color: INK });
   }
   for (const q of [a, b]) {
     g.circle(q[0] - lx * 0.06, q[1] - ly * 0.06, 0.08).fill({ color: 0x000000, alpha: 0.25 });
-    g.circle(q[0], q[1], 0.075).fill(WOOD[0]).stroke({ width: 0.02, color: INK });
+    g.circle(q[0], q[1], 0.075).fill(WOOD[0]).stroke({ width: LINE, color: INK });
     g.circle(q[0] + lx * 0.02, q[1] + ly * 0.02, 0.045).fill(WOOD[2]);
   }
 }
@@ -3658,8 +3675,7 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       roofDome(g, f, light, rnd);
       break;
     case 'water_jar':
-      // (A burial urn's clay body, terracotta, some with a whitewashed lip.)
-      burialUrn(g, f, light, v % 2 ? 3 : 0, rnd);
+      waterJar(g, f, light, v, rnd);
       break;
     case 'planter':
       planter(g, f, light, v, rnd);
