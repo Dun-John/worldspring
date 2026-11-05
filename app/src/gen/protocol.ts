@@ -606,6 +606,9 @@ export interface Interior {
   function: string;
   /** Underground: the site's theme (`THEMES`). */
   theme?: string;
+  /** A city's sewers: the walkway's stonework (`under::sewer_stone`: bits 0-1 brick, dressed flags,
+   * rubble; bit 2 warm stone). */
+  stone?: number;
   /** World ft of grid corner (0, 0); grid x runs along `axis`, y along `across`. */
   origin: [number, number];
   axis: [number, number];

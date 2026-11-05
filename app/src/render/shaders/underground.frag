@@ -207,15 +207,67 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         c = mix(c, vec3(0.40, 0.38, 0.36), smoothstep(0.75, 0.88, vnoise(p * 6.0)) * 0.6);
         c = mix(c, c * 0.75, smoothstep(0.4, 0.6, vnoise(p * vec2(0.6, 3.0))) * 0.3);
     } else if (mat == 3) {
-        // Sewer walkway: running-bond brick, grimy.
-        vec2 b = q * vec2(2.0, 4.0);
-        b.x += 0.5 * mod(floor(b.y), 2.0);
+        // Sewer walkway by the city (`under::sewer_stone`, in a section's low bits of `var`):
+        // running-bond brick, dressed flags or rough rubble, warm (buff, sandstone) or cool;
+        // each piece one of three flat tones, mid-tone joints, the NW edge of flags and rubble
+        // lit. Pieces are numbered from the world (one across a section's edge is one piece).
+        float st = uPad > 0.5 ? mod(var + 0.5, 8.0) - 0.5 : 0.0;
+        float warm = step(3.5, st);
+        float kind = st - 4.0 * warm;
+        vec2 sc = kind < 0.5 ? vec2(2.0, 4.0) : kind < 1.5 ? vec2(1.0, 1.5) : vec2(2.4, 2.8);
+        vec2 b = q * sc;
+        float row = floor(b.y);
+        float shift = kind < 1.5 ? 0.5 * mod(row, 2.0) : hash21(vec2(row + mod(uOrigin.y * sc.y, 1024.0), 4.1));
+        b.x += shift;
+        vec2 id = mod(floor(b) + mod(uOrigin * sc, 1024.0), 1024.0);
         vec2 g = fract(b);
-        float mortar = 1.0 - smoothstep(0.0, 0.08, min(min(g.x, 1.0 - g.x) * 0.5, min(g.y, 1.0 - g.y)));
-        // (Numbered from the world, small: a brick across a section's edge is one brick.)
-        c = vec3(0.50, 0.40, 0.33) * (0.82 + 0.3 * hash21(mod(floor(b) + mod(uOrigin * vec2(2.0, 4.0), 1024.0), 1024.0)));
-        c = mix(c, vec3(0.30, 0.29, 0.26), mortar * 0.8);
-        c = mix(c, c * vec3(0.7, 0.75, 0.6), smoothstep(0.45, 0.8, fbm(p * 0.5 + 2.0)) * 0.5);
+        float tone = floor(hash21(id) * 2.999) * 0.5;
+        // (Square units from the piece's edge, and the way out to it.)
+        vec2 eg = min(g, 1.0 - g) / sc;
+        vec2 out2 = eg.x < eg.y ? vec2(sign(g.x - 0.5), 0.0) : vec2(0.0, sign(g.y - 0.5));
+        float edge = min(eg.x, eg.y);
+        float jw = 0.035;
+        if (kind > 1.5) {
+            // Rubble: rounded stones of a few sizes, jittered in their cells.
+            vec2 v = (g - 0.5 - 0.12 * (vec2(hash21(id + 2.2), hash21(id + 5.9)) - 0.5)) / sc;
+            vec2 hs = (0.5 - 0.06 - 0.05 * hash21(id + 8.1)) / sc;
+            float rr = 0.12;
+            vec2 a = abs(v) - hs + rr;
+            edge = rr - length(max(a, 0.0)) - min(max(a.x, a.y), 0.0);
+            out2 = normalize(v + 1e-4);
+            jw = 0.03;
+        }
+        vec3 base = kind < 0.5 ? mix(vec3(0.52, 0.41, 0.34), vec3(0.62, 0.52, 0.38), warm)
+                  : kind < 1.5 ? mix(vec3(0.56, 0.55, 0.52), vec3(0.63, 0.56, 0.44), warm)
+                  : mix(vec3(0.54, 0.52, 0.48), vec3(0.62, 0.55, 0.44), warm);
+        c = base * (kind < 0.5 ? 0.9 + 0.14 * tone : 0.87 + 0.2 * tone);
+        // Patches (one block of 3 x 3 squares in a few): repaired in another tone, following the
+        // pieces; cracks across others.
+        vec2 pc = (floor(b) + 0.5 - vec2(shift, 0.0)) / sc;
+        vec2 pw = floor((q + uOrigin) / 3.0);
+        float ph = hash21(mod(pw, 1024.0) + 11.3);
+        vec2 pm = pw * 3.0 - uOrigin + 1.5 + (vec2(hash21(pw + 3.3), hash21(pw + 6.1)) - 0.5) * 0.8;
+        vec2 pd = abs(pc - pm) - vec2(0.5, 0.45) - 0.5 * vec2(hash21(pw + 9.4), hash21(pw + 1.8));
+        if (ph > 0.78 && max(pd.x, pd.y) < 0.0) {
+            c = mix(c, (kind < 0.5 ? vec3(0.63, 0.56, 0.47) : vec3(0.49, 0.46, 0.42)) * (0.92 + 0.12 * tone), 0.85);
+        }
+        if (edge > 0.0) {
+            // The edge toward the light lit, the far edge shaded (flags and rubble).
+            float bev = (1.0 - smoothstep(0.02, 0.08, edge)) * step(0.5, kind);
+            c *= 1.0 - 0.1 * bev * dot(out2, uLight) / max(length(uLight), 1e-4);
+        }
+        if (ph > 0.62 && ph <= 0.78) {
+            float ca = 6.2832 * hash21(pw + 4.7);
+            vec2 ct = vec2(cos(ca), sin(ca));
+            vec2 cv = q - pm;
+            float along = dot(cv, ct);
+            float cd = dot(cv, vec2(-ct.y, ct.x)) + 0.12 * sin(along * 4.0 + ca) + 0.06 * sin(along * 9.0);
+            float cw = 0.018 + fwidth(cd);
+            c = mix(c, c * 0.68, (1.0 - smoothstep(cw * 0.5, cw, abs(cd))) * (1.0 - smoothstep(0.8, 1.3, abs(along))));
+        }
+        float joint = 1.0 - smoothstep(jw * 0.5, jw, edge);
+        c = mix(c, mix(base * 0.6, vec3(0.34, 0.32, 0.28), 0.5), joint * (kind < 0.5 ? 0.85 : 0.6));
+        c = mix(c, c * vec3(0.72, 0.77, 0.62), smoothstep(0.5, 0.8, fbm(p * 0.5 + 2.0)) * 0.4);
     } else if (mat == 7) {
         // Marble: a square slab per square, light and dark in turn, veined.
         vec2 cell = floor(q);
@@ -484,7 +536,8 @@ void main() {
             // A smoothed edge reaching into a rock square: the floor next to it.
             cell = texelFetch(uCells, clamp(s + ivec2(round(n)), ivec2(0), ivec2(uN) - 1), 0) * 255.0;
             // (That floor may lie past the section's edge: sewers are all brick.)
-            if (cell.a < 0.5 && uPad > 0.5) cell = vec4(3.0, 0.0, 0.0, 255.0);
+            // (The city's stonework is on the rock too.)
+            if (cell.a < 0.5 && uPad > 0.5) cell = vec4(3.0, 0.0, cell.b, 255.0);
         }
         int mat = int(cell.r + 0.5);
         col = floorColor(mat, q, p, cell.b);
@@ -549,7 +602,9 @@ void main() {
                 float stroke = smoothstep(0.0, 0.3, sf.x) * (1.0 - smoothstep(0.5, 0.95, sf.x));
                 stroke *= 1.0 - smoothstep(0.1, 0.24, abs(sf.y - 0.5 + 0.12 * sin(sf.x * 6.28 + sid.x)));
                 stroke *= step(0.55, hash21(sid + 0.7)) * calm * (1.0 - smoothstep(0.06, 0.12, px));
-                float fo = uPad > 0.5 && mat == 3 ? cell.b / 255.0 : 0.0;
+                // (Foam in steps of 8, the city's stonework in the low bits: `sewerFoam`.)
+                float stw = mod(cell.b + 0.5, 8.0) - 0.5;
+                float fo = uPad > 0.5 && mat == 3 ? (cell.b - stw) / 248.0 : 0.0;
                 liq = mix(liq, mix(liq * 1.25 + vec3(0.03, 0.04, 0.02), vec3(0.74, 0.74, 0.64), fo), stroke * 0.7);
                 // Scum and debris, drifting more slowly (cells 2 x 0.6 squares).
                 vec2 bc = vec2(fp.x * 0.5 - uTime * 0.06, fp.y * 1.6);
@@ -589,10 +644,34 @@ void main() {
                     bub *= (1.0 - smoothstep(0.0, 0.12, abs(fv))) * (1.0 - smoothstep(0.03, 0.06, px)) * smoothstep(0.53, 0.58, l);
                     liq = mix(liq, cream + vec3(0.04), bub * 0.7);
                 }
-                // On the walkway: damp brick toward the water, a soft slime band at its edge, slime
+                // Kerb stones along the edge (sewer sections): a lighter dressed course in stones
+                // a square or so long, the lip toward the water shaded, chipped here and there.
+                if (uPad > 0.5 && mat == 3) {
+                    float kw = max(lw, 0.004);
+                    float kerb = smoothstep(0.26 - kw, 0.26 + kw, l) * (1.0 - inside);
+                    float ku = fp.x * 0.85;
+                    float kid = floor(ku);
+                    float kf = fract(ku);
+                    float kh = hash21(vec2(kid, 7.7));
+                    float kwarm = step(3.5, stw);
+                    vec3 kc = mix(vec3(0.63, 0.61, 0.57), vec3(0.72, 0.65, 0.53), kwarm) * (0.92 + 0.08 * floor(kh * 2.999));
+                    // The lip: the stone's face dropping to the water.
+                    kc *= mix(1.0, 0.8, smoothstep(0.47, 0.49, l));
+                    // Chips: a bite or two out of the lip.
+                    float cx = kf - 0.25 - 0.5 * hash21(vec2(kid, 2.9));
+                    float chip = step(0.55, kh) * (1.0 - smoothstep(0.0, 0.03, length(vec2(cx * 1.4, (0.5 - l) * 2.5)) - 0.14 - 0.03 * sin(kf * 40.0)));
+                    kc = mix(kc, col * 0.78, chip);
+                    float kcalm = 1.0 - smoothstep(0.6, 1.2, fwidth(here.a) / max(px, 1e-4));
+                    float kj = (1.0 - smoothstep(0.0, 0.04 + 1.2 * fwidth(ku), min(kf, 1.0 - kf))) * kcalm * (1.0 - smoothstep(0.12, 0.25, fwidth(ku)));
+                    kc = mix(kc, kc * 0.66, kj * 0.8);
+                    // (Its inner edge: a mid-tone joint on the walkway.)
+                    kc = mix(kc, col * 0.7, (1.0 - smoothstep(0.0, kw * 2.5, l - 0.26)) * 0.7);
+                    col = mix(col, kc, kerb);
+                }
+                // On the walkway: damp stone toward the water, a soft slime band at its edge, slime
                 // at the wall foot, a few puddles.
-                col *= mix(1.0, 0.84, smoothstep(0.06, 0.4, l));
-                col = mix(col, vec3(0.36, 0.40, 0.22), smoothstep(0.34 + 0.08 * wob, 0.47, l) * 0.45);
+                col *= mix(1.0, 0.86, smoothstep(0.06, 0.4, l));
+                col = mix(col, vec3(0.36, 0.40, 0.22), smoothstep(0.44 + 0.04 * wob, 0.49, l) * 0.4);
                 col = mix(col, vec3(0.31, 0.35, 0.21), (1.0 - smoothstep(0.05, 0.16 + 0.14 * wob, d)) * 0.5);
                 vec2 pc = p * 0.5;
                 vec2 pid = floor(pc);

@@ -298,11 +298,12 @@ function flowAngle(dx: number, dy: number): number {
   return Math.max(0, Math.min(1, Math.atan2(side * s, along * s) / Math.PI + 0.5));
 }
 
-/** Foam in a sewer's channel (0-255 in its squares' blue, which brick doesn't use): round where
+/** Foam in a sewer's channel (in its squares' blue, which brick doesn't use: 0-248 in steps of 8,
+ * the city's stonework, `Interior.stone`, in the low 3 bits, on the rock round it too): round where
  * runs meet (three or more ends together), where one ends, and at the outfalls, fading over
  * `FOAM_REACH` squares. */
 const FOAM_REACH = 2.2;
-function sewerFoam(lv: InteriorLevel, paths: number[][], nx: number, ny: number, cells: Uint8Array) {
+function sewerFoam(lv: InteriorLevel, paths: number[][], nx: number, ny: number, cells: Uint8Array, stone: number) {
   const ends = new Map<string, { x: number; y: number; n: number }>();
   for (const [x0, y0, x1, y1] of paths) {
     for (const [x, y] of [[x0, y0], [x1, y1]]) {
@@ -329,7 +330,10 @@ function sewerFoam(lv: InteriorLevel, paths: number[][], nx: number, ny: number,
     }
   }
   // (The rest of the brick: none.)
-  for (let k = 0; k < nx * ny; k++) if (cells[k * 4] === 3 && !foamed.has(k)) cells[k * 4 + 2] = 0;
+  for (let k = 0; k < nx * ny; k++) {
+    if (cells[k * 4 + 3] !== 0 && cells[k * 4] !== 3) continue;
+    cells[k * 4 + 2] = ((foamed.has(k) ? cells[k * 4 + 2] : 0) & 0xf8) | (stone & 7);
+  }
 }
 
 /** The textures of a level of an underground site. */
@@ -425,7 +429,7 @@ export function underField(it: Interior, level: number): UnderField {
     liquidKind = 1;
     liquid.set(sewerChannel(paths, near, lined, nx, ny, rim, w, h));
     for (let k = 0; k < w * h; k++) if (lined[k]) floor[k] = 1;
-    sewerFoam(lv, paths, nx, ny, cells);
+    sewerFoam(lv, paths, nx, ny, cells, it.stone ?? 0);
   }
   // Natural rock is rounded; sewers follow their streets; built sites keep square corners
   // (the shader measures their walls from the squares).

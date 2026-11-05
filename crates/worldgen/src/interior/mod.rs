@@ -39,6 +39,9 @@ pub struct Interior {
     /// Underground: the site's theme (`under::THEMES`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<&'static str>,
+    /// A city's sewers: the walkway's stonework (`under::sewer_stone`), 0 for the rest.
+    #[serde(skip_serializing_if = "no_stone")]
+    pub stone: u8,
     /// World position (ft) of grid corner (0, 0); grid x runs along `axis`, grid y along
     /// `across` (both unit vectors).
     pub origin: [f64; 2],
@@ -61,6 +64,10 @@ pub struct Interior {
     /// inside it (`Shell::outlines`). Empty for the rest.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub outlines: Vec<Vec<[f32; 2]>>,
+}
+
+fn no_stone(v: &u8) -> bool {
+    *v == 0
 }
 
 /// An uploaded picture used as an item (`Edits::sprites`): its asset id and name.
@@ -2168,6 +2175,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         building: bi as u32,
         name: b.name.clone(),
         theme: None,
+        stone: 0,
         function: b.label(),
         origin,
         axis: u,
@@ -5086,6 +5094,7 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
         building: k as u32,
         name: None,
         theme: None,
+        stone: 0,
         function: if gate { "Gate tower" } else { "Wall tower" },
         origin,
         axis: u,

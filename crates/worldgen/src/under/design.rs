@@ -405,6 +405,7 @@ impl SiteDesign {
             name: None,
             function: kind.name(),
             theme: self.theme.as_deref().and_then(|t| THEMES.iter().find(|x| x.key == t)).map(|t| t.key),
+            stone: 0,
             origin: self.origin,
             axis: self.axis,
             across: [-self.axis[1], self.axis[0]],

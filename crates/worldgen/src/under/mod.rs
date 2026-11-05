@@ -591,7 +591,34 @@ pub fn sewer_site(world: &World, t0: &T0, layout: usize, sx: i64, sy: i64) -> Op
     let surface = t0.sample(origin[0] + 0.5 * s, origin[1] + 0.5 * s, 20.0) as f32;
     let frame = Frame { origin, axis: [1.0, 0.0], across: [0.0, 1.0], nx: n, ny: n };
     let caves = (Age::Living, hash3(world.stream("under.sewer"), town::rng_key(t0, layout), sx, sy ^ 0xb4ea));
-    site(t0, &l, UnderKind::Sewer, format!("w:{layout}:{sx}:{sy}"), (layout as u32, 0), frame, 2, grate, surface, (&UNDERCROFT, 1.0), caves, &mut rng)
+    let mut it = site(t0, &l, UnderKind::Sewer, format!("w:{layout}:{sx}:{sy}"), (layout as u32, 0), frame, 2, grate, surface, (&UNDERCROFT, 1.0), caves, &mut rng)?;
+    it.stone = sewer_stone(&l);
+    Some(it)
+}
+
+/// The stonework of a city's sewer walkways (`Interior::stone`), the same in every section: bits
+/// 0-1 the kind (0 running-bond brick, 1 dressed flags, 2 rough rubble), bit 2 warm stone (buff
+/// brick, sandstone). By the layout's culture (`town::roof`: 0 north, 1 west, 2 south, 3 dry,
+/// 4 steppe) and tier: small towns lay rubble, the great cities dressed stone.
+pub fn sewer_stone(l: &Layout) -> u8 {
+    let culture = l.culture % 5;
+    let (brick, flags, rubble) = match culture {
+        0 => (2, 6, 3),
+        1 => (7, 3, 1),
+        2 => (5, 4, 1),
+        3 => (1, 6, 3),
+        _ => (3, 2, 5),
+    };
+    let tier = l.tier as u32;
+    let rubble = match tier {
+        0 | 1 => rubble * 2,
+        2 => rubble,
+        _ => 0,
+    };
+    let flags = flags + if tier >= 3 { 3 } else { 0 };
+    let x = crate::core::rng::unit(hash3(l.roof_seed, 0x5e57, 0, 0x7e3a)) * (brick + flags + rubble) as f64;
+    let kind = if x < brick as f64 { 0 } else if x < (brick + flags) as f64 { 1 } else { 2 };
+    kind | if matches!(culture, 2 | 3) { 4 } else { 0 }
 }
 
 /// Kinds of house whose cellar has a way into the sewers (when it stands on a street).
@@ -829,6 +856,7 @@ fn site(
         name: None,
         function: kind.name(),
         theme: (!matches!(kind, UnderKind::Sewer | UnderKind::KeepDungeon)).then_some(theme.key),
+        stone: 0,
         origin: f.origin,
         axis: f.axis,
         across: f.across,

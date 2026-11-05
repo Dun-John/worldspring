@@ -266,6 +266,7 @@ pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::B
         name: b.name.clone(),
         function: b.label(),
         theme: None,
+        stone: 0,
         origin: sh.origin,
         axis: sh.u,
         across: sh.v,
