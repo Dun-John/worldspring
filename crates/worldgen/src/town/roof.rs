@@ -300,18 +300,20 @@ pub fn look(l: &Layout, b: &Building) -> Look {
 pub const ROUND_SIDES: usize = 16;
 
 /// A round roof's footprint (`Shape::Round`: a steppe home's, a shrine's) on its lot: a ring of
-/// `ROUND_SIDES` about the lot's widest middle, half a foot inside its sides, wound as the lot is;
-/// `None` on a lot under about 19 ft across (no round roof there: `look`). The walls, the
-/// interior and the roof all follow it (`super::round_off`).
+/// `ROUND_SIDES` about the lot's widest middle, a yard inside its sides (half a foot on a tight lot),
+/// wound as the lot is; `None` on a lot under about 19 ft across (no round roof there: `look`).
+/// The walls, the interior and the roof all follow it (`super::round_off`).
 pub fn round_footprint(lot: &[P]) -> Option<Vec<P>> {
     if lot.len() < 3 {
         return None;
     }
     let (c, clear) = widest(lot);
-    let r = clear - 0.5;
-    if r < 9.0 {
+    if clear - 0.5 < 9.0 {
         return None;
     }
+    // (A yard round it where the lot allows: about 6 ft to the lot's sides, at least 18 ft across,
+    // at most 30.)
+    let r = (clear - 6.0).clamp(9.0, 15.0);
     let u = super::geom::obb(lot).axis;
     let mut out: Vec<P> = (0..ROUND_SIDES)
         .map(|k| {

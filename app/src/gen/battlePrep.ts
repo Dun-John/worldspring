@@ -621,9 +621,12 @@ function roofMesh(roofs: Roof[]): ColorMesh {
     }
     const round = roof.cone ? null : roundOutline(roof);
     if (round) {
-      roundRoof(g, round, tint);
+      // (Felt whatever the material, unless tinted by hand.)
+      const felt = roof.tint >= 0 && roof.tint < ROOF_TINTS.length && roof.shade === 2 ? tint : FELT[roof.shade] ?? FELT[0];
+      roundRoof(g, round, felt);
       if (roof.smoke) smoke(g, round, 0.5);
       g.outline(round, INK_OUT, ROOF_INK);
+      yurtDoor(g, round, felt);
       continue;
     }
     // Footprints drawn by hand may be concave: a roof on each convex part, valleys between.
@@ -1283,31 +1286,68 @@ function roundOutline(roof: Roof): number[] | null {
   return roundEaves(roof.pts);
 }
 
-/** A low round roof (a steppe home's): shaded smoothly round from the NW, patterned in rings, the
- * crown's wooden ring and smoke hole at the top. */
-function roundRoof(g: MeshBuilder, ring: number[], tint: number) {
+/** Felt for a round roof (`Roof.shade` 0-4): cream, off-white, grey, warm cream, dusty grey. */
+const FELT = [0xc9bea6, 0xc4bdad, 0xaea595, 0xc2b394, 0xa39a88];
+
+/** A low round roof (a yurt's, whatever its material: felt over the poles): a wedge per side in three
+ * flat tones lit from the NW (shaded SE), faint seams along every other pole, two rope bands round it,
+ * the crown's wooden ring with its cross over the smoke hole; unpatterned. */
+function roundRoof(g: MeshBuilder, ring: number[], felt: number) {
   const n = ring.length / 2;
   let [cx, cy] = [0, 0];
   for (let i = 0; i < n; i++) [cx, cy] = [cx + ring[i * 2] / n, cy + ring[i * 2 + 1] / n];
-  let rise = 0;
-  for (let i = 0; i < n; i++) rise += Math.hypot(ring[i * 2] - cx, ring[i * 2 + 1] - cy) / n;
-  const shade = (x: number, y: number) => {
-    const l = Math.hypot(x - cx, y - cy) || 1;
-    return shadeHex(tint, 0.86 + 0.28 * ((-((x - cx) + (y - cy)) / l / Math.SQRT2 + 1) / 2));
-  };
-  let u0 = g.seed;
+  let r = 0;
+  for (let i = 0; i < n; i++) r += Math.hypot(ring[i * 2] - cx, ring[i * 2 + 1] - cy) / n;
   for (let i = 0; i < n; i++) {
     const [ax, ay, bx, by] = [ring[i * 2], ring[i * 2 + 1], ring[((i + 1) % n) * 2], ring[((i + 1) % n) * 2 + 1]];
-    const l = Math.hypot(bx - ax, by - ay) / FT;
-    const a = g.vert(ax, ay, shade(ax, ay), 1, u0, 0, g.code, 1);
-    const b = g.vert(bx, by, shade(bx, by), 1, u0 + l, 0, g.code, 1);
-    g.tri(a, b, g.vert(cx, cy, shadeHex(tint, 1.02), 1, 0, rise / FT, g.code, 0));
-    u0 += l;
+    const [mx, my] = [(ax + bx) / 2 - cx, (ay + by) / 2 - cy];
+    const t = -(mx + my) / (Math.hypot(mx, my) || 1) / Math.SQRT2;
+    const c = shadeHex(felt, t > 0.2 ? 1.08 : t > -0.55 ? 0.98 : 0.84);
+    g.tri(g.vert(ax, ay, c, 1), g.vert(bx, by, c, 1), g.vert(cx, cy, c, 1));
   }
-  const r = rise * 0.2;
-  g.poly(circle(cx, cy, r, 12), 0x8a6a48);
-  g.poly(circle(cx + r * 0.1, cy + r * 0.1, r * 0.62, 12), 0x2a2420);
-  g.outline(circle(cx, cy, r, 12), INK_LINE, ROOF_INK);
+  const rc = Math.max(r * 0.2, 0.9 * FT);
+  const at = (i: number, f: number): [number, number] => [cx + (ring[(i % n) * 2] - cx) * f, cy + (ring[(i % n) * 2 + 1] - cy) * f];
+  // (Seams down every other pole, faint: a darker felt.)
+  const seam = shadeHex(felt, 0.86);
+  for (let i = 0; i < n; i += 2) {
+    const [ax, ay] = at(i, rc / r + 0.02);
+    const [bx, by] = at(i, 0.97);
+    g.line(ax, ay, bx, by, 0.02 * PX, seam, 1);
+  }
+  // (Two girth ropes, dark hemp, following the sides.)
+  for (const f of [0.52, 0.8]) {
+    const band: number[] = [];
+    for (let i = 0; i < n; i++) band.push(...at(i, f));
+    g.outline(band, 0.06 * PX, 0x4a3d31);
+  }
+  // The crown: a wooden ring, the smoke hole dark inside it, crossed by two bars.
+  const wood = 0x8a6a48;
+  g.poly(circle(cx, cy, rc, 16), wood);
+  g.poly(circle(cx, cy, rc * 0.7, 16), 0x2e2822);
+  const s = rc * 0.78;
+  g.line(cx - s, cy, cx + s, cy, 0.03 * PX, wood, 1);
+  g.line(cx, cy - s, cx, cy + s, 0.03 * PX, wood, 1);
+  g.outline(circle(cx, cy, rc, 16), INK_LINE, ROOF_INK);
+}
+
+/** A yurt's door on its south side (where they face): a small painted panel under a felt hood, through
+ * the rim, inked; drawn over the eaves' ink. */
+function yurtDoor(g: MeshBuilder, ring: number[], felt: number) {
+  const n = ring.length / 2;
+  let [cx, cy, low] = [0, 0, -Infinity];
+  for (let i = 0; i < n; i++) [cx, cy] = [cx + ring[i * 2] / n, cy + ring[i * 2 + 1] / n];
+  for (let i = 0; i < n; i++) low = Math.max(low, ring[i * 2 + 1]);
+  // (Where the rim crosses due south of the middle: the lowest y of the sides spanning cx.)
+  let ey = low;
+  for (let i = 0; i < n; i++) {
+    const [ax, ay, bx, by] = [ring[i * 2], ring[i * 2 + 1], ring[((i + 1) % n) * 2], ring[((i + 1) % n) * 2 + 1]];
+    if ((ax - cx) * (bx - cx) <= 0 && ax !== bx && ay > cy) ey = ay + ((cx - ax) / (bx - ax)) * (by - ay);
+  }
+  const [w, out, ins] = [1.6 * FT, 1.1 * FT, 1.4 * FT];
+  const hood = [cx - w, ey - ins, cx + w, ey - ins, cx + w, ey + out, cx - w, ey + out];
+  g.poly(hood, shadeHex(felt, 0.9));
+  g.poly([cx - w * 0.6, ey - ins * 0.2, cx + w * 0.6, ey - ins * 0.2, cx + w * 0.6, ey + out, cx - w * 0.6, ey + out], 0x8a4a32);
+  g.outline(hood, INK_LINE, ROOF_INK);
 }
 
 /** A smithy's (kiln's, still's) chimney on its ridge `at` of the way along, and the soot round it. */
