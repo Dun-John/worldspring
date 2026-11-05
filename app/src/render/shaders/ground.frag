@@ -122,7 +122,8 @@ vec3 stoneLook(vec3 col, vec2 v, float hs, float joint, float aa) {
 vec3 cobbles(vec3 col, vec2 w, bool fan) {
     vec3 flat_ = col * 0.95;
     float px = (fan ? 0.5333 : 0.5) * uPxPerSq;
-    float show = smoothstep(3.0, 5.0, px);
+    // (Stones gone by ~5 px, so at town zoom the 5-ft grid reads over the paving.)
+    float show = smoothstep(5.0, 10.0, px);
     if (show <= 0.0) return flat_;
     float jw = max(0.5, 0.035 * px);
     vec3 stone;
