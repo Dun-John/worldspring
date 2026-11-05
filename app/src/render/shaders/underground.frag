@@ -533,8 +533,10 @@ void main() {
                 float wob = vnoise(p * 0.8 + 31.0);
                 float lt = l + 0.03 * (wob - 0.5);
                 float sw = max(lw, 0.006);
-                liq = mix(vec3(0.35, 0.35, 0.21), vec3(0.28, 0.29, 0.17), smoothstep(0.565 - sw, 0.565 + sw, lt));
-                liq = mix(liq, vec3(0.22, 0.23, 0.14), smoothstep(0.625 - sw, 0.625 + sw, lt));
+                liq = mix(vec3(0.32, 0.37, 0.20), vec3(0.26, 0.31, 0.16), smoothstep(0.565 - sw, 0.565 + sw, lt));
+                liq = mix(liq, vec3(0.21, 0.26, 0.13), smoothstep(0.625 - sw, 0.625 + sw, lt));
+                // A thin wet glint just inside each edge (matte, painted).
+                liq = mix(liq, vec3(0.47, 0.52, 0.34), (1.0 - smoothstep(0.0, max(lw * 1.2, 0.005), abs(lt - 0.512))) * 0.7);
                 // Along and across the run (`flowAngle`; the strokes fade where runs meet).
                 float ph = (here.a - 0.5) * 3.14159265;
                 vec2 fd = cos(ph) * vec2(0.958, 0.287) + sin(ph) * vec2(-0.287, 0.958);
@@ -561,22 +563,31 @@ void main() {
                 vec3 scum = mix(vec3(0.50, 0.49, 0.30), vec3(0.62, 0.60, 0.38), smoothstep(-0.3, 0.6, -dot(bg, uLight) / br));
                 scum = mix(scum, vec3(0.30, 0.22, 0.14), deb);
                 liq = mix(liq, scum, blob * 0.9);
-                // Foam where runs meet, end or fall out (sewer sections' brick only).
-                // (Cells half a square, inside its squares: each a puff of two rounds.)
+                // Foam where runs meet, end or fall out (sewer sections' brick only): soft cream
+                // patches merging along the falling water, a few small bubbles at their edges.
                 if (fo > 0.0) {
-                    vec2 fc = p * 2.0;
-                    vec2 fid = floor(fc);
-                    float fh = hash21(fid + 4.4);
-                    float fr = (0.24 + 0.14 * hash21(fid + 9.2)) * (0.6 + 0.4 * fo) * (0.92 + 0.08 * sin(uTime * 1.7 + fh * 6.0));
-                    vec2 fo2 = vec2(hash21(fid + 1.1), hash21(fid + 6.6)) - 0.5;
-                    vec2 fv = fract(fc) - 0.5 - 0.12 * fo2;
-                    float fm = min(length(fv) - fr, length(fv + fo2 * 0.5) - fr * 0.7);
-                    float bub = (1.0 - smoothstep(-0.03, 0.02, fm)) * step(fh, 0.15 + 0.85 * fo);
-                    vec3 froth = mix(vec3(0.64, 0.65, 0.56), vec3(0.84, 0.84, 0.76), smoothstep(-0.2, 0.3, -dot(fv, uLight) / max(fr, 1e-3)));
-                    // (Far out the puffs drop away, the froth staying as a wash.)
-                    float near = 1.0 - smoothstep(0.04, 0.08, px);
-                    liq = mix(liq, vec3(0.52, 0.53, 0.42), fo * fo * mix(0.55, 0.3, near));
-                    liq = mix(liq, froth, bub * near * smoothstep(0.53, 0.58, l));
+                    // (Value noise from hashes, drifting downstream, roughened by `wob`; no fetches.)
+                    vec2 fc = vec2(fp.x * 2.2 - uTime * 0.3, fp.y * 2.8);
+                    vec2 fi = floor(fc);
+                    vec2 ff = fract(fc);
+                    ff = ff * ff * (3.0 - 2.0 * ff);
+                    float fn = mix(mix(hash21(fi), hash21(fi + vec2(1.0, 0.0)), ff.x), mix(hash21(fi + vec2(0.0, 1.0)), hash21(fi + 1.0), ff.x), ff.y);
+                    fn = 0.75 * fn + 0.25 * wob;
+                    float fv = fn + 0.9 * fo - 0.95;
+                    float fw = 0.06 + 0.5 * px;
+                    float fpat = smoothstep(-fw, fw, fv) * smoothstep(0.52, 0.56, l);
+                    vec3 cream = liq * 1.05 + vec3(0.16, 0.14, 0.10);
+                    // (Lit from the upper left: lighter on the side toward the light.)
+                    cream += vec3(0.03) * clamp(-dot(fd, uLight) * fv * 4.0, -1.0, 1.0);
+                    liq = mix(liq, cream, fpat * 0.85);
+                    // Bubbles: one in a few cells, jittered, only round the patch edges, near in.
+                    vec2 hc = p * 2.5;
+                    vec2 hid = floor(hc);
+                    vec2 hv = fract(hc) - 0.2 - 0.6 * vec2(hash21(hid + 1.1), hash21(hid + 6.6));
+                    float hr = 0.07 + 0.05 * hash21(hid + 9.2);
+                    float bub = (1.0 - smoothstep(hr - 0.03, hr, length(hv))) * step(0.78, hash21(hid + 4.4));
+                    bub *= (1.0 - smoothstep(0.0, 0.12, abs(fv))) * (1.0 - smoothstep(0.03, 0.06, px)) * smoothstep(0.53, 0.58, l);
+                    liq = mix(liq, cream + vec3(0.04), bub * 0.7);
                 }
                 // On the walkway: damp brick toward the water, a soft slime band at its edge, slime
                 // at the wall foot, a few puddles.
