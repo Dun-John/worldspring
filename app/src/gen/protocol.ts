@@ -158,18 +158,18 @@ export type RoofMaterial = 'thatch' | 'slate' | 'clay_tile' | 'shingle' | 'turf'
 export const ROOF_MATERIALS: RoofMaterial[] = ['thatch', 'slate', 'clay_tile', 'shingle', 'turf', 'lead', 'copper', 'glazed_tile', 'flat_clay', 'hide', 'plank', 'whitewash'];
 /** The materials the old tints map to (`roof::TINT_MATERIAL`). */
 export const TINT_MATERIAL: Record<Tint, RoofMaterial> = { terracotta: 'clay_tile', slate: 'slate', thatch: 'thatch', shingle: 'shingle', moss: 'turf' };
-export const ROOF_MATERIAL_RGB = [0xaf8e51, 0x5c6470, 0x995742, 0x7a6656, 0x6e6a48, 0x7c848c, 0x5c9a88, 0x4a718b, 0xb89a72, 0x9c8a6c, 0x86684a, 0xc4baa7];
+export const ROOF_MATERIAL_RGB = [0xa88b5c, 0x5c6470, 0x995742, 0x7a6656, 0x7f7b54, 0x7c848c, 0x6a9282, 0x4a718b, 0xb89a72, 0x9c8a6c, 0x86684a, 0xc4baa7];
 /** Five colours per material (`Look.shade` 0-4, matte; index 2 is `ROOF_MATERIAL_RGB`, the usual one). Slate
  * keeps two hues (cool grey, warm grey-moss), glaze is dusty (saturation about 0.5), plaster a warm cream. */
 export const ROOF_SHADES = [
-  [0x857353, 0x997f51, 0xaf8e51, 0xc09c53, 0x755a3b], // thatch: silver, dark straw, golden, bright gold, brown
-  [0x5f6874, 0x646c5c, 0x5c6470, 0x6a6560, 0x47494d], // slate: blue-grey, moss-grey, grey, warm grey, dark
+  [0x86775f, 0x957d58, 0xa88b5c, 0xb59765, 0x765d42], // thatch: silver, dark straw, golden, bright gold, brown
+  [0x5f6874, 0x71766a, 0x5c6470, 0x6a6560, 0x55575c], // slate: blue-grey, moss-grey, grey, warm grey, dark
   [0x864c40, 0xb06a44, 0x995742, 0x86614c, 0xac6350], // clay tile: dark brick, orange, red, brown, salmon
   [0x665a50, 0x6e6a5c, 0x7a6656, 0x8a7258, 0x8c8074], // shingle: dark, grey-green, brown, warm, weathered
-  [0x5a6a42, 0x62664a, 0x6e6a48, 0x7c7448, 0x5a5a40], // turf: green, moss, olive, dry, dark
+  [0x6a7c4e, 0x727756, 0x7f7b54, 0x8c8454, 0x6a6a4b], // turf: green, moss, olive, dry, dark
   [0x6c747c, 0x727e86, 0x7c848c, 0x8a8c88, 0x9098a0], // lead: dark, blue, grey, warm, light
-  [0x9a6a4c, 0x7c8e68, 0x5c9a88, 0x4e8a80, 0x70a898], // copper: bare, olive, verdigris, teal, pale
-  [0x3f766a, 0x476486, 0x4a718b, 0x52899b, 0x675786], // glazed tile: green, deep blue, blue, turquoise, violet
+  [0x9a6a4c, 0x7c8e68, 0x6a9282, 0x5f877a, 0x7fa192], // copper: bare, olive, verdigris, teal, pale
+  [0x4f7868, 0x476486, 0x4a718b, 0x5d8790, 0x675786], // glazed tile: green, deep blue, blue, turquoise, violet
   [0xa8885f, 0xb0a080, 0xb89a72, 0xc4a47c, 0x9a8268], // flat clay: darker, pale, sand, warm, umber
   [0x7c6a52, 0x8a7c64, 0x9c8a6c, 0xaa9a7c, 0x9a7e66], // hide: dark, grey, tan, pale, reddish
   [0x6e5a44, 0x7a6a56, 0x86684a, 0x94744e, 0x8a6a56], // plank: dark, grey, brown, warm, rosy

@@ -1,8 +1,9 @@
 #version 300 es
 // Pre-tessellated, vertex-coloured triangles (battlemap roofs), in chunk pixels; roof faces carry
 // their pattern's coordinates and code (`battlePrep` MeshBuilder.vert). Lines (code -2 - half width) have
-// their vertices on the middle, the unit normal in xy and the side in w: widened here to at least a
-// screen pixel and a pixel more to antialias (`colormesh.frag`).
+// their vertices on the middle, the unit normal in xy and the side in w (±2 for ink): widened here to at
+// least a screen pixel and a pixel more to antialias (`colormesh.frag`); ink never thinner than at 29 px a
+// square, as the mipmapped sprites' outlines hold their weight.
 
 in vec2 aPos;
 in vec4 aColor;
@@ -26,10 +27,11 @@ void main() {
     if (aRoof.z < -1.5) {
         // (Screen px per chunk px: the battlemap's 64 a square.)
         float sc = uPxPerSq / 64.0;
-        float hw = -2.0 - aRoof.z;
+        float side = sign(aRoof.w);
+        float hw = (-2.0 - aRoof.z) * (abs(aRoof.w) > 1.5 ? max(1.0, 29.0 / uPxPerSq) : 1.0);
         float e = max(hw, 0.5 / sc) + 1.0 / sc;
-        pos += aRoof.xy * (aRoof.w * e);
-        vRoof = vec3(aRoof.w * e * sc, hw * sc, 0.0);
+        pos += aRoof.xy * (side * e);
+        vRoof = vec3(side * e * sc, hw * sc, 0.0);
     }
     gl_Position = vec4((uProjectionMatrix * m * vec3(pos, 1.0)).xy, 0.0, 1.0);
 }

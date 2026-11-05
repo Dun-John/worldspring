@@ -112,11 +112,13 @@ export interface PreparedChunk {
 }
 
 // Roof tints: terracotta, slate, thatch, weathered shingle, moss.
-export const ROOF_TINTS = [0x995742, 0x5c6470, 0xaf8e51, 0x7a6656, 0x6e6a48];
+export const ROOF_TINTS = [0x995742, 0x5c6470, 0xa88b5c, 0x7a6656, 0x7f7b54];
 export const ROOF_INK = 0x1d1a14;
-/** Ink weights (chunk px) as the sprites': `OUT` (0.045 sq) round a roof, `LINE` (0.025) inside it. */
-const INK_OUT = 0.045 * PX;
-const INK_LINE = 0.025 * PX;
+/** Ink weights (chunk px): round a roof between the big props' (stalls, carts: 0.055 sq), a little over the
+ * sprites' `LINE` inside it (0.032); never thinner on screen than at 29 px a square (`colormesh.vert`),
+ * as the mipmapped sprites' ink. */
+const INK_OUT = 0.055 * PX;
+const INK_LINE = 0.032 * PX;
 
 export function shadeHex(c: number, f: number): number {
   const ch = (s: number) => Math.min(255, Math.max(0, Math.round(((c >> s) & 255) * f)));
@@ -490,8 +492,9 @@ class MeshBuilder {
   }
 
   /** A butt-capped line `w` wide, extended by `ext` past each end: its vertices on the middle, the
-   * unit normal and side in `roof` (code -2 - w/2), widened in `colormesh.vert` to at least a screen
-   * pixel plus one to antialias its sides (`colormesh.frag`). */
+   * unit normal and side in `roof` (code -2 - w/2; the side ±2 for ink, kept at least as wide as at 29 px
+   * a square), widened in `colormesh.vert` to at least a screen pixel plus one to antialias its sides
+   * (`colormesh.frag`). */
   line(ax: number, ay: number, bx: number, by: number, w: number, c: number, a: number, ext = 0) {
     const l = Math.hypot(bx - ax, by - ay);
     if (l < 1e-6) return;
@@ -499,11 +502,12 @@ class MeshBuilder {
     const [sx, sy, ex, ey] = [ax - ux * ext, ay - uy * ext, bx + ux * ext, by + uy * ext];
     const v0 = this.pos.length / 2;
     const code = -2 - w / 2;
+    const ink = c === ROOF_INK ? 2 : 1;
     for (const [x, y, k] of [
-      [sx, sy, 1],
-      [ex, ey, 1],
-      [ex, ey, -1],
-      [sx, sy, -1],
+      [sx, sy, ink],
+      [ex, ey, ink],
+      [ex, ey, -ink],
+      [sx, sy, -ink],
     ]) {
       this.pos.push(x, y);
       this.color.push(((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, a);
@@ -719,7 +723,7 @@ function belfryTop(g: MeshBuilder, pts: number[]) {
   const at = (f: number) => pts.map((v, i) => (i % 2 ? cy : cx) + (v - (i % 2 ? cy : cx)) * f);
   const spire = at(0.86);
   // The spire's faces: the lit one pale, the far ones deep (a steep pitch), courses and hips.
-  const tint = 0x5c9a88;
+  const tint = 0x6a9282;
   const ccw = signedArea(spire) > 0;
   for (let i = 0; i < 4; i++) {
     const [ax, ay, bx, by] = [spire[i * 2], spire[i * 2 + 1], spire[((i + 1) % 4) * 2], spire[((i + 1) % 4) * 2 + 1]];

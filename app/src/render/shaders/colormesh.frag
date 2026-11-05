@@ -39,31 +39,25 @@ float tone3(float h) {
     return h < 0.34 ? 0.94 : h < 0.67 ? 1.0 : 1.055;
 }
 
-// Rows of rounded scallops w ft wide and h ft tall, each row offset half a piece: row n's lower edge
-// hangs drop ft at a piece's middle. Returns (row, x in pieces, ft up from its own edge, ft down to the
-// next row's edge).
-vec4 scallops(float u, float v, float w, float h, float drop) {
-    float n = floor(v / h);
-    float e1 = (n + 1.0) * h - drop * sin(3.14159 * fract(u / w + 0.5 * mod(n + 1.0, 2.0)));
-    if (v >= e1) n += 1.0;
-    float x = u / w + 0.5 * mod(n, 2.0);
-    float e0 = n * h - drop * sin(3.14159 * fract(x));
-    float eu = (n + 1.0) * h - drop * sin(3.14159 * fract(u / w + 0.5 * mod(n + 1.0, 2.0)));
-    return vec4(n, x, v - e0, eu - v);
+// Row n's pieces across: about w ft wide (jit: up to that fraction wider or narrower), offset half a piece
+// from the row below, plus up to jit of a piece.
+float rowX(float u, float n, float w, float jit) {
+    return u / (w * (1.0 + jit * (hash(vec2(n, 3.7)) - 0.5))) + 0.5 * mod(n, 2.0) + jit * hash(vec2(n, 8.1));
 }
 
-// A short painted crack on plaster: a zigzag stroke in about a quarter of 12-ft cells.
-float crack(vec2 p, float lw, float px) {
-    vec2 cell = floor(p / 12.0);
-    float h = hash(cell + 23.0);
-    if (h > 0.25) return 0.0;
-    vec2 o = p - (cell + 0.3 + 0.4 * vec2(hash(cell + 7.0), hash(cell + 9.0))) * 12.0;
-    float an = h * 25.0;
-    vec2 dir = vec2(cos(an), sin(an));
-    float along = dot(o, dir);
-    float across = dot(o, vec2(-dir.y, dir.x)) - 0.35 * (abs(fract(along * 0.55) - 0.5) * 2.0 - 0.5);
-    float len = 1.4 + 1.2 * fract(h * 37.0);
-    return ln(abs(across), lw * (1.0 - 0.6 * abs(along) / len), px) * step(abs(along), len);
+// Rows of rounded scallops (`rowX`) h ft tall: row n's lower edge hangs drop ft at a piece's middle.
+// Returns (row, x in pieces, ft up from its own edge, ft down to the next row's edge).
+vec4 scallops(float u, float v, float w, float h, float drop, float jit) {
+    float n = floor(v / h);
+    float eu = (n + 1.0) * h - drop * sin(3.14159 * fract(rowX(u, n + 1.0, w, jit)));
+    float x;
+    if (v >= eu) {
+        n += 1.0;
+        x = rowX(u, n, w, jit);
+        eu = (n + 1.0) * h - drop * sin(3.14159 * fract(rowX(u, n + 1.0, w, jit)));
+    } else x = rowX(u, n, w, jit);
+    float e0 = n * h - drop * sin(3.14159 * fract(x));
+    return vec4(n, x, v - e0, eu - v);
 }
 
 void main() {
@@ -89,15 +83,16 @@ void main() {
             // Matte: saturation at most 0.55 at the same value (copper and glazed tile, dustier: 0.5).
             float mx = max(col.r, max(col.g, col.b));
             float sat = (mx - min(col.r, min(col.g, col.b))) / max(mx, 1e-3);
-            float cap = mat == 6 || mat == 7 ? 0.5 : 0.55;
+            float cap = mat == 0 ? 0.45 : mat == 6 || mat == 7 ? 0.42 : 0.55;
             if (sat > cap) col = mx - (mx - col) * (cap / sat);
             // The pieces' size (ft; shrinking toward a cone's or dome's apex): under ~4 px the drawing fades
             // to the flat colour.
-            float size = mat <= 1 ? 3.4 : mat <= 3 ? 3.0 : mat == 4 ? 4.4 : mat <= 6 ? 4.4 : mat == 7 ? 2.8 : mat == 9 ? 5.5 : mat == 10 ? 2.2 : 8.0;
+            float size = mat == 0 ? 4.6 : mat == 1 ? 3.4 : mat == 2 ? 4.8 : mat == 3 ? 3.0 : mat == 4 ? 4.4 : mat <= 6 ? 4.4 : mat == 7 ? 2.8 : mat == 9 ? 5.5 : mat == 10 ? 2.2 : 8.0;
             float sp = size * pxFt * min(vRoof.z, 1.0);
-            float k = smoothstep(4.0, 7.0, sp);
+            // (Clay's scale rows go sooner: at a wide zoom they alias into hatching.)
+            float k = mat == 2 ? smoothstep(8.0, 13.0, sp) : smoothstep(4.0, 7.0, sp);
             // (Scallops and piece joints go first, to flat courses.)
-            float kp = smoothstep(8.0, 14.0, sp);
+            float kp = mat == 2 ? smoothstep(13.0, 20.0, sp) : smoothstep(8.0, 14.0, sp);
             if (k > 0.0) {
                 vec3 c = col;
                 float s = 1.0;
@@ -110,37 +105,32 @@ void main() {
                 // Moss takes to it (not metal, glaze or plaster).
                 bool mossy = mat <= 4 || mat == 9 || mat == 10;
                 if (mat == 0) {
-                    // Thatch: courses of soft bundled tufts hanging over the one below, two long straw
-                    // strokes in each, the next course's shadow on its top.
-                    vec4 q = scallops(u, v + wob, 3.0, 3.4, 0.8 * kp);
-                    float fx = fract(q.y);
-                    float th = hash(vec2(floor(q.y), q.x));
-                    s = (q.z < 0.7 ? 1.05 : 1.0) * mix(0.86, 1.0, stp(0.6, q.w, px));
-                    s *= 1.0 - 0.18 * ln(q.z, lw, px);
-                    // (Two bold lighter straw bands down each tuft.)
-                    float st = min(abs(fx - 0.3 - 0.06 * th), abs(fx - 0.7 + 0.06 * th)) * 3.0;
-                    s *= 1.0 + 0.12 * kp * ln(st, 0.6, px) * step(0.35, q.z) * step(q.z, 2.5);
+                    // Thatch: a few wide wavy courses of straw hanging over the one below, each lit along
+                    // its lower lip, the next course's shadow on its top; no strokes inside.
+                    vec4 q = scallops(u, v + wob, 4.6, 4.4, 0.7 * kp, 0.0);
+                    s = (q.z < 0.9 ? 1.05 : 1.0) * mix(0.88, 1.0, stp(0.8, q.w, px));
+                    s *= 1.0 - 0.16 * ln(q.z, lw, px);
                 } else if (mat == 1) {
-                    // Slate: big offset rectangles in three soft tones, a course line under each row and a joint
+                    // Slate: big offset rectangles in two soft tones, a course line under each row and a joint
                     // between slates, the next course's shadow on its top.
                     float vv = v + wob;
                     float row = floor(vv / 3.2);
                     float x = u / 4.4 + 0.5 * mod(row, 2.0);
-                    tile = hash(vec2(floor(x), row));
                     float fx = fract(x);
                     float fv = fract(vv / 3.2) * 3.2;
-                    // (A tone per patch of 3 slates by 3 courses.)
-                    s = tone3(hash(vec2(floor(floor(x) / 3.0), floor(row / 3.0)))) * mix(1.0, 0.92, stp(2.65, fv, px));
+                    // (A tone per patch of 3 slates by 3 courses, two tones; no patched slates.)
+                    s = (hash(vec2(floor(floor(x) / 3.0), floor(row / 3.0))) < 0.5 ? 0.975 : 1.025) * mix(1.0, 0.92, stp(2.65, fv, px));
                     s *= 1.0 - 0.26 * ln(fv, lw, px);
                     s *= 1.0 - 0.2 * kp * ln(min(fx, 1.0 - fx) * 4.4, lw, px);
                 } else if (mat == 2) {
                     // Clay tile: a few chunky rows of rounded scallops, each lit on one flank and shaded on the
                     // other in flat tones, its lower rim drawn.
-                    vec4 q = scallops(u, v + wob, 3.2, 2.8, kp);
+                    // (Scales a little uneven in size and offset; the rim a mid brown, not ink.)
+                    vec4 q = scallops(u, v + wob, 4.8, 4.2, kp, 0.25);
                     float fx = fract(q.y);
                     tile = hash(vec2(floor(q.y), q.x));
-                    s = mix(1.0, fx < 0.32 ? 1.08 : fx < 0.7 ? 1.0 : 0.9, kp) * mix(0.84, 1.0, stp(0.55, q.w, px));
-                    s *= 1.0 - 0.3 * ln(q.z, lw * 1.2, px);
+                    s = mix(1.0, fx < 0.32 ? 1.08 : fx < 0.7 ? 1.0 : 0.9, kp) * mix(0.86, 1.0, stp(0.8, q.w, px));
+                    c = mix(c, vec3(0.45, 0.31, 0.23) / max(s, 0.5), 0.55 * ln(q.z, lw * 1.2, px));
                 } else if (mat == 3) {
                     // Wood shingle: uneven courses of odd-width shingles, close tones, a grain stroke in each.
                     float vv = v + wob;
@@ -213,7 +203,7 @@ void main() {
                     float gx = abs(fx - 0.3 - 0.4 * fract(tile * 5.1)) * 2.2;
                     s *= 1.0 - 0.12 * kp * ln(gx, lw, px) * step(0.15, e) * step(e, 0.7);
                 } else {
-                    // Flat clay and whitewash: smooth plaster, a few soft painted patches, a crack or two.
+                    // Flat clay and whitewash: smooth plaster, a few soft painted patches.
                     if (mat == 8) c *= vec3(1.03, 1.0, 0.96);
                     vec2 cell = floor(p / 11.0);
                     float ph = hash(cell + 61.0);
@@ -223,7 +213,6 @@ void main() {
                         float d = length(o * vec2(1.0, 1.3)) + 0.35 * sin(o.x * 0.9 + o.y * 0.7 + ph * 20.0);
                         s = mix(1.0, ph < 0.2 ? 0.95 : 1.04, 1.0 - smoothstep(r - 0.8, r + 0.4, d));
                     }
-                    s *= 1.0 - 0.18 * crack(p, lw, px);
                 }
                 if (wear > 0.05) {
                     // A patched piece of a slightly different flat tone here and there; a few soft painted moss
@@ -238,13 +227,14 @@ void main() {
                     }
                     vec2 mc = floor(p / 9.0);
                     // (Only old roofs, and few blobs on them: spread evenly they read as polka dots.)
-                    if (hash(mc + 41.0) < max(0.0, wear - 0.55) * 0.5) {
+                    if (hash(mc + 41.0) < max(0.0, wear - 0.6) * 0.3) {
                         vec2 o = p - (mc + 0.5) * 9.0 - 2.0 * (vec2(hash(mc + 43.0), hash(mc + 47.0)) - 0.5);
                         float r = 1.2 + 0.8 * hash(mc + 53.0);
                         float d = min(length(o), length(o - vec2(0.55, 0.3) * r) + 0.2);
-                        float mm = 1.0 - smoothstep(r - 0.35, r + 0.05, d);
-                        if (mossy) c = mix(c, vec3(0.4, 0.43, 0.27) / max(s, 0.5), mm * 0.45);
-                        else s *= 1.0 - 0.06 * mm;
+                        // (Soft, and gone before a wide zoom smudges them.)
+                        float mm = (1.0 - smoothstep(r - 0.8, r + 0.2, d)) * kp;
+                        if (mossy) c = mix(c, vec3(0.42, 0.45, 0.3) / max(s, 0.5), mm * 0.32);
+                        else s *= 1.0 - 0.05 * mm;
                     }
                 }
                 col = mix(col, c * s, k);
