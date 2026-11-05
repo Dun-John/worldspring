@@ -15,7 +15,7 @@
 //!  .. roads: same layout, vertices as (x, y in tile units, bed width ft, class).
 //!  .. site polygons (levels >= SITE_MIN_LEVEL): n u32, n_verts u32, starts u32[n + 1],
 //!     attrs u32[n] (kind | ward << 8 | floors (to 15) << 16 | roof material (`town::roof`, to 15)
-//!     << 20 | has-function << 24; kind 0 building,
+//!     << 20 | has-function << 24 | (a plain building) roof colour variant 0-4 << 29; kind 0 building,
 //!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard, 6 deck: bridge or pier, 7 monument,
 //!     8 a camp's clearing, 9 a tent (or a park's gazebo), 11 a park's water (its pond as a fan
 //!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
@@ -394,7 +394,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         crate::town::Structure::Open => 5,
                     };
                     // (Its roof's material in bits 20-23, its storeys capped at 15 below them.)
-                    let attr = kind | (b.ward as u32) << 8 | (b.floors.min(15) as u32) << 16 | (crate::town::roof::look(&l, b).material as u32 & 15) << 20 | (b.func.is_some() as u32) << 24;
+                    let k = crate::town::roof::look(&l, b);
+                    let attr = kind | (b.ward as u32) << 8 | (b.floors.min(15) as u32) << 16 | (k.material as u32 & 15) << 20 | (b.func.is_some() as u32) << 24;
+                    // (A plain building's colour variant in bits 29-31; a keep's pieces use them for their tops.)
+                    let plain = attr | (k.shade as u32) << 29;
                     // A keep of pieces: each piece (convex, outlined), its towers over its body;
                     // each with its kind + 1 (bits 25-28: 1 body, 2 round tower, 3 square tower, 4
                     // forebuilding, 5 wing) and how it is topped (bits 29-31: `town::keep_tops`, its
@@ -404,7 +407,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     if crate::town::temple::shaped(b) {
                         whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
                         for p in &b.parts {
-                            push(&p.poly, attr);
+                            push(&p.poly, plain);
                         }
                         whole.set(None);
                         continue;
@@ -416,7 +419,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     if let Some(t) = crate::town::belfry::of(b) {
                         use crate::town::geom::{add, hull, mean, mul, sub};
                         whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
-                        push(&b.parts[0].poly, attr);
+                        push(&b.parts[0].poly, plain);
                         let c = mean(&t.poly);
                         let mut sh: Vec<[f64; 2]> = t.poly.iter().flat_map(|&p| [p, add(p, [11.0, 11.0])]).collect();
                         sh.push(add(c, [21.0, 21.0]));
@@ -477,7 +480,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                             }
                         }
                         for k in 0..4 {
-                            push(&[b.poly[k], b.poly[(k + 1) % 4], q[(k + 1) % 4], q[k]], attr);
+                            push(&[b.poly[k], b.poly[(k + 1) % 4], q[(k + 1) % 4], q[k]], plain);
                         }
                         // (A coaching inn's carriage arch: the yard's cobbles out through its mouth to
                         // the street.)
@@ -497,12 +500,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     // (all in the tile holding its middle).
                     if let Some((main, wing)) = crate::interior::cross_wing_of(world, t0, &l, b) {
                         whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
-                        push(&main, attr);
-                        push(&wing, attr);
+                        push(&main, plain);
+                        push(&wing, plain);
                         whole.set(None);
                         continue;
                     }
-                    push(&b.poly, attr);
+                    push(&b.poly, plain);
                     // A keep's round corner towers (as the battlemap draws them), standing a
                     // little proud of its walls; each tile keeps the ones it owns.
                     if let Some(t) = crate::interior::battlements(b)

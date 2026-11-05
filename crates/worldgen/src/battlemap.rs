@@ -2906,11 +2906,11 @@ fn roof_byte(b: &crate::town::Building, battlements: bool) -> u8 {
     style | b.tint.map_or(0, |t| (t + 1) << 2)
 }
 
-/// A roof's look as packed (`town::roof::look`): material id, shape id | 0x10 smoke-darkened,
-/// weathering 0-255.
+/// A roof's look as packed (`town::roof::look`): material id, shape id | 0x10 smoke-darkened |
+/// colour variant << 5, weathering 0-255.
 fn look_bytes(l: &crate::town::Layout, b: &crate::town::Building) -> [u8; 3] {
     let k = crate::town::roof::look(l, b);
-    [k.material as u8, k.shape as u8 | if k.smoke { 0x10 } else { 0 }, k.wear]
+    [k.material as u8, k.shape as u8 | if k.smoke { 0x10 } else { 0 } | k.shade << 5, k.wear]
 }
 
 fn apply_edits(c: &mut Chunk, e: &crate::world::Edits, ox: f64, oy: f64) {

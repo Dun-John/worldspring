@@ -22,26 +22,29 @@ export interface BuildSettings {
   /** Roof material and shape; '' picked. */
   material: RoofMaterial | '';
   rshape: RoofShape | '';
+  /** Colour variant 0-4 of the material (`ROOF_SHADES`); '' picked. */
+  shade: number | '';
   ruin: boolean;
   /** '' named for its trade. */
   name: string;
 }
 
-export const defaultBuild = (): BuildSettings => ({ shape: 'rect', func: 'house', floors: 1, roof: '', material: '', rshape: '', ruin: false, name: '' });
+export const defaultBuild = (): BuildSettings => ({ shape: 'rect', func: 'house', floors: 1, roof: '', material: '', rshape: '', shade: '', ruin: false, name: '' });
 
 /** A building's options from the menu's choices (as `Created` holds them). */
-export function buildOptions(s: BuildSettings): Pick<Created, 'func' | 'floors' | 'roof' | 'material' | 'shape' | 'structure'> {
-  const o: Pick<Created, 'func' | 'floors' | 'roof' | 'material' | 'shape' | 'structure'> = { func: s.func, floors: s.floors };
+export function buildOptions(s: BuildSettings): Pick<Created, 'func' | 'floors' | 'roof' | 'material' | 'shape' | 'shade' | 'structure'> {
+  const o: Pick<Created, 'func' | 'floors' | 'roof' | 'material' | 'shape' | 'shade' | 'structure'> = { func: s.func, floors: s.floors };
   if (s.roof) o.roof = s.roof;
   if (s.material) o.material = s.material;
   if (s.rshape) o.shape = s.rshape;
+  if (s.shade !== '') o.shade = s.shade;
   if (s.ruin) o.structure = 'ruin';
   return o;
 }
 
 /** The menu's choices for a building drawn earlier. */
 export function settingsOf(c: Created, shape: BuildShape): BuildSettings {
-  return { shape, func: c.func ?? 'house', floors: c.floors ?? 1, roof: c.roof ?? '', material: c.material ?? (c.tint ? TINT_MATERIAL[c.tint] : ''), rshape: c.shape ?? '', ruin: c.structure === 'ruin', name: c.name };
+  return { shape, func: c.func ?? 'house', floors: c.floors ?? 1, roof: c.roof ?? '', material: c.material ?? (c.tint ? TINT_MATERIAL[c.tint] : ''), rshape: c.shape ?? '', shade: c.shade ?? '', ruin: c.structure === 'ruin', name: c.name };
 }
 
 const GRID = 5;

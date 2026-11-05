@@ -86,6 +86,8 @@ pub struct Look {
     pub shape: Shape,
     pub wear: u8,
     pub smoke: bool,
+    /// Colour variant 0-4 of the material (`app/src/gen/protocol.ts` `ROOF_SHADES`); 2 the usual.
+    pub shade: u8,
 }
 
 /// What a building is for, as its roof tells it.
@@ -282,5 +284,11 @@ pub fn look(l: &Layout, b: &Building) -> Look {
         wear += 70.0;
     }
     let smoke = matches!(key, "blacksmith" | "armorer" | "weaponsmith" | "glassblower" | "potter" | "distillery");
-    Look { material, shape, wear: wear.clamp(0.0, 255.0) as u8, smoke }
+    // Colour: by hand, else (an old tint keeping its colour) the usual one or a hashed variant.
+    let shade = match b.shade {
+        Some(s) => s.min(4),
+        None if b.tint.is_some() => 2,
+        None => pick(h(11), &[(0u8, 1), (1, 3), (2, 8), (3, 3), (4, 1)]),
+    };
+    Look { material, shape, wear: wear.clamp(0.0, 255.0) as u8, smoke, shade }
 }

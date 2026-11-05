@@ -24,6 +24,7 @@ fn props() -> Value {
         "tint": { "type": "string", "enum": ([TINTS.as_slice(), &["auto"]].concat()), "description": "Roof colour (auto: picked)" },
         "material": { "type": "string", "enum": ([roof::MATERIALS.as_slice(), &["auto"]].concat()), "description": "Roof material: thatch, slate, clay_tile, shingle, turf, lead, copper, glazed_tile, flat_clay, hide, plank, whitewash (auto: picked for its town and kind; wins over tint)" },
         "shape": { "type": "string", "enum": ([roof::SHAPES.as_slice(), &["auto"]].concat()), "description": "Roof shape: hip, gable, cone, dome, flat (behind a parapet; a walkable terrace), round (auto: picked). Not for battlements" },
+        "shade": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 4 }, { "type": "string", "enum": ["auto"] }], "description": "Roof colour of the material, one of its 5 variants (slate: 0 blue-grey, 1 green-grey, 2 the usual, 3 purple-grey, 4 dark; clay_tile: 0 brick, 1 orange, 2 the usual, 3 brown, 4 pale; each material has its own, 2 always the usual). auto: picked (mostly the usual)" },
         "structure": { "type": "string", "enum": STRUCTURES, "description": "roofed (default) or ruin (broken walls, no roof, no interior)" },
     })
 }
@@ -46,8 +47,8 @@ pub fn list() -> Vec<Value> {
     }
     let poly = json!({ "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } });
     vec![
-        json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle), or near a place with width_ft and depth_ft (the nearest clear lot on a street), on dry land clear of other buildings, roads, streets, walls and squares, with what it is, storeys, roof, roof colour, material and shape. It gets an interior (enter_building / get_interior on its building id), a roof and walls on the battlemap. Returns its id (c:<n>, for update_building, delete_feature, notes and NPCs) and its building id (b:<layout>:0).", "inputSchema": schema(create, &[]) }),
-        json!({ "name": "update_building", "title": "Change a building", "description": "Change a building: one drawn by hand (c:<n>) or one of the world's own (b:<layout>:<id>, as get_feature and list_children give them): a new footprint (poly, rect or circle; checked like a new one), name, func, floors, roof, tint, material, shape or structure. Fields left out stay; for the world's own, auto (or an empty func) goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
+        json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle), or near a place with width_ft and depth_ft (the nearest clear lot on a street), on dry land clear of other buildings, roads, streets, walls and squares, with what it is, storeys, roof, roof colour, material, shape and shade. It gets an interior (enter_building / get_interior on its building id), a roof and walls on the battlemap. Returns its id (c:<n>, for update_building, delete_feature, notes and NPCs) and its building id (b:<layout>:0).", "inputSchema": schema(create, &[]) }),
+        json!({ "name": "update_building", "title": "Change a building", "description": "Change a building: one drawn by hand (c:<n>) or one of the world's own (b:<layout>:<id>, as get_feature and list_children give them): a new footprint (poly, rect or circle; checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; for the world's own, auto (or an empty func) goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
         json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not (water, river, another building, street, road, wall, square).", "inputSchema": schema(check, &[]), "annotations": { "readOnlyHint": true } }),
         json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away buildings of the world's own (not drawn by hand: delete_feature does those): by ids (b:<layout>:<id>), or every one whose middle lies inside a polygon (within, [[x_ft, y_ft], ...]) such as a ward to clear for buildings of your own. Every other building keeps its id. restore_building brings one back.", "inputSchema": schema(json!({ "ids": { "type": "array", "items": { "type": "string" } }, "within": poly }), &[]) }),
         json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and any update_building change (its name stays as renamed).", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]) }),
@@ -88,6 +89,18 @@ async fn check_spot(app: &Shared, a: &Value) -> Result<Value, String> {
         .await
 }
 
+/// The `shade` argument: none given, `auto` (`Some(None)`) or a variant 0-4.
+fn shade_arg(a: &Value) -> Result<Option<Option<u8>>, String> {
+    match &a["shade"] {
+        Value::Null => Ok(None),
+        Value::String(s) if s == "auto" => Ok(Some(None)),
+        v => match v.as_u64() {
+            Some(n) if n <= 4 => Ok(Some(Some(n as u8))),
+            _ => Err("shade: 0 to 4 (2 the usual), or auto".into()),
+        },
+    }
+}
+
 /// Change one of the world's own buildings (`Edits.buildings`; its name goes to `renames`).
 async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, String> {
     let opt = |k: &str| a[k].as_str().map(|s| s.trim().to_string());
@@ -95,7 +108,7 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
         Value::Null => None,
         v => Some(v.as_u64().filter(|f| *f <= 255).ok_or("floors: a whole number")? as u8),
     };
-    let change = agent::BuildingChange { func: opt("func"), floors, poly: footprint(a)?, roof: opt("roof"), tint: opt("tint"), material: opt("material"), shape: opt("shape"), structure: opt("structure") };
+    let change = agent::BuildingChange { func: opt("func"), floors, poly: footprint(a)?, roof: opt("roof"), tint: opt("tint"), material: opt("material"), shape: opt("shape"), shade: shade_arg(a)?, structure: opt("structure") };
     let name = opt("name");
     let id2 = id.clone();
     // Its inside designed by hand: new storeys follow (in the same change); a new footprint or a
@@ -292,6 +305,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     }
     if let Some(r) = opt("shape") {
         c.shape = Some(r).filter(|r| r != "auto");
+    }
+    if let Some(s) = shade_arg(a)? {
+        c.shade = s;
     }
     if let Some(s) = opt("structure") {
         c.structure = Some(s).filter(|s| s != "roofed");

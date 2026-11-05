@@ -1700,6 +1700,7 @@
       roof: (e?.roof ?? '') as BuildSettings['roof'],
       material: (e?.material ?? (e?.tint ? TINT_MATERIAL[e.tint as Tint] : '')) as BuildSettings['material'],
       rshape: (e?.shape ?? '') as BuildSettings['rshape'],
+      shade: e?.shade ?? '',
       ruin: hit.ward !== 'underground' && (e?.structure === 'ruin' || hit.function.toLowerCase() === 'ruined building'),
       name: '',
     };
@@ -1725,6 +1726,10 @@
       if (edits.buildings?.[id]?.tint) change.tint = 'auto';
     }
     if (build.rshape !== g.was.rshape) change.shape = build.rshape || 'auto';
+    if (build.shade !== g.was.shade) {
+      change.shade = build.shade === '' ? 'auto' : build.shade;
+      if (edits.buildings?.[id]?.tint) change.tint = 'auto';
+    }
     if (build.ruin !== g.was.ruin) change.structure = build.ruin ? 'ruin' : 'roofed';
     if (poly) change.poly = poly;
     const r = await view.gen.buildingEdit(id, change);
@@ -1822,7 +1827,7 @@
     if (genEditing) return void saveGenerated();
     const c = buildEditing ? drawnBuilding(buildEditing) : null;
     if (!c) return;
-    const { roof: _r, tint: _t, material: _m, shape: _h, structure: _s, ...rest } = c;
+    const { roof: _r, tint: _t, material: _m, shape: _h, shade: _d, structure: _s, ...rest } = c;
     const next: Created = { ...rest, ...buildOptions(build), name: build.name.trim() || c.name };
     const bid = drawnBuildingId(c.id);
     let designs = edits.designs;

@@ -124,6 +124,8 @@ export interface Created {
   /** Roof material and shape (`ROOF_MATERIALS`, `ROOF_SHAPES`); else the tint's / the roof's, else picked. */
   material?: RoofMaterial;
   shape?: RoofShape;
+  /** Roof colour variant 0-4 of the material (`ROOF_SHADES`; 2 the usual), else picked. */
+  shade?: number;
   structure?: 'roofed' | 'ruin';
   /** A castle drawn by hand (its outline in `poly`, `structure` too): the side its gate is in
    * (corner `gate` to the next; else facing the nearest road), a keep, buildings round the yard
@@ -157,6 +159,23 @@ export const ROOF_MATERIALS: RoofMaterial[] = ['thatch', 'slate', 'clay_tile', '
 /** The materials the old tints map to (`roof::TINT_MATERIAL`). */
 export const TINT_MATERIAL: Record<Tint, RoofMaterial> = { terracotta: 'clay_tile', slate: 'slate', thatch: 'thatch', shingle: 'shingle', moss: 'turf' };
 export const ROOF_MATERIAL_RGB = [0xa88e56, 0x5c6470, 0xa0543c, 0x7a6656, 0x6e6a48, 0x7c848c, 0x5c9a88, 0x3f6f8f, 0xb89a72, 0x9c8a6c, 0x86684a, 0xe0d8c8];
+/** Five colours per material (`Look.shade` 0-4, matte; index 2 is `ROOF_MATERIAL_RGB`, the usual one). */
+export const ROOF_SHADES = [
+  [0x7e7358, 0x927f56, 0xa88e56, 0xb99c58, 0x6e5a40], // thatch: silver, dark straw, golden, bright gold, brown
+  [0x58687c, 0x57695f, 0x5c6470, 0x6b6274, 0x44484f], // slate: blue-grey, green-grey, grey, purple-grey, dark
+  [0x8c4a3c, 0xb8683c, 0xa0543c, 0x8a6048, 0xb4604a], // clay tile: dark brick, orange, red, brown, salmon
+  [0x665a50, 0x6e6a5c, 0x7a6656, 0x8a7258, 0x8c8074], // shingle: dark, grey-green, brown, warm, weathered
+  [0x5a6a42, 0x62664a, 0x6e6a48, 0x7c7448, 0x5a5a40], // turf: green, moss, olive, dry, dark
+  [0x6c747c, 0x727e86, 0x7c848c, 0x8a8c88, 0x9098a0], // lead: dark, blue, grey, warm, light
+  [0x9a6a4c, 0x7c8e68, 0x5c9a88, 0x4e8a80, 0x70a898], // copper: bare, olive, verdigris, teal, pale
+  [0x3c7a6c, 0x3a5f8a, 0x3f6f8f, 0x4a8aa0, 0x6a5a8a], // glazed tile: green, deep blue, blue, turquoise, violet
+  [0xa8885f, 0xb0a080, 0xb89a72, 0xc4a47c, 0x9a8268], // flat clay: darker, pale, sand, warm, umber
+  [0x7c6a52, 0x8a7c64, 0x9c8a6c, 0xaa9a7c, 0x9a7e66], // hide: dark, grey, tan, pale, reddish
+  [0x6e5a44, 0x7a6a56, 0x86684a, 0x94744e, 0x8a6a56], // plank: dark, grey, brown, warm, rosy
+  [0xd0d0cc, 0xd8d0b8, 0xe0d8c8, 0xe8e0d0, 0xd8c8b4], // whitewash: cool, cream, lime, bright, sand
+];
+/** A roof material's colour in a variant (0-4; bad values: the usual). */
+export const roofRgb = (material: number, shade = 2): number => ROOF_SHADES[material]?.[shade] ?? ROOF_MATERIAL_RGB[material] ?? ROOF_MATERIAL_RGB[3];
 /** Roof shapes by id (`worldgen::town::roof::SHAPES`, append-only). */
 export type RoofShape = 'hip' | 'gable' | 'cone' | 'dome' | 'flat' | 'round';
 export const ROOF_SHAPES: RoofShape[] = ['hip', 'gable', 'cone', 'dome', 'flat', 'round'];
@@ -381,6 +400,7 @@ export interface BuildingEdit {
   tint?: string;
   material?: string;
   shape?: string;
+  shade?: number;
   structure?: string;
 }
 
@@ -906,7 +926,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         // A roofed building: its roof material's colour, softened toward its ward's paper brown
         // (watabou-ish), a business a little deeper.
         const base = WARD_RGB[ward] ?? WARD_RGB[6];
-        const m = ROOF_MATERIAL_RGB[material] ?? ROOF_MATERIAL_RGB[3];
+        const m = roofRgb(material, (attr >>> 29) & 7);
         const shade = (0.94 + 0.12 * (((i * 2654435761) >>> 0) / 4294967296)) * (hasFunc ? 0.88 : 1);
         rgb = [0, 1, 2].map((c) => (0.6 * (((m >> (16 - 8 * c)) & 255) / 255) + 0.4 * base[c]) * shade) as [number, number, number];
       } else {

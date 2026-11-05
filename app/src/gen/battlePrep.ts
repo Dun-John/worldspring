@@ -4,7 +4,7 @@
 // Graphics tessellation in a frame).
 import earcut from 'earcut';
 import { BLOCKS, DIFFICULT, OPAQUE } from '../play/vision';
-import { ROOF_MATERIAL_RGB } from './protocol';
+import { roofRgb, ROOF_MATERIAL_RGB } from './protocol';
 
 export const SQ = 128;
 export const HS = SQ + 2;
@@ -30,6 +30,8 @@ export interface Roof {
   shape: number;
   smoke: boolean;
   wear: number;
+  /** Colour variant 0-4 of the material (`ROOF_SHADES`). */
+  shade: number;
   /** A hash of where it stands. */
   idx: number;
   /** A keep's pieces (`battlemap::part_code`: 0 body, 1 round tower, 2 square tower, 3
@@ -210,7 +212,7 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
       const towerByte = dv.getUint8(o + 3);
       const tower = towerByte === 255 ? 0 : (towerByte & 63) * PX;
       const top = towerByte === 255 ? 0 : towerByte >> 6;
-      // Material, shape | 0x10 smoke, weathering (`battlemap::look_bytes`).
+      // Material, shape | 0x10 smoke | shade << 5, weathering (`battlemap::look_bytes`).
       const material = dv.getUint8(o + 4);
       const shapeByte = dv.getUint8(o + 5);
       const wear = dv.getUint8(o + 6);
@@ -238,7 +240,7 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
           parts.push({ kind: code & 15, top: code >> 4, pts: pp });
         }
       }
-      roofs.push({ pts, floors, battlements, tower, top, cone, tint, material, shape: shapeByte & 15, smoke: (shapeByte & 0x10) !== 0, wear, idx: at, parts });
+      roofs.push({ pts, floors, battlements, tower, top, cone, tint, material, shape: shapeByte & 15, smoke: (shapeByte & 0x10) !== 0, shade: shapeByte >> 5, wear, idx: at, parts });
     }
     // Walls, towers and decks, drawn as vectors (see `battlemap::pack`).
     const nShapes = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
@@ -527,7 +529,7 @@ function roofMesh(roofs: Roof[]): ColorMesh {
   }
   for (const roof of roofs) {
     if (roof.battlements || roof.pts.length < 6) continue;
-    const tint = roof.tint >= 0 && roof.tint < ROOF_TINTS.length ? ROOF_TINTS[roof.tint] : (ROOF_MATERIAL_RGB[roof.material] ?? ROOF_TINTS[3]);
+    const tint = roof.tint >= 0 && roof.tint < ROOF_TINTS.length && roof.shade === 2 ? ROOF_TINTS[roof.tint] : (ROOF_MATERIAL_RGB[roof.material] === undefined ? ROOF_TINTS[3] : roofRgb(roof.material, roof.shade));
     g.mat = roof.material < ROOF_MATERIAL_RGB.length ? roof.material : 3;
     g.code = g.mat + 16 * Math.min(15, roof.wear >> 4);
     g.seed = (((roof.idx * 2654435761) >>> 0) % 509) * 0.73;

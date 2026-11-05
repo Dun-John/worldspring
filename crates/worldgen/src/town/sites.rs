@@ -81,6 +81,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             tint: None,
             material: None,
             shape: None,
+            shade: None,
             id: 0,
             parts: Vec::new(),
             keep: None,
@@ -335,23 +336,27 @@ fn drawn(c: &crate::world::Created, poly: Vec<P>, pad_ft: f32, rng: &mut Pcg32, 
         tint: None,
         material: None,
         shape: None,
+            shade: None,
         id: 0,
         parts: Vec::new(),
         keep: None,
     };
     apply_looks(&mut b, c.roof.as_deref(), c.tint.as_deref(), c.structure.as_deref());
-    apply_roof(&mut b, c.material.as_deref(), c.shape.as_deref());
+    apply_roof(&mut b, c.material.as_deref(), c.shape.as_deref(), c.shade);
     b
 }
 
 /// A roof material (`roof::MATERIALS`) and shape (`roof::SHAPES`) chosen by hand; each not given
 /// stays as it is.
-pub fn apply_roof(b: &mut Building, material: Option<&str>, shape: Option<&str>) {
+pub fn apply_roof(b: &mut Building, material: Option<&str>, shape: Option<&str>, shade: Option<u8>) {
     if let Some(m) = material.and_then(super::roof::Material::by_name) {
         b.material = Some(m as u8);
     }
     if let Some(s) = shape.and_then(super::roof::Shape::by_name) {
         b.shape = Some(s as u8);
+    }
+    if shade.is_some() {
+        b.shade = shade;
     }
 }
 

@@ -437,6 +437,9 @@ pub struct BuildingEdit {
     pub material: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<String>,
+    /// Roof colour variant 0-4 of its material (2 the usual), else picked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shade: Option<u8>,
     /// `roofed` or `ruin`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure: Option<String>,
@@ -466,6 +469,7 @@ impl BuildingEdit {
             tint: self.tint.clone(),
             material: self.material.clone(),
             shape: self.shape.clone(),
+            shade: self.shade,
             structure: self.structure.clone(),
             ..Default::default()
         };
@@ -474,7 +478,7 @@ impl BuildingEdit {
 
     /// Whether it changes nothing (every option as generated).
     pub fn is_noop(&self) -> bool {
-        !self.removed && self.func.is_none() && self.floors.is_none() && self.poly.is_empty() && self.roof.is_none() && self.tint.is_none() && self.material.is_none() && self.shape.is_none() && self.structure.is_none()
+        !self.removed && self.func.is_none() && self.floors.is_none() && self.poly.is_empty() && self.roof.is_none() && self.tint.is_none() && self.material.is_none() && self.shape.is_none() && self.shade.is_none() && self.structure.is_none()
     }
 }
 
@@ -815,6 +819,9 @@ pub struct Created {
     pub material: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape: Option<String>,
+    /// Roof colour variant 0-4 of its material (2 the usual), else picked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shade: Option<u8>,
     /// `roofed` (default) or `ruin` (broken walls, no roof).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure: Option<String>,
@@ -1003,7 +1010,7 @@ impl Created {
             "wall" => return self.check_wall(),
             _ => {}
         }
-        if !self.poly.is_empty() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.structure.is_some() || works {
+        if !self.poly.is_empty() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() || self.structure.is_some() || works {
             return Err("footprint, floors, function, roof, tint and structure are for buildings; gates, keep and lines for castles and walls".into());
         }
         if let Some(u) = &self.under {
@@ -1072,6 +1079,9 @@ impl Created {
                 return Err(format!("{what} must be one of {}", list.join(", ")));
             }
         }
+        if self.shade.is_some_and(|s| s > 4) {
+            return Err("shade: 0 to 4 (2 the usual colour of its material)".into());
+        }
         Ok(())
     }
 }
@@ -1081,7 +1091,7 @@ impl Created {
     /// to `CASTLE_MAX_FT` across, its gate on one of its sides; ruined or not.
     fn check_castle(&self) -> Result<(), String> {
         use crate::town::geom::{cross, obb, sub};
-        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() {
+        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() {
             return Err("a castle takes its outline (poly), gate, keep, yard_buildings and structure".into());
         }
         if !self.pts.is_empty() || !self.gates.is_empty() || self.closed {
@@ -1123,7 +1133,7 @@ impl Created {
     /// A wall's options: a line of 2–64 corners (a ring of 3 or more if closed), each side at
     /// least 10 ft, at most `WALL_MAX_FT` in all, its gates on its corners.
     fn check_wall(&self) -> Result<(), String> {
-        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() {
+        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() {
             return Err("a wall takes its line (pts), gates and closed".into());
         }
         if !self.poly.is_empty() || self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || self.structure.is_some() {

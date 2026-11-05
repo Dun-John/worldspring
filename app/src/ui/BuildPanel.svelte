@@ -10,7 +10,7 @@
   // or ferry) by clicking one bank, then the other; clicking one picks it to change or take away.
   // Castle: an outline (a rectangle or a convex polygon), then the side its gate is in; Wall: a
   // line of corners (a ring if closed), gates on the corners clicked twice.
-  import { CROSSING_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial } from '../gen/protocol';
+  import { CROSSING_WIDTH, MAX_FLOORS, ROOFS, ROOF_MATERIALS, ROOF_MATERIAL_RGB, ROOF_SHADES, ROOF_SHAPES, type BuildingFuncs, type CrossingKind, type CrossingMaterial } from '../gen/protocol';
   import type { BuildSettings, BuildShape } from '../editor/build';
   import type { CrossSettings } from '../editor/crossing';
   import type { ClearShape } from '../editor/clearArea';
@@ -294,10 +294,23 @@
     <div class="ws-field">
       Roof material
       <div class="tints" role="radiogroup" aria-label="Roof material">
-        <button class="ws-chip" class:on={settings.material === ''} role="radio" aria-checked={settings.material === ''} onclick={() => (settings.material = '')} title="Picked for it">Picked</button>
+        <button class="ws-chip" class:on={settings.material === ''} role="radio" aria-checked={settings.material === ''} onclick={() => ((settings.material = ''), (settings.shade = ''))} title="Picked for it">Picked</button>
         {#each ROOF_MATERIALS as m, i (m)}
-          <button class="swatch" class:on={settings.material === m} role="radio" aria-checked={settings.material === m} style:background={hex(ROOF_MATERIAL_RGB[i])} onclick={() => (settings.material = m)} title={label(m)} aria-label={label(m)}></button>
+          <button class="swatch" class:on={settings.material === m} role="radio" aria-checked={settings.material === m} style:background={hex(ROOF_MATERIAL_RGB[i])} onclick={() => ((settings.material = m), (settings.shade = ''))} title={label(m)} aria-label={label(m)}></button>
         {/each}
+      </div>
+    </div>
+    <div class="ws-field">
+      Roof colour
+      <div class="tints" role="radiogroup" aria-label="Roof colour">
+        <button class="ws-chip" class:on={settings.shade === ''} role="radio" aria-checked={settings.shade === ''} onclick={() => (settings.shade = '')} title="Picked for it">Picked</button>
+        {#if settings.material}
+          {#each ROOF_SHADES[ROOF_MATERIALS.indexOf(settings.material)] as c, k (k)}
+            <button class="swatch" class:on={settings.shade === k} role="radio" aria-checked={settings.shade === k} style:background={hex(c)} onclick={() => (settings.shade = k)} title={k === 2 ? 'Usual' : `Variant ${k + 1}`} aria-label={k === 2 ? 'Usual colour' : `Variant ${k + 1}`}></button>
+          {/each}
+        {:else}
+          <span class="ws-hint">Pick a material for its colours</span>
+        {/if}
       </div>
     </div>
     <label class="switch">

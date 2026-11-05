@@ -128,6 +128,10 @@ pub fn created_detail(c: &crate::world::Created) -> String {
         let tint = c.tint.as_ref().map(|t| format!("{t} roof"));
         let material = c.material.as_ref().map(|m| format!("{} roof", m.replace('_', " ")));
         let shape = c.shape.as_ref().map(|r| format!("{r} roof shape"));
+        let shape = match (shape, c.shade) {
+            (s, Some(n)) => Some(format!("{}colour {n}", s.map_or(String::new(), |s| format!("{s}, ")))),
+            (s, None) => s,
+        };
         let ruin = (c.structure.as_deref() == Some("ruin")).then(|| "ruined".to_string());
         let opts: Vec<String> = [what, floors, ruin, roof, tint, material, shape].into_iter().flatten().collect();
         return if opts.is_empty() { "created building".into() } else { format!("created building ({})", opts.join(", ")) };
@@ -413,6 +417,8 @@ pub struct BuildingChange {
     pub tint: Option<String>,
     pub material: Option<String>,
     pub shape: Option<String>,
+    /// `Some(None)`: back to picked.
+    pub shade: Option<Option<u8>>,
     pub structure: Option<String>,
 }
 
@@ -454,6 +460,12 @@ pub fn building_edit(world: &World, t0: &T0, id: &str, change: &BuildingChange) 
     }
     if change.shape.is_some() {
         e.shape = keep(&change.shape);
+    }
+    if let Some(s) = change.shade {
+        if s.is_some_and(|s| s > 4) {
+            return Err("shade must be 0 to 4 (2 the usual), or auto".into());
+        }
+        e.shade = s;
     }
     if change.structure.is_some() {
         let generated = match g.structure {
@@ -1274,6 +1286,7 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
             let k = town::roof::look(&l, b);
             v["roof_material"] = json!(town::roof::MATERIALS[k.material as usize]);
             v["roof_shape"] = json!(town::roof::SHAPES[k.shape as usize]);
+            v["roof_shade"] = json!(k.shade);
         }
         // The footprint: corners in order, and its long side's direction and size.
         let o = geom::obb(&b.poly);
