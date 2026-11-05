@@ -52,7 +52,9 @@ const ROUGH_DETOUR = 1;
 const PROP_GAP = 0.85;
 const DOOR_GAP = 1;
 /** What a wall prop may lie over: the floor and what is strewn on it. */
-const UNDERFOOT = new Set(['sewage', 'lava', 'rail', 'guano', 'moss', 'rubble', 'debris', 'sulfur']);
+const UNDERFOOT = new Set(['sewage', 'lava', 'rail', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'drain', 'grille']);
+/** Props drawn along the run of a sewer under them (`runDir`). */
+const ALONG_RUN = new Set(['drain', 'grille']);
 /** Per level, the squares a line's floor can be painted on (`nearFloor`). */
 const NEAR_FLOOR = new WeakMap<InteriorLevel, Uint8Array>();
 /** An item's `back` (0 north 1 east 2 south 3 west) as a unit step in grid axes. */
@@ -577,6 +579,8 @@ export class InteriorLayer {
   private under: { uniforms: UniformGroup; sources: BufferImageSource[]; shader: Shader; mesh: Mesh<any, any>; level: number } | null = null;
   /** Underground levels' textures, worked out once each (`underField`). */
   private readonly fields = new Map<number, UnderField>();
+  /** Props along a sewer run (`runOf`), worked out once each. */
+  private readonly runs = new WeakMap<InteriorItem, { dir: [number, number]; at: [number, number]; span: [number, number] }>();
   /** Rough walls by level (`roughAnchors`). */
   private readonly rough = new Map<number, RoughWalls>();
   /** Props on a curving wall, worked out once each (`wallAnchor`). */
@@ -1689,7 +1693,63 @@ export class InteriorLayer {
     const variant = SCATTERED.has(f.kind) || UNDER_DRAWN.has(f.kind) || f.kind === 'key' ? this.lookOf(f) : 0;
     const links = f.kind === 'rail' || f.kind === 'ore_cart' ? `:r${this.railLinks(f)}` : '';
     const rock = f.kind === 'niche' && !turned ? `:k${this.rockBehind(f)}` : '';
-    return `u:${base}:${light}:${wall}:${variant}${links}${rock}`;
+    const ro = ALONG_RUN.has(f.kind) ? this.runOf(f) : null;
+    const run = ro ? `:d${ro.dir.map((v) => Math.round(v * 16)).join(',')}` + (f.kind === 'grille' ? `:${(ro.at[0] - f.x).toFixed(2)},${(ro.at[1] - f.y).toFixed(2)}:${ro.span.join(',')}` : '') : '';
+    return `u:${base}:${light}:${wall}:${variant}${links}${rock}${run}`;
+  }
+
+  /** The way the sewer runs under prop `f` (unit, grid axes): its nearest line's, turned downstream (toward the way
+   * every run flows, as `underField` paints it), rounded to 16ths, as its key; east where the level has no lines.
+   * `at`: the square's middle moved onto that line, and `span` how far the channel reaches either side of it there
+   * (squares, to tenths: a grille crosses it), from the level's field. */
+  private runDir(f: InteriorItem): [number, number] {
+    return this.runOf(f).dir;
+  }
+
+  private runOf(f: InteriorItem): { dir: [number, number]; at: [number, number]; span: [number, number] } {
+    const hit = this.runs.get(f);
+    if (hit) return hit;
+    const lines = this.interior.levels[this.level].paths ?? [];
+    const [px, py] = [f.x + 0.5, f.y + 0.5];
+    let best: [number, number] = [1, 0];
+    let at: [number, number] = [px, py];
+    let near = Infinity;
+    for (const [x0, y0, x1, y1] of lines) {
+      const [dx, dy] = [x1 - x0, y1 - y0];
+      const len2 = Math.max(dx * dx + dy * dy, 1e-9);
+      const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / len2));
+      const d = Math.hypot(px - x0 - t * dx, py - y0 - t * dy);
+      if (d < near) {
+        near = d;
+        const s = (dx * 0.958 + dy * 0.287 < 0 ? -1 : 1) / Math.sqrt(len2);
+        best = [dx * s, dy * s];
+        at = [x0 + t * dx, y0 + t * dy];
+      }
+    }
+    const [a, b] = [Math.round(best[0] * 16) / 16, Math.round(best[1] * 16) / 16];
+    const l = Math.hypot(a, b) || 1;
+    const dir: [number, number] = [a / l, b / l];
+    at = [Math.round(at[0] * 20) / 20, Math.round(at[1] * 20) / 20];
+    let span: [number, number] = [0.6, 0.6];
+    if (f.kind === 'grille' && lines.length) {
+      let field = this.fields.get(this.level);
+      if (!field) this.fields.set(this.level, (field = underField(this.interior, this.level)));
+      const fd = field;
+      const wet = (x: number, y: number) => {
+        const tx = Math.max(0, Math.min(fd.w - 1, Math.floor((x + fd.pad) * FIELD_RES)));
+        const ty = Math.max(0, Math.min(fd.h - 1, Math.floor((y + fd.pad) * FIELD_RES)));
+        return fd.data[(ty * fd.w + tx) * 4 + 1] >= 128;
+      };
+      const reach = (side: number) => {
+        let d = 0;
+        while (d < 2.5 && wet(at[0] - dir[1] * side * (d + 0.05), at[1] + dir[0] * side * (d + 0.05))) d += 0.05;
+        return Math.max(0.3, Math.round(d * 10) / 10);
+      };
+      span = [reach(-1), reach(1)];
+    }
+    const r = { dir, at, span };
+    this.runs.set(f, r);
+    return r;
   }
 
   /** The sides (north 1, east 2, south 4, west 8) a rail or an ore cart joins the rails beside it: a rail its
@@ -1992,7 +2052,7 @@ export class InteriorLayer {
     }
     // (Indoor props in a building too.)
     const turned = this.wallAnchor(f);
-    if ((this.underground || !shared) && drawUnderProp(g, f, turned?.light ?? this.light, this.lookOf(f), turned ? [0, -1] : ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : [0, 0], this.railLinks(f), !!turned, kind === 'niche' && !turned ? this.rockBehind(f) : 2)) return;
+    if ((this.underground || !shared) && drawUnderProp(g, f, turned?.light ?? this.light, this.lookOf(f), turned ? [0, -1] : ON_WALL.has(kind) ? this.propWall(f) : BACKED.has(kind) ? this.backWall(f) : ALONG_RUN.has(kind) ? this.runDir(f) : [0, 0], this.railLinks(f), !!turned, kind === 'niche' && !turned ? this.rockBehind(f) : 2, kind === 'grille' ? this.runOf(f) : undefined)) return;
     if (kind === 'sprite') {
       // A picture not loaded yet (or no renderer): a plain square in its place.
       g.rect(x + 0.1, y + 0.1, w - 0.2, h - 0.2).fill({ color: 0x786046, alpha: 0.5 }).stroke({ width: 0.05, color: INK });

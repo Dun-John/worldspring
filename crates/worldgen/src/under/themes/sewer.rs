@@ -256,9 +256,78 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
     }
     // Sewage down the middle of the runs, where the channel is painted; dry floor along the walls.
     let sewage = channel(&p, nx, ny, &beyond);
+    // (Squares with something on them before the sewage: the drains and grilles keep off them.)
+    let held = p.taken.clone();
+    let mut wet_sq = vec![false; n];
     for k in 0..n {
         if sewage[k] && p.cells[k] == tunnel && !p.taken[k] && !keep(&p, k) {
             p.put(Item::new("sewage", "sewage channel", k % nx, k / nx, 1, 1, 0, false, 0.0, Some("difficult terrain; swallowed: DC 11 Con save or poisoned for 1 hour")));
+            wet_sq[k] = true;
+        }
+    }
+    // Daylight through the drain grates in the street overhead (`drain_grates`, as the battlemap
+    // draws them), over the sewage or the walkway alike.
+    for (q, _) in drain_grates(t0, l, origin) {
+        if let Some(k) = square_of(q)
+            && p.cells[k] >= 0
+            && !held[k]
+            && !keep(&p, k)
+        {
+            p.put(Item::new("drain", "drain grate overhead (daylight)", k % nx, k / nx, 1, 1, 0, false, 0.0, None));
+        }
+    }
+    // An iron grille across the channel where runs meet: on the first channel square a run
+    // reaches from the junction (the runs taken in their order, the first that has one).
+    let mut ends: Vec<([f32; 2], usize)> = Vec::new();
+    for l in &p.paths {
+        for e in [[l[0], l[1]], [l[2], l[3]]] {
+            match ends.iter_mut().find(|(o, _)| (o[0] - e[0]).abs() < 0.05 && (o[1] - e[1]).abs() < 0.05) {
+                Some(o) => o.1 += 1,
+                None => ends.push((e, 1)),
+            }
+        }
+    }
+    // (A run ending on another's middle meets it too: a T.)
+    for (e, deg) in ends.iter_mut() {
+        for l in &p.paths {
+            let (dx, dy) = (l[2] - l[0], l[3] - l[1]);
+            let len2 = (dx * dx + dy * dy).max(1e-6);
+            let t = ((e[0] - l[0]) * dx + (e[1] - l[1]) * dy) / len2;
+            let (ex, ey) = (e[0] - l[0] - t * dx, e[1] - l[1] - t * dy);
+            if t * t * len2 > 0.25 && (1.0 - t) * (1.0 - t) * len2 > 0.25 && (0.0..=1.0).contains(&t) && ex * ex + ey * ey < 0.09 {
+                *deg += 2;
+            }
+        }
+    }
+    // (One a junction: ends a little apart at one meeting count once.)
+    let mut met: Vec<[f32; 2]> = Vec::new();
+    for (j, _) in ends.iter().filter(|e| e.1 >= 3) {
+        if met.len() >= 3 {
+            break;
+        }
+        if met.iter().any(|m| (m[0] - j[0]).powi(2) + (m[1] - j[1]).powi(2) < 9.0) {
+            continue;
+        }
+        let run = p.paths.iter().find_map(|l| {
+            let (a, b) = if (l[0] - j[0]).abs() < 0.05 && (l[1] - j[1]).abs() < 0.05 { ([l[0], l[1]], [l[2], l[3]]) } else if (l[2] - j[0]).abs() < 0.05 && (l[3] - j[1]).abs() < 0.05 { ([l[2], l[3]], [l[0], l[1]]) } else { return None };
+            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+            if len < 3.0 {
+                return None;
+            }
+            // From a square and a half out to three: past the junction's pool.
+            (3..=6).find_map(|h| {
+                let t = h as f32 * 0.5 / len;
+                let (x, y) = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
+                if x < 0.0 || y < 0.0 || x >= nx as f32 || y >= ny as f32 {
+                    return None;
+                }
+                let k = y as usize * nx + x as usize;
+                (wet_sq[k] && !p.items.iter().any(|it| it.kind == "drain" && it.x as usize == k % nx && it.y as usize == k / nx)).then_some(k)
+            })
+        });
+        if let Some(k) = run {
+            p.put(Item::new("grille", "iron grille across the channel", k % nx, k / nx, 1, 1, 0, false, 0.0, None));
+            met.push(*j);
         }
     }
     Some(p)

@@ -419,6 +419,48 @@ pub fn sewer_section(p: P) -> P {
     [crate::core::floor(p[0] / SEWER_SECTION_FT) * SEWER_SECTION_FT, crate::core::floor(p[1] / SEWER_SECTION_FT) * SEWER_SECTION_FT]
 }
 
+/// Iron drain grates in the paved streets over sewer section `origin` (corner, world ft): each
+/// at a square's middle on a street's line, with the street's way (unit), every 55 ft or so
+/// along it from a phase of its own (a hash of its ends: the same seen from any section), at
+/// most six, 40 ft clear of each other and of the street grates down, over dry ground, clear
+/// of towers and gates. From the layout alone: the sewer section lights the floor under them
+/// and the battlemap draws them in the street, each working it out for itself. Cities only.
+pub fn drain_grates(t0: &T0, l: &Layout, origin: P) -> Vec<(P, P)> {
+    if l.site || l.tier < crate::t0::settle::Tier::City {
+        return Vec::new();
+    }
+    let s = SEWER_SECTION_FT;
+    let inside = |p: P| p[0] >= origin[0] + 15.0 && p[0] < origin[0] + s - 15.0 && p[1] >= origin[1] + 15.0 && p[1] < origin[1] + s - 15.0;
+    let ways: Vec<P> = l.entrances.iter().filter(|e| e.kind == UnderKind::Sewer).map(|e| e.at).collect();
+    let towers = crate::interior::towers(l);
+    let clear = |q: P| towers.iter().all(|&(t, r, gate)| town::geom::dist(q, t) >= r + if gate { 22.0 } else { 5.0 });
+    const STEP: f64 = 55.0;
+    let mut out: Vec<(P, P)> = Vec::new();
+    for (a, b, _) in street_segments(l) {
+        if a[0].max(b[0]) < origin[0] || a[0].min(b[0]) > origin[0] + s || a[1].max(b[1]) < origin[1] || a[1].min(b[1]) > origin[1] + s {
+            continue;
+        }
+        let len = town::geom::dist(a, b);
+        if len < 20.0 {
+            continue;
+        }
+        let dir = mul(sub(b, a), 1.0 / len);
+        let phase = crate::core::rng::unit(hash3(l.roof_seed ^ 0xd7a1, crate::core::round(a[0] + b[0]) as i64, crate::core::round(a[1] + b[1]) as i64, 0x96a7)) * STEP;
+        let mut t = phase.max(8.0);
+        while t < len - 8.0 {
+            let q = add(a, mul(dir, t));
+            t += STEP;
+            let q = [crate::core::floor(q[0] / SQUARE_FT) * SQUARE_FT + 0.5 * SQUARE_FT, crate::core::floor(q[1] / SQUARE_FT) * SQUARE_FT + 0.5 * SQUARE_FT];
+            let apart = |o: &P| town::geom::dist(*o, q) >= 40.0;
+            if out.len() >= 6 || !inside(q) || !ways.iter().all(apart) || !out.iter().all(|(o, _)| apart(o)) || !clear(q) || wet(t0, q) {
+                continue;
+            }
+            out.push((q, dir));
+        }
+    }
+    out
+}
+
 /// Ways underground in a city: a sewer grate on a street in every section the paved streets
 /// run far enough into (never under a tower or in a gate's passage, nor by a palace's
 /// forecourt), catacomb stairs in each graveyard and beside each mausoleum and catacomb house.

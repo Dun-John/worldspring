@@ -1397,6 +1397,25 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 shapes.push(VectorShape { kind: ShapeKind::Entrance, size: (e.kind as u8 + 16 * style) as f32, pts: vec![local(&e.at), local(&inward)] });
             }
         }
+        // Drain grates in the streets over the sewers (style 3, along the street), as each
+        // sewer section works them out (`under::drain_grates`).
+        if l.tier >= crate::t0::settle::Tier::City && !l.site {
+            let s = crate::under::SEWER_SECTION_FT;
+            let (si0, sj0) = (crate::core::floor(ox / s) as i64, crate::core::floor(oy / s) as i64);
+            let (si1, sj1) = (crate::core::floor((ox + chunk_ft - 1e-6) / s) as i64, crate::core::floor((oy + chunk_ft - 1e-6) / s) as i64);
+            for sj in sj0..=sj1 {
+                for si in si0..=si1 {
+                    for (at, dir) in crate::under::drain_grates(t0, &l, [si as f64 * s, sj as f64 * s]) {
+                        if owns(at) {
+                            let k = (((at[1] - hy0) / SQUARE_FT) as usize) * HS + ((at[0] - hx0) / SQUARE_FT) as usize;
+                            ent_h[k] = true;
+                            let along = crate::town::geom::add(at, crate::town::geom::mul(dir, SQUARE_FT));
+                            shapes.push(VectorShape { kind: ShapeKind::Entrance, size: (crate::under::UnderKind::Sewer as u8 + 48) as f32, pts: vec![local(&at), local(&along)] });
+                        }
+                    }
+                }
+            }
+        }
         // Streets drawn as roads (approaches to gates, main streets, bridge streets): street
         // ground wherever they run, inside the walls or out.
         let hand = shaper.is_some() && l.tier >= crate::town::stairs::STAIR_TIER;

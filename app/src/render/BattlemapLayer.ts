@@ -1168,6 +1168,7 @@ function drawEntrance(g: Graphics, s: Shape) {
   };
   if (code >> 4 === 1) return drawRuinStair(g, at, quad, rnd);
   if (code >> 4 === 2) return drawMausoleum(g, at, quad, rnd);
+  if (code >> 4 === 3) return drawDrain(g, at, quad);
   switch (code & 15) {
     case 0:
     case 1:
@@ -1222,6 +1223,21 @@ function drawEntrance(g: Graphics, s: Shape) {
 
 type At = (a: number, b: number) => [number, number];
 type Quad = (a0: number, a1: number, b0: number, b1: number) => number[];
+
+/** A drain grate in the street over the sewers (`under::drain_grates`), along the street (`at`'s first axis):
+ * a dark slot in a stone kerb, iron bars across it, ink round the frame; lit from the NW like the props. */
+function drawDrain(g: Graphics, at: At, quad: Quad) {
+  const IRON = [0x3e4044, 0x5a5e64, 0x7a7e84];
+  g.poly(quad(-0.38, 0.42, -0.26, 0.3)).fill({ color: 0x000000, alpha: 0.18 });
+  g.poly(quad(-0.42, 0.42, -0.3, 0.3)).fill(STONE).stroke({ width: 2.5, color: ROOF_INK, join: 'round' });
+  g.poly(quad(-0.3, 0.3, -0.18, 0.18)).fill(0x1e1c19);
+  for (let k = 0; k < 5; k++) {
+    const a = -0.24 + k * 0.12;
+    g.poly(quad(a - 0.035, a + 0.035, -0.2, 0.2)).fill(IRON[1]).stroke({ width: 1.2, color: ROOF_INK });
+    g.moveTo(...at(a - 0.02, -0.19)).lineTo(...at(a - 0.02, 0.19)).stroke({ width: 1.4, color: IRON[2] });
+  }
+  g.poly(quad(-0.3, 0.3, -0.18, 0.18)).stroke({ width: 3, color: IRON[0], join: 'round' });
+}
 
 /** Stone grey shaded by `k` (0 light .. 1 dark). */
 const stoneShade = (k: number) => {

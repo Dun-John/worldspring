@@ -4622,6 +4622,54 @@ function patch(cx: number, cy: number, rx: number, ry: number, rnd: () => number
   return pts;
 }
 
+/** Daylight through a drain grate in the street overhead (`under::drain_grates`), on a sewer's floor: a soft warm
+ * pool in two flat steps, brightest where the grate's square of light lands, its bars faintly across it. No glow:
+ * it lies on the floor like a painted patch. `run`: the way the tunnel runs (the street's way, which the grate follows). */
+function drainLight(g: Graphics, f: InteriorItem, rnd: () => number, run: [number, number]) {
+  const [cx, cy] = [f.x + 0.5, f.y + 0.5];
+  const [ux, uy] = run;
+  const [vx, vy] = [-uy, ux];
+  const at = (a: number, b: number): [number, number] => [cx + ux * a + vx * b, cy + uy * a + vy * b];
+  const SUN = 0xffe6a0;
+  g.poly(patch(cx, cy, 0.6, 0.56, rnd, 0.1)).fill({ color: SUN, alpha: 0.14 });
+  g.poly(patch(cx, cy, 0.43, 0.4, rnd, 0.08)).fill({ color: SUN, alpha: 0.16 });
+  g.poly([...at(-0.3, -0.2), ...at(0.3, -0.2), ...at(0.3, 0.2), ...at(-0.3, 0.2)]).fill({ color: 0xfff0c4, alpha: 0.26 });
+  for (let k = 0; k < 5; k++) g.moveTo(...at(-0.24 + k * 0.12, -0.19)).lineTo(...at(-0.24 + k * 0.12, 0.19));
+  g.stroke({ width: 0.035, color: 0x2a261c, alpha: 0.2 });
+}
+
+/** An iron grille across a sewer channel where runs meet, seen from above: a rail across the channel from kerb to kerb
+ * (`span`: how far the channel reaches either side of `c`, its run's line), fixed in the kerbs at either end, the bar
+ * heads standing up along it, a shadow away from the light and the muck caught on its upstream side. `run`: the way
+ * the sewage runs here (downstream). */
+function grille(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, run: [number, number], c: [number, number], span: [number, number]) {
+  const [cx, cy] = c;
+  const [ux, uy] = run;
+  const [vx, vy] = [-uy, ux];
+  const at = (a: number, b: number): [number, number] => [cx + ux * a + vx * b, cy + uy * a + vy * b];
+  const band = (a0: number, a1: number, b0: number, b1: number) => [...at(a0, b0), ...at(a1, b0), ...at(a1, b1), ...at(a0, b1)];
+  const [lx, ly] = light;
+  const [b0, b1] = [-span[0] - 0.12, span[1] + 0.12];
+  // Muck against it upstream, in a few flat blobs.
+  const blobs = Math.max(2, Math.round((b1 - b0) / 0.4));
+  for (let i = 0; i < blobs; i++) {
+    const [mx, my] = at(-0.13 - rnd() * 0.05, b0 + 0.2 + ((b1 - b0 - 0.4) * (i + 0.5)) / blobs + (rnd() - 0.5) * 0.1);
+    g.poly(patch(mx, my, 0.1, 0.07, rnd, 0.25, 10)).fill({ color: 0x6c7046, alpha: 0.8 });
+  }
+  // The shadow, then the rail and its fixings in the kerbs.
+  g.poly(band(-0.06, 0.06, b0, b1).map((v, i) => v - (i % 2 ? ly : lx) * 0.07)).fill({ color: 0x000000, alpha: 0.25 });
+  g.poly(band(-0.06, 0.06, b0, b1)).fill(IRON[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  const lit = ux * lx + uy * ly < 0 ? -0.035 : 0.035;
+  g.moveTo(...at(lit, b0 + 0.04)).lineTo(...at(lit, b1 - 0.04)).stroke({ width: 0.025, color: IRON[2] });
+  for (const b of [b0, b1]) g.poly(band(-0.1, 0.1, b - 0.07, b + 0.07)).fill(IRON[0]).stroke({ width: 0.03, color: INK });
+  // The bar heads, about a fifth of a square apart.
+  const n = Math.max(3, Math.round((b1 - b0 - 0.2) / 0.2));
+  for (let k = 0; k <= n; k++) {
+    const [bx, by] = at(0, b0 + 0.1 + ((b1 - b0 - 0.2) * k) / n);
+    g.circle(bx, by, 0.045).fill(IRON[2]).stroke({ width: 0.02, color: INK });
+  }
+}
+
 const CAVE_ROCK = [0x5a5246, 0x857a6a, 0xa89c88, 0xc8bca6];
 
 /** Stalagmite: a cone of wet rock rising from the floor — rings of flowstone climbing to a pale tip set toward
@@ -7243,13 +7291,23 @@ export const UNDER_DRAWN = new Set([
   'bones', 'skeleton', 'skulls', 'coffin', 'effigy', 'niche', 'urn', 'offering',
   'campfire', 'rubble', 'debris', 'timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'lantern', 'powder', 'bedroll', 'sacks',
   'brazier', 'candles', 'chains', 'sconce', 'banner', 'iron_maiden', 'stocks', 'hoard', 'dais', 'fountain', 'glyph',
-  'collapsed_wall',
+  'collapsed_wall', 'drain', 'grille',
 ]);
 
 /** Draws underground prop `f` if it is drawn here; false otherwise. `wall` is the rock side for props
  * against a wall, and the back for those that have one (the dais); `links` the sides a rail or an ore cart joins
  * the rails beside it (`railRuns`). */
-export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: number, wall: [number, number], links = 0, turned = false, rock = 2): boolean {
+export function drawUnderProp(
+  g: Graphics,
+  f: InteriorItem,
+  light: Light,
+  v: number,
+  wall: [number, number],
+  links = 0,
+  turned = false,
+  rock = 2,
+  run?: { at: [number, number]; span: [number, number] },
+): boolean {
   if (!UNDER_DRAWN.has(f.kind)) return false;
   const rnd = rng(v * 7919 + f.w * 131 + f.h * 17 + f.kind.length * 1009 + f.kind.charCodeAt(0) * 3);
   const w: [number, number] = wall[0] || wall[1] ? wall : [0, -1];
@@ -7437,6 +7495,12 @@ export function drawUnderProp(g: Graphics, f: InteriorItem, light: Light, v: num
       break;
     case 'collapsed_wall':
       collapsedWall(g, f, light, rnd, w);
+      break;
+    case 'drain':
+      drainLight(g, f, rnd, w);
+      break;
+    case 'grille':
+      grille(g, f, light, rnd, w, run?.at ?? [f.x + 0.5, f.y + 0.5], run?.span ?? [0.6, 0.6]);
       break;
     case 'fountain':
       dryFountain(g, f, light, rnd);
