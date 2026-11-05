@@ -89,7 +89,8 @@ export interface PreparedChunk {
   nObj: number;
   atmosphere: number;
   sea: number;
-  /** Whose paving the chunk's cobbles are (`battlemap::Chunk::stone`: settlement index + 1, 0 none). */
+  /** Whose paving the chunk's cobbles are (`battlemap::Chunk::stone`: settlement index + 1 in the low 24
+   * bits, its culture + 1 in the high 8; 0 none). */
   stone: number;
   /** Height offset subtracted before the half-float encoding. */
   base: number;

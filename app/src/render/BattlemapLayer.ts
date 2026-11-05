@@ -144,19 +144,26 @@ const SURFACES = [
   'stairs',
   'gravel path',
 ];
-/** Cobbles' tints by settlement (`ground.frag` `uStone`): warm grey, cool grey, buff, reddish
- * granite, slate, sandstone; none (roads out of town) the plain grey. */
+/** Cobbles' tints by culture (`ground.frag` `uStone`, times the cobble grey; `Layout::culture`):
+ * north cool blue-grey granite, west warm grey-buff, south warm honey limestone, dry pale ochre
+ * sandstone, steppe khaki fieldstone. Each within about 8% of the grey's value, saturation <= 0.35. */
 const STONE_TONES = [
-  [1.03, 1.0, 0.96],
-  [0.96, 0.99, 1.03],
-  [1.06, 1.02, 0.92],
-  [1.06, 0.97, 0.94],
-  [0.94, 0.97, 0.99],
-  [1.05, 1.0, 0.9],
+  [0.92, 0.97, 1.1],
+  [1.01, 1.0, 0.97],
+  [1.08, 1.05, 0.86],
+  [1.15, 1.08, 0.95],
+  [0.99, 1.0, 0.89],
 ];
+/** A chunk's `stone` word's tint: its culture's, varied a little by city; none (roads out of
+ * town) the plain grey. */
 function stoneTone(stone: number): Float32Array {
   if (!stone) return new Float32Array([1, 1, 1]);
-  return new Float32Array(STONE_TONES[(Math.imul(stone, 0x9e3779b1) >>> 28) % STONE_TONES.length]);
+  const t = STONE_TONES[((stone >>> 24) + 4) % 5];
+  const h = Math.imul(stone & 0xffffff, 0x9e3779b1) >>> 0;
+  // (Up to 3% in value and 2% in warmth either way.)
+  const v = 1 + 0.06 * ((h >>> 24) / 255 - 0.5);
+  const warm = 0.04 * (((h >>> 16) & 255) / 255 - 0.5);
+  return new Float32Array([t[0] * v * (1 + warm), t[1] * v, t[2] * v * (1 - warm)]);
 }
 
 /** The most flights of steps' axes one chunk's ground draws treads for (`ground.frag`; `battlemap::MAX_STAIR_AXES`). */
@@ -740,6 +747,8 @@ export class BattlemapLayer {
       // (Gravel here, or park ground by the edge, whose neighbour's gravel the halo may hold.)
       uGravel: { value: c.surface.includes(20) || parkEdge(c.raised) ? 1 : 0, type: 'f32' },
       uStone: { value: stoneTone(c.stone), type: 'vec3<f32>' },
+      // (Paving here: its edges with the ground drawn soft.)
+      uPaved: { value: c.surface.includes(14) ? 1 : 0, type: 'f32' },
     });
     const ground = new Mesh({
       geometry: this.quad,

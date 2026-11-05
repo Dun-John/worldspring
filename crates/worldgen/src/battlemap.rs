@@ -399,8 +399,9 @@ pub struct Chunk {
     /// A castle's yard per square (bits 1 a bailey, 2 a garden yard's, 4 on a motte above its toe;
     /// empty: none here): where the guarantee counts its walls, towers and buildings as cover.
     pub yard: Vec<u8>,
-    /// The settlement whose paving the chunk's cobbles are (its index + 1, 0 none): the highest-tier
-    /// layout near the chunk, the nearest of those. The ground picks the stone's colour by it.
+    /// The settlement whose paving the chunk's cobbles are (its index + 1 in the low 24 bits, its
+    /// culture + 1 in the high 8; 0 none): the highest-tier layout near the chunk, the nearest of
+    /// those. The ground picks the stone's colour by them.
     pub stone: u32,
 }
 
@@ -2385,7 +2386,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let tier_here = here.iter().map(|l| l.tier).max();
     let mid = [ox + SQ as f64 * SQUARE_FT / 2.0, oy + SQ as f64 * SQUARE_FT / 2.0];
     let away = |l: &crate::town::Layout| (l.center[0] - mid[0]).hypot(l.center[1] - mid[1]);
-    chunk.stone = here.iter().filter(|l| Some(l.tier) == tier_here).min_by(|a, b| away(a).total_cmp(&away(b))).map_or(0, |l| l.index + 1);
+    chunk.stone = here.iter().filter(|l| Some(l.tier) == tier_here).min_by(|a, b| away(a).total_cmp(&away(b))).map_or(0, |l| (l.index + 1) & 0xff_ffff | (l.culture as u32 % 5 + 1) << 24);
     let paved = tier_here.is_some_and(|t| t >= crate::t0::settle::Tier::Town);
     let village = tier_here == Some(crate::t0::settle::Tier::Village);
     for k in 0..n {
