@@ -642,14 +642,18 @@ void main() {
                 liq = mix(liq, scum, blob * 0.8);
                 // Foam where runs meet, end or fall out (sewer sections' brick only): soft cream
                 // patches merging along the falling water, fading out softly.
+                // (Where runs meet the way turns within a texel, and `fp`, far from the origin, swings
+                // through many noise cells a pixel: there the noise fades to its mean, or it speckles.)
+                vec2 fc = vec2(fp.x * 2.2 - uTime * 0.3, fp.y * 2.8);
+                vec2 fcw = fwidth(fc);
+                float fsharp = 1.0 - smoothstep(0.25, 0.6, max(fcw.x, fcw.y));
                 if (fo > 0.0) {
                     // (Value noise from hashes, drifting downstream, roughened by `wob`; no fetches.)
-                    vec2 fc = vec2(fp.x * 2.2 - uTime * 0.3, fp.y * 2.8);
                     vec2 fi = floor(fc);
                     vec2 ff = fract(fc);
                     ff = ff * ff * (3.0 - 2.0 * ff);
                     float fn = mix(mix(hash21(fi), hash21(fi + vec2(1.0, 0.0)), ff.x), mix(hash21(fi + vec2(0.0, 1.0)), hash21(fi + 1.0), ff.x), ff.y);
-                    fn = 0.75 * fn + 0.25 * wob;
+                    fn = 0.75 * mix(0.5, fn, fsharp) + 0.25 * wob;
                     float fv = 1.2 * (fn - 0.5) + 1.1 * fo - 0.55;
                     float fw = 0.06 + 0.5 * px;
                     float fpat = smoothstep(-fw, fw, fv) * smoothstep(0.52, 0.56, l) * smoothstep(0.0, 0.2, fo);
