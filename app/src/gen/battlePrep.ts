@@ -112,8 +112,11 @@ export interface PreparedChunk {
 }
 
 // Roof tints: terracotta, slate, thatch, weathered shingle, moss.
-export const ROOF_TINTS = [0xa0543c, 0x5c6470, 0xa88e56, 0x7a6656, 0x6e6a48];
+export const ROOF_TINTS = [0x995742, 0x5c6470, 0xaf8e51, 0x7a6656, 0x6e6a48];
 export const ROOF_INK = 0x1d1a14;
+/** Ink weights (chunk px) as the sprites': `OUT` (0.045 sq) round a roof, `LINE` (0.025) inside it. */
+const INK_OUT = 0.045 * PX;
+const INK_LINE = 0.025 * PX;
 
 export function shadeHex(c: number, f: number): number {
   const ch = (s: number) => Math.min(255, Math.max(0, Math.round(((c >> s) & 255) * f)));
@@ -486,18 +489,26 @@ class MeshBuilder {
     for (const t of tri) this.index.push(v0 + t);
   }
 
-  /** A butt-capped line `w` wide, extended by `ext` past each end. */
+  /** A butt-capped line `w` wide, extended by `ext` past each end: its vertices on the middle, the
+   * unit normal and side in `roof` (code -2 - w/2), widened in `colormesh.vert` to at least a screen
+   * pixel plus one to antialias its sides (`colormesh.frag`). */
   line(ax: number, ay: number, bx: number, by: number, w: number, c: number, a: number, ext = 0) {
     const l = Math.hypot(bx - ax, by - ay);
     if (l < 1e-6) return;
     const [ux, uy] = [(bx - ax) / l, (by - ay) / l];
-    const [nx, ny] = [(-uy * w) / 2, (ux * w) / 2];
     const [sx, sy, ex, ey] = [ax - ux * ext, ay - uy * ext, bx + ux * ext, by + uy * ext];
     const v0 = this.pos.length / 2;
-    this.vert(sx + nx, sy + ny, c, a);
-    this.vert(ex + nx, ey + ny, c, a);
-    this.vert(ex - nx, ey - ny, c, a);
-    this.vert(sx - nx, sy - ny, c, a);
+    const code = -2 - w / 2;
+    for (const [x, y, k] of [
+      [sx, sy, 1],
+      [ex, ey, 1],
+      [ex, ey, -1],
+      [sx, sy, -1],
+    ]) {
+      this.pos.push(x, y);
+      this.color.push(((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, a);
+      this.roof.push(-uy, ux, code, k);
+    }
     this.index.push(v0, v0 + 1, v0 + 2, v0, v0 + 2, v0 + 3);
   }
 
@@ -538,9 +549,9 @@ function roofMesh(roofs: Roof[]): ColorMesh {
     const ranges = courtRanges(roof);
     if (ranges) {
       for (const part of ranges) (flat ? flatRoof : hipRoof)(g, part, tint);
-      if (!flat) for (const part of ranges) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
-      g.outline(roof.pts, 2.5, ROOF_INK);
-      g.outline(roof.parts.find((p) => p.kind === COURT)!.pts, 2.5, ROOF_INK);
+      if (!flat) for (const part of ranges) g.outline(part, INK_LINE, ROOF_INK);
+      g.outline(roof.pts, INK_OUT, ROOF_INK);
+      g.outline(roof.parts.find((p) => p.kind === COURT)!.pts, INK_OUT, ROOF_INK);
       const church = roof.parts.find((p) => p.kind === CHURCH);
       if (church && church.pts.length === 8) churchRoof(g, church.pts, tint);
       // (A coaching inn round its yard: its carriage arch's mouth on the street front.)
@@ -558,9 +569,9 @@ function roofMesh(roofs: Roof[]): ColorMesh {
       else {
         const hp = convexParts(hall.pts);
         for (const part of hp) hipRoof(g, part, tint);
-        if (hp.length > 1) for (const part of hp) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
+        if (hp.length > 1) for (const part of hp) g.outline(part, INK_LINE, ROOF_INK);
       }
-      g.outline(hall.pts, 2.5, ROOF_INK);
+      g.outline(hall.pts, INK_OUT, ROOF_INK);
       belfryTop(g, belfry.pts);
       continue;
     }
@@ -568,7 +579,7 @@ function roofMesh(roofs: Roof[]): ColorMesh {
     // transept hipped across it (a big one's crossing under a squat tower's spire, or a dome).
     if (roof.parts.some((p) => p.kind === APSE)) {
       templeRoof(g, roof, tint);
-      g.outline(roof.pts, 2.5, ROOF_INK);
+      g.outline(roof.pts, INK_OUT, ROOF_INK);
       continue;
     }
     // A manor: its main range hipped along it, its cross wing over the family end hipped across it
@@ -585,26 +596,26 @@ function roofMesh(roofs: Roof[]): ColorMesh {
         for (const part of convexParts(range.pts)) hipRoof(g, part, tint);
         for (const part of convexParts(wing.pts)) hipRoof(g, part, tint, [-along[1], along[0]]);
       }
-      g.outline(wing.pts, 1.6, shadeHex(tint, 0.5), 0.8);
-      g.outline(roof.pts, 2.5, ROOF_INK);
+      g.outline(wing.pts, INK_LINE, ROOF_INK);
+      g.outline(roof.pts, INK_OUT, ROOF_INK);
       continue;
     }
     if (!roof.cone && flat) {
       flatRoof(g, roof.pts, tint);
       if (roof.smoke) smoke(g, roof.pts, 0.2);
-      g.outline(roof.pts, 2.5, ROOF_INK);
+      g.outline(roof.pts, INK_OUT, ROOF_INK);
       continue;
     }
     if (!roof.cone && roof.shape === DOME) {
       domeRoof(g, roof.pts, tint);
-      g.outline(roof.pts, 2.5, ROOF_INK);
+      g.outline(roof.pts, INK_OUT, ROOF_INK);
       continue;
     }
     const round = roof.cone ? null : roundOutline(roof);
     if (round) {
       roundRoof(g, round, tint);
       if (roof.smoke) smoke(g, round, 0.5);
-      g.outline(round, 2.5, ROOF_INK);
+      g.outline(round, INK_OUT, ROOF_INK);
       continue;
     }
     // Footprints drawn by hand may be concave: a roof on each convex part, valleys between.
@@ -615,8 +626,8 @@ function roofMesh(roofs: Roof[]): ColorMesh {
       else hipRoof(g, part, tint);
     }
     if (roof.smoke) smoke(g, parts[0], roof.cone || roof.shape === CONE ? 0.5 : 0.28);
-    if (parts.length > 1) for (const part of parts) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
-    g.outline(roof.pts, 2.5, ROOF_INK);
+    if (parts.length > 1) for (const part of parts) g.outline(part, INK_LINE, ROOF_INK);
+    g.outline(roof.pts, INK_OUT, ROOF_INK);
   }
   return g.build();
 }
@@ -686,7 +697,7 @@ function arcadePiers(g: MeshBuilder, roof: Roof) {
       0.3,
     );
     g.poly(sq, 0xb4ad9e);
-    g.outline(sq, 1.5, 0x4a4540);
+    g.outline(sq, INK_LINE, ROOF_INK);
   }
 }
 
@@ -704,7 +715,7 @@ function belfryTop(g: MeshBuilder, pts: number[]) {
   g.poly(hull(sq).flat(), 0x000000, 0.32);
   // (Its walls' top, stone, round the spire's eaves.)
   g.poly(pts, 0xb3aa98);
-  g.outline(pts, 2.5, ROOF_INK);
+  g.outline(pts, INK_OUT, ROOF_INK);
   const at = (f: number) => pts.map((v, i) => (i % 2 ? cy : cx) + (v - (i % 2 ? cy : cx)) * f);
   const spire = at(0.86);
   // The spire's faces: the lit one pale, the far ones deep (a steep pitch), courses and hips.
@@ -716,14 +727,14 @@ function belfryTop(g: MeshBuilder, pts: number[]) {
     let [nx, ny] = [(by - ay) / l, -(bx - ax) / l];
     if (!ccw) [nx, ny] = [-nx, -ny];
     const lit = (-(nx + ny) / Math.SQRT2 + 1) / 2;
-    g.poly([ax, ay, bx, by, cx, cy], shadeHex(tint, 0.5 + 0.75 * lit));
-    for (let k = 1; k < 7; k++) {
-      const t = k / 7;
-      g.line(ax + (cx - ax) * t, ay + (cy - ay) * t, bx + (cx - bx) * t, by + (cy - by) * t, 1, shadeHex(tint, 0.45), 0.4);
+    g.poly([ax, ay, bx, by, cx, cy], shadeHex(tint, 0.86 + 0.28 * lit));
+    for (let k = 1; k < 4; k++) {
+      const t = k / 4;
+      g.line(ax + (cx - ax) * t, ay + (cy - ay) * t, bx + (cx - bx) * t, by + (cy - by) * t, INK_LINE, shadeHex(tint, 0.72), 0.8);
     }
   }
-  for (let i = 0; i < 8; i += 2) g.line(spire[i], spire[i + 1], cx, cy, 2, shadeHex(tint, 0.35), 0.9);
-  g.outline(spire, 2, ROOF_INK, 0.9);
+  for (let i = 0; i < 8; i += 2) g.line(spire[i], spire[i + 1], cx, cy, INK_LINE, ROOF_INK, 1);
+  g.outline(spire, INK_OUT, ROOF_INK);
   // The open lantern on top: a stone post at each corner, the dark of its arches between, the bell.
   const lant = at(0.3);
   g.poly(lant.map((v) => v + PX * 0.18), 0x000000, 0.3);
@@ -738,14 +749,14 @@ function belfryTop(g: MeshBuilder, pts: number[]) {
   for (let i = 0; i < 8; i += 2) {
     const p = post(i);
     g.poly(p, 0xd6cbb2);
-    g.outline(p, 1.2, ROOF_INK, 0.8);
+    g.outline(p, INK_LINE, ROOF_INK);
   }
   const br = Math.hypot(lant[2] - lant[0], lant[3] - lant[1]) * 0.22;
   const bell: number[] = [];
   for (let k = 0; k < 10; k++) bell.push(cx + br * Math.cos((k * Math.PI) / 5), cy + br * Math.sin((k * Math.PI) / 5));
   g.poly(bell, 0xc9a13e);
-  g.outline(bell, 1.2, 0x5a4318, 0.9);
-  g.outline(lant, 1.6, ROOF_INK);
+  g.outline(bell, INK_LINE, ROOF_INK);
+  g.outline(lant, INK_LINE, ROOF_INK);
 }
 
 /** A coaching inn's carriage arch (`ARCADE`: its front along the street, then a square in), the roof
@@ -797,7 +808,7 @@ function archMouth(g: MeshBuilder, roof: Roof) {
     const j = quad(t0, t1, -PX * 0.5, PX * 0.22);
     g.poly(j.map((v) => v + PX * 0.08), 0x000000, 0.3);
     g.poly(j, 0xc4baa5);
-    g.outline(j, 1.5, 0x4a4540);
+    g.outline(j, INK_LINE, ROOF_INK);
   }
 }
 
@@ -822,11 +833,8 @@ function churchRoof(g: MeshBuilder, pts: number[], tint: number) {
   const ccw = signedArea(pts) > 0;
   const u0 = slope(g, [x0, y0, x1, y1, r1x, r1y, r0x, r0y], x0, y0, x1, y1, faceShade(x0, y0, x1, y1, ccw, deep));
   slope(g, [x2, y2, x3, y3, r0x, r0y, r1x, r1y], x2, y2, x3, y3, faceShade(x2, y2, x3, y3, ccw, deep), u0);
-  g.line(r0x, r0y, r1x, r1y, 3.2, shadeHex(tint, 0.36), 0.95);
-  // (The gables at the ends.)
-  g.line(x0, y0, x3, y3, 2, shadeHex(tint, 0.45), 0.9);
-  g.line(x1, y1, x2, y2, 2, shadeHex(tint, 0.45), 0.9);
-  g.outline(pts, 2.5, ROOF_INK);
+  g.line(r0x, r0y, r1x, r1y, INK_LINE, ROOF_INK, 1);
+  g.outline(pts, INK_OUT, ROOF_INK);
   // The bell-cote on the ridge, its middle 1.2 squares in from the west end.
   const h = Math.hypot(x3 - x0, y3 - y0) / 2;
   const [cx, cy] = [r0x + ex * PX * 1.2, r0y + ey * PX * 1.2];
@@ -835,7 +843,7 @@ function churchRoof(g: MeshBuilder, pts: number[], tint: number) {
   const sq = [cx - ex * r - vx * r, cy - ey * r - vy * r, cx + ex * r - vx * r, cy + ey * r - vy * r, cx + ex * r + vx * r, cy + ey * r + vy * r, cx - ex * r + vx * r, cy - ey * r + vy * r];
   g.poly(sq.map((v) => v + PX * 0.25), 0x000000, 0.32);
   withMat(g, 1, () => coneRoof(g, sq, 0x4e5660));
-  g.outline(sq, 2, ROOF_INK, 0.9);
+  g.outline(sq, INK_OUT, ROOF_INK);
 }
 
 /** The shade of a roof face whose eave runs a-b (the face on the inside of a polygon wound `ccw`): the
@@ -846,7 +854,8 @@ function faceShade(ax: number, ay: number, bx: number, by: number, ccw: boolean,
   let [nx, ny] = [(by - ay) / l, -(bx - ax) / l];
   if (!ccw) [nx, ny] = [-nx, -ny];
   const lit = (-(nx + ny) / Math.SQRT2 + 1) / 2;
-  return shadeHex(tint, 0.7 + 0.5 * lit);
+  // (The shadowed face about a quarter darker than the lit one.)
+  return shadeHex(tint, 0.86 + 0.28 * lit);
 }
 
 /** A temple's roof (`Roof.parts`: its body, transept and apse): the nave and choir under one ridge from a
@@ -882,7 +891,9 @@ function templeRoof(g: MeshBuilder, roof: Roof, tint: number) {
     const [ax, ay, bx, by] = [a[i * 2], a[i * 2 + 1], a[(i + 1) * 2], a[(i + 1) * 2 + 1]];
     u0 = fanFace(g, ax, ay, bx, by, r1x, r1y, faceShade(ax, ay, bx, by, accw, tint), u0, h);
   }
-  for (let i = 1; i + 1 < m; i += 2) ridgeLine(g, a[i * 2], a[i * 2 + 1], r1x, r1y, tint, true);
+  // (Its hips every fourth point, about the middle one.)
+  const mid = Math.round((m - 1) / 2);
+  for (let i = 1; i + 1 < m; i++) if (Math.abs(i - mid) % 4 === 0) ridgeLine(g, a[i * 2], a[i * 2 + 1], r1x, r1y, tint, true);
   // (A domed one, no transept: the dome over the middle of its body.)
   if (!wing) {
     if (roof.shape === DOME) dome(g, (x0 + x1 + x2 + x3) / 4, (y0 + y1 + y2 + y3) / 4, h * 0.95, tint);
@@ -890,7 +901,7 @@ function templeRoof(g: MeshBuilder, roof: Roof, tint: number) {
   }
   // The transept across the body, its valleys inked.
   hipRoof(g, wing.pts, tint, [-ey, ex]);
-  g.outline(wing.pts, 1.6, shadeHex(tint, 0.5), 0.8);
+  g.outline(wing.pts, INK_LINE, ROOF_INK);
   // The crossing's tower: a square a little narrower than the body about the crossing's middle, under a
   // pyramid spire of slate.
   let [cx, cy] = [0, 0];
@@ -906,7 +917,7 @@ function templeRoof(g: MeshBuilder, roof: Roof, tint: number) {
   }
   const sq = [cx - ex * r - vx * r, cy - ey * r - vy * r, cx + ex * r - vx * r, cy + ey * r - vy * r, cx + ex * r + vx * r, cy + ey * r + vy * r, cx - ex * r + vx * r, cy - ey * r + vy * r];
   withMat(g, 1, () => coneRoof(g, sq, 0x4e5660));
-  g.outline(sq, 2, ROOF_INK, 0.9);
+  g.outline(sq, INK_OUT, ROOF_INK);
 }
 
 /** The way a polygon's longest edge runs (unit). */
@@ -1072,22 +1083,28 @@ function fanFace(g: MeshBuilder, ax: number, ay: number, bx: number, by: number,
   return u0 + l;
 }
 
-/** A ridge (or a hip) from a to b in the roof's material: thatch under a thick capping roll, clay and
- * glazed tile under ridge tiles, lead and copper under a roll, turf soft, the rest a dark line. */
+/** A ridge (or a hip) from a to b in the roof's material, one interior ink stroke (`INK_LINE`): thatch's
+ * under a rounded capping roll (lit side, shaded side, inked both edges), clay's and glazed tile's down a
+ * band of ridge tiles, lead's and copper's beside a lit roll, turf's soft. */
 function ridgeLine(g: MeshBuilder, ax: number, ay: number, bx: number, by: number, tint: number, hip = false) {
   const m = g.mat;
-  const band = (w: number, f: number, edge: number) => {
-    const l = Math.hypot(bx - ax, by - ay);
-    if (l < 1e-6) return;
-    const [nx, ny] = [(-(by - ay) / l) * (w / 2), ((bx - ax) / l) * (w / 2)];
-    g.line(ax, ay, bx, by, w, shadeHex(tint, f), 1, hip ? 0 : w / 3);
-    for (const k of [1, -1]) g.line(ax + nx * k, ay + ny * k, bx + nx * k, by + ny * k, 2.2, shadeHex(tint, 0.5), edge, hip ? 0 : w / 3);
-  };
-  if (m === 0) band((hip ? 0.6 : 1.3) * FT, 0.96, hip ? 0.45 : 0.85);
-  else if (m === 2 || m === 7) band((hip ? 0.35 : 0.5) * FT, 0.9, 1);
-  else if (m === 5 || m === 6) band(0.28 * FT, 1.16, 0.9);
-  else if (m === 4) g.line(ax, ay, bx, by, 2, shadeHex(tint, 0.62), 0.55);
-  else g.line(ax, ay, bx, by, 2.6, shadeHex(tint, 0.5), 1);
+  const l = Math.hypot(bx - ax, by - ay);
+  if (l < 1e-6) return;
+  // (Unit normal towards the NW light.)
+  let [nx, ny] = [-(by - ay) / l, (bx - ax) / l];
+  if (nx + ny > 0) [nx, ny] = [-nx, -ny];
+  const band = (w: number, f: number, off: number) => g.line(ax + nx * off, ay + ny * off, bx + nx * off, by + ny * off, w, shadeHex(tint, f), 1, hip ? 0 : w / 3);
+  if (m === 0) {
+    // (A hip's roll inked on its shaded side only, so it doesn't read as a double line.)
+    const w = (hip ? 0.9 : 1.3) * FT;
+    band(w, 0.9, 0);
+    band(w * 0.5, 1.08, w * 0.2);
+    for (const k of hip ? [-0.5] : [0.5, -0.5]) g.line(ax + nx * w * k, ay + ny * w * k, bx + nx * w * k, by + ny * w * k, INK_LINE, ROOF_INK, 1, hip ? 0 : w / 3);
+    return;
+  }
+  if (m === 2 || m === 7) band((hip ? 0.35 : 0.5) * FT, 0.92, 0);
+  else if (m === 5 || m === 6) band(0.22 * FT, 1.14, 0.12 * FT);
+  g.line(ax, ay, bx, by, INK_LINE, ROOF_INK, m === 4 ? 0.5 : 1);
 }
 
 /** A hip roof on a convex footprint: a face up from each eave to the ridge (shaded by how it faces the
@@ -1149,7 +1166,7 @@ function gableRoof(g: MeshBuilder, pts: number[], tint: number, dir?: [number, n
       uvd.push(g.seed + (dx * ux + dy * uy) / FT, (halfW - sg * (dx * nx + dy * ny)) / FT, 1);
     }
     const lit = (-(sg * nx + sg * ny) / Math.SQRT2 + 1) / 2;
-    g.face(half, uvd, shadeHex(tint, 0.7 + 0.5 * lit));
+    g.face(half, uvd, shadeHex(tint, 0.86 + 0.28 * lit));
   }
   const [t0, t1] = chord(pts, rx, ry, ux, uy, cx, cy, hi - lo + 1);
   if (t1 > t0) ridgeLine(g, rx + ux * t0, ry + uy * t0, rx + ux * t1, ry + uy * t1, tint);
@@ -1163,7 +1180,7 @@ function gableRoof(g: MeshBuilder, pts: number[], tint: number, dir?: [number, n
     if ((cx - ax) * ix + (cy - ay) * iy < 0) [ix, iy] = [-ix, -iy];
     const d = 0.2 * FT;
     g.line(ax + ix * d, ay + iy * d, bx + ix * d, by + iy * d, 0.3 * FT, shadeHex(tint, 1.18), 0.9);
-    g.line(ax, ay, bx, by, 2.2, ROOF_INK, 1);
+    g.line(ax, ay, bx, by, INK_OUT, ROOF_INK, 1);
   }
 }
 
@@ -1203,7 +1220,15 @@ function flatRoof(g: MeshBuilder, pts: number[], tint: number) {
     g.patch(pts, uv, shadeHex(tint, 1.02));
     return;
   }
-  g.poly(pts, shadeHex(tint, 1.16));
+  // The coping in three tones: lit on the sides facing the NW light, shaded on the SE ones.
+  const osg = signedArea(pts) > 0 ? 1 : -1;
+  for (let i = 0; i < m; i++) {
+    const j = (i + 1) % m;
+    const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1]];
+    const l = Math.hypot(bx - ax, by - ay) || 1;
+    const out = (osg * (by - ay) - osg * (bx - ax)) / l / Math.SQRT2;
+    g.poly([ax, ay, bx, by, inner[j * 2], inner[j * 2 + 1], inner[i * 2], inner[i * 2 + 1]], shadeHex(tint, out < -0.3 ? 1.18 : out > 0.3 ? 1.0 : 1.09));
+  }
   g.patch(inner, uv, shadeHex(tint, 1.0));
   const sg = signedArea(inner) > 0 ? 1 : -1;
   for (let i = 0; i < m; i++) {
@@ -1221,11 +1246,9 @@ function flatRoof(g: MeshBuilder, pts: number[], tint: number) {
       g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], shadeHex(tint, 1.2), 0.55);
     }
   }
-  // (Inked at a screen pixel or more at zoom 2, else the axis-aligned edges break into dashes.)
-  g.outline(inner, 3.2, ROOF_INK, 0.75);
-  g.outline(pts, 3.6, ROOF_INK, 0.9);
+  g.outline(inner, INK_LINE, ROOF_INK);
+  g.outline(pts, INK_OUT, ROOF_INK);
   // Water spouts through the lee (S, E) parapet's longest side.
-  const osg = signedArea(pts) > 0 ? 1 : -1;
   let [best, bi] = [0, -1];
   for (let i = 0; i < m; i++) {
     const [ax, ay, bx, by] = [pts[i * 2], pts[i * 2 + 1], pts[((i + 1) % m) * 2], pts[((i + 1) % m) * 2 + 1]];
@@ -1244,7 +1267,7 @@ function flatRoof(g: MeshBuilder, pts: number[], tint: number) {
     const q = [px - ex * hw - onx * i0, py - ey * hw - ony * i0, px + ex * hw - onx * i0, py + ey * hw - ony * i0, px + ex * hw + onx * o1, py + ey * hw + ony * o1, px - ex * hw + onx * o1, py - ey * hw + ony * o1];
     g.poly(q.map((v) => v + 0.2 * FT), 0x000000, 0.25);
     g.poly(q, 0x8b6b4a);
-    g.outline(q, 1.0, ROOF_INK, 0.85);
+    g.outline(q, INK_LINE, ROOF_INK);
   }
 }
 
@@ -1256,46 +1279,34 @@ function circle(cx: number, cy: number, r: number, n: number): number[] {
 }
 
 /** The plaster of a dome's drum and the flat roof round it (whitewash keeps its own). */
-const PLASTER = 0xcbbfa6;
+const PLASTER = 0xb4a68b;
 
-/** A dome of radius r about (cx, cy) on its drum: its shadow on the roof round it, the drum's ring,
- * shaded as a sphere lit from the NW, its courses in rings and its seams in ribs (per material) up to a
- * finial. */
+/** A dome of radius r about (cx, cy) on its drum: its shadow on the roof round it, the drum's ring, the
+ * dome in three flat tones lit from the NW (a shaded crescent to the SE, the mid tone, a lit cap towards
+ * the light), its seams in a few ribs (not whitewash) up to a finial, inked round. */
 function dome(g: MeshBuilder, cx: number, cy: number, r: number, tint: number) {
-  const n = 20;
+  const n = 24;
   g.poly(circle(cx + r * 0.24, cy + r * 0.24, r * 1.06, n), 0x000000, 0.3);
   const drum = circle(cx, cy, r * 1.12, n);
   g.poly(drum, g.mat === 11 ? shadeHex(tint, 1.04) : PLASTER);
-  g.outline(drum, 1.4, ROOF_INK, 0.85);
-  const rings = [1, 0.93, 0.8, 0.6, 0.34, 0];
-  const L = [-0.55, -0.55, 0.63];
-  const at: number[][] = [];
-  for (const p of rings) {
-    const row: number[] = [];
-    const [nz, v] = [Math.sqrt(1 - p * p), (r * (Math.PI / 2 - Math.asin(p))) / FT];
-    for (let j = 0; j <= n; j++) {
-      const th = (2 * Math.PI * j) / n;
-      const [c, s] = [Math.cos(th), Math.sin(th)];
-      const lit = Math.max(0, p * c * L[0] + p * s * L[1] + nz * L[2]);
-      row.push(g.vert(cx + r * p * c, cy + r * p * s, shadeHex(tint, 0.5 + 0.78 * lit), 1, g.seed + (th * r) / FT, v, g.code, p));
-    }
-    at.push(row);
+  g.outline(drum, INK_LINE, ROOF_INK);
+  // (Each lighter disc inside the last, pushed towards the light.)
+  const nw = -Math.SQRT1_2;
+  for (const [f, o, t] of [
+    [1, 0, 0.86],
+    [0.84, 0.16, 1.0],
+    [0.62, 0.26, 1.12],
+  ]) {
+    g.poly(circle(cx + nw * r * o, cy + nw * r * o, r * f, n), shadeHex(tint, t));
   }
-  for (let k = 0; k + 1 < rings.length; k++) {
-    for (let j = 0; j < n; j++) {
-      g.tri(at[k][j], at[k][j + 1], at[k + 1][j + 1]);
-      g.tri(at[k][j], at[k + 1][j + 1], at[k + 1][j]);
-    }
-  }
-  // Its ribs (whitewash smooth): from the drum up to the finial, the courses' rings between.
   if (g.mat !== 11) {
-    const rib = shadeHex(tint, 0.55);
-    for (let j = 0; j < 12; j++) {
-      const th = (Math.PI * j) / 6;
-      g.line(cx + r * Math.cos(th), cy + r * Math.sin(th), cx + r * 0.1 * Math.cos(th), cy + r * 0.1 * Math.sin(th), 1.3, rib, 0.6);
+    const rib = shadeHex(tint, 0.72);
+    for (let j = 0; j < 8; j++) {
+      const th = (Math.PI * j) / 4 + Math.PI / 8;
+      g.line(cx + r * 0.97 * Math.cos(th), cy + r * 0.97 * Math.sin(th), cx + r * 0.12 * Math.cos(th), cy + r * 0.12 * Math.sin(th), 0.018 * PX, rib, 0.8);
     }
   }
-  g.outline(circle(cx, cy, r, n), 2, ROOF_INK, 0.95);
+  g.outline(circle(cx, cy, r, n), INK_OUT, ROOF_INK);
   g.poly(circle(cx, cy, Math.max(2, r * 0.09), 8), ROOF_INK);
   g.poly(circle(cx - r * 0.015, cy - r * 0.015, Math.max(1, r * 0.05), 8), 0xb8963e);
 }
@@ -1343,7 +1354,7 @@ function roundRoof(g: MeshBuilder, ring: number[], tint: number) {
   for (let i = 0; i < n; i++) rise += Math.hypot(ring[i * 2] - cx, ring[i * 2 + 1] - cy) / n;
   const shade = (x: number, y: number) => {
     const l = Math.hypot(x - cx, y - cy) || 1;
-    return shadeHex(tint, 0.82 + 0.34 * ((-((x - cx) + (y - cy)) / l / Math.SQRT2 + 1) / 2));
+    return shadeHex(tint, 0.86 + 0.28 * ((-((x - cx) + (y - cy)) / l / Math.SQRT2 + 1) / 2));
   };
   let u0 = g.seed;
   for (let i = 0; i < n; i++) {
@@ -1357,7 +1368,7 @@ function roundRoof(g: MeshBuilder, ring: number[], tint: number) {
   const r = rise * 0.2;
   g.poly(circle(cx, cy, r, 12), 0x8a6a48);
   g.poly(circle(cx + r * 0.1, cy + r * 0.1, r * 0.62, 12), 0x2a2420);
-  g.outline(circle(cx, cy, r, 12), 1.2, ROOF_INK, 0.9);
+  g.outline(circle(cx, cy, r, 12), INK_LINE, ROOF_INK);
 }
 
 /** A smithy's (kiln's, still's) chimney on its ridge `at` of the way along, and the soot round it. */
@@ -1374,7 +1385,7 @@ function smoke(g: MeshBuilder, pts: number[], at: number) {
   const sq = (h: number, dx = 0) => [x - ux * h + uy * h + dx, y - uy * h - ux * h + dx, x + ux * h + uy * h + dx, y + uy * h - ux * h + dx, x + ux * h - uy * h + dx, y + uy * h + ux * h + dx, x - ux * h - uy * h + dx, y - uy * h + ux * h + dx];
   g.poly(sq(0.9 * FT, 0.6 * FT), 0x000000, 0.3);
   g.poly(sq(0.9 * FT), 0x8f877a);
-  g.outline(sq(0.9 * FT), 1.4, ROOF_INK, 0.95);
+  g.outline(sq(0.9 * FT), INK_LINE, ROOF_INK);
   g.poly(sq(0.45 * FT), 0x1e1a16);
 }
 
