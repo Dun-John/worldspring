@@ -23,10 +23,10 @@ const WALL_POINT = 0.1;
 const CHANNEL_RAMP = 0.25;
 
 export interface UnderField {
-  /** Field texture (w x h, RGBA: floor, liquid, raised; `pad` squares wider than the grid each
-   * way) and per-square cells (nx x ny, RGBA:
+  /** Field texture (w x h, RGBA: floor, liquid, raised, the way sewage runs (`flowAngle`); `pad`
+   * squares wider than the grid each way) and per-square cells (nx x ny, RGBA:
    * material, shape (0 none, its slot + 1 in `shapes`, 254 none but one next to it, 255 a cavern),
-   * room hash, 255). A shaped room's squares are left out of the floor (its doorways stay in): the
+   * room hash (a sewer's brick: its foam, `sewerFoam`), 255). A shaped room's squares are left out of the floor (its doorways stay in): the
    * shader draws it from its shape. */
   w: number;
   h: number;
@@ -286,6 +286,52 @@ export function lineWall(lv: InteriorLevel, nx: number, ny: number, near: Uint8A
   return best;
 }
 
+/** The way sewage runs along a run from (0, 0) toward (dx, dy), for the field's alpha (0-1): every
+ * run flows toward `FLOW_TO` (grid axes), so runs meeting across sections agree; the angle from it
+ * (within a quarter turn either way) over a half turn, plus 0.5. The shader turns it back
+ * (`underground.frag`, the sewage). */
+const FLOW_TO = [0.958, 0.287];
+function flowAngle(dx: number, dy: number): number {
+  const along = dx * FLOW_TO[0] + dy * FLOW_TO[1];
+  const side = FLOW_TO[0] * dy - FLOW_TO[1] * dx;
+  const s = along < 0 ? -1 : 1;
+  return Math.max(0, Math.min(1, Math.atan2(side * s, along * s) / Math.PI + 0.5));
+}
+
+/** Foam in a sewer's channel (0-255 in its squares' blue, which brick doesn't use): round where
+ * runs meet (three or more ends together), where one ends, and at the outfalls, fading over
+ * `FOAM_REACH` squares. */
+const FOAM_REACH = 2.2;
+function sewerFoam(lv: InteriorLevel, paths: number[][], nx: number, ny: number, cells: Uint8Array) {
+  const ends = new Map<string, { x: number; y: number; n: number }>();
+  for (const [x0, y0, x1, y1] of paths) {
+    for (const [x, y] of [[x0, y0], [x1, y1]]) {
+      const key = `${Math.round(x * 20)},${Math.round(y * 20)}`;
+      const e = ends.get(key);
+      if (e) e.n++;
+      else ends.set(key, { x, y, n: 1 });
+    }
+  }
+  const foamed = new Set<number>();
+  const at = [...ends.values()].filter((e) => e.n !== 2).map((e) => [e.x, e.y]);
+  for (const f of lv.furniture) if (f.kind === 'outfall') at.push([f.x + f.w / 2, f.y + f.h / 2]);
+  for (const [x, y] of at) {
+    const [i0, j0] = [Math.max(0, Math.floor(x - FOAM_REACH)), Math.max(0, Math.floor(y - FOAM_REACH))];
+    const [i1, j1] = [Math.min(nx - 1, Math.floor(x + FOAM_REACH)), Math.min(ny - 1, Math.floor(y + FOAM_REACH))];
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const k = j * nx + i;
+        if (cells[k * 4] !== 3 || cells[k * 4 + 3] === 0) continue;
+        const v = Math.round(255 * Math.max(0, 1 - Math.hypot(i + 0.5 - x, j + 0.5 - y) / FOAM_REACH));
+        cells[k * 4 + 2] = Math.max(v, foamed.has(k) ? cells[k * 4 + 2] : 0);
+        foamed.add(k);
+      }
+    }
+  }
+  // (The rest of the brick: none.)
+  for (let k = 0; k < nx * ny; k++) if (cells[k * 4] === 3 && !foamed.has(k)) cells[k * 4 + 2] = 0;
+}
+
 /** The textures of a level of an underground site. */
 export function underField(it: Interior, level: number): UnderField {
   const lv = it.levels[level];
@@ -299,6 +345,8 @@ export function underField(it: Interior, level: number): UnderField {
   const floor = new Float32Array(w * h);
   const liquid = new Float32Array(w * h);
   const raised = new Float32Array(w * h);
+  // Which way the sewage runs (`flowAngle`), by the nearest run.
+  const flow = new Float32Array(w * h).fill(0.5);
   const wet = new Uint8Array(nx * ny);
   let liquidKind = 0;
   for (const f of lv.furniture) {
@@ -341,11 +389,13 @@ export function underField(it: Interior, level: number): UnderField {
     const near = nearFloor(lv, nx, ny, rim);
     const across = nx + 2 * rim;
     const lined = new Float32Array(w * h);
+    const closest = new Float32Array(w * h).fill(Infinity);
     for (const [x0, y0, x1, y1, r] of paths) {
       const dx = x1 - x0;
       const dy = y1 - y0;
       const len2 = Math.max(dx * dx + dy * dy, 1e-9);
       const r2 = r * r;
+      const way = flowAngle(dx, dy);
       const tx0 = Math.max(0, Math.floor((Math.min(x0, x1) - r + rim) * R));
       const ty0 = Math.max(0, Math.floor((Math.min(y0, y1) - r + rim) * R));
       const tx1 = Math.min(w - 1, Math.ceil((Math.max(x0, x1) + r + rim) * R));
@@ -359,7 +409,13 @@ export function underField(it: Interior, level: number): UnderField {
           const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / len2));
           const ex = px - x0 - t * dx;
           const ey = py - y0 - t * dy;
-          if (ex * ex + ey * ey <= r2) lined[ty * w + tx] = 1;
+          const e2 = ex * ex + ey * ey;
+          if (e2 > r2) continue;
+          lined[ty * w + tx] = 1;
+          if (e2 < closest[ty * w + tx]) {
+            closest[ty * w + tx] = e2;
+            flow[ty * w + tx] = way;
+          }
         }
       }
     }
@@ -369,6 +425,7 @@ export function underField(it: Interior, level: number): UnderField {
     liquidKind = 1;
     liquid.set(sewerChannel(paths, near, lined, nx, ny, rim, w, h));
     for (let k = 0; k < w * h; k++) if (lined[k]) floor[k] = 1;
+    sewerFoam(lv, paths, nx, ny, cells);
   }
   // Natural rock is rounded; sewers follow their streets; built sites keep square corners
   // (the shader measures their walls from the squares).
@@ -391,7 +448,7 @@ export function underField(it: Interior, level: number): UnderField {
       data[o] = (f1[k] * 255 + 0.5) | 0;
       data[o + 1] = (f2[k] * 255 + 0.5) | 0;
       data[o + 2] = (f3[k] * 255 + 0.5) | 0;
-      data[o + 3] = 255;
+      data[o + 3] = (flow[k] * 255 + 0.5) | 0;
     }
   }
   // (Rock beside a shape too: the shader looks round there, the shape reaching into it.)

@@ -8,10 +8,10 @@
 // 5-ft grid.
 //
 // uField: 4 texels per square, linear: r floor (blurred mask), g liquid (blurred), b raised
-//         floor (blurred, raise / 10 ft). Built sites (uSquare): nearest, the floor unblurred;
+//         floor (blurred, raise / 10 ft), a the way sewage runs (`flowAngle` in underField.ts). Built sites (uSquare): nearest, the floor unblurred;
 //         their walls are measured from the squares instead, keeping square corners.
 // uCells: one texel per square, nearest: r material, g shape (0 none, a shaped room's slot + 1
-//         in uShapes, 255 a cavern breaking in), b variation, a floor.
+//         in uShapes, 255 a cavern breaking in), b variation (a sewer's brick: foam), a floor.
 // uShapes: shaped rooms (round, octagon, apses, chamfered: `roomShapes.ts`), one column each:
 //         row 0 the box round its squares (x0, y0, x1, y1), row 1 shape, material, variation.
 //         Their squares are left out of uField and the squares' walls; the floor is drawn from
@@ -527,13 +527,71 @@ void main() {
             float inside = smoothstep(0.5 - lw, 0.5 + lw, l);
             vec3 liq;
             if (uLiquid < 1.5) {
-                float n1 = vnoise(p * 1.4 + vec2(uTime * 0.22, uTime * 0.09));
-                float n2 = vnoise(p * 4.2 - vec2(uTime * 0.35, 0.0));
-                liq = vec3(0.21, 0.24, 0.14) * (0.78 + 0.4 * n1);
-                liq += vec3(0.14, 0.15, 0.07) * smoothstep(0.72, 0.86, n2);
-                liq += vec3(0.08) * smoothstep(0.9, 0.97, vnoise(p * 7.0 + uTime * 0.5));
-                // Wet grime on the walkway's edge.
-                col *= mix(1.0, 0.8, smoothstep(0.15, 0.45, l));
+                // Sewage, painted: three flat tones (darker down the middle), a few soft strokes
+                // drifting downstream, floating scum and the odd bit of debris, foam where runs
+                // meet or end; slime and damp brick along its edge and the wall foot, puddles.
+                float wob = vnoise(p * 0.8 + 31.0);
+                float lt = l + 0.03 * (wob - 0.5);
+                float sw = max(lw, 0.006);
+                liq = mix(vec3(0.35, 0.35, 0.21), vec3(0.28, 0.29, 0.17), smoothstep(0.565 - sw, 0.565 + sw, lt));
+                liq = mix(liq, vec3(0.22, 0.23, 0.14), smoothstep(0.625 - sw, 0.625 + sw, lt));
+                // Along and across the run (`flowAngle`; the strokes fade where runs meet).
+                float ph = (here.a - 0.5) * 3.14159265;
+                vec2 fd = cos(ph) * vec2(0.958, 0.287) + sin(ph) * vec2(-0.287, 0.958);
+                vec2 fp = vec2(dot(p, fd), dot(p, vec2(-fd.y, fd.x)));
+                float calm = (1.0 - smoothstep(0.6, 1.2, fwidth(here.a) / max(px, 1e-4))) * smoothstep(0.54, 0.6, l);
+                vec2 sc = vec2(fp.x * 0.45 - uTime * 0.13, fp.y * 4.0);
+                sc.x += 5.0 * hash21(vec2(floor(sc.y), 3.1));
+                vec2 sid = floor(sc);
+                vec2 sf = fract(sc);
+                float stroke = smoothstep(0.0, 0.3, sf.x) * (1.0 - smoothstep(0.5, 0.95, sf.x));
+                stroke *= 1.0 - smoothstep(0.1, 0.24, abs(sf.y - 0.5 + 0.12 * sin(sf.x * 6.28 + sid.x)));
+                stroke *= step(0.55, hash21(sid + 0.7)) * calm * (1.0 - smoothstep(0.06, 0.12, px));
+                float fo = uPad > 0.5 && mat == 3 ? cell.b / 255.0 : 0.0;
+                liq = mix(liq, mix(liq * 1.25 + vec3(0.03, 0.04, 0.02), vec3(0.74, 0.74, 0.64), fo), stroke * 0.7);
+                // Scum and debris, drifting more slowly (cells 2 x 0.6 squares).
+                vec2 bc = vec2(fp.x * 0.5 - uTime * 0.06, fp.y * 1.6);
+                vec2 bid = floor(bc);
+                float bh = hash21(bid + 2.3);
+                vec2 bv = (fract(bc) - vec2(0.3 + 0.4 * hash21(bid + 5.1), 0.5)) * vec2(2.0, 0.625);
+                float deb = step(0.94, bh);
+                float br = mix(0.17 + 0.06 * hash21(bid + 8.7), 0.09, deb) * (1.0 + 0.2 * sin(bv.x * 23.0 + bh * 9.0) * sin(bv.y * 19.0 + bh * 5.0));
+                float blob = (1.0 - smoothstep(br - max(px, 0.01), br + max(px, 0.01), length(bv * vec2(1.0, 1.0 + deb)))) * step(0.72, bh) * calm;
+                vec2 bg = bv.x * fd + bv.y * vec2(-fd.y, fd.x);
+                vec3 scum = mix(vec3(0.50, 0.49, 0.30), vec3(0.62, 0.60, 0.38), smoothstep(-0.3, 0.6, -dot(bg, uLight) / br));
+                scum = mix(scum, vec3(0.30, 0.22, 0.14), deb);
+                liq = mix(liq, scum, blob * 0.9);
+                // Foam where runs meet, end or fall out (sewer sections' brick only).
+                // (Cells half a square, inside its squares: each a puff of two rounds.)
+                if (fo > 0.0) {
+                    vec2 fc = p * 2.0;
+                    vec2 fid = floor(fc);
+                    float fh = hash21(fid + 4.4);
+                    float fr = (0.24 + 0.14 * hash21(fid + 9.2)) * (0.6 + 0.4 * fo) * (0.92 + 0.08 * sin(uTime * 1.7 + fh * 6.0));
+                    vec2 fo2 = vec2(hash21(fid + 1.1), hash21(fid + 6.6)) - 0.5;
+                    vec2 fv = fract(fc) - 0.5 - 0.12 * fo2;
+                    float fm = min(length(fv) - fr, length(fv + fo2 * 0.5) - fr * 0.7);
+                    float bub = (1.0 - smoothstep(-0.03, 0.02, fm)) * step(fh, 0.15 + 0.85 * fo);
+                    vec3 froth = mix(vec3(0.64, 0.65, 0.56), vec3(0.84, 0.84, 0.76), smoothstep(-0.2, 0.3, -dot(fv, uLight) / max(fr, 1e-3)));
+                    // (Far out the puffs drop away, the froth staying as a wash.)
+                    float near = 1.0 - smoothstep(0.04, 0.08, px);
+                    liq = mix(liq, vec3(0.52, 0.53, 0.42), fo * fo * mix(0.55, 0.3, near));
+                    liq = mix(liq, froth, bub * near * smoothstep(0.53, 0.58, l));
+                }
+                // On the walkway: damp brick toward the water, a soft slime band at its edge, slime
+                // at the wall foot, a few puddles.
+                col *= mix(1.0, 0.84, smoothstep(0.06, 0.4, l));
+                col = mix(col, vec3(0.36, 0.40, 0.22), smoothstep(0.34 + 0.08 * wob, 0.47, l) * 0.45);
+                col = mix(col, vec3(0.31, 0.35, 0.21), (1.0 - smoothstep(0.05, 0.16 + 0.14 * wob, d)) * 0.5);
+                vec2 pc = p * 0.5;
+                vec2 pid = floor(pc);
+                vec2 pv = (fract(pc) - 0.3 - 0.4 * vec2(hash21(pid + 7.7), hash21(pid + 2.9))) * 2.0;
+                float pr = (0.26 + 0.12 * hash21(pid + 3.3)) * (1.0 + 0.15 * sin(pv.x * 9.0 + pv.y * 7.0));
+                float pud = (1.0 - smoothstep(pr - max(px, 0.015), pr + max(px, 0.015), length(pv * vec2(1.0, 1.4)))) * step(0.8, hash21(pid + 0.4));
+                pud *= (1.0 - smoothstep(0.12, 0.3, l)) * smoothstep(0.18, 0.35, d);
+                vec3 wetCol = col * vec3(0.76, 0.80, 0.80) + vec3(0.03, 0.04, 0.04);
+                wetCol = mix(wetCol, vec3(0.72, 0.78, 0.74), (1.0 - smoothstep(0.0, 0.08, length(pv + uLight * pr * 0.55) - pr * 0.3)) * 0.35);
+                col = mix(col, wetCol, pud);
             } else {
                 float n1 = vnoise(p * 1.2 + vec2(uTime * 0.05, uTime * 0.03));
                 liq = mix(vec3(0.92, 0.26, 0.05), vec3(1.0, 0.78, 0.25), n1);
