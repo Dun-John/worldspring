@@ -1186,19 +1186,23 @@ function inset(pts: number[], w: number): number[] | null {
   return a * sg > 0.15 * Math.abs(signedArea(pts)) ? out : null;
 }
 
-/** A flat roof behind a parapet: the parapet's coping round it, the roof's field inside (patterned),
- * the shadow the parapet casts on it from the NW and the lit inner face of the far side, and a water spout
- * or two out through the parapet on its lee side. */
+/** A flat roof behind a parapet: the parapet's coping round it (a plain lighter band, inked on both
+ * edges), the roof's field inside (patterned), the shadow the NW parapet casts on it towards the SE and
+ * the lit inner face of the far side, and a small water spout (two on a long side) out through the
+ * parapet on its lee side. */
 function flatRoof(g: MeshBuilder, pts: number[], tint: number) {
   const m = pts.length / 2;
   const { ux, uy, halfW } = frame(pts);
-  const w = Math.min(0.7 * FT, halfW * 0.3);
+  const w = Math.min(0.9 * FT, halfW * 0.3);
   const [ox, oy] = [pts[0], pts[1]];
   const uv = (x: number, y: number): [number, number] => [g.seed + ((x - ox) * ux + (y - oy) * uy) / FT, (-(x - ox) * uy + (y - oy) * ux) / FT];
-  g.patch(pts, uv, shadeHex(tint, 1.1));
   const inner = inset(pts, w);
-  if (!inner) return;
-  g.patch(inner, uv, shadeHex(tint, 0.94));
+  if (!inner) {
+    g.patch(pts, uv, shadeHex(tint, 1.02));
+    return;
+  }
+  g.poly(pts, shadeHex(tint, 1.16));
+  g.patch(inner, uv, shadeHex(tint, 1.0));
   const sg = signedArea(inner) > 0 ? 1 : -1;
   for (let i = 0; i < m; i++) {
     const [ax, ay, bx, by] = [inner[i * 2], inner[i * 2 + 1], inner[((i + 1) % m) * 2], inner[((i + 1) % m) * 2 + 1]];
@@ -1208,14 +1212,16 @@ function flatRoof(g: MeshBuilder, pts: number[], tint: number) {
     const [onx, ony] = [(sg * (by - ay)) / l, (-sg * (bx - ax)) / l];
     const nw = -(onx + ony) / Math.SQRT2;
     if (nw > 0.25) {
-      const d = w * 0.9 * nw;
-      g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], 0x000000, 0.2);
+      const d = w * 1.1 * nw;
+      g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], 0x000000, 0.22);
     } else if (nw < -0.25) {
       const d = w * 0.25;
       g.poly([ax, ay, bx, by, bx - onx * d, by - ony * d, ax - onx * d, ay - ony * d], shadeHex(tint, 1.2), 0.55);
     }
   }
-  g.outline(inner, 1.2, shadeHex(tint, 0.55), 0.8);
+  // (Inked at a screen pixel or more at zoom 2, else the axis-aligned edges break into dashes.)
+  g.outline(inner, 3.2, ROOF_INK, 0.75);
+  g.outline(pts, 3.6, ROOF_INK, 0.9);
   // Water spouts through the lee (S, E) parapet's longest side.
   const osg = signedArea(pts) > 0 ? 1 : -1;
   let [best, bi] = [0, -1];
@@ -1228,15 +1234,15 @@ function flatRoof(g: MeshBuilder, pts: number[], tint: number) {
   const [ax, ay, bx, by] = [pts[bi * 2], pts[bi * 2 + 1], pts[((bi + 1) % m) * 2], pts[((bi + 1) % m) * 2 + 1]];
   const [ex, ey] = [(bx - ax) / best, (by - ay) / best];
   const [onx, ony] = [osg * ey, -osg * ex];
-  const n = best > 6 * PX ? 2 : 1;
+  const n = best > 10 * PX ? 2 : 1;
   for (let k = 0; k < n; k++) {
     const t = (best * (k + 1)) / (n + 1);
     const [px, py] = [ax + ex * t, ay + ey * t];
-    const [hw, i0, o1] = [0.2 * FT, w, 0.8 * FT];
+    const [hw, i0, o1] = [0.14 * FT, w, 0.5 * FT];
     const q = [px - ex * hw - onx * i0, py - ey * hw - ony * i0, px + ex * hw - onx * i0, py + ey * hw - ony * i0, px + ex * hw + onx * o1, py + ey * hw + ony * o1, px - ex * hw + onx * o1, py - ey * hw + ony * o1];
-    g.poly(q.map((v) => v + 0.25 * FT), 0x000000, 0.3);
+    g.poly(q.map((v) => v + 0.2 * FT), 0x000000, 0.25);
     g.poly(q, 0x8b6b4a);
-    g.outline(q, 1.1, ROOF_INK, 0.9);
+    g.outline(q, 1.0, ROOF_INK, 0.85);
   }
 }
 

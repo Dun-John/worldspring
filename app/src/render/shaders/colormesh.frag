@@ -64,7 +64,7 @@ void main() {
             a *= 0.7 * (1.0 - smoothstep(0.2, 1.0, r));
         } else {
             // The pattern's rhythm (ft): under ~3 px it fades out.
-            float size = mat == 0 ? 1.4 : mat == 1 ? 1.0 : mat == 2 ? 1.0 : mat == 3 ? 0.9 : mat == 4 ? 1.2 : mat <= 6 ? 1.6 : mat == 7 ? 0.8 : mat == 8 ? 2.0 : mat == 9 ? 2.0 : mat == 10 ? 0.8 : 2.5;
+            float size = mat == 0 ? 1.4 : mat == 1 ? 1.8 : mat == 2 ? 1.0 : mat == 3 ? 1.6 : mat == 4 ? 1.2 : mat <= 6 ? 1.6 : mat == 7 ? 1.4 : mat == 8 ? 2.0 : mat == 9 ? 2.0 : mat == 10 ? 0.8 : 2.5;
             float k = smoothstep(2.0, 4.0, size * pxFt);
             if (k > 0.0) {
                 vec3 c = col;
@@ -82,13 +82,16 @@ void main() {
                     float h = hash(vec2(floor(u * 5.0), 1.0));
                     if (v < 0.35 + 0.2 * h) s *= 0.8 + 0.12 * h;
                 } else if (mat == 1) {
-                    // Slate: small slates in courses, each offset half a slate, blue-grey from slate to slate.
-                    float row = floor(v);
-                    float x = u / 1.2 + 0.5 * mod(row, 2.0);
+                    // Slate: slates in courses, each offset half a slate, blue-grey from slate to slate, a dark
+                    // joint under each course and between slates.
+                    float row = floor(v / 1.8);
+                    float x = u / 2.0 + 0.5 * mod(row, 2.0);
                     tile = hash(vec2(floor(x), row));
                     float fx = fract(x);
-                    s = (0.94 + 0.1 * tile) * course(fract(v));
-                    s *= 1.0 - 0.26 * ln(min(fx, 1.0 - fx) * 1.2, 0.11, px);
+                    float fv = fract(v / 1.8);
+                    s = (0.9 + 0.18 * tile) * course(fv);
+                    s *= 1.0 - 0.4 * ln(min(fx, 1.0 - fx) * 2.0, 0.14, px);
+                    s *= 1.0 - 0.32 * ln(fv * 1.8, 0.12, px);
                     c *= vec3(1.0 - 0.06 * (tile - 0.5), 1.0, 1.0 + 0.08 * (tile - 0.5));
                 } else if (mat == 2) {
                     // Clay barrel tile: half-round tiles in rows down the slope, scalloped ends, dark channels.
@@ -101,13 +104,15 @@ void main() {
                     s *= 1.0 - 0.3 * ln(min(fx, 1.0 - fx) * 0.95, 0.13, px);
                 } else if (mat == 3) {
                     // Wood shingle / shake: staggered courses of shingles of odd widths, grain down them.
-                    float row = floor(v / 0.9);
-                    float x = u / 0.7 + 0.37 * row + 0.3 * hash(vec2(row, 5.0));
+                    float row = floor(v / 1.6);
+                    float x = u / 1.2 + 0.37 * row + 0.3 * hash(vec2(row, 5.0));
                     tile = hash(vec2(floor(x), row));
                     float fx = fract(x);
-                    s = (0.88 + 0.18 * tile) * course(fract(v / 0.9 + 0.1 * (tile - 0.5)));
-                    s *= 0.95 + 0.1 * vnoise(vec2(u * 6.0, v * 0.6));
-                    s *= 1.0 - 0.28 * ln(min(fx, 1.0 - fx) * 0.7, 0.1, px);
+                    float fv = fract(v / 1.6 + 0.06 * (tile - 0.5));
+                    s = (0.84 + 0.26 * tile) * course(fv);
+                    s *= 0.96 + 0.08 * vnoise(vec2(u * 4.0, v * 0.4));
+                    s *= 1.0 - 0.4 * ln(min(fx, 1.0 - fx) * 1.2, 0.13, px);
+                    s *= 1.0 - 0.3 * ln(fv * 1.6, 0.12, px);
                 } else if (mat == 4) {
                     // Turf: lumpy grass, a few flowers.
                     s = 0.84 + 0.26 * vnoise(p * 0.8) + 0.07 * (hash(floor(p * 4.0)) - 0.5);
@@ -133,17 +138,18 @@ void main() {
                     }
                 } else if (mat == 7) {
                     // Glazed tile: neat rows, crisp joints, a slight sheen on each (no glow).
-                    vec2 gq = p / 0.8;
+                    vec2 gq = vec2(u / 1.4 + 0.5 * mod(floor(v / 1.4), 2.0), v / 1.4);
                     vec2 f = fract(gq);
                     tile = hash(floor(gq));
-                    s = (0.95 + 0.08 * tile) * (0.95 + 0.1 * (1.0 - f.x) * f.y);
-                    s *= 1.0 - 0.3 * ln(min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)) * 0.8, 0.1, px);
+                    s = (0.93 + 0.12 * tile) * (0.93 + 0.14 * (1.0 - f.x) * f.y) * course(f.y);
+                    s *= 1.0 - 0.38 * ln(min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)) * 1.4, 0.13, px);
                 } else if (mat == 8) {
-                    // Flat clay: smooth mud plaster, trowel marks, a few cracks.
-                    float n = vnoise(p * 0.45);
-                    s = 0.95 + 0.08 * n;
-                    float cr = abs(vnoise(p * 0.7 + 13.0) - 0.5) * 2.2;
-                    s *= 1.0 - 0.3 * ln(cr, 0.09, px) * step(0.55, n) * smoothstep(1.5, 3.0, 0.5 * pxFt);
+                    // Flat clay: smooth matte mud plaster, soft mottling, a few hairline cracks.
+                    float n = vnoise(p * 0.28);
+                    s = 1.0 + 0.06 * n + 0.025 * vnoise(p * 0.9 + 7.0);
+                    c *= vec3(1.03, 1.0, 0.96);
+                    float cr = abs(vnoise(p * 0.32 + 13.0) - 0.5) * 2.4;
+                    s *= 1.0 - 0.13 * ln(cr, 0.05, px) * smoothstep(0.8, 0.86, n);
                 } else if (mat == 9) {
                     // Hide / felt: panels stitched together, rope bands across them.
                     float x = u / 3.2;
@@ -167,21 +173,20 @@ void main() {
                     s *= 1.0 - 0.3 * ln(min(e, 1.0 - e) * 7.0, 0.1, px);
                 } else {
                     // Whitewash: bright plaster, soft brushed shading.
-                    s = (0.97 + 0.05 * vnoise(p * 0.35)) * (0.985 + 0.03 * hash(vec2(floor(u * 2.0), floor(v * 0.5))));
+                    s = 1.04 + 0.04 * vnoise(p * 0.3);
                 }
                 if (wear > 0.05) {
-                    // Missing pieces (dark battens), newer patches; rain streaks down the slope; moss.
+                    // Replaced pieces a shade off (older and darker, or newer and lighter); rain streaks down the
+                    // slope (not on flat plaster); moss.
                     if (tile >= 0.0) {
                         float t2 = fract(tile * 13.7);
-                        if (t2 < wear * wear * 0.025) {
-                            s *= 0.55;
-                            c = mix(c, vec3(0.24, 0.2, 0.16), 0.5);
-                        } else if (t2 < wear * wear * 0.07) {
-                            s *= 1.1;
-                            c *= vec3(1.04, 1.0, 0.94);
+                        if (t2 < wear * wear * 0.012) s *= 0.86;
+                        else if (t2 < wear * wear * 0.035) {
+                            s *= 1.08;
+                            c *= vec3(1.03, 1.0, 0.96);
                         }
                     }
-                    s *= 1.0 - 0.22 * wear * smoothstep(0.55, 0.9, vnoise1(u * 1.1, floor(v / 9.0)));
+                    if (mat != 8 && mat != 11) s *= 1.0 - 0.22 * wear * smoothstep(0.55, 0.9, vnoise1(u * 1.1, floor(v / 9.0)));
                     float mo = vnoise(p * 0.33 + 41.0) + 0.22 * hash(floor(p * 3.0));
                     float mm = smoothstep(1.22 - 0.5 * wear, 1.32 - 0.5 * wear, mo);
                     if (mossy) c = mix(c, vec3(0.38, 0.41, 0.25) / max(s, 0.5), mm * 0.55);
