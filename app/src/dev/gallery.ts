@@ -35,7 +35,7 @@ const FURNITURE: [string, number, number][] = [
   ['bar', 3, 1], ['counter', 2, 1], ['hearth', 2, 1], ['oven', 1, 1], ['forge', 2, 2], ['anvil', 1, 1], ['vat', 2, 2],
   ['cauldron', 1, 1], ['workbench', 2, 1], ['alchemy_bench', 2, 1], ['weapon_rack', 1, 1], ['weapon_rack', 2, 1], ['rack', 1, 2], ['cage', 2, 2], ['cage', 1, 1],
   ['altar', 2, 1], ['statue', 1, 1], ['pillar', 1, 1], ['sarcophagus', 1, 2], ['bell', 2, 2], ['throne', 1, 1], ['rug', 2, 3], ['rug', 2, 2], ['rug', 2, 1],
-  ['bath', 1, 2], ['bath', 2, 2], ['bucket', 1, 1], ['trapdoor', 1, 1], ['winch', 1, 1], ['telescope', 2, 2], ['barricade', 2, 1],
+  ['bath', 1, 2], ['bath', 2, 2], ['bucket', 1, 1], ['water_jar', 1, 1], ['planter', 1, 1], ['planter', 2, 1], ['washing_line', 3, 1], ['roof_dome', 4, 4], ['trapdoor', 1, 1], ['winch', 1, 1], ['telescope', 2, 2], ['barricade', 2, 1],
   ['stage', 3, 2], ['spiral_stair', 1, 1], ['link_down', 1, 1],
   ['throne_dais', 4, 2], ['throne_dais', 3, 2], ['low_dais', 3, 2], ['chair_of_office', 1, 1], ['high_table', 4, 1], ['carpet_runner', 1, 5], ['carpet_runner', 2, 4],
   ['tapestry', 3, 1], ['tapestry', 2, 1], ['wall_banner', 1, 1], ['standing_banner', 1, 1], ['font', 1, 1], ['cloister_well', 2, 2],

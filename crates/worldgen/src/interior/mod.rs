@@ -206,6 +206,9 @@ pub const OPEN_BELOW: &str = "open to below";
 /// A room kind that is a roof's slopes inside a parapet walk (a keep's top roofed over).
 pub const ROOF_SLOPE: &str = "roof";
 
+/// A room kind that is a flat roof walked on inside its parapet (`terrace`).
+pub const TERRACE: &str = "roof terrace";
+
 /// Rooms that are ways about a floor (passages, landings, an open yard, a nave, a palace's court and
 /// long gallery) rather than rooms of their own: every room beside one opens onto it (`connect`).
 pub fn is_circulation(kind: &str) -> bool {
@@ -471,6 +474,45 @@ pub fn battlements(b: &town::Building) -> Option<f64> {
     }
 }
 
+/// A flat roof behind its parapet (`town::roof::look`'s shape flat, picked or set by hand), or the
+/// flat roof round a dome's drum on a building of one piece: a terrace one walks on, as battlements
+/// are. Its domes (world centre, the drum's radius ft) as the battlemap draws them (`domeRoof` in
+/// `battlePrep.ts`: one over the middle, two along a long footprint); None for any other roof.
+pub fn terrace(l: &Layout, b: &town::Building) -> Option<Vec<(P, f64)>> {
+    use town::roof::Shape;
+    if b.structure != Structure::Roofed || battlements(b).is_some() || b.roof == Some(town::RoofStyle::Cone) || b.poly.len() < 3 {
+        return None;
+    }
+    match town::roof::look(l, b).shape {
+        Shape::Flat => Some(Vec::new()),
+        Shape::Dome if b.parts.is_empty() => {
+            // (`frame`: the vertices' mean, the longest side's direction, the extent along and across it.)
+            let m = b.poly.len();
+            let c = b.poly.iter().fold([0.0, 0.0], |a, p| add(a, mul(*p, 1.0 / m as f64)));
+            let (mut ud, mut best) = ([1.0, 0.0], 0.0);
+            for k in 0..m {
+                let e = sub(b.poly[(k + 1) % m], b.poly[k]);
+                let len = crate::core::sqrt(dot(e, e));
+                if len > best {
+                    (ud, best) = (mul(e, 1.0 / len), len);
+                }
+            }
+            let (mut lo, mut hi, mut plo, mut phi) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+            for p in &b.poly {
+                let d = sub(*p, c);
+                let (a, q) = (dot(d, ud), -d[0] * ud[1] + d[1] * ud[0]);
+                (lo, hi, plo, phi) = (lo.min(a), hi.max(a), plo.min(q), phi.max(q));
+            }
+            let (mid, half_w, len) = (0.5 * (plo + phi), 0.5 * (phi - plo), hi - lo);
+            let r0 = [c[0] - ud[1] * mid, c[1] + ud[0] * mid];
+            let n = if len > 1.75 * 2.0 * half_w { 2 } else { 1 };
+            let r = 0.4 * (len / n as f64).min(2.0 * half_w);
+            Some((0..n).map(|k| (add(r0, mul(ud, lo + len * (k as f64 + 0.5) / n as f64)), r * 1.12)).collect())
+        }
+        _ => None,
+    }
+}
+
 /// A keep with no pieces of its own has a tower on each corner of its grid, but a castle's keep
 /// drawn round its towers by hand (its pieces gone: a footprint far from its grid's rectangle),
 /// whose corners those don't fit.
@@ -490,7 +532,7 @@ const TOWER_TOP: i8 = 101;
 fn big_room(kind: &str) -> bool {
     matches!(
         kind,
-        "common room" | "taproom" | "brewhouse" | "battlements" | "warehouse floor" | "loft storage" | "nave" | "great hall" | "mess hall" | "forge" | "reading room" | "counting house" | "baths" | "infirmary" | "courtroom" | "arena floor" | "stands" | "crypt" | "dungeon"
+        "common room" | "taproom" | "brewhouse" | "battlements" | "roof terrace" | "warehouse floor" | "loft storage" | "nave" | "great hall" | "mess hall" | "forge" | "reading room" | "counting house" | "baths" | "infirmary" | "courtroom" | "arena floor" | "stands" | "crypt" | "dungeon"
     )
 }
 
@@ -585,6 +627,12 @@ pub const FURNITURE: &[(&str, &str, u8, bool, f32)] = &[
     ("stable_stall", "stable stall", 1, false, 4.5),
     ("guild_arms", "guild's arms", 0, false, 0.0),
     ("council_table", "council table", 1, true, 3.0),
+    // A roof terrace's (`furnish_terrace`): a dome on its drum (a wall to stand behind), a big clay
+    // water jar, a planter of herbs (gone round), a washing line on its two posts (walked under).
+    ("roof_dome", "dome", 3, true, 12.0),
+    ("water_jar", "water jar", 1, true, 3.0),
+    ("planter", "planter", 1, true, 2.0),
+    ("washing_line", "washing line", 0, false, 0.0),
 ];
 
 /// A guild's arms' looks (`Item::variant` of `guild_arms`): the merchants', the craftsmen's, the
@@ -789,6 +837,8 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         "wall walk" => &[],
         "hall" | "corridor" => &[],
         "screens passage" | "mural passage" | "landing" | "gate passage" | "open to below" | "roof" => &[],
+        // (A roof terrace furnished on its own, round its domes: `furnish_terrace`.)
+        TERRACE => &[],
         "entrance hall" => &[("bench", Wall(2, 1), 1, 0)],
         "minstrels' gallery" => &[("bench", Wall(2, 1), 1, 0)],
         "keep yard" => &[("barrel", Wall(1, 1), 2, 0), ("crate", Wall(1, 1), 1, 0)],
@@ -869,7 +919,7 @@ pub const ROOM_KINDS: &[&str] = &[
     "treasury", "guest chamber", "servants' quarters", "officers' quarters", "pantry", "buttery", "wardrobe",
     "guard post", "tower top", "torture chamber", "prison block", "well room", "warden's office",
     "screens passage", "mural passage", "landing", "entrance hall", "minstrels' gallery", "open to below",
-    "roof", "keep yard", "gate passage", "great chamber", "garrison", "oratory", "throne room", "ballroom",
+    "roof", "roof terrace", "keep yard", "gate passage", "great chamber", "garrison", "oratory", "throne room", "ballroom",
     "audience chamber", "long gallery", "banqueting hall", "royal chapel", "courtyard", "antechamber",
     "servants' hall", "salon", "stair hall", "side chapel", "shrine", "refectory", "chapter house", "dorter",
     "scriptorium", "cloister walk", "garth", "arcade", "council chamber", "strongroom", "sample room",
@@ -1795,6 +1845,9 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     let corner = if arch == Arch::Keep { t } else { 0 };
     let capital = capital_of(t0, settlement);
     let mut plan = if zoned { zone_plan(world, t0, l, settlement, b, &sh, corner) } else { None };
+    // A flat roof (or one round a dome) is walked on too: a roof terrace inside its parapet (not on a
+    // building laid out by zones: a palace's ranges round its court, a town hall's under its belfry).
+    let roof_terrace = if open_roof || zoned { None } else { terrace(l, b) };
     if plan.is_none() && zoned && hub::kind_of(b, key, &sh, capital, city_of(t0, settlement)).is_some() {
         fell.extend(0..floors);
     }
@@ -1802,7 +1855,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     let belfry = plan.as_ref().and_then(|p| p.belfry());
     if let Some(p) = plan.as_ref().filter(|p| p.pieces || belfry.is_some()) {
         zs = (-1..=p.reaches()).collect();
-    } else if open_roof {
+    } else if open_roof || roof_terrace.is_some() {
         zs.push(ROOF);
     }
     let towers: Option<Vec<Vec<usize>>> = (arch == Arch::Keep && !b.parts.is_empty()).then(|| sh.towers.iter().map(|t| t.0.clone()).collect());
@@ -1904,7 +1957,11 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         let pieces_top = plan.as_ref().is_some_and(|p| p.pieces && z == p.reaches() && p.kind != hub::Kind::ShellKeep);
         // (A hovel's program by its kind: it has no function's key.)
         let hovel = b.func.is_none() && town::catalog::RESIDENTIAL[b.residential as usize] == "hovel";
-        let prog = program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, if hovel { Some("hovel") } else { key });
+        let prog = if z == ROOF && roof_terrace.is_some() {
+            LevelProgram { name: "Roof terrace", rooms: vec![(TERRACE, 1.0)], filler: None, corridor: false, cells: false, by_size: false }
+        } else {
+            program(arch, if pieces_top { ROOF } else { z.min(ROOF) }, top, if hovel { Some("hovel") } else { key })
+        };
         // (Laid out by zones, if it holds together: every room in one piece and reached.)
         let laid = plan.as_mut().and_then(|p| p.level(z));
         let tried = laid.is_some();
@@ -2037,6 +2094,14 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
                 }
             }
         }
+        // A roof terrace: its domes standing on it and a few things about (none where its domes leave
+        // it in pieces or over the stairs).
+        if z == ROOF
+            && let Some(domes) = &roof_terrace
+            && !furnish_terrace(&mut lvl, nx, ny, stairs, domes, &sh, hash3(world.stream("interior.terrace"), town::rng_key(t0, settlement), bi as i64, 0))
+        {
+            continue;
+        }
         let open_hall = lvl.rooms.iter().any(|r| r.kind == OPEN_BELOW && r.squares > 0);
         let galleries: Vec<i16> = (0..lvl.rooms.len() as i16).filter(|&ri| open_hall && lvl.rooms[ri as usize].kind == "minstrels' gallery").collect();
         let skip: Vec<i16> = halls.iter().map(|h| h.0).chain(galleries.iter().copied()).collect();
@@ -2115,6 +2180,155 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         sprites: Vec::new(),
         outlines: sh.outlines(),
     }
+}
+
+/// A roof terrace (`terrace`, one room): its domes as pieces standing on it, each over the squares
+/// whose middles lie inside its drum by a quarter of a square or more; then, sparsely, along its
+/// parapet water jars, planters, a bench and sacks of grain, out on it a rug and a washing line,
+/// clear of the stairs and never cutting it in two. False (no terrace) where a dome stands on the
+/// stairs or leaves fewer than six squares, or parts of it out of reach.
+fn furnish_terrace(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], domes: &[(P, f64)], sh: &Shell, seed: u64) -> bool {
+    let n = nx * ny;
+    let Some(ri) = lvl.cells.iter().copied().find(|&c| c >= 0 && lvl.rooms[c as usize].kind == TERRACE) else { return false };
+    let mine = |k: usize| lvl.cells[k] == ri;
+    let on_st = |k: usize| (st[0]..st[0] + st[2]).contains(&(k % nx)) && (st[1]..st[1] + st[3]).contains(&(k / nx));
+    let mut blocked = vec![false; n];
+    let mut items: Vec<Item> = Vec::new();
+    for &(c, r) in domes {
+        let ks: Vec<usize> = (0..n).filter(|&k| mine(k) && geom::dist(sh.world_at((k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5), c) < r - 0.25 * SQUARE_FT).collect();
+        if ks.is_empty() {
+            continue;
+        }
+        let (x0, x1) = ks.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k % nx), a.1.max(k % nx)));
+        let (y0, y1) = ks.iter().fold((usize::MAX, 0), |a, &k| (a.0.min(k / nx), a.1.max(k / nx)));
+        for k in (y0..=y1).flat_map(|j| (x0..=x1).map(move |i| j * nx + i)) {
+            if on_st(k) {
+                return false;
+            }
+            blocked[k] = true;
+        }
+        items.extend(building_item("roof_dome", x0, y0, x1 - x0 + 1, y1 - y0 + 1));
+    }
+    // (Every square of it not under a dome reached from the stairs.)
+    let whole = |blocked: &[bool]| {
+        let mut seen = vec![false; n];
+        let mut stack: Vec<usize> = (0..n).filter(|&k| on_st(k) && mine(k)).collect();
+        for &k in &stack {
+            seen[k] = true;
+        }
+        let mut count = 0;
+        while let Some(k) = stack.pop() {
+            count += 1;
+            let (i, j) = (k % nx, k / nx);
+            for q in [(i > 0).then(|| k - 1), (i + 1 < nx).then(|| k + 1), (j > 0).then(|| k - nx), (j + 1 < ny).then(|| k + nx)].into_iter().flatten() {
+                if !seen[q] && mine(q) && !blocked[q] {
+                    seen[q] = true;
+                    stack.push(q);
+                }
+            }
+        }
+        (count, (0..n).all(|k| seen[k] || !mine(k) || blocked[k]))
+    };
+    let (open, ok) = whole(&blocked);
+    if !ok || open < 6 + st[2] * st[3] {
+        return false;
+    }
+    // (Its name off its domes: on the open square nearest the open squares' middle.)
+    if !items.is_empty() {
+        let free: Vec<usize> = (0..n).filter(|&k| mine(k) && !blocked[k] && !on_st(k)).collect();
+        let m = free.iter().fold([0.0, 0.0], |a, &k| [a[0] + ((k % nx) as f64 + 0.5) / free.len() as f64, a[1] + ((k / nx) as f64 + 0.5) / free.len() as f64]);
+        let d = |k: usize| geom::dist([(k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5], m);
+        if let Some(&k) = free.iter().min_by(|&&a, &&b| d(a).total_cmp(&d(b)).then(a.cmp(&b))) {
+            lvl.rooms[ri as usize].center = [(k % nx) as f32 + 0.5, (k / nx) as f32 + 0.5];
+        }
+    }
+    // Free squares: on it, off the domes, the stairs and their landing squares round them.
+    let mut taken = blocked.clone();
+    for k in 0..n {
+        let (i, j) = ((k % nx) as isize, (k / nx) as isize);
+        if !mine(k) || (-1..=1).any(|dj| (-1..=1).any(|di| (i + di) >= 0 && (j + dj) >= 0 && ((i + di) as usize) < nx && ((j + dj) as usize) < ny && on_st((j + dj) as usize * nx + (i + di) as usize))) {
+            taken[k] = true;
+        }
+    }
+    for it in &items {
+        for j in (it.y as usize).saturating_sub(1)..((it.y + it.h) as usize + 1).min(ny) {
+            for i in (it.x as usize).saturating_sub(1)..((it.x + it.w) as usize + 1).min(nx) {
+                taken[j * nx + i] = true;
+            }
+        }
+    }
+    let wall = |k: usize| {
+        let (i, j) = (k % nx, k / nx);
+        i == 0 || j == 0 || i + 1 == nx || j + 1 == ny || [k - 1, k + 1, k - nx, k + nx].iter().any(|&q| !mine(q))
+    };
+    let mut rng = Pcg32::new(seed, 83);
+    let mut spots: Vec<usize> = (0..n).filter(|&k| !taken[k] && wall(k)).collect();
+    for k in (1..spots.len()).rev() {
+        spots.swap(k, rng.below(k as u32 + 1) as usize);
+    }
+    // Along the parapet: a few of these, more on a big terrace.
+    let along = ["water_jar", "planter", "bench", "water_jar", "sacks", "planter", "water_jar"];
+    let want = (open / 10).clamp(2, along.len());
+    let mut placed = 0;
+    for &k in &spots {
+        if placed >= want {
+            break;
+        }
+        if taken[k] {
+            continue;
+        }
+        let kind = along[placed];
+        // (A bench two squares along the parapet where there is room, else one.)
+        let (i, j) = (k % nx, k / nx);
+        let pair = if kind == "bench" { [(i + 1 < nx).then(|| k + 1), (j + 1 < ny).then(|| k + nx)].into_iter().flatten().find(|&q| !taken[q] && wall(q)) } else { None };
+        let (w, h) = match pair {
+            Some(q) if q == k + 1 => (2, 1),
+            Some(_) => (1, 2),
+            None => (1, 1),
+        };
+        let Some(it) = building_item(kind, i, j, w, h) else { continue };
+        let cells: Vec<usize> = (j..j + h).flat_map(|y| (i..i + w).map(move |x| y * nx + x)).collect();
+        if it.blocks_move {
+            let mut b2 = blocked.clone();
+            for &q in &cells {
+                b2[q] = true;
+            }
+            if !whole(&b2).1 {
+                continue;
+            }
+            blocked = b2;
+        }
+        for &q in &cells {
+            taken[q] = true;
+        }
+        items.push(it);
+        placed += 1;
+    }
+    // Out on it (walked over, walked under): a rug laid out, a washing line between its posts.
+    for (kind, w, h) in [("rug", 2, 2), ("washing_line", 3, 1), ("washing_line", 1, 3)] {
+        if kind == "washing_line" && items.iter().any(|it| it.kind == kind) {
+            continue;
+        }
+        let fits: Vec<(usize, usize)> = (0..ny.saturating_sub(h - 1))
+            .flat_map(|j| (0..nx.saturating_sub(w - 1)).map(move |i| (i, j)))
+            .filter(|&(i, j)| (j..j + h).all(|y| (i..i + w).all(|x| !taken[y * nx + x])))
+            .collect();
+        // (Off the parapet where it can be.)
+        let inner: Vec<(usize, usize)> = fits.iter().copied().filter(|&(i, j)| (j..j + h).all(|y| (i..i + w).all(|x| !wall(y * nx + x)))).collect();
+        let fits = if inner.is_empty() { fits } else { inner };
+        if fits.is_empty() {
+            continue;
+        }
+        let (i, j) = fits[rng.below(fits.len() as u32) as usize];
+        for y in j..j + h {
+            for x in i..i + w {
+                taken[y * nx + x] = true;
+            }
+        }
+        items.extend(building_item(kind, i, j, w, h));
+    }
+    lvl.furniture.extend(items);
+    true
 }
 
 /// Room `ri` furnished as a hall (`hall::furnish_hall`) in frame `f`; where it may be turned (`f.1`,

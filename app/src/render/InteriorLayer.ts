@@ -4,7 +4,7 @@
 // surface shows through only faintly; caves get rough, chamfered rock edges. Geometry is in
 // the interior's own 5-ft grid units; the container maps them to the screen every frame.
 import { BufferImageSource, Container, Geometry, GlProgram, Graphics, Mesh, RenderTexture, Shader, Sprite, Text, TextStyle, Texture, UniformGroup, type Renderer } from 'pixi.js';
-import { OPEN_BELOW, ROOF_SLOPE, type Interior, type InteriorItem, type InteriorLevel } from '../gen/protocol';
+import { OPEN_BELOW, ROOF_SLOPE, TERRACE, type Interior, type InteriorItem, type InteriorLevel } from '../gen/protocol';
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
@@ -212,6 +212,8 @@ function floorColor(kind: string, z: number, natural = false, raise = 0): number
   // (A roof's squares: the walk's stone, under the roof drawn over them, `drawRoofs`.)
   if (kind === 'battlements' || kind === 'wall walk' || kind === ROOF_SLOPE) return 0xa8a296;
   if (kind === OPEN_BELOW) return -1;
+  // (A flat roof's mud plaster, smooth.)
+  if (kind === TERRACE) return PLASTER;
   if (kind === 'stands') return 0x8a7a64;
   if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison', 'throne room', 'banqueting hall', 'royal chapel', 'stair hall', "servants' hall", 'side chapel', 'shrine', 'chapter house', 'cloister walk', 'refectory', 'arcade', 'strongroom', 'warded vault', 'trophy hall'].includes(kind))
     return 0x9d978c;
@@ -220,10 +222,12 @@ function floorColor(kind: string, z: number, natural = false, raise = 0): number
 const STONE = (c: number) => c === 0x9d978c || c === 0x8f8a80 || c === 0xa8a296 || c === 0x958f83;
 /** A court's lawn (`floorColor`). */
 const LAWN = 0x7f9a56;
+/** A roof terrace's plaster (`floorColor`): no joints. */
+const PLASTER = 0xc4ad88;
 
 /** A floor square's pattern in its colour: planks along x on wood, flagstone joints on stone, none on a lawn. */
 function floorPattern(i: number, j: number, c: number): [Pt, Pt][] {
-  if (c === LAWN) return [];
+  if (c === LAWN || c === PLASTER) return [];
   if (!STONE(c)) return [1, 2, 3].map((k): [Pt, Pt] => [[i, j + k / 4], [i + 1, j + k / 4]]);
   const odd = ((j % 2) + 2) % 2;
   return [
@@ -961,7 +965,29 @@ export class InteriorLayer {
     // it to stand clear) goes over the wall, so it can be seen and used.
     const [sx, sy, sw, sh] = it.stairs;
     const stairsCut = !!parts && [[sx, sy], [sx + sw, sy], [sx, sy + sh], [sx + sw, sy + sh]].some((c) => insetParts(c as Pt, parts) < WALL_HALF - 1e-3);
+    // (A small building's roof terrace: reached by a ladder up through a hatch.)
+    const hatch = lv.rooms.some((r) => r.kind === TERRACE) && it.levels.filter((l) => l.z >= 0).length <= 2;
     const drawStairs = (g: Graphics) => {
+      if (hatch) {
+        const along = sw >= sh;
+        g.rect(sx + 0.08, sy + 0.08, sw - 0.16, sh - 0.16).fill(0x5e4028).stroke({ width: 0.06, color: INK });
+        g.rect(sx + 0.18, sy + 0.18, sw - 0.36, sh - 0.36).fill(0x241a12);
+        // The ladder's rails and rungs, seen down the hatch.
+        const [r0, r1] = along ? [sy + 0.34, sy + sh - 0.34] : [sx + 0.34, sx + sw - 0.34];
+        for (const r of [r0, r1]) {
+          if (along) g.moveTo(sx + 0.2, r).lineTo(sx + sw - 0.2, r);
+          else g.moveTo(r, sy + 0.2).lineTo(r, sy + sh - 0.2);
+        }
+        g.stroke({ width: 0.06, color: 0x9c7450 });
+        const n = Math.max(2, Math.round(Math.max(sw, sh) * 2.5));
+        for (let k = 1; k < n; k++) {
+          const t = (along ? sx + 0.2 : sy + 0.2) + (k / n) * ((along ? sw : sh) - 0.4);
+          if (along) g.moveTo(t, r0).lineTo(t, r1);
+          else g.moveTo(r0, t).lineTo(r1, t);
+        }
+        g.stroke({ width: 0.045, color: 0x86603c });
+        return;
+      }
       g.rect(sx, sy, sw, sh).fill(0x7a6a58);
       const along = sw >= sh;
       const steps = Math.max(sw, sh) * 3;
@@ -1116,7 +1142,7 @@ export class InteriorLayer {
         run -= len;
       }
       g.fill(0x6f6a61);
-    } else if (lv.roof) {
+    } else if (lv.roof && !lv.rooms.some((r) => r.kind === TERRACE)) {
       for (const w of lv.walls) {
         if (!w.exterior) continue;
         const len = Math.abs(w.b[0] - w.a[0]) + Math.abs(w.b[1] - w.a[1]);
