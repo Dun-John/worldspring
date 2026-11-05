@@ -381,8 +381,8 @@ pub struct Chunk {
     /// renderer draws roofs from these rather than from the square grid.
     /// With each: storeys, roof (style 0 pitched, 1 battlements, 2 cone | (tint + 1) << 2) and
     /// corner-tower side (squares; a castle's keep with no pieces its top in the high two bits,
-    /// `town::plain_keep_top`; 255 a keep of pieces).
-    pub building_polys: Vec<(Vec<[f32; 2]>, u8, u8, u8)>,
+    /// `town::plain_keep_top`; 255 a keep of pieces), and its look (`look_bytes`).
+    pub building_polys: Vec<(Vec<[f32; 2]>, u8, u8, u8, [u8; 3])>,
     /// A keep's pieces with its footprint in `building_polys` (`part_code`, outline; chunk-local
     /// squares); a palace's court (`COURT_PART`, its corners each by the footprint's in the same
     /// place); a manor's cross wing and main range (`CROSS_WING_PART`, `MAIN_RANGE_PART`); empty for
@@ -1045,7 +1045,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // square (steps follow the slopes made by hand; empty when nothing is shaped here).
     let mut hand_st: Vec<Option<HandStreet>> = Vec::new();
     let mut refs: Vec<(u32, u32)> = Vec::new();
-    let mut polys: Vec<(Vec<[f32; 2]>, u8, u8, u8)> = Vec::new();
+    let mut polys: Vec<(Vec<[f32; 2]>, u8, u8, u8, [u8; 3])> = Vec::new();
     let mut poly_parts: Vec<Vec<(u8, Vec<[f32; 2]>)>> = Vec::new();
     let mut shapes: Vec<VectorShape> = Vec::new();
     let local = |p: &[f64; 2]| [((p[0] - ox) / SQUARE_FT) as f32, ((p[1] - oy) / SQUARE_FT) as f32];
@@ -1618,6 +1618,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                                 b.floors,
                                 roof_byte(b, battlements.is_some()),
                                 crate::core::round(battlements.unwrap_or(0.0) / SQUARE_FT) as u8 | top << 6,
+                                look_bytes(&l, b),
                             ));
                             // (Each piece's code, how it is topped above it: `town::keep_tops`.)
                             let tops = crate::town::keep_tops(b, world.stream("keep.tops"));
@@ -2903,6 +2904,13 @@ fn roof_byte(b: &crate::town::Building, battlements: bool) -> u8 {
         0
     };
     style | b.tint.map_or(0, |t| (t + 1) << 2)
+}
+
+/// A roof's look as packed (`town::roof::look`): material id, shape id | 0x10 smoke-darkened,
+/// weathering 0-255.
+fn look_bytes(l: &crate::town::Layout, b: &crate::town::Building) -> [u8; 3] {
+    let k = crate::town::roof::look(l, b);
+    [k.material as u8, k.shape as u8 | if k.smoke { 0x10 } else { 0 }, k.wear]
 }
 
 fn apply_edits(c: &mut Chunk, e: &crate::world::Edits, ox: f64, oy: f64) {
@@ -5571,7 +5579,8 @@ fn compute_edges(c: &mut Chunk) {
 ///   building u16[SQ²]: index + 1 of the building on each square (0 = none)
 ///   buildings: count u32, then per building: n u8, floors u8, roof u8 (style: 0 hip,
 ///   1 battlements, 2 cone; | (tint + 1) << 2, 0 = picked),
-///   corner-tower side u8 (squares; 255: a keep of pieces), then n × (x, y) f32 in
+///   corner-tower side u8 (squares; 255: a keep of pieces), roof material u8, shape u8 (| 0x10
+///   smoke-darkened), weathering u8 (`town::roof`), then n × (x, y) f32 in
 ///   chunk squares (heights above are the ground; roofs are drawn from these outlines); a keep
 ///   of pieces then has its pieces: count u8, then per piece `part_code` u8, n u8, n × (x, y) f32
 ///   structures: count u32, then per shape: kind u8 (`ShapeKind`), n u8, 0, 0, size f32,
@@ -5617,9 +5626,10 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
         out.extend_from_slice(&b.to_le_bytes());
     }
     out.extend_from_slice(&(c.building_polys.len() as u32).to_le_bytes());
-    for (k, (poly, floors, roof, tower)) in c.building_polys.iter().enumerate() {
+    for (k, (poly, floors, roof, tower, look)) in c.building_polys.iter().enumerate() {
         let parts = c.building_parts.get(k).filter(|p| !p.is_empty());
         out.extend_from_slice(&[poly.len().min(255) as u8, *floors, *roof, if parts.is_some() { 255 } else { *tower }]);
+        out.extend_from_slice(look);
         for p in poly.iter().take(255) {
             out.extend_from_slice(&p[0].to_le_bytes());
             out.extend_from_slice(&p[1].to_le_bytes());

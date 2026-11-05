@@ -121,6 +121,9 @@ export interface Created {
   func?: string;
   roof?: RoofStyle;
   tint?: Tint;
+  /** Roof material and shape (`ROOF_MATERIALS`, `ROOF_SHAPES`); else the tint's / the roof's, else picked. */
+  material?: RoofMaterial;
+  shape?: RoofShape;
   structure?: 'roofed' | 'ruin';
   /** A castle drawn by hand (its outline in `poly`, `structure` too): the side its gate is in
    * (corner `gate` to the next; else facing the nearest road), a keep, buildings round the yard
@@ -147,6 +150,14 @@ export const ROOFS: RoofStyle[] = ['hip', 'battlements', 'cone'];
 /** Roof colours (`worldgen::world::TINTS`, as `battlePrep.ROOF_TINTS`). */
 export type Tint = 'terracotta' | 'slate' | 'thatch' | 'shingle' | 'moss';
 export const TINTS: Tint[] = ['terracotta', 'slate', 'thatch', 'shingle', 'moss'];
+/** Roof materials by id (`worldgen::town::roof::MATERIALS`, append-only) and their base colours (the
+ * old tints' materials keep the tints' colours: `roof::TINT_MATERIAL`). */
+export type RoofMaterial = 'thatch' | 'slate' | 'clay_tile' | 'shingle' | 'turf' | 'lead' | 'copper' | 'glazed_tile' | 'flat_clay' | 'hide' | 'plank' | 'whitewash';
+export const ROOF_MATERIALS: RoofMaterial[] = ['thatch', 'slate', 'clay_tile', 'shingle', 'turf', 'lead', 'copper', 'glazed_tile', 'flat_clay', 'hide', 'plank', 'whitewash'];
+export const ROOF_MATERIAL_RGB = [0xa88e56, 0x5c6470, 0xa0543c, 0x7a6656, 0x6e6a48, 0x7c848c, 0x5c9a88, 0x3f6f8f, 0xb89a72, 0x9c8a6c, 0x86684a, 0xe0d8c8];
+/** Roof shapes by id (`worldgen::town::roof::SHAPES`, append-only). */
+export type RoofShape = 'hip' | 'gable' | 'cone' | 'dome' | 'flat' | 'round';
+export const ROOF_SHAPES: RoofShape[] = ['hip', 'gable', 'cone', 'dome', 'flat', 'round'];
 export const MAX_FLOORS = 8;
 /** What a building drawn by hand can be. */
 export interface BuildingFuncs {
@@ -366,6 +377,8 @@ export interface BuildingEdit {
   poly?: [number, number][];
   roof?: string;
   tint?: string;
+  material?: string;
+  shape?: string;
   structure?: string;
 }
 
@@ -836,6 +849,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       const kind = attr & 0xff;
       const ward = (attr >> 8) & 0xff;
       const hasFunc = (attr >> 24) & 1;
+      // (Its roof's material: `payload::pack_sites`, `town::roof`.)
+      const material = (attr >> 20) & 15;
       let rgb: [number, number, number];
       let a = 1;
       if (kind === 1) rgb = [0.86, 0.82, 0.71];
@@ -883,6 +898,13 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
           const base = WARD_RGB[ward] ?? WARD_RGB[6];
           rgb = [base[0] * 0.7, base[1] * 0.58, base[2] * 0.52];
         } else rgb = piece === 3 || piece === 4 ? (top === 0 ? [0.62, 0.6, 0.55] : top === 1 ? [0.4, 0.42, 0.44] : [0.38, 0.42, 0.47]) : piece === 0 ? [0.42, 0.45, 0.49] : [0.36, 0.4, 0.45];
+      } else if (kind === 0) {
+        // A roofed building: its roof material's colour, softened toward its ward's paper brown
+        // (watabou-ish), a business a little deeper.
+        const base = WARD_RGB[ward] ?? WARD_RGB[6];
+        const m = ROOF_MATERIAL_RGB[material] ?? ROOF_MATERIAL_RGB[3];
+        const shade = (0.94 + 0.12 * (((i * 2654435761) >>> 0) / 4294967296)) * (hasFunc ? 0.88 : 1);
+        rgb = [0, 1, 2].map((c) => (0.6 * (((m >> (16 - 8 * c)) & 255) / 255) + 0.4 * base[c]) * shade) as [number, number, number];
       } else {
         const base = WARD_RGB[ward] ?? WARD_RGB[6];
         const shade = 0.94 + 0.12 * (((i * 2654435761) >>> 0) / 4294967296);

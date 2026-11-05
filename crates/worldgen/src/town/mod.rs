@@ -19,6 +19,7 @@ pub mod geom;
 pub mod mesh;
 pub mod sites;
 pub mod palace;
+pub mod roof;
 pub mod squares;
 pub mod stairs;
 pub mod temple;
@@ -59,6 +60,10 @@ pub struct Building {
     pub roof: Option<RoofStyle>,
     /// Roof colour (index into the battlemap's tints), else picked.
     pub tint: Option<u8>,
+    /// Roof material and shape set by hand (`roof::Material`, `roof::Shape` ids), else picked
+    /// (`roof::look`).
+    pub material: Option<u8>,
+    pub shape: Option<u8>,
     /// Its id (`b:<layout>:<id>`): its place in the layout as generated, kept when buildings
     /// before it are taken away (`Layout::building`).
     pub id: u32,
@@ -255,6 +260,11 @@ pub struct Layout {
     /// on in pieces (`temple::shape_all`), a monastery's own lot and those it took in (`palace::merge`).
     /// What of it the building leaves open is its own: no other building's door opens onto it.
     pub grounds: Vec<(u32, Vec<P>)>,
+    /// The settlement's culture (a site's: the nearest settlement's), its roofs' seed and age
+    /// (base weathering, 0-255): `roof::look`.
+    pub culture: u8,
+    pub roof_seed: u64,
+    pub roof_age: u8,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -489,6 +499,14 @@ impl Layout {
     }
 
     /// A layout with nothing laid out yet.
+    /// Its roofs' culture, seed and age (`roof::look`): the age by the place's own hash, a site's
+    /// older.
+    pub(crate) fn set_roofs(&mut self, world: &World, t0: &T0, culture: u8) {
+        self.culture = culture;
+        self.roof_seed = hash2(world.stream("town.roof"), rng_key(t0, self.index as usize), 0);
+        self.roof_age = (unit(hash2(self.roof_seed, 1, 0)) * 90.0) as u8;
+    }
+
     pub(crate) fn empty(index: u32, center: P, radius: f64, tier: Tier) -> Layout {
         Layout {
             index,
@@ -529,6 +547,9 @@ impl Layout {
             close_room: Vec::new(),
             forecourts: Vec::new(),
             grounds: Vec::new(),
+            culture: 0,
+            roof_seed: 0,
+            roof_age: 0,
         }
     }
 
@@ -699,7 +720,7 @@ fn edits_fingerprint(world: &World, index: u32) -> Option<u64> {
             h.write(&v.to_le_bytes());
         }
         h.write(&[e.removed as u8, e.floors.map_or(0, |f| f.saturating_add(1)), 0xfe]);
-        for t in [&e.func, &e.roof, &e.tint, &e.structure] {
+        for t in [&e.func, &e.roof, &e.tint, &e.material, &e.shape, &e.structure] {
             h.write(t.as_deref().unwrap_or("-").as_bytes());
             h.write(&[0xff]);
         }
@@ -810,6 +831,7 @@ fn apply_building_edits(world: &World, t0: &T0, base: &Layout) -> Layout {
             b.poly = e.poly.clone();
         }
         sites::apply_looks(b, e.roof.as_deref(), e.tint.as_deref(), e.structure.as_deref());
+        sites::apply_roof(b, e.material.as_deref(), e.shape.as_deref());
         if b.structure == Structure::Ruin && b.func.is_none() && e.func.is_none() {
             b.residential = catalog::RUINED as u8;
         }
@@ -1669,6 +1691,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     let r = urban_radius(s.tier, s.population);
     let (site, road_ends, mut rng) = prepare(world, t0, index);
     let mut l = Layout::empty(index as u32, center, r, s.tier);
+    l.set_roofs(world, t0, s.culture);
     // (How far apart the plan's patches are: how far a function the edit lost may move.)
     let mut spacing = 0.0;
     if s.tier == Tier::Village {
@@ -4292,7 +4315,7 @@ fn build_block<G: Ground>(site: &G, block: &[P], streets: &mut Vec<(P, f64)>, wa
                 continue;
             }
             let pad = site.pad(&poly);
-            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
+            l.buildings.push(Building { poly, ward, func: None, residential: 0, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, id: 0, parts: Vec::new(), keep: None });
         }
     }
 }
@@ -4451,7 +4474,7 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
             let house = rect(add(add(a, mul(u, 0.5 * w + 6.0)), mul(inward, 0.5 * dp + 6.0)), u, w, dp);
             if house.iter().all(|p| contains(&f, *p)) && site.buildable(&house) {
                 let pad = site.pad(&house);
-                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
+                l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, id: 0, parts: Vec::new(), keep: None });
             }
         }
         l.fields.push(f);
@@ -4639,7 +4662,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
                     let house = rect(add(p, mul(n, side * back)), u, w, d);
                     if clear(&house, l) && site.buildable(&house) {
                         let pad = site.pad(&house);
-                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
+                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, id: 0, parts: Vec::new(), keep: None });
                     }
                 }
                 let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
@@ -4660,7 +4683,7 @@ fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mu
         let house = rect(c, [-libm::sin(a), libm::cos(a)], rng.range(22.0, 34.0), rng.range(16.0, 22.0));
         if clear(&house, l) && site.buildable(&house) {
             let pad = site.pad(&house);
-            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
+            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, id: 0, parts: Vec::new(), keep: None });
         }
     }
     // Fields: Voronoi cells seeded along the lanes and on a jittered ring, split into plots
@@ -5032,7 +5055,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
-            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, id: 0, parts: Vec::new(), keep: None });
+            l.buildings.push(Building { poly: house, ward, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, id: 0, parts: Vec::new(), keep: None });
         }
     }
     // Big functions first so they get the big lots.

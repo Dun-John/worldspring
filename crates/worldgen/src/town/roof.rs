@@ -1,0 +1,286 @@
+//! Roofs: a material, a shape and a weathering per building, picked from the settlement's culture
+//! (`Layout::culture`: 0 north, 1 west, 2 south, 3 dry, 4 steppe), its ward (wealth), its function
+//! (civic and sacred stand out, working buildings plain), its size and storeys, and its own hash.
+//! A pure function of the layout and the building (`look`), so a function or storeys changed by
+//! hand change the roof with them; a material or shape set by hand (`Building::material`,
+//! `Building::shape`, or the old `tint`) wins.
+//!
+//! The ids below are stable once shipped (payload, edits by name): only ever append.
+//!
+//! Materials (`MATERIALS`, colours as `app/src/gen/protocol.ts` `ROOF_MATERIALS`):
+//!   0 thatch, 1 slate, 2 clay_tile (terracotta barrel), 3 shingle (wood shingle/shake), 4 turf,
+//!   5 lead, 6 copper (verdigris), 7 glazed_tile, 8 flat_clay (mud plaster), 9 hide (hide/felt),
+//!   10 plank, 11 whitewash (lime-washed plaster: the dry lands' domes).
+//! Shapes (`SHAPES`): 0 hip, 1 gable, 2 cone, 3 dome, 4 flat (behind a parapet), 5 round (a low
+//!   cone, yurt-like).
+//! Weathering: 0-255 (moss, missing tiles, repairs; more on poor wards, old towns, sites), and
+//!   `Look::smoke`: a smoke-darkened patch (smithies, kilns).
+
+use super::catalog::{CATALOG, Ward};
+use super::{Building, Layout, RoofStyle, Structure};
+use crate::core::rng::{hash3, unit};
+
+pub const MATERIALS: [&str; 12] = ["thatch", "slate", "clay_tile", "shingle", "turf", "lead", "copper", "glazed_tile", "flat_clay", "hide", "plank", "whitewash"];
+pub const SHAPES: [&str; 6] = ["hip", "gable", "cone", "dome", "flat", "round"];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Material {
+    Thatch = 0,
+    Slate,
+    ClayTile,
+    Shingle,
+    Turf,
+    Lead,
+    Copper,
+    GlazedTile,
+    FlatClay,
+    Hide,
+    Plank,
+    Whitewash,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Shape {
+    Hip = 0,
+    Gable,
+    Cone,
+    Dome,
+    Flat,
+    Round,
+}
+
+use Material::*;
+use Shape::*;
+
+/// The old hand-set tints (`world::TINTS`: terracotta, slate, thatch, shingle, moss) as materials
+/// (their colours are those materials' base colours).
+pub const TINT_MATERIAL: [Material; 5] = [ClayTile, Slate, Thatch, Shingle, Turf];
+
+const ALL_MATERIALS: [Material; 12] = [Thatch, Slate, ClayTile, Shingle, Turf, Lead, Copper, GlazedTile, FlatClay, Hide, Plank, Whitewash];
+const ALL_SHAPES: [Shape; 6] = [Hip, Gable, Cone, Dome, Flat, Round];
+
+impl Material {
+    pub fn from_u8(v: u8) -> Option<Material> {
+        ALL_MATERIALS.get(v as usize).copied()
+    }
+    pub fn by_name(s: &str) -> Option<Material> {
+        MATERIALS.iter().position(|m| *m == s).map(|i| ALL_MATERIALS[i])
+    }
+}
+
+impl Shape {
+    pub fn from_u8(v: u8) -> Option<Shape> {
+        ALL_SHAPES.get(v as usize).copied()
+    }
+    pub fn by_name(s: &str) -> Option<Shape> {
+        SHAPES.iter().position(|m| *m == s).map(|i| ALL_SHAPES[i])
+    }
+}
+
+/// A building's roof as picked (or set by hand).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Look {
+    pub material: Material,
+    pub shape: Shape,
+    pub wear: u8,
+    pub smoke: bool,
+}
+
+/// What a building is for, as its roof tells it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Home,
+    Civic,
+    Sacred,
+    Working,
+    Trade,
+}
+
+fn role(b: &Building) -> Role {
+    let Some(f) = b.func else { return Role::Home };
+    let f = &CATALOG[f as usize];
+    match f.key {
+        "temple" | "shrine" | "monastery" | "mausoleum" | "catacombs" => Role::Sacred,
+        "library" | "arcane_academy" | "observatory" | "bank" | "auction_house" | "merchant_guild" | "craft_guild" | "mages_guild" | "theater" | "bards_college" | "arena" | "bathhouse" => Role::Civic,
+        "blacksmith" | "armorer" | "weaponsmith" | "glassblower" | "potter" | "brewery" | "winery" | "distillery" | "leatherworker" | "mill" | "stables" | "warehouse" | "shipwright" | "carpenter" | "mason" | "cooper" | "cartwright" | "weaver" => Role::Working,
+        _ if f.category == "civic & military" => Role::Civic,
+        _ => Role::Trade,
+    }
+}
+
+/// Wealth 0 poor, 1 middling, 2 rich: the ward's, a home's kind nudging it.
+fn wealth(b: &Building) -> u8 {
+    if b.func.is_none() {
+        match b.residential {
+            0 | 5 => return 0,
+            2 => return 2.min(ward_wealth(b.ward) + 1),
+            4 => return 2,
+            _ => {}
+        }
+    }
+    ward_wealth(b.ward)
+}
+
+fn ward_wealth(w: Ward) -> u8 {
+    match w {
+        Ward::Noble | Ward::Castle | Ward::Plaza | Ward::Temple => 2,
+        Ward::Merchant | Ward::Common | Ward::Craft | Ward::Military | Ward::Docks | Ward::Park => 1,
+        Ward::Slum | Ward::Farm | Ward::Rural => 0,
+    }
+}
+
+/// Picks one of `opts` by weight with `u` in [0, 1).
+fn pick<T: Copy>(u: f64, opts: &[(T, u32)]) -> T {
+    let total: u32 = opts.iter().map(|o| o.1).sum();
+    let mut t = u * total as f64;
+    for o in opts {
+        if t < o.1 as f64 {
+            return o.0;
+        }
+        t -= o.1 as f64;
+    }
+    opts[opts.len() - 1].0
+}
+
+/// A building's roof: as set by hand, else as its culture, ward, function and size have it.
+pub fn look(l: &Layout, b: &Building) -> Look {
+    let h = |k: i64| unit(hash3(l.roof_seed, b.id as i64, k, 0x726f_6f66));
+    let culture = l.culture % 5;
+    let role = role(b);
+    let rich = wealth(b);
+    let city = l.tier as u8 >= 2;
+    let o = super::geom::obb(&b.poly);
+    let area = super::geom::area(&b.poly).abs();
+    let compact = o.long <= 1.35 * o.short.max(1.0);
+    let small = area < 1000.0 && b.floors <= 1;
+    let grand = matches!(role, Role::Civic | Role::Sacred) || (rich == 2 && area > 1600.0);
+    let key = b.func.map(|f| CATALOG[f as usize].key).unwrap_or("");
+    let temple = matches!(key, "temple" | "monastery" | "mausoleum");
+    let (u0, u1, u2) = (h(1), h(2), h(3));
+    let (material, shape) = match culture {
+        // North: steep shake and turf, dark slate on the rich; stave-like shingle on the sacred.
+        0 => {
+            let m = match role {
+                Role::Sacred => pick(u0, &[(Shingle, 5), (Lead, 3), (Slate, 2)]),
+                Role::Civic => pick(u0, &[(Slate, 4), (Lead, 3), (Shingle, 3)]),
+                Role::Working => pick(u0, &[(Shingle, 4), (Turf, 3), (Plank, 3)]),
+                _ => match rich {
+                    0 => pick(u0, &[(Turf, 6), (Shingle, 3), (Thatch, 1)]),
+                    1 => pick(u0, &[(Shingle, 6), (Turf, 3), (Slate, 1)]),
+                    _ => pick(u0, &[(Slate, 5), (Shingle, 5)]),
+                },
+            };
+            (m, if temple && compact { Cone } else { pick(u1, &[(Gable, 7), (Hip, 3)]) })
+        }
+        // West: thatch on the poor, slate on the rich, red clay tile in the big cities.
+        1 => {
+            let m = match role {
+                Role::Sacred => pick(u0, &[(Lead, 4), (Slate, 4), (Copper, 2)]),
+                Role::Civic => pick(u0, &[(Slate, 4), (Lead, 3), (Copper, 2), (ClayTile, 1)]),
+                Role::Working => pick(u0, &[(Shingle, 4), (Plank, 2), (Thatch, 3), (ClayTile, if city { 2 } else { 0 })]),
+                _ => match (rich, city) {
+                    (0, false) => pick(u0, &[(Thatch, 8), (Shingle, 2)]),
+                    (0, true) => pick(u0, &[(Thatch, 5), (ClayTile, 3), (Shingle, 2)]),
+                    (1, false) => pick(u0, &[(Thatch, 5), (Shingle, 3), (Slate, 2)]),
+                    (1, true) => pick(u0, &[(ClayTile, 4), (Slate, 3), (Thatch, 2), (Shingle, 1)]),
+                    (_, false) => pick(u0, &[(Slate, 7), (Shingle, 2), (ClayTile, 1)]),
+                    (_, true) => pick(u0, &[(Slate, 6), (ClayTile, 4)]),
+                },
+            };
+            (m, pick(u1, &[(Hip, 5), (Gable, 5)]))
+        }
+        // South: terracotta barrel tile at a low pitch, tiled domes on temples.
+        2 => {
+            let m = match role {
+                Role::Sacred => pick(u0, &[(GlazedTile, 4), (ClayTile, 4), (Copper, 2)]),
+                Role::Civic => pick(u0, &[(ClayTile, 5), (GlazedTile, 3), (Copper, 1), (Lead, 1)]),
+                Role::Working => pick(u0, &[(ClayTile, 6), (Plank, 3), (Thatch, 1)]),
+                _ => match rich {
+                    0 => pick(u0, &[(ClayTile, 6), (Thatch, 2), (FlatClay, 2)]),
+                    1 => pick(u0, &[(ClayTile, 9), (FlatClay, 1)]),
+                    _ => pick(u0, &[(ClayTile, 8), (GlazedTile, 2)]),
+                },
+            };
+            let shape = if m == FlatClay {
+                Flat
+            } else if (temple || (grand && compact && u2 < 0.4)) && role != Role::Working {
+                Dome
+            } else {
+                pick(u1, &[(Hip, 7), (Gable, 3)])
+            };
+            (m, shape)
+        }
+        // Dry: flat clay behind parapets; whitewashed domes on temples, some grand buildings and a
+        // few homes.
+        3 => {
+            let dome = temple || (grand && u2 < 0.5) || (role == Role::Home && compact && u2 < if rich == 2 { 0.25 } else { 0.06 });
+            if dome {
+                (if grand && u0 < 0.35 { GlazedTile } else { Whitewash }, Dome)
+            } else {
+                let m = match role {
+                    Role::Working => pick(u0, &[(FlatClay, 8), (Plank, 2)]),
+                    _ => pick(u0, &[(FlatClay, 9), (Whitewash, 1)]),
+                };
+                (m, Flat)
+            }
+        }
+        // Steppe: low hide/felt and thatch, round roofs on small homes.
+        _ => {
+            if role == Role::Home && small && (compact || u2 < 0.5) {
+                (pick(u0, &[(Hide, 7), (Thatch, 3)]), Round)
+            } else {
+                let m = match role {
+                    Role::Sacred => pick(u0, &[(GlazedTile, 4), (Copper, 3), (Hide, 3)]),
+                    Role::Civic => pick(u0, &[(Shingle, 3), (GlazedTile, 3), (Hide, 2), (ClayTile, 2)]),
+                    Role::Working => pick(u0, &[(Plank, 5), (Thatch, 3), (Hide, 2)]),
+                    _ => match rich {
+                        0 => pick(u0, &[(Hide, 5), (Thatch, 5)]),
+                        1 => pick(u0, &[(Thatch, 6), (Hide, 2), (Shingle, 2)]),
+                        _ => pick(u0, &[(Shingle, 4), (Thatch, 3), (ClayTile, 3)]),
+                    },
+                };
+                let shape = if temple && compact {
+                    Dome
+                } else if role == Role::Sacred && u1 < 0.5 {
+                    Round
+                } else {
+                    pick(u1, &[(Hip, 6), (Gable, 4)])
+                };
+                (m, shape)
+            }
+        }
+    };
+    // (Hand-set: a material, else the old tint; a shape, else the old roof style.)
+    let material = b.material.and_then(Material::from_u8).or_else(|| b.tint.and_then(|t| TINT_MATERIAL.get(t as usize).copied())).unwrap_or(material);
+    let shape = match (b.shape.and_then(Shape::from_u8), b.roof) {
+        (Some(s), _) => s,
+        (None, Some(RoofStyle::Cone)) => Cone,
+        (None, Some(RoofStyle::Hip)) => Hip,
+        // (A dome or a flat roof on a thatched or hide roof set by hand: a hip / a round.)
+        _ if b.material.is_some() || b.tint.is_some() => match (material, shape) {
+            (Thatch | Turf | Shingle | Plank, Dome | Flat) => Hip,
+            (Hide, Dome | Flat) => Round,
+            (FlatClay, Hip | Gable) => Flat,
+            _ => shape,
+        },
+        _ => shape,
+    };
+    // Weathering: the town's age, poverty, soft materials, a site's neglect; grand ones kept up.
+    let mut wear = l.roof_age as f64 + [70.0, 30.0, 10.0][rich as usize] + 60.0 * h(4);
+    wear += match material {
+        Thatch | Turf | Hide => 25.0,
+        Shingle | Plank => 15.0,
+        GlazedTile | Copper | Lead | Whitewash => -20.0,
+        _ => 0.0,
+    };
+    if grand {
+        wear -= 30.0;
+    }
+    if l.site || b.structure == Structure::Ruin {
+        wear += 70.0;
+    }
+    let smoke = matches!(key, "blacksmith" | "armorer" | "weaponsmith" | "glassblower" | "potter" | "distillery");
+    Look { material, shape, wear: wear.clamp(0.0, 255.0) as u8, smoke }
+}

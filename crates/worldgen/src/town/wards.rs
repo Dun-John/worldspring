@@ -486,7 +486,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
             Some(g) => {
                 used[g] = true;
                 let o = &generated.buildings[g];
-                (b.id, b.func, b.residential, b.floors, b.structure, b.roof, b.tint) = (o.id, o.func, o.residential, o.floors, o.structure, o.roof, o.tint);
+                (b.id, b.func, b.residential, b.floors, b.structure, b.roof, b.tint, b.material, b.shape) = (o.id, o.func, o.residential, o.floors, o.structure, o.roof, o.tint, o.material, o.shape);
                 b.name = o.name.clone();
             }
             None => {
@@ -507,7 +507,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
         if let Some(g) = hit {
             used[g] = true;
             let (o, b) = (&generated.buildings[g], &mut l.buildings[k]);
-            (b.id, b.func, b.residential, b.floors, b.structure, b.roof, b.tint) = (o.id, o.func, o.residential, o.floors, o.structure, o.roof, o.tint);
+            (b.id, b.func, b.residential, b.floors, b.structure, b.roof, b.tint, b.material, b.shape) = (o.id, o.func, o.residential, o.floors, o.structure, o.roof, o.tint, o.material, o.shape);
             b.name = o.name.clone();
             fresh.retain(|&j| j != k);
         }
@@ -533,7 +533,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
         if let Some((_, g)) = hit {
             used[g] = true;
             let (o, b) = (&generated.buildings[g], &mut l.buildings[k]);
-            (b.id, b.func, b.residential, b.floors, b.structure, b.roof, b.tint) = (o.id, o.func, o.residential, o.floors, o.structure, o.roof, o.tint);
+            (b.id, b.func, b.residential, b.floors, b.structure, b.roof, b.tint, b.material, b.shape) = (o.id, o.func, o.residential, o.floors, o.structure, o.roof, o.tint, o.material, o.shape);
             b.name = o.name.clone();
             fresh.retain(|&j| j != k);
         }

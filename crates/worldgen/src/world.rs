@@ -432,6 +432,11 @@ pub struct BuildingEdit {
     pub roof: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tint: Option<String>,
+    /// Roof material (`town::roof::MATERIALS`) and shape (`town::roof::SHAPES`), else picked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<String>,
     /// `roofed` or `ruin`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure: Option<String>,
@@ -459,6 +464,8 @@ impl BuildingEdit {
             func: self.func.clone(),
             roof: self.roof.clone(),
             tint: self.tint.clone(),
+            material: self.material.clone(),
+            shape: self.shape.clone(),
             structure: self.structure.clone(),
             ..Default::default()
         };
@@ -467,7 +474,7 @@ impl BuildingEdit {
 
     /// Whether it changes nothing (every option as generated).
     pub fn is_noop(&self) -> bool {
-        !self.removed && self.func.is_none() && self.floors.is_none() && self.poly.is_empty() && self.roof.is_none() && self.tint.is_none() && self.structure.is_none()
+        !self.removed && self.func.is_none() && self.floors.is_none() && self.poly.is_empty() && self.roof.is_none() && self.tint.is_none() && self.material.is_none() && self.shape.is_none() && self.structure.is_none()
     }
 }
 
@@ -802,6 +809,12 @@ pub struct Created {
     /// A building's roof colour (`TINTS`), else picked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tint: Option<String>,
+    /// A building's roof material (`town::roof::MATERIALS`; else the tint's, else picked) and
+    /// shape (`town::roof::SHAPES`; else as `roof`, else picked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<String>,
     /// `roofed` (default) or `ruin` (broken walls, no roof).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure: Option<String>,
@@ -990,7 +1003,7 @@ impl Created {
             "wall" => return self.check_wall(),
             _ => {}
         }
-        if !self.poly.is_empty() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.structure.is_some() || works {
+        if !self.poly.is_empty() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.structure.is_some() || works {
             return Err("footprint, floors, function, roof, tint and structure are for buildings; gates, keep and lines for castles and walls".into());
         }
         if let Some(u) = &self.under {
@@ -1052,7 +1065,7 @@ impl Created {
         {
             return Err(format!("func: a business (list_names shows them; e.g. inn, tavern, blacksmith, temple, castle) or a home: {}", BUILDING_HOMES.join(", ")));
         }
-        for (v, list, what) in [(&self.roof, &ROOFS[..], "roof"), (&self.tint, &TINTS[..], "tint"), (&self.structure, &STRUCTURES[..], "structure")] {
+        for (v, list, what) in [(&self.roof, &ROOFS[..], "roof"), (&self.tint, &TINTS[..], "tint"), (&self.material, &crate::town::roof::MATERIALS[..], "material"), (&self.shape, &crate::town::roof::SHAPES[..], "shape"), (&self.structure, &STRUCTURES[..], "structure")] {
             if let Some(v) = v
                 && !list.contains(&v.as_str())
             {
@@ -1068,7 +1081,7 @@ impl Created {
     /// to `CASTLE_MAX_FT` across, its gate on one of its sides; ruined or not.
     fn check_castle(&self) -> Result<(), String> {
         use crate::town::geom::{cross, obb, sub};
-        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() {
+        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() {
             return Err("a castle takes its outline (poly), gate, keep, yard_buildings and structure".into());
         }
         if !self.pts.is_empty() || !self.gates.is_empty() || self.closed {
@@ -1110,7 +1123,7 @@ impl Created {
     /// A wall's options: a line of 2–64 corners (a ring of 3 or more if closed), each side at
     /// least 10 ft, at most `WALL_MAX_FT` in all, its gates on its corners.
     fn check_wall(&self) -> Result<(), String> {
-        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() {
+        if self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() || self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() {
             return Err("a wall takes its line (pts), gates and closed".into());
         }
         if !self.poly.is_empty() || self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || self.structure.is_some() {

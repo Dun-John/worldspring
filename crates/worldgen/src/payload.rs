@@ -14,7 +14,8 @@
 //!     containing its midpoint, so neighbours never draw the same segment twice.
 //!  .. roads: same layout, vertices as (x, y in tile units, bed width ft, class).
 //!  .. site polygons (levels >= SITE_MIN_LEVEL): n u32, n_verts u32, starts u32[n + 1],
-//!     attrs u32[n] (kind | ward << 8 | floors << 16 | has-function << 24; kind 0 building,
+//!     attrs u32[n] (kind | ward << 8 | floors (to 15) << 16 | roof material (`town::roof`, to 15)
+//!     << 20 | has-function << 24; kind 0 building,
 //!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard, 6 deck: bridge or pier, 7 monument,
 //!     8 a camp's clearing, 9 a tent (or a park's gazebo), 11 a park's water (its pond as a fan
 //!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
@@ -392,7 +393,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                         crate::town::Structure::Ruin => 4,
                         crate::town::Structure::Open => 5,
                     };
-                    let attr = kind | (b.ward as u32) << 8 | (b.floors as u32) << 16 | (b.func.is_some() as u32) << 24;
+                    // (Its roof's material in bits 20-23, its storeys capped at 15 below them.)
+                    let attr = kind | (b.ward as u32) << 8 | (b.floors.min(15) as u32) << 16 | (crate::town::roof::look(&l, b).material as u32 & 15) << 20 | (b.func.is_some() as u32) << 24;
                     // A keep of pieces: each piece (convex, outlined), its towers over its body;
                     // each with its kind + 1 (bits 25-28: 1 body, 2 round tower, 3 square tower, 4
                     // forebuilding, 5 wing) and how it is topped (bits 29-31: `town::keep_tops`, its

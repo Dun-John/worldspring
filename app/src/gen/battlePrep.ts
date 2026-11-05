@@ -4,6 +4,7 @@
 // Graphics tessellation in a frame).
 import earcut from 'earcut';
 import { BLOCKS, DIFFICULT, OPAQUE } from '../play/vision';
+import { ROOF_MATERIAL_RGB } from './protocol';
 
 export const SQ = 128;
 export const HS = SQ + 2;
@@ -23,7 +24,13 @@ export interface Roof {
   cone: boolean;
   /** Index into `ROOF_TINTS` chosen by hand; -1: picked. */
   tint: number;
-  /** A hash of where it stands (for the tint). */
+  /** Its material and shape (`ROOF_MATERIALS`, `ROOF_SHAPES` ids: `town::roof`), smoke-darkened
+   * (smithies, kilns), weathering 0-255. */
+  material: number;
+  shape: number;
+  smoke: boolean;
+  wear: number;
+  /** A hash of where it stands. */
   idx: number;
   /** A keep's pieces (`battlemap::part_code`: 0 body, 1 round tower, 2 square tower, 3
    * forebuilding, 4 wing), how each is topped (0 open battlements, 1 a lead roof, 2 slate:
@@ -201,7 +208,11 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
       const towerByte = dv.getUint8(o + 3);
       const tower = towerByte === 255 ? 0 : (towerByte & 63) * PX;
       const top = towerByte === 255 ? 0 : towerByte >> 6;
-      o += 4;
+      // Material, shape | 0x10 smoke, weathering (`battlemap::look_bytes`).
+      const material = dv.getUint8(o + 4);
+      const shapeByte = dv.getUint8(o + 5);
+      const wear = dv.getUint8(o + 6);
+      o += 7;
       const pts: number[] = [];
       // (Its first corner on the map, in quarter squares: the same in every chunk it is in,
       // and whatever else is built or taken away round it.)
@@ -225,7 +236,7 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
           parts.push({ kind: code & 15, top: code >> 4, pts: pp });
         }
       }
-      roofs.push({ pts, floors, battlements, tower, top, cone, tint, idx: at, parts });
+      roofs.push({ pts, floors, battlements, tower, top, cone, tint, material, shape: shapeByte & 15, smoke: (shapeByte & 0x10) !== 0, wear, idx: at, parts });
     }
     // Walls, towers and decks, drawn as vectors (see `battlemap::pack`).
     const nShapes = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
@@ -475,7 +486,7 @@ function roofMesh(roofs: Roof[]): ColorMesh {
   }
   for (const roof of roofs) {
     if (roof.battlements || roof.pts.length < 6) continue;
-    const tint = ROOF_TINTS[roof.tint >= 0 && roof.tint < ROOF_TINTS.length ? roof.tint : (Math.imul(roof.idx, 2654435761) >>> 16) % ROOF_TINTS.length];
+    const tint = roof.tint >= 0 && roof.tint < ROOF_TINTS.length ? ROOF_TINTS[roof.tint] : (ROOF_MATERIAL_RGB[roof.material] ?? ROOF_TINTS[3]);
     // A palace round its court: a hipped range along each side, the court open to the sky.
     const ranges = courtRanges(roof);
     if (ranges) {
@@ -525,7 +536,8 @@ function roofMesh(roofs: Roof[]): ColorMesh {
     // Footprints drawn by hand may be concave: a roof on each convex part, valleys between.
     const parts = convexParts(roof.pts);
     for (const part of parts) {
-      if (roof.cone) coneRoof(g, part, tint);
+      // (Shapes 2 cone and 5 round drawn as cones until their own tessellation: `town::roof`.)
+      if (roof.cone || roof.shape === 2 || roof.shape === 5) coneRoof(g, part, tint);
       else hipRoof(g, part, tint);
     }
     if (parts.length > 1) for (const part of parts) g.outline(part, 1.6, shadeHex(tint, 0.5), 0.8);
