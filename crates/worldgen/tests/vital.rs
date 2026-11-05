@@ -1766,8 +1766,9 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
             assert!(d <= most, "{tag}: its outer wall stands {d:.2} squares off its floor at {v:?}");
         }
     }
-    // (Generated ones; a design may have no cellar.)
-    assert!(it.levels.len() >= 2 || world.file.edits.designs.contains_key(id), "{tag}: only {} level", it.levels.len());
+    // (Generated ones; a design may have no cellar, a yurt has one storey.)
+    let yurt = it.levels.len() == 1 && it.levels[0].rooms.iter().any(|r| r.kind == "yurt") && !it.levels[0].has_stairs && it.levels[0].windows.is_empty();
+    assert!(it.levels.len() >= 2 || yurt || world.file.edits.designs.contains_key(id), "{tag}: only {} level", it.levels.len());
     // A building's interior as a design builds it again exactly, and keeps the designer's rules.
     if id.starts_with("b:") {
         let (d, _) = interior::design::design_of(world, t0, id, false).unwrap();

@@ -8,7 +8,7 @@ import { OPEN_BELOW, ROOF_SLOPE, TERRACE, type Interior, type InteriorItem, type
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
-import { drawFurniture, drawUnderProp, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED } from './furniture';
+import { drawFurniture, drawUnderProp, IN_RING, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED, type Fit } from './furniture';
 import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
@@ -16,7 +16,7 @@ import type { Camera } from './camera';
 import { noiseSource } from './noise';
 import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, roughness, SQUARE_SITES, TERRAIN_CHANNEL, underField, type UnderField } from './underField';
 import { nearestWall, wallDistance, type WallDistance } from './wallField';
-import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
+import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
 import undergroundFragment from './shaders/underground.frag?raw';
 import vertex from './shaders/terrain.vert?raw';
 
@@ -217,6 +217,8 @@ function floorColor(kind: string, z: number, natural = false, raise = 0): number
   // (A flat roof's mud plaster, smooth.)
   if (kind === TERRACE) return PLASTER;
   if (kind === 'stands') return 0x8a7a64;
+  // (A yurt's felt floor: no joints.)
+  if (kind === 'yurt') return FELT_FLOOR;
   if (z < 0 || ['nave', 'sanctuary', 'crypt', 'ossuary', 'great hall', 'mess hall', 'dungeon', 'guardroom', 'armory', 'vault', 'chapel', 'oratory', 'courtroom', 'counting house', 'hall', 'entry hall', 'foyer', 'holding pen', 'beast pen', 'cell', 'warehouse floor', 'screens passage', 'mural passage', 'landing', 'entrance hall', 'gate passage', 'keep yard', 'well room', 'garrison', 'throne room', 'banqueting hall', 'royal chapel', 'stair hall', "servants' hall", 'side chapel', 'shrine', 'chapter house', 'cloister walk', 'refectory', 'arcade', 'strongroom', 'warded vault', 'trophy hall'].includes(kind))
     return 0x9d978c;
   return 0xa87a4f;
@@ -226,10 +228,12 @@ const STONE = (c: number) => c === 0x9d978c || c === 0x8f8a80 || c === 0xa8a296 
 const LAWN = 0x7f9a56;
 /** A roof terrace's plaster (`floorColor`): no joints. */
 const PLASTER = 0xc4ad88;
+/** A yurt's floor of undyed felt (`floorColor`): no joints. */
+const FELT_FLOOR = 0xb39d78;
 
 /** A floor square's pattern in its colour: planks along x on wood, flagstone joints on stone, none on a lawn. */
 function floorPattern(i: number, j: number, c: number): [Pt, Pt][] {
-  if (c === LAWN || c === PLASTER) return [];
+  if (c === LAWN || c === PLASTER || c === FELT_FLOOR) return [];
   if (!STONE(c)) return [1, 2, 3].map((k): [Pt, Pt] => [[i, j + k / 4], [i + 1, j + k / 4]]);
   const odd = ((j % 2) + 2) % 2;
   return [
@@ -340,6 +344,169 @@ function drawRoofs(g: Graphics, lv: InteriorLevel, nx: number, ny: number, sp: S
     g.moveTo(...r0).lineTo(...r1).stroke({ width: 0.09, color: 0x9aa0a8 });
     g.rect(x0, y0, x1 - x0, y1 - y0).stroke({ width: 0.06, color: INK });
   });
+}
+
+// A yurt's (`roomShapes.yurtRing`): rugs on its felt floor, its lattice wall, its painted door.
+const MADDER = 0x8e4c38;
+const RUG_OCHRE = 0xb89048;
+const PAINT = 0x985a44;
+const WILLOW = 0xa0805a;
+/** A yurt's wall's width (squares; a built outer wall is 0.45). */
+const KHANA = 0.36;
+
+/** A circle's points round (cx, cy), a little uneven (the same for the same seed). */
+function hand(cx: number, cy: number, r: number, seed: number, n = 40): number[] {
+  const out: number[] = [];
+  for (let k = 0; k < n; k++) {
+    const a = (k / n) * Math.PI * 2;
+    const rr = r * (1 + 0.012 * (hash2(seed, k % (n - 1), 5) - 0.5));
+    out.push(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+  }
+  return out;
+}
+
+/** A rect `l` long along unit `u` and `w` wide, about (cx, cy). */
+function band(cx: number, cy: number, u: Pt, l: number, w: number): number[] {
+  const [vx, vy] = [-u[1], u[0]];
+  const [hl, hw] = [l / 2, w / 2];
+  return [cx - u[0] * hl - vx * hw, cy - u[1] * hl - vy * hw, cx + u[0] * hl - vx * hw, cy + u[1] * hl - vy * hw, cx + u[0] * hl + vx * hw, cy + u[1] * hl + vy * hw, cx - u[0] * hl + vx * hw, cy - u[1] * hl + vy * hw];
+}
+
+/** A yurt's rugs, under the grid: a felt rug laid across from the door under the chests, the big round
+ * felt rug round the hearth (madder, an ochre border, a ring of lozenges; bare earth under the fire),
+ * and a dark felt runner in from the door over its edge. */
+function yurtRugs(g: Graphics, ring: { c: Pt; r: number; south: Pt }, door: { a: Pt; b: Pt } | null) {
+  const [cx, cy] = ring.c;
+  const seed = Math.round(cx * 97 + cy * 31);
+  let dd: Pt = ring.south;
+  if (door) {
+    const [mx, my] = [(door.a[0] + door.b[0]) / 2 - cx, (door.a[1] + door.b[1]) / 2 - cy];
+    const l = Math.hypot(mx, my);
+    if (l > 0.1) dd = [mx / l, my / l];
+  }
+  const t: Pt = [-dd[1], dd[0]];
+  const ro = Math.max(0.9, ring.r - 0.6);
+  const ri = 0.5;
+  // Across from the door: a walnut-brown felt with an ochre stripe.
+  const bd = ring.r - 0.75;
+  const back = band(cx - dd[0] * bd, cy - dd[1] * bd, t, Math.min(1.5, ring.r), 0.7);
+  g.poly(back).fill(0x6a4a34).stroke({ width: LINE_W, color: INK, join: 'round' });
+  g.poly(band(cx - dd[0] * bd, cy - dd[1] * bd, t, Math.min(1.5, ring.r) - 0.16, 0.54)).stroke({ width: 0.02, color: RUG_OCHRE });
+  // The round felt.
+  g.poly(hand(cx, cy, ro, seed)).fill(RUG_OCHRE).stroke({ width: LINE_W, color: INK, join: 'round' });
+  g.poly(hand(cx, cy, ro - 0.09, seed + 1)).fill(MADDER);
+  g.poly(hand(cx, cy, ro - 0.16, seed + 2)).stroke({ width: 0.018, color: 0x5a3424 });
+  const rm = (ro - 0.16 + ri) / 2;
+  const n = Math.max(6, Math.round((Math.PI * 2 * rm) / 0.42));
+  for (let k = 0; k < n; k++) {
+    const a = (k / n) * Math.PI * 2;
+    const [px, py] = [cx + Math.cos(a) * rm, cy + Math.sin(a) * rm];
+    const [ux, uy] = [Math.cos(a), Math.sin(a)];
+    const [s, w] = [0.11, 0.07];
+    g.poly([px - ux * s, py - uy * s, px - uy * w, py + ux * w, px + ux * s, py + uy * s, px + uy * w, py - ux * w]).fill(RUG_OCHRE);
+    g.circle(px, py, 0.022).fill(0x5a3424);
+  }
+  g.poly(hand(cx, cy, ri, seed + 3, 24)).fill(0x8f7a5e).stroke({ width: LINE_W, color: INK, join: 'round' });
+  // The runner in from the door.
+  const r0 = ring.r - 0.3;
+  const r1 = ro - 0.25;
+  const rl = r0 - r1;
+  if (rl > 0.2) {
+    const m = (r0 + r1) / 2;
+    g.poly(band(cx + dd[0] * m, cy + dd[1] * m, dd, rl, 0.72)).fill(0x56706a).stroke({ width: LINE_W, color: INK, join: 'round' });
+    g.poly(band(cx + dd[0] * m, cy + dd[1] * m, dd, rl - 0.14, 0.56)).stroke({ width: 0.02, color: RUG_OCHRE });
+  }
+}
+const LINE_W = 0.025;
+
+/** A yurt's wall as a lattice (khana): between the outer wall's ink a band of willow, crossed by its
+ * laths. `kept`: the outer wall's pieces as drawn (`drawShapedWalls`), gaps at the door. */
+function khana(g: Graphics, kept: { a: Pt; b: Pt; out: Pt }[]) {
+  const runs: { a: Pt; b: Pt; out: Pt }[][] = [];
+  for (const p of kept) {
+    const last = runs[runs.length - 1];
+    const prev = last?.[last.length - 1];
+    if (prev && Math.hypot(prev.b[0] - p.a[0], prev.b[1] - p.a[1]) < 1e-3) last.push(p);
+    else runs.push([p]);
+  }
+  // (A run going on round past where the pieces began: one run.)
+  if (runs.length > 1) {
+    const [first, last] = [runs[0], runs[runs.length - 1]];
+    const e = last[last.length - 1];
+    if (Math.hypot(e.b[0] - first[0].a[0], e.b[1] - first[0].a[1]) < 1e-3) runs[0] = [...(runs.pop() ?? []), ...first];
+  }
+  for (const run of runs) {
+    // Points every 0.2 square along the run, each with its way out.
+    const pts: { at: Pt; out: Pt }[] = [];
+    let s = 0;
+    let next = 0;
+    for (const p of run) {
+      const l = Math.hypot(p.b[0] - p.a[0], p.b[1] - p.a[1]);
+      while (next <= s + l) {
+        const f = l > 0 ? (next - s) / l : 0;
+        pts.push({ at: [p.a[0] + (p.b[0] - p.a[0]) * f, p.a[1] + (p.b[1] - p.a[1]) * f], out: p.out });
+        next += 0.2;
+      }
+      s += l;
+    }
+    const e = run[run.length - 1];
+    pts.push({ at: e.b, out: e.out });
+    if (pts.length < 2) continue;
+    // The willow band inside the wall's ink, then the laths crossing it, pinned where they cross.
+    const h = KHANA / 2 - 0.05;
+    for (let k = 0; k + 1 < pts.length; k++) {
+      const [p, q] = [pts[k], pts[k + 1]];
+      g.poly([p.at[0] + p.out[0] * h, p.at[1] + p.out[1] * h, q.at[0] + q.out[0] * h, q.at[1] + q.out[1] * h, q.at[0] - q.out[0] * h, q.at[1] - q.out[1] * h, p.at[0] - p.out[0] * h, p.at[1] - p.out[1] * h]);
+    }
+    g.fill(WILLOW);
+    const w = h - 0.03;
+    for (let k = 0; k + 1 < pts.length; k++) {
+      const [p, q] = [pts[k], pts[k + 1]];
+      g.moveTo(p.at[0] - p.out[0] * w, p.at[1] - p.out[1] * w).lineTo(q.at[0] + q.out[0] * w, q.at[1] + q.out[1] * w);
+      g.moveTo(p.at[0] + p.out[0] * w, p.at[1] + p.out[1] * w).lineTo(q.at[0] - q.out[0] * w, q.at[1] - q.out[1] * w);
+    }
+    g.stroke({ width: 0.022, color: 0x5e4028, cap: 'round' });
+  }
+}
+
+/** A yurt's door through its wall: a low double door painted red ochre with an ochre border and a
+ * lozenge on each leaf, between wooden posts; open, its leaves swung in. */
+function yurtDoor(g: Graphics, d: { a: Pt | number[]; b: Pt | number[] }, open: boolean, ring: { c: Pt; r: number }) {
+  const c = ring.c;
+  const len0 = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]) || 1;
+  const u: Pt = [(d.b[0] - d.a[0]) / len0, (d.b[1] - d.a[1]) / len0];
+  // (On the wall's line, whatever side of it the doorway was found on.)
+  const [ox, oy] = [(d.a[0] + d.b[0]) / 2 - c[0], (d.a[1] + d.b[1]) / 2 - c[1]];
+  const k = (ring.r * Math.cos(Math.PI / 16)) / (Math.hypot(ox, oy) || 1);
+  const [mx, my] = [c[0] + ox * k, c[1] + oy * k];
+  const len = Math.min(len0, 0.95);
+  const [ax, ay, bx, by] = [mx - (u[0] * len) / 2, my - (u[1] * len) / 2, mx + (u[0] * len) / 2, my + (u[1] * len) / 2];
+  // (In: toward the ring's middle.)
+  const side = (c[0] - mx) * -u[1] + (c[1] - my) * u[0] >= 0 ? 1 : -1;
+  const n: Pt = [-u[1] * side, u[0] * side];
+  for (const [px, py] of [
+    [ax, ay],
+    [bx, by],
+  ]) {
+    g.poly(band(px, py, u, 0.12, KHANA + 0.04)).fill(0x6e4a2c).stroke({ width: LINE_W, color: INK, join: 'round' });
+  }
+  const leaf = (len - 0.12) / 2;
+  const paint = (cx: number, cy: number, along: Pt, l: number) => {
+    g.poly(band(cx, cy, along, l, 0.16)).fill(PAINT).stroke({ width: LINE_W, color: INK, join: 'round' });
+    g.poly(band(cx, cy, along, l - 0.08, 0.08)).stroke({ width: 0.016, color: RUG_OCHRE });
+    const [s, w] = [0.06, 0.04];
+    g.poly([cx - along[0] * s, cy - along[1] * s, cx - along[1] * w, cy + along[0] * w, cx + along[0] * s, cy + along[1] * s, cx + along[1] * w, cy - along[0] * w]).fill(RUG_OCHRE);
+  };
+  if (!open) {
+    for (const k of [-1, 1]) paint(mx + u[0] * k * leaf * 0.5, my + u[1] * k * leaf * 0.5, u, leaf);
+    return;
+  }
+  for (const [px, py] of [
+    [ax + u[0] * 0.06, ay + u[1] * 0.06],
+    [bx - u[0] * 0.06, by - u[1] * 0.06],
+  ]) {
+    paint(px + n[0] * leaf * 0.5, py + n[1] * leaf * 0.5, n, leaf);
+  }
 }
 
 /** Railings (`Wall::rail`) along a hall's open height and a temple's altar rails: a timber rail on posts;
@@ -919,8 +1086,10 @@ export class InteriorLayer {
     // floors drawn here, to a round yard's circle).
     if (!this.underground) this.drawBelow(g, sp);
     const parts = sp?.real ? sp.parts : null;
+    // A yurt: its rugs on the felt under the grid, its lattice wall, its door.
+    const ring = this.underground ? null : yurtRing(it, this.level);
     if (sp) {
-      drawShapedFloors(g, sp, lv, colorOf, floorPattern);
+      drawShapedFloors(g, sp, lv, colorOf, floorPattern, ring ? () => yurtRugs(g, ring, drawnDoorsOf(it, this.level)?.find((_, k) => lv.doors[k].kind === 'front') ?? null) : undefined);
     } else if (!this.underground) {
       // Floors; their texture (planks along x on wood, flagstone joints on stone); the 5-ft grid.
       for (let j = 0; j < ny; j++) {
@@ -1105,7 +1274,9 @@ export class InteriorLayer {
       // (The players' view: no gap for a secret door they haven't found.)
       const hidden = (k: number) => this.style.player && lv.doors[k].kind === 'secret' && !!this.style.doors && !this.style.doors(locKey(it.id, this.level), k).found && !this.style.doors(locKey(it.id, this.level), k).open;
       const gapped = drawn.map((d, k) => (hidden(k) ? { ...d, inner: undefined, outer: undefined, threshold: undefined } : d));
-      const kept = drawShapedWalls(g, sp, lv, gapped, panes, lv.roof ? 0.45 : 0.28, 0.45, INK);
+      // (A yurt's lattice and felt thinner than a built wall.)
+      const kept = drawShapedWalls(g, sp, lv, gapped, panes, lv.roof ? 0.45 : 0.28, ring ? KHANA : 0.45, INK);
+      if (ring) khana(g, kept);
       // (A parapet where the outer wall stands round an open top: a roof's walk, battlements, a
       // wing's or forebuilding's platform; not round a storey, a tower's room under its cone.)
       const open = (p: { a: Pt; b: Pt; out: Pt }) => {
@@ -1203,6 +1374,10 @@ export class InteriorLayer {
         const [bx, by] = d.b;
         for (let t = 0; t < 1; t += 0.34) g.moveTo(ax + (bx - ax) * t, ay + (by - ay) * t).lineTo(ax + (bx - ax) * (t + 0.18), ay + (by - ay) * (t + 0.18));
         g.stroke({ width: 0.14, color: 0x9333ea, alpha: 0.85 });
+        continue;
+      }
+      if (d.kind === 'front' && ring) {
+        yurtDoor(g, d, false, ring);
         continue;
       }
       const wood = d.kind === 'front' ? 0x5a3a1a : 0x7a5530;
@@ -1358,6 +1533,8 @@ export class InteriorLayer {
    * the players have not found is wall to them and a dashed line to the DM. */
   private drawPlayDoor(g: Graphics, d: InteriorLevel['doors'][number], st: DoorState, moved = false) {
     if (d.kind === 'portcullis') return this.drawPortcullis(g, d, !!st.open);
+    const ring = d.kind === 'front' ? yurtRing(this.interior, this.level) : null;
+    if (ring) return yurtDoor(g, d, !!st.open, ring);
     const [ax, ay] = d.a;
     const [bx, by] = d.b;
     const secret = d.kind === 'secret';
@@ -1686,7 +1863,9 @@ export class InteriorLayer {
     if (shared) {
       const g = { ...f, kind: shared };
       const back = ORIENTED.has(shared) ? this.backSide(g).join(',') : '';
-      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}`;
+      const fit = this.ringFit(f);
+      const ring = fit ? `:y${[fit.c[0] - f.x, fit.c[1] - f.y, fit.r].map((v) => v.toFixed(2)).join(',')}` : '';
+      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}${ring}`;
     }
     const turned = this.wallAnchor(f);
     const wall = turned ? `t${turned.step}` : ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
@@ -2038,6 +2217,13 @@ export class InteriorLayer {
     }
   }
 
+  /** A yurt's ring for a piece that stands by its wall (`IN_RING`): drawn inside it. */
+  private ringFit(f: InteriorItem): Fit | undefined {
+    if (this.underground || !IN_RING.has(f.kind)) return undefined;
+    const ring = yurtRing(this.interior, this.level);
+    return ring ? { c: ring.c, r: ring.r - WALL_HALF } : undefined;
+  }
+
   private drawItem(g: Graphics, f: InteriorItem) {
     const { x, y, w, h, kind } = f;
     if (TERRAIN_KINDS.has(kind) || SPAN_KINDS.has(kind)) return this.drawTerrain(g, f);
@@ -2048,7 +2234,7 @@ export class InteriorLayer {
     const shared = this.sharedKind(kind);
     if (shared) {
       const s = { ...f, kind: shared };
-      if (drawFurniture(g, s, this.light, this.lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null)) return;
+      if (drawFurniture(g, s, this.light, this.lookOf(f), ORIENTED.has(shared) ? this.backSide(s) : null, this.ringFit(f))) return;
     }
     // (Indoor props in a building too.)
     const turned = this.wallAnchor(f);

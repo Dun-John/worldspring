@@ -769,7 +769,7 @@ const shownAt = (sp: ShapedPlan, i: number, j: number) =>
  * squares as `under` has them), the shaped rooms over them, the floors' texture (`texture`: a
  * square's pattern lines in a colour) and the 5-ft grid as far as each square's floor is drawn.
  * The solid wall comes later, over the furniture (`drawMass`). */
-export function drawShapedFloors(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, color: (room: number) => number, texture: (i: number, j: number, color: number) => [Pt, Pt][]) {
+export function drawShapedFloors(g: Graphics, sp: ShapedPlan, lv: InteriorLevel, color: (room: number) => number, texture: (i: number, j: number, color: number) => [Pt, Pt][], decor?: () => void) {
   const { nx, ny, parts, polys } = sp;
   const lines: { seg: [Pt, Pt]; clip: Pt[][] }[] = [];
   for (let j = -1; j <= ny; j++) {
@@ -793,6 +793,8 @@ export function drawShapedFloors(g: Graphics, sp: ShapedPlan, lv: InteriorLevel,
     }
   });
   strokeClipped(g, own, { width: 0.03, color: 0x000000, alpha: 0.25 });
+  // (What lies on the floor under the grid: a yurt's rugs.)
+  decor?.();
   const grid: { seg: [Pt, Pt]; clip: Pt[][] }[] = [];
   for (let j = 0; j < ny; j++) {
     for (let i = 0; i < nx; i++) {
@@ -1148,10 +1150,39 @@ function planOf(it: Interior, level: number): { plan: ShapedPlan | null; doors: 
       outlines = it.outlines.filter((_, p) => holds.has(p));
     }
     const plan = shapedPlan(outlines, lv, it.nx, it.ny, footOf(it.levels, it.nx * it.ny));
-    out = { plan, doors: plan ? lv.doors.map((d) => doorSegment(plan, lv, d)) : null };
+    const doors = plan ? lv.doors.map((d) => doorSegment(plan, lv, d)) : null;
+    // (A yurt's door on the south point of its ring, as the battlemap draws it.)
+    const ring = yurtRing(it, level);
+    doors?.forEach((d, k) => {
+      if (!ring || lv.doors[k].kind !== 'front') return;
+      const m: Pt = [(d.a[0] + d.b[0]) / 2, (d.a[1] + d.b[1]) / 2];
+      const [sx, sy] = ring.south;
+      const len = Math.hypot(m[0] - ring.c[0], m[1] - ring.c[1]) || 1;
+      if (((m[0] - ring.c[0]) * sx + (m[1] - ring.c[1]) * sy) / len < 0.6) return;
+      const p: Pt = [ring.c[0] + sx * ring.r, ring.c[1] + sy * ring.r];
+      const [dx, dy] = [p[0] - m[0], p[1] - m[1]];
+      const half = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]) / 2;
+      const t: Pt = (d.b[0] - d.a[0]) * -sy + (d.b[1] - d.a[1]) * sx >= 0 ? [-sy, sx] : [sy, -sx];
+      const move = (q: Pt): Pt => [q[0] + dx, q[1] + dy];
+      doors[k] = { ...d, a: [p[0] - t[0] * half, p[1] - t[1] * half], b: [p[0] + t[0] * half, p[1] + t[1] * half], outer: d.outer && move(d.outer), inner: d.inner && move(d.inner), threshold: d.threshold?.map(move), moved: true };
+    });
+    out = { plan, doors };
   }
   byLevel.set(level, out);
   return out;
+}
+
+/** A yurt's ring (a level holding a yurt, drawn inside one outline): its middle and mean radius (the
+ * wall's line, grid units), and the way south on the map (unit, grid axes). Null for the rest. */
+export function yurtRing(it: Interior, level: number): { c: Pt; r: number; south: Pt } | null {
+  const lv = it.levels[level];
+  const o = it.outlines;
+  if (!lv || !o || o.length !== 1 || o[0].length < 8 || !lv.rooms.some((r) => r.kind === 'yurt')) return null;
+  const n = o[0].length;
+  const c: Pt = [o[0].reduce((a, p) => a + p[0], 0) / n, o[0].reduce((a, p) => a + p[1], 0) / n];
+  const r = o[0].reduce((a, p) => a + Math.hypot(p[0] - c[0], p[1] - c[1]), 0) / n;
+  const s = Math.hypot(it.axis[1], it.across[1]) || 1;
+  return { c, r, south: [it.axis[1] / s, it.across[1] / s] };
 }
 
 /** A building level's drawing plan (`shapedPlan`), null when drawn on its squares as they are. */

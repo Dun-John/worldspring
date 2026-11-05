@@ -620,6 +620,12 @@ pub const FURNITURE: &[(&str, &str, u8, bool, f32)] = &[
     ("water_jar", "water jar", 1, true, 3.0),
     ("planter", "planter", 1, true, 2.0),
     ("washing_line", "washing line", 0, false, 0.0),
+    // A yurt's (`furnish_yurt`): its hearth, a ring of stones round the fire (stepped over), cushions
+    // round it; a low pallet with its bedding; a painted chest; a floor cushion.
+    ("yurt_hearth", "hearth", 0, false, 1.5),
+    ("yurt_pallet", "pallet and bedroll", 0, false, 1.0),
+    ("painted_chest", "painted chest", 1, true, 2.5),
+    ("floor_cushion", "floor cushion", 0, false, 0.5),
 ];
 
 /// A guild's arms' looks (`Item::variant` of `guild_arms`): the merchants', the craftsmen's, the
@@ -785,8 +791,8 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         "bedroom" | "guest room" | "owner's quarters" | "chamber" => &[("bed", Wall(1, 2), 1, 0), ("chest", Wall(1, 1), 1, 0), ("wardrobe", Wall(1, 1), 1, 0)],
         "master bedroom" | "lord's chamber" | "bedchamber" => &[("bed", Wall(2, 2), 1, 0), ("wardrobe", Wall(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("rug", Center(2, 2), 1, 0)],
         // A one-room home's: its bed against a wall by the hearth.
-        // A yurt's: its hearth (a pot on the fire) in the middle, beds and a chest round the wall.
-        "yurt" => &[("bed", Wall(1, 2), 1, 0), ("cauldron", Center(1, 1), 1, 0), ("cot", Wall(1, 2), 1, 14), ("chest", Wall(1, 1), 1, 0), ("barrel", Wall(1, 1), 0, 20)],
+        // A yurt's: its own (`furnish_yurt`).
+        "yurt" => &[],
         "hearth room" => &[("bed", Wall(1, 2), 1, 0), ("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0)],
         "main room" | "living room" => &[("hearth", Wall(2, 1), 1, 0), ("table", Center(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("bench", Wall(2, 1), 1, 0)],
         "shop" => &[("counter", Wall(3, 1), 1, 0), ("shelf", Wall(2, 1), 2, 10), ("display", Center(2, 1), 0, 12)],
@@ -1407,8 +1413,8 @@ impl<'a> Shell<'a> {
         let grown = grow(&b.poly, 1.5);
         let mut inside: Vec<bool> = (0..nx * ny).map(|k| geom::contains(&grown, world_at((k % nx) as f64 + 0.5, (k / nx) as f64 + 0.5))).collect();
         // A round tower's floors are round: its squares those of a circle in the box round them,
-        // so its rooms keep their round shape (`shape::fits`).
-        if arch_of(b) == Arch::Tower && round_ish(b) {
+        // so its rooms keep their round shape (`shape::fits`); a yurt's floor too.
+        if matches!(arch_of(b), Arch::Tower | Arch::House) && round_ish(b) {
             let all: Vec<i16> = inside.iter().map(|&i| if i { 0 } else { -1 }).collect();
             if let Some(bx) = shape::room_box(&all, nx, 0) {
                 let round = shape::shape_cells(bx, shape::ROUND);
@@ -1817,7 +1823,10 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         })
         .unwrap_or(0);
 
-    // Levels: a cellar, the ground floor and the storeys above; at least two levels.
+    // A home on a round footprint (under a round roof: `town::round_off`): a yurt, one round room
+    // on one storey (no cellar, no stairs).
+    let yurt = arch == Arch::House && b.parts.is_empty() && round_ish(b);
+    // Levels: a cellar, the ground floor and the storeys above; at least two levels (a yurt one).
     let floors = b.floors.max(1) as i8;
     let mut zs: Vec<i8> = vec![-1];
     zs.extend(0..floors);
@@ -1855,7 +1864,10 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     if arch == Arch::Keep && (t > 0 || towers.as_ref().is_some_and(|t| !t.is_empty())) && open_roof && !plan.as_ref().is_some_and(|p| p.pieces) {
         zs.push(TOWER_TOP);
     }
-    let entry_level = 1;
+    if yurt {
+        zs = vec![0];
+    }
+    let entry_level = if yurt { 0 } else { 1 };
 
     // The stair block: at the back of the building, in the middle of the short side (towers:
     // near the centre), on inside squares. Inns and taverns lay out the ground floor first
@@ -1931,6 +1943,10 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         }
     }
 
+    if yurt {
+        stairs = [0, 0, 0, 0];
+    }
+
     // (Furniture stands clear of the outer wall as drawn: in a building laid out by zones (a keep's
     // round tower rooms), off any square its middle line cuts more than a tenth of a square into;
     // elsewhere off a square it cuts deeply, its far corner 0.4 of a square beyond it.)
@@ -1946,7 +1962,6 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         let pieces_top = plan.as_ref().is_some_and(|p| p.pieces && z == p.reaches() && p.kind != hub::Kind::ShellKeep);
         // (A hovel's program by its kind: it has no function's key.)
         let hovel = b.func.is_none() && town::catalog::RESIDENTIAL[b.residential as usize] == "hovel";
-        let yurt = arch == Arch::House && b.parts.is_empty() && round_ish(b);
         let prog = if z == ROOF && roof_terrace.is_some() {
             LevelProgram { name: "Roof terrace", rooms: vec![(TERRACE, 1.0)], filler: None, corridor: false, cells: false, by_size: false }
         } else {
@@ -1991,6 +2006,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             _ => z,
         };
         lvl.z = zf;
+        lvl.has_stairs &= !yurt;
         lvl.name = if z == TOWER_TOP { "Tower tops".to_string() } else { prog.name.to_string() };
         lvl.elevation_ft = b.pad_ft + STOREY_FT * zf as f32;
         if let Some((name, roof, items)) = &hubbed {
@@ -2096,6 +2112,10 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         let galleries: Vec<i16> = (0..lvl.rooms.len() as i16).filter(|&ri| open_hall && lvl.rooms[ri as usize].kind == "minstrels' gallery").collect();
         let skip: Vec<i16> = halls.iter().map(|h| h.0).chain(galleries.iter().copied()).collect();
         furnish_rooms(&mut lvl, nx, ny, stairs, None, Some(&floor), &skip, thrones, faith, &mut rng);
+        if yurt {
+            // (Its door on the south of the ring, where the battlemap draws it: `battlePrep.yurtDoor`.)
+            furnish_yurt(&mut lvl, nx, ny, [u[1], v[1]], &|i, j| ext_free(i, j));
+        }
         for &(ri, f, turns, style) in &halls {
             let seed = hash3(world.stream("interior.hall"), town::rng_key(t0, settlement), bi as i64, zf as i64);
             let n = lvl.furniture.len();
@@ -4443,11 +4463,12 @@ pub fn wall_runs(cells: &[i16], rooms: &[Room], nx: usize, ny: usize, doors: &[D
 }
 
 /// Windows on exterior walls above ground: every third square along a run, off doors; none onto
-/// open battlements, a walk or a roof (a keep's lower pieces' tops beside a storey).
+/// open battlements, a walk or a roof (a keep's lower pieces' tops beside a storey), nor in a yurt's
+/// lattice wall.
 fn windows(lvl: &mut Level, nx: usize, ny: usize, _ground: bool) {
     let mut out = Vec::new();
     let open = |x: isize, y: isize| {
-        x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < ny && lvl.cells[y as usize * nx + x as usize] >= 0 && matches!(lvl.rooms[lvl.cells[y as usize * nx + x as usize] as usize].kind, "battlements" | "wall walk" | ROOF_SLOPE)
+        x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < ny && lvl.cells[y as usize * nx + x as usize] >= 0 && matches!(lvl.rooms[lvl.cells[y as usize * nx + x as usize] as usize].kind, "battlements" | "wall walk" | ROOF_SLOPE | "yurt")
     };
     for w in &lvl.walls {
         if !w.exterior || w.arcade {
@@ -4488,7 +4509,6 @@ fn required(kind: &str, item: &str) -> bool {
             | ("private dining room", "long_table")
             | ("best chamber", "bed")
             | ("bedroom" | "hearth room", "bed")
-            | ("yurt", "cauldron" | "bed")
     )
 }
 
@@ -4662,12 +4682,6 @@ pub(crate) fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4
                         for k in (1..cands.len()).rev() {
                             cands.swap(k, rng.below(k as u32 + 1) as usize);
                         }
-                        // (A yurt's hearth as near its middle as it goes.)
-                        if room.kind == "yurt" && matches!(place, Place::Center(..)) {
-                            let m = mine.iter().fold([0.0, 0.0], |a, &(x, y)| [a[0] + x as f64 / mine.len() as f64, a[1] + y as f64 / mine.len() as f64]);
-                            let d = |c: &(usize, usize, usize, usize)| (c.0 as f64 + 0.5 * c.2 as f64 - 0.5 - m[0]).abs() + (c.1 as f64 + 0.5 * c.3 as f64 - 0.5 - m[1]).abs();
-                            cands.sort_by(|a, b| d(a).total_cmp(&d(b)));
-                        }
                         for (x, y, w, h) in cands {
                             if !must && (y..y + h).any(|j| (x..x + w).any(|i| cut(j * nx + i))) {
                                 continue;
@@ -4724,6 +4738,143 @@ pub(crate) fn furnish_rooms(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4
         }
     }
     lvl.furniture = furniture;
+}
+
+/// A yurt's one round room furnished (`program` "yurt"): its front door through the rim on the
+/// side `south` (grid axes) points to as near as open ground allows, at the middle of that side;
+/// the hearth in the middle (on the middle square, or the middle two or four: a ring of stones
+/// round the fire, cushions round it but on the door's side); painted chests at the back across
+/// from the door; pallets with bedrolls along the wall two squares long, a floor cushion where one
+/// won't go; the squares beside the door left clear. Each piece's `back` the wall it stands against
+/// (the hearth's: the door's side).
+fn furnish_yurt(lvl: &mut Level, nx: usize, ny: usize, south: P, ext_free: &dyn Fn(isize, isize) -> bool) {
+    let Some(ri) = lvl.rooms.iter().position(|r| r.kind == "yurt") else { return };
+    let ri = ri as i16;
+    let cells = lvl.cells.clone();
+    let mine = |i: isize, j: isize| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny && cells[j as usize * nx + i as usize] == ri;
+    let sq: Vec<(isize, isize)> = (0..nx * ny).filter(|&k| cells[k] == ri).map(|k| ((k % nx) as isize, (k / nx) as isize)).collect();
+    if sq.is_empty() {
+        return;
+    }
+    let (x0, x1) = (sq.iter().map(|s| s.0).min().unwrap(), sq.iter().map(|s| s.0).max().unwrap() + 1);
+    let (y0, y1) = (sq.iter().map(|s| s.1).min().unwrap(), sq.iter().map(|s| s.1).max().unwrap() + 1);
+    let c = [0.5 * (x0 + x1) as f64, 0.5 * (y0 + y1) as f64];
+    const STEPS: [(isize, isize); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+    // The door: the rim's edge facing most nearly south, onto open ground.
+    let mut best: Option<(f64, isize, isize, usize)> = None;
+    for &(i, j) in &sq {
+        for (side, (di, dj)) in STEPS.into_iter().enumerate() {
+            if mine(i + di, j + dj) || !ext_free(i + di, j + dj) {
+                continue;
+            }
+            // (Along the side's normal, then toward the middle of the ring.)
+            let m = [i as f64 + 0.5 + 0.5 * di as f64 - c[0], j as f64 + 0.5 + 0.5 * dj as f64 - c[1]];
+            let score = (di as f64 * south[0] + dj as f64 * south[1]) * 4.0 + (m[0] * south[0] + m[1] * south[1]) / geom::len(m).max(1e-9);
+            if best.is_none_or(|b| score > b.0 + 1e-9) {
+                best = Some((score, i, j, side));
+            }
+        }
+    }
+    if let (Some((_, i, j, side)), Some(d)) = (best, lvl.doors.iter_mut().find(|d| d.kind == "front" && d.rooms[0] == ri)) {
+        let (i, j) = (i as f32, j as f32);
+        (d.a, d.b) = match side {
+            0 => ([i, j], [i + 1.0, j]),
+            1 => ([i + 1.0, j], [i + 1.0, j + 1.0]),
+            2 => ([i, j + 1.0], [i + 1.0, j + 1.0]),
+            _ => ([i, j], [i, j + 1.0]),
+        };
+    }
+    let mut held = vec![false; nx * ny];
+    // (Squares already taken, and the doorways.)
+    for f in &lvl.furniture {
+        for j in f.y as usize..(f.y + f.h) as usize {
+            for i in f.x as usize..(f.x + f.w) as usize {
+                held[j * nx + i] = true;
+            }
+        }
+    }
+    let mut door_at = None;
+    for d in &lvl.doors {
+        let (dx0, dy0) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize);
+        let pair = if d.a[0] == d.b[0] { [(dx0 - 1, dy0), (dx0, dy0)] } else { [(dx0, dy0 - 1), (dx0, dy0)] };
+        for (i, j) in pair.into_iter().filter(|&(i, j)| mine(i, j)) {
+            held[j as usize * nx + i as usize] = true;
+            if d.kind == "front" {
+                door_at = Some([0.5 * (d.a[0] + d.b[0]) as f64 - c[0], 0.5 * (d.a[1] + d.b[1]) as f64 - c[1]]);
+            }
+        }
+    }
+    let to_door = door_at.unwrap_or(south);
+    let door_angle = libm::atan2(to_door[1], to_door[0]);
+    let side_of = |d: P| if d[0].abs() > d[1].abs() { if d[0] > 0.0 { 1u8 } else { 3 } } else if d[1] > 0.0 { 2 } else { 0 };
+    let put = |lvl: &mut Level, held: &mut Vec<bool>, kind: &'static str, x: isize, y: isize, w: isize, h: isize, back: u8| {
+        if let Some(mut it) = building_item(kind, x as usize, y as usize, w as usize, h as usize) {
+            it.back = Some(back);
+            lvl.furniture.push(it);
+            for j in y..y + h {
+                for i in x..x + w {
+                    held[j as usize * nx + i as usize] = true;
+                }
+            }
+        }
+    };
+    let free = |held: &Vec<bool>, i: isize, j: isize| mine(i, j) && !held[j as usize * nx + i as usize];
+    // The hearth.
+    let (hw, hh) = (if (x1 - x0) % 2 == 0 { 2 } else { 1 }, if (y1 - y0) % 2 == 0 { 2 } else { 1 });
+    let (hx, hy) = ((c[0] - 0.5 * hw as f64) as isize, (c[1] - 0.5 * hh as f64) as isize);
+    let fits = (hy..hy + hh).all(|j| (hx..hx + hw).all(|i| free(&held, i, j)));
+    let hearth = if fits {
+        Some((hx, hy, hw, hh))
+    } else {
+        sq.iter().copied().filter(|&(i, j)| free(&held, i, j)).min_by(|a, b| {
+            let d = |s: &(isize, isize)| (s.0 as f64 + 0.5 - c[0]).abs() + (s.1 as f64 + 0.5 - c[1]).abs();
+            d(a).total_cmp(&d(b))
+        }).map(|(i, j)| (i, j, 1, 1))
+    };
+    let door_side = side_of(to_door);
+    if let Some((x, y, w, h)) = hearth {
+        put(lvl, &mut held, "yurt_hearth", x, y, w, h, door_side);
+        // (A hearth on one square: cushions on the squares round it, not the door's side.)
+        if w == 1 && h == 1 {
+            for (k, (di, dj)) in STEPS.into_iter().enumerate() {
+                let (i, j) = (x + di, y + dj);
+                let rim = STEPS.iter().any(|&(a, b)| !mine(i + a, j + b));
+                if k as u8 != door_side && free(&held, i, j) && !rim {
+                    put(lvl, &mut held, "floor_cushion", i, j, 1, 1, side_of([-di as f64, -dj as f64]));
+                }
+            }
+        }
+    }
+    // Round the wall: each square's bearing from the door (0 at it, pi across from it).
+    let from_door = |i: isize, j: isize| {
+        let a = libm::atan2(j as f64 + 0.5 - c[1], i as f64 + 0.5 - c[0]) - door_angle;
+        let a = libm::fmod(a + 3.0 * core::f64::consts::PI, 2.0 * core::f64::consts::PI) - core::f64::consts::PI;
+        a.abs()
+    };
+    let mut rim: Vec<(isize, isize)> = sq.iter().copied().filter(|&(i, j)| STEPS.iter().any(|&(a, b)| !mine(i + a, j + b)) && from_door(i, j) > 0.9).collect();
+    rim.sort_by(|a, b| from_door(b.0, b.1).total_cmp(&from_door(a.0, a.1)).then(a.cmp(b)));
+    let out = |i: isize, j: isize, w: isize, h: isize| side_of([i as f64 + 0.5 * w as f64 - c[0], j as f64 + 0.5 * h as f64 - c[1]]);
+    let mut chests = 0;
+    for &(i, j) in &rim {
+        if !free(&held, i, j) {
+            continue;
+        }
+        // (At the back: up to two chests.)
+        if from_door(i, j) > 2.3 && chests < 2 {
+            put(lvl, &mut held, "painted_chest", i, j, 1, 1, out(i, j, 1, 1));
+            chests += 1;
+            continue;
+        }
+        // (A pallet along the wall over this square and the next round it.)
+        let next = [(1, 0), (0, 1), (-1, 0), (0, -1)].into_iter().map(|(a, b)| (i + a, j + b)).find(|&(a, b)| free(&held, a, b) && rim.contains(&(a, b)));
+        match next {
+            Some((a, b)) => {
+                let (x, y, w, h) = (i.min(a), j.min(b), (i - a).abs() + 1, (j - b).abs() + 1);
+                put(lvl, &mut held, "yurt_pallet", x, y, w, h, out(x, y, w, h));
+            }
+            None => put(lvl, &mut held, "floor_cushion", i, j, 1, 1, out(i, j, 1, 1)),
+        }
+    }
 }
 
 fn push_item(furniture: &mut Vec<Item>, kind: &'static str, x: usize, y: usize) {

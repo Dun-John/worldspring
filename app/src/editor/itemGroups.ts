@@ -24,10 +24,10 @@ export const INSIDE_GROUPS = [
 ];
 
 const BY_GROUP: Record<string, string[]> = {
-  'Beds & seating': ['bed', 'cot', 'bedroll', 'bench', 'pew', 'chair', 'couch', 'booth_seat', 'throne', 'dais', 'stage'],
+  'Beds & seating': ['bed', 'cot', 'bedroll', 'yurt_pallet', 'floor_cushion', 'bench', 'pew', 'chair', 'couch', 'booth_seat', 'throne', 'dais', 'stage'],
   'Tables & counters': ['table', 'long_table', 'desk', 'booth_table', 'bar', 'counter', 'display', 'sideboard'],
-  Storage: ['chest', 'wardrobe', 'shelf', 'bookcase', 'bookshelf', 'barrel', 'keg_rack', 'crate', 'sacks', 'weapon_rack', 'hoard', 'powder'],
-  'Kitchen & craft': ['hearth', 'oven', 'forge', 'anvil', 'workbench', 'cauldron', 'alchemy_bench', 'vat', 'bucket', 'bath', 'telescope'],
+  Storage: ['chest', 'painted_chest', 'wardrobe', 'shelf', 'bookcase', 'bookshelf', 'barrel', 'keg_rack', 'crate', 'sacks', 'weapon_rack', 'hoard', 'powder'],
+  'Kitchen & craft': ['hearth', 'yurt_hearth', 'oven', 'forge', 'anvil', 'workbench', 'cauldron', 'alchemy_bench', 'vat', 'bucket', 'bath', 'telescope'],
   'Great hall': [
     'throne_dais', 'low_dais', 'chair_of_office', 'high_table', 'carpet_runner', 'tapestry', 'wall_banner', 'standing_banner', 'font', 'cloister_well',
     'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'garden_path',

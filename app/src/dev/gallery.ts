@@ -42,6 +42,7 @@ const FURNITURE: [string, number, number][] = [
   ['dance_floor', 5, 5], ['dance_floor', 4, 3], ['harpsichord', 1, 2], ['musicians_corner', 2, 2], ['refreshment_table', 3, 1], ['refreshment_table', 2, 1],
   ['garden_path', 1, 4], ['garden_path', 3, 2],
   ['god_statue', 1, 1], ['god_statue', 2, 1], ['candle_stand', 1, 1], ['carved_screen', 1, 1], ['carved_screen', 2, 1], ['carved_screen', 3, 1], ['screen_gate', 1, 1], ['screen_gate', 2, 1], ['side_altar', 1, 1], ['side_altar', 2, 1],
+  ['yurt_hearth', 2, 2], ['yurt_hearth', 1, 1], ['yurt_pallet', 2, 1], ['painted_chest', 1, 1], ['floor_cushion', 1, 1],
   ['strongbox', 1, 1], ['counting_desk', 2, 1], ['job_board', 2, 1], ['stable_stall', 1, 2], ['guild_arms', 1, 1], ['guild_arms', 2, 1], ['council_table', 4, 2], ['council_table', 6, 2],
 ];
 
