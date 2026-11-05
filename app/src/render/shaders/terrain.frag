@@ -102,12 +102,39 @@ vec2 symbol(vec2 p, int kind, float aa) {
     vec2 o = 0.5 + (h - 0.5) * 0.45;
     vec2 d = f - o;
     if (kind == 1 || kind == 3) {
-        if (kind == 1 && h.x > 0.75) return vec2(0.0);
-        float r = kind == 3 ? 0.40 + 0.06 * h.y : 0.30 + 0.08 * h.y;
-        float dist = length(d);
-        float fill = 1.0 - smoothstep(r - aa, r, dist);
-        float ink = 1.0 - smoothstep(0.0, aa * 1.2, abs(dist - r));
-        return vec2(fill, ink);
+        // A lobed tree clump: 3-5 circles on a slightly squashed ring (each wider than the ring, so
+        // the middle is covered), inked outline, SE side shaded away from the NW light, trunk tick.
+        // Stays inside its cell: ring radius R, crown reach 2.35 R, trunk tk below.
+        bool dense = kind == 3;
+        if (h.x > (dense ? 0.95 : 0.72)) return vec2(0.0);
+        float h3 = hash21(c + 31.7);
+        vec2 g = hash22(c + 3.7);
+        float R = dense ? 0.165 + 0.02 * h.y : 0.11 + 0.05 * h.y;
+        float tk = dense ? 0.05 : 0.07;
+        float room = max(0.0, 0.47 - 2.35 * R - tk * 0.5);
+        vec2 q = f - (vec2(0.5, 0.5 - tk * 0.5) + (g - 0.5) * 2.0 * room);
+        int n = dense ? 4 + int(h3 * 1.999) : 3 + int(h3 * 2.999);
+        vec2 cs = n == 3 ? vec2(-0.5, 0.8660) : n == 4 ? vec2(0.0, 1.0) : vec2(0.3090, 0.9511);
+        float a0 = g.x * 6.2831;
+        vec2 v = vec2(cos(a0), sin(a0)) * R;
+        float sd = 1e3;
+        vec2 dw = vec2(0.0);
+        float rw = R;
+        for (int k = 0; k < 5; k++) {
+            if (k < n) {
+                float rk = R * (1.05 + 0.3 * fract(h3 * 7.31 * float(k + 1) + g.y));
+                vec2 dk = q - v * vec2(1.0, 0.85);
+                float e = length(dk) - rk;
+                if (e < sd) { sd = e; dw = dk; rw = rk; }
+                v = vec2(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x);
+            }
+        }
+        float fill = 1.0 - smoothstep(-aa, 0.0, sd);
+        // Shade: inside the lobe but outside a copy of it shifted towards the NW light.
+        float shade = smoothstep(rw - aa, rw + aa, length(dw + vec2(R * 0.7)));
+        float ink = 1.0 - smoothstep(0.0, aa * 1.2, abs(sd));
+        float trunk = (1.0 - smoothstep(0.0, aa, segment(q, vec2(0.0, R), vec2(0.0, 2.2 * R + tk)))) * (1.0 - fill);
+        return vec2(fill * (1.0 + 0.9 * shade), max(ink, trunk));
     }
     if (kind == 2) {
         if (h.x > 0.8) return vec2(0.0);
