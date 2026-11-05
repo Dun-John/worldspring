@@ -36,6 +36,8 @@ export const SECTION_N = 96;
 /** Sections kept in memory, and loaded beyond the edge of the view. */
 const CAP = 64;
 const REACH = 1;
+/** Sections asked for and not back yet (flying in, the view moves on before they are). */
+const IN_FLIGHT = 8;
 
 interface Section {
   /** Null where no sewers run (no paved street above): plain rock is drawn there. */
@@ -73,6 +75,9 @@ export class Sewers {
   /** Sections arrived and prepared, not drawn yet (one is drawn a frame); `rock`: none there. */
   private readonly ready: { it: Interior; field: UnderField; rock: boolean }[] = [];
   private dead = false;
+  private inFlight = 0;
+  /** Whether a section is round the view now (the last `update`). */
+  private near = (_sx: number, _sy: number) => true;
   /** Sections drawn so far (play mode looks again at what blocks sight when it grows). */
   loaded = 0;
 
@@ -127,6 +132,7 @@ export class Sewers {
     const [sx0, sy0] = Sewers.sectionOf(x0, y0);
     const [sx1, sy1] = Sewers.sectionOf(x1, y1);
     const near = (sx: number, sy: number) => sx >= sx0 - REACH && sx <= sx1 + REACH && sy >= sy0 - REACH && sy <= sy1 + REACH;
+    this.near = near;
     // Ask for the sections round the view (nearest the middle first).
     const [cx, cy] = Sewers.sectionOf(cam.cx, cam.cy);
     const want: [number, number][] = [];
@@ -134,18 +140,28 @@ export class Sewers {
     const many = (sx1 - sx0 + 1 + 2 * REACH) * (sy1 - sy0 + 1 + 2 * REACH) > CAP * 2;
     if (!many) for (let sy = sy0 - REACH; sy <= sy1 + REACH; sy++) for (let sx = sx0 - REACH; sx <= sx1 + REACH; sx++) if (!this.asked.has(`${sx},${sy}`)) want.push([sx, sy]);
     want.sort((a, b) => Math.hypot(a[0] - cx, a[1] - cy) - Math.hypot(b[0] - cx, b[1] - cy));
-    for (const [sx, sy] of want.slice(0, CAP)) {
+    // (A few at a time; what the view has left by the time it comes back is forgotten, to be
+    // asked again if it comes back into view.)
+    for (const [sx, sy] of want.slice(0, Math.max(0, IN_FLIGHT - this.inFlight))) {
       const key = `${sx},${sy}`;
       this.asked.add(key);
+      this.inFlight++;
       void this.gen.interior(this.id(sx, sy)).then(async (found) => {
         if (this.dead) return;
-        const it = found ?? rockSection(this.layout, sx, sy);
-        const field = await prepareField(it, it.entry_level);
-        if (!this.dead) this.ready.push({ it, field, rock: !found });
-      });
+        if (this.near(sx, sy)) {
+          const it = found ?? rockSection(this.layout, sx, sy);
+          const field = await prepareField(it, it.entry_level);
+          if (!this.dead) this.ready.push({ it, field, rock: !found });
+        } else this.asked.delete(key);
+      }).catch(() => this.asked.delete(key)).finally(() => this.inFlight--);
     }
-    // Draw one new section a frame (its textures and props).
-    const next = this.ready.shift();
+    // Draw one new section a frame (its textures and props), forgetting those out of view.
+    let next;
+    while ((next = this.ready.shift())) {
+      const [sx, sy] = Sewers.sectionOf(next.it.origin[0] + 1, next.it.origin[1] + 1);
+      if (near(sx, sy)) break;
+      this.asked.delete(`${sx},${sy}`);
+    }
     if (next) this.add(next.it, next.field, next.rock);
     for (const [key, s] of this.sections) {
       const [sx, sy] = key.split(',').map(Number);
