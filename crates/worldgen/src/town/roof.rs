@@ -17,6 +17,7 @@
 //!   `Look::smoke`: a smoke-darkened patch (smithies, kilns).
 
 use super::catalog::{CATALOG, Ward};
+use super::geom::P;
 use super::{Building, Layout, RoofStyle, Structure};
 use crate::core::rng::{hash3, unit};
 
@@ -291,4 +292,111 @@ pub fn look(l: &Layout, b: &Building) -> Look {
         None => pick(h(11), &[(0u8, 1), (1, 3), (2, 8), (3, 3), (4, 1)]),
     };
     Look { material, shape, wear: wear.clamp(0.0, 255.0) as u8, smoke, shade }
+}
+
+/// Where a domed roof's domes stand (world ft): each its middle and its drum's radius, all inside the
+/// footprint with a foot of roof round them: one over its widest middle, two along a long one (if
+/// each half holds one near as big); none if it can't hold a dome 5 ft across. The battlemap draws
+/// the same (`app/src/gen/roofGeom.ts` `domeSpots`, its maths step for step) and the roof terrace
+/// keeps them clear (`interior::terrace`).
+pub fn domes(poly: &[P]) -> Vec<(P, f64)> {
+    use super::geom::{add, clip_plain, mul};
+    let m = poly.len();
+    if m < 3 {
+        return Vec::new();
+    }
+    // (`frame`: the corners' mean, the longest side's way, the extent along and across it.)
+    let c = poly.iter().fold([0.0, 0.0], |a, p| add(a, mul(*p, 1.0 / m as f64)));
+    let (mut ud, mut best) = ([1.0, 0.0], 0.0);
+    for k in 0..m {
+        let e = [poly[(k + 1) % m][0] - poly[k][0], poly[(k + 1) % m][1] - poly[k][1]];
+        let len = crate::core::sqrt(e[0] * e[0] + e[1] * e[1]);
+        if len > best {
+            (ud, best) = ([e[0] / len, e[1] / len], len);
+        }
+    }
+    let (mut lo, mut hi, mut plo, mut phi) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for p in poly {
+        let d = [p[0] - c[0], p[1] - c[1]];
+        let (a, q) = (d[0] * ud[0] + d[1] * ud[1], -d[0] * ud[1] + d[1] * ud[0]);
+        (lo, hi, plo, phi) = (lo.min(a), hi.max(a), plo.min(q), phi.max(q));
+    }
+    let (mid, half_w, len) = (0.5 * (plo + phi), 0.5 * (phi - plo), hi - lo);
+    let r0 = [c[0] - ud[1] * mid, c[1] + ud[0] * mid];
+    let size = |w: f64, c: f64| (0.448 * w).min(c - 1.0);
+    let (p, cl) = widest(poly);
+    let mut out = vec![(p, size(len.min(2.0 * half_w), cl))];
+    if len > 1.75 * 2.0 * half_w {
+        let t = (lo + hi) * 0.5;
+        let k = (r0[0] + ud[0] * t) * ud[0] + (r0[1] + ud[1] * t) * ud[1];
+        let (a, b) = (clip_plain(poly, ud, k), clip_plain(poly, mul(ud, -1.0), -k));
+        if a.len() >= 3 && b.len() >= 3 {
+            let ((pa, ca), (pb, cb)) = (widest(&a), widest(&b));
+            let two = size((len * 0.5).min(2.0 * half_w), ca).min(size((len * 0.5).min(2.0 * half_w), cb));
+            if two >= 0.7 * out[0].1 {
+                out = vec![(pa, two), (pb, two)];
+            }
+        }
+    }
+    if out[0].1 >= 2.5 { out } else { Vec::new() }
+}
+
+/// How far a point is from a polygon's nearest side, negative outside it.
+fn clearance(poly: &[P], x: f64, y: f64) -> f64 {
+    let m = poly.len();
+    let (mut d, mut inside) = (f64::MAX, false);
+    let mut j = m - 1;
+    for i in 0..m {
+        let ([ax, ay], [bx, by]) = (poly[i], poly[j]);
+        if (ay > y) != (by > y) && x < (bx - ax) * (y - ay) / (by - ay) + ax {
+            inside = !inside;
+        }
+        let (ex, ey) = (bx - ax, by - ay);
+        let t = (((x - ax) * ex + (y - ay) * ey) / (ex * ex + ey * ey).max(1e-12)).clamp(0.0, 1.0);
+        let (dx, dy) = (x - ax - ex * t, y - ay - ey * t);
+        d = d.min(crate::core::sqrt(dx * dx + dy * dy));
+        j = i;
+    }
+    if inside { d } else { -d }
+}
+
+/// The middle of the biggest circle in a polygon (the nearest such to its corners' mean) and its
+/// radius: a coarse grid over it, then steps that halve.
+fn widest(poly: &[P]) -> (P, f64) {
+    const STEPS: [f64; 16] = [1.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, -1.0, 1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0];
+    let m = poly.len() as f64;
+    let (mut cx, mut cy, mut x0, mut y0, mut x1, mut y1) = (0.0, 0.0, f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for &[x, y] in poly {
+        (cx, cy) = (cx + x / m, cy + y / m);
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    let size = (x1 - x0).max(y1 - y0);
+    let score = |x: f64, y: f64| clearance(poly, x, y) - 0.02 * crate::core::sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+    let (mut bx, mut by, mut bs) = (cx, cy, score(cx, cy));
+    for i in 0..=8 {
+        for j in 0..=8 {
+            let (x, y) = (x0 + (x1 - x0) * i as f64 / 8.0, y0 + (y1 - y0) * j as f64 / 8.0);
+            let s = score(x, y);
+            if s > bs {
+                (bx, by, bs) = (x, y, s);
+            }
+        }
+    }
+    let mut step = size / 16.0;
+    let mut it = 0;
+    while it < 200 && step > size * 1e-4 {
+        let mut moved = false;
+        for k in (0..16).step_by(2) {
+            let (x, y) = (bx + STEPS[k] * step, by + STEPS[k + 1] * step);
+            let s = score(x, y);
+            if s > bs {
+                (bx, by, bs, moved) = (x, y, s, true);
+            }
+        }
+        if !moved {
+            step /= 2.0;
+        }
+        it += 1;
+    }
+    ([bx, by], clearance(poly, bx, by))
 }

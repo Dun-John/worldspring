@@ -5,6 +5,7 @@
 import earcut from 'earcut';
 import { BLOCKS, DIFFICULT, OPAQUE } from '../play/vision';
 import { roofRgb, ROOF_MATERIAL_RGB } from './protocol';
+import { domeSpots, frame, isConvex, ridgeEnds, roofParts, signedArea, straighten } from './roofGeom';
 
 export const SQ = 128;
 export const HS = SQ + 2;
@@ -549,7 +550,8 @@ function roofMesh(roofs: Roof[]): ColorMesh {
     g.mat = roof.material < ROOF_MATERIAL_RGB.length ? roof.material : 3;
     g.code = g.mat + 16 * Math.min(15, roof.wear >> 4);
     g.seed = (((roof.idx * 2654435761) >>> 0) % 509) * 0.73;
-    const flat = roof.shape === FLAT;
+    // (Ranges, halls and wings of a domed roof behind parapets, as flat ones.)
+    const flat = roof.shape === FLAT || (roof.shape === DOME && !roof.cone);
     // A palace round its court: a hipped (or flat) range along each side, the court open to the sky.
     const ranges = courtRanges(roof);
     if (ranges) {
@@ -572,7 +574,7 @@ function roofMesh(roofs: Roof[]): ColorMesh {
     if (belfry && hall && belfry.pts.length === 8) {
       if (flat) flatRoof(g, hall.pts, tint);
       else {
-        const hp = convexParts(hall.pts);
+        const hp = roofParts(hall.pts).map((p) => p.pts);
         for (const part of hp) hipRoof(g, part, tint);
         if (hp.length > 1) for (const part of hp) g.outline(part, INK_LINE, ROOF_INK);
       }
@@ -592,27 +594,28 @@ function roofMesh(roofs: Roof[]): ColorMesh {
     // dry lands).
     const range = roof.parts.find((p) => p.kind === MAIN_RANGE);
     const wing = roof.parts.find((p) => p.kind === CROSS_WING);
+    if (range && wing && !roof.cone && roof.shape === DOME) {
+      domeRoof(g, roof.pts, tint);
+      g.outline(roof.pts, INK_OUT, ROOF_INK);
+      continue;
+    }
     if (range && wing) {
       if (flat) {
         flatRoof(g, range.pts, tint);
         flatRoof(g, wing.pts, tint);
-      } else {
-        const along = longestDir(range.pts);
-        for (const part of convexParts(range.pts)) hipRoof(g, part, tint);
-        for (const part of convexParts(wing.pts)) hipRoof(g, part, tint, [-along[1], along[0]]);
-      }
-      g.outline(wing.pts, INK_LINE, ROOF_INK);
+        g.outline(wing.pts, INK_LINE, ROOF_INK);
+      } else crossGable(g, roof.pts, range.pts, wing.pts, tint, roof.shape === GABLE);
+      g.outline(roof.pts, INK_OUT, ROOF_INK);
+      continue;
+    }
+    if (!roof.cone && roof.shape === DOME) {
+      domeRoof(g, roof.pts, tint);
       g.outline(roof.pts, INK_OUT, ROOF_INK);
       continue;
     }
     if (!roof.cone && flat) {
       flatRoof(g, roof.pts, tint);
       if (roof.smoke) smoke(g, roof.pts, 0.2);
-      g.outline(roof.pts, INK_OUT, ROOF_INK);
-      continue;
-    }
-    if (!roof.cone && roof.shape === DOME) {
-      domeRoof(g, roof.pts, tint);
       g.outline(roof.pts, INK_OUT, ROOF_INK);
       continue;
     }
@@ -624,7 +627,7 @@ function roofMesh(roofs: Roof[]): ColorMesh {
       continue;
     }
     // Footprints drawn by hand may be concave: a roof on each convex part, valleys between.
-    const parts = convexParts(roof.pts);
+    const parts = roofParts(roof.pts).map((p) => p.pts);
     for (const part of parts) {
       if (roof.cone || roof.shape === CONE) coneRoof(g, part, tint);
       else if (roof.shape === GABLE) gableRoof(g, part, tint);
@@ -872,7 +875,7 @@ function templeRoof(g: MeshBuilder, roof: Roof, tint: number) {
   const apse = roof.parts.find((p) => p.kind === APSE);
   const wing = roof.parts.find((p) => p.kind === WING && p.pts.length === 8);
   if (!body || !apse) {
-    for (const part of convexParts(roof.pts)) hipRoof(g, part, tint);
+    for (const part of roofParts(roof.pts)) hipRoof(g, part.pts, tint);
     return;
   }
   // (The body's corners: the door's end 0 and 3, the apse's end 1 and 2; its half width; the ridge from
@@ -901,7 +904,8 @@ function templeRoof(g: MeshBuilder, roof: Roof, tint: number) {
   for (let i = 1; i + 1 < m; i++) if (Math.abs(i - mid) % 4 === 0) ridgeLine(g, a[i * 2], a[i * 2 + 1], r1x, r1y, tint, true);
   // (A domed one, no transept: the dome over the middle of its body.)
   if (!wing) {
-    if (roof.shape === DOME) dome(g, (x0 + x1 + x2 + x3) / 4, (y0 + y1 + y2 + y3) / 4, h * 0.95, tint);
+    // (Its drum inside the body's eaves.)
+    if (roof.shape === DOME) dome(g, (x0 + x1 + x2 + x3) / 4, (y0 + y1 + y2 + y3) / 4, h * 0.85, tint);
     return;
   }
   // The transept across the body, its valleys inked.
@@ -917,25 +921,17 @@ function templeRoof(g: MeshBuilder, roof: Roof, tint: number) {
   const r = h * 0.82;
   const [vx, vy] = [-ey, ex];
   if (roof.shape === DOME) {
-    dome(g, cx, cy, h * 1.05, tint);
+    // (Its drum over the body's eaves into the transept's arms, but not past the transept's: within the
+    // circle through the crossing's corners.)
+    let [lo, hi] = [Infinity, -Infinity];
+    for (let i = 0; i < 4; i++) [lo, hi] = [Math.min(lo, (wing.pts[i * 2] - cx) * ex + (wing.pts[i * 2 + 1] - cy) * ey), Math.max(hi, (wing.pts[i * 2] - cx) * ex + (wing.pts[i * 2 + 1] - cy) * ey)];
+    const d = Math.min(-lo, hi);
+    dome(g, cx, cy, Math.min(h * 1.05, (0.95 * Math.sqrt(h * h + d * d)) / 1.12), tint);
     return;
   }
   const sq = [cx - ex * r - vx * r, cy - ey * r - vy * r, cx + ex * r - vx * r, cy + ey * r - vy * r, cx + ex * r + vx * r, cy + ey * r + vy * r, cx - ex * r + vx * r, cy - ey * r + vy * r];
   withMat(g, 1, () => coneRoof(g, sq, 0x4e5660));
   g.outline(sq, INK_OUT, ROOF_INK);
-}
-
-/** The way a polygon's longest edge runs (unit). */
-function longestDir(pts: number[]): [number, number] {
-  const m = pts.length / 2;
-  let [ux, uy, best] = [1, 0, 0];
-  for (let i = 0; i < m; i++) {
-    const dx = pts[((i + 1) % m) * 2] - pts[i * 2];
-    const dy = pts[((i + 1) % m) * 2 + 1] - pts[i * 2 + 1];
-    const l = Math.hypot(dx, dy);
-    if (l > best) [ux, uy, best] = [dx / l, dy / l, l];
-  }
-  return [ux, uy];
 }
 
 /** A palace round its court: the ranges along its sides, each between a side of its footprint and
@@ -974,89 +970,6 @@ function coneRoof(g: MeshBuilder, pts: number[], tint: number) {
   const finial: number[] = [];
   for (let k = 0; k < 8; k++) finial.push(cx + r * Math.cos((k * Math.PI) / 4), cy + r * Math.sin((k * Math.PI) / 4));
   g.poly(finial, ROOF_INK);
-}
-
-function signedArea(pts: number[]): number {
-  let a = 0;
-  const m = pts.length / 2;
-  for (let i = 0; i < m; i++) a += pts[i * 2] * pts[((i + 1) % m) * 2 + 1] - pts[((i + 1) % m) * 2] * pts[i * 2 + 1];
-  return a / 2;
-}
-
-/** Whether a polygon turns one way only (collinear corners allowed). */
-function isConvex(pts: number[]): boolean {
-  const m = pts.length / 2;
-  let sign = 0;
-  for (let i = 0; i < m; i++) {
-    const [ax, ay] = [pts[i * 2], pts[i * 2 + 1]];
-    const [bx, by] = [pts[((i + 1) % m) * 2], pts[((i + 1) % m) * 2 + 1]];
-    const [qx, qy] = [pts[((i + 2) % m) * 2], pts[((i + 2) % m) * 2 + 1]];
-    const c = (bx - ax) * (qy - by) - (by - ay) * (qx - bx);
-    if (Math.abs(c) < 1e-6) continue;
-    if (sign && Math.sign(c) !== sign) return false;
-    sign = Math.sign(c);
-  }
-  return true;
-}
-
-/** A simple polygon as convex parts (Hertel–Mehlhorn: its triangles, merged across shared
- * edges while the union stays convex). */
-export function convexParts(pts: number[]): number[][] {
-  if (isConvex(pts)) return [pts];
-  const tri = earcut(pts);
-  const ccw = signedArea(pts) > 0;
-  const at = (ids: number[]) => ids.flatMap((k) => [pts[k * 2], pts[k * 2 + 1]]);
-  // Every part turned the polygon's way, so a shared edge runs opposite ways in the two.
-  let parts: number[][] = [];
-  for (let t = 0; t < tri.length; t += 3) {
-    const ids = [tri[t], tri[t + 1], tri[t + 2]];
-    if (signedArea(at(ids)) > 0 !== ccw) ids.reverse();
-    parts.push(ids);
-  }
-  const merge = (a: number[], b: number[]): number[] | null => {
-    for (let i = 0; i < a.length; i++) {
-      const [p, q] = [a[i], a[(i + 1) % a.length]];
-      const j = b.indexOf(q);
-      if (j < 0 || b[(j + 1) % b.length] !== p) continue;
-      const out: number[] = [];
-      for (let k = 0; k < a.length; k++) out.push(a[(i + 1 + k) % a.length]);
-      for (let k = 2; k < b.length; k++) out.push(b[(j + k) % b.length]);
-      return isConvex(at(out)) ? out : null;
-    }
-    return null;
-  };
-  for (let merged = true; merged; ) {
-    merged = false;
-    for (let i = 0; i < parts.length && !merged; i++) {
-      for (let j = i + 1; j < parts.length && !merged; j++) {
-        const u = merge(parts[i], parts[j]);
-        if (u) {
-          parts[i] = u;
-          parts.splice(j, 1);
-          merged = true;
-        }
-      }
-    }
-  }
-  return parts.map(at);
-}
-
-/** A convex footprint's frame: its ridge's way (unit; `dir`, else along its longest edge), centroid,
- * extent along the ridge about the centroid, the ridge's line through the middle of its width (a point
- * on it level with the centroid) and its half width. */
-function frame(pts: number[], dir?: [number, number]) {
-  const m = pts.length / 2;
-  let [cx, cy] = [0, 0];
-  for (let i = 0; i < m; i++) [cx, cy] = [cx + pts[i * 2] / m, cy + pts[i * 2 + 1] / m];
-  const [ux, uy] = dir ?? longestDir(pts);
-  let [lo, hi, plo, phi] = [Infinity, -Infinity, Infinity, -Infinity];
-  for (let i = 0; i < m; i++) {
-    const a = (pts[i * 2] - cx) * ux + (pts[i * 2 + 1] - cy) * uy;
-    const b = -(pts[i * 2] - cx) * uy + (pts[i * 2 + 1] - cy) * ux;
-    [lo, hi, plo, phi] = [Math.min(lo, a), Math.max(hi, a), Math.min(plo, b), Math.max(phi, b)];
-  }
-  const mid = (plo + phi) / 2;
-  return { cx, cy, ux, uy, lo, hi, halfW: (phi - plo) / 2, rx: cx - uy * mid, ry: cy + ux * mid };
 }
 
 /** A roof face whose eave runs a→b, in the current pattern: u along the eave from `u0` (ft), v up the
@@ -1112,23 +1025,58 @@ function ridgeLine(g: MeshBuilder, ax: number, ay: number, bx: number, by: numbe
   g.line(ax, ay, bx, by, INK_LINE, ROOF_INK, m === 4 ? 0.5 : 1);
 }
 
+/** A manor's main range and its cross wing (`interior::cross_wing_of`: its outline cut across) under
+ * one roof: a wing wider than the range hipped across it, the range's ridge run on into the wing's
+ * slope with a valley either side; else (or if either piece is not convex) one roof over the whole
+ * outline (`gable`: a gable roof), so no hips cross at the cut. */
+function crossGable(g: MeshBuilder, pts: number[], range: number[], wing: number[], tint: number, gable: boolean) {
+  // (The cut: the range's side whose corners are both the wing's; the ridge runs square to it.)
+  const m = range.length / 2;
+  const tol = 0.05 * PX;
+  const on = (x: number, y: number) => wing.some((_, k) => k % 2 === 0 && Math.abs(wing[k] - x) < tol && Math.abs(wing[k + 1] - y) < tol);
+  let cut = -1;
+  for (let i = 0; i < m && cut < 0; i++) if (on(range[i * 2], range[i * 2 + 1]) && on(range[((i + 1) % m) * 2], range[((i + 1) % m) * 2 + 1])) cut = i;
+  const [a, b] = [straighten(range), straighten(wing)];
+  if (cut >= 0 && isConvex(a) && isConvex(b)) {
+    const j = (cut + 1) % m;
+    const [sx, sy] = [range[j * 2] - range[cut * 2], range[j * 2 + 1] - range[cut * 2 + 1]];
+    const sl = Math.hypot(sx, sy) || 1;
+    const [ux, uy] = [-sy / sl, sx / sl];
+    // (Its ridge along u pointing at the wing, so the open end is the frame's far one.)
+    let [cx, cy] = [0, 0];
+    for (let i = 0; i < m; i++) [cx, cy] = [cx + range[i * 2] / m, cy + range[i * 2 + 1] / m];
+    const dir: [number, number] = (range[cut * 2] - cx) * ux + (range[cut * 2 + 1] - cy) * uy > 0 ? [ux, uy] : [-ux, -uy];
+    const rf = frame(a, dir);
+    const wf = frame(b, [-dir[1], dir[0]]);
+    // (The range's ridge stands as high as its half width: it runs into the wing's slope if the wing is
+    // as deep as the range is wide, and the wing's ridge across it is a ridge, not a point. A wing cut
+    // from the range's own outline is neither: one roof over both.)
+    if (wf.halfW >= rf.halfW * 0.98 && wf.hi - wf.lo > 2.1 * wf.halfW) {
+      hipRoof(g, b, tint, [-dir[1], dir[0]]);
+      hipRoof(g, a, tint, dir, rf.halfW);
+      return;
+    }
+  }
+  for (const part of roofParts(pts)) (gable ? gableRoof : hipRoof)(g, part.pts, tint);
+}
+
 /** A hip roof on a convex footprint: a face up from each eave to the ridge (shaded by how it faces the
  * NW light, patterned in its material), ridge and hips; its ridge along `dir` (unit) if given, else along
  * the longest edge. */
-function hipRoof(g: MeshBuilder, pts: number[], tint: number, dir?: [number, number]) {
+function hipRoof(g: MeshBuilder, pts: number[], tint: number, dir?: [number, number], open = 0) {
   const m = pts.length / 2;
-  const { cx, cy, ux, uy, lo, hi, halfW, rx, ry } = frame(pts, dir);
-  const r0 = lo + halfW;
-  const r1 = Math.max(r0, hi - halfW);
-  const ends = [rx + ux * r0, ry + uy * r0, rx + ux * r1, ry + uy * r1];
-  // (Each corner's hip runs to the nearer end of the ridge.)
-  const end = (i: number) => ((pts[i * 2] - cx) * ux + (pts[i * 2 + 1] - cy) * uy < (r0 + r1) / 2 ? 0 : 2);
+  const { ends, end } = ridgeEnds(pts, dir, open);
   const ccw = signedArea(pts) > 0;
   let u0 = g.seed;
   for (let i = 0; i < m; i++) {
     const j = (i + 1) % m;
     const [px, py, qx, qy] = [pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1]];
     const [ei, ej] = [end(i), end(j)];
+    // (An open end's eave has no face: the slopes either side run on over it into the other roof.)
+    if (open > 0 && ei === 2 && ej === 2) {
+      u0 += Math.hypot(qx - px, qy - py) / FT;
+      continue;
+    }
     const face = ei === ej ? [px, py, qx, qy, ends[ei], ends[ei + 1]] : [px, py, qx, qy, ends[ej], ends[ej + 1], ends[ei], ends[ei + 1]];
     u0 = slope(g, face, px, py, qx, qy, faceShade(px, py, qx, qy, ccw, tint), u0);
   }
@@ -1316,8 +1264,8 @@ function dome(g: MeshBuilder, cx: number, cy: number, r: number, tint: number) {
   g.poly(circle(cx - r * 0.015, cy - r * 0.015, Math.max(1, r * 0.05), 8), 0xb8963e);
 }
 
-/** A domed roof: a flat roof behind its parapet round the drum, one dome over the middle (two along a
- * long one). */
+/** A domed roof: a flat roof behind its parapet round the drum, one dome over its widest middle (two
+ * along a long one; none if it is too small for one), inside the footprint (`domeSpots`). */
 function domeRoof(g: MeshBuilder, pts: number[], tint: number) {
   const code = g.code;
   const white = g.mat === 11;
@@ -1325,14 +1273,8 @@ function domeRoof(g: MeshBuilder, pts: number[], tint: number) {
   g.code = (white ? 11 : 8) + (code & ~15);
   flatRoof(g, pts, white ? tint : PLASTER);
   g.code = code;
-  const { ux, uy, lo, hi, halfW, rx, ry } = frame(pts);
-  const len = hi - lo;
-  const n = len > 1.75 * 2 * halfW ? 2 : 1;
-  const r = 0.4 * Math.min(len / n, 2 * halfW);
-  for (let k = 0; k < n; k++) {
-    const t = lo + (len * (k + 0.5)) / n;
-    dome(g, rx + ux * t, ry + uy * t, r, tint);
-  }
+  // (The drum's radius each: the dome's is a little less.)
+  for (const [x, y, r] of domeSpots(pts, FT)) dome(g, x, y, r / 1.12, tint);
 }
 
 /** A small round home's outline (`ROUND`): an ellipse in its footprint (convex, of one piece); else

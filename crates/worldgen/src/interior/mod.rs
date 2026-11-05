@@ -492,30 +492,8 @@ pub fn terrace(l: &Layout, b: &town::Building) -> Option<Vec<(P, f64)>> {
     }
     match town::roof::look(l, b).shape {
         Shape::Flat => Some(Vec::new()),
-        Shape::Dome if b.parts.is_empty() => {
-            // (`frame`: the vertices' mean, the longest side's direction, the extent along and across it.)
-            let m = b.poly.len();
-            let c = b.poly.iter().fold([0.0, 0.0], |a, p| add(a, mul(*p, 1.0 / m as f64)));
-            let (mut ud, mut best) = ([1.0, 0.0], 0.0);
-            for k in 0..m {
-                let e = sub(b.poly[(k + 1) % m], b.poly[k]);
-                let len = crate::core::sqrt(dot(e, e));
-                if len > best {
-                    (ud, best) = (mul(e, 1.0 / len), len);
-                }
-            }
-            let (mut lo, mut hi, mut plo, mut phi) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-            for p in &b.poly {
-                let d = sub(*p, c);
-                let (a, q) = (dot(d, ud), -d[0] * ud[1] + d[1] * ud[0]);
-                (lo, hi, plo, phi) = (lo.min(a), hi.max(a), plo.min(q), phi.max(q));
-            }
-            let (mid, half_w, len) = (0.5 * (plo + phi), 0.5 * (phi - plo), hi - lo);
-            let r0 = [c[0] - ud[1] * mid, c[1] + ud[0] * mid];
-            let n = if len > 1.75 * 2.0 * half_w { 2 } else { 1 };
-            let r = 0.4 * (len / n as f64).min(2.0 * half_w);
-            Some((0..n).map(|k| (add(r0, mul(ud, lo + len * (k as f64 + 0.5) / n as f64)), r * 1.12)).collect())
-        }
+        // (The battlemap's domes, `town::roof::domes`; none where the roof is too small for one.)
+        Shape::Dome if b.parts.is_empty() => Some(town::roof::domes(&b.poly)),
         _ => None,
     }
 }
