@@ -3046,6 +3046,10 @@
     groundRemove: () => !!groundArmed?.remove(),
     playTool: (t) => play.setTool(t),
     removeTokens: () => play.removeSelected(),
+    newToken: () => play.newTokenAtPointer(),
+    duplicateTokens: () => play.duplicateSelected(),
+    copyTokens: () => play.copySelected(),
+    pasteTokens: () => play.pasteAtPointer(),
     escape: [
       () => (shell.help ? ((shell.help = false), true) : false),
       () => (shell.menu || moves ? ((shell.menu = null), (moves = null), true) : false),

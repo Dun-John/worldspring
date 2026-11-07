@@ -2,7 +2,7 @@
   // Play (local table), the DM's side: the tools (all that shows when the panel is folded
   // down), the selected token, the players' window and view, this location's fog, dark and line
   // of sight, and the table's settings (grid scale, diagonals, reset) folded away.
-  import { SIZES, type Measure, type ShapeKind, type Token, type TokenKind } from './state';
+  import { roleOf, SIZES, type Measure, type ShapeKind, type Token, type TokenRole } from './state';
   import { SHAPE_COLORS, TOKEN_COLORS, type PlayController, type Tool } from './controller';
   import { formatDistance } from './vision';
   import Icon from '../ui/Icon.svelte';
@@ -55,10 +55,25 @@
     ['shape', 'shapes', 'Shapes', 'S'],
     ['fog', 'cloud', 'Fog of war brush', 'F'],
   ];
-  const KINDS: [TokenKind, string][] = [
-    ['character', 'Character'],
+  const ROLES: [TokenRole | 'light', string][] = [
+    ['pc', 'PC'],
+    ['npc', 'NPC'],
+    ['creature', 'Creature'],
+    ['object', 'Object'],
     ['light', 'Light'],
   ];
+  const DEFAULT_NAMES = ['Token', ...ROLES.map(([, l]) => l)];
+  /** The role a new token has (Light is a kind of its own). */
+  const draftRole = (d: typeof play.draft): TokenRole | 'light' => (d.kind === 'light' ? 'light' : d.role);
+  function setDraftRole(r: TokenRole | 'light') {
+    const label = ROLES.find(([k]) => k === r)![1];
+    const name = DEFAULT_NAMES.includes(play.draft.name.trim()) ? label : play.draft.name;
+    setDraft(r === 'light' ? { kind: 'light', name } : { kind: 'character', role: r, name });
+  }
+  function setRole(t: Token, r: TokenRole | 'light') {
+    if (r === 'light') patch(t, { kind: 'light', light: t.light || 4 });
+    else patch(t, { kind: 'character', role: r, light: undefined });
+  }
   const SHAPES: [ShapeKind, string][] = [
     ['circle', 'Circle'],
     ['rect', 'Rectangle'],
@@ -126,10 +141,9 @@
           {/if}
         </div>
         <div class="ws-seg">
-          {#each KINDS as [k, label] (k)}<button class:on={v.draft.kind === k} onclick={() => setDraft({ kind: k })}>{label}</button>{/each}
+          {#each ROLES as [k, label] (k)}<button class:on={draftRole(v.draft) === k} onclick={() => setDraftRole(k)}>{label}</button>{/each}
         </div>
         {#if v.draft.kind === 'character'}
-          <label class="switch"><span class="grow">Players see by it</span><input type="checkbox" class="ws-switch" checked={v.draft.vision} onchange={(e) => setDraft({ vision: checked(e) })} /></label>
           <div class="swatches">
             {#each TOKEN_COLORS as c (c)}
               <button class="sw" class:on={v.draft.color === c} style:background={hex(c)} aria-label="Colour" onclick={() => setDraft({ color: c })}></button>
@@ -195,7 +209,7 @@
           {/if}
         </div>
         <div class="ws-seg">
-          {#each KINDS as [k, label] (k)}<button class:on={t.kind === k} onclick={() => patch(t, { kind: k })}>{label}</button>{/each}
+          {#each ROLES as [k, label] (k)}<button class:on={(t.kind === 'light' ? 'light' : roleOf(t)) === k} onclick={() => setRole(t, k)}>{label}</button>{/each}
         </div>
         <label class="switch"><span class="grow">Hidden<span class="ws-muted"> · only you see it</span></span><input type="checkbox" class="ws-switch" checked={!!t.hidden} onchange={(e) => patch(t, { hidden: checked(e) })} /></label>
         {#if t.kind === 'character'}

@@ -12,7 +12,7 @@ import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scen
 import { PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
 import { loadSession, putImage, saveSession } from './session';
-import { apply, emptyState, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, type Token, type TokenKind } from './state';
+import { apply, emptyState, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
 import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
 
 export type Tool = 'select' | 'token' | 'measure' | 'shape' | 'fog';
@@ -128,7 +128,11 @@ export class PlayController implements PointerTool {
   /** What the characters see now (the DM works it out and sends it). */
   vision: Vision | null = null;
   /** New tokens. */
-  draft: { name: string; kind: TokenKind; size: number; color: number; vision: boolean } = { name: 'Token', kind: 'character', size: 1, color: TOKEN_COLORS[0], vision: false };
+  draft: { name: string; kind: TokenKind; role: TokenRole; size: number; color: number } = { name: 'PC', kind: 'character', role: 'pc', size: 1, color: TOKEN_COLORS[0] };
+  /** The last pointer position over the map (world ft), null off it. */
+  pointer: [number, number] | null = null;
+  /** Copied tokens (Ctrl+C): kept in memory, pasted with Ctrl+V. */
+  private clip: Token[] = [];
   shapeKind: ShapeKind = 'circle';
   shapeColor = SHAPE_COLORS[0];
   fogReveal = true;
@@ -627,29 +631,107 @@ export class PlayController implements PointerTool {
     const place = this.place;
     if (!place) return null;
     const [gx, gy] = place.toGrid(wx ?? this.view.cam.cx, wy ?? this.view.cam.cy);
-    const d = as ? { ...this.draft, name: as.name, kind: 'character' as TokenKind, vision: false } : this.draft;
-    const base = d.name.trim() || 'Token';
-    const same = Object.values(this.state.tokens).filter((t) => t.name.replace(/ \d+$/, '') === base).length;
-    const t: Token = { id: newId(), loc: place.loc, x: 0, y: 0, name: same ? `${base} ${same + 1}` : base, kind: d.kind, size: d.kind === 'light' ? 1 : d.size, color: d.color };
+    const d = as ? { ...this.draft, name: as.name, kind: 'character' as TokenKind, role: 'npc' as TokenRole } : this.draft;
+    const t: Token = { id: newId(), loc: place.loc, x: 0, y: 0, name: this.numbered(d.name.trim() || 'Token'), kind: d.kind, size: d.kind === 'light' ? 1 : d.size, color: d.color };
     if (as?.image) t.image = as.image;
     if (d.kind === 'light') t.light = 4;
-    else if (d.vision) t.vision = true;
+    else {
+      t.role = d.role;
+      if (d.role === 'pc') t.vision = true;
+      if (d.role === 'creature') t.hidden = true;
+    }
     [t.x, t.y] = snap(gx, gy, t.size);
     this.dispatch({ t: 'token', token: t });
     this.select(t.id);
     return t;
   }
 
+  /** `base` numbered after the tokens already named so (as `addToken` does). */
+  private numbered(base: string, taken: Token[] = []): string {
+    const names = [...Object.values(this.state.tokens), ...taken];
+    const same = names.filter((t) => t.name.replace(/ \d+$/, '') === base).length;
+    return same ? `${base} ${same + 1}` : base;
+  }
+
   updateToken(id: string, patch: Partial<Token>) {
     const t = this.state.tokens[id];
     if (!t) return;
     const next = { ...t, ...patch };
+    // A new role: becoming a PC turns vision on, leaving PC turns it off.
+    if (patch.role && next.kind === 'character' && patch.role !== roleOf(t)) next.vision = patch.role === 'pc' ? true : undefined;
+    if (next.kind === 'light') delete next.role;
     if (patch.size) [next.x, next.y] = snap(next.x, next.y, next.size);
     this.dispatch({ t: 'token', token: next });
   }
 
   removeToken(id: string) {
     this.dispatch({ t: 'untoken', id });
+  }
+
+  /** The token's name without its number, numbered after the others (and `extra`). */
+  private copyName(name: string, extra: Token[]): string {
+    return this.numbered(name.replace(/ \d+$/, ''), extra);
+  }
+
+  /** The selected tokens in view, as copies (new ids, nothing placed yet). */
+  private selectedHere(): Token[] {
+    return this.tokensInView().filter((s) => s.where === 'here' && this.selection.has(s.t.id)).map((s) => s.t);
+  }
+
+  /** Put copies of `src` down with their centre at (cx, cy) squares; they become the selection. */
+  private putCopies(src: Token[], cx: number, cy: number, loc: string) {
+    if (!src.length) return;
+    const mx = src.reduce((a, t) => a + t.x, 0) / src.length;
+    const my = src.reduce((a, t) => a + t.y, 0) / src.length;
+    const made: Token[] = [];
+    for (const t of src) {
+      const [x, y] = snap(cx + t.x - mx, cy + t.y - my, t.size);
+      made.push({ ...t, id: newId(), loc, x, y, name: this.copyName(t.name, made) });
+    }
+    this.selection.clear();
+    for (const t of made) {
+      this.dispatch({ t: 'token', token: t });
+      this.selection.add(t.id);
+    }
+    this.onChange();
+  }
+
+  /** N: a new token (the draft) at the pointer, or the middle of the view. */
+  newTokenAtPointer() {
+    if (this.role !== 'dm' || !this.on) return;
+    if (this.pointer) this.addToken(...this.pointer);
+    else this.addToken();
+  }
+
+  /** Ctrl+D: the selection again, beside itself (the next free squares to the right). */
+  duplicateSelected() {
+    const src = this.selectedHere();
+    const place = this.place;
+    if (!place || !src.length) return;
+    const taken = new Set(Object.values(this.state.tokens).filter((t) => t.loc === place.loc && !t.hidden).map((t) => `${Math.floor(t.x)},${Math.floor(t.y)}`));
+    const w = Math.max(...src.map((t) => t.x + t.size / 2)) - Math.min(...src.map((t) => t.x - t.size / 2));
+    const mx = src.reduce((a, t) => a + t.x, 0) / src.length;
+    const my = src.reduce((a, t) => a + t.y, 0) / src.length;
+    // Step right until none of the copies lands on a taken square.
+    let dx = Math.max(1, Math.ceil(w));
+    for (let k = 0; k < 60; k++, dx++) {
+      if (src.every((t) => !taken.has(`${Math.floor(snap(t.x + dx, t.y, t.size)[0])},${Math.floor(t.y)}`))) break;
+    }
+    this.putCopies(src, mx + dx, my, place.loc);
+  }
+
+  /** Ctrl+C: remember the selected tokens in view. */
+  copySelected() {
+    const src = this.selectedHere();
+    if (src.length) this.clip = src.map((t) => ({ ...t }));
+  }
+
+  /** Ctrl+V: the copied tokens at the pointer, in the location in view. */
+  pasteAtPointer() {
+    const place = this.place;
+    if (this.role !== 'dm' || !this.on || !place || !this.clip.length) return;
+    const [gx, gy] = place.toGrid(...(this.pointer ?? [this.view.cam.cx, this.view.cam.cy]));
+    this.putCopies(this.clip, gx, gy, place.loc);
   }
 
   /** Remove every selected token. */
@@ -804,10 +886,12 @@ export class PlayController implements PointerTool {
     if (this.role === 'player' || !this.on) return false;
     if (e.button === 2) return this.rightClick(place, gx, gy);
     if (e.button !== 0) return false;
-    switch (this.tool) {
+    // The Tokens tool picks up a token it is pressed on (as Select does); open ground places one.
+    const pick = this.tool === 'token' ? this.tokenAt(x, y) : null;
+    switch (pick ? 'select' : this.tool) {
       case 'select': {
         // A token first (one may stand by a door), then a door.
-        const hit = this.tokenAt(x, y);
+        const hit = pick ?? this.tokenAt(x, y);
         if (hit) {
           const id = hit.t.id;
           // Shift-click: add to or take from the selection.
@@ -1059,7 +1143,12 @@ export class PlayController implements PointerTool {
     this.draftShape = null;
   }
 
+  leave() {
+    this.pointer = null;
+  }
+
   hover(x: number, y: number) {
+    this.pointer = [x, y];
     const place = this.place;
     if (!place || this.role !== 'dm' || !this.on || this.tool !== 'fog' || (this.fogRooms && (place.it || place.sewers))) {
       this.brush = null;

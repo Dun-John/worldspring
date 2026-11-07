@@ -7,7 +7,7 @@
 import { BufferImageSource, Container, Graphics, RenderTexture, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import type { MapView } from '../render/MapView';
 import { getImage } from './session';
-import { FOG_N, settingsOf, type GridSettings, type Shape, type Token } from './state';
+import { FOG_N, roleOf, settingsOf, type GridSettings, type Shape, type Token } from './state';
 import { bitAt, formatDistance, shapeLabel, shapeOutline, type Bitmap } from './vision';
 import type { PlayController } from './controller';
 
@@ -349,6 +349,9 @@ export class PlayLayer {
     v.face.removeChildren().forEach((c) => c.destroy());
     const side = Math.max(0.5, t.size);
     const r = (side * TPX) / 2 - (side < 1 ? 2 : 4);
+    // Objects are rounded squares, people discs.
+    const obj = t.kind === 'character' && roleOf(t) === 'object';
+    const body = (rad: number, ox = 0, oy = 0) => (obj ? g.roundRect(ox - rad, oy - rad, rad * 2, rad * 2, rad * 0.3) : g.circle(ox, oy, rad));
     // Its light's reach, for the DM.
     if (!player && t.light) g.circle(0, 0, t.light * TPX).stroke({ width: 3, color: 0xffd36b, alpha: 0.5 });
     if (t.kind === 'light') {
@@ -356,8 +359,8 @@ export class PlayLayer {
       g.moveTo(0, -r * 0.55).quadraticCurveTo(r * 0.42, -r * 0.05, 0, r * 0.4).quadraticCurveTo(-r * 0.42, -r * 0.05, 0, -r * 0.55).fill(0xffd36b).stroke({ width: 3, color: 0x7c2d12 });
     } else {
       // Drop shadow, body, picture or initials, rim (pale for those the players see by).
-      g.circle(5, 5, r).fill({ color: 0x000000, alpha: 0.35 });
-      g.circle(0, 0, r).fill(t.color);
+      body(r, 5, 5).fill({ color: 0x000000, alpha: 0.35 });
+      body(r).fill(t.color);
       const tex = this.image(t.image);
       if (tex) {
         const sp = new Sprite(tex);
@@ -376,11 +379,11 @@ export class PlayLayer {
         txt.scale.set(Math.min(1.6, (r * 1.1) / 30));
         v.face.addChild(txt);
       }
-      g.circle(0, 0, r).stroke({ width: 4, color: t.vision ? 0xf5ecd6 : INK });
+      body(r).stroke({ width: 4, color: t.vision ? 0xf5ecd6 : INK });
     }
-    if (t.hidden && !player) g.circle(0, 0, r + 6).stroke({ width: 3, color: 0x9333ea, alpha: 0.9 });
-    if (v.key.includes('|sel|')) g.circle(0, 0, r + 10).stroke({ width: 5, color: SELECT });
-    v.label.text = t.kind === 'light' && player ? '' : t.name;
+    if (t.hidden && !player) body(r + 6).stroke({ width: 3, color: 0x9333ea, alpha: 0.9 });
+    if (v.key.includes('|sel|')) body(r + 10).stroke({ width: 5, color: SELECT });
+    v.label.text = (t.kind === 'light' && player) || obj ? '' : t.name;
   }
 
   /**
@@ -500,7 +503,7 @@ export class PlayLayer {
 
 /** What a token's drawing depends on. */
 function tokenKey(t: Token, selected: boolean, player: boolean, image: Texture | null, grid: GridSettings): string {
-  return [t.name, t.kind, t.size, t.color, t.hidden ? 1 : 0, t.vision ? 1 : 0, t.light ?? 0, image ? t.image : '', grid.scale, selected && !player ? 'sel' : '', ''].join('|');
+  return [t.name, t.kind, t.kind === 'character' ? roleOf(t) : '', t.size, t.color, t.hidden ? 1 : 0, t.vision ? 1 : 0, t.light ?? 0, image ? t.image : '', grid.scale, selected && !player ? 'sel' : '', ''].join('|');
 }
 
 /** A shape: a tinted fill and its outline, from its origin. */

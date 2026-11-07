@@ -13,6 +13,10 @@ export const SIZES = [0.5, 1, 2, 3, 4];
 /** A character or creature, or a light source (a torch on a wall, a brazier). */
 export type TokenKind = 'character' | 'light';
 
+/** What a character token stands for (lights have none). */
+export type TokenRole = 'pc' | 'npc' | 'creature' | 'object';
+export const ROLES: TokenRole[] = ['pc', 'npc', 'creature', 'object'];
+
 export interface Token {
   id: string;
   /** The location it stands in (`surface` or `<interior id>@<level>`). */
@@ -22,6 +26,8 @@ export interface Token {
   y: number;
   name: string;
   kind: TokenKind;
+  /** Characters only; missing: a PC if the players see by it, else an NPC (`roleOf`). */
+  role?: TokenRole;
   /** Squares a side. */
   size: number;
   color: number;
@@ -33,6 +39,11 @@ export interface Token {
   vision?: boolean;
   /** Light it gives: radius in squares (the panel shows it in the grid's unit). */
   light?: number;
+}
+
+/** A character token's role (older tokens carry none). */
+export function roleOf(t: Token): TokenRole {
+  return t.role && ROLES.includes(t.role) ? t.role : t.vision ? 'pc' : 'npc';
 }
 
 export type ShapeKind = 'circle' | 'rect' | 'line' | 'cone';
@@ -221,6 +232,7 @@ export function normalize(raw: unknown): PlayState {
     if (t.image) token.image = String(t.image);
     if (t.hidden) token.hidden = true;
     if (t.vision || t.kind === 'pc') token.vision = true;
+    if (kind === 'character') token.role = ROLES.includes(t.role as TokenRole) ? (t.role as TokenRole) : token.vision ? 'pc' : 'npc';
     // Older sessions gave light in feet.
     if (Number(t.light) > 0) token.light = r.grid ? Number(t.light) : Number(t.light) / 5;
     s.tokens[token.id] = token;

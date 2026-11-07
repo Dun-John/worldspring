@@ -59,6 +59,11 @@ export interface KeyContext {
   groundRemove(): boolean;
   playTool(t: PlayTool): void;
   removeTokens(): void;
+  /** N: a new token at the pointer; Ctrl+D, Ctrl+C, Ctrl+V: duplicate, copy, paste tokens. */
+  newToken(): void;
+  duplicateTokens(): void;
+  copyTokens(): void;
+  pasteTokens(): void;
   /** Steps Escape tries in order; the first that does something wins. */
   escape: (() => boolean)[];
 }
@@ -223,5 +228,9 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
   ];
   for (const [key, t, label] of tools) out.push({ keys: [key], label, group: 'Play', when: playing, run: () => k.playTool(t) });
   out.push({ keys: ['Delete', 'Backspace'], label: 'Remove the selected tokens', group: 'Play', when: () => playing() && k.tokensSelected(), run: () => k.removeTokens() });
+  out.push({ keys: ['N'], label: 'New token at the pointer', group: 'Play', when: playing, run: () => k.newToken() });
+  out.push({ keys: ['Ctrl+D'], label: 'Duplicate the selected tokens', group: 'Play', when: () => playing() && k.tokensSelected(), run: () => k.duplicateTokens() });
+  out.push({ keys: ['Ctrl+C'], label: 'Copy the selected tokens', group: 'Play', when: () => playing() && k.tokensSelected(), run: () => k.copyTokens() });
+  out.push({ keys: ['Ctrl+V'], label: 'Paste tokens at the pointer', group: 'Play', when: playing, run: () => k.pasteTokens() });
   return out;
 }
