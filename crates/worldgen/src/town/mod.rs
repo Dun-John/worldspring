@@ -24,6 +24,7 @@ pub mod squares;
 pub mod stairs;
 pub mod temple;
 pub mod wards;
+pub mod village;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -267,6 +268,9 @@ pub struct Layout {
     pub culture: u8,
     pub roof_seed: u64,
     pub roof_age: u8,
+    /// A village's plots: its cottages' tofts and crofts, its churchyard or shrine's yard, its manor's
+    /// yard (`village`).
+    pub crofts: Vec<village::Plot>,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -552,6 +556,7 @@ impl Layout {
             culture: 0,
             roof_seed: 0,
             roof_age: 0,
+            crofts: Vec::new(),
         }
     }
 
@@ -1771,6 +1776,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for (_, g) in &mut l.grounds {
         g.iter_mut().for_each(tw);
     }
+    for c in &mut l.crofts {
+        c.pts.iter_mut().for_each(tw);
+    }
     // Temples on their lots in pieces (world ft, so that a town laid out anew shapes them alike), a shrine
     // shut in a block's middle moved first to a home with a way out.
     if edit.is_none() {
@@ -1794,7 +1802,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);
     }
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())) {
+    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())).chain(l.crofts.iter().flat_map(|c| c.pts.iter())) {
         bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
     }
     l.bbox = if bb[0] <= bb[2] { bb } else { [center[0], center[1], center[0], center[1]] };
@@ -4589,173 +4597,7 @@ pub(crate) fn rect(c: P, dir: P, w: f64, d: f64) -> Vec<P> {
 // Villages.
 
 fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mut Pcg32, l: &mut Layout) {
-    let t0 = site.t0;
-    let target = ((s.population as f64 / 5.0).round() as usize).clamp(6, 110);
-    let spread = rng.next_f64();
-    // The green.
-    let green = circle([0.0, 0.0], rng.range(35.0, 55.0), 12);
-    if !site.wet([0.0, 0.0]) {
-        l.plazas.push(Plaza { pts: green.clone(), kind: PlazaKind::Green });
-    }
-    let reach = r * 1.3;
-    // Main lanes: the roads through the village.
-    let mut lanes: Vec<(Vec<P>, f64)> = Vec::new();
-    for (ri, k) in t0.roads.segments_near([site.center[0] - reach, site.center[1] - reach, site.center[0] + reach, site.center[1] + reach], 0.0) {
-        let rc = &t0.roads.roads[ri as usize];
-        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 40.0).ceil().clamp(1.0, 400.0) as usize;
-        let pts: Vec<P> = (0..=n).map(|j| sub(rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft).p, site.center)).filter(|p| len(*p) < reach).collect();
-        if pts.len() >= 2 {
-            lanes.push((pts, rc.class.width_ft()));
-        }
-    }
-    let n_roads = lanes.len();
-    // Waterfront (after ProcGenArcana's wharf): the stretch of shore facing the village
-    // becomes a wharf lane with houses on its landward side and piers into the water; a
-    // lane runs from the green down to it.
-    let wharf = shore_run(site, reach);
-    if let Some(wh) = &wharf {
-        let (mid, _) = point_along(wh, 0.5 * wh.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>());
-        let to = sub(mid, [0.0, 0.0]);
-        let tl = len(to);
-        if tl > 60.0 {
-            let d = mul(to, 1.0 / tl);
-            let link = track(site, mul(d, 45.0), d, tl + 10.0, &[(wh.clone(), 12.0)], rng);
-            if link.len() >= 2 {
-                lanes.push((link, 10.0));
-            }
-        }
-        lanes.push((wh.clone(), 12.0));
-        piers_along(site, wh, rng, l);
-    }
-    // Branch lanes (after watabou's road trackers): from the roads (or the green), lanes
-    // leave every `min_block` ft, step 25 ft at a time turning toward level ground, and stop
-    // at water, the village edge, or where they meet another lane.
-    let min_block = (4.0 + 8.0 * rng.next_f64()) * 28.0;
-    let mut starts: Vec<(P, P, u32)> = Vec::new();
-    if lanes.is_empty() {
-        let a0 = rng.range(0.0, std::f64::consts::TAU);
-        for k in 0..3 {
-            let a = a0 + std::f64::consts::TAU * k as f64 / 3.0 + rng.range(-0.4, 0.4);
-            let d = [libm::cos(a), libm::sin(a)];
-            starts.push((mul(d, 50.0), d, 0));
-        }
-    } else {
-        for (pts, _) in &lanes {
-            branch_points(pts, min_block, rng, &mut starts, 1);
-        }
-    }
-    let mut made = 0;
-    let max_lanes = 3 + (s.population / 80) as usize;
-    let mut k = 0;
-    while k < starts.len() && made < max_lanes {
-        let (p0, d0, depth) = starts[k];
-        k += 1;
-        let lane = track(site, p0, d0, r * 1.05, &lanes, rng);
-        if lane.len() >= 4 {
-            if depth < 2 {
-                let mut more = Vec::new();
-                branch_points(&lane, min_block * 1.5, rng, &mut more, depth + 1);
-                starts.extend(more);
-            }
-            lanes.push((lane, 10.0));
-            made += 1;
-        }
-    }
-    // Houses along both sides of every lane (watabou's buildAlong): a house of width
-    // 22–36 ft, a gap, the next; set back from the lane; denser near the green.
-    let clear = |poly: &[P], l: &Layout| {
-        let c = centroid(poly);
-        len(c) > 60.0 && l.buildings.iter().all(|b| !overlaps(&b.poly, poly) && dist(centroid(&b.poly), c) > 14.0)
-    };
-    'lanes: for (pts, road_w) in &lanes {
-        for side in [-1.0, 1.0] {
-            let mut along = rng.range(0.0, 20.0);
-            let total: f64 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
-            while along < total {
-                if l.buildings.len() >= target {
-                    break 'lanes;
-                }
-                let w = rng.range(22.0, 36.0);
-                let (p, u) = point_along(pts, along + 0.5 * w);
-                let n = [-u[1], u[0]];
-                let density = 1.0 - 0.75 * (len(p) / reach).min(1.0);
-                let d = rng.range(16.0, 24.0);
-                if rng.next_f64() < density {
-                    let back = 0.5 * road_w + 5.0 * (1.0 + spread) * rng.range(0.6, 1.4) + 0.5 * d;
-                    let house = rect(add(p, mul(n, side * back)), u, w, d);
-                    if clear(&house, l) && site.buildable(&house) {
-                        let pad = site.pad(&house);
-                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None });
-                    }
-                }
-                let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
-                along += w + 22.0 * avg3 * 2.0;
-            }
-        }
-    }
-    for (pts, _) in lanes.iter().skip(n_roads) {
-        l.streets.push(pts.clone());
-    }
-    // Last resort for cramped sites: a ring around the green.
-    let mut tries = 0;
-    while l.buildings.len() < target / 2 && tries < target * 30 {
-        tries += 1;
-        let rad = rng.range(70.0, r);
-        let a = rng.range(0.0, std::f64::consts::TAU);
-        let c = [rad * libm::cos(a), rad * libm::sin(a)];
-        let house = rect(c, [-libm::sin(a), libm::cos(a)], rng.range(22.0, 34.0), rng.range(16.0, 22.0));
-        if clear(&house, l) && site.buildable(&house) {
-            let pad = site.pad(&house);
-            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None });
-        }
-    }
-    // Fields: Voronoi cells seeded along the lanes and on a jittered ring, split into plots
-    // and claimed outward from the village until there is enough farmland for its people.
-    let spacing = 260.0 - 120.0 * spread;
-    let mut seeds: Vec<P> = Vec::new();
-    for (pts, _) in &lanes {
-        let total: f64 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
-        let mut a = 0.5 * spacing;
-        while a < total {
-            let (p, u) = point_along(pts, a);
-            let n = [-u[1], u[0]];
-            for side in [-1.0, 1.0] {
-                seeds.push(add(p, mul(n, side * 0.6 * spacing)));
-            }
-            a += spacing;
-        }
-    }
-    let ring_n = ((std::f64::consts::TAU * 1.7 * r) / spacing) as usize;
-    for k in 0..ring_n {
-        let a = std::f64::consts::TAU * (k as f64 + rng.range(-0.3, 0.3)) / ring_n as f64;
-        for rad in [1.35 * r, 1.9 * r] {
-            seeds.push(polar_pt(rad * rng.range(0.9, 1.1), a));
-        }
-    }
-    seeds.retain(|p| len(*p) > 0.7 * r && len(*p) < 2.1 * r);
-    let cells = voronoi(&seeds, &circle([0.0, 0.0], 2.1 * r, 40));
-    let mut order: Vec<usize> = (0..cells.len()).filter(|&i| cells[i].pts.len() >= 3).collect();
-    order.sort_by(|&a, &b| len(seeds[a]).total_cmp(&len(seeds[b])).then(a.cmp(&b)));
-    let want = l.buildings.len() as f64 * 22_000.0 * (0.7 + 0.6 * spread);
-    let mut have = 0.0;
-    for i in order {
-        if have >= want {
-            break;
-        }
-        let cell = inset(&cells[i].pts, &vec![5.0; cells[i].pts.len()]);
-        if cell.len() < 3 || site.wet(centroid(&cell)) || l.buildings.iter().any(|b| overlaps(&b.poly, &cell)) {
-            continue;
-        }
-        let mut plots = Vec::new();
-        split_field(&cell, 20_000.0 * (1.0 + spread), rng, &mut plots, 0);
-        for plot in plots {
-            let f = clean(&chamfer(&plot, 10.0));
-            if f.len() >= 3 && area(&f).abs() > 1_500.0 && !site.wet(centroid(&f)) && site.dry_outline(&f, 8.0) {
-                have += area(&f).abs();
-                l.fields.push(f);
-            }
-        }
-    }
+    village::village(site, s, r, rng, l);
 }
 
 /// The shore a village faces: rays from the centre find the water's edge; the longest run
@@ -5105,6 +4947,9 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
                 needs.remove(k);
             }
         }
+    }
+    if tier == Tier::Village {
+        village::reserve(l, &mut needs, &mut taken);
     }
     for fi in needs {
         let f = &CATALOG[fi];

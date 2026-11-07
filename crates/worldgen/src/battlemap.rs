@@ -100,6 +100,10 @@ pub const URBAN_YARD: u8 = 10;
 pub const URBAN_PARK: u8 = 11;
 /// A park's gravel paths and rounds (kept clear of what the guarantee adds).
 pub const URBAN_PATH: u8 = 12;
+// v63 countryside
+/// A village's toft and croft, a manor's or a shrine's yard (`town::village`): the ground's own,
+/// grass for forest floor, no wild scatter.
+pub const URBAN_CROFT: u8 = 13;
 /// Wall-walk and tower-top heights above the ground (ft).
 const WALL_FT: f32 = 20.0;
 const TOWER_FT: f32 = 30.0;
@@ -1191,6 +1195,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             stamp(&y.0, URBAN_YARD, &mut urb_h);
             yards.push(y.clone());
         }
+        crate::town::village::stamp(&l, &mut |poly, val| stamp(poly, val, &mut urb_h));
         for pl in &l.plazas {
             use crate::town::PlazaKind as K;
             let p = &pl.pts;
@@ -1528,6 +1533,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let mut fore_piers: Vec<([f64; 2], [f64; 2])> = Vec::new();
         let mut fore_gates: Vec<[[f64; 2]; 3]> = Vec::new();
         let mut walks: Vec<[[f64; 2]; 4]> = Vec::new();
+        fore_walls.extend(crate::town::village::wall_runs(&l));
         for b in l.buildings.iter().filter(|b| crate::town::palace::merges(&l, b)) {
             let bb = bbox(&b.poly);
             if !overlaps((bb.0 - 40.0, bb.1 - 40.0, bb.2 + 40.0, bb.3 + 40.0)) {
@@ -2427,6 +2433,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 URBAN_RUIN | URBAN_YARD => chunk.surface[k] = Surface::Dirt,
                 URBAN_WALL | URBAN_TOWER => chunk.surface[k] = Surface::Rock,
                 URBAN_PATH => chunk.surface[k] = Surface::Gravel,
+                URBAN_CROFT if matches!(chunk.surface[k], Surface::ForestFloor | Surface::Mud) => chunk.surface[k] = Surface::Grass,
                 // (A formal garden's lawn is mown grass, whatever grows round the town; a common's is
                 // the ground of the land round its middle, whatever the shore beside it.)
                 // (A palace's court a mown lawn too.)
@@ -5394,6 +5401,7 @@ fn town_cover(urban: u8, rng: &mut Pcg32) -> Kind {
         URBAN_PLAZA => &[Kind::Crate, Kind::Barrel, Kind::Cart],
         URBAN_GRAVEYARD => &[Kind::Headstone],
         URBAN_RUIN => &[Kind::RuinWall, Kind::RockPile],
+        URBAN_CROFT => &[Kind::Firewood, Kind::Haystack, Kind::Cart, Kind::Barrel],
         _ => &[Kind::Crate, Kind::Barrel, Kind::Cart],
     };
     opts[rng.below(opts.len() as u32) as usize]

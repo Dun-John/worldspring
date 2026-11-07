@@ -300,6 +300,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             for f in &l.fields {
                 push(f, 2);
             }
+            crate::town::village::plan_polys(&l, &mut push);
             // A green (a village's or a town's) and a temple's close are the ground round them, as
             // on the battlemap; a town's squares are paved.
             // (A square where streets meet need not be convex: drawn as triangles.)
@@ -529,6 +530,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     push(bl, 3);
                 }
             }
+            if key.level >= BUILDING_MIN_LEVEL {
+                crate::town::village::plan_ticks(&l, &mut push);
+            }
+            crate::town::village::plan_lines(&l, &mut lines);
             for w in &l.walls {
                 lines.push(w.iter().map(|p| [p[0], p[1], 9.0, 0.0]).collect());
             }
