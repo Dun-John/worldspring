@@ -43,7 +43,7 @@ pub struct Battle {
     pub trees: Vec<(P, Kind, f32, u8)>,
     /// Windmills' sails (middle, the way they stand, radians).
     pub sails: Vec<(P, f64)>,
-    /// Water wheels (middle, the way the mill's wall runs).
+    /// Water wheels (middle, the way the mill's wall runs, the mill to its left).
     pub wheels: Vec<(P, P)>,
 }
 
@@ -157,6 +157,8 @@ fn wheels(site: &Site, l: &mut Layout) {
         }
         // (Half in the water at the bank, no lane or road between it and the mill.)
         if let Some((d, mid, u, o)) = best {
+            // (Its way along the wall turned so the mill lies to its left, `[-u.y, u.x]`: the sprite's +y.)
+            let u = if dot([-u[1], u[0]], o) > 0.0 { mul(u, -1.0) } else { u };
             let c = add(mid, mul(o, d + 1.0));
             let clear = |q: P| {
                 l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |x| seg_dist(q, x[0], x[1]) - 0.5 * w)).chain(l.streets.iter().flat_map(|st| st.windows(2).map(|x| seg_dist(q, x[0], x[1]) - 0.5 * super::village::LANE_W))).fold(f64::MAX, f64::min) > 1.0

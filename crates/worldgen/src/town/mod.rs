@@ -277,7 +277,8 @@ pub struct Layout {
     /// A village's plots: its cottages' tofts and crofts, its churchyard or shrine's yard, its manor's
     /// yard (`village`).
     pub crofts: Vec<village::Plot>,
-    /// v63 countryside: water mills' wheels (middle, the way the mill's wall runs; `rural`).
+    /// v63 countryside: water mills' wheels (middle, the way the mill's wall runs, the mill to its left;
+    /// `rural`).
     pub wheels: Vec<(P, P)>,
 }
 
