@@ -171,6 +171,8 @@ struct Ground<'s, 'a> {
     lanes: LaneGrid,
     plots: Vec<Plot>,
     boxes: Vec<[f64; 4]>,
+    /// The green's middle and radius (0: none).
+    green: (P, f64),
 }
 
 impl Ground<'_, '_> {
@@ -196,7 +198,26 @@ impl Ground<'_, '_> {
 
     /// Open ground a plot can take: dry, off the lanes and the roads, in no plot.
     fn open(&self, p: P) -> bool {
-        self.dry(p) && !self.lanes.near(p, 1.0) && !self.site.near_network_road(p, 3.0) && !self.in_plot(p)
+        self.dry(p) && !self.lanes.near(p, 1.0) && !self.site.near_network_road(p, 3.0) && !self.in_plot(p) && dist(p, self.green.0) > self.green.1 + 1.0
+    }
+
+    /// Convex `poly` clear of the green by `margin` ft.
+    fn off_green(&self, poly: &[P], margin: f64) -> bool {
+        let (c, r) = self.green;
+        let m = poly.len();
+        r <= 0.0 || (!contains(poly, c) && (0..m).all(|k| seg_dist(c, poly[k], poly[(k + 1) % m]) > r + margin))
+    }
+
+    /// Clear of every lane and road by `margin` ft (their edges): its outline every 4 ft off the
+    /// network roads as drawn, and off the lanes.
+    fn off_lanes(&self, poly: &[P], margin: f64) -> bool {
+        let m = poly.len();
+        !self.lanes.touches(poly, margin)
+            && (0..m).all(|k| {
+                let (a, b) = (poly[k], poly[(k + 1) % m]);
+                let n = (dist(a, b) / 4.0).ceil().max(1.0) as usize;
+                (0..n).all(|j| !self.site.near_network_road(lerp(a, b, j as f64 / n as f64), margin))
+            })
     }
 
     fn add(&mut self, plot: Plot) {
@@ -231,7 +252,7 @@ fn yard_ok(g: &Ground, l: &Layout, yard: &[P]) -> bool {
             }
         }
     }
-    !building_hit(l, yard, None) && !g.plot_hit(yard)
+    !building_hit(l, yard, None) && !g.plot_hit(yard) && g.off_lanes(yard, 1.0) && g.off_green(yard, 1.0)
 }
 
 fn new_building(site: &Site, poly: Vec<P>, ward: Ward, func: Option<usize>, structure: Structure) -> Building {
@@ -324,16 +345,20 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
             made += 1;
         }
     }
-    for (pts, _) in lanes.iter().skip(n_roads) {
-        l.streets.push(pts.clone());
-    }
     // (The green round the village's middle, its well at its heart off the lanes and roads through it:
     // the first spot of rings round the middle clear of them.)
     let lane_d = |p: P| lanes.iter().flat_map(|(q, w)| q.windows(2).map(move |s| seg_dist(p, s[0], s[1]) - 0.5 * w)).fold(f64::MAX, f64::min);
     let spots: Vec<P> = std::iter::once([0.0, 0.0]).chain([10.0, 18.0, 0.45 * green_r, 0.65 * green_r].into_iter().flat_map(|rad| (0..8).map(move |k| polar_pt(rad, std::f64::consts::TAU * k as f64 / 8.0)))).filter(|&p| !site.wet(p)).collect();
     let well = spots.iter().copied().find(|&p| lane_d(p) > 7.0 && !site.near_network_road(p, 6.0)).or_else(|| spots.iter().copied().max_by(|a, b| lane_d(*a).total_cmp(&lane_d(*b)))).unwrap_or([0.0, 0.0]);
-    if !site.wet(well) {
+    let green = if site.wet(well) { 0.0 } else { green_r };
+    if green > 0.0 {
         l.plazas.push(Plaza { pts: circle(well, green_r, 12), kind: PlazaKind::Green });
+        // (The lanes off the roads end at its edge: none runs onto it.)
+        let off: Vec<(Vec<P>, f64)> = lanes.drain(n_roads..).flat_map(|(pts, w)| outside(&pts, well, green_r + 0.5 * w).into_iter().map(move |q| (q, w))).collect();
+        lanes.extend(off);
+    }
+    for (pts, _) in lanes.iter().skip(n_roads) {
+        l.streets.push(pts.clone());
     }
     // (The village's calls, each one draw: a church in the bigger villages, some smaller ones too, a
     // cross plan in the biggest; a manor in the big ones, a few others; how many crofts are hedged.)
@@ -341,14 +366,14 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
     let big_church = s.population >= 380 && rng.next_f64() < 0.5;
     let manor = (s.population >= 300 && rng.next_f64() < 0.75) || rng.next_f64() < 0.12;
     let hedge_share = hedged(crate::battlemap::land_biome(t0, site.center));
-    let mut g = Ground { site, lanes: LaneGrid::new(&lanes), plots: Vec::new(), boxes: Vec::new() };
+    let mut g = Ground { site, lanes: LaneGrid::new(&lanes), plots: Vec::new(), boxes: Vec::new(), green: (well, green) };
     // The church in its churchyard by the green, else a shrine in its yard.
     let faith = church && churchyard(&mut g, l, green_r, big_church, rng);
     if !faith {
         let bound = if rng.next_f64() < hedge_share { Bound::Hedge } else { Bound::Fence };
         shrine_yard(&mut g, l, green_r, bound, rng);
     }
-    mill(&mut g, l, r, green_r, wharf.as_deref(), rng);
+    mill(&mut g, l, r, wharf.as_deref(), rng);
     if manor {
         manor_yard(&mut g, l, r, &lanes[..], rng);
     }
@@ -361,6 +386,8 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
         let c = centroid(poly);
         len(c) > 60.0 && l.buildings.iter().all(|b| !overlaps_or_crosses(&b.poly, poly) && dist(centroid(&b.poly), c) > 14.0)
     };
+    // (A house off every lane and road but by a foot, and off the green.)
+    let off = |g: &Ground, poly: &[P]| g.off_lanes(poly, 1.0) && g.off_green(poly, 2.0);
     let mut fronts: Vec<(Vec<P>, f64)> = Vec::new();
     for (li, (pts, w)) in lanes.iter().enumerate() {
         let k = if li < n_roads { (0..pts.len()).min_by(|&a, &b| len(pts[a]).total_cmp(&len(pts[b])).then(a.cmp(&b))).unwrap_or(0) } else { 0 };
@@ -416,7 +443,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
                 // (Its front square to the lane: its two corners nearest the lane about as far from it.)
                 let mut ds: Vec<f64> = house.iter().map(|c| pts.windows(2).map(|s| seg_dist(*c, s[0], s[1])).fold(f64::MAX, f64::min)).collect();
                 ds.sort_by(f64::total_cmp);
-                if ds[1] - ds[0] < 3.0 && clear(&house, l) && site.buildable(&house) && !g.plot_hit(&house) {
+                if ds[1] - ds[0] < 3.0 && clear(&house, l) && site.buildable(&house) && !g.plot_hit(&house) && off(&g, &house) {
                     l.buildings.push(new_building(site, house, Ward::Rural, None, Structure::Roofed));
                     let own = l.buildings.len() - 1;
                     let (e0, e1) = (rng.range(3.0, 10.0), rng.range(3.0, 10.0));
@@ -450,7 +477,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
         let a = rng.range(0.0, std::f64::consts::TAU);
         let c = [rad * libm::cos(a), rad * libm::sin(a)];
         let house = rect(c, [-libm::sin(a), libm::cos(a)], rng.range(22.0, 34.0), rng.range(16.0, 22.0));
-        if clear(&house, l) && site.buildable(&house) && !g.plot_hit(&house) {
+        if clear(&house, l) && site.buildable(&house) && !g.plot_hit(&house) && off(&g, &house) {
             l.buildings.push(new_building(site, house, Ward::Rural, None, Structure::Roofed));
         }
     }
@@ -508,9 +535,10 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
 /// A cottage's toft and croft on lane `pts`, side `side`, from `a0` to `a1` along it: its front
 /// `front` ft out from the lane's middle, its sides square to the lane where they leave it (so the
 /// crofts beside it share theirs), running back `depth` ft or until they meet water or a shore's
-/// beach, a lane or a road (`CROFT_LANE_FT` off it), another plot or building, or ground too steep to
-/// work; at least to `house` ft (the cottage's back) and 10 more, else none. `own`: the cottage's
-/// place in the buildings.
+/// beach, a lane or a road (`CROFT_LANE_FT` off it; its front half a foot off its own), the green,
+/// another plot or building, or ground too steep to work; at least to `house` ft (the cottage's back)
+/// and 10 more, else none; deeper than wide and not a wedge. `own`: the cottage's place in the
+/// buildings.
 #[allow(clippy::too_many_arguments)]
 fn croft(g: &Ground, l: &Layout, pts: &[P], side: f64, a0: f64, a1: f64, front: f64, house: f64, depth: f64, own: usize) -> Option<Vec<P>> {
     let (p0, u0) = point_along(pts, a0);
@@ -564,6 +592,15 @@ fn croft(g: &Ground, l: &Layout, pts: &[P], side: f64, a0: f64, a1: f64, front: 
             d -= 20.0;
             continue;
         }
+        // (Deeper than wide, and most of the rectangle round it: no wide wedge at a bend.)
+        let (wide, deep) = frame(&poly);
+        if wide > deep {
+            return None;
+        }
+        if area(&poly).abs() < 0.5 * wide * deep {
+            d = (0.75 * d).min(d - 15.0);
+            continue;
+        }
         let core = inset(&poly, &[0.3; 4]);
         // (Its sides and back clear of the lanes and the roads, and dry, every 8 ft round: behind its
         // front strip, which is on the lane.)
@@ -579,12 +616,58 @@ fn croft(g: &Ground, l: &Layout, pts: &[P], side: f64, a0: f64, a1: f64, front: 
         // (And dry across it, every 8 ft or so.)
         let (nw, nd) = ((dist(f0, f1) / 8.0).ceil() as usize, (d / 8.0).ceil() as usize);
         let inside_ok = || (1..nd).all(|j| (1..nw).all(|i| g.dry(lerp(lerp(poly[0], poly[1], i as f64 / nw as f64), lerp(poly[3], poly[2], i as f64 / nw as f64), j as f64 / nd as f64))));
-        if core.len() >= 3 && behind.len() >= 3 && !g.plot_hit(&core) && !building_hit(l, &core, Some(own)) && !g.lanes.touches(&behind, CROFT_LANE_FT) && round_ok && inside_ok() && g.plot_overlap(&poly) < 1.0 {
+        if core.len() >= 3 && behind.len() >= 3 && !g.plot_hit(&core) && !building_hit(l, &core, Some(own)) && !g.lanes.touches(&behind, CROFT_LANE_FT) && !g.lanes.touches(&poly, 0.5) && g.off_green(&poly, 1.0) && round_ok && inside_ok() && g.plot_overlap(&poly) < 1.0 {
             return Some(poly);
         }
         d = (0.75 * d).min(d - 15.0);
     }
     None
+}
+
+/// A croft's width along its front and its depth square to it (the rectangle round it).
+fn frame(poly: &[P]) -> (f64, f64) {
+    let t = sub(poly[1], poly[0]);
+    let tu = mul(t, 1.0 / len(t).max(1e-9));
+    let span = |u: P| poly.iter().map(|q| dot(sub(*q, poly[0]), u)).fold((f64::MAX, f64::MIN), |a, v| (a.0.min(v), a.1.max(v)));
+    let ((a0, a1), (b0, b1)) = (span(tu), span([-tu[1], tu[0]]));
+    (a1 - a0, b1 - b0)
+}
+
+/// The pieces of lane `pts` outside the circle round `c` of radius `r`, each at least 25 ft long.
+fn outside(pts: &[P], c: P, r: f64) -> Vec<Vec<P>> {
+    let mut out: Vec<Vec<P>> = Vec::new();
+    let mut cur: Vec<P> = Vec::new();
+    let r2 = r * r;
+    let inside = |p: P| dot(sub(p, c), sub(p, c)) < r2;
+    for s in pts.windows(2) {
+        let (a, b) = (s[0], s[1]);
+        let (da, ab) = (sub(a, c), sub(b, a));
+        // (Where the segment crosses the circle: |da + t ab| = r.)
+        let (qa, qb, qc) = (dot(ab, ab), 2.0 * dot(da, ab), dot(da, da) - r2);
+        let disc = qb * qb - 4.0 * qa * qc;
+        let (t0, t1) = if qa > 1e-12 && disc > 0.0 {
+            let sq = crate::core::sqrt(disc);
+            ((-qb - sq) / (2.0 * qa), (-qb + sq) / (2.0 * qa))
+        } else {
+            (2.0, 2.0)
+        };
+        if !inside(a) && cur.is_empty() {
+            cur.push(a);
+        }
+        if t0 > 0.0 && t0 < 1.0 {
+            cur.push(add(a, mul(ab, t0)));
+            out.push(std::mem::take(&mut cur));
+        }
+        if t1 > 0.0 && t1 < 1.0 {
+            cur.push(add(a, mul(ab, t1)));
+        }
+        if !inside(b) {
+            cur.push(b);
+        }
+    }
+    out.push(cur);
+    out.retain(|q| q.len() >= 2 && q.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>() >= 25.0);
+    out
 }
 
 /// The church on its lot inside a walled churchyard on the green's edge (east of it first: the
@@ -606,7 +689,7 @@ fn churchyard(g: &mut Ground, l: &mut Layout, green_r: f64, big: bool, rng: &mut
         for step in ROUND {
             let a = a0 + step * std::f64::consts::PI / 6.0;
             let n = [libm::cos(a), libm::sin(a)];
-            let m = mul(n, ring);
+            let m = add(g.green.0, mul(n, ring));
             let yard = quad(m, n, width, depth);
             if (lane && g.lanes.dist(m) > GATE_LANE_FT) || (flat && !level(&yard)) || !yard_ok(g, l, &yard) {
                 continue;
@@ -643,7 +726,7 @@ fn shrine_yard(g: &mut Ground, l: &mut Layout, green_r: f64, bound: Bound, rng: 
         for step in ROUND {
             let a = a0 + step * std::f64::consts::PI / 6.0;
             let n = [libm::cos(a), libm::sin(a)];
-            let m = mul(n, ring);
+            let m = add(g.green.0, mul(n, ring));
             let yard = quad(m, n, width, depth);
             let shrine = rect(add(m, mul(n, 6.0 + 0.5 * sd)), [n[1], -n[0]], sw, sd);
             if (lane && g.lanes.dist(m) > GATE_LANE_FT) || !yard_ok(g, l, &yard) || !g.site.buildable(&shrine) {
@@ -663,12 +746,12 @@ fn shrine_yard(g: &mut Ground, l: &mut Layout, green_r: f64, bound: Bound, rng: 
 /// The water mill: on the river's bank where a river runs by (the bank nearer the green; across the
 /// lane along it from the water if one runs there), else by the wharf; its long side along the bank,
 /// its footprint within `MILL_WATER_FT` of the water. Else none (V3: a windmill on a rise at the edge).
-fn mill(g: &mut Ground, l: &mut Layout, r: f64, green_r: f64, wharf: Option<&[P]>, rng: &mut Pcg32) -> bool {
+fn mill(g: &mut Ground, l: &mut Layout, r: f64, wharf: Option<&[P]>, rng: &mut Pcg32) -> bool {
     let Some(mill_f) = catalog::index_of("mill") else { return false };
     let (w, d) = (rng.range(30.0, 40.0), rng.range(20.0, 26.0));
     let site = g.site;
     let fits = |g: &Ground, l: &Layout, poly: &[P]| {
-        poly.iter().all(|p| len(*p) > green_r + 6.0) && site.buildable(poly) && !building_hit(l, poly, None) && !g.plot_hit(poly) && poly.iter().chain([&centroid(poly)]).all(|p| !g.lanes.near(*p, 2.0)) && waterside(site, poly, MILL_WATER_FT)
+        g.off_green(poly, 6.0) && site.buildable(poly) && !building_hit(l, poly, None) && !g.plot_hit(poly) && g.off_lanes(poly, 2.0) && waterside(site, poly, MILL_WATER_FT)
     };
     let mut spots: Vec<Vec<P>> = Vec::new();
     // (River pieces by their distance from the green, nearer first.)
@@ -794,6 +877,23 @@ pub(super) fn reserve(l: &Layout, needs: &mut Vec<usize>, taken: &mut [bool]) {
             taken[i] = true;
         }
     }
+}
+
+/// Whether a house `assign_functions` adds to make up the numbers (local ft) keeps off a village's
+/// lanes, roads, green and plots; anywhere in any other layout.
+pub(super) fn spare_ok(site: &Site, l: &Layout, poly: &[P]) -> bool {
+    if !village_of(l) {
+        return true;
+    }
+    let m = poly.len();
+    let edges = || (0..m).map(|k| [poly[k], poly[(k + 1) % m]]);
+    let lanes_ok = l.streets.iter().all(|s| s.windows(2).all(|w| !contains(poly, w[0]) && edges().all(|e| poly_gap(&e, w) > 7.0)));
+    let roads_ok = edges().all(|e| (0..=8).all(|j| !site.near_network_road(lerp(e[0], e[1], j as f64 / 8.0), 1.0)));
+    let green_ok = l.plazas.iter().filter(|p| p.kind == PlazaKind::Green).all(|g| {
+        let (c, r) = (centroid(&g.pts), dist(centroid(&g.pts), g.pts[0]));
+        !contains(poly, c) && edges().all(|e| seg_dist(c, e[0], e[1]) > r + 2.0)
+    });
+    lanes_ok && roads_ok && green_ok && l.crofts.iter().all(|p| !overlaps_or_crosses(&p.pts, poly))
 }
 
 fn village_of(l: &Layout) -> bool {

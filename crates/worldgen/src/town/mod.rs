@@ -4920,7 +4920,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         let rad = rng.range(30.0, l.radius.max(80.0));
         let c = [rad * libm::cos(a), rad * libm::sin(a)];
         let house = rect(c, [-libm::sin(a), libm::cos(a)], 30.0, 20.0);
-        let clear = l.buildings.iter().all(|b| dist(centroid(&b.poly), c) > 28.0);
+        let clear = l.buildings.iter().all(|b| dist(centroid(&b.poly), c) > 28.0) && village::spare_ok(site, l, &house);
         if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
