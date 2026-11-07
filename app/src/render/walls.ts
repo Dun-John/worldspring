@@ -1188,24 +1188,56 @@ export function drawDrawbridge(g: Graphics, s: Shape) {
   g.poly(land).stroke({ width: 2.2, color: INK, join: 'round' });
 }
 
+/** A dry ditch's sides (ft down from a bank's top to the floor) and its outer bank's lip (ft wide). */
+const DITCH_SIDE = 3.2;
+const DITCH_LIP = 3;
+/** Earth on a ditch's side turned from the light, toward it, and on its outer bank's lip. */
+const CUT_DARK = 0x5a4430;
+const CUT_LIT = 0xb09468;
+const CUT_LIP = 0xd9c79c;
+/** Ink widths by size (the sprite style rule): outlines of shapes over half a square. */
+const OUT = 0.045 * PX;
+
 /**
- * A dry ditch's bank along its top (`ShapeKind::DitchBank`: the two ends of a stretch), inked by
- * hand: a line a little wavering, a shade of earth under it on the ditch's side.
+ * A dry ditch's bank along its top (`ShapeKind::DitchBank`: the two ends of a stretch, the way
+ * down into the ditch, whether its outer bank lies behind): its side a band of earth down to the
+ * floor, dark where it is turned from the light (NW) and light toward it, the outer bank's lip
+ * pale behind it (`ink` false); the top inked by hand, a little wavering (`ink`: over every
+ * stretch's earth).
  */
-export function drawDitchBank(g: Graphics, s: Shape) {
+export function drawDitchBank(g: Graphics, s: Shape, ink: boolean) {
   const [ax, ay, bx, by] = s.pts;
   const L = Math.hypot(bx - ax, by - ay);
   if (!(L > 0)) return;
   const rnd = rngAt(ax + bx, ay + by);
   const [nx, ny] = [-(by - ay) / L, (bx - ax) / L];
+  const dl = Math.hypot(s.pts[4] ?? 0, s.pts[5] ?? 0);
+  if (!ink) {
+    if (!(dl > 0)) return;
+    const [dx, dy] = [s.pts[4] / dl, s.pts[5] / dl];
+    // (Overlapping a little at the ends: a stretch's band meets the next's without a seam.)
+    const [ux, uy] = [((bx - ax) / L) * FT * 0.4, ((by - ay) / L) * FT * 0.4];
+    const band = (from: number, to: number, color: number, alpha: number) => {
+      const [f, t] = [from * FT, to * FT];
+      g.poly([ax - ux + dx * f, ay - uy + dy * f, bx + ux + dx * f, by + uy + dy * f, bx + ux + dx * t, by + uy + dy * t, ax - ux + dx * t, ay - uy + dy * t]).fill({ color, alpha });
+    };
+    const lit = 0.5 + 0.5 * (dx * LX + dy * LY);
+    const side = mix(CUT_DARK, CUT_LIT, lit);
+    band(0, DITCH_SIDE * 0.7, side, 1);
+    band(DITCH_SIDE * 0.7, DITCH_SIDE, side, 0.5);
+    // (Its foot: a dark line where the side meets the floor, under the lit side only faint.)
+    band(DITCH_SIDE * 0.62, DITCH_SIDE * 0.7, CUT_DARK, 0.5 - 0.35 * lit);
+    if ((s.pts[6] ?? 0) > 0) band(-DITCH_LIP, 0, CUT_LIP, 0.45);
+    return;
+  }
   const n = Math.max(1, Math.round(L / (FT * 3)));
   g.moveTo(ax, ay);
   for (let k = 1; k < n; k++) {
     const t = k / n;
-    const w = (rnd() - 0.5) * FT * 0.35;
+    const w = (rnd() - 0.5) * FT * 0.3;
     g.lineTo(ax + (bx - ax) * t + nx * w, ay + (by - ay) * t + ny * w);
   }
-  g.lineTo(bx, by).stroke({ width: 2, color: INK, alpha: 0.75, cap: 'round', join: 'round' });
+  g.lineTo(bx, by).stroke({ width: OUT, color: INK, cap: 'round', join: 'round' });
 }
 
 /** A gravel walk on a court's lawn (`ShapeKind::GravelWalk`: its rectangle's corners), drawn as a

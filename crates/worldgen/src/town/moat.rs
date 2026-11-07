@@ -16,8 +16,8 @@
 //! Where: `BERM` ft out from the curtain's line (the wall's foot clear) and `TOWER_BERM` round its
 //! towers, `width` wide, along every side of the curtain the castle's own (not along the town wall
 //! where that is the castle's); a town's castle keeps it to its own block, the curtain's bound
-//! drawn in by the moat's width (`Plan::room`) so its streets and its neighbours' lots stay as they
-//! were. Roads crossing it (but the castle's own way from the gate) stand on causeways. The
+//! drawn in by the moat's width and a bank (`Plan::room`) so its streets and its neighbours' lots
+//! stay as they were. Roads crossing it (but the castle's own way from the gate) stand on causeways. The
 //! drawbridge spans it straight out from the gate (`Drawbridge`); a town castle's way to its gate
 //! leaves straight out over it (`castle::gate_way`).
 
@@ -27,10 +27,14 @@ use super::geom::*;
 /// The moat's inner edge stands this far out from the curtain's line (ft): as far as the curtain's
 /// bound stands in from its block, so a town castle's moat reaches its block's edge.
 pub const BERM: f64 = 6.0;
-/// A wet moat's water keeps this far (ft) in from its bound (`Moat::bound_bank`).
+/// A wet moat's water keeps this far (ft) in from its bound (`Moat::bound_bank`); a town castle's
+/// curtain stands as much further in (`Plan::room`), so the water keeps its full width.
 pub const BOUND_BANK: f64 = 5.0;
-/// Its inner edge stands this far clear of a tower's foot (ft).
-pub const TOWER_BERM: f64 = 2.0;
+/// Its inner edge stands this far clear of a tower's foot (ft): none, the towers stand out into it.
+pub const TOWER_BERM: f64 = 0.0;
+/// A square tower's reach out into the moat (ft from its centre): between its side's and its
+/// corner's.
+const SQUARE_TOWER_R: f64 = 12.5;
 /// Water lies within this far of the moat (ft) for it to be wet: a channel from it can feed the moat.
 const NEAR_FT: f64 = 480.0;
 /// The moat's line rises and falls no more than this (ft) for it to hold water.
@@ -41,10 +45,6 @@ const LEVEL_DOWN: f64 = 2.0;
 pub const DITCH_FT: f32 = 8.0;
 pub const BANK_FT: f64 = 4.0;
 pub const BANK_UP: f32 = 2.0;
-/// A wet moat's depth at its edges and in its middle (ft): deep water (`Surface::Deep`, over 4 ft)
-/// but at its edges.
-pub const EDGE_DEEP: f32 = 1.5;
-pub const MID_DEEP: f32 = 6.5;
 /// The drawbridge's width (ft): the castle's way's.
 pub const BRIDGE_W: f64 = 10.0;
 
@@ -55,9 +55,11 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// How much further in a town castle's curtain stands from its block for the moat to fit (ft).
+    /// How much further in a town castle's curtain stands from its block for the moat to fit (ft):
+    /// its width and a wet moat's bank (dry or wet, it is not known yet; a dry ditch's outer bank
+    /// then stands a few feet short of the street).
     pub fn room(self) -> f64 {
-        self.width
+        self.width + BOUND_BANK
     }
 }
 
@@ -128,8 +130,15 @@ impl Moat {
     /// Where `p` lies across the moat, if by it (outside the curtain, off the causeways, within its
     /// bound, beside a side it runs along, within a square of it).
     pub fn spot(&self, p: P) -> Option<Spot> {
+        self.spot_by(p, 5.0, true)
+    }
+
+    /// `spot`, as far as `reach` ft off the moat; `kept` false: also past its bound and inside the
+    /// curtain (ft short of it less than 0: where the battlemap's water's edge reaches).
+    pub(crate) fn spot_by(&self, p: P, reach: f64, kept: bool) -> Option<Spot> {
         let r = self.width + BERM + 20.0;
-        if p[0] < self.bbox[0] - 6.0 || p[1] < self.bbox[1] - 6.0 || p[0] > self.bbox[2] + 6.0 || p[1] > self.bbox[3] + 6.0 || contains(&self.ring, p) {
+        let within = contains(&self.ring, p);
+        if p[0] < self.bbox[0] - 6.0 || p[1] < self.bbox[1] - 6.0 || p[0] > self.bbox[2] + 6.0 || p[1] > self.bbox[3] + 6.0 || (kept && within) {
             return None;
         }
         let n = self.ring.len();
@@ -144,17 +153,18 @@ impl Moat {
             return None;
         }
         let tower = self.towers.iter().map(|&(t, tr)| dist(p, t) - tr - TOWER_BERM).fold(f64::MAX, f64::min);
-        let inner = (d - BERM).min(tower);
+        let inner = (if within { -d } else { d } - BERM).min(tower);
         let mut outer = self.width - inner;
         if !self.bound.is_empty() {
-            if !contains(&self.bound, p) {
+            let past = !contains(&self.bound, p);
+            if kept && past {
                 return None;
             }
             let m = self.bound.len();
             let edge = (0..m).map(|k| seg_dist(p, self.bound[k], self.bound[(k + 1) % m])).fold(f64::MAX, f64::min);
-            outer = outer.min(edge - self.bound_bank());
+            outer = outer.min(if past { -edge } else { edge } - self.bound_bank());
         }
-        if inner < -5.0 || outer < -5.0 || self.causeways.iter().any(|&(a, b, hw)| seg_dist(p, a, b) <= hw) {
+        if inner < -reach || outer < -reach || self.causeways.iter().any(|&(a, b, hw)| seg_dist(p, a, b) <= hw) {
             return None;
         }
         Some(Spot { inner, outer })
@@ -167,16 +177,29 @@ impl Moat {
     }
 
     /// A dry ditch's banks along their tops (the inked edges of its pieces, its outer bank left
-    /// out), as segments; a wet moat's none.
-    pub fn bank_lines(&self) -> Vec<(P, P)> {
+    /// out), as segments, each with the way down into the ditch (unit; none where neither side is
+    /// its floor) and whether its outer bank lies behind it; a wet moat's none.
+    pub fn bank_lines(&self) -> Vec<(P, P, P, bool)> {
         if self.wet {
             return Vec::new();
         }
+        let floor = |q: P| self.spot(q).is_some_and(|s| s.inside() && s.outer >= BANK_FT && !self.bridge.covers(q));
         let (pieces, inks) = plan_pieces(self, self.width - BANK_FT);
         let mut out = Vec::new();
         for (pc, ink) in pieces.iter().zip(inks) {
             for e in (0..pc.len()).filter(|&e| e >= 8 || ink & (1 << e) != 0) {
-                out.push((pc[e], pc[(e + 1) % pc.len()]));
+                let (a, z) = (pc[e], pc[(e + 1) % pc.len()]);
+                let l = dist(a, z).max(1e-9);
+                let (mid, n) = (lerp(a, z, 0.5), [(a[1] - z[1]) / l, (z[0] - a[0]) / l]);
+                let down = if floor(add(mid, mul(n, 1.5))) {
+                    n
+                } else if floor(add(mid, mul(n, -1.5))) {
+                    mul(n, -1.0)
+                } else {
+                    [0.0, 0.0]
+                };
+                let bank = self.spot(add(mid, mul(down, -1.5))).is_some_and(|s| s.inside());
+                out.push((a, z, down, bank));
             }
         }
         out
@@ -238,7 +261,7 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
     let towers: Vec<(P, f64)> = l
         .towers
         .iter()
-        .map(|t| (*t, 11.0 * if l.square_tower(*t).is_some() { std::f64::consts::SQRT_2 } else { 1.0 }))
+        .map(|t| (*t, if l.square_tower(*t).is_some() { SQUARE_TOWER_R } else { 11.0 }))
         .chain(l.gate_towers.iter().map(|t| (*t, 15.0)))
         .filter(|&(t, _)| (0..n).any(|k| seg_dist(t, ring[k], ring[(k + 1) % n]) <= 4.0))
         .collect();

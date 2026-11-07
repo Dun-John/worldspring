@@ -866,12 +866,11 @@ export class BattlemapLayer {
       } else if (s.kind === 7) {
         drawFerry(bridgeG, s);
         continue;
-      } else if (s.kind === 19) {
-        drawDitchBank(bridgeG, s);
-        continue;
       } else continue;
       deckGrid(gridG, s);
     }
+    // (A dry ditch's sides, then the inked tops of its banks over them all.)
+    for (const ink of [false, true]) for (const s of c.shapes) if (s.kind === 19) drawDitchBank(bridgeG, s, ink);
     const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12) || s.kind === 18));
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1));
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel

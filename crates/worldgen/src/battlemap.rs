@@ -504,7 +504,8 @@ pub enum ShapeKind {
     /// A castle's drawbridge over its moat (`town::moat::Drawbridge`): the gate's middle, the far
     /// end, then `[wet, 0]` (1 over water, 0 over a dry ditch); size is its width (squares).
     Drawbridge = 18,
-    /// A dry ditch's bank, inked along its top: the two ends of a stretch of it.
+    /// A dry ditch's bank, inked along its top: the two ends of a stretch of it, the way down into
+    /// the ditch (a unit vector; `[0, 0]` none), then `[bank, 0]` (1: its outer bank behind it).
     DitchBank = 19,
 }
 
@@ -1175,9 +1176,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         // A dry ditch's two banks inked along their tops (by the chunk holding each stretch's
         // middle).
-        for (a, z) in m.bank_lines() {
+        for (a, z, down, bank) in m.bank_lines() {
             if owns(crate::town::geom::lerp(a, z, 0.5)) {
-                shapes.push(VectorShape { kind: ShapeKind::DitchBank, size: 0.0, pts: vec![local(&a), local(&z)] });
+                shapes.push(VectorShape { kind: ShapeKind::DitchBank, size: 0.0, pts: vec![local(&a), local(&z), [down[0] as f32, down[1] as f32], [bank as u8 as f32, 0.0]] });
             }
         }
     }
@@ -2945,6 +2946,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
         }
     }
+    // Nothing generated grows or stands on a dry ditch's floor (its sides and floor kept clear to read).
+    chunk.objects.retain(|o| !dug.ditch[((o.y.max(0.0) as usize).min(SQ - 1) + 1) * HS + (o.x.max(0.0) as usize).min(SQ - 1) + 1]);
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);
     for k in 0..n {
