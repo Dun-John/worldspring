@@ -48,10 +48,12 @@ export async function saveSession(world: string, state: PlayState): Promise<void
   }
 }
 
-/** Store a token picture; returns its id. */
-export async function putImage(picture: Blob): Promise<string> {
+/** Store a token picture; returns its id. With `id` (a picture copied from the world's
+ * assets, `img-a-<asset>`): stored under it, once. */
+export async function putImage(picture: Blob, id?: string): Promise<string> {
+  if (id && (await hasImage(id))) return id;
   const blob = await fitPicture(picture);
-  const id = `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  id ??= `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   await run('images', 'readwrite', (st) => st.put(blob, id));
   return id;
 }
@@ -61,5 +63,14 @@ export async function getImage(id: string): Promise<Blob | null> {
     return (await run<Blob | undefined>('images', 'readonly', (st) => st.get(id))) ?? null;
   } catch {
     return null;
+  }
+}
+
+/** A picture is stored under this id. */
+export async function hasImage(id: string): Promise<boolean> {
+  try {
+    return (await run<number>('images', 'readonly', (st) => st.count(id))) > 0;
+  } catch {
+    return false;
   }
 }

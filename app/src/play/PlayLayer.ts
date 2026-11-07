@@ -82,6 +82,14 @@ export class PlayLayer {
   private draftKey = '';
   private readonly marks = new Graphics();
   private lastFrame = performance.now();
+  /** Screen-space play marks (labels, ruler text and lines, pings) scaled up for a table's TV:
+   * the players' window `clamp(innerHeight / 720, 1, 2.5)`, the DM's 1. */
+  tableScale = 1;
+  /** The scale the label styles were last set for. */
+  private styledScale = 1;
+  private readonly onResize = () => {
+    this.tableScale = Math.max(1, Math.min(2.5, innerHeight / 720));
+  };
 
   constructor(
     private readonly view: MapView,
@@ -93,6 +101,10 @@ export class PlayLayer {
     this.over.addChild(this.fogSprite, this.ruler, this.draft, this.rulerText, this.marks);
     view.playUnder.addChild(this.under);
     view.playOver.addChild(this.over);
+    if (ctl.role === 'player') {
+      this.onResize();
+      window.addEventListener('resize', this.onResize);
+    }
   }
 
   /** Fog chunks changed (`loc|cx,cy`). */
@@ -106,6 +118,7 @@ export class PlayLayer {
   }
 
   destroy() {
+    window.removeEventListener('resize', this.onResize);
     this.under.destroy({ children: true });
     this.over.destroy({ children: true });
     for (const f of this.fogChunks.values()) f.tex.destroy(true);
@@ -125,6 +138,13 @@ export class PlayLayer {
     if (!shown || !place) return;
     const loc = place.loc;
     const player = ctl.role === 'player';
+    const ts = this.tableScale;
+    if (ts !== this.styledScale) {
+      // (Only when the window's size changes: every label is drawn again once.)
+      this.styledScale = ts;
+      scaleStyles(ts);
+      this.rulerKey = '#';
+    }
     const s = ctl.state;
     const settings = settingsOf(s, loc);
     const pxPerSq = 5 * cam.ppf;
@@ -209,7 +229,7 @@ export class PlayLayer {
       v.c.scale.set(scale);
       // Inside a building seen from outside: the DM's faint marker on the roof.
       v.c.alpha = where === 'inside' && !ctl.dragging.has(t.id) ? 0.4 : t.hidden ? 0.55 : 1;
-      v.label.position.set(sx, sy + (t.size * pxPerSq) / 2 + 2);
+      v.label.position.set(sx, sy + (t.size * pxPerSq) / 2 + 2 * ts);
       v.label.visible = pxPerSq >= 22 && !!v.label.text && where !== 'inside';
       v.c.visible = pxPerSq >= 2;
     }
@@ -234,20 +254,20 @@ export class PlayLayer {
         // A straight line between two points, drawn on screen (it may span the continent).
         const [ax, ay] = at(r.a[0], r.a[1]);
         const [bx, by] = at(r.b[0], r.b[1]);
-        this.ruler.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 5, color: INK, cap: 'round' });
-        this.ruler.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 2.5, color: 0xfacc15, cap: 'round' });
-        this.ruler.circle(ax, ay, 5).fill(0xfacc15).stroke({ width: 2, color: INK });
-        this.ruler.circle(bx, by, 5).fill(0xfacc15).stroke({ width: 2, color: INK });
+        this.ruler.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 5 * ts, color: INK, cap: 'round' });
+        this.ruler.moveTo(ax, ay).lineTo(bx, by).stroke({ width: 2.5 * ts, color: 0xfacc15, cap: 'round' });
+        this.ruler.circle(ax, ay, 5 * ts).fill(0xfacc15).stroke({ width: 2 * ts, color: INK });
+        this.ruler.circle(bx, by, 5 * ts).fill(0xfacc15).stroke({ width: 2 * ts, color: INK });
       } else if (r) {
         const m = ctl.measureRuler(r);
         const [ox, oy] = r.a;
         for (const [i, j] of m.squares) this.ruler.rect((i - ox) * TPX, (j - oy) * TPX, TPX, TPX);
         this.ruler.fill({ color: 0xfacc15, alpha: 0.22 });
         const [ex, ey] = [(r.b[0] - ox) * TPX, (r.b[1] - oy) * TPX];
-        this.ruler.moveTo(TPX / 2, TPX / 2).lineTo(ex + TPX / 2, ey + TPX / 2).stroke({ width: 9, color: INK, cap: 'round' });
-        this.ruler.moveTo(TPX / 2, TPX / 2).lineTo(ex + TPX / 2, ey + TPX / 2).stroke({ width: 5, color: 0xfacc15, cap: 'round' });
-        this.ruler.circle(TPX / 2, TPX / 2, 9).fill(0xfacc15).stroke({ width: 3, color: INK });
-        this.ruler.circle(ex + TPX / 2, ey + TPX / 2, 9).fill(0xfacc15).stroke({ width: 3, color: INK });
+        this.ruler.moveTo(TPX / 2, TPX / 2).lineTo(ex + TPX / 2, ey + TPX / 2).stroke({ width: 9 * ts, color: INK, cap: 'round' });
+        this.ruler.moveTo(TPX / 2, TPX / 2).lineTo(ex + TPX / 2, ey + TPX / 2).stroke({ width: 5 * ts, color: 0xfacc15, cap: 'round' });
+        this.ruler.circle(TPX / 2, TPX / 2, 9 * ts).fill(0xfacc15).stroke({ width: 3 * ts, color: INK });
+        this.ruler.circle(ex + TPX / 2, ey + TPX / 2, 9 * ts).fill(0xfacc15).stroke({ width: 3 * ts, color: INK });
       }
     }
     if (r) {
@@ -265,7 +285,7 @@ export class PlayLayer {
         this.ruler.scale.set(scale);
       }
       const [tx, ty] = r.free ? at(r.b[0], r.b[1]) : at(r.b[0] + 0.5, r.b[1] + 0.5);
-      this.rulerText.position.set(tx + 12, ty - 10);
+      this.rulerText.position.set(tx + 12 * ts, ty - 10 * ts);
     } else if (!ctl.draftShape && this.rulerText.text) {
       this.rulerText.text = '';
     }
@@ -286,7 +306,7 @@ export class PlayLayer {
       this.draft.scale.set(scale);
       if (!r) {
         const [tx, ty] = at(d.x + d.dx, d.y + d.dy);
-        this.rulerText.position.set(tx + 12, ty - 10);
+        this.rulerText.position.set(tx + 12 * ts, ty - 10 * ts);
       }
     }
 
@@ -302,9 +322,9 @@ export class PlayLayer {
       const [sx, sy] = at(p.x, p.y);
       for (const k of [0, 0.33]) {
         const a = (age + k) % 1;
-        this.marks.circle(sx, sy, 8 + a * 46).stroke({ width: 4, color: p.color, alpha: 1 - a });
+        this.marks.circle(sx, sy, (8 + a * 46) * ts).stroke({ width: 4 * ts, color: p.color, alpha: 1 - a });
       }
-      this.marks.circle(sx, sy, 6).fill({ color: p.color, alpha: 1 - age });
+      this.marks.circle(sx, sy, 6 * ts).fill({ color: p.color, alpha: 1 - age });
     }
     // The selection box being dragged out.
     if (ctl.box) {
@@ -524,4 +544,15 @@ function drawShape(sh: Shape, into?: Graphics): Graphics {
 function labelSpot(sh: Shape): [number, number] {
   if (sh.kind === 'circle') return [sh.x, sh.y];
   return [sh.x + sh.dx / 2, sh.y + sh.dy / 2];
+}
+
+/** The screen-space label styles at a table scale (labels, shape sizes, the ruler's text). */
+function scaleStyles(ts: number) {
+  labelStyle.fontSize = 13 * ts;
+  labelStyle.stroke = { color: '#1d1a14', width: 3 * ts, join: 'round' };
+  shapeStyle.fontSize = 13 * ts;
+  shapeStyle.stroke = { color: '#1d1a14', width: 3 * ts, join: 'round' };
+  rulerStyle.fontSize = 15 * ts;
+  rulerStyle.lineHeight = 21 * ts;
+  rulerStyle.stroke = { color: '#1d1a14', width: 4 * ts, join: 'round' };
 }

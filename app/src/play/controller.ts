@@ -11,7 +11,7 @@ import { SECTION_N, type Sewers } from '../render/Sewers';
 import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scene, type Vision } from './channel';
 import { PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
-import { loadSession, putImage, saveSession } from './session';
+import { hasImage, loadSession, putImage, saveSession } from './session';
 import { apply, emptyState, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
 import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
 
@@ -151,6 +151,13 @@ export class PlayController implements PointerTool {
   onChange: () => void = () => {};
   /** Something went wrong that the DM should hear about (a picture refused). */
   onError: (text: string) => void = () => {};
+  /** The DM right-pressed a token: its menu for these tokens at a screen point (null: closed,
+   * the map moved). */
+  onTokenMenu: (m: { ids: string[]; x: number; y: number } | null) => void = () => {};
+  /** The picture picker for these tokens (the menu's and the editor's Picture…). */
+  onPickPicture: (ids: string[]) => void = () => {};
+  /** Where the camera was when the token menu opened (it closes once the map moves). */
+  private menuCam: [number, number, number] | null = null;
   /** Player window: show this world (resolves once it is loaded). */
   onWorld: (w: WorldFile) => Promise<void> = async () => {};
   /** Player window: the world's edits changed. */
@@ -627,11 +634,11 @@ export class PlayController implements PointerTool {
 
   /** A new token at a world point (or the middle of the view); `as`: a character with this
    * name and picture (an NPC from the notebook) rather than the token being drafted. */
-  addToken(wx?: number, wy?: number, as?: { name: string; image?: string }): Token | null {
+  addToken(wx?: number, wy?: number, as?: { name: string; image?: string; role?: TokenRole }): Token | null {
     const place = this.place;
     if (!place) return null;
     const [gx, gy] = place.toGrid(wx ?? this.view.cam.cx, wy ?? this.view.cam.cy);
-    const d = as ? { ...this.draft, name: as.name, kind: 'character' as TokenKind, role: 'npc' as TokenRole } : this.draft;
+    const d = as ? { ...this.draft, name: as.name, kind: 'character' as TokenKind, role: as.role ?? ('npc' as TokenRole) } : this.draft;
     const t: Token = { id: newId(), loc: place.loc, x: 0, y: 0, name: this.numbered(d.name.trim() || 'Token'), kind: d.kind, size: d.kind === 'light' ? 1 : d.size, color: d.color };
     if (as?.image) t.image = as.image;
     if (d.kind === 'light') t.light = 4;
@@ -760,6 +767,76 @@ export class PlayController implements PointerTool {
     this.updateToken(id, { image });
   }
 
+  /** The token menu is closed (or the map moved under it). */
+  closeTokenMenu() {
+    if (!this.menuCam) return;
+    this.menuCam = null;
+    this.onTokenMenu(null);
+  }
+
+  /** A token's role (the menu's and the editor's control): Light is a kind of its own. */
+  setTokenRole(id: string, r: TokenRole | 'light') {
+    const t = this.state.tokens[id];
+    if (!t) return;
+    if (r === 'light') this.updateToken(id, { kind: 'light', light: t.light || 4 });
+    else this.updateToken(id, { kind: 'character', role: r, light: t.kind === 'light' ? undefined : t.light });
+  }
+
+  /** These tokens' picture: one stored in this session (by id), or none. */
+  setTokensImage(ids: string[], image: string | null) {
+    if (image) this.layer.imageChanged(image);
+    for (const id of ids) this.updateToken(id, { image: image ?? undefined });
+  }
+
+  /** A picture of the world's (an NPC portrait, an uploaded sprite) as a session picture:
+   * copied into the session's store once, as `img-a-<asset>`; null if it could not be. */
+  async assetImage(asset: string, load: () => Promise<Blob | null>): Promise<string | null> {
+    const id = `img-a-${asset}`;
+    if (await hasImage(id)) return id;
+    try {
+      const blob = await load();
+      if (!blob) throw new Error('That picture is no longer in this world');
+      return await putImage(blob, id);
+    } catch (e) {
+      this.onError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }
+
+  /** Picture files dropped on the map (world ft): on a token, the first is its picture; else
+   * each is a new token (in a row, a square apart), its role the draft's (Light: NPC), named
+   * after its file. */
+  async dropImages(files: File[], wx: number, wy: number) {
+    const place = this.place;
+    if (this.role !== 'dm' || !this.on || !place) return;
+    files = files.filter((f) => f.type.startsWith('image/'));
+    if (!files.length) return;
+    const hit = this.tokenAt(wx, wy);
+    if (hit) return this.setTokenImage(hit.t.id, files[0]);
+    const role: TokenRole = this.draft.kind === 'light' ? 'npc' : this.draft.role;
+    const step = Math.max(1, this.draft.size);
+    const [gx, gy] = place.toGrid(wx, wy);
+    const made: string[] = [];
+    for (const [i, f] of files.entries()) {
+      let image: string;
+      try {
+        image = await putImage(f);
+      } catch (e) {
+        this.onError(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
+        continue;
+      }
+      this.layer.imageChanged(image);
+      const [x, y] = place.toWorld(gx + i * step, gy);
+      const t = this.addToken(x, y, { name: fileTitle(f.name), image, role });
+      if (t) made.push(t.id);
+    }
+    if (made.length > 1) {
+      this.selection.clear();
+      for (const id of made) this.selection.add(id);
+      this.onChange();
+    }
+  }
+
   /** Move a token in a building to another of its levels (onto the floor nearest where it
    * stands; stairs line up between floors). */
   tokenToLevel(id: string, level: number) {
@@ -884,7 +961,7 @@ export class PlayController implements PointerTool {
       return true;
     }
     if (this.role === 'player' || !this.on) return false;
-    if (e.button === 2) return this.rightClick(place, gx, gy);
+    if (e.button === 2) return this.rightClick(place, gx, gy, x, y, e);
     if (e.button !== 0) return false;
     // The Tokens tool picks up a token it is pressed on (as Select does); open ground places one.
     const pick = this.tool === 'token' ? this.tokenAt(x, y) : null;
@@ -1158,8 +1235,17 @@ export class PlayController implements PointerTool {
     this.brush = { x: gx, y: gy, r: this.fogRadius, reveal: this.fogReveal };
   }
 
-  /** Right button: a secret door found (or not), a shape taken away. */
-  private rightClick(place: Place, gx: number, gy: number): boolean {
+  /** Right button: a token's menu, a secret door found (or not), a shape taken away. */
+  private rightClick(place: Place, gx: number, gy: number, wx: number, wy: number, e: PointerEvent): boolean {
+    const hit = this.tokenAt(wx, wy);
+    if (hit) {
+      // On a token of the selection: the menu is for all of them; else just this one.
+      if (!this.selection.has(hit.t.id)) this.select(hit.t.id);
+      const cam = this.view.cam;
+      this.menuCam = [cam.cx, cam.cy, cam.zoom];
+      this.onTokenMenu({ ids: [...this.selection], x: e.clientX, y: e.clientY });
+      return true;
+    }
     const door = this.doorAt(place, gx, gy);
     const dd = door ? door.sec.it.levels[door.sec.level].doors[door.k] : null;
     if (door && dd?.lock) {
@@ -1371,6 +1457,11 @@ export class PlayController implements PointerTool {
 
   private frame(now: number) {
     this.pings = this.pings.filter((p) => now - p.t < 1700);
+    if (this.menuCam) {
+      const cam = this.view.cam;
+      const [cx, cy, zoom] = this.menuCam;
+      if (cam.cx !== cx || cam.cy !== cy || cam.zoom !== zoom) this.closeTokenMenu();
+    }
     const place = this.place;
     const loc = place?.loc ?? '';
     if (this.role === 'dm') {
@@ -1689,4 +1780,11 @@ function forPlayers(w: WorldFile): WorldFile {
   if (!w.edits) return w;
   const { notes: _, npcs: __, plots: ___, ...edits } = w.edits;
   return { ...w, edits };
+}
+
+/** A token's name from a picture's file name: no extension, `_` and `-` as spaces, the first
+ * letter capitalised. */
+function fileTitle(file: string): string {
+  const s = file.replace(/\.[^.]*$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : 'Token';
 }

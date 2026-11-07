@@ -71,8 +71,7 @@
     setDraft(r === 'light' ? { kind: 'light', name } : { kind: 'character', role: r, name });
   }
   function setRole(t: Token, r: TokenRole | 'light') {
-    if (r === 'light') patch(t, { kind: 'light', light: t.light || 4 });
-    else patch(t, { kind: 'character', role: r, light: undefined });
+    play.setTokenRole(t.id, r);
   }
   const SHAPES: [ShapeKind, string][] = [
     ['circle', 'Circle'],
@@ -236,7 +235,7 @@
         </div>
         <div class="ws-row">
           {#if t.kind === 'character'}
-            <label class="ws-btn file"><Icon name="image" size={16} /> Picture… <input type="file" accept="image/*" onchange={(e) => void play.setTokenImage(t.id, (e.target as HTMLInputElement).files?.[0] ?? null)} /></label>
+            <button class="ws-btn" onclick={() => play.onPickPicture([t.id])}><Icon name="image" size={16} /> Picture…</button>
             {#if t.image}<button class="ws-btn quiet" onclick={() => void play.setTokenImage(t.id, null)}>No picture</button>{/if}
           {/if}
           <span class="grow"></span>
@@ -388,16 +387,6 @@
   }
   .num {
     width: 60px;
-  }
-  .file {
-    position: relative;
-    overflow: hidden;
-  }
-  .file input {
-    position: absolute;
-    inset: 0;
-    opacity: 0;
-    cursor: pointer;
   }
   .warn {
     color: #8b2e2e;

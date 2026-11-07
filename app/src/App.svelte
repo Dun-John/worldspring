@@ -9,7 +9,7 @@
   import { buildKeymap } from './ui/shell/keymap';
   import { createKeyHandler, focusKind } from './ui/shell/shortcuts';
   import { layoutAt, layoutsIn, layoutTargets, madeCount, madeOn, matchLayouts, reanchor, remapLayouts, restorePinned, setAsideRemoved, upgradeEdits, type MadeOn } from './editor/reanchor';
-  import { loadSession } from './play/session';
+  import { getImage, loadSession, putImage } from './play/session';
   import { hasSession } from './play/state';
   import type { PreviewReply, PreviewRequest } from './editor/preview.worker';
   import { MapView, type HudState, type InteriorState, type PointerTool } from './render/MapView';
@@ -60,6 +60,8 @@
   import { carrySession, sessionLayouts, tokensIn, type Carried } from './play/carry';
   import { PlayController } from './play/controller';
   import PlayPanel from './play/PlayPanel.svelte';
+  import TokenMenu from './play/TokenMenu.svelte';
+  import PicturePicker, { type PictureItem } from './play/PicturePicker.svelte';
   import { describe, tidy, type Step } from './sync/history';
   import { applyOps, changedKeys, diffEdits, EDIT_FIELDS, keepPlaces, shiftLevels, type EditOp } from './sync/ops';
   import { breadcrumbs, frameSize, hitName, kindLabel, listedName, removedKind, setAside, settlementAt, SETTLEMENT_KINDS, SITE_KINDS, unnamed, zoomFor, type BuildingHit, type Crumb, type CrumbSites, type Selection } from './ui/gazetteer';
@@ -127,6 +129,74 @@
   let playVersion = $state(0);
   play.onChange = () => playVersion++;
   play.onError = (t) => toast(t);
+  /** The token menu (a right press on a token) and the picture picker, while open. */
+  let tokenMenu = $state<{ ids: string[]; x: number; y: number } | null>(null);
+  let picker = $state<{ ids: string[]; items: PictureItem[]; current: string | null } | null>(null);
+  play.onTokenMenu = (m) => (tokenMenu = m);
+  play.onPickPicture = (ids) => openPicker(ids);
+
+  /** The picture picker for these tokens: the world's NPC portraits and uploaded sprites, and
+   * the pictures already on tokens in this session. */
+  function openPicker(ids: string[]) {
+    closeTokenMenu();
+    const items: PictureItem[] = [];
+    const assets = new Set<string>();
+    const fromAsset = (asset: string, label: string, group: string) => {
+      if (assets.has(asset)) return;
+      assets.add(asset);
+      items.push({ key: `a:${asset}`, label, group, load: async () => (await getAsset(asset))?.blob ?? null });
+    };
+    for (const n of Object.values(npcs).sort((a, b) => a.name.localeCompare(b.name))) if (n.portrait) fromAsset(n.portrait, n.name, 'People in your notebook');
+    for (const [asset, m] of Object.entries(edits.sprites ?? {})) fromAsset(asset, m.name, 'Uploaded pictures');
+    const inPlay = new Map<string, string>();
+    for (const t of Object.values(play.state.tokens)) if (t.image && !inPlay.has(t.image) && !assets.has(t.image.replace(/^img-a-/, ''))) inPlay.set(t.image, t.name);
+    for (const [img, name] of inPlay) items.push({ key: `i:${img}`, label: name, group: 'On tokens in play', load: () => getImage(img) });
+    const image = ids.length === 1 ? play.state.tokens[ids[0]]?.image : undefined;
+    const current = !image ? null : image.startsWith('img-a-') ? `a:${image.slice(6)}` : `i:${image}`;
+    picker = { ids, items, current };
+  }
+
+  /** The picker's choice: a picture of the world's (copied into the session once), one in
+   * play, a file, or none. */
+  async function pickPicture(choice: { key: string } | { file: File } | null) {
+    const ids = picker?.ids ?? [];
+    picker = null;
+    if (!choice) return play.setTokensImage(ids, null);
+    let image: string | null;
+    if ('file' in choice) {
+      try {
+        image = await putImage(choice.file);
+      } catch (e) {
+        return play.onError(e instanceof Error ? e.message : String(e));
+      }
+    } else if (choice.key.startsWith('a:')) {
+      const asset = choice.key.slice(2);
+      image = await play.assetImage(asset, async () => (await getAsset(asset))?.blob ?? null);
+    } else image = choice.key.slice(2);
+    if (image) play.setTokensImage(ids, image);
+  }
+
+  function closeTokenMenu() {
+    play.closeTokenMenu();
+    tokenMenu = null;
+  }
+
+  /** Picture files dropped on the map while playing: tokens (or a token's picture). */
+  function mapDragOver(e: DragEvent) {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    // (Never let the browser open the file instead of the page.)
+    e.preventDefault();
+    e.dataTransfer.dropEffect = playOn ? 'copy' : 'none';
+  }
+  function mapDrop(e: DragEvent) {
+    if (!e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    if (!playOn) return;
+    const files = [...e.dataTransfer.files];
+    if (!files.some((f) => f.type.startsWith('image/'))) return;
+    const r = container.getBoundingClientRect();
+    void play.dropImages(files, ...view.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top));
+  }
 
   /** A play session: tokens, fog and doors are live (here and in the players' window) whatever
    * panel is open, until Stop playing. */
@@ -3053,6 +3123,7 @@
     escape: [
       () => (shell.help ? ((shell.help = false), true) : false),
       () => (shell.menu || moves ? ((shell.menu = null), (moves = null), true) : false),
+      () => (picker ? ((picker = null), true) : tokenMenu ? (closeTokenMenu(), true) : false),
       () => (shell.ask ? (void answer('keep'), true) : false),
       () => {
         const el = document.activeElement as HTMLElement | null;
@@ -3172,7 +3243,8 @@
   });
 </script>
 
-<div class="map" bind:this={container} onpointerdowncapture={mapTouched}></div>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="map" bind:this={container} onpointerdowncapture={mapTouched} ondragover={mapDragOver} ondrop={mapDrop}></div>
 
 {#snippet askBar()}
   {#if shell.ask}<Confirm ask={shell.ask} blocked={designBlocked} seconds={genSeconds} onKeep={() => void answer('keep')} onDrop={() => void answer('drop')} onCommit={() => void answer('commit')} onSave={() => void answer('save')} />{/if}
@@ -3712,6 +3784,12 @@
   {/if}
   {#if moves && inside}
     <MovesMenu moves={moves.list} x={moves.x} y={moves.y} onMove={(m) => void view.move(m)} onClose={() => (moves = null)} />
+  {/if}
+  {#if tokenMenu && playOn}
+    <TokenMenu {play} version={playVersion} ids={tokenMenu.ids} x={tokenMenu.x} y={tokenMenu.y} onPicture={(ids) => openPicker(ids)} onClose={closeTokenMenu} />
+  {/if}
+  {#if picker}
+    <PicturePicker items={picker.items} current={picker.current} onPick={(key) => void pickPicture({ key })} onFile={(file) => void pickPicture({ file })} onNone={() => void pickPicture(null)} onClose={() => (picker = null)} />
   {/if}
 {/if}
 
