@@ -290,10 +290,12 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
   }
   const data = new Uint8Array(n * 4);
   const shown = groundUnder(surface, raised);
+  const paveEdge = pavingEdges(shown);
   for (let k = 0; k < n; k++) {
     data[k * 4] = shown[k];
-    // (Bit 64: a plaza or market square, `URBAN_PLAZA`, whose cobbles the ground lays in fans.)
-    data[k * 4 + 1] = edges[k] | (raised && raised[k * 2 + 1] === 3 ? 64 : 0);
+    // (Bit 64: a plaza or market square, `URBAN_PLAZA`, whose cobbles the ground lays in fans;
+    // bit 128: by the paving's edge, see `pavingEdges`.)
+    data[k * 4 + 1] = edges[k] | (raised && raised[k * 2 + 1] === 3 ? 64 : 0) | paveEdge[k];
     data[k * 4 + 2] = tier[k] & 255;
     // Building id (1..255, wrapping) for per-building roof colour and wall edges.
     data[k * 4 + 3] = building[k] ? 1 + ((building[k] - 1) % 255) : 0;
@@ -342,6 +344,31 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
 
 /** Surface 17: under a building. */
 const UNDER_BUILDING = 17;
+
+/** 128 for each square with both paving (cobbles 14, dressed stone 19) and natural ground (0-9, 13,
+ * 18) among the 3 x 3 round it (clamped at the chunk's sides, as `ground.frag`'s `dataAt`), else 0.
+ * Every lookup `ground.frag`'s soft paving edge depends on lies within a square of the pixel's own,
+ * so off these squares that block changes nothing and the shader skips it (it is a good part of
+ * the ground's GPU time in towns). */
+function pavingEdges(shown: Uint8Array): Uint8Array {
+  const out = new Uint8Array(SQ * SQ);
+  for (let y = 0; y < SQ; y++) {
+    for (let x = 0; x < SQ; x++) {
+      let paved = false;
+      let natural = false;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = Math.min(SQ - 1, Math.max(0, y + dy));
+        for (let dx = -1; dx <= 1; dx++) {
+          const s = shown[yy * SQ + Math.min(SQ - 1, Math.max(0, x + dx))];
+          if (s === 14 || s === 19) paved = true;
+          else if (s <= 9 || s === 13 || s === 18) natural = true;
+        }
+      }
+      if (paved && natural) out[y * SQ + x] = 128;
+    }
+  }
+  return out;
+}
 
 /**
  * The surfaces the ground is drawn with: a square under a building, a wall or a tower shows the

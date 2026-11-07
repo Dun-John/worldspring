@@ -413,9 +413,11 @@ void main() {
     // Paving's edges with the ground: soft and hand-wobbled from the 2 x 2 squares' bilinear
     // paving (as a gravel path's), not the warped lookup's square steps; between the paving and
     // a natural ground only, every other boundary as it was.
+    // (Only on squares by the paving's edge, bit 128: everywhere else this changes nothing.)
     float pave = -1.0;
     int nat = 0;
-    if (!onRoad && uPaved > 0.5 && gravel < 0.0 && (surf <= 9 || surf == 13 || surf == 14 || surf == 18)) {
+    vec4 d = dataAt(sq);
+    if (!onRoad && uPaved > 0.5 && (int(d.g + 0.5) & 128) != 0 && gravel < 0.0 && (surf <= 9 || surf == 13 || surf == 14 || surf == 18)) {
         vec2 g = q - 0.5 + warp * 0.3;
         ivec2 gi = ivec2(floor(g));
         vec2 fg = g - floor(g);
@@ -452,7 +454,6 @@ void main() {
         }
     }
     vec2 f = fract(q);
-    vec4 d = dataAt(sq);
     float own = d.b;
     vec2 hw = heightsAt(q);
     float h = hw.x;
