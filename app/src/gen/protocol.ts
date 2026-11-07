@@ -861,7 +861,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 24 || kind === 25;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 24 || kind === 25 || kind === 26;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -909,11 +909,13 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         a = 0.7;
       } else if (kind === 14) rgb = [0.33, 0.46, 0.26];
       else if (kind === 15) rgb = [0.74, 0.5, 0.46];
-      // A castle's moat (`town::moat`): a wet one the rivers' water, a dry ditch a sunken band of
-      // darker earth; both inked along their banks (and their ends at a gap) by the edges in the
-      // ward's place (`Moat::inks`).
-      else if (kind === 24) rgb = [0.41, 0.53, 0.61];
-      else if (kind === 25) rgb = [0.56, 0.47, 0.35];
+      // A castle's moat (`town::moat`): a wet one water a shade deeper than the rivers' (its berm by
+      // the curtain left uninked, so a pale strip shows between them), a dry ditch a band of warm
+      // earth to its block's edge; inked along their banks (and their ends at a gap) by the edges
+      // in the ward's place (`Moat::inks`). Its drawbridge (26) a timber deck over the gap.
+      else if (kind === 24) rgb = [0.3, 0.45, 0.57];
+      else if (kind === 25) rgb = [0.6, 0.48, 0.33];
+      else if (kind === 26) rgb = [0.55, 0.4, 0.25];
       else if ((attr >>> 25) & 15) {
         // A keep's piece (`payload::pack_sites`): towers and the body's hall under slate, a wing or
         // forebuilding by its top (`town::keep_tops`): open battlements stone, a roof lead or slate; a

@@ -27,7 +27,9 @@ use super::geom::*;
 /// The moat's inner edge stands this far out from the curtain's line (ft): as far as the curtain's
 /// bound stands in from its block, so a town castle's moat reaches its block's edge.
 pub const BERM: f64 = 6.0;
-/// And this far clear of a tower's foot (ft).
+/// A wet moat's water keeps this far (ft) in from its bound (`Moat::bound_bank`).
+pub const BOUND_BANK: f64 = 5.0;
+/// Its inner edge stands this far clear of a tower's foot (ft).
 pub const TOWER_BERM: f64 = 2.0;
 /// Water lies within this far of the moat (ft) for it to be wet: a channel from it can feed the moat.
 const NEAR_FT: f64 = 480.0;
@@ -98,8 +100,8 @@ pub struct Moat {
     /// Roads over it on causeways (ends, half width).
     pub causeways: Vec<(P, P, f64)>,
     pub bridge: Drawbridge,
-    /// Its outline at plan zoom: convex pieces (its inner edge to the far bank, a dry ditch's bank
-    /// left out: side by side, round the corners and its towers), cut to `bound`, none where the
+    /// Its outline at plan zoom: convex pieces (its inner edge to its far edge, a dry ditch's bank
+    /// in it: side by side, round the corners and its towers), cut to `bound`, none where the
     /// drawbridge or a causeway crosses it (`plan_pieces`); and by piece, its inked edges (bit k
     /// the edge from corner k to k + 1; past the eighth, all inked).
     pub pieces: Vec<Vec<P>>,
@@ -150,12 +152,34 @@ impl Moat {
             }
             let m = self.bound.len();
             let edge = (0..m).map(|k| seg_dist(p, self.bound[k], self.bound[(k + 1) % m])).fold(f64::MAX, f64::min);
-            outer = outer.min(edge);
+            outer = outer.min(edge - self.bound_bank());
         }
         if inner < -5.0 || outer < -5.0 || self.causeways.iter().any(|&(a, b, hw)| seg_dist(p, a, b) <= hw) {
             return None;
         }
         Some(Spot { inner, outer })
+    }
+
+    /// How far (ft) it keeps in from its bound: a wet moat a square (a bank between its water and
+    /// the street, where the water's edge can follow its line), a dry ditch none (its own bank).
+    pub fn bound_bank(&self) -> f64 {
+        if self.wet { BOUND_BANK } else { 0.0 }
+    }
+
+    /// A dry ditch's banks along their tops (the inked edges of its pieces, its outer bank left
+    /// out), as segments; a wet moat's none.
+    pub fn bank_lines(&self) -> Vec<(P, P)> {
+        if self.wet {
+            return Vec::new();
+        }
+        let (pieces, inks) = plan_pieces(self, self.width - BANK_FT);
+        let mut out = Vec::new();
+        for (pc, ink) in pieces.iter().zip(inks) {
+            for e in (0..pc.len()).filter(|&e| e >= 8 || ink & (1 << e) != 0) {
+                out.push((pc[e], pc[(e + 1) % pc.len()]));
+            }
+        }
+        out
     }
 
     /// Moved by `by` (local to world).
@@ -278,7 +302,7 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
         }
     }
     moat.bridge.span = span;
-    (moat.pieces, moat.inks) = plan_pieces(&moat);
+    (moat.pieces, moat.inks) = plan_pieces(&moat, w);
     l.moats.push(moat);
 }
 
@@ -290,13 +314,12 @@ const PIECE_TURN: f64 = 0.25;
 /// A moat's plan pieces and their inked edges (`Moat::pieces`, `inks`): quads between rays out from
 /// the curtain's line (along each side it runs along, and round each outer corner between two),
 /// each from the moat's inner edge to its far bank as `spot` has them (`BERM` out, bent round a
-/// tower `TOWER_BERM` clear of its foot, the width beyond); none where the drawbridge or a causeway
+/// tower `TOWER_BERM` clear of its foot, `wide` beyond); none where the drawbridge or a causeway
 /// crosses it (found to the foot between the rays), so the road shows through. Quads on a straight
-/// run clear of towers are one. Its banks are inked, and its ends at a gap or where it stops, not
-/// the joins between its pieces.
-fn plan_pieces(m: &Moat) -> (Vec<Vec<P>>, Vec<u8>) {
+/// run clear of towers are one. Its banks are inked (a wet moat's far one only), and its ends at a
+/// gap or where it stops, not the joins between its pieces.
+fn plan_pieces(m: &Moat, wide: f64) -> (Vec<Vec<P>>, Vec<u8>) {
     let (ring, sides, n) = (&m.ring, &m.sides, m.ring.len());
-    let wide = m.width - if m.wet { 0.0 } else { BANK_FT };
     let out_of = |k: usize| {
         let (a, b) = (ring[k], ring[(k + 1) % n]);
         let u = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
@@ -416,7 +439,7 @@ fn plan_pieces(m: &Moat) -> (Vec<Vec<P>>, Vec<u8>) {
                     let (ea, eb) = (bound[e], bound[(e + 1) % mb]);
                     let u = mul(sub(eb, ea), 1.0 / dist(ea, eb).max(1e-9));
                     let on = if ccw { [u[1], -u[0]] } else { [-u[1], u[0]] };
-                    p = clip_plain(&p, on, dot(ea, on));
+                    p = clip_plain(&p, on, dot(ea, on) - m.bound_bank());
                     if p.len() < 3 {
                         break;
                     }
@@ -434,7 +457,10 @@ fn plan_pieces(m: &Moat) -> (Vec<Vec<P>>, Vec<u8>) {
                 for e in 0..p.len().min(8) {
                     let (x, y) = (p[e], p[(e + 1) % p.len()]);
                     let join = (both(x, y, q0, d0) && !ink0) || (both(x, y, q1, d1) && !ink1) || joins.iter().any(|&(q, d)| both(x, y, q, d));
-                    if !join {
+                    // (A wet moat's inner edge, by its berm, not inked: the berm then shows between
+                    // the water and the curtain's line.)
+                    let berm = m.wet && m.spot(lerp(x, y, 0.5)).is_some_and(|s| s.inner.abs() < 1.0);
+                    if !join && !berm {
                         mask |= 1 << e;
                     }
                 }

@@ -1179,6 +1179,33 @@ export function drawDrawbridge(g: Graphics, s: Shape) {
     g.circle(rx, ry, FT * 0.42).stroke({ width: 3, color: INK }).circle(rx, ry, FT * 0.42).stroke({ width: 1.4, color: IRON[1] });
   }
   g.poly(deck).stroke({ width: 2.6, color: INK, join: 'round' });
+  // Its landing on the far bank: a timber sill a little wider than the deck, its boards along it.
+  const sill = (FT * 2.5) / L;
+  const land = [...P(1, -1.15), ...P(1 + sill, -1.15), ...P(1 + sill, 1.15), ...P(1, 1.15)];
+  g.poly(land).fill(WOOD[0]);
+  for (const q of [-0.4, 0.4]) g.moveTo(...P(1 + sill * 0.08, q)).lineTo(...P(1 + sill * 0.92, q));
+  g.stroke({ width: 1.1, color: WOOD[2], alpha: 0.6 });
+  g.poly(land).stroke({ width: 2.2, color: INK, join: 'round' });
+}
+
+/**
+ * A dry ditch's bank along its top (`ShapeKind::DitchBank`: the two ends of a stretch), inked by
+ * hand: a line a little wavering, a shade of earth under it on the ditch's side.
+ */
+export function drawDitchBank(g: Graphics, s: Shape) {
+  const [ax, ay, bx, by] = s.pts;
+  const L = Math.hypot(bx - ax, by - ay);
+  if (!(L > 0)) return;
+  const rnd = rngAt(ax + bx, ay + by);
+  const [nx, ny] = [-(by - ay) / L, (bx - ax) / L];
+  const n = Math.max(1, Math.round(L / (FT * 3)));
+  g.moveTo(ax, ay);
+  for (let k = 1; k < n; k++) {
+    const t = k / n;
+    const w = (rnd() - 0.5) * FT * 0.35;
+    g.lineTo(ax + (bx - ax) * t + nx * w, ay + (by - ay) * t + ny * w);
+  }
+  g.lineTo(bx, by).stroke({ width: 2, color: INK, alpha: 0.75, cap: 'round', join: 'round' });
 }
 
 /** A gravel walk on a court's lawn (`ShapeKind::GravelWalk`: its rectangle's corners), drawn as a

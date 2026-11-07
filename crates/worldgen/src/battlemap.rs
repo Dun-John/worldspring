@@ -504,6 +504,8 @@ pub enum ShapeKind {
     /// A castle's drawbridge over its moat (`town::moat::Drawbridge`): the gate's middle, the far
     /// end, then `[wet, 0]` (1 over water, 0 over a dry ditch); size is its width (squares).
     Drawbridge = 18,
+    /// A dry ditch's bank, inked along its top: the two ends of a stretch of it.
+    DitchBank = 19,
 }
 
 /// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands
@@ -1164,12 +1166,19 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     // Castles' moats, dug before anything stands on the ground, and their drawbridges (v63 castles).
     let moats: Vec<crate::town::moat::Moat> = crate::town::layouts_near(world, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT]).iter().flat_map(|l| l.moats.clone()).collect();
-    let ditch_h = moat::dig(&moats, ox - SQUARE_FT, oy - SQUARE_FT, &mut hh, &mut hw, &mut road_h, &mut lift);
+    let dug = moat::dig(&moats, ox - SQUARE_FT, oy - SQUARE_FT, &mut hh, &mut hw, &mut road_h, &mut lift);
     for m in &moats {
         let b = &m.bridge;
         let far = crate::town::geom::add(b.at, crate::town::geom::mul(b.dir, b.span));
         if owns(crate::town::geom::lerp(b.at, far, 0.5)) {
             shapes.push(VectorShape { kind: ShapeKind::Drawbridge, size: (b.width / SQUARE_FT) as f32, pts: vec![local(&b.at), local(&far), [m.wet as u8 as f32, 0.0]] });
+        }
+        // A dry ditch's two banks inked along their tops (by the chunk holding each stretch's
+        // middle).
+        for (a, z) in m.bank_lines() {
+            if owns(crate::town::geom::lerp(a, z, 0.5)) {
+                shapes.push(VectorShape { kind: ShapeKind::DitchBank, size: 0.0, pts: vec![local(&a), local(&z)] });
+            }
         }
     }
     // Ground before anything is raised on it (walls stand on the ground, not on roofs).
@@ -2926,15 +2935,30 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     for k in 0..n {
         chunk.halo_height[(k / SQ + 1) * HS + k % SQ + 1] = chunk.height[k];
     }
+    // A dry ditch drawn shallower than it is dug (its tiers as dug: `moat::dig`).
+    for (h, &d) in dug.soft.iter().enumerate() {
+        if d != 0.0 {
+            chunk.halo_height[h] += d;
+            let (i, j) = (h % HS, h / HS);
+            if (1..=SQ).contains(&i) && (1..=SQ).contains(&j) {
+                chunk.height[(j - 1) * SQ + i - 1] += d;
+            }
+        }
+    }
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);
     for k in 0..n {
-        if park_wet[(k / SQ + 1) * HS + k % SQ + 1] {
+        let h = (k / SQ + 1) * HS + k % SQ + 1;
+        // (A wet moat's water and its banks, as a park's pond's, v63 castles.)
+        if park_wet[h] || dug.wet[h] {
             chunk.edges[k] |= 32;
         }
-        // (A dry moat's ditch: difficult ground, v63 castles.)
-        if ditch_h[(k / SQ + 1) * HS + k % SQ + 1] {
+        // (A dry moat's ditch: difficult ground, its floor earth, v63 castles.)
+        if dug.ditch[h] {
             chunk.edges[k] |= 16;
+            if !chunk.surface[k].is_road() && chunk.building[k] == 0 && chunk.water_level[k] <= chunk.height[k] {
+                chunk.surface[k] = Surface::Dirt;
+            }
         }
     }
     chunk

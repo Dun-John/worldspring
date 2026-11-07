@@ -24,7 +24,7 @@ import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
-import { banner, cornerHatch, drawDrawbridge, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
+import { banner, cornerHatch, drawDitchBank, drawDrawbridge, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
 import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
@@ -865,6 +865,9 @@ export class BattlemapLayer {
         continue;
       } else if (s.kind === 7) {
         drawFerry(bridgeG, s);
+        continue;
+      } else if (s.kind === 19) {
+        drawDitchBank(bridgeG, s);
         continue;
       } else continue;
       deckGrid(gridG, s);

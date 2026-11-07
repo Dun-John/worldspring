@@ -3580,7 +3580,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 let wide = if s.capital { 320.0 } else if want_inner { 280.0 } else { 120.0 };
                 // v63 castles: a citadel's moat by roll, its room taken from the
                 // patch's leftover (the castle's part cut the bigger for it).
-                let moat = castle_moat(s, plan.ward[i] == Some(Ward::Castle), want_inner, l.roof_age, plan.roll(i, 163), plan.roll(i, 164));
+                let moat = castle_moat(s, want_inner, l.roof_age, plan.roll(i, 163), plan.roll(i, 164));
                 let (target, wide) = moat.map_or((target, wide), |m| (target + 4.0 * crate::core::sqrt(target) * m.width, wide + 2.0 * m.width));
                 let cut = castle::cut_bound(&block, &c.pts, &wall_sides, away, &|p| site.height(p), 1.12 * target, wide + 20.0);
                 let (blocks_at, cblock) = (l.blocks.len(), cut.as_ref().map_or(block.clone(), |k| k.kept.clone()));
@@ -4106,10 +4106,10 @@ impl District {
     }
 }
 
-/// A town castle's moat by roll (v63 castles, `moat`): a city's or a metropolis's citadel the town
-/// planned, about half of them. (Not yet one set on a ward by hand: `planned` false.)
-fn castle_moat(s: &Settlement, planned: bool, inner: bool, age: u8, roll: f64, wide: f64) -> Option<moat::Plan> {
-    if !planned || s.tier < Tier::City {
+/// A town castle's moat by roll (v63 castles, `moat`): a city's or a metropolis's citadel, the
+/// town's own or one set on a ward by hand, about half of them.
+fn castle_moat(s: &Settlement, inner: bool, age: u8, roll: f64, wide: f64) -> Option<moat::Plan> {
+    if s.tier < Tier::City {
         return None;
     }
     let great = s.capital || s.tier == Tier::Metropolis;

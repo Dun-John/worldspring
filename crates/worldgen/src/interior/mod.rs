@@ -2751,6 +2751,53 @@ fn pub_stairs(lvl: &Level, nx: usize, ny: usize, whole: &[bool], against: bool, 
     best.map(|b| b.1)
 }
 
+/// The towers' rooms (`cells` ids from `first`) more than one room from a way about the floor (a
+/// passage, a hall, a landing): each given to the room beside it nearest one (v63 castles: a keep's
+/// corner tower off a chamber that is itself a room from the ways).
+fn tower_rooms_near_ways(cells: &mut [i16], rooms: &[Room], nx: usize, ny: usize, first: usize) {
+    let n = rooms.len();
+    if first >= n || !rooms.iter().any(|r| is_way_through(r.kind)) {
+        return;
+    }
+    loop {
+        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for k in 0..nx * ny {
+            let a = cells[k];
+            if a < 0 || !walkable(rooms[a as usize].kind) {
+                continue;
+            }
+            for q in [(k % nx + 1 < nx).then_some(k + 1), (k / nx + 1 < ny).then_some(k + nx)].into_iter().flatten() {
+                let b = cells[q];
+                if b >= 0 && b != a && walkable(rooms[b as usize].kind) && !adj[a as usize].contains(&(b as usize)) {
+                    adj[a as usize].push(b as usize);
+                    adj[b as usize].push(a as usize);
+                }
+            }
+        }
+        let mut hops = vec![usize::MAX; n];
+        let mut q = std::collections::VecDeque::new();
+        for r in (0..n).filter(|&r| is_way_through(rooms[r].kind)) {
+            hops[r] = 0;
+            q.push_back(r);
+        }
+        while let Some(a) = q.pop_front() {
+            for &b in &adj[a] {
+                if hops[b] == usize::MAX {
+                    hops[b] = hops[a] + 1;
+                    q.push_back(b);
+                }
+            }
+        }
+        let merge = (first..n).filter(|&r| hops[r] != usize::MAX && hops[r] >= 3).find_map(|r| adj[r].iter().copied().filter(|&o| !is_way_through(rooms[o].kind)).min_by_key(|&o| (hops[o], o)).map(|o| (r, o)));
+        let Some((r, to)) = merge else { return };
+        for c in cells.iter_mut() {
+            if *c == r as i16 {
+                *c = to as i16;
+            }
+        }
+    }
+}
+
 /// A floor laid out by zones (`hub::Plan::level`), finished: a room in each of the keep's towers
 /// standing on it and in the grid's corner towers (`corner`: their side), of the kinds the plan
 /// gave them, doors where its zones want them (`Hints`), windows (none onto open battlements,
@@ -2759,6 +2806,7 @@ fn pub_stairs(lvl: &Level, nx: usize, ny: usize, whole: &[bool], against: bool, 
 fn hub_level(laid: hub::Laid, sh: &Shell, nx: usize, ny: usize, st: [usize; 4], corner: usize, front: usize, ground: bool, ext_free: &dyn Fn(isize, isize) -> bool, rng: &mut Pcg32) -> Level {
     let hub::Laid { mut cells, mut rooms, hints, public, towers, corners, .. } = laid;
     let on_stairs = |k: usize| (k % nx) >= st[0] && (k % nx) < st[0] + st[2] && (k / nx) >= st[1] && (k / nx) < st[1] + st[3];
+    let first_tower = rooms.len();
     for &(ti, kind) in &towers {
         let id = rooms.len() as i16;
         rooms.push(Room { kind, squares: 0, raise_ft: 0.0, center: [0.0; 2], shape: 0 });
@@ -2782,6 +2830,9 @@ fn hub_level(laid: hub::Laid, sh: &Shell, nx: usize, ny: usize, st: [usize; 4], 
             }
         }
     }
+    // (A tower's room more than a room from a way about the floor, where the rooms beside it
+    // stand: made part of the room beside it nearest one, as no door could bring it nearer.)
+    tower_rooms_near_ways(&mut cells, &rooms, nx, ny, first_tower);
     let cells = merge_fragments(cells, nx, ny);
     let (cells, mut rooms, map) = compact_map(cells, rooms);
     finish_rooms(&mut rooms, &cells, nx);
