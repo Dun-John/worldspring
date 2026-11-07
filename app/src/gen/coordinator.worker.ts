@@ -43,6 +43,8 @@ interface GenWorker {
 let ctx: Ctx | null = null;
 let geom: Geom | null = null;
 let workers: GenWorker[] = [];
+/** Workers still loading T0 (they join `workers` as each is done). */
+let joining: GenWorker[] = [];
 let session = 0;
 let nextJobId = 1;
 
@@ -91,8 +93,9 @@ function request(gw: GenWorker, msg: ToGen, transfer: Transferable[] = []): Prom
 
 async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
   const mySession = ++session;
-  workers.forEach((gw) => gw.w.terminate());
+  [...workers, ...joining].forEach((gw) => gw.w.terminate());
   workers = [];
+  joining = [];
   cache.clear();
   battleCache.clear();
   pending.clear();
@@ -115,19 +118,41 @@ async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
   const first = spawnWorker();
   const rest = Array.from({ length: Math.max(0, msg.workers - 1) }, spawnWorker);
   rest.forEach((gw) => gw.w.postMessage({ type: 'warm' } satisfies ToGen));
+  // (Listed from now: a world started meanwhile stops them all, the one making T0 too.)
+  joining = [first, ...rest];
   const firstReply = await request(first, { type: 'init', worldJson, t0: null });
-  if (firstReply.type !== 'inited' || !firstReply.t0) throw new Error(firstReply.type === 'error' ? firstReply.message : 'T0 failed');
-  const t0 = firstReply.t0;
-  await Promise.all(rest.map((gw) => request(gw, { type: 'init', worldJson, t0: t0.slice(0) })));
   if (mySession !== session) {
-    [first, ...rest].forEach((gw) => gw.w.terminate());
+    first.w.terminate();
     return;
   }
-  workers = [first, ...rest];
-  workers.forEach((gw) => (gw.w.onmessage = (e: MessageEvent<FromGen>) => onGenMessage(gw, e.data)));
-  // Edits made while T0 was generating.
-  if (Object.keys(editFields).length) workers.forEach((gw) => gw.w.postMessage({ type: 'edits', json: JSON.stringify(editFields), patch: null } satisfies ToGen));
+  if (firstReply.type !== 'inited' || !firstReply.t0) throw new Error(firstReply.type === 'error' ? firstReply.message : 'T0 failed');
+  // The map is ready once the worker that made T0 has it: it starts on the first tiles while
+  // the rest load T0 (each its own copy, handed over, not copied again on the way) and join in
+  // as each is done (a few hundred ms in a worker that has only just compiled the WASM).
+  join(first);
+  const t0 = firstReply.t0;
+  rest.forEach((gw, k) => {
+    const bytes = k === rest.length - 1 ? t0 : t0.slice(0);
+    void request(gw, { type: 'init', worldJson, t0: bytes }, [bytes]).then((m) => {
+      if (mySession !== session) return;
+      if (m.type === 'inited') join(gw);
+      else {
+        joining = joining.filter((j) => j !== gw);
+        gw.w.terminate();
+      }
+    });
+  });
   post({ type: 'ready', geom, t0Ms: firstReply.ms, overlay: firstReply.overlay ?? '{"features":[]}', catalog: battlemap_catalog_json() });
+}
+
+/** A worker with T0 loaded takes jobs: first the edits as they are now (those made while it was
+ * loading included), then whatever is waiting. */
+function join(gw: GenWorker) {
+  joining = joining.filter((j) => j !== gw);
+  gw.w.onmessage = (e: MessageEvent<FromGen>) => onGenMessage(gw, e.data);
+  if (Object.keys(editFields).length) gw.w.postMessage({ type: 'edits', json: JSON.stringify(editFields), patch: null } satisfies ToGen);
+  workers.push(gw);
+  pump();
 }
 
 const jobId = (kind: number, level: number, x: number, y: number) =>
