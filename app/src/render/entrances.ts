@@ -139,19 +139,19 @@ function drawBarrow(g: Graphics, at: At, rnd: () => number) {
     ...at(a1, b1),
     ...at(a0, b1),
   ];
-  g.poly(quad(-0.75, 0.5, -0.42, 0.42)).fill(DARK);
+  g.poly(quad(-1.1, 0.75, -0.63, 0.63)).fill(0x0c0b0a);
   for (let k = 0; k < 3; k++)
-    g.poly(quad(-0.7 + k * 0.17, -0.58 + k * 0.17, -0.38, 0.38)).fill(
-      [0x5d574e, 0x48433c, 0x35312b][k],
+    g.poly(quad(-1.02 + k * 0.25, -0.84 + k * 0.25, -0.57, 0.57)).fill(
+      [0x2c2924, 0x1d1b18, 0x12110f][k],
     );
   for (const side of [-1, 1]) {
-    const j = quad(-0.85, 0.35, side * 0.42, side * 0.8);
+    const j = quad(-1.25, 0.5, side * 0.63, side * 1.2);
     g.poly(shade(j, 0.1)).fill({ color: 0x000000, alpha: 0.3 });
-    g.poly(j).fill(STONE[1]).stroke({ width: 2, color: INK, join: "round" });
+    g.poly(j).fill(STONE[0]).stroke({ width: 2.5, color: INK, join: "round" });
   }
-  const cap = quad(-0.18, 0.62, -0.95, 0.95);
+  const cap = quad(-0.27, 0.9, -1.4, 1.4);
   g.poly(shade(cap, 0.14)).fill({ color: 0x000000, alpha: 0.35 });
-  g.poly(cap).fill(STONE[0]).stroke({ width: 2.2, color: INK, join: "round" });
+  g.poly(cap).fill(0xc9c3b6).stroke({ width: 2.8, color: INK, join: "round" });
   g.moveTo(...at(0.02, -0.5))
     .lineTo(...at(0.25, -0.1))
     .lineTo(...at(0.12, 0.35))
@@ -299,7 +299,13 @@ function drawTowerStump(g: Graphics, at: At, rnd: () => number) {
   g.poly(quad(0.45, 1.75, -0.42, 0.42)).fill(DARK);
   for (let k = 0; k < 4; k++)
     g.poly(quad(0.47 + k * 0.26, 0.71 + k * 0.26, -0.36, 0.36)).fill([0x8a847a, 0x6c675e, 0x504c45, 0x37342f][k]);
-  g.poly(quad(0.45, 1.75, -0.42, 0.42)).stroke({ width: OUT, color: INK, join: "miter" });
+  for (let k = 0; k < 5; k++) {
+    const [x0, y0] = at(0.47 + k * 0.26, -0.42);
+    const [x1, y1] = at(0.47 + k * 0.26, 0.42);
+    g.moveTo(x0, y0).lineTo(x1, y1);
+  }
+  g.stroke({ width: LINE, color: INK });
+  g.poly(quad(0.45, 1.75, -0.42, 0.42)).stroke({ width: OUT * 1.4, color: INK, join: "miter" });
   // The broken wall: runs between the doorway and the breach, broken off a course or two above
   // the ground but standing higher on one side (thicker there, a stepped and ragged top, its
   // shadow cast long), a joint scored every so often.

@@ -15,7 +15,7 @@ pub const WALL: u32 = 29;
 pub const RUBBLE: u32 = 30;
 
 /// Wall thickness (ft) on the plan.
-const WALL_FT: f64 = 3.0;
+const WALL_FT: f64 = 6.0;
 
 /// The pieces (kind, polygon in world ft) of a ruined building's plan, in drawing order.
 /// `seed` is the battlemap stream (`world.stream("battlemap")`).

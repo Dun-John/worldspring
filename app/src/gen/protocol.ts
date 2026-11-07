@@ -862,7 +862,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 29;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
