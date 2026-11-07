@@ -10,7 +10,7 @@
   import { createKeyHandler, focusKind } from './ui/shell/shortcuts';
   import { layoutAt, layoutsIn, layoutTargets, madeCount, madeOn, matchLayouts, reanchor, remapLayouts, restorePinned, setAsideRemoved, upgradeEdits, type MadeOn } from './editor/reanchor';
   import { getImage, loadSession, putImage } from './play/session';
-  import { hasSession } from './play/state';
+  import { hasSession, parseLoc } from './play/state';
   import type { PreviewReply, PreviewRequest } from './editor/preview.worker';
   import { MapView, type HudState, type InteriorState, type PointerTool } from './render/MapView';
   import TopBar from './ui/shell/TopBar.svelte';
@@ -2791,6 +2791,34 @@
     await goTo(id);
   }
 
+  /** Go to a play token: start play, its location and floor, the camera on it, selected. */
+  async function showToken(id: string) {
+    const t = play.state.tokens[id];
+    if (!t) return;
+    startPlay();
+    let at: [number, number] | null = null;
+    const sewer = /^w:(\d+)$/.exec(t.loc);
+    if (t.loc === 'surface') {
+      if (view.interior) view.exitBuilding();
+    } else if (sewer) {
+      const [sx, sy] = [Math.floor((t.x * 5) / 480), Math.floor((t.y * 5) / 480)];
+      if (await view.enterBuilding(`w:${sewer[1]}:${sx}:${sy}`)) at = [t.x * 5, t.y * 5];
+    } else {
+      const { interior, level } = parseLoc(t.loc);
+      if (interior && interior !== view.interior?.interior.id) await view.enterBuilding(interior, { level });
+      if (view.interior && interior === view.interior.interior.id) {
+        if (view.interior.currentLevel !== level) view.setInteriorLevel(level);
+        at = view.interior.toWorld(t.x, t.y);
+      }
+    }
+    if (t.loc === 'surface') at = [t.x * 5, t.y * 5];
+    if (!at) return;
+    // (A frame first: moving to a new location lets go of the selection there.)
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    play.select(id);
+    flyToSize(at[0], at[1], 50);
+  }
+
   /** A new NPC or plot point at the selected place, opened in the notebook. */
   function addHere(tab: 'npcs' | 'plots') {
     const at = here;
@@ -3307,6 +3335,8 @@
           onNpc={(id) => openNotebook('npcs', id)}
           onPlot={(id) => openNotebook('plots', id)}
           onNote={(id) => void showPlace(id)}
+          tokens={() => play.state.tokens}
+          onToken={(id) => void showToken(id)}
         />
       {/if}
     {/snippet}

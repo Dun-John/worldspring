@@ -5,6 +5,7 @@
   // ↑/↓ move through the results, Enter opens one.
   import type { Npc, Overlay, PlaceInfo, Plot } from '../gen/protocol';
   import { hitName, kindLabel, listedName, removedKind, searchFeatures, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection } from './gazetteer';
+  import { roleOf, parseLoc, type Token } from '../play/state';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
 
@@ -32,8 +33,12 @@
     onPlot: (id: string) => void;
     /** Show the place a note is on. */
     onNote: (id: string) => void;
+    /** The play tokens now (read when a query is typed, not per frame). */
+    tokens?: () => Record<string, Token>;
+    /** Go to a token: its location and floor, the camera on it, selected. */
+    onToken?: (id: string) => void;
   }
-  let { overlay, renames, searchBuildings, viewRect, whereName, inTown, drawnOf, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote }: Props = $props();
+  let { overlay, renames, searchBuildings, viewRect, whereName, inTown, drawnOf, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote, tokens, onToken }: Props = $props();
 
   let q = $state('');
   let open = $state(false);
@@ -78,6 +83,14 @@
     return names[id] ?? '…';
   }
 
+  /** Where a token is: the surface, or its building or site and level. */
+  function tokenWhere(loc: string): string {
+    if (loc === 'surface') return 'On the map';
+    if (/^w:\d+$/.test(loc)) return 'Sewers';
+    const { interior, level } = parseLoc(loc);
+    return interior ? `${placeName(interior)} · level ${level + 1}` : 'On the map';
+  }
+
   const needle = $derived(q.trim().toLowerCase());
   const has = (s: string | undefined, t: string) => !!s && s.toLowerCase().includes(t);
   const snippet = (text: string, t: string) => {
@@ -99,6 +112,13 @@
       .filter(([, p]) => has(p.title, t) || has(p.text, t) || p.tags.some((g) => has(g, t)))
       .slice(0, 5);
     for (const [k, p] of plotRows) out.push({ key: k, group: 'Plots', icon: 'scroll', name: p.title, sub: has(p.title, t) ? p.status : snippet(p.text, t), pick: () => onPlot(k) });
+    if (tokens && onToken) {
+      const list = Object.values(tokens())
+        .filter((k) => has(k.name, t))
+        .sort((a, b) => Number(!a.name.toLowerCase().startsWith(t)) - Number(!b.name.toLowerCase().startsWith(t)) || a.name.localeCompare(b.name))
+        .slice(0, 6);
+      for (const k of list) out.push({ key: `token:${k.id}`, group: 'Tokens', icon: 'token', name: k.name, sub: [k.kind === 'character' ? roleOf(k) : k.kind, tokenWhere(k.loc), k.hidden ? 'hidden' : ''].filter(Boolean).join(' · '), pick: () => onToken(k.id) });
+    }
     const noteRows = Object.entries(notes)
       .filter(([id, n]) => has(n.text, t) || (n.tags ?? []).some((g) => has(g, t)) || has(placeName(id), t))
       .slice(0, 5);
