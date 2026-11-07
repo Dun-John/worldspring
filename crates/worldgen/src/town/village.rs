@@ -80,6 +80,8 @@ struct LaneGrid {
     cells: FastMap<(i64, i64), Vec<u32>>,
 }
 
+/// A branch lane's width (ft): what the plots keep clear of and what plan zoom draws.
+const LANE_W: f64 = 10.0;
 const CELL: f64 = 40.0;
 /// The most margin `LaneGrid::near` is asked for (ft).
 const LANE_MARGIN: f64 = 4.0;
@@ -305,7 +307,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
             let d = mul(to, 1.0 / tl);
             let link = track(site, mul(d, 45.0), d, tl + 10.0, &[(wh.clone(), 12.0)], rng);
             if link.len() >= 2 {
-                lanes.push((link, 10.0));
+                lanes.push((link, LANE_W));
             }
         }
         lanes.push((wh.clone(), 12.0));
@@ -341,7 +343,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
                 branch_points(&lane, min_block * 1.5, rng, &mut more, depth + 1);
                 starts.extend(more);
             }
-            lanes.push((lane, 10.0));
+            lanes.push((lane, LANE_W));
             made += 1;
         }
     }
@@ -1083,7 +1085,7 @@ pub fn plan_lanes(l: &Layout) -> Vec<Vec<[f64; 4]>> {
         return Vec::new();
     }
     let track = crate::t0::roads::RoadClass::Track as u8 as f64;
-    l.streets.iter().map(|s| s.iter().map(|p| [p[0], p[1], 8.0, track]).collect()).collect()
+    l.streets.iter().map(|s| s.iter().map(|p| [p[0], p[1], LANE_W, track]).collect()).collect()
 }
 
 /// How far `p` (world ft) is from a village's lanes (a croft's front, a lane's edge): where a

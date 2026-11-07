@@ -43,7 +43,11 @@ void main() {
         vec3 cob = mix(PAVED * 0.74, PAVED * (0.9 + 0.18 * n), sett);
         surface = mix(surface, cob, smoothstep(1.0, 3.0, vPpf));
     }
-    float edge = street ? 0.0 : smoothstep(vHalf - 1.4, vHalf - 0.6, d);
+    // Edge ink along the sides only: a capsule's round ends would draw a seam across the
+    // neighbouring segment (a lane of many segments looked like a chain of beads).
+    float raw = dot(pa, ba) / max(dot(ba, ba), 1e-6);
+    float lat = abs(pa.x * ba.y - pa.y * ba.x) / max(length(ba), 1e-6);
+    float edge = (street || raw < 0.0 || raw > 1.0) ? 0.0 : smoothstep(vHalf - 1.4, vHalf - 0.6, lat);
     vec3 bed = mix(surface, INK, edge * 0.8);
     vec3 col = mix(line, bed, vBed);
     float a = cover * vFade * uAlpha * mix(0.9, 1.0, vBed);
