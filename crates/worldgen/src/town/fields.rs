@@ -198,13 +198,6 @@ pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
     l.field_info = info;
 }
 
-/// The plan's site-polygon attr for a field (`payload::pack_sites`, kind 2): angle (8 bits) << 8,
-/// use << 16, bound << 18, strips << 20, tone << 21 (`gen/protocol.ts`).
-pub fn plan_attr(i: &FieldInfo) -> u32 {
-    let a = (crate::core::round(i.angle as f64 / std::f64::consts::PI * 256.0) as u32) & 255;
-    2 | a << 8 | (i.kind as u32) << 16 | (i.bound as u32) << 18 | (i.strips as u32) << 20 | (i.tone as u32 & 7) << 21
-}
-
 /// A field's byte on its battlemap squares (`Chunk::field`): the furrows' angle (6 bits over π) and
 /// how its rows are drawn above (0 arable, 1 open-field strips, 2 fallow, 3 none: pasture, orchard).
 pub fn square_byte(i: &FieldInfo) -> u8 {

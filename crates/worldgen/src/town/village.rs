@@ -47,9 +47,6 @@ pub struct Plot {
 }
 
 /// Plan zoom's site polygons (`payload::pack_sites`, `gen/protocol.ts`; v63 countryside, 16-23).
-pub const PLAN_CROFT: u32 = 16;
-pub const PLAN_HEDGE: u32 = 17;
-pub const PLAN_FENCE: u32 = 18;
 pub const PLAN_CHURCHYARD: u32 = 19;
 pub const PLAN_HEADSTONE: u32 = 20;
 pub const PLAN_GREEN: u32 = 21;
@@ -60,9 +57,7 @@ const PLAN_STONE: u32 = 7;
 /// A yard's gate (ft), and how near a lane's edge it is wanted (else it opens onto the green).
 const GATE_FT: f64 = 10.0;
 const GATE_LANE_FT: f64 = 30.0;
-/// A hedge's, a fence's and a yard wall's width at plan zoom (ft): about the same line.
-const HEDGE_FT: f64 = 2.6;
-const FENCE_FT: f64 = 2.0;
+/// A churchyard wall's width at plan zoom (ft).
 const WALL_FT: f64 = 2.4;
 /// A croft's width (ft) and depth back from the lane.
 const CROFT_W: (f64, f64) = (30.0, 60.0);
@@ -1176,7 +1171,8 @@ pub fn wall_runs(l: &Layout) -> Vec<(P, P)> {
 }
 
 /// A village's plan zoom polygons (`payload::pack_sites`, before its buildings): its green and its
-/// well, each plot's ground and its hedges, fences or walls (`bounds`).
+/// well, a churchyard's or shrine yard's ground and the churchyard's wall. The crofts and their
+/// bounds are seen on the battlemap only.
 pub fn plan_polys(l: &Layout, push: &mut dyn FnMut(&[P], u32)) {
     if !village_of(l) {
         return;
@@ -1185,18 +1181,13 @@ pub fn plan_polys(l: &Layout, push: &mut dyn FnMut(&[P], u32)) {
         push(&pl.pts, PLAN_GREEN);
         push(&circle(centroid(&pl.pts), 3.0, 10), PLAN_STONE);
     }
-    for p in &l.crofts {
-        push(&p.pts, if matches!(p.kind, PlotKind::Churchyard | PlotKind::ShrineYard) { PLAN_CHURCHYARD } else { PLAN_CROFT });
+    for p in l.crofts.iter().filter(|p| matches!(p.kind, PlotKind::Churchyard | PlotKind::ShrineYard)) {
+        push(&p.pts, PLAN_CHURCHYARD);
     }
-    for (a, b, bound, _) in bounds(l) {
-        let (kind, w) = match bound {
-            Bound::Hedge => (PLAN_HEDGE, HEDGE_FT),
-            Bound::Fence => (PLAN_FENCE, FENCE_FT),
-            Bound::Wall => (PLAN_WALL, WALL_FT),
-        };
+    for (a, b, bound, _) in bounds(l).into_iter().filter(|b| b.3 == PlotKind::Churchyard) {
         let e = dist(a, b);
-        if e > 0.5 {
-            push(&rect(lerp(a, b, 0.5), sub(b, a), e + w, w), kind);
+        if bound == Bound::Wall && e > 0.5 {
+            push(&rect(lerp(a, b, 0.5), sub(b, a), e + WALL_FT, WALL_FT), PLAN_WALL);
         }
     }
 }

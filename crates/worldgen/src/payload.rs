@@ -21,7 +21,8 @@
 //!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
 //!     parterre, 14 a tree's (or topiary's) crown, 15 a flowerbed, 24 a castle's wet moat, 25 its
 //!     dry ditch (`town::moat::Moat::pieces`; in place of a ward, its inked edges: `Moat::inks`), 26
-//!     its drawbridge's deck; a park's raised features as
+//!     its drawbridge's deck, 19 a churchyard's ground, 20 a headstone, 21 a green, 22 a churchyard's wall,
+//!     23 a windmill's sails (a village's plots: the battlemap only); a park's raised features as
 //!     monuments; all of a park's in the tile holding its middle; a ruin's plan as 28 its floor,
 //!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4),
 //!     verts f32[n_verts * 2] (tile units).
@@ -300,8 +301,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
         }
         for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
-            for (i, f) in l.fields.iter().enumerate() {
-                push(f, l.field_info.get(i).map_or(2, crate::town::fields::plan_attr));
+            for f in &l.fields {
+                push(f, 2);
             }
             // v63 castles: a castle's moat, its pieces (24 wet, 25 a dry ditch).
             for m in &l.moats {
