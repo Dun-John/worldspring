@@ -2230,7 +2230,7 @@ fn yard_buildings<G: Ground>(
         let (long, deep) = (l0 + f * (l1 - l0), d0 + f * (d1 - d0));
         let mut best: Option<(f64, Vec<P>)> = None;
         // (Stables and a smithy smaller where the yard is tight: `TRADES`.)
-        let sizes = if yi < TRADES { vec![(long, deep), (l0, d0), (TRADES_LEAST * l0, TRADES_LEAST * d0)] } else { vec![(long, deep)] };
+        let sizes = if yi < TRADES { vec![(long, deep), (l0, d0), (TRADES_LEAST * l0, TRADES_LEAST * d0), (0.6 * l0, 0.6 * d0)] } else { vec![(long, deep)] };
         for (long, deep) in sizes {
             if best.is_some() {
                 break;

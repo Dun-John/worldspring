@@ -43,7 +43,7 @@ pub(super) struct Zones {
 }
 
 /// The capital's palace's plan: its frame, its zones, the grand stair on its axis. None for a
-/// footprint that isn't a rectangle 13 squares by 11 or more (laid out as an older palace).
+/// footprint that isn't a rectangle 13 squares by 11 or more round a court (laid out as an older palace).
 /// `front`: its front's middle as the town laid it out (grid units), else picked here.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan(b: &town::Building, sh: &Shell, piece: Vec<Piece>, seed: u64, near: &dyn Fn(P) -> f64, ground: &dyn Fn(isize, isize) -> bool, front: Option<P>) -> Option<Plan> {
@@ -89,7 +89,7 @@ pub(super) fn plan(b: &town::Building, sh: &Shell, piece: Vec<Piece>, seed: u64,
             ground(i, j)
         })
     };
-    let fits = |k: &usize| fronts[*k].0 >= 13 && fronts[*k].1 >= 11;
+    let fits = |k: &usize| fronts[*k].0 >= 13 && fronts[*k].1 >= 11 && zones(fronts[*k].0, fronts[*k].1).court;
     let k = match front {
         Some(h) => (0..4).filter(fits).min_by(|&a, &c| town::geom::dist(fronts[a].2, h).total_cmp(&town::geom::dist(fronts[c].2, h)).then(a.cmp(&c)))?,
         None => (0..4).filter(fits).min_by_key(|&k| {
