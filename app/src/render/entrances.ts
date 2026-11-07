@@ -158,10 +158,53 @@ function drawBarrow(g: Graphics, at: At, rnd: () => number) {
     .stroke({ width: 1.2, color: STONE[2] });
 }
 
+/** Outline widths (px): `OUT` round shapes over half a square, `LINE` for parts and joints. */
+const OUT = 0.045 * PX;
+const LINE = 0.025 * PX;
+
 /**
- * A dwarven hall's gate cut into a rock face 3 squares wide: rock shoulders either side (the crag
- * rising behind is the ground's own), a dressed façade with square pillars carved with runes, broad
- * steps up to the dark gateway, its stone leaves swung in against the passage walls.
+ * A dressed stone block (`pts`: its corners, px, either winding): filled, a crescent of shade
+ * along its edges turned away from the upper-left light, inked.
+ */
+function block(g: Graphics, pts: number[], tone: number, shadeTone: number, width = OUT) {
+  g.poly(pts).fill(tone);
+  const n = pts.length / 2;
+  let [cx, cy] = [0, 0];
+  for (let k = 0; k < n; k++) [cx, cy] = [cx + pts[2 * k] / n, cy + pts[2 * k + 1] / n];
+  for (let k = 0; k < n; k++) {
+    const [x0, y0, x1, y1] = [pts[2 * k], pts[2 * k + 1], pts[(2 * k + 2) % pts.length], pts[(2 * k + 3) % pts.length]];
+    // Outward normal of the edge; shaded when it faces down and right.
+    let [nx, ny] = [y1 - y0, x0 - x1];
+    if (((x0 + x1) / 2 - cx) * nx + ((y0 + y1) / 2 - cy) * ny < 0) [nx, ny] = [-nx, -ny];
+    const l = Math.hypot(nx, ny) || 1;
+    const face = (nx + ny) / (l * Math.SQRT2);
+    if (face < 0.3) continue;
+    const d = 0.1 * PX * face;
+    const [ix, iy] = [(-nx / l) * d, (-ny / l) * d];
+    g.poly([x0, y0, x1, y1, x1 + ix, y1 + iy, x0 + ix, y0 + iy]).fill(shadeTone);
+  }
+  g.poly(pts).stroke({ width, color: INK, join: "miter" });
+}
+
+/** Rune strokes (`u` up the glyph 0-1, `v` across -0.5-0.5) for the lintel. */
+const RUNES: [number, number][][] = [
+  // ᚠ: a stem, two branches up and out.
+  [[0, -0.25], [1, -0.25], [0.55, -0.25], [0.85, 0.3], [0.25, -0.25], [0.55, 0.3]],
+  // ᛉ: a stem, two branches up from its middle.
+  [[0, 0], [1, 0], [0.5, 0], [1, -0.4], [0.5, 0], [1, 0.4]],
+  // ᛏ: an arrow pointing up.
+  [[0, 0], [1, 0], [1, 0], [0.6, -0.4], [1, 0], [0.6, 0.4]],
+  // ᛞ-like: two stems crossed by a saltire.
+  [[0, -0.35], [1, -0.35], [0, 0.35], [1, 0.35], [0, -0.35], [1, 0.35], [1, -0.35], [0, 0.35]],
+  // ᛗ-like: two stems, a chevron between them at the top.
+  [[0, -0.35], [1, -0.35], [0, 0.35], [1, 0.35], [1, -0.35], [0.6, 0], [0.6, 0], [1, 0.35]],
+];
+
+/**
+ * A dwarven hall's gate set into the inner face of its crag (the face and the rock behind it are
+ * the ground's own), 3 squares wide: a dark doorway recessed in the cliff with steps going down
+ * inside, a carved frame of big dressed blocks (a pillar either side, a lintel over the doorway
+ * cut with bold runes), rock tucked against the face at its shoulders, and steps leading out.
  */
 function drawRuneGate(g: Graphics, at: At, rnd: () => number) {
   const quad = (a0: number, a1: number, b0: number, b1: number) => [
@@ -170,178 +213,169 @@ function drawRuneGate(g: Graphics, at: At, rnd: () => number) {
     ...at(a1, b1),
     ...at(a0, b1),
   ];
-  // Rock shoulders: rounded masses of the crag either side of the façade.
+  // The frame's shadow on the ground and the face.
+  g.poly(shade(quad(-0.5, 1.3, -1.6, 1.6), 0.2)).fill({ color: 0x000000, alpha: 0.28 });
+  // Rock tucked against the face at the frame's shoulders.
   for (const side of [-1, 1]) {
-    const pts = oval(
-      at,
-      0.85,
-      0.85,
-      0.75,
-      Array.from({ length: 14 }, () => (rnd() - 0.5) * 0.16),
-      side * 2.2,
-    );
-    g.poly(shade(pts, 0.2)).fill({ color: 0x000000, alpha: 0.25 });
-    g.poly(pts).fill(ROCK[1]).stroke({ width: 2.5, color: INK, join: "round" });
-    g.poly(inset(pts, 0.55, -0.12 * PX, -0.12 * PX)).fill(ROCK[0]);
-    // A crack.
-    const [x, y] = at(0.7 + rnd() * 0.4, side * (2.0 + rnd() * 0.4));
-    g.moveTo(x, y)
-      .lineTo(x + (rnd() - 0.5) * 22, y + (rnd() - 0.5) * 22)
-      .stroke({ width: 1.3, color: ROCK[2] });
+    const pts = oval(at, 0.6, 0.55, 0.45, Array.from({ length: 12 }, () => (rnd() - 0.5) * 0.2), side * 1.85);
+    g.poly(shade(pts, 0.12)).fill({ color: 0x000000, alpha: 0.25 });
+    g.poly(pts).fill(ROCK[1]).stroke({ width: OUT, color: INK, join: "round" });
+    g.poly(inset(pts, 0.55, -0.1 * PX, -0.1 * PX)).fill(ROCK[0]);
   }
-  // The façade: one dressed slab, its joints scored.
-  const face = quad(0.05, 0.8, -1.6, 1.6);
-  g.poly(face).fill(STONE[1]).stroke({ width: 2.5, color: INK, join: "miter" });
-  for (const b of [-1.15, 1.15]) g.moveTo(...at(0.05, b)).lineTo(...at(0.8, b));
-  g.stroke({ width: 1.2, color: STONE[2] });
-  // The gateway: dark, steps going down inside, the leaves open against its walls.
-  g.poly(quad(0.05, 1.7, -0.72, 0.72))
-    .fill(DARK)
-    .stroke({ width: 2, color: INK });
-  for (let k = 0; k < 4; k++)
-    g.poly(quad(0.1 + k * 0.32, 0.36 + k * 0.32, -0.6, 0.6)).fill(
-      [0x6a645a, 0x534e46, 0x3e3a34, 0x2b2824][k],
-    );
-  for (const side of [-1, 1])
-    g.poly(quad(0.12, 1.0, side * 0.58, side * 0.72))
-      .fill(ROCK[2])
-      .stroke({ width: 1.5, color: INK });
-  // Broad steps up to it.
-  for (const [a0, a1, w, c] of [
-    [-1.05, -0.6, 1.1, STONE[1]],
-    [-0.6, 0.05, 0.9, STONE[0]],
-  ] as const) {
-    g.poly(quad(a0, a1, -w, w))
-      .fill(c)
-      .stroke({ width: 1.8, color: INK, join: "miter" });
-  }
-  // Square pillars either side, a rune cut in each.
-  const RUNE = 0xe1cd8a;
+  // Steps leading out, the lower one wider.
+  block(g, quad(-1.2, -0.75, -1.3, 1.3), STONE[1], STONE[2]);
+  block(g, quad(-0.8, -0.35, -1.12, 1.12), STONE[0], STONE[2]);
+  // The doorway: dark, recessed under the lintel, a flight going down inside.
+  g.poly(quad(-0.4, 0.75, -0.82, 0.82)).fill(DARK);
+  for (let k = 0; k < 3; k++)
+    g.poly(quad(-0.38 + k * 0.26, -0.14 + k * 0.26, -0.7, 0.7)).fill([0x625d54, 0x4a463f, 0x34312c][k]);
+  g.poly(quad(-0.4, 0.75, -0.82, 0.82)).stroke({ width: OUT, color: INK, join: "miter" });
+  // The lintel's shadow falling into the doorway.
+  g.poly(quad(0.32, 0.62, -0.82, 0.82)).fill({ color: 0x000000, alpha: 0.4 });
+  // Pillars either side: two big blocks each.
   for (const side of [-1, 1]) {
-    const p = quad(-0.55, 0.3, side * 0.85, side * 1.5);
-    g.poly(shade(p, 0.14)).fill({ color: 0x000000, alpha: 0.35 });
-    g.poly(p).fill(STONE[0]).stroke({ width: 2.2, color: INK, join: "miter" });
-    const c = -0.12;
-    const m = side * 1.17;
-    g.moveTo(...at(c - 0.22, m)).lineTo(...at(c + 0.22, m));
-    g.moveTo(...at(c - 0.22, m - 0.15))
-      .lineTo(...at(c, m + 0.12))
-      .lineTo(...at(c + 0.22, m - 0.15));
-    g.stroke({ width: 2, color: RUNE, cap: "round", join: "round" });
+    block(g, quad(-0.5, 0.12, side * 0.82, side * 1.58), STONE[0], STONE[2]);
+    block(g, quad(0.12, 0.7, side * 0.82, side * 1.58), STONE[1], STONE[2]);
   }
-  // A rune band across the façade's foot.
-  for (let k = 0; k < 6; k++) {
-    const b = -0.95 + k * 0.38;
-    if (Math.abs(b) < 0.75) continue;
-    g.moveTo(...at(0.62, b - 0.08))
-      .lineTo(...at(0.45, b))
-      .lineTo(...at(0.62, b + 0.08));
+  // The lintel over the doorway, its joints scored, bold runes cut in it.
+  block(g, quad(0.62, 1.3, -1.7, 1.7), STONE[1], STONE[2]);
+  for (const b of [-0.9, 0.9]) g.moveTo(...at(0.62, b)).lineTo(...at(1.3, b));
+  g.stroke({ width: 0.018 * PX, color: INK });
+  const first = Math.floor(rnd() * RUNES.length);
+  for (let k = 0; k < 3; k++) {
+    const rune = RUNES[(first + k * 2) % RUNES.length];
+    const b0 = (k - 1) * 0.55;
+    // Up the rune is up the face (into the rock).
+    const p = (u: number, v: number) => at(0.74 + u * 0.44, b0 + v * 0.36);
+    for (let s = 0; s < rune.length; s += 2) g.moveTo(...p(...rune[s])).lineTo(...p(...rune[s + 1]));
   }
-  g.stroke({ width: 1.5, color: RUNE, alpha: 0.9, cap: "round" });
-  for (let k = 0; k < 4; k++)
-    boulder(
-      g,
-      at(-1.4 - rnd() * 0.8, (rnd() < 0.5 ? -1 : 1) * (1.6 + rnd() * 1.2)),
-      0.18 + rnd() * 0.14,
-      ROCK[rnd() < 0.5 ? 0 : 1],
-      rnd,
-    );
+  g.stroke({ width: 0.065 * PX, color: INK, cap: "round", join: "round" });
 }
 
 /**
- * A wizard's tower fallen to its stump, 4 squares across: a ring of broken wall with the doorway
- * facing the way in and a breach behind, a worn floor, a spiral stair going down in the middle, a
- * faint chalk circle round it, fallen blocks outside.
+ * A wizard's tower fallen to its stump, 4 squares across: a ring of wall broken off ragged,
+ * standing higher on one side (thicker, its shadow cast long over the floor and ground), the
+ * doorway facing the way in and a breach behind, a flagged floor with a flight going down in it,
+ * dressed blocks fallen out through the breach.
  */
 function drawTowerStump(g: Graphics, at: At, rnd: () => number) {
   const [cx, cy] = at(1.0, 0);
   const [fx, fy] = at(0, 0);
+  const [ux, uy] = [(cx - fx) / PX, (cy - fy) / PX];
   const door = Math.atan2(fy - cy, fx - cx);
   const breach = door + Math.PI * (0.8 + rnd() * 0.4);
+  // Where the wall stands highest: to one side, between the doorway and the breach.
+  const high = door + (rnd() < 0.5 ? 1 : -1) * Math.PI * (0.45 + rnd() * 0.15);
   const R = 2.0 * PX;
   const r = 1.45 * PX;
-  g.circle(cx + 0.35 * PX, cy + 0.35 * PX, R).fill({
-    color: 0x000000,
-    alpha: 0.25,
-  });
-  // The floor, its flags in rings.
-  g.circle(cx, cy, r).fill(STONE[2]);
-  g.circle(cx - 0.12 * PX, cy - 0.12 * PX, r * 0.8).fill({
-    color: STONE[1],
-    alpha: 0.6,
-  });
-  g.circle(cx, cy, r * 0.72).stroke({ width: 1, color: 0x5f5a52, alpha: 0.6 });
-  // A chalk circle round the stair, a few glyphs on it.
-  g.circle(cx, cy, 1.05 * PX).stroke({
-    width: 1.5,
-    color: 0xb9a7e0,
-    alpha: 0.55,
-  });
-  for (let k = 0; k < 5; k++) {
-    const t = (k / 5) * Math.PI * 2 + door;
-    const [x, y] = [cx + Math.cos(t) * 1.05 * PX, cy + Math.sin(t) * 1.05 * PX];
-    g.moveTo(x - 4, y - 4)
-      .lineTo(x + 4, y + 4)
-      .moveTo(x + 4, y - 4)
-      .lineTo(x, y);
+  const diff = (t: number, c: number) => Math.abs(Math.atan2(Math.sin(t - c), Math.cos(t - c)));
+  // Height of the wall standing at `t` (0 a course or two, 1 the tallest piece), ragged.
+  const tall = (t: number) => {
+    const d = diff(t, high);
+    return d < 1.1 ? 1 - d / 1.1 : 0;
+  };
+  g.circle(cx + 0.3 * PX, cy + 0.3 * PX, R).fill({ color: 0x000000, alpha: 0.25 });
+  // The floor: flags in rough courses.
+  g.circle(cx, cy, r).fill(STONE[1]);
+  g.circle(cx - 0.15 * PX, cy - 0.15 * PX, r * 0.75).fill({ color: STONE[0], alpha: 0.35 });
+  for (let k = -2; k <= 2; k++) {
+    const o = k * 0.55 * PX;
+    const w = Math.sqrt(Math.max(0, r * r - o * o)) * 0.92;
+    g.moveTo(cx - uy * o - ux * w, cy + ux * o - uy * w).lineTo(cx - uy * o + ux * w, cy + ux * o + uy * w);
+    for (let j = -2; j <= 2; j++) {
+      const s = (j + (k & 1 ? 0.5 : 0)) * 0.6 * PX;
+      if (Math.abs(s) > w * 0.95 || Math.hypot(o + 0.27 * PX, s) > r * 0.95) continue;
+      g.moveTo(cx - uy * o + ux * s, cy + ux * o + uy * s).lineTo(cx - uy * (o + 0.55 * PX) + ux * s, cy + ux * (o + 0.55 * PX) + uy * s);
+    }
   }
-  g.stroke({ width: 1.3, color: 0xb9a7e0, alpha: 0.6 });
-  // The spiral stair: wedges darkening as they wind down round a newel.
-  const sr = 0.75 * PX;
-  g.circle(cx, cy, sr).fill(DARK);
-  for (let k = 0; k < 7; k++) {
-    const t0 = door + Math.PI / 2 + k * 0.62;
-    const v = Math.round(0xa0 - k * 0x14);
-    g.moveTo(cx, cy)
-      .arc(cx, cy, sr * 0.95, t0, t0 + 0.55)
-      .closePath()
-      .fill((v << 16) | (v << 8) | (v - 10));
-  }
-  g.circle(cx, cy, sr).stroke({ width: 2, color: INK });
-  g.circle(cx, cy, 0.16 * PX)
-    .fill(STONE[0])
-    .stroke({ width: 1.5, color: INK });
-  // The broken wall: ring pieces between the doorway and the breach, of uneven height (tone).
+  g.stroke({ width: 0.016 * PX, color: STONE[2] });
+  // The flight going down, along the way in: treads darkening to the dark at its foot.
+  const quad = (a0: number, a1: number, b0: number, b1: number) => [
+    ...at(a0, b0),
+    ...at(a1, b0),
+    ...at(a1, b1),
+    ...at(a0, b1),
+  ];
+  g.poly(quad(0.45, 1.75, -0.42, 0.42)).fill(DARK);
+  for (let k = 0; k < 4; k++)
+    g.poly(quad(0.47 + k * 0.26, 0.71 + k * 0.26, -0.36, 0.36)).fill([0x8a847a, 0x6c675e, 0x504c45, 0x37342f][k]);
+  g.poly(quad(0.45, 1.75, -0.42, 0.42)).stroke({ width: OUT, color: INK, join: "miter" });
+  // The broken wall: runs between the doorway and the breach, broken off a course or two above
+  // the ground but standing higher on one side (thicker there, a stepped and ragged top, its
+  // shadow cast long), a joint scored every so often.
   const gaps = [
     [door, 0.36],
-    [breach, 0.55 + rnd() * 0.3],
+    [breach, 0.5 + rnd() * 0.25],
   ];
-  const inGap = (t: number) =>
-    gaps.some(
-      ([c, w]) => Math.abs(Math.atan2(Math.sin(t - c), Math.cos(t - c))) < w,
-    );
-  const step = 0.21;
-  for (let t = 0; t < Math.PI * 2 - 1e-6; t += step) {
-    if (inGap(t + step / 2)) continue;
-    const ro = R - (rnd() < 0.3 ? 0.08 * PX : 0);
-    const pts = [
-      cx + Math.cos(t) * r,
-      cy + Math.sin(t) * r,
-      cx + Math.cos(t) * ro,
-      cy + Math.sin(t) * ro,
-    ];
-    for (const tt of [t + step * 0.5, t + step])
-      pts.push(cx + Math.cos(tt) * ro, cy + Math.sin(tt) * ro);
-    pts.push(cx + Math.cos(t + step) * r, cy + Math.sin(t + step) * r);
-    // Lit on the side facing the upper left.
-    const lit = Math.cos(t + step / 2 + Math.PI * 0.75);
-    g.poly(pts)
-      .fill(lit > 0.3 ? STONE[0] : lit > -0.3 ? STONE[1] : STONE[2])
-      .stroke({ width: 1.6, color: INK, join: "round" });
+  const inGap = (t: number) => gaps.some(([c, w]) => diff(t, c) < w);
+  const N = 72;
+  const pt = (t: number, rr: number): [number, number] => [cx + Math.cos(t) * rr, cy + Math.sin(t) * rr];
+  const runs: number[][] = [];
+  let cur: number[] = [];
+  const k0 = Array.from({ length: N }, (_, k) => k).find((k) => inGap(((k + 0.5) / N) * Math.PI * 2)) ?? 0;
+  for (let j = 1; j <= N; j++) {
+    const k = (k0 + j) % N;
+    if (inGap(((k + 0.5) / N) * Math.PI * 2)) {
+      if (cur.length) runs.push(cur);
+      cur = [];
+    } else cur.push(k);
   }
-  // Fallen blocks out through the breach and by the door.
+  if (cur.length) runs.push(cur);
+  const jag = Array.from({ length: N + 1 }, () => (rnd() - 0.5) * 0.1 * PX);
+  // A ring band over `ks` (segment indices) from `ri` to `ro(t)` (px).
+  const band = (ks: number[], ri: (t: number) => number, ro: (t: number, k: number) => number) => {
+    const out: number[] = [];
+    const ts = [...ks.map((k) => (k / N) * Math.PI * 2), ((ks[ks.length - 1] + 1) / N) * Math.PI * 2];
+    ts.forEach((t, i) => out.push(...pt(t, ro(t, ks[Math.min(i, ks.length - 1)] + (i === ks.length ? 1 : 0)))));
+    for (let i = ts.length - 1; i >= 0; i--) out.push(...pt(ts[i], ri(ts[i])));
+    return out;
+  };
+  const low = runs.map((ks) => band(ks, () => r, (_, k) => R - 0.08 * PX + jag[k]));
+  // The standing piece: where the wall is tall, cut off ragged at its ends.
+  const highKs: number[][] = [];
+  for (const ks of runs) {
+    let part: number[] = [];
+    for (const k of ks) {
+      if (tall(((k + 0.5) / N) * Math.PI * 2) > 0.25 + 0.15 * ((k * 7) % 3)) part.push(k);
+      else if (part.length) [highKs[highKs.length], part] = [part, []];
+    }
+    if (part.length) highKs.push(part);
+  }
+  const standing = highKs
+    .filter((ks) => ks.length > 1)
+    .map((ks) => band(ks, (t) => r - 0.12 * PX * tall(t), (t, k) => R + 0.22 * PX * tall(t) + jag[k] * 0.6));
+  for (const p of low) g.poly(shade(p, 0.14)).fill({ color: 0x000000, alpha: 0.28 });
+  for (const p of standing) g.poly(shade(p, 0.55)).fill({ color: 0x000000, alpha: 0.3 });
+  for (const p of low) g.poly(p).fill(STONE[2]).stroke({ width: OUT, color: INK, join: "round" });
+  for (const p of standing) {
+    g.poly(p).fill(STONE[0]);
+    g.poly(inset(p, 0.9, 0.06 * PX, 0.06 * PX)).fill({ color: STONE[1], alpha: 0.6 });
+    g.poly(p).stroke({ width: OUT, color: INK, join: "round" });
+  }
+  // Joints across the wall.
+  for (const ks of runs)
+    for (const k of ks) {
+      if (k % 3 !== 0) continue;
+      const t = (k / N) * Math.PI * 2;
+      const h = tall(t);
+      g.moveTo(...pt(t, r - 0.12 * PX * h)).lineTo(...pt(t, R + 0.2 * PX * h));
+    }
+  g.stroke({ width: 0.018 * PX, color: INK, alpha: 0.8 });
+  // Dressed blocks fallen out through the breach (one inside, by the wall).
   for (let k = 0; k < 6; k++) {
-    const t =
-      (k < 4 ? breach : door + Math.PI * 0.35 * (k === 4 ? 1 : -1)) +
-      (rnd() - 0.5) * 0.9;
-    const d = R + (0.3 + rnd() * 1.1) * PX;
-    boulder(
-      g,
-      [cx + Math.cos(t) * d, cy + Math.sin(t) * d],
-      0.16 + rnd() * 0.14,
-      STONE[rnd() < 0.5 ? 1 : 2],
-      rnd,
-    );
+    const t = k === 0 ? breach + (rnd() < 0.5 ? -1 : 1) * 0.9 : breach + (rnd() - 0.5) * 1.1;
+    const d = k === 0 ? r - 0.3 * PX : R + (0.3 + rnd() * 1.3) * PX;
+    const [bx, by] = [cx + Math.cos(t) * d, cy + Math.sin(t) * d];
+    const [w, l, rot] = [(0.12 + rnd() * 0.06) * PX, (0.18 + rnd() * 0.08) * PX, rnd() * Math.PI];
+    const [c, s] = [Math.cos(rot), Math.sin(rot)];
+    const unitSq = [-1, -1, 1, -1, 1, 1, -1, 1];
+    const corners: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const [px, py] = [unitSq[2 * i] * l, unitSq[2 * i + 1] * w];
+      corners.push(bx + px * c - py * s, by + px * s + py * c);
+    }
+    g.poly(shade(corners, 0.1)).fill({ color: 0x000000, alpha: 0.28 });
+    block(g, corners, STONE[rnd() < 0.5 ? 0 : 1], STONE[2], LINE * 1.4);
   }
 }
 

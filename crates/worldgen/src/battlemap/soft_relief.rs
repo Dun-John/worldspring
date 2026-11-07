@@ -1,8 +1,9 @@
 //! Small closed relief drawn soft (v63 underground): the knolls, hollows and ditches of
 //! `relief_in_cell` are marked with edge bit 128 where they stand on gentle ground, and
 //! `ground.frag` draws them with soft shading and a faint contour instead of a rock face and a
-//! bold rim. Real slopes, banks and cliffs (steep ground under the feature) and a dwarven hall's
-//! crag keep their ink. Rendering only: tiers and cliff bits are unchanged.
+//! bold rim. Real slopes, banks and cliffs (steep ground under the feature) and the face of a
+//! dwarven hall's crag keep their ink; the crag's back and horns are soft. Rendering only: tiers
+//! and cliff bits are unchanged.
 
 use super::{HS, Relief, SQ};
 
@@ -56,16 +57,22 @@ fn grade(h: &[f32], x: usize, y: usize) -> f64 {
     crate::core::sqrt(gx * gx + gy * gy)
 }
 
-/// Sets `SOFT` on the chunk's marked squares, except by a crag (`crag`: its lift on the `HS`²
-/// grid, empty when there is none).
-pub(super) fn flag(edges: &mut [u8], mask: &[bool], crag: &[f32]) {
-    if mask.is_empty() {
+/// Sets `SOFT` on the chunk's marked squares and on a crag's back and horns (`crag`: its lift on
+/// the `HS`² grid, `crag_m`: bit 2 by its face; empty when there is none), but not by the face,
+/// which keeps its rock and ink.
+pub(super) fn flag(edges: &mut [u8], mask: &[bool], crag: &[f32], crag_m: &[u8]) {
+    if mask.is_empty() && crag.is_empty() {
         return;
     }
-    let by_crag = |h: usize| !crag.is_empty() && [h, h - 1, h + 1, h - HS, h + HS].iter().any(|&q| crag[q] > 0.0);
+    // Within `r` squares of the halo square (x, y) (clipped to the halo grid).
+    let near = |x: usize, y: usize, r: usize, hit: &dyn Fn(usize) -> bool| {
+        (y.saturating_sub(r)..(y + r + 1).min(HS)).any(|yy| (x.saturating_sub(r)..(x + r + 1).min(HS)).any(|xx| hit(yy * HS + xx)))
+    };
     for k in 0..SQ * SQ {
-        let h = (k / SQ + 1) * HS + k % SQ + 1;
-        if mask[h] && !by_crag(h) {
+        let (x, y) = (k % SQ + 1, k / SQ + 1);
+        let h = y * HS + x;
+        let (on_crag, by_face) = if crag.is_empty() { (false, false) } else { (near(x, y, 2, &|q| crag[q] > 0.0), crag_m[h] & 2 != 0) };
+        if ((!mask.is_empty() && mask[h]) || on_crag) && !by_face {
             edges[k] |= SOFT;
         }
     }

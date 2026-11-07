@@ -59,19 +59,35 @@ pub fn barrow_ground(e: &Entrance) -> Vec<P> {
         .collect()
 }
 
-/// Tallest a crag stands over flat ground (ft): three tiers, its face a cliff.
-const CRAG_FT: f64 = 15.0;
-/// How far a crag runs in behind its gate, and its half-width (ft).
-const CRAG_LONG: f64 = 75.0;
-const CRAG_HALF: f64 = 36.0;
+/// Tallest a crag's face stands over flat ground (ft).
+const CRAG_FT: f64 = 11.0;
+/// The crag is a crescent round a point this far in front of the gate (ft); its face runs round
+/// that point this far out (so it stands 3 ft behind the opening, square to the passage).
+const CRAG_FRONT: f64 = 9.0;
+const CRAG_FACE_R: f64 = 12.0;
+/// The face's run from foot to top (ft): sheer, so it is inked as a cliff.
+const CRAG_FACE_RUN: f64 = 4.0;
+/// Where the level top along the face's rim gives way to the back's slope (ft in from the face).
+const CRAG_TOP: f64 = 11.0;
+/// How far the rock runs back from its face before it meets the ground (ft), behind the gate
+/// and less at its horns.
+const CRAG_BACK: f64 = 36.0;
+const CRAG_BACK_HORN: f64 = 22.0;
+/// Ground past the crag's back (ft) where the micro-relief eases back in.
+const CRAG_APRON: f64 = 15.0;
+/// Farthest the crag (and its apron) reaches from its centre (ft), outline noise included.
+const CRAG_REACH: f64 = CRAG_FACE_R + CRAG_BACK + CRAG_APRON + 6.0;
 
-/// A rock crag raised behind a dwarven hall's gate: its face half a square behind the opening,
-/// square to the passage, running back and down into the ground round it.
+/// A small rock outcrop raised behind a dwarven hall's gate: a crescent wrapping behind and
+/// round the sides of the gate, its inner face a cliff (3 ft behind the opening), its back and
+/// horns sloping smoothly down into the ground round it. Its outline is warped by noise of
+/// the world position.
 pub struct Crag {
     at: P,
     dir: P,
     amp: f64,
-    phase: f64,
+    ph: [f64; 2],
+    seed: u64,
 }
 
 impl Crag {
@@ -80,36 +96,87 @@ impl Crag {
     pub fn new(t0: &T0, e: &Entrance) -> Option<Crag> {
         let behind = add(e.at, mul(e.dir, 40.0));
         let rise = t0.sample(behind[0], behind[1], 5.0) - t0.sample(e.at[0], e.at[1], 5.0);
-        let amp = (CRAG_FT - rise.max(0.0)).min(CRAG_FT);
-        let phase = unit(hash2(0x6372_6167, crate::core::round(e.at[0]) as i64, crate::core::round(e.at[1]) as i64)) * std::f64::consts::TAU;
-        (amp >= 6.0).then_some(Crag { at: e.at, dir: e.dir, amp, phase })
+        let amp = (CRAG_FT - 0.6 * rise.max(0.0)).min(CRAG_FT);
+        let seed = hash2(0x6372_6167, crate::core::round(e.at[0]) as i64, crate::core::round(e.at[1]) as i64);
+        let ph = [unit(seed) * std::f64::consts::TAU, unit(hash2(seed, 1, 2)) * std::f64::consts::TAU];
+        (rise < 9.0).then_some(Crag { at: e.at, dir: e.dir, amp, ph, seed })
     }
 
     /// World bounding box (x0, y0, x1, y1).
     pub fn bbox(&self) -> (f64, f64, f64, f64) {
-        let r = CRAG_LONG.hypot(CRAG_HALF * 1.25);
-        (self.at[0] - r, self.at[1] - r, self.at[0] + r, self.at[1] + r)
+        let c = add(self.at, mul(self.dir, -CRAG_FRONT));
+        (c[0] - CRAG_REACH, c[1] - CRAG_REACH, c[0] + CRAG_REACH, c[1] + CRAG_REACH)
     }
 
-    /// Height (ft) the crag adds at `p`: nothing in front of the face; behind it a sheer rise of
-    /// about one square, a lumpy top, the sides and the back sloping away.
-    pub fn lift(&self, p: P) -> f64 {
-        let d = [p[0] - self.at[0], p[1] - self.at[1]];
+    /// Where `p` lies on the crag: its distance (ft) in from the face (negative in front of it),
+    /// the rock's depth there (face to back, ft) and the face's height (ft); None off the crag.
+    fn place(&self, p: P) -> Option<(f64, f64, f64)> {
+        let c = add(self.at, mul(self.dir, -CRAG_FRONT));
+        let d = [p[0] - c[0], p[1] - c[1]];
         let s = d[0] * self.dir[0] + d[1] * self.dir[1];
         let t = -d[0] * self.dir[1] + d[1] * self.dir[0];
-        if s <= 2.5 {
+        let r = crate::core::sqrt(s * s + t * t);
+        if r > CRAG_REACH {
+            return None;
+        }
+        // Angle off the passage's line: 0 behind the gate, the horns towards ±2 rad.
+        let th = libm::atan2(t, s).abs();
+        let hgt = self.amp * (1.0 - smoothstep(0.4, 2.0, th));
+        if hgt <= 0.0 {
+            return None;
+        }
+        // The face is true behind the gate and wanders round the horns; the back's outline
+        // wanders everywhere (noise of the world position, so it is not a drawn curve).
+        let side = smoothstep(0.3, 0.8, th);
+        let sth = if t < 0.0 { -th } else { th };
+        let wander = 1.4 * libm::sin(2.0 * sth + self.ph[0]) + 0.8 * libm::sin(5.0 * sth + self.ph[1]);
+        let warp = crate::core::noise::gradient2(self.seed, p[0] / 14.0, p[1] / 14.0);
+        let u = r - CRAG_FACE_R - side * (wander + 2.0 * warp);
+        let depth = CRAG_BACK - (CRAG_BACK - CRAG_BACK_HORN) * smoothstep(0.3, 1.8, th) + 2.5 * crate::core::noise::gradient2(self.seed ^ 0x5a5a, p[0] / 18.0, p[1] / 18.0);
+        Some((u, depth, hgt))
+    }
+
+    /// Height (ft) the crag adds at `p`: nothing in front of the face; a sheer face, a level rim,
+    /// then the top sloping away to the ground at the back (under 3 ft a square: a slope).
+    pub fn lift(&self, p: P) -> f64 {
+        let Some((u, depth, hgt)) = self.place(p) else { return 0.0 };
+        if u <= 0.0 || u >= depth {
             return 0.0;
         }
-        let face = smoothstep(2.5, 6.5, s);
-        // The width swells and pinches along its length; the back is rounded off.
-        let half = CRAG_HALF * (1.0 + 0.18 * libm::sin(s / 17.0 + self.phase));
-        let back = (s - 0.45 * CRAG_LONG).max(0.0) / (0.55 * CRAG_LONG);
-        let q = crate::core::sqrt(back * back + (t / half) * (t / half));
-        let body = 1.0 - smoothstep(0.4, 1.0, q);
-        if body <= 0.0 {
-            return 0.0;
-        }
-        let lumps = 1.0 + 0.12 * libm::sin(s / 9.0 + 2.0 * self.phase) * libm::cos(t / 11.0 - self.phase);
-        self.amp * face * body * lumps
+        let face = smoothstep(0.0, CRAG_FACE_RUN, u);
+        let back = 1.0 - ramp((u - CRAG_TOP) / (depth - CRAG_TOP));
+        hgt * face * back
+    }
+
+    /// How far (0-1) the ground's micro-relief is smoothed away at `p`: wholly on the crag
+    /// behind its face, easing back in over an apron past its back and towards its horns.
+    pub fn apron(&self, p: P) -> f64 {
+        self.place(p).map_or(0.0, |(u, depth, hgt)| smoothstep(0.0, 3.0, hgt) * smoothstep(-3.0, 0.0, u) * (1.0 - smoothstep(depth, depth + CRAG_APRON, u)))
+    }
+
+    /// Whether `p` is on the crag's face or the thin rim along its top (drawn as rock; the top
+    /// behind keeps the ground's own cover).
+    pub fn rock(&self, p: P) -> bool {
+        self.place(p).is_some_and(|(u, _, hgt)| hgt >= 5.0 && (-1.0..=CRAG_FACE_RUN + 3.5).contains(&u))
+    }
+
+    /// Whether `p` is by the crag's face (drawn with its ink and rock shading; the rest of the
+    /// crag is shaded soft). The two meet on the level rim and on the horns where the face is low,
+    /// so the change of shading never shows.
+    pub fn by_face(&self, p: P) -> bool {
+        self.place(p).is_some_and(|(u, _, hgt)| hgt >= 1.5 && (-6.0..=CRAG_TOP - 3.0).contains(&u))
+    }
+}
+
+/// 0 → 1 over `v` in [0, 1]: straight through the middle (slope 4/3), eased at both ends.
+fn ramp(v: f64) -> f64 {
+    const K: f64 = 0.25;
+    let v = v.clamp(0.0, 1.0);
+    if v < K {
+        v * v / (2.0 * K * (1.0 - K))
+    } else if v > 1.0 - K {
+        1.0 - (1.0 - v) * (1.0 - v) / (2.0 * K * (1.0 - K))
+    } else {
+        (v - 0.5 * K) / (1.0 - K)
     }
 }

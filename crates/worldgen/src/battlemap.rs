@@ -2118,6 +2118,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // v63 underground: a crag raised behind a dwarven hall's gate on flat ground (its rock drawn
     // below); buildings keep their pads.
     let mut crag_h = vec![0f32; if crags.is_empty() { 0 } else { HS * HS }];
+    // Per square: 1 the face or its rim (rock), 2 by the face (inked; the rest of the crag soft).
+    let mut crag_m = vec![0u8; crag_h.len()];
+    let mut crag_w = vec![0f32; crag_h.len()];
     for c in &crags {
         let (i0, j0, i1, j1) = range(c.bbox());
         if i1 < 0.0 || j1 < 0.0 {
@@ -2126,13 +2129,18 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for j in j0..=j1 as usize {
             for i in i0..=i1 as usize {
                 let h = j * HS + i;
-                let lift = c.lift(center(i, j)) as f32;
-                if lift > 0.0 && bld_h[h] == 0 {
-                    hh[h] += lift;
-                    crag_h[h] += lift;
+                let p = center(i, j);
+                if bld_h[h] == 0 {
+                    crag_h[h] += c.lift(p) as f32;
+                    crag_w[h] = crag_w[h].max(c.apron(p) as f32);
                 }
+                crag_m[h] |= u8::from(c.rock(p)) | 2 * u8::from(c.by_face(p));
             }
         }
+    }
+    // The micro-relief under it and just past its back fades out (no hollow cut into it).
+    for (h, &w) in crag_w.iter().enumerate().filter(|&(_, &w)| w > 0.0) {
+        hh[h] += crag_h[h] - w * (hh[h] - relief_base[h]);
     }
     // A camp's clearing is level: the ground eases to one height from just past the rim to
     // three quarters of the way in (so the tents stand on one tier). That height is the mean
@@ -2517,7 +2525,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     };
     let yard = Yard { ok: &yard_ok, ways: &bailey_ways, gates: &gates, ox, oy };
     for k in (0..n).filter(|_| !crag_h.is_empty()) {
-        if crag_h[(k / SQ + 1) * HS + k % SQ + 1] > 2.0 && chunk.water_level[k] <= chunk.height[k] && chunk.building[k] == 0 {
+        if crag_m[(k / SQ + 1) * HS + k % SQ + 1] & 1 != 0 && chunk.water_level[k] <= chunk.height[k] && chunk.building[k] == 0 {
             chunk.surface[k] = Surface::Rock;
         }
     }
@@ -2929,7 +2937,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);
-    soft_relief::flag(&mut chunk.edges, &soft, &crag_h);
+    soft_relief::flag(&mut chunk.edges, &soft, &crag_h, &crag_m);
     for k in 0..n {
         if park_wet[(k / SQ + 1) * HS + k % SQ + 1] {
             chunk.edges[k] |= 32;
