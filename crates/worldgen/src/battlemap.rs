@@ -1040,6 +1040,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Ground kept clear round a way underground (its own ground stays: graveyard grass, ruin
     // dirt, street cobbles).
     let mut ent_h = vec![false; HS * HS];
+    let mut crags: Vec<crate::under::surface::Crag> = Vec::new();
     // Squares on a flight of steps (only where a flight comes near the chunk).
     let mut stair_h: Option<Vec<bool>> = None;
     // Where the ground was shaped by hand round a city's streets: the street line nearest each such
@@ -1357,7 +1358,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         // Ways underground: the opening's ground stays clear; the chunk holding it draws it.
         // `size` = kind + 16 × style (0 plain, 1 a ruin's broken stair, 2 a graveyard's
-        // mausoleum headhouse).
+        // mausoleum headhouse, 4-6 a wild site's by theme: `under::surface`).
         for e in &l.entrances {
             use crate::town::geom::{add, mul};
             let in_yard = l.buildings.iter().any(|b| b.structure == crate::town::Structure::Open && crate::town::geom::contains(&b.poly, e.at));
@@ -1366,7 +1367,18 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 crate::under::UnderKind::Catacombs if in_yard => 2,
                 _ => 0,
             };
-            let clear = if style == 2 {
+            // v63 underground: a wild site's way down by its theme (`under::surface`), and the crag
+            // a dwarven hall's gate is cut into.
+            let style = crate::under::surface::entrance_style(world, t0, &l, e).unwrap_or(style);
+            if style == crate::under::surface::STYLE_RUNE_GATE
+                && let Some(c) = crate::under::surface::Crag::new(t0, e)
+                && overlaps(c.bbox())
+            {
+                crags.push(c);
+            }
+            let clear = if style == crate::under::surface::STYLE_BARROW {
+                crate::under::surface::barrow_ground(e)
+            } else if style == 2 {
                 // The headhouse (4 × 3 squares) and a square round it.
                 let side = [-e.dir[1], e.dir[0]];
                 let at = |a: f64, b: f64| add(e.at, add(mul(e.dir, a * SQUARE_FT), mul(side, b * SQUARE_FT)));
@@ -2096,6 +2108,25 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             hh[h] = road_bed[h] + (hh[h] - road_bed[h]) * (1.0 - w);
         }
     }
+    // v63 underground: a crag raised behind a dwarven hall's gate on flat ground (its rock drawn
+    // below); buildings keep their pads.
+    let mut crag_h = vec![0f32; if crags.is_empty() { 0 } else { HS * HS }];
+    for c in &crags {
+        let (i0, j0, i1, j1) = range(c.bbox());
+        if i1 < 0.0 || j1 < 0.0 {
+            continue;
+        }
+        for j in j0..=j1 as usize {
+            for i in i0..=i1 as usize {
+                let h = j * HS + i;
+                let lift = c.lift(center(i, j)) as f32;
+                if lift > 0.0 && bld_h[h] == 0 {
+                    hh[h] += lift;
+                    crag_h[h] += lift;
+                }
+            }
+        }
+    }
     // A camp's clearing is level: the ground eases to one height from just past the rim to
     // three quarters of the way in (so the tents stand on one tier). That height is the mean
     // of the ground in it when the chunk holds it all (camps are placed so), else the layout's
@@ -2478,6 +2509,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             .collect()
     };
     let yard = Yard { ok: &yard_ok, ways: &bailey_ways, gates: &gates, ox, oy };
+    for k in (0..n).filter(|_| !crag_h.is_empty()) {
+        if crag_h[(k / SQ + 1) * HS + k % SQ + 1] > 2.0 && chunk.water_level[k] <= chunk.height[k] && chunk.building[k] == 0 {
+            chunk.surface[k] = Surface::Rock;
+        }
+    }
     place_objects(&mut chunk, &biome, &slope, &road_near, &yard, seed, gsx, gsy);
     // The land's scatter in a bailey gives way to what the bailey is dressed with (every prop of
     // the layout, not only this chunk's, so a seam cuts nothing differently).

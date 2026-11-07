@@ -4148,3 +4148,56 @@ fn sketch_names_and_sites() {
     let places = |t: &worldgen::t0::T0| t.settlements.iter().map(|s| (s.x.round() as i64, s.y.round() as i64, s.tier as u8, s.population)).collect::<Vec<_>>();
     assert_eq!(places(&t_road), places(&t_none), "drawing a road moved or resized settlements with generated roads off");
 }
+
+// v63 underground
+
+/// A dwarven hall's gate on flat ground stands in a crag the battlemap raises (`under::surface`):
+/// the chunks round it still meet bit for bit, and the crag's face behind the gate is a cliff.
+#[test]
+fn dwarven_crag_seams() {
+    use worldgen::battlemap::{HS, SQ, SQUARE_FT};
+    use worldgen::under::surface::{Crag, STYLE_RUNE_GATE, entrance_style};
+    let mut found = 0;
+    for seed in [1u32, 3] {
+        let world = World::from_json(&world_json(seed)).unwrap();
+        let size = world.geom.tile_size_ft(world.geom.max_level);
+        let level = world.geom.max_level;
+        let mut ex = Executor::new(world);
+        let n = ex.t0.settlements.len();
+        let gates: Vec<_> = (n..n + ex.t0.pois.len())
+            .flat_map(|i| {
+                let l = worldgen::town::layout(&ex.world, &ex.t0, i);
+                l.entrances.iter().filter(|e| entrance_style(&ex.world, &ex.t0, &l, e) == Some(STYLE_RUNE_GATE) && Crag::new(&ex.t0, e).is_some()).copied().collect::<Vec<_>>()
+            })
+            .collect();
+        for e in gates {
+            found += 1;
+            let (kx, ky) = ((e.at[0] / size) as u32, (e.at[1] / size) as u32);
+            let c = ex.battlemap(TileKey::surface(level, kx, ky));
+            let seam = |a: &worldgen::battlemap::Chunk, east: &worldgen::battlemap::Chunk, south: &worldgen::battlemap::Chunk| {
+                for j in 0..SQ {
+                    assert_eq!(a.halo_height[(j + 1) * HS + SQ + 1].to_bits(), east.height[j * SQ].to_bits(), "seed {seed}: crag seam at row {j}");
+                    assert_eq!(a.halo_height[(SQ + 1) * HS + j + 1].to_bits(), south.height[j].to_bits(), "seed {seed}: crag seam at column {j}");
+                }
+            };
+            let (east, south) = (ex.battlemap(TileKey::surface(level, kx + 1, ky)), ex.battlemap(TileKey::surface(level, kx, ky + 1)));
+            seam(&c, &east, &south);
+            let (west, north) = (ex.battlemap(TileKey::surface(level, kx - 1, ky)), ex.battlemap(TileKey::surface(level, kx, ky - 1)));
+            seam(&west, &c, &ex.battlemap(TileKey::surface(level, kx - 1, ky + 1)));
+            seam(&north, &ex.battlemap(TileKey::surface(level, kx + 1, ky - 1)), &c);
+            // Cliff ink between the opening and three squares behind it, across the gate.
+            let mut cliff = false;
+            for a in 0..=3 {
+                for b in -1i32..=1 {
+                    let p = [e.at[0] + e.dir[0] * a as f64 * SQUARE_FT - e.dir[1] * b as f64 * SQUARE_FT, e.at[1] + e.dir[1] * a as f64 * SQUARE_FT + e.dir[0] * b as f64 * SQUARE_FT];
+                    let (cx, cy) = ((p[0] / size) as u32, (p[1] / size) as u32);
+                    let k = ((p[1] - cy as f64 * size) / SQUARE_FT) as usize * SQ + ((p[0] - cx as f64 * size) / SQUARE_FT) as usize;
+                    let ch = ex.battlemap(TileKey::surface(level, cx, cy));
+                    cliff |= ch.edges[k] & 3 != 0 || (k % SQ > 0 && ch.edges[k - 1] & 1 != 0) || (k >= SQ && ch.edges[k - SQ] & 2 != 0);
+                }
+            }
+            assert!(cliff, "seed {seed}: no cliff behind the dwarven gate at {:?}", e.at);
+        }
+    }
+    assert!(found > 0, "no dwarven hall gate with a crag in seeds 1 and 3");
+}

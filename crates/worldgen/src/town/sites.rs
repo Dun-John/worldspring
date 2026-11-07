@@ -8,13 +8,19 @@ use super::catalog::{self, Ward};
 use super::geom::*;
 use super::{Building, District, Ground, Layout, Structure, castle, clip_walls, rect, wall_pieces};
 use crate::World;
-use crate::core::rng::{Pcg32, hash2};
+use crate::core::rng::{Pcg32, hash2, unit};
 use crate::t0::T0;
 use crate::t0::settle::{PoiKind, Tier};
 use crate::under::UnderKind;
 
 /// How far a POI layout reaches from its point (ft).
 pub const SITE_REACH_FT: f64 = 260.0;
+
+/// What a generated ruin's way down comes to: a dungeon under the hold or its crypt, from the
+/// site's seed alone (v63: placement asks it before the site is laid out).
+pub fn ruin_under(world: &World, seed: u64) -> UnderKind {
+    if unit(hash2(world.stream("site.under"), 0, seed as i64)) < 0.5 { UnderKind::Dungeon } else { UnderKind::Crypt }
+}
 
 pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let p = &t0.pois[poi];
@@ -94,25 +100,33 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             let n = 3 + rng.below(5) as usize;
             let a0 = rng.range(0.0, std::f64::consts::TAU);
             let mut dir = [libm::cos(a0), libm::sin(a0)];
+            // A dungeon under the hold, or its crypt (from the seed alone, so placement knows the
+            // theme: `ruin_under`). A dwarven hall's gate is cut into the hill (or a crag the
+            // battlemap raises), the ruined outbuildings standing before it.
+            let kind = t0.created_site(poi).and_then(|c| c.under).unwrap_or_else(|| ruin_under(world, p.seed));
+            let dwarven = crate::under::surface::theme_at(world, t0, t0.settlements.len() + poi, 0, kind, true).key == "dwarven_hall";
+            let gate = dwarven.then(|| uphill([0.0, 0.0]).unwrap_or(dir));
             for k in 0..n {
                 let a = a0 + std::f64::consts::TAU * (k as f64 + rng.range(-0.2, 0.2)) / n as f64;
                 let (w, d) = (rng.range(24.0, 48.0), rng.range(18.0, 30.0));
                 let c = [(yard + 0.5 * d) * libm::cos(a), (yard + 0.5 * d) * libm::sin(a)];
+                if gate.is_some_and(|g| c[0] * g[0] + c[1] * g[1] > -0.3 * len(c)) {
+                    continue;
+                }
                 push(rect(c, [-libm::sin(a), libm::cos(a)], w, d), Structure::Ruin, None, catalog::RUINED, 1, &mut buildings);
             }
-            if rng.next_f64() < 0.5 {
+            if rng.next_f64() < 0.5 && gate.is_none() {
                 let a = rng.range(0.0, std::f64::consts::PI);
                 dir = [libm::cos(a), libm::sin(a)];
                 push(rect([0.0, 0.0], dir, yard * 1.1, yard * 0.7), Structure::Ruin, None, catalog::RUINED, 1, &mut buildings);
+            } else if let Some(g) = gate {
+                dir = g;
+                plazas.push(circle(mul(g, -0.6 * yard), yard * 0.5, 10));
             } else {
                 plazas.push(circle([0.0, 0.0], yard * 0.6, 10));
             }
-            // A stair down in the middle, square to the old hall (or facing the first shell): a
-            // dungeon under the hold, or its crypt.
-            let mut kind = if rng.next_f64() < 0.5 { UnderKind::Dungeon } else { UnderKind::Crypt };
-            if let Some(under) = t0.created_site(poi).and_then(|c| c.under) {
-                kind = under;
-            }
+            // A stair down in the middle, square to the old hall (or facing the first shell).
+            let _ = rng.next_f64();
             entrances.push(super::Entrance { at: mul(dir, -7.5), dir, kind, id: 0 });
         }
         PoiKind::Cave => {
