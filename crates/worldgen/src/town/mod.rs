@@ -1089,6 +1089,8 @@ struct Site<'a> {
     roads: std::cell::OnceCell<(Vec<(P, P, f64)>, FastMap<(i64, i64), Vec<u32>>)>,
     /// How far from the centre (ft) the settlement's layout can reach.
     reach: f64,
+    /// The sea's level (ft): a beach is within 3 ft over it (`battlemap::beach`).
+    sea: f64,
 }
 
 /// The ground settlements are planned on (`Site::height`), which the terrain is also reset
@@ -1285,7 +1287,7 @@ const RIVER_CELL: f64 = 250.0;
 const ROAD_CELL: f64 = 100.0;
 
 impl<'a> Site<'a> {
-    fn new(t0: &'a T0, center: P, lattice_ft: f64, layout_reach: f64, river: Vec<(P, P, f64)>) -> Site<'a> {
+    fn new(t0: &'a T0, center: P, lattice_ft: f64, layout_reach: f64, river: Vec<(P, P, f64)>, sea: f64) -> Site<'a> {
         let mut river_grid: FastMap<(i64, i64), Vec<u32>> = FastMap::default();
         let mut river_max_hw = 0.0f64;
         for (i, &(a, b, hw)) in river.iter().enumerate() {
@@ -1313,7 +1315,7 @@ impl<'a> Site<'a> {
             lattice_ft,
             VALLEY_CELL,
         );
-        Site { t0, center, plan, lakeside, river, river_grid, river_max_hw, roads: std::cell::OnceCell::new(), reach: layout_reach }
+        Site { t0, center, plan, lakeside, river, river_grid, river_max_hw, roads: std::cell::OnceCell::new(), reach: layout_reach, sea }
     }
 }
 
@@ -1817,6 +1819,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         belfry::raise_all(&mut l, Some(&generated));
     }
     round_off(&mut l);
+    fields::crofts_off_sand(&site, &mut l);
     fields::assign(&site, s.seed, &mut l);
     rural::place(&site, s, &mut l);
     // (A town edited by hand keeps its windmills as generated, ids and all, where they still stand
@@ -1878,7 +1881,7 @@ fn prepare<'a>(world: &World, t0: &'a T0, index: usize) -> (Site<'a>, Vec<(P, u8
     let center = [s.x, s.y];
     let r = urban_radius(s.tier, s.population);
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-    let site = Site::new(t0, center, lattice, reach(s) + 500.0, river_pieces(t0, center, reach(s) + 500.0));
+    let site = Site::new(t0, center, lattice, reach(s) + 500.0, river_pieces(t0, center, reach(s) + 500.0), world.params().sea_level_ft);
     let rng = Pcg32::new(hash2(world.stream("town"), rng_key(t0, index), s.seed as i64), 31);
     (site, road_ends(t0, center, r, road_trim_radius(s.tier, s.population)), rng)
 }
@@ -3769,6 +3772,9 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let want: f64 = plots.iter().filter(|p| p.1 < 2).map(|p| area(&p.0).abs()).sum();
     // (None on a road running across open ground.)
     plots.retain(|p| p.1 == 0 || !far_roads.iter().any(|r| r.0.windows(2).any(|s| poly_seg_dist(&p.0, s[0], s[1]) < 0.5 * r.2 + 4.0)));
+    // (Off sand: cut back to the land, `fields::off_sand`; the belt takes plots farther out for
+    // those lost.)
+    let plots: Vec<(Vec<P>, u8)> = plots.into_iter().filter_map(|(f, class)| fields::off_sand(site, &f).map(|f| (f, class))).collect();
     let picked = fields::belt_order(site, plan.pseed, &plots, want, &|c| {
         let b = belt(c);
         len(c) / (b * fields::reach(site, plan.pseed, c, &far_roads, b))

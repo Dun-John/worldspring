@@ -748,6 +748,18 @@ fn surface_for(b: Biome, slope: f64) -> Surface {
     }
 }
 
+/// A dry square's beach (`Surface::Sand`, whatever the biome): within 3 ft of the sea beside it
+/// (`depth`: its water's level over it; `level` that water's), on gentle ground.
+pub fn beach(depth: f64, level: f64, sea: f64, slope: f64) -> bool {
+    depth > -3.0 && level <= sea + 0.5 && slope < 0.15
+}
+
+/// Whether a dry square's ground is sand: a beach (`beach`), or the biome's own (a hot desert's,
+/// or the sea's or a lake's by their shores).
+pub fn sand_ground(b: Biome, depth: f64, level: f64, sea: f64, slope: f64) -> bool {
+    beach(depth, level, sea, slope) || surface_for(b, slope) == Surface::Sand
+}
+
 /// Micro-relief feature from its grid cell (pure function of the cell): center (global
 /// squares), radius (squares), height (ft, may be negative), steepness 0 smooth..1 cliff-edged,
 /// elongation along `dir`, and an irregular outline (three harmonics of the angle).
@@ -2558,7 +2570,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             Surface::Deep
         } else if depth > 0.0 {
             Surface::Shallow
-        } else if depth > -3.0 && chunk.water_level[k] as f64 <= sea + 0.5 && slope[k] < 0.15 {
+        } else if beach(depth as f64, chunk.water_level[k] as f64, sea, slope[k]) {
             Surface::Sand
         } else {
             surface_for(biome[k], slope[k])

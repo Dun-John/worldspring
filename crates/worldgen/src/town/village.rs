@@ -567,6 +567,8 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
                 continue;
             }
             if f.len() >= 3 && area(&f).abs() > 1_500.0 && !site.wet(c) && site.dry_outline(&f, 8.0) && !g.plot_hit(&f) && !l.buildings.iter().any(|b| super::overlaps(&b.poly, &f)) {
+                // (Cut back off sand, `fields::off_sand`: plots farther out make up for it.)
+                let Some(f) = super::fields::off_sand(site, &f) else { continue };
                 have += area(&f).abs();
                 plots.push((f, 1));
             }

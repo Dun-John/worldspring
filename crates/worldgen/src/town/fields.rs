@@ -43,6 +43,9 @@ pub struct FieldInfo {
     pub strips: bool,
     /// A shade (0-7), so neighbouring fields differ.
     pub tone: u8,
+    /// Hedgerows (or walls) across it (`rural::rows`): none on a pasture in a forest biome (open
+    /// ground, its floor the forest's) or on a hot desert's watered fields.
+    pub rows: bool,
 }
 
 /// How far a settlement's fields reach at `p` (local ft) as a share of the belt's plain radius
@@ -86,6 +89,205 @@ pub(super) fn belt_order(site: &Site, seed: u64, plots: &[(Vec<P>, u8)], want: f
     plots.iter().zip(take).filter(|x| x.1).map(|x| x.0.0.clone()).collect()
 }
 
+/// How far (ft) a field or croft stops short of sand, and the step (ft) the ground is looked at.
+const SAND_MARGIN: f64 = 8.0;
+const SAND_STEP: f64 = 10.0;
+
+/// What the battlemap draws at `w` (world ft; `battlemap::sand_ground`): 0 the land's own ground, 1
+/// sand by the sea or a lake (a beach, a shore's biome) or their water, 2 a hot desert's sand.
+fn sand_kind(site: &Site, sea: f64, w: P) -> u8 {
+    let t0 = site.t0;
+    let (level, mask) = t0.sample_lake(w[0], w[1]);
+    if level > crate::t0::hydro::DRY {
+        let p = sub(w, site.center);
+        let water = if mask >= 0.5 { level as f64 } else { crate::t0::hydro::DRY as f64 };
+        let h = site.height(p);
+        if water > h {
+            return 1;
+        }
+        if water - h > -3.0 && water <= sea + 0.5 {
+            let d = |o: P| site.height(add(p, o)) - site.height(sub(p, o));
+            let (gx, gy) = (d([5.0, 0.0]) / 5.0, d([0.0, 5.0]) / 5.0);
+            if crate::battlemap::beach(water - h, water, sea, crate::core::sqrt(gx * gx + gy * gy)) {
+                return 1;
+            }
+        }
+    }
+    match Biome::from_u8(t0.sample_biome(w[0], w[1], t0.biome_warp(w[0], w[1]))[0]) {
+        Biome::Ocean | Biome::Lake => 1,
+        Biome::HotDesert => 2,
+        _ => 0,
+    }
+}
+
+/// Whether a hot desert's ground at `c` (world ft) is watered: a river or standing water (an
+/// oasis) within about 600 ft.
+fn watered(site: &Site, c: P) -> bool {
+    site.near_river(sub(c, site.center), 600.0)
+        || [0.0, 300.0, 600.0].into_iter().any(|r: f64| {
+            (0..if r > 0.0 { 8 } else { 1 }).any(|k| {
+                let t = std::f64::consts::TAU * k as f64 / 8.0;
+                site.t0.sample_water(c[0] + r * libm::cos(t), c[1] + r * libm::sin(t)) > crate::t0::hydro::DRY
+            })
+        })
+}
+
+/// The ground under a polygon (world ft) every `SAND_STEP` on the world lattice, out to the margin
+/// round it: each point, whether it is inside, and its kind (`sand_kind`; a watered desert's is
+/// the land's, 3). None where no sand can be near; empty where it is sand all over (at its corners,
+/// its sides' middles and its middle).
+fn sand_samples(site: &Site, sea: f64, poly: &[P]) -> Option<Vec<(P, bool, u8)>> {
+    let t0 = site.t0;
+    let biome = |q: &P| Biome::from_u8(t0.sample_biome(q[0], q[1], t0.biome_warp(q[0], q[1]))[0]);
+    let c = centroid(poly);
+    // (Looked at only where its corners, its sides' middles or its middle are sand, or the sea's
+    // shore is near them: a beach within 6 ft of height.)
+    let n = poly.len();
+    let probes = poly.iter().copied().chain((0..n).map(|k| lerp(poly[k], poly[(k + 1) % n], 0.5))).chain(std::iter::once(c));
+    let probes: Vec<P> = probes.collect();
+    let mut desert = false;
+    let mut near = false;
+    for q in &probes {
+        let b = biome(q);
+        desert |= b == Biome::HotDesert;
+        near |= matches!(b, Biome::Ocean | Biome::Lake | Biome::HotDesert) || {
+            let (level, mask) = t0.sample_lake(q[0], q[1]);
+            level > crate::t0::hydro::DRY && {
+                let h = site.height(sub(*q, site.center));
+                (mask >= 0.5 && level as f64 > h) || (level as f64 <= sea + 0.5 && h < level as f64 + 9.0)
+            }
+        };
+    }
+    if !near {
+        return None;
+    }
+    let wet = desert && watered(site, c);
+    // (Sand at every one of them: sand all over, as good as.)
+    if probes.iter().all(|&q| match sand_kind(site, sea, q) {
+        2 => !wet,
+        k => k == 1,
+    }) {
+        return Some(Vec::new());
+    }
+    let reach = SAND_MARGIN + 0.5 * SAND_STEP;
+    let (x0, y0, x1, y1) = poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    let f = |v: f64| crate::core::floor(v / SAND_STEP) as i64;
+    // (Every other point first, the rest looked at only between two that differ, else as they are:
+    // the lattice's even points, so a point's kind never depends on the polygon.)
+    let even = |v: i64| v - v.rem_euclid(2);
+    let (i0, j0) = (even(f(x0 - reach)), even(f(y0 - reach)));
+    let (i1, j1) = (even(f(x1 + reach) + 2), even(f(y1 + reach) + 2));
+    let w = (i1 - i0 + 1) as usize;
+    let at = |i: i64, j: i64| (j - j0) as usize * w + (i - i0) as usize;
+    let kind = |i: i64, j: i64| match sand_kind(site, sea, [i as f64 * SAND_STEP, j as f64 * SAND_STEP]) {
+        2 if wet => 3,
+        k => k,
+    };
+    let mut grid = vec![0u8; w * (j1 - j0 + 1) as usize];
+    for j in (j0..=j1).step_by(2) {
+        for i in (i0..=i1).step_by(2) {
+            grid[at(i, j)] = kind(i, j);
+        }
+    }
+    let mut out = Vec::new();
+    for j in j0..=j1 {
+        for i in i0..=i1 {
+            let p = [i as f64 * SAND_STEP, j as f64 * SAND_STEP];
+            let inside = contains(poly, p);
+            if !inside && (0..n).all(|k| seg_dist(p, poly[k], poly[(k + 1) % n]) > reach) {
+                continue;
+            }
+            let k = if i.rem_euclid(2) == 0 && j.rem_euclid(2) == 0 {
+                grid[at(i, j)]
+            } else {
+                let (xs, ys) = (if i.rem_euclid(2) == 0 { [i, i] } else { [i - 1, i + 1] }, if j.rem_euclid(2) == 0 { [j, j] } else { [j - 1, j + 1] });
+                let first = grid[at(xs[0], ys[0])];
+                if xs.iter().all(|&a| ys.iter().all(|&b| grid[at(a, b)] == first)) { first } else { kind(i, j) }
+            };
+            out.push((p, inside, k));
+        }
+    }
+    Some(out)
+}
+
+/// A field plot off sand (v63; `poly` local ft, as the plot comes and goes): where it reaches onto a
+/// beach, a shore's sand or a hot desert's unwatered sand it is cut back along a straight line to
+/// the land, a few feet short of the sand (`SAND_MARGIN`; of 32 ways round, the line keeping most
+/// of its land), and dropped (`None`) where little of it is left. A pure function of its ground.
+pub(super) fn off_sand(site: &Site, poly: &[P]) -> Option<Vec<P>> {
+    let f: Vec<P> = poly.iter().map(|&p| add(p, site.center)).collect();
+    let Some(pts) = sand_samples(site, site.sea, &f) else { return Some(poly.to_vec()) };
+    if pts.is_empty() {
+        return None;
+    }
+    let bad: Vec<P> = pts.iter().filter(|s| matches!(s.2, 1 | 2)).map(|s| s.0).collect();
+    if bad.is_empty() {
+        return Some(poly.to_vec());
+    }
+    let good: Vec<P> = pts.iter().filter(|s| s.1 && matches!(s.2, 0 | 3)).map(|s| s.0).collect();
+    let mut best: Option<(usize, P, f64)> = None;
+    for k in 0..32 {
+        let t = std::f64::consts::TAU * k as f64 / 32.0;
+        let n = [libm::cos(t), libm::sin(t)];
+        let c = bad.iter().map(|&b| dot(b, n)).fold(f64::MIN, f64::max) + SAND_MARGIN + 0.5 * SAND_STEP;
+        let kept = good.iter().filter(|&&g| dot(g, n) > c).count();
+        if best.is_none_or(|b| kept > b.0) {
+            best = Some((kept, n, c));
+        }
+    }
+    let (kept, n, c) = best?;
+    if kept * 3 < good.len() {
+        return None;
+    }
+    let piece = clean(&clip_plain(&f, mul(n, -1.0), -c));
+    if piece.len() < 3 || area(&piece).abs() < (0.3 * area(&f).abs()).max(1500.0) || obb(&piece).short < 20.0 {
+        return None;
+    }
+    Some(piece.into_iter().map(|p| sub(p, site.center)).collect())
+}
+
+/// A village's crofts off sand (v63, world ft, once its buildings and fields are final).
+pub(super) fn crofts_off_sand(site: &Site, l: &mut Layout) {
+    let sea = site.sea;
+    // Crofts: shortened from the back (their front on the lane and their cottage kept) until clear
+    // of the sand by the margin, else dropped. (A churchyard keeps its low stone wall.)
+    let homes: Vec<Vec<P>> = l.buildings.iter().map(|b| b.poly.clone()).collect();
+    let crofts = std::mem::take(&mut l.crofts);
+    for mut c in crofts {
+        if c.kind == super::village::PlotKind::Churchyard || c.pts.len() < 3 {
+            l.crofts.push(c);
+            continue;
+        }
+        let Some(pts) = sand_samples(site, sea, &c.pts) else {
+            l.crofts.push(c);
+            continue;
+        };
+        let bad: Vec<P> = if pts.is_empty() { c.pts.clone() } else { pts.iter().filter(|s| matches!(s.2, 1 | 2)).map(|s| s.0).collect() };
+        if bad.is_empty() {
+            l.crofts.push(c);
+            continue;
+        }
+        // (A shrine's or the manor's yard on sand is walled: no hedge or fence round it.)
+        if c.kind != super::village::PlotKind::Croft || c.pts.len() != 4 {
+            c.bound = super::village::Bound::Wall;
+            l.crofts.push(c);
+            continue;
+        }
+        let q = c.pts.clone();
+        let held: Vec<&Vec<P>> = homes.iter().filter(|h| contains(&q, centroid(h))).collect();
+        let clear = |quad: &[P]| {
+            let reach = SAND_MARGIN + 0.5 * SAND_STEP;
+            bad.iter().all(|&b| !contains(quad, b) && (0..4).all(|k| seg_dist(b, quad[k], quad[(k + 1) % 4]) > reach))
+                && held.iter().all(|h| h.iter().all(|&v| contains(quad, v) && (0..4).all(|k| seg_dist(v, quad[k], quad[(k + 1) % 4]) > 2.0)))
+        };
+        let short = (4..=9).rev().map(|t| t as f64 / 10.0).map(|s| vec![q[0], q[1], lerp(q[1], q[2], s), lerp(q[0], q[3], s)]).find(|quad| clear(quad));
+        if let Some(quad) = short {
+            c.pts = quad;
+            l.crofts.push(c);
+        }
+    }
+}
+
 /// Ground steeper than this (rise over run across the field) is pasture or walled.
 const STEEP: f64 = 0.05;
 
@@ -93,6 +295,7 @@ const STEEP: f64 = 0.05;
 /// settlement's middle, `site` planned round it).
 pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
     let biome = crate::battlemap::land_biome(site.t0, l.center);
+    let t0 = site.t0;
     let (wall0, hedge0): (f64, f64) = match biome {
         Biome::Alpine | Biome::Tundra | Biome::ColdDesert | Biome::Ice => (0.75, 0.0),
         Biome::Steppe | Biome::Taiga => (0.55, 0.2),
@@ -136,14 +339,24 @@ pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
         let rim = ((len(local) / outer[sector(local)].max(1.0) - 0.8) / 0.2).clamp(0.0, 1.0);
         // Use: pasture on steep and wet ground, more of it far out; arable near, some of it fallow.
         let pasture = grazing + if steep { 0.4 } else { 0.0 } + if wet { 0.45 } else { 0.0 } + if far > 2.0 { 0.15 } else { 0.0 } + 0.3 * rim;
-        let kind = if roll(1) < pasture {
+        // (A hot desert's watered fields, `off_sand`, are crops, open: no grazing on its sand.)
+        let own_at = |q: &P| Biome::from_u8(t0.sample_biome(q[0], q[1], t0.biome_warp(q[0], q[1]))[0]);
+        let dry = f.iter().chain(std::iter::once(&c)).any(|q| own_at(q) == Biome::HotDesert);
+        let kind = if roll(1) < pasture && !dry {
             FieldUse::Pasture
         } else if roll(2) < 0.13 {
             FieldUse::Fallow
         } else {
             FieldUse::Arable
         };
-        if fruit && !steep && !wet && kind != FieldUse::Pasture {
+        // (A pasture in a forest biome, its ground the forest's floor, is open ground: no bound, no
+        // rows.)
+        let own = match own_at(&c) {
+            Biome::Ocean | Biome::Lake => biome,
+            b => b,
+        };
+        let open = dry || (kind == FieldUse::Pasture && matches!(own, Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga | Biome::Jungle));
+        if fruit && !steep && !wet && !dry && kind != FieldUse::Pasture {
             near.push((far, i));
         }
         let strips = village && !steep && matches!(kind, FieldUse::Arable | FieldUse::Fallow);
@@ -167,7 +380,9 @@ pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
         // (Round a village, most of its small fields near it are hedged all round, strips too: a
         // bocage of little closes.)
         let close = village && far < 1.7 && area(f).abs() < 20000.0 && roll(6) < 0.65;
-        let bound = if close {
+        let bound = if open {
+            FieldBound::None
+        } else if close {
             if hedge0 >= wall0 { FieldBound::Hedge } else { FieldBound::Wall }
         } else if strips {
             FieldBound::None
@@ -178,7 +393,7 @@ pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
         } else {
             FieldBound::None
         };
-        info.push(FieldInfo { angle: angle as f32, kind, bound, strips, tone: (h >> 40) as u8 & 7 });
+        info.push(FieldInfo { angle: angle as f32, kind, bound, strips, tone: (h >> 40) as u8 & 7, rows: !open });
     }
     // A few orchards by the settlement's edge: the nearest fields that may hold one, about one in two.
     near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));

@@ -110,7 +110,7 @@ const ROW_GATE_HALF: f64 = 4.0;
 /// field, so every chunk agrees.
 pub fn rows(l: &Layout, i: usize) -> Vec<(P, P, Vec<f64>)> {
     let (Some(f), Some(info)) = (l.fields.get(i), l.field_info.get(i)) else { return Vec::new() };
-    if info.kind == FieldUse::Orchard || f.len() < 3 {
+    if info.kind == FieldUse::Orchard || !info.rows || f.len() < 3 {
         return Vec::new();
     }
     let a = info.angle as f64;
