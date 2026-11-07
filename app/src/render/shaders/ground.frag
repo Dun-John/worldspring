@@ -5,7 +5,7 @@
 // shore, lava glow, flights of steps (treads square across their streets), and the 5-ft grid.
 // Gameplay tiers stay per-square in the data.
 //
-// uData:    u8 (surface, edge bits, tier & 255, building) per square (texelFetch); edge bit 32
+// uData:    u8 (surface, edge bits, tier & 255, building; on a field its furrows) per square (texelFetch); edge bit 32
 //           marks a park's pond or stream and the ground by it.
 // uHeights: f16 (h - uBase, water - uBase) per square center, with a one-square halo ring
 //           (130 × 130), so gradients at chunk edges use the neighbours' real heights.
@@ -36,7 +36,7 @@ uniform float uPaved;
 const float N = 128.0;
 const vec3 INK = vec3(0.12, 0.10, 0.08);
 
-const vec3 SURF[21] = vec3[21](
+const vec3 SURF[22] = vec3[22](
     vec3(0.40, 0.54, 0.25), // grass
     vec3(0.31, 0.35, 0.19), // forest floor
     vec3(0.64, 0.60, 0.36), // dry grass
@@ -57,8 +57,13 @@ const vec3 SURF[21] = vec3[21](
     vec3(0.58, 0.50, 0.38), // under a building (roofs are drawn as vectors)
     vec3(0.66, 0.62, 0.36), // field
     vec3(0.62, 0.59, 0.53), // stairs (dressed stone)
-    vec3(0.76, 0.71, 0.60)  // gravel (a park's paths)
+    vec3(0.76, 0.71, 0.60), // gravel (a park's paths)
+    vec3(0.43, 0.57, 0.27)  // v63 countryside: pasture
 );
+
+// v63 countryside: the field square's furrows under the pixel (`town::fields::square_byte`: angle in
+// 64ths of a half turn, mode << 6: 0 arable, 1 open-field strips, 2 fallow), set in main.
+float gField = 0.0;
 
 
 float hash21(vec2 p) {
@@ -232,7 +237,7 @@ vec3 groundColor(int s, vec2 w) {
     float m = fbm3(w * 0.45);
     float fine = vnoise(w * 3.1);
     vec3 col = base * (0.82 + 0.3 * m) * (0.94 + 0.12 * fine);
-    if (s == 0 || s == 2) {
+    if (s == 0 || s == 2 || s == 21) {
         // Grass: tufts of lighter and darker blades.
         float blades = vnoise(w * 7.0 + vec2(0.0, w.x * 0.3));
         col = mix(col, col * vec3(1.15, 1.18, 1.05), smoothstep(0.65, 0.9, blades) * 0.6);
@@ -272,9 +277,22 @@ vec3 groundColor(int s, vec2 w) {
         col = mix(col, col * (0.86 + 0.28 * peb), 0.55);
         col = mix(col, col * 0.84, smoothstep(0.6, 0.85, vnoise(w * 1.6)) * 0.35);
     } else if (s == 18) {
-        // Crop rows.
-        float row = abs(fract(w.y * 0.9 + 0.2 * vnoise(w * 0.3)) - 0.5);
-        col = mix(col * 0.78, col * 1.08, smoothstep(0.1, 0.3, row));
+        // Crop rows along the field's furrows (v63 countryside); an open field's strips each a shade
+        // of their own with a grass balk between; fallow rows faint, the ground browner.
+        int fb = int(gField + 0.5);
+        int mode = fb >> 6;
+        float ang = float(fb & 63) * (3.14159265 / 64.0);
+        float across = dot(w, vec2(-sin(ang), cos(ang)));
+        float row = abs(fract(across * 0.9 + 0.2 * vnoise(w * 0.3)) - 0.5);
+        col = mix(col * (mode == 2 ? 0.93 : 0.86), col * 1.08, smoothstep(0.06, 0.34, row));
+        if (mode == 1) {
+            float st = across / 7.6;
+            col *= 0.93 + 0.14 * hash21(vec2(floor(st), 5.1));
+            float balk = 1.0 - smoothstep(0.03, 0.07, min(fract(st), 1.0 - fract(st)));
+            col = mix(col, SURF[0] * 1.05, balk * 0.75);
+        } else if (mode == 2) {
+            col = mix(col, vec3(0.56, 0.46, 0.33), 0.38);
+        }
     } else if (s == 8) {
         // Salt crust polygons.
         float c = abs(vnoise(w * 2.2) - vnoise(w * 2.2 + 5.0));
@@ -371,7 +389,7 @@ void main() {
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
                 int s = int(dataAt(sq + ivec2(dx, dy)).r + 0.5);
-                if ((s < 14 || s == 18) && natural == 9) natural = s;
+                if ((s < 14 || s == 18 || s == 21) && natural == 9) natural = s;
                 paved = paved || s == 14 || s == 19;
             }
         }
@@ -417,7 +435,7 @@ void main() {
     float pave = -1.0;
     int nat = 0;
     vec4 d = dataAt(sq);
-    if (!onRoad && uPaved > 0.5 && (int(d.g + 0.5) & 128) != 0 && gravel < 0.0 && (surf <= 9 || surf == 13 || surf == 14 || surf == 18)) {
+    if (!onRoad && uPaved > 0.5 && (int(d.g + 0.5) & 128) != 0 && gravel < 0.0 && (surf <= 9 || surf == 13 || surf == 14 || surf == 18 || surf == 21)) {
         vec2 g = q - 0.5 + warp * 0.3;
         ivec2 gi = ivec2(floor(g));
         vec2 fg = g - floor(g);
@@ -436,7 +454,7 @@ void main() {
                     best = wt;
                     fanHere = (int(dk.g + 0.5) & 64) != 0;
                 }
-            } else if (s <= 9 || s == 13 || s == 18) {
+            } else if (s <= 9 || s == 13 || s == 18 || s == 21) {
                 sn += wt;
                 if (nat < 0) nat = s;
             }
@@ -454,6 +472,7 @@ void main() {
         }
     }
     vec2 f = fract(q);
+    gField = int(dw.r + 0.5) == 18 ? dw.a : d.a;
     float own = d.b;
     vec2 hw = heightsAt(q);
     float h = hw.x;

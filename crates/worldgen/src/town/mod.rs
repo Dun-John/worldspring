@@ -25,6 +25,11 @@ pub mod squares;
 pub mod stairs;
 pub mod temple;
 pub mod wards;
+pub mod village;
+// v63 countryside
+pub mod fields;
+// v63 countryside: hedgerows, orchards, copses, windmills, water wheels.
+pub mod rural;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -207,6 +212,8 @@ pub struct Layout {
     /// Parks: formal gardens and commons, each a block of its own.
     pub parks: Vec<Park>,
     pub fields: Vec<Vec<P>>,
+    /// v63 countryside: what each of `fields` is (furrows, use, bound; `fields::assign`), in step.
+    pub field_info: Vec<fields::FieldInfo>,
     /// Built-up patches (streets are the ground inside these that no building covers).
     pub districts: Vec<Vec<P>>,
     /// Built blocks (ward patches minus their streets): drawn instead of buildings when
@@ -270,6 +277,12 @@ pub struct Layout {
     pub roof_age: u8,
     /// Castles' moats (v63 castles: `moat`).
     pub moats: Vec<moat::Moat>,
+    /// A village's plots: its cottages' tofts and crofts, its churchyard or shrine's yard, its manor's
+    /// yard (`village`).
+    pub crofts: Vec<village::Plot>,
+    /// v63 countryside: water mills' wheels (middle, the way the mill's wall runs, the mill to its left;
+    /// `rural`).
+    pub wheels: Vec<(P, P)>,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -527,6 +540,7 @@ impl Layout {
             plazas: Vec::new(),
             parks: Vec::new(),
             fields: Vec::new(),
+            field_info: Vec::new(),
             districts: Vec::new(),
             blocks: Vec::new(),
             buildings: Vec::new(),
@@ -556,6 +570,8 @@ impl Layout {
             roof_seed: 0,
             roof_age: 0,
             moats: Vec::new(),
+            crofts: Vec::new(),
+            wheels: Vec::new(),
         }
     }
 
@@ -1779,6 +1795,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for m in &mut l.moats {
         m.shift(center);
     }
+    for c in &mut l.crofts {
+        c.pts.iter_mut().for_each(tw);
+    }
     // Temples on their lots in pieces (world ft, so that a town laid out anew shapes them alike), a shrine
     // shut in a block's middle moved first to a home with a way out.
     if edit.is_none() {
@@ -1798,12 +1817,14 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         belfry::raise_all(&mut l, Some(&generated));
     }
     round_off(&mut l);
+    fields::assign(&site, s.seed, &mut l);
+    rural::place(&site, s, &mut l);
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);
     }
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())) {
+    for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())).chain(l.crofts.iter().flat_map(|c| c.pts.iter())) {
         bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
     }
     for m in &l.moats {
@@ -3409,8 +3430,28 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // Blocks → alleys → lots → buildings.
     // Castles' ways from their gates to the streets (nothing built on them by a later patch).
     let mut castle_ways: Vec<Vec<P>> = Vec::new();
+    // v63 countryside: the farmland belt's plain radius each way (`plan_town`'s `farmed`), which
+    // its fields fray past or fall short of (`fields::reach`), and the roads they run on along.
+    let (a1, a2, f1, f2) = (plan.roll(0, 30) * 0.15 + 0.1, plan.roll(0, 31) * 0.1 + 0.05, plan.roll(0, 32) * std::f64::consts::TAU, plan.roll(0, 33) * std::f64::consts::TAU);
+    let belt = |p: P| {
+        let th = libm::atan2(p[1], p[0]);
+        (1.0 + a1 * libm::sin(th + f1) + a2 * libm::sin(2.0 * th + f2)) * OUTSKIRTS * r * 0.8
+    };
+    let far_roads: Vec<(Vec<P>, u8, f64)> = l.roads.iter().filter(|x| x.1 < 3).cloned().collect();
+    // Farmland plots (`farm`): those of the planned farm patches, then those of the open ground past them.
+    let mut plots: Vec<(Vec<P>, u8)> = Vec::new();
     for i in 0..total {
-        let Some(w) = ward[i] else { continue };
+        let Some(w) = ward[i] else {
+            // Open ground past the farmland: fields where the belt frays out over it.
+            let c = &cells[i];
+            if i >= plan.n_inner && !plan.wet[i] && c.pts.len() >= 3 && !ch.ward.contains_key(&i) && c.pts.iter().any(|p| len(*p) < 1.9 * belt(*p)) {
+                let block = inset(&c.pts, &insets(i, Ward::Farm));
+                if block.len() >= 3 {
+                    farm(site, &block, &mut Pcg32::new(hash2(plan.pseed, i as i64, 0xf1e1d), 61), l, &mut plots, 2, false);
+                }
+            }
+            continue;
+        };
         let c = &cells[i];
         let m = c.pts.len();
         if i < n_inner {
@@ -3503,7 +3544,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 };
                 l.plazas.push(Plaza { pts: block, kind })
             }
-            Ward::Farm => farm(site, &block, &mut prng, l),
+            Ward::Farm => farm(site, &block, &mut prng, l, &mut plots, if ch.ward.contains_key(&i) { 0 } else { 1 }, true),
             Ward::Park if sparse => build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None),
             // (A block left too small for a park once its streets are cut, 6,000 sq ft or 40 ft
             // across: built on as a common ward's, `PARK_SLIVER`.)
@@ -3710,6 +3751,16 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             hand_walls.extend(walls_at..l.walls.len());
         }
     }
+    // The fields: as much farmland as the farm patches hold, taken outward by each plot's reach
+    // (`fields::belt_order`), so the belt's edge frays over the open ground and short of it.
+    let want: f64 = plots.iter().filter(|p| p.1 < 2).map(|p| area(&p.0).abs()).sum();
+    // (None on a road running across open ground.)
+    plots.retain(|p| p.1 == 0 || !far_roads.iter().any(|r| r.0.windows(2).any(|s| poly_seg_dist(&p.0, s[0], s[1]) < 0.5 * r.2 + 4.0)));
+    let picked = fields::belt_order(site, plan.pseed, &plots, want, &|c| {
+        let b = belt(c);
+        len(c) / (b * fields::reach(site, plan.pseed, c, &far_roads, b))
+    });
+    l.fields.extend(picked);
     // The squares the chords enclose; a green's lanes stop at its edge (a lawn, not paving), where
     // a path runs before the houses fronting it (laid once the lanes are cut).
     let (mut greens, mut green_paths): (Vec<Vec<P>>, Vec<(Vec<P>, f64)>) = (Vec::new(), Vec::new());
@@ -4517,8 +4568,11 @@ fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, o
 
 /// Farmland (after watabou's fields): the patch is split into plots, square to the long
 /// side of each piece's bounding box with some skewed cuts, leaving hedged lanes between
-/// plots; corners are chamfered; one plot in five gets a farmhouse on its longest side.
-fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
+/// plots; corners are chamfered; one plot in five gets a farmhouse on its longest side. v63: the
+/// plots go to `out` with `class` (0: always kept; one with its farmhouse on it is too), which
+/// fields the belt keeps chosen once all are known (`build_town`); `houses` off: open ground past
+/// the farmland, fields only.
+fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout, out: &mut Vec<(Vec<P>, u8)>, class: u8, houses: bool) {
     let spread = rng.next_f64();
     let mut plots: Vec<Vec<P>> = Vec::new();
     split_field(block, 67_600.0 * (1.0 + spread), rng, &mut plots, 0);
@@ -4527,7 +4581,8 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
         if f.len() < 3 || area(&f).abs() < 2_000.0 || site.wet(centroid(&f)) || !site.dry_outline(&f, 8.0) || site.grade(&f) > 0.08 {
             continue;
         }
-        if rng.next_f64() < 0.2 {
+        let mut housed = false;
+        if houses && rng.next_f64() < 0.2 {
             let m = f.len();
             let e = (0..m).max_by(|&x, &y| dist(f[x], f[(x + 1) % m]).total_cmp(&dist(f[y], f[(y + 1) % m]))).unwrap_or(0);
             let (a, b) = (f[e], f[(e + 1) % m]);
@@ -4541,9 +4596,10 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
             if house.iter().all(|p| contains(&f, *p)) && site.buildable(&house) {
                 let pad = site.pad(&house);
                 l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None });
+                housed = true;
             }
         }
-        l.fields.push(f);
+        out.push((f, if housed { 0 } else { class }));
     }
 }
 
@@ -4632,173 +4688,7 @@ pub(crate) fn rect(c: P, dir: P, w: f64, d: f64) -> Vec<P> {
 // Villages.
 
 fn village(site: &Site, s: &Settlement, r: f64, _road_ends: &[(P, u8)], rng: &mut Pcg32, l: &mut Layout) {
-    let t0 = site.t0;
-    let target = ((s.population as f64 / 5.0).round() as usize).clamp(6, 110);
-    let spread = rng.next_f64();
-    // The green.
-    let green = circle([0.0, 0.0], rng.range(35.0, 55.0), 12);
-    if !site.wet([0.0, 0.0]) {
-        l.plazas.push(Plaza { pts: green.clone(), kind: PlazaKind::Green });
-    }
-    let reach = r * 1.3;
-    // Main lanes: the roads through the village.
-    let mut lanes: Vec<(Vec<P>, f64)> = Vec::new();
-    for (ri, k) in t0.roads.segments_near([site.center[0] - reach, site.center[1] - reach, site.center[0] + reach, site.center[1] + reach], 0.0) {
-        let rc = &t0.roads.roads[ri as usize];
-        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 40.0).ceil().clamp(1.0, 400.0) as usize;
-        let pts: Vec<P> = (0..=n).map(|j| sub(rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft).p, site.center)).filter(|p| len(*p) < reach).collect();
-        if pts.len() >= 2 {
-            lanes.push((pts, rc.class.width_ft()));
-        }
-    }
-    let n_roads = lanes.len();
-    // Waterfront (after ProcGenArcana's wharf): the stretch of shore facing the village
-    // becomes a wharf lane with houses on its landward side and piers into the water; a
-    // lane runs from the green down to it.
-    let wharf = shore_run(site, reach);
-    if let Some(wh) = &wharf {
-        let (mid, _) = point_along(wh, 0.5 * wh.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>());
-        let to = sub(mid, [0.0, 0.0]);
-        let tl = len(to);
-        if tl > 60.0 {
-            let d = mul(to, 1.0 / tl);
-            let link = track(site, mul(d, 45.0), d, tl + 10.0, &[(wh.clone(), 12.0)], rng);
-            if link.len() >= 2 {
-                lanes.push((link, 10.0));
-            }
-        }
-        lanes.push((wh.clone(), 12.0));
-        piers_along(site, wh, rng, l);
-    }
-    // Branch lanes (after watabou's road trackers): from the roads (or the green), lanes
-    // leave every `min_block` ft, step 25 ft at a time turning toward level ground, and stop
-    // at water, the village edge, or where they meet another lane.
-    let min_block = (4.0 + 8.0 * rng.next_f64()) * 28.0;
-    let mut starts: Vec<(P, P, u32)> = Vec::new();
-    if lanes.is_empty() {
-        let a0 = rng.range(0.0, std::f64::consts::TAU);
-        for k in 0..3 {
-            let a = a0 + std::f64::consts::TAU * k as f64 / 3.0 + rng.range(-0.4, 0.4);
-            let d = [libm::cos(a), libm::sin(a)];
-            starts.push((mul(d, 50.0), d, 0));
-        }
-    } else {
-        for (pts, _) in &lanes {
-            branch_points(pts, min_block, rng, &mut starts, 1);
-        }
-    }
-    let mut made = 0;
-    let max_lanes = 3 + (s.population / 80) as usize;
-    let mut k = 0;
-    while k < starts.len() && made < max_lanes {
-        let (p0, d0, depth) = starts[k];
-        k += 1;
-        let lane = track(site, p0, d0, r * 1.05, &lanes, rng);
-        if lane.len() >= 4 {
-            if depth < 2 {
-                let mut more = Vec::new();
-                branch_points(&lane, min_block * 1.5, rng, &mut more, depth + 1);
-                starts.extend(more);
-            }
-            lanes.push((lane, 10.0));
-            made += 1;
-        }
-    }
-    // Houses along both sides of every lane (watabou's buildAlong): a house of width
-    // 22–36 ft, a gap, the next; set back from the lane; denser near the green.
-    let clear = |poly: &[P], l: &Layout| {
-        let c = centroid(poly);
-        len(c) > 60.0 && l.buildings.iter().all(|b| !overlaps(&b.poly, poly) && dist(centroid(&b.poly), c) > 14.0)
-    };
-    'lanes: for (pts, road_w) in &lanes {
-        for side in [-1.0, 1.0] {
-            let mut along = rng.range(0.0, 20.0);
-            let total: f64 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
-            while along < total {
-                if l.buildings.len() >= target {
-                    break 'lanes;
-                }
-                let w = rng.range(22.0, 36.0);
-                let (p, u) = point_along(pts, along + 0.5 * w);
-                let n = [-u[1], u[0]];
-                let density = 1.0 - 0.75 * (len(p) / reach).min(1.0);
-                let d = rng.range(16.0, 24.0);
-                if rng.next_f64() < density {
-                    let back = 0.5 * road_w + 5.0 * (1.0 + spread) * rng.range(0.6, 1.4) + 0.5 * d;
-                    let house = rect(add(p, mul(n, side * back)), u, w, d);
-                    if clear(&house, l) && site.buildable(&house) {
-                        let pad = site.pad(&house);
-                        l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None });
-                    }
-                }
-                let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
-                along += w + 22.0 * avg3 * 2.0;
-            }
-        }
-    }
-    for (pts, _) in lanes.iter().skip(n_roads) {
-        l.streets.push(pts.clone());
-    }
-    // Last resort for cramped sites: a ring around the green.
-    let mut tries = 0;
-    while l.buildings.len() < target / 2 && tries < target * 30 {
-        tries += 1;
-        let rad = rng.range(70.0, r);
-        let a = rng.range(0.0, std::f64::consts::TAU);
-        let c = [rad * libm::cos(a), rad * libm::sin(a)];
-        let house = rect(c, [-libm::sin(a), libm::cos(a)], rng.range(22.0, 34.0), rng.range(16.0, 22.0));
-        if clear(&house, l) && site.buildable(&house) {
-            let pad = site.pad(&house);
-            l.buildings.push(Building { poly: house, ward: Ward::Rural, func: None, residential: 1, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None });
-        }
-    }
-    // Fields: Voronoi cells seeded along the lanes and on a jittered ring, split into plots
-    // and claimed outward from the village until there is enough farmland for its people.
-    let spacing = 260.0 - 120.0 * spread;
-    let mut seeds: Vec<P> = Vec::new();
-    for (pts, _) in &lanes {
-        let total: f64 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
-        let mut a = 0.5 * spacing;
-        while a < total {
-            let (p, u) = point_along(pts, a);
-            let n = [-u[1], u[0]];
-            for side in [-1.0, 1.0] {
-                seeds.push(add(p, mul(n, side * 0.6 * spacing)));
-            }
-            a += spacing;
-        }
-    }
-    let ring_n = ((std::f64::consts::TAU * 1.7 * r) / spacing) as usize;
-    for k in 0..ring_n {
-        let a = std::f64::consts::TAU * (k as f64 + rng.range(-0.3, 0.3)) / ring_n as f64;
-        for rad in [1.35 * r, 1.9 * r] {
-            seeds.push(polar_pt(rad * rng.range(0.9, 1.1), a));
-        }
-    }
-    seeds.retain(|p| len(*p) > 0.7 * r && len(*p) < 2.1 * r);
-    let cells = voronoi(&seeds, &circle([0.0, 0.0], 2.1 * r, 40));
-    let mut order: Vec<usize> = (0..cells.len()).filter(|&i| cells[i].pts.len() >= 3).collect();
-    order.sort_by(|&a, &b| len(seeds[a]).total_cmp(&len(seeds[b])).then(a.cmp(&b)));
-    let want = l.buildings.len() as f64 * 22_000.0 * (0.7 + 0.6 * spread);
-    let mut have = 0.0;
-    for i in order {
-        if have >= want {
-            break;
-        }
-        let cell = inset(&cells[i].pts, &vec![5.0; cells[i].pts.len()]);
-        if cell.len() < 3 || site.wet(centroid(&cell)) || l.buildings.iter().any(|b| overlaps(&b.poly, &cell)) {
-            continue;
-        }
-        let mut plots = Vec::new();
-        split_field(&cell, 20_000.0 * (1.0 + spread), rng, &mut plots, 0);
-        for plot in plots {
-            let f = clean(&chamfer(&plot, 10.0));
-            if f.len() >= 3 && area(&f).abs() > 1_500.0 && !site.wet(centroid(&f)) && site.dry_outline(&f, 8.0) {
-                have += area(&f).abs();
-                l.fields.push(f);
-            }
-        }
-    }
+    village::village(site, s, r, rng, l);
 }
 
 /// The shore a village faces: rays from the centre find the water's edge; the longest run
@@ -4863,19 +4753,23 @@ fn shore_run(site: &Site, reach: f64) -> Option<Vec<P>> {
     Some((0..=n).map(|k| point_along(&pts, total * k as f64 / n as f64).0).collect())
 }
 
-/// Piers along a wharf: every 70–120 ft, square to the shore, 40–80 ft into the water (a
-/// river pier reaches at most a third of the way across). Built only where the water starts
-/// right at the wharf and the whole pier stands over water.
+/// Piers along a village's wharf: every 150–260 ft (about one in three left out), square to the
+/// shore, 25–45 ft into the water (a river pier reaches at most a third of the way across). Built
+/// only where the water starts right at the wharf and the whole pier stands over water.
 fn piers_along(site: &Site, wharf: &[P], rng: &mut Pcg32, l: &mut Layout) {
     let total: f64 = wharf.windows(2).map(|w| dist(w[0], w[1])).sum();
-    let mut at = rng.range(30.0, 70.0);
+    let mut at = rng.range(40.0, 120.0);
     while at < total - 20.0 {
+        if rng.next_f64() < 0.33 {
+            at += rng.range(150.0, 260.0);
+            continue;
+        }
         let (p, u) = point_along(wharf, at);
         let mut out = [-u[1], u[0]];
         if !site.wet(add(p, mul(out, 30.0))) {
             out = mul(out, -1.0);
         }
-        let mut length = rng.range(40.0, 80.0);
+        let mut length = rng.range(25.0, 45.0);
         if let Some((_, _, hw)) = site.nearest_river(p)
             && site.near_river(add(p, mul(out, 30.0)), 0.0)
         {
@@ -4907,7 +4801,7 @@ fn piers_along(site: &Site, wharf: &[P], rng: &mut Pcg32, l: &mut Layout) {
                 l.piers.push(pier);
             }
         }
-        at += rng.range(70.0, 120.0);
+        at += rng.range(150.0, 260.0);
     }
 }
 
@@ -5117,7 +5011,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         let rad = rng.range(30.0, l.radius.max(80.0));
         let c = [rad * libm::cos(a), rad * libm::sin(a)];
         let house = rect(c, [-libm::sin(a), libm::cos(a)], 30.0, 20.0);
-        let clear = l.buildings.iter().all(|b| dist(centroid(&b.poly), c) > 28.0);
+        let clear = l.buildings.iter().all(|b| dist(centroid(&b.poly), c) > 28.0) && village::spare_ok(site, l, &house);
         if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
             let ward = if tier == Tier::Village { Ward::Rural } else { Ward::Common };
@@ -5148,6 +5042,9 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
                 needs.remove(k);
             }
         }
+    }
+    if tier == Tier::Village {
+        village::reserve(l, &mut needs, &mut taken);
     }
     for fi in needs {
         let f = &CATALOG[fi];

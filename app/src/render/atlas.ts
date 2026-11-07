@@ -3227,6 +3227,134 @@ function flowerbed(g: Graphics, r: number, rnd: () => number, v: number) {
   }
 }
 
+/** `a` blended `t` of the way toward `b`. */
+function mix3(a: number, b: number, t: number): number {
+  const ch = (k: number) => Math.round(((a >> k) & 255) * (1 - t) + ((b >> k) & 255) * t);
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+}
+
+/** Fruit tree (an orchard's, v63 countryside): a smaller, rounder, lighter crown than the woods' trees,
+ * a few fruit among the leaves (apple red v0, pear yellow v1, plum v2; v3 leaf only) and a short trunk
+ * peeping out under it to the south with its own little shadow. About 11 ft across at scale 1. */
+function fruitTree(g: Graphics, r: number, rnd: () => number, v: number) {
+  const [dark, mid, light] = [
+    [0x3d5a26, 0x5a7e34, 0x9eb85a],
+    [0x425e2a, 0x608238, 0xa6bc60],
+    [0x3a5428, 0x56763a, 0x98ae62],
+    [0x3e5c28, 0x5c8036, 0xa2b85a],
+  ][v];
+  const R = r * 1.1;
+  // The trunk, short, under the crown's south side, and its shadow.
+  g.moveTo(R * 0.12, R * 0.9).lineTo(R * 0.34, R * 0.98).stroke({ width: R * 0.1, color: 0x000000, alpha: 0.22, cap: 'round' });
+  g.roundRect(-R * 0.06, R * 0.55, R * 0.13, R * 0.38, R * 0.04).fill(0x6a4a2e).stroke({ width: 1.8, color: INK });
+  g.rect(-R * 0.035, R * 0.6, R * 0.04, R * 0.3).fill({ color: 0x8e6a44, alpha: 0.9 });
+  const parts: [number, number, number][] = [];
+  const n = 6;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + rnd() * 0.5;
+    const d = R * (0.3 + 0.08 * rnd());
+    parts.push([Math.cos(a) * d, Math.sin(a) * d - R * 0.04, R * (0.48 + 0.08 * rnd())]);
+  }
+  parts.push([0, -R * 0.04, R * 0.62]);
+  for (const [x, y, rr] of parts) g.circle(x, y, rr + 2.6).fill(INK);
+  for (const [x, y, rr] of parts) g.circle(x, y, rr).fill(dark);
+  for (const [x, y, rr] of parts) g.circle(x - rr * 0.16, y - rr * 0.16, rr * 0.8).fill(mid);
+  for (const [x, y, rr] of parts) g.circle(x - rr * 0.34, y - rr * 0.34, rr * 0.4).fill({ color: light, alpha: 0.85 });
+  // The crown's top (its north-west) a paler, yellower green, so it reads as a different tree from a round one.
+  for (const [x, y, rr] of parts.slice(0, 3)) g.circle(x - rr * 0.38, y - rr * 0.4, rr * 0.3).fill({ color: mix3(light, 0xd4cc70, 0.45), alpha: 0.7 });
+  // Leaf clumps: a few dark curls toward the shade, light flecks toward the light.
+  for (let i = 0; i < 7; i++) {
+    const a = 0.2 + rnd() * 2.2;
+    const d = R * (0.35 + 0.4 * rnd());
+    const [x, y] = [Math.cos(a) * d, Math.sin(a) * d];
+    g.arc(x, y, R * 0.11, a - 1.2, a + 0.9).stroke({ width: 1.5, color: dark, alpha: 0.75 });
+  }
+  for (let i = 0; i < 8; i++) {
+    const a = Math.PI + 0.3 + rnd() * 2.4;
+    const d = R * (0.2 + 0.55 * rnd());
+    g.circle(Math.cos(a) * d, Math.sin(a) * d, R * 0.045).fill({ color: shade(light, 1.15), alpha: 0.7 });
+  }
+  if (v === 3) return;
+  // The fruit: dark under, the colour, a fleck of light.
+  const [fd, fm, fl] = [
+    [0x862a22, 0xb4402e, 0xd87a60],
+    [0x8e7c30, 0xc4ae52, 0xe8d888],
+    [0x3a2238, 0x5e3a5a, 0x92709a],
+  ][v];
+  const fr = R * 0.1;
+  const count = 7 + Math.floor(rnd() * 3);
+  for (let i = 0; i < count; i++) {
+    const a = ((i + rnd() * 0.8) / count) * Math.PI * 2;
+    const d = R * (0.25 + 0.55 * Math.sqrt(rnd()));
+    const [x, y] = [Math.cos(a) * d, Math.sin(a) * d - R * 0.04];
+    g.circle(x, y, fr).fill(fd);
+    g.circle(x - fr * 0.2, y - fr * 0.2, fr * 0.74).fill(fm);
+    g.circle(x - fr * 0.42, y - fr * 0.42, fr * 0.28).fill(fl);
+  }
+}
+
+/** Water wheel (v63 countryside; turned: local x along the mill's wall, the mill toward +y), seen from
+ * above: a timber wheel about 14 ft across and 4 ft broad, its two rims along x and the floats between
+ * them, crowded toward the ends where the wheel curves down out of sight; the axle running out toward
+ * the mill to its bearing block; a short timber race bringing the water over the top; soft white
+ * foam where it churns the stream on the water side. */
+function waterWheel(g: Graphics, r: number) {
+  const [X, Y] = [r * 0.96, r * 0.29];
+  const WD = [0x5e4024, 0x7d5a3c, 0xb08a5a];
+  // Its shadow on the water, to the south-east (the layer draws no round one).
+  g.roundRect(-X + X * 0.07, -Y + Y * 0.45, 2 * X, 2 * Y, Y * 0.7).fill({ color: 0x000000, alpha: 0.14 });
+  // Foam on the water side and round the ends: soft, no ink.
+  const foam: [number, number, number, number][] = [
+    [-0.42, -1.3, 0.16, 0.3],
+    [-0.08, -1.4, 0.2, 0.32],
+    [0.28, -1.3, 0.16, 0.3],
+    [0.52, -1.15, 0.1, 0.26],
+    [-0.64, -1.1, 0.09, 0.24],
+    [-0.99, -0.3, 0.05, 0.6],
+    [0.99, -0.1, 0.05, 0.6],
+  ];
+  for (const [x, y, rx, ry] of foam) g.ellipse(x * X, y * Y, rx * X, ry * Y * 1.6).fill({ color: 0xffffff, alpha: 0.2 });
+  for (let i = 0; i < 5; i++) {
+    const x = (-0.5 + i * 0.24) * X;
+    g.arc(x, -Y * 1.12, Y * 0.3, Math.PI * 1.15, Math.PI * 1.85).stroke({ width: 1.6, color: 0xffffff, alpha: 0.5 });
+  }
+  // The wheel, a drum seen from above: dark between the floats, then the floats, palest along the top
+  // (its middle) and a little more on the west, darker as the wheel curves down to either end.
+  const end = Y * 0.7;
+  g.roundRect(-X, -Y, 2 * X, 2 * Y, end).fill(mix3(WD[0], INK, 0.3));
+  const N = 14;
+  for (let i = 0; i < N; i++) {
+    const t = ((i + 0.5) / N) * Math.PI;
+    const c = Math.cos(t);
+    const x = c * X * 0.95;
+    const w = 3.6 + 5.4 * Math.abs(c);
+    const tone = mix3(mix3(WD[1], WD[2], Math.max(0, 0.75 - 0.9 * Math.abs(c) - 0.25 * c)), WD[0], Math.max(0, Math.abs(c) - 0.6));
+    g.rect(x - w / 2, -Y + 4, w, 2 * Y - 8).fill(tone).stroke({ width: 1.3, color: INK, alpha: 0.75 });
+  }
+  // The rims, the north one in the light.
+  const rim = Y * 0.28;
+  g.roundRect(-X, -Y, 2 * X, rim, rim * 0.5).fill(WD[2]);
+  g.roundRect(-X, Y - rim, 2 * X, rim, rim * 0.5).fill(WD[1]);
+  for (const sx of [-1, 1]) g.roundRect(sx > 0 ? X - X * 0.12 : -X, -Y, X * 0.12, 2 * Y, end).fill({ color: WD[0], alpha: 0.45 });
+  g.moveTo(-X + 6, Y - rim).lineTo(X - 6, Y - rim).moveTo(-X + 6, -Y + rim).lineTo(X - 6, -Y + rim).stroke({ width: 1.4, color: INK, alpha: 0.8 });
+  g.roundRect(-X, -Y, 2 * X, 2 * Y, end).stroke({ width: 2.9, color: INK });
+  // The axle out toward the mill, and its bearing block.
+  const ax = r * 0.13;
+  g.moveTo(0, Y).lineTo(0, Y + r * 0.42).stroke({ width: ax + 3.2, color: INK }).moveTo(0, Y + 1).lineTo(0, Y + r * 0.42).stroke({ width: ax, color: WD[1] });
+  g.moveTo(-ax * 0.25, Y + 2).lineTo(-ax * 0.25, Y + r * 0.42).stroke({ width: ax * 0.3, color: WD[2], alpha: 0.8 });
+  g.rect(-r * 0.12, Y + r * 0.38, r * 0.24, r * 0.16).fill(WD[1]).stroke({ width: 2, color: INK });
+  g.rect(-r * 0.1, Y + r * 0.39, r * 0.2, r * 0.05).fill({ color: WD[2], alpha: 0.8 });
+  // The race: a trough of boards on the mill's side, water in it, pouring over the top of the wheel.
+  const [rx0, rx1, ry0, ry1] = [-0.58 * X, -0.3 * X, -Y * 0.2, r * 0.72];
+  g.rect(rx0, ry0, rx1 - rx0, ry1 - ry0).fill(WD[1]).stroke({ width: 2.4, color: INK });
+  const wall = (rx1 - rx0) * 0.2;
+  g.rect(rx0 + wall, ry0 + 2, rx1 - rx0 - 2 * wall, ry1 - ry0 - 2).fill(0x5f808a);
+  g.moveTo(rx0 + wall * 1.8, ry0 + 6).lineTo(rx0 + wall * 1.8, ry1 - 10).moveTo(rx1 - wall * 1.9, ry0 + 14).lineTo(rx1 - wall * 1.9, ry1 - 4);
+  g.stroke({ width: 1.4, color: 0xd8e6e6, alpha: 0.55, cap: 'round' });
+  g.moveTo(rx0 + wall * 0.5, ry0 + 3).lineTo(rx0 + wall * 0.5, ry1 - 2).stroke({ width: wall * 0.45, color: WD[2], alpha: 0.8 });
+  g.moveTo(rx0 + wall, ry0 + 1).lineTo(rx1 - wall, ry0 + 1).stroke({ width: 2.4, color: 0xffffff, alpha: 0.6, cap: 'round' });
+}
+
 /** Hedge, along x: a section a little over five feet long, clipped nearly square at its ends, so sections
  * placed five feet apart overlap and read as one hedge; a lumpy top lit along its north side, leaves picked
  * out, a darker foot along the south. Clipped box (v0), dark yew (v1), hawthorn in flower (v2), overgrown
@@ -4212,6 +4340,9 @@ const DRAW: Record<number, Draw> = {
   59: bandstand,
   60: gardenStatue,
   61: footbridge,
+  // v63 countryside: an orchard's fruit tree and a water mill's wheel.
+  62: fruitTree,
+  63: (g, r) => waterWheel(g, r),
   38: haystack,
   13: smallRocks,
   14: rockPile,
@@ -4241,7 +4372,7 @@ const DRAW: Record<number, Draw> = {
 };
 
 /** Room in the frame beyond the footprint (squares, by kind id) for tall things drawn from a high angle. */
-const ROOM: Record<number, number> = { 48: 0.6, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
+const ROOM: Record<number, number> = { 48: 0.6, 62: 1.16, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
 
 export function frameRadiusPx(info: KindInfo): number {
   // Radius in atlas px at scale 1 plus room for outlines.

@@ -295,7 +295,7 @@ fn arch_of(b: &town::Building) -> Arch {
         Some("tavern" | "alehouse" | "fine_dining" | "gambling_den" | "smugglers_den") => Arch::Tavern,
         Some("blacksmith" | "armorer" | "weaponsmith" | "glassblower" | "potter" | "tinker") => Arch::Forge,
         Some("brewery" | "winery" | "distillery") => Arch::Brewery,
-        Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
+        Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "windmill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
         Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs") => Arch::Temple,
         Some("prison") => Arch::Prison,
         Some("castle" | "barracks" | "gatehouse") => Arch::Keep,
@@ -1805,6 +1805,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             .iter()
             .flat_map(|(pts, _, w)| pts.windows(2).map(move |s| geom::seg_dist(p, s[0], s[1]) - 0.5 * w))
             .fold(f64::MAX, f64::min)
+            .min(town::village::front_d(l, p))
     };
     let open: Vec<usize> = (0..4).map(open_on).collect();
     let any_open = open.iter().any(|&n| n > 0);

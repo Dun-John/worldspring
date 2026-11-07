@@ -672,9 +672,14 @@ fn settlement_catalog_guarantees() {
             }
         }
         assert!(have[inn] >= 1, "settlement {i} ({:?}) has no inn", l.tier);
+        // (A village's church stands for its shrine: `town::village::reserve`.)
+        let temple = CATALOG.iter().position(|f| f.key == "temple").unwrap();
         for (fi, f) in CATALOG.iter().enumerate() {
             let need = required_count(f, l.tier, l.on_water);
-            assert!(have[fi] >= need, "settlement {i} ({:?}) has {} of {} (needs {need})", l.tier, have[fi], f.name);
+            let has = if f.key == "shrine" && l.tier == worldgen::t0::settle::Tier::Village { have[fi] + have[temple] } else { have[fi] };
+            // (A village's mill stands only by the water: `town::village::mill`.)
+            let need = if f.key == "mill" && l.tier == worldgen::t0::settle::Tier::Village { 0 } else { need };
+            assert!(has >= need, "settlement {i} ({:?}) has {} of {} (needs {need})", l.tier, has, f.name);
         }
     }
 }

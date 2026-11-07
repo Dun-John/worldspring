@@ -118,7 +118,7 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     let town_roads: Vec<Vec<[f64; 4]>> = if key.level >= SITE_MIN_LEVEL {
         crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size])
             .iter()
-            .flat_map(|l| l.roads.iter().map(|(pts, class, w)| pts.iter().map(|p| [p[0], p[1], *w, *class as f64]).collect::<Vec<_>>()).collect::<Vec<_>>())
+            .flat_map(|l| l.roads.iter().map(|(pts, class, w)| pts.iter().map(|p| [p[0], p[1], *w, *class as f64]).collect::<Vec<_>>()).chain(crate::town::village::plan_lanes(l)).collect::<Vec<_>>())
             .collect()
     } else {
         Vec::new()
@@ -299,8 +299,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
         }
         for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
-            for f in &l.fields {
-                push(f, 2);
+            for (i, f) in l.fields.iter().enumerate() {
+                push(f, l.field_info.get(i).map_or(2, crate::town::fields::plan_attr));
             }
             // v63 castles: a castle's moat, its pieces (24 wet, 25 a dry ditch).
             for m in &l.moats {
@@ -314,6 +314,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 let deck = [crate::town::geom::add(a, side), crate::town::geom::add(z, side), crate::town::geom::sub(z, side), crate::town::geom::sub(a, side)];
                 push(&deck, 26);
             }
+            crate::town::village::plan_polys(&l, &mut push);
+            crate::town::rural::plan_polys(&l, &mut push);
             // A green (a village's or a town's) and a temple's close are the ground round them, as
             // on the battlemap; a town's squares are paved.
             // (A square where streets meet need not be convex: drawn as triangles.)
@@ -542,6 +544,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 for bl in &l.blocks {
                     push(bl, 3);
                 }
+            }
+            if key.level >= BUILDING_MIN_LEVEL {
+                crate::town::village::plan_ticks(&l, &mut push);
+                crate::town::rural::plan_ticks(&l, &mut push);
             }
             for w in &l.walls {
                 lines.push(w.iter().map(|p| [p[0], p[1], 9.0, 0.0]).collect());

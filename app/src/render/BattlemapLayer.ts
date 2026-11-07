@@ -17,13 +17,14 @@ import {
   UniformGroup,
   type Renderer,
 } from 'pixi.js';
-import { builtinKind, fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
+import { builtinKind, FIELD, fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
+import { boundAt, drawBounds, drawSails, isBound, SAILS } from './countryside';
 import { banner, cornerHatch, drawDitchBank, drawDrawbridge, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
@@ -84,6 +85,8 @@ interface ChunkView {
   raised: Uint8Array | null;
   sea: number;
   objs: ChunkObject[];
+  /** v63 countryside: its hedgerows, dry-stone walls and fences (`countryside.ts`), for inspection. */
+  bounds: Shape[];
   /** Uploaded sprites its objects use. */
   sprites: ChunkSprite[];
   /** What it was built from, kept while a sprite's picture is loading (to build it again). */
@@ -143,6 +146,8 @@ const SURFACES = [
   'field (crops)',
   'stairs',
   'gravel path',
+  // v63 countryside
+  'pasture',
 ];
 /** Cobbles' tints by culture (`ground.frag` `uStone`, times the cobble grey; `Layout::culture`):
  * north cool blue-grey granite, west warm grey-buff, south warm honey limestone, dry pale ochre
@@ -382,7 +387,7 @@ export class BattlemapLayer {
     if (!c) return false;
     const k = Math.floor((wy - cy * ts) / SQUARE_FT) * SQ + Math.floor((wx - cx * ts) / SQUARE_FT);
     if (k < 0 || k >= SQ * SQ) return false;
-    return c.data[k * 4 + 3] !== 0 || (!!c.raised && c.raised[k * 2] > 0 && c.raised[k * 2 + 1] === 8);
+    return (c.data[k * 4 + 3] !== 0 && c.surface[k] !== FIELD) || (!!c.raised && c.raised[k * 2] > 0 && c.raised[k * 2 + 1] === 8);
   }
 
   /** The object whose footprint holds a world position (the nearest centre), if its chunk is
@@ -499,6 +504,9 @@ export class BattlemapLayer {
         object = { name: inf.name, cover: COVER[inf.cover], notes: notes.join(' · ') };
       }
     }
+    // (A hedgerow, a dry-stone wall or a fence: cover, seen over.)
+    const bound = object ? null : boundAt(c.bounds, sx * PX, sy * PX);
+    if (bound) object = { name: bound.name, cover: COVER[bound.cover], notes: bound.notes };
     // Walls, towers and decks stand on the drawn ground: report their top.
     const lift = c.raised ? c.raised[k * 2] : 0;
     const on = c.raised ? RAISED[c.raised[k * 2 + 1]] : undefined;
@@ -871,8 +879,8 @@ export class BattlemapLayer {
     }
     // (A dry ditch's sides, then the inked tops of its banks over them all.)
     for (const ink of [false, true]) for (const s of c.shapes) if (s.kind === 19) drawDitchBank(bridgeG, s, ink);
-    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12) || s.kind === 18));
-    const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1));
+    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12) || s.kind === 18 || isBound(s.kind)), cx * SQ * PX, cy * SQ * PX);
+    const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1 || s.kind === SAILS));
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
     // walks (over them, on the ground).
     const walkGridG = new Graphics();
@@ -958,6 +966,7 @@ export class BattlemapLayer {
       raised: c.raised,
       sea: c.sea,
       objs,
+      bounds: c.shapes.filter((s) => isBound(s.kind)),
       sprites: c.sprites,
       prepared: waiting ? c : null,
     });
@@ -1009,7 +1018,7 @@ function parkEdge(raised: Uint8Array | null): boolean {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil']);
+const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel']);
 /** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
  * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
  * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
@@ -1065,7 +1074,7 @@ export const LONG_SHADOW = new Map([
   ['vegetable row', [1.9, 0.7, 0.5]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
-export const OWN_SHADOW = new Set(['market cross']);
+export const OWN_SHADOW = new Set(['market cross', 'water wheel']);
 
 const STONE = 0x9c968b;
 const STONE_TOP = 0xb3ada2;
@@ -1074,10 +1083,14 @@ const STONE_TOP = 0xb3ada2;
  * Walls, gatehouses, towers and ways underground as clean vectors over the ground (their squares
  * keep their tactical height; the ground under them is drawn flat): `walls.ts` draws the first
  * three, and a forecourt's garden wall, gate piers and gate. Bridges and piers are drawn apart
- * (`bridges.ts`).
+ * (`bridges.ts`). (`ox`, `oy`: the chunk's corner in world px, for the bounds' patterns.)
  */
-function drawStructures(shapes: Shape[]): Graphics {
+function drawStructures(shapes: Shape[], ox = 0, oy = 0): Graphics {
   const g = new Graphics();
+  // (v63 countryside: hedgerows, dry-stone walls and fences low under the rest; a windmill's sails.)
+  const bounds = shapes.filter((s) => isBound(s.kind));
+  if (bounds.length) drawBounds(g, bounds, ox, oy);
+  for (const s of shapes) if (s.kind === SAILS) drawSails(g, s);
   const walls = shapes.filter((s) => s.kind === 0);
   if (walls.length) drawWalls(g, walls);
   // A drawbridge's inner end under its gatehouse.
