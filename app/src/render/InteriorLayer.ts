@@ -758,6 +758,9 @@ export class InteriorLayer {
   private readonly anchors = new WeakMap<InteriorItem, WallAnchor | null>();
   /** Toward the light (screen NW) in grid axes, rounded to 45 degrees, for items' shading. */
   private light: [number, number] = [-Math.SQRT1_2, -Math.SQRT1_2];
+  /** The other levels' furniture going into the item atlas a little a frame (`update`), so that
+   * changing level finds it drawn; null once done (or never: peeks, ghosts, sewer sections). */
+  private warming: Iterator<boolean> | null = null;
 
   /** `peek`: the ground floor shown through a faded roof while hovering (no dimming or
    * labels). `ghost`: faint, floors only. `tile`: a section of a city's sewers drawn with the
@@ -789,6 +792,44 @@ export class InteriorLayer {
     const la = Math.round(Math.atan2(lx * interior.across[0] + ly * interior.across[1], lx * interior.axis[0] + ly * interior.axis[1]) / (Math.PI / 4)) * (Math.PI / 4);
     this.light = [Math.cos(la), Math.sin(la)];
     this.draw();
+    if (!peek && !ghost && !tile && interior.levels.length > 1 && InteriorLayer.renderer) this.warming = this.warmLevels();
+  }
+
+  /** Draws the other levels' furniture into the item atlas one piece a step (yielding true), in
+   * the order of how near each level is to the one shown; an underground level waits (yielding
+   * false) for its textures from the worker (`prefetch`), which its props are fitted to. */
+  private *warmLevels(): Generator<boolean> {
+    const atlas = ItemAtlas.for(InteriorLayer.renderer!);
+    const start = this.level;
+    const order = this.interior.levels.map((_, li) => li).filter((li) => li !== start).sort((a, b) => Math.abs(a - start) - Math.abs(b - start) || a - b);
+    for (const li of order) {
+      while (this.underground && !this.fields.has(li)) yield false;
+      for (const f of this.interior.levels[li].furniture) {
+        if (f.sprite || !this.drawnAsItem(f)) continue;
+        const keep = this.level;
+        this.level = li;
+        try {
+          atlas.get(this.itemKey(f), (ig) => this.drawItem(ig, f), [f.x, f.y]);
+        } finally {
+          this.level = keep;
+        }
+        yield true;
+      }
+    }
+  }
+
+  /** Whether a piece of furniture is drawn as an item (from the item atlas, or from its uploaded
+   * picture: `f.sprite`), not as floor or not at all here. */
+  private drawnAsItem(f: InteriorItem): boolean {
+    // (Underground, the shader paints sewage and lava channels; water, chasms and rubble lie on
+    // the floor, the bridges over them are vector.)
+    if (this.underground && (f.kind === 'sewage' || f.kind === 'lava')) return false;
+    if (TERRAIN_KINDS.has(f.kind) || SPAN_KINDS.has(f.kind)) return false;
+    // (A key is for the DM's eyes only.)
+    if (this.style.player && f.kind === 'key') return false;
+    // Marks where a tunnel leaves the section: the next section is drawn on from there.
+    if (this.tile && f.kind === 'continues') return false;
+    return !(this.style.player && dmOnlyHazard(f.hazard));
   }
 
   /** An underground site (rock all round, levels below the surface). */
@@ -914,6 +955,22 @@ export class InteriorLayer {
     if (this.under) {
       this.under.uniforms.uniforms.uTime = performance.now() / 1000;
       this.under.uniforms.uniforms.uGrid = undergroundGrid ? 1 : 0;
+    }
+    // The other levels' furniture into the atlas, ~1.5 ms of drawing a frame (and its flush,
+    // about as much again), so a change of level doesn't draw a whole level's on one frame.
+    if (this.warming) {
+      const t0 = performance.now();
+      let drawn = false;
+      while (performance.now() - t0 < 1.5) {
+        const step = this.warming.next();
+        if (step.done) {
+          this.warming = null;
+          break;
+        }
+        if (!step.value) break;
+        drawn = true;
+      }
+      if (drawn) ItemAtlas.for(InteriorLayer.renderer!).flush();
     }
     // (Over the whole screen, the view turned or not: `Camera.turn`.)
     const span = Math.hypot(cam.width, cam.height);
@@ -1219,13 +1276,7 @@ export class InteriorLayer {
     for (const pass of this.underground ? [SPAN_KINDS] : [TERRAIN_KINDS, SPAN_KINDS]) for (const f of lv.furniture) if (pass.has(f.kind)) this.drawTerrain(g, f);
     // (A platform under what stands on it.)
     for (const f of [...lv.furniture].sort((a, b) => +PLATFORMS.has(b.kind) - +PLATFORMS.has(a.kind))) {
-      if (this.underground && (f.kind === 'sewage' || f.kind === 'lava')) continue;
-      if (TERRAIN_KINDS.has(f.kind) || SPAN_KINDS.has(f.kind)) continue;
-      // (A key is for the DM's eyes only.)
-      if (this.style.player && f.kind === 'key') continue;
-      // Marks where a tunnel leaves the section: the next section is drawn on from there.
-      if (this.tile && f.kind === 'continues') continue;
-      if (this.style.player && dmOnlyHazard(f.hazard)) continue;
+      if (!this.drawnAsItem(f)) continue;
       if (f.sprite && atlas) {
         const s = this.pictureOf(f);
         if (s) items.addChild(s);
