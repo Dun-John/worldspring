@@ -654,82 +654,143 @@ export function drawBounds(g: Graphics, shapes: Shape[], ox = 0, oy = 0, side = 
 
 /** Sail cloth: lit, shaded. */
 const CLOTH = [0xe6dcc6, 0xc9bca2];
+/** A tower mill's cap, painted boards over a dark tower, bare wood over a pale one: lit, shaded, the
+ * ridge's highlight. */
+const CAP_PAINT = [0xe3dccb, 0xbdb39d, 0xf1ecdf];
+const CAP_WOOD = [0x9c7450, 0x7a5638, 0xb8916a];
 
 /**
- * A windmill's sails (`pts`: the hub, then the angle × PX; `size` their reach): four arms, each a
- * whip (the long timber) with a lattice of bars and laths on its trailing side, cloth spread over two
- * or three of them; a hub cap over the middle; a faint shadow cast down to the south-east. Small, it
- * reads as a pale cross.
+ * A tower mill from straight above (`pts`: the tower's middle, then the way its cap faces × PX and
+ * the tower's radius, then whether its walls are pale × PX; `size` the sails' reach). The tower itself is its cone roof (its battered walls
+ * rising to the curb); over it the cap, boat-shaped, blunt at the front where the windshaft comes
+ * out, pointed at the back, lit on its north-west side; the tail pole and its struts running back
+ * and down past the tower's foot to a small capstan wheel. The sails turn in an upright plane across
+ * the front, so from above they show edge-on: a long narrow bar, each arm's stretch of it as long as
+ * the arm leans across (their stop keyed by place), lattice bars across the bare ones, cloth along
+ * the others, the stocks over them; its shadow cast well off to the south-east.
  */
 export function drawSails(g: Graphics, s: Shape) {
   const [cx, cy] = [s.pts[0], s.pts[1]];
   const a0 = s.pts[2] / PX;
+  const rt = s.pts[3] > 0 ? s.pts[3] : 12 * FT;
   const R = s.size;
-  const [r0, w] = [R * 0.2, R * 0.21];
-  const spread = hash(Math.round(a0 * 1000), 5, 1) < 0.5 ? [0, 2] : [0, 1, 2];
-  const arms = [0, 1, 2, 3].map((k) => {
-    const t = a0 + (k * Math.PI) / 2;
-    const [dx, dy, ex, ey] = [Math.cos(t), Math.sin(t), -Math.sin(t), Math.cos(t)];
-    const P = (r: number, x: number): Pt => [cx + dx * r + ex * x, cy + dy * r + ey * x];
-    return { P, cloth: spread.includes(k), lit: ex * LX + ey * LY };
-  });
-  const frame = (P: (r: number, x: number) => Pt) => [...P(r0, w * 0.1), ...P(R, w * 0.1), ...P(R, w), ...P(r0 + w * 0.3, w)];
-  // The shadow, well off (they stand high).
-  const off = R * 0.14;
-  for (const { P } of arms) g.poly(frame(P).map((v) => v + off));
+  const CAP = s.pts[4] > 0 ? CAP_WOOD : CAP_PAINT;
+  const [dx, dy, ex, ey] = [Math.cos(a0), Math.sin(a0), -Math.sin(a0), Math.cos(a0)];
+  // (u along the way the cap faces, v across it, from the tower's middle.)
+  const P = (u: number, v: number): Pt => [cx + dx * u + ex * v, cy + dy * u + ey * v];
+  const flat = (pts: Pt[]) => pts.flat();
+  const seed = Math.round(cx * 7 + cy * 13);
+  // The cap: widest a little forward of the middle, blunt at the front, pointed at the back.
+  const [A, B, u0] = [rt * 0.68, rt * 0.56, rt * 0.08];
+  const half = (u: number) => Math.max(0, B * (1 - ((u - u0) / (u > u0 ? 1.55 * A : 1.2 * (A + u0))) ** 2));
+  const side = (sd: number) => {
+    const out: Pt[] = [];
+    for (let k = 0; k <= 16; k++) {
+      const u = A - (2 * A * k) / 16;
+      out.push(P(u, sd * half(u)));
+    }
+    return out;
+  };
+  const left = side(-1);
+  const right = side(1);
+  const cap = [...left, ...right.reverse()];
+  // The sails: each arm's stretch along the bar (its lean across), the upper ones over the lower.
+  const front = 0.95 * rt + 2 * FT;
+  const phi = hash(seed, 3, 7) * (Math.PI / 2);
+  const spread = hash(seed, 5, 1) < 0.5 ? [0, 2] : [0, 1, 2];
+  const r0 = R * 0.2;
+  const t = FT * 1.6;
+  const arms = [0, 1, 2, 3]
+    .map((k) => {
+      const th = phi + (k * Math.PI) / 2;
+      return { k, c: Math.cos(th), up: Math.sin(th) > 0, cloth: spread.includes(k) };
+    })
+    .sort((p, q) => Number(p.up) - Number(q.up));
+  const B2 = (v0: number, v1: number, w: number, du = 0): number[] => flat([P(front + du - w, v0), P(front + du - w, v1), P(front + du + w, v1), P(front + du + w, v0)]);
+  // Shadows: the sails' well off (they stand high), the cap's and the tail's close.
+  const [sx, sy] = [R * 0.2, R * 0.2];
+  const shade = (pts: number[], ox: number, oy: number) => pts.map((v, i) => v + (i % 2 ? oy : ox));
+  for (const { c } of arms) if (Math.abs(c) > 0.05) g.poly(shade(B2(r0 * c, R * c, t), sx, sy));
+  g.poly(shade(B2(-R * 0.08, R * 0.08, t * 1.4), sx, sy));
   g.fill({ color: 0x000000, alpha: 0.12 });
-  for (const { P } of arms) g.moveTo(...P(0, 0).map((v) => v + off) as Pt).lineTo(...P(R, 0).map((v) => v + off) as Pt);
-  g.stroke({ width: FT * 0.6, color: 0x000000, alpha: 0.12 });
-  const bars = 7;
-  for (const { P, cloth, lit } of arms) {
-    const box = frame(P);
+  g.poly(shade(flat(cap), FT * 1.4, FT * 1.4)).fill({ color: 0x000000, alpha: 0.16 });
+  // The tail pole and its struts, to the capstan wheel past the tower's foot.
+  const tail = rt + 5 * FT;
+  const strutAt = -A * 0.35;
+  for (const [width, color] of [
+    [FT * 0.75 + 3.4, INK],
+    [FT * 0.75, WOOD[1]],
+  ] as const) {
+    g.moveTo(...P(-A * 0.8, 0)).lineTo(...P(-tail, 0));
+    for (const sd of [-1, 1]) g.moveTo(...P(strutAt, sd * half(strutAt) * 0.9)).lineTo(...P(-tail * 0.82, 0));
+    g.stroke({ width, color, cap: 'round' });
+  }
+  g.moveTo(...P(-A * 0.8, ex * LX + ey * LY > 0 ? -FT * 0.15 : FT * 0.15)).lineTo(...P(-tail, ex * LX + ey * LY > 0 ? -FT * 0.15 : FT * 0.15)).stroke({ width: FT * 0.22, color: WOOD[2], alpha: 0.8 });
+  const [wx, wy] = P(-tail, 0);
+  const wr = FT * 1.5;
+  g.poly(flat(Array.from({ length: 6 }, (_, k) => P(-tail + wr * Math.cos((k * Math.PI) / 3), wr * Math.sin((k * Math.PI) / 3))))).stroke({ width: FT * 0.3 + 2.4, color: INK, join: 'round' });
+  g.poly(flat(Array.from({ length: 6 }, (_, k) => P(-tail + wr * Math.cos((k * Math.PI) / 3), wr * Math.sin((k * Math.PI) / 3))))).stroke({ width: FT * 0.3, color: WOOD[1], join: 'round' });
+  for (let k = 0; k < 3; k++) g.moveTo(...P(-tail + wr * Math.cos((k * Math.PI) / 3), wr * Math.sin((k * Math.PI) / 3))).lineTo(...P(-tail - wr * Math.cos((k * Math.PI) / 3), -wr * Math.sin((k * Math.PI) / 3)));
+  g.stroke({ width: FT * 0.18, color: INK });
+  g.circle(wx, wy, FT * 0.35).fill(WOOD[0]).stroke({ width: 1.6, color: INK });
+  // The cap: shaded, its lit half, the ridge along it, the boards' seams across, inked round.
+  const litSide = ex * LX + ey * LY > 0 ? -1 : 1;
+  g.poly(flat(cap)).fill(CAP[1]);
+  g.poly(flat([...(litSide < 0 ? left : right.slice().reverse()), P(-A, 0), P(A, 0)])).fill(CAP[0]);
+  for (let k = 1; k < 7; k++) {
+    const u = A - (2 * A * k) / 7;
+    const w = half(u);
+    g.moveTo(...P(u, -w * 0.94)).lineTo(...P(u + FT * 0.5, 0)).lineTo(...P(u, w * 0.94));
+  }
+  g.stroke({ width: 1.4, color: mix(CAP[1], INK, 0.35), alpha: 0.7 });
+  g.moveTo(...P(A, 0)).lineTo(...P(-A * 0.96, 0)).stroke({ width: FT * 0.32, color: CAP[2] });
+  g.moveTo(...P(A, 0)).lineTo(...P(-A * 0.96, 0)).stroke({ width: 1.6, color: mix(CAP[1], INK, 0.5) });
+  g.poly(flat(cap), true).stroke({ width: 4.4, color: INK, join: 'round' });
+  // The windshaft out of the cap's front to the canister.
+  for (const [width, color] of [
+    [FT * 1.1 + 3.4, INK],
+    [FT * 1.1, WOOD[1]],
+  ] as const) g.moveTo(...P(A - FT, 0)).lineTo(...P(front, 0)).stroke({ width, color, cap: 'butt' });
+  // The sails edge-on: each arm's frame a strip along the bar, its lattice bars across (cloth on
+  // some), the stock along its middle.
+  for (const { c, cloth } of arms) {
+    if (Math.abs(c) < 0.05) continue;
+    const [v0, v1] = [r0 * c, R * c];
+    const box = B2(v0, v1, t);
     if (cloth) {
-      // Cloth over the lattice: a shaded strip along its outer edge, the bars showing as folds.
-      g.poly(box).fill(lit > 0 ? CLOTH[0] : mix(CLOTH[0], CLOTH[1], 0.5));
-      g.poly([...P(r0 + w * 0.2, w * 0.72), ...P(R, w * 0.72), ...P(R, w), ...P(r0 + w * 0.3, w)]).fill({ color: CLOTH[1], alpha: 0.8 });
-      for (let i = 1; i < bars; i++) {
-        const r = r0 + ((R - r0) * i) / bars;
-        g.moveTo(...P(r, w * 0.12)).lineTo(...P(r, w * 0.98));
-      }
-      g.stroke({ width: 1.6, color: mix(CLOTH[1], WOOD[0], 0.35), alpha: 0.8 });
+      g.poly(box).fill(CLOTH[0]);
+      g.poly(B2(v0, v1, t * 0.4, litSide * t * 0.6)).fill({ color: CLOTH[1], alpha: 0.85 });
     } else {
-      // Bare lattice: bars across, a lath along the middle and the hemlath along the edge.
+      g.poly(box).fill({ color: WOOD[0], alpha: 0.35 });
+      const bars = Math.max(2, Math.round((Math.abs(v1 - v0) / (R - r0)) * 9));
       for (let i = 0; i <= bars; i++) {
-        const r = r0 + w * 0.3 * (1 - i / bars) + ((R - r0 - w * 0.3 * (1 - i / bars)) * i) / bars;
-        g.moveTo(...P(r, w * 0.1)).lineTo(...P(r, w));
+        const v = v0 + ((v1 - v0) * i) / bars;
+        g.moveTo(...P(front - t, v)).lineTo(...P(front + t, v));
       }
-      g.moveTo(...P(r0 + w * 0.15, w * 0.55)).lineTo(...P(R, w * 0.55));
-      g.moveTo(...P(r0 + w * 0.3, w)).lineTo(...P(R, w));
-      g.stroke({ width: 4.4, color: INK, cap: 'round' });
+      g.moveTo(...P(front - t, v0)).lineTo(...P(front - t, v1));
+      g.moveTo(...P(front + t, v0)).lineTo(...P(front + t, v1));
+      g.stroke({ width: 3.6, color: INK, cap: 'round' });
       for (let i = 0; i <= bars; i++) {
-        const r = r0 + w * 0.3 * (1 - i / bars) + ((R - r0 - w * 0.3 * (1 - i / bars)) * i) / bars;
-        g.moveTo(...P(r, w * 0.1)).lineTo(...P(r, w));
+        const v = v0 + ((v1 - v0) * i) / bars;
+        g.moveTo(...P(front - t, v)).lineTo(...P(front + t, v));
       }
-      g.moveTo(...P(r0 + w * 0.15, w * 0.55)).lineTo(...P(R, w * 0.55));
-      g.moveTo(...P(r0 + w * 0.3, w)).lineTo(...P(R, w));
-      g.stroke({ width: 2, color: WOOD[2], cap: 'round' });
+      g.moveTo(...P(front - t, v0)).lineTo(...P(front - t, v1));
+      g.moveTo(...P(front + t, v0)).lineTo(...P(front + t, v1));
+      g.stroke({ width: 1.6, color: WOOD[2], cap: 'round' });
     }
     if (cloth) g.poly(box, true).stroke({ width: 2.6, color: INK, join: 'round' });
   }
-  // The whips, over the sails.
-  const whip = FT * 0.7;
-  for (const [width, color] of [
-    [whip + 3.4, INK],
-    [whip, WOOD[1]],
-  ] as const) {
-    for (const { P } of arms) g.moveTo(...P(0, 0)).lineTo(...P(R * 1.02, 0));
-    g.stroke({ width, color, cap: 'round' });
+  for (const { c } of arms) {
+    if (Math.abs(c) < 0.05) continue;
+    for (const [width, color] of [
+      [FT * 0.6 + 3.2, INK],
+      [FT * 0.6, WOOD[1]],
+    ] as const) g.moveTo(...P(front, 0)).lineTo(...P(front, R * c * 1.02)).stroke({ width, color, cap: 'round' });
   }
-  for (const { P, lit } of arms) {
-    const sd = lit > 0 ? 1 : -1;
-    g.moveTo(...P(R * 0.1, sd * whip * 0.22)).lineTo(...P(R, sd * whip * 0.22));
-  }
-  g.stroke({ width: whip * 0.3, color: WOOD[2], alpha: 0.8 });
-  // The hub cap.
-  const hub = FT * 1.4;
-  g.circle(cx, cy, hub).fill(WOOD[0]).stroke({ width: 2.6, color: INK });
-  g.circle(cx - hub * 0.12, cy - hub * 0.12, hub * 0.78).fill(WOOD[1]);
-  g.circle(cx - hub * 0.32, cy - hub * 0.32, hub * 0.32).fill({ color: WOOD[2], alpha: 0.9 });
+  // The canister at the hub, over the stocks.
+  const hub = FT * 1.2;
+  g.poly(flat([P(front - hub, -hub), P(front - hub, hub), P(front + hub, hub), P(front + hub, -hub)])).fill(WOOD[0]).stroke({ width: 2.6, color: INK, join: 'round' });
+  g.poly(flat([P(front - hub * 0.6, -hub * 0.6 * litSide), P(front + hub * 0.6, -hub * 0.6 * litSide), P(front + hub * 0.6, 0), P(front - hub * 0.6, 0)])).fill(WOOD[1]);
 }
 
 /** Tactical info for a bound under a point (chunk px), if one is within half a square of it. */

@@ -547,12 +547,12 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
     // A building laid out for a purpose (a close's temple) takes the place, id and name of one the
     // town lost with that purpose (the nearest, about a patch away at most; notes and people there
     // follow it); else of one kept as generated on its patch, which is a home again with the new
-    // one's id.
+    // one's id. (Not its windmills: out in the fields, kept as generated after, `super::layout`.)
     let mut lost: Vec<(usize, P, u32, Option<String>, bool)> = generated
         .buildings
         .iter()
         .zip(&used)
-        .filter(|(_, u)| !**u)
+        .filter(|(b, u)| !**u && !super::rural::windmill(b))
         .filter_map(|(b, _)| b.func.map(|f| (f as usize, centroid(&b.poly), b.id, b.name.clone(), b.ward == Ward::Castle)))
         .collect();
     // (Nearest pairs first, so each takes its own patch's before a neighbour's.)

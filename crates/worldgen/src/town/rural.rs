@@ -46,8 +46,9 @@ pub struct Battle {
     pub runs: Vec<(P, P, RunKind)>,
     /// Trees (place, kind, scale, look).
     pub trees: Vec<(P, Kind, f32, u8)>,
-    /// Windmills' sails (middle, the way they stand, radians).
-    pub sails: Vec<(P, f64)>,
+    /// Windmills' caps and sails (the tower's middle, the way the cap faces (radians), the tower's
+    /// radius ft, whether its walls are pale: lime-washed or plastered).
+    pub sails: Vec<(P, f64, f64, bool)>,
     /// Water wheels (middle, the way the mill's wall runs, the mill to its left).
     pub wheels: Vec<(P, P)>,
 }
@@ -70,6 +71,8 @@ const ROOF_FT: f64 = 3.0;
 const WAY_GAP_FT: f64 = 5.0;
 /// A windmill's sails' reach from the hub (ft).
 pub const SAIL_FT: f64 = 27.0;
+/// Sides of a tower mill's round footprint (as the POI towers').
+pub const MILL_SIDES: usize = 14;
 
 /// A copse on field `i`: the clump's middle and radius (ft). Some pasture and fallow out on the
 /// belt's rim, keyed by place; never a windmill's field.
@@ -197,10 +200,22 @@ pub fn windmill(b: &Building) -> bool {
     is_func(b, "windmill")
 }
 
-/// The way a windmill's sails stand (radians), keyed by its place.
+/// The way a windmill's cap faces, its sails in front (radians, world axes): into the prevailing
+/// wind, from the south-west, a little either way by its place.
 pub fn sail_angle(b: &Building) -> f64 {
     let c = centroid(&b.poly);
-    unit(hash3(0x5a11, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 3)) * std::f64::consts::FRAC_PI_2
+    let u = unit(hash3(0x5a11, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 3));
+    0.75 * std::f64::consts::PI + 0.9 * (u - 0.5)
+}
+
+/// A windmill's middle and its tower's radius (ft): the corners' mean, measured from the first
+/// corner (world feet are millions).
+pub fn mill_ring(b: &Building) -> (P, f64) {
+    let p0 = b.poly[0];
+    let n = b.poly.len().max(1) as f64;
+    let m = b.poly.iter().fold([0.0, 0.0], |a, &q| add(a, mul(sub(q, p0), 1.0 / n)));
+    let r = b.poly.iter().map(|&q| len(sub(sub(q, p0), m))).sum::<f64>() / n;
+    (add(p0, m), r)
 }
 
 /// Last in making a layout (world ft): water wheels, then windmills.
@@ -257,17 +272,20 @@ fn wheels(site: &Site, l: &mut Layout) {
     l.wheels = out;
 }
 
-/// Windmills on the highest ground among the fields against the land round (150 ft out): a
-/// village's when it has no water mill, else one round some towns, one or two round a city, two or
-/// three round a metropolis, on rises only. A post mill's body (16-20 x 14-16 ft) in a field's
-/// middle, clear of its hedges, the roads, lanes and buildings, 600 ft apart.
+/// Windmills among the fields, the highest ground against the land round (150 ft out) first: a
+/// village's always when it has no water mill, else one time in three; one round most towns, one or
+/// two round a city, two or three round a metropolis. A tower mill: a round tower (`MILL_SIDES`,
+/// 22-28 ft across) of three or four floors in a field's middle, clear of its hedges, the roads,
+/// lanes and buildings, 600 ft apart.
 fn windmills(site: &Site, s: &Settlement, l: &mut Layout) {
     let Some(func) = catalog::index_of("windmill") else { return };
-    let roll = |k: i64| unit(hash3(s.seed, l.index as i64, k, 0x3d11));
+    // (Keyed by its place, not its number: a town added elsewhere leaves it as it was.)
+    let roll = |k: i64| unit(hash3(s.seed ^ 0x3d11, crate::core::round(s.x) as i64, crate::core::round(s.y) as i64, k));
     let village = l.tier == Tier::Village;
     let want = match l.tier {
-        Tier::Village => !l.buildings.iter().any(|b| is_func(b, "mill")) as usize,
-        Tier::Town => (roll(1) < 0.6) as usize,
+        Tier::Village if l.buildings.iter().any(|b| is_func(b, "mill")) => (roll(2) < 1.0 / 3.0) as usize,
+        Tier::Village => 1,
+        Tier::Town => (roll(1) < 0.8) as usize,
         Tier::City => 1 + (roll(1) < 0.5) as usize,
         Tier::Metropolis => 2 + (roll(1) < 0.5) as usize,
     };
@@ -290,37 +308,42 @@ fn windmills(site: &Site, s: &Settlement, l: &mut Layout) {
             let a = k as f64 * std::f64::consts::FRAC_PI_4;
             site.height(add(lc, [150.0 * libm::cos(a), 150.0 * libm::sin(a)]))
         }).sum::<f64>() / 8.0;
-        let rise = site.height(lc) - ring;
-        if !village && rise < 2.0 {
-            continue;
-        }
+        // (A rise preferred, not needed: flat land scores by nearness alone.)
+        let rise = (site.height(lc) - ring).clamp(-6.0, 12.0);
         let far = len(lc) / r;
-        cands.push((rise - if village { 4.0 * (far - 1.0).max(0.0) } else { 0.0 }, i));
+        cands.push((rise - 4.0 * (far - if village { 1.0 } else { 1.3 }).max(0.0), i));
     }
     cands.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
     let mut placed: Vec<P> = Vec::new();
     let mut id = l.buildings.iter().map(|b| b.id + 1).max().unwrap_or(0);
-    for &(_, i) in cands.iter().take(40) {
+    for &(_, i) in cands.iter().take(200) {
         if placed.len() >= want {
             break;
         }
         let f = &l.fields[i];
         let c = centroid(f);
-        if placed.iter().any(|&q| dist(q, c) < 600.0) || outline_dist(f, c) < 24.0 {
+        let h = hash3(s.seed, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 0x3d12);
+        let rad = 11.0 + 3.0 * unit(h ^ 1);
+        if placed.iter().any(|&q| dist(q, c) < 600.0) || outline_dist(f, c) < rad + 12.0 {
             continue;
         }
-        let h = hash3(s.seed, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 0x3d12);
-        let a = unit(h) * std::f64::consts::PI;
-        let (w, d) = (16.0 + 4.0 * unit(h ^ 1), 14.0 + 2.0 * unit(h ^ 2));
-        let poly = rect(c, [libm::cos(a), libm::sin(a)], w, d);
+        let a0 = unit(h) * std::f64::consts::TAU;
+        let mut poly: Vec<P> = (0..MILL_SIDES).map(|k| {
+            let a = a0 + std::f64::consts::TAU * k as f64 / MILL_SIDES as f64;
+            [c[0] + rad * libm::cos(a), c[1] + rad * libm::sin(a)]
+        }).collect();
+        if area(&poly) < 0.0 {
+            poly.reverse();
+        }
         let local: Vec<P> = poly.iter().map(|&p| sub(p, center)).collect();
         let lc = sub(c, center);
-        let near_way = l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |q| seg_dist(c, q[0], q[1]) - 0.5 * w)).chain(l.streets.iter().flat_map(|st| st.windows(2).map(|q| seg_dist(c, q[0], q[1]) - 6.0))).any(|d| d < 25.0);
-        if near_way || site.near_network_road(lc, 30.0) || !site.buildable(&local) || l.buildings.iter().any(|b| dist(centroid(&b.poly), c) < 40.0) {
+        let near_way = l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |q| seg_dist(c, q[0], q[1]) - 0.5 * w)).chain(l.streets.iter().flat_map(|st| st.windows(2).map(|q| seg_dist(c, q[0], q[1]) - 6.0))).any(|d| d < rad + 14.0);
+        if near_way || site.near_network_road(lc, rad + 19.0) || !site.buildable(&local) || l.buildings.iter().any(|b| dist(centroid(&b.poly), c) < rad + 30.0) {
             continue;
         }
         let ward = if village { catalog::Ward::Rural } else { catalog::Ward::Farm };
-        l.buildings.push(Building { poly, ward, func: Some(func as u16), residential: 1, name: None, floors: 1, pad_ft: site.pad(&local), structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id, parts: Vec::new(), keep: None });
+        let floors = 3 + (unit(h ^ 3) < 0.5) as u8;
+        l.buildings.push(Building { poly, ward, func: Some(func as u16), residential: 1, name: None, floors, pad_ft: site.pad(&local), structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id, parts: Vec::new(), keep: None });
         id += 1;
         placed.push(c);
     }
@@ -562,10 +585,11 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
                 }
             }
         }
-        for b in l.buildings.iter().filter(|b| windmill(b)) {
-            let c = centroid(&b.poly);
+        for b in l.buildings.iter().filter(|b| windmill(b) && b.poly.len() >= 3) {
+            let (c, r) = mill_ring(b);
             if inside(c) {
-                out.sails.push((c, sail_angle(b)));
+                let pale = matches!(super::roof::look(l, b).material, super::roof::Material::Whitewash | super::roof::Material::FlatClay);
+                out.sails.push((c, sail_angle(b), r, pale));
             }
         }
         for &(c, u) in &l.wheels {
@@ -621,8 +645,8 @@ pub fn shapes(b: &Battle, ox: f64, oy: f64, out: &mut Vec<VectorShape>) {
         }
         out.push(VectorShape { kind: sk, size: (kind.ft() / SQUARE_FT) as f32, pts });
     }
-    for &(c, a) in &b.sails {
-        out.push(VectorShape { kind: ShapeKind::Sails, size: (SAIL_FT / SQUARE_FT) as f32, pts: vec![local(c), [a as f32, 0.0]] });
+    for &(c, a, r, pale) in &b.sails {
+        out.push(VectorShape { kind: ShapeKind::Sails, size: (SAIL_FT / SQUARE_FT) as f32, pts: vec![local(c), [a as f32, (r / SQUARE_FT) as f32], [pale as u8 as f32, 0.0]] });
     }
 }
 
@@ -688,15 +712,19 @@ pub fn plan_polys(l: &Layout, push: &mut dyn FnMut(&[P], u32)) {
     }
 }
 
-/// Plan zoom marks over the buildings: a windmill's sails as a cross (site kind 23, `PLAN_SAILS`).
+/// How far in front of a windmill's middle its sails turn, by its tower's radius (ft).
+pub fn sail_front(r: f64) -> f64 {
+    0.95 * r + 2.0
+}
+
+/// Plan zoom marks over the buildings: a windmill's sails, edge-on from above, as a bar across the
+/// front of its cap (site kind 23, `PLAN_SAILS`).
 pub const PLAN_SAILS: u32 = 23;
 pub fn plan_ticks(l: &Layout, push: &mut dyn FnMut(&[P], u32)) {
-    for b in l.buildings.iter().filter(|b| windmill(b)) {
-        let c = centroid(&b.poly);
+    for b in l.buildings.iter().filter(|b| windmill(b) && b.poly.len() >= 3) {
+        let (c, r) = mill_ring(b);
         let a = sail_angle(b);
-        for k in 0..2 {
-            let t = a + k as f64 * std::f64::consts::FRAC_PI_2;
-            push(&rect(c, [libm::cos(t), libm::sin(t)], 2.0 * SAIL_FT, 3.5), PLAN_SAILS);
-        }
+        let d = [libm::cos(a), libm::sin(a)];
+        push(&rect(add(c, mul(d, sail_front(r))), [-d[1], d[0]], 2.0 * SAIL_FT, 4.0), PLAN_SAILS);
     }
 }
