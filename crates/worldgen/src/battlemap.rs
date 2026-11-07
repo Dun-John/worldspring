@@ -26,6 +26,9 @@ use crate::t0::roads::CrossingKind;
 
 /// A park laid out (`town::Park`): what a park's chunks and tiles draw.
 pub use crate::park::layout as park_layout;
+// v63 underground: a ruin's plan at site zoom; small closed relief drawn soft.
+pub mod ruin_plan;
+mod soft_relief;
 
 pub const SQ: usize = TILE_N / 2;
 /// Squares per edge including a one-square halo ring (for seamless rendering gradients).
@@ -360,6 +363,7 @@ pub struct Chunk {
     pub surface: Vec<Surface>,
     /// Bits: 1 cliff to the east, 2 cliff to the south, 4 slope edge east, 8 slope edge south,
     /// 16 difficult terrain, 32 a park's pond or stream or the ground by it.
+    /// 128 small closed relief, drawn soft (`soft_relief`).
     pub edges: Vec<u8>,
     pub objects: Vec<Object>,
     pub atmosphere: Atmosphere,
@@ -2082,6 +2086,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let rseed = hash2(seed, 0x5e11, 1);
     let (cx0, cy0) = (gsx.div_euclid(RELIEF_CELL) - 1, gsy.div_euclid(RELIEF_CELL) - 1);
     let (cx1, cy1) = ((gsx + SQ as i64).div_euclid(RELIEF_CELL) + 1, (gsy + SQ as i64).div_euclid(RELIEF_CELL) + 1);
+    let (relief_base, mut reliefs) = (hh.clone(), Vec::new());
     for cy in cy0..=cy1 {
         for cx in cx0..=cx1 {
             // Biome at the feature cell's true world position (not clamped into this chunk),
@@ -2090,9 +2095,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let b = Biome::from_u8(t0.sample_biome(wx, wy, t0.biome_warp(wx, wy))[0]);
             for f in relief_in_cell(rseed, cx, cy, b) {
                 apply_relief(&f, &mut hh, &hw, gsx - 1, gsy - 1, HS);
+                reliefs.push(f);
             }
         }
     }
+    let soft = soft_relief::mask(&reliefs, &relief_base, gsx - 1, gsy - 1);
     // Micro-relief never lifts or digs a road bed, a building, a street, a field or the ground
     // at a way underground.
     let protected: Vec<bool> =
@@ -2922,6 +2929,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);
+    soft_relief::flag(&mut chunk.edges, &soft, &crag_h);
     for k in 0..n {
         if park_wet[(k / SQ + 1) * HS + k % SQ + 1] {
             chunk.edges[k] |= 32;

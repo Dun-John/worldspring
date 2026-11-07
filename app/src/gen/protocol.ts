@@ -1,5 +1,6 @@
 // Messages between the main thread, the coordinator worker and generator workers,
 // plus the terrain payload layout (mirrors crates/worldgen/src/payload.rs).
+import { ruinPlanFill } from './ruinPlan';
 import type { PreparedChunk } from './battlePrep';
 
 export type Wind = 'belts' | 'from_west' | 'from_east';
@@ -909,6 +910,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         a = 0.7;
       } else if (kind === 14) rgb = [0.33, 0.46, 0.26];
       else if (kind === 15) rgb = [0.74, 0.5, 0.46];
+      // v63 underground: a ruin's plan (`ruinPlan.ts`).
+      else if (ruinPlanFill(kind)) [rgb, a] = ruinPlanFill(kind)!;
       else if ((attr >>> 25) & 15) {
         // A keep's piece (`payload::pack_sites`): towers and the body's hall under slate, a wing or
         // forebuilding by its top (`town::keep_tops`): open battlements stone, a roof lead or slate; a
