@@ -4521,8 +4521,9 @@ fn bailey_well(
 /// - inside each gate, to one side of the way, a cart, a trough or barrels;
 /// (The ways from gate to gate and to the keep go in `ways`: the guarantee keeps off them too.)
 /// - a well in the keep's court;
-/// - an anvil and its quench tub before each smithy (`kitchen::anvils`);
-/// - in a garden yard, a kitchen garden by the kitchen range or the keep (`kitchen::garden`: rows
+/// - an anvil and its quench tub before each smithy (`kitchen::anvils`), a trough and hay before
+///   each stables (`kitchen::stables`);
+/// - in a garden yard, a kitchen garden against a range, the keep or the curtain (`kitchen::garden`: rows
 ///   in a wattle fence, skeps) and a few of the biome's trees planted in the yard, spaced out.
 fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed: u64, out: &mut Vec<([f64; 2], f32, Kind, u8, f32)>, ways: &mut Vec<([f64; 2], [f64; 2])>) -> bool {
     use crate::town::geom::{add, centroid, contains, cross, dist, dot, lerp, mul, seg_dist, sub};
@@ -4616,6 +4617,7 @@ fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed:
     let look = |a: i64, b: i64| (hash2(key, a, b) >> 20) as u8 & 7;
     // v63 castles: an anvil before each smithy.
     kitchen::anvils(key, &ranges, &blds, &depth, &free, &mut placed, out);
+    kitchen::stables(key, &ranges, &blds, &depth, &free, &mut placed, out);
     // By the ranges, a store's group against the yard side.
     for (ri, b) in ranges.iter().enumerate() {
         if roll(10 + ri as i64) >= 0.7 || b.poly.len() != 4 {
@@ -4700,7 +4702,7 @@ fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed:
         return false;
     }
     // v63 castles: the kitchen garden.
-    kitchen::garden(key, &ranges, &blds, to, ring, &spots, &to_keep, &depth, &free, &mut placed, out);
+    kitchen::garden(key, &ranges, &blds, keep.copied(), to, ring, &spots, &to_keep, &depth, &free, &mut placed, out);
     // A few planted trees, spaced out over the yard (the biome's own).
     let tree = greenery(land_biome(t0, c0)).0.first().copied().unwrap_or(Kind::TreeDeciduous);
     let want = 3 + (roll(300) * 4.0) as usize;

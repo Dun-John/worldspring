@@ -902,7 +902,7 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, tier: cr
 const GARDEN_GAP: f64 = 5.0;
 const GARDEN_MOST: f64 = 160.0;
 const GARDEN_LEAST: f64 = 40.0;
-const GARDEN_FT2: f64 = 2500.0;
+const GARDEN_FT2: f64 = 4000.0;
 const GARDEN_RELIEF: f64 = 6.0;
 const GARDEN_CLEARS: f64 = 100.0;
 

@@ -1057,8 +1057,8 @@ export const SPARSE = new Map([
 export const LONG_SHADOW = new Map([
   ['hedge', [1.35, 0.72, 1]],
   ['footbridge', [3.1, 0.85, 1.6]],
-  ['wattle fence', [1.0, 0.3, 0.6]],
-  ['vegetable row', [1.9, 0.5, 0.5]],
+  ['wattle fence', [1.0, 0.36, 0.6]],
+  ['vegetable row', [1.9, 0.7, 0.5]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
 export const OWN_SHADOW = new Set(['market cross']);
