@@ -113,8 +113,9 @@ const float DIST_MAX = 8.0;
 // stone tone. `depth`: squares into the rock; `px`: squares a pixel. Strokes under ~2 px apart
 // give way to their average tone (no shimmer). Clusters are the cells of a jittered grid
 // (nearest centre), from hashes alone: one noise lookup, for the tone.
-vec3 hatchedRock(vec2 p, float depth, float px, vec2 n) {
-    vec3 c = vec3(0.62, 0.57, 0.48) * (0.92 + 0.16 * vnoise(p * 0.55));
+vec3 hatchedRock(vec2 p, float depth, float px, out float cut) {
+    cut = 0.0;
+    vec3 c = vec3(0.42, 0.39, 0.34) * (0.92 + 0.16 * vnoise(p * 0.55));
     float out1 = smoothstep(0.3, 2.0, depth);
     // Strokes this far apart (squares), half this thick (squares: about a pixel, bolder close up).
     const float GAP = 0.20;
@@ -147,12 +148,10 @@ vec3 hatchedRock(vec2 p, float depth, float px, vec2 n) {
         float edge = (sqrt(second) - sqrt(best)) / 1.1;
         // (Each cluster in or out as a whole; the band ends in ink, not in a haze.)
         float keep = step(hash21(id + 9.1), dens) * step(hash21(id + 11.9), 1.0 - smoothstep(1.2, 3.0, depth));
+        // (Straight, parallel strokes: one angle for the whole cluster. The cluster's own
+        // shift of where the tone fades out breaks up the outer edge.)
         float a = 3.14159265 * hash21(id + 3.7);
-        // Off the wall's tangent by 30-60 degrees, either way (never along the wall).
-        if (dot(n, n) > 0.01) {
-            float off = 0.5236 + 0.5236 * hash21(id + 6.1);
-            a = atan(n.x, -n.y) + (hash21(id + 8.3) < 0.5 ? off : -off);
-        }
+        cut = (hash21(id + 4.9) - 0.5) * 0.8;
         vec2 dir = vec2(cos(a), sin(a));
         vec2 r = rel / 1.1;
         float t = dot(r, vec2(-dir.y, dir.x)) / GAP + hash21(id + 5.3);
@@ -170,7 +169,7 @@ vec3 hatchedRock(vec2 p, float depth, float px, vec2 n) {
         float ink = 1.0 - smoothstep(hws - aa, hws + aa, shape);
         // (Clear of ink just by the wall's lip.)
         ink *= smoothstep(0.1, 0.15 + aa, depth);
-        ink *= smoothstep(0.04, 0.06 + aa, edge) * keep;
+        ink *= smoothstep(0.09, 0.12 + aa, edge) * keep;
         c = mix(c, INK, ink * 0.88 * sharp);
     }
     // (Too fine to draw: their tone.)
@@ -605,7 +604,8 @@ void main() {
         // fading out beyond (the map above shows round the site). (Near the wall its depth is
         // the wall's own; farther out, from uDist.)
         float depth = mix(-d, far, smoothstep(0.6, 1.4, far));
-        vec3 r = hatchedRock(p, depth, px, n);
+        float cut;
+        vec3 r = hatchedRock(p, depth, px, cut);
         float face = clamp(0.55 + 0.6 * dot(n, uLight), 0.25, 1.15);
         vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * face;
         if (rough < 0.2) {
@@ -616,7 +616,7 @@ void main() {
             lip = mix(vec3(0.56, 0.53, 0.48) * (0.85 + 0.25 * hash21(floor(b))) * face, INK, joint * 0.5);
         }
         col = mix(lip, r, smoothstep(-rim, -rim - 0.12, d));
-        alpha = 1.0 - smoothstep(2.4, 3.2, depth);
+        alpha = 0.7 * (1.0 - smoothstep(2.2, 3.2, depth + cut));
     } else {
         ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
         vec4 cell = texelFetch(uCells, s, 0) * 255.0;
