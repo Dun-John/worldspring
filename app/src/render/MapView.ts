@@ -191,6 +191,8 @@ export class MapView {
   sewers: Sewers | null = null;
   /** The zoom-out limit before going down into the sewers (they are drawn near the view only). */
   private sewerMinZoom: number | null = null;
+  /** Inside a building or site: the view turned so that its plan stands north up (`turnView`). */
+  northUp = false;
   /** Roof fade: the ground floor of the hovered building at close battlemap zoom. */
   private catalog: KindInfo[] | null = null;
   private restoredAt = -Infinity;
@@ -727,6 +729,20 @@ export class MapView {
     this.onInterior(null);
   }
 
+  /** North up (`northUp`): the whole stage turned about the middle of the screen so the open
+   * building or site's plan stands square to it, the map round it turned alike (sewers already
+   * stand north up). The camera turns the pointer back (`Camera.turn`). */
+  private turnView() {
+    const it = this.northUp && this.interior && !this.sewers ? this.interior.interior : null;
+    const turn = it ? -Math.atan2(it.axis[1], it.axis[0]) : 0;
+    const st = this.app.stage;
+    if (turn === this.cam.turn && (!turn || (st.pivot.x === this.cam.width / 2 && st.pivot.y === this.cam.height / 2))) return;
+    this.cam.turn = turn;
+    st.pivot.set(this.cam.width / 2, this.cam.height / 2);
+    st.position.set(this.cam.width / 2, this.cam.height / 2);
+    st.rotation = turn;
+  }
+
   private emitInterior() {
     const it = this.interior;
     if (!it) return;
@@ -1138,6 +1154,7 @@ export class MapView {
     this.frameTimes.push(dt);
     if (this.frameTimes.length > 120) this.frameTimes.shift();
     this.syncSize();
+    this.turnView();
 
     this.noteMotion(now);
     const driven = this.driver?.(now);
@@ -1184,10 +1201,9 @@ export class MapView {
       const want: WantTile[] = this.tiles.update(this.cam, this.app.renderer.resolution, now, [this.camVel[0] * LEAD_MS, this.camVel[1] * LEAD_MS]);
       if (this.battle) want.push(...this.battle.update(this.cam, now));
       this.lastWants = want.length;
-      // Under a fully built battlemap the tile layer is invisible, and in the sewers (their
-      // rock covers the view) the whole street map: skip drawing them.
-      this.tiles.container.visible = !this.battle?.covering && !this.sewers;
-      if (this.battle) this.battle.container.visible &&= !this.sewers;
+      // Under a fully built battlemap the tile layer is invisible: skip drawing it. (In the
+      // sewers the street map shows, dimmed, where the rock fades out away from the tunnels.)
+      this.tiles.container.visible = !this.battle?.covering;
       // Safety net: a screenful needs a few hundred tiles at most; never flood the generator.
       const MAX_WANT = 600;
       if (want.length > MAX_WANT) {

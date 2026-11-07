@@ -33,6 +33,8 @@ export interface KeyContext {
   zoom(dz: number): void;
   pan(dx: number, dy: number): void;
   level(d: number): void;
+  /** Inside: the view turned north up, or back. */
+  northUp(): void;
   undo(): void;
   redo(): void;
   generate(): void;
@@ -101,6 +103,7 @@ export function buildKeymap(k: KeyContext): Shortcut[] {
     { keys: ['P'], label: 'Place names (inns, shops, temples)', group: 'Map', run: () => k.places() },
     { keys: [']', 'PageUp'], label: 'Floor up', group: 'Map', when: k.inside, run: () => k.level(1) },
     { keys: ['[', 'PageDown'], label: 'Floor down', group: 'Map', when: k.inside, run: () => k.level(-1) },
+    { keys: ['Shift+N'], label: 'Turn the plan north up (again: back)', group: 'Map', when: k.inside, run: () => k.northUp() },
     { keys: ['Ctrl+Enter'], label: 'Generate', group: 'World', inInputs: true, when: () => k.section() === 'world', run: () => k.generate() },
   ];
   const sketch: [string, EditTool, string][] = [

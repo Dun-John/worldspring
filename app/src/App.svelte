@@ -99,6 +99,11 @@
   let overlay = $state.raw<Overlay | null>(null);
   let selection = $state.raw<Selection | null>(null);
   let inside = $state<InteriorState | null>(null);
+  /** Inside a building or site: the view turned so its plan stands north up (this session only). */
+  let northUp = $state(false);
+  function setNorthUp(on: boolean) {
+    northUp = view.northUp = on;
+  }
   let places = $state(readPlaces());
 
   /** Business pins on or off, as this viewer left them (on at first). */
@@ -1199,7 +1204,7 @@
   if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
-    const [sx, sy] = view.cam.worldToScreen(x, y);
+    const [sx, sy] = view.cam.worldToPage(x, y);
     const b = container.getBoundingClientRect();
     return [b.left + sx, b.top + sy];
   }
@@ -2010,7 +2015,7 @@
   /** The chip at a world point (none: null text). */
   function chipAt(x: number, y: number, text: string | null) {
     if (text === null) return (chip = null);
-    const [sx, sy] = view.cam.worldToScreen(x, y);
+    const [sx, sy] = view.cam.worldToPage(x, y);
     const b = container.getBoundingClientRect();
     chip = { x: b.left + sx, y: b.top + sy, text };
   }
@@ -2020,7 +2025,7 @@
     if (!at) return void (placeBarAt = null);
     let raf = 0;
     const tick = () => {
-      const [sx, sy] = view.cam.worldToScreen(at.x, at.y);
+      const [sx, sy] = view.cam.worldToPage(at.x, at.y);
       const b = container.getBoundingClientRect();
       const next = { x: b.left + sx, y: b.top + sy, r: at.r * view.cam.ppf };
       if (!placeBarAt || Math.abs(next.x - placeBarAt.x) + Math.abs(next.y - placeBarAt.y) + Math.abs(next.r - placeBarAt.r) > 0.5) placeBarAt = next;
@@ -2047,7 +2052,7 @@
       commit: (objects, cleared, label) => commitObjects(objects, cleared, label),
       ring: (x, y, r) => {
         if (r === null) return (ring = null);
-        const [sx, sy] = view.cam.worldToScreen(x, y);
+        const [sx, sy] = view.cam.worldToPage(x, y);
         const b = container.getBoundingClientRect();
         ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
       },
@@ -2117,7 +2122,7 @@
       commit: (g, p, label) => commitGround(g, p, label),
       ring: (x, y, r) => {
         if (r === null) return (ring = null);
-        const [sx, sy] = view.cam.worldToScreen(x, y);
+        const [sx, sy] = view.cam.worldToPage(x, y);
         const b = container.getBoundingClientRect();
         ring = { x: b.left + sx, y: b.top + sy, r: r * view.cam.ppf };
       },
@@ -2195,7 +2200,7 @@
     // A settlement's ring: about how far it reaches, at a middling size for its tier.
     const reach = c.settlement ? SETTLEMENT_REACH_FT[c.settlement.tier] : 0;
     const showRing = (x: number, y: number) => {
-      const [sx, sy] = view.cam.worldToScreen(x, y);
+      const [sx, sy] = view.cam.worldToPage(x, y);
       const b = container.getBoundingClientRect();
       ring = { x: b.left + sx, y: b.top + sy, r: Math.max(6, reach * view.cam.ppf) };
     };
@@ -3000,6 +3005,7 @@
     zoom: (dz) => view.zoomBy(dz),
     pan: (dx, dy) => view.panBy(dx, dy),
     level: (d) => view.levelBy(d),
+    northUp: () => setNorthUp(!northUp),
     undo: undoAny,
     redo: redoAny,
     generate: () => (sketchOn ? exitSketch(true) : void generate(draftWorld(), { keepSketch: true })),
@@ -3592,6 +3598,7 @@
     onWhole={wholeMap}
     onUndo={undoAny}
     floors={inside ? floorPicker : undefined}
+    north={inside && !inside.id.startsWith('w:') ? { on: northUp, set: setNorthUp } : undefined}
   />
   {#if placeArmed}
     <div class="banner" role="status">

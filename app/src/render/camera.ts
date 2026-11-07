@@ -16,6 +16,11 @@ export class Camera implements CameraState {
   maxZoom = 5;
   width = 1;
   height = 1;
+  /** The view turned about the middle of the screen (radians; a site with north up: `MapView`),
+   * else 0. The map is drawn as if unturned and the stage turned: `worldToScreen` gives stage
+   * points; `screenToWorld` takes points on the screen (the pointer), `toPage` turns a stage point
+   * onto the screen (for HTML over the map). */
+  turn = 0;
 
   private ppfZoom = NaN;
   private ppfValue = 1;
@@ -34,7 +39,27 @@ export class Camera implements CameraState {
     return [(x - this.cx) * s + this.width / 2, (y - this.cy) * s + this.height / 2];
   }
 
+  /** A stage point (`worldToScreen`) where it shows on the screen. */
+  toPage(sx: number, sy: number): [number, number] {
+    return this.turned(sx, sy, this.turn);
+  }
+
+  /** `worldToScreen` on the screen (`toPage`). */
+  worldToPage(x: number, y: number): [number, number] {
+    const [sx, sy] = this.worldToScreen(x, y);
+    return this.toPage(sx, sy);
+  }
+
+  /** A point turned by `a` about the middle of the screen. */
+  private turned(sx: number, sy: number, a: number): [number, number] {
+    if (!a) return [sx, sy];
+    const [c, s] = [Math.cos(a), Math.sin(a)];
+    const [dx, dy] = [sx - this.width / 2, sy - this.height / 2];
+    return [this.width / 2 + dx * c - dy * s, this.height / 2 + dx * s + dy * c];
+  }
+
   screenToWorld(sx: number, sy: number): [number, number] {
+    [sx, sy] = this.turned(sx, sy, -this.turn);
     const s = this.ppf;
     return [(sx - this.width / 2) / s + this.cx, (sy - this.height / 2) / s + this.cy];
   }
@@ -42,6 +67,7 @@ export class Camera implements CameraState {
   /** Zoom by `dz` keeping the world point under screen point (sx, sy) fixed. */
   zoomAt(dz: number, sx: number, sy: number) {
     const [wx, wy] = this.screenToWorld(sx, sy);
+    [sx, sy] = this.turned(sx, sy, -this.turn);
     this.zoom = Math.min(this.maxZoom, Math.max(this.minZoom, this.zoom + dz));
     const s = this.ppf;
     this.cx = wx - (sx - this.width / 2) / s;
@@ -49,13 +75,18 @@ export class Camera implements CameraState {
   }
 
   panPixels(dx: number, dy: number) {
+    if (this.turn) [dx, dy] = [dx * Math.cos(this.turn) + dy * Math.sin(this.turn), dy * Math.cos(this.turn) - dx * Math.sin(this.turn)];
     const s = this.ppf;
     this.cx -= dx / s;
     this.cy -= dy / s;
   }
 
-  /** Visible world rectangle [x0, y0, x1, y1]. */
+  /** Visible world rectangle [x0, y0, x1, y1] (turned: the box round it). */
   viewRect(): [number, number, number, number] {
+    if (this.turn) {
+      const c = [this.screenToWorld(0, 0), this.screenToWorld(this.width, 0), this.screenToWorld(0, this.height), this.screenToWorld(this.width, this.height)];
+      return [Math.min(...c.map((p) => p[0])), Math.min(...c.map((p) => p[1])), Math.max(...c.map((p) => p[0])), Math.max(...c.map((p) => p[1]))];
+    }
     const [x0, y0] = this.screenToWorld(0, 0);
     const [x1, y1] = this.screenToWorld(this.width, this.height);
     return [x0, y0, x1, y1];

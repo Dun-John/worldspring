@@ -21,6 +21,9 @@
 // uTerrain: terrain (`kit::TERRAIN`), linear, 4 texels per square: r water (shallow, and under
 //         deep water), g deep water, b chasm, a rubble slope; each blurred, spread into the rock
 //         beside it (so it meets the walls). Read only where uHasTerrain.
+// uDist: squares to the nearest floor (`rockDistance.ts`), linear, 4 texels per square, DIST_PAD
+//         squares past the grid each way, DIST_MAX at 1: the rock is hatched beside the walls by
+//         it and fades out beyond (one fetch; the walls themselves come from the fields above).
 
 in vec2 vUV;
 in vec2 vLocal;
@@ -33,6 +36,7 @@ uniform sampler2D uCells;
 uniform sampler2D uShapes;
 uniform sampler2D uCave;
 uniform sampler2D uTerrain;
+uniform sampler2D uDist;
 
 uniform vec2 uN;
 uniform vec2 uLight;
@@ -53,6 +57,9 @@ uniform float uPad;
 uniform float uShapeCount;
 uniform float uCaverns;
 uniform float uHasTerrain;
+// Squares the quad is drawn past the grid each way (a site's, so its rock fades out round it;
+// sewer sections meet edge to edge: 0).
+uniform float uGrow;
 uniform vec4 uColor;
 
 const vec3 INK = vec3(0.10, 0.085, 0.07);
@@ -75,7 +82,10 @@ float fbm(vec2 p) {
 }
 
 vec4 field(vec2 q) {
-    return texture(uField, (q + uPad) / (uN + 2.0 * uPad));
+    vec2 u = (q + uPad) / (uN + 2.0 * uPad);
+    // (Past the texture, round a site's grid: rock.)
+    if (any(lessThan(u, vec2(0.0))) || any(greaterThan(u, vec2(1.0)))) return vec4(0.0, 0.0, 0.0, 0.5);
+    return texture(uField, u);
 }
 
 // Thin dark seams where noise crosses a level (cracks in rock and stone): about `w` of the
@@ -95,6 +105,67 @@ vec3 rockMass(vec2 p, float depth) {
     return c * mix(1.0, 0.5, smoothstep(0.0, 2.5, depth));
 }
 
+const float DIST_PAD = 4.0;
+const float DIST_MAX = 8.0;
+
+// The rock beside the walls, inked as on a hand-drawn dungeon map: short parallel strokes in
+// small clusters, each cluster at its own angle, densest at the wall and thinning out, on a
+// stone tone. `depth`: squares into the rock; `px`: squares a pixel. Strokes under ~2 px apart
+// give way to their average tone (no shimmer). Clusters are the cells of a jittered grid
+// (nearest centre), from hashes alone: one noise lookup, for the tone.
+vec3 hatchedRock(vec2 p, float depth, float px) {
+    vec3 c = vec3(0.41, 0.38, 0.34) * (0.9 + 0.2 * vnoise(p * 0.55));
+    c *= mix(1.0, 0.82, smoothstep(0.4, 2.6, depth));
+    float out1 = smoothstep(0.3, 2.5, depth);
+    // Strokes this far apart (squares), half this thick (squares: about a pixel, bolder close up).
+    const float GAP = 0.26;
+    float hw = min(max(mix(0.03, 0.022, out1), 0.55 * px), 0.3 * GAP);
+    float sharp = smoothstep(1.8, 3.0, GAP / max(px, 1e-5));
+    float dens = mix(0.95, 0.3, out1);
+    if (sharp > 0.0) {
+        vec2 hc = p * 1.1;
+        vec2 base = floor(hc);
+        float best = 9.0;
+        float second = 9.0;
+        vec2 id = base;
+        vec2 rel = vec2(0.0);
+        for (int j = -1; j <= 1; j++) {
+            for (int i = -1; i <= 1; i++) {
+                vec2 cc = base + vec2(float(i), float(j));
+                vec2 dv = hc - cc - 0.15 - 0.7 * vec2(hash21(cc), hash21(cc + 17.3));
+                float dd = dot(dv, dv);
+                if (dd < best) {
+                    second = best;
+                    best = dd;
+                    id = cc;
+                    rel = dv;
+                } else if (dd < second) {
+                    second = dd;
+                }
+            }
+        }
+        // (A thin gap between clusters; whole clusters drop out farther from the wall.)
+        float edge = (sqrt(second) - sqrt(best)) / 1.1;
+        float keep = step(hash21(id + 9.1), mix(1.0, 0.5, smoothstep(1.0, 2.6, depth)));
+        float a = 3.14159265 * hash21(id + 3.7);
+        vec2 dir = vec2(cos(a), sin(a));
+        vec2 r = rel / 1.1;
+        float t = dot(r, vec2(-dir.y, dir.x)) / GAP + hash21(id + 5.3);
+        float row = floor(t);
+        float h = hash21(vec2(row, 1.3) + id * 7.1);
+        // Each stroke a little shorter or longer, a little off the cluster's middle.
+        float u = dot(r, dir) - (h - 0.5) * 0.16;
+        float half1 = 0.22 + 0.16 * fract(h * 13.7);
+        float aa = 0.8 * px;
+        float ink = 1.0 - smoothstep(hw - aa, hw + aa, abs(fract(t) - 0.5) * GAP);
+        ink *= 1.0 - smoothstep(half1 - aa, half1 + aa, abs(u));
+        ink *= smoothstep(0.04, 0.06 + aa, edge) * keep * step(fract(h * 31.1), dens);
+        c = mix(c, INK, ink * 0.88 * sharp);
+    }
+    // (Too fine to draw: their tone.)
+    return mix(c, INK, (1.0 - sharp) * 2.0 * hw / GAP * dens * 0.45);
+}
+
 // A square drawn from the squares: no shape on it (0, or 254: one next to it).
 bool fromSquares(float g) {
     float c = g * 255.0;
@@ -108,7 +179,9 @@ bool fromSquares(float g) {
 void boxField(vec2 q, out float d, out vec2 n) {
     ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
     vec4 own = texelFetch(uCells, s, 0);
-    bool fl = own.a > 0.5 && fromSquares(own.g);
+    // (Off the grid, round a site: rock.)
+    bool on = all(greaterThanEqual(q, vec2(0.0))) && all(lessThan(q, uN));
+    bool fl = on && own.a > 0.5 && fromSquares(own.g);
     float best = 2.0;
     vec2 way = vec2(0.0);
     for (int j = -2; j <= 2; j++) {
@@ -424,10 +497,16 @@ vec3 terrain(vec3 col, vec2 q, vec2 p, float px) {
 }
 
 void main() {
-    vec2 q = vUV * uN;
+    vec2 q = vUV * (uN + 2.0 * uGrow) - uGrow;
     vec2 p = q + uOrigin;
     // (Squares a pixel.)
     float px = length(fwidth(q));
+    // Squares to the nearest floor: past where the rock has faded out, nothing.
+    float far = texture(uDist, (q + DIST_PAD) / (uN + 2.0 * DIST_PAD)).r * DIST_MAX;
+    if (far > 4.2) {
+        finalColor = vec4(0.0);
+        return;
+    }
     vec4 here = field(q);
     float d;
     vec2 n;
@@ -490,7 +569,7 @@ void main() {
                 look = lk;
             }
         }
-        if (cave) {
+        if (cave && all(greaterThanEqual(q, vec2(0.0))) && all(lessThan(q, uN))) {
             float e = 0.25;
             float c0 = texture(uCave, q / uN).r;
             vec2 gc = vec2(texture(uCave, (q + vec2(e, 0.0)) / uN).r - texture(uCave, (q - vec2(e, 0.0)) / uN).r, texture(uCave, (q + vec2(0.0, e)) / uN).r - texture(uCave, (q - vec2(0.0, e)) / uN).r) / (2.0 * e);
@@ -511,8 +590,11 @@ void main() {
     float alpha;
     float rim = mix(0.16, 0.3, rough);
     if (d < 0.0) {
-        // Rock: the wall's top edge lit from the NW, then the rock mass.
-        vec3 r = rockMass(p, -d);
+        // Rock: the wall's top edge lit from the NW, then the rock hatched beside the walls,
+        // fading out beyond (the map above shows round the site). (Near the wall its depth is
+        // the wall's own; farther out, from uDist.)
+        float depth = mix(-d, far, smoothstep(0.6, 1.4, far));
+        vec3 r = hatchedRock(p, depth, px);
         float face = clamp(0.55 + 0.6 * dot(n, uLight), 0.25, 1.15);
         vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * face;
         if (rough < 0.2) {
@@ -523,7 +605,7 @@ void main() {
             lip = mix(vec3(0.56, 0.53, 0.48) * (0.85 + 0.25 * hash21(floor(b))) * face, INK, joint * 0.5);
         }
         col = mix(lip, r, smoothstep(-rim, -rim - 0.12, d));
-        alpha = mix(1.0, 0.9, smoothstep(-rim, -rim - 0.5, d));
+        alpha = 1.0 - smoothstep(2.0, 3.5, depth);
     } else {
         ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
         vec4 cell = texelFetch(uCells, s, 0) * 255.0;

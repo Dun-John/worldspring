@@ -5,6 +5,7 @@
 // while the view moves.
 import type { Interior, InteriorLevel } from '../gen/protocol';
 import { CAVERN, fromSquares, shapeIndex } from './roomShapes';
+import { rockDistance } from './rockDistance';
 
 /** Field texels per square. */
 export const FIELD_RES = 4;
@@ -45,6 +46,8 @@ export interface UnderField {
   /** Terrain (`kit::TERRAIN`) as soft masks, blurred (w x h, RGBA: shallow water (deep water
    * too: it lies in water), deep water, chasm, rubble slope), else null. */
   terrain: Uint8Array | null;
+  /** Squares to the nearest floor (`rockDistance`: r8, `DIST_PAD` squares past the grid each way). */
+  dist: Uint8Array;
 }
 
 /** Underground terrain kinds, by their channel in `UnderField.terrain`. */
@@ -482,7 +485,9 @@ export function underField(it: Interior, level: number): UnderField {
     cave = new Uint8Array(cw * ch * 4);
     for (let k = 0; k < cw * ch; k++) cave[k * 4] = (b[k] * 255 + 0.5) | 0;
   }
-  return { w: tw, h: th, pad, data, cells, liquidKind, shapes, shapeCount: slots.length, cave, terrain: terrainField(it, level) };
+  // How far the rock lies from the floor (hatched beside the walls, fading out beyond).
+  const dist = rockDistance(f1, w, h, R, rim, nx, ny, (i, j) => lv.cells[j * nx + i] >= 0 && !fromSquares(index[j * nx + i]));
+  return { w: tw, h: th, pad, data, cells, liquidKind, shapes, shapeCount: slots.length, cave, terrain: terrainField(it, level), dist };
 }
 
 /** Terrain's masks (`UnderField.terrain`): each kind's squares, spread into the rock next to
