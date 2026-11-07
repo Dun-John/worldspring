@@ -522,6 +522,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         crate::battlemap::land_biome(t0, l.center),
         Biome::Alpine | Biome::Tundra | Biome::ColdDesert | Biome::Ice | Biome::Steppe | Biome::HotDesert | Biome::SaltFlat | Biome::Savanna
     );
+    // (The sails turn in front of the tower, `sail_front`: their tips reach ~31 ft from its middle.)
     let mills: Vec<P> = l.buildings.iter().filter(|b| windmill(b)).map(|b| centroid(&b.poly)).collect();
     for (i, f) in l.fields.iter().enumerate() {
         if !hits(bbox(f), near) {
@@ -536,7 +537,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         for (a, b, gates) in rows(l, i) {
             let keep = |p: P| {
                 let s = dist(a, p);
-                gates.iter().all(|&g| (s - g).abs() > ROW_GATE_HALF) && clump.is_none_or(|(c, r)| dist(p, c) > 1.15 * r + 6.0) && mills.iter().all(|&m| dist(p, m) > SAIL_FT + 3.0)
+                gates.iter().all(|&g| (s - g).abs() > ROW_GATE_HALF) && clump.is_none_or(|(c, r)| dist(p, c) > 1.15 * r + 6.0) && mills.iter().all(|&m| dist(p, m) > SAIL_FT + 8.0)
             };
             piece_runs(a, b, kind, &keep, out);
         }
