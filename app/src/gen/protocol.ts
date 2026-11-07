@@ -862,7 +862,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -893,8 +893,12 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         // Ruin: roofless shell, pale rubble.
         rgb = [0.7, 0.67, 0.6];
         a = 0.55;
-      } else if (kind === 5) rgb = [0.6, 0.66, 0.47];
-      else if (kind === 6) rgb = [0.55, 0.4, 0.26];
+      } else if (kind === 5) {
+        // A graveyard (an open-air plot): inked round, its grass the land's own (no fill, so it matches
+        // the biome's ground round it; its headstones and wall mark it).
+        rgb = [0.6, 0.66, 0.47];
+        a = 0;
+      } else if (kind === 6) rgb = [0.55, 0.4, 0.26];
       else if (kind === 7) rgb = [0.72, 0.69, 0.62];
       else if (kind === 8) {
         // A camp's clearing: bare earth.
