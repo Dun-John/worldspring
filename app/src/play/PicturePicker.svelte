@@ -57,10 +57,12 @@
     }
     return out;
   });
+  /** Sized to its content: up to six pictures across (76 px each), room for the buttons. */
+  const width = $derived(Math.max(300, 28 + Math.min(6, groups.reduce((n, [, l]) => Math.max(n, l.length), 0)) * 82 - 6));
 </script>
 
 <div class="scrim" role="presentation" onclick={onClose}></div>
-<div class="box ws-panel" role="dialog" aria-modal="true" aria-labelledby="picture-title">
+<div class="box ws-panel" style:width="{width}px" role="dialog" aria-modal="true" aria-labelledby="picture-title">
   <header>
     <Icon name="image" />
     <b id="picture-title" class="grow">Picture</b>
@@ -77,11 +79,11 @@
       {/each}
     </div>
   {:else}
-    <p class="ws-hint">No portraits or uploaded pictures in this world yet.</p>
+    <p class="ws-hint">No pictures yet. Drop image files on the map, or choose a file.</p>
   {/each}
   <div class="ws-row buttons">
     <label class="ws-btn file"><Icon name="image" size={16} /> From a file… <input type="file" accept="image/*" onchange={(e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) onFile(f); }} /></label>
-    <button class="ws-btn quiet" onclick={onNone}>No picture</button>
+    <button class="ws-btn" onclick={onNone}>No picture</button>
   </div>
 </div>
 
@@ -98,7 +100,7 @@
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: min(460px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
     max-height: calc(100dvh - 48px);
     overflow-y: auto;
     padding: 12px 14px 14px;
@@ -115,7 +117,7 @@
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+    grid-template-columns: repeat(auto-fill, 76px);
     gap: 6px;
     margin: 4px 0 10px;
   }

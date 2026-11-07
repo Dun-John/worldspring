@@ -96,6 +96,8 @@ const POI_KINDS = new Set(['waystation', 'ruin', 'tower', 'cave', 'mine', 'lava_
 const PING_DM = 0xf97316;
 const PING_PLAYER = 0x38bdf8;
 
+/** A role's default colour (the draft follows it until a swatch is chosen). */
+export const ROLE_COLORS = { pc: 0x2f5d8a, npc: 0x3f7a3a, creature: 0x8b2e2e, object: 0x7a5a2a } as const;
 export const TOKEN_COLORS = [0x8b2e2e, 0x2f5d8a, 0x3f7a3a, 0x7a5a2a, 0x6b3f7a, 0x2a6b6b, 0xc2a14a, 0x4a4a4a, 0xd8d1c2];
 export const SHAPE_COLORS = [0xf97316, 0x3b82f6, 0x22c55e, 0xa855f7, 0xeab308];
 
@@ -128,7 +130,7 @@ export class PlayController implements PointerTool {
   /** What the characters see now (the DM works it out and sends it). */
   vision: Vision | null = null;
   /** New tokens. */
-  draft: { name: string; kind: TokenKind; role: TokenRole; size: number; color: number } = { name: 'PC', kind: 'character', role: 'pc', size: 1, color: TOKEN_COLORS[0] };
+  draft: { name: string; kind: TokenKind; role: TokenRole; size: number; color: number } = { name: 'PC', kind: 'character', role: 'pc', size: 1, color: ROLE_COLORS.pc };
   /** The last pointer position over the map (world ft), null off it. */
   pointer: [number, number] | null = null;
   /** Copied tokens (Ctrl+C): kept in memory, pasted with Ctrl+V. */
@@ -153,7 +155,7 @@ export class PlayController implements PointerTool {
   onError: (text: string) => void = () => {};
   /** The DM right-pressed a token: its menu for these tokens at a screen point (null: closed,
    * the map moved). */
-  onTokenMenu: (m: { ids: string[]; x: number; y: number } | null) => void = () => {};
+  onTokenMenu: (m: { ids: string[]; x: number; y: number; box: [number, number, number, number] } | null) => void = () => {};
   /** The picture picker for these tokens (the menu's and the editor's Picture…). */
   onPickPicture: (ids: string[]) => void = () => {};
   /** Where the camera was when the token menu opened (it closes once the map moves). */
@@ -1243,7 +1245,7 @@ export class PlayController implements PointerTool {
       if (!this.selection.has(hit.t.id)) this.select(hit.t.id);
       const cam = this.view.cam;
       this.menuCam = [cam.cx, cam.cy, cam.zoom];
-      this.onTokenMenu({ ids: [...this.selection], x: e.clientX, y: e.clientY });
+      this.onTokenMenu({ ids: [...this.selection], x: e.clientX, y: e.clientY, box: this.layer.tokenBox(hit.t.id, e.clientX, e.clientY) });
       return true;
     }
     const door = this.doorAt(place, gx, gy);

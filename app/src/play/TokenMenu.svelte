@@ -1,5 +1,5 @@
 <script lang="ts">
-  // A token's menu at the pointer (the DM right-presses a token): its name, role, size, hidden,
+  // A token's menu at the token (the DM right-presses a token): its name, role, size, hidden,
   // whether the players see by it, its picture, duplicate and remove; for several selected
   // tokens, their role, hide or show, duplicate and remove. Kept inside the window; Escape, a
   // press elsewhere or the map moving closes it.
@@ -12,12 +12,12 @@
     /** Bumped whenever the play state changes. */
     version: number;
     ids: string[];
-    x: number;
-    y: number;
+    /** The token's box on screen [left, top, right, bottom]: the menu goes beside it. */
+    box: [number, number, number, number];
     onPicture: (ids: string[]) => void;
     onClose: () => void;
   }
-  let { play, version, ids, x, y, onPicture, onClose }: Props = $props();
+  let { play, version, ids, box, onPicture, onClose }: Props = $props();
 
   const ROLES: [TokenRole | 'light', string][] = [
     ['pc', 'PC'],
@@ -47,8 +47,12 @@
   let el = $state<HTMLDivElement>();
   let w = $state(0);
   let h = $state(0);
-  const left = $derived(Math.max(8, Math.min(x + 4, innerWidth - w - 8)));
-  const top = $derived(Math.max(8, Math.min(y + 4, innerHeight - h - 8)));
+  // Beside the token: to its right, or its left when there is no room; kept inside the window.
+  const left = $derived.by(() => {
+    const right = box[2] + 8;
+    return Math.max(8, right + w + 8 <= innerWidth ? right : box[0] - 8 - w);
+  });
+  const top = $derived(Math.max(8, Math.min(box[1], innerHeight - h - 8)));
 
   const checked = (e: Event) => (e.target as HTMLInputElement).checked;
 
@@ -94,7 +98,7 @@
   {:else}
     <b class="count">{tokens.length} tokens</b>
   {/if}
-  <div class="ws-seg" role="radiogroup" aria-label="Role">
+  <div class="ws-seg tight" role="radiogroup" aria-label="Role">
     {#each ROLES as [k, label] (k)}<button class:on={role === k} role="radio" aria-checked={role === k} onclick={() => setRole(k)}>{label}</button>{/each}
   </div>
   {#if one}
@@ -114,6 +118,10 @@
 </div>
 
 <style>
+  .tight > button {
+    padding: 0 2px;
+    font-size: 12px;
+  }
   .menu {
     position: fixed;
     z-index: var(--z-menu);

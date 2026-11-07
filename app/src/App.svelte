@@ -130,7 +130,7 @@
   play.onChange = () => playVersion++;
   play.onError = (t) => toast(t);
   /** The token menu (a right press on a token) and the picture picker, while open. */
-  let tokenMenu = $state<{ ids: string[]; x: number; y: number } | null>(null);
+  let tokenMenu = $state<{ ids: string[]; x: number; y: number; box: [number, number, number, number] } | null>(null);
   let picker = $state<{ ids: string[]; items: PictureItem[]; current: string | null } | null>(null);
   play.onTokenMenu = (m) => (tokenMenu = m);
   play.onPickPicture = (ids) => openPicker(ids);
@@ -197,6 +197,21 @@
     const r = container.getBoundingClientRect();
     void play.dropImages(files, ...view.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top));
   }
+
+  // A file dropped anywhere but the map is never opened by the browser (only the map makes tokens).
+  $effect(() => {
+    const stop = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      if ((e.target as HTMLElement | null)?.closest?.('input[type=file]')) return;
+      e.preventDefault();
+    };
+    window.addEventListener('dragover', stop);
+    window.addEventListener('drop', stop);
+    return () => {
+      window.removeEventListener('dragover', stop);
+      window.removeEventListener('drop', stop);
+    };
+  });
 
   /** A play session: tokens, fog and doors are live (here and in the players' window) whatever
    * panel is open, until Stop playing. */
@@ -3786,7 +3801,7 @@
     <MovesMenu moves={moves.list} x={moves.x} y={moves.y} onMove={(m) => void view.move(m)} onClose={() => (moves = null)} />
   {/if}
   {#if tokenMenu && playOn}
-    <TokenMenu {play} version={playVersion} ids={tokenMenu.ids} x={tokenMenu.x} y={tokenMenu.y} onPicture={(ids) => openPicker(ids)} onClose={closeTokenMenu} />
+    <TokenMenu {play} version={playVersion} ids={tokenMenu.ids} box={tokenMenu.box} onPicture={(ids) => openPicker(ids)} onClose={closeTokenMenu} />
   {/if}
   {#if picker}
     <PicturePicker items={picker.items} current={picker.current} onPick={(key) => void pickPicture({ key })} onFile={(file) => void pickPicture({ file })} onNone={() => void pickPicture(null)} onClose={() => (picker = null)} />

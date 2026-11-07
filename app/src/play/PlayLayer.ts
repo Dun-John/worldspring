@@ -27,6 +27,10 @@ interface TokenView {
   sel: boolean;
   img: Texture | null;
   grid: GridSettings | null;
+  /** Its label is wanted (a name to show, big enough) before overlaps are looked at. */
+  want: boolean;
+  /** Its role (PCs' labels come before the others'). */
+  pc: boolean;
   /** Where it is drawn (squares, in the grid of `loc`): eases toward where it is. */
   x: number;
   y: number;
@@ -78,6 +82,8 @@ export class PlayLayer {
   private readonly ruler = new Graphics();
   private readonly rulerText = new Text({ text: '', style: rulerStyle, anchor: { x: 0, y: 1 }, resolution: 2 });
   private rulerKey = '';
+  /** What the token labels were last sorted out for (overlaps are looked at only when it changes). */
+  private labelKey = '';
   private readonly draft = new Graphics();
   private draftKey = '';
   private readonly marks = new Graphics();
@@ -191,6 +197,7 @@ export class PlayLayer {
     // Tokens: here; outside the building in view; the DM's markers of those inside buildings.
     const live = new Set<string>();
     const ease = 1 - Math.exp(-dt / 70);
+    let lk = `${Math.round(pxPerSq * 10)}|${ts}|`;
     for (const { t, place: tp, where } of ctl.tokensInView()) {
       if (player && where === 'here' && (t.hidden || (s.los && !t.vision && !seen(t)))) continue;
       live.add(t.id);
@@ -203,7 +210,7 @@ export class PlayLayer {
         const label = new Text({ text: '', style: labelStyle, anchor: { x: 0.5, y: 0 }, resolution: 2 });
         this.tokens.addChild(c);
         this.tokenLabels.addChild(label);
-        v = { c, g, face, label, key: '', tok: null, sel: false, img: null, grid: null, x: t.x, y: t.y, loc: t.loc };
+        v = { c, g, face, label, key: '', tok: null, sel: false, img: null, grid: null, want: false, pc: false, x: t.x, y: t.y, loc: t.loc };
         this.tokenViews.set(t.id, v);
       }
       // Into or out of a building: no glide across grids.
@@ -230,7 +237,9 @@ export class PlayLayer {
       // Inside a building seen from outside: the DM's faint marker on the roof.
       v.c.alpha = where === 'inside' && !ctl.dragging.has(t.id) ? 0.4 : t.hidden ? 0.55 : 1;
       v.label.position.set(sx, sy + (t.size * pxPerSq) / 2 + 2 * ts);
-      v.label.visible = pxPerSq >= 22 && !!v.label.text && where !== 'inside';
+      v.want = pxPerSq >= 22 && !!v.label.text && where !== 'inside' && (!(t.kind === 'character' && roleOf(t) === 'object') || (!player && sel));
+      v.pc = t.kind === 'character' && roleOf(t) === 'pc';
+      lk += `${t.id}|${Math.round(sx)},${Math.round(sy)}|${v.want ? 1 : 0}${sel ? 1 : 0}${v.pc ? 1 : 0}${t.name};`;
       v.c.visible = pxPerSq >= 2;
     }
     for (const [id, v] of this.tokenViews) {
@@ -238,6 +247,24 @@ export class PlayLayer {
       v.c.destroy({ children: true });
       v.label.destroy();
       this.tokenViews.delete(id);
+    }
+
+    // Labels that would overlap: the selected token's first, then PCs', then in draw order.
+    if (lk !== this.labelKey) {
+      this.labelKey = lk;
+      const vs = [...this.tokenViews.values()].filter((v) => v.want);
+      for (const v of this.tokenViews.values()) if (!v.want) v.label.visible = false;
+      vs.sort((a, b) => Number(b.sel) - Number(a.sel) || Number(b.pc) - Number(a.pc));
+      const placed: { x: number; y: number; w: number; h: number }[] = [];
+      for (const v of vs) {
+        const l = v.label;
+        const w = l.width;
+        const h = l.height;
+        const box = { x: l.x - w / 2, y: l.y, w, h };
+        const hit = placed.some((b) => box.x < b.x + b.w && b.x < box.x + box.w && box.y < b.y + b.h && b.y < box.y + box.h);
+        l.visible = !hit;
+        if (!hit) placed.push(box);
+      }
     }
 
     // Fog of war and sight.
@@ -363,6 +390,17 @@ export class PlayLayer {
     return null;
   }
 
+  /** A token's screen box [left, top, right, bottom] in the window (the pointer's, if it is not drawn). */
+  tokenBox(id: string, cx: number, cy: number): [number, number, number, number] {
+    const v = this.tokenViews.get(id);
+    if (!v) return [cx, cy, cx, cy];
+    const r = this.view.app.canvas.getBoundingClientRect();
+    const half = ((v.tok?.size ?? 1) * 5 * this.view.cam.ppf) / 2;
+    const x = r.left + v.c.x;
+    const y = r.top + v.c.y;
+    return [x - half, y - half, x + half, y + half];
+  }
+
   private drawToken(v: TokenView, t: Token, player: boolean) {
     const g = v.g;
     g.clear();
@@ -387,6 +425,20 @@ export class PlayLayer {
         sp.anchor.set(0.5);
         sp.width = sp.height = r * 2 - 6;
         v.face.addChild(sp);
+      } else if (obj) {
+        // A small chest: lit from the upper left, two close tones, ink outline.
+        const k = r * 0.62;
+        const lit = (c: number, f: number) => (Math.min(255, Math.round(((c >> 16) & 255) * f)) << 16) | (Math.min(255, Math.round(((c >> 8) & 255) * f)) << 8) | Math.min(255, Math.round((c & 255) * f));
+        const w = k * 1.5;
+        const top = -k * 0.75;
+        const lid = k * 0.7;
+        const bottom = k * 0.75;
+        g.roundRect(-w / 2, top, w, bottom - top, k * 0.2).fill(lit(t.color, 0.72));
+        g.roundRect(-w / 2, top, w, lid, k * 0.2).fill(lit(t.color, 1.3));
+        g.roundRect(-w / 2, top, w * 0.55, lid * 0.45, k * 0.15).fill({ color: 0xffffff, alpha: 0.18 });
+        g.roundRect(-w / 2, top, w, bottom - top, k * 0.2).stroke({ width: 3, color: INK });
+        g.moveTo(-w / 2, top + lid).lineTo(w / 2, top + lid).stroke({ width: 3, color: INK });
+        g.roundRect(-k * 0.13, top + lid - k * 0.16, k * 0.26, k * 0.34, k * 0.06).fill(0xd8b04a).stroke({ width: 2, color: INK });
       } else {
         const initials = t.name
           .split(/\s+/)
@@ -403,7 +455,7 @@ export class PlayLayer {
     }
     if (t.hidden && !player) body(r + 6).stroke({ width: 3, color: 0x9333ea, alpha: 0.9 });
     if (v.key.includes('|sel|')) body(r + 10).stroke({ width: 5, color: SELECT });
-    v.label.text = (t.kind === 'light' && player) || obj ? '' : t.name;
+    v.label.text = t.kind === 'light' && player ? '' : t.name;
   }
 
   /**

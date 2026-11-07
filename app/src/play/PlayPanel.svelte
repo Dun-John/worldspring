@@ -3,7 +3,7 @@
   // down), the selected token, the players' window and view, this location's fog, dark and line
   // of sight, and the table's settings (grid scale, diagonals, reset) folded away.
   import { roleOf, SIZES, type Measure, type ShapeKind, type Token, type TokenRole } from './state';
-  import { SHAPE_COLORS, TOKEN_COLORS, type PlayController, type Tool } from './controller';
+  import { ROLE_COLORS, SHAPE_COLORS, TOKEN_COLORS, type PlayController, type Tool } from './controller';
   import { formatDistance } from './vision';
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
@@ -68,7 +68,9 @@
   function setDraftRole(r: TokenRole | 'light') {
     const label = ROLES.find(([k]) => k === r)![1];
     const name = DEFAULT_NAMES.includes(play.draft.name.trim()) ? label : play.draft.name;
-    setDraft(r === 'light' ? { kind: 'light', name } : { kind: 'character', role: r, name });
+    // (The colour follows the role while it is still a role's default.)
+    const dflt = (Object.values(ROLE_COLORS) as number[]).includes(play.draft.color);
+    setDraft(r === 'light' ? { kind: 'light', name } : { kind: 'character', role: r, name, ...(dflt ? { color: ROLE_COLORS[r] } : {}) });
   }
   function setRole(t: Token, r: TokenRole | 'light') {
     play.setTokenRole(t.id, r);
@@ -131,6 +133,7 @@
       <div class="ws-hint">{touch ? 'Drag tokens; tap a door to open it.' : 'Drag tokens; click a door to open it. Shift-click or shift-drag selects several; Alt-click pings.'}</div>
     {:else if v.tool === 'token'}
       <section>
+        <div class="ws-label">New token</div>
         <div class="ws-row">
           <input class="ws-input grow" value={v.draft.name} oninput={(e) => setDraft({ name: (e.target as HTMLInputElement).value })} aria-label="New token's name" />
           {#if v.draft.kind === 'character'}
@@ -139,7 +142,7 @@
             </select>
           {/if}
         </div>
-        <div class="ws-seg">
+        <div class="ws-seg tight">
           {#each ROLES as [k, label] (k)}<button class:on={draftRole(v.draft) === k} onclick={() => setDraftRole(k)}>{label}</button>{/each}
         </div>
         {#if v.draft.kind === 'character'}
@@ -199,6 +202,7 @@
     {:else if v.sel}
       {@const t = v.sel}
       <section class="card">
+        <div class="ws-label">Selected</div>
         <div class="ws-row">
           <input class="ws-input grow name" value={t.name} oninput={(e) => patch(t, { name: (e.target as HTMLInputElement).value })} aria-label="Name" />
           {#if t.kind === 'character'}
@@ -207,7 +211,7 @@
             </select>
           {/if}
         </div>
-        <div class="ws-seg">
+        <div class="ws-seg tight">
           {#each ROLES as [k, label] (k)}<button class:on={(t.kind === 'light' ? 'light' : roleOf(t)) === k} onclick={() => setRole(t, k)}>{label}</button>{/each}
         </div>
         <label class="switch"><span class="grow">Hidden<span class="ws-muted"> · only you see it</span></span><input type="checkbox" class="ws-switch" checked={!!t.hidden} onchange={(e) => patch(t, { hidden: checked(e) })} /></label>
@@ -247,7 +251,7 @@
     <section>
       <div class="ws-label">Players</div>
       <div class="ws-row">
-        <button class="ws-btn grow" onclick={() => play.openPlayerWindow()}><Icon name="monitor" size={16} /> {v.players ? 'Players’ window open' : 'Open the players’ window'}</button>
+        <button class="ws-btn grow" onclick={() => play.openPlayerWindow()}><Icon name="monitor" size={16} /> {v.players ? 'Players’ window ✓' : 'Players’ window'}</button>
         <button class="ws-btn" onclick={() => play.sendCamera(true)} title="Bring the players' view to yours">Show my view</button>
       </div>
       <div class="ws-seg" role="radiogroup" aria-label="The players' view">
@@ -290,6 +294,10 @@
 </div>
 
 <style>
+  .tight > button {
+    padding: 0 2px;
+    font-size: 12px;
+  }
   .play {
     display: flex;
     flex-direction: column;
