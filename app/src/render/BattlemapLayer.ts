@@ -220,6 +220,10 @@ export class BattlemapLayer {
   private readonly groundProgram = GlProgram.from({ vertex, fragment: groundFragment, name: 'battle-ground' });
   private readonly atmoProgram = GlProgram.from({ vertex, fragment: atmoFragment, name: 'battle-atmo' });
   private readonly colorMeshProgram = GlProgram.from({ vertex: colorMeshVertex, fragment: colorMeshFragment, name: 'battle-roofs' });
+  /** Its shader programs (compiled ahead: `precompile`). */
+  get programs(): GlProgram[] {
+    return [this.groundProgram, this.atmoProgram, this.colorMeshProgram];
+  }
   private readonly quad = new Geometry({
     attributes: {
       aPosition: { buffer: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), format: 'float32x2' },

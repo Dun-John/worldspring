@@ -170,7 +170,7 @@ const COVER = ['no cover', 'half cover', 'three-quarters cover', 'total cover'];
 
 // Underground levels are painted by a shader (`underground.frag`) from a smooth floor field
 // (`underField.ts`).
-const underProgram = GlProgram.from({ vertex, fragment: undergroundFragment, name: 'underground' });
+export const underProgram = GlProgram.from({ vertex, fragment: undergroundFragment, name: 'underground' });
 let underQuad: Geometry | null = null;
 /** How far the map above is dimmed under an underground level (`Sewers` too). */
 export const UNDER_DIM = 0.62;

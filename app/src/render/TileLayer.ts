@@ -128,6 +128,10 @@ export class TileLayer {
   private readonly roadProgram = GlProgram.from({ vertex: roadVertex, fragment: roadFragment, name: 'tile-road' });
   private readonly siteFillProgram = GlProgram.from({ vertex: siteFillVertex, fragment: siteFillFragment, name: 'site-fill' });
   private readonly inkProgram = GlProgram.from({ vertex: inkVertex, fragment: inkFragment, name: 'tile-ink' });
+  /** Its shader programs (compiled ahead: `precompile`). */
+  get programs(): GlProgram[] {
+    return [this.program, this.riverProgram, this.roadProgram, this.siteFillProgram, this.inkProgram];
+  }
   private readonly geometry = new Geometry({
     attributes: {
       aPosition: { buffer: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), format: 'float32x2' },

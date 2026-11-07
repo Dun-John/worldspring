@@ -7,7 +7,8 @@ import { type Clear, type Created, type Edits, type Feature, type Placed, type G
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
-import { InteriorLayer, setUndergroundGrid, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
+import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
+import { precompile } from './precompile';
 import { Labels } from './Labels';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
@@ -45,20 +46,26 @@ const STAGES: Record<string, string> = {
   climate: 'Simulating climate',
   rivers: 'Tracing rivers and lakes',
   biomes: 'Growing biomes',
+  settlements: 'Founding settlements',
+  roads: 'Laying roads',
   names: 'Naming the land',
   done: 'Finishing',
 };
-/** Rough share of generation time per stage, for the progress bar. */
+/** Share of a continent's generation per stage, for the progress bar, as measured (T0 in WASM,
+ * seeds 1-3, v63): `done` is the encoding after it and the hand-over to the map. They sum to 1.
+ * (Measure again when a stage is added or grows: a stage missing here holds the bar where it is.) */
 const STAGE_WEIGHT: [string, number][] = [
-  ['plates', 0.2],
-  ['erosion', 0.55],
-  ['terrain', 0.03],
-  ['volcanoes', 0.0],
-  ['climate', 0.04],
-  ['rivers', 0.05],
-  ['biomes', 0.04],
-  ['names', 0.09],
-  ['done', 0.0],
+  ['plates', 0.112],
+  ['erosion', 0.26],
+  ['terrain', 0.055],
+  ['volcanoes', 0.007],
+  ['climate', 0.025],
+  ['rivers', 0.021],
+  ['biomes', 0.093],
+  ['settlements', 0.184],
+  ['roads', 0.103],
+  ['names', 0.092],
+  ['done', 0.048],
 ];
 
 /** Tile levels that draw site layouts (`payload::SITE_MIN_LEVEL`). */
@@ -291,7 +298,14 @@ export class MapView {
   /** How long the last continent took to generate (ms, in the worker that made it). */
   t0Ms = 0;
   private exagFactor = 1;
+  /** The progress bar as last shown (0..1 while a continent generates, else null): it only grows. */
   private progress: number | null = null;
+  /** The generator's last stage report: the bar there, where that stage ends, and when. */
+  private stage: { base: number; end: number; at: number } | null = null;
+  /** When the continent's first stage was reported (its pace so far sets how the bar moves on). */
+  private genStarted = 0;
+  /** Shaders compiled and sprites drawn (`warmGpu`). */
+  private warmed = false;
   private lastWantKey = '';
 
   /** Its own keys (zoom, pan, grid, floors…); the map's window turns them off and drives the
@@ -392,20 +406,12 @@ export class MapView {
       this.renderMs = performance.now() - t;
       return out;
     }) as typeof renderer.render;
-    // Compile shaders and draw the sprite atlas while the continent generates (the main
-    // thread is idle then), instead of stalling on the first tiles and battlemaps after it.
+    // (Shaders are compiled in the background and warmed while the first continent generates:
+    // `warmGpu`, `warmBattle`, then `warmUnder`.)
     const stub = { max_level: 0, domain_ft: 1, sea_level_ft: 0, map_w_ft: 1, map_h_ft: 1 } as Geom;
-    const warmTiles = new TileLayer(stub, this.gen);
-    warmTiles.warmup(this.app.renderer);
-    warmTiles.destroy();
-    warmUnderground(this.app.renderer);
     // The GPU's copies are gone: Pixi uploads again what it has the data for, not what was drawn.
     this.app.canvas.addEventListener('webglcontextrestored', () => void this.restoreGpu());
-    this.gen.onCatalog = (catalog) => {
-      const warmBattle = new BattlemapLayer(stub, this.app.renderer, catalog);
-      warmBattle.warmup();
-      warmBattle.destroy();
-    };
+    this.gen.onCatalog = (catalog) => void this.warmBattle(stub, catalog);
     this.gen.onTile = (t, epoch) => {
       this.received++;
       this.tiles?.receive(t, epoch);
@@ -416,16 +422,17 @@ export class MapView {
     };
     this.gen.onStats = (s) => (this.genStats = s);
     this.gen.onProgress = (stage, frac) => {
-      let done = 0;
-      for (const [s, w] of STAGE_WEIGHT) {
-        if (s === stage) {
-          done += w * frac;
-          break;
-        }
-        done += w;
-      }
-      this.progress = Math.min(1, done);
       this.status = `${STAGES[stage] ?? stage}…`;
+      let start = 0;
+      const i = STAGE_WEIGHT.findIndex(([s]) => s === stage);
+      if (i < 0 || this.progress === null) return;
+      for (let k = 0; k < i; k++) start += STAGE_WEIGHT[k][1];
+      const w = STAGE_WEIGHT[i][1];
+      // (`done` comes once T0 is made: the encoding and the hand-over still to come.)
+      const f = stage === 'done' ? 0 : frac;
+      const now = performance.now();
+      if (this.progress === 0 && !this.stage) this.genStarted = now;
+      this.stage = { base: Math.max(this.progress, start + w * f), end: start + w, at: now };
     };
     this.gen.onError = (m) => {
       console.error('[gen]', m);
@@ -796,14 +803,20 @@ export class MapView {
   async loadWorld(world: WorldFile, adjust?: (overlay: Overlay) => Promise<Edits | null>) {
     this.status = 'Generating continent…';
     this.progress = 0;
+    this.stage = null;
     let ready: Ready, adjusted: Edits | null;
     try {
-      ready = await this.gen.init(world);
+      const made = this.gen.init(world);
+      // The first time: the map's shaders compiled in the background and warmed while the
+      // continent generates, after a frame shows the bar.
+      if (!this.warmed) requestAnimationFrame(() => setTimeout(() => void this.warmGpu(), 0));
+      ready = await made;
       adjusted = (await adjust?.(ready.overlay)) ?? null;
     } catch (e) {
       // (Said so, not left "Generating" for good.)
       this.status = 'This world could not be opened';
       this.progress = null;
+      this.stage = null;
       throw e;
     }
     const { geom, t0Ms, overlay, catalog } = ready;
@@ -843,6 +856,14 @@ export class MapView {
     this.app.stage.addChild(this.playOver);
     this.app.stage.addChild(this.toolLayer);
     this.progress = null;
+    this.stage = null;
+    // (Underground's shader once the map is up: its compile is long (~10 s on the reference laptop)
+    // and slows the GPU's other work while it runs, and nothing needs it sooner. The user's call:
+    // the map sooner, a few seconds of hitches after.)
+    if (!this.warmed) {
+      this.warmed = true;
+      void this.warmUnder();
+    }
     this.syncSize();
     this.cam.minZoom = this.cam.fitZoom(geom.map_w_ft, geom.map_h_ft, 0.5);
     this.cam.set({ cx: geom.map_w_ft / 2, cy: geom.map_h_ft / 2, zoom: this.cam.fitZoom(geom.map_w_ft, geom.map_h_ft) });
@@ -1333,6 +1354,49 @@ export class MapView {
     else [u.uContour, u.uIndexEvery] = [5, 5];
   }
 
+  /** The progress bar now: between the generator's reports it moves on through the stage at the
+   * pace the generation has kept so far (each stage's share is `STAGE_WEIGHT`), stopping short of
+   * the stage's end until the next report. */
+  private shownProgress(): number | null {
+    const s = this.stage;
+    if (this.progress === null || !s) return this.progress;
+    // (Until a tenth is done, a continent of about 5 s.)
+    const total = s.base > 0.1 ? (s.at - this.genStarted) / s.base : 5000;
+    const left = s.end - s.base;
+    const along = Math.min(0.95, (performance.now() - s.at) / Math.max(1, left * total));
+    this.progress = Math.max(this.progress, s.base + left * along);
+    return this.progress;
+  }
+
+  /** The map tiles' shaders compiled in the background (`precompile`) and warmed, while the first
+   * continent generates. Compiled in one go, the shaders held the main thread for seconds on some
+   * GPUs (the reference laptop: ~8 s with the underground one), and they did so before the
+   * generation even started. (The battlemap's: `warmBattle`; underground's: `warmUnder`.) */
+  private async warmGpu() {
+    const renderer = this.app.renderer;
+    const stub = { max_level: 0, domain_ft: 1, sea_level_ft: 0, map_w_ft: 1, map_h_ft: 1 } as Geom;
+    const warmTiles = new TileLayer(stub, this.gen);
+    await precompile(renderer, warmTiles.programs);
+    warmTiles.warmup(renderer);
+    warmTiles.destroy();
+  }
+
+  /** The underground shader compiled in the background and warmed (the reference laptop: ~12 s
+   * of compiling, which held the main thread ~7 s when done in one go). */
+  private async warmUnder() {
+    await precompile(this.app.renderer, [underProgram]);
+    warmUnderground(this.app.renderer);
+  }
+
+  /** The battlemap's shaders compiled in the background and its sprite atlas drawn, once the
+   * generator has sent the object catalog (early in a continent's generation). */
+  private async warmBattle(stub: Geom, catalog: KindInfo[]) {
+    const warm = new BattlemapLayer(stub, this.app.renderer, catalog);
+    await precompile(this.app.renderer, warm.programs);
+    warm.warmup();
+    warm.destroy();
+  }
+
   private emitHud() {
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
     const avg = sorted.reduce((a, b) => a + b, 0) / Math.max(1, sorted.length);
@@ -1354,7 +1418,7 @@ export class MapView {
       layer: this.tiles?.stats ?? { level: 0, targetTiles: 0, targetReceived: 0, targetUploaded: 0, targetReady: 0, gpuTiles: 0, queuedUploads: 0 },
       gen: this.genStats,
       status: this.status,
-      progress: this.progress,
+      progress: this.shownProgress(),
     });
   }
 
