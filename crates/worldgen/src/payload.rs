@@ -19,7 +19,8 @@
 //!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard, 6 deck: bridge or pier, 7 monument,
 //!     8 a camp's clearing, 9 a tent (or a park's gazebo), 11 a park's water (its pond as a fan
 //!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
-//!     parterre, 14 a tree's (or topiary's) crown, 15 a flowerbed; a park's raised features as
+//!     parterre, 14 a tree's (or topiary's) crown, 15 a flowerbed, 24 a castle's wet moat, 25 its
+//!     dry ditch (`town::moat::Moat::pieces`); a park's raised features as
 //!     monuments; all of a park's in the tile holding its middle),
 //!     verts f32[n_verts * 2] (tile units).
 //!     A polygon belongs to
@@ -299,6 +300,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
         for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
             for f in &l.fields {
                 push(f, 2);
+            }
+            // v63 castles: a castle's moat, its pieces (24 wet, 25 a dry ditch).
+            for m in &l.moats {
+                for p in &m.pieces {
+                    push(p, if m.wet { 24 } else { 25 });
+                }
             }
             // A green (a village's or a town's) and a temple's close are the ground round them, as
             // on the battlemap; a town's squares are paved.

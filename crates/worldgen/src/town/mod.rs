@@ -17,6 +17,7 @@ mod castle;
 pub mod catalog;
 pub mod geom;
 pub mod mesh;
+pub mod moat;
 pub mod sites;
 pub mod palace;
 pub mod roof;
@@ -267,6 +268,8 @@ pub struct Layout {
     pub culture: u8,
     pub roof_seed: u64,
     pub roof_age: u8,
+    /// Castles' moats (v63 castles: `moat`).
+    pub moats: Vec<moat::Moat>,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -552,6 +555,7 @@ impl Layout {
             culture: 0,
             roof_seed: 0,
             roof_age: 0,
+            moats: Vec::new(),
         }
     }
 
@@ -1772,6 +1776,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for (_, g) in &mut l.grounds {
         g.iter_mut().for_each(tw);
     }
+    for m in &mut l.moats {
+        m.shift(center);
+    }
     // Temples on their lots in pieces (world ft, so that a town laid out anew shapes them alike), a shrine
     // shut in a block's middle moved first to a home with a way out.
     if edit.is_none() {
@@ -1798,6 +1805,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
     for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())) {
         bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];
+    }
+    for m in &l.moats {
+        bb = [bb[0].min(m.bbox[0]), bb[1].min(m.bbox[1]), bb[2].max(m.bbox[2]), bb[3].max(m.bbox[3])];
     }
     l.bbox = if bb[0] <= bb[2] { bb } else { [center[0], center[1], center[0], center[1]] };
     match edit {
@@ -3568,6 +3578,10 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 let away = mul(away, 1.0 / len(away).max(1e-9));
                 // (Measured on the patch: its block's about an eighth less, 20 ft narrower.)
                 let wide = if s.capital { 320.0 } else if want_inner { 280.0 } else { 120.0 };
+                // v63 castles: a citadel's moat by roll, its room taken from the
+                // patch's leftover (the castle's part cut the bigger for it).
+                let moat = castle_moat(s, plan.ward[i] == Some(Ward::Castle), want_inner, l.roof_age, plan.roll(i, 163), plan.roll(i, 164));
+                let (target, wide) = moat.map_or((target, wide), |m| (target + 4.0 * crate::core::sqrt(target) * m.width, wide + 2.0 * m.width));
                 let cut = castle::cut_bound(&block, &c.pts, &wall_sides, away, &|p| site.height(p), 1.12 * target, wide + 20.0);
                 let (blocks_at, cblock) = (l.blocks.len(), cut.as_ref().map_or(block.clone(), |k| k.kept.clone()));
                 // (As it was, should the castle's part hold no keep after all: the castle on the whole.)
@@ -3596,6 +3610,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     planned: plan.ward[i] == Some(Ward::Castle),
                     inner: cut.is_ok().then_some(want_inner),
                     hall: cut.is_ok() && (s.capital || s.tier == Tier::Metropolis),
+                    moat,
                 };
                 let mut ways_at = l.roads.len();
                 let mut laid = castle(site, &cblock, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
@@ -4089,6 +4104,17 @@ impl District {
         }
         d
     }
+}
+
+/// A town castle's moat by roll (v63 castles, `moat`): a city's or a metropolis's citadel the town
+/// planned, about half of them. (Not yet one set on a ward by hand: `planned` false.)
+fn castle_moat(s: &Settlement, planned: bool, inner: bool, age: u8, roll: f64, wide: f64) -> Option<moat::Plan> {
+    if !planned || s.tier < Tier::City {
+        return None;
+    }
+    let great = s.capital || s.tier == Tier::Metropolis;
+    let p = moat::odds(age as f64 / 90.0, s.kind == crate::t0::settle::SettleKind::Fortress, s.capital || inner, great);
+    moat::roll(roll, wide, p, great)
 }
 
 /// The ground a layout is built on, as building lots see it: whether a footprint can stand

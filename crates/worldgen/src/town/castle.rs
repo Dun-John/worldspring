@@ -77,6 +77,9 @@ pub(super) struct Setting {
     /// A great castle's (a capital's, a metropolis's): a hall range in its inner bailey (else along
     /// the curtain) before the other ranges.
     pub hall: bool,
+    /// A moat round the outer curtain (v63 castles: `moat`): a town's castle's curtain stands its
+    /// width further in from the block.
+    pub moat: Option<super::moat::Plan>,
 }
 
 /// A castle on `block` (convex, local ft): its curtain (see the module), gate facing `gate_toward`
@@ -156,6 +159,8 @@ pub(super) fn castle<G: Ground>(
                 .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))));
             match line_in {
                 Some(o) if !along(add(a, n), add(b, n)) => 31.0 + o.clamp(0.0, 4.0),
+                // (Room for a town castle's moat, but where the town wall is its.)
+                _ if set.follow && set.moat.is_some() && !along(add(a, n), add(b, n)) => CURTAIN_IN + set.moat.map_or(0.0, |m| m.room()),
                 _ => CURTAIN_IN,
             }
         })
@@ -385,7 +390,7 @@ pub(super) fn castle<G: Ground>(
         if streets.is_empty() || street_dist(g) <= 20.0 {
             break (g, gin);
         }
-        match gate_way(site, l, &ring, &block, &streets, laid, g, gin) {
+        match gate_way(site, l, &ring, &block, &streets, laid, g, gin, set.moat.map_or(0.0, |m| super::moat::BERM + m.width + 4.0)) {
             Some(way) => {
                 l.roads.push((way, 3, 10.0));
                 break (g, gin);
@@ -578,6 +583,11 @@ pub(super) fn castle<G: Ground>(
         pts: ring.clone(),
         kind: PlazaKind::Bailey,
     });
+    // Its moat (v63 castles), a town castle's in its block.
+    if let Some(m) = set.moat {
+        let motte = l.mottes.iter().any(|mt| contains(&ring, mt.at));
+        super::moat::lay(site, l, m, &ring, &walled, if set.follow { &block } else { &[] }, outer_gate, outer_in, flat, motte);
+    }
     Some(ring)
 }
 
@@ -1349,7 +1359,7 @@ fn curtain(l: &mut Layout, ring: &[P], walled: &[bool], up: bool, score: &dyn Fn
 /// or not) and buildings, else out from the gate first, else round what stands in the way
 /// (`way_round`).
 #[allow(clippy::too_many_arguments)]
-fn gate_way<G: Ground>(site: &G, l: &Layout, ring: &[P], block: &[P], streets: &[(P, P)], laid: (&[(P, P)], &[(P, f64)]), gate: P, inward: P) -> Option<Vec<P>> {
+fn gate_way<G: Ground>(site: &G, l: &Layout, ring: &[P], block: &[P], streets: &[(P, P)], laid: (&[(P, P)], &[(P, f64)]), gate: P, inward: P, out: f64) -> Option<Vec<P>> {
     let from = sub(gate, mul(inward, 6.0));
     let nearest = |from: P| {
         let mut near: Vec<P> = streets
@@ -1384,10 +1394,12 @@ fn gate_way<G: Ground>(site: &G, l: &Layout, ring: &[P], block: &[P], streets: &
             && near.iter().all(|b| super::poly_seg_dist(&b.poly, p, q) >= 6.0)
             && laid.0.iter().all(|&(a, b)| !crosses(p, q, a, b) && seg_dist(q, a, b) >= 6.0 && seg_dist(p, a, b) >= 5.0)
     };
-    let way = nearest(from)
-        .into_iter()
-        .find(|q| dist(*q, from) <= 160.0 && clear(from, *q))
-        .map(|q| vec![from, q])
+    // (Over a moat, `out` ft from the gate: straight out across it first, v63 castles.)
+    let over = (out > 0.0).then(|| sub(from, mul(inward, out))).filter(|&mid| clear(from, mid)).and_then(|mid| {
+        nearest(mid).into_iter().find(|q| dist(*q, mid) <= 160.0 && clear(mid, *q)).map(|q| if dist(q, mid) < 1.0 { vec![from, q] } else { vec![from, mid, q] })
+    });
+    let way = over
+        .or_else(|| nearest(from).into_iter().find(|q| dist(*q, from) <= 160.0 && clear(from, *q)).map(|q| vec![from, q]))
         .or_else(|| {
             [15.0, 25.0, 35.0, 50.0].iter().find_map(|&out| {
                 let mid = sub(from, mul(inward, out));

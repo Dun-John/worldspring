@@ -876,6 +876,7 @@ fn castles(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&CASTLE_COUNTS);
     r.counts(&CASTLE_MORE);
     r.counts(&["mottes", "objects on a motte's toe (its last 8 ft)"]);
+    r.counts(&["moats: wet", "moats: dry", "castles without a moat", "wet moats under 90% water", "dry moats under 90% difficult", "drawbridges with no deck"]);
     r.counts(&CASTLE_SPOTS);
     r.counts(&TOWN_RING);
     let n = town::layout_count(&ctx.ex.t0);
@@ -893,6 +894,52 @@ fn castles(ctx: &mut Ctx, r: &mut Report) {
         let tag = format!("L{li} {:?}", l.tier);
         castle_checks(&ctx.ex.world, &ctx.ex.t0, &l, &tag, capital, r);
         motte_objects(ctx, &l, &tag, r);
+        moat_checks(ctx, &l, &tag, r);
+    }
+}
+
+/// v63 castles: moats by castle (wet, dry, none; by tier) and on the battlemap: a wet moat's squares
+/// under water (deep in its middle), a dry ditch's difficult, its drawbridge a deck.
+fn moat_checks(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
+    let Some(m) = l.moats.first() else {
+        r.tally("castles without a moat", 1);
+        r.tally(&format!("{:?} castles without a moat", l.tier), 1);
+        return;
+    };
+    let kind = if m.wet { "wet" } else { "dry" };
+    let far = add(m.bridge.at, mul(m.bridge.dir, m.bridge.span));
+    r.add(&format!("moats: {kind}"), m.width, format!("{tag}: {:.0} ft wide, drawbridge {} to {}", m.width, at(m.bridge.at), at(far)));
+    r.tally(&format!("{:?} castles with a {kind} moat", l.tier), 1);
+    let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
+    let k = |v: f64| (v / size).floor().max(0.0) as u32;
+    let b = m.bbox;
+    let (mut band, mut good, mut deep, mut deck) = (0, 0, 0, 0);
+    for ky in k(b[1])..=k(b[3]) {
+        for kx in k(b[0])..=k(b[2]) {
+            let c = ctx.chunk(kx, ky);
+            for q in 0..SQ * SQ {
+                let p = [kx as f64 * size + ((q % SQ) as f64 + 0.5) * SQUARE_FT, ky as f64 * size + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                let Some(s) = m.spot(p) else { continue };
+                if !s.inside() {
+                    continue;
+                }
+                if m.bridge.covers(p) {
+                    deck += (c.road_halo[(q / SQ + 1) * (SQ + 2) + q % SQ + 1] & 0x80 != 0) as usize;
+                    continue;
+                }
+                band += 1;
+                good += if m.wet { (c.water_level[q] > c.height[q]) as usize } else { (c.edges[q] & 16 != 0 || s.outer < town::moat::BANK_FT) as usize };
+                deep += (c.surface[q] == Surface::Deep) as usize;
+            }
+        }
+    }
+    r.tally("moat squares", band);
+    r.tally(&format!("moat squares deep water ({kind} moats)"), deep);
+    if good * 10 < band * 9 {
+        r.add(&format!("{kind} moats under 90% {}", if m.wet { "water" } else { "difficult" }), (band - good) as f64, format!("{tag}: {good} of {band} at {}", at(m.bridge.at)));
+    }
+    if deck == 0 {
+        r.add("drawbridges with no deck", 1.0, format!("{tag}: at {}", at(m.bridge.at)));
     }
 }
 

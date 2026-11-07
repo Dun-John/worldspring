@@ -29,6 +29,7 @@ pub use crate::park::layout as park_layout;
 
 // v63 castles: a castle's kitchen garden and its smithy's anvil.
 mod kitchen;
+mod moat;
 
 pub const SQ: usize = TILE_N / 2;
 /// Squares per edge including a one-square halo ring (for seamless rendering gradients).
@@ -499,6 +500,10 @@ pub enum ShapeKind {
     ForecourtGate = 12,
     /// A gravel walk across a palace court's lawn: its four corners.
     GravelWalk = 13,
+    // v63 castles
+    /// A castle's drawbridge over its moat (`town::moat::Drawbridge`): the gate's middle, the far
+    /// end, then `[wet, 0]` (1 over water, 0 over a dry ditch); size is its width (squares).
+    Drawbridge = 18,
 }
 
 /// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands
@@ -1155,6 +1160,16 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     }
                 }
             }
+        }
+    }
+    // Castles' moats, dug before anything stands on the ground, and their drawbridges (v63 castles).
+    let moats: Vec<crate::town::moat::Moat> = crate::town::layouts_near(world, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT]).iter().flat_map(|l| l.moats.clone()).collect();
+    let ditch_h = moat::dig(&moats, ox - SQUARE_FT, oy - SQUARE_FT, &mut hh, &mut hw, &mut road_h, &mut lift);
+    for m in &moats {
+        let b = &m.bridge;
+        let far = crate::town::geom::add(b.at, crate::town::geom::mul(b.dir, b.span));
+        if owns(crate::town::geom::lerp(b.at, far, 0.5)) {
+            shapes.push(VectorShape { kind: ShapeKind::Drawbridge, size: (b.width / SQUARE_FT) as f32, pts: vec![local(&b.at), local(&far), [m.wet as u8 as f32, 0.0]] });
         }
     }
     // Ground before anything is raised on it (walls stand on the ground, not on roofs).
@@ -2916,6 +2931,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     for k in 0..n {
         if park_wet[(k / SQ + 1) * HS + k % SQ + 1] {
             chunk.edges[k] |= 32;
+        }
+        // (A dry moat's ditch: difficult ground, v63 castles.)
+        if ditch_h[(k / SQ + 1) * HS + k % SQ + 1] {
+            chunk.edges[k] |= 16;
         }
     }
     chunk
