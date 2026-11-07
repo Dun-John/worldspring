@@ -26,8 +26,8 @@ const vec3 HEDGE = vec3(0.24, 0.36, 0.19);
 const vec3 WALL = vec3(0.47, 0.46, 0.43);
 const vec3 BALK = vec3(0.53, 0.6, 0.38);
 // An orchard's trees: rows and trees apart (ft, as on the battlemap: `town::rural`), crowns' colour.
-const float ORCHARD_ROW_FT = 15.0;
-const float ORCHARD_TREE_FT = 12.5;
+const float ORCHARD_ROW_FT = 22.0;
+const float ORCHARD_TREE_FT = 20.0;
 const vec3 CROWN = vec3(0.3, 0.45, 0.22);
 
 float hash21(vec2 p) {
@@ -60,7 +60,7 @@ vec3 fieldLook(vec3 col, int code, float fw, out vec3 ink, out float lw) {
         vec2 q = vec2(vField.y / ORCHARD_TREE_FT, c / ORCHARD_ROW_FT);
         vec2 f = (fract(q + 0.5) - 0.5) * vec2(ORCHARD_TREE_FT, ORCHARD_ROW_FT) / fw;
         float show = smoothstep(4.0, 8.0, ORCHARD_ROW_FT / fw);
-        float rpx = 0.32 * ORCHARD_TREE_FT / fw;
+        float rpx = 4.0 / fw;
         col = mix(col, CROWN, (1.0 - smoothstep(rpx - 0.7, rpx + 0.7, length(f))) * 0.8 * show);
     }
     if (strips) {

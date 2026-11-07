@@ -213,13 +213,17 @@ impl Ground<'_, '_> {
     /// Clear of every lane and road by `margin` ft (their edges): its outline every 4 ft off the
     /// network roads as drawn, and off the lanes.
     fn off_lanes(&self, poly: &[P], margin: f64) -> bool {
+        !self.lanes.touches(poly, margin) && self.off_roads(poly, margin)
+    }
+
+    /// `off_lanes` for the network roads only.
+    fn off_roads(&self, poly: &[P], margin: f64) -> bool {
         let m = poly.len();
-        !self.lanes.touches(poly, margin)
-            && (0..m).all(|k| {
-                let (a, b) = (poly[k], poly[(k + 1) % m]);
-                let n = (dist(a, b) / 4.0).ceil().max(1.0) as usize;
-                (0..n).all(|j| !self.site.near_network_road(lerp(a, b, j as f64 / n as f64), margin))
-            })
+        (0..m).all(|k| {
+            let (a, b) = (poly[k], poly[(k + 1) % m]);
+            let n = (dist(a, b) / 4.0).ceil().max(1.0) as usize;
+            (0..n).all(|j| !self.site.near_network_road(lerp(a, b, j as f64 / n as f64), margin))
+        })
     }
 
     fn add(&mut self, plot: Plot) {
@@ -375,7 +379,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
         let bound = if rng.next_f64() < hedge_share { Bound::Hedge } else { Bound::Fence };
         shrine_yard(&mut g, l, green_r, bound, rng);
     }
-    mill(&mut g, l, r, wharf.as_deref(), rng);
+    mill(&mut g, l, r, wharf.as_deref(), &mut lanes, n_roads, rng);
     if manor {
         manor_yard(&mut g, l, r, &lanes[..], rng);
     }
@@ -766,34 +770,113 @@ fn shrine_yard(g: &mut Ground, l: &mut Layout, green_r: f64, bound: Bound, rng: 
     false
 }
 
-/// The water mill: on the river's bank where a river runs by (the bank nearer the green; across the
-/// lane along it from the water if one runs there), else by the wharf; its long side along the bank,
-/// its footprint within `MILL_WATER_FT` of the water. Else none (`rural::place`: a windmill on a rise).
-fn mill(g: &mut Ground, l: &mut Layout, r: f64, wharf: Option<&[P]>, rng: &mut Pcg32) -> bool {
+/// The water mill: on the river's bank where a river runs by (the bank nearer the green), its
+/// water-side wall a foot or few from the water: a lane along the bank there goes round its back
+/// (`round_mill`). Else across that lane from the water, else by the wharf; its long side along
+/// the bank, its footprint within `MILL_WATER_FT` of the water. Else none (`rural::place`: a
+/// windmill on a rise).
+fn mill(g: &mut Ground, l: &mut Layout, r: f64, wharf: Option<&[P]>, lanes: &mut Vec<(Vec<P>, f64)>, n_roads: usize, rng: &mut Pcg32) -> bool {
     let Some(mill_f) = catalog::index_of("mill") else { return false };
     let (w, d) = (rng.range(30.0, 40.0), rng.range(20.0, 26.0));
     let site = g.site;
-    let fits = |g: &Ground, l: &Layout, poly: &[P]| {
-        g.off_green(poly, 6.0) && site.buildable(poly) && !building_hit(l, poly, None) && !g.plot_hit(poly) && g.off_lanes(poly, 2.0) && waterside(site, poly, MILL_WATER_FT)
+    // (Its wheel's room too: off the piers and bridges by 8 ft.)
+    let decks = |l: &Layout, poly: &[P]| {
+        let (c, u) = (centroid(poly), sub(poly[1], poly[0]));
+        let room = rect(c, u, len(u) + 16.0, dist(poly[1], poly[2]) + 16.0);
+        !l.piers.iter().chain(&l.bridges).any(|q| overlaps_or_crosses(q, &room))
     };
-    let mut spots: Vec<Vec<P>> = Vec::new();
-    // (River pieces by their distance from the green, nearer first.)
+    let near = |g: &Ground, l: &Layout, poly: &[P]| g.off_green(poly, 6.0) && site.buildable(poly) && !building_hit(l, poly, None) && !g.plot_hit(poly) && g.off_roads(poly, 2.0) && decks(l, poly) && waterside(site, poly, MILL_WATER_FT);
+    let fits = |g: &Ground, l: &Layout, poly: &[P]| near(g, l, poly) && !g.lanes.touches(poly, 2.0);
+    // (River pieces by their distance from the green, nearer first: the mill's middle, its way
+    // along the bank, and its way from the water.)
     let mut pieces: Vec<(f64, usize)> = site.river.iter().enumerate().map(|(i, &(a, b, _))| (len(lerp(a, b, 0.5)), i)).filter(|&(dd, _)| dd > 0.3 * r && dd < 1.1 * r).collect();
     pieces.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+    let mut banks: Vec<(P, P, P, f64)> = Vec::new();
     for &(_, i) in pieces.iter().take(24) {
         let (a, b, hw) = site.river[i];
-        let q = lerp(a, b, 0.5);
         let ab = sub(b, a);
         let al = len(ab);
         if al < 1e-6 {
             continue;
         }
+        let q = lerp(a, b, 0.5);
         let t = mul(ab, 1.0 / al);
         let mut nrm = [-t[1], t[0]];
         if dot(nrm, q) > 0.0 {
             nrm = mul(nrm, -1.0);
         }
-        // (On the bank, else across the riverside lane from it.)
+        banks.push((q, t, nrm, hw));
+    }
+    // (Else the wharf's shore: where the water starts out from points along it.)
+    let mut shore: Vec<(P, P, P)> = Vec::new();
+    if banks.is_empty()
+        && let Some(wh) = wharf
+    {
+        let total: f64 = wh.windows(2).map(|s| dist(s[0], s[1])).sum();
+        for at in [0.2, 0.8, 0.35, 0.65, 0.1, 0.9, 0.5] {
+            let (p, u) = point_along(wh, at * total);
+            let mut n = [-u[1], u[0]];
+            if dot(n, p) > 0.0 {
+                n = mul(n, -1.0);
+            }
+            if let Some(s) = (0..=40).find(|&s| site.wet(sub(p, mul(n, s as f64)))) {
+                shore.push((sub(p, mul(n, s as f64 - 0.5)), u, n));
+            }
+        }
+    }
+    let put = |l: &mut Layout, poly: Vec<P>| l.buildings.push(new_building(site, poly, Ward::Rural, Some(mill_f), Structure::Roofed));
+    // On the bank: its middle 12.5 ft off the channel at least (`buildable`).
+    let off0 = (12.5 - 0.5 * d).max(1.0);
+    let edges = banks.iter().map(|&(q, t, nrm, hw)| (add(q, mul(nrm, hw)), t, nrm, off0)).chain(shore.iter().map(|&(e, t, nrm)| (e, t, nrm, 2.0)));
+    for (e, t, nrm, o) in edges {
+        for off in [o, o + 3.0] {
+            let c = add(e, mul(nrm, 0.5 * d + off));
+            let poly = rect(c, t, w, d);
+            if fits(g, l, &poly) {
+                put(l, poly);
+                return true;
+            }
+            if !near(g, l, &poly) {
+                continue;
+            }
+            // (A lane runs there: round the mill's back, or ending at it.)
+            let mut moved = lanes.clone();
+            let mut ok = true;
+            for (li, (pts, lw)) in moved.iter_mut().enumerate() {
+                if !LaneGrid::new(&[(pts.clone(), *lw)]).touches(&poly, 2.0) {
+                    continue;
+                }
+                match (li >= n_roads).then(|| round_mill(g, l, pts, *lw, &poly, c, t, nrm, w, d)).flatten() {
+                    Some(np) => *pts = np,
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok {
+                continue;
+            }
+            let grid = LaneGrid::new(&moved);
+            if grid.touches(&poly, 2.0) {
+                continue;
+            }
+            for (old, new) in lanes.iter().zip(&moved).skip(n_roads) {
+                if old.0 != new.0
+                    && let Some(st) = l.streets.iter_mut().find(|st| **st == old.0)
+                {
+                    *st = new.0.clone();
+                }
+            }
+            *lanes = moved;
+            g.lanes = grid;
+            put(l, poly);
+            return true;
+        }
+    }
+    // (Across the riverside lane from the water.)
+    let mut spots: Vec<Vec<P>> = Vec::new();
+    for &(q, t, nrm, hw) in &banks {
         for off in [4.0, 8.0, 14.0, 22.0] {
             spots.push(rect(add(q, mul(nrm, hw + 0.5 * d + off)), t, w, d));
         }
@@ -812,8 +895,79 @@ fn mill(g: &mut Ground, l: &mut Layout, r: f64, wharf: Option<&[P]>, rng: &mut P
         }
     }
     let Some(poly) = spots.into_iter().find(|p| fits(g, l, p)) else { return false };
-    l.buildings.push(new_building(site, poly, Ward::Rural, Some(mill_f), Structure::Roofed));
+    put(l, poly);
     true
+}
+
+/// A lane `lw` wide that meets the mill `poly` (middle `c`, `t` along the bank, `nrm` from the
+/// water, `w` x `d`) taken round its back, clear of it by 3 ft, or cut short of it where the lane
+/// ends there; the new way checked (dry, off the green, the plots, the buildings and the roads).
+#[allow(clippy::too_many_arguments)]
+fn round_mill(g: &Ground, l: &Layout, pts: &[P], lw: f64, poly: &[P], c: P, t: P, nrm: P, w: f64, d: f64) -> Option<Vec<P>> {
+    let hw = 0.5 * lw;
+    let m = poly.len();
+    let hits = |p: P| contains(poly, p) || (0..m).any(|k| seg_dist(p, poly[k], poly[(k + 1) % m]) < hw + 3.0);
+    // (The lane every 2 ft: which piece each sample lies on.)
+    let mut samples: Vec<(usize, P)> = Vec::new();
+    for (j, s) in pts.windows(2).enumerate() {
+        let n = (dist(s[0], s[1]) / 2.0).ceil().max(1.0) as usize;
+        samples.extend((0..n).map(|k| (j, lerp(s[0], s[1], k as f64 / n as f64))));
+    }
+    samples.push((pts.len() - 1, pts[pts.len() - 1]));
+    let first = samples.iter().position(|&(_, p)| hits(p))?;
+    let last = samples.iter().rposition(|&(_, p)| hits(p))?;
+    let at = |p: P| [dot(sub(p, c), t), dot(sub(p, c), nrm)];
+    let (w2, d2) = (0.5 * w + hw + 3.5, 0.5 * d + hw + 3.5);
+    let corner = |p: P| add(c, add(mul(t, if at(p)[0] < 0.0 { -w2 } else { w2 }), mul(nrm, d2)));
+    let mut out: Vec<P> = Vec::new();
+    let mut fresh: Vec<P> = Vec::new();
+    if first > 0 {
+        let (ja, pa) = samples[first - 1];
+        out.extend_from_slice(&pts[..=ja]);
+        out.push(pa);
+        fresh.push(pa);
+        if last + 1 < samples.len() {
+            fresh.push(corner(pa));
+        }
+    }
+    if last + 1 < samples.len() {
+        let (jb, pb) = samples[last + 1];
+        if first > 0 {
+            let b = corner(pb);
+            if dist(b, fresh[fresh.len() - 1]) > 0.5 {
+                fresh.push(b);
+            }
+        }
+        fresh.push(pb);
+        out.extend_from_slice(&fresh[if first > 0 { 1 } else { 0 }..]);
+        out.extend_from_slice(&pts[(jb + 1).min(pts.len())..]);
+    }
+    out.dedup_by(|a, b| dist(*a, *b) < 0.5);
+    if out.len() < 2 || out.windows(2).map(|s| dist(s[0], s[1])).sum::<f64>() < 25.0 {
+        return None;
+    }
+    // (The new way: its band clear of what is there, its ground dry.)
+    for s in fresh.windows(2) {
+        let e = sub(s[1], s[0]);
+        let el = len(e);
+        if el < 0.5 {
+            continue;
+        }
+        let band = quad(s[0], mul(e, 1.0 / el), lw, el);
+        if building_hit(l, &band, None) || g.plot_hit(&band) || !g.off_green(&band, 1.0) {
+            return None;
+        }
+        // (Off the channel; off the roads but where it leaves the old way.)
+        let n = (el / 3.0).ceil() as usize;
+        let (pa, pb) = (fresh[0], fresh[fresh.len() - 1]);
+        if (0..=n).any(|k| {
+            let p = lerp(s[0], s[1], k as f64 / n as f64);
+            g.site.near_river(p, 1.0) || g.site.wet(p) || (dist(p, pa).min(dist(p, pb)) > lw && g.site.near_network_road(p, hw + 1.0))
+        }) {
+            return None;
+        }
+    }
+    Some(out)
 }
 
 /// Water within `reach` ft of `poly`'s outline, looking straight out from each side (every 5 ft).
@@ -949,7 +1103,7 @@ fn runs(p: &Plot) -> Vec<(P, P)> {
 
 /// Each plot's hedges, fences and walls as drawn (`runs`), but where they run along a plot's before it
 /// (within 3 ft, pieces of 4 ft or so): one hedge between two crofts, not two side by side.
-pub fn bounds(l: &Layout) -> Vec<(P, P, Bound)> {
+pub fn bounds(l: &Layout) -> Vec<(P, P, Bound, PlotKind)> {
     let mut out = Vec::new();
     let boxes: Vec<[f64; 4]> = l.crofts.iter().map(|p| bbox(&p.pts)).collect();
     for (k, p) in l.crofts.iter().enumerate() {
@@ -967,7 +1121,7 @@ pub fn bounds(l: &Layout) -> Vec<(P, P, Bound)> {
                 match (keep, from) {
                     (true, None) => from = Some(j),
                     (false, Some(f)) => {
-                        out.push((lerp(a, b, f as f64 / m as f64), lerp(a, b, j as f64 / m as f64), p.bound));
+                        out.push((lerp(a, b, f as f64 / m as f64), lerp(a, b, j as f64 / m as f64), p.bound, p.kind));
                         from = None;
                     }
                     _ => {}
@@ -1017,7 +1171,8 @@ pub fn wall_runs(l: &Layout) -> Vec<(P, P)> {
     if !village_of(l) {
         return Vec::new();
     }
-    l.crofts.iter().filter(|p| p.bound == Bound::Wall).flat_map(runs).collect()
+    // (A churchyard's wall is a low one, seen over: `rural::battle` draws it as a dry-stone run.)
+    l.crofts.iter().filter(|p| p.bound == Bound::Wall && p.kind != PlotKind::Churchyard).flat_map(runs).collect()
 }
 
 /// A village's plan zoom polygons (`payload::pack_sites`, before its buildings): its green and its
@@ -1033,7 +1188,7 @@ pub fn plan_polys(l: &Layout, push: &mut dyn FnMut(&[P], u32)) {
     for p in &l.crofts {
         push(&p.pts, if matches!(p.kind, PlotKind::Churchyard | PlotKind::ShrineYard) { PLAN_CHURCHYARD } else { PLAN_CROFT });
     }
-    for (a, b, bound) in bounds(l) {
+    for (a, b, bound, _) in bounds(l) {
         let (kind, w) = match bound {
             Bound::Hedge => (PLAN_HEDGE, HEDGE_FT),
             Bound::Fence => (PLAN_FENCE, FENCE_FT),

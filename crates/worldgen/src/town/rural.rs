@@ -9,7 +9,7 @@
 use super::catalog;
 use super::fields::{FieldBound, FieldUse};
 use super::geom::*;
-use super::village::Bound;
+use super::village::{Bound, PlotKind};
 use super::{Building, Layout, Site, Structure, rect};
 use crate::battlemap::{Kind, Object, SQ, SQUARE_FT, ShapeKind, URBAN_FIELD, VectorShape};
 use crate::core::rng::{hash3, unit};
@@ -51,12 +51,14 @@ pub struct Battle {
 const MAX_RUNS: usize = 900;
 const MAX_TREES: usize = 1200;
 /// An orchard's rows apart and its trees apart along a row (ft).
-const ORCHARD_ROW_FT: f64 = 15.0;
-const ORCHARD_TREE_FT: f64 = 12.5;
+const ORCHARD_ROW_FT: f64 = 22.0;
+const ORCHARD_TREE_FT: f64 = 20.0;
 /// A copse's trees apart (ft, a jittered lattice keyed by world position).
 const COPSE_FT: f64 = 9.0;
 /// A field's gate (ft wide).
 const GATE_FT: f64 = 10.0;
+/// How far a gate's gap keeps off its side's corners (ft).
+const GATE_CORNER_FT: f64 = 8.0;
 /// A windmill's sails' reach from the hub (ft).
 pub const SAIL_FT: f64 = 27.0;
 
@@ -267,17 +269,24 @@ fn clip_seg(a: P, b: P, r: [f64; 4]) -> Option<(P, P)> {
 }
 
 /// A bounded field's gate: where its outline comes nearest a lane or the layout's road (within 45
-/// ft), else a place along its longest side keyed by the field.
+/// ft), else a place along its longest side keyed by the field. Its gap stays `GATE_CORNER_FT` off
+/// the side's corners (no stub of hedge left between it and a corner); sides too short for that
+/// take none but the longest.
 fn gate(f: &[P], ways: &[(P, P, f64)]) -> P {
     let n = f.len();
     let fb = grow(bbox(f), 50.0);
     let ways: Vec<(P, P, f64)> = ways.iter().copied().filter(|&(a, b, half)| hits(grow(bbox(&[a, b]), half), fb)).collect();
+    let room = 0.5 * GATE_FT + GATE_CORNER_FT;
     let mut best = (45.0, None);
     for k in 0..n {
         let (a, b) = (f[k], f[(k + 1) % n]);
-        let m = (dist(a, b) / 8.0).ceil().max(1.0) as usize;
-        for j in 0..m {
-            let p = lerp(a, b, (j as f64 + 0.5) / m as f64);
+        let e = dist(a, b);
+        if e < 2.0 * room {
+            continue;
+        }
+        let m = ((e - 2.0 * room) / 8.0).ceil().max(1.0) as usize;
+        for j in 0..=m {
+            let p = lerp(a, b, (room + (e - 2.0 * room) * j as f64 / m as f64) / e);
             for &(s, e, half) in &ways {
                 let d = seg_dist(p, s, e) - half;
                 if d < best.0 {
@@ -291,7 +300,9 @@ fn gate(f: &[P], ways: &[(P, P, f64)]) -> P {
     }
     let k = (0..n).max_by(|&x, &y| dist(f[x], f[(x + 1) % n]).total_cmp(&dist(f[y], f[(y + 1) % n])).then(y.cmp(&x))).unwrap_or(0);
     let c = centroid(f);
-    lerp(f[k], f[(k + 1) % n], 0.3 + 0.4 * unit(hash3(0x9a7e, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 4)))
+    let e = dist(f[k], f[(k + 1) % n]).max(1e-9);
+    let span = (0.4 * e).min((e - 2.0 * room).max(0.0));
+    lerp(f[k], f[(k + 1) % n], 0.5 + span / e * (unit(hash3(0x9a7e, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, 4)) - 0.5))
 }
 
 /// What a chunk (`rect`, world ft) takes from layout `l`: runs (pieces of 4 ft or so: not on a road
@@ -369,12 +380,14 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
             piece_runs(f[k], f[(k + 1) % f.len()], kind, &keep, out);
         }
     }
-    // A village's crofts' and yards' hedges and fences (its walls are raised as a garden wall's).
+    // A village's crofts' and yards' hedges and fences, and its churchyard's low wall (the manor's
+    // yard wall is raised as a garden wall's).
     if l.crofts.iter().any(|p| hits(bbox(&p.pts), near)) {
-        for (a, b, bound) in super::village::bounds(l) {
+        for (a, b, bound, plot) in super::village::bounds(l) {
             let kind = match bound {
                 Bound::Hedge => RunKind::Hedge,
                 Bound::Fence => RunKind::Fence,
+                Bound::Wall if plot == PlotKind::Churchyard => RunKind::DryWall,
                 Bound::Wall => continue,
             };
             piece_runs(a, b, kind, &|_| true, out);

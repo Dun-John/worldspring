@@ -313,7 +313,7 @@ pub const CATALOG: [KindInfo; 63] = [
     k(Kind::GardenStatue, "garden statue", 0.7, true, false, 2, false, 10.0, true),
     k(Kind::Footbridge, "footbridge", 1.6, false, false, 0, false, 3.0, true),
     // v63 countryside
-    k(Kind::FruitTree, "fruit tree", 1.0, true, false, 1, false, 15.0, false),
+    k(Kind::FruitTree, "fruit tree", 1.0, false, false, 1, true, 15.0, false),
     k(Kind::WaterWheel, "water wheel", 1.4, true, false, 2, false, 14.0, true),
 ];
 
