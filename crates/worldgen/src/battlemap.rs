@@ -4532,7 +4532,7 @@ pub(crate) fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static 
 
 /// A castle's well where its keep's court has no spot with 25 ft of room (`dress_bailey`): with
 /// less room round it, in the court first, else anywhere in the bailey, by the keep. (v63: a well
-/// in every castle.)
+/// in every castle, down to any free spot of the bailey.)
 fn bailey_well(
     spots: &[[f64; 2]],
     placed: &[([f64; 2], f64)],
@@ -4543,7 +4543,7 @@ fn bailey_well(
     free: &dyn Fn(&[([f64; 2], f64)], [f64; 2], f64, Option<usize>) -> bool,
 ) -> Option<[f64; 2]> {
     for court in [true, false] {
-        for least in [18.0, 12.0] {
+        for least in [18.0, 12.0, 6.0, 0.0] {
             let well = spots
                 .iter()
                 .copied()
@@ -4740,6 +4740,33 @@ fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed:
         .filter(|&p| in_court(p) && room(p) >= 25.0 && free(&placed, p, well_r, None))
         .min_by(|&a, &b| (to_keep(a) - room(a)).total_cmp(&(to_keep(b) - room(b))).then(a[1].total_cmp(&b[1])).then(a[0].total_cmp(&b[0])));
     let well = well.or_else(|| bailey_well(&spots, &placed, well_r, &in_court, &room, &to_keep, &free));
+    // Last resort in a cramped bailey: a finer grid, bare well footprint, least clearances.
+    let well = well.or_else(|| {
+        let r = well_r - 6.0;
+        let mut best: Option<([f64; 2], f64)> = None;
+        let mut y = crate::core::ceil(y0 / 5.0) * 5.0;
+        while y <= y1 {
+            let mut x = crate::core::ceil(x0 / 5.0) * 5.0;
+            while x <= x1 {
+                let p = [x, y];
+                let ok = depth(p) >= r + 3.0
+                    && blds.iter().all(|b| poly_d(&b.poly, p) >= r + 1.0)
+                    && walls.iter().all(|&(a, b)| seg_dist(p, a, b) >= r + 3.0)
+                    && towers.iter().all(|&(t, tr)| dist(p, t) >= tr + r + 2.0)
+                    && lanes.iter().all(|&(a, b)| seg_dist(p, a, b) >= r + 4.0)
+                    && gates.iter().all(|&(g, _)| dist(p, g) >= r + 8.0)
+                    && mottes.iter().all(|m| dist(p, m.at) >= m.foot_r + r + 2.0)
+                    && placed.iter().all(|&(q, qr)| dist(p, q) >= r + qr);
+                let score = room(p) - 0.1 * to_keep(p);
+                if ok && best.map_or(true, |(_, s)| score > s) {
+                    best = Some((p, score));
+                }
+                x += 5.0;
+            }
+            y += 5.0;
+        }
+        best.map(|b| b.0)
+    });
     if let Some(p) = well {
         placed.push((p, well_r));
         out.push((p, 0.0, Kind::Well, (key >> 24) as u8 & 7, 1.0));
