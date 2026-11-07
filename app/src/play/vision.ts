@@ -277,8 +277,21 @@ export function showNiches(lv: Interior['levels'][number], nx: number, ny: numbe
   }
 }
 
+/** The most squares across a vision bitmap. */
+const MAX_VISION = 2048;
+
 /** What the eyes see together; in the dark, only the squares `lights` reach. */
-export function computeVision(grid: TacticalGrid, eyes: Eye[], lights: Eye[], dark: boolean): Bitmap {
+export function computeVision(grid: TacticalGrid, eyes: Eye[], lights: Eye[], dark: boolean, near?: [number, number]): Bitmap {
+  // (Never a bitmap from an unbounded box: eyes far apart keep only those near `near`, or the
+  // first, and the box is cut to the cap round it.)
+  const ref = near ?? (eyes.length ? [eyes[0].x, eyes[0].y] : [0, 0]);
+  const reach = (e: Eye) => Math.max(Math.abs(e.x - ref[0]), Math.abs(e.y - ref[1]));
+  const wide = (es: Eye[]) => {
+    let [a, b, c, d] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const e of es) [a, b, c, d] = [Math.min(a, e.x - e.range), Math.min(b, e.y - e.range), Math.max(c, e.x + e.range), Math.max(d, e.y + e.range)];
+    return (c - a) * (d - b) > MAX_VISION * MAX_VISION || !Number.isFinite(c - a);
+  };
+  if (wide(eyes)) eyes = eyes.filter((e) => Number.isFinite(e.x) && Number.isFinite(e.y) && reach(e) <= MAX_VISION / 2);
   let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
   for (const e of eyes) {
     x0 = Math.min(x0, Math.floor(e.x - e.range));
@@ -288,6 +301,10 @@ export function computeVision(grid: TacticalGrid, eyes: Eye[], lights: Eye[], da
   }
   const b = grid.bounds;
   if (b) [x0, y0, x1, y1] = [Math.max(x0, b[0]), Math.max(y0, b[1]), Math.min(x1, b[2]), Math.min(y1, b[3])];
+  if (eyes.length && (x1 - x0) * (y1 - y0) > MAX_VISION * MAX_VISION) {
+    const m = MAX_VISION / 2;
+    [x0, y0, x1, y1] = [Math.max(x0, Math.floor(ref[0] - m)), Math.max(y0, Math.floor(ref[1] - m)), Math.min(x1, Math.ceil(ref[0] + m)), Math.min(y1, Math.ceil(ref[1] + m))];
+  }
   if (!eyes.length || x1 <= x0 || y1 <= y0) return { x0: 0, y0: 0, w: 0, h: 0, bits: new Uint8Array(0) };
   const [w, h] = [x1 - x0, y1 - y0];
   const L = local(grid, x0, y0, w, h);

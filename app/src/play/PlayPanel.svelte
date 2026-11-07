@@ -263,6 +263,7 @@
         <button class:on={v.target === 'party'} onclick={() => play.setFollowTarget('party')} title="Their view goes where the PCs are and keeps them all in sight">Follow party</button>
         <button class:on={v.lock} onclick={() => play.setFollow(true, true)} title="They can't move their view"><Icon name="lock" size={14} /> Locked</button>
       </div>
+      <div class="ws-hint">Follow me: their view goes where you look. Follow party: it keeps the party in view. Locked: they can't move it.</div>
       {#if v.following !== null}
         <div class="ws-row following">
           <Icon name="eye" size={16} /><span class="grow">Following <b>{v.following || 'a token'}</b></span>

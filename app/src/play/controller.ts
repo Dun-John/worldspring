@@ -180,6 +180,7 @@ export class PlayController implements PointerTool {
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private placeCache: { key: string; place: Place } | null = null;
   /** Buildings and sites tokens stand in (null: none by that id), and their places. */
+  private visionFailed = false;
   private readonly interiors = new Map<string, Interior | null>();
   private readonly places = new Map<string, Place>();
   /** Where buildings and sites are entered from the surface (`entranceOf`). */
@@ -681,7 +682,9 @@ export class PlayController implements PointerTool {
     this.state.changed = Date.now();
     this.channel.send({ t: 'op', op });
     // (The token the players' view follows gone: it follows the DM again.)
-    if ((op.t === 'untoken' && op.id === this.followTarget) || (op.t === 'reset' && this.followTarget && this.followTarget !== 'party')) this.setFollowTarget(null);
+    // (Or hidden: the players' window goes back to the DM's scene and camera, as on Stop.)
+    const ft = this.followTarget;
+    if ((op.t === 'untoken' && op.id === this.followTarget) || (op.t === 'reset' && ft && ft !== 'party') || (ft && ft !== 'party' && this.state.tokens[ft]?.hidden)) this.setFollowTarget(null);
     this.scheduleSave();
     this.onChange();
   }
@@ -1248,10 +1251,13 @@ export class PlayController implements PointerTool {
         break;
       case 'token': {
         this.dragging.clear();
+        const landed: string[] = [];
         for (const g of p.group ?? []) {
           const t = this.state.tokens[g.id];
           if (t) this.drop(t, place, !!p.pin);
+          if (t && p.pin && !place.it && !place.sewers) landed.push(t.id);
         }
+        if (landed.length) void this.clearOfBuildings(landed);
         break;
       }
       case 'box': {
@@ -1334,6 +1340,51 @@ export class PlayController implements PointerTool {
     const landed = { ...t, x, y };
     this.dispatch({ t: 'token', token: landed });
     if (!it && !here.sewers && t.loc === 'surface') void this.enterAt(landed, wx, wy);
+  }
+
+  /**
+   * Pins dropped on the surface land on open ground: any that came to rest inside a building's
+   * footprint move straight out from its middle to the nearest square outside every building
+   * (at most 40 squares), the others of the group by the same step so the formation holds.
+   */
+  private async clearOfBuildings(ids: string[]) {
+    const inBuilding = async (x: number, y: number) => {
+      const h = await this.view.gen.query(x, y);
+      return h?.kind === 'building' ? h : null;
+    };
+    // The step out from (x, y), in squares; null if none within 40 squares.
+    const stepOut = async (x: number, y: number, hit: { x: number; y: number }): Promise<[number, number] | null> => {
+      let [dx, dy] = [x - hit.x, y - hit.y];
+      const len = Math.hypot(dx, dy) || 1;
+      [dx, dy] = dx === 0 && dy === 0 ? [1, 0] : [dx / len, dy / len];
+      for (let k = 1; k <= 40; k++) {
+        if (!(await inBuilding(x + dx * 5 * k, y + dy * 5 * k))) return [dx * k, dy * k];
+      }
+      return null;
+    };
+    const at = ids.map((id) => this.state.tokens[id]).filter((t): t is Token => !!t && t.loc === 'surface');
+    let group: [number, number] = [0, 0];
+    for (const t of at) {
+      const h = await inBuilding(t.x * 5, t.y * 5);
+      if (h) {
+        group = (await stepOut(t.x * 5, t.y * 5, h)) ?? group;
+        break;
+      }
+    }
+    for (const t of at) {
+      let [dx, dy] = group;
+      let h = await inBuilding((t.x + dx) * 5, (t.y + dy) * 5);
+      if (h) {
+        const s = await stepOut((t.x + dx) * 5, (t.y + dy) * 5, h);
+        if (s) [dx, dy] = [dx + s[0], dy + s[1]];
+      }
+      if (!dx && !dy) continue;
+      const now = this.state.tokens[t.id];
+      // Moved again (or removed) meanwhile: leave it.
+      if (!now || now.loc !== 'surface' || now.x !== t.x || now.y !== t.y) continue;
+      const [x, y] = snap(t.x + dx, t.y + dy, t.size);
+      this.dispatch({ t: 'token', token: { ...now, x, y } });
+    }
   }
 
   /** A token dropped on a building on the surface goes inside, if it can be entered. */
@@ -1631,8 +1682,14 @@ export class PlayController implements PointerTool {
         this.camAt = now;
         this.sendCamera();
       }
-      this.updateVision(now, place);
-      this.updateFollowVision(now, place);
+      try {
+        this.updateVision(now, place);
+        this.updateFollowVision(now, place);
+      } catch (err) {
+        // (Not the render loop's end: said once, and the next frame goes on.)
+        if (!this.visionFailed) console.error('vision failed', err);
+        this.visionFailed = true;
+      }
       // Where the sewers come up to the street, round the view (they are gone once left).
       if (place?.sewers && now - this.sewerExitsAt > 500) {
         this.sewerExitsAt = now;
@@ -1678,7 +1735,8 @@ export class PlayController implements PointerTool {
     const here = Object.values(s.tokens).filter((t) => t.loc === place.loc);
     const eyes: Eye[] = here.filter((t) => t.kind === 'character' && t.vision).map((t) => ({ x: t.x, y: t.y, above: 5, range: SIGHT }));
     const lights: Eye[] = here.filter((t) => (t.light ?? 0) > 0).map((t) => ({ x: t.x, y: t.y, above: 5, range: t.light! }));
-    const v = computeVision(grid, eyes, lights, settings.dark);
+    const pick = here.find((t) => this.selection.has(t.id) && t.vision) ?? here.find((t) => t.vision);
+    const v = computeVision(grid, eyes, lights, settings.dark, pick ? [pick.x, pick.y] : undefined);
     if (place.it && !place.sewers && v.w) showNiches(place.it.levels[place.level], place.it.nx, place.it.ny, v);
     this.vision = { loc: place.loc, x0: v.x0, y0: v.y0, w: v.w, h: v.h, bits: v.bits };
     this.channel.send({ t: 'vision', vision: this.vision });

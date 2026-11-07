@@ -2796,6 +2796,8 @@
     const t = play.state.tokens[id];
     if (!t) return;
     startPlay();
+    // (Nothing selected, so moving to a new location doesn't carry the old selection along.)
+    play.select(null);
     let at: [number, number] | null = null;
     const sewer = /^w:(\d+)$/.exec(t.loc);
     if (t.loc === 'surface') {
@@ -2805,7 +2807,23 @@
       if (await view.enterBuilding(`w:${sewer[1]}:${sx}:${sy}`)) at = [t.x * 5, t.y * 5];
     } else {
       const { interior, level } = parseLoc(t.loc);
-      if (interior && interior !== view.interior?.interior.id) await view.enterBuilding(interior, { level });
+      if (interior && interior !== view.interior?.interior.id) {
+        // (From the surface, so a place that isn't loaded can't leave us stuck in another interior.)
+        if (view.interior) view.exitBuilding();
+        let ok = false;
+        try {
+          ok = await view.enterBuilding(interior, { level });
+        } catch {}
+        if (!ok) {
+          toast("Couldn't open that place");
+          const p = await view.gen.place(interior).catch(() => null);
+          if (p) {
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            flyToSize(p.x, p.y, 50);
+          }
+          return;
+        }
+      }
       if (view.interior && interior === view.interior.interior.id) {
         if (view.interior.currentLevel !== level) view.setInteriorLevel(level);
         at = view.interior.toWorld(t.x, t.y);
@@ -3337,6 +3355,7 @@
           onNote={(id) => void showPlace(id)}
           tokens={() => play.state.tokens}
           onToken={(id) => void showToken(id)}
+          levelNames={(id) => view.gen.interior(id).then((it) => it?.levels.map((l) => l.name) ?? null)}
         />
       {/if}
     {/snippet}

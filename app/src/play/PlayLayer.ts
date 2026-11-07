@@ -30,7 +30,21 @@ interface TokenView {
   door: Graphics;
   g: Graphics;
   face: Container;
+  /** The players' follow ring, drawn in screen px (redrawn when its `ringKey` changes). */
+  ring: Graphics;
+  ringKey: number;
   label: Text;
+  /** A cream plate behind the label of a pin, and its size; whether the label has the pin style. */
+  plate: Graphics;
+  pw: number;
+  ph: number;
+  platedStyle: boolean;
+  /** Hashes of its id, name and drawing key (frame keys are numbers, nothing built per frame). */
+  idHash: number;
+  nameHash: number;
+  keyHash: number;
+  /** The party it was last merged into (0: none), for the split margin. */
+  pg: number;
   key: string;
   /** What it was last drawn from (the token object is replaced whenever it changes). */
   tok: Token | null;
@@ -65,7 +79,10 @@ interface PartyView {
   top: Graphics;
   count: Text;
   label: Text;
-  key: string;
+  plate: Graphics;
+  pw: number;
+  ph: number;
+  key: number;
   ids: string[];
   inside: boolean;
   want: boolean;
@@ -86,7 +103,16 @@ interface FogChunk {
 const labelStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 13, fontWeight: 'bold', fill: '#f8f1de', stroke: { color: '#1d1a14', width: 3, join: 'round' } });
 const shapeStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 13, fontWeight: 'bold', fill: '#fff7d6', stroke: { color: '#1d1a14', width: 3, join: 'round' } });
 const initialsStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 30, fontWeight: 'bold', fill: '#ffffff', stroke: { color: '#1d1a14', width: 4, join: 'round' } });
-const countStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 26, fontWeight: 'bold', fill: '#ffffff' });
+const countStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 34, fontWeight: 'bold', fill: '#ffffff', stroke: { color: '#1d1a14', width: 5, join: 'round' } });
+/** A pin's label, ink on its cream plate. */
+const plateStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 13, fontWeight: 'bold', fill: '#1d1a14' });
+
+const strHash = (s: string) => {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+};
+const mix = (h: number, n: number) => Math.imul(h ^ Math.round(n), 16777619) >>> 0;
 const rulerStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 15, fontWeight: 'bold', fill: '#fff7d6', stroke: { color: '#1d1a14', width: 4, join: 'round' }, align: 'left', lineHeight: 21 });
 
 /** Luminance of a 0xRRGGBB colour (0..1). */
@@ -120,10 +146,11 @@ export class PlayLayer {
   private readonly rulerText = new Text({ text: '', style: rulerStyle, anchor: { x: 0, y: 1 }, resolution: 2 });
   private rulerKey = '';
   /** What the token labels were last sorted out for (overlaps are looked at only when it changes). */
-  private labelKey = '';
+  private labelKey = 0;
   /** The party pins (each two or more PCs' pins) and what they were worked out for. */
   private parties: TokenView[][] = [];
-  private partyKey = '';
+  private partyKey = 0;
+  private pgSeq = 0;
   private readonly partyViews: PartyView[] = [];
   private readonly draft = new Graphics();
   private draftKey = '';
@@ -239,7 +266,7 @@ export class PlayLayer {
     // Tokens: here; outside the building in view; the DM's markers of those inside buildings.
     const live = new Set<string>();
     const ease = 1 - Math.exp(-dt / 70);
-    let lk = `${Math.round(pxPerSq * 10)}|${ts}|`;
+    let lk = mix(mix(1, pxPerSq * 10), ts * 100);
     const surface = loc === 'surface';
     const pinPx = PIN * ts;
     for (const { t, place: tp, where, at: way } of ctl.tokensInView()) {
@@ -253,11 +280,14 @@ export class PlayLayer {
         const door = new Graphics();
         const g = new Graphics();
         const face = new Container();
-        c.addChild(reach, pin, g, face, door);
+        const ring = new Graphics();
+        c.addChild(reach, pin, g, face, ring, door);
         const label = new Text({ text: '', style: labelStyle, anchor: { x: 0.5, y: 0 }, resolution: 2 });
+        const plate = new Graphics();
+        plate.visible = false;
         this.tokens.addChild(c);
-        this.tokenLabels.addChild(label);
-        v = { id: t.id, c, reach, pin, door, g, face, label, key: '', tok: null, sel: false, img: null, grid: null, want: false, pc: false, x: t.x, y: t.y, loc: t.loc, pinned: false, inside: false, ax: 0, ay: 0, tx: 0, ty: 0, fol: false };
+        this.tokenLabels.addChild(plate, label);
+        v = { id: t.id, c, reach, pin, door, g, face, ring, ringKey: 0, label, plate, pw: 0, ph: 0, platedStyle: false, idHash: strHash(t.id), nameHash: 0, keyHash: 0, pg: 0, key: '', tok: null, sel: false, img: null, grid: null, want: false, pc: false, x: t.x, y: t.y, loc: t.loc, pinned: false, inside: false, ax: 0, ay: 0, tx: 0, ty: 0, fol: false };
         this.tokenViews.set(t.id, v);
       }
       // Into or out of a building: no glide across grids.
@@ -269,9 +299,11 @@ export class PlayLayer {
       const fol = player && ctl.followedIds.has(t.id);
       if (v.tok !== t || v.sel !== sel || v.img !== img || v.grid !== s.grid || v.fol !== fol) {
         [v.tok, v.sel, v.img, v.grid, v.fol] = [t, sel, img, s.grid, fol];
-        const key = tokenKey(t, sel, player, img, s.grid, fol ? ts : 0);
+        v.nameHash = strHash(t.name);
+        const key = tokenKey(t, sel, player, img, s.grid);
         if (v.key !== key) {
           v.key = key;
+          v.keyHash = strHash(key);
           this.drawToken(v, t, player);
         }
       }
@@ -283,7 +315,8 @@ export class PlayLayer {
       // A PC on the surface drawn smaller than a pin, or inside somewhere: a pin, its point
       // where the PC is (or at the way in).
       const side = Math.max(0.5, t.size);
-      v.pinned = surface && t.kind === 'character' && roleOf(t) === 'pc' && (where === 'entrance' || side * pxPerSq < pinPx);
+      // (A disc turns into a pin below `pinPx` and back only above a quarter more.)
+      v.pinned = surface && t.kind === 'character' && roleOf(t) === 'pc' && (where === 'entrance' || side * pxPerSq < (v.pinned ? pinPx * 1.25 : pinPx));
       v.inside = where === 'entrance';
       [v.ax, v.ay, v.tx, v.ty] = [wx, wy, sx, sy];
       v.pin.visible = v.pinned;
@@ -296,72 +329,93 @@ export class PlayLayer {
         v.c.position.set(sx, sy);
         v.c.scale.set(scale);
       }
+      const rk = v.fol ? (Math.round(ts * 100) * 31 + (v.pinned ? 1 : 0)) * 1009 + Math.round(v.c.scale.x * 100) : 0;
+      if (rk !== v.ringKey) {
+        v.ringKey = rk;
+        this.drawRing(v, t);
+      }
+      if (v.pinned !== v.platedStyle) {
+        v.platedStyle = v.pinned;
+        v.label.style = v.pinned ? plateStyle : labelStyle;
+      }
       // Inside a building seen from outside: the DM's faint marker on the roof.
       v.c.alpha = where === 'inside' && !ctl.dragging.has(t.id) ? 0.4 : t.hidden ? 0.55 : 1;
-      v.label.position.set(sx, v.pinned ? sy + 2 * ts : sy + (t.size * pxPerSq) / 2 + 2 * ts);
+      v.label.position.set(sx, v.pinned ? sy + 3 * ts : sy + (t.size * pxPerSq) / 2 + 2 * ts);
       v.want = (pxPerSq >= 22 || v.pinned) && !!v.label.text && where !== 'inside' && (!(t.kind === 'character' && roleOf(t) === 'object') || (!player && sel));
       v.pc = t.kind === 'character' && roleOf(t) === 'pc';
-      lk += `${t.id}|${Math.round(sx)},${Math.round(sy)}|${v.want ? 1 : 0}${sel ? 1 : 0}${v.pc ? 1 : 0}${t.name};`;
       v.c.visible = pxPerSq >= 2 || v.pinned;
+      lk = mix(mix(mix(mix(mix(lk, v.idHash), sx), sy), (v.want ? 1 : 0) | (sel ? 2 : 0) | (v.pc ? 4 : 0) | (v.pinned ? 8 : 0) | (v.c.visible ? 16 : 0)), v.nameHash);
     }
     for (const [id, v] of this.tokenViews) {
       if (live.has(id)) continue;
       v.c.destroy({ children: true });
       v.label.destroy();
+      v.plate.destroy();
       this.tokenViews.delete(id);
     }
 
     // Pins that overlap on screen: one party pin at their middle (who is in it is worked out
     // again only when the zoom or a pin's place changes; panning moves them together).
-    let pk = `${cam.ppf}|${pinPx}|`;
-    for (const v of this.tokenViews.values()) if (v.pinned) pk += `${v.id}@${Math.round(v.ax)},${Math.round(v.ay)};`;
+    let pk = mix(mix(1, Math.log(cam.ppf) * 1000), pinPx);
+    for (const v of this.tokenViews.values()) if (v.pinned) pk = mix(mix(mix(pk, v.idHash), v.ax), v.ay);
     if (pk !== this.partyKey) {
       this.partyKey = pk;
-      this.parties = partiesOf([...this.tokenViews.values()].filter((v) => v.pinned), pinPx / cam.ppf);
+      this.parties = partiesOf([...this.tokenViews.values()].filter((v) => v.pinned), pinPx / cam.ppf, () => ++this.pgSeq);
     }
     let nParty = 0;
     for (const members of this.parties) {
       const pv = this.partyView(nParty++);
-      let [sx, sy, inside, sel, who] = [0, 0, true, false, ''];
+      let [sx, sy, inside, sel, fol] = [0, 0, true, false, false];
+      const first = members[0];
+      let key = mix(mix(1, first.keyHash), ts * 100);
       for (const m of members) {
         sx += m.tx;
         sy += m.ty;
         inside &&= m.inside;
         sel ||= m.sel;
-        who += `${m.id}:${m.tok?.name}\n`;
+        fol ||= m.fol;
+        key = mix(mix(key, m.idHash), m.nameHash);
         m.c.visible = false;
         m.want = false;
       }
       [sx, sy] = [sx / members.length, sy / members.length];
-      const first = members[0];
-      const key = `${who}|${first.key}|${inside}|${sel}`;
+      key = mix(key, (inside ? 1 : 0) | (sel ? 2 : 0) | (fol ? 4 : 0));
       if (pv.key !== key) {
         pv.key = key;
         pv.ids = members.map((m) => m.id);
         pv.inside = inside;
-        this.drawParty(pv, first, members, inside, sel && !player);
+        this.drawParty(pv, first, members, inside, sel && !player, fol);
       }
       pv.c.visible = true;
       pv.c.position.set(sx, sy - PIN_TIP * pinPx);
       pv.c.scale.set(pinPx / TPX);
-      pv.label.position.set(sx, sy + 2 * ts);
+      pv.label.position.set(sx, sy + 3 * ts);
       pv.want = !!pv.label.text;
       pv.sel = sel;
-      lk += `P${pv.ids.length}${pv.ids[0]}|${Math.round(sx)},${Math.round(sy)};`;
+      lk = mix(mix(mix(mix(lk, pv.ids.length), strHash(pv.ids[0])), sx), sy);
     }
     for (let k = nParty; k < this.partyViews.length; k++) {
       const pv = this.partyViews[k];
       if (!pv.c.visible && !pv.want) continue;
-      pv.c.visible = pv.label.visible = pv.want = false;
-      pv.key = '';
+      pv.c.visible = pv.label.visible = pv.plate.visible = pv.want = false;
+      pv.key = 0;
     }
 
     // Labels that would overlap: the selected token's first, then PCs', then in draw order.
     if (lk !== this.labelKey) {
       this.labelKey = lk;
       const vs = [...this.tokenViews.values(), ...this.partyViews].filter((v) => v.want);
-      for (const v of this.tokenViews.values()) if (!v.want) v.label.visible = false;
-      for (const v of this.partyViews) if (!v.want) v.label.visible = false;
+      for (const v of this.tokenViews.values()) if (!v.want) v.label.visible = v.plate.visible = false;
+      for (const v of this.partyViews) if (!v.want) v.label.visible = v.plate.visible = false;
+      // The token discs on screen too: a label that would sit on another token hides.
+      const discs: { o: unknown; x: number; y: number; w: number; h: number }[] = [];
+      for (const v of this.tokenViews.values()) {
+        if (!v.c.visible) continue;
+        const half = v.pinned ? pinPx / 2 : (Math.max(0.5, v.tok?.size ?? 1) * pxPerSq) / 2;
+        discs.push({ o: v, x: v.c.x - half, y: v.c.y - half, w: half * 2, h: half * 2 });
+      }
+      for (const pv of this.partyViews) if (pv.c.visible) discs.push({ o: pv, x: pv.c.x - pinPx / 2, y: pv.c.y - pinPx / 2, w: pinPx, h: pinPx });
+      const over = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
       vs.sort((a, b) => Number(b.sel) - Number(a.sel) || Number(b.pc) - Number(a.pc));
       const placed: { x: number; y: number; w: number; h: number }[] = [];
       for (const v of vs) {
@@ -369,9 +423,10 @@ export class PlayLayer {
         const w = l.width;
         const h = l.height;
         const box = { x: l.x - w / 2, y: l.y, w, h };
-        const hit = placed.some((b) => box.x < b.x + b.w && b.x < box.x + box.w && box.y < b.y + b.h && b.y < box.y + box.h);
+        const hit = placed.some((b) => over(box, b)) || (!v.sel && discs.some((d) => d.o !== v && over(box, d)));
         l.visible = !hit;
         if (!hit) placed.push(box);
+        this.drawPlate(v, 'pinned' in v ? v.pinned : true);
       }
     }
 
@@ -526,16 +581,18 @@ export class PlayLayer {
     const top = new Graphics();
     const count = new Text({ text: '', style: countStyle, anchor: 0.5, resolution: 2 });
     c.addChild(g, face, top, count);
-    const label = new Text({ text: '', style: labelStyle, anchor: { x: 0.5, y: 0 }, resolution: 2 });
+    const label = new Text({ text: '', style: plateStyle, anchor: { x: 0.5, y: 0 }, resolution: 2 });
+    const plate = new Graphics();
+    plate.visible = false;
     this.tokens.addChild(c);
-    this.tokenLabels.addChild(label);
-    pv = { c, g, face, top, count, label, key: '', ids: [], inside: false, want: false, sel: false, pc: true };
+    this.tokenLabels.addChild(plate, label);
+    pv = { c, g, face, top, count, label, plate, pw: 0, ph: 0, key: 0, ids: [], inside: false, want: false, sel: false, pc: true };
     this.partyViews[k] = pv;
     return pv;
   }
 
   /** A party pin: the first PC's look on a pin, how many in a badge, their names below. */
-  private drawParty(pv: PartyView, first: TokenView, members: TokenView[], inside: boolean, sel: boolean) {
+  private drawParty(pv: PartyView, first: TokenView, members: TokenView[], inside: boolean, sel: boolean, fol: boolean) {
     const t = first.tok;
     const { g, top } = pv;
     g.clear();
@@ -559,13 +616,15 @@ export class PlayLayer {
     }
     top.circle(0, 0, r).stroke({ width: 4, color: 0xf5ecd6 });
     if (sel) top.circle(0, 0, r + 10).stroke({ width: 5, color: SELECT });
-    if (inside) doorMark(top, r, 1);
-    // How many: a badge at the top right.
+    if (fol) ring(top, r, TPX / (PIN * this.tableScale), false);
+    if (inside) doorMark(top, r);
+    // How many: a badge at the top right (a pin is small: at least 9 px across x table scale).
     const [bx, by] = [r * 0.78, -r * 0.78];
-    top.circle(bx, by, 18).fill(0xb3261e).stroke({ width: 3, color: 0xf5ecd6 });
+    top.circle(bx, by, 26).fill(0xb3261e).stroke({ width: 4, color: INK });
     pv.count.text = String(members.length);
     pv.count.position.set(bx, by);
-    const names = members.map((m) => m.tok?.name ?? '').join(', ');
+    const who = members.map((m) => m.tok?.name ?? '');
+    const names = who.length <= 3 ? who.join(', ') : `${who[0]} +${who.length - 1}`;
     pv.label.text = names.length > 28 ? `${names.slice(0, 27).trimEnd()}…` : names;
   }
 
@@ -578,6 +637,30 @@ export class PlayLayer {
     const x = r.left + v.c.x;
     const y = r.top + v.c.y;
     return [x - half, y - half, x + half, y + half];
+  }
+
+  /** The label's cream plate behind a pin's name (redrawn only when its size changes). */
+  private drawPlate(v: { plate: Graphics; label: Text; pw: number; ph: number }, on: boolean) {
+    const l = v.label;
+    v.plate.visible = on && l.visible;
+    if (!v.plate.visible) return;
+    const ts = this.tableScale;
+    const [w, h] = [Math.ceil(l.width + 10 * ts), Math.ceil(l.height + 2 * ts)];
+    if (w !== v.pw || h !== v.ph) {
+      [v.pw, v.ph] = [w, h];
+      v.plate.clear().roundRect(-w / 2, 0, w, h, 4 * ts).fill(0xf5ecd6).stroke({ width: 2 * ts, color: INK });
+    }
+    v.plate.position.set(l.x, l.y - ts);
+  }
+
+  /** The follow ring of a token (players' window), drawn to be 6 px x table scale on screen. */
+  private drawRing(v: TokenView, t: Token) {
+    v.ring.clear();
+    v.ring.visible = v.fol;
+    if (!v.fol) return;
+    const side = Math.max(0.5, t.size);
+    const r = (side * TPX) / 2 - (side < 1 ? 2 : 4);
+    ring(v.ring, r, 1 / Math.max(0.02, v.c.scale.x), t.kind === 'character' && roleOf(t) === 'object');
   }
 
   private drawToken(v: TokenView, t: Token, player: boolean) {
@@ -597,7 +680,7 @@ export class PlayLayer {
     // A PC's pin: its point below, and a door on it while it is inside somewhere.
     if (t.kind === 'character' && roleOf(t) === 'pc') {
       pinPoint(v.pin, r, PIN_TIP * side * TPX, t.color);
-      doorMark(v.door, r, side);
+      doorMark(v.door, r);
     }
     if (t.kind === 'light') {
       g.circle(0, 0, r * 0.75).fill({ color: 0xffb02e, alpha: 0.35 });
@@ -642,12 +725,6 @@ export class PlayLayer {
     }
     if (t.hidden && !player) body(r + 6).stroke({ width: 3, color: 0x9333ea, alpha: 0.9 });
     if (v.key.includes('|sel|')) body(r + 10).stroke({ width: 5, color: SELECT });
-    // The one the players' view follows (players' window): a cream ring inked both sides.
-    if (v.fol) {
-      const k = this.tableScale;
-      body(r + 4 + 5 * k).stroke({ width: 8 * k, color: INK });
-      body(r + 4 + 5 * k).stroke({ width: 4.5 * k, color: 0xf3dc9b });
-    }
     v.label.text = t.kind === 'light' && player ? '' : t.name;
   }
 
@@ -769,13 +846,14 @@ export class PlayLayer {
 }
 
 /** What a token's drawing depends on. */
-function tokenKey(t: Token, selected: boolean, player: boolean, image: Texture | null, grid: GridSettings, followed = 0): string {
-  return [t.name, t.kind, t.kind === 'character' ? roleOf(t) : '', t.size, t.color, t.hidden ? 1 : 0, t.vision ? 1 : 0, t.light ?? 0, image ? t.image : '', grid.scale, selected && !player ? 'sel' : '', followed ? `fol${followed}` : ''].join('|');
+function tokenKey(t: Token, selected: boolean, player: boolean, image: Texture | null, grid: GridSettings): string {
+  return [t.name, t.kind, t.kind === 'character' ? roleOf(t) : '', t.size, t.color, t.hidden ? 1 : 0, t.vision ? 1 : 0, t.light ?? 0, image ? t.image : '', grid.scale, selected && !player ? 'sel' : ''].join('|');
 }
 
-/** Pins in single linkage: those whose points are nearer than `near` (world ft) in one party;
- * the parties of two or more, in draw order. */
-function partiesOf(pins: TokenView[], near: number): TokenView[][] {
+/** Pins in single linkage: those whose points are nearer than `near` (world ft) in one party,
+ * and those nearer than 1.2 x `near` that were in one party already (so a party splits a little
+ * later than it merged); the parties of two or more, in draw order. */
+function partiesOf(pins: TokenView[], near: number, seq: () => number): TokenView[][] {
   const root = pins.map((_, i) => i);
   const find = (i: number) => {
     while (root[i] !== i) i = root[i] = root[root[i]];
@@ -783,7 +861,9 @@ function partiesOf(pins: TokenView[], near: number): TokenView[][] {
   };
   for (let i = 0; i < pins.length; i++) {
     for (let j = i + 1; j < pins.length; j++) {
-      if ((pins[i].ax - pins[j].ax) ** 2 + (pins[i].ay - pins[j].ay) ** 2 < near * near) root[find(i)] = find(j);
+      const d = (pins[i].ax - pins[j].ax) ** 2 + (pins[i].ay - pins[j].ay) ** 2;
+      const together = pins[i].pg !== 0 && pins[i].pg === pins[j].pg;
+      if (d < near * near || (together && d < near * near * 1.44)) root[find(i)] = find(j);
     }
   }
   const groups = new Map<number, TokenView[]>();
@@ -793,7 +873,13 @@ function partiesOf(pins: TokenView[], near: number): TokenView[][] {
     if (g) g.push(v);
     else groups.set(k, [v]);
   });
-  return [...groups.values()].filter((g) => g.length > 1);
+  for (const v of pins) v.pg = 0;
+  const parties = [...groups.values()].filter((g) => g.length > 1);
+  for (const g of parties) {
+    const id = seq();
+    for (const v of g) v.pg = id;
+  }
+  return parties;
 }
 
 /** A pin's point: from under a body of radius `r` down to `tip` (local units). */
@@ -801,18 +887,27 @@ function pinPoint(g: Graphics, r: number, tip: number, color: number) {
   g.moveTo(-r * 0.5, r * 0.6).lineTo(0, tip).lineTo(r * 0.5, r * 0.6).closePath().fill(color).stroke({ width: 4, color: INK, join: 'round' });
 }
 
-/** A small door at a pin's lower right: the PC is inside somewhere. */
-function doorMark(g: Graphics, r: number, side: number) {
-  const k = side;
+/** The ring of what the players' view follows: warm gold, 6 px x table scale, ink inside and out
+ * (`u`: local units per screen px). */
+function ring(g: Graphics, r: number, u: number, square: boolean) {
+  const rr = r + 4 + 3 * u;
+  const draw = (width: number, color: number) => (square ? g.roundRect(-rr, -rr, rr * 2, rr * 2, rr * 0.3) : g.circle(0, 0, rr)).stroke({ width: width * u, color });
+  draw(10, INK);
+  draw(6, 0xe0b040);
+}
+
+/** A small arched door at a pin's lower right (about 40% of the pin across): the PC is inside
+ * somewhere. */
+function doorMark(g: Graphics, r: number) {
   const [bx, by] = [r * 0.74, r * 0.62];
-  g.circle(bx, by, 17 * k).fill(0xf5ecd6).stroke({ width: 3 * k, color: INK });
-  g.moveTo(bx - 7 * k, by + 10 * k)
-    .lineTo(bx - 7 * k, by - 3 * k)
-    .arc(bx, by - 3 * k, 7 * k, Math.PI, 0)
-    .lineTo(bx + 7 * k, by + 10 * k)
+  const [hw, h] = [r * 0.28, r * 0.4];
+  g.moveTo(bx - hw, by + h)
+    .lineTo(bx - hw, by - h + hw)
+    .arc(bx, by - h + hw, hw, Math.PI, 0)
+    .lineTo(bx + hw, by + h)
     .closePath()
-    .fill(0x8a5a2b)
-    .stroke({ width: 2.5 * k, color: INK, join: 'round' });
+    .fill(0xf5ecd6)
+    .stroke({ width: 5, color: INK, join: 'round' });
 }
 
 /** A name's initials (two at most). */
@@ -850,6 +945,7 @@ function labelSpot(sh: Shape): [number, number] {
 /** The screen-space label styles at a table scale (labels, shape sizes, the ruler's text). */
 function scaleStyles(ts: number) {
   labelStyle.fontSize = 13 * ts;
+  plateStyle.fontSize = 13 * ts;
   labelStyle.stroke = { color: '#1d1a14', width: 3 * ts, join: 'round' };
   shapeStyle.fontSize = 13 * ts;
   shapeStyle.stroke = { color: '#1d1a14', width: 3 * ts, join: 'round' };

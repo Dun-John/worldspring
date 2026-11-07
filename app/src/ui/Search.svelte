@@ -37,8 +37,10 @@
     tokens?: () => Record<string, Token>;
     /** Go to a token: its location and floor, the camera on it, selected. */
     onToken?: (id: string) => void;
+    /** The level names of a building or site (the floor picker's), null if unknown. */
+    levelNames?: (id: string) => Promise<string[] | null>;
   }
-  let { overlay, renames, searchBuildings, viewRect, whereName, inTown, drawnOf, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote, tokens, onToken }: Props = $props();
+  let { overlay, renames, searchBuildings, viewRect, whereName, inTown, drawnOf, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote, tokens, onToken, levelNames }: Props = $props();
 
   let q = $state('');
   let open = $state(false);
@@ -88,7 +90,28 @@
     if (loc === 'surface') return 'On the map';
     if (/^w:\d+$/.test(loc)) return 'Sewers';
     const { interior, level } = parseLoc(loc);
-    return interior ? `${placeName(interior)} · level ${level + 1}` : 'On the map';
+    if (interior) askLevels(interior);
+    if (!interior) return 'On the map';
+    const lv = levels[interior];
+    const name = lv ? lv[level] : level === 0 ? 'ground floor' : undefined;
+    return `${placeName(interior)} · ${name ?? (level === 0 ? 'ground floor' : `level ${level + 1}`)}`;
+  }
+
+  // Level names per place, looked up once (while the rows are derived, set when they come back).
+  let levels = $state<Record<string, string[] | undefined>>({});
+  let levelAsked = new Set<string>();
+  let levelsOf: unknown = null;
+  $effect.pre(() => {
+    if (levelsOf === levelNames) return;
+    [levelsOf, levels, levelAsked] = [levelNames, {}, new Set()];
+  });
+  function askLevels(id: string) {
+    if (!levelNames || levelAsked.has(id)) return;
+    levelAsked.add(id);
+    const ask = levelNames;
+    void ask(id).then((n) => {
+      if (levelsOf === ask && n) levels[id] = n;
+    });
   }
 
   const needle = $derived(q.trim().toLowerCase());
