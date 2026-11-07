@@ -268,6 +268,10 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     }
     if (o + n * 2 <= buf.byteLength) raised = new Uint8Array(buf.slice(o, o + n * 2));
     o += n * 2;
+    const nField = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
+    o += 4;
+    if (nField === n && o + n <= buf.byteLength) field = new Uint8Array(buf.slice(o, o + n));
+    if (nField <= n) o += nField;
     // Uploaded sprites (see `battlemap::pack`).
     const nSprites = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
     o += 4;
@@ -281,9 +285,6 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
       o += 12 + len;
       sprites.push({ asset, cover, radius, height_ft, blocks_move: !!(flags & 1), blocks_sight: !!(flags & 2), difficult: !!(flags & 4) });
     }
-    const nField = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
-    o += 4;
-    if (nField === n && o + n <= buf.byteLength) field = new Uint8Array(buf.slice(o, o + n));
   }
   const hdata = new Uint16Array(nh * 4);
   for (let k = 0; k < nh; k++) {

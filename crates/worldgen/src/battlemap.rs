@@ -5743,6 +5743,9 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
         out.push(lift.round().clamp(0.0, 255.0) as u8);
         out.push(c.urban[k]);
     }
+    // v63 countryside: the field squares' furrows, before the sprite table, which ends the payload (`Chunk::field`): count u32 (0 or SQ²), bytes.
+    out.extend_from_slice(&(c.field.len() as u32).to_le_bytes());
+    out.extend_from_slice(&c.field);
     out.extend_from_slice(&(c.sprites.len() as u32).to_le_bytes());
     for sp in &c.sprites {
         let i = &sp.info;
@@ -5752,9 +5755,6 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
         out.extend_from_slice(&i.height_ft.to_le_bytes());
         out.extend_from_slice(&sp.asset.as_bytes()[..sp.asset.len().min(255)]);
     }
-    // v63 countryside: the field squares' furrows (`Chunk::field`): count u32 (0 or SQ²), bytes.
-    out.extend_from_slice(&(c.field.len() as u32).to_le_bytes());
-    out.extend_from_slice(&c.field);
     out
 }
 
