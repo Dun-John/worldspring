@@ -33,6 +33,8 @@ mod soft_relief;
 // v63 castles: a castle's kitchen garden and its smithy's anvil.
 mod kitchen;
 mod moat;
+// v63 countryside: where haystacks stand (stack yards, by field gates).
+mod farm;
 
 pub const SQ: usize = TILE_N / 2;
 /// Squares per edge including a one-square halo ring (for seamless rendering gradients).
@@ -2640,7 +2642,16 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             chunk.surface[k] = Surface::Rock;
         }
     }
-    place_objects(&mut chunk, &biome, &slope, &road_near, &yard, seed, gsx, gsy);
+    // v63 countryside: a croft's or a field's squares (halo), which the land's scatter keeps off; and
+    // a verge by the roads and streets (two squares) the land's trees and boulders keep off.
+    let farm_h: Vec<bool> = urb_h.iter().map(|&u| matches!(u, URBAN_FIELD | URBAN_CROFT)).collect();
+    let verge: Vec<bool> = (0..RN * RN)
+        .map(|h| {
+            let (i, j) = ((h % RN) as i64, (h / RN) as i64);
+            (-2..=2i64).any(|dy| (-2..=2i64).any(|dx| (i + dx) >= 0 && (j + dy) >= 0 && (i + dx) < RN as i64 && (j + dy) < RN as i64 && road_near[(j + dy) as usize * RN + (i + dx) as usize]))
+        })
+        .collect();
+    place_objects(&mut chunk, &biome, &slope, &road_near, &yard, &Keep { farm: &farm_h, verge: &verge }, seed, gsx, gsy);
     // The land's scatter in a bailey gives way to what the bailey is dressed with (every prop of
     // the layout, not only this chunk's, so a seam cuts nothing differently).
     if !yard_ok.is_empty() {
@@ -2667,6 +2678,27 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     };
     place_town_props(&mut chunk, seed, gsx, gsy, &rowless);
     crate::town::rural::objects(&rural, ox, oy, &mut chunk);
+    // v63 countryside: haystacks in stack yards and by field gates (`farm`), each in the chunk holding
+    // its middle, on its field's or croft's open ground, off what stands there already.
+    {
+        let mut hay: Vec<([f64; 2], f32, f32)> = Vec::new();
+        for l in &rural_ls {
+            farm::stacks(l, [ox, oy, ox + chunk_ft, oy + chunk_ft], &mut hay);
+        }
+        for (p, rot, scale) in hay {
+            let (x, y) = (((p[0] - ox) / SQUARE_FT) as f32, ((p[1] - oy) / SQUARE_FT) as f32);
+            let k = (y as usize).min(SQ - 1) * SQ + (x as usize).min(SQ - 1);
+            let o = Object { kind: Kind::Haystack, variant: (hash2(seed, (p[0] * 4.0) as i64, (p[1] * 4.0) as i64) >> 40) as u8 & 7, x, y, rot, scale, sprite: 0, turned: false };
+            let r = info(Kind::Haystack as u16).radius * scale;
+            let free = !chunk.objects.iter().any(|q| {
+                let rq = chunk.info(q).radius * q.scale;
+                (q.x - x) * (q.x - x) + (q.y - y) * (q.y - y) < (r + rq) * (r + rq)
+            });
+            if matches!(chunk.urban[k], URBAN_FIELD | URBAN_CROFT) && placeable(&chunk, k) && clear_of_roads(&chunk, k) && clear_of_buildings(&chunk, &o) && free {
+                chunk.objects.push(o);
+            }
+        }
+    }
     // Ruins: broken wall segments along the old outlines, rubble inside. Keyed by world
     // position so a ruin across a chunk border breaks the same way in both chunks.
     let wseed = hash2(seed, 0x2a11, 5);
@@ -3238,7 +3270,16 @@ struct Yard<'a> {
     oy: f64,
 }
 
-fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[bool], yard: &Yard, seed: u64, gsx: i64, gsy: i64) {
+/// v63 countryside: what the land's scatter keeps off besides (`place_objects`): a croft's or a
+/// field's squares (`HS`² halo grid; their own trees are theirs), and for trees and boulders a verge
+/// two squares wide by the roads and streets (`RN`² grid as `road_near`).
+struct Keep<'a> {
+    farm: &'a [bool],
+    verge: &'a [bool],
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[bool], yard: &Yard, keep: &Keep, seed: u64, gsx: i64, gsy: i64) {
     let grove_seed = hash2(seed, 0x6007, 2);
     // Each (biome, kind) pair has its own jittered global lattice; objects belong to the
     // chunk that contains them, so placement is identical whichever chunk is asked.
@@ -3263,6 +3304,8 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[boo
         let (lx0, ly0) = (crate::core::floor(gsx as f64 / cell) as i64 - 1, crate::core::floor(gsy as f64 / cell) as i64 - 1);
         let (lx1, ly1) = (crate::core::floor((gsx + SQ as i64) as f64 / cell) as i64 + 1, crate::core::floor((gsy + SQ as i64) as f64 / cell) as i64 + 1);
         let is_tree = info(kind as u16).height_ft >= 15.0 && info(kind as u16).blocks_move;
+        let tall = info(kind as u16).height_ft >= 5.0;
+        let roads = if tall { keep.verge } else { road_near };
         for ly in ly0..=ly1 {
             for lx in lx0..=lx1 {
                 let h = hash2(lat_seed, lx, ly);
@@ -3301,12 +3344,16 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[boo
                         if x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && c.building[y as usize * SQ + x as usize] != 0 {
                             return true;
                         }
-                        if x < -2 || y < -2 || x >= SQ as i64 + 2 || y >= SQ as i64 + 2 || !road_near[(y + 2) as usize * RN + (x + 2) as usize] {
-                            return false;
-                        }
                         let ex = (x as f64 - ox).max(ox - (x + 1) as f64).max(0.0);
                         let ey = (y as f64 - oy).max(oy - (y + 1) as f64).max(0.0);
-                        ex * ex + ey * ey < 1.21 * r * r
+                        let within = ex * ex + ey * ey < 1.21 * r * r;
+                        if within && x >= -1 && y >= -1 && x <= SQ as i64 && y <= SQ as i64 && keep.farm.get((y + 1) as usize * HS + (x + 1) as usize).is_some_and(|&f| f) {
+                            return true;
+                        }
+                        if x < -2 || y < -2 || x >= SQ as i64 + 2 || y >= SQ as i64 + 2 || !roads[(y + 2) as usize * RN + (x + 2) as usize] {
+                            return false;
+                        }
+                        within
                     })
                 });
                 if blocked {
@@ -3608,12 +3655,14 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
     let yard_major = |cells: &[usize]| !bailey.is_empty() && cells.iter().filter(|&&k| yard(k) != 0).count() * 2 > cells.len();
     let cover_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| match in_park(k) {
         _ if yard(k) != 0 => yard_kind(c, k, yard(k) == 2, biome[k], false, rng),
+        0 if c.urban[k] == URBAN_FIELD => field_cover(c, k, biome[k], false, rng),
         0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
         0 => fallback_cover(biome[k], rng),
         p => park_cover(p & 3 == 2, biome[k], false, rng),
     };
     let feature_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| match in_park(k) {
         _ if yard(k) != 0 => yard_kind(c, k, yard(k) == 2, biome[k], true, rng),
+        0 if c.urban[k] == URBAN_FIELD => field_cover(c, k, biome[k], true, rng),
         0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
         0 => fallback_feature(biome[k], rng),
         p => park_cover(p & 3 == 2, biome[k], true, rng),
@@ -3687,8 +3736,9 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
     }
 
 
-    // Cover: every 8x8 cell has at least one cover object (but open squares: there the windows and
-    // the gap below see to it, so crates aren't strewn one to a cell over the paving).
+    // Cover: every 8x8 cell has at least one cover object (but open squares and fields: there the
+    // windows and the gap below see to it, so crates aren't strewn one to a cell over the paving, nor
+    // bushes over a field).
     for cy in 0..SQ / COVER_CELL {
         for cx in 0..SQ / COVER_CELL {
             let (x0, y0) = ((cx * COVER_CELL) as f32, (cy * COVER_CELL) as f32);
@@ -3699,7 +3749,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
                 continue;
             }
             let all: Vec<usize> = (0..COVER_CELL * COVER_CELL).map(square).filter(|&k| dry(c, k)).collect();
-            if all.iter().filter(|&&k| c.urban[k] == URBAN_PLAZA).count() * 2 > all.len() {
+            if all.iter().filter(|&&k| matches!(c.urban[k], URBAN_PLAZA | URBAN_FIELD)).count() * 2 > all.len() {
                 continue;
             }
             let cells = off_road_first(c, all, keep_off);
@@ -5579,21 +5629,35 @@ fn within(k: usize, r: i64, of: impl Fn(usize) -> bool) -> bool {
     })
 }
 
-/// Cover in town (streets, plazas) or on fields (a lawn takes the biome's own).
+/// Cover in town (streets, plazas, crofts; a lawn takes the biome's own, a field `field_cover`).
 fn town_cover(urban: u8, rng: &mut Pcg32) -> Kind {
     let opts: &[Kind] = match urban {
-        URBAN_FIELD => &[Kind::Haystack],
         URBAN_PLAZA => &[Kind::Crate, Kind::Barrel, Kind::Cart],
         URBAN_GRAVEYARD => &[Kind::Headstone],
         URBAN_RUIN => &[Kind::RuinWall, Kind::RockPile],
-        URBAN_CROFT => &[Kind::Firewood, Kind::Haystack, Kind::Cart, Kind::Barrel],
+        URBAN_CROFT => &[Kind::Firewood, Kind::Cart, Kind::Barrel, Kind::WaterTrough],
         _ => &[Kind::Crate, Kind::Barrel, Kind::Cart],
     };
     opts[rng.below(opts.len() as u32) as usize]
 }
 
-/// Street life: barrels and crates against walls, haystacks in fields (market stalls stand in
-/// blocks: `market_blocks`).
+/// What the guarantee sets out on a field (v63 countryside; never a haystack, `farm` places those):
+/// for cover thorn bushes and a clearance cairn, on pasture now and then a lone field tree or a
+/// trough; to see, wildflowers and tall grass.
+fn field_cover(c: &Chunk, k: usize, b: Biome, feature: bool, rng: &mut Pcg32) -> Kind {
+    let (trees, shrubs, _, _) = greenery(b);
+    let shrub = shrubs.first().copied().unwrap_or(Kind::Bush);
+    let tree = trees.first().copied().unwrap_or(Kind::TreeDeciduous);
+    let opts: Vec<Kind> = match (c.surface[k] == Surface::Pasture, feature) {
+        (true, false) => vec![shrub, shrub, shrub, tree, shrub, shrub, shrub, Kind::WaterTrough],
+        (false, false) => vec![shrub, shrub, Kind::RockPile],
+        (_, true) => vec![Kind::Flowers, Kind::TallGrass],
+    };
+    opts[rng.below(opts.len() as u32) as usize]
+}
+
+/// Street life: barrels and crates against walls (market stalls stand in blocks: `market_blocks`;
+/// haystacks in stack yards and by field gates: `farm`).
 /// Keyed by global square so the result does not depend on which chunk asks.
 /// `rowless`: graveyard squares whose headstones are laid otherwise (empty: none).
 fn place_town_props(c: &mut Chunk, seed: u64, gsx: i64, gsy: i64, rowless: &[bool]) {
@@ -5614,7 +5678,6 @@ fn place_town_props(c: &mut Chunk, seed: u64, gsx: i64, gsy: i64, rowless: &[boo
             URBAN_STREET if by_wall && r < 0.035 => Some(if (h >> 20) & 1 == 0 { Kind::Barrel } else { Kind::Crate }),
             // Headstones in rows (every other square, most of them).
             URBAN_GRAVEYARD if (gsx + i as i64) % 2 == 0 && (gsy + j as i64) % 3 == 0 && r < 0.8 && !rowless.get(k).is_some_and(|&x| x) => Some(Kind::Headstone),
-            URBAN_FIELD if r < 0.004 => Some(Kind::Haystack),
             _ => None,
         };
         if let Some(kind) = kind {
@@ -5646,8 +5709,9 @@ fn push_at(c: &mut Chunk, kind: Kind, k: usize, rng: &mut Pcg32) -> bool {
         o.y = (k / SQ) as f32 + 0.5;
         o.scale = 0.85;
         if !fits(c, &o) {
-            // (On a park's lawn or gravel, a bush; else a crate, or in a lane one square wide, barrels.)
-            let park = matches!(c.urban[k], URBAN_PARK | URBAN_PATH);
+            // (On a park's lawn or gravel or on a field, a bush; else a crate, or in a lane one square
+            // wide, barrels.)
+            let park = matches!(c.urban[k], URBAN_PARK | URBAN_PATH | URBAN_FIELD);
             let tries: &[Kind] = if park { &[Kind::Bush] } else if tall { &[Kind::Crate, Kind::Barrel] } else { &[Kind::Barrel] };
             let Some(&small) = tries.iter().find(|&&kd| kd != kind && off_buildings(c, &Object { kind: kd, ..o })) else { return false };
             o.kind = small;

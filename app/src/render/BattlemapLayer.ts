@@ -819,8 +819,8 @@ export class BattlemapLayer {
       // (Gravel here, or park ground by the edge, whose neighbour's gravel the halo may hold.)
       uGravel: { value: c.surface.includes(20) || parkEdge(c.raised) ? 1 : 0, type: 'f32' },
       uStone: { value: stoneTone(c.stone), type: 'vec3<f32>' },
-      // (Paving here: its edges with the ground drawn soft.)
-      uPaved: { value: c.surface.includes(14) ? 1 : 0, type: 'f32' },
+      // (Paving here, or a field: their edges with the ground drawn soft, a field's crisp.)
+      uPaved: { value: c.surface.includes(14) || c.surface.includes(18) ? 1 : 0, type: 'f32' },
     });
     const ground = new Mesh({
       geometry: this.quad,
