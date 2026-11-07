@@ -297,8 +297,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
         }
         for l in crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size]) {
-            for f in &l.fields {
-                push(f, 2);
+            for (i, f) in l.fields.iter().enumerate() {
+                push(f, l.field_info.get(i).map_or(2, crate::town::fields::plan_attr));
             }
             crate::town::village::plan_polys(&l, &mut push);
             // A green (a village's or a town's) and a temple's close are the ground round them, as

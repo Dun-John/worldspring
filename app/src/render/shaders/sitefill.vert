@@ -4,10 +4,13 @@
 in vec2 aPos;
 in vec4 aColor;
 in vec3 aEdge;
+// v63 countryside: a field's furrow coordinate (ft) and style (0 not a field).
+in vec2 aField;
 
 out vec4 vColor;
 out vec2 vTile;
 out vec3 vEdge;
+out vec2 vField;
 
 uniform mat3 uProjectionMatrix;
 uniform mat3 uWorldTransformMatrix;
@@ -19,5 +22,6 @@ void main() {
     vColor = aColor;
     vTile = aPos;
     vEdge = aEdge;
+    vField = aField;
     gl_Position = vec4((uProjectionMatrix * vec3(p, 1.0)).xy, 0.0, 1.0);
 }

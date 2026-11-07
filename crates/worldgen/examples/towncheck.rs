@@ -3880,6 +3880,12 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
         for k in ["Great", "Hall", "L", "T", "Shell", "Plain"] {
             text = text.replace(&format!(", keep: Some({k}) }}"), " }");
         }
+        // (Nor the fields' info, v63: their furrows, use and bounds.)
+        if let Some(a) = text.find(", field_info: [") {
+            if let Some(b) = text[a..].find(']') {
+                text.replace_range(a..a + b + 1, "");
+            }
+        }
         // (Nor the castle's and the market's patches, recorded later.)
         if let Some(a) = text.find(", castle_patch: ")
             && let Some(b) = text[a..].find(", bbox: ")

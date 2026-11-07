@@ -17,7 +17,7 @@ import {
   UniformGroup,
   type Renderer,
 } from 'pixi.js';
-import { fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
+import { FIELD, fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
@@ -143,6 +143,8 @@ const SURFACES = [
   'field (crops)',
   'stairs',
   'gravel path',
+  // v63 countryside
+  'pasture',
 ];
 /** Cobbles' tints by culture (`ground.frag` `uStone`, times the cobble grey; `Layout::culture`):
  * north cool blue-grey granite, west warm grey-buff, south warm honey limestone, dry pale ochre
@@ -382,7 +384,7 @@ export class BattlemapLayer {
     if (!c) return false;
     const k = Math.floor((wy - cy * ts) / SQUARE_FT) * SQ + Math.floor((wx - cx * ts) / SQUARE_FT);
     if (k < 0 || k >= SQ * SQ) return false;
-    return c.data[k * 4 + 3] !== 0 || (!!c.raised && c.raised[k * 2] > 0 && c.raised[k * 2 + 1] === 8);
+    return (c.data[k * 4 + 3] !== 0 && c.surface[k] !== FIELD) || (!!c.raised && c.raised[k * 2] > 0 && c.raised[k * 2 + 1] === 8);
   }
 
   /** The object whose footprint holds a world position (the nearest centre), if its chunk is

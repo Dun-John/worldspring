@@ -475,6 +475,7 @@ export class TileLayer {
         aPos: { buffer: g.pos, format: 'float32x2' },
         aColor: { buffer: g.color, format: 'float32x4' },
         aEdge: { buffer: g.edge, format: 'float32x3' },
+        aField: { buffer: g.field, format: 'float32x2' },
       },
       indexBuffer: g.index,
     });

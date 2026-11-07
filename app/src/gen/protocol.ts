@@ -835,8 +835,10 @@ export interface TileSitePolys {
 export interface SiteGeometry {
   /** Polygons, one vertex per triangle corner; `edge` per vertex: the corner's barycentric
    * coordinate for each triangle edge that is an outlined polygon's real edge, 1 for an inner
-   * diagonal or an unoutlined polygon (the fill shader inks distance-to-edge < ~1 px). */
-  fill: { pos: Float32Array; color: Float32Array; edge: Float32Array; index: Uint32Array } | null;
+   * diagonal or an unoutlined polygon (the fill shader inks distance-to-edge < ~1 px); `field` per
+   * vertex (v63 countryside): a field's furrow coordinate (ft across its furrows) and its style (0 not a
+   * field, else 1 + use + 4 × bound + 16 × strips: `fieldStyle`). */
+  fill: { pos: Float32Array; color: Float32Array; edge: Float32Array; field: Float32Array; index: Uint32Array } | null;
   ink: RiverGeometry | null;
 }
 
@@ -857,7 +859,28 @@ const WARD_RGB: [number, number, number][] = [
   [0.6, 0.62, 0.5], // park
 ];
 
-export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): SiteGeometry | null {
+// v63 countryside: a field's fill by its use (arable, pasture, fallow, orchard) and shade (`town::fields`).
+const FIELD_RGB: [number, number, number][][] = [
+  [[0.86, 0.77, 0.47], [0.8, 0.74, 0.47], [0.88, 0.81, 0.56], [0.83, 0.7, 0.45]],
+  [[0.6, 0.71, 0.44], [0.55, 0.67, 0.42], [0.64, 0.73, 0.47], [0.58, 0.68, 0.4]],
+  [[0.71, 0.6, 0.45], [0.67, 0.57, 0.43], [0.74, 0.64, 0.49], [0.69, 0.6, 0.47]],
+  [[0.5, 0.63, 0.38], [0.47, 0.6, 0.37], [0.53, 0.65, 0.4], [0.49, 0.62, 0.36]],
+];
+
+/** A field's fill, whether it is inked (hedged or walled) and its shader style (`payload::pack_sites`
+ * attr: angle << 8, use << 16, bound << 18, strips << 20, tone << 21). */
+function fieldStyle(attr: number): { rgb: [number, number, number]; ink: boolean; style: number; nx: number; ny: number } {
+  const angle = (((attr >>> 8) & 255) / 256) * Math.PI;
+  const use = (attr >>> 16) & 3;
+  const bound = (attr >>> 18) & 3;
+  const strips = (attr >>> 20) & 1;
+  const tone = (attr >>> 21) & 7;
+  const base = FIELD_RGB[use][tone & 3];
+  const shade = 0.96 + 0.025 * (tone >> 2) + 0.02 * (tone & 1);
+  return { rgb: [base[0] * shade, base[1] * shade, base[2] * shade], ink: bound !== 0, style: 1 + use + 4 * bound + 16 * strips, nx: -Math.sin(angle), ny: Math.cos(angle) };
+}
+
+export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, tileFt = 0): SiteGeometry | null {
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
@@ -868,6 +891,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
     const pos = new Float32Array(tris * 6);
     const color = new Float32Array(tris * 12);
     const edge = new Float32Array(tris * 9);
+    const field = new Float32Array(tris * 6);
     const index = new Uint32Array(tris * 3);
     let v = 0;
     for (let i = 0; i < n; i++) {
@@ -881,12 +905,12 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       const material = (attr >> 20) & 15;
       let rgb: [number, number, number];
       let a = 1;
+      const fs = kind === 2 ? fieldStyle(attr) : null;
       if (kind === 1) rgb = [0.86, 0.82, 0.71];
-      else if (kind === 2) {
-        // Fields: alternate crop tints.
-        const k = i % 3;
-        rgb = k === 0 ? [0.78, 0.77, 0.55] : k === 1 ? [0.72, 0.74, 0.5] : [0.8, 0.74, 0.52];
-        a = 0.55;
+      else if (fs) {
+        // Fields (v63 countryside): by use and shade, furrows and strips drawn by the shader.
+        rgb = fs.rgb;
+        a = 0.85;
       } else if (kind === 3) rgb = [0.62, 0.56, 0.5];
       else if (kind === 4) {
         // Ruin: roofless shell, pale rubble.
@@ -954,7 +978,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         rgb = hasFunc ? [base[0] * 0.86, base[1] * 0.74, base[2] * 0.66] : [base[0] * shade, base[1] * shade, base[2] * shade];
       }
       // (A belfry's shadow not inked.)
-      const ink = outlined(kind) && ((attr >>> 25) & 15) !== 10;
+      const ink = fs ? fs.ink : outlined(kind) && ((attr >>> 25) & 15) !== 10;
       // Fan triangles (0, k, k+1): the edge k..k+1 is always the polygon's; 0..1 only for the
       // first triangle, k+1..0 only for the last.
       for (let k = 1; k + 1 < m; k++) {
@@ -966,12 +990,16 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
           pos[v * 2 + 1] = polys.verts[corners[c] * 2 + 1];
           color.set([rgb[0], rgb[1], rgb[2], a], v * 4);
           for (let e = 0; e < 3; e++) edge[v * 3 + e] = real[e] ? (c === e ? 1 : 0) : 1;
+          if (fs) {
+            field[v * 2] = (pos[v * 2] * fs.nx + pos[v * 2 + 1] * fs.ny) * tileFt;
+            field[v * 2 + 1] = fs.style;
+          }
           index[v] = v;
           v++;
         }
       }
     }
-    fill = { pos, color, edge, index };
+    fill = { pos, color, edge, field, index };
   }
   // Ink: walls and towers from the line section (building outlines are inked by the fill).
   const lineVerts = lines.verts.length / 4;

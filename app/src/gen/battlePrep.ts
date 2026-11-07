@@ -202,6 +202,8 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
   const shapes: Shape[] = [];
   const sprites: ChunkSprite[] = [];
   let raised: Uint8Array | null = null;
+  // v63 countryside: field squares' furrows (`battlemap::Chunk::field`), if the chunk has fields.
+  let field: Uint8Array | null = null;
   {
     let o = objOffset + nObj * 20 + nh + n * 2;
     const count = dv.getUint32(o, true);
@@ -279,6 +281,9 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
       o += 12 + len;
       sprites.push({ asset, cover, radius, height_ft, blocks_move: !!(flags & 1), blocks_sight: !!(flags & 2), difficult: !!(flags & 4) });
     }
+    const nField = o + 4 <= buf.byteLength ? dv.getUint32(o, true) : 0;
+    o += 4;
+    if (nField === n && o + n <= buf.byteLength) field = new Uint8Array(buf.slice(o, o + n));
   }
   const hdata = new Uint16Array(nh * 4);
   for (let k = 0; k < nh; k++) {
@@ -295,8 +300,9 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
     // (Bit 64: a plaza or market square, `URBAN_PLAZA`, whose cobbles the ground lays in fans.)
     data[k * 4 + 1] = edges[k] | (raised && raised[k * 2 + 1] === 3 ? 64 : 0);
     data[k * 4 + 2] = tier[k] & 255;
-    // Building id (1..255, wrapping) for per-building roof colour and wall edges.
-    data[k * 4 + 3] = building[k] ? 1 + ((building[k] - 1) % 255) : 0;
+    // Building id (1..255, wrapping) for per-building roof colour and wall edges; on a field's square
+    // (never a building's) its furrows (v63 countryside, `town::fields::square_byte`).
+    data[k * 4 + 3] = building[k] ? 1 + ((building[k] - 1) % 255) : field && surface[k] === FIELD ? field[k] : 0;
   }
 
   // Objects: short things first, then by y (canopies overlap downward).
@@ -342,6 +348,8 @@ export function prepareChunk(buf: ArrayBuffer, cx: number, cy: number, kinds: Ki
 
 /** Surface 17: under a building. */
 const UNDER_BUILDING = 17;
+/** Surface 18: a field (v63 countryside: its squares' 4th data byte is its furrows, not a building). */
+export const FIELD = 18;
 
 /**
  * The surfaces the ground is drawn with: a square under a building, a wall or a tower shows the
@@ -395,7 +403,7 @@ function tacticalFlags(data: Uint8Array, surface: Uint8Array, raised: Uint8Array
   for (let k = 0; k < SQ * SQ; k++) {
     let v = 0;
     if (data[k * 4 + 1] & 16 || (surface[k] >= 10 && surface[k] <= 12)) v |= DIFFICULT;
-    if (data[k * 4 + 3] || (raised && raised[k * 2] > 0 && (raised[k * 2 + 1] === 7 || raised[k * 2 + 1] === 8))) v |= OPAQUE | BLOCKS;
+    if ((data[k * 4 + 3] && surface[k] !== FIELD) || (raised && raised[k * 2] > 0 && (raised[k * 2 + 1] === 7 || raised[k * 2 + 1] === 8))) v |= OPAQUE | BLOCKS;
     f[k] = v;
   }
   for (let o = 0; o < objs.length; o += 6) {

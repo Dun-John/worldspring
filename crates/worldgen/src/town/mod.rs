@@ -25,6 +25,8 @@ pub mod stairs;
 pub mod temple;
 pub mod wards;
 pub mod village;
+// v63 countryside
+pub mod fields;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -207,6 +209,8 @@ pub struct Layout {
     /// Parks: formal gardens and commons, each a block of its own.
     pub parks: Vec<Park>,
     pub fields: Vec<Vec<P>>,
+    /// v63 countryside: what each of `fields` is (furrows, use, bound; `fields::assign`), in step.
+    pub field_info: Vec<fields::FieldInfo>,
     /// Built-up patches (streets are the ground inside these that no building covers).
     pub districts: Vec<Vec<P>>,
     /// Built blocks (ward patches minus their streets): drawn instead of buildings when
@@ -528,6 +532,7 @@ impl Layout {
             plazas: Vec::new(),
             parks: Vec::new(),
             fields: Vec::new(),
+            field_info: Vec::new(),
             districts: Vec::new(),
             blocks: Vec::new(),
             buildings: Vec::new(),
@@ -1797,6 +1802,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         belfry::raise_all(&mut l, Some(&generated));
     }
     round_off(&mut l);
+    fields::assign(&site, s.seed, &mut l);
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);

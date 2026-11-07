@@ -73,6 +73,9 @@ pub enum Surface {
     Stairs,
     /// A park's gravel paths.
     Gravel,
+    // v63 countryside
+    /// Grazing (pasture, an orchard's grass): a field with no crop rows.
+    Pasture = 21,
 }
 
 impl Surface {
@@ -407,6 +410,9 @@ pub struct Chunk {
     /// culture + 1 in the high 8; 0 none): the highest-tier layout near the chunk, the nearest of
     /// those. The ground picks the stone's colour by them.
     pub stone: u32,
+    /// v63 countryside: each field square's furrows (`town::fields::square_byte`; 0 elsewhere; empty: no
+    /// field here).
+    pub field: Vec<u8>,
 }
 
 impl Chunk {
@@ -1041,6 +1047,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Settlements: buildings (roofs at eave height), streets and plazas, fields.
     let mut bld_h = vec![0u16; HS * HS];
     let mut urb_h = vec![0u8; HS * HS];
+    // v63 countryside: the fields' furrows per halo square (`town::fields::square_byte`).
+    let mut fld_h = vec![0u8; HS * HS];
     // Ground kept clear round a way underground (its own ground stays: graveyard grass, ruin
     // dirt, street cobbles).
     let mut ent_h = vec![false; HS * HS];
@@ -1357,8 +1365,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
             park_props.extend(lay.props.iter().copied());
         }
-        for f in &l.fields {
+        for (fi, f) in l.fields.iter().enumerate() {
             stamp(f, URBAN_FIELD, &mut urb_h);
+            if let Some(info) = l.field_info.get(fi) {
+                stamp(f, crate::town::fields::square_byte(info), &mut fld_h);
+            }
         }
         // Ways underground: the opening's ground stays clear; the chunk holding it draws it.
         // `size` = kind + 16 × style (0 plain, 1 a ruin's broken stair, 2 a graveyard's
@@ -2384,6 +2395,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         sprites: Vec::new(),
         yard: Vec::new(),
         stone: 0,
+        field: Vec::new(),
     };
     retier(&mut chunk, sea);
 
@@ -2428,7 +2440,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 // (Not at the mouth of a way underground on the flight: it keeps the street.)
                 URBAN_STREET if chunk.urban[k] == URBAN_STREET && stair_h.as_ref().is_some_and(|s| s[(k / SQ + 1) * HS + k % SQ + 1]) => chunk.surface[k] = Surface::Stairs,
                 URBAN_STREET => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
-                URBAN_FIELD => chunk.surface[k] = Surface::Field,
+                URBAN_FIELD => chunk.surface[k] = crate::town::fields::surface(fld_h[(k / SQ + 1) * HS + k % SQ + 1]),
                 URBAN_DECK => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_RUIN | URBAN_YARD => chunk.surface[k] = Surface::Dirt,
                 URBAN_WALL | URBAN_TOWER => chunk.surface[k] = Surface::Rock,
@@ -2456,6 +2468,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         if chunk.building[k] != 0 {
             chunk.surface[k] = Surface::Roof;
         }
+    }
+    // v63 countryside
+    if chunk.surface.contains(&Surface::Field) {
+        chunk.field = (0..n).map(|k| if chunk.surface[k] == Surface::Field { fld_h[(k / SQ + 1) * HS + k % SQ + 1] } else { 0 }).collect();
     }
 
     // Road squares (bridges and fords too) two squares round the chunk, and the chunk's
@@ -5698,6 +5714,9 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
         out.extend_from_slice(&i.height_ft.to_le_bytes());
         out.extend_from_slice(&sp.asset.as_bytes()[..sp.asset.len().min(255)]);
     }
+    // v63 countryside: the field squares' furrows (`Chunk::field`): count u32 (0 or SQ²), bytes.
+    out.extend_from_slice(&(c.field.len() as u32).to_le_bytes());
+    out.extend_from_slice(&c.field);
     out
 }
 
