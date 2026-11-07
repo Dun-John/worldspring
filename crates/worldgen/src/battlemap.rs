@@ -1221,7 +1221,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         // A dry ditch's two banks inked along their tops (by the chunk holding each stretch's
         // middle).
-        for (a, z, down, bank) in m.bank_lines() {
+        for &(a, z, down, bank) in &m.banks {
             if owns(crate::town::geom::lerp(a, z, 0.5)) {
                 shapes.push(VectorShape { kind: ShapeKind::DitchBank, size: 0.0, pts: vec![local(&a), local(&z), [down[0] as f32, down[1] as f32], [bank as u8 as f32, 0.0]] });
             }
