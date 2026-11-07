@@ -1,7 +1,7 @@
 // Dev tool: the README's pictures (docs/media/), from the running dev server: one zoom from the
 // whole continent down to an inn's battlemap and inside it (zoom.gif, needs ffmpeg), and stills of
 // the continent, a city, a street battlemap, the inn's interior and underground sites (a dungeon,
-// a cave, a mine, a lava tube or a crypt: the biggest of each).
+// a cave, a mine, a lava tube or a crypt: the biggest of each, close on the middle of its floor).
 // Usage: node scripts/readme-media.mjs [url]   (default http://localhost:5173/?seed=1)
 // Each frame is taken once the map has drawn everything in view, so the GIF is smooth however
 // slow the generation is.
@@ -167,6 +167,14 @@ try {
     await evaluate('window.__map.exitBuilding()');
     if (!(await evaluate(`window.__map.enterBuilding(${JSON.stringify(unders[kind])})`))) continue;
     await still();
+    // Closer than the whole level: about twice as near, on the middle of its floor.
+    await evaluate(`(() => {
+      const m = window.__map, l = m.interior, it = l.interior, lv = it.levels[l.currentLevel];
+      let [sx, sy, n] = [0, 0, 0];
+      for (let j = 0; j < it.ny; j++) for (let i = 0; i < it.nx; i++) if (lv.cells[j * it.nx + i] >= 0) [sx, sy, n] = [sx + i + 0.5, sy + j + 0.5, n + 1];
+      const [x, y] = l.toWorld(sx / n, sy / n);
+      m.cam.set({ cx: x, cy: y, zoom: m.cam.zoom + 0.9 });
+    })()`);
     await settle();
     await shot(join(out, `${kind.replace(' ', '-')}.png`));
   }
