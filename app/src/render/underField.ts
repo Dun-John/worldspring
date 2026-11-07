@@ -144,6 +144,18 @@ function offLine([x0, y0, x1, y1, r]: number[], px: number, py: number): [number
   return [e - r, ex / e, ey / e];
 }
 
+/** `offLine(...)[0] <= 0` without the array (the same sums: called a great many times a section). */
+function inLine(l: number[], px: number, py: number): boolean {
+  const x0 = l[0];
+  const y0 = l[1];
+  const dx = l[2] - x0;
+  const dy = l[3] - y0;
+  const t = Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / Math.max(dx * dx + dy * dy, 1e-9)));
+  const ex = px - x0 - t * dx;
+  const ey = py - y0 - t * dy;
+  return Math.max(Math.hypot(ex, ey), 1e-9) - l[4] <= 0;
+}
+
 const WALL_RAYS = 64;
 const WALL_STEP = 0.1;
 /** How far a prop looks for its wall (squares). */
@@ -249,7 +261,10 @@ function sewerChannel(paths: number[][], near: Uint8Array, lined: Float32Array, 
  * `underField` meets rock, so a point inside one line on another's edge is no wall, and floor on squares
  * (a passage dug beside a tunnel) neither. Null if nothing within reach is a line's edge in the section. */
 export function lineWall(lv: InteriorLevel, nx: number, ny: number, near: Uint8Array, cx: number, cy: number): { x: number; y: number; dx: number; dy: number } | null {
-  const paths = lv.paths ?? [];
+  // Only the lines within reach: every point looked at lies within WALL_REACH of (cx, cy), so a
+  // line farther than that past its own reach (plus the edge test's 0.02) can't hold it or edge it.
+  // (In their order, so the nearest edge wins the same ties.)
+  const paths = (lv.paths ?? []).filter((l) => offLine(l, cx, cy)[0] <= WALL_REACH + 0.05);
   const onFloor = (px: number, py: number) => {
     const [i, j] = [Math.floor(px), Math.floor(py)];
     if (i >= 0 && j >= 0 && i < nx && j < ny) {
@@ -258,7 +273,8 @@ export function lineWall(lv: InteriorLevel, nx: number, ny: number, near: Uint8A
       if (r >= 0 && lv.rooms[r].kind !== LINE_ROOM) return true;
       if (!near[k]) return false;
     }
-    return paths.some((l) => offLine(l, px, py)[0] <= 0);
+    for (const l of paths) if (inLine(l, px, py)) return true;
+    return false;
   };
   const from = onFloor(cx, cy);
   let best: { x: number; y: number; dx: number; dy: number } | null = null;
