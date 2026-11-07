@@ -1012,7 +1012,7 @@ export class BattlemapLayer {
         uKind: { value: atmosphere, type: 'f32' },
         uEdges: { value: new Float32Array(4), type: 'vec4<f32>' },
         uAlpha: { value: 1, type: 'f32' },
-        uNoiseOff: { value: noiseOff, type: 'vec2<f32>' },
+        uNoiseOff: { value: new Float32Array([((cx * SQ) % 65536 + 65536) % 65536, ((cy * SQ) % 65536 + 65536) % 65536]), type: 'vec2<f32>' },
       });
       atmo = new Mesh({
         geometry: this.quad,

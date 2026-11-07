@@ -1991,7 +1991,8 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     // (Furniture stands clear of the outer wall as drawn: in a building laid out by zones (a keep's
     // round tower rooms), off any square its middle line cuts more than a tenth of a square into;
     // elsewhere off a square it cuts deeply, its far corner 0.4 of a square beyond it.)
-    let floor = sh.whole_by(if plan.is_some() { -0.1 } else { -0.4 });
+    // (A tower mill's round wall cuts its rim squares: nothing but the stair stands on one.)
+    let floor = sh.whole_by(if plan.is_some() { -0.1 } else if mill { -0.15 } else { -0.4 });
     // Great halls furnished as wholes (`hall`): a castle's, a town's or a guild's, a noble estate's,
     // a barracks' mess hall; thrones only in a castle or a palace.
     let (_, thrones, styled) = hall_kind(world, t0, settlement, b);

@@ -296,7 +296,7 @@ fn windmills(site: &Site, s: &Settlement, l: &mut Layout) {
     let center = l.center;
     let mut cands: Vec<(f64, usize)> = Vec::new();
     for (i, f) in l.fields.iter().enumerate() {
-        if l.field_info[i].kind == FieldUse::Orchard || copse(l, i).is_some() || area(f).abs() < 3000.0 {
+        if l.field_info[i].kind != FieldUse::Arable || copse(l, i).is_some() || area(f).abs() < 3000.0 {
             continue;
         }
         let c = centroid(f);

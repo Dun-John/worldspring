@@ -2571,33 +2571,24 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 u => u,
             };
             match mark {
-                // A castle's bailey: the biome's own grass (mud becomes grass); a path up
-                // a motte, gravel.
+                // A castle's bailey, a village's green, a croft and pasture keep the biome's own ground;
+                // a path up a motte is gravel, a town's plaza paved.
                 URBAN_PLAZA if motte_path[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Gravel,
-                URBAN_PLAZA if bailey_h[(k / SQ + 1) * HS + k % SQ + 1] => {
-                    if chunk.surface[k] == Surface::Mud {
-                        chunk.surface[k] = Surface::Grass;
-                    }
-                }
-                // A village's green keeps the biome's own grass (mud and dirt become grass); a town's plaza is paved.
-                URBAN_PLAZA if village && matches!(chunk.surface[k], Surface::Mud | Surface::Dirt) => chunk.surface[k] = Surface::Grass,
+                URBAN_PLAZA if bailey_h[(k / SQ + 1) * HS + k % SQ + 1] => {}
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
                 // (Not at the mouth of a way underground on the flight: it keeps the street.)
                 URBAN_STREET if chunk.urban[k] == URBAN_STREET && stair_h.as_ref().is_some_and(|s| s[(k / SQ + 1) * HS + k % SQ + 1]) => chunk.surface[k] = Surface::Stairs,
                 URBAN_STREET => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_FIELD => {
-                    // Crops get their own surface; pasture takes the biome's grass (mud and dirt become grass).
+                    // Crops get their own surface; pasture keeps the biome's ground.
                     if crate::town::fields::is_crop(fld_h[(k / SQ + 1) * HS + k % SQ + 1]) {
                         chunk.surface[k] = Surface::Field;
-                    } else if !matches!(chunk.surface[k], Surface::Grass | Surface::DryGrass | Surface::ForestFloor) {
-                        chunk.surface[k] = Surface::Grass;
                     }
                 }
                 URBAN_DECK => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_RUIN | URBAN_YARD => chunk.surface[k] = Surface::Dirt,
                 URBAN_WALL | URBAN_TOWER => chunk.surface[k] = Surface::Rock,
                 URBAN_PATH => chunk.surface[k] = Surface::Gravel,
-                URBAN_CROFT if chunk.surface[k] == Surface::Mud => chunk.surface[k] = Surface::Grass,
                 // (A formal garden's lawn is mown grass, whatever grows round the town; a common's is
                 // the ground of the land round its middle, whatever the shore beside it.)
                 // (A palace's court a mown lawn too.)
@@ -2623,7 +2614,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     // v63 countryside
     if chunk.urban.contains(&URBAN_FIELD) {
-        chunk.field = (0..n).map(|k| if chunk.urban[k] == URBAN_FIELD && (chunk.surface[k] == Surface::Field || (fld_h[(k / SQ + 1) * HS + k % SQ + 1] >> 6 == 3 && matches!(chunk.surface[k], Surface::Grass | Surface::DryGrass | Surface::ForestFloor))) { fld_h[(k / SQ + 1) * HS + k % SQ + 1] } else { 0 }).collect();
+        chunk.field = (0..n).map(|k| if chunk.urban[k] == URBAN_FIELD && (chunk.surface[k] == Surface::Field || (fld_h[(k / SQ + 1) * HS + k % SQ + 1] >> 6 == 3)) { fld_h[(k / SQ + 1) * HS + k % SQ + 1] } else { 0 }).collect();
     }
 
     // Road squares (bridges and fords too) two squares round the chunk, and the chunk's
@@ -2633,6 +2624,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             let (i, j) = ((h % RN) as i64 - 2, (h / RN) as i64 - 2);
             let inside = i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64;
             tile.road_mask.get(sidx(i, j)).is_some_and(|&r| r != 0) || (inside && chunk.urban[j as usize * SQ + i as usize] == URBAN_STREET)
+                || (!inside && i >= -1 && j >= -1 && i <= SQ as i64 && j <= SQ as i64 && urb_h[(j + 1) as usize * HS + (i + 1) as usize] == URBAN_STREET)
         })
         .collect();
     // A castle's baileys take the land's own scatter (trees, bushes, rocks) on their open squares:
@@ -3363,7 +3355,10 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[boo
                 // Canopies and boulders keep clear of buildings (roofs stay visible), and
                 // nothing overhangs a road or street: no square of one within the footprint.
                 let r = info(kind as u16).radius as f64;
-                let reach = crate::core::ceil(r * 1.25) as i64;
+                // (A tree's drawn crown reaches 1.25 x its footprint at the largest scale, so trees and
+                // boulders keep that, and one more square off a croft or field.)
+                let (crown, farm_gap) = if tall { (1.6 * r, 1.0) } else { (1.1 * r, 0.0) };
+                let reach = crate::core::ceil((r * 1.25).max(if tall { crown + farm_gap } else { 0.0 })) as i64;
                 let (ox, oy) = (px - gsx as f64, py - gsy as f64);
                 let blocked = (-reach..=reach).any(|dy| {
                     (-reach..=reach).any(|dx| {
@@ -3373,8 +3368,8 @@ fn place_objects(c: &mut Chunk, biome: &[Biome], slope: &[f64], road_near: &[boo
                         }
                         let ex = (x as f64 - ox).max(ox - (x + 1) as f64).max(0.0);
                         let ey = (y as f64 - oy).max(oy - (y + 1) as f64).max(0.0);
-                        let within = ex * ex + ey * ey < 1.21 * r * r;
-                        if within && x >= -1 && y >= -1 && x <= SQ as i64 && y <= SQ as i64 && keep.farm.get((y + 1) as usize * HS + (x + 1) as usize).is_some_and(|&f| f) {
+                        let within = ex * ex + ey * ey < crown * crown;
+                        if (ex * ex + ey * ey < (crown + farm_gap) * (crown + farm_gap)) && x >= -1 && y >= -1 && x <= SQ as i64 && y <= SQ as i64 && keep.farm.get((y + 1) as usize * HS + (x + 1) as usize).is_some_and(|&f| f) {
                             return true;
                         }
                         if x < -2 || y < -2 || x >= SQ as i64 + 2 || y >= SQ as i64 + 2 || !roads[(y + 2) as usize * RN + (x + 2) as usize] {
