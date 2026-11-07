@@ -53,6 +53,8 @@ interface TokenView {
   ay: number;
   tx: number;
   ty: number;
+  /** The players' view follows it (players' window: a ring). */
+  fol: boolean;
 }
 
 /** PCs' pins that overlap on screen, drawn as one: the first one's face, how many, the names. */
@@ -198,8 +200,9 @@ export class PlayLayer {
       const [wx, wy] = place.toWorld(gx, gy);
       return cam.worldToScreen(wx, wy);
     };
-    const vision = ctl.vision && ctl.vision.loc === loc ? ctl.vision : null;
-    const seen = (t: Token) => !vision || bitAt(vision, Math.floor(t.x), Math.floor(t.y));
+    const vision = ctl.visionOf(loc);
+    // (The players' view in a location with no sight worked out for it: nothing is in sight.)
+    const seen = (t: Token) => (vision ? bitAt(vision, Math.floor(t.x), Math.floor(t.y)) : !player);
 
     // Shapes, each with its size.
     const liveShapes = new Set<string>();
@@ -254,7 +257,7 @@ export class PlayLayer {
         const label = new Text({ text: '', style: labelStyle, anchor: { x: 0.5, y: 0 }, resolution: 2 });
         this.tokens.addChild(c);
         this.tokenLabels.addChild(label);
-        v = { id: t.id, c, reach, pin, door, g, face, label, key: '', tok: null, sel: false, img: null, grid: null, want: false, pc: false, x: t.x, y: t.y, loc: t.loc, pinned: false, inside: false, ax: 0, ay: 0, tx: 0, ty: 0 };
+        v = { id: t.id, c, reach, pin, door, g, face, label, key: '', tok: null, sel: false, img: null, grid: null, want: false, pc: false, x: t.x, y: t.y, loc: t.loc, pinned: false, inside: false, ax: 0, ay: 0, tx: 0, ty: 0, fol: false };
         this.tokenViews.set(t.id, v);
       }
       // Into or out of a building: no glide across grids.
@@ -263,9 +266,10 @@ export class PlayLayer {
       // (and then only if its look did).
       const sel = ctl.selection.has(t.id);
       const img = this.image(t.image);
-      if (v.tok !== t || v.sel !== sel || v.img !== img || v.grid !== s.grid) {
-        [v.tok, v.sel, v.img, v.grid] = [t, sel, img, s.grid];
-        const key = tokenKey(t, sel, player, img, s.grid);
+      const fol = player && ctl.followedIds.has(t.id);
+      if (v.tok !== t || v.sel !== sel || v.img !== img || v.grid !== s.grid || v.fol !== fol) {
+        [v.tok, v.sel, v.img, v.grid, v.fol] = [t, sel, img, s.grid, fol];
+        const key = tokenKey(t, sel, player, img, s.grid, fol ? ts : 0);
         if (v.key !== key) {
           v.key = key;
           this.drawToken(v, t, player);
@@ -638,6 +642,12 @@ export class PlayLayer {
     }
     if (t.hidden && !player) body(r + 6).stroke({ width: 3, color: 0x9333ea, alpha: 0.9 });
     if (v.key.includes('|sel|')) body(r + 10).stroke({ width: 5, color: SELECT });
+    // The one the players' view follows (players' window): a cream ring inked both sides.
+    if (v.fol) {
+      const k = this.tableScale;
+      body(r + 4 + 5 * k).stroke({ width: 8 * k, color: INK });
+      body(r + 4 + 5 * k).stroke({ width: 4.5 * k, color: 0xf3dc9b });
+    }
     v.label.text = t.kind === 'light' && player ? '' : t.name;
   }
 
@@ -647,8 +657,10 @@ export class PlayLayer {
    */
   private updateFog(loc: string, fog: boolean, los: boolean, player: boolean, at: (gx: number, gy: number) => [number, number], rotation: number, pxPerSq: number) {
     const cam = this.view.cam;
-    const vision = this.ctl.vision && this.ctl.vision.loc === loc ? this.ctl.vision : null;
-    const active = fog || (los && !!vision);
+    const vision = this.ctl.visionOf(loc);
+    // Players with line of sight on and no sight worked out here: only what is revealed shows.
+    const blind = player && los && !vision;
+    const active = fog || (los && !!vision) || blind;
     this.fogSprite.visible = active;
     // Upload changed chunks (even when not shown: the location may come back).
     for (const key of this.fogDirty) this.uploadChunk(key);
@@ -680,7 +692,7 @@ export class PlayLayer {
       f.sprite.rotation = rotation;
       f.sprite.scale.set(pxPerSq);
       // Known but not in sight now: dimmed under fog; with sight alone, clear.
-      f.sprite.alpha = fog && los && vision ? 0.55 : 1;
+      f.sprite.alpha = fog && los && (vision || blind) ? 0.55 : 1;
     }
     if (this.vision) {
       const v = this.vision;
@@ -757,8 +769,8 @@ export class PlayLayer {
 }
 
 /** What a token's drawing depends on. */
-function tokenKey(t: Token, selected: boolean, player: boolean, image: Texture | null, grid: GridSettings): string {
-  return [t.name, t.kind, t.kind === 'character' ? roleOf(t) : '', t.size, t.color, t.hidden ? 1 : 0, t.vision ? 1 : 0, t.light ?? 0, image ? t.image : '', grid.scale, selected && !player ? 'sel' : '', ''].join('|');
+function tokenKey(t: Token, selected: boolean, player: boolean, image: Texture | null, grid: GridSettings, followed = 0): string {
+  return [t.name, t.kind, t.kind === 'character' ? roleOf(t) : '', t.size, t.color, t.hidden ? 1 : 0, t.vision ? 1 : 0, t.light ?? 0, image ? t.image : '', grid.scale, selected && !player ? 'sel' : '', followed ? `fol${followed}` : ''].join('|');
 }
 
 /** Pins in single linkage: those whose points are nearer than `near` (world ft) in one party;

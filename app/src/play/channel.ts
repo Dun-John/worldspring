@@ -9,6 +9,8 @@ import type { Op, PlayState } from './state';
 export interface Scene {
   interior: string | null;
   level: number;
+  /** The DM's location key (ties when the players' view follows the party). */
+  loc?: string;
 }
 
 /** The DM's view: centre and how much ground it shows (ft), and what the players' view does
@@ -20,6 +22,9 @@ export interface CameraMsg {
   h: number;
   follow: boolean;
   lock: boolean;
+  /** The players' view follows a token (its id) or the party ('party') on its own: it goes
+   * where they are, whatever the DM's camera and scene do. */
+  target?: string | null;
 }
 
 /** A ruler between two squares, or (`free`, measuring the map zoomed out) between two

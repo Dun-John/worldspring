@@ -39,6 +39,8 @@
       players: play.players,
       follow: play.follow,
       lock: play.lock,
+      target: play.followTarget,
+      following: play.followedToken?.name ?? null,
       draft: { ...play.draft },
       shapeKind: play.shapeKind,
       shapeColor: play.shapeColor,
@@ -217,6 +219,7 @@
         <label class="switch"><span class="grow">Hidden<span class="ws-muted"> · only you see it</span></span><input type="checkbox" class="ws-switch" checked={!!t.hidden} onchange={(e) => patch(t, { hidden: checked(e) })} /></label>
         {#if t.kind === 'character'}
           <label class="switch"><span class="grow">Players see by it</span><input type="checkbox" class="ws-switch" checked={!!t.vision} onchange={(e) => patch(t, { vision: checked(e) })} /></label>
+          <label class="switch" title="The players' window goes where it is and keeps it in the middle"><span class="grow">Players’ view follows</span><input type="checkbox" class="ws-switch" checked={v.target === t.id} onchange={(e) => play.setFollowTarget(checked(e) ? t.id : null)} /></label>
           <div class="swatches">
             {#each TOKEN_COLORS as c (c)}
               <button class="sw" class:on={t.color === c} style:background={hex(c)} aria-label="Colour" onclick={() => patch(t, { color: c })}></button>
@@ -254,11 +257,18 @@
         <button class="ws-btn grow" onclick={() => play.openPlayerWindow()}><Icon name="monitor" size={16} /> {v.players ? 'Players’ window ✓' : 'Players’ window'}</button>
         <button class="ws-btn" onclick={() => play.sendCamera(true)} title="Bring the players' view to yours">Show my view</button>
       </div>
-      <div class="ws-seg" role="radiogroup" aria-label="The players' view">
-        <button class:on={!v.follow && !v.lock} onclick={() => play.setFollow(false, false)} title="Players move their own view">Free</button>
+      <div class="ws-seg tight" role="radiogroup" aria-label="The players' view">
+        <button class:on={!v.follow && !v.lock && !v.target} onclick={() => play.setFollow(false, false)} title="Players move their own view">Free</button>
         <button class:on={v.follow && !v.lock} onclick={() => play.setFollow(true, false)} title="Their view follows yours">Follow me</button>
+        <button class:on={v.target === 'party'} onclick={() => play.setFollowTarget('party')} title="Their view goes where the PCs are and keeps them all in sight">Follow party</button>
         <button class:on={v.lock} onclick={() => play.setFollow(true, true)} title="They can't move their view"><Icon name="lock" size={14} /> Locked</button>
       </div>
+      {#if v.following !== null}
+        <div class="ws-row following">
+          <Icon name="eye" size={16} /><span class="grow">Following <b>{v.following || 'a token'}</b></span>
+          <button class="ws-btn quiet" onclick={() => play.setFollowTarget(null)} title="Their view follows yours again">Stop</button>
+        </div>
+      {/if}
     </section>
 
     <section>
@@ -297,6 +307,12 @@
   .tight > button {
     padding: 0 2px;
     font-size: 12px;
+  }
+  .following {
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--ink-2);
   }
   .play {
     display: flex;

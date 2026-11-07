@@ -39,6 +39,10 @@
     return rs.size === 1 ? [...rs][0] : null;
   });
   const anyShown = $derived(tokens.some((t) => !t.hidden));
+  const following = $derived.by(() => {
+    void version;
+    return play.followTarget;
+  });
 
   $effect(() => {
     if (!tokens.length) onClose();
@@ -106,6 +110,7 @@
     <label class="switch"><span class="grow">Hidden <span class="ws-muted">· only you see it</span></span><input type="checkbox" class="ws-switch" checked={!!t.hidden} onchange={(e) => play.updateToken(t.id, { hidden: checked(e) })} /></label>
     {#if t.kind === 'character'}
       <label class="switch"><span class="grow">Players see by it</span><input type="checkbox" class="ws-switch" checked={!!t.vision} onchange={(e) => play.updateToken(t.id, { vision: checked(e) })} /></label>
+      <label class="switch" title="The players' window goes where it is and keeps it in the middle"><span class="grow">Players’ view follows</span><input type="checkbox" class="ws-switch" checked={following === t.id} onchange={(e) => play.setFollowTarget(checked(e) ? t.id : null)} /></label>
       <button class="ws-btn item" role="menuitem" onclick={() => onPicture([t.id])}><Icon name="image" size={16} /> Picture…</button>
     {/if}
   {:else}

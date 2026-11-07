@@ -12,7 +12,7 @@ import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scen
 import { PIN, PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
 import { hasImage, loadSession, putImage, saveSession } from './session';
-import { apply, emptyState, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
+import { apply, emptyState, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
 import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
 
 export type Tool = 'select' | 'token' | 'measure' | 'shape' | 'fog';
@@ -148,6 +148,11 @@ export class PlayController implements PointerTool {
   /** The player window's camera follows the DM's, and can't be moved there. */
   follow = false;
   lock = false;
+  /** The players' view follows a token (its id) or the party ('party') on its own (DM: the
+   * mode; players' window: what it follows). */
+  followTarget: string | null = null;
+  /** Players' window: the tokens its view is on (drawn with a ring). */
+  readonly followedIds = new Set<string>();
   /** A player window is open. */
   players = false;
   /** Player window: the DM shows business and place pins (the players see those in sight). */
@@ -195,6 +200,23 @@ export class PlayController implements PointerTool {
   private camTarget: CameraMsg | null = null;
   private sceneSeq = 0;
   private sentPlaces: boolean | null = null;
+  /** Players' window: the last vision of each location (the view may show another than the DM's). */
+  private readonly visions = new Map<string, Vision>();
+  /** Players' window: the DM's scene, kept while following (it goes back there after). */
+  private dmScene: Scene | null = null;
+  /** Players' window, following: where the view goes (world ft; `zoom` null keeps the players'
+   * zoom), once in `loc`. */
+  private aim: { loc: string; ids: string[]; cx: number; cy: number; zoom: number | null; fit: boolean; first: boolean; ready: boolean } | null = null;
+  private going: string | null = null;
+  private aimTried = 0;
+  /** DM: the vision of the followed location when it isn't the one in view, and what it was
+   * computed from. */
+  private followVision: Vision | null = null;
+  private followSig = '';
+  private followVisionAt = 0;
+  private followDirty = true;
+  private followLoc = '';
+  private followChunks = 0;
   /** Sewer sections' grids (by section id), kept until one of their doors changes. */
   private readonly sewerGrids = new Map<string, { it: Interior; grid: TacticalGrid; doors: number }>();
   /** Changes to doors, by the location they are in. */
@@ -211,6 +233,8 @@ export class PlayController implements PointerTool {
     wx?: number;
     wy?: number;
     pts?: number[];
+    /** Dragged from a pin (zoomed out): lands on the ground, never inside a building. */
+    pin?: boolean;
   } | null = null;
   private rulerTimer: ReturnType<typeof setTimeout> | null = null;
   private lastDragSend = 0;
@@ -338,7 +362,7 @@ export class PlayController implements PointerTool {
 
   get scene(): Scene {
     const it = this.view.interior;
-    return { interior: it?.interior.id ?? null, level: it?.currentLevel ?? 0 };
+    return { interior: it?.interior.id ?? null, level: it?.currentLevel ?? 0, loc: this.place?.loc };
   }
 
   door(loc: string, index: number): DoorState {
@@ -565,6 +589,8 @@ export class PlayController implements PointerTool {
       this.layer.fogChanged([...before, ...this.fogKeys()]);
       this.selection.clear();
       this.vision = null;
+      this.followVision = null;
+      this.followSig = '';
       this.ruler = null;
       this.visionDirty = true;
       // The buildings tokens stand in, for the DM's markers.
@@ -654,6 +680,8 @@ export class PlayController implements PointerTool {
     this.applyOp(op);
     this.state.changed = Date.now();
     this.channel.send({ t: 'op', op });
+    // (The token the players' view follows gone: it follows the DM again.)
+    if ((op.t === 'untoken' && op.id === this.followTarget) || (op.t === 'reset' && this.followTarget && this.followTarget !== 'party')) this.setFollowTarget(null);
     this.scheduleSave();
     this.onChange();
   }
@@ -668,7 +696,7 @@ export class PlayController implements PointerTool {
     }
     if (op.t === 'reset') this.selection.clear();
     if (op.t === 'untoken') this.selection.delete(op.id);
-    if (op.t !== 'fog' && op.t !== 'fogbits' && op.t !== 'fogreset' && op.t !== 'shape' && op.t !== 'unshape' && op.t !== 'grid') this.visionDirty = true;
+    if (op.t !== 'fog' && op.t !== 'fogbits' && op.t !== 'fogreset' && op.t !== 'shape' && op.t !== 'unshape' && op.t !== 'grid') this.visionDirty = this.followDirty = true;
   }
 
   setTool(t: Tool) {
@@ -945,8 +973,8 @@ export class PlayController implements PointerTool {
   sendCamera(force = false) {
     const cam = this.view.cam;
     const [x0, y0, x1, y1] = cam.viewRect();
-    const camera: CameraMsg = { cx: cam.cx, cy: cam.cy, w: x1 - x0, h: y1 - y0, follow: this.follow, lock: this.lock };
-    const key = `${camera.cx.toFixed(1)},${camera.cy.toFixed(1)},${camera.w.toFixed(1)},${this.follow},${this.lock}`;
+    const camera: CameraMsg = { cx: cam.cx, cy: cam.cy, w: x1 - x0, h: y1 - y0, follow: this.follow, lock: this.lock, target: this.followTarget };
+    const key = `${camera.cx.toFixed(1)},${camera.cy.toFixed(1)},${camera.w.toFixed(1)},${this.follow},${this.lock},${this.followTarget}`;
     if (!force && key === this.camKey) return;
     this.camKey = key;
     this.channel.send({ t: 'camera', camera });
@@ -955,8 +983,36 @@ export class PlayController implements PointerTool {
   setFollow(follow: boolean, lock: boolean) {
     this.follow = follow || lock;
     this.lock = lock;
+    this.followTarget = null;
     this.sendCamera(true);
     this.onChange();
+  }
+
+  /** The players' view follows a token or the party ('party') on its own (one message; their
+   * window follows the token ops). Null: back to following the DM. */
+  setFollowTarget(target: string | null) {
+    if (!target) {
+      this.setFollow(true, false);
+      return;
+    }
+    this.follow = this.lock = false;
+    this.followTarget = target;
+    this.followDirty = true;
+    this.sendCamera(true);
+    this.onChange();
+  }
+
+  /** The token the players' view follows, if it follows one (not the party). */
+  get followedToken(): Token | null {
+    const id = this.followTarget;
+    return id && id !== 'party' ? (this.state.tokens[id] ?? null) : null;
+  }
+
+  /** What the characters see in a location (players' window: the last sent for it). */
+  visionOf(loc: string): Vision | null {
+    if (this.role === 'player') return this.visions.get(loc) ?? null;
+    if (this.vision?.loc === loc) return this.vision;
+    return this.followVision?.loc === loc ? this.followVision : null;
   }
 
   private snapshot() {
@@ -969,11 +1025,12 @@ export class PlayController implements PointerTool {
       world: this.world,
       state: this.state,
       scene: this.scene,
-      camera: { cx: cam.cx, cy: cam.cy, w: x1 - x0, h: y1 - y0, follow: this.follow, lock: this.lock },
+      camera: { cx: cam.cx, cy: cam.cy, w: x1 - x0, h: y1 - y0, follow: this.follow, lock: this.lock, target: this.followTarget },
       vision: this.vision,
       on: this.on,
       places: this.view.places,
     });
+    if (this.followVision && this.followVision.loc !== this.vision?.loc) this.channel.send({ t: 'vision', vision: this.followVision });
   }
 
   private fogKeys(): string[] {
@@ -1117,7 +1174,7 @@ export class PlayController implements PointerTool {
           });
     this.dragging.clear();
     for (const g of group) this.dragging.add(g.id);
-    this.press = group.length ? { kind: 'token', x: gx, y: gy, group } : { kind: 'none', x: gx, y: gy };
+    this.press = group.length ? { kind: 'token', x: gx, y: gy, group, pin: true } : { kind: 'none', x: gx, y: gy };
     this.onChange();
     return true;
   }
@@ -1193,7 +1250,7 @@ export class PlayController implements PointerTool {
         this.dragging.clear();
         for (const g of p.group ?? []) {
           const t = this.state.tokens[g.id];
-          if (t) this.drop(t, place);
+          if (t) this.drop(t, place, !!p.pin);
         }
         break;
       }
@@ -1238,7 +1295,7 @@ export class PlayController implements PointerTool {
    * ground floor (the DM sees a marker of it on the roof); a marker dragged off its building's
    * floor comes out (or into the building it lands on).
    */
-  private drop(t: Token, here: Place) {
+  private drop(t: Token, here: Place, pinned = false) {
     const tp = this.placeOf(t.loc) ?? here;
     const [wx, wy] = tp.toWorld(t.x, t.y);
     const it = here.it;
@@ -1248,6 +1305,11 @@ export class PlayController implements PointerTool {
       this.dispatch({ t: 'token', token: outside });
       return outside;
     };
+    // A pin (zoomed out) lands on the ground where it is dropped.
+    if (pinned && !it && !here.sewers) {
+      out();
+      return;
+    }
     if (it && !isUnderground(it.id)) {
       const [gx, gy] = here.toGrid(wx, wy);
       if (onFloor(it, here.level, gx, gy)) {
@@ -1557,7 +1619,7 @@ export class PlayController implements PointerTool {
         // The selected tokens come along; any others are let go.
         const carried = this.prevPlace && place ? this.carry(this.prevPlace, place) : 0;
         if (!carried) this.selection.clear();
-        this.visionDirty = true;
+        this.visionDirty = this.followDirty = true;
         this.channel.send({ t: 'scene', scene: this.scene });
         this.onChange();
       }
@@ -1570,6 +1632,7 @@ export class PlayController implements PointerTool {
         this.sendCamera();
       }
       this.updateVision(now, place);
+      this.updateFollowVision(now, place);
       // Where the sewers come up to the street, round the view (they are gone once left).
       if (place?.sewers && now - this.sewerExitsAt > 500) {
         this.sewerExitsAt = now;
@@ -1577,6 +1640,12 @@ export class PlayController implements PointerTool {
       }
       this.prevPlace = place;
     } else {
+      // Following: not there yet (the world or the building still loading): try again now and then.
+      const a = this.followTarget ? this.aim : null;
+      if (a && !a.ready && !this.going && now - this.aimTried > 400) {
+        this.aimTried = now;
+        this.aimAt();
+      }
       this.followCamera();
       const labels = this.view.labels;
       if (labels && labels.conceal !== this.concealFn) labels.conceal = this.concealFn;
@@ -1620,6 +1689,54 @@ export class PlayController implements PointerTool {
   }
 
   /**
+   * The players' view follows a token or the party into another location than the DM's: work
+   * out what the characters see there too (when its tokens, doors or settings changed, or more
+   * of the surface's battlemap came in), as `updateVision` does, so their window has it. Where
+   * its grid can't be built here (the sewers, the surface with no battlemap), the last stays.
+   */
+  private updateFollowVision(now: number, place: Place | null) {
+    const target = this.followTarget;
+    // (Sight off: what was sent is dropped in their window; sent again once it is back on.)
+    if (!this.state.los) this.followSig = '';
+    if (!target || !this.on || !place || !this.state.los) return;
+    const chunks = this.view.battle?.stats.chunks ?? 0;
+    if (!this.followDirty && !(this.followLoc === 'surface' && chunks > this.followChunks)) return;
+    if (now - this.followVisionAt < 120) return;
+    this.followVisionAt = now;
+    const s = this.state;
+    const f = followed(s, target, place.loc);
+    this.followLoc = f?.loc ?? '';
+    this.followChunks = chunks;
+    if (!f || f.loc === place.loc || f.loc.startsWith('w:')) {
+      this.followDirty = false;
+      this.followSig = '';
+      return;
+    }
+    const tp = this.placeOf(f.loc);
+    // (An interior still being fetched: try again shortly.)
+    if (!tp) return;
+    this.followDirty = false;
+    const surface = f.loc === 'surface';
+    if (surface && !chunks) return;
+    const here = Object.values(s.tokens).filter((t) => t.loc === f.loc && ((t.kind === 'character' && t.vision) || (t.light ?? 0) > 0));
+    const settings = settingsOf(s, f.loc);
+    const sig = `${f.loc}|${settings.dark}|${this.doorChanges.get(f.loc) ?? 0}|${surface ? chunks : 0}|${here.map((t) => `${t.x},${t.y},${t.vision ? 1 : 0},${t.light ?? 0}`).join(';')}`;
+    if (sig === this.followSig) return;
+    const grid = this.gridOf(tp);
+    if (!grid) return;
+    this.followSig = sig;
+    const eyes: Eye[] = here.filter((t) => t.kind === 'character' && t.vision).map((t) => ({ x: t.x, y: t.y, above: 5, range: SIGHT }));
+    const lights: Eye[] = here.filter((t) => (t.light ?? 0) > 0).map((t) => ({ x: t.x, y: t.y, above: 5, range: t.light! }));
+    const v = computeVision(grid, eyes, lights, settings.dark);
+    if (tp.it && v.w) showNiches(tp.it.levels[tp.level], tp.it.nx, tp.it.ny, v);
+    this.followVision = { loc: f.loc, x0: v.x0, y0: v.y0, w: v.w, h: v.h, bits: v.bits };
+    this.channel.send({ t: 'vision', vision: this.followVision });
+    if (v.w && revealsNew(s, f.loc, v.x0, v.y0, v.w, v.h, v.bits)) {
+      this.dispatch({ t: 'fogbits', loc: f.loc, reveal: true, x0: v.x0, y0: v.y0, w: v.w, h: v.h, bits: v.bits });
+    }
+  }
+
+  /**
    * Players' window: labels of businesses and places of interest show only while the DM shows
    * place pins, and then only where the players can see (in sight with line of sight on; else
    * revealed under fog; else anywhere).
@@ -1635,7 +1752,8 @@ export class PlayController implements PointerTool {
     const size = this.view.labels?.placeHit(f.id)?.size_ft ?? 20;
     const r = Math.min(8, Math.max(1, size / 10 + 1));
     const [ci, cj] = [f.x / 5, f.y / 5];
-    const known = (i: number, j: number) => (this.state.los ? this.vision?.loc === 'surface' && bitAt(this.vision, i, j) : revealed(this.state, 'surface', i, j));
+    const surfaceVision = this.visionOf('surface');
+    const known = (i: number, j: number) => (this.state.los ? !!surfaceVision && bitAt(surfaceVision, i, j) : revealed(this.state, 'surface', i, j));
     for (let j = Math.floor(cj - r); j <= Math.floor(cj + r); j++) {
       for (let i = Math.floor(ci - r); i <= Math.floor(ci + r); i++) {
         if ((i + 0.5 - ci) ** 2 + (j + 0.5 - cj) ** 2 <= r * r && known(i, j)) return false;
@@ -1673,8 +1791,16 @@ export class PlayController implements PointerTool {
         this.state = normalize(m.state);
         this.layer.fogChanged([...before, ...this.fogKeys()]);
         this.vision = m.vision;
+        this.visions.clear();
+        if (m.vision) this.visions.set(m.vision.loc, m.vision);
         this.setOn(m.on);
         this.setDmPlaces(m.places);
+        this.dmScene = m.scene;
+        if (m.camera?.target) {
+          this.followTo(m.camera.target);
+          break;
+        }
+        this.unfollow();
         this.camTarget = m.camera && (m.camera.follow || m.camera.lock) ? m.camera : null;
         this.view.locked = !!this.camTarget?.lock;
         if (m.camera) this.jumpCamera(m.camera);
@@ -1685,13 +1811,26 @@ export class PlayController implements PointerTool {
         this.forgetRedesigned(m.world);
         this.onEdits(m.world);
         break;
-      case 'op':
+      case 'op': {
+        const touches = this.touchesFollow(m.op);
         this.applyOp(m.op);
+        if (touches) this.refollow();
         break;
+      }
       case 'scene':
-        await this.applyScene(m.scene);
+        // (Following a token: the DM's scene waits until the view follows the DM again.)
+        this.dmScene = m.scene;
+        if (!this.followTarget) await this.applyScene(m.scene);
         break;
       case 'camera':
+        if (m.camera.target) {
+          this.followTo(m.camera.target);
+          break;
+        }
+        if (this.followTarget) {
+          this.unfollow();
+          if (this.dmScene) await this.applyScene(this.dmScene);
+        }
         this.camTarget = m.camera.follow || m.camera.lock ? m.camera : null;
         this.view.locked = m.camera.lock;
         if (!this.camTarget) this.flyCamera(m.camera);
@@ -1704,6 +1843,13 @@ export class PlayController implements PointerTool {
         break;
       case 'vision':
         this.vision = m.vision;
+        if (!m.vision) this.visions.clear();
+        else {
+          this.visions.delete(m.vision.loc);
+          this.visions.set(m.vision.loc, m.vision);
+          // (Only the last few locations are kept.)
+          if (this.visions.size > 24) this.visions.delete(this.visions.keys().next().value!);
+        }
         break;
       case 'mode':
         this.setOn(m.on);
@@ -1737,10 +1883,122 @@ export class PlayController implements PointerTool {
     }
     if (cur !== sc.interior) {
       // Following the DM's camera: no framing flight of its own.
-      const ok = await v.enterBuilding(sc.interior, this.camTarget ? { level: sc.level } : undefined);
+      const ok = await v.enterBuilding(sc.interior, this.camTarget || this.followTarget ? { level: sc.level } : undefined);
       if (!ok || seq !== this.sceneSeq) return;
     }
     if (v.interior && v.interior.currentLevel !== sc.level) v.setInteriorLevel(sc.level);
+  }
+
+  /** Players' window: follow a token or the party (the first time: go there, about 40 px a
+   * square for a token, the party's box fitted). */
+  private followTo(target: string) {
+    this.camTarget = null;
+    this.view.locked = false;
+    this.view.zoomOnly = true;
+    if (this.followTarget === target && this.aim) return;
+    this.followTarget = target;
+    this.aim = null;
+    this.refollow();
+  }
+
+  /** Players' window: stop following (the view is the players' own again). */
+  private unfollow() {
+    if (!this.followTarget) return;
+    this.followTarget = null;
+    this.aim = null;
+    this.followedIds.clear();
+    this.view.zoomOnly = false;
+    // (A building being entered for the token: the DM's scene comes after it.)
+    this.sceneSeq++;
+  }
+
+  /** Whether an op moves, shows, hides or removes what the players' view follows. */
+  private touchesFollow(op: Op): boolean {
+    const target = this.followTarget;
+    if (!target) return false;
+    if (op.t === 'reset') return true;
+    if (op.t !== 'token' && op.t !== 'untoken') return false;
+    const id = op.t === 'token' ? op.token.id : op.id;
+    if (target !== 'party') return id === target;
+    const pc = (t: Token | undefined) => !!t && t.kind === 'character' && roleOf(t) === 'pc';
+    return pc(this.state.tokens[id]) || (op.t === 'token' && pc(op.token));
+  }
+
+  /** Players' window: what it follows changed (or the mode did): where to aim the view. A
+   * hidden or gone target isn't followed: the view stays where it is. */
+  private refollow() {
+    const target = this.followTarget;
+    if (!target) return;
+    const f = followed(this.state, target, this.dmScene?.loc ?? 'surface');
+    this.followedIds.clear();
+    if (!f) return;
+    for (const id of f.ids) this.followedIds.add(id);
+    const cam = this.view.cam;
+    const a = this.aim;
+    if (!a) {
+      this.aim = { loc: f.loc, ids: f.ids, cx: cam.cx, cy: cam.cy, zoom: target === 'party' ? null : Math.log2(40 / 5), fit: target === 'party', first: true, ready: false };
+    } else {
+      [a.loc, a.ids, a.ready] = [f.loc, f.ids, false];
+    }
+    this.aimAt();
+  }
+
+  /** Players' window: aim at the followed tokens once their location is in view (going there
+   * first: building and level, site, sewers, or the surface). */
+  private aimAt() {
+    const a = this.aim;
+    const here = this.place;
+    if (!a || !here) return;
+    if (here.loc !== a.loc) {
+      void this.goTo(a.loc);
+      return;
+    }
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const id of a.ids) {
+      const t = this.state.tokens[id];
+      if (!t || t.loc !== a.loc || t.hidden) continue;
+      const [wx, wy] = here.toWorld(t.x, t.y);
+      const r = Math.max(0.5, t.size) * 2.5;
+      [x0, y0, x1, y1] = [Math.min(x0, wx - r), Math.min(y0, wy - r), Math.max(x1, wx + r), Math.max(y1, wy + r)];
+    }
+    if (x0 > x1) return;
+    [a.cx, a.cy] = [(x0 + x1) / 2, (y0 + y1) / 2];
+    if (a.fit) {
+      // The party's box with about six squares round it, never closer than ~48 px a square;
+      // after the first fit only zoomed out when they no longer fit (the players' zoom stays).
+      const m = 2 * 6 * 5;
+      const fit = Math.min(this.view.cam.fitZoom(x1 - x0 + m, y1 - y0 + m, 1), Math.log2(48 / 5));
+      a.zoom = a.first || fit < this.view.cam.zoom - 0.01 ? fit : a.zoom;
+    }
+    a.first = false;
+    a.ready = true;
+  }
+
+  /** Players' window, following: go to a location (its scene), then aim. */
+  private async goTo(loc: string) {
+    if (this.going === loc) return;
+    this.going = loc;
+    try {
+      const sc = await this.sceneOf(loc);
+      if (sc && this.aim?.loc === loc) await this.applyScene(sc);
+    } finally {
+      if (this.going === loc) this.going = null;
+    }
+    if (this.aim?.loc === loc && this.place?.loc === loc) this.aimAt();
+  }
+
+  /** The scene that shows a location (the sewers: the section under the followed token). */
+  private async sceneOf(loc: string): Promise<Scene | null> {
+    if (loc === 'surface') return { interior: null, level: 0 };
+    if (loc.startsWith('w:') && !loc.includes('@')) {
+      const t = this.aim?.ids.map((id) => this.state.tokens[id]).find((t) => t?.loc === loc);
+      if (!t) return null;
+      const id = `${loc}:${Math.floor(t.x / SECTION_N)}:${Math.floor(t.y / SECTION_N)}`;
+      const it = await this.view.gen.interior(id);
+      return it ? { interior: id, level: it.entry_level } : null;
+    }
+    const { interior, level } = parseLoc(loc);
+    return interior ? { interior, level } : null;
   }
 
   private zoomFor(c: CameraMsg): number {
@@ -1756,12 +2014,15 @@ export class PlayController implements PointerTool {
     this.view.flyTo({ cx: c.cx, cy: c.cy, zoom: this.zoomFor(c) });
   }
 
-  /** Ease toward the DM's view (a jump if it is far). */
+  /** Ease toward the DM's view, or the followed tokens (a jump if it is far). */
   private followCamera() {
-    const c = this.camTarget;
+    const a = this.followTarget ? this.aim : null;
+    const c = a ? (a.ready ? a : null) : this.camTarget;
     if (!c) return;
     const cam = this.view.cam;
-    const zoom = this.zoomFor(c);
+    const zoom = a ? (a.zoom ?? cam.zoom) : this.zoomFor(c as CameraMsg);
+    // (Zoomed in or out to the aim: from then on the players' zoom is theirs.)
+    if (a && a.zoom !== null && Math.abs(zoom - cam.zoom) < 0.002) a.zoom = null;
     const span = cam.width / cam.ppf;
     if (Math.abs(zoom - cam.zoom) > 3 || Math.hypot(c.cx - cam.cx, c.cy - cam.cy) > span * 3) {
       cam.set({ cx: c.cx, cy: c.cy, zoom });

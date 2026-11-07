@@ -225,6 +225,9 @@ export class MapView {
   driver: ((now: number) => CameraState | null) | null = null;
   /** Map input off (the player window while the DM holds its camera). */
   locked = false;
+  /** Zoom only, no panning or going anywhere (the players' window while its view follows a
+   * token or the party: it keeps them centred). Zooming keeps the middle of the view. */
+  zoomOnly = false;
   /** Play mode: tokens and templates (under the labels), fog, rulers and pings (over all). */
   readonly playUnder = new Container();
   readonly playOver = new Container();
@@ -315,7 +318,7 @@ export class MapView {
   }
 
   panBy(dx: number, dy: number) {
-    if (this.inputOff) return;
+    if (this.inputOff || this.zoomOnly) return;
     this.fly = null;
     this.cam.panPixels(dx, dy);
   }
@@ -323,7 +326,7 @@ export class MapView {
   /** Fly out to the whole map. */
   fitWorld() {
     const g = this.geom;
-    if (!g || this.inputOff) return;
+    if (!g || this.inputOff || this.zoomOnly) return;
     this.flyTo({ cx: g.map_w_ft / 2, cy: g.map_h_ft / 2, zoom: Math.max(this.cam.minZoom, this.cam.fitZoom(g.map_w_ft, g.map_h_ft)) });
   }
 
@@ -1157,8 +1160,8 @@ export class MapView {
         this.vel.y *= decay;
       }
       if (Math.abs(this.vel.z) > 1e-4) {
-        const cx = this.cursor?.sx ?? this.cam.width / 2;
-        const cy = this.cursor?.sy ?? this.cam.height / 2;
+        const cx = this.zoomOnly ? this.cam.width / 2 : (this.cursor?.sx ?? this.cam.width / 2);
+        const cy = this.zoomOnly ? this.cam.height / 2 : (this.cursor?.sy ?? this.cam.height / 2);
         this.cam.zoomAt(this.vel.z * dt, cx, cy);
         this.vel.z *= Math.exp(-dt / 90);
       }
@@ -1422,9 +1425,9 @@ export class MapView {
       if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
         const d = Math.hypot(a.x - b.x, a.y - b.y);
-        if (this.pinchDist > 0) this.cam.zoomAt(Math.log2(d / this.pinchDist), (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
+        if (this.pinchDist > 0) this.cam.zoomAt(Math.log2(d / this.pinchDist), this.zoomOnly ? this.cam.width / 2 : (a.x + b.x) / 2 - r.left, this.zoomOnly ? this.cam.height / 2 : (a.y + b.y) / 2 - r.top);
         this.pinchDist = d;
-      } else if (this.drag && this.drag.id === e.pointerId) {
+      } else if (this.drag && this.drag.id === e.pointerId && !this.zoomOnly) {
         const now = performance.now();
         const dx = e.clientX - this.drag.x;
         const dy = e.clientY - this.drag.y;
@@ -1501,6 +1504,7 @@ export class MapView {
     if (!this.ownKeys) return;
     window.addEventListener('keydown', (e) => {
       if (this.inputOff || (e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
+      if (this.zoomOnly && /^(Arrow|Page|Escape$|\[$|\]$)/.test(e.key)) return;
       const step = 120;
       if (e.key === '+' || e.key === '=') this.zoomBy(0.006);
       else if (e.key === '-' || e.key === '_') this.zoomBy(-0.006);
@@ -1518,7 +1522,7 @@ export class MapView {
 
   /** Double-click / double-tap: go into a building at battlemap zoom, else zoom in there. */
   private async doubleTap(sx: number, sy: number, shift: boolean) {
-    if (this.inputOff) return;
+    if (this.inputOff || this.zoomOnly) return;
     const [x, y] = this.cam.screenToWorld(sx, sy);
     // Stairs, ladders, the way out, trapdoors, tunnels: take the first way on from the square
     // (into another site, arriving at its way back here).

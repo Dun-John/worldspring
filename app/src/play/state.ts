@@ -308,3 +308,27 @@ export function revealsNew(s: PlayState, loc: string, x0: number, y0: number, w:
 
 /** A short random id. */
 export const newId = () => Math.random().toString(36).slice(2, 10);
+
+/**
+ * What the players' view follows (`target`: a token's id or 'party'): the location and the
+ * tokens it frames, or null (gone, hidden, or no PC in view). The party: the PCs not hidden, in
+ * the location holding most of them (ties: `tie`, the DM's location, else the first found).
+ */
+export function followed(s: PlayState, target: string, tie: string): { loc: string; ids: string[] } | null {
+  if (target !== 'party') {
+    const t = s.tokens[target];
+    return t && !t.hidden ? { loc: t.loc, ids: [t.id] } : null;
+  }
+  const by = new Map<string, string[]>();
+  for (const t of Object.values(s.tokens)) {
+    if (t.kind !== 'character' || t.hidden || roleOf(t) !== 'pc') continue;
+    const ids = by.get(t.loc);
+    if (ids) ids.push(t.id);
+    else by.set(t.loc, [t.id]);
+  }
+  let best: { loc: string; ids: string[] } | null = null;
+  for (const [loc, ids] of by) {
+    if (!best || ids.length > best.ids.length || (ids.length === best.ids.length && loc === tie)) best = { loc, ids };
+  }
+  return best;
+}
