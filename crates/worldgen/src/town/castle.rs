@@ -544,11 +544,15 @@ pub(super) fn castle<G: Ground>(
                 None => ranges(site, &ring, &walled, None, &gates, &by_ring, &[], &lanes, &clear, motte, w, HALL, from, prng, l),
             }
         }
+        let after_hall = l.buildings.len();
         ranges(site, &ring, &walled, inner.as_deref(), &gates, &by_ring, &inner_towers, &lanes, &clear, motte, w, RANGE, from, prng, l);
         // (A town's castle sized to them, or one it planned on its whole patch: free-standing
         // buildings in the yard as well.)
         if set.follow && (set.inner.is_some() || set.planned) {
             l.castle_yard = yard_buildings(site, &ring, inner.as_deref(), &gates, &by_ring, &inner_towers, &lanes, &clear, motte, w, from, l);
+        }
+        if set.follow {
+            yard_trades(l, from, after_hall);
         }
     }
     if let Some((mut b, motte)) = kept {
@@ -1644,8 +1648,16 @@ fn sq(v: f64, min: f64) -> f64 {
     (crate::core::round(v / 5.0) * 5.0).max(min)
 }
 
+/// How much longer a keep's sides are than its kinds' sizes below say (v63: a fifth, its area
+/// about half as much again, in the same citadel patch).
+const KEEP_GROW: f64 = 1.2;
+/// The scales a keep is tried at, the biggest first (`place_keep`): down to the sizes the kinds
+/// had before `KEEP_GROW`'s smallest, so a tight court still takes the kind it rolled.
+const KEEP_FITS: [f64; 7] = [1.0, 0.86, 0.74, 0.64, 0.55, 0.47, 0.4];
+
 /// The pieces of a keep of `kind` scaled by `f` (its rolls in `rolls`, 0..1 each): its frame.
 fn keep_frame(kind: KeepKind, f: f64, rolls: &[f64; 6], round: bool) -> Frame {
+    let f = f * KEEP_GROW;
     let mut fr = Frame { parts: Vec::new() };
     let sgn = |r: f64| if r < 0.5 { -1.0 } else { 1.0 };
     match kind {
@@ -1852,7 +1864,7 @@ fn place_keep<G: Ground>(
     // (Else a smaller great tower; in a court too small for one, a tower keep without corner towers,
     // last off the middle, between the curtain's towers: `more`.)
     for (kind, clear_by, spots) in [(first, CLEAR, spots), (KeepKind::Great, CLEAR, spots), (KeepKind::Plain, 8.0, spots), (KeepKind::Plain, 8.0, more)] {
-        for f in [1.0, 0.86, 0.74, 0.64, 0.55] {
+        for f in KEEP_FITS {
             let fr = keep_frame(kind, f, &rolls, round);
             for &(c, _) in spots {
                 let mut parts: Vec<Part> = fr
@@ -1940,7 +1952,7 @@ fn place_keep<G: Ground>(
     let mut sides: Vec<usize> = (0..n).filter(|&e| dist(court[e], court[(e + 1) % n]) >= 30.0).collect();
     let far = |e: usize| dist(gate, lerp(court[e], court[(e + 1) % n], 0.5));
     sides.sort_by(|&a, &b| far(b).total_cmp(&far(a)).then(a.cmp(&b)));
-    for (sunk, f) in [false, true].into_iter().flat_map(|k| [1.0, 0.86, 0.74, 0.64, 0.55].map(|f| (k, f))) {
+    for (sunk, f) in [false, true].into_iter().flat_map(|k| KEEP_FITS.map(|f| (k, f))) {
         let fr = keep_frame(KeepKind::Plain, f, &rolls, round);
         let body = &fr.parts[0].0;
         let hl = body.iter().map(|q| q[0]).fold(0.0, f64::max);
@@ -2131,9 +2143,34 @@ fn ranges<G: Ground>(
     }
 }
 
-/// The free-standing buildings of a town castle's yard, largest first: a barracks, stables and a
-/// chapel (a shrine), as many as the open yard holds (one in 12,000 sq ft of it, 3 at most).
-const YARD: [(&str, f64, f64, f64, f64); 3] = [("barracks", 44.0, 56.0, 22.0, 26.0), ("stables", 34.0, 44.0, 20.0, 24.0), ("shrine", 26.0, 32.0, 16.0, 20.0)];
+/// The free-standing buildings of a town castle's yard: stables and a smithy (`TRADES`, in every
+/// bailey they fit in), then a barracks and a chapel (a shrine) as the open yard holds them (one
+/// building in 12,000 sq ft of it, 4 at most).
+const YARD: [(&str, f64, f64, f64, f64); 4] = [("stables", 34.0, 44.0, 20.0, 24.0), ("blacksmith", 30.0, 38.0, 18.0, 22.0), ("barracks", 44.0, 56.0, 22.0, 26.0), ("shrine", 26.0, 32.0, 16.0, 20.0)];
+/// The first of `YARD` every bailey gets (stables and a smithy): where the yard is tight, at
+/// their least size, else smaller again (`TRADES_LEAST` of it), else in a range (`yard_trades`).
+const TRADES: usize = 2;
+const TRADES_LEAST: f64 = 0.8;
+
+/// Stables and a smithy in every town castle's bailey (`TRADES`): those its yard had no room for
+/// (or no yard buildings at all) go in its ranges (from `first`, past a great castle's hall
+/// range), the stables in the biggest, the smithy in the smallest left. (The castle's buildings
+/// from `from`.)
+fn yard_trades(l: &mut Layout, from: usize, first: usize) {
+    for (key, biggest) in YARD[..TRADES].iter().map(|y| y.0).zip([true, false]) {
+        let Some(fi) = super::catalog::index_of(key) else { continue };
+        if l.buildings[from..].iter().any(|b| b.func == Some(fi as u16)) {
+            continue;
+        }
+        let size = |i: usize| area(&l.buildings[i].poly).abs();
+        let pick = (first..l.buildings.len())
+            .filter(|&i| l.buildings[i].func.is_none() && l.buildings[i].keep.is_none())
+            .max_by(|&a, &b| if biggest { size(a).total_cmp(&size(b)) } else { size(b).total_cmp(&size(a)) }.then(b.cmp(&a)));
+        if let Some(i) = pick {
+            l.buildings[i].func = Some(fi as u16);
+        }
+    }
+}
 
 /// The yard's buildings (`YARD`) in the bailey (the outer one, where there is an inner), standing
 /// free: 24 ft in from the curtain at least, 16 ft clear of the ranges and of each other and of the
@@ -2162,7 +2199,7 @@ fn yard_buildings<G: Ground>(
     // (The yard left open: the bailey but the inner one, the keep and the ranges.)
     let built: f64 = l.buildings[from..].iter().map(|b| area(&b.poly).abs()).sum::<f64>() + area(keep).abs();
     let open = area(ring).abs() - inner.map_or(0.0, |q| area(q).abs()) - built;
-    let want = ((open / 12_000.0).max(0.0) as usize).min(YARD.len());
+    let want = ((open / 12_000.0).max(0.0) as usize).clamp(TRADES, YARD.len());
     let (x0, y0, x1, y1) = ring.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
     let step = 6.0;
     let (nx, ny) = (crate::core::ceil((x1 - x0) / step) as usize, crate::core::ceil((y1 - y0) / step) as usize);
@@ -2175,39 +2212,46 @@ fn yard_buildings<G: Ground>(
         .collect();
     let walls: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
     let mut placed = 0;
-    for &(key, l0, l1, d0, d1) in YARD.iter().take(want) {
+    for (yi, &(key, l0, l1, d0, d1)) in YARD.iter().enumerate().take(want) {
         // (Sized by the yard: the more room, the longer.)
         let f = (open / 60_000.0).clamp(0.0, 1.0);
         let (long, deep) = (l0 + f * (l1 - l0), d0 + f * (d1 - d0));
         let mut best: Option<(f64, Vec<P>)> = None;
-        for j in 0..=ny {
-            for i in 0..=nx {
-                let c = [x0 + i as f64 * step, y0 + j as f64 * step];
-                let depth = inset_depth(ring, c);
-                if depth < 24.0 + 0.5 * deep || best.as_ref().is_some_and(|b| b.0 <= depth) {
-                    continue;
-                }
-                // (Along the curtain nearest it.)
-                let Some(e) = (0..n).min_by(|&a, &b| seg_dist(c, ring[a], ring[(a + 1) % n]).total_cmp(&seg_dist(c, ring[b], ring[(b + 1) % n])).then(a.cmp(&b))) else {
-                    continue;
-                };
-                let poly = super::rect(c, sub(ring[(e + 1) % n], ring[e]), long, deep);
-                let fits = poly.iter().all(|p| inset_depth(ring, *p) >= 24.0)
-                    && walls.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 20.0)
-                    && inner.is_none_or(|q| poly.iter().all(|p| inset_depth(q, *p) <= -20.0) && !q.iter().any(|p| inset_depth(&poly, *p) > -20.0))
-                    && inner_towers.iter().all(|(q, r)| inset_depth(&poly, *q) < -(r + 10.0))
-                    && towers.iter().all(|(q, r)| inset_depth(&poly, *q) < -(r + 12.0))
-                    && lanes.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 20.0 && !contains(&poly, p))
-                    && gates.iter().all(|g| poly.iter().all(|p| dist(*p, *g) >= GATE_HALF + 24.0) && inset_depth(&poly, *g) < -(GATE_HALF + 18.0))
-                    && (keep.is_empty() || (poly.iter().all(|p| inset_depth(keep, *p) <= -16.0) && !keep.iter().any(|p| inset_depth(&poly, *p) >= -16.0)))
-                    && motte.is_none_or(|m| poly.iter().all(|p| dist(*p, m.at) >= m.foot_r + 12.0) && dist(c, m.at) >= m.foot_r + 12.0)
-                    && l.buildings[from..].iter().all(|o| {
-                        !super::overlaps_or_crosses(&o.poly, &poly) && poly.iter().all(|p| inset_depth(&o.poly, *p) <= -16.0) && o.poly.iter().all(|p| inset_depth(&poly, *p) <= -16.0)
-                    })
-                    && roads.iter().all(|&(p, q, rw)| super::poly_seg_dist(&poly, p, q) >= 0.5 * rw + 2.0)
-                    && site.buildable(&poly);
-                if fits {
-                    best = Some((depth, poly));
+        // (Stables and a smithy smaller where the yard is tight: `TRADES`.)
+        let sizes = if yi < TRADES { vec![(long, deep), (l0, d0), (TRADES_LEAST * l0, TRADES_LEAST * d0)] } else { vec![(long, deep)] };
+        for (long, deep) in sizes {
+            if best.is_some() {
+                break;
+            }
+            for j in 0..=ny {
+                for i in 0..=nx {
+                    let c = [x0 + i as f64 * step, y0 + j as f64 * step];
+                    let depth = inset_depth(ring, c);
+                    if depth < 24.0 + 0.5 * deep || best.as_ref().is_some_and(|b| b.0 <= depth) {
+                        continue;
+                    }
+                    // (Along the curtain nearest it.)
+                    let Some(e) = (0..n).min_by(|&a, &b| seg_dist(c, ring[a], ring[(a + 1) % n]).total_cmp(&seg_dist(c, ring[b], ring[(b + 1) % n])).then(a.cmp(&b))) else {
+                        continue;
+                    };
+                    let poly = super::rect(c, sub(ring[(e + 1) % n], ring[e]), long, deep);
+                    let fits = poly.iter().all(|p| inset_depth(ring, *p) >= 24.0)
+                        && walls.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 20.0)
+                        && inner.is_none_or(|q| poly.iter().all(|p| inset_depth(q, *p) <= -20.0) && !q.iter().any(|p| inset_depth(&poly, *p) > -20.0))
+                        && inner_towers.iter().all(|(q, r)| inset_depth(&poly, *q) < -(r + 10.0))
+                        && towers.iter().all(|(q, r)| inset_depth(&poly, *q) < -(r + 12.0))
+                        && lanes.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 20.0 && !contains(&poly, p))
+                        && gates.iter().all(|g| poly.iter().all(|p| dist(*p, *g) >= GATE_HALF + 24.0) && inset_depth(&poly, *g) < -(GATE_HALF + 18.0))
+                        && (keep.is_empty() || (poly.iter().all(|p| inset_depth(keep, *p) <= -16.0) && !keep.iter().any(|p| inset_depth(&poly, *p) >= -16.0)))
+                        && motte.is_none_or(|m| poly.iter().all(|p| dist(*p, m.at) >= m.foot_r + 12.0) && dist(c, m.at) >= m.foot_r + 12.0)
+                        && l.buildings[from..].iter().all(|o| {
+                            !super::overlaps_or_crosses(&o.poly, &poly) && poly.iter().all(|p| inset_depth(&o.poly, *p) <= -16.0) && o.poly.iter().all(|p| inset_depth(&poly, *p) <= -16.0)
+                        })
+                        && roads.iter().all(|&(p, q, rw)| super::poly_seg_dist(&poly, p, q) >= 0.5 * rw + 2.0)
+                        && site.buildable(&poly);
+                    if fits {
+                        best = Some((depth, poly));
+                    }
                 }
             }
         }

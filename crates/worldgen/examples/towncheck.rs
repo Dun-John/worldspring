@@ -1061,8 +1061,24 @@ fn castle_spot(ctx: &mut Ctx, l: &Layout, tag: &str, r: &mut Report) {
     let keep: f64 = l.buildings.iter().filter(|b| b.ward == Ward::Castle && is_keep(b) && contains(ring, centroid(&b.poly))).map(|b| area(&b.poly).abs()).fold(0.0, f64::max);
     if keep > 0.0 {
         r.value("bailey area / keep area", area(ring).abs() / keep, format!("{tag} at {}", at(mid)));
+        r.value("keep area (sq ft)", keep, format!("{tag} at {}", at(mid)));
+    }
+    // (Keep kinds, and the bailey's trades: stables and a smithy in every castle.)
+    for b in l.buildings.iter().filter(|b| b.ward == Ward::Castle && contains(ring, centroid(&b.poly))) {
+        if let Some(k) = b.keep {
+            r.tally(&format!("keeps: {k:?}"), 1);
+        }
+    }
+    let has = |key: &str| l.buildings.iter().any(|b| b.ward == Ward::Castle && contains(ring, centroid(&b.poly)) && b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == key));
+    for key in ["stables", "blacksmith"] {
+        if !has(key) {
+            r.add(&format!("town castles with no {key}"), area(ring).abs(), format!("{tag}: bailey of {:.0} sq ft at {}", area(ring).abs(), at(mid)));
+        }
     }
     let w = ctx.window(bbox(ring));
+    if !w.objects.iter().any(|(p, name)| name == "well" && contains(ring, *p)) {
+        r.add("town castles with no well", area(ring).abs(), format!("{tag}: bailey of {:.0} sq ft at {}", area(ring).abs(), at(mid)));
+    }
     let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
     let (kx0, ky0) = ((w.ox / size) as u32, (w.oy / size) as u32);
     let (mut inside, mut paved) = (0, 0);
@@ -2375,6 +2391,14 @@ fn palaces(ctx: &mut Ctx, r: &mut Report) {
                     capital = Some(capital.map_or(a, |c| c.max(a)));
                 } else if city.as_ref().is_none_or(|c| a > c.0) {
                     city = Some((a, format!("b:{li}:{}", b.id)));
+                }
+                // (Its formal garden beside it: `palace::gardens`.)
+                r.tally("palaces", 1);
+                let garden = l.parks.iter().find(|pk| pk.kind == town::ParkKind::Formal && pk.pts.iter().any(|p| (0..b.poly.len()).any(|k| town::geom::seg_dist(*p, b.poly[k], b.poly[(k + 1) % b.poly.len()]) < 12.0)));
+                if let Some(pk) = garden {
+                    r.tally("palaces with a formal garden beside them", 1);
+                    r.tally("capital palaces with a formal garden beside them", t0.settlements.get(li).is_some_and(|s| s.capital) as usize);
+                    r.value("palace garden area (sq ft)", town::geom::area(&pk.pts).abs(), format!("b:{li}:{}", b.id));
                 }
             }
             let Some(kind) = interior::hub_kind(t0, &l, b).filter(|k| !k.is_keep() && !k.is_faith() && !k.is_civic() && !k.is_inn()) else { continue };

@@ -1728,6 +1728,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         l.number_buildings();
         palace::merge(&site, &mut l, [0.0, 0.0], s.capital, s.tier, &[], None);
         palace::approach(&site, &mut l, [0.0, 0.0], s.capital, &[], None);
+        palace::gardens(&site, &mut l, [0.0, 0.0]);
     }
     // Local → world.
     let tw = |p: &mut P| *p = add(*p, center);
@@ -1784,6 +1785,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         wards::inherit(world, t0, e, &generated, spacing, &mut l);
         palace::merge(&site, &mut l, center, s.capital, s.tier, &kept, Some(&generated));
         palace::approach(&site, &mut l, center, s.capital, &kept, Some(&generated));
+        palace::gardens(&site, &mut l, center);
         temple::reach_streets(&mut l, Some(&generated));
         temple::shape_all(&mut l, Some(&generated));
         belfry::raise_all(&mut l, Some(&generated));

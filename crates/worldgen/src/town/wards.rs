@@ -970,7 +970,8 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
             v["close_generated"] = json!(planned);
         }
         // A park: how it is laid out, and whether that was set by hand.
-        if let Some(k) = parks.get(&p) {
+        // (A palace's garden on a patch of another ward is the palace's: `palace::gardens`.)
+        if let Some(k) = parks.get(&p).filter(|_| ward[p] == Some(Ward::Park)) {
             v["park"] = json!(k.name());
         }
         if ward[p] == Some(Ward::Park) && ch.park.contains_key(&p) {

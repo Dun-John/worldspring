@@ -524,7 +524,10 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     by_size.sort_by(|&a, &b| area(&l.buildings[b].poly).abs().total_cmp(&area(&l.buildings[a].poly).abs()).then(a.cmp(&b)));
     for (rank, &bi) in by_size.iter().enumerate() {
         let big = area(&l.buildings[bi].poly).abs() > 2500.0;
-        let func = ["barracks", "stables", "blacksmith"].get(rank).and_then(|k| catalog::index_of(k));
+        // (Stables and a smithy in every castle with two buildings or more; a barracks, the
+        // biggest, in one with three.)
+        let trades: &[&str] = if by_size.len() >= 3 { &["barracks", "stables", "blacksmith"] } else { &["stables", "blacksmith"] };
+        let func = trades.get(rank).and_then(|k| catalog::index_of(k));
         let b = &mut l.buildings[bi];
         b.func = func.map(|f| f as u16);
         b.residential = catalog::residential_for(Ward::Castle, big) as u8;

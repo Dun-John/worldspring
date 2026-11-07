@@ -4457,6 +4457,33 @@ pub(crate) fn greenery(b: Biome) -> (&'static [Kind], &'static [Kind], &'static 
     }
 }
 
+/// A castle's well where its keep's court has no spot with 25 ft of room (`dress_bailey`): with
+/// less room round it, in the court first, else anywhere in the bailey, by the keep. (v63: a well
+/// in every castle.)
+fn bailey_well(
+    spots: &[[f64; 2]],
+    placed: &[([f64; 2], f64)],
+    well_r: f64,
+    in_court: &dyn Fn([f64; 2]) -> bool,
+    room: &dyn Fn([f64; 2]) -> f64,
+    to_keep: &dyn Fn([f64; 2]) -> f64,
+    free: &dyn Fn(&[([f64; 2], f64)], [f64; 2], f64, Option<usize>) -> bool,
+) -> Option<[f64; 2]> {
+    for court in [true, false] {
+        for least in [18.0, 12.0] {
+            let well = spots
+                .iter()
+                .copied()
+                .filter(|&p| (!court || in_court(p)) && room(p) >= least && free(placed, p, well_r, None))
+                .min_by(|&a, &b| (to_keep(a) - room(a)).total_cmp(&(to_keep(b) - room(b))).then(a[1].total_cmp(&b[1])).then(a[0].total_cmp(&b[0])));
+            if well.is_some() {
+                return well;
+            }
+        }
+    }
+    None
+}
+
 /// A castle's bailey: whether it is one of the castles with a garden yard (rolled per castle), and
 /// how it is dressed (world ft: place, turn, kind, look, scale), a pure function of its outer
 /// bailey (`pl`) and its castle in `l`, so every chunk sets out the same. Nothing stands in the
@@ -4481,6 +4508,8 @@ fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed:
     let c0 = centroid(ring);
     let key = hash3(seed ^ 0xba11, crate::core::round(c0[0]) as i64, crate::core::round(c0[1]) as i64, 7);
     let roll = |k: i64| unit(hash2(key, k, 0x5d));
+    // (v63 K1b hook: this topiary garden yard gives way to a kitchen garden by the kitchen range;
+    // topiary stays a palace's, `palace::gardens`.)
     let garden = roll(0) < 0.45;
     let depth = |p: [f64; 2]| {
         let d = (0..rn).map(|k| seg_dist(p, ring[k], ring[(k + 1) % rn])).fold(f64::MAX, f64::min);
@@ -4635,6 +4664,7 @@ fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed:
         .copied()
         .filter(|&p| in_court(p) && room(p) >= 25.0 && free(&placed, p, well_r, None))
         .min_by(|&a, &b| (to_keep(a) - room(a)).total_cmp(&(to_keep(b) - room(b))).then(a[1].total_cmp(&b[1])).then(a[0].total_cmp(&b[0])));
+    let well = well.or_else(|| bailey_well(&spots, &placed, well_r, &in_court, &room, &to_keep, &free));
     if let Some(p) = well {
         placed.push((p, well_r));
         out.push((p, 0.0, Kind::Well, (key >> 24) as u8 & 7, 1.0));
