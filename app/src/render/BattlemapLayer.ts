@@ -24,7 +24,7 @@ import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
-import { banner, cornerHatch, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
+import { banner, cornerHatch, drawDrawbridge, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
 import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
@@ -869,7 +869,7 @@ export class BattlemapLayer {
       } else continue;
       deckGrid(gridG, s);
     }
-    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12)));
+    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12) || s.kind === 18));
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1));
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
     // walks (over them, on the ground).
@@ -877,6 +877,8 @@ export class BattlemapLayer {
     const topGridG = new Graphics();
     const pathGridG = new Graphics();
     for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 13 ? pathGridG : walkGridG, s);
+    // A drawbridge's deck (drawn with the walls) takes the walks' grid.
+    for (const s of c.shapes) if (s.kind === 18) deckGrid(walkGridG, s);
     for (const gr of [gridG, walkGridG, topGridG, pathGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
     for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, walkGridG, towerG, topGridG]) {
       if (!part) continue;
@@ -1076,6 +1078,8 @@ function drawStructures(shapes: Shape[]): Graphics {
   const g = new Graphics();
   const walls = shapes.filter((s) => s.kind === 0);
   if (walls.length) drawWalls(g, walls);
+  // A drawbridge's inner end under its gatehouse.
+  for (const s of shapes) if (s.kind === 18) drawDrawbridge(g, s);
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
   for (const s of shapes) if (s.kind === 1) drawWallTower(g, s);
   for (const s of shapes) if (s.kind === 4) drawEntrance(g, s);

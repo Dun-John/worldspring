@@ -1108,6 +1108,79 @@ function ironLeaf(g: Graphics, P: (p: number, q: number) => [number, number], le
   g.circle(...P(1, 0), FT * 0.28).fill(IRON[1]).stroke({ width: 1.2, color: INK });
 }
 
+/**
+ * A castle's drawbridge, lowered (`ShapeKind::Drawbridge`: the gate's middle on the curtain's line,
+ * the far end on the moat's far bank, then `[wet, 0]`; `size` its width): a heavy timber deck out
+ * from under the gatehouse, its planks laid across it between two stout side beams (the sunlit one
+ * lit along its top), iron bands across it and an iron-shod lifting edge, nailed; the lifting
+ * chains from rings at its far corners back along its beams into the gatehouse (drawn over its
+ * inner end); its shadow on the water, or further down on a dry ditch's floor, to the south-east.
+ * Inked bold. (Raised, play shuts it as a door: the deck stays drawn where it lies.)
+ */
+export function drawDrawbridge(g: Graphics, s: Shape) {
+  const [ax, ay, bx, by] = s.pts;
+  const wet = flagsOf(s, 4) === 1;
+  const L = Math.hypot(bx - ax, by - ay) || 1;
+  const [ux, uy] = [(bx - ax) / L, (by - ay) / L];
+  const [vx, vy] = [-uy, ux];
+  const half = s.size * 0.5;
+  const rnd = rngAt(ax + bx, ay + by);
+  // `p` along it from the gate (0) to the lifting edge (1), `q` across it (-1 .. 1).
+  const P = (p: number, q: number): [number, number] => [ax + ux * L * p + vx * half * q, ay + uy * L * p + vy * half * q];
+  const deck = [...P(0, -1), ...P(1, -1), ...P(1, 1), ...P(0, 1)];
+  const drop = FT * (wet ? 1.3 : 3.2);
+  g.poly(hull(pairs([...deck, ...deck.map((v) => v + drop)]))).fill({ color: 0x000000, alpha: wet ? 0.24 : 0.32 });
+  // The planks across it, some a shade lighter, their joints a little out of true.
+  const beam = 0.2;
+  g.poly(deck).fill(WOOD[1]);
+  const n = Math.max(6, Math.round(L / (FT * 1.1)));
+  const j = () => (rnd() - 0.5) * 0.25;
+  for (let k = 0; k < n; k++) if (rnd() < 0.3) g.poly([...P(k / n, -1), ...P((k + 1) / n, -1), ...P((k + 1) / n, 1), ...P(k / n, 1)]).fill({ color: WOOD[2], alpha: 0.32 });
+  for (let k = 1; k < n; k++) {
+    const t = k / n + j() / n;
+    g.moveTo(...P(t, -1 + beam)).lineTo(...P(t + j() / n, 1 - beam));
+  }
+  g.stroke({ width: 1.3, color: WOOD[0] });
+  // The side beams, the sunlit one's top lit.
+  const sun = lit(vx, vy) >= 0 ? 1 : -1;
+  for (const q of [-1, 1]) {
+    g.poly([...P(0, q), ...P(1, q), ...P(1, q * (1 - beam)), ...P(0, q * (1 - beam))]).fill(q === sun ? WOOD[1] : WOOD[0]);
+    g.moveTo(...P(0, q * (1 - beam))).lineTo(...P(1, q * (1 - beam)));
+  }
+  g.stroke({ width: 1.4, color: INK, alpha: 0.7 });
+  g.poly([...P(0, sun * 0.97), ...P(1, sun * 0.97), ...P(1, sun * 0.9), ...P(0, sun * 0.9)]).fill({ color: WOOD[2], alpha: 0.9 });
+  // Iron bands across it, and the shod lifting edge; nail heads along them.
+  const band = (p0: number, p1: number) => {
+    g.poly([...P(p0, -1), ...P(p1, -1), ...P(p1, 1), ...P(p0, 1)]).fill(IRON[0]);
+    const pm = (p0 + p1) / 2;
+    for (const q of [-0.62, -0.2, 0.2, 0.62]) g.circle(...P(pm, q), 1.2).fill(IRON[2]);
+  };
+  const t = (FT * 0.5) / L;
+  band(0.34 - t * 0.5, 0.34 + t * 0.5);
+  band(0.68 - t * 0.5, 0.68 + t * 0.5);
+  band(1 - t * 1.4, 1);
+  // The chains: from a ring at each far corner back along the beam, links alternately flat and
+  // edge-on.
+  const ring = 0.86;
+  for (const q of [-1, 1]) {
+    const [rx, ry] = P(ring, q * (1 - beam * 0.5));
+    const links = Math.max(3, Math.round((L * ring) / (FT * 0.9)));
+    for (let k = 0; k < links; k++) {
+      const [p0, p1] = [ring * (1 - k / links), ring * (1 - (k + 0.8) / links)];
+      const [c0, c1] = [P(p0, q * (1 - beam * 0.5)), P(p1, q * (1 - beam * 0.5))];
+      if (k % 2) {
+        g.moveTo(...c0).lineTo(...c1).stroke({ width: 3.4, color: INK, cap: 'round' });
+        g.moveTo(...c0).lineTo(...c1).stroke({ width: 1.6, color: IRON[1], cap: 'round' });
+      } else {
+        const [mx, my] = [(c0[0] + c1[0]) / 2, (c0[1] + c1[1]) / 2];
+        g.circle(mx, my, FT * 0.3).stroke({ width: 2.6, color: INK }).circle(mx, my, FT * 0.3).stroke({ width: 1.2, color: IRON[2] });
+      }
+    }
+    g.circle(rx, ry, FT * 0.42).stroke({ width: 3, color: INK }).circle(rx, ry, FT * 0.42).stroke({ width: 1.4, color: IRON[1] });
+  }
+  g.poly(deck).stroke({ width: 2.6, color: INK, join: 'round' });
+}
+
 /** A gravel walk on a court's lawn (`ShapeKind::GravelWalk`: its rectangle's corners), drawn as a
  * building's court draws it (`gravelPatch`), along its longer side. */
 export function drawGravelWalk(g: Graphics, s: Shape) {

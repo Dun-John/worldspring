@@ -98,9 +98,12 @@ pub struct Moat {
     /// Roads over it on causeways (ends, half width).
     pub causeways: Vec<(P, P, f64)>,
     pub bridge: Drawbridge,
-    /// Its outline at plan zoom: convex pieces (the berm to the far bank, side by side and round
-    /// the corners), cut to `bound`.
+    /// Its outline at plan zoom: convex pieces (its inner edge to the far bank, a dry ditch's bank
+    /// left out: side by side, round the corners and its towers), cut to `bound`, none where the
+    /// drawbridge or a causeway crosses it (`plan_pieces`); and by piece, its inked edges (bit k
+    /// the edge from corner k to k + 1; past the eighth, all inked).
     pub pieces: Vec<Vec<P>>,
+    pub inks: Vec<u8>,
     /// Bounding box of all of it (x0, y0, x1, y1).
     pub bbox: [f64; 4],
 }
@@ -242,47 +245,6 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
     let gate_way = |pts: &[P]| pts.first().is_some_and(|p| dist(*p, gate) <= 8.0);
     let causeways: Vec<(P, P, f64)> =
         l.roads.iter().filter(|r| !gate_way(&r.0)).flat_map(|(pts, _, rw)| pts.windows(2).map(move |s| (s[0], s[1], 0.5 * rw))).filter(|&(a, b, _)| (0..n).any(|k| sides[k] && seg_dist(ring[k], a, b).min(seg_dist(a, ring[k], ring[(k + 1) % n])) <= BERM + w + 40.0)).collect();
-    // Plan pieces: along each side, and round each outer corner between two sides it runs along.
-    let mut pieces: Vec<Vec<P>> = Vec::new();
-    let (i0, i1) = (BERM, BERM + w - if wet { 0.0 } else { BANK_FT });
-    for k in (0..n).filter(|&k| sides[k]) {
-        let (a, b, o) = (ring[k], ring[(k + 1) % n], out_of(k));
-        pieces.push(vec![add(a, mul(o, i0)), add(b, mul(o, i0)), add(b, mul(o, i1)), add(a, mul(o, i1))]);
-        let nk = (k + 1) % n;
-        if !sides[nk] {
-            continue;
-        }
-        let o2 = out_of(nk);
-        let turn = libm::atan2(cross(o, o2), dot(o, o2));
-        if turn <= 0.01 {
-            continue;
-        }
-        let steps = crate::core::ceil(turn / 0.5) as usize;
-        let at = |t: f64| {
-            let ang = libm::atan2(o[1], o[0]) + turn * t;
-            [libm::cos(ang), libm::sin(ang)]
-        };
-        for s in 0..steps {
-            let (u0, u1) = (at(s as f64 / steps as f64), at((s + 1) as f64 / steps as f64));
-            pieces.push(vec![add(b, mul(u0, i0)), add(b, mul(u0, i1)), add(b, mul(u1, i1)), add(b, mul(u1, i0))]);
-        }
-    }
-    if !bound.is_empty() {
-        let m = bound.len();
-        let ccw = area(bound) > 0.0;
-        for p in &mut pieces {
-            for e in 0..m {
-                let (a, b) = (bound[e], bound[(e + 1) % m]);
-                let u = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
-                let o = if ccw { [u[1], -u[0]] } else { [-u[1], u[0]] };
-                *p = clip_plain(p, o, dot(a, o));
-                if p.len() < 3 {
-                    break;
-                }
-            }
-        }
-        pieces.retain(|p| p.len() >= 3 && area(p).abs() > 1.0);
-    }
     let mut moat = Moat {
         wet,
         width: w,
@@ -293,7 +255,8 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
         bound: bound.to_vec(),
         causeways,
         bridge: Drawbridge { at: gate, dir: mul(inward, -1.0 / len(inward).max(1e-9)), width: BRIDGE_W, span: 0.0 },
-        pieces,
+        pieces: Vec::new(),
+        inks: Vec::new(),
         bbox: [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
     };
     let r = BERM + w + 15.0;
@@ -315,5 +278,171 @@ pub(super) fn lay<G: Ground>(site: &G, l: &mut super::Layout, plan: Plan, ring: 
         }
     }
     moat.bridge.span = span;
+    (moat.pieces, moat.inks) = plan_pieces(&moat);
     l.moats.push(moat);
+}
+
+/// Rays out from the curtain's line this far apart along a side (ft), this far round an outer
+/// corner (radians), for the plan pieces.
+const PIECE_STEP: f64 = 4.0;
+const PIECE_TURN: f64 = 0.25;
+
+/// A moat's plan pieces and their inked edges (`Moat::pieces`, `inks`): quads between rays out from
+/// the curtain's line (along each side it runs along, and round each outer corner between two),
+/// each from the moat's inner edge to its far bank as `spot` has them (`BERM` out, bent round a
+/// tower `TOWER_BERM` clear of its foot, the width beyond); none where the drawbridge or a causeway
+/// crosses it (found to the foot between the rays), so the road shows through. Quads on a straight
+/// run clear of towers are one. Its banks are inked, and its ends at a gap or where it stops, not
+/// the joins between its pieces.
+fn plan_pieces(m: &Moat) -> (Vec<Vec<P>>, Vec<u8>) {
+    let (ring, sides, n) = (&m.ring, &m.sides, m.ring.len());
+    let wide = m.width - if m.wet { 0.0 } else { BANK_FT };
+    let out_of = |k: usize| {
+        let (a, b) = (ring[k], ring[(k + 1) % n]);
+        let u = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
+        [u[1], -u[0]]
+    };
+    let turn_at = |k: usize| {
+        let (o, o2) = (out_of(k), out_of((k + 1) % n));
+        libm::atan2(cross(o, o2), dot(o, o2))
+    };
+    // How far out along a ray from `q` (unit `d`) the moat's inner edge (`extra` 0) or its far bank
+    // (`extra` its width) lies: `base` ft, or round the towers.
+    let clear = |q: P, d: P, base: f64, extra: f64| {
+        m.towers.iter().fold(base, |h, &(t, tr)| {
+            let r = tr + TOWER_BERM + extra;
+            let rel = sub(t, q);
+            let (tp, ta) = (dot(rel, d), cross(d, rel));
+            if ta.abs() < r && tp.abs() < r { h.max(tp + crate::core::sqrt(r * r - ta * ta)) } else { h }
+        })
+    };
+    let gap = |p: P| m.bridge.covers(p) || m.causeways.iter().any(|&(a, b, hw)| seg_dist(p, a, b) <= hw);
+    let (mut pieces, mut inks) = (Vec::new(), Vec::new());
+    // Runs: side k (`None`) or the corner after it (`Some(turn)`).
+    let mut runs: Vec<(usize, Option<f64>)> = Vec::new();
+    for k in (0..n).filter(|&k| sides[k]) {
+        runs.push((k, None));
+        let turn = turn_at(k);
+        if sides[(k + 1) % n] && turn > 0.01 {
+            runs.push((k, Some(turn)));
+        }
+    }
+    for (k, corner) in runs {
+        let (a, b, o) = (ring[k], ring[(k + 1) % n], out_of(k));
+        let ray = |t: f64| -> (P, P) {
+            match corner {
+                None => (lerp(a, b, t), o),
+                Some(turn) => {
+                    let ang = libm::atan2(o[1], o[0]) + turn * t;
+                    (b, [libm::cos(ang), libm::sin(ang)])
+                }
+            }
+        };
+        // (Its inner edge, its far bank, whether clear of towers.)
+        let span = |t: f64| {
+            let (q, d) = ray(t);
+            let (hi, ho) = (clear(q, d, BERM, 0.0), clear(q, d, BERM + wide, wide));
+            (hi, ho, hi <= BERM && ho <= BERM + wide)
+        };
+        let mid = |t: f64| {
+            let (q, d) = ray(t);
+            let (hi, ho, _) = span(t);
+            add(q, mul(d, 0.5 * (hi + ho)))
+        };
+        let steps = match corner {
+            None => crate::core::ceil(dist(a, b) / PIECE_STEP).max(1.0),
+            Some(turn) => crate::core::ceil(turn / PIECE_TURN).max(1.0),
+        } as usize;
+        // The rays' params, with one more at each gap's edge (to a foot or so).
+        let mut ts: Vec<f64> = Vec::with_capacity(steps + 3);
+        for s in 0..=steps {
+            let t = s as f64 / steps as f64;
+            if let Some(&t0) = ts.last() {
+                if gap(mid(t0)) != gap(mid(t)) {
+                    let (mut lo, mut hi) = (t0, t);
+                    for _ in 0..10 {
+                        let c = 0.5 * (lo + hi);
+                        if gap(mid(c)) == gap(mid(t0)) { lo = c } else { hi = c }
+                    }
+                    ts.push(0.5 * (lo + hi));
+                }
+            }
+            ts.push(t);
+        }
+        let shut: Vec<bool> = ts.windows(2).map(|w| gap(mid(0.5 * (w[0] + w[1])))).collect();
+        let plain: Vec<bool> = ts.iter().map(|&t| span(t).2).collect();
+        // Whether the run carries on past its start and its end (into the next side's or corner's).
+        let (pk, nk) = ((k + n - 1) % n, (k + 1) % n);
+        let (on_start, on_end) = match corner {
+            None => (sides[pk], sides[nk]),
+            Some(_) => (true, true),
+        };
+        let mut i = 0;
+        while i + 1 < ts.len() {
+            if shut[i] {
+                i += 1;
+                continue;
+            }
+            let mut j = i + 1;
+            if corner.is_none() {
+                while j + 1 < ts.len() && !shut[j] && plain[i] && plain[j] && plain[j + 1] {
+                    j += 1;
+                }
+            }
+            let ((q0, d0), (q1, d1)) = (ray(ts[i]), ray(ts[j]));
+            let ((hi0, ho0, _), (hi1, ho1, _)) = (span(ts[i]), span(ts[j]));
+            let mut p = vec![add(q0, mul(d0, hi0)), add(q1, mul(d1, hi1)), add(q1, mul(d1, ho1)), add(q0, mul(d0, ho0))];
+            let ink0 = if i == 0 { !on_start } else { shut[i - 1] };
+            let ink1 = if j + 1 == ts.len() { !on_end } else { shut[j] };
+            // At an inner corner the two sides' quads meet on its bisector.
+            let mut joins: Vec<(P, P)> = Vec::new();
+            if corner.is_none() {
+                if sides[pk] && turn_at(pk) < -0.01 {
+                    let nn = sub(o, out_of(pk));
+                    p = clip_plain(&p, nn, dot(a, nn));
+                    joins.push((a, mul([nn[1], -nn[0]], 1.0 / len(nn).max(1e-9))));
+                }
+                if sides[nk] && turn_at(k) < -0.01 {
+                    let nn = sub(o, out_of(nk));
+                    p = clip_plain(&p, nn, dot(b, nn));
+                    joins.push((b, mul([nn[1], -nn[0]], 1.0 / len(nn).max(1e-9))));
+                }
+            }
+            if !m.bound.is_empty() && p.len() >= 3 {
+                let bound = &m.bound;
+                let mb = bound.len();
+                let ccw = area(bound) > 0.0;
+                for e in 0..mb {
+                    let (ea, eb) = (bound[e], bound[(e + 1) % mb]);
+                    let u = mul(sub(eb, ea), 1.0 / dist(ea, eb).max(1e-9));
+                    let on = if ccw { [u[1], -u[0]] } else { [-u[1], u[0]] };
+                    p = clip_plain(&p, on, dot(ea, on));
+                    if p.len() < 3 {
+                        break;
+                    }
+                }
+            }
+            // (Corners the cuts left a hair apart are one.)
+            p.dedup_by(|x, y| dist(*x, *y) < 1e-3);
+            while p.len() > 1 && dist(p[0], p[p.len() - 1]) < 1e-3 {
+                p.pop();
+            }
+            if p.len() >= 3 && area(&p).abs() > 1.0 {
+                let on_line = |x: P, q: P, d: P| cross(d, sub(x, q)).abs() < 1e-6 * (1.0 + len(sub(x, q)));
+                let both = |x: P, y: P, q: P, d: P| on_line(x, q, d) && on_line(y, q, d);
+                let mut mask = 0u8;
+                for e in 0..p.len().min(8) {
+                    let (x, y) = (p[e], p[(e + 1) % p.len()]);
+                    let join = (both(x, y, q0, d0) && !ink0) || (both(x, y, q1, d1) && !ink1) || joins.iter().any(|&(q, d)| both(x, y, q, d));
+                    if !join {
+                        mask |= 1 << e;
+                    }
+                }
+                pieces.push(p);
+                inks.push(mask);
+            }
+            i = j;
+        }
+    }
+    (pieces, inks)
 }

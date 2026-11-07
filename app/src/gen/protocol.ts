@@ -861,7 +861,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 24 || kind === 25;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -909,6 +909,11 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
         a = 0.7;
       } else if (kind === 14) rgb = [0.33, 0.46, 0.26];
       else if (kind === 15) rgb = [0.74, 0.5, 0.46];
+      // A castle's moat (`town::moat`): a wet one the rivers' water, a dry ditch a sunken band of
+      // darker earth; both inked along their banks (and their ends at a gap) by the edges in the
+      // ward's place (`Moat::inks`).
+      else if (kind === 24) rgb = [0.41, 0.53, 0.61];
+      else if (kind === 25) rgb = [0.56, 0.47, 0.35];
       else if ((attr >>> 25) & 15) {
         // A keep's piece (`payload::pack_sites`): towers and the body's hall under slate, a wing or
         // forebuilding by its top (`town::keep_tops`): open battlements stone, a roof lead or slate; a
@@ -940,12 +945,14 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       }
       // (A belfry's shadow not inked.)
       const ink = outlined(kind) && ((attr >>> 25) & 15) !== 10;
+      const inks = kind === 24 || kind === 25 ? ward : -1;
+      const inkEdge = (j: number) => ink && (j >= 8 || ((inks >> j) & 1) !== 0);
       // Fan triangles (0, k, k+1): the edge k..k+1 is always the polygon's; 0..1 only for the
       // first triangle, k+1..0 only for the last.
       for (let k = 1; k + 1 < m; k++) {
         const corners = [s0, s0 + k, s0 + k + 1];
         // Which edges are real, by the corner opposite each.
-        const real = [ink, ink && k + 1 === m - 1, ink && k === 1];
+        const real = [inkEdge(k), k + 1 === m - 1 && inkEdge(m - 1), k === 1 && inkEdge(0)];
         for (let c = 0; c < 3; c++) {
           pos[v * 2] = polys.verts[corners[c] * 2];
           pos[v * 2 + 1] = polys.verts[corners[c] * 2 + 1];
