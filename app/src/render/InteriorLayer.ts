@@ -15,6 +15,7 @@ import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
 import { noiseSource } from './noise';
 import { DIST_PAD } from './rockDistance';
+import { underLook } from './underTheme';
 import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, roughness, SQUARE_SITES, TERRAIN_CHANNEL, underField, type UnderField } from './underField';
 import { nearestWall, wallDistance, type WallDistance } from './wallField';
 import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
@@ -1049,7 +1050,13 @@ export class InteriorLayer {
     const grow = this.tile ? 0 : DIST_PAD;
     // Light from the NW of the screen, in grid axes.
     const [lx, ly] = [-Math.SQRT1_2, -Math.SQRT1_2];
+    // The site's stone: wall style and palette by its theme (sewers: wet brick).
+    const look = underLook(it.function, it.theme);
     const uniforms = new UniformGroup({
+      uTheme: { value: look.style, type: 'f32' },
+      uStone: { value: new Float32Array(look.stone), type: 'vec3<f32>' },
+      uCoping: { value: new Float32Array(look.coping), type: 'vec3<f32>' },
+      uRock: { value: new Float32Array(look.rock), type: 'vec3<f32>' },
       uGrow: { value: grow, type: 'f32' },
       uN: { value: new Float32Array([nx, ny]), type: 'vec2<f32>' },
       uPad: { value: pad, type: 'f32' },

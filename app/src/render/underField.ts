@@ -63,7 +63,8 @@ export function roughness(site: string): number {
 }
 
 /** Floor material for the shader: 0 cave rock, 1 basalt, 2 mine earth, 3 sewer brick,
- * 4 flagstones, 5 boss flagstones, 6 crypt flagstones, 7 marble, 8 hewn blocks, 9 ice, 10 the cult's dark ring flagstones. */
+ * 4 flagstones, 5 boss flagstones, 6 the cult's flagstones, 7 marble, 8 hewn blocks, 9 ice, 10 the cult's dark ring flagstones,
+ * 11 (v63 underground) crypt flagstones. Flagstones (4-6, 10, 11) take their stone from the site's theme (`underTheme.ts`). */
 export function materialOf(site: string, kind: string, theme?: string): number {
   if (kind === 'ring corridor') return 10;
   if (kind === 'sewer tunnel' || kind === 'service passage') return 3;
@@ -76,7 +77,7 @@ export function materialOf(site: string, kind: string, theme?: string): number {
   if (theme === 'dwarven_hall' || theme === 'labyrinth') return 8;
   if (site === 'lava tube') return 1;
   if (site === 'mine') return 2;
-  if (site === 'crypt' || site === 'catacombs') return 6;
+  if (site === 'crypt' || site === 'catacombs') return 11;
   return 4;
 }
 
