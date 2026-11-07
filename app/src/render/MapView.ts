@@ -1205,11 +1205,14 @@ export class MapView {
       const LEAD_MS = Math.min(500, viewW / Math.max(1e-9, Math.hypot(this.camVel[0], this.camVel[1])));
       const t0 = performance.now();
       const want: WantTile[] = this.tiles.update(this.cam, this.app.renderer.resolution, now, [this.camVel[0] * LEAD_MS, this.camVel[1] * LEAD_MS]);
-      if (this.battle) want.push(...this.battle.update(this.cam, now));
+      // (Not in the sewers: the town's battlemap isn't drawn there, so none of it is asked for or built.)
+      if (this.battle && !this.sewers) want.push(...this.battle.update(this.cam, now));
       this.lastWants = want.length;
-      // Under a fully built battlemap the tile layer is invisible: skip drawing it. (In the
-      // sewers the street map shows, dimmed, where the rock fades out away from the tunnels.)
-      this.tiles.container.visible = !this.battle?.covering;
+      // Under a fully built battlemap the tile layer is invisible, and in the sewers (solid rock
+      // round the tunnels) the whole street map: skip drawing them. (The town's battlemaps under
+      // every sewer frame cost ~5-8 ms of GPU a frame on the reference laptop.)
+      this.tiles.container.visible = !this.battle?.covering && !this.sewers;
+      if (this.battle) this.battle.container.visible &&= !this.sewers;
       // Down in the sewers the town's roofs stay out of sight (the streets and ground show, dimmed).
       this.battle?.setRoofs(!this.sewers);
       // Safety net: a screenful needs a few hundred tiles at most; never flood the generator.

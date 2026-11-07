@@ -6,7 +6,8 @@ import { Container, Sprite, Texture } from 'pixi.js';
 import type { GenClient } from '../gen/client';
 import type { Interior } from '../gen/protocol';
 import type { Camera } from './camera';
-import { InteriorLayer, UNDER_DIM, type InteriorStyle } from './InteriorLayer';
+import { InteriorLayer, type InteriorStyle } from './InteriorLayer';
+import { underLook } from './underTheme';
 import type { UnderField } from './underField';
 import type { FieldRequest } from './underField.worker';
 
@@ -46,7 +47,7 @@ interface Section {
   lastUsed: number;
 }
 
-/** Plain rock where no sewers run (none drawn: the map above shows there, as round the tunnels). */
+/** Plain rock where no sewers run (none drawn: the solid rock behind the sewers shows there). */
 function rockSection(layout: number, sx: number, sy: number): Interior {
   const n = SECTION_N;
   return {
@@ -88,9 +89,11 @@ export class Sewers {
     first: Interior,
     firstField?: UnderField,
   ) {
-    // Underground the surface is a ghost (it shows where the rock fades out, away from the tunnels).
-    this.dim.tint = 0x14100c;
-    this.dim.alpha = Math.min(0.85, UNDER_DIM + 0.1);
+    // The street map is not drawn down here (MapView): solid rock behind the tunnels, the
+    // hatched rock's own tone, where it fades out away from them.
+    const [r, g, b] = underLook('sewer').rock;
+    this.dim.tint = (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255);
+    this.dim.alpha = 1;
     this.container.addChild(this.dim);
     this.add(first, firstField);
   }
