@@ -530,8 +530,9 @@ pub enum ShapeKind {
     DryWall = 15,
     /// A post-and-rail fence.
     Fence = 16,
-    /// A windmill's sails: the hub, then `[angle, 0]` (the way one pair stands, radians); size is
-    /// their reach from the hub.
+    /// A windmill's cap and sails: the tower's middle, then `[angle, radius]` (the way the cap faces,
+    /// radians; the tower's radius in squares), then `[pale, 0]` (1: its walls lime-washed or
+    /// plastered, its cap wooden); size is the sails' reach from the hub.
     Sails = 17,
     // v63 castles
     /// A castle's drawbridge over its moat (`town::moat::Drawbridge`): the gate's middle, the far

@@ -1819,6 +1819,19 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     round_off(&mut l);
     fields::assign(&site, s.seed, &mut l);
     rural::place(&site, s, &mut l);
+    // (A town edited by hand keeps its windmills as generated, ids and all, where they still stand
+    // clear of its buildings: in their places by id, before the ones the edit made.)
+    if edit.is_some() {
+        let generated = generated_layout(world, t0, index);
+        l.buildings.retain(|b| !rural::windmill(b));
+        for w in generated.buildings.iter().filter(|b| rural::windmill(b)) {
+            let c = geom::centroid(&w.poly);
+            let at = l.buildings.partition_point(|b| b.id < w.id);
+            if l.buildings.get(at).is_none_or(|b| b.id != w.id) && l.buildings.iter().all(|b| geom::dist(geom::centroid(&b.poly), c) > 40.0) {
+                l.buildings.insert(at, w.clone());
+            }
+        }
+    }
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);

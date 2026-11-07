@@ -295,6 +295,8 @@ fn arch_of(b: &town::Building) -> Arch {
         Some("tavern" | "alehouse" | "fine_dining" | "gambling_den" | "smugglers_den") => Arch::Tavern,
         Some("blacksmith" | "armorer" | "weaponsmith" | "glassblower" | "potter" | "tinker") => Arch::Forge,
         Some("brewery" | "winery" | "distillery") => Arch::Brewery,
+        // A tower mill: round floors up a round tower, its own on each (`program`), under a cap.
+        Some("windmill") if round_ish(b) => Arch::Tower,
         Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "windmill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
         Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs") => Arch::Temple,
         Some("prison") => Arch::Prison,
@@ -373,10 +375,18 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
             Mansion => p("Cellar", &[("wine cellar", 2.0), ("storeroom", 1.0)], Some("storeroom"), false),
             Hall if matches!(key, Some("bank" | "thieves_guild")) => p("Vault", &[("vault", 2.0), ("storeroom", 1.0)], None, false),
             Hall if matches!(key, Some("courthouse" | "guard_post")) => cells("Cells", "guardroom"),
+            Tower if key == Some("windmill") => p("Cellar", &[("storeroom", 1.0)], None, false),
             Tower => p("Vault", &[("vault", 1.0)], None, false),
             Warehouse => p("Cellar", &[("storeroom", 3.0)], Some("storeroom"), false),
             _ => p("Cellar", &[("storeroom", 1.0)], None, false),
         },
+        // A tower mill, from the ground up: the meal floor (the flour bagged off the stones), the
+        // stone floor, the bin floor (the grain, the sack hoist's trap), the dust floor under the cap
+        // (the gearing).
+        (Tower, 0) if key == Some("windmill") => p("Meal floor", &[("meal floor", 1.0)], None, false),
+        (Tower, _) if key == Some("windmill") && top => p("Dust floor", &[("dust floor", 1.0)], None, false),
+        (Tower, 1) if key == Some("windmill") => p("Stone floor", &[("stone floor", 1.0)], None, false),
+        (Tower, _) if key == Some("windmill") => p("Bin floor", &[("bin floor", 1.0)], None, false),
         (Tower, 0) => p("Entry", &[("entry hall", 1.0)], None, false),
         (Tower, _) => {
             let rooms = ["library", "laboratory", "study", "bedchamber"];
@@ -478,6 +488,8 @@ pub fn battlements(b: &town::Building) -> Option<f64> {
             let (nx, ny) = (crate::core::round(o.long / SQUARE_FT) as usize, crate::core::round(o.short / SQUARE_FT) as usize);
             Some(keep_tower_squares(nx, ny) as f64 * SQUARE_FT)
         }
+        // (A tower mill under its cap.)
+        Arch::Tower if b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "windmill") => None,
         Arch::Tower => Some(0.0),
         _ => None,
     }
@@ -626,6 +638,12 @@ pub const FURNITURE: &[(&str, &str, u8, bool, f32)] = &[
     ("yurt_pallet", "pallet and bedroll", 0, false, 1.0),
     ("painted_chest", "painted chest", 1, true, 2.5),
     ("floor_cushion", "floor cushion", 0, false, 0.5),
+    // A tower mill's (`furnishing`): a pair of millstones in their wooden tun, the hopper over
+    // them; the great spur wheel on the upright shaft; the sack hoist's trap and its winding drum.
+    ("millstones", "millstones", 1, true, 3.5),
+    ("spur_wheel", "great spur wheel", 1, true, 4.0),
+    ("hoist_trapdoor", "sack hoist trapdoor", 0, false, 0.0),
+    ("sack_hoist", "sack hoist", 1, true, 4.0),
 ];
 
 /// A guild's arms' looks (`Item::variant` of `guild_arms`): the merchants', the craftsmen's, the
@@ -679,7 +697,13 @@ pub fn item_looks(kind: &str) -> u8 {
 
 /// (kind, display name, cover, blocks movement, height ft).
 fn item_info(kind: &'static str) -> (&'static str, u8, bool, f32) {
-    FURNITURE.iter().find(|f| f.0 == kind).map(|f| (f.1, f.2, f.3, f.4)).unwrap_or(("furniture", 1, true, 3.0))
+    // (Else an indoor prop, as underground: a mill's sacks.)
+    FURNITURE
+        .iter()
+        .find(|f| f.0 == kind)
+        .map(|f| (f.1, f.2, f.3, f.4))
+        .or_else(|| crate::under::PROPS.iter().find(|p| p.0 == kind && INDOOR_PROPS.contains(&p.0)).map(|p| (p.1, p.2, p.3, p.4)))
+        .unwrap_or(("furniture", 1, true, 3.0))
 }
 
 /// Clutter a building's design can hold besides its furniture (the designer's indoor props):
@@ -828,6 +852,12 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         "arena floor" => &[("pillar", Center(1, 1), 2, 40), ("barricade", Center(2, 1), 2, 30), ("trapdoor", Center(1, 1), 1, 30), ("cage", Center(1, 1), 1, 0)],
         "stands" => &[("bench", Wall(3, 1), 2, 6)],
         "tower room" => &[("weapon_rack", Wall(1, 1), 1, 0), ("crate", Wall(1, 1), 1, 0)],
+        // A tower mill's floors (`program`): flour sacks and meal bins; the millstones; the grain
+        // bins and the sack hoist's trap; the great spur wheel and the hoist under the cap.
+        "meal floor" => &[("sacks", Wall(1, 1), 2, 10), ("barrel", Wall(1, 1), 2, 0), ("workbench", Wall(2, 1), 1, 0)],
+        "stone floor" => &[("millstones", Center(2, 2), 1, 0), ("sacks", Wall(1, 1), 2, 0), ("barrel", Wall(1, 1), 1, 0)],
+        "bin floor" => &[("hoist_trapdoor", Center(1, 1), 1, 0), ("crate", Wall(1, 1), 3, 0), ("sacks", Wall(1, 1), 1, 0)],
+        "dust floor" => &[("spur_wheel", Center(2, 2), 1, 0), ("sack_hoist", Wall(1, 1), 1, 0), ("sacks", Wall(1, 1), 1, 0)],
         "winch room" => &[("winch", Center(1, 1), 1, 0), ("weapon_rack", Wall(1, 1), 1, 0)],
         "wall walk" => &[],
         "hall" | "corridor" => &[],
@@ -920,7 +950,7 @@ pub const ROOM_KINDS: &[&str] = &[
     "scriptorium", "cloister walk", "garth", "arcade", "council chamber", "strongroom", "sample room",
     "masterpiece gallery", "job-board room", "trophy hall", "bunk room", "warded vault", "belfry stair", "belfry",
     "stables", "tack room", "snug", "private dining room", "scullery", "best chamber", "innkeeper's quarters",
-    "inn yard", "yard gallery", "yurt",
+    "inn yard", "yard gallery", "yurt", "meal floor", "stone floor", "bin floor", "dust floor",
 ];
 
 /// A kind of room in a building, by name.
@@ -1834,6 +1864,8 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     let yurt = arch == Arch::House && b.parts.is_empty() && round_ish(b);
     // Levels: a cellar, the ground floor and the storeys above; at least two levels (a yurt one).
     let floors = b.floors.max(1) as i8;
+    // (A tower mill: its stair up the wall, `mill_stairs`.)
+    let mill = arch == Arch::Tower && key == Some("windmill");
     let mut zs: Vec<i8> = vec![-1];
     zs.extend(0..floors);
     // Keeps and towers (or any roof drawn so): walk the battlements on the roof.
@@ -1889,16 +1921,19 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         m
     };
     let whole = off_towers(sh.whole.clone());
+    // (A tower mill's stair up its wall, a straight one: the stones and the gearing in the middle.)
+    let arch_st = if mill { Arch::Warehouse } else { arch };
     let mut stairs = match &plan {
         Some(p) => p.stairs,
-        None if key == Some("shrine") => shrine_stairs(&whole, nx, ny, front).unwrap_or_else(|| place_stairs(&whole, nx, ny, front, arch)),
-        None => place_stairs(&whole, nx, ny, front, arch),
+        None if mill => mill_stairs(&whole, nx, ny, front).unwrap_or_else(|| place_stairs(&whole, nx, ny, front, arch_st)),
+        None if key == Some("shrine") => shrine_stairs(&whole, nx, ny, front).unwrap_or_else(|| place_stairs(&whole, nx, ny, front, arch_st)),
+        None => place_stairs(&whole, nx, ny, front, arch_st),
     };
     let on = |st: [usize; 4], m: &[bool]| (st[1]..st[1] + st[3]).all(|j| (st[0]..st[0] + st[2]).all(|i| m[j * nx + i]));
     if plan.is_none() && !on(stairs, &whole) {
         for t in [0.1, 0.0, f64::MIN] {
             let m = off_towers(sh.whole_by(t));
-            stairs = place_stairs(&m, nx, ny, front, arch);
+            stairs = place_stairs(&m, nx, ny, front, arch_st);
             if on(stairs, &m) {
                 break;
             }
@@ -2927,6 +2962,36 @@ fn grow(poly: &[P], d: f64) -> Vec<P> {
             add(*p, mul(r, d / l))
         })
         .collect()
+}
+
+/// A tower mill's stair: two squares up its wall (both on the floor's rim), the side away from
+/// the door (`front`: 0 the grid's top, 1 its right, 2 its bottom, 3 its left), the middle left
+/// for the stones and the gearing.
+fn mill_stairs(inside: &[bool], nx: usize, ny: usize, front: usize) -> Option<[usize; 4]> {
+    let at = |i: isize, j: isize| i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny && inside[j as usize * nx + i as usize];
+    let rim = |i: usize, j: usize| at(i as isize, j as isize) && [(0, -1), (1, 0), (0, 1), (-1, 0)].iter().any(|&(di, dj)| !at(i as isize + di, j as isize + dj));
+    let door = match front {
+        0 => [0.5 * nx as f64, 0.0],
+        1 => [nx as f64, 0.5 * ny as f64],
+        2 => [0.5 * nx as f64, ny as f64],
+        _ => [0.0, 0.5 * ny as f64],
+    };
+    let mut best: Option<(f64, [usize; 4])> = None;
+    for j in 0..ny {
+        for i in 0..nx {
+            for (w, h) in [(2, 1), (1, 2)] {
+                if i + w > nx || j + h > ny || !(0..h).all(|b| (0..w).all(|a| rim(i + a, j + b))) {
+                    continue;
+                }
+                let m = [i as f64 + 0.5 * w as f64, j as f64 + 0.5 * h as f64];
+                let d = geom::dist(m, door);
+                if best.is_none_or(|b| d > b.0 + 1e-9) {
+                    best = Some((d, [i, j, w, h]));
+                }
+            }
+        }
+    }
+    best.map(|b| b.1)
 }
 
 fn place_stairs(inside: &[bool], nx: usize, ny: usize, front: usize, arch: Arch) -> [usize; 4] {

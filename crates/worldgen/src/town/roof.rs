@@ -258,6 +258,14 @@ pub fn look(l: &Layout, b: &Building) -> Look {
             }
         }
     };
+    // A tower mill: its battered walls rising to the cap, seen from above as a cone (the cap drawn
+    // over it with the sails): lime-washed in the south and the dry lands, else tarred boards,
+    // stone or weatherboard.
+    let (material, shape) = if key == "windmill" {
+        (if matches!(culture, 2 | 3) { Whitewash } else { pick(u0, &[(Plank, 4), (Slate, 3), (Shingle, 3)]) }, Cone)
+    } else {
+        (material, shape)
+    };
     // (Hand-set: a material, else the old tint; a shape, else the old roof style.)
     let material = b.material.and_then(Material::from_u8).or_else(|| b.tint.and_then(|t| TINT_MATERIAL.get(t as usize).copied())).unwrap_or(material);
     let shape = match (b.shape.and_then(Shape::from_u8), b.roof) {

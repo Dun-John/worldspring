@@ -1287,6 +1287,83 @@ function vat(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   g.poly(ring(cx + px * 0.7, cy + py * 0.7, 0.1, rnd, 0.01, 10)).fill(WOOD[2]).stroke({ width: LINE, color: INK });
 }
 
+/** Millstones: the runner stone in its wooden tun (the vat round the pair), grey, its furrows dressed in
+ * harps round the eye; over the eye the hopper on its frame (the horse), grain in it, the shoe below. */
+function millstones(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
+  const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
+  const r = Math.min(f.w, f.h) / 2 - 0.08;
+  staveRing(g, cx, cy, r, 0.86, light, rnd);
+  const rs = r * 0.84;
+  g.circle(cx, cy, rs).fill(STONE[1]);
+  g.circle(cx + light[0] * rs * 0.08, cy + light[1] * rs * 0.08, rs * 0.86).fill(STONE[2]);
+  // The harps: furrows in sectors, each run off the radius at a slant.
+  const harps = 8;
+  for (let k = 0; k < harps; k++) {
+    const a = (k / harps) * Math.PI * 2;
+    for (let j = 0; j < 3; j++) {
+      const t = 0.28 + j * 0.2;
+      const [ax, ay] = [cx + Math.cos(a) * rs * 0.2, cy + Math.sin(a) * rs * 0.2];
+      const b = a + 0.26 + j * 0.1;
+      g.moveTo(ax + Math.cos(a + Math.PI / 2) * rs * t * 0.3, ay + Math.sin(a + Math.PI / 2) * rs * t * 0.3).lineTo(cx + Math.cos(b) * rs * 0.94, cy + Math.sin(b) * rs * 0.94);
+    }
+  }
+  g.stroke({ width: 0.016, color: STONE[0], alpha: 0.8 });
+  g.circle(cx, cy, rs).stroke({ width: LINE, color: INK });
+  // The horse: two bars across the tun, the hopper on them.
+  for (const sd of [-1, 1]) {
+    const y = cy + sd * r * 0.3;
+    g.poly(quad([cx - r * 0.98, y - 0.05, cx + r * 0.98, y + 0.05], rnd, 0.004)).fill(WOOD[1]).stroke({ width: LINE, color: INK });
+  }
+  const h = r * 0.42;
+  g.poly([cx - h, cy - h, cx + h, cy - h, cx + h, cy + h, cx - h, cy + h]).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly([cx - h, cy - h, cx + h, cy - h, cx + h * 0.4, cy - h * 0.4, cx - h * 0.4, cy - h * 0.4]).fill(WOOD[2]);
+  g.poly([cx - h, cy - h, cx - h * 0.4, cy - h * 0.4, cx - h * 0.4, cy + h * 0.4, cx - h, cy + h]).fill({ color: WOOD[2], alpha: 0.7 });
+  g.poly([cx - h * 0.4, cy - h * 0.4, cx + h * 0.4, cy - h * 0.4, cx + h * 0.4, cy + h * 0.4, cx - h * 0.4, cy + h * 0.4]).fill(0xc9a862).stroke({ width: 0.018, color: INK });
+  g.circle(cx, cy, 0.05).fill(0x6e5a30);
+}
+
+/** The great spur wheel on the upright shaft, from above: its rim of wooden cogs, the two pairs of
+ * clasp arms boxing the shaft, the shaft's square head, a stone nut meshed on its rim. */
+function spurWheel(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
+  const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
+  const r = Math.min(f.w, f.h) / 2 - 0.16;
+  // The cogs, then the rim over their roots.
+  const n = 28;
+  for (let k = 0; k < n; k++) {
+    const a = (k / n) * Math.PI * 2;
+    const [c, s] = [Math.cos(a), Math.sin(a)];
+    const [px, py] = [-s * 0.035, c * 0.035];
+    g.poly([cx + c * r * 0.9 - px, cy + s * r * 0.9 - py, cx + c * (r + 0.11) - px, cy + s * (r + 0.11) - py, cx + c * (r + 0.11) + px, cy + s * (r + 0.11) + py, cx + c * r * 0.9 + px, cy + s * r * 0.9 + py]);
+  }
+  g.fill(WOOD[2]).stroke({ width: 0.016, color: INK });
+  g.circle(cx, cy, r).fill(WOOD[0]).stroke({ width: OUT, color: INK });
+  g.circle(cx + light[0] * 0.02, cy + light[1] * 0.02, r * 0.86).fill(WOOD[1]);
+  g.circle(cx, cy, r * 0.72).fill(0x2a2018).stroke({ width: LINE, color: INK });
+  // The clasp arms: two pairs of beams across, crossing round the shaft.
+  const q = r * 0.16;
+  for (const along of [true, false]) {
+    for (const sd of [-1, 1]) {
+      const rect = along ? [cx - r * 0.95, cy + sd * q - 0.055, cx + r * 0.95, cy + sd * q + 0.055] : [cx + sd * q - 0.055, cy - r * 0.95, cx + sd * q + 0.055, cy + r * 0.95];
+      g.poly(quad(rect, rnd, 0.004)).fill(WOOD[1]).stroke({ width: LINE, color: INK });
+      g.moveTo(...((along ? [rect[0], rect[1] + 0.025] : [rect[0] + 0.025, rect[1]]) as [number, number])).lineTo(...((along ? [rect[2], rect[1] + 0.025] : [rect[0] + 0.025, rect[3]]) as [number, number])).stroke({ width: 0.016, color: WOOD[2] });
+    }
+  }
+  // The upright shaft's head, iron-banded.
+  g.poly(quad([cx - q * 0.85, cy - q * 0.85, cx + q * 0.85, cy + q * 0.85], rnd, 0.003)).fill(WOOD[2]).stroke({ width: LINE, color: INK });
+  g.circle(cx, cy, q * 0.5).stroke({ width: 0.02, color: IRON[1] });
+  // A stone nut meshed on the rim (to the south-east, away from the light).
+  const [nx, ny] = [cx - light[0] * (r + 0.2), cy - light[1] * (r + 0.2)];
+  const nr = 0.17;
+  const teeth: number[] = [];
+  for (let k = 0; k < 20; k++) {
+    const a = (k / 20) * Math.PI * 2;
+    const rr = k % 2 ? nr : nr + 0.05;
+    teeth.push(nx + Math.cos(a) * rr, ny + Math.sin(a) * rr);
+  }
+  g.poly(teeth).fill(WOOD[1]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.circle(nx, ny, 0.05).fill(IRON[1]).stroke({ width: 0.016, color: INK });
+}
+
 /** Cauldron: a round black iron pot on three short legs, the embers of a fire glowing round its foot, a
  * bubbling brew inside. */
 function cauldron(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () => number) {
@@ -3733,6 +3810,7 @@ export const VARIED = new Set([
   'altar', 'statue', 'pillar', 'sarcophagus', 'bell', 'throne', 'stage',
   'vat', 'cauldron', 'alchemy_bench', 'weapon_rack', 'rack', 'cage', 'winch', 'telescope', 'barricade',
   'trapdoor', 'spiral_stair', 'link_down',
+  'millstones', 'spur_wheel', 'hoist_trapdoor', 'sack_hoist',
   'throne_dais', 'carpet_runner', 'chair_of_office', 'high_table', 'tapestry', 'wall_banner', 'standing_banner', 'font', 'cloister_well',
   'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'low_dais', 'garden_path',
   'god_statue', 'candle_stand', 'carved_screen', 'screen_gate', 'side_altar',
@@ -3822,7 +3900,14 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       cage(g, f, rnd);
       break;
     case 'winch':
+    case 'sack_hoist':
       winch(g, f, light, rnd);
+      break;
+    case 'millstones':
+      millstones(g, f, light, rnd);
+      break;
+    case 'spur_wheel':
+      spurWheel(g, f, light, rnd);
       break;
     case 'telescope':
       telescope(g, f, light, rnd);
@@ -3831,6 +3916,7 @@ export function drawFurniture(g: Graphics, f: InteriorItem, light: Light, v: num
       barricade(g, f);
       break;
     case 'trapdoor':
+    case 'hoist_trapdoor':
       trapdoor(g, f, light, rnd);
       break;
     case 'spiral_stair':
