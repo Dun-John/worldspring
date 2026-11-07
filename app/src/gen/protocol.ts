@@ -910,10 +910,10 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       } else if (kind === 14) rgb = [0.33, 0.46, 0.26];
       else if (kind === 15) rgb = [0.74, 0.5, 0.46];
       // v63 countryside: a village's plots (`town::village`): a croft's or a yard's ground (faint), its
-      // hedges and fences, a churchyard's grass and its headstones, the green.
+      // hedges and fences, a churchyard's grass and its headstones, the green, a yard's low wall.
       else if (kind === 16) {
         rgb = [0.64, 0.7, 0.47];
-        a = 0.35;
+        a = 0.2;
       } else if (kind === 17) rgb = [0.34, 0.48, 0.26];
       else if (kind === 18) rgb = [0.52, 0.39, 0.26];
       else if (kind === 19) {
@@ -923,7 +923,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       else if (kind === 21) {
         rgb = [0.6, 0.7, 0.44];
         a = 0.6;
-      } else if ((attr >>> 25) & 15) {
+      } else if (kind === 22) rgb = [0.62, 0.6, 0.55];
+      else if ((attr >>> 25) & 15) {
         // A keep's piece (`payload::pack_sites`): towers and the body's hall under slate, a wing or
         // forebuilding by its top (`town::keep_tops`): open battlements stone, a roof lead or slate; a
         // monastery's church (5) its ranges' colour deepened, its bell-cote (6) slate; a town hall's

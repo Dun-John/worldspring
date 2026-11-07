@@ -158,7 +158,8 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     let area = super::geom::area(&b.poly).abs();
     let compact = o.long <= 1.35 * o.short.max(1.0);
     let small = area < 1000.0 && b.floors <= 1;
-    let grand = matches!(role, Role::Civic | Role::Sacred) || (rich == 2 && area > 1600.0);
+    // (A village's manor is a big house, not a grand one: `town::village`.)
+    let grand = matches!(role, Role::Civic | Role::Sacred) || (rich == 2 && area > 1600.0 && l.tier != crate::t0::settle::Tier::Village);
     let key = b.func.map(|f| CATALOG[f as usize].key).unwrap_or("");
     let temple = matches!(key, "temple" | "monastery" | "mausoleum");
     let (u0, u1, u2) = (h(1), h(2), h(3));

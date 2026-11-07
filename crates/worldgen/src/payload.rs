@@ -116,7 +116,7 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
     let town_roads: Vec<Vec<[f64; 4]>> = if key.level >= SITE_MIN_LEVEL {
         crate::town::layouts_near(world, t0, [ox, oy, ox + size, oy + size])
             .iter()
-            .flat_map(|l| l.roads.iter().map(|(pts, class, w)| pts.iter().map(|p| [p[0], p[1], *w, *class as f64]).collect::<Vec<_>>()).collect::<Vec<_>>())
+            .flat_map(|l| l.roads.iter().map(|(pts, class, w)| pts.iter().map(|p| [p[0], p[1], *w, *class as f64]).collect::<Vec<_>>()).chain(crate::town::village::plan_lanes(l)).collect::<Vec<_>>())
             .collect()
     } else {
         Vec::new()
@@ -533,7 +533,6 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             if key.level >= BUILDING_MIN_LEVEL {
                 crate::town::village::plan_ticks(&l, &mut push);
             }
-            crate::town::village::plan_lines(&l, &mut lines);
             for w in &l.walls {
                 lines.push(w.iter().map(|p| [p[0], p[1], 9.0, 0.0]).collect());
             }

@@ -4662,19 +4662,23 @@ fn shore_run(site: &Site, reach: f64) -> Option<Vec<P>> {
     Some((0..=n).map(|k| point_along(&pts, total * k as f64 / n as f64).0).collect())
 }
 
-/// Piers along a wharf: every 70–120 ft, square to the shore, 40–80 ft into the water (a
-/// river pier reaches at most a third of the way across). Built only where the water starts
-/// right at the wharf and the whole pier stands over water.
+/// Piers along a village's wharf: every 150–260 ft (about one in three left out), square to the
+/// shore, 25–45 ft into the water (a river pier reaches at most a third of the way across). Built
+/// only where the water starts right at the wharf and the whole pier stands over water.
 fn piers_along(site: &Site, wharf: &[P], rng: &mut Pcg32, l: &mut Layout) {
     let total: f64 = wharf.windows(2).map(|w| dist(w[0], w[1])).sum();
-    let mut at = rng.range(30.0, 70.0);
+    let mut at = rng.range(40.0, 120.0);
     while at < total - 20.0 {
+        if rng.next_f64() < 0.33 {
+            at += rng.range(150.0, 260.0);
+            continue;
+        }
         let (p, u) = point_along(wharf, at);
         let mut out = [-u[1], u[0]];
         if !site.wet(add(p, mul(out, 30.0))) {
             out = mul(out, -1.0);
         }
-        let mut length = rng.range(40.0, 80.0);
+        let mut length = rng.range(25.0, 45.0);
         if let Some((_, _, hw)) = site.nearest_river(p)
             && site.near_river(add(p, mul(out, 30.0)), 0.0)
         {
@@ -4706,7 +4710,7 @@ fn piers_along(site: &Site, wharf: &[P], rng: &mut Pcg32, l: &mut Layout) {
                 l.piers.push(pier);
             }
         }
-        at += rng.range(70.0, 120.0);
+        at += rng.range(150.0, 260.0);
     }
 }
 

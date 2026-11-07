@@ -677,6 +677,8 @@ fn settlement_catalog_guarantees() {
         for (fi, f) in CATALOG.iter().enumerate() {
             let need = required_count(f, l.tier, l.on_water);
             let has = if f.key == "shrine" && l.tier == worldgen::t0::settle::Tier::Village { have[fi] + have[temple] } else { have[fi] };
+            // (A village's mill stands only by the water: `town::village::mill`.)
+            let need = if f.key == "mill" && l.tier == worldgen::t0::settle::Tier::Village { 0 } else { need };
             assert!(has >= need, "settlement {i} ({:?}) has {} of {} (needs {need})", l.tier, has, f.name);
         }
     }
