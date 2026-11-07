@@ -836,8 +836,8 @@ export interface SiteGeometry {
   /** Polygons, one vertex per triangle corner; `edge` per vertex: the corner's barycentric
    * coordinate for each triangle edge that is an outlined polygon's real edge, 1 for an inner
    * diagonal or an unoutlined polygon (the fill shader inks distance-to-edge < ~1 px); `field` per
-   * vertex (v63 countryside): a field's furrow coordinate (ft across its furrows) and its style (0 not a
-   * field, else 1 + use + 4 × bound + 16 × strips: `fieldStyle`). */
+   * vertex (v63 countryside): a field's furrow coordinate (ft across its furrows), along them (ft) and its
+   * style (0 not a field, else 1 + use + 4 × bound + 16 × strips: `fieldStyle`). */
   fill: { pos: Float32Array; color: Float32Array; edge: Float32Array; field: Float32Array; index: Uint32Array } | null;
   ink: RiverGeometry | null;
 }
@@ -899,14 +899,14 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, tileF
     return true;
   };
   for (let i = 0; i < n; i++) tris += fanned(i) ? polys.starts[i + 1] - polys.starts[i] : Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
     const pos = new Float32Array(tris * 6);
     const color = new Float32Array(tris * 12);
     const edge = new Float32Array(tris * 9);
-    const field = new Float32Array(tris * 6);
+    const field = new Float32Array(tris * 9);
     const index = new Uint32Array(tris * 3);
     let v = 0;
     for (let i = 0; i < n; i++) {
@@ -963,6 +963,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, tileF
         rgb = [0.6, 0.7, 0.44];
         a = 0.6;
       } else if (kind === 22) rgb = [0.62, 0.6, 0.55];
+      // A windmill's sails (`town::rural::plan_ticks`), over its roof.
+      else if (kind === 23) rgb = [0.88, 0.84, 0.74];
       else if ((attr >>> 25) & 15) {
         // A keep's piece (`payload::pack_sites`): towers and the body's hall under slate, a wing or
         // forebuilding by its top (`town::keep_tops`): open battlements stone, a roof lead or slate; a
@@ -1011,8 +1013,9 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, tileF
             color.set([rgb[0], rgb[1], rgb[2], a], v * 4);
             // (The side, opposite the middle, is the only real edge.)
             for (let e = 0; e < 3; e++) edge[v * 3 + e] = e === 0 && ink ? (c === 0 ? 1 : 0) : 1;
-            field[v * 2] = (pos[v * 2] * fs.nx + pos[v * 2 + 1] * fs.ny) * tileFt;
-            field[v * 2 + 1] = fs.style;
+            field[v * 3] = (pos[v * 2] * fs.nx + pos[v * 2 + 1] * fs.ny) * tileFt;
+            field[v * 3 + 1] = (pos[v * 2 + 1] * fs.nx - pos[v * 2] * fs.ny) * tileFt;
+            field[v * 3 + 2] = fs.style;
             index[v] = v;
             v++;
           }
@@ -1031,8 +1034,9 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, tileF
           color.set([rgb[0], rgb[1], rgb[2], a], v * 4);
           for (let e = 0; e < 3; e++) edge[v * 3 + e] = real[e] ? (c === e ? 1 : 0) : 1;
           if (fs) {
-            field[v * 2] = (pos[v * 2] * fs.nx + pos[v * 2 + 1] * fs.ny) * tileFt;
-            field[v * 2 + 1] = fs.style;
+            field[v * 3] = (pos[v * 2] * fs.nx + pos[v * 2 + 1] * fs.ny) * tileFt;
+            field[v * 3 + 1] = (pos[v * 2 + 1] * fs.nx - pos[v * 2] * fs.ny) * tileFt;
+            field[v * 3 + 2] = fs.style;
           }
           index[v] = v;
           v++;

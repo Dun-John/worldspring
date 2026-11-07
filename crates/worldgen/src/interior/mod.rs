@@ -295,7 +295,7 @@ fn arch_of(b: &town::Building) -> Arch {
         Some("tavern" | "alehouse" | "fine_dining" | "gambling_den" | "smugglers_den") => Arch::Tavern,
         Some("blacksmith" | "armorer" | "weaponsmith" | "glassblower" | "potter" | "tinker") => Arch::Forge,
         Some("brewery" | "winery" | "distillery") => Arch::Brewery,
-        Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
+        Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "windmill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
         Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs") => Arch::Temple,
         Some("prison") => Arch::Prison,
         Some("castle" | "barracks" | "gatehouse") => Arch::Keep,

@@ -81,7 +81,7 @@ struct LaneGrid {
 }
 
 /// A branch lane's width (ft): what the plots keep clear of and what plan zoom draws.
-const LANE_W: f64 = 10.0;
+pub(super) const LANE_W: f64 = 10.0;
 const CELL: f64 = 40.0;
 /// The most margin `LaneGrid::near` is asked for (ft).
 const LANE_MARGIN: f64 = 4.0;
@@ -768,7 +768,7 @@ fn shrine_yard(g: &mut Ground, l: &mut Layout, green_r: f64, bound: Bound, rng: 
 
 /// The water mill: on the river's bank where a river runs by (the bank nearer the green; across the
 /// lane along it from the water if one runs there), else by the wharf; its long side along the bank,
-/// its footprint within `MILL_WATER_FT` of the water. Else none (V3: a windmill on a rise at the edge).
+/// its footprint within `MILL_WATER_FT` of the water. Else none (`rural::place`: a windmill on a rise).
 fn mill(g: &mut Ground, l: &mut Layout, r: f64, wharf: Option<&[P]>, rng: &mut Pcg32) -> bool {
     let Some(mill_f) = catalog::index_of("mill") else { return false };
     let (w, d) = (rng.range(30.0, 40.0), rng.range(20.0, 26.0));

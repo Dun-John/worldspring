@@ -6,9 +6,10 @@
 in vec4 vColor;
 in vec2 vTile;
 in vec3 vEdge;
-// v63 countryside: a field's furrow coordinate (ft across its furrows) and style (0 not a field, else
-// 1 + use (0 arable, 1 pasture, 2 fallow, 3 orchard) + 4 bound (1 hedge, 2 wall) + 16 strips).
-in vec2 vField;
+// v63 countryside: a field's furrow coordinate (ft across its furrows), the one along them and its style
+// (0 not a field, else 1 + use (0 arable, 1 pasture, 2 fallow, 3 orchard) + 4 bound (1 hedge, 2 wall) +
+// 16 strips).
+in vec3 vField;
 
 out vec4 finalColor;
 
@@ -24,6 +25,10 @@ const float STRIP_FT = 38.0;
 const vec3 HEDGE = vec3(0.24, 0.36, 0.19);
 const vec3 WALL = vec3(0.47, 0.46, 0.43);
 const vec3 BALK = vec3(0.53, 0.6, 0.38);
+// An orchard's trees: rows and trees apart (ft, as on the battlemap: `town::rural`), crowns' colour.
+const float ORCHARD_ROW_FT = 15.0;
+const float ORCHARD_TREE_FT = 12.5;
+const vec3 CROWN = vec3(0.3, 0.45, 0.22);
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -50,6 +55,14 @@ vec3 fieldLook(vec3 col, int code, float fw, out vec3 ink, out float lw) {
         float band = mix(wave, smoothstep(0.5, 0.95, wave), smoothstep(8.0, 20.0, period));
         col *= 1.0 - (use == 2 ? 0.06 : 0.12) * band * smoothstep(2.5, 6.0, period);
     }
+    if (use == 3) {
+        // An orchard: a dot a tree in rows along the furrows (shown once a row is ~5 px apart).
+        vec2 q = vec2(vField.y / ORCHARD_TREE_FT, c / ORCHARD_ROW_FT);
+        vec2 f = (fract(q + 0.5) - 0.5) * vec2(ORCHARD_TREE_FT, ORCHARD_ROW_FT) / fw;
+        float show = smoothstep(4.0, 8.0, ORCHARD_ROW_FT / fw);
+        float rpx = 0.32 * ORCHARD_TREE_FT / fw;
+        col = mix(col, CROWN, (1.0 - smoothstep(rpx - 0.7, rpx + 0.7, length(f))) * 0.8 * show);
+    }
     if (strips) {
         float s = c / STRIP_FT;
         float period = STRIP_FT / fw;
@@ -71,7 +84,7 @@ void main() {
     vec3 fill = vColor.rgb;
     // (Derivatives taken outside the branch.)
     float fw = max(length(vec2(dFdx(vField.x), dFdy(vField.x))), 1e-4);
-    if (vField.y > 0.5) fill = fieldLook(fill, int(vField.y + 0.5) - 1, fw, inkCol, lw);
+    if (vField.z > 0.5) fill = fieldLook(fill, int(vField.z + 0.5) - 1, fw, inkCol, lw);
     float ink = (1.0 - smoothstep(lw - 0.5, lw + 0.5, d)) * smoothstep(0.04, 0.12, uPpf);
     float a = max(vColor.a, ink) * uAlpha;
     if (a <= 0.001) discard;

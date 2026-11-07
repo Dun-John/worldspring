@@ -202,6 +202,9 @@ pub enum Kind {
     Bandstand,
     GardenStatue,
     Footbridge,
+    // v63 countryside
+    FruitTree = 62,
+    WaterWheel = 63,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -247,7 +250,7 @@ const fn hz(id: Kind, name: &'static str, radius: f32, difficult: bool, effect: 
     }
 }
 
-pub const CATALOG: [KindInfo; 61] = [
+pub const CATALOG: [KindInfo; 63] = [
     k(Kind::TreeDeciduous, "deciduous tree", 1.4, true, true, 2, false, 35.0, false),
     k(Kind::TreeConifer, "conifer", 1.1, true, true, 2, false, 45.0, false),
     k(Kind::TreePalm, "palm", 1.2, true, false, 1, false, 30.0, false),
@@ -309,10 +312,13 @@ pub const CATALOG: [KindInfo; 61] = [
     k(Kind::Bandstand, "bandstand", 2.0, false, false, 1, false, 14.0, true),
     k(Kind::GardenStatue, "garden statue", 0.7, true, false, 2, false, 10.0, true),
     k(Kind::Footbridge, "footbridge", 1.6, false, false, 0, false, 3.0, true),
+    // v63 countryside
+    k(Kind::FruitTree, "fruit tree", 1.0, true, false, 1, false, 15.0, false),
+    k(Kind::WaterWheel, "water wheel", 1.4, true, false, 2, false, 14.0, true),
 ];
 
 /// Every kind, by id - 1.
-const KINDS: [Kind; 61] = [
+const KINDS: [Kind; 63] = [
     Kind::TreeDeciduous, Kind::TreeConifer, Kind::TreePalm, Kind::TreeJungle, Kind::TreeAcacia, Kind::TreeDead, Kind::TreeWillow, Kind::Bush,
     Kind::Thicket, Kind::FallenLog, Kind::Stump, Kind::Boulder, Kind::RockSmall, Kind::RockPile, Kind::Reeds, Kind::Cactus, Kind::TallGrass,
     Kind::Flowers, Kind::Mushrooms, Kind::Bones, Kind::Snowdrift, Kind::IceSpire, Kind::BasaltPillar, Kind::Obsidian, Kind::Brambles, Kind::Bog,
@@ -320,6 +326,8 @@ const KINDS: [Kind; 61] = [
     Kind::MarketStall, Kind::Well, Kind::Haystack, Kind::Headstone, Kind::RuinWall, Kind::Statue, Kind::Tent, Kind::Campfire, Kind::Firewood,
     Kind::Bedroll, Kind::WaterTrough, Kind::NoticeBoard, Kind::Signpost, Kind::Stocks, Kind::LampPost, Kind::MarketCross, Kind::Fountain, Kind::Pond,
     Kind::Bench, Kind::Flowerbed, Kind::Hedge, Kind::Topiary, Kind::Gazebo, Kind::Bandstand, Kind::GardenStatue, Kind::Footbridge,
+    // v63 countryside
+    Kind::FruitTree, Kind::WaterWheel,
 ];
 
 /// The kind with a catalog id.
@@ -482,6 +490,15 @@ pub enum ShapeKind {
     ForecourtGate = 12,
     /// A gravel walk across a palace court's lawn: its four corners.
     GravelWalk = 13,
+    // v63 countryside (`town::rural`): a field's or a croft's bound, a straight stretch of it (its
+    // ends); size is its thickness. About 4 ft: difficult ground, cover, seen over (never sight's).
+    Hedge = 14,
+    DryWall = 15,
+    /// A post-and-rail fence.
+    Fence = 16,
+    /// A windmill's sails: the hub, then `[angle, 0]` (the way one pair stands, radians); size is
+    /// their reach from the hub.
+    Sails = 17,
 }
 
 /// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands
@@ -1114,7 +1131,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // A bailey's dressing (`dress_bailey`: world ft, rotation, kind, look, scale).
     let mut bailey_props: Vec<([f64; 2], f32, Kind, u8, f32)> = Vec::new();
     let mut bailey_ways: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    // v63 countryside: the layouts here, for `town::rural` below.
+    let mut rural_ls: Vec<std::rc::Rc<crate::town::Layout>> = Vec::new();
     for l in crate::town::layouts_near(world, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT]) {
+        rural_ls.push(l.clone());
         for m in &l.mottes {
             let (a, b) = (crate::town::geom::add(m.at, crate::town::geom::mul(m.way, m.top_r - 8.0)), crate::town::geom::add(m.at, crate::town::geom::mul(m.way, m.foot_r + 6.0)));
             for j in 0..HS {
@@ -2373,6 +2393,22 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         })
         .collect();
 
+    // v63 countryside: hedgerows, dry-stone walls and fences (not on a road or water), orchards,
+    // copses, windmills' sails and water wheels (`town::rural`).
+    let mut rural = crate::town::rural::Battle::default();
+    {
+        let blocked = |p: [f64; 2]| {
+            let (i, j) = (((p[0] - ox) / SQUARE_FT).floor() as i64, ((p[1] - oy) / SQUARE_FT).floor() as i64);
+            if i < -1 || j < -1 || i > SQ as i64 || j > SQ as i64 {
+                return false;
+            }
+            hw[(j + 1) as usize * HS + (i + 1) as usize] > hh[(j + 1) as usize * HS + (i + 1) as usize] || (-1..=1).any(|dy| (-1..=1).any(|dx| tile.road_mask.get(sidx(i + dx, j + dy)).is_some_and(|&r| r != 0)))
+        };
+        for l in &rural_ls {
+            crate::town::rural::battle(l, t0, [ox, oy, ox + chunk_ft, oy + chunk_ft], &blocked, &mut rural);
+        }
+    }
+    crate::town::rural::shapes(&rural, ox, oy, &mut shapes);
     let mut chunk = Chunk {
         key: *key,
         tier: vec![0; n],
@@ -2527,6 +2563,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         (0..n).map(|k| churchyards.iter().any(|y| crate::town::geom::contains(y, [ox + ((k % SQ) as f64 + 0.5) * SQUARE_FT, oy + ((k / SQ) as f64 + 0.5) * SQUARE_FT]))).collect()
     };
     place_town_props(&mut chunk, seed, gsx, gsy, &rowless);
+    crate::town::rural::objects(&rural, ox, oy, &mut chunk);
     // Ruins: broken wall segments along the old outlines, rubble inside. Keyed by world
     // position so a ruin across a chunk border breaks the same way in both chunks.
     let wseed = hash2(seed, 0x2a11, 5);
@@ -2909,6 +2946,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     }
     apply_edits(&mut chunk, &world.file.edits, ox, oy);
     compute_edges(&mut chunk);
+    crate::town::rural::mark(&rural, ox, oy, &mut chunk.edges);
     for k in 0..n {
         if park_wet[(k / SQ + 1) * HS + k % SQ + 1] {
             chunk.edges[k] |= 32;

@@ -107,7 +107,7 @@ fn role(b: &Building) -> Role {
     match f.key {
         "temple" | "shrine" | "monastery" | "mausoleum" | "catacombs" => Role::Sacred,
         "library" | "arcane_academy" | "observatory" | "bank" | "auction_house" | "merchant_guild" | "craft_guild" | "mages_guild" | "theater" | "bards_college" | "arena" | "bathhouse" => Role::Civic,
-        "blacksmith" | "armorer" | "weaponsmith" | "glassblower" | "potter" | "brewery" | "winery" | "distillery" | "leatherworker" | "mill" | "stables" | "warehouse" | "shipwright" | "carpenter" | "mason" | "cooper" | "cartwright" | "weaver" => Role::Working,
+        "blacksmith" | "armorer" | "weaponsmith" | "glassblower" | "potter" | "brewery" | "winery" | "distillery" | "leatherworker" | "mill" | "windmill" | "stables" | "warehouse" | "shipwright" | "carpenter" | "mason" | "cooper" | "cartwright" | "weaver" => Role::Working,
         _ if f.category == "civic & military" => Role::Civic,
         _ => Role::Trade,
     }

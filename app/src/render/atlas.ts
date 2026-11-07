@@ -3986,6 +3986,13 @@ const DRAW: Record<number, Draw> = {
   59: bandstand,
   60: gardenStatue,
   61: footbridge,
+  // v63 countryside placeholders (V3b draws them): a fruit tree as the deciduous tree, a water wheel as
+  // a plain timber rectangle (its rim along x) with its paddles.
+  62: (g, r, rnd, v) => DRAW[1](g, r, rnd, v),
+  63: (g, r) => {
+    g.rect(-r, -r * 0.3, 2 * r, r * 0.6).fill(0x7d5a3c).stroke({ width: 2, color: 0x1d1a14 });
+    for (let k = 1; k < 6; k++) g.moveTo(-r + (2 * r * k) / 6, -r * 0.3).lineTo(-r + (2 * r * k) / 6, r * 0.3).stroke({ width: 1.5, color: 0x1d1a14 });
+  },
   38: haystack,
   13: smallRocks,
   14: rockPile,

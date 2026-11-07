@@ -27,6 +27,8 @@ pub mod wards;
 pub mod village;
 // v63 countryside
 pub mod fields;
+// v63 countryside: hedgerows, orchards, copses, windmills, water wheels.
+pub mod rural;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -275,6 +277,8 @@ pub struct Layout {
     /// A village's plots: its cottages' tofts and crofts, its churchyard or shrine's yard, its manor's
     /// yard (`village`).
     pub crofts: Vec<village::Plot>,
+    /// v63 countryside: water mills' wheels (middle, the way the mill's wall runs; `rural`).
+    pub wheels: Vec<(P, P)>,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -562,6 +566,7 @@ impl Layout {
             roof_seed: 0,
             roof_age: 0,
             crofts: Vec::new(),
+            wheels: Vec::new(),
         }
     }
 
@@ -1803,6 +1808,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     }
     round_off(&mut l);
     fields::assign(&site, s.seed, &mut l);
+    rural::place(&site, s, &mut l);
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);

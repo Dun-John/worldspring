@@ -3876,7 +3876,7 @@ fn hashes(ctx: &mut Ctx, label: &str, r: &mut Report) {
         let castle = if !l.castles.is_empty() || l.buildings.iter().any(|b| b.ward == Ward::Castle) { "C" } else { "-" };
         // (Without the keep's mark, nor an empty list of forecourts or grounds, so that the hashes
         // compare with trees from before them.)
-        let mut text = format!("{l:?}").replace(", grounds: [] }", " }").replace(", keep: false }", " }").replace(", keep: true }", " }").replace(", keep: None }", " }").replace(", forecourts: [] }", " }").replace(", crofts: [] }", " }");
+        let mut text = format!("{l:?}").replace(", grounds: [] }", " }").replace(", keep: false }", " }").replace(", keep: true }", " }").replace(", keep: None }", " }").replace(", forecourts: [] }", " }").replace(", wheels: [] }", " }").replace(", crofts: [] }", " }");
         for k in ["Great", "Hall", "L", "T", "Shell", "Plain"] {
             text = text.replace(&format!(", keep: Some({k}) }}"), " }");
         }

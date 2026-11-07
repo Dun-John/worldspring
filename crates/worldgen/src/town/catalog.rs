@@ -188,6 +188,9 @@ pub const CATALOG: &[Func] = &[
     f("healer", "Healer", FUN, Village, Some(Town), [0, 1, 1, 2], &[Temple, Common], Owner, false, false, "Infirmary"),
     f("orphanage", "Orphanage", FUN, City, Some(City), [0, 0, 1, 1], &[Temple, Slum], Institution, false, false, "Orphanage"),
     f("bards_college", "Bards' college", FUN, City, Some(Metropolis), [0, 0, 0, 1], &[Noble, Merchant], Institution, false, true, "College"),
+    // v63 countryside: set only by the layout (`rural::place`), on a rise among the fields: never on a
+    // lot (`required_count` 0, and no tier draws it at random).
+    f("windmill", "Windmill", CRAFT, Metropolis, None, [0, 0, 0, 0], &[Rural, Farm], Owner, false, false, "Windmill"),
 ];
 
 /// Residential building kinds by ward (index into `RESIDENTIAL`).
@@ -208,6 +211,9 @@ pub fn residential_for(ward: Ward, big: bool) -> usize {
 
 /// Copies of `func` this settlement is guaranteed.
 pub fn required_count(func: &Func, tier: Tier, on_water: bool) -> usize {
+    if func.key == "windmill" {
+        return 0;
+    }
     if func.water && !on_water {
         return 0;
     }

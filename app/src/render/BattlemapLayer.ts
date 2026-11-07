@@ -24,6 +24,7 @@ import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
+import { boundAt, drawBounds, drawSails, isBound, SAILS } from './countryside';
 import { banner, cornerHatch, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
@@ -84,6 +85,8 @@ interface ChunkView {
   raised: Uint8Array | null;
   sea: number;
   objs: ChunkObject[];
+  /** v63 countryside: its hedgerows, dry-stone walls and fences (`countryside.ts`), for inspection. */
+  bounds: Shape[];
   /** Uploaded sprites its objects use. */
   sprites: ChunkSprite[];
   /** What it was built from, kept while a sprite's picture is loading (to build it again). */
@@ -501,6 +504,9 @@ export class BattlemapLayer {
         object = { name: inf.name, cover: COVER[inf.cover], notes: notes.join(' · ') };
       }
     }
+    // (A hedgerow, a dry-stone wall or a fence: cover, seen over.)
+    const bound = object ? null : boundAt(c.bounds, sx * PX, sy * PX);
+    if (bound) object = { name: bound.name, cover: COVER[bound.cover], notes: bound.notes };
     // Walls, towers and decks stand on the drawn ground: report their top.
     const lift = c.raised ? c.raised[k * 2] : 0;
     const on = c.raised ? RAISED[c.raised[k * 2 + 1]] : undefined;
@@ -871,8 +877,8 @@ export class BattlemapLayer {
       } else continue;
       deckGrid(gridG, s);
     }
-    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12)));
-    const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1));
+    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12) || isBound(s.kind)));
+    const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1 || s.kind === SAILS));
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
     // walks (over them, on the ground).
     const walkGridG = new Graphics();
@@ -956,6 +962,7 @@ export class BattlemapLayer {
       raised: c.raised,
       sea: c.sea,
       objs,
+      bounds: c.shapes.filter((s) => isBound(s.kind)),
       sprites: c.sprites,
       prepared: waiting ? c : null,
     });
@@ -1007,7 +1014,7 @@ function parkEdge(raised: Uint8Array | null): boolean {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge']);
+const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'water wheel']);
 /** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
  * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
  * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
@@ -1072,6 +1079,10 @@ const STONE_TOP = 0xb3ada2;
  */
 function drawStructures(shapes: Shape[]): Graphics {
   const g = new Graphics();
+  // (v63 countryside: hedgerows, dry-stone walls and fences low under the rest; a windmill's sails.)
+  const bounds = shapes.filter((s) => isBound(s.kind));
+  if (bounds.length) drawBounds(g, bounds);
+  for (const s of shapes) if (s.kind === SAILS) drawSails(g, s);
   const walls = shapes.filter((s) => s.kind === 0);
   if (walls.length) drawWalls(g, walls);
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
