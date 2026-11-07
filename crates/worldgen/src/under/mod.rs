@@ -30,6 +30,7 @@
 use serde::Serialize;
 
 pub mod design;
+pub mod surface;
 mod grow;
 mod kit;
 mod plan;

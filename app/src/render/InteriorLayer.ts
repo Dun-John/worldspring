@@ -14,6 +14,8 @@ import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs'
 import type { SquareInfo } from './BattlemapLayer';
 import type { Camera } from './camera';
 import { noiseSource } from './noise';
+import { DIST_PAD } from './rockDistance';
+import { underLook } from './underTheme';
 import { FIELD_RES, LINE_ROOM, lineWall, nearFloor, roughness, SQUARE_SITES, TERRAIN_CHANNEL, underField, type UnderField } from './underField';
 import { nearestWall, wallDistance, type WallDistance } from './wallField';
 import { boundaryPieces, drawMass, drawnDoorsOf, drawnWindows, drawOpening, drawShapedFloors, drawShapedWalls, fromSquares, insetIn, insetParts, keptRuns, roomBoxes, shapedPlanOf, shapeIndex, undergroundWalls, yurtRing, WALL_HALF, wallTangent, within, type Pt, type ShapedPlan } from './roomShapes';
@@ -170,6 +172,8 @@ const COVER = ['no cover', 'half cover', 'three-quarters cover', 'total cover'];
 // (`underField.ts`).
 const underProgram = GlProgram.from({ vertex, fragment: undergroundFragment, name: 'underground' });
 let underQuad: Geometry | null = null;
+/** How far the map above is dimmed under an underground level (`Sewers` too). */
+export const UNDER_DIM = 0.62;
 /** Each level's rail and ore cart squares, by its items (`railLinks`), and how many items it had then. */
 const RAIL_SQUARES = new WeakMap<InteriorItem[], { n: number; at: Map<number, string> }>();
 const quad = () =>
@@ -772,8 +776,8 @@ export class InteriorLayer {
   ) {
     for (const [l, f] of fields ?? []) this.fields.set(l, f);
     this.dim.tint = 0x14100c;
-    // Underground the surface is only a ghost.
-    this.dim.alpha = this.underground ? 0.78 : 0.55;
+    // Underground the surface is a ghost, showing round the site where its rock fades out.
+    this.dim.alpha = this.underground ? UNDER_DIM : 0.55;
     this.dim.visible = !peek && !ghost && !tile;
     this.labels.visible = !peek && !ghost;
     this.marks.visible = !peek && !ghost && !style.player;
@@ -911,9 +915,12 @@ export class InteriorLayer {
       this.under.uniforms.uniforms.uTime = performance.now() / 1000;
       this.under.uniforms.uniforms.uGrid = undergroundGrid ? 1 : 0;
     }
-    this.dim.width = cam.width;
-    this.dim.height = cam.height;
+    // (Over the whole screen, the view turned or not: `Camera.turn`.)
+    const span = Math.hypot(cam.width, cam.height);
+    this.dim.position.set((cam.width - span) / 2, (cam.height - span) / 2);
+    this.dim.width = this.dim.height = span;
     for (const l of this.labelSpots) {
+      l.text.rotation = -cam.turn;
       const w = this.toWorld(l.x, l.y);
       const [lx, ly] = cam.worldToScreen(w[0], w[1]);
       l.text.position.set(lx, ly);
@@ -1027,7 +1034,7 @@ export class InteriorLayer {
     this.freeUnder();
     let f = this.fields.get(this.level);
     if (!f) this.fields.set(this.level, (f = underField(it, this.level)));
-    const { w, h, pad, data, cells, liquidKind, shapes, shapeCount, cave, terrain } = f;
+    const { w, h, pad, data, cells, liquidKind, shapes, shapeCount, cave, terrain, dist } = f;
     // Built sites keep square corners: walls measured from the squares, the field unsmoothed.
     const square = SQUARE_SITES.has(it.function);
     const fieldSrc = new BufferImageSource({ resource: data, width: w, height: h, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: square ? 'nearest' : 'linear', addressMode: 'clamp-to-edge' });
@@ -1037,9 +1044,20 @@ export class InteriorLayer {
     const caveSrc = new BufferImageSource({ resource: cave ?? new Uint8Array(4), width: cave ? nx * FIELD_RES : 1, height: cave ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // Water, chasms and rubble slopes (a blank texel when there are none).
     const terrainSrc = new BufferImageSource({ resource: terrain ?? new Uint8Array(4), width: terrain ? nx * FIELD_RES : 1, height: terrain ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
+    // How far the rock lies from the floor (hatched beside the walls, faded out beyond).
+    const distSrc = new BufferImageSource({ resource: dist, width: (nx + 2 * DIST_PAD) * FIELD_RES, height: (ny + 2 * DIST_PAD) * FIELD_RES, format: 'r8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
+    // A site is drawn past its grid, so its rock fades out round it; sewer sections meet edge to edge.
+    const grow = this.tile ? 0 : DIST_PAD;
     // Light from the NW of the screen, in grid axes.
     const [lx, ly] = [-Math.SQRT1_2, -Math.SQRT1_2];
+    // The site's stone: wall style and palette by its theme (sewers: wet brick).
+    const look = underLook(it.function, it.theme);
     const uniforms = new UniformGroup({
+      uTheme: { value: look.style, type: 'f32' },
+      uStone: { value: new Float32Array(look.stone), type: 'vec3<f32>' },
+      uCoping: { value: new Float32Array(look.coping), type: 'vec3<f32>' },
+      uRock: { value: new Float32Array(look.rock), type: 'vec3<f32>' },
+      uGrow: { value: grow, type: 'f32' },
       uN: { value: new Float32Array([nx, ny]), type: 'vec2<f32>' },
       uPad: { value: pad, type: 'f32' },
       uLight: { value: new Float32Array([lx * it.axis[0] + ly * it.axis[1], lx * it.across[0] + ly * it.across[1]]), type: 'vec2<f32>' },
@@ -1057,11 +1075,12 @@ export class InteriorLayer {
       uCaverns: { value: cave ? 1 : 0, type: 'f32' },
       uHasTerrain: { value: terrain ? 1 : 0, type: 'f32' },
     });
-    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uShapes: shapeSrc, uCave: caveSrc, uTerrain: terrainSrc, uNoise: noiseSource(), under: uniforms } });
+    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uShapes: shapeSrc, uCave: caveSrc, uTerrain: terrainSrc, uDist: distSrc, uNoise: noiseSource(), under: uniforms } });
     const mesh = new Mesh({ geometry: quad(), shader });
-    mesh.scale.set(nx, ny);
+    mesh.position.set(-grow, -grow);
+    mesh.scale.set(nx + 2 * grow, ny + 2 * grow);
     this.plan.addChild(mesh);
-    this.under = { uniforms, sources: [fieldSrc, cellSrc, shapeSrc, caveSrc, terrainSrc], shader, mesh, level: this.level };
+    this.under = { uniforms, sources: [fieldSrc, cellSrc, shapeSrc, caveSrc, terrainSrc, distSrc], shader, mesh, level: this.level };
   }
 
   private draw() {

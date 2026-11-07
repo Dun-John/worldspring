@@ -1,5 +1,6 @@
 // Messages between the main thread, the coordinator worker and generator workers,
 // plus the terrain payload layout (mirrors crates/worldgen/src/payload.rs).
+import { ruinPlanFill } from './ruinPlan';
 import type { PreparedChunk } from './battlePrep';
 
 export type Wind = 'belts' | 'from_west' | 'from_east';
@@ -899,7 +900,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, tileF
     return true;
   };
   for (let i = 0; i < n; i++) tris += fanned(i) ? polys.starts[i + 1] - polys.starts[i] : Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -972,6 +973,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, tileF
       } else if (kind === 22) rgb = [0.62, 0.6, 0.55];
       // A windmill's sails (`town::rural::plan_ticks`), over its roof.
       else if (kind === 23) rgb = [0.88, 0.84, 0.74];
+      // v63 underground: a ruin's plan (`ruinPlan.ts`).
+      else if (ruinPlanFill(kind)) [rgb, a] = ruinPlanFill(kind)!;
       else if ((attr >>> 25) & 15) {
         // A keep's piece (`payload::pack_sites`): towers and the body's hall under slate, a wing or
         // forebuilding by its top (`town::keep_tops`): open battlements stone, a roof lead or slate; a

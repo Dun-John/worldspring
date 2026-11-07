@@ -1458,7 +1458,11 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
             if !away(x, y, &out, min_s_mi * 5280.0, 8.0 * 5280.0) {
                 continue;
             }
-            out.push(Poi { kind, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });
+            let seed = rng.next_u32() as u64 | (rng.next_u32() as u64) << 32;
+            if kind == PoiKind::Ruin && !dwarven_ground(inp, k, seed) {
+                continue;
+            }
+            out.push(Poi { kind, x, y, seed, stroke: None });
             placed += 1;
         }
     }
@@ -1532,4 +1536,23 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
 #[inline]
 fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     crate::core::sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by))
+}
+
+/// v63: a ruin over a dwarven hall stands in hills or mountains; on flat ground 6 in 7 such tries
+/// are passed over (the count of ruins stays: another try takes the place).
+fn dwarven_ground(inp: &Inputs, k: usize, seed: u64) -> bool {
+    let world = inp.world;
+    if crate::under::wild_theme(world, seed, crate::town::sites::ruin_under(world, seed), true) != "dwarven_hall" {
+        return true;
+    }
+    let (w, h, sea) = (inp.w, inp.h, world.params().sea_level_ft);
+    let (x, y) = (k % w, k / w);
+    let mut relief: f64 = 0.0;
+    for (dx, dy) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+        let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+            relief = relief.max((inp.height[k] - inp.height[ny as usize * w + nx as usize].max(sea)).abs());
+        }
+    }
+    relief > 150.0 || inp.height[k] > sea + 1500.0 || crate::core::rng::unit(crate::core::rng::hash2(seed, 0x6477, 0)) < 1.0 / 7.0
 }

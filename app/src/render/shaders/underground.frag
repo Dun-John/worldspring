@@ -21,6 +21,9 @@
 // uTerrain: terrain (`kit::TERRAIN`), linear, 4 texels per square: r water (shallow, and under
 //         deep water), g deep water, b chasm, a rubble slope; each blurred, spread into the rock
 //         beside it (so it meets the walls). Read only where uHasTerrain.
+// uDist: squares to the nearest floor (`rockDistance.ts`), linear, 4 texels per square, DIST_PAD
+//         squares past the grid each way, DIST_MAX at 1: the rock is hatched beside the walls by
+//         it and fades out beyond (one fetch; the walls themselves come from the fields above).
 
 in vec2 vUV;
 in vec2 vLocal;
@@ -33,6 +36,7 @@ uniform sampler2D uCells;
 uniform sampler2D uShapes;
 uniform sampler2D uCave;
 uniform sampler2D uTerrain;
+uniform sampler2D uDist;
 
 uniform vec2 uN;
 uniform vec2 uLight;
@@ -53,9 +57,23 @@ uniform float uPad;
 uniform float uShapeCount;
 uniform float uCaverns;
 uniform float uHasTerrain;
+// Squares the quad is drawn past the grid each way (a site's, so its rock fades out round it;
+// sewer sections meet edge to edge: 0).
+uniform float uGrow;
 uniform vec4 uColor;
+// The site's stone (`underTheme.ts`): its wall style (0 plain, 1 dwarven rune-cut blocks with
+// thick walls, 2 rough ashlar, 3 dark basalt, 4 pale dusty stone, 5 wet brick, 6 marble, 7 packed
+// earth, 8 natural rock: one branch for the whole site), flagstones, the coping on built walls
+// and the hatched rock's tone.
+uniform float uTheme;
+uniform vec3 uStone;
+uniform vec3 uCoping;
+uniform vec3 uRock;
 
 const vec3 INK = vec3(0.10, 0.085, 0.07);
+
+// Squares a pixel (set first thing in `main`, for the functions below).
+float gPx;
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -75,7 +93,10 @@ float fbm(vec2 p) {
 }
 
 vec4 field(vec2 q) {
-    return texture(uField, (q + uPad) / (uN + 2.0 * uPad));
+    vec2 u = (q + uPad) / (uN + 2.0 * uPad);
+    // (Past the texture, round a site's grid: rock.)
+    if (any(lessThan(u, vec2(0.0))) || any(greaterThan(u, vec2(1.0)))) return vec4(0.0, 0.0, 0.0, 0.5);
+    return texture(uField, u);
 }
 
 // Thin dark seams where noise crosses a level (cracks in rock and stone): about `w` of the
@@ -95,6 +116,86 @@ vec3 rockMass(vec2 p, float depth) {
     return c * mix(1.0, 0.5, smoothstep(0.0, 2.5, depth));
 }
 
+const float DIST_PAD = 4.0;
+const float DIST_MAX = 8.0;
+
+// The rock beside the walls, inked as on a hand-drawn dungeon map: short parallel strokes in
+// small clusters, each cluster at its own angle, densest at the wall and thinning out, on a
+// stone tone. `depth`: squares into the rock; `px`: squares a pixel. Strokes under ~2 px apart
+// give way to their average tone (no shimmer). Clusters are the cells of a jittered grid
+// (nearest centre), from hashes alone: one noise lookup, for the tone.
+vec3 hatchedRock(vec2 p, float depth, float px, out float cut, out float ra) {
+    cut = 0.0;
+    vec3 c = uRock * (0.92 + 0.16 * vnoise(p * 0.55));
+    vec3 inkc = mix(INK, uRock, 0.18);
+    // (The flat tone only close to the wall, ragged per cluster, so the rock is never paler than the ground.)
+    float toneA = 0.55;
+    float inkA = 0.0;
+    float out1 = smoothstep(0.3, 2.0, depth);
+    // Strokes this far apart (squares), half this thick (squares: about a pixel, bolder close up).
+    const float GAP = 0.20;
+    float hw = min(max(mix(0.03, 0.022, out1), 0.55 * px), 0.3 * GAP);
+    float sharp = smoothstep(1.8, 3.0, GAP / max(px, 1e-5));
+    float dens = mix(0.95, 0.15, out1);
+    if (sharp > 0.0) {
+        vec2 hc = p * 1.1;
+        vec2 base = floor(hc);
+        float best = 9.0;
+        float second = 9.0;
+        vec2 id = base;
+        vec2 rel = vec2(0.0);
+        for (int j = -1; j <= 1; j++) {
+            for (int i = -1; i <= 1; i++) {
+                vec2 cc = base + vec2(float(i), float(j));
+                vec2 dv = hc - cc - 0.15 - 0.7 * vec2(hash21(cc), hash21(cc + 17.3));
+                float dd = dot(dv, dv);
+                if (dd < best) {
+                    second = best;
+                    best = dd;
+                    id = cc;
+                    rel = dv;
+                } else if (dd < second) {
+                    second = dd;
+                }
+            }
+        }
+        // (A thin gap between clusters; whole clusters drop out farther from the wall.)
+        float edge = (sqrt(second) - sqrt(best)) / 1.1;
+        // (Each cluster in or out as a whole; the band ends in ink, not in a haze.)
+        float keep = step(hash21(id + 9.1), dens) * step(hash21(id + 11.9), 1.0 - smoothstep(1.2, 3.0, depth));
+        // (Straight, parallel strokes: one angle for the whole cluster. The cluster's own
+        // shift of where the tone fades out breaks up the outer edge.)
+        float a = 3.14159265 * hash21(id + 3.7);
+        cut = (hash21(id + 4.9) - 0.5) * 0.8;
+        toneA = 0.55 * (1.0 - smoothstep(0.8, 1.6, depth + cut));
+        vec2 dir = vec2(cos(a), sin(a));
+        vec2 r = rel / 1.1;
+        float t = dot(r, vec2(-dir.y, dir.x)) / GAP + hash21(id + 5.3);
+        float row = floor(t);
+        float h = hash21(vec2(row, 1.3) + id * 7.1);
+        // Each stroke a little shorter or longer, a little off the cluster's middle.
+        float u = dot(r, dir) - (h - 0.5) * 0.16;
+        float half1 = (0.30 + 0.12 * fract(h * 13.7)) * mix(1.0, 0.6, out1);
+        float aa = 0.8 * px;
+        // (Width varies a quarter either way per stroke; ends round off.)
+        float hws = hw * (0.75 + 0.5 * fract(h * 7.3));
+        float dy = abs(fract(t) - 0.5) * GAP;
+        float end = abs(u) - (half1 - hws);
+        float shape = length(vec2(dy, max(end, 0.0)));
+        float ink = 1.0 - smoothstep(hws - aa, hws + aa, shape);
+        // (Clear of ink just by the wall's lip.)
+        ink *= smoothstep(0.1, 0.15 + aa, depth);
+        ink *= smoothstep(0.09, 0.12 + aa, edge) * keep;
+        inkA = ink * 0.88 * sharp;
+    } else {
+        toneA = 0.55 * (1.0 - smoothstep(0.8, 1.6, depth));
+    }
+    // (Too fine to draw: their tone.)
+    inkA = max(inkA, (1.0 - sharp) * 2.0 * hw / GAP * dens * 0.45);
+    ra = mix(toneA, 0.7, inkA);
+    return mix(c, inkc, inkA);
+}
+
 // A square drawn from the squares: no shape on it (0, or 254: one next to it).
 bool fromSquares(float g) {
     float c = g * 255.0;
@@ -108,7 +209,9 @@ bool fromSquares(float g) {
 void boxField(vec2 q, out float d, out vec2 n) {
     ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
     vec4 own = texelFetch(uCells, s, 0);
-    bool fl = own.a > 0.5 && fromSquares(own.g);
+    // (Off the grid, round a site: rock.)
+    bool on = all(greaterThanEqual(q, vec2(0.0))) && all(lessThan(q, uN));
+    bool fl = on && own.a > 0.5 && fromSquares(own.g);
     float best = 2.0;
     vec2 way = vec2(0.0);
     for (int j = -2; j <= 2; j++) {
@@ -185,6 +288,26 @@ void shapeSlot(int slot, out vec2 lo, out vec2 hi, out vec3 look) {
     lo = b.xy;
     hi = b.zw;
     look = floor(texelFetch(uShapes, ivec2(slot - 1, 1), 0).rgb * 255.0 + 0.5);
+}
+
+float segment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0));
+}
+
+// A rune cut into a dwarven block (0-1: how much groove): a stave and one or two twigs off it,
+// which and where by `h`. `g`: from the block's middle (squares). Gone below ~2 px a stroke.
+float rune(vec2 g, float h) {
+    float sx = sign(fract(h * 5.3) - 0.5);
+    float y1 = 0.25 - 0.3 * fract(h * 3.1);
+    float y2 = -0.05 - 0.2 * fract(h * 9.7);
+    float r = segment(g, vec2(0.0, -0.3), vec2(0.0, 0.3));
+    r = min(r, segment(g, vec2(0.0, y1), vec2(0.2 * sx, y1 + (fract(h * 2.3) > 0.5 ? 0.2 : -0.2))));
+    if (fract(h * 7.7) > 0.45) r = min(r, segment(g, vec2(0.0, y2), vec2(-0.2 * sx, y2 - 0.18)));
+    float w = 0.03;
+    float aa = max(gPx * 0.8, 0.004);
+    return (1.0 - smoothstep(w - aa, w + aa, r)) * (1.0 - smoothstep(0.02, 0.035, gPx));
 }
 
 vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
@@ -277,13 +400,16 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         float joint = 1.0 - smoothstep(0.0, 0.02, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
         c = mix(c, INK * 1.8, joint * 0.3);
     } else if (mat == 8) {
-        // Hewn rock: big blocks two squares long in running bond, tight joints.
-        vec2 b = q * vec2(0.5, 1.0);
+        // Hewn rock: big blocks two squares long in running bond, tight joints. A dwarven hall's
+        // two squares each way, a rune cut in some.
+        bool dw = uTheme > 0.5 && uTheme < 1.5;
+        vec2 b = q * (dw ? vec2(0.5) : vec2(0.5, 1.0));
         b.x += 0.5 * mod(floor(b.y), 2.0);
         vec2 g = fract(b);
-        c = vec3(0.52, 0.49, 0.45) * (0.85 + 0.2 * hash21(floor(b))) * (0.92 + 0.12 * vnoise(p * 2.0));
-        float joint = 1.0 - smoothstep(0.0, 0.025, min(min(g.x, 1.0 - g.x) * 2.0, min(g.y, 1.0 - g.y)));
-        c = mix(c, INK * 1.5, joint * 0.4);
+        c = uStone * 0.9 * (0.85 + 0.2 * hash21(floor(b))) * (0.92 + 0.12 * vnoise(p * 2.0));
+        float joint = 1.0 - smoothstep(0.0, dw ? 0.06 : 0.025, min(min(g.x, 1.0 - g.x) * 2.0, min(g.y, 1.0 - g.y) * (dw ? 2.0 : 1.0)));
+        c = mix(c, INK * 1.5, joint * (dw ? 0.75 : 0.4));
+        if (dw && hash21(floor(b) + 2.1) > 0.6) c = mix(c, c * 0.6, rune((g - 0.5) * 2.0 * vec2(1.0, 0.8), hash21(floor(b) + 6.3)));
     } else if (mat == 9) {
         // Ice: pale blue, cracked, glinting.
         c = vec3(0.74, 0.84, 0.90) * (0.88 + 0.16 * fbm(p * 0.5));
@@ -312,7 +438,7 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         if (h > 0.4) edge = min(edge, min(e.x, e.y));
         edge += 0.025 * (vnoise(p * 6.0) - 0.5);
         float mortar = 1.0 - smoothstep(0.012, 0.04, edge);
-        vec3 stone = mat == 5 ? vec3(0.44, 0.39, 0.37) : mat == 6 ? vec3(0.60, 0.56, 0.48) : mat == 10 ? vec3(0.30, 0.28, 0.30) : vec3(0.58, 0.55, 0.50);
+        vec3 stone = mat == 5 ? uStone * vec3(0.76, 0.71, 0.74) : mat == 10 ? vec3(0.30, 0.28, 0.30) : uStone;
         c = stone * (0.8 + 0.32 * hash21(stoneId * 1.7 + var)) * (0.9 + 0.15 * vnoise(p * 3.0));
         c = mix(c, INK * 1.6, mortar * 0.35);
     }
@@ -424,10 +550,18 @@ vec3 terrain(vec3 col, vec2 q, vec2 p, float px) {
 }
 
 void main() {
-    vec2 q = vUV * uN;
+    vec2 q = vUV * (uN + 2.0 * uGrow) - uGrow;
     vec2 p = q + uOrigin;
     // (Squares a pixel.)
     float px = length(fwidth(q));
+    gPx = px;
+    int style = int(uTheme + 0.5);
+    // Squares to the nearest floor: past where the rock has faded out, nothing.
+    float far = texture(uDist, (q + DIST_PAD) / (uN + 2.0 * DIST_PAD)).r * DIST_MAX;
+    if (far > 4.2) {
+        finalColor = vec4(0.0);
+        return;
+    }
     vec4 here = field(q);
     float d;
     vec2 n;
@@ -490,7 +624,7 @@ void main() {
                 look = lk;
             }
         }
-        if (cave) {
+        if (cave && all(greaterThanEqual(q, vec2(0.0))) && all(lessThan(q, uN))) {
             float e = 0.25;
             float c0 = texture(uCave, q / uN).r;
             vec2 gc = vec2(texture(uCave, (q + vec2(e, 0.0)) / uN).r - texture(uCave, (q - vec2(e, 0.0)) / uN).r, texture(uCave, (q + vec2(0.0, e)) / uN).r - texture(uCave, (q - vec2(0.0, e)) / uN).r) / (2.0 * e);
@@ -510,20 +644,69 @@ void main() {
     vec3 col;
     float alpha;
     float rim = mix(0.16, 0.3, rough);
+    // (A dwarven hall's walls are thick: a wider coping, inked on both sides.)
+    if (style == 1 && rough < 0.2) rim = 0.3;
     if (d < 0.0) {
-        // Rock: the wall's top edge lit from the NW, then the rock mass.
-        vec3 r = rockMass(p, -d);
+        // Rock: the wall's top edge lit from the NW, then the rock hatched beside the walls,
+        // fading out beyond (the map above shows round the site). (Near the wall its depth is
+        // the wall's own; farther out, from uDist.)
+        float depth = mix(-d, far, smoothstep(0.6, 1.4, far));
+        float cut;
+        float ra;
+        vec3 r = hatchedRock(p, depth, px, cut, ra);
         float face = clamp(0.55 + 0.6 * dot(n, uLight), 0.25, 1.15);
-        vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * face;
+        // (Natural rock's lip in the site's own rock: caves as they were.)
+        vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * face * (uRock / vec3(0.29, 0.27, 0.245));
+        float edge = rim;
         if (rough < 0.2) {
-            // Dressed stone coping on built walls.
-            vec2 b = q * vec2(1.6, 1.6);
-            vec2 g = fract(b + 0.5 * mod(floor(b.yx), 2.0));
-            float joint = 1.0 - smoothstep(0.0, 0.06, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
-            lip = mix(vec3(0.56, 0.53, 0.48) * (0.85 + 0.25 * hash21(floor(b))) * face, INK, joint * 0.5);
+            // Dressed stone coping on built walls, by the site's style.
+            vec2 b;
+            vec2 g;
+            float jw = 0.06;
+            float jk = 0.5;
+            if (style == 2) {
+                // Rough ashlar: uneven blocks, each course shifted its own way, wavering joints,
+                // a ragged edge toward the rock.
+                b = q * vec2(1.3, 1.7);
+                b.x += hash21(vec2(floor(b.y), 2.7)) + 0.3 * (vnoise(p * 2.1) - 0.5);
+                b.y += 0.15 * (vnoise(p * 2.3 + 7.0) - 0.5);
+                g = fract(b);
+                jw = 0.09;
+                edge = rim + 0.1 * (vnoise(p * 2.7 + 1.0) - 0.5);
+            } else if (style == 5) {
+                // Brick: stretchers in running bond.
+                b = q * vec2(2.2, 4.4);
+                b.x += 0.5 * mod(floor(b.y), 2.0);
+                g = fract(b);
+                jw = 0.1;
+                jk = 0.4;
+            } else {
+                float k = style == 1 ? 0.8 : style == 6 ? 1.0 : 1.6;
+                b = q * k;
+                g = fract(b + 0.5 * mod(floor(b.yx), 2.0));
+                jk = style == 6 ? 0.22 : style == 4 ? 0.3 : style == 7 ? 0.0 : style == 1 ? 0.85 : 0.5;
+                jw = style == 1 ? 0.14 : 0.06;
+            }
+            float joint = 1.0 - smoothstep(0.0, jw, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
+            vec3 cop = uCoping * (0.85 + 0.25 * hash21(floor(b)));
+            if (style == 2) {
+                // (A few blocks chipped dark.)
+                cop *= hash21(floor(b) + 5.5) < 0.2 ? 0.78 : 1.0;
+            } else if (style == 4) {
+                // (Dust over it.)
+                cop = mix(cop, vec3(0.76, 0.73, 0.66), smoothstep(0.45, 0.8, vnoise(p * 1.7)) * 0.4);
+            } else if (style == 5) {
+                // (Damp, green toward the floor.)
+                cop = mix(cop, cop * vec3(0.62, 0.84, 0.5), max(smoothstep(0.4, 0.75, vnoise(p * 0.9)) * 0.6, (1.0 - smoothstep(0.02, 0.2, -d)) * 0.9));
+            } else if (style == 7) {
+                // (Packed earth: no joints, lumpy.)
+                cop = uCoping * (0.82 + 0.3 * vnoise(p * 1.6));
+            }
+            lip = mix(cop * face, INK, joint * jk);
         }
-        col = mix(lip, r, smoothstep(-rim, -rim - 0.12, d));
-        alpha = mix(1.0, 0.9, smoothstep(-rim, -rim - 0.5, d));
+        col = mix(lip, r, smoothstep(-edge, -edge - 0.12, d));
+        if (style == 1 && rough < 0.2) col = mix(col, INK, (1.0 - smoothstep(0.0, aa * 1.6, abs(d + rim))) * 0.75);
+        alpha = ra * (1.0 - smoothstep(2.2, 3.2, depth + cut));
     } else {
         ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
         vec4 cell = texelFetch(uCells, s, 0) * 255.0;
@@ -541,6 +724,17 @@ void main() {
         }
         int mat = int(cell.r + 0.5);
         col = floorColor(mat, q, p, cell.b);
+        if (style == 4) {
+            // Dust on a tomb's flags, drifted against the walls.
+            float dust = smoothstep(0.5, 0.9, vnoise(p * 0.6 + 40.0) + 0.35 * (1.0 - smoothstep(0.0, 1.2, d)));
+            col = mix(col, vec3(0.75, 0.71, 0.63), dust * 0.35 * step(3.5, float(mat)));
+        } else if (style == 2) {
+            // A fallen fortress's flags, cracked.
+            col = mix(col, col * 0.7, seam(vnoise(p * 0.7 + 17.0), 0.012) * 0.8 * step(3.5, float(mat)));
+        } else if (style == 3) {
+            // The cult's floor, a dark red stain spreading here and there.
+            col = mix(col, col * vec3(0.86, 0.7, 0.68), smoothstep(0.55, 0.8, vnoise(p * 0.4 + 23.0)) * 0.5 * step(3.5, float(mat)));
+        }
         if (mat <= 2) {
             // Natural floors: uneven rock lit from the NW, loose stones, rubble at the wall foot.
             float b0 = vnoise(p * 0.7);

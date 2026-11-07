@@ -523,7 +523,10 @@ void main() {
     float relief = surf == 19 ? 0.5 : 1.6;
     vec3 n = normalize(vec3(-hx / 5.0 * relief, -hy / 5.0 * relief, 1.0));
     vec3 L = normalize(vec3(-1.0, -1.0, 1.4));
-    col *= clamp(0.35 + 0.65 * dot(n, L) / L.z, 0.45, 1.25);
+    // v63 underground: small closed relief (data bit 8, the edges' 128: `battlemap::soft_relief`,
+    // `battlePrep`) is shaded soft: a narrower range, which gentle ground stays inside.
+    bool softRelief = (int(d.g + 0.5) & 8) != 0;
+    col *= clamp(0.35 + 0.65 * dot(n, L) / L.z, softRelief ? 0.8 : 0.45, softRelief ? 1.12 : 1.25);
 
     // Water.
     if (depth > 0.0) {
@@ -555,8 +558,11 @@ void main() {
     float distSq = min(fr, 1.0 - fr) * 5.0 * stride / max(slope, 0.02) / 5.0;
     // Steps climb steeper ground before it is a cliff.
     float steep = surf == 19 ? smoothstep(1.0, 1.4, slope) : smoothstep(0.45, 0.8, slope);
+    // (Soft relief: a faint face, and the gentle slopes' dashed contour.)
+    float face = softRelief ? 0.25 * steep : steep;
+    if (softRelief) steep = 0.0;
     if (depth <= 0.0) {
-        if (steep > 0.0) {
+        if (face > 0.0) {
             // Cliff face: rock with striations running down the fall line.
             vec2 dir = normalize(grad + 1e-6);
             float stri = vnoise(vec2(dot(w, vec2(-dir.y, dir.x)) * 3.0, 0.5));
@@ -564,7 +570,7 @@ void main() {
             // Faces turned away from the NW light are in shadow (dark grey rock, not black: a
             // sheer step then reads as a rock face all round).
             float lit = clamp(0.55 + 0.6 * dot(-dir, normalize(vec2(-1.0, -1.0))), 0.6, 1.15);
-            col = mix(col, rock * lit, steep * 0.9);
+            col = mix(col, rock * lit, face * 0.9);
         }
         // Tier contour: bold ink on cliffs, thin dashed line on gentle slopes (on steps only the
         // cliff's: a contour would cut across the treads; on a plaza too, where a graded square's

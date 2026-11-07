@@ -425,7 +425,7 @@ export class Labels {
         if (show) {
           boxes.add(box);
           text.position.set(sx + ox + (style.prio >= 100 ? (it.ox ?? 0) : 0), sy + (style.prio >= 100 ? (it.oy ?? 0) : 0));
-          text.rotation = angle;
+          text.rotation = angle - (cam.turn ?? 0);
         }
       }
       if (it.text && it.text.visible !== show) it.text.visible = show;

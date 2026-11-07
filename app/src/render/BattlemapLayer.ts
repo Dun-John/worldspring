@@ -27,6 +27,7 @@ import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from '
 import { boundAt, drawBounds, drawSails, isBound, SAILS } from './countryside';
 import { banner, cornerHatch, drawDitchBank, drawDrawbridge, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
+import { drawCaveMouth, drawThemedEntrance } from './entrances';
 import { noiseSource } from './noise';
 import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
 import type { Camera } from './camera';
@@ -63,6 +64,7 @@ interface ChunkView {
   shown: { data: Uint16Array; dirty: boolean } | null;
   /** The roof mesh's vertex buffers (a mesh does not free its geometry). */
   roofGeometry: Geometry | null;
+  roofMesh: Mesh<Geometry, Shader> | null;
   /** The grids over bridge and pier decks, wall walks, tower tops and gravel walks, shown and hidden
    * with the ground's. */
   grids: Graphics[];
@@ -591,6 +593,14 @@ export class BattlemapLayer {
   }
 
   /** Show the 5-ft grid (over the ground and bridge and pier decks) or not. */
+  /** Roofs shown (hidden under the city, where only the streets and ground should read). */
+  private roofsOn = true;
+  setRoofs(on: boolean) {
+    if (on === this.roofsOn) return;
+    this.roofsOn = on;
+    for (const ch of this.chunks.values()) if (ch.roofMesh) ch.roofMesh.visible = on;
+  }
+
   setGrid(on: boolean) {
     this.frame.uniforms.uGrid = on ? 1 : 0;
     for (const ch of this.chunks.values()) for (const g of ch.grids) g.visible = on;
@@ -902,7 +912,10 @@ export class BattlemapLayer {
       if (i === 0) holder.addChild(daisG, pathGridG);
       if (i === 2) {
         holder.addChild(structG, walkGridG);
-        if (roofMesh) holder.addChild(roofMesh);
+        if (roofMesh) {
+          roofMesh.visible = this.roofsOn;
+          holder.addChild(roofMesh);
+        }
         holder.addChild(battleG);
       }
       if (i === 3) holder.addChild(towerG, topGridG);
@@ -951,6 +964,7 @@ export class BattlemapLayer {
       base,
       shown: null,
       roofGeometry,
+      roofMesh,
       grids: [gridG, walkGridG, topGridG, pathGridG],
       decks,
       atmo,
@@ -1190,7 +1204,8 @@ function drawEntrance(g: Graphics, s: Shape) {
     return pts;
   };
   // `size` carries kind + 16 × style (scaled by PX like every shape size when the chunk was
-  // decoded): style 1 a ruin's broken stair, 2 a graveyard mausoleum over the stair.
+  // decoded): style 1 a ruin's broken stair, 2 a graveyard mausoleum over the stair, 3 a drain
+  // grate, 4-6 a wild site's way down by theme (barrow, rune gate, tower stump: `entrances.ts`).
   const code = Math.round(s.size / PX);
   // A stable random per entrance.
   let seed = (Math.round(x * 7.1) * 73856093) ^ (Math.round(y * 3.3) * 19349663);
@@ -1201,6 +1216,7 @@ function drawEntrance(g: Graphics, s: Shape) {
   if (code >> 4 === 1) return drawRuinStair(g, at, quad, rnd);
   if (code >> 4 === 2) return drawMausoleum(g, at, quad, rnd);
   if (code >> 4 === 3) return drawDrain(g, at, quad);
+  if (code >> 4 >= 4 && code >> 4 <= 6) return drawThemedEntrance(g, code >> 4, at, rnd);
   switch (code & 15) {
     case 0:
     case 1:
@@ -1217,10 +1233,8 @@ function drawEntrance(g: Graphics, s: Shape) {
       break;
     }
     case 2: {
-      // Cave mouth: rock heaped round a dark opening.
-      g.poly(ellipse(0.7, 1.5, 2.1, 0.12)).fill({ color: 0x5d584f, alpha: 0.9 });
-      g.poly(ellipse(0.8, 1.1, 1.6, 0.1)).fill(0x221e1a).stroke({ width: 3, color: ROOF_INK });
-      g.poly(ellipse(1.0, 0.6, 1.0, 0.08)).fill(0x0f0d0b);
+      // Cave mouth: rock heaped round a dark opening under an overhang (`entrances.ts`).
+      drawCaveMouth(g, at, rnd);
       break;
     }
     case 3: {

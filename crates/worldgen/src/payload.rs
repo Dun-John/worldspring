@@ -22,7 +22,8 @@
 //!     parterre, 14 a tree's (or topiary's) crown, 15 a flowerbed, 24 a castle's wet moat, 25 its
 //!     dry ditch (`town::moat::Moat::pieces`; in place of a ward, its inked edges: `Moat::inks`), 26
 //!     its drawbridge's deck; a park's raised features as
-//!     monuments; all of a park's in the tile holding its middle),
+//!     monuments; all of a park's in the tile holding its middle; a ruin's plan as 28 its floor,
+//!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4),
 //!     verts f32[n_verts * 2] (tile units).
 //!     A polygon belongs to
 //!     the tile containing its centroid.
@@ -404,6 +405,15 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             let detailed = key.level >= BUILDING_MIN_LEVEL || l.tier == crate::t0::settle::Tier::Village;
             if detailed {
                 for b in &l.buildings {
+                    // v63 underground: a ruin as its broken walls, rubble and floor (`battlemap::ruin_plan`).
+                    if b.structure == crate::town::Structure::Ruin {
+                        whole.set(Some(owns(crate::town::geom::centroid(&b.poly))));
+                        for (kind, poly) in crate::battlemap::ruin_plan::footprint(world.stream("battlemap"), &b.poly) {
+                            push(&poly, kind | (b.ward as u32) << 8);
+                        }
+                        whole.set(None);
+                        continue;
+                    }
                     let kind = match b.structure {
                         crate::town::Structure::Roofed => 0,
                         crate::town::Structure::Ruin => 4,

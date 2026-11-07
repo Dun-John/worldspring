@@ -19,14 +19,19 @@
     onWhole: () => void;
     onUndo: () => void;
     floors?: Snippet;
+    /** Inside a building or site: the view turned so its plan stands north up. */
+    north?: { on: boolean; set: (on: boolean) => void };
   }
-  let { grid, places, battlemap, canUndo, undoLabel, onGrid, onPlaces, onZoom, onWhole, onUndo, floors }: Props = $props();
+  let { grid, places, battlemap, canUndo, undoLabel, onGrid, onPlaces, onZoom, onWhole, onUndo, floors, north }: Props = $props();
 
   const layers = $derived(shell.menu === 'layers');
 </script>
 
 <div class="controls" class:phone={shell.phone} data-map-controls>
   {#if floors}{@render floors()}{/if}
+  {#if north}
+    <button class="ctl" class:on={north.on} onclick={() => north.set(!north.on)} aria-label="North up" aria-pressed={north.on} title={north.on ? 'Back to the map as it lies (Shift+N)' : 'Turn the plan north up (Shift+N)'}><Icon name="north" /></button>
+  {/if}
   {#if shell.phone && canUndo}
     <button class="ctl" onclick={onUndo} aria-label="Undo" title={undoLabel ? `Undo: ${undoLabel}` : 'Undo'}><Icon name="undo" /></button>
   {/if}
