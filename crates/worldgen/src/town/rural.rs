@@ -29,7 +29,7 @@ impl RunKind {
     fn ft(self) -> f64 {
         match self {
             RunKind::Hedge => 3.5,
-            RunKind::DryWall => 2.5,
+            RunKind::DryWall => 3.75,
             RunKind::Fence => 0.8,
         }
     }
@@ -161,7 +161,7 @@ fn wheels(site: &Site, l: &mut Layout) {
         if let Some((d, mid, u, o)) = best {
             // (Its way along the wall turned so the mill lies to its left, `[-u.y, u.x]`: the sprite's +y.)
             let u = if dot([-u[1], u[0]], o) > 0.0 { mul(u, -1.0) } else { u };
-            let c = add(mid, mul(o, d + 1.0));
+            let c = add(mid, mul(o, d + 4.0));
             let clear = |q: P| {
                 l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |x| seg_dist(q, x[0], x[1]) - 0.5 * w)).chain(l.streets.iter().flat_map(|st| st.windows(2).map(|x| seg_dist(q, x[0], x[1]) - 0.5 * super::village::LANE_W))).fold(f64::MAX, f64::min) > 1.0
                     && !site.near_network_road(sub(q, center), 1.0)
@@ -499,7 +499,7 @@ pub fn objects(b: &Battle, ox: f64, oy: f64, c: &mut crate::battlemap::Chunk) {
         let (x, y) = at(p);
         let k = (y.max(0.0) as usize).min(SQ - 1) * SQ + (x.max(0.0) as usize).min(SQ - 1);
         if c.building[k] == 0 {
-            c.objects.push(Object { kind: Kind::WaterWheel, variant: 0, x, y, rot: libm::atan2(u[1], u[0]) as f32, scale: 1.0, sprite: 0, turned: true });
+            c.objects.push(Object { kind: Kind::WaterWheel, variant: 0, x, y, rot: libm::atan2(u[1], u[0]) as f32, scale: 1.3, sprite: 0, turned: true });
         }
     }
 }

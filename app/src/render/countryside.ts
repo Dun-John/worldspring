@@ -190,7 +190,7 @@ function inkOutline(g: Graphics, r: Run, L: number[], R: number[], caps: boolean
 }
 
 /** Hedgerow leaves: dark, mid, light. */
-const LEAF = [0x375527, 0x547830, 0x7ea248];
+const LEAF = [0x4b6d36, 0x688a42, 0x8fb058];
 
 /**
  * Hedgerows (about 3.5 ft thick, 5 ft tall): a soft shadow to the south-east, a lumpy band of leaves
@@ -246,7 +246,16 @@ function drawHedges(g: Graphics, rs: Run[]) {
     }
     g.fill(light ? { color: 0x86aa52, alpha: 0.75 } : { color: LEAF[0], alpha: 0.8 });
   }
-  rs.forEach((r, i) => inkOutline(g, r, sides[i][0], sides[i][1], true, 2.8));
+  // A crescent of shade along the side away from the light, over the leaves, inside the outline.
+  rs.forEach((r, i) => {
+    const sd = r.lit >= 0 ? -1 : 1;
+    const E = sd > 0 ? sides[i][0] : sides[i][1];
+    const sh: Pt = [LX * r.h * 0.2, LY * r.h * 0.2];
+    const inner = edge(r, sd as 1 | -1, step, bump(r, sd), 0.8, sh);
+    g.poly([...E, ...rev(inner)]);
+  });
+  g.fill({ color: LEAF[0], alpha: 0.55 });
+  rs.forEach((r, i) => inkOutline(g, r, sides[i][0], sides[i][1], true, 2));
 }
 
 /** A stone's tone on a face lit `l` (-1 away from the light .. 1 toward it), one of three close tones. */
@@ -377,7 +386,7 @@ function drawFences(g: Graphics, rs: Run[]) {
   for (const p of posts) g.moveTo(p[0], p[1]).lineTo(p[0] + FT * 1.6, p[1] + FT * 1.6);
   g.stroke({ width: FT * 0.4, color: 0x000000, alpha: 0.16, cap: 'round' });
   // The rails: ink under both, then the wood, its top edge lit.
-  const rail = FT * 0.26;
+  const rail = FT * 0.36;
   for (const [width, color] of [
     [rail + 3.2, INK],
     [rail, WOOD[1]],
@@ -393,7 +402,7 @@ function drawFences(g: Graphics, rs: Run[]) {
     const [p, q] = ends(r);
     for (const hgt of rails) g.moveTo(p[0], p[1] - hgt * RISE - rail * 0.25).lineTo(q[0], q[1] - hgt * RISE - rail * 0.25);
   }
-  g.stroke({ width: rail * 0.4, color: WOOD[2], alpha: 0.8 });
+  g.stroke({ width: rail * 0.5, color: mix(WOOD[2], 0xffffff, 0.3), alpha: 1 });
   // The posts, foot to top, a lighter top.
   const pw = FT * 0.42;
   for (const [width, color] of [

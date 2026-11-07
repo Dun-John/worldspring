@@ -3238,10 +3238,10 @@ function mix3(a: number, b: number, t: number): number {
  * peeping out under it to the south with its own little shadow. About 11 ft across at scale 1. */
 function fruitTree(g: Graphics, r: number, rnd: () => number, v: number) {
   const [dark, mid, light] = [
-    [0x3d5a26, 0x5a7e34, 0x8cac52],
-    [0x425e2a, 0x608238, 0x94b058],
-    [0x3a5428, 0x56763a, 0x86a256],
-    [0x3e5c28, 0x5c8036, 0x90b052],
+    [0x3d5a26, 0x5a7e34, 0x9eb85a],
+    [0x425e2a, 0x608238, 0xa6bc60],
+    [0x3a5428, 0x56763a, 0x98ae62],
+    [0x3e5c28, 0x5c8036, 0xa2b85a],
   ][v];
   const R = r * 1.1;
   // The trunk, short, under the crown's south side, and its shadow.
@@ -3260,6 +3260,8 @@ function fruitTree(g: Graphics, r: number, rnd: () => number, v: number) {
   for (const [x, y, rr] of parts) g.circle(x, y, rr).fill(dark);
   for (const [x, y, rr] of parts) g.circle(x - rr * 0.16, y - rr * 0.16, rr * 0.8).fill(mid);
   for (const [x, y, rr] of parts) g.circle(x - rr * 0.34, y - rr * 0.34, rr * 0.4).fill({ color: light, alpha: 0.85 });
+  // The crown's top (its north-west) a paler, yellower green, so it reads as a different tree from a round one.
+  for (const [x, y, rr] of parts.slice(0, 3)) g.circle(x - rr * 0.38, y - rr * 0.4, rr * 0.3).fill({ color: mix3(light, 0xd4cc70, 0.45), alpha: 0.7 });
   // Leaf clumps: a few dark curls toward the shade, light flecks toward the light.
   for (let i = 0; i < 7; i++) {
     const a = 0.2 + rnd() * 2.2;
@@ -3279,8 +3281,8 @@ function fruitTree(g: Graphics, r: number, rnd: () => number, v: number) {
     [0x8e7c30, 0xc4ae52, 0xe8d888],
     [0x3a2238, 0x5e3a5a, 0x92709a],
   ][v];
-  const fr = R * 0.065;
-  const count = 8 + Math.floor(rnd() * 4);
+  const fr = R * 0.1;
+  const count = 7 + Math.floor(rnd() * 3);
   for (let i = 0; i < count; i++) {
     const a = ((i + rnd() * 0.8) / count) * Math.PI * 2;
     const d = R * (0.25 + 0.55 * Math.sqrt(rnd()));
@@ -3299,6 +3301,8 @@ function fruitTree(g: Graphics, r: number, rnd: () => number, v: number) {
 function waterWheel(g: Graphics, r: number) {
   const [X, Y] = [r * 0.96, r * 0.29];
   const WD = [0x5e4024, 0x7d5a3c, 0xb08a5a];
+  // Its shadow on the water, to the south-east (the layer draws no round one).
+  g.roundRect(-X + X * 0.07, -Y + Y * 0.45, 2 * X, 2 * Y, Y * 0.7).fill({ color: 0x000000, alpha: 0.14 });
   // Foam on the water side and round the ends: soft, no ink.
   const foam: [number, number, number, number][] = [
     [-0.42, -1.3, 0.16, 0.3],
@@ -3323,9 +3327,9 @@ function waterWheel(g: Graphics, r: number) {
     const t = ((i + 0.5) / N) * Math.PI;
     const c = Math.cos(t);
     const x = c * X * 0.95;
-    const w = 4.5 + 7 * Math.abs(c);
+    const w = 3.6 + 5.4 * Math.abs(c);
     const tone = mix3(mix3(WD[1], WD[2], Math.max(0, 0.75 - 0.9 * Math.abs(c) - 0.25 * c)), WD[0], Math.max(0, Math.abs(c) - 0.6));
-    g.rect(x - w / 2, -Y + 4, w, 2 * Y - 8).fill(tone);
+    g.rect(x - w / 2, -Y + 4, w, 2 * Y - 8).fill(tone).stroke({ width: 1.3, color: INK, alpha: 0.75 });
   }
   // The rims, the north one in the light.
   const rim = Y * 0.28;

@@ -1066,7 +1066,7 @@ export const LONG_SHADOW = new Map([
   ['footbridge', [3.1, 0.85, 1.6]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
-export const OWN_SHADOW = new Set(['market cross']);
+export const OWN_SHADOW = new Set(['market cross', 'water wheel']);
 
 const STONE = 0x9c968b;
 const STONE_TOP = 0xb3ada2;
