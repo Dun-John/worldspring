@@ -15,6 +15,8 @@ export const BATTLE_GROUPS: [string, number[]][] = [
   ['Camp', [42, 43, 44, 45]],
   ['Squares & streets', [36, 37, 46, 47, 48, 49, 50, 51]],
   ['Park & garden', [52, 53, 54, 55, 56, 57, 58, 59, 60, 61]],
+  // v63 castles
+  ['Kitchen garden & smithy', [75, 76, 77, 78]],
 ];
 
 /** The groups of furniture and props inside, in the order the picker shows them. */

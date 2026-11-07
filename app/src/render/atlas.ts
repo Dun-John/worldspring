@@ -3919,6 +3919,232 @@ function footbridge(g: Graphics, r: number, rnd: () => number, v: number) {
   }
 }
 
+// v63 castles: a castle's kitchen garden (rows, a wattle fence, skeps) and its smithy's anvil.
+
+/** Ink widths by size (the sprite style rule): outlines of shapes over half a square, of smaller ones. */
+const OUT = 0.045 * PX;
+const LINE = 0.025 * PX;
+
+/** A round leafy head (a cabbage, a herb clump) at (x, y): lobes inked as one, dark under, lit toward
+ * the NW, a few lobes picked out lighter. */
+function leafHead(g: Graphics, x: number, y: number, s: number, n: number, tones: readonly number[], rnd: () => number) {
+  const lobes: [number, number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + rnd() * 0.6;
+    lobes.push([x + Math.cos(a) * s * 0.5, y + Math.sin(a) * s * 0.5, s * (0.48 + 0.1 * rnd())]);
+  }
+  for (const [lx, ly, lr] of lobes) g.circle(lx, ly, lr + LINE).fill(INK);
+  for (const [lx, ly, lr] of lobes) g.circle(lx, ly, lr).fill(tones[0]);
+  for (const [lx, ly, lr] of lobes) g.circle(lx - lr * 0.16, ly - lr * 0.16, lr * 0.74).fill(tones[1]);
+  for (const [lx, ly, lr] of lobes) if (lx + ly < x + y) g.circle(lx - lr * 0.3, ly - lr * 0.3, lr * 0.34).fill({ color: tones[2], alpha: 0.85 });
+}
+
+/** A bed of dug earth along x, half `L` long and `W` wide: dark soil inked round, lit along its
+ * north side, a furrow's shade along its south one, a few crumbs. */
+function ridge(g: Graphics, L: number, W: number, rnd: () => number) {
+  const earth = [0x3e2a1c, 0x563c28, 0x6e5038];
+  g.roundRect(-L, -W, L * 2, W * 2, W * 0.7).fill(earth[1]).stroke({ width: LINE, color: INK, join: 'round' });
+  g.roundRect(-L + 4, -W + 3, L * 2 - 8, W * 0.6, W * 0.3).fill({ color: earth[2], alpha: 0.85 });
+  g.roundRect(-L + 4, W * 0.3, L * 2 - 8, W * 0.55, W * 0.27).fill({ color: earth[0], alpha: 0.8 });
+  for (let i = 0; i < 8; i++) g.circle(-L + 6 + rnd() * (L * 2 - 12), (rnd() - 0.5) * W * 1.3, 1.2 + rnd()).fill({ color: rnd() < 0.5 ? earth[2] : earth[0], alpha: 0.9 });
+}
+
+/** A kitchen garden's row, along x (two squares long): a bed of dark earth, a few big crops along it.
+ * Cabbages, one red among them (v0); leeks in fans (v1); herbs, sage, parsley and chives in lilac
+ * flower (v2); carrots' feathery tops, orange shoulders showing (v3). */
+function vegRow(g: Graphics, r: number, rnd: () => number, v: number) {
+  const [L, W] = [r * 0.94, 0.34 * PX];
+  ridge(g, L, W, rnd);
+  const at = (i: number, n: number, j = 2) => [-L + ((i + 0.5) / n) * L * 2 + (rnd() - 0.5) * j, (rnd() - 0.5) * j] as const;
+  if (v === 0) {
+    const n = 4;
+    const red = Math.floor(rnd() * n);
+    for (let i = 0; i < n; i++) {
+      const [x, y] = at(i, n);
+      const tones = i === red ? [0x5a3448, 0x7a4a62, 0x9a6a80] : [0x4e7a3e, 0x6c9c50, 0x94bc6a];
+      leafHead(g, x, y, 0.25 * PX, 6, tones, rnd);
+      const h = 0.12 * PX;
+      g.circle(x - 1, y - 1, h).fill(i === red ? 0xae7e94 : 0xa6c47e).stroke({ width: LINE * 0.75, color: INK });
+      g.moveTo(x - h * 0.5, y - h * 0.1).quadraticCurveTo(x - h * 0.1, y - h * 0.6, x + h * 0.4, y - h * 0.4).stroke({ width: 1.2, color: tones[0], cap: 'round' });
+    }
+    return;
+  }
+  if (v === 1) {
+    const n = 5;
+    const tones = [0x4a7a44, 0x62944e, 0x80ae66];
+    for (let i = 0; i < n; i++) {
+      const [x, y] = at(i, n);
+      for (let k = 0; k < 4; k++) {
+        const a = (k % 2 ? Math.PI / 2 : -Math.PI / 2) + (k < 2 ? -0.4 : 0.4) + (rnd() - 0.5) * 0.3;
+        leaf(g, x, y, a, 0.36 * PX * (0.85 + 0.2 * rnd()), 6.5, shade(tones[k % 3], 1 + 0.12 * lit(a)), 0.4, (rnd() - 0.5) * 0.25);
+      }
+      g.circle(x, y, 3.4).fill(0xe0e0c8).stroke({ width: LINE * 0.75, color: INK });
+    }
+    return;
+  }
+  if (v === 2) {
+    const n = 3;
+    for (let i = 0; i < n; i++) {
+      const [x, y] = at(i, n, 3);
+      const kind = (i + Math.floor(rnd() * 2)) % 3;
+      if (kind === 0) {
+        // Sage: soft grey-green leaves, rounded.
+        leafHead(g, x, y, 0.28 * PX, 7, [0x627a56, 0x80986e, 0xa4b48c], rnd);
+      } else if (kind === 1) {
+        // Parsley: a tight curly clump.
+        leafHead(g, x, y, 0.27 * PX, 8, [0x3e6e2a, 0x5a903a, 0x7eac56], rnd);
+      } else {
+        // Chives: fine blades, a few lilac heads.
+        tuft(g, x, y, 9, 0.3 * PX, 4.6, [0x4e7e3a, 0x60904a, 0x74a456], rnd);
+        for (let k = 0; k < 3; k++) {
+          const a = rnd() * Math.PI * 2;
+          const [fx, fy] = [x + Math.cos(a) * 0.1 * PX, y + Math.sin(a) * 0.1 * PX];
+          g.circle(fx, fy, 3.6).fill(0xb49ccc).stroke({ width: LINE * 0.75, color: INK });
+          g.circle(fx - 1, fy - 1, 1.4).fill(0xd6c8e4);
+        }
+      }
+    }
+    return;
+  }
+  const n = 5;
+  const show = new Set([Math.floor(rnd() * 2), 2 + Math.floor(rnd() * 3)]);
+  for (let i = 0; i < n; i++) {
+    const [x, y] = at(i, n);
+    if (show.has(i)) g.ellipse(x + 2, y + 3, 4.6, 3.8).fill(0xc8743a).stroke({ width: LINE * 0.75, color: INK });
+    tuft(g, x, y, 7, 0.3 * PX, 5.6, [0x5e923f, 0x72a44c, 0x90b862], rnd);
+  }
+}
+
+/** A piece of wattle fence along x, five feet long so pieces set end to end read as one fence: pale
+ * withies inked along both sides (not across its ends), a stake ticked across it every few inches,
+ * one light zig-zag of weave between them. Fresh hazel (v0), older darker withies (v1), bindweed in
+ * flower on it (v2), a broken withy sticking out (v3). */
+function wattleFence(g: Graphics, r: number, rnd: () => number, v: number) {
+  void r;
+  const wood = v === 1 ? [0x7a5c3a, 0x9a7a50, 0xbc9c6c] : [0x8c6e46, 0xb08e5c, 0xd4b67e];
+  const [L, T] = [0.5 * PX, 0.1 * PX];
+  g.rect(-L, -T, L * 2, T * 2).fill(wood[1]);
+  g.rect(-L, -T + 1.5, L * 2, T * 0.6).fill(wood[2]);
+  // The stakes, about every 0.12 of a square, standing proud of the weave either side.
+  const n = 8;
+  const step = (L * 2) / n;
+  for (let i = 0; i < n; i++) {
+    const x = -L + (i + 0.5) * step;
+    g.moveTo(x, -T - 2.2).lineTo(x, T + 2.2).stroke({ width: 3, color: INK, cap: 'round' });
+    g.moveTo(x, -T - 1).lineTo(x, T + 1).stroke({ width: 1.4, color: wood[1], cap: 'round' });
+  }
+  // The weave: one withy zig-zagging over and under, stake to stake.
+  g.moveTo(-L, 0);
+  for (let i = 0; i <= n; i++) g.lineTo(Math.min(L, -L + i * step), (i % 2 ? -1 : 1) * T * 0.45);
+  g.stroke({ width: 2.2, color: shade(wood[2], 1.12), join: 'round' });
+  for (const y of [-T, T]) g.moveTo(-L, y).lineTo(L, y);
+  g.stroke({ width: LINE, color: INK });
+  if (v === 2) {
+    for (let i = 0; i < 4; i++) {
+      const x = -L + 6 + rnd() * (L * 2 - 12);
+      leaf(g, x, (rnd() < 0.5 ? -1 : 1) * T * 0.7, (rnd() - 0.5) * Math.PI * 2, 7, 3, [0x4e7a34, 0x5e8a40][i % 2], 0.4);
+    }
+    flower5(g, -L * 0.3 + rnd() * L * 0.6, -T * 0.3, 4.5, 0xf2eee0, 0xd8c060, rnd());
+  }
+  if (v === 3) {
+    const x = -L * 0.4 + rnd() * L * 0.8;
+    g.moveTo(x, T * 0.4).quadraticCurveTo(x + 5, T + 4, x + 11, T + 5.5).stroke({ width: 3.6, color: INK, cap: 'round' });
+    g.moveTo(x, T * 0.4).quadraticCurveTo(x + 5, T + 4, x + 11, T + 5.5).stroke({ width: 1.6, color: wood[2], cap: 'round' });
+  }
+}
+
+/** A straw skep from above at (x, y), `R` round: a straw-gold dome, a crescent of shade on the SE, a
+ * light on the NW shoulder, two or three coils of its straw rope as arcs, its doorway at the foot
+ * (south). */
+function skep(g: Graphics, x: number, y: number, R: number, rnd: () => number) {
+  const straw = [0xa8884a, 0xc8a660, 0xe2c88c];
+  g.circle(x, y, R).fill(straw[0]).stroke({ width: R > 0.25 * PX ? OUT : LINE, color: INK });
+  g.circle(x - R * 0.12, y - R * 0.12, R * 0.84).fill(straw[1]);
+  g.circle(x - R * 0.36, y - R * 0.36, R * 0.3).fill({ color: straw[2], alpha: 0.9 });
+  const coils = R > 0.2 * PX ? [0.72, 0.46, 0.22] : [0.66, 0.34];
+  for (const f of coils) {
+    const a0 = Math.PI * (0.05 + 0.2 * rnd());
+    g.moveTo(x + Math.cos(a0) * R * f, y + Math.sin(a0) * R * f).arc(x, y, R * f, a0, a0 + Math.PI * 1.25).stroke({ width: 1.8, color: 0x7e6034, cap: 'round' });
+  }
+  g.ellipse(x, y + R * 0.88, R * 0.24, R * 0.14).fill(0x2a1e10);
+}
+
+/** Beehives: a straw skep on a plank (v0); two on a longer plank (v1); one on a sawn stump (v2);
+ * one bigger, set on the ground (v3). */
+function beehive(g: Graphics, r: number, rnd: () => number, v: number) {
+  if (v === 1) {
+    bevel(g, -r * 0.98, -r * 0.3, r * 0.98, r * 0.38, 3, WOOD, LINE);
+    skep(g, -r * 0.47, -r * 0.02, r * 0.46, rnd);
+    skep(g, r * 0.47, 0.02 * r, r * 0.44, rnd);
+    return;
+  }
+  if (v === 2) {
+    g.poly(oval(0, r * 0.06, r * 0.86, r * 0.78, 0)).fill(BARK[0][1]).stroke({ width: LINE, color: INK });
+    endGrain(g, 0, 0, r * 0.76, r * 0.68, BARK[0]);
+  } else if (v === 0) {
+    bevel(g, -r * 0.82, -r * 0.34, r * 0.82, r * 0.42, 3, WOOD, LINE);
+  }
+  skep(g, 0, -r * 0.04, r * (v === 3 ? 0.72 : 0.64), rnd);
+}
+
+/** An anvil from above on a stump before a smithy, along x, its horn to +x (to -x in v3): dark iron,
+ * its four feet showing past a flat face worn bright, a hardy hole at the heel. A small wooden quench
+ * tub of dark water beside it (v1, v3), tongs on the stump (v1), a hammer on it (v2). */
+function anvil(g: Graphics, r: number, rnd: () => number, v: number) {
+  const f = v === 3 ? -1 : 1;
+  const X = (x: number) => f * x;
+  const flipped = (pts: number[]) => pts.map((p, i) => (i % 2 ? p : X(p)));
+  if (v === 1 || v === 3) {
+    // The tub: a hooped stave rim, dark water.
+    const [tx, ty, T] = [X(0.55 * r), 0.48 * r, 0.26 * r];
+    g.circle(tx, ty, T).fill(WOOD[1]).stroke({ width: LINE, color: INK });
+    g.circle(tx - T * 0.1, ty - T * 0.1, T * 0.86).stroke({ width: 1.4, color: WOOD[2], alpha: 0.85 });
+    g.circle(tx, ty, T * 0.68).fill(0x2a2620).stroke({ width: 1.2, color: INK });
+    g.ellipse(tx + T * 0.18, ty + T * 0.2, T * 0.26, T * 0.1).fill({ color: 0x6a6656, alpha: 0.7 });
+  }
+  // The stump.
+  const [sx, sy] = [X(-0.12 * r), -0.04 * r];
+  g.poly(oval(sx, sy + r * 0.05, r * 0.5, r * 0.44, 0)).fill(BARK[0][1]).stroke({ width: OUT, color: INK });
+  endGrain(g, sx, sy, r * 0.42, r * 0.37, BARK[0]);
+  // Its feet: a waisted block under the face, flaring out past it at both ends.
+  const [h0, h1] = [-0.52 * r, 0.24 * r];
+  const feet = flipped([sx * f + h0 + 2, sy - 0.32 * r, sx * f - 0.14 * r, sy - 0.16 * r, sx * f + h1, sy - 0.32 * r, sx * f + h1, sy + 0.32 * r, sx * f - 0.14 * r, sy + 0.16 * r, sx * f + h0 + 2, sy + 0.32 * r]);
+  g.poly(feet).fill(IRON[0]).stroke({ width: LINE, color: INK, join: 'round' });
+  // The face and the horn tapering off it.
+  const w = 0.2 * r;
+  const face = flipped([
+    sx * f + h0, sy - w,
+    sx * f + h1, sy - w,
+    sx * f + h1 + 0.2 * r, sy - w * 0.55,
+    sx * f + h1 + 0.4 * r, sy - 0.02 * r,
+    sx * f + h1 + 0.2 * r, sy + w * 0.5,
+    sx * f + h1, sy + w,
+    sx * f + h0, sy + w,
+  ]);
+  g.poly(face).fill(IRON[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  // Lit along its north edge, the face worn bright, the hardy hole.
+  g.poly(flipped([sx * f + h0 + 2, sy - w + 2, sx * f + h1 + 0.18 * r, sy - w * 0.5 + 1, sx * f + h1 + 0.36 * r, sy - 0.02 * r, sx * f + h1, sy - w * 0.35, sx * f + h0 + 2, sy - w * 0.35])).fill(IRON[2]);
+  const worn = sx * f + h0 + 0.14 * r;
+  g.rect(Math.min(X(worn), X(worn + 0.4 * r)), sy - w * 0.25, 0.4 * r, w * 0.55).fill({ color: IRON[3], alpha: 0.75 });
+  g.rect(X(sx * f + h0 + 0.08 * r) - 2, sy - 2, 4, 4).fill(INK);
+  if (v === 1) {
+    // Tongs laid over the stump's edge.
+    const [a, b] = [[X(-0.3 * r), 0.36 * r], [X(0.2 * r), 0.42 * r]];
+    for (const d of [-1.8, 1.8]) g.moveTo(a[0], a[1] + d).lineTo(b[0], b[1] + d * 0.3);
+    g.stroke({ width: 3.4, color: INK, cap: 'round' });
+    for (const d of [-1.8, 1.8]) g.moveTo(a[0], a[1] + d).lineTo(b[0], b[1] + d * 0.3);
+    g.stroke({ width: 1.5, color: IRON[2], cap: 'round' });
+  }
+  if (v === 2) {
+    // A hammer on the stump, its haft out over the edge.
+    const [hx, hy] = [X(-0.32 * r), 0.3 * r];
+    g.moveTo(hx, hy).lineTo(hx + X(0.36 * r), hy + 0.14 * r).stroke({ width: 4.4, color: INK, cap: 'round' });
+    g.moveTo(hx, hy).lineTo(hx + X(0.36 * r), hy + 0.14 * r).stroke({ width: 2.2, color: WOOD[2], cap: 'round' });
+    g.roundRect(hx - 3.5, hy - 5.5, 7, 11, 1.5).fill(IRON[1]).stroke({ width: LINE * 0.75, color: INK });
+  }
+  void rnd;
+}
+
 const DRAW: Record<number, Draw> = {
   1: (g, r, rnd, v) => canopy(g, r, rnd, [[0x2f4a22, 0x4d6e2d, 0x7a9a3c], [0x34502a, 0x557a32, 0x88a846], [0x3a4a20, 0x62702c, 0x9aa24a], [0x2c4426, 0x46683a, 0x6f9450]][v], 7),
   2: conifer,
@@ -4007,6 +4233,11 @@ const DRAW: Record<number, Draw> = {
   30: steamVent,
   31: scree,
   32: sinkhole,
+  // v63 castles: a kitchen garden and a smithy's yard.
+  75: vegRow,
+  76: wattleFence,
+  77: beehive,
+  78: anvil,
 };
 
 /** Room in the frame beyond the footprint (squares, by kind id) for tall things drawn from a high angle. */

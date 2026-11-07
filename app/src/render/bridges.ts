@@ -634,7 +634,7 @@ function oldStoneBridge(g: Graphics, f: Frame, rnd: () => number) {
 export function deckGrid(g: Graphics, s: Shape) {
   let q: number[];
   if (s.kind === 2 && s.pts.length >= 8) q = s.pts.slice(0, 8);
-  else if (s.kind === 3) {
+  else if (s.kind === 3 || s.kind === 18) {
     const [x0, y0, x1, y1] = s.pts;
     const len = Math.hypot(x1 - x0, y1 - y0) || 1;
     const [vx, vy] = [(-(y1 - y0) / len) * s.size * 0.5, ((x1 - x0) / len) * s.size * 0.5];

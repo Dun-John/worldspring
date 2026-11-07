@@ -17,14 +17,14 @@ import {
   UniformGroup,
   type Renderer,
 } from 'pixi.js';
-import { fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
+import { builtinKind, fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
-import { banner, cornerHatch, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
+import { banner, cornerHatch, drawDitchBank, drawDrawbridge, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { noiseSource } from './noise';
 import { sheetFor, thumbSheet, type ThumbSheet } from './thumbs';
@@ -271,7 +271,7 @@ export class BattlemapLayer {
     }
     const texture = atlas.frames[o.kind]?.[o.variant % looks(o.kind)];
     if (!texture) return null;
-    return { texture, rotation: drawnRotation(this.catalog[o.kind - 1], !!o.turned, o.rot), scale: o.scale };
+    return { texture, rotation: drawnRotation(builtinKind(this.catalog, o.kind), !!o.turned, o.rot), scale: o.scale };
   }
 
   /** What is in the hand, drawn where it would land (world ft): one sprite over the objects,
@@ -484,7 +484,7 @@ export class BattlemapLayer {
     let best = Infinity;
     for (const o of c.objs) {
       const custom = o.kind >= SPRITE_KIND ? c.sprites[o.kind - SPRITE_KIND] : null;
-      const inf = custom ? { ...custom, name: this.sprites[custom.asset]?.name || 'custom object', hazard: null } : this.catalog[o.kind - 1];
+      const inf = custom ? { ...custom, name: this.sprites[custom.asset]?.name || 'custom object', hazard: null } : builtinKind(this.catalog, o.kind);
       if (!inf) continue;
       const d = Math.hypot(o.x - sx, o.y - sy);
       if (d <= Math.max(0.5, inf.radius * o.scale) && d < best) {
@@ -869,7 +869,9 @@ export class BattlemapLayer {
       } else continue;
       deckGrid(gridG, s);
     }
-    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12)));
+    // (A dry ditch's sides, then the inked tops of its banks over them all.)
+    for (const ink of [false, true]) for (const s of c.shapes) if (s.kind === 19) drawDitchBank(bridgeG, s, ink);
+    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12) || s.kind === 18));
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1));
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
     // walks (over them, on the ground).
@@ -877,6 +879,8 @@ export class BattlemapLayer {
     const topGridG = new Graphics();
     const pathGridG = new Graphics();
     for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 13 ? pathGridG : walkGridG, s);
+    // A drawbridge's deck (drawn with the walls) takes the walks' grid.
+    for (const s of c.shapes) if (s.kind === 18) deckGrid(walkGridG, s);
     for (const gr of [gridG, walkGridG, topGridG, pathGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
     for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, walkGridG, towerG, topGridG]) {
       if (!part) continue;
@@ -1005,7 +1009,7 @@ function parkEdge(raised: Uint8Array | null): boolean {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge']);
+const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil']);
 /** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
  * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
  * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
@@ -1014,6 +1018,8 @@ const HALF_TURN = new Map([
   ['hedge', -135],
   ['flowerbed', -90],
   ['footbridge', -45],
+  ['vegetable row', -135],
+  ['wattle fence', -135],
 ]);
 /** Props drawn at their `rot` only when turned by hand (`Placed.turned`), by catalog name: those whose
  * NW-lit look still reads turned (approved in the gallery, `?gallery=1&turn=1`). Trees, plants,
@@ -1055,6 +1061,8 @@ export const SPARSE = new Map([
 export const LONG_SHADOW = new Map([
   ['hedge', [1.35, 0.72, 1]],
   ['footbridge', [3.1, 0.85, 1.6]],
+  ['wattle fence', [1.0, 0.36, 0.6]],
+  ['vegetable row', [1.9, 0.7, 0.5]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
 export const OWN_SHADOW = new Set(['market cross']);
@@ -1072,6 +1080,8 @@ function drawStructures(shapes: Shape[]): Graphics {
   const g = new Graphics();
   const walls = shapes.filter((s) => s.kind === 0);
   if (walls.length) drawWalls(g, walls);
+  // A drawbridge's inner end under its gatehouse.
+  for (const s of shapes) if (s.kind === 18) drawDrawbridge(g, s);
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
   for (const s of shapes) if (s.kind === 1) drawWallTower(g, s);
   for (const s of shapes) if (s.kind === 4) drawEntrance(g, s);

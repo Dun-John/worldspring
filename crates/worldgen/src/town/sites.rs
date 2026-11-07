@@ -252,7 +252,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             plazas.push(rect(at(20.0, 88.0), dir, 70.0, 40.0));
         }
     }
-    let super::Layout { mut walls, mut towers, mut gate_towers, mut castles, mut square_towers, mut mottes, .. } = works;
+    let super::Layout { mut walls, mut towers, mut gate_towers, mut castles, mut square_towers, mut mottes, mut moats, .. } = works;
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
     let reach = |q: &P, r: f64| [[q[0] - r, q[1] - r], [q[0] + r, q[1] + r]];
     let tower_reach = towers.iter().flat_map(|t| reach(t, 11.0)).chain(gate_towers.iter().flat_map(|t| reach(t, 15.0)));
@@ -286,6 +286,10 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     for m in &mut mottes {
         m.at = add(m.at, center);
     }
+    for m in &mut moats {
+        m.shift(center);
+        bb = [bb[0].min(m.bbox[0]), bb[1].min(m.bbox[1]), bb[2].max(m.bbox[2]), bb[3].max(m.bbox[3])];
+    }
     // A castle is picked anywhere in its walls; a wall on its line (`gazetteer::query`).
     let radius = match p.kind {
         PoiKind::Castle => created.map_or(80.0, |c| c.poly.iter().map(|q| dist(*q, center)).fold(0.0, f64::max)),
@@ -301,6 +305,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
         castles,
         square_towers,
         mottes,
+        moats,
         bbox: if bb[0] <= bb[2] { bb } else { [center[0] - 40.0, center[1] - 40.0, center[0] + 40.0, center[1] + 40.0] },
         site: true,
         entrances,
@@ -509,7 +514,13 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     let keep = c.keep.unwrap_or(true);
     // (The curtain on the outline drawn; the keep, and an inner curtain in a big one, on the high
     // ground. Its bailey an open yard of grass, built on only by hand.)
-    let set = super::castle::Setting { follow: false, capital: false, wall_up: false, planned: false, inner: None, hall: false };
+    // (A moat by roll, v63 castles: the likelier for a ruin (older), a big one or one with a keep.)
+    // (Keyed to its id: the same castle moved keeps its roll.)
+    let key = world.stream(&format!("castle.moat:{}", c.id));
+    let roll = |salt: i64| crate::core::rng::unit(hash2(key, salt, 0));
+    let p = super::moat::odds(roll(3), c.structure.as_deref() == Some("ruin"), keep, area(&block).abs() >= 80_000.0);
+    let moat = super::moat::roll(roll(1), roll(2), p, false);
+    let set = super::castle::Setting { follow: false, capital: false, wall_up: false, planned: false, inner: None, hall: false, moat };
     castle(&ground, &block, toward, Ward::Castle, &dp, set, &[], &[], (&[], &[]), rng, l, keep, c.yard_buildings.unwrap_or(true));
     // The keep (pushed last) is the castle; the yard's buildings by size.
     let n = l.buildings.len();
@@ -524,7 +535,10 @@ fn castle_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, rng
     by_size.sort_by(|&a, &b| area(&l.buildings[b].poly).abs().total_cmp(&area(&l.buildings[a].poly).abs()).then(a.cmp(&b)));
     for (rank, &bi) in by_size.iter().enumerate() {
         let big = area(&l.buildings[bi].poly).abs() > 2500.0;
-        let func = ["barracks", "stables", "blacksmith"].get(rank).and_then(|k| catalog::index_of(k));
+        // (Stables and a smithy in every castle with two buildings or more; a barracks, the
+        // biggest, in one with three.)
+        let trades: &[&str] = if by_size.len() >= 3 { &["barracks", "stables", "blacksmith"] } else { &["stables", "blacksmith"] };
+        let func = trades.get(rank).and_then(|k| catalog::index_of(k));
         let b = &mut l.buildings[bi];
         b.func = func.map(|f| f as u16);
         b.residential = catalog::residential_for(Ward::Castle, big) as u8;

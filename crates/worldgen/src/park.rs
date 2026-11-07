@@ -725,7 +725,7 @@ pub(crate) fn seam_inside(pr: &(P, f32, Kind, u8, f32)) -> bool {
 
 /// One hedge piece made pieces each wholly inside a chunk, on its line (`seam_split`), `depth` times
 /// over at most (a chunk's corner).
-fn seam_fit(pr: &(P, f32, Kind, u8, f32), depth: u32) -> Vec<(P, f32, Kind, u8, f32)> {
+pub(crate) fn seam_fit(pr: &(P, f32, Kind, u8, f32), depth: u32) -> Vec<(P, f32, Kind, u8, f32)> {
     if seam_inside(pr) {
         return vec![*pr];
     }

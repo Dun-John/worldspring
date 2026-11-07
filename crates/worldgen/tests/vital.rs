@@ -1390,6 +1390,12 @@ fn castle_works(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layout
 /// all but 3% of its bailey's open squares are (slivers between a range and the curtain may not
 /// be).
 fn castle_reach(l: &worldgen::town::Layout, si: usize) {
+    castle_reach_by(l, si, &|_| 0);
+}
+
+/// `castle_reach` with a moat (v63 castles): `moat` 2 where a square is blocked, 1 where it is by
+/// the moat (a street there is no way in).
+fn castle_reach_by(l: &worldgen::town::Layout, si: usize, moat: &dyn Fn([f64; 2]) -> u8) {
     use worldgen::town::{PlazaKind, geom};
     let Some(bailey) = l.plazas.iter().find(|p| p.kind == PlazaKind::Bailey).map(|p| &p.pts) else { panic!("#{si}: a castle without its bailey") };
     let (cc, cr) = l.castles[0];
@@ -1413,6 +1419,7 @@ fn castle_reach(l: &worldgen::town::Layout, si: usize) {
                 })
                 || l.gate_towers.iter().any(|t| geom_dist(p, *t) <= 16.5)
                 || l.extra_towers.iter().any(|t| geom_dist(p, t.0) <= if t.1 { 16.5 } else { 12.5 })
+                || moat(p) == 2
         })
         .collect();
     let mut seen = vec![false; n * n];
@@ -1420,7 +1427,7 @@ fn castle_reach(l: &worldgen::town::Layout, si: usize) {
     for k in 0..n * n {
         let (i, j) = (k % n, k / n);
         let p = mid(k);
-        let street = !geom::contains(bailey, p) && l.roads.iter().any(|(pts, _, w)| pts.windows(2).any(|q| geom::seg_dist(p, q[0], q[1]) <= 0.5 * w));
+        let street = !geom::contains(bailey, p) && moat(p) == 0 && l.roads.iter().any(|(pts, _, w)| pts.windows(2).any(|q| geom::seg_dist(p, q[0], q[1]) <= 0.5 * w));
         if !blocked[k] && (i == 0 || j == 0 || i == n - 1 || j == n - 1 || street) {
             seen[k] = true;
             q.push_back(k);
@@ -4147,4 +4154,85 @@ fn sketch_names_and_sites() {
     assert!(!t_road.pois.iter().any(|p| p.kind == worldgen::t0::settle::PoiKind::Waystation), "roadside inns made with generated roads off");
     let places = |t: &worldgen::t0::T0| t.settlements.iter().map(|s| (s.x.round() as i64, s.y.round() as i64, s.tier as u8, s.population)).collect::<Vec<_>>();
     assert_eq!(places(&t_road), places(&t_none), "drawing a road moved or resized settlements with generated roads off");
+}
+
+// v63 castles
+
+/// Castles' moats: over seeds 1-4 every city castle with one (wet and dry both seen): its chunks
+/// seamless across the moat (heights and water bit for bit on shared edges), a wet moat's squares
+/// under water (deep in the middle), a dry ditch's difficult ground, the drawbridge a deck; and
+/// play reaches every building in the bailey (the keep too) from outside over the drawbridge alone,
+/// the moat's squares blocked.
+#[test]
+fn castle_moats() {
+    use worldgen::battlemap::{HS, SQ, SQUARE_FT, Surface};
+    use worldgen::t0::settle::Tier;
+    let (mut wet, mut dry) = (0, 0);
+    for seed in 1..=4u32 {
+        let world = World::from_json(&world_json(seed)).unwrap();
+        let mut ex = Executor::new(world);
+        let size = ex.world.geom.tile_size_ft(ex.world.geom.max_level);
+        let max = ex.world.geom.max_level;
+        let cities: Vec<usize> = (0..ex.t0.settlements.len()).filter(|&i| ex.t0.settlements[i].tier >= Tier::City).collect();
+        for si in cities {
+            let l = worldgen::town::layout(&ex.world, &ex.t0, si);
+            let Some(m) = l.moats.first().cloned() else { continue };
+            if m.wet {
+                wet += 1;
+            } else {
+                dry += 1;
+            }
+            let tag = format!("seed {seed} #{si} ({} moat by {:?})", if m.wet { "wet" } else { "dry" }, m.bridge.at);
+            assert!(m.bridge.span >= m.width && m.bridge.span <= m.width + 40.0, "{tag}: a drawbridge {:.0} ft long over a moat {:.0} ft wide", m.bridge.span, m.width);
+            castle_reach_by(&l, si, &|p| match m.spot(p) {
+                Some(s) if s.inside() && !m.bridge.covers(p) => 2,
+                Some(_) => 1,
+                None => 0,
+            });
+            let k = |v: f64| (v / size).floor() as u32;
+            let (kx0, ky0, kx1, ky1) = (k(m.bbox[0]), k(m.bbox[1]), k(m.bbox[2]), k(m.bbox[3]));
+            let (mut band, mut good, mut deep, mut deck) = (0, 0, 0, 0);
+            let mut chunks = std::collections::HashMap::new();
+            for ky in ky0..=ky1 {
+                for kx in kx0..=kx1 {
+                    chunks.insert((kx, ky), ex.battlemap(TileKey::surface(max, kx, ky)));
+                }
+            }
+            for ky in ky0..=ky1 {
+                for kx in kx0..=kx1 {
+                    let c = &chunks[&(kx, ky)];
+                    for q in 0..SQ * SQ {
+                        let p = [kx as f64 * size + ((q % SQ) as f64 + 0.5) * SQUARE_FT, ky as f64 * size + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                        let Some(s) = m.spot(p).filter(|s| s.inside()) else { continue };
+                        if m.bridge.covers(p) {
+                            deck += (c.road_halo[(q / SQ + 1) * HS + q % SQ + 1] & 0x80 != 0) as usize;
+                            continue;
+                        }
+                        band += 1;
+                        good += if m.wet { (c.water_level[q] > c.height[q]) as usize } else { (c.edges[q] & 16 != 0 || s.outer < worldgen::town::moat::BANK_FT) as usize };
+                        deep += (c.surface[q] == Surface::Deep) as usize;
+                    }
+                    // Seamless: this chunk's east and south halo rows are its neighbours' first.
+                    if kx < kx1 {
+                        let east = &chunks[&(kx + 1, ky)];
+                        for j in 0..SQ {
+                            assert_eq!(c.halo_height[(j + 1) * HS + SQ + 1].to_bits(), east.height[j * SQ].to_bits(), "{tag}: chunk ({kx}, {ky}) height seam at row {j}");
+                            assert_eq!(c.halo_water[(j + 1) * HS + SQ + 1].to_bits(), east.water_level[j * SQ].to_bits(), "{tag}: chunk ({kx}, {ky}) water seam at row {j}");
+                        }
+                    }
+                    if ky < ky1 {
+                        let south = &chunks[&(kx, ky + 1)];
+                        for i in 0..SQ {
+                            assert_eq!(c.halo_height[(SQ + 1) * HS + i + 1].to_bits(), south.height[i].to_bits(), "{tag}: chunk ({kx}, {ky}) height seam at column {i}");
+                            assert_eq!(c.halo_water[(SQ + 1) * HS + i + 1].to_bits(), south.water_level[i].to_bits(), "{tag}: chunk ({kx}, {ky}) water seam at column {i}");
+                        }
+                    }
+                }
+            }
+            assert!(band > 0 && good * 10 >= band * 9, "{tag}: {good} of its {band} squares {}", if m.wet { "under water" } else { "difficult" });
+            assert!(!m.wet || deep * 3 >= band, "{tag}: {deep} of its {band} squares deep water");
+            assert!(deck > 0, "{tag}: no drawbridge deck");
+        }
+    }
+    assert!(wet >= 1 && dry >= 1 && wet + dry >= 8, "{wet} wet and {dry} dry moats");
 }

@@ -5,6 +5,7 @@
   import type { KindInfo } from '../gen/client';
   import type { SpriteMeta } from '../gen/protocol';
   import { BATTLE_GROUPS } from '../editor/itemGroups';
+  import { builtinKind } from '../gen/battlePrep';
   import type { HeldView } from '../editor/placing';
   import type { ScatterMode, ScatterSettings } from '../editor/scatter';
   import { drawnTurned } from '../render/BattlemapLayer';
@@ -53,10 +54,10 @@
   ];
   const COVER = ['None', 'Half', 'Three-quarters', 'Full'];
 
-  const nameOf = (k: number | string) => (typeof k === 'string' ? (sprites[k.slice(2)]?.name ?? 'Your sprite') : cap(catalog[k - 1]?.name ?? `kind ${k}`));
+  const nameOf = (k: number | string) => (typeof k === 'string' ? (sprites[k.slice(2)]?.name ?? 'Your sprite') : cap(builtinKind(catalog, k)?.name ?? `kind ${k}`));
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
   /** Whether a kind shows a turn given by hand (as the tool's `turns`). */
-  const turnsKind = (k: number | string) => typeof k === 'string' || drawnTurned(catalog[k - 1], true);
+  const turnsKind = (k: number | string) => typeof k === 'string' || drawnTurned(builtinKind(catalog, k), true);
 
   const SHORT_COVER = ['', '½ cover', '¾ cover', 'full cover'];
   const squares = (n: number) => `${n} square${n === 1 ? '' : 's'}`;

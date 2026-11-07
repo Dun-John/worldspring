@@ -12,6 +12,7 @@
 // screen a tap moves the ghost (or picks up the object tapped) and the place bar puts it down.
 import type { Clear, Edits, Placed } from '../gen/protocol';
 import type { KindInfo } from '../gen/client';
+import { builtinKind } from '../gen/battlePrep';
 import type { Camera } from '../render/camera';
 import type { Graphics } from 'pixi.js';
 import { drawnTurned } from '../render/BattlemapLayer';
@@ -81,7 +82,7 @@ export function newObjectId(prefix: 'o' | 'x' | 'v' | 'h'): string {
 /** A placed object's footprint radius (ft). */
 function placedRadius(o: Placed, e: Edits, catalog: KindInfo[]): number {
   if (typeof o.kind === 'string') return ((e.sprites?.[o.kind.slice(2)]?.size ?? 1) / 2) * 5 * o.scale;
-  return (catalog[o.kind - 1]?.radius ?? 0.5) * 5 * o.scale;
+  return (builtinKind(catalog, o.kind)?.radius ?? 0.5) * 5 * o.scale;
 }
 
 /** A small deterministic hash of a grid cell (for the brush's jittered lattice). */
@@ -148,7 +149,7 @@ export class ScatterTool implements PointerTool, Placer {
   }
 
   private kindInfo(kind: number | string): KindInfo | undefined {
-    return typeof kind === 'number' ? this.host.catalog()[kind - 1] : undefined;
+    return typeof kind === 'number' ? builtinKind(this.host.catalog(), kind) : undefined;
   }
 
   /** Whether a kind shows a turn given by hand (props approved for it, and uploaded pictures). */
@@ -601,7 +602,7 @@ export class ScatterTool implements PointerTool, Placer {
     const hit = this.host.objectAt(x, y);
     if (!hit) return this.host.hint('Nothing there to take away');
     if (typeof hit.kind === 'string') return;
-    this.host.commit({}, { [newObjectId('x')]: { x: hit.x, y: hit.y, kind: hit.kind } }, { tool: 'remove_objects', count: 1, name: catalog[hit.kind - 1]?.name });
+    this.host.commit({}, { [newObjectId('x')]: { x: hit.x, y: hit.y, kind: hit.kind } }, { tool: 'remove_objects', count: 1, name: builtinKind(catalog, hit.kind)?.name });
   }
 
   /** An eraser stroke: objects put down inside go; a clear for each circle takes the

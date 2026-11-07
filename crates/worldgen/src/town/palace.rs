@@ -896,6 +896,101 @@ pub(super) fn merge(site: &Site, l: &mut Layout, off: P, capital: bool, tier: cr
     }
 }
 
+/// A palace's formal garden (`gardens`): this far out from its walls (ft), as deep as this at most
+/// and at least (ft, in whole squares), at least this big (sq ft), on ground this level (ft of
+/// relief at most, as a town's formal park).
+const GARDEN_GAP: f64 = 5.0;
+const GARDEN_MOST: f64 = 160.0;
+const GARDEN_LEAST: f64 = 40.0;
+const GARDEN_FT2: f64 = 4000.0;
+const GARDEN_RELIEF: f64 = 6.0;
+const GARDEN_CLEARS: f64 = 100.0;
+
+/// Each palace's formal garden (v63, after `approach`; layout `l` in local ft from `off`): on the
+/// open ground of its block beyond one of its sides, `GARDEN_GAP` out, as wide as that side and
+/// as deep as the ground holds clear (`GARDEN_MOST` down to `GARDEN_LEAST`): inside the block and
+/// clear of every building, street and road, wall, square, park, field and monument, its
+/// forecourt and its paved way, level and dry. The biggest such; its side toward the palace its
+/// way in. The capital's (`capital`: the one with a forecourt), which clears its block, clears its
+/// garden too (as deep as `GARDEN_CLEARS` at most): the homes there taken in and the alleys cut
+/// back to it (`cut_alleys`), stranding no neighbour (`strands`). A pure function of the layout, so
+/// a town laid out anew by hand lays it out again.
+pub(super) fn gardens(site: &Site, l: &mut Layout, off: P) {
+    let local = |poly: &[P]| -> Vec<P> { poly.iter().map(|p| sub(*p, off)).collect() };
+    let clear = |l: &Layout, q: &[P], clears: Option<&[P]>| {
+        l.buildings.iter().all(|b| overlap(&b.poly, q) <= TOUCH || (clears.is_some() && takes(b)))
+            && l.roads.iter().all(|r| clears.is_some_and(|block| is_alley(r, block)) || r.0.windows(2).all(|s| poly_seg_dist(q, s[0], s[1]) >= 0.5 * r.2 + 2.0 && !contains(q, s[0])))
+            && l.streets.iter().all(|pts| pts.windows(2).all(|s| poly_seg_dist(q, s[0], s[1]) >= 11.0 && !contains(q, s[0])))
+            && l.walls.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(q, s[0], s[1]) >= 8.0 && !contains(q, s[0])))
+            && l.plazas.iter().map(|x| &x.pts).chain(l.parks.iter().map(|x| &x.pts)).chain(&l.monuments).chain(&l.fields).all(|x| overlap(x, q) <= TOUCH)
+            && l.forecourts.iter().all(|f| overlap(&f.yard, q) <= TOUCH && f.way.windows(2).all(|s| poly_seg_dist(q, s[0], s[1]) >= 8.0 && !contains(q, s[0])))
+    };
+    // (By id: the capital's takes homes in.)
+    let palaces: Vec<(u32, Vec<P>)> = l
+        .buildings
+        .iter()
+        .filter(|b| is_palace(b) && b.structure == Structure::Roofed && b.ward != Ward::Castle && b.parts.is_empty() && b.poly.len() == 4)
+        .map(|b| (b.id, b.poly.clone()))
+        .collect();
+    for (id, rect) in palaces {
+        let c0 = centroid(&rect);
+        let Some(block) = l.blocks.iter().find(|b| contains(b, c0)).cloned() else { continue };
+        let ccw = area(&rect) > 0.0;
+        let capital = l.forecourts.iter().any(|f| f.palace == id);
+        let clears = capital.then_some(&block[..]);
+        let taken = |l: &Layout, q: &[P]| -> Vec<usize> { (0..l.buildings.len()).filter(|&k| clears.is_some() && takes(&l.buildings[k]) && overlap(&l.buildings[k].poly, q) > TOUCH).collect() };
+        let mut best: Option<(f64, Vec<P>)> = None;
+        for k in 0..4 {
+            let (a, b) = (rect[k], rect[(k + 1) % 4]);
+            let e = sub(b, a);
+            let mut out = mul([e[1], -e[0]], 1.0 / super::geom::len(e).max(1e-9));
+            if !ccw {
+                out = mul(out, -1.0);
+            }
+            let (a0, b0) = (add(a, mul(out, GARDEN_GAP)), add(b, mul(out, GARDEN_GAP)));
+            let mut deep = if capital { GARDEN_CLEARS } else { GARDEN_MOST };
+            while deep >= GARDEN_LEAST {
+                // (Wound as the palace: its first side the one toward it.)
+                let q = vec![a0, b0, add(b0, mul(out, deep)), add(a0, mul(out, deep))];
+                let q = if (area(&q) > 0.0) == ccw { q } else { q.into_iter().rev().collect() };
+                let ar = area(&q).abs();
+                if best.as_ref().is_some_and(|x| x.0 >= ar) || ar < GARDEN_FT2 {
+                    break;
+                }
+                let lq = local(&q);
+                let inside = q.iter().all(|p| contains(&block, *p));
+                if inside && clear(l, &q, clears) && !(capital && strands(l, &q, &block, id, &taken(l, &q))) {
+                    let (lo, hi) = site.dry_relief(&lq);
+                    let dry = lq.iter().chain(std::iter::once(&centroid(&lq))).all(|&p| !site.wet(p) && !site.near_river(p, 20.0));
+                    if dry && hi - lo <= GARDEN_RELIEF {
+                        best = Some((ar, q));
+                        break;
+                    }
+                }
+                deep -= 5.0;
+            }
+        }
+        let Some((_, q)) = best else { continue };
+        if capital {
+            let gone: Vec<u32> = taken(l, &q).iter().map(|&k| l.buildings[k].id).collect();
+            l.buildings.retain(|b| !gone.contains(&b.id));
+            cut_alleys(l, &q);
+        }
+        // (Its way in on its side toward the palace: whichever of its sides lies along the gap.)
+        let fronts: Vec<bool> = (0..4)
+            .map(|j| {
+                let m = mul(add(q[j], q[(j + 1) % 4]), 0.5);
+                poly_seg_dist(&rect, m, m) < GARDEN_GAP + 1.0
+            })
+            .collect();
+        let key = crate::core::rng::hash2(0x9a4c_6a7d, id as i64, 0x67);
+        let mut pk = super::park(site, &local(&q), super::ParkKind::Formal, fronts, key);
+        pk.pts = q;
+        pk.ground.origin = add(pk.ground.origin, off);
+        l.parks.push(pk);
+    }
+}
+
 /// The inns of layout `l` that grow round a yard (`merge`, by index): every caravanserai; of the inns
 /// of `INN_FROM` sq ft or more, roofed, of one piece, on a street (a side within 8 ft of one), the
 /// biggest (the most floor, then the lowest id): a town's one, a city's two, a metropolis' three, less
