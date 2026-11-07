@@ -164,6 +164,8 @@ export class MapView {
   geom: Geom | null = null;
   tiles: TileLayer | null = null;
   battle: BattlemapLayer | null = null;
+  /** Play's drawbridges raised, by door key (`BattlemapLayer.raisedOf`); null: all lowered. */
+  bridgeRaised: ((key: string) => boolean) | null = null;
   labels: Labels | null = null;
   /** Named features: the generated ones, then created sites. */
   overlay: Overlay | null = null;
@@ -459,6 +461,7 @@ export class MapView {
     this.catalog = catalog;
     this.battle = new BattlemapLayer(geom, this.app.renderer, catalog, this.role === 'player');
     this.battle.setGrid(this.gridOn);
+    this.battle.raisedOf = (key) => !!this.bridgeRaised?.(key);
     this.battle.sprites = this.edits.sprites ?? {};
     this.battle.warmup();
     return this.battle;

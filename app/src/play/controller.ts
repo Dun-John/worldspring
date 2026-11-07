@@ -227,7 +227,8 @@ export class PlayController implements PointerTool {
     kind: 'door' | 'token' | 'place' | 'measure' | 'shape' | 'fog' | 'ping' | 'box' | 'none';
     x: number;
     y: number;
-    door?: { k: number; loc: string; lock: number; secret: boolean };
+    /** (`bridge`: a castle's drawbridge on the surface, by its door key.) */
+    door?: { k: number; loc: string; lock: number; secret: boolean; bridge?: string };
     /** Dragged tokens and their offsets from the pointer (world ft). */
     group?: { id: string; dx: number; dy: number }[];
     /** World point pressed (a selection box's corner). */
@@ -368,6 +369,13 @@ export class PlayController implements PointerTool {
 
   door(loc: string, index: number): DoorState {
     return this.state.doors[`${loc}#${index}`] ?? {};
+  }
+
+  /** The surface's drawbridges drawn and their squares' flags as the door states have them (after
+   * the states change wholesale), and the surface's vision made again. */
+  private bridgesChanged() {
+    this.doorChanges.set('surface', (this.doorChanges.get('surface') ?? 0) + 1);
+    this.view.battle?.refreshBridges();
   }
 
   /** The tactical grid of the location in view. */
@@ -594,6 +602,7 @@ export class PlayController implements PointerTool {
       this.followSig = '';
       this.ruler = null;
       this.visionDirty = true;
+      this.bridgesChanged();
       // The buildings tokens stand in, for the DM's markers.
       for (const t of Object.values(this.state.tokens)) {
         const id = parseLoc(t.loc).interior;
@@ -666,6 +675,9 @@ export class PlayController implements PointerTool {
     this.view.tool = on || this.role === 'player' ? this : null;
     this.view.interiorStyle.doors = on ? (loc, k) => this.door(loc, k) : null;
     this.view.redrawInterior();
+    // (A castle's drawbridge: lowered unless shut, the reverse of a door; all lowered with play off.)
+    this.view.bridgeRaised = on ? (key) => this.state.doors[key]?.open === false : null;
+    this.bridgesChanged();
     if (!on) {
       this.brush = null;
       this.ruler = null;
@@ -695,8 +707,10 @@ export class PlayController implements PointerTool {
     if (op.t === 'door') {
       const loc = op.key.slice(0, op.key.lastIndexOf('#'));
       this.doorChanges.set(loc, (this.doorChanges.get(loc) ?? 0) + 1);
-      this.view.redrawInterior();
+      if (loc === 'surface') this.view.battle?.refreshBridges();
+      else this.view.redrawInterior();
     }
+    if (op.t === 'reset') this.bridgesChanged();
     if (op.t === 'reset') this.selection.clear();
     if (op.t === 'untoken') this.selection.delete(op.id);
     if (op.t !== 'fog' && op.t !== 'fogbits' && op.t !== 'fogreset' && op.t !== 'shape' && op.t !== 'unshape' && op.t !== 'grid') this.visionDirty = this.followDirty = true;
@@ -1110,6 +1124,12 @@ export class PlayController implements PointerTool {
           this.press = { kind: 'door', x: gx, y: gy, door: { k: door.k, loc: door.sec.doorLoc, lock: d.lock ?? 0, secret: d.kind === 'secret' } };
           return true;
         }
+        // (On the surface: a castle's drawbridge, its deck or its gate.)
+        const bridge = place.loc === 'surface' ? this.view.battle?.bridgeAt(Math.floor(gx), Math.floor(gy)) : null;
+        if (bridge) {
+          this.press = { kind: 'door', x: gx, y: gy, door: { k: -1, loc: 'surface', lock: 0, secret: false, bridge } };
+          return true;
+        }
         // Shift-drag on open ground: a selection box.
         if (e.shiftKey) {
           this.press = { kind: 'box', x: gx, y: gy, wx: x, wy: y };
@@ -1239,7 +1259,11 @@ export class PlayController implements PointerTool {
         if (still) this.ping(place.loc, gx, gy);
         break;
       case 'door':
-        if (still && p.door) {
+        if (still && p.door?.bridge) {
+          // A drawbridge: raised (stored shut) or lowered (no state, or open).
+          const st = this.state.doors[p.door.bridge] ?? {};
+          this.dispatch({ t: 'door', key: p.door.bridge, state: { ...st, open: st.open === false } });
+        } else if (still && p.door) {
           const st = this.door(p.door.loc, p.door.k);
           const key = `${p.door.loc}#${p.door.k}`;
           if (p.door.lock && !st.unlocked && !st.open) {

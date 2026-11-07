@@ -20,12 +20,12 @@ import {
 import { builtinKind, FIELD, fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
-import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
+import { BLOCKS, DIFFICULT, dmOnlyHazard, OPAQUE, UNKNOWN, type TacticalGrid } from '../play/vision';
 import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
 import { boundAt, drawBounds, drawSails, isBound, SAILS } from './countryside';
-import { banner, cornerHatch, drawDitchBank, drawDrawbridge, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower, flagFloor, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
+import { banner, cornerHatch, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawRaisedDrawbridge, drawWalls, drawWallTower, flagFloor, GATE_DEPTH, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { drawCaveMouth, drawThemedEntrance } from './entrances';
 import { noiseSource } from './noise';
@@ -91,6 +91,11 @@ interface ChunkView {
   bounds: Shape[];
   /** Uploaded sprites its objects use. */
   sprites: ChunkSprite[];
+  /** Its castles' drawbridges: the deck with its grid (lowered) and the stub at the gate (raised),
+   * shown by play's door state (`raisedOf`). */
+  bridges: { key: string; deck: Container; stub: Graphics }[];
+  /** Its squares' play flags as they came, where a raised drawbridge changed them. */
+  bridgeOrig: Map<number, number> | null;
   /** What it was built from, kept while a sprite's picture is loading (to build it again). */
   prepared: PreparedChunk | null;
 }
@@ -578,6 +583,50 @@ export class BattlemapLayer {
     };
   }
 
+  /** Play's drawbridges raised (by key, `surface#bridge:<i>:<j>`); null: all lowered (play off). */
+  raisedOf: ((key: string) => boolean) | null = null;
+  /** The drawbridges of chunks in memory (by their owner, the chunk holding the deck's middle): per
+   * square it covers (world squares), the play flags it adds raised. */
+  private readonly bridgeReg = new Map<string, { cells: number[]; owner: ChunkView }>();
+
+  /** The drawbridge whose deck or gate square is world square (`i`, `j`), by its door key. */
+  bridgeAt(i: number, j: number): string | null {
+    for (const [key, b] of this.bridgeReg) for (let o = 0; o < b.cells.length; o += 3) if (b.cells[o] === i && b.cells[o + 1] === j) return key;
+    return null;
+  }
+
+  /**
+   * Play's drawbridges as their door states have them (on a door change, and when chunks come and
+   * go): a raised one's deck hidden and its stub shown, and its squares' play flags in every chunk
+   * it crosses changed (the moat's under its deck, a wall across its gate); lowered, as they came.
+   */
+  refreshBridges() {
+    const up = (key: string) => !!this.raisedOf?.(key);
+    for (const c of this.chunks.values()) {
+      if (c.bridgeOrig) for (const [k, v] of c.bridgeOrig) c.flags[k] = v;
+      c.bridgeOrig = null;
+      for (const b of c.bridges ?? []) {
+        const raised = up(b.key);
+        b.deck.visible = !raised;
+        b.stub.visible = raised;
+      }
+    }
+    for (const [key, b] of this.bridgeReg) {
+      if (!up(key)) continue;
+      for (let o = 0; o < b.cells.length; o += 3) {
+        if (!b.cells[o + 2]) continue;
+        const [i, j] = [b.cells[o], b.cells[o + 1]];
+        const [cx, cy] = [Math.floor(i / SQ), Math.floor(j / SQ)];
+        const c = this.chunks.get(`${cx}/${cy}`);
+        if (!c) continue;
+        const k = (j - cy * SQ) * SQ + i - cx * SQ;
+        c.bridgeOrig ??= new Map();
+        if (!c.bridgeOrig.has(k)) c.bridgeOrig.set(k, c.flags[k]);
+        c.flags[k] = c.bridgeOrig.get(k)! | b.cells[o + 2];
+      }
+    }
+  }
+
   /** Whether opaque battlemap chunks cover the whole view (the map beneath need not draw). */
   covering = false;
   /** Chunks built in the last update (for the frame profile). */
@@ -889,7 +938,27 @@ export class BattlemapLayer {
     }
     // (A dry ditch's sides, then the inked tops of its banks over them all.)
     for (const ink of [false, true]) for (const s of c.shapes) if (s.kind === 19) drawDitchBank(bridgeG, s, ink);
-    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12) || s.kind === 18 || isBound(s.kind)), cx * SQ * PX, cy * SQ * PX);
+    // A drawbridge's deck lies over the walls and under its gatehouse (which covers its inner end);
+    // its deck and grid, and the stub shown when play raises it, each on their own (shown by door
+    // state). Chunks without one draw their structures in one piece.
+    const drawbridges = c.shapes.filter((s) => s.kind === 18);
+    const lowKind = (k: number) => k === 0 || isBound(k);
+    const highKind = (k: number) => k === 4 || k === 9 || (k >= 10 && k <= 12);
+    const structG = drawStructures(c.shapes.filter((s) => lowKind(s.kind) || (!drawbridges.length && highKind(s.kind))), cx * SQ * PX, cy * SQ * PX);
+    const structHigh = drawbridges.length ? drawStructures(c.shapes.filter((s) => highKind(s.kind))) : null;
+    const bridges = drawbridges.map((s) => {
+      drawDrawbridgeSill(structG, s);
+      const deckG = new Graphics();
+      drawDrawbridge(deckG, s);
+      const deckGridG = new Graphics();
+      deckGrid(deckGridG, s);
+      deckGridG.visible = this.frame.uniforms.uGrid > 0;
+      const deck = new Container();
+      deck.addChild(deckG, deckGridG);
+      const stub = new Graphics();
+      drawRaisedDrawbridge(stub, s);
+      return { key: bridgeKey(s, cx, cy), deck, stub, grid: deckGridG };
+    });
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1 || s.kind === SAILS));
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
     // walks (over them, on the ground).
@@ -897,10 +966,8 @@ export class BattlemapLayer {
     const topGridG = new Graphics();
     const pathGridG = new Graphics();
     for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 13 ? pathGridG : walkGridG, s);
-    // A drawbridge's deck (drawn with the walls) takes the walks' grid.
-    for (const s of c.shapes) if (s.kind === 18) deckGrid(walkGridG, s);
     for (const gr of [gridG, walkGridG, topGridG, pathGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
-    for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, walkGridG, towerG, topGridG]) {
+    for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, ...bridges.flatMap((b) => [b.deck, b.stub]), structHigh, walkGridG, towerG, topGridG]) {
       if (!part) continue;
       this.prewarm(part);
       yield;
@@ -911,7 +978,11 @@ export class BattlemapLayer {
       for (const [key, pc] of customs) if ((i === 1 && key.endsWith('/0')) || (i === 3 && key.endsWith('/1'))) holder.addChild(pc);
       if (i === 0) holder.addChild(daisG, pathGridG);
       if (i === 2) {
-        holder.addChild(structG, walkGridG);
+        holder.addChild(structG);
+        for (const b of bridges) holder.addChild(b.deck);
+        if (structHigh) holder.addChild(structHigh);
+        for (const b of bridges) holder.addChild(b.stub);
+        holder.addChild(walkGridG);
         if (roofMesh) {
           roofMesh.visible = this.roofsOn;
           holder.addChild(roofMesh);
@@ -965,7 +1036,7 @@ export class BattlemapLayer {
       shown: null,
       roofGeometry,
       roofMesh,
-      grids: [gridG, walkGridG, topGridG, pathGridG],
+      grids: [gridG, walkGridG, topGridG, pathGridG, ...bridges.map((b) => b.grid)],
       decks,
       atmo,
       atmoUniforms,
@@ -982,9 +1053,14 @@ export class BattlemapLayer {
       objs,
       bounds: c.shapes.filter((s) => isBound(s.kind)),
       sprites: c.sprites,
+      bridges: bridges.map(({ key, deck, stub }) => ({ key, deck, stub })),
+      bridgeOrig: null,
       prepared: waiting ? c : null,
     });
     this.dropPreview(id, epoch);
+    const view = this.chunks.get(id)!;
+    for (const s of drawbridges) this.bridgeReg.set(bridgeKey(s, cx, cy), { cells: bridgeCells(s, cx, cy), owner: view });
+    if (this.bridgeReg.size) this.refreshBridges();
   }
 
   private evict() {
@@ -998,6 +1074,13 @@ export class BattlemapLayer {
   }
 
   private destroyChunk(c: ChunkView) {
+    let gone = false;
+    for (const b of c.bridges ?? []) {
+      if (this.bridgeReg.get(b.key)?.owner !== c) continue;
+      this.bridgeReg.delete(b.key);
+      gone = true;
+    }
+    if (gone) this.refreshBridges();
     for (const p of c.parts) p.destroy({ children: true });
     for (const t of c.textures) t.destroy(true);
     c.roofGeometry?.destroy();
@@ -1093,11 +1176,54 @@ export const OWN_SHADOW = new Set(['market cross', 'water wheel']);
 const STONE = 0x9c968b;
 const STONE_TOP = 0xb3ada2;
 
+/** A drawbridge's play door key: its gate's world square (the same from whichever chunk it is read). */
+function bridgeKey(s: Shape, cx: number, cy: number): string {
+  return `surface#bridge:${Math.floor(cx * SQ + s.pts[0] / PX + 1e-3)}:${Math.floor(cy * SQ + s.pts[1] / PX + 1e-3)}`;
+}
+
+/**
+ * The world squares a drawbridge covers, with the play flags each takes raised (triples i, j, flags):
+ * every square the raised leaf's line across the gatehouse's outer arch touches (a little wider than
+ * the deck, to meet the arch's sides however the squares fall) is shut (OPAQUE | BLOCKS); those beyond
+ * it whose middle is on its deck (as `moat::Drawbridge::covers`) lie open to the moat, a wet one's water
+ * (BLOCKS) or a dry ditch (DIFFICULT). The passage under the gatehouse stays as it is (flags 0: only
+ * for `bridgeAt`).
+ */
+function bridgeCells(s: Shape, cx: number, cy: number): number[] {
+  const [ax, ay] = [cx * SQ + s.pts[0] / PX, cy * SQ + s.pts[1] / PX];
+  const [bx, by] = [cx * SQ + s.pts[2] / PX, cy * SQ + s.pts[3] / PX];
+  const wet = s.pts.length > 4 && Math.round(s.pts[4] / PX) === 1;
+  const span = Math.hypot(bx - ax, by - ay) || 1;
+  const [ux, uy] = [(bx - ax) / span, (by - ay) / span];
+  const half = s.size / PX / 2 + 1e-6;
+  const out: number[] = [];
+  const gate = new Set<string>();
+  const reach = half + 0.6;
+  const leaf = GATE_DEPTH / SQUARE_FT + 0.15;
+  for (let q = -reach; q <= reach + 1e-6; q += 0.05) {
+    const [i, j] = [Math.floor(ax + ux * leaf - uy * q), Math.floor(ay + uy * leaf + ux * q)];
+    if (gate.has(`${i},${j}`)) continue;
+    gate.add(`${i},${j}`);
+    out.push(i, j, OPAQUE | BLOCKS);
+  }
+  const r = Math.ceil(half + 1);
+  for (let j = Math.floor(Math.min(ay, by)) - r; j <= Math.ceil(Math.max(ay, by)) + r; j++) {
+    for (let i = Math.floor(Math.min(ax, bx)) - r; i <= Math.ceil(Math.max(ax, bx)) + r; i++) {
+      const [dx, dy] = [i + 0.5 - ax, j + 0.5 - ay];
+      const along = dx * ux + dy * uy;
+      if (gate.has(`${i},${j}`) || Math.abs(ux * dy - uy * dx) > half || along < 0 || along > span) continue;
+      // (Under the gatehouse: unchanged, but a click there works the bridge too.)
+      out.push(i, j, along < leaf ? 0 : wet ? BLOCKS : DIFFICULT);
+    }
+  }
+  return out;
+}
+
 /**
  * Walls, gatehouses, towers and ways underground as clean vectors over the ground (their squares
  * keep their tactical height; the ground under them is drawn flat): `walls.ts` draws the first
- * three, and a forecourt's garden wall, gate piers and gate. Bridges and piers are drawn apart
- * (`bridges.ts`). (`ox`, `oy`: the chunk's corner in world px, for the bounds' patterns.)
+ * three, and a forecourt's garden wall, gate piers and gate. Bridges, piers and drawbridges are drawn apart
+ * (`bridges.ts`; a drawbridge in pieces, for play). (`ox`, `oy`: the chunk's corner in world px, for the bounds' patterns.)
  */
 function drawStructures(shapes: Shape[], ox = 0, oy = 0): Graphics {
   const g = new Graphics();
@@ -1107,8 +1233,6 @@ function drawStructures(shapes: Shape[], ox = 0, oy = 0): Graphics {
   for (const s of shapes) if (s.kind === SAILS) drawSails(g, s);
   const walls = shapes.filter((s) => s.kind === 0);
   if (walls.length) drawWalls(g, walls);
-  // A drawbridge's inner end under its gatehouse.
-  for (const s of shapes) if (s.kind === 18) drawDrawbridge(g, s);
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
   for (const s of shapes) if (s.kind === 1) drawWallTower(g, s);
   for (const s of shapes) if (s.kind === 4) drawEntrance(g, s);
