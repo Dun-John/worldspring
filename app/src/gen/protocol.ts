@@ -863,7 +863,7 @@ const WARD_RGB: [number, number, number][] = [
 const FIELD_RGB: [number, number, number][][] = [
   [[0.86, 0.77, 0.47], [0.8, 0.74, 0.47], [0.88, 0.81, 0.56], [0.83, 0.7, 0.45]],
   [[0.6, 0.71, 0.44], [0.55, 0.67, 0.42], [0.64, 0.73, 0.47], [0.58, 0.68, 0.4]],
-  [[0.71, 0.6, 0.45], [0.67, 0.57, 0.43], [0.74, 0.64, 0.49], [0.69, 0.6, 0.47]],
+  [[0.74, 0.63, 0.48], [0.7, 0.6, 0.46], [0.77, 0.67, 0.52], [0.72, 0.63, 0.5]],
   [[0.5, 0.63, 0.38], [0.47, 0.6, 0.37], [0.53, 0.65, 0.4], [0.49, 0.62, 0.36]],
 ];
 
@@ -883,7 +883,22 @@ function fieldStyle(attr: number): { rgb: [number, number, number]; ink: boolean
 export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, tileFt = 0): SiteGeometry | null {
   const n = polys.attrs.length;
   let tris = 0;
-  for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
+  // (A convex field fanned from its middle, a triangle a side: below.)
+  const fanned = (i: number) => {
+    const s0 = polys.starts[i];
+    const m = polys.starts[i + 1] - s0;
+    if ((polys.attrs[i] & 0xff) !== 2 || m < 3) return false;
+    let sign = 0;
+    for (let k = 0; k < m; k++) {
+      const [a, b, c] = [k, (k + 1) % m, (k + 2) % m].map((j) => (s0 + j) * 2);
+      const cr = (polys.verts[b] - polys.verts[a]) * (polys.verts[c + 1] - polys.verts[b + 1]) - (polys.verts[b + 1] - polys.verts[a + 1]) * (polys.verts[c] - polys.verts[b]);
+      if (Math.abs(cr) < 1e-12) continue;
+      if (sign === 0) sign = Math.sign(cr);
+      else if (Math.sign(cr) !== sign) return false;
+    }
+    return true;
+  };
+  for (let i = 0; i < n; i++) tris += fanned(i) ? polys.starts[i + 1] - polys.starts[i] : Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
   const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
@@ -979,6 +994,31 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, tileF
       }
       // (A belfry's shadow not inked.)
       const ink = fs ? fs.ink : outlined(kind) && ((attr >>> 25) & 15) !== 10;
+      if (fs && fanned(i)) {
+        // A field (convex) fanned from its middle: each triangle holds one side, so its hedge or
+        // wall meets the next at a mitre along the spoke between them, with no notch at a corner.
+        let cx = 0;
+        let cy = 0;
+        for (let k = 0; k < m; k++) {
+          cx += polys.verts[(s0 + k) * 2] / m;
+          cy += polys.verts[(s0 + k) * 2 + 1] / m;
+        }
+        for (let k = 0; k < m; k++) {
+          const ps = [cx, cy, polys.verts[(s0 + k) * 2], polys.verts[(s0 + k) * 2 + 1], polys.verts[(s0 + ((k + 1) % m)) * 2], polys.verts[(s0 + ((k + 1) % m)) * 2 + 1]];
+          for (let c = 0; c < 3; c++) {
+            pos[v * 2] = ps[c * 2];
+            pos[v * 2 + 1] = ps[c * 2 + 1];
+            color.set([rgb[0], rgb[1], rgb[2], a], v * 4);
+            // (The side, opposite the middle, is the only real edge.)
+            for (let e = 0; e < 3; e++) edge[v * 3 + e] = e === 0 && ink ? (c === 0 ? 1 : 0) : 1;
+            field[v * 2] = (pos[v * 2] * fs.nx + pos[v * 2 + 1] * fs.ny) * tileFt;
+            field[v * 2 + 1] = fs.style;
+            index[v] = v;
+            v++;
+          }
+        }
+        continue;
+      }
       // Fan triangles (0, k, k+1): the edge k..k+1 is always the polygon's; 0..1 only for the
       // first triangle, k+1..0 only for the last.
       for (let k = 1; k + 1 < m; k++) {

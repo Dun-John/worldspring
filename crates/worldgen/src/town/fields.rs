@@ -11,6 +11,7 @@
 use super::geom::*;
 use super::{Layout, Site};
 use crate::battlemap::Surface;
+use crate::core::noise::{gradient2, smoothstep};
 use crate::core::rng::{hash3, unit};
 use crate::t0::biome::Biome;
 use crate::t0::settle::Tier;
@@ -45,6 +46,47 @@ pub struct FieldInfo {
     pub tone: u8,
 }
 
+/// How far a settlement's fields reach at `p` (local ft) as a share of the belt's plain radius
+/// `scale` (about 1): a low-frequency noise keyed by the world position wanders the belt's edge in
+/// and out, and the fields run on along the roads (`roads`: local ft) and the river.
+pub(super) fn reach(site: &Site, seed: u64, p: P, roads: &[(Vec<P>, u8, f64)], scale: f64) -> f64 {
+    let w = add(p, site.center);
+    let k = 1.0 / (0.45 * scale).max(200.0);
+    let n = 0.7 * gradient2(seed ^ 0x5eed_f1e1d, w[0] * k, w[1] * k) + 0.3 * gradient2(seed ^ 0x5eed_f1e1e, w[0] * 2.7 * k, w[1] * 2.7 * k);
+    let road = roads.iter().flat_map(|r| r.0.windows(2)).map(|s| seg_dist(p, s[0], s[1])).fold(f64::MAX, f64::min);
+    let by_road = 0.3 * (1.0 - smoothstep(60.0, 400.0, road));
+    let by_river = if site.near_river(p, 150.0) { 0.2 } else if site.near_river(p, 400.0) { 0.1 } else { 0.0 };
+    1.0 + 0.5 * n + by_road + by_river
+}
+
+/// The fields a settlement keeps of its candidate plots (local ft; class 0 always), outward by
+/// `far` (a plot's distance over its reach, `reach`: 1 at the belt's edge) until they hold `want`
+/// sq ft: the belt's edge wanders with the reach, and its outermost plots are thinned (a jitter
+/// keyed by place, so some are skipped and some beyond kept). In the plots' order.
+pub(super) fn belt_order(site: &Site, seed: u64, plots: &[(Vec<P>, u8)], want: f64, far: &dyn Fn(P) -> f64) -> Vec<Vec<P>> {
+    let mut order: Vec<(f64, usize)> = plots
+        .iter()
+        .enumerate()
+        .map(|(k, (f, class))| {
+            let c = centroid(f);
+            let w = add(c, site.center);
+            let jitter = unit(hash3(seed, crate::core::round(w[0]) as i64, crate::core::round(w[1]) as i64, 0x7a11));
+            (if *class == 0 { -1.0 } else { far(c) + 0.3 * jitter }, k)
+        })
+        .collect();
+    order.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut take = vec![false; plots.len()];
+    let mut have = 0.0;
+    for &(t, k) in &order {
+        if t >= 0.0 && have >= want {
+            break;
+        }
+        take[k] = true;
+        have += area(&plots[k].0).abs();
+    }
+    plots.iter().zip(take).filter(|x| x.1).map(|x| x.0.0.clone()).collect()
+}
+
 /// Ground steeper than this (rise over run across the field) is pasture or walled.
 const STEEP: f64 = 0.05;
 
@@ -68,6 +110,15 @@ pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
     let fruit = !matches!(biome, Biome::Alpine | Biome::Tundra | Biome::Ice | Biome::ColdDesert | Biome::HotDesert | Biome::SaltFlat | Biome::Taiga);
     let village = l.tier == Tier::Village;
     let r = l.radius.max(1.0);
+    // How far out each field lies against the outermost in its direction: the belt's ragged rim is
+    // more pasture, less fenced.
+    const SECTORS: usize = 32;
+    let sector = |p: P| ((libm::atan2(p[1], p[0]) / std::f64::consts::TAU + 0.5) * SECTORS as f64) as usize % SECTORS;
+    let mut outer = [0.0f64; SECTORS];
+    for f in &l.fields {
+        let p = sub(centroid(f), l.center);
+        outer[sector(p)] = outer[sector(p)].max(len(p));
+    }
     let mut info = Vec::with_capacity(l.fields.len());
     let mut near: Vec<(f64, usize)> = Vec::new();
     for (i, f) in l.fields.iter().enumerate() {
@@ -83,8 +134,9 @@ pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
         let steep = grade > STEEP;
         let wet = site.near_river(local, 120.0);
         let far = len(local) / r;
+        let rim = ((len(local) / outer[sector(local)].max(1.0) - 0.8) / 0.2).clamp(0.0, 1.0);
         // Use: pasture on steep and wet ground, more of it far out; arable near, some of it fallow.
-        let pasture = grazing + if steep { 0.4 } else { 0.0 } + if wet { 0.45 } else { 0.0 } + if far > 2.0 { 0.15 } else { 0.0 };
+        let pasture = grazing + if steep { 0.4 } else { 0.0 } + if wet { 0.45 } else { 0.0 } + if far > 2.0 { 0.15 } else { 0.0 } + 0.3 * rim;
         let kind = if roll(1) < pasture {
             FieldUse::Pasture
         } else if roll(2) < 0.13 {
@@ -111,7 +163,7 @@ pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
         // Bounds: walls on high, stony, dry or cold ground, hedges in temperate lowlands, some none
         // (open-field strips never); stock is fenced in more often than crops.
         let (wall, hedge) = if steep { ((wall0 + 0.45).min(0.9), hedge0.min(0.1)) } else { (wall0, hedge0) };
-        let keep = if kind == FieldUse::Pasture { 1.15 } else { 1.0 };
+        let keep = if kind == FieldUse::Pasture { 1.15 } else { 1.0 } * (1.0 - 0.4 * rim);
         let b = roll(5);
         let bound = if strips {
             FieldBound::None

@@ -23,6 +23,7 @@ const float FURROW_FT = 14.0;
 const float STRIP_FT = 38.0;
 const vec3 HEDGE = vec3(0.24, 0.36, 0.19);
 const vec3 WALL = vec3(0.47, 0.46, 0.43);
+const vec3 BALK = vec3(0.53, 0.6, 0.38);
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -30,27 +31,33 @@ float hash21(vec2 p) {
     return fract(p.x * p.y);
 }
 
-// v63 countryside: a field's furrows (soft darker bands, gone once they crowd under ~4 px), an open
-// field's strips (each its own shade, a pale balk between), and the ink and width of its bound.
+// v63 countryside: a field's furrows (soft darker bands, faded out as they crowd toward ~2.5 px), an
+// open field's strips (each its own shade, a balk between), and the ink and width of its bound. One
+// furrow period a field (`fw`: ft a pixel, the same whichever way they run); an open field's a third
+// of its strips, its balks in a furrow, so the two never beat.
 vec3 fieldLook(vec3 col, int code, float fw, out vec3 ink, out float lw) {
     int use = code & 3;
     int bound = (code >> 2) & 3;
+    bool strips = (code & 16) != 0;
     ink = bound == 1 ? HEDGE : WALL;
     lw = bound == 1 ? clamp(4.0 * uPpf, 1.4, 4.0) : clamp(2.5 * uPpf, 1.1, 2.5);
     float c = vField.x;
     if (use == 0 || use == 2) {
-        float period = FURROW_FT / fw;
-        float dpx = abs(fract(c / FURROW_FT) - 0.5) * period;
-        float band = 1.0 - smoothstep(0.18 * period - 0.5, 0.18 * period + 0.5, dpx);
-        col *= 1.0 - (use == 2 ? 0.06 : 0.12) * band * smoothstep(3.0, 6.0, period);
+        float ft = strips ? STRIP_FT / 3.0 : FURROW_FT;
+        float period = ft / fw;
+        // A cosine (nothing sharp to alias), sharpened into bands once they are wide.
+        float wave = 0.5 + 0.5 * cos(6.2831853 * c / ft);
+        float band = mix(wave, smoothstep(0.5, 0.95, wave), smoothstep(8.0, 20.0, period));
+        col *= 1.0 - (use == 2 ? 0.06 : 0.12) * band * smoothstep(2.5, 6.0, period);
     }
-    if ((code & 16) != 0) {
+    if (strips) {
         float s = c / STRIP_FT;
         float period = STRIP_FT / fw;
-        float show = smoothstep(4.0, 8.0, period);
+        float show = smoothstep(4.0, 9.0, period);
         col *= 1.0 + (0.12 * hash21(vec2(floor(s), 7.3)) - 0.06) * show;
         float dpx = min(fract(s), 1.0 - fract(s)) * period;
-        col = mix(col, vec3(0.62, 0.68, 0.45), (1.0 - smoothstep(0.4, 1.2, dpx)) * 0.7 * show);
+        float bw = clamp(0.05 * period, 0.5, 1.5);
+        col = mix(col, BALK, (1.0 - smoothstep(bw - 0.5, bw + 0.5, dpx)) * 0.7 * show);
     }
     return col;
 }
@@ -63,7 +70,7 @@ void main() {
     float lw = LINE_PX;
     vec3 fill = vColor.rgb;
     // (Derivatives taken outside the branch.)
-    float fw = max(fwidth(vField.x), 1e-4);
+    float fw = max(length(vec2(dFdx(vField.x), dFdy(vField.x))), 1e-4);
     if (vField.y > 0.5) fill = fieldLook(fill, int(vField.y + 0.5) - 1, fw, inkCol, lw);
     float ink = (1.0 - smoothstep(lw - 0.5, lw + 0.5, d)) * smoothstep(0.04, 0.12, uPpf);
     float a = max(vColor.a, ink) * uAlpha;

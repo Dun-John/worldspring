@@ -284,14 +284,14 @@ vec3 groundColor(int s, vec2 w) {
         float ang = float(fb & 63) * (3.14159265 / 64.0);
         float across = dot(w, vec2(-sin(ang), cos(ang)));
         float row = abs(fract(across * 0.9 + 0.2 * vnoise(w * 0.3)) - 0.5);
-        col = mix(col * (mode == 2 ? 0.9 : 0.78), col * 1.08, smoothstep(0.1, 0.3, row));
+        col = mix(col * (mode == 2 ? 0.93 : 0.86), col * 1.08, smoothstep(0.06, 0.34, row));
         if (mode == 1) {
             float st = across / 7.6;
             col *= 0.93 + 0.14 * hash21(vec2(floor(st), 5.1));
             float balk = 1.0 - smoothstep(0.03, 0.07, min(fract(st), 1.0 - fract(st)));
             col = mix(col, SURF[0] * 1.05, balk * 0.75);
         } else if (mode == 2) {
-            col = mix(col, vec3(0.5, 0.4, 0.28), 0.4);
+            col = mix(col, vec3(0.56, 0.46, 0.33), 0.38);
         }
     } else if (s == 8) {
         // Salt crust polygons.

@@ -483,9 +483,13 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
             l.buildings.push(new_building(site, house, Ward::Rural, None, Structure::Roofed));
         }
     }
-    // Fields: Voronoi cells seeded along the lanes and on a jittered ring, split into plots
-    // and claimed outward from the village until there is enough farmland for its people; none
-    // on the village's plots.
+    // Fields: Voronoi cells seeded along the lanes and scattered round the village (rings of their
+    // own counts and spins, seeds jittered, cells of many sizes), split into plots and claimed
+    // outward until there is enough farmland for its people; none on the village's plots. Outward
+    // by each plot's reach (`fields::reach`): the belt's edge wanders, runs on along the roads and
+    // the river, and its last fields are thinned (`fields::belt_order`). (Their own random stream:
+    // what the village draws after them never shifts with the fields.)
+    let mut frng = Pcg32::new(hash3(s.seed, 0xf1e1d, 0, 7), 61);
     let spacing = 260.0 - 120.0 * spread;
     let mut seeds: Vec<P> = Vec::new();
     for (pts, _) in &lanes {
@@ -495,42 +499,59 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
             let (p, u) = point_along(pts, a);
             let n = [-u[1], u[0]];
             for side in [-1.0, 1.0] {
-                seeds.push(add(p, mul(n, side * 0.6 * spacing)));
+                seeds.push(add(p, mul(n, side * frng.range(0.45, 0.8) * spacing)));
             }
-            a += spacing;
+            a += spacing * frng.range(0.75, 1.3);
         }
     }
-    let ring_n = ((std::f64::consts::TAU * 1.7 * r) / spacing) as usize;
-    for k in 0..ring_n {
-        let a = std::f64::consts::TAU * (k as f64 + rng.range(-0.3, 0.3)) / ring_n as f64;
-        for rad in [1.35 * r, 1.9 * r] {
-            seeds.push(polar_pt(rad * rng.range(0.9, 1.1), a));
+    let ring_n = (std::f64::consts::TAU * 1.7 * r) / spacing;
+    for rad in [1.3, 1.7, 2.05] {
+        let n = ((ring_n * rad / 1.7 * frng.range(0.6, 1.2)) as usize).max(4);
+        let spin = frng.range(0.0, std::f64::consts::TAU);
+        for k in 0..n {
+            let a = spin + std::f64::consts::TAU * (k as f64 + frng.range(-0.45, 0.45)) / n as f64;
+            seeds.push(polar_pt(rad * r * frng.range(0.85, 1.15), a));
         }
     }
-    seeds.retain(|p| len(*p) > 0.7 * r && len(*p) < 2.1 * r);
-    let cells = voronoi(&seeds, &circle([0.0, 0.0], 2.1 * r, 40));
-    let mut order: Vec<usize> = (0..cells.len()).filter(|&i| cells[i].pts.len() >= 3).collect();
-    order.sort_by(|&a, &b| len(seeds[a]).total_cmp(&len(seeds[b])).then(a.cmp(&b)));
+    // (Within 2.18 r: the ground the village's pad covers, `town::reach`.)
+    let rim = 2.18 * r;
+    seeds.retain(|p| len(*p) > 0.5 * r && len(*p) < rim);
+    let cells = voronoi(&seeds, &circle([0.0, 0.0], rim, 64));
+    let roads = l.roads.clone();
+    let reach = |c: P| super::fields::reach(site, s.seed, c, &roads, 1.75 * r);
+    let far = |c: P| len(c) / (1.75 * r * reach(c));
+    let mut order: Vec<(f64, usize)> = (0..cells.len()).filter(|&i| cells[i].pts.len() >= 3).map(|i| (far(seeds[i]), i)).collect();
+    order.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
     let want = l.buildings.len() as f64 * 22_000.0 * (0.7 + 0.6 * spread);
+    // (A third more than wanted, for the edge to be chosen from.)
     let mut have = 0.0;
-    for i in order {
-        if have >= want {
+    let mut plots: Vec<(Vec<P>, u8)> = Vec::new();
+    for (_, i) in order {
+        if have >= 1.33 * want {
             break;
         }
         let cell = inset(&cells[i].pts, &vec![5.0; cells[i].pts.len()]);
-        if cell.len() < 3 || site.wet(centroid(&cell)) || l.buildings.iter().any(|b| super::overlaps(&b.poly, &cell)) {
+        if cell.len() < 3 || site.wet(centroid(&cell)) {
             continue;
         }
-        let mut plots = Vec::new();
-        split_field(&cell, 20_000.0 * (1.0 + spread), rng, &mut plots, 0);
-        for plot in plots {
+        let mut cut = Vec::new();
+        split_field(&cell, 20_000.0 * (1.0 + spread) * frng.range(0.6, 1.6), &mut frng, &mut cut, 0);
+        for plot in cut {
             let f = clean(&chamfer(&plot, 10.0));
-            if f.len() >= 3 && area(&f).abs() > 1_500.0 && !site.wet(centroid(&f)) && site.dry_outline(&f, 8.0) && !g.plot_hit(&f) {
+            // (Short of the rim where the reach is short, and now and then by it: no round edge.)
+            let c = centroid(&f);
+            let w = add(c, site.center);
+            let by_rim = len(c) > 0.86 * rim && unit(hash3(s.seed, crate::core::round(w[0]) as i64, crate::core::round(w[1]) as i64, 0x41e)) < 0.25;
+            if len(c) > rim * (0.76 + 0.24 * reach(c)).min(1.0) - 40.0 || by_rim {
+                continue;
+            }
+            if f.len() >= 3 && area(&f).abs() > 1_500.0 && !site.wet(c) && site.dry_outline(&f, 8.0) && !g.plot_hit(&f) && !l.buildings.iter().any(|b| super::overlaps(&b.poly, &f)) {
                 have += area(&f).abs();
-                l.fields.push(f);
+                plots.push((f, 1));
             }
         }
     }
+    l.fields.extend(super::fields::belt_order(site, s.seed, &plots, want, &far));
     l.crofts = g.plots;
 }
 

@@ -3411,8 +3411,28 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // Blocks → alleys → lots → buildings.
     // Castles' ways from their gates to the streets (nothing built on them by a later patch).
     let mut castle_ways: Vec<Vec<P>> = Vec::new();
+    // v63 countryside: the farmland belt's plain radius each way (`plan_town`'s `farmed`), which
+    // its fields fray past or fall short of (`fields::reach`), and the roads they run on along.
+    let (a1, a2, f1, f2) = (plan.roll(0, 30) * 0.15 + 0.1, plan.roll(0, 31) * 0.1 + 0.05, plan.roll(0, 32) * std::f64::consts::TAU, plan.roll(0, 33) * std::f64::consts::TAU);
+    let belt = |p: P| {
+        let th = libm::atan2(p[1], p[0]);
+        (1.0 + a1 * libm::sin(th + f1) + a2 * libm::sin(2.0 * th + f2)) * OUTSKIRTS * r * 0.8
+    };
+    let far_roads: Vec<(Vec<P>, u8, f64)> = l.roads.iter().filter(|x| x.1 < 3).cloned().collect();
+    // Farmland plots (`farm`): those of the planned farm patches, then those of the open ground past them.
+    let mut plots: Vec<(Vec<P>, u8)> = Vec::new();
     for i in 0..total {
-        let Some(w) = ward[i] else { continue };
+        let Some(w) = ward[i] else {
+            // Open ground past the farmland: fields where the belt frays out over it.
+            let c = &cells[i];
+            if i >= plan.n_inner && !plan.wet[i] && c.pts.len() >= 3 && !ch.ward.contains_key(&i) && c.pts.iter().any(|p| len(*p) < 1.9 * belt(*p)) {
+                let block = inset(&c.pts, &insets(i, Ward::Farm));
+                if block.len() >= 3 {
+                    farm(site, &block, &mut Pcg32::new(hash2(plan.pseed, i as i64, 0xf1e1d), 61), l, &mut plots, 2, false);
+                }
+            }
+            continue;
+        };
         let c = &cells[i];
         let m = c.pts.len();
         if i < n_inner {
@@ -3505,7 +3525,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 };
                 l.plazas.push(Plaza { pts: block, kind })
             }
-            Ward::Farm => farm(site, &block, &mut prng, l),
+            Ward::Farm => farm(site, &block, &mut prng, l, &mut plots, if ch.ward.contains_key(&i) { 0 } else { 1 }, true),
             Ward::Park if sparse => build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None),
             // (A block left too small for a park once its streets are cut, 6,000 sq ft or 40 ft
             // across: built on as a common ward's, `PARK_SLIVER`.)
@@ -3692,6 +3712,16 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             hand_walls.extend(walls_at..l.walls.len());
         }
     }
+    // The fields: as much farmland as the farm patches hold, taken outward by each plot's reach
+    // (`fields::belt_order`), so the belt's edge frays over the open ground and short of it.
+    let want: f64 = plots.iter().filter(|p| p.1 < 2).map(|p| area(&p.0).abs()).sum();
+    // (None on a road running across open ground.)
+    plots.retain(|p| p.1 == 0 || !far_roads.iter().any(|r| r.0.windows(2).any(|s| poly_seg_dist(&p.0, s[0], s[1]) < 0.5 * r.2 + 4.0)));
+    let picked = fields::belt_order(site, plan.pseed, &plots, want, &|c| {
+        let b = belt(c);
+        len(c) / (b * fields::reach(site, plan.pseed, c, &far_roads, b))
+    });
+    l.fields.extend(picked);
     // The squares the chords enclose; a green's lanes stop at its edge (a lawn, not paving), where
     // a path runs before the houses fronting it (laid once the lanes are cut).
     let (mut greens, mut green_paths): (Vec<Vec<P>>, Vec<(Vec<P>, f64)>) = (Vec::new(), Vec::new());
@@ -4488,8 +4518,11 @@ fn bisect(poly: &[P], min_area: f64, variance: f64, gap: f64, rng: &mut Pcg32, o
 
 /// Farmland (after watabou's fields): the patch is split into plots, square to the long
 /// side of each piece's bounding box with some skewed cuts, leaving hedged lanes between
-/// plots; corners are chamfered; one plot in five gets a farmhouse on its longest side.
-fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
+/// plots; corners are chamfered; one plot in five gets a farmhouse on its longest side. v63: the
+/// plots go to `out` with `class` (0: always kept; one with its farmhouse on it is too), which
+/// fields the belt keeps chosen once all are known (`build_town`); `houses` off: open ground past
+/// the farmland, fields only.
+fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout, out: &mut Vec<(Vec<P>, u8)>, class: u8, houses: bool) {
     let spread = rng.next_f64();
     let mut plots: Vec<Vec<P>> = Vec::new();
     split_field(block, 67_600.0 * (1.0 + spread), rng, &mut plots, 0);
@@ -4498,7 +4531,8 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
         if f.len() < 3 || area(&f).abs() < 2_000.0 || site.wet(centroid(&f)) || !site.dry_outline(&f, 8.0) || site.grade(&f) > 0.08 {
             continue;
         }
-        if rng.next_f64() < 0.2 {
+        let mut housed = false;
+        if houses && rng.next_f64() < 0.2 {
             let m = f.len();
             let e = (0..m).max_by(|&x, &y| dist(f[x], f[(x + 1) % m]).total_cmp(&dist(f[y], f[(y + 1) % m]))).unwrap_or(0);
             let (a, b) = (f[e], f[(e + 1) % m]);
@@ -4512,9 +4546,10 @@ fn farm(site: &Site, block: &[P], rng: &mut Pcg32, l: &mut Layout) {
             if house.iter().all(|p| contains(&f, *p)) && site.buildable(&house) {
                 let pad = site.pad(&house);
                 l.buildings.push(Building { poly: house, ward: Ward::Farm, func: None, residential: 5, name: None, floors: 1, pad_ft: pad, structure: Structure::Roofed, roof: None, tint: None, material: None, shape: None, shade: None, id: 0, parts: Vec::new(), keep: None });
+                housed = true;
             }
         }
-        l.fields.push(f);
+        out.push((f, if housed { 0 } else { class }));
     }
 }
 
