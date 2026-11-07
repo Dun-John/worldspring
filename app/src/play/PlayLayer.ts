@@ -15,9 +15,19 @@ import type { PlayController } from './controller';
 const TPX = 64;
 const INK = 0x1d1a14;
 const SELECT = 0x38bdf8;
+/** A PC's pin on screen (px, x `tableScale`): PCs drawn smaller on the surface stay this size. */
+export const PIN = 24;
+/** A pin's point below its middle, as a share of its size (it marks where the PC is). */
+const PIN_TIP = 0.8;
 
 interface TokenView {
+  id: string;
   c: Container;
+  /** Its light's reach (the DM's; not on a pin). */
+  reach: Graphics;
+  /** A PC's pin point and the mark of one inside somewhere (shown only on a pin). */
+  pin: Graphics;
+  door: Graphics;
   g: Graphics;
   face: Container;
   label: Text;
@@ -35,6 +45,30 @@ interface TokenView {
   x: number;
   y: number;
   loc: string;
+  /** Drawn as a pin this frame (`inside`: at the way in to where it is). */
+  pinned: boolean;
+  inside: boolean;
+  /** Where it is this frame: world ft and screen px. */
+  ax: number;
+  ay: number;
+  tx: number;
+  ty: number;
+}
+
+/** PCs' pins that overlap on screen, drawn as one: the first one's face, how many, the names. */
+interface PartyView {
+  c: Container;
+  g: Graphics;
+  face: Container;
+  top: Graphics;
+  count: Text;
+  label: Text;
+  key: string;
+  ids: string[];
+  inside: boolean;
+  want: boolean;
+  sel: boolean;
+  pc: boolean;
 }
 
 interface FogChunk {
@@ -50,6 +84,7 @@ interface FogChunk {
 const labelStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 13, fontWeight: 'bold', fill: '#f8f1de', stroke: { color: '#1d1a14', width: 3, join: 'round' } });
 const shapeStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 13, fontWeight: 'bold', fill: '#fff7d6', stroke: { color: '#1d1a14', width: 3, join: 'round' } });
 const initialsStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 30, fontWeight: 'bold', fill: '#ffffff', stroke: { color: '#1d1a14', width: 4, join: 'round' } });
+const countStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 26, fontWeight: 'bold', fill: '#ffffff' });
 const rulerStyle = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 15, fontWeight: 'bold', fill: '#fff7d6', stroke: { color: '#1d1a14', width: 4, join: 'round' }, align: 'left', lineHeight: 21 });
 
 /** Luminance of a 0xRRGGBB colour (0..1). */
@@ -84,6 +119,10 @@ export class PlayLayer {
   private rulerKey = '';
   /** What the token labels were last sorted out for (overlaps are looked at only when it changes). */
   private labelKey = '';
+  /** The party pins (each two or more PCs' pins) and what they were worked out for. */
+  private parties: TokenView[][] = [];
+  private partyKey = '';
+  private readonly partyViews: PartyView[] = [];
   private readonly draft = new Graphics();
   private draftKey = '';
   private readonly marks = new Graphics();
@@ -198,19 +237,24 @@ export class PlayLayer {
     const live = new Set<string>();
     const ease = 1 - Math.exp(-dt / 70);
     let lk = `${Math.round(pxPerSq * 10)}|${ts}|`;
-    for (const { t, place: tp, where } of ctl.tokensInView()) {
+    const surface = loc === 'surface';
+    const pinPx = PIN * ts;
+    for (const { t, place: tp, where, at: way } of ctl.tokensInView()) {
       if (player && where === 'here' && (t.hidden || (s.los && !t.vision && !seen(t)))) continue;
       live.add(t.id);
       let v = this.tokenViews.get(t.id);
       if (!v) {
         const c = new Container();
+        const reach = new Graphics();
+        const pin = new Graphics();
+        const door = new Graphics();
         const g = new Graphics();
         const face = new Container();
-        c.addChild(g, face);
+        c.addChild(reach, pin, g, face, door);
         const label = new Text({ text: '', style: labelStyle, anchor: { x: 0.5, y: 0 }, resolution: 2 });
         this.tokens.addChild(c);
         this.tokenLabels.addChild(label);
-        v = { c, g, face, label, key: '', tok: null, sel: false, img: null, grid: null, want: false, pc: false, x: t.x, y: t.y, loc: t.loc };
+        v = { id: t.id, c, reach, pin, door, g, face, label, key: '', tok: null, sel: false, img: null, grid: null, want: false, pc: false, x: t.x, y: t.y, loc: t.loc, pinned: false, inside: false, ax: 0, ay: 0, tx: 0, ty: 0 };
         this.tokenViews.set(t.id, v);
       }
       // Into or out of a building: no glide across grids.
@@ -230,17 +274,31 @@ export class PlayLayer {
       // The DM's own drags show where the pointer is; others glide.
       if (ctl.dragging.has(t.id)) [v.x, v.y] = [t.x, t.y];
       else [v.x, v.y] = [v.x + (t.x - v.x) * ease, v.y + (t.y - v.y) * ease];
-      const [wx, wy] = tp.toWorld(v.x, v.y);
+      const [wx, wy] = way ?? tp.toWorld(v.x, v.y);
       const [sx, sy] = cam.worldToScreen(wx, wy);
-      v.c.position.set(sx, sy);
-      v.c.scale.set(scale);
+      // A PC on the surface drawn smaller than a pin, or inside somewhere: a pin, its point
+      // where the PC is (or at the way in).
+      const side = Math.max(0.5, t.size);
+      v.pinned = surface && t.kind === 'character' && roleOf(t) === 'pc' && (where === 'entrance' || side * pxPerSq < pinPx);
+      v.inside = where === 'entrance';
+      [v.ax, v.ay, v.tx, v.ty] = [wx, wy, sx, sy];
+      v.pin.visible = v.pinned;
+      v.door.visible = v.inside;
+      v.reach.visible = !v.pinned;
+      if (v.pinned) {
+        v.c.position.set(sx, sy - PIN_TIP * pinPx);
+        v.c.scale.set(pinPx / (side * TPX));
+      } else {
+        v.c.position.set(sx, sy);
+        v.c.scale.set(scale);
+      }
       // Inside a building seen from outside: the DM's faint marker on the roof.
       v.c.alpha = where === 'inside' && !ctl.dragging.has(t.id) ? 0.4 : t.hidden ? 0.55 : 1;
-      v.label.position.set(sx, sy + (t.size * pxPerSq) / 2 + 2 * ts);
-      v.want = pxPerSq >= 22 && !!v.label.text && where !== 'inside' && (!(t.kind === 'character' && roleOf(t) === 'object') || (!player && sel));
+      v.label.position.set(sx, v.pinned ? sy + 2 * ts : sy + (t.size * pxPerSq) / 2 + 2 * ts);
+      v.want = (pxPerSq >= 22 || v.pinned) && !!v.label.text && where !== 'inside' && (!(t.kind === 'character' && roleOf(t) === 'object') || (!player && sel));
       v.pc = t.kind === 'character' && roleOf(t) === 'pc';
       lk += `${t.id}|${Math.round(sx)},${Math.round(sy)}|${v.want ? 1 : 0}${sel ? 1 : 0}${v.pc ? 1 : 0}${t.name};`;
-      v.c.visible = pxPerSq >= 2;
+      v.c.visible = pxPerSq >= 2 || v.pinned;
     }
     for (const [id, v] of this.tokenViews) {
       if (live.has(id)) continue;
@@ -249,11 +307,57 @@ export class PlayLayer {
       this.tokenViews.delete(id);
     }
 
+    // Pins that overlap on screen: one party pin at their middle (who is in it is worked out
+    // again only when the zoom or a pin's place changes; panning moves them together).
+    let pk = `${cam.ppf}|${pinPx}|`;
+    for (const v of this.tokenViews.values()) if (v.pinned) pk += `${v.id}@${Math.round(v.ax)},${Math.round(v.ay)};`;
+    if (pk !== this.partyKey) {
+      this.partyKey = pk;
+      this.parties = partiesOf([...this.tokenViews.values()].filter((v) => v.pinned), pinPx / cam.ppf);
+    }
+    let nParty = 0;
+    for (const members of this.parties) {
+      const pv = this.partyView(nParty++);
+      let [sx, sy, inside, sel, who] = [0, 0, true, false, ''];
+      for (const m of members) {
+        sx += m.tx;
+        sy += m.ty;
+        inside &&= m.inside;
+        sel ||= m.sel;
+        who += `${m.id}:${m.tok?.name}\n`;
+        m.c.visible = false;
+        m.want = false;
+      }
+      [sx, sy] = [sx / members.length, sy / members.length];
+      const first = members[0];
+      const key = `${who}|${first.key}|${inside}|${sel}`;
+      if (pv.key !== key) {
+        pv.key = key;
+        pv.ids = members.map((m) => m.id);
+        pv.inside = inside;
+        this.drawParty(pv, first, members, inside, sel && !player);
+      }
+      pv.c.visible = true;
+      pv.c.position.set(sx, sy - PIN_TIP * pinPx);
+      pv.c.scale.set(pinPx / TPX);
+      pv.label.position.set(sx, sy + 2 * ts);
+      pv.want = !!pv.label.text;
+      pv.sel = sel;
+      lk += `P${pv.ids.length}${pv.ids[0]}|${Math.round(sx)},${Math.round(sy)};`;
+    }
+    for (let k = nParty; k < this.partyViews.length; k++) {
+      const pv = this.partyViews[k];
+      if (!pv.c.visible && !pv.want) continue;
+      pv.c.visible = pv.label.visible = pv.want = false;
+      pv.key = '';
+    }
+
     // Labels that would overlap: the selected token's first, then PCs', then in draw order.
     if (lk !== this.labelKey) {
       this.labelKey = lk;
-      const vs = [...this.tokenViews.values()].filter((v) => v.want);
+      const vs = [...this.tokenViews.values(), ...this.partyViews].filter((v) => v.want);
       for (const v of this.tokenViews.values()) if (!v.want) v.label.visible = false;
+      for (const v of this.partyViews) if (!v.want) v.label.visible = false;
       vs.sort((a, b) => Number(b.sel) - Number(a.sel) || Number(b.pc) - Number(a.pc));
       const placed: { x: number; y: number; w: number; h: number }[] = [];
       for (const v of vs) {
@@ -390,12 +494,83 @@ export class PlayLayer {
     return null;
   }
 
+  /** The PCs of the pin or party pin under a world point (by their size on screen), and
+   * whether they are all inside somewhere (their pin is at the way in). */
+  pinAt(wx: number, wy: number): { ids: string[]; entrance: boolean } | null {
+    if (!this.under.visible) return null;
+    const [sx, sy] = this.view.cam.worldToScreen(wx, wy);
+    let best: { ids: string[]; entrance: boolean } | null = null;
+    let bestD = ((PIN * this.tableScale) / 2 + 3) ** 2;
+    for (const pv of this.partyViews) {
+      const d = (pv.c.x - sx) ** 2 + (pv.c.y - sy) ** 2;
+      if (pv.c.visible && d <= bestD) [best, bestD] = [{ ids: pv.ids, entrance: pv.inside }, d];
+    }
+    for (const v of this.tokenViews.values()) {
+      const d = (v.c.x - sx) ** 2 + (v.c.y - sy) ** 2;
+      if (v.pinned && v.c.visible && d <= bestD) [best, bestD] = [{ ids: [v.id], entrance: v.inside }, d];
+    }
+    return best;
+  }
+
+  /** The party pin at `k` in the pool (made the first time so many are shown). */
+  private partyView(k: number): PartyView {
+    let pv = this.partyViews[k];
+    if (pv) return pv;
+    const c = new Container();
+    const g = new Graphics();
+    const face = new Container();
+    const top = new Graphics();
+    const count = new Text({ text: '', style: countStyle, anchor: 0.5, resolution: 2 });
+    c.addChild(g, face, top, count);
+    const label = new Text({ text: '', style: labelStyle, anchor: { x: 0.5, y: 0 }, resolution: 2 });
+    this.tokens.addChild(c);
+    this.tokenLabels.addChild(label);
+    pv = { c, g, face, top, count, label, key: '', ids: [], inside: false, want: false, sel: false, pc: true };
+    this.partyViews[k] = pv;
+    return pv;
+  }
+
+  /** A party pin: the first PC's look on a pin, how many in a badge, their names below. */
+  private drawParty(pv: PartyView, first: TokenView, members: TokenView[], inside: boolean, sel: boolean) {
+    const t = first.tok;
+    const { g, top } = pv;
+    g.clear();
+    top.clear();
+    pv.face.removeChildren().forEach((c) => c.destroy());
+    const r = TPX / 2 - 4;
+    const color = t?.color ?? 0x2f5d8a;
+    pinPoint(g, r, PIN_TIP * TPX, color);
+    g.circle(5, 5, r).fill({ color: 0x000000, alpha: 0.35 });
+    g.circle(0, 0, r).fill(color);
+    if (first.img) {
+      const sp = new Sprite(first.img);
+      sp.anchor.set(0.5);
+      sp.width = sp.height = r * 2 - 6;
+      pv.face.addChild(sp);
+    } else {
+      const txt = new Text({ text: initialsOf(t?.name ?? ''), style: initialsStyle, anchor: 0.5, resolution: 2 });
+      txt.style.fill = lum(color) > 0.6 ? '#1d1a14' : '#ffffff';
+      txt.scale.set(Math.min(1.6, (r * 1.1) / 30));
+      pv.face.addChild(txt);
+    }
+    top.circle(0, 0, r).stroke({ width: 4, color: 0xf5ecd6 });
+    if (sel) top.circle(0, 0, r + 10).stroke({ width: 5, color: SELECT });
+    if (inside) doorMark(top, r, 1);
+    // How many: a badge at the top right.
+    const [bx, by] = [r * 0.78, -r * 0.78];
+    top.circle(bx, by, 18).fill(0xb3261e).stroke({ width: 3, color: 0xf5ecd6 });
+    pv.count.text = String(members.length);
+    pv.count.position.set(bx, by);
+    const names = members.map((m) => m.tok?.name ?? '').join(', ');
+    pv.label.text = names.length > 28 ? `${names.slice(0, 27).trimEnd()}…` : names;
+  }
+
   /** A token's screen box [left, top, right, bottom] in the window (the pointer's, if it is not drawn). */
   tokenBox(id: string, cx: number, cy: number): [number, number, number, number] {
     const v = this.tokenViews.get(id);
     if (!v) return [cx, cy, cx, cy];
     const r = this.view.app.canvas.getBoundingClientRect();
-    const half = ((v.tok?.size ?? 1) * 5 * this.view.cam.ppf) / 2;
+    const half = v.pinned ? (PIN * this.tableScale) / 2 : ((v.tok?.size ?? 1) * 5 * this.view.cam.ppf) / 2;
     const x = r.left + v.c.x;
     const y = r.top + v.c.y;
     return [x - half, y - half, x + half, y + half];
@@ -404,6 +579,9 @@ export class PlayLayer {
   private drawToken(v: TokenView, t: Token, player: boolean) {
     const g = v.g;
     g.clear();
+    v.reach.clear();
+    v.pin.clear();
+    v.door.clear();
     v.face.removeChildren().forEach((c) => c.destroy());
     const side = Math.max(0.5, t.size);
     const r = (side * TPX) / 2 - (side < 1 ? 2 : 4);
@@ -411,7 +589,12 @@ export class PlayLayer {
     const obj = t.kind === 'character' && roleOf(t) === 'object';
     const body = (rad: number, ox = 0, oy = 0) => (obj ? g.roundRect(ox - rad, oy - rad, rad * 2, rad * 2, rad * 0.3) : g.circle(ox, oy, rad));
     // Its light's reach, for the DM.
-    if (!player && t.light) g.circle(0, 0, t.light * TPX).stroke({ width: 3, color: 0xffd36b, alpha: 0.5 });
+    if (!player && t.light) v.reach.circle(0, 0, t.light * TPX).stroke({ width: 3, color: 0xffd36b, alpha: 0.5 });
+    // A PC's pin: its point below, and a door on it while it is inside somewhere.
+    if (t.kind === 'character' && roleOf(t) === 'pc') {
+      pinPoint(v.pin, r, PIN_TIP * side * TPX, t.color);
+      doorMark(v.door, r, side);
+    }
     if (t.kind === 'light') {
       g.circle(0, 0, r * 0.75).fill({ color: 0xffb02e, alpha: 0.35 });
       g.moveTo(0, -r * 0.55).quadraticCurveTo(r * 0.42, -r * 0.05, 0, r * 0.4).quadraticCurveTo(-r * 0.42, -r * 0.05, 0, -r * 0.55).fill(0xffd36b).stroke({ width: 3, color: 0x7c2d12 });
@@ -576,6 +759,60 @@ export class PlayLayer {
 /** What a token's drawing depends on. */
 function tokenKey(t: Token, selected: boolean, player: boolean, image: Texture | null, grid: GridSettings): string {
   return [t.name, t.kind, t.kind === 'character' ? roleOf(t) : '', t.size, t.color, t.hidden ? 1 : 0, t.vision ? 1 : 0, t.light ?? 0, image ? t.image : '', grid.scale, selected && !player ? 'sel' : '', ''].join('|');
+}
+
+/** Pins in single linkage: those whose points are nearer than `near` (world ft) in one party;
+ * the parties of two or more, in draw order. */
+function partiesOf(pins: TokenView[], near: number): TokenView[][] {
+  const root = pins.map((_, i) => i);
+  const find = (i: number) => {
+    while (root[i] !== i) i = root[i] = root[root[i]];
+    return i;
+  };
+  for (let i = 0; i < pins.length; i++) {
+    for (let j = i + 1; j < pins.length; j++) {
+      if ((pins[i].ax - pins[j].ax) ** 2 + (pins[i].ay - pins[j].ay) ** 2 < near * near) root[find(i)] = find(j);
+    }
+  }
+  const groups = new Map<number, TokenView[]>();
+  pins.forEach((v, i) => {
+    const k = find(i);
+    const g = groups.get(k);
+    if (g) g.push(v);
+    else groups.set(k, [v]);
+  });
+  return [...groups.values()].filter((g) => g.length > 1);
+}
+
+/** A pin's point: from under a body of radius `r` down to `tip` (local units). */
+function pinPoint(g: Graphics, r: number, tip: number, color: number) {
+  g.moveTo(-r * 0.5, r * 0.6).lineTo(0, tip).lineTo(r * 0.5, r * 0.6).closePath().fill(color).stroke({ width: 4, color: INK, join: 'round' });
+}
+
+/** A small door at a pin's lower right: the PC is inside somewhere. */
+function doorMark(g: Graphics, r: number, side: number) {
+  const k = side;
+  const [bx, by] = [r * 0.74, r * 0.62];
+  g.circle(bx, by, 17 * k).fill(0xf5ecd6).stroke({ width: 3 * k, color: INK });
+  g.moveTo(bx - 7 * k, by + 10 * k)
+    .lineTo(bx - 7 * k, by - 3 * k)
+    .arc(bx, by - 3 * k, 7 * k, Math.PI, 0)
+    .lineTo(bx + 7 * k, by + 10 * k)
+    .closePath()
+    .fill(0x8a5a2b)
+    .stroke({ width: 2.5 * k, color: INK, join: 'round' });
+}
+
+/** A name's initials (two at most). */
+function initialsOf(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]!.toUpperCase())
+      .join('') || '?'
+  );
 }
 
 /** A shape: a tinted fill and its outline, from its origin. */

@@ -9,7 +9,7 @@ import type { MapView, PointerTool } from '../render/MapView';
 import { drawnDoorsOf } from '../render/roomShapes';
 import { SECTION_N, type Sewers } from '../render/Sewers';
 import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scene, type Vision } from './channel';
-import { PlayLayer } from './PlayLayer';
+import { PIN, PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
 import { hasImage, loadSession, putImage, saveSession } from './session';
 import { apply, emptyState, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
@@ -103,11 +103,14 @@ export const SHAPE_COLORS = [0xf97316, 0x3b82f6, 0x22c55e, 0xa855f7, 0xeab308];
 
 /** A token drawn in the view: in the location in view, outside a building one is inside
  * (`outside`, draggable in), or inside a building while the view is outside (`inside`, the
- * DM's faint marker, draggable out). */
+ * DM's faint marker, draggable out), or a PC inside a building or underground as a pin at its
+ * way in on the surface (`entrance`, at `at` world ft, or where it stands in the sewers; not
+ * dragged). */
 export interface ShownToken {
   t: Token;
   place: Place;
-  where: 'here' | 'outside' | 'inside';
+  where: 'here' | 'outside' | 'inside' | 'entrance';
+  at?: [number, number];
 }
 
 export class PlayController implements PointerTool {
@@ -174,6 +177,8 @@ export class PlayController implements PointerTool {
   /** Buildings and sites tokens stand in (null: none by that id), and their places. */
   private readonly interiors = new Map<string, Interior | null>();
   private readonly places = new Map<string, Place>();
+  /** Where buildings and sites are entered from the surface (`entranceOf`). */
+  private readonly entrances = new Map<string, [number, number] | null>();
   /** Sites designed by hand, as last seen (JSON by id). */
   private designsSeen: Record<string, { ref: unknown; json: string }> = {};
   private lastLoc = '';
@@ -273,6 +278,34 @@ export class PlayController implements PointerTool {
     const place = interiorPlace(it, level, null);
     this.places.set(loc, place);
     return place;
+  }
+
+  /** Where a building or site is entered from the surface (world ft): outside a building's
+   * front door (else another door to the street, its way up, its middle); a site behind an
+   * entrance at the entrance; a keep's deep dungeons at the keep's door. Null while not known
+   * (asked for once). */
+  private entranceOf(id: string): [number, number] | null {
+    const known = this.entrances.get(id);
+    if (known !== undefined) return known;
+    if (id.startsWith('k:')) return this.entranceOf(`b:${id.slice(2)}`);
+    if (isUnderground(id)) {
+      this.entrances.set(id, null);
+      void this.view.gen.place(id).then((p) => {
+        if (p) this.entrances.set(id, [p.x, p.y]);
+      });
+      return null;
+    }
+    const it = this.interiors.get(id);
+    if (it === undefined) void this.fetchInterior(id);
+    if (!it) return null;
+    const level = it.entry_level;
+    const lv = it.levels[level];
+    const ground = interiorPlace(it, level, null);
+    const door = lv.doors.find((d) => d.kind === 'front') ?? lv.doors.find((d) => d.kind === 'back' || (d.kind === 'arch' && d.rooms.includes(-1)));
+    const exit = lv.furniture.find((f) => f.kind === 'exit');
+    const at = door ? ground.toWorld(...this.outsideOf(it, level, door)) : exit ? ground.toWorld(exit.x + 0.5, exit.y + 0.5) : ground.toWorld(it.nx / 2, it.ny / 2);
+    this.entrances.set(id, at);
+    return at;
   }
 
   private async fetchInterior(id: string): Promise<Interior | null> {
@@ -441,12 +474,20 @@ export class PlayController implements PointerTool {
     if (!here) return [];
     const player = this.role === 'player';
     const building = !!here.it && !isUnderground(here.it.id);
+    // On the surface, PCs inside show as pins at the way in: for the players at any zoom, for
+    // the DM once a square is smaller than a pin (closer, the DM's roof markers).
+    const pins = !here.it && !here.sewers && (player || 5 * this.view.cam.ppf < PIN * this.layer.tableScale);
     const out: ShownToken[] = [];
     for (const t of Object.values(this.state.tokens)) {
       if (t.loc === here.loc) {
         out.push({ t, place: here, where: 'here' });
       } else if (building && t.loc === 'surface') {
         if (!player || (t.vision && !t.hidden)) out.push({ t, place: SURFACE, where: 'outside' });
+      } else if (pins && t.kind === 'character' && roleOf(t) === 'pc' && !(player && t.hidden)) {
+        // (The sewers are in world squares; a building or site shows at its way in.)
+        const { interior } = parseLoc(t.loc);
+        const at = interior ? this.entranceOf(interior) : undefined;
+        if (at !== null) out.push({ t, place: SURFACE, where: 'entrance', at });
       } else if (!here.it && !here.sewers && !player && t.loc !== 'surface' && !isUnderground(t.loc)) {
         const place = this.placeOf(t.loc);
         if (place) out.push({ t, place, where: 'inside' });
@@ -565,6 +606,7 @@ export class PlayController implements PointerTool {
     if (g === now[0] && p === now[1]) return;
     if (JSON.stringify(g ?? {}) === JSON.stringify(now[0] ?? {}) && JSON.stringify(p ?? {}) === JSON.stringify(now[1] ?? {})) return;
     this.interiors.clear();
+    this.entrances.clear();
     for (const loc of [...this.places.keys()]) if (parseLoc(loc).interior) this.places.delete(loc);
     this.placeCache = null;
     this.visionDirty = true;
@@ -585,6 +627,7 @@ export class PlayController implements PointerTool {
       if (json) this.designsSeen[id] = { ref: now[id], json };
       else delete this.designsSeen[id];
       this.interiors.delete(id);
+      this.entrances.delete(id);
       for (const loc of [...this.places.keys()]) if (parseLoc(loc).interior === id) this.places.delete(loc);
       this.placeCache = null;
       this.visionDirty = true;
@@ -965,6 +1008,9 @@ export class PlayController implements PointerTool {
     if (this.role === 'player' || !this.on) return false;
     if (e.button === 2) return this.rightClick(place, gx, gy, x, y, e);
     if (e.button !== 0) return false;
+    // A PC's pin (zoomed out), or a party's: its PCs.
+    const pin = this.tool === 'select' || this.tool === 'token' ? this.layer.pinAt(x, y) : null;
+    if (pin) return this.pressPin(pin.ids, pin.entrance, gx, gy, x, y, e.shiftKey);
     // The Tokens tool picks up a token it is pressed on (as Select does); open ground places one.
     const pick = this.tool === 'token' ? this.tokenAt(x, y) : null;
     switch (pick ? 'select' : this.tool) {
@@ -987,7 +1033,7 @@ export class PlayController implements PointerTool {
           }
           // Drag every selected token in view together.
           const group = this.tokensInView()
-            .filter((s) => this.selection.has(s.t.id))
+            .filter((s) => this.selection.has(s.t.id) && s.where !== 'entrance')
             .map((s) => {
               const [wx, wy] = s.place.toWorld(s.t.x, s.t.y);
               return { id: s.t.id, dx: wx - x, dy: wy - y };
@@ -1041,6 +1087,39 @@ export class PlayController implements PointerTool {
         return true;
       }
     }
+  }
+
+  /** A press on a pin: its PCs selected (shift: added, or taken away if all were) and, unless
+   * they are all inside somewhere, dragged with the rest of the selection in view (formation
+   * kept; `drop` lands each). */
+  private pressPin(ids: string[], inside: boolean, gx: number, gy: number, x: number, y: number, shift: boolean): boolean {
+    const all = ids.every((id) => this.selection.has(id));
+    if (shift) {
+      for (const id of ids) {
+        if (all) this.selection.delete(id);
+        else this.selection.add(id);
+      }
+      this.press = { kind: 'none', x: gx, y: gy };
+      this.onChange();
+      return true;
+    }
+    if (!all) {
+      this.selection.clear();
+      for (const id of ids) this.selection.add(id);
+    }
+    const group = inside
+      ? []
+      : this.tokensInView()
+          .filter((s) => this.selection.has(s.t.id) && s.where !== 'entrance')
+          .map((s) => {
+            const [wx, wy] = s.place.toWorld(s.t.x, s.t.y);
+            return { id: s.t.id, dx: wx - x, dy: wy - y };
+          });
+    this.dragging.clear();
+    for (const g of group) this.dragging.add(g.id);
+    this.press = group.length ? { kind: 'token', x: gx, y: gy, group } : { kind: 'none', x: gx, y: gy };
+    this.onChange();
+    return true;
   }
 
   move(x: number, y: number, e: PointerEvent) {
@@ -1123,7 +1202,7 @@ export class PlayController implements PointerTool {
         const [x0, y0, x1, y1] = this.box ?? [0, 0, 0, 0];
         this.box = null;
         for (const s of this.tokensInView()) {
-          const [wx, wy] = s.place.toWorld(s.t.x, s.t.y);
+          const [wx, wy] = s.at ?? s.place.toWorld(s.t.x, s.t.y);
           if (wx >= Math.min(x0, x1) && wx <= Math.max(x0, x1) && wy >= Math.min(y0, y1) && wy <= Math.max(y0, y1)) this.selection.add(s.t.id);
         }
         this.onChange();
@@ -1289,6 +1368,12 @@ export class PlayController implements PointerTool {
   /** The token under a world point that can be picked up: here, outside the building in
    * view, or (the DM's markers on the street) inside a building. */
   private tokenAt(wx: number, wy: number): ShownToken | null {
+    // A PC's pin zoomed out: by its size on screen.
+    const pin = this.layer.pinAt(wx, wy);
+    if (pin?.ids.length === 1) {
+      const s = this.tokensInView().find((s) => s.t.id === pin.ids[0]);
+      if (s) return s;
+    }
     let best: ShownToken | null = null;
     let bestD = Infinity;
     for (const s of this.tokensInView()) {
