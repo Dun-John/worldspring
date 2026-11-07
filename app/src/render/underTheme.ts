@@ -21,18 +21,19 @@ export interface UnderLook {
 
 const look = (style: Style, stone: UnderLook['stone'], coping: UnderLook['coping'], rock: UnderLook['rock']): UnderLook => ({ style, stone, coping, rock });
 
-const PLAIN = look(Style.Plain, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.33, 0.315, 0.29]);
-const DWARVEN = look(Style.Dwarven, [0.62, 0.56, 0.44], [0.6, 0.53, 0.4], [0.35, 0.32, 0.26]);
-const FORTRESS = look(Style.Ashlar, [0.55, 0.54, 0.52], [0.53, 0.52, 0.5], [0.32, 0.32, 0.31]);
-const CULT = look(Style.Basalt, [0.42, 0.33, 0.31], [0.38, 0.29, 0.27], [0.31, 0.25, 0.24]);
-const TOMB = look(Style.Dusty, [0.68, 0.64, 0.56], [0.7, 0.66, 0.58], [0.36, 0.345, 0.31]);
-const SEWER = look(Style.Brick, [0.5, 0.5, 0.42], [0.5, 0.43, 0.35], [0.29, 0.32, 0.26]);
-const MARBLE = look(Style.Marble, [0.64, 0.62, 0.6], [0.72, 0.7, 0.67], [0.33, 0.33, 0.335]);
-const EARTH = look(Style.Earth, [0.52, 0.45, 0.36], [0.5, 0.41, 0.31], [0.35, 0.3, 0.24]);
-const CAVE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.34, 0.32, 0.29]);
-const MINE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.35, 0.31, 0.26]);
-const LAVA = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.3, 0.26, 0.245]);
-const ICE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.31, 0.335, 0.36]);
+const PLAIN = look(Style.Plain, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.28, 0.27, 0.25]);
+const DWARVEN = look(Style.Dwarven, [0.68, 0.54, 0.36], [0.64, 0.5, 0.32], [0.29, 0.26, 0.21]);
+const FORTRESS = look(Style.Ashlar, [0.52, 0.54, 0.57], [0.5, 0.52, 0.55], [0.27, 0.28, 0.3]);
+const CULT = look(Style.Basalt, [0.4, 0.32, 0.34], [0.38, 0.27, 0.27], [0.27, 0.23, 0.24]);
+const TOMB = look(Style.Dusty, [0.68, 0.64, 0.56], [0.7, 0.66, 0.58], [0.42, 0.4, 0.36]);
+const OSSUARY = look(Style.Dusty, [0.72, 0.68, 0.58], [0.74, 0.7, 0.6], [0.42, 0.4, 0.36]);
+const SEWER = look(Style.Brick, [0.5, 0.5, 0.42], [0.46, 0.5, 0.36], [0.26, 0.29, 0.23]);
+const MARBLE = look(Style.Marble, [0.6, 0.59, 0.57], [0.72, 0.7, 0.67], [0.29, 0.29, 0.3]);
+const EARTH = look(Style.Earth, [0.52, 0.45, 0.36], [0.5, 0.41, 0.31], [0.45, 0.38, 0.3]);
+const CAVE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.29, 0.27, 0.245]);
+const MINE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.3, 0.26, 0.22]);
+const LAVA = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.26, 0.225, 0.21]);
+const ICE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.27, 0.29, 0.31]);
 
 /** A site's look from its kind (`Interior.function`) and theme (`Interior.theme`, `under::THEMES`). */
 export function underLook(site: string, theme?: string): UnderLook {
@@ -44,10 +45,11 @@ export function underLook(site: string, theme?: string): UnderLook {
       return FORTRESS;
     case 'cult_sanctum':
       return CULT;
-    case 'crypt':
-    case 'tomb':
     case 'ossuary':
     case 'catacombs':
+      return OSSUARY;
+    case 'crypt':
+    case 'tomb':
       return TOMB;
     case 'temple':
     case 'sunken_temple':
@@ -59,7 +61,8 @@ export function underLook(site: string, theme?: string): UnderLook {
     case 'ice':
       return ICE;
   }
-  if (site === 'crypt' || site === 'catacombs') return TOMB;
+  if (site === 'catacombs') return OSSUARY;
+  if (site === 'crypt') return TOMB;
   if (site === 'cave') return CAVE;
   if (site === 'mine') return MINE;
   if (site === 'lava tube') return LAVA;

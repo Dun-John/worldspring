@@ -124,9 +124,13 @@ const float DIST_MAX = 8.0;
 // stone tone. `depth`: squares into the rock; `px`: squares a pixel. Strokes under ~2 px apart
 // give way to their average tone (no shimmer). Clusters are the cells of a jittered grid
 // (nearest centre), from hashes alone: one noise lookup, for the tone.
-vec3 hatchedRock(vec2 p, float depth, float px, out float cut) {
+vec3 hatchedRock(vec2 p, float depth, float px, out float cut, out float ra) {
     cut = 0.0;
     vec3 c = uRock * (0.92 + 0.16 * vnoise(p * 0.55));
+    vec3 inkc = mix(INK, uRock, 0.18);
+    // (The flat tone only close to the wall, ragged per cluster, so the rock is never paler than the ground.)
+    float toneA = 0.55;
+    float inkA = 0.0;
     float out1 = smoothstep(0.3, 2.0, depth);
     // Strokes this far apart (squares), half this thick (squares: about a pixel, bolder close up).
     const float GAP = 0.20;
@@ -163,6 +167,7 @@ vec3 hatchedRock(vec2 p, float depth, float px, out float cut) {
         // shift of where the tone fades out breaks up the outer edge.)
         float a = 3.14159265 * hash21(id + 3.7);
         cut = (hash21(id + 4.9) - 0.5) * 0.8;
+        toneA = 0.55 * (1.0 - smoothstep(0.8, 1.6, depth + cut));
         vec2 dir = vec2(cos(a), sin(a));
         vec2 r = rel / 1.1;
         float t = dot(r, vec2(-dir.y, dir.x)) / GAP + hash21(id + 5.3);
@@ -181,10 +186,14 @@ vec3 hatchedRock(vec2 p, float depth, float px, out float cut) {
         // (Clear of ink just by the wall's lip.)
         ink *= smoothstep(0.1, 0.15 + aa, depth);
         ink *= smoothstep(0.09, 0.12 + aa, edge) * keep;
-        c = mix(c, INK, ink * 0.88 * sharp);
+        inkA = ink * 0.88 * sharp;
+    } else {
+        toneA = 0.55 * (1.0 - smoothstep(0.8, 1.6, depth));
     }
     // (Too fine to draw: their tone.)
-    return mix(c, INK, (1.0 - sharp) * 2.0 * hw / GAP * dens * 0.45);
+    inkA = max(inkA, (1.0 - sharp) * 2.0 * hw / GAP * dens * 0.45);
+    ra = mix(toneA, 0.7, inkA);
+    return mix(c, inkc, inkA);
 }
 
 // A square drawn from the squares: no shape on it (0, or 254: one next to it).
@@ -398,8 +407,8 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         b.x += 0.5 * mod(floor(b.y), 2.0);
         vec2 g = fract(b);
         c = uStone * 0.9 * (0.85 + 0.2 * hash21(floor(b))) * (0.92 + 0.12 * vnoise(p * 2.0));
-        float joint = 1.0 - smoothstep(0.0, 0.025, min(min(g.x, 1.0 - g.x) * 2.0, min(g.y, 1.0 - g.y) * (dw ? 2.0 : 1.0)));
-        c = mix(c, INK * 1.5, joint * 0.4);
+        float joint = 1.0 - smoothstep(0.0, dw ? 0.06 : 0.025, min(min(g.x, 1.0 - g.x) * 2.0, min(g.y, 1.0 - g.y) * (dw ? 2.0 : 1.0)));
+        c = mix(c, INK * 1.5, joint * (dw ? 0.75 : 0.4));
         if (dw && hash21(floor(b) + 2.1) > 0.6) c = mix(c, c * 0.6, rune((g - 0.5) * 2.0 * vec2(1.0, 0.8), hash21(floor(b) + 6.3)));
     } else if (mat == 9) {
         // Ice: pale blue, cracked, glinting.
@@ -643,10 +652,11 @@ void main() {
         // the wall's own; farther out, from uDist.)
         float depth = mix(-d, far, smoothstep(0.6, 1.4, far));
         float cut;
-        vec3 r = hatchedRock(p, depth, px, cut);
+        float ra;
+        vec3 r = hatchedRock(p, depth, px, cut, ra);
         float face = clamp(0.55 + 0.6 * dot(n, uLight), 0.25, 1.15);
         // (Natural rock's lip in the site's own rock: caves as they were.)
-        vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * face * (uRock / vec3(0.34, 0.32, 0.29));
+        vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * face * (uRock / vec3(0.29, 0.27, 0.245));
         float edge = rim;
         if (rough < 0.2) {
             // Dressed stone coping on built walls, by the site's style.
@@ -674,7 +684,8 @@ void main() {
                 float k = style == 1 ? 0.8 : style == 6 ? 1.0 : 1.6;
                 b = q * k;
                 g = fract(b + 0.5 * mod(floor(b.yx), 2.0));
-                jk = style == 6 ? 0.22 : style == 4 ? 0.3 : style == 7 ? 0.0 : 0.5;
+                jk = style == 6 ? 0.22 : style == 4 ? 0.3 : style == 7 ? 0.0 : style == 1 ? 0.85 : 0.5;
+                jw = style == 1 ? 0.14 : 0.06;
             }
             float joint = 1.0 - smoothstep(0.0, jw, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
             vec3 cop = uCoping * (0.85 + 0.25 * hash21(floor(b)));
@@ -686,7 +697,7 @@ void main() {
                 cop = mix(cop, vec3(0.76, 0.73, 0.66), smoothstep(0.45, 0.8, vnoise(p * 1.7)) * 0.4);
             } else if (style == 5) {
                 // (Damp, green toward the floor.)
-                cop = mix(cop, cop * vec3(0.7, 0.86, 0.62), max(smoothstep(0.4, 0.75, vnoise(p * 0.9)) * 0.6, 1.0 - smoothstep(0.0, 0.12, -d)));
+                cop = mix(cop, cop * vec3(0.62, 0.84, 0.5), max(smoothstep(0.4, 0.75, vnoise(p * 0.9)) * 0.6, (1.0 - smoothstep(0.02, 0.2, -d)) * 0.9));
             } else if (style == 7) {
                 // (Packed earth: no joints, lumpy.)
                 cop = uCoping * (0.82 + 0.3 * vnoise(p * 1.6));
@@ -695,7 +706,7 @@ void main() {
         }
         col = mix(lip, r, smoothstep(-edge, -edge - 0.12, d));
         if (style == 1 && rough < 0.2) col = mix(col, INK, (1.0 - smoothstep(0.0, aa * 1.6, abs(d + rim))) * 0.75);
-        alpha = 0.7 * (1.0 - smoothstep(2.2, 3.2, depth + cut));
+        alpha = ra * (1.0 - smoothstep(2.2, 3.2, depth + cut));
     } else {
         ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
         vec4 cell = texelFetch(uCells, s, 0) * 255.0;
