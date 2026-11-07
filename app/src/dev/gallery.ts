@@ -7,7 +7,8 @@
 // things look turned by hand instead: battlemap props that may turn (`TURNABLE`, and the other candidates) at four
 // turns on grass with their shadows, and furniture and props with a back at each of their four sides. Last, a
 // palace's forecourt as the battlemap draws it (garden wall, gate piers, open gates, gravel walks; `&items=forecourt`
-// alone, at `&sq=` px a square, default 64); and a temple's pieces in each god's look (`&items=temple` alone,
+// alone, at `&sq=` px a square, default 64); the countryside's hedgerows, dry-stone walls, fences and windmill sails
+// (`&items=countryside`, or with `&kinds=62` or `63`, at `&sq=`, default 32); and a temple's pieces in each god's look (`&items=temple` alone,
 // default 56). `&items=civic` shows the guild and civic pieces and the stable stall. `&items=terrain` (alone, at
 // `&sq=` px a square, default 34) shows underground terrain as the floor shader paints it: a room each of shallow
 // water, deep water, a chasm and a rubble slope, a pool crossed by a rope bridge and stepping stones, and a chasm
@@ -23,6 +24,7 @@ import { BATTLE_GROUPS, ITEM_GROUPS, looks as insideLooks } from '../editor/item
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
 import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
 import { drawForecourtGate, drawGardenWalls, drawGatePier, drawGravelWalk } from '../render/walls';
+import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
 import { thumbSheet, type ThumbTile } from '../render/thumbs';
@@ -421,9 +423,82 @@ export async function runGallery(target: HTMLElement) {
     y = forecourt(root, y, width, query.has('nolabels'), Number(query.get('sq')) || PX);
   }
 
+  // The countryside's bounds and sails (`&items=countryside`, or with the fruit tree or water wheel kinds).
+  if (pick?.includes('countryside') || only?.includes(62) || only?.includes(63)) {
+    head('Countryside: hedgerow, dry-stone wall, fence (two chunks side by side, cut at the line between), windmill sails');
+    y = countryside(root, y, Number(query.get('sq')) || 32);
+  }
+
   const bg = new Graphics().rect(0, 0, width, y).fill(0xefe6d2);
   app.stage.addChild(bg, root);
   app.renderer.resize(width, y);
+}
+
+/** Field bounds over two chunks' worth of grass (each drawn apart, its pieces cut at its edges, as the
+ * battlemap draws them), then sails at two turns and two sizes; at `sq` px a square. */
+function countryside(root: Container, y0: number, sq: number): number {
+  const [W, H] = [14, 9];
+  const shape = (kind: number, size: number, pts: number[]): Shape => ({ kind, size, pts });
+  const runs: [number, number, [number, number][]][] = [
+    [HEDGE, 3.5, [[1.5, 7.6], [1.5, 1.5], [20, 1.2], [20.7, 7.4]]],
+    [DRY_WALL, 2.5, [[3.6, 6.2], [11.5, 4.1], [17.5, 6.4], [26.6, 5.9], [26.9, 1.4]]],
+    [FENCE, 0.8, [[4, 3.4], [11, 3.0]]],
+    [FENCE, 0.8, [[9.5, 8.4], [24.2, 8.1], [24.4, 3.4]]],
+  ];
+  // A segment cut to the chunk [0, W*PX] x [0, H*PX] (chunk px), if any of it is inside.
+  const clip = (x0: number, y0: number, x1: number, y1: number): number[] | null => {
+    let [t0, t1] = [0, 1];
+    const [dx, dy] = [x1 - x0, y1 - y0];
+    for (const [p, q] of [[-dx, x0], [dx, W * PX - x0], [-dy, y0], [dy, H * PX - y0]]) {
+      if (p === 0) {
+        if (q < 0) return null;
+        continue;
+      }
+      const t = q / p;
+      if (p < 0) t0 = Math.max(t0, t);
+      else t1 = Math.min(t1, t);
+    }
+    return t0 < t1 ? [x0 + dx * t0, y0 + dy * t0, x0 + dx * t1, y0 + dy * t1] : null;
+  };
+  for (const c of [0, 1]) {
+    const g = new Graphics();
+    g.rect(0, 0, W * PX, H * PX).fill(GRASS);
+    const shapes: Shape[] = [];
+    for (const [kind, ft, pts] of runs) {
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const seg = clip((pts[i][0] - c * W) * PX, pts[i][1] * PX, (pts[i + 1][0] - c * W) * PX, pts[i + 1][1] * PX);
+        if (seg) shapes.push(shape(kind, (ft / 5) * PX, seg));
+      }
+    }
+    drawBounds(g, shapes, c * W * PX, 0, W * PX);
+    const panel = new Container();
+    const mask = new Graphics().rect(-PX, -PX, (W + 2) * PX, (H + 2) * PX).fill(0xffffff);
+    panel.addChild(g, mask);
+    g.mask = mask;
+    panel.scale.set(sq / PX);
+    panel.position.set(16 + c * W * sq, y0);
+    root.addChild(panel);
+  }
+  let y = y0 + H * sq + 30;
+  // Sails over a plain roof, at two turns, full size and small (about the battlemap's farthest).
+  const S = 12;
+  let x = 16;
+  [
+    [0.3, sq * 0.4],
+    [1.05, sq * 0.4],
+    [0.3, sq],
+    [1.05, sq],
+  ].forEach(([turn, k]) => {
+    const g = new Graphics();
+    g.rect(0, 0, S * PX, S * PX).fill(GRASS);
+    g.rect((S / 2 - 1.6) * PX, (S / 2 - 1.4) * PX, 3.2 * PX, 2.8 * PX).fill(0x8a7a62).stroke({ width: 2.9, color: 0x1d1a14 });
+    drawSails(g, shape(SAILS, 5.4 * PX, [(S / 2) * PX, (S / 2 - 0.6) * PX, turn * PX, 0]));
+    g.scale.set(k / PX);
+    g.position.set(x, y);
+    x += S * k + 16;
+    root.addChild(g);
+  });
+  return y + S * sq + 30;
 }
 
 /** Ground colours (`ground.frag`): grass, and a plaza's paving (its cobbles). */

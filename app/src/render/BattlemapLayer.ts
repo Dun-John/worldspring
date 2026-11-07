@@ -877,7 +877,7 @@ export class BattlemapLayer {
       } else continue;
       deckGrid(gridG, s);
     }
-    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12) || isBound(s.kind)));
+    const structG = drawStructures(c.shapes.filter((s) => s.kind === 0 || s.kind === 4 || s.kind === 9 || (s.kind >= 10 && s.kind <= 12) || isBound(s.kind)), cx * SQ * PX, cy * SQ * PX);
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1 || s.kind === SAILS));
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
     // walks (over them, on the ground).
@@ -1075,13 +1075,13 @@ const STONE_TOP = 0xb3ada2;
  * Walls, gatehouses, towers and ways underground as clean vectors over the ground (their squares
  * keep their tactical height; the ground under them is drawn flat): `walls.ts` draws the first
  * three, and a forecourt's garden wall, gate piers and gate. Bridges and piers are drawn apart
- * (`bridges.ts`).
+ * (`bridges.ts`). (`ox`, `oy`: the chunk's corner in world px, for the bounds' patterns.)
  */
-function drawStructures(shapes: Shape[]): Graphics {
+function drawStructures(shapes: Shape[], ox = 0, oy = 0): Graphics {
   const g = new Graphics();
   // (v63 countryside: hedgerows, dry-stone walls and fences low under the rest; a windmill's sails.)
   const bounds = shapes.filter((s) => isBound(s.kind));
-  if (bounds.length) drawBounds(g, bounds);
+  if (bounds.length) drawBounds(g, bounds, ox, oy);
   for (const s of shapes) if (s.kind === SAILS) drawSails(g, s);
   const walls = shapes.filter((s) => s.kind === 0);
   if (walls.length) drawWalls(g, walls);
