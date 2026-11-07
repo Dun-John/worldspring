@@ -917,16 +917,10 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       else if (kind === 24) rgb = [0.3, 0.45, 0.57];
       else if (kind === 25) rgb = [0.6, 0.48, 0.33];
       else if (kind === 26) rgb = [0.55, 0.4, 0.25];
-      // v63 countryside: a village's churchyard grass, its headstones, the green and a churchyard's low
-      // wall (`town::village::plan_polys`; its crofts are seen on the battlemap only).
-      else if (kind === 19) {
-        rgb = [0.58, 0.65, 0.45];
-        a = 0.85;
-      } else if (kind === 20) rgb = [0.74, 0.73, 0.69];
-      else if (kind === 21) {
-        rgb = [0.6, 0.7, 0.44];
-        a = 0.6;
-      } else if (kind === 22) rgb = [0.62, 0.6, 0.55];
+      // v63 countryside: a village's headstones and a churchyard's low wall (`town::village::plan_polys`;
+      // the green's and churchyard's grass is the land's own, its crofts seen on the battlemap only).
+      else if (kind === 20) rgb = [0.74, 0.73, 0.69];
+      else if (kind === 22) rgb = [0.62, 0.6, 0.55];
       // A windmill's sails (`town::rural::plan_ticks`), over its roof.
       else if (kind === 23) rgb = [0.88, 0.84, 0.74];
       // v63 underground: a ruin's plan (`ruinPlan.ts`).

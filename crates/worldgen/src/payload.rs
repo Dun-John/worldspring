@@ -21,7 +21,7 @@
 //!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
 //!     parterre, 14 a tree's (or topiary's) crown, 15 a flowerbed, 24 a castle's wet moat, 25 its
 //!     dry ditch (`town::moat::Moat::pieces`; in place of a ward, its inked edges: `Moat::inks`), 26
-//!     its drawbridge's deck, 19 a churchyard's ground, 20 a headstone, 21 a green, 22 a churchyard's wall,
+//!     its drawbridge's deck, 20 a headstone, 22 a churchyard's wall,
 //!     23 a windmill's sails (a village's plots: the battlemap only); a park's raised features as
 //!     monuments; all of a park's in the tile holding its middle; a ruin's plan as 28 its floor,
 //!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4),

@@ -46,10 +46,8 @@ pub struct Plot {
     pub bound: Bound,
 }
 
-/// Plan zoom's site polygons (`payload::pack_sites`, `gen/protocol.ts`; v63 countryside, 16-23).
-pub const PLAN_CHURCHYARD: u32 = 19;
+/// Plan zoom's site polygons (`payload::pack_sites`, `gen/protocol.ts`; v63 countryside, 20-23).
 pub const PLAN_HEADSTONE: u32 = 20;
-pub const PLAN_GREEN: u32 = 21;
 pub const PLAN_WALL: u32 = 22;
 /// A plan polygon in the monuments' pale stone (the green's well).
 const PLAN_STONE: u32 = 7;
@@ -1344,19 +1342,16 @@ pub fn wall_runs(l: &Layout) -> Vec<(P, P)> {
     l.crofts.iter().filter(|p| p.bound == Bound::Wall && p.kind != PlotKind::Churchyard).flat_map(runs).collect()
 }
 
-/// A village's plan zoom polygons (`payload::pack_sites`, before its buildings): its green and its
-/// well, a churchyard's or shrine yard's ground and the churchyard's wall. The crofts and their
-/// bounds are seen on the battlemap only.
+/// A village's plan zoom polygons (`payload::pack_sites`, before its buildings): its green's well
+/// and the churchyard's wall. The green's and a churchyard's grass are the land's own (no fill, so
+/// they match the biome's ground round them); the crofts and their bounds are seen on the
+/// battlemap only.
 pub fn plan_polys(l: &Layout, push: &mut dyn FnMut(&[P], u32)) {
     if !village_of(l) {
         return;
     }
     for pl in l.plazas.iter().filter(|p| p.kind == PlazaKind::Green) {
-        push(&pl.pts, PLAN_GREEN);
         push(&circle(centroid(&pl.pts), 3.0, 10), PLAN_STONE);
-    }
-    for p in l.crofts.iter().filter(|p| matches!(p.kind, PlotKind::Churchyard | PlotKind::ShrineYard)) {
-        push(&p.pts, PLAN_CHURCHYARD);
     }
     for (a, b, bound, _) in bounds(l).into_iter().filter(|b| b.3 == PlotKind::Churchyard) {
         let e = dist(a, b);
