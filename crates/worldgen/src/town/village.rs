@@ -594,8 +594,8 @@ fn green_props(site: &Site, seed: u64, well: P, r: f64, roads: &[(Vec<P>, f64)],
     let mut put = |at: P, kind: crate::battlemap::Kind, variant: u8, scale: f64, rot: f64| {
         l.props.push(super::Prop { at: add(at, site.center), rot: rot as f32, kind, variant, scale: scale as f32 });
     };
-    // (A pond 9-12 ft across the radius, half way out; a tree on the far side, nearer the edge.)
-    let pond_r = 9.0 + 3.0 * h(1);
+    // (A pond 11-14 ft across the radius, half way out; a tree on the far side, nearer the edge.)
+    let pond_r = 11.0 + 3.0 * h(1);
     let pond = (h(2) < 0.55).then(|| spot(a0, 0.5 * r, pond_r)).flatten();
     if let Some(p) = pond {
         put(p, crate::battlemap::Kind::Pond, 0, pond_r / 10.0, std::f64::consts::TAU * h(3));

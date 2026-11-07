@@ -69,6 +69,9 @@ interface Run {
   ou: number;
   lit: number;
   ends: [End, End];
+  /** A field's hedge, round it or a row in it (a third point (1, 0) on its shape): long, so drawn
+   * the cheaper way (fewer, bigger clumps, a coarser outline, fewer bushes and trees). */
+  row: boolean;
 }
 
 /** How far along a piece node `k` of a lattice every `step` lies (nominally `step` apart along it). */
@@ -93,7 +96,8 @@ function runs(shapes: Shape[], ox: number, oy: number, side: number): Run[] {
     const [ux, uy] = [(x1 - x0) / l, (y1 - y0) / l];
     const axis = Math.abs(ux) >= Math.abs(uy) ? 0 : 1;
     const [c0, cu, o0, ou] = axis ? [y0 + oy, uy, x0 + ox, ux] : [x0 + ox, ux, y0 + oy, uy];
-    return { x0, y0, x1, y1, l, ux, uy, h: s.size / 2, axis, c0, cu, cq: Math.round(Math.abs(cu) * 64) / 64, o0, ou };
+    const row = s.pts.length > 4 && Math.round(s.pts[4] / PX) === 1;
+    return { x0, y0, x1, y1, l, ux, uy, h: s.size / 2, axis, c0, cu, cq: Math.round(Math.abs(cu) * 64) / 64, o0, ou, row };
   });
   const near = (x: number, y: number, px: number, py: number) => Math.abs(x - px) < 1.5 && Math.abs(y - py) < 1.5;
   const onEdge = (x: number, y: number) => Math.min(Math.abs(x), Math.abs(x - side), Math.abs(y), Math.abs(y - side)) < 0.75;
@@ -120,8 +124,8 @@ function runs(shapes: Shape[], ox: number, oy: number, side: number): Run[] {
       } else e.cut = onEdge(...p);
       return e;
     }) as [End, End];
-    const { x0, y0, l, ux, uy, h, axis, c0, cu, cq, o0, ou } = s;
-    return { x0, y0, l, ux, uy, nx, ny, h, axis, c0, cu, cq, o0, ou, lit: nx * LX + ny * LY, ends };
+    const { x0, y0, l, ux, uy, h, axis, c0, cu, cq, o0, ou, row } = s;
+    return { x0, y0, l, ux, uy, nx, ny, h, axis, c0, cu, cq, o0, ou, lit: nx * LX + ny * LY, ends, row };
   });
 }
 
@@ -207,6 +211,8 @@ const HEDGE_INK = 2.7;
 
 /** A hedgerow's lattices: its clumps, its bushes and trees (one in most cells). */
 const CLUMP = FT * 1.7;
+/** A field's row's clumps apart (fewer, bigger: `Run::row`). */
+const ROW_CLUMP = FT * 2.6;
 const CELL = FT * 60;
 
 /** A round clump of leaves on a piece: `a` along, `d` across (toward its left), `r` its radius (px). */
@@ -259,14 +265,16 @@ function clumps(r: Run, hw: number): Clump[] {
     return (v(k) + (v(k + 1) - v(k)) * t * t * (3 - 2 * t)) * FT * 0.9 * Math.max(0, ease);
   };
   const out: Clump[] = [];
-  const step = CLUMP;
+  // (A row: fewer, bigger clumps.)
+  const step = r.row ? ROW_CLUMP : CLUMP;
+  const grow = r.row ? 1.22 : 1;
   const [lo, hi] = [A.cut ? -hw * 1.5 : hw * 0.55, B.cut ? r.l + hw * 1.5 : r.l - hw * 0.55];
   for (const k of nodes(r, step, lo - step, hi + step)) {
     const a = nodeA(r, k, step) + (hk(r, k, step, 52) - 0.5) * step * 0.7;
     if (a < lo || a > hi) continue;
     const side = k & 1 ? 1 : -1;
     const big = hk(r, k, step, 55) > 0.88 ? 1.15 : 1;
-    out.push({ a, d: swing(a) + side * hw * (0.16 + 0.24 * hk(r, k, step, 53)), r: hw * (0.62 + 0.2 * hk(r, k, step, 54)) * big, k });
+    out.push({ a, d: swing(a) + side * hw * (0.16 + 0.24 * hk(r, k, step, 53)) / grow, r: hw * (0.62 + 0.2 * hk(r, k, step, 54)) * big * grow, k });
   }
   for (const [E, a, corner] of [
     [A, hw * 0.4, 0],
@@ -292,7 +300,7 @@ function envelope(r: Run, cl: Clump[]): [number[], number[]] {
   const a1 = B.cut ? r.l : last.a + last.r;
   const at0: number[] = [a0];
   if (!A.cut) for (const t of [0.06, 0.22, 0.45]) at0.push(a0 + first.r * t);
-  const step = FT * 0.42;
+  const step = r.row ? FT * 0.95 : FT * 0.42;
   for (const k of nodes(r, step, a0, a1)) at0.push(nodeA(r, k, step));
   if (!B.cut) for (const t of [0.45, 0.22, 0.06]) at0.push(a1 - last.r * t);
   at0.push(a1);
@@ -350,7 +358,7 @@ function drawHedges(g: Graphics, rs: Run[]) {
     const cell = CELL;
     const [lo, hi] = [r.ends[0].cut ? -FT * 14 : FT * 5, r.ends[1].cut ? r.l + FT * 14 : r.l - FT * 5];
     for (const m of nodes(r, cell, lo - cell, hi + cell)) {
-      if (hk(r, m, cell, 60) > 0.85) continue;
+      if (hk(r, m, cell, 60) > (r.row ? 0.5 : 0.85)) continue;
       const a = nodeA(r, m, cell) + (0.33 + 0.34 * hk(r, m, cell, 61)) * cell;
       if (a < lo || a > hi) continue;
       const tree = hk(r, m, cell, 62) < 0.45;
@@ -365,7 +373,7 @@ function drawHedges(g: Graphics, rs: Run[]) {
     [1, 0.11],
     [0.55, 0.15],
   ]) {
-    rings.forEach((p) => p.length && g.poly(p.map((v) => v + off * f)));
+    rings.forEach((p, i) => p.length && !(rs[i].row && f < 1) && g.poly(p.map((v) => v + off * f)));
     rs.forEach((r, i) => {
       for (const e of extras[i]) {
         const [x, y] = at(r, e.a, e.d);
@@ -376,22 +384,26 @@ function drawHedges(g: Graphics, rs: Run[]) {
     g.fill({ color: 0x000000, alpha });
   }
   // The ink round the band first, then the leaves over its inner half: an outline round the whole.
-  const opened: number[][] = [];
-  const closed: number[][] = [];
-  rs.forEach((r, i) => {
-    const [L, R] = sides[i];
-    if (!L.length) return;
-    const [A, B] = r.ends;
-    if (A.cut && B.cut) opened.push(L, R);
-    else if (A.cut) opened.push([...L, ...rev(R)]);
-    else if (B.cut) opened.push([...rev(R), ...L]);
-    else closed.push(rings[i]);
-  });
-  for (const p of opened) g.poly(p, false);
-  // (Butt ends across a chunk's edge: the band carries on next door.)
-  if (opened.length) g.stroke({ width: HEDGE_INK * 2, color: INK, join: 'round', cap: 'butt' });
-  for (const p of closed) g.poly(p, true);
-  if (closed.length) g.stroke({ width: HEDGE_INK * 2, color: INK, join: 'round' });
+  // (A field's hedges' joins bevelled: as good at this weight, and far fewer points.)
+  for (const row of [false, true]) {
+    const opened: number[][] = [];
+    const closed: number[][] = [];
+    rs.forEach((r, i) => {
+      const [L, R] = sides[i];
+      if (!L.length || r.row !== row) return;
+      const [A, B] = r.ends;
+      if (A.cut && B.cut) opened.push(L, R);
+      else if (A.cut) opened.push([...L, ...rev(R)]);
+      else if (B.cut) opened.push([...rev(R), ...L]);
+      else closed.push(rings[i]);
+    });
+    const join = row ? 'bevel' : 'round';
+    for (const p of opened) g.poly(p, false);
+    // (Butt ends across a chunk's edge: the band carries on next door.)
+    if (opened.length) g.stroke({ width: HEDGE_INK * 2, color: INK, join, cap: 'butt' });
+    for (const p of closed) g.poly(p, true);
+    if (closed.length) g.stroke({ width: HEDGE_INK * 2, color: INK, join });
+  }
   rings.forEach((p) => p.length && g.poly(p));
   g.fill(LEAF[0]);
   // The mid leaves: the band again from its clumps a little smaller and toward the light, one mass
@@ -411,7 +423,7 @@ function drawHedges(g: Graphics, rs: Run[]) {
       if (h < 0.3) continue;
       const sunny = Math.max(0.6, Math.min(1, 0.8 + (c.d * r.lit) / (r.h * 2))) * (0.7 + 0.45 * h);
       const [x, y] = at(r, c.a, c.d);
-      g.poly(disc(r, x + LX * c.r * 0.34, y + LY * c.r * 0.34, c.r * 0.34 * sunny, 10));
+      g.poly(disc(r, x + LX * c.r * 0.34, y + LY * c.r * 0.34, c.r * 0.34 * sunny, r.row ? 8 : 10));
     }
   });
   g.fill({ color: LEAF[2], alpha: 0.7 });
@@ -419,7 +431,7 @@ function drawHedges(g: Graphics, rs: Run[]) {
   for (const light of [true, false]) {
     rs.forEach((r, i) => {
       for (const c of cls[i]) {
-        if (c.k === undefined) continue;
+        if (c.k === undefined || (r.row && (c.k & 1) === 0)) continue;
         const [x, y] = at(r, c.a, c.d);
         for (let j = 0; j < (light ? 2 : 1); j++) {
           const t = hk(r, c.k, CLUMP, (light ? 70 : 74) + j) * Math.PI * 2;

@@ -10,7 +10,8 @@
 //! - every aligned 8 × 8 cell has ≥ 1 cover object (≥ half cover) → any 32 × 32 window holds ≥ 9;
 //! - every aligned 16 × 16 cell spans ≥ 2 tiers → any 32 × 32 window contains one such cell;
 //! - every aligned 16 × 16 cell has a hazard or prop cluster, or the chunk has atmosphere;
-//! - no dry square is more than `MAX_COVER_GAP` squares from cover.
+//! - no dry square is more than `MAX_COVER_GAP` squares from cover (`cover_gap`: more in a castle's
+//!   yard and on a field, where walls and hedgerows are the cover).
 //! Open water far from shore is exempt (cells that are entirely deep water).
 
 use serde::Serialize;
@@ -46,6 +47,9 @@ pub const MAX_COVER_GAP: i32 = 6;
 /// than this from cover, and a window of it (most of its squares) holding any of them needs no more
 /// (`cover_gap`, `works_cover`).
 pub const YARD_COVER_GAP: i32 = 12;
+/// On a field (v63 countryside), where its hedgerows and walls are the cover (`town::rural::rows`
+/// split a field at most about 110 ft apart): how far a square may be from cover.
+pub const FIELD_COVER_GAP: i32 = 12;
 const COVER_CELL: usize = 8;
 const TIER_CELL: usize = 16;
 /// Micro-relief feature grid (squares).
@@ -446,7 +450,9 @@ pub struct Chunk {
     /// Uploaded sprites the chunk's objects use.
     pub sprites: Vec<ChunkSprite>,
     /// A castle's yard per square (bits 1 a bailey, 2 a garden yard's, 4 on a motte above its toe;
-    /// empty: none here): where the guarantee counts its walls, towers and buildings as cover.
+    /// empty: none here): where the guarantee counts its walls, towers and buildings as cover. Bit 8
+    /// a hedgerow's or dry-stone wall's square (v63 countryside, `town::rural::cover`): cover itself;
+    /// bit 16 a village's green, which takes its own cover.
     pub yard: Vec<u8>,
     /// The settlement whose paving the chunk's cobbles are (its index + 1 in the low 24 bits, its
     /// culture + 1 in the high 8; 0 none): the highest-tier layout near the chunk, the nearest of
@@ -1107,6 +1113,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut urb_h = vec![0u8; HS * HS];
     // v63 countryside: the fields' furrows per halo square (`town::fields::square_byte`).
     let mut fld_h = vec![0u8; HS * HS];
+    // A village's green per halo square (1; 0 elsewhere): its cover is the green's own (`enforce`).
+    let mut green_h = vec![0u8; HS * HS];
     // Ground kept clear round a way underground (its own ground stays: graveyard grass, ruin
     // dirt, street cobbles).
     let mut ent_h = vec![false; HS * HS];
@@ -1290,6 +1298,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             // round it as it is.
             let lawn = pl.kind.is_lawn() && l.tier >= crate::t0::settle::Tier::Town;
             stamp(p, if lawn { URBAN_PARK } else { URBAN_PLAZA }, &mut urb_h);
+            if pl.kind == K::Green && !lawn {
+                stamp(p, 1, &mut green_h);
+            }
             // A castle's bailey: an open yard of grass, dressed sparingly (`dress_bailey`).
             if pl.kind == K::Bailey {
                 let (i0, j0, i1, j1) = range(bbox(p));
@@ -2957,6 +2968,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let before = if shaped.is_empty() { Vec::new() } else { chunk.height.clone() };
     let set_out = chunk.objects.len();
     chunk.yard = bailey.clone();
+    // (The guarantee counts hedgerows and dry-stone walls as cover, and gives a village's green its
+    // own: `Chunk::yard` bits 8 and 16.)
+    if !rural.runs.is_empty() || green_h.iter().any(|&g| g != 0) {
+        chunk.yard.resize(n, 0);
+        crate::town::rural::cover(&rural, ox, oy, &mut chunk.yard);
+        for k in 0..n {
+            if green_h[(k / SQ + 1) * HS + k % SQ + 1] != 0 && chunk.urban[k] == URBAN_PLAZA {
+                chunk.yard[k] |= 16;
+            }
+        }
+    }
     enforce(&mut chunk, &biome, seed, gsx, gsy, sea, &shaped, &keep_off, &park, &bailey);
     // A bench the guarantee put in a park is one of the park's, facing its nearest path, or the
     // middle of the gravel round it stands at; one out on the lawn, more than 12 ft from either, is a
@@ -3516,6 +3538,35 @@ fn by_fronts(c: &Chunk, cells: Vec<usize>) -> Vec<usize> {
     if edge.is_empty() { cells } else { edge }
 }
 
+/// On a field, the squares of `cells` by its edge or a hedgerow (within two squares of one that is
+/// no field's, or of a hedgerow's or wall's, not on it), where a thorn bush or a cairn of cleared
+/// stones stands rather than out on the ploughed land; none if there are none (else all, with
+/// `fallback`). Not a field: all.
+fn by_bounds(c: &Chunk, cells: Vec<usize>, fallback: bool) -> Vec<usize> {
+    if cells.iter().filter(|&&k| c.urban[k] == URBAN_FIELD).count() * 2 <= cells.len() {
+        return cells;
+    }
+    let run = |q: usize| c.yard.get(q).is_some_and(|&y| y & 8 != 0);
+    let edge: Vec<usize> = cells
+        .iter()
+        .copied()
+        .filter(|&k| {
+            let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
+            !run(k)
+                && (-2..=2).any(|dy| {
+                    (-2..=2).any(|dx| {
+                        let (i, j) = (x + dx, y + dy);
+                        i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 && {
+                            let q = j as usize * SQ + i as usize;
+                            c.urban[q] != URBAN_FIELD || run(q)
+                        }
+                    })
+                })
+        })
+        .collect();
+    if edge.is_empty() && fallback { cells } else { edge }
+}
+
 /// The 32x32 windows `enforce` fills: those mostly dry with fewer than three cover objects and
 /// buildings in them (every building with a square in a window, as `tests/vital.rs` counts); with
 /// `feature`, those with no hazard or prop in them. What doesn't change while objects are added
@@ -3656,6 +3707,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
     let cover_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| match in_park(k) {
         _ if yard(k) != 0 => yard_kind(c, k, yard(k) == 2, biome[k], false, rng),
         0 if c.urban[k] == URBAN_FIELD => field_cover(c, k, biome[k], false, rng),
+        0 if green(c, k) => green_cover(biome[k], false, rng),
         0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
         0 => fallback_cover(biome[k], rng),
         p => park_cover(p & 3 == 2, biome[k], false, rng),
@@ -3663,6 +3715,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
     let feature_kind = |c: &Chunk, k: usize, rng: &mut Pcg32| match in_park(k) {
         _ if yard(k) != 0 => yard_kind(c, k, yard(k) == 2, biome[k], true, rng),
         0 if c.urban[k] == URBAN_FIELD => field_cover(c, k, biome[k], true, rng),
+        0 if green(c, k) => green_cover(biome[k], true, rng),
         0 if !matches!(c.urban[k], 0 | URBAN_PARK) => town_cover(c.urban[k], rng),
         0 => fallback_feature(biome[k], rng),
         p => park_cover(p & 3 == 2, biome[k], true, rng),
@@ -3783,7 +3836,7 @@ fn enforce(c: &mut Chunk, biome: &[Biome], seed: u64, gsx: i64, gsy: i64, sea: f
         if all.is_empty() {
             continue;
         }
-        let cells = by_fronts(c, off_road_first(c, all, keep_off));
+        let cells = by_bounds(c, by_fronts(c, off_road_first(c, all, keep_off)), span.1 == 32);
         if cells.is_empty() {
             continue;
         }
@@ -5096,8 +5149,10 @@ fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, lanes
             }
         }
         K::Green => {
-            let mid = rng.next_f64();
-            if mid < 0.4 && well(&mut room, &mut rng, out, features) {
+            // (A village's green has its well at the heart already, and its own tree by it.)
+            let village = l.tier < crate::t0::settle::Tier::Town;
+            let mid = if village { 1.0 } else { rng.next_f64() };
+            if village || (mid < 0.4 && well(&mut room, &mut rng, out, features)) {
             } else if mid < 0.65 && room.free(c, cross_ft(), false) {
                 room.taken.push((c, cross_ft() + 2.0));
                 out.push((c, 0.0, Kind::MarketCross, [0, 2][rng.below(2) as usize]));
@@ -5106,7 +5161,9 @@ fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, lanes
                 room.taken.push((c, 9.0));
                 out.push((c, 0.0, pick(&mut rng, trees), rng.below(4) as u8));
             }
-            grove(&mut room, &mut rng, out, ((area(poly).abs() / 3000.0) as i64).clamp(2, 6), 10.0);
+            if !village {
+                grove(&mut room, &mut rng, out, ((area(poly).abs() / 3000.0) as i64).clamp(2, 6), 10.0);
+            }
             for k in 0..if shrubs.is_empty() { 0 } else { 1 + rng.below(3) as i64 } {
                 let kind = pick(&mut rng, shrubs);
                 if let Some(p) = room.best(foot(kind), true, edge(4.0, 20 + k)) {
@@ -5194,7 +5251,7 @@ fn dress_square(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, lanes
     }
     // Every square has its focus, however little room it leaves: a signpost at a crossroads, a
     // well at a well or fountain square, a tree or a well on a green.
-    if out.len() == start {
+    if out.len() == start && !(pl.kind == K::Green && l.tier < crate::t0::settle::Tier::Town) {
         let kind = match pl.kind {
             K::Crossroads => Kind::Signpost,
             K::Green if !trees.is_empty() => trees[0],
@@ -5641,6 +5698,19 @@ fn town_cover(urban: u8, rng: &mut Pcg32) -> Kind {
     opts[rng.below(opts.len() as u32) as usize]
 }
 
+/// A village's green's square (`Chunk::yard` bit 16).
+fn green(c: &Chunk, k: usize) -> bool {
+    c.yard.get(k).is_some_and(|&y| y & 16 != 0)
+}
+
+/// What the guarantee sets out on a village's green: for cover the biome's shrubs and now and then
+/// a bench (never crates, rocks or the forest's trees); to see, wildflowers.
+fn green_cover(b: Biome, feature: bool, rng: &mut Pcg32) -> Kind {
+    let shrub = greenery(b).1.first().copied().unwrap_or(Kind::Bush);
+    let opts: &[Kind] = if feature { &[Kind::Flowers] } else { &[shrub, shrub, Kind::Bench] };
+    opts[rng.below(opts.len() as u32) as usize]
+}
+
 /// What the guarantee sets out on a field (v63 countryside; never a haystack, `farm` places those):
 /// for cover thorn bushes and a clearance cairn, on pasture now and then a lone field tree or a
 /// trough; to see, wildflowers and tall grass.
@@ -5748,7 +5818,13 @@ fn clear_of_buildings(c: &Chunk, o: &Object) -> bool {
 /// How far square `k` may be from cover (`cover_distance`): `MAX_COVER_GAP`, in a castle's yard
 /// `YARD_COVER_GAP`.
 pub fn cover_gap(c: &Chunk, k: usize) -> i32 {
-    if c.yard.get(k).is_some_and(|&y| y & 3 != 0) { YARD_COVER_GAP } else { MAX_COVER_GAP }
+    if c.yard.get(k).is_some_and(|&y| y & 3 != 0) {
+        YARD_COVER_GAP
+    } else if c.urban[k] == URBAN_FIELD {
+        FIELD_COVER_GAP
+    } else {
+        MAX_COVER_GAP
+    }
 }
 
 /// Whether the 32x32 window at (`wx`, `wy`) is a castle's yard's (half its squares not under water
@@ -5775,7 +5851,7 @@ pub fn cover_distance(c: &Chunk) -> Vec<i32> {
     let mut dist = vec![i32::MAX; SQ * SQ];
     let mut queue = std::collections::VecDeque::new();
     for k in 0..SQ * SQ {
-        if c.building[k] != 0 || matches!(c.urban[k], URBAN_WALL | URBAN_TOWER) {
+        if c.building[k] != 0 || matches!(c.urban[k], URBAN_WALL | URBAN_TOWER) || c.yard.get(k).is_some_and(|&y| y & 8 != 0) {
             dist[k] = 0;
             queue.push_back(k);
         }

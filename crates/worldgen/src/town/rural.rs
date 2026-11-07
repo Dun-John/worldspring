@@ -2,7 +2,9 @@
 //! (`place`, last, in world ft): windmills on rises among the fields (a village with no water mill,
 //! some round towns' farmland) and a water mill's wheel on its water side (`Layout::wheels`). From
 //! the finished layout alone, so every chunk and the plan agree: hedgerows, dry-stone walls and
-//! fences along bounded fields and crofts as straight runs (`battle`), orchard trees in rows along
+//! fences along bounded fields and crofts as straight runs (`battle`), rows of hedge splitting the
+//! bigger fields along their furrows, a gate in each now and then (`rows`: the fields' cover, as
+//! the guarantee counts it, `cover`), orchard trees in rows along
 //! the field's furrows, copses (a small clump of trees on a field out on the belt's rim: `copse`),
 //! a windmill's sails.
 
@@ -13,13 +15,16 @@ use super::village::{Bound, PlotKind};
 use super::{Building, Layout, Site, Structure, rect};
 use crate::battlemap::{Kind, Object, SQ, SQUARE_FT, ShapeKind, URBAN_FIELD, VectorShape};
 use crate::core::rng::{hash3, unit};
+use crate::t0::biome::Biome;
 use crate::t0::settle::{Settlement, Tier};
 use crate::t0::T0;
 
-/// A run's kind (the battlemap's `ShapeKind::Hedge`, `DryWall`, `Fence`).
+/// A run's kind (the battlemap's `ShapeKind::Hedge`, `DryWall`, `Fence`; a field's hedge, round it
+/// or a row in it (`rows`), is a `Hedge` drawn the cheaper way, long as they run).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunKind {
     Hedge,
+    HedgeRow,
     DryWall,
     Fence,
 }
@@ -28,7 +33,7 @@ impl RunKind {
     /// Its thickness (ft) as drawn.
     fn ft(self) -> f64 {
         match self {
-            RunKind::Hedge => 3.5,
+            RunKind::Hedge | RunKind::HedgeRow => 3.5,
             RunKind::DryWall => 3.75,
             RunKind::Fence => 0.8,
         }
@@ -85,6 +90,76 @@ pub fn copse(l: &Layout, i: usize) -> Option<(P, f64)> {
     let room = outline_dist(f, c) - 10.0;
     let r = (0.3 * obb(f).short).clamp(16.0, 40.0).min(room);
     (r >= 12.0).then_some((c, r))
+}
+
+/// A field's rows apart at most (ft): about this, a little less on some fields (keyed by place).
+const ROW_FT: f64 = 110.0;
+/// A row's gates apart (ft, about: 100 to 150 keyed by the row) and how far a gate's gap reaches
+/// either side of its middle (ft: two 4-ft pieces, so a square stays open).
+const ROW_GATE_FT: f64 = 100.0;
+const ROW_GATE_HALF: f64 = 4.0;
+
+/// Field `i`'s hedgerows (or a walled field's walls) inside it, along its furrows: each row's ends
+/// on the field's outline (world ft) and its gates (ft along it from the first end). Rows split the
+/// field across its furrows at most `ROW_FT` apart, so no point of it lies more than about 55 ft
+/// from a row or its bound (a field with no bound has its outer rows half a step in). Orchards keep
+/// their trees' rows instead, and pieces shorter than 30 ft are left out. A pure function of the
+/// field, so every chunk agrees.
+pub fn rows(l: &Layout, i: usize) -> Vec<(P, P, Vec<f64>)> {
+    let (Some(f), Some(info)) = (l.fields.get(i), l.field_info.get(i)) else { return Vec::new() };
+    if info.kind == FieldUse::Orchard || f.len() < 3 {
+        return Vec::new();
+    }
+    let a = info.angle as f64;
+    let (u, v) = ([libm::cos(a), libm::sin(a)], [-libm::sin(a), libm::cos(a)]);
+    let c = centroid(f);
+    let key = |k: i64| hash3(0x4ed6e, crate::core::round(c[0]) as i64, crate::core::round(c[1]) as i64, k);
+    let (t0, t1) = f.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+        let t = dot(sub(*p, c), v);
+        (lo.min(t), hi.max(t))
+    });
+    let width = t1 - t0;
+    let step = ROW_FT * (0.85 + 0.15 * unit(key(0)));
+    let n = (width / step).ceil().max(1.0) as usize;
+    let ts: Vec<f64> = if info.bound != FieldBound::None {
+        (1..n).map(|k| t0 + width * k as f64 / n as f64).collect()
+    } else if width < 40.0 {
+        Vec::new()
+    } else {
+        (0..n).map(|k| t0 + width * (k as f64 + 0.5) / n as f64).collect()
+    };
+    let mut out = Vec::new();
+    for (ri, &t) in ts.iter().enumerate() {
+        // (Where the line crosses the outline, in order along it: inside between each pair.)
+        let mut ss: Vec<f64> = Vec::new();
+        for k in 0..f.len() {
+            let (p, q) = (f[k], f[(k + 1) % f.len()]);
+            let (dp, dq) = (dot(sub(p, c), v) - t, dot(sub(q, c), v) - t);
+            if (dp < 0.0) != (dq < 0.0) {
+                ss.push(dot(sub(lerp(p, q, dp / (dp - dq)), c), u));
+            }
+        }
+        ss.sort_by(f64::total_cmp);
+        for (pi, s) in ss.chunks_exact(2).enumerate() {
+            let len_ft = s[1] - s[0];
+            if len_ft < 30.0 {
+                continue;
+            }
+            let base = add(c, mul(v, t));
+            let (pa, pb) = (add(base, mul(u, s[0])), add(base, mul(u, s[1])));
+            let h = key(1 + 64 * ri as i64 + pi as i64);
+            let every = ROW_GATE_FT * (1.0 + 0.5 * unit(h));
+            let g = if len_ft < 60.0 { 0 } else { crate::core::round(len_ft / every).max(1.0) as usize };
+            let gates = (0..g)
+                .map(|m| {
+                    let span = len_ft / g as f64;
+                    (span * (m as f64 + 0.5 + 0.3 * (unit(hash3(h, m as i64, 0, 3)) - 0.5))).clamp(10.0, len_ft - 10.0)
+                })
+                .collect();
+            out.push((pa, pb, gates));
+        }
+    }
+    out
 }
 
 /// A copse's clump: a middle and three lobes (centre, radius ft).
@@ -371,6 +446,8 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
             d < half + WAY_GAP_FT && (dot(u, v) / (ul * vl)).abs() < 0.7
         })
     };
+    // (Nothing runs over a village's green.)
+    let greens: Vec<&Vec<P>> = l.plazas.iter().filter(|p| p.kind == super::PlazaKind::Green && hits(grow(bbox(&p.pts), 4.0), near)).map(|p| &p.pts).collect();
     let piece_runs = |a: P, b: P, kind: RunKind, keep: &dyn Fn(P) -> bool, out: &mut Battle| {
         if !hits(bbox(&[a, b]), near) {
             return;
@@ -379,7 +456,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         let mut from: Option<usize> = None;
         for j in 0..=m {
             let mid = lerp(a, b, (j as f64 + 0.5) / m as f64);
-            let ok = j < m && hits([mid[0], mid[1], mid[0], mid[1]], mids) && keep(mid) && !blocked(mid) && {
+            let ok = j < m && hits([mid[0], mid[1], mid[0], mid[1]], mids) && keep(mid) && !blocked(mid) && !greens.iter().any(|g| contains(g, mid)) && {
                 let (p, q) = (lerp(a, b, j as f64 / m as f64), lerp(a, b, (j + 1) as f64 / m as f64));
                 !on_way(p, q) && !by_roof(p, q)
             };
@@ -400,7 +477,7 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
     // Fields: hedged or walled, each shared side once (the lower field's), a gate each.
     for (bi, &(i, _)) in bounded.iter().enumerate() {
         let f = &l.fields[i];
-        let kind = if l.field_info[i].bound == FieldBound::Wall { RunKind::DryWall } else { RunKind::Hedge };
+        let kind = if l.field_info[i].bound == FieldBound::Wall { RunKind::DryWall } else { RunKind::HedgeRow };
         let g = gate(f, &ways);
         let keep = |p: P| {
             dist(p, g) > 0.5 * GATE_FT
@@ -413,6 +490,32 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         };
         for k in 0..f.len() {
             piece_runs(f[k], f[(k + 1) % f.len()], kind, &keep, out);
+        }
+    }
+    // Fields' rows inside them along their furrows (`rows`), a gap at each of their gates; none
+    // through a copse or under a windmill's sails. A walled field's are walls, an unbounded field's
+    // hedges but on cold or dry ground (walls).
+    let stony = matches!(
+        crate::battlemap::land_biome(t0, l.center),
+        Biome::Alpine | Biome::Tundra | Biome::ColdDesert | Biome::Ice | Biome::Steppe | Biome::HotDesert | Biome::SaltFlat | Biome::Savanna
+    );
+    let mills: Vec<P> = l.buildings.iter().filter(|b| windmill(b)).map(|b| centroid(&b.poly)).collect();
+    for (i, f) in l.fields.iter().enumerate() {
+        if !hits(bbox(f), near) {
+            continue;
+        }
+        let kind = match l.field_info.get(i).map(|x| x.bound) {
+            Some(FieldBound::Wall) => RunKind::DryWall,
+            Some(FieldBound::None) if stony => RunKind::DryWall,
+            _ => RunKind::HedgeRow,
+        };
+        let clump = copse(l, i);
+        for (a, b, gates) in rows(l, i) {
+            let keep = |p: P| {
+                let s = dist(a, p);
+                gates.iter().all(|&g| (s - g).abs() > ROW_GATE_HALF) && clump.is_none_or(|(c, r)| dist(p, c) > 1.15 * r + 6.0) && mills.iter().all(|&m| dist(p, m) > SAIL_FT + 3.0)
+            };
+            piece_runs(a, b, kind, &keep, out);
         }
     }
     // A village's crofts' and yards' hedges and fences, and its churchyard's low wall (the manor's
@@ -507,11 +610,16 @@ pub fn shapes(b: &Battle, ox: f64, oy: f64, out: &mut Vec<VectorShape>) {
     let local = |p: P| [((p[0] - ox) / SQUARE_FT) as f32, ((p[1] - oy) / SQUARE_FT) as f32];
     for &(a, e, kind) in &b.runs {
         let sk = match kind {
-            RunKind::Hedge => ShapeKind::Hedge,
+            RunKind::Hedge | RunKind::HedgeRow => ShapeKind::Hedge,
             RunKind::DryWall => ShapeKind::DryWall,
             RunKind::Fence => ShapeKind::Fence,
         };
-        out.push(VectorShape { kind: sk, size: (kind.ft() / SQUARE_FT) as f32, pts: vec![local(a), local(e)] });
+        // (A field's hedge's third point (1, 0): drawn the cheaper way, `countryside.ts`.)
+        let mut pts = vec![local(a), local(e)];
+        if kind == RunKind::HedgeRow {
+            pts.push([1.0, 0.0]);
+        }
+        out.push(VectorShape { kind: sk, size: (kind.ft() / SQUARE_FT) as f32, pts });
     }
     for &(c, a) in &b.sails {
         out.push(VectorShape { kind: ShapeKind::Sails, size: (SAIL_FT / SQUARE_FT) as f32, pts: vec![local(c), [a as f32, 0.0]] });
@@ -539,18 +647,33 @@ pub fn objects(b: &Battle, ox: f64, oy: f64, c: &mut crate::battlemap::Chunk) {
     }
 }
 
-/// Play: a run's squares are difficult ground (bit 16 of `Chunk::edges`), never sight's walls.
-pub fn mark(b: &Battle, ox: f64, oy: f64, edges: &mut [u8]) {
-    for &(a, e, _) in &b.runs {
+/// Each square of the chunk (origin `ox`, `oy` ft) a run crosses, with the run's kind.
+fn each_square(b: &Battle, ox: f64, oy: f64, f: &mut dyn FnMut(usize, RunKind)) {
+    for &(a, e, kind) in &b.runs {
         let m = (dist(a, e) / (0.25 * SQUARE_FT)).ceil().max(1.0) as usize;
         for j in 0..=m {
             let p = lerp(a, e, j as f64 / m as f64);
             let (i, k) = (((p[0] - ox) / SQUARE_FT).floor() as i64, ((p[1] - oy) / SQUARE_FT).floor() as i64);
             if i >= 0 && k >= 0 && (i as usize) < SQ && (k as usize) < SQ {
-                edges[k as usize * SQ + i as usize] |= 16;
+                f(k as usize * SQ + i as usize, kind);
             }
         }
     }
+}
+
+/// Play: a run's squares are difficult ground (bit 16 of `Chunk::edges`), never sight's walls.
+pub fn mark(b: &Battle, ox: f64, oy: f64, edges: &mut [u8]) {
+    each_square(b, ox, oy, &mut |k, _| edges[k] |= 16);
+}
+
+/// The guarantee: a hedgerow's or dry-stone wall's squares are cover (`Chunk::yard` bit 8; a
+/// fence's are not).
+pub fn cover(b: &Battle, ox: f64, oy: f64, yard: &mut [u8]) {
+    each_square(b, ox, oy, &mut |k, kind| {
+        if kind != RunKind::Fence {
+            yard[k] |= 8;
+        }
+    });
 }
 
 /// Plan zoom polygons under the buildings (`payload::pack_sites`): each copse's clump as a park's

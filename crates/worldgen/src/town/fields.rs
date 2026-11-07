@@ -161,11 +161,16 @@ pub(super) fn assign(site: &Site, seed: u64, l: &mut Layout) {
         }
         let angle = a.rem_euclid(std::f64::consts::PI);
         // Bounds: walls on high, stony, dry or cold ground, hedges in temperate lowlands, some none
-        // (open-field strips never); stock is fenced in more often than crops.
+        // (open-field strips never, but for a village's closes); stock is fenced in more often than crops.
         let (wall, hedge) = if steep { ((wall0 + 0.45).min(0.9), hedge0.min(0.1)) } else { (wall0, hedge0) };
         let keep = if kind == FieldUse::Pasture { 1.15 } else { 1.0 } * (1.0 - 0.4 * rim);
         let b = roll(5);
-        let bound = if strips {
+        // (Round a village, most of its small fields near it are hedged all round, strips too: a
+        // bocage of little closes.)
+        let close = village && far < 1.7 && area(f).abs() < 20000.0 && roll(6) < 0.65;
+        let bound = if close {
+            if hedge0 >= wall0 { FieldBound::Hedge } else { FieldBound::Wall }
+        } else if strips {
             FieldBound::None
         } else if b < wall * keep {
             FieldBound::Wall

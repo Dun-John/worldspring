@@ -3546,6 +3546,8 @@ fn belfry_rules(it: &worldgen::interior::Interior, floors: i8) -> Vec<String> {
 fn villages(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&["villages", "cottages", "cottages not square to their lane", "croft overlaps", "crofts over a building", "crofts over a lane", "bounds by a roof", "bounds across a lane", "lane kinks", "lanes ending at nothing inside the village", "greens with props", "greens without their well (of the first 24)"]);
     let mut greens: Vec<(P, String)> = Vec::new();
+    let mut gpolys: Vec<Vec<P>> = Vec::new();
+    let mut fchunks: Vec<(P, String)> = Vec::new();
     let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
     for li in 0..town::layout_count(t0) {
         let l = town::layout(world, t0, li);
@@ -3639,8 +3641,15 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
                 }
             }
         }
+        fields_rows(&l, t0, &tag, r);
+        if fchunks.len() < 8 {
+            if let Some(f) = l.fields.iter().enumerate().filter(|(i, _)| l.field_info[*i].kind != town::fields::FieldUse::Orchard).max_by(|a, b| area(a.1).abs().total_cmp(&area(b.1).abs())) {
+                fchunks.push((centroid(f.1), tag.clone()));
+            }
+        }
         if let Some(g) = l.plazas.iter().find(|p| p.kind == PlazaKind::Green) {
             let (c, rad) = (centroid(&g.pts), dist(centroid(&g.pts), g.pts[0]));
+            gpolys.push(g.pts.clone());
             if l.props.iter().any(|p| dist(p.at, c) < rad) {
                 r.tally("greens with props", 1);
             }
@@ -3651,6 +3660,56 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
     }
     // (The first two dozen greens' wells on the battlemap.)
     let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
+    // (Field cover: in the chunk under each of the first villages' biggest field, the 32x32 windows
+    // mostly of field squares, every 4 squares.)
+    for (c, tag) in fchunks {
+        let (kx, ky) = ((c[0] / size).floor() as u32, (c[1] / size).floor() as u32);
+        let ch = ctx.chunk(kx, ky);
+        let field = |k: usize| ch.urban[k] == worldgen::battlemap::URBAN_FIELD;
+        let hedge = |k: usize| ch.yard.get(k).is_some_and(|&y| y & 8 != 0);
+        for o in ch.objects.iter().filter(|o| worldgen::battlemap::info(o.kind as u16).cover >= 1) {
+            let (x, y) = ((o.x as usize).min(SQ - 1), (o.y as usize).min(SQ - 1));
+            if !field(y * SQ + x) {
+                continue;
+            }
+            let edge = (-2i64..=2).any(|dy| (-2i64..=2).any(|dx| {
+                let (i, j) = (x as i64 + dx, y as i64 + dy);
+                i < 0 || j < 0 || i >= SQ as i64 || j >= SQ as i64 || { let q = j as usize * SQ + i as usize; !field(q) || hedge(q) }
+            }));
+            // (Orchards' and copses' trees aside.)
+            if !matches!(o.kind, Kind::Bush | Kind::RockPile | Kind::Thicket | Kind::WaterTrough) {
+                continue;
+            }
+            r.tally(if edge { "field cover by an edge or hedge" } else { "field cover mid-field" }, 1);
+        }
+        let dist = worldgen::battlemap::cover_distance(&ch);
+        let far = (0..SQ * SQ).filter(|&k| field(k) && ch.water_level[k] <= ch.height[k]).map(|k| dist[k]).max().unwrap_or(0);
+        r.measure("field square farthest from cover in a chunk (squares)", false, far as f64, tag.clone());
+        for wy in (0..=SQ - 32).step_by(4) {
+            for wx in (0..=SQ - 32).step_by(4) {
+                let n = (0..32 * 32).filter(|&q| field((wy + q / 32) * SQ + wx + q % 32)).count();
+                if n * 2 < 32 * 32 {
+                    continue;
+                }
+                let inw = |o: &worldgen::battlemap::Object| o.x >= wx as f32 && o.x < (wx + 32) as f32 && o.y >= wy as f32 && o.y < (wy + 32) as f32;
+                let cover = ch.objects.iter().filter(|o| worldgen::battlemap::info(o.kind as u16).cover >= 1 && inw(o)).count();
+                r.value("cover objects per 32x32 field window", cover as f64, format!("{tag} ({wx},{wy})"));
+            }
+        }
+    }
+    // (What stands on the greens: objects by kind, of the first two dozen.)
+    for g in gpolys.iter().take(24) {
+        let c = centroid(g);
+        let (kx, ky) = ((c[0] / size).floor() as u32, (c[1] / size).floor() as u32);
+        let ch = ctx.chunk(kx, ky);
+        let (ox, oy) = (kx as f64 * size, ky as f64 * size);
+        r.tally("hedge or wall squares on greens (of 24)", (0..SQ * SQ).filter(|&k| ch.yard.get(k).is_some_and(|&y| y & 24 == 24)).count());
+        for o in &ch.objects {
+            if contains(g, [ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT]) {
+                r.tally(&format!("on greens: {:?}", o.kind), 1);
+            }
+        }
+    }
     for (c, tag) in greens {
         let (kx, ky) = ((c[0] / size).floor() as u32, (c[1] / size).floor() as u32);
         let ch = ctx.chunk(kx, ky);
@@ -3658,6 +3717,94 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         if !ch.objects.iter().any(|o| o.kind == Kind::Well && dist([ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT], c) < 6.0) {
             r.add("greens without their well (of the first 24)", 1.0, tag);
         }
+    }
+}
+
+/// The fields' rows (`rural::rows`) and how far their squares lie from a hedgerow or wall (bounds,
+/// rows, crofts' hedges: `rural::battle` over the layout's fields, chunk by chunk, roads not cut).
+fn fields_rows(l: &Layout, t0: &T0, tag: &str, r: &mut Report) {
+    use worldgen::town::fields::{FieldBound, FieldUse};
+    use worldgen::town::rural;
+    let live: Vec<usize> = (0..l.fields.len()).filter(|&i| l.field_info.get(i).is_some_and(|x| x.kind != FieldUse::Orchard)).collect();
+    if live.is_empty() {
+        return;
+    }
+    let bb = live.iter().flat_map(|&i| l.fields[i].iter()).fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    let g0 = [(bb[0] / 5.0).floor() * 5.0 - 100.0, (bb[1] / 5.0).floor() * 5.0 - 100.0];
+    let (nx, ny) = (((bb[2] - g0[0]) / 5.0) as usize + 21, ((bb[3] - g0[1]) / 5.0) as usize + 21);
+    let mut d = vec![i32::MAX; nx * ny];
+    let mut q = VecDeque::new();
+    let blk = 640.0;
+    let (bx0, by0) = ((g0[0] / blk).floor() as i64, (g0[1] / blk).floor() as i64);
+    let (bx1, by1) = (((g0[0] + nx as f64 * 5.0) / blk).floor() as i64, ((g0[1] + ny as f64 * 5.0) / blk).floor() as i64);
+    for by in by0..=by1 {
+        for bx in bx0..=bx1 {
+            let mut bt = rural::Battle::default();
+            let rect = [bx as f64 * blk, by as f64 * blk, (bx + 1) as f64 * blk, (by + 1) as f64 * blk];
+            rural::battle(l, t0, rect, &|_| false, &mut bt);
+            r.measure("runs in a chunk (most, of the 900 a chunk holds)", false, bt.runs.len() as f64, format!("{tag} block ({bx},{by})"));
+            for &(a, e, kind) in &bt.runs {
+                if kind == rural::RunKind::Fence {
+                    continue;
+                }
+                let m = (dist(a, e) / 1.25).ceil().max(1.0) as usize;
+                for j in 0..=m {
+                    let p = lerp(a, e, j as f64 / m as f64);
+                    let (i, k) = (((p[0] - g0[0]) / 5.0).floor() as i64, ((p[1] - g0[1]) / 5.0).floor() as i64);
+                    if i >= 0 && k >= 0 && (i as usize) < nx && (k as usize) < ny && d[k as usize * nx + i as usize] != 0 {
+                        d[k as usize * nx + i as usize] = 0;
+                        q.push_back(k as usize * nx + i as usize);
+                    }
+                }
+            }
+        }
+    }
+    while let Some(k) = q.pop_front() {
+        let (x, y) = ((k % nx) as i64, (k / nx) as i64);
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+            let (i, j) = (x + dx, y + dy);
+            if i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny && d[j as usize * nx + i as usize] > d[k] + 1 {
+                d[j as usize * nx + i as usize] = d[k] + 1;
+                q.push_back(j as usize * nx + i as usize);
+            }
+        }
+    }
+    for &i in &live {
+        let f = &l.fields[i];
+        let info = &l.field_info[i];
+        let rows = rural::rows(l, i);
+        let a = info.angle as f64;
+        let v = [-libm::sin(a), libm::cos(a)];
+        let (lo, hi) = f.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(dot(*p, v)), hi.max(dot(*p, v))));
+        r.value("field width across furrows (ft)", hi - lo, format!("{tag} f{i}"));
+        r.value("field area (sq ft)", area(f).abs(), format!("{tag} f{i}"));
+        r.value("rows per field", rows.len() as f64, format!("{tag} f{i} {:.0} ft wide", hi - lo));
+        r.tally(if info.bound == FieldBound::None { "fields unbounded" } else { "fields bounded" }, 1);
+        for (pa, pb, gates) in &rows {
+            r.tally("rows", 1);
+            r.tally("row gates", gates.len());
+            r.value("row ft per gate", dist(*pa, *pb) / gates.len().max(1) as f64, format!("{tag} f{i}"));
+        }
+        let copse = rural::copse(l, i);
+        let fb = f.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        let mut worst = 0;
+        let (i0, j0) = (((fb[0] - g0[0]) / 5.0) as usize, ((fb[1] - g0[1]) / 5.0) as usize);
+        let (i1, j1) = (((fb[2] - g0[0]) / 5.0) as usize, ((fb[3] - g0[1]) / 5.0) as usize);
+        for j in j0..=j1.min(ny - 1) {
+            for ii in i0..=i1.min(nx - 1) {
+                let p = [g0[0] + (ii as f64 + 0.5) * 5.0, g0[1] + (j as f64 + 0.5) * 5.0];
+                if !contains(f, p) || copse.is_some_and(|(c, rr)| dist(c, p) < 1.2 * rr + 10.0) {
+                    continue;
+                }
+                let dd = d[j * nx + ii];
+                worst = worst.max(dd);
+                r.tally("field squares", 1);
+                if dd > 12 {
+                    r.tally("field squares over 60 ft from a hedge or wall", 1);
+                }
+            }
+        }
+        r.value("farthest square from a hedge or wall per field (ft)", 5.0 * worst as f64, format!("{tag} f{i} {:?} {:?} {:.0} ft wide", info.kind, info.bound, hi - lo));
     }
 }
 
