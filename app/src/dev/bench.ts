@@ -336,10 +336,13 @@ export async function runSewerBench(view: MapView): Promise<BenchResult> {
   });
 }
 
+/** The ruin whose dungeon `?bench=dungeon` runs in, by its feature id (seed 1). */
+const DUNGEON_RUIN = 'ruin:5c6fd5b5';
+
 /**
- * The biggest built site underground (a ruin's dungeon, crypt or catacombs: square corners,
- * walls measured from the squares in the shader): panning its deepest level, zooming out to the
- * whole level and in again, changing level every few seconds. Run with ?bench=dungeon.
+ * A big built site underground (a ruin's dungeon, crypt or catacombs: square corners, walls
+ * measured from the squares in the shader): panning its deepest level, zooming out to the whole
+ * level and in again, changing level every few seconds. Run with ?bench=dungeon.
  */
 export async function runDungeonBench(view: MapView): Promise<BenchResult> {
   await waitReady(view, 4000);
@@ -347,7 +350,16 @@ export async function runDungeonBench(view: MapView): Promise<BenchResult> {
   const towns = features.filter((f) => ['metropolis', 'city', 'town', 'village'].includes(f.kind)).length;
   const sites = features.filter((f) => SITE_KINDS.includes(f.kind) && !f.id.startsWith('c:'));
   let best: { id: string; squares: number } | null = null;
-  for (let k = 0; k < sites.length; k++) {
+  // The same ruin release to release (seed 1's dungeon/dungeon 57x47, 4 levels; in v62 and v63
+  // alike): the biggest moves whenever sites are placed differently (v62's, `u:175:0`, is a small
+  // crypt in v63).
+  const pinned = sites.findIndex((f) => f.id === DUNGEON_RUIN);
+  if (pinned >= 0) {
+    const it = await view.gen.interior(`u:${towns + pinned}:0`);
+    if (it && ['dungeon', 'crypt', 'catacombs'].includes(it.function)) best = { id: `u:${towns + pinned}:0`, squares: it.nx * it.ny * it.levels.length };
+  }
+  // (Else, on other seeds or if it is gone, the biggest.)
+  if (!best) for (let k = 0; k < sites.length; k++) {
     if (sites[k].kind !== 'ruin') continue;
     const id = `u:${towns + k}:0`;
     const it = await view.gen.interior(id);
