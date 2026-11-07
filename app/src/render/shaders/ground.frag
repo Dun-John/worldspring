@@ -36,7 +36,7 @@ uniform float uPaved;
 const float N = 128.0;
 const vec3 INK = vec3(0.12, 0.10, 0.08);
 
-const vec3 SURF[22] = vec3[22](
+const vec3 SURF[21] = vec3[21](
     vec3(0.40, 0.54, 0.25), // grass
     vec3(0.31, 0.35, 0.19), // forest floor
     vec3(0.64, 0.60, 0.36), // dry grass
@@ -57,8 +57,7 @@ const vec3 SURF[22] = vec3[22](
     vec3(0.58, 0.50, 0.38), // under a building (roofs are drawn as vectors)
     vec3(0.66, 0.62, 0.36), // field
     vec3(0.62, 0.59, 0.53), // stairs (dressed stone)
-    vec3(0.76, 0.71, 0.60), // gravel (a park's paths)
-    vec3(0.43, 0.57, 0.27)  // v63 countryside: pasture
+    vec3(0.76, 0.71, 0.60)  // gravel (a park's paths)
 );
 
 // v63 countryside: the field square's furrows under the pixel (`town::fields::square_byte`: angle in
@@ -237,7 +236,7 @@ vec3 groundColor(int s, vec2 w) {
     float m = fbm3(w * 0.45);
     float fine = vnoise(w * 3.1);
     vec3 col = base * (0.82 + 0.3 * m) * (0.94 + 0.12 * fine);
-    if (s == 0 || s == 2 || s == 21) {
+    if (s == 0 || s == 2) {
         // Grass: tufts of lighter and darker blades.
         float blades = vnoise(w * 7.0 + vec2(0.0, w.x * 0.3));
         col = mix(col, col * vec3(1.15, 1.18, 1.05), smoothstep(0.65, 0.9, blades) * 0.6);
@@ -390,7 +389,7 @@ void main() {
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
                 int s = int(dataAt(sq + ivec2(dx, dy)).r + 0.5);
-                if ((s < 14 || s == 18 || s == 21) && natural == 9) natural = s;
+                if ((s < 14 || s == 18) && natural == 9) natural = s;
                 paved = paved || s == 14 || s == 19;
             }
         }
@@ -441,7 +440,7 @@ void main() {
     float fieldA = -1.0;
     int nat = 0;
     vec4 d = dataAt(sq);
-    if (!onRoad && uPaved > 0.5 && (int(d.g + 0.5) & 128) != 0 && gravel < 0.0 && (surf <= 9 || surf == 13 || surf == 14 || surf == 18 || surf == 21)) {
+    if (!onRoad && uPaved > 0.5 && (int(d.g + 0.5) & 128) != 0 && gravel < 0.0 && (surf <= 9 || surf == 13 || surf == 14 || surf == 18)) {
         vec2 g = q - 0.5 + warp * 0.3;
         ivec2 gi = ivec2(floor(g));
         vec2 fg = g - floor(g);
@@ -465,7 +464,7 @@ void main() {
                     best = wt;
                     fanHere = (int(dk.g + 0.5) & 64) != 0;
                 }
-            } else if (s <= 9 || s == 13 || s == 18 || s == 21) {
+            } else if (s <= 9 || s == 13 || s == 18) {
                 sn += wt;
                 if (nat < 0) nat = s;
                 if (s == 18) {

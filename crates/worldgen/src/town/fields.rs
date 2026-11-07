@@ -10,7 +10,6 @@
 
 use super::geom::*;
 use super::{Layout, Site};
-use crate::battlemap::Surface;
 use crate::core::noise::{gradient2, smoothstep};
 use crate::core::rng::{hash3, unit};
 use crate::t0::biome::Biome;
@@ -216,7 +215,7 @@ pub fn square_byte(i: &FieldInfo) -> u8 {
     a | mode << 6
 }
 
-/// The battlemap surface of a field's square by its byte (`square_byte`).
-pub fn surface(byte: u8) -> Surface {
-    if byte >> 6 == 3 { Surface::Pasture } else { Surface::Field }
+/// Whether a field's square (by its byte, `square_byte`) is crop ground (furrows) and not grazing.
+pub fn is_crop(byte: u8) -> bool {
+    byte >> 6 != 3
 }

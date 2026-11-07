@@ -86,9 +86,6 @@ pub enum Surface {
     Stairs,
     /// A park's gravel paths.
     Gravel,
-    // v63 countryside
-    /// Grazing (pasture, an orchard's grass): a field with no crop rows.
-    Pasture = 21,
 }
 
 impl Surface {
@@ -2574,26 +2571,33 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 u => u,
             };
             match mark {
-                // A castle's bailey: grass where anything grows (else the ground's own); a path up
+                // A castle's bailey: the biome's own grass (mud becomes grass); a path up
                 // a motte, gravel.
                 URBAN_PLAZA if motte_path[(k / SQ + 1) * HS + k % SQ + 1] => chunk.surface[k] = Surface::Gravel,
                 URBAN_PLAZA if bailey_h[(k / SQ + 1) * HS + k % SQ + 1] => {
-                    if matches!(chunk.surface[k], Surface::ForestFloor | Surface::Mud | Surface::Grass) {
+                    if chunk.surface[k] == Surface::Mud {
                         chunk.surface[k] = Surface::Grass;
                     }
                 }
-                // A village's green is mown grass where anything grows; a town's plaza is paved.
-                URBAN_PLAZA if village && matches!(chunk.surface[k], Surface::ForestFloor | Surface::Mud | Surface::DryGrass | Surface::Dirt) => chunk.surface[k] = Surface::Grass,
+                // A village's green keeps the biome's own grass (mud and dirt become grass); a town's plaza is paved.
+                URBAN_PLAZA if village && matches!(chunk.surface[k], Surface::Mud | Surface::Dirt) => chunk.surface[k] = Surface::Grass,
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
                 // (Not at the mouth of a way underground on the flight: it keeps the street.)
                 URBAN_STREET if chunk.urban[k] == URBAN_STREET && stair_h.as_ref().is_some_and(|s| s[(k / SQ + 1) * HS + k % SQ + 1]) => chunk.surface[k] = Surface::Stairs,
                 URBAN_STREET => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
-                URBAN_FIELD => chunk.surface[k] = crate::town::fields::surface(fld_h[(k / SQ + 1) * HS + k % SQ + 1]),
+                URBAN_FIELD => {
+                    // Crops get their own surface; pasture takes the biome's grass (mud and dirt become grass).
+                    if crate::town::fields::is_crop(fld_h[(k / SQ + 1) * HS + k % SQ + 1]) {
+                        chunk.surface[k] = Surface::Field;
+                    } else if !matches!(chunk.surface[k], Surface::Grass | Surface::DryGrass | Surface::ForestFloor) {
+                        chunk.surface[k] = Surface::Grass;
+                    }
+                }
                 URBAN_DECK => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_RUIN | URBAN_YARD => chunk.surface[k] = Surface::Dirt,
                 URBAN_WALL | URBAN_TOWER => chunk.surface[k] = Surface::Rock,
                 URBAN_PATH => chunk.surface[k] = Surface::Gravel,
-                URBAN_CROFT if matches!(chunk.surface[k], Surface::ForestFloor | Surface::Mud) => chunk.surface[k] = Surface::Grass,
+                URBAN_CROFT if chunk.surface[k] == Surface::Mud => chunk.surface[k] = Surface::Grass,
                 // (A formal garden's lawn is mown grass, whatever grows round the town; a common's is
                 // the ground of the land round its middle, whatever the shore beside it.)
                 // (A palace's court a mown lawn too.)
@@ -2618,8 +2622,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
     }
     // v63 countryside
-    if chunk.surface.contains(&Surface::Field) {
-        chunk.field = (0..n).map(|k| if chunk.surface[k] == Surface::Field { fld_h[(k / SQ + 1) * HS + k % SQ + 1] } else { 0 }).collect();
+    if chunk.urban.contains(&URBAN_FIELD) {
+        chunk.field = (0..n).map(|k| if chunk.urban[k] == URBAN_FIELD && (chunk.surface[k] == Surface::Field || (fld_h[(k / SQ + 1) * HS + k % SQ + 1] >> 6 == 3 && matches!(chunk.surface[k], Surface::Grass | Surface::DryGrass | Surface::ForestFloor))) { fld_h[(k / SQ + 1) * HS + k % SQ + 1] } else { 0 }).collect();
     }
 
     // Road squares (bridges and fords too) two squares round the chunk, and the chunk's
@@ -5719,7 +5723,7 @@ fn field_cover(c: &Chunk, k: usize, b: Biome, feature: bool, rng: &mut Pcg32) ->
     let (trees, shrubs, _, _) = greenery(b);
     let shrub = shrubs.first().copied().unwrap_or(Kind::Bush);
     let tree = trees.first().copied().unwrap_or(Kind::TreeDeciduous);
-    let opts: Vec<Kind> = match (c.surface[k] == Surface::Pasture, feature) {
+    let opts: Vec<Kind> = match (c.field.get(k).is_some_and(|&b| b >> 6 == 3), feature) {
         (true, false) => vec![shrub, shrub, shrub, tree, shrub, shrub, shrub, Kind::WaterTrough],
         (false, false) => vec![shrub, shrub, Kind::RockPile],
         (_, true) => vec![Kind::Flowers, Kind::TallGrass],

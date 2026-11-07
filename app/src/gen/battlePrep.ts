@@ -385,7 +385,7 @@ function pavingEdges(shown: Uint8Array): Uint8Array {
           if (s === 14 || s === 19) paved = true;
           else if (s <= 9 || s === 13 || s === 18) natural = true;
           if (s === 18) field = true;
-          else if (s <= 9 || s === 13 || s === 21) other = true;
+          else if (s <= 9 || s === 13) other = true;
         }
       }
       if ((paved && natural) || (field && other)) out[y * SQ + x] = 128;
