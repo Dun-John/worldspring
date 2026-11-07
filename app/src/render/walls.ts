@@ -1215,7 +1215,7 @@ export function drawRaisedDrawbridge(g: Graphics, s: Shape) {
   const [ux, uy] = [(bx - ax) / L, (by - ay) / L];
   const [vx, vy] = [-uy, ux];
   const half = s.size * 0.5 * 1.08;
-  const th = FT * 1.7;
+  const th = FT * 2.75;
   // `p` out from the gatehouse's outer arch (ft), `q` across it (-1 .. 1).
   const out = FT * GATE_DEPTH;
   const P = (p: number, q: number): [number, number] => [ax + ux * (out + p) + vx * half * q, ay + uy * (out + p) + vy * half * q];

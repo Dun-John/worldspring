@@ -161,6 +161,8 @@ export class PlayLayer {
   tableScale = 1;
   /** The scale the label styles were last set for. */
   private styledScale = 1;
+  /** The camera's turn the upright parts (pictures, glyphs, text) were last counter-turned for. */
+  private turnSet = 0;
   private readonly onResize = () => {
     this.tableScale = Math.max(1, Math.min(2.5, innerHeight / 720));
   };
@@ -223,6 +225,14 @@ export class PlayLayer {
     const settings = settingsOf(s, loc);
     const pxPerSq = 5 * cam.ppf;
     const scale = pxPerSq / TPX;
+    // The stage may be turned (a site with north up): the upright parts turn back, set only when it changes.
+    if (cam.turn !== this.turnSet) {
+      this.turnSet = cam.turn;
+      this.rulerText.rotation = -cam.turn;
+      for (const v of this.shapeViews.values()) v.label.rotation = -cam.turn;
+      for (const v of this.tokenViews.values()) this.uprightToken(v);
+      for (const pv of this.partyViews) this.uprightParty(pv);
+    }
     const at = (gx: number, gy: number) => {
       const [wx, wy] = place.toWorld(gx, gy);
       return cam.worldToScreen(wx, wy);
@@ -245,6 +255,7 @@ export class PlayLayer {
         const label = new Text({ text: shapeLabel(sh, s.grid), style: shapeStyle, anchor: 0.5, resolution: 2 });
         this.shapes.addChild(g);
         this.shapeLabels.addChild(label);
+        label.rotation = -this.turnSet;
         v = { g, label, shape: sh, grid: s.grid };
         this.shapeViews.set(sh.id, v);
       }
@@ -288,6 +299,7 @@ export class PlayLayer {
         this.tokens.addChild(c);
         this.tokenLabels.addChild(plate, label);
         v = { id: t.id, c, reach, pin, door, g, face, ring, ringKey: 0, label, plate, pw: 0, ph: 0, platedStyle: false, idHash: strHash(t.id), nameHash: 0, keyHash: 0, pg: 0, key: '', tok: null, sel: false, img: null, grid: null, want: false, pc: false, x: t.x, y: t.y, loc: t.loc, pinned: false, inside: false, ax: 0, ay: 0, tx: 0, ty: 0, fol: false };
+        this.uprightToken(v);
         this.tokenViews.set(t.id, v);
       }
       // Into or out of a building: no glide across grids.
@@ -588,7 +600,19 @@ export class PlayLayer {
     this.tokenLabels.addChild(plate, label);
     pv = { c, g, face, top, count, label, plate, pw: 0, ph: 0, key: 0, ids: [], inside: false, want: false, sel: false, pc: true };
     this.partyViews[k] = pv;
+    this.uprightParty(pv);
     return pv;
+  }
+
+  /** A token's picture, glyph and name turned back against the stage's turn (about its own middle). */
+  private uprightToken(v: TokenView) {
+    const a = -this.turnSet;
+    v.g.rotation = v.face.rotation = v.label.rotation = v.plate.rotation = a;
+  }
+
+  private uprightParty(pv: PartyView) {
+    const a = -this.turnSet;
+    pv.face.rotation = pv.count.rotation = pv.label.rotation = pv.plate.rotation = a;
   }
 
   /** A party pin: the first PC's look on a pin, how many in a badge, their names below. */
@@ -633,10 +657,14 @@ export class PlayLayer {
     const v = this.tokenViews.get(id);
     if (!v) return [cx, cy, cx, cy];
     const r = this.view.app.canvas.getBoundingClientRect();
-    const half = v.pinned ? (PIN * this.tableScale) / 2 : ((v.tok?.size ?? 1) * 5 * this.view.cam.ppf) / 2;
-    const x = r.left + v.c.x;
-    const y = r.top + v.c.y;
-    return [x - half, y - half, x + half, y + half];
+    const cam = this.view.cam;
+    const half = v.pinned ? (PIN * this.tableScale) / 2 : ((v.tok?.size ?? 1) * 5 * cam.ppf) / 2;
+    // (The stage may be turned: the box round the turned square.)
+    const [px, py] = cam.toPage(v.c.x, v.c.y);
+    const x = r.left + px;
+    const y = r.top + py;
+    const h = half * (Math.abs(Math.cos(cam.turn)) + Math.abs(Math.sin(cam.turn)));
+    return [x - h, y - h, x + h, y + h];
   }
 
   /** The label's cream plate behind a pin's name (redrawn only when its size changes). */
