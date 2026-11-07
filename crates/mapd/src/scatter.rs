@@ -4,7 +4,7 @@
 use base64::Engine;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use worldgen::battlemap::{CATALOG, KindInfo};
+use worldgen::battlemap::{self, KindInfo, catalog};
 use worldgen::world::{Clear, ObjKind, Placed, SpriteMeta};
 
 use crate::Shared;
@@ -59,10 +59,10 @@ fn rules(i: &KindInfo) -> Value {
 /// A built-in kind by id or name.
 fn builtin(v: &Value) -> Option<u16> {
     match v {
-        Value::Number(n) => n.as_u64().filter(|&k| k >= 1 && k as usize <= CATALOG.len()).map(|k| k as u16),
+        Value::Number(n) => n.as_u64().filter(|&k| k <= u16::MAX as u64 && battlemap::kind_of(k as u16).is_some()).map(|k| k as u16),
         Value::String(s) => {
             let s = s.trim().to_lowercase();
-            CATALOG.iter().find(|i| i.name == s || i.name.replace(' ', "_") == s).map(|i| i.id).or_else(|| s.parse().ok().filter(|&k: &u16| k >= 1 && k as usize <= CATALOG.len()))
+            catalog().find(|i| i.name == s || i.name.replace(' ', "_") == s).map(|i| i.id).or_else(|| s.parse().ok().filter(|&k: &u16| battlemap::kind_of(k).is_some()))
         }
         _ => None,
     }
@@ -130,7 +130,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 
 fn list_sprites(app: &Shared) -> Result<Value, String> {
     let e = app.with_edits(Clone::clone).unwrap_or_default();
-    let built: Vec<Value> = CATALOG.iter().map(|i| json!({ "kind": i.id, "name": i.name, "rules": rules(i) })).collect();
+    let built: Vec<Value> = catalog().map(|i| json!({ "kind": i.id, "name": i.name, "rules": rules(i) })).collect();
     let up: Vec<Value> = e
         .sprites
         .iter()

@@ -27,6 +27,9 @@ use crate::t0::roads::CrossingKind;
 /// A park laid out (`town::Park`): what a park's chunks and tiles draw.
 pub use crate::park::layout as park_layout;
 
+// v63 castles: a castle's kitchen garden and its smithy's anvil.
+mod kitchen;
+
 pub const SQ: usize = TILE_N / 2;
 /// Squares per edge including a one-square halo ring (for seamless rendering gradients).
 pub const HS: usize = SQ + 2;
@@ -195,6 +198,11 @@ pub enum Kind {
     Bandstand,
     GardenStatue,
     Footbridge,
+    // v63 castles: a castle's kitchen garden and smithy (`kitchen.rs`).
+    VegRow = 75,
+    WattleFence = 76,
+    Beehive = 77,
+    Anvil = 78,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -315,13 +323,32 @@ const KINDS: [Kind; 61] = [
     Kind::Bench, Kind::Flowerbed, Kind::Hedge, Kind::Topiary, Kind::Gazebo, Kind::Bandstand, Kind::GardenStatue, Kind::Footbridge,
 ];
 
+/// Kinds past `CATALOG`, with explicit ids (each lane's range, `docs/lane-common.md`).
+static MORE: [&[(Kind, KindInfo)]; 1] = [
+    // v63 castles
+    &kitchen::KINDS,
+];
+
+fn more() -> impl Iterator<Item = &'static (Kind, KindInfo)> {
+    MORE.iter().flat_map(|t| t.iter())
+}
+
+/// Every kind's rules (`CATALOG`, then the kinds past it).
+pub fn catalog() -> impl Iterator<Item = &'static KindInfo> {
+    CATALOG.iter().chain(more().map(|m| &m.1))
+}
+
 /// The kind with a catalog id.
 pub fn kind_of(id: u16) -> Option<Kind> {
-    KINDS.get((id as usize).checked_sub(1)?).copied()
+    KINDS.get((id as usize).checked_sub(1)?).copied().or_else(|| more().find(|m| m.1.id == id).map(|m| m.0))
 }
 
 pub fn info(kind: u16) -> &'static KindInfo {
-    &CATALOG[(kind as usize).saturating_sub(1).min(CATALOG.len() - 1)]
+    let i = (kind as usize).saturating_sub(1);
+    if i < CATALOG.len() {
+        return &CATALOG[i];
+    }
+    more().find(|m| m.1.id == kind).map_or(&CATALOG[CATALOG.len() - 1], |m| &m.1)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4494,12 +4521,11 @@ fn bailey_well(
 /// - inside each gate, to one side of the way, a cart, a trough or barrels;
 /// (The ways from gate to gate and to the keep go in `ways`: the guarantee keeps off them too.)
 /// - a well in the keep's court;
-/// - in a garden yard, a plot by the keep (flowerbeds square to it, topiary at its corners, a
-///   bench on each long side facing in, now and then a fountain at its middle, a short hedge
-///   behind it, each piece wholly inside one chunk) and a few of the biome's trees planted in the
-///   yard, spaced out.
+/// - an anvil and its quench tub before each smithy (`kitchen::anvils`);
+/// - in a garden yard, a kitchen garden by the kitchen range or the keep (`kitchen::garden`: rows
+///   in a wattle fence, skeps) and a few of the biome's trees planted in the yard, spaced out.
 fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed: u64, out: &mut Vec<([f64; 2], f32, Kind, u8, f32)>, ways: &mut Vec<([f64; 2], [f64; 2])>) -> bool {
-    use crate::town::geom::{add, centroid, contains, cross, dist, dot, len, lerp, mul, seg_dist, sub};
+    use crate::town::geom::{add, centroid, contains, cross, dist, dot, lerp, mul, seg_dist, sub};
     let ring = &pl.pts;
     let rn = ring.len();
     if rn < 3 {
@@ -4508,9 +4534,8 @@ fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed:
     let c0 = centroid(ring);
     let key = hash3(seed ^ 0xba11, crate::core::round(c0[0]) as i64, crate::core::round(c0[1]) as i64, 7);
     let roll = |k: i64| unit(hash2(key, k, 0x5d));
-    // (v63 K1b hook: this topiary garden yard gives way to a kitchen garden by the kitchen range;
-    // topiary stays a palace's, `palace::gardens`.)
-    let garden = roll(0) < 0.45;
+    // (Topiary is a palace's, `palace::gardens`: a castle's garden yard is a kitchen garden.)
+    let garden = roll(0) < 0.8;
     let depth = |p: [f64; 2]| {
         let d = (0..rn).map(|k| seg_dist(p, ring[k], ring[(k + 1) % rn])).fold(f64::MAX, f64::min);
         if contains(ring, p) { d } else { -d }
@@ -4589,6 +4614,8 @@ fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed:
     };
     let along = |d: [f64; 2]| libm::atan2(d[1], d[0]) as f32;
     let look = |a: i64, b: i64| (hash2(key, a, b) >> 20) as u8 & 7;
+    // v63 castles: an anvil before each smithy.
+    kitchen::anvils(key, &ranges, &blds, &depth, &free, &mut placed, out);
     // By the ranges, a store's group against the yard side.
     for (ri, b) in ranges.iter().enumerate() {
         if roll(10 + ri as i64) >= 0.7 || b.poly.len() != 4 {
@@ -4672,61 +4699,8 @@ fn dress_bailey(pl: &crate::town::Plaza, l: &crate::town::Layout, t0: &T0, seed:
     if !garden {
         return false;
     }
-    // The garden plot by the keep, square to the nearest stretch of curtain.
-    let (pw, pd) = (35.0 + 15.0 * roll(200), 25.0 + 10.0 * roll(201));
-    let plot = spots
-        .iter()
-        .copied()
-        .filter_map(|c| {
-            let k = (0..rn).min_by(|&x, &y| seg_dist(c, ring[x], ring[(x + 1) % rn]).total_cmp(&seg_dist(c, ring[y], ring[(y + 1) % rn])).then(x.cmp(&y)))?;
-            let e = sub(ring[(k + 1) % rn], ring[k]);
-            let u = mul(e, 1.0 / len(e).max(1e-9));
-            let v = [-u[1], u[0]];
-            let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(a, b)| add(c, add(mul(u, a * 0.5 * pw), mul(v, b * 0.5 * pd))));
-            let ok = in_court(c)
-                && free(&placed, c, 0.5 * pd + 4.0, None)
-                && (0..4).all(|k| (0..=4).all(|j| free(&placed, lerp(corners[k], corners[(k + 1) % 4], j as f64 / 4.0), 12.0, None)));
-            ok.then_some((c, u, v))
-        })
-        .min_by(|a, b| to_keep(a.0).total_cmp(&to_keep(b.0)).then(a.0[1].total_cmp(&b.0[1])).then(a.0[0].total_cmp(&b.0[0])));
-    if let Some((c, u, v)) = plot {
-        let rot = along(u);
-        // Flowerbeds in a grid, its middle left for a fountain now and then.
-        let fountain = roll(210) < 0.35 && pw >= 40.0;
-        let cols = if pw >= 45.0 { 3 } else { 2 };
-        for i in 0..cols {
-            for j in 0..2 {
-                if fountain && cols == 3 && i == 1 {
-                    continue;
-                }
-                let (s, t) = ((i as f64 + 0.5) / cols as f64 - 0.5, (j as f64 + 0.5) / 2.0 - 0.5);
-                let p = add(c, add(mul(u, s * (pw - 10.0)), mul(v, t * (pd - 10.0))));
-                out.push((p, rot, Kind::Flowerbed, look(220 + i as i64, j as i64), 1.0));
-            }
-        }
-        if fountain {
-            out.push((c, rot, Kind::Fountain, (key >> 28) as u8 & 7, 1.0));
-        }
-        // Topiary at its corners; a bench on each long side facing in.
-        for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-            let p = add(c, add(mul(u, a * (0.5 * pw - 2.5)), mul(v, b * (0.5 * pd - 2.5))));
-            out.push((p, 0.0, Kind::Topiary, (key >> 32) as u8 & 7, 1.0));
-        }
-        for b in [-1.0, 1.0] {
-            out.push((add(c, mul(v, b * (0.5 * pd + 3.0))), crate::park::facing(mul(v, -b)), Kind::Bench, (key >> 36) as u8 & 7, 1.0));
-        }
-        // A short hedge behind it, open at both ends, each piece wholly inside one chunk.
-        let side = if roll(230) < 0.5 { 1.0 } else { -1.0 };
-        let pieces = crate::core::floor((pw - 5.0) / 5.0) as i64;
-        for k in 0..pieces {
-            let p = add(c, add(mul(u, (k as f64 + 0.5) * 5.0 - 0.5 * pieces as f64 * 5.0), mul(v, side * (0.5 * pd + 9.0))));
-            let pr = (p, rot, Kind::Hedge, (key >> 40) as u8 & 3, 1.0);
-            if crate::park::seam_inside(&pr) && free(&placed, p, 3.0, None) {
-                out.push(pr);
-            }
-        }
-        placed.push((c, 0.5 * pw.max(pd) + 14.0));
-    }
+    // v63 castles: the kitchen garden.
+    kitchen::garden(key, &ranges, &blds, to, ring, &spots, &to_keep, &depth, &free, &mut placed, out);
     // A few planted trees, spaced out over the yard (the biome's own).
     let tree = greenery(land_biome(t0, c0)).0.first().copied().unwrap_or(Kind::TreeDeciduous);
     let want = 3 + (roll(300) * 4.0) as usize;
@@ -5725,5 +5699,5 @@ pub fn pack(world: &World, c: &Chunk) -> Vec<u8> {
 
 /// Object catalog (tactical data) as JSON for the renderer and agents.
 pub fn catalog_json() -> String {
-    serde_json::to_string(&CATALOG.to_vec()).expect("serializable")
+    serde_json::to_string(&catalog().collect::<Vec<_>>()).expect("serializable")
 }

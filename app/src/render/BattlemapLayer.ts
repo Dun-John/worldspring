@@ -17,7 +17,7 @@ import {
   UniformGroup,
   type Renderer,
 } from 'pixi.js';
-import { fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
+import { builtinKind, fromHalf, HS, kindRules, prepareChunk, ROOF_INK, SPRITE_KIND, SQ, toHalf, type ChunkSprite, type PreparedChunk, type Roof, type Shape } from '../gen/battlePrep';
 import type { KindInfo } from '../gen/client';
 import type { Geom, Placed, Rect, SpriteMeta, WantTile } from '../gen/protocol';
 import { dmOnlyHazard, UNKNOWN, type TacticalGrid } from '../play/vision';
@@ -271,7 +271,7 @@ export class BattlemapLayer {
     }
     const texture = atlas.frames[o.kind]?.[o.variant % looks(o.kind)];
     if (!texture) return null;
-    return { texture, rotation: drawnRotation(this.catalog[o.kind - 1], !!o.turned, o.rot), scale: o.scale };
+    return { texture, rotation: drawnRotation(builtinKind(this.catalog, o.kind), !!o.turned, o.rot), scale: o.scale };
   }
 
   /** What is in the hand, drawn where it would land (world ft): one sprite over the objects,
@@ -484,7 +484,7 @@ export class BattlemapLayer {
     let best = Infinity;
     for (const o of c.objs) {
       const custom = o.kind >= SPRITE_KIND ? c.sprites[o.kind - SPRITE_KIND] : null;
-      const inf = custom ? { ...custom, name: this.sprites[custom.asset]?.name || 'custom object', hazard: null } : this.catalog[o.kind - 1];
+      const inf = custom ? { ...custom, name: this.sprites[custom.asset]?.name || 'custom object', hazard: null } : builtinKind(this.catalog, o.kind);
       if (!inf) continue;
       const d = Math.hypot(o.x - sx, o.y - sy);
       if (d <= Math.max(0.5, inf.radius * o.scale) && d < best) {
@@ -1005,7 +1005,7 @@ function parkEdge(raised: Uint8Array | null): boolean {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge']);
+const TURNED = new Set(['market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil']);
 /** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
  * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
  * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
@@ -1014,6 +1014,8 @@ const HALF_TURN = new Map([
   ['hedge', -135],
   ['flowerbed', -90],
   ['footbridge', -45],
+  ['vegetable row', -135],
+  ['wattle fence', -135],
 ]);
 /** Props drawn at their `rot` only when turned by hand (`Placed.turned`), by catalog name: those whose
  * NW-lit look still reads turned (approved in the gallery, `?gallery=1&turn=1`). Trees, plants,
@@ -1055,6 +1057,8 @@ export const SPARSE = new Map([
 export const LONG_SHADOW = new Map([
   ['hedge', [1.35, 0.72, 1]],
   ['footbridge', [3.1, 0.85, 1.6]],
+  ['wattle fence', [1.0, 0.3, 0.6]],
+  ['vegetable row', [1.9, 0.5, 0.5]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
 export const OWN_SHADOW = new Set(['market cross']);

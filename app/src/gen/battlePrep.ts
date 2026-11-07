@@ -60,7 +60,8 @@ export interface ColorMesh {
 
 /** What play mode needs to know of an object kind (`battlemap::KindInfo`). */
 export interface KindTactics {
-  /** Built-in kinds' catalog name. */
+  /** Built-in kinds' catalog id and name. */
+  id?: number;
   name?: string;
   height_ft: number;
   radius: number;
@@ -78,9 +79,16 @@ export interface ChunkSprite extends KindTactics {
   cover: number;
 }
 
-/** The rules of an object kind: built-in (`kinds[kind - 1]`) or one of the chunk's sprites. */
+/** A built-in kind's entry in the object catalog by id: `kinds[id - 1]` for the first ones, else
+ * looked up (later kinds take ids from ranges with gaps between them, `battlemap::MORE`). */
+export function builtinKind<T extends { id?: number }>(kinds: T[], id: number): T | undefined {
+  const k = kinds[id - 1];
+  return k?.id === id ? k : kinds.find((i) => i.id === id);
+}
+
+/** The rules of an object kind: built-in (`builtinKind`) or one of the chunk's sprites. */
 export function kindRules<T extends KindTactics>(kind: number, kinds: T[], sprites: ChunkSprite[]): T | ChunkSprite | undefined {
-  return kind >= SPRITE_KIND ? sprites[kind - SPRITE_KIND] : kinds[kind - 1];
+  return kind >= SPRITE_KIND ? sprites[kind - SPRITE_KIND] : builtinKind(kinds, kind);
 }
 
 export interface PreparedChunk {
@@ -383,7 +391,12 @@ function groundUnder(surface: Uint8Array, raised: Uint8Array | null): Uint8Array
 
 /** Long things laid along their turn (by catalog name): the rectangle that blocks, [half length, half
  * width] in squares at scale 1 (a hedge a section a square long, as runs are set five feet apart). */
-const LONG_FOOTPRINT = new Map([['hedge', [0.49, 0.29]]]);
+const LONG_FOOTPRINT = new Map([
+  ['hedge', [0.49, 0.29]],
+  // v63 castles: a kitchen garden's rows and wattle fence.
+  ['vegetable row', [0.98, 0.3]],
+  ['wattle fence', [0.49, 0.12]],
+]);
 
 /**
  * Per square: what blocks sight and movement and what is difficult ground (`play/vision`
