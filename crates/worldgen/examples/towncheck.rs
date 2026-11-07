@@ -3538,6 +3538,129 @@ fn belfry_rules(it: &worldgen::interior::Interior, floors: i8) -> Vec<String> {
     bad
 }
 
+/// `villages`: v63 village layouts (not part of `all`). Per village: its cottages, how many stand
+/// along each 100 ft of lane, those not square to the lane they front (> 8°), crofts overlapping
+/// another or a building they do not hold or a lane; the battlemap's bounds (hedges, fences, walls:
+/// `rural::battle`) within 2 ft of a roof or across a lane; hard kinks (> 50°) in the lanes; the green's
+/// props. Places are offsets from the village's middle (ft).
+fn villages(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["villages", "cottages", "cottages not square to their lane", "croft overlaps", "crofts over a building", "crofts over a lane", "bounds by a roof", "bounds across a lane", "lane kinks", "lanes ending at nothing inside the village", "greens with props", "greens without their well (of the first 24)"]);
+    let mut greens: Vec<(P, String)> = Vec::new();
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.tier != worldgen::t0::settle::Tier::Village || l.site {
+            continue;
+        }
+        let tag = format!("L{li}");
+        let off = |p: P| format!("({:.0}, {:.0})", p[0] - l.center[0], p[1] - l.center[1]);
+        r.tally("villages", 1);
+        // (Lanes: the village's own and its roads, as segments with their half widths.)
+        let mut ways: Vec<(P, P, f64)> = l.streets.iter().flat_map(|s| s.windows(2).map(|w| (w[0], w[1], 0.5 * town::village::LANE_W))).collect();
+        ways.extend(l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w))));
+        let reach = 1.3 * l.radius;
+        let c = l.center;
+        for (ri, k) in t0.roads.segments_near([c[0] - reach, c[1] - reach, c[0] + reach, c[1] + reach], 0.0) {
+            let rc = &t0.roads.roads[ri as usize];
+            let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 40.0).ceil().clamp(1.0, 400.0) as usize;
+            let pts: Vec<P> = (0..=n).map(|j| rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft).p).collect();
+            ways.extend(pts.windows(2).map(|q| (q[0], q[1], 0.5 * rc.class.width_ft())));
+        }
+        let lane_ft: f64 = ways.iter().filter(|&&(a, b, _)| dist(lerp(a, b, 0.5), l.center) < l.radius).map(|&(a, b, _)| dist(a, b)).sum();
+        let roofed: Vec<&town::Building> = l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed).collect();
+        let cottages: Vec<&&town::Building> = roofed.iter().filter(|b| b.func.is_none() && b.ward == Ward::Rural).collect();
+        r.tally("cottages", cottages.len());
+        let fronting = roofed.iter().filter(|b| ways.iter().any(|&(a, e, h)| seg_poly(a, e, &b.poly) < h + 14.0)).count();
+        if lane_ft > 150.0 {
+            r.measure("houses fronting a lane per 100 ft of lane (fewest)", true, 100.0 * fronting as f64 / lane_ft.max(1.0), format!("{tag} {} houses, {lane_ft:.0} ft", roofed.len()));
+            r.value("houses fronting a lane per 100 ft of lane", 100.0 * fronting as f64 / lane_ft, tag.clone());
+        }
+        r.measure("cottages (fewest)", true, cottages.len() as f64, tag.clone());
+        let mill = town::catalog::index_of("mill").map(|f| f as u16);
+        for b in &roofed {
+            if b.poly.len() != 4 || (b.func.is_some() && b.func == mill) {
+                continue;
+            }
+            let Some(&(a, e, h)) = ways.iter().filter(|&&(a, e, h)| seg_poly(a, e, &b.poly) < h + 10.0).min_by(|x, y| seg_poly(x.0, x.1, &b.poly).total_cmp(&seg_poly(y.0, y.1, &b.poly))) else { continue };
+            let u = sub(e, a);
+            let s0 = sub(b.poly[1], b.poly[0]);
+            let c = (dot(u, s0) / (len(u) * len(s0)).max(1e-9)).abs();
+            // (Either side square to it: the angle off the nearer axis.)
+            let deg = libm::acos(c.min(1.0)).to_degrees();
+            let deg = deg.min(90.0 - deg);
+            if deg > 8.0 {
+                let held = l.crofts.iter().any(|p| contains(&p.pts, centroid(&b.poly)));
+                r.add("cottages not square to their lane", deg, format!("{tag} {} {deg:.0}° func {:?} croft {held} gap {:.1}", off(centroid(&b.poly)), b.func.map(|f| town::catalog::CATALOG[f as usize].key), seg_poly(a, e, &b.poly) - h));
+            }
+        }
+        for (i, p) in l.crofts.iter().enumerate() {
+            let core = shrink(&p.pts, 1.0);
+            for q in l.crofts.iter().skip(i + 1) {
+                if poly_overlap(&core, &shrink(&q.pts, 1.0)) {
+                    r.add("croft overlaps", 1.0, format!("{tag} {:?} {:?} {}", p.kind, q.kind, off(centroid(&p.pts))));
+                }
+            }
+            for b in &l.buildings {
+                if !b.poly.iter().all(|c| contains(&p.pts, *c) || edge_dist(&p.pts, *c) < 0.6) && poly_overlap(&core, &b.poly) {
+                    r.add("crofts over a building", 1.0, format!("{tag} {:?} {} func {:?} {:?} {:.0} sq ft", p.kind, off(centroid(&b.poly)), b.func.map(|f| town::catalog::CATALOG[f as usize].key), b.structure, area(&b.poly).abs()));
+                }
+            }
+            if let Some(&(a, e, _)) = ways.iter().find(|&&(a, e, h)| seg_poly(a, e, &core) < h - 0.5 || contains(&core, a)) {
+                r.add("crofts over a lane", 1.0, format!("{tag} {:?} {}", p.kind, off(lerp(a, e, 0.5))));
+            }
+        }
+        let mut bt = worldgen::town::rural::Battle::default();
+        let bb = l.crofts.iter().flat_map(|p| p.pts.iter()).fold([l.center[0] - 10.0, l.center[1] - 10.0, l.center[0] + 10.0, l.center[1] + 10.0], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        worldgen::town::rural::battle(&l, t0, [bb[0] - 20.0, bb[1] - 20.0, bb[2] + 20.0, bb[3] + 20.0], &|_| false, &mut bt);
+        for &(a, e, _) in &bt.runs {
+            let pts: Vec<P> = samples(&[a, e], 1.0).into_iter().map(|s| s.0).collect();
+            if let Some(p) = pts.iter().find(|p| roofed.iter().any(|b| contains(&b.poly, **p) || edge_dist(&b.poly, **p) < 2.0)) {
+                r.add("bounds by a roof", 1.0, format!("{tag} {}", off(*p)));
+            }
+            if let Some(p) = pts.iter().find(|p| ways.iter().any(|&(s, t, h)| seg_dist(**p, s, t) < h)) {
+                r.add("bounds across a lane", 1.0, format!("{tag} {}", off(*p)));
+            }
+        }
+        for (si, s) in l.streets.iter().enumerate() {
+            let e = s[s.len() - 1];
+            let met = l.streets.iter().enumerate().any(|(j, q)| j != si && q.windows(2).any(|w| seg_dist(e, w[0], w[1]) < 15.0)) || ways.iter().skip(l.streets.iter().map(|q| q.len() - 1).sum()).any(|&(a, b, h)| seg_dist(e, a, b) < h + 15.0);
+            let on_green = l.plazas.iter().any(|g| g.kind == PlazaKind::Green && dist(e, centroid(&g.pts)) < dist(centroid(&g.pts), g.pts[0]) + 10.0);
+            if !met && !on_green && dist(e, l.center) < 0.9 * l.radius && !l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) < 20.0) && !l.crofts.iter().any(|p| edge_dist(&p.pts, e) < 12.0) {
+                r.add("lanes ending at nothing inside the village", 1.0, format!("{tag} {}", off(e)));
+            }
+            for w in s.windows(3) {
+                let (u, v) = (sub(w[1], w[0]), sub(w[2], w[1]));
+                if len(u) < 2.0 || len(v) < 2.0 {
+                    continue;
+                }
+                let deg = libm::acos((dot(u, v) / (len(u) * len(v))).clamp(-1.0, 1.0)).to_degrees();
+                if deg > 50.0 {
+                    r.add("lane kinks", deg, format!("{tag} {} {deg:.0}° legs {:.0} {:.0}", off(w[1]), len(u), len(v)));
+                }
+            }
+        }
+        if let Some(g) = l.plazas.iter().find(|p| p.kind == PlazaKind::Green) {
+            let (c, rad) = (centroid(&g.pts), dist(centroid(&g.pts), g.pts[0]));
+            if l.props.iter().any(|p| dist(p.at, c) < rad) {
+                r.tally("greens with props", 1);
+            }
+            if greens.len() < 24 {
+                greens.push((c, tag.clone()));
+            }
+        }
+    }
+    // (The first two dozen greens' wells on the battlemap.)
+    let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
+    for (c, tag) in greens {
+        let (kx, ky) = ((c[0] / size).floor() as u32, (c[1] / size).floor() as u32);
+        let ch = ctx.chunk(kx, ky);
+        let (ox, oy) = (kx as f64 * size, ky as f64 * size);
+        if !ch.objects.iter().any(|o| o.kind == Kind::Well && dist([ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT], c) < 6.0) {
+            r.add("greens without their well (of the first 24)", 1.0, tag);
+        }
+    }
+}
+
 /// `piers`: dock piers (not part of `all`). Per town with piers: how many, how many are shorter than
 /// the 105 ft a sea pier gets (cut back on a river), and the narrowest open channel between piers that
 /// face each other across the water (outline to outline); pairs closer than 40 ft, piers overlapping
@@ -4216,7 +4339,7 @@ fn under_terrain(mut it: interior::Interior, id: &str, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 14] = ["castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "all"];
+    const MODES: [&str; 15] = ["villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -4255,6 +4378,7 @@ fn main() {
                 "civic" => civic(&mut ctx, &mut r),
                 "inns" => inns(&mut ctx, &mut r),
                 "piers" => piers(&mut ctx, &mut r),
+                "villages" => villages(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),

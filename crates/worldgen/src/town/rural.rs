@@ -59,6 +59,10 @@ const COPSE_FT: f64 = 9.0;
 const GATE_FT: f64 = 10.0;
 /// How far a gate's gap keeps off its side's corners (ft).
 const GATE_CORNER_FT: f64 = 8.0;
+/// How far a run stops short of a roof (ft), and the gap it leaves where it meets a lane or a road
+/// (ft off its edge).
+const ROOF_FT: f64 = 3.0;
+const WAY_GAP_FT: f64 = 5.0;
 /// A windmill's sails' reach from the hub (ft).
 pub const SAIL_FT: f64 = 27.0;
 
@@ -248,6 +252,12 @@ fn windmills(site: &Site, s: &Settlement, l: &mut Layout) {
 }
 
 /// The part of the segment a-b inside `r` (Liang-Barsky).
+fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
+    let (o1, o2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
+    let (o3, o4) = (cross(sub(d, c), sub(a, c)), cross(sub(d, c), sub(b, c)));
+    o1 * o2 < 0.0 && o3 * o4 < 0.0
+}
+
 fn clip_seg(a: P, b: P, r: [f64; 4]) -> Option<(P, P)> {
     let d = sub(b, a);
     let (mut t0, mut t1) = (0.0f64, 1.0f64);
@@ -328,16 +338,39 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         .collect();
     let wide = bounded.iter().fold(grow(rect, 30.0), |a, &(_, b)| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
     let wide = grow(wide, 80.0);
-    let ways: Vec<(P, P, f64)> = l
+    let mut ways: Vec<(P, P, f64)> = l
         .roads
         .iter()
         .flat_map(|(pts, _, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w)))
         .chain(l.streets.iter().flat_map(|st| st.windows(2).map(|q| (q[0], q[1], 0.5 * super::village::LANE_W))))
         .filter(|&(a, b, _)| hits(bbox(&[a, b]), wide))
         .collect();
-    let blds: Vec<&Vec<P>> = l.buildings.iter().map(|b| &b.poly).filter(|p| hits(bbox(p), near)).collect();
-    let in_building = |p: P| blds.iter().any(|b| contains(b, p));
-    let on_way = |p: P| ways.iter().any(|&(a, b, half)| seg_dist(p, a, b) < half + 2.5);
+    // (And the world's roads by it, as the village took them: `village`.)
+    for (ri, k) in t0.roads.segments_near(wide, 0.0) {
+        let rc = &t0.roads.roads[ri as usize];
+        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 40.0).ceil().clamp(1.0, 400.0) as usize;
+        let pts: Vec<P> = (0..=n).map(|j| rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft).p).collect();
+        ways.extend(pts.windows(2).map(|q| (q[0], q[1], 0.5 * rc.class.width_ft())).filter(|&(a, b, _)| hits(bbox(&[a, b]), wide)));
+    }
+    // (Its roofs: a run stops `ROOF_FT` short of one.)
+    let blds: Vec<&Vec<P>> = l.buildings.iter().filter(|b| b.structure == Structure::Roofed).map(|b| &b.poly).filter(|p| hits(grow(bbox(p), ROOF_FT + 4.0), near)).collect();
+    let by_roof = |a: P, b: P| {
+        let piece = [a, b];
+        blds.iter().any(|q| contains(q, a) || contains(q, b) || poly_gap(q, &piece) < ROOF_FT)
+    };
+    // (Off a way by 2.5 ft along it, and a gate's gap where it meets one: `WAY_GAP_FT` off its edge
+    // where it runs at it.)
+    let on_way = |a: P, b: P| {
+        let (u, ul) = (sub(b, a), dist(a, b).max(1e-9));
+        ways.iter().any(|&(s, e, half)| {
+            let d = [seg_dist(a, s, e), seg_dist(b, s, e), seg_dist(s, a, b), seg_dist(e, a, b)].into_iter().fold(f64::MAX, f64::min);
+            if d < half + 2.5 || segs_cross(a, b, s, e) {
+                return true;
+            }
+            let (v, vl) = (sub(e, s), dist(s, e).max(1e-9));
+            d < half + WAY_GAP_FT && (dot(u, v) / (ul * vl)).abs() < 0.7
+        })
+    };
     let piece_runs = |a: P, b: P, kind: RunKind, keep: &dyn Fn(P) -> bool, out: &mut Battle| {
         if !hits(bbox(&[a, b]), near) {
             return;
@@ -346,7 +379,10 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         let mut from: Option<usize> = None;
         for j in 0..=m {
             let mid = lerp(a, b, (j as f64 + 0.5) / m as f64);
-            let ok = j < m && hits([mid[0], mid[1], mid[0], mid[1]], mids) && keep(mid) && !blocked(mid) && !in_building(mid);
+            let ok = j < m && hits([mid[0], mid[1], mid[0], mid[1]], mids) && keep(mid) && !blocked(mid) && {
+                let (p, q) = (lerp(a, b, j as f64 / m as f64), lerp(a, b, (j + 1) as f64 / m as f64));
+                !on_way(p, q) && !by_roof(p, q)
+            };
             match (ok, from) {
                 (true, None) => from = Some(j),
                 (false, Some(f)) => {
@@ -368,7 +404,6 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
         let g = gate(f, &ways);
         let keep = |p: P| {
             dist(p, g) > 0.5 * GATE_FT
-                && !on_way(p)
                 && !bounded[..bi].iter().any(|&(j, b)| {
                     p[0] > b[0] - 3.0 && p[0] < b[2] + 3.0 && p[1] > b[1] - 3.0 && p[1] < b[3] + 3.0 && {
                         let o = &l.fields[j];

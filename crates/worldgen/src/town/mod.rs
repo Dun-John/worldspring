@@ -5010,7 +5010,8 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
         let a = rng.range(0.0, std::f64::consts::TAU);
         let rad = rng.range(30.0, l.radius.max(80.0));
         let c = [rad * libm::cos(a), rad * libm::sin(a)];
-        let house = rect(c, [-libm::sin(a), libm::cos(a)], 30.0, 20.0);
+        // (In a village, its long side along the nearest lane.)
+        let house = rect(c, village::spare_dir(l, c).unwrap_or([-libm::sin(a), libm::cos(a)]), 30.0, 20.0);
         let clear = l.buildings.iter().all(|b| dist(centroid(&b.poly), c) > 28.0) && village::spare_ok(site, l, &house);
         if clear && (site.buildable(&house) || (k > 300 && !site.wet(c) && site.dry_outline(&house, 10.0))) {
             let pad = site.pad(&house);
@@ -5059,7 +5060,7 @@ fn assign_functions(site: &Site, s: &Settlement, on_water: bool, rng: &mut Pcg32
             // A business needs room for its fittings (a bar and tables, a counter): a shed-sized
             // lot only when nothing else is left.
             let cramped = if areas[bi] < 500.0 { 100.0 } else { 0.0 };
-            let score = ward_score + size_score - cramped + rng.next_f64() * 1.5;
+            let score = ward_score + size_score - cramped + village::green_bonus(l, &b.poly, f.key) + rng.next_f64() * 1.5;
             if best.is_none_or(|(s, _)| score > s) {
                 best = Some((score, bi));
             }

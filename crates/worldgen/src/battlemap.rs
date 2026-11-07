@@ -2568,8 +2568,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                         chunk.surface[k] = Surface::Grass;
                     }
                 }
-                // A village green and a graveyard keep the ground round them (no odd patch
-                // in a forest); a town's plaza is paved.
+                // A village's green is mown grass where anything grows; a town's plaza is paved.
+                URBAN_PLAZA if village && matches!(chunk.surface[k], Surface::ForestFloor | Surface::Mud | Surface::DryGrass | Surface::Dirt) => chunk.surface[k] = Surface::Grass,
                 URBAN_PLAZA if !village => chunk.surface[k] = Surface::Cobble,
                 // (Not at the mouth of a way underground on the flight: it keeps the street.)
                 URBAN_STREET if chunk.urban[k] == URBAN_STREET && stair_h.as_ref().is_some_and(|s| s[(k / SQ + 1) * HS + k % SQ + 1]) => chunk.surface[k] = Surface::Stairs,
