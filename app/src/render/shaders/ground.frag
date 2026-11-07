@@ -283,8 +283,9 @@ vec3 groundColor(int s, vec2 w) {
         int mode = fb >> 6;
         float ang = float(fb & 63) * (3.14159265 / 64.0);
         float across = dot(w, vec2(-sin(ang), cos(ang)));
+        // (Two flat tones, ridge and furrow, a narrow soft step between: painted, not noise.)
         float row = abs(fract(across * 0.9 + 0.2 * vnoise(w * 0.3)) - 0.5);
-        col = mix(col * (mode == 2 ? 0.93 : 0.86), col * 1.08, smoothstep(0.06, 0.34, row));
+        col = mix(col * (mode == 2 ? 0.9 : 0.8), col * 1.1, smoothstep(0.17, 0.27, row));
         if (mode == 1) {
             float st = across / 7.6;
             col *= 0.93 + 0.14 * hash21(vec2(floor(st), 5.1));
@@ -431,8 +432,13 @@ void main() {
     // Paving's edges with the ground: soft and hand-wobbled from the 2 x 2 squares' bilinear
     // paving (as a gravel path's), not the warped lookup's square steps; between the paving and
     // a natural ground only, every other boundary as it was.
-    // (Only on squares by the paving's edge, bit 128: everywhere else this changes nothing.)
+    // A field's edge with the ground round it (v63 countryside) the same way: crisp, a slight wobble
+    // (the warp's), a rim of plain darker earth inside it (`frim`) for a headland.
+    // (Only on squares by the paving's or a field's edge, bit 128: everywhere else this changes
+    // nothing.)
     float pave = -1.0;
+    float frim = 0.0;
+    float fieldA = -1.0;
     int nat = 0;
     vec4 d = dataAt(sq);
     if (!onRoad && uPaved > 0.5 && (int(d.g + 0.5) & 128) != 0 && gravel < 0.0 && (surf <= 9 || surf == 13 || surf == 14 || surf == 18 || surf == 21)) {
@@ -442,6 +448,11 @@ void main() {
         float sp = 0.0;
         float sn = 0.0;
         float best = 0.0;
+        float sf = 0.0;
+        float so = 0.0;
+        float fbest = 0.0;
+        float fa = 0.0;
+        int oth = -1;
         nat = -1;
         bool fanHere = plaza;
         for (int k = 0; k < 4; k++) {
@@ -457,6 +468,16 @@ void main() {
             } else if (s <= 9 || s == 13 || s == 18 || s == 21) {
                 sn += wt;
                 if (nat < 0) nat = s;
+                if (s == 18) {
+                    sf += wt;
+                    if (wt > fbest) {
+                        fbest = wt;
+                        fa = dk.a;
+                    }
+                } else {
+                    so += wt;
+                    if (oth < 0) oth = s;
+                }
             }
         }
         if (sp > 0.0 && sn > 0.0) {
@@ -469,10 +490,15 @@ void main() {
             plaza = fanHere;
         } else if (sn > 0.0 && surf == 14) {
             surf = nat;
+        } else if (sp == 0.0 && sf > 0.0 && so > 0.0) {
+            float fc = sf / (sf + so) + warp.y * 0.14;
+            surf = fc > 0.5 ? 18 : oth;
+            fieldA = fa;
+            frim = fc > 0.5 ? 1.0 - smoothstep(0.66, 0.8, fc) : 0.0;
         }
     }
     vec2 f = fract(q);
-    gField = int(dw.r + 0.5) == 18 ? dw.a : d.a;
+    gField = fieldA >= 0.0 ? fieldA : (int(dw.r + 0.5) == 18 ? dw.a : d.a);
     float own = d.b;
     vec2 hw = heightsAt(q);
     float h = hw.x;
@@ -497,6 +523,7 @@ void main() {
     float band = pave >= 0.0 && surf == 14 ? 1.0 - smoothstep(0.5, 0.8, pave) : 0.0;
     bool fanned = surf == 14 && plaza && (!onRoad || roadInPlaza);
     vec3 col = surfaceColor(surf, w, fanned, 1.0 - band);
+    if (frim > 0.0) col = mix(col, SURF[18] * vec3(0.74, 0.68, 0.62), frim * 0.85);
     if (band > 0.0) {
         // The ground laps over the edge: soft (a pixel or so, never a stair), a few tufts of it
         // over the outer stones, a faint painted shade along the line.

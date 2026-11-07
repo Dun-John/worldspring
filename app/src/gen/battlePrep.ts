@@ -365,7 +365,8 @@ const UNDER_BUILDING = 17;
 export const FIELD = 18;
 
 /** 128 for each square with both paving (cobbles 14, dressed stone 19) and natural ground (0-9, 13,
- * 18) among the 3 x 3 round it (clamped at the chunk's sides, as `ground.frag`'s `dataAt`), else 0.
+ * 18), or a field (18) and other natural ground (v63 countryside: the field's crisp edge), among the
+ * 3 x 3 round it (clamped at the chunk's sides, as `ground.frag`'s `dataAt`), else 0.
  * Every lookup `ground.frag`'s soft paving edge depends on lies within a square of the pixel's own,
  * so off these squares that block changes nothing and the shader skips it (it is a good part of
  * the ground's GPU time in towns). */
@@ -375,15 +376,19 @@ function pavingEdges(shown: Uint8Array): Uint8Array {
     for (let x = 0; x < SQ; x++) {
       let paved = false;
       let natural = false;
+      let field = false;
+      let other = false;
       for (let dy = -1; dy <= 1; dy++) {
         const yy = Math.min(SQ - 1, Math.max(0, y + dy));
         for (let dx = -1; dx <= 1; dx++) {
           const s = shown[yy * SQ + Math.min(SQ - 1, Math.max(0, x + dx))];
           if (s === 14 || s === 19) paved = true;
           else if (s <= 9 || s === 13 || s === 18) natural = true;
+          if (s === 18) field = true;
+          else if (s <= 9 || s === 13 || s === 21) other = true;
         }
       }
-      if (paved && natural) out[y * SQ + x] = 128;
+      if ((paved && natural) || (field && other)) out[y * SQ + x] = 128;
     }
   }
   return out;
