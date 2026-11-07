@@ -3580,56 +3580,71 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 let wide = if s.capital { 320.0 } else if want_inner { 280.0 } else { 120.0 };
                 // v63 castles: a citadel's moat by roll, its room taken from the
                 // patch's leftover (the castle's part cut the bigger for it).
-                let moat = castle_moat(s, want_inner, l.roof_age, plan.roll(i, 163), plan.roll(i, 164));
-                let (target, wide) = moat.map_or((target, wide), |m| (target + 4.0 * crate::core::sqrt(target) * m.width, wide + 2.0 * m.width));
-                let cut = castle::cut_bound(&block, &c.pts, &wall_sides, away, &|p| site.height(p), 1.12 * target, wide + 20.0);
-                let (blocks_at, cblock) = (l.blocks.len(), cut.as_ref().map_or(block.clone(), |k| k.kept.clone()));
-                // (As it was, should the castle's part hold no keep after all: the castle on the whole.)
-                let uncut = cut.is_ok().then(|| l.clone());
-                if let Ok(k) = &cut {
-                    l.roads.push((vec![k.lane.0, k.lane.1], 3, castle::LANE));
-                    if let Some(b) = l.blocks.last_mut() {
-                        *b = k.kept.clone();
+                let rolled = castle_moat(s, want_inner, l.roof_age, plan.roll(i, 163), plan.roll(i, 164));
+                // (A capital's castle keeps its inner curtain first: should the moat's room leave
+                // none, the castle is laid again without a moat.)
+                let before = (s.capital && rolled.is_some()).then(|| l.clone());
+                let mut moat = rolled;
+                let (laid, ways_at, blocks_at) = loop {
+                    let castles_at = l.castles.len();
+                    let (target, wide) = moat.map_or((target, wide), |m| (target + 4.0 * crate::core::sqrt(target) * m.width, wide + 2.0 * m.width));
+                    let cut = castle::cut_bound(&block, &c.pts, &wall_sides, away, &|p| site.height(p), 1.12 * target, wide + 20.0);
+                    let (blocks_at, cblock) = (l.blocks.len(), cut.as_ref().map_or(block.clone(), |k| k.kept.clone()));
+                    // (As it was, should the castle's part hold no keep after all: the castle on the whole.)
+                    let uncut = cut.is_ok().then(|| l.clone());
+                    if let Ok(k) = &cut {
+                        l.roads.push((vec![k.lane.0, k.lane.1], 3, castle::LANE));
+                        if let Some(b) = l.blocks.last_mut() {
+                            *b = k.kept.clone();
+                        }
+                        l.blocks.push(k.left.clone());
+                        // (Its own sides' streets alone: the same lots whether the town wall stands or not.)
+                        let nl = k.left.len();
+                        let mut streets: Vec<(P, f64)> = street_lines(i, &d)
+                            .into_iter()
+                            .filter(|&(n, off)| (0..nl).any(|e| (dot(lerp(k.left[e], k.left[(e + 1) % nl], 0.5), n) - off).abs() < 1.0))
+                            .collect();
+                        streets.push(k.line);
+                        let (dp, mut prng) = lots_of(i, Ward::Noble, false);
+                        build_block(site, &k.left, &mut streets, Ward::Noble, &dp, &mut prng, l, None);
                     }
-                    l.blocks.push(k.left.clone());
-                    // (Its own sides' streets alone: the same lots whether the town wall stands or not.)
-                    let nl = k.left.len();
-                    let mut streets: Vec<(P, f64)> = street_lines(i, &d)
-                        .into_iter()
-                        .filter(|&(n, off)| (0..nl).any(|e| (dot(lerp(k.left[e], k.left[(e + 1) % nl], 0.5), n) - off).abs() < 1.0))
-                        .collect();
-                    streets.push(k.line);
-                    let (dp, mut prng) = lots_of(i, Ward::Noble, false);
-                    build_block(site, &k.left, &mut streets, Ward::Noble, &dp, &mut prng, l, None);
-                }
-                l.castle_cut = cut.as_ref().map_or_else(|r| *r, |_| castle::CUT_DONE);
-                let set = castle::Setting {
-                    follow: true,
-                    capital: s.capital,
-                    wall_up: walled,
-                    planned: plan.ward[i] == Some(Ward::Castle),
-                    inner: cut.is_ok().then_some(want_inner),
-                    hall: cut.is_ok() && (s.capital || s.tier == Tier::Metropolis),
-                    moat,
+                    l.castle_cut = cut.as_ref().map_or_else(|r| *r, |_| castle::CUT_DONE);
+                    let set = castle::Setting {
+                        follow: true,
+                        capital: s.capital,
+                        wall_up: walled,
+                        planned: plan.ward[i] == Some(Ward::Castle),
+                        inner: cut.is_ok().then_some(want_inner),
+                        hall: cut.is_ok() && (s.capital || s.tier == Tier::Metropolis),
+                        moat,
+                    };
+                    let mut ways_at = l.roads.len();
+                    let mut laid = castle(site, &cblock, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
+                    // (Nor a ring with a corner under 35 degrees between long sides: a wedge of yard.)
+                    let spike = |r: &Vec<P>| {
+                        let k = r.len();
+                        (0..k).any(|j| {
+                            let (a, b) = (sub(r[(j + k - 1) % k], r[j]), sub(r[(j + 1) % k], r[j]));
+                            len(a) >= 40.0 && len(b) >= 40.0 && dot(a, b) / (len(a) * len(b)) > libm::cos(35.0_f64.to_radians())
+                        })
+                    };
+                    if let Some(was) = uncut.filter(|_| laid.as_ref().is_none_or(spike) || !l.buildings[first..].iter().any(|b| b.keep.is_some())) {
+                        *l = was;
+                        prng = lots_of(i, w, false).1;
+                        l.castle_cut = castle::CUT_KEEP;
+                        ways_at = l.roads.len();
+                        let set = castle::Setting { inner: None, hall: false, ..set };
+                        laid = castle(site, &block, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
+                    }
+                    match &before {
+                        Some(was) if moat.is_some() && (laid.is_none() || l.castles.len() < castles_at + 2) => {
+                            *l = was.clone();
+                            prng = lots_of(i, w, false).1;
+                            moat = None;
+                        }
+                        _ => break (laid, ways_at, blocks_at),
+                    }
                 };
-                let mut ways_at = l.roads.len();
-                let mut laid = castle(site, &cblock, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
-                // (Nor a ring with a corner under 35 degrees between long sides: a wedge of yard.)
-                let spike = |r: &Vec<P>| {
-                    let k = r.len();
-                    (0..k).any(|j| {
-                        let (a, b) = (sub(r[(j + k - 1) % k], r[j]), sub(r[(j + 1) % k], r[j]));
-                        len(a) >= 40.0 && len(b) >= 40.0 && dot(a, b) / (len(a) * len(b)) > libm::cos(35.0_f64.to_radians())
-                    })
-                };
-                if let Some(was) = uncut.filter(|_| laid.as_ref().is_none_or(spike) || !l.buildings[first..].iter().any(|b| b.keep.is_some())) {
-                    *l = was;
-                    prng = lots_of(i, w, false).1;
-                    l.castle_cut = castle::CUT_KEEP;
-                    ways_at = l.roads.len();
-                    let set = castle::Setting { inner: None, hall: false, ..set };
-                    laid = castle(site, &block, toward, w, &dp, set, &on_wall, &gate_pts, (&town_segs, &town_towers), &mut prng, l, true, true);
-                }
                 // No room for its curtain after all: the patch is a noble ward's (its insets, streets and lots).
                 if laid.is_some() {
                     l.castle_patch = Some(i as u32);

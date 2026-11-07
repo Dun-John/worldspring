@@ -969,8 +969,9 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
             }
         }
         // (Laid out again: where the walls give no room for both halves, one across the axis before
-        // the dais, else one before it by the way up to it, else beside it.)
-        if again && n_rows >= 3 {
+        // the dais, else one before it by the way up to it, else beside it; a short hall's too, a
+        // row of tables left before it.)
+        if again && n_rows >= 2 {
             let w = h.f.wid as isize;
             // (Across the axis: the runner up to the dais a row shorter, ending at it.)
             let m = h.mark();
