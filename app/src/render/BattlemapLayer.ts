@@ -63,6 +63,7 @@ interface ChunkView {
   shown: { data: Uint16Array; dirty: boolean } | null;
   /** The roof mesh's vertex buffers (a mesh does not free its geometry). */
   roofGeometry: Geometry | null;
+  roofMesh: Mesh<Geometry, Shader> | null;
   /** The grids over bridge and pier decks, wall walks, tower tops and gravel walks, shown and hidden
    * with the ground's. */
   grids: Graphics[];
@@ -584,6 +585,14 @@ export class BattlemapLayer {
   }
 
   /** Show the 5-ft grid (over the ground and bridge and pier decks) or not. */
+  /** Roofs shown (hidden under the city, where only the streets and ground should read). */
+  private roofsOn = true;
+  setRoofs(on: boolean) {
+    if (on === this.roofsOn) return;
+    this.roofsOn = on;
+    for (const ch of this.chunks.values()) if (ch.roofMesh) ch.roofMesh.visible = on;
+  }
+
   setGrid(on: boolean) {
     this.frame.uniforms.uGrid = on ? 1 : 0;
     for (const ch of this.chunks.values()) for (const g of ch.grids) g.visible = on;
@@ -891,7 +900,10 @@ export class BattlemapLayer {
       if (i === 0) holder.addChild(daisG, pathGridG);
       if (i === 2) {
         holder.addChild(structG, walkGridG);
-        if (roofMesh) holder.addChild(roofMesh);
+        if (roofMesh) {
+          roofMesh.visible = this.roofsOn;
+          holder.addChild(roofMesh);
+        }
         holder.addChild(battleG);
       }
       if (i === 3) holder.addChild(towerG, topGridG);
@@ -940,6 +952,7 @@ export class BattlemapLayer {
       base,
       shown: null,
       roofGeometry,
+      roofMesh,
       grids: [gridG, walkGridG, topGridG, pathGridG],
       decks,
       atmo,

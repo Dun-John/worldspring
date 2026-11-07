@@ -1204,6 +1204,8 @@ export class MapView {
       // Under a fully built battlemap the tile layer is invisible: skip drawing it. (In the
       // sewers the street map shows, dimmed, where the rock fades out away from the tunnels.)
       this.tiles.container.visible = !this.battle?.covering;
+      // Down in the sewers the town's roofs stay out of sight (the streets and ground show, dimmed).
+      this.battle?.setRoofs(!this.sewers);
       // Safety net: a screenful needs a few hundred tiles at most; never flood the generator.
       const MAX_WANT = 600;
       if (want.length > MAX_WANT) {

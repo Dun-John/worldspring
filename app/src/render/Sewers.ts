@@ -90,7 +90,7 @@ export class Sewers {
   ) {
     // Underground the surface is a ghost (it shows where the rock fades out, away from the tunnels).
     this.dim.tint = 0x14100c;
-    this.dim.alpha = UNDER_DIM;
+    this.dim.alpha = Math.min(0.85, UNDER_DIM + 0.1);
     this.container.addChild(this.dim);
     this.add(first, firstField);
   }
