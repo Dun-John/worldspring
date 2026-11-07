@@ -990,12 +990,14 @@ export class InteriorLayer {
   inspect(wx: number, wy: number): SquareInfo | null {
     const it = this.interior;
     const lv = it.levels[this.level];
+    if (!lv) return null;
     const [gx, gy] = this.toGrid(wx, wy);
     const i = Math.floor(gx);
     const j = Math.floor(gy);
     if (i < 0 || j < 0 || i >= it.nx || j >= it.ny) return null;
     const room = lv.cells[j * it.nx + i];
-    if (room < 0) return null;
+    // (A level still being laid out can name a room it has no entry for yet.)
+    if (room < 0 || !lv.rooms[room]) return null;
     const onStairs = i >= it.stairs[0] && i < it.stairs[0] + it.stairs[2] && j >= it.stairs[1] && j < it.stairs[1] + it.stairs[3];
     const item = itemAt(lv, i, j);
     let object: SquareInfo['object'] = null;

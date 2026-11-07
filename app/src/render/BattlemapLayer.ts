@@ -65,6 +65,8 @@ interface ChunkView {
   /** The roof mesh's vertex buffers (a mesh does not free its geometry). */
   roofGeometry: Geometry | null;
   roofMesh: Mesh<Geometry, Shader> | null;
+  /** Battlemented and leaded roofs (keeps, castle ranges, towers' flats): hidden with the roof mesh. */
+  battleRoofs: Graphics;
   /** The grids over bridge and pier decks, wall walks, tower tops and gravel walks, shown and hidden
    * with the ground's. */
   grids: Graphics[];
@@ -647,7 +649,10 @@ export class BattlemapLayer {
   setRoofs(on: boolean) {
     if (on === this.roofsOn) return;
     this.roofsOn = on;
-    for (const ch of this.chunks.values()) if (ch.roofMesh) ch.roofMesh.visible = on;
+    for (const ch of this.chunks.values()) {
+      if (ch.roofMesh) ch.roofMesh.visible = on;
+      ch.battleRoofs.visible = on;
+    }
   }
 
   setGrid(on: boolean) {
@@ -920,6 +925,7 @@ export class BattlemapLayer {
     }
     const battleG = new Graphics();
     for (const r of c.battlements) drawBattlements(battleG, r);
+    battleG.visible = this.roofsOn;
     // Bridges and piers, the grid over their decks (shown with the ground's), then walls with
     // their shadows; towers stand above every chunk's walls.
     const bridgeG = new Graphics();
@@ -1036,6 +1042,7 @@ export class BattlemapLayer {
       shown: null,
       roofGeometry,
       roofMesh,
+      battleRoofs: battleG,
       grids: [gridG, walkGridG, topGridG, pathGridG, ...bridges.map((b) => b.grid)],
       decks,
       atmo,
