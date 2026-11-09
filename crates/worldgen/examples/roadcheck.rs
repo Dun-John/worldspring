@@ -12,6 +12,8 @@
 //!   (angle, spacing), out-and-backs (near crossings listed), roads running beside roads, gates per town and up, settlements by tier;
 //! - steep streets in towns and up: length by grade per tier and kind of street, and the flights
 //!   of steps the stair rule would make at three thresholds; `TOP=n` lists the steepest flights.
+//! - settlements on water (their cell or a neighbour on a coast, lake shore or river) per tier, and per reason;
+//!   `LAYOUTS=0` skips the layouts (T0 and network lines only).
 //! `DUMP=file.json` writes every road and settlement (for drawing over a preview).
 //!
 //! Usage: cargo run --release -p worldgen --example roadcheck -- [seed|world.json...] [--json]   (default 1 2 3)
@@ -178,7 +180,9 @@ fn main() {
         let mut bridge_x = Tally::default();
         let mut gate_counts: Vec<(worldgen::t0::settle::Tier, usize)> = Vec::new();
         let mut pier_x = Tally::default();
-        for i in 0..n_layouts {
+        // (`LAYOUTS=0`: no layouts, only the T0 and network lines.)
+        let layouts = if std::env::var("LAYOUTS").is_ok_and(|v| v == "0") { 0 } else { n_layouts };
+        for i in 0..layouts {
             let l = worldgen::town::layout(&world, &t0, i);
             let name = if i < t0.settlements.len() { format!("{:?} {i}", l.tier) } else { format!("site {i}") };
             if i < t0.settlements.len() && l.tier >= worldgen::t0::settle::Tier::Town {
@@ -494,6 +498,25 @@ fn main() {
         }
         say!("  ({n_layouts} layouts in {layout_s:.1} s)");
         report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst, "drawn_roads": drawn, "stairs": steps, "network": net, "economy": econ }));
+    }
+    // The waterside shares and reasons over every world.
+    if worlds.len() > 1 {
+        let mut on_water = [[0usize; 2]; 4];
+        let mut reasons = vec![0usize; 16];
+        for r in &report {
+            if let Some(a) = r["network"]["on_water"].as_array() {
+                for (t, c) in a.iter().enumerate().take(4) {
+                    on_water[t][0] += c[0].as_u64().unwrap_or(0) as usize;
+                    on_water[t][1] += c[1].as_u64().unwrap_or(0) as usize;
+                }
+            }
+            if let Some(a) = r["network"]["reasons"].as_array() {
+                for (i, c) in a.iter().enumerate().take(16) {
+                    reasons[i] += c.as_u64().unwrap_or(0) as usize;
+                }
+            }
+        }
+        say!("total ({} worlds): {}", report.len(), water_line(&on_water, &reasons));
     }
     if args.json {
         println!("{}", Value::Array(report));
@@ -1008,6 +1031,14 @@ fn realms(world: &worldgen::World, t0: &T0) {
     }
 }
 
+/// The share on water per tier (realms left out) and the count per reason.
+fn water_line(on_water: &[[usize; 2]; 4], reasons: &[usize]) -> String {
+    let tiers = ["village", "town", "city", "metropolis"];
+    let shares: Vec<String> = (0..4).map(|t| format!("{} {}/{} ({:.0}%)", tiers[t], on_water[t][0], on_water[t][1], 100.0 * on_water[t][0] as f64 / on_water[t][1].max(1) as f64)).collect();
+    let rs: Vec<String> = reasons.iter().enumerate().filter(|&(_, &c)| c > 0).map(|(i, c)| format!("{} {c}", worldgen::t0::settle::Reason::from_u8(i as u8).name())).collect();
+    format!("on water: {}; reasons: {}", shares.join(", "), rs.join(", "))
+}
+
 fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle::Tier, usize)]) -> Value {
     use worldgen::lod::roads::river_crossings;
     use worldgen::t0::roads::{meeting_points, CrossingKind};
@@ -1351,8 +1382,8 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
     }
     let spike_wet: Vec<&(P, f64, usize)> = spikes.iter().filter(|s| crossings.iter().any(|c| dist(c.0, s.0) <= MI)).collect();
     say!("  out-and-backs (> 100° over 200 ft): {} ({} within a mile of a river crossing)", spikes.len(), spike_wet.len());
-    for s in spike_wet.iter().take(top) {
-        say!("      road {} turns {:.0}° at ({:.0}, {:.0})", s.2, s.1, s.0[0], s.0[1]);
+    for s in spikes.iter().take(top) {
+        say!("      road {} turns {:.0}° at ({:.0}, {:.0}){}", s.2, s.1, s.0[0], s.0[1], if crossings.iter().any(|c| dist(c.0, s.0) <= MI) { " (near a crossing)" } else { "" });
     }
     // --- Roads running beside roads: share of each class's length (sampled every 200 ft, more than
     // a mile from its ends) within 1,500 ft of another road, where the two share no place within a mile.
@@ -1416,7 +1447,7 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
     {
         use worldgen::t0::settle::Reason;
         say!("  settlements by reason and tier (village town city metropolis):");
-        for ri in 0..=12u8 {
+        for ri in 0..=14u8 {
             let r = Reason::from_u8(ri);
             let c: Vec<usize> = tiers.iter().map(|t| sts.iter().filter(|s| s.reason == r && s.tier == *t).count()).collect();
             if c.iter().sum::<usize>() > 0 {
@@ -1424,11 +1455,39 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
             }
         }
     }
+    // On water: the settlement's cell or one of its 8 neighbours on a coast, a lake shore or a river
+    // (`settle::Ground`), per tier (village, town, city, metropolis), as [on water, all].
+    let mut on_water = [[0usize; 2]; 4];
+    let reasons: Vec<usize> = (0..16u8).map(|ri| sts.iter().filter(|s| s.reason as u8 == ri).count()).collect();
+    if let Some(e) = t0.extra.as_ref().filter(|e| !e.waterside.is_empty()) {
+        let (w, h) = (t0.height.w, t0.height.h);
+        for s in sts.iter().filter(|s| !s.isolated) {
+            let (x, y) = ((s.cell % w) as i64, (s.cell / w) as i64);
+            let wet = (-1..=1i64).any(|dy| (-1..=1i64).any(|dx| {
+                let (i, j) = (x + dx, y + dy);
+                i >= 0 && j >= 0 && i < w as i64 && j < h as i64 && e.waterside[j as usize * w + i as usize]
+            }));
+            on_water[s.tier as usize][0] += wet as usize;
+            on_water[s.tier as usize][1] += 1;
+        }
+        let dry = |k: usize| t0.water.data[k] == worldgen::t0::hydro::DRY;
+        let land: Vec<usize> = (0..w * h).filter(|&k| dry(k)).collect();
+        let wet_land = land.iter().filter(|&&k| {
+            let (x, y) = ((k % w) as i64, (k / w) as i64);
+            (-1..=1i64).any(|dy| (-1..=1i64).any(|dx| {
+                let (i, j) = (x + dx, y + dy);
+                i >= 0 && j >= 0 && i < w as i64 && j < h as i64 && e.waterside[j as usize * w + i as usize]
+            }))
+        }).count();
+        say!("  {} (dry land cells on water {:.0}%)", water_line(&on_water, &reasons), 100.0 * wet_land as f64 / land.len().max(1) as f64);
+    }
+    let on_water_json: Vec<Value> = on_water.iter().map(|c| json!(c)).collect();
     json!({
         "trips": trips_all, "trips_dry": trips_dry,
         "length_mi": { "total": total / MI, "king": by_class[0] / MI, "road": by_class[1] / MI, "track": by_class[2] / MI, "mst": mst / MI, "ratio": total / mst.max(1.0) },
         "junctions": { "n": njunc, "arms": arms_n, "shape_t_cross": shape_n[0], "shape_y": shape_n[1], "shape_other": shape_n[2], "stubs_half_mi": stub_half, "stubs_half_mi_shared": stub_doubled, "stubs_2_mi": stub_two, "x_crossings": x_cross, "near_crossing": near_cross, "out_and_backs": spikes.len(), "out_and_backs_wet": spike_wet.len() },
         "crossings": { "n": crossings.len(), "bridges": kind_n[0], "fords": kind_n[1], "ferries": kind_n[2], "under_45": under(0.707), "under_30": under(0.5), "within_1_mi": within(MI), "within_3_mi": within(3.0 * MI) },
         "beside_pct": beside_pct, "gates": gate_json, "gates_mean": gate_mean, "tiers": tier_n,
+        "on_water": on_water_json, "reasons": reasons,
     })
 }

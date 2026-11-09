@@ -2,7 +2,8 @@
 //!
 //! Sites are scored for habitability (fertile biome, flat ground, fresh water, sheltered
 //! harbours, river confluences; penalized at altitude) and placed tier by tier (metropolis →
-//! city → town → village) with spacing, like central places. Each gets a character (port,
+//! city → town → village) with spacing, like central places. Cities weigh the water most; towns
+//! and villages less, and their inland pulls too (springs, farmland, market spacing). Each gets a character (port,
 //! river town, mining town, fortress, market, farming/fishing/lumber/herding village, oasis)
 //! from its surroundings. Ruins and wizard towers are scattered in the wilds.
 
@@ -87,15 +88,19 @@ pub enum Reason {
     Crossroads,
     /// Farmland within reach.
     Food,
+    /// A spring or wells: low, flat ground at the foot of higher ground, away from rivers and shores.
+    Spring,
+    /// A market far from the cities (towns): the farms round buy and sell there.
+    Market,
 }
 
 impl Reason {
     pub fn from_u8(v: u8) -> Reason {
         use Reason::*;
-        [None, Harbour, Mouth, Outlet, Confluence, Head, Crossing, Ore, Timber, Fishing, Pass, Crossroads, Food][(v as usize).min(12)]
+        [None, Harbour, Mouth, Outlet, Confluence, Head, Crossing, Ore, Timber, Fishing, Pass, Crossroads, Food, Spring, Market][(v as usize).min(14)]
     }
     pub fn name(self) -> &'static str {
-        ["none", "harbour", "mouth", "outlet", "confluence", "head of navigation", "crossing", "ore", "timber", "fishing", "pass", "crossroads", "food"][self as usize]
+        ["none", "harbour", "mouth", "outlet", "confluence", "head of navigation", "crossing", "ore", "timber", "fishing", "pass", "crossroads", "food", "spring", "market"][self as usize]
     }
 }
 
@@ -200,7 +205,14 @@ pub struct Inputs<'a> {
 
 /// Per cell: how good a site it is, and what water it stands by.
 pub struct Ground {
+    /// How good a site each cell is: `base` (fertile, flat, low) times its water (`water`, 0 to ~2.4:
+    /// a sheltered coast 1, a river 0.5-1, a lake 0.6, a mouth up to 1.4 more) as `0.35 + water`, the
+    /// weight cities give it; towns and villages weigh the water less (`place`).
     score: Vec<f64>,
+    base: Vec<f32>,
+    water: Vec<f32>,
+    /// A spring's strength, 0-1 (`Reason::Spring`).
+    pub(crate) spring: Vec<f32>,
     coastal: Vec<bool>,
     lakeside: Vec<bool>,
     pub(crate) on_river: Vec<bool>,
@@ -216,6 +228,38 @@ pub struct Ground {
     /// Where the river reasons (but crossings) come from: reason, cell, the cell before it on its river (a
     /// mouth's last land cell; else the cell again) and the river's strength there, 0-1.
     sources: Vec<(Reason, u32, u32, f32)>,
+}
+
+impl Ground {
+    /// Per cell: on a coast, a lake shore or a river.
+    pub fn waterside(&self) -> Vec<bool> {
+        (0..self.score.len()).map(|k| self.coastal[k] || self.lakeside[k] || self.on_river[k]).collect()
+    }
+}
+
+/// Timber away from a river (forest only), against 0.6 by one.
+const TIMBER_INLAND: f64 = 0.4;
+/// A spring's ground: the ground round rising this much (ft, mean over two cells) above it, from
+/// none to full, then fading out again (mountain valleys).
+const SPRING_RISE_FT: (f64, f64, f64, f64) = (40.0, 250.0, 600.0, 1_200.0);
+/// A spring's strength as a reason (`Reason::Spring`).
+const SPRING_REASON: f64 = 0.7;
+/// Market spacing (towns): the miles from the nearest city (or town placed before) at which a
+/// site starts to gain and gains fully, and a market's strength as a reason.
+const MARKET_MI: (f64, f64) = (45.0, 100.0);
+const MARKET_REASON: f64 = 0.7;
+/// How much of its water a tier weighs: `wet.0 + wet.1 * water` (cities `0.35 + water`).
+const TOWN_WET: (f64, f64) = (0.5, 0.6);
+const VILLAGE_WET: (f64, f64) = (0.55, 0.55);
+/// Inland pulls for towns and villages: a spring (`1 + s * spring`), farmland (`f.0 + f.1 * food`)
+/// and, for towns, market spacing (`1 + m * gap`).
+const SPRING_GAIN: f64 = 1.0;
+const FOOD_GAIN: (f64, f64) = (0.6, 0.8);
+const MARKET_GAIN: f64 = 0.6;
+
+/// How strong a market is `d` cells of `cell` ft from the nearest city: 0-1.
+pub(crate) fn market_gap(d: f64, cell: f64) -> f64 {
+    smoothstep(MARKET_MI.0 * 5280.0 / cell, MARKET_MI.1 * 5280.0 / cell, d)
 }
 
 pub(crate) fn fertility(b: Biome) -> f64 {
@@ -250,6 +294,8 @@ fn ground(inp: &Inputs) -> Ground {
     let biome_of = |k: usize| Biome::from_u8((inp.biome[k] & 0xff) as u8);
     let slope_of = |k: usize| super::biome::local_slope(w, h, inp.height, k % w, k / w, cell);
     let mut score = vec![0.0f64; n];
+    let mut base = vec![0.0f32; n];
+    let mut water_at = vec![0.0f32; n];
     let mut coastal = vec![false; n];
     let mut lakeside = vec![false; n];
     let mut on_river = vec![false; n];
@@ -457,7 +503,14 @@ fn ground(inp: &Inputs) -> Ground {
         // Industry: ore in the hills, timber where forest meets a river, fishing grounds.
         let ore = smoothstep(1_500.0, 2_500.0, above) * smoothstep(0.3, 0.45, fbm(ore_seed, cx / 12.0, cy / 12.0, 3, 2.0, 0.5));
         let forest = matches!(b, Biome::TemperateForest | Biome::TemperateRainforest | Biome::Taiga | Biome::Jungle);
-        let timber = if forest && (inp.hydro.discharge[k] as f64 >= river_q || neighbors(w, h, k).any(|(nb, _)| inp.hydro.discharge[nb] as f64 >= river_q)) { 0.6 } else { 0.0 };
+        // (Logs float down a river; away from one, woodcutters and charcoal burners still live by it.)
+        let timber = if !forest {
+            0.0
+        } else if inp.hydro.discharge[k] as f64 >= river_q || neighbors(w, h, k).any(|(nb, _)| inp.hydro.discharge[nb] as f64 >= river_q) {
+            0.6
+        } else {
+            TIMBER_INLAND
+        };
         if ocean_n > 0 {
             // A bay or inlet (sea on little of the ground round: land on three sides) shelters a
             // harbour; a bare coast or a headland is only fishing.
@@ -502,7 +555,37 @@ fn ground(inp: &Inputs) -> Ground {
         let fed = 0.3 * fert + 0.7 * (1.4 * food[k] as f64).min(1.0);
         let fert = fed.max(0.6 * ore).max(0.5 * timber);
         let altitude = 1.0 - 0.8 * smoothstep(3_000.0, 8_000.0, above) * (1.0 - ore);
-        score[k] = fert * (0.35 + 0.65 * flat) * (0.35 + water) * altitude * dry_fix;
+        base[k] = (fert * (0.35 + 0.65 * flat) * altitude * dry_fix) as f32;
+        water_at[k] = water as f32;
+        score[k] = base[k] as f64 * (0.35 + water);
+    }
+    // Springs: low, flat ground at the foot of higher ground (the ground within two cells lying
+    // above it on the whole: a valley floor, the foot of a slope), away from rivers, lakes and the
+    // sea (within a cell): where wells and springs water a village. One box sum, O(cells).
+    let mut spring = vec![0.0f32; n];
+    {
+        let sw = w + 1;
+        let mut sum = vec![0.0f64; sw * (h + 1)];
+        for y in 0..h {
+            let mut row = 0.0;
+            for x in 0..w {
+                row += inp.height[y * w + x].max(sea);
+                sum[(y + 1) * sw + x + 1] = sum[y * sw + x + 1] + row;
+            }
+        }
+        let wet = |k: usize| coastal[k] || lakeside[k] || on_river[k] || inp.hydro.lake_of[k] != NO_LAKE;
+        for k in 0..n {
+            if base[k] <= 0.0 || wet(k) || neighbors(w, h, k).any(|(nb, _)| wet(nb)) {
+                continue;
+            }
+            let (x, y) = (k % w, k / w);
+            let (x0, x1, y0, y1) = (x.saturating_sub(2), (x + 3).min(w), y.saturating_sub(2), (y + 3).min(h));
+            let total = sum[y1 * sw + x1] - sum[y0 * sw + x1] - sum[y1 * sw + x0] + sum[y0 * sw + x0];
+            let rise = total / ((x1 - x0) * (y1 - y0)) as f64 - inp.height[k];
+            let flat = 1.0 - smoothstep(0.02, 0.10, slope_of(k));
+            // (Not between mountains: deep valleys have their rivers.)
+            spring[k] = (flat * smoothstep(SPRING_RISE_FT.0, SPRING_RISE_FT.1, rise) * (1.0 - smoothstep(SPRING_RISE_FT.2, SPRING_RISE_FT.3, rise))) as f32;
+        }
     }
     for k in 0..n {
         let s = &site[k];
@@ -510,7 +593,7 @@ fn ground(inp: &Inputs) -> Ground {
         bulk[k] = m(&[Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing]);
         industry[k] = m(&[Reason::Ore, Reason::Timber, Reason::Fishing]);
     }
-    Ground { score, coastal, lakeside, on_river, harbour, site, food, bulk, industry, sources }
+    Ground { score, base, water: water_at, spring, coastal, lakeside, on_river, harbour, site, food, bulk, industry, sources }
 }
 
 /// What a place lives by: its reason's kind where the place allows, else a cascade on its ground
@@ -525,7 +608,9 @@ fn kind_of(reason: Reason, tier: Tier, b: Biome, above: f64, ore: f64, is_coast:
         Reason::Timber if tier <= Tier::Town => Some(SettleKind::Lumber),
         Reason::Fishing if tier == Tier::Village && is_coast => Some(SettleKind::Fishing),
         Reason::Pass => Some(SettleKind::Fortress),
-        Reason::Crossroads => Some(SettleKind::Market),
+        Reason::Crossroads | Reason::Market => Some(SettleKind::Market),
+        Reason::Spring if matches!(b, Biome::HotDesert | Biome::ColdDesert) => Some(SettleKind::Oasis),
+        Reason::Spring if tier == Tier::Village => Some(SettleKind::Farming),
         _ => None,
     };
     if let Some(kind) = from_reason {
@@ -571,7 +656,7 @@ pub fn retier(inp: &Inputs, s: &mut Settlement, tier: Tier) {
     let Some(g) = inp.ground.get() else { return };
     let k = s.cell;
     s.tier = tier;
-    let skip = |r: Reason| (tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Pass | Reason::Crossroads)) || (tier >= Tier::City && matches!(r, Reason::Timber | Reason::Fishing | Reason::Pass | Reason::Crossroads));
+    let skip = |r: Reason| (tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Pass | Reason::Crossroads | Reason::Market)) || (tier >= Tier::City && matches!(r, Reason::Timber | Reason::Fishing | Reason::Pass | Reason::Crossroads | Reason::Spring | Reason::Market));
     if skip(s.reason) {
         let mut best = 0.3;
         s.reason = Reason::None;
@@ -580,6 +665,9 @@ pub fn retier(inp: &Inputs, s: &mut Settlement, tier: Tier) {
             if !skip(r) && v > best + 1e-9 {
                 (s.reason, best) = (r, v);
             }
+        }
+        if !skip(Reason::Spring) && SPRING_REASON * g.spring[k] as f64 > best + 1e-9 {
+            s.reason = Reason::Spring;
         }
         if s.reason == Reason::None && g.food[k] >= 0.5 {
             s.reason = Reason::Food;
@@ -610,7 +698,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
 
     let ore_seed = world.stream("t0.settle.ore");
     let biome_of = |k: usize| Biome::from_u8((inp.biome[k] & 0xff) as u8);
-    let Ground { score, coastal, lakeside, on_river, harbour, site, food, bulk, industry, .. } = inp.ground.get_or_init(|| ground(inp));
+    let Ground { score, base, water, spring, coastal, lakeside, on_river, harbour, site, food, bulk, .. } = inp.ground.get_or_init(|| ground(inp));
 
     // How many of each tier, from land area (square miles) and density. At density 0 none are
     // chosen, but the sketch's pins still stand: what is placed by hand wins over the dial.
@@ -651,12 +739,13 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         let (on_b, at_b) = if tier >= Tier::Town { (3.0, 5.0) } else { (2.0, 3.5) };
         // Cities and towns also favour the sites where goods change hands (harbours, mouths,
         // confluences, heads of navigation, crossings) over plain farmland.
-        let gain = match tier {
-            Tier::Metropolis | Tier::City => 2.0,
-            Tier::Town => 0.8,
-            Tier::Village => 0.25,
+        // (Only cities: towns and villages live by what is round them, not by the water's trade.)
+        let timber = site[k][Reason::Timber as usize] as f64 / 255.0;
+        let sites = match tier {
+            Tier::Metropolis | Tier::City => 1.0 + 2.0 * bulk[k] as f64,
+            Tier::Town => 1.0 + 0.5 * timber,
+            Tier::Village => 1.0 + 0.25 * timber,
         };
-        let sites = 1.0 + gain * if tier == Tier::Village { bulk[k].max(industry[k]) } else { bulk[k] } as f64;
         // Ore draws miners to towns and villages however poor the ground; a pass, a town to
         // hold it; a ford on a road, a town or village by it.
         let ore = site[k][Reason::Ore as usize] as f64 / 255.0;
@@ -679,7 +768,32 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         // Each cell's draws are its own (its jitter here, its seed and size in `make`), so a
         // settlement added or taken away elsewhere changes no other's.
         let jitter = world.stream("t0.settle");
-        let mut cands: Vec<(f64, usize)> = (0..n).filter(|&k| score[k] > 0.05).map(|k| (score[k] * road_bonus(k, tier) * (0.55 + 0.45 * unit(hash3(jitter, k as i64, tier as i64, 0))), k)).collect();
+        // Market spacing (towns): how far each cell lies from the towns and up placed before this
+        // tier (cities, realms, pins), in cells; O(cells × those few).
+        let before: Vec<(f64, f64)> = out.iter().filter(|s| s.tier >= Tier::Town).map(|s| ((s.cell % w) as f64, (s.cell / w) as f64)).collect();
+        let cities: Vec<(f64, f64)> = out.iter().filter(|s| s.tier >= Tier::City && !s.isolated).map(|s| ((s.cell % w) as f64, (s.cell / w) as f64)).collect();
+        // (Cells to the nearest city; 0 with none.)
+        let cities_d = |k: usize| {
+            let (cx, cy) = ((k % w) as f64, (k / w) as f64);
+            let d = cities.iter().map(|&(x, y)| (x - cx) * (x - cx) + (y - cy) * (y - cy)).fold(f64::INFINITY, f64::min);
+            if d.is_finite() { crate::core::sqrt(d) } else { 0.0 }
+        };
+        let gap = |k: usize| {
+            let (cx, cy) = ((k % w) as f64, (k / w) as f64);
+            let d = before.iter().map(|&(x, y)| (x - cx) * (x - cx) + (y - cy) * (y - cy)).fold(f64::INFINITY, f64::min);
+            if d.is_finite() { market_gap(crate::core::sqrt(d), cell) } else { 0.0 }
+        };
+        // What the tier weighs at a cell: cities the water most; towns and villages less, and
+        // their inland pulls (springs, farmland, market spacing).
+        let site_score = |k: usize| -> f64 {
+            let (b, wv) = (base[k] as f64, water[k] as f64);
+            match tier {
+                Tier::Metropolis | Tier::City => score[k],
+                Tier::Town => b * (TOWN_WET.0 + TOWN_WET.1 * wv) * (1.0 + SPRING_GAIN * spring[k] as f64) * (FOOD_GAIN.0 + FOOD_GAIN.1 * food[k] as f64) * (1.0 + MARKET_GAIN * gap(k)),
+                Tier::Village => b * (VILLAGE_WET.0 + VILLAGE_WET.1 * wv) * (1.0 + SPRING_GAIN * spring[k] as f64) * (FOOD_GAIN.0 + FOOD_GAIN.1 * food[k] as f64),
+            }
+        };
+        let mut cands: Vec<(f64, usize)> = (0..n).filter(|&k| score[k] > 0.05).map(|k| (site_score(k) * road_bonus(k, tier) * (0.55 + 0.45 * unit(hash3(jitter, k as i64, tier as i64, 0))), k)).collect();
         cands.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         // The top of a pass on a king's road draws a town to hold it however poor the ground
         // (rare: few routes top a saddle): those first, the highest first.
@@ -727,6 +841,10 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 }
                 if at && tier == Tier::Town {
                     consider(Reason::Crossroads, 0.75);
+                }
+                consider(Reason::Spring, SPRING_REASON * spring[k] as f64);
+                if tier == Tier::Town {
+                    consider(Reason::Market, MARKET_REASON * market_gap(cities_d(k), cell));
                 }
             }
             if reason == Reason::None && food[k] >= 0.5 {
@@ -1021,6 +1139,9 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>, kings: Option<&supe
                 (reason, best) = (r, v);
             }
         }
+        if tier <= Tier::Town && SPRING_REASON * g.spring[k] as f64 > best + 1e-9 {
+            reason = Reason::Spring;
+        }
         if reason == Reason::None && g.food[k] >= 0.5 { Reason::Food } else { reason }
     };
     let ore_seed = world.stream("t0.settle.ore");
@@ -1305,6 +1426,16 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
     let crossed = |c: [f64; 2], reach: f64| {
         at.crossings.iter().any(|&p| d2(p, c) <= 2_640.0 && (on_road(p, 400.0) || (d2(p, c) <= reach - 1_200.0 && arms(c, reach).len() >= 2)))
     };
+    // (A market's distance to the nearest city, as the towns were placed: cells between cell centres.)
+    let cities: Vec<usize> = settlements.iter().filter(|s| s.tier >= Tier::City && !s.isolated).map(|s| s.cell).collect();
+    let cities_d = |k: usize| {
+        let d = cities.iter().map(|&c| {
+            let (dx, dy) = ((c % w) as f64 - (k % w) as f64, (c / w) as f64 - (k / w) as f64);
+            dx * dx + dy * dy
+        });
+        let d = d.fold(f64::INFINITY, f64::min);
+        if d.is_finite() { crate::core::sqrt(d) } else { 0.0 }
+    };
     let near_source = |r: Reason, c: [f64; 2], d: f64| g.sources.iter().any(|&(sr, k, before, v)| sr == r && v >= 0.3 && d2(if r == Reason::Mouth { mouth_at(k, before) } else { centre(k) }, c) <= d);
     for s in settlements.iter_mut() {
         let c = [s.x, s.y];
@@ -1330,6 +1461,8 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
                 // (A city's is its market: only the economy gives a city one, `retier`.)
                 Reason::Crossroads => if s.tier >= Tier::City || (s.tier == Tier::Town && arms(c, reach).len() >= 3) { 0.75 } else { 0.0 },
                 Reason::Food => if g.food[k] >= 0.5 { 1.0 } else { 0.0 },
+                Reason::Spring => if s.tier <= Tier::Town { SPRING_REASON * g.spring[k] as f64 } else { 0.0 },
+                Reason::Market => if s.tier == Tier::Town { MARKET_REASON * market_gap(cities_d(k), cell) } else { 0.0 },
                 _ => v,
             }
         };
@@ -1339,9 +1472,9 @@ pub fn verify(inp: &Inputs, settlements: &mut [Settlement], at: &Placed) {
         let was = s.reason;
         let mut reason = Reason::None;
         let mut best = 0.3;
-        for r in [Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing, Reason::Ore, Reason::Timber, Reason::Fishing, Reason::Pass, Reason::Crossroads] {
+        for r in [Reason::Harbour, Reason::Mouth, Reason::Outlet, Reason::Confluence, Reason::Head, Reason::Crossing, Reason::Ore, Reason::Timber, Reason::Fishing, Reason::Pass, Reason::Crossroads, Reason::Spring, Reason::Market] {
             // (The same reasons as `place` weighs for the tier; a village's crossing only on a road over a river.)
-            if r == was || (s.tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Pass | Reason::Crossroads)) || (s.tier >= Tier::City && matches!(r, Reason::Timber | Reason::Fishing | Reason::Pass | Reason::Crossroads)) {
+            if r == was || (s.tier < Tier::Town && matches!(r, Reason::Outlet | Reason::Head | Reason::Pass | Reason::Crossroads | Reason::Market)) || (s.tier >= Tier::City && matches!(r, Reason::Timber | Reason::Fishing | Reason::Pass | Reason::Crossroads | Reason::Spring | Reason::Market)) {
                 continue;
             }
             let v = worth(r);

@@ -168,7 +168,8 @@ fn roads_within_grade() {
             let d = ((r.pts[k][0] - r.pts[k - 1][0]).powi(2) + (r.pts[k][1] - r.pts[k - 1][1]).powi(2)).sqrt();
             let grade = (r.z[k] - r.z[k - 1]).abs() as f64 / d.max(1e-6);
             assert!(grade <= gmax * 1.001, "road {ri} ({:?}) segment {k}: grade {grade:.3} > {gmax}", r.class);
-            if d > 200.0 && grade > steepest.0 {
+            // (Not a road's end segments: there its bed blends into the junction's or gate's.)
+            if d > 200.0 && grade > steepest.0 && k >= 2 && k + 1 < r.pts.len() {
                 steepest = (grade, ri, k);
             }
             checked += 1;
@@ -477,13 +478,14 @@ fn towns_meet_roads_and_water() {
         let tile = ex.terrain(key);
         ex.t0.sample_water(p[0], p[1]).max(tile.river_water[k]) > tile.padded[k]
     };
-    assert!(all_piers.len() > 200, "too few piers: {}", all_piers.len());
+    // (Since item 101 about half the villages stand inland, so fewer have piers.)
+    assert!(all_piers.len() > 120, "too few piers: {}", all_piers.len());
     for (i, e1, e2) in all_piers {
         assert!(over_water(e1) || over_water(e2), "settlement {i}: the pier at {:?} ends on drawn land", geom::lerp(e1, e2, 0.5));
     }
     // Seed 1's cities stand on flat river and harbour sites: steep streets are found in a world
-    // whose cities have them (seed 11), its cities' flights checked as above.
-    let mut sx = Executor::new(World::from_json(&world_json(11)).unwrap());
+    // whose cities have them (seed 13), its cities' flights checked as above.
+    let mut sx = Executor::new(World::from_json(&world_json(13)).unwrap());
     let mut steep: Vec<(usize, Vec<[f64; 2]>, f32)> = Vec::new();
     for i in (0..sx.t0.settlements.len()).filter(|&i| sx.t0.settlements[i].tier >= town::stairs::STAIR_TIER) {
         let l = town::layout(&sx.world, &sx.t0, i);
@@ -518,7 +520,7 @@ fn towns_meet_roads_and_water() {
             assert!(climb / length >= prm.g_off - 0.03, "settlement {i}: a flight at {:?} climbs only {:.3} on the drawn ground (rise {rise:.1} ft over {length:.0} ft)", pts[0], climb / length);
         }
     }
-    // The steepest flights are seed 7's (its world's geometry the same as seed 1's).
+    // The steepest flights are seed 13's (its world's geometry the same as seed 1's).
     assert_eq!(format!("{:?}", sx.world.geom), format!("{g:?}"));
     let flights = &steep;
     // The battlemap draws the highest flight as steps: most of its centreline (2.5 ft in from its

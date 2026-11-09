@@ -22,6 +22,10 @@ use crate::core::rng::{hash3, unit};
 
 /// How far (miles of travel) a town's hinterland reaches.
 const HINTERLAND_MI: f64 = 15.0;
+/// What a market town (`Reason::Market`) earns on top of its hinterland, as a share of a mean one's.
+const MARKET_TRADE: f64 = 0.2;
+/// The gateway (0-1) a town needs to grow into a city.
+const CITY_GATE: f64 = 0.3;
 /// Trade between two places falls off past this distance (miles of travel).
 const TRADE_MI: f64 = 60.0;
 /// What a mile by sea costs against one by road, how much farther than straight a sea way runs,
@@ -157,7 +161,9 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
         .enumerate()
         .map(|(t, &i)| {
             let k = settlements[i].cell;
-            food[t] / mean_food + 0.7 * around(k, &g.industry) + 1.0 * around(k, &g.bulk)
+            // (A market town far from the cities trades with the farms round it.)
+            let market = if settlements[i].reason == settle::Reason::Market { MARKET_TRADE } else { 0.0 };
+            food[t] / mean_food + 0.7 * around(k, &g.industry) + 1.0 * around(k, &g.bulk) + market
         })
         .collect();
 
@@ -334,6 +340,8 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
     rank.sort_by(|&a, &b| wealth[b].total_cmp(&wealth[a]).then(a.cmp(&b)));
     let was: Vec<Tier> = towns.iter().map(|&i| settlements[i].tier).collect();
     let mut now: Vec<Option<Tier>> = towns.iter().map(|&i| fixed(i).then_some(settlements[i].tier)).collect();
+    // (A town grows into a city only by a gateway: one inland, however busy its market, stays a town.)
+    let gate: Vec<f64> = towns.iter().map(|&i| around(settlements[i].cell, &g.bulk)).collect();
     for tier in [Tier::Metropolis, Tier::City, Tier::Town] {
         let count = was.iter().filter(|&&t| t == tier).count();
         let mut taken = now.iter().filter(|&&t| t == Some(tier)).count();
@@ -348,7 +356,7 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
             if taken >= count {
                 break;
             }
-            if now[t].is_none() && (was[t] as i32 - tier as i32).abs() <= 1 {
+            if now[t].is_none() && (was[t] as i32 - tier as i32).abs() <= 1 && (tier <= Tier::Town || was[t] >= tier || gate[t] >= CITY_GATE) {
                 now[t] = Some(tier);
                 taken += 1;
             }

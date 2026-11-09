@@ -5277,6 +5277,8 @@ impl Locale {
             Reason::Fishing => &["Slipway", "Net Loft"],
             Reason::Confluence => &["Two Rivers"],
             Reason::Food => &["Granary", "Haywain"],
+            Reason::Spring => &["Spring", "Old Well"],
+            Reason::Market => &["Market Cross", "Fair Green"],
             _ => &[],
         });
         l.landmarks.dedup();

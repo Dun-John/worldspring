@@ -120,6 +120,8 @@ pub struct T0Extra {
     pub traffic: Vec<roads::SegTraffic>,
     /// Each isolated realm's routes (`roads::Network::realm_paths`).
     pub realm_paths: Vec<(usize, Vec<[f64; 2]>)>,
+    /// Per cell: on a coast, a lake shore or a river (`settle::Ground`; QA's waterside shares).
+    pub waterside: Vec<bool>,
 }
 
 impl T0 {
@@ -493,6 +495,7 @@ impl T0 {
             let roads: Vec<(roads::RoadClass, &[[f64; 2]])> = network.roads.iter().map(|r| (r.class, &r.pts[..])).collect();
             settle::verify(&sinp, &mut settlements, &settle::Placed { wet: &wet, ground: &planned, crossings: &crossings, roads: &roads });
         }
+        let waterside = sinp.ground.get().map(|g| g.waterside()).unwrap_or_default();
         let (map_w, map_h) = ((w - 1) as f64 * cell, (h - 1) as f64 * cell);
         let road_net = RoadNet::new(
             network
@@ -596,7 +599,7 @@ impl T0 {
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
         t0.sketch_sites(world);
-        t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, economy, traffic: network.traffic, realm_paths: network.realm_paths });
+        t0.extra = Some(T0Extra { temp: clim.temp, precip: clim.precip, hydro, volcanoes, overlay, settlements, pois, crossings: network.crossings, economy, traffic: network.traffic, realm_paths: network.realm_paths, waterside });
         t0
     }
 

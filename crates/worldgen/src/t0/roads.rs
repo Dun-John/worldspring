@@ -4238,6 +4238,7 @@ pub fn tidy(r: &mut RoadPath) {
 /// that would cross water). Not where that stretch would reach the first or last two points.
 pub fn ease_turns(r: &mut RoadPath, cell: f64, dry: &dyn Fn(f64, f64) -> bool) {
     const CHORD: f64 = 40.0;
+    const HAIRPIN: f64 = 420.0;
     let reach = 0.05 * cell;
     let mut i = 2;
     while i + 2 < r.pts.len() {
@@ -4253,11 +4254,26 @@ pub fn ease_turns(r: &mut RoadPath, cell: f64, dry: &dyn Fn(f64, f64) -> bool) {
         };
         let (a, b) = (walk(i, -1, CHORD), walk(i, 1, CHORD));
         let (u, v) = (unit2([r.pts[i][0] - r.pts[a][0], r.pts[i][1] - r.pts[a][1]]), unit2([r.pts[b][0] - r.pts[i][0], r.pts[b][1] - r.pts[i][1]]));
-        if a == i || b == i || dot2(u, v) >= libm::cos(70f64.to_radians()) {
+        // (A hairpin, turning over 120° between the headings 150 ft either side, already rounded
+        // too tight for a cart.)
+        let (a2, b2) = (walk(i, -1, 150.0), walk(i, 1, 150.0));
+        let (u2, v2) = (unit2([r.pts[i][0] - r.pts[a2][0], r.pts[i][1] - r.pts[a2][1]]), unit2([r.pts[b2][0] - r.pts[i][0], r.pts[b2][1] - r.pts[i][1]]));
+        let hairpin = a2 != i && b2 != i && dot2(u2, v2) < -0.5;
+        if a == i || b == i || (dot2(u, v) >= libm::cos(70f64.to_radians()) && !hairpin) {
             i += 1;
             continue;
         }
-        let (i0, i1) = (walk(i, -1, reach), walk(i, 1, reach));
+        let (mut i0, mut i1) = (walk(i, -1, reach), walk(i, 1, reach));
+        // (A hairpin takes a wider stretch: its legs at least `HAIRPIN` ft apart where it turns,
+        // else it turns on the spot.)
+        if hairpin {
+            for m in [1.5, 2.0, 3.0] {
+                if dist(r.pts[i0], r.pts[i1]) >= HAIRPIN {
+                    break;
+                }
+                (i0, i1) = (walk(i, -1, m * reach), walk(i, 1, m * reach));
+            }
+        }
         // (Near an end the road keeps its way in: a junction's or a gate's.)
         let room = |a: usize, b: usize| (a.min(b)..a.max(b)).map(|k| dist(r.pts[k], r.pts[k + 1])).sum::<f64>() >= reach;
         if !room(i0, i) || !room(i, i1) {
@@ -4268,7 +4284,9 @@ pub fn ease_turns(r: &mut RoadPath, cell: f64, dry: &dyn Fn(f64, f64) -> bool) {
         let h0 = unit2([p0[0] - r.pts[i0 - 1][0], p0[1] - r.pts[i0 - 1][1]]);
         let h1 = unit2([r.pts[i1 + 1][0] - p3[0], r.pts[i1 + 1][1] - p3[1]]);
         let span = dist(p0, p3);
-        let (c1, c2) = ([p0[0] + h0[0] * 0.4 * span, p0[1] + h0[1] * 0.4 * span], [p3[0] - h1[0] * 0.4 * span, p3[1] - h1[1] * 0.4 * span]);
+        // (A hairpin's turn is round: its handles about two thirds of the span, a half circle.)
+        let pull = if hairpin { 0.65 } else { 0.4 } * span;
+        let (c1, c2) = ([p0[0] + h0[0] * pull, p0[1] + h0[1] * pull], [p3[0] - h1[0] * pull, p3[1] - h1[1] * pull]);
         let m = (span / 30.0).ceil().clamp(3.0, 40.0) as usize;
         let curve: Vec<[f64; 2]> = (1..m)
             .map(|k| {
