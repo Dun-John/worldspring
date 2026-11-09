@@ -5,13 +5,15 @@
 //! each). TEXT=1 prints the design's text form instead (`under::design::to_text`, what agents read and write with
 //! get/set_site_design). MAKE=theme[:size[:levels]][,...] adds created sites of those themes on dry land (as the vital
 //! test does) and prints only them (e.g. MAKE=temple:large:3,sunken_temple).
-//! LEVEL=n prints only level n (1 the top); ROOMS=1 leaves the furniture out; BBOX=1 prints, instead of the plans, the share
+//! ID=u:… prints only that site. FLOOR=1 prints floor heights in the plan. LEVEL=n prints only level n (1 the top); ROOMS=1 leaves the furniture out; BBOX=1 prints, instead of the plans, the share
 //! of the grid each level's rooms span (their bounding box). `keep` / `undercroft` print a keep's deep dungeons (`k:`) / a sewer
 //! section with a grate and its undercroft below (`w:`).
 //! Terrain tools on the printed site, after generation (`under::water`/`chasm`/`rubble_slope`; generation untouched):
 //! WATER=wet|flooded, CHASM=level|room (the biggest room's), SPAN=bridge|stones (default bridge), RUBBLE=1 (a slope in
 //! the biggest room). Letters: `-` shallow water, `=` deep water, `#` chasm, `+` rope bridge, `:` stepping stones,
 //! `%` rubble slope; a line per level counts the squares still unreached (0 expected).
+//! LEDGES=1: over every site (not the first of each kind), raised chambers (over 3 ft) and their open sheer edges
+//! (squares of the ledge over a floor more than 3 ft lower): a total line, no plans.
 use worldgen::{World, WorldFile, interior, town};
 
 fn main() {
@@ -60,6 +62,8 @@ fn main() {
     let mut seen_n = std::collections::BTreeMap::new();
     let themes: Vec<&str> = worldgen::under::THEMES.iter().map(|t| t.key).collect();
     let by_theme = wanted.iter().any(|w| themes.contains(&w.as_str()));
+    let ledges_only = std::env::var("LEDGES").is_ok();
+    let mut ledges = Ledges::default();
     for li in first..town::layout_count(&t0) {
         if !made.is_empty() && t0.created_site(li - first).is_none() {
             continue;
@@ -77,6 +81,10 @@ fn main() {
             if !by_theme && !wanted.is_empty() && !wanted.contains(&kind) {
                 continue;
             }
+            // ID=u:…: only that site.
+            if std::env::var("ID").is_ok_and(|w| w != id) {
+                continue;
+            }
             let t = std::time::Instant::now();
             let Some(mut it) = interior::generate_id(&world, &t0, &id) else { continue };
             let ms = t.elapsed().as_secs_f64() * 1e3;
@@ -85,11 +93,15 @@ fn main() {
             if by_theme && !wanted.contains(&key) {
                 continue;
             }
+            if ledges_only {
+                ledges.add(&it, &key, ms);
+                continue;
+            }
             // SKIP=n: the n+1-th site of each kind instead of the first.
             let skip: usize = std::env::var("SKIP").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
             let count = seen_n.entry(key.clone()).or_insert(0usize);
             *count += 1;
-            if made.is_empty() && (*count != skip + 1 || !seen.insert(key.clone())) {
+            if made.is_empty() && std::env::var("ID").is_err() && (*count != skip + 1 || !seen.insert(key.clone())) {
                 continue;
             }
             let unreached = terrain(&mut it, worldgen::core::rng::hash3(seed as u64, li as i64, worldgen::core::hash::fnv64(id.as_bytes()) as i64, 0x7e44));
@@ -195,11 +207,116 @@ fn main() {
                         }
                     }
                 }
+                // FLOOR=1: the floor heights instead (`Level.floor`: '0' level, ':' 5 ft, 'D' 10 ft; '.' rock).
+                if std::env::var("FLOOR").is_ok() && !lv.floor.is_empty() {
+                    let f = lv.floor.as_bytes();
+                    for (j, row) in grid.iter_mut().enumerate() {
+                        for (i, c) in row.iter_mut().enumerate() {
+                            *c = if lv.cells[j * it.nx + i] < 0 { '.' } else { f[j * it.nx + i] as char };
+                        }
+                    }
+                }
                 for row in grid {
                     println!("  {}", row.into_iter().collect::<String>());
                 }
             }
         }
+    }
+    if ledges_only {
+        ledges.print();
+    }
+}
+
+/// LEDGES=1's counts: per raised chamber its open edge (squares), the ones with none and whether a lower floor lies
+/// within 3 squares of them (else none near), by theme.
+#[derive(Default)]
+struct Ledges {
+    edges: Vec<usize>,
+    near: usize,
+    none_near: usize,
+    by_theme: std::collections::BTreeMap<String, (usize, usize)>,
+    worst_ms: f64,
+}
+
+impl Ledges {
+    fn add(&mut self, it: &interior::Interior, theme: &str, ms: f64) {
+        let nx = it.nx;
+        self.worst_ms = self.worst_ms.max(ms);
+        for lv in &it.levels {
+            if lv.floor.is_empty() {
+                continue;
+            }
+            let f = worldgen::interior::height::of_level(lv, nx);
+            let n = lv.cells.len();
+            let side = |k: usize| [(k % nx > 0).then(|| k - 1), (k % nx + 1 < nx).then(|| k + 1), (k >= nx).then(|| k - nx), (k + nx < n).then(|| k + nx)].into_iter().flatten();
+            // (Squares reached from the way in only by a climb, as the vital `r5_no_climb` walks: natural levels only.)
+            if lv.natural {
+                let blocks = worldgen::under::blocked_squares(&lv.furniture, nx, n / nx);
+                let start = lv.furniture.iter().find(|f| matches!(f.kind, "exit" | "up")).map(|f| f.y as usize * nx + f.x as usize);
+                if let Some(start) = start {
+                    let mut seen = vec![false; n];
+                    let mut stack = vec![start];
+                    seen[start] = true;
+                    while let Some(k) = stack.pop() {
+                        for q in side(k) {
+                            if !seen[q] && lv.cells[q] >= 0 && !blocks[q] && f.sheer(k, q) <= 0.0 {
+                                seen[q] = true;
+                                stack.push(q);
+                            }
+                        }
+                    }
+                    let lost: Vec<usize> = (0..n).filter(|&q| lv.cells[q] >= 0 && !blocks[q] && !seen[q]).collect();
+                    if !lost.is_empty() {
+                        println!("CLIMB {} {}: {} squares only by a climb, first at ({}, {})", it.id, lv.name, lost.len(), lost[0] % nx, lost[0] / nx);
+                    }
+                }
+            }
+            for (r, room) in lv.rooms.iter().enumerate() {
+                if room.raise_ft <= 3.0 {
+                    continue;
+                }
+                let sq: Vec<usize> = (0..n).filter(|&k| lv.cells[k] == r as i16).collect();
+                if sq.is_empty() {
+                    continue;
+                }
+                let edge = sq.iter().filter(|&&k| side(k).any(|m| lv.cells[m] >= 0 && f.sheer(k, m) < 0.0)).count();
+                let e = self.by_theme.entry(theme.to_string()).or_default();
+                e.0 += 1;
+                if edge > 0 {
+                    e.1 += 1;
+                    self.edges.push(edge);
+                } else {
+                    let low = |m: usize| lv.cells[m] >= 0 && lv.cells[m] != r as i16 && f.ft[m] + 3.0 < room.raise_ft;
+                    let near = sq.iter().any(|&k| {
+                        let (i, j) = ((k % nx) as isize, (k / nx) as isize);
+                        (-3..=3isize).any(|dj| (-3..=3isize).any(|di| {
+                            let (x, y) = (i + di, j + dj);
+                            x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < n / nx && low(y as usize * nx + x as usize)
+                        }))
+                    });
+                    if near { self.near += 1 } else { self.none_near += 1 }
+                }
+            }
+        }
+    }
+
+    fn print(&mut self) {
+        self.edges.sort_unstable();
+        let total = self.edges.len() + self.near + self.none_near;
+        let at = |q: f64| self.edges.get(((self.edges.len().max(1) - 1) as f64 * q) as usize).copied().unwrap_or(0);
+        let themes: Vec<String> = self.by_theme.iter().map(|(t, (a, b))| format!("{t} {b}/{a}")).collect();
+        println!(
+            "ledges: {total} raised (worst site {:.0} ms), {} with an open edge ({:.0}%); edge squares min {} median {} max {}; none open: {} with a lower floor within 3 squares, {} none near; by theme {}",
+            self.worst_ms,
+            self.edges.len(),
+            100.0 * self.edges.len() as f64 / total.max(1) as f64,
+            at(0.0),
+            at(0.5),
+            at(1.0),
+            self.near,
+            self.none_near,
+            themes.join(", ")
+        );
     }
 }
 

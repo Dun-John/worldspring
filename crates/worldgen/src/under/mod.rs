@@ -889,6 +889,8 @@ fn site(
             let (first, lk) = locks.get_or_insert_with(|| (d, Locks::new(size, rng)));
             guard(&mut p, &mut plans[*first..], nx, ny, d, depth, lk, rng);
         }
+        // (Raised floors reached without a climb before water and a chasm keep every square reached.)
+        p.ramp_ledges(ny);
         if !p.water.is_empty() {
             // (Its planner's water, once the locks and keys are in: off doorways, every square still reached.)
             p.reserve_doors();

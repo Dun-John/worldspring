@@ -3,7 +3,7 @@
 // terrain (water, chasms, rubble slopes) likewise.
 // Pure data, so a city's sewer sections can be prepared in a worker (`underField.worker.ts`)
 // while the view moves.
-import { floorEdges, floorFt, floorOf, STEP_FT } from '../gen/floor';
+import { floorEdges, floorFt, floorOf } from '../gen/floor';
 import type { Interior, InteriorLevel } from '../gen/protocol';
 import { CAVERN, fromSquares, shapeIndex } from './roomShapes';
 import { rockDistance } from './rockDistance';
@@ -54,9 +54,9 @@ export interface UnderField {
 }
 
 /** The edges between floor heights (`liftField`): (nx * res) x (ny * res), RGBA: signed distance to the nearest
- * edge (squares, + on its high side; 128 + d * LIFT_SCALE), its rise (ft / LIFT_FT; a cliff's drop there), how
- * strongly it is drawn (0 on ramps, so the way up reads), a cliff: natural rock dropping from a raised floor to a
- * lower one past it (1 on the high side of that rock). */
+ * edge (squares, + on its high side; 128 + d * LIFT_SCALE), its rise (ft / LIFT_FT), how strongly it is drawn (0
+ * on ramps, so the way up reads); a unused (0). Rock stays rock: cave ledges open onto their floors in the generator
+ * (`cave::open_ledges`), so a ledge's drop is a floor-to-floor edge. */
 export interface Lift {
   data: Uint8Array;
   res: number;
@@ -546,47 +546,7 @@ function liftField(it: Interior, level: number): Lift | null {
   const square = SQUARE_SITES.has(it.function);
   const R = square ? 8 : 4;
   const [w, hh] = [nx * R, ny * R];
-  // Natural rock between a raised floor and a lower one a square or two past it (a ledge's own wall): a cliff, its
-  // face drawn down that wall from the high floor (the high floor's half square by it and the rock's half nearer it).
-  const cliff = new Float32Array(w * hh);
-  const cliffDrop = new Float32Array(w * hh);
-  let cliffs = false;
-  const mark = (x0: number, y0: number, x1: number, y1: number, drop: number) => {
-    for (let ty = Math.max(0, Math.round(y0 * R)); ty < Math.min(hh, Math.round(y1 * R)); ty++) {
-      for (let tx = Math.max(0, Math.round(x0 * R)); tx < Math.min(w, Math.round(x1 * R)); tx++) {
-        cliff[ty * w + tx] = 1;
-        cliffDrop[ty * w + tx] = Math.max(cliffDrop[ty * w + tx], drop);
-      }
-    }
-  };
-  if (lv.natural) {
-    for (let j = 0; j < ny; j++) {
-      for (let i = 0; i < nx; i++) {
-        const k = j * nx + i;
-        if (lv.cells[k] < 0 || f.ramp[k]) continue;
-        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-          for (let t = 1; t <= 2; t++) {
-            const [a, b] = [i + di * t, j + dj * t];
-            if (a < 0 || b < 0 || a >= nx || b >= ny || lv.cells[b * nx + a] >= 0) break;
-            const [a1, b1] = [a + di, b + dj];
-            if (a1 < 0 || b1 < 0 || a1 >= nx || b1 >= ny) break;
-            const m = b1 * nx + a1;
-            if (lv.cells[m] < 0) continue;
-            const drop = f.ft[k] - f.ft[m];
-            if (drop > STEP_FT && !f.ramp[m]) {
-              cliffs = true;
-              // (Along the way out: from the high square's middle to halfway across the rock.)
-              const [u0, u1] = di + dj > 0 ? [0.5, 1 + 0.5 * t] : [-0.5 * t, 0.5];
-              if (di) mark(i + u0, j, i + u1, j + 1, drop);
-              else mark(i, j + u0, i + 1, j + u1, drop);
-            }
-            break;
-          }
-        }
-      }
-    }
-  }
-  if (!segs.length && !cliffs) return null;
+  if (!segs.length) return null;
   const best = new Float32Array(w * hh).fill(Infinity);
   const dist = new Float32Array(w * hh);
   const rise = new Float32Array(w * hh);
@@ -609,12 +569,33 @@ function liftField(it: Interior, level: number): Lift | null {
       }
     }
   }
-  // Texels out of reach take the side of those beside them (so no edge shows between).
-  const side = new Int8Array(w * hh);
-  for (let k = 0; k < w * hh; k++) if (best[k] < Infinity) side[k] = dist[k] > 0 ? 1 : -1;
-  for (let k = 0; k < w * hh; k++) if (!side[k]) side[k] = (k % w && side[k - 1]) || (k >= w && side[k - w]) || 0;
-  for (let k = w * hh - 1; k >= 0; k--) if (!side[k]) side[k] = ((k + 1) % w && side[k + 1]) || (k + w < w * hh && side[k + w]) || 0;
-  for (let k = 0; k < w * hh; k++) if (best[k] === Infinity) dist[k] = (side[k] || -1) * LIFT_REACH;
+  // Texels out of reach take their square's side (so no edge shows inside a floor): a square's from its middle texel
+  // where that is in reach, else from the floor of the same height it joins (4 ways), then the rock from what is
+  // beside it; else low.
+  const sq = new Int8Array(nx * ny);
+  const todo: number[] = [];
+  for (let k = 0; k < nx * ny; k++) {
+    const t = (Math.floor(k / nx) * R + (R >> 1)) * w + (k % nx) * R + (R >> 1);
+    if (best[t] < Infinity) {
+      sq[k] = dist[t] > 0 ? 1 : -1;
+      todo.push(k);
+    }
+  }
+  for (const floors of [true, false]) {
+    const queue = floors ? todo : Array.from(sq.keys()).filter((k) => sq[k]);
+    for (let q = 0; q < queue.length; q++) {
+      const k = queue[q];
+      const [i, j] = [k % nx, Math.floor(k / nx)];
+      for (const m of [i > 0 ? k - 1 : -1, i + 1 < nx ? k + 1 : -1, j > 0 ? k - nx : -1, j + 1 < ny ? k + nx : -1]) {
+        if (m < 0 || sq[m]) continue;
+        if (floors ? lv.cells[k] >= 0 && lv.cells[m] >= 0 && f.ft[m] === f.ft[k] : lv.cells[m] < 0) {
+          sq[m] = sq[k];
+          queue.push(m);
+        }
+      }
+    }
+  }
+  for (let k = 0; k < w * hh; k++) if (best[k] === Infinity) dist[k] = (sq[Math.floor(Math.floor(k / w) / R) * nx + Math.floor((k % w) / R)] || -1) * LIFT_REACH;
   // Ramps: no lip.
   let strength: Float32Array = new Float32Array(w * hh).fill(1);
   for (let j = 0; j < ny; j++) {
@@ -623,18 +604,16 @@ function liftField(it: Interior, level: number): Lift | null {
       for (let y = j * R; y < (j + 1) * R; y++) strength.fill(0, y * w + i * R, y * w + (i + 1) * R);
     }
   }
-  for (let k = 0; k < w * hh; k++) if (cliffDrop[k] > rise[k]) rise[k] = cliffDrop[k];
-  let [dd, rr, cc]: Float32Array[] = [dist, rise, cliff];
+  let [dd, rr]: Float32Array[] = [dist, rise];
   if (!square) {
     const sigma = 0.36 * R;
-    [dd, rr, strength, cc] = [blur(dist, w, hh, sigma), blur(rise, w, hh, sigma), blur(strength, w, hh, sigma), cliffs ? blur(cliff, w, hh, 0.3 * R) : cliff];
+    [dd, rr, strength] = [blur(dist, w, hh, sigma), blur(rise, w, hh, sigma), blur(strength, w, hh, sigma)];
   }
   const data = new Uint8Array(w * hh * 4);
   for (let k = 0; k < w * hh; k++) {
     data[k * 4] = Math.max(1, Math.min(255, Math.round(128 + dd[k] * LIFT_SCALE)));
     data[k * 4 + 1] = Math.min(255, Math.round((rr[k] / LIFT_FT) * 255));
     data[k * 4 + 2] = Math.round(strength[k] * 255);
-    data[k * 4 + 3] = Math.round(cc[k] * 255);
   }
   return { data, res: R };
 }

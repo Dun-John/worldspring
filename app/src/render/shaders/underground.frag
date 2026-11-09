@@ -645,10 +645,9 @@ void main() {
         return;
     }
     vec4 here = field(q);
-    // Ledges and steps; a cliff (natural rock dropping from a raised floor to a lower one past it).
+    // Ledges and steps.
     vec4 lift = vec4(0.5, 0.0, 0.0, 0.0);
     if (uHasLift > 0.5) lift = texture(uLift, q / uN);
-    float cliff = smoothstep(0.3, 0.7, lift.a);
     float d;
     vec2 n;
     if (uSquare > 0.5) {
@@ -793,13 +792,6 @@ void main() {
         col = mix(lip, r, smoothstep(-edge, -edge - 0.12, d));
         if (style == 1 && rough < 0.2) col = mix(col, INK, (1.0 - smoothstep(0.0, aa * 1.6, abs(d + rim))) * 0.75);
         alpha = ra * (1.0 - smoothstep(2.2, 3.2, depth + cut));
-        if (cliff > 0.0) {
-            // A ledge's wall: its cliff face down from the high floor, the rock beyond as it was.
-            float faceW = faceWidth(lift.g * 20.0) + 0.12;
-            float inFace = cliff * (1.0 - smoothstep(faceW - aa * 0.5, faceW + aa * 0.5, -d));
-            col = mix(col, cliffFace(uRock * 1.7, q, n, -d, faceW, px, aa), inFace);
-            alpha = max(alpha, inFace);
-        }
     } else {
         ivec2 s = clamp(ivec2(floor(q)), ivec2(0), ivec2(uN) - 1);
         vec4 cell = texelFetch(uCells, s, 0) * 255.0;
@@ -854,9 +846,8 @@ void main() {
         // Water, chasms, rubble slopes.
         if (uHasTerrain > 0.5) col = terrain(col, q, p, px);
         // Against the walls: ambient occlusion and the shadow cast from the NW.
-        // (Not on a cliff's top: the rock there drops away.)
-        col *= mix(0.6 + 0.4 * smoothstep(0.0, 0.75, d), 1.0, cliff * 0.8);
-        col *= mix(mix(0.66, 1.0, smoothstep(0.35, 0.6, lit)), 1.0, cliff);
+        col *= 0.6 + 0.4 * smoothstep(0.0, 0.75, d);
+        col *= mix(0.66, 1.0, smoothstep(0.35, 0.6, lit));
         // Liquid down the channel.
         float l = here.g;
         if (uLiquid > 0.5) {
@@ -1007,10 +998,8 @@ void main() {
         }
         alpha = 1.0;
     }
-    // The wall's inked outline (a cliff's top: its lip, bold, on the floor's side).
+    // The wall's inked outline.
     col = mix(col, INK, (1.0 - smoothstep(0.0, aa * 1.6, abs(d))) * 0.85);
-    float clw = max(OUT_W, 1.2 * px);
-    col = mix(col, INK, cliff * smoothstep(-aa * 1.6, 0.0, d) * (1.0 - smoothstep(clw - aa * 0.5, clw + aa * 0.5, d)) * 0.95);
     // A neighbouring section: its floors and their rims only, faint.
     if (uGhost > 0.5) alpha *= d < -rim ? 0.0 : 0.42;
     finalColor = vec4(col * alpha, alpha) * uColor;

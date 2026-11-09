@@ -743,6 +743,8 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
             }
         }
     }
+    // (Ledges opened onto the floor below them: a sheer edge to stand at.)
+    open_ledges(&mut p, ny, boss, &g.joins, rs ^ 0x1ed6_e5a7);
     // Water by theme.
     let hs = rng.next_u32() as u64;
     let h = |k: usize| noise(hs, k % nx, k / nx, 7.0);
@@ -921,6 +923,153 @@ pub(crate) fn cave(nx: usize, ny: usize, arrive: usize, last: bool, theme: &Them
         p.chasm = Some((-1, true));
     }
     p
+}
+
+/// Open raised chambers onto the floor below (cave ledges, walled off from it by the rock `caverns` leaves between
+/// chambers): where a raised chamber lies within two squares of rock of one more than a step lower, the rock between
+/// and, out from there, the rock along the ledge's foot (up to two squares out from it) become the low chamber's
+/// floor along a stretch of the ledge (four to fourteen squares of its edge, rarely all of it), so the ledge's own
+/// wandering outline stands as a sheer edge over the cavern. Never by the boss chamber (a dead end), the ways in, up
+/// or down, nor beside the joins (their slopes stay the way up); a cut touches only its two chambers (no new way into
+/// a third). Stretches picked by hashes of `seed` (no rng): the squares opened.
+pub(crate) fn open_ledges(p: &mut Plan, ny: usize, boss: Option<i16>, joins: &[Join], seed: u64) -> usize {
+    use crate::core::rng::{hash3, unit};
+    let (nx, n) = (p.nx, p.nx * ny);
+    let step = crate::interior::height::STEP_FT;
+    const GAP: u8 = 2;
+    const MIN: usize = 4;
+    let raised: Vec<i16> = (0..p.rooms.len() as i16).filter(|&r| p.rooms[r as usize].raise > step && Some(r) != boss).collect();
+    if raised.is_empty() {
+        return 0;
+    }
+    // (Squares that stay: the grid's edge, taken ones, by the ways in and out, round the joins and the boss chamber.)
+    let near = |a: usize, b: usize| (a % nx).abs_diff(b % nx) <= 2 && (a / nx).abs_diff(b / nx) <= 2;
+    let mut keep: Vec<bool> = (0..n).map(|k| k % nx < 1 || k / nx < 1 || k % nx + 2 > nx || k / nx + 2 > ny || p.taken[k] || near(k, p.up) || p.down.is_some_and(|d| near(k, d))).collect();
+    for &s in joins.iter().flat_map(|j| &j.squares) {
+        keep[s] = true;
+        for m in neighbours(s, nx, ny) {
+            keep[m] = true;
+        }
+    }
+    for k in 0..n {
+        if p.cells[k] >= 0 && Some(p.cells[k]) == boss {
+            for m in around(k, nx, ny) {
+                keep[m] = true;
+            }
+        }
+    }
+    // (Steps through rock from room `r`'s squares, up to 2.)
+    let reach = |p: &Plan, r: i16| {
+        let mut d = vec![u8::MAX; n];
+        let mut q: VecDeque<usize> = (0..n).filter(|&k| p.cells[k] == r).collect();
+        for &k in &q {
+            d[k] = 0;
+        }
+        while let Some(k) = q.pop_front() {
+            if d[k] >= GAP {
+                continue;
+            }
+            for m in neighbours(k, nx, ny) {
+                if p.cells[m] < 0 && d[m] == u8::MAX {
+                    d[m] = d[k] + 1;
+                    q.push_back(m);
+                }
+            }
+        }
+        d
+    };
+    let mut opened = 0;
+    for &hi in &raised {
+        let top = p.rooms[hi as usize].raise;
+        let dh = reach(p, hi);
+        // (The chambers more than a step lower that lie within reach of its rock.)
+        let mut lows: Vec<i16> = (0..n)
+            .filter(|&k| dh[k] != u8::MAX && dh[k] > 0)
+            .flat_map(|k| neighbours(k, nx, ny))
+            .map(|m| p.cells[m])
+            .filter(|&r| r >= 0 && r != hi && Some(r) != boss && top - p.rooms[r as usize].raise > step)
+            .collect();
+        lows.sort_unstable();
+        lows.dedup();
+        for lo in lows {
+            let dl = reach(p, lo);
+            // The rock at the ledge's foot a cut may run along (within 2 of it, touching only these two chambers), and
+            // of it the rock between the two.
+            let foot: Vec<bool> = (0..n).map(|k| p.cells[k] < 0 && !keep[k] && dh[k] <= 2 && around(k, nx, ny).all(|m| p.cells[m] < 0 || p.cells[m] == hi || p.cells[m] == lo)).collect();
+            let gap: Vec<bool> = (0..n).map(|k| foot[k] && dl[k] != u8::MAX && dh[k] + dl[k] <= GAP + 1).collect();
+            let is_hi: Vec<bool> = p.cells.iter().map(|&r| r == hi).collect();
+            let along_hi: Vec<bool> = (0..n).map(|k| neighbours(k, nx, ny).any(|m| is_hi[m])).collect();
+            let edge = |k: usize| along_hi[k];
+            let mut part = vec![false; n];
+            for k0 in 0..n {
+                if !gap[k0] || part[k0] {
+                    continue;
+                }
+                // A stretch of rock between (8 ways), its squares along the ledge.
+                let mut c = vec![k0];
+                part[k0] = true;
+                let mut i = 0;
+                while i < c.len() {
+                    for m in around(c[i], nx, ny) {
+                        if gap[m] && !part[m] {
+                            part[m] = true;
+                            c.push(m);
+                        }
+                    }
+                    i += 1;
+                }
+                let along: Vec<usize> = c.iter().copied().filter(|&k| edge(k)).collect();
+                if along.is_empty() {
+                    continue;
+                }
+                // Opened out from a square along it picked by hash, nearest first (8 ways, along the foot too), until
+                // the ledge's edge over the cut is a little longer than the stretch.
+                let h = hash3(seed, hi as i64, lo as i64, k0 as i64);
+                let want = ((along.len() as f64 * (0.55 + 0.45 * unit(h))) as usize + 3).clamp(MIN + 1, 14);
+                let from = along[(h >> 40) as usize % along.len()];
+                let mut d = vec![u32::MAX; n];
+                d[from] = 0;
+                let mut q = VecDeque::from([from]);
+                let mut cut = Vec::new();
+                while let Some(k) = q.pop_front() {
+                    if cut.iter().filter(|&&k| edge(k)).count() >= want {
+                        break;
+                    }
+                    cut.push(k);
+                    for m in around(k, nx, ny) {
+                        if foot[m] && p.cells[m] < 0 && d[m] == u32::MAX {
+                            d[m] = d[k] + 1;
+                            q.push_back(m);
+                        }
+                    }
+                }
+                // (Rock left standing alone between the cut and a chamber goes too.)
+                let mut more: Vec<usize> = cut.iter().flat_map(|&k| neighbours(k, nx, ny)).filter(|&k| foot[k] && p.cells[k] < 0 && !cut.contains(&k) && neighbours(k, nx, ny).all(|m| cut.contains(&m) || p.cells[m] >= 0)).collect();
+                more.sort_unstable();
+                more.dedup();
+                cut.extend(more);
+                // Only what joins the low floor (4 ways, through the cut) opens.
+                let mut on: Vec<usize> = cut.iter().copied().filter(|&k| neighbours(k, nx, ny).any(|m| p.cells[m] == lo)).collect();
+                let mut i = 0;
+                while i < on.len() {
+                    for m in neighbours(on[i], nx, ny) {
+                        if cut.contains(&m) && !on.contains(&m) {
+                            on.push(m);
+                        }
+                    }
+                    i += 1;
+                }
+                if on.iter().filter(|&&k| edge(k)).count() < MIN {
+                    continue;
+                }
+                for &k in &on {
+                    p.cells[k] = lo;
+                }
+                opened += on.len();
+            }
+        }
+    }
+    opened
 }
 
 /// Finish a natural level from its open squares: keep what the arrival reaches, the boss

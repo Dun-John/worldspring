@@ -1193,9 +1193,11 @@ impl Ground {
         Ground { nx, ny: n / nx, cells, start, free, blocked, east, south, locked }
     }
 
-    /// A level being laid out.
+    /// A level being laid out (no step over a sheer edge, up or down, where it has raised floors).
     pub(crate) fn of_plan(p: &Plan) -> Ground {
-        let step = |a: usize, b: usize| if !p.passable(a, b) { 0 } else if p.locks.contains_key(&(a, b)) { 2 } else { 1 };
+        let high = p.rooms.iter().any(|r| r.raise > crate::interior::height::STEP_FT).then(|| p.floor(p.cells.len() / p.nx));
+        let sheer = |a: usize, b: usize| high.as_ref().is_some_and(|f| f.sheer(a, b) != 0.0);
+        let step = |a: usize, b: usize| if !p.passable(a, b) || sheer(a, b) { 0 } else if p.locks.contains_key(&(a, b)) { 2 } else { 1 };
         let free = (0..p.cells.len()).map(|k| p.cells[k] >= 0 && !p.taken[k]).collect();
         let mut locked: Vec<usize> = p.locks.keys().flat_map(|&(a, b)| [a, b]).collect();
         locked.sort_unstable();
