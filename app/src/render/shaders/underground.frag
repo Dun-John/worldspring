@@ -30,13 +30,13 @@ in vec2 vLocal;
 
 out vec4 finalColor;
 
-uniform sampler2D uNoise;
-uniform sampler2D uField;
-uniform sampler2D uCells;
-uniform sampler2D uShapes;
-uniform sampler2D uCave;
-uniform sampler2D uTerrain;
-uniform sampler2D uDist;
+uniform highp sampler2D uNoise;
+uniform highp sampler2D uField;
+uniform highp sampler2D uCells;
+uniform highp sampler2D uShapes;
+uniform highp sampler2D uCave;
+uniform highp sampler2D uTerrain;
+uniform highp sampler2D uDist;
 
 uniform vec2 uN;
 uniform vec2 uLight;

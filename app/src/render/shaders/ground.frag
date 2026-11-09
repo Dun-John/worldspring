@@ -15,9 +15,9 @@ in vec2 vLocal;
 
 out vec4 finalColor;
 
-uniform sampler2D uNoise;
-uniform sampler2D uData;
-uniform sampler2D uHeights;
+uniform highp sampler2D uNoise;
+uniform highp sampler2D uData;
+uniform highp sampler2D uHeights;
 
 uniform float uBase;
 uniform float uAlpha;

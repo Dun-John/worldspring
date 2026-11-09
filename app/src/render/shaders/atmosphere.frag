@@ -8,7 +8,7 @@ in vec2 vLocal;
 
 out vec4 finalColor;
 
-uniform sampler2D uNoise;
+uniform highp sampler2D uNoise;
 uniform float uKind;
 uniform float uTime;
 uniform float uAlpha;

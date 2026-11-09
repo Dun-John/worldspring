@@ -14,8 +14,8 @@ in vec2 vLocal;
 
 out vec4 finalColor;
 
-uniform sampler2D uTex;
-uniform sampler2D uBio;
+uniform highp sampler2D uTex;
+uniform highp sampler2D uBio;
 
 // Per tile.
 uniform float uBase;
