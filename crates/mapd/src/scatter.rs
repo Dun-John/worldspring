@@ -79,7 +79,7 @@ fn rules(i: &KindInfo) -> Value {
 }
 
 /// A built-in kind by id or name.
-fn builtin(v: &Value) -> Option<u16> {
+pub(crate) fn builtin(v: &Value) -> Option<u16> {
     match v {
         Value::Number(n) => n.as_u64().filter(|&k| k <= u16::MAX as u64 && battlemap::kind_of(k as u16).is_some()).map(|k| k as u16),
         Value::String(s) => {
@@ -91,7 +91,7 @@ fn builtin(v: &Value) -> Option<u16> {
 }
 
 /// A kind (built-in, or an uploaded sprite by `s:<asset>` or name).
-fn kind_of(v: &Value, sprites: &std::collections::BTreeMap<String, SpriteMeta>) -> Result<ObjKind, String> {
+pub(crate) fn kind_of(v: &Value, sprites: &std::collections::BTreeMap<String, SpriteMeta>) -> Result<ObjKind, String> {
     if let Some(k) = builtin(v) {
         return Ok(ObjKind::Builtin(k));
     }

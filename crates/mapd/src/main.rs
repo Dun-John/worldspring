@@ -13,6 +13,7 @@ mod design;
 mod ground;
 mod mcp;
 mod notebook;
+mod reads;
 mod scatter;
 mod sites;
 mod store;

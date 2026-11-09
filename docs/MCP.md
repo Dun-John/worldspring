@@ -1,6 +1,6 @@
 # Worldspring MCP: full reference
 
-`mapd` exposes the open world to agents (any MCP client) through 54 tools. With them an agent can:
+`mapd` exposes the open world to agents (any MCP client) through 57 tools. With them an agent can:
 - read and search the world: features, buildings, districts, underground sites, routes, battlemaps;
 - look at the map as you see it, or move your view;
 - edit the world: rename anything (down to a dungeon's levels and rooms), write notes, hide features, and create
@@ -54,8 +54,8 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   `id` is not its subject also takes the old `id`, or `x_ft` and `y_ft`, beside its other arguments.
 - **Lists** come back as `{items, found}`: `found` is how many there were before any `limit`, and `truncated: true`
   says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`). Every list tool has a
-  `limit` (defaults: `list_names`, `list_children` and `list_sprites` 200, `list_crossings` 200, `list_npcs` and
-  `list_plots` 100, `search_features` 25, `features_near` and `list_roads` 50; `list_children` cuts each of its lists
+  `limit` (defaults: `list_names`, `list_children`, `list_sprites`, `list_crossings` and `list_objects` 200, `list_npcs`,
+  `list_plots`, `list_plateaus` and `list_designs` 100, `search_features` 25, `features_near` and `list_roads` 50; `list_children` cuts each of its lists
   and gives the full counts in `found`). A `limit` out of range is refused. Results are compact JSON (no
   indentation), and `render_view` sends a JPEG of 1,024 px unless asked for more.
 - **Safe to repeat:** a create that is asked for again with the same arguments adds nothing and returns what is already
@@ -94,7 +94,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | A sprite's rules | `blocks_movement`, `blocks_sight`, `cover` as a word (`none`, `half`, `three-quarters`, `full`), `size_squares` | `blocks_move`, `cover` 0 to 3, `size` | `upload_sprite` |
 | Units | `_ft` feet, `_mi` miles, `_squares` squares, `_deg` degrees, in every name that carries one | | |
 | Dry runs | `dry_run`, only where a tool lists it; elsewhere it is an unknown argument | | `set_site_design`, `edit_town` |
-| Lists returned | `{items, found}` (+ `truncated`) | | `search_features`, `features_near`, `list_names`, `list_roads`, `list_npcs`, `list_plots`, `list_sprites` (each item says `uploaded`), `list_crossings` |
+| Lists returned | `{items, found}` (+ `truncated`) | | `search_features`, `features_near`, `list_names`, `list_roads`, `list_npcs`, `list_plots`, `list_sprites` (each item says `uploaded`), `list_crossings`, `list_objects`, `list_plateaus`, `list_designs` |
 | Moves reported | `moved: {x_ft, y_ft, ft, why}` | | `create_feature`, `create_building` (a crossing's ends are never moved) |
 
 - **Names** in results already include renames, and search matches them. Hidden features are left out of search
@@ -222,12 +222,17 @@ A summary of the world:
 
 ### `search_features`
 Searches by name, as the places are named now (renames included). From three letters, it also finds districts and
-named businesses (inns, temples, smithies…). Returns `{items, found}` (`truncated: true` when `limit` cut the list); each item has its `extent`.
+named businesses (inns, temples, smithies…) and wall or gate towers that have been renamed. One of `query`, `kind` or `tag`
+must be given (nothing at all is refused). A district, building or tower says its `settlement` as `{id, name}` (and its
+`site`, in a site's layout), as `get_feature` does. A building drawn by hand shows the ward of its own little layout
+(`village`), not the one it stands in. Returns `{items, found}` (`truncated: true` when `limit` cut the list); each item has its `extent`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `query` | string | `""` | Part of a name. Empty, together with `kind`, lists every feature of that kind. |
-| `kind` | string | none | Only this kind: `city`, `ruin`, `river`, `building`, `district`, … |
+| `query` | string | `""` | Part of a name. Empty, together with `kind` or `tag`, lists every feature of that kind or tag. |
+| `kind` | string | none | Only this kind: `city`, `ruin`, `river`, `building`, `district`, `tower`, … |
+| `tag` | string | none | Only features whose notes carry this tag (any case): the DM's `hook`, `secret`… |
+| `in_notes` | boolean | false | The query also matches the words of a feature's notes (not only its name). |
 | `limit` | integer | 25 | 1 to 200 |
 | `include_hidden` | boolean | false | Also return hidden features. |
 
@@ -235,6 +240,8 @@ named businesses (inns, temples, smithies…). Returns `{items, found}` (`trunca
 { "name": "search_features", "arguments": { "query": "gate" } }
 { "name": "search_features", "arguments": { "query": "", "kind": "volcano" } }
 { "name": "search_features", "arguments": { "query": "Prancing", "kind": "building" } }
+{ "name": "search_features", "arguments": { "tag": "hook" } }
+{ "name": "search_features", "arguments": { "query": "cult", "in_notes": true } }
 ```
 > *"Find every inn called something with 'Pony'."* · *"List all the volcanoes."* · *"Is there a town named Wolfbarrow?"*
 
@@ -296,6 +303,7 @@ with a "did you mean" and the kinds there are (`kind: no names of kind "sitee"; 
 | `kind` | string | optional | Only this kind: `river`, `range`, `city`… or `district`, `building`, `tower`, `underground`, `site`, `level`, `room`. |
 | `settlement` | string | optional | A settlement's or site's id: its districts, businesses, wall and gate towers and underground sites (sewer grates aside). For a settlement, also the buildings drawn in it that have a trade (as businesses, `b:<layout>:0`) and every site in it (kind `site`, by the site's own id). |
 | `inside` | string | optional | A building's or underground site's id: its levels (`l:`) and their rooms (`r:`). (`within` is accepted too.) |
+| `function` | string | optional | Only businesses of this function, by `create_building`'s `func` keys (`inn`, `blacksmith`, `temple`…); needs `settlement`. Each building entry also says its `function`. An unknown one is refused with a "did you mean". |
 | `limit` | integer | 200 | 1 to 2000 (`truncated: true` when it cut the list). |
 
 Without `settlement` or `inside` it lists every named feature: oceans, seas, rivers, ranges, settlements, sites
@@ -394,8 +402,8 @@ lists:
   no movement cost; also where ground shaped by hand makes a city street climb steeply; `gravel`: a park's paths);
 - each kind of object in the chunk, with its 5e rules: cover, whether it blocks movement or sight, difficult
   terrain, hazards and their effects;
-- the objects within `radius_squares` of the place (placed objects are read within the one chunk only; there is no
-  list of every object yet), by grid square (`near_focus`), each with its centre
+- the objects within `radius_squares` of the place (placed objects are read within the one chunk only; `list_objects`
+  lists every one in the world), by grid square (`near_focus`), each with its centre
   (`x_ft`, `y_ft`) and either its `id` (put down by hand: `place_objects` moves or turns it, `remove_objects`
   takes it; `rot_deg` when it was given a turn) or its built-in `kind` (generated: `remove_objects` takes it by
   `at`);
@@ -521,6 +529,7 @@ under its building id is joined onto it.
 | `id` | string | required | |
 | `notes` | string | required | (`text` is accepted too.) |
 | `tags` | string[] | none | Added to the existing tags. |
+| `remove_tags` | string[] | none | Taken off; one that is not there is fine. The reply's `removed_tags` says which were, and `tags` what is left. (`update_feature` with `tags: []` clears them all.) |
 | `append` | boolean | false | Add to the existing notes instead of replacing them. |
 
 ```json
@@ -826,6 +835,27 @@ Parameter: `limit` (1 to 1000, default 200; `truncated: true` when it cut the li
 `{kind, name, uploaded, rules}` (an uploaded one also `picture` and `placed`, how many are put down); `rules` are cover (a
 word), blocks_movement, blocks_sight, difficult, height_ft, size_squares and any hazard.
 
+### `list_objects`
+Every object put down by hand (`o:`) and every clear (`x:`, generated objects taken away), world-wide, in one `{items, found}`
+list (objects first; `objects` and `clears` beside say how many of each), so an agent that lost its ids can audit or undo.
+
+| Parameter | Type | Default | |
+|---|---|---|---|
+| `within` | box `[x0, y0, x1, y1]`, polygon `[[x, y], ...]` or circle `{at, radius_ft}` | whole world | Only those with their place inside. |
+| `kinds` | (id or name)[] | all | Only these kinds (built-in id or name, or `s:<asset>`); a clear of all kinds matches any. |
+| `which` | `objects`, `clears` or `both` | both | |
+| `limit` | integer | 200 | 1 to 2000 |
+
+An object item is `{id, what: "object", kind, x_ft, y_ft, variant}` and, when set, `rot_deg`, `scale` and `sprite`
+(`s:<asset>`); a clear is `{id, what: "clear", x_ft, y_ft}` with `kind` (one object taken by kind and place) or `radius_ft`
+and `kinds` (a circle). `remove_objects` takes objects by id; `restore_objects` brings clears back.
+
+```json
+{ "name": "list_objects", "arguments": { "within": { "at": "c:2", "radius_ft": 300 } } }
+{ "name": "list_objects", "arguments": { "which": "clears", "kinds": ["boulder"] } }
+```
+> *"What did I put on the bridge map? Take the barrels away."*
+
 ### `upload_sprite`
 | Parameter | Type | | |
 |---|---|---|---|
@@ -1122,6 +1152,12 @@ another sketch or generator) is set aside: the generated site stands, and the re
 
 ### `reset_site_design`
 `id`: the site (or a building's interior) as generated again.
+
+### `list_designs`
+The underground sites (`u:`) and buildings (`b:`) that have a design made by hand, in one `{items, found}` list (`limit` 1 to
+1000, default 100): `{id, name, what: "site" or "building", kind, levels, x_ft, y_ft}`. `within` (a box, a polygon or a circle
+`{at, radius_ft}`) keeps those whose place is inside. `get_feature` of one of them says `designed: true`; `reset_site_design`
+drops a design.
 
 ## Building interiors designed by hand
 
@@ -1573,6 +1609,13 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 ```json
 { "name": "set_plateau", "arguments": { "around": "c:3", "margin_ft": 15, "rise_ft": 25, "edge_ft": 0 } }
 ```
+
+### `list_plateaus`
+The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
+`{id: "h:...", what: "plateau", level_ft, edge_ft, x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
+brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
+block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those whose bounding box reaches into its
+bounding box. `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
 
 ### `delete_plateau`
 Take plateaus or pits away by `id` or `ids` (all or none); the ground goes back as it was (brushed changes stay).

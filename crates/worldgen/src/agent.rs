@@ -770,7 +770,7 @@ pub fn feature_of_layout(world: &World, t0: &T0, li: usize) -> Option<String> {
     }
 }
 
-fn name_of(world: &World, t0: &T0, id: &str) -> Option<String> {
+pub fn name_of(world: &World, t0: &T0, id: &str) -> Option<String> {
     if let Some(n) = world.file.edits.renames.get(id) {
         return Some(n.clone());
     }
@@ -893,7 +893,7 @@ pub fn place(world: &World, t0: &T0, id: &str) -> Option<Value> {
 }
 
 /// Any id's display name: a feature, building, district, NPC or plot (else null).
-fn name_any(world: &World, t0: &T0, id: &str) -> Option<String> {
+pub fn name_any(world: &World, t0: &T0, id: &str) -> Option<String> {
     if deleted_with(world, t0, id).is_some() {
         return None;
     }
@@ -1173,22 +1173,96 @@ fn places_removed(world: &World) -> Vec<Value> {
 /// Named features (and, from three letters, districts and businesses) matching a query, by
 /// their current names, each with its extent.
 pub fn search(world: &World, t0: &T0, q: &str, kind: Option<&str>, limit: usize, include_hidden: bool) -> Value {
-    let ql = q.trim().to_lowercase();
-    let hidden = &world.file.edits.hidden;
+    search_with(world, t0, &SearchOpts { query: q.to_string(), kind: kind.map(str::to_string), tag: None, in_notes: false, hidden: include_hidden }, limit)
+}
+
+/// What `search_with` looks for: `query` in names (and notes with `in_notes`), `kind`, and only features
+/// whose notes carry `tag`.
+#[derive(Default)]
+pub struct SearchOpts {
+    pub query: String,
+    pub kind: Option<String>,
+    pub tag: Option<String>,
+    pub in_notes: bool,
+    pub hidden: bool,
+}
+
+pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Value {
+    let ql = o.query.trim().to_lowercase();
+    let (kind, include_hidden) = (o.kind.as_deref(), o.hidden);
+    let edits = &world.file.edits;
+    let hidden = &edits.hidden;
+    let tag = o.tag.as_deref().map(str::to_lowercase);
     let shapes = shapes(world, t0);
-    let mut out: Vec<Value> = features(world, t0)
-        .into_iter()
-        .zip(&shapes)
-        .filter(|(f, _)| (ql.is_empty() || f.name.to_lowercase().contains(&ql)) && kind.is_none_or(|k| f.kind == k) && (include_hidden || !hidden.contains(&f.id)))
-        .take(limit)
-        .map(|(f, s)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) }))
-        .collect();
-    if ql.len() >= 3 && out.len() < limit && kind.is_none_or(|k| matches!(k, "building" | "district")) {
-        for h in crate::gazetteer::search_buildings(world, t0, &ql, limit - out.len(), None, include_hidden) {
-            out.push(hit_json(world, t0, &h));
+    let fs = features(world, t0);
+    let mut out: Vec<Value> = Vec::new();
+    if tag.is_none() {
+        out = fs
+            .iter()
+            .zip(&shapes)
+            .filter(|(f, _)| (ql.is_empty() || f.name.to_lowercase().contains(&ql)) && kind.is_none_or(|k| f.kind == k) && (include_hidden || !hidden.contains(&f.id)))
+            .take(limit)
+            .map(|(f, s)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) }))
+            .collect();
+        if ql.len() >= 3 && out.len() < limit && kind.is_none_or(|k| matches!(k, "building" | "district")) {
+            for h in crate::gazetteer::search_buildings(world, t0, &ql, limit - out.len(), None, include_hidden) {
+                out.push(hit_json(world, t0, &h));
+            }
+        }
+        // Towers that were renamed (a tower has no name of its own to search until it has one).
+        if (!ql.is_empty() || kind == Some("tower")) && out.len() < limit && kind.is_none_or(|k| k == "tower") {
+            for (id, name) in edits.renames.iter().filter(|(id, n)| id.starts_with("t:") && n.to_lowercase().contains(&ql) && (include_hidden || !hidden.contains(*id))) {
+                if out.len() < limit && let Some(v) = tower_hit(world, t0, id, name) {
+                    out.push(v);
+                }
+            }
+        }
+    }
+    // Notes: their tags, and with `in_notes` their words.
+    if tag.is_some() || (o.in_notes && !ql.is_empty()) {
+        let seen: Vec<String> = out.iter().filter_map(|v| v["id"].as_str().map(str::to_string)).collect();
+        for (id, n) in &edits.notes {
+            if out.len() >= limit || seen.contains(id) || (!include_hidden && hidden.contains(id)) {
+                continue;
+            }
+            if tag.as_ref().is_some_and(|t| !n.tags.iter().any(|x| x.to_lowercase() == *t)) {
+                continue;
+            }
+            let found = if tag.is_some() && ql.is_empty() { true } else { (o.in_notes && n.text.to_lowercase().contains(&ql)) || name_any(world, t0, id).is_some_and(|nm| nm.to_lowercase().contains(&ql)) };
+            if !found {
+                continue;
+            }
+            let v = if let Some((f, s)) = fs.iter().zip(&shapes).find(|(f, _)| f.id == *id) {
+                json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) })
+            } else if let Some(g) = get(world, t0, id) {
+                let mut v = json!({ "id": id, "kind": g["kind"], "name": g["name"], "x_ft": g["x_ft"], "y_ft": g["y_ft"], "settlement": g["settlement"] });
+                if let Some(e) = g.get("extent") {
+                    v["extent"] = e.clone();
+                }
+                v
+            } else {
+                continue;
+            };
+            if kind.is_none_or(|k| v["kind"] == k) {
+                out.push(v);
+            }
         }
     }
     json!({ "results": out })
+}
+
+/// A renamed wall or gate tower (`t:<layout>:<k>`) as a search hit.
+fn tower_hit(world: &World, t0: &T0, id: &str, name: &str) -> Option<Value> {
+    let n: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
+    let (li, k) = (*n.first()?, *n.get(1)?);
+    if li >= town::layout_count(t0) {
+        return None;
+    }
+    let l = town::layout(world, t0, li);
+    let (at, _, gate) = *crate::interior::towers(&l).get(k)?;
+    let mut v = json!({ "id": id, "kind": "tower", "name": name, "function": if gate { "Gate tower" } else { "Wall tower" }, "x_ft": at[0].round(), "y_ft": at[1].round() });
+    set_whereabouts(world, t0, &mut v, li);
+    Some(v)
 }
 
 /// A district or building found in a layout, with its extent.
@@ -1196,6 +1270,10 @@ fn hit_json(world: &World, t0: &T0, h: &crate::gazetteer::Hit) -> Value {
     let mut v = with_rename(world, serde_json::to_value(h).unwrap_or(Value::Null));
     if let Some(e) = v["id"].as_str().and_then(|id| extent_of(world, t0, id)) {
         v["extent"] = e;
+    }
+    // The settlement as `get_feature` gives it ({id, name}; a layout's number is not an id).
+    if let Some(li) = v["settlement"].as_u64() {
+        set_whereabouts(world, t0, &mut v, li as usize);
     }
     v
 }
@@ -1390,6 +1468,9 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         if let Some(li) = site.split(':').nth(1).and_then(|s| s.parse::<usize>().ok()).filter(|&li| li < town::layout_count(t0)) {
             v["settlement"] = whereabouts(world, t0, li).0;
         }
+    }
+    if world.file.edits.designs.contains_key(id) {
+        v["designed"] = json!(true);
     }
     let (npcs, plots) = authored_at(world, t0, &[id.to_string()]);
     v["npcs"] = json!(npcs);
@@ -1622,7 +1703,9 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     }
     for b in l.buildings.iter().filter(|b| b.func.is_some()) {
         let generated = b.name.clone().unwrap_or_else(|| b.label().to_string());
-        out.push(name_entry(world, format!("b:{li}:{}", b.id), "building", generated, Some(geom::centroid(&b.poly)), true));
+        let mut v = name_entry(world, format!("b:{li}:{}", b.id), "building", generated, Some(geom::centroid(&b.poly)), true);
+        v["function"] = json!(b.label());
+        out.push(v);
     }
     for (k, (at, _, gate)) in crate::interior::towers(&l).into_iter().enumerate() {
         out.push(name_entry(world, format!("t:{li}:{k}"), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
@@ -1639,6 +1722,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
             let Some(b) = cl.building(0) else { continue };
             let hidden = is_hidden(world, t0, &id);
             let mut v = name_entry(world, id, "building", b.name.clone().unwrap_or_else(|| b.label().to_string()), Some(geom::centroid(&b.poly)), true);
+            v["function"] = json!(b.label());
             if hidden {
                 v["hidden"] = json!(true);
             }

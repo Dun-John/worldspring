@@ -10,10 +10,10 @@ use worldgen::world::{CREATABLE, Created, Edits, Note};
 use crate::Shared;
 
 pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from the map's top-left corner, x east, y south. \
-Find places with search_features, features_near or world_overview; inspect them with get_feature and list_children. Ids carry their kind: c: a created site, b: a building, d: a district, u: a site underground, l:/r: its levels and rooms, \
+Find places with search_features, features_near or world_overview; inspect them with get_feature and list_children. A place (at) is an id, {x_ft, y_ft} or [x_ft, y_ft]. Ids carry their kind: c: a created site, b: a building, d: a district, u: a site underground, l:/r: its levels and rooms, \
 n: an NPC, p: a plot point, o: a placed object, x: a clear, v: a crossing, h: a plateau; get one wrong and search_features finds the right one. \
 Edits (rename, annotate, hide, create_feature, create_building, place_crossing, place_objects, shape_ground, set_plateau, edit_town, set_site_design) are saved and appear live in the open app; \
-many at once go in one batch. Roads and routes: list_roads, route. The DM's notebook holds NPCs and plot points tied to places (create_npc, create_plot). \
+many at once go in one batch. Roads and routes: list_roads, route. Read back hand work: list_objects, list_plateaus, list_designs. The DM's notebook holds NPCs and plot points tied to places (create_npc, create_plot). \
 render_view and focus_view need the app open in a visible tab. Habits that avoid trouble: check_building_spot (or a dry_run where a tool has one) before a write; \
 an error means nothing changed, except a save warning (saved: false), which is not to be repeated; the creates are safe to repeat (the same one again returns what is there); \
 deletes come back with restore_feature, restore_objects and restore_building. Lists are cut by limit (found says how many there were). \
@@ -43,10 +43,10 @@ fn merge(a: Value, b: Value) -> Value {
 pub fn list() -> Value {
     let mut v = json!([
         { "name": "world_overview", "title": "World overview", "description": "The world's size, land masses, counts of named features and its largest settlements.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "search_features", "title": "Search", "description": "Named features matching a query (towns, ranges, rivers, ruins...; from three letters also districts and businesses). Empty query with a kind lists that kind. Returns {items, found}; limit cuts it and sets truncated.", "inputSchema": schema(json!({ "query": { "type": "string", "default": "" }, "kind": { "type": "string", "description": "Only this kind (city, ruin, river, building...)" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "search_features", "title": "Search", "description": "Named features matching a query (towns, ranges, rivers, ruins...; from three letters also districts and businesses). Give a query, a kind or a tag. Returns {items, found}; limit cuts it and sets truncated.", "inputSchema": schema(json!({ "query": { "type": "string", "default": "" }, "kind": { "type": "string", "description": "Only this kind (city, ruin, river, building...)" }, "tag": { "type": "string", "description": "Only features whose notes carry this tag" }, "in_notes": { "type": "boolean", "default": false, "description": "The query also matches notes" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: where and what it is, extent, notes, regions, nearest settlements, roads, districts, notable buildings, ways underground, sites in it, levels and rooms; for anything in a layout, its settlement and site. NPCs and plots there.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
         { "name": "list_children", "title": "Children", "description": "What a feature contains: a settlement's districts, businesses and sites, a building's or site's levels and rooms, a region's settlements and sites. Each list is cut to limit (default 200, max 2000); then found gives the full counts and truncated is true.", "inputSchema": schema(json!({ "id": { "type": "string" }, "limit": limit_prop(200, 2000) }), &["id"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, with id, kind, current and generated name; with settlement its districts, businesses, towers and sites; with inside (a building or site) its levels and rooms. Returns {items, found}; limit (default 200, max 2000) cuts it and sets truncated. A kind nothing has is refused with the kinds there are.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, city, building, site, room...)" }, "settlement": { "type": "string" }, "inside": { "type": "string" }, "limit": limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, with id, kind, current and generated name; with settlement its districts, businesses, towers and sites; with inside (a building or site) its levels and rooms. Returns {items, found}; limit (default 200, max 2000) cuts it and sets truncated. A kind nothing has is refused with the kinds there are.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, city, building, site, room...)" }, "settlement": { "type": "string" }, "inside": { "type": "string" }, "function": { "type": "string", "description": "Only businesses of this function (inn, blacksmith...), in a settlement or site" }, "limit": limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, biome, areas it lies in, the building, district or site there, named features nearby (within a tenth of their size, 2 to 10 mi), nearest settlements.", "inputSchema": schema(place_props(), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "features_near", "title": "Near a place", "description": "Everything named within a radius of a place, nearest first, to each feature's nearest edge or course, with distance, direction and extent. Returns {items, found}; limit (default 50) cuts it and sets truncated. kinds limits it; districts and businesses only when asked for or within a mile.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 500, "default": 5 }, "kinds": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 50 }, "include_hidden": { "type": "boolean", "default": false } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "route", "title": "Route", "description": "Distance between two places by road (where roads join them) or overland, with D&D 5e travel days (normal, fast, slow pace).", "inputSchema": schema(json!({ "from": crate::args::point_schema("Where from: an id, {x_ft, y_ft} or [x_ft, y_ft]"), "to": crate::args::point_schema("Where to: an id, {x_ft, y_ft} or [x_ft, y_ft]") }), &["from", "to"]), "annotations": { "readOnlyHint": true } },
@@ -55,7 +55,7 @@ pub fn list() -> Value {
         { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (JPEG 1024x683; width_px 256-1536, format png). Needs the app open in a visible tab with the map generated. size_ft is the ground across: ~450 the battlemap, 3000 a village, 20000 a city, 200000 a region.", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 }, "width_px": { "type": "integer", "minimum": 256, "maximum": 1536, "default": 1024, "description": "Pixels across (height 2/3 of it)" }, "format": { "type": "string", "enum": ["jpeg", "png"], "default": "jpeg" } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "focus_view", "title": "Show the user", "description": "Move the open map app's view to a place (the user sees it).", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 } })), &[]) },
         { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, site, or a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), ids as list_names gives them. An empty name restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
-        { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets for the DM, with tags. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "append": { "type": "boolean", "default": false } }), &["id", "notes"]) },
+        { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets for the DM, with tags. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "remove_tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to take off (one not there is fine)" }, "append": { "type": "boolean", "default": false } }), &["id", "notes"]) },
         { "name": "create_feature", "title": "Create a site", "description": "Add a site on dry land, generated like the world's own: ruin (over a dungeon, crypt or catacombs), tower, camp, waystation, cave, mine, lava_tube, or entrance (a bare way underground); something underground takes size, levels and theme (left out: chosen as for the world's own). Or a castle (poly/rect) or a wall (pts), drawn instead of a place; the world's own buildings in the way are named, or taken away with remove_in_way. Returns its id and its underground ways (a castle: keep, towers, gates).", "inputSchema": schema(merge(merge(place_props(), crate::works::props()), json!({
             "kind": { "type": "string", "enum": CREATABLE.iter().filter(|k| **k != "building").collect::<Vec<_>>() },
             "name": { "type": "string" },
@@ -77,6 +77,7 @@ pub fn list() -> Value {
         a.extend(crate::crossings::list());
         a.extend(crate::ground::list());
         a.extend(crate::design::list());
+        a.extend(crate::reads::list());
         a.extend(crate::towns::list());
         a.extend(crate::batch::list());
         // Any tool can say which world it means, and has its hints (a tool's own win).
@@ -99,7 +100,7 @@ pub fn list() -> Value {
 /// Tools that only read (or look): `readOnlyHint`.
 const READS: &[&str] = &[
     "world_overview", "search_features", "get_feature", "list_children", "list_names", "describe_location", "features_near", "route", "list_roads", "get_battlemap", "render_view",
-    "list_crossings", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_sprites", "check_building_spot", "get_town_plan",
+    "list_crossings", "list_objects", "list_plateaus", "list_designs", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_sprites", "check_building_spot", "get_town_plan",
 ];
 /// Writes that delete, replace or reset work (`destructiveHint`); every other write only adds or adjusts.
 const DESTRUCTIVE: &[&str] = &[
@@ -240,6 +241,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
     if let Some(r) = crate::towns::call(app, name, &a).await {
         return r;
     }
+    if let Some(r) = crate::reads::call(app, name, &a).await {
+        return r;
+    }
     match name {
         "world_overview" => {
             let mut v = app.worker.with(|ex| Ok(agent::overview(&ex.world, &ex.t0))).await?;
@@ -247,12 +251,14 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             Ok(text(v))
         }
         "search_features" => {
-            let q = a["query"].as_str().unwrap_or("").to_string();
-            let kind = a["kind"].as_str().map(str::to_string);
+            let (q, kind, tag) = (a["query"].as_str().unwrap_or("").to_string(), a["kind"].as_str().map(str::to_string), a["tag"].as_str().map(|t| t.trim().to_string()));
+            if q.trim().is_empty() && kind.is_none() && tag.is_none() {
+                return Err(crate::args::bad("query, kind, tag", "give at least one (world_overview lists the largest places; list_names everything renameable)", &json!({})));
+            }
             let limit = a["limit"].as_u64().unwrap_or(25) as usize;
-            let hidden = a["include_hidden"].as_bool().unwrap_or(false);
+            let opts = agent::SearchOpts { query: q, kind, tag, in_notes: a["in_notes"].as_bool().unwrap_or(false), hidden: a["include_hidden"].as_bool().unwrap_or(false) };
             // (All the matches are found, so `found` can say how many there were.)
-            let all = app.worker.with(move |ex| Ok(agent::search(&ex.world, &ex.t0, &q, kind.as_deref(), 100_000, hidden))).await?;
+            let all = app.worker.with(move |ex| Ok(agent::search_with(&ex.world, &ex.t0, &opts, 100_000))).await?;
             Ok(text(listed(all["results"].clone(), limit, json!({}))))
         }
         "get_feature" => {
@@ -280,10 +286,26 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         "list_names" => {
             let (kind, inside, settlement) = (a["kind"].as_str().map(str::to_string), a["inside"].as_str().map(str::to_string), a["settlement"].as_str().map(str::to_string));
             let limit = limit_of(&a, 200);
+            let function = a["function"].as_str().map(|f| f.trim().to_lowercase());
+            if function.is_some() && settlement.is_none() {
+                return Err(crate::args::bad("function", "used with settlement (a settlement's or site's id)", &a["function"]));
+            }
             let v = app
                 .worker
                 .with(move |ex| {
-                    let v = agent::names(&ex.world, &ex.t0, kind.as_deref(), inside.as_deref(), settlement.as_deref())?;
+                    let mut v = agent::names(&ex.world, &ex.t0, kind.as_deref(), inside.as_deref(), settlement.as_deref())?;
+                    if let Some(f) = function.as_deref() {
+                        let keys: Vec<&str> = worldgen::town::catalog::CATALOG.iter().map(|c| c.key).collect();
+                        let label = worldgen::town::catalog::index_of(f).map(|i| worldgen::town::catalog::CATALOG[i as usize].name.to_lowercase());
+                        if label.is_none() && !v["names"].as_array().into_iter().flatten().any(|n| n["function"].as_str().is_some_and(|x| x.to_lowercase() == f)) {
+                            let hint = crate::args::suggest(f, keys.iter().copied()).map(|s| format!(" (did you mean \"{s}\"?)")).unwrap_or_default();
+                            return Err(format!("function: no business \"{f}\"{hint}; the keys are as create_building's func"));
+                        }
+                        let want = label.unwrap_or_else(|| f.to_string());
+                        if let Some(l) = v["names"].as_array_mut() {
+                            l.retain(|n| n["function"].as_str().is_some_and(|x| x.to_lowercase() == want));
+                        }
+                    }
                     // A kind nothing has is a typo, not an empty answer.
                     if let Some(k) = kind.as_deref().filter(|_| v["names"].as_array().is_some_and(|n| n.is_empty())) {
                         let all = agent::names(&ex.world, &ex.t0, None, inside.as_deref(), settlement.as_deref())?;
@@ -383,8 +405,10 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             })?;
             let img = reply["image"].as_str().or_else(|| reply["png"].as_str()).ok_or_else(|| format!("the app could not render: {} (the tab must be visible and the map generated; try again, or a larger size_ft)", reply["error"].as_str().unwrap_or("no image")))?;
             let data = img.split(',').next_back().unwrap_or(img);
+            // (Labelled by what the app sent, as its data URL says: an older app answers png whatever was asked.)
+            let mime = img.strip_prefix("data:").and_then(|r| r.split(';').next()).filter(|m| m.starts_with("image/")).unwrap_or(if png { "image/png" } else { "image/jpeg" });
             Ok(vec![
-                json!({ "type": "image", "data": data, "mimeType": if png { "image/png" } else { "image/jpeg" } }),
+                json!({ "type": "image", "data": data, "mimeType": mime }),
                 json!({ "type": "text", "text": format!("View centred at ({:.0}, {:.0}) ft, spanning about {size:.0} ft; {width} x {} px.", p[0], p[1], (width as f64 * 2.0 / 3.0).round()) }),
             ])
         }
@@ -430,6 +454,10 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             let id = arg_str(&a, "id")?;
             let t = arg_str(&a, "notes")?;
             let tags: Vec<String> = a["tags"].as_array().map(|v| v.iter().filter_map(|t| t.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            let remove: Vec<String> = a["remove_tags"].as_array().map(|v| v.iter().filter_map(|t| t.as_str().map(|t| t.to_string())).collect()).unwrap_or_default();
+            if let Some(t) = tags.iter().find(|t| remove.contains(t)) {
+                return Err(crate::args::bad("remove_tags", "not also in tags", &json!(t)));
+            }
             let append = a["append"].as_bool().unwrap_or(false);
             known(app, &id).await?;
             let pair = drawn_pair(app, &id).await?;
@@ -437,12 +465,18 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
                 let key = note_key(e, pair, &id);
                 let n = e.notes.entry(key.clone()).or_insert_with(Note::default);
                 n.text = if append && !n.text.is_empty() { format!("{}\n\n{t}", n.text) } else { t };
+                let removed: Vec<&String> = remove.iter().filter(|t| n.tags.contains(t)).collect();
+                n.tags.retain(|t| !remove.contains(t));
                 for tag in tags {
                     if !n.tags.contains(&tag) {
                         n.tags.push(tag);
                     }
                 }
-                Ok(json!({ "tool": "annotate_feature", "id": key }))
+                let mut v = json!({ "tool": "annotate_feature", "id": key, "tags": n.tags });
+                if !remove.is_empty() {
+                    v["removed_tags"] = json!(removed);
+                }
+                Ok(v)
             })
             .await
             .map(text)

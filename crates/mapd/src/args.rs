@@ -269,6 +269,11 @@ pub fn area_schema(description: &str, max_radius_ft: f64) -> Value {
     })
 }
 
+/// A short `within` for read tools (the list tools' schemas stay small): the same three forms, checked by `area`.
+pub fn area_light(description: &str) -> Value {
+    json!({ "type": ["array", "object"], "description": description })
+}
+
 /// An area of the map (world ft).
 #[derive(Clone, Debug)]
 pub enum Area {
