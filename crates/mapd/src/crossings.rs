@@ -5,21 +5,20 @@ use worldgen::world::{Crossing, CrossingKind, CrossingMaterial};
 
 use crate::Shared;
 use crate::notebook::new_id;
-use crate::tools::{schema, text};
+use crate::tools::{listed, schema, text};
 
 pub fn list() -> Vec<Value> {
-    let point = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x_ft, y_ft]" });
     vec![
-        json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (bridges, fords, ferries): id, kind, ends (world ft), width, length and a bridge's material.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (returns {items, found}; bridges, fords, ferries): id, kind, ends (world ft), width, length and a bridge's material.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } }),
         json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry on the map from one bank to the other (world ft), drawn on the battlemap over what is there: a bridge's deck clear of the water (walkable; timber planks, or old stone with material \"stone\"), a ford's bed brought up to wading depth under stepping stones, a ferry's jetties out from each point with a raft on a rope between. 10 to 2000 ft long (a ferry at least 68), 5 to 40 ft wide. With id, changes that crossing (fields left out stay). Returns its id (v:...).", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A crossing to change" },
             "kind": { "type": "string", "enum": ["bridge", "ford", "ferry"] },
-            "from": point,
-            "to": point,
-            "width_ft": { "type": "number", "description": "Deck, ford or raft width (default 12)" },
+            "from": crate::args::point_schema("One bank: an id, {x_ft, y_ft} or [x_ft, y_ft] (world ft)"),
+            "to": crate::args::point_schema("The other bank: an id, {x_ft, y_ft} or [x_ft, y_ft] (world ft); the crossing is 10 to 2000 ft long (a ferry at least 68)"),
+            "width_ft": { "type": "number", "minimum": 5, "maximum": 40, "default": 12, "description": "Deck, ford or raft width" },
             "material": { "type": "string", "enum": ["timber", "stone"], "description": "A bridge's: timber planks (default) or old stone" },
         }), &[]) }),
-        json!({ "name": "remove_crossings", "title": "Take crossings away", "description": "Take crossings put down by hand off the map, by id (v:...).", "inputSchema": schema(json!({ "ids": { "type": "array", "items": { "type": "string" } } }), &["ids"]) }),
+        json!({ "name": "remove_crossings", "title": "Take crossings away", "description": "Take crossings put down by hand off the map, by id or ids (v:..., all or none).", "inputSchema": schema(crate::args::ids_props("crossing id"), &[]) }),
     ]
 }
 
@@ -42,16 +41,13 @@ fn describe(id: &str, c: &Crossing) -> Value {
 }
 
 fn list_crossings(app: &Shared) -> Result<Value, String> {
-    Ok(json!(app.with_edits(|e| e.crossings.iter().map(|(id, c)| describe(id, c)).collect::<Vec<_>>()).unwrap_or_default()))
+    Ok(listed(json!(app.with_edits(|e| e.crossings.iter().map(|(id, c)| describe(id, c)).collect::<Vec<_>>()).unwrap_or_default()), usize::MAX, json!({})))
 }
 
-fn point(v: &Value, k: &str) -> Result<Option<[f64; 2]>, String> {
-    if v[k].is_null() {
-        return Ok(None);
-    }
-    match v[k].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>()) {
-        Some(p) if p.len() == 2 => Ok(Some([p[0], p[1]])),
-        _ => Err(format!("{k}: [x_ft, y_ft]")),
+async fn end(app: &Shared, a: &Value, k: &str) -> Result<Option<[f64; 2]>, String> {
+    match &a[k] {
+        Value::Null => Ok(None),
+        v => crate::args::point(app, k, v).await.map(Some),
     }
 }
 
@@ -69,7 +65,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         Some("stone") => Some(CrossingMaterial::Stone),
         Some(m) => return Err(format!("material: timber or stone, not {m}")),
     };
-    let (from, to, width) = (point(a, "from")?, point(a, "to")?, a["width_ft"].as_f64());
+    let (from, to, width) = (end(app, a, "from").await?, end(app, a, "to").await?, a["width_ft"].as_f64());
     let id = a["id"].as_str().map(str::to_string);
     let [w, h] = app.worker.with(|ex| Ok([ex.world.geom.map_w_ft, ex.world.geom.map_h_ft])).await?;
     app.edit("agent", 0, move |e| {
@@ -103,13 +99,15 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
 }
 
 async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
-    let ids: Vec<String> = a["ids"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-    if ids.is_empty() {
-        return Err("give ids".into());
-    }
+    let ids = crate::args::ids(a)?;
     app.edit("agent", 0, move |e| {
+        for (i, id) in ids.iter().enumerate() {
+            if !e.crossings.contains_key(id) {
+                return Err(format!("ids[{i}]: no crossing {id}"));
+            }
+        }
         for id in &ids {
-            e.crossings.remove(id).ok_or_else(|| format!("no crossing {id}"))?;
+            e.crossings.remove(id);
         }
         Ok(json!({ "tool": "remove_crossings", "ids": ids }))
     })

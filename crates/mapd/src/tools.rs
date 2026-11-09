@@ -88,7 +88,7 @@ pub(crate) fn text(v: Value) -> Vec<Value> {
 }
 
 /// A list as `{items, found}` (`found`: how many there were; `truncated: true` when `limit` cut it), `rest` beside.
-fn listed(items: Value, limit: usize, rest: Value) -> Value {
+pub(crate) fn listed(items: Value, limit: usize, rest: Value) -> Value {
     let mut list = items.as_array().cloned().unwrap_or_default();
     let found = list.len();
     list.truncate(limit);
@@ -419,7 +419,7 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
 /// An id the world knows (so edits never pile up on typos).
 pub(crate) async fn known(app: &Shared, id: &str) -> Result<(), String> {
     let id2 = id.to_string();
-    app.worker.with(move |ex| agent::position(&ex.world, &ex.t0, &id2).map(|_| ()).ok_or_else(|| format!("no such feature: {id2}"))).await
+    app.worker.with(move |ex| agent::position(&ex.world, &ex.t0, &id2).map(|_| ()).ok_or_else(|| crate::args::no_such(&ex.world, &id2))).await
 }
 
 /// A building drawn by hand behind an id (`agent::drawn_pair`: its place in `created`, created

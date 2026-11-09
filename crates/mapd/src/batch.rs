@@ -62,7 +62,7 @@ pub fn list() -> Vec<Value> {
         "inputSchema": schema(json!({
             "steps": {
                 "type": "array",
-                "items": { "type": "object", "properties": { "tool": { "type": "string" }, "arguments": { "type": "object" } }, "required": ["tool"] },
+                "items": { "type": "object", "properties": { "tool": { "type": "string", "description": "A tool's name" }, "arguments": { "type": "object", "default": {}, "description": "That tool's arguments" } }, "required": ["tool"] },
                 "description": "The tools to run, in order (up to 5,000)",
             },
         }), &["steps"]),

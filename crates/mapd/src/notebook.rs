@@ -6,7 +6,7 @@ use worldgen::agent;
 use worldgen::world::{Npc, NpcPlace, PLOT_STATUSES, Plot, STANCES};
 
 use crate::Shared;
-use crate::tools::{arg_str, known, schema, text};
+use crate::tools::{arg_str, known, listed, schema, text};
 
 fn npc_props() -> Value {
     json!({
@@ -26,9 +26,10 @@ fn npc_props() -> Value {
 fn place_props() -> Value {
     json!({
         "location": { "type": "string", "description": "Where they are found: a feature, building, district or site id (empty: nowhere)" },
-        "level": { "type": "integer", "description": "Inside a building or site: the level (0 = lowest; default the way in)" },
+        "level": { "type": "integer", "minimum": 0, "description": "Inside a building or site: the level (0 = lowest; default the way in)" },
         "x_ft": { "type": "number", "description": "A point (ft) to stand at; alone, the place there is looked up" },
         "y_ft": { "type": "number" },
+        "at": crate::args::point_schema("Instead of location, x_ft and y_ft: an id (the location) or {x_ft, y_ft} / [x_ft, y_ft] (the point)"),
     })
 }
 
@@ -53,19 +54,20 @@ fn with(a: Value, b: Value) -> Value {
 
 pub fn list() -> Vec<Value> {
     let id = json!({ "id": { "type": "string" } });
+    let ids = crate::args::ids_props("id");
     let ro = json!({ "readOnlyHint": true });
     vec![
-        json!({ "name": "list_npcs", "title": "NPCs", "description": "The world's NPCs (written by the DM or agents): name, attitude, status, where they are. Filter by text, place (also on its levels and in its rooms; a settlement's id also finds those in its buildings and the sites standing in it; a building drawn by hand by either of its ids), tag or stance.", "inputSchema": schema(json!({ "query": { "type": "string" }, "location": { "type": "string" }, "tag": { "type": "string" }, "stance": { "type": "string", "enum": STANCES } }), &[]), "annotations": ro }),
+        json!({ "name": "list_npcs", "title": "NPCs", "description": "The world's NPCs (returns {items, found}; written by the DM or agents): name, attitude, status, where they are. Filter by text, place (also on its levels and in its rooms; a settlement's id also finds those in its buildings and the sites standing in it; a building drawn by hand by either of its ids), tag or stance.", "inputSchema": schema(json!({ "query": { "type": "string" }, "location": { "type": "string" }, "tag": { "type": "string" }, "stance": { "type": "string", "enum": STANCES } }), &[]), "annotations": ro }),
         json!({ "name": "get_npc", "title": "NPC", "description": "An NPC in full: appearance, mannerisms, attitude toward the players, goals, notes, where they are and the plots they are in.", "inputSchema": schema(id.clone(), &["id"]), "annotations": ro }),
         json!({ "name": "create_npc", "title": "Create an NPC", "description": "Add an NPC, optionally placed somewhere (a building's id puts them inside it; the DM sees them there). Returns the NPC with its id.", "inputSchema": schema(with(npc_props(), place_props()), &["name"]) }),
         json!({ "name": "update_npc", "title": "Update an NPC", "description": "Change an NPC's fields (only those given).", "inputSchema": schema(with(id.clone(), npc_props()), &["id"]) }),
-        json!({ "name": "delete_npc", "title": "Delete an NPC", "description": "Delete an NPC (and take them out of plots).", "inputSchema": schema(id.clone(), &["id"]) }),
-        json!({ "name": "place_npc", "title": "Place an NPC", "description": "Put an NPC somewhere: a place id (and level inside), or a point; an empty location takes them off the map.", "inputSchema": schema(with(id.clone(), place_props()), &["id"]) }),
-        json!({ "name": "list_plots", "title": "Plot points", "description": "The world's plot points: title, status, places and NPCs. Filter by text, status, place, NPC or tag.", "inputSchema": schema(json!({ "query": { "type": "string" }, "status": { "type": "string", "enum": PLOT_STATUSES }, "anchor": { "type": "string" }, "npc": { "type": "string" }, "tag": { "type": "string" } }), &[]), "annotations": ro }),
+        json!({ "name": "delete_npc", "title": "Delete an NPC", "description": "Delete an NPC, or several (id or ids; all or none), and take them out of plots.", "inputSchema": schema(ids.clone(), &[]) }),
+        json!({ "name": "place_npc", "title": "Place an NPC", "description": "Put an NPC somewhere: a place id (and level inside), or a point (at, or x_ft and y_ft); an empty location takes them off the map.", "inputSchema": schema(with(id.clone(), place_props()), &["id"]) }),
+        json!({ "name": "list_plots", "title": "Plot points", "description": "The world's plot points (returns {items, found}): title, status, places and NPCs. Filter by text, status, place, NPC or tag.", "inputSchema": schema(json!({ "query": { "type": "string" }, "status": { "type": "string", "enum": PLOT_STATUSES }, "anchor": { "type": "string" }, "npc": { "type": "string" }, "tag": { "type": "string" } }), &[]), "annotations": ro }),
         json!({ "name": "get_plot", "title": "Plot point", "description": "A plot point in full.", "inputSchema": schema(id.clone(), &["id"]), "annotations": ro }),
         json!({ "name": "create_plot", "title": "Create a plot point", "description": "Add a plot point tied to places and NPCs. Returns it with its id.", "inputSchema": schema(plot_props(), &["title"]) }),
         json!({ "name": "update_plot", "title": "Update a plot point", "description": "Change a plot point's fields (only those given; lists are replaced).", "inputSchema": schema(with(id.clone(), plot_props()), &["id"]) }),
-        json!({ "name": "delete_plot", "title": "Delete a plot point", "description": "Delete a plot point.", "inputSchema": schema(id, &["id"]) }),
+        json!({ "name": "delete_plot", "title": "Delete a plot point", "description": "Delete a plot point, or several (id or ids; all or none).", "inputSchema": schema(ids, &[]) }),
     ]
 }
 
@@ -119,12 +121,27 @@ fn npc_fields(n: &mut Npc, a: &Value) -> Result<(), String> {
 
 /// Where `a` puts an NPC: `Some(None)` off the map, `None` if it says nothing about it.
 async fn npc_place(app: &Shared, a: &Value) -> Result<Option<Option<NpcPlace>>, String> {
-    let at = match (a["x_ft"].as_f64(), a["y_ft"].as_f64()) {
-        (Some(x), Some(y)) => Some([x, y]),
-        _ => None,
-    };
+    // `at`: an id is the location, a point is x_ft and y_ft; not together with those.
+    let (mut location, mut at) = (a["location"].as_str().map(str::trim), None);
+    let given = |k: &str| !a[k].is_null();
+    if given("at") {
+        if given("location") || given("x_ft") || given("y_ft") {
+            return Err("at and location/x_ft/y_ft: give one place".into());
+        }
+        match &a["at"] {
+            Value::String(id) => location = Some(id.trim()),
+            p => at = Some(crate::args::point(app, "at", p).await?),
+        }
+    } else {
+        at = match (a["x_ft"].as_f64(), a["y_ft"].as_f64()) {
+            (Some(x), Some(y)) => Some(crate::args::point(app, "x_ft", &json!([x, y])).await?),
+            (Some(_), None) => return Err("y_ft: needed with x_ft".into()),
+            (None, Some(_)) => return Err("x_ft: needed with y_ft".into()),
+            _ => None,
+        };
+    }
     let level = a["level"].as_u64().map(|l| l as usize);
-    let id = match a["location"].as_str().map(str::trim) {
+    let id = match location {
         Some("") => return Ok(Some(None)),
         Some(id) if agent::is_authored(id) => return Err("a location is a place (a feature, building, district or site), not an NPC or plot".into()),
         Some(id) => {
@@ -190,26 +207,41 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
     Some(match name {
         "list_npcs" | "get_npc" | "list_plots" | "get_plot" => read(app, name, a.clone()).await.map(text),
         "create_npc" | "update_npc" | "place_npc" => write_npc(app, name, a).await.map(text),
-        "delete_npc" => match arg_str(a, "id") {
+        "delete_npc" => match crate::args::ids(a) {
             Err(e) => Err(e),
-            Ok(id) => app
+            Ok(ids) => app
                 .edit("agent", 0, move |e| {
-                    let n = e.npcs.remove(&id).ok_or_else(|| format!("no such NPC: {id}"))?;
-                    for p in e.plots.values_mut() {
-                        p.npcs.retain(|k| *k != id);
+                    for id in &ids {
+                        if !e.npcs.contains_key(id) {
+                            return Err(format!("no such NPC: {id}"));
+                        }
                     }
-                    Ok(json!({ "tool": "delete_npc", "id": id, "name": n.name }))
+                    let mut names = Vec::new();
+                    for id in &ids {
+                        if let Some(n) = e.npcs.remove(id) {
+                            names.push(n.name);
+                        }
+                        for p in e.plots.values_mut() {
+                            p.npcs.retain(|k| k != id);
+                        }
+                    }
+                    Ok(json!({ "tool": "delete_npc", "ids": ids, "names": names }))
                 })
                 .await
                 .map(text),
         },
         "create_plot" | "update_plot" => write_plot(app, name, a).await.map(text),
-        "delete_plot" => match arg_str(a, "id") {
+        "delete_plot" => match crate::args::ids(a) {
             Err(e) => Err(e),
-            Ok(id) => app
+            Ok(ids) => app
                 .edit("agent", 0, move |e| {
-                    let p = e.plots.remove(&id).ok_or_else(|| format!("no such plot point: {id}"))?;
-                    Ok(json!({ "tool": "delete_plot", "id": id, "name": p.title }))
+                    for id in &ids {
+                        if !e.plots.contains_key(id) {
+                            return Err(format!("no such plot point: {id}"));
+                        }
+                    }
+                    let names: Vec<String> = ids.iter().filter_map(|id| e.plots.remove(id)).map(|p| p.title).collect();
+                    Ok(json!({ "tool": "delete_plot", "ids": ids, "names": names }))
                 })
                 .await
                 .map(text),
@@ -228,8 +260,8 @@ async fn read(app: &Shared, name: &str, a: Value) -> Result<Value, String> {
             let tag = a["tag"].as_str();
             let tagged = |tags: &[String]| tag.is_none_or(|t| tags.iter().any(|x| x.eq_ignore_ascii_case(t)));
             match name.as_str() {
-                "get_npc" => agent::npc_json(w, t0, a["id"].as_str().unwrap_or(""), false).ok_or_else(|| "no such NPC".to_string()),
-                "get_plot" => agent::plot_json(w, t0, a["id"].as_str().unwrap_or(""), false).ok_or_else(|| "no such plot point".to_string()),
+                "get_npc" => agent::npc_json(w, t0, a["id"].as_str().unwrap_or(""), false).ok_or_else(|| format!("no such NPC: {}", a["id"].as_str().unwrap_or(""))),
+                "get_plot" => agent::plot_json(w, t0, a["id"].as_str().unwrap_or(""), false).ok_or_else(|| format!("no such plot point: {}", a["id"].as_str().unwrap_or(""))),
                 "list_npcs" => {
                     // A settlement or site also holds its buildings, districts, towers and ways underground
                     // (and their levels and rooms); a settlement, the sites in it (`agent::at_place`).
@@ -244,7 +276,7 @@ async fn read(app: &Shared, name: &str, a: Value) -> Result<Value, String> {
                         .filter(|(_, n)| at.is_none() || n.location.as_ref().is_some_and(|l| inside(&l.id)))
                         .filter_map(|(k, _)| agent::npc_json(w, t0, k, true))
                         .collect();
-                    Ok(json!({ "count": v.len(), "npcs": v }))
+                    Ok(listed(json!(v), usize::MAX, json!({})))
                 }
                 _ => {
                     let status = a["status"].as_str();
@@ -257,7 +289,7 @@ async fn read(app: &Shared, name: &str, a: Value) -> Result<Value, String> {
                         .filter(|(_, p)| anchor.is_none_or(|x| p.anchors.iter().any(|y| y == x)) && npc.is_none_or(|x| p.npcs.iter().any(|y| y == x)))
                         .filter_map(|(k, _)| agent::plot_json(w, t0, k, true))
                         .collect();
-                    Ok(json!({ "count": v.len(), "plots": v }))
+                    Ok(listed(json!(v), usize::MAX, json!({})))
                 }
             }
         })

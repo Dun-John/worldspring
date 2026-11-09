@@ -28,6 +28,17 @@ const ALIASES: &[(&str, &str, &str)] = &[
     ("list_names", "within", "inside"),
     ("annotate_feature", "text", "notes"),
     ("update_feature", "text", "notes"),
+    ("create_npc", "text", "notes"),
+    ("update_npc", "text", "notes"),
+    ("create_plot", "notes", "text"),
+    ("update_plot", "notes", "text"),
+    ("upload_sprite", "blocks_move", "blocks_movement"),
+    ("upload_sprite", "size", "size_squares"),
+    ("remove_objects", "area", "within"),
+    ("restore_objects", "area", "within"),
+    ("remove_objects", "at", "points"),
+    ("remove_buildings", "area", "within"),
+    ("set_plateau", "outline", "poly"),
 ];
 
 /// Keys a tool's code reads that its schema doesn't list (tools of files this module's owner
@@ -81,7 +92,7 @@ fn distance(a: &str, b: &str) -> usize {
 }
 
 /// The nearest of `names` to `word`: within 2 edits, or sharing a prefix of 3 or more letters.
-fn suggest<'a>(word: &str, names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+pub fn suggest<'a>(word: &str, names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
     let word = word.to_lowercase();
     names
         .into_iter()
@@ -164,18 +175,135 @@ fn fold_place(obj: &mut Map<String, Value>) -> Result<(), String> {
     let old = match (&id, &x, &y) {
         (None, None, None) => return Ok(()),
         (Some(_), Some(_), _) | (Some(_), _, Some(_)) => return Err("id and x_ft/y_ft: give one place, or at".into()),
-        (None, Some(_), None) => return Err(bad("y_ft", "needed with x_ft", &Value::Null)),
-        (None, None, Some(_)) => return Err(bad("x_ft", "needed with y_ft", &Value::Null)),
-        (Some(id), None, None) => id.clone(),
-        (None, Some(x), Some(y)) => json!({ "x_ft": x, "y_ft": y }),
+        (Some(id), None, None) => Some(id.clone()),
+        (None, Some(x), Some(y)) => Some(json!({ "x_ft": x, "y_ft": y })),
+        _ => None,
     };
-    match obj.get("at") {
-        Some(at) if *at != old => Err(format!("at and {} disagree: give one", if id.is_some() { "id" } else { "x_ft/y_ft" })),
-        Some(_) => Ok(()),
-        None => {
-            obj.insert("at".into(), old);
+    // `at` beside the old ways: the same place twice is fine, two places are not.
+    if let Some(at) = obj.get("at") {
+        return match old {
+            Some(o) if o == *at => Ok(()),
+            _ => Err(format!("at and {} disagree: give one", if id.is_some() { "id" } else { "x_ft/y_ft" })),
+        };
+    }
+    match old {
+        Some(o) => {
+            obj.insert("at".into(), o);
             Ok(())
         }
+        None if x.is_some() => Err("y_ft: needed with x_ft".into()),
+        None => Err("x_ft: needed with y_ft".into()),
+    }
+}
+
+/// The ids a remover or restorer is given: `id` (one) or `ids` (a list), either; both only when the same.
+pub fn ids(a: &Value) -> Result<Vec<String>, String> {
+    let one = a["id"].as_str().map(str::to_string);
+    let many: Option<Vec<String>> = a["ids"].as_array().map(|l| l.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
+    let mut out = match (one, many) {
+        (None, None) => return Err("give id or ids".into()),
+        (Some(o), None) => vec![o],
+        (None, Some(m)) => m,
+        (Some(o), Some(m)) if m.len() == 1 && m[0] == o => m,
+        (Some(_), Some(_)) => return Err("id and ids disagree: give one".into()),
+    };
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|i| seen.insert(i.clone()));
+    if out.is_empty() {
+        return Err(bad("ids", "at least one id", &json!([])));
+    }
+    Ok(out)
+}
+
+/// `id` and `ids`, for a remover's or restorer's schema.
+pub fn ids_props(what: &str) -> Value {
+    json!({
+        "id": { "type": "string", "description": format!("One {what} (or ids)") },
+        "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": format!("Several {what}s, all or none (or id)") },
+    })
+}
+
+/// The `within` schema: a box, a polygon or a circle (`max_radius_ft` its largest radius).
+pub fn area_schema(description: &str, max_radius_ft: f64) -> Value {
+    let num = json!({ "type": "number" });
+    json!({
+        "description": description,
+        "oneOf": [
+            { "type": "array", "title": "a box [x0, y0, x1, y1]", "items": num, "minItems": 4, "maxItems": 4 },
+            { "type": "array", "title": "a polygon [[x, y], ...]", "items": { "type": "array", "items": num, "minItems": 2, "maxItems": 2 }, "minItems": 3 },
+            { "type": "object", "title": "a circle {at, radius_ft}", "properties": {
+                "at": point_schema("The middle: an id, {x_ft, y_ft} or [x_ft, y_ft]"),
+                "x_ft": num, "y_ft": num,
+                "radius_ft": { "type": "number", "minimum": 0, "maximum": max_radius_ft },
+            }, "required": ["radius_ft"] },
+        ],
+    })
+}
+
+/// An area of the map (world ft).
+#[derive(Clone, Debug)]
+pub enum Area {
+    Box([f64; 4]),
+    Poly(Vec<[f64; 2]>),
+    Circle([f64; 2], f64),
+}
+
+impl Area {
+    pub fn contains(&self, p: [f64; 2]) -> bool {
+        match self {
+            Area::Box(b) => p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3],
+            Area::Circle(c, r) => (p[0] - c[0]).hypot(p[1] - c[1]) <= *r,
+            Area::Poly(q) => {
+                let mut inside = false;
+                let mut j = q.len() - 1;
+                for i in 0..q.len() {
+                    if (q[i][1] > p[1]) != (q[j][1] > p[1]) && p[0] < (q[j][0] - q[i][0]) * (p[1] - q[i][1]) / (q[j][1] - q[i][1]) + q[i][0] {
+                        inside = !inside;
+                    }
+                    j = i;
+                }
+                inside
+            }
+        }
+    }
+
+    /// A polygon that holds the whole area (its own, or a box round a circle).
+    pub fn outline(&self) -> Vec<[f64; 2]> {
+        match self {
+            Area::Box(b) => vec![[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]],
+            Area::Poly(q) => q.clone(),
+            Area::Circle(c, r) => vec![[c[0] - r, c[1] - r], [c[0] + r, c[1] - r], [c[0] + r, c[1] + r], [c[0] - r, c[1] + r]],
+        }
+    }
+}
+
+/// An area from a `within` value (already checked against `area_schema`); `field` names it in errors.
+pub async fn area(app: &Shared, field: &str, v: &Value) -> Result<Area, String> {
+    match v {
+        Value::Array(a) if a.len() == 4 && a.iter().all(Value::is_number) => {
+            let n: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
+            if n[2] <= n[0] || n[3] <= n[1] {
+                return Err(bad(field, "a box [x0, y0, x1, y1] with x1 > x0 and y1 > y0", v));
+            }
+            Ok(Area::Box([n[0], n[1], n[2], n[3]]))
+        }
+        Value::Array(a) => {
+            let q: Option<Vec<[f64; 2]>> = a.iter().map(|p| Some([p.get(0)?.as_f64()?, p.get(1)?.as_f64()?])).collect();
+            q.filter(|q| q.len() >= 3).map(Area::Poly).ok_or_else(|| bad(field, "a polygon of 3 or more [x_ft, y_ft] corners", v))
+        }
+        Value::Object(o) => {
+            let r = o.get("radius_ft").and_then(Value::as_f64).ok_or_else(|| format!("{field}.radius_ft: required"))?;
+            let c = match (o.get("at"), o.get("x_ft"), o.get("y_ft")) {
+                (Some(_), Some(_), _) | (Some(_), _, Some(_)) => return Err(format!("{field}: at and x_ft/y_ft: give one middle")),
+                (Some(at), None, None) => point(app, &format!("{field}.at"), at).await?,
+                (None, Some(x), Some(y)) => point(app, field, &json!({ "x_ft": x, "y_ft": y })).await?,
+                (None, Some(_), None) => return Err(format!("{field}.y_ft: needed with x_ft")),
+                (None, None, Some(_)) => return Err(format!("{field}.x_ft: needed with y_ft")),
+                (None, None, None) => return Err(format!("{field}: a circle needs at (or x_ft and y_ft)")),
+            };
+            Ok(Area::Circle(c, r))
+        }
+        _ => Err(bad(field, "a box, a polygon or a circle {at, radius_ft}", v)),
     }
 }
 
@@ -356,6 +484,18 @@ fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&
     }
 }
 
+/// What to say of an id that names no place: a notebook id that is not on the map says what it is.
+pub fn no_such(world: &worldgen::world::World, id: &str) -> String {
+    let e = &world.file.edits;
+    if e.npcs.contains_key(id) {
+        format!("{id} is an NPC with no location")
+    } else if e.plots.contains_key(id) {
+        format!("{id} is a plot point, not a place")
+    } else {
+        format!("no such feature: {id}")
+    }
+}
+
 /// The map's size in feet.
 async fn map_size(app: &Shared) -> Result<[f64; 2], String> {
     app.worker.with(|ex| Ok([ex.world.geom.map_w_ft, ex.world.geom.map_h_ft])).await
@@ -369,7 +509,7 @@ pub async fn point(app: &Shared, field: &str, v: &Value) -> Result<[f64; 2], Str
             let id = id.clone();
             return app
                 .worker
-                .with(move |ex| worldgen::agent::position(&ex.world, &ex.t0, &id).ok_or_else(|| format!("no such feature: {id}")))
+                .with(move |ex| worldgen::agent::position(&ex.world, &ex.t0, &id).ok_or_else(|| no_such(&ex.world, &id)))
                 .await;
         }
         Value::Object(o) => (o.get("x_ft").and_then(Value::as_f64), o.get("y_ft").and_then(Value::as_f64)),

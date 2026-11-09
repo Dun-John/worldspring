@@ -52,12 +52,13 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 - **Lists** come back as `{items, found}`: `found` is how many there were before any `limit`, and `truncated: true`
   says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`).
 - **Moves are reported:** a tool that puts something elsewhere than asked (a site pushed off a river onto dry land, a
-  point snapped) says so when it is more than 5 ft: `moved: {x_ft, y_ft, ft, why}`.
+  footprint snapped to the grid) says so when it is more than 5 ft: `moved: {x_ft, y_ft, ft, why}`.
 
 | What | Name | Also accepted | Tools |
 |---|---|---|---|
 | A point | `at`: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | `id` (where it is not the tool's subject), `x_ft` + `y_ft` | `describe_location`, `features_near`, `list_roads`, `get_battlemap`, `render_view`, `focus_view`, `create_feature`, `ground_heights`, `shape_ground` |
 | Other points | `near` (`create_building`), `from`/`to` (`route`, `place_crossing`): the same three forms | | |
+| Generated objects to take away | `points` `[{kind, x_ft, y_ft}, ...]` | `at` (a list here only) | `remove_objects` |
 | An NPC's place | `location` (an id) and/or a point | `at` (an id is the `location`, a point is `x_ft`/`y_ft`) | `create_npc`, `place_npc` |
 | An area | `within`: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` (3+ points) or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`) | `area` | `remove_buildings`, `remove_objects`, `restore_objects` (`get_town_plan`: a box) |
 | Inside a building or site | `inside`: its id | `within` given as an id | `list_names` |
@@ -69,7 +70,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | Units | `_ft` feet, `_mi` miles, `_squares` squares, `_deg` degrees, in every name that carries one | | |
 | Dry runs | `dry_run`, only where a tool lists it; elsewhere it is an unknown argument | | `set_site_design`, `edit_town` |
 | Lists returned | `{items, found}` (+ `truncated`) | | `search_features`, `features_near`, `list_names`, `list_roads`, `list_npcs`, `list_plots`, `list_sprites` (each item says `uploaded`), `list_crossings` |
-| Moves reported | `moved: {x_ft, y_ft, ft, why}` | | `create_feature`, `create_building`, `place_crossing` |
+| Moves reported | `moved: {x_ft, y_ft, ft, why}` | | `create_feature`, `create_building` (a crossing's ends are never moved) |
 
 - **Names** in results already include renames, and search matches them. Hidden features are left out of search
   unless you ask for them.
@@ -661,7 +662,7 @@ tools. Ids are random (`n:k3x9q0ab`), so the app and an agent can create at the 
 | `tag` | string | optional | |
 | `stance` | string | optional | `hostile`, `unfriendly`, `neutral`, `friendly` or `allied`. |
 
-Returns `{count, npcs: [{id, name, stance, status, location: {id, name, level?, x_ft?, y_ft?}, tags}]}`.
+Returns `{items: [{id, name, stance, status, location: {id, name, level?, x_ft?, y_ft?}, tags}], found}`.
 
 ### `get_npc`
 An NPC in full: `name`, `appearance`, `mannerisms`, `attitude: {stance, text}`, `goals`, `notes`, `tags`,
@@ -671,15 +672,16 @@ An NPC in full: `name`, `appearance`, `mannerisms`, `attitude: {stance, text}`, 
 | Parameter | Type | | |
 |---|---|---|---|
 | `name` | string | required | |
-| `appearance`, `mannerisms`, `goals`, `notes` | string | optional | `notes` are the DM's (secrets). |
+| `appearance`, `mannerisms`, `goals`, `notes` | string | optional | `notes` are the DM's (secrets); `text` is accepted for `notes`. |
 | `stance` | string | optional | Attitude toward the players (default `neutral`). |
 | `attitude` | string | optional | Why they feel that way, what would change it. |
 | `tags` | string[] | optional | |
 | `status` | string | optional | Free text: alive, dead, missing, imprisoned… |
 | `portrait` | string | optional | An asset id (`PUT /assets/<id>`, or a picture uploaded in the app). |
 | `location` | string | optional | A place id. |
-| `level` | integer | optional | Inside a building or site: 0 is the lowest level. |
-| `x_ft`, `y_ft` | number | optional | A point to stand at. Without `location`, the building, district or settlement there (else the nearest named place) is used. |
+| `level` | integer | optional | Inside a building or site: 0 (the lowest level) or more. |
+| `x_ft`, `y_ft` | number | optional | A point to stand at (both; on the map). Without `location`, the building, district or settlement there (else the nearest named place) is used. |
+| `at` | id, point | optional | Instead of those: an id is the `location`, `{x_ft, y_ft}` or `[x_ft, y_ft]` is the point. Not together with `location`, `x_ft` or `y_ft` (refused). |
 
 ```json
 { "name": "create_npc", "arguments": { "name": "Old Brannoc", "appearance": "One eye, a scarred chin", "stance": "unfriendly", "attitude": "Distrusts adventurers since the fire", "goals": "Sell the inn and retire", "location": "b:0:620", "tags": ["innkeeper"] } }
@@ -690,10 +692,10 @@ An NPC in full: `name`, `appearance`, `mannerisms`, `attitude: {stance, text}`, 
 `id` plus any of `create_npc`'s fields except the place; only the fields given change.
 
 ### `place_npc`
-`id` plus `location` (and `level`) or `x_ft`/`y_ft`. An empty `location` takes them off the map.
+`id` plus `location` (and `level`), `x_ft`/`y_ft` or `at`. An empty `location` takes them off the map. An id that is an NPC with no place, or a plot point, is not a place: the refusal says so.
 
 ### `delete_npc`
-`id`. They are also taken out of every plot point.
+`id` or `ids` (all or none, in one edit). They are also taken out of every plot point.
 
 ### `list_plots`
 | Parameter | Type | | |
@@ -704,6 +706,8 @@ An NPC in full: `name`, `appearance`, `mannerisms`, `attitude: {stance, text}`, 
 | `npc` | string | optional | An NPC id. |
 | `tag` | string | optional | |
 
+Returns `{items, found}`.
+
 ### `get_plot`
 A plot point in full: `title`, `text`, `status`, `anchors` and `npcs` (each with its name), `tags`.
 
@@ -711,7 +715,7 @@ A plot point in full: `title`, `text`, `status`, `anchors` and `npcs` (each with
 | Parameter | Type | | |
 |---|---|---|---|
 | `title` | string | required | |
-| `text` | string | optional | What is going on, hooks, how it may play out. |
+| `text` | string | optional | What is going on, hooks, how it may play out; `notes` is accepted for `text`. |
 | `status` | string | optional | `idea` (default), `active` or `resolved`. |
 | `anchors` | string[] | optional | Place ids (not NPCs). |
 | `npcs` | string[] | optional | NPC ids; they must exist. |
@@ -726,7 +730,7 @@ A plot point in full: `title`, `text`, `status`, `anchors` and `npcs` (each with
 `id` plus any of `create_plot`'s fields; lists given replace the old ones.
 
 ### `delete_plot`
-`id`.
+`id` or `ids` (all or none).
 
 ---
 
@@ -746,8 +750,9 @@ alone; only the battlemap chunk holding each object (by its centre) is made agai
   picture with a transparent background works best, at about 64 px a square.
 
 ### `list_sprites`
-No parameters. Returns `{built_in: [{kind, name, rules}], uploaded: [{kind, name, picture, rules, placed}]}`;
-`rules` are cover, blocks_movement, blocks_sight, difficult, height_ft, size_squares and any hazard.
+No parameters. Returns `{items, found}`: built-in kinds and uploaded sprites in one list, each
+`{kind, name, uploaded, rules}` (an uploaded one also `picture` and `placed`, how many are put down); `rules` are cover (a
+word), blocks_movement, blocks_sight, difficult, height_ft, size_squares and any hazard.
 
 ### `upload_sprite`
 | Parameter | Type | | |
@@ -756,15 +761,15 @@ No parameters. Returns `{built_in: [{kind, name, rules}], uploaded: [{kind, name
 | `path` | string | | A picture file on the machine mapd runs on. |
 | `asset` | string | | A picture already uploaded: change its name or rules. |
 | `name` | string | optional | |
-| `size` | number | optional | Squares across at scale 1 (default 1; 0.2–40). |
-| `cover` | integer | optional | 0 none (default), 1 half, 2 three-quarters, 3 full. |
-| `blocks_move`, `blocks_sight`, `difficult` | boolean | optional | Default false. |
-| `height_ft` | number | optional | Default 3. Objects 5 ft and taller draw above tokens' shadows. |
+| `size_squares` | number | optional | Squares across at scale 1 (default 1; 0.2–40). Also `size`. |
+| `cover` | string or integer | optional | `none` (default), `half`, `three-quarters` or `full`, as the rules are returned; or 0 to 3. |
+| `blocks_movement`, `blocks_sight`, `difficult` | boolean | optional | Default false. `blocks_move` is accepted for `blocks_movement`. |
+| `height_ft` | number | optional | 0–500 (default 3). Objects 5 ft and taller draw above tokens' shadows. |
 
 Returns `{kind: "s:<asset>", asset}`.
 
 ```json
-{ "name": "upload_sprite", "arguments": { "path": "C:/art/altar.png", "name": "Blood altar", "size": 2, "cover": 2, "blocks_move": true, "height_ft": 4 } }
+{ "name": "upload_sprite", "arguments": { "path": "C:/art/altar.png", "name": "Blood altar", "size_squares": 2, "cover": "three-quarters", "blocks_movement": true, "height_ft": 4 } }
 ```
 
 ### `place_objects`
@@ -772,7 +777,7 @@ Returns `{kind: "s:<asset>", asset}`.
 |---|---|---|---|
 | `objects` | array | required | 1–500 of `{id?, kind, x_ft, y_ft, rot_deg?, scale?, variant?}`. |
 
-`kind` is a built-in kind (id or name) or an uploaded sprite. `rot_deg` turns it clockwise: it is drawn turned
+A mistake in the list is refused with the item's place in it (`objects[17].scale: 0.2 to 5, got 9`, `objects[3].kind: no object kind 'boulderr'`); nothing is put down then. `kind` is a built-in kind (id or name) or an uploaded sprite. `rot_deg` turns it clockwise: it is drawn turned
 for props that can turn (not trees, plants or pools) and for uploaded sprites; without it the object keeps the
 way it is drawn by default. `scale` is 0.2–5 (default 1). `variant` (0–15) picks a built-in kind's look: most
 have four (taken modulo 4), a market stall sixteen (its awning and its goods); default by chance. Positions must be on the map. Objects stand on the outdoor battlemap: one put down where a building
@@ -781,7 +786,7 @@ stands is under its roof. Furniture, props and traps in a building's rooms or un
 
 With `id` (`o:…`, an object put down before) the object is changed in place and keeps its id: only the fields
 given change, so `{id, x_ft, y_ft}` moves it and `{id, rot_deg}` turns it (`kind` is then optional). A
-generated object is moved by taking it away (`remove_objects` with `at`) and putting one down. Returns
+generated object is moved by taking it away (`remove_objects` with `points`) and putting one down. Returns
 `{tool, ids, changed}` (`changed`: the ids that were given, changed in place).
 
 ```json
@@ -795,20 +800,21 @@ generated object is moved by taking it away (`remove_objects` with `at`) and put
 ### `remove_objects`
 | Parameter | Type | | |
 |---|---|---|---|
-| `ids` | string[] | optional | Objects put down by hand (`o:…`). |
-| `at` | array | optional | Generated objects: `{kind, x_ft, y_ft}` each, as `get_battlemap` lists them (matched within a quarter square). |
-| `area` | object | optional | `{x_ft, y_ft, radius_ft, kinds?}`: everything in the circle, placed and generated (only built-in `kinds`, if given). Radius up to 640 ft. |
+| `id`, `ids` | string / string[] | optional | Objects put down by hand (`o:…`); all or none. |
+| `points` | array | optional | Generated objects: `{kind, x_ft, y_ft}` each, as `get_battlemap` lists them (matched within a quarter square). Before, this was called `at`, which still works here (`at` is one place everywhere else). |
+| `within` | area | optional | Everything inside: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`; radius up to 640 ft). A circle takes away placed and generated objects; a box or polygon only those put down by hand (the reply says so). Also `area`. |
+| `kinds` | array | optional | With `within`: only these built-in kinds (ids or names). A `kinds` inside a circle works too. |
 
 Returns `{tool, removed: [o:…], clears: [x:…]}`.
 
 ```json
-{ "name": "remove_objects", "arguments": { "area": { "x_ft": 412500, "y_ft": 380120, "radius_ft": 30, "kinds": ["deciduous tree", "conifer"] } } }
+{ "name": "remove_objects", "arguments": { "within": { "x_ft": 412500, "y_ft": 380120, "radius_ft": 30 }, "kinds": ["deciduous tree", "conifer"] } }
 ```
 > *"Clear the trees from a 60-ft circle in the woods north of the ruin so there's room for a fight."*
 
 ### `restore_objects`
-`ids` (clears, `x:…`) and/or `area` (`{x_ft, y_ft, radius_ft}`: every clear touching the circle). The generated
-objects come back.
+`id` or `ids` (clears, `x:…`; all or none) and/or `within` (a box, a polygon or a circle `{at, radius_ft}`, also
+`area`: every clear touching a circle, or with its middle inside a box or polygon). The generated objects come back.
 
 ## Buildings drawn by hand
 
@@ -828,10 +834,11 @@ alone.
 - **Footprint:** any simple shape of 3–64 corners, at least 10 ft across, every corner within 200 ft of its
   middle. L-shapes and other concave plans are fine (their roofs are drawn as several hips).
 - **What it is (`func`):** a business by its catalog key (`inn`, `tavern`, `blacksmith`, `temple`, `castle`,
-  `observatory`, `library`… as `list_names` shows them) or a home: `hovel`, `house` (default), `townhouse`,
+  `observatory`, `library`… as `list_names` shows them; the tool's `func` description lists every key) or a home: `hovel`, `house` (default), `townhouse`,
   `tenement`, `noble_estate`, `farmhouse`, `wizard_tower`. It decides the rooms inside: a taproom and guest
   rooms for an inn, a forge for a smithy, cells for a prison, a round stair and study floors for a wizard's tower
-  (when the footprint is round).
+  (when the footprint is round). A `func` the code does not know is refused with the nearest key
+  (`func: a business or home such as inn, tavern, ..., got "tavrn" (did you mean tavern?)`).
 - **Roof:** `hip` (pitched; L-shapes get one per wing), `battlements` (a walkable roof with a parapet: the
   interior gains a roof level) or `cone`; left out, as its kind has it (battlements on castles, barracks and
   towers). **Tint:** `terracotta`, `slate`, `thatch`, `shingle` or `moss` (left out: picked).
@@ -845,13 +852,13 @@ A building with the same footprint as one already drawn (every corner within 2 f
 given) the same name is not drawn twice: the result is that building, with `"existing": true`. A different
 building on that footprint is refused (`that overlaps …`).
 
-Instead of a footprint, `near` (an id, or `{x_ft, y_ft}`) with `width_ft` and `depth_ft` finds the nearest clear
+Instead of a footprint, `near` (an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`) with `width_ft` and `depth_ft` finds the nearest clear
 lot: tried ring by ring out to 400 ft, turned square to the nearest street (or road), its front 2–12 ft from it
 where a street is within 300 ft, on the grid when unturned, off squares.
 
 | Parameter | Type | | |
 |---|---|---|---|
-| `poly` | `[[x_ft, y_ft], …]` | one of these | The footprint's corners in order. |
+| `poly` | `[[x_ft, y_ft], …]` | one of these | The footprint's corners in order (3–64). |
 | `rect` | object | | `{x_ft, y_ft, width_ft, depth_ft, angle_deg?}`: a rectangle about its middle, `width` along `angle_deg` (clockwise from east). |
 | `circle` | object | | `{x_ft, y_ft, radius_ft, sides?}`: a round tower (8–32 sides, default 16). |
 | `snap` | boolean | optional | Default true: corners of a `poly` or unturned `rect`, and a circle's middle, snap to the 5-ft grid. |
@@ -864,10 +871,12 @@ where a street is within 300 ft, on the grid when unturned, off squares.
 | `shape` | string | optional | Roof shape: `hip`, `gable`, `cone`, `dome`, `flat`, `round` or `auto`. A flat roof (or a dome on a plain building) has a walkable terrace. A material that cannot take the shape is eased to one it can. |
 | `shade` | integer or string | optional | Roof colour: one of the material's five variants, 0–4 (2 the usual; e.g. slate 0 blue-grey, 1 green-grey, 3 purple-grey, 4 dark; clay tile 0 brick, 1 orange, 3 brown, 4 salmon), or `auto` (picked: mostly the usual one). |
 | `structure` | string | optional | `roofed` (default) or `ruin`. |
-| `near` | id or object | instead of a footprint | Find the nearest clear lot near this place (see above). |
+| `near` | id, object or `[x_ft, y_ft]` | instead of a footprint | Find the nearest clear lot near this place (see above). |
 | `width_ft`, `depth_ft` | number | with `near` | The lot along the street and back from it, 10–400 ft. |
 
-Returns the site as `get_feature` does, plus `building` (its building id).
+Returns the site as `get_feature` does, plus `building` (its building id), and `moved: {x_ft, y_ft, ft, why}` when
+the footprint snapped to the grid (or its point set where it fits) put it more than 5 ft from where it was asked
+(not with `near`, which picks a lot by design).
 
 ```json
 { "name": "create_building", "arguments": { "rect": { "x_ft": 412500, "y_ft": 380120, "width_ft": 50, "depth_ft": 30 }, "func": "inn", "floors": 2, "tint": "thatch" } }
@@ -903,23 +912,48 @@ Read-only: whether a footprint (`poly`, `rect` or `circle`, with `snap`) is clea
 ```
 
 ### `remove_buildings`
-Take away buildings of the world's own (drawn ones go with `delete_feature`): `ids` (`b:<layout>:<id>`), and/or
-every one whose middle lies inside `within` (a polygon, `[[x_ft, y_ft], …]`), such as a ward to clear for
-buildings of your own. Their ground is free to build on; every other building keeps its id. Returns `removed`
-(the ids) and `count`.
+Take away buildings of the world's own (drawn ones go with `delete_feature`): `id` or `ids` (`b:<layout>:<id>`),
+and/or every one whose middle lies inside `within`: a polygon `[[x_ft, y_ft], …]`, a box `[x0, y0, x1, y1]` or a
+circle `{at, radius_ft}` (also `area`), such as a ward to clear for buildings of your own. Their ground is free to
+build on; every other building keeps its id. Returns `removed` (the ids) and `count`.
 
 ```json
 { "name": "remove_buildings", "arguments": { "within": [[412400, 380000], [412800, 380000], [412800, 380300], [412400, 380300]] } }
 ```
 
 ### `restore_building`
-`id` (`b:<layout>:<id>`): the building back as generated, whether taken away or changed (a rename stays).
+`id` or `ids` (`b:<layout>:<id>`; all or none): the buildings back as generated, whether taken away or changed (a
+rename stays). One id returns that building; several return `{ids, restored: [buildings]}`.
 
 ### Worlds with only drawn roads
 With the world parameter `generated_roads: false` (the app's World › Generate › People & places › Roads: Only
 drawn), the world has only the roads drawn in its sketch, with short spurs to the settlements beside them, and no
 roadside inns; settlements are placed without regard to roads, so drawing a road never moves one. Drawing a road
 into a town lays the town out anew (its gates follow its roads): draw roads before changing a town's buildings.
+
+## Crossings (bridges, fords and ferries)
+
+Crossings put down by hand (`v:<id>`) join one bank to the other, drawn on the battlemap over what is there. A
+bridge is a walkable deck clear of the water (timber, or old stone), a ford a bed brought up to wading depth under
+stepping stones, a ferry jetties out from each end with a raft between. The ends are exactly where they are given
+(never moved).
+
+### `list_crossings`
+No parameters. Returns `{items, found}`: `{id, kind, from, to, width_ft, length_ft, material?}`.
+
+### `place_crossing`
+| Parameter | Type | | |
+|---|---|---|---|
+| `kind` | string | required for a new one | `bridge`, `ford` or `ferry`. |
+| `from`, `to` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required for a new one | The banks (on the map). The length between them is 10–2,000 ft (a ferry at least 68). |
+| `width_ft` | number | optional | Deck, ford or raft width, 5–40 (default 12). |
+| `material` | string | optional | A bridge's: `timber` (default) or `stone`. |
+| `id` | string | optional | A crossing to change (`v:…`): only the fields given change. |
+
+Returns `{tool, id, kind, changed, crossing}`.
+
+### `remove_crossings`
+`id` or `ids` (`v:…`; all or none). A mistake names the id's place in the list (`ids[1]: no crossing v:zz`).
 
 ## Underground sites designed by hand
 
@@ -1430,7 +1464,7 @@ does). The reply: `blocks` changed, `squares` under the brush, the lowest and hi
 | `mode` | string | required | `raise`, `lower`, `smooth`, `restore` |
 | `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | | A dab (or `x_ft` + `y_ft`, or `id`, beside the other arguments) |
 | `radius_ft` | number | 15 | A dab's radius, 2.5–200 |
-| `path` | `[[x_ft, y_ft], …]` | | Or a stroke along a line |
+| `path` | `[[x_ft, y_ft], …]` | | Or a stroke along a line (each point may be an id or `{x_ft, y_ft}` too) |
 | `width_ft` | number | 30 | A stroke's width, 5–400 |
 | `height_ft` | number | 5 | Raise, lower: 0–50 (one tier is 5) |
 | `hardness` | number | 0.5 | 0 soft to 1 hard |
@@ -1441,7 +1475,7 @@ does). The reply: `blocks` changed, `squares` under the brush, the lowest and hi
 ```
 
 ### `set_plateau`
-A plateau or pit, or a change to one. The outline is `outline`, or `around` a building (`b:`), a keep, a wall
+A plateau or pit, or a change to one. The outline is `poly` (also `outline`), or `around` a building (`b:`), a keep, a wall
 tower (`t:`) or a site (its buildings, towers and walls), its footprint's convex outline grown by `margin_ft`;
 outlines are simplified to at most 48 points. The level is `level_ft` above the sea, or `rise_ft` above the
 ground (as shaped, this plateau left out) at the outline's middle. The reply: `id`, `changed`, `level_ft`,
@@ -1450,11 +1484,11 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 | Parameter | Type | Default | |
 |---|---|---|---|
 | `id` | string | | A plateau to change (`h:…`): only the fields given change |
-| `outline` | `[[x_ft, y_ft], …]` | | The outline (world ft) |
+| `poly` | `[[x_ft, y_ft], …]` | | The outline (world ft, 3 or more corners; also called `outline`) |
 | `around` | string | | Or a building, tower or site to raise it round |
 | `margin_ft` | number | 10 | Round the footprint, 0–200 |
-| `level_ft` | number | | Its level above the sea |
-| `rise_ft` | number | 10 | Or its level above the ground at the middle (below zero: a pit); with `id`, only when given |
+| `level_ft` | number | | Its level above the sea, within 20,000 ft |
+| `rise_ft` | number | 10 | Or its level above the ground at the middle, within 150 ft (below zero: a pit); with `id`, only when given |
 | `edge_ft` | number | 0 | The slope round it, 0 (sheer) to 60 |
 
 ```json
@@ -1462,7 +1496,7 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 ```
 
 ### `delete_plateau`
-Take plateaus or pits away by `id` or `ids`; the ground goes back as it was (brushed changes stay).
+Take plateaus or pits away by `id` or `ids` (all or none); the ground goes back as it was (brushed changes stay).
 
 ### `ground_heights`
 Every square of the box reaching `radius_ft` (default 25, at most 200) east, west, north and south of a place:
@@ -1483,6 +1517,7 @@ top (knolls, hollows) and levels road beds under roads.
 |---|---|
 | `a stroke reaches at most 48 blocks of 80 ft` | Shorten the path or narrow it; or several calls |
 | `a world holds at most 1500 blocks of brushed ground` / `at most 256 plateaus` | The world's limits |
+| `radius_ft: 2.5 to 200, got 500` (and the like for `width_ft`, `height_ft`, `hardness`, `edge_ft`, `margin_ft`) | The numbers' ranges are in the schema and refused, never clamped |
 | `an outline spans at most 1280 ft` / `the outline crosses itself` / `the outline holds no ground` | A plateau's outline |
 | `… is a settlement: a plateau spans at most 1280 ft` | `around` a whole town: give a building or an outline |
 

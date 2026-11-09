@@ -13,12 +13,12 @@ const SQUARE_FT: f64 = 5.0;
 
 fn props() -> Value {
     json!({
-        "poly": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "The footprint: corners [x_ft, y_ft] in order (3-64; any simple shape, L-shapes too)" },
+        "poly": { "type": "array", "minItems": 3, "maxItems": 64, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "The footprint: corners [x_ft, y_ft] in order (3-64; any simple shape, L-shapes too)" },
         "rect": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "width_ft": { "type": "number" }, "depth_ft": { "type": "number" }, "angle_deg": { "type": "number", "default": 0 } }, "required": ["x_ft", "y_ft", "width_ft", "depth_ft"], "description": "Or a rectangle about its middle (width along angle_deg, clockwise from east)" },
         "circle": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "radius_ft": { "type": "number" }, "sides": { "type": "integer", "minimum": 8, "maximum": 32, "default": 16 } }, "required": ["x_ft", "y_ft", "radius_ft"], "description": "Or a round tower" },
         "snap": { "type": "boolean", "default": true, "description": "Snap poly and unturned rect corners (and a circle's middle) to the 5-ft grid" },
         "name": { "type": "string", "description": "Else named for its trade (or what it is)" },
-        "func": { "type": "string", "description": format!("What it is: a business (a catalog key as list_names shows businesses: inn, tavern, blacksmith, temple, castle, observatory...) or a home: {}. Default house; a round wizard_tower or observatory is a tower inside", BUILDING_HOMES.join(", ")) },
+        "func": { "type": "string", "description": format!("What it is: a business (a catalog key as list_names shows businesses: inn, tavern, blacksmith, temple, castle, observatory...) or a home: {}. Default house; a round wizard_tower or observatory is a tower inside. Businesses: {}", BUILDING_HOMES.join(", "), worldgen::town::catalog::CATALOG.iter().map(|f| f.key).collect::<Vec<_>>().join(", ")) },
         "floors": { "type": "integer", "minimum": 1, "maximum": MAX_FLOORS },
         "roof": { "type": "string", "enum": ([ROOFS.as_slice(), &["auto"]].concat()), "description": "hip (pitched), battlements (a walkable roof), cone; auto: as its kind has it (battlements on castles and towers)" },
         "tint": { "type": "string", "enum": ([TINTS.as_slice(), &["auto"]].concat()), "description": "Roof colour (auto: picked)" },
@@ -36,22 +36,25 @@ pub fn list() -> Vec<Value> {
     }
     let mut create = props();
     if let Some(m) = create.as_object_mut() {
-        m.insert("near".into(), json!({ "description": "Instead of a footprint: an id or {x_ft, y_ft}; the nearest clear spot for width_ft x depth_ft, its front on a street and square to it, off squares" }));
-        m.insert("width_ft".into(), json!({ "type": "number", "description": "With near: along the street (10-400)" }));
-        m.insert("depth_ft".into(), json!({ "type": "number", "description": "With near: back from the street (10-400)" }));
+        m.insert("near".into(), crate::args::point_schema("Instead of a footprint: an id, {x_ft, y_ft} or [x_ft, y_ft]; the nearest clear spot for width_ft x depth_ft, its front on a street and square to it, off squares"));
+        m.insert("width_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400, "description": "With near: along the street" }));
+        m.insert("depth_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400, "description": "With near: back from the street" }));
     }
     let mut check = props();
     if let Some(m) = check.as_object_mut() {
         m.retain(|k, _| ["poly", "rect", "circle", "snap", "func"].contains(&k.as_str()));
         m.insert("id".into(), json!({ "type": "string", "description": "The building being reshaped, if any (it does not count against itself)" }));
     }
-    let poly = json!({ "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } });
+    let mut remove = crate::args::ids_props("building id (b:<layout>:<id>)");
+    if let Some(m) = remove.as_object_mut() {
+        m.insert("within".into(), crate::args::area_schema("Every one whose middle lies inside: a polygon [[x_ft, y_ft], ...], a box [x0, y0, x1, y1] or a circle {at, radius_ft}", 1.0e6));
+    }
     vec![
         json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle), or near a place with width_ft and depth_ft (the nearest clear lot on a street), on dry land clear of other buildings, roads, streets, walls and squares, with what it is, storeys, roof, roof colour, material, shape and shade. It gets an interior (enter_building / get_interior on its building id), a roof and walls on the battlemap. Returns its id (c:<n>, for update_building, delete_feature, notes and NPCs) and its building id (b:<layout>:0).", "inputSchema": schema(create, &[]) }),
         json!({ "name": "update_building", "title": "Change a building", "description": "Change a building: one drawn by hand (c:<n>) or one of the world's own (b:<layout>:<id>, as get_feature and list_children give them): a new footprint (poly, rect or circle; checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; for the world's own, auto (or an empty func) goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
         json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not (water, river, another building, street, road, wall, square).", "inputSchema": schema(check, &[]), "annotations": { "readOnlyHint": true } }),
-        json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away buildings of the world's own (not drawn by hand: delete_feature does those): by ids (b:<layout>:<id>), or every one whose middle lies inside a polygon (within, [[x_ft, y_ft], ...]) such as a ward to clear for buildings of your own. Every other building keeps its id. restore_building brings one back.", "inputSchema": schema(json!({ "ids": { "type": "array", "items": { "type": "string" } }, "within": poly }), &[]) }),
-        json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and any update_building change (its name stays as renamed).", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]) }),
+        json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away buildings of the world's own (not drawn by hand: delete_feature does those): by id or ids (b:<layout>:<id>), or every one whose middle lies inside an area (within: a polygon [[x_ft, y_ft], ...], a box [x0, y0, x1, y1] or a circle {at, radius_ft}) such as a ward to clear for buildings of your own. Every other building keeps its id. restore_building (id or ids) brings them back.", "inputSchema": schema(remove, &[]) }),
+        json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and any update_building change (its name stays as renamed).", "inputSchema": schema(crate::args::ids_props("building id"), &[]) }),
     ]
 }
 
@@ -65,9 +68,9 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         },
         "check_building_spot" => check_spot(app, a).await.map(text),
         "remove_buildings" => remove(app, a).await.map(text),
-        "restore_building" => match a["id"].as_str() {
-            Some(id) => restore(app, id.to_string()).await.map(text),
-            None => Err("missing 'id'".into()),
+        "restore_building" => match crate::args::ids(a) {
+            Ok(ids) => restore(app, ids).await.map(text),
+            Err(e) => Err(e),
         },
         _ => return None,
     })
@@ -77,6 +80,9 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 async fn check_spot(app: &Shared, a: &Value) -> Result<Value, String> {
     let poly = footprint(a)?.ok_or("give the footprint: poly, rect or circle")?;
     let func = a["func"].as_str().map(str::to_string);
+    if let Some(f) = &func {
+        known_func(f)?;
+    }
     let id = a["id"].as_str().unwrap_or("c:new").to_string();
     app.worker
         .with(move |ex| {
@@ -87,6 +93,18 @@ async fn check_spot(app: &Shared, a: &Value) -> Result<Value, String> {
             })
         })
         .await
+}
+
+/// A `func` the code knows: a business (`town::catalog`) or a home (`BUILDING_HOMES`); empty is none.
+fn known_func(f: &str) -> Result<(), String> {
+    let f = f.trim();
+    if f.is_empty() || worldgen::town::catalog::index_of(f).is_some() || BUILDING_HOMES.contains(&f) {
+        return Ok(());
+    }
+    let keys = worldgen::town::catalog::CATALOG.iter().map(|c| c.key).chain(BUILDING_HOMES);
+    let hint = crate::args::suggest(f, keys.clone()).map(|h| format!(" (did you mean {h}?)")).unwrap_or_default();
+    let few: Vec<&str> = ["inn", "tavern", "blacksmith", "temple", "castle"].into_iter().chain(BUILDING_HOMES.into_iter().take(3)).collect();
+    Err(format!("func: a business or home such as {}, got {}{hint}; list_names shows the businesses", few.join(", "), json!(f)))
 }
 
 /// The `shade` argument: none given, `auto` (`Some(None)`) or a variant 0-4.
@@ -104,6 +122,9 @@ fn shade_arg(a: &Value) -> Result<Option<Option<u8>>, String> {
 /// Change one of the world's own buildings (`Edits.buildings`; its name goes to `renames`).
 async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, String> {
     let opt = |k: &str| a[k].as_str().map(|s| s.trim().to_string());
+    if let Some(f) = opt("func") {
+        known_func(&f)?;
+    }
     let floors = match &a["floors"] {
         Value::Null => None,
         v => Some(v.as_u64().filter(|f| *f <= 255).ok_or("floors: a whole number")? as u8),
@@ -159,19 +180,16 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
 
 /// Take away buildings of the world's own: by ids, or every one with its middle in `within`.
 async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
-    let mut ids: Vec<String> = a["ids"].as_array().map(|v| v.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let within: Option<Vec<[f64; 2]>> = match a["within"].as_array() {
-        Some(p) => Some(p.iter().map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?])).collect::<Option<Vec<_>>>().filter(|p| p.len() >= 3).ok_or("within: a polygon of 3 or more [x_ft, y_ft] corners")?),
-        None => None,
-    };
+    let mut ids = if a["id"].is_null() && a["ids"].is_null() { Vec::new() } else { crate::args::ids(a)? };
+    let within = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
     if ids.is_empty() && within.is_none() {
-        return Err("give ids or within".into());
+        return Err("give id, ids or within".into());
     }
     let edits = app
         .worker
         .with(move |ex| {
-            if let Some(p) = &within {
-                ids.extend(agent::generated_buildings_in(&ex.world, &ex.t0, p).into_iter().map(|(id, _)| id));
+            if let Some(area) = &within {
+                ids.extend(agent::generated_buildings_in(&ex.world, &ex.t0, &area.outline()).into_iter().filter(|(_, at)| area.contains(*at)).map(|(id, _)| id));
             }
             ids.sort();
             ids.dedup();
@@ -192,17 +210,30 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
     .await
 }
 
-/// One of the world's own buildings back as generated.
-async fn restore(app: &Shared, id: String) -> Result<Value, String> {
-    let id2 = id.clone();
-    app.edit("agent", 0, move |e| match e.buildings.remove(&id2) {
-        Some(_) => Ok(json!({ "tool": "restore_building", "id": id2 })),
-        None => Err(format!("{id2} is as generated already")),
+/// Some of the world's own buildings back as generated (all or none).
+async fn restore(app: &Shared, ids: Vec<String>) -> Result<Value, String> {
+    let ids2 = ids.clone();
+    app.edit("agent", 0, move |e| {
+        if let Some(id) = ids2.iter().find(|id| !e.buildings.contains_key(*id)) {
+            return Err(format!("{id} is as generated already"));
+        }
+        for id in &ids2 {
+            e.buildings.remove(id);
+        }
+        Ok(json!({ "tool": "restore_building", "ids": ids2 }))
     })
     .await?;
-    let mut v = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "restored, but it could not be read back".to_string())).await?;
-    v["tool"] = json!("restore_building");
-    Ok(v)
+    let ids2 = ids.clone();
+    let mut got = app
+        .worker
+        .with(move |ex| ids2.iter().map(|id| agent::get(&ex.world, &ex.t0, id).ok_or_else(|| "restored, but it could not be read back".to_string())).collect::<Result<Vec<_>, String>>())
+        .await?;
+    if ids.len() == 1 {
+        let mut v = got.remove(0);
+        v["tool"] = json!("restore_building");
+        return Ok(v);
+    }
+    Ok(json!({ "tool": "restore_building", "ids": ids, "restored": got }))
 }
 
 /// The footprint asked for, if any (world ft).
@@ -244,6 +275,15 @@ fn footprint(a: &Value) -> Result<Option<Vec<[f64; 2]>>, String> {
 /// Create a building (`id` None) or change one.
 async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, String> {
     let poly = footprint(a)?;
+    // The footprint's middle as asked for (before the grid): a move of more than 5 ft is said.
+    let asked_mid = match &poly {
+        Some(_) => {
+            let mut raw = a.clone();
+            raw["snap"] = json!(false);
+            footprint(&raw)?.filter(|p| !p.is_empty()).map(|p| [p.iter().map(|q| q[0]).sum::<f64>() / p.len() as f64, p.iter().map(|q| q[1]).sum::<f64>() / p.len() as f64])
+        }
+        None => None,
+    };
     let mut c = match &id {
         Some(id) => app
             .with_edits(|e| e.created.iter().find(|c| &c.id == id && !c.removed && c.kind == "building").cloned())
@@ -259,22 +299,14 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     let poly = match poly {
         None if creating && !a["near"].is_null() => {
             // The nearest clear lot near a place.
-            let near = match (&a["near"], a["near"]["x_ft"].as_f64(), a["near"]["y_ft"].as_f64()) {
-                (_, Some(x), Some(y)) => Ok([x, y]),
-                (Value::String(s), ..) => Err(s.clone()),
-                _ => return Err("near: an id or {x_ft, y_ft}".into()),
-            };
-            let size = |k: &str| a[k].as_f64().ok_or("near needs width_ft and depth_ft");
+            let near = crate::args::point(app, "near", &a["near"]).await?;
+            let size = |k: &str| a[k].as_f64().ok_or_else(|| format!("{k}: needed with near"));
             let (w, d) = (size("width_ft")?, size("depth_ft")?);
             let (func, cid) = (a["func"].as_str().map(str::to_string), c.id.clone());
             let found = app
                 .worker
                 .with(move |ex| {
-                    let p = match near {
-                        Ok(p) => p,
-                        Err(id) => agent::position(&ex.world, &ex.t0, &id).ok_or_else(|| format!("no such feature: {id}"))?,
-                    };
-                    agent::find_spot(&ex.world, &ex.t0, p, w, d, func.as_deref(), &cid).map(|s| s.0)
+                    agent::find_spot(&ex.world, &ex.t0, near, w, d, func.as_deref(), &cid).map(|s| s.0)
                 })
                 .await?;
             Some(found)
@@ -292,6 +324,7 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     }
     let opt = |k: &str| a[k].as_str().map(|s| s.trim().to_string());
     if let Some(f) = opt("func") {
+        known_func(&f)?;
         c.func = Some(f).filter(|f| !f.is_empty());
     }
     if let Some(r) = opt("roof") {
@@ -367,6 +400,10 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     if let Some(n) = asked {
         c.name = n;
     }
+    let moved = asked_mid.map(|m| ((c.x - m[0]).hypot(c.y - m[1]), c.x, c.y)).filter(|(ft, ..)| *ft > 5.0).map(|(ft, x, y)| {
+        let why = if a["snap"].as_bool().unwrap_or(true) { "the footprint was snapped to the 5-ft grid and its point set where it fits" } else { "its point was set where it fits" };
+        json!({ "x_ft": x.round(), "y_ft": y.round(), "ft": ft.round(), "why": why })
+    });
     let tool = if creating { "create_building" } else { "update_building" };
     let reply = json!({ "tool": tool, "id": c.id, "kind": "building", "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
     let cid = c.id.clone();
@@ -402,6 +439,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             }
             if aside {
                 v["note"] = json!("its inside was designed by hand for the building as it was: that design is set aside (the generated interior stands) until the footprint and storeys are as they were; set_site_design makes a new one");
+            }
+            if let Some(m) = moved {
+                v["moved"] = m;
             }
             Ok(v)
         })
