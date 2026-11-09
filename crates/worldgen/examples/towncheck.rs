@@ -3676,6 +3676,97 @@ fn lane_ends(world: &World, t0: &T0, l: &Layout, tag: &str, r: &mut Report) {
     r.tally("farmsteads", l.crofts.iter().filter(|p| format!("{:?}", p.kind) == "Farmyard").count());
 }
 
+/// `NEAR_DUMP=L<n>:<x>,<y>,<r>` prints what stands within `r` ft of the offset (x, y) from that
+/// village's middle: buildings, plots, lanes, roads, `rural::battle` runs and fields (stderr).
+fn near_dump(l: &Layout, bt: &worldgen::town::rural::Battle, tag: &str) {
+    let Ok(v) = std::env::var("NEAR_DUMP") else { return };
+    let Some((t, rest)) = v.split_once(':') else { return };
+    let n: Vec<f64> = rest.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    if t != tag || n.len() < 3 {
+        return;
+    }
+    let (q, rad) = (add(l.center, [n[0], n[1]]), n[2]);
+    let off = |p: P| format!("({:.0},{:.0})", p[0] - l.center[0], p[1] - l.center[1]);
+    let poly = |ps: &[P]| ps.iter().map(|p| off(*p)).collect::<Vec<_>>().join(" ");
+    let near = |ps: &[P]| contains(ps, q) || edge_dist(ps, q) < rad;
+    for (i, b) in l.buildings.iter().enumerate().filter(|(_, b)| near(&b.poly)) {
+        eprintln!("bldg {i} c {} {:?} {:?} {:?} {}", off(centroid(&b.poly)), b.ward, b.func.map(|f| town::catalog::CATALOG[f as usize].key), b.structure, poly(&b.poly));
+    }
+    for (i, p) in l.crofts.iter().enumerate().filter(|(_, p)| near(&p.pts)) {
+        let held = l.buildings.iter().filter(|b| contains(&p.pts, centroid(&b.poly))).count();
+        eprintln!("plot {i} {:?} {:?} holds {held}: {}", p.kind, p.bound, poly(&p.pts));
+    }
+    for (i, s) in l.streets.iter().enumerate().filter(|(_, s)| s.windows(2).any(|w| seg_dist(q, w[0], w[1]) < rad)) {
+        eprintln!("lane {i}: {}", poly(s));
+    }
+    for (pts, _, w) in l.roads.iter().filter(|(s, _, _)| s.windows(2).any(|w| seg_dist(q, w[0], w[1]) < rad)) {
+        eprintln!("layout road w {w:.0}: {}", poly(pts));
+    }
+    for &(a, b, k) in bt.runs.iter().filter(|r| seg_dist(q, r.0, r.1) < rad) {
+        eprintln!("run {k:?} {} {}", off(a), off(b));
+    }
+    for (i, f) in l.fields.iter().enumerate().filter(|(_, f)| near(f)) {
+        let x = &l.field_info[i];
+        eprintln!("field {i} {:?} {:?}: {}", x.kind, x.bound, poly(f));
+    }
+}
+
+/// R5 towns (103 fix): plots (crofts, yards) holding no building; farmyards with no lane to their
+/// gate; a plot's sides and back (as drawn, a croft's front open) within 6 ft (a yard's 4) of a building it does
+/// not hold, one in no other plot (a cottage beside it with no croft of its own, a hedge across its
+/// corner); the battlemap's runs
+/// (hedges, fences, walls, field rows) within 2 ft of any building, roofed or not; lanes through a
+/// building (the lane's band over it).
+fn plot_checks(l: &Layout, bt: &worldgen::town::rural::Battle, tag: &str, r: &mut Report) {
+    let off = |p: P| format!("({:.0}, {:.0})", p[0] - l.center[0], p[1] - l.center[1]);
+    // (A footprint's middle by its corners' mean: `centroid` loses a round home's small area in world ft.)
+    let mid = |q: &[P]| mul(q.iter().fold([0.0, 0.0], |s, p| add(s, *p)), 1.0 / q.len().max(1) as f64);
+    let holds = |p: &town::village::Plot, b: &town::Building| contains(&p.pts, mid(&b.poly));
+    for p in &l.crofts {
+        if !l.buildings.iter().any(|b| holds(p, b)) {
+            r.add("plots holding no building", 1.0, format!("{tag} {:?} {}", p.kind, off(mid(&p.pts))));
+        }
+        let n = p.pts.len();
+        let first = if p.kind == town::village::PlotKind::Croft { 1 } else { 0 };
+        for k in first..n {
+            let (a, e) = (p.pts[k], p.pts[(k + 1) % n]);
+            for b in l.buildings.iter().filter(|b| !holds(p, b)) {
+                // (A croft's 6 ft; a yard's 4, the cottages laid out after it: `village::off_yards`.)
+                let clear = if p.kind == town::village::PlotKind::Croft { 6.0 } else { 4.0 };
+                if seg_poly(a, e, &b.poly) >= clear && !contains(&b.poly, a) {
+                    continue;
+                }
+                // (In a plot of its own: that plot keeps its bounds off it, along this one's or not.)
+                let shared = l.crofts.iter().any(|q| !std::ptr::eq(q, p) && holds(q, b));
+                if !shared {
+                    r.add("plot bounds by a building not theirs", 1.0, format!("{tag} {:?} side {} {} by {:?} {:?} at {:.1} ft", p.kind, off(a), off(e), b.ward, b.func.map(|f| town::catalog::CATALOG[f as usize].key), seg_poly(a, e, &b.poly)));
+                }
+            }
+        }
+    }
+    for p in l.crofts.iter().filter(|p| p.kind == town::village::PlotKind::Farmyard) {
+        let gate = lerp(p.pts[0], p.pts[1], 0.5);
+        if !l.streets.iter().any(|s| s.windows(2).any(|w| seg_dist(gate, w[0], w[1]) < 8.0)) {
+            r.add("farmyards with no lane to their gate", 1.0, format!("{tag} {}", off(gate)));
+        }
+    }
+    // (A churchyard's graveyard is a building of its own, open: its wall runs round it.)
+    let graveyard = town::catalog::index_of("graveyard").map(|f| f as u16);
+    for &(a, e, k) in &bt.runs {
+        if let Some(b) = l.buildings.iter().filter(|b| b.func.is_none() || b.func != graveyard).find(|b| contains(&b.poly, a) || contains(&b.poly, e) || seg_poly(a, e, &b.poly) < 2.0) {
+            r.add("runs by any building", 1.0, format!("{tag} {k:?} {} {} by {:?} {:?} {:?}", off(a), off(e), b.ward, b.func.map(|f| town::catalog::CATALOG[f as usize].key), b.structure));
+        }
+    }
+    for (si, s) in l.streets.iter().enumerate() {
+        for w in s.windows(2) {
+            if let Some(b) = l.buildings.iter().find(|b| contains(&b.poly, w[0]) || seg_poly(w[0], w[1], &b.poly) < 0.5 * town::village::LANE_W - 0.5) {
+                r.add("lanes through a building", 1.0, format!("{tag} lane {si} {} {} by {:?} {:?}", off(w[0]), off(w[1]), b.ward, b.func.map(|f| town::catalog::CATALOG[f as usize].key)));
+                break;
+            }
+        }
+    }
+}
+
 /// `villages`: v63 village layouts (not part of `all`). Per village: its cottages, how many stand
 /// along each 100 ft of lane, those not square to the lane they front (> 8°), crofts overlapping
 /// another or a building they do not hold or a lane; the battlemap's bounds (hedges, fences, walls:
@@ -3684,6 +3775,7 @@ fn lane_ends(world: &World, t0: &T0, l: &Layout, tag: &str, r: &mut Report) {
 fn villages(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&["villages", "cottages", "cottages not square to their lane", "croft overlaps", "crofts over a building", "crofts over a lane", "bounds by a roof", "bounds across a lane", "lane kinks", "lanes ending at nothing inside the village", "greens with props", "greens without their well (of the first 24)"]);
     r.counts(&["cottages by no lane or road", "lane ends", "lane ends joined", "lane ends not joined, at nothing", "lane ends near a way but not joined", "lane ends overshooting a way", "lanes crossing a lane or road away from a shared node", "farmsteads"]);
+    r.counts(&["plots holding no building", "farmyards with no lane to their gate", "plot bounds by a building not theirs", "runs by any building", "lanes through a building"]);
     let mut greens: Vec<(P, String)> = Vec::new();
     let mut gpolys: Vec<Vec<P>> = Vec::new();
     let mut fchunks: Vec<(P, String)> = Vec::new();
@@ -3755,6 +3847,8 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         let mut bt = worldgen::town::rural::Battle::default();
         let bb = l.crofts.iter().flat_map(|p| p.pts.iter()).fold([l.center[0] - 10.0, l.center[1] - 10.0, l.center[0] + 10.0, l.center[1] + 10.0], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
         worldgen::town::rural::battle(&l, t0, [bb[0] - 20.0, bb[1] - 20.0, bb[2] + 20.0, bb[3] + 20.0], &|_| false, &mut bt);
+        near_dump(&l, &bt, &tag);
+        plot_checks(&l, &bt, &tag, r);
         for &(a, e, _) in &bt.runs {
             let pts: Vec<P> = samples(&[a, e], 1.0).into_iter().map(|s| s.0).collect();
             if let Some(p) = pts.iter().find(|p| roofed.iter().any(|b| contains(&b.poly, **p) || edge_dist(&b.poly, **p) < 2.0)) {

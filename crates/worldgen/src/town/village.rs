@@ -366,8 +366,9 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
         let (p0, d0, depth, parent) = starts[k];
         k += 1;
         let (mut lane, end) = grow(site, p0, d0, r * 1.05, &lanes, parent, rng);
-        // (Long enough for a house or two; a shorter one that joins a way is a loop's.)
-        if lane.len() >= 4 || (end.is_some() && lane.len() >= 3 && length(&lane) > 40.0) {
+        // (Long enough for a house or two; a shorter one that joins a way is a loop's; none beside the
+        // lane it joins all the way.)
+        if (lane.len() >= 4 || (end.is_some() && lane.len() >= 3 && length(&lane) > 40.0)) && !sliver(&lane, end, &lanes) {
             // (Its ends points of the ways it leaves and joins: shared nodes.)
             if parent < lanes.len() {
                 lane[0] = node(&mut lanes, parent, p0);
@@ -497,11 +498,36 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
             let d = rng.range(16.0, 24.0);
             if rng.next_f64() < density {
                 let back = 0.5 * road_w + (5.0 * (1.0 + spread) * rng.range(0.6, 1.4)).min(9.0) + 0.5 * d;
+                let fits = |house: &[P], u: P| {
+                    // (Its front square to the lane: its two corners nearest the lane about as far from it.)
+                    let mut ds: Vec<f64> = house.iter().map(|c| pts.windows(2).map(|s| seg_dist(*c, s[0], s[1])).fold(f64::MAX, f64::min)).collect();
+                    ds.sort_by(f64::total_cmp);
+                    ds[1] - ds[0] < 3.0 && square_to(&lanes, house, u, Some(pts)) && clear(house, l) && site.buildable(house) && !g.plot_hit(house) && off(&g, house)
+                };
+                // (Off a yard's bounds by `CLEAR_FT`, `off_yards`: else a step or two on along the lane.)
+                let mut placed = None;
                 let house = rect(add(p, mul(n, side * back)), u, w, d);
-                // (Its front square to the lane: its two corners nearest the lane about as far from it.)
-                let mut ds: Vec<f64> = house.iter().map(|c| pts.windows(2).map(|s| seg_dist(*c, s[0], s[1])).fold(f64::MAX, f64::min)).collect();
-                ds.sort_by(f64::total_cmp);
-                if ds[1] - ds[0] < 3.0 && square_to(&lanes, &house, u, Some(pts)) && clear(&house, l) && site.buildable(&house) && !g.plot_hit(&house) && off(&g, &house) {
+                if fits(&house, u) {
+                    if off_yards(&g, &house) {
+                        placed = Some((house, 0.0));
+                    } else {
+                        for shift in [5.0, -5.0, 10.0, -10.0, 15.0, 20.0] {
+                            if along + shift + w > wk.total || along + shift < wk.house_end.max(0.0) + 1.0 {
+                                continue;
+                            }
+                            let (q0, q1) = (point_along(pts, along + shift).0, point_along(pts, along + shift + w).0);
+                            let u = mul(sub(q1, q0), 1.0 / len(sub(q1, q0)).max(1e-9));
+                            let house = rect(add(point_along(pts, along + shift + 0.5 * w).0, mul([-u[1], u[0]], side * back)), u, w, d);
+                            if fits(&house, u) && off_yards(&g, &house) {
+                                placed = Some((house, shift));
+                                break;
+                            }
+                        }
+                    }
+                }
+                if let Some((house, shift)) = placed {
+                    let along = along + shift;
+                    wk.along += shift;
                     l.buildings.push(new_building(site, house, Ward::Rural, None, Structure::Roofed));
                     let own = l.buildings.len() - 1;
                     let (e0, e1) = (rng.range(3.0, 10.0), rng.range(3.0, 10.0));
@@ -547,6 +573,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
         }
     }
     // Every lane's ends joined or on purpose (`settle_ends`); the lanes as they are now the layout's.
+    clear_crofts(&mut g, l);
     settle_ends(&mut g, l, &mut lanes, n_roads, hedge_share, rng);
     for (pts, _) in lanes.iter().skip(n_roads) {
         l.streets.push(pts.clone());
@@ -986,7 +1013,7 @@ fn settle_end(g: &mut Ground, l: &mut Layout, lanes: &mut [(Vec<P>, f64)], li: u
     let pts = lanes[li].0.clone();
     let e = pts[pts.len() - 1];
     let (well, green) = g.green;
-    if on_way(lanes, li, e) {
+    if on_way(lanes, li, e) || at_gate(g, e) {
         return false;
     }
     // (Run on to a way near it: its band clear of the buildings, the plots and the green, short of the way's edge.)
@@ -1037,7 +1064,7 @@ fn settle_end(g: &mut Ground, l: &mut Layout, lanes: &mut [(Vec<P>, f64)], li: u
         return true;
     }
     if green > 0.0 && dist(e, well) <= green + 0.5 * LANE_W + 2.0 {
-        return false;
+        return rim_straight(g, l, &mut lanes[li].0);
     }
     // (A few feet short of a way: on it.)
     let near = lanes.iter().enumerate().filter(|&(j, _)| j != li).flat_map(|(j, (q, _))| q.windows(2).map(move |s| (j, nearest_on(e, s[0], s[1])))).min_by(|a, b| dist(e, a.1).total_cmp(&dist(e, b.1)));
@@ -1070,8 +1097,8 @@ fn settle_end(g: &mut Ground, l: &mut Layout, lanes: &mut [(Vec<P>, f64)], li: u
     }
     let from = last.unwrap_or(floor);
     if !water && total - from >= FARM_RUN_FT {
-        if let Some(keep) = farmstead(g, l, lanes, li, from + 40.0, hedge_share, rng) {
-            lanes[li].0 = cut_at(&pts, keep);
+        if let Some(lane) = farmstead(g, l, lanes, li, from + 40.0, hedge_share, rng) {
+            lanes[li].0 = lane;
             return true;
         }
     }
@@ -1099,8 +1126,9 @@ fn settle_end(g: &mut Ground, l: &mut Layout, lanes: &mut [(Vec<P>, f64)], li: u
 /// a yard (`PlotKind::Farmyard`, hedged or fenced, as the manor's), a barn (the catalog's stables, its
 /// stalls inside) along one side, the lane run to its gate. The yard's front 7 ft past the lane's end,
 /// on ground open (`yard_ok`) and level enough to work; else with the lane cut every 20 ft back, to
-/// `from` ft along it. How much of the lane is kept, if it stands.
-fn farmstead(g: &mut Ground, l: &mut Layout, lanes: &[(Vec<P>, f64)], li: usize, from: f64, hedge_share: f64, rng: &mut Pcg32) -> Option<f64> {
+/// `from` ft along it. The lane as it is then, if it stands: run on to `FARM_GATE_FT` short of the
+/// gate, its round end in the gate's gap.
+fn farmstead(g: &mut Ground, l: &mut Layout, lanes: &[(Vec<P>, f64)], li: usize, from: f64, hedge_share: f64, rng: &mut Pcg32) -> Option<Vec<P>> {
     let barn_f = catalog::index_of("stables")?;
     let pts = &lanes[li].0;
     let (hw_, hd) = (rng.range(34.0, 44.0), rng.range(20.0, 26.0));
@@ -1124,19 +1152,168 @@ fn farmstead(g: &mut Ground, l: &mut Layout, lanes: &[(Vec<P>, f64)], li: usize,
             let mut trial = lanes.to_vec();
             trial[li].0 = cut_at(pts, at);
             let held = std::mem::replace(&mut g.lanes, LaneGrid::new(&trial));
-            if yard_ok(g, l, &yard) && square_to(&trial, &house, t, None) && square_to(&trial, &barn, u, None) {
+            if yard_ok(g, l, &yard) && yard_clear(l, &yard) && square_to(&trial, &house, t, None) && square_to(&trial, &barn, u, None) {
                 let mut home = new_building(g.site, house, Ward::Farm, None, Structure::Roofed);
                 home.residential = catalog::residential_for(Ward::Farm, false) as u8;
                 l.buildings.push(home);
                 l.buildings.push(new_building(g.site, barn, Ward::Rural, Some(barn_f), Structure::Roofed));
                 g.add(Plot { pts: yard, kind: PlotKind::Farmyard, bound });
-                return Some(at);
+                let mut lane = cut_at(pts, at);
+                lane.push(add(e, mul(u, 7.0 - FARM_GATE_FT)));
+                return Some(lane);
             }
             g.lanes = held;
         }
         at -= 20.0;
     }
     None
+}
+
+/// A branch joining lane `end` that runs within `SLIVER_FT` of it all the way: a sliver between the
+/// two (they leave their way side by side), not a loop.
+fn sliver(lane: &[P], end: Option<(usize, P)>, lanes: &[(Vec<P>, f64)]) -> bool {
+    let Some((j, _)) = end else { return false };
+    let (q, total) = (&lanes[j].0, length(lane));
+    let n = (total / 5.0).ceil().max(1.0) as usize;
+    (0..=n).all(|k| {
+        let p = point_along(lane, total * k as f64 / n as f64).0;
+        q.windows(2).any(|s| seg_dist(p, s[0], s[1]) < SLIVER_FT)
+    })
+}
+
+const SLIVER_FT: f64 = 30.0;
+
+/// A lane ended at the green's rim (`outside` cut it there) just past a bend: its last piece short
+/// and turned, a hook. Its piece before run straight on to the rim instead, where that ground is
+/// clear (as `settle_end`'s joins). Whether it changed.
+fn rim_straight(g: &Ground, l: &Layout, pts: &mut Vec<P>) -> bool {
+    let n = pts.len();
+    if n < 3 {
+        return false;
+    }
+    let (a, b, e) = (pts[n - 3], pts[n - 2], pts[n - 1]);
+    let (u, v) = (sub(b, a), sub(e, b));
+    if len(v) >= 12.0 || len(u) < 1.0 || len(v) < 1e-6 || dot(u, v) >= libm::cos(15f64.to_radians()) * len(u) * len(v) {
+        return false;
+    }
+    // (Where the line on from `b` meets the rim: |b + t d - well| = rim.)
+    let (well, green) = g.green;
+    let d = mul(u, 1.0 / len(u));
+    let w = sub(b, well);
+    let rim = dist(e, well);
+    let (bq, cq) = (dot(w, d), dot(w, w) - rim * rim);
+    let disc = bq * bq - cq;
+    if green <= 0.0 || disc < 0.0 {
+        return false;
+    }
+    let t = -bq - crate::core::sqrt(disc);
+    if !(1.0..=20.0).contains(&t) {
+        return false;
+    }
+    let x = add(b, mul(d, t));
+    let band = quad(b, d, LANE_W, (t - 2.0).max(0.5));
+    if building_hit(l, &band, None) || g.plot_hit(&band) {
+        return false;
+    }
+    pts[n - 1] = x;
+    true
+}
+
+/// How far a plot's hedge or fence keeps off a building it does not hold (ft): a run nearer reads
+/// as through its roof (the eaves and the hedge's own width), across a corner most of all.
+const CLEAR_FT: f64 = 6.0;
+
+/// A plot's runs as `runs` draws them, the gate's gap aside: a croft's sides and back, a yard's round.
+fn plot_edges(p: &Plot) -> impl Iterator<Item = (P, P)> + '_ {
+    let n = p.pts.len();
+    let first = if p.kind == PlotKind::Croft { 1 } else { 0 };
+    (first..n).map(move |k| (p.pts[k], p.pts[(k + 1) % n]))
+}
+
+/// A footprint's middle by its corners' mean.
+fn corner_mean(q: &[P]) -> P {
+    mul(q.iter().fold([0.0, 0.0], |s, p| add(s, *p)), 1.0 / q.len().max(1) as f64)
+}
+
+/// Whether plot `p`'s runs come within `clear` ft of building `b`.
+fn runs_by(p: &Plot, b: &[P], clear: f64) -> bool {
+    let bb = bbox(b);
+    plot_edges(p).any(|(a, e)| {
+        let sb = bbox(&[a, e]);
+        sb[0] < bb[2] + clear && sb[2] > bb[0] - clear && sb[1] < bb[3] + clear && sb[3] > bb[1] - clear && poly_gap(b, &[a, e]) < clear
+    })
+}
+
+/// A cottage `HOUSE_BOUND_FT` off the yards' bounds (laid out before it: churchyard, shrine's,
+/// manor's), as a croft's from its own: a wall or hedge along its side, not one by its corner.
+fn off_yards(g: &Ground, house: &[P]) -> bool {
+    g.plots.iter().filter(|p| p.kind != PlotKind::Croft).all(|p| !runs_by(p, house, HOUSE_BOUND_FT))
+}
+
+/// A farmyard's bounds `CLEAR_FT` off the buildings round it.
+fn yard_clear(l: &Layout, yard: &[P]) -> bool {
+    let p = Plot { pts: yard.to_vec(), kind: PlotKind::Farmyard, bound: Bound::Hedge };
+    l.buildings.iter().all(|b| !runs_by(&p, &b.poly, CLEAR_FT))
+}
+
+/// Every croft's sides and back `CLEAR_FT` off the buildings it does not hold (those in another plot
+/// aside: that plot keeps its own off them): one by a cottage left with none of its own, or across a
+/// house's corner, cut back (its own cottage still held as `croft` holds it), else given up.
+fn clear_crofts(g: &mut Ground, l: &Layout) {
+    let mids: Vec<P> = l.buildings.iter().map(|b| corner_mean(&b.poly)).collect();
+    let mut gone = vec![false; g.plots.len()];
+    // (Again while one goes: the cottage it held is one the others must keep off now.)
+    let mut again = true;
+    while again {
+        again = false;
+        for i in 0..g.plots.len() {
+            if gone[i] || g.plots[i].kind != PlotKind::Croft {
+                continue;
+            }
+            let held_by = |j: usize, bi: usize, plots: &[Plot]| contains(&plots[j].pts, mids[bi]);
+            let foreign: Vec<usize> = (0..l.buildings.len()).filter(|&bi| !held_by(i, bi, &g.plots) && !(0..g.plots.len()).any(|j| j != i && !gone[j] && held_by(j, bi, &g.plots))).collect();
+            let hit = |p: &Plot| foreign.iter().any(|&bi| runs_by(p, &l.buildings[bi].poly, CLEAR_FT));
+            if !hit(&g.plots[i]) {
+                continue;
+            }
+            let own: Vec<usize> = (0..l.buildings.len()).filter(|&bi| held_by(i, bi, &g.plots)).collect();
+            let q = g.plots[i].pts.clone();
+            let mut done = false;
+            for k in 1..10 {
+                let f = 1.0 - 0.1 * k as f64;
+                let pts = vec![q[0], q[1], lerp(q[1], q[2], f), lerp(q[0], q[3], f)];
+                let held = inset(&pts, &[0.0, HOUSE_BOUND_FT, HOUSE_BOUND_FT, HOUSE_BOUND_FT]);
+                if held.len() < 3 || !own.iter().all(|&bi| l.buildings[bi].poly.iter().all(|c| contains(&held, *c))) {
+                    break;
+                }
+                let cut = Plot { pts, kind: PlotKind::Croft, bound: g.plots[i].bound };
+                if !hit(&cut) {
+                    g.plots[i] = cut;
+                    done = true;
+                    break;
+                }
+            }
+            if !done {
+                gone[i] = true;
+                again = true;
+            }
+        }
+    }
+    let plots = std::mem::take(&mut g.plots);
+    g.boxes.clear();
+    for (p, gone) in plots.into_iter().zip(gone) {
+        if !gone {
+            g.add(p);
+        }
+    }
+}
+
+/// How far short of a farmyard's gate its lane ends (ft): its round end reaches the gap.
+const FARM_GATE_FT: f64 = 4.0;
+
+/// At a farmstead's gate (`farmstead`): a lane's end there on purpose.
+fn at_gate(g: &Ground, p: P) -> bool {
+    g.plots.iter().any(|pl| pl.kind == PlotKind::Farmyard && dist(p, lerp(pl.pts[0], pl.pts[1], 0.5)) <= FARM_GATE_FT + 2.0)
 }
 
 /// The green's pond (on some) and its tree beside the well, each on dry ground off the roads across
@@ -1426,7 +1603,7 @@ fn mill(g: &mut Ground, l: &mut Layout, r: f64, wharf: Option<&[P]>, lanes: &mut
         let room = rect(c, u, len(u) + 16.0, dist(poly[1], poly[2]) + 16.0);
         !l.piers.iter().chain(&l.bridges).any(|q| overlaps_or_crosses(q, &room))
     };
-    let near = |g: &Ground, l: &Layout, poly: &[P]| g.off_green(poly, 6.0) && site.buildable(poly) && !building_hit(l, poly, None) && !g.plot_hit(poly) && g.off_roads(poly, 2.0) && decks(l, poly) && waterside(site, poly, MILL_WATER_FT);
+    let near = |g: &Ground, l: &Layout, poly: &[P]| g.off_green(poly, 6.0) && site.buildable(poly) && !building_hit(l, poly, None) && !g.plot_hit(poly) && off_yards(g, poly) && g.off_roads(poly, 2.0) && decks(l, poly) && waterside(site, poly, MILL_WATER_FT);
     let fits = |g: &Ground, l: &Layout, poly: &[P]| near(g, l, poly) && !g.lanes.touches(poly, 2.0);
     // (River pieces by their distance from the green, nearer first: the mill's middle, its way
     // along the bank, and its way from the water.)
