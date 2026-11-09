@@ -1,6 +1,6 @@
 # Worldspring MCP: full reference
 
-`mapd` exposes the open world to agents (any MCP client) through 57 tools. With them an agent can:
+`mapd` exposes the open world to agents (any MCP client) through 59 tools. With them an agent can:
 - read and search the world: features, buildings, districts, underground sites, routes, battlemaps;
 - look at the map as you see it, or move your view;
 - edit the world: rename anything (down to a dungeon's levels and rooms), write notes, hide features, and create
@@ -226,7 +226,7 @@ A summary of the world:
 Searches by name, as the places are named now (renames included). From three letters, it also finds districts and
 named businesses (inns, temples, smithies…) and wall or gate towers that have been renamed; road stretches that have been
 renamed (kind `road`, as the roads drawn in the sketch) and crossings put down by hand that have a name (kind `crossing`).
-One of `query`, `kind` or `tag` must be given (nothing at all is refused); a `kind` nothing has is refused with a "did
+One of `query`, `kind`, `tag` or `within` must be given (nothing at all is refused); a `kind` nothing has is refused with a "did
 you mean" and the kinds there are. A district, building or tower says its `settlement` as `{id, name}` (and its
 `site`, in a site's layout), as `get_feature` does. A building drawn by hand shows the ward of its own little layout
 (`village`), not the one it stands in. Returns `{items, found}` (`truncated: true` when `limit` cut the list); each item has its `extent`.
@@ -237,6 +237,7 @@ you mean" and the kinds there are. A district, building or tower says its `settl
 | `kind` | string | none | Only this kind: `city`, `ruin`, `river`, `building`, `district`, `tower`, … |
 | `tag` | string | none | Only features whose notes carry this tag (any case): the DM's `hook`, `secret`… |
 | `in_notes` | boolean | false | The query also matches the words of a feature's notes (not only its name); needs a `query`. |
+| `within` | box, polygon or circle | none | Only features with a point inside the area (`inside: "point"`) or an extent overlapping it (`inside: "extent"`: a river or road that runs through it, a region that covers part of it; area extents are tested at up to 400 sample points, so a sliver narrower than a map cell can be missed). A box is `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]`, a circle `{at, radius_ft}` (as `list_objects`). Combines with `query`, `kind` and `tag`; districts and businesses still need a query of three letters. |
 | `limit` | integer | 25 | 1 to 200 |
 | `include_hidden` | boolean | false | Also return hidden features. |
 
@@ -246,6 +247,7 @@ you mean" and the kinds there are. A district, building or tower says its `settl
 { "name": "search_features", "arguments": { "query": "Prancing", "kind": "building" } }
 { "name": "search_features", "arguments": { "tag": "hook" } }
 { "name": "search_features", "arguments": { "query": "cult", "in_notes": true } }
+{ "name": "search_features", "arguments": { "kind": "ruin", "within": { "at": "city:bab44567", "radius_ft": 150000 } } }
 ```
 > *"Find every inn called something with 'Pony'."* · *"List all the volcanoes."* · *"Is there a town named Wolfbarrow?"*
 
@@ -332,6 +334,9 @@ What is at a point:
   building of a site standing in a settlement, such as one drawn by hand, has the settlement's district there);
 - `nearby`: named features within a tenth of their size (2 to 10 miles), nearest first, measured to their nearest
   edge or course, with `distance_mi` and `direction`;
+- `slope_deg`: the ground's slope over about one map cell (`nearest` says how coarse that is: about 1.2 miles on a 1,200-mile map);
+- `water`: a river within 1,000 ft (`{kind: "river", id, name, width_ft, banks: [[x, y], [x, y]] (the bank on the point's side first), distance_ft (to the water's edge; 0 in it), in_water}`), or a lake or the sea (`{kind: "lake" | "sea", id?, name? (the smallest named body there), in_water, distance_ft, shore? ({x_ft, y_ft}; in the water, `shore_ft` is how far it is)}`), whichever is nearer; null where there is none;
+- `coast`: the nearest coast of the sea within 5 miles (`{distance_ft, x_ft, y_ft, shore: "cliff" | "beach", rise_ft, in_sea}`; `nearest` says how a cliff is told from a beach); null where there is none;
 - the nearest settlements.
 
 | Parameter | Type | | |
@@ -372,14 +377,72 @@ The distance between two places:
 
 | Parameter | Type | | |
 |---|---|---|---|
-| `from` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
-| `to` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
+| `from` | id, place name, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | A name matches a place's current name, whole and in any case (features, districts, businesses, renamed roads and crossings). One place of that name is used, and the reply says which (`from_place: {id, name, kind}`); several are refused, listing up to 5 with their ids and kinds; none is refused with a did-you-mean. |
+| `to` | id, place name, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | As `from` (`to_place`). |
 
 ```json
 { "name": "route", "arguments": { "from": "metropolis:6eee9055", "to": "village:6db3886e" } }
 { "name": "route", "arguments": { "from": "city:bab44567", "to": { "x_ft": 1200000, "y_ft": 2500000 } } }
 ```
 > *"How many days does it take to ride from Agentholm to Geirgai at a fast pace?"* · *"What's the route from Gatewatch to the capital, and which towns does it pass?"*
+
+### `nearest`
+The nearest coast, cliff, river, road or flat ground to a place, within `within_mi` miles (default 5, at most 25): one
+bounded search over the map's coarse ground and the rivers' and roads' indexes (a few milliseconds), never a scan of the
+whole map. Returns `{what, found, x_ft, y_ft, distance_ft, distance_mi, direction}` and, by what, one more; `found: false`
+(not an error) where there is none within the distance. The ground is read from the world's coarse grid (one cell is
+about 1.2 miles on a 1,200-mile map), so a cliff or a beach narrower than a cell is gentler here than on a battlemap.
+Thresholds (defined once, `worldgen/src/geoquery.rs`):
+- `coast`: the sea's shore, nearest the point (a point at sea gets the nearest land's edge, `in_sea: true`). `shore` is
+  `cliff` where the land rises 300 ft or more within one cell inland of the shore, else `beach`; `rise_ft` is that rise.
+  Lakes are not coasts (`describe_location`'s `water` has them).
+- `cliff`: the nearest dry ground steeper than 8 degrees over a cell (on this scale the steepest few percent of land):
+  `slope_deg` there and `drop_ft`, the height range across the cell.
+- `river`: the nearest river's water: `id`, `name`, `width_ft`, `banks` (the one on the point's side first), the point
+  (`x_ft`, `y_ft`) on that bank (the point itself when it is in the water, `in_water`), `distance_ft` to the water.
+- `road`: the nearest point of any road: the stretch `id` (`rd:`), `name` if it has one, `class`, `heading_deg`
+  (clockwise from north, as in `road_point`).
+- `flat`: the nearest dry ground gentler than 5 degrees over a patch big enough for a site: the cell and the four beside
+  it (`patch_ft`, about three cells across), the point in it, `slope_deg`, `elevation_ft`. Distance 0 where the point is on one.
+
+| Parameter | Type | Default | |
+|---|---|---|---|
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
+| `what` | string | required | `coast`, `cliff`, `river`, `road` or `flat` |
+| `within_mi` | number | 5 | 0.1 to 25 |
+
+```json
+{ "name": "nearest", "arguments": { "at": "city:bab44567", "what": "coast", "within_mi": 25 } }
+{ "name": "nearest", "arguments": { "at": [2310194, 4127619], "what": "flat" } }
+```
+> *"How far is the nearest cliff from the keep?"* · *"Where is the closest flat ground to build a camp?"*
+
+### `road_point`
+A point along a road, for placing things "on the Trade Way" or a day's ride down a route. Give `road` (an `rd:` id, or a
+road's name: a drawn road, or stretches renamed alike and joined end to end; names match whole and in any case) and
+optionally `from`, or `from` and `to` for the road path `route` takes between them. Then `at_mi` (miles along it from
+the start) or `fraction` (0 to 1), one of the two. With `road`, the start is the road's first end, or the end nearer
+`from` (a place near one end; a name works as in `route`, and is echoed as `from_place`). Returns `x_ft`, `y_ft`,
+`heading_deg` (the way it runs there, clockwise from north: 90 is east), `at_mi`, `fraction`, `stretch` (`{id, class, name?,
+from, to, length_mi}`: the stretch there with its ends, as `list_roads`) and `road` (`{name?, length_mi, stretches, from,
+to}`). Lengths are the stretches' own (`list_roads`' `length_mi`); the point is on the road as the map draws it. A point
+past the road's length is refused, saying the length. A name for several separate roads is refused, listing a stretch of
+each; no road by that name is refused with a did-you-mean; a `route` with no road between its places is refused
+(its `by_road` is null). Several roads share a name only if you named them so.
+
+| Parameter | Type | | |
+|---|---|---|---|
+| `road` | string | | An `rd:` id or a road's name (not with `to`) |
+| `from` | id, place name, `{x_ft, y_ft}` or `[x_ft, y_ft]` | | With `road`: the end to start from (default the first); without: where the route starts |
+| `to` | id, place name, `{x_ft, y_ft}` or `[x_ft, y_ft]` | | Where the route ends (instead of `road`) |
+| `at_mi` | number | | Miles from the start; 0 or more |
+| `fraction` | number | | 0 to 1 of the length |
+
+```json
+{ "name": "road_point", "arguments": { "road": "The Trade Way", "from": "city:bab44567", "at_mi": 12 } }
+{ "name": "road_point", "arguments": { "from": "city:bab44567", "to": "village:6db3886e", "fraction": 0.5 } }
+```
+> *"Put a waystation 12 miles down the Trade Way from the capital."* · *"Where is the midpoint of the road between these towns?"*
 
 ### `list_roads`
 The road network:
@@ -554,7 +617,7 @@ under its building id is joined onto it.
 |---|---|---|---|
 | `id` | string | required | |
 | `notes` | string | one of `notes`, `tags`, `remove_tags` | (`text` is accepted too.) Left out, the notes stay as they are; the reply echoes `notes`. |
-| `tags` | string[] | none | Added to the existing tags. |
+| `tags` | string[] | none | Added to the existing tags. `[]` alone (no notes, no non-empty `remove_tags`) is refused: "at least 1 item". |
 | `remove_tags` | string[] | none | Taken off; one that is not there is fine. The reply's `removed_tags` says which were, and `tags` what is left. (`update_feature` with `tags: []` clears them all.) |
 | `append` | boolean | false | Add to the existing notes instead of replacing them. |
 
@@ -1092,7 +1155,7 @@ Returns `{tool, id, kind, changed, crossing}` (`changed: true` when an `id` was 
 crossing again) and where the banks are: `river` `{id, name, width_ft, banks}` (the river it crosses, its width there,
 and the two bank points across it there, the one on `from`'s side first; `id`/`name` null for a stream too small to be
 named; `river: null` when none is within 1,000 ft), `from_bank_ft` and `to_bank_ft` (how far each end lies beyond its
-bank), and `note` when both ends are on the same side. An end in the water is refused:
+bank), and `note` when both ends are on the same side. An end more than 5 ft into the water is refused (a fixed tolerance, whatever the width):
 `from: (x, y) is in the water of The Red River (river:f32acc5b), 419 ft wide there: its bank on that side is at about (x, y)`.
 
 ### `remove_crossings`
@@ -1648,7 +1711,7 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
 `{id: "h:...", what: "plateau", level_ft, edge_ft, x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
 brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
-block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it. `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
+block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it, or whose outline holds the area's middle (a small area inside a big plateau). `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
 
 ### `delete_plateau`
 Take plateaus or pits away by `id` or `ids` (all or none); the ground goes back as it was (brushed changes stay).

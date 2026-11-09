@@ -13,6 +13,7 @@ use crate::Shared;
 /// `x_ft` and `y_ft` beside the other arguments.
 const PLACE_TOOLS: &[&str] = &[
     "describe_location",
+    "nearest",
     "features_near",
     "list_roads",
     "get_battlemap",
@@ -301,6 +302,25 @@ impl Area {
         }
     }
 
+    /// The same area for worldgen's queries.
+    pub fn region(&self) -> worldgen::geoquery::Region {
+        use worldgen::geoquery::Region;
+        match self {
+            Area::Box(b) => Region::Box(*b),
+            Area::Poly(q) => Region::Poly(q.clone()),
+            Area::Circle(c, r) => Region::Circle(*c, *r),
+        }
+    }
+
+    /// The middle: a box's or circle's centre, a polygon's corners' mean.
+    pub fn middle(&self) -> [f64; 2] {
+        match self {
+            Area::Box(b) => [0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3])],
+            Area::Circle(c, _) => *c,
+            Area::Poly(q) => [q.iter().map(|p| p[0]).sum::<f64>() / q.len() as f64, q.iter().map(|p| p[1]).sum::<f64>() / q.len() as f64],
+        }
+    }
+
     /// A polygon that holds the whole area (its own, or a box round a circle).
     pub fn outline(&self) -> Vec<[f64; 2]> {
         match self {
@@ -578,5 +598,58 @@ pub async fn place(app: &Shared, a: &Value) -> Result<[f64; 2], String> {
     match o.get("at") {
         Some(at) => point(app, "at", at).await,
         None => Err("at: an id, {x_ft, y_ft} or [x_ft, y_ft] is needed".into()),
+    }
+}
+
+/// Like `point`, and a string that is no id may be a place's name (case-insensitive, the whole name):
+/// one place called that is used, and comes back as `{id, name, kind}` to echo; several are refused,
+/// listing up to 5 with their ids and kinds; none is refused with a did-you-mean.
+pub async fn point_named(app: &Shared, field: &str, v: &Value) -> Result<([f64; 2], Option<Value>), String> {
+    let Value::String(s) = v else { return Ok((point(app, field, v).await?, None)) };
+    let name = s.clone();
+    let (field, field_out) = (field.to_string(), field);
+    let r = app
+        .worker
+        .with(move |ex| {
+            if let Some(p) = worldgen::agent::position(&ex.world, &ex.t0, &name) {
+                return Ok((Some(p), None));
+            }
+            // Something shaped like an id (`b:3:7`) that is none is refused as before.
+            if name.contains(':') && !name.contains(' ') {
+                return Err(no_such(&ex.world, &ex.t0, &name));
+            }
+            let (exact, close) = worldgen::geoquery::places_named(&ex.world, &ex.t0, &name);
+            let at = |m: &Value| match (m["x_ft"].as_f64(), m["y_ft"].as_f64()) {
+                (Some(x), Some(y)) => Some([x, y]),
+                _ => m["id"].as_str().and_then(|id| worldgen::agent::position(&ex.world, &ex.t0, id)),
+            };
+            let echo = |m: &Value| json!({ "id": m["id"], "name": m["name"], "kind": m["kind"] });
+            match exact.as_slice() {
+                [m] => Ok((at(m), Some(echo(m)))),
+                [] => {
+                    let fs = worldgen::agent::features(&ex.world, &ex.t0);
+                    let mut near: Vec<String> = close.iter().filter_map(|m| m["name"].as_str().map(str::to_string)).take(3).collect();
+                    if near.is_empty() {
+                        near.extend(suggest(&name, fs.iter().map(|f| f.name.as_str())).map(str::to_string));
+                    }
+                    let hint = if near.is_empty() { String::new() } else { format!(" (did you mean {}?)", near.iter().map(|n| format!("\"{n}\"")).collect::<Vec<_>>().join(" or ")) };
+                    Err(format!("{field}: no place with the id or name \"{name}\"{hint}"))
+                }
+                many => {
+                    let list: Vec<String> = many.iter().take(5).map(|m| format!("{} ({})", m["id"].as_str().unwrap_or("?"), m["kind"].as_str().unwrap_or("?"))).collect();
+                    Err(format!("{field}: {} places are called \"{name}\": {}{}; give an id", many.len(), list.join(", "), if many.len() > 5 { ", ..." } else { "" }))
+                }
+            }
+        })
+        .await?;
+    match r {
+        (Some(p), echo) => {
+            let [w, h] = map_size(app).await?;
+            if !(0.0..w).contains(&p[0]) || !(0.0..h).contains(&p[1]) {
+                return Err(format!("{field_out}: ({}, {}) is off the map", num(p[0]), num(p[1])));
+            }
+            Ok((p, echo))
+        }
+        _ => Err(format!("{field_out}: that place has no position")),
     }
 }

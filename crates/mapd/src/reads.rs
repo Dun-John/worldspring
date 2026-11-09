@@ -60,44 +60,44 @@ async fn objects(app: &Shared, a: &Value) -> Result<Value, String> {
     }
     let (mut objects, clears) = app
         .with_edits(|e| {
-    let near = |x: f64, y: f64| area.as_ref().is_none_or(|ar| ar.contains([x, y]));
-    let mut objects = Vec::new();
-    if which != "clears" {
-        for (id, p) in e.objects.iter().filter(|(_, p)| near(p.x, p.y) && (wanted.is_empty() || wanted.contains(&p.kind))) {
-            let mut v = json!({ "id": id, "what": "object", "kind": kind_name(&p.kind, &sprites), "x_ft": p.x.round(), "y_ft": p.y.round(), "variant": p.variant });
-            if p.turned || p.rot != 0.0 {
-                v["rot_deg"] = json!((p.rot as f64).to_degrees().rem_euclid(360.0).round());
+            let near = |x: f64, y: f64| area.as_ref().is_none_or(|ar| ar.contains([x, y]));
+            let mut objects = Vec::new();
+            if which != "clears" {
+                for (id, p) in e.objects.iter().filter(|(_, p)| near(p.x, p.y) && (wanted.is_empty() || wanted.contains(&p.kind))) {
+                    let mut v = json!({ "id": id, "what": "object", "kind": kind_name(&p.kind, &sprites), "x_ft": p.x.round(), "y_ft": p.y.round(), "variant": p.variant });
+                    if p.turned || p.rot != 0.0 {
+                        v["rot_deg"] = json!((p.rot as f64).to_degrees().rem_euclid(360.0).round());
+                    }
+                    if (p.scale - 1.0).abs() > 1e-3 {
+                        v["scale"] = json!((p.scale as f64 * 100.0).round() / 100.0);
+                    }
+                    if let ObjKind::Sprite(s) = &p.kind {
+                        v["sprite"] = json!(s);
+                    }
+                    objects.push(v);
+                }
             }
-            if (p.scale - 1.0).abs() > 1e-3 {
-                v["scale"] = json!((p.scale as f64 * 100.0).round() / 100.0);
+            let mut clears = Vec::new();
+            if which != "objects" {
+                let builtin_wanted: Vec<u16> = wanted.iter().filter_map(|k| if let ObjKind::Builtin(b) = k { Some(*b) } else { None }).collect();
+                for (id, c) in e.cleared.iter().filter(|(_, c)| {
+                    // A clear of all kinds matches any built-in kind asked for; clears hold built-in kinds only (kinds naming only sprites: none).
+                    near(c.x, c.y) && (wanted.is_empty() || (!builtin_wanted.is_empty() && ((c.kind.is_none() && c.kinds.is_empty()) || c.kind.is_some_and(|k| builtin_wanted.contains(&k)) || c.kinds.iter().any(|k| builtin_wanted.contains(k)))))
+                }) {
+                    let mut v = json!({ "id": id, "what": "clear", "x_ft": c.x.round(), "y_ft": c.y.round() });
+                    if let Some(k) = c.kind {
+                        v["kind"] = json!(battlemap::info(k).name);
+                    }
+                    if let Some(r) = c.r {
+                        v["radius_ft"] = json!(r.round());
+                    }
+                    if !c.kinds.is_empty() {
+                        v["kinds"] = json!(c.kinds.iter().map(|k| battlemap::info(*k).name).collect::<Vec<_>>());
+                    }
+                    clears.push(v);
+                }
             }
-            if let ObjKind::Sprite(s) = &p.kind {
-                v["sprite"] = json!(s);
-            }
-            objects.push(v);
-        }
-    }
-    let mut clears = Vec::new();
-    if which != "objects" {
-        let builtin_wanted: Vec<u16> = wanted.iter().filter_map(|k| if let ObjKind::Builtin(b) = k { Some(*b) } else { None }).collect();
-        for (id, c) in e.cleared.iter().filter(|(_, c)| {
-            // A clear of all kinds matches any built-in kind asked for; clears hold built-in kinds only (kinds naming only sprites: none).
-            near(c.x, c.y) && (wanted.is_empty() || (!builtin_wanted.is_empty() && ((c.kind.is_none() && c.kinds.is_empty()) || c.kind.is_some_and(|k| builtin_wanted.contains(&k)) || c.kinds.iter().any(|k| builtin_wanted.contains(k)))))
-        }) {
-            let mut v = json!({ "id": id, "what": "clear", "x_ft": c.x.round(), "y_ft": c.y.round() });
-            if let Some(k) = c.kind {
-                v["kind"] = json!(battlemap::info(k).name);
-            }
-            if let Some(r) = c.r {
-                v["radius_ft"] = json!(r.round());
-            }
-            if !c.kinds.is_empty() {
-                v["kinds"] = json!(c.kinds.iter().map(|k| battlemap::info(*k).name).collect::<Vec<_>>());
-            }
-            clears.push(v);
-        }
-    }
-    (objects, clears)
+            (objects, clears)
         })
         .ok_or("no world is open")?;
     let rest = json!({ "objects": objects.len(), "clears": clears.len() });
@@ -112,12 +112,12 @@ fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
 async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
     let area = within(app, a).await?;
     let limit = limit_of(a, 100);
-        let v = app
+    let v = app
         .worker
         .with(move |ex| {
             let sea = ex.world.params().sea_level_ft;
-            // Inside when the middle or any outline point is.
-            let hits = |mid: [f64; 2], pts: &[[f64; 2]]| area.as_ref().is_none_or(|ar| ar.contains(mid) || pts.iter().any(|&q| ar.contains(q)));
+            // Inside when the middle or any outline point is, or the outline holds the area's middle.
+            let hits = |mid: [f64; 2], pts: &[[f64; 2]]| area.as_ref().is_none_or(|ar| ar.contains(mid) || pts.iter().any(|&q| ar.contains(q)) || Area::Poly(pts.to_vec()).contains(ar.middle()));
             let mut items = Vec::new();
             for (id, p) in &ex.world.file.edits.plateaus {
                 let b = bbox(&p.pts);

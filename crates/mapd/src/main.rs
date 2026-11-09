@@ -10,6 +10,7 @@ mod batch;
 mod build;
 mod crossings;
 mod design;
+mod geo;
 mod ground;
 mod mcp;
 mod notebook;

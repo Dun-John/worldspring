@@ -38,7 +38,7 @@ fn list_crossings(app: &Shared, limit: usize) -> Result<Value, String> {
 }
 
 /// An end in a river's water is refused, naming the bank on its side.
-/// Only one clearly in the water (more than `tol` ft past the bank) is: fords, ferries and app-placed ends a few ft in pass.
+/// Only one clearly in the water (more than `tol` ft past the bank, a fixed 5) is: fords, ferries and app-placed ends a few ft in pass.
 async fn dry_end(app: &Shared, k: &str, p: Option<[f64; 2]>, tol: f64) -> Result<(), String> {
     let Some(p) = p else { return Ok(()) };
     let k = k.to_string();
@@ -124,7 +124,7 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         _ => false,
     };
     if !repeat {
-        let tol = width.unwrap_or(12.0).max(10.0);
+        let tol = 5.0;
         dry_end(app, "from", from, tol).await?;
         dry_end(app, "to", to, tol).await?;
     }

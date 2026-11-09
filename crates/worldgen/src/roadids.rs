@@ -437,3 +437,44 @@ pub fn search_hits(world: &World, t0: &T0, ql: &str, kind: Option<&str>, include
     }
     out
 }
+
+/// A road found by name: stretches (indices in `t0.roads.roads`) in order along it, each
+/// with whether it is walked as listed (first point first).
+pub struct Chain {
+    pub name: String,
+    pub idx: Vec<usize>,
+    pub fwd: Vec<bool>,
+}
+
+/// The roads called `name` (case-insensitive, whole name): stretches renamed to it (walked
+/// end to end, `named_roads`) and roads drawn in the sketch under it. Hidden ones too.
+pub fn chains_named(world: &World, t0: &T0, name: &str) -> Vec<Chain> {
+    let want = name.trim().to_lowercase();
+    let rs = &t0.roads.roads;
+    let mut out = Vec::new();
+    for nr in named_roads(world, t0, false).into_iter().filter(|n| n.name.trim().to_lowercase() == want) {
+        // Each stretch is walked as listed when its first point is where the line holds it.
+        let mut base = 0;
+        let mut fwd = Vec::new();
+        for &i in &nr.idx {
+            fwd.push(nr.pts.get(base) == rs[i].pts.first());
+            base += rs[i].pts.len();
+        }
+        out.push(Chain { name: nr.name, idx: nr.idx, fwd });
+    }
+    let fs = crate::agent::features(world, t0);
+    let mut seen: Vec<u32> = Vec::new();
+    for r in rs.iter() {
+        let Some(st) = r.stroke.filter(|s| !seen.contains(s)) else { continue };
+        seen.push(st);
+        let Some(f) = drawn_road(world, t0, &fs, st).map(|k| &fs[k]) else { continue };
+        if f.name.trim().to_lowercase() != want {
+            continue;
+        }
+        let set: Vec<usize> = (0..rs.len()).filter(|&q| rs[q].stroke == Some(st) && rs[q].pts.len() >= 2).collect();
+        for chain in walk(t0, &set) {
+            out.push(Chain { name: f.name.clone(), idx: chain.iter().map(|&(k, _)| set[k]).collect(), fwd: chain.iter().map(|&(_, f)| f).collect() });
+        }
+    }
+    out
+}

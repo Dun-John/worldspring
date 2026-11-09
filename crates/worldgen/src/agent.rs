@@ -1190,7 +1190,7 @@ fn places_removed(world: &World) -> Vec<Value> {
 /// Named features (and, from three letters, districts and businesses) matching a query, by
 /// their current names, each with its extent.
 pub fn search(world: &World, t0: &T0, q: &str, kind: Option<&str>, limit: usize, include_hidden: bool) -> Value {
-    search_with(world, t0, &SearchOpts { query: q.to_string(), kind: kind.map(str::to_string), tag: None, in_notes: false, hidden: include_hidden }, limit)
+    search_with(world, t0, &SearchOpts { query: q.to_string(), kind: kind.map(str::to_string), tag: None, in_notes: false, hidden: include_hidden, within: None }, limit)
 }
 
 /// What `search_with` looks for: `query` in names (and notes with `in_notes`), `kind`, and only features
@@ -1202,6 +1202,8 @@ pub struct SearchOpts {
     pub tag: Option<String>,
     pub in_notes: bool,
     pub hidden: bool,
+    /// Only features with a point inside, or an extent overlapping (each hit says which: `inside`).
+    pub within: Option<crate::geoquery::Region>,
 }
 
 pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Value {
@@ -1222,7 +1224,7 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
             .map(|(f, s)| json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) }))
             .collect();
         if ql.len() >= 3 && out.len() < limit && kind.is_none_or(|k| matches!(k, "building" | "district")) {
-            for h in crate::gazetteer::search_buildings(world, t0, &ql, limit - out.len(), None, include_hidden) {
+            for h in crate::gazetteer::search_buildings(world, t0, &ql, limit - out.len(), o.within.as_ref().map(|r| r.bbox()), include_hidden) {
                 out.push(hit_json(world, t0, &h));
             }
         }
@@ -1275,6 +1277,32 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
                 out.push(v);
             }
         }
+    }
+    if let Some(rg) = &o.within {
+        let at: std::collections::HashMap<&str, usize> = fs.iter().enumerate().map(|(i, f)| (f.id.as_str(), i)).collect();
+        let ids: std::cell::OnceCell<Vec<String>> = std::cell::OnceCell::new();
+        out.retain_mut(|v| {
+            let id = v["id"].as_str().unwrap_or("");
+            let inside = match (v["x_ft"].as_f64(), v["y_ft"].as_f64()) {
+                (Some(x), Some(y)) if rg.contains([x, y]) => Some("point"),
+                _ if id.starts_with("rd:") => {
+                    let ids = ids.get_or_init(|| crate::roadids::road_ids(t0));
+                    ids.iter().position(|r| r == id).filter(|&i| rg.hits_line(&t0.roads.roads[i].pts)).map(|_| "extent")
+                }
+                _ => match at.get(id) {
+                    Some(&i) => shapes.get(i).filter(|s| rg.overlaps(s)).map(|_| "extent"),
+                    None => v["extent"]["bbox_ft"].as_array().and_then(|b| {
+                        let b: Vec<f64> = b.iter().filter_map(Value::as_f64).collect();
+                        let q = rg.bbox();
+                        (b.len() == 4 && b[2] >= q[0] && b[0] <= q[2] && b[3] >= q[1] && b[1] <= q[3] && (rg.contains([b[0], b[1]]) || rg.contains([b[2], b[3]]) || rg.contains([b[0], b[3]]) || rg.contains([b[2], b[1]]) || (b[0] <= rg.middle()[0] && rg.middle()[0] <= b[2] && b[1] <= rg.middle()[1] && rg.middle()[1] <= b[3]))).then_some("extent")
+                    }),
+                },
+            };
+            if let Some(w) = inside {
+                v["inside"] = json!(w);
+            }
+            inside.is_some()
+        });
     }
     json!({ "results": out })
 }
@@ -1715,11 +1743,22 @@ pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
         ids.extend(h["settlement"].as_u64().and_then(|li| feature_of_layout(world, t0, li as usize)));
     }
     let (npcs, plots) = authored_at(world, t0, &ids);
+    // The water of a lake or sea at a point: the smallest named body there.
+    let named = |q: P| {
+        fs.iter()
+            .zip(&shapes)
+            .filter(|(f, s)| matches!(f.kind, "lake" | "salt_lake" | "sea" | "ocean" | "bay") && { let b = s.bbox(); q[0] >= b[0] && q[0] <= b[2] && q[1] >= b[1] && q[1] <= b[3] } && s.distance(q).0 == 0.0)
+            .min_by(|a, b| a.1.area_sq_ft().total_cmp(&b.1.area_sq_ft()))
+            .map(|(f, _)| (f.id.clone(), f.name.clone()))
+    };
     json!({
         "x_ft": x.round(),
         "y_ft": y.round(),
         "elevation_ft": (ground - sea).round(),
         "under_water": water > ground,
+        "slope_deg": (crate::geoquery::slope_deg(t0, p) * 10.0).round() / 10.0,
+        "water": crate::geoquery::water(world, t0, p, &named),
+        "coast": crate::geoquery::coast(t0, p, crate::geoquery::COAST_NEAR_FT),
         "npcs": npcs,
         "plots": plots,
         "biome": biome,
@@ -2017,6 +2056,62 @@ pub fn roads(world: &World, t0: &T0, near: Option<(P, f64)>, settlement: Option<
     json!({ "named": named, "roads": roads, "count": total, "shown": roads.len() })
 }
 
+/// Shortest ways over the road graph from node `a` (stopping at `b`): distance, previous node and
+/// the road reached by, per node.
+fn dijkstra(adj: &[Vec<(usize, f64, usize)>], n: usize, a: usize, b: usize) -> (Vec<f64>, Vec<usize>, Vec<usize>) {
+    let mut dist = vec![f64::MAX; n];
+    let mut prev = vec![usize::MAX; n];
+    let mut via_road = vec![usize::MAX; n];
+    let mut heap = std::collections::BTreeSet::new();
+    dist[a] = 0.0;
+    heap.insert(((0.0f64).to_bits(), a));
+    while let Some((dk, u)) = heap.pop_first() {
+        let du = f64::from_bits(dk);
+        if du > dist[u] {
+            continue;
+        }
+        if u == b {
+            break;
+        }
+        for &(v, w, ri) in &adj[u] {
+            if du + w < dist[v] {
+                dist[v] = du + w;
+                prev[v] = u;
+                via_road[v] = ri;
+                heap.insert(((du + w).to_bits(), v));
+            }
+        }
+    }
+    (dist, prev, via_road)
+}
+
+/// The stretches (indices in `t0.roads.roads`, each with whether it is walked as listed) a route
+/// between two points takes along roads, in order; None where roads do not join them (or
+/// `route` would go overland).
+pub fn route_stretches(world: &World, t0: &T0, from: P, to: P) -> Option<Vec<(usize, bool)>> {
+    let (nodes, adj, _) = road_graph(world, t0);
+    let nearest = |p: P| (0..nodes.len()).min_by(|&a, &b| geom::dist(nodes[a], p).total_cmp(&geom::dist(nodes[b], p)));
+    let (a, b) = (nearest(from)?, nearest(to)?);
+    let (dist, prev, via_road) = dijkstra(&adj, nodes.len(), a, b);
+    if dist[b] == f64::MAX {
+        return None;
+    }
+    let total = dist[b] + geom::dist(nodes[a], from) + geom::dist(nodes[b], to);
+    if total >= geom::dist(from, to) * 2.5 + 2.0 * MI {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut k = b;
+    while prev[k] != usize::MAX {
+        let r = &t0.roads.roads[via_road[k]];
+        let at = nodes[prev[k]];
+        out.push((via_road[k], geom::dist(r.pts[0], at) <= geom::dist(*r.pts.last().unwrap(), at)));
+        k = prev[k];
+    }
+    out.reverse();
+    Some(out)
+}
+
 /// A route between two ids or points: by road where the road network joins them, else
 /// overland; distances and 5e travel days (normal 24 mi/day, fast 30, slow 18).
 pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
@@ -2026,30 +2121,7 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
     let mut road = None;
     if let (Some(a), Some(b)) = (nearest(from), nearest(to)) {
         let (da, db) = (geom::dist(nodes[a], from), geom::dist(nodes[b], to));
-        // Dijkstra.
-        let mut dist = vec![f64::MAX; nodes.len()];
-        let mut prev = vec![usize::MAX; nodes.len()];
-        let mut via_road = vec![usize::MAX; nodes.len()];
-        let mut heap = std::collections::BTreeSet::new();
-        dist[a] = 0.0;
-        heap.insert(((0.0f64).to_bits(), a));
-        while let Some((dk, u)) = heap.pop_first() {
-            let du = f64::from_bits(dk);
-            if du > dist[u] {
-                continue;
-            }
-            if u == b {
-                break;
-            }
-            for &(v, w, ri) in &adj[u] {
-                if du + w < dist[v] {
-                    dist[v] = du + w;
-                    prev[v] = u;
-                    via_road[v] = ri;
-                    heap.insert(((du + w).to_bits(), v));
-                }
-            }
-        }
+        let (dist, prev, via_road) = dijkstra(&adj, nodes.len(), a, b);
         if dist[b] < f64::MAX {
             let mut via = Vec::new();
             let mut used = Vec::new();
