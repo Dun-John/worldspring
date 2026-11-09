@@ -3542,6 +3542,140 @@ fn belfry_rules(it: &worldgen::interior::Interior, floors: i8) -> Vec<String> {
     bad
 }
 
+/// R5 towns (103): where a village's lanes (`Layout::streets`) end and cross, both ends of each,
+/// anywhere. An end is joined on a way (within 1 ft of another lane's or a road's centre line: the
+/// network roads as `villages` samples them, and the layout's); else at the green's rim, a building
+/// (15 ft), a yard or croft (8 ft) or the water, or at nothing. Ends not joined 1-40 ft from a way's
+/// centre line (but at the rim) are near one; those whose last 40 ft cross a way's centre line and stop
+/// past its far edge overshoot it. Crossings: a lane's piece across another lane's or a road's, but
+/// within 1 ft of the lane's ends or of a node both share. Farmsteads: farmyards by count.
+/// `LANE_DUMP=L<n>` prints that village's lanes, roads and what stands by each lane's ends (stderr).
+fn lane_ends(world: &World, t0: &T0, l: &Layout, tag: &str, r: &mut Report) {
+    let off = |p: P| format!("({:.0}, {:.0})", p[0] - l.center[0], p[1] - l.center[1]);
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    let reach = 1.3 * l.radius;
+    let c = l.center;
+    let mut roads: Vec<Vec<(P, f64)>> = Vec::new();
+    for (ri, k) in t0.roads.segments_near([c[0] - reach, c[1] - reach, c[0] + reach, c[1] + reach], 0.0) {
+        let rc = &t0.roads.roads[ri as usize];
+        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 40.0).ceil().clamp(1.0, 400.0) as usize;
+        roads.push((0..=n).map(|j| (rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft).p, 0.5 * rc.class.width_ft())).collect());
+    }
+    let mut river: Vec<(P, P, f64)> = Vec::new();
+    let rr = reach + 200.0;
+    for (ri, k) in t0.rivers.segments_near(c[0] - rr, c[1] - rr, c[0] + rr, c[1] + rr, 0.0) {
+        let rc = &t0.rivers.rivers[ri as usize];
+        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 20.0).ceil().clamp(2.0, 1200.0) as usize;
+        let pts: Vec<(P, f64)> = (0..=n).map(|j| rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft)).map(|c| (c.p, c.w)).collect();
+        river.extend(pts.windows(2).map(|s| (s[0].0, s[1].0, 0.5 * s[0].1.max(s[1].1))));
+    }
+    let by_water = |p: P| river.iter().any(|&(a, b, hw)| seg_dist(p, a, b) <= hw + 30.0) || wet(p) || [12.0, 25.0, 30.0].iter().any(|&d| (0..8).any(|k| wet(add(p, [d * libm::cos(k as f64 * 0.785), d * libm::sin(k as f64 * 0.785)]))));
+    // (Every way as segments with half widths, and whose: the lane's index, or none for a road.)
+    let mut segs: Vec<(P, P, f64, Option<usize>)> = Vec::new();
+    for (si, s) in l.streets.iter().enumerate() {
+        segs.extend(s.windows(2).map(|w| (w[0], w[1], 0.5 * town::village::LANE_W, Some(si))));
+    }
+    for q in &roads {
+        segs.extend(q.windows(2).map(|w| (w[0].0, w[1].0, w[0].1, None)));
+    }
+    let n_cross = segs.len();
+    segs.extend(l.roads.iter().flat_map(|(pts, _, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w, None))));
+    let green = l.plazas.iter().find(|g| g.kind == PlazaKind::Green).map(|g| (centroid(&g.pts), dist(centroid(&g.pts), g.pts[0])));
+    if std::env::var("LANE_DUMP").is_ok_and(|v| v == tag) {
+        for (si, st) in l.streets.iter().enumerate() {
+            eprintln!("lane {si}: {}", st.iter().map(|p| off(*p)).collect::<Vec<_>>().join(" "));
+        }
+        for q in &roads {
+            eprintln!("road: {}", q.iter().map(|p| off(p.0)).collect::<Vec<_>>().join(" "));
+        }
+        eprintln!("green {:?}", green.map(|g| (off(g.0), g.1)));
+        for st in &l.streets {
+            for e in [st[0], st[st.len() - 1]] {
+                for b in l.buildings.iter().filter(|b| edge_dist(&b.poly, e) < 40.0) {
+                    eprintln!("  end {} building {:?} {:?} {:.1} ft, {} pts", off(e), b.ward, b.func, edge_dist(&b.poly, e), b.poly.len());
+                }
+                for p in l.crofts.iter().filter(|p| edge_dist(&p.pts, e) < 40.0) {
+                    eprintln!("  end {} plot {:?} {:.1} ft", off(e), p.kind, edge_dist(&p.pts, e));
+                }
+            }
+        }
+    }
+    let hit = |a: P, b: P, p: P, q: P| -> Option<P> {
+        let (e, f) = (sub(b, a), sub(q, p));
+        let den = cross(e, f);
+        if den.abs() < 1e-9 {
+            return None;
+        }
+        let (t, u) = (cross(sub(p, a), f) / den, cross(sub(p, a), e) / den);
+        (t > 0.0 && t < 1.0 && u > 0.0 && u < 1.0).then(|| add(a, mul(e, t)))
+    };
+    for (si, s) in l.streets.iter().enumerate() {
+        if s.len() < 2 {
+            continue;
+        }
+        for end in [0, 1] {
+            r.tally("lane ends", 1);
+            let (e, way): (P, Vec<P>) = if end == 0 { (s[0], s.to_vec()) } else { (s[s.len() - 1], s.iter().rev().copied().collect()) };
+            let others = || segs.iter().filter(|w| w.3 != Some(si));
+            let d = others().map(|w| seg_dist(e, w.0, w.1)).fold(f64::MAX, f64::min);
+            if d <= 1.0 {
+                r.tally("lane ends joined", 1);
+                continue;
+            }
+            // (Its last 40 ft across a way and past its far edge.)
+            let mut back = vec![way[0]];
+            let mut acc = 0.0;
+            for w in way.windows(2) {
+                let k = dist(w[0], w[1]);
+                if acc + k >= 40.0 {
+                    back.push(lerp(w[0], w[1], (40.0 - acc) / k.max(1e-9)));
+                    break;
+                }
+                back.push(w[1]);
+                acc += k;
+            }
+            let start = way[way.len() - 1];
+            let over = others().find(|w| back.windows(2).any(|b| hit(b[0], b[1], w.0, w.1).is_some_and(|x| dist(x, e) > 1.0 && dist(x, start) > 1.0)) && seg_dist(e, w.0, w.1) > w.2);
+            if let Some(w) = over {
+                r.add("lane ends overshooting a way", 1.0, format!("{tag} {} by {:.0} ft (lane {si}, {} pts, {:.0} ft)", off(e), seg_dist(e, w.0, w.1) - w.2, s.len(), s.windows(2).map(|q| dist(q[0], q[1])).sum::<f64>()));
+            }
+            let rim = green.is_some_and(|(gc, gr)| dist(e, gc) <= gr + 7.0);
+            let at_building = l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) <= 15.0);
+            let at_yard = l.crofts.iter().any(|p| contains(&p.pts, e) || edge_dist(&p.pts, e) <= 8.0);
+            if !rim && d <= 40.0 {
+                r.add("lane ends near a way but not joined", 1.0, format!("{tag} {} {d:.0} ft off (lane {si}, {} pts, {}{}{})", off(e), s.len(), if at_building { "house " } else { "" }, if at_yard { "yard " } else { "" }, if by_water(e) { "water" } else { "" }));
+            }
+            if !rim && !at_building && !at_yard && !by_water(e) {
+                let near_b = l.buildings.iter().map(|b| edge_dist(&b.poly, e)).fold(f64::MAX, f64::min);
+                let near_p = l.crofts.iter().map(|p| edge_dist(&p.pts, e)).fold(f64::MAX, f64::min);
+                r.add("lane ends not joined, at nothing", 1.0, format!("{tag} {} {} ft out (lane {si}, {} pts, way {d:.0} ft, building {near_b:.0}, plot {near_p:.0})", off(e), dist(e, l.center) as i64, s.len()));
+            }
+        }
+        // (Across a later lane or a road.)
+        for w in s.windows(2) {
+            for o in segs[..n_cross].iter().filter(|o| o.3.is_none_or(|j| j > si)) {
+                let Some(x) = hit(w[0], w[1], o.0, o.1) else { continue };
+                if dist(x, s[0]) <= 1.0 || dist(x, s[s.len() - 1]) <= 1.0 {
+                    continue;
+                }
+                // (A road across a lane at a point of the lane's own: a crossroads.)
+                if o.3.is_none() && s.iter().any(|p| dist(*p, x) <= 1.0) {
+                    continue;
+                }
+                if let Some(j) = o.3 {
+                    let q = &l.streets[j];
+                    if dist(x, q[0]) <= 1.0 || dist(x, q[q.len() - 1]) <= 1.0 || (s.iter().any(|p| dist(*p, x) <= 1.0) && q.iter().any(|p| dist(*p, x) <= 1.0)) {
+                        continue;
+                    }
+                }
+                r.add("lanes crossing a lane or road away from a shared node", 1.0, format!("{tag} {} {} (lane {si} {} to {})", off(x), if o.3.is_some() { "lane" } else { "road" }, off(s[0]), off(s[s.len() - 1])));
+            }
+        }
+    }
+    r.tally("farmsteads", l.crofts.iter().filter(|p| format!("{:?}", p.kind) == "Farmyard").count());
+}
+
 /// `villages`: v63 village layouts (not part of `all`). Per village: its cottages, how many stand
 /// along each 100 ft of lane, those not square to the lane they front (> 8°), crofts overlapping
 /// another or a building they do not hold or a lane; the battlemap's bounds (hedges, fences, walls:
@@ -3549,6 +3683,7 @@ fn belfry_rules(it: &worldgen::interior::Interior, floors: i8) -> Vec<String> {
 /// props. Places are offsets from the village's middle (ft).
 fn villages(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&["villages", "cottages", "cottages not square to their lane", "croft overlaps", "crofts over a building", "crofts over a lane", "bounds by a roof", "bounds across a lane", "lane kinks", "lanes ending at nothing inside the village", "greens with props", "greens without their well (of the first 24)"]);
+    r.counts(&["cottages by no lane or road", "lane ends", "lane ends joined", "lane ends not joined, at nothing", "lane ends near a way but not joined", "lane ends overshooting a way", "lanes crossing a lane or road away from a shared node", "farmsteads"]);
     let mut greens: Vec<(P, String)> = Vec::new();
     let mut gpolys: Vec<Vec<P>> = Vec::new();
     let mut fchunks: Vec<(P, String)> = Vec::new();
@@ -3577,6 +3712,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         let cottages: Vec<&&town::Building> = roofed.iter().filter(|b| b.func.is_none() && b.ward == Ward::Rural).collect();
         r.tally("cottages", cottages.len());
         let fronting = roofed.iter().filter(|b| ways.iter().any(|&(a, e, h)| seg_poly(a, e, &b.poly) < h + 14.0)).count();
+        r.tally("cottages by no lane or road", cottages.iter().filter(|b| !ways.iter().any(|&(a, e, h)| seg_poly(a, e, &b.poly) < h + 14.0)).count());
         if lane_ft > 150.0 {
             r.measure("houses fronting a lane per 100 ft of lane (fewest)", true, 100.0 * fronting as f64 / lane_ft.max(1.0), format!("{tag} {} houses, {lane_ft:.0} ft", roofed.len()));
             r.value("houses fronting a lane per 100 ft of lane", 100.0 * fronting as f64 / lane_ft, tag.clone());
@@ -3587,7 +3723,8 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
             if b.poly.len() != 4 || (b.func.is_some() && b.func == mill) {
                 continue;
             }
-            let Some(&(a, e, h)) = ways.iter().filter(|&&(a, e, h)| seg_poly(a, e, &b.poly) < h + 10.0).min_by(|x, y| seg_poly(x.0, x.1, &b.poly).total_cmp(&seg_poly(y.0, y.1, &b.poly))) else { continue };
+            let n_lane = l.streets.iter().map(|q| q.len().saturating_sub(1)).sum::<usize>();
+            let Some((wi, &(a, e, h))) = ways.iter().enumerate().filter(|&(_, &(a, e, h))| seg_poly(a, e, &b.poly) < h + 10.0).min_by(|x, y| seg_poly(x.1.0, x.1.1, &b.poly).total_cmp(&seg_poly(y.1.0, y.1.1, &b.poly))) else { continue };
             let u = sub(e, a);
             let s0 = sub(b.poly[1], b.poly[0]);
             let c = (dot(u, s0) / (len(u) * len(s0)).max(1e-9)).abs();
@@ -3596,7 +3733,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
             let deg = deg.min(90.0 - deg);
             if deg > 8.0 {
                 let held = l.crofts.iter().any(|p| contains(&p.pts, centroid(&b.poly)));
-                r.add("cottages not square to their lane", deg, format!("{tag} {} {deg:.0}° func {:?} croft {held} gap {:.1}", off(centroid(&b.poly)), b.func.map(|f| town::catalog::CATALOG[f as usize].key), seg_poly(a, e, &b.poly) - h));
+                r.add("cottages not square to their lane", deg, format!("{tag} {} {deg:.0}° func {:?} croft {held} gap {:.1} by a {}, {:.0} ft from a lane's end", off(centroid(&b.poly)), b.func.map(|f| town::catalog::CATALOG[f as usize].key), seg_poly(a, e, &b.poly) - h, if wi < n_lane { "lane" } else { "road" }, l.streets.iter().flat_map(|q| [q[0], q[q.len() - 1]]).map(|q| dist(q, centroid(&b.poly))).fold(f64::MAX, f64::min)));
             }
         }
         for (i, p) in l.crofts.iter().enumerate() {
@@ -3645,6 +3782,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
                 }
             }
         }
+        lane_ends(world, t0, &l, &tag, r);
         fields_rows(&l, t0, &tag, r);
         if fchunks.len() < 8 {
             if let Some(f) = l.fields.iter().enumerate().filter(|(i, _)| l.field_info[*i].kind != town::fields::FieldUse::Orchard).max_by(|a, b| area(a.1).abs().total_cmp(&area(b.1).abs())) {

@@ -5024,52 +5024,6 @@ fn point_along(pts: &[P], at: f64) -> (P, P) {
     (pts[n - 1], mul(sub(pts[n - 1], pts[n - 2]), 1.0 / d))
 }
 
-/// Branch starts every `every` ft along a lane, alternating sides at random.
-fn branch_points(pts: &[P], every: f64, rng: &mut Pcg32, out: &mut Vec<(P, P, u32)>, depth: u32) {
-    let total: f64 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
-    let mut a = every * rng.range(0.5, 1.0);
-    while a < total - 0.5 * every {
-        let (p, u) = point_along(pts, a);
-        let side = if rng.next_f64() < 0.5 { 1.0 } else { -1.0 };
-        let d = rotate([-u[1] * side, u[0] * side], rng.range(-0.35, 0.35));
-        out.push((add(p, mul(d, 20.0)), d, depth));
-        a += every * rng.range(0.8, 1.3);
-    }
-}
-
-/// Grow a lane from `p` heading `d`: 25 ft steps, each turning (by up to 20°) toward the
-/// most level ground; stops at water, the edge, or on meeting another lane.
-fn track(site: &Site, p: P, d: P, max_r: f64, lanes: &[(Vec<P>, f64)], rng: &mut Pcg32) -> Vec<P> {
-    const STEP: f64 = 25.0;
-    let mut pts = vec![p];
-    let (mut p, mut d) = (p, d);
-    let wander = rng.range(-0.08, 0.08);
-    for _ in 0..(max_r / STEP) as usize + 4 {
-        let h = site.height(p);
-        let mut best: Option<(f64, P)> = None;
-        for turn in [-0.35, 0.0, 0.35] {
-            let nd = rotate(d, turn + wander);
-            let q = add(p, mul(nd, STEP));
-            let cost = (site.height(q) - h).abs() + if turn == 0.0 { 0.0 } else { 0.6 };
-            if best.is_none_or(|b| cost < b.0) {
-                best = Some((cost, nd));
-            }
-        }
-        d = best.unwrap().1;
-        let q = add(p, mul(d, STEP));
-        if site.wet(q) || site.near_river(q, 10.0) || len(q) > max_r {
-            break;
-        }
-        pts.push(q);
-        let met = lanes.iter().any(|(lp, _)| lp.windows(2).any(|w| seg_dist(q, w[0], w[1]) < 15.0));
-        if met && pts.len() > 3 {
-            break;
-        }
-        p = q;
-    }
-    pts
-}
-
 // ---------------------------------------------------------------------------------------
 // Functions, names, floors.
 

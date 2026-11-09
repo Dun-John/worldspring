@@ -93,7 +93,7 @@ pub(super) fn stacks(l: &Layout, rect: [f64; 4], out: &mut Vec<(P, f32, f32)>) {
                 let start = add(add(b0, mul(t, EDGE_FT + 1.0 + room * unit(h ^ 0x5))), mul(n_in, 9.0));
                 put(&group(start, t, n_in, n, unit(h ^ 0x9) < 0.5, h), h, &p.pts, &|_| true);
             }
-            PlotKind::ManorYard => {
+            PlotKind::ManorYard | PlotKind::Farmyard => {
                 if unit(h) >= 0.8 {
                     continue;
                 }

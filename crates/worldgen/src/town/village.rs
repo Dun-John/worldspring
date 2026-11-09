@@ -7,7 +7,7 @@
 
 use super::catalog::{self, Ward};
 use super::geom::*;
-use super::{Building, Layout, Plaza, PlazaKind, Site, Structure, branch_points, chamfer, overlaps_or_crosses, piers_along, point_along, polar_pt, rect, shore_run, split_field, temple, track, voronoi};
+use super::{Building, Layout, Plaza, PlazaKind, Site, Structure, chamfer, overlaps_or_crosses, piers_along, point_along, polar_pt, rect, rotate, shore_run, split_field, temple, voronoi};
 use crate::battlemap::{URBAN_CROFT, URBAN_GRAVEYARD, URBAN_YARD};
 use crate::core::hash::FastMap;
 use crate::core::rng::{Pcg32, hash3, unit};
@@ -25,6 +25,8 @@ pub enum PlotKind {
     ShrineYard,
     /// The manor's yard round the manor house.
     ManorYard,
+    /// A farmstead's yard at a lane's end: its farmhouse and barn (R5 towns, 103).
+    Farmyard,
 }
 
 /// What a plot is closed by.
@@ -298,54 +300,100 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
     let n_roads = lanes.len();
     // Waterfront (after ProcGenArcana's wharf): the stretch of shore facing the village
     // becomes a wharf lane with houses on its landward side and piers into the water; a
-    // lane runs from the green down to it.
+    // lane runs from the green down to it (or to the first way it meets: a T there).
     let wharf = shore_run(site, reach);
     if let Some(wh) = &wharf {
         let (mid, _) = point_along(wh, 0.5 * wh.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>());
         let to = sub(mid, [0.0, 0.0]);
         let tl = len(to);
+        let mut link = None;
         if tl > 60.0 {
-            let d = mul(to, 1.0 / tl);
-            let link = track(site, mul(d, 45.0), d, tl + 10.0, &[(wh.clone(), 12.0)], rng);
-            if link.len() >= 2 {
-                lanes.push((link, LANE_W));
+            // (From the point of the roads nearest the middle, a T, else from the middle.)
+            let from = (0..n_roads).flat_map(|j| lanes[j].0.windows(2).map(move |s| (j, nearest_on([0.0, 0.0], s[0], s[1])))).min_by(|a, b| len(a.1).total_cmp(&len(b.1)));
+            let (parent, p0) = match from {
+                Some((j, p)) if len(p) < 0.5 * tl && len(sub(mid, p)) > 60.0 => (j, p),
+                _ => (usize::MAX, mul(to, 20.0 / tl)),
+            };
+            let d = mul(sub(mid, p0), 1.0 / len(sub(mid, p0)));
+            let mut ways = lanes.clone();
+            ways.push((wh.clone(), 12.0));
+            let (pts, end) = grow(site, p0, d, tl + 10.0, &ways, parent, rng);
+            if pts.len() >= 2 {
+                link = Some((pts, end, parent));
             }
         }
         lanes.push((wh.clone(), 12.0));
+        // (Where a road crosses it, a point of its own: a crossroads.)
+        let wi = lanes.len() - 1;
+        let xs: Vec<P> = (0..n_roads).flat_map(|j| lanes[j].0.windows(2).flat_map(|s| wh.windows(2).filter_map(move |w| seg_cross(w[0], w[1], s[0], s[1]).map(|(t, _)| lerp(w[0], w[1], t))))).collect();
+        for x in xs {
+            node_within(&mut lanes, wi, x, 0.05);
+        }
+        if let Some((mut pts, end, parent)) = link {
+            if parent < n_roads {
+                pts[0] = node(&mut lanes, parent, pts[0]);
+            }
+            if let Some((j, x)) = end {
+                let n = pts.len();
+                pts[n - 1] = node(&mut lanes, j, x);
+            }
+            lanes.push((pts, LANE_W));
+        }
         piers_along(site, wh, rng, l);
     }
     // Branch lanes (after watabou's road trackers): from the roads (or the green), lanes
     // leave every `min_block` ft, step 25 ft at a time turning toward level ground, and stop
     // at water, the village edge, or where they meet another lane.
     let min_block = (4.0 + 8.0 * rng.next_f64()) * 28.0;
-    let mut starts: Vec<(P, P, u32)> = Vec::new();
+    let mut starts: Vec<Start> = Vec::new();
     if lanes.is_empty() {
         let a0 = rng.range(0.0, std::f64::consts::TAU);
         for k in 0..3 {
             let a = a0 + std::f64::consts::TAU * k as f64 / 3.0 + rng.range(-0.4, 0.4);
             let d = [libm::cos(a), libm::sin(a)];
-            starts.push((mul(d, 50.0), d, 0));
+            starts.push((mul(d, 20.0), d, 0, usize::MAX));
         }
     } else {
-        for (pts, _) in &lanes {
-            branch_points(pts, min_block, rng, &mut starts, 1);
+        for (li, (pts, _)) in lanes.iter().enumerate() {
+            branch_points(pts, li, min_block, rng, &mut starts, 1);
         }
     }
-    let mut made = 0;
+    // (A lane cut short by the way it joins counts for its length: up to 150 ft, a part of one.)
+    let mut made = 0.0;
     let max_lanes = 3 + (s.population / 80) as usize;
     let mut k = 0;
-    while k < starts.len() && made < max_lanes {
-        let (p0, d0, depth) = starts[k];
+    while k < starts.len() && made < max_lanes as f64 {
+        let (p0, d0, depth, parent) = starts[k];
         k += 1;
-        let lane = track(site, p0, d0, r * 1.05, &lanes, rng);
-        if lane.len() >= 4 {
+        let (mut lane, end) = grow(site, p0, d0, r * 1.05, &lanes, parent, rng);
+        // (Long enough for a house or two; a shorter one that joins a way is a loop's.)
+        if lane.len() >= 4 || (end.is_some() && lane.len() >= 3 && length(&lane) > 40.0) {
+            // (Its ends points of the ways it leaves and joins: shared nodes.)
+            if parent < lanes.len() {
+                lane[0] = node(&mut lanes, parent, p0);
+            }
+            if let Some((j, x)) = end {
+                let n = lane.len();
+                lane[n - 1] = node(&mut lanes, j, x);
+            }
             if depth < 2 {
                 let mut more = Vec::new();
-                branch_points(&lane, min_block * 1.5, rng, &mut more, depth + 1);
+                branch_points(&lane, lanes.len(), min_block * 1.5, rng, &mut more, depth + 1);
                 starts.extend(more);
             }
             lanes.push((lane, LANE_W));
-            made += 1;
+            made += (length(&lanes[lanes.len() - 1].0) / 150.0).min(1.0);
+        }
+    }
+    // (A lane that stopped short of a way laid out after it runs on to join it.)
+    for li in n_roads..lanes.len() {
+        let own = lanes[li].0.clone();
+        if on_way(&lanes, li, own[own.len() - 1]) {
+            continue;
+        }
+        if let Some((j, x)) = join_to(site, &own, li, &lanes, JOIN_REACH_FT, &|_, _| false, &|_, _, _| true) {
+            let x = node(&mut lanes, j, x);
+            lanes[li].0.push(x);
         }
     }
     // (The green round the village's middle, its well at its heart off the lanes and roads through it:
@@ -359,9 +407,6 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
         // (The lanes off the roads end at its edge: none runs onto it.)
         let off: Vec<(Vec<P>, f64)> = lanes.drain(n_roads..).flat_map(|(pts, w)| outside(&pts, well, green_r + 0.5 * w).into_iter().map(move |q| (q, w))).collect();
         lanes.extend(off);
-    }
-    for (pts, _) in lanes.iter().skip(n_roads) {
-        l.streets.push(pts.clone());
     }
     if green > 0.0 {
         green_props(site, s.seed, well, green, &lanes[..n_roads], l);
@@ -395,13 +440,18 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
     // (A house off every lane and road but by a foot, and off the green.)
     let off = |g: &Ground, poly: &[P]| g.off_lanes(poly, 1.0) && g.off_green(poly, 2.0);
     let mut fronts: Vec<(Vec<P>, f64)> = Vec::new();
+    // (And how far along a lane from its T its first house may stand: off the way it leaves.)
+    let mut leads: Vec<f64> = Vec::new();
     for (li, (pts, w)) in lanes.iter().enumerate() {
         let k = if li < n_roads { (0..pts.len()).min_by(|&a, &b| len(pts[a]).total_cmp(&len(pts[b])).then(a.cmp(&b))).unwrap_or(0) } else { 0 };
         if k >= 1 {
             fronts.push((pts[..=k].iter().rev().copied().collect(), *w));
+            leads.push(0.0);
         }
         if pts.len() - k >= 2 {
             fronts.push((pts[k..].to_vec(), *w));
+            let from = lanes.iter().enumerate().filter(|&(j, (q, _))| j != li && li >= n_roads && q.windows(2).any(|s| seg_dist(pts[0], s[0], s[1]) <= 1.0)).map(|(_, (_, wj))| 0.5 * wj + 3.0).fold(0.0, f64::max);
+            leads.push(from);
         }
     }
     struct Walk {
@@ -417,7 +467,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
     for (lane, (pts, _)) in fronts.iter().enumerate() {
         let total: f64 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
         for side in [-1.0, 1.0] {
-            walks.push(Walk { lane, side, along: rng.range(0.0, 20.0), total, last: f64::MIN, house_end: f64::MIN });
+            walks.push(Walk { lane, side, along: rng.range(0.0, 20.0) + leads[lane], total, last: f64::MIN, house_end: f64::MIN });
         }
     }
     'fill: loop {
@@ -451,7 +501,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
                 // (Its front square to the lane: its two corners nearest the lane about as far from it.)
                 let mut ds: Vec<f64> = house.iter().map(|c| pts.windows(2).map(|s| seg_dist(*c, s[0], s[1])).fold(f64::MAX, f64::min)).collect();
                 ds.sort_by(f64::total_cmp);
-                if ds[1] - ds[0] < 3.0 && square_to(&lanes, &house, u) && clear(&house, l) && site.buildable(&house) && !g.plot_hit(&house) && off(&g, &house) {
+                if ds[1] - ds[0] < 3.0 && square_to(&lanes, &house, u, Some(pts)) && clear(&house, l) && site.buildable(&house) && !g.plot_hit(&house) && off(&g, &house) {
                     l.buildings.push(new_building(site, house, Ward::Rural, None, Structure::Roofed));
                     let own = l.buildings.len() - 1;
                     let (e0, e1) = (rng.range(3.0, 10.0), rng.range(3.0, 10.0));
@@ -496,13 +546,10 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
             l.buildings.push(new_building(site, house, Ward::Rural, None, Structure::Roofed));
         }
     }
-    // A lane that runs down to the water and stops there ends at its last house or plot instead.
-    for li in n_roads..lanes.len() {
-        let Some(cut) = bank_end(&g, l, &lanes, li) else { continue };
-        if let Some(st) = l.streets.iter_mut().find(|st| **st == lanes[li].0) {
-            *st = cut.clone();
-        }
-        lanes[li].0 = cut;
+    // Every lane's ends joined or on purpose (`settle_ends`); the lanes as they are now the layout's.
+    settle_ends(&mut g, l, &mut lanes, n_roads, hedge_share, rng);
+    for (pts, _) in lanes.iter().skip(n_roads) {
+        l.streets.push(pts.clone());
     }
     // Fields: Voronoi cells seeded along the lanes and scattered round the village (rings of their
     // own counts and spins, seeds jittered, cells of many sizes), split into plots and claimed
@@ -578,6 +625,520 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
     l.crofts = g.plots;
 }
 
+// ---------------------------------------------------------------------------------------
+// R5 towns (103): lanes that join their ways.
+
+/// A branch lane's step as it grows (ft), and how finely each step is looked along (ft).
+const STEP_FT: f64 = 25.0;
+const PROBE_FT: f64 = 5.0;
+/// How near a way's edge a growing lane comes before it turns to join it (ft); how far a lane's end
+/// looks for a way to run on to as it grows (ft), and once the village is laid out.
+const JOIN_NEAR_FT: f64 = 15.0;
+const JOIN_REACH_FT: f64 = 60.0;
+const JOIN_LATE_FT: f64 = 40.0;
+/// The hardest turn a lane takes to join a way (degrees), and the shallowest its T meets it at.
+const JOIN_TURN_DEG: f64 = 45.0;
+const T_DEG: f64 = 35.0;
+/// How far a lane may run on past its last house or yard and be cut back to it (ft); farther, over
+/// open ground, it ends at a farmstead.
+const FARM_RUN_FT: f64 = 150.0;
+
+/// Where a branch lane leaves: a point on its parent's centre line, the way it heads, its depth, and
+/// its parent (its place in the lanes; `usize::MAX`: none, it leaves the green).
+type Start = (P, P, u32, usize);
+
+/// Branch starts every `every` ft along lane `li` (`pts`), on its centre line, alternating sides at
+/// random.
+fn branch_points(pts: &[P], li: usize, every: f64, rng: &mut Pcg32, out: &mut Vec<Start>, depth: u32) {
+    let total: f64 = pts.windows(2).map(|w| dist(w[0], w[1])).sum();
+    let mut a = every * rng.range(0.5, 1.0);
+    while a < total - 0.5 * every {
+        let (p, u) = point_along(pts, a);
+        let side = if rng.next_f64() < 0.5 { 1.0 } else { -1.0 };
+        let d = rotate([-u[1] * side, u[0] * side], rng.range(-0.35, 0.35));
+        out.push((p, d, depth, li));
+        a += every * rng.range(0.8, 1.3);
+    }
+}
+
+/// Where segments `a`-`b` and `c`-`d` cross: the share of the way along each.
+fn seg_cross(a: P, b: P, c: P, d: P) -> Option<(f64, f64)> {
+    let (e, f) = (sub(b, a), sub(d, c));
+    let den = cross(e, f);
+    if den.abs() < 1e-9 {
+        return None;
+    }
+    let (t, u) = (cross(sub(c, a), f) / den, cross(sub(c, a), e) / den);
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some((t, u))
+}
+
+/// How many times a lane (from `from` in `lanes`) crosses another lane or a road but within a foot
+/// of either's ends.
+fn crossings(lanes: &[(Vec<P>, f64)], from: usize) -> usize {
+    let mut n = 0;
+    for li in from..lanes.len() {
+        let a = &lanes[li].0;
+        for (j, (b, _)) in lanes.iter().enumerate() {
+            if j == li || (j >= from && j < li) || a.len() < 2 || b.len() < 2 {
+                continue;
+            }
+            let ends = [a[0], a[a.len() - 1], b[0], b[b.len() - 1]];
+            for s in a.windows(2) {
+                for t in b.windows(2) {
+                    if let Some((u, _)) = seg_cross(s[0], s[1], t[0], t[1])
+                        && ends.iter().all(|e| dist(*e, lerp(s[0], s[1], u)) > 1.0)
+                    {
+                        n += 1;
+                    }
+                }
+            }
+        }
+    }
+    n
+}
+
+/// The point of segment `a`-`b` nearest `p`.
+fn nearest_on(p: P, a: P, b: P) -> P {
+    let e = sub(b, a);
+    let l2 = dot(e, e);
+    if l2 < 1e-12 {
+        return a;
+    }
+    lerp(a, b, (dot(sub(p, a), e) / l2).clamp(0.0, 1.0))
+}
+
+fn length(pts: &[P]) -> f64 {
+    pts.windows(2).map(|w| dist(w[0], w[1])).sum()
+}
+
+/// How far along `pts` its point nearest `p` lies (ft).
+fn arc_at(pts: &[P], p: P) -> f64 {
+    let (mut best, mut at, mut acc) = (f64::MAX, 0.0, 0.0);
+    for w in pts.windows(2) {
+        let q = nearest_on(p, w[0], w[1]);
+        let d = dist(p, q);
+        if d < best {
+            (best, at) = (d, acc + dist(w[0], q));
+        }
+        acc += dist(w[0], w[1]);
+    }
+    at
+}
+
+/// `pts` cut `keep` ft along.
+fn cut_at(pts: &[P], keep: f64) -> Vec<P> {
+    let mut out = vec![pts[0]];
+    let mut acc = 0.0;
+    for s in pts.windows(2) {
+        let d = dist(s[0], s[1]);
+        if acc + d >= keep {
+            if keep - acc > 0.05 {
+                out.push(lerp(s[0], s[1], (keep - acc) / d.max(1e-9)));
+            }
+            return out;
+        }
+        out.push(s[1]);
+        acc += d;
+    }
+    out
+}
+
+/// Whether `p` lies on a way but lane `li` (within a foot of its centre line).
+fn on_way(lanes: &[(Vec<P>, f64)], li: usize, p: P) -> bool {
+    lanes.iter().enumerate().any(|(j, (q, _))| j != li && q.windows(2).any(|s| seg_dist(p, s[0], s[1]) <= 1.0))
+}
+
+/// `x` on lane `j`'s centre line made one of its points, or the point of it within 2 ft (returned):
+/// the node a lane joining there shares.
+fn node(lanes: &mut [(Vec<P>, f64)], j: usize, x: P) -> P {
+    node_within(lanes, j, x, 2.0)
+}
+
+/// `node`, the point of the lane within `snap` ft of `x` taken for it.
+fn node_within(lanes: &mut [(Vec<P>, f64)], j: usize, x: P, snap: f64) -> P {
+    let pts = &mut lanes[j].0;
+    let Some(k) = (0..pts.len().saturating_sub(1)).min_by(|&a, &b| seg_dist(x, pts[a], pts[a + 1]).total_cmp(&seg_dist(x, pts[b], pts[b + 1]))) else { return x };
+    for v in [pts[k], pts[k + 1]] {
+        if dist(v, x) < snap {
+            return v;
+        }
+    }
+    pts.insert(k + 1, x);
+    x
+}
+
+/// Where a lane ending at the last of `own` (`me`: its place in `lanes`, if there) can run on to join
+/// a way in a T: the nearest point of a way within `reach` ft it turns to by `JOIN_TURN_DEG` at most
+/// and meets at `T_DEG` or more, the ground on the way there dry, across no other way nor itself, and
+/// `clear` (from the end to short of the way); but where `skip` (the way, the point) rules it out.
+fn join_to(site: &Site, own: &[P], me: usize, lanes: &[(Vec<P>, f64)], reach: f64, skip: &dyn Fn(usize, P) -> bool, clear: &dyn Fn(P, P, f64) -> bool) -> Option<(usize, P)> {
+    let n = own.len();
+    if n < 2 {
+        return None;
+    }
+    let p = own[n - 1];
+    let d = sub(p, own[n - 2]);
+    let d = mul(d, 1.0 / len(d).max(1e-9));
+    let (turn, t_min) = (libm::cos(JOIN_TURN_DEG.to_radians()), libm::sin(T_DEG.to_radians()));
+    let mut cands: Vec<(f64, usize, P, f64)> = Vec::new();
+    for (j, (q, w)) in lanes.iter().enumerate() {
+        if j == me {
+            continue;
+        }
+        for s in q.windows(2) {
+            let (a, b) = (s[0], s[1]);
+            let el = dist(a, b);
+            if el < 1e-6 || seg_dist(p, a, b) > reach {
+                continue;
+            }
+            let tu = mul(sub(b, a), 1.0 / el);
+            let ray = add(p, mul(d, reach));
+            let m = (el / 6.0).ceil() as usize;
+            let xs = std::iter::once(nearest_on(p, a, b)).chain(seg_cross(p, ray, a, b).map(|(t, _)| lerp(p, ray, t))).chain((0..=m).map(|k| lerp(a, b, k as f64 / m as f64)));
+            for x in xs {
+                let v = sub(x, p);
+                let vl = len(v);
+                if vl < 0.5 || vl > reach || skip(j, x) {
+                    continue;
+                }
+                let v = mul(v, 1.0 / vl);
+                let c = dot(v, d);
+                if c < turn || cross(v, tu).abs() < t_min {
+                    continue;
+                }
+                cands.push((vl + 30.0 * (1.0 - c), j, x, 0.5 * w));
+            }
+        }
+    }
+    cands.sort_by(|a, b| a.0.total_cmp(&b.0));
+    'c: for (_, j, x, hw) in cands.into_iter().take(40) {
+        let vl = dist(p, x);
+        let m = (vl / 4.0).ceil() as usize;
+        if (1..=m).any(|k| {
+            let s = lerp(p, x, k as f64 / m as f64);
+            site.wet(s) || site.near_river(s, 6.0)
+        }) {
+            continue;
+        }
+        for (i, (q, _)) in lanes.iter().enumerate() {
+            if i == me {
+                continue;
+            }
+            for s in q.windows(2) {
+                if seg_cross(p, x, s[0], s[1]).is_some_and(|(t, _)| t * vl > 0.5 && t * vl < vl - 1.0) {
+                    continue 'c;
+                }
+            }
+        }
+        if own[..n - 1].windows(2).any(|s| seg_cross(p, x, s[0], s[1]).is_some_and(|(t, _)| t * vl > 0.5)) || !clear(p, x, hw) {
+            continue;
+        }
+        return Some((j, x));
+    }
+    None
+}
+
+/// Grow a lane from `p0` on its parent's centre line (`parent`: its place in `lanes`) heading `d0`
+/// (after watabou's road trackers): 25-ft steps, each turning (by up to 20°) toward the most level
+/// ground, looked along every 5 ft. It stops at water, the river's banks or `max_r`; where it crosses
+/// a way, or comes within `JOIN_NEAR_FT` of one's edge, it runs on to it (`join_to`) and ends on its
+/// centre line in a T, as its far end does where a way is near. Its points, and the way it joins at
+/// its end and where.
+fn grow(site: &Site, p0: P, d0: P, max_r: f64, lanes: &[(Vec<P>, f64)], parent: usize, rng: &mut Pcg32) -> (Vec<P>, Option<(usize, P)>) {
+    let mut pts = vec![p0];
+    let (mut p, mut d) = (p0, d0);
+    let wander = rng.range(-0.08, 0.08);
+    // (Its parent by its start is no way to join, nor what meets its parent there (the next piece of a
+    // road, a lane leaving it); nor, leaving the green, what crosses its middle.)
+    let skip = |j: usize, x: P| (j == parent && dist(x, p0) < 60.0) || dist(x, p0) < 45.0;
+    let t_min = libm::sin(T_DEG.to_radians());
+    let me = usize::MAX;
+    let no_band = |_: P, _: P, _: f64| true;
+    for _ in 0..(max_r / STEP_FT) as usize + 4 {
+        let h = site.height(p);
+        let mut best: Option<(f64, P)> = None;
+        for turn in [-0.35, 0.0, 0.35] {
+            let nd = rotate(d, turn + wander);
+            let q = add(p, mul(nd, STEP_FT));
+            let cost = (site.height(q) - h).abs() + if turn == 0.0 { 0.0 } else { 0.6 };
+            if best.is_none_or(|b| cost < b.0) {
+                best = Some((cost, nd));
+            }
+        }
+        d = best.unwrap().1;
+        let q = add(p, mul(d, STEP_FT));
+        let probes: Vec<P> = (1..=5).map(|k| add(p, mul(d, PROBE_FT * k as f64))).collect();
+        if len(q) > max_r || probes.iter().any(|&s| dist(s, p0) > 12.0 && (site.wet(s) || site.near_river(s, 10.0))) {
+            break;
+        }
+        // (Across a way: it ends on it there, if at a T's angle; else it turns onto one, or stops.)
+        let mut hit: Option<(f64, usize, P, P)> = None;
+        for (j, (lp, _)) in lanes.iter().enumerate() {
+            for s in lp.windows(2) {
+                let Some((t, _)) = seg_cross(p, q, s[0], s[1]) else { continue };
+                let x = lerp(p, q, t);
+                if dist(x, p0) > 2.0 && (parent != usize::MAX || dist(x, p0) > 45.0) && hit.is_none_or(|h| t < h.0) {
+                    hit = Some((t, j, x, sub(s[1], s[0])));
+                }
+            }
+        }
+        let near = || lanes.iter().enumerate().any(|(j, (lp, w))| lp.windows(2).any(|s| probes.iter().any(|&pr| seg_dist(pr, s[0], s[1]) < 0.5 * w + JOIN_NEAR_FT && !skip(j, nearest_on(pr, s[0], s[1])))));
+        if hit.is_some() || near() {
+            // (From the step's end if it crosses nothing, else from its start.)
+            let mut joined = None;
+            if hit.is_none() {
+                pts.push(q);
+                joined = join_to(site, &pts, me, lanes, JOIN_REACH_FT, &skip, &no_band);
+                if joined.is_none() {
+                    pts.pop();
+                }
+            }
+            if let Some((j, x)) = joined.or_else(|| join_to(site, &pts, me, lanes, JOIN_REACH_FT, &skip, &no_band)) {
+                pts.push(x);
+                return (pts, Some((j, x)));
+            }
+            if let Some((_, j, x, tg)) = hit {
+                if cross(d, mul(tg, 1.0 / len(tg).max(1e-9))).abs() >= t_min {
+                    pts.push(x);
+                    return (pts, Some((j, x)));
+                }
+                return (pts, None);
+            }
+        }
+        pts.push(q);
+        p = q;
+    }
+    match join_to(site, &pts, me, lanes, JOIN_REACH_FT, &skip, &no_band) {
+        Some((j, x)) => {
+            pts.push(x);
+            (pts, Some((j, x)))
+        }
+        None => (pts, None),
+    }
+}
+
+/// Distance from `p` to `poly`'s outline (0 inside it).
+fn outline_d(poly: &[P], p: P) -> f64 {
+    if contains(poly, p) {
+        return 0.0;
+    }
+    let m = poly.len();
+    (0..m).map(|k| seg_dist(p, poly[k], poly[(k + 1) % m])).fold(f64::MAX, f64::min)
+}
+
+/// A lane may end at `p`: a building within 10 ft, a plot within 7.5 with a building within 14 (a
+/// croft cut back off the sand after, `fields::crofts_off_sand`, leaves its cottage by the lane).
+fn at_home(g: &Ground, l: &Layout, p: P) -> bool {
+    near_home(g, l, p, 10.0)
+}
+
+/// `at_home`, a building within `m` ft.
+fn near_home(g: &Ground, l: &Layout, p: P, m: f64) -> bool {
+    let by = |bb: [f64; 4], m: f64| p[0] > bb[0] - m && p[0] < bb[2] + m && p[1] > bb[1] - m && p[1] < bb[3] + m;
+    let house = |m: f64| l.buildings.iter().any(|b| by(bbox(&b.poly), m) && outline_d(&b.poly, p) <= m);
+    house(m) || (g.boxes.iter().zip(&g.plots).any(|(bb, pl)| by(*bb, 7.5) && outline_d(&pl.pts, p) <= 7.5) && house(14.0))
+}
+
+/// By the water: on it, within 30 ft of the river or with water 30 ft off.
+fn by_water(site: &Site, p: P) -> bool {
+    site.wet(p) || site.near_river(p, 30.0) || (0..8).any(|k| site.wet(add(p, polar_pt(30.0, std::f64::consts::TAU * k as f64 / 8.0))))
+}
+
+/// Every lane's two ends joined or there on purpose, once the village is laid out: an end on a way or
+/// at the green's rim stays; else it runs on to a way within `JOIN_LATE_FT` where the ground between
+/// is clear of the plots and buildings; else, by the water, it is cut back to its last house or yard
+/// (about 6 ft past it); else, run on more than `FARM_RUN_FT` past it, it ends at a farmstead
+/// (`farmstead`), or is cut back to it. A lane is never cut short of a junction on it (where a lane
+/// leaves it or ends on it: it may end at that T); one with nothing along it nor on it is dropped.
+/// Children first (a lane's after its parent's), again until nothing changes.
+fn settle_ends(g: &mut Ground, l: &mut Layout, lanes: &mut Vec<(Vec<P>, f64)>, n_roads: usize, hedge_share: f64, rng: &mut Pcg32) {
+    g.lanes = LaneGrid::new(lanes);
+    for _ in 0..4 {
+        let mut changed = false;
+        for li in (n_roads..lanes.len()).rev() {
+            for end in [1, 0] {
+                if lanes[li].0.len() < 2 {
+                    continue;
+                }
+                if end == 0 {
+                    lanes[li].0.reverse();
+                }
+                let done = settle_end(g, l, lanes, li, n_roads, hedge_share, rng);
+                if end == 0 {
+                    lanes[li].0.reverse();
+                }
+                if done {
+                    changed = true;
+                    g.lanes = LaneGrid::new(lanes);
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    lanes.retain(|(pts, _)| pts.len() >= 2);
+    g.lanes = LaneGrid::new(lanes);
+}
+
+/// `settle_ends` for lane `li`'s last point: whether it changed.
+fn settle_end(g: &mut Ground, l: &mut Layout, lanes: &mut [(Vec<P>, f64)], li: usize, n_roads: usize, hedge_share: f64, rng: &mut Pcg32) -> bool {
+    let pts = lanes[li].0.clone();
+    let e = pts[pts.len() - 1];
+    let (well, green) = g.green;
+    if on_way(lanes, li, e) {
+        return false;
+    }
+    // (Run on to a way near it: its band clear of the buildings, the plots and the green, short of the way's edge.)
+    let clear = |a: P, b: P, hw: f64| {
+        let v = sub(b, a);
+        let vl = len(v) - hw - 2.0;
+        if vl < 0.5 {
+            return true;
+        }
+        let u = mul(v, 1.0 / len(v));
+        let band = quad(a, u, LANE_W, vl);
+        // (A house it runs by square to it, as `square_to`.)
+        let (cos, sin) = (libm::cos(SQUARE_DEG.to_radians()), libm::sin(SQUARE_DEG.to_radians()));
+        let square = l.buildings.iter().filter(|h| h.structure == Structure::Roofed && h.poly.len() == 4 && poly_gap(&h.poly, &[a, b]) < 0.5 * LANE_W + SQUARE_FT).all(|h| {
+            let e = sub(h.poly[1], h.poly[0]);
+            let k = (dot(e, u) / len(e).max(1e-9)).abs();
+            k > cos || k < sin
+        });
+        square && !building_hit(l, &band, None) && !g.plot_hit(&band) && g.off_green(&band, 1.0)
+    };
+    // (The farthest junction on it: it keeps to there at least.)
+    let anchor = lanes.iter().enumerate().filter(|&(j, (q, _))| j != li && j >= n_roads && q.len() >= 2).flat_map(|(_, (q, _))| [q[0], q[q.len() - 1]]).filter(|&a| pts.windows(2).any(|s| seg_dist(a, s[0], s[1]) <= 1.0)).map(|a| (arc_at(&pts, a), a)).max_by(|x, y| x.0.total_cmp(&y.0));
+    let floor = anchor.map_or(0.0, |a| a.0);
+    let total = length(&pts);
+    // (Its last house or yard, a house's front within 10 ft of its edge.)
+    let reach = 0.5 * lanes[li].1 + 10.0;
+    let mut last = None;
+    let mut at = total - 2.0;
+    while at > floor {
+        if near_home(g, l, point_along(&pts, at).0, reach) {
+            last = Some(at);
+            break;
+        }
+        at -= 2.0;
+    }
+    // (Across a way just before it, past its last house, a crossroads: it ends there.)
+    let mut acc = 0.0;
+    let mut cross_at = None;
+    for k in 1..pts.len() - 1 {
+        acc += dist(pts[k - 1], pts[k]);
+        if total - acc <= JOIN_LATE_FT && acc >= floor - 0.5 && last.is_none_or(|s| s <= acc + 2.0) && on_way(lanes, li, pts[k]) {
+            cross_at = Some(k);
+            break;
+        }
+    }
+    if let Some(k) = cross_at {
+        lanes[li].0.truncate(k + 1);
+        return true;
+    }
+    if green > 0.0 && dist(e, well) <= green + 0.5 * LANE_W + 2.0 {
+        return false;
+    }
+    // (A few feet short of a way: on it.)
+    let near = lanes.iter().enumerate().filter(|&(j, _)| j != li).flat_map(|(j, (q, _))| q.windows(2).map(move |s| (j, nearest_on(e, s[0], s[1])))).min_by(|a, b| dist(e, a.1).total_cmp(&dist(e, b.1)));
+    // (No harder a turn for it than a join's.)
+    let turn_ok = |x: P| {
+        let n = pts.len();
+        n < 3 || {
+            let (u, v) = (sub(pts[n - 2], pts[n - 3]), sub(x, pts[n - 2]));
+            dot(u, v) >= libm::cos(JOIN_TURN_DEG.to_radians()) * len(u) * len(v)
+        }
+    };
+    if let Some((j, x)) = near
+        && dist(e, x) <= 6.0
+        && dist(pts[pts.len() - 2], e) > 10.0
+        && turn_ok(x)
+    {
+        let x = node(lanes, j, x);
+        let n = lanes[li].0.len();
+        lanes[li].0[n - 1] = x;
+        return true;
+    }
+    if let Some((j, x)) = join_to(g.site, &pts, li, lanes, JOIN_LATE_FT, &|_, _| false, &clear) {
+        let x = node(lanes, j, x);
+        lanes[li].0.push(x);
+        return true;
+    }
+    let water = by_water(g.site, e);
+    if at_home(g, l, e) {
+        return false;
+    }
+    let from = last.unwrap_or(floor);
+    if !water && total - from >= FARM_RUN_FT {
+        if let Some(keep) = farmstead(g, l, lanes, li, from + 40.0, hedge_share, rng) {
+            lanes[li].0 = cut_at(&pts, keep);
+            return true;
+        }
+    }
+    match (last, anchor) {
+        (Some(at), _) => lanes[li].0 = cut_at(&pts, at),
+        (None, Some((at, a))) => {
+            let mut cut = cut_at(&pts, at);
+            let n = cut.len();
+            if n >= 2 && dist(cut[n - 1], a) < 1.5 {
+                cut[n - 1] = a;
+            } else {
+                cut.push(a);
+            }
+            lanes[li].0 = cut;
+        }
+        (None, None) => lanes[li].0.clear(),
+    }
+    if lanes[li].0.len() < 2 || length(&lanes[li].0) < 1.0 {
+        lanes[li].0.clear();
+    }
+    true
+}
+
+/// A farmstead where lane `li` runs on over open ground: a farmhouse (`Ward::Farm`) across the back of
+/// a yard (`PlotKind::Farmyard`, hedged or fenced, as the manor's), a barn (the catalog's stables, its
+/// stalls inside) along one side, the lane run to its gate. The yard's front 7 ft past the lane's end,
+/// on ground open (`yard_ok`) and level enough to work; else with the lane cut every 20 ft back, to
+/// `from` ft along it. How much of the lane is kept, if it stands.
+fn farmstead(g: &mut Ground, l: &mut Layout, lanes: &[(Vec<P>, f64)], li: usize, from: f64, hedge_share: f64, rng: &mut Pcg32) -> Option<f64> {
+    let barn_f = catalog::index_of("stables")?;
+    let pts = &lanes[li].0;
+    let (hw_, hd) = (rng.range(34.0, 44.0), rng.range(20.0, 26.0));
+    let (bw, bd) = (rng.range(38.0, 50.0), rng.range(22.0, 28.0));
+    let yw = rng.range(76.0, 96.0).max(2.0 * bd + 30.0).max(hw_ + 14.0);
+    let yd = rng.range(72.0, 92.0).max(bw + hd + 24.0);
+    let side = if rng.next_f64() < 0.5 { 1.0 } else { -1.0 };
+    let bound = if rng.next_f64() < hedge_share { Bound::Hedge } else { Bound::Fence };
+    let total = length(pts);
+    let mut at = total;
+    while at >= from {
+        let (e, u) = point_along(pts, at);
+        let t = [u[1], -u[0]];
+        let m = add(e, mul(u, 7.0));
+        let yard = quad(m, u, yw, yd);
+        let barn = rect(add(m, add(mul(t, side * (0.5 * yw - 6.0 - 0.5 * bd)), mul(u, 8.0 + 0.5 * bw))), u, bw, bd);
+        let house = rect(add(m, add(mul(t, -side * (0.5 * yw - 6.0 - 0.5 * hw_)), mul(u, yd - 6.0 - 0.5 * hd))), t, hw_, hd);
+        let (lo, hi) = g.site.relief(&yard);
+        if hi - lo < 8.0 && g.site.buildable(&house) && g.site.buildable(&barn) {
+            // (Off the lanes as they would be: this one cut there.)
+            let mut trial = lanes.to_vec();
+            trial[li].0 = cut_at(pts, at);
+            let held = std::mem::replace(&mut g.lanes, LaneGrid::new(&trial));
+            if yard_ok(g, l, &yard) && square_to(&trial, &house, t, None) && square_to(&trial, &barn, u, None) {
+                let mut home = new_building(g.site, house, Ward::Farm, None, Structure::Roofed);
+                home.residential = catalog::residential_for(Ward::Farm, false) as u8;
+                l.buildings.push(home);
+                l.buildings.push(new_building(g.site, barn, Ward::Rural, Some(barn_f), Structure::Roofed));
+                g.add(Plot { pts: yard, kind: PlotKind::Farmyard, bound });
+                return Some(at);
+            }
+            g.lanes = held;
+        }
+        at -= 20.0;
+    }
+    None
+}
+
 /// The green's pond (on some) and its tree beside the well, each on dry ground off the roads across
 /// it (world ft props); their ways round the well keyed by the village's seed.
 fn green_props(site: &Site, seed: u64, well: P, r: f64, roads: &[(Vec<P>, f64)], l: &mut Layout) {
@@ -607,50 +1168,14 @@ fn green_props(site: &Site, seed: u64, well: P, r: f64, roads: &[(Vec<P>, f64)],
     }
 }
 
-/// Lane `li` cut back to 6 ft past the last house or plot along it (within 14 ft of its edge) where
-/// it ends by the water (within 30 ft) and meets no other lane there; none if it does not, or if
-/// nothing stands along it.
-fn bank_end(g: &Ground, l: &Layout, lanes: &[(Vec<P>, f64)], li: usize) -> Option<Vec<P>> {
-    let (pts, w) = (&lanes[li].0, lanes[li].1);
-    let e = *pts.last()?;
-    let wet = g.site.wet(e) || g.site.near_river(e, 30.0) || (0..8).any(|k| g.site.wet(add(e, polar_pt(30.0, std::f64::consts::TAU * k as f64 / 8.0))));
-    let met = lanes.iter().enumerate().any(|(j, (q, _))| j != li && q.windows(2).any(|s| seg_dist(e, s[0], s[1]) < 15.0));
-    if !wet || met {
-        return None;
-    }
-    let total: f64 = pts.windows(2).map(|s| dist(s[0], s[1])).sum();
-    let reach = 0.5 * w + 14.0;
-    let by = |p: P| {
-        l.buildings.iter().any(|b| b.structure == Structure::Roofed && (contains(&b.poly, p) || (0..b.poly.len()).any(|k| seg_dist(p, b.poly[k], b.poly[(k + 1) % b.poly.len()]) < reach)))
-            || g.plots.iter().any(|pl| seg_dist(p, pl.pts[0], pl.pts[1]) < reach)
-    };
-    let mut at = total;
-    while at > 25.0 && !by(point_along(pts, at).0) {
-        at -= 4.0;
-    }
-    let keep = (at + 6.0).min(total);
-    if at <= 25.0 || keep >= total - 4.0 {
-        return None;
-    }
-    let mut out = vec![pts[0]];
-    let mut acc = 0.0;
-    for s in pts.windows(2) {
-        let d = dist(s[0], s[1]);
-        if acc + d >= keep {
-            out.push(lerp(s[0], s[1], (keep - acc) / d.max(1e-9)));
-            break;
-        }
-        out.push(s[1]);
-        acc += d;
-    }
-    Some(out)
-}
-
 /// Whether a house along `u` stands square to every lane and road within `SQUARE_FT` of it (but by
 /// `SQUARE_DEG`): none runs past it at a slant.
-fn square_to(lanes: &[(Vec<P>, f64)], house: &[P], u: P) -> bool {
+/// (By `JUNCTION_DEG` but along `own`, the lane it fronts: a house by a junction square to both ways.)
+fn square_to(lanes: &[(Vec<P>, f64)], house: &[P], u: P, own: Option<&[P]>) -> bool {
     let (c, r) = (centroid(house), house.iter().map(|q| dist(*q, centroid(house))).fold(0.0, f64::max));
     let (cos, sin) = (libm::cos(SQUARE_DEG.to_radians()), libm::sin(SQUARE_DEG.to_radians()));
+    let (cos_j, sin_j) = (libm::cos(JUNCTION_DEG.to_radians()), libm::sin(JUNCTION_DEG.to_radians()));
+    let mine = |s: &[P]| own.is_some_and(|o| o.windows(2).any(|w| seg_dist(lerp(s[0], s[1], 0.5), w[0], w[1]) < 0.01));
     lanes.iter().all(|(pts, w)| {
         pts.windows(2).all(|s| {
             let e = sub(s[1], s[0]);
@@ -660,7 +1185,7 @@ fn square_to(lanes: &[(Vec<P>, f64)], house: &[P], u: P) -> bool {
             }
             // (Along it or across it.)
             let k = (dot(e, u) / el).abs();
-            k > cos || k < sin
+            if mine(s) { k > cos || k < sin } else { k > cos_j || k < sin_j }
         })
     })
 }
@@ -668,6 +1193,7 @@ fn square_to(lanes: &[(Vec<P>, f64)], house: &[P], u: P) -> bool {
 /// How near a lane's edge a house must stand square to it (ft), and by how much (degrees).
 const SQUARE_FT: f64 = 12.0;
 const SQUARE_DEG: f64 = 12.0;
+const JUNCTION_DEG: f64 = 8.0;
 
 /// A cottage's toft and croft on lane `pts`, side `side`, from `a0` to `a1` along it: its front
 /// `front` ft out from the lane's middle, its sides square to the lane where they leave it (so the
@@ -973,15 +1499,8 @@ fn mill(g: &mut Ground, l: &mut Layout, r: f64, wharf: Option<&[P]>, lanes: &mut
                 continue;
             }
             let grid = LaneGrid::new(&moved);
-            if grid.touches(&poly, 2.0) {
+            if grid.touches(&poly, 2.0) || crossings(&moved, n_roads) > crossings(lanes, n_roads) {
                 continue;
-            }
-            for (old, new) in lanes.iter().zip(&moved).skip(n_roads) {
-                if old.0 != new.0
-                    && let Some(st) = l.streets.iter_mut().find(|st| **st == old.0)
-                {
-                    *st = new.0.clone();
-                }
             }
             *lanes = moved;
             g.lanes = grid;
@@ -1195,8 +1714,9 @@ pub(super) fn reserve(l: &Layout, needs: &mut Vec<usize>, taken: &mut [bool]) {
     if let Some(mill) = catalog::index_of("mill") {
         needs.retain(|&f| f != mill);
     }
+    // (Nor a farmstead's farmhouse: a farmer's.)
     for (i, b) in l.buildings.iter().enumerate() {
-        if b.ward == Ward::Noble {
+        if b.ward == Ward::Noble || b.ward == Ward::Farm {
             taken[i] = true;
         }
     }
