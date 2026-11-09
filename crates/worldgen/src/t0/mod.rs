@@ -377,7 +377,18 @@ impl T0 {
             settlements = towns;
             // What the towns and up earn, trading along those roads, sets their tiers.
             economy = economy::run(&sinp, &mut settlements, Some(&usage.paths));
-            settlements = settle::place(&sinp, settlements, &[T::Village], Some(&usage), &mut conflicts);
+            // Villages by the world's own roads: towns added beside them (`Pin::added`) draw none
+            // from far off to theirs (the villages are a fixed number). Routed again without them
+            // (the routes before their first link reused), the memo kept for the network's own.
+            let added = |s: &settle::Settlement| s.pin.is_some_and(|st| pins.iter().any(|p| p.stroke == st as usize && p.added));
+            let own = settlements.iter().any(added).then(|| {
+                let kept = rinp.routes.borrow().clone();
+                let own: Vec<settle::Settlement> = settlements.iter().filter(|s| !added(s)).cloned().collect();
+                let own = roads::preview(&rinp, &own, &[roads::RoadClass::KingsRoad, roads::RoadClass::Road]);
+                *rinp.routes.borrow_mut() = kept;
+                own
+            });
+            settlements = settle::place(&sinp, settlements, &[T::Village], Some(own.as_ref().unwrap_or(&usage)), &mut conflicts);
         } else {
             // Placed without regard to roads (and sized without trade), so drawing one never moves
             // or resizes a settlement.
