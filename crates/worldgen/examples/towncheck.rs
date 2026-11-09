@@ -3544,12 +3544,15 @@ fn belfry_rules(it: &worldgen::interior::Interior, floors: i8) -> Vec<String> {
 
 /// R5 towns (103): where a village's lanes (`Layout::streets`) end and cross, both ends of each,
 /// anywhere. An end is joined on a way (within 1 ft of another lane's or a road's centre line: the
-/// network roads as `villages` samples them, and the layout's); else at the green's rim, a building
-/// (15 ft), a yard or croft (8 ft) or the water, or at nothing. Ends not joined 1-40 ft from a way's
-/// centre line (but at the rim) are near one; those whose last 40 ft cross a way's centre line and stop
+/// network roads as `villages` samples them, and the layout's; a ring closed on itself); else at a
+/// building (15 ft), a yard or croft (8 ft) or the water, or at nothing; one by the green (within 35 ft
+/// of its rim) is also counted as not on its ring. Ends not joined 1-40 ft from a way's centre line are
+/// near one; those whose last 40 ft cross a way's centre line and stop
 /// past its far edge overshoot it. Crossings: a lane's piece across another lane's or a road's, but
 /// within 1 ft of the lane's ends or of a node both share. Farmsteads: farmyards by count.
-/// `LANE_DUMP=L<n>` prints that village's lanes, roads and what stands by each lane's ends (stderr).
+/// `LANE_DUMP=L<n>` prints that village's lanes, roads and what stands by each lane's ends (stderr);
+/// `NEAR_LIST=1` every end near a way but not joined (on the ring or not, ft past the green's rim,
+/// by water, the village's centre).
 fn lane_ends(world: &World, t0: &T0, l: &Layout, tag: &str, r: &mut Report) {
     let off = |p: P| format!("({:.0}, {:.0})", p[0] - l.center[0], p[1] - l.center[1]);
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level - 1);
@@ -3589,7 +3592,7 @@ fn lane_ends(world: &World, t0: &T0, l: &Layout, tag: &str, r: &mut Report) {
         for q in &roads {
             eprintln!("road: {}", q.iter().map(|p| off(p.0)).collect::<Vec<_>>().join(" "));
         }
-        eprintln!("green {:?}", green.map(|g| (off(g.0), g.1)));
+        eprintln!("green {:?} centre ({:.0}, {:.0})", green.map(|g| (off(g.0), g.1)), l.center[0], l.center[1]);
         for st in &l.streets {
             for e in [st[0], st[st.len() - 1]] {
                 for b in l.buildings.iter().filter(|b| edge_dist(&b.poly, e) < 40.0) {
@@ -3619,7 +3622,8 @@ fn lane_ends(world: &World, t0: &T0, l: &Layout, tag: &str, r: &mut Report) {
             let (e, way): (P, Vec<P>) = if end == 0 { (s[0], s.to_vec()) } else { (s[s.len() - 1], s.iter().rev().copied().collect()) };
             let others = || segs.iter().filter(|w| w.3 != Some(si));
             let d = others().map(|w| seg_dist(e, w.0, w.1)).fold(f64::MAX, f64::min);
-            if d <= 1.0 {
+            // (A ring round the green closed on itself: its ends one node.)
+            if d <= 1.0 || dist(s[0], s[s.len() - 1]) < 0.01 {
                 r.tally("lane ends joined", 1);
                 continue;
             }
@@ -3640,13 +3644,22 @@ fn lane_ends(world: &World, t0: &T0, l: &Layout, tag: &str, r: &mut Report) {
             if let Some(w) = over {
                 r.add("lane ends overshooting a way", 1.0, format!("{tag} {} by {:.0} ft (lane {si}, {} pts, {:.0} ft)", off(e), seg_dist(e, w.0, w.1) - w.2, s.len(), s.windows(2).map(|q| dist(q[0], q[1])).sum::<f64>()));
             }
-            let rim = green.is_some_and(|(gc, gr)| dist(e, gc) <= gr + 7.0);
+            // (Within the ring lane's reach of the green: R5 towns 103, lanes there end on the ring.)
+            let ring = green.is_some_and(|(gc, gr)| s.len() >= 4 && s[1..s.len() - 1].iter().all(|p| (dist(*p, gc) - gr - 0.5 * town::village::LANE_W).abs() < 2.0));
+            if ring {
+                r.add("ring lane ends not on a way", 1.0, format!("{tag} {} (lane {si}, way {d:.0} ft{})", off(e), if by_water(e) { ", water" } else { "" }));
+            } else if green.is_some_and(|(gc, gr)| dist(e, gc) <= gr + town::village::LANE_W + 25.0) {
+                r.add("lane ends at the green's rim but not on the ring", 1.0, format!("{tag} {} (lane {si}, way {d:.0} ft{})", off(e), if by_water(e) { ", water" } else { "" }));
+            }
             let at_building = l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) <= 15.0);
             let at_yard = l.crofts.iter().any(|p| contains(&p.pts, e) || edge_dist(&p.pts, e) <= 8.0);
-            if !rim && d <= 40.0 {
+            if d <= 40.0 && std::env::var("NEAR_LIST").is_ok() {
+                eprintln!("NEAR {tag} {} {d:.0} ring {ring} green {:.0} water {} centre ({:.0}, {:.0})", off(e), green.map_or(-1.0, |(gc, gr)| dist(e, gc) - gr), by_water(e), l.center[0], l.center[1]);
+            }
+            if d <= 40.0 {
                 r.add("lane ends near a way but not joined", 1.0, format!("{tag} {} {d:.0} ft off (lane {si}, {} pts, {}{}{})", off(e), s.len(), if at_building { "house " } else { "" }, if at_yard { "yard " } else { "" }, if by_water(e) { "water" } else { "" }));
             }
-            if !rim && !at_building && !at_yard && !by_water(e) {
+            if !at_building && !at_yard && !by_water(e) {
                 let near_b = l.buildings.iter().map(|b| edge_dist(&b.poly, e)).fold(f64::MAX, f64::min);
                 let near_p = l.crofts.iter().map(|p| edge_dist(&p.pts, e)).fold(f64::MAX, f64::min);
                 r.add("lane ends not joined, at nothing", 1.0, format!("{tag} {} {} ft out (lane {si}, {} pts, way {d:.0} ft, building {near_b:.0}, plot {near_p:.0})", off(e), dist(e, l.center) as i64, s.len()));
@@ -3776,6 +3789,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&["villages", "cottages", "cottages not square to their lane", "croft overlaps", "crofts over a building", "crofts over a lane", "bounds by a roof", "bounds across a lane", "lane kinks", "lanes ending at nothing inside the village", "greens with props", "greens without their well (of the first 24)"]);
     r.counts(&["cottages by no lane or road", "lane ends", "lane ends joined", "lane ends not joined, at nothing", "lane ends near a way but not joined", "lane ends overshooting a way", "lanes crossing a lane or road away from a shared node", "farmsteads"]);
     r.counts(&["plots holding no building", "farmyards with no lane to their gate", "plot bounds by a building not theirs", "runs by any building", "lanes through a building"]);
+    r.counts(&["greens without a ring lane", "lanes across the green", "lane ends at the green's rim but not on the ring", "ring lane ends not on a way"]);
     let mut greens: Vec<(P, String)> = Vec::new();
     let mut gpolys: Vec<Vec<P>> = Vec::new();
     let mut fchunks: Vec<(P, String)> = Vec::new();
@@ -3861,8 +3875,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         for (si, s) in l.streets.iter().enumerate() {
             let e = s[s.len() - 1];
             let met = l.streets.iter().enumerate().any(|(j, q)| j != si && q.windows(2).any(|w| seg_dist(e, w[0], w[1]) < 15.0)) || ways.iter().skip(l.streets.iter().map(|q| q.len() - 1).sum()).any(|&(a, b, h)| seg_dist(e, a, b) < h + 15.0);
-            let on_green = l.plazas.iter().any(|g| g.kind == PlazaKind::Green && dist(e, centroid(&g.pts)) < dist(centroid(&g.pts), g.pts[0]) + 10.0);
-            if !met && !on_green && dist(e, l.center) < 0.9 * l.radius && !l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) < 20.0) && !l.crofts.iter().any(|p| edge_dist(&p.pts, e) < 12.0) {
+            if !met && dist(e, l.center) < 0.9 * l.radius && !l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) < 20.0) && !l.crofts.iter().any(|p| edge_dist(&p.pts, e) < 12.0) {
                 r.add("lanes ending at nothing inside the village", 1.0, format!("{tag} {}", off(e)));
             }
             for w in s.windows(3) {
@@ -3886,6 +3899,16 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         if let Some(g) = l.plazas.iter().find(|p| p.kind == PlazaKind::Green) {
             let (c, rad) = (centroid(&g.pts), dist(centroid(&g.pts), g.pts[0]));
             gpolys.push(g.pts.clone());
+            // (R5 towns, 103: the lane round it, its points but its ends on its centre line; no lane on its grass.)
+            let rr = rad + 0.5 * town::village::LANE_W;
+            if !l.streets.iter().any(|s| s.len() >= 4 && s[1..s.len() - 1].iter().all(|p| (dist(*p, c) - rr).abs() < 2.0)) {
+                r.add("greens without a ring lane", 1.0, format!("{tag} green {} r {rad:.0}, {} roads by", off(c), l.roads.len()));
+            }
+            for s in &l.streets {
+                if let Some(w) = s.windows(2).find(|w| seg_dist(c, w[0], w[1]) < rad - 1.0) {
+                    r.add("lanes across the green", 1.0, format!("{tag} {} to {}", off(w[0]), off(w[1])));
+                }
+            }
             if l.props.iter().any(|p| dist(p.at, c) < rad) {
                 r.tally("greens with props", 1);
             }
