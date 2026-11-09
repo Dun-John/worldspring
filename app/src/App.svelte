@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { runBench, runDungeonBench, runEditBench, runPlayBench, runSewerBench, type BenchResult } from './dev/bench';
-  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, Npc, Overlay, Placed, Plateau, Plot, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
+  import type { BuildingEdit, BuildingFuncs, UnderCatalog, Clear, Conflict, Created, Crossing, Edits, Feature, NamedPlaces, Npc, Overlay, Placed, Plateau, Plot, SpriteMeta, Stroke, Tint, TownPlan, TownReport, TownRequest, WorldFile, WorldParams } from './gen/protocol';
   import { TINT_MATERIAL } from './gen/protocol';
   import SketchPanel from './editor/SketchPanel.svelte';
   import { MI, Sketcher, drawsLand, pinStroke, scaleStrokes, type PinTier, type ToolSettings } from './editor/sketcher';
@@ -273,6 +273,31 @@
     const hidden = new Set(placeHidden);
     return overlay ? { ...overlay, features: overlay.features.filter((f) => !hidden.has(f.id)) } : null;
   });
+  // Roads someone named and crossings put down by hand, as places for search and the gazetteer
+  // (asked again whenever names, hidden places or crossings change).
+  let named = $state.raw<NamedPlaces | null>(null);
+  let namedAsk = 0;
+  $effect(() => {
+    const o = overlay;
+    void [renames, edits.hidden, edits.crossings];
+    if (!o) return;
+    const n = ++namedAsk;
+    void view.gen.named().then((r) => {
+      if (overlay === o && n === namedAsk) named = r;
+    });
+  });
+  // (Their names as generated, as features carry; a road framed on its line: its box; a crossing
+  // on its middle.)
+  const namedFeatures = $derived<Feature[]>([
+    ...(named?.roads ?? []).map(({ id, generated, bbox: [x0, y0, x1, y1] }) => ({ id, kind: 'road', name: generated, x: (x0 + x1) / 2, y: (y0 + y1) / 2, angle: 0, extent_ft: Math.max(x1 - x0, y1 - y0, 300) / 1.4, detail: 'road' })),
+    ...(named?.crossings ?? []).map((c) => ({ id: c.id, kind: 'crossing', name: c.generated, x: c.x, y: c.y, angle: 0, extent_ft: Math.max(c.length_ft, 200), detail: c.generated })),
+  ]);
+  const searchOverlay = $derived.by<Overlay | null>(() => {
+    const hidden = new Set(edits.hidden ?? []);
+    return shown && namedFeatures.length ? { ...shown, features: [...shown.features, ...namedFeatures.filter((f) => !hidden.has(f.id)).map((f) => ({ ...f, name: renames[f.id] ?? f.name }))] } : shown;
+  });
+  /** A named road's stretches by any of their ids (renamed or hidden together), else the id. */
+  const stretchesOf = (id: string): string[] => (id.startsWith('rd:') ? named?.roads.find((r) => r.ids.includes(id))?.ids : undefined) ?? [id];
   // The sites the breadcrumbs may name (those shown), each with the settlement it stands in, and the
   // site whose inside is open (a building or way underground of a site's layout).
   const crumbSites = $derived.by<CrumbSites | null>(() => {
@@ -1169,8 +1194,10 @@
       return applyEdits({ ...edits, renames: all, created }, { tool: 'update_building', id: drawn.id, name }, 'user');
     }
     const all = { ...renames };
-    if (name) all[id] = name;
-    else delete all[id];
+    for (const k of stretchesOf(id)) {
+      if (name) all[k] = name;
+      else delete all[k];
+    }
     applyEdits({ ...edits, renames: all }, { tool: 'rename_feature', id, name }, 'user');
   }
 
@@ -2756,8 +2783,10 @@
     const key = pair?.c ?? id;
     const set = new Set(edits.hidden ?? []);
     if (pair) set.delete(pair.b);
-    if (hide) set.add(key);
-    else set.delete(key);
+    for (const k of pair ? [key] : stretchesOf(key)) {
+      if (hide) set.add(k);
+      else set.delete(k);
+    }
     const next = [...set].sort();
     const now = edits.hidden ?? [];
     if (next.length === now.length && next.every((h, i) => h === now[i])) return;
@@ -2780,7 +2809,7 @@
   /** Show a place: a map feature is selected (and framed); a building or district is found
    * where it stands and selected; anything else (levels, rooms) is gone to. */
   async function showPlace(id: string) {
-    const f = overlay?.features.find((g) => g.id === id);
+    const f = overlay?.features.find((g) => g.id === id) ?? namedFeatures.find((g) => g.id === id);
     if (f) {
       if (view.interior) view.exitBuilding();
       return select({ kind: 'feature', feature: f });
@@ -2921,7 +2950,7 @@
   /** Go to a name in the Gazetteer: a map feature is selected (and framed); the rest as `goTo`. */
   async function goName(id: string) {
     if (designer?.dirty) return ask('design', () => void goName(id));
-    const f = overlay?.features.find((g) => g.id === id);
+    const f = overlay?.features.find((g) => g.id === id) ?? namedFeatures.find((g) => g.id === id);
     if (f) {
       if (view.interior) view.exitBuilding();
       return select({ kind: 'feature', feature: f });
@@ -3344,7 +3373,7 @@
     {#snippet search()}
       {#if overlay}
         <Search
-          overlay={shown ?? overlay}
+          overlay={searchOverlay ?? overlay}
           {renames}
           searchBuildings={(q, rect) => view.gen.searchBuildings(q, rect)}
           viewRect={() => view.cam.viewRect()}
@@ -3619,7 +3648,7 @@
         {:else if notebookFocus.tab === 'gazetteer'}
           {#if overlay}
             <Gazetteer
-              features={overlay.features}
+              features={namedFeatures.length ? [...overlay.features, ...namedFeatures] : overlay.features}
               {renames}
               hidden={placeHidden}
               notes={placeNotes}

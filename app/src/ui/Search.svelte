@@ -4,7 +4,7 @@
   // they arrive, in groups. "Only in view" (a chip over the results) keeps to the current view.
   // ↑/↓ move through the results, Enter opens one.
   import type { Npc, Overlay, PlaceInfo, Plot } from '../gen/protocol';
-  import { hitName, kindLabel, listedName, removedKind, searchFeatures, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection } from './gazetteer';
+  import { hitName, kindIcon, kindLabel, listedName, removedKind, searchFeatures, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection } from './gazetteer';
   import { roleOf, parseLoc, type Token } from '../play/state';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
@@ -150,7 +150,7 @@
     for (const f of searchFeatures(overlay, q, 12, local && rect ? rect : undefined)) {
       const town = inTown(f.id);
       places.add(f.id);
-      out.push({ key: f.id, group: 'Places', icon: 'pin', name: renames[f.id] ?? f.name, sub: `${kindLabel(f.kind)}${town ? ` · in ${town}` : ''}`, pick: () => onSelect({ kind: 'feature', feature: f }) });
+      out.push({ key: f.id, group: 'Places', icon: /^(rd|v):/.test(f.id) ? kindIcon(f.kind) : 'pin', name: renames[f.id] ?? f.name, sub: `${kindLabel(f.kind)}${town ? ` · in ${town}` : ''}`, pick: () => onSelect({ kind: 'feature', feature: f }) });
     }
     for (const b of buildings) {
       // A building drawn by hand is its site: listed once, under Places, and hidden with it.

@@ -179,6 +179,12 @@ impl Ctx {
         }
     }
 
+    /// The roads someone named and the crossings put down by hand, for the map's labels, search
+    /// and the gazetteer (`roadids::named_json`), JSON; `null` before T0.
+    pub fn named_json(&self) -> String {
+        self.t0.as_ref().map_or_else(|| "null".into(), |t0| worldgen::roadids::named_json(&self.world, t0).to_string())
+    }
+
     /// Fingerprints of layouts as generated (`town::layout_print`, folded to 32 bits), by layout
     /// index; 0 for one past the last, or before T0.
     pub fn layout_prints(&self, layouts: Vec<u32>) -> Vec<u32> {

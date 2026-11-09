@@ -217,6 +217,8 @@ export class MapView {
   private towns: { x: number; y: number; r: number; index: number }[] = [];
   private readonly townHints = new Map<string, { edit: string; rects: Rect[] }>();
   private districtsAsked = new Set<number>();
+  /** The last ask for the roads someone named (a later one wins). */
+  private roadsAsk = 0;
   private lastDistrictCheck = 0;
   /** Business pins ("Places"): shown or not, the area asked for last, and a pending ask. */
   places = false;
@@ -504,6 +506,14 @@ export class MapView {
         if (this.labels === labels) labels.addDistricts(list, this.renames);
       });
     }
+  }
+
+  /** Letter the roads someone named as the generators have them now. */
+  private askRoads() {
+    const [labels, n] = [this.labels, ++this.roadsAsk];
+    if (labels) void this.gen.named().then((r) => {
+      if (this.labels === labels && n === this.roadsAsk) labels.setRoads(r.labels);
+    });
   }
 
   /** Show business names on the map (as pins) or not. */
@@ -907,13 +917,17 @@ export class MapView {
     const nr = next.renames ?? {};
     // (Only names drawn inside, levels, rooms and sites, redraw the building or site we are in.)
     let renamed = false;
+    // (Roads someone named, renamed or hidden: their labels asked for again once these are sent.)
+    let roadNames = prev.hidden !== next.hidden && [...(prev.hidden ?? []), ...(next.hidden ?? [])].some((h) => h.startsWith('rd:'));
     // (Fields that are the same object are unchanged: edits are never changed in place.)
     if (pr !== nr || createdChanged) for (const id of createdChanged ? new Set([...Object.keys(pr), ...Object.keys(nr)]) : keys('renames', pr, nr)) {
       if (pr[id] !== nr[id] && /^[lrbtuwk]:/.test(id)) renamed = true;
       if (pr[id] !== nr[id] || (createdChanged && id.startsWith('c:'))) this.labels?.rename(id, nr[id] ?? null);
+      if (pr[id] !== nr[id] && id.startsWith('rd:')) roadNames = true;
     }
     this.renames = nr;
     InteriorLayer.names = nr;
+    if (roadNames) queueMicrotask(() => this.askRoads());
     // Inside: the title, level and room names as renamed.
     if (renamed && this.interior) {
       this.redrawInterior();

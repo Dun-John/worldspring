@@ -535,6 +535,8 @@ export type Ask =
   /** `rect` (x0, y0, x1, y1 ft) limits the search to that area. */
   | { op: 'search'; q: string; rect?: [number, number, number, number] }
   | { op: 'districts'; settlement: number }
+  /** The roads someone named and the crossings put down by hand (`roadids::named_json`). */
+  | { op: 'named' }
   | { op: 'inview'; rect: [number, number, number, number] }
   /** `b:<settlement>:<building>` or `t:<settlement>:<tower>`. */
   | { op: 'interior'; id: string }
@@ -720,6 +722,25 @@ export interface DistrictLabel {
   kind: string;
   /** Label baseline (world ft), left to right. */
   path: [number, number][];
+}
+
+/** A road someone named: its stretches (`rd:` ids, in order along it) named alike and meeting
+ * end to end; `id` is the first. */
+export interface NamedRoad {
+  id: string;
+  ids: string[];
+  name: string;
+  length_ft: number;
+}
+
+/** The roads someone named and the crossings put down by hand (`worldgen::roadids::named_json`). */
+export interface NamedPlaces {
+  /** What the map letters (hidden stretches left out): each road's line (world ft). */
+  labels: (NamedRoad & { pts: [number, number][] })[];
+  /** Every named road, hidden ones too, with its box (x0, y0, x1, y1 ft). */
+  roads: (NamedRoad & { bbox: [number, number, number, number]; generated: string })[];
+  /** `name`: given, else `generated` ("Stone bridge", "Ford", "Ferry"); x, y its middle. */
+  crossings: { id: string; name: string; generated: string; x: number; y: number; length_ft: number }[];
 }
 
 export interface Geom {

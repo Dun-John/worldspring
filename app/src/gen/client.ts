@@ -4,7 +4,7 @@ import { EDIT_FIELDS } from '../sync/ops';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, NamedPlaces, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -185,6 +185,11 @@ export class GenClient {
   /** A settlement's named districts, for labels. */
   districts(settlement: number): Promise<DistrictLabel[]> {
     return this.ask({ op: 'districts', settlement }).then((j) => (JSON.parse(j) as DistrictLabel[] | null) ?? []);
+  }
+
+  /** The roads someone named and the crossings put down by hand (labels, search, gazetteer). */
+  named(): Promise<NamedPlaces> {
+    return this.ask({ op: 'named' }).then((j) => (JSON.parse(j) as NamedPlaces | null) ?? { labels: [], roads: [], crossings: [] });
   }
 
   private ask(ask: Ask): Promise<string> {

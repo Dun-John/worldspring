@@ -85,6 +85,8 @@ const KIND_ICON: Record<string, IconName> = {
   building: 'building',
   castle: 'castle',
   wall: 'wall',
+  road: 'road',
+  crossing: 'bridge',
 };
 
 /** A site's icon (as on the Places tab). */

@@ -176,27 +176,151 @@ pub fn road_json(world: &World, t0: &T0, id: &str) -> Option<Value> {
     Some(v)
 }
 
-/// The stretches given a name (`rename_feature rd:…`) that are still there: id, name and
-/// whole line (ft), in id order. What the map letters (only roads someone named).
+/// A road someone named, as the map letters it: the stretches given one name that meet end to
+/// end (at a junction, or a settlement both reach), in order along it.
 pub struct NamedRoad {
-    pub id: String,
+    pub ids: Vec<String>,
+    /// The stretches' indices in `t0.roads.roads`.
+    pub idx: Vec<usize>,
     pub name: String,
+    /// The whole line (ft), the stretches turned to run on from each other (straight across
+    /// a settlement between two).
     pub pts: Vec<[f64; 2]>,
 }
 
-pub fn named_roads(world: &World, t0: &T0) -> Vec<NamedRoad> {
-    let renames = &world.file.edits.renames;
-    if !renames.keys().any(|k| k.starts_with("rd:")) {
+/// The roads someone named (`rename_feature rd:…`, stretches still there), by name; hidden
+/// stretches left out with `skip_hidden`. What the map letters (only roads someone named).
+pub fn named_roads(world: &World, t0: &T0, skip_hidden: bool) -> Vec<NamedRoad> {
+    let e = &world.file.edits;
+    if !e.renames.keys().any(|k| k.starts_with("rd:")) {
         return Vec::new();
     }
     let ids = road_ids(t0);
-    let mut out: Vec<NamedRoad> = ids
-        .iter()
-        .enumerate()
-        .filter_map(|(i, id)| renames.get(id).filter(|n| !n.trim().is_empty()).map(|n| NamedRoad { id: id.clone(), name: n.clone(), pts: t0.roads.roads[i].pts.clone() }))
-        .collect();
-    out.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut by_name: std::collections::BTreeMap<&String, Vec<usize>> = Default::default();
+    for (i, id) in ids.iter().enumerate() {
+        if let Some(n) = e.renames.get(id).filter(|n| !n.trim().is_empty() && !(skip_hidden && e.hidden.contains(id))) {
+            by_name.entry(n).or_default().push(i);
+        }
+    }
+    let rs = &t0.roads.roads;
+    let mut out = Vec::new();
+    for (name, set) in by_name {
+        for chain in walk(t0, &set) {
+            let mut pts: Vec<P> = Vec::new();
+            for &(k, fwd) in &chain {
+                let r = &rs[set[k]].pts;
+                if fwd {
+                    pts.extend(r.iter().copied());
+                } else {
+                    pts.extend(r.iter().rev().copied());
+                }
+            }
+            out.push(NamedRoad { ids: chain.iter().map(|&(k, _)| ids[set[k]].clone()).collect(), idx: chain.iter().map(|&(k, _)| set[k]).collect(), name: name.clone(), pts });
+        }
+    }
     out
+}
+
+/// Stretches (`set`: indices in `t0.roads.roads`) walked end to end: each run of stretches
+/// meeting at a node (a settlement, else a point to 400 ft), from an end met once where there
+/// is one, as (index in `set`, walked as listed).
+fn walk(t0: &T0, set: &[usize]) -> Vec<Vec<(usize, bool)>> {
+    let rs = &t0.roads.roads;
+    let node = |p: P| match town_at(t0, p) {
+        Some(s) => (i64::MIN, s as i64),
+        None => (crate::core::round(p[0] / 400.0) as i64, crate::core::round(p[1] / 400.0) as i64),
+    };
+    let ends: Vec<((i64, i64), (i64, i64))> = set.iter().map(|&i| (node(rs[i].pts[0]), node(*rs[i].pts.last().unwrap_or(&rs[i].pts[0])))).collect();
+    let degree = |n: (i64, i64)| ends.iter().filter(|e| e.0 == n || e.1 == n).count();
+    let mut used = vec![false; set.len()];
+    let mut chains: Vec<Vec<(usize, bool)>> = Vec::new();
+    let mut n = 0;
+    while n < set.len() {
+        let starts: Vec<(i64, i64)> = (0..set.len()).filter(|&k| !used[k]).flat_map(|k| [ends[k].0, ends[k].1]).collect();
+        let Some(mut at) = starts.iter().copied().filter(|&n| degree(n) == 1).min().or_else(|| starts.iter().copied().min()) else { break };
+        let mut chain = Vec::new();
+        while let Some(k) = (0..set.len()).find(|&k| !used[k] && (ends[k].0 == at || ends[k].1 == at)) {
+            used[k] = true;
+            let fwd = ends[k].0 == at;
+            chain.push((k, fwd));
+            at = if fwd { ends[k].1 } else { ends[k].0 };
+        }
+        n += chain.len();
+        chains.push(chain);
+    }
+    chains
+}
+
+/// A line with the points it can do without dropped (Douglas–Peucker to `tol` ft), whole ft.
+pub fn simplify(pts: &[P], tol: f64) -> Vec<P> {
+    let n = pts.len();
+    if n < 3 {
+        return pts.iter().map(|p| [crate::core::round(p[0]), crate::core::round(p[1])]).collect();
+    }
+    let mut keep = vec![false; n];
+    keep[0] = true;
+    keep[n - 1] = true;
+    let mut stack = vec![(0usize, n - 1)];
+    while let Some((a, b)) = stack.pop() {
+        let (pa, pb) = (pts[a], pts[b]);
+        let (dx, dy) = (pb[0] - pa[0], pb[1] - pa[1]);
+        let len = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
+        let (mut best, mut at) = (tol, 0);
+        for (k, p) in pts.iter().enumerate().take(b).skip(a + 1) {
+            let d = if len < 1e-6 { geom::dist(*p, pa) } else { crate::core::fabs((p[0] - pa[0]) * dy - (p[1] - pa[1]) * dx) / len };
+            if d > best {
+                best = d;
+                at = k;
+            }
+        }
+        if at > 0 {
+            keep[at] = true;
+            stack.push((a, at));
+            stack.push((at, b));
+        }
+    }
+    (0..n).filter(|&k| keep[k]).map(|k| [crate::core::round(pts[k][0]), crate::core::round(pts[k][1])]).collect()
+}
+
+fn line_len(pts: &[P]) -> f64 {
+    pts.windows(2).map(|w| geom::dist(w[0], w[1])).sum()
+}
+
+/// For the app (`Ctx::named_json`): the named roads to letter (hidden stretches left out; line
+/// to 15 ft), every named road for the lists (`ids`, its box, length, `generated`: its name
+/// before renames, a drawn road's or else its class) and the crossings put down
+/// by hand (name given, else as generated; `generated`; middle; length).
+pub fn named_json(world: &World, t0: &T0) -> Value {
+    let labels: Vec<Value> = named_roads(world, t0, true)
+        .into_iter()
+        .map(|r| json!({ "id": r.ids[0], "ids": r.ids, "name": r.name, "length_ft": crate::core::round(line_len(&r.pts)), "pts": simplify(&r.pts, 15.0) }))
+        .collect();
+    let named = named_roads(world, t0, false);
+    let rs = &t0.roads.roads;
+    let fs = if named.iter().any(|r| rs[r.idx[0]].stroke.is_some()) { crate::agent::features(world, t0) } else { Vec::new() };
+    let roads: Vec<Value> = named
+        .into_iter()
+        .map(|r| {
+            let first = &rs[r.idx[0]];
+            let generated = first.stroke.and_then(|s| drawn_road(world, t0, &fs, s)).map_or_else(|| class_name(first.class).to_string(), |i| fs[i].name.clone());
+            let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+            for p in &r.pts {
+                b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
+            }
+            json!({ "id": r.ids[0], "ids": r.ids, "name": r.name, "length_ft": crate::core::round(line_len(&r.pts)), "bbox": b.map(crate::core::round), "generated": generated })
+        })
+        .collect();
+    let e = &world.file.edits;
+    let crossings: Vec<Value> = e
+        .crossings
+        .iter()
+        .map(|(id, c)| {
+            let m = crossing_mid(c);
+            let generated = crossing_generated(c);
+            json!({ "id": id, "name": e.renames.get(id).cloned().unwrap_or_else(|| generated.clone()), "generated": generated, "x": crate::core::round(m[0]), "y": crate::core::round(m[1]), "length_ft": crate::core::round(c.length()) })
+        })
+        .collect();
+    json!({ "labels": labels, "roads": roads, "crossings": crossings })
 }
 
 /// The stretches renamed alike, each name once: its stretches in order along the road (ends
@@ -211,31 +335,12 @@ pub fn renamed_groups(world: &World, t0: &T0, ids: &[String], keep: &dyn Fn(usiz
         }
     }
     let rs = &t0.roads.roads;
-    // A road end as a node: its settlement, else its point to 400 ft.
-    let node = |p: P| match town_at(t0, p) {
-        Some(s) => (i64::MIN, s as i64),
-        None => (crate::core::round(p[0] / 400.0) as i64, crate::core::round(p[1] / 400.0) as i64),
-    };
     let mut out = Vec::new();
     for (name, set) in by_name {
         if !set.iter().any(|&i| keep(i)) {
             continue;
         }
-        let ends: Vec<((i64, i64), (i64, i64))> = set.iter().map(|&i| (node(rs[i].pts[0]), node(*rs[i].pts.last().unwrap_or(&rs[i].pts[0])))).collect();
-        let degree = |n: (i64, i64)| ends.iter().filter(|e| e.0 == n || e.1 == n).count();
-        // Walk from an end met once (the road's start), stretch to stretch; any left after.
-        let mut used = vec![false; set.len()];
-        let mut order: Vec<(usize, bool)> = Vec::new();
-        while order.len() < set.len() {
-            let starts: Vec<(i64, i64)> = (0..set.len()).filter(|&k| !used[k]).flat_map(|k| [ends[k].0, ends[k].1]).collect();
-            let Some(mut at) = starts.iter().copied().filter(|&n| degree(n) == 1).min().or_else(|| starts.iter().copied().min()) else { break };
-            while let Some(k) = (0..set.len()).find(|&k| !used[k] && (ends[k].0 == at || ends[k].1 == at)) {
-                used[k] = true;
-                let fwd = ends[k].0 == at;
-                order.push((k, fwd));
-                at = if fwd { ends[k].1 } else { ends[k].0 };
-            }
-        }
+        let order: Vec<(usize, bool)> = walk(t0, &set).concat();
         let mut towns: Vec<usize> = Vec::new();
         for &(k, fwd) in &order {
             let r = &rs[set[k]];
