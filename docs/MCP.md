@@ -31,7 +31,46 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 
 - **Coordinates** are in feet from the map's top-left corner: `x_ft` runs east and `y_ft` runs south. One mile is
   5,280 ft; one battlemap square is 5 ft.
-- **Places:** any tool that needs a place takes either an `id` or both `x_ft` and `y_ft`.
+- **One vocabulary:** the same thing has the same name in every tool (table below). Old names still work (they are
+  accepted, never returned, and not in the tool schemas). Give a new name and its old one with different values and the
+  call is refused (`blocks_move and blocks_movement disagree: give one`); the same value twice is fine.
+- **Arguments are checked before anything runs**, for every tool and every `batch` step, against the tool's own
+  schema: unknown arguments, types (an integer is a whole number; `"10"` is not a number), `enum` values,
+  `minimum`/`maximum`, list sizes and required fields. `null` for an optional argument counts as not given. A
+  refusal says which field and what was wrong, up to five at once, with the item's index in lists, and suggests a
+  near name when there is one:
+  `radius_squares: 1 to 64, got 200` · `hidden: true or false, got "yes"` ·
+  `radius: unknown argument (did you mean radius_mi?)` · `kind: one of city, town, ..., got "citty" (did you mean city?)` ·
+  `unknown tool 'serch_features' (did you mean search_features?)`.
+  A number out of range is refused, never clamped; the ranges and defaults are in the schemas (`minimum`, `maximum`,
+  `default`). A tool's rules that a schema can't say (one of several fields needed, a polygon that crosses itself)
+  are worded the same way: `field: rule, got X`.
+- **Places:** `at` is a place: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`. Other points (`near`, `from`, `to`) take the
+  same three forms. Refused: a point off the map (the message gives the map's size), `at` together with `id`,
+  `x_ft` or `y_ft` (the same place twice is fine), only one of `x_ft`/`y_ft`, an id that names nothing. A tool whose
+  `id` is not its subject also takes the old `id`, or `x_ft` and `y_ft`, beside its other arguments.
+- **Lists** come back as `{items, found}`: `found` is how many there were before any `limit`, and `truncated: true`
+  says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`).
+- **Moves are reported:** a tool that puts something elsewhere than asked (a site pushed off a river onto dry land, a
+  point snapped) says so when it is more than 5 ft: `moved: {x_ft, y_ft, ft, why}`.
+
+| What | Name | Also accepted | Tools |
+|---|---|---|---|
+| A point | `at`: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | `id` (where it is not the tool's subject), `x_ft` + `y_ft` | `describe_location`, `features_near`, `list_roads`, `get_battlemap`, `render_view`, `focus_view`, `create_feature`, `ground_heights`, `shape_ground` |
+| Other points | `near` (`create_building`), `from`/`to` (`route`, `place_crossing`): the same three forms | | |
+| An NPC's place | `location` (an id) and/or a point | `at` (an id is the `location`, a point is `x_ft`/`y_ft`) | `create_npc`, `place_npc` |
+| An area | `within`: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` (3+ points) or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`) | `area` | `remove_buildings`, `remove_objects`, `restore_objects` (`get_town_plan`: a box) |
+| Inside a building or site | `inside`: its id | `within` given as an id | `list_names` |
+| A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot`, `create_feature` (castles), `set_plateau` |
+| A line | `path` `[[x, y], ...]` | walls keep `pts` and also take `path` | `shape_ground`, `create_feature` (wall), `update_fortification` |
+| One or many ids | `ids` (a list) or `id` (one), either; all or nothing | | every remover and restorer: `delete_feature`, `delete_npc`, `delete_plot`, `delete_plateau`, `remove_objects`, `restore_objects`, `remove_buildings`, `restore_building`, `remove_crossings` |
+| Notes | `notes` on features and NPCs, `text` on plot points | the other one | `annotate_feature`, `update_feature`, `create_npc`, `update_npc`, `create_plot`, `update_plot` (not `set_site_design`: its `text` is the plan) |
+| A sprite's rules | `blocks_movement`, `blocks_sight`, `cover` as a word (`none`, `half`, `three-quarters`, `full`), `size_squares` | `blocks_move`, `cover` 0 to 3, `size` | `upload_sprite` |
+| Units | `_ft` feet, `_mi` miles, `_squares` squares, `_deg` degrees, in every name that carries one | | |
+| Dry runs | `dry_run`, only where a tool lists it; elsewhere it is an unknown argument | | `set_site_design`, `edit_town` |
+| Lists returned | `{items, found}` (+ `truncated`) | | `search_features`, `features_near`, `list_names`, `list_roads`, `list_npcs`, `list_plots`, `list_sprites` (each item says `uploaded`), `list_crossings` |
+| Moves reported | `moved: {x_ft, y_ft, ft, why}` | | `create_feature`, `create_building`, `place_crossing` |
+
 - **Names** in results already include renames, and search matches them. Hidden features are left out of search
   unless you ask for them.
 - **Extents:** search results, `get_feature` and `features_near` give each place's `extent`: `bbox_ft` (`[x0, y0,
@@ -149,13 +188,13 @@ A summary of the world:
 
 ### `search_features`
 Searches by name, as the places are named now (renames included). From three letters, it also finds districts and
-named businesses (inns, temples, smithies…). Each result has its `extent`.
+named businesses (inns, temples, smithies…). Returns `{items, found}` (`truncated: true` when `limit` cut the list); each item has its `extent`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `query` | string | required | Part of a name. Empty, together with `kind`, lists every feature of that kind. |
+| `query` | string | `""` | Part of a name. Empty, together with `kind`, lists every feature of that kind. |
 | `kind` | string | none | Only this kind: `city`, `ruin`, `river`, `building`, `district`, … |
-| `limit` | integer | 25 | 1–200 |
+| `limit` | integer | 25 | 1 to 200 |
 | `include_hidden` | boolean | false | Also return hidden features. |
 
 ```json
@@ -214,21 +253,21 @@ What a feature contains:
 ### `list_names`
 Everything that can be renamed, with ids to pass to `rename_feature`. Each entry has `id`, `kind`, `name` (as
 renamed), `generated` (the name before renames), `x_ft`/`y_ft` where it has a spot, `enter: true` for buildings and
-sites with levels, and `hidden: true` for hidden features.
+sites with levels, and `hidden: true` for hidden features. Returns `{items, found}`.
 
 | Parameter | Type | | |
 |---|---|---|---|
 | `kind` | string | optional | Only this kind: `river`, `range`, `city`… or `district`, `building`, `tower`, `underground`, `site`, `level`, `room`. |
 | `settlement` | string | optional | A settlement's or site's id: its districts, businesses, wall and gate towers and underground sites (sewer grates aside). For a settlement, also the buildings drawn in it that have a trade (as businesses, `b:<layout>:0`) and every site in it (kind `site`, by the site's own id). |
-| `within` | string | optional | A building's or underground site's id: its levels (`l:`) and their rooms (`r:`). |
+| `inside` | string | optional | A building's or underground site's id: its levels (`l:`) and their rooms (`r:`). (`within` is accepted too.) |
 
-Without `settlement` or `within` it lists every named feature: oceans, seas, rivers, ranges, settlements, sites
+Without `settlement` or `inside` it lists every named feature: oceans, seas, rivers, ranges, settlements, sites
 and created sites.
 
 ```json
 { "name": "list_names", "arguments": { "kind": "river" } }
 { "name": "list_names", "arguments": { "settlement": "city:bab44567", "kind": "district" } }
-{ "name": "list_names", "arguments": { "within": "u:312:0" } }
+{ "name": "list_names", "arguments": { "inside": "u:312:0" } }
 ```
 > *"Give every room in the crypt under the Sunken Bastion a proper name."* · *"Which rivers have I renamed?"*
 
@@ -244,7 +283,7 @@ What is at a point:
 
 | Parameter | Type | | |
 |---|---|---|---|
-| `id` or `x_ft` + `y_ft` | | required | |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
 
 ```json
 { "name": "describe_location", "arguments": { "x_ft": 2310194, "y_ft": 4127619 } }
@@ -253,14 +292,14 @@ What is at a point:
 
 ### `features_near`
 Everything named within a radius of a place, nearest first. Distances are to each feature's nearest edge or
-course (0, direction `here`, inside an area). Each result has `distance_mi`, `direction` and `extent`.
+course (0, direction `here`, inside an area). Returns `{items, found}` (`truncated: true` when `limit` cut the list); each item has `distance_mi`, `direction` and `extent`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `id` or `x_ft` + `y_ft` | | required | |
-| `radius_mi` | number | 5 | |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
+| `radius_mi` | number | 5 | 0.01 to 500 |
 | `kinds` | string array | all | Only these kinds. Districts and businesses come when `kinds` names `district` or `building`, or with no `kinds` within a mile. |
-| `limit` | integer | 50 | 1–500; `found` says how many there were. |
+| `limit` | integer | 50 | 1 to 500 |
 | `include_hidden` | boolean | false | |
 
 ```json
@@ -277,8 +316,8 @@ The distance between two places:
 
 | Parameter | Type | | |
 |---|---|---|---|
-| `from` | id string, or `{ "x_ft", "y_ft" }` | required | |
-| `to` | id string, or `{ "x_ft", "y_ft" }` | required | |
+| `from` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
+| `to` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
 
 ```json
 { "name": "route", "arguments": { "from": "metropolis:6eee9055", "to": "village:6db3886e" } }
@@ -290,19 +329,19 @@ The distance between two places:
 The road network:
 - `named`: the roads drawn and named in the world's sketch, each with its id, name, class, length and the
   settlements along it, in order;
-- `roads`: the roads between settlements and junctions, longest first, each with its `class` (king's road, road,
+- `items`: the roads between settlements and junctions, longest first, each with its `class` (king's road, road,
   track), `length_mi`, and its ends `from` and `to` (a settlement's `id` and `name`, or a junction's
   `x_ft`/`y_ft`); a drawn road's pieces say which (`road`: its name, or `drawn: true`);
-- `count`: how many roads matched, `shown`: how many are listed.
+- `found`: how many roads matched (`truncated: true` when `limit` cut the list).
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `id` or `x_ft` + `y_ft` | | none | Only roads within `radius_mi` of this place. |
-| `radius_mi` | number | 25 | |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | none | Only roads within `radius_mi` of this place. |
+| `radius_mi` | number | 25 | 0.01 to 3000 |
 | `settlement` | id string | none | Only roads ending at this settlement. |
 | `class` | `kings_road`, `road` or `track` | all | |
 | `drawn` | boolean | false | Only roads drawn in the sketch. |
-| `limit` | integer | 50 | 1–1000. |
+| `limit` | integer | 50 | 1 to 1000 |
 
 ```json
 { "name": "list_roads", "arguments": { "settlement": "city:bab44567" } }
@@ -326,8 +365,8 @@ lists:
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `id` or `x_ft` + `y_ft` | | required | |
-| `radius_squares` | number | 12 | 1–64 |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
+| `radius_squares` | number | 12 | 1 to 64 |
 
 ```json
 { "name": "get_battlemap", "arguments": { "id": "c:2", "radius_squares": 20 } }
@@ -346,8 +385,8 @@ then puts your view back where it was. Waits up to 45 s.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `id` or `x_ft` + `y_ft` | | required | |
-| `size_ft` | number | 3000 | The ground across the image (50–5,000,000). |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
+| `size_ft` | number | 3000 | The ground across the image (50 to 5,000,000). |
 
 What each `size_ft` shows:
 
@@ -370,8 +409,8 @@ Flies your map view to a place. You see it happen.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
-| `id` or `x_ft` + `y_ft` | | required | |
-| `size_ft` | number | 3000 | How much ground fits on screen. |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
+| `size_ft` | number | 3000 | How much ground fits on screen (50 to 5,000,000). |
 
 ```json
 { "name": "focus_view", "arguments": { "id": "city:bab44567", "size_ft": 20000 } }
@@ -403,7 +442,7 @@ app as one notice. If a step fails, nothing is changed, and the error names the 
 ```json
 { "name": "batch", "arguments": { "world": "b3a8412f4fa3a3b1", "steps": [
   { "tool": "rename_feature", "arguments": { "id": "d:4:2", "name": "Tri-Spire Ward" } },
-  { "tool": "annotate_feature", "arguments": { "id": "d:4:2", "text": "Three wizard towers lean over its lanes." } },
+  { "tool": "annotate_feature", "arguments": { "id": "d:4:2", "notes": "Three wizard towers lean over its lanes." } },
   { "tool": "create_feature", "arguments": { "kind": "ruin", "under": "crypt", "x_ft": 2325000, "y_ft": 4127000 } },
   { "tool": "rename_feature", "arguments": { "id": "c:0", "name": "The Evening Nip" } }
 ] } }
@@ -437,13 +476,13 @@ under its building id is joined onto it.
 | Parameter | Type | Default | |
 |---|---|---|---|
 | `id` | string | required | |
-| `text` | string | required | |
+| `notes` | string | required | (`text` is accepted too.) |
 | `tags` | string[] | none | Added to the existing tags. |
 | `append` | boolean | false | Add to the existing notes instead of replacing them. |
 
 ```json
-{ "name": "annotate_feature", "arguments": { "id": "c:2", "text": "The night watch vanishes one by one; the trail leads here.", "tags": ["hook"] } }
-{ "name": "annotate_feature", "arguments": { "id": "c:2", "text": "Secret: the baron funds the cult.", "tags": ["secret"], "append": true } }
+{ "name": "annotate_feature", "arguments": { "id": "c:2", "notes": "The night watch vanishes one by one; the trail leads here.", "tags": ["hook"] } }
+{ "name": "annotate_feature", "arguments": { "id": "c:2", "notes": "Secret: the baron funds the cult.", "tags": ["secret"], "append": true } }
 ```
 > *"Write a short history for every ruin in the Emberwood."* · *"Add a rumour to the Gilded Griffon that the innkeeper is a retired assassin."*
 
@@ -457,10 +496,13 @@ Creating the same site again adds nothing: if a live site of the same `kind` (an
 300 ft of the place asked for, or of the spot the new one would take, the result is that site, with
 `"existing": true`. A script that creates sites can be run again safely.
 
+A site asked for in a river or within 150 ft of one is put on the bank (a camp's clearing is also kept inside its
+battlemap chunk). When that moves it more than 5 ft the result says so: `moved: {x_ft, y_ft, ft, why}`.
+
 | Parameter | Type | | |
 |---|---|---|---|
 | `kind` | string | required | `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube`, `entrance`; `castle`, `wall` (drawn by their shape: see *Castles and walls* below) |
-| `id` or `x_ft` + `y_ft` | | required | Where to put it. With an `id`, the site goes at that feature's position. |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | Where to put it. With an `id`, the site goes at that feature's position. |
 | `name` | string | optional | If left out, it is named in the local culture's style. |
 | `under` | string | optional | What lies beneath: for a ruin `dungeon`, `crypt` or `catacombs`; for an entrance any of those or `cave`, `mine`, `lava_tube` (default `dungeon`). |
 | `size` | string | optional | The site underground: `small`, `medium`, `large`, `huge`. |
@@ -557,8 +599,10 @@ building drawn by hand takes either id, as in `rename_feature` and `annotate_fea
 |---|---|---|---|
 | `id` | string | required | |
 | `name` | string | optional | |
-| `notes` | string | optional | Replaces the notes text. |
+| `notes` | string | optional | Replaces the notes text. (`text` is accepted too.) |
 | `tags` | string[] | optional | Replaces the tags. |
+
+Give at least one of `name`, `notes` and `tags`; with none the call is refused.
 
 ```json
 { "name": "update_feature", "arguments": { "id": "c:2", "name": "Bastion of the Drowned", "notes": "Flooded at high tide.", "tags": ["dungeon", "undead"] } }

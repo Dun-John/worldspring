@@ -5,6 +5,7 @@
 //! `cargo run --release -p mapd -- [--port 7777] [--dir worlds] [--app app/dist]`
 //! Any MCP client, e.g. `claude mcp add --transport http worldspring http://127.0.0.1:7777/mcp`
 
+mod args;
 mod batch;
 mod build;
 mod crossings;

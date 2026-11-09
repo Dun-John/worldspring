@@ -71,6 +71,9 @@ A tool that takes a place accepts either an `id` or `x_ft` and `y_ft`.
 ## Tools
 
 Full reference with every parameter, example calls and prompts: [MCP.md](MCP.md).
+Every tool call is checked against the tool's schema before it runs (unknown arguments, wrong types and out-of-range
+numbers are refused with the field and the rule), and the same thing has the same name in every tool (places are `at`,
+lists come back as `{items, found}`): see [Conventions](MCP.md#conventions).
 
 | Tool | Does |
 |---|---|

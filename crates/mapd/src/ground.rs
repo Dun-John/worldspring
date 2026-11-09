@@ -123,26 +123,6 @@ impl Squares {
     }
 }
 
-/// A point from an array, or a place (an id or {x_ft, y_ft}).
-async fn point_of(app: &Shared, v: &Value) -> Result<[f64; 2], String> {
-    if let Some(p) = v.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>()) {
-        return match p[..] {
-            [x, y] if x.is_finite() && y.is_finite() => Ok([x, y]),
-            _ => Err("a point is [x_ft, y_ft]".into()),
-        };
-    }
-    crate::tools::place(app, v).await
-}
-
-/// The place a call gives: `at`, else `x_ft`/`y_ft` or `id` beside its other arguments.
-async fn place_of(app: &Shared, a: &Value) -> Result<[f64; 2], String> {
-    if a["at"].is_null() {
-        crate::tools::place(app, a).await
-    } else {
-        point_of(app, &a["at"]).await
-    }
-}
-
 /// An optional number: absent (or null) is `None`, anything else must be a finite number.
 fn opt_num(a: &Value, k: &str) -> Result<Option<f64>, String> {
     match &a[k] {
@@ -176,11 +156,11 @@ async fn shape(app: &Shared, a: &Value) -> Result<Value, String> {
         m => return Err(format!("mode: raise, lower, smooth or restore, not {}", m.unwrap_or("nothing"))),
     };
     let (path, radius) = if a["path"].is_null() {
-        (vec![place_of(app, a).await?], num(a, "radius_ft", 15.0)?)
+        (vec![crate::args::place(app, a).await?], num(a, "radius_ft", 15.0)?)
     } else {
         let mut path = Vec::new();
         for p in a["path"].as_array().ok_or("path: a list of [x_ft, y_ft]")? {
-            path.push(point_of(app, p).await?);
+            path.push(crate::args::point(app, "path", p).await?);
         }
         if path.is_empty() {
             return Err("path: at least one point".into());
@@ -361,7 +341,7 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
     let outline: Option<Vec<[f64; 2]>> = if let Some(o) = a["outline"].as_array() {
         let mut pts = Vec::new();
         for p in o {
-            pts.push(point_of(app, p).await?);
+            pts.push(crate::args::point(app, "outline", p).await?);
         }
         Some(pts)
     } else if let Some(around) = a["around"].as_str() {
@@ -461,7 +441,7 @@ async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
 }
 
 async fn heights(app: &Shared, a: &Value) -> Result<Value, String> {
-    let c = place_of(app, a).await?;
+    let c = crate::args::place(app, a).await?;
     let r = num(a, "radius_ft", 25.0)?;
     if !(0.0..=MAX_READ_FT).contains(&r) {
         return Err(format!("radius_ft: 0 to {MAX_READ_FT}"));
