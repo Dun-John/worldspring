@@ -4,6 +4,7 @@
 // surface shows through only faintly; caves get rough, chamfered rock edges. Geometry is in
 // the interior's own 5-ft grid units; the container maps them to the screen every frame.
 import { BufferImageSource, Container, Geometry, GlProgram, Graphics, Mesh, RenderTexture, Shader, Sprite, Text, TextStyle, Texture, UniformGroup, type Renderer } from 'pixi.js';
+import { floorFt, lipOf } from '../gen/floor';
 import { OPEN_BELOW, ROOF_SLOPE, TERRACE, type Interior, type InteriorItem, type InteriorLevel } from '../gen/protocol';
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
@@ -1065,7 +1066,10 @@ export class InteriorLayer {
     } else if (onStairs) {
       object = { name: 'stairs', cover: COVER[0], notes: 'difficult terrain' };
     }
-    const elev = lv.elevation_ft + lv.rooms[room].raise_ft;
+    // (At a lip: the drop beside it and the cover its edge gives from below.)
+    const lip = lipOf(lv, it.nx, it.ny, i, j);
+    if (lip) object = object ? { ...object, cover: `${object.cover}; ${lip.cover}`, notes: [object.notes, lip.note].filter(Boolean).join(' · ') } : { name: 'lip', cover: lip.cover, notes: lip.note };
+    const elev = lv.elevation_ft + floorFt(lv, it.nx, it.ny, i, j);
     return { elevationFt: Math.round(elev - this.sea), tier: Math.floor((elev - this.sea) / 5), surface: `${this.roomName(this.level, room)} (${this.levelName(this.level)})`, object };
   }
 

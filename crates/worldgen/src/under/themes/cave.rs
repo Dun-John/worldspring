@@ -955,6 +955,8 @@ pub(super) fn natural_level(nx: usize, ny: usize, arrive: usize, last: bool, ope
     for (si, &s) in seeds.iter().enumerate() {
         if owner[s] < 0 {
             let raise = if si == 0 { 0.0 } else { [0.0, 0.0, 0.0, 5.0, 5.0, 10.0][rng.below(6) as usize] };
+            // (No ledges where the theme has none: lava tubes, mines.)
+            let raise = if ledge.is_empty() { 0.0 } else { raise };
             let kind = if raise > 0.0 { ledge } else { kinds[rng.below(kinds.len() as u32) as usize] };
             let id = p.room(kind, raise);
             owner[s] = id;

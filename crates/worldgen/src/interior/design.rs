@@ -227,6 +227,8 @@ pub fn level_of(d: &SiteDesign, li: usize, inside: Option<&[bool]>, sprites: &mu
         paths: Vec::new(),
         rim: Vec::new(),
         links: Vec::new(),
+        floor: String::new(),
+        ramps: Vec::new(),
     };
     if !lv.roof {
         windows(&mut level, nx, ny, lv.z == 0);

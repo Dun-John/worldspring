@@ -1,6 +1,7 @@
 // Geometry on a location's grid of squares: what the characters can see (rays cast square
 // by square, stopped by walls, closed doors, rock, buildings and tall objects, and hidden by
 // higher ground), lit squares in the dark, ruler paths and shapes.
+import { floorOf, sheer, sightFt, STEP_FT, type Floor } from '../gen/floor';
 import { OPEN_BELOW, ROOF_SLOPE, type Interior } from '../gen/protocol';
 import type { GridSettings, Shape } from './state';
 
@@ -16,7 +17,7 @@ export const UNKNOWN = 16;
 /** A location's grid as play mode needs it. */
 export interface TacticalGrid {
   flags(i: number, j: number): number;
-  /** Ground height (ft) for seeing over hills; NaN where flat (inside). */
+  /** Ground height (ft) for seeing over hills and ledges; NaN where flat (inside). */
   elev(i: number, j: number): number;
   /** A wall (or closed door) on the west edge of square (i, j), i.e. the line x = i. */
   wallW(i: number, j: number): boolean;
@@ -64,11 +65,26 @@ export function interiorGrid(it: Interior, li: number, closed: (door: number) =>
     if (f.blocks_move && !terrain) v |= BLOCKS;
     if (terrain) for (let j = f.y; j < f.y + f.h && j < ny; j++) for (let i = f.x; i < f.x + f.w && i < nx; i++) gap[j * nx + i] = 1;
     if (f.blocks_move && f.height_ft >= 6) v |= OPAQUE;
-    if (!f.blocks_move && (f.height_ft >= 1 || f.hazard)) v |= DIFFICULT;
+    // (A hidden trap is no difficult terrain: the ruler counts these in both windows.)
+    if (!f.blocks_move && (f.height_ft >= 1 || (f.hazard && !dmOnlyHazard(f.hazard)))) v |= DIFFICULT;
     for (let j = f.y; j < f.y + f.h && j < ny; j++) for (let i = f.x; i < f.x + f.w && i < nx; i++) flags[j * nx + i] |= v;
   }
   for (const f of lv.furniture) if (SPANS.has(f.kind)) for (let j = f.y; j < f.y + f.h && j < ny; j++) for (let i = f.x; i < f.x + f.w && i < nx; i++) gap[j * nx + i] = 0;
   for (let k = 0; k < gap.length; k++) if (gap[k]) flags[k] |= BLOCKS;
+  // Raised floors (`gen/floor.ts`): ramps and the tops of steps are difficult; sight follows the heights (a ledge
+  // hides what lies behind its lip from below, dead ground under it from above), a step's rise hiding nothing.
+  const fl = floorOf(lv, nx, ny);
+  const seenFt = fl ? new Float32Array(nx * ny) : null;
+  if (fl && seenFt) {
+    for (let k = 0; k < nx * ny; k++) {
+      if (lv.cells[k] < 0) continue;
+      seenFt[k] = sightFt(fl, lv, k);
+      const [i, j] = [k % nx, Math.floor(k / nx)];
+      const step = (q: number) => lv.cells[q] >= 0 && (lv.natural || lv.cells[q] === lv.cells[k]) && fl.ft[k] - fl.ft[q] > 0 && fl.ft[k] - fl.ft[q] <= STEP_FT;
+      if (fl.ramp[k] || (i > 0 && step(k - 1)) || (i + 1 < nx && step(k + 1)) || (j > 0 && step(k - nx)) || (j + 1 < ny && step(k + nx))) flags[k] |= DIFFICULT;
+    }
+  }
+  const elevAt = (i: number, j: number) => (seenFt && i >= 0 && j >= 0 && i < nx && j < ny ? seenFt[j * nx + i] : NaN);
   if (lv.has_stairs && !/^[uwk]:/.test(it.id)) {
     const [sx, sy, sw, sh] = it.stairs;
     for (let j = sy; j < sy + sh; j++) for (let i = sx; i < sx + sw; i++) if (i < nx && j < ny) flags[j * nx + i] |= DIFFICULT;
@@ -123,10 +139,11 @@ export function interiorGrid(it: Interior, li: number, closed: (door: number) =>
   };
   return {
     flags: at,
-    elev: () => NaN,
+    elev: elevAt,
     fill: (x0, y0, w, h, out, elev) => {
       elev.fill(NaN);
       for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) out[j * w + i] = at(x0 + i, y0 + j);
+      if (seenFt) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) elev[j * w + i] = elevAt(x0 + i, y0 + j);
     },
     wallW: (i, j) => i >= 0 && i <= nx && j >= 0 && j < ny && wv[j * (nx + 1) + i] === 1,
     wallN: (i, j) => i >= 0 && i < nx && j >= 0 && j <= ny && wh[j * nx + i] === 1,
@@ -366,6 +383,22 @@ export function rulerLabel(dist: number, rise: number | null, g: GridSettings): 
   return `${across} horizontal
 ${formatDistance(up, g)} ${rise > 0 ? 'up' : 'down'}
 ${formatDistance(Math.hypot(dist, up), g)} diagonal`;
+}
+
+/**
+ * What a ruler crosses inside a site ("show, don't count": its distance stays plain, the DM applies their system):
+ * the sheer rises climbed along its squares (summed, ft) and the difficult squares entered (ramps, steps, rubble,
+ * shallow water: DIFFICULT). `floor` (the level's heights) is null where it is flat. Empty where it crosses neither.
+ */
+export function rulerTerrain(squares: [number, number][], grid: TacticalGrid, floor: Floor | null): string {
+  let [climb, hard] = [0, 0];
+  for (let s = 1; s < squares.length; s++) {
+    const [i, j] = squares[s];
+    if (grid.flags(i, j) & DIFFICULT) hard++;
+    const [pi, pj] = squares[s - 1];
+    if (floor && i >= 0 && j >= 0 && pi >= 0 && pj >= 0 && i < floor.nx && pi < floor.nx && j < floor.ny && pj < floor.ny) climb += Math.max(0, sheer(floor, pj * floor.nx + pi, j * floor.nx + i));
+  }
+  return [climb > 0 ? `climb ${climb} ft` : '', hard > 0 ? `${hard} difficult square${hard === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
 }
 
 /** A ruler from square `a` to square `b`: the squares crossed and the distance (squares). */

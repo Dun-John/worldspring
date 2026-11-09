@@ -668,6 +668,12 @@ export interface InteriorLevel {
   /** Ways to other sites (cellar trapdoors, stairs to deep dungeons, sewer ladders): the
    * square and the site's id; the other site has a way straight back. */
   links?: { x: number; y: number; to: string }[];
+  /** Floor height per square (underground sites; `interior::height`): a character per square (row-major), its
+   * code - 48 the height above `elevation_ft` in half feet; absent where the level is flat. Read it with
+   * `gen/floor.ts`. */
+  floor?: string;
+  /** Ramp squares (indices into `cells`): rubble slopes joining two floors, at a height between them. */
+  ramps?: number[];
 }
 
 export interface InteriorItem {

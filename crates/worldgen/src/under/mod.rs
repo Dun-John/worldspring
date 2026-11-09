@@ -913,6 +913,8 @@ fn site(
             }
         }
         furnish(&mut p, nx, ny, kind, rng);
+        // (Every raised floor reached without a climb.)
+        p.ramp_ledges(ny);
         arrive = p.down.or(arrive);
         plans.push(p);
     }

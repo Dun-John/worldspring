@@ -2128,6 +2128,7 @@ fn underground_guarantee() {
             let seen = flood(lv, nx, ny, start, &|q| blocks[q]);
             let lost = (0..nx * ny).filter(|&q| lv.cells[q] >= 0 && !blocks[q] && !seen[q]).count();
             assert_eq!(lost, 0, "{tag} {}: {lost} squares unreachable", lv.name);
+            r5_no_climb(tag, lv, nx, ny, start);
             if li2 > 0 {
                 start = at(lv, "down")[0];
             }
@@ -4295,4 +4296,36 @@ fn dwarven_crag_seams() {
         }
     }
     assert!(found > 0, "no dwarven hall gate with a crag in seeds 1 and 3");
+}
+
+// R5 underground
+
+/// Every floor square of a site's level is reached from `start` without climbing a sheer edge (`interior::height`: up
+/// by ramps or steps, down by anything), around blocking furniture, between rooms through doors (any step on a natural
+/// level). Called by `underground_guarantee` on every level.
+fn r5_no_climb(tag: &str, lv: &worldgen::interior::Level, nx: usize, ny: usize, start: usize) {
+    use worldgen::interior::height;
+    assert!(lv.floor.is_empty() || lv.floor.len() == nx * ny, "{tag} {}: {} floor heights for {} squares", lv.name, lv.floor.len(), nx * ny);
+    let f = height::of_level(lv, nx);
+    let blocks = worldgen::under::blocked_squares(&lv.furniture, nx, ny);
+    let door = |a: usize, b: usize| {
+        let (ia, ja, ib, jb) = ((a % nx) as f32, (a / nx) as f32, (b % nx) as f32, (b / nx) as f32);
+        let (p, q) = if ja == jb { ([ia.max(ib), ja], [ia.max(ib), ja + 1.0]) } else { ([ia, ja.max(jb)], [ia + 1.0, ja.max(jb)]) };
+        lv.doors.iter().any(|d| (d.a == p && d.b == q) || (d.a == q && d.b == p))
+    };
+    let mut seen = vec![false; nx * ny];
+    let mut stack = vec![start];
+    seen[start] = true;
+    while let Some(k) = stack.pop() {
+        let (i, j) = (k % nx, k / nx);
+        for q in [(i > 0).then(|| k - 1), (i + 1 < nx).then(|| k + 1), (j > 0).then(|| k - nx), (j + 1 < ny).then(|| k + nx)].into_iter().flatten() {
+            if seen[q] || lv.cells[q] < 0 || blocks[q] || f.sheer(k, q) > 0.0 || (!lv.natural && lv.cells[q] != lv.cells[k] && !door(k, q)) {
+                continue;
+            }
+            seen[q] = true;
+            stack.push(q);
+        }
+    }
+    let lost: Vec<usize> = (0..nx * ny).filter(|&q| lv.cells[q] >= 0 && !blocks[q] && !seen[q]).collect();
+    assert!(lost.is_empty(), "{tag} {}: {} squares reached only by a climb (first at {}, {})", lv.name, lost.len(), lost[0] % nx, lost[0] / nx);
 }

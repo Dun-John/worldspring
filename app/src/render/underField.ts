@@ -3,6 +3,7 @@
 // terrain (water, chasms, rubble slopes) likewise.
 // Pure data, so a city's sewer sections can be prepared in a worker (`underField.worker.ts`)
 // while the view moves.
+import { floorFt } from '../gen/floor';
 import type { Interior, InteriorLevel } from '../gen/protocol';
 import { CAVERN, fromSquares, shapeIndex } from './roomShapes';
 import { rockDistance } from './rockDistance';
@@ -395,7 +396,7 @@ export function underField(it: Interior, level: number): UnderField {
       // Floors that follow lines (sewers under streets) are painted from the lines below; shaped
       // rooms from their shapes; anything else fills its squares.
       const square = (!paths.length || room.kind !== LINE_ROOM) && fromSquares(index[k]);
-      const lift = Math.min(1, room.raise_ft / 10);
+      const lift = Math.min(1, floorFt(lv, nx, ny, i, j) / 10);
       if (lift > 0) anyRaised = true;
       for (let y = j * R; y < (j + 1) * R; y++) {
         const o = (y + off) * w + off;
