@@ -7346,13 +7346,13 @@ function treasureHoard(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
   }
 }
 
-/** Dais and throne: a stone platform raised two steps, the lower step showing round its front and sides, a red runner
- * up the steps to a throne set at the back against the wall. */
+/** Dais and throne: the top dressing of a platform raised two steps, a red runner up the steps to a throne set at the
+ * back against the wall. The lower step is the raised floor itself (a 2.5-ft dais in the floor heights), its edge,
+ * riser and shadow drawn with every other step and ledge by the underground shader (`ledges`); this draws the upper
+ * step, the runner and the throne. */
 function daisThrone(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
   const { len, rect, at } = frame(f, back);
   const wid = Math.min(f.w, f.h);
-  castShadow(g, quad(rect(0.04, 0.02, len - 0.04, wid - 0.04), rnd, 0), light, 0.25);
-  board(g, rect(0.04, 0.02, len - 0.04, wid - 0.04), STONE.map((c) => shade(c, 0.85)), light, rnd, true, 0.05, 0);
   const top = board(g, rect(0.24, 0.04, len - 0.24, wid - 0.34), STONE, light, rnd, true, 0.05, 0);
   masonry(g, top, STONE, rnd, 0.4);
   // The runner, down from the throne over both steps.

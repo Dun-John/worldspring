@@ -1097,7 +1097,7 @@ export class InteriorLayer {
     this.freeUnder();
     let f = this.fields.get(this.level);
     if (!f) this.fields.set(this.level, (f = underField(it, this.level)));
-    const { w, h, pad, data, cells, liquidKind, shapes, shapeCount, cave, terrain, dist } = f;
+    const { w, h, pad, data, cells, liquidKind, shapes, shapeCount, cave, terrain, dist, lift } = f;
     // Built sites keep square corners: walls measured from the squares, the field unsmoothed.
     const square = SQUARE_SITES.has(it.function);
     const fieldSrc = new BufferImageSource({ resource: data, width: w, height: h, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: square ? 'nearest' : 'linear', addressMode: 'clamp-to-edge' });
@@ -1107,6 +1107,8 @@ export class InteriorLayer {
     const caveSrc = new BufferImageSource({ resource: cave ?? new Uint8Array(4), width: cave ? nx * FIELD_RES : 1, height: cave ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // Water, chasms and rubble slopes (a blank texel when there are none).
     const terrainSrc = new BufferImageSource({ resource: terrain ?? new Uint8Array(4), width: terrain ? nx * FIELD_RES : 1, height: terrain ? ny * FIELD_RES : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
+    // Ledges and steps: the edges between floor heights (a blank texel when it is flat).
+    const liftSrc = new BufferImageSource({ resource: lift?.data ?? new Uint8Array(4), width: lift ? nx * lift.res : 1, height: lift ? ny * lift.res : 1, format: 'rgba8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // How far the rock lies from the floor (hatched beside the walls, faded out beyond).
     const distSrc = new BufferImageSource({ resource: dist, width: (nx + 2 * DIST_PAD) * FIELD_RES, height: (ny + 2 * DIST_PAD) * FIELD_RES, format: 'r8unorm', alphaMode: 'no-premultiply-alpha', scaleMode: 'linear', addressMode: 'clamp-to-edge' });
     // A site is drawn past its grid, so its rock fades out round it; sewer sections meet edge to edge.
@@ -1137,13 +1139,14 @@ export class InteriorLayer {
       uShapeCount: { value: shapeCount, type: 'f32' },
       uCaverns: { value: cave ? 1 : 0, type: 'f32' },
       uHasTerrain: { value: terrain ? 1 : 0, type: 'f32' },
+      uHasLift: { value: lift ? 1 : 0, type: 'f32' },
     });
-    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uShapes: shapeSrc, uCave: caveSrc, uTerrain: terrainSrc, uDist: distSrc, uNoise: noiseSource(), under: uniforms } });
+    const shader = new Shader({ glProgram: underProgram, resources: { uField: fieldSrc, uCells: cellSrc, uShapes: shapeSrc, uCave: caveSrc, uTerrain: terrainSrc, uLift: liftSrc, uDist: distSrc, uNoise: noiseSource(), under: uniforms } });
     const mesh = new Mesh({ geometry: quad(), shader });
     mesh.position.set(-grow, -grow);
     mesh.scale.set(nx + 2 * grow, ny + 2 * grow);
     this.plan.addChild(mesh);
-    this.under = { uniforms, sources: [fieldSrc, cellSrc, shapeSrc, caveSrc, terrainSrc, distSrc], shader, mesh, level: this.level };
+    this.under = { uniforms, sources: [fieldSrc, cellSrc, shapeSrc, caveSrc, terrainSrc, liftSrc, distSrc], shader, mesh, level: this.level };
   }
 
   private draw() {
