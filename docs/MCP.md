@@ -46,19 +46,25 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   `default`). A tool's rules that a schema can't say (one of several fields needed, a polygon that crosses itself)
   are worded the same way: `field: rule, got X`.
 - **Places:** `at` is a place: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`. Other points (`near`, `from`, `to`) take the
-  same three forms. Refused: a point off the map (the message gives the map's size), `at` together with `id`,
+  same three forms. Refused: a point off the map (0 ≤ x < width and 0 ≤ y < height, the same for every tool; the message gives the map's size), `at` together with `id`,
   `x_ft` or `y_ft` (the same place twice is fine), only one of `x_ft`/`y_ft`, an id that names nothing. A tool whose
   `id` is not its subject also takes the old `id`, or `x_ft` and `y_ft`, beside its other arguments.
 - **Lists** come back as `{items, found}`: `found` is how many there were before any `limit`, and `truncated: true`
   says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`).
 - **Safe to repeat:** a create that is asked for again with the same arguments adds nothing and returns what is already
   there, with `"existing": true` and a `note` that says so (never "created"). Which tools, and what counts as the same:
-  `create_feature` (the same kind of site within 300 ft), `create_building` (the same footprint, or with `near` a
-  building of the same `func`, and name when given, within 200 ft), `create_npc` (the same name and place),
-  `create_plot` (the same title), `place_objects` (new objects: the same kind within 0.5 ft with the same turn, scale and
-  any variant given; those ids come back under `existing`). To make a second one on purpose, give it another name,
-  title or place. A change that was made but could not be saved to disk is not an error: its reply carries
-  `saved: false` and a `warning` (don't repeat the call; mapd saves it again every few seconds).
+  `create_feature` (the same kind of site within 300 ft), `create_building` (the same footprint; with `near`, an
+  identical call: mapd remembers this session's `near` calls, last 500, until it restarts, and returns the building of
+  an identical earlier call while it stands. Change anything, e.g. the name, to make a second), `create_npc` (the same
+  name and place), `create_plot` (the same title), `place_objects` (new objects: the same kind within 0.5 ft with the
+  same turn, scale and any variant given; those ids come back under `existing`), `remove_objects` with `points` (a
+  point already cleared there: its clear comes back under `existing`), `place_crossing` (a crossing of the same kind
+  with both ends within 5 ft of an existing one's, either way round), `set_plateau` without `id` (an outline within 1
+  ft at every corner of an existing one) and `upload_sprite` (the same picture again: `existing: true`, and
+  `replaced` says what name and rules it had; a picture has one name and rules, the last upload's). To make a second
+  one on purpose, give it another name, title or place. A change that was made but could not be saved to disk is not
+  an error: its reply carries `saved: false` and a `warning` (don't repeat the call; mapd saves it again every few
+  seconds); a call that changed nothing never carries it.
 - **Deletes:** `delete_feature` retires a created site (a drawn building's `b:` ids with it), but keeps what pointed at
   it (NPCs, plots, notes, a hand design, renames) and says which in `left_pointing`; `restore_feature` brings the site
   back, and what pointed at it is as it was. Every tool says in its `annotations` whether it is read-only, destructive,
@@ -74,7 +80,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | An NPC's place | `location` (an id) and/or a point | `at` (an id is the `location`, a point is `x_ft`/`y_ft`) | `create_npc`, `place_npc` |
 | An area | `within`: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` (3+ points) or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`) | `area` | `remove_buildings`, `remove_objects`, `restore_objects` (`get_town_plan`: a box) |
 | Inside a building or site | `inside`: its id | `within` given as an id | `list_names` |
-| A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot`, `create_feature` (castles), `set_plateau` |
+| A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot` (all three forms); `create_feature` (castles: `poly` or `rect`); `set_plateau` (`poly` only, or `around`) |
 | A line | `path` `[[x, y], ...]` | walls keep `pts` and also take `path` | `shape_ground`, `create_feature` (wall), `update_fortification` |
 | One or many ids | `ids` (a list) or `id` (one), either; all or nothing | | every remover and restorer: `delete_feature`, `restore_feature`, `delete_npc`, `delete_plot`, `delete_plateau`, `remove_objects`, `restore_objects`, `remove_buildings`, `restore_building`, `remove_crossings` |
 | Notes | `notes` on features and NPCs, `text` on plot points | the other one | `annotate_feature`, `update_feature`, `create_npc`, `update_npc`, `create_plot`, `update_plot` (not `set_site_design`: its `text` is the plan) |
@@ -804,7 +810,7 @@ word), blocks_movement, blocks_sight, difficult, height_ft, size_squares and any
 | `blocks_movement`, `blocks_sight`, `difficult` | boolean | optional | Default false. `blocks_move` is accepted for `blocks_movement`. |
 | `height_ft` | number | optional | 0–500 (default 3). Objects 5 ft and taller draw above tokens' shadows. |
 
-Returns `{kind: "s:<asset>", asset}`.
+Returns `{kind: "s:<asset>", asset}`. A picture already uploaded (same bytes) under another name or rules adds `existing: true` and `replaced` (its old name and the rules that changed): a picture has one name and one set of rules, the last upload's.
 
 ```json
 { "name": "upload_sprite", "arguments": { "path": "C:/art/altar.png", "name": "Blood altar", "size_squares": 2, "cover": "three-quarters", "blocks_movement": true, "height_ft": 4 } }
@@ -843,11 +849,11 @@ Give another place, turn or scale for a second one on purpose.
 | Parameter | Type | | |
 |---|---|---|---|
 | `id`, `ids` | string / string[] | optional | Objects put down by hand (`o:…`); all or none. |
-| `points` | array | optional | Generated objects: `{kind, x_ft, y_ft}` each, as `get_battlemap` lists them (matched within a quarter square). Before, this was called `at`, which still works here (`at` is one place everywhere else). |
+| `points` | array | optional | Generated objects: `{kind, x_ft, y_ft}` each, as `get_battlemap` lists them (matched within a quarter square; a point already cleared there adds nothing and its clear is listed under `existing`). Before, this was called `at`, which still works here (`at` is one place everywhere else). |
 | `within` | area | optional | Everything inside: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`; radius up to 640 ft). A circle takes away placed and generated objects; a box or polygon only those put down by hand (the reply says so). Also `area`. |
 | `kinds` | array | optional | With `within`: only these built-in kinds (ids or names). A `kinds` inside a circle works too. |
 
-Returns `{tool, removed: [o:…], clears: [x:…]}`.
+Returns `{tool, removed: [o:…], clears: [x:…]}` (+ `existing` for points that were already cleared).
 
 ```json
 { "name": "remove_objects", "arguments": { "within": { "x_ft": 412500, "y_ft": 380120, "radius_ft": 30 }, "kinds": ["deciduous tree", "conifer"] } }
@@ -856,7 +862,7 @@ Returns `{tool, removed: [o:…], clears: [x:…]}`.
 
 ### `restore_objects`
 `id` or `ids` (clears, `x:…`; all or none) and/or `within` (a box, a polygon or a circle `{at, radius_ft}`, also
-`area`: every clear touching a circle, or with its middle inside a box or polygon). The generated objects come back.
+`area`: every clear touching it: a clear's circle meeting the circle, box or polygon, or its middle inside). The generated objects come back.
 
 ## Buildings drawn by hand
 
@@ -892,9 +898,10 @@ alone.
 ### `create_building`
 A building with the same footprint as one already drawn (every corner within 2 ft), the same `func` and (if
 given) the same name is not drawn twice: the result is that building, with `"existing": true`. A different
-building on that footprint is refused (`that overlaps …`). With `near`, a building drawn by hand of the same `func`
-(and the same name, when one is given; case ignored) whose point lies within 200 ft of `near` is the same one:
-repeating the call returns it and draws nothing. Another name, another `func` or another place makes a second one.
+building on that footprint is refused (`that overlaps …`). With `near`, mapd remembers this session's calls (the world and every argument): an identical call whose building
+still stands returns it (`existing: true`) and draws nothing, until mapd restarts. Any difference (another name, place, size
+or `func`) makes a new one, so a row of unnamed houses along a street is a row of buildings. `func` is matched
+without regard to case and spaces (`"Inn"` is `inn`).
 
 Instead of a footprint, `near` (an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`) with `width_ft` and `depth_ft` finds the nearest clear
 lot: tried ring by ring out to 400 ft, turned square to the nearest street (or road), its front 2–12 ft from it
@@ -992,12 +999,12 @@ No parameters. Returns `{items, found}`: `{id, kind, from, to, width_ft, length_
 | `from`, `to` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required for a new one | The banks (on the map). The length between them is 10–2,000 ft (a ferry at least 68). |
 | `width_ft` | number | optional | Deck, ford or raft width, 5–40 (default 12). |
 | `material` | string | optional | A bridge's: `timber` (default) or `stone`. |
-| `id` | string | optional | A crossing to change (`v:…`): only the fields given change. |
+| `id` | string | optional | A crossing to change (`v:…`): only the fields given change. Without it, a crossing of the same kind with both ends within 5 ft of an existing one's (either way round) is that one: `existing: true`. |
 
 Returns `{tool, id, kind, changed, crossing}`.
 
 ### `remove_crossings`
-`id` or `ids` (`v:…`; all or none). A mistake names the id's place in the list (`ids[1]: no crossing v:zz`).
+`id` or `ids` (`v:…`; all or none). A mistake names the id's place in the list (`ids[1]: no crossing v:zz`; a single `id` is `id: …`).
 
 ## Underground sites designed by hand
 
@@ -1496,7 +1503,7 @@ How it applies:
 - Limits: a stroke reaches at most 48 blocks; a world holds 1,500 blocks and 256 plateaus.
 
 ### `shape_ground`
-A round brush. `raise` and `lower` move each square by up to `height_ft` (full out to `hardness` of the radius,
+A round brush, or a stroke along `path` (not both: `at` and `path` together are refused). `raise` and `lower` move each square by up to `height_ft` (full out to `hardness` of the radius,
 fading to the rim), `smooth` eases each square toward the mean of its neighbours as drawn by `strength`,
 `restore` takes brushed change back toward the ground as generated by `strength` (plateaus stay). Each square
 takes the stroke's strongest touch, so going over a place twice in one stroke doesn't pile up (a second call
@@ -1523,7 +1530,7 @@ A plateau or pit, or a change to one. The outline is `poly` (also `outline`), or
 tower (`t:`) or a site (its buildings, towers and walls), its footprint's convex outline grown by `margin_ft`;
 outlines are simplified to at most 48 points. The level is `level_ft` above the sea, or `rise_ft` above the
 ground (as shaped, this plateau left out) at the outline's middle. The reply: `id`, `changed`, `level_ft`,
-`ground_ft` (the ground at the middle), `edge_ft`, `points`, `area_sq_ft`, `bbox`.
+`ground_ft` (the ground at the middle), `edge_ft`, `points`, `area_sq_ft`, `bbox`. Without `id`, an outline that matches an existing plateau's (the same number of corners, each within 1 ft) is that one: `existing: true`, nothing added.
 
 | Parameter | Type | Default | |
 |---|---|---|---|

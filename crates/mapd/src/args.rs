@@ -39,6 +39,12 @@ const ALIASES: &[(&str, &str, &str)] = &[
     ("remove_objects", "at", "points"),
     ("remove_buildings", "area", "within"),
     ("set_plateau", "outline", "poly"),
+    ("create_feature", "outline", "poly"),
+    ("create_building", "outline", "poly"),
+    ("update_building", "outline", "poly"),
+    ("check_building_spot", "outline", "poly"),
+    ("create_feature", "path", "pts"),
+    ("update_fortification", "path", "pts"),
 ];
 
 /// Keys a tool's code reads that its schema doesn't list (tools of files this module's owner
@@ -131,13 +137,14 @@ pub fn check(tool: &str, args: &Value) -> Result<Value, String> {
         Value::Object(m) => m.clone(),
         v => return Err(bad("arguments", "an object", v)),
     };
+    let mut errs = Vec::new();
     for (t, old, new) in ALIASES {
         if *t != tool {
             continue;
         }
         if let Some(v) = obj.remove(*old).filter(|v| !v.is_null()) {
             match obj.get(*new).filter(|n| !n.is_null()) {
-                Some(n) if *n != v => return Err(format!("{old} and {new} disagree: give one")),
+                Some(n) if !same(n, &v) => errs.push(format!("{old} and {new} disagree: give one")),
                 Some(_) => {}
                 None => {
                     obj.insert((*new).to_string(), v);
@@ -146,11 +153,17 @@ pub fn check(tool: &str, args: &Value) -> Result<Value, String> {
         }
     }
     if PLACE_TOOLS.contains(&tool) {
-        fold_place(&mut obj)?;
+        if let Err(e) = fold_place(&mut obj) {
+            errs.push(e);
+        }
+    }
+    if matches!(tool, "create_building" | "update_building" | "check_building_spot") {
+        if let Some(Value::String(f)) = obj.get_mut("func") {
+            *f = f.trim().to_lowercase();
+        }
     }
     let mut v = Value::Object(obj);
     let extra: Vec<&str> = EXTRA_KEYS.iter().filter(|(t, _)| *t == tool).map(|(_, k)| *k).collect();
-    let mut errs = Vec::new();
     walk(schema, &mut v, "", &mut errs, &extra);
     if errs.is_empty() {
         return Ok(v);
@@ -162,6 +175,16 @@ pub fn check(tool: &str, args: &Value) -> Result<Value, String> {
         msg.push_str(&format!("; and {more} more"));
     }
     Err(msg)
+}
+
+/// Equal as JSON, numbers by value (`5` and `5.0` agree), also inside lists and objects.
+pub fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q)),
+        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, p)| y.get(k).is_some_and(|q| same(p, q))),
+        _ => a == b,
+    }
 }
 
 /// `id` or `x_ft` and `y_ft` (the old ways to give a place) into `at`.
@@ -182,7 +205,7 @@ fn fold_place(obj: &mut Map<String, Value>) -> Result<(), String> {
     // `at` beside the old ways: the same place twice is fine, two places are not.
     if let Some(at) = obj.get("at") {
         return match old {
-            Some(o) if o == *at => Ok(()),
+            Some(o) if same(&o, at) => Ok(()),
             _ => Err(format!("at and {} disagree: give one", if id.is_some() { "id" } else { "x_ft/y_ft" })),
         };
     }
@@ -213,6 +236,11 @@ pub fn ids(a: &Value) -> Result<Vec<String>, String> {
         return Err(bad("ids", "at least one id", &json!([])));
     }
     Ok(out)
+}
+
+/// How an item of `ids` is named in an error: `id` when one was given as `id`, else `ids[i]`.
+pub fn item(single: bool, i: usize) -> String {
+    if single { "id".to_string() } else { format!("ids[{i}]") }
 }
 
 /// `id` and `ids`, for a remover's or restorer's schema.
@@ -374,10 +402,10 @@ fn range(s: &Value, unit: &str) -> Option<String> {
 fn items_range(s: &Value) -> Option<String> {
     let (lo, hi) = (s["minItems"].as_u64(), s["maxItems"].as_u64());
     match (lo, hi) {
-        (Some(l), Some(h)) if l == h => Some(format!("{l} items")),
+        (Some(l), Some(h)) if l == h => Some(format!("{l} {}", if l == 1 { "item" } else { "items" })),
         (Some(l), Some(h)) => Some(format!("{l} to {h} items")),
-        (Some(l), None) => Some(format!("at least {l} items")),
-        (None, Some(h)) => Some(format!("at most {h} items")),
+        (Some(l), None) => Some(format!("at least {l} {}", if l == 1 { "item" } else { "items" })),
+        (None, Some(h)) => Some(format!("at most {h} {}", if h == 1 { "item" } else { "items" })),
         _ => None,
     }
 }
@@ -520,7 +548,7 @@ pub async fn point(app: &Shared, field: &str, v: &Value) -> Result<[f64; 2], Str
     };
     let (Some(x), Some(y)) = xy else { return Err(bad(field, FORMS, v)) };
     let [w, h] = map_size(app).await?;
-    if !(0.0..=w).contains(&x) || !(0.0..=h).contains(&y) {
+    if !(0.0..w).contains(&x) || !(0.0..h).contains(&y) {
         return Err(format!("{field}: ({}, {}) is off the map, which is {} by {} ft", num(x), num(y), num(w), num(h)));
     }
     Ok([x, y])

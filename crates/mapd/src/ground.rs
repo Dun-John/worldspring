@@ -155,6 +155,9 @@ async fn shape(app: &Shared, a: &Value) -> Result<Value, String> {
         Some("restore") => Brush::Restore,
         m => return Err(format!("mode: raise, lower, smooth or restore, not {}", m.unwrap_or("nothing"))),
     };
+    if !a["path"].is_null() && !a["at"].is_null() {
+        return Err("at and path: give one".into());
+    }
     let (path, radius) = if a["path"].is_null() {
         (vec![crate::args::place(app, a).await?], num(a, "radius_ft", 15.0)?)
     } else {
@@ -407,6 +410,16 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             (None, None) => unreachable!("an outline or a plateau"),
         };
+        // The same outline again (a script run twice): that plateau, nothing added.
+        if !changed
+            && let Some((eid, ep)) = e.plateaus.iter().find(|(_, q)| q.pts.len() == p.pts.len() && q.pts.iter().zip(&p.pts).all(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) <= 1.0))
+        {
+            return Ok(json!({
+                "tool": "set_plateau", "id": eid, "changed": false, "existing": true,
+                "note": "a plateau with this outline was already there: nothing was added (give its id to change it)",
+                "level_ft": round1(ep.level - sea as f32), "edge_ft": ep.edge, "points": ep.pts.len(),
+            }));
+        }
         let b = p.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]);
         let reply = json!({
             "tool": "set_plateau", "id": id, "changed": changed,
@@ -421,10 +434,11 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
 
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = crate::args::ids(a)?;
+    let single = a["ids"].is_null();
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
             if !e.plateaus.contains_key(id) {
-                return Err(format!("ids[{i}]: no plateau {id}"));
+                return Err(format!("{}: no plateau {id}", crate::args::item(single, i)));
             }
         }
         for id in &ids {

@@ -70,6 +70,17 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     let [w, h] = app.worker.with(|ex| Ok([ex.world.geom.map_w_ft, ex.world.geom.map_h_ft])).await?;
     app.edit("agent", 0, move |e| {
         let changed = id.is_some();
+        // The same crossing again (a script run twice): one of that kind with both ends within 5 ft of this one's, either way round.
+        if let (None, Some(k), Some(f), Some(t)) = (&id, kind, from, to) {
+            let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 5.0;
+            if let Some((eid, c)) = e.crossings.iter().find(|(_, c)| c.kind == k && ((near(c.a, f) && near(c.b, t)) || (near(c.a, t) && near(c.b, f)))) {
+                return Ok(json!({
+                    "tool": "place_crossing", "id": eid, "kind": c.kind.name(), "changed": false, "existing": true,
+                    "note": "a crossing of this kind between these ends was already there: nothing was added (give its id to change it)",
+                    "crossing": describe(eid, c),
+                }));
+            }
+        }
         let (id, mut c) = match id {
             Some(id) => {
                 let c = e.crossings.get(&id).cloned().ok_or_else(|| format!("no crossing {id}"))?;
@@ -100,10 +111,11 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
 
 async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = crate::args::ids(a)?;
+    let single = a["ids"].is_null();
     app.edit("agent", 0, move |e| {
         for (i, id) in ids.iter().enumerate() {
             if !e.crossings.contains_key(id) {
-                return Err(format!("ids[{i}]: no crossing {id}"));
+                return Err(format!("{}: no crossing {id}", crate::args::item(single, i)));
             }
         }
         for id in &ids {

@@ -64,6 +64,11 @@ pub struct AppState {
     pub gate: tokio::sync::Mutex<()>,
     /// A save failed: the open world has changes only in memory (saved again shortly).
     pub unsaved: AtomicBool,
+    /// How many changes to the open world have been made (a call that made one raised it).
+    pub changes: AtomicU64,
+    /// This session's `create_building` calls that gave `near`: (world hash, the arguments as canonical JSON)
+    /// and the site made (id, middle), the last 500: an identical call is a repeat.
+    pub near_calls: std::sync::Mutex<Vec<((u64, String), (String, [f64; 2]))>>,
     /// Why the last save failed (for the warning an agent gets).
     pub save_error: std::sync::Mutex<String>,
 }
@@ -154,6 +159,7 @@ impl AppState {
                 return Ok(change);
             }
             file.edits = edits.clone();
+            self.changes.fetch_add(1, Ordering::Relaxed);
             (*hash, edits, ops, change, Store::text(file))
         };
         let saved = text.and_then(|t| self.store.write(hash, &t));
@@ -496,6 +502,8 @@ async fn main() {
         tabs: Mutex::new(HashMap::new()),
         dist: dist.join("index.html").exists().then(|| dist.clone()),
         gate: tokio::sync::Mutex::new(()),
+        changes: AtomicU64::new(0),
+        near_calls: std::sync::Mutex::new(Vec::new()),
         unsaved: AtomicBool::new(false),
         save_error: std::sync::Mutex::new(String::new()),
     });

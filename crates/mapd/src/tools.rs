@@ -163,6 +163,7 @@ pub fn other_world(open: Option<u64>, want: u64) -> String {
 pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, String> {
     // Old names folded, arguments checked against the tool's schema (batch steps come through here too).
     let a = crate::args::check(name, &a)?;
+    let before = app.changes.load(std::sync::atomic::Ordering::Relaxed);
     let r = match a["world"].as_str() {
         None => Box::pin(dispatch(app, name, a)).await,
         Some(w) => {
@@ -173,14 +174,14 @@ pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             WANT.scope(want, Box::pin(dispatch(app, name, a))).await
         }
     };
-    unsaved_note(app, name, r)
+    unsaved_note(app, name, r, app.changes.load(std::sync::atomic::Ordering::Relaxed) != before)
 }
 
 /// A write that went through while the world could not be saved says so (`saved: false`, once, even where
 /// the tool's own reply was built after the save): an error would invite a repeat of a change that stands.
-fn unsaved_note(app: &Shared, name: &str, r: Result<Vec<Value>, String>) -> Result<Vec<Value>, String> {
+fn unsaved_note(app: &Shared, name: &str, r: Result<Vec<Value>, String>, changed: bool) -> Result<Vec<Value>, String> {
     let write = !READS.contains(&name) && name != "focus_view";
-    if !write || crate::batch::active() || !app.unsaved.load(std::sync::atomic::Ordering::Relaxed) {
+    if !write || !changed || crate::batch::active() || !app.unsaved.load(std::sync::atomic::Ordering::Relaxed) {
         return r;
     }
     let mut out = r?;
@@ -528,11 +529,26 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
         return found(app, id).await;
     }
     let (kind2, asked_at) = (kind.clone(), p);
-    let (p, name) = app.worker.with(move |ex| agent::creation_spot(&ex.world, &ex.t0, &kind, under.as_deref(), &id, p)).await?;
+    let (p, name, river) = app
+        .worker
+        .with(move |ex| {
+            let (q, name) = agent::creation_spot(&ex.world, &ex.t0, &kind, under.as_deref(), &id, p)?;
+            // (Where the river clearance alone puts it: what moved it, apart from a camp's chunk.)
+            let r = worldgen::lod::rivers::clear_of_rivers(&ex.t0.rivers, p[0], p[1], 150.0, ex.t0.cell_ft);
+            Ok((q, name, [r.0, r.1]))
+        })
+        .await?;
     // Put elsewhere than asked (clear of a river, a camp's clearing kept in its chunk): said so when it is more than 5 ft.
     let ft = (p[0] - asked_at[0]).hypot(p[1] - asked_at[1]);
     let moved = (ft > 5.0).then(|| {
-        let why = if kind2 == "camp" { "kept clear of rivers (150 ft) and 70 ft inside its battlemap chunk" } else { "kept clear of rivers (150 ft)" };
+        let by_river = (river[0] - asked_at[0]).hypot(river[1] - asked_at[1]) > 1.0;
+        let by_chunk = kind2 == "camp" && (p[0] - river[0]).hypot(p[1] - river[1]) > 1.0;
+        let why = match (by_river, by_chunk) {
+            (true, true) => "kept clear of rivers (150 ft) and 70 ft inside its battlemap chunk",
+            (true, false) => "kept clear of rivers (150 ft)",
+            (false, true) => "a camp's clearing is kept 70 ft inside its battlemap chunk",
+            (false, false) => "put where it fits",
+        };
         json!({ "x_ft": p[0].round(), "y_ft": p[1].round(), "ft": ft.round(), "why": why })
     });
     (c.x, c.y, c.name) = (p[0], p[1], asked.unwrap_or(name));

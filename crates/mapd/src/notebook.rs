@@ -204,6 +204,7 @@ fn has(text: &str, q: &str) -> bool {
 
 /// Run a notebook tool (None: not one of these).
 pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Value>, String>> {
+    let single = a["ids"].is_null();
     Some(match name {
         "list_npcs" | "get_npc" | "list_plots" | "get_plot" => read(app, name, a.clone()).await.map(text),
         "create_npc" | "update_npc" | "place_npc" => write_npc(app, name, a).await.map(text),
@@ -211,9 +212,9 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
             Err(e) => Err(e),
             Ok(ids) => app
                 .edit("agent", 0, move |e| {
-                    for id in &ids {
+                    for (i, id) in ids.iter().enumerate() {
                         if !e.npcs.contains_key(id) {
-                            return Err(format!("no such NPC: {id}"));
+                            return Err(format!("{}: no such NPC: {id}", crate::args::item(single, i)));
                         }
                     }
                     let mut names = Vec::new();
@@ -235,9 +236,9 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
             Err(e) => Err(e),
             Ok(ids) => app
                 .edit("agent", 0, move |e| {
-                    for id in &ids {
+                    for (i, id) in ids.iter().enumerate() {
                         if !e.plots.contains_key(id) {
-                            return Err(format!("no such plot point: {id}"));
+                            return Err(format!("{}: no such plot point: {id}", crate::args::item(single, i)));
                         }
                     }
                     let names: Vec<String> = ids.iter().filter_map(|id| e.plots.remove(id)).map(|p| p.title).collect();

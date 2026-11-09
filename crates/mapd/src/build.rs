@@ -69,7 +69,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "check_building_spot" => check_spot(app, a).await.map(text),
         "remove_buildings" => remove(app, a).await.map(text),
         "restore_building" => match crate::args::ids(a) {
-            Ok(ids) => restore(app, ids).await.map(text),
+            Ok(ids) => restore(app, ids, a["ids"].is_null()).await.map(text),
             Err(e) => Err(e),
         },
         _ => return None,
@@ -181,6 +181,7 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
 /// Take away buildings of the world's own: by ids, or every one with its middle in `within`.
 async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
     let mut ids = if a["id"].is_null() && a["ids"].is_null() { Vec::new() } else { crate::args::ids(a)? };
+    let single = a["ids"].is_null();
     let within = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
     if ids.is_empty() && within.is_none() {
         return Err("give id, ids or within".into());
@@ -193,7 +194,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             ids.sort();
             ids.dedup();
-            ids.into_iter().map(|id| agent::building_removal(&ex.world, &ex.t0, &id).map(|e| (id, e))).collect::<Result<Vec<_>, String>>()
+            ids.into_iter().enumerate().map(|(i, id)| agent::building_removal(&ex.world, &ex.t0, &id).map(|e| (id, e)).map_err(|m| if single { format!("id: {m}") } else { format!("{}: {m}", crate::args::item(false, i)) })).collect::<Result<Vec<_>, String>>()
         })
         .await?;
     let removed: Vec<String> = edits.iter().map(|(id, _)| id.clone()).collect();
@@ -211,11 +212,11 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
 }
 
 /// Some of the world's own buildings back as generated (all or none).
-async fn restore(app: &Shared, ids: Vec<String>) -> Result<Value, String> {
+async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, String> {
     let ids2 = ids.clone();
     app.edit("agent", 0, move |e| {
-        if let Some(id) = ids2.iter().find(|id| !e.buildings.contains_key(*id)) {
-            return Err(format!("{id} is as generated already"));
+        if let Some((i, id)) = ids2.iter().enumerate().find(|(_, id)| !e.buildings.contains_key(*id)) {
+            return Err(format!("{}: {id} is as generated already", crate::args::item(single, i)));
         }
         for id in &ids2 {
             e.buildings.remove(id);
@@ -272,8 +273,19 @@ fn footprint(a: &Value) -> Result<Option<Vec<[f64; 2]>>, String> {
     Ok(None)
 }
 
-/// A building drawn by hand this near the `near` point (ft), of the same trade and name, is the one asked for again.
-const NEAR_SAME_FT: f64 = 200.0;
+/// The key a `near` call is remembered by: the open world and the folded arguments as canonical JSON
+/// (`serde_json` maps are sorted), `world` left out.
+fn near_key(app: &Shared, a: &Value) -> Option<(u64, String)> {
+    let mut a = a.clone();
+    a.as_object_mut()?.remove("world");
+    Some((app.current()?, a.to_string()))
+}
+
+/// The building an identical earlier `near` call made, if it still stands.
+fn remembered(app: &Shared, key: &(u64, String)) -> Option<String> {
+    let (id, at) = app.near_calls.lock().unwrap().iter().rev().find(|(k, _)| k == key)?.1.clone();
+    app.with_edits(|e| e.created.iter().any(|c| c.id == id && !c.removed && c.kind == "building" && (c.x - at[0]).hypot(c.y - at[1]) < 1.0))?.then_some(id)
+}
 
 /// Create a building (`id` None) or change one.
 async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, String> {
@@ -298,6 +310,7 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
         }
     };
     let creating = id.is_none();
+    let near_key = if creating && poly.is_none() && !a["near"].is_null() { near_key(app, a) } else { None };
     let (was_floors, was_ruin) = (c.floors, c.structure.as_deref() == Some("ruin"));
     let poly = match poly {
         None if creating && !a["near"].is_null() => {
@@ -305,22 +318,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             let near = crate::args::point(app, "near", &a["near"]).await?;
             let size = |k: &str| a[k].as_f64().ok_or_else(|| format!("{k}: needed with near"));
             let (w, d) = (size("width_ft")?, size("depth_ft")?);
-            // The same building again (a script run twice): the one drawn by hand of the same trade (and
-            // name, if one is given) within 200 ft of `near`, nothing added.
-            let (want_func, want_name) = (a["func"].as_str().map(str::trim).filter(|f| !f.is_empty()).map(str::to_string), a["name"].as_str().map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty()));
-            let there = app.with_edits(|e| {
-                e.created
-                    .iter()
-                    .find(|o| {
-                        !o.removed
-                            && o.kind == "building"
-                            && o.func == want_func
-                            && want_name.as_ref().is_none_or(|n| o.name.trim().to_lowercase() == *n)
-                            && (o.x - near[0]).hypot(o.y - near[1]) <= NEAR_SAME_FT
-                    })
-                    .map(|o| o.id.clone())
-            });
-            if let Some(Some(id)) = there {
+            // The same call again (a script run twice): mapd remembers this session's `near` calls; one
+            // identical to an earlier one whose building still stands gives that building, nothing added.
+            if let Some(id) = near_key.as_ref().and_then(|k| remembered(app, k)) {
                 return found(app, id).await;
             }
             let (func, cid) = (a["func"].as_str().map(str::to_string), c.id.clone());
@@ -429,6 +429,7 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     let reply = json!({ "tool": tool, "id": c.id, "kind": "building", "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
     let cid = c.id.clone();
     let mut reply = reply;
+    let app2 = app.clone();
     let change = app.edit("agent", 0, move |e| {
         if creating {
             if let Some(o) = e.existing_site(&c, at) {
@@ -437,6 +438,13 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             // (Another client may have created a site meanwhile: take the next id.)
             c.id = format!("c:{}", e.created.len());
             reply["id"] = json!(c.id);
+            if let Some(k) = near_key {
+                let mut m = app2.near_calls.lock().unwrap();
+                m.push((k, (c.id.clone(), [c.x, c.y])));
+                if m.len() > 500 {
+                    m.remove(0);
+                }
+            }
             e.created.push(c);
         } else {
             let slot = e.created.iter_mut().find(|x| x.id == c.id && !x.removed).ok_or_else(|| format!("{} was deleted meanwhile", c.id))?;

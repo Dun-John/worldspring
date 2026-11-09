@@ -21,7 +21,7 @@ fn sprite_props() -> Value {
         "blocks_movement": { "type": "boolean" },
         "blocks_sight": { "type": "boolean" },
         "difficult": { "type": "boolean", "description": "Difficult terrain over its spread" },
-        "height_ft": { "type": "number", "minimum": 0, "maximum": 500 },
+        "height_ft": { "type": "number", "minimum": 0, "maximum": 500, "default": 3 },
     })
 }
 
@@ -60,6 +60,11 @@ pub fn list() -> Vec<Value> {
     ]
 }
 
+/// An f32 rule as a number with two decimals (no f32 noise).
+fn round2(x: f32) -> f64 {
+    (x as f64 * 100.0).round() / 100.0
+}
+
 fn rules(i: &KindInfo) -> Value {
     let cover = ["none", "half", "three-quarters", "full"][i.cover.min(3) as usize];
     json!({
@@ -67,8 +72,8 @@ fn rules(i: &KindInfo) -> Value {
         "blocks_movement": i.blocks_move,
         "blocks_sight": i.blocks_sight,
         "difficult": i.difficult,
-        "height_ft": i.height_ft,
-        "size_squares": i.radius * 2.0,
+        "height_ft": round2(i.height_ft),
+        "size_squares": round2(i.radius * 2.0),
         "hazard": i.hazard.map(|h| h.effect),
     })
 }
@@ -194,18 +199,61 @@ async fn upload(app: &Shared, a: &Value) -> Result<Value, String> {
     };
     let a2 = a.clone();
     let id2 = id.clone();
-    app.edit("agent", 0, move |e| {
-        let mut m = e.sprites.get(&id2).cloned().unwrap_or_default();
-        sprite_fields(&mut m, &a2)?;
-        if m.name.is_empty() {
-            m.name = "Custom object".into();
+    let by_bytes = a["asset"].is_null();
+    let r = app
+        .edit("agent", 0, move |e| {
+            let old = e.sprites.get(&id2).cloned();
+            let mut m = old.clone().unwrap_or_default();
+            sprite_fields(&mut m, &a2)?;
+            if m.name.is_empty() {
+                m.name = "Custom object".into();
+            }
+            let name = m.name.clone();
+            let mut v = json!({ "tool": "upload_sprite", "id": format!("s:{id2}"), "name": name });
+            // The same picture again: one name and rules per picture, the last upload's.
+            if let (true, Some(o)) = (by_bytes, &old) {
+                let mut was = serde_json::Map::new();
+                let (cw, ow) = (|c: u8| ["none", "half", "three-quarters", "full"][c.min(3) as usize], &o.name);
+                if o.name != m.name {
+                    was.insert("name".into(), json!(ow));
+                }
+                if o.size != m.size {
+                    was.insert("size_squares".into(), json!(round2(o.size)));
+                }
+                if o.cover != m.cover {
+                    was.insert("cover".into(), json!(cw(o.cover)));
+                }
+                if o.blocks_move != m.blocks_move {
+                    was.insert("blocks_movement".into(), json!(o.blocks_move));
+                }
+                if o.blocks_sight != m.blocks_sight {
+                    was.insert("blocks_sight".into(), json!(o.blocks_sight));
+                }
+                if o.difficult != m.difficult {
+                    was.insert("difficult".into(), json!(o.difficult));
+                }
+                if o.height_ft != m.height_ft {
+                    was.insert("height_ft".into(), json!(round2(o.height_ft)));
+                }
+                v["existing"] = json!(true);
+                if was.is_empty() {
+                    v["note"] = json!("this picture was already uploaded with these name and rules");
+                } else {
+                    v["replaced"] = Value::Object(was);
+                    v["note"] = json!("this picture was already uploaded: a picture has one name and rules, the last upload's (replaced shows what they were)");
+                }
+            }
+            e.sprites.insert(id2.clone(), m);
+            Ok(v)
+        })
+        .await?;
+    let mut out = json!({ "kind": format!("s:{id}"), "asset": id });
+    for k in ["existing", "replaced", "note"] {
+        if !r[k].is_null() {
+            out[k] = r[k].clone();
         }
-        let name = m.name.clone();
-        e.sprites.insert(id2.clone(), m);
-        Ok(json!({ "tool": "upload_sprite", "id": format!("s:{id2}"), "name": name }))
-    })
-    .await?;
-    Ok(json!({ "kind": format!("s:{id}"), "asset": id }))
+    }
+    Ok(out)
 }
 
 async fn bounds(app: &Shared) -> Result<[f64; 2], String> {
@@ -302,6 +350,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
         let kind = builtin(&o["kind"]).ok_or_else(|| format!("points[{i}].kind: built-in kinds only (placed objects go by id), got {}", o["kind"]))?;
         points.push((kind, num(o, "x_ft").map_err(|m| format!("points[{i}].{m}"))?, num(o, "y_ft").map_err(|m| format!("points[{i}].{m}"))?));
     }
+    let single = a["ids"].is_null();
     let area = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
     let kinds = kinds_of(a, &a["within"])?;
     if ids.is_empty() && points.is_empty() && area.is_none() {
@@ -310,14 +359,24 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
     app.edit("agent", 0, move |e| {
         let mut removed = Vec::new();
         for (i, id) in ids.iter().enumerate() {
-            e.objects.get(id).ok_or_else(|| format!("ids[{i}]: no placed object {id}"))?;
+            e.objects.get(id).ok_or_else(|| format!("{}: no placed object {id}", crate::args::item(single, i)))?;
         }
         for id in &ids {
             e.objects.remove(id);
             removed.push(id.clone());
         }
         let mut clears = Vec::new();
+        let mut there = Vec::new();
         for (kind, x, y) in points {
+            // Already cleared there: a clear of that kind at the point (a quarter square), or a circle over it.
+            let have = e.cleared.iter().find(|(_, c)| match c.kind {
+                Some(k) => k == kind && (c.x - x).hypot(c.y - y) <= 1.25,
+                None => (c.x - x).hypot(c.y - y) <= c.r.unwrap_or(0.0) && (c.kinds.is_empty() || c.kinds.contains(&kind)),
+            });
+            if let Some((id, _)) = have {
+                there.push(id.clone());
+                continue;
+            }
             let id = new_id("x");
             e.cleared.insert(id.clone(), Clear { x, y, kind: Some(kind), ..Default::default() });
             clears.push(id);
@@ -346,13 +405,31 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
         if let Some(n) = note {
             v["note"] = json!(n);
         }
+        if !there.is_empty() {
+            v["existing"] = json!(there);
+            v["note"] = json!(format!("{} of these points were already cleared (their clear ids are in existing): nothing was added for them", there.len()));
+        }
         Ok(v)
     })
     .await
 }
 
+/// How far `p` is from the nearest side of the closed polygon `q`.
+fn edge_dist(q: &[[f64; 2]], p: [f64; 2]) -> f64 {
+    (0..q.len())
+        .map(|i| {
+            let (a, b) = (q[i], q[(i + 1) % q.len()]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 == 0.0 { 0.0 } else { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) };
+            (p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy)
+        })
+        .fold(f64::MAX, f64::min)
+}
+
 async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = if a["id"].is_null() && a["ids"].is_null() { Vec::new() } else { crate::args::ids(a)? };
+    let single = a["ids"].is_null();
     let area = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
     if ids.is_empty() && area.is_none() {
         return Err("give id, ids or within".into());
@@ -360,7 +437,7 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
     app.edit("agent", 0, move |e| {
         let mut gone = Vec::new();
         for (i, id) in ids.iter().enumerate() {
-            e.cleared.get(id).ok_or_else(|| format!("ids[{i}]: no clear {id}"))?;
+            e.cleared.get(id).ok_or_else(|| format!("{}: no clear {id}", crate::args::item(single, i)))?;
         }
         for id in &ids {
             e.cleared.remove(id);
@@ -372,7 +449,7 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
                 .iter()
                 .filter(|(_, c)| match &area {
                     crate::args::Area::Circle(m, r) => (c.x - m[0]).hypot(c.y - m[1]) <= r + c.r.unwrap_or(0.0),
-                    other => other.contains([c.x, c.y]),
+                    other => other.contains([c.x, c.y]) || edge_dist(&other.outline(), [c.x, c.y]) <= c.r.unwrap_or(0.0),
                 })
                 .map(|(k, _)| k.clone())
                 .collect();

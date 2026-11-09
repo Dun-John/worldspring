@@ -36,25 +36,27 @@ struct Site {
 }
 
 /// The created sites behind `ids` (`c:<n>`, or a drawn building's `b:<layout>:0`), deleted ones too.
-async fn resolve(app: &Shared, ids: Vec<String>) -> Result<Vec<Site>, String> {
+async fn resolve(app: &Shared, ids: Vec<String>, single: bool) -> Result<Vec<Site>, String> {
     app.worker
         .with(move |ex| {
             let (w, t0) = (&ex.world, &ex.t0);
             let edits = &w.file.edits;
             let base = t0.settlements.len() + t0.base_pois;
             ids.iter()
-                .map(|id| {
+                .enumerate()
+                .map(|(i, id)| {
+                    let at = crate::args::item(single, i);
                     let (k, bid) = match agent::drawn_pair(w, t0, id) {
                         Some((k, _, b)) => (k, Some(b)),
                         None => match edits.created.iter().position(|c| &c.id == id) {
                             Some(k) => (k, None),
                             None if agent::generated_building(t0, id).is_some() => {
-                                return Err(format!("{id} is one of the world's own buildings: they go with remove_buildings (restore_building brings them back)"));
+                                return Err(format!("{at}: {id} is one of the world's own buildings: they go with remove_buildings (restore_building brings them back)"));
                             }
                             None if agent::position(w, t0, id).is_some() => {
-                                return Err(format!("{id} is not a created site (other generated features can be hidden with hide_feature)"));
+                                return Err(format!("{at}: {id} is not a created site (other generated features can be hidden with hide_feature)"));
                             }
-                            None => return Err(crate::args::no_such(w, t0, id)),
+                            None => return Err(format!("{at}: {}", crate::args::no_such(w, t0, id))),
                         },
                     };
                     let site = edits.created[k].clone();
@@ -67,7 +69,7 @@ async fn resolve(app: &Shared, ids: Vec<String>) -> Result<Vec<Site>, String> {
 
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = crate::args::ids(a)?;
-    let sites = resolve(app, ids.clone()).await?;
+    let sites = resolve(app, ids.clone(), a["ids"].is_null()).await?;
     let mut seen = std::collections::HashSet::new();
     let sites: Vec<Site> = sites.into_iter().filter(|s| seen.insert(s.cid.clone())).collect();
     app.edit("agent", 0, move |e| {
@@ -131,7 +133,7 @@ fn out_len_one(v: &Value) -> bool {
 
 async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = crate::args::ids(a)?;
-    let sites = resolve(app, ids).await?;
+    let sites = resolve(app, ids, a["ids"].is_null()).await?;
     let mut seen = std::collections::HashSet::new();
     let sites: Vec<Site> = sites.into_iter().filter(|s| seen.insert(s.cid.clone())).collect();
     for s in &sites {
@@ -139,7 +141,9 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
             return Err(format!("{} is not deleted", s.given));
         }
     }
-    // The spot must be free now, by the checks a new one of its kind meets.
+    // The spot must be free now, by the checks a new one of its kind meets; the check and the
+    // un-delete happen under one hold of the gate, so nothing can be placed in between.
+    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
     let copies: Vec<(String, usize, Created)> = sites.iter().map(|s| (s.given.clone(), s.li, s.site.clone())).collect();
     app.worker
         .with(move |ex| {
@@ -158,7 +162,7 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
         })
         .await?;
     let ids2: Vec<(String, String)> = sites.iter().map(|s| (s.given.clone(), s.cid.clone())).collect();
-    app.edit("agent", 0, move |e| {
+    let change = move |e: &mut worldgen::world::Edits| {
         for (given, cid) in &ids2 {
             let k = e.created.iter().position(|c| &c.id == cid).ok_or_else(|| format!("{given} is not a created site"))?;
             if !e.created[k].removed {
@@ -171,8 +175,13 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
             e.created[k].removed = false;
         }
         Ok(json!({ "tool": "restore_feature", "ids": ids2.iter().map(|p| p.1.clone()).collect::<Vec<_>>() }))
-    })
-    .await?;
+    };
+    if crate::batch::active() {
+        app.edit("agent", 0, change).await?;
+    } else {
+        app.edit_now("agent", 0, change).await?;
+    }
+    drop(_hold);
     let want: Vec<(String, Option<String>)> = sites.iter().map(|s| (s.cid.clone(), s.bid.clone())).collect();
     let mut got = app
         .worker
