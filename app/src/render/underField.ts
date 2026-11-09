@@ -55,8 +55,8 @@ export interface UnderField {
 
 /** The edges between floor heights (`liftField`): (nx * res) x (ny * res), RGBA: signed distance to the nearest
  * edge (squares, + on its high side; 128 + d * LIFT_SCALE), its rise (ft / LIFT_FT), how strongly it is drawn (0
- * on ramps, so the way up reads); a unused (0). Rock stays rock: cave ledges open onto their floors in the generator
- * (`cave::open_ledges`), so a ledge's drop is a floor-to-floor edge. */
+ * on ramps, rising to 1 within RAMP_TAPER of one, so the way up reads); a unused (0). Rock stays rock: cave ledges
+ * open onto their floors in the generator (`cave::open_ledges`), so a ledge's drop is a floor-to-floor edge. */
 export interface Lift {
   data: Uint8Array;
   res: number;
@@ -65,6 +65,8 @@ export interface Lift {
 /** The lift field's distances: to +-LIFT_REACH squares, LIFT_SCALE a square. */
 const LIFT_REACH = 2;
 const LIFT_SCALE = 63.5;
+/** How far (squares) a cliff tapers away beside a ramp. */
+const RAMP_TAPER = 0.4;
 /** The highest rise it tells apart (ft). */
 const LIFT_FT = 20;
 
@@ -596,18 +598,26 @@ function liftField(it: Interior, level: number): Lift | null {
     }
   }
   for (let k = 0; k < w * hh; k++) if (best[k] === Infinity) dist[k] = (sq[Math.floor(Math.floor(k / w) / R) * nx + Math.floor((k % w) / R)] || -1) * LIFT_REACH;
-  // Ramps: no lip.
-  let strength: Float32Array = new Float32Array(w * hh).fill(1);
+  // Ramps: no lip, and the cliff beside one tapers to it (0 on the ramp, 1 from RAMP_TAPER squares off it), so it
+  // ends cleanly where the way up starts. (Unblurred: the taper is the soft part.)
+  const strength = new Float32Array(w * hh).fill(1);
   for (let j = 0; j < ny; j++) {
     for (let i = 0; i < nx; i++) {
       if (!f.ramp[j * nx + i]) continue;
-      for (let y = j * R; y < (j + 1) * R; y++) strength.fill(0, y * w + i * R, y * w + (i + 1) * R);
+      for (let ty = Math.max(0, Math.floor((j - RAMP_TAPER) * R)); ty < Math.min(hh, Math.ceil((j + 1 + RAMP_TAPER) * R)); ty++) {
+        for (let tx = Math.max(0, Math.floor((i - RAMP_TAPER) * R)); tx < Math.min(w, Math.ceil((i + 1 + RAMP_TAPER) * R)); tx++) {
+          const [px, py] = [(tx + 0.5) / R, (ty + 0.5) / R];
+          const d = Math.hypot(Math.max(0, i - px, px - i - 1), Math.max(0, j - py, py - j - 1));
+          const k = ty * w + tx;
+          strength[k] = Math.min(strength[k], Math.min(1, d / RAMP_TAPER));
+        }
+      }
     }
   }
   let [dd, rr]: Float32Array[] = [dist, rise];
   if (!square) {
     const sigma = 0.36 * R;
-    [dd, rr, strength] = [blur(dist, w, hh, sigma), blur(rise, w, hh, sigma), blur(strength, w, hh, sigma)];
+    [dd, rr] = [blur(dist, w, hh, sigma), blur(rise, w, hh, sigma)];
   }
   const data = new Uint8Array(w * hh * 4);
   for (let k = 0; k < w * hh; k++) {
