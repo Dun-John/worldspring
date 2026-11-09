@@ -237,11 +237,18 @@ impl Ground {
     }
 }
 
+/// What a village a cell off a previewed road (not on it) gains of the road's bonus.
+const ROAD_NEAR: f64 = 0.6;
+/// And on it: a village on the road itself needs no spur.
+const ROAD_HERE: f64 = 1.4;
 /// Timber away from a river (forest only), against 0.6 by one.
 const TIMBER_INLAND: f64 = 0.4;
 /// A spring's ground: the ground round rising this much (ft, mean over two cells) above it, from
 /// none to full, then fading out again (mountain valleys).
 const SPRING_RISE_FT: (f64, f64, f64, f64) = (40.0, 250.0, 600.0, 1_200.0);
+/// A spring's ground lies at the foot: its height above the lowest within two cells (ft), from
+/// full to none.
+const SPRING_LOW_FT: (f64, f64) = (120.0, 400.0);
 /// A spring's strength as a reason (`Reason::Spring`).
 const SPRING_REASON: f64 = 0.7;
 /// Market spacing (towns): the miles from the nearest city (or town placed before) at which a
@@ -583,8 +590,17 @@ fn ground(inp: &Inputs) -> Ground {
             let total = sum[y1 * sw + x1] - sum[y0 * sw + x1] - sum[y1 * sw + x0] + sum[y0 * sw + x0];
             let rise = total / ((x1 - x0) * (y1 - y0)) as f64 - inp.height[k];
             let flat = 1.0 - smoothstep(0.02, 0.10, slope_of(k));
+            // (At the foot: little above the lowest ground round, not on a bench up the slope,
+            // where its track would climb to it. 25 cells each, O(cells).)
+            let mut lo = inp.height[k];
+            for yy in y0..y1 {
+                for xx in x0..x1 {
+                    lo = lo.min(inp.height[yy * w + xx].max(sea));
+                }
+            }
+            let foot = 1.0 - smoothstep(SPRING_LOW_FT.0, SPRING_LOW_FT.1, inp.height[k] - lo);
             // (Not between mountains: deep valleys have their rivers.)
-            spring[k] = (flat * smoothstep(SPRING_RISE_FT.0, SPRING_RISE_FT.1, rise) * (1.0 - smoothstep(SPRING_RISE_FT.2, SPRING_RISE_FT.3, rise))) as f32;
+            spring[k] = (flat * foot * smoothstep(SPRING_RISE_FT.0, SPRING_RISE_FT.1, rise) * (1.0 - smoothstep(SPRING_RISE_FT.2, SPRING_RISE_FT.3, rise))) as f32;
         }
     }
     for k in 0..n {
@@ -713,11 +729,13 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         (Tier::Village, villages, 14.0),
     ];
 
-    // Roads: a site on a road is better, a junction much better (within a cell of it).
-    let road_at = |k: usize| -> (bool, bool, bool) {
-        let Some(rp) = roads else { return (false, false, false) };
+    // Roads: a site on a road is better, a junction much better (within a cell of it; and
+    // whether on its own cell).
+    let road_at = |k: usize| -> (bool, bool, bool, bool) {
+        let Some(rp) = roads else { return (false, false, false, false) };
         let (x, y) = ((k % w) as i64, (k / w) as i64);
         let (mut on, mut at, mut pass) = (false, false, false);
+        let here = rp.usage[k] > 0 || rp.junction[k];
         for dy in -1i64..=1 {
             for dx in -1i64..=1 {
                 let (nx, ny) = (x + dx, y + dy);
@@ -730,13 +748,17 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 pass |= rp.pass[j];
             }
         }
-        (on, at, pass)
+        (on, at, pass, here)
     };
     // A ford or bridge where a road crosses a real river.
     let ford = |k: usize| inp.hydro.discharge[k] as f64 >= 3.0 * super::hydro::river_q(p.river_density);
     let road_bonus = |k: usize, tier: Tier| -> f64 {
-        let (on, at, pass) = road_at(k);
+        let (on, at, pass, here) = road_at(k);
         let (on_b, at_b) = if tier >= Tier::Town { (3.0, 5.0) } else { (2.0, 3.5) };
+        // (Villages: on the road itself more, a cell off it less: a short spur from beside a road
+        // meets it at a slant, or by a bridge.)
+        let near = |b: f64| if tier >= Tier::Town { b } else if here { ROAD_HERE * b } else { 1.0 + ROAD_NEAR * (b - 1.0) };
+        let (on_b, at_b) = (near(on_b), near(at_b));
         // Cities and towns also favour the sites where goods change hands (harbours, mouths,
         // confluences, heads of navigation, crossings) over plain farmland.
         // (Only cities: towns and villages live by what is round them, not by the water's trade.)
@@ -832,7 +854,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 consider(r, site[k][r as usize] as f64 / 255.0);
             }
             if tier <= Tier::Town {
-                let (on, at, pass) = road_at(k);
+                let (on, at, pass, _) = road_at(k);
                 if on && ford(k) {
                     consider(Reason::Crossing, 0.55);
                 }

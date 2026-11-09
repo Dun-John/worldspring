@@ -330,13 +330,31 @@ fn main() {
         let mut fingers: [Vec<(P, P, f64)>; 2] = [Vec::new(), Vec::new()];
         let mut stacks: Vec<(P, usize)> = Vec::new();
         let sang = |u: P, v: P| libm::atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]).to_degrees();
+        // (`CLIMB=1`: climbing road by class, and by what it leads to: the least place at its ends.)
+        let mut climb_by: std::collections::BTreeMap<String, (f64, f64)> = Default::default();
         for rc in t0.roads.roads.iter() {
+            let before = climb_ft;
             for k in 0..rc.pts.len() - 1 {
                 let (s0, z0) = (rc.s[k], rc.z[k]);
                 if let Some(j) = (k..rc.pts.len()).find(|&j| rc.s[j] - s0 >= 500.0) {
                     if ((rc.z[j] - z0).abs() as f64) > 0.04 * (rc.s[j] - s0) {
                         climb_ft += rc.s[k + 1] - s0;
                     }
+                }
+            }
+            if std::env::var("CLIMB").is_ok_and(|v| v == "1") {
+                let reach = |st: &worldgen::t0::settle::Settlement| worldgen::town::road_trim_radius(st.tier, st.population).max(300.0) * 1.15 + 100.0;
+                let at_end = [rc.pts[0], rc.pts[rc.pts.len() - 1]].iter().filter_map(|p| t0.settlements.iter().find(|st| dist([st.x, st.y], *p) <= reach(st))).min_by_key(|st| st.tier);
+                let to = match at_end {
+                    Some(st) if st.tier == worldgen::t0::settle::Tier::Village => format!("village/{}", st.reason.name()),
+                    Some(st) => format!("{:?}", st.tier),
+                    None => "junctions".into(),
+                };
+                let len = *rc.s.last().unwrap();
+                for key in [format!("class {:?}", rc.class), format!("to {to}")] {
+                    let e = climb_by.entry(key).or_default();
+                    e.0 += climb_ft - before;
+                    e.1 += len;
                 }
             }
             let mut q: Vec<P> = Vec::new();
@@ -437,6 +455,32 @@ fn main() {
             per10(zig),
             climb_ft / MI
         );
+        for (k, (c, l)) in &climb_by {
+            say!("    CLIMB {k}: {:.1} mi of {:.1} mi", c / MI, l / MI);
+        }
+        // (`CLIMB=1`: each spring village's ground against the 5x5 cells round it: above their
+        // lowest, below their highest.)
+        if std::env::var("CLIMB").is_ok_and(|v| v == "1") {
+            let (hw, hh) = (t0.height.w, t0.height.h);
+            let (mut n, mut up, mut sum_lo, mut sum_hi, mut sloped) = (0usize, 0usize, 0.0f64, 0.0f64, 0usize);
+            for st in t0.settlements.iter().filter(|st| st.reason == worldgen::t0::settle::Reason::Spring) {
+                let (x, y) = (st.cell % hw, st.cell / hw);
+                let h0 = t0.height.get(x, y) as f64;
+                let (mut lo, mut hi) = (h0, h0);
+                for yy in y.saturating_sub(2)..(y + 3).min(hh) {
+                    for xx in x.saturating_sub(2)..(x + 3).min(hw) {
+                        let v = t0.height.get(xx, yy) as f64;
+                        (lo, hi) = (lo.min(v), hi.max(v));
+                    }
+                }
+                n += 1;
+                sum_lo += h0 - lo;
+                sum_hi += hi - h0;
+                up += (h0 - lo > 0.5 * (hi - lo)) as usize;
+                sloped += (h0 - lo > 150.0) as usize;
+            }
+            say!("    CLIMB springs {n}: mean {:.0} ft above the lowest of 5x5, {:.0} below the highest; in the upper half {up}, over 150 ft above the lowest {sloped}", sum_lo / n.max(1) as f64, sum_hi / n.max(1) as f64);
+        }
         for h in hp_at.iter().filter(|h| h.2 || h.1.abs() > 150.0).take(std::env::var("TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(4)) {
             say!("      bend {:.0}° at ({:.0}, {:.0}){}{}", h.1, h.0[0], h.0[1], if h.2 { " sharp" } else { "" }, if h.3 { " zigzag" } else { "" });
         }
@@ -1323,6 +1367,33 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
     for &n in near.iter().take(top) {
         let c = crossings.iter().map(|c| dist(c.0, spots.pos[n])).fold(f64::MAX, f64::min);
         say!("      junction at ({:.0}, {:.0}), {} arms, shape {}: a crossing {:.0} ft away", spots.pos[n][0], spots.pos[n][1], deg[n], shape_of[n], c);
+    }
+    // (`JLIST=1`: every Y and every junction near a crossing, with its roads: class, whether it
+    // ends there, and the settlements at its two ends.)
+    if std::env::var("JLIST").is_ok_and(|v| v == "1") {
+        let end_at = |p: P| sts.iter().find(|s| dist([s.x, s.y], p) <= reach(s)).map(|s| format!("{:?}/{}", s.tier, s.reason.name())).unwrap_or_else(|| "-".into());
+        for n in (0..nroad).filter(|&n| junction[n] && (shape_of[n] == 1 || near.contains(&n))) {
+            let c = crossings.iter().map(|c| dist(c.0, spots.pos[n])).fold(f64::MAX, f64::min);
+            let roads: Vec<String> = at_node[n]
+                .iter()
+                .map(|&(r, i)| {
+                    let q = &pts[r];
+                    let end = if i == 0 || i == q.len() - 1 { "ends" } else { "on" };
+                    format!("{r} {} {end} [{} .. {}]", class_names[class[r]], end_at(q[0]), end_at(q[q.len() - 1]))
+                })
+                .collect();
+            say!("      JLIST ({:.0}, {:.0}) shape {} crossing {:.0} ft: {}", spots.pos[n][0], spots.pos[n][1], shape_of[n], c, roads.join("; "));
+        }
+        // (Spurs: a road from a settlement to a junction outside settlements, by length.)
+        let mut spur = [0usize; 4];
+        for &(u, v, l, ..) in &edges {
+            let (s_end, j_end) = (deg[u] == 1 || attached(spots.pos[u]), junction[v]);
+            let (s_end2, j_end2) = (deg[v] == 1 || attached(spots.pos[v]), junction[u]);
+            if (s_end && j_end) || (s_end2 && j_end2) {
+                spur[if l < 0.5 * MI { 0 } else if l < MI { 1 } else if l < 2.0 * MI { 2 } else { 3 }] += 1;
+            }
+        }
+        say!("      JLIST spurs < 0.5 mi {}, 0.5-1 {}, 1-2 {}, 2+ {}", spur[0], spur[1], spur[2], spur[3]);
     }
     // Dead ends: a road end at no settlement and no other road (those within 0.3 mi of a river
     // crossing counted apart: a road may end at a ferry or ford).
