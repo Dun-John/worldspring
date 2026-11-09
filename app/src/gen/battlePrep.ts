@@ -1386,23 +1386,23 @@ function roundRoof(g: MeshBuilder, ring: number[], felt: number) {
   g.outline(circle(cx, cy, rc, 16), INK_LINE, ROOF_INK);
 }
 
-/** A yurt's door on its south side (where they face): a small painted panel under a felt hood, through
- * the rim, inked; drawn over the eaves' ink. */
+/** A yurt's door on the ring's first side (`town::round_off` turns the ring so that side faces the nearest
+ * lane or the camp's middle): a small painted panel under a felt hood, through the rim, inked; drawn over
+ * the eaves' ink. */
 function yurtDoor(g: MeshBuilder, ring: number[], felt: number) {
   const n = ring.length / 2;
-  let [cx, cy, low] = [0, 0, -Infinity];
+  let [cx, cy] = [0, 0];
   for (let i = 0; i < n; i++) [cx, cy] = [cx + ring[i * 2] / n, cy + ring[i * 2 + 1] / n];
-  for (let i = 0; i < n; i++) low = Math.max(low, ring[i * 2 + 1]);
-  // (Where the rim crosses due south of the middle: the lowest y of the sides spanning cx.)
-  let ey = low;
-  for (let i = 0; i < n; i++) {
-    const [ax, ay, bx, by] = [ring[i * 2], ring[i * 2 + 1], ring[((i + 1) % n) * 2], ring[((i + 1) % n) * 2 + 1]];
-    if ((ax - cx) * (bx - cx) <= 0 && ax !== bx && ay > cy) ey = ay + ((cx - ax) / (bx - ax)) * (by - ay);
-  }
+  const [ex, ey] = [(ring[0] + ring[2]) / 2, (ring[1] + ring[3]) / 2];
+  const l = Math.hypot(ex - cx, ey - cy) || 1;
+  // (Outward, and along the rim.)
+  const [ox, oy] = [(ex - cx) / l, (ey - cy) / l];
+  const [tx, ty] = [-oy, ox];
   const [w, out, ins] = [1.6 * FT, 1.1 * FT, 1.4 * FT];
-  const hood = [cx - w, ey - ins, cx + w, ey - ins, cx + w, ey + out, cx - w, ey + out];
+  const at = (a: number, b: number) => [ex + tx * a + ox * b, ey + ty * a + oy * b];
+  const hood = [...at(-w, -ins), ...at(w, -ins), ...at(w, out), ...at(-w, out)];
   g.poly(hood, shadeHex(felt, 0.9));
-  g.poly([cx - w * 0.6, ey - ins * 0.2, cx + w * 0.6, ey - ins * 0.2, cx + w * 0.6, ey + out, cx - w * 0.6, ey + out], 0x8a4a32);
+  g.poly([...at(-w * 0.6, -ins * 0.2), ...at(w * 0.6, -ins * 0.2), ...at(w * 0.6, out), ...at(-w * 0.6, out)], 0x8a4a32);
   g.outline(hood, INK_LINE, ROOF_INK);
 }
 

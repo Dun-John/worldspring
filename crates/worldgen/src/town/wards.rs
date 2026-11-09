@@ -486,7 +486,11 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
         // (A lot that stood as generated under a round roof: the ring it was given, `round_off`.)
         let hit = hit.or_else(|| {
             let ring = super::roof::round_footprint(&b.poly)?;
-            near(cell(centroid(&ring))).find(|&g| !used[g] && same(&lot(&generated.buildings[g]), &ring))
+            // (Its door turns the generated ring, `round_off`: the same corners from another one.)
+            near(cell(centroid(&ring))).find(|&g| {
+                let o = lot(&generated.buildings[g]);
+                !used[g] && o.len() == ring.len() && (0..ring.len()).any(|r| (0..ring.len()).all(|k| dist(o[k], ring[(k + r) % ring.len()]) < 0.01))
+            })
         });
         match hit {
             Some(g) => {

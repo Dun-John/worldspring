@@ -2155,8 +2155,11 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
         let skip: Vec<i16> = halls.iter().map(|h| h.0).chain(galleries.iter().copied()).collect();
         furnish_rooms(&mut lvl, nx, ny, stairs, None, Some(&floor), &skip, thrones, faith, &mut rng);
         if yurt {
-            // (Its door on the south of the ring, where the battlemap draws it: `battlePrep.yurtDoor`.)
-            furnish_yurt(&mut lvl, nx, ny, [u[1], v[1]], &|i, j| ext_free(i, j));
+            // (Its door on the ring's first side, where the battlemap draws it: `battlePrep.yurtDoor`;
+            // turned toward the lane or the centre by `town::round_off`.)
+            let mean = mul(b.poly.iter().fold([0.0, 0.0], |a, p| add(a, *p)), 1.0 / b.poly.len() as f64);
+            let d = sub(mul(add(b.poly[0], b.poly[1]), 0.5), mean);
+            furnish_yurt(&mut lvl, nx, ny, [geom::dot(d, u), geom::dot(d, v)], &|i, j| ext_free(i, j));
         }
         for &(ri, f, turns, style) in &halls {
             let seed = hash3(world.stream("interior.hall"), town::rng_key(t0, settlement), bi as i64, zf as i64);
@@ -4883,7 +4886,7 @@ fn furnish_yurt(lvl: &mut Level, nx: usize, ny: usize, south: P, ext_free: &dyn 
     let (y0, y1) = (sq.iter().map(|s| s.1).min().unwrap(), sq.iter().map(|s| s.1).max().unwrap() + 1);
     let c = [0.5 * (x0 + x1) as f64, 0.5 * (y0 + y1) as f64];
     const STEPS: [(isize, isize); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
-    // The door: the rim's edge facing most nearly south, onto open ground.
+    // The door: the rim's edge facing most nearly `south` (the ring's door side), onto open ground.
     let mut best: Option<(f64, isize, isize, usize)> = None;
     for &(i, j) in &sq {
         for (side, (di, dj)) in STEPS.into_iter().enumerate() {

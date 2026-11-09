@@ -43,7 +43,7 @@ use mesh::Mesh;
 
 use crate::World;
 use crate::core::hash::{FastMap, FastSet};
-use crate::core::rng::{Pcg32, hash2, hash3, unit};
+use crate::core::rng::{Pcg32, hash2, hash3, signed, unit};
 use crate::t0::T0;
 use crate::t0::names::Namer;
 use crate::t0::settle::{Settlement, Tier};
@@ -1869,9 +1869,59 @@ pub(crate) fn round_off(l: &mut Layout) {
         let mut round = b.clone();
         round.poly = poly;
         if roof::look(l, &round).shape == roof::Shape::Round {
-            l.buildings[i].poly = round.poly;
+            let ring = yurt_door(l, i, round.poly);
+            l.buildings[i].poly = ring;
         }
     }
+}
+
+/// How far a yurt looks for a lane to face (ft from its middle to the lane's nearest point).
+const YURT_LANE_REACH: f64 = 70.0;
+/// The most a yurt's door swings off its lane or the centre (degrees, either way).
+const YURT_SWING: f64 = 20.0;
+
+/// A yurt's ring turned so its first side (corners 0 and 1) is its door: facing the nearest lane or
+/// street within `YURT_LANE_REACH`, else the layout's centre (a camp's fire, a green), swung a little by
+/// a hash of the layout and the building's id; the nearest side whose outside is clear of other roofs
+/// if that one is shut in. Carried by the ring's order alone: `interior::furnish_yurt` and the
+/// battlemap's roof (`battlePrep.yurtDoor`) both take the door from side 0.
+fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>) -> Vec<P> {
+    let m = ring.len();
+    let c = centroid(&ring);
+    let mut best: Option<(f64, P)> = None;
+    let ways = l.roads.iter().map(|r| &r.0).chain(l.streets.iter());
+    for w in ways {
+        for e in w.windows(2) {
+            let ab = sub(e[1], e[0]);
+            let t = (dot(sub(c, e[0]), ab) / dot(ab, ab).max(1e-12)).clamp(0.0, 1.0);
+            let q = add(e[0], mul(ab, t));
+            let d = dist(c, q);
+            if d <= YURT_LANE_REACH && best.is_none_or(|b| d < b.0) {
+                best = Some((d, q));
+            }
+        }
+    }
+    let aim = best.map(|b| b.1).filter(|q| dist(*q, c) > 1.0).unwrap_or(l.center);
+    let to = if dist(aim, c) > 1.0 { sub(aim, c) } else { [0.0, 1.0] };
+    let swing = signed(hash2(hash2(l.roof_seed, l.buildings[i].id as i64, 0x7975), 1, 0)) * YURT_SWING.to_radians();
+    let a = libm::atan2(to[1], to[0]) + swing;
+    let want = [libm::cos(a), libm::sin(a)];
+    let mid = |e: usize| lerp(ring[e], ring[(e + 1) % m], 0.5);
+    let open = |e: usize| {
+        let d = sub(mid(e), c);
+        let p = add(mid(e), mul(d, 4.0 / len(d).max(1e-9)));
+        !l.buildings.iter().enumerate().any(|(k, o)| k != i && o.structure == Structure::Roofed && dist(o.poly[0], c) < 400.0 && contains(&o.poly, p))
+    };
+    let mut sides: Vec<(f64, usize)> = (0..m)
+        .map(|e| {
+            let d = sub(mid(e), c);
+            (-(dot(d, want) / len(d).max(1e-9)), e)
+        })
+        .collect();
+    sides.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+    let door = sides.iter().map(|s| s.1).find(|&e| open(e)).unwrap_or(sides[0].1);
+    ring.rotate_left(door);
+    ring
 }
 
 /// What a settlement is laid out from: its ground (`Site`), where its roads arrive (local

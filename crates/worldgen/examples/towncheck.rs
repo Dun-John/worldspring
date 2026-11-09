@@ -15,6 +15,10 @@
 //!   walls, towers, blocking objects, a hedge every square it is drawn across) from the window's
 //!   edge and its streets, so from outside the outer gate: castle buildings cut off, outer gates
 //!   not reached, bailey squares sealed (and the largest pocket); the same for every park.
+//! - `yurts`: round homes' doors (`town::round_off`): how many, the share facing their lane (within 70 ft)
+//!   or the centre within 30 degrees, the share still facing south, interior door squares more than 1.5
+//!   square from the ring's door side, and up to 8 listed per world with seed, layout, id, x,y and angle.
+//!   `cargo run --profile fast -p worldgen --example towncheck -- yurts [seeds]` (default seeds 1-8; `TOP=8`); a door over 1.5 squares off is the interior finding the ring's side shut.
 //! - `interiors`: vital's `check_interior` over every enterable building and wall or gate tower,
 //!   failures grouped by function; and the corridor rule on its own (no room more than two rooms
 //!   from a corridor), with the stricter old reading (a hall or corridor only, not the front room).
@@ -4044,6 +4048,63 @@ const INN_COUNTS: [&str; 15] = [
     "coaching inns round a yard (where, by the yard open to the sky: squares)",
 ];
 
+/// Yurts (round homes on `town::round_off`'s rings): their doors face the nearest lane (within 70 ft) or
+/// the layout's centre, and the interior's door lies on the ring's door side (its first side). Up to 8
+/// per world are listed (`TOP=8`): seed, layout, building id, world ft x,y, the door's angle (degrees,
+/// 0 east, 90 south: y runs down) and the aim's.
+fn yurts(ctx: &mut Ctx, r: &mut Report) {
+    r.counts(&["yurts", "doors within 30 degrees of their lane or centre", "doors facing south, within 22.5 degrees", "interior doors over 1.5 squares from the ring's door", "yurts listed"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let mut listed = 0;
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        for b in l.buildings.iter().filter(|b| b.structure == town::Structure::Roofed && b.poly.len() == town::roof::ROUND_SIDES && b.parts.is_empty()) {
+            let id = format!("b:{li}:{}", b.id);
+            let Some(it) = interior::generate_id(world, t0, &id) else { continue };
+            let Some(lv) = it.levels.get(it.entry_level) else { continue };
+            let Some(yi) = lv.rooms.iter().position(|q| q.kind == "yurt") else { continue };
+            r.tally("yurts", 1);
+            let n = b.poly.len() as f64;
+            let c = b.poly.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]);
+            let door = [0.5 * (b.poly[0][0] + b.poly[1][0]), 0.5 * (b.poly[0][1] + b.poly[1][1])];
+            let ang = libm::atan2(door[1] - c[1], door[0] - c[0]).to_degrees();
+            let mut near: Option<(f64, [f64; 2])> = None;
+            for w in l.roads.iter().map(|w| &w.0).chain(l.streets.iter()) {
+                for e in w.windows(2) {
+                    let ab = [e[1][0] - e[0][0], e[1][1] - e[0][1]];
+                    let t = (((c[0] - e[0][0]) * ab[0] + (c[1] - e[0][1]) * ab[1]) / (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-12)).clamp(0.0, 1.0);
+                    let q = [e[0][0] + ab[0] * t, e[0][1] + ab[1] * t];
+                    let d = libm::hypot(q[0] - c[0], q[1] - c[1]);
+                    if d <= 70.0 && near.is_none_or(|b| d < b.0) {
+                        near = Some((d, q));
+                    }
+                }
+            }
+            let aim = near.map(|n| n.1).unwrap_or(l.center);
+            let aim_ang = libm::atan2(aim[1] - c[1], aim[0] - c[0]).to_degrees();
+            let off = |a: f64, b: f64| ((a - b + 540.0) % 360.0 - 180.0).abs();
+            if off(ang, aim_ang) <= 30.0 {
+                r.tally("doors within 30 degrees of their lane or centre", 1);
+            }
+            if off(ang, 90.0) <= 22.5 {
+                r.tally("doors facing south, within 22.5 degrees", 1);
+            }
+            if let Some(d) = lv.doors.iter().find(|d| d.kind == "front" && d.rooms.contains(&(yi as i16))) {
+                let g = [0.5 * (d.a[0] + d.b[0]) as f64 * interior::SQUARE_FT, 0.5 * (d.a[1] + d.b[1]) as f64 * interior::SQUARE_FT];
+                let w = [it.origin[0] + it.axis[0] * g[0] + it.across[0] * g[1], it.origin[1] + it.axis[1] * g[0] + it.across[1] * g[1]];
+                let gap = libm::hypot(w[0] - door[0], w[1] - door[1]);
+                if gap > 1.5 * interior::SQUARE_FT {
+                    r.add("interior doors over 1.5 squares from the ring's door", gap, format!("{id} seed {}: {gap:.1} ft off, at {:.0},{:.0}", world.file.seed, c[0], c[1]));
+                }
+            }
+            if listed < 8 {
+                listed += 1;
+                r.add("yurts listed", 0.0, format!("seed {} layout {li} {id} at {:.0},{:.0} door {ang:.0} aim {aim_ang:.0}", world.file.seed, c[0], c[1]));
+            }
+        }
+    }
+}
+
 /// Inns and caravanserais (`interior::hub::inn`): the rules in the header's `inns`.
 fn inns(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&["inns and caravanserais", "  laid out by zones"]);
@@ -4486,7 +4547,7 @@ fn under_terrain(mut it: interior::Interior, id: &str, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 15] = ["villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "all"];
+    const MODES: [&str; 16] = ["yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -4503,7 +4564,13 @@ fn main() {
     }
     QUIET.store(modes.contains(&"hash"), Ordering::Relaxed);
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
-    let worlds = if worlds.is_empty() { vec!["1".into(), "2".into(), "3".into()] } else { worlds };
+    let worlds = if worlds.is_empty() && modes == ["yurts"] {
+        (1..=8).map(|s| s.to_string()).collect()
+    } else if worlds.is_empty() {
+        vec!["1".into(), "2".into(), "3".into()]
+    } else {
+        worlds
+    };
     let mut all: BTreeMap<&str, Report> = BTreeMap::new();
     let start = Instant::now();
     for arg in &worlds {
@@ -4525,6 +4592,7 @@ fn main() {
                 "civic" => civic(&mut ctx, &mut r),
                 "inns" => inns(&mut ctx, &mut r),
                 "piers" => piers(&mut ctx, &mut r),
+                "yurts" => yurts(&mut ctx, &mut r),
                 "villages" => villages(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
