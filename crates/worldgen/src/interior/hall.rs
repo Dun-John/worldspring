@@ -730,6 +730,25 @@ pub fn furnish_hall(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], ri: i
     // castle's hall or a palace's throne room.)
     let bare = matches!(style, Style::Throne { .. } | Style::Ballroom | Style::Presence { .. });
     let throne = matches!(style, Style::Castle { .. } | Style::Throne { .. });
+    // (A castle's hall only two squares deep, a small tower keep's where its outer wall cuts the
+    // body's last row: just its throne dais, one square deep against the far wall.)
+    if l == 2 && w >= 2 && throne {
+        let look = match style {
+            Style::Castle { dais, .. } | Style::Throne { dais, .. } => dais,
+            _ => 0,
+        };
+        let mut widths: Vec<usize> = (1..=5.min(w as usize - 2).max(1)).rev().filter(|d| d % 2 == w as usize % 2).collect();
+        if widths.is_empty() {
+            widths.push(w as usize);
+        }
+        for dw in widths {
+            if h.put("throne_dais", 1, (w - dw as isize) / 2, 1, dw, Some((1, 0)), Some(look), false) {
+                lvl.furniture.extend(h.items);
+                return true;
+            }
+        }
+        return false;
+    }
     if l < 3 || w < 2 {
         return mess || style == Style::Ballroom;
     }

@@ -222,29 +222,37 @@ pub(super) fn castle<G: Ground>(
     // A stretch of the town wall running beside a side of the bound, outside it and nearer than
     // 30 ft (where the wall steps out round a corner or a tower): the side stands back 30 ft
     // from it, a strip a street can take, not a gap a curtain would leave against the wall.
+    // (How far a wall piece runs beside side `e`, nearer than 32 ft and outside the bound; the
+    // test sums a side's whole run along the pieces, so a wall of several short pieces counts too.)
+    let beside = |outer: &[P], e: usize, q: P, r: P| -> Option<f64> {
+        let (ql, n) = (dist(q, r), outer.len());
+        if ql < 1.0 || n < 3 {
+            return None;
+        }
+        let uq = mul(sub(r, q), 1.0 / ql);
+        let (a, b) = (outer[e], outer[(e + 1) % n]);
+        let el = dist(a, b);
+        if el < 1.0 || cross(mul(sub(b, a), 1.0 / el), uq).abs() >= 0.26 || along(a, b) {
+            return None;
+        }
+        let ue = mul(sub(b, a), 1.0 / el);
+        let (t0, t1) = (dot(sub(q, a), ue), dot(sub(r, a), ue));
+        let (lo, hi) = (t0.min(t1).max(0.0), t0.max(t1).min(el));
+        if hi <= lo {
+            return None;
+        }
+        let on_wall = |t: f64| lerp(q, r, ((t - t0) / (t1 - t0)).clamp(0.0, 1.0));
+        let (pl, ph) = (on_wall(lo), on_wall(hi));
+        let near = seg_dist(pl, a, b).min(seg_dist(ph, a, b));
+        ((2.5..32.0).contains(&near) && !contains(outer, lerp(pl, ph, 0.5))).then_some(hi - lo)
+    };
     for &(q, r) in town_walls {
         let (ql, n) = (dist(q, r), outer.len());
         if ql < 1.0 || n < 3 {
             continue;
         }
         let uq = mul(sub(r, q), 1.0 / ql);
-        let close = (0..n).any(|e| {
-            let (a, b) = (outer[e], outer[(e + 1) % n]);
-            let el = dist(a, b);
-            if el < 1.0 || cross(mul(sub(b, a), 1.0 / el), uq).abs() >= 0.26 || along(a, b) {
-                return false;
-            }
-            let ue = mul(sub(b, a), 1.0 / el);
-            let (t0, t1) = (dot(sub(q, a), ue), dot(sub(r, a), ue));
-            let (lo, hi) = (t0.min(t1).max(0.0), t0.max(t1).min(el));
-            if hi - lo < 25.0 {
-                return false;
-            }
-            let on_wall = |t: f64| lerp(q, r, ((t - t0) / (t1 - t0)).clamp(0.0, 1.0));
-            let (pl, ph) = (on_wall(lo), on_wall(hi));
-            let near = seg_dist(pl, a, b).min(seg_dist(ph, a, b));
-            (2.5..32.0).contains(&near) && !contains(&outer, lerp(pl, ph, 0.5))
-        });
+        let close = (0..n).any(|e| beside(&outer, e, q, r).is_some() && town_walls.iter().filter_map(|&(q2, r2)| beside(&outer, e, q2, r2)).sum::<f64>() >= 25.0);
         if !close {
             continue;
         }

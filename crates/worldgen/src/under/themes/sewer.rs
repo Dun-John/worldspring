@@ -5,6 +5,21 @@ use crate::t0::T0;
 use crate::town::{Layout, geom::P};
 use crate::under::*;
 
+/// A square whose middle `c` is wet, yet a street (`ab`) crosses dry ground in it: the street's
+/// own dry points there have a sewer beneath (the nearest point to `c` and some along the street).
+fn dry_street_in(t0: &T0, c: P, a: P, b: P) -> bool {
+    let ab = town::geom::sub(b, a);
+    let len = town::geom::dot(ab, ab).max(1e-12);
+    let t = (town::geom::dot(town::geom::sub(c, a), ab) / len).clamp(0.0, 1.0);
+    let u = town::geom::mul(ab, 1.0 / crate::core::sqrt(len));
+    let q = town::geom::add(a, town::geom::mul(ab, t));
+    let half = SQUARE_FT * 0.5;
+    [-2.5, -1.25, 0.0, 1.25, 2.5].iter().any(|&d| {
+        let s = town::geom::add(q, town::geom::mul(u, d));
+        town::geom::seg_dist(s, a, b) < 1e-6 && (s[0] - c[0]).abs() <= half && (s[1] - c[1]).abs() <= half && !wet(t0, s)
+    })
+}
+
 /// The sewers of a section: the ground under the paved streets, joined where runs meet only
 /// outside the section by service passages; a sewage channel down the runs, an outfall
 /// where a tunnel reaches water; the drain shaft down at the far end from the way in (the
@@ -45,7 +60,7 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
                 if p.cells[k] >= 0 || town::geom::seg_dist(centre(k), a, b) > r {
                     continue;
                 }
-                if !*is_wet[k].get_or_insert_with(|| wet(t0, centre(k))) {
+                if !*is_wet[k].get_or_insert_with(|| wet(t0, centre(k))) || dry_street_in(t0, centre(k), a, b) {
                     p.cells[k] = tunnel;
                 }
             }
@@ -58,7 +73,7 @@ pub(crate) fn sewer(t0: &T0, l: &Layout, origin: P, nx: usize, ny: usize, grate:
                     continue;
                 }
                 let c = [origin[0] + (i as f64 + 0.5) * SQUARE_FT, origin[1] + (j as f64 + 0.5) * SQUARE_FT];
-                if town::geom::seg_dist(c, a, b) <= r && *dry[at_rim(i, j)].get_or_insert_with(|| !wet(t0, c)) {
+                if town::geom::seg_dist(c, a, b) <= r && (*dry[at_rim(i, j)].get_or_insert_with(|| !wet(t0, c)) || dry_street_in(t0, c, a, b)) {
                     beyond[at_rim(i, j)] = true;
                 }
             }
