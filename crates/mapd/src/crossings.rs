@@ -73,7 +73,12 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         // The same crossing again (a script run twice): one of that kind with both ends within 5 ft of this one's, either way round.
         if let (None, Some(k), Some(f), Some(t)) = (&id, kind, from, to) {
             let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 5.0;
-            if let Some((eid, c)) = e.crossings.iter().find(|(_, c)| c.kind == k && ((near(c.a, f) && near(c.b, t)) || (near(c.a, t) && near(c.b, f)))) {
+            if let Some((eid, c)) = e.crossings.iter().find(|(_, c)| (near(c.a, f) && near(c.b, t)) || (near(c.a, t) && near(c.b, f))) {
+                let differs = c.kind != k || (k == CrossingKind::Bridge && material.is_some_and(|m| m != c.material)) || width.is_some_and(|w| (w - c.width).abs() > 1e-6);
+                if differs {
+                    let m = if c.kind == CrossingKind::Bridge { format!("{:?}", c.material).to_lowercase() } else { "timber".to_string() };
+                    return Err(format!("{eid} already joins these banks (a {}, {m}, {} ft): give its id to change it", c.kind.name(), c.width));
+                }
                 return Ok(json!({
                     "tool": "place_crossing", "id": eid, "kind": c.kind.name(), "changed": false, "existing": true,
                     "note": "a crossing of this kind between these ends was already there: nothing was added (give its id to change it)",

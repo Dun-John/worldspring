@@ -414,6 +414,19 @@ async fn set_plateau(app: &Shared, a: &Value) -> Result<Value, String> {
         if !changed
             && let Some((eid, ep)) = e.plateaus.iter().find(|(_, q)| q.pts.len() == p.pts.len() && q.pts.iter().zip(&p.pts).all(|(a, b)| (a[0] - b[0]).hypot(a[1] - b[1]) <= 1.0))
         {
+            // A rise is from the ground without that plateau (the new level above took the matched one into account).
+            let level = match (level_ft, rise) {
+                (Some(_), _) | (None, None) => p.level as f64,
+                (None, Some(r)) => {
+                    let mut o2 = Edits { ground: e.ground.clone(), plateaus: e.plateaus.clone(), ..Default::default() };
+                    o2.plateaus.remove(eid);
+                    squares.shaped(&o2)[0] as f64 + r
+                }
+            };
+            let tol = if level_ft.is_some() { 0.15 } else { 1.0 };
+            if (level_ft.is_some() || rise.is_some()) && (ep.level as f64 - level).abs() > tol || edge_arg.is_some() && (ep.edge - p.edge).abs() > 1e-4 {
+                return Err(format!("{eid} has this outline: give its id to change it"));
+            }
             return Ok(json!({
                 "tool": "set_plateau", "id": eid, "changed": false, "existing": true,
                 "note": "a plateau with this outline was already there: nothing was added (give its id to change it)",

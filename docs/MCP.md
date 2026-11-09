@@ -58,9 +58,9 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   an identical earlier call while it stands. Change anything, e.g. the name, to make a second), `create_npc` (the same
   name and place), `create_plot` (the same title), `place_objects` (new objects: the same kind within 0.5 ft with the
   same turn, scale and any variant given; those ids come back under `existing`), `remove_objects` with `points` (a
-  point already cleared there: its clear comes back under `existing`), `place_crossing` (a crossing of the same kind
-  with both ends within 5 ft of an existing one's, either way round), `set_plateau` without `id` (an outline within 1
-  ft at every corner of an existing one) and `upload_sprite` (the same picture again: `existing: true`, and
+  point already cleared there: its clear comes back under `existing`), `place_crossing` (a crossing with both ends within
+  5 ft of an existing one's, either way round; another kind, material or width is refused, naming it), `set_plateau`
+  without `id` (an outline within 1 ft at every corner of an existing one; another level or edge is refused, naming it) and `upload_sprite` (the same picture again: `existing: true`, and
   `replaced` says what name and rules it had; a picture has one name and rules, the last upload's). To make a second
   one on purpose, give it another name, title or place. A change that was made but could not be saved to disk is not
   an error: its reply carries `saved: false` and a `warning` (don't repeat the call; mapd saves it again every few
@@ -80,7 +80,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | An NPC's place | `location` (an id) and/or a point | `at` (an id is the `location`, a point is `x_ft`/`y_ft`) | `create_npc`, `place_npc` |
 | An area | `within`: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` (3+ points) or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`) | `area` | `remove_buildings`, `remove_objects`, `restore_objects` (`get_town_plan`: a box) |
 | Inside a building or site | `inside`: its id | `within` given as an id | `list_names` |
-| A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot` (all three forms); `create_feature` (castles: `poly` or `rect`); `set_plateau` (`poly` only, or `around`) |
+| A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot` (all three forms); `create_feature` and `update_fortification` (castles: `poly` or `rect`); `set_plateau` (`poly` only, or `around`) |
 | A line | `path` `[[x, y], ...]` | walls keep `pts` and also take `path` | `shape_ground`, `create_feature` (wall), `update_fortification` |
 | One or many ids | `ids` (a list) or `id` (one), either; all or nothing | | every remover and restorer: `delete_feature`, `restore_feature`, `delete_npc`, `delete_plot`, `delete_plateau`, `remove_objects`, `restore_objects`, `remove_buildings`, `restore_building`, `remove_crossings` |
 | Notes | `notes` on features and NPCs, `text` on plot points | the other one | `annotate_feature`, `update_feature`, `create_npc`, `update_npc`, `create_plot`, `update_plot` (not `set_site_design`: its `text` is the plan) |
@@ -999,7 +999,7 @@ No parameters. Returns `{items, found}`: `{id, kind, from, to, width_ft, length_
 | `from`, `to` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required for a new one | The banks (on the map). The length between them is 10–2,000 ft (a ferry at least 68). |
 | `width_ft` | number | optional | Deck, ford or raft width, 5–40 (default 12). |
 | `material` | string | optional | A bridge's: `timber` (default) or `stone`. |
-| `id` | string | optional | A crossing to change (`v:…`): only the fields given change. Without it, a crossing of the same kind with both ends within 5 ft of an existing one's (either way round) is that one: `existing: true`. |
+| `id` | string | optional | A crossing to change (`v:…`): only the fields given change. Without it, a crossing with both ends within 5 ft of an existing one's (either way round) is that one: `existing: true`; a different kind, material or width is refused (give its id to change it). |
 
 Returns `{tool, id, kind, changed, crossing}`.
 
@@ -1530,7 +1530,7 @@ A plateau or pit, or a change to one. The outline is `poly` (also `outline`), or
 tower (`t:`) or a site (its buildings, towers and walls), its footprint's convex outline grown by `margin_ft`;
 outlines are simplified to at most 48 points. The level is `level_ft` above the sea, or `rise_ft` above the
 ground (as shaped, this plateau left out) at the outline's middle. The reply: `id`, `changed`, `level_ft`,
-`ground_ft` (the ground at the middle), `edge_ft`, `points`, `area_sq_ft`, `bbox`. Without `id`, an outline that matches an existing plateau's (the same number of corners, each within 1 ft) is that one: `existing: true`, nothing added.
+`ground_ft` (the ground at the middle), `edge_ft`, `points`, `area_sq_ft`, `bbox`. Without `id`, an outline that matches an existing plateau's (the same number of corners, each within 1 ft) is that one: `existing: true`, nothing added; a different `level_ft`, `rise_ft` or `edge_ft` is refused (give its id to change it).
 
 | Parameter | Type | Default | |
 |---|---|---|---|

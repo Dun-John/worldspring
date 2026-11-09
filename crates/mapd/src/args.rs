@@ -45,6 +45,7 @@ const ALIASES: &[(&str, &str, &str)] = &[
     ("check_building_spot", "outline", "poly"),
     ("create_feature", "path", "pts"),
     ("update_fortification", "path", "pts"),
+    ("update_fortification", "outline", "poly"),
 ];
 
 /// Keys a tool's code reads that its schema doesn't list (tools of files this module's owner
