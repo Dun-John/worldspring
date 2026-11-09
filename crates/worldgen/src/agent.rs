@@ -6,7 +6,8 @@
 //! layouts are also reachable by those; buildings are `b:<layout>:<i>`, districts
 //! `d:<layout>:<q>`, wall towers `t:<layout>:<k>`, underground sites `u:`/`w:`/`k:`, created
 //! sites `c:<n>`; a site's levels and rooms (for renaming) `l:<site>:<level>` and
-//! `r:<site>:<level>:<room>`, levels counted from the bottom. NPCs (`n:<id>`) and plot points (`p:<id>`) are authored, never generated;
+//! `r:<site>:<level>:<room>`, levels counted from the bottom; road stretches `rd:<8 hex>`
+//! (`roadids`) and crossings put down by hand `v:<id>`. NPCs (`n:<id>`) and plot points (`p:<id>`) are authored, never generated;
 //! they come with the places they are tied to.
 
 use std::borrow::Cow;
@@ -60,7 +61,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
 
 /// Each feature's shape, in `features` order: the overlay's own; a created site is a point (a
 /// building reaches to its footprint's farthest corner).
-fn shapes<'a>(world: &World, t0: &'a T0) -> Vec<Cow<'a, Shape>> {
+pub(crate) fn shapes<'a>(world: &World, t0: &'a T0) -> Vec<Cow<'a, Shape>> {
     let mut out: Vec<Cow<Shape>> = match t0.extra.as_ref().map(|e| &e.overlay) {
         Some(o) => o.features.iter().enumerate().map(|(i, f)| o.shapes.get(i).map(Cow::Borrowed).unwrap_or(Cow::Owned(Shape::Point { at: [f.x, f.y], radius_ft: 0.0 }))).collect(),
         None => Vec::new(),
@@ -800,6 +801,13 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     if let Some(p) = edits.plots.get(id) {
         return p.anchors.iter().filter(|a| !is_authored(a)).find_map(|a| position(world, t0, a));
     }
+    // A road stretch halfway along; a crossing put down by hand at its middle.
+    if id.starts_with("rd:") {
+        return crate::roadids::road_index(t0, id).map(|i| crate::roadids::midpoint(&t0.roads.roads[i]));
+    }
+    if let Some(c) = edits.crossings.get(id) {
+        return Some(crate::roadids::crossing_mid(c));
+    }
     // A level is where its site is; a room at its middle.
     if let Some((site, li, ri)) = split_room_id(id) {
         let it = crate::interior::generate_id(world, t0, site)?;
@@ -923,6 +931,15 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
             Some(ri) => lv.rooms.get(ri).map(|r| r.kind.to_string()),
             None => Some(lv.name.clone()),
         };
+    }
+    if let Some(c) = world.file.edits.crossings.get(id) {
+        return Some(crate::roadids::crossing_generated(c));
+    }
+    if id.starts_with("rd:") {
+        let i = crate::roadids::road_index(t0, id)?;
+        let r = &t0.roads.roads[i];
+        let fs = features(world, t0);
+        return r.stroke.and_then(|s| crate::roadids::drawn_road(world, t0, &fs, s)).map(|f| fs[f].name.clone());
     }
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     match (id.split(':').next(), nums.as_slice()) {
@@ -1217,6 +1234,10 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
                 }
             }
         }
+        // Road stretches renamed and crossings named (only those given a name).
+        if (!ql.is_empty() || matches!(kind, Some("road" | "crossing"))) && out.len() < limit {
+            out.extend(crate::roadids::search_hits(world, t0, &ql, kind, include_hidden, limit - out.len()));
+        }
     }
     // Notes: their tags, and with `in_notes` their words.
     if tag.is_some() || (o.in_notes && !ql.is_empty()) {
@@ -1337,6 +1358,9 @@ pub fn near(world: &World, t0: &T0, p: P, radius: f64, kinds: &[String], limit: 
 pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
     if deleted_with(world, t0, id).is_some() {
         return None;
+    }
+    if id.starts_with("rd:") || world.file.edits.crossings.contains_key(id) {
+        return way_json(world, t0, id);
     }
     let fs = features(world, t0);
     // (A building taken away: where it stood, while its place is in the world.)
@@ -1479,6 +1503,31 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
 }
 
 /// A settlement's or site's layout: districts, notable buildings, ways underground.
+/// A road stretch (`rd:`) or a crossing put down by hand (`v:`) for `get_feature`: what
+/// `roadids` says of it, with its notes, whether hidden, the settlements nearest and (a
+/// crossing) the river it crosses.
+fn way_json(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    let mut v = match world.file.edits.crossings.get(id) {
+        Some(c) => {
+            let mut v = crate::roadids::crossing_json(&world.file.edits, id, c);
+            v["crossing"] = v["kind"].take();
+            v["kind"] = json!("crossing");
+            let m = crate::roadids::crossing_mid(c);
+            v["x_ft"] = json!(m[0].round());
+            v["y_ft"] = json!(m[1].round());
+            v["river"] = river_at(world, t0, m, 0.5 * c.length() + 500.0).map_or(Value::Null, |r| r.json(Some(m)));
+            v
+        }
+        None => crate::roadids::road_json(world, t0, id)?,
+    };
+    let p = [v["x_ft"].as_f64().unwrap_or(0.0), v["y_ft"].as_f64().unwrap_or(0.0)];
+    v["generated"] = json!(generated_name(world, t0, id));
+    v["hidden"] = json!(is_hidden(world, t0, id));
+    v["notes"] = note_of(world, t0, id);
+    v["nearest_settlements"] = json!(nearest_settlements(&features(world, t0), p, id, 3));
+    Some(v)
+}
+
 fn layout_summary(world: &World, t0: &T0, l: &town::Layout) -> Value {
     let notable: Vec<Value> = l
         .buildings
@@ -1782,8 +1831,19 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
     } else {
         let edits = &world.file.edits;
         let fs = t0.extra.as_ref().map(|e| e.overlay.features.as_slice()).unwrap_or_default();
+        let fs_all = features(world, t0);
         let mut v: Vec<Value> = fs.iter().map(|f| name_entry(world, f.id.clone(), f.kind, f.name.clone(), Some([f.x, f.y]), false)).collect();
         v.extend(edits.created.iter().filter(|c| !c.removed).map(|c| name_entry(world, c.id.clone(), &c.kind, c.name.clone(), Some([c.x, c.y]), false)));
+        // Road stretches someone renamed (not every stretch: list_roads has their ids), and the
+        // crossings put down by hand.
+        if edits.renames.keys().any(|k| k.starts_with("rd:")) {
+            for (i, id) in crate::roadids::road_ids(t0).into_iter().enumerate().filter(|(_, id)| edits.renames.contains_key(id)) {
+                let r = &t0.roads.roads[i];
+                let generated = r.stroke.and_then(|s| crate::roadids::drawn_road(world, t0, &fs_all, s)).map(|f| fs_all[f].name.clone()).unwrap_or_default();
+                v.push(name_entry(world, id, "road", generated, Some(crate::roadids::midpoint(r)), false));
+            }
+        }
+        v.extend(edits.crossings.iter().map(|(id, c)| name_entry(world, id.clone(), "crossing", crate::roadids::crossing_generated(c), Some(crate::roadids::crossing_mid(c)), false)));
         v
     };
     Ok(json!({ "names": list.into_iter().filter(|v| kind.is_none_or(|k| v["kind"] == k)).collect::<Vec<_>>() }))
@@ -1793,8 +1853,8 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
 // Routes over the road network.
 
 /// The road graph: nodes (settlement `S(i)` or a junction by rounded position) and edges
-/// (road length, ft).
-fn road_graph(world: &World, t0: &T0) -> (Vec<P>, Vec<Vec<(usize, f64)>>, Vec<Option<usize>>) {
+/// (the node reached, road length in ft, the stretch in `t0.roads.roads`).
+fn road_graph(world: &World, t0: &T0) -> (Vec<P>, Vec<Vec<(usize, f64, usize)>>, Vec<Option<usize>>) {
     let mut nodes: Vec<P> = Vec::new();
     let mut town_of: Vec<Option<usize>> = Vec::new();
     let mut key: std::collections::BTreeMap<(i64, i64), usize> = Default::default();
@@ -1817,22 +1877,22 @@ fn road_graph(world: &World, t0: &T0) -> (Vec<P>, Vec<Vec<(usize, f64)>>, Vec<Op
             nodes.len() - 1
         })
     };
-    let mut edges: Vec<(usize, usize, f64)> = Vec::new();
-    for r in &t0.roads.roads {
+    let mut edges: Vec<(usize, usize, f64, usize)> = Vec::new();
+    for (i, r) in t0.roads.roads.iter().enumerate() {
         if r.pts.len() < 2 {
             continue;
         }
         let a = node(r.pts[0], &mut nodes, &mut town_of);
         let b = node(*r.pts.last().unwrap(), &mut nodes, &mut town_of);
         if a != b {
-            edges.push((a, b, *r.s.last().unwrap_or(&0.0)));
+            edges.push((a, b, *r.s.last().unwrap_or(&0.0), i));
         }
     }
     let _ = world;
     let mut adj = vec![Vec::new(); nodes.len()];
-    for (a, b, w) in edges {
-        adj[a].push((b, w));
-        adj[b].push((a, w));
+    for (a, b, w, i) in edges {
+        adj[a].push((b, w, i));
+        adj[b].push((a, w, i));
     }
     (nodes, adj, town_of)
 }
@@ -1845,7 +1905,7 @@ fn roads_from(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     // Follow junctions on to the next settlement.
     let mut seen = vec![false; adj.len()];
     seen[n] = true;
-    let mut stack: Vec<(usize, f64)> = adj[n].clone();
+    let mut stack: Vec<(usize, f64)> = adj[n].iter().map(|&(k, w, _)| (k, w)).collect();
     while let Some((m, d)) = stack.pop() {
         if seen[m] {
             continue;
@@ -1855,7 +1915,7 @@ fn roads_from(world: &World, t0: &T0, li: usize) -> Vec<Value> {
             let fid = feature_of_layout(world, t0, t);
             out.push(json!({ "id": fid, "name": fid.as_deref().and_then(|f| name_of(world, t0, f)), "road_mi": mi(d) }));
         } else {
-            stack.extend(adj[m].iter().map(|&(k, w)| (k, d + w)));
+            stack.extend(adj[m].iter().map(|&(k, w, _)| (k, d + w)));
         }
     }
     out
@@ -1867,71 +1927,66 @@ fn roads_from(world: &World, t0: &T0, li: usize) -> Vec<Value> {
 /// place and a radius, ft) of the place, ending at `settlement` (a layout), of `class` (king's
 /// road, road, track), or drawn only; at most `limit`, longest first.
 pub fn roads(world: &World, t0: &T0, near: Option<(P, f64)>, settlement: Option<usize>, class: Option<&str>, drawn_only: bool, limit: usize) -> Value {
-    use crate::t0::roads::RoadClass;
-    let class_name = |c: RoadClass| ["king's road", "road", "track"][c as usize];
+    use crate::roadids::{class_name, drawn_road, end_json, town_at};
     let want = class.map(|c| c.to_lowercase().replace('_', " ").replace("kings", "king's"));
     let fs = features(world, t0);
-    let road_feature = |stroke: u32| {
-        let name = world.file.sketch.strokes.get(stroke as usize)?.name.as_deref()?.trim().to_string();
-        fs.iter().find(|f| f.kind == "road" && f.name == name).or_else(|| {
-            // (Renamed: the feature made from the stroke, by its course.)
-            let first = t0.roads.roads.iter().find(|r| r.stroke == Some(stroke))?.pts[0];
-            let shapes = shapes(world, t0);
-            fs.iter().zip(shapes.iter()).filter(|(f, _)| f.kind == "road").min_by(|a, b| a.1.distance(first).0.total_cmp(&b.1.distance(first).0)).map(|(f, _)| f)
-        })
-    };
-    // A road's end: the settlement it reaches (as `road_graph` decides), else its point.
-    let town_at = |p: P| {
-        t0.settlements
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| geom::dist([s.x, s.y], p) < town::reach(s) + 3_000.0)
-            .min_by(|a, b| geom::dist([a.1.x, a.1.y], p).total_cmp(&geom::dist([b.1.x, b.1.y], p)))
-            .map(|(i, _)| i)
-    };
-    let end_json = |p: P| match town_at(p).and_then(|i| feature_of_layout(world, t0, i)) {
-        Some(id) => json!({ "id": id, "name": name_of(world, t0, &id) }),
-        None => json!({ "x_ft": p[0].round(), "y_ft": p[1].round() }),
-    };
-    let keep = |r: &crate::lod::roads::RoadCurve| {
+    let ids = crate::roadids::road_ids(t0);
+    let rs = &t0.roads.roads;
+    let keep = |i: usize| {
+        let r = &rs[i];
         r.pts.len() >= 2
             && (!drawn_only || r.stroke.is_some())
             && want.as_deref().is_none_or(|w| w == class_name(r.class))
             && near.is_none_or(|(p, rad)| r.pts.iter().any(|q| geom::dist(*q, p) <= rad))
-            && settlement.is_none_or(|li| [r.pts[0], *r.pts.last().unwrap()].iter().any(|&e| town_at(e) == Some(li)))
+            && settlement.is_none_or(|li| [r.pts[0], *r.pts.last().unwrap()].iter().any(|&e| town_at(t0, e) == Some(li)))
     };
-    // Named roads: their pieces' ends that reach settlements, in order along the line drawn.
+    // Named roads: drawn in the sketch (their pieces' ends that reach settlements, in order
+    // along the line drawn), then stretches renamed alike.
     let mut named = Vec::new();
     let mut seen: Vec<u32> = Vec::new();
-    for r in t0.roads.roads.iter().filter(|r| keep(r)) {
+    for i in (0..rs.len()).filter(|&i| keep(i)) {
+        let r = &rs[i];
         let Some(st) = r.stroke.filter(|s| !seen.contains(s)) else { continue };
         seen.push(st);
-        let Some(f) = road_feature(st) else { continue };
+        let Some(f) = drawn_road(world, t0, &fs, st).map(|k| &fs[k]) else { continue };
         let line = &world.file.sketch.strokes[st as usize].pts;
         let along = |p: P| (0..line.len()).min_by(|&a, &b| geom::dist(line[a], p).total_cmp(&geom::dist(line[b], p))).unwrap_or(0);
-        let pieces: Vec<&crate::lod::roads::RoadCurve> = t0.roads.roads.iter().filter(|q| q.stroke == Some(st)).collect();
-        let mut towns: Vec<(usize, usize)> = pieces.iter().flat_map(|q| [q.pts[0], *q.pts.last().unwrap()]).filter_map(|e| town_at(e).map(|t| (along(e), t))).collect();
+        let pieces: Vec<usize> = (0..rs.len()).filter(|&q| rs[q].stroke == Some(st)).collect();
+        let mut towns: Vec<(usize, usize)> = pieces.iter().flat_map(|&q| [rs[q].pts[0], *rs[q].pts.last().unwrap()]).filter_map(|e| town_at(t0, e).map(|t| (along(e), t))).collect();
         towns.sort();
         towns.dedup_by_key(|t| t.1);
         let via: Vec<Value> = towns.iter().filter_map(|&(_, t)| feature_of_layout(world, t0, t)).map(|id| json!({ "id": id, "name": name_of(world, t0, &id) })).collect();
+        let mut by_along: Vec<(usize, usize)> = pieces.iter().map(|&q| (along(rs[q].pts[0]).min(along(*rs[q].pts.last().unwrap())), q)).collect();
+        by_along.sort();
         named.push(json!({
             "id": f.id,
             "name": name_of(world, t0, &f.id).unwrap_or_else(|| f.name.clone()),
-            "class": class_name(pieces.iter().map(|q| q.class).min().unwrap_or(r.class)),
-            "length_mi": mi(pieces.iter().map(|q| *q.s.last().unwrap_or(&0.0)).sum()),
+            "class": class_name(pieces.iter().map(|&q| rs[q].class).min().unwrap_or(r.class)),
+            "length_mi": mi(pieces.iter().map(|&q| *rs[q].s.last().unwrap_or(&0.0)).sum()),
             "settlements": via,
+            "stretches": by_along.iter().map(|&(_, q)| ids[q].clone()).collect::<Vec<_>>(),
         }));
     }
-    let mut list: Vec<&crate::lod::roads::RoadCurve> = t0.roads.roads.iter().filter(|r| keep(r)).collect();
-    list.sort_by(|a, b| b.s.last().unwrap_or(&0.0).total_cmp(a.s.last().unwrap_or(&0.0)));
+    named.extend(crate::roadids::renamed_groups(world, t0, &ids, &keep));
+    let mut list: Vec<usize> = (0..rs.len()).filter(|&i| keep(i)).collect();
+    list.sort_by(|&a, &b| rs[b].s.last().unwrap_or(&0.0).total_cmp(rs[a].s.last().unwrap_or(&0.0)).then_with(|| ids[a].cmp(&ids[b])));
     let total = list.len();
     let roads: Vec<Value> = list
         .iter()
         .take(limit)
-        .map(|r| {
-            let mut v = json!({ "class": class_name(r.class), "length_mi": mi(*r.s.last().unwrap_or(&0.0)), "from": end_json(r.pts[0]), "to": end_json(*r.pts.last().unwrap()) });
-            if let Some(f) = r.stroke.and_then(road_feature) {
-                v["road"] = json!(name_of(world, t0, &f.id).unwrap_or_else(|| f.name.clone()));
+        .map(|&i| {
+            let r = &rs[i];
+            let mut v = json!({ "id": ids[i], "class": class_name(r.class), "length_mi": mi(*r.s.last().unwrap_or(&0.0)), "from": end_json(world, t0, r.pts[0]), "to": end_json(world, t0, *r.pts.last().unwrap()) });
+            if let Some(n) = world.file.edits.renames.get(&ids[i]) {
+                v["name"] = json!(n);
+            }
+            if let Some(f) = r.stroke.and_then(|s| drawn_road(world, t0, &fs, s)).map(|k| &fs[k]) {
+                let n = name_of(world, t0, &f.id).unwrap_or_else(|| f.name.clone());
+                if v["name"].is_null() {
+                    v["name"] = json!(n);
+                }
+                v["road"] = json!(n);
+                v["road_id"] = json!(f.id);
             } else if r.stroke.is_some() {
                 v["drawn"] = json!(true);
             }
@@ -1953,6 +2008,7 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
         // Dijkstra.
         let mut dist = vec![f64::MAX; nodes.len()];
         let mut prev = vec![usize::MAX; nodes.len()];
+        let mut via_road = vec![usize::MAX; nodes.len()];
         let mut heap = std::collections::BTreeSet::new();
         dist[a] = 0.0;
         heap.insert(((0.0f64).to_bits(), a));
@@ -1964,16 +2020,18 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
             if u == b {
                 break;
             }
-            for &(v, w) in &adj[u] {
+            for &(v, w, ri) in &adj[u] {
                 if du + w < dist[v] {
                     dist[v] = du + w;
                     prev[v] = u;
+                    via_road[v] = ri;
                     heap.insert(((du + w).to_bits(), v));
                 }
             }
         }
         if dist[b] < f64::MAX {
             let mut via = Vec::new();
+            let mut used = Vec::new();
             let mut k = b;
             while k != usize::MAX {
                 if let Some(t) = town_of[k]
@@ -1981,13 +2039,41 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
                 {
                     via.push(json!({ "id": fid, "name": name_of(world, t0, &fid) }));
                 }
+                if via_road[k] != usize::MAX {
+                    used.push(via_road[k]);
+                }
                 k = prev[k];
             }
             via.reverse();
+            used.reverse();
+            // The stretches in order (id, name if any, class, length), and the named roads
+            // followed (runs of stretches of one name joined).
+            let ids = crate::roadids::road_ids(t0);
+            let fs = features(world, t0);
+            let mut stretches = Vec::new();
+            let mut follows: Vec<Value> = Vec::new();
+            for &ri in &used {
+                let r = &t0.roads.roads[ri];
+                let len = *r.s.last().unwrap_or(&0.0);
+                let name = crate::roadids::stretch_name(world, t0, &fs, &ids[ri], r);
+                let mut sv = json!({ "id": ids[ri], "class": crate::roadids::class_name(r.class), "length_mi": mi(len) });
+                if let Some(n) = &name {
+                    sv["name"] = json!(n);
+                    match follows.last_mut().filter(|f| f["name"] == json!(n) && f["last"] == json!(stretches.len() - 1)) {
+                        Some(f) => {
+                            f["ft"] = json!(f["ft"].as_f64().unwrap_or(0.0) + len);
+                            f["last"] = json!(stretches.len());
+                        }
+                        None => follows.push(json!({ "name": n, "ft": len, "last": stretches.len() })),
+                    }
+                }
+                stretches.push(sv);
+            }
+            let follows: Vec<Value> = follows.into_iter().map(|f| json!({ "name": f["name"], "length_mi": mi(f["ft"].as_f64().unwrap_or(0.0)) })).collect();
             let total = dist[b] + da + db;
             // Worth it only if not far longer than going straight across.
             if total < straight * 2.5 + 2.0 * MI {
-                road = Some(json!({ "distance_mi": mi(total), "off_road_mi": mi(da + db), "via": via }));
+                road = Some(json!({ "distance_mi": mi(total), "off_road_mi": mi(da + db), "via": via, "stretches": stretches, "follows": follows }));
             }
         }
     }
@@ -1998,6 +2084,110 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
         "by_road": road,
         "travel": travel(by),
         "direction": compass(from, to),
+    })
+}
+
+// ---------------------------------------------------------------------------------------
+// Rivers' banks.
+
+/// A river near a point: the nearest point of its finest curve, its width and banks there,
+/// and its feature (a river big enough to be named).
+pub struct RiverAt {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub width_ft: f64,
+    /// The middle of the channel nearest the point, and the unit normal across it there.
+    pub center: P,
+    pub across: P,
+    /// From the point to the middle of the channel (ft).
+    pub dist_ft: f64,
+}
+
+impl RiverAt {
+    /// Whether the point asked about is in the water.
+    pub fn in_water(&self) -> bool {
+        self.dist_ft < 0.5 * self.width_ft
+    }
+
+    /// The two banks across the channel (ft): on the `across` side, then the other.
+    pub fn banks(&self) -> [P; 2] {
+        let h = 0.5 * self.width_ft;
+        [[self.center[0] + self.across[0] * h, self.center[1] + self.across[1] * h], [self.center[0] - self.across[0] * h, self.center[1] - self.across[1] * h]]
+    }
+
+    /// The bank on `p`'s side, `beyond` ft out of the water, and how far `p` is from the bank
+    /// (ft; negative: in the water).
+    pub fn bank_of(&self, p: P, beyond: f64) -> (P, f64) {
+        let side = if (p[0] - self.center[0]) * self.across[0] + (p[1] - self.center[1]) * self.across[1] >= 0.0 { 1.0 } else { -1.0 };
+        let h = 0.5 * self.width_ft + beyond;
+        let b = [self.center[0] + side * self.across[0] * h, self.center[1] + side * self.across[1] * h];
+        let along = (p[0] - self.center[0]) * self.across[0] * side + (p[1] - self.center[1]) * self.across[1] * side;
+        (b, along - 0.5 * self.width_ft)
+    }
+
+    /// {id, name, width_ft, banks}: with `from`, the bank on its side first.
+    pub fn json(&self, from: Option<P>) -> Value {
+        let mut b = self.banks();
+        if let Some(p) = from
+            && (p[0] - self.center[0]) * self.across[0] + (p[1] - self.center[1]) * self.across[1] < 0.0
+        {
+            b.swap(0, 1);
+        }
+        let r = |p: P| [p[0].round(), p[1].round()];
+        json!({ "id": self.id, "name": self.name, "width_ft": self.width_ft.round(), "banks": [r(b[0]), r(b[1])] })
+    }
+}
+
+/// The river nearest `p` whose water comes within `range_ft` of it (by its finest curve, as
+/// battlemaps draw it), else None.
+pub fn river_at(world: &World, t0: &T0, p: P, range_ft: f64) -> Option<RiverAt> {
+    let net = &t0.rivers;
+    let cell = t0.cell_ft;
+    // (Distance to the water's edge, river, segment, t, steps.)
+    let mut best: Option<(f64, usize, usize, f64, usize)> = None;
+    for (ri, k) in net.segments_near(p[0] - range_ft, p[1] - range_ft, p[0] + range_ft, p[1] + range_ft, 0.0) {
+        let (r, k) = (&net.rivers[ri as usize], k as usize);
+        let n = ((r.s[k + 1] - r.s[k]) / 20.0).ceil().clamp(8.0, 2000.0) as usize;
+        for j in 0..=n {
+            let t = j as f64 / n as f64;
+            let c = r.eval(k, t, 2.5, cell);
+            let d = geom::dist(c.p, p) - 0.5 * c.w;
+            if best.is_none_or(|b| d < b.0) {
+                best = Some((d, ri as usize, k, t, n));
+            }
+        }
+    }
+    let (_, ri, k, t0_, n) = best?;
+    let r = &net.rivers[ri];
+    // Finer about the best sample.
+    let (mut bt, mut bd) = (t0_, f64::MAX);
+    for j in -10..=10 {
+        let t = (t0_ + j as f64 / (10.0 * n as f64)).clamp(0.0, 1.0);
+        let d = geom::dist(r.eval(k, t, 2.5, cell).p, p);
+        if d < bd {
+            (bt, bd) = (t, d);
+        }
+    }
+    let c = r.eval(k, bt, 2.5, cell);
+    if bd - 0.5 * c.w > range_ft {
+        return None;
+    }
+    let eps = (2.0 / (r.s[k + 1] - r.s[k]).max(1.0)).min(0.05);
+    let (a, b) = (r.eval(k, (bt - eps).max(0.0), 2.5, cell).p, r.eval(k, (bt + eps).min(1.0), 2.5, cell).p);
+    let tl = geom::dist(a, b).max(1e-9);
+    let across = [-(b[1] - a[1]) / tl, (b[0] - a[0]) / tl];
+    // Its feature: the named river whose course passes nearest.
+    let feature = t0.extra.as_ref().and_then(|e| {
+        let o = &e.overlay;
+        (0..o.features.len().min(o.shapes.len())).filter(|&i| o.features[i].kind == "river").map(|i| (o.shapes[i].distance(c.p).0, i)).filter(|&(d, _)| d <= (2.0 * cell).max(c.w)).min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, i)| &o.features[i])
+    });
+    Some(RiverAt {
+        id: feature.map(|f| f.id.clone()),
+        name: feature.map(|f| world.file.edits.renames.get(&f.id).cloned().unwrap_or_else(|| f.name.clone())),
+        width_ft: c.w,
+        center: c.p,
+        across,
+        dist_ft: bd,
     })
 }
 

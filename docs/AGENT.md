@@ -63,7 +63,8 @@ pace.
 | `was:<version>:<id>` | A settlement or site of a world upgraded to a generator that makes every town and site anew: what was made on it is kept under this id, which names nothing (`places_removed` too). |
 | `n:<id>`, `p:<id>` | An NPC, a plot point (the DM's notebook). |
 | `o:<id>`, `x:<id>`, `s:<asset>` | A battlemap object put down by hand; a clear (generated objects taken away); an uploaded sprite (an object kind). |
-| `v:<id>` | A crossing put down by hand: a bridge, ford or ferry. |
+| `v:<id>` | A crossing put down by hand: a bridge, ford or ferry; takes a name and notes like a feature. |
+| `rd:<8 hex>` | A road stretch, made from its two ends: the same across every edit that leaves the roads as generated; renamed and annotated like a feature. |
 | `h:<id>`, `g:<x>:<y>` | A plateau or pit; a block of ground brushed by hand (80 ft square, block indices). |
 
 A tool that takes a place accepts either an `id` or `x_ft` and `y_ft`.
@@ -84,8 +85,8 @@ lists come back as `{items, found}`): see [Conventions](MCP.md#conventions).
 | `list_names` | Everything that can be renamed, with current and generated names: named features; a settlement's districts, businesses, towers, underground sites and the sites in it; a building's or site's levels (`l:`) and rooms (`r:`). `{items, found}`, `limit` 200 by default (2000 at most); a kind nothing has is refused with a "did you mean"; `function` keeps one trade in a settlement. |
 | `describe_location` | What is at a place: elevation, biome, the areas it lies in, the building, district or site there, named features nearby (measured to their nearest edge or course). |
 | `features_near` | Everything named within a radius of a place, nearest first, with distance, direction and extent; `kinds` filters (districts and businesses too). |
-| `route` | Road or overland distance between two places, with travel days at normal, fast and slow pace. |
-| `list_roads` | The road network: named roads drawn in the sketch with the settlements along them, then roads between settlements and junctions (class, length, ends); filter by a place and radius, a settlement, a class, or drawn roads only. |
+| `route` | Road or overland distance between two places, with travel days at normal, fast and slow pace; by road, the stretches (`rd:`) taken and the named roads followed. |
+| `list_roads` | The road network: named roads drawn in the sketch with the settlements along them, then stretches renamed alike (one entry per name), then roads between settlements and junctions (`rd:` id, class, length, ends, name); filter by a place and radius, a settlement, a class, or drawn roads only. |
 | `get_battlemap` | The 640-ft battlemap chunk at a place: surfaces (`stairs` on steep city streets), buildings, objects with their tactical rules, and what lies near the place by square. |
 | `render_view` | A screenshot from the open app (JPEG 1024×683 by default; `width_px` 256–1536, `format` `png`; needs a visible app tab). `size_ft` is the ground across the image. About 450 shows the painted battlemap; 3000 a village; 20000 a city; 200000 a region. |
 | `focus_view` | Fly the user's view to a place. |
@@ -112,7 +113,7 @@ lists come back as `{items, found}`): see [Conventions](MCP.md#conventions).
 | `check_building_spot` | Whether a footprint is clear for a building (read-only): its point and name, or why not. |
 | `remove_buildings` | Take away buildings of the world's own, by `id`/`ids` or every one with its middle inside `within` (a polygon, box or circle: a ward to clear); every other building keeps its id. |
 | `restore_building` | Put the world's own buildings back as generated (`id` or `ids`). |
-| `place_crossing` | Put a bridge, ford or ferry down `from` one bank `to` the other (`[x_ft, y_ft]` each; 10 to 2000 ft, a ferry at least 68; `width_ft` 5 to 40, default 12; a bridge's `material` `timber` (default) or `stone`): a bridge's deck clear of the water (timber planks, or old stone on piers), a ford's bed at wading depth under stepping stones, a ferry's jetties with a raft on a rope between. With `id`, changes that one. Returns its `v:` id. |
+| `place_crossing` | Put a bridge, ford or ferry down `from` one bank `to` the other (`[x_ft, y_ft]` each; 10 to 2000 ft, a ferry at least 68; `width_ft` 5 to 40, default 12; a bridge's `material` `timber` (default) or `stone`): a bridge's deck clear of the water (timber planks, or old stone on piers), a ford's bed at wading depth under stepping stones, a ferry's jetties with a raft on a rope between. With `id`, changes that one. Returns its `v:` id, the river it crosses and both banks there (an end in the water is refused). |
 | `list_crossings`, `remove_crossings` | The crossings put down by hand (`{items, found}`, `limit` 200 by default); take some away by `id` or `ids`. |
 | `shape_ground` | Shape a battlemap's ground with a round brush, a dab (`at`, `radius_ft`) or a stroke (`path`, `width_ft`): `raise` or `lower` (`height_ft`, `hardness`), `smooth` or `restore` (`strength`). Dry ground lowered never sinks below the water beside it. Returns the blocks changed and the lowest and highest ground under it before and after. |
 | `set_plateau`, `delete_plateau` | A plateau or pit: a `poly` (or `outline`), or `around` a building, tower or site (its footprint grown by `margin_ft`), at `level_ft` above the sea or `rise_ft` above the ground there, with an `edge_ft` slope (0: a sheer cliff). With `id`, changes one; buildings on it stand at its level. |

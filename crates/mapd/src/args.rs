@@ -534,6 +534,10 @@ pub fn no_such(world: &worldgen::world::World, t0: &worldgen::t0::T0, id: &str) 
         format!("{id} is an NPC with no location")
     } else if e.plots.contains_key(id) {
         format!("{id} is a plot point, not a place")
+    } else if id.starts_with("rd:") {
+        format!("no road stretch {id} (list_roads gives the ids; a stretch whose ends a remake or sketch change moved has a new one)")
+    } else if id.starts_with("v:") {
+        format!("no crossing {id} (list_crossings gives the ids)")
     } else {
         format!("no such feature: {id}")
     }

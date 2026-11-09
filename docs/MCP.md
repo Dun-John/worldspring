@@ -130,6 +130,8 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `b:<layout>:<i>` | `b:0:57` | A building in a settlement or site |
 | `d:<layout>:<q>` | `d:0:3` | A district |
 | `t:<layout>:<k>` | `t:0:2` | A wall tower |
+| `rd:<8 hex>` | `rd:c3517b52` | A road stretch (between settlements and junctions, as `list_roads` lists them). Made from its two ends (rounded to 10 ft, either way round; stretches with the same ends told apart by length), so it stays the same across every edit that leaves the roads as generated (renames, notes, sites, buildings, objects, crossings, town edits); a remake of the world, or a sketch change that moves one of its ends, gives it a new id. Renamed and annotated like a feature |
+| `v:<id>` | `v:zbfopudy` | A crossing put down by hand (bridge, ford, ferry): renamed and annotated like a feature |
 | `<layout>` | `0` | A town's entry in `towns` (the ward editor): its layout number; its patches and corners are numbered by `get_town_plan` |
 | `u:<layout>:<k>` | `u:312:0` | An underground site: dungeon, crypt, cave, mine or lava tube |
 | `w:<layout>:<sx>:<sy>` | `w:0:2:1` | A sewer section |
@@ -222,8 +224,10 @@ A summary of the world:
 
 ### `search_features`
 Searches by name, as the places are named now (renames included). From three letters, it also finds districts and
-named businesses (inns, temples, smithies…) and wall or gate towers that have been renamed. One of `query`, `kind` or `tag`
-must be given (nothing at all is refused). A district, building or tower says its `settlement` as `{id, name}` (and its
+named businesses (inns, temples, smithies…) and wall or gate towers that have been renamed; road stretches that have been
+renamed (kind `road`, as the roads drawn in the sketch) and crossings put down by hand that have a name (kind `crossing`).
+One of `query`, `kind` or `tag` must be given (nothing at all is refused); a `kind` nothing has is refused with a "did
+you mean" and the kinds there are. A district, building or tower says its `settlement` as `{id, name}` (and its
 `site`, in a site's layout), as `get_feature` does. A building drawn by hand shows the ward of its own little layout
 (`village`), not the one it stands in. Returns `{items, found}` (`truncated: true` when `limit` cut the list); each item has its `extent`.
 
@@ -259,6 +263,8 @@ One feature in detail. What comes back depends on the feature:
 | Anything in a layout | `settlement` (and in a site's layout `site`): see Conventions. A building drawn by hand (`b:<layout>:0`) used to give its own site as `settlement`; it now gives the town it stands in (or `null`), and its site as `site` |
 | Places with NPCs or plots | `npcs`, `plots`: those at the place, at anything in its layout, at their levels and rooms; for a settlement also at its sites |
 | A building drawn by hand | `notes`, `hidden`, `npcs` and `plots` are the same under its `c:` id and its building id |
+| A road stretch (`rd:`) | `kind: "road"`, `class`, `length_mi`, `from`/`to` (as `list_roads`), `name` (renamed, or the drawn road's; else `null`), `renamed: true`, `drawn_road` `{id, name}` when it is a piece of a road drawn in the sketch, `line` (at most 40 points, ft), position halfway along, `notes`, `hidden`, `nearest_settlements` |
+| A crossing (`v:`) | `kind: "crossing"`, `crossing` (bridge, ford, ferry), ends, width, length, `material`, `name` (as given, else `Timber bridge`, `Stone bridge`, `Ford`, `Ferry`), `generated`, `notes`, `river` (as `place_crossing` gives it) |
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -296,7 +302,9 @@ What a feature contains:
 Everything that can be renamed, with ids to pass to `rename_feature`. Each entry has `id`, `kind`, `name` (as
 renamed), `generated` (the name before renames), `x_ft`/`y_ft` where it has a spot, `enter: true` for buildings and
 sites with levels, and `hidden: true` for hidden features. Returns `{items, found}`. A `kind` nothing has is refused
-with a "did you mean" and the kinds there are (`kind: no names of kind "sitee"; did you mean "site"?`).
+with a "did you mean" and the kinds there are (`kind: no names of kind "sitee"; did you mean "site"?`). Road stretches
+are listed only once renamed (kind `road`; `list_roads` gives every stretch's id); crossings put down by hand are all
+listed (kind `crossing`).
 
 | Parameter | Type | | |
 |---|---|---|---|
@@ -355,7 +363,9 @@ course (0, direction `here`, inside an area). Returns `{items, found}` (`truncat
 
 ### `route`
 The distance between two places:
-- `by_road`: road miles (plus any stretch off the road) and the settlements passed on the way;
+- `by_road`: road miles (plus any stretch off the road), the settlements passed on the way, the `stretches` taken in
+  order (`{id, class, length_mi, name?}`: `rd:` ids, a name where one was given or the stretch is a drawn road's) and
+  `follows`: the named roads followed, runs of stretches of one name joined (`{name, length_mi}`);
 - `straight_mi`: the distance as the crow flies, and its `direction`;
 - `travel`: D&D 5e travel days at normal (24 mi/day), fast (30) and slow (18) pace.
 
@@ -372,11 +382,13 @@ The distance between two places:
 
 ### `list_roads`
 The road network:
-- `named`: the roads drawn and named in the world's sketch, each with its id, name, class, length and the
-  settlements along it, in order;
-- `items`: the roads between settlements and junctions, longest first, each with its `class` (king's road, road,
-  track), `length_mi`, and its ends `from` and `to` (a settlement's `id` and `name`, or a junction's
-  `x_ft`/`y_ft`); a drawn road's pieces say which (`road`: its name, or `drawn: true`);
+- `named`: the roads drawn and named in the world's sketch, each with its id, name, class, length, the
+  settlements along it, in order, and its `stretches` (`rd:` ids); then the stretches renamed alike, one entry per
+  name: `{name, stretches (in order along it), class, length_mi, settlements}`;
+- `items`: the roads between settlements and junctions (stretches), longest first, each with its `id` (`rd:`),
+  `class` (king's road, road, track), `length_mi`, its ends `from` and `to` (a settlement's `id` and `name`, or a
+  junction's `x_ft`/`y_ft`) and `name` (renamed, else the drawn road's); a drawn road's pieces say which (`road`:
+  its name, and `road_id`; or `drawn: true`);
 - `found`: how many roads matched (`truncated: true` when `limit` cut the list).
 
 | Parameter | Type | Default | |
@@ -394,6 +406,17 @@ The road network:
 { "name": "list_roads", "arguments": { "x_ft": 2310194, "y_ft": 4127619, "radius_mi": 40, "class": "kings_road" } }
 ```
 > *"Which roads leave Bladegarden, and where do they go?"* · *"Which towns does the Gilded Roadway pass through?"*
+
+**Naming a road.** A road across country is several stretches. To name the High Road from one city to another:
+`route` between them, then one `rename_feature` per `rd:` id in `by_road.stretches` (in one `batch`), all with the
+same name. `list_roads` then gives it as one entry in `named`, `route` says it `follows` it, and search finds its
+stretches. `name: ""` takes a stretch's name off again. Only roads someone named carry a name; nothing is generated.
+
+```json
+{ "name": "batch", "arguments": { "steps": [
+  { "tool": "rename_feature", "arguments": { "id": "rd:6eaa3b7c", "name": "The High Road" } },
+  { "tool": "rename_feature", "arguments": { "id": "rd:28a39f0b", "name": "The High Road" } } ] } }
+```
 
 ### `get_battlemap`
 The 640-ft battlemap chunk (128 × 128 five-foot squares) that contains a place, for running a fight there. It
@@ -501,8 +524,9 @@ app as one notice. If a step fails, nothing is changed, and the error names the 
 > *"Name every district in the capital and give each a line of lore, all in one go."*
 
 ### `rename_feature`
-Renames anything with a name: a feature, building, district, tower, underground site, or a site's level (`l:`) or
-room (`r:`). Use `list_names` for the ids. The app shows the new names everywhere, including the level list and
+Renames anything with a name: a feature, building, district, tower, underground site, a site's level (`l:`) or
+room (`r:`), a road stretch (`rd:`, ids from `list_roads` or `route`) or a crossing put down by hand (`v:`). Use
+`list_names` for the ids. The app shows the new names everywhere, including the level list and
 the room labels inside. A building drawn by hand is one place, whether it is named by its `c:` id or its
 building id (`b:<layout>:0`): one name, one note (kept under `c:`) and one hidden mark.
 
@@ -1045,10 +1069,13 @@ into a town lays the town out anew (its gates follow its roads): draw roads befo
 Crossings put down by hand (`v:<id>`) join one bank to the other, drawn on the battlemap over what is there. A
 bridge is a walkable deck clear of the water (timber, or old stone), a ford a bed brought up to wading depth under
 stepping stones, a ferry jetties out from each end with a raft between. The ends are exactly where they are given
-(never moved).
+(never moved), but an end in a river's water is refused, naming the bank point on that side to use. A crossing takes a
+name and notes like a feature (`rename_feature`, `annotate_feature`, `get_feature` with its `v:` id); a named one is
+found by `search_features` (kind `crossing`) and listed in Notes › Gazetteer (nothing is lettered on the map).
 
 ### `list_crossings`
-Parameter: `limit` (1 to 2000, default 200; `truncated: true` when it cut the list). Returns `{items, found}`: `{id, kind, from, to, width_ft, length_ft, material?}`.
+Parameter: `limit` (1 to 2000, default 200; `truncated: true` when it cut the list). Returns `{items, found}`: `{id, kind, from, to, width_ft, length_ft, material?, name, notes?}` (`name`: as given, else
+`Timber bridge`, `Stone bridge`, `Ford` or `Ferry`).
 
 ### `place_crossing`
 | Parameter | Type | | |
@@ -1059,7 +1086,12 @@ Parameter: `limit` (1 to 2000, default 200; `truncated: true` when it cut the li
 | `material` | string | optional | A bridge's: `timber` (default) or `stone`. |
 | `id` | string | optional | A crossing to change (`v:…`): only the fields given change. Without it, a crossing with both ends within 5 ft of an existing one's (either way round) is that one: `existing: true`; a different kind, material or width is refused (give its id to change it). |
 
-Returns `{tool, id, kind, changed, crossing}`.
+Returns `{tool, id, kind, changed, crossing}` (`changed: true` when an `id` was given; `existing: true` for the same
+crossing again) and where the banks are: `river` `{id, name, width_ft, banks}` (the river it crosses, its width there,
+and the two bank points across it there, the one on `from`'s side first; `id`/`name` null for a stream too small to be
+named; `river: null` when none is within 1,000 ft), `from_bank_ft` and `to_bank_ft` (how far each end lies beyond its
+bank), and `note` when both ends are on the same side. An end in the water is refused:
+`from: (x, y) is in the water of The Red River (river:f32acc5b), 419 ft wide there: its bank on that side is at about (x, y)`.
 
 ### `remove_crossings`
 `id` or `ids` (`v:…`; all or none). A mistake names the id's place in the list (`ids[1]: no crossing v:zz`; a single `id` is `id: …`).

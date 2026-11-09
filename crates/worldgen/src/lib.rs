@@ -14,6 +14,7 @@ pub mod lod;
 pub mod park;
 pub mod payload;
 pub mod pipeline;
+pub mod roadids;
 pub mod town;
 pub mod t0;
 pub mod under;
