@@ -500,6 +500,7 @@ fn main() {
         let net = network(&t0, &standing, &gate_counts);
         realms(&world, &t0);
         islands(&world, &t0);
+        sea_lanes(&t0);
         let econ = economy(&t0);
         let drawn = drawn_roads(&world, &t0, &standing);
         let steps = stairs(&world, &t0);
@@ -1194,6 +1195,88 @@ fn islands(world: &worldgen::World, t0: &T0) {
         }
     }
     say!("  island roads: {} roads on islands; road points at open sea {sea_pts} on {sea_roads} roads; island settlements with no road (others on the island) {roadless}; islands split by roads {split}", island_roads.len());
+}
+
+/// The sea lanes: segments, miles (all and per class: busy, normal, quiet), the routed links'
+/// lengths, the share of link length within 1 mi of land (outside the last 3 mi into each port),
+/// lane points on land (but the ports' own), island ports linked, and island vs mainland ports'
+/// trade.
+fn sea_lanes(t0: &T0) {
+    use worldgen::t0::biome::Biome;
+    use worldgen::t0::{islands, sealanes};
+    let Some(extra) = t0.extra.as_ref() else { return };
+    let (w, h, cell) = (t0.biome.w, t0.biome.h, t0.cell_ft);
+    let mi = cell / 5280.0;
+    let b = |k: usize| Biome::from_u8((t0.biome.data[k] & 0xff) as u8);
+    let land: Vec<bool> = (0..w * h).map(|k| b(k) != Biome::Ocean).collect();
+    let lake: Vec<u32> = (0..w * h).map(|k| if b(k) == Biome::Lake { 0 } else { worldgen::t0::hydro::NO_LAKE }).collect();
+    let isl = islands::label(w, h, cell, &land, &lake, &t0.biome.data);
+    let lanes = &t0.sea_lanes;
+    let length = |p: &[P]| p.windows(2).map(|q| ((q[1][0] - q[0][0]).powi(2) + (q[1][1] - q[0][1]).powi(2)).sqrt()).sum::<f64>() / 5280.0;
+    let mut by = [(0usize, 0.0f64); 3];
+    for l in lanes {
+        by[l.class as usize].0 += 1;
+        by[l.class as usize].1 += length(&l.pts);
+    }
+    let total: f64 = by.iter().map(|v| v.1).sum();
+    let on_land = lanes
+        .iter()
+        .map(|l| {
+            let n = l.pts.len();
+            (0..n)
+                .filter(|&i| !((i == 0 && l.ends[0] != sealanes::JUNCTION) || (i + 1 == n && l.ends[1] != sealanes::JUNCTION)))
+                .filter(|&i| {
+                    let p = l.pts[i];
+                    let (x, y) = ((p[0] / cell).round() as usize, (p[1] / cell).round() as usize);
+                    land[y.min(h - 1) * w + x.min(w - 1)]
+                })
+                .count()
+        })
+        .sum::<usize>();
+    let links: Vec<_> = extra.economy.sea_links.iter().filter(|l| !l.cells.is_empty()).collect();
+    let mut lens: Vec<f64> = links.iter().map(|l| l.mi).collect();
+    lens.sort_by(|a, b| a.total_cmp(b));
+    // (Each link's cells walked: the miles within 1 mi of the shore, half a cell short of the
+    // nearest land cell's centre, past 3 mi from either end.)
+    let (mut near, mut open) = (0.0, 0.0);
+    for l in &links {
+        let c = &l.cells;
+        let at = |k: u32| [(k as usize % w) as f64, (k as usize / w) as f64];
+        let steps: Vec<f64> = c.windows(2).map(|q| { let (a, b) = (at(q[0]), at(q[1])); ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt() * mi }).collect();
+        let mut from = 0.0;
+        for (i, &s) in steps.iter().enumerate() {
+            let mid = from + 0.5 * s;
+            from += s;
+            if mid < 3.0 || l.mi - mid < 3.0 {
+                continue;
+            }
+            let k = c[i + 1] as usize;
+            open += s;
+            if t0.coast.data[k] as f64 - 0.5 * cell <= 5280.0 || land[k] {
+                near += s;
+            }
+        }
+    }
+    let ports: Vec<usize> = (0..t0.settlements.len()).filter(|&i| { let s = &t0.settlements[i]; s.coastal && s.tier >= worldgen::t0::settle::Tier::Town }).collect();
+    let linked = |i: usize| lanes.iter().any(|l| l.ends.contains(&(i as u32)));
+    let island_ports: Vec<usize> = ports.iter().copied().filter(|&i| isl.island_at(t0.settlements[i].cell).is_some()).collect();
+    let trade = |set: &[usize]| {
+        let v: Vec<f32> = extra.economy.places.iter().filter(|p| set.contains(&p.index)).map(|p| p.trade).collect();
+        if v.is_empty() { f32::NAN } else { v.iter().sum::<f32>() / v.len() as f32 }
+    };
+    let mainland: Vec<usize> = ports.iter().copied().filter(|i| !island_ports.contains(i)).collect();
+    let q = |f: f64| lens.get(((lens.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(0.0);
+    let straight: f64 = links.iter().map(|l| { let (a, b) = (&t0.settlements[l.ports[0] as usize], &t0.settlements[l.ports[1] as usize]); ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt() / 5280.0 }).sum();
+    let points: usize = lanes.iter().map(|l| l.pts.len()).sum();
+    say!("  sea lanes JSON: {} points, {:.1} KB", points, sealanes::overlay_json(lanes).len() as f64 / 1024.0);
+    say!("  sea lanes: {} segments, {total:.0} mi (busy {} / {:.0} mi, normal {} / {:.0} mi, quiet {} / {:.0} mi); links {} (of {}), length min/median/max {:.1}/{:.1}/{:.1} mi, routed/straight {:.2}; within 1 mi of land (past 3 mi from the ports) {:.1}%; points on land {on_land}; island ports linked {}/{}; trade island ports {:.2}, mainland ports {:.2}",
+        lanes.len(), by[0].0, by[0].1, by[1].0, by[1].1, by[2].0, by[2].1, links.len(), extra.economy.sea_links.len(), q(0.0), q(0.5), q(1.0), lens.iter().sum::<f64>() / straight.max(1e-9), 100.0 * near / open.max(1e-9),
+        island_ports.iter().filter(|&&i| linked(i)).count(), island_ports.len(), trade(&island_ports), trade(&mainland));
+    for &i in island_ports.iter().filter(|&&i| !linked(i)) {
+        let s = &t0.settlements[i];
+        let others = ports.iter().filter(|&&j| j != i && isl.island_at(t0.settlements[j].cell) == isl.island_at(s.cell)).count();
+        say!("      island port with no lane: {} at ({:.0}, {:.0}){}, {others} other ports on its island", s.tier.name(), s.x, s.y, if s.isolated { " (realm)" } else { "" });
+    }
 }
 
 fn water_line(on_water: &[[usize; 2]; 4], reasons: &[usize]) -> String {

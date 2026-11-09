@@ -15,6 +15,7 @@ pub mod islands;
 pub mod names;
 pub mod plates;
 pub mod roads;
+pub mod sealanes;
 pub mod settle;
 pub mod sketch;
 pub mod volcano;
@@ -63,6 +64,8 @@ pub struct T0 {
     pub created: Vec<CreatedSite>,
     /// The sketch's sites (by point of interest) and their options.
     pub sketched: Vec<(usize, CreatedSite)>,
+    /// The sea lanes between ports (`sealanes::lanes`; none with generated roads off).
+    pub sea_lanes: Vec<sealanes::SeaLane>,
     biome_seed: u64,
     /// mips[0] is `height`; each next level is a 2x2 box downsample.
     mips: Vec<Grid<f32>>,
@@ -607,6 +610,7 @@ impl T0 {
         for (s, &c) in settlements.iter_mut().zip(&overlay.settlement_cultures) {
             s.culture = c;
         }
+        t0.sea_lanes = sealanes::lanes(&economy.sea_links, &settlements, &land, w, h, cell);
         t0.settlements = settlements.clone();
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
@@ -622,7 +626,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), sea_lanes: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -638,6 +642,11 @@ impl T0 {
         }
         t0.rivers = rivers;
         t0
+    }
+
+    fn with_sea_lanes(mut self, sea_lanes: Vec<sealanes::SeaLane>) -> T0 {
+        self.sea_lanes = sea_lanes;
+        self
     }
 
     fn with_settlements(mut self, settlements: Vec<settle::Settlement>, pois: Vec<settle::Poi>) -> T0 {
@@ -952,9 +961,13 @@ impl T0 {
     }
 
     pub fn overlay_json(&self) -> String {
-        match &self.extra {
+        let o = match &self.extra {
             Some(e) => serde_json::to_string(&e.overlay).expect("serializable"),
             None => "{\"features\":[]}".into(),
+        };
+        match o.strip_suffix('}') {
+            Some(head) => format!("{head},\"sea_lanes\":{}}}", sealanes::overlay_json(&self.sea_lanes)),
+            None => o,
         }
     }
 
@@ -1025,6 +1038,20 @@ impl T0 {
             out.extend_from_slice(&p.y.to_le_bytes());
             out.extend_from_slice(&p.seed.to_le_bytes());
             out.extend_from_slice(&p.stroke.unwrap_or(u32::MAX).to_le_bytes());
+        }
+        // Sea lanes (optional: a blob without them reads as none): count, then per lane: class u8,
+        // flow f32, ends u32 x2, point count u32, then (x, y) f64.
+        out.extend_from_slice(&(self.sea_lanes.len() as u32).to_le_bytes());
+        for l in &self.sea_lanes {
+            out.push(l.class);
+            out.extend_from_slice(&l.flow.to_le_bytes());
+            out.extend_from_slice(&l.ends[0].to_le_bytes());
+            out.extend_from_slice(&l.ends[1].to_le_bytes());
+            out.extend_from_slice(&(l.pts.len() as u32).to_le_bytes());
+            for p in &l.pts {
+                out.extend_from_slice(&p[0].to_le_bytes());
+                out.extend_from_slice(&p[1].to_le_bytes());
+            }
         }
         out
     }
@@ -1125,6 +1152,21 @@ impl T0 {
             let stroke = u32::from_le_bytes(take(4)?.try_into().unwrap());
             pois.push(settle::Poi { kind, x, y, seed, stroke: (stroke != u32::MAX).then_some(stroke) });
         }
+        let mut sea_lanes = Vec::new();
+        if let Ok(b) = take(4) {
+            let count = u32::from_le_bytes(b.try_into().unwrap()) as usize;
+            for _ in 0..count {
+                let class = take(1)?[0];
+                let flow = f32::from_le_bytes(take(4)?.try_into().unwrap());
+                let ends = [u32::from_le_bytes(take(4)?.try_into().unwrap()), u32::from_le_bytes(take(4)?.try_into().unwrap())];
+                let npts = u32::from_le_bytes(take(4)?.try_into().unwrap()) as usize;
+                let mut pts = Vec::with_capacity(npts);
+                for _ in 0..npts {
+                    pts.push([f64::from_le_bytes(take(8)?.try_into().unwrap()), f64::from_le_bytes(take(8)?.try_into().unwrap())]);
+                }
+                sea_lanes.push(sealanes::SeaLane { pts, class, flow, ends });
+            }
+        }
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;
         Ok(Self::from_grids(
@@ -1137,7 +1179,8 @@ impl T0 {
             RiverNet::new(curves, map_w, map_h, cell_ft),
             RoadNet::new(road_curves, map_w, map_h, cell_ft),
         )
-        .with_settlements(settlements, pois))
+        .with_settlements(settlements, pois)
+        .with_sea_lanes(sea_lanes))
     }
 }
 
