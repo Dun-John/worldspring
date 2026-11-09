@@ -55,7 +55,8 @@ export interface UnderField {
 
 /** The edges between floor heights (`liftField`): (nx * res) x (ny * res), RGBA: signed distance to the nearest
  * edge (squares, + on its high side; 128 + d * LIFT_SCALE), its rise (ft / LIFT_FT), how strongly it is drawn (0
- * on ramps, rising to 1 within RAMP_TAPER of one, so the way up reads); a unused (0). Rock stays rock: cave ledges
+ * on ramps, rising to 1 within RAMP_TAPER of one, so the way up reads); a on and a texel round ramps 1 + 254 t, t how
+ * far up it (0 at the lower floor's edge; g there the ramp's rise), else 0. Rock stays rock: cave ledges
  * open onto their floors in the generator (`cave::open_ledges`), so a ledge's drop is a floor-to-floor edge. */
 export interface Lift {
   data: Uint8Array;
@@ -548,7 +549,7 @@ function liftField(it: Interior, level: number): Lift | null {
   const square = SQUARE_SITES.has(it.function);
   const R = square ? 8 : 4;
   const [w, hh] = [nx * R, ny * R];
-  if (!segs.length) return null;
+  if (!segs.length && !f.ramp.some((r) => r)) return null;
   const best = new Float32Array(w * hh).fill(Infinity);
   const dist = new Float32Array(w * hh);
   const rise = new Float32Array(w * hh);
@@ -614,6 +615,89 @@ function liftField(it: Interior, level: number): Lift | null {
       }
     }
   }
+  // Ramps, so the shader draws each as a slope: how far up it a texel is (a, 1 + 254 t: t 0 on the edge it meets the
+  // lower floor at, 1 on the higher's; spread a texel past the ramp, so filtering inside it reads only ramp texels),
+  // and on it (g) the rise between its two floors, its low 3 bits the way up (one of eight, 45 degrees each from +x,
+  // y down; one per run of ramp squares), read exactly by texelFetch (off by at most 0.6 ft as a rise).
+  const segsOf = (i: number, j: number, k: number) => {
+    const out: [number, number, number, number, number][] = [];
+    for (const [di, dj] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      const [a, b] = [i + di, j + dj];
+      if (a < 0 || b < 0 || a >= nx || b >= ny) continue;
+      const m = b * nx + a;
+      if (lv.cells[m] < 0 || f.ramp[m] || f.ft[m] === f.ft[k]) continue;
+      // (The side shared with that square, and that square's height.)
+      const [x0, y0] = [di > 0 ? i + 1 : i, dj > 0 ? j + 1 : j];
+      out.push([x0, y0, di ? x0 : x0 + 1, dj ? y0 : y0 + 1, f.ft[m]]);
+    }
+    return out;
+  };
+  const rampSides: [number, number, number, number, number, number][] = [];
+  for (let k = 0; k < nx * ny; k++) if (f.ramp[k]) for (const sg of segsOf(k % nx, Math.floor(k / nx), k)) rampSides.push([...sg, f.ft[k]]);
+  const rampT = new Float32Array(w * hh).fill(-1);
+  const rampCode = new Uint8Array(w * hh);
+  const onRamp = new Uint8Array(w * hh);
+  // (Each run: its way up from the sides it meets higher floors on, less those it meets lower ones on; its rise.)
+  const runCode = new Uint8Array(nx * ny);
+  const seen = new Uint8Array(nx * ny);
+  for (let k0 = 0; k0 < nx * ny; k0++) {
+    if (!f.ramp[k0] || seen[k0]) continue;
+    const run = [k0];
+    seen[k0] = 1;
+    let [vx, vy, lo, hi] = [0, 0, Infinity, -Infinity];
+    for (let r = 0; r < run.length; r++) {
+      const k = run[r];
+      const [i, j] = [k % nx, Math.floor(k / nx)];
+      for (const [di, dj] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+        const [a, b] = [i + di, j + dj];
+        if (a < 0 || b < 0 || a >= nx || b >= ny) continue;
+        const m = b * nx + a;
+        if (lv.cells[m] < 0) continue;
+        if (f.ramp[m]) {
+          if (!seen[m]) {
+            seen[m] = 1;
+            run.push(m);
+          }
+          continue;
+        }
+        const sgn = Math.sign(f.ft[m] - f.ft[k]);
+        [vx, vy] = [vx + sgn * di, vy + sgn * dj];
+        if (sgn < 0) lo = Math.min(lo, f.ft[m]);
+        if (sgn > 0) hi = Math.max(hi, f.ft[m]);
+      }
+    }
+    const way = (Math.round(Math.atan2(vy, vx) / (Math.PI / 4)) + 8) % 8;
+    const riseFt = lo < Infinity && hi > -Infinity ? hi - lo : lo < Infinity || hi > -Infinity ? 2 * Math.abs(f.ft[k0] - (lo < Infinity ? lo : hi)) : 0;
+    const code = Math.min(248, Math.round((riseFt / LIFT_FT) * 255 / 8) * 8) + way;
+    for (const k of run) runCode[k] = code;
+  }
+  if (rampSides.length) {
+    const segDist = (px: number, py: number, s: number[]) => Math.hypot(px - Math.min(Math.max(px, s[0]), s[2]), py - Math.min(Math.max(py, s[1]), s[3]));
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        if (!f.ramp[j * nx + i]) continue;
+        const near = rampSides.filter((s) => s[0] >= i - 3 && s[2] <= i + 4 && s[1] >= j - 3 && s[3] <= j + 4);
+        for (let ty = Math.max(0, j * R - 1); ty < Math.min(hh, (j + 1) * R + 1); ty++) {
+          for (let tx = Math.max(0, i * R - 1); tx < Math.min(w, (i + 1) * R + 1); tx++) {
+            const [px, py] = [(tx + 0.5) / R, (ty + 0.5) / R];
+            let [dLo, dHi] = [Infinity, Infinity];
+            for (const s of near) {
+              const d = segDist(px, py, s);
+              if (s[4] < s[5]) dLo = Math.min(dLo, d);
+              if (s[4] > s[5]) dHi = Math.min(dHi, d);
+            }
+            if (dLo === Infinity && dHi === Infinity) continue;
+            const k = ty * w + tx;
+            const inside = tx >= i * R && tx < (i + 1) * R && ty >= j * R && ty < (j + 1) * R;
+            if (!inside && onRamp[k]) continue;
+            if (inside) onRamp[k] = 1;
+            rampT[k] = dHi === Infinity ? 1 : dLo === Infinity ? 0 : dLo / (dLo + dHi);
+            if (inside) rampCode[k] = runCode[j * nx + i];
+          }
+        }
+      }
+    }
+  }
   let [dd, rr]: Float32Array[] = [dist, rise];
   if (!square) {
     const sigma = 0.36 * R;
@@ -624,6 +708,8 @@ function liftField(it: Interior, level: number): Lift | null {
     data[k * 4] = Math.max(1, Math.min(255, Math.round(128 + dd[k] * LIFT_SCALE)));
     data[k * 4 + 1] = Math.min(255, Math.round((rr[k] / LIFT_FT) * 255));
     data[k * 4 + 2] = Math.round(strength[k] * 255);
+    if (rampT[k] >= 0) data[k * 4 + 3] = 1 + Math.round(rampT[k] * 254);
+    if (onRamp[k]) data[k * 4 + 1] = rampCode[k];
   }
   return { data, res: R };
 }
