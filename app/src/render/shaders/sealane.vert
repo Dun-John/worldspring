@@ -13,6 +13,7 @@ flat out float vHalf;
 uniform mat3 uProjectionMatrix;
 uniform mat3 uWorldTransformMatrix;
 uniform mat3 uTransformMatrix;
+uniform float uWidth; // widening when zoomed out
 
 void main() {
     mat3 m = uWorldTransformMatrix * uTransformMatrix;
@@ -24,7 +25,7 @@ void main() {
     vec2 n = nl > 1e-12 ? nt / nl * k : vec2(0.0);
     float cls = aInfo.z;
     // Half widths (px): busy 1.0, normal 0.7, quiet 0.5.
-    float hw = cls < 0.5 ? 1.0 : (cls < 1.5 ? 0.7 : 0.5);
+    float hw = (cls < 0.5 ? 1.0 : (cls < 1.5 ? 0.7 : 0.5)) * uWidth;
     float pad = hw + 1.0;
     vLat = aInfo.x * pad;
     vS = aInfo.y;

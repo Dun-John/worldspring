@@ -500,7 +500,7 @@ fn main() {
         let net = network(&t0, &standing, &gate_counts);
         realms(&world, &t0);
         islands(&world, &t0);
-        sea_lanes(&t0);
+        sea_lanes(&t0, world.geom.spacing_ft(world.geom.first_refine_level - 1));
         sea_ferries(&world, &t0);
         let econ = economy(&t0);
         let drawn = drawn_roads(&world, &t0, &standing);
@@ -1377,7 +1377,7 @@ fn sea_ferries(world: &worldgen::world::World, t0: &T0) {
 /// lengths, the share of link length within 1 mi of land (outside the last 3 mi into each port),
 /// lane points on land (but the ports' own), island ports linked, and island vs mainland ports'
 /// trade.
-fn sea_lanes(t0: &T0) {
+fn sea_lanes(t0: &T0, world_lattice: f64) {
     use worldgen::t0::biome::Biome;
     use worldgen::t0::{islands, sealanes};
     let Some(extra) = t0.extra.as_ref() else { return };
@@ -1444,6 +1444,15 @@ fn sea_lanes(t0: &T0) {
     let q = |f: f64| lens.get(((lens.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(0.0);
     let straight: f64 = links.iter().map(|l| { let (a, b) = (&t0.settlements[l.ports[0] as usize], &t0.settlements[l.ports[1] as usize]); ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt() / 5280.0 }).sum();
     let points: usize = lanes.iter().map(|l| l.pts.len()).sum();
+    {
+        let shortest = |l: &[sealanes::SeaLane]| l.iter().map(|l| length(&l.pts)).fold(f64::MAX, f64::min);
+        let mut before = sealanes::lanes_with(&extra.economy.sea_links, &extra.settlements, &land, w, h, cell, false);
+        sealanes::clip_ports(&mut before, &|x, y| t0.sample_water(x, y) as f64 > t0.ground_at(x, y, world_lattice));
+        for l in lanes.iter().filter(|l| length(&l.pts) < 5.0) {
+            say!("    short {:.1} mi ends {:?} pts {:?}", length(&l.pts), l.ends.map(|e| e as i64), l.pts);
+        }
+        say!("  sea lanes shortest segment {:.1} mi before stub merge ({} segments) -> {:.1} mi after ({})", shortest(&before), before.len(), shortest(lanes), lanes.len());
+    }
     say!("  sea lanes JSON: {} points, {:.1} KB", points, sealanes::overlay_json(lanes).len() as f64 / 1024.0);
     say!("  sea lanes: {} segments, {total:.0} mi (busy {} / {:.0} mi, normal {} / {:.0} mi, quiet {} / {:.0} mi); links {} (of {}), length min/median/max {:.1}/{:.1}/{:.1} mi, routed/straight {:.2}; within 1 mi of land (past 3 mi from the ports) {:.1}%; points on land {on_land}; island ports linked {}/{}; trade island ports {:.2}, mainland ports {:.2}",
         lanes.len(), by[0].0, by[0].1, by[1].0, by[1].1, by[2].0, by[2].1, links.len(), extra.economy.sea_links.len(), q(0.0), q(0.5), q(1.0), lens.iter().sum::<f64>() / straight.max(1e-9), 100.0 * near / open.max(1e-9),

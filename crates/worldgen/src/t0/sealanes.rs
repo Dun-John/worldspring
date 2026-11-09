@@ -560,6 +560,16 @@ impl<'a> Router<'a> {
 /// its summed flow and class, smoothed into world-ft polylines (a port's end at its settlement's
 /// own place, which `settlements` give) whose every point lies at sea but for the ports' own.
 pub fn lanes(links: &[Link], settlements: &[Settlement], land: &[bool], w: usize, h: usize, cell_ft: f64) -> Vec<SeaLane> {
+    lanes_with(links, settlements, land, w, h, cell_ft, true)
+}
+
+/// Segments shorter than this (mi) between junctions are merged away.
+const STUB_MI: f64 = 3.0;
+/// The same for a stub to a port (a diagonal step is 3.7 cells' worth of miles on some seeds).
+const PORT_STUB_MI: f64 = 6.0;
+
+/// `lanes`, with `merge_stubs` off for comparing (a fork a few miles short of a port stays).
+pub fn lanes_with(links: &[Link], settlements: &[Settlement], land: &[bool], w: usize, h: usize, cell_ft: f64, merge_stubs: bool) -> Vec<SeaLane> {
     // The steps every link takes, with the goods over each.
     let mut step: FastMap<(u32, u32), f64> = Default::default();
     let mut port_of: BTreeMap<u32, u32> = BTreeMap::new();
@@ -606,8 +616,55 @@ pub fn lanes(links: &[Link], settlements: &[Settlement], land: &[bool], w: usize
     if segs.is_empty() {
         return Vec::new();
     }
-    // Classes by flow quantiles (by length).
     let len = |c: &[u32]| c.windows(2).map(|p| { let (a, b) = (p[0] as usize, p[1] as usize); let (dx, dy) = ((a % w) as f64 - (b % w) as f64, (a / w) as f64 - (b / w) as f64); sqrt(dx * dx + dy * dy) }).sum::<f64>();
+    // Stubs: a short segment with a junction end is contracted. Its junction moves to the other
+    // end: the segments meeting there run on along the stub (their last cells), the heaviest
+    // taking the stub's flow too. Repeated until no stub is left.
+    let mut kept: Vec<(u32, u32)> = Vec::new();
+    while merge_stubs {
+        let mi = cell_ft / 5280.0;
+        let ends_of = |c: &Vec<u32>| (c[0], *c.last().expect("cells"));
+        // (Lengths are of the cell path: a port's last stretch over land is cut at the waterline later.)
+        let drawn = |c: &Vec<u32>| len(c);
+        let Some(si) = (0..segs.len())
+            .filter(|&i| {
+                let (a, b) = ends_of(&segs[i].0);
+                a != b && !kept.contains(&(a, b)) && drawn(&segs[i].0) * mi < if port_of.contains_key(&a) || port_of.contains_key(&b) { PORT_STUB_MI } else { STUB_MI } && !(port_of.contains_key(&a) && port_of.contains_key(&b))
+            })
+            .min_by(|&x, &y| drawn(&segs[x].0).total_cmp(&drawn(&segs[y].0)).then(x.cmp(&y)))
+        else {
+            break;
+        };
+        let (stub, sflow) = segs.remove(si);
+        let (a, b) = ends_of(&stub);
+        // The junction to drop: the one that is not a port; of two junctions, the higher cell.
+        let gone = if port_of.contains_key(&a) { b } else if port_of.contains_key(&b) { a } else { a.max(b) };
+        let mut path: Vec<u32> = if stub[0] == gone { stub.clone() } else { stub.iter().rev().copied().collect() };
+        path.remove(0);
+        let keep = if gone == a { b } else { a };
+        let meets = |c: &Vec<u32>| ends_of(c).0 == gone || ends_of(c).1 == gone;
+        let heaviest = (0..segs.len()).filter(|&i| meets(&segs[i].0)).max_by(|&x, &y| segs[x].1.total_cmp(&segs[y].1).then(y.cmp(&x)));
+        // (Not where it would leave a lane starting and ending at the same place.)
+        let hook = segs.iter().any(|c| meets(&c.0) && (ends_of(&c.0).0 == keep || ends_of(&c.0).1 == keep));
+        if heaviest.is_none() || hook {
+            kept.push((a, b));
+            segs.insert(si, (stub, sflow));
+            continue;
+        }
+        for i in 0..segs.len() {
+            if !meets(&segs[i].0) {
+                continue;
+            }
+            if ends_of(&segs[i].0).1 != gone {
+                segs[i].0.reverse();
+            }
+            segs[i].0.extend_from_slice(&path);
+            if Some(i) == heaviest {
+                segs[i].1 += sflow;
+            }
+        }
+    }
+    // Classes by flow quantiles (by length).
     let mut by: Vec<(f64, f64)> = segs.iter().map(|(c, f)| (*f, len(c))).collect();
     by.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
     let total: f64 = by.iter().map(|v| v.1).sum();
@@ -642,6 +699,47 @@ pub fn lanes(links: &[Link], settlements: &[Settlement], land: &[bool], w: usize
             SeaLane { pts, class, flow: flow as f32, ends }
         })
         .collect()
+}
+
+/// Ends each port end at the waterline: from the last point of the lane that stands in water
+/// (`wet`) the way on toward the port is walked in ~100 ft steps and cut at the first dry one.
+/// A pure function of the lanes and `wet`; a few hundred samples an end.
+pub fn clip_ports(lanes: &mut [SeaLane], wet: &dyn Fn(f64, f64) -> bool) {
+    const STEP: f64 = 100.0;
+    for l in lanes.iter_mut() {
+        for end in 0..2 {
+            if l.ends[end] == JUNCTION || l.pts.len() < 2 {
+                continue;
+            }
+            if end == 0 {
+                l.pts.reverse();
+            }
+            // (The port is at the back.) The last wet point within the final few.
+            let n = l.pts.len();
+            let lo = n.saturating_sub(8);
+            if let Some(i) = (lo..n - 1).rev().find(|&i| wet(l.pts[i][0], l.pts[i][1])) {
+                let (a, b) = (l.pts[i], l.pts[i + 1]);
+                let d = sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]));
+                let steps = (d / STEP).ceil().max(1.0) as usize;
+                let mut last = a;
+                for k in 1..=steps {
+                    let t = k as f64 / steps as f64;
+                    let q = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+                    if !wet(q[0], q[1]) {
+                        break;
+                    }
+                    last = q;
+                }
+                l.pts.truncate(i + 1);
+                if last != a || l.pts.len() < 2 {
+                    l.pts.push(last);
+                }
+            }
+            if end == 0 {
+                l.pts.reverse();
+            }
+        }
+    }
 }
 
 /// Whether the straight way from `a` to `b` stays at sea (sampled every quarter cell).

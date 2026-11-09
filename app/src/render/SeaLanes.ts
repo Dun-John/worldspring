@@ -10,7 +10,12 @@ import vertex from './shaders/sealane.vert?raw';
 /** Ink: the roads' sepia, a touch lighter, reads on the sea without shouting. */
 const INK = [0.34, 0.23, 0.17];
 /** The ink's strength at full show. */
-const STRENGTH = 0.8;
+const STRENGTH = 0.9;
+/** Widths (and the dash cycle) grow as the view zooms out: x1 from tile level `WIDEN_FROM` (region
+ * zoom) in, `WIDEN_MAX` at `WIDEN_TO` (the whole map). */
+const WIDEN_FROM = 7.7;
+const WIDEN_TO = 4.5;
+const WIDEN_MAX = 1.6;
 /** A dash and its gap on screen (px), about 7:3. */
 const PERIOD_PX = 13;
 /** Mitres are cut at this factor (a sharp turn's outer corner). */
@@ -28,6 +33,7 @@ export class SeaLanes {
     uPpf: { value: 1, type: 'f32' },
     uAlpha: { value: 0, type: 'f32' },
     uPeriodPx: { value: PERIOD_PX, type: 'f32' },
+    uWidth: { value: 1, type: 'f32' },
     uInk: { value: new Float32Array(INK), type: 'vec3<f32>' },
   });
   private mesh: Mesh<Geometry, Shader> | null = null;
@@ -101,8 +107,8 @@ export class SeaLanes {
     this.container.addChild(this.mesh);
   }
 
-  /** Placed for the camera, at `fade` (1 shown, 0 faded out by zoom). */
-  update(cam: Camera, fade: number) {
+  /** Placed for the camera, at `fade` (1 shown, 0 faded out by zoom), the view at tile `level`. */
+  update(cam: Camera, fade: number, level: number) {
     this.alpha = this.on && this.mesh ? fade * STRENGTH : 0;
     this.container.visible = this.alpha > 0.002;
     if (!this.container.visible) return;
@@ -112,6 +118,10 @@ export class SeaLanes {
     const u = this.uniforms.uniforms;
     u.uPpf = cam.ppf;
     u.uAlpha = this.alpha;
+    const t = Math.min(1, Math.max(0, (WIDEN_FROM - level) / (WIDEN_FROM - WIDEN_TO)));
+    const widen = 1 + (WIDEN_MAX - 1) * t * t * (3 - 2 * t);
+    u.uWidth = widen;
+    u.uPeriodPx = PERIOD_PX * widen;
   }
 
   destroy() {

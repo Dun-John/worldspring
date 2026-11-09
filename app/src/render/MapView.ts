@@ -1283,7 +1283,7 @@ export class MapView {
       const t1 = performance.now();
       // Sea lanes from the continent to region zoom, gone before the towns' plans show.
       const level = Math.log2((this.geom!.domain_ft * this.cam.ppf * this.app.renderer.resolution) / TILE_N);
-      this.lanes?.update(this.cam, this.interior ? 0 : laneFade(level, SITE_MIN_LEVEL - LANE_FADE[0], SITE_MIN_LEVEL - LANE_FADE[1]));
+      this.lanes?.update(this.cam, this.interior ? 0 : laneFade(level, SITE_MIN_LEVEL - LANE_FADE[0], SITE_MIN_LEVEL - LANE_FADE[1]), level);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
       if (this.sewers) {

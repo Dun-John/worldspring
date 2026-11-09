@@ -613,7 +613,9 @@ impl T0 {
         for (s, &c) in settlements.iter_mut().zip(&overlay.settlement_cultures) {
             s.culture = c;
         }
-        t0.sea_lanes = sealanes::lanes(&economy.sea_links, &settlements, &land, w, h, cell);
+        let mut lanes = sealanes::lanes(&economy.sea_links, &settlements, &land, w, h, cell);
+        sealanes::clip_ports(&mut lanes, &|x, y| t0.sample_water(x, y) as f64 > t0.ground_at(x, y, lattice));
+        t0.sea_lanes = lanes;
         t0.ferries = network.ferries.clone();
         t0.settlements = settlements.clone();
         t0.base_pois = pois.len();
