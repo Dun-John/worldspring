@@ -939,6 +939,56 @@ fn raft_on(a: [f64; 2], b: [f64; 2], size: f64) -> ([f64; 2], f64, f64) {
     (at, 1.6 * w, w)
 }
 
+/// The sea ferries' landing stages a chunk sees (`t0::ferries`), as ferries are drawn: out from
+/// each landing along the ferry's line to where the water begins (the first wet square after a
+/// dry one, within `SEA_STAGE_REACH_FT`: a shelf may run dry far past the water's contour), a
+/// stage of two jetties end to end (the line between them a mooring), the ferry boat moored
+/// alongside its outer end. `hh`, `hw`: the chunk's ground and water per halo square, the halo's
+/// corner at `h0` (world ft); a chunk on either side of where the water begins finds the same.
+fn sea_ferry_shapes(t0: &T0, h0: [f64; 2], hh: &[f32], hw: &[f32]) -> Vec<CrossingShape> {
+    let size = crate::t0::roads::RoadClass::Track.width_ft().max(12.0);
+    let span = HS as f64 * SQUARE_FT;
+    let mut out = Vec::new();
+    for f in &t0.ferries {
+        for (p, q) in [(f.a, f.b), (f.b, f.a)] {
+            let r = SEA_STAGE_REACH_FT + 60.0;
+            if p[0] + r < h0[0] || p[0] - r > h0[0] + span || p[1] + r < h0[1] || p[1] - r > h0[1] + span {
+                continue;
+            }
+            let u = unit2([q[0] - p[0], q[1] - p[1]]);
+            let along = |t: f64, side: f64| [p[0] + u[0] * t - u[1] * side, p[1] + u[1] * t + u[0] * side];
+            let wet_at = |t: f64| {
+                let c = along(t, 0.0);
+                let (i, j) = (crate::core::floor((c[0] - h0[0]) / SQUARE_FT), crate::core::floor((c[1] - h0[1]) / SQUARE_FT));
+                (i >= 0.0 && j >= 0.0 && i < HS as f64 && j < HS as f64).then(|| {
+                    let k = j as usize * HS + i as usize;
+                    hw[k] > hh[k]
+                })
+            };
+            let mut prev: Option<bool> = None;
+            let mut start = None;
+            for m in 0..((SEA_STAGE_REACH_FT + 60.0) / 2.5) as usize {
+                let t = m as f64 * 2.5 - 60.0;
+                let now = wet_at(t);
+                if prev == Some(false) && now == Some(true) {
+                    start = Some(t);
+                    break;
+                }
+                prev = now;
+            }
+            let Some(t) = start else { continue };
+            let (a, b) = (along(t + JETTY_FT - 4.0, 0.0), along(t + JETTY_FT - 3.5, 0.0));
+            let (_, l, w) = raft_on(a, b, size);
+            let raft = (along(t + 2.0 * JETTY_FT - 3.5 - 0.5 * l, 0.5 * (JETTY_WIDTH_FT + w) + 1.0), l, w);
+            out.push(CrossingShape { kind: ShapeKind::Ferry, a, b, size, raft: Some(raft), dropped: false, stone: false });
+        }
+    }
+    out
+}
+
+/// How far out from a sea ferry's landing (ft) its stage may stand, where a shelf runs dry.
+const SEA_STAGE_REACH_FT: f64 = 1_200.0;
+
 /// A crossing put down by hand as decks (world ft polygons) for the map's site tiles: a
 /// bridge's; a ferry's jetties, raft and rope (a ford has none).
 pub fn hand_decks(c: &crate::world::Crossing) -> Vec<Vec<[f64; 2]>> {
@@ -1970,7 +2020,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
     }
     // A ferry's jetties and raft are decks too: planks over the water (the raft afloat).
-    for c in crossing_shapes.iter().chain(hand.iter().map(|(c, _)| c)).filter(|c| c.kind == ShapeKind::Ferry) {
+    let sea_ferries = sea_ferry_shapes(t0, [hx0, hy0], &hh, &hw);
+    for c in crossing_shapes.iter().chain(hand.iter().map(|(c, _)| c)).chain(&sea_ferries).filter(|c| c.kind == ShapeKind::Ferry) {
         let u = unit2([c.b[0] - c.a[0], c.b[1] - c.a[1]]);
         let mut decks: Vec<([f64; 2], f64, f64, f32)> = vec![
             ([c.a[0] - u[0] * 0.5 * JETTY_FT, c.a[1] - u[1] * 0.5 * JETTY_FT], JETTY_FT, JETTY_WIDTH_FT, DECK_CLEARANCE_FT),
@@ -2057,6 +2108,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             pts.push([old as u8 as f32, 0.0]);
         }
         shapes.push(VectorShape { kind: c.kind, size: (c.size / SQUARE_FT) as f32, pts });
+    }
+    // The sea ferries' landing stages: each drawn by the chunk holding its mooring.
+    for c in sea_ferries.iter().filter(|c| owns(c.a)) {
+        shapes.push(VectorShape { kind: c.kind, size: (c.size / SQUARE_FT) as f32, pts: vec![local(&c.a), local(&c.b), local(&c.raft.expect("a raft").0)] });
     }
     // Those put down by hand: drawn by the chunk owning their middle; a ford's stones (along
     // its whole line, on water) by each chunk where they fall.

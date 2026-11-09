@@ -22,6 +22,11 @@ const SHARED: f64 = 0.7;
 const ACCESS: i64 = 6;
 /// A port's water: sea cells within this many cells of it (as `economy::run` finds its sea).
 pub const PORT_REACH: i64 = 2;
+/// A sea of fewer cells is a pocket: a port beside only such water finds its sea farther off
+/// (`port_sea`).
+const POCKET: usize = 64;
+/// Ports farther apart by sea are not each other's nearest (`Router::nearest`).
+const NEAREST_MI: f64 = 1600.0;
 /// Segments at or above the upper flow quantile (by length) are busy, under the lower quiet.
 const BUSY_Q: f64 = 2.0 / 3.0;
 const QUIET_Q: f64 = 1.0 / 3.0;
@@ -96,6 +101,28 @@ fn shore_distance(w: usize, h: usize, land: &[bool]) -> Vec<f64> {
         }
     }
     d
+}
+
+/// The sea a port at cell `k` trades on (labels `sea`, cells per label `size`) and the reach
+/// (cells) its water lies within: the largest sea within `PORT_REACH`, or where that is a pocket
+/// cut off by land, the largest within `ACCESS` (the reach the routing gets out to open water by);
+/// `None` where there is only a pocket.
+pub fn port_sea(k: usize, w: usize, h: usize, sea: &[u32], size: &[usize]) -> Option<(u32, i64)> {
+    let (x, y) = ((k % w) as i64, (k / w) as i64);
+    let largest = |r: i64| {
+        (-r..=r)
+            .flat_map(|dy| (-r..=r).map(move |dx| (x + dx, y + dy)))
+            .filter(|&(i, j)| i >= 0 && j >= 0 && i < w as i64 && j < h as i64)
+            .map(|(i, j)| sea[j as usize * w + i as usize])
+            .filter(|&s| s != u32::MAX)
+            .min_by_key(|&s| (std::cmp::Reverse(size[s as usize]), s))
+    };
+    let near = largest(PORT_REACH)?;
+    if size[near as usize] >= POCKET {
+        return Some((near, PORT_REACH));
+    }
+    // (Only a pocket in reach, a lagoon inland: no port.)
+    largest(ACCESS).filter(|&s| size[s as usize] >= POCKET).map(|s| (s, ACCESS))
 }
 
 /// One grid lanes are searched over: the T0 cells (`s` 1) or blocks of 2x2 of them (`s` 2), a
@@ -352,12 +379,97 @@ impl<'a> Router<'a> {
         Router { w, h, mi, land, coarse: Level::new(w, h, 2, land, mi), fine: None }
     }
 
-    /// The sea cells within `PORT_REACH` of port cell `k` whose sea is `sea[..] == label`.
-    pub fn water(&self, k: usize, sea: &[u32], label: u32) -> Vec<u32> {
+    /// The sea cells within `r` (`port_sea`) of port cell `k` whose sea is `sea[..] == label`:
+    /// all within `PORT_REACH`, the nearest beyond it.
+    pub fn water(&self, k: usize, sea: &[u32], label: u32, r: i64) -> Vec<u32> {
         let (w, h) = (self.w as i64, self.h as i64);
         let (x, y) = ((k % self.w) as i64, (k / self.w) as i64);
-        let r = PORT_REACH;
-        (-r..=r).flat_map(|dy| (-r..=r).map(move |dx| (x + dx, y + dy))).filter(|&(i, j)| i >= 0 && j >= 0 && i < w && j < h).map(|(i, j)| (j * w + i) as u32).filter(|&c| sea[c as usize] == label).collect()
+        let all: Vec<(i64, u32)> = (-r..=r).flat_map(|dy| (-r..=r).map(move |dx| (dx, dy))).filter(|&(dx, dy)| x + dx >= 0 && y + dy >= 0 && x + dx < w && y + dy < h).map(|(dx, dy)| (dx * dx + dy * dy, ((y + dy) * w + x + dx) as u32)).filter(|&(_, c)| sea[c as usize] == label).collect();
+        let near = all.iter().map(|v| v.0).min().unwrap_or(0).max(PORT_REACH * PORT_REACH * 2);
+        all.into_iter().filter(|v| v.0 <= near).map(|v| v.1).collect()
+    }
+
+    /// Per port (its cell, its water as `water` gives it, its sea's label), up to `k` of the others
+    /// on its sea nearest by sea, nearest first: (miles over the 2x2 blocks, plain length from
+    /// port to port, other port's index). One search per port, out to `NEAREST_MI`.
+    pub fn nearest(&mut self, ports: &[(usize, Vec<u32>, u32)], k: usize) -> Vec<Vec<(f64, usize)>> {
+        let mi = self.mi;
+        let ends: Vec<Vec<(usize, f64)>> = ports
+            .iter()
+            .map(|(c, water, _)| {
+                let tree = self.access(*c, water);
+                let mut v: Vec<(usize, f64)> = tree.iter().filter_map(|(&q, &(d, _))| self.coarse.node(q as usize).filter(|&n| self.coarse.cell(n) == q as usize).map(|n| (n, d))).collect();
+                v.sort_by(|x, y| x.0.cmp(&y.0));
+                v
+            })
+            .collect();
+        // (Per node, the ports whose ways out reach it and what that costs them.)
+        let mut at: std::collections::BTreeMap<usize, Vec<(usize, f64)>> = BTreeMap::new();
+        for (p, e) in ends.iter().enumerate() {
+            for &(n, d) in e {
+                at.entry(n).or_default().push((p, d));
+            }
+        }
+        let l = &mut self.coarse;
+        let s2 = core::f64::consts::SQRT_2;
+        let mut out = Vec::with_capacity(ports.len());
+        for (p, e) in ends.iter().enumerate() {
+            l.round += 1;
+            let round = l.round;
+            let mut heap = BinaryHeap::new();
+            for &(n, d) in e {
+                if l.stamp[n] != round || d < l.cost[n] {
+                    l.stamp[n] = round;
+                    l.cost[n] = d;
+                    heap.push(Node(d, n as u32));
+                }
+            }
+            let mut best: BTreeMap<usize, f64> = BTreeMap::new();
+            let mut kth = NEAREST_MI;
+            while let Some(Node(c, n)) = heap.pop() {
+                let n = n as usize;
+                if c > l.cost[n] {
+                    continue;
+                }
+                if c > kth {
+                    break;
+                }
+                let mut changed = false;
+                for &(q, d) in at.get(&n).map(|v| &v[..]).unwrap_or(&[]) {
+                    if q != p && ports[q].2 == ports[p].2 {
+                        let e = best.entry(q).or_insert(f64::INFINITY);
+                        changed |= c + d < *e;
+                        *e = e.min(c + d);
+                    }
+                }
+                if changed && best.len() >= k {
+                    let mut v: Vec<f64> = best.values().copied().collect();
+                    v.sort_by(|a, b| a.total_cmp(b));
+                    kth = kth.min(v[k - 1]);
+                }
+                if l.steps[n] & 0x100 == 0 {
+                    l.steps[n] = l.steps_of(n, self.land);
+                }
+                let m = l.steps[n];
+                let (x, y) = ((n % l.w) as i32, (n / l.w) as i32);
+                for (i, &(dx, dy, _)) in D8.iter().enumerate() {
+                    if m & (1 << i) != 0 {
+                        let u = (y + dy) as usize * l.w + (x + dx) as usize;
+                        let nc = c + if dx != 0 && dy != 0 { s2 } else { 1.0 } * mi * l.s as f64;
+                        if l.stamp[u] != round || nc < l.cost[u] {
+                            l.stamp[u] = round;
+                            l.cost[u] = nc;
+                            heap.push(Node(nc, u as u32));
+                        }
+                    }
+                }
+            }
+            let mut v: Vec<(f64, usize)> = best.into_iter().filter(|v| v.1 <= NEAREST_MI).map(|(q, d)| (d, q)).collect();
+            v.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            v.truncate(k);
+            out.push(v);
+        }
+        out
     }
 
     /// The ways out of port cell `k` (through its water `from`) over the cells within `ACCESS`

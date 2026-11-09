@@ -7,6 +7,7 @@
 pub mod biome;
 pub mod climate;
 pub mod economy;
+pub mod ferries;
 pub mod erosion;
 pub mod features;
 pub mod flood;
@@ -66,6 +67,8 @@ pub struct T0 {
     pub sketched: Vec<(usize, CreatedSite)>,
     /// The sea lanes between ports (`sealanes::lanes`; none with generated roads off).
     pub sea_lanes: Vec<sealanes::SeaLane>,
+    /// The ferries over the sea to near islands (`ferries`; none with generated roads off).
+    pub ferries: Vec<ferries::SeaFerry>,
     biome_seed: u64,
     /// mips[0] is `height`; each next level is a 2x2 box downsample.
     mips: Vec<Grid<f32>>,
@@ -611,6 +614,7 @@ impl T0 {
             s.culture = c;
         }
         t0.sea_lanes = sealanes::lanes(&economy.sea_links, &settlements, &land, w, h, cell);
+        t0.ferries = network.ferries.clone();
         t0.settlements = settlements.clone();
         t0.base_pois = pois.len();
         t0.pois = pois.clone();
@@ -626,7 +630,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), sea_lanes: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -644,8 +648,9 @@ impl T0 {
         t0
     }
 
-    fn with_sea_lanes(mut self, sea_lanes: Vec<sealanes::SeaLane>) -> T0 {
+    fn with_sea_lanes(mut self, sea_lanes: Vec<sealanes::SeaLane>, ferries: Vec<ferries::SeaFerry>) -> T0 {
         self.sea_lanes = sea_lanes;
+        self.ferries = ferries;
         self
     }
 
@@ -1053,6 +1058,13 @@ impl T0 {
                 out.extend_from_slice(&p[1].to_le_bytes());
             }
         }
+        // Sea ferries (optional, after the lanes): count, then per ferry its landings (x, y f64 x2).
+        out.extend_from_slice(&(self.ferries.len() as u32).to_le_bytes());
+        for f in &self.ferries {
+            for v in [f.a[0], f.a[1], f.b[0], f.b[1]] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
         out
     }
 
@@ -1167,6 +1179,16 @@ impl T0 {
                 sea_lanes.push(sealanes::SeaLane { pts, class, flow, ends });
             }
         }
+        let mut sea_ferries = Vec::new();
+        if let Ok(b) = take(4) {
+            for _ in 0..u32::from_le_bytes(b.try_into().unwrap()) {
+                let mut v = [0.0f64; 4];
+                for x in &mut v {
+                    *x = f64::from_le_bytes(take(8)?.try_into().unwrap());
+                }
+                sea_ferries.push(ferries::SeaFerry { a: [v[0], v[1]], b: [v[2], v[3]] });
+            }
+        }
         let map_w = (w - 1) as f64 * cell_ft;
         let map_h = (h - 1) as f64 * cell_ft;
         Ok(Self::from_grids(
@@ -1180,7 +1202,7 @@ impl T0 {
             RoadNet::new(road_curves, map_w, map_h, cell_ft),
         )
         .with_settlements(settlements, pois)
-        .with_sea_lanes(sea_lanes))
+        .with_sea_lanes(sea_lanes, sea_ferries))
     }
 }
 

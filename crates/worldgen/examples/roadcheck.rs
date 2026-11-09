@@ -501,6 +501,7 @@ fn main() {
         realms(&world, &t0);
         islands(&world, &t0);
         sea_lanes(&t0);
+        sea_ferries(&world, &t0);
         let econ = economy(&t0);
         let drawn = drawn_roads(&world, &t0, &standing);
         let steps = stairs(&world, &t0);
@@ -1197,6 +1198,131 @@ fn islands(world: &worldgen::World, t0: &T0) {
     say!("  island roads: {} roads on islands; road points at open sea {sea_pts} on {sea_roads} roads; island settlements with no road (others on the island) {roadless}; islands split by roads {split}", island_roads.len());
 }
 
+/// The sea ferries (`t0::ferries`): how many, their water (miles), the settled islands they serve
+/// against those with bigger land with roads within `WATER_MAX_MI` (cell centres less two cells);
+/// with `FERRY_MAP=1`, the battlemap chunks out from each of the first few landings: their ferry
+/// shapes, decks and squares of road bed on the water (`FERRY_PROFILE=1`: each line's water at L10).
+fn sea_ferries(world: &worldgen::world::World, t0: &T0) {
+    use worldgen::t0::biome::Biome;
+    use worldgen::t0::{ferries, islands};
+    let (w, h, cell) = (t0.biome.w, t0.biome.h, t0.cell_ft);
+    let b = |k: usize| Biome::from_u8((t0.biome.data[k] & 0xff) as u8);
+    let land: Vec<bool> = (0..w * h).map(|k| b(k) != Biome::Ocean).collect();
+    let lake: Vec<u32> = (0..w * h).map(|k| if b(k) == Biome::Lake { 0 } else { worldgen::t0::hydro::NO_LAKE }).collect();
+    let isl = islands::label(w, h, cell, &land, &lake, &t0.biome.data);
+    let mut settled = vec![false; isl.parts.len()];
+    for s in t0.settlements.iter().filter(|s| !s.isolated) {
+        if isl.of[s.cell] != islands::NONE {
+            settled[isl.of[s.cell] as usize] = true;
+        }
+    }
+    let at_cell = |p: P| (((p[1] / cell).round() as usize).min(h - 1)) * w + ((p[0] / cell).round() as usize).min(w - 1);
+    let ferried: std::collections::BTreeSet<u32> = t0.ferries.iter().map(|f| isl.of[at_cell(f.a)]).collect();
+    let reach = (ferries::WATER_MAX_MI * 5280.0 / cell + 2.2).ceil() as i64;
+    let mut within = 0;
+    for (m, part) in isl.parts.iter().enumerate() {
+        if m as u32 == isl.mainland || !settled[m] {
+            continue;
+        }
+        let near = (0..w * h).filter(|&k| isl.of[k] == m as u32).any(|k| {
+            let (x, y) = ((k % w) as i64, (k / w) as i64);
+            (-reach..=reach).any(|dy| (-reach..=reach).any(|dx| {
+                let (i, j) = (x + dx, y + dy);
+                if i < 0 || j < 0 || i >= w as i64 || j >= h as i64 || ((dx * dx + dy * dy) as f64).sqrt() - 2.2 > ferries::WATER_MAX_MI * 5280.0 / cell {
+                    return false;
+                }
+                let o = isl.of[j as usize * w + i as usize];
+                o != islands::NONE && o != m as u32 && settled[o as usize] && isl.parts[o as usize].area_mi2 > part.area_mi2
+            }))
+        });
+        within += near as usize;
+    }
+    let mut mi: Vec<f64> = t0.ferries.iter().map(|f| f.mi()).collect();
+    mi.sort_by(|a, b| a.total_cmp(b));
+    let q = |f: f64| mi.get(((mi.len() as f64 - 1.0) * f).round() as usize).copied().unwrap_or(0.0);
+    say!("  ferries: {}, water min/median/max {:.1}/{:.1}/{:.1} mi; islands ferried {} / settled islands by bigger land with roads (cell centres within the reach + 2.2 cells) {within}", t0.ferries.len(), q(0.0), q(0.5), q(1.0), ferried.len());
+    for f in t0.ferries.iter().take(4) {
+        say!("      ferry ({:.0}, {:.0}) -> ({:.0}, {:.0}), {:.2} mi", f.a[0], f.a[1], f.b[0], f.b[1], f.mi());
+    }
+    if !std::env::var("FERRY_MAP").is_ok_and(|v| v == "1") {
+        return;
+    }
+    let g = &world.geom;
+    if std::env::var("FERRY_PROFILE").is_ok() {
+        use worldgen::core::tile::{HALO, PADDED, TileKey};
+        let level = 10u8;
+        let s = g.spacing_ft(level);
+        let size = g.tile_size_ft(level);
+        let sea = world.params().sea_level_ft;
+        let mut cache: std::collections::BTreeMap<(u32, u32), Vec<f32>> = Default::default();
+        for f in &t0.ferries {
+            let l = dist(f.a, f.b);
+            let row: String = (0..=(l / 100.0) as usize).map(|k| {
+                let t = k as f64 * 100.0;
+                let (x, y) = (f.a[0] + (f.b[0] - f.a[0]) * t / l, f.a[1] + (f.b[1] - f.a[1]) * t / l);
+                let (tx, ty) = ((x / size) as u32, (y / size) as u32);
+                let pad = cache.entry((tx, ty)).or_insert_with(|| {
+                    let mut parent: Option<Vec<f32>> = None;
+                    for lv in 0..=level {
+                        let pk = TileKey::surface(lv, tx >> (level - lv), ty >> (level - lv));
+                        parent = Some(worldgen::lod::terrain_refine::terrain_tile(world, t0, &pk, parent.as_deref()).padded.to_vec());
+                    }
+                    parent.unwrap()
+                });
+                let (ox, oy) = (tx as f64 * size, ty as f64 * size);
+                let (i, j) = (((x - ox) / s).round() as usize + HALO, ((y - oy) / s).round() as usize + HALO);
+                let z = pad[j * PADDED + i];
+                if (z as f64) < sea as f64 { '~' } else { '#' }
+            }).collect();
+            say!("        line L10 every 100 ft: {row}");
+        }
+    }
+    for f in t0.ferries.iter().take(3) {
+        // (Each chunk along the line out to where its stage may stand.)
+        let level = g.max_level;
+        let size = g.tile_size_ft(level);
+        let mut keys: Vec<(P, worldgen::core::tile::TileKey)> = Vec::new();
+        for (p, q) in [(f.a, f.b), (f.b, f.a)] {
+            let l = dist(p, q);
+            for m in 0..=13 {
+                let t = m as f64 * 100.0 - 60.0;
+                let c = [p[0] + (q[0] - p[0]) * t / l, p[1] + (q[1] - p[1]) * t / l];
+                let key = worldgen::core::tile::TileKey::surface(level, (c[0] / size) as u32, (c[1] / size) as u32);
+                if !keys.iter().any(|k| k.1 == key) {
+                    keys.push((p, key));
+                }
+            }
+        }
+        for (p, key) in keys {
+            let mut parent: Option<Vec<f32>> = None;
+            let mut tile = None;
+            for l in 0..=level {
+                let pk = worldgen::core::tile::TileKey::surface(l, key.x >> (level - l), key.y >> (level - l));
+                let t = worldgen::lod::terrain_refine::terrain_tile(world, t0, &pk, parent.as_deref());
+                parent = Some(t.padded.clone());
+                tile = Some(t);
+            }
+            let tile = tile.expect("a tile");
+            let chunk = worldgen::battlemap::generate(world, t0, &key, &tile);
+            let shapes = chunk.structures.iter().filter(|s| s.kind == worldgen::battlemap::ShapeKind::Ferry).count();
+            let hs = (chunk.road_halo.len() as f64).sqrt() as usize;
+            let (mut bed, mut deck, mut wet) = (0, 0, 0);
+            for i in 0..hs * hs {
+                if chunk.halo_water[i] > chunk.halo_height[i] - 0.01 || chunk.road_halo[i] & 0x80 != 0 {
+                    wet += 1;
+                    if chunk.road_halo[i] & 0x80 != 0 {
+                        deck += 1;
+                    } else if chunk.road_halo[i] != 0 {
+                        bed += 1;
+                    }
+                }
+            }
+            let roads = chunk.road_halo.iter().filter(|&&r| r != 0 && r & 0x80 == 0).count();
+            say!("      landing ({:.0}, {:.0}) chunk L{level} ({}, {}): ferry shapes {shapes}, water squares {wet}, decks {deck}, road bed on water {bed}, road squares {roads}", p[0], p[1], key.x, key.y);
+        }
+    }
+}
+
 /// The sea lanes: segments, miles (all and per class: busy, normal, quiet), the routed links'
 /// lengths, the share of link length within 1 mi of land (outside the last 3 mi into each port),
 /// lane points on land (but the ports' own), island ports linked, and island vs mainland ports'
@@ -1351,6 +1477,14 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
                 adj[nroad + si].push((e, d));
                 adj[e].push((nroad + si, d));
             }
+        }
+    }
+    // (A sea ferry joins the road ends at its two landings: a trip may cross it.)
+    let landing_end = |p: P| ends.iter().copied().filter(|&e| dist(spots.pos[e], p) <= 600.0).min_by(|&x, &y| dist(spots.pos[x], p).total_cmp(&dist(spots.pos[y], p)));
+    for f in &t0.ferries {
+        if let (Some(u), Some(v)) = (landing_end(f.a), landing_end(f.b)) {
+            adj[u].push((v, dist(f.a, f.b)));
+            adj[v].push((u, dist(f.a, f.b)));
         }
     }
     let dry = |a: P, b: P| {
@@ -1600,7 +1734,8 @@ fn network(t0: &T0, standing: &dyn Fn(P) -> bool, gates: &[(worldgen::t0::settle
     }
     // Dead ends: a road end at no settlement and no other road (those within 0.3 mi of a river
     // crossing counted apart: a road may end at a ferry or ford).
-    let dead: Vec<usize> = (0..nroad).filter(|&n| deg[n] == 1 && !attached(spots.pos[n])).collect();
+    let at_ferry = |p: P| t0.ferries.iter().any(|f| dist(f.a, p) <= 600.0 || dist(f.b, p) <= 600.0);
+    let dead: Vec<usize> = (0..nroad).filter(|&n| deg[n] == 1 && !attached(spots.pos[n]) && !at_ferry(spots.pos[n])).collect();
     let dead_wet = dead.iter().filter(|&&n| crossings.iter().any(|c| dist(c.0, spots.pos[n]) <= 0.3 * MI)).count();
     say!("  dead ends (no settlement, no other road): {} ({} at a river crossing)", dead.len(), dead_wet);
     for &n in dead.iter().take(top) {

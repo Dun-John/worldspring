@@ -38,6 +38,36 @@ const SEA_LOAD: f64 = 25.0;
 /// Ports linked by sea to this many of their nearest on the same sea.
 const SEA_LINKS: usize = 3;
 
+/// A pair of ports is not linked where the lanes already join them by a way at most this many
+/// times as long as the sea between them.
+const SEA_REDUNDANT: f64 = 1.25;
+
+/// Whether the links so far (`joined`: per port, the ports it is linked to and how far) join
+/// ports `a` and `b` by a way of at most `limit` miles.
+fn sea_way(joined: &[Vec<(usize, f64)>], a: usize, b: usize, limit: f64) -> bool {
+    let mut cost = vec![f64::INFINITY; joined.len()];
+    let mut heap = BinaryHeap::new();
+    cost[a] = 0.0;
+    heap.push(Node(0.0, a as u32));
+    while let Some(Node(c, v)) = heap.pop() {
+        let v = v as usize;
+        if v == b {
+            return true;
+        }
+        if c > cost[v] {
+            continue;
+        }
+        for &(u, e) in &joined[v] {
+            let nc = c + e;
+            if nc <= limit && nc < cost[u] {
+                cost[u] = nc;
+                heap.push(Node(nc, u as u32));
+            }
+        }
+    }
+    false
+}
+
 /// What each town and up earned (index into the settlements, the tier it was placed at, the
 /// parts of its wealth: hinterland food relative to the mean, industry and gateway 0-1, trade
 /// relative to the mean; then the wealth they add up to).
@@ -228,34 +258,45 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
             for &s in sea.iter().filter(|&&s| s != u32::MAX) {
                 size[s as usize] += 1;
             }
-            let ports: Vec<(u32, u32, usize)> = towns
+            let ports: Vec<(u32, u32, usize, i64)> = towns
                 .iter()
                 .filter(|&&i| settlements[i].coastal)
                 .filter_map(|&i| {
                     let k = settlements[i].cell;
-                    let (x, y) = ((k % w) as i64, (k / w) as i64);
-                    let r = sealanes::PORT_REACH;
                     // (The largest sea within reach: not a pocket of water cut off beside it.)
-                    let water = (-r..=r).flat_map(|dy| (-r..=r).map(move |dx| (x + dx, y + dy))).filter(|&(i, j)| i >= 0 && j >= 0 && i < w as i64 && j < h as i64).map(|(i, j)| sea[j as usize * w + i as usize]).filter(|&s| s != u32::MAX).min_by_key(|&s| (std::cmp::Reverse(size[s as usize]), s))?;
-                    Some((k as u32, water, i))
+                    let (water, r) = sealanes::port_sea(k, w, h, &sea, &size)?;
+                    Some((k as u32, water, i, r))
                 })
                 .collect();
-            // Each pair once, routed shortest first (a lane sees those before it).
+            // Each port's nearest by sea; each pair once, routed shortest first (a lane sees
+            // those before it), unless the lanes so far already join it by a way not much longer.
+            let mut router = (!ports.is_empty()).then(|| sealanes::Router::new(w, h, cell, inp.land));
             let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
-            for (pa, &(a, sa, _)) in ports.iter().enumerate() {
-                let mut near: Vec<(f64, u32, usize)> = ports.iter().enumerate().filter(|&(_, &(b, sb, _))| sb == sa && b != a).map(|(pb, &(b, _, _))| (len(a, b), b, pb)).collect();
-                near.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
-                for &(d, _, pb) in near.iter().take(SEA_LINKS) {
-                    pairs.push((d, pa.min(pb), pa.max(pb)));
+            if let Some(r) = router.as_mut() {
+                let list: Vec<(usize, Vec<u32>, u32)> = ports.iter().map(|&(a, sa, _, reach)| (a as usize, r.water(a as usize, &sea, sa, reach), sa)).collect();
+                for (pa, mut near) in r.nearest(&list, SEA_LINKS).into_iter().enumerate() {
+                    // (Where the blocks find none, narrow water: the nearest in a straight line.)
+                    if near.is_empty() {
+                        let (a, sa) = (ports[pa].0, ports[pa].1);
+                        near = ports.iter().enumerate().filter(|&(pb, p)| p.1 == sa && pb != pa).map(|(pb, p)| (len(a, p.0), pb)).collect();
+                        near.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+                        near.truncate(SEA_LINKS);
+                    }
+                    for (d, pb) in near {
+                        pairs.push((d, pa.min(pb), pa.max(pb)));
+                    }
                 }
             }
             pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
             pairs.dedup_by(|x, y| x.1 == y.1 && x.2 == y.2);
-            let mut router = (!pairs.is_empty()).then(|| sealanes::Router::new(w, h, cell, inp.land));
+            let mut joined: Vec<Vec<(usize, f64)>> = vec![Vec::new(); ports.len()];
             for &(d, pa, pb) in &pairs {
-                let ((a, sa, ia), (b, _, ib)) = (ports[pa], ports[pb]);
+                if sea_way(&joined, pa, pb, SEA_REDUNDANT * d) {
+                    continue;
+                }
+                let ((a, sa, ia, ra), (b, _, ib, rb)) = (ports[pa], ports[pb]);
                 let routed = router.as_mut().and_then(|r| {
-                    let (from, into) = (r.water(a as usize, &sea, sa), r.water(b as usize, &sea, sa));
+                    let (from, into) = (r.water(a as usize, &sea, sa, ra), r.water(b as usize, &sea, sa, rb));
                     r.route(a as usize, &from, b as usize, &into)
                 });
                 let (cells, way) = routed.unwrap_or((Vec::new(), d * SEA_DETOUR));
@@ -263,6 +304,8 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
                 let l = report.sea_links.len() as u32;
                 adj[id(a) as usize].push((id(b), c, l));
                 adj[id(b) as usize].push((id(a), c, l));
+                joined[pa].push((pb, way));
+                joined[pb].push((pa, way));
                 report.sea_links.push(sealanes::Link { ports: [ia as u32, ib as u32], cells, mi: way, flow: 0.0 });
             }
         }

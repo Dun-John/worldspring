@@ -99,6 +99,8 @@ pub struct Network {
     /// Each isolated realm's routes as found (its town's index, the cells' centres in ft): its
     /// track, then its villages'.
     pub realm_paths: Vec<(usize, Vec<[f64; 2]>)>,
+    /// The ferries over the sea to near islands (`ferries`; their land legs are among `roads`).
+    pub ferries: Vec<super::ferries::SeaFerry>,
 }
 
 /// A stretch's class as planned and as built, the most goods it carries (`economy::Traffic`),
@@ -282,7 +284,10 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
     let river_q = super::hydro::river_q(p.river_density);
 
     let edges = links(inp, settlements, &[RoadClass::KingsRoad, RoadClass::Road, RoadClass::Track]);
-    let (_, paths) = route(inp, settlements, &edges);
+    let (_, mut paths) = route(inp, settlements, &edges);
+    // Ferries to near islands: their land legs routed as tracks (`ferries`), each ending at its landing.
+    let ferries = super::ferries::plan(inp, settlements, &paths);
+    let landing: std::collections::BTreeMap<u32, [f64; 2]> = ferries.iter().flat_map(|f| f.legs.iter().map(|(cells, end)| (*cells.last().expect("a leg"), *end))).collect();
     // (A realm's routes are the only ones starting at an isolated place: `links`.)
     let realm_paths: Vec<(usize, Vec<[f64; 2]>)> = paths
         .iter()
@@ -299,6 +304,8 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         .filter(|(_, path, _)| path.first().is_some_and(|&f| settlements.iter().any(|s| s.isolated && s.planned >= Tier::Town && s.cell as u32 == f)))
         .flat_map(|(_, path, _)| path.windows(2).map(|p| (p[0].min(p[1]), p[0].max(p[1]))))
         .collect();
+
+    paths.extend(ferries.iter().flat_map(|f| f.legs.iter().map(|(cells, _)| (RoadClass::Track, cells.clone(), None))));
 
     // --- 3. Segments between junctions (and settlements), from the union of routes: per
     // step, the best class over it and the drawn road it is part of (the first).
@@ -476,6 +483,8 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         for (end, c) in [(0, seg[0]), (cells.len() - 1, seg[seg.len() - 1])] {
             if let Some(&s) = at_cell.get(&(c as usize)) {
                 cells[end] = [s.x / cell, s.y / cell];
+            } else if let Some(p) = landing.get(&c) {
+                cells[end] = [p[0] / cell, p[1] / cell];
             }
         }
         // A drawn road keeps to its line wherever that is dry (the cells only found its way).
@@ -606,7 +615,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
             }
         }
     }
-    Network { roads, crossings, waystations, traffic: traffic_out, realm_paths }
+    Network { roads, crossings, waystations, traffic: traffic_out, realm_paths, ferries: ferries.into_iter().map(|f| f.ferry).collect() }
 }
 
 /// Settlement pairs to join, per class: king's roads join cities, roads join towns and up,
@@ -1169,6 +1178,17 @@ impl Costs {
         let q = mids.iter().chain(std::iter::once(&nb)).map(|&m| inp.hydro.discharge[m]).fold(0f32, f32::max) as f64;
         if q >= self.river_q && (inp.hydro.discharge[i] as f64) < q { 1.0 + 3.0 * (q / (self.river_q * 20.0)).min(1.0) } else { 0.0 }
     }
+}
+
+/// Whether a road may enter cell `k` (as `route` found it; nothing before `route` has run), and
+/// what a step from `i` to its neighbour `nb` (`d` cells) costs per cell of its length, as
+/// `route` costs it but for its wobble (`ferries`' land legs).
+pub(super) fn open_cell(inp: &Inputs, k: usize) -> bool {
+    inp.fixed.get().is_some_and(|f| f.open[k])
+}
+
+pub(super) fn step_cost(inp: &Inputs, i: usize, nb: usize, d: f64) -> f64 {
+    inp.fixed.get().map_or(f64::INFINITY, |f| f.costs.ground(inp, i, nb, d) + f.costs.river(inp, i, nb, &[nb, nb]))
 }
 
 /// The drawn roads' routes: through waypoints along each line, each leg the cheapest way
