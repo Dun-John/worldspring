@@ -10,9 +10,10 @@ use crate::interior::{Item, Level};
 /// The highest rise that is a step (a dais), not a climb (ft).
 pub const STEP_FT: f32 = 3.0;
 /// Items that raise the floor under them by their `height_ft` (stood on, not walked round).
-pub const RAISING: [&str; 1] = ["dais"];
+/// (A boss chamber's platform and its sunken arena's surround, balconies, a mine's scaffold: item 117.)
+pub const RAISING: [&str; 4] = ["dais", "platform", "balcony", "scaffold"];
 /// Items that are ramps where they join floors of two heights (elsewhere a heap on the floor).
-pub const RAMPS: [&str; 1] = ["rubble_slope"];
+pub const RAMPS: [&str; 3] = ["rubble_slope", "steps", "climb_ladder"];
 /// `Level::floor`: a square's character is `FLOOR_0` + its height in half feet (`'0'`-`'~'`: 0-39 ft).
 pub const FLOOR_0: u8 = b'0';
 const MAX_HALF: f32 = (b'~' - FLOOR_0) as f32;

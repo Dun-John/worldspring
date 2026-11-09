@@ -31,6 +31,7 @@ use serde::Serialize;
 
 pub mod design;
 pub mod surface;
+mod boss;
 mod grow;
 mod kit;
 mod plan;
@@ -914,6 +915,7 @@ fn site(
                 p.put(item("stone_bridge", x0.min(x1), y0.min(y1), x0.abs_diff(x1) + 1, y0.abs_diff(y1) + 1));
             }
         }
+        p.theme = theme.key;
         furnish(&mut p, nx, ny, kind, rng);
         // (Every raised floor reached without a climb.)
         p.ramp_ledges(ny);

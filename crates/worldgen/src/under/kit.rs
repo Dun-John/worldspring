@@ -128,7 +128,7 @@ pub const PROPS: &[(&str, &str, u8, bool, f32, Option<&str>)] = &[
     ("altar", "altar", 2, true, 3.5, None),
     ("chest", "chest", 1, true, 2.5, None),
     ("hoard", "treasure hoard", 1, false, 2.0, None),
-    ("dais", "dais and throne", 1, false, 2.5, None),
+    ("dais", "dais", 0, false, 2.5, None),
     ("table", "table", 1, true, 3.0, None),
     ("cot", "cot", 0, false, 1.5, None),
     ("crate", "crates", 1, true, 4.0, None),
@@ -215,6 +215,22 @@ pub const PROPS: &[(&str, &str, u8, bool, f32, Option<&str>)] = &[
     ("stepping_stone", "stepping stones", 0, false, 0.0, Some("difficult terrain")),
     // (A dwarven hall's stone bridge: dressed slabs over a chasm, walked like floor; the chasm is laid round it.)
     ("stone_bridge", "stone bridge", 0, false, 0.0, None),
+    // R5 underground (item 117: boss chambers, `boss`). Raised floors (`interior::height::RAISING`, by their height)
+    // and the ramps up to them (`RAMPS`); a throne stands on a dais only in a ruler's theme.
+    ("throne", "throne", 1, true, 5.0, None),
+    ("platform", "raised platform", 0, false, 5.0, None),
+    ("balcony", "gallery", 0, false, 10.0, None),
+    ("scaffold", "scaffolding", 0, false, 10.0, None),
+    ("steps", "stone steps", 0, false, 0.0, None),
+    ("climb_ladder", "ladder", 0, false, 0.0, None),
+    ("wall_stub", "broken wall", 2, true, 6.0, None),
+    ("fallen_column", "fallen column", 1, false, 3.0, Some("difficult terrain")),
+    ("arcane_workbench", "arcane workbench", 1, true, 3.0, None),
+    ("arcane_focus", "arcane focus", 1, true, 4.0, Some("arcane: its power is the DM's")),
+    ("bone_mound", "bone mound", 1, false, 3.0, Some("difficult terrain")),
+    ("totem", "totem", 1, true, 8.0, None),
+    ("chair_of_office", "chief's seat", 1, true, 4.0, None),
+    ("cracked_floor", "cracked floor", 0, false, 0.0, Some("hidden (DC 14 Perception): gives way under a creature, 10 ft fall, 1d6 bludgeoning (DC 13 Dex to leap clear)")),
 ];
 
 /// Items that lie on the floor under a span: water, chasms, rubble slopes.
@@ -566,13 +582,17 @@ pub(crate) fn furnish_room(p: &mut Plan, nx: usize, ny: usize, ri: i16, rkind: &
     }
 }
 
-/// Pillars in rows, a dais and throne at the far end from the way in, a hoard beside it,
-/// braziers; caves get bones and a hoard instead of masonry.
+/// A built site's: a tactical layout and its theme's centrepiece (`boss`). A mine's (until item 117's slice 2): pillars
+/// in rows, a dais at the far end from the way in, a hoard beside it, braziers; caves get bones and a hoard instead.
 pub(crate) fn boss_chamber(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usize], kind: UnderKind, rng: &mut Pcg32) {
     let dist = p.distances(p.up, ny, None);
     let far = squares.iter().copied().max_by_key(|&k| dist[k]).unwrap_or(squares[0]);
     let (fx, fy) = (far % nx, far / nx);
     let built = !matches!(kind, UnderKind::Cave | UnderKind::LavaTube);
+    // (A built site's but a mine's: a tactical layout and its theme's centrepiece, `boss`.)
+    if built && kind != UnderKind::Mine {
+        return super::boss::built(p, nx, ny, ri, squares, rng);
+    }
     if built {
         // The dais against the far end.
         for (dx, dy) in [(0isize, 0isize), (-1, 0), (0, -1), (-1, -1), (-2, 0), (0, -2), (-2, -1), (-1, -2), (1, 0), (0, 1)] {

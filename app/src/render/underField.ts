@@ -542,6 +542,10 @@ function liftField(it: Interior, level: number): Lift | null {
   const f = floorOf(lv, nx, ny);
   if (!f) return null;
   const { v, h } = floorEdges(f, lv);
+  // (Only rubble slopes are drawn as slopes; steps and ladders are plain ramps, under their own sprites.)
+  const rubble = new Uint8Array(nx * ny);
+  for (const g of lv.furniture) if (g.kind === 'rubble_slope') for (let y = g.y; y < Math.min(ny, g.y + g.h); y++) for (let x = g.x; x < Math.min(nx, g.x + g.w); x++) rubble[y * nx + x] = 1;
+  const slope = (k: number) => f.ramp[k] && rubble[k] === 1;
   // (i, j, 1 on the line x = i over row j / 0 on y = j over column i, rise: the east or south side's minus the other's.)
   const segs: [number, number, number, number][] = [];
   for (let j = 0; j < ny; j++) for (let i = 0; i <= nx; i++) if (v[j * (nx + 1) + i]) segs.push([i, j, 1, v[j * (nx + 1) + i]]);
@@ -633,7 +637,7 @@ function liftField(it: Interior, level: number): Lift | null {
     return out;
   };
   const rampSides: [number, number, number, number, number, number][] = [];
-  for (let k = 0; k < nx * ny; k++) if (f.ramp[k]) for (const sg of segsOf(k % nx, Math.floor(k / nx), k)) rampSides.push([...sg, f.ft[k]]);
+  for (let k = 0; k < nx * ny; k++) if (slope(k)) for (const sg of segsOf(k % nx, Math.floor(k / nx), k)) rampSides.push([...sg, f.ft[k]]);
   const rampT = new Float32Array(w * hh).fill(-1);
   const rampCode = new Uint8Array(w * hh);
   const onRamp = new Uint8Array(w * hh);
@@ -675,7 +679,7 @@ function liftField(it: Interior, level: number): Lift | null {
     const segDist = (px: number, py: number, s: number[]) => Math.hypot(px - Math.min(Math.max(px, s[0]), s[2]), py - Math.min(Math.max(py, s[1]), s[3]));
     for (let j = 0; j < ny; j++) {
       for (let i = 0; i < nx; i++) {
-        if (!f.ramp[j * nx + i]) continue;
+        if (!slope(j * nx + i)) continue;
         const near = rampSides.filter((s) => s[0] >= i - 3 && s[2] <= i + 4 && s[1] >= j - 3 && s[3] <= j + 4);
         for (let ty = Math.max(0, j * R - 1); ty < Math.min(hh, (j + 1) * R + 1); ty++) {
           for (let tx = Math.max(0, i * R - 1); tx < Math.min(w, (i + 1) * R + 1); tx++) {

@@ -826,6 +826,8 @@ export class InteriorLayer {
     // the floor, the bridges over them are vector.)
     if (this.underground && (f.kind === 'sewage' || f.kind === 'lava')) return false;
     if (TERRAIN_KINDS.has(f.kind) || SPAN_KINDS.has(f.kind)) return false;
+    // (A boss chamber's platform and galleries are raised floor, drawn by the floor heights: `underField` `liftField`.)
+    if (f.kind === 'platform' || f.kind === 'balcony') return false;
     // (A key is for the DM's eyes only.)
     if (this.style.player && f.kind === 'key') return false;
     // Marks where a tunnel leaves the section: the next section is drawn on from there.

@@ -14,6 +14,9 @@
 //! `%` rubble slope; a line per level counts the squares still unreached (0 expected).
 //! LEDGES=1: over every site (not the first of each kind), raised chambers (over 3 ft) and their open sheer edges
 //! (squares of the ledge over a floor more than 3 ft lower): a total line, no plans.
+//! BOSS=1 (BOSS=list: a line per site too; BOSS=plan, with ID=: the chamber, items by letter, heights in 2.5 ft): over every built site (keeps' deep dungeons too; not caves, lava tubes, mines), the boss chamber's layout
+//! (`under::boss`, told by its items) and centrepiece by theme, a line per theme and the spread; CHECK lines where a
+//! throne stands outside keep dungeons, dungeons and dwarven halls, or a ritual circle outside temples and cults.
 use worldgen::{World, WorldFile, interior, town};
 
 fn main() {
@@ -64,6 +67,8 @@ fn main() {
     let by_theme = wanted.iter().any(|w| themes.contains(&w.as_str()));
     let ledges_only = std::env::var("LEDGES").is_ok();
     let mut ledges = Ledges::default();
+    let boss_only = std::env::var("BOSS").is_ok();
+    let mut boss = Boss::default();
     for li in first..town::layout_count(&t0) {
         if !made.is_empty() && t0.created_site(li - first).is_none() {
             continue;
@@ -71,7 +76,7 @@ fn main() {
         let l = town::layout(&world, &t0, li);
         // (The ways down, then `keep`: keeps' deep dungeons, `undercroft`: sewer sections with grates.)
         let mut sites: Vec<(String, [f64; 2], String)> = l.entrances.iter().enumerate().map(|(k, e)| (format!("u:{li}:{k}"), e.at, e.kind.name().replace(' ', "_"))).collect();
-        if wanted.iter().any(|w| w == "keep") {
+        if wanted.iter().any(|w| w == "keep") || boss_only {
             sites.extend(l.buildings.iter().filter(|b| interior::has_deep_dungeon(b)).map(|b| (format!("k:{li}:{}", b.id), town::geom::centroid(&b.poly), "keep".to_string())));
         }
         if wanted.iter().any(|w| w == "undercroft") {
@@ -95,6 +100,10 @@ fn main() {
             }
             if ledges_only {
                 ledges.add(&it, &key, ms);
+                continue;
+            }
+            if boss_only {
+                boss.add(&it, it.theme.unwrap_or(if kind == "keep" { "keep" } else { "-" }), ms);
                 continue;
             }
             // SKIP=n: the n+1-th site of each kind instead of the first.
@@ -224,6 +233,137 @@ fn main() {
     }
     if ledges_only {
         ledges.print();
+    }
+    if boss_only {
+        boss.print();
+    }
+}
+
+/// BOSS=1's counts: per theme, the boss chambers' layouts and centrepieces.
+#[derive(Default)]
+struct Boss {
+    by_theme: std::collections::BTreeMap<String, (std::collections::BTreeMap<&'static str, usize>, std::collections::BTreeMap<&'static str, usize>)>,
+    layouts: std::collections::BTreeMap<&'static str, usize>,
+    n: usize,
+    worst_ms: f64,
+}
+
+impl Boss {
+    fn add(&mut self, it: &interior::Interior, theme: &str, ms: f64) {
+        if matches!(theme, "cave" | "fungal" | "crystal" | "ice" | "flooded" | "beast_den" | "mine" | "lava_tube" | "-") {
+            return;
+        }
+        self.worst_ms = self.worst_ms.max(ms);
+        let nx = it.nx;
+        let lv = &it.levels[0];
+        let Some(ri) = lv.rooms.iter().position(|r| r.kind == worldgen::under::BOSS && r.squares > 0) else { return };
+        let room = lv.cells.iter().filter(|&&c| c == ri as i16).count();
+        let inside: Vec<&interior::Item> = lv.furniture.iter().filter(|f| lv.cells[f.y as usize * nx + f.x as usize] == ri as i16).collect();
+        let sq = |k: &str| inside.iter().filter(|f| f.kind == k).map(|f| (f.w * f.h) as usize).sum::<usize>();
+        let has = |k: &str| inside.iter().any(|f| f.kind == k);
+        let layout = if has("chasm") {
+            "chasm and bridge"
+        } else if (has("water_deep") || has("lava")) && (has("stone_bridge") || has("stepping_stone")) {
+            "moat"
+        } else if (sq("platform") + sq("balcony")) * 5 > room * 2 {
+            "sunken arena"
+        } else if has("balcony") {
+            "balconies"
+        } else if has("platform") {
+            "raised platform"
+        } else if has("wall_stub") {
+            "broken walls"
+        } else if inside.iter().filter(|f| f.kind == "pit").count() >= 2 {
+            "pits"
+        } else if sq("statue") >= 4 {
+            "statue gallery"
+        } else if sq("rubble") >= 6 {
+            "rubble ring"
+        } else if sq("pillar") >= 4 {
+            "pillar grid"
+        } else {
+            "(none)"
+        };
+        let centre = if has("throne") && has("forge") {
+            "forge-throne"
+        } else if has("throne") {
+            "throne"
+        } else if has("altar") && has("glyph") {
+            "altar+circle"
+        } else if has("arcane_workbench") {
+            "workshop"
+        } else if has("cage") {
+            "cell block"
+        } else if has("sarcophagus") {
+            if has("dais") || has("platform") { "sarcophagus on bier" } else { "sarcophagus" }
+        } else if has("chair_of_office") {
+            "chief's seat"
+        } else if has("totem") {
+            "totem+mounds"
+        } else if has("nest") {
+            "lair"
+        } else if has("long_table") {
+            "war table"
+        } else if has("hoard") {
+            "hoard"
+        } else {
+            "(none)"
+        };
+        if has("throne") && !matches!(theme, "keep" | "dungeon" | "dwarven_hall") {
+            println!("CHECK {}: a throne in a {theme}'s boss chamber", it.id);
+        }
+        if has("glyph") && !matches!(theme, "temple" | "sunken_temple" | "cult_sanctum") {
+            println!("CHECK {}: a ritual circle in a {theme}'s boss chamber", it.id);
+        }
+        // (BOSS=plan: the chamber, its items by letter beside its floor heights in 5 ft.)
+        if std::env::var("BOSS").is_ok_and(|v| v == "plan") {
+            let f = worldgen::interior::height::of_level(lv, nx);
+            let sq: Vec<usize> = (0..lv.cells.len()).filter(|&k| lv.cells[k] == ri as i16).collect();
+            let (x0, x1) = (sq.iter().map(|k| k % nx).min().unwrap_or(0), sq.iter().map(|k| k % nx).max().unwrap_or(0));
+            let (y0, y1) = (sq.iter().map(|k| k / nx).min().unwrap_or(0), sq.iter().map(|k| k / nx).max().unwrap_or(0));
+            println!("{} {theme}: {layout}, {centre}", it.id);
+            for y in y0..=y1 {
+                let mut a = String::new();
+                let mut b = String::new();
+                for x in x0..=x1 {
+                    let k = y * nx + x;
+                    if lv.cells[k] != ri as i16 {
+                        a.push(' ');
+                        b.push(' ');
+                        continue;
+                    }
+                    let top = inside.iter().rev().find(|i| x as u16 >= i.x && (x as u16) < i.x + i.w && y as u16 >= i.y && (y as u16) < i.y + i.h && !matches!(i.kind, "platform" | "balcony"));
+                    a.push(top.map_or('.', |i| match i.kind {
+                        "pillar" => 'P', "statue" => 'S', "wall_stub" => 'W', "collapsed_wall" => 'w', "fallen_column" => 'c', "rubble" => 'r', "boulder" => 'B',
+                        "pit" => 'O', "chasm" => '#', "stone_bridge" => '=', "water_deep" | "lava" => '~', "stepping_stone" => ':', "steps" => '/', "climb_ladder" => 'H',
+                        "dais" => 'd', "throne" => 'T', "altar" => 'A', "glyph" => 'g', "sarcophagus" => 'X', "hoard" => '$', "chest" => 'C', "brazier" => 'b',
+                        "banner" => 'f', "candles" => 'i', "forge" => 'F', "anvil" => 'n', "cage" => 'G', "desk" => 'D', "chains" => 'h', "arcane_workbench" => 'K',
+                        "arcane_focus" => 'o', "bookshelf" => 'L', "totem" => 't', "bone_mound" => 'M', "nest" => 'N', "bones" => 'z', "chair_of_office" => 'Y', _ => '*',
+                    }));
+                    let ft = f.ft[k];
+                    b.push(if f.ramp[k] { '/' } else if ft == 0.0 { '.' } else { (b'0' + (ft / 2.5) as u8) as char });
+                }
+                println!("  {a}   {b}");
+            }
+        }
+        // (BOSS=list: a line per chamber.)
+        if std::env::var("BOSS").is_ok_and(|v| v == "list") {
+            println!("{} {theme}: {layout}, {centre}", it.id);
+        }
+        let e = self.by_theme.entry(theme.to_string()).or_default();
+        *e.0.entry(layout).or_default() += 1;
+        *e.1.entry(centre).or_default() += 1;
+        *self.layouts.entry(layout).or_default() += 1;
+        self.n += 1;
+    }
+
+    fn print(&self) {
+        let fmt = |m: &std::collections::BTreeMap<&str, usize>| m.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", ");
+        for (t, (l, c)) in &self.by_theme {
+            println!("  {t}: layouts {} | centrepieces {}", fmt(l), fmt(c));
+        }
+        let spread: Vec<String> = self.layouts.iter().map(|(k, v)| format!("{k} {v} ({:.0}%)", 100.0 * *v as f64 / self.n.max(1) as f64)).collect();
+        println!("boss: {} built boss chambers (worst site {:.0} ms); layouts {}", self.n, self.worst_ms, spread.join(", "));
     }
 }
 

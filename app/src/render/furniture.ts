@@ -7346,25 +7346,15 @@ function treasureHoard(g: Graphics, f: InteriorItem, light: Light, rnd: () => nu
   }
 }
 
-/** Dais and throne: the top dressing of a platform raised two steps, a red runner up the steps to a throne set at the
- * back against the wall. The lower step is the raised floor itself (a 2.5-ft dais in the floor heights), its edge,
- * riser and shadow drawn with every other step and ledge by the underground shader (`ledges`); this draws the upper
- * step, the runner and the throne. */
-function daisThrone(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
-  const { len, rect, at } = frame(f, back);
+/** Dais: the top dressing of a platform raised two steps, the upper step set back from the front. The lower step is
+ * the raised floor itself (a 2.5-ft dais in the floor heights), its edge, riser and shadow drawn with every other step
+ * and ledge by the underground shader (`ledges`); this draws the upper step. What stands on it (a throne, a bier's
+ * sarcophagus) is an item of its own. */
+function dais(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
+  const { len, rect } = frame(f, back);
   const wid = Math.min(f.w, f.h);
   const top = board(g, rect(0.24, 0.04, len - 0.24, wid - 0.34), STONE, light, rnd, true, 0.05, 0);
   masonry(g, top, STONE, rnd, 0.4);
-  // The runner, down from the throne over both steps.
-  const run = quad(rect(len / 2 - 0.26, 0.7, len / 2 + 0.26, wid - 0.04), rnd, 0.004);
-  g.poly(run).fill(0x7a2420).stroke({ width: 0.018, color: INK });
-  g.poly(quad(rect(len / 2 - 0.2, 0.72, len / 2 + 0.2, wid - 0.06), rnd, 0.003)).stroke({ width: 0.014, color: GILT[1] });
-  g.moveTo(...at(len / 2 - 0.26, wid - 0.34)).lineTo(...at(len / 2 + 0.26, wid - 0.34)).stroke({ width: 0.014, color: 0x4a1410 });
-  // The throne, on the top at the back.
-  const [tx, ty] = at(len / 2 - 0.5, 0);
-  const [ux, uy] = at(len / 2 + 0.5, 1);
-  const sub: InteriorItem = { ...f, kind: 'throne', x: Math.min(tx, ux), y: Math.min(ty, uy), w: 1, h: 1 };
-  throne(g, sub, light, rnd, back);
 }
 
 /** Collapsed wall: a few big dressed blocks tumbled out of a jagged gap in a wall (`back`, the side it fell from) into
@@ -7779,7 +7769,7 @@ export function drawUnderProp(
       treasureHoard(g, f, light, rnd);
       break;
     case 'dais':
-      daisThrone(g, f, light, rnd, w);
+      dais(g, f, light, rnd, w);
       break;
     case 'collapsed_wall':
       collapsedWall(g, f, light, rnd, w);

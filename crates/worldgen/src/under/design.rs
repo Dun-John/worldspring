@@ -549,6 +549,7 @@ impl SiteDesign {
         let Some(lv) = self.levels.get(level) else { return };
         let metas = Default::default();
         let mut p = self.plan(lv, kind, nx, ny, &mut Sprites::new(&metas));
+        p.theme = if kind == UnderKind::KeepDungeon { KEEP_DUNGEON.key } else { self.theme.as_deref().and_then(|t| THEMES.iter().find(|x| x.key == t)).map_or("", |t| t.key) };
         let Some(rkind) = p.rooms.get(room).map(|r| r.kind) else { return };
         p.reserve_doors();
         let had = p.items.len();
@@ -893,12 +894,13 @@ pub fn check(it: &Interior, entry: Option<[u16; 2]>) -> Vec<Problem> {
             put(li, Some(down[1]), format!("{} ways down (one only)", down.len()), true);
         }
         // Items on floor, none on another.
-        // (A square holds one item, or terrain with a span over it: `held` bits 1 terrain, 2 span, 4 anything else.)
+        // (A square holds one item, or terrain with a span over it: `held` bits 1 terrain, 2 span, 4 anything else; a
+        // raised floor, 8 (`height::RAISING`: a dais, a platform), may bear one item.)
         let mut held = vec![0u8; nx * ny];
         let blocks = blocked_squares(&lv.furniture, nx, ny);
         let mut clash = None;
         for f in &lv.furniture {
-            let bit = if TERRAIN.contains(&f.kind) { 1 } else if SPANS.contains(&f.kind) { 2 } else { 4 };
+            let bit = if TERRAIN.contains(&f.kind) { 1 } else if SPANS.contains(&f.kind) { 2 } else if crate::interior::height::RAISING.contains(&f.kind) { 8 } else { 4 };
             for j in f.y as usize..(f.y + f.h) as usize {
                 for i in f.x as usize..(f.x + f.w) as usize {
                     if i >= nx || j >= ny {
@@ -908,7 +910,13 @@ pub fn check(it: &Interior, entry: Option<[u16; 2]>) -> Vec<Problem> {
                     if lv.cells[k] < 0 {
                         put(li, Some(k), format!("the {} at {i},{j} is in the rock", f.name), true);
                     }
-                    if held[k] & (bit | 4) != 0 || bit == 4 && held[k] != 0 {
+                    let bars = match bit {
+                        1 => 1 | 4 | 8,
+                        2 => 2 | 4 | 8,
+                        4 => 1 | 2 | 4,
+                        _ => 1 | 2 | 8,
+                    };
+                    if held[k] & bars != 0 {
                         clash.get_or_insert((k, f.name));
                     }
                     held[k] |= bit;

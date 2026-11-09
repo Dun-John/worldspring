@@ -68,6 +68,8 @@ pub(crate) struct Plan {
     /// A mine's lift shaft, the same on every level (`themes::mine`): its 2 x 2 squares' top-left corner, whether it
     /// lies north of the haulage way (its landing between them), and whether the cage stands at the top (else the foot).
     pub(crate) lift: Option<(usize, bool, bool)>,
+    /// Its site's theme key (`Theme::key`; "" unknown): the boss chamber's centrepiece goes by it (`boss`).
+    pub(crate) theme: &'static str,
 }
 
 impl Plan {
@@ -100,6 +102,7 @@ impl Plan {
             lock_first: Vec::new(),
             gaps: FastSet::default(),
             lift: None,
+            theme: "",
         }
     }
 
