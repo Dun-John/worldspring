@@ -358,9 +358,35 @@ fn ranges(kind: UnderKind) -> ((usize, usize), (SiteSize, SiteSize), (u8, u8)) {
     }
 }
 
+/// How cold the ground over a site is, for the themes that need it (ice): `Glacier` (the Ice biome: a cave there
+/// is always ice), `Snowy` (Alpine, Tundra, and the high part of Taiga: ice keeps its usual odds), else `No`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Cold {
+    #[default]
+    No,
+    Snowy,
+    Glacier,
+}
+
+/// Taiga this far above the sea (ft) counts as snowy: about the highest third of its land (see `namecheck --ice`).
+pub const TAIGA_SNOW_FT: f64 = 4750.0;
+
+/// The ground's coldness from a T0 cell's biome (the packed `T0::biome` value) and height (ft, as stored in
+/// `T0::height`, an `f32`). The one rule every caller shares (`T0::cold_at`; the namer, with its own grids).
+pub fn cold_of(biome: u32, height_ft: f32, sea_ft: f64) -> Cold {
+    use crate::t0::biome::Biome;
+    match Biome::from_u8((biome & 0xff) as u8) {
+        Biome::Ice => Cold::Glacier,
+        Biome::Alpine | Biome::Tundra => Cold::Snowy,
+        Biome::Taiga if height_ft as f64 - sea_ft > TAIGA_SNOW_FT => Cold::Snowy,
+        _ => Cold::No,
+    }
+}
+
 /// Choose what `spec` leaves open (size, levels, theme) for a site of `kind`: a generated
-/// site keeps its kind's usual theme half the time.
-fn resolve(kind: UnderKind, spec: SiteSpec, ruin: bool, rng: &mut Pcg32) -> (SiteSize, usize, &'static Theme) {
+/// site keeps its kind's usual theme half the time. Ice only over cold ground (`cold`) unless `spec` asks for it:
+/// off it, a drawn ice is drawn again among the others; in the Ice biome a cave is always ice.
+fn resolve(kind: UnderKind, spec: SiteSpec, ruin: bool, cold: Cold, rng: &mut Pcg32) -> (SiteSize, usize, &'static Theme) {
     let (_, (s0, s1), (l0, l1)) = ranges(kind);
     let size = spec.size.unwrap_or_else(|| SiteSize::ALL[s0 as usize + rng.below((s1 as usize - s0 as usize + 1) as u32) as usize]);
     let levels = spec.levels.map(|l| l.clamp(1, MAX_LEVELS)).unwrap_or_else(|| l0 + rng.below((l1 - l0 + 1) as u32) as u8) as usize;
@@ -370,6 +396,14 @@ fn resolve(kind: UnderKind, spec: SiteSpec, ruin: bool, rng: &mut Pcg32) -> (Sit
         None if own.len() > 1 && rng.next_f64() >= 0.5 => own[1 + rng.below(own.len() as u32 - 1) as usize],
         None => own.first().copied().unwrap_or(&THEMES[0]),
     };
+    let theme = if spec.theme.is_some() || (theme.key != "ice" && cold != Cold::Glacier) {
+        theme
+    } else if cold == Cold::No {
+        let others: Vec<&'static Theme> = own.iter().copied().filter(|t| t.key != "ice").collect();
+        others[rng.below(others.len() as u32) as usize]
+    } else {
+        own.iter().copied().find(|t| t.key == "ice").unwrap_or(theme)
+    };
     (size, levels, theme)
 }
 
@@ -377,10 +411,10 @@ fn resolve(kind: UnderKind, spec: SiteSpec, ruin: bool, rng: &mut Pcg32) -> (Sit
 /// draws it, from the site's seed alone (`town::rng_key` of a world's own site): so the site can
 /// be named for it before anything is laid out. `ruin`: no roof stands at the site. (A temple
 /// sunk on wet ground is still its temple here.)
-pub fn wild_theme(world: &World, poi_seed: u64, kind: UnderKind, ruin: bool) -> &'static str {
+pub fn wild_theme(world: &World, poi_seed: u64, kind: UnderKind, ruin: bool, cold: Cold) -> &'static str {
     let key = crate::core::rng::hash2(0x7369_7465_706f_6900, 0, poi_seed as i64) as i64;
     let mut rng = Pcg32::new(hash3(world.stream("under"), key, 0, kind as i64), 91);
-    resolve(kind, SiteSpec::default(), ruin, &mut rng).2.key
+    resolve(kind, SiteSpec::default(), ruin, cold, &mut rng).2.key
 }
 
 /// A `u:` site's size, read back from its grid (None for sewer sections and keep dungeons).
@@ -590,7 +624,7 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
     // (A ruin: no roof standing over it, out in the wilds.)
     let ruin = layout >= t0.settlements.len() && l.buildings.iter().all(|b| b.structure == town::Structure::Ruin);
     let age = if made.is_some() { Age::Made } else if ruin { Age::Ruin } else { Age::Living };
-    let (size, depth, theme) = resolve(e.kind, spec, ruin, &mut rng);
+    let (size, depth, theme) = resolve(e.kind, spec, ruin, t0.cold_of_layout(world, layout), &mut rng);
     // A temple on wet ground lies sunken, and about 1 in 4 of the rest (unless its maker chose the theme).
     // (A hash of the site, not the rng: the draws after it stay as they were.)
     let share = crate::core::rng::unit(hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, 0x5e4c)) < 0.25;

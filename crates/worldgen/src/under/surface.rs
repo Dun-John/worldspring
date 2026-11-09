@@ -22,13 +22,18 @@ pub const STYLE_TOWER_STUMP: u8 = 6;
 /// The theme the site behind entrance `k` of layout `layout` comes to, as `generate` resolves it
 /// (the same rng and its first draws; a temple's sinking left out). `ruin`: no roof stands there.
 pub fn theme_at(world: &World, t0: &T0, layout: usize, k: usize, kind: UnderKind, ruin: bool) -> &'static Theme {
+    theme_in(world, t0, layout, k, kind, ruin, t0.cold_of_layout(world, layout))
+}
+
+/// `theme_at` for ground of a given coldness (`Cold::Snowy` gives the theme before ice was kept to the cold: the QA metric).
+pub fn theme_in(world: &World, t0: &T0, layout: usize, k: usize, kind: UnderKind, ruin: bool, cold: crate::under::Cold) -> &'static Theme {
     let mut rng = Pcg32::new(hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, kind as i64), 91);
     let spec = layout
         .checked_sub(t0.settlements.len())
         .and_then(|p| t0.created_site(p))
         .map(|c| c.spec)
         .unwrap_or_default();
-    resolve(kind, spec, ruin, &mut rng).2
+    resolve(kind, spec, ruin, cold, &mut rng).2
 }
 
 /// The style a wild site's way down is drawn in, by its theme (None: as before, by kind).

@@ -941,7 +941,11 @@ impl Builder<'_> {
                 PoiKind::Entrance => Some((drawn_under().unwrap_or(UnderKind::Dungeon), true)),
                 _ => None,
             };
-            under.map(|(k, ruin)| crate::under::wild_theme(inp.world, p.seed, k, ruin))
+            under.map(|(k, ruin)| {
+                let (i, j) = (((p.x / inp.cell_ft).round().max(0.0) as usize).min(inp.w - 1), ((p.y / inp.cell_ft).round().max(0.0) as usize).min(inp.h - 1));
+                let cold = crate::under::cold_of(inp.biome[j * inp.w + i], inp.height[j * inp.w + i] as f32, inp.world.params().sea_level_ft);
+                crate::under::wild_theme(inp.world, p.seed, k, ruin, cold)
+            })
         };
         let drawn = |stroke: Option<u32>| stroke.and_then(|i| inp.world.file.sketch.strokes.get(i as usize)).and_then(|s| s.name.as_deref()).is_some_and(|n| !n.trim().is_empty());
         // Names first: the generated settlements and sites in their order, then those pinned or

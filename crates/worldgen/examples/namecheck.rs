@@ -17,7 +17,10 @@
 //! village, else `tier`) added by hand
 //! (Edit › Places) and a site drawn in the sketch; how many of the first's names changed (must
 //! be 0) and what the added ones were named.
-//! `cargo run --profile fast -p worldgen --example namecheck -- [--summary | --world <seed> | --hand <seed>]`
+//! `--ice`: ice caves and the cold ground (ice caves only on snowy ground, `under::cold_of`), seeds 1-8: per biome the
+//! generated caves' themes; ice outside Ice/Alpine/Tundra/high Taiga (must be 0); glacier caves; the share of Taiga land
+//! the snowy rule admits; and up to 12 caves whose theme changed (seed, `u:<layout>:0`, world ft x,y, biome, old -> new).
+//! `cargo run --profile fast -p worldgen --example namecheck -- [--summary | --world <seed> | --hand <seed> | --ice]`
 use std::collections::BTreeMap;
 
 use worldgen::core::rng::{Pcg32, hash2};
@@ -151,6 +154,9 @@ fn main() {
     }
     if let Some(i) = args.iter().position(|a| a == "--hand") {
         return hand(args.get(i + 1).map_or(3, |s| s.parse().expect("a seed")), args.get(i + 2).map_or("village", |s| s.as_str()));
+    }
+    if args.iter().any(|a| a == "--ice") {
+        return ice();
     }
     let summary = args.iter().any(|a| a == "--summary");
     // samples[culture][group]: names from every seed.
@@ -349,4 +355,59 @@ fn main() {
         n.shop_repeats,
         n.word_repeats
     );
+}
+
+/// `--ice`: see the header.
+fn ice() {
+    use worldgen::t0::biome::Biome;
+    use worldgen::t0::settle::PoiKind;
+    use worldgen::under::{Cold, UnderKind, surface::theme_in};
+    let mut per: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    let (mut outside, mut glacier, mut changed, mut caves) = (0, 0, 0, 0);
+    let (mut taiga, mut taiga_snowy) = (0usize, 0usize);
+    let mut tall: Vec<f32> = Vec::new();
+    let mut list = Vec::new();
+    for seed in 1..=8u32 {
+        let world = worldgen::World::new(worldgen::WorldFile { seed, ..Default::default() }).expect("a world");
+        let t0 = worldgen::t0::T0::generate(&world);
+        let sea = world.params().sea_level_ft;
+        for k in 0..t0.height.data.len() {
+            if Biome::from_u8((t0.biome.data[k] & 0xff) as u8) == Biome::Taiga && t0.coast.data[k] == 0.0 {
+                taiga += 1;
+                tall.push(t0.height.data[k] - sea as f32);
+                taiga_snowy += (worldgen::under::cold_of(t0.biome.data[k], t0.height.data[k], sea) == Cold::Snowy) as usize;
+            }
+        }
+        for (p, poi) in t0.pois.iter().enumerate() {
+            if poi.kind != PoiKind::Cave {
+                continue;
+            }
+            let layout = t0.settlements.len() + p;
+            let (i, j) = ((poi.x / t0.cell_ft).round() as usize, (poi.y / t0.cell_ft).round() as usize);
+            let b = Biome::from_u8((t0.biome.get(i.min(t0.biome.w - 1), j.min(t0.biome.h - 1)) & 0xff) as u8);
+            let cold = t0.cold_at(&world, poi.x, poi.y);
+            let new = theme_in(&world, &t0, layout, 0, UnderKind::Cave, true, cold).key;
+            let old = theme_in(&world, &t0, layout, 0, UnderKind::Cave, true, Cold::Snowy).key;
+            caves += 1;
+            *per.entry((b.name(), new)).or_default() += 1;
+            outside += (new == "ice" && cold == Cold::No) as usize;
+            glacier += (new == "ice" && cold == Cold::Glacier) as usize;
+            if new != old {
+                changed += 1;
+                if list.len() < 12 {
+                    list.push(format!("seed {seed} u:{layout}:0 ({:.0},{:.0}) {} {old} -> {new}", poi.x, poi.y, b.name()));
+                }
+            }
+        }
+    }
+    println!("caves {caves}; ice outside snowy ground {outside}; glacier caves {glacier}; changed {changed}");
+    println!("taiga land snowy: {taiga_snowy}/{taiga} = {:.1}%", 100.0 * taiga_snowy as f64 / taiga.max(1) as f64);
+    tall.sort_by(|a, b| a.total_cmp(b));
+    println!("taiga height above sea, ft: p33 {:.0} p50 {:.0} p67 {:.0} p90 {:.0}", tall[tall.len() / 3], tall[tall.len() / 2], tall[tall.len() * 2 / 3], tall[tall.len() * 9 / 10]);
+    for ((b, t), n) in per {
+        println!("{b:<12} {t:<10} {n}");
+    }
+    for l in list {
+        println!("{l}");
+    }
 }

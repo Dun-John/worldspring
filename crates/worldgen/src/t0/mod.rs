@@ -664,6 +664,18 @@ impl T0 {
             .collect();
     }
 
+    /// How cold the ground is at a world position (`under::cold_of` of its nearest cell).
+    pub fn cold_at(&self, world: &World, x_ft: f64, y_ft: f64) -> crate::under::Cold {
+        let (w, h) = (self.height.w, self.height.h);
+        let (i, j) = (((x_ft / self.cell_ft).round().max(0.0) as usize).min(w - 1), ((y_ft / self.cell_ft).round().max(0.0) as usize).min(h - 1));
+        crate::under::cold_of(self.biome.get(i, j), self.height.get(i, j), world.params().sea_level_ft)
+    }
+
+    /// The coldness at a wild site's point (layout `layout`: the points of interest follow the settlements); No for a town.
+    pub fn cold_of_layout(&self, world: &World, layout: usize) -> crate::under::Cold {
+        layout.checked_sub(self.settlements.len()).and_then(|p| self.pois.get(p)).map_or(Default::default(), |p| self.cold_at(world, p.x, p.y))
+    }
+
     /// The created-site options for point of interest `poi`, if it is a created one or the
     /// sketch's.
     pub fn created_site(&self, poi: usize) -> Option<CreatedSite> {

@@ -471,7 +471,7 @@ A `camp` is tents round a campfire in a levelled clearing (bedrolls, firewood, a
 a `waystation` is an inn with stables set back from the nearest road. A camp is nudged up to 70 ft so its clearing
 lies within one battlemap chunk.
 
-Anything left out of `size`, `levels` and `theme` is chosen as for the world's own sites. Towers, camps and inns
+Anything left out of `size`, `levels` and `theme` is chosen as for the world's own sites. A theme left out is never `ice` except on snowy ground (Ice, Alpine, Tundra and high Taiga), where a cave in the Ice biome is always ice; asking for `ice` works anywhere. Towers, camps and inns
 have nothing underground, so they take none of them. Themes by kind of site:
 
 | Kind | Themes (the first is the usual one) |

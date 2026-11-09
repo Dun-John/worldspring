@@ -1493,7 +1493,7 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
                 continue;
             }
             let b = Biome::from_u8((inp.biome[k] & 0xff) as u8);
-            if matches!(b, Biome::Ice | Biome::SaltFlat | Biome::Swamp) {
+            if matches!(b, Biome::SaltFlat | Biome::Swamp) || (b == Biome::Ice && kind == PoiKind::Mine) {
                 continue;
             }
             let (x, y) = ((k % w) as f64 * cell, (k / w) as f64 * cell);
@@ -1542,7 +1542,8 @@ fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
 /// are passed over (the count of ruins stays: another try takes the place).
 fn dwarven_ground(inp: &Inputs, k: usize, seed: u64) -> bool {
     let world = inp.world;
-    if crate::under::wild_theme(world, seed, crate::town::sites::ruin_under(world, seed), true) != "dwarven_hall" {
+    // (Never a cave: the cold only matters to ice.)
+    if crate::under::wild_theme(world, seed, crate::town::sites::ruin_under(world, seed), true, crate::under::Cold::No) != "dwarven_hall" {
         return true;
     }
     let (w, h, sea) = (inp.w, inp.h, world.params().sea_level_ft);
