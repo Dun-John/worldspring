@@ -152,6 +152,8 @@ pub struct Inputs<'a> {
     pub routes: std::cell::RefCell<Vec<(RouteKey, Option<Vec<u32>>)>>,
     /// What `route` needs of the inputs alone, built on its first call.
     pub fixed: std::cell::OnceCell<RouteFixed>,
+    /// Per cell, its land mass (`islands::label`), built on first use: no link crosses the sea.
+    pub masses: std::cell::OnceCell<super::islands::Islands>,
 }
 
 /// The per-cell tables `route` reads, the same for every call on one `Inputs`.
@@ -169,6 +171,10 @@ impl Inputs<'_> {
     /// The drawn roads' routes (found on first use; they depend on no settlement).
     pub fn pre(&self) -> &DrawnRoutes {
         self.pre.get_or_init(|| drawn_routes(self))
+    }
+    /// The land masses (per cell: `of`, `super::islands::NONE` at sea).
+    pub fn masses(&self) -> &super::islands::Islands {
+        self.masses.get_or_init(|| super::islands::label(self.w, self.h, self.cell_ft, self.land, &self.hydro.lake_of, self.biome))
     }
 }
 
@@ -378,7 +384,7 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         }
         let cities: Vec<(usize, &Settlement)> = settlements.iter().enumerate().filter(|(_, s)| s.tier >= Tier::City).collect();
         let by_tier: Vec<Settlement> = settlements.iter().map(|s| Settlement { planned: s.tier, ..s.clone() }).collect();
-        let pairs = if cities.len() >= 2 { link_edges(&by_tier, &[RoadClass::KingsRoad], w, cell) } else { Vec::new() };
+        let pairs = if cities.len() >= 2 { link_edges(&by_tier, &[RoadClass::KingsRoad], w, cell, None) } else { Vec::new() };
         let mut src_of: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
         for &(a, b, _) in &pairs {
             src_of.entry(a).or_default().push(b);
@@ -606,8 +612,11 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
 /// Settlement pairs to join, per class: king's roads join cities, roads join towns and up,
 /// tracks join everything. Each class is a relative-neighbourhood graph (no third place
 /// closer to both ends) plus a minimum spanning tree so its members stay connected.
-fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell: f64) -> Vec<(usize, usize, RoadClass)> {
+/// `mass`: per settlement, its land mass, and the mainland's; links join only those on one (with
+/// `None`, all), and an island's tracks join all its places.
+fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell: f64, mass: Option<(&[u32], u32)>) -> Vec<(usize, usize, RoadClass)> {
     let ns = settlements.len();
+    let one = |a: usize, b: usize| mass.is_none_or(|(m, _)| m[a] == m[b]);
     let d = |a: usize, b: usize| {
         // On the settlements' cells, not where they stand: snapping to water moves a settlement after
         // the previews, which must not reorder the links (the route memo is keyed on their order).
@@ -641,14 +650,14 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell:
         for (ia, &a) in members.iter().enumerate() {
             for &b in &members[ia + 1..] {
                 let dab = d(a, b);
-                if dab < max_link {
+                if dab < max_link && one(a, b) {
                     pairs.push((dab, a, b));
                 }
             }
         }
         pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
         for &(dab, a, b) in &pairs {
-            if members.iter().all(|&c| c == a || c == b || d(a, c).max(d(b, c)) >= dab) {
+            if members.iter().all(|&c| c == a || c == b || !one(a, c) || d(a, c).max(d(b, c)) >= dab) {
                 add(a, b, &mut edges);
             }
         }
@@ -660,20 +669,61 @@ fn link_edges(settlements: &[Settlement], classes: &[RoadClass], w: usize, cell:
                 add(a, b, &mut edges);
             }
         }
-        // (A town or city farther than that from any other still has a road, to the nearest.)
+        // (A town or city farther than that from any other still has a road, to the nearest on
+        // its land.)
         if class != RoadClass::Track {
             for &a in &members {
                 if edges.iter().any(|e| e.0 == a || e.1 == a) {
                     continue;
                 }
-                if let Some(&b) = members.iter().filter(|&&b| b != a).min_by(|&&x, &&y| d(a, x).total_cmp(&d(a, y)).then(x.cmp(&y))) {
+                if let Some(&b) = members.iter().filter(|&&b| b != a && one(a, b)).min_by(|&&x, &&y| d(a, x).total_cmp(&d(a, y)).then(x.cmp(&y))) {
                     add(a, b, &mut edges);
                 }
             }
         }
+        if class == RoadClass::Track
+            && let Some((m, mainland)) = mass
+        {
+            island_tracks(&members, m, mainland, &d, &mut edges);
+        }
     }
 
     edges
+}
+
+/// An island's places the links so far leave in more than one group: joined by tracks, the
+/// nearest pair between two groups first, however far (`members`: those on tracks; `mass`: per
+/// settlement, its land mass).
+fn island_tracks(members: &[usize], mass: &[u32], mainland: u32, d: &dyn Fn(usize, usize) -> f64, edges: &mut Vec<(usize, usize, RoadClass)>) {
+    let mut parent: Vec<usize> = (0..mass.len()).collect();
+    fn find(p: &mut [usize], mut x: usize) -> usize {
+        while p[x] != x {
+            p[x] = p[p[x]];
+            x = p[x];
+        }
+        x
+    }
+    for &(a, b, _) in edges.iter() {
+        let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+        parent[ra] = rb;
+    }
+    let on: Vec<usize> = members.iter().copied().filter(|&a| mass[a] != mainland && mass[a] != super::islands::NONE).collect();
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (ia, &a) in on.iter().enumerate() {
+        for &b in &on[ia + 1..] {
+            if mass[a] == mass[b] {
+                pairs.push((d(a, b), a, b));
+            }
+        }
+    }
+    pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+    for (_, a, b) in pairs {
+        let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+        if ra != rb {
+            parent[ra] = rb;
+            edges.push((a.min(b), a.max(b), RoadClass::Track));
+        }
+    }
 }
 
 /// The links to route for these classes: the planned ones (`link_edges`) less those a drawn
@@ -688,7 +738,13 @@ pub fn links(inp: &Inputs, settlements: &[Settlement], classes: &[RoadClass]) ->
     let beside: Vec<Vec<usize>> = settlements.iter().map(|s| inp.drawn.iter().enumerate().filter(|(_, d)| d.class.is_some() && line_dist(at(s), &d.pts) <= snap).map(|(i, _)| i).collect()).collect();
     let barriers: Vec<&Drawn> = inp.drawn.iter().filter(|d| d.class.is_none()).collect();
     // With generated roads off, only the drawn roads and their spurs.
-    let planned = if inp.world.file.params.generated_roads { link_edges(settlements, classes, inp.w, inp.cell_ft) } else { Vec::new() };
+    let planned = if inp.world.file.params.generated_roads {
+        let m = inp.masses();
+        let mass: Vec<u32> = settlements.iter().map(|s| m.of[s.cell]).collect();
+        link_edges(settlements, classes, inp.w, inp.cell_ft, Some((&mass, m.mainland)))
+    } else {
+        Vec::new()
+    };
     let mut out: Vec<Link> = planned
         .into_iter()
         .filter(|&(a, b, _)| !beside[a].iter().any(|d| beside[b].contains(d)) && !barriers.iter().any(|d| crosses(at(&settlements[a]), at(&settlements[b]), &d.pts)))
@@ -1384,8 +1440,11 @@ pub fn route(inp: &Inputs, settlements: &[Settlement], links: &[Link]) -> (Vec<u
                     r * (1.0 + 0.4 * off)
                 };
                 let toward = |cells: &mut dyn Iterator<Item = usize>| cells.map(|k| (d(k), k)).min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))).map(|m| m.1);
-                let any = toward(&mut (0..outside.len()).filter(|&k| outside[k]));
-                let king = toward(&mut (0..outside.len()).filter(|&k| outside[k] && road_class[k] == RoadClass::KingsRoad as u8));
+                // (On the realm's own land: not to an island's roads across the sea.)
+                let mass = &inp.masses().of;
+                let ours = |k: usize| outside[k] && mass[k] == mass[from];
+                let any = toward(&mut (0..outside.len()).filter(|&k| ours(k)));
+                let king = toward(&mut (0..outside.len()).filter(|&k| ours(k) && road_class[k] == RoadClass::KingsRoad as u8));
                 let natural = match (king, any) {
                     (Some(kc), Some(ac)) if d(kc) <= d(ac) + 15.0 * 5280.0 / cell => Some(kc),
                     _ => any,
