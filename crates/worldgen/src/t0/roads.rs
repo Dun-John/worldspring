@@ -530,6 +530,8 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
     };
     // Settlements and how far round them a junction stays put (towns' roads end at their edge).
     let towns: Vec<([f64; 2], f64)> = settlements.iter().map(|s| ([s.x, s.y], crate::town::road_trim_radius(s.tier, s.population).max(0.15 * cell))).collect();
+    // (Routes laid across each other meet where they cross.)
+    join_crossings(&mut roads, &towns, cell);
     drop_parallel(&mut roads, &towns);
     drop_shortcuts(&mut roads, &towns);
     join_through(&mut roads, &towns, cell, &dry_ft);
@@ -903,6 +905,86 @@ fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 /// Whether segment a–b crosses the polyline.
+/// Two roads that cross away from settlements (routes laid across each other between grid
+/// cells, never sharing one) meet there: both are cut at the crossing, a junction of four arms
+/// that the passes after square (a crossroads, or Ts) or drop. Drawn roads are left as they are.
+/// Segments are bucketed by `cell` squares, O(segments).
+fn join_crossings(roads: &mut Vec<RoadPath>, towns: &[([f64; 2], f64)], cell: f64) {
+    let mut keyed: Vec<((i64, i64), usize, usize)> = Vec::new();
+    for (ri, r) in roads.iter().enumerate().filter(|(_, r)| r.stroke.is_none() && r.pts.len() >= 2) {
+        for k in 0..r.pts.len() - 1 {
+            let (a, b) = (r.pts[k], r.pts[k + 1]);
+            let (x0, x1) = (crate::core::floor(a[0].min(b[0]) / cell) as i64, crate::core::floor(a[0].max(b[0]) / cell) as i64);
+            let (y0, y1) = (crate::core::floor(a[1].min(b[1]) / cell) as i64, crate::core::floor(a[1].max(b[1]) / cell) as i64);
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    keyed.push(((x, y), ri, k));
+                }
+            }
+        }
+    }
+    keyed.sort_unstable();
+    let mut cuts: Vec<Vec<(f64, [f64; 2])>> = vec![Vec::new(); roads.len()];
+    let side = |p: [f64; 2], q: [f64; 2], r: [f64; 2]| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+    let mut i = 0;
+    while i < keyed.len() {
+        let mut e = i;
+        while e < keyed.len() && keyed[e].0 == keyed[i].0 {
+            e += 1;
+        }
+        for u in i..e {
+            for v in u + 1..e {
+                let ((_, ra, ka), (_, rb, kb)) = (keyed[u], keyed[v]);
+                if ra == rb {
+                    continue;
+                }
+                let (a, b, c, d) = (roads[ra].pts[ka], roads[ra].pts[ka + 1], roads[rb].pts[kb], roads[rb].pts[kb + 1]);
+                let (d1, d2, d3, d4) = (side(a, b, c), side(a, b, d), side(c, d, a), side(c, d, b));
+                if d1 * d2 >= 0.0 || d3 * d4 >= 0.0 {
+                    continue;
+                }
+                let t = d3 / (d3 - d4);
+                let x = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+                // (Not in a settlement, nor at a road's end: a junction is there already.)
+                let at_end = |r: &RoadPath| dist(x, r.pts[0]) < 30.0 || dist(x, r.pts[r.pts.len() - 1]) < 30.0;
+                if towns.iter().any(|&(tc, tr)| dist(x, tc) < tr) || at_end(&roads[ra]) || at_end(&roads[rb]) {
+                    continue;
+                }
+                let along = |r: &RoadPath, k: usize| r.pts[..=k].windows(2).map(|w| dist(w[0], w[1])).sum::<f64>() + dist(r.pts[k], x);
+                cuts[ra].push((along(&roads[ra], ka), x));
+                cuts[rb].push((along(&roads[rb], kb), x));
+            }
+        }
+        i = e;
+    }
+    if cuts.iter().all(|c| c.is_empty()) {
+        return;
+    }
+    let mut out = Vec::with_capacity(roads.len());
+    for (ri, r) in roads.drain(..).enumerate() {
+        let mut c = std::mem::take(&mut cuts[ri]);
+        if c.is_empty() {
+            out.push(r);
+            continue;
+        }
+        c.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1[0].total_cmp(&q.1[0])).then(p.1[1].total_cmp(&q.1[1])));
+        c.dedup_by(|p, q| p.1 == q.1);
+        let s = arc(&r.pts);
+        for mut piece in split_road(&r, &s, &c) {
+            // (Where they meet is fixed: no wander.)
+            let n = piece.pts.len();
+            if c.iter().any(|q| q.1 == piece.pts[0]) {
+                piece.wander[0] = 0.0;
+            }
+            if c.iter().any(|q| q.1 == piece.pts[n - 1]) {
+                piece.wander[n - 1] = 0.0;
+            }
+            out.push(piece);
+        }
+    }
+    *roads = out;
+}
+
 fn crosses(a: [f64; 2], b: [f64; 2], line: &[[f64; 2]]) -> bool {
     let side = |p: [f64; 2], q: [f64; 2], r: [f64; 2]| (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
     line.windows(2).any(|w| side(a, b, w[0]) * side(a, b, w[1]) < 0.0 && side(w[0], w[1], a) * side(w[0], w[1], b) < 0.0)
