@@ -3,7 +3,7 @@
 import { Application, Container, Graphics } from 'pixi.js';
 import { GenClient, type Ready } from '../gen/client';
 import type { KindInfo } from '../gen/client';
-import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT } from '../gen/protocol';
+import { type Clear, type Created, type Edits, type Feature, type Placed, type GenStats, type Geom, type Interior, type NamedPlaces, type Overlay, type Rect, type TownEdit, type WantTile, type WorldFile, TILE_N, WORKS_MARGIN_FT } from '../gen/protocol';
 import { BattlemapLayer, dropSharedAtlas, type SquareInfo } from './BattlemapLayer';
 import { Camera, flyPath, type CameraState } from './camera';
 import { ItemAtlas } from './itemAtlas';
@@ -223,6 +223,8 @@ export class MapView {
   /** Business pins ("Places"): shown or not, the area asked for last, and a pending ask. */
   places = false;
   onPlaces: (on: boolean) => void = () => {};
+  /** The roads someone named, as asked for after a road was renamed or hidden (the one ask for those: the app's lists use it too). */
+  onNamed: (r: NamedPlaces) => void = () => {};
   private placesRect: [number, number, number, number] | null = null;
   /** Bumped when buildings are changed by hand: an answer asked for before is dropped. */
   private placesEpoch = 0;
@@ -511,8 +513,10 @@ export class MapView {
   /** Letter the roads someone named as the generators have them now. */
   private askRoads() {
     const [labels, n] = [this.labels, ++this.roadsAsk];
-    if (labels) void this.gen.named().then((r) => {
-      if (this.labels === labels && n === this.roadsAsk) labels.setRoads(r.labels);
+    void this.gen.named().then((r) => {
+      if (this.labels !== labels || n !== this.roadsAsk) return;
+      labels?.setRoads(r.labels);
+      this.onNamed(r);
     });
   }
 

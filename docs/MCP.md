@@ -130,7 +130,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `b:<layout>:<i>` | `b:0:57` | A building in a settlement or site |
 | `d:<layout>:<q>` | `d:0:3` | A district |
 | `t:<layout>:<k>` | `t:0:2` | A wall tower |
-| `rd:<8 hex>` | `rd:c3517b52` | A road stretch (between settlements and junctions, as `list_roads` lists them). Made from its two ends (rounded to 10 ft, either way round; stretches with the same ends told apart by length), so it stays the same across every edit that leaves the roads as generated (renames, notes, sites, buildings, objects, crossings, town edits); a remake of the world, or a sketch change that moves one of its ends, gives it a new id. Renamed and annotated like a feature |
+| `rd:<8 hex>` | `rd:c3517b52` | A road stretch (between settlements and junctions, as `list_roads` lists them). Made from its two ends (rounded to 10 ft, either way round; stretches with the same ends told apart by length, so two such twins may swap ids if a sketch change alters one's length), so it stays the same across every edit that leaves the roads as generated (renames, notes, sites, buildings, objects, crossings, town edits); a remake of the world, or a sketch change that moves one of its ends, gives it a new id. Renamed and annotated like a feature |
 | `v:<id>` | `v:zbfopudy` | A crossing put down by hand (bridge, ford, ferry): renamed and annotated like a feature |
 | `<layout>` | `0` | A town's entry in `towns` (the ward editor): its layout number; its patches and corners are numbered by `get_town_plan` |
 | `u:<layout>:<k>` | `u:312:0` | An underground site: dungeon, crypt, cave, mine or lava tube |
@@ -236,7 +236,7 @@ you mean" and the kinds there are. A district, building or tower says its `settl
 | `query` | string | `""` | Part of a name. Empty, together with `kind` or `tag`, lists every feature of that kind or tag. |
 | `kind` | string | none | Only this kind: `city`, `ruin`, `river`, `building`, `district`, `tower`, … |
 | `tag` | string | none | Only features whose notes carry this tag (any case): the DM's `hook`, `secret`… |
-| `in_notes` | boolean | false | The query also matches the words of a feature's notes (not only its name). |
+| `in_notes` | boolean | false | The query also matches the words of a feature's notes (not only its name); needs a `query`. |
 | `limit` | integer | 25 | 1 to 200 |
 | `include_hidden` | boolean | false | Also return hidden features. |
 
@@ -365,7 +365,8 @@ course (0, direction `here`, inside an area). Returns `{items, found}` (`truncat
 The distance between two places:
 - `by_road`: road miles (plus any stretch off the road), the settlements passed on the way, the `stretches` taken in
   order (`{id, class, length_mi, name?}`: `rd:` ids, a name where one was given or the stretch is a drawn road's) and
-  `follows`: the named roads followed, runs of stretches of one name joined (`{name, length_mi}`);
+  `follows`: the named roads followed, runs of stretches of one name joined (`{name, length_mi}`); a long way lists its
+  first 50 `stretches` with `stretches_found` and `truncated: true` (`follows` stays whole);
 - `straight_mi`: the distance as the crow flies, and its `direction`;
 - `travel`: D&D 5e travel days at normal (24 mi/day), fast (30) and slow (18) pace.
 
@@ -396,7 +397,7 @@ The road network:
 | `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | none | Only roads within `radius_mi` of this place. |
 | `radius_mi` | number | 25 | 0.01 to 3000 |
 | `settlement` | id string | none | Only roads ending at this settlement. |
-| `class` | `kings_road`, `road` or `track` | all | |
+| `class` | `king's road` (also `kings road`, `kings_road`), `road` or `track` | all | Results always say `king's road`. |
 | `drawn` | boolean | false | Only roads drawn in the sketch. |
 | `limit` | integer | 50 | 1 to 1000 |
 
@@ -410,7 +411,8 @@ The road network:
 **Naming a road.** A road across country is several stretches. To name the High Road from one city to another:
 `route` between them, then one `rename_feature` per `rd:` id in `by_road.stretches` (in one `batch`), all with the
 same name. `list_roads` then gives it as one entry in `named`, `route` says it `follows` it, and search finds its
-stretches. `name: ""` takes a stretch's name off again. Only roads someone named carry a name; nothing is generated.
+stretches. `name: ""` takes a stretch's name off again. Renaming one stretch of a named road over MCP splits it
+(the app renames all of its stretches together): to rename a whole road, use the batch above with every stretch. Only roads someone named carry a name; nothing is generated.
 
 ```json
 { "name": "batch", "arguments": { "steps": [
@@ -551,7 +553,7 @@ under its building id is joined onto it.
 | Parameter | Type | Default | |
 |---|---|---|---|
 | `id` | string | required | |
-| `notes` | string | required | (`text` is accepted too.) |
+| `notes` | string | one of `notes`, `tags`, `remove_tags` | (`text` is accepted too.) Left out, the notes stay as they are; the reply echoes `notes`. |
 | `tags` | string[] | none | Added to the existing tags. |
 | `remove_tags` | string[] | none | Taken off; one that is not there is fine. The reply's `removed_tags` says which were, and `tags` what is left. (`update_feature` with `tags: []` clears them all.) |
 | `append` | boolean | false | Add to the existing notes instead of replacing them. |
@@ -1187,7 +1189,7 @@ another sketch or generator) is set aside: the generated site stands, and the re
 
 ### `list_designs`
 The underground sites (`u:`) and buildings (`b:`) that have a design made by hand, in one `{items, found}` list (`limit` 1 to
-1000, default 100): `{id, name, what: "site" or "building", kind, levels, x_ft, y_ft}`. `within` (a box, a polygon or a circle
+1000, default 100): `{id, name, what: "site" or "building", kind, levels, x_ft, y_ft}` (`x_ft`/`y_ft` only while the site or building stands; one that is gone has `gone: true` instead; `world_overview`'s `designs_set_aside` also lists building designs that no longer fit, and a gone site only here). `within` (a box, a polygon or a circle
 `{at, radius_ft}`) keeps those whose place is inside. `get_feature` of one of them says `designed: true`; `reset_site_design`
 drops a design.
 
@@ -1646,8 +1648,7 @@ ground (as shaped, this plateau left out) at the outline's middle. The reply: `i
 The ground shaped by hand, world-wide, in one `{items, found}` list (`limit` 1 to 1000, default 100): plateaus and pits
 `{id: "h:...", what: "plateau", level_ft, edge_ft, x_ft, y_ft, bbox, poly}` (`level_ft` above the sea, `poly` the outline), then
 brushed blocks `{id: "g:...", what: "ground", x_ft, y_ft, size_ft: 80, squares_shaped, raised_ft, lowered_ft}` (`x_ft`/`y_ft` the
-block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those whose bounding box reaches into its
-bounding box. `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
+block's north-west corner). `within` (a box, a polygon or a circle `{at, radius_ft}`) keeps those with their middle or any outline point (a ground block: its middle or a corner) inside it. `delete_plateau` takes plateaus away; `ground_heights` reads the heights.
 
 ### `delete_plateau`
 Take plateaus or pits away by `id` or `ids` (all or none); the ground goes back as it was (brushed changes stay).

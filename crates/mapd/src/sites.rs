@@ -54,7 +54,8 @@ async fn resolve(app: &Shared, ids: Vec<String>, single: bool) -> Result<Vec<Sit
                                 return Err(format!("{at}: {id} is one of the world's own buildings: they go with remove_buildings (restore_building brings them back)"));
                             }
                             None if agent::position(w, t0, id).is_some() => {
-                                return Err(format!("{at}: {id} is not a created site (other generated features can be hidden with hide_feature)"));
+                                let hint = if edits.hidden.contains(id) { " (it is hidden: hide_feature hidden:false shows it again)" } else { "" };
+                                return Err(format!("{at}: {id} is not a created site{hint} (other generated features can be hidden with hide_feature)"));
                             }
                             None => return Err(format!("{at}: {}", crate::args::no_such(w, t0, id))),
                         },

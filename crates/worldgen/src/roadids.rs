@@ -136,7 +136,7 @@ pub fn drawn_road(world: &World, t0: &T0, fs: &[Feature], stroke: u32) -> Option
     if let Some(i) = fs.iter().position(|f| f.kind == "road" && f.name == name) {
         return Some(i);
     }
-    let first = t0.roads.roads.iter().find(|r| r.stroke == Some(stroke))?.pts[0];
+    let first = *t0.roads.roads.iter().find(|r| r.stroke == Some(stroke))?.pts.first()?;
     let shapes = crate::agent::shapes(world, t0);
     (0..fs.len().min(shapes.len())).filter(|&i| fs[i].kind == "road").min_by(|&a, &b| shapes[a].distance(first).0.total_cmp(&shapes[b].distance(first).0))
 }
@@ -150,19 +150,22 @@ pub fn stretch_name(world: &World, t0: &T0, fs: &[Feature], id: &str, r: &RoadCu
 }
 
 /// A stretch's details for `get_feature`.
-pub fn road_json(world: &World, t0: &T0, id: &str) -> Option<Value> {
-    let i = road_index(t0, id)?;
+/// `ids` is `road_ids(t0)` and `fs` the world's features (the caller computes them once).
+pub fn road_json(world: &World, t0: &T0, ids: &[String], fs: &[Feature], id: &str) -> Option<Value> {
+    if !id.starts_with("rd:") {
+        return None;
+    }
+    let i = ids.iter().position(|r| r == id)?;
     let r = &t0.roads.roads[i];
-    let fs = crate::agent::features(world, t0);
     let m = midpoint(r);
     let mut v = json!({
         "id": id,
         "kind": "road",
-        "name": stretch_name(world, t0, &fs, id, r),
+        "name": stretch_name(world, t0, fs, id, r),
         "class": class_name(r.class),
         "length_mi": mi(*r.s.last().unwrap_or(&0.0)),
-        "from": end_json(world, t0, r.pts[0]),
-        "to": end_json(world, t0, *r.pts.last().unwrap_or(&r.pts[0])),
+        "from": end_json(world, t0, r.pts.first().copied().unwrap_or_default()),
+        "to": end_json(world, t0, r.pts.last().copied().unwrap_or_default()),
         "x_ft": crate::core::round(m[0]),
         "y_ft": crate::core::round(m[1]),
         "line": line(r),
@@ -170,7 +173,7 @@ pub fn road_json(world: &World, t0: &T0, id: &str) -> Option<Value> {
     if world.file.edits.renames.contains_key(id) {
         v["renamed"] = json!(true);
     }
-    if let Some(f) = r.stroke.and_then(|s| drawn_road(world, t0, &fs, s)) {
+    if let Some(f) = r.stroke.and_then(|s| drawn_road(world, t0, fs, s)) {
         v["drawn_road"] = json!({ "id": fs[f].id, "name": fs[f].name });
     }
     Some(v)
@@ -198,7 +201,7 @@ pub fn named_roads(world: &World, t0: &T0, skip_hidden: bool) -> Vec<NamedRoad> 
     let ids = road_ids(t0);
     let mut by_name: std::collections::BTreeMap<&String, Vec<usize>> = Default::default();
     for (i, id) in ids.iter().enumerate() {
-        if let Some(n) = e.renames.get(id).filter(|n| !n.trim().is_empty() && !(skip_hidden && e.hidden.contains(id))) {
+        if let Some(n) = e.renames.get(id).filter(|n| !n.trim().is_empty() && !(skip_hidden && e.hidden.contains(id)) && t0.roads.roads[i].pts.len() >= 2) {
             by_name.entry(n).or_default().push(i);
         }
     }
@@ -291,11 +294,14 @@ fn line_len(pts: &[P]) -> f64 {
 /// before renames, a drawn road's or else its class) and the crossings put down
 /// by hand (name given, else as generated; `generated`; middle; length).
 pub fn named_json(world: &World, t0: &T0) -> Value {
-    let labels: Vec<Value> = named_roads(world, t0, true)
-        .into_iter()
+    let named = named_roads(world, t0, false);
+    // Hidden stretches are left out of the lettering (and the rest re-chained); the same walk serves when none is hidden.
+    let hidden = named.iter().any(|r| r.ids.iter().any(|id| world.file.edits.hidden.contains(id)));
+    let lettered = if hidden { named_roads(world, t0, true) } else { Vec::new() };
+    let labels: Vec<Value> = (if hidden { &lettered } else { &named })
+        .iter()
         .map(|r| json!({ "id": r.ids[0], "ids": r.ids, "name": r.name, "length_ft": crate::core::round(line_len(&r.pts)), "pts": simplify(&r.pts, 15.0) }))
         .collect();
-    let named = named_roads(world, t0, false);
     let rs = &t0.roads.roads;
     let fs = if named.iter().any(|r| rs[r.idx[0]].stroke.is_some()) { crate::agent::features(world, t0) } else { Vec::new() };
     let roads: Vec<Value> = named
@@ -330,7 +336,7 @@ pub fn renamed_groups(world: &World, t0: &T0, ids: &[String], keep: &dyn Fn(usiz
     let renames = &world.file.edits.renames;
     let mut by_name: std::collections::BTreeMap<String, Vec<usize>> = Default::default();
     for (i, id) in ids.iter().enumerate() {
-        if let Some(n) = renames.get(id).filter(|n| !n.trim().is_empty()) {
+        if let Some(n) = renames.get(id).filter(|n| !n.trim().is_empty() && t0.roads.roads[i].pts.len() >= 2) {
             by_name.entry(n.clone()).or_default().push(i);
         }
     }
@@ -391,6 +397,14 @@ pub fn crossing_json(e: &crate::world::Edits, id: &str, c: &Crossing) -> Value {
         v["notes"] = json!({ "text": n.text, "tags": n.tags });
     }
     v
+}
+
+/// A renamed stretch as a search hit (kind `road`), from `ids` = `road_ids(t0)` and the world's features.
+pub fn road_hit(world: &World, t0: &T0, ids: &[String], fs: &[Feature], id: &str) -> Option<Value> {
+    let i = ids.iter().position(|r| r == id)?;
+    let r = &t0.roads.roads[i];
+    let m = midpoint(r);
+    Some(json!({ "id": id, "kind": "road", "name": stretch_name(world, t0, fs, id, r), "class": class_name(r.class), "length_mi": mi(*r.s.last().unwrap_or(&0.0)), "x_ft": crate::core::round(m[0]), "y_ft": crate::core::round(m[1]) }))
 }
 
 /// Renamed stretches (kind `road`) and named crossings (kind `crossing`) whose names hold `ql`

@@ -277,9 +277,12 @@
   // (asked again whenever names, hidden places or crossings change).
   let named = $state.raw<NamedPlaces | null>(null);
   let namedAsk = 0;
+  // (A road's rename or hiding is asked for by the map, which letters it and hands the answer on: `view.onNamed`.
+  // Here only a crossing's name, a crossing put down or taken away, and a new overlay.)
+  const namedKey = $derived(JSON.stringify([Object.entries(renames).filter(([k]) => k.startsWith('v:')), (edits.hidden ?? []).filter((h) => h.startsWith('v:')), edits.crossings]));
   $effect(() => {
     const o = overlay;
-    void [renames, edits.hidden, edits.crossings];
+    void namedKey;
     if (!o) return;
     const n = ++namedAsk;
     void view.gen.named().then((r) => {
@@ -3276,6 +3279,9 @@
     };
     view.onPick = (x, y, sx, sy) => void pick(x, y, sx, sy);
     view.onPlaces = (on) => setPlaces(on);
+    view.onNamed = (r) => {
+      if (overlay) named = r;
+    };
     view.setPlaces(places);
     view.onMoves = (list, x, y) => (moves = list.length ? { list, x, y } : null);
     const onKey = createKeyHandler(() => keymap, () => shell.help || !!shell.ask || !!versionAsk || !!openAsk || !!restoreAsk);

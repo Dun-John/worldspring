@@ -407,7 +407,7 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
         }
         if !there.is_empty() {
             v["existing"] = json!(there);
-            let n = format!("{} of these points were already cleared (their clear ids are in existing): nothing was added for them", there.len());
+            let n = format!("{} of these points {} already cleared (their clear ids are in existing): nothing was added for them", there.len(), if there.len() == 1 { "was" } else { "were" });
             v["note"] = json!(match note {
                 Some(o) => format!("{o}; {n}"),
                 None => n,

@@ -53,6 +53,9 @@ const LAND = '#46512f';
 
 const REGION: KindStyle = { size: 13, fill: LAND, spacing: 2, italic: true, minPx: 90, maxPx: 1600, prio: 40, rotate: true };
 
+/** Half the width of a named road's line on screen (px), for lettering it beside the line. */
+const ROAD_HALF_PX = 2;
+
 const STYLES: Record<string, KindStyle> = {
   continent: { size: 28, fill: INK, spacing: 12, upper: true, bold: true, minPx: 300, maxPx: 4000, prio: 100, rotate: true },
   ocean: { size: 20, fill: WATER, spacing: 9, upper: true, italic: true, minPx: 200, maxPx: 1e9, prio: 95 },
@@ -331,8 +334,9 @@ export class Labels {
     } else {
       for (const it of this.shown) {
         if (it.glyphs?.visible && it.at) {
+          const n = it.at.length;
           it.glyphs.children.forEach((g, k) => {
-            const [sx, sy] = cam.worldToScreen(it.at![k][0], it.at![k][1]);
+            const [sx, sy] = cam.worldToScreen(it.at![k % n][0], it.at![k % n][1]);
             g.position.set(sx, sy);
           });
         }
@@ -501,7 +505,7 @@ export class Labels {
     let created = false;
     if (show && !it.glyphs) {
       it.glyphs = this.createGlyphs(it);
-      it.glyphW = (it.glyphs.children as Text[]).map((g) => g.width);
+      it.glyphW = (it.glyphs.children as Text[]).slice(it.road ? it.glyphs.children.length / 2 : 0).map((g) => g.width);
       // (A road's letters as close as in one text, as a sketch road's name: each letter's
       // own outline and slant padding taken off.)
       if (it.road && it.glyphW.length > 1) {
@@ -514,7 +518,8 @@ export class Labels {
       created = true;
     }
     if (show && it.glyphs) {
-      const glyphs = it.glyphs.children as Text[];
+      // (A road's box holds its letters, then the halos behind them, one each.)
+      const glyphs = (it.glyphs.children as Text[]).slice(0, it.glyphW!.length);
       const widths = it.glyphW!;
       const total = widths.reduce((a, b) => a + b, 0) + style.spacing * (glyphs.length - 1);
       const lenPx = (it.pathLen ??= pathLength(path)) * cam.ppf;
@@ -545,12 +550,18 @@ export class Labels {
           glyphs.forEach((g, k) => {
             const sk = (s + widths[k] / 2) / cam.ppf;
             const [wx, wy, a] = pos(sk);
+            let [lx, ly] = [wx, wy];
             if (it.road) {
               const [x0, y0] = pos(Math.max(0, sk - half));
               const [x1, y1] = pos(sk + half);
-              at.push([wx, wy, Math.atan2(y1 - y0, x1 - x0)]);
+              const ang = Math.atan2(y1 - y0, x1 - x0);
+              // Beside the road, on the side above the reading direction: the road's half-width and half a letter's height out.
+              const off = (ROAD_HALF_PX + 0.5 * style.size) / cam.ppf;
+              lx += Math.sin(ang) * off;
+              ly -= Math.cos(ang) * off;
+              at.push([lx, ly, ang]);
             } else at.push([wx, wy, a]);
-            const [gx, gy] = cam.worldToScreen(wx, wy);
+            const [gx, gy] = cam.worldToScreen(lx, ly);
             box[0] = Math.min(box[0], gx - r);
             box[1] = Math.min(box[1], gy - r);
             box[2] = Math.max(box[2], gx + r);
@@ -562,10 +573,12 @@ export class Labels {
           show = true;
           boxes.add(box);
           it.at = at;
-          glyphs.forEach((g, k) => {
-            const [gx, gy] = cam.worldToScreen(at[k][0], at[k][1]);
+          const all = it.glyphs.children as Text[];
+          all.forEach((g, k) => {
+            const j = k % at.length;
+            const [gx, gy] = cam.worldToScreen(at[j][0], at[j][1]);
             g.position.set(gx, gy);
-            g.rotation = at[k][2];
+            g.rotation = at[j][2];
           });
           break;
         }
@@ -579,15 +592,29 @@ export class Labels {
     const { f, style } = it;
     const label = style.upper ? f.name.toUpperCase() : f.name;
     const box = new Container();
-    const textStyle = new TextStyle({
+    const opts = {
       fontFamily: FONT,
       fontSize: style.size,
       fill: style.fill,
-      fontStyle: style.italic ? 'italic' : 'normal',
-      fontWeight: style.bold ? 'bold' : 'normal',
-      stroke: { color: '#efe6cf', width: 3, join: 'round' },
-    });
-    for (const ch of label) box.addChild(new Text({ text: ch, style: textStyle, anchor: 0.5, resolution: 2 }));
+      fontStyle: style.italic ? ('italic' as const) : ('normal' as const),
+      fontWeight: style.bold ? ('bold' as const) : ('normal' as const),
+    };
+    const stroke = { color: '#efe6cf', width: 3, join: 'round' as const };
+    const textStyle = new TextStyle({ ...opts, stroke });
+    if (it.road) {
+      // A road's letters sit beside it, each in full ink with every letter's halo behind all of them (a halo drawn with
+      // its own letter ate its neighbour's edge, so the thin ink went pale).
+      const ink = new TextStyle(opts);
+      const halo = new TextStyle({ ...opts, fill: '#efe6cf', stroke });
+      box.sortableChildren = true;
+      for (const [st, z] of [[ink, 1], [halo, 0]] as const) {
+        for (const ch of label) {
+          const t = new Text({ text: ch, style: st, anchor: 0.5, resolution: 2 });
+          t.zIndex = z;
+          box.addChild(t);
+        }
+      }
+    } else for (const ch of label) box.addChild(new Text({ text: ch, style: textStyle, anchor: 0.5, resolution: 2 }));
     this.container.addChild(box);
     return box;
   }

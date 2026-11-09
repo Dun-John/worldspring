@@ -38,11 +38,12 @@ fn list_crossings(app: &Shared, limit: usize) -> Result<Value, String> {
 }
 
 /// An end in a river's water is refused, naming the bank on its side.
-async fn dry_end(app: &Shared, k: &str, p: Option<[f64; 2]>) -> Result<(), String> {
+/// Only one clearly in the water (more than `tol` ft past the bank) is: fords, ferries and app-placed ends a few ft in pass.
+async fn dry_end(app: &Shared, k: &str, p: Option<[f64; 2]>, tol: f64) -> Result<(), String> {
     let Some(p) = p else { return Ok(()) };
     let k = k.to_string();
     app.worker
-        .with(move |ex| match worldgen::agent::river_at(&ex.world, &ex.t0, p, 50.0).filter(|r| r.in_water()) {
+        .with(move |ex| match worldgen::agent::river_at(&ex.world, &ex.t0, p, 50.0).filter(|r| 0.5 * r.width_ft - r.dist_ft > tol) {
             Some(r) => {
                 let (b, _) = r.bank_of(p, 5.0);
                 let what = r.name.clone().map_or_else(|| "a river".to_string(), |n| format!("{n} ({})", r.id.clone().unwrap_or_default()));
@@ -111,9 +112,22 @@ async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
         Some(m) => return Err(format!("material: timber or stone, not {m}")),
     };
     let (from, to, width) = (end(app, a, "from").await?, end(app, a, "to").await?, a["width_ft"].as_f64());
-    dry_end(app, "from", from).await?;
-    dry_end(app, "to", to).await?;
     let id = a["id"].as_str().map(str::to_string);
+    // A repeat of a crossing already there is reported by `edit` below whatever its ends stand in.
+    let repeat = match (&id, kind, from, to) {
+        (None, Some(_), Some(f), Some(t)) => app
+            .with_edits(move |e| {
+                let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 5.0;
+                e.crossings.values().any(|c| (near(c.a, f) && near(c.b, t)) || (near(c.a, t) && near(c.b, f)))
+            })
+            .unwrap_or(false),
+        _ => false,
+    };
+    if !repeat {
+        let tol = width.unwrap_or(12.0).max(10.0);
+        dry_end(app, "from", from, tol).await?;
+        dry_end(app, "to", to, tol).await?;
+    }
     let [w, h] = app.worker.with(|ex| Ok([ex.world.geom.map_w_ft, ex.world.geom.map_h_ft])).await?;
     let mut v = app.edit("agent", 0, move |e| {
         let changed = id.is_some();

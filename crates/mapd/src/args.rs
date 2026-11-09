@@ -66,7 +66,7 @@ pub fn point_schema(description: &str) -> Value {
 
 /// The `at` property of the tools in `PLACE_TOOLS`.
 pub fn at_props() -> Value {
-    json!({ "at": point_schema("A place") })
+    json!({ "at": point_schema("A place (ft from the map's top-left, x east, y south)") })
 }
 
 /// `field: rule, got X` (X as JSON, cut short).

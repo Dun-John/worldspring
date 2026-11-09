@@ -58,7 +58,8 @@ async fn objects(app: &Shared, a: &Value) -> Result<Value, String> {
     for (i, k) in a["kinds"].as_array().into_iter().flatten().enumerate() {
         wanted.push(crate::scatter::kind_of(k, &sprites).map_err(|e| format!("kinds[{i}]: {e}"))?);
     }
-    let e = app.with_edits(Clone::clone).ok_or("no world is open")?;
+    let (mut objects, clears) = app
+        .with_edits(|e| {
     let near = |x: f64, y: f64| area.as_ref().is_none_or(|ar| ar.contains([x, y]));
     let mut objects = Vec::new();
     if which != "clears" {
@@ -80,8 +81,8 @@ async fn objects(app: &Shared, a: &Value) -> Result<Value, String> {
     if which != "objects" {
         let builtin_wanted: Vec<u16> = wanted.iter().filter_map(|k| if let ObjKind::Builtin(b) = k { Some(*b) } else { None }).collect();
         for (id, c) in e.cleared.iter().filter(|(_, c)| {
-            // A clear of all kinds matches any kind asked for.
-            near(c.x, c.y) && (builtin_wanted.is_empty() || (c.kind.is_none() && c.kinds.is_empty()) || c.kind.is_some_and(|k| builtin_wanted.contains(&k)) || c.kinds.iter().any(|k| builtin_wanted.contains(k)))
+            // A clear of all kinds matches any built-in kind asked for; clears hold built-in kinds only (kinds naming only sprites: none).
+            near(c.x, c.y) && (wanted.is_empty() || (!builtin_wanted.is_empty() && ((c.kind.is_none() && c.kinds.is_empty()) || c.kind.is_some_and(|k| builtin_wanted.contains(&k)) || c.kinds.iter().any(|k| builtin_wanted.contains(k)))))
         }) {
             let mut v = json!({ "id": id, "what": "clear", "x_ft": c.x.round(), "y_ft": c.y.round() });
             if let Some(k) = c.kind {
@@ -96,6 +97,9 @@ async fn objects(app: &Shared, a: &Value) -> Result<Value, String> {
             clears.push(v);
         }
     }
+    (objects, clears)
+        })
+        .ok_or("no world is open")?;
     let rest = json!({ "objects": objects.len(), "clears": clears.len() });
     objects.extend(clears);
     Ok(listed(json!(objects), limit, rest))
@@ -108,17 +112,17 @@ fn bbox(pts: &[[f64; 2]]) -> [f64; 4] {
 async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
     let area = within(app, a).await?;
     let limit = limit_of(a, 100);
-    let reach = area.as_ref().map(|ar| bbox(&ar.outline()));
-    let v = app
+        let v = app
         .worker
         .with(move |ex| {
             let sea = ex.world.params().sea_level_ft;
-            let hits = |b: [f64; 4]| reach.is_none_or(|r| b[0] <= r[2] && b[2] >= r[0] && b[1] <= r[3] && b[3] >= r[1]);
+            // Inside when the middle or any outline point is.
+            let hits = |mid: [f64; 2], pts: &[[f64; 2]]| area.as_ref().is_none_or(|ar| ar.contains(mid) || pts.iter().any(|&q| ar.contains(q)));
             let mut items = Vec::new();
             for (id, p) in &ex.world.file.edits.plateaus {
                 let b = bbox(&p.pts);
-                if hits(b) {
-                    let mid = worldgen::town::geom::centroid(&p.pts);
+                let mid = worldgen::town::geom::centroid(&p.pts);
+                if hits(mid, &p.pts) {
                     items.push(json!({ "id": id, "what": "plateau", "level_ft": ((p.level as f64 - sea) * 10.0).round() / 10.0, "edge_ft": p.edge, "x_ft": mid[0].round(), "y_ft": mid[1].round(), "bbox": b.map(f64::round), "poly": p.pts }));
                 }
             }
@@ -126,7 +130,7 @@ async fn plateaus(app: &Shared, a: &Value) -> Result<Value, String> {
             for (id, g) in &ex.world.file.edits.ground {
                 let Some((bx, by)) = ground::parse_key(id) else { continue };
                 let b = [bx as f64 * side, by as f64 * side, (bx + 1) as f64 * side, (by + 1) as f64 * side];
-                if hits(b) {
+                if hits([0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3])], &[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]) {
                     let up = g.add.iter().copied().max().unwrap_or(0).max(0);
                     let down = g.add.iter().copied().min().unwrap_or(0).min(0);
                     items.push(json!({
@@ -156,9 +160,12 @@ async fn designs(app: &Shared, a: &Value) -> Result<Value, String> {
                     continue;
                 }
                 let mut v = json!({ "id": id, "name": worldgen::agent::name_any(&ex.world, &ex.t0, id), "what": if id.starts_with("b:") { "building" } else { "site" }, "kind": d.kind, "levels": d.levels.len() });
-                if let Some(p) = at {
-                    v["x_ft"] = json!(p[0].round());
-                    v["y_ft"] = json!(p[1].round());
+                match at {
+                    Some(p) => {
+                        v["x_ft"] = json!(p[0].round());
+                        v["y_ft"] = json!(p[1].round());
+                    }
+                    None => v["gone"] = json!(true),
                 }
                 items.push(v);
             }

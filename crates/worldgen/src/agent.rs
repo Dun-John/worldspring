@@ -1242,6 +1242,7 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
     // Notes: their tags, and with `in_notes` their words.
     if tag.is_some() || (o.in_notes && !ql.is_empty()) {
         let seen: Vec<String> = out.iter().filter_map(|v| v["id"].as_str().map(str::to_string)).collect();
+        let road_ids: std::cell::OnceCell<Vec<String>> = std::cell::OnceCell::new();
         for (id, n) in &edits.notes {
             if out.len() >= limit || seen.contains(id) || (!include_hidden && hidden.contains(id)) {
                 continue;
@@ -1253,7 +1254,13 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
             if !found {
                 continue;
             }
-            let v = if let Some((f, s)) = fs.iter().zip(&shapes).find(|(f, _)| f.id == *id) {
+            let v = if id.starts_with("rd:") {
+                let ids = road_ids.get_or_init(|| crate::roadids::road_ids(t0));
+                match crate::roadids::road_hit(world, t0, ids, &fs, id) {
+                    Some(v) => v,
+                    None => continue,
+                }
+            } else if let Some((f, s)) = fs.iter().zip(&shapes).find(|(f, _)| f.id == *id) {
                 json!({ "id": f.id, "kind": f.kind, "name": f.name, "detail": f.detail, "x_ft": f.x.round(), "y_ft": f.y.round(), "extent": extent(s) })
             } else if let Some(g) = get(world, t0, id) {
                 let mut v = json!({ "id": id, "kind": g["kind"], "name": g["name"], "x_ft": g["x_ft"], "y_ft": g["y_ft"], "settlement": g["settlement"] });
@@ -1507,6 +1514,9 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
 /// `roadids` says of it, with its notes, whether hidden, the settlements nearest and (a
 /// crossing) the river it crosses.
 fn way_json(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    // Computed once for the call: every road lookup below reads them.
+    let fs = features(world, t0);
+    let generated: Option<String>;
     let mut v = match world.file.edits.crossings.get(id) {
         Some(c) => {
             let mut v = crate::roadids::crossing_json(&world.file.edits, id, c);
@@ -1516,15 +1526,22 @@ fn way_json(world: &World, t0: &T0, id: &str) -> Option<Value> {
             v["x_ft"] = json!(m[0].round());
             v["y_ft"] = json!(m[1].round());
             v["river"] = river_at(world, t0, m, 0.5 * c.length() + 500.0).map_or(Value::Null, |r| r.json(Some(m)));
+            generated = Some(crate::roadids::crossing_generated(c));
             v
         }
-        None => crate::roadids::road_json(world, t0, id)?,
+        None => {
+            let ids = crate::roadids::road_ids(t0);
+            let v = crate::roadids::road_json(world, t0, &ids, &fs, id)?;
+            let r = &t0.roads.roads[ids.iter().position(|x| x == id)?];
+            generated = r.stroke.and_then(|s| crate::roadids::drawn_road(world, t0, &fs, s)).map(|f| fs[f].name.clone());
+            v
+        }
     };
     let p = [v["x_ft"].as_f64().unwrap_or(0.0), v["y_ft"].as_f64().unwrap_or(0.0)];
-    v["generated"] = json!(generated_name(world, t0, id));
+    v["generated"] = json!(generated);
     v["hidden"] = json!(is_hidden(world, t0, id));
     v["notes"] = note_of(world, t0, id);
-    v["nearest_settlements"] = json!(nearest_settlements(&features(world, t0), p, id, 3));
+    v["nearest_settlements"] = json!(nearest_settlements(&fs, p, id, 3));
     Some(v)
 }
 
@@ -1840,7 +1857,11 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
             for (i, id) in crate::roadids::road_ids(t0).into_iter().enumerate().filter(|(_, id)| edits.renames.contains_key(id)) {
                 let r = &t0.roads.roads[i];
                 let generated = r.stroke.and_then(|s| crate::roadids::drawn_road(world, t0, &fs_all, s)).map(|f| fs_all[f].name.clone()).unwrap_or_default();
-                v.push(name_entry(world, id, "road", generated, Some(crate::roadids::midpoint(r)), false));
+                let mut ent = name_entry(world, id, "road", generated.clone(), Some(crate::roadids::midpoint(r)), false);
+                if generated.is_empty() {
+                    ent["generated"] = Value::Null;
+                }
+                v.push(ent);
             }
         }
         v.extend(edits.crossings.iter().map(|(id, c)| name_entry(world, id.clone(), "crossing", crate::roadids::crossing_generated(c), Some(crate::roadids::crossing_mid(c)), false)));
@@ -2073,7 +2094,15 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
             let total = dist[b] + da + db;
             // Worth it only if not far longer than going straight across.
             if total < straight * 2.5 + 2.0 * MI {
-                road = Some(json!({ "distance_mi": mi(total), "off_road_mi": mi(da + db), "via": via, "stretches": stretches, "follows": follows }));
+                // A long way lists its first 50 stretches (`follows` stays whole).
+                let found = stretches.len();
+                stretches.truncate(50);
+                let mut r = json!({ "distance_mi": mi(total), "off_road_mi": mi(da + db), "via": via, "stretches": stretches, "follows": follows });
+                if found > 50 {
+                    r["stretches_found"] = json!(found);
+                    r["truncated"] = json!(true);
+                }
+                road = Some(r);
             }
         }
     }
