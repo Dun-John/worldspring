@@ -762,6 +762,17 @@ export interface Overlay {
   /** The settlements added from Edit › Places: `[layout index, sketch stroke index]` (the pin each
    * stands for). */
   added?: [number, number][];
+  /** Shipping between ports (`t0::SeaLane`), segments split at ports and where lanes meet. */
+  sea_lanes?: SeaLane[];
+}
+
+/** A sea lane: `p` its line (world ft, x y pairs), `c` class (0 busy, 1 normal, 2 quiet), `f`
+ * flow, `e` its ends (a settlement's layout index, or -1 where lanes meet). */
+export interface SeaLane {
+  c: number;
+  f: number;
+  e: [number, number];
+  p: number[];
 }
 
 /** River polylines owned by one tile: vertex k is verts[4k..4k+4] = (x, y in tile units, width ft, discharge). */

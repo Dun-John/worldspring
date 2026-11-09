@@ -10,6 +10,7 @@ import { ItemAtlas } from './itemAtlas';
 import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
 import { precompile } from './precompile';
 import { Labels } from './Labels';
+import { laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
@@ -70,6 +71,8 @@ const STAGE_WEIGHT: [string, number][] = [
 
 /** Tile levels that draw site layouts (`payload::SITE_MIN_LEVEL`). */
 const SITE_MIN_LEVEL = 9;
+/** Sea lanes fade out between these many levels before the site plans (`SITE_MIN_LEVEL`). */
+const LANE_FADE: [number, number] = [1.3, 0.4];
 /** How far a created site's layout reaches (`town::sites::SITE_REACH_FT`), with a margin. */
 const SITE_REACH_FT = 260 + 100;
 
@@ -221,6 +224,10 @@ export class MapView {
   /** Business pins ("Places"): shown or not, the area asked for last, and a pending ask. */
   places = false;
   onPlaces: (on: boolean) => void = () => {};
+  /** Sea lanes between ports (Layers): shown or not. */
+  seaLanes = true;
+  onSeaLanes: (on: boolean) => void = () => {};
+  private lanes: SeaLanes | null = null;
   private placesRect: [number, number, number, number] | null = null;
   /** Bumped when buildings are changed by hand: an answer asked for before is dropped. */
   private placesEpoch = 0;
@@ -511,6 +518,18 @@ export class MapView {
     this.places = on;
     this.labels?.setPlaces(on && !this.interior);
     this.onPlaces(on);
+  }
+
+  setSeaLanes(on: boolean) {
+    this.seaLanes = on;
+    if (this.lanes) this.lanes.on = on;
+    this.onSeaLanes(on);
+  }
+
+  /** The sea lanes as drawn last (for checks): segments, and the strength shown (0: hidden). */
+  get laneStats(): { segments: number; alpha: number; visible: boolean } {
+    const l = this.lanes;
+    return { segments: l?.segments ?? 0, alpha: l?.alpha ?? 0, visible: !!l?.container.visible };
   }
 
   /** While Places is on at town zoom: ask for the businesses round the view once it has moved
@@ -826,6 +845,7 @@ export class MapView {
     this.tiles?.destroy();
     this.battle?.destroy();
     this.labels?.destroy();
+    this.lanes?.destroy();
     this.exitBuilding();
     this.peek?.layer.destroy();
     this.peek = null;
@@ -835,6 +855,8 @@ export class MapView {
     this.overlay = this.baseOverlay = overlay;
     this.tiles = new TileLayer(geom, this.gen);
     this.labels = new Labels(overlay.features);
+    this.lanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2]);
+    this.lanes.on = this.seaLanes;
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
     this.townHints.clear();
@@ -850,6 +872,7 @@ export class MapView {
     this.districtsAsked.clear();
     const battle = this.makeBattle(geom, catalog);
     this.app.stage.addChild(this.tiles.container);
+    this.app.stage.addChild(this.lanes.container);
     this.app.stage.addChild(battle.container);
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
@@ -1258,6 +1281,9 @@ export class MapView {
         this.gen.want(want);
       }
       const t1 = performance.now();
+      // Sea lanes from the continent to region zoom, gone before the towns' plans show.
+      const level = Math.log2((this.geom!.domain_ft * this.cam.ppf * this.app.renderer.resolution) / TILE_N);
+      this.lanes?.update(this.cam, this.interior ? 0 : laneFade(level, SITE_MIN_LEVEL - LANE_FADE[0], SITE_MIN_LEVEL - LANE_FADE[1]));
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
       if (this.sewers) {
@@ -1376,7 +1402,7 @@ export class MapView {
     const renderer = this.app.renderer;
     const stub = { max_level: 0, domain_ft: 1, sea_level_ft: 0, map_w_ft: 1, map_h_ft: 1 } as Geom;
     const warmTiles = new TileLayer(stub, this.gen);
-    await precompile(renderer, warmTiles.programs);
+    await precompile(renderer, [...warmTiles.programs, seaLaneProgram()]);
     warmTiles.warmup(renderer);
     warmTiles.destroy();
   }

@@ -107,6 +107,7 @@
     northUp = view.northUp = on;
   }
   let places = $state(readPlaces());
+  let seaLanes = $state(readSeaLanes());
 
   /** Business pins on or off, as this viewer left them (on at first). */
   function readPlaces(): boolean {
@@ -121,6 +122,24 @@
     places = on;
     try {
       localStorage.setItem('map.places', on ? '1' : '0');
+    } catch {
+      // Private mode: the choice just isn't remembered.
+    }
+  }
+
+  /** Sea lanes on or off, as this viewer left them (on at first). */
+  function readSeaLanes(): boolean {
+    try {
+      return localStorage.getItem('map.seaLanes') !== '0';
+    } catch {
+      return true;
+    }
+  }
+
+  function setSeaLanes(on: boolean) {
+    seaLanes = on;
+    try {
+      localStorage.setItem('map.seaLanes', on ? '1' : '0');
     } catch {
       // Private mode: the choice just isn't remembered.
     }
@@ -3133,6 +3152,7 @@
     wholeMap,
     grid: () => setGrid(!gridOn),
     places: () => view.setPlaces(!view.places),
+    seaLanes: () => view.setSeaLanes(!view.seaLanes),
     zoom: (dz) => view.zoomBy(dz),
     pan: (dx, dy) => view.panBy(dx, dy),
     level: (d) => view.levelBy(d),
@@ -3248,6 +3268,8 @@
     view.onPick = (x, y, sx, sy) => void pick(x, y, sx, sy);
     view.onPlaces = (on) => setPlaces(on);
     view.setPlaces(places);
+    view.onSeaLanes = (on) => setSeaLanes(on);
+    view.setSeaLanes(seaLanes);
     view.onMoves = (list, x, y) => (moves = list.length ? { list, x, y } : null);
     const onKey = createKeyHandler(() => keymap, () => shell.help || !!shell.ask || !!versionAsk || !!openAsk || !!restoreAsk);
     window.addEventListener('keydown', onKey);
@@ -3734,6 +3756,8 @@
     {undoLabel}
     onGrid={setGrid}
     onPlaces={(on) => view.setPlaces(on)}
+    {seaLanes}
+    onSeaLanes={(on) => view.setSeaLanes(on)}
     onZoom={zoomStep}
     onWhole={wholeMap}
     onUndo={undoAny}
