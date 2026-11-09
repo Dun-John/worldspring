@@ -13,47 +13,47 @@ const SQUARE_FT: f64 = 5.0;
 
 fn props() -> Value {
     json!({
-        "poly": { "type": "array", "minItems": 3, "maxItems": 64, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "The footprint: corners [x_ft, y_ft] in order (3-64; any simple shape, L-shapes too)" },
-        "rect": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "width_ft": { "type": "number" }, "depth_ft": { "type": "number" }, "angle_deg": { "type": "number", "default": 0 } }, "required": ["x_ft", "y_ft", "width_ft", "depth_ft"], "description": "Or a rectangle about its middle (width along angle_deg, clockwise from east)" },
+        "poly": { "type": "array", "minItems": 3, "maxItems": 64, "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "Corners [x_ft, y_ft] in order" },
+        "rect": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "width_ft": { "type": "number" }, "depth_ft": { "type": "number" }, "angle_deg": { "type": "number", "default": 0 } }, "required": ["x_ft", "y_ft", "width_ft", "depth_ft"], "description": "A rectangle about its middle" },
         "circle": { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "radius_ft": { "type": "number" }, "sides": { "type": "integer", "minimum": 8, "maximum": 32, "default": 16 } }, "required": ["x_ft", "y_ft", "radius_ft"], "description": "Or a round tower" },
-        "snap": { "type": "boolean", "default": true, "description": "Snap poly and unturned rect corners (and a circle's middle) to the 5-ft grid" },
-        "name": { "type": "string", "description": "Else named for its trade (or what it is)" },
-        "func": { "type": "string", "description": format!("What it is: a business (a catalog key as list_names shows businesses: inn, tavern, blacksmith, temple, castle, observatory...) or a home: {}. Default house; a round wizard_tower or observatory is a tower inside. Businesses: {}", BUILDING_HOMES.join(", "), worldgen::town::catalog::CATALOG.iter().map(|f| f.key).collect::<Vec<_>>().join(", ")) },
+        "snap": { "type": "boolean", "default": true, "description": "Snap corners to the 5-ft grid" },
+        "name": { "type": "string" },
+        "func": { "type": "string", "description": "A home or business key (docs/MCP.md); default house" },
         "floors": { "type": "integer", "minimum": 1, "maximum": MAX_FLOORS },
-        "roof": { "type": "string", "enum": ([ROOFS.as_slice(), &["auto"]].concat()), "description": "hip (pitched), battlements (a walkable roof), cone; auto: as its kind has it (battlements on castles and towers)" },
+        "roof": { "type": "string", "enum": ([ROOFS.as_slice(), &["auto"]].concat()) },
         "tint": { "type": "string", "enum": ([TINTS.as_slice(), &["auto"]].concat()), "description": "Roof colour (auto: picked)" },
-        "material": { "type": "string", "enum": ([roof::MATERIALS.as_slice(), &["auto"]].concat()), "description": "Roof material: thatch, slate, clay_tile, shingle, turf, lead, copper, glazed_tile, flat_clay, hide, plank, whitewash (auto: picked for its town and kind; wins over tint)" },
-        "shape": { "type": "string", "enum": ([roof::SHAPES.as_slice(), &["auto"]].concat()), "description": "Roof shape: hip, gable, cone, dome, flat (behind a parapet; a walkable terrace), round (auto: picked). Not for battlements" },
-        "shade": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 4 }, { "type": "string", "enum": ["auto"] }], "description": "Roof colour of the material, one of its 5 variants (slate: 0 blue-grey, 1 green-grey, 2 the usual, 3 purple-grey, 4 dark; clay_tile: 0 brick, 1 orange, 2 the usual, 3 brown, 4 pale; each material has its own, 2 always the usual). auto: picked (mostly the usual)" },
-        "structure": { "type": "string", "enum": STRUCTURES, "description": "roofed (default) or ruin (broken walls, no roof, no interior)" },
+        "material": { "type": "string", "enum": ([roof::MATERIALS.as_slice(), &["auto"]].concat()) },
+        "shape": { "type": "string", "enum": ([roof::SHAPES.as_slice(), &["auto"]].concat()) },
+        "shade": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 4 }, { "type": "string", "enum": ["auto"] }], "description": "Variant 0-4 of the material\'s colours (2 the usual); auto: picked" },
+        "structure": { "type": "string", "enum": STRUCTURES },
     })
 }
 
 pub fn list() -> Vec<Value> {
     let mut update = props();
     if let Some(m) = update.as_object_mut() {
-        m.insert("id".into(), json!({ "type": "string", "description": "A building drawn by hand (its created id c:<n>) or one of the world's own (b:<layout>:<id>)" }));
+        m.insert("id".into(), json!({ "type": "string" }));
     }
     let mut create = props();
     if let Some(m) = create.as_object_mut() {
-        m.insert("near".into(), crate::args::point_schema("Instead of a footprint: an id, {x_ft, y_ft} or [x_ft, y_ft]; the nearest clear spot for width_ft x depth_ft, its front on a street and square to it, off squares"));
+        m.insert("near".into(), crate::args::point_schema("Instead of a footprint: the nearest clear spot for width_ft x depth_ft, fronting a street"));
         m.insert("width_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400, "description": "With near: along the street" }));
-        m.insert("depth_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400, "description": "With near: back from the street" }));
+        m.insert("depth_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400 }));
     }
     let mut check = props();
     if let Some(m) = check.as_object_mut() {
         m.retain(|k, _| ["poly", "rect", "circle", "snap", "func"].contains(&k.as_str()));
-        m.insert("id".into(), json!({ "type": "string", "description": "The building being reshaped, if any (it does not count against itself)" }));
+        m.insert("id".into(), json!({ "type": "string", "description": "A building being reshaped" }));
     }
     let mut remove = crate::args::ids_props("building id (b:<layout>:<id>)");
     if let Some(m) = remove.as_object_mut() {
-        m.insert("within".into(), crate::args::area_schema("Every one whose middle lies inside: a polygon [[x_ft, y_ft], ...], a box [x0, y0, x1, y1] or a circle {at, radius_ft}", 1.0e6));
+        m.insert("within".into(), crate::args::area_schema("Buildings whose middle lies inside: [x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}", 1.0e6));
     }
     vec![
-        json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle), or near a place with width_ft and depth_ft (the nearest clear lot on a street), on dry land clear of other buildings, roads, streets, walls and squares, with what it is, storeys, roof, roof colour, material, shape and shade. It gets an interior (enter_building / get_interior on its building id), a roof and walls on the battlemap. Returns its id (c:<n>, for update_building, delete_feature, notes and NPCs) and its building id (b:<layout>:0).", "inputSchema": schema(create, &[]) }),
-        json!({ "name": "update_building", "title": "Change a building", "description": "Change a building: one drawn by hand (c:<n>) or one of the world's own (b:<layout>:<id>, as get_feature and list_children give them): a new footprint (poly, rect or circle; checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; for the world's own, auto (or an empty func) goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
+        json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle) or near a place with width_ft and depth_ft, on dry land clear of buildings, roads, streets, walls and squares. It gets an interior, roof and walls. Returns its id (c:<n>) and building id (b:<layout>:0). check_building_spot tests a spot first.", "inputSchema": schema(create, &[]) }),
+        json!({ "name": "update_building", "title": "Change a building", "description": "Change a building drawn by hand (c:<n>) or one of the world's own (b:<layout>:<id>): footprint (checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; auto goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
         json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not (water, river, another building, street, road, wall, square).", "inputSchema": schema(check, &[]), "annotations": { "readOnlyHint": true } }),
-        json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away buildings of the world's own (not drawn by hand: delete_feature does those): by id or ids (b:<layout>:<id>), or every one whose middle lies inside an area (within: a polygon [[x_ft, y_ft], ...], a box [x0, y0, x1, y1] or a circle {at, radius_ft}) such as a ward to clear for buildings of your own. Every other building keeps its id. restore_building (id or ids) brings them back.", "inputSchema": schema(remove, &[]) }),
+        json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away the world's own buildings (delete_feature does drawn ones): by id or ids (b:<layout>:<id>) or every one whose middle lies inside within. Others keep their ids. restore_building brings them back.", "inputSchema": schema(remove, &[]) }),
         json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and any update_building change (its name stays as renamed).", "inputSchema": schema(crate::args::ids_props("building id"), &[]) }),
     ]
 }

@@ -21,30 +21,30 @@ use crate::tools::{schema, text};
 const MAX_READ_FT: f64 = 200.0;
 
 pub fn list() -> Vec<Value> {
-    let pt = crate::args::point_schema("[x_ft, y_ft] (world ft; also {x_ft, y_ft} or an id)");
-    let at = crate::args::point_schema("A place: an id, {x_ft, y_ft} or [x_ft, y_ft] (or give x_ft and y_ft, or id, beside the other arguments)");
+    let pt = crate::args::point_schema("A point (world ft)");
+    let at = crate::args::point_schema("A place (id, point or [x, y] in ft)");
     vec![
-        json!({ "name": "shape_ground", "title": "Shape the ground", "description": "Shape the battlemap's ground by hand, as a round brush: raise or lower it (by up to height_ft in the middle, fading to the rim by hardness), smooth it (each square toward the mean of its neighbours, by strength) or put it back toward the ground as generated (brushed changes only: plateaus stay). A dab at a place (at, radius_ft) or a stroke along a path (path, width_ft); each square takes the stroke's strongest touch, so a path over itself doesn't pile up. Buildings, streets, roads and walls ride on the shaped ground; dry ground lowered never sinks below the water beside it; city streets made to climb steeply enough (0.15, and 0.03 more than before) are drawn as steps. A stroke reaches at most 48 blocks of 80 ft, a world holds 1500. Returns the blocks changed and the ground's lowest and highest under the brush before and after (ft above the sea).", "inputSchema": schema(json!({
+        json!({ "name": "shape_ground", "title": "Shape the ground", "description": "Shape the battlemap's ground with a round brush: raise, lower, smooth, or restore toward the generated ground (plateaus stay). A dab (at, radius_ft) or a stroke (path, width_ft). Buildings, streets and walls follow it. A stroke reaches at most 48 blocks of 80 ft, a world holds 1500. Returns the blocks changed and the ground's range before and after (ft).", "inputSchema": schema(json!({
             "mode": { "type": "string", "enum": ["raise", "lower", "smooth", "restore"] },
             "at": at,
             "radius_ft": { "type": "number", "minimum": 2.5, "maximum": 200, "default": 15, "description": "A dab's radius" },
             "path": { "type": "array", "minItems": 1, "items": pt, "description": "A stroke's points (world ft)" },
             "width_ft": { "type": "number", "minimum": 5, "maximum": 400, "default": 30, "description": "A stroke's width" },
-            "height_ft": { "type": "number", "minimum": 0, "maximum": 50, "default": 5, "description": "Raise and lower: at most this far (5 is one tier)" },
-            "hardness": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "0 soft (fades from the middle) to 1 hard (full to the rim)" },
-            "strength": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "Smooth and restore: how far toward their goal" },
+            "height_ft": { "type": "number", "minimum": 0, "maximum": 50, "default": 5, "description": "Raise and lower by up to this" },
+            "hardness": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5, "description": "0 soft to 1 hard" },
+            "strength": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
         }), &["mode"]) }),
-        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau (or a pit): the ground inside an outline levelled at one height, easing back to the ground round it over edge_ft (0: a sheer cliff at the outline). Give the outline (poly, world ft, at most 48 points kept, spanning at most 1280 ft) or around: a building, tower or site whose footprint, grown by margin_ft, is the outline (a castle on a cliff). The level is level_ft above the sea, or rise_ft above the ground at the outline's middle (default 10; below zero digs a pit); a plateau inside another (a terrace) goes on top of it. Buildings on it stand at its level. With id, changes that plateau (fields left out stay). Returns its id (h:...).", "inputSchema": schema(json!({
+        json!({ "name": "set_plateau", "title": "Make or change a plateau", "description": "A plateau or pit: the ground inside an outline levelled at one height, easing back over edge_ft (0: a cliff). Give poly (at most 48 points, spanning at most 1280 ft) or around (a building, tower or site, grown by margin_ft). Height: level_ft above the sea or rise_ft above the ground (default 10; negative digs). With id, changes that plateau. Returns its id (h:...).", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A plateau to change (h:...)" },
-            "poly": { "type": "array", "minItems": 3, "items": pt, "description": "The outline: corners [x_ft, y_ft]" },
-            "around": { "type": "string", "description": "A building (b:...), tower (t:...) or site whose footprint makes the outline" },
+            "poly": { "type": "array", "minItems": 3, "items": pt },
+            "around": { "type": "string", "description": "A building, tower or site (its footprint)" },
             "margin_ft": { "type": "number", "minimum": 0, "maximum": 200, "default": 10, "description": "How far round the footprint" },
             "level_ft": { "type": "number", "minimum": -20000, "maximum": 20000, "description": "Its level, ft above the sea" },
-            "rise_ft": { "type": "number", "minimum": -ground::MAX_SHIFT_FT, "maximum": ground::MAX_SHIFT_FT, "default": 10, "description": "Or its level above the ground at the outline's middle" },
-            "edge_ft": { "type": "number", "minimum": 0, "maximum": ground::MAX_EDGE_FT, "default": 0, "description": "The slope round it, 0 (sheer) to 60 ft" },
+            "rise_ft": { "type": "number", "minimum": -ground::MAX_SHIFT_FT, "maximum": ground::MAX_SHIFT_FT, "default": 10 },
+            "edge_ft": { "type": "number", "minimum": 0, "maximum": ground::MAX_EDGE_FT, "default": 0 },
         }), &[]) }),
         json!({ "name": "delete_plateau", "title": "Take plateaus away", "description": "Take plateaus or pits away (the ground goes back as it was), by id (h:...).", "inputSchema": schema(crate::args::ids_props("plateau id (h:...)"), &[]) }),
-        json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on every 5-ft square of the box reaching radius_ft (at most 200) east, west, north and south of a place: as generated and as shaped by hand (rows north to south, columns west to east, from origin: the first square's middle); squares under water; the plateaus and brushed blocks there. The battlemap draws a little relief on top (knolls, hollows) and levels road beds.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "ground_heights", "title": "Ground heights", "description": "The ground's height (ft above the sea) on each 5-ft square of the box radius_ft (at most 200) round a place, as generated and as shaped by hand (rows north to south, columns west to east from origin), with water squares, plateaus and brushed blocks.", "inputSchema": schema(json!({ "at": at, "radius_ft": { "type": "number", "minimum": 0, "maximum": MAX_READ_FT, "default": 25 } }), &[]), "annotations": { "readOnlyHint": true } }),
     ]
 }
 

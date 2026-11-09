@@ -16,11 +16,11 @@ const MAX_BATCH: usize = 500;
 fn sprite_props() -> Value {
     json!({
         "name": { "type": "string" },
-        "size_squares": { "type": "number", "minimum": 0.2, "maximum": 40, "default": 1, "description": "Squares across at scale 1 (a new sprite: 1)" },
-        "cover": { "oneOf": [{ "type": "string", "enum": COVERS }, { "type": "integer", "minimum": 0, "maximum": 3 }], "description": "none, half, three-quarters or full (as the rules are returned); or 0 to 3" },
+        "size_squares": { "type": "number", "minimum": 0.2, "maximum": 40, "default": 1, "description": "Squares across at scale 1" },
+        "cover": { "oneOf": [{ "type": "string", "enum": COVERS }, { "type": "integer", "minimum": 0, "maximum": 3 }], "description": "none, half, three-quarters, full (or 0 to 3)" },
         "blocks_movement": { "type": "boolean" },
         "blocks_sight": { "type": "boolean" },
-        "difficult": { "type": "boolean", "description": "Difficult terrain over its spread" },
+        "difficult": { "type": "boolean" },
         "height_ft": { "type": "number", "minimum": 0, "maximum": 500, "default": 3 },
     })
 }
@@ -28,16 +28,16 @@ fn sprite_props() -> Value {
 const COVERS: [&str; 4] = ["none", "half", "three-quarters", "full"];
 
 pub fn list() -> Vec<Value> {
-    let kind = json!({ "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }], "description": "A built-in kind (its id or name, e.g. 12 or \"boulder\"), or an uploaded sprite (\"s:<asset>\" or its name)" });
-    let kinds = json!({ "type": "array", "items": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }] }, "description": "Only these built-in kinds (ids or names)" });
-    let mut within = crate::args::area_schema("Everything inside: a box [x0, y0, x1, y1], a polygon [[x, y], ...] or a circle {at, radius_ft}. Only a circle also takes away generated objects (a box or polygon: those put down by hand)", 640.0);
+    let kind = json!({ "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }], "description": "A built-in kind (id or name) or sprite (s:<asset> or name)" });
+    let kinds = json!({ "type": "array", "items": { "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string" }] }, "description": "Only these kinds" });
+    let mut within = crate::args::area_schema("[x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}; only a circle takes generated objects", 640.0);
     within["oneOf"][2]["properties"]["kinds"] = kinds.clone();
-    let mut restore_within = crate::args::area_schema("Every clear touching it: a box, a polygon or a circle {at, radius_ft}", 640.0);
+    let mut restore_within = crate::args::area_schema("Clears touching a box, polygon or circle", 640.0);
     restore_within["oneOf"][2]["properties"]["kinds"] = kinds.clone();
     let ids = crate::args::ids_props("id");
     let mut remove = ids.clone();
     if let Some(m) = remove.as_object_mut() {
-        m.insert("points".into(), json!({ "type": "array", "minItems": 1, "maxItems": MAX_BATCH, "items": { "type": "object", "properties": { "kind": kind.clone(), "x_ft": { "type": "number" }, "y_ft": { "type": "number" } }, "required": ["kind", "x_ft", "y_ft"] }, "description": "Generated objects to take away, each by built-in kind and place, as get_battlemap lists them" }));
+        m.insert("points".into(), json!({ "type": "array", "minItems": 1, "maxItems": MAX_BATCH, "items": { "type": "object", "properties": { "kind": kind.clone(), "x_ft": { "type": "number" }, "y_ft": { "type": "number" } }, "required": ["kind", "x_ft", "y_ft"] }, "description": "Generated objects, as get_battlemap lists them" }));
         m.insert("within".into(), within);
         m.insert("kinds".into(), kinds);
     }
@@ -47,15 +47,15 @@ pub fn list() -> Vec<Value> {
     }
     let mut upload = sprite_props();
     if let Some(m) = upload.as_object_mut() {
-        m.insert("data_base64".into(), json!({ "type": "string", "description": "The picture (png, jpeg, webp, gif or svg), base64; a top-down view, transparent round it" }));
-        m.insert("path".into(), json!({ "type": "string", "description": "Or a picture file on this machine" }));
-        m.insert("asset".into(), json!({ "type": "string", "description": "Or an asset already uploaded (to change its name or rules)" }));
+        m.insert("data_base64".into(), json!({ "type": "string", "description": "The picture (png, jpeg, webp, gif or svg), base64, top-down" }));
+        m.insert("path".into(), json!({ "type": "string" }));
+        m.insert("asset".into(), json!({ "type": "string", "description": "An uploaded asset to change" }));
     }
     vec![
-        json!({ "name": "list_sprites", "title": "Object kinds", "description": "What can be put on a battlemap (returns {items, found}): the built-in kinds (trees, rocks, props, hazards) and uploaded sprites, each with its id, tactical rules and uploaded: true or false; uploaded ones with how many are placed.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "list_sprites", "title": "Object kinds", "description": "What can be put on a battlemap: built-in kinds and uploaded sprites with id, tactical rules and uploaded. Returns {items, found}; limit (default 200, max 1000) cuts it and sets truncated.", "inputSchema": schema(json!({ "limit": crate::tools::limit_prop(200, 1000) }), &[]), "annotations": { "readOnlyHint": true } }),
         json!({ "name": "upload_sprite", "title": "Upload a sprite", "description": "Add a picture as an object kind for battlemaps (64 px per 5-ft square is plenty), with its name, size and tactical rules. Give data_base64 or path; or asset to change an uploaded one's rules. Returns its kind id (s:<asset>).", "inputSchema": schema(upload, &[]) }),
-        json!({ "name": "place_objects", "title": "Put objects down", "description": "Put objects on the battlemap at world positions (ft): built-in kinds or uploaded sprites, up to 500 at once. They block, cover and hinder by their kind's rules in play. Give an id (o:...) to move, turn or change one put down before: only the fields given change. Returns their ids.", "inputSchema": schema(json!({ "objects": { "type": "array", "minItems": 1, "maxItems": MAX_BATCH, "items": { "type": "object", "properties": { "id": { "type": "string", "description": "A placed object (o:...) to change instead of a new one" }, "kind": kind, "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "rot_deg": { "type": "number", "description": "Turned clockwise: drawn turned for props that can turn (not trees, plants or pools) and for uploaded sprites" }, "scale": { "type": "number", "minimum": 0.2, "maximum": 5, "default": 1 }, "variant": { "type": "integer", "minimum": 0, "maximum": 15, "description": "Built-in kinds' look: most have four, a market stall sixteen, an awning and its goods; default by chance" } } } } }), &["objects"]) }),
-        json!({ "name": "remove_objects", "title": "Take objects away", "description": "Take objects off the battlemap: ids of placed ones (o:..., id or ids); generated ones by kind and place (points) (as get_battlemap lists them: kind, x_ft, y_ft); or everything inside an area (within; kinds narrows a circle to some built-in kinds). Returns the ids of the clears (restore_objects undoes them).", "inputSchema": schema(remove, &[]) }),
+        json!({ "name": "place_objects", "title": "Put objects down", "description": "Put objects on the battlemap at world positions (ft): built-in kinds or uploaded sprites, up to 500 at once. They block, cover and hinder by their kind's rules. With an id (o:...), changes one put down before. Returns their ids.", "inputSchema": schema(json!({ "objects": { "type": "array", "minItems": 1, "maxItems": MAX_BATCH, "items": { "type": "object", "properties": { "id": { "type": "string", "description": "A placed object (o:...) to change" }, "kind": kind, "x_ft": { "type": "number" }, "y_ft": { "type": "number" }, "rot_deg": { "type": "number", "description": "Degrees clockwise (props that can turn)" }, "scale": { "type": "number", "minimum": 0.2, "maximum": 5, "default": 1 }, "variant": { "type": "integer", "minimum": 0, "maximum": 15, "description": "Look (most kinds have four); default by chance" } } } } }), &["objects"]) }),
+        json!({ "name": "remove_objects", "title": "Take objects away", "description": "Take objects off the battlemap: placed ones by id or ids (o:...), generated ones by kind and place (points), or everything inside within (kinds narrows a circle). Returns the ids of the clears (restore_objects undoes them).", "inputSchema": schema(remove, &[]) }),
         json!({ "name": "restore_objects", "title": "Bring objects back", "description": "Bring back generated objects that were taken away: clear ids (x:...), or every clear touching an area (within).", "inputSchema": schema(restore, &[]) }),
     ]
 }
@@ -140,7 +140,7 @@ fn asset_id(bytes: &[u8]) -> String {
 /// Run a battlemap object tool (None: not one of these).
 pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Value>, String>> {
     Some(match name {
-        "list_sprites" => list_sprites(app).map(text),
+        "list_sprites" => list_sprites(app, crate::tools::limit_of(a, 200)).map(text),
         "upload_sprite" => upload(app, a).await.map(text),
         "place_objects" => place(app, a).await.map(text),
         "remove_objects" => remove(app, a).await.map(text),
@@ -149,7 +149,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
     })
 }
 
-fn list_sprites(app: &Shared) -> Result<Value, String> {
+fn list_sprites(app: &Shared, limit: usize) -> Result<Value, String> {
     let e = app.with_edits(Clone::clone).unwrap_or_default();
     let built: Vec<Value> = catalog().map(|i| json!({ "kind": i.id, "name": i.name, "uploaded": false, "rules": rules(i) })).collect();
     let up: Vec<Value> = e
@@ -162,7 +162,7 @@ fn list_sprites(app: &Shared) -> Result<Value, String> {
             json!({ "kind": kind, "name": m.name, "uploaded": true, "picture": format!("/assets/{id}"), "rules": rules(&i), "placed": placed })
         })
         .collect();
-    Ok(listed(json!(built.into_iter().chain(up).collect::<Vec<_>>()), usize::MAX, json!({})))
+    Ok(listed(json!(built.into_iter().chain(up).collect::<Vec<_>>()), limit, json!({})))
 }
 
 async fn upload(app: &Shared, a: &Value) -> Result<Value, String> {

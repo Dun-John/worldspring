@@ -14,20 +14,20 @@ fn npc_props() -> Value {
         "appearance": { "type": "string", "description": "How they look and sound" },
         "mannerisms": { "type": "string", "description": "Habits, speech, quirks" },
         "stance": { "type": "string", "enum": STANCES, "description": "Attitude toward the players" },
-        "attitude": { "type": "string", "description": "Why they feel that way, what would change it" },
+        "attitude": { "type": "string" },
         "goals": { "type": "string" },
-        "notes": { "type": "string", "description": "Secrets and anything else for the DM" },
+        "notes": { "type": "string" },
         "tags": { "type": "array", "items": { "type": "string" } },
-        "status": { "type": "string", "description": "Free text: alive, dead, missing, imprisoned..." },
-        "portrait": { "type": "string", "description": "An asset id (a picture uploaded to the app or to /assets)" },
+        "status": { "type": "string" },
+        "portrait": { "type": "string", "description": "An asset id" },
     })
 }
 
 fn place_props() -> Value {
     json!({
-        "location": { "type": "string", "description": "Where they are found: a feature, building, district or site id (empty: nowhere)" },
-        "level": { "type": "integer", "minimum": 0, "description": "Inside a building or site: the level (0 = lowest; default the way in)" },
-        "x_ft": { "type": "number", "description": "A point (ft) to stand at; alone, the place there is looked up" },
+        "location": { "type": "string", "description": "A place id (empty: nowhere)" },
+        "level": { "type": "integer", "minimum": 0, "description": "Level inside a building or site (0 lowest)" },
+        "x_ft": { "type": "number", "description": "A point to stand at" },
         "y_ft": { "type": "number" },
         "at": crate::args::point_schema("Instead of location, x_ft and y_ft: an id (the location) or {x_ft, y_ft} / [x_ft, y_ft] (the point)"),
     })
@@ -36,10 +36,10 @@ fn place_props() -> Value {
 fn plot_props() -> Value {
     json!({
         "title": { "type": "string" },
-        "text": { "type": "string", "description": "What is going on, hooks, how it may play out" },
+        "text": { "type": "string" },
         "status": { "type": "string", "enum": PLOT_STATUSES },
-        "anchors": { "type": "array", "items": { "type": "string" }, "description": "Ids of the places it is tied to" },
-        "npcs": { "type": "array", "items": { "type": "string" }, "description": "Ids of the NPCs involved (n:...)" },
+        "anchors": { "type": "array", "items": { "type": "string" } },
+        "npcs": { "type": "array", "items": { "type": "string" } },
         "tags": { "type": "array", "items": { "type": "string" } },
     })
 }
@@ -57,13 +57,13 @@ pub fn list() -> Vec<Value> {
     let ids = crate::args::ids_props("id");
     let ro = json!({ "readOnlyHint": true });
     vec![
-        json!({ "name": "list_npcs", "title": "NPCs", "description": "The world's NPCs (returns {items, found}; written by the DM or agents): name, attitude, status, where they are. Filter by text, place (also on its levels and in its rooms; a settlement's id also finds those in its buildings and the sites standing in it; a building drawn by hand by either of its ids), tag or stance.", "inputSchema": schema(json!({ "query": { "type": "string" }, "location": { "type": "string" }, "tag": { "type": "string" }, "stance": { "type": "string", "enum": STANCES } }), &[]), "annotations": ro }),
+        json!({ "name": "list_npcs", "title": "NPCs", "description": "The world's NPCs, {items, found}; limit (default 100) cuts it and sets truncated. Filter by text, location (also its levels, rooms and, for a settlement, its buildings and sites), tag or stance.", "inputSchema": schema(json!({ "query": { "type": "string" }, "location": { "type": "string" }, "tag": { "type": "string" }, "stance": { "type": "string", "enum": STANCES }, "limit": crate::tools::limit_prop(100, 1000) }), &[]), "annotations": ro }),
         json!({ "name": "get_npc", "title": "NPC", "description": "An NPC in full: appearance, mannerisms, attitude toward the players, goals, notes, where they are and the plots they are in.", "inputSchema": schema(id.clone(), &["id"]), "annotations": ro }),
         json!({ "name": "create_npc", "title": "Create an NPC", "description": "Add an NPC, optionally placed somewhere (a building's id puts them inside it; the DM sees them there). Returns the NPC with its id.", "inputSchema": schema(with(npc_props(), place_props()), &["name"]) }),
         json!({ "name": "update_npc", "title": "Update an NPC", "description": "Change an NPC's fields (only those given).", "inputSchema": schema(with(id.clone(), npc_props()), &["id"]) }),
         json!({ "name": "delete_npc", "title": "Delete an NPC", "description": "Delete an NPC, or several (id or ids; all or none), and take them out of plots.", "inputSchema": schema(ids.clone(), &[]) }),
         json!({ "name": "place_npc", "title": "Place an NPC", "description": "Put an NPC somewhere: a place id (and level inside), or a point (at, or x_ft and y_ft); an empty location takes them off the map.", "inputSchema": schema(with(id.clone(), place_props()), &["id"]) }),
-        json!({ "name": "list_plots", "title": "Plot points", "description": "The world's plot points (returns {items, found}): title, status, places and NPCs. Filter by text, status, place, NPC or tag.", "inputSchema": schema(json!({ "query": { "type": "string" }, "status": { "type": "string", "enum": PLOT_STATUSES }, "anchor": { "type": "string" }, "npc": { "type": "string" }, "tag": { "type": "string" } }), &[]), "annotations": ro }),
+        json!({ "name": "list_plots", "title": "Plot points", "description": "The world's plot points (returns {items, found}, at most limit, default 100; truncated: true when cut): title, status, places and NPCs. Filter by text, status, place, NPC or tag.", "inputSchema": schema(json!({ "query": { "type": "string" }, "status": { "type": "string", "enum": PLOT_STATUSES }, "anchor": { "type": "string" }, "npc": { "type": "string" }, "tag": { "type": "string" }, "limit": crate::tools::limit_prop(100, 1000) }), &[]), "annotations": ro }),
         json!({ "name": "get_plot", "title": "Plot point", "description": "A plot point in full.", "inputSchema": schema(id.clone(), &["id"]), "annotations": ro }),
         json!({ "name": "create_plot", "title": "Create a plot point", "description": "Add a plot point tied to places and NPCs. Returns it with its id.", "inputSchema": schema(plot_props(), &["title"]) }),
         json!({ "name": "update_plot", "title": "Update a plot point", "description": "Change a plot point's fields (only those given; lists are replaced).", "inputSchema": schema(with(id.clone(), plot_props()), &["id"]) }),
@@ -277,7 +277,7 @@ async fn read(app: &Shared, name: &str, a: Value) -> Result<Value, String> {
                         .filter(|(_, n)| at.is_none() || n.location.as_ref().is_some_and(|l| inside(&l.id)))
                         .filter_map(|(k, _)| agent::npc_json(w, t0, k, true))
                         .collect();
-                    Ok(listed(json!(v), usize::MAX, json!({})))
+                    Ok(listed(json!(v), crate::tools::limit_of(&a, 100), json!({})))
                 }
                 _ => {
                     let status = a["status"].as_str();
@@ -290,7 +290,7 @@ async fn read(app: &Shared, name: &str, a: Value) -> Result<Value, String> {
                         .filter(|(_, p)| anchor.is_none_or(|x| p.anchors.iter().any(|y| y == x)) && npc.is_none_or(|x| p.npcs.iter().any(|y| y == x)))
                         .filter_map(|(k, _)| agent::plot_json(w, t0, k, true))
                         .collect();
-                    Ok(listed(json!(v), usize::MAX, json!({})))
+                    Ok(listed(json!(v), crate::tools::limit_of(&a, 100), json!({})))
                 }
             }
         })

@@ -57,16 +57,16 @@ pub fn point_schema(description: &str) -> Value {
     json!({
         "description": description,
         "oneOf": [
-            { "type": "string", "title": "an id" },
-            { "type": "object", "title": "{x_ft, y_ft}", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" } }, "required": ["x_ft", "y_ft"] },
-            { "type": "array", "title": "[x_ft, y_ft]", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+            { "type": "string" },
+            { "type": "object", "properties": { "x_ft": { "type": "number" }, "y_ft": { "type": "number" } }, "required": ["x_ft", "y_ft"] },
+            { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
         ],
     })
 }
 
 /// The `at` property of the tools in `PLACE_TOOLS`.
 pub fn at_props() -> Value {
-    json!({ "at": point_schema("A place: a feature, building, district or site id, {x_ft, y_ft} or [x_ft, y_ft] (feet from the map's top-left corner, x east, y south)") })
+    json!({ "at": point_schema("A place") })
 }
 
 /// `field: rule, got X` (X as JSON, cut short).
@@ -248,7 +248,7 @@ pub fn item(single: bool, i: usize) -> String {
 pub fn ids_props(what: &str) -> Value {
     json!({
         "id": { "type": "string", "description": format!("One {what} (or ids)") },
-        "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": format!("Several {what}s, all or none (or id)") },
+        "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Several (all or none), or id" },
     })
 }
 
@@ -261,7 +261,7 @@ pub fn area_schema(description: &str, max_radius_ft: f64) -> Value {
             { "type": "array", "title": "a box [x0, y0, x1, y1]", "items": num, "minItems": 4, "maxItems": 4 },
             { "type": "array", "title": "a polygon [[x, y], ...]", "items": { "type": "array", "items": num, "minItems": 2, "maxItems": 2 }, "minItems": 3 },
             { "type": "object", "title": "a circle {at, radius_ft}", "properties": {
-                "at": point_schema("The middle: an id, {x_ft, y_ft} or [x_ft, y_ft]"),
+                "at": point_schema("The middle"),
                 "x_ft": num, "y_ft": num,
                 "radius_ft": { "type": "number", "minimum": 0, "maximum": max_radius_ft },
             }, "required": ["radius_ft"] },
@@ -427,6 +427,8 @@ fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&
             all.push((f, e));
         }
         // The one form of the value's own type tells what is wrong with it; else name the forms.
+        // (A point's three forms carry no titles, to keep tools/list small: named here.)
+        let point = forms.iter().any(|f| f["properties"]["x_ft"].is_object() && f["required"].is_array() && f["title"].is_null());
         let same: Vec<_> = all.iter().filter(|(f, _)| types_of(f).iter().any(|t| is_type(t, &mut v.clone()))).collect();
         if let [(_, e)] = same[..] {
             errs.extend(e.iter().cloned());
@@ -437,6 +439,11 @@ fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&
                     f["title"]
                         .as_str()
                         .map(str::to_string)
+                        .or_else(|| point.then(|| match f["type"].as_str() {
+                            Some("string") => "an id",
+                            Some("object") => "{x_ft, y_ft}",
+                            _ => "[x_ft, y_ft]",
+                        }.to_string()))
                         .unwrap_or_else(|| types_of(f).iter().map(|t| type_name(t)).collect::<Vec<_>>().join(" or "))
                 })
                 .collect();

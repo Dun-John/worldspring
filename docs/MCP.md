@@ -1,6 +1,6 @@
 # Worldspring MCP: full reference
 
-`mapd` exposes the open world to agents (any MCP client) through 53 tools. With them an agent can:
+`mapd` exposes the open world to agents (any MCP client) through 54 tools. With them an agent can:
 - read and search the world: features, buildings, districts, underground sites, routes, battlemaps;
 - look at the map as you see it, or move your view;
 - edit the world: rename anything (down to a dungeon's levels and rooms), write notes, hide features, and create
@@ -8,7 +8,10 @@
 - keep the DM's notebook: NPCs and plot points;
 - put objects on battlemaps (and take generated ones away), with uploaded sprites;
 - draw buildings and towers, with what they are, their storeys and roofs;
-- shape a battlemap's ground: mounds, hollows, plateaus, cliffs and pits.
+- shape a battlemap's ground: mounds, hollows, plateaus, cliffs and pits;
+- put bridges, fords and ferries across rivers (crossings), and lay a town out anew (town plans: its patches, wards
+  and lots) or design a dungeon's rooms and a building's interior by hand (designs);
+- do many of these at once, as one change, with `batch`.
 
 Every edit is saved and appears live in the open map app.
 
@@ -43,14 +46,18 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   `radius: unknown argument (did you mean radius_mi?)` · `kind: one of city, town, ..., got "citty" (did you mean city?)` ·
   `unknown tool 'serch_features' (did you mean search_features?)`.
   A number out of range is refused, never clamped; the ranges and defaults are in the schemas (`minimum`, `maximum`,
-  `default`). A tool's rules that a schema can't say (one of several fields needed, a polygon that crosses itself)
+  `default`): every range and default below is the schema's. A tool's rules that a schema can't say (one of several fields needed, a polygon that crosses itself)
   are worded the same way: `field: rule, got X`.
 - **Places:** `at` is a place: an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`. Other points (`near`, `from`, `to`) take the
   same three forms. Refused: a point off the map (0 ≤ x < width and 0 ≤ y < height, the same for every tool; the message gives the map's size), `at` together with `id`,
   `x_ft` or `y_ft` (the same place twice is fine), only one of `x_ft`/`y_ft`, an id that names nothing. A tool whose
   `id` is not its subject also takes the old `id`, or `x_ft` and `y_ft`, beside its other arguments.
 - **Lists** come back as `{items, found}`: `found` is how many there were before any `limit`, and `truncated: true`
-  says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`).
+  says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`). Every list tool has a
+  `limit` (defaults: `list_names`, `list_children` and `list_sprites` 200, `list_crossings` 200, `list_npcs` and
+  `list_plots` 100, `search_features` 25, `features_near` and `list_roads` 50; `list_children` cuts each of its lists
+  and gives the full counts in `found`). A `limit` out of range is refused. Results are compact JSON (no
+  indentation), and `render_view` sends a JPEG of 1,024 px unless asked for more.
 - **Safe to repeat:** a create that is asked for again with the same arguments adds nothing and returns what is already
   there, with `"existing": true` and a `note` that says so (never "created"). Which tools, and what counts as the same:
   `create_feature` (the same kind of site within 300 ft), `create_building` (the same footprint; with `near`, an
@@ -103,9 +110,17 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   (building, district, tower, underground site, level, room), gives `settlement`: the town it is in, `{id, name}`,
   or `null` when it stands in none. Inside a site's layout it also gives `site`: `{id, name}` (for levels and rooms,
   `site` is the building's or site's id).
-- **Which world:** every tool takes an optional `world`, the hash `world_overview` returns. If mapd has another
-  world open (the user opened a different one in the app), the call is refused and nothing happens. Pass it in
+- **Which world:** every tool takes an optional `world` (a string: the hash `world_overview` returns). If mapd has
+  another world open (the user opened a different one in the app), the call is refused and nothing happens. Pass it in
   long scripted sessions.
+- **An error means nothing changed**, with one exception: a write that went through but could not be saved to disk is
+  a success carrying `saved: false` and a `warning` (don't repeat it). Before a write, `search_features` finds the id
+  of a name you were not sure of, `check_building_spot` and a `dry_run` (where a tool has one) try it without
+  keeping it.
+- **Undo:** the user has Undo in the app for each edit. For an agent, deletes come back with `restore_feature`
+  (sites), `restore_objects` (cleared generated objects) and `restore_building` (the world's own buildings taken
+  away or changed); `remove_crossings`, `delete_npc`, `delete_plot` and `delete_plateau` have no restore: make them
+  again.
 
 ### Ids
 
@@ -178,7 +193,7 @@ These never change anything, and work whether or not the map app is open.
 
 ### `world_overview`
 A summary of the world:
-- its size;
+- `size_mi`: the map's `[width, height]` in miles (the app's `width_ft` and `height_ft` are 5,280 times that);
 - its land masses;
 - how many features of each kind it has;
 - its largest settlements, with population and position;
@@ -262,6 +277,7 @@ What a feature contains:
 | Parameter | Type | | |
 |---|---|---|---|
 | `id` | string | required | |
+| `limit` | integer | 200 | 1 to 2000; each list is cut to it (`found` has the full counts of those cut, `truncated: true`). |
 
 ```json
 { "name": "list_children", "arguments": { "id": "city:bab44567" } }
@@ -272,13 +288,15 @@ What a feature contains:
 ### `list_names`
 Everything that can be renamed, with ids to pass to `rename_feature`. Each entry has `id`, `kind`, `name` (as
 renamed), `generated` (the name before renames), `x_ft`/`y_ft` where it has a spot, `enter: true` for buildings and
-sites with levels, and `hidden: true` for hidden features. Returns `{items, found}`.
+sites with levels, and `hidden: true` for hidden features. Returns `{items, found}`. A `kind` nothing has is refused
+with a "did you mean" and the kinds there are (`kind: no names of kind "sitee"; did you mean "site"?`).
 
 | Parameter | Type | | |
 |---|---|---|---|
 | `kind` | string | optional | Only this kind: `river`, `range`, `city`… or `district`, `building`, `tower`, `underground`, `site`, `level`, `room`. |
 | `settlement` | string | optional | A settlement's or site's id: its districts, businesses, wall and gate towers and underground sites (sewer grates aside). For a settlement, also the buildings drawn in it that have a trade (as businesses, `b:<layout>:0`) and every site in it (kind `site`, by the site's own id). |
 | `inside` | string | optional | A building's or underground site's id: its levels (`l:`) and their rooms (`r:`). (`within` is accepted too.) |
+| `limit` | integer | 200 | 1 to 2000 (`truncated: true` when it cut the list). |
 
 Without `settlement` or `inside` it lists every named feature: oceans, seas, rivers, ranges, settlements, sites
 and created sites.
@@ -376,7 +394,8 @@ lists:
   no movement cost; also where ground shaped by hand makes a city street climb steeply; `gravel`: a park's paths);
 - each kind of object in the chunk, with its 5e rules: cover, whether it blocks movement or sight, difficult
   terrain, hazards and their effects;
-- the objects within `radius_squares` of the place, by grid square (`near_focus`), each with its centre
+- the objects within `radius_squares` of the place (placed objects are read within the one chunk only; there is no
+  list of every object yet), by grid square (`near_focus`), each with its centre
   (`x_ft`, `y_ft`) and either its `id` (put down by hand: `place_objects` moves or turns it, `remove_objects`
   takes it; `rot_deg` when it was given a turn) or its built-in `kind` (generated: `remove_objects` takes it by
   `at`);
@@ -399,13 +418,17 @@ lists:
 These need the map app open and connected. If it isn't, the tool says so.
 
 ### `render_view`
-A 1,536 × 1,024 PNG screenshot of the map, as the app draws it. The app loads everything at that place first,
-then puts your view back where it was. Waits up to 45 s.
+A screenshot of the map, as the app draws it: a JPEG 1,024 px across (683 high) by default, a fifth of the size of the
+old 1,536 px PNG. The app loads everything at that place first, then puts your view back where it was. Waits up to 45 s;
+it needs the app open in a visible tab (a hidden one does not draw) and the place generated, so if it times out, wait a
+few seconds and ask again, or try a larger `size_ft`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
 | `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | (`id`, or `x_ft` + `y_ft`, still work) |
 | `size_ft` | number | 3000 | The ground across the image (50 to 5,000,000). |
+| `width_px` | integer | 1024 | Pixels across, 256 to 1536; the height is two thirds of it. |
+| `format` | string | `jpeg` | `jpeg` (quality 0.85) or `png` (exact lines; larger). The reply's `mimeType` follows it. |
 
 What each `size_ft` shows:
 
@@ -454,8 +477,9 @@ memory and saves it again every few seconds.
 ### `batch`
 Many edits as one change: `steps` is a list of `{ "tool": …, "arguments": { … } }`, run in order (up to 5,000). Any
 edit tool can be a step (and read tools too); `batch`, `render_view` and `focus_view` can't. Each step sees what
-the steps before it did: a site created in one step can be renamed or annotated in the next (`c:<n>` ids count
-up from `world_overview`'s `created_sites`). The whole batch is saved once, logged as one entry and shown in the
+the steps before it did: a site created in one step can be renamed or annotated in the next (`c:<n>` ids count up
+from the highest ever made. Deleted sites keep their number, so `world_overview`'s `created_sites`, which counts the
+live ones, can be too low: when unsure, create in one call and read the id it returns). The whole batch is saved once, logged as one entry and shown in the
 app as one notice. If a step fails, nothing is changed, and the error names the step. Returns each step's result.
 
 ```json
@@ -477,7 +501,7 @@ building id (`b:<layout>:0`): one name, one note (kept under `c:`) and one hidde
 | Parameter | Type | | |
 |---|---|---|---|
 | `id` | string | required | |
-| `name` | string | required | An empty string restores the generated name. |
+| `name` | string | required | An empty string removes a rename and restores the generated name. |
 
 ```json
 { "name": "rename_feature", "arguments": { "id": "city:bab44567", "name": "Gatewatch" } }
@@ -506,6 +530,7 @@ under its building id is joined onto it.
 > *"Write a short history for every ruin in the Emberwood."* · *"Add a rumour to the Gilded Griffon that the innkeeper is a retired assassin."*
 
 ### `create_feature`
+Makes sites, castles and walls (not buildings: `create_building`; not towns or settlements: see "What agents can't do").
 Adds a new site, built by the same generators as the world's own: map symbol, buildings, battlemap, interiors,
 and a full multi-level site underground (a ruin's dungeon, crypt or catacombs; a cave, mine or lava tube; or an
 `entrance`, a bare way down with nothing built above it). The result includes the new `c:<n>` id and its
@@ -567,7 +592,8 @@ Rules:
 
 ### Castles and walls
 `create_feature` with `kind: "castle"` or `"wall"` takes a shape instead of a place. A **castle** is an outline
-(`poly`, convex, 3–32 corners, 80 to 600 ft across; or `rect` about its middle): a curtain wall just inside it, a
+(`poly`, convex, 3–32 corners, 80 to 600 ft across, measured along its longest diagonal: a `rect` of 500 × 350 is 610
+across and refused; or `rect` about its middle): a curtain wall just inside it, a
 tower on every corner and along long runs (round, or square in some castles), a gatehouse on one side (`gate`: the
 side from corner `gate` to the next; else the side facing the nearest road), in a big one (80,000 sq ft or more and
 200 ft across) an inner curtain with its own gatehouse round the keep's high ground, leaving an outer bailey at
@@ -620,7 +646,7 @@ building drawn by hand takes either id, as in `rename_feature` and `annotate_fea
 | `id` | string | required | |
 | `name` | string | optional | |
 | `notes` | string | optional | Replaces the notes text. (`text` is accepted too.) |
-| `tags` | string[] | optional | Replaces the tags. |
+| `tags` | string[] | optional | Replaces the tags; `[]` clears them. |
 
 Give at least one of `name`, `notes` and `tags`; with none the call is refused.
 
@@ -645,7 +671,7 @@ kept under its `c:` id), and its business pin is hidden with it.
 > *"Hide the town of Zhuol; the players haven't discovered it yet."* · *"Reveal Zhuol."*
 
 ### `delete_feature`
-Deletes created sites (`c:<n>`): `id` or `ids`, all or none in one change. A building drawn by hand goes by either of
+Deletes created sites (`c:<n>`: ruins, towers, camps, castles, walls...) and buildings drawn by hand: `id` or `ids`, all or none in one change. A building drawn by hand goes by either of
 its ids (`c:<n>` or `b:<layout>:0`). Generated features can't be deleted, only hidden; the world's own buildings go
 with `remove_buildings`. The ids are retired and never reused: the site's `b:`, `d:`, `u:` and other layout ids stop
 answering (`get_feature` says `b:320:0 was deleted with c:2 (restore_feature brings it back)`), and searches, lists and
@@ -699,6 +725,7 @@ tools. Ids are random (`n:k3x9q0ab`), so the app and an agent can create at the 
 | `location` | string | optional | A place id. Also finds NPCs on its levels and in its rooms; a settlement's or site's id, NPCs in its buildings, districts, towers and ways underground; a settlement's, NPCs at the sites in it too. A building drawn by hand by either of its ids. |
 | `tag` | string | optional | |
 | `stance` | string | optional | `hostile`, `unfriendly`, `neutral`, `friendly` or `allied`. |
+| `limit` | integer | 100 | 1 to 1000 (`truncated: true` when it cut the list). |
 
 Returns `{items: [{id, name, stance, status, location: {id, name, level?, x_ft?, y_ft?}, tags}], found}`.
 
@@ -730,7 +757,7 @@ Safe to repeat: an NPC with the same name (case and surrounding spaces ignored) 
 one, is that NPC: the result is it, with `"existing": true`, and nothing is added. Another name or place makes a second.
 
 ### `update_npc`
-`id` plus any of `create_npc`'s fields except the place; only the fields given change.
+`id` plus any of `create_npc`'s fields except the place (`name`, `appearance`, `mannerisms`, `attitude`, `goals`, `notes`, `stance`, `status`, `tags`, `portrait`); only the fields given change.
 
 ### `place_npc`
 `id` plus `location` (and `level`), `x_ft`/`y_ft` or `at`. An empty `location` takes them off the map. An id that is an NPC with no place, or a plot point, is not a place: the refusal says so.
@@ -746,11 +773,12 @@ one, is that NPC: the result is it, with `"existing": true`, and nothing is adde
 | `anchor` | string | optional | A place id. |
 | `npc` | string | optional | An NPC id. |
 | `tag` | string | optional | |
+| `limit` | integer | 100 | 1 to 1000 (`truncated: true` when it cut the list). |
 
 Returns `{items, found}`.
 
 ### `get_plot`
-A plot point in full: `title`, `text`, `status`, `anchors` and `npcs` (each with its name), `tags`.
+`id`: a plot point in full: `title`, `text`, `status`, `anchors` and `npcs` (each with its name), `tags`.
 
 ### `create_plot`
 | Parameter | Type | | |
@@ -771,7 +799,7 @@ Safe to repeat: a plot point with the same title (case and surrounding spaces ig
 `"existing": true`; nothing is added. Another title makes a second.
 
 ### `update_plot`
-`id` plus any of `create_plot`'s fields; lists given replace the old ones.
+`id` plus any of `create_plot`'s fields (`title`, `text` or `notes`, `status`, `anchors`, `npcs`, `tags`); lists given replace the old ones.
 
 ### `delete_plot`
 `id` or `ids` (all or none).
@@ -794,7 +822,7 @@ alone; only the battlemap chunk holding each object (by its centre) is made agai
   picture with a transparent background works best, at about 64 px a square.
 
 ### `list_sprites`
-No parameters. Returns `{items, found}`: built-in kinds and uploaded sprites in one list, each
+Parameter: `limit` (1 to 1000, default 200; `truncated: true` when it cut the list). Returns `{items, found}`: built-in kinds and uploaded sprites in one list, each
 `{kind, name, uploaded, rules}` (an uploaded one also `picture` and `placed`, how many are put down); `rules` are cover (a
 word), blocks_movement, blocks_sight, difficult, height_ft, size_squares and any hazard.
 
@@ -943,7 +971,7 @@ the footprint snapped to the grid (or its point set where it fits) put it more t
 checked like a new one (it never collides with itself).
 
 The world's own buildings take the same changes (`edits.buildings`): what it is (`func`), `floors`, `roof`,
-`tint`, `structure`, a new footprint, and `name` (a rename). `auto` (or an empty `func`) puts one option back as
+`tint`, `material`, `shape`, `shade`, `structure`, a new footprint (`snap` as in `create_building`), and `name` (a rename). `auto` (or an empty `func`) puts one option back as
 generated. A new trade with no name of its own is named as a drawn building's would be. Every other building
 keeps its id and footprint. If the world is generated again from a changed sketch and the town is laid out anew,
 a change whose building no longer stands at its id is set aside (not applied to another building).
@@ -990,7 +1018,7 @@ stepping stones, a ferry jetties out from each end with a raft between. The ends
 (never moved).
 
 ### `list_crossings`
-No parameters. Returns `{items, found}`: `{id, kind, from, to, width_ft, length_ft, material?}`.
+Parameter: `limit` (1 to 2000, default 200; `truncated: true` when it cut the list). Returns `{items, found}`: `{id, kind, from, to, width_ft, length_ft, material?}`.
 
 ### `place_crossing`
 | Parameter | Type | | |
@@ -1571,6 +1599,21 @@ top (knolls, hollows) and levels road beds under roads.
 | `radius_ft: 2.5 to 200, got 500` (and the like for `width_ft`, `height_ft`, `hardness`, `edge_ft`, `margin_ft`) | The numbers' ranges are in the schema and refused, never clamped |
 | `an outline spans at most 1280 ft` / `the outline crosses itself` / `the outline holds no ground` | A plateau's outline |
 | `… is a settlement: a plateau spans at most 1280 ft` | `around` a whole town: give a building or an outline |
+
+---
+
+## What agents can't do
+
+Asked for any of these, say so rather than looking for a tool:
+- **Reshape the world.** The sketch (coastlines, mountains, rivers and roads drawn in the app's Sketch mode) is the
+  user's to draw; no tool draws, changes or erases a stroke, or generates the world again. Sea and land stay as they
+  are: no sea, lake or river can be added, moved or removed, and `create_feature` refuses water.
+- **Draw political borders.** There are no realms, provinces or border lines to read or make.
+- **Make or remove settlements.** Cities, towns and villages are generated; an agent can rename, annotate and hide
+  them, lay a town out anew (`edit_town`), add and take away buildings, but not found a new city or delete one.
+- **Move a feature.** Names, notes, tags and hiding change; a site's, a river's or a settlement's place does not
+  (delete and create a site again to put it elsewhere; a building: `update_building`).
+- **See what the user sees without the app.** `render_view` and `focus_view` need the map app open and connected.
 
 ---
 

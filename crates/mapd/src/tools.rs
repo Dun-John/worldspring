@@ -7,22 +7,25 @@ use worldgen::core::tile::TileKey;
 use worldgen::under::{MAX_LEVELS, SiteSize, THEMES, UnderKind};
 use worldgen::world::{CREATABLE, Created, Edits, Note};
 
-/// The themes by kind of site, for the tool's description.
-fn theme_doc() -> String {
-    let kinds = [UnderKind::Dungeon, UnderKind::Crypt, UnderKind::Catacombs, UnderKind::Cave, UnderKind::Mine, UnderKind::LavaTube];
-    let by: Vec<String> = kinds.iter().map(|k| format!("{}: {}", k.key(), THEMES.iter().filter(|t| t.kind == *k).map(|t| t.key).collect::<Vec<_>>().join(", "))).collect();
-    format!("The site underground; by its kind: {}", by.join("; "))
-}
-
 use crate::Shared;
 
-pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from \
-the map's top-left corner, x east and y south. Find places with search_features, features_near or world_overview, \
-inspect them with get_feature and list_children, see them with render_view. Edits (rename, annotate, create, hide) are saved and appear live \
-in the open map app. Created sites are generated like the world's own: a ruin's dungeon or crypt is fully playable. Battlemaps take objects put down or taken away by hand (place_objects, remove_objects), including uploaded sprites (upload_sprite); their ground can be shaped (shape_ground, set_plateau). Many edits at once go in one batch. Deletes can be undone (restore_feature); the creates (create_feature, create_building, create_npc, create_plot, place_objects) are safe to repeat: the same one again returns what is there. Every tool takes an optional world (the hash world_overview gives) and refuses to run if another world is open. The DM's notebook holds NPCs (list_npcs, create_npc, place_npc...) and plot points tied to places (list_plots, create_plot...); get_feature and describe_location show those at a place.";
+pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from the map's top-left corner, x east, y south. \
+Find places with search_features, features_near or world_overview; inspect them with get_feature and list_children. Ids carry their kind: c: a created site, b: a building, d: a district, u: a site underground, l:/r: its levels and rooms, \
+n: an NPC, p: a plot point, o: a placed object, x: a clear, v: a crossing, h: a plateau; get one wrong and search_features finds the right one. \
+Edits (rename, annotate, hide, create_feature, create_building, place_crossing, place_objects, shape_ground, set_plateau, edit_town, set_site_design) are saved and appear live in the open app; \
+many at once go in one batch. Roads and routes: list_roads, route. The DM's notebook holds NPCs and plot points tied to places (create_npc, create_plot). \
+render_view and focus_view need the app open in a visible tab. Habits that avoid trouble: check_building_spot (or a dry_run where a tool has one) before a write; \
+an error means nothing changed, except a save warning (saved: false), which is not to be repeated; the creates are safe to repeat (the same one again returns what is there); \
+deletes come back with restore_feature, restore_objects and restore_building. Lists are cut by limit (found says how many there were). \
+Out-of-range values are refused, never clamped. Every tool takes an optional world (the hash world_overview gives) and refuses to run if another world is open. \
+Not possible: reshaping the sketch, drawing borders, founding or deleting settlements, moving a feature. The full reference is docs/MCP.md.";
 
 pub(crate) fn schema(props: Value, required: &[&str]) -> Value {
-    json!({ "type": "object", "properties": props, "required": required })
+    let mut s = json!({ "type": "object", "properties": props });
+    if !required.is_empty() {
+        s["required"] = json!(required);
+    }
+    s
 }
 
 fn place_props() -> Value {
@@ -40,30 +43,30 @@ fn merge(a: Value, b: Value) -> Value {
 pub fn list() -> Value {
     let mut v = json!([
         { "name": "world_overview", "title": "World overview", "description": "The world's size, land masses, counts of named features and its largest settlements.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "search_features", "title": "Search", "description": "Named features matching a query, by their current names (towns, ranges, rivers, ruins...; from three letters also districts and businesses such as inns and temples). Empty query with a kind lists that kind. Returns {items, found} (truncated: true when limit cut the list). Each item has its extent: bounding box (ft) and area (sq mi), or a river's length (mi).", "inputSchema": schema(json!({ "query": { "type": "string", "default": "" }, "kind": { "type": "string", "description": "Only this kind (city, town, village, ruin, cave, range, forest, river, lake, building, district...)" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: what and where it is, its extent (bounding box, area or length), its notes, the regions it lies in, nearest settlements, roads to other settlements, a settlement's districts, notable buildings, ways underground and the sites standing in it (sites), a building's or site's levels and rooms; for anything in a settlement's or site's layout, the settlement it is in (settlement: {id, name} or null) and the site (site). NPCs and plots at it, its sites, levels and rooms (a building drawn by hand: the same under either of its ids).", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_children", "title": "Children", "description": "What a feature contains: a settlement's districts, businesses (buildings drawn in it with a trade too) and the sites standing in it, a district's businesses, a building's or underground site's levels and rooms, a region's settlements and sites.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, each with its id, kind, current and generated name: every named feature (oceans, rivers, ranges, settlements, sites...); with settlement (a settlement's or site's id) its districts, businesses, towers and underground sites, and for a settlement the sites standing in it (kind site); with inside (a building or site id) its levels and rooms. Returns {items, found}.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, range, city, district, building, tower, underground, site, level, room...)" }, "settlement": { "type": "string" }, "inside": { "type": "string", "description": "A building or site id: its levels and rooms" } }), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, biome, the areas it lies in (land, sea, range, forest, lake...), the building or district or site there, named features nearby (within a tenth of their size, 2 to 10 mi, measured to their nearest edge or course), nearest settlements.", "inputSchema": schema(place_props(), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "features_near", "title": "Near a place", "description": "Everything named within a radius of a place, nearest first (returns {items, found}; truncated: true when limit cut the list), measured to each feature's nearest edge or course (0 inside an area), with its distance, direction and extent. kinds limits it to some kinds (e.g. [\"river\", \"lake\", \"forest\"]); districts and businesses come when kinds asks for district or building, or with no kinds within a mile.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 500, "default": 5 }, "kinds": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 50 }, "include_hidden": { "type": "boolean", "default": false } })), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "search_features", "title": "Search", "description": "Named features matching a query (towns, ranges, rivers, ruins...; from three letters also districts and businesses). Empty query with a kind lists that kind. Returns {items, found}; limit cuts it and sets truncated.", "inputSchema": schema(json!({ "query": { "type": "string", "default": "" }, "kind": { "type": "string", "description": "Only this kind (city, ruin, river, building...)" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: where and what it is, extent, notes, regions, nearest settlements, roads, districts, notable buildings, ways underground, sites in it, levels and rooms; for anything in a layout, its settlement and site. NPCs and plots there.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
+        { "name": "list_children", "title": "Children", "description": "What a feature contains: a settlement's districts, businesses and sites, a building's or site's levels and rooms, a region's settlements and sites. Each list is cut to limit (default 200, max 2000); then found gives the full counts and truncated is true.", "inputSchema": schema(json!({ "id": { "type": "string" }, "limit": limit_prop(200, 2000) }), &["id"]), "annotations": { "readOnlyHint": true } },
+        { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, with id, kind, current and generated name; with settlement its districts, businesses, towers and sites; with inside (a building or site) its levels and rooms. Returns {items, found}; limit (default 200, max 2000) cuts it and sets truncated. A kind nothing has is refused with the kinds there are.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, city, building, site, room...)" }, "settlement": { "type": "string" }, "inside": { "type": "string" }, "limit": limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "describe_location", "title": "What is here", "description": "What is at a place: elevation, biome, areas it lies in, the building, district or site there, named features nearby (within a tenth of their size, 2 to 10 mi), nearest settlements.", "inputSchema": schema(place_props(), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "features_near", "title": "Near a place", "description": "Everything named within a radius of a place, nearest first, to each feature's nearest edge or course, with distance, direction and extent. Returns {items, found}; limit (default 50) cuts it and sets truncated. kinds limits it; districts and businesses only when asked for or within a mile.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 500, "default": 5 }, "kinds": { "type": "array", "items": { "type": "string" } }, "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 50 }, "include_hidden": { "type": "boolean", "default": false } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "route", "title": "Route", "description": "Distance between two places by road (where roads join them) or overland, with D&D 5e travel days (normal, fast, slow pace).", "inputSchema": schema(json!({ "from": crate::args::point_schema("Where from: an id, {x_ft, y_ft} or [x_ft, y_ft]"), "to": crate::args::point_schema("Where to: an id, {x_ft, y_ft} or [x_ft, y_ft]") }), &["from", "to"]), "annotations": { "readOnlyHint": true } },
-        { "name": "list_roads", "title": "Roads", "description": "The road network: named roads (drawn in the world's sketch) with the settlements along them, then the roads between settlements and junctions, longest first, each with its class (king's road, road, track), length and ends (a settlement's id and name, or the junction's point). Returns {items, found, named}. Filter by a place (at) and radius_mi, by settlement (roads ending there), by class, or drawn roads only.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 3000, "default": 25 }, "settlement": { "type": "string", "description": "A settlement's id: only roads ending there" }, "class": { "type": "string", "enum": ["kings_road", "road", "track"] }, "drawn": { "type": "boolean", "default": false, "description": "Only roads drawn in the sketch" }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "get_battlemap", "title": "Battlemap", "description": "The battlemap (a 640-ft square of 5-ft squares) at a place: elevation range, surfaces, buildings, and every kind of object with its tactical rules (cover, movement, sight, hazards); objects near the place listed by square.", "inputSchema": schema(merge(place_props(), json!({ "radius_squares": { "type": "number", "minimum": 1, "maximum": 64, "default": 12 } })), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (PNG, 1536x1024). size_ft is the ground across the image: up to about 450 shows the painted battlemap with its 5-ft grid, 3000 a village or a town's streets, 20000 a city and its fields, 200000 a region.", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 } })), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "list_roads", "title": "Roads", "description": "The road network: roads drawn in the sketch (named, with their settlements), then roads between settlements and junctions, longest first, with class, length and ends. Returns {items, found, named}; limit (default 50) cuts it and sets truncated. Filter by at and radius_mi, settlement, class or drawn.", "inputSchema": schema(merge(place_props(), json!({ "radius_mi": { "type": "number", "minimum": 0.01, "maximum": 3000, "default": 25 }, "settlement": { "type": "string", "description": "Only roads ending at this settlement" }, "class": { "type": "string", "enum": ["kings_road", "road", "track"] }, "drawn": { "type": "boolean", "default": false, "description": "Only roads drawn in the sketch" }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 } })), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "get_battlemap", "title": "Battlemap", "description": "The battlemap (a 640-ft square of 5-ft squares) at a place: elevation range, surfaces, buildings, every kind of object with its tactical rules, and the objects near the place by square.", "inputSchema": schema(merge(place_props(), json!({ "radius_squares": { "type": "number", "minimum": 1, "maximum": 64, "default": 12 } })), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "render_view", "title": "Look at the map", "description": "A screenshot of the open map app at a place (JPEG 1024x683; width_px 256-1536, format png). Needs the app open in a visible tab with the map generated. size_ft is the ground across: ~450 the battlemap, 3000 a village, 20000 a city, 200000 a region.", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 }, "width_px": { "type": "integer", "minimum": 256, "maximum": 1536, "default": 1024, "description": "Pixels across (height 2/3 of it)" }, "format": { "type": "string", "enum": ["jpeg", "png"], "default": "jpeg" } })), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "focus_view", "title": "Show the user", "description": "Move the open map app's view to a place (the user sees it).", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 } })), &[]) },
-        { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, underground site, or a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), ids as list_names gives them. An empty name restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
+        { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, site, or a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), ids as list_names gives them. An empty name restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
         { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets for the DM, with tags. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "append": { "type": "boolean", "default": false } }), &["id", "notes"]) },
-        { "name": "create_feature", "title": "Create a site", "description": "Add a site at a place on dry land, generated like the world's own (map, battlemap, interiors, underground): ruin (over a dungeon, crypt or catacombs), tower, camp, waystation (roadside inn), cave, mine, lava_tube, or entrance (a bare way underground: stairs, a cave mouth, a mine adit or a skylight, by 'under'). Sites with something underground take its size, levels and theme (anything left out is chosen as for the world's own). Or a castle (an outline: curtain wall, towers, gatehouse, keep, yard buildings) or a wall (a line of wall with towers; gates where asked and where roads and streets cross it), drawn by poly/rect or pts instead of a place; the world's own buildings in the way are named, or taken away with remove_in_way. Returns its id and the ids of its ways underground (a castle: its keep's building id, towers and gates).", "inputSchema": schema(merge(merge(place_props(), crate::works::props()), json!({
+        { "name": "create_feature", "title": "Create a site", "description": "Add a site on dry land, generated like the world's own: ruin (over a dungeon, crypt or catacombs), tower, camp, waystation, cave, mine, lava_tube, or entrance (a bare way underground); something underground takes size, levels and theme (left out: chosen as for the world's own). Or a castle (poly/rect) or a wall (pts), drawn instead of a place; the world's own buildings in the way are named, or taken away with remove_in_way. Returns its id and its underground ways (a castle: keep, towers, gates).", "inputSchema": schema(merge(merge(place_props(), crate::works::props()), json!({
             "kind": { "type": "string", "enum": CREATABLE.iter().filter(|k| **k != "building").collect::<Vec<_>>() },
             "name": { "type": "string" },
             "under": { "type": "string", "enum": UnderKind::CREATABLE.map(|k| k.key()), "description": "What lies beneath a ruin (dungeon, crypt, catacombs) or an entrance (any)" },
             "size": { "type": "string", "enum": SiteSize::NAMES, "description": "The site underground" },
             "levels": { "type": "integer", "minimum": 1, "maximum": MAX_LEVELS },
-            "theme": { "type": "string", "enum": THEMES.iter().map(|t| t.key).collect::<Vec<_>>(), "description": theme_doc() },
+            "theme": { "type": "string", "enum": THEMES.iter().map(|t| t.key).collect::<Vec<_>>(), "description": "Which themes fit which kind of site: MCP.md" },
         })), &["kind"]) },
         { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } }), &["id"]) },
         { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there. A building drawn by hand is one place: either of its ids (its business pin is hidden too).", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
-        { "name": "delete_feature", "title": "Delete a created site", "description": "Delete sites that were created, buildings drawn by hand too (a building by either of its ids): id or ids, all or none in one change. Its ids are retired (get_feature and searches no longer find them); NPCs, plots, notes and a hand design that pointed at it are kept and reported in left_pointing. restore_feature brings it back. The world's own buildings go with remove_buildings; other generated features can only be hidden.", "inputSchema": schema(crate::args::ids_props("created site (c:<n>, or a drawn building's b:<layout>:0)"), &[]) },
+        { "name": "delete_feature", "title": "Delete a created site", "description": "Delete created sites and buildings drawn by hand (id or ids, all or none). Their ids are retired; NPCs, plots and notes pointing at them are kept (left_pointing). restore_feature undoes it. The world's own buildings go with remove_buildings; other generated features can only be hidden.", "inputSchema": schema(crate::args::ids_props("created site (c:<n>, or a drawn building's b:<layout>:0)"), &[]) },
     ]);
     if let Some(a) = v.as_array_mut() {
         a.extend(crate::notebook::list());
@@ -87,7 +90,7 @@ pub fn list() -> Value {
                     t["annotations"][k] = v.clone();
                 }
             }
-            t["inputSchema"]["properties"]["world"] = json!({ "type": "string", "description": "The world meant (its hash, from world_overview): the call is refused if mapd has another world open" });
+            t["inputSchema"]["properties"]["world"] = json!({ "type": "string" });
         }
     }
     v
@@ -119,7 +122,7 @@ pub(crate) fn annotations(name: &str) -> Value {
 }
 
 pub(crate) fn text(v: Value) -> Vec<Value> {
-    vec![json!({ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() })]
+    vec![json!({ "type": "text", "text": serde_json::to_string(&v).unwrap_or_default() })]
 }
 
 /// A list as `{items, found}` (`found`: how many there were; `truncated: true` when `limit` cut it), `rest` beside.
@@ -134,6 +137,16 @@ pub(crate) fn listed(items: Value, limit: usize, rest: Value) -> Value {
         v["truncated"] = json!(true);
     }
     v
+}
+
+/// A `limit` property: whole numbers `1..=max`, `default` when left out (every list tool has one).
+pub(crate) fn limit_prop(default: u64, max: u64) -> Value {
+    json!({ "type": "integer", "minimum": 1, "maximum": max, "default": default, "description": "Most items to return" })
+}
+
+/// The `limit` a call gave, else `default`.
+pub(crate) fn limit_of(a: &Value, default: usize) -> usize {
+    a["limit"].as_u64().map(|l| l as usize).unwrap_or(default)
 }
 
 pub(crate) fn arg_str(a: &Value, k: &str) -> Result<String, String> {
@@ -248,12 +261,46 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         }
         "list_children" => {
             let id = arg_str(&a, "id")?;
-            app.worker.with(move |ex| agent::children(&ex.world, &ex.t0, &id).ok_or_else(|| deleted_or(&ex.world, &ex.t0, &id, format!("no such feature, or it contains nothing: {id}")))).await.map(text)
+            let limit = limit_of(&a, 200);
+            let mut v = app.worker.with(move |ex| agent::children(&ex.world, &ex.t0, &id).ok_or_else(|| deleted_or(&ex.world, &ex.t0, &id, format!("no such feature, or it contains nothing: {id}")))).await?;
+            // Each list is cut to `limit`; `found` has the full counts of the ones that were cut.
+            let mut found = serde_json::Map::new();
+            for (k, l) in v.as_object_mut().into_iter().flatten() {
+                if let Some(arr) = l.as_array_mut().filter(|x| x.len() > limit) {
+                    found.insert(k.clone(), json!(arr.len()));
+                    arr.truncate(limit);
+                }
+            }
+            if !found.is_empty() {
+                v["found"] = Value::Object(found);
+                v["truncated"] = json!(true);
+            }
+            Ok(text(v))
         }
         "list_names" => {
             let (kind, inside, settlement) = (a["kind"].as_str().map(str::to_string), a["inside"].as_str().map(str::to_string), a["settlement"].as_str().map(str::to_string));
-            let v = app.worker.with(move |ex| agent::names(&ex.world, &ex.t0, kind.as_deref(), inside.as_deref(), settlement.as_deref())).await?;
-            Ok(text(listed(v["names"].clone(), usize::MAX, json!({}))))
+            let limit = limit_of(&a, 200);
+            let v = app
+                .worker
+                .with(move |ex| {
+                    let v = agent::names(&ex.world, &ex.t0, kind.as_deref(), inside.as_deref(), settlement.as_deref())?;
+                    // A kind nothing has is a typo, not an empty answer.
+                    if let Some(k) = kind.as_deref().filter(|_| v["names"].as_array().is_some_and(|n| n.is_empty())) {
+                        let all = agent::names(&ex.world, &ex.t0, None, inside.as_deref(), settlement.as_deref())?;
+                        let mut kinds: Vec<&str> = all["names"].as_array().into_iter().flatten().filter_map(|n| n["kind"].as_str()).collect();
+                        // (Kinds that only a scoped list has are known too: settlement and inside.)
+                        kinds.extend(["site", "district", "building", "tower", "underground", "level", "room"]);
+                        kinds.sort_unstable();
+                        kinds.dedup();
+                        if !kinds.contains(&k) {
+                            let hint = crate::args::suggest(k, kinds.iter().copied()).map(|s| format!(" (did you mean \"{s}\"?)")).unwrap_or_default();
+                            return Err(format!("kind: no names of kind \"{k}\"{hint}; the kinds here: {}", kinds.join(", ")));
+                        }
+                    }
+                    Ok(v)
+                })
+                .await?;
+            Ok(text(listed(v["names"].clone(), limit, json!({}))))
         }
         "describe_location" => {
             let p = place(app, &a).await?;
@@ -329,12 +376,16 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         "render_view" => {
             let p = place(app, &a).await?;
             let size = a["size_ft"].as_f64().unwrap_or(3000.0);
-            let reply = app.ask_app(json!({ "type": "render", "x": p[0], "y": p[1], "size": size }), 45).await?;
-            let png = reply["png"].as_str().ok_or_else(|| format!("the app could not render: {}", reply["error"].as_str().unwrap_or("no image")))?;
-            let data = png.split(',').next_back().unwrap_or(png);
+            let width = a["width_px"].as_u64().unwrap_or(1024);
+            let png = a["format"].as_str() == Some("png");
+            let reply = app.ask_app(json!({ "type": "render", "x": p[0], "y": p[1], "size": size, "width_px": width, "format": if png { "png" } else { "jpeg" } }), 45).await.map_err(|e| {
+                format!("{e}; render_view needs the map app open in a visible tab, with the place generated (give it a few seconds and try again, or try a larger size_ft)")
+            })?;
+            let img = reply["image"].as_str().or_else(|| reply["png"].as_str()).ok_or_else(|| format!("the app could not render: {} (the tab must be visible and the map generated; try again, or a larger size_ft)", reply["error"].as_str().unwrap_or("no image")))?;
+            let data = img.split(',').next_back().unwrap_or(img);
             Ok(vec![
-                json!({ "type": "image", "data": data, "mimeType": "image/png" }),
-                json!({ "type": "text", "text": format!("View centred at ({:.0}, {:.0}) ft, spanning about {size:.0} ft.", p[0], p[1]) }),
+                json!({ "type": "image", "data": data, "mimeType": if png { "image/png" } else { "image/jpeg" } }),
+                json!({ "type": "text", "text": format!("View centred at ({:.0}, {:.0}) ft, spanning about {size:.0} ft; {width} x {} px.", p[0], p[1], (width as f64 * 2.0 / 3.0).round()) }),
             ])
         }
         "focus_view" => {

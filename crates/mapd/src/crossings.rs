@@ -9,14 +9,14 @@ use crate::tools::{listed, schema, text};
 
 pub fn list() -> Vec<Value> {
     vec![
-        json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (returns {items, found}; bridges, fords, ferries): id, kind, ends (world ft), width, length and a bridge's material.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } }),
-        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry on the map from one bank to the other (world ft), drawn on the battlemap over what is there: a bridge's deck clear of the water (walkable; timber planks, or old stone with material \"stone\"), a ford's bed brought up to wading depth under stepping stones, a ferry's jetties out from each point with a raft on a rope between. 10 to 2000 ft long (a ferry at least 68), 5 to 40 ft wide. With id, changes that crossing (fields left out stay). Returns its id (v:...).", "inputSchema": schema(json!({
+        json!({ "name": "list_crossings", "title": "Crossings", "description": "The crossings put down by hand (bridges, fords, ferries) with id, kind, ends, width, length and material. Returns {items, found}; limit (default 200) cuts it and sets truncated.", "inputSchema": schema(json!({ "limit": crate::tools::limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "place_crossing", "title": "Put a crossing down", "description": "Put a bridge, ford or ferry from one bank to the other (world ft), drawn on the battlemap. 10 to 2000 ft long (a ferry at least 68), 5 to 40 ft wide. With id, changes that crossing (fields left out stay). Returns its id (v:...).", "inputSchema": schema(json!({
             "id": { "type": "string", "description": "A crossing to change" },
             "kind": { "type": "string", "enum": ["bridge", "ford", "ferry"] },
             "from": crate::args::point_schema("One bank: an id, {x_ft, y_ft} or [x_ft, y_ft] (world ft)"),
             "to": crate::args::point_schema("The other bank: an id, {x_ft, y_ft} or [x_ft, y_ft] (world ft); the crossing is 10 to 2000 ft long (a ferry at least 68)"),
             "width_ft": { "type": "number", "minimum": 5, "maximum": 40, "default": 12, "description": "Deck, ford or raft width" },
-            "material": { "type": "string", "enum": ["timber", "stone"], "description": "A bridge's: timber planks (default) or old stone" },
+            "material": { "type": "string", "enum": ["timber", "stone"] },
         }), &[]) }),
         json!({ "name": "remove_crossings", "title": "Take crossings away", "description": "Take crossings put down by hand off the map, by id or ids (v:..., all or none).", "inputSchema": schema(crate::args::ids_props("crossing id"), &[]) }),
     ]
@@ -25,7 +25,7 @@ pub fn list() -> Vec<Value> {
 /// Run a crossing tool (None: not one of these).
 pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Value>, String>> {
     Some(match name {
-        "list_crossings" => list_crossings(app).map(text),
+        "list_crossings" => list_crossings(app, crate::tools::limit_of(a, 200)).map(text),
         "place_crossing" => place(app, a).await.map(text),
         "remove_crossings" => remove(app, a).await.map(text),
         _ => return None,
@@ -40,8 +40,8 @@ fn describe(id: &str, c: &Crossing) -> Value {
     v
 }
 
-fn list_crossings(app: &Shared) -> Result<Value, String> {
-    Ok(listed(json!(app.with_edits(|e| e.crossings.iter().map(|(id, c)| describe(id, c)).collect::<Vec<_>>()).unwrap_or_default()), usize::MAX, json!({})))
+fn list_crossings(app: &Shared, limit: usize) -> Result<Value, String> {
+    Ok(listed(json!(app.with_edits(|e| e.crossings.iter().map(|(id, c)| describe(id, c)).collect::<Vec<_>>()).unwrap_or_default()), limit, json!({})))
 }
 
 async fn end(app: &Shared, a: &Value, k: &str) -> Result<Option<[f64; 2]>, String> {
