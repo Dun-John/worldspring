@@ -1186,7 +1186,7 @@ impl T0 {
                 for x in &mut v {
                     *x = f64::from_le_bytes(take(8)?.try_into().unwrap());
                 }
-                sea_ferries.push(ferries::SeaFerry { a: [v[0], v[1]], b: [v[2], v[3]] });
+                sea_ferries.push(ferries::SeaFerry::new([v[0], v[1]], [v[2], v[3]]));
             }
         }
         let map_w = (w - 1) as f64 * cell_ft;

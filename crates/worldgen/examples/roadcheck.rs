@@ -1244,10 +1244,60 @@ fn sea_ferries(world: &worldgen::world::World, t0: &T0) {
     for f in t0.ferries.iter().take(4) {
         say!("      ferry ({:.0}, {:.0}) -> ({:.0}, {:.0}), {:.2} mi", f.a[0], f.a[1], f.b[0], f.b[1], f.mi());
     }
+    // Each landing's track (the road ending at it): real miles, climb and range of its bed (ft).
+    for f in &t0.ferries {
+        let t = std::time::Instant::now();
+        let sh = f.shores(world, t0);
+        say!("        stages ({:.0}, {:.0}) {:.0} ft out, ({:.0}, {:.0}) {:.0} ft out ({} ms)", sh[0][0], sh[0][1], dist(sh[0], f.a), sh[1][0], sh[1][1], dist(sh[1], f.b), t.elapsed().as_millis());
+        for p in [f.a, f.b] {
+            let near = |q: &P| dist(*q, p) < ferries::INLAND_FT + 30.0;
+            let Some(r) = t0.roads.roads.iter().find(|r| r.pts.first().is_some_and(near) || r.pts.last().is_some_and(near)) else {
+                say!("        landing ({:.0}, {:.0}): no track ends here", p[0], p[1]);
+                continue;
+            };
+            let len: f64 = r.pts.windows(2).map(|s| dist(s[0], s[1])).sum();
+            let climb: f32 = r.z.windows(2).map(|z| (z[1] - z[0]).abs()).sum();
+            let (lo, hi) = r.z.iter().fold((f32::MAX, f32::MIN), |(a, b), &z| (a.min(z), b.max(z)));
+            say!("        landing ({:.0}, {:.0}): track {:.1} mi, climb {:.0} ft, bed {:.0}..{:.0} ft", p[0], p[1], len / 5280.0, climb, lo, hi);
+        }
+    }
     if !std::env::var("FERRY_MAP").is_ok_and(|v| v == "1") {
         return;
     }
     let g = &world.geom;
+    if std::env::var("FERRY_PROBE").is_ok() {
+        // Out from each landing every 25 ft: the plan's ground and the finest tile's, less the water.
+        use worldgen::core::tile::{HALO, PADDED, TileKey};
+        let level = g.max_level;
+        let (s, size) = (g.spacing_ft(level), g.tile_size_ft(level));
+        let lattice = g.spacing_ft(g.first_refine_level.saturating_sub(1));
+        let mut cache: std::collections::BTreeMap<(u32, u32), Vec<f32>> = Default::default();
+        for f in &t0.ferries {
+            for (p, q) in [(f.a, f.b), (f.b, f.a)] {
+                let l = dist(p, q);
+                let mut row = String::new();
+                for k in 0..=48 {
+                    let t = k as f64 * 25.0 - 100.0;
+                    let (x, y) = (p[0] + (q[0] - p[0]) * t / l, p[1] + (q[1] - p[1]) * t / l);
+                    let (tx, ty) = ((x / size) as u32, (y / size) as u32);
+                    let pad = cache.entry((tx, ty)).or_insert_with(|| {
+                        let mut parent: Option<Vec<f32>> = None;
+                        for lv in 0..=level {
+                            let pk = TileKey::surface(lv, tx >> (level - lv), ty >> (level - lv));
+                            parent = Some(worldgen::lod::terrain_refine::terrain_tile(world, t0, &pk, parent.as_deref()).padded.to_vec());
+                        }
+                        parent.unwrap()
+                    });
+                    let (ox, oy) = (tx as f64 * size, ty as f64 * size);
+                    let (i, j) = (((x - ox) / s).round() as usize + HALO, ((y - oy) / s).round() as usize + HALO);
+                    let wv = t0.sample_water(x, y) as f64;
+                    let gp = t0.rivers.valley(t0.ground_at(x, y, lattice), x, y);
+                    row += &format!(" {:.0}:{:.1}/{:.1}", t, gp - wv.max(-1e3), pad[j * PADDED + i] as f64 - wv.max(-1e3));
+                }
+                say!("        probe from ({:.0}, {:.0}) t:plan-water/tile-water:{row}", p[0], p[1]);
+            }
+        }
+    }
     if std::env::var("FERRY_PROFILE").is_ok() {
         use worldgen::core::tile::{HALO, PADDED, TileKey};
         let level = 10u8;

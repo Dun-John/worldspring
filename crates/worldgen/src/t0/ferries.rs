@@ -28,19 +28,88 @@ pub const INLAND_FT: f64 = 12.0;
 /// The water's contour is found along the line in steps of this (ft), then halved down.
 const STEP_FT: f64 = 50.0;
 
-/// A ferry over the sea: its landings where the water meets each shore (world ft), `a` on the
-/// island it serves, `b` on the bigger land.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// A ferry over the sea: its landings where the water's contour meets each shore (world ft),
+/// `a` on the island it serves, `b` on the bigger land. Its land legs end there; the finest
+/// terrain's waterline (`shores`) may lie further out, over a shelf the contour leaves dry.
+#[derive(Clone, Debug, Default)]
 pub struct SeaFerry {
     pub a: [f64; 2],
     pub b: [f64; 2],
+    /// `shores`, found once (from the finest terrain, so a pure function of the world).
+    shore: std::sync::OnceLock<[[f64; 2]; 2]>,
+}
+
+impl PartialEq for SeaFerry {
+    fn eq(&self, o: &Self) -> bool {
+        self.a == o.a && self.b == o.b
+    }
 }
 
 impl SeaFerry {
+    pub fn new(a: [f64; 2], b: [f64; 2]) -> SeaFerry {
+        SeaFerry { a, b, shore: Default::default() }
+    }
+
     /// Its water's length (miles).
     pub fn mi(&self) -> f64 {
         dist(self.a, self.b) / 5280.0
     }
+
+    /// Where the water begins out from each landing (`a`'s, `b`'s) on the finest terrain, as the
+    /// battlemap reads it: the first battlemap square along the line, from the landing out to
+    /// `SHORE_REACH_FT` (and never past half way), whose water stands above its ground; the
+    /// landing itself where there is none. The same in every chunk and tile (found once per
+    /// ferry, from the finest tiles along the line; the land legs' tracks run on to it and the
+    /// stages stand there).
+    pub fn shores(&self, world: &crate::world::World, t0: &super::T0) -> [[f64; 2]; 2] {
+        *self.shore.get_or_init(|| [shore_out(world, t0, self.a, self.b), shore_out(world, t0, self.b, self.a)])
+    }
+}
+
+/// How far out from a landing (ft) the finest terrain's waterline is looked for (a shelf may run
+/// dry far past the water's contour).
+pub const SHORE_REACH_FT: f64 = 1_500.0;
+
+/// `SeaFerry::shores` from landing `p` towards `q`: walked in steps of half a battlemap square,
+/// reading each square's centre sample (an odd sample of the finest level) from the tiles along
+/// the way, each built from the coarsest level down.
+fn shore_out(world: &crate::world::World, t0: &super::T0, p: [f64; 2], q: [f64; 2]) -> [f64; 2] {
+    use crate::core::tile::{HALO, PADDED, TILE_N, TileKey};
+    let g = &world.geom;
+    let level = g.max_level;
+    let s = g.spacing_ft(level);
+    let square = 2.0 * s;
+    let len = dist(p, q);
+    if len <= 0.0 {
+        return p;
+    }
+    let u = [(q[0] - p[0]) / len, (q[1] - p[1]) / len];
+    let mut tiles: std::collections::BTreeMap<(u8, u32, u32), Vec<f32>> = Default::default();
+    let reach = SHORE_REACH_FT.min(0.5 * len);
+    for m in 0..=(reach / (0.5 * square)) as usize {
+        let t = m as f64 * 0.5 * square;
+        let c = [p[0] + u[0] * t, p[1] + u[1] * t];
+        if c[0] < 0.0 || c[1] < 0.0 || c[0] >= g.map_w_ft || c[1] >= g.map_h_ft {
+            break;
+        }
+        // The square's centre: lattice sample (2i + 1, 2j + 1) of the finest level.
+        let (gi, gj) = (2 * crate::core::floor(c[0] / square) as i64 + 1, 2 * crate::core::floor(c[1] / square) as i64 + 1);
+        let (tx, ty) = ((gi / TILE_N as i64) as u32, (gj / TILE_N as i64) as u32);
+        for lv in 0..=level {
+            let k = (lv, tx >> (level - lv), ty >> (level - lv));
+            if !tiles.contains_key(&k) {
+                let parent = lv.checked_sub(1).and_then(|pl| tiles.get(&(pl, tx >> (level - pl), ty >> (level - pl))));
+                let made = crate::lod::terrain_refine::terrain_tile(world, t0, &TileKey::surface(lv, k.1, k.2), parent.map(|v| v.as_slice()));
+                tiles.insert(k, made.padded.to_vec());
+            }
+        }
+        let pad = &tiles[&(level, tx, ty)];
+        let (li, lj) = ((gi - tx as i64 * TILE_N as i64) as usize + HALO, (gj - ty as i64 * TILE_N as i64) as usize + HALO);
+        if t0.sample_water(gi as f64 * s, gj as f64 * s) > pad[lj * PADDED + li] {
+            return c;
+        }
+    }
+    p
 }
 
 /// A ferry and its land legs: per side, the cells from the road (or settlement) it leaves to the
@@ -247,25 +316,42 @@ pub fn plan(inp: &Inputs, settlements: &[Settlement], paths: &[Routed]) -> Vec<P
         if legs.iter().any(|l| l.0.len() < 2) || last(&legs[0]) == last(&legs[1]) || out.iter().any(|p: &Planned| p.legs.iter().any(|l| legs.iter().any(|m| last(l) == last(m)))) {
             continue;
         }
-        out.push(Planned { ferry: SeaFerry { a: la, b: lb }, legs });
+        out.push(Planned { ferry: SeaFerry::new(la, lb), legs });
     }
     out
 }
 
 /// The ferries' lines over the sea near a rectangle (world ft), as the tile payload's road lines
 /// (x, y, width, class 5: a ferry's dashed line): points every `step` ft along each from its
-/// island's landing, so every tile cuts them alike.
-pub fn tile_lines(ferries: &[SeaFerry], rect: [f64; 4], step: f64) -> Vec<Vec<[f64; 4]>> {
+/// island's end, so every tile of a level cuts them alike. With `fine` (levels that show a
+/// shelf), each line runs between the stages where the water begins (`SeaFerry::shores`), and
+/// each land leg's track (class 2) runs on over the shelf to its stage; else landing to landing.
+pub fn tile_lines(world: &crate::world::World, t0: &super::T0, rect: [f64; 4], step: f64, fine: bool) -> Vec<Vec<[f64; 4]>> {
     let width = super::roads::RoadClass::Track.width_ft();
-    ferries
-        .iter()
-        .filter(|f| f.a[0].max(f.b[0]) + step >= rect[0] && f.a[0].min(f.b[0]) - step <= rect[2] && f.a[1].max(f.b[1]) + step >= rect[1] && f.a[1].min(f.b[1]) - step <= rect[3])
-        .map(|f| {
-            let len = dist(f.a, f.b);
-            let m = crate::core::ceil(len / step).max(1.0) as usize;
-            let mut v: Vec<[f64; 4]> = (0..m).map(|i| i as f64 * step).map(|s| [f.a[0] + (f.b[0] - f.a[0]) * s / len, f.a[1] + (f.b[1] - f.a[1]) * s / len, width, 5.0]).collect();
-            v.push([f.b[0], f.b[1], width, 5.0]);
-            v
-        })
-        .collect()
+    let pad = step + if fine { SHORE_REACH_FT } else { 0.0 };
+    let mut out = Vec::new();
+    for f in t0.ferries.iter().filter(|f| f.a[0].max(f.b[0]) + pad >= rect[0] && f.a[0].min(f.b[0]) - pad <= rect[2] && f.a[1].max(f.b[1]) + pad >= rect[1] && f.a[1].min(f.b[1]) - pad <= rect[3]) {
+        let [a, b] = if fine { f.shores(world, t0) } else { [f.a, f.b] };
+        let len = dist(a, b);
+        if len <= 0.0 {
+            continue;
+        }
+        let m = crate::core::ceil(len / step).max(1.0) as usize;
+        let mut v: Vec<[f64; 4]> = (0..m).map(|i| i as f64 * step).map(|s| [a[0] + (b[0] - a[0]) * s / len, a[1] + (b[1] - a[1]) * s / len, width, 5.0]).collect();
+        v.push([b[0], b[1], width, 5.0]);
+        out.push(v);
+        if fine {
+            // (From the leg's end, `INLAND_FT` back from its landing, to its stage.)
+            for (p, w) in [(f.a, a), (f.b, b)] {
+                let u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+                let u = if p == f.a { u } else { [-u[0], -u[1]] };
+                let s = [p[0] - u[0] * INLAND_FT, p[1] - u[1] * INLAND_FT];
+                let e = [w[0] - u[0] * 3.0, w[1] - u[1] * 3.0];
+                if (e[0] - s[0]) * u[0] + (e[1] - s[1]) * u[1] > INLAND_FT {
+                    out.push(vec![[s[0], s[1], width, 2.0], [e[0], e[1], width, 2.0]]);
+                }
+            }
+        }
+    }
+    out
 }
