@@ -4901,6 +4901,13 @@ fn furnish_yurt(lvl: &mut Level, nx: usize, ny: usize, south: P, ext_free: &dyn 
             }
         }
     }
+    // (Kept clear of rugs and chests: the door's square and the one just inside it.)
+    let mut inside: Vec<(isize, isize)> = Vec::new();
+    if let Some((_, i, j, side)) = best {
+        let (di, dj) = STEPS[side];
+        inside = vec![(i, j), (i - di, j - dj)];
+        lvl.furniture.retain(|f| !inside.iter().any(|&(a, b)| a >= f.x as isize && a < (f.x + f.w) as isize && b >= f.y as isize && b < (f.y + f.h) as isize));
+    }
     if let (Some((_, i, j, side)), Some(d)) = (best, lvl.doors.iter_mut().find(|d| d.kind == "front" && d.rooms[0] == ri)) {
         let (i, j) = (i as f32, j as f32);
         (d.a, d.b) = match side {
@@ -4917,6 +4924,11 @@ fn furnish_yurt(lvl: &mut Level, nx: usize, ny: usize, south: P, ext_free: &dyn 
             for i in f.x as usize..(f.x + f.w) as usize {
                 held[j * nx + i] = true;
             }
+        }
+    }
+    for &(i, j) in &inside {
+        if mine(i, j) {
+            held[j as usize * nx + i as usize] = true;
         }
     }
     let mut door_at = None;

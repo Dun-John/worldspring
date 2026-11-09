@@ -1071,7 +1071,7 @@ pub fn layout_count(t0: &T0) -> usize {
 // ---------------------------------------------------------------------------------------
 // Terrain context.
 
-struct Site<'a> {
+pub(crate) struct Site<'a> {
     t0: &'a T0,
     center: P,
     /// The ground it is planned on (a town asks for it many thousands of times).
@@ -1818,7 +1818,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         temple::shape_all(&mut l, Some(&generated));
         belfry::raise_all(&mut l, Some(&generated));
     }
-    round_off(&mut l);
+    round_off(&mut l, Some(&site));
     fields::crofts_off_sand(&site, &mut l);
     fields::assign(&site, s.seed, &mut l);
     rural::place(&site, s, &mut l);
@@ -1858,7 +1858,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
 /// home, a shrine; of one piece, its shape not set by hand) stands on the ring its lot holds
 /// (`roof::round_footprint`), if it is still roofed round there; the rest of its lot is open ground.
 /// Last, once every other building stands, so theirs are as they were.
-pub(crate) fn round_off(l: &mut Layout) {
+pub(crate) fn round_off(l: &mut Layout, site: Option<&Site>) {
     for i in 0..l.buildings.len() {
         let b = &l.buildings[i];
         let hand = b.shape.is_some() || b.roof.is_some();
@@ -1869,7 +1869,7 @@ pub(crate) fn round_off(l: &mut Layout) {
         let mut round = b.clone();
         round.poly = poly;
         if roof::look(l, &round).shape == roof::Shape::Round {
-            let ring = yurt_door(l, i, round.poly);
+            let ring = yurt_door(l, i, round.poly, site);
             l.buildings[i].poly = ring;
         }
     }
@@ -1879,13 +1879,15 @@ pub(crate) fn round_off(l: &mut Layout) {
 const YURT_LANE_REACH: f64 = 70.0;
 /// The most a yurt's door swings off its lane or the centre (degrees, either way).
 const YURT_SWING: f64 = 20.0;
+/// How far out from its door a yurt wants open ground (ft; `interior`'s squares there are then free too).
+pub const YURT_CLEAR_FT: f64 = 10.0;
 
 /// A yurt's ring turned so its first side (corners 0 and 1) is its door: facing the nearest lane or
 /// street within `YURT_LANE_REACH`, else the layout's centre (a camp's fire, a green), swung a little by
 /// a hash of the layout and the building's id; the nearest side whose outside is clear of other roofs
 /// if that one is shut in. Carried by the ring's order alone: `interior::furnish_yurt` and the
 /// battlemap's roof (`battlePrep.yurtDoor`) both take the door from side 0.
-fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>) -> Vec<P> {
+fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>, site: Option<&Site>) -> Vec<P> {
     let m = ring.len();
     let c = centroid(&ring);
     let mut best: Option<(f64, P)> = None;
@@ -1907,10 +1909,19 @@ fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>) -> Vec<P> {
     let a = libm::atan2(to[1], to[0]) + swing;
     let want = [libm::cos(a), libm::sin(a)];
     let mid = |e: usize| lerp(ring[e], ring[(e + 1) % m], 0.5);
-    let open = |e: usize| {
+    // (Open ground out to `out` ft from the side: under no other roof or ground of another's lot, on no water.)
+    let me = l.buildings[i].id;
+    let lot = l.buildings[i].poly.clone();
+    let open = |e: usize, out: f64| {
         let d = sub(mid(e), c);
-        let p = add(mid(e), mul(d, 4.0 / len(d).max(1e-9)));
-        !l.buildings.iter().enumerate().any(|(k, o)| k != i && o.structure == Structure::Roofed && dist(o.poly[0], c) < 400.0 && contains(&o.poly, p))
+        let n = mul(d, 1.0 / len(d).max(1e-9));
+        // (A strip 10 ft wide: the interior's door lands on a square beside the side's middle.)
+        [0.25, 0.5, 0.75, 1.0].iter().flat_map(|&t| [-5.0, -2.5, 0.0, 2.5, 5.0].map(|w| (t, w))).all(|(t, w)| {
+            let p = add(add(mid(e), mul(n, out * t)), mul([-n[1], n[0]], w));
+            !l.buildings.iter().enumerate().any(|(k, o)| k != i && o.structure == Structure::Roofed && dist(o.poly[0], c) < 400.0 && contains(&o.poly, p))
+                && !l.grounds.iter().any(|g| g.0 != me && dist(g.1[0], c) < 400.0 && !on_lot(&g.1, &lot) && contains(&g.1, p))
+                && !site.is_some_and(|s| s.wet(sub(p, s.center)))
+        })
     };
     let mut sides: Vec<(f64, usize)> = (0..m)
         .map(|e| {
@@ -1919,7 +1930,7 @@ fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>) -> Vec<P> {
         })
         .collect();
     sides.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
-    let door = sides.iter().map(|s| s.1).find(|&e| open(e)).unwrap_or(sides[0].1);
+    let door = [YURT_CLEAR_FT, 4.0].iter().find_map(|&out| sides.iter().map(|s| s.1).find(|&e| open(e, out))).unwrap_or(sides[0].1);
     ring.rotate_left(door);
     ring
 }

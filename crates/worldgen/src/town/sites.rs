@@ -333,7 +333,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     l.number();
     // (A building drawn by hand keeps its outline.)
     if p.kind != PoiKind::Building {
-        super::round_off(&mut l);
+        super::round_off(&mut l, None);
     }
     l
 }

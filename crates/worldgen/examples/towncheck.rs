@@ -4053,7 +4053,7 @@ const INN_COUNTS: [&str; 15] = [
 /// per world are listed (`TOP=8`): seed, layout, building id, world ft x,y, the door's angle (degrees,
 /// 0 east, 90 south: y runs down) and the aim's.
 fn yurts(ctx: &mut Ctx, r: &mut Report) {
-    r.counts(&["yurts", "doors within 30 degrees of their lane or centre", "doors facing south, within 22.5 degrees", "interior doors over 1.5 squares from the ring's door", "yurts listed"]);
+    r.counts(&["yurts", "doors within 30 degrees of their lane or centre", "doors facing south, within 22.5 degrees", "interior doors over 1.5 squares from the ring's door", "doors with their first 10 ft out under another roof", "yurts with no clear side (10 ft out, 10 ft wide, any side)", "yurts listed"]);
     let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
     let mut listed = 0;
     for li in 0..town::layout_count(t0) {
@@ -4088,6 +4088,20 @@ fn yurts(ctx: &mut Ctx, r: &mut Report) {
             }
             if off(ang, 90.0) <= 22.5 {
                 r.tally("doors facing south, within 22.5 degrees", 1);
+            }
+            let n = b.poly.len();
+            let clear = |e: usize| {
+                let m = [0.5 * (b.poly[e][0] + b.poly[(e + 1) % n][0]), 0.5 * (b.poly[e][1] + b.poly[(e + 1) % n][1])];
+                let cc = town::geom::centroid(&b.poly);
+                let d = [m[0] - cc[0], m[1] - cc[1]];
+                let k = 1.0 / libm::hypot(d[0], d[1]).max(1e-9);
+                [0.25, 0.5, 0.75, 1.0].iter().flat_map(|&t| [-5.0, -2.5, 0.0, 2.5, 5.0].map(|w| (t, w))).all(|(t, w)| {
+                    let p = [m[0] + d[0] * k * town::YURT_CLEAR_FT * t - d[1] * k * w, m[1] + d[1] * k * town::YURT_CLEAR_FT * t + d[0] * k * w];
+                    !l.buildings.iter().any(|o| o.id != b.id && o.structure == town::Structure::Roofed && libm::hypot(o.poly[0][0] - cc[0], o.poly[0][1] - cc[1]) < 400.0 && town::geom::contains(&o.poly, p))
+                })
+            };
+            if !clear(0) {
+                r.tally(if (0..n).any(clear) { "doors with their first 10 ft out under another roof" } else { "yurts with no clear side (10 ft out, 10 ft wide, any side)" }, 1);
             }
             if let Some(d) = lv.doors.iter().find(|d| d.kind == "front" && d.rooms.contains(&(yi as i16))) {
                 let g = [0.5 * (d.a[0] + d.b[0]) as f64 * interior::SQUARE_FT, 0.5 * (d.a[1] + d.b[1]) as f64 * interior::SQUARE_FT];
