@@ -304,7 +304,7 @@ async fn write_npc(app: &Shared, tool: &str, a: &Value) -> Result<Value, String>
     }
     let (tool, a2) = (tool.to_string(), a.clone());
     let id2 = id.clone();
-    app.edit("agent", 0, move |e| {
+    let change = app.edit("agent", 0, move |e| {
         let mut n = match e.npcs.get(&id2) {
             Some(n) if tool != "create_npc" => n.clone(),
             None if tool != "create_npc" => return Err(format!("no such NPC: {id2}")),
@@ -317,11 +317,22 @@ async fn write_npc(app: &Shared, tool: &str, a: &Value) -> Result<Value, String>
             n.location = p;
         }
         let name = n.name.clone();
+        // The same NPC again (a script run twice): that one, nothing added.
+        if tool == "create_npc" && let Some((k, _)) = e.npcs.iter().find(|(_, o)| o.name.trim().to_lowercase() == name.trim().to_lowercase() && o.location == n.location) {
+            return Ok(json!({ "existing": k }));
+        }
         e.npcs.insert(id2.clone(), n);
         Ok(json!({ "tool": tool, "id": id2, "name": name }))
     })
     .await?;
-    app.worker.with(move |ex| agent::npc_json(&ex.world, &ex.t0, &id, false).ok_or_else(|| "saved, but it could not be read back".to_string())).await
+    let existing = change["existing"].as_str().map(str::to_string);
+    let id = existing.clone().unwrap_or(id);
+    let mut v = app.worker.with(move |ex| agent::npc_json(&ex.world, &ex.t0, &id, false).ok_or_else(|| "saved, but it could not be read back".to_string())).await?;
+    if existing.is_some() {
+        v["existing"] = json!(true);
+        v["note"] = json!("an NPC with this name and place was already here: its id is returned and nothing was added (give another name or place for a second one)");
+    }
+    Ok(v)
 }
 
 async fn write_plot(app: &Shared, tool: &str, a: &Value) -> Result<Value, String> {
@@ -334,7 +345,7 @@ async fn write_plot(app: &Shared, tool: &str, a: &Value) -> Result<Value, String
     }
     let (tool, a2) = (tool.to_string(), a.clone());
     let id2 = id.clone();
-    app.edit("agent", 0, move |e| {
+    let change = app.edit("agent", 0, move |e| {
         let mut p = match e.plots.get(&id2) {
             Some(p) if tool != "create_plot" => p.clone(),
             None if tool != "create_plot" => return Err(format!("no such plot point: {id2}")),
@@ -342,9 +353,20 @@ async fn write_plot(app: &Shared, tool: &str, a: &Value) -> Result<Value, String
         };
         plot_fields(&mut p, &a2, &e.npcs)?;
         let title = p.title.clone();
+        // The same plot point again (a script run twice): that one, nothing added.
+        if tool == "create_plot" && let Some((k, _)) = e.plots.iter().find(|(_, o)| o.title.trim().to_lowercase() == title.trim().to_lowercase()) {
+            return Ok(json!({ "existing": k }));
+        }
         e.plots.insert(id2.clone(), p);
         Ok(json!({ "tool": tool, "id": id2, "name": title }))
     })
     .await?;
-    app.worker.with(move |ex| agent::plot_json(&ex.world, &ex.t0, &id, false).ok_or_else(|| "saved, but it could not be read back".to_string())).await
+    let existing = change["existing"].as_str().map(str::to_string);
+    let id = existing.clone().unwrap_or(id);
+    let mut v = app.worker.with(move |ex| agent::plot_json(&ex.world, &ex.t0, &id, false).ok_or_else(|| "saved, but it could not be read back".to_string())).await?;
+    if existing.is_some() {
+        v["existing"] = json!(true);
+        v["note"] = json!("a plot point with this title was already here: its id is returned and nothing was added (give another title for a second one)");
+    }
+    Ok(v)
 }

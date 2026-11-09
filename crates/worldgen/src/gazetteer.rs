@@ -209,7 +209,7 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
     let mut by_function = Vec::new();
     let layouts: Vec<Rc<town::Layout>> = match rect {
         Some(r) => town::layouts_near(world, t0, r),
-        None => (0..town::layout_count(t0)).map(|i| town::layout(world, t0, i)).collect(),
+        None => (0..town::layout_count(t0)).filter(|&i| i < t0.settlements.len() + t0.base_pois || !edits.created.get(i - t0.settlements.len() - t0.base_pois).is_some_and(|c| c.removed)).map(|i| town::layout(world, t0, i)).collect(),
     };
     let inside = |x: f64, y: f64| rect.is_none_or(|r| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]);
     // A place's name as it is now (None if hidden and not wanted).

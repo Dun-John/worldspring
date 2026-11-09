@@ -51,6 +51,18 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   `id` is not its subject also takes the old `id`, or `x_ft` and `y_ft`, beside its other arguments.
 - **Lists** come back as `{items, found}`: `found` is how many there were before any `limit`, and `truncated: true`
   says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`).
+- **Safe to repeat:** a create that is asked for again with the same arguments adds nothing and returns what is already
+  there, with `"existing": true` and a `note` that says so (never "created"). Which tools, and what counts as the same:
+  `create_feature` (the same kind of site within 300 ft), `create_building` (the same footprint, or with `near` a
+  building of the same `func`, and name when given, within 200 ft), `create_npc` (the same name and place),
+  `create_plot` (the same title), `place_objects` (new objects: the same kind within 0.5 ft with the same turn, scale and
+  any variant given; those ids come back under `existing`). To make a second one on purpose, give it another name,
+  title or place. A change that was made but could not be saved to disk is not an error: its reply carries
+  `saved: false` and a `warning` (don't repeat the call; mapd saves it again every few seconds).
+- **Deletes:** `delete_feature` retires a created site (a drawn building's `b:` ids with it), but keeps what pointed at
+  it (NPCs, plots, notes, a hand design, renames) and says which in `left_pointing`; `restore_feature` brings the site
+  back, and what pointed at it is as it was. Every tool says in its `annotations` whether it is read-only, destructive,
+  idempotent; none reaches outside the world (`openWorldHint: false`).
 - **Moves are reported:** a tool that puts something elsewhere than asked (a site pushed off a river onto dry land, a
   footprint snapped to the grid) says so when it is more than 5 ft: `moved: {x_ft, y_ft, ft, why}`.
 
@@ -64,7 +76,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | Inside a building or site | `inside`: its id | `within` given as an id | `list_names` |
 | A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot`, `create_feature` (castles), `set_plateau` |
 | A line | `path` `[[x, y], ...]` | walls keep `pts` and also take `path` | `shape_ground`, `create_feature` (wall), `update_fortification` |
-| One or many ids | `ids` (a list) or `id` (one), either; all or nothing | | every remover and restorer: `delete_feature`, `delete_npc`, `delete_plot`, `delete_plateau`, `remove_objects`, `restore_objects`, `remove_buildings`, `restore_building`, `remove_crossings` |
+| One or many ids | `ids` (a list) or `id` (one), either; all or nothing | | every remover and restorer: `delete_feature`, `restore_feature`, `delete_npc`, `delete_plot`, `delete_plateau`, `remove_objects`, `restore_objects`, `remove_buildings`, `restore_building`, `remove_crossings` |
 | Notes | `notes` on features and NPCs, `text` on plot points | the other one | `annotate_feature`, `update_feature`, `create_npc`, `update_npc`, `create_plot`, `update_plot` (not `set_site_design`: its `text` is the plan) |
 | A sprite's rules | `blocks_movement`, `blocks_sight`, `cover` as a word (`none`, `half`, `three-quarters`, `full`), `size_squares` | `blocks_move`, `cover` 0 to 3, `size` | `upload_sprite` |
 | Units | `_ft` feet, `_mi` miles, `_squares` squares, `_deg` degrees, in every name that carries one | | |
@@ -495,7 +507,8 @@ underground ids.
 
 Creating the same site again adds nothing: if a live site of the same `kind` (and the same `under`) stands within
 300 ft of the place asked for, or of the spot the new one would take, the result is that site, with
-`"existing": true`. A script that creates sites can be run again safely.
+`"existing": true` (and `note` says it was already there, not created). A script that creates sites can be run again
+safely; for a second one on purpose, ask for it somewhere else.
 
 A site asked for in a river or within 150 ft of one is put on the bank (a camp's clearing is also kept inside its
 battlemap chunk). When that moves it more than 5 ft the result says so: `moved: {x_ft, y_ft, ft, why}`.
@@ -626,17 +639,36 @@ kept under its `c:` id), and its business pin is hidden with it.
 > *"Hide the town of Zhuol; the players haven't discovered it yet."* · *"Reveal Zhuol."*
 
 ### `delete_feature`
-Removes a created site (`c:<n>`), a building drawn by hand too. Generated features can't be deleted, only hidden. The id is retired and never
-reused.
+Deletes created sites (`c:<n>`): `id` or `ids`, all or none in one change. A building drawn by hand goes by either of
+its ids (`c:<n>` or `b:<layout>:0`). Generated features can't be deleted, only hidden; the world's own buildings go
+with `remove_buildings`. The ids are retired and never reused: the site's `b:`, `d:`, `u:` and other layout ids stop
+answering (`get_feature` says `b:320:0 was deleted with c:2 (restore_feature brings it back)`), and searches, lists and
+`describe_location` skip it. What pointed at it is kept as it is, and listed per site in `left_pointing` (only what
+applies): `npcs`, `plots` (ids), `notes: true`, `design: true`, `renames` (a count). Deleting a deleted site is
+refused (`c:11 is already deleted (restore_feature brings it back)`).
 
 | Parameter | Type | | |
 |---|---|---|---|
-| `id` | string | required | Must be a `c:` id. |
+| `id` | string | one of | A `c:` id, or a drawn building's `b:<layout>:0`. |
+| `ids` | string[] | one of | Several; all or none. |
 
 ```json
 { "name": "delete_feature", "arguments": { "id": "c:0" } }
 ```
 > *"Delete the ruin we made earlier."*
+
+### `restore_feature`
+Brings back sites deleted with `delete_feature`: `id` or `ids` (`c:<n>`, or a drawn building's `b:<layout>:0`; all or
+none, one change). The ids answer again, with the NPCs, plots, notes, design and renames that still pointed at them.
+Refused when the spot is taken now, by the checks a new one of that kind meets (`b:… can't be restored, its place is
+taken: that overlaps …`; for a castle or wall, the world's own buildings in its way are named), or when the site is
+not deleted. Returns the site as `get_feature` does (a building with its `building` id); several return
+`{ids, restored: [sites]}`.
+
+```json
+{ "name": "restore_feature", "arguments": { "id": "c:0" } }
+```
+> *"Bring the ruin back."*
 
 ## Notebook tools: NPCs and plot points
 
@@ -688,6 +720,9 @@ An NPC in full: `name`, `appearance`, `mannerisms`, `attitude: {stance, text}`, 
 ```
 > *"Give the Jolly Lantern an innkeeper with a secret, and put him behind the bar."*
 
+Safe to repeat: an NPC with the same name (case and surrounding spaces ignored) and the same place, or both without
+one, is that NPC: the result is it, with `"existing": true`, and nothing is added. Another name or place makes a second.
+
 ### `update_npc`
 `id` plus any of `create_npc`'s fields except the place; only the fields given change.
 
@@ -725,6 +760,9 @@ A plot point in full: `title`, `text`, `status`, `anchors` and `npcs` (each with
 { "name": "create_plot", "arguments": { "title": "Smugglers in the cellar", "text": "Barrels move at night...", "status": "active", "anchors": ["b:0:620"], "npcs": ["n:k3x9q0ab"] } }
 ```
 > *"Make a plot point for the smuggling ring, tie it to the inn and the harbour district, and involve Brannoc."*
+
+Safe to repeat: a plot point with the same title (case and surrounding spaces ignored) is that plot point, with
+`"existing": true`; nothing is added. Another title makes a second.
 
 ### `update_plot`
 `id` plus any of `create_plot`'s fields; lists given replace the old ones.
@@ -789,6 +827,10 @@ given change, so `{id, x_ft, y_ft}` moves it and `{id, rot_deg}` turns it (`kind
 generated object is moved by taking it away (`remove_objects` with `points`) and putting one down. Returns
 `{tool, ids, changed}` (`changed`: the ids that were given, changed in place).
 
+Safe to repeat: a new object of the same kind within 0.5 ft of one put down before, with the same turn and scale (and
+the same `variant` when one is given), is that object: its id is in `ids` and also in `existing`, and nothing is added.
+Give another place, turn or scale for a second one on purpose.
+
 ```json
 { "name": "place_objects", "arguments": { "objects": [ { "kind": "boulder", "x_ft": 412500, "y_ft": 380120 }, { "kind": "s:0123456789abcdef0123456789abcdef", "x_ft": 412520, "y_ft": 380120, "rot_deg": 90 } ] } }
 ```
@@ -850,7 +892,9 @@ alone.
 ### `create_building`
 A building with the same footprint as one already drawn (every corner within 2 ft), the same `func` and (if
 given) the same name is not drawn twice: the result is that building, with `"existing": true`. A different
-building on that footprint is refused (`that overlaps …`).
+building on that footprint is refused (`that overlaps …`). With `near`, a building drawn by hand of the same `func`
+(and the same name, when one is given; case ignored) whose point lies within 200 ft of `near` is the same one:
+repeating the call returns it and draws nothing. Another name, another `func` or another place makes a second one.
 
 Instead of a footprint, `near` (an id, `{x_ft, y_ft}` or `[x_ft, y_ft]`) with `width_ft` and `depth_ft` finds the nearest clear
 lot: tried ring by ring out to 400 ft, turned square to the nearest street (or road), its front 2–12 ft from it
@@ -912,7 +956,7 @@ Read-only: whether a footprint (`poly`, `rect` or `circle`, with `snap`) is clea
 ```
 
 ### `remove_buildings`
-Take away buildings of the world's own (drawn ones go with `delete_feature`): `id` or `ids` (`b:<layout>:<id>`),
+Take away buildings of the world's own (drawn ones go with `delete_feature`; a drawn building's id is refused, saying so): `id` or `ids` (`b:<layout>:<id>`),
 and/or every one whose middle lies inside `within`: a polygon `[[x_ft, y_ft], …]`, a box `[x0, y0, x1, y1]` or a
 circle `{at, radius_ft}` (also `area`), such as a ward to clear for buildings of your own. Their ground is free to
 build on; every other building keeps its id. Returns `removed` (the ids) and `count`.
@@ -1573,11 +1617,12 @@ It also answers `initialize`, `ping` and `tools/list`.
 | `the map app is not open` / `did not answer in time` | `render_view` and `focus_view` need the app open and connected. |
 | `no open map app shows mapd's world` | The open tabs show other worlds: open mapd's world in a tab, or choose **Follow this tab** in one. |
 | `mapd has another world open (…), not …: nothing was done` | The `world` given isn't the one open: the user switched worlds. |
-| `the change was made, but could not be saved to disk: …` | The change stands in memory and is saved again every few seconds. |
+| `saved: false`, `warning: made, but not yet saved to disk (…)` | Not an error: the change stands in memory and is saved again every few seconds. Don't repeat the call. |
 | `step N (tool) failed: … Nothing was changed.` | A `batch` step failed; the batch was not applied. |
 | `no such feature: …` | A bad id: check it with `search_features`. |
 | `that place is under water: pick dry land` / `off the map` | `create_feature` refused the position. |
 | `… is not a created site` | `delete_feature` only removes `c:` sites. Use `hide_feature` for generated ones. |
+| `… was deleted with c:<n> (restore_feature brings it back)` / `… is already deleted` | A deleted site's ids are retired; `restore_feature` undoes the delete. |
 | `under a ruin: …` / `under an entrance: …` / `'under' is for ruins and entrances` | Only ruins and entrances choose what lies beneath them. |
 | `themes for a …: …` / `size must be …` / `levels: 1 to 6` / `… has nothing underground` | `create_feature` options that don't fit the site. |
 | `not saved: …` | `set_site_design`: the plan breaks a rule play mode needs (the reasons follow). |

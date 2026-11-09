@@ -100,6 +100,9 @@ fn poly_extent(polys: &[&[P]]) -> Value {
 
 /// The extent of anything with an id: a feature, a settlement, a building, a district.
 fn extent_of(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     match (id.split(':').next()?, nums.as_slice()) {
         ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| poly_extent(&[&b.poly])),
@@ -640,6 +643,9 @@ pub fn generated_buildings_in_json(world: &World, t0: &T0, poly: &[P]) -> String
 
 /// The edit that takes generated building `id` away.
 pub fn building_removal(world: &World, t0: &T0, id: &str) -> Result<crate::world::BuildingEdit, String> {
+    if let Some((k, ..)) = drawn_pair(world, t0, id) {
+        return Err(if world.file.edits.created[k].removed { format!("{id} is already deleted (restore_feature brings it back)") } else { format!("{id} is drawn by hand: delete_feature deletes it") });
+    }
     let (li, bi) = generated_building(t0, id).ok_or_else(|| format!("{id} is not a generated building (buildings drawn by hand are deleted with delete_feature)"))?;
     let base = town::base_layout(world, t0, li);
     let g = base.building(bi as usize).ok_or_else(|| format!("no such building: {id}"))?;
@@ -718,6 +724,21 @@ pub fn creation_spot_json(world: &World, t0: &T0, kind: &str, under: Option<&str
     .to_string()
 }
 
+/// The created site a layout id was deleted with: `b:<layout>:..`, `d:`, `t:`, `u:`, `k:`, `w:`, `l:`
+/// and `r:` ids of a site whose `c:` entry is removed (layout numbers stay, so the ids are retired).
+pub fn deleted_with(world: &World, t0: &T0, id: &str) -> Option<String> {
+    let k = crate::world::layout_in_id(id)?.checked_sub(t0.settlements.len() + t0.base_pois)?;
+    world.file.edits.created.get(k).filter(|c| c.removed).map(|c| c.id.clone())
+}
+
+/// What to say of an id that was deleted: a created site (`c:<n>`) or what lay in its layout.
+pub fn deleted_note(world: &World, t0: &T0, id: &str) -> Option<String> {
+    if let Some(cid) = deleted_with(world, t0, id) {
+        return Some(format!("{id} was deleted with {cid} (restore_feature brings it back)"));
+    }
+    world.file.edits.created.iter().any(|c| c.id == id && c.removed).then(|| format!("{id} was deleted (restore_feature brings it back)"))
+}
+
 /// The layout index of a settlement or site feature (by overlay order; created sites follow
 /// the generated ones).
 pub fn layout_of(world: &World, t0: &T0, id: &str) -> Option<usize> {
@@ -764,6 +785,9 @@ fn building_name(world: &World, l: &town::Layout, b: &town::Building) -> String 
 
 /// Where an id is (ft), for features, buildings, districts, towers, underground sites.
 pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
     let edits = &world.file.edits;
     // An NPC is where they were placed; a plot point at its first place.
     if let Some(n) = edits.npcs.get(id) {
@@ -870,6 +894,9 @@ pub fn place(world: &World, t0: &T0, id: &str) -> Option<Value> {
 
 /// Any id's display name: a feature, building, district, NPC or plot (else null).
 fn name_any(world: &World, t0: &T0, id: &str) -> Option<String> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
     let edits = &world.file.edits;
     if let Some(n) = edits.npcs.get(id) {
         return Some(n.name.clone());
@@ -886,6 +913,9 @@ fn name_any(world: &World, t0: &T0, id: &str) -> Option<String> {
 /// A place's name before renames (a building's own name or its trade, a level's or room's
 /// generated name, a tower's or way underground's label, a feature's overlay name).
 fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
     if let Some((site, li, ri)) = split_room_id(id) {
         let it = crate::interior::generate_id(world, t0, site)?;
         let lv = it.levels.get(li)?;
@@ -1227,6 +1257,9 @@ pub fn near(world: &World, t0: &T0, p: P, radius: f64, kinds: &[String], limit: 
 /// it (the regions it lies in, the nearest settlements, roads; a settlement's districts and
 /// notable buildings; a building's floors; an underground site's levels).
 pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    if deleted_with(world, t0, id).is_some() {
+        return None;
+    }
     let fs = features(world, t0);
     // (A building taken away: where it stood, while its place is in the world.)
     let here = || crate::world::layout_in_id(id).is_some_and(|li| li < town::layout_count(t0));
@@ -1446,6 +1479,9 @@ fn interior_summary(world: &World, it: &crate::interior::Interior) -> Value {
 /// Children of a feature: a settlement's districts and businesses, a district's businesses, a
 /// building's or underground site's levels and rooms, a region's settlements and sites.
 pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
+    if deleted_note(world, t0, id).is_some() {
+        return None;
+    }
     let head = id.split(':').next().unwrap_or("");
     let nums: Vec<usize> = id.split(':').skip(1).filter_map(|s| s.parse().ok()).collect();
     if let Some(li) = layout_of(world, t0, id) {
@@ -1576,7 +1612,7 @@ fn name_entry(world: &World, id: String, kind: &str, generated: String, p: Optio
 /// The names in a settlement's or site's layout: its districts, businesses, wall and gate
 /// towers, ways underground (sewer grates aside) and keeps' deep dungeons.
 pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
-    if li >= town::layout_count(t0) {
+    if li >= town::layout_count(t0) || li.checked_sub(t0.settlements.len() + t0.base_pois).and_then(|k| world.file.edits.created.get(k)).is_some_and(|c| c.removed) {
         return Vec::new();
     }
     let l = town::layout(world, t0, li);
@@ -1614,6 +1650,9 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
 
 /// The names in a building or site: each level, then its rooms (ids `l:` and `r:`).
 pub fn site_names(world: &World, t0: &T0, site: &str) -> Option<Vec<Value>> {
+    if deleted_with(world, t0, site).is_some() {
+        return None;
+    }
     let it = crate::interior::generate_id(world, t0, site)?;
     let mut out = Vec::new();
     for (li, lv) in it.levels.iter().enumerate() {
@@ -1640,8 +1679,11 @@ pub fn names_json(world: &World, t0: &T0, scope: &str) -> String {
 /// feature (natural ones, settlements, sites, created sites). `kind` keeps only that kind.
 pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, settlement: Option<&str>) -> Result<Value, String> {
     let list = if let Some(site) = within {
-        site_names(world, t0, site).ok_or_else(|| format!("not a building or site with levels: {site}"))?
+        site_names(world, t0, site).ok_or_else(|| deleted_note(world, t0, site).unwrap_or_else(|| format!("not a building or site with levels: {site}")))?
     } else if let Some(s) = settlement {
+        if let Some(n) = deleted_note(world, t0, s) {
+            return Err(n);
+        }
         let li = layout_of(world, t0, s).ok_or_else(|| format!("not a settlement or site: {s}"))?;
         let mut v = layout_names(world, t0, li);
         // A settlement's sites (by their own ids; a drawn business is also among the buildings).

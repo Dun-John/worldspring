@@ -120,10 +120,17 @@ async fn run(app: &Shared, a: &Value) -> Result<Value, String> {
     let n = staged.changes.len();
     let change = json!({ "tool": "batch", "count": n, "changes": staged.changes });
     let edits = staged.edits;
-    app.edit_now("agent", 0, move |e| {
-        *e = edits;
-        Ok(change)
-    })
-    .await?;
-    Ok(json!({ "steps": results.len(), "changes": n, "results": results }))
+    let made = app
+        .edit_now("agent", 0, move |e| {
+            *e = edits;
+            Ok(change)
+        })
+        .await?;
+    let mut v = json!({ "steps": results.len(), "changes": n, "results": results });
+    // (A failed save: the batch stands, once; see `edit_now`.)
+    if made["saved"] == json!(false) {
+        v["saved"] = json!(false);
+        v["warning"] = made["warning"].clone();
+    }
+    Ok(v)
 }

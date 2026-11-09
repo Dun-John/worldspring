@@ -94,7 +94,8 @@ lists come back as `{items, found}`): see [Conventions](MCP.md#conventions).
 | `create_feature` | A new site, generated like the world's own (map, battlemap, interiors, underground). Kinds: ruin (over a `dungeon`, `crypt` or `catacombs`), tower, camp (tents round a fire), waystation (an inn by the road), cave, mine, lava_tube, entrance (a bare way down to any of those). Sites underground take `size` (small–huge), `levels` (1–6) and a `theme` of their kind (prison, temple, wizard_lair, dwarven_hall, labyrinth, collapsed_fortress, tomb, ossuary, fungal, ice, beast_den…). It must be on dry land; it is stepped out of river channels. The same kind again within 300 ft returns the site already there (`existing: true`), so it can be run twice. |
 | `update_feature` | Name and notes in one go. |
 | `hide_feature` | Hide a feature from labels and search, or show it again. |
-| `delete_feature` | Remove a created site. Generated features can only be hidden. |
+| `delete_feature` | Delete created sites (`id` or `ids`; a drawn building by either id): their ids are retired, what pointed at them is kept and listed in `left_pointing`. Generated features can only be hidden. |
+| `restore_feature` | Bring deleted sites back (`id` or `ids`), unless the spot is taken now. |
 | `list_npcs`, `get_npc` | The notebook's NPCs (`{items, found}`): filter by text, place (a settlement includes its buildings, levels and rooms, and the sites in it), tag or attitude; one in full. |
 | `create_npc`, `update_npc`, `delete_npc` | NPCs (`delete_npc` takes `id` or `ids`): name, appearance, mannerisms, attitude toward the players (stance and why), goals, DM notes, tags, status, portrait; a place as `location`, a point or `at`. |
 | `place_npc` | Put an NPC at a place (a building puts them inside, on a level, shown to the DM), at a point, or nowhere. |

@@ -212,8 +212,9 @@ async fn bounds(app: &Shared) -> Result<[f64; 2], String> {
     app.worker.with(|ex| Ok([ex.world.geom.map_w_ft, ex.world.geom.map_h_ft])).await
 }
 
-/// One object of `place_objects` onto `e`: its id, and whether it changed one put down before.
-fn put_one(e: &mut worldgen::world::Edits, o: &Value, w: f64, h: f64) -> Result<(String, bool), String> {
+/// One object of `place_objects` onto `e`: its id, whether it changed one put down before, and whether it was
+/// already there (a new one of the same kind within half a foot, with the same turn, scale and any variant given).
+fn put_one(e: &mut worldgen::world::Edits, o: &Value, w: f64, h: f64) -> Result<(String, bool, bool), String> {
     // One put down before (`id`): only the fields given change.
     let (id, old) = match &o["id"] {
         Value::Null => (new_id("o"), None),
@@ -247,23 +248,38 @@ fn put_one(e: &mut worldgen::world::Edits, o: &Value, w: f64, h: f64) -> Result<
         (None, None) => (0.0, false),
     };
     let changed = old.is_some();
+    if old.is_none()
+        && let Some((k, _)) = e.objects.iter().find(|(_, p)| {
+            p.kind == kind && (p.x - x).hypot(p.y - y) <= 0.5 && (p.rot - rot).abs() < 1e-3 && (p.scale - scale).abs() < 1e-3 && (o["variant"].is_null() || p.variant == variant)
+        })
+    {
+        return Ok((k.clone(), false, true));
+    }
     e.objects.insert(id.clone(), Placed { kind, x, y, rot, scale, variant, turned });
-    Ok((id, changed))
+    Ok((id, changed, false))
 }
 
 async fn place(app: &Shared, a: &Value) -> Result<Value, String> {
     let list = a["objects"].as_array().ok_or("objects: required")?.clone();
     let [w, h] = bounds(app).await?;
     app.edit("agent", 0, move |e| {
-        let (mut ids, mut changed) = (Vec::new(), Vec::new());
+        let (mut ids, mut changed, mut existing) = (Vec::new(), Vec::new(), Vec::new());
         for (i, o) in list.iter().enumerate() {
-            let (id, was) = put_one(e, o, w, h).map_err(|m| format!("objects[{i}].{m}"))?;
+            let (id, was, there) = put_one(e, o, w, h).map_err(|m| format!("objects[{i}].{m}"))?;
             if was {
                 changed.push(id.clone());
             }
+            if there {
+                existing.push(id.clone());
+            }
             ids.push(id);
         }
-        Ok(json!({ "tool": "place_objects", "ids": ids, "changed": changed }))
+        let mut v = json!({ "tool": "place_objects", "ids": ids, "changed": changed });
+        if !existing.is_empty() {
+            v["existing"] = json!(existing);
+            v["note"] = json!(format!("{} of these were already there (same kind, place, turn and scale): their ids are returned and nothing was added for them", existing.len()));
+        }
+        Ok(v)
     })
     .await
 }

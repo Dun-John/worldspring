@@ -19,7 +19,7 @@ use crate::Shared;
 pub const INSTRUCTIONS: &str = "A procedurally generated fantasy world (D&D 5e scale: 5-ft squares). Coordinates are feet from \
 the map's top-left corner, x east and y south. Find places with search_features, features_near or world_overview, \
 inspect them with get_feature and list_children, see them with render_view. Edits (rename, annotate, create, hide) are saved and appear live \
-in the open map app. Created sites are generated like the world's own: a ruin's dungeon or crypt is fully playable. Battlemaps take objects put down or taken away by hand (place_objects, remove_objects), including uploaded sprites (upload_sprite); their ground can be shaped (shape_ground, set_plateau). Many edits at once go in one batch. Every tool takes an optional world (the hash world_overview gives) and refuses to run if another world is open. The DM's notebook holds NPCs (list_npcs, create_npc, place_npc...) and plot points tied to places (list_plots, create_plot...); get_feature and describe_location show those at a place.";
+in the open map app. Created sites are generated like the world's own: a ruin's dungeon or crypt is fully playable. Battlemaps take objects put down or taken away by hand (place_objects, remove_objects), including uploaded sprites (upload_sprite); their ground can be shaped (shape_ground, set_plateau). Many edits at once go in one batch. Deletes can be undone (restore_feature); the creates (create_feature, create_building, create_npc, create_plot, place_objects) are safe to repeat: the same one again returns what is there. Every tool takes an optional world (the hash world_overview gives) and refuses to run if another world is open. The DM's notebook holds NPCs (list_npcs, create_npc, place_npc...) and plot points tied to places (list_plots, create_plot...); get_feature and describe_location show those at a place.";
 
 pub(crate) fn schema(props: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": props, "required": required })
@@ -63,10 +63,11 @@ pub fn list() -> Value {
         })), &["kind"]) },
         { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } }), &["id"]) },
         { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there. A building drawn by hand is one place: either of its ids (its business pin is hidden too).", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
-        { "name": "delete_feature", "title": "Delete a created site", "description": "Delete a site that was created, buildings drawn by hand too (the world's own buildings go with remove_buildings; other generated features can only be hidden).", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]) },
+        { "name": "delete_feature", "title": "Delete a created site", "description": "Delete sites that were created, buildings drawn by hand too (a building by either of its ids): id or ids, all or none in one change. Its ids are retired (get_feature and searches no longer find them); NPCs, plots, notes and a hand design that pointed at it are kept and reported in left_pointing. restore_feature brings it back. The world's own buildings go with remove_buildings; other generated features can only be hidden.", "inputSchema": schema(crate::args::ids_props("created site (c:<n>, or a drawn building's b:<layout>:0)"), &[]) },
     ]);
     if let Some(a) = v.as_array_mut() {
         a.extend(crate::notebook::list());
+        a.extend(crate::sites::list());
         a.extend(crate::scatter::list());
         a.extend(crate::build::list());
         a.extend(crate::works::list());
@@ -75,12 +76,46 @@ pub fn list() -> Value {
         a.extend(crate::design::list());
         a.extend(crate::towns::list());
         a.extend(crate::batch::list());
-        // Any tool can say which world it means.
+        // Any tool can say which world it means, and has its hints (a tool's own win).
         for t in a.iter_mut() {
+            let hints = annotations(t["name"].as_str().unwrap_or(""));
+            if !t["annotations"].is_object() {
+                t["annotations"] = json!({});
+            }
+            for (k, v) in hints.as_object().into_iter().flatten() {
+                if t["annotations"].get(k).is_none() {
+                    t["annotations"][k] = v.clone();
+                }
+            }
             t["inputSchema"]["properties"]["world"] = json!({ "type": "string", "description": "The world meant (its hash, from world_overview): the call is refused if mapd has another world open" });
         }
     }
     v
+}
+
+/// Tools that only read (or look): `readOnlyHint`.
+const READS: &[&str] = &[
+    "world_overview", "search_features", "get_feature", "list_children", "list_names", "describe_location", "features_near", "route", "list_roads", "get_battlemap", "render_view",
+    "list_crossings", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_sprites", "check_building_spot", "get_town_plan",
+];
+/// Writes that delete, replace or reset work (`destructiveHint`); every other write only adds or adjusts.
+const DESTRUCTIVE: &[&str] = &[
+    "delete_feature", "delete_npc", "delete_plot", "delete_plateau", "remove_objects", "remove_buildings", "remove_crossings", "reset_site_design", "set_site_design", "edit_town", "batch",
+];
+/// Writes that leave the world the same when repeated with the same arguments (`idempotentHint`): setters, restorers,
+/// `focus_view` and the creates that return what is already there.
+const IDEMPOTENT: &[&str] = &[
+    "focus_view", "rename_feature", "update_feature", "hide_feature", "create_feature", "restore_feature", "create_building", "update_building", "restore_building", "create_npc",
+    "update_npc", "place_npc", "create_plot", "update_plot", "place_objects", "restore_objects", "set_site_design", "reset_site_design", "set_plateau", "update_fortification",
+];
+
+/// A tool's hints by name, one table for every tool (so a tool in any module gets them): reads say `readOnlyHint` and
+/// `openWorldHint: false`; writes also `destructiveHint` and `idempotentHint`.
+pub(crate) fn annotations(name: &str) -> Value {
+    if READS.contains(&name) {
+        return json!({ "readOnlyHint": true, "openWorldHint": false });
+    }
+    json!({ "readOnlyHint": false, "destructiveHint": DESTRUCTIVE.contains(&name), "idempotentHint": IDEMPOTENT.contains(&name), "openWorldHint": false })
 }
 
 pub(crate) fn text(v: Value) -> Vec<Value> {
@@ -128,12 +163,36 @@ pub fn other_world(open: Option<u64>, want: u64) -> String {
 pub async fn call(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, String> {
     // Old names folded, arguments checked against the tool's schema (batch steps come through here too).
     let a = crate::args::check(name, &a)?;
-    let Some(w) = a["world"].as_str() else { return Box::pin(dispatch(app, name, a)).await };
-    let want = u64::from_str_radix(w.trim(), 16).map_err(|_| format!("world: a hash as world_overview gives it, not {w}"))?;
-    if app.current() != Some(want) {
-        return Err(other_world(app.current(), want));
+    let r = match a["world"].as_str() {
+        None => Box::pin(dispatch(app, name, a)).await,
+        Some(w) => {
+            let want = u64::from_str_radix(w.trim(), 16).map_err(|_| format!("world: a hash as world_overview gives it, not {w}"))?;
+            if app.current() != Some(want) {
+                return Err(other_world(app.current(), want));
+            }
+            WANT.scope(want, Box::pin(dispatch(app, name, a))).await
+        }
+    };
+    unsaved_note(app, name, r)
+}
+
+/// A write that went through while the world could not be saved says so (`saved: false`, once, even where
+/// the tool's own reply was built after the save): an error would invite a repeat of a change that stands.
+fn unsaved_note(app: &Shared, name: &str, r: Result<Vec<Value>, String>) -> Result<Vec<Value>, String> {
+    let write = !READS.contains(&name) && name != "focus_view";
+    if !write || crate::batch::active() || !app.unsaved.load(std::sync::atomic::Ordering::Relaxed) {
+        return r;
     }
-    WANT.scope(want, Box::pin(dispatch(app, name, a))).await
+    let mut out = r?;
+    if let Some(t) = out.first_mut()
+        && let Some(mut v) = t["text"].as_str().and_then(|s| serde_json::from_str::<Value>(s).ok()).filter(Value::is_object)
+        && v.get("saved").is_none()
+    {
+        v["saved"] = json!(false);
+        v["warning"] = json!(format!("made, but not yet saved to disk ({}): mapd keeps it and saves it again every few seconds; don't repeat this call", app.save_error.lock().unwrap()));
+        *t = text(v).remove(0);
+    }
+    Ok(out)
 }
 
 async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, String> {
@@ -147,6 +206,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::works::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::sites::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::scatter::call(app, name, &a).await {
@@ -181,11 +243,11 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         }
         "get_feature" => {
             let id = arg_str(&a, "id")?;
-            app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| format!("no such feature: {id}"))).await.map(text)
+            app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| crate::args::no_such(&ex.world, &ex.t0, &id))).await.map(text)
         }
         "list_children" => {
             let id = arg_str(&a, "id")?;
-            app.worker.with(move |ex| agent::children(&ex.world, &ex.t0, &id).ok_or_else(|| format!("no such feature, or it contains nothing: {id}"))).await.map(text)
+            app.worker.with(move |ex| agent::children(&ex.world, &ex.t0, &id).ok_or_else(|| deleted_or(&ex.world, &ex.t0, &id, format!("no such feature, or it contains nothing: {id}")))).await.map(text)
         }
         "list_names" => {
             let (kind, inside, settlement) = (a["kind"].as_str().map(str::to_string), a["inside"].as_str().map(str::to_string), a["settlement"].as_str().map(str::to_string));
@@ -397,29 +459,20 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             .await
             .map(text)
         }
-        "delete_feature" => {
-            let id = arg_str(&a, "id")?;
-            app.edit("agent", 0, move |e| {
-                let c = e
-                    .created
-                    .iter_mut()
-                    .find(|c| c.id == id && !c.removed)
-                    .ok_or_else(|| format!("{id} is not a created site (the world's own buildings go with remove_buildings; other generated features can be hidden with hide_feature)"))?;
-                c.removed = true;
-                Ok(json!({ "tool": "delete_feature", "id": id }))
-            })
-            .await
-            .map(text)
-        }
         "create_feature" => create(app, a).await.map(text),
         _ => Err(format!("unknown tool: {name}")),
     }
 }
 
+/// The reply for an id that gave nothing: what it was deleted with (a deleted site), else `other`.
+pub(crate) fn deleted_or(world: &worldgen::world::World, t0: &worldgen::t0::T0, id: &str, other: String) -> String {
+    agent::deleted_note(world, t0, id).unwrap_or(other)
+}
+
 /// An id the world knows (so edits never pile up on typos).
 pub(crate) async fn known(app: &Shared, id: &str) -> Result<(), String> {
     let id2 = id.to_string();
-    app.worker.with(move |ex| agent::position(&ex.world, &ex.t0, &id2).map(|_| ()).ok_or_else(|| crate::args::no_such(&ex.world, &id2))).await
+    app.worker.with(move |ex| agent::position(&ex.world, &ex.t0, &id2).map(|_| ()).ok_or_else(|| crate::args::no_such(&ex.world, &ex.t0, &id2))).await
 }
 
 /// A building drawn by hand behind an id (`agent::drawn_pair`: its place in `created`, created
@@ -521,7 +574,11 @@ pub(crate) async fn found(app: &Shared, id: String) -> Result<Value, String> {
             Ok::<_, String>(v)
         })
         .await?;
+    // (Its description says what it is, not that it was just made.)
+    if let Some(d) = v["detail"].as_str().and_then(|d| d.strip_prefix("created ")) {
+        v["detail"] = json!(format!("already here, not made again: {d}"));
+    }
     v["existing"] = json!(true);
-    v["note"] = json!("this was already here: its id is returned and nothing was added");
+    v["note"] = json!("this was already here: its id is returned and nothing was added (change something to make a second one: another name or place)");
     Ok(v)
 }

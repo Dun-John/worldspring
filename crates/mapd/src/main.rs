@@ -14,6 +14,7 @@ mod ground;
 mod mcp;
 mod notebook;
 mod scatter;
+mod sites;
 mod store;
 mod tools;
 mod towns;
@@ -63,6 +64,8 @@ pub struct AppState {
     pub gate: tokio::sync::Mutex<()>,
     /// A save failed: the open world has changes only in memory (saved again shortly).
     pub unsaved: AtomicBool,
+    /// Why the last save failed (for the warning an agent gets).
+    pub save_error: std::sync::Mutex<String>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -166,9 +169,16 @@ impl AppState {
             }
             Err(e) => {
                 self.unsaved.store(true, Ordering::Relaxed);
+                *self.save_error.lock().unwrap() = e.to_string();
                 eprintln!("mapd: could not save: {e}");
                 self.send(json!({ "type": "error", "message": format!("could not save to disk: {e}"), "world": hex(hash), "from": from }));
-                Err(format!("the change was made, but could not be saved to disk: {e}. mapd keeps it and tries again every few seconds"))
+                // The change stands: a success that says so (an error would invite a repeat, and a second copy).
+                let mut change = change;
+                if change.is_object() {
+                    change["saved"] = json!(false);
+                    change["warning"] = json!(format!("made, but not yet saved to disk ({e}): mapd keeps it and saves it again every few seconds; don't repeat this call"));
+                }
+                Ok(change)
             }
         }
     }
@@ -487,6 +497,7 @@ async fn main() {
         dist: dist.join("index.html").exists().then(|| dist.clone()),
         gate: tokio::sync::Mutex::new(()),
         unsaved: AtomicBool::new(false),
+        save_error: std::sync::Mutex::new(String::new()),
     });
     // After a failed save, try again every few seconds (the changes are kept in memory).
     let retry = app.clone();

@@ -485,9 +485,11 @@ fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&
 }
 
 /// What to say of an id that names no place: a notebook id that is not on the map says what it is.
-pub fn no_such(world: &worldgen::world::World, id: &str) -> String {
+pub fn no_such(world: &worldgen::world::World, t0: &worldgen::t0::T0, id: &str) -> String {
     let e = &world.file.edits;
-    if e.npcs.contains_key(id) {
+    if let Some(n) = worldgen::agent::deleted_note(world, t0, id) {
+        n
+    } else if e.npcs.contains_key(id) {
         format!("{id} is an NPC with no location")
     } else if e.plots.contains_key(id) {
         format!("{id} is a plot point, not a place")
@@ -509,7 +511,7 @@ pub async fn point(app: &Shared, field: &str, v: &Value) -> Result<[f64; 2], Str
             let id = id.clone();
             return app
                 .worker
-                .with(move |ex| worldgen::agent::position(&ex.world, &ex.t0, &id).ok_or_else(|| no_such(&ex.world, &id)))
+                .with(move |ex| worldgen::agent::position(&ex.world, &ex.t0, &id).ok_or_else(|| no_such(&ex.world, &ex.t0, &id)))
                 .await;
         }
         Value::Object(o) => (o.get("x_ft").and_then(Value::as_f64), o.get("y_ft").and_then(Value::as_f64)),

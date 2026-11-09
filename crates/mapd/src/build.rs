@@ -272,6 +272,9 @@ fn footprint(a: &Value) -> Result<Option<Vec<[f64; 2]>>, String> {
     Ok(None)
 }
 
+/// A building drawn by hand this near the `near` point (ft), of the same trade and name, is the one asked for again.
+const NEAR_SAME_FT: f64 = 200.0;
+
 /// Create a building (`id` None) or change one.
 async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, String> {
     let poly = footprint(a)?;
@@ -302,6 +305,24 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             let near = crate::args::point(app, "near", &a["near"]).await?;
             let size = |k: &str| a[k].as_f64().ok_or_else(|| format!("{k}: needed with near"));
             let (w, d) = (size("width_ft")?, size("depth_ft")?);
+            // The same building again (a script run twice): the one drawn by hand of the same trade (and
+            // name, if one is given) within 200 ft of `near`, nothing added.
+            let (want_func, want_name) = (a["func"].as_str().map(str::trim).filter(|f| !f.is_empty()).map(str::to_string), a["name"].as_str().map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty()));
+            let there = app.with_edits(|e| {
+                e.created
+                    .iter()
+                    .find(|o| {
+                        !o.removed
+                            && o.kind == "building"
+                            && o.func == want_func
+                            && want_name.as_ref().is_none_or(|n| o.name.trim().to_lowercase() == *n)
+                            && (o.x - near[0]).hypot(o.y - near[1]) <= NEAR_SAME_FT
+                    })
+                    .map(|o| o.id.clone())
+            });
+            if let Some(Some(id)) = there {
+                return found(app, id).await;
+            }
             let (func, cid) = (a["func"].as_str().map(str::to_string), c.id.clone());
             let found = app
                 .worker
