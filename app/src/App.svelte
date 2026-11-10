@@ -2966,7 +2966,10 @@
   async function goUnder(id: string) {
     view.markRoom(id.startsWith('r:') ? id : null);
     await goName(id);
-    view.markRoom(id.startsWith('r:') ? id : null);
+    // (Kept only if the site opened: a room of one that could not be entered is not marked.)
+    const here = view.interior?.interior.id ?? '';
+    const sewer = /^w:\d+/.exec(here)?.[0];
+    view.markRoom(id.startsWith('r:') && (id.startsWith(`r:${here}:`) || (!!sewer && id.startsWith(`r:${sewer}:`))) ? id : null);
   }
 
   /** The named place nearest a point (within 3 mi; not seas or land masses). */
@@ -3407,6 +3410,7 @@
           levelNames={(id) => view.gen.interior(id).then((it) => it?.levels.map((l) => l.name) ?? null)}
           searchUnder={(q, f) => view.gen.searchUnder(q, f)}
           onUnder={(id) => void goUnder(id)}
+          onType={() => view.markRoom(null)}
         />
       {/if}
     {/snippet}

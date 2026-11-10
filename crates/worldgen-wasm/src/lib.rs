@@ -20,6 +20,8 @@ impl Ctx {
     #[wasm_bindgen(constructor)]
     pub fn new(world_json: &str) -> Result<Ctx, JsError> {
         let world = World::from_json(world_json).map_err(|e| JsError::new(&e))?;
+        // (A new world: the names of the last one's places are not its own.)
+        worldgen::agent::set_place_names("[]");
         Ok(Ctx { world, t0: None })
     }
 

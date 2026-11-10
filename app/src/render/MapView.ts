@@ -609,7 +609,11 @@ export class MapView {
   async enterBuilding(id: string, keep?: { level: number }, from?: string): Promise<boolean> {
     this.unmarkUnless(id);
     const it = await this.gen.interior(id);
-    if (!it || !this.geom) return false;
+    if (!it || !this.geom) {
+      // (Nothing opened: a room picked in it is not marked.)
+      if (InteriorLayer.picked?.startsWith(`r:${id}:`)) this.markRoom(null);
+      return false;
+    }
     const back = from ? linkIn(it, from) : null;
     const level = back?.level ?? keep?.level ?? it.entry_level;
     const sewer = id.startsWith('w:') && level === it.entry_level;

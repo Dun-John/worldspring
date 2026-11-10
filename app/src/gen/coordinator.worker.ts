@@ -132,10 +132,11 @@ async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
   // The map is ready once the worker that made T0 has it: it starts on the first tiles while
   // the rest load T0 (each its own copy, handed over, not copied again on the way) and join in
   // as each is done (a few hundred ms in a worker that has only just compiled the WASM).
-  join(first);
-  const t0 = firstReply.t0;
+  // (The names of this world's places first: each worker gets them as it joins, before any ask.)
   const feats = (JSON.parse(firstReply.overlay ?? '{"features":[]}') as { features: { id: string; kind: string; name: string }[] }).features;
   placesJson = JSON.stringify(feats.map((f) => ({ id: f.id, kind: f.kind, name: f.name })));
+  join(first);
+  const t0 = firstReply.t0;
   rest.forEach((gw, k) => {
     const bytes = k === rest.length - 1 ? t0 : t0.slice(0);
     void request(gw, { type: 'init', worldJson, t0: bytes }, [bytes]).then((m) => {
