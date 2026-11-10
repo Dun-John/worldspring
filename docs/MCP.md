@@ -57,6 +57,8 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | `b:<layout>:<i>` | `b:0:57` | A building in a settlement or site |
 | `d:<layout>:<q>` | `d:0:3` | A district |
 | `t:<layout>:<k>` | `t:0:2` | A wall tower |
+| `sq:<layout>:…` | `sq:0:p0`, `sq:0:20` | A town's square or park: `p<patch>` on a patch, `<corner>` where streets meet, `g<building>` a palace's garden, `r<road>` a cemetery by a road out |
+| `gt:<layout>:<corner>` | `gt:0:243` | A gate in a town's wall (while the town is walled) |
 | `<layout>` | `0` | A town's entry in `towns` (the ward editor): its layout number; its patches and corners are numbered by `get_town_plan` |
 | `u:<layout>:<k>` | `u:312:0` | An underground site: dungeon, crypt, cave, mine or lava tube |
 | `w:<layout>:<sx>:<sy>` | `w:0:2:1` | A sewer section |
@@ -1290,7 +1292,13 @@ patch built on as a common ward's, too small once its streets were cut), `corner
 meet but none can (a close's corner), `square` and `square_ft` (how far out from the corner its chords are cut,
 on average) for the one there, `square_generated` when set by hand: a kind or `none`), `districts` (`id`, `name`,
 `kind`, `patches`; `by_hand` for one made by hand, `changed` when its patches or their wards were changed by hand),
-`max_move_ft`, `walls` (`built`, `generated`), `edited`, `set_aside`.
+`max_move_ft`, `walls` (`built`, `generated`), `edited`, `set_aside`, `places`: its squares, parks and gates (`id`,
+`kind`: `square`, `park` or `gate`; `sort`: a square's `market`, `civic`, `fountain`, `well`, `crossroads` or `green`,
+a park's `formal`, `common` or `cemetery`; `name`, `generated`, `x_ft`, `y_ft`, `size_ft`, `patch`, `district` with
+its id, `main` for the square the main streets lead to). Their ids are kept by what they stand on (a patch, a corner,
+a road, a palace), so an edit elsewhere in the town or the walls set on or off move none; a gate is there only
+while the town is walled. `get_feature`, `rename_feature`, notes, `list_names` (`kind` `square`, `park`, `gate`)
+and `search_features` take them as other features.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -1309,7 +1317,8 @@ and the ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken
 a ward no longer allows them), `districts_changed` (`patch`, `from`, `to`: district ids), `renames_carried` (`from`,
 `to`, `name`: a building renamed or noted that the change took away hands its name and note to the new building on
 its patch with the same function, a castle's to the new keep), `renames_lost` (`id`, `name`: those with none; the
-rename stays on the old id), `rects` (where the map is drawn again). A square set by hand where the wards no
+rename stays on the old id), `rects` (where the map is drawn again). A square or park whose patch or corner the
+change takes away goes with its id (and its name and note stay on that id); the rest keep theirs. A square set by hand where the wards no
 longer leave three streets goes with the change that took them. `added` and `taken_away` count buildings by id
 and footprint (a patch laid out again keeps reusing its new buildings' ids). A square set or taken away changes only
 the lots at its corner: they are trimmed back to it, or come back whole.
