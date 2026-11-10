@@ -1970,10 +1970,10 @@ fn prepare<'a>(world: &World, t0: &'a T0, index: usize) -> (Site<'a>, Vec<(P, u8
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
     let site = Site::new(t0, center, lattice, reach(s) + 500.0, river_pieces(t0, center, reach(s) + 500.0), world.params().sea_level_ft);
     let rng = Pcg32::new(hash2(world.stream("town"), rng_key(t0, index), s.seed as i64), 31);
-    // (One added by hand meets its own track at its edge; no network road comes so near it.)
+    // (One added by hand meets its own link (a town's at its edge); no network road comes so near it.)
     let track = index.checked_sub(t0.settlements.len()).and_then(|poi| t0.made.iter().find(|m| m.poi == poi)).and_then(|m| m.track.first());
     let ends = match track {
-        Some(&a) => vec![(sub(a, center), crate::t0::roads::RoadClass::Track as u8)],
+        Some(&a) => vec![(sub(a, center), crate::t0::made::link_class(s.tier) as u8)],
         None => road_ends(t0, center, r, road_trim_radius(s.tier, s.population)),
     };
     (site, ends, rng)

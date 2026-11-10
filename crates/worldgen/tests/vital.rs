@@ -4308,7 +4308,7 @@ fn dwarven_crag_seams() {
 fn created_settlements_move_nothing_else() {
     use worldgen::t0::made;
     use worldgen::world::Created;
-    use worldgen::{agent, town};
+    use worldgen::town;
     let file: WorldFile = serde_json::from_str(&world_json(1)).unwrap();
     let mut ex0 = Executor::new(World::new(file.clone()).unwrap());
     let first = ex0.t0.settlements.len() + ex0.t0.base_pois;
@@ -4359,7 +4359,8 @@ fn created_settlements_move_nothing_else() {
         let end = *m.track.last().unwrap();
         let near = ea.t0.roads.segments_near([end[0] - 50.0, end[1] - 50.0, end[0] + 50.0, end[1] + 50.0], 0.0);
         assert!(!near.is_empty(), "c:{k}: the track does not reach a road");
-        let gmax = worldgen::t0::roads::RoadClass::Track.max_grade();
+        assert_eq!(m.class, made::link_class(m.s.tier));
+        let gmax = m.class.max_grade();
         let mut run = 0.0;
         for i in (1..m.track.len()).rev() {
             let d = geom_dist(m.track[i], m.track[i - 1]);
@@ -4407,6 +4408,28 @@ fn created_settlements_move_nothing_else() {
         assert!(ea.terrain(key.parent().unwrap()).padded == ex0.terrain(key.parent().unwrap()).padded, "terrain changed");
     }
     assert!(differs && same > 4, "the village's battlemap unchanged ({same} clear)");
+
+    // Seamless round both: each chunk's east and south halo rows are its neighbours' first, bit for
+    // bit (heights, water and roads), across the village and the town and along their links.
+    use worldgen::battlemap::{HS, SQ};
+    let mut seams = 0;
+    for (k, m) in ea.t0.made.clone().iter().enumerate() {
+        let c = key_at([m.s.x, m.s.y]);
+        let mid = key_at(m.track[m.track.len() / 2]);
+        let keys = (-2i64..=1).map(|d| TileKey::surface(level, (c.x as i64 + d) as u32, c.y)).chain([TileKey::surface(level, c.x, c.y - 1), TileKey::surface(level, c.x - 1, c.y - 1), mid]);
+        for key in keys {
+            let (a, east, south) = (ea.battlemap(key), ea.battlemap(TileKey::surface(level, key.x + 1, key.y)), ea.battlemap(TileKey::surface(level, key.x, key.y + 1)));
+            for j in 0..SQ {
+                assert_eq!(a.halo_height[(j + 1) * HS + SQ + 1].to_bits(), east.height[j * SQ].to_bits(), "c:{k} {key:?}: battlemap seam at row {j}");
+                assert_eq!(a.halo_water[(j + 1) * HS + SQ + 1].to_bits(), east.water_level[j * SQ].to_bits(), "c:{k} {key:?}: water seam at row {j}");
+                assert_eq!(a.road_halo[(j + 1) * HS + SQ + 1], east.road_halo[(j + 1) * HS + 1], "c:{k} {key:?}: road seam at row {j}");
+                assert_eq!(a.halo_height[(SQ + 1) * HS + j + 1].to_bits(), south.height[j].to_bits(), "c:{k} {key:?}: battlemap seam at column {j}");
+                assert_eq!(a.road_halo[(SQ + 1) * HS + j + 1], south.road_halo[HS + j + 1], "c:{k} {key:?}: road seam at column {j}");
+            }
+            seams += 2;
+        }
+    }
+    assert!(seams >= 28, "{seams} seams checked round the created settlements");
 
     // Removed, the world is as it was (its place in the list kept).
     let mut r = a.clone();

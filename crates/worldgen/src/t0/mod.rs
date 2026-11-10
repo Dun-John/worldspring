@@ -700,7 +700,7 @@ impl T0 {
                     Some(m) => (m.track.clone(), m.z.clone()),
                     None => made::track(world, self, &s),
                 };
-                self.made.push(made::Made { poi: self.base_pois + k, s, track, z });
+                self.made.push(made::Made { poi: self.base_pois + k, class: made::link_class(s.tier), s, track, z });
             }
             self.pois.push(settle::Poi { kind, x: c.x, y: c.y, seed, stroke: None });
             self.created.push(CreatedSite { removed: c.removed, reach, under, spec });

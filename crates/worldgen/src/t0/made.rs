@@ -11,7 +11,7 @@ use super::roads::RoadClass;
 use super::settle::{Reason, SettleKind, Settlement, Tier};
 use crate::World;
 use crate::town;
-use crate::core::noise::{fbm, smoothstep};
+use crate::core::noise::{fbm, gradient2, smoothstep};
 use crate::core::rng::{hash3, unit};
 use crate::world::Created;
 
@@ -22,7 +22,7 @@ fn dist(a: P, b: P) -> f64 {
 }
 
 /// The farthest a created settlement may lie from the nearest road for a track to join it
-/// (ft, straight line from its centre): 10 mi. Farther, it stands without one.
+/// (ft, straight line from its centre): 10 mi. `spot` refuses a place farther.
 pub const TRACK_CAP_FT: f64 = 10.0 * 5280.0;
 /// The track's routing lattice (ft; nodes at global index × step).
 const STEP_FT: f64 = 250.0;
@@ -32,14 +32,16 @@ const MARGIN_FT: f64 = 1.5 * 5280.0;
 const TRACK_EASE_FT: f64 = 15.0;
 
 /// A settlement added by hand: its point of interest (layout `settlements.len() + poi`), the
-/// settlement it is, and its track from the settlement's edge (`town::road_trim_radius`) to the
-/// road, with the track's surface (ft) at each point; empty with none.
+/// settlement it is, and its link to the road (`track`: from where it leaves the settlement,
+/// `link_start`, to the road), with the link's surface (ft) at each point (empty with none) and
+/// its class (`link_class`).
 #[derive(Clone, Debug)]
 pub struct Made {
     pub poi: usize,
     pub s: Settlement,
     pub track: Vec<P>,
     pub z: Vec<f32>,
+    pub class: RoadClass,
 }
 
 /// The tier of a created settlement's kind.
@@ -109,14 +111,14 @@ pub fn settlement(world: &World, t0: &T0, c: &Created, seed: u64) -> Settlement 
     }
 }
 
-/// The nearest point of a network road within `TRACK_CAP_FT` of `c`: (point, the road's surface there).
-fn nearest_road(t0: &T0, c: P) -> Option<(P, f64)> {
-    let cap = TRACK_CAP_FT;
+/// The nearest point of a network road within `cap` of `c`: (point, the road's surface there).
+fn nearest_road(t0: &T0, c: P, cap: f64) -> Option<(P, f64)> {
     let mut best: Option<(f64, P, f64)> = None;
     for (ri, k) in t0.roads.segments_near([c[0] - cap, c[1] - cap, c[0] + cap, c[1] + cap], 0.0) {
         let rc = &t0.roads.roads[ri as usize];
-        for j in 0..=16 {
-            let q = rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft);
+        let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 25.0).ceil().clamp(16.0, 400.0) as usize;
+        for j in 0..=n {
+            let q = rc.eval(k as usize, j as f64 / n as f64, 5.0, t0.cell_ft);
             let d = dist(q.p, c);
             if d <= cap && best.is_none_or(|b| d < b.0) {
                 best = Some((d, q.p, q.z));
@@ -126,21 +128,79 @@ fn nearest_road(t0: &T0, c: P) -> Option<(P, f64)> {
     best.map(|b| (b.1, b.2))
 }
 
-/// The track from settlement `s` to the nearest road: routed over the ground between them (on a
-/// lattice of `STEP_FT`, round water, as gently as it can; never steeper than a track's grade
-/// where it can help it), corners rounded, trimmed to the settlement's edge (its layout draws the
-/// rest) and graded (`roads::fit_profile`) to meet the road at its level. None beyond
-/// `TRACK_CAP_FT`, or where a road already reaches the settlement's edge.
+/// The class of road joining a created settlement of `tier` to the network: a village's is a
+/// track, a town's a road (as the world's own are joined, `t0::roads`).
+pub fn link_class(tier: Tier) -> RoadClass {
+    if tier >= Tier::Town { RoadClass::Road } else { RoadClass::Track }
+}
+
+/// Where a created settlement's link leaves it (ft from its centre): a village's runs in through
+/// its centre (0: its lanes are laid from it, as round a road through a village of the world's
+/// own); a town's stops at its edge (`town::road_trim_radius`), where its streets take over.
+fn link_start(s: &Settlement) -> f64 {
+    if s.tier >= Tier::Town { crate::town::road_trim_radius(s.tier, s.population) } else { 0.0 }
+}
+
+/// Sways a route (ft, points about 40 ft apart) sideways as the world's own roads bend
+/// (`t0::roads::follow_terrain`'s noise bends and `lod::roads::RoadCurve`'s kinks, at the class's
+/// strength), none at its ends or round its corners, never onto water (`wet`).
+fn sway(pts: &[P], class: RoadClass, cell: f64, seed: u64, wet: &dyn Fn(P) -> bool) -> Vec<P> {
+    let n = pts.len();
+    if n < 3 {
+        return pts.to_vec();
+    }
+    let mut s = vec![0.0; n];
+    for i in 1..n {
+        s[i] = s[i - 1] + dist(pts[i - 1], pts[i]);
+    }
+    let total = s[n - 1];
+    // (Eased in from each end over a third of a cell, or a quarter of a short route.)
+    let ease_ft = (0.3 * cell).min(0.25 * total);
+    let amp = [0.75, 1.0, 1.3][class as usize] * cell;
+    let mut out = pts.to_vec();
+    for i in 1..n - 1 {
+        let ease = smoothstep(0.0, ease_ft, s[i].min(total - s[i]));
+        let (a, b) = (pts[i.saturating_sub(10)], pts[(i + 10).min(n - 1)]);
+        let (u, v) = ([pts[i][0] - a[0], pts[i][1] - a[1]], [b[0] - pts[i][0], b[1] - pts[i][1]]);
+        let cos = (u[0] * v[0] + u[1] * v[1]) / (crate::core::sqrt(u[0] * u[0] + u[1] * u[1]) * crate::core::sqrt(v[0] * v[0] + v[1] * v[1])).max(1e-9);
+        let ease = ease * smoothstep(0.9, 0.99, cos);
+        if ease <= 0.0 {
+            continue;
+        }
+        let x = s[i] / cell;
+        let bend = amp * (0.045 * gradient2(seed, x / 0.6, 0.31) + 0.012 * gradient2(seed ^ 0xb3, x / 0.22, 0.77));
+        let kink = 70.0 * gradient2(seed ^ 0x5a, s[i] / 1_600.0, 0.71);
+        let off = ease * (bend + kink);
+        let (tx, ty) = (b[0] - a[0], b[1] - a[1]);
+        let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-9);
+        for f in [1.0, 0.5] {
+            let q = [pts[i][0] - ty / tl * off * f, pts[i][1] + tx / tl * off * f];
+            if !wet(q) {
+                out[i] = q;
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// The link from settlement `s` to the nearest road (`link_class`): routed over the ground
+/// between them (on a lattice of `STEP_FT`, round water, as gently as it can; never steeper than
+/// its class's grade where it can help it), corners rounded, swayed as the world's own roads are
+/// (`sway`), from where it leaves the settlement (`link_start`) to a square T on the road, and
+/// graded (`roads::fit_profile`) to meet the road at its level. None beyond `TRACK_CAP_FT`
+/// (`spot` refuses such places), or where a road already reaches the settlement.
 pub fn track(world: &World, t0: &T0, s: &Settlement) -> (Vec<P>, Vec<f32>) {
     let c = [s.x, s.y];
-    let trim = crate::town::road_trim_radius(s.tier, s.population);
+    let class = link_class(s.tier);
+    let trim = link_start(s);
     let none = (Vec::new(), Vec::new());
-    let Some((end, end_z)) = nearest_road(t0, c) else { return none };
+    let Some((end, end_z)) = nearest_road(t0, c, TRACK_CAP_FT) else { return none };
     if dist(end, c) <= trim + STEP_FT {
         return none;
     }
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-    let gmax = RoadClass::Track.max_grade();
+    let gmax = class.max_grade();
     // The lattice round both ends (global indices, so a node's place is its index × step).
     let i0 = crate::core::floor((c[0].min(end[0]) - MARGIN_FT) / STEP_FT) as i64;
     let j0 = crate::core::floor((c[1].min(end[1]) - MARGIN_FT) / STEP_FT) as i64;
@@ -148,15 +208,17 @@ pub fn track(world: &World, t0: &T0, s: &Settlement) -> (Vec<P>, Vec<f32>) {
     let j1 = crate::core::ceil((c[1].max(end[1]) + MARGIN_FT) / STEP_FT) as i64;
     let (w, h) = ((i1 - i0 + 1) as usize, (j1 - j0 + 1) as usize);
     let at = |n: usize| [(i0 + (n % w) as i64) as f64 * STEP_FT, (j0 + (n / w) as i64) as f64 * STEP_FT];
+    let off_map = |p: P| p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft;
+    let wet_at = |p: P| off_map(p) || t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
     let ground: Vec<f64> = (0..w * h).map(&at).map(|p| t0.ground_at(p[0], p[1], lattice)).collect();
-    let wet: Vec<bool> = (0..w * h).map(|n| (at(n), ground[n])).map(|(p, g)| p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft || t0.sample_water(p[0], p[1]) as f64 > g).collect();
+    let wet: Vec<bool> = (0..w * h).map(|n| (at(n), ground[n])).map(|(p, g)| off_map(p) || t0.sample_water(p[0], p[1]) as f64 > g).collect();
     let node = |p: P| {
         let i = (crate::core::round(p[0] / STEP_FT) as i64 - i0).clamp(0, w as i64 - 1) as usize;
         let j = (crate::core::round(p[1] / STEP_FT) as i64 - j0).clamp(0, h as i64 - 1) as usize;
         j * w + i
     };
     let (start, goal) = (node(c), node(end));
-    // Dijkstra over 16 directions: length, more on a climb, much more past a track's grade.
+    // Dijkstra over 16 directions: length, more on a climb, much more past the class's grade.
     const DIRS: [(i64, i64); 16] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1), (2, 1), (2, -1), (-2, 1), (-2, -1), (1, 2), (1, -2), (-1, 2), (-1, -2)];
     let mut cost = vec![f64::INFINITY; w * h];
     let mut from = vec![u32::MAX; w * h];
@@ -195,7 +257,10 @@ pub fn track(world: &World, t0: &T0, s: &Settlement) -> (Vec<P>, Vec<f32>) {
     if from[goal] == u32::MAX && goal != start {
         return none;
     }
-    let mut path = vec![end];
+    // The route's nodes from the settlement on; it leaves the lattice where it comes within
+    // 300 ft of the road and meets the road square to it there (its nearest point): no stub
+    // past the road, whichever side of it the lattice's last node fell.
+    let mut path = Vec::new();
     let mut n = from[goal];
     while n != u32::MAX && n as usize != start {
         path.push(at(n as usize));
@@ -203,7 +268,13 @@ pub fn track(world: &World, t0: &T0, s: &Settlement) -> (Vec<P>, Vec<f32>) {
     }
     path.push(c);
     path.reverse();
-    // Straight runs as one leg, corners rounded.
+    while path.len() > 1 && dist(*path.last().unwrap(), end) < 300.0 {
+        path.pop();
+    }
+    let last = *path.last().unwrap();
+    let (end, end_z) = nearest_road(t0, last, dist(last, end) + 50.0).unwrap_or((end, end_z));
+    path.push(end);
+    // Straight runs as one leg, corners rounded, then resampled and swayed.
     let mut legs: Vec<P> = vec![path[0]];
     for k in 1..path.len() - 1 {
         let (a, b, d) = (*legs.last().unwrap(), path[k], path[k + 1]);
@@ -213,15 +284,34 @@ pub fn track(world: &World, t0: &T0, s: &Settlement) -> (Vec<P>, Vec<f32>) {
         }
     }
     legs.push(*path.last().unwrap());
-    let (mut pts, _) = super::roads::round_corners(&legs, &vec![0.0; legs.len()], 300.0, 40.0);
-    // From the settlement's edge on.
-    let Some(k) = pts.iter().position(|p| dist(*p, c) >= trim) else { return none };
-    if k > 0 {
-        let (a, b) = (pts[k - 1], pts[k]);
-        let (da, db) = (dist(a, c), dist(b, c));
-        let t = ((trim - da) / (db - da).max(1e-9)).clamp(0.0, 1.0);
-        pts[k - 1] = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-        pts.drain(..k - 1);
+    let (rounded, _) = super::roads::round_corners(&legs, &vec![0.0; legs.len()], 300.0, 40.0);
+    let mut fine: Vec<P> = vec![rounded[0]];
+    for q in rounded.windows(2) {
+        let m = (dist(q[0], q[1]) / 40.0).ceil().max(1.0) as usize;
+        fine.extend((1..=m).map(|j| j as f64 / m as f64).map(|t| [q[0][0] + (q[1][0] - q[0][0]) * t, q[0][1] + (q[1][1] - q[0][1]) * t]));
+    }
+    let seed = crate::lod::roads::road_seed(world.seed, &[c, end]);
+    let mut pts = sway(&fine, class, t0.cell_ft, seed, &wet_at);
+    // A village's runs on through its centre, straight, nine tenths of the way to its edge (its
+    // lanes are laid from it there too).
+    if trim == 0.0
+        && let Some(&q) = pts.iter().find(|p| dist(**p, c) >= 100.0)
+    {
+        let u = [(c[0] - q[0]) / dist(q, c), (c[1] - q[1]) / dist(q, c)];
+        let r = crate::town::urban_radius(s.tier, s.population);
+        let on: Vec<P> = (1..=(0.9 * r / 40.0) as usize).map(|k| [c[0] + u[0] * 40.0 * k as f64, c[1] + u[1] * 40.0 * k as f64]).take_while(|p| !wet_at(*p)).collect();
+        pts.splice(0..0, on.into_iter().rev());
+    }
+    // From where it leaves the settlement on.
+    if trim > 0.0 {
+        let Some(k) = pts.iter().position(|p| dist(*p, c) >= trim) else { return none };
+        if k > 0 {
+            let (a, b) = (pts[k - 1], pts[k]);
+            let (da, db) = (dist(a, c), dist(b, c));
+            let t = ((trim - da) / (db - da).max(1e-9)).clamp(0.0, 1.0);
+            pts[k - 1] = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+            pts.drain(..k - 1);
+        }
     }
     if pts.len() < 2 {
         return none;
@@ -244,14 +334,18 @@ pub fn track(world: &World, t0: &T0, s: &Settlement) -> (Vec<P>, Vec<f32>) {
     (pts, z)
 }
 
+/// How far round a battlemap's rect a created settlement's link is taken in (ft): far enough for
+/// every chunk a bridge or ford of it reaches to see that crossing (`Ground::pieces`).
+const LINK_MARGIN_FT: f64 = 400.0;
+
 /// The ground created settlements lay over a battlemap: each one's pad (the ground eased to the
-/// smooth surface its layout was planned on, as `town::pad_weight` reaches) and its track (the
-/// ground cut and filled to the track's surface, easing back over `TRACK_EASE_FT`).
+/// smooth surface its layout was planned on, as `town::pad_weight` reaches) and its link (the
+/// ground cut and filled to the link's surface, easing back over `TRACK_EASE_FT`).
 pub struct Ground<'a> {
     t0: &'a T0,
     lattice: f64,
     pads: Vec<(P, f64)>,
-    tracks: Vec<(&'a [P], &'a [f32])>,
+    tracks: Vec<(&'a [P], &'a [f32], RoadClass)>,
 }
 
 impl<'a> Ground<'a> {
@@ -266,9 +360,9 @@ impl<'a> Ground<'a> {
             if hit([m.s.x - e, m.s.y - e, m.s.x + e, m.s.y + e]) {
                 pads.push(([m.s.x, m.s.y], r));
             }
-            let pad = 0.5 * RoadClass::Track.width_ft() + TRACK_EASE_FT;
+            let pad = LINK_MARGIN_FT;
             if m.track.windows(2).any(|s| hit([s[0][0].min(s[1][0]) - pad, s[0][1].min(s[1][1]) - pad, s[0][0].max(s[1][0]) + pad, s[0][1].max(s[1][1]) + pad])) {
-                tracks.push((m.track.as_slice(), m.z.as_slice()));
+                tracks.push((m.track.as_slice(), m.z.as_slice(), m.class));
             }
         }
         if pads.is_empty() && tracks.is_empty() {
@@ -277,11 +371,12 @@ impl<'a> Ground<'a> {
         Some(Ground { t0, lattice: world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1)), pads, tracks })
     }
 
-    /// The nearest track point: (distance, the track's surface there).
-    fn track_near(&self, p: P) -> Option<(f64, f64)> {
-        let mut best: Option<(f64, f64)> = None;
-        let reach = 0.5 * RoadClass::Track.width_ft() + TRACK_EASE_FT;
-        for (pts, z) in &self.tracks {
+    /// The nearest link: (distance past its edge, negative on it; its surface there; its class).
+    fn track_near(&self, p: P) -> Option<(f64, f64, RoadClass)> {
+        let mut best: Option<(f64, f64, RoadClass)> = None;
+        for &(pts, z, class) in &self.tracks {
+            let half = 0.5 * class.width_ft();
+            let reach = half + TRACK_EASE_FT;
             for k in 0..pts.len() - 1 {
                 let (a, b) = (pts[k], pts[k + 1]);
                 if p[0] < a[0].min(b[0]) - reach || p[0] > a[0].max(b[0]) + reach || p[1] < a[1].min(b[1]) - reach || p[1] > a[1].max(b[1]) + reach {
@@ -289,9 +384,9 @@ impl<'a> Ground<'a> {
                 }
                 let ab = [b[0] - a[0], b[1] - a[1]];
                 let t = (((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-12)).clamp(0.0, 1.0);
-                let d = dist(p, [a[0] + ab[0] * t, a[1] + ab[1] * t]);
+                let d = dist(p, [a[0] + ab[0] * t, a[1] + ab[1] * t]) - half;
                 if best.is_none_or(|b| d < b.0) {
-                    best = Some((d, z[k] as f64 + (z[k + 1] - z[k]) as f64 * t));
+                    best = Some((d, z[k] as f64 + (z[k + 1] - z[k]) as f64 * t, class));
                 }
             }
         }
@@ -305,17 +400,22 @@ impl<'a> Ground<'a> {
         if w > 0.0 {
             h += (self.t0.ground_at(x, y, self.lattice) - h) * w;
         }
-        if let Some((d, z)) = self.track_near([x, y]) {
-            let half = 0.5 * RoadClass::Track.width_ft();
-            let k = 1.0 - smoothstep(half + 2.5, half + TRACK_EASE_FT, d);
+        if let Some((e, z, _)) = self.track_near([x, y]) {
+            let k = 1.0 - smoothstep(2.5, TRACK_EASE_FT, e);
             h += (z - h) * k;
         }
         h as f32
     }
 
-    /// Whether `(x, y)` is on a track.
-    pub fn on_track(&self, x: f64, y: f64) -> bool {
-        self.track_near([x, y]).is_some_and(|(d, _)| d < 0.5 * RoadClass::Track.width_ft())
+    /// The class of the link `(x, y)` is on, if any.
+    pub fn on_track(&self, x: f64, y: f64) -> Option<RoadClass> {
+        self.track_near([x, y]).filter(|t| t.0 < 0.0).map(|t| t.2)
+    }
+
+    /// The links near here as road pieces (for their river crossings: bridges and fords as the
+    /// world's own roads have them).
+    pub fn pieces(&self) -> Vec<crate::lod::roads::RoadPiece> {
+        self.tracks.iter().map(|&(pts, z, class)| crate::lod::roads::RoadPiece { class, pts: pts.iter().zip(z).map(|(&p, &z)| crate::lod::roads::RoadPoint { p, z: z as f64 }).collect() }).collect()
     }
 }
 
@@ -333,7 +433,8 @@ pub const SETTLEMENT_MAX_GRADE: f64 = 0.15;
 /// without remaking the world: on the map, on dry land out of river channels, clear of sea and
 /// lake past its pad (no shore spots: no ports or fishing villages), `SETTLEMENT_GAP_FT` clear
 /// of every settlement's layout and `SETTLEMENT_SITE_GAP_FT` of every site's, with no network
-/// road through its layout and its ground no steeper than `SETTLEMENT_MAX_GRADE`.
+/// road through its layout, its ground no steeper than `SETTLEMENT_MAX_GRADE`, and a road within
+/// `TRACK_CAP_FT` that its link (`track`) reaches.
 pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), String> {
     if !crate::world::CREATED_SETTLEMENTS.contains(&kind) {
         return Err(format!("kind must be one of {}", crate::world::CREATED_SETTLEMENTS.join(", ")));
@@ -401,6 +502,13 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
         if (g - g0).abs() / holds > SETTLEMENT_MAX_GRADE {
             return Err("that ground is too steep for a settlement".to_string());
         }
+    }
+    // Joined to the network: a road within `TRACK_CAP_FT`, and a way there for its link.
+    if nearest_road(t0, at, TRACK_CAP_FT).is_none() {
+        return Err("there is no road within 10 miles: put it nearer a road (a track will join them)".to_string());
+    }
+    if track(world, t0, &s).0.is_empty() {
+        return Err("no track can reach a road from there (water is in the way): put it elsewhere".to_string());
     }
     Ok(())
 }

@@ -596,15 +596,16 @@ reused.
 ### `create_settlement`
 Adds a village or town without remaking the world. It is laid out by the world's own village and town generators
 (streets, buildings, businesses, districts, battlemaps, interiors), its size drawn from its id, and joined to the
-nearest road by a track (when a road is within 10 mi; farther, it stands without one). Nothing else in the world
-changes: other settlements, sites, roads and terrain stay as they were. The result is `get_feature`'s details with
-the new `c:<n>` id, plus `culture`, `lives_by`, `population` and `track_ft` (the track's length, `null` without
-one). Its buildings take the world's building tools (`b:<layout>:<id>`), and `get_town_plan`/`edit_town` take a
+nearest road as the world's own are (a village by a track running in through its middle, a town by a road to its
+edge). Nothing else in the world changes: other settlements, sites, roads and terrain stay as they were. The result
+is `get_feature`'s details with the new `c:<n>` id, plus `culture`, `lives_by`, `population` and `track_ft` (the
+link's length). Its buildings take the world's building tools (`b:<layout>:<id>`), and `get_town_plan`/`edit_town` take a
 town.
 
 Villages and towns are added inland. The call is refused, with the reason, on the edge of the map, in water or a
 river, on or near a shore (ports and fishing villages need the world remade), too near another settlement (half a
-mile of open ground between them) or site, with a road running through it, or on steep ground. Asking again for the
+mile of open ground between them) or site, with a road running through it, on steep ground, more than 10 miles
+from a road, or where water keeps its link from reaching one. Asking again for the
 same settlement at the same place returns that one, with `"existing": true`.
 
 `delete_feature` takes it away. The changes made in it (its buildings' edits, its town laid out anew, names, notes,

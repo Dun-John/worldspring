@@ -295,6 +295,13 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
             lanes.push((pts, rc.class.width_ft()));
         }
     }
+    // (One added by hand, `t0::made`: its link runs in through its centre, as a road through one would.)
+    if let Some(m) = t0.made.iter().find(|m| m.s.seed == s.seed && m.s.x == s.x && m.s.y == s.y) {
+        let pts: Vec<P> = m.track.iter().map(|p| sub(*p, site.center)).take_while(|p| len(*p) < reach).collect();
+        if pts.len() >= 2 {
+            lanes.push((pts, m.class.width_ft()));
+        }
+    }
     let n_roads = lanes.len();
     // Waterfront (after ProcGenArcana's wharf): the stretch of shore facing the village
     // becomes a wharf lane with houses on its landward side and piers into the water; a

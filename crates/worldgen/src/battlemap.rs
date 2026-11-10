@@ -1147,7 +1147,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut road_h = vec![0u8; HS * HS];
     let mut lift = vec![0f32; HS * HS];
     // Where roads cross rivers, and how (see `RiverCrossing`).
-    let crossings = crate::lod::roads::river_crossings(&tile.roads, &tile.pieces);
+    // Settlements added by hand: their pads and links over the terrain (`t0::made::Ground`), their
+    // links' river crossings as the network's.
+    let made = crate::t0::made::Ground::new(world, t0, [ox - 2.0 * SQUARE_FT, oy - 2.0 * SQUARE_FT, ox + (SQ + 2) as f64 * SQUARE_FT, oy + (SQ + 2) as f64 * SQUARE_FT]);
+    let made_roads = made.as_ref().map_or(Vec::new(), |m| m.pieces());
+    let mut crossings = crate::lod::roads::river_crossings(&tile.roads, &tile.pieces);
+    crossings.extend(crate::lod::roads::river_crossings(&made_roads, &tile.pieces));
     let mut crossing_shapes: Vec<CrossingShape> = crossings.iter().map(|x| crossing_shape(x, tile)).collect();
     merge_bridges(&crossings, &mut crossing_shapes);
     let x_ft = |i: i64| ox + (i as f64 + 0.5) * SQUARE_FT;
@@ -1157,9 +1162,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // where the shaping changed the ground (the slope is measured on the shaped ground there).
     let shaper = crate::ground::Shaper::new(&world.file.edits, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT], SQUARE_FT);
     let (mut plat_w, mut moved) = if shaper.is_some() { (vec![0f32; HS * HS], vec![false; HS * HS]) } else { (Vec::new(), Vec::new()) };
-    // Settlements added by hand: their pads and tracks over the terrain (`t0::made::Ground`).
-    let made = crate::t0::made::Ground::new(world, t0, [ox - 2.0 * SQUARE_FT, oy - 2.0 * SQUARE_FT, ox + (SQ + 2) as f64 * SQUARE_FT, oy + (SQ + 2) as f64 * SQUARE_FT]);
-    let base_at = |x: f64, y: f64, c: usize| made.as_ref().map_or(tile.padded[c], |m| m.at(x, y, tile.padded[c]));
+    // (A river's channel stays as the river carved it: a link crosses it on a bridge or a ford.)
+    let base_at = |x: f64, y: f64, c: usize| made.as_ref().filter(|_| tile.river_water[c] <= tile.padded[c]).map_or(tile.padded[c], |m| m.at(x, y, tile.padded[c]));
     for j in -1..=SQ as i64 {
         for i in -1..=SQ as i64 {
             let (x, y) = (ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT);
@@ -1172,8 +1176,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 moved[h] = hh[h] != tile.padded[c] || plat_w[h] > 0.0;
             }
             road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);
-            if road_h[h] == 0 && made.as_ref().is_some_and(|m| m.on_track(x, y)) {
-                road_h[h] = crate::t0::roads::RoadClass::Track as u8 + 1;
+            if road_h[h] == 0
+                && let Some(class) = made.as_ref().and_then(|m| m.on_track(x, y))
+            {
+                road_h[h] = class as u8 + 1;
             }
             // A ford or a ferry leaves the water as it is (wading, or the raft).
             if road_h[h] != 0 && hw[h] > hh[h] && crossings.iter().any(|x| x.kind != CrossingKind::Bridge && x.covers([x_ft(i), y_ft(j)])) {
@@ -1182,7 +1188,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if road_h[h] != 0 && hw[h] > hh[h] {
                 // The deck carries the road at its own level (its embankments reach the
                 // banks), at least clear of the water.
-                let top = (hw[h] + DECK_CLEARANCE_FT).max(road_level(&tile.roads, [x, y]).unwrap_or(f32::MIN));
+                let top = (hw[h] + DECK_CLEARANCE_FT).max(road_level(&tile.roads, [x, y]).or_else(|| road_level(&made_roads, [x, y])).unwrap_or(f32::MIN));
                 lift[h] = top - hh[h];
                 hh[h] = top;
                 road_h[h] |= 0x80;
