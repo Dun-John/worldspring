@@ -6520,7 +6520,8 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
     use worldgen::t0::settle::Tier;
     use worldgen::town::gatehouse;
     use worldgen::town::wallgates::{GATE_TOWER_ID, HAND_TOWER_ID, OTHER_TOWER_ID};
-    const RULES: [&str; 7] = [
+    const RULES: [&str; 8] = [
+        "building by a gate taken out nearer the wall than the town's",
         "hand gate with no way through",
         "hand gate's track along the wall",
         "hand gate not in the group's form",
@@ -6633,8 +6634,10 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
             r.tally(&format!("{tn}: hand towers added"), towers_added);
             // One generated gate out, one generated tower down.
             let gone_gate = gen_gates[0];
+            let mut gate_out = false;
             if let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"gates_remove":[{gone_gate}]}}}}"#)) {
                 if rep["wall"]["gates_removed"].as_array().is_some_and(|a| !a.is_empty()) {
+                    gate_out = true;
                     w = with(&w, ci, e);
                 }
             }
@@ -6648,6 +6651,28 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
             let l = town::layout(&w, t0, ci);
             let (t_after, g_after) = (towers_of(&l), gates_of(&w, &l));
             let label = |what: &str| format!("{tn} #{ci} {what}");
+            // The gate taken out: within 150 ft of it, no building nearer the wall than the town's
+            // buildings kept there with the gate (its least), nor on the ground the gate kept clear
+            // (40 ft round it; `clear_of`). (Castles aside: their own curtains.)
+            if let Some(gone) = wall.iter().find(|c| c.0 == gone_gate).map(|c| c.1)
+                && gate_out
+            {
+                let wall_of = |l: &town::Layout, poly: &[P]| l.walls.iter().flat_map(|w| w.windows(2)).map(|t| seg_poly(t[0], t[1], poly)).fold(f64::MAX, f64::min);
+                let near = |b: &&town::Building| b.ward != Ward::Castle && b.poly.iter().any(|p| dist(*p, gone) < 150.0);
+                let keep = l0.buildings.iter().filter(near).map(|b| wall_of(&l0, &b.poly)).fold(f64::MAX, f64::min);
+                if keep < f64::MAX {
+                    r.measure("wall clearance by a generated gate (ft, its buildings within 150 ft), least", true, keep, label(&format!("gate {gone_gate}")));
+                }
+                for b in l.buildings.iter().filter(near) {
+                    let d = wall_of(&l, &b.poly);
+                    let held = b.poly.iter().any(|p| dist(*p, gone) < 40.0) || contains(&b.poly, gone);
+                    r.measure("building by a gate taken out: off the wall (ft), least", true, d, label(&format!("gate {gone_gate} b:{ci}:{}", b.id)));
+                    if d < keep - 0.5 || held {
+                        let why = if held { "on the gate's ground".to_string() } else { format!("{d:.0} ft off the wall, the town's {keep:.0}") };
+                        r.add("building by a gate taken out nearer the wall than the town's", 1.0, label(&format!("gate {gone_gate} b:{ci}:{}: {why}", b.id)));
+                    }
+                }
+            }
             // Hand gates: a way through, the group's form.
             let houses = gatehouse::houses(&l);
             for &v in &added {

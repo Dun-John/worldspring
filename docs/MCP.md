@@ -1354,7 +1354,8 @@ Gates and towers go in and out of the town's own wall by its corners (`get_town_
 the others, and a track (12 ft) out through it to the nearest approach or road, or across the outskirts to the
 open country; it is refused (in `wall.refused`, with why) where there is none, at a corner on the water, at the
 wall's end, on a castle's curtain, under 80 ft from another gate, or where the wall's sides there are under 56 ft.
-A gate taken out closes the wall: its road stops outside, its main street inside. A tower goes up `f` of the way
+A gate taken out closes the wall: its road stops 60 ft or more outside (or at a junction just past that), its main
+street inside, and its ground keeps clear as with the gate (nothing built nearer the wall). A tower goes up `f` of the way
 along a side (refused within 20 ft of another tower or a gate, over a building, or over a street crossing the
 wall) and comes down by its corner or its id (a gate's towers go with the gate); a corner's tower taken down goes
 back up by its corner. Every other gate and tower keeps its id, renames and notes (a tower put up by hand is
