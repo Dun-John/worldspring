@@ -36,7 +36,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
     for c in edits.created.iter().filter(|c| !c.removed) {
         out.push(Feature {
             id: c.id.clone(),
-            kind: SITE_KINDS.iter().copied().find(|k| *k == c.kind).unwrap_or("ruin"),
+            kind: SITE_KINDS.iter().chain(&SETTLEMENT_KINDS).copied().find(|k| *k == c.kind).unwrap_or("ruin"),
             name: c.name.clone(),
             x: c.x,
             y: c.y,
@@ -69,6 +69,7 @@ fn shapes<'a>(world: &World, t0: &'a T0) -> Vec<Cow<'a, Shape>> {
         let r = match c.kind.as_str() {
             "building" => c.poly.iter().map(|q| geom::dist(*q, [c.x, c.y])).fold(0.0, f64::max),
             "castle" | "wall" => c.reach() - crate::world::WORKS_MARGIN_FT,
+            "village" | "town" => crate::t0::made::built_radius(world, t0, &c.id),
             _ => SITE_RADIUS_FT,
         };
         out.push(Cow::Owned(Shape::Point { at: [c.x, c.y], radius_ft: r }));
@@ -231,92 +232,6 @@ fn bbox(pts: &[P]) -> [f64; 4] {
     pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
 }
 
-/// Least open ground between a created settlement's layout and another settlement's (ft).
-pub const SETTLEMENT_GAP_FT: f64 = 2_640.0;
-/// Least open ground between a created settlement's layout and a site's (ft).
-pub const SETTLEMENT_SITE_GAP_FT: f64 = 500.0;
-/// How far past its pad (`town::pad_extent`) a created settlement keeps from sea and lake (ft).
-pub const SETTLEMENT_SHORE_FT: f64 = 500.0;
-/// The steepest a created settlement's ground may be: the mean grade from its centre out to
-/// where its buildings stand (`town::holds_radius`), in any direction.
-pub const SETTLEMENT_MAX_GRADE: f64 = 0.15;
-
-/// Where a village or town (`kind`; `id` its `c:<n>`, which draws its size) may be added
-/// without remaking the world: on the map, on dry land out of river channels, clear of sea and
-/// lake past its pad (no shore spots: no ports or fishing villages), `SETTLEMENT_GAP_FT` clear
-/// of every settlement's layout and `SETTLEMENT_SITE_GAP_FT` of every site's, with no network
-/// road through its layout and its ground no steeper than `SETTLEMENT_MAX_GRADE`.
-pub fn settlement_spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), String> {
-    if !crate::world::CREATED_SETTLEMENTS.contains(&kind) {
-        return Err(format!("kind must be one of {}", crate::world::CREATED_SETTLEMENTS.join(", ")));
-    }
-    let (x, y) = (at[0], at[1]);
-    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
-    let c = crate::world::Created { id: id.to_string(), kind: kind.to_string(), x, y, ..Default::default() };
-    let seed = crate::core::hash::fnv64(id.as_bytes()) ^ world.seed;
-    let s = crate::t0::made::settlement(world, t0, &c, seed);
-    let (reach, holds) = (town::reach(&s), town::holds_radius(&s));
-    let far = town::pad_extent(reach) + SETTLEMENT_SHORE_FT;
-    if x - reach < 0.0 || y - reach < 0.0 || x + reach > mw || y + reach > mh {
-        return Err("that is too near the edge of the map".to_string());
-    }
-    let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
-    if wet(at) {
-        return Err("that is in the water: put it on dry land".to_string());
-    }
-    let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, x, y, 2.0, t0.cell_ft);
-    if (q.0 - x).abs() + (q.1 - y).abs() > 0.01 {
-        return Err("that is in a river: put it on the bank".to_string());
-    }
-    // Rings every 250 ft out past the pad, a probe every 250 ft round each.
-    let rings = (far / 250.0).ceil() as usize;
-    for k in 1..=rings {
-        let r = far * k as f64 / rings as f64;
-        let n = ((std::f64::consts::TAU * r / 250.0).ceil() as usize).max(8);
-        for a in 0..n {
-            let t = std::f64::consts::TAU * a as f64 / n as f64;
-            let p = [x + r * libm::cos(t), y + r * libm::sin(t)];
-            if p[0] >= 0.0 && p[1] >= 0.0 && p[0] <= mw && p[1] <= mh && wet(p) {
-                return Err(if r <= holds { "that is on the water's edge: villages and towns are added inland (ports and fishing villages need the world remade)" } else { "that is too near the shore: villages and towns are added inland (ports and fishing villages need the world remade)" }.to_string());
-            }
-        }
-    }
-    // Other settlements (the world's own and those added by hand) and sites.
-    let n = t0.settlements.len();
-    for li in 0..town::layout_count(t0) {
-        if let Some(o) = town::settlement(t0, li) {
-            if geom::dist([o.x, o.y], at) < town::reach(o) + reach + SETTLEMENT_GAP_FT {
-                return Err("that is too near another settlement".to_string());
-            }
-            continue;
-        }
-        let Some(p) = t0.pois.get(li - n) else { continue };
-        let made = t0.created_site(li - n);
-        if made.is_some_and(|m| m.removed) {
-            continue;
-        }
-        if geom::dist([p.x, p.y], at) < made.map_or(town::sites::SITE_REACH_FT, |m| m.reach) + reach + SETTLEMENT_SITE_GAP_FT {
-            return Err("that is too near another site".to_string());
-        }
-    }
-    for (ri, k) in t0.roads.segments_near([x - reach, y - reach, x + reach, y + reach], 0.0) {
-        let rc = &t0.roads.roads[ri as usize];
-        if (0..=16).any(|j| geom::dist(rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p, at) < reach) {
-            return Err("a road runs through that place: put it beside the road (a track will join them)".to_string());
-        }
-    }
-    let g0 = t0.ground_at(x, y, lattice);
-    for a in 0..16 {
-        let t = std::f64::consts::TAU * a as f64 / 16.0;
-        let g = t0.ground_at(x + holds * libm::cos(t), y + holds * libm::sin(t), lattice);
-        if (g - g0).abs() / holds > SETTLEMENT_MAX_GRADE {
-            return Err("that ground is too steep for a settlement".to_string());
-        }
-    }
-    Ok(())
-}
-
 /// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
 /// clear of other buildings (sharing a wall is fine), roads, streets, town walls and squares
 /// (market squares, quays, greens, yards). `skip`: the building being reshaped: (its layout,
@@ -476,7 +391,7 @@ pub fn generated_buildings_in(world: &World, t0: &T0, poly: &[P]) -> Vec<(String
     let mut out = Vec::new();
     for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
         let li = l.index as usize;
-        if li >= t0.settlements.len() + t0.base_pois {
+        if li >= t0.settlements.len() + t0.base_pois && !town::is_settlement(t0, li) {
             continue;
         }
         let base = town::base_layout(world, t0, li);
@@ -655,7 +570,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
             if !hit {
                 continue;
             }
-            if li >= generated {
+            if li >= generated && !town::is_settlement(t0, li) {
                 return Err(format!("that crosses {}", building_name(world, &l, b)));
             }
             let base = town::base_layout(world, t0, li);
@@ -751,7 +666,7 @@ pub fn generated_building(t0: &T0, id: &str) -> Option<(usize, u32)> {
     }
     let li: usize = parts.next()?.parse().ok()?;
     let bi: u32 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || li >= t0.settlements.len() + t0.base_pois {
+    if parts.next().is_some() || (li >= t0.settlements.len() + t0.base_pois && !town::is_settlement(t0, li)) {
         return None;
     }
     Some((li, bi))
@@ -880,7 +795,7 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
         ("t", [li, k]) if *li < town::layout_count(t0) => crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| t.0),
         ("u", [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| e.at),
         ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
-        ("w", [li, sx, sy]) if *li < t0.settlements.len() => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
+        ("w", [li, sx, sy]) if town::is_settlement(t0, *li) => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
         _ => features(world, t0).into_iter().find(|f| f.id == id).map(|f| [f.x, f.y]),
     }
 }
@@ -1025,7 +940,7 @@ pub fn at_place(world: &World, t0: &T0, id: &str) -> impl Fn(&str) -> bool + use
         layouts.push(t0.settlements.len() + t0.base_pois + k);
     } else if let Some(li) = layout_of(world, t0, id) {
         layouts.push(li);
-        if li < t0.settlements.len() {
+        if town::is_settlement(t0, li) {
             for c in town::sites_in(t0, li) {
                 layouts.push(c);
                 ids.extend(feature_of_layout(world, t0, c));
@@ -1057,7 +972,7 @@ fn layout_ref(world: &World, t0: &T0, li: usize) -> Value {
 /// Where something in layout `li` is: the settlement (the layout's own, or the one its site
 /// stands in; `{id, name}` or null), and for a site's layout the site (`{id, name}`).
 fn whereabouts(world: &World, t0: &T0, li: usize) -> (Value, Option<Value>) {
-    if li < t0.settlements.len() {
+    if town::is_settlement(t0, li) {
         return (layout_ref(world, t0, li), None);
     }
     (town::parent_of(t0, li).map_or(Value::Null, |si| layout_ref(world, t0, si)), Some(layout_ref(world, t0, li)))
@@ -1341,9 +1256,9 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
     if let Some(li) = layout_of(world, t0, id) {
         let l = town::layout(world, t0, li);
         v["layout"] = layout_summary(world, t0, &l);
-        if li < t0.settlements.len() {
+        if town::is_settlement(t0, li) {
             v["roads_to"] = json!(roads_from(world, t0, li));
-            if t0.settlements[li].tier >= crate::t0::settle::Tier::Town {
+            if town::settlement(t0, li).is_some_and(|s| s.tier >= crate::t0::settle::Tier::Town) {
                 v["layout"]["wards_edited"] = json!(town::wards::edit_of(world, t0, li).is_some());
             }
             v["sites"] = json!(sites_json(world, t0, li, false));
@@ -1545,7 +1460,7 @@ pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
         let summary = layout_summary(world, t0, &l);
         let mut v = json!({ "districts": summary["districts"], "businesses": [], "underground": summary["underground"] });
         // A settlement's sites too: drawn buildings with a trade among its businesses.
-        if li < t0.settlements.len() {
+        if town::is_settlement(t0, li) {
             for (id, cl) in drawn_businesses(world, t0, li) {
                 let Some(b) = cl.building(0) else { continue };
                 businesses.push(json!({ "id": id, "name": building_name(world, &cl, b), "function": b.label() }));
@@ -1684,7 +1599,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
         out.push(name_entry(world, format!("k:{li}:{}", b.id), "underground", "Deep dungeons".into(), Some(geom::centroid(&b.poly)), true));
     }
     // A settlement's buildings drawn by hand that have a trade, as its businesses.
-    if li < t0.settlements.len() {
+    if town::is_settlement(t0, li) {
         for (id, cl) in drawn_businesses(world, t0, li) {
             let Some(b) = cl.building(0) else { continue };
             let hidden = is_hidden(world, t0, &id);
@@ -1731,7 +1646,7 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
         let li = layout_of(world, t0, s).ok_or_else(|| format!("not a settlement or site: {s}"))?;
         let mut v = layout_names(world, t0, li);
         // A settlement's sites (by their own ids; a drawn business is also among the buildings).
-        if li < t0.settlements.len() {
+        if town::is_settlement(t0, li) {
             for c in town::sites_in(t0, li) {
                 let (Some(id), Some(p)) = (feature_of_layout(world, t0, c), t0.pois.get(c - t0.settlements.len())) else { continue };
                 let generated = generated_name(world, t0, &id).unwrap_or_default();

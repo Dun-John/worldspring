@@ -4320,7 +4320,7 @@ fn created_settlements_move_nothing_else() {
                 let (a, r) = ((k % 16) as f64 * std::f64::consts::TAU / 16.0, if k % 32 < 16 { 15_840.0 } else { 31_680.0 });
                 [s.x + r * libm::cos(a), s.y + r * libm::sin(a)]
             })
-            .find(|p| agent::settlement_spot(&ex.world, &ex.t0, kind, id, *p).is_ok())
+            .find(|p| worldgen::t0::made::spot(&ex.world, &ex.t0, kind, id, *p).is_ok())
             .unwrap_or_else(|| panic!("no spot for a {kind}"))
     };
     let entry = |ex: &Executor, kind: &str, id: &str, p: [f64; 2]| {
@@ -4414,8 +4414,8 @@ fn created_settlements_move_nothing_else() {
     let mut er = Executor::new(World::new(r).unwrap());
     assert!(er.t0.made.is_empty() && !town::is_settlement(&er.t0, first));
     assert_eq!(print(&er.battlemap(centre)), print(&ex0.battlemap(centre)), "removing the village left its ground");
-    assert!(agent::settlement_spot(&er.world, &er.t0, "village", "c:0", v).is_ok(), "its spot is free again");
-    assert!(agent::settlement_spot(&ea.world, &ea.t0, "village", "c:9", v).is_err(), "a village on a village");
+    assert!(worldgen::t0::made::spot(&er.world, &er.t0, "village", "c:0", v).is_ok(), "its spot is free again");
+    assert!(worldgen::t0::made::spot(&ea.world, &ea.t0, "village", "c:9", v).is_err(), "a village on a village");
 
     // Remade with a site drawn far away (one more of the world's own sites): each in its place,
     // with its culture and kind, laid out as before.

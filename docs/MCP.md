@@ -593,6 +593,38 @@ reused.
 ```
 > *"Delete the ruin we made earlier."*
 
+### `create_settlement`
+Adds a village or town without remaking the world. It is laid out by the world's own village and town generators
+(streets, buildings, businesses, districts, battlemaps, interiors), its size drawn from its id, and joined to the
+nearest road by a track (when a road is within 10 mi; farther, it stands without one). Nothing else in the world
+changes: other settlements, sites, roads and terrain stay as they were. The result is `get_feature`'s details with
+the new `c:<n>` id, plus `culture`, `lives_by`, `population` and `track_ft` (the track's length, `null` without
+one). Its buildings take the world's building tools (`b:<layout>:<id>`), and `get_town_plan`/`edit_town` take a
+town.
+
+Villages and towns are added inland. The call is refused, with the reason, on the edge of the map, in water or a
+river, on or near a shore (ports and fishing villages need the world remade), too near another settlement (half a
+mile of open ground between them) or site, with a road running through it, or on steep ground. Asking again for the
+same settlement at the same place returns that one, with `"existing": true`.
+
+`delete_feature` takes it away. The changes made in it (its buildings' edits, its town laid out anew, names, notes,
+hidden marks, NPCs' places and plot points in it) are set aside, as when the world is remade: they stay in the file
+and resolve nowhere. The result's `set_aside` counts them.
+
+| Parameter | Type | | |
+|---|---|---|---|
+| `tier` | string | required | `village` or `town`. |
+| `id` or `x_ft` + `y_ft` | | required | Where its centre goes. |
+| `name` | string | optional | If left out, it is named in its culture's style. |
+| `culture` | integer | optional | Naming culture: 0 cold north, 1 temperate west, 2 warm south, 3 dry lands, 4 open steppe. Default: the nearest settlement's. |
+| `lives_by` | string | optional | `river`, `mining`, `fortress`, `market`, `farming`, `lumber`, `herding` or `oasis`. Default: from its ground. |
+
+```json
+{ "name": "create_settlement", "arguments": { "tier": "village", "x_ft": 2318926, "y_ft": 1121032, "lives_by": "lumber" } }
+{ "name": "create_settlement", "arguments": { "tier": "town", "x_ft": 2318926, "y_ft": 1121032, "name": "Pelbridge", "culture": 1 } }
+```
+> *"Add a logging village up in those hills."* · *"Put a market town between Bornworth and the lake."*
+
 ## Notebook tools: NPCs and plot points
 
 The DM's notebook holds NPCs (`n:<id>`) and plot points (`p:<id>`). They are written by the user (the app's

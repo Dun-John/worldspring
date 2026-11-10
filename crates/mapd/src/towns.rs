@@ -63,7 +63,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 
 /// The layout index of the town `id` names.
 fn town_index(ex: &worldgen::pipeline::Executor, id: &str) -> Result<usize, String> {
-    agent::layout_of(&ex.world, &ex.t0, id).filter(|&l| l < ex.t0.settlements.len()).ok_or_else(|| format!("{id} is not a settlement"))
+    agent::layout_of(&ex.world, &ex.t0, id).filter(|&l| worldgen::town::is_settlement(&ex.t0, l)).ok_or_else(|| format!("{id} is not a settlement"))
 }
 
 async fn plan(app: &Shared, a: &Value) -> Result<Value, String> {

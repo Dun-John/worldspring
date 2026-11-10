@@ -618,8 +618,9 @@ pub(super) struct WallLanes {
     pub fp: u64,
 }
 
-/// The lanes that pass through a wall: the world's roads, and the approaches and main streets
-/// of the towns it reaches, as those are laid out (`Edits.towns`; the paved side streets and
+/// The lanes that pass through a wall: the world's roads and the tracks of the villages and towns
+/// added by hand, and the approaches and main streets of the towns it reaches (those added by
+/// hand too), as those are laid out (`Edits.towns`; the paved side streets and
 /// alleys, class 3, the wall closes).
 pub(super) fn wall_lanes(world: &World, t0: &T0, c: &crate::world::Created) -> WallLanes {
     const MARGIN_FT: f64 = 1.0;
@@ -632,8 +633,13 @@ pub(super) fn wall_lanes(world: &World, t0: &T0, c: &crate::world::Created) -> W
         lanes.extend(pts.windows(2).map(|s| (s[0], s[1])).filter(|s| near(s.0, s.1)));
     }
     let hit = |x: f64, y: f64, r: f64| x + r >= x0 && x - r <= x1 && y + r >= y0 && y - r <= y1;
+    // (The tracks of the villages and towns added by hand are roads too.)
+    for m in &t0.made {
+        lanes.extend(m.track.windows(2).map(|q| (q[0], q[1])).filter(|q| near(q.0, q.1)));
+    }
     let mut reached: Vec<u32> = Vec::new();
-    for (i, s) in t0.settlements.iter().enumerate() {
+    let n = t0.settlements.len();
+    for (i, s) in t0.settlements.iter().enumerate().chain(t0.made.iter().map(|m| (n + m.poi, &m.s))) {
         if !hit(s.x, s.y, super::reach(s)) {
             continue;
         }

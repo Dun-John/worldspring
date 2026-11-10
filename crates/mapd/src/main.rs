@@ -13,6 +13,7 @@ mod ground;
 mod mcp;
 mod notebook;
 mod scatter;
+mod settlements;
 mod store;
 mod tools;
 mod towns;

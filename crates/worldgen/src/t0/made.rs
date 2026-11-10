@@ -10,6 +10,7 @@ use super::biome::Biome;
 use super::roads::RoadClass;
 use super::settle::{Reason, SettleKind, Settlement, Tier};
 use crate::World;
+use crate::town;
 use crate::core::noise::{fbm, smoothstep};
 use crate::core::rng::{hash3, unit};
 use crate::world::Created;
@@ -316,4 +317,191 @@ impl<'a> Ground<'a> {
     pub fn on_track(&self, x: f64, y: f64) -> bool {
         self.track_near([x, y]).is_some_and(|(d, _)| d < 0.5 * RoadClass::Track.width_ft())
     }
+}
+
+/// Least open ground between a created settlement's layout and another settlement's (ft).
+pub const SETTLEMENT_GAP_FT: f64 = 2_640.0;
+/// Least open ground between a created settlement's layout and a site's (ft).
+pub const SETTLEMENT_SITE_GAP_FT: f64 = 500.0;
+/// How far past its pad (`town::pad_extent`) a created settlement keeps from sea and lake (ft).
+pub const SETTLEMENT_SHORE_FT: f64 = 500.0;
+/// The steepest a created settlement's ground may be: the mean grade from its centre out to
+/// where its buildings stand (`town::holds_radius`), in any direction.
+pub const SETTLEMENT_MAX_GRADE: f64 = 0.15;
+
+/// Where a village or town (`kind`; `id` its `c:<n>`, which draws its size) may be added
+/// without remaking the world: on the map, on dry land out of river channels, clear of sea and
+/// lake past its pad (no shore spots: no ports or fishing villages), `SETTLEMENT_GAP_FT` clear
+/// of every settlement's layout and `SETTLEMENT_SITE_GAP_FT` of every site's, with no network
+/// road through its layout and its ground no steeper than `SETTLEMENT_MAX_GRADE`.
+pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), String> {
+    if !crate::world::CREATED_SETTLEMENTS.contains(&kind) {
+        return Err(format!("kind must be one of {}", crate::world::CREATED_SETTLEMENTS.join(", ")));
+    }
+    let (x, y) = (at[0], at[1]);
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let c = Created { id: id.to_string(), kind: kind.to_string(), x, y, ..Default::default() };
+    let seed = crate::core::hash::fnv64(id.as_bytes()) ^ world.seed;
+    let s = settlement(world, t0, &c, seed);
+    let (reach, holds) = (town::reach(&s), town::holds_radius(&s));
+    let far = town::pad_extent(reach) + SETTLEMENT_SHORE_FT;
+    if x - reach < 0.0 || y - reach < 0.0 || x + reach > mw || y + reach > mh {
+        return Err("that is too near the edge of the map".to_string());
+    }
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    if wet(at) {
+        return Err("that is in the water: put it on dry land".to_string());
+    }
+    let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, x, y, 2.0, t0.cell_ft);
+    if (q.0 - x).abs() + (q.1 - y).abs() > 0.01 {
+        return Err("that is in a river: put it on the bank".to_string());
+    }
+    // Rings every 250 ft out past the pad, a probe every 250 ft round each.
+    let rings = (far / 250.0).ceil() as usize;
+    for k in 1..=rings {
+        let r = far * k as f64 / rings as f64;
+        let n = ((std::f64::consts::TAU * r / 250.0).ceil() as usize).max(8);
+        for a in 0..n {
+            let t = std::f64::consts::TAU * a as f64 / n as f64;
+            let p = [x + r * libm::cos(t), y + r * libm::sin(t)];
+            if p[0] >= 0.0 && p[1] >= 0.0 && p[0] <= mw && p[1] <= mh && wet(p) {
+                return Err(if r <= holds { "that is on the water's edge: villages and towns are added inland (ports and fishing villages need the world remade)" } else { "that is too near the shore: villages and towns are added inland (ports and fishing villages need the world remade)" }.to_string());
+            }
+        }
+    }
+    // Other settlements (the world's own and those added by hand) and sites.
+    let n = t0.settlements.len();
+    for li in 0..town::layout_count(t0) {
+        if let Some(o) = town::settlement(t0, li) {
+            if dist([o.x, o.y], at) < town::reach(o) + reach + SETTLEMENT_GAP_FT {
+                return Err("that is too near another settlement".to_string());
+            }
+            continue;
+        }
+        let Some(p) = t0.pois.get(li - n) else { continue };
+        let made = t0.created_site(li - n);
+        if made.is_some_and(|m| m.removed) {
+            continue;
+        }
+        if dist([p.x, p.y], at) < made.map_or(town::sites::SITE_REACH_FT, |m| m.reach) + reach + SETTLEMENT_SITE_GAP_FT {
+            return Err("that is too near another site".to_string());
+        }
+    }
+    for (ri, k) in t0.roads.segments_near([x - reach, y - reach, x + reach, y + reach], 0.0) {
+        let rc = &t0.roads.roads[ri as usize];
+        if (0..=16).any(|j| dist(rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p, at) < reach) {
+            return Err("a road runs through that place: put it beside the road (a track will join them)".to_string());
+        }
+    }
+    let g0 = t0.ground_at(x, y, lattice);
+    for a in 0..16 {
+        let t = std::f64::consts::TAU * a as f64 / 16.0;
+        let g = t0.ground_at(x + holds * libm::cos(t), y + holds * libm::sin(t), lattice);
+        if (g - g0).abs() / holds > SETTLEMENT_MAX_GRADE {
+            return Err("that ground is too steep for a settlement".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// The built-up radius (ft, `town::urban_radius`) of the village or town added by hand as
+/// created site `id`; 0 if it is none (or removed).
+pub fn built_radius(world: &World, t0: &T0, id: &str) -> f64 {
+    let Some(k) = world.file.edits.created.iter().position(|c| c.id == id) else { return 0.0 };
+    t0.made.iter().find(|m| m.poi == t0.base_pois + k).map_or(0.0, |m| town::urban_radius(m.s.tier, m.s.population))
+}
+
+/// A name for a village or town added by hand (`id` its `c:<n>`, which seeds it), in naming
+/// culture `culture`'s style, unlike the world's features' and the other created sites' names.
+pub fn name(world: &World, t0: &T0, id: &str, culture: u8) -> String {
+    use super::names::{NameKind, Namer};
+    let mut namer = Namer::new(crate::core::hash::fnv64(id.as_bytes()) ^ world.seed);
+    let taken = |n: &str| t0.extra.as_ref().is_some_and(|e| e.overlay.features.iter().any(|f| f.name == n)) || world.file.edits.created.iter().any(|c| c.name == n);
+    let mut n = namer.name(NameKind::Settlement, culture as usize);
+    for _ in 0..8 {
+        if !taken(&n) {
+            break;
+        }
+        n = namer.name(NameKind::Settlement, culture as usize);
+    }
+    n
+}
+
+/// `id` with its layout number (`world::layout_in_id`) `from` made `to`; `None` when it names
+/// another layout or none.
+fn relaid(id: &str, from: usize, to: usize) -> Option<String> {
+    if crate::world::layout_in_id(id) != Some(from) {
+        return None;
+    }
+    let (lead, rest) = match id.get(..2) {
+        Some(h @ ("l:" | "r:")) => (h, &id[2..]),
+        _ => ("", id),
+    };
+    let (head, tail) = rest.split_once(':')?;
+    let after = tail.split_once(':').map_or(String::new(), |(_, a)| format!(":{a}"));
+    Some(format!("{lead}{head}:{to}{after}"))
+}
+
+/// Sets aside what is keyed to layout `li` (a village or town added by hand, now removed or
+/// moved): its buildings' edits, its town laid out anew (`Edits.towns`), and the names, notes,
+/// hidden marks, site designs, NPCs' places and plot points in its layout, all moved to the
+/// first free layout number from `world::PARKED_LAYOUT` up, as the app sets aside a place that
+/// is gone when the world is remade (`remapLayouts` in `app/src/editor/reanchor.ts`). They stay
+/// in the file and resolve nowhere. What is kept under its own `c:` id stays. Walls drawn by
+/// hand are not keyed to it (they read the towns they reach afresh). How many entries moved.
+pub fn set_aside(edits: &mut crate::world::Edits, li: usize) -> usize {
+    use crate::world::{PARKED_LAYOUT, layout_in_id};
+    let parked = |id: &str| layout_in_id(id).filter(|&l| l >= PARKED_LAYOUT);
+    let mut ids: Vec<&str> = edits.renames.keys().chain(edits.notes.keys()).chain(edits.designs.keys()).chain(edits.buildings.keys()).map(String::as_str).collect();
+    ids.extend(edits.hidden.iter().map(String::as_str));
+    ids.extend(edits.npcs.values().filter_map(|n| n.location.as_ref().map(|l| l.id.as_str())));
+    ids.extend(edits.plots.values().flat_map(|p| p.anchors.iter().map(String::as_str)));
+    let to = ids.into_iter().filter_map(parked).chain(edits.towns.keys().filter_map(|k| k.parse::<usize>().ok()).filter(|&l| l >= PARKED_LAYOUT)).max().map_or(PARKED_LAYOUT, |m| m + 1);
+    let mut n = 0;
+    fn rekey<V>(m: &mut std::collections::BTreeMap<String, V>, li: usize, to: usize, n: &mut usize) {
+        let keys: Vec<String> = m.keys().filter(|k| relaid(k, li, to).is_some()).cloned().collect();
+        for k in keys {
+            let v = m.remove(&k).expect("a key just listed");
+            m.insert(relaid(&k, li, to).expect("a key of the layout"), v);
+            *n += 1;
+        }
+    }
+    rekey(&mut edits.renames, li, to, &mut n);
+    rekey(&mut edits.notes, li, to, &mut n);
+    rekey(&mut edits.designs, li, to, &mut n);
+    rekey(&mut edits.buildings, li, to, &mut n);
+    if let Some(t) = edits.towns.remove(&li.to_string()) {
+        edits.towns.insert(to.to_string(), t);
+        n += 1;
+    }
+    let hidden: Vec<String> = edits.hidden.iter().filter(|h| relaid(h, li, to).is_some()).cloned().collect();
+    for h in hidden {
+        edits.hidden.remove(&h);
+        edits.hidden.insert(relaid(&h, li, to).expect("a mark of the layout"));
+        n += 1;
+    }
+    for l in edits.npcs.values_mut().filter_map(|v| v.location.as_mut()) {
+        if let Some(id) = relaid(&l.id, li, to) {
+            l.id = id;
+            n += 1;
+        }
+    }
+    for a in edits.plots.values_mut().flat_map(|p| p.anchors.iter_mut()) {
+        if let Some(id) = relaid(a, li, to) {
+            *a = id;
+            n += 1;
+        }
+    }
+    n
+}
+
+/// After `edits.created` changed from `old` (`first`: the first created layout index), sets
+/// aside (`set_aside`) the edits of each village or town added by hand that was removed, moved
+/// or changed in what lays it out (its kind, culture or what it lives by; a new name lays out
+/// nothing anew). How many entries moved.
+pub fn set_aside_changed(old: &[Created], edits: &mut crate::world::Edits, first: usize) -> usize {
+    let lays = |c: &Created| (c.removed, c.kind.clone(), c.x.to_bits(), c.y.to_bits(), c.culture, c.lives_by.clone());
+    let gone: Vec<usize> = old.iter().enumerate().filter(|(k, c)| c.is_settlement() && !c.removed && edits.created.get(*k).is_none_or(|d| lays(d) != lays(c))).map(|(k, _)| k).collect();
+    gone.into_iter().map(|k| set_aside(edits, first + k)).sum()
 }

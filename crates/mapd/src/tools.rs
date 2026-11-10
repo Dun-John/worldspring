@@ -78,6 +78,7 @@ pub fn list() -> Value {
         a.extend(crate::ground::list());
         a.extend(crate::design::list());
         a.extend(crate::towns::list());
+        a.extend(crate::settlements::list());
         a.extend(crate::batch::list());
         // Any tool can say which world it means.
         for t in a.iter_mut() {
@@ -159,6 +160,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
     if let Some(r) = crate::towns::call(app, name, &a).await {
         return r;
     }
+    if let Some(r) = crate::settlements::call(app, name, &a).await {
+        return r;
+    }
     match name {
         "world_overview" => {
             let mut v = app.worker.with(|ex| Ok(agent::overview(&ex.world, &ex.t0))).await?;
@@ -210,7 +214,7 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
             app.worker
                 .with(move |ex| {
                     let li = match &settlement {
-                        Some(id) => Some(agent::layout_of(&ex.world, &ex.t0, id).filter(|&l| l < ex.t0.settlements.len()).ok_or_else(|| format!("{id} is not a settlement"))?),
+                        Some(id) => Some(agent::layout_of(&ex.world, &ex.t0, id).filter(|&l| worldgen::town::is_settlement(&ex.t0, l)).ok_or_else(|| format!("{id} is not a settlement"))?),
                         None => None,
                     };
                     Ok(agent::roads(&ex.world, &ex.t0, near, li, class.as_deref(), drawn, limit))

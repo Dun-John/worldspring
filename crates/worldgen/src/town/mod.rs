@@ -633,7 +633,12 @@ pub fn is_settlement(t0: &T0, li: usize) -> bool {
 /// sites and sites out of town. From T0 alone (no layout is read).
 pub fn parent_of(t0: &T0, li: usize) -> Option<usize> {
     let p = site_point(t0, li)?;
-    best_holder(t0, p, 0..t0.settlements.len())
+    best_holder(t0, p, (0..t0.settlements.len()).chain(made_layouts(t0)))
+}
+
+/// The layouts of the villages and towns added by hand (`t0::made`), in order.
+fn made_layouts(t0: &T0) -> impl Iterator<Item = usize> + '_ {
+    t0.made.iter().map(|m| t0.settlements.len() + m.poi)
 }
 
 /// Every site layout in a settlement: (site layout, settlement), by layout.
@@ -647,7 +652,7 @@ pub fn parents(t0: &T0) -> Vec<(usize, usize)> {
         let Some(p) = site_point(t0, li) else { continue };
         let from = by_x.partition_point(|&i| t0.settlements[i as usize].x < p[0] - widest);
         let to = by_x.partition_point(|&i| t0.settlements[i as usize].x <= p[0] + widest);
-        if let Some(si) = best_holder(t0, p, by_x[from..to].iter().map(|&i| i as usize)) {
+        if let Some(si) = best_holder(t0, p, by_x[from..to].iter().map(|&i| i as usize).chain(made_layouts(t0))) {
             out.push((li, si));
         }
     }
@@ -656,7 +661,7 @@ pub fn parents(t0: &T0) -> Vec<(usize, usize)> {
 
 /// The site layouts in settlement `si`, by layout.
 pub fn sites_in(t0: &T0, si: usize) -> Vec<usize> {
-    let Some(s) = t0.settlements.get(si) else { return Vec::new() };
+    let Some(s) = settlement(t0, si) else { return Vec::new() };
     let (c, r) = ([s.x, s.y], holds_radius(s));
     let n = t0.settlements.len();
     (n..layout_count(t0)).filter(|&li| site_point(t0, li).is_some_and(|p| dist(p, c) < r) && parent_of(t0, li) == Some(si)).collect()
@@ -669,11 +674,11 @@ fn site_point(t0: &T0, li: usize) -> Option<P> {
     (!t0.created_site(k).is_some_and(|c| c.removed) && p.kind != crate::t0::settle::PoiKind::Settlement).then_some([p.x, p.y])
 }
 
-/// Of the settlements `among`, the one holding point `p` (nearest for its size, then by index).
+/// Of the settlements `among` (layouts), the one holding point `p` (nearest for its size, then by index).
 fn best_holder(t0: &T0, p: P, among: impl Iterator<Item = usize>) -> Option<usize> {
     let mut best: Option<(f64, usize)> = None;
     for si in among {
-        let s = &t0.settlements[si];
+        let Some(s) = settlement(t0, si) else { continue };
         let r = holds_radius(s);
         let d = dist(p, [s.x, s.y]);
         if d < r && best.is_none_or(|(b, bi)| (d / r, si) < (b, bi)) {
