@@ -511,9 +511,16 @@ pub fn build(inp: &Inputs, settlements: &[Settlement], traffic: &super::economy:
         }
         // A realm village's spur wanders a little more: on flat ground it would run ruler-straight.
         let spur_end = |c: u32| settlements.iter().any(|v| v.isolated && v.planned == Tier::Village && v.cell as u32 == c);
-        if *class == RoadClass::Track && (spur_end(seg[0]) || spur_end(seg[seg.len() - 1])) {
+        let realm_spur = *class == RoadClass::Track && (spur_end(seg[0]) || spur_end(seg[seg.len() - 1]));
+        // So does any long dead end into a settlement (a spur nothing else joins), of any class: its cells
+        // are 1.17 mi, so over flat ground it would otherwise run straight for miles. Roads sway a little less.
+        let dead_end = |c: u32| adj[&c].len() == 1 && at_cell.contains_key(&(c as usize));
+        let length_mi = pts.windows(2).map(|p| dist(p[0], p[1])).sum::<f64>() * cell / 5280.0;
+        let long_spur = stroke.is_none() && length_mi > 5.0 && (dead_end(seg[0]) || dead_end(seg[seg.len() - 1]));
+        if realm_spur || long_spur {
+            let scale = if realm_spur { 1.0 } else { 1.0 - 0.3 * (*class <= RoadClass::Road) as u8 as f64 };
             let seed = crate::core::rng::hash2(inp.world.stream("t0.road.spur"), seg[0] as i64, seg[seg.len() - 1] as i64);
-            meander_spur(&mut pts, &mut wander, seed, &|x, y| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && passable_fn(inp)(y as usize * w + x as usize));
+            meander_spur(&mut pts, &mut wander, seed, scale, &|x, y| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && passable_fn(inp)(y as usize * w + x as usize));
         }
         // Bend with the land instead of running ruler-straight across it.
         let seed = crate::core::rng::hash2(inp.world.stream("t0.road.bends"), seg[0] as i64, seg[seg.len() - 1] as i64);
@@ -1765,7 +1772,7 @@ fn passable_fn<'a>(inp: &'a Inputs) -> impl Fn(usize) -> bool + 'a {
 /// Sways a realm village's spur (points in cells) sideways by up to about a third of a mile in waves a few
 /// miles long, none at its ends (it leaves the village and joins the track as it did), none where the
 /// ground there is wet or on a switchback leg. Short spurs sway less.
-fn meander_spur(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, seed: u64, dry: &dyn Fn(i64, i64) -> bool) {
+fn meander_spur(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, seed: u64, scale: f64, dry: &dyn Fn(i64, i64) -> bool) {
     const STEP: f64 = 0.08;
     const TAPER: f64 = 1.0;
     if pts.len() < 2 {
@@ -1807,7 +1814,7 @@ fn meander_spur(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, seed: u64, dry: 
         }
         let (tx, ty) = (b[0] - a[0], b[1] - a[1]);
         let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-9);
-        let off = ease * size * 0.6 * gradient2(seed, s[i] / 2.5, 0.37);
+        let off = ease * size * scale * 0.6 * gradient2(seed, s[i] / 2.5, 0.37);
         for f in [1.0, 0.5] {
             let q = [rp[i][0] - ty / tl * off * f, rp[i][1] + tx / tl * off * f];
             if dry(crate::core::round(q[0]) as i64, crate::core::round(q[1]) as i64) {

@@ -170,6 +170,44 @@ fn main() {
         let standing = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
         let n_layouts = worldgen::town::layout_count(&t0);
         say!("{}: {} settlements, {} sites, T0 {:.1} s", common::label(arg), t0.settlements.len(), n_layouts - t0.settlements.len(), t.elapsed().as_secs_f64());
+        // Spurs over 5 mi (one end at a settlement, the other joining no road): the longest straight run
+        // (points within 200 ft of its chord) and the share of spur length on runs over 3 mi.
+        {
+            let near_settlement = |q: P| t0.settlements.iter().any(|s| dist(q, [s.x, s.y]) < 6000.0);
+            let joins = |ri: usize, q: P| t0.roads.roads.iter().enumerate().any(|(rj, r)| rj != ri && r.pts.windows(2).any(|w| seg_dist(q, w[0], w[1]) < 400.0));
+            let (mut n, mut tot, mut on_long, mut worst) = (0, 0.0, 0.0, 0.0f64);
+            let mut spurs: Vec<(f64, P, P)> = Vec::new();
+            for (ri, rc) in t0.roads.roads.iter().enumerate() {
+                let (a, b) = (rc.pts[0], *rc.pts.last().unwrap());
+                let len: f64 = rc.pts.windows(2).map(|w| dist(w[0], w[1])).sum();
+                let dead = (near_settlement(a) && !joins(ri, b)) || (near_settlement(b) && !joins(ri, a));
+                if len < 5.0 * MI || !dead {
+                    continue;
+                }
+                let (mut i, mut longest) = (0, 0.0f64);
+                while i + 1 < rc.pts.len() {
+                    let mut j = i + 1;
+                    let mut best = j;
+                    while j < rc.pts.len() && (i + 1..j).all(|m| seg_dist(rc.pts[m], rc.pts[i], rc.pts[j]) < 200.0) {
+                        best = j;
+                        j += 1;
+                    }
+                    let run = dist(rc.pts[i], rc.pts[best]);
+                    longest = longest.max(run);
+                    if run > 3.0 * MI {
+                        on_long += run;
+                    }
+                    i = best;
+                }
+                n += 1;
+                tot += len;
+                worst = worst.max(longest);
+                if std::env::var("SPURDBG").is_ok() { say!("    spur {:.1} mi ({:.0}, {:.0}) -> ({:.0}, {:.0}) pts {} longest run {:.1} mi {:?}", len / MI, a[0], a[1], b[0], b[1], rc.pts.len(), longest / MI, rc.class); }
+                spurs.push((len, a, b));
+            }
+            spurs.sort_by(|x, y| y.0.total_cmp(&x.0));
+            say!("  long spurs (> 5 mi): {n}, {:.0} mi; longest straight run {:.1} mi; length on straight runs over 3 mi {:.0}%; longest: {}", tot / MI, worst / MI, 100.0 * on_long / tot.max(1.0), spurs.iter().take(3).map(|s| format!("{:.0} mi ({:.0}, {:.0}) -> ({:.0}, {:.0})", s.0 / MI, s.1[0], s.1[1], s.2[0], s.2[1])).collect::<Vec<_>>().join("; "));
+        }
         for p in t0.pois.iter().filter(|p| p.stroke.is_none()) {
             use worldgen::t0::settle::PoiKind as K;
             let Some(i) = [K::Cave, K::Mine, K::LavaTube, K::Ruin, K::Tower].iter().position(|k| *k == p.kind) else { continue };
