@@ -5008,6 +5008,9 @@ fn approach_curve(e: P, g: P, heading: Option<P>) -> Vec<P> {
         .collect()
 }
 
+/// A bank tower no nearer another town tower than this (ft, centre to centre).
+const BANK_CLEAR: f64 = 22.0;
+
 /// Walls end at the bank: wall runs are cut where they cross a river channel (the water is
 /// the defence there), each cut end gets a tower on the bank, and towers standing in the
 /// channel go. The walls of castles set by hand (`hand`, places in `l.walls`) put their bank
@@ -5037,6 +5040,11 @@ fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> 
         };
         let bank = |l: &mut Layout, t: P| {
             if crowded(l, t, !fill) {
+                return;
+            }
+            // (Nor beside a town tower that stays, as where a run's corner or another cut end stands
+            // on the bank: one tower there.)
+            if !by_hand && l.towers.iter().chain(&l.gate_towers).any(|o| dist(*o, t) < BANK_CLEAR && !tower_wet(*o)) {
                 return;
             }
             if crowded(l, t, true) {

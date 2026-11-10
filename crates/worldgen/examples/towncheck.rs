@@ -4981,6 +4981,27 @@ fn curtain_bows(ctx: &Ctx, l: &Layout, li: usize) -> (Vec<(f64, String)>, Vec<St
     out
 }
 
+/// Town wall towers (a castle's apart) and gate towers under 22 ft apart, centre to centre: two
+/// wall runs' corners meeting, each with its own tower (a gate's own pair apart).
+fn close_towers(l: &Layout, li: usize, r: &mut Report) {
+    let castle = |t: P| l.tower_forms.iter().any(|f| (f.0[0] - t[0]).abs() + (f.0[1] - t[1]).abs() < 1e-6 && f.1 & 16 != 0);
+    let ts: Vec<(P, bool)> = l.towers.iter().filter(|t| !castle(**t)).map(|t| (*t, false)).chain(l.gate_towers.iter().map(|t| (*t, true))).collect();
+    for i in 0..ts.len() {
+        for j in i + 1..ts.len() {
+            let d = dist(ts[i].0, ts[j].0);
+            // (A gate's pair: across its passage, both gate towers.)
+            if d < 22.0 && !(ts[i].1 && ts[j].1 && d > 8.0) {
+                let kind = match (ts[i].1, ts[j].1) {
+                    (false, false) => "wall towers",
+                    (true, true) => "gate towers",
+                    _ => "a gate tower and a wall tower",
+                };
+                r.add("town towers under 22 ft apart", 1.0, format!("L{li} {kind} {d:.1} ft apart at {} and {}", at(ts[i].0), at(ts[j].0)));
+            }
+        }
+    }
+}
+
 fn walls(ctx: &mut Ctx, r: &mut Report) {
     use worldgen::battlemap::URBAN_TOWER_FLOOR;
     use worldgen::town::wallstyle::{self, TowerShape};
@@ -5001,6 +5022,7 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
         "gate passages not walkable end to end on the battlemap",
         "gatehouses over a road, a building or the water",
         "castle gates not of their group's form",
+        "town towers under 22 ft apart",
         "buildings in the town's patches the wall leaves outside",
         "places listed",
     ]);
@@ -5043,6 +5065,7 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
                 r.add("towers not of their style's shapes", 1.0, format!("L{li} {} {}", SHAPES[shape as usize], at(t)));
             }
         }
+        close_towers(&l, li, r);
         wall_rules(&l, li, lattice, t0, r);
         gate_rules(&l, li, lattice, t0, r);
         // How round the curtains run (castles' apart): the turning at each corner; runs of gentle steps
