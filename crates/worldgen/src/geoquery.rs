@@ -475,6 +475,16 @@ impl Patch {
         slope_of(if xx > 0.0 { sx / xx / SQUARE_FT } else { 0.0 }, if yy > 0.0 { sy / yy / SQUARE_FT } else { 0.0 })
     }
 
+    /// The dry square (not under river or lake water) beside a sea square nearest `p`.
+    fn dry_by_sea(&self, t0: &T0, p: P) -> Option<usize> {
+        let sea = |k: usize| sea_at(t0, self.centre(k), self.h[k]);
+        (0..self.h.len())
+            .filter(|&k| !self.wet(k) && [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| self.off(k, dx, dy).is_some_and(sea)))
+            .map(|k| (geom::dist(self.centre(k), p), k))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|f| f.1)
+    }
+
     /// The square nearest `p` for which `state` (t0, square's middle, its ground) differs from `here`.
     fn nearest_not(&self, t0: &T0, p: P, here: bool, state: State) -> Option<(f64, usize)> {
         (0..self.h.len()).filter(|&k| state(t0, self.centre(k), self.h[k]) != here).map(|k| (geom::dist(self.centre(k), p), k)).min_by(|a, b| a.0.total_cmp(&b.0))
@@ -651,7 +661,7 @@ const CLIFF_SCAN_FT: f32 = 10.0;
 pub const FLAT_PATCH_FT: f64 = 200.0;
 pub const FLAT_RANGE_FT: f32 = 10.0;
 /// How many coarse candidates are measured on squares at most.
-const FLAT_TRIES: usize = 6;
+const FLAT_TRIES: usize = 12;
 
 /// The sea's coast nearest `p` within `max_ft`, on the battlemap's ground: `{distance_ft, x_ft, y_ft (the last dry
 /// square), shore: cliff | beach, rise_ft (the land's height within CLIFF_RUN_FT of the water), inland_ft (within
@@ -669,7 +679,7 @@ pub fn coast(ex: &mut Executor, p: P, max_ft: f64) -> Option<Value> {
     let (_, x, pa) = found?;
     // The last dry square: the one found when coming from the sea, else the dry square nearest the water found.
     let t0 = &ex.t0;
-    let e = if in_sea { x } else { pa.nearest_not(t0, pa.centre(x), true, &sea_at).map_or(x, |f| f.1) };
+    let e = pa.dry_by_sea(t0, p).unwrap_or_else(|| if in_sea { x } else { pa.nearest_not(t0, pa.centre(x), true, &sea_at).map_or(x, |f| f.1) });
     let e = pa.centre(e);
     let pb = Patch::read(ex, e, 100.0);
     let water = ex.world.params().sea_level_ft as f32;
@@ -756,6 +766,54 @@ fn drops(pa: &Patch, p: P) -> (Option<(f64, f32, usize, usize)>, Option<(f32, us
     (near, steep)
 }
 
+/// Points inside hand-made plateaus (at least 100 ft from their edges) within `max_ft` of `p`, on a grid `step` ft apart:
+/// at most `per` for each plateau, nearest first, with the plateau's level.
+fn plateau_spots(ex: &Executor, p: P, max_ft: f64, step: f64, per: usize) -> Vec<(f64, P, f32)> {
+    let mut out = Vec::new();
+    for pl in ex.world.file.edits.plateaus.values() {
+        let n = pl.pts.len();
+        let b = pl.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]);
+        if n < 3 || b[0] > p[0] + max_ft || b[2] < p[0] - max_ft || b[1] > p[1] + max_ft || b[3] < p[1] - max_ft {
+            continue;
+        }
+        let mut v: Vec<(f64, P, f32)> = Vec::new();
+        let (nx, ny) = (crate::core::floor((b[2] - b[0]) / step) as i64, crate::core::floor((b[3] - b[1]) / step) as i64);
+        for j in 0..=ny {
+            for i in 0..=nx {
+                let q = [b[0] + i as f64 * step, b[1] + j as f64 * step];
+                let d = geom::dist(q, p);
+                if d <= max_ft && geom::contains(&pl.pts, q) && (0..n).all(|k| geom::seg_dist(q, pl.pts[k], pl.pts[(k + 1) % n]) >= 0.5 * FLAT_PATCH_FT) {
+                    v.push((d, q, pl.level));
+                }
+            }
+        }
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out.extend(v.into_iter().take(per));
+    }
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
+}
+
+/// The middles of hand-brushed blocks (80 ft) within `max_ft` of `p`, nearest first, with the block's greatest change (ft).
+fn block_spots(ex: &Executor, p: P, max_ft: f64) -> Vec<(f64, P, f64)> {
+    let side = crate::ground::BLOCK as f64 * SQUARE_FT;
+    let mut v: Vec<(f64, P, f64)> = ex
+        .world
+        .file
+        .edits
+        .ground
+        .iter()
+        .filter_map(|(k, b)| {
+            let (bx, by) = crate::ground::parse_key(k)?;
+            let q = [(bx as f64 + 0.5) * side, (by as f64 + 0.5) * side];
+            let d = geom::dist(q, p);
+            (d <= max_ft && !b.is_zero()).then(|| (d, q, b.add.iter().map(|&a| (a as f64 * 0.1).abs()).fold(0.0, f64::max)))
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v
+}
+
 fn cliff(ex: &mut Executor, p: P, max_ft: f64, none: Value) -> Value {
     let (c, sea) = (cell(&ex.t0), ex.world.params().sea_level_ft as f32);
     // Spots to measure: hand-made plateaus' outlines nearest the point, then the steepest samples in T0 cells steep enough.
@@ -770,6 +828,8 @@ fn cliff(ex: &mut Executor, p: P, max_ft: f64, none: Value) -> Value {
     }
     spots.sort_by(|a, b| geom::dist(*a, p).total_cmp(&geom::dist(*b, p)));
     spots.truncate(2);
+    // Hand-brushed blocks nearest the point (raised or lowered ground can make a cliff).
+    spots.extend(block_spots(ex, p, max_ft).into_iter().take(2).map(|b| b.1));
     let cells: Vec<(f64, f64, i64, i64)> = {
         let t0 = &ex.t0;
         let (ci, cj) = cell_of(t0, p);
@@ -820,6 +880,7 @@ fn cliff(ex: &mut Executor, p: P, max_ft: f64, none: Value) -> Value {
     }
     scanned.sort_by(|a, b| a.0.total_cmp(&b.0));
     spots.extend(scanned.into_iter().map(|s| s.1).take(6));
+    let measured = spots.len();
     // Measured on squares: the nearest cliff found, else the steepest ground.
     let (mut best, mut steep): (Option<(f64, f32, P, P, f32)>, Option<(f32, P)>) = (None, None);
     for q in spots {
@@ -853,9 +914,9 @@ fn cliff(ex: &mut Executor, p: P, max_ft: f64, none: Value) -> Value {
             v["note"] = json!(match steep {
                 Some((rise, at)) => {
                     v["steepest"] = json!({ "x_ft": r1(at[0]), "y_ft": r1(at[1]), "rise_ft": r1(rise as f64 * 10.0) / 10.0, "distance_mi": r1((geom::dist(at, p) / MI) * 100.0) / 100.0 });
-                    format!("no cliff ({CLIFF_RISE_FT} ft within {CLIFF_RUN_FT} ft) within {within} mi; the steepest ground found is {:.1} ft in {CLIFF_RUN_FT} ft at ({}, {})", rise, r1(at[0]), r1(at[1]))
+                    format!("no cliff ({CLIFF_RISE_FT} ft within {CLIFF_RUN_FT} ft) among the {measured} steep spots measured within {within} mi (the search is not exhaustive); the steepest ground found is {:.1} ft in {CLIFF_RUN_FT} ft at ({}, {})", rise, r1(at[0]), r1(at[1]))
                 }
-                None => format!("no cliff ({CLIFF_RISE_FT} ft within {CLIFF_RUN_FT} ft) within {within} mi: no ground there is steeper than {CLIFF_CELL_DEG} degrees over a mile"),
+                None => format!("no cliff ({CLIFF_RISE_FT} ft within {CLIFF_RUN_FT} ft) among the {measured} steep spots measured within {within} mi: no ground there is steeper than {CLIFF_CELL_DEG} degrees over a mile to measure (the search is not exhaustive)"),
             });
             v
         }
@@ -889,10 +950,23 @@ fn flat(ex: &mut Executor, p: P, max_ft: f64, none: Value) -> Value {
         v.dedup_by(|a, b| geom::dist(a.1, b.1) < 1.0);
         v
     };
+    // Hand-shaped ground first: points on plateau tops and middles of brushed blocks (levelled ground).
+    let mut hand: Vec<(f64, P)> = plateau_spots(ex, p, max_ft, 40.0, 3).into_iter().map(|s| (s.0, s.1)).collect();
+    hand.extend(block_spots(ex, p, max_ft).into_iter().take(3).map(|b| (b.0, b.1)));
+    hand.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let spots: Vec<(f64, P)> = hand.into_iter().take(6).chain(spots).collect();
     let mut roughest: Option<f32> = None;
+    let (mut measured, mut wet_n) = (0, 0);
+    let whole = (FLAT_PATCH_FT / SQUARE_FT) as i64 + 1;
     for &(d, q) in spots.iter().take(FLAT_TRIES) {
         let pa = Patch::read(ex, q, 0.5 * FLAT_PATCH_FT);
+        // The whole patch must be on the map.
+        if pa.s.w != whole || pa.s.h != whole {
+            continue;
+        }
+        measured += 1;
         if (0..pa.h.len()).any(|k| pa.wet(k)) {
+            wet_n += 1;
             continue;
         }
         let (lo, hi) = pa.h.iter().fold((f32::MAX, f32::MIN), |m, &h| (m.0.min(h), m.1.max(h)));
@@ -908,10 +982,85 @@ fn flat(ex: &mut Executor, p: P, max_ft: f64, none: Value) -> Value {
         return v;
     }
     let mut v = none;
-    if let Some(r) = roughest {
-        v["note"] = json!(format!("the nearest gentle ground (by the coarse map) is rougher on the battlemap: at best {:.1} ft over {FLAT_PATCH_FT} ft (flat is at most {FLAT_RANGE_FT})", r));
-    }
+    let within = max_ft / MI;
+    v["note"] = json!(match roughest {
+        Some(r) => format!("no flat among the {measured} spots measured within {within} mi (the search is not exhaustive): the nearest gentle ground (by the coarse map) is rougher on the battlemap, at best {:.1} ft over {FLAT_PATCH_FT} ft (flat is at most {FLAT_RANGE_FT})", r),
+        None if measured > 0 => format!("no flat among the {measured} spots measured within {within} mi (the search is not exhaustive): {wet_n} had water in the {FLAT_PATCH_FT}-ft patch"),
+        None => format!("no ground under {FLAT_DEG} degrees within {within} mi to measure (a {FLAT_PATCH_FT}-ft patch on the map, dry, found on the coarse map)"),
+    });
     v
+}
+
+/// The highest ground within `max_ft` of `p`: the T0 cells highest in reach are scanned on 80-ft samples, the highest
+/// samples (and hand-shaped ground: plateau tops, brushed blocks, the point itself) measured on squares.
+fn highest(ex: &mut Executor, p: P, max_ft: f64) -> Value {
+    const CELLS: usize = 10;
+    const SAMPLES: usize = 6;
+    let (c, sea) = (cell(&ex.t0), ex.world.params().sea_level_ft as f32);
+    let cells: Vec<(i64, i64)> = {
+        let t0 = &ex.t0;
+        let (ci, cj) = cell_of(t0, p);
+        let rr = crate::core::ceil(max_ft / c) as i64 + 1;
+        let mut v: Vec<(f64, i64, i64)> = Vec::new();
+        for j in (cj - rr).max(0)..=(cj + rr).min(t0.height.h as i64 - 1) {
+            for i in (ci - rr).max(0)..=(ci + rr).min(t0.height.w as i64 - 1) {
+                if geom::dist(center(t0, i, j), p) <= max_ft + 0.7 * c {
+                    v.push((h_at(t0, i, j), i, j));
+                }
+            }
+        }
+        v.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        v.into_iter().take(CELLS).map(|x| (x.1, x.2)).collect()
+    };
+    let mut lat = Lattice::new(ex, COAST_STEP_FT);
+    let mut samples: Vec<(f32, P)> = Vec::new();
+    for (ci, cj) in cells {
+        let m = center(&ex.t0, ci, cj);
+        let (i0, j0) = lat.index([m[0] - 0.5 * c, m[1] - 0.5 * c]);
+        let (i1, j1) = lat.index([m[0] + 0.5 * c, m[1] + 0.5 * c]);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let q = lat.pos(i, j);
+                if geom::dist(q, p) <= max_ft {
+                    let h = lat.ground(ex, i, j);
+                    samples.push((h, q));
+                }
+            }
+        }
+    }
+    // Highest first (ties by position), thinned to those at least 2 steps apart.
+    samples.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1[0].total_cmp(&b.1[0])).then(a.1[1].total_cmp(&b.1[1])));
+    samples.dedup_by(|a, b| a.1 == b.1);
+    let mut spots: Vec<P> = Vec::new();
+    for s in &samples {
+        if spots.len() < SAMPLES && spots.iter().all(|&q| geom::dist(q, s.1) >= 2.0 * lat.step) {
+            spots.push(s.1);
+        }
+    }
+    spots.push(p);
+    spots.extend(plateau_spots(ex, p, max_ft, 40.0, 1).into_iter().map(|s| s.1));
+    spots.extend(block_spots(ex, p, max_ft).into_iter().take(3).map(|b| b.1));
+    let (pa, k) = here(ex, p);
+    let at_h = pa.h[k];
+    let mut best: Option<(f32, P)> = None;
+    for q in spots {
+        let pa = Patch::read(ex, q, 1.5 * lat.step + 10.0);
+        for j in 0..pa.h.len() {
+            let ctr = pa.centre(j);
+            if !pa.wet(j) && geom::dist(ctr, p) <= max_ft && best.is_none_or(|b| pa.h[j] > b.0) {
+                best = Some((pa.h[j], ctr));
+            }
+        }
+    }
+    match best {
+        Some((h, at)) => {
+            let mut v = base("highest", p, at, geom::dist(p, at));
+            v["elevation_ft"] = json!(r1((h - sea) as f64 * 10.0) / 10.0);
+            v["rise_ft"] = json!(r1((h - at_h).max(0.0) as f64 * 10.0) / 10.0);
+            v
+        }
+        None => json!({ "what": "highest", "found": false, "within_mi": max_ft / MI, "note": "no dry ground within reach" }),
+    }
 }
 
 /// The nearest point of a road's drawn surface (the finest tiles' carved road) within `reach_ft` of `p`, with its
@@ -988,6 +1137,7 @@ pub fn nearest(ex: &mut Executor, p: P, what: &str, max_ft: f64) -> Result<Value
         }
         "cliff" => return Ok(cliff(ex, p, max_ft, none())),
         "flat" => return Ok(flat(ex, p, max_ft, none())),
+        "highest" => return Ok(highest(ex, p, max_ft)),
         _ => (&ex.world, &ex.t0),
     };
     Ok(match what {
@@ -1024,7 +1174,7 @@ pub fn nearest(ex: &mut Executor, p: P, what: &str, max_ft: f64) -> Result<Value
             }
             None => none(),
         },
-        _ => return Err(format!("what: \"{what}\" is not one of coast, cliff, river, road, flat")),
+        _ => return Err(format!("what: \"{what}\" is not one of coast, cliff, river, road, flat, highest")),
     })
 }
 

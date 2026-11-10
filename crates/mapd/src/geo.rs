@@ -14,8 +14,8 @@ const SNAP_FT: f64 = 60.0;
 
 pub fn list() -> Vec<Value> {
     vec![
-        json!({ "name": "nearest", "title": "Nearest coast, cliff, river, road or flat", "description": "The nearest coast, cliff, river, road or flat ground to a place within within_mi (default 5, at most 25): its point, distance, direction and what it is. found is false where there is none. Thresholds: MCP.md.", "inputSchema": schema(crate::tools::merge(at_props(), json!({
-            "what": { "type": "string", "enum": ["coast", "cliff", "river", "road", "flat"] },
+        json!({ "name": "nearest", "title": "Nearest coast, cliff, river, road, flat or highest", "description": "The nearest coast, cliff, river, road or flat ground to a place, or the highest ground (its point, elevation_ft and the rise above the place), within within_mi (default 5, at most 25): its point, distance, direction and what it is. found is false where there is none; for cliff and flat the search is not exhaustive (the note says what was measured). Thresholds: MCP.md.", "inputSchema": schema(crate::tools::merge(at_props(), json!({
+            "what": { "type": "string", "enum": ["coast", "cliff", "river", "road", "flat", "highest"] },
             "within_mi": { "type": "number", "minimum": 0.1, "maximum": NEAREST_MAX_MI, "default": NEAREST_DEFAULT_MI },
         })), &["what"]) }),
         json!({ "name": "road_point", "title": "A point along a road", "description": "A point at_mi or fraction along a road: road (an rd: id or a road's name) from one end (from: a place near it; default the first), or from and to along the road route takes. Returns x_ft, y_ft, heading_deg and the stretch there; past the length is refused with it.", "inputSchema": schema(json!({
@@ -39,7 +39,7 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
 
 async fn nearest(app: &Shared, a: &Value) -> Result<Value, String> {
     let p = place(app, a).await?;
-    let what = a["what"].as_str().ok_or_else(|| bad("what", "coast, cliff, river, road or flat", &a["what"]))?.to_string();
+    let what = a["what"].as_str().ok_or_else(|| bad("what", "coast, cliff, river, road, flat or highest", &a["what"]))?.to_string();
     let mi = a["within_mi"].as_f64().unwrap_or(NEAREST_DEFAULT_MI);
     if !(0.1..=NEAREST_MAX_MI).contains(&mi) {
         return Err(bad("within_mi", &format!("0.1 to {NEAREST_MAX_MI} miles"), &a["within_mi"]));

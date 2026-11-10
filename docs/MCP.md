@@ -237,7 +237,7 @@ you mean" and the kinds there are. A district, building or tower says its `settl
 | `kind` | string | none | Only this kind: `city`, `ruin`, `river`, `building`, `district`, `tower`, … |
 | `tag` | string | none | Only features whose notes carry this tag (any case): the DM's `hook`, `secret`… |
 | `in_notes` | boolean | false | The query also matches the words of a feature's notes (not only its name); needs a `query`. |
-| `within` | box, polygon or circle | none | Only features with a point inside the area (`inside: "point"`) or an extent overlapping it (`inside: "extent"`: a river or road that runs through it, a region that covers part of it; area extents are tested at up to 400 sample points, so a sliver narrower than a map cell can be missed). A box is `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]`, a circle `{at, radius_ft}` (as `list_objects`). Combines with `query`, `kind` and `tag`; districts and businesses still need a query of three letters (an empty `kind: building` or `district` search without one says so in `note`). A circle's `radius_ft` must be more than 0. |
+| `within` | box, polygon or circle | none | Only features with a point inside the area (`inside: "point"`) or an extent overlapping it (`inside: "extent"`: a river or road that runs through it, a region that covers part of it; area extents are tested at up to 400 sample points, so a sliver narrower than a map cell can be missed). A box is `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]`, a circle `{at, radius_ft}` (as `list_objects`). Hits come nearest the area's middle first. Combines with `query`, `kind` and `tag`; districts and businesses still need a query of three letters (an empty `kind: building` or `district` search without one says so in `note`). A circle's `radius_ft` must be more than 0. |
 | `limit` | integer | 25 | 1 to 200 |
 | `include_hidden` | boolean | false | Also return hidden features. |
 
@@ -328,7 +328,7 @@ and created sites.
 
 ### `describe_location`
 What is at a point:
-- `elevation_ft` and `under_water`: the 5-ft square at the point as the battlemap draws it (shaped by hand included; `ground_heights` has the squares round it), and the biome;
+- `elevation_ft` and `under_water`: the 5-ft square at the point as the battlemap draws it (shaped by hand included; `ground_heights` has the squares round it), and the biome. `biome` is the coarse map's and `elevation_ft` / `under_water` the battlemap's, so a dry point near the sea can read `biome: ocean`;
 - `in`: the areas it lies in, largest first (continent or island, sea, range, forest, lake…);
 - the building, district or site there (a building's `district` is its name as renamed, `district_id` its id; a
   building of a site standing in a settlement, such as one drawn by hand, has the settlement's district there);
@@ -388,7 +388,7 @@ The distance between two places:
 > *"How many days does it take to ride from Agentholm to Geirgai at a fast pace?"* · *"What's the route from Gatewatch to the capital, and which towns does it pass?"*
 
 ### `nearest`
-The nearest coast, cliff, river, road or flat ground to a place, within `within_mi` miles (default 5, at most 25): a
+The nearest coast, cliff, river, road or flat ground, or the highest ground, to a place, within `within_mi` miles (default 5, at most 25): a
 bounded search, never a scan of the whole map. Returns `{what, found, x_ft, y_ft, distance_ft, distance_mi, direction}`
 and, by what, one more; `found: false` (not an error) where there is none within the distance. Coast, cliff and flat
 are answered on the battlemap's own ground (the refined terrain tiles; 5-ft squares as `ground_heights` reads them,
@@ -398,12 +398,12 @@ roads are found on their own lines. Definitions (defined once, `worldgen/src/geo
 - `coast`: the sea's shore nearest the point (a point at sea gets the nearest land's edge, `in_sea: true`): searched on
   samples 80 ft apart about the point and about the coarse coast (out to 3 cells from it, as far as the coarse coast can
   be off on a steep coast), then placed on the squares. The point is the last dry square, with the sea's squares beside
-  it. `shore` is `cliff` where the land stands 15 ft or more above the water within 20 ft of it, else `beach`; `rise_ft`
+  it (a river or lake square is never the coast point). `shore` is `cliff` where the land stands 15 ft or more above the water within 20 ft of it, else `beach`; `rise_ft`
   is that height, `inland_ft` the highest within 100 ft. Lakes are not coasts (`describe_location`'s `water` has them).
 - `cliff`: a drop of 15 ft or more within 20 ft on the squares (about 37 degrees or steeper; the top dry, the foot at its
   ground or at the water over it). Looked for in the coarse cells steeper than 12 degrees within reach (the two nearest
   and the two steepest, scanned on samples 40 ft apart) and along hand-made plateaus (`set_plateau`), then measured on
-  the squares at the steepest few spots: so the nearest of those, not every cliff. Returns the top (`x_ft`, `y_ft`,
+  the squares at the steepest few spots, and at hand-brushed blocks (`shape_ground`): so the nearest of those, not every cliff. The search is not exhaustive: where none is found the `note` says how many steep spots were measured. Returns the top (`x_ft`, `y_ft`,
   `top_ft` its height above the sea), `foot`, `drop_ft`, `run_ft` and `slope_deg`. Where none is found, `note` says so
   and `steepest` gives the steepest ground measured (`{x_ft, y_ft, rise_ft, distance_mi}`, rise within 20 ft). Natural
   cliffs are rare (mountain faces); for a sheer one, make it with `set_plateau` (`edge_ft: 0`) or `shape_ground`.
@@ -413,19 +413,24 @@ roads are found on their own lines. Definitions (defined once, `worldgen/src/geo
   (clockwise from north, as in `road_point`).
 - `flat`: a 200-ft square patch (`patch_ft`) of dry squares whose heights differ by 10 ft or less (`range_ft`), its
   middle the point. Candidates are the gentle points (under 5 degrees on the coarse grid) in and round the nearest coarse
-  cells gentle with their four neighbours, nearest first; at most 6 are measured on the squares. `slope_deg` is the
+  cells gentle with their four neighbours, nearest first, after the tops of hand-made plateaus and the middles of hand-brushed blocks; at most 12 are measured on the squares (the search is not exhaustive: the `note` of a `found: false` says how many were, or that no gentle ground was in reach to measure). The whole patch must be on the map. `slope_deg` is the
   patch's mean slope, `elevation_ft` its middle's. Distance 0 where the point is on one; where the candidates measured
   are all rougher, `found: false` with a `note` saying how rough.
+- `highest`: the highest dry ground within `within_mi` of the place: the ten highest coarse cells in reach are scanned on samples
+  80 ft apart, the highest few (and the point itself, hand-made plateaus and brushed blocks) measured on the squares. Returns the
+  top's point, `elevation_ft` above the sea and `rise_ft` above the place (0 where the place is the highest). A first call in a
+  new area is a fraction of a second, a second one there a few ms.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
 | `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | required | |
-| `what` | string | required | `coast`, `cliff`, `river`, `road` or `flat` |
+| `what` | string | required | `coast`, `cliff`, `river`, `road`, `flat` or `highest` |
 | `within_mi` | number | 5 | 0.1 to 25 |
 
 ```json
 { "name": "nearest", "arguments": { "at": "city:bab44567", "what": "coast", "within_mi": 25 } }
 { "name": "nearest", "arguments": { "at": [2310194, 4127619], "what": "flat" } }
+{ "name": "nearest", "arguments": { "at": "city:bab44567", "what": "highest", "within_mi": 2 } }
 ```
 > *"How far is the nearest cliff from the keep?"* · *"Where is the closest flat ground to build a camp?"*
 

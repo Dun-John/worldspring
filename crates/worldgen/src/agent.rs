@@ -1303,6 +1303,13 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
             }
             inside.is_some()
         });
+        // Nearest the area's middle first (a hit with no point sorts last).
+        let mid = rg.middle();
+        let key = |v: &Value| match (v["x_ft"].as_f64(), v["y_ft"].as_f64()) {
+            (Some(x), Some(y)) => town::geom::dist([x, y], mid),
+            _ => f64::MAX,
+        };
+        out.sort_by(|a, b| key(a).total_cmp(&key(b)));
     }
     json!({ "results": out })
 }
