@@ -6073,12 +6073,13 @@ fn district_edits(base: &World, t0: &T0, r: &mut Report) {
 
 // R5 towns (M16b): squares, parks and gates (`town::places`).
 
-const PLACE_COUNTS: [&str; 7] = [
+const PLACE_COUNTS: [&str; 8] = [
     "places sharing an id",
     "places unnamed",
     "place labels over a wall or building",
     "place ids moved or gone after an unrelated patch edit",
     "place ids moved or gone with the walls toggled",
+    "generated place names changed by an edit elsewhere",
     "gates listed while the town is unwalled",
     "unrelated patch edits refused",
 ];
@@ -6102,7 +6103,7 @@ fn places(base: &World, t0: &T0, r: &mut Report) {
         done += 1;
         let tier = tiers[t0.settlements[ci].tier as usize];
         let l = town::layout(base, t0, ci);
-        let ps = of(t0, &l);
+        let ps = of(base, t0, &l);
         for k in ["square", "park", "gate"] {
             r.tally(&format!("{tier}: {k}s"), ps.iter().filter(|p| p.kind == k).count());
         }
@@ -6135,7 +6136,11 @@ fn places(base: &World, t0: &T0, r: &mut Report) {
         let kept = |now: &[Place], skip: &dyn Fn(&Place) -> bool, label: &str, tag: &str, r: &mut Report| {
             for p in ps.iter().filter(|p| !skip(p)) {
                 match now.iter().find(|q| q.id == p.id) {
-                    Some(q) if dist(q.at, p.at) <= 40.0 && q.kind == p.kind => {}
+                    Some(q) if dist(q.at, p.at) <= 40.0 && q.kind == p.kind => {
+                        if q.name != p.name {
+                            r.add("generated place names changed by an edit elsewhere", 1.0, format!("{ci} {tag}: {} {} -> {}", p.id, p.name, q.name));
+                        }
+                    }
                     Some(q) => r.add(label, dist(q.at, p.at), format!("{ci} {tag}: {} moved {:.0} ft", p.id, dist(q.at, p.at))),
                     None => r.add(label, 1.0, format!("{ci} {tag}: {} {} gone", p.id, p.name)),
                 }
@@ -6162,7 +6167,7 @@ fn places(base: &World, t0: &T0, r: &mut Report) {
                 Ok((Some(e), _)) => {
                     let l2 = town::wards::with_edit(base, t0, ci, &e);
                     // (A road's cemetery may come or go as the town's commons change.)
-                    kept(&of(t0, &l2), &|q| q.id.contains(":r"), "place ids moved or gone after an unrelated patch edit", &format!("patch {p} to {to}"), r);
+                    kept(&of(base, t0, &l2), &|q| q.id.contains(":r"), "place ids moved or gone after an unrelated patch edit", &format!("patch {p} to {to}"), r);
                 }
                 Ok((None, _)) => r.add("unrelated patch edits refused", 1.0, format!("{ci}: patch {p}: no change")),
                 Err(e) => r.add("unrelated patch edits refused", 1.0, format!("{ci}: patch {p}: {e}")),
@@ -6172,7 +6177,7 @@ fn places(base: &World, t0: &T0, r: &mut Report) {
         let req: town::wards::TownRequest = serde_json::from_value(json!({ "walls": !walled })).unwrap();
         if let Ok((Some(e), _)) = town::wards::change(base, t0, ci, &req) {
             let l2 = town::wards::with_edit(base, t0, ci, &e);
-            let now = of(t0, &l2);
+            let now = of(base, t0, &l2);
             if gates_off(&l2, &now) {
                 r.add("gates listed while the town is unwalled", 1.0, format!("{ci} walls toggled"));
             }

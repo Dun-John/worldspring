@@ -23,6 +23,7 @@ use super::catalog::CATALOG;
 use super::geom::*;
 use super::{Layout, ParkKind, PlazaKind};
 use crate::core::rng::{hash3, unit};
+use crate::core::hash::FastMap;
 use crate::t0::T0;
 use crate::t0::names::Namer;
 use crate::t0::settle::Tier;
@@ -174,8 +175,22 @@ fn destination(t0: &T0, l: &Layout, g: P) -> Option<String> {
     fs.iter().filter(|f| matches!(f.kind, "metropolis" | "city" | "town" | "village")).nth(j).map(|f| f.name.clone())
 }
 
-/// The town's squares, parks and gates, with their ids, generated names and labels.
-pub fn of(t0: &T0, l: &Layout) -> Vec<Place> {
+/// The town's squares, parks and gates, with their ids, generated names and labels. A place
+/// the town as generated has keeps its name from there, whatever is edited round it.
+pub fn of(world: &crate::World, t0: &T0, l: &Layout) -> Vec<Place> {
+    if l.site || t0.settlements.get(l.index as usize).is_none() {
+        return Vec::new();
+    }
+    let g = super::generated_layout(world, t0, l.index as usize);
+    if std::ptr::eq(&*g, l) {
+        return made(t0, l, &FastMap::default());
+    }
+    let fixed: FastMap<String, String> = made(t0, &g, &FastMap::default()).into_iter().map(|p| (p.id, p.name)).collect();
+    made(t0, l, &fixed)
+}
+
+/// `of` with the names in `fixed` (by id) given and kept from the others.
+fn made(t0: &T0, l: &Layout, fixed: &FastMap<String, String>) -> Vec<Place> {
     let li = l.index;
     let Some(s) = t0.settlements.get(li as usize).filter(|_| !l.site) else { return Vec::new() };
     let group = (s.culture % 5) as usize;
@@ -183,7 +198,7 @@ pub fn of(t0: &T0, l: &Layout) -> Vec<Place> {
     let roll = |tag: i64, n: i64, k: i64| unit(hash3(s.seed ^ 0x5a1e_7c3d, tag, n, k));
     let namer = |tag: i64, n: i64| Namer::new(hash3(s.seed, tag, n, 0x91ac));
     let district = |p: P| l.quarters.iter().position(|q| q.patches.iter().any(|poly| contains(poly, p)));
-    let mut used: std::collections::BTreeSet<String> = Default::default();
+    let mut used: std::collections::BTreeSet<String> = fixed.values().cloned().collect();
     // The first of these not yet taken, else the last with a culture word before it.
     let mut take = |cands: Vec<String>, namer: &mut Namer, noun: &str| -> String {
         for c in &cands {
@@ -219,7 +234,8 @@ pub fn of(t0: &T0, l: &Layout) -> Vec<Place> {
         let mut nm = namer(tag, n as i64);
         let at = centroid(&p.pts);
         let civic = p.kind == PlazaKind::Civic;
-        let name = match rank {
+        let id = if rank < 2 { format!("sq:{li}:p{n}") } else { format!("sq:{li}:{n}") };
+        let name = if let Some(f) = fixed.get(&id) { f.clone() } else { match rank {
             0 => {
                 let mut c: Vec<String> = Vec::new();
                 if s.tier == Tier::Metropolis && t < 0.3 {
@@ -275,12 +291,11 @@ pub fn of(t0: &T0, l: &Layout) -> Vec<Place> {
                 }
                 take(c, &mut nm, noun)
             }
-        };
+        } };
         let o = obb(&p.pts);
         let sort = if p.kind.is_market() { "market" } else { p.kind.name() };
         let label = if rank < 2 { clear_line(l, &p.pts, rank == 0) } else { Vec::new() };
         let patch = if let Spot::Patch(i) = p.spot { Some(i) } else { None };
-        let id = if rank < 2 { format!("sq:{li}:p{n}") } else { format!("sq:{li}:{n}") };
         out.push(Place { id, kind: "square", sort, main: rank == 0, name, at, size_ft: o.long, patch, district: district(at), label });
     }
     // Parks: on patches, a palace's gardens, then the cemeteries by the roads.
@@ -338,15 +353,15 @@ pub fn of(t0: &T0, l: &Layout) -> Vec<Place> {
         if p.kind == ParkKind::Common && !c.is_empty() && roll(tag, n as i64, 2) < 0.4 {
             c.insert(0, format!("{} {noun}", nm.word(culture, 1, 2)));
         }
-        let name = take(c, &mut nm, noun);
-        let patch = match p.spot {
-            Spot::Patch(i) => Some(i),
-            _ => p.cemetery.map(|c| c.patch),
-        };
         let id = match p.spot {
             Spot::Patch(i) => format!("sq:{li}:p{i}"),
             Spot::Garden(b) => format!("sq:{li}:g{b}"),
             _ => format!("sq:{li}:r{n}"),
+        };
+        let name = fixed.get(&id).cloned().unwrap_or_else(|| take(c, &mut nm, noun));
+        let patch = match p.spot {
+            Spot::Patch(i) => Some(i),
+            _ => p.cemetery.map(|c| c.patch),
         };
         out.push(Place { id, kind: "park", sort: p.kind.name(), main: false, name, at, size_ft: obb(&p.pts).long, patch, district: district(at), label: clear_line(l, &p.pts, false) });
     }
@@ -370,7 +385,7 @@ pub fn of(t0: &T0, l: &Layout) -> Vec<Place> {
             }
             c.push(format!("{} Gate", way(l.center, g, false)));
             c.push(format!("{} Gate", way(l.center, g, true)));
-            let name = take(c, &mut nm, "Gate");
+            let name = fixed.get(&format!("gt:{li}:{v}")).cloned().unwrap_or_else(|| take(c, &mut nm, "Gate"));
             let inward = mul(sub(l.center, g), 1.0 / dist(l.center, g).max(1e-9));
             let box_ = super::rect(add(g, mul(inward, 50.0)), [-inward[1], inward[0]], 140.0, 36.0);
             out.push(Place { id: format!("gt:{li}:{v}"), kind: "gate", sort: "gate", main: false, name, at: g, size_ft: 30.0, patch: None, district: district(add(g, mul(inward, 30.0))), label: clear_line(l, &box_, false) });
@@ -480,7 +495,7 @@ pub fn find(world: &crate::World, t0: &T0, id: &str) -> Option<(std::rc::Rc<Layo
     }
     let li = parts.next()?.parse::<usize>().ok().filter(|&li| li < t0.settlements.len())?;
     let l = super::layout(world, t0, li);
-    let p = of(t0, &l).into_iter().find(|p| p.id == id)?;
+    let p = of(world, t0, &l).into_iter().find(|p| p.id == id)?;
     Some((l, p))
 }
 
@@ -523,7 +538,7 @@ pub fn plan_json(world: &crate::World, t0: &T0, index: usize) -> serde_json::Val
         return serde_json::json!([]);
     }
     let l = super::layout(world, t0, index);
-    serde_json::json!(of(t0, &l).iter().map(|p| json_of(world, &l, p)).collect::<Vec<_>>())
+    serde_json::json!(of(world, t0, &l).iter().map(|p| json_of(world, &l, p)).collect::<Vec<_>>())
 }
 
 /// Squares, parks and gates whose name (as it is now) holds `q` (lower case), for
@@ -535,7 +550,7 @@ pub fn search(world: &crate::World, t0: &T0, q: &str, kind: Option<&str>, limit:
     }
     for li in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= Tier::Town) {
         let l = super::layout(world, t0, li);
-        for p in of(t0, &l) {
+        for p in of(world, t0, &l) {
             if kind.is_some_and(|k| k != p.kind) || (!include_hidden && world.file.edits.hidden.contains(&p.id)) || !name_now(world, &p).to_lowercase().contains(q) {
                 continue;
             }
@@ -552,8 +567,8 @@ pub fn search(world: &crate::World, t0: &T0, q: &str, kind: Option<&str>, limit:
 
 /// The map's labels for a town's squares on patches, parks and gates (the app shows a gate's once
 /// it is renamed), with the district labels (`gazetteer::districts_json`).
-pub fn labels(t0: &T0, l: &Layout) -> Vec<crate::gazetteer::DistrictLabel> {
-    of(t0, l)
+pub fn labels(world: &crate::World, t0: &T0, l: &Layout) -> Vec<crate::gazetteer::DistrictLabel> {
+    of(world, t0, l)
         .into_iter()
         .filter(|p| !p.label.is_empty())
         .map(|p| {

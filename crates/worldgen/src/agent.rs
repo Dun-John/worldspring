@@ -1599,7 +1599,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     for (k, (at, _, gate)) in crate::interior::towers(&l).into_iter().enumerate() {
         out.push(name_entry(world, format!("t:{li}:{k}"), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
     }
-    for p in town::places::of(t0, &l) {
+    for p in town::places::of(world, t0, &l) {
         out.push(name_entry(world, p.id, p.kind, p.name, Some(p.at), false));
     }
     for e in l.entrances.iter().filter(|e| e.kind != crate::under::UnderKind::Sewer) {
