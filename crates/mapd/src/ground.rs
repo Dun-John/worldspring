@@ -292,7 +292,8 @@ fn footprint(ex: &Executor, id: &str) -> Result<Vec<[f64; 2]>, String> {
     match (head, nums.as_slice()) {
         ("b" | "k", [li, bi]) if *li < n => town::layout(world, t0, *li).building(*bi).map(|b| b.poly.clone()).ok_or_else(|| format!("no building {id}")),
         ("t", [li, k]) if *li < n => {
-            let (c, r, _) = *worldgen::interior::towers(&town::layout(world, t0, *li)).get(*k).ok_or_else(|| format!("no tower {id}"))?;
+            let l = town::layout(world, t0, *li);
+            let (c, r, _) = l.tower_index(*k).and_then(|i| worldgen::interior::towers(&l).get(i).copied()).ok_or_else(|| format!("no tower {id}"))?;
             Ok(geom::circle(c, r, 16))
         }
         _ => {

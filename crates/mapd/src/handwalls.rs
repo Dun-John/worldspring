@@ -61,6 +61,14 @@ pub async fn street_gates(app: &Shared, a: &Value, c: &mut Created) -> Result<Ma
         .worker
         .with(move |ex| {
             let (mut pts, mut gates) = (pts, gates);
+            // (A ring on a town's patch edges, as `around_patches` lays one: its streets by the plan.)
+            if closed && all && let Some((more, crossings)) = worldgen::town::wallgates::ring_street_gates(&ex.world, &ex.t0, &pts) {
+                gates.extend(more);
+                gates.sort_unstable();
+                gates.dedup();
+                let shut: Vec<P> = crossings.iter().filter(|c| c.corner.is_none_or(|k| !gates.contains(&(k as u32)))).map(|c| c.at).collect();
+                return Ok((pts, gates, shut));
+            }
             let side = handwall::side_crossings(&ex.world, &ex.t0, &pts, closed);
             let shut: Vec<P> = side.clone();
             if all {
