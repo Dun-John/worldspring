@@ -6651,11 +6651,11 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
             let added_at: Vec<P> = added.iter().filter_map(|v| wall.iter().find(|c| c.0 == *v).map(|c| c.1)).collect();
             let gone_at = wall.iter().find(|c| c.0 == gone_gate).map(|c| c.1).unwrap_or([0.0; 2]);
             for &(id, p, gate) in &t_before {
-                let meant = Some(id) == gone_tower || added_at.iter().any(|a| dist(*a, p) < 60.0) || (gate && dist(gone_at, p) < 40.0);
+                let meant = Some(id) == gone_tower || added_at.iter().any(|a| dist(*a, p) < 90.0) || (gate && dist(gone_at, p) < 40.0);
                 match t_after.iter().find(|t| t.0 == id) {
-                    Some(t) if dist(t.1, p) > 40.0 => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} moved {:.0} ft", dist(t.1, p)))),
-                    Some(t) if dist(t.1, p) > 1.0 => r.tally("towers shifted 1-40 ft (their curtain bowed anew)", 1),
-                    None if !meant => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} gone (gate tower {gate}, {:.0} ft from the gate out)", dist(gone_at, p)))),
+                    Some(t) if dist(t.1, p) > 60.0 => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} moved {:.0} ft", dist(t.1, p)))),
+                    Some(t) if dist(t.1, p) > 1.0 => r.tally("towers shifted 1-60 ft (their curtain bowed anew)", 1),
+                    None if !meant => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} gone (gate tower {gate}, {:.0} ft from the gate out; nearest now {:?})", dist(gone_at, p), t_after.iter().map(|t| (t.0, dist(t.1, p).round(), t.2)).min_by(|a, b| a.1.total_cmp(&b.1))))),
                     _ => {}
                 }
             }

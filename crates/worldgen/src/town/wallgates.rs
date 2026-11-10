@@ -55,7 +55,7 @@ const ROAD_BACK_FT: f64 = 30.0;
 const STREET_BACK_FT: f64 = 14.0;
 /// A tower this near where one stood without the wall edit keeps its number (towers stand 22 ft
 /// apart and more).
-const MATCH_FT: f64 = 40.0;
+const MATCH_FT: f64 = 60.0;
 
 /// A wall edit as the builder takes it (the plan's corners).
 #[derive(Clone, Debug, Default)]
@@ -564,10 +564,38 @@ pub(super) fn finish(world: &World, t0: &T0, index: usize, e: &TownEdit, l: &mut
     }
     let base = base_towers(world, t0, index, e);
     let all = crate::interior::towers(l);
-    // (Nearest first: a tower within `MATCH_FT` of where one stood without the edit is that one: a
+    // (First a hand gate's towers and the towers put up by hand, by where they were set; then,
+    // nearest first, a tower within `MATCH_FT` of where one stood without the edit is that one: a
     // curtain bowed anew where a gate went in or out carries its towers along.)
+    let mut ids: Vec<Option<u32>> = vec![None; all.len()];
+    let mut tag_used = vec![false; l.hand_wall.tags.len()];
+    let mut sides: FastMap<u32, u32> = FastMap::default();
+    for (k, &(p, _, gate)) in all.iter().enumerate() {
+        if gate {
+            if let Some(&(v, _)) = l
+                .hand_wall
+                .gates
+                .iter()
+                .filter(|g| dist(g.1, p) < GATE_HALF + 6.0)
+                .min_by(|a, b| dist(a.1, p).total_cmp(&dist(b.1, p)))
+            {
+                let s = sides.entry(v).or_default();
+                *s += 1;
+                ids[k] = Some(GATE_TOWER_ID + 2 * v + (*s - 1).min(1));
+            }
+        } else if let Some(t) = (0..l.hand_wall.tags.len())
+            .filter(|&t| !tag_used[t] && dist(l.hand_wall.tags[t].0, p) < 15.0)
+            .min_by(|&a, &b| dist(l.hand_wall.tags[a].0, p).total_cmp(&dist(l.hand_wall.tags[b].0, p)))
+        {
+            tag_used[t] = true;
+            ids[k] = Some(l.hand_wall.tags[t].1);
+        }
+    }
     let mut pairs: Vec<(u64, usize, usize)> = Vec::new();
     for (k, &(p, _, gate)) in all.iter().enumerate() {
+        if ids[k].is_some() {
+            continue;
+        }
         for (j, &(q, g)) in base.iter().enumerate() {
             let d = dist(p, q);
             if g == gate && d < MATCH_FT {
@@ -576,7 +604,6 @@ pub(super) fn finish(world: &World, t0: &T0, index: usize, e: &TownEdit, l: &mut
         }
     }
     pairs.sort_unstable();
-    let mut ids: Vec<Option<u32>> = vec![None; all.len()];
     let mut used = vec![false; base.len()];
     for (_, k, j) in pairs {
         if ids[k].is_none() && !used[j] {
@@ -584,37 +611,14 @@ pub(super) fn finish(world: &World, t0: &T0, index: usize, e: &TownEdit, l: &mut
             used[j] = true;
         }
     }
-    let mut tag_used = vec![false; l.hand_wall.tags.len()];
-    let mut sides: FastMap<u32, u32> = FastMap::default();
     let ids: Vec<u32> = (0..all.len())
         .map(|k| {
             if let Some(id) = ids[k] {
                 return id;
             }
             let (p, _, gate) = all[k];
-            if gate {
-                if let Some(&(v, _)) = l
-                    .hand_wall
-                    .gates
-                    .iter()
-                    .filter(|g| dist(g.1, p) < GATE_HALF + 6.0)
-                    .min_by(|a, b| dist(a.1, p).total_cmp(&dist(b.1, p)))
-                {
-                    let s = sides.entry(v).or_default();
-                    *s += 1;
-                    return GATE_TOWER_ID + 2 * v + (*s - 1).min(1);
-                }
-            } else {
-                if let Some(t) = (0..l.hand_wall.tags.len())
-                    .filter(|&t| !tag_used[t] && dist(l.hand_wall.tags[t].0, p) < 15.0)
-                    .min_by(|&a, &b| dist(l.hand_wall.tags[a].0, p).total_cmp(&dist(l.hand_wall.tags[b].0, p)))
-                {
-                    tag_used[t] = true;
-                    return l.hand_wall.tags[t].1;
-                }
-                if let Some(&(v, _)) = l.hand_wall.closed.iter().find(|g| dist(g.1, p) < 20.0) {
-                    return CORNER_TOWER_ID + v;
-                }
+            if !gate && let Some(&(v, _)) = l.hand_wall.closed.iter().find(|g| dist(g.1, p) < 20.0) {
+                return CORNER_TOWER_ID + v;
             }
             OTHER_TOWER_ID + k as u32
         })
@@ -1044,7 +1048,10 @@ pub fn ring_street_gates(world: &World, t0: &T0, pts: &[P]) -> Option<(Vec<u32>,
     let (ch, _) = super::wards::edit_of(world, t0, index).map(|e| super::wards::changes(&plan, e, center)).unwrap_or_default();
     let mesh = super::wards::moved_mesh(&plan, &ch.moves);
     let (ward, _) = ch.wards(&plan);
-    let mut on: Vec<usize> = pts.iter().map(|p| (0..mesh.pos.len()).find(|&v| !plan.vf[v].is_empty() && dist(add(mesh.pos[v], center), *p) < 1.0)).collect::<Option<_>>()?;
+    let mut on: Vec<usize> = pts
+        .iter()
+        .map(|p| (0..mesh.pos.len()).find(|&v| !plan.vf[v].is_empty() && dist(add(mesh.pos[v], center), *p) < 1.0))
+        .collect::<Option<_>>()?;
     let local: Vec<P> = pts.iter().map(|p| sub(*p, center)).collect();
     let nf = mesh.faces.len();
     let patches: Vec<usize> = (0..nf)
