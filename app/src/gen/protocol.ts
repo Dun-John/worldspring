@@ -296,7 +296,7 @@ export type LotSize = (typeof LOT_SIZES)[number];
 export const SQUARE_KINDS = ['crossroads', 'well', 'fountain', 'green'] as const;
 export type SquareKind = (typeof SQUARE_KINDS)[number];
 /** How a park can be laid out (`worldgen::world::PARK_KINDS`). */
-export const PARK_KINDS = ['formal', 'common'] as const;
+export const PARK_KINDS = ['formal', 'common', 'cemetery'] as const;
 export type ParkKind = (typeof PARK_KINDS)[number];
 
 /** A patch of a town as the ward editor sees it (`town::wards::plan_json`): its corners (plan
@@ -907,6 +907,97 @@ function towerPoly(x: number, y: number, r: number, ang: number, shape: number, 
   return out;
 }
 
+/** A village's headstone tick on the plan (`town::village::PLAN_HEADSTONE`). */
+const PLAN_HEADSTONE = 20;
+
+/** Plan kind of a town graveyard's grave mark (not from the generator). */
+const GRAVE_KIND = 0xfd;
+
+/** Roadmap 5 cemeteries: rows of grave marks across each graveyard (plan kind 5) that has none of its own (a
+ * village's churchyards and shrine yards get theirs from `town::village::plan_ticks`): pale ticks 3.4 by 1.5 ft
+ * across the rows, side by side as graves lie (a little over life size, to read at near zoom; lost in the plot's
+ * green farther out), 5 ft apart in rows 8 ft apart, the rows square to the plot's longest side, 3.5 ft in from
+ * its edges, off any roofed building in it (a mausoleum, a tomb house) and from under a tree's crown (a yew's,
+ * plan kind 14), a walk left across the rows of a plot over 40 ft long. A pure function of the plot's corners
+ * (tile units, `tileFt` ft a side). */
+function withGraveRows(polys: TileSitePolys, tileFt: number): TileSitePolys {
+  const n = polys.attrs.length;
+  const kindOf = (i: number) => polys.attrs[i] & 0xff;
+  const ring = (i: number): [number, number][] => {
+    const out: [number, number][] = [];
+    for (let k = polys.starts[i]; k < polys.starts[i + 1]; k++) out.push([polys.verts[k * 2] * tileFt, polys.verts[k * 2 + 1] * tileFt]);
+    return out;
+  };
+  const inside = (p: [number, number], q: [number, number][]) => {
+    let c = false;
+    for (let a = 0, b = q.length - 1; a < q.length; b = a++) {
+      if (q[a][1] > p[1] !== q[b][1] > p[1] && p[0] < ((q[b][0] - q[a][0]) * (p[1] - q[a][1])) / (q[b][1] - q[a][1]) + q[a][0]) c = !c;
+    }
+    return c;
+  };
+  const edgeDist = (p: [number, number], q: [number, number][]) => {
+    let best = Infinity;
+    for (let a = 0, b = q.length - 1; a < q.length; b = a++) {
+      const [dx, dy] = [q[a][0] - q[b][0], q[a][1] - q[b][1]];
+      const t = Math.max(0, Math.min(1, ((p[0] - q[b][0]) * dx + (p[1] - q[b][1]) * dy) / (dx * dx + dy * dy || 1)));
+      best = Math.min(best, Math.hypot(p[0] - q[b][0] - dx * t, p[1] - q[b][1] - dy * t));
+    }
+    return best;
+  };
+  const centroid = (q: [number, number][]): [number, number] => [q.reduce((s, p) => s + p[0], 0) / q.length, q.reduce((s, p) => s + p[1], 0) / q.length];
+  let ticks: [number, number][] | null = null;
+  let roofed: [number, number][][] | null = null;
+  const marks: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    if (kindOf(i) !== 5 || polys.starts[i + 1] - polys.starts[i] < 3) continue;
+    ticks ??= Array.from({ length: n }, (_, j) => j)
+      .filter((j) => kindOf(j) === PLAN_HEADSTONE)
+      .map((j) => centroid(ring(j)));
+    roofed ??= Array.from({ length: n }, (_, j) => j)
+      .filter((j) => kindOf(j) === 0 || kindOf(j) === 14)
+      .map(ring);
+    const q = ring(i);
+    if (ticks.some((t) => inside(t, q))) continue;
+    // The longest side: the rows run along it.
+    let [ux, uy, best] = [1, 0, 0];
+    for (let a = 0, b = q.length - 1; a < q.length; b = a++) {
+      const d = Math.hypot(q[a][0] - q[b][0], q[a][1] - q[b][1]);
+      if (d > best) [ux, uy, best] = [(q[a][0] - q[b][0]) / d, (q[a][1] - q[b][1]) / d, d];
+    }
+    const [o0, o1] = q[0];
+    const along = q.map(([x, y]) => (x - o0) * ux + (y - o1) * uy);
+    const across = q.map(([x, y]) => -(x - o0) * uy + (y - o1) * ux);
+    const [u0, u1, w0, w1] = [Math.min(...along), Math.max(...along), Math.min(...across), Math.max(...across)];
+    if (u1 - u0 < 8 || w1 - w0 < 8 || (u1 - u0) * (w1 - w0) > 4e6) continue;
+    const inPlot = roofed.filter((b) => inside(centroid(b), q));
+    const walk = u1 - u0 > 40 ? (u0 + u1) / 2 : NaN;
+    // (Rows and marks centred in the plot, so the margins match on both sides.)
+    const [rows, cols] = [Math.floor((w1 - w0 - 7) / 8), Math.floor((u1 - u0 - 7 - 1.5) / 5)];
+    const [s0, x0] = [(w0 + w1) / 2 - (rows * 8) / 2, (u0 + u1) / 2 - (cols * 5) / 2];
+    for (let r = 0; r <= rows; r++) {
+      for (let c = 0; c <= cols; c++) {
+        const [u, w] = [x0 + c * 5, s0 + r * 8];
+        if (Math.abs(u - walk) < 4) continue;
+        const p: [number, number] = [o0 + u * ux - w * uy, o1 + u * uy + w * ux];
+        if (!inside(p, q) || edgeDist(p, q) < 3.5) continue;
+        if (inPlot.some((b) => inside(p, b) || edgeDist(p, b) < 3)) continue;
+        const [hx, hy, nx, ny] = [ux * 0.75, uy * 0.75, -uy * 1.7, ux * 1.7];
+        marks.push([p[0] - hx - nx, p[1] - hy - ny, p[0] + hx - nx, p[1] + hy - ny, p[0] + hx + nx, p[1] + hy + ny, p[0] - hx + nx, p[1] - hy + ny].map((v) => v / tileFt));
+      }
+    }
+  }
+  if (!marks.length) return polys;
+  const starts = Array.from(polys.starts);
+  const attrs = Array.from(polys.attrs);
+  const verts = Array.from(polys.verts);
+  for (const m of marks) {
+    attrs.push(GRAVE_KIND);
+    verts.push(...m);
+    starts.push(starts[starts.length - 1] + 4);
+  }
+  return { starts: new Uint32Array(starts), attrs: new Uint32Array(attrs), verts: new Float32Array(verts) };
+}
+
 /** Plan kind of a D, octagonal or square wall tower's footprint (not from the generator; the stone in its ward byte). */
 const TOWER_KIND = 0xfe;
 
@@ -974,6 +1065,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       polys = { starts: new Uint32Array(starts), attrs: new Uint32Array(attrs), verts: new Float32Array(verts) };
     }
   }
+  if (tileFt > 0) polys = withGraveRows(polys, tileFt);
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
@@ -1010,10 +1102,10 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
         rgb = [0.7, 0.67, 0.6];
         a = 0.55;
       } else if (kind === 5) {
-        // A graveyard (an open-air plot): inked round, its grass the land's own (no fill, so it matches
-        // the biome's ground round it; its headstones and wall mark it).
-        rgb = [0.6, 0.66, 0.47];
-        a = 0;
+        // A graveyard or cemetery (an open-air plot): inked round, a muted green over the land's own
+        // ground, its rows of grave marks over it (`withGraveRows`, or a village's own ticks).
+        rgb = [0.5, 0.6, 0.42];
+        a = 0.55;
       } else if (kind === 6) rgb = [0.55, 0.4, 0.26];
       else if (kind === 7) rgb = [0.72, 0.69, 0.62];
       else if (kind === 8) {
@@ -1044,6 +1136,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // v63 countryside: a village's headstones and a churchyard's low wall (`town::village::plan_polys`;
       // the green's and churchyard's grass is the land's own, its crofts seen on the battlemap only).
       else if (kind === 20) rgb = [0.74, 0.73, 0.69];
+      // A town graveyard's grave marks (`withGraveRows`): pale stone on its green.
+      else if (kind === GRAVE_KIND) rgb = [0.9, 0.89, 0.84];
       else if (kind === 22) rgb = [0.62, 0.6, 0.55];
       // A windmill's sails (`town::rural::plan_ticks`), over its roof.
       else if (kind === 23) rgb = [0.88, 0.84, 0.74];

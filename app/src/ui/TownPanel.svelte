@@ -63,10 +63,11 @@
     empty: 'Open ground',
   };
   const LOT_LABEL: Record<LotSize, string> = { small: 'Small', medium: 'Medium', large: 'Large', huge: 'Huge' };
-  const PARK_LABEL: Record<ParkKind, string> = { formal: 'Formal garden', common: 'Common' };
+  const PARK_LABEL: Record<ParkKind, string> = { formal: 'Formal garden', common: 'Common', cemetery: 'Cemetery' };
   const PARK_HINT: Record<ParkKind, string> = {
     formal: 'cross walks, a fountain, hedged beds, statues and topiary',
     common: 'winding paths, a pond, trees, a gazebo or a bandstand',
+    cemetery: "graves in rows, tombs and a lychgate by the town's culture",
   };
   const SQUARE_LABEL: Record<SquareKind | 'none', string> = {
     crossroads: 'Widened crossroads',
