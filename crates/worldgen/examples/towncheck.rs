@@ -3790,6 +3790,7 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&["cottages by no lane or road", "lane ends", "lane ends joined", "lane ends not joined, at nothing", "lane ends near a way but not joined", "lane ends overshooting a way", "lanes crossing a lane or road away from a shared node", "farmsteads"]);
     r.counts(&["plots holding no building", "farmyards with no lane to their gate", "plot bounds by a building not theirs", "runs by any building", "lanes through a building"]);
     r.counts(&["greens without a ring lane", "lanes across the green", "lane ends at the green's rim but not on the ring", "ring lane ends not on a way"]);
+    r.counts(&["cottages facing the ring", "rings with fewer than 3 cottages facing them", "ways ending inside the green"]);
     let mut greens: Vec<(P, String)> = Vec::new();
     let mut gpolys: Vec<Vec<P>> = Vec::new();
     let mut fchunks: Vec<(P, String)> = Vec::new();
@@ -3830,7 +3831,9 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
                 continue;
             }
             let n_lane = l.streets.iter().map(|q| q.len().saturating_sub(1)).sum::<usize>();
-            let Some((wi, &(a, e, h))) = ways.iter().enumerate().filter(|&(_, &(a, e, h))| seg_poly(a, e, &b.poly) < h + 10.0).min_by(|x, y| seg_poly(x.1.0, x.1.1, &b.poly).total_cmp(&seg_poly(y.1.0, y.1.1, &b.poly))) else { continue };
+            // (Nearest by its gap; a tie, where a house's front runs past a bend in the lane, to the piece by its middle.)
+            let key = |a: P, e: P| seg_poly(a, e, &b.poly) + 0.05 * seg_dist(centroid(&b.poly), a, e);
+            let Some((wi, &(a, e, h))) = ways.iter().enumerate().filter(|&(_, &(a, e, h))| seg_poly(a, e, &b.poly) < h + 10.0).min_by(|x, y| key(x.1.0, x.1.1).total_cmp(&key(y.1.0, y.1.1))) else { continue };
             let u = sub(e, a);
             let s0 = sub(b.poly[1], b.poly[0]);
             let c = (dot(u, s0) / (len(u) * len(s0)).max(1e-9)).abs();
@@ -3875,7 +3878,8 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
         for (si, s) in l.streets.iter().enumerate() {
             let e = s[s.len() - 1];
             let met = l.streets.iter().enumerate().any(|(j, q)| j != si && q.windows(2).any(|w| seg_dist(e, w[0], w[1]) < 15.0)) || ways.iter().skip(l.streets.iter().map(|q| q.len() - 1).sum()).any(|&(a, b, h)| seg_dist(e, a, b) < h + 15.0);
-            if !met && dist(e, l.center) < 0.9 * l.radius && !l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) < 20.0) && !l.crofts.iter().any(|p| edge_dist(&p.pts, e) < 12.0) {
+            // (A ring closed on itself has no end.)
+            if !met && dist(s[0], e) > 0.01 && dist(e, l.center) < 0.9 * l.radius && !l.buildings.iter().any(|b| contains(&b.poly, e) || edge_dist(&b.poly, e) < 20.0) && !l.crofts.iter().any(|p| edge_dist(&p.pts, e) < 12.0) {
                 r.add("lanes ending at nothing inside the village", 1.0, format!("{tag} {}", off(e)));
             }
             for w in s.windows(3) {
@@ -3907,6 +3911,52 @@ fn villages(ctx: &mut Ctx, r: &mut Report) {
             for s in &l.streets {
                 if let Some(w) = s.windows(2).find(|w| seg_dist(c, w[0], w[1]) < rad - 1.0) {
                     r.add("lanes across the green", 1.0, format!("{tag} {} to {}", off(w[0]), off(w[1])));
+                }
+            }
+            // (Cottages facing the ring: front within 15 ft of a ring lane's edge, square to its nearest piece within 15°, on its outer side.)
+            let on_c = |p: P| (dist(p, c) - rr).abs() < 2.0;
+            let pieces: Vec<(P, P)> = l.streets.iter().flat_map(|s| s.windows(2).filter(|w| on_c(w[0]) && on_c(w[1])).map(|w| (w[0], w[1]))).collect();
+            if !pieces.is_empty() {
+                // (Houses: the cottages and those given a trade, an inn or a smithy; not the church, shrine or mill.)
+                let house = |b: &&&town::Building| b.func.is_none_or(|f| !["church", "chapel", "shrine", "mill", "graveyard", "watermill", "windmill"].iter().any(|k| town::catalog::CATALOG[f as usize].key.contains(k)));
+                let facing = roofed.iter().filter(house).filter(|b| b.poly.len() == 4 && dist(centroid(&b.poly), c) > rr).filter(|b| {
+                    let key = |a: P, e: P| seg_poly(a, e, &b.poly) + 0.05 * seg_dist(centroid(&b.poly), a, e);
+                    let Some((a, e)) = pieces.iter().copied().min_by(|x, y| key(x.0, x.1).total_cmp(&key(y.0, y.1))) else { return false };
+                    let (u, s0) = (sub(e, a), sub(b.poly[1], b.poly[0]));
+                    let deg = libm::acos((dot(u, s0) / (len(u) * len(s0)).max(1e-9)).abs().min(1.0)).to_degrees();
+                    seg_poly(a, e, &b.poly) - 0.5 * town::village::LANE_W <= 15.0 && deg.min(90.0 - deg) <= 15.0
+                }).count();
+                r.tally("cottages facing the ring", facing);
+                if std::env::var("FACING_LIST").is_ok() {
+                    eprintln!("facing {tag} {facing} green {} r {rad:.0} centre {:.0} {:.0}", off(c), l.center[0], l.center[1]);
+                }
+                r.value("cottages facing a ring", facing as f64, tag.clone());
+                if facing < 3 {
+                    r.add("rings with fewer than 3 cottages facing them", 1.0, format!("{tag} {facing} facing, green {} r {rad:.0}", off(c)));
+                }
+            }
+            // (Ways ending inside the green, on no other way: lanes, the layout's roads and the network's.)
+            let mut ends: Vec<P> = l.streets.iter().flat_map(|s| [s[0], s[s.len() - 1]]).collect();
+            ends.extend(l.roads.iter().flat_map(|(q, _, _)| [q[0], q[q.len() - 1]]));
+            let mut net: Vec<Vec<P>> = Vec::new();
+            for (ri, k) in t0.roads.segments_near([c[0] - rad, c[1] - rad, c[0] + rad, c[1] + rad], 0.0) {
+                let rc = &t0.roads.roads[ri as usize];
+                let n = ((rc.s[k as usize + 1] - rc.s[k as usize]) / 10.0).ceil().clamp(1.0, 400.0) as usize;
+                net.push((0..=n).map(|j| rc.eval(k as usize, j as f64 / n as f64, 2.5, t0.cell_ft).p).collect());
+                if k == 0 {
+                    ends.push(rc.eval(0, 0.0, 2.5, t0.cell_ft).p);
+                }
+                if k as usize + 2 == rc.pts.len() {
+                    ends.push(rc.eval(k as usize, 1.0, 2.5, t0.cell_ft).p);
+                }
+            }
+            let all: Vec<(P, P)> = l.streets.iter().chain(l.roads.iter().map(|q| &q.0)).chain(net.iter()).flat_map(|s| s.windows(2).map(|w| (w[0], w[1]))).collect();
+            for e in ends.into_iter().filter(|e| dist(*e, c) < rad - 2.0) {
+                // (An end shared with another way's piece passing it is a joint, not a dead end.)
+                let by = all.iter().filter(|&&(a, b)| seg_dist(e, a, b) < 1.0).count();
+                let mine = all.iter().filter(|&&(a, b)| dist(a, e) < 1.0 || dist(b, e) < 1.0).count();
+                if by <= mine.max(1) && mine <= 1 {
+                    r.add("ways ending inside the green", 1.0, format!("{tag} {} green {} r {rad:.0}", off(e), off(c)));
                 }
             }
             if l.props.iter().any(|p| dist(p.at, c) < rad) {

@@ -416,7 +416,11 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
     // the first spot of rings round the middle clear of them.)
     let lane_d = |p: P| lanes.iter().flat_map(|(q, w)| q.windows(2).map(move |s| seg_dist(p, s[0], s[1]) - 0.5 * w)).fold(f64::MAX, f64::min);
     let spots: Vec<P> = std::iter::once([0.0, 0.0]).chain([10.0, 18.0, 0.45 * green_r0, 0.65 * green_r0].into_iter().flat_map(|rad| (0..8).map(move |k| polar_pt(rad, std::f64::consts::TAU * k as f64 / 8.0)))).filter(|&p| !site.wet(p)).collect();
-    let well = spots.iter().copied().find(|&p| lane_d(p) > 7.0 && !site.near_network_road(p, 6.0)).or_else(|| spots.iter().copied().max_by(|a, b| lane_d(*a).total_cmp(&lane_d(*b)))).unwrap_or([0.0, 0.0]);
+    // (A road ending at the middle, a spur to the village, ends on the ring: the green beyond its end.)
+    let spur = spur_end(&lanes, n_roads);
+    let spur_well = spur.as_ref().and_then(|(_, t)| spur_well(site, *t, green_r, &|p| !site.near_network_road(p, 6.0)));
+    let spur = if spur_well.is_some() { spur.map(|(pc, _)| pc).unwrap_or_default() } else { Vec::new() };
+    let well = spur_well.or_else(|| spots.iter().copied().find(|&p| lane_d(p) > 7.0 && !site.near_network_road(p, 6.0))).or_else(|| spots.iter().copied().max_by(|a, b| lane_d(*a).total_cmp(&lane_d(*b)))).unwrap_or([0.0, 0.0]);
     let green = if site.wet(well) { 0.0 } else { green_r };
     // (The ring lane's centre line round it, and the points its runs reach out to on the roads.)
     let rr = green + 0.5 * LANE_W;
@@ -428,7 +432,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
         let off: Vec<(Vec<P>, f64)> = lanes.drain(n_roads..).flat_map(|(pts, w)| outside(&pts, well, rr + RING_CLEAR_FT).into_iter().map(move |q| (q, w))).collect();
         lanes.extend(off);
         let first = lanes.len();
-        reach_out = ring(site, well, rr, &mut lanes, n_roads);
+        reach_out = ring(site, well, rr, &mut lanes, n_roads, &spur);
         let last = lanes.len();
         to_ring(site, well, rr, &mut lanes, n_roads, first..last);
         lanes.retain(|(pts, _)| pts.len() >= 2);
@@ -493,6 +497,8 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
         // (Where the last croft on this side ends along the lane, and the last house.)
         last: f64,
         house_end: f64,
+        // (On the ring, the middle of the piece last tried: the next try is on past it, `ring_spot`.)
+        tried: f64,
     }
     let mut walks: Vec<Walk> = Vec::new();
     for (lane, (pts, _)) in fronts.iter().enumerate() {
@@ -502,97 +508,115 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
             if inner[lane] && side > 0.0 {
                 continue;
             }
-            walks.push(Walk { lane, side, along: rng.range(0.0, 20.0) + leads[lane], total, last: f64::MIN, house_end: f64::MIN });
+            walks.push(Walk { lane, side, along: rng.range(0.0, 20.0) + leads[lane], total, last: f64::MIN, house_end: f64::MIN, tried: f64::MIN });
         }
     }
-    'fill: loop {
-        let mut live = false;
-        for wk in walks.iter_mut() {
-            if wk.along >= wk.total {
-                continue;
-            }
-            live = true;
-            if l.buildings.len() >= target {
-                break 'fill;
-            }
-            let (pts, road_w) = (&fronts[wk.lane].0, fronts[wk.lane].1);
-            let side = wk.side;
-            let (own_deg, wk_lane) = (if inner[wk.lane] { 90.0 } else { SQUARE_DEG }, wk.lane);
-            wk.along = wk.along.max(wk.last);
-            let along = wk.along;
-            let w = rng.range(22.0, 36.0);
-            // (The house square to the lane's chord across its width.)
-            let (q0, q1) = (point_along(pts, along).0, point_along(pts, along + w).0);
-            let (p, _) = point_along(pts, along + 0.5 * w);
-            let chord = sub(q1, q0);
-            let u = mul(chord, 1.0 / len(chord).max(1e-9));
-            let n = [-u[1], u[0]];
-            // (Every plot taken near the green, thinning toward the edge: a village's houses close
-            // along its lanes, not strewn.)
-            let density = (1.2 - 0.9 * (len(p) / reach).min(1.0)).min(1.0);
-            let d = rng.range(16.0, 24.0);
-            if rng.next_f64() < density {
-                let back = 0.5 * road_w + (5.0 * (1.0 + spread) * rng.range(0.6, 1.4)).min(9.0) + 0.5 * d;
-                let fits = |house: &[P], u: P| {
-                    // (Its front square to the lane: its two corners nearest the lane about as far from it.)
-                    let mut ds: Vec<f64> = house.iter().map(|c| pts.windows(2).map(|s| seg_dist(*c, s[0], s[1])).fold(f64::MAX, f64::min)).collect();
-                    ds.sort_by(f64::total_cmp);
-                    ds[1] - ds[0] < 3.0 && square_to(&lanes, house, u, Some(pts), own_deg) && (!inner[wk_lane] || square_to_nearest(pts, house, u)) && clear(house, l) && site.buildable(house) && !g.plot_hit(house) && off(&g, house)
-                };
-                // (Off a yard's bounds by `CLEAR_FT`, `off_yards`: else a step or two on along the lane.)
-                let mut placed = None;
-                let house = rect(add(p, mul(n, side * back)), u, w, d);
-                if fits(&house, u) {
-                    if off_yards(&g, &house) {
-                        placed = Some((house, 0.0));
+    // (The ring's walks first, to their ends: the green lined with cottages before the roads take
+    // the ground by it; then every walk in turn.)
+    for ring_first in [true, false] {
+        'fill: loop {
+            let mut live = false;
+            for wk in walks.iter_mut() {
+                if wk.along >= wk.total || (ring_first && !inner[wk.lane]) {
+                    continue;
+                }
+                live = true;
+                if l.buildings.len() >= target {
+                    break 'fill;
+                }
+                let (pts, road_w) = (&fronts[wk.lane].0, fronts[wk.lane].1);
+                let side = wk.side;
+                let (own_deg, wk_lane) = (if inner[wk.lane] { 90.0 } else { SQUARE_DEG }, wk.lane);
+                wk.along = wk.along.max(wk.last);
+                let w = rng.range(22.0, 36.0);
+                // (Round the green, the cottages a little narrower, close along it: `RING_HOUSE_W`.)
+                let w = if inner[wk.lane] { RING_HOUSE_W.0 + (w - 22.0) * (RING_HOUSE_W.1 - RING_HOUSE_W.0) / 14.0 } else { w };
+                // (The house square to the lane's chord across its width; on the ring, square to the piece
+                // its middle is on, at that piece's middle: its front to the green, `ring_spot`.)
+                let (q0, q1) = (point_along(pts, wk.along).0, point_along(pts, wk.along + w).0);
+                let (mut p, _) = point_along(pts, wk.along + 0.5 * w);
+                let chord = sub(q1, q0);
+                let mut u = mul(chord, 1.0 / len(chord).max(1e-9));
+                if inner[wk.lane] {
+                    if let Some((m, pu, a)) = ring_spot(pts, wk.along + 0.5 * w, (wk.house_end + 0.5 * w + 2.0).max(wk.tried + 1.0)) {
+                        (p, u, wk.along, wk.tried) = (m, pu, a - 0.5 * w, a);
                     } else {
-                        for shift in [5.0, -5.0, 10.0, -10.0, 15.0, 20.0] {
-                            if along + shift + w > wk.total || along + shift < wk.house_end.max(0.0) + 1.0 {
-                                continue;
+                        wk.along = wk.total;
+                        continue;
+                    }
+                }
+                let along = wk.along;
+                let n = [-u[1], u[0]];
+                // (Every plot taken near the green, thinning toward the edge: a village's houses close
+                // along its lanes, not strewn.)
+                let density = (1.2 - 0.9 * (len(p) / reach).min(1.0)).min(1.0);
+                let d = rng.range(16.0, 24.0);
+                let mut housed = false;
+                if rng.next_f64() < density || inner[wk.lane] {
+                    let back = 0.5 * road_w + (5.0 * (1.0 + spread) * rng.range(0.6, 1.4)).min(9.0) + 0.5 * d;
+                    let fits = |house: &[P], u: P| {
+                        // (Its front square to the lane: its two corners nearest the lane about as far from it.)
+                        let mut ds: Vec<f64> = house.iter().map(|c| pts.windows(2).map(|s| seg_dist(*c, s[0], s[1])).fold(f64::MAX, f64::min)).collect();
+                        ds.sort_by(f64::total_cmp);
+                        ds[1] - ds[0] < 3.0 && square_to(&lanes, house, u, Some(pts), own_deg) && (!inner[wk_lane] || square_to_nearest(pts, house, u)) && clear(house, l) && site.buildable(house) && !g.plot_hit(house) && off(&g, house)
+                    };
+                    // (Off a yard's bounds by `CLEAR_FT`, `off_yards`: else a step or two on along the lane.)
+                    let mut placed = None;
+                    let house = rect(add(p, mul(n, side * back)), u, w, d);
+                    if fits(&house, u) {
+                        if off_yards(&g, &house) {
+                            placed = Some((house, 0.0));
+                        } else if !inner[wk.lane] {
+                            for shift in [5.0, -5.0, 10.0, -10.0, 15.0, 20.0] {
+                                if along + shift + w > wk.total || along + shift < wk.house_end.max(0.0) + 1.0 {
+                                    continue;
+                                }
+                                let (q0, q1) = (point_along(pts, along + shift).0, point_along(pts, along + shift + w).0);
+                                let u = mul(sub(q1, q0), 1.0 / len(sub(q1, q0)).max(1e-9));
+                                let house = rect(add(point_along(pts, along + shift + 0.5 * w).0, mul([-u[1], u[0]], side * back)), u, w, d);
+                                if fits(&house, u) && off_yards(&g, &house) {
+                                    placed = Some((house, shift));
+                                    break;
+                                }
                             }
-                            let (q0, q1) = (point_along(pts, along + shift).0, point_along(pts, along + shift + w).0);
-                            let u = mul(sub(q1, q0), 1.0 / len(sub(q1, q0)).max(1e-9));
-                            let house = rect(add(point_along(pts, along + shift + 0.5 * w).0, mul([-u[1], u[0]], side * back)), u, w, d);
-                            if fits(&house, u) && off_yards(&g, &house) {
-                                placed = Some((house, shift));
+                        }
+                    }
+                    housed = placed.is_some();
+                    if let Some((house, shift)) = placed {
+                        let along = along + shift;
+                        wk.along += shift;
+                        l.buildings.push(new_building(site, house, Ward::Rural, None, Structure::Roofed));
+                        let own = l.buildings.len() - 1;
+                        let (e0, e1) = (rng.range(3.0, 10.0), rng.range(3.0, 10.0));
+                        let depth = rng.range(CROFT_D.0, CROFT_D.1);
+                        let bound = if rng.next_f64() < hedge_share { Bound::Hedge } else { Bound::Fence };
+                        let mut a0 = (along - e0).max(wk.house_end + 1.0);
+                        // (Up to the last croft beside it if that is near: no sliver between them.)
+                        let pinned = wk.last > f64::MIN && a0 < wk.last + 12.0;
+                        if pinned {
+                            a0 = wk.last;
+                        }
+                        let prev_end = wk.house_end;
+                        wk.house_end = along + w;
+                        let a1 = (along + w + e1).max(a0 + CROFT_W.0).min(a0 + CROFT_W.1).max(along + w + 1.0);
+                        // (Wider where the lane bends and the house's corner would reach its side.)
+                        for ext in [0.0, 5.0, 10.0] {
+                            let b0 = if pinned { a0 } else { (a0 - ext).max(prev_end + 1.0) };
+                            if let Some(pl) = croft(&g, l, pts, side, b0, a1 + ext, 0.5 * road_w + 1.5, back + 0.5 * d, depth, own) {
+                                g.add(Plot { pts: pl, kind: PlotKind::Croft, bound });
+                                wk.last = a1 + ext;
                                 break;
                             }
                         }
                     }
                 }
-                if let Some((house, shift)) = placed {
-                    let along = along + shift;
-                    wk.along += shift;
-                    l.buildings.push(new_building(site, house, Ward::Rural, None, Structure::Roofed));
-                    let own = l.buildings.len() - 1;
-                    let (e0, e1) = (rng.range(3.0, 10.0), rng.range(3.0, 10.0));
-                    let depth = rng.range(CROFT_D.0, CROFT_D.1);
-                    let bound = if rng.next_f64() < hedge_share { Bound::Hedge } else { Bound::Fence };
-                    let mut a0 = (along - e0).max(wk.house_end + 1.0);
-                    // (Up to the last croft beside it if that is near: no sliver between them.)
-                    let pinned = wk.last > f64::MIN && a0 < wk.last + 12.0;
-                    if pinned {
-                        a0 = wk.last;
-                    }
-                    let prev_end = wk.house_end;
-                    wk.house_end = along + w;
-                    let a1 = (along + w + e1).max(a0 + CROFT_W.0).min(a0 + CROFT_W.1).max(along + w + 1.0);
-                    // (Wider where the lane bends and the house's corner would reach its side.)
-                    for ext in [0.0, 5.0, 10.0] {
-                        let b0 = if pinned { a0 } else { (a0 - ext).max(prev_end + 1.0) };
-                        if let Some(pl) = croft(&g, l, pts, side, b0, a1 + ext, 0.5 * road_w + 1.5, back + 0.5 * d, depth, own) {
-                            g.add(Plot { pts: pl, kind: PlotKind::Croft, bound });
-                            wk.last = a1 + ext;
-                            break;
-                        }
-                    }
-                }
+                let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
+                // (Along the ring, a spot that will not take one is tried again a step on.)
+                wk.along += if !inner[wk.lane] { w + 8.0 + 16.0 * avg3 } else if housed { w + 4.0 + 8.0 * avg3 } else { RING_STEP_FT };
             }
-            let avg3 = (rng.next_f64() + rng.next_f64() + rng.next_f64()) / 3.0;
-            wk.along += w + 8.0 + 16.0 * avg3;
-        }
-        if !live {
-            break;
+            if !live {
+                break;
+            }
         }
     }
     // Last resort for a village with no lanes at all: a ring around the green.
@@ -1270,6 +1294,66 @@ fn ring_at(g: &Ground, a: f64) -> f64 {
     if g.green.1 > 0.0 { crate::core::round(a / seg) * seg } else { a }
 }
 
+/// A road ending at the village's middle and no other way through it there (a spur to the village):
+/// its pieces within `SPUR_FT` of that end, and the way it arrives along (a unit vector).
+fn spur_end(lanes: &[(Vec<P>, f64)], n_roads: usize) -> Option<(Vec<(P, P)>, P)> {
+    let at_mid = |p: P| len(p) < 1.0;
+    let ends: Vec<usize> = (0..n_roads).filter(|&j| at_mid(lanes[j].0[0]) || at_mid(lanes[j].0[lanes[j].0.len() - 1])).collect();
+    if ends.len() != 1 || (0..n_roads).any(|j| j != ends[0] && lanes[j].0.windows(2).any(|s| seg_dist([0.0, 0.0], s[0], s[1]) < 1.0)) {
+        return None;
+    }
+    // (Back from the end along the road, on through the pieces of the road that join it end to end.)
+    let mut j = ends[0];
+    let mut q: Vec<P> = lanes[j].0.clone();
+    if !at_mid(q[q.len() - 1]) {
+        q.reverse();
+    }
+    let t = sub(q[q.len() - 1], q[q.len() - 2]);
+    if len(t) < 1e-6 {
+        return None;
+    }
+    let mut pieces = Vec::new();
+    let mut walked = 0.0;
+    loop {
+        for w in q.windows(2).rev() {
+            if walked >= SPUR_FT {
+                break;
+            }
+            pieces.push((w[0], w[1]));
+            pieces.push((w[1], w[0]));
+            walked += dist(w[0], w[1]);
+        }
+        let start = q[0];
+        let Some(k) = (0..n_roads).find(|&k| k != j && (dist(lanes[k].0[0], start) < 1e-3 || dist(lanes[k].0[lanes[k].0.len() - 1], start) < 1e-3)) else { break };
+        if walked >= SPUR_FT {
+            break;
+        }
+        j = k;
+        q = lanes[k].0.clone();
+        if dist(q[q.len() - 1], start) >= 1e-3 {
+            q.reverse();
+        }
+    }
+    Some((pieces, mul(t, 1.0 / len(t))))
+}
+
+/// How much of a spur's end the ring does not give way to (ft).
+const SPUR_FT: f64 = 60.0;
+
+/// The well for a green beyond the end of a spur arriving along `t` at the middle (`spur_end`): the
+/// end on the ring's circle at one of its points (`ring`), the road meeting it within 37.5° of
+/// square; the well dry and `ok`, no more than two of eight points round the green wet.
+fn spur_well(site: &Site, t: P, green_r: f64, ok: &dyn Fn(P) -> bool) -> Option<P> {
+    let rr = green_r + 0.5 * LANE_W;
+    let seg = std::f64::consts::TAU / RING_N as f64;
+    let a = libm::atan2(-t[1], -t[0]);
+    let a = crate::core::round(a / seg) * seg;
+    [0.0, 1.0, -1.0, 2.0, -2.0].into_iter().map(|k| sub([0.0, 0.0], polar_pt(rr, a + k * seg))).find(|&w| {
+        let wet = (0..8).filter(|&k| site.wet(add(w, polar_pt(green_r, std::f64::consts::TAU * k as f64 / 8.0)))).count();
+        !site.wet(w) && wet <= 2 && ok(w)
+    })
+}
+
 /// Whether lane `pts` is a run of the ring round `well` (`ring`): its points but its ends on the
 /// circle of radius `rr` (or a node on one of its chords).
 fn on_ring(pts: &[P], well: P, rr: f64) -> bool {
@@ -1283,15 +1367,17 @@ fn on_ring(pts: &[P], well: P, rr: f64) -> bool {
 /// its tangent to a road (its last piece meeting the road at `RING_T_DEG` or squarer; from up to two
 /// points back), a node of the road's (two such on a road within 12 ft: one crossroads).
 /// A run shorter than 40 ft is dropped. Pushed onto `lanes`; the points the runs reach out to.
-fn ring(site: &Site, well: P, rr: f64, lanes: &mut Vec<(Vec<P>, f64)>, n_roads: usize) -> Vec<P> {
+fn ring(site: &Site, well: P, rr: f64, lanes: &mut Vec<(Vec<P>, f64)>, n_roads: usize, spur: &[(P, P)]) -> Vec<P> {
     let n = RING_N;
     let at = |k: usize| {
         let a = std::f64::consts::TAU * (k % n) as f64 / n as f64;
         (add(well, polar_pt(rr, a)), [-libm::sin(a), libm::cos(a)])
     };
     let ways = &lanes[..];
-    let road_d = |p: P| (0..n_roads).flat_map(|j| ways[j].0.windows(2).map(move |s| seg_dist(p, s[0], s[1]) - 0.5 * ways[j].1)).fold(f64::MAX, f64::min);
-    let crosses_road = |a: P, b: P| (0..n_roads).any(|j| ways[j].0.windows(2).any(|s| seg_cross(a, b, s[0], s[1]).is_some()));
+    // (The last of a spur ending on the ring (`spur_well`) is not given way to: it ends at a node of it.)
+    let by_spur = |s: &[P]| spur.iter().any(|&(a, b)| dist(a, s[0]) < 1e-6 && dist(b, s[1]) < 1e-6);
+    let road_d = |p: P| (0..n_roads).flat_map(|j| ways[j].0.windows(2).filter(|s| !by_spur(s)).map(move |s| seg_dist(p, s[0], s[1]) - 0.5 * ways[j].1)).fold(f64::MAX, f64::min);
+    let crosses_road = |a: P, b: P| (0..n_roads).any(|j| ways[j].0.windows(2).any(|s| !by_spur(s) && seg_cross(a, b, s[0], s[1]).is_some()));
     // (A point given way at, or the piece on from it.)
     let blocked: Vec<bool> = (0..n).map(|k| {
         let (p, q) = (at(k).0, at(k + 1).0);
@@ -1905,11 +1991,36 @@ fn square_to(lanes: &[(Vec<P>, f64)], house: &[P], u: P, own: Option<&[P]>, own_
 /// A house along `u` square by `JUNCTION_DEG` to the piece of `pts` nearest it (along the ring round
 /// the green, curved: the pieces beside that one turn away from it).
 fn square_to_nearest(pts: &[P], house: &[P], u: P) -> bool {
-    let Some(s) = pts.windows(2).filter(|s| dist(s[0], s[1]) > 1e-6).min_by(|a, b| poly_gap(house, a).total_cmp(&poly_gap(house, b))) else { return true };
+    // (Nearest by its gap, a tie, where its front runs past a bend, to the piece by its middle.)
+    let c = centroid(house);
+    let key = |s: &[P]| poly_gap(house, s) + 0.05 * seg_dist(c, s[0], s[1]);
+    let Some(s) = pts.windows(2).filter(|s| dist(s[0], s[1]) > 1e-6).min_by(|a, b| key(a).total_cmp(&key(b))) else { return true };
     let e = sub(s[1], s[0]);
     let k = (dot(e, u) / len(e)).abs();
     k > libm::cos(JUNCTION_DEG.to_radians()) || k < libm::sin(JUNCTION_DEG.to_radians())
 }
+
+/// The piece of ring run `pts` whose middle is nearest `a` ft along it, but not short of `min` ft:
+/// that middle, the piece's direction and how far along the run the middle is.
+fn ring_spot(pts: &[P], a: f64, min: f64) -> Option<(P, P, f64)> {
+    let mut s = 0.0;
+    let mut best: Option<(P, P, f64)> = None;
+    for w in pts.windows(2) {
+        let pl = dist(w[0], w[1]);
+        let m = s + 0.5 * pl;
+        s += pl;
+        if pl > 1e-6 && m >= min && best.is_none_or(|b| (m - a).abs() < (b.2 - a).abs()) {
+            best = Some((lerp(w[0], w[1], 0.5), mul(sub(w[1], w[0]), 1.0 / pl), m));
+        }
+    }
+    best
+}
+
+/// The width of a cottage on the ring (ft; off it 22-36).
+const RING_HOUSE_W: (f64, f64) = (20.0, 30.0);
+
+/// How far on along the ring a spot that took no house is tried again (ft).
+const RING_STEP_FT: f64 = 6.0;
 
 /// How near a lane's edge a house must stand square to it (ft), and by how much (degrees).
 const SQUARE_FT: f64 = 12.0;
