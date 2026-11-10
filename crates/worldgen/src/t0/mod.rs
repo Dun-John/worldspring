@@ -367,6 +367,8 @@ impl T0 {
         // they leave realms out), before the towns (nothing grows up beside them).
         let kings = world.file.params.generated_roads.then(|| roads::preview(&rinp, &settlements, &[roads::RoadClass::KingsRoad]));
         let economy;
+        // Where the world's own roads run (no added settlement's), for the caves' pull towards people.
+        let mut own_roads: Vec<u8> = Vec::new();
         if let Some(usage) = kings {
             let cities = settlements;
             // (A realm the roads between the towns pass too close to is given up and another site
@@ -399,6 +401,7 @@ impl T0 {
                 *rinp.routes.borrow_mut() = kept;
                 own
             });
+            own_roads = own.as_ref().unwrap_or(&usage).usage.clone();
             settlements = settle::place(&sinp, settlements, &[T::Village], Some(own.as_ref().unwrap_or(&usage)), &mut conflicts);
         } else {
             // Placed without regard to roads (and sized without trade), so drawing one never moves
@@ -455,7 +458,7 @@ impl T0 {
         };
         settle::snap_to_water(&mut settlements, cell, &wet, &nearest_river);
         let vents_at: Vec<(f64, f64, f64)> = volcanoes.iter().map(|v| (v.cx, v.cy, v.radius_ft)).collect();
-        let mut pois = settle::place_pois(&sinp, &settlements, &vents_at);
+        let mut pois = settle::place_pois(&sinp, &settlements, &vents_at, &own_roads);
         // The sketch's sites (after the generated ones, so drawing one moves none of them), seeded
         // by where they were drawn.
         let s_site = world.stream("t0.sketch.site");

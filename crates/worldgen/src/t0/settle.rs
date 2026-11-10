@@ -1673,7 +1673,67 @@ pub fn snap_to_water(settlements: &mut [Settlement], cell: f64, wet: &dyn Fn(f64
 
 /// Ruins and wizard towers, away from settlements; then cave mouths, mines and lava tubes
 /// (`volcanoes`: T0 cell centre and cone radius ft).
-pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f64, f64)]) -> Vec<Poi> {
+/// Miles from each cell to the nearest of `own`'s settlements or a cell of the world's own roads
+/// (`roads`: route usage per cell, empty with no roads): a two-pass 8-neighbour chamfer, so it
+/// goes by the cells alone.
+fn people_field(inp: &Inputs, own: &[&Settlement], roads: &[u8]) -> Vec<f32> {
+    let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
+    let mut d = vec![f32::MAX; w * h];
+    for s in own {
+        let (i, j) = (((s.x / cell).round().max(0.0) as usize).min(w - 1), ((s.y / cell).round().max(0.0) as usize).min(h - 1));
+        d[j * w + i] = 0.0;
+    }
+    for (k, &u) in roads.iter().enumerate().take(w * h) {
+        if u > 0 {
+            d[k] = 0.0;
+        }
+    }
+    let (a, b) = ((cell / 5280.0) as f32, (cell * std::f64::consts::SQRT_2 / 5280.0) as f32);
+    let relax = |d: &mut [f32], x: usize, y: usize, nx: i64, ny: i64, c: f32| {
+        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+            let v = d[ny as usize * w + nx as usize] + c;
+            if v < d[y * w + x] {
+                d[y * w + x] = v;
+            }
+        }
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let (xi, yi) = (x as i64, y as i64);
+            relax(&mut d, x, y, xi - 1, yi, a);
+            relax(&mut d, x, y, xi, yi - 1, a);
+            relax(&mut d, x, y, xi - 1, yi - 1, b);
+            relax(&mut d, x, y, xi + 1, yi - 1, b);
+        }
+    }
+    for y in (0..h).rev() {
+        for x in (0..w).rev() {
+            let (xi, yi) = (x as i64, y as i64);
+            relax(&mut d, x, y, xi + 1, yi, a);
+            relax(&mut d, x, y, xi, yi + 1, a);
+            relax(&mut d, x, y, xi + 1, yi + 1, b);
+            relax(&mut d, x, y, xi - 1, yi + 1, b);
+        }
+    }
+    d
+}
+
+/// How willing a cave is to open this far (miles) from people: most of them 5-25 mi off, fewer
+/// farther, a few deep in the wilds, and less within the 2-mi clear zone's edge.
+fn cave_pull(mi: f64) -> f64 {
+    const WILD: f64 = 0.8;
+    if mi < 5.0 {
+        0.4 + 0.6 * ((mi - 2.0) / 3.0).clamp(0.0, 1.0)
+    } else if mi <= 25.0 {
+        1.0
+    } else if mi < 50.0 {
+        1.0 - (1.0 - 0.3) * (mi - 25.0) / 25.0
+    } else {
+        WILD
+    }
+}
+
+pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f64, f64)], roads: &[u8]) -> Vec<Poi> {
     let (w, h, cell) = (inp.w, inp.h, inp.cell_ft);
     let p = inp.world.params();
     // Each try draws from its own stream (where it looks, whether it takes the place, the seed),
@@ -1733,11 +1793,12 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
         }
         r
     };
+    let people = people_field(inp, &own, roads);
     let n_caves = ((own.len() as f64) * 0.2 * p.poi_density).round() as usize;
     let n_mines = ((own.len() as f64) * 0.1 * p.poi_density).round() as usize;
     for (kind, count) in [(PoiKind::Cave, n_caves), (PoiKind::Mine, n_mines)] {
         let (mut tries, mut placed) = (0, 0);
-        while placed < count && tries < count * 200 + 200 {
+        while placed < count && tries < count * 600 + 600 {
             tries += 1;
             let mut rng = Pcg32::new(hash3(stream, kind as i64, tries as i64, 0), 23);
             let k = rng.below((w * h) as u32) as usize;
@@ -1757,6 +1818,10 @@ pub fn place_pois(inp: &Inputs, settlements: &[Settlement], volcanoes: &[(f64, f
                 }
             };
             if !ok || !away(x, y, &out, 2.0 * 5280.0, 5.0 * 5280.0) {
+                continue;
+            }
+            // Caves lean towards people (the try's own draw, so no other try moves).
+            if kind == PoiKind::Cave && rng.next_f64() >= cave_pull(people[k] as f64) {
                 continue;
             }
             out.push(Poi { kind, x, y, seed: rng.next_u32() as u64 | (rng.next_u32() as u64) << 32, stroke: None });

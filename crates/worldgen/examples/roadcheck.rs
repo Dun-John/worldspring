@@ -160,6 +160,8 @@ fn main() {
     let worlds: Vec<String> = args.pos.iter().filter(|a| common::is_world(a)).cloned().collect();
     let worlds = if worlds.is_empty() { vec!["1".into(), "2".into(), "3".into()] } else { worlds };
     let mut report = Vec::new();
+    // Distance (mi) from each generated site to the nearest settlement or road, per kind, over every world.
+    let mut poi_mi: Vec<Vec<f64>> = vec![Vec::new(); 5];
     for arg in &worlds {
         let t = std::time::Instant::now();
         let world = common::world(arg);
@@ -168,6 +170,18 @@ fn main() {
         let standing = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
         let n_layouts = worldgen::town::layout_count(&t0);
         say!("{}: {} settlements, {} sites, T0 {:.1} s", common::label(arg), t0.settlements.len(), n_layouts - t0.settlements.len(), t.elapsed().as_secs_f64());
+        for p in t0.pois.iter().filter(|p| p.stroke.is_none()) {
+            use worldgen::t0::settle::PoiKind as K;
+            let Some(i) = [K::Cave, K::Mine, K::LavaTube, K::Ruin, K::Tower].iter().position(|k| *k == p.kind) else { continue };
+            let q = [p.x, p.y];
+            let mut d = t0.settlements.iter().map(|s| dist(q, [s.x, s.y])).fold(f64::MAX, f64::min);
+            for rc in &t0.roads.roads {
+                for w in rc.pts.windows(2) {
+                    d = d.min(seg_dist(q, w[0], w[1]));
+                }
+            }
+            poi_mi[i].push(d / 5280.0);
+        }
         let t = std::time::Instant::now();
         let mut walls = Tally::default();
         let mut towers = Tally::default();
@@ -548,6 +562,12 @@ fn main() {
         }
         say!("  ({n_layouts} layouts in {layout_s:.1} s)");
         report.push(json!({ "world": common::label(arg), "settlements": t0.settlements.len(), "sites": n_layouts - t0.settlements.len(), "counts": counts, "worst": worst, "drawn_roads": drawn, "stairs": steps, "network": net, "economy": econ }));
+    }
+    for (name, v) in ["cave", "mine", "lava tube", "ruin", "tower"].iter().zip(poi_mi.iter_mut()) {
+        v.sort_by(|a, b| a.total_cmp(b));
+        let n = v.len().max(1) as f64;
+        let share = |f: &dyn Fn(f64) -> bool| v.iter().filter(|d| f(**d)).count() as f64 / n * 100.0;
+        say!("pois {name}: n {}, within 50 mi {:.0}%, median {:.1} mi, 5-25 mi {:.0}%", v.len(), share(&|d| d <= 50.0), v.get(v.len() / 2).copied().unwrap_or(0.0), share(&|d| (5.0..=25.0).contains(&d)));
     }
     // The waterside shares and reasons over every world.
     if worlds.len() > 1 {
