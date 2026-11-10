@@ -21,7 +21,7 @@ const WIDEN_FROM = 7.7;
 const WIDEN_TO = 4.5;
 const WIDEN_MAX = 1.25;
 /** Dot spacing on screen (px), about 3x the dot diameter. */
-const PERIOD_PX = 14;
+const PERIOD_PX = 10;
 /** Mitres are cut at this factor (a sharp turn's outer corner). */
 const MITRE_MAX = 2.5;
 

@@ -16,8 +16,8 @@ uniform float uPeriodPx;
 uniform vec3 uInk;
 uniform vec3 uRim;
 
-const float RIM_W = 1.0;     // rim width (px)
-const float RIM_A = 0.85;    // rim strength
+const float RIM_W = 0.8;     // rim width (px)
+const float RIM_A = 0.65;    // rim strength
 
 // Coverage of the disc (outer radius vHalf) of the dot nearest along the line.
 float dotAt(float s, float period) {

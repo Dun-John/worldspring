@@ -24,8 +24,8 @@ void main() {
     float k = length(aN);
     vec2 n = nl > 1e-12 ? nt / nl * k : vec2(0.0);
     float cls = aInfo.z;
-    // Dot radii (px): busy 2.85, normal 2.25, quiet 1.9, ferry (3) 2.25; the pad holds the disc and its rim.
-    float hw = (cls < 0.5 ? 2.85 : (cls < 1.5 ? 2.25 : (cls < 2.5 ? 1.9 : 2.25))) * uWidth;
+    // Dot radii (px): busy 1.9, normal 1.5, quiet 1.25, ferry (3) 1.5; the pad holds the disc and its rim.
+    float hw = (cls < 0.5 ? 1.9 : (cls < 1.5 ? 1.5 : (cls < 2.5 ? 1.25 : 1.5))) * uWidth;
     float pad = hw + 1.5;
     vLat = aInfo.x * pad;
     vS = aInfo.y;
