@@ -10,7 +10,7 @@ import { ItemAtlas } from './itemAtlas';
 import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
 import { precompile } from './precompile';
 import { Labels } from './Labels';
-import { laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
+import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
 import { SketchLayer } from './SketchLayer';
 import { prepareField, SECTION_FT, Sewers } from './Sewers';
 import type { Sketcher } from '../editor/sketcher';
@@ -228,6 +228,8 @@ export class MapView {
   seaLanes = true;
   onSeaLanes: (on: boolean) => void = () => {};
   private lanes: SeaLanes | null = null;
+  /** The ferries' water legs: their own layer, shown further in than the lanes. */
+  private ferryLanes: SeaLanes | null = null;
   private placesRect: [number, number, number, number] | null = null;
   /** Bumped when buildings are changed by hand: an answer asked for before is dropped. */
   private placesEpoch = 0;
@@ -523,13 +525,15 @@ export class MapView {
   setSeaLanes(on: boolean) {
     this.seaLanes = on;
     if (this.lanes) this.lanes.on = on;
+    if (this.ferryLanes) this.ferryLanes.on = on;
     this.onSeaLanes(on);
   }
 
   /** The sea lanes as drawn last (for checks): segments, and the strength shown (0: hidden). */
-  get laneStats(): { segments: number; alpha: number; visible: boolean } {
+  get laneStats(): { segments: number; alpha: number; visible: boolean; ferrySegments: number; ferryAlpha: number; ferryVisible: boolean } {
     const l = this.lanes;
-    return { segments: l?.segments ?? 0, alpha: l?.alpha ?? 0, visible: !!l?.container.visible };
+    const f = this.ferryLanes;
+    return { segments: l?.segments ?? 0, alpha: l?.alpha ?? 0, visible: !!l?.container.visible, ferrySegments: f?.segments ?? 0, ferryAlpha: f?.alpha ?? 0, ferryVisible: !!f?.container.visible };
   }
 
   /** While Places is on at town zoom: ask for the businesses round the view once it has moved
@@ -846,6 +850,7 @@ export class MapView {
     this.battle?.destroy();
     this.labels?.destroy();
     this.lanes?.destroy();
+    this.ferryLanes?.destroy();
     this.exitBuilding();
     this.peek?.layer.destroy();
     this.peek = null;
@@ -857,6 +862,8 @@ export class MapView {
     this.labels = new Labels(overlay.features);
     this.lanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2]);
     this.lanes.on = this.seaLanes;
+    this.ferryLanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2], true);
+    this.ferryLanes.on = this.seaLanes;
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
     this.townHints.clear();
@@ -873,6 +880,7 @@ export class MapView {
     const battle = this.makeBattle(geom, catalog);
     this.app.stage.addChild(this.tiles.container);
     this.app.stage.addChild(this.lanes.container);
+    this.app.stage.addChild(this.ferryLanes.container);
     this.app.stage.addChild(battle.container);
     this.app.stage.addChild(this.playUnder);
     this.app.stage.addChild(this.labels.container);
@@ -1284,6 +1292,7 @@ export class MapView {
       // Sea lanes from the continent to region zoom, gone before the towns' plans show.
       const level = Math.log2((this.geom!.domain_ft * this.cam.ppf * this.app.renderer.resolution) / TILE_N);
       this.lanes?.update(this.cam, this.interior ? 0 : laneFade(level, SITE_MIN_LEVEL - LANE_FADE[0], SITE_MIN_LEVEL - LANE_FADE[1]), level);
+      this.ferryLanes?.update(this.cam, this.interior ? 0 : ferryFade(level), level);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
       if (this.sewers) {

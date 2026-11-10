@@ -24,8 +24,8 @@ void main() {
     float k = length(aN);
     vec2 n = nl > 1e-12 ? nt / nl * k : vec2(0.0);
     float cls = aInfo.z;
-    // Half widths (px): busy 1.0, normal 0.7, quiet 0.5.
-    float hw = (cls < 0.5 ? 1.0 : (cls < 1.5 ? 0.7 : 0.5)) * uWidth;
+    // Half widths (px): busy 1.0, normal 0.7, quiet 0.5, ferry (3) 0.7.
+    float hw = (cls < 0.5 ? 1.0 : (cls < 1.5 ? 0.7 : (cls < 2.5 ? 0.5 : 0.7))) * uWidth;
     float pad = hw + 1.0;
     vLat = aInfo.x * pad;
     vS = aInfo.y;

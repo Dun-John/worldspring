@@ -11,11 +11,13 @@ import vertex from './shaders/sealane.vert?raw';
 const INK = [0.34, 0.23, 0.17];
 /** The ink's strength at full show. */
 const STRENGTH = 0.9;
+/** The ink's strength at the whole map (eased in with the widening, so it reads less like a border). */
+const STRENGTH_FAR = 0.8;
 /** Widths (and the dash cycle) grow as the view zooms out: x1 from tile level `WIDEN_FROM` (region
  * zoom) in, `WIDEN_MAX` at `WIDEN_TO` (the whole map). */
 const WIDEN_FROM = 7.7;
 const WIDEN_TO = 4.5;
-const WIDEN_MAX = 1.6;
+const WIDEN_MAX = 1.25;
 /** A dash and its gap on screen (px), about 7:3. */
 const PERIOD_PX = 13;
 /** Mitres are cut at this factor (a sharp turn's outer corner). */
@@ -40,6 +42,7 @@ export class SeaLanes {
   /** Where the vertices are measured from (ft): f32 keeps its precision near it. */
   private ox = 0;
   private oy = 0;
+  private readonly ferries: boolean;
   /** Segments drawn (lines of the overlay with two points or more). */
   segments = 0;
   /** Shown by the viewer's choice (Layers). */
@@ -47,7 +50,9 @@ export class SeaLanes {
   /** The strength last drawn at (0: hidden). */
   alpha = 0;
 
-  constructor(lanes: SeaLane[], origin: [number, number]) {
+  /** `ferries`: draw only the ferries' water legs (class 3); otherwise only the other lanes. */
+  constructor(lanes: SeaLane[], origin: [number, number], ferries = false) {
+    this.ferries = ferries;
     [this.ox, this.oy] = origin;
     this.build(lanes);
   }
@@ -58,6 +63,7 @@ export class SeaLanes {
     const info: number[] = [];
     const index: number[] = [];
     for (const lane of lanes) {
+      if ((lane.c === 3) !== this.ferries) continue;
       // Points, repeats dropped (a zero-length step has no direction).
       const pts: [number, number][] = [];
       for (let i = 0; i + 1 < lane.p.length; i += 2) {
@@ -109,7 +115,9 @@ export class SeaLanes {
 
   /** Placed for the camera, at `fade` (1 shown, 0 faded out by zoom), the view at tile `level`. */
   update(cam: Camera, fade: number, level: number) {
-    this.alpha = this.on && this.mesh ? fade * STRENGTH : 0;
+    const t = Math.min(1, Math.max(0, (WIDEN_FROM - level) / (WIDEN_FROM - WIDEN_TO)));
+    const ease = t * t * (3 - 2 * t);
+    this.alpha = this.on && this.mesh ? fade * (STRENGTH + (STRENGTH_FAR - STRENGTH) * ease) : 0;
     this.container.visible = this.alpha > 0.002;
     if (!this.container.visible) return;
     const [sx, sy] = cam.worldToScreen(this.ox, this.oy);
@@ -118,8 +126,7 @@ export class SeaLanes {
     const u = this.uniforms.uniforms;
     u.uPpf = cam.ppf;
     u.uAlpha = this.alpha;
-    const t = Math.min(1, Math.max(0, (WIDEN_FROM - level) / (WIDEN_FROM - WIDEN_TO)));
-    const widen = 1 + (WIDEN_MAX - 1) * t * t * (3 - 2 * t);
+    const widen = 1 + (WIDEN_MAX - 1) * ease;
     u.uWidth = widen;
     u.uPeriodPx = PERIOD_PX * widen;
   }
@@ -145,4 +152,13 @@ function normal(a: [number, number], b: [number, number]): [number, number] {
 export function laneFade(level: number, from: number, to: number): number {
   const t = Math.min(1, Math.max(0, (level - from) / (to - from)));
   return 1 - t * t * (3 - 2 * t);
+}
+
+/** The ferries' water legs: full up to tile level `FERRY_HAND_OVER` (L10, where the tile layer
+ * draws its own ferry line, `payload::FERRY_MIN_LEVEL`; tiles of level L are the target from view
+ * level L), then crossfaded out over `FERRY_FADE` levels, which covers the tiles' arrival. */
+export const FERRY_HAND_OVER = 10;
+const FERRY_FADE = 0.3;
+export function ferryFade(level: number): number {
+  return 1 - Math.min(1, Math.max(0, (level - FERRY_HAND_OVER) / FERRY_FADE));
 }
