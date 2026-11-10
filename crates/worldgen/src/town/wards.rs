@@ -176,6 +176,13 @@ const AT_CLOSE: &str = "a temple's close is at that corner: its houses face the 
 
 /// Why a garden can't be set on a patch.
 const NOT_PARK: &str = "only a park's patch is laid out as a garden: give it the park ward first";
+/// Why a patch outside the town's districts (a farm's, open country) takes none.
+const OUTSIDE_DISTRICT: &str = "a district holds the town's patches only: this one is open country, in no district";
+
+/// Whether patch `p` is in one of the town's districts as generated (in the town or its sprawl).
+fn in_a_district(plan: &TownPlan, p: usize) -> bool {
+    plan.quarters.iter().any(|(_, m)| m.contains(&p))
+}
 
 /// Why a close set on a temple's patch isn't laid out.
 const NO_ROOM: &str = "no room for a close there: the temple and churchyard must fit, with houses along at least 65% of the block's streets";
@@ -302,7 +309,7 @@ pub(super) fn changes(plan: &TownPlan, e: &TownEdit, center: P) -> (Changes, Vec
             Some(Err(why)) => aside.push(format!("patch {p}: {why}")),
             None => {}
         }
-        match pe.district.as_deref().map(|d| super::districts::parse(plan, d)) {
+        match pe.district.as_deref().map(|d| if !in_a_district(plan, p) { Err(OUTSIDE_DISTRICT.to_string()) } else { super::districts::parse(plan, d) }) {
             Some(Ok(t)) => {
                 if let super::districts::Target::Named(n) = &t
                     && !ch.districts.contains(n)
@@ -1355,6 +1362,9 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             Some(_) => return Err(format!("patch {p}: close: true, false or \"auto\"")),
         }
         if let Some(d) = &pr.district {
+            if !in_a_district(&plan, p) && d.trim() != "auto" {
+                return Err(format!("patch {p}: {OUTSIDE_DISTRICT}"));
+            }
             let mut d = super::districts::resolve(world, &plan, index, &mut e, p, d).map_err(|why| format!("patch {p}: {why}"))?;
             std::mem::swap(&mut e.patches[k].district, &mut d);
         }
