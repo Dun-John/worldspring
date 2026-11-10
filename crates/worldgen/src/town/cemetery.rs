@@ -58,6 +58,9 @@ pub enum Bound {
     Wall,
     Hedge,
     None,
+    /// A gate pier: a short stretch of the wall either side of a gap with no lychgate (the South's,
+    /// the dry lands'), drawn thicker than the wall.
+    Pier,
 }
 
 /// A cemetery laid out (world ft).
@@ -142,6 +145,8 @@ pub(crate) const KINDS: [(Kind, KindInfo); 6] = [
 
 /// A kurgan's radius (ft) at size 1.
 pub const KURGAN_R: f64 = 17.5;
+/// A yew's crown's radius (ft, as drawn) at size 1.
+pub const YEW_R: f64 = 6.5;
 
 /// How many cemeteries a town of this tier has (by its plan's roll): one at most, a town's one
 /// time in ten, a city's one in four, a metropolis's one in two.
@@ -158,8 +163,19 @@ fn wanted(s: &Settlement, plan: &TownPlan) -> usize {
 
 /// How far a cemetery by a road stands off its road's edge (ft): its wall clear of the road's
 /// verge (the battlemap keeps walls a square and more off a road) and of the road's line as the
-/// plan draws it (wider than the bed), a short path over to the gate.
-pub const VERGE: f64 = 20.0;
+/// plan draws it (wider than the bed, every corner clear: `BEND` more at its middle for a bend), a
+/// short path over to the gate.
+pub const VERGE: f64 = 30.0;
+/// How much farther than `VERGE` the plot's road side stands off its road at its middle (ft): room
+/// for the road to bend toward a corner.
+const BEND: f64 = 3.0;
+/// How far a tomb's corners keep in from the boundary's line (ft): 5 ft off its wall's or hedge's face.
+const TOMB_IN: f64 = 7.0;
+/// How far a yew's crown keeps off the gate's gap and off a walk's edge (ft).
+const YEW_GATE: f64 = 10.0;
+const YEW_WALK: f64 = 2.5;
+/// A gate pier's length along the wall (ft); the battlemap draws it thicker than the wall (`rural`).
+pub const PIER_FT: f64 = 5.0;
 
 /// How many cemeteries the town wants, and the generated common (if it has two or more, none
 /// set by hand, on a slope, the palace's or bigger than `INNER_MAX`) that is one of them.
@@ -220,10 +236,9 @@ pub(super) fn by_roads(site: &Site, s: &Settlement, plan: &TownPlan, l: &mut Lay
             .enumerate()
             .flat_map(|(wi, (_, q, _))| q.iter().enumerate().map(move |(i, p)| (dist(*p, end), wi, i)))
             .min_by(|a, b| a.0.total_cmp(&b.0).then((a.1, a.2).cmp(&(b.1, b.2))));
-        let mut own = None;
         let mut w = w;
         if let Some((_, wi, i)) = near.filter(|n| n.0 < 80.0) {
-            let (ri, q, ww) = &ways[wi];
+            let (_, q, ww) = &ways[wi];
             let away = |j: usize| len(q[j]);
             let up = i + 1 < q.len() && (i == 0 || away(i + 1) >= away(i - 1));
             let mut run = 0.0;
@@ -237,7 +252,6 @@ pub(super) fn by_roads(site: &Site, s: &Settlement, plan: &TownPlan, l: &mut Lay
                 line.push(q[nj]);
                 j = nj;
             }
-            own = Some(*ri);
             w = w.max(*ww);
         }
         let total: f64 = line.windows(2).map(|q| dist(q[0], q[1])).sum();
@@ -262,9 +276,9 @@ pub(super) fn by_roads(site: &Site, s: &Settlement, plan: &TownPlan, l: &mut Lay
             let t = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
             for side in [1.0, -1.0] {
                 let nrm = mul([-t[1], t[0]], side);
-                let c = add(p, mul(nrm, 0.5 * w + VERGE + 0.5 * deep));
+                let c = add(p, mul(nrm, 0.5 * w + VERGE + BEND + 0.5 * deep));
                 let poly = super::rect(c, t, along, deep);
-                if clear_by_road(site, plan, l, &poly, rk, &ways, own) {
+                if clear_by_road(site, plan, l, &poly, &ways) {
                     // (The side facing the road: corners 0-1 lie at -v, `rect`.)
                     let v = [-t[1], t[0]];
                     let road_side = if dot(v, nrm) > 0.0 { 0 } else { 2 };
@@ -327,9 +341,9 @@ fn world_ways(site: &Site) -> Vec<(u32, Vec<P>, f64)> {
     out
 }
 
-/// Whether a cemetery `poly` (local ft) beside road `rk` (on along the world's road `own`) stands
+/// Whether a cemetery `poly` (local ft) beside a road stands
 /// clear: outside the town, dry, gentle, off every way.
-fn clear_by_road(site: &Site, plan: &TownPlan, l: &Layout, poly: &[P], rk: usize, ways: &[(u32, Vec<P>, f64)], own: Option<u32>) -> bool {
+fn clear_by_road(site: &Site, plan: &TownPlan, l: &Layout, poly: &[P], ways: &[(u32, Vec<P>, f64)]) -> bool {
     let o = obb(poly);
     let c = centroid(poly);
     let mut samples: Vec<P> = poly.to_vec();
@@ -364,16 +378,15 @@ fn clear_by_road(site: &Site, plan: &TownPlan, l: &Layout, poly: &[P], rk: usize
     if l.buildings.iter().any(|b| near(&b.poly, 10.0)) {
         return false;
     }
-    // (Its own road a little nearer than `VERGE` where it bends; every other a good way off, its
-    // wall clear of it.)
-    for (ri, pts, w) in ways {
-        let need = 0.5 * w + if Some(*ri) == own { VERGE - 4.0 } else { VERGE };
+    // (Every road `VERGE` off and more, its own too where it bends: the plot's every corner clear.)
+    for (_, pts, w) in ways {
+        let need = 0.5 * w + VERGE;
         if pts.windows(2).any(|s| seg_gap(s[0], s[1]) < need) {
             return false;
         }
     }
-    for (k, (pts, _, w)) in l.roads.iter().enumerate() {
-        let need = 0.5 * w + if k == rk { VERGE - 4.0 } else { VERGE };
+    for (pts, _, w) in &l.roads {
+        let need = 0.5 * w + VERGE;
         if pts.windows(2).any(|s| seg_gap(s[0], s[1]) < need) {
             return false;
         }
@@ -518,7 +531,7 @@ pub fn plan(pk: &Park) -> Option<Plan> {
         along: t,
         gap: wm + 2.0,
         walks: Vec::new(),
-        link: st.by_road.then(|| (sub(mid, mul(n, VERGE + 2.0)), mid)),
+        link: st.by_road.then(|| (sub(mid, mul(n, VERGE + BEND + 2.0)), mid)),
         tombs: Vec::new(),
         props: Vec::new(),
     };
@@ -570,7 +583,7 @@ pub fn plan(pk: &Park) -> Option<Plan> {
                     let d = if group == 2 && roll(wi as i64, (s * 4.0) as i64, 2) < 0.35 { td + 5.0 } else { td };
                     let door = add(add(p, mul(u, s + 0.5 * tw)), mul(o, 0.5 * w + DOOR_GAP));
                     let f = footprint(door, u, o, tw, d);
-                    let fits = f.iter().all(|&c| depth(&boundary, c) >= 3.5)
+                    let fits = f.iter().all(|&c| depth(&boundary, c) >= TOMB_IN)
                         && dist(centroid(&f), gate) > 0.5 * (tw + d) + 12.0
                         && walks
                             .iter()
@@ -630,8 +643,13 @@ pub fn plan(pk: &Park) -> Option<Plan> {
             }
         }
     }
-    // The West's yews: along the boundary every 30 ft or so, 6 ft in, and an avenue by the main walk.
+    // The West's yews: along the boundary every 30 ft or so, 6 ft in, and an avenue by the main walk;
+    // their crowns `YEW_GATE` off the gate's gap, `YEW_WALK` off the walks.
     if group == 1 {
+        let (g0, g1) = (sub(gate, mul(t, 0.5 * out.gap)), add(gate, mul(t, 0.5 * out.gap)));
+        let yew_ok = |room: &Room, y: P, r: f64, edge: f64| {
+            seg_dist(y, g0, g1) >= r + YEW_GATE && room.free(y, r, edge, YEW_WALK)
+        };
         let bm = boundary.len();
         for e in 0..bm {
             let (p, q) = (boundary[e], boundary[(e + 1) % bm]);
@@ -644,20 +662,20 @@ pub fn plan(pk: &Park) -> Option<Plan> {
                     inn = mul(inn, -1.0);
                 }
                 let y = add(at, mul(inn, 6.0));
-                if roll(e as i64, k as i64, 7) < 0.8 && room.free(y, 4.0, 1.0, 2.0) {
-                    room.discs.push((y, 4.0));
+                if roll(e as i64, k as i64, 7) < 0.8 && yew_ok(&room, y, YEW_R, -1.0) {
+                    room.discs.push((y, YEW_R));
                     out.props.push((y, 0.0, Kind::Yew, rng.below(4) as u8, 1.0));
                 }
             }
         }
         let (p, q, w) = walks[0];
         let lw = dist(p, q);
-        let mut s = 20.0;
+        let mut s = 30.0;
         while s < lw - 6.0 {
             for side in [1.0, -1.0] {
-                let y = add(lerp(p, q, s / lw), mul(t, side * (0.5 * w + 5.0)));
-                if room.free(y, 3.0, 2.0, 1.5) {
-                    room.discs.push((y, 3.0));
+                let y = add(lerp(p, q, s / lw), mul(t, side * (0.5 * w + 0.9 * YEW_R + YEW_WALK + 0.5)));
+                if yew_ok(&room, y, 0.9 * YEW_R, 2.0) {
+                    room.discs.push((y, 0.9 * YEW_R));
                     out.props.push((y, 0.0, Kind::Yew, rng.below(4) as u8, 0.9));
                 }
             }
@@ -755,9 +773,10 @@ pub fn park_layout(pk: &Park) -> ParkLayout {
 }
 
 /// The boundary's runs (world ft): its line but for the gap at the gate (a wall or a hedge; none on
-/// the Steppe), for `rural::battle`.
+/// the Steppe), for `rural::battle`; last, a walled gap's two piers where no lychgate stands over it.
 pub fn bounds(l: &Layout) -> Vec<(P, P, Bound)> {
     let mut out = Vec::new();
+    let mut piers = Vec::new();
     for pk in l.parks.iter().filter(|p| p.kind == ParkKind::Cemetery) {
         let Some(pl) = plan(pk) else { continue };
         if pl.bound == Bound::None {
@@ -774,7 +793,13 @@ pub fn bounds(l: &Layout) -> Vec<(P, P, Bound)> {
             let s = dot(sub(pl.gate, a), u);
             let off = cross(u, sub(pl.gate, a)).abs();
             if off < 0.5 && s > -0.5 * pl.gap && s < le + 0.5 * pl.gap {
-                let (s0, s1) = (s - 0.5 * pl.gap, s + 0.5 * pl.gap);
+                let (mut s0, mut s1) = (s - 0.5 * pl.gap, s + 0.5 * pl.gap);
+                // (The wall's ends meet the piers' outer ends.)
+                if pl.bound == Bound::Wall && !pl.props.iter().any(|p| p.2 == Kind::Lychgate) && s0 - PIER_FT > 1.0 && s1 + PIER_FT < le - 1.0 {
+                    piers.push((add(a, mul(u, s0 - PIER_FT)), add(a, mul(u, s0)), Bound::Pier));
+                    piers.push((add(a, mul(u, s1)), add(a, mul(u, s1 + PIER_FT)), Bound::Pier));
+                    (s0, s1) = (s0 - PIER_FT, s1 + PIER_FT);
+                }
                 if s0 > 0.5 {
                     out.push((a, add(a, mul(u, s0)), pl.bound));
                 }
@@ -786,6 +811,7 @@ pub fn bounds(l: &Layout) -> Vec<(P, P, Bound)> {
             }
         }
     }
+    out.extend(piers);
     out
 }
 

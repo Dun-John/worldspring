@@ -27,6 +27,8 @@ pub enum RunKind {
     HedgeRow,
     DryWall,
     Fence,
+    /// A cemetery's gate pier: a dry-stone wall's short, thicker stretch (`cemetery::bounds`).
+    Pier,
 }
 
 impl RunKind {
@@ -36,6 +38,7 @@ impl RunKind {
             RunKind::Hedge | RunKind::HedgeRow => 3.5,
             RunKind::DryWall => 3.75,
             RunKind::Fence => 0.8,
+            RunKind::Pier => 6.0,
         }
     }
 }
@@ -558,7 +561,11 @@ pub fn battle(l: &Layout, t0: &T0, rect: [f64; 4], blocked: &dyn Fn(P) -> bool, 
     // R5 towns: a cemetery's low wall or hedge, a gap at its gate (`cemetery::bounds`).
     if l.parks.iter().any(|p| p.kind == super::ParkKind::Cemetery && hits(bbox(&p.pts), near)) {
         for (a, b, bound) in super::cemetery::bounds(l) {
-            let kind = if bound == super::cemetery::Bound::Hedge { RunKind::Hedge } else { RunKind::DryWall };
+            let kind = match bound {
+                super::cemetery::Bound::Hedge => RunKind::Hedge,
+                super::cemetery::Bound::Pier => RunKind::Pier,
+                _ => RunKind::DryWall,
+            };
             piece_runs(a, b, kind, &|_| true, out);
         }
     }
@@ -643,7 +650,7 @@ pub fn shapes(b: &Battle, ox: f64, oy: f64, out: &mut Vec<VectorShape>) {
     for &(a, e, kind) in &b.runs {
         let sk = match kind {
             RunKind::Hedge | RunKind::HedgeRow => ShapeKind::Hedge,
-            RunKind::DryWall => ShapeKind::DryWall,
+            RunKind::DryWall | RunKind::Pier => ShapeKind::DryWall,
             RunKind::Fence => ShapeKind::Fence,
         };
         // (A field's hedge's third point (1, 0): drawn the cheaper way, `countryside.ts`.)

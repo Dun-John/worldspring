@@ -5554,8 +5554,10 @@ fn cemeteries(ctx: &mut Ctx, r: &mut Report) {
         let n = l.parks.iter().filter(|p| p.kind == town::ParkKind::Cemetery).count();
         r.tally(&format!("{} {}: places", l.tier.name(), GROUPS[g]), 1);
         r.tally(&format!("{} {}: cemeteries", l.tier.name(), GROUPS[g]), n);
+        let ps = if n > 0 { town::places::of(world, t0, &l) } else { Vec::new() };
         for pk in l.parks.iter().filter(|p| p.kind == town::ParkKind::Cemetery) {
             let by_road = pk.cemetery.is_some_and(|c| c.by_road);
+            cemetery_label(&ps, li, pk, &GROUPS, r);
             r.tally(&format!("{}: cemeteries {}", GROUPS[g], if by_road { "by a road" } else { "in town" }), 1);
             check_cemetery(world, t0, &l, li, pk, &GROUPS, r);
             ground.push((li, pk.clone()));
@@ -5627,7 +5629,7 @@ fn cemeteries(ctx: &mut Ctx, r: &mut Report) {
     }
 }
 
-const CEM_RULES: [&str; 8] = [
+const CEM_RULES: [&str; 12] = [
     "R props or tombs on a walk",
     "R props or tombs over the boundary",
     "R props or tombs outside the plot",
@@ -5636,6 +5638,10 @@ const CEM_RULES: [&str; 8] = [
     "R lychgates not on the way in (North, West)",
     "R tombs planned and not built",
     "R tombs with no tomb chamber",
+    "R plots by a road within 25 ft of a road as drawn",
+    "R tombs within 5 ft of the boundary's face",
+    "R yews within 10 ft of the gate or 2 ft of a walk",
+    "R cemetery labels on a walk, a tomb, a big prop or the boundary",
 ];
 
 // R5 towns (M21 fixes): a cemetery as the battlemap lays it.
@@ -5729,6 +5735,43 @@ fn cemetery_ground(ctx: &mut Ctx, li: usize, pk: &town::Park, groups: &[&str; 5]
 /// How much farther (ft) than the plot's nearest edge a way in by a road may be from it.
 const BOUND_SLACK: f64 = 20.0;
 
+/// A cemetery's label (`places::of`): its baseline's every 2 ft off the walks, the tombs, the yews,
+/// kurgans and lychgate and 2 ft inside the boundary.
+fn cemetery_label(ps: &[town::places::Place], li: usize, pk: &town::Park, groups: &[&str; 5], r: &mut Report) {
+    let Some(pl) = town::cemetery::plan(pk) else { return };
+    let g = pk.cemetery.map_or(1, |c| c.group as usize % 5);
+    let Some(p) = ps.iter().find(|p| p.sort == "cemetery" && p.label.len() >= 2 && contains(&pk.pts, p.label[p.label.len() / 2])) else {
+        r.tally(&format!("{}: cemeteries with no label line", groups[g]), 1);
+        return;
+    };
+    r.tally(&format!("{}: cemetery labels", groups[g]), 1);
+    let len: f64 = p.label.windows(2).map(|q| dist(q[0], q[1])).sum();
+    r.tally(&format!("{}: cemetery label ft", groups[g]), len as usize);
+    if len < 36.0 {
+        r.tally(&format!("{}: cemetery labels under 36 ft", groups[g]), 1);
+    }
+    let m = pl.boundary.len();
+    let bad = p.label.windows(2).any(|q| {
+        let n = (dist(q[0], q[1]) / 2.0).ceil().max(1.0) as usize;
+        (0..=n).any(|k| {
+            let x = lerp(q[0], q[1], k as f64 / n as f64);
+            !contains(&pl.boundary, x)
+                || (0..m).any(|e| seg_dist(x, pl.boundary[e], pl.boundary[(e + 1) % m]) < 2.0)
+                || pl.walks.iter().any(|&(a, b, w)| seg_dist(x, a, b) < 0.5 * w + 1.0)
+                || pl.tombs.iter().any(|t| contains(t, x) || (0..t.len()).any(|e| seg_dist(x, t[e], t[(e + 1) % t.len()]) < 1.0))
+                || pl.props.iter().any(|q| match q.2 {
+                    Kind::Kurgan => dist(x, q.0) < town::cemetery::KURGAN_R * q.4 as f64,
+                    Kind::Yew => dist(x, q.0) < town::cemetery::YEW_R * q.4 as f64,
+                    Kind::Lychgate => dist(x, q.0) < 6.0,
+                    _ => false,
+                })
+        })
+    });
+    if bad {
+        r.add(CEM_RULES[11], 1.0, format!("L{li} {} at {}: {}", groups[g], at(town::geom::mean(&pk.pts)), p.name));
+    }
+}
+
 fn check_cemetery(world: &World, t0: &T0, l: &Layout, li: usize, pk: &town::Park, groups: &[&str; 5], r: &mut Report) {
     let Some(pl) = town::cemetery::plan(pk) else {
         r.add("cemeteries too small to lay out", 1.0, format!("L{li} at {}", at(town::geom::mean(&pk.pts))));
@@ -5761,6 +5804,53 @@ fn check_cemetery(world: &World, t0: &T0, l: &Layout, li: usize, pk: &town::Park
         }
         if !contains(&pk.pts, p) {
             r.add(CEM_RULES[2], 1.0, format!("{here}: {:?} at {}", k, at(p)));
+        }
+    }
+    // R5 towns (last fix): a plot by a road clear of every road as the map draws it at every level
+    // the plot is seen at (the tiles' pieces, `lod::roads::pieces`) and of the layout's roads.
+    {
+        let b = pk.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let geo = &world.geom;
+        let mut worst: Option<(f64, String)> = None;
+        let mut note = |gap: f64, what: String| {
+            if worst.as_ref().is_none_or(|w| gap < w.0) {
+                worst = Some((gap, what));
+            }
+        };
+        for lv in 0..=geo.max_level {
+            let sp = geo.spacing_ft(lv);
+            if sp > worldgen::lod::roads::CARVE_MAX_SPACING_FT {
+                continue;
+            }
+            for pc in worldgen::lod::roads::pieces(&t0.roads, b, 0.0, sp.max(20.0)) {
+                let hw = 0.5 * pc.class.width_ft();
+                for q in pc.pts.windows(2) {
+                    note(town::geom::poly_gap(&pk.pts, &[q[0].p, q[1].p]) - hw, format!("level {lv} ({sp:.0} ft)"));
+                }
+            }
+        }
+        for (k, (pts, c, w)) in l.roads.iter().enumerate() {
+            for q in pts.windows(2) {
+                note(town::geom::poly_gap(&pk.pts, &[q[0], q[1]]) - 0.5 * w, format!("layout road {k} (class {c}, {w:.0} ft)"));
+            }
+        }
+        if let Some((gap, what)) = worst.filter(|_| pk.cemetery.is_some_and(|c| c.by_road)) {
+            if gap < town::cemetery::VERGE - 5.0 {
+                r.add(CEM_RULES[8], 1.0, format!("{here}: {gap:.1} ft from the road at {what}"));
+            }
+        }
+    }
+    let face = |pl: &town::cemetery::Plan| if pl.bound == town::cemetery::Bound::None { 0.0 } else { 1.875 };
+    for t in &pl.tombs {
+        if t.iter().any(|&q| depth(&pl.boundary, q) < 5.0 + face(&pl)) {
+            r.add(CEM_RULES[9], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+    }
+    let gap_seg = (sub(pl.gate, mul(pl.along, 0.5 * pl.gap)), add(pl.gate, mul(pl.along, 0.5 * pl.gap)));
+    for &(p, _, k, _, s) in pl.props.iter().filter(|p| p.2 == Kind::Yew) {
+        let rr = town::cemetery::YEW_R * s as f64;
+        if seg_dist(p, gap_seg.0, gap_seg.1) < rr + 10.0 || pl.walks.iter().any(|&(a, b, w)| seg_dist(p, a, b) < 0.5 * w + rr + 2.0) {
+            r.add(CEM_RULES[10], 1.0, format!("{here}: {:?} at {}", k, at(p)));
         }
     }
     let seg_poly = |t: &[P], a: P, b: P| town::geom::poly_gap(t, &[a, b]);
