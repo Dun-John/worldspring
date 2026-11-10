@@ -50,7 +50,8 @@ pub(crate) fn labyrinth(nx: usize, ny: usize, arrive: usize, depth: usize, last:
     // The heart: mid-grid on the top level, else a quarter in from the side away from the arrival.
     let (tx, ty) = (if depth == 0 { nx / 2 } else if ax < nx / 2 { 3 * nx / 4 } else { nx / 4 }, ny / 2);
     let big = crate::core::sqrt(area) >= 1.2;
-    let (hw, hh) = if last { if big { (4, 4) } else { (3, 3) } } else if big { (3, 3) } else { (3, 2) };
+    // (The boss's on a medium or bigger site: 9 x 11 squares, 11 x 13 on a large one.)
+    let (hw, hh) = if last && area >= 1.0 { if big { (6, 7) } else { (5, 6) } } else if last { if big { (4, 4) } else { (3, 3) } } else if big { (3, 3) } else { (3, 2) };
     let heart = p.room(if last { BOSS } else { "heart of the maze" }, 0.0);
     let mut spots: Vec<(usize, usize)> = (0..=ch.saturating_sub(hh)).flat_map(|j| (0..=cw.saturating_sub(hw)).map(move |i| (i, j))).collect();
     let mid = |i: usize, j: usize| (xs[i] + xs[(i + hw - 1).min(cw - 1)], ys[j] + ys[(j + hh - 1).min(ch - 1)]);

@@ -89,7 +89,7 @@ pub(crate) fn fortress(nx: usize, ny: usize, arrive: usize, depth: usize, last: 
     let mut boss = None;
     if last {
         g.cap = ROOMS_MAX;
-        boss = boss_room(&mut p, &mut g, ny, rng);
+        boss = boss_room(&mut p, &mut g, ny, area, rng);
     }
     finish(&mut p, ny, passage, cw, last, boss, &[], &pillared);
     // Rubble across the broken gatehouse.

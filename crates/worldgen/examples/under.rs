@@ -244,6 +244,8 @@ fn main() {
 struct Boss {
     by_theme: std::collections::BTreeMap<String, (std::collections::BTreeMap<&'static str, usize>, std::collections::BTreeMap<&'static str, usize>)>,
     layouts: std::collections::BTreeMap<&'static str, usize>,
+    /// Per site size (keeps' as "keep"): each chamber's bounding box (short side, long side) and its layout.
+    sizes: std::collections::BTreeMap<String, Vec<(usize, usize, &'static str)>>,
     n: usize,
     worst_ms: f64,
 }
@@ -354,6 +356,17 @@ impl Boss {
         *e.0.entry(layout).or_default() += 1;
         *e.1.entry(centre).or_default() += 1;
         *self.layouts.entry(layout).or_default() += 1;
+        let (bw, bh) = {
+            let sq: Vec<usize> = (0..lv.cells.len()).filter(|&k| lv.cells[k] == ri as i16).collect();
+            let w = sq.iter().map(|k| k % nx).max().unwrap_or(0) - sq.iter().map(|k| k % nx).min().unwrap_or(0) + 1;
+            let h = sq.iter().map(|k| k / nx).max().unwrap_or(0) - sq.iter().map(|k| k / nx).min().unwrap_or(0) + 1;
+            (w.min(h), w.max(h))
+        };
+        let size = worldgen::under::site_size(it).map_or("keep", |s| s.name()).to_string();
+        if std::env::var("BOSS").is_ok_and(|v| v == "list") {
+            println!("  {size} {bw}x{bh}");
+        }
+        self.sizes.entry(size).or_default().push((bw, bh, layout));
         self.n += 1;
     }
 
@@ -363,6 +376,14 @@ impl Boss {
             println!("  {t}: layouts {} | centrepieces {}", fmt(l), fmt(c));
         }
         let spread: Vec<String> = self.layouts.iter().map(|(k, v)| format!("{k} {v} ({:.0}%)", 100.0 * *v as f64 / self.n.max(1) as f64)).collect();
+        for (size, v) in &self.sizes {
+            let mid = |mut x: Vec<usize>| {
+                x.sort();
+                format!("{}/{}/{}", x[0], x[x.len() / 2], x[x.len() - 1])
+            };
+            let none = v.iter().filter(|q| q.2 == "(none)").count();
+            println!("  size {size}: {} chambers, short side {} long side {} (min/median/max squares), no layout {none}", v.len(), mid(v.iter().map(|q| q.0).collect()), mid(v.iter().map(|q| q.1).collect()));
+        }
         println!("boss: {} built boss chambers (worst site {:.0} ms); layouts {}", self.n, self.worst_ms, spread.join(", "));
     }
 }

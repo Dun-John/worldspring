@@ -7,7 +7,7 @@
 //! deeper it goes.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, colonnade, dead_end, fallback, fill, flood_room, way_down};
+use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, boss_size, boss_sizes, colonnade, dead_end, fallback, fill, flood_room, way_down};
 use crate::under::*;
 
 #[allow(clippy::too_many_arguments)]
@@ -36,7 +36,9 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         let cross = rng.next_f64() < 0.45;
         // (Bigger sites: a longer, wider nave, a bigger sanctum and crossing.)
         let sc = |n: usize| ((n as f64) * crate::core::sqrt(area)).round() as usize;
-        let (sd, sa) = (pick(5, sc(7), rng), odd(pick(5, sc(7), rng)));
+        // (The boss's sanctum on a medium or bigger site: a big apsed hall, `boss_size`, as big as fits.)
+        let big = if last { boss_size(area, rng) } else { None };
+        let (sd, sa) = big.map_or_else(|| (pick(5, sc(7), rng), odd(pick(5, sc(7), rng))), |(a, d)| (d, a));
         let cw = if cross { odd(pick(5, sc(7), rng)) } else { 0 };
         let room_left = nx.saturating_sub(x0 + nw + 2 + sd + cw);
         let nave_h = if ny >= 30 { odd(pick(7, sc(9).min(11), rng)) } else { 7 };
@@ -69,7 +71,8 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         g.deck(&mut p, end, Side::N, "vestry", Template::Rect, va, vd, along, true);
         let kind = if last { BOSS } else { "sanctum" };
         let mut gate = None;
-        for (t, a, d) in [(Template::Apse, sa, sd), (Template::Apse, 5, 5), (Template::Rect, 3, 3)] {
+        let ends = big.map(boss_sizes).unwrap_or_default().into_iter().map(|q| (Template::Apse, q.1, q.2)).skip(big.is_some() as usize);
+        for (t, a, d) in [(Template::Apse, sa, sd)].into_iter().chain(ends).chain([(Template::Apse, 5, 5), (Template::Rect, 3, 3)]) {
             if let Some(&s) = g.deck(&mut p, end, Side::E, kind, t, a, d, 0, true).first() {
                 g.pieces[s].open = false;
                 gate = g.pieces[s].door;
@@ -113,7 +116,7 @@ pub(crate) fn temple(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         g.grow(&mut p, &specs, rooms.saturating_sub(made + 1), false, rng);
         if last {
             g.cap = ROOMS_MAX;
-            boss = boss_room(&mut p, &mut g, ny, rng);
+            boss = boss_room(&mut p, &mut g, ny, area, rng);
         }
     }
     // A boss chamber that found no room: the farthest dead end becomes it.

@@ -18,7 +18,7 @@
 //! the run, a second run across each passage between them.
 
 use crate::core::rng::Pcg32;
-use crate::under::grow::{Grower, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, colonnade, dead_end, fallback, fill, flood_room, mask, way_down};
+use crate::under::grow::{Grower, RESERVE, ROOMS_GROWING, ROOMS_MAX, Side, Spec, Template, boss_room, boss_size, boss_sizes, colonnade, dead_end, fallback, fill, flood_room, mask, way_down};
 use crate::under::*;
 
 /// A small chamber where galleries meet.
@@ -42,6 +42,8 @@ struct Grid {
     mirror: bool,
     bigs: usize,
     jitter: bool,
+    /// Rock kept clear of crossings along one side of the level (squares), for a big boss chamber (`reserve`).
+    keep_clear: Option<(Side, usize)>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -52,15 +54,15 @@ pub(crate) fn crypt(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     let (ax, ay) = (arrive % nx, arrive / nx);
     let big = area >= 1.0;
     // (Big crypts and huge ossuaries: out to the level's edges.)
-    let grid = match theme.key {
-        "crypt" if area > 1.0 => Grid { pitch: pick(6, 7, rng), cols: 0, rows: 1 + (area >= 2.0) as usize, keep: 1.0, loops: 0.5, bare: 0.0, mirror: true, bigs: 1, jitter: false },
-        "crypt" => Grid { pitch: pick(6, 7, rng), cols: 3 + big as usize + depth.min(1), rows: 1, keep: 1.0, loops: 0.5, bare: 0.0, mirror: true, bigs: 1, jitter: false },
+    let mut grid = match theme.key {
+        "crypt" if area > 1.0 => Grid { pitch: pick(6, 7, rng), cols: 0, rows: 1 + (area >= 2.0) as usize, keep: 1.0, loops: 0.5, bare: 0.0, mirror: true, bigs: 1, jitter: false, keep_clear: None },
+        "crypt" => Grid { pitch: pick(6, 7, rng), cols: 3 + big as usize + depth.min(1), rows: 1, keep: 1.0, loops: 0.5, bare: 0.0, mirror: true, bigs: 1, jitter: false, keep_clear: None },
         "ossuary" => {
             let edge = area >= 2.0;
-            Grid { pitch: pick(6, 7, rng), cols: if edge { 0 } else { 4 + big as usize }, rows: if edge { 0 } else { 1 + big as usize }, keep: 0.9, loops: 0.35, bare: 0.15, mirror: false, bigs: 1 + (area >= 1.3) as usize, jitter: false }
+            Grid { pitch: pick(6, 7, rng), cols: if edge { 0 } else { 4 + big as usize }, rows: if edge { 0 } else { 1 + big as usize }, keep: 0.9, loops: 0.35, bare: 0.15, mirror: false, bigs: 1 + (area >= 1.3) as usize, jitter: false, keep_clear: None }
         }
         // (Catacombs: fewer loops, less regular: crossings and galleries a square off, more crossings left out.)
-        _ => Grid { pitch: pick(6, 8, rng), cols: 0, rows: 0, keep: 0.8, loops: 0.08, bare: 0.3, mirror: false, bigs: 1 + big as usize + (area >= 1.6) as usize, jitter: true },
+        _ => Grid { pitch: pick(6, 8, rng), cols: 0, rows: 0, keep: 0.8, loops: 0.08, bare: 0.3, mirror: false, bigs: 1 + big as usize + (area >= 1.6) as usize, jitter: true, keep_clear: None },
     };
     if grid.jitter {
         // (About half the loops `kit::guard` would add, and few secret doors.)
@@ -78,6 +80,16 @@ pub(crate) fn crypt(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     let (cx0, cy0) = (x0 + s / 2, y0 + s / 2);
     let mut g = Grower::new(nx, ny, passage, grid.mirror.then_some(cy0));
     g.cap = ROOMS_GROWING;
+    // (The deepest level of a medium or bigger site: a strip of rock on the side farthest from the way in kept for a
+    // big boss chamber, its depth and two more; along the spine in a mirrored crypt.)
+    if last && let Some(b) = boss_size(area, rng) {
+        let sides: &[(Side, usize)] = &[(Side::E, nx - ax), (Side::W, ax), (Side::S, ny - ay), (Side::N, ay)];
+        let &(side, room) = sides.iter().take(if grid.mirror { 2 } else { 4 }).max_by_key(|q| (q.1, std::cmp::Reverse(q.0 as u8))).unwrap_or(&sides[0]);
+        if room >= 2 * (b.1 + 2) {
+            grid.keep_clear = Some((side, b.1 + 2));
+            g.boss = Some(b);
+        }
+    }
     let first = if depth == 0 { theme.first } else { "stair foot" };
     let Some(core) = g.seed(&mut p, first, Template::Rect, x0, y0, s, s).or_else(|| g.seed(&mut p, first, Template::Rect, ax, ay, 1, 1)) else {
         return fallback(p, last);
@@ -85,6 +97,9 @@ pub(crate) fn crypt(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     let mut junctions = vec![g.pieces[core].room];
     if g.pieces[core].w == s {
         galleries(&mut p, &mut g, &grid, theme, (cx0, cy0, s / 2), &mut junctions, rng);
+    }
+    if let Some((side, n)) = grid.keep_clear {
+        reserve(&mut p, ny, side, n - 1);
     }
     // A catacomb level sometimes has a flooded gallery.
     let mut pools = Vec::new();
@@ -117,7 +132,7 @@ pub(crate) fn crypt(nx: usize, ny: usize, arrive: usize, depth: usize, last: boo
     let mut boss = None;
     if last {
         g.cap = ROOMS_MAX;
-        boss = boss_room(&mut p, &mut g, ny, rng);
+        boss = boss_room(&mut p, &mut g, ny, area, rng);
         if boss.is_none() {
             boss = dead_end(&p, ny);
             if let Some(b) = boss {
@@ -148,8 +163,11 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
     let ny = p.cells.len() / nx;
     let pp = grid.pitch as isize;
     // Columns and rows of crossings whose junction lies inside the ring of rock round the level.
-    let span = |c0: usize, n: usize, limit: usize, both: bool| -> (isize, isize) {
-        let (lo, hi) = (-((c0 as isize - 2) / pp), (n as isize - 3 - c0 as isize) / pp);
+    // (Squares kept clear at the low and high ends of the columns and rows: `Grid::keep_clear`.)
+    let cut = |s: Side| grid.keep_clear.filter(|q| q.0 == s).map_or(0, |q| q.1 as isize);
+    let (cuts_x, cuts_y) = ((cut(Side::W), cut(Side::E)), (cut(Side::N), cut(Side::S)));
+    let span = |c0: usize, n: usize, limit: usize, both: bool, (cl, ch): (isize, isize)| -> (isize, isize) {
+        let (lo, hi) = ((-((c0 as isize - 2 - cl) / pp)).min(0), ((n as isize - 3 - ch - c0 as isize) / pp).max(0));
         if limit == 0 || hi - lo <= limit as isize {
             (lo, hi)
         } else if both {
@@ -162,20 +180,20 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
             ((h - limit as isize + 1).max(lo), h)
         }
     };
-    let (c_lo, c_hi) = span(cx0, nx, grid.cols, false);
-    let (r_lo, r_hi) = span(cy0, ny, grid.rows, true);
+    let (c_lo, c_hi) = span(cx0, nx, grid.cols, false, cuts_x);
+    let (r_lo, r_hi) = span(cy0, ny, grid.rows, true, cuts_y);
     let (w, h) = ((c_hi - c_lo + 1) as usize, (r_hi - r_lo + 1) as usize);
     let at = |c: isize, r: isize| (r - r_lo) as usize * w + (c - c_lo) as usize;
     // Where each column (row) of crossings lies: `pitch` apart; jittered, each a square off its place or not, the next
     // at most a square further off (neighbours a pitch apart give or take a square), inside the ring of rock.
-    let line = |lo: isize, hi: isize, c0: usize, n: usize, rng: &mut Pcg32| -> Vec<usize> {
+    let line = |lo: isize, hi: isize, c0: usize, n: usize, (cl, ch): (isize, isize), rng: &mut Pcg32| -> Vec<usize> {
         let mut o = vec![0isize; (hi - lo + 1) as usize];
         if grid.jitter {
             for dir in [1isize, -1] {
                 let (mut prev, mut c) = (0isize, dir);
                 while (lo..=hi).contains(&c) {
                     let at0 = c0 as isize + c * pp;
-                    let v = (prev + rng.below(3) as isize - 1).clamp(-1, 1).clamp(2 - at0, n as isize - 3 - at0);
+                    let v = (prev + rng.below(3) as isize - 1).clamp(-1, 1).clamp(2 + cl - at0, (n as isize - 3 - ch - at0).max(2 + cl - at0));
                     o[(c - lo) as usize] = v;
                     prev = v;
                     c += dir;
@@ -184,8 +202,8 @@ fn galleries(p: &mut Plan, g: &mut Grower, grid: &Grid, theme: &Theme, (cx0, cy0
         }
         (lo..=hi).map(|c| (c0 as isize + c * pp + o[(c - lo) as usize]) as usize).collect()
     };
-    let xs = line(c_lo, c_hi, cx0, nx, rng);
-    let ys = line(r_lo, r_hi, cy0, ny, rng);
+    let xs = line(c_lo, c_hi, cx0, nx, cuts_x, rng);
+    let ys = line(r_lo, r_hi, cy0, ny, cuts_y, rng);
     let pos = |(c, r): (isize, isize)| (xs[(c - c_lo) as usize], ys[(r - r_lo) as usize]);
     let inside = |c: isize, r: isize| (c_lo..=c_hi).contains(&c) && (r_lo..=r_hi).contains(&r);
     // (Mirrored: drawn for the rows on and above the axis, copied below.)
@@ -504,7 +522,9 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     // (Above the deepest, half the time a plain hall rather than an apse, so levels differ.)
     let plain = !last && rng.next_f64() < 0.5;
     let ends = if plain { [(Template::Rect, ba, bd), (Template::Apse, 5, 5), (Template::Rect, 3, 3)] } else { [(Template::Apse, ba, bd), (Template::Apse, 5, 5), (Template::Rect, 3, 3)] };
-    for (t, a, d) in ends {
+    // (A medium tomb's burial chamber, the boss's, is a long hall when there is room: `boss_size`.)
+    let big = if last { boss_size(area, rng).map(boss_sizes).unwrap_or_default() } else { Vec::new() };
+    for (t, a, d) in big.into_iter().chain(ends) {
         if let Some(&e) = g.deck(&mut p, at, fwd, kind, t, a, d, 0, true).first() {
             g.pieces[e].open = false;
             end = Some(e);
@@ -539,7 +559,7 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     g.grow(&mut p, &specs, target.saturating_sub(have), true, rng);
     if last && boss.is_none() {
         g.cap = ROOMS_MAX;
-        boss = boss_room(&mut p, &mut g, ny, rng).or_else(|| {
+        boss = boss_room(&mut p, &mut g, ny, area, rng).or_else(|| {
             let b = dead_end(&p, ny)?;
             p.rooms[b as usize].kind = BOSS;
             Some(b)
@@ -559,4 +579,22 @@ pub(crate) fn tomb(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     }
     pillars(&mut p, ny, passage, boss);
     p
+}
+
+/// Mark the rock within `n` squares of the level's `side` edge (inside its ring of rock) `RESERVE`: kept for the boss
+/// chamber while the rest grows.
+fn reserve(p: &mut Plan, ny: usize, side: Side, n: usize) {
+    let nx = p.nx;
+    for k in 0..nx * ny {
+        let (x, y) = (k % nx, k / nx);
+        let near = match side {
+            Side::E => x + n >= nx,
+            Side::W => x < n,
+            Side::S => y + n >= ny,
+            Side::N => y < n,
+        };
+        if near && p.cells[k] < 0 {
+            p.cells[k] = RESERVE;
+        }
+    }
 }

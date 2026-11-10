@@ -35,7 +35,8 @@ pub(crate) fn cult(nx: usize, ny: usize, arrive: usize, depth: usize, last: bool
     p.loops = if depth == 0 { 0.0 } else { 0.34 };
     let (ax, ay) = ((arrive % nx) as isize, (arrive / nx) as isize);
     let (nxi, nyi) = (nx as isize, ny as isize);
-    let s: isize = if area >= 1.3 { 9 } else { 7 };
+    // (The deepest level of a medium or bigger site: a bigger chamber, the boss's: 11 or 13 across.)
+    let s: isize = if last && area >= 1.0 { 11 + 2 * (area >= 1.3) as isize } else if area >= 1.3 { 9 } else { 7 };
     let h = s / 2;
     let (bx, by) = (3 + rng.below(2 + (area >= 1.3) as u32) as isize, 3 + rng.below(2) as isize);
     // Ring k's half-sizes (from the centre to the ring, across x and y).

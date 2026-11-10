@@ -103,7 +103,7 @@ pub(crate) fn prison(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         g.grow(&mut p, &specs, target.saturating_sub(have), false, rng);
         if last {
             g.cap = ROOMS_MAX;
-            boss = boss_room(&mut p, &mut g, ny, rng);
+            boss = boss_room(&mut p, &mut g, ny, area, rng);
         }
     } else {
         // A guard room round the way down from above, then solitary cells and oubliettes off it, the rest grown.
@@ -145,7 +145,7 @@ pub(crate) fn prison(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         g.grow(&mut p, &specs, target.saturating_sub(have).max(2), false, rng);
         if last {
             g.cap = ROOMS_MAX;
-            boss = boss_room(&mut p, &mut g, ny, rng);
+            boss = boss_room(&mut p, &mut g, ny, area, rng);
         }
     }
     if last && boss.is_none() {

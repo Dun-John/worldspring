@@ -139,7 +139,7 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
     g.grow(&mut p, &specs, left.saturating_sub(made), false, rng);
     if last && boss.is_none() {
         g.cap = ROOMS_MAX;
-        boss = boss_room(&mut p, &mut g, ny, rng);
+        boss = boss_room(&mut p, &mut g, ny, area, rng);
     }
     finish(&mut p, ny, passage, cw, last, boss, &[], &pillared);
     // Ancestor statues along the great halls' walls.

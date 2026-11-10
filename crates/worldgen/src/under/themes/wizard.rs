@@ -67,9 +67,10 @@ pub(crate) fn wizard(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
         sides.push(back);
     }
     if last {
-        let s = odd(pick(9, sc(11).max(9), rng));
+        // (11-13 across on a medium or bigger site.)
+        let s = if area >= 1.0 { odd(pick(11, sc(13).max(11), rng)) } else { odd(pick(9, sc(11).max(9), rng)) };
         'boss: for side in [dir, back, Side::N, Side::S] {
-            for (t, s) in [(Template::Round, s), (Template::Round, 9), (Template::Octagon, 7), (Template::Rect, 5)] {
+            for (t, s) in [(Template::Round, s), (Template::Round, s.min(11)), (Template::Round, 9), (Template::Octagon, 7), (Template::Rect, 5)] {
                 if let Some(&b) = g.deck(&mut p, rot, side, BOSS, t, s, s, 0, !matches!(side, Side::N | Side::S)).first() {
                     g.pieces[b].open = false;
                     boss = Some(g.pieces[b].room);
@@ -113,7 +114,7 @@ pub(crate) fn wizard(nx: usize, ny: usize, arrive: usize, depth: usize, last: bo
     g.grow(&mut p, &specs, left.saturating_sub(made), false, rng);
     if last && boss.is_none() {
         g.cap = ROOMS_MAX;
-        boss = boss_room(&mut p, &mut g, ny, rng);
+        boss = boss_room(&mut p, &mut g, ny, area, rng);
         if boss.is_none() {
             boss = dead_end(&p, ny);
             if let Some(b) = boss {
