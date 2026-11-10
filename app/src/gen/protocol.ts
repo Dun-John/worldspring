@@ -592,6 +592,9 @@ export interface MadeSettlement {
   built: number;
   rect: Rect;
   track: [number, number][];
+  /** The link's road class (`RoadClass`: 2 a village's track, 1 a town's road) and bed width (ft). */
+  class: number;
+  width: number;
 }
 
 /** A name to rename (`worldgen::agent::name_entry`): `generated` is the name before renames. */

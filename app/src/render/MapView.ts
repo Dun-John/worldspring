@@ -114,10 +114,12 @@ function createdDetail(c: Created): string {
 }
 
 /** A created site as a named feature (as `worldgen::agent::features` lists it). */
-function createdFeature(c: Created): Feature {
-  // (A village or town added by hand: labelled as the world's own of its tier, `features.rs`.)
+function createdFeature(c: Created, population?: number): Feature {
+  // (A village or town added by hand: labelled as the world's own of its tier, `features.rs`, its
+  // population in its detail once known, as theirs: the breadcrumbs size a settlement by it.)
   const extent = c.kind === 'building' ? 0.5 * 5280 : c.kind === 'castle' || c.kind === 'wall' ? Math.max(2 * (siteReach(c) - 100), 0.5 * 5280) : (MADE_EXTENT_MI[c.kind] ?? 2) * 5280;
-  return { id: c.id, kind: c.kind, name: c.name, x: c.x, y: c.y, angle: 0, extent_ft: extent, detail: createdDetail(c) };
+  const detail = createdDetail(c) + (isMade(c) && population ? `, pop. ${population.toLocaleString('en-US')}` : '');
+  return { id: c.id, kind: c.kind, name: c.name, x: c.x, y: c.y, angle: 0, extent_ft: extent, detail };
 }
 
 /** Label extents (mi) of the villages and towns added by hand, as the world's own have them. */
@@ -252,6 +254,9 @@ export class MapView {
   /** Inside a site, a click: the ways on from that square (empty elsewhere) and the screen
    * position, for a menu. */
   onMoves: (moves: Move[], sx: number, sy: number) => void = () => {};
+  /** The features changed outside `setEdits` (the populations of the settlements added by hand,
+   * once the generators have them). */
+  onOverlay: (overlay: Overlay) => void = () => {};
   private tap: { x: number; y: number; t: number } | null = null;
   /** When set, called each frame to drive the camera (benchmarks); input is ignored. */
   driver: ((now: number) => CameraState | null) | null = null;
@@ -565,6 +570,13 @@ export class MapView {
       for (const o of this.made) if (!now.has(o.id)) changed.push(o);
       this.made = list;
       tracks.set(list);
+      const pops = new Map(list.map((m) => [m.id, m.population]));
+      const stale = (f: Feature) => (f.kind === 'village' || f.kind === 'town') && pops.has(f.id) && !f.detail?.includes(`pop. ${pops.get(f.id)!.toLocaleString('en-US')}`);
+      if (this.overlay?.features.some(stale)) {
+        const created = new Map((this.edits.created ?? []).map((c) => [c.id, c]));
+        this.overlay = { ...this.overlay, features: this.overlay.features.map((f) => (stale(f) && created.has(f.id) ? createdFeature(created.get(f.id)!, pops.get(f.id)) : f)) };
+        this.onOverlay(this.overlay);
+      }
       this.towns = [...this.towns.filter((t) => !t.made), ...list.filter((m) => m.tier === 'town').map((m) => ({ x: m.x, y: m.y, r: 12 * Math.sqrt(m.population), index: m.layout, made: true }))];
       for (const m of changed) {
         this.districtsAsked.delete(m.layout);
@@ -1001,7 +1013,7 @@ export class MapView {
     }
     const createdChanged = JSON.stringify(before) !== JSON.stringify(after);
     if (createdChanged && this.baseOverlay) {
-      const created = after.filter((c) => !c.removed).map(createdFeature);
+      const created = after.filter((c) => !c.removed).map((c) => createdFeature(c, this.made.find((m) => m.id === c.id)?.population));
       this.overlay = { ...this.baseOverlay, features: [...this.baseOverlay.features, ...created] };
       this.labels?.setCreated(created);
     }

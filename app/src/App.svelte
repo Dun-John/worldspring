@@ -3325,6 +3325,7 @@
     view.onSeaLanes = (on) => setSeaLanes(on);
     view.setSeaLanes(seaLanes);
     view.onMoves = (list, x, y) => (moves = list.length ? { list, x, y } : null);
+    view.onOverlay = (o) => (overlay = o);
     const onKey = createKeyHandler(() => keymap, () => shell.help || !!shell.ask || !!versionAsk || !!openAsk || !!restoreAsk);
     window.addEventListener('keydown', onKey);
     // Changes not yet stored are stored before the page goes.

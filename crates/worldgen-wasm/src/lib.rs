@@ -278,10 +278,11 @@ impl Ctx {
     }
 
     /// The villages and towns added by hand (`T0.made`), as JSON: `[{id, layout, tier,
-    /// population, x, y, reach, built, rect, track}]`, where `reach` is the layout's
+    /// population, x, y, reach, built, rect, track, class, width}]`, where `reach` is the layout's
     /// (`town::reach`), `built` the built-up radius, `rect` (x0, y0, x1, y1 ft) all its battlemaps
-    /// change over (the pad, `town::pad_extent`, and the track's bounds + 15 ft) and `track` its
-    /// points `[x, y]` from the settlement's edge to the road (empty with none).
+    /// change over (the pad, `town::pad_extent`, and the link's bounds + 30 ft: its bed, banks and
+    /// crossings), `track` its link's points `[x, y]` to the road (empty with none), `class` and
+    /// `width` the link's road class and bed width (ft).
     pub fn made_json(&self) -> String {
         let Some(t0) = &self.t0 else { return "[]".into() };
         let edits = &self.world.file.edits.created;
@@ -294,13 +295,13 @@ impl Ctx {
                 let pad = worldgen::town::pad_extent(reach);
                 let mut r = [s.x - pad, s.y - pad, s.x + pad, s.y + pad];
                 for p in &m.track {
-                    r = [r[0].min(p[0] - 15.0), r[1].min(p[1] - 15.0), r[2].max(p[0] + 15.0), r[3].max(p[1] + 15.0)];
+                    r = [r[0].min(p[0] - 30.0), r[1].min(p[1] - 30.0), r[2].max(p[0] + 30.0), r[3].max(p[1] + 30.0)];
                 }
                 let track: Vec<[f64; 2]> = m.track.iter().map(|p| [p[0].round(), p[1].round()]).collect();
                 Some(serde_json::json!({
                     "id": c.id, "layout": t0.settlements.len() + m.poi, "tier": s.tier.name(), "population": s.population,
                     "x": s.x, "y": s.y, "reach": reach.ceil(), "built": worldgen::town::urban_radius(s.tier, s.population).round(),
-                    "rect": r.map(|v| v.round()), "track": track,
+                    "rect": r.map(|v| v.round()), "track": track, "class": m.class as u8, "width": m.class.width_ft(),
                 }))
             })
             .collect();

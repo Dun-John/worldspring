@@ -1,16 +1,13 @@
-// The tracks of the villages and towns added by hand (`T0.made`): the terrain tiles never hold
-// them (their caches ignore edits), so they are drawn here, by the tiles' own road shader as a
-// track (class 2, an 8 ft bed), so they read as the world's own tracks at every zoom. The layer
-// lies under the battlemap, which draws the track itself and covers it where it is built.
+// The links of the villages and towns added by hand (`T0.made`): the terrain tiles never hold
+// them (their caches ignore edits), so they are drawn here, by the tiles' own road shader in
+// their own class and width (a village's track, a town's road), so they read as the world's own
+// at every zoom. The layer lies under the battlemap, which draws the link itself and covers it
+// where it is built.
 import { Container, Geometry, GlProgram, Mesh, Shader, UniformGroup } from 'pixi.js';
 import { buildRiverGeometry, type MadeSettlement } from '../gen/protocol';
 import type { Camera } from './camera';
 import roadFragment from './shaders/tileroad.frag?raw';
 import roadVertex from './shaders/tileroad.vert?raw';
-
-/** `RoadClass::Track` in the tiles' road shader, and its bed width (ft). */
-const TRACK_CLASS = 2;
-const TRACK_WIDTH_FT = 8;
 
 export class MadeTracks {
   readonly container = new Container();
@@ -30,7 +27,7 @@ export class MadeTracks {
     for (const m of list) {
       if (m.track.length < 2) continue;
       const verts = new Float32Array(m.track.length * 4);
-      m.track.forEach((p, i) => verts.set([p[0] - m.x, p[1] - m.y, TRACK_WIDTH_FT, TRACK_CLASS], i * 4));
+      m.track.forEach((p, i) => verts.set([p[0] - m.x, p[1] - m.y, m.width, m.class], i * 4));
       const g = buildRiverGeometry({ starts: new Uint32Array([0, m.track.length]), verts });
       if (!g) continue;
       const geometry = new Geometry({
