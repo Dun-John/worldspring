@@ -123,13 +123,25 @@ impl House {
 
 /// The ground a bent entrance's block and the way out of it toward `exit` need, clear of buildings.
 fn bent_fits(l: &Layout, h: &House) -> bool {
+    let near = |q: &P| dist(*q, h.a) < h.len() + 80.0;
+    !l.buildings.iter().filter(|b| b.poly.iter().any(near)).any(|b| bent_on(h, &b.poly))
+}
+
+/// Whether `poly` stands on a bent entrance's block or the way out of it.
+fn bent_on(h: &House, poly: &[P]) -> bool {
     let len = h.len();
     let apron = h.rect(len - SQUARE_HALF, len - SQUARE_HALF + 14.0, SQUARE_HALF + 1.5, BENT_DEPTH);
     let block = h.block().unwrap_or_default();
-    let near = |q: &P| dist(*q, h.a) < len + 80.0;
-    !l.buildings.iter().filter(|b| b.poly.iter().any(near)).any(|b| {
-        [&block, &apron].iter().any(|z| b.poly.iter().any(|p| contains(z, *p)) || z.iter().any(|p| contains(&b.poly, *p)))
-    })
+    [&block, &apron].iter().any(|z| poly.iter().any(|p| contains(z, *p)) || z.iter().any(|p| contains(poly, *p)))
+}
+
+/// Whether a castle's bent entrance at `gate` (the middle of its passage, as `castle::curtain` sets it;
+/// `inward` into the yard, unit) has the ground for its block and a way out (either side) with `poly`
+/// (its keep) standing: its towers `wall_pieces`' 52 ft apart, a foot to spare.
+pub(super) fn bent_room(gate: P, inward: P, poly: &[P]) -> bool {
+    let w = mul([-inward[1], inward[0]], 27.0);
+    let h = House { a: sub(gate, w), b: add(gate, w), form: Form::Bent, n: mul(inward, (BENT_DEPTH + 1.0) / BENT_DEPTH), exit: 1.0, castle: true };
+    [1.0, -1.0].into_iter().any(|e| !bent_on(&House { exit: e, ..h }, poly))
 }
 
 /// The gatehouses of `l`, in the order `battlemap::gateways` pairs their towers: a pure function of the

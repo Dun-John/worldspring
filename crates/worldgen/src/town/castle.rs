@@ -453,12 +453,14 @@ pub(super) fn castle<G: Ground>(
         None
     };
     let mut gates = vec![outer_gate];
+    let mut gate_ins: Vec<(P, P)> = vec![(outer_gate, outer_in)];
     let mut lanes: Vec<(P, P)> = vec![(outer_gate, add(outer_gate, mul(outer_in, 30.0)))];
     if let Some(inner) = &inner {
         let walled_in = vec![false; inner.len()];
         let apart = |p: P| dist(p, outer_gate) >= GATES_APART;
         let (g, gin) = curtain(l, inner, &walled_in, true, &|p: P| dist(p, outer_gate), &apart, &style, 4.0, &mut others, set.follow);
         gates.push(g);
+        gate_ins.push((g, gin));
         // The way from gate to gate along the outer bailey.
         let (a, b) = (add(outer_gate, mul(outer_in, 30.0)), sub(g, mul(gin, 30.0)));
         lanes.extend([(a, b), (b, g)]);
@@ -506,6 +508,9 @@ pub(super) fn castle<G: Ground>(
     more.sort_by(|a, b| dist(a.0, c).total_cmp(&dist(b.0, c)));
     more.truncate(24);
     let court_gate = *gates.last().unwrap_or(&outer_gate);
+    // (A bent entrance's block stands in the yard behind its gate: the keep leaves it room, item 104.)
+    let bent_gates: Vec<(P, P)> = if style.gatehouse == super::wallstyle::Gatehouse::Bent { gate_ins.clone() } else { Vec::new() };
+    let room = |poly: &[P]| bent_gates.iter().all(|&(g, n)| super::gatehouse::bent_room(g, n, poly));
     // (Every tower by the bailey, the town wall's as laid whether standing or not: the same keep
     // either way.)
     let near: Vec<(P, f64)> = laid
@@ -521,7 +526,7 @@ pub(super) fn castle<G: Ground>(
     let own: Vec<bool> = (0..court.len()).map(|e| inner.is_some() || !walled[e]).collect();
     let curtain: Vec<(P, P)> = l.walls[w0..].iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
     let kept = if keep {
-        place_keep(site, court, &spots, &more, axis, square, &towers, &near, &own, &curtain, &gates, &lanes, court_gate, prng)
+        place_keep(site, court, &spots, &more, axis, square, &towers, &near, &own, &curtain, &gates, &lanes, court_gate, &room, prng)
     } else {
         None
     };
@@ -1868,6 +1873,7 @@ fn place_keep<G: Ground>(
     gates: &[P],
     lanes: &[(P, P)],
     gate: P,
+    room: &dyn Fn(&[P]) -> bool,
     prng: &mut Pcg32,
 ) -> Option<(Building, Option<Motte>)> {
     const CLEAR: f64 = 16.0;
@@ -1920,7 +1926,7 @@ fn place_keep<G: Ground>(
                     continue;
                 };
                 let reach = if kind == KeepKind::Shell { MOTTE_TOP + MOTTE_SLOPE } else { 0.0 };
-                let fits = poly.iter().all(|p| inset_depth(court, *p) >= clear_by + reach) && !court.iter().any(|p| contains(&poly, *p));
+                let fits = poly.iter().all(|p| inset_depth(court, *p) >= clear_by + reach) && !court.iter().any(|p| contains(&poly, *p)) && room(&poly);
                 // (Off the curtain's towers.)
                 let off_towers = towers.iter().all(|(t, r)| inset_depth(&poly, *t) < -(r + clear_by + reach));
                 if !fits || !off_towers {
@@ -2006,7 +2012,7 @@ fn place_keep<G: Ground>(
                     curtain.iter().any(|&(q, r)| seg_dist(p, q, r) < 1.5)
                 });
                 let off_towers = by_ring.iter().all(|(t, r)| inset_depth(&poly, *t) < -(r + 1.0));
-                let off_gates = gates.iter().all(|g| inset_depth(&poly, *g) < -GATE_HALF) && lanes.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 10.0 && !contains(&poly, p));
+                let off_gates = gates.iter().all(|g| inset_depth(&poly, *g) < -GATE_HALF) && room(&poly) && lanes.iter().all(|&(p, q)| super::poly_seg_dist(&poly, p, q) >= 10.0 && !contains(&poly, p));
                 // (The lane before its face: inside the court, off the towers.)
                 let (f0, f1) = (at([-hl, hw]), at([hl, hw]));
                 let mut lane = vec![f0, f1, add(f1, mul(inward, KEEP_LANE)), add(f0, mul(inward, KEEP_LANE))];
