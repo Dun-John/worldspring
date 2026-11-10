@@ -1144,9 +1144,10 @@ pub fn overview(world: &World, t0: &T0) -> Value {
         "npcs": world.file.edits.npcs.len(),
         "plots": world.file.edits.plots.len(),
         "roads": if p.generated_roads { "generated and drawn" } else { "only drawn" },
-        "buildings_changed": world.file.edits.buildings.len(),
+        // (With the pieces of hand castles that were changed.)
+        "buildings_changed": world.file.edits.buildings.len() + world.file.edits.created.iter().filter(|c| !c.removed).map(|c| c.pieces.len()).sum::<usize>(),
         // Changes to the world's own buildings that no longer apply (the town was laid out anew).
-        "buildings_set_aside": town::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
+        "buildings_set_aside": town::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).chain(town::pieces::set_aside(world, t0).into_iter().map(|(id, castle, why)| json!({ "id": id, "castle": castle, "why": why }))).collect::<Vec<_>>(),
         "designs_set_aside": crate::interior::design::set_aside(world, t0).into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect::<Vec<_>>(),
         "towns_set_aside": town::wards::set_aside(world, t0).into_iter().map(|(layout, why)| json!({ "layout": layout, "why": why })).collect::<Vec<_>>(),
         "places_removed": places_removed(world),
@@ -1314,7 +1315,13 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         v["kind"] = json!("building");
         v["name"] = json!(building_name(world, &l, b));
         v["function"] = json!(b.label());
-        v["floors"] = json!(b.floors);
+        // (A hand castle's ruined piece keeps the storeys it was built with, for when it is roofed again: it has none now.)
+        if b.structure == town::Structure::Ruin && town::pieces::piece_of(world, t0, id).is_some() {
+            v["floors"] = json!(0);
+            v["floors_note"] = json!("a ruin: a roofless shell has no storeys");
+        } else {
+            v["floors"] = json!(b.floors);
+        }
         // The roof's material and shape (battlements and ruins have none of their own).
         if b.roof != Some(town::RoofStyle::Battlements) && b.structure != town::Structure::Ruin {
             let k = town::roof::look(&l, b);

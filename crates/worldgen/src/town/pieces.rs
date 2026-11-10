@@ -31,7 +31,10 @@ pub fn apply(world: &World, t0: &T0, c: &Created, l: &mut Layout) {
         } else {
             k.parse::<usize>().ok().and_then(|id| l.building_index(id)).filter(|&i| Some(i) != keep && dist(centroid(&l.buildings[i].poly), p.edit.at) <= BuildingEdit::SAME_AT_FT)
         };
-        let Some(i) = i else { continue };
+        let Some(i) = i else {
+            l.pieces_aside.push(k.clone());
+            continue;
+        };
         let e = &p.edit;
         if e.removed {
             if Some(i) != keep {
@@ -216,4 +219,23 @@ pub fn piece_removal(p: &Piece) -> Result<CastlePiece, String> {
     }
     let at = p.at.ok_or_else(|| format!("b:{}:{} was taken away already", p.layout, p.id))?;
     Ok(CastlePiece { edit: BuildingEdit { at, removed: true, ..Default::default() }, name: None })
+}
+
+/// Piece edits of hand castles that no longer find their building (the castle's gate moved or
+/// its yard was laid out anew): (the piece's building id or `keep of c:<n>`, castle id, why). The edits
+/// stay stored; they apply again if the layout comes back.
+pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String, &'static str)> {
+    let first = t0.settlements.len() + t0.base_pois;
+    let mut out = Vec::new();
+    for (k, c) in world.file.edits.created.iter().enumerate() {
+        if c.kind != "castle" || c.removed || c.pieces.is_empty() || first + k >= super::layout_count(t0) {
+            continue;
+        }
+        let l = super::layout(world, t0, first + k);
+        for key in &l.pieces_aside {
+            let id = if key == CastlePiece::KEEP { format!("keep of {}", c.id) } else { format!("b:{}:{key}", first + k) };
+            out.push((id, c.id.clone(), "the castle was laid out anew: no building of this piece stands where it was changed"));
+        }
+    }
+    out
 }

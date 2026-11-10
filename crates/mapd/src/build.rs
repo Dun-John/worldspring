@@ -111,7 +111,7 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
     let change = agent::BuildingChange { func: opt("func"), floors, poly: footprint(a)?, roof: opt("roof"), tint: opt("tint"), material: opt("material"), shape: opt("shape"), shade: shade_arg(a)?, structure: opt("structure") };
     let name = opt("name");
     // (R5 towns: a castle made by hand keeps its pieces' edits itself.)
-    if let Some(v) = crate::works::update_piece(app, &id, &change, name.as_deref()).await? {
+    if let Some(v) = crate::works::update_piece(app, &id, &change, name.as_deref(), a).await? {
         return Ok(v);
     }
     let id2 = id.clone();

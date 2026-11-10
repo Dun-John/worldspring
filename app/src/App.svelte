@@ -1832,6 +1832,21 @@
     return buildFuncs.businesses.find((b) => b.name.toLowerCase() === l)?.key ?? buildFuncs.homes.find((h) => h.name.toLowerCase() === l)?.key ?? 'house';
   }
 
+  /** Whether the castle piece selected has an edit (Restore is offered then only): asked of the
+   * generator, which knows which of the castle's pieces it is (the keep's key is not its id). */
+  let pieceChanged = $state({ id: '', has: false });
+  $effect(() => {
+    const sel = selection;
+    const id = sel?.kind === 'building' ? sel.hit.id : '';
+    const k = id ? castleOfPiece(id) : -1;
+    const own = id.split(':')[2];
+    if (k < 0) return void (pieceChanged = { id: '', has: false });
+    if (edits.created?.[k]?.pieces?.[own]) return void (pieceChanged = { id, has: true });
+    void pieceEdit(id).then((e) => {
+      if (selection === sel) pieceChanged = { id, has: !!e };
+    });
+  });
+
   /** A castle piece's edit so far (the generator knows which of the castle's pieces it is). */
   async function pieceEdit(id: string): Promise<BuildingEdit | undefined> {
     const r = await view.gen.buildingEdit(id, {});
@@ -1933,7 +1948,7 @@
         if (buildEditing === id) ((buildEditing = null), (genEditing = null));
         selection = null;
       },
-      onRestore: edits.buildings?.[id] || (castleOfPiece(id) >= 0 && edits.created?.[castleOfPiece(id)]?.pieces)
+      onRestore: (castleOfPiece(id) >= 0 ? pieceChanged.id === id && pieceChanged.has : !!edits.buildings?.[id])
         ? async () => {
             if (castleOfPiece(id) >= 0) {
               // (The castle's piece goes back as generated, its name too.)

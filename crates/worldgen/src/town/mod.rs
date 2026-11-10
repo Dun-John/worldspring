@@ -286,6 +286,8 @@ pub struct Layout {
     pub bbox: [f64; 4],
     /// A point-of-interest site (ruin, tower, roadside inn), not a settlement.
     pub site: bool,
+    /// A hand castle's piece edits that found no building here (`pieces::apply`): their keys.
+    pub pieces_aside: Vec<String>,
     /// Ways underground (see `under`).
     pub entrances: Vec<Entrance>,
     /// Bare packed earth levelled to a height (ft): a camp's clearing.
@@ -591,6 +593,7 @@ impl Layout {
             radius,
             tier,
             on_water: false,
+            pieces_aside: Vec::new(),
             walls: Vec::new(),
             towers: Vec::new(),
             gates: Vec::new(),

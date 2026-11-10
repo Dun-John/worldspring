@@ -215,6 +215,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         return found(app, id.to_string()).await;
     }
     let id = if creating { change["id"].as_str().unwrap_or_default().to_string() } else { cid };
+    let cid2 = id.clone();
     let mut v = app
         .worker
         .with(move |ex| {
@@ -227,6 +228,12 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
                     v["keep"] = json!(format!("b:{li}:{}", k.id));
                 }
                 v["buildings"] = json!(l.buildings.len());
+            }
+            if castle {
+                let aside = aside_of(ex, &cid2);
+                if !aside.is_empty() {
+                    v["pieces_set_aside"] = json!(aside);
+                }
             }
             Ok::<_, String>(v)
         })
@@ -266,6 +273,11 @@ fn keep_args(a: &Value, c: &mut Created) -> Result<(), String> {
     Ok(())
 }
 
+/// A castle's piece edits that find no building now, as the overview lists them (they stay stored).
+fn aside_of(ex: &worldgen::pipeline::Executor, castle: &str) -> Vec<Value> {
+    pieces::set_aside(&ex.world, &ex.t0).into_iter().filter(|(_, c, _)| c == castle).map(|(id, _, why)| json!({ "id": id, "why": why, "kept": true })).collect()
+}
+
 /// A castle piece's edit stored on its castle (`None`: as built), found by its `c:` id.
 async fn store_piece(app: &Shared, castle: String, key: String, piece: Option<CastlePiece>, tool: &'static str, id: String) -> Result<Value, String> {
     app.edit("agent", 0, move |e| {
@@ -282,7 +294,14 @@ async fn store_piece(app: &Shared, castle: String, key: String, piece: Option<Ca
 /// A castle piece read back after a change, with its castle.
 async fn piece_reply(app: &Shared, id: String, tool: &'static str, castle: (String, String)) -> Result<Value, String> {
     let id2 = id.clone();
-    let mut v = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id2).ok_or_else(|| "changed, but it could not be read back".to_string())).await?;
+    let c2 = castle.0.clone();
+    let (mut v, aside) = app
+        .worker
+        .with(move |ex| agent::get(&ex.world, &ex.t0, &id2).map(|v| (v, aside_of(ex, &c2))).ok_or_else(|| "changed, but it could not be read back".to_string()))
+        .await?;
+    if !aside.is_empty() {
+        v["pieces_set_aside"] = json!(aside);
+    }
     v["tool"] = json!(tool);
     v["id"] = json!(id);
     v["castle"] = json!({ "id": castle.0, "name": castle.1 });
@@ -291,12 +310,23 @@ async fn piece_reply(app: &Shared, id: String, tool: &'static str, castle: (Stri
 
 /// `update_building` on a piece of a castle made by hand (its keep or a yard building): `None`
 /// when `id` is not one. The edit is kept on the castle (by its `c:` id).
-pub async fn update_piece(app: &Shared, id: &str, change: &agent::BuildingChange, name: Option<&str>) -> Result<Option<Value>, String> {
+pub async fn update_piece(app: &Shared, id: &str, change: &agent::BuildingChange, name: Option<&str>, args: &Value) -> Result<Option<Value>, String> {
     let (id2, change, name) = (id.to_string(), change.clone(), name.map(str::to_string));
+    // (Asked for in words update_building has none for: answered, not skipped.)
+    let stray = if args["removed"].as_bool() == Some(true) {
+        Some(format!("{id} is a piece of a castle: update_building does not take it away (remove_buildings does, a yard building only; the keep goes with update_fortification keep: false)"))
+    } else if args.get("footprint").is_some() {
+        Some(format!("{id} is a piece of a castle: its footprint is the castle's (redraw the castle with update_fortification); update_building has no footprint argument"))
+    } else {
+        None
+    };
     let r = app
         .worker
         .with(move |ex| {
             let Some(p) = pieces::piece_of(&ex.world, &ex.t0, &id2) else { return Ok(None) };
+            if let Some(s) = stray {
+                return Err(s);
+            }
             let e = pieces::piece_edit(&ex.world, &p, &change, name.as_deref())?;
             Ok(Some((p.castle.clone(), p.castle_name.clone(), p.key.clone(), p.what(), e)))
         })

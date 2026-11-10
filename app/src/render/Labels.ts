@@ -655,9 +655,10 @@ export class Labels {
     }
   }
 
-  /** Drop the business pins of these buildings (changed or taken away: asked for again). */
-  forgetPlaces(ids: Iterable<string>) {
-    const gone = new Set(ids);
+  /** Drop the business pins of these buildings (changed or taken away: asked for again). One
+   * place's all, when `ids` is a prefix (`b:<layout>:`) given as a string. */
+  forgetPlaces(ids: Iterable<string> | string) {
+    const gone = new Set(typeof ids === 'string' ? [...this.placeHits.keys()].filter((id) => id.startsWith(ids)) : ids);
     let n = 0;
     for (let k = this.items.length - 1; k >= 0; k--) {
       const it = this.items[k];
