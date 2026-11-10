@@ -1329,7 +1329,7 @@ pub fn has_cellar(b: &town::Building) -> bool {
 /// stairs down to a keep's deep dungeons (in the middle of the far end). Which ones it should
 /// have (their names), put on the free floor of `lvl` (the deepest level below ground; fewer if
 /// there is none; none without a level).
-fn cellar_links(mut lvl: Option<&mut Level>, world: &World, t0: &T0, l: &Layout, b: &town::Building, sh: &Shell, stairs: [usize; 4]) -> Vec<&'static str> {
+fn cellar_links(mut lvl: Option<&mut Level>, world: &World, t0: &T0, l: &Layout, b: &town::Building, sh: &Shell, stairs: [usize; 4], designed: bool) -> Vec<&'static str> {
     let (nx, ny) = (sh.nx, sh.ny);
     let grid = |p: P| {
         let d = sub(p, sh.origin);
@@ -1353,7 +1353,7 @@ fn cellar_links(mut lvl: Option<&mut Level>, world: &World, t0: &T0, l: &Layout,
         let (item, name, wanted) = crate::sitelinks::way_down(c.under_kind().unwrap_or(crate::under::UnderKind::Dungeon), crate::sitelinks::trapdoor(c));
         want.push(wanted);
         if let Some(lvl) = lvl.as_deref_mut() {
-            crate::sitelinks::place_way(lvl, nx, ny, stairs, grid([c.x, c.y]), item, name, format!("u:{el}:0"));
+            crate::sitelinks::place_way(lvl, nx, ny, stairs, grid([c.x, c.y]), item, name, format!("u:{el}:0"), designed);
         }
     }
     want
@@ -2221,7 +2221,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             p.clear_tops(&mut lvl);
         }
         if z == -1 {
-            cellar_links(Some(&mut lvl), world, t0, l, b, &sh, stairs);
+            cellar_links(Some(&mut lvl), world, t0, l, b, &sh, stairs, false);
         }
         // (A guild's arms in its own look; a thieves' guild hangs none.)
         match arms_look(key) {

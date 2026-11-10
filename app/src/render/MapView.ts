@@ -825,6 +825,8 @@ export class MapView {
       if (first !== undefined && c.name?.trim()) ways[`u:${first + k}:0`] = c.name.trim();
     });
     InteriorLayer.ways = ways;
+    // (Inside, the labels hide the new set at once.)
+    this.labels?.setInside(this.interior ? this.inBuilding : null);
   }
 
   /** The names of the buildings a site's ways lead back up to (`b:` links), for its labels: a business pin's,
@@ -840,7 +842,8 @@ export class MapView {
           let host = this.peekCache.get(k.to);
           if (host === undefined) {
             host = await this.gen.interior(k.to);
-            this.peekCache.set(k.to, host);
+            // (Not a host that is gone: none is kept, so once it is restored its name is asked again.)
+            if (host) this.peekCache.set(k.to, host);
             if (this.peekCache.size > 64) this.peekCache.delete(this.peekCache.keys().next().value!);
           }
           name = host ? (host.name ?? `the ${host.function}`) : undefined;

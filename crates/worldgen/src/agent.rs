@@ -272,14 +272,47 @@ pub fn creation_spot_with(world: &World, t0: &T0, kind: &str, under: Option<&str
 }
 
 /// The nearest spot beyond the 400 ft `nearest_clear` covers where a site of `kind` may stand (rings 150 ft apart out to 1,500 ft, points 150 ft apart round
-/// each): the move from `p`.
+/// each): the move from `p`. What stands in the way (buildings, walls; all but an entrance also streets and squares) is gathered once with
+/// bounding boxes, so only the points clear of it go through the full check.
 fn farther_clear(world: &World, t0: &T0, kind: &str, p: P) -> Option<P> {
+    let reach = site_reach(kind) + 2.0;
+    let region = [p[0] - 1500.0 - reach, p[1] - 1500.0 - reach, p[0] + 1500.0 + reach, p[1] + 1500.0 + reach];
+    let near = |b: [f64; 4]| b[2] >= region[0] && b[0] <= region[2] && b[3] >= region[1] && b[1] <= region[3];
+    let free = kind == "entrance";
+    let mut areas: Vec<([f64; 4], Vec<P>)> = Vec::new();
+    let mut lines: Vec<([f64; 4], P, P, f64)> = Vec::new();
+    for l in town::layouts_near(world, t0, region) {
+        let plazas = l.plazas.iter().filter(|q| !free && q.kind != town::PlazaKind::Bailey).map(|q| &q.pts);
+        for pts in l.buildings.iter().map(|b| &b.poly).chain(plazas) {
+            let bb = bbox(pts);
+            if near(bb) {
+                areas.push((bb, pts.clone()));
+            }
+        }
+        let streets = l.roads.iter().filter(|_| !free).map(|(pts, _, w)| (pts, 0.5 * w));
+        for (pts, half) in streets.chain(l.walls.iter().map(|w| (w, 4.5))) {
+            for s in pts.windows(2) {
+                let b = bbox(s);
+                let bb = [b[0] - half, b[1] - half, b[2] + half, b[3] + half];
+                if near(bb) {
+                    lines.push((bb, s[0], s[1], half));
+                }
+            }
+        }
+    }
+    let hits = |a: [f64; 4], b: [f64; 4]| a[2] >= b[0] && a[0] <= b[2] && a[3] >= b[1] && a[1] <= b[3];
     let mut r = 450.0;
     while r <= 1500.0 {
         let n = ((std::f64::consts::TAU * r / 150.0) as usize).max(12);
         for k in 0..n {
             let a = std::f64::consts::TAU * k as f64 / n as f64;
             let q = [crate::core::round(p[0] + r * libm::cos(a)), crate::core::round(p[1] + r * libm::sin(a))];
+            let disc = inner_of(&geom::circle(q, site_reach(kind), 16));
+            let db = bbox(&disc);
+            let blocked = areas.iter().any(|(b, pts)| hits(*b, db) && polys_overlap(&disc, pts)) || lines.iter().any(|(b, s0, s1, half)| hits(*b, db) && poly_seg_dist(&disc, *s0, *s1) < *half);
+            if blocked {
+                continue;
+            }
             if let Ok((s, _)) = creation_spot_inner(world, t0, kind, None, "", q, Overlap::Refuse, false)
                 && geom::dist(s, q) < 1.0
             {

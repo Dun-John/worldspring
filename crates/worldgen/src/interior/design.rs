@@ -251,13 +251,13 @@ pub fn build(world: &World, d: &SiteDesign, t0: &T0, l: &Layout, settlement: usi
             let mut lvl = level_of(d, li, Some(&sh.inside), &mut sprites);
             lvl.elevation_ft = b.pad_ft + STOREY_FT * lvl.z as f32;
             if Some(li) == deepest {
-                want = cellar_links(Some(&mut lvl), world, t0, l, b, sh, stairs);
+                want = cellar_links(Some(&mut lvl), world, t0, l, b, sh, stairs, true);
             }
             lvl
         })
         .collect();
     if deepest.is_none() {
-        want = cellar_links(None, world, t0, l, b, sh, stairs);
+        want = cellar_links(None, world, t0, l, b, sh, stairs, true);
     }
     let it = Interior {
         id: format!("b:{}:{}", l.index, b.id),
@@ -505,7 +505,8 @@ pub fn room_for_way_down(world: &World, t0: &T0, id: &str) -> Result<(), String>
     }
     let Some(deep) = deepest_cellar(d) else { return Err("it has no cellar level".into()) };
     let st = stairs_of(d);
-    if super::place_link(&mut it.levels[deep], sh.nx, sh.ny, st, [0.0, 0.0], "link_down", "", String::new()) {
+    // (The same rule as the build: `place_way` on a hand design takes a free square, never one of its items.)
+    if crate::sitelinks::place_way(&mut it.levels[deep], sh.nx, sh.ny, st, [0.0, 0.0], "link_down", "", String::new(), true) {
         Ok(())
     } else {
         Err("it has no free square on the cellar level for it".into())

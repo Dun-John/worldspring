@@ -121,12 +121,16 @@ pub fn dress(world: &World, t0: &T0, layout: usize, it: &mut Interior) {
     }
 }
 
+/// Items `place_way` never takes away for a way: the ways and keys themselves, pictures and hangings.
+const KEPT: [&str; 13] = ["sprite", "trapdoor", "hoist_trapdoor", "link_down", "link_up", "exit", "up", "down", "ladder", "key", "spiral_stair", "tapestry", "banner"];
+
 /// Put the way down to a site (item `kind`, `name`, linked `to`) on cellar level `lvl` so it reads at a glance:
 /// on a free floor square whose eight neighbours are free floor of its room (the app draws it bigger than its
 /// square), the nearest to grid point `at`; else the square of the largest room with the most free neighbours,
 /// nearest its middle; else any free square nearest `at`; with none free, the nearest furniture that may move
-/// (no way, no picture) gives way. Off the stairs `st` and doorways. False only on a level with no floor.
-pub fn place_way(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64; 2], kind: &'static str, name: &'static str, to: String) -> bool {
+/// (`KEPT`, links and hazards stay) gives way. Off the stairs `st` and doorways. False only on a level with no floor
+/// off them; `designed` (a hand design): free squares only, false when there is none (its `check` then says so).
+pub fn place_way(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64; 2], kind: &'static str, name: &'static str, to: String, designed: bool) -> bool {
     let mut taken = vec![false; nx * ny];
     let mut stair = vec![false; nx * ny];
     for f in &lvl.furniture {
@@ -191,10 +195,12 @@ pub fn place_way(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64
     if best.is_none() {
         best = nearest(&mut (0..nx * ny).filter(|&k| free(&taken, k)), at);
     }
-    if best.is_none() {
-        // No free floor: the nearest furniture that may move gives way, the way on one of its squares.
+    if best.is_none() && !designed {
+        // No free floor: the nearest furniture that may move gives way, the way on one of its squares (never a way, a link, a hazard or a
+        // picture; a hand design's items never: `designed` stops at the free squares, `design::room_for_way_down` refuses up front).
         let linked = |f: &Item| lvl.links.iter().any(|l| l.x >= f.x && l.x < f.x + f.w && l.y >= f.y && l.y < f.y + f.h);
-        let mut order: Vec<usize> = (0..lvl.furniture.len()).filter(|&n| lvl.furniture[n].kind != "sprite" && !linked(&lvl.furniture[n])).collect();
+        let fixed = |f: &Item| linked(f) || f.hazard.is_some() || KEPT.contains(&f.kind);
+        let mut order: Vec<usize> = (0..lvl.furniture.len()).filter(|&n| !fixed(&lvl.furniture[n])).collect();
         let mid = |f: &Item| [f.x as f64 + f.w as f64 * 0.5 - 0.5, f.y as f64 + f.h as f64 * 0.5 - 0.5];
         order.sort_by(|&a, &b| {
             let (pa, pb) = (mid(&lvl.furniture[a]), mid(&lvl.furniture[b]));
@@ -211,9 +217,9 @@ pub fn place_way(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64
             }
         }
     }
-    // (Last: any floor off the stairs, a doorway's square if it must.)
-    if best.is_none() {
-        best = nearest(&mut (0..nx * ny).filter(|&k| floor(k) && !stair[k]), at).or_else(|| nearest(&mut (0..nx * ny).filter(|&k| floor(k)), at));
+    // (Last: any floor off the stairs and doorways.)
+    if best.is_none() && !designed {
+        best = nearest(&mut (0..nx * ny).filter(|&k| floor(k) && !stair[k] && !door[k]), at);
     }
     let Some(k) = best else { return false };
     let (x, y) = ((k % nx) as u16, (k / nx) as u16);

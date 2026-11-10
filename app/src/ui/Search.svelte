@@ -6,7 +6,7 @@
   // here" keep to the view or round its middle; while underground sites are listed, kind and
   // depth chips narrow them. ↑/↓ move through the results, Enter opens one; Tab reaches the chips.
   import type { Npc, Overlay, PlaceInfo, Plot } from '../gen/protocol';
-  import { hitName, kindIcon, kindLabel, listedName, removedKind, searchFeatures, UNDER_DEPTHS, UNDER_KINDS, underIcon, underTarget, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection, type UnderAttached, type UnderHit, type UnderResult } from './gazetteer';
+  import { hitName, kindIcon, kindLabel, listedName, removedKind, searchFeatures, SETTLEMENT_KINDS, UNDER_DEPTHS, UNDER_KINDS, underIcon, underTarget, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection, type UnderAttached, type UnderHit, type UnderResult } from './gazetteer';
   import { roleOf, parseLoc, type Token } from '../play/state';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
@@ -279,7 +279,26 @@
       .filter((k) => count[k])
       .map((k) => `${count[k]} ${k === 'npc' ? 'NPC' : k}${count[k] === 1 ? '' : 's'}`)
       .join(', ');
-    return [p.what, p.kind, p.theme, p.levels, p.where, region, far, h.hidden ? 'hidden' : '', attached].filter(Boolean).join(' · ');
+    // (Where it is always said, the nearest settlement if nothing else; first when another listed site has its title, so a clipped line keeps it.)
+    const at = [p.where, region].filter(Boolean).join(' · ') || town || settledNear(h.x_ft, h.y_ft);
+    const first = sameTitle(h) ? [at] : [];
+    return [...first, p.what, p.kind, p.theme, p.levels, first.length ? '' : at, far, h.hidden ? 'hidden' : '', attached].filter(Boolean).join(' · ');
+  }
+
+  /** Whether another listed underground site has `h`'s title. */
+  function sameTitle(h: UnderHit): boolean {
+    const t = underTitle(h).toLowerCase();
+    return underShown.slice(0, UNDER_MAX).some((g) => g.id !== h.id && underTitle(g).toLowerCase() === t);
+  }
+
+  /** The settlement nearest a point within 3 mi, as "near …"; else "in the wilds". */
+  function settledNear(x: number, y: number): string {
+    let [best, bestD] = ['', 3 * 5280];
+    for (const g of overlay.features) {
+      const d = SETTLEMENT_KINDS.includes(g.kind) ? Math.hypot(g.x - x, g.y - y) : Infinity;
+      if (d < bestD) [best, bestD] = [renames[g.id] ?? g.name, d];
+    }
+    return best ? `near ${best}` : 'in the wilds';
   }
 
   /** Whether the query matched something attached to a site (or the level or room it is on): only
