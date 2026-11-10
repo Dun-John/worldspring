@@ -1,6 +1,6 @@
 #version 300 es
 // Sea lane: a ribbon along the lane's line, its corners mitred on the CPU (world-space unit
-// normals scaled by the mitre), widened here to a screen-pixel width by class.
+// normals scaled by the mitre), widened here to a screen-pixel size by class (dots are drawn in the fragment shader).
 
 in vec2 aP;    // point (ft from the layer's origin)
 in vec2 aN;    // mitred normal (ft-free: unit length times the mitre factor, side included)
@@ -24,9 +24,9 @@ void main() {
     float k = length(aN);
     vec2 n = nl > 1e-12 ? nt / nl * k : vec2(0.0);
     float cls = aInfo.z;
-    // Half widths (px): busy 1.0, normal 0.7, quiet 0.5, ferry (3) 0.7.
-    float hw = (cls < 0.5 ? 1.0 : (cls < 1.5 ? 0.7 : (cls < 2.5 ? 0.5 : 0.7))) * uWidth;
-    float pad = hw + 1.0;
+    // Dot radii (px): busy 1.9, normal 1.5, quiet 1.25, ferry (3) 1.5; the pad holds the disc and its rim.
+    float hw = (cls < 0.5 ? 1.9 : (cls < 1.5 ? 1.5 : (cls < 2.5 ? 1.25 : 1.5))) * uWidth;
+    float pad = hw + 1.5;
     vLat = aInfo.x * pad;
     vS = aInfo.y;
     vHalf = hw;

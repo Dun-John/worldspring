@@ -1,7 +1,8 @@
 #version 300 es
-// Sea lane: thin dashed ink. The dashes are measured in feet along the line, their length a
-// power of two in feet blended with the next one up, so they keep their place while panning and
-// grow or part smoothly while zooming (a screen-pixel dash would slide along the line).
+// Sea lane: a dotted line of round pale dots with a thin soft sea-blue rim. The dots are spaced
+// in feet along the line, the spacing a power of two in feet blended with the next one up, so
+// they keep their place while panning and part or fill in smoothly while zooming (a screen-pixel
+// spacing would slide along the line).
 
 in float vLat;
 in float vS;
@@ -13,22 +14,34 @@ uniform float uPpf;
 uniform float uAlpha;
 uniform float uPeriodPx;
 uniform vec3 uInk;
+uniform vec3 uRim;
 
-const float ON = 0.7;
+const float RIM_W = 0.8;     // rim width (px)
+const float RIM_A = 0.65;    // rim strength
 
-float dash(float s, float period) {
+// Coverage of the disc (outer radius vHalf) of the dot nearest along the line.
+float dotAt(float s, float period) {
     float pPx = period * uPpf;
-    float x = fract(s / period) * pPx;
-    return clamp(min(x, ON * pPx - x) + 0.5, 0.0, 1.0);
+    float x = (fract(s / period + 0.5) - 0.5) * pPx;
+    float d = length(vec2(x, vLat));
+    float outer = clamp(vHalf + 0.5 - d, 0.0, 1.0);
+    float fill = clamp(vHalf - RIM_W + 0.5 - d, 0.0, 1.0);
+    return outer * mix(RIM_A, 1.0, fill);
 }
 
 void main() {
-    float cover = clamp(vHalf + 0.5 - abs(vLat), 0.0, 1.0);
     float u = log2(uPeriodPx / uPpf);
     float k = floor(u);
     float p0 = exp2(k);
-    float on = mix(dash(vS, p0), dash(vS, 2.0 * p0), smoothstep(0.0, 1.0, u - k));
-    float a = cover * on * uAlpha;
+    float t = smoothstep(0.0, 1.0, u - k);
+    // The fill share (for the colour) comes from the same blend.
+    float x0 = (fract(vS / p0 + 0.5) - 0.5) * p0 * uPpf;
+    float x1 = (fract(vS / (2.0 * p0) + 0.5) - 0.5) * 2.0 * p0 * uPpf;
+    float x = abs(mix(x0, x1, t));
+    float d = length(vec2(x, vLat));
+    float fill = clamp(vHalf - RIM_W + 0.5 - d, 0.0, 1.0);
+    float a = mix(dotAt(vS, p0), dotAt(vS, 2.0 * p0), t) * uAlpha;
     if (a <= 0.002) discard;
-    finalColor = vec4(uInk * a, a);
+    vec3 col = mix(uRim, uInk, fill);
+    finalColor = vec4(col * a, a);
 }

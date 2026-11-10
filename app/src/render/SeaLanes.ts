@@ -1,5 +1,5 @@
-// Sea lanes between ports (the overlay's `sea_lanes`): thin dashed ink over the sea, one mesh
-// built once per world. Shown from the continent to region zoom, faded out before the towns'
+// Sea lanes between ports (the overlay's `sea_lanes`): a dotted line of pale round dots over the sea,
+// one mesh built once per world. Shown from the continent to region zoom, faded out before the towns'
 // plans appear (`fadeLevels`).
 import { Container, Geometry, GlProgram, Mesh, Shader, UniformGroup } from 'pixi.js';
 import type { SeaLane } from '../gen/protocol';
@@ -7,19 +7,21 @@ import type { Camera } from './camera';
 import fragment from './shaders/sealane.frag?raw';
 import vertex from './shaders/sealane.vert?raw';
 
-/** Ink: the roads' sepia, a touch lighter, reads on the sea without shouting. */
-const INK = [0.34, 0.23, 0.17];
+/** Dot fill: cream-white with a hint of sea blue, so it reads on deep water and pale shallows. */
+const INK = [0.95, 0.96, 0.93];
+/** The dots' thin soft rim: a dark sea blue. */
+const RIM = [0.18, 0.3, 0.38];
 /** The ink's strength at full show. */
 const STRENGTH = 0.9;
 /** The ink's strength at the whole map (eased in with the widening, so it reads less like a border). */
 const STRENGTH_FAR = 0.8;
-/** Widths (and the dash cycle) grow as the view zooms out: x1 from tile level `WIDEN_FROM` (region
+/** Widths (and the dot spacing) grow as the view zooms out: x1 from tile level `WIDEN_FROM` (region
  * zoom) in, `WIDEN_MAX` at `WIDEN_TO` (the whole map). */
 const WIDEN_FROM = 7.7;
 const WIDEN_TO = 4.5;
 const WIDEN_MAX = 1.25;
-/** A dash and its gap on screen (px), about 7:3. */
-const PERIOD_PX = 13;
+/** Dot spacing on screen (px), about 3x the dot diameter. */
+const PERIOD_PX = 10;
 /** Mitres are cut at this factor (a sharp turn's outer corner). */
 const MITRE_MAX = 2.5;
 
@@ -37,6 +39,7 @@ export class SeaLanes {
     uPeriodPx: { value: PERIOD_PX, type: 'f32' },
     uWidth: { value: 1, type: 'f32' },
     uInk: { value: new Float32Array(INK), type: 'vec3<f32>' },
+    uRim: { value: new Float32Array(RIM), type: 'vec3<f32>' },
   });
   private mesh: Mesh<Geometry, Shader> | null = null;
   /** Where the vertices are measured from (ft): f32 keeps its precision near it. */
