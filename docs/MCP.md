@@ -1288,8 +1288,9 @@ can't be set there, or why the one set isn't built, `park` for a park's patch: `
 patch built on as a common ward's, too small once its streets were cut), `corners` (`corner`, `at`,
 `planned` when moved, `pinned`, `gate`, `wall`, `junction` where a square can open, `square_refused` where streets
 meet but none can (a close's corner), `square` and `square_ft` (how far out from the corner its chords are cut,
-on average) for the one there, `square_generated` when set by hand: a kind or `none`), `max_move_ft`, `walls`
-(`built`, `generated`), `edited`, `set_aside`.
+on average) for the one there, `square_generated` when set by hand: a kind or `none`), `districts` (`id`, `name`,
+`kind`, `patches`; `by_hand` for one made by hand, `changed` when its patches or their wards were changed by hand),
+`max_move_ft`, `walls` (`built`, `generated`), `edited`, `set_aside`.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -1305,7 +1306,10 @@ Change a town's layout. Every field is optional; they apply in this order: `rese
 `relax`, `patches`, `squares`, `walls`. The reply: `corners` (`asked`, `moved` all the way, `part_way`, `stayed`,
 and the ones that fell `short`), `buildings` (`before`, `after`, `added`, `taken_away`), `walls` (`built`, `towers`,
 `gates`), `squares` (the kinds of its open spaces, quays aside), `parks` (how each is laid out), `functions_lost`, `unmerged` (merges dropped because
-a ward no longer allows them), `rects` (where the map is drawn again). A square set by hand where the wards no
+a ward no longer allows them), `districts_changed` (`patch`, `from`, `to`: district ids), `renames_carried` (`from`,
+`to`, `name`: a building renamed or noted that the change took away hands its name and note to the new building on
+its patch with the same function, a castle's to the new keep), `renames_lost` (`id`, `name`: those with none; the
+rename stays on the old id), `rects` (where the map is drawn again). A square set by hand where the wards no
 longer leave three streets goes with the change that took them. `added` and `taken_away` count buildings by id
 and footprint (a patch laid out again keeps reusing its new buildings' ids). A square set or taken away changes only
 the lots at its corner: they are trimmed back to it, or come back whole.
@@ -1316,7 +1320,7 @@ the lots at its corner: they are trimmed back to it, or come back whole.
 | `moves` | `[{corner, to \| by \| as_generated}]` | | `to: [x_ft, y_ft]`, or `by: [dx_ft, dy_ft]` from where it stands now; `as_generated` puts it back |
 | `equalize` | `[patch]` | | Pull each patch toward a regular polygon (its corners move) |
 | `relax` | `{at, radius_ft, amount}` | | Each corner within `radius_ft` of `at` toward the middle of its neighbours, by `amount` (0–1, default 0.5) at the centre, less toward the edge |
-| `patches` | `[{patch, ward, lots, merge_with, reroll, close, park, as_generated}]` | | `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `park`: `formal` or `common`, a park's patch only; `"auto"` puts a field back |
+| `patches` | `[{patch, ward, lots, merge_with, reroll, close, park, district, as_generated}]` | | `district`: a district's id (`d:<layout>:<n>`: any patch to any district, apart or not), a name (the district of that name now, any case, else a new district so named: new ones follow the generated ones, so every district keeps its id; one emptied keeps its id with no patches or label) or `"auto"`; a district whose patches change takes its kind from its wards by area (the centre stays the centre) and its label at its largest piece; `rename_feature` renames one; `ward`: plaza, castle, temple, merchant, craft, noble, common, slum, docks, military, farm, park, empty; `lots`: small, medium, large, huge; `merge_with`: a neighbouring patch or `"none"`; `reroll: true` rolls it again; `close`: a close round a temple's patch's temple (`true`) or none (`false`); `park`: `formal` or `common`, a park's patch only; `"auto"` puts a field back |
 | `squares` | `[{corner, kind}]` | | `kind`: crossroads, well, fountain, green, `"none"` (no square there) or `"auto"` (as generated); a square opens only at a `junction` |
 | `walls` | `true` \| `false` \| `"auto"` | | Walls up, down, or as generated |
 | `reset` | `"all"` \| `"corners"` \| `"patches"` \| `"squares"` | | Back to as generated |
