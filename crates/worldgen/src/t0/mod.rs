@@ -1005,6 +1005,7 @@ impl T0 {
         let cache = crate::lod::rivers::CrossingCache::default();
         let mut out = Vec::new();
         for r in &self.roads.roads {
+            let first = out.len();
             // The places along the road that meet the water, with the road's direction there.
             let mut hits: Vec<([f64; 2], f64, [f64; 2])> = Vec::new();
             for pair in r.pts.windows(2) {
@@ -1023,6 +1024,17 @@ impl T0 {
                 }
                 let (p, _, d) = hits[(k + e - 1) / 2];
                 let w = hits[k..e].iter().fold(0.0f64, |a, h| a.max(h.1));
+                // The road runs along the river (a shallow angle: its wet stretch is long for the river's
+                // width), or the last mark on this road is close: none, rather than a smudge.
+                let run = (hits[e - 1].0[0] - hits[k].0[0]).abs() + (hits[e - 1].0[1] - hits[k].0[1]).abs() + 40.0;
+                let near = out.len() > first && {
+                    let l: &[f64; 7] = &out[out.len() - 1];
+                    (l[0] - p[0]).abs() + (l[1] - p[1]).abs() < 400.0
+                };
+                if run > 2.8 * w + 200.0 || near {
+                    k = e;
+                    continue;
+                }
                 out.push([p[0], p[1], d[0], d[1], r.class as u8 as f64, roads::crossing_kind(r.class, w) as u8 as f64, w]);
                 k = e;
             }

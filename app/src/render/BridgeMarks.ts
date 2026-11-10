@@ -10,9 +10,10 @@ export type BridgeRow = number[];
 
 const INK = 0x5c3824;
 const INK_TRACK = 0x80603d;
-/** Half length of a bracket (px) by road class: king's road, road, track. */
-const HALF = [8.5, 7, 5.5];
-const BULGE = 2.4;
+/** Half width of the deck (px) by road class: king's road, road, track. */
+const HALF = [5, 4.2, 3.4];
+const MIN_LEN = 20;
+const PAPER = 0xe8d8b0;
 const KIND_BRIDGE = 0;
 /** Gone again toward the whole map (ft per px), where a mark would be a speck. */
 const FAR_FROM = 250;
@@ -71,17 +72,27 @@ export class BridgeMarks {
       const a = near * roadShown(cls, ftpx);
       if (a < 0.02) continue;
       const [sx, sy] = cam.worldToScreen(x, y);
-      const half = HALF[Math.min(2, cls)];
-      const gap = Math.max(6, 0.5 * w * cam.ppf + 3);
+      // A small bridge: the deck along the road across the river, a little wider than the road,
+      // with a light rail either side and a short post at each end.
+      const hw = HALF[Math.min(2, cls)];
+      const len = Math.max(MIN_LEN, w * cam.ppf + 8) * 0.5;
       const [nx, ny] = [-dy, dx];
+      const ink = cls > 1.5 ? INK_TRACK : INK;
       for (const s of [-1, 1]) {
-        const cx = sx + dx * gap * s;
-        const cy = sy + dy * gap * s;
-        g.moveTo(cx + nx * half, cy + ny * half);
-        // Bows toward the river: `)` before it, `(` after.
-        g.quadraticCurveTo(cx - dx * s * BULGE * 2, cy - dy * s * BULGE * 2, cx - nx * half, cy - ny * half);
+        g.moveTo(sx - dx * len + nx * hw * s, sy - dy * len + ny * hw * s);
+        g.lineTo(sx + dx * len + nx * hw * s, sy + dy * len + ny * hw * s);
+        g.moveTo(sx - dx * len + nx * hw * s, sy - dy * len + ny * hw * s);
+        g.lineTo(sx - dx * len + nx * hw * (s - 0.5), sy - dy * len + ny * hw * (s - 0.5));
+        g.moveTo(sx + dx * len + nx * hw * s, sy + dy * len + ny * hw * s);
+        g.lineTo(sx + dx * len + nx * hw * (s - 0.5), sy + dy * len + ny * hw * (s - 0.5));
       }
-      g.stroke({ width: cls > 1.5 ? 1.3 : 1.9, color: cls > 1.5 ? INK_TRACK : INK, alpha: a * 0.9, cap: 'round' });
+      g.stroke({ width: 1, color: ink, alpha: a * 0.7, cap: 'round' });
+      g.moveTo(sx - dx * len, sy - dy * len);
+      g.lineTo(sx + dx * len, sy + dy * len);
+      g.stroke({ width: hw * 1.5, color: PAPER, alpha: a * 0.85, cap: 'butt' });
+      g.moveTo(sx - dx * len, sy - dy * len);
+      g.lineTo(sx + dx * len, sy + dy * len);
+      g.stroke({ width: cls > 1.5 ? 1.4 : 2, color: ink, alpha: a * 0.9, cap: 'butt' });
       this.drawn++;
     }
   }

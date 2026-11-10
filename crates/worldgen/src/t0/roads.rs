@@ -1805,13 +1805,19 @@ fn meander_spur(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, seed: u64, scale
             continue;
         }
         // (Not at a corner of the route: the sideways push would fold it.)
-        let (a, m, b) = (rp[i.saturating_sub(20)], rp[i], rp[(i + 20).min(n - 1)]);
-        let (ux, uy, vx, vy) = (m[0] - a[0], m[1] - a[1], b[0] - m[0], b[1] - m[1]);
-        let cos = (ux * vx + uy * vy) / (crate::core::sqrt(ux * ux + uy * uy) * crate::core::sqrt(vx * vx + vy * vy)).max(1e-9);
+        // Looked at over a few lengths, so a turn just past the nearest one still holds it back.
+        let m = rp[i];
+        let mut cos = 1.0f64;
+        for w in [20usize, 40, 70] {
+            let (a, b) = (rp[i.saturating_sub(w)], rp[(i + w).min(n - 1)]);
+            let (ux, uy, vx, vy) = (m[0] - a[0], m[1] - a[1], b[0] - m[0], b[1] - m[1]);
+            cos = cos.min((ux * vx + uy * vy) / (crate::core::sqrt(ux * ux + uy * uy) * crate::core::sqrt(vx * vx + vy * vy)).max(1e-9));
+        }
         let ease = ease * smoothstep(0.9, 0.99, cos);
         if ease <= 0.0 {
             continue;
         }
+        let (a, b) = (rp[i.saturating_sub(20)], rp[(i + 20).min(n - 1)]);
         let (tx, ty) = (b[0] - a[0], b[1] - a[1]);
         let tl = crate::core::sqrt(tx * tx + ty * ty).max(1e-9);
         let off = ease * size * scale * 0.6 * gradient2(seed, s[i] / 2.5, 0.37);
@@ -1820,6 +1826,19 @@ fn meander_spur(pts: &mut Vec<[f64; 2]>, wander: &mut Vec<f32>, seed: u64, scale
             if dry(crate::core::round(q[0]) as i64, crate::core::round(q[1]) as i64) {
                 out[i] = q;
                 break;
+            }
+        }
+    }
+    // Two light passes over the swayed stretches (1-2-1), so no step or corner is sharper than the road's.
+    for _ in 0..2 {
+        let prev = out.clone();
+        for i in 1..n - 1 {
+            if prev[i] == rp[i] && prev[i - 1] == rp[i - 1] && prev[i + 1] == rp[i + 1] {
+                continue;
+            }
+            let q = [0.25 * prev[i - 1][0] + 0.5 * prev[i][0] + 0.25 * prev[i + 1][0], 0.25 * prev[i - 1][1] + 0.5 * prev[i][1] + 0.25 * prev[i + 1][1]];
+            if dry(crate::core::round(q[0]) as i64, crate::core::round(q[1]) as i64) {
+                out[i] = q;
             }
         }
     }
