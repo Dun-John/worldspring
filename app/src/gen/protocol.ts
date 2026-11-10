@@ -348,6 +348,8 @@ export interface TownCorner {
   gate_removed?: boolean;
   /** On the town's wall, and its neighbours along it (null at an open wall's end). */
   wall?: boolean;
+  /** The generated tower standing at this corner was taken down by hand. */
+  tower_removed?: boolean;
   wall_next?: [number | null, number | null];
   /** Streets meet here: a square can open. */
   junction?: boolean;

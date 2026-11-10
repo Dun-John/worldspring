@@ -467,10 +467,6 @@ export class TownTool implements PointerTool {
     // The patch picked, outlined; the corner picked, ringed (as wide as its square).
     const picked = sel !== null ? this.faces.get(sel) : undefined;
     if (picked) g.poly(picked.map((v) => this.at(v)).flatMap(scr)).stroke({ width: 3, color: 0xfde047 });
-    if (selCorner !== null && this.pos.has(selCorner)) {
-      const [sx, sy] = scr(this.at(selCorner));
-      g.circle(sx, sy, Math.max(8, (this.squares.get(selCorner)?.r ?? 0) * ppf)).stroke({ width: 3, color: 0xfde047 });
-    }
     // Corners, once patches are big enough to tell them apart: movable ones round, those
     // moved by hand orange, those on the water locked (a grey square).
     if (plan.max_move_ft * ppf >= 40) {
@@ -500,6 +496,11 @@ export class TownTool implements PointerTool {
           else g.fill({ color: this.gateHand.has(v) ? 0x38bdf8 : 0xfafaf9, alpha: 0.35 }).stroke({ width: 2, color: this.gateHand.has(v) ? 0x0369a1 : 0x1c1917 });
         }
       }
+    }
+    // (Drawn after the corners so the gate marks show inside it.)
+    if (selCorner !== null && this.pos.has(selCorner)) {
+      const [sx, sy] = scr(this.at(selCorner));
+      g.circle(sx, sy, Math.max(8, (this.squares.get(selCorner)?.r ?? 0) * ppf)).stroke({ width: 3, color: 0xfde047 });
     }
     // Dragging one corner: how far it may go from where it was planned.
     if (this.drag?.kind === 'corner') {

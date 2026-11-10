@@ -81,11 +81,13 @@
   // The wall at the picked corner (R5 towns, M18c): a gate, towers, and the hand towers touching it.
   const byHand = $derived(plan?.walls.by_hand);
   const onWall = $derived(!!corner?.wall && !!plan?.walls.built);
+  // Map north is up, and world y grows southward (as drawn).
+  const compass = (dx: number, dy: number) => ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'][((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) % 8) + 8) % 8];
   const sides = $derived.by(() => {
     if (!plan || !corner?.wall_next) return [];
     return corner.wall_next.flatMap((w) => {
       const o = w === null ? undefined : plan.corners.find((c) => c.corner === w);
-      return o ? [{ corner: o.corner, ft: Math.hypot(o.at[0] - corner.at[0], o.at[1] - corner.at[1]) }] : [];
+      return o ? [{ corner: o.corner, dir: compass(o.at[0] - corner.at[0], o.at[1] - corner.at[1]), ft: Math.hypot(o.at[0] - corner.at[0], o.at[1] - corner.at[1]) }] : [];
     });
   });
   const handTowers = $derived(byHand && corner ? byHand.towers_added.filter((t) => t.corners.includes(corner.corner)) : []);
@@ -255,7 +257,7 @@
               <button class="ws-btn" disabled={busy} onclick={() => onChange({ squares: [{ corner: corner.corner, kind: 'auto' }] }, 'square')}><Icon name="reset" size={16} /> As generated</button>
             </div>
           {/if}
-        {:else}
+        {:else if !onWall}
           <div class="ws-hint">No square opens here: {corner.square_refused ?? 'it needs three streets or more meeting between built-up patches, inside the walls and off the water'}.</div>
         {/if}
         {#if onWall}
@@ -266,14 +268,15 @@
             {:else}
               <button class="ws-btn" disabled={busy} onclick={() => walls({ gates_add: [corner.corner] }, 'gate')}>Gate here</button>
             {/if}
-            <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_remove: [corner.corner] }, 'tower')}>Remove tower</button>
-            {#if byHand?.towers_removed.some((t) => Number(t.split(':')[2]) < 1000000 || Number(t.split(':')[2]) >= 3000000)}
+            {#if !corner.tower_removed}
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_remove: [corner.corner] }, 'tower')}>Remove tower</button>
+            {:else}
               <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_add: [corner.corner] }, 'tower')}>Tower back</button>
             {/if}
           </div>
           <div class="row">
             {#each sides as s (s.corner)}
-              <button class="ws-btn" disabled={busy} title="A tower midway along the wall to corner {s.corner}" onclick={() => walls({ towers_add: [[corner.corner, s.corner, 0.5]] }, 'tower')}>Tower toward {s.corner} ({ft(s.ft)})</button>
+              <button class="ws-btn" disabled={busy} title="A tower midway along the wall to corner {s.corner}" onclick={() => walls({ towers_add: [[corner.corner, s.corner, 0.5]] }, 'tower')}>Tower to the {s.dir}, {ft(s.ft)}</button>
             {/each}
           </div>
           {#each handTowers as t (t.id)}
