@@ -140,7 +140,22 @@ export interface Created {
   gates?: number[];
   closed?: boolean;
   removed?: boolean;
+  /** A castle's pieces changed by hand (`worldgen::world::CastlePiece`), by `keep` or a yard
+   * building's number (`b:<layout>:<number>`). */
+  pieces?: Record<string, CastlePiece>;
 }
+
+/** One of a castle's pieces changed by hand: a building's edit (`at` its middle as built; no
+ * footprint) and its name. */
+/** The answer of `bedit` for a castle's piece: its castle's `c:` id, its key in `pieces`, the
+ * keep or not, and its edit as it is then (null: as generated). */
+export interface PieceEdit {
+  castle: string;
+  key: string;
+  keep: boolean;
+  edit: CastlePiece | null;
+}
+export type CastlePiece = Omit<BuildingEdit, 'poly'> & { name?: string };
 
 /** Widest a castle may be and narrowest (ft), longest a wall (`worldgen::world`), how far past
  * its outline a castle's or wall's layout reaches (`WORKS_MARGIN_FT`). */

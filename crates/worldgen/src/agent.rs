@@ -494,6 +494,23 @@ pub fn building_edit(world: &World, t0: &T0, id: &str, change: &BuildingChange) 
 /// as generated) or `{error}`.
 pub fn building_edit_json(world: &World, t0: &T0, id: &str, change_json: &str) -> String {
     let v: Value = serde_json::from_str(change_json).unwrap_or_default();
+    // (R5 towns) A piece of a castle made by hand: its edit is kept on the castle, by `key`
+    // (`{}` as the change just names the piece).
+    if generated_building(t0, id).is_none()
+        && let Some(p) = town::pieces::piece_of(world, t0, id)
+    {
+        let r = if v["remove"].as_bool() == Some(true) {
+            town::pieces::piece_removal(&p).map(Some)
+        } else {
+            let name = v["name"].as_str().map(str::to_string);
+            serde_json::from_value::<BuildingChange>(v).map_err(|e| e.to_string()).and_then(|c| town::pieces::piece_edit(world, &p, &c, name.as_deref()))
+        };
+        return match r {
+            Ok(e) => json!({ "piece": { "castle": p.castle, "key": p.key, "keep": p.keep(), "edit": e } }),
+            Err(e) => json!({ "error": e }),
+        }
+        .to_string();
+    }
     let r = if v["remove"].as_bool() == Some(true) {
         building_removal(world, t0, id).map(Some)
     } else {
