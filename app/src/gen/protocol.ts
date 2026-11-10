@@ -854,6 +854,12 @@ const STONE_TONE: [number, number, number][] = [
   [0.8, 0.72, 0.56],
 ];
 
+/** A tone a third of the way to its own grey (a bastion's broad fill, beside its wall's narrow core). */
+const calm = ([r, g, b]: [number, number, number]): [number, number, number] => {
+  const y = 0.3 * r + 0.59 * g + 0.11 * b;
+  return [r + (y - r) * 0.35, g + (y - g) * 0.35, b + (y - b) * 0.35];
+};
+
 // Fill colours by ward (buildings), then plaza, field, block. Watabou-ish muted browns.
 const WARD_RGB: [number, number, number][] = [
   [0.62, 0.56, 0.5], // plaza (unused for buildings)
@@ -1019,8 +1025,9 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // (hedged beds), trees' crowns and flowerbeds.
       else if (kind === 11) rgb = [0.42, 0.6, 0.64];
       // A town wall's bastion (`payload.rs` kind 32): a stone platform, outlined (its faces are the town
-      // wall's lines).
-      else if (kind === 32) rgb = ward ? STONE_TONE[Math.min(ward - 1, STONE_TONE.length - 1)] : [0.76, 0.73, 0.65];
+      // wall's lines), in its wall's stone calmed toward grey: a broad fill reads louder than the curtain's
+      // narrow core in the same tone.
+      else if (kind === 32) rgb = ward ? calm(STONE_TONE[Math.min(ward - 1, STONE_TONE.length - 1)]) : [0.76, 0.73, 0.65];
       else if (kind === 12) rgb = [0.85, 0.81, 0.69];
       else if (kind === 13) {
         rgb = [0.42, 0.55, 0.33];
