@@ -261,7 +261,7 @@ pub struct DistrictLabel {
 }
 
 pub fn districts_json(world: &World, t0: &T0, settlement: usize) -> String {
-    if settlement >= t0.settlements.len() {
+    if !town::is_settlement(t0, settlement) {
         return "[]".into();
     }
     let l = town::layout(world, t0, settlement);

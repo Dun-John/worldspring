@@ -231,6 +231,8 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
                 wall_site(world, t0, c, center, &mut works);
             }
         }
+        // (Laid out as a settlement, `town::generate`; never here.)
+        PoiKind::Settlement => {}
         PoiKind::Building => {
             // Drawn by hand: one building, as the world file has it.
             if let Some(c) = created {

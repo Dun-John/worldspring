@@ -208,7 +208,7 @@ fn built_parks(l: &Layout, mesh: &Mesh, center: P) -> BTreeMap<usize, ParkKind> 
 /// Whether the town as generated has a temple on patch `p` (its middle on the patch as planned).
 fn has_temple(world: &World, t0: &T0, plan: &TownPlan, index: usize, p: usize) -> bool {
     let Some(fi) = catalog::index_of("temple") else { return false };
-    let s = &t0.settlements[index];
+    let Some(s) = super::settlement(t0, index) else { return false };
     let face: Vec<P> = plan.mesh.face_pts(p).iter().map(|q| add(*q, [s.x, s.y])).collect();
     super::generated_layout(world, t0, index).buildings.iter().any(|b| b.func == Some(fi as u16) && contains(&face, centroid(&b.poly)))
 }
@@ -389,7 +389,7 @@ pub fn edit_of<'a>(world: &'a World, t0: &T0, index: usize) -> Option<&'a TownEd
     if world.file.edits.towns.is_empty() {
         return None;
     }
-    let s = t0.settlements.get(index).filter(|s| s.tier >= Tier::Town)?;
+    let s = super::settlement(t0, index).filter(|s| s.tier >= Tier::Town)?;
     let e = world.file.edits.towns.get(&key(index))?;
     (!e.is_noop() && dist(e.at, [s.x, s.y]) <= TownEdit::SAME_AT_FT).then_some(e)
 }
@@ -880,7 +880,7 @@ fn round1(p: P) -> [f64; 2] {
 
 /// The town of layout `index` and its plan, or why it has none.
 fn town_of<'a>(t0: &'a T0, world: &World, index: usize) -> Result<(&'a crate::t0::settle::Settlement, Rc<TownPlan>), String> {
-    let s = t0.settlements.get(index).ok_or("not a settlement")?;
+    let s = super::settlement(t0, index).ok_or("not a settlement")?;
     if s.tier < Tier::Town {
         return Err("a village has no wards: it grows along its roads".into());
     }
@@ -1479,12 +1479,12 @@ pub fn change_json(world: &World, t0: &T0, index: usize, req: &str) -> String {
 pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (k, e) in &world.file.edits.towns {
-        let Some(index) = k.parse::<usize>().ok().filter(|&i| i < t0.settlements.len()) else {
+        let Some(index) = k.parse::<usize>().ok().filter(|&i| super::is_settlement(t0, i)) else {
             let parked = k.parse::<usize>().is_ok_and(|i| i >= crate::world::PARKED_LAYOUT);
             out.push((k.clone(), if parked { "set aside when the world was remade or upgraded" } else { "not a town" }.into()));
             continue;
         };
-        let s = &t0.settlements[index];
+        let Some(s) = super::settlement(t0, index) else { continue };
         if s.tier < Tier::Town {
             out.push((k.clone(), "a village has no wards".into()));
         } else if dist(e.at, [s.x, s.y]) > TownEdit::SAME_AT_FT {

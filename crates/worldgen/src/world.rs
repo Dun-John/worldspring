@@ -201,6 +201,8 @@ pub enum SketchTool {
 pub const VOLCANO_KINDS: [&str; 4] = ["strato", "shield", "cinder", "caldera"];
 pub const VOLCANO_ACTIVITY: [&str; 3] = ["active", "dormant", "extinct"];
 
+/// What settlements by the shore live by: never created without a remake.
+pub const SHORE_KINDS: [&str; 2] = ["port", "fishing"];
 /// Pin strokes' kinds (`t0::settle::SettleKind::key`).
 pub const PIN_KINDS: [&str; 10] = ["port", "river", "mining", "fortress", "market", "farming", "fishing", "lumber", "herding", "oasis"];
 /// Site strokes' kinds (as created sites').
@@ -778,7 +780,9 @@ impl Note {
 pub struct Created {
     /// `c:<n>`.
     pub id: String,
-    /// `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube` or `entrance`.
+    /// `ruin`, `tower`, `camp`, `waystation`, `cave`, `mine`, `lava_tube` or `entrance`; a
+    /// drawn `building`, `castle` or `wall`; or a settlement (`CREATED_SETTLEMENTS`: `village`,
+    /// `town`), added without remaking the world.
     pub kind: String,
     pub x: f64,
     pub y: f64,
@@ -845,6 +849,14 @@ pub struct Created {
     /// A wall's last corner joins its first (a ring).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
+    /// A settlement's naming culture, set where it was put (`t0::made::culture_at`) so a world
+    /// remade round it names it as before; else from its nearest settlement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub culture: Option<u8>,
+    /// What a settlement lives by (`PIN_KINDS` but `port` and `fishing`), set where it was put
+    /// (`t0::made::kind_at`); else from its ground.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lives_by: Option<String>,
     /// Deleted (kept in the list so later sites keep their place).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
@@ -931,6 +943,8 @@ pub const PLOT_STATUSES: [&str; 3] = ["idea", "active", "resolved"];
 
 /// The kinds of site that can be created.
 pub const CREATABLE: [&str; 11] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall"];
+/// Settlements that can be created without remaking the world (cities keep the remake).
+pub const CREATED_SETTLEMENTS: [&str; 2] = ["village", "town"];
 /// Kinds drawn by hand as a shape (a footprint, an outline, a line), not put at a point.
 pub const DRAWN_KINDS: [&str; 3] = ["building", "castle", "wall"];
 /// Widest a castle may be, corner to corner (ft).
@@ -999,8 +1013,14 @@ impl Created {
     /// where there is a site underground.
     pub fn check(&self) -> Result<(), String> {
         use crate::under::{MAX_LEVELS, SiteSize, THEMES, UnderKind};
+        if CREATED_SETTLEMENTS.contains(&self.kind.as_str()) {
+            return self.check_settlement();
+        }
         if !CREATABLE.contains(&self.kind.as_str()) {
             return Err(format!("kind must be one of {}", CREATABLE.join(", ")));
+        }
+        if self.culture.is_some() || self.lives_by.is_some() {
+            return Err("culture and lives_by are for villages and towns".into());
         }
         let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed;
         match self.kind.as_str() {
@@ -1042,6 +1062,31 @@ impl Created {
             }
         }
         Ok(())
+    }
+
+    /// A settlement's options: a culture and what it lives by (not by the shore), nothing else.
+    fn check_settlement(&self) -> Result<(), String> {
+        let shaped = !self.poly.is_empty() || !self.pts.is_empty() || !self.gates.is_empty() || self.closed;
+        let built = self.floors.is_some() || self.func.is_some() || self.roof.is_some() || self.tint.is_some() || self.material.is_some() || self.shape.is_some() || self.shade.is_some() || self.structure.is_some();
+        let works = self.gate.is_some() || self.keep.is_some() || self.yard_buildings.is_some();
+        if shaped || built || works || self.under.is_some() || self.size.is_some() || self.levels.is_some() || self.theme.is_some() {
+            return Err(format!("a {} takes only a name, culture and lives_by", self.kind));
+        }
+        if let Some(k) = &self.lives_by
+            && !PIN_KINDS.iter().any(|p| p == k && !SHORE_KINDS.contains(p))
+        {
+            let ok: Vec<&str> = PIN_KINDS.iter().copied().filter(|p| !SHORE_KINDS.contains(p)).collect();
+            return Err(format!("lives_by must be one of {}", ok.join(", ")));
+        }
+        if self.culture.is_some_and(|c| c as usize >= crate::t0::names::CULTURES.len()) {
+            return Err(format!("culture: 0 to {}", crate::t0::names::CULTURES.len() - 1));
+        }
+        Ok(())
+    }
+
+    /// Whether this is a settlement added by hand (`CREATED_SETTLEMENTS`).
+    pub fn is_settlement(&self) -> bool {
+        CREATED_SETTLEMENTS.contains(&self.kind.as_str())
     }
 
     /// A building's options: a simple footprint of 3–64 corners near its point, at least

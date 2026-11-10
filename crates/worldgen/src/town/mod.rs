@@ -614,6 +614,20 @@ pub fn holds_radius(s: &Settlement) -> f64 {
     urban_radius(s.tier, s.population) * if s.tier == Tier::Village { 1.4 } else { OUTSKIRTS }
 }
 
+/// The settlement layout `li` is: one of the world's own, or a village or town added by hand
+/// (`t0::made`; not once removed). `None` for every other site.
+pub fn settlement(t0: &T0, li: usize) -> Option<&Settlement> {
+    match li.checked_sub(t0.settlements.len()) {
+        None => t0.settlements.get(li),
+        Some(poi) => t0.made.iter().find(|m| m.poi == poi).map(|m| &m.s),
+    }
+}
+
+/// Whether layout `li` is a settlement (`settlement`): the world's own or one added by hand.
+pub fn is_settlement(t0: &T0, li: usize) -> bool {
+    li < t0.settlements.len() || t0.made.iter().any(|m| t0.settlements.len() + m.poi == li)
+}
+
 /// The settlement site layout `li` stands in: of those whose `holds_radius` takes in its point,
 /// the nearest for its size (then the lowest index). `None` for settlements, removed created
 /// sites and sites out of town. From T0 alone (no layout is read).
@@ -652,7 +666,7 @@ pub fn sites_in(t0: &T0, si: usize) -> Vec<usize> {
 fn site_point(t0: &T0, li: usize) -> Option<P> {
     let k = li.checked_sub(t0.settlements.len())?;
     let p = t0.pois.get(k)?;
-    (!t0.created_site(k).is_some_and(|c| c.removed)).then_some([p.x, p.y])
+    (!t0.created_site(k).is_some_and(|c| c.removed) && p.kind != crate::t0::settle::PoiKind::Settlement).then_some([p.x, p.y])
 }
 
 /// Of the settlements `among`, the one holding point `p` (nearest for its size, then by index).
@@ -910,7 +924,7 @@ pub fn generated_layout(world: &World, t0: &T0, index: usize) -> Rc<Layout> {
         return l;
     }
     let n = t0.settlements.len();
-    let l = Rc::new(if index < n { generate(world, t0, index) } else { sites::generate(world, t0, index - n, key) });
+    let l = Rc::new(if is_settlement(t0, index) { generate(world, t0, index) } else { sites::generate(world, t0, index - n, key) });
     let deps = wall_of(world, t0, index).map(|c| {
         let w = sites::wall_lanes(world, t0, c);
         WallDeps { towns_fp: towns_fp(world, t0, &w.reached), lanes_fp: w.fp, reached: w.reached }
@@ -989,9 +1003,16 @@ pub fn forget_from(index: usize) {
 /// rest stay: no generated layout reads `Edits.created`, and a created one reads only its own
 /// entry (a wall drawn by hand reads the settlements it reaches, kept by `wall_kept`).
 pub fn forget_created(old: &[crate::world::Created], new: &[crate::world::Created], first: usize) {
-    let gone: FastSet<u32> = (0..old.len().max(new.len())).filter(|&k| old.get(k) != new.get(k)).map(|k| (first + k) as u32).collect();
+    let mut gone: FastSet<u32> = (0..old.len().max(new.len())).filter(|&k| old.get(k) != new.get(k)).map(|k| (first + k) as u32).collect();
     if gone.is_empty() {
         return;
+    }
+    // A settlement added, moved or removed by hand takes its dependents with it: the walls drawn
+    // by hand (they may reach it) and its edited copies (its buildings' and wards' edits, by its
+    // index, above).
+    let town = |c: Option<&crate::world::Created>| c.is_some_and(|c| c.is_settlement());
+    if (0..old.len().max(new.len())).any(|k| old.get(k) != new.get(k) && (town(old.get(k)) || town(new.get(k)))) {
+        gone.extend(new.iter().enumerate().filter(|(_, c)| c.kind == "wall").map(|(k, _)| (first + k) as u32));
     }
     CACHE.with(|c| c.borrow_mut().1.retain(|k, _| !gone.contains(k)));
     WALLS.with(|w| w.borrow_mut().retain(|k, _| !gone.contains(k)));
@@ -1035,7 +1056,7 @@ pub fn layout_print(world: &World, t0: &T0, index: usize) -> u64 {
 /// only then (`remapLayouts`); 0 past the last layout.
 pub fn layout_identity(t0: &T0, index: usize) -> u64 {
     let n = t0.settlements.len();
-    if let Some(s) = t0.settlements.get(index) {
+    if let Some(s) = settlement(t0, index) {
         let what = (s.coastal as i64) << 49 | (s.river as i64) << 48 | (s.tier as i64) << 40 | (s.kind as i64) << 32 | s.population as i64;
         return hash3(0x7365_7474_6c65_0000, rng_key(t0, index), s.seed as i64, what);
     }
@@ -1710,7 +1731,7 @@ pub fn generate(world: &World, t0: &T0, index: usize) -> Layout {
 /// layout's (`wards::inherit`).
 /// `survey`: every street judged for steps, towns' too (`stairs::survey`).
 fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::world::TownEdit>, survey: Option<&mut Vec<stairs::Profile>>) -> Layout {
-    let s = &t0.settlements[index];
+    let s = settlement(t0, index).expect("layout of a settlement");
     let center = [s.x, s.y];
     let r = urban_radius(s.tier, s.population);
     let (site, road_ends, mut rng) = prepare(world, t0, index);
@@ -1938,18 +1959,24 @@ fn yurt_door(l: &Layout, i: usize, mut ring: Vec<P>, site: Option<&Site>) -> Vec
 /// What a settlement is laid out from: its ground (`Site`), where its roads arrive (local
 /// coords: the road ends and passes near it), and its random stream.
 fn prepare<'a>(world: &World, t0: &'a T0, index: usize) -> (Site<'a>, Vec<(P, u8)>, Pcg32) {
-    let s = &t0.settlements[index];
+    let s = settlement(t0, index).expect("layout of a settlement");
     let center = [s.x, s.y];
     let r = urban_radius(s.tier, s.population);
     let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
     let site = Site::new(t0, center, lattice, reach(s) + 500.0, river_pieces(t0, center, reach(s) + 500.0), world.params().sea_level_ft);
     let rng = Pcg32::new(hash2(world.stream("town"), rng_key(t0, index), s.seed as i64), 31);
-    (site, road_ends(t0, center, r, road_trim_radius(s.tier, s.population)), rng)
+    // (One added by hand meets its own track at its edge; no network road comes so near it.)
+    let track = index.checked_sub(t0.settlements.len()).and_then(|poi| t0.made.iter().find(|m| m.poi == poi)).and_then(|m| m.track.first());
+    let ends = match track {
+        Some(&a) => vec![(sub(a, center), crate::t0::roads::RoadClass::Track as u8)],
+        None => road_ends(t0, center, r, road_trim_radius(s.tier, s.population)),
+    };
+    (site, ends, rng)
 }
 
 /// A town's plan (kept by `wards::plan`), without building it; `None` for a village or a site.
 fn town_plan(world: &World, t0: &T0, index: usize) -> Option<Rc<TownPlan>> {
-    let s = t0.settlements.get(index).filter(|s| s.tier >= Tier::Town)?;
+    let s = settlement(t0, index).filter(|s| s.tier >= Tier::Town)?;
     Some(wards::plan(world, index, || {
         let (site, road_ends, mut rng) = prepare(world, t0, index);
         plan_town(&site, s, urban_radius(s.tier, s.population), &road_ends, &mut rng)

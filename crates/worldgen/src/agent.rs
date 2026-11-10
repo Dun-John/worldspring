@@ -231,6 +231,92 @@ fn bbox(pts: &[P]) -> [f64; 4] {
     pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
 }
 
+/// Least open ground between a created settlement's layout and another settlement's (ft).
+pub const SETTLEMENT_GAP_FT: f64 = 2_640.0;
+/// Least open ground between a created settlement's layout and a site's (ft).
+pub const SETTLEMENT_SITE_GAP_FT: f64 = 500.0;
+/// How far past its pad (`town::pad_extent`) a created settlement keeps from sea and lake (ft).
+pub const SETTLEMENT_SHORE_FT: f64 = 500.0;
+/// The steepest a created settlement's ground may be: the mean grade from its centre out to
+/// where its buildings stand (`town::holds_radius`), in any direction.
+pub const SETTLEMENT_MAX_GRADE: f64 = 0.15;
+
+/// Where a village or town (`kind`; `id` its `c:<n>`, which draws its size) may be added
+/// without remaking the world: on the map, on dry land out of river channels, clear of sea and
+/// lake past its pad (no shore spots: no ports or fishing villages), `SETTLEMENT_GAP_FT` clear
+/// of every settlement's layout and `SETTLEMENT_SITE_GAP_FT` of every site's, with no network
+/// road through its layout and its ground no steeper than `SETTLEMENT_MAX_GRADE`.
+pub fn settlement_spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), String> {
+    if !crate::world::CREATED_SETTLEMENTS.contains(&kind) {
+        return Err(format!("kind must be one of {}", crate::world::CREATED_SETTLEMENTS.join(", ")));
+    }
+    let (x, y) = (at[0], at[1]);
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let c = crate::world::Created { id: id.to_string(), kind: kind.to_string(), x, y, ..Default::default() };
+    let seed = crate::core::hash::fnv64(id.as_bytes()) ^ world.seed;
+    let s = crate::t0::made::settlement(world, t0, &c, seed);
+    let (reach, holds) = (town::reach(&s), town::holds_radius(&s));
+    let far = town::pad_extent(reach) + SETTLEMENT_SHORE_FT;
+    if x - reach < 0.0 || y - reach < 0.0 || x + reach > mw || y + reach > mh {
+        return Err("that is too near the edge of the map".to_string());
+    }
+    let lattice = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    if wet(at) {
+        return Err("that is in the water: put it on dry land".to_string());
+    }
+    let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, x, y, 2.0, t0.cell_ft);
+    if (q.0 - x).abs() + (q.1 - y).abs() > 0.01 {
+        return Err("that is in a river: put it on the bank".to_string());
+    }
+    // Rings every 250 ft out past the pad, a probe every 250 ft round each.
+    let rings = (far / 250.0).ceil() as usize;
+    for k in 1..=rings {
+        let r = far * k as f64 / rings as f64;
+        let n = ((std::f64::consts::TAU * r / 250.0).ceil() as usize).max(8);
+        for a in 0..n {
+            let t = std::f64::consts::TAU * a as f64 / n as f64;
+            let p = [x + r * libm::cos(t), y + r * libm::sin(t)];
+            if p[0] >= 0.0 && p[1] >= 0.0 && p[0] <= mw && p[1] <= mh && wet(p) {
+                return Err(if r <= holds { "that is on the water's edge: villages and towns are added inland (ports and fishing villages need the world remade)" } else { "that is too near the shore: villages and towns are added inland (ports and fishing villages need the world remade)" }.to_string());
+            }
+        }
+    }
+    // Other settlements (the world's own and those added by hand) and sites.
+    let n = t0.settlements.len();
+    for li in 0..town::layout_count(t0) {
+        if let Some(o) = town::settlement(t0, li) {
+            if geom::dist([o.x, o.y], at) < town::reach(o) + reach + SETTLEMENT_GAP_FT {
+                return Err("that is too near another settlement".to_string());
+            }
+            continue;
+        }
+        let Some(p) = t0.pois.get(li - n) else { continue };
+        let made = t0.created_site(li - n);
+        if made.is_some_and(|m| m.removed) {
+            continue;
+        }
+        if geom::dist([p.x, p.y], at) < made.map_or(town::sites::SITE_REACH_FT, |m| m.reach) + reach + SETTLEMENT_SITE_GAP_FT {
+            return Err("that is too near another site".to_string());
+        }
+    }
+    for (ri, k) in t0.roads.segments_near([x - reach, y - reach, x + reach, y + reach], 0.0) {
+        let rc = &t0.roads.roads[ri as usize];
+        if (0..=16).any(|j| geom::dist(rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p, at) < reach) {
+            return Err("a road runs through that place: put it beside the road (a track will join them)".to_string());
+        }
+    }
+    let g0 = t0.ground_at(x, y, lattice);
+    for a in 0..16 {
+        let t = std::f64::consts::TAU * a as f64 / 16.0;
+        let g = t0.ground_at(x + holds * libm::cos(t), y + holds * libm::sin(t), lattice);
+        if (g - g0).abs() / holds > SETTLEMENT_MAX_GRADE {
+            return Err("that ground is too steep for a settlement".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
 /// clear of other buildings (sharing a wall is fine), roads, streets, town walls and squares
 /// (market squares, quays, greens, yards). `skip`: the building being reshaped: (its layout,

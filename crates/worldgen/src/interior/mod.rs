@@ -1014,12 +1014,12 @@ fn zoned_arch(b: &town::Building) -> bool {
 
 /// Whether layout `settlement` is the capital's.
 fn capital_of(t0: &T0, settlement: usize) -> bool {
-    t0.settlements.get(settlement).is_some_and(|s| s.capital)
+    crate::town::settlement(t0, settlement).is_some_and(|s| s.capital)
 }
 
 /// Whether layout `settlement` is a city's or a metropolis's.
 fn city_of(t0: &T0, settlement: usize) -> bool {
-    t0.settlements.get(settlement).is_some_and(|s| s.tier >= crate::t0::settle::Tier::City)
+    crate::town::settlement(t0, settlement).is_some_and(|s| s.tier >= crate::t0::settle::Tier::City)
 }
 
 /// The floors (z) of a building laid out by zones that the zones didn't hold together on, laid out
@@ -2484,7 +2484,7 @@ fn hall_style(world: &World, t0: &T0, settlement: usize, b: &town::Building, arc
     use crate::t0::settle::Tier;
     let roll = |salt: i64| hash3(world.stream("interior.hall"), town::rng_key(t0, settlement), salt, 0);
     let house = |own: bool| (if own { hash3(world.stream("interior.house"), town::rng_key(t0, settlement), b.id as i64, 1) } else { roll(0x40) } % HOUSES as u64) as u8;
-    let set = t0.settlements.get(settlement);
+    let set = crate::town::settlement(t0, settlement);
     if key == Some("barracks") {
         return vec![("mess hall", hall::Style::Mess { house: castle.then(|| house(false)) })];
     }

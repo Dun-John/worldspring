@@ -222,6 +222,19 @@ pub fn det_report(world_json: &str) -> Result<String, String> {
         let under = l.entrances.first().and_then(|e| crate::interior::generate_id(&ex.world, &ex.t0, &format!("u:{li}:{}", e.id))).map(|it| serde_json::to_string(&it).unwrap_or_default()).unwrap_or_default();
         writeln!(out, "created/{} {li} {:016x} {:016x}", c.id, h.finish(), fnv64(under.as_bytes())).unwrap();
     }
+    // Settlements added by hand: the track and the battlemaps at the settlement's middle and the
+    // track's.
+    for m in ex.t0.made.clone() {
+        let size = ex.world.geom.tile_size_ft(max_level);
+        let mid = m.track.get(m.track.len() / 2).copied().unwrap_or([m.s.x, m.s.y]);
+        let mut h = crate::core::hash::Fnv64::default();
+        h.write(format!("{:?} {:?} {:?} {:?} {}", m.track, m.z, m.s.kind, m.s.tier, m.s.population).as_bytes());
+        for at in [[m.s.x, m.s.y], mid] {
+            let chunk = ex.battlemap(TileKey::surface(max_level, (at[0] / size) as u32, (at[1] / size) as u32));
+            h.write(&crate::battlemap::pack(&ex.world, &chunk));
+        }
+        writeln!(out, "made/{} {:016x}", m.poi, h.finish()).unwrap();
+    }
     // The world's own buildings edited (a world without edits): in the largest settlement, the
     // first residence taken away, the next made a three-storey smithy; its layout, the smithy's
     // interior and the battlemap where the first stood.

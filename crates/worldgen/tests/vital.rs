@@ -4296,3 +4296,144 @@ fn dwarven_crag_seams() {
     }
     assert!(found > 0, "no dwarven hall gate with a crag in seeds 1 and 3");
 }
+
+// R5 world
+
+/// A village and a town added by hand (`world::Created`, `t0::made`) move nothing else: the
+/// world's T0, its network roads, its terrain tiles, every other layout and every battlemap
+/// clear of the two and their tracks stay as they were; each joins the nearest road by a track
+/// within a track's grade; removing them gives the world back; and remade with a site drawn far
+/// away, each is laid out as before, with the culture and kind it was given where it was put.
+#[test]
+fn created_settlements_move_nothing_else() {
+    use worldgen::t0::made;
+    use worldgen::world::Created;
+    use worldgen::{agent, town};
+    let file: WorldFile = serde_json::from_str(&world_json(1)).unwrap();
+    let mut ex0 = Executor::new(World::new(file.clone()).unwrap());
+    let first = ex0.t0.settlements.len() + ex0.t0.base_pois;
+    // Spots 3 to 6 miles round the world's settlements where each may be added.
+    let spots = |ex: &Executor, kind: &str, id: &str| {
+        (0..ex.t0.settlements.len() * 32)
+            .map(|k| {
+                let s = &ex.t0.settlements[k / 32];
+                let (a, r) = ((k % 16) as f64 * std::f64::consts::TAU / 16.0, if k % 32 < 16 { 15_840.0 } else { 31_680.0 });
+                [s.x + r * libm::cos(a), s.y + r * libm::sin(a)]
+            })
+            .find(|p| agent::settlement_spot(&ex.world, &ex.t0, kind, id, *p).is_ok())
+            .unwrap_or_else(|| panic!("no spot for a {kind}"))
+    };
+    let entry = |ex: &Executor, kind: &str, id: &str, p: [f64; 2]| {
+        let tier = made::tier_of(kind);
+        let lives = made::kind_at(&ex.world, &ex.t0, p[0], p[1], tier);
+        let key = worldgen::world::PIN_KINDS[lives as usize].to_string();
+        Created { id: id.into(), kind: kind.into(), x: p[0], y: p[1], name: format!("New {kind}"), culture: Some(made::culture_at(&ex.t0, p[0], p[1])), lives_by: Some(key), ..Default::default() }
+    };
+    let v = spots(&ex0, "village", "c:0");
+    let mut a = file.clone();
+    a.edits.created = vec![entry(&ex0, "village", "c:0", v)];
+    let ev = Executor::new(World::new(a.clone()).unwrap());
+    let t = spots(&ev, "town", "c:1");
+    a.edits.created.push(entry(&ev, "town", "c:1", t));
+    let mut ea = Executor::new(World::new(a.clone()).unwrap());
+    assert_eq!(ea.t0.made.len(), 2, "both settlements made");
+    assert!(town::is_settlement(&ea.t0, first) && town::is_settlement(&ea.t0, first + 1) && !town::is_settlement(&ea.t0, first + 2));
+
+    // T0 and its network roads as the world made them.
+    let bytes0 = ex0.t0.to_bytes();
+    let mut back = Executor::new(World::new(a.clone()).unwrap());
+    back.t0.apply_edits(&ex0.world);
+    assert!(back.t0.to_bytes() == bytes0, "T0 changed under created settlements");
+    assert_eq!(ea.t0.roads.roads.len(), ex0.t0.roads.roads.len());
+    for (r, q) in ea.t0.roads.roads.iter().zip(&ex0.t0.roads.roads) {
+        assert!(r.pts == q.pts && r.z == q.z, "a network road moved");
+    }
+
+    // Laid out by the village and town generators, each joined to the nearest road by a track.
+    for (k, m) in ea.t0.made.iter().enumerate() {
+        let l = town::layout(&ea.world, &ea.t0, first + k);
+        assert_eq!(l.index as usize, first + k);
+        assert!(l.buildings.len() >= 5, "c:{k}: {} buildings", l.buildings.len());
+        assert_eq!(m.s.tier, made::tier_of(&a.edits.created[k].kind));
+        assert!(m.track.len() >= 2, "c:{k}: no track");
+        let end = *m.track.last().unwrap();
+        let near = ea.t0.roads.segments_near([end[0] - 50.0, end[1] - 50.0, end[0] + 50.0, end[1] + 50.0], 0.0);
+        assert!(!near.is_empty(), "c:{k}: the track does not reach a road");
+        let gmax = worldgen::t0::roads::RoadClass::Track.max_grade();
+        let mut run = 0.0;
+        for i in (1..m.track.len()).rev() {
+            let d = geom_dist(m.track[i], m.track[i - 1]);
+            run += d;
+            if run > 250.0 {
+                assert!(((m.z[i] - m.z[i - 1]).abs() as f64) <= gmax * d + 0.01, "c:{k}: track too steep at {i}");
+            }
+        }
+    }
+
+    // Every other layout near them as it was; terrain tiles too.
+    let reach = ea.t0.made.iter().map(|m| [m.s.x, m.s.y]).collect::<Vec<_>>();
+    for p in &reach {
+        let r = [p[0] - 30_000.0, p[1] - 30_000.0, p[0] + 30_000.0, p[1] + 30_000.0];
+        let (la, l0) = (town::layouts_near(&ea.world, &ea.t0, r), town::layouts_near(&ex0.world, &ex0.t0, r));
+        let others: Vec<String> = la.iter().filter(|l| (l.index as usize) < first).map(|l| format!("{l:?}")).collect();
+        assert_eq!(others, l0.iter().map(|l| format!("{l:?}")).collect::<Vec<_>>(), "a layout near a created settlement changed");
+    }
+    let g = ea.world.geom.clone();
+    let level = g.max_level;
+    let size = g.tile_size_ft(level);
+    let print = |c: &worldgen::battlemap::Chunk| format!("{:?}", (c.height.iter().map(|h| h.to_bits()).collect::<Vec<_>>(), &c.road_halo, &c.building, &c.buildings, &c.urban, c.objects.len()));
+    let key_at = |p: [f64; 2]| TileKey::surface(level, (p[0] / size) as u32, (p[1] / size) as u32);
+    // (Squares a created settlement's pad or track reaches.)
+    let touched = |ex: &Executor, key: &TileKey| {
+        let (ox, oy) = g.tile_origin_ft(key);
+        made::Ground::new(&ex.world, &ex.t0, [ox - 10.0, oy - 10.0, ox + size + 10.0, oy + size + 10.0]).is_some()
+    };
+    let m0 = &ea.t0.made[0];
+    let centre = key_at([m0.s.x, m0.s.y]);
+    let mut differs = false;
+    let mut same = 0;
+    // A row of tiles through the village, out past its pad, and tiles along its track's road.
+    let mut keys: Vec<TileKey> = (-12i64..=12).map(|d| TileKey::surface(level, (centre.x as i64 + d) as u32, centre.y)).collect();
+    let end = *m0.track.last().unwrap();
+    keys.extend((-6i64..=6).map(|d| TileKey::surface(level, (key_at(end).x as i64 + d) as u32, (key_at(end).y as i64 + d) as u32)));
+    for key in keys {
+        let (ca, c0) = (ea.battlemap(key), ex0.battlemap(key));
+        if touched(&ea, &key) {
+            differs |= print(&ca) != print(&c0);
+        } else {
+            assert_eq!(print(&ca), print(&c0), "battlemap {key:?} changed clear of the created settlements");
+            same += 1;
+        }
+        assert!(ea.terrain(key.parent().unwrap()).padded == ex0.terrain(key.parent().unwrap()).padded, "terrain changed");
+    }
+    assert!(differs && same > 4, "the village's battlemap unchanged ({same} clear)");
+
+    // Removed, the world is as it was (its place in the list kept).
+    let mut r = a.clone();
+    r.edits.created.iter_mut().for_each(|c| c.removed = true);
+    let mut er = Executor::new(World::new(r).unwrap());
+    assert!(er.t0.made.is_empty() && !town::is_settlement(&er.t0, first));
+    assert_eq!(print(&er.battlemap(centre)), print(&ex0.battlemap(centre)), "removing the village left its ground");
+    assert!(agent::settlement_spot(&er.world, &er.t0, "village", "c:0", v).is_ok(), "its spot is free again");
+    assert!(agent::settlement_spot(&ea.world, &ea.t0, "village", "c:9", v).is_err(), "a village on a village");
+
+    // Remade with a site drawn far away (one more of the world's own sites): each in its place,
+    // with its culture and kind, laid out as before.
+    let far = ex0.t0.settlements.iter().max_by(|p, q| geom_dist([p.x, p.y], v).total_cmp(&geom_dist([q.x, q.y], v))).map(|s| [s.x + 3_000.0, s.y]).unwrap();
+    let mut b = a.clone();
+    b.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "site", "kind": "ruin", "pts": [far] })).unwrap());
+    let eb = Executor::new(World::new(b).unwrap());
+    let fb = eb.t0.settlements.len() + eb.t0.base_pois;
+    assert_eq!(fb, first + 1);
+    for k in 0..2 {
+        let (ma, mb) = (&ea.t0.made[k], &eb.t0.made[k]);
+        assert_eq!((mb.s.x, mb.s.y, mb.s.culture, mb.s.kind, mb.s.tier, mb.s.population), (ma.s.x, ma.s.y, ma.s.culture, ma.s.kind, ma.s.tier, ma.s.population), "c:{k} changed when remade");
+        assert_eq!(Some(ma.s.culture), a.edits.created[k].culture);
+        let laid = |ex: &Executor, li: usize| {
+            let mut l = (*town::layout(&ex.world, &ex.t0, li)).clone();
+            l.index = 0;
+            format!("{l:?}")
+        };
+        assert_eq!(laid(&ea, first + k), laid(&eb, fb + k), "c:{k}: laid out anew when the world was remade");
+    }
+}

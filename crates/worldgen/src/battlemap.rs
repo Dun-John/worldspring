@@ -1157,18 +1157,24 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // where the shaping changed the ground (the slope is measured on the shaped ground there).
     let shaper = crate::ground::Shaper::new(&world.file.edits, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT], SQUARE_FT);
     let (mut plat_w, mut moved) = if shaper.is_some() { (vec![0f32; HS * HS], vec![false; HS * HS]) } else { (Vec::new(), Vec::new()) };
+    // Settlements added by hand: their pads and tracks over the terrain (`t0::made::Ground`).
+    let made = crate::t0::made::Ground::new(world, t0, [ox - 2.0 * SQUARE_FT, oy - 2.0 * SQUARE_FT, ox + (SQ + 2) as f64 * SQUARE_FT, oy + (SQ + 2) as f64 * SQUARE_FT]);
+    let base_at = |x: f64, y: f64, c: usize| made.as_ref().map_or(tile.padded[c], |m| m.at(x, y, tile.padded[c]));
     for j in -1..=SQ as i64 {
         for i in -1..=SQ as i64 {
             let (x, y) = (ox + (i as f64 + 0.5) * SQUARE_FT, oy + (j as f64 + 0.5) * SQUARE_FT);
             let c = sidx(i, j);
             let h = (j + 1) as usize * HS + (i + 1) as usize;
-            hh[h] = tile.padded[c];
+            hh[h] = base_at(x, y, c);
             hw[h] = t0.sample_water(x, y).max(tile.river_water[c]);
             if let Some(s) = &shaper {
                 (hh[h], plat_w[h]) = s.at_square(gsx + i, gsy + j, hh[h], hw[h]);
                 moved[h] = hh[h] != tile.padded[c] || plat_w[h] > 0.0;
             }
             road_h[h] = tile.road_mask.get(c).copied().unwrap_or(0);
+            if road_h[h] == 0 && made.as_ref().is_some_and(|m| m.on_track(x, y)) {
+                road_h[h] = crate::t0::roads::RoadClass::Track as u8 + 1;
+            }
             // A ford or a ferry leaves the water as it is (wading, or the raft).
             if road_h[h] != 0 && hw[h] > hh[h] && crossings.iter().any(|x| x.kind != CrossingKind::Bridge && x.covers([x_ft(i), y_ft(j)])) {
                 road_h[h] = 0;
@@ -2179,10 +2185,17 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             biome[k] = Biome::from_u8(t0.sample_biome(x, y, t0.biome_warp(x, y))[0]);
             let c = sidx(i as i64, j as i64);
             let h = (j + 1) * HS + i + 1;
-            let plain = || ((tile.padded[c + 1] - tile.padded[c - 1]) as f64 / 5.0, (tile.padded[c + PADDED] - tile.padded[c - PADDED]) as f64 / 5.0);
+            // (Over a created settlement's pad or track, from the padded heights.)
+            let plain = || match &made {
+                Some(_) => {
+                    let at = |dx: f64, dy: f64, c: usize| base_at(x + dx, y + dy, c);
+                    ((at(2.5, 0.0, c + 1) - at(-2.5, 0.0, c - 1)) as f64 / 5.0, (at(0.0, 2.5, c + PADDED) - at(0.0, -2.5, c - PADDED)) as f64 / 5.0)
+                }
+                None => ((tile.padded[c + 1] - tile.padded[c - 1]) as f64 / 5.0, (tile.padded[c + PADDED] - tile.padded[c - PADDED]) as f64 / 5.0),
+            };
             let (gx, gy) = match &shaper {
                 Some(s) if [h, h - 1, h + 1, h - HS, h + HS].iter().any(|&q| moved[q]) => {
-                    let at = |dx: f64, dy: f64, c: usize| s.at_point(x + dx, y + dy, tile.padded[c], hw[h]) as f64;
+                    let at = |dx: f64, dy: f64, c: usize| s.at_point(x + dx, y + dy, base_at(x + dx, y + dy, c), hw[h]) as f64;
                     ((at(2.5, 0.0, c + 1) - at(-2.5, 0.0, c - 1)) / 5.0, (at(0.0, 2.5, c + PADDED) - at(0.0, -2.5, c - PADDED)) / 5.0)
                 }
                 _ => plain(),

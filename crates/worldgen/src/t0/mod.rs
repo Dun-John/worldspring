@@ -13,6 +13,7 @@ pub mod features;
 pub mod flood;
 pub mod hydro;
 pub mod islands;
+pub mod made;
 pub mod names;
 pub mod plates;
 pub mod roads;
@@ -69,6 +70,8 @@ pub struct T0 {
     pub created: Vec<CreatedSite>,
     /// The sketch's sites (by point of interest) and their options.
     pub sketched: Vec<(usize, CreatedSite)>,
+    /// The settlements created by edits (`made`), by point of interest; removed ones left out.
+    pub made: Vec<made::Made>,
     /// The sea lanes between ports (`sealanes::lanes`; none with generated roads off).
     pub sea_lanes: Vec<sealanes::SeaLane>,
     /// The ferries over the sea to near islands (`ferries`; none with generated roads off).
@@ -639,7 +642,7 @@ impl T0 {
             let next = mips.last().unwrap().downsample();
             mips.push(next);
         }
-        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
+        let mut t0 = T0 { height, water, coast, biome, cell_ft, rivers: RiverNet::default(), roads, settlements: Vec::new(), pois: Vec::new(), base_pois: 0, created: Vec::new(), sketched: Vec::new(), made: Vec::new(), sea_lanes: Vec::new(), ferries: Vec::new(), biome_seed, mips, ground_cache: Default::default(), extra: None };
         // Water surfaces follow the ground the terrain is built on along each curve
         // (generated and loaded alike). That ground's lattice is the coarsest spacing
         // (2.5 · 2^n ft) at least a T0 cell.
@@ -677,7 +680,9 @@ impl T0 {
         self.pois.truncate(self.base_pois);
         self.created.clear();
         self.sketch_sites(world);
-        for c in &world.file.edits.created {
+        // (A settlement's track is kept while it stands where it was routed from.)
+        let was = std::mem::take(&mut self.made);
+        for (k, c) in world.file.edits.created.iter().enumerate() {
             let kind = settle::PoiKind::parse(&c.kind);
             let under = c.under.as_deref().and_then(crate::under::UnderKind::parse);
             let spec = crate::under::SiteSpec {
@@ -686,8 +691,19 @@ impl T0 {
                 theme: c.theme.as_deref().and_then(crate::under::theme).map(|i| i as u8),
             };
             let seed = crate::core::hash::fnv64(c.id.as_bytes()) ^ world.seed;
+            let mut reach = c.reach();
+            if kind == settle::PoiKind::Settlement && !c.removed {
+                let s = made::settlement(world, self, c, seed);
+                reach = crate::town::reach(&s);
+                let kept = was.iter().find(|m| m.s.seed == s.seed && m.s.x == s.x && m.s.y == s.y && m.s.tier == s.tier && m.s.population == s.population);
+                let (track, z) = match kept {
+                    Some(m) => (m.track.clone(), m.z.clone()),
+                    None => made::track(world, self, &s),
+                };
+                self.made.push(made::Made { poi: self.base_pois + k, s, track, z });
+            }
             self.pois.push(settle::Poi { kind, x: c.x, y: c.y, seed, stroke: None });
-            self.created.push(CreatedSite { removed: c.removed, reach: c.reach(), under, spec });
+            self.created.push(CreatedSite { removed: c.removed, reach, under, spec });
         }
     }
 

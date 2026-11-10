@@ -152,6 +152,8 @@ pub enum PoiKind {
     Castle,
     /// Created only: a wall drawn by hand (its line, `world::Created::pts`).
     Wall,
+    /// Created only: a village or town added without remaking the world (`t0::made`).
+    Settlement,
 }
 
 impl PoiKind {
@@ -168,12 +170,13 @@ impl PoiKind {
             "building" => PoiKind::Building,
             "castle" => PoiKind::Castle,
             "wall" => PoiKind::Wall,
+            "village" | "town" => PoiKind::Settlement,
             _ => PoiKind::Ruin,
         }
     }
 
     pub fn from_u8(v: u8) -> PoiKind {
-        const ALL: [PoiKind; 11] = [PoiKind::Ruin, PoiKind::Tower, PoiKind::Camp, PoiKind::Waystation, PoiKind::Cave, PoiKind::Mine, PoiKind::LavaTube, PoiKind::Entrance, PoiKind::Building, PoiKind::Castle, PoiKind::Wall];
+        const ALL: [PoiKind; 12] = [PoiKind::Ruin, PoiKind::Tower, PoiKind::Camp, PoiKind::Waystation, PoiKind::Cave, PoiKind::Mine, PoiKind::LavaTube, PoiKind::Entrance, PoiKind::Building, PoiKind::Castle, PoiKind::Wall, PoiKind::Settlement];
         ALL[(v as usize).min(ALL.len() - 1)]
     }
 }
@@ -619,7 +622,7 @@ fn ground(inp: &Inputs) -> Ground {
 /// (`ore`: the ore noise at its cell; `hilly`: hill or mountain ground round it, for a mining
 /// town).
 #[allow(clippy::too_many_arguments)]
-fn kind_of(reason: Reason, tier: Tier, b: Biome, above: f64, ore: f64, is_coast: bool, near_river: bool, on_river: bool, hilly: bool) -> SettleKind {
+pub(crate) fn kind_of(reason: Reason, tier: Tier, b: Biome, above: f64, ore: f64, is_coast: bool, near_river: bool, on_river: bool, hilly: bool) -> SettleKind {
     let from_reason = match reason {
         Reason::Harbour | Reason::Mouth if is_coast => Some(if tier >= Tier::Town { SettleKind::Port } else { SettleKind::Fishing }),
         Reason::Outlet | Reason::Confluence | Reason::Head | Reason::Crossing if tier >= Tier::Town && near_river => Some(SettleKind::River),
