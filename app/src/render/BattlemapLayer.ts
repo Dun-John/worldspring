@@ -953,8 +953,12 @@ export class BattlemapLayer {
     // state). Chunks without one draw their structures in one piece.
     const drawbridges = c.shapes.filter((s) => s.kind === 18);
     const lowKind = (k: number) => k === 0 || k === 20 || isBound(k);
-    const highKind = (k: number) => k === 4 || k === 9 || (k >= 10 && k <= 12);
-    const structG = drawStructures(c.shapes.filter((s) => lowKind(s.kind) || (!drawbridges.length && highKind(s.kind))), cx * SQ * PX, cy * SQ * PX);
+    const highKind = (k: number) => k === 4 || (k >= 10 && k <= 12);
+    // (Gatehouses go under the towers but over every chunk's walls (`gateG`): a curtain owned by the next
+    // chunk would otherwise end on top of its gate block. The walls still learn from them which way the
+    // town lies.)
+    const gates = c.shapes.filter((s) => s.kind === 9);
+    const structG = drawStructures(c.shapes.filter((s) => lowKind(s.kind) || (!drawbridges.length && highKind(s.kind))), cx * SQ * PX, cy * SQ * PX, gates);
     const structHigh = drawbridges.length ? drawStructures(c.shapes.filter((s) => highKind(s.kind))) : null;
     const bridges = drawbridges.map((s) => {
       drawDrawbridgeSill(structG, s);
@@ -970,14 +974,16 @@ export class BattlemapLayer {
       return { key: bridgeKey(s, cx, cy), deck, stub, grid: deckGridG };
     });
     const towerG = drawStructures(c.shapes.filter((s) => s.kind === 1 || s.kind === SAILS));
+    const gateG = gates.length ? drawStructures(gates) : null;
+    const gateGridG = new Graphics();
     // The grid on the wall walks (over the walls), the tower tops (over the towers) and the gravel
     // walks (over them, on the ground).
     const walkGridG = new Graphics();
     const topGridG = new Graphics();
     const pathGridG = new Graphics();
-    for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 13 ? pathGridG : walkGridG, s);
-    for (const gr of [gridG, walkGridG, topGridG, pathGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
-    for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, ...bridges.flatMap((b) => [b.deck, b.stub]), structHigh, walkGridG, towerG, topGridG]) {
+    for (const s of c.shapes) topGrid(s.kind === 1 ? topGridG : s.kind === 9 ? gateGridG : s.kind === 13 ? pathGridG : walkGridG, s);
+    for (const gr of [gridG, walkGridG, topGridG, pathGridG, gateGridG]) gr.visible = this.frame.uniforms.uGrid > 0;
+    for (const part of [roofMesh, daisG, pathGridG, battleG, bridgeG, gridG, structG, ...bridges.flatMap((b) => [b.deck, b.stub]), structHigh, walkGridG, gateG, gateGridG, towerG, topGridG]) {
       if (!part) continue;
       this.prewarm(part);
       yield;
@@ -1009,6 +1015,13 @@ export class BattlemapLayer {
     decks.addChild(bridgeG, gridG);
     this.layers[2].addChildAt(decks, this.layers[2].getChildIndex(parts[2]));
     parts.push(decks);
+    if (gateG) {
+      // (At the bottom of the towers' layer: over every chunk's walls and roofs, under every tower.)
+      const holder = new Container();
+      holder.addChild(gateG, gateGridG);
+      this.layers[3].addChildAt(holder, 0);
+      parts.push(holder);
+    }
     let atmo: Mesh<Geometry, Shader> | null = null;
     let atmoUniforms: UniformGroup | null = null;
     if (atmosphere > 0) {
@@ -1047,7 +1060,7 @@ export class BattlemapLayer {
       roofGeometry,
       roofMesh,
       battleRoofs: battleG,
-      grids: [gridG, walkGridG, topGridG, pathGridG, ...bridges.map((b) => b.grid)],
+      grids: [gridG, walkGridG, topGridG, pathGridG, gateGridG, ...bridges.map((b) => b.grid)],
       decks,
       atmo,
       atmoUniforms,
@@ -1236,7 +1249,7 @@ function bridgeCells(s: Shape, cx: number, cy: number): number[] {
  * three, and a forecourt's garden wall, gate piers and gate. Bridges, piers and drawbridges are drawn apart
  * (`bridges.ts`; a drawbridge in pieces, for play). (`ox`, `oy`: the chunk's corner in world px, for the bounds' patterns.)
  */
-function drawStructures(shapes: Shape[], ox = 0, oy = 0): Graphics {
+function drawStructures(shapes: Shape[], ox = 0, oy = 0, gates = shapes.filter((s) => s.kind === 9)): Graphics {
   const g = new Graphics();
   // (v63 countryside: hedgerows, dry-stone walls and fences low under the rest; a windmill's sails.)
   const bounds = shapes.filter((s) => isBound(s.kind));
@@ -1245,7 +1258,7 @@ function drawStructures(shapes: Shape[], ox = 0, oy = 0): Graphics {
   // (A star bastion's platform under its curtain, which is drawn over its edge.)
   for (const s of shapes) if (s.kind === 20) drawBastion(g, s);
   const walls = shapes.filter((s) => s.kind === 0);
-  if (walls.length) drawWalls(g, walls, shapes.filter((s) => s.kind === 9));
+  if (walls.length) drawWalls(g, walls, gates);
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
   for (const s of shapes) if (s.kind === 1) drawWallTower(g, s);
   for (const s of shapes) if (s.kind === 4) drawEntrance(g, s);
