@@ -293,6 +293,7 @@ pub(super) fn by_roads(site: &Site, s: &Settlement, plan: &TownPlan, l: &mut Lay
         let key = hash3(plan.pseed, rk as i64, laid as i64, 0xce5);
         let mut pk = super::park(site, &poly, ParkKind::Cemetery, fronts, key);
         pk.cemetery = Some(Style::of(s, patch, true));
+        pk.spot = super::places::Spot::Road(rk as u32);
         l.parks.push(pk);
         laid += 1;
     }

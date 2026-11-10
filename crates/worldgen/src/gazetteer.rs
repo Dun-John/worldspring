@@ -272,6 +272,7 @@ pub fn districts_json(world: &World, t0: &T0, settlement: usize) -> String {
         .enumerate()
         .filter(|(_, q)| !q.label.is_empty())
         .map(|(qi, q)| DistrictLabel { id: format!("d:{}:{}", l.index, qi), name: q.name.clone(), kind: q.kind.name(), path: q.label.clone() })
+        .chain(town::places::labels(t0, &l))
         .collect();
     serde_json::to_string(&out).expect("serializable")
 }

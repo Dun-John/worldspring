@@ -426,7 +426,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
     let rr = green + 0.5 * LANE_W;
     let mut reach_out = Vec::new();
     if green > 0.0 {
-        l.plazas.push(Plaza { pts: circle(well, green_r, 12), kind: PlazaKind::Green });
+        l.plazas.push(Plaza { pts: circle(well, green_r, 12), kind: PlazaKind::Green, spot: super::places::Spot::None });
         // (The lanes off the roads stop short of it, none running along the ring nor onto the green,
         // and run on to the lane round it in Ts.)
         let off: Vec<(Vec<P>, f64)> = lanes.drain(n_roads..).flat_map(|(pts, w)| outside(&pts, well, rr + RING_CLEAR_FT).into_iter().map(move |q| (q, w))).collect();

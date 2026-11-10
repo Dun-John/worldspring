@@ -347,7 +347,7 @@ pub(super) fn close(site: &Site, block: &[P], streets: &[(P, f64)], t: f64, firs
     l.roads.extend(kept);
     l.buildings.push(temple_part(site, hall, temple, Structure::Roofed));
     l.buildings.push(temple_part(site, ch, yard, Structure::Open));
-    l.plazas.push(Plaza { pts: open, kind: PlazaKind::TempleClose });
+    l.plazas.push(Plaza { pts: open, kind: PlazaKind::TempleClose, spot: super::places::Spot::None });
     true
 }
 

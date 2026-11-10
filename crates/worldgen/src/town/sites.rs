@@ -322,7 +322,7 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let mut l = Layout {
         walls,
         towers,
-        plazas: plazas.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Yard }).chain(baileys.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Bailey })).collect(),
+        plazas: plazas.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Yard, spot: super::places::Spot::None }).chain(baileys.into_iter().map(|pts| super::Plaza { pts, kind: super::PlazaKind::Bailey, spot: super::places::Spot::None })).collect(),
         buildings,
         gate_towers,
         castles,

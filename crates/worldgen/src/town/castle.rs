@@ -605,6 +605,7 @@ pub(super) fn castle<G: Ground>(
     l.plazas.push(Plaza {
         pts: ring.clone(),
         kind: PlazaKind::Bailey,
+        spot: super::places::Spot::None,
     });
     // Its moat (v63 castles), a town castle's in its block.
     if let Some(m) = set.moat {

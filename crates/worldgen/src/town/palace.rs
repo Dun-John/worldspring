@@ -988,6 +988,7 @@ pub(super) fn gardens(site: &Site, l: &mut Layout, off: P) {
         let mut pk = super::park(site, &local(&q), super::ParkKind::Formal, fronts, key);
         pk.pts = q;
         pk.ground.origin = add(pk.ground.origin, off);
+        pk.spot = super::places::Spot::Garden(id);
         l.parks.push(pk);
     }
 }

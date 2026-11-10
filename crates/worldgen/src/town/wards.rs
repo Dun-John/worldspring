@@ -1091,6 +1091,7 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
             d
         }).collect::<Vec<_>>(),
         "set_aside": aside,
+        "places": super::places::plan_json(world, t0, index),
     }))
 }
 

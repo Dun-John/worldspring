@@ -40,6 +40,7 @@ pub mod rural;
 pub mod cemetery;
 // R5 towns: districts drawn by hand, and renames kept when a patch is laid out anew.
 mod districts;
+pub mod places;
 mod carry;
 
 use std::cell::RefCell;
@@ -212,6 +213,9 @@ pub struct Layout {
     pub walls: Vec<Vec<P>>,
     pub towers: Vec<P>,
     pub gates: Vec<P>,
+    /// R5 towns: each of `gates`' corner on the plan when the town is walled (else none): its
+    /// `gt:` id (`places`).
+    pub gate_spots: Vec<u32>,
     /// Main streets from the gates to the plaza.
     pub streets: Vec<Vec<P>>,
     /// Streets drawn as roads (world ft): approaches from each road's end to its gate (road
@@ -382,6 +386,8 @@ impl PlazaKind {
 pub struct Plaza {
     pub pts: Vec<P>,
     pub kind: PlazaKind,
+    /// R5 towns: what its `sq:` id is keyed by (`places`).
+    pub spot: places::Spot,
 }
 
 /// How a park is laid out.
@@ -423,6 +429,8 @@ pub struct Park {
     pub key: u64,
     /// R5 towns: a cemetery's look (its culture group, wealth) and patch (`cemetery`).
     pub cemetery: Option<cemetery::Style>,
+    /// R5 towns: what its `sq:` id is keyed by (`places`).
+    pub spot: places::Spot,
 }
 
 /// The points of a 20-ft grid about the town's centre inside a polygon (local ft).
@@ -578,6 +586,7 @@ impl Layout {
             walls: Vec::new(),
             towers: Vec::new(),
             gates: Vec::new(),
+            gate_spots: Vec::new(),
             streets: Vec::new(),
             roads: Vec::new(),
             plazas: Vec::new(),
@@ -3132,6 +3141,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let cells: Vec<Labeled> = (0..total).map(|i| Labeled { pts: mesh.face_pts(i), labels: mesh.labels[i].clone() }).collect();
     let edge_v = |i: usize, e: usize| (mesh.faces[i][e], mesh.faces[i][(e + 1) % mesh.faces[i].len()]);
     l.gates = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
+    l.gate_spots = if walled { plan.gates.iter().map(|&g| g as u32).collect() } else { Vec::new() };
     // (Its outline by its style, item 104: `outline::lay`.)
     let mut wall_laid = outline::lay(site, plan, &mesh, ward, &l.wall_style);
     // A round wall's curtains bowed out, before the outskirts step back from them (`curtain`).
@@ -3298,7 +3308,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             }
             let quay = vec![a, b, sub(b, mul(out, 14.0)), sub(a, mul(out, 14.0))];
             if !site.wet(centroid(&quay)) && !site.near_river(centroid(&quay), 10.0) {
-                l.plazas.push(Plaza { pts: quay, kind: PlazaKind::Quay });
+                l.plazas.push(Plaza { pts: quay, kind: PlazaKind::Quay, spot: places::Spot::None });
             }
             if ward[i] != Some(Ward::Docks) {
                 continue;
@@ -3704,7 +3714,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 } else {
                     PlazaKind::MarketDay
                 };
-                l.plazas.push(Plaza { pts: block, kind })
+                l.plazas.push(Plaza { pts: block, kind, spot: places::Spot::Patch(i as u32) })
             }
             Ward::Farm => farm(site, &block, &mut prng, l, &mut plots, if ch.ward.contains_key(&i) { 0 } else { 1 }, true),
             Ward::Park if sparse => build_block(site, &block, &mut streets, w, &dp, &mut prng, l, None),
@@ -3747,6 +3757,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     pk.cemetery = Some(cemetery::Style::of(s, i, false));
                     cem_laid += (!ch.park.contains_key(&i)) as usize;
                 }
+                pk.spot = places::Spot::Patch(i as u32);
                 l.parks.push(pk);
             }
             // The gate faces the centre (the plaza, if the citadel backs onto it).
@@ -3944,13 +3955,13 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // The squares the chords enclose; a green's lanes stop at its edge (a lawn, not paving), where
     // a path runs before the houses fronting it (laid once the lanes are cut).
     let (mut greens, mut green_paths): (Vec<Vec<P>>, Vec<(Vec<P>, f64)>) = (Vec::new(), Vec::new());
-    for cut in &cuts {
+    for (cut, &(v, _)) in cuts.iter().zip(&spots) {
         if let Some(pts) = cut.outline() {
             if cut.kind == PlazaKind::Green {
                 greens.push(pts.clone());
                 green_paths.extend(cut.edge_paths(5.0));
             }
-            l.plazas.push(Plaza { pts, kind: cut.kind });
+            l.plazas.push(Plaza { pts, kind: cut.kind, spot: places::Spot::Corner(v as u32) });
         }
     }
     // Off the roads into the city and the ground before each gate (`clear_of`), a bent entrance's
@@ -4818,7 +4829,7 @@ fn park(site: &Site, block: &[P], kind: ParkKind, fronts: Vec<bool>, key: u64) -
         wet: pts.iter().map(|&p| site.wet(p) || site.near_river(p, 80.0)).collect(),
         water: pts.iter().map(|&p| site.wet(p)).collect(),
     };
-    Park { pts: block.to_vec(), kind, fronts, ground, key, cemetery: None }
+    Park { pts: block.to_vec(), kind, fronts, ground, key, cemetery: None, spot: places::Spot::None }
 }
 
 fn split_field(poly: &[P], max_area: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, depth: u32) {

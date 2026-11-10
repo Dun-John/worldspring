@@ -795,6 +795,7 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
         ("u", [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| e.at),
         ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
         ("w", [li, sx, sy]) if *li < t0.settlements.len() => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
+        ("sq" | "gt", _) => town::places::find(world, t0, id).map(|x| x.1.at),
         _ => features(world, t0).into_iter().find(|f| f.id == id).map(|f| [f.x, f.y]),
     }
 }
@@ -905,6 +906,7 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
         (Some("u"), [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| cap(e.kind.name())),
         (Some("k"), [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).filter(|b| crate::interior::has_deep_dungeon(b)).map(|_| "Deep dungeons".into()),
         (Some("w"), [li, ..]) if *li < town::layout_count(t0) => crate::interior::generate_id(world, t0, id).map(|it| it.name.unwrap_or_else(|| it.function.to_string())),
+        (Some("sq" | "gt"), _) => town::places::find(world, t0, id).map(|x| x.1.name),
         _ => match world.file.edits.created.iter().find(|c| c.id == id) {
             Some(c) => Some(c.name.clone()),
             None => t0.extra.as_ref()?.overlay.features.iter().find(|f| f.id == id).map(|f| f.name.clone()),
@@ -953,7 +955,7 @@ pub fn at_place(world: &World, t0: &T0, id: &str) -> impl Fn(&str) -> bool + use
             return true;
         }
         let mut parts = at.split(':');
-        matches!(parts.next(), Some("b" | "d" | "t" | "u" | "k" | "w")) && parts.next().and_then(|s| s.parse::<usize>().ok()).is_some_and(|li| layouts.contains(&li))
+        matches!(parts.next(), Some("b" | "d" | "t" | "u" | "k" | "w" | "sq" | "gt")) && parts.next().and_then(|s| s.parse::<usize>().ok()).is_some_and(|li| layouts.contains(&li))
     }
 }
 
@@ -1158,6 +1160,8 @@ pub fn search(world: &World, t0: &T0, q: &str, kind: Option<&str>, limit: usize,
             out.push(hit_json(world, t0, &h));
         }
     }
+    let room = limit.saturating_sub(out.len());
+    out.extend(town::places::search(world, t0, &ql, kind, room, include_hidden));
     json!({ "results": out })
 }
 
@@ -1341,6 +1345,10 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
         v["kind"] = json!("district");
         v["name"] = json!(world.file.edits.renames.get(id).cloned().unwrap_or_else(|| q.name.clone()));
         v["district_kind"] = json!(q.kind.name());
+        set_whereabouts(world, t0, &mut v, nums[0]);
+    } else if matches!(head, "sq" | "gt") {
+        // (R5 towns: a square, park or gate, `town::places`.)
+        v.as_object_mut()?.extend(town::places::detail(world, t0, id)?.as_object()?.clone());
         set_whereabouts(world, t0, &mut v, nums[0]);
     } else if matches!(head, "u" | "w" | "k" | "t") {
         let it = crate::interior::generate_id(world, t0, id)?;
@@ -1591,6 +1599,9 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     for (k, (at, _, gate)) in crate::interior::towers(&l).into_iter().enumerate() {
         out.push(name_entry(world, format!("t:{li}:{k}"), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
     }
+    for p in town::places::of(t0, &l) {
+        out.push(name_entry(world, p.id, p.kind, p.name, Some(p.at), false));
+    }
     for e in l.entrances.iter().filter(|e| e.kind != crate::under::UnderKind::Sewer) {
         out.push(name_entry(world, format!("u:{li}:{}", e.id), "underground", cap(e.kind.name()), Some(e.at), true));
     }
@@ -1658,6 +1669,10 @@ pub fn names(world: &World, t0: &T0, kind: Option<&str>, within: Option<&str>, s
         let fs = t0.extra.as_ref().map(|e| e.overlay.features.as_slice()).unwrap_or_default();
         let mut v: Vec<Value> = fs.iter().map(|f| name_entry(world, f.id.clone(), f.kind, f.name.clone(), Some([f.x, f.y]), false)).collect();
         v.extend(edits.created.iter().filter(|c| !c.removed).map(|c| name_entry(world, c.id.clone(), &c.kind, c.name.clone(), Some([c.x, c.y]), false)));
+        // (R5 towns: squares, parks and gates are in their towns' layouts.)
+        if matches!(kind, Some("square" | "park" | "gate")) {
+            v.extend((0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= crate::t0::settle::Tier::Town).flat_map(|li| layout_names(world, t0, li)));
+        }
         v
     };
     Ok(json!({ "names": list.into_iter().filter(|v| kind.is_none_or(|k| v["kind"] == k)).collect::<Vec<_>>() }))
