@@ -1,7 +1,8 @@
 //! Worlds on disk: `<dir>/<world hash>/world.json` (the world file with its edits) and
 //! `edits.jsonl` (every change: when, who, what), `<dir>/current` (the open world's hash), and
 //! `<dir>/assets/<id>`: uploaded pictures (sprites, portraits) by content hash, shared by all
-//! worlds.
+//! worlds. `<dir>/<hash>/sketch.json`: sketch changes not regenerated yet, and `remade_from`:
+//! the world it was remade from by `regenerate` (`sketch.rs`).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,11 @@ impl Store {
 
     fn world_dir(&self, hash: u64) -> PathBuf {
         self.dir.join(format!("{hash:016x}"))
+    }
+
+    /// Another file kept with a world (`<dir>/<hash>/<name>`: the sketch's pending changes).
+    pub fn world_path(&self, hash: u64, name: &str) -> PathBuf {
+        self.world_dir(hash).join(name)
     }
 
     pub fn load(&self, hash: u64) -> Option<WorldFile> {

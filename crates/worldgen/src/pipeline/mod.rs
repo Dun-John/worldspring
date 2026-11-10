@@ -76,6 +76,11 @@ impl Executor {
         Self { world, t0, terrain: HashMap::new() }
     }
 
+    /// An executor round a T0 made already (`t0::remap::remake`'s, its edits applied).
+    pub fn from_parts(world: World, t0: T0) -> Self {
+        Self { world, t0, terrain: HashMap::new() }
+    }
+
     pub fn terrain(&mut self, key: TileKey) -> Rc<TerrainOut> {
         if let Some(t) = self.terrain.get(&key) {
             return t.clone();

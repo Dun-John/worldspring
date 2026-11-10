@@ -79,6 +79,7 @@ pub fn list() -> Value {
         a.extend(crate::design::list());
         a.extend(crate::towns::list());
         a.extend(crate::settlements::list());
+        a.extend(crate::sketch::list());
         a.extend(crate::batch::list());
         // Any tool can say which world it means.
         for t in a.iter_mut() {
@@ -161,6 +162,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::settlements::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::sketch::call(app, name, &a).await {
         return r;
     }
     match name {
