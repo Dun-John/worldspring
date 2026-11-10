@@ -491,21 +491,19 @@ export class Labels {
       else {
         let s = (lenPx - total) / 2;
         const at: [number, number, number][] = [];
-        const box: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+        // (Each letter's own box: a slanting name's whole frame would keep off much that it misses.)
+        const gb: Box[] = [];
         glyphs.forEach((g, k) => {
           const [wx, wy, a] = along(path, (s + (widths[k] - tight) / 2) / cam.ppf);
           at.push([wx, wy, a]);
           const [gx, gy] = cam.worldToScreen(wx, wy);
           const r = style.size * 0.6 + pad;
-          box[0] = Math.min(box[0], gx - r);
-          box[1] = Math.min(box[1], gy - r);
-          box[2] = Math.max(box[2], gx + r);
-          box[3] = Math.max(box[3], gy + r);
+          gb.push([gx - r, gy - r, gx + r, gy + r]);
           s += widths[k] - tight + spacing;
         });
-        show = !boxes.hits(box);
+        show = !gb.some((b) => boxes.hits(b));
         if (show) {
-          boxes.add(box);
+          for (const b of gb) boxes.add(b);
           it.at = at;
           glyphs.forEach((g, k) => {
             const [gx, gy] = cam.worldToScreen(at[k][0], at[k][1]);
