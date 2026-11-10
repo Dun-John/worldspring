@@ -544,22 +544,26 @@ pub fn plan(pk: &Park) -> Option<Plan> {
         tombs: Vec::new(),
         discs: Vec::new(),
     };
-    // Tomb buildings along the walks, both sides, their doors toward them: (width along, depth, gap, most).
+    // Tomb buildings along the walks, both sides, their doors toward them, 10 ft apart at least:
+    // (width along, depth, most: fewer in a smaller plot). The places that fit, every 2 ft along
+    // each walk's sides, taken in a rolled order so they spread over the plot (slab rows between).
     let area_ft = area(&boundary).abs();
-    let tombs: Option<(f64, f64, f64, usize)> = match group {
-        1 if st.rich => Some((15.0, 20.0, 10.0, (2 + (area_ft / 12_000.0) as usize).min(6))),
-        2 => Some((15.0, 15.0, 3.0, usize::MAX)),
-        3 => Some((15.0, 15.0, 7.0, usize::MAX)),
+    let tombs: Option<(f64, f64, usize)> = match group {
+        1 if st.rich => Some((15.0, 20.0, (2 + (area_ft / 12_000.0) as usize).min(6))),
+        2 => Some((15.0, 15.0, ((area_ft / 5_000.0) as usize).clamp(1, 4))),
+        3 => Some((15.0, 15.0, ((area_ft / 2_500.0) as usize).clamp(2, 8))),
         _ => None,
     };
-    if let Some((tw, td, tgap, most)) = tombs {
+    if let Some((tw, td, most)) = tombs {
+        let tgap = 10.0;
+        let mut cands: Vec<(f64, Vec<P>)> = Vec::new();
         for (wi, &(p, q, w)) in walks.iter().enumerate() {
             let len_w = dist(p, q);
             let u = mul(sub(q, p), 1.0 / len_w.max(1e-9));
-            for side in [1.0, -1.0] {
+            for (si, side) in [1.0, -1.0].into_iter().enumerate() {
                 let o = mul([-u[1], u[0]], side);
                 let mut s = 2.0;
-                while s + tw <= len_w && room.tombs.len() < most {
+                while s + tw <= len_w {
                     // (A South tomb-house now and then deeper: a family's grander one.)
                     let d = if group == 2 && roll(wi as i64, (s * 4.0) as i64, 2) < 0.35 { td + 5.0 } else { td };
                     let door = add(add(p, mul(u, s + 0.5 * tw)), mul(o, 0.5 * w + DOOR_GAP));
@@ -569,15 +573,21 @@ pub fn plan(pk: &Park) -> Option<Plan> {
                         && walks
                             .iter()
                             .enumerate()
-                            .all(|(wj, &(a, b, ww))| wj == wi || poly_gap(&[a, b], &f) >= 0.5 * ww + 2.0 && !contains(&f, a))
-                        && room.tombs.iter().all(|o2| poly_gap(o2, &f) >= tgap && !contains(o2, centroid(&f)));
+                            .all(|(wj, &(a, b, ww))| wj == wi || poly_gap(&[a, b], &f) >= 0.5 * ww + 2.0 && !contains(&f, a));
                     if fits {
-                        room.tombs.push(f);
-                        s += tw + tgap;
-                    } else {
-                        s += 2.0;
+                        cands.push((roll(wi as i64 * 2 + si as i64, (s * 4.0) as i64, 12), f));
                     }
+                    s += 2.0;
                 }
+            }
+        }
+        cands.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, f) in cands {
+            if room.tombs.len() >= most {
+                break;
+            }
+            if room.tombs.iter().all(|o2| poly_gap(o2, &f) >= tgap && !contains(o2, centroid(&f)) && !contains(&f, centroid(o2))) {
+                room.tombs.push(f);
             }
         }
     }
@@ -652,11 +662,11 @@ pub fn plan(pk: &Park) -> Option<Plan> {
             s += 36.0;
         }
     }
-    // The North's standing stones: three to five, apart, in the open.
+    // The North's standing stones: half a dozen and more (one to 2,500 sq ft or so), apart, in the open.
     if group == 0 {
-        let want = 3 + rng.below(3) as usize;
+        let want = (6 + rng.below(3) as usize).max((area_ft / 2_500.0) as usize).min(14);
         let mut set = 0;
-        for k in 0..60 {
+        for k in 0..120 {
             if set >= want {
                 break;
             }
@@ -667,7 +677,7 @@ pub fn plan(pk: &Park) -> Option<Plan> {
                     mul(t, (roll(k, 0, 9) - 0.5) * 2.0 * exit(&boundary, add(gate, mul(n, 0.5 * deep)), t).max(1.0)),
                 ),
             );
-            if room.free(p, 2.5, 3.0, 3.0) && room.discs.iter().all(|&(q, _)| dist(p, q) > 20.0) {
+            if room.free(p, 2.5, 3.0, 3.0) && room.discs.iter().all(|&(q, _)| dist(p, q) > 14.0) {
                 room.discs.push((p, 2.5));
                 out.props.push((p, 0.0, Kind::StandingStone, rng.below(4) as u8, 1.0));
                 set += 1;
@@ -678,7 +688,12 @@ pub fn plan(pk: &Park) -> Option<Plan> {
     // slabs in the South and the dry lands, along each row out from the main walk.
     if group != 4 {
         let slab = matches!(group, 2 | 3);
-        let (row, step) = if slab { (10.0, 5.0) } else { (8.0, 5.0) };
+        // (The North's rows wider apart, its graves farther apart along them, some gaps.)
+        let (row, step, gaps) = match group {
+            2 | 3 => (10.0, 5.0, 0.12),
+            0 => (12.0, 7.0, 0.2),
+            _ => (8.0, 5.0, 0.12),
+        };
         let reach = |s: f64, d: P| exit(&boundary, add(gate, mul(n, s)), d);
         let mut j = 0;
         while 6.0 + j as f64 * row < deep {
@@ -690,9 +705,12 @@ pub fn plan(pk: &Park) -> Option<Plan> {
                 while 0.5 * wm + 3.5 + k as f64 * step < far {
                     let a = 0.5 * wm + 3.5 + k as f64 * step;
                     let p = add(add(gate, mul(n, s)), mul(d, a));
-                    let skip = roll(j, k * 2 + si as i64, 10) < 0.12;
+                    let skip = roll(j, k * 2 + si as i64, 10) < gaps;
                     let ok = if slab {
-                        room.free(p, 1.5, 1.0, 1.0) && room.free(add(p, mul(n, 2.5)), 1.0, 1.0, 1.0) && room.free(sub(p, mul(n, 2.5)), 1.0, 1.0, 1.0)
+                        room.free(p, 1.5, 1.0, 1.0)
+                            && room.free(add(p, mul(n, 2.5)), 1.0, 1.0, 1.0)
+                            && room.free(sub(p, mul(n, 2.5)), 1.0, 1.0, 1.0)
+                            && room.tombs.iter().all(|tb| depth_or_gap(tb, p) >= 4.0)
                     } else {
                         room.free(p, 1.2, 1.0, 1.0)
                     };
@@ -700,7 +718,7 @@ pub fn plan(pk: &Park) -> Option<Plan> {
                         if slab {
                             out.props
                                 .push((p, (libm::atan2(t[1], t[0]) - std::f64::consts::FRAC_PI_2) as f32, Kind::TombSlab, rng.below(4) as u8, 1.0));
-                        } else if group == 0 && roll(j, k * 2 + si as i64, 11) < 0.1 && room.free(p, 2.0, 1.0, 1.0) {
+                        } else if group == 0 && roll(j, k * 2 + si as i64, 11) < 0.3 && room.free(p, 2.0, 1.0, 1.0) {
                             out.props.push((p, 0.0, Kind::Cairn, rng.below(4) as u8, 1.0));
                             room.discs.push((p, 2.0));
                         } else {
