@@ -1718,16 +1718,17 @@ fn people_field(inp: &Inputs, own: &[&Settlement], roads: &[u8]) -> Vec<f32> {
     d
 }
 
-/// How willing a cave is to open this far (miles) from people: most of them 5-25 mi off, fewer
-/// farther, a few deep in the wilds, and less within the 2-mi clear zone's edge.
+/// How willing a cave is to open this far (miles) from people: 0.2 at the 2-mi clear zone's edge
+/// rising to 1.0 at 5 mi, 1.0 to 25 mi, falling fast to 0.05 at 35 mi and flat to 50, then 0.6
+/// beyond (the wilds are their own draw, about a fifth of the caves).
 fn cave_pull(mi: f64) -> f64 {
-    const WILD: f64 = 0.8;
+    const WILD: f64 = 0.6;
     if mi < 5.0 {
-        0.4 + 0.6 * ((mi - 2.0) / 3.0).clamp(0.0, 1.0)
+        0.2 + 0.8 * ((mi - 2.0) / 3.0).clamp(0.0, 1.0)
     } else if mi <= 25.0 {
         1.0
     } else if mi < 50.0 {
-        1.0 - (1.0 - 0.3) * (mi - 25.0) / 25.0
+        if mi < 35.0 { 1.0 - 0.95 * (mi - 25.0) / 10.0 } else { 0.05 }
     } else {
         WILD
     }
