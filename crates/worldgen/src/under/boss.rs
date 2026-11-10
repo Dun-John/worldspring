@@ -526,6 +526,7 @@ fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut Pcg32) -> O
             let bw = if h.w >= 10 { 2 } else { 1 };
             let first = rng.below(2) as usize;
             let mut items = Vec::new();
+            let mut sides = Vec::new();
             for s in 0..if two { 2 } else { 1 } {
                 let right = (first + s) % 2 == 1;
                 let a = if right { w - bw as isize } else { 0 };
@@ -540,8 +541,36 @@ fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut Pcg32) -> O
                 let back = Some(if right { h.walls().1 } else { h.walls().0 });
                 items.push(h.item("balcony", d0, a, (d1 - d0 + 1) as usize, bw, back));
                 items.push(h.item(up, d0 - 1, if right { w - 1 } else { 0 }, 1, 1, Some(h.far())));
+                sides.push((right, d0, d1));
             }
-            lay(p, h, items).then_some(stage)
+            if !lay(p, h, items) {
+                return None;
+            }
+            // Columns under the gallery's edge, holding it up, every second square (third in a long hall), before the stage.
+            let gap = if h.l >= 12 { 3 } else { 2 };
+            for &(right, d0, d1) in &sides {
+                let a = if right { w - 1 - bw as isize } else { bw as isize };
+                let mut d = d0 + 1;
+                while d <= d1.min(front) {
+                    set(p, h, h.item("pillar", d, a, 1, 1, None), false);
+                    d += gap;
+                }
+            }
+            // Cover in the hall between them: a broken wall or a statue a third and two thirds of the way in, on
+            // alternate sides of the middle (where the hall is wide enough to walk round them).
+            let (lo, hi) = (bw as isize + 1, w - 2 - bw as isize);
+            if hi - lo >= 3 && front >= 4 {
+                let left = rng.below(2) == 0;
+                for (i, d) in [(front + 1) / 3, (2 * front + 1) / 3].into_iter().enumerate() {
+                    let west = left == (i == 0);
+                    let stub = rng.below(2) == 0;
+                    let aw = if stub { 2 } else { 1 };
+                    let a = if west { lo + rng.below(2) as isize } else { hi - aw as isize + 1 - rng.below(2) as isize };
+                    let kind = if stub { "wall_stub" } else { "statue" };
+                    let _ = [d, d + 1, d - 1].into_iter().filter(|&d| d >= 1 && d <= front).any(|d| set(p, h, h.item(kind, d, a, 1, aw, None), false));
+                }
+            }
+            Some(stage)
         }
         "sunken arena" => {
             // The chamber's floor raised by `rise` round a fighting floor at the level's own height (heights stand

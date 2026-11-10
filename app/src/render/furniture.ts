@@ -8009,6 +8009,54 @@ function scaffold(g: Graphics, f: InteriorItem, light: Light, rnd: () => number)
 /** Cracked floor (a hidden hazard, as the DM sees it): a slightly sunken patch of floor — a shade on its side toward
  * the light where its rim overhangs, a paler sliver opposite — cracks running out from its middle and part way round
  * it, a few loose crumbs. Kept faint. */
+/** A flooded pit (a hidden hazard, seen only by the DM): a shaft full of dark still water seen from straight above,
+ * in the pit's family: an inked stone rim with a wet band inside it, the water in three flat dark tones (shade on
+ * the side toward the light, under the rim), one pale ripple line, a floating plank and a little scum, broken
+ * stones round the rim. */
+function floodedPit(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
+  const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
+  const r = Math.min(f.w, f.h) * 0.45;
+  const [lx, ly] = light;
+  const rough = (k: number, j: number, ox = 0, oy = 0) => {
+    const pts: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const a = (i / 20) * Math.PI * 2;
+      const rr = r * k * (1 + (rnd() - 0.5) * j);
+      pts.push(cx + ox + Math.cos(a) * rr, cy + oy + Math.sin(a) * rr);
+    }
+    return pts;
+  };
+  g.poly(rough(1, 0.1)).fill(STONE[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  g.poly(rough(0.84, 0.08)).fill(0x4a4540).stroke({ width: LINE, color: INK, join: 'round' });
+  // The water: its shade toward the light (the rim's shadow), the open water, and a lit patch beyond.
+  g.poly(rough(0.76, 0.06)).fill(0x1c2627);
+  g.poly(rough(0.62, 0.08, lx * r * 0.12, ly * r * 0.12)).fill(0x2b3a3b);
+  g.poly(rough(0.32, 0.12, lx * r * 0.3, ly * r * 0.3)).fill(0x364849);
+  // One pale ripple line, curved round the lit side.
+  const a0 = Math.atan2(ly, lx) - 0.7;
+  g.moveTo(cx + Math.cos(a0) * r * 0.5, cy + Math.sin(a0) * r * 0.5);
+  for (let k = 1; k <= 6; k++) {
+    const a = a0 + (k / 6) * 1.4;
+    g.lineTo(cx + Math.cos(a) * r * 0.5, cy + Math.sin(a) * r * 0.5);
+  }
+  g.stroke({ width: 0.018, color: 0x7f9696, alpha: 0.7, cap: 'round', join: 'round' });
+  // A floating plank, a little scum.
+  const pa = rnd() * Math.PI;
+  const [px, py] = [cx - lx * r * 0.15 + (rnd() - 0.5) * 0.08, cy - ly * r * 0.15 + (rnd() - 0.5) * 0.08];
+  const [ux, uy, vx, vy] = [Math.cos(pa) * 0.14, Math.sin(pa) * 0.14, -Math.sin(pa) * 0.035, Math.cos(pa) * 0.035];
+  g.poly([px - ux - vx, py - uy - vy, px + ux - vx, py + uy - vy, px + ux + vx, py + uy + vy, px - ux + vx, py - uy + vy]).fill(0x6e5638).stroke({ width: LINE * 0.8, color: INK, join: 'round' });
+  for (let i = 0; i < 3; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = r * (0.3 + 0.3 * rnd());
+    g.circle(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0.022 + 0.012 * rnd()).fill({ color: 0x5c6444, alpha: 0.85 });
+  }
+  // Broken stones on the rim.
+  for (let i = 0; i < 4; i++) {
+    const a = rnd() * Math.PI * 2;
+    g.poly(ring(cx + Math.cos(a) * r * 0.97, cy + Math.sin(a) * r * 0.97, 0.05 + 0.03 * rnd(), rnd, 0.03, 6)).fill(STONE[2]).stroke({ width: LINE, color: INK });
+  }
+}
+
 function crackedFloor(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const [lx, ly] = light;
@@ -8058,6 +8106,7 @@ export const UNDER_DRAWN = new Set([
   'brazier', 'candles', 'chains', 'sconce', 'banner', 'iron_maiden', 'stocks', 'hoard', 'dais', 'fountain', 'glyph',
   'collapsed_wall', 'drain', 'grille',
   'throne', 'steps', 'climb_ladder', 'wall_stub', 'fallen_column', 'arcane_workbench', 'arcane_focus', 'bone_mound', 'totem', 'scaffold', 'cracked_floor',
+  'flooded_pit',
 ]);
 
 /** Draws underground prop `f` if it is drawn here; false otherwise. `wall` is the rock side for props
@@ -8306,6 +8355,9 @@ export function drawUnderProp(
       break;
     case 'cracked_floor':
       crackedFloor(g, f, light, rnd);
+      break;
+    case 'flooded_pit':
+      floodedPit(g, f, light, rnd);
       break;
   }
   return true;

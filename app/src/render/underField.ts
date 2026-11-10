@@ -85,7 +85,7 @@ export function roughness(site: string): number {
 
 /** Floor material for the shader: 0 cave rock, 1 basalt, 2 mine earth, 3 sewer brick,
  * 4 flagstones, 5 boss flagstones, 6 the cult's flagstones, 7 marble, 8 hewn blocks, 9 ice, 10 the cult's dark ring flagstones,
- * 11 (v63 underground) crypt flagstones. Flagstones (4-6, 10, 11) take their stone from the site's theme (`underTheme.ts`). */
+ * 11 (v63 underground) crypt flagstones, 12 a sunken arena's packed sand (`sunkenPits`). Flagstones (4-6, 10, 11) take their stone from the site's theme (`underTheme.ts`). */
 export function materialOf(site: string, kind: string, theme?: string): number {
   if (kind === 'ring corridor') return 10;
   if (kind === 'sewer tunnel' || kind === 'service passage') return 3;
@@ -100,6 +100,44 @@ export function materialOf(site: string, kind: string, theme?: string): number {
   if (site === 'mine') return 2;
   if (site === 'crypt' || site === 'catacombs') return 11;
   return 4;
+}
+
+/** A boss chamber's sunken arena (`under::boss`: most of its floor raised round a pit at the level's own height):
+ * the pit's squares (4 or more together at the bottom, so not the doorway's square), 1 where the floor is the
+ * fighting pit's packed sand (the shader's material 12). */
+function sunkenPits(lv: InteriorLevel, nx: number, ny: number): Uint8Array {
+  const out = new Uint8Array(nx * ny);
+  if (!floorOf(lv, nx, ny)) return out;
+  for (let r = 0; r < lv.rooms.length; r++) {
+    if (lv.rooms[r].kind !== 'boss chamber') continue;
+    let all = 0;
+    let raised = 0;
+    for (let k = 0; k < nx * ny; k++) {
+      if (lv.cells[k] !== r) continue;
+      all++;
+      if (floorFt(lv, nx, ny, k % nx, Math.floor(k / nx)) > 3) raised++;
+    }
+    if (raised * 5 <= all * 2) continue;
+    const low = (k: number) => lv.cells[k] === r && !out[k] && floorFt(lv, nx, ny, k % nx, Math.floor(k / nx)) < 0.5;
+    const seen = new Uint8Array(nx * ny);
+    for (let k0 = 0; k0 < nx * ny; k0++) {
+      if (seen[k0] || !low(k0)) continue;
+      const part = [k0];
+      seen[k0] = 1;
+      for (let n = 0; n < part.length; n++) {
+        const k = part[n];
+        const i = k % nx;
+        for (const m of [i > 0 ? k - 1 : -1, i + 1 < nx ? k + 1 : -1, k - nx, k + nx]) {
+          if (m >= 0 && m < nx * ny && !seen[m] && low(m)) {
+            seen[m] = 1;
+            part.push(m);
+          }
+        }
+      }
+      if (part.length >= 4) for (const k of part) out[k] = 1;
+    }
+  }
+  return out;
 }
 
 /** Separable Gaussian blur of a w × h field (outside counts as 0). */
@@ -401,6 +439,7 @@ export function underField(it: Interior, level: number): UnderField {
     }
   }
   const cells = new Uint8Array(nx * ny * 4);
+  const sand = sunkenPits(lv, nx, ny);
   const { index, shapes: slots, caverns } = shapeIndex(lv, nx, ny);
   let anyRaised = false;
   for (let j = 0; j < ny; j++) {
@@ -409,7 +448,7 @@ export function underField(it: Interior, level: number): UnderField {
       const r = lv.cells[k];
       if (r < 0) continue;
       const room = lv.rooms[r];
-      cells[k * 4] = room.shape === CAVERN ? 0 : materialOf(it.function, room.kind, it.theme);
+      cells[k * 4] = room.shape === CAVERN ? 0 : sand[k] ? 12 : materialOf(it.function, room.kind, it.theme);
       cells[k * 4 + 1] = index[k];
       cells[k * 4 + 2] = (r * 37) & 255;
       cells[k * 4 + 3] = 255;
