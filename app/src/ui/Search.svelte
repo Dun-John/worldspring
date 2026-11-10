@@ -12,13 +12,16 @@
   import type { IconName } from './icons';
 
   type Found = BuildingHit | DistrictHit;
-  type Row = { key: string; group: string; icon: IconName; name: string; sub: string; pick: () => void; indent?: boolean };
+  /** A result row; `indent` (with `last`): attached to the site row above it, `wrap`: a sub line
+   * on up to two lines (underground sites: what matched, then where). */
+  type Row = { key: string; group: string; icon: IconName; name: string; sub: string; pick: () => void; indent?: boolean; last?: boolean; wrap?: boolean };
   type Place = '' | 'view' | 'near';
 
   /** "Near here": round the view's middle, this far (ft: 5 mi, a morning's walk). */
   const NEAR_FT = 5 * 5280;
-  /** Underground sites listed at most (the chips narrow the rest), and asked for (kind and
-   * depth chips filter here, at once, and show only the kinds and depths found). */
+  /** Underground sites listed at most (the chips narrow the rest), and asked for. The kind and
+   * depth chips filter here, at once, so the chip row can show every kind and depth found (an
+   * ask narrowed by them would hide the others); past the ask's cut the count says "+". */
   const UNDER_MAX = 8;
   const UNDER_ASK = 300;
   /** Things attached to a site listed under it at most. */
@@ -66,6 +69,8 @@
   let buildings = $state<Found[]>([]);
   let searching = $state(false);
   let under = $state<UnderHit[]>([]);
+  /** Underground sites the last answer found in all (`under` holds the first UNDER_ASK). */
+  let underFound = $state(0);
   let place = $state<Place>(readPlace());
   let rect = $state<Rect | null>(null);
   /** Near here: the middle of the view (a circle of NEAR_FT, as the underground search takes it; `rect` is its square). */
@@ -151,7 +156,7 @@
     return `${from ? '…' : ''}${text.slice(from, from + 70).replace(/\s+/g, ' ')}${text.length > from + 70 ? '…' : ''}`;
   };
 
-  const rows = $derived.by<Row[]>(() => {
+  const found = $derived.by<Row[]>(() => {
     const t = needle;
     if (!t) return [];
     const out: Row[] = [];
@@ -182,8 +187,11 @@
       out.push({ key: f.id, group: 'Places', icon: /^(rd|v):/.test(f.id) ? kindIcon(f.kind) : 'pin', name: renames[f.id] ?? f.name, sub: `${kindLabel(f.kind)}${town ? ` · in ${town}` : ''}`, pick: () => onSelect({ kind: 'feature', feature: f }) });
     }
     for (const h of underShown.slice(0, UNDER_MAX)) {
-      out.push({ key: `under:${h.id}`, group: 'Underground', icon: underIcon(h.site_kind), name: h.name, sub: underSub(h), pick: () => onUnder?.(underTarget(h)) });
-      for (const a of h.attached.slice(0, ATTACHED_MAX)) out.push(attachedRow(h, a));
+      out.push({ key: `under:${h.id}`, group: 'Underground', icon: underIcon(h.site_kind), name: underTitle(h), sub: underSub(h), pick: () => onUnder?.(underTarget(h)), wrap: true });
+      // (Once each: an NPC placed on the site and on one of its levels is one NPC.)
+      const seen = new Set<string>();
+      const list = h.attached.filter((a) => !seen.has(`${a.what}:${a.id}`) && !!seen.add(`${a.what}:${a.id}`)).slice(0, ATTACHED_MAX);
+      list.forEach((a, i) => out.push({ ...attachedRow(h, a), last: i === list.length - 1 }));
     }
     for (const b of buildings.filter((g) => inNear(g.x, g.y))) {
       // A building drawn by hand is its site: listed once, under Places, and hidden with it.
@@ -200,17 +208,27 @@
     }
     return out;
   });
-  /** An underground site's sub line: what matched (a level, room, NPC, plot or note), its kind,
-   * theme, levels and where it is (its settlement, the site it lies under, else the named place
-   * nearest), how far when near here. */
+  /** Where an underground site is: the site it lies under, else its settlement, else the named
+   * place nearest. */
+  function underPlace(h: UnderHit): string {
+    return h.site ? `under ${renames[h.site.id] ?? h.site.name}` : h.settlement ? `in ${renames[h.settlement.id] ?? h.settlement.name}` : nearOf(h.x_ft, h.y_ft);
+  }
+  /** A site with no name of its own ("Crypt") is titled by its place: "Crypt under The Lost Halls". */
+  const ownName = (h: UnderHit) => h.name !== h.generated || h.site_kind === 'sewer';
+  const underTitle = (h: UnderHit) => (ownName(h) ? h.name : [h.name, underPlace(h)].filter(Boolean).join(' '));
+
+  /** An underground site's sub line: what matched first (a level, room, NPC, plot, note, or the
+   * kind or theme word), then its kind, theme, levels, where it is (unless its title says so),
+   * how far when near here. */
   function underSub(h: UnderHit): string {
     const m = h.match;
-    const what = m && ['level', 'room', 'npc', 'plot', 'note'].includes(m.what) ? `${m.what === 'npc' ? 'NPC' : m.what}: ${m.what === 'note' ? snippet(m.text, needle) : m.text}` : '';
+    const said = m && m.what !== 'name' ? m.what : '';
+    const what = !m || !said ? '' : said === 'note' ? `note: ${snippet(m.text, needle)}` : `${said === 'npc' ? 'NPC' : said}: ${m.text}`;
     // (The theme alone when it says the kind: "ice cave", not "cave · ice cave".)
-    const theme = h.theme_name && h.theme_name !== h.site_kind && h.site_kind !== 'sewer' ? h.theme_name : '';
-    const kind = theme.split(' ').includes(h.site_kind) ? '' : h.site_kind === 'sewer' ? 'sewers' : h.site_kind;
+    const theme = said !== 'theme' && h.theme_name && h.theme_name !== h.site_kind && h.site_kind !== 'sewer' ? h.theme_name : '';
+    const kind = said === 'kind' || theme.split(' ').includes(h.site_kind) ? '' : h.site_kind === 'sewer' ? 'sewers' : h.site_kind;
     // (A city's sewers are named after it.)
-    const where = h.site_kind === 'sewer' && h.name === h.generated ? '' : h.settlement ? `in ${renames[h.settlement.id] ?? h.settlement.name}` : h.site ? `under ${renames[h.site.id] ?? h.site.name}` : nearOf(h.x_ft, h.y_ft);
+    const where = !ownName(h) || (h.site_kind === 'sewer' && h.name === h.generated) ? '' : underPlace(h);
     const far = h.distance_ft === undefined ? '' : h.distance_ft < 528 ? 'here' : `${(h.distance_ft / 5280).toFixed(1)} mi`;
     return [what, kind, theme, `${h.levels} level${h.levels === 1 ? '' : 's'}`, where, far, h.hidden ? 'hidden' : ''].filter(Boolean).join(' · ');
   }
@@ -230,35 +248,51 @@
   /** A note, NPC or plot point on an underground site, listed under it: a note opens its place,
    * an NPC or plot point the notebook. */
   function attachedRow(h: UnderHit, a: UnderAttached): Row {
-    const on = a.at !== h.id && /^[lr]:/.test(a.at) ? placeName(a.at) : '';
+    // "on Hall of Bones": the level or room it is on, else the site.
+    const on = `on ${a.at !== h.id && /^[lr]:/.test(a.at) ? placeName(a.at) : ownName(h) ? h.name : 'the site'}`;
     const base = { key: `under:${h.id}:${a.what}:${a.id}:${a.at}`, group: 'Underground', indent: true };
-    if (a.what === 'npc') return { ...base, icon: 'user', name: a.name ?? '', sub: ['NPC', on].filter(Boolean).join(' · '), pick: () => onNpc(a.id) };
-    if (a.what === 'plot') return { ...base, icon: 'scroll', name: a.name ?? '', sub: ['plot', on].filter(Boolean).join(' · '), pick: () => onPlot(a.id) };
-    const text = (a.text ?? '').replace(/\s+/g, ' ');
-    return { ...base, icon: 'note', name: text.length > 60 ? `${text.slice(0, 60)}…` : text, sub: ['note', on].filter(Boolean).join(' · '), pick: () => onUnder?.(underTarget({ ...h, match: { what: 'note', id: a.at, text: '' } })) };
+    if (a.what === 'npc') return { ...base, icon: 'user', name: a.name ?? '', sub: `NPC ${on}`, pick: () => onNpc(a.id) };
+    if (a.what === 'plot') return { ...base, icon: 'scroll', name: a.name ?? '', sub: `plot ${on}`, pick: () => onPlot(a.id) };
+    return { ...base, icon: 'note', name: clip((a.text ?? '').replace(/\s+/g, ' '), 60), sub: `note ${on}`, pick: () => onUnder?.(underTarget({ ...h, match: { what: 'note', id: a.at, text: '' } })) };
+  }
+
+  /** Text cut to about `n` characters, at a word. */
+  function clip(text: string, n: number): string {
+    if (text.length <= n) return text;
+    const cut = text.slice(0, n);
+    const sp = cut.lastIndexOf(' ');
+    return `${(sp > n / 2 ? cut.slice(0, sp) : cut).replace(/[\s,;:.]+$/, '')}…`;
   }
 
   const band = (h: UnderHit, i: number) => h.levels >= UNDER_DEPTHS[i][1] && h.levels <= (UNDER_DEPTHS[i][2] ?? Infinity);
   /** The underground hits the kind and depth chips keep. */
   const underShown = $derived(under.filter((h) => (!kinds.length || kinds.includes(h.site_kind)) && (depth === null || band(h, depth))));
-  /** Kind and depth chips: those of the sites found (and any on), when there are two to tell apart. */
-  const kindChips = $derived.by(() => {
-    const found = UNDER_KINDS.filter(([, k]) => kinds.includes(k) || under.some((h) => h.site_kind === k));
-    return found.length > 1 || kinds.length ? found : [];
-  });
-  const depthChips = $derived.by(() => {
-    const found = UNDER_DEPTHS.map((d, i) => [d[0], i] as const).filter(([, i]) => depth === i || under.some((h) => band(h, i)));
-    return found.length > 1 || depth !== null ? found : [];
-  });
+  /** Kind and depth chips: those of the sites found (and any on), in a fixed order, whenever
+   * underground sites are found. */
+  const kindChips = $derived(under.length ? UNDER_KINDS.filter(([, k]) => kinds.includes(k) || under.some((h) => h.site_kind === k)) : []);
+  const depthChips = $derived(under.length ? UNDER_DEPTHS.map((d, i) => [d[0], i] as const).filter(([, i]) => depth === i || under.some((h) => band(h, i))) : []);
+  const chipsOn = $derived(kinds.length > 0 || depth !== null);
+  /** Underground sites past the ask's cut (how many of them the chips keep is not known). */
+  const beyond = $derived(Math.max(0, underFound - under.length));
+  /** The more the chips could narrow the sites listed: two kinds or depths among them. */
+  const narrowable = $derived(new Set(underShown.map((h) => h.site_kind)).size > 1 || UNDER_DEPTHS.filter((_, i) => underShown.some((h) => band(h, i))).length > 1);
 
-  const groups = $derived([...new Set(rows.map((r) => r.group))].map((g) => ({ g, rows: rows.filter((r) => r.group === g) })));
+  // The groups (with a kind or depth chip on, Underground first: the chip is about it) and the
+  // rows in that order (↑/↓ walk them as shown).
+  const groups = $derived.by(() => {
+    const list = [...new Set(found.map((r) => r.group))].map((g) => ({ g, rows: found.filter((r) => r.group === g) }));
+    return chipsOn ? [...list.filter((x) => x.g === 'Underground'), ...list.filter((x) => x.g !== 'Underground')] : list;
+  });
+  const rows = $derived(groups.flatMap((x) => x.rows));
+  /** A group's count for its header: its rows (not what is attached); all the sites found underground. */
+  const count = (g: string, list: Row[]) => (g === 'Underground' ? `${underShown.length + (chipsOn ? 0 : beyond)}${chipsOn && beyond ? '+' : ''}` : `${list.filter((r) => !r.indent).length}`);
 
   function input() {
     open = true;
     active = 0;
     buildings = [];
-    under = [];
-    // (The kind and depth chips last while the query is edited, not into a new search.)
+    // (The underground list stays until the new answer lands; the kind and depth chips last
+    // while the query is edited, those the new answer has nothing for switch off.)
     if (!q.trim()) [kinds, depth] = [[], null];
     run(300);
   }
@@ -274,7 +308,7 @@
     const mine = ++token;
     const query = q.trim();
     if (query.length < 3) {
-      [buildings, under, searching] = [[], [], false];
+      [buildings, under, underFound, searching] = [[], [], 0, false];
       return;
     }
     const area = rect ? ([...rect] as Rect) : undefined;
@@ -291,7 +325,10 @@
       });
       if (searchUnder)
         void searchUnder(query, filters).then((res) => {
-          if (mine === token) under = res.items;
+          if (mine !== token) return done();
+          [under, underFound] = [res.items, res.found];
+          kinds = kinds.filter((k) => under.some((h) => h.site_kind === k));
+          if (depth !== null && !under.some((h) => band(h, depth!))) depth = null;
           done();
         });
     }, delay);
@@ -351,6 +388,10 @@
   const placeholder = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? 'Search places, people, notes… ⌘K' : 'Search places, people, notes…';
 </script>
 
+{#snippet chip(label: string, on: boolean, toggle: () => void, title?: string)}
+  <button class="ws-chip" class:on aria-pressed={on} onclick={toggle} {title}>{#if on}<Icon name="check" size={12} />{/if}{label}</button>
+{/snippet}
+
 <div class="search" bind:this={box} onfocusout={focusOut}>
   <input
     bind:this={input_}
@@ -380,32 +421,37 @@
         if (e.key === 'Escape') (input_?.focus(), e.stopPropagation());
       }}
     >
+      <!-- Chips in groups, a line each: where (always), then kind and depth while underground sites are found. -->
       <div class="chips" role="group" aria-label="Narrow the results">
-        <button class="ws-chip" class:on={place === 'view'} aria-pressed={place === 'view'} onclick={() => setPlace('view')}>Only in view</button>
-        <button class="ws-chip" class:on={place === 'near'} aria-pressed={place === 'near'} onclick={() => setPlace('near')} title="Within 5 miles of the middle of the view">Near here</button>
+        <div class="cg">
+          {@render chip('Only in view', place === 'view', () => setPlace('view'))}
+          {@render chip('Near here', place === 'near', () => setPlace('near'), 'Within 5 miles of the middle of the view')}
+        </div>
         {#if kindChips.length}
-          <span class="sep" aria-hidden="true"></span>
-          {#each kindChips as [label, k] (k)}
-            <button class="ws-chip" class:on={kinds.includes(k)} aria-pressed={kinds.includes(k)} onclick={() => toggleKind(k)}>{label}</button>
-          {/each}
+          <div class="cg" role="group" aria-label="Kind">
+            <span class="cl" aria-hidden="true">Kind</span>
+            {#each kindChips as [label, k] (k)}{@render chip(label, kinds.includes(k), () => toggleKind(k))}{/each}
+          </div>
         {/if}
         {#if depthChips.length}
-          <span class="sep" aria-hidden="true"></span>
-          {#each depthChips as [label, i] (label)}
-            <button class="ws-chip" class:on={depth === i} aria-pressed={depth === i} onclick={() => setDepth(i)}>{label}</button>
-          {/each}
+          <div class="cg" role="group" aria-label="Depth">
+            <span class="cl" aria-hidden="true">Depth</span>
+            {#each depthChips as [label, i] (label)}{@render chip(label, depth === i, () => setDepth(i))}{/each}
+          </div>
         {/if}
       </div>
       {#each groups as { g, rows: list } (g)}
-        <div class="group">{g}</div>
+        <div class="group">{g}<span class="count">{count(g, list)}</span></div>
         {#each list as r (r.key)}
           {@const i = rows.indexOf(r)}
-          <button class="row" class:indent={r.indent} class:active={i === active} role="option" aria-selected={i === active} onclick={() => pick(r)} onmouseenter={() => (active = i)}>
+          <button class="row" class:indent={r.indent} class:last={r.last} class:wrap={r.wrap} class:active={i === active} role="option" aria-selected={i === active} onclick={() => pick(r)} onmouseenter={() => (active = i)}>
             <Icon name={r.icon} size={16} />
             <span class="text"><span class="name">{r.name}</span><span class="sub">{r.sub}</span></span>
           </button>
         {/each}
-        {#if g === 'Underground' && underShown.length > UNDER_MAX}<div class="note">{underShown.length - UNDER_MAX} more underground: narrow them with the chips</div>{/if}
+        {#if g === 'Underground' && underShown.length + (chipsOn ? 0 : beyond) > UNDER_MAX}
+          <div class="note">{underShown.length - UNDER_MAX + (chipsOn ? 0 : beyond)}{chipsOn && beyond ? '+' : ''} more underground{narrowable ? ': narrow them with the chips' : ': type more to narrow them'}</div>
+        {/if}
       {/each}
       {#if under.length && !underShown.length}<div class="note">No underground sites with these chips</div>{/if}
       {#if searching}<div class="note">Searching…</div>{/if}
@@ -454,23 +500,60 @@
   }
   .chips {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
+    flex-direction: column;
     gap: 4px;
     padding: 2px 10px 6px;
     border-bottom: 1px solid var(--line-faint);
   }
-  .sep {
-    width: 1px;
-    align-self: stretch;
-    margin: 2px 2px;
-    background: var(--line-faint);
+  .cg {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+  }
+  .cl {
+    min-width: 3.4em;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-2);
+  }
+  /* Off chips stand out from the panel, on ones are filled (and ticked). */
+  .chips :global(.ws-chip:not(.on)) {
+    background: var(--paper-solid);
+    border-color: var(--line-soft);
   }
   .row.indent {
+    position: relative;
     padding-left: 36px;
     min-height: 32px;
   }
+  /* Attached rows hang off their site row's icon. */
+  .row.indent::before {
+    content: '';
+    position: absolute;
+    left: 20px;
+    top: 0;
+    bottom: 0;
+    width: 10px;
+    border-left: 1px solid var(--line-soft);
+  }
+  .row.indent.last::before {
+    bottom: 50%;
+    border-bottom: 1px solid var(--line-soft);
+    border-bottom-left-radius: 4px;
+  }
+  .row.indent:not(.last)::after {
+    content: '';
+    position: absolute;
+    left: 20px;
+    top: 50%;
+    width: 10px;
+    border-top: 1px solid var(--line-soft);
+  }
   .group {
+    display: flex;
+    justify-content: space-between;
     padding: 6px 12px 2px;
     font-size: 11px;
     text-transform: uppercase;
@@ -512,7 +595,17 @@
   .sub {
     font-size: 12px;
     font-style: italic;
-    color: var(--ink-3);
+    color: var(--ink-2);
+  }
+  .row.wrap .sub {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+  }
+  .count {
+    font-variant-numeric: tabular-nums;
   }
   .note {
     padding: 4px 12px;

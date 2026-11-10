@@ -607,6 +607,7 @@ export class MapView {
    * back to that one (a trapdoor, stairs or ladder between sites). A city's sewers open as one
    * network (`Sewers`); a section's undercroft on its own. */
   async enterBuilding(id: string, keep?: { level: number }, from?: string): Promise<boolean> {
+    this.unmarkUnless(id);
     const it = await this.gen.interior(id);
     if (!it || !this.geom) return false;
     const back = from ? linkIn(it, from) : null;
@@ -623,7 +624,7 @@ export class MapView {
         layer = this.sewers.layerOf(it);
         this.interior = layer;
       } else {
-        this.exitBuilding();
+        this.exitBuilding(true);
         this.dropPeek();
         this.sewers = new Sewers(layout, this.gen, this.geom.sea_level_ft, this.interiorStyle, it, fields?.get(level));
         this.app.stage.addChildAt(this.sewers.container, this.interiorIndex);
@@ -634,7 +635,7 @@ export class MapView {
         this.labels?.setPlaces(false);
       }
     } else {
-      this.exitBuilding();
+      this.exitBuilding(true);
       this.dropPeek();
       layer = new InteriorLayer(it, this.geom.sea_level_ft, false, false, this.interiorStyle, false, fields, level);
       layer.prefetch(prepareField);
@@ -730,7 +731,19 @@ export class MapView {
   /** Outline a room picked from the search (`r:` id; null: none), on whichever layer shows it. */
   markRoom(id: string | null) {
     InteriorLayer.picked = id;
+    if (id) InteriorLayer.pickedAt = 0;
     this.interior?.drawPicked();
+    this.sewers?.drawPicked();
+  }
+
+  /** The picked room's mark goes once another site (another city's sewers) or another level of
+   * its own opens. */
+  private unmarkUnless(site: string, level?: number) {
+    const m = /^r:(.+):(\d+):\d+$/.exec(InteriorLayer.picked ?? '');
+    if (!m) return;
+    const sewers = (id: string) => /^w:(\d+)/.exec(id)?.[1];
+    const same = m[1] === site || (!!sewers(site) && sewers(site) === sewers(m[1]));
+    if (!same || (level !== undefined && m[1] === site && Number(m[2]) !== level)) this.markRoom(null);
   }
 
   setInteriorLevel(i: number) {
@@ -738,6 +751,7 @@ export class MapView {
     if (!layer) return;
     const it = layer.interior;
     const level = Math.max(0, Math.min(it.levels.length - 1, i));
+    this.unmarkUnless(it.id, level);
     // Down from the sewers into a section's undercroft, or back up into the whole network.
     if (it.id.startsWith('w:') && level !== layer.currentLevel && (this.sewers || level === it.entry_level)) {
       void this.enterBuilding(it.id, { level });
@@ -747,8 +761,11 @@ export class MapView {
     this.emitInterior();
   }
 
-  exitBuilding() {
+  /** Leave the building or site open (`keepMark`: on the way into another, which judges the
+   * search's room mark itself). */
+  exitBuilding(keepMark = false) {
     if (!this.interior) return;
+    if (!keepMark) this.markRoom(null);
     if (this.sewers) {
       this.sewers.destroy();
       this.sewers = null;
@@ -1551,6 +1568,8 @@ export class MapView {
       }
     });
     const end = (e: PointerEvent) => {
+      // (Any click on the map, a tool's or a pick, lets go of a room picked from the search.)
+      if (e.type === 'pointerup' && e.pointerId === this.toolPointer && InteriorLayer.picked) this.markRoom(null);
       if (e.pointerId === this.toolPointer) {
         this.toolPointer = null;
         const r = c.getBoundingClientRect();
@@ -1569,6 +1588,7 @@ export class MapView {
       const tap = this.tap;
       this.tap = null;
       if (tap && e.type === 'pointerup' && this.pointers.size === 0 && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < 5 && performance.now() - tap.t < 400) {
+        if (InteriorLayer.picked) this.markRoom(null);
         const r = c.getBoundingClientRect();
         const [x, y] = this.cam.screenToWorld(e.clientX - r.left, e.clientY - r.top);
         // Inside a site, a click offers the ways on from that square; outside, it picks.

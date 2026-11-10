@@ -727,6 +727,9 @@ export function setUndergroundGrid(on: boolean) {
   undergroundGrid = on;
 }
 
+/** How long a room picked from the search pulses (s). */
+const PICK_PULSE_S = 2.4;
+
 export class InteriorLayer {
   /** The world's renames, for level and room names (`l:`/`r:` ids); set by `MapView`. */
   static names: Record<string, string> = {};
@@ -735,9 +738,16 @@ export class InteriorLayer {
   static renderer: Renderer | null = null;
   /** The room picked from the search (`r:<site>:<level>:<room>`), outlined for the DM; set by `MapView.markRoom`. */
   static picked: string | null = null;
+  /** When its outline started to pulse (ms; 0: not yet, the camera still on its way in): for a
+   * moment, then it stays. */
+  static pickedAt = 0;
   readonly container = new Container();
   /** The picked room's outline (grid units, like the plan). */
   private readonly pickedRoom = new Graphics();
+  /** The picked room's name over it (screen space, always shown), its spot (grid) and room. */
+  private readonly pickedName = new Container();
+  private pickedSpot: [number, number] | null = null;
+  private pickedRi = -1;
   private readonly dim = new Sprite(Texture.WHITE);
   private readonly plan = new Container();
   /** What is in the hand (`setGhost`), over the plan (which every draw rebuilds). */
@@ -745,7 +755,7 @@ export class InteriorLayer {
   private ghostKey = '';
   private readonly labels = new Container();
   private level = 0;
-  private labelSpots: { text: Text; x: number; y: number; min: number }[] = [];
+  private labelSpots: { text: Text; x: number; y: number; min: number; ri?: number }[] = [];
   /** NPCs placed here, drawn for the DM only (screen space, like the labels). */
   private readonly marks = new Container();
   private npcs: NpcMarker[] = [];
@@ -788,7 +798,7 @@ export class InteriorLayer {
     this.dim.visible = !peek && !ghost && !tile;
     this.labels.visible = !peek && !ghost;
     this.marks.visible = !peek && !ghost && !style.player;
-    this.container.addChild(this.dim, this.plan, this.pickedRoom, this.ghostLayer, this.labels, this.marks);
+    this.container.addChild(this.dim, this.plan, this.pickedRoom, this.ghostLayer, this.labels, this.pickedName, this.marks);
     this.level = Math.max(0, Math.min(interior.levels.length - 1, start ?? interior.entry_level));
     // Light from the NW of the screen, in grid axes, rounded to 45 degrees so items lit alike share
     // one look in the item atlas.
@@ -986,7 +996,15 @@ export class InteriorLayer {
       const [lx, ly] = cam.worldToScreen(w[0], w[1]);
       l.text.position.set(lx, ly);
       // Only rooms big enough on screen get a label.
-      l.text.visible = l.min * s > 70;
+      l.text.visible = l.min * s > 70 && l.ri !== this.pickedRi;
+    }
+    if (this.pickedSpot) {
+      this.pickedName.position.set(...cam.worldToScreen(...this.toWorld(...this.pickedSpot)));
+      this.pickedName.rotation = -cam.turn;
+      // (Three slow beats, from and back to full, once its squares are big enough to see.)
+      if (!InteriorLayer.pickedAt && s >= 12) InteriorLayer.pickedAt = performance.now();
+      const t = InteriorLayer.pickedAt ? (performance.now() - InteriorLayer.pickedAt) / 1000 : PICK_PULSE_S;
+      this.pickedRoom.alpha = t < PICK_PULSE_S ? 0.45 + 0.55 * Math.cos((t * Math.PI * 2) / 1.6) ** 2 : 1;
     }
     for (const m of this.markSpots) {
       const w = this.toWorld(m.x, m.y);
@@ -1033,26 +1051,50 @@ export class InteriorLayer {
     }
   }
 
-  /** Outline the picked room (`InteriorLayer.picked`) if it is on this level: its squares' edges
-   * that border another room or none. */
+  /** Mark the picked room (`InteriorLayer.picked`) if it is on this level: a soft gold wash
+   * over its squares, a gold line (on a dark one) round its edges that border another room or
+   * none, and its name over it. */
   drawPicked() {
     const g = this.pickedRoom.clear();
+    this.pickedName.removeChildren().forEach((c) => c.destroy());
+    [this.pickedSpot, this.pickedRi] = [null, -1];
     const m = /^r:(.+):(\d+):(\d+)$/.exec(InteriorLayer.picked ?? '');
     if (!m || m[1] !== this.interior.id || Number(m[2]) !== this.level || this.peek || this.ghost || this.style.player) return;
     const ri = Number(m[3]);
     const { nx, ny } = this.interior;
-    const cells = this.interior.levels[this.level]?.cells;
-    if (!cells) return;
+    const lv = this.interior.levels[this.level];
+    const cells = lv?.cells;
+    if (!cells || !lv.rooms[ri]) return;
     const at = (i: number, j: number) => i >= 0 && j >= 0 && i < nx && j < ny && cells[j * nx + i] === ri;
+    let first: [number, number] | null = null;
     for (let j = 0; j < ny; j++)
-      for (let i = 0; i < nx; i++) {
-        if (!at(i, j)) continue;
-        if (!at(i, j - 1)) g.moveTo(i, j).lineTo(i + 1, j);
-        if (!at(i, j + 1)) g.moveTo(i, j + 1).lineTo(i + 1, j + 1);
-        if (!at(i - 1, j)) g.moveTo(i, j).lineTo(i, j + 1);
-        if (!at(i + 1, j)) g.moveTo(i + 1, j).lineTo(i + 1, j + 1);
-      }
-    g.stroke({ width: 0.4, color: 0x2a1f14, alpha: 0.7, cap: 'square' }).stroke({ width: 0.2, color: 0xfbbf24, cap: 'square' });
+      for (let i = 0; i < nx; i++)
+        if (at(i, j)) {
+          g.rect(i, j, 1, 1);
+          first ??= [i + 0.5, j + 0.5];
+        }
+    g.fill({ color: 0xf5c04a, alpha: 0.2 });
+    // (A stroke uses up its path: the edges are traced once per line.)
+    const edges = () => {
+      for (let j = 0; j < ny; j++)
+        for (let i = 0; i < nx; i++) {
+          if (!at(i, j)) continue;
+          if (!at(i, j - 1)) g.moveTo(i, j).lineTo(i + 1, j);
+          if (!at(i, j + 1)) g.moveTo(i, j + 1).lineTo(i + 1, j + 1);
+          if (!at(i - 1, j)) g.moveTo(i, j).lineTo(i, j + 1);
+          if (!at(i + 1, j)) g.moveTo(i + 1, j).lineTo(i + 1, j + 1);
+        }
+    };
+    edges();
+    g.stroke({ width: 0.42, color: 0x2a1f14, alpha: 0.6, cap: 'square' });
+    edges();
+    g.stroke({ width: 0.22, color: 0xf6c453, cap: 'square' });
+    if (!first) return;
+    const c = lv.rooms[ri].center;
+    this.pickedSpot = at(Math.floor(c[0]), Math.floor(c[1])) ? [c[0], c[1]] : first;
+    this.pickedRi = ri;
+    const style = new TextStyle({ fontFamily: ['Palatino Linotype', 'Georgia', 'serif'], fontSize: 14, fontStyle: 'italic', fontWeight: 'bold', fill: '#fcd56a', stroke: { color: '#2a1f14', width: 4, join: 'round' } });
+    this.pickedName.addChild(new Text({ text: this.roomName(this.level, ri), style, anchor: 0.5, resolution: 2 }));
   }
 
   /** World ft of a grid point. */
@@ -1524,7 +1566,7 @@ export class InteriorLayer {
       if (this.tile && (r.kind === 'sewer tunnel' || r.kind === 'service passage')) return;
       const text = new Text({ text: this.roomName(this.level, ri), style, anchor: 0.5, resolution: 2 });
       this.labels.addChild(text);
-      this.labelSpots.push({ text, x: r.center[0], y: r.center[1], min: Math.sqrt(r.squares) });
+      this.labelSpots.push({ text, x: r.center[0], y: r.center[1], min: Math.sqrt(r.squares), ri });
     });
   }
 
