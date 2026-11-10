@@ -5457,7 +5457,7 @@ fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 20] = ["districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 21] = ["handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -5506,6 +5506,7 @@ fn main() {
                 "villages" => villages(&mut ctx, &mut r),
                 "walls" => walls(&mut ctx, &mut r),
                 "cemeteries" => cemeteries(&mut ctx, &mut r),
+                "handwalls" => handwalls(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),
                 "places" => places(&ctx.ex.world, &ctx.ex.t0, &mut r),
@@ -6274,4 +6275,201 @@ fn places(base: &World, t0: &T0, r: &mut Report) {
             kept(&now, &|q| q.kind == "gate" || q.id.contains(":r"), "place ids moved or gone with the walls toggled", "walls toggled", r);
         }
     }
+}
+
+// R5 towns
+/// Walls drawn by hand round patches (M18): per tier up to 3 towns, a ring round 3-6 patches
+/// near the middle, one round the whole old town (its own walls taken down if it has them), an
+/// open line across it. Rules (each should be 0): a road, approach or main street crossing with
+/// no gate; a ring with no way in; a building cut by a hand wall; a ring not closed; the town's
+/// own walls on or off changing a hand wall. Then gate counts.
+fn handwalls(ctx: &mut Ctx, r: &mut Report) {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::handwall;
+    use worldgen::world::{Created, Edits, WorldFile};
+    const RULES: [&str; 5] = ["crossing with no gate", "ring with no way in", "building cut by a hand wall", "ring not closed", "hand wall changed by town walls on/off"];
+    r.counts(&RULES);
+    r.counts(&["hand walls refused"]);
+    let (base, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let n = t0.settlements.len();
+    let mut towns: Vec<usize> = Vec::new();
+    for tier in [Tier::Town, Tier::City, Tier::Metropolis] {
+        towns.extend((0..n).filter(|&i| t0.settlements[i].tier == tier).take(3));
+    }
+    // (The towns with walls, taken down for the ring round the old town; toggled for the last rule.)
+    let toggle = |ci: usize, on: bool| town::wards::change(base, t0, ci, &serde_json::from_str(&format!(r#"{{"walls":{on}}}"#)).unwrap()).ok().and_then(|x| x.0);
+    let mut off = base.file.edits.clone();
+    for &ci in &towns {
+        let walled = town::wards::plan_json(base, t0, ci).is_ok_and(|p| p["walls"]["built"] == true);
+        if walled && let Some(e) = toggle(ci, false) {
+            off.towns.insert(town::wards::key(ci), e);
+        }
+    }
+    let w1 = World::new(WorldFile { edits: off.clone(), ..base.file.clone() }).unwrap();
+    // (case label, town, wall, main crossings, sides with no street)
+    let mut cases: Vec<(String, usize, Created, Vec<P>)> = Vec::new();
+    let mut bare: HashMap<String, Vec<(P, P)>> = HashMap::new();
+    for &ci in &towns {
+        let s = &t0.settlements[ci];
+        let Ok(plan) = town::wards::plan_json(&w1, t0, ci) else { continue };
+        let patches: Vec<&serde_json::Value> = plan["patches"].as_array().unwrap().iter().filter(|p| p["in_town"] == true).collect();
+        let num = |p: &serde_json::Value| p["patch"].as_u64().unwrap() as usize;
+        let at = |p: &serde_json::Value| [p["at"][0].as_f64().unwrap(), p["at"][1].as_f64().unwrap()];
+        let Some(first) = patches.iter().min_by(|a, b| dist(at(a), [s.x, s.y]).total_cmp(&dist(at(b), [s.x, s.y]))) else { continue };
+        let want = 3 + ci % 4;
+        let mut few = vec![num(first)];
+        let mut k = 0;
+        while few.len() < want && k < few.len() {
+            let p = patches.iter().find(|p| num(p) == few[k]).unwrap();
+            for nb in p["neighbours"].as_array().unwrap().iter().filter_map(|v| v.as_u64()).map(|v| v as usize) {
+                if few.len() < want && !few.contains(&nb) && patches.iter().any(|q| num(q) == nb) {
+                    few.push(nb);
+                }
+            }
+            k += 1;
+        }
+        let all: Vec<usize> = patches.iter().map(|p| num(p)).collect();
+        for (label, set) in [("ring round patches", few), ("ring round the old town", all)] {
+            match handwall::around_patches(&w1, t0, ci, &set, false) {
+                Ok(ring) => {
+                    let c = Created { kind: "wall".into(), pts: ring.pts.clone(), gates: ring.gates.clone(), closed: true, ..Default::default() };
+                    let main = ring.crossings.iter().filter(|x| x.main).map(|x| x.at).collect();
+                    r.tally(&format!("{label}: side streets closed"), ring.crossings.iter().filter(|x| !x.gate && !x.main).count());
+                    let name = format!("{label} #{ci} ({} patches)", set.len());
+                    let m = ring.pts.len();
+                    bare.insert(name.clone(), ring.bare.iter().map(|&i| (ring.pts[i], ring.pts[(i + 1) % m])).collect());
+                    cases.push((name, ci, c, main));
+                }
+                Err(e) => r.add("hand walls refused", 0.0, format!("{label} #{ci}: {e}")),
+            }
+        }
+        // (An open line across it, the first way round that stays out of the water.)
+        let half = 0.6 * town::reach(s).min(1200.0);
+        for j in 0..16 {
+            let ang = ((ci + j) % 16) as f64 * std::f64::consts::PI / 16.0;
+            let d = [ang.cos() * half, ang.sin() * half];
+            let mut c = Created { kind: "wall".into(), x: s.x, y: s.y, pts: vec![sub([s.x, s.y], d), add([s.x, s.y], d)], ..Default::default() };
+            c.id = "c:0".into();
+            if j == 15 || worldgen::agent::works_spot(&w1, t0, &c, "c:0", None).is_ok() {
+                cases.push((format!("open line #{ci}"), ci, c, Vec::new()));
+                break;
+            }
+        }
+    }
+    // Checked like a new one (`works_spot`); those it takes go in the world together.
+    let mut kept: Vec<(String, usize, Created, Vec<P>)> = Vec::new();
+    for (label, ci, mut c, main) in cases {
+        let k = c.pts.len() as f64;
+        (c.x, c.y) = (c.pts.iter().map(|q| q[0]).sum::<f64>() / k, c.pts.iter().map(|q| q[1]).sum::<f64>() / k);
+        c.id = format!("c:{}", off.created.len() + kept.len());
+        match c.check().and_then(|_| worldgen::agent::works_spot(&w1, t0, &c, &c.id, None)) {
+            Err(e) => {
+                r.add("hand walls refused", 0.0, format!("{label}: {e}"));
+                continue;
+            }
+            // (Taken away with it: `remove_in_way`.)
+            Ok(s) => {
+                let kind = label.split(" #").next().unwrap();
+                r.tally(&format!("{kind}: buildings in its way (remove_in_way)"), s.in_way.len());
+                let sides = bare.get(&label).cloned().unwrap_or_default();
+                for (id, at) in &s.in_way {
+                    if kind != "open line" && !sides.iter().any(|&(a, q)| seg_dist(*at, a, q) < 40.0) {
+                        r.add(&format!("{kind}: in its way off a side with no street"), 0.0, format!("{label}: {id} at ({:.0}, {:.0})", at[0], at[1]));
+                    }
+                }
+                for (id, at) in s.in_way {
+                    off.buildings.insert(id, worldgen::world::BuildingEdit { at, removed: true, ..Default::default() });
+                }
+            }
+        }
+        kept.push((label, ci, c, main));
+    }
+    let mut e3: Edits = off.clone();
+    e3.created.extend(kept.iter().map(|k| k.2.clone()));
+    let w3 = World::new(WorldFile { edits: e3.clone(), ..base.file.clone() }).unwrap();
+    let mut t3 = T0::from_bytes(&t0.to_bytes()).unwrap();
+    t3.apply_edits(&w3);
+    let first = n + t3.base_pois + off.created.len();
+    let look = |l: &Layout| format!("{:?}", (&l.walls, &l.towers, &l.gate_towers));
+    let mut looks: Vec<String> = Vec::new();
+    for (k, (label, ci, c, main)) in kept.iter().enumerate() {
+        let l = town::layout(&w3, &t3, first + k);
+        looks.push(look(&l));
+        let gates = handwall::gates_of(&l);
+        let kind = label.split(" #").next().unwrap();
+        r.tally(&format!("{kind}: walls"), 1);
+        r.tally(&format!("{kind}: gates"), gates.len());
+        r.value(&format!("{kind}: gates each"), gates.len() as f64, label.clone());
+        let mut crossings = handwall::road_crossings(&w3, &t3, &c.pts, c.closed);
+        crossings.extend(main.iter().copied());
+        r.tally(&format!("{kind}: road/approach/main crossings"), crossings.len());
+        for q in &crossings {
+            // (None in the water, where the wall is broken.)
+            if !gates.iter().any(|g| dist(*g, *q) < 65.0) && l.walls.iter().any(|w| w.windows(2).any(|s| seg_dist(*q, s[0], s[1]) < 30.0)) {
+                r.add("crossing with no gate", 0.0, format!("{label} at ({:.0}, {:.0})", q[0], q[1]));
+            }
+        }
+        if c.closed {
+            if gates.is_empty() {
+                r.add("ring with no way in", 0.0, label.clone());
+            }
+            let m = c.pts.len();
+            let ring: f64 = (0..m).map(|i| dist(c.pts[i], c.pts[(i + 1) % m])).sum();
+            // (Every 10 ft of it on dry ground: on a wall piece or in a gate.)
+            let (x0, y0) = c.pts.iter().fold((f64::MAX, f64::MAX), |a, p| (a.0.min(p[0]), a.1.min(p[1])));
+            let (x1, y1) = c.pts.iter().fold((f64::MIN, f64::MIN), |a, p| (a.0.max(p[0]), a.1.max(p[1])));
+            let shore = town::Shore::new(&w3, &t3, [x0, y0, x1, y1]);
+            let mut short = 0.0;
+            for i in 0..m {
+                let (a, b) = (c.pts[i], c.pts[(i + 1) % m]);
+                let k = (dist(a, b) / 10.0).ceil().max(1.0) as usize;
+                for j in 0..k {
+                    let p = lerp(a, b, (j as f64 + 0.5) / k as f64);
+                    let q = worldgen::lod::rivers::clear_of_rivers(&t3.rivers, p[0], p[1], 6.0, t3.cell_ft);
+                    let wet = shore.wet(p) || (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01;
+                    let laid = l.walls.iter().any(|w| w.windows(2).any(|s| seg_dist(p, s[0], s[1]) < 6.0)) || gates.iter().any(|g| dist(*g, p) < 32.0);
+                    if !wet && !laid {
+                        short += dist(a, b) / k as f64;
+                    }
+                }
+            }
+            if short > 40.0 {
+                r.add("ring not closed", short, format!("{label}: {short:.0} ft of {ring:.0} missing"));
+            }
+        }
+        // A building of its town the wall stands on (half its width, 4.5 ft, less a little).
+        let town_l = town::layout(&w3, &t3, *ci);
+        for b in &town_l.buildings {
+            let m = b.poly.len();
+            let hit = l.walls.iter().any(|w| {
+                w.windows(2).any(|s| contains(&b.poly, s[0]) || (0..m).any(|i| seg_dist(b.poly[i], s[0], s[1]) < 4.0 || seg_dist(s[0], b.poly[i], b.poly[(i + 1) % m]) < 4.0 || segs_cross(s[0], s[1], b.poly[i], b.poly[(i + 1) % m])))
+            });
+            if hit {
+                let on_bare = bare.get(label).is_some_and(|s| s.iter().any(|&(a, q)| b.poly.iter().any(|p| seg_dist(*p, a, q) < 8.0)));
+                r.add(if on_bare { "building cut (a side with no street)" } else { "building cut by a hand wall" }, 0.0, format!("{label}: b:{ci}:{}", b.id));
+            }
+        }
+    }
+    // The towns' own walls toggled: each hand wall the same.
+    let mut e4 = e3.clone();
+    for &ci in &towns {
+        let now = town::wards::plan_json(&w3, &t3, ci).is_ok_and(|p| p["walls"]["built"] == true);
+        let w = World::new(WorldFile { edits: e3.clone(), ..base.file.clone() }).unwrap();
+        if let Ok((Some(e), _)) = town::wards::change(&w, &t3, ci, &serde_json::from_str(&format!(r#"{{"walls":{}}}"#, !now)).unwrap()) {
+            e4.towns.insert(town::wards::key(ci), e);
+        }
+    }
+    let w4 = World::new(WorldFile { edits: e4, ..base.file.clone() }).unwrap();
+    for (k, (label, ..)) in kept.iter().enumerate() {
+        if look(&town::layout(&w4, &t3, first + k)) != looks[k] {
+            r.add("hand wall changed by town walls on/off", 0.0, label.clone());
+        }
+    }
+    let _ = toggle;
+}
+
+fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
+    let (d1, d2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
+    let (d3, d4) = (cross(sub(d, c), sub(a, c)), cross(sub(d, c), sub(b, c)));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
 }
