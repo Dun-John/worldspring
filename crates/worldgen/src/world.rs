@@ -500,6 +500,10 @@ pub struct TownEdit {
     /// Squares where streets meet, set by hand.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub squares: Vec<SquareEdit>,
+    /// (R5 towns) Districts made by hand, by name, in the order they were made: each is district
+    /// `d:<layout>:<generated count + k>` (`town::districts`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub districts: Vec<String>,
 }
 
 /// A square set by hand at a corner where streets meet (`v`, the plan's vertex; `at` where it was
@@ -540,6 +544,10 @@ pub struct PatchEdit {
     pub close: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park: Option<String>,
+    /// (R5 towns) The district it is put in: a generated one's id (`d:<layout>:<q>`) or the name
+    /// of one made by hand (`TownEdit::districts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub district: Option<String>,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -570,7 +578,7 @@ impl TownEdit {
 
 impl PatchEdit {
     pub fn is_noop(&self) -> bool {
-        self.ward.is_none() && self.lots.is_none() && self.merge_with.is_none() && self.reroll == 0 && self.close.is_none() && self.park.is_none()
+        self.ward.is_none() && self.lots.is_none() && self.merge_with.is_none() && self.reroll == 0 && self.close.is_none() && self.park.is_none() && self.district.is_none()
     }
 }
 

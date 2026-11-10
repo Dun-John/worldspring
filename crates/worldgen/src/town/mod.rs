@@ -38,6 +38,9 @@ pub mod fields;
 pub mod rural;
 // R5 towns
 pub mod cemetery;
+// R5 towns: districts drawn by hand, and renames kept when a patch is laid out anew.
+mod districts;
+mod carry;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -1777,7 +1780,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     }
     // A pin's ward names go to its districts in order, the central one first.
     if let Some(pin) = s.pin.and_then(|i| world.file.sketch.strokes.get(i as usize)) {
-        let mut order: Vec<usize> = (0..l.quarters.len()).collect();
+        // (Not to districts made by hand: R5 towns, `districts`.)
+        let made = edit.map_or(0, |e| e.districts.len());
+        let mut order: Vec<usize> = (0..l.quarters.len().saturating_sub(made)).collect();
         order.sort_by_key(|&q| (l.quarters[q].kind != QuarterKind::Center, q));
         for (&q, name) in order.iter().zip(&pin.wards) {
             if !name.trim().is_empty() {
@@ -4013,12 +4018,16 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     l.roads = clipped;
     // Districts keep the patches and names they were planned with; their outlines and labels
     // follow the moved corners.
-    l.quarters = plan
-        .quarters
+    l.quarters = districts::of(plan, ch)
         .iter()
-        .map(|(q, members)| {
+        .map(|(q, members, touched)| {
             let patches: Vec<Vec<P>> = members.iter().map(|&i| cells[i].pts.clone()).collect();
-            let mut label = label_curve(&patches).0;
+            // (R5 towns: one changed by hand, at its largest connected piece; an emptied one, none.)
+            let mut label = match (*touched, members.is_empty()) {
+                (_, true) => Vec::new(),
+                (true, false) => label_curve(&districts::label_piece(plan, &cells, members).iter().map(|&i| cells[i].pts.clone()).collect::<Vec<_>>()).0,
+                _ => label_curve(&patches).0,
+            };
             // (Not across a park's middle, its basin or its hub: over one of its sides.)
             if let Some(pk) = label.get(label.len() / 2).and_then(|&m| l.parks.iter().find(|pk| contains(&pk.pts, m))) {
                 let o = obb(&pk.pts);

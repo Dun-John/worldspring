@@ -221,7 +221,8 @@ pub fn search_buildings(world: &World, t0: &T0, q: &str, limit: usize, rect: Opt
     };
     for l in &layouts {
         for qi in 0..l.quarters.len() {
-            let at = l.quarters[qi].label[l.quarters[qi].label.len() / 2];
+            // (R5 towns: a district emptied by hand has no label.)
+            let Some(&at) = l.quarters[qi].label.get(l.quarters[qi].label.len() / 2) else { continue };
             let name = current(&format!("d:{}:{qi}", l.index), Some(&l.quarters[qi].name)).flatten();
             if name.is_some_and(|n| n.contains(&q)) && districts.len() < limit && inside(at[0], at[1]) {
                 districts.push(district_hit(l, qi));
@@ -269,6 +270,7 @@ pub fn districts_json(world: &World, t0: &T0, settlement: usize) -> String {
         .quarters
         .iter()
         .enumerate()
+        .filter(|(_, q)| !q.label.is_empty())
         .map(|(qi, q)| DistrictLabel { id: format!("d:{}:{}", l.index, qi), name: q.name.clone(), kind: q.kind.name(), path: q.label.clone() })
         .collect();
     serde_json::to_string(&out).expect("serializable")
@@ -287,7 +289,7 @@ pub fn in_view(world: &World, t0: &T0, rect: [f64; 4], limit: usize) -> Vec<Hit>
     for l in &layouts {
         for qi in 0..l.quarters.len() {
             let q = &l.quarters[qi];
-            if inside(q.label[q.label.len() / 2]) {
+            if q.label.get(q.label.len() / 2).is_some_and(|&at| inside(at)) {
                 districts.push(district_hit(l, qi));
             }
         }

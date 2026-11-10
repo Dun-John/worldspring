@@ -790,7 +790,7 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     let nums: Vec<usize> = parts.filter_map(|p| p.parse().ok()).collect();
     match (head, nums.as_slice()) {
         ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
-        ("d", [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).map(|q| q.label[q.label.len() / 2]),
+        ("d", [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).and_then(|q| q.label.get(q.label.len() / 2).copied()),
         ("t", [li, k]) if *li < town::layout_count(t0) => crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| t.0),
         ("u", [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| e.at),
         ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
@@ -1582,7 +1582,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
     let l = town::layout(world, t0, li);
     let mut out = Vec::new();
     for (qi, q) in l.quarters.iter().enumerate() {
-        out.push(name_entry(world, format!("d:{li}:{qi}"), "district", q.name.clone(), Some(q.label[q.label.len() / 2]), false));
+        out.push(name_entry(world, format!("d:{li}:{qi}"), "district", q.name.clone(), q.label.get(q.label.len() / 2).copied(), false));
     }
     for b in l.buildings.iter().filter(|b| b.func.is_some()) {
         let generated = b.name.clone().unwrap_or_else(|| b.label().to_string());
