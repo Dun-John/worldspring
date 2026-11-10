@@ -70,6 +70,9 @@ pub(crate) struct Plan {
     pub(crate) lift: Option<(usize, bool, bool)>,
     /// Its site's theme key (`Theme::key`; "" unknown): the boss chamber's centrepiece goes by it (`boss`).
     pub(crate) theme: &'static str,
+    /// The boss chamber's second way in (`boss::side_door`): its doorway square in the chamber, the square inside that,
+    /// and the chamber's main way in.
+    pub(crate) side_door: Option<(usize, usize, usize)>,
 }
 
 impl Plan {
@@ -103,6 +106,7 @@ impl Plan {
             gaps: FastSet::default(),
             lift: None,
             theme: "",
+            side_door: None,
         }
     }
 

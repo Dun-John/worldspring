@@ -42,7 +42,7 @@ const BY_GROUP: Record<string, string[]> = {
   'Cave & nature': ['stalagmite', 'rock_column', 'boulder', 'crystal', 'fungus', 'mushroom', 'web', 'guano', 'moss', 'pool', 'nest', 'ice', 'ice_sheet', 'basalt', 'obsidian', 'sulfur', 'glass_pool'],
   'Mine & works': ['timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'winch'],
   'Remains & clutter': ['bones', 'skeleton', 'skulls', 'rubble', 'collapsed_wall', 'debris', 'cobweb', 'banner', 'rug', 'rat_nest', 'scorched', 'wall_stub', 'fallen_column', 'bone_mound'],
-  'Traps & hazards': ['trap', 'pit', 'cave_in', 'vent', 'lava', 'cracked_floor'],
+  'Traps & hazards': ['trap', 'pit', 'cave_in', 'vent', 'lava', 'cracked_floor', 'flooded_pit'],
   'Locks & keys': ['key'],
   Terrain: ['water_shallow', 'water_deep', 'chasm', 'rubble_slope', 'rope_bridge', 'stone_bridge', 'stepping_stone'],
   'Ways & fixtures': ['exit', 'up', 'down', 'tunnel', 'ladder', 'pipe', 'well', 'trapdoor', 'spiral_stair', 'link_down', 'pillar', 'barricade', 'steps', 'climb_ladder', 'platform', 'balcony', 'scaffold'],

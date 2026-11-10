@@ -14,9 +14,12 @@
 //! `%` rubble slope; a line per level counts the squares still unreached (0 expected).
 //! LEDGES=1: over every site (not the first of each kind), raised chambers (over 3 ft) and their open sheer edges
 //! (squares of the ledge over a floor more than 3 ft lower): a total line, no plans.
-//! BOSS=1 (BOSS=list: a line per site too; BOSS=plan, with ID=: the chamber, items by letter, heights in 2.5 ft): over every built site (keeps' deep dungeons too; not caves, lava tubes, mines), the boss chamber's layout
-//! (`under::boss`, told by its items) and centrepiece by theme, a line per theme and the spread; CHECK lines where a
-//! throne stands outside keep dungeons, dungeons and dwarven halls, or a ritual circle outside temples and cults.
+//! BOSS=1 (BOSS=list: a line per site too; BOSS=plan, with ID=: the chamber, items by letter, heights in 2.5 ft, doors
+//! '?' secret '+' plain, ',' floor outside): over every site (keeps' deep dungeons too), the boss chamber's layout
+//! (`under::boss`, told by its items) and centrepiece by theme, a line per theme and the spread; caves', lava tubes'
+//! and mines' layouts; hazards (share, mean, kinds) and second ways in (share, secret); CHECK lines where a throne
+//! stands outside keep dungeons, dungeons and dwarven halls, a ritual circle outside temples and cults, or a chamber
+//! has more than one second way in.
 use worldgen::{World, WorldFile, interior, town};
 
 fn main() {
@@ -248,11 +251,20 @@ struct Boss {
     sizes: std::collections::BTreeMap<String, Vec<(usize, usize, &'static str)>>,
     n: usize,
     worst_ms: f64,
+    /// Caves, lava tubes and mines: per kind ("cave", "lava tube", "mine") the layouts.
+    wild: std::collections::BTreeMap<&'static str, std::collections::BTreeMap<&'static str, usize>>,
+    /// Every boss chamber (built and natural): how many, with hazards, hazards in all, by kind; with a second way in,
+    /// of them secret; more than one (a CHECK).
+    all: usize,
+    perilous: usize,
+    perils: std::collections::BTreeMap<&'static str, usize>,
+    sides: usize,
+    secret: usize,
 }
 
 impl Boss {
     fn add(&mut self, it: &interior::Interior, theme: &str, ms: f64) {
-        if matches!(theme, "cave" | "fungal" | "crystal" | "ice" | "flooded" | "beast_den" | "mine" | "lava_tube" | "-") {
+        if theme == "-" {
             return;
         }
         self.worst_ms = self.worst_ms.max(ms);
@@ -263,6 +275,106 @@ impl Boss {
         let inside: Vec<&interior::Item> = lv.furniture.iter().filter(|f| lv.cells[f.y as usize * nx + f.x as usize] == ri as i16).collect();
         let sq = |k: &str| inside.iter().filter(|f| f.kind == k).map(|f| (f.w * f.h) as usize).sum::<usize>();
         let has = |k: &str| inside.iter().any(|f| f.kind == k);
+        // (Hazards and the second way in, every chamber.)
+        self.all += 1;
+        let perils: Vec<&'static str> = inside.iter().map(|f| f.name).filter(|n| worldgen::under::PERILS.contains(n)).collect();
+        self.perilous += !perils.is_empty() as usize;
+        for p in &perils {
+            *self.perils.entry(p).or_default() += 1;
+        }
+        let doors: Vec<&interior::Door> = lv.doors.iter().filter(|d| d.rooms.contains(&(ri as i16))).collect();
+        let side = doors.len().saturating_sub(!lv.natural as usize);
+        if side > 1 {
+            println!("CHECK {}: {side} second ways into the boss chamber", it.id);
+        }
+        if side > 0 {
+            self.sides += 1;
+            self.secret += doors.iter().any(|d| d.kind == "secret") as usize;
+        }
+        if lv.natural {
+            let kind: &'static str = match theme {
+                "mine" => "mine",
+                "lava_tube" => "lava tube",
+                _ => "cave",
+            };
+            let isle = (0..lv.cells.len()).any(|k| {
+                lv.cells[k] == ri as i16 && [k.wrapping_sub(1), k + 1, k.wrapping_sub(nx), k + nx].iter().any(|&m| m < lv.cells.len() && lv.cells[m] >= 0 && lv.cells[m] != ri as i16 && lv.furniture.iter().any(|f| f.kind == "water_deep" && f.x as usize == m % nx && f.y as usize == m / nx))
+            });
+            let count = |k: &str| inside.iter().filter(|f| f.kind == k).count();
+            let layout = if kind == "mine" {
+                // (Walkways: the scaffolding's pieces, joined side by side; across the face if all of one lies in the
+                // far half from the way in.)
+                let on: Vec<usize> = inside.iter().filter(|f| f.kind == "scaffold").flat_map(|f| (f.y..f.y + f.h).flat_map(move |j| (f.x..f.x + f.w).map(move |i| j as usize * nx + i as usize))).collect();
+                let n = lv.cells.len();
+                let step = |k: usize| [(k % nx > 0).then(|| k - 1), (k % nx + 1 < nx).then_some(k + 1), (k >= nx).then(|| k - nx), (k + nx < n).then_some(k + nx)].into_iter().flatten();
+                let walk = |from: &[usize], inside_only: bool| {
+                    let mut d = vec![usize::MAX; n];
+                    let mut q: std::collections::VecDeque<usize> = from.iter().copied().collect();
+                    for &k in from {
+                        d[k] = 0;
+                    }
+                    while let Some(k) = q.pop_front() {
+                        for m in step(k) {
+                            if d[m] == usize::MAX && lv.cells[m] >= 0 && (!inside_only || lv.cells[m] == ri as i16) {
+                                d[m] = d[k] + 1;
+                                q.push_back(m);
+                            }
+                        }
+                    }
+                    d
+                };
+                let start: Vec<usize> = lv.furniture.iter().filter(|f| matches!(f.kind, "up" | "exit")).map(|f| f.y as usize * nx + f.x as usize).collect();
+                let from = walk(&start, false);
+                let entry = (0..n).filter(|&k| lv.cells[k] == ri as i16).min_by_key(|&k| (from[k], k)).unwrap_or(0);
+                let din = walk(&[entry], true);
+                let far = (0..n).filter(|&k| lv.cells[k] == ri as i16 && din[k] != usize::MAX).map(|k| din[k]).max().unwrap_or(0);
+                let mut seen = std::collections::BTreeSet::new();
+                let (mut walks, mut across) = (0, false);
+                for &s in &on {
+                    if !seen.insert(s) {
+                        continue;
+                    }
+                    walks += 1;
+                    let mut todo = vec![s];
+                    let mut near_face = true;
+                    while let Some(k) = todo.pop() {
+                        near_face &= din[k] * 2 >= far;
+                        for m in [k.wrapping_sub(1), k + 1, k.wrapping_sub(nx), k + nx] {
+                            if on.contains(&m) && seen.insert(m) {
+                                todo.push(m);
+                            }
+                        }
+                    }
+                    across |= near_face;
+                }
+                if walks == 1 && across { "face gallery" } else if walks >= 2 { "twin walkways" } else if walks == 1 { "side walkway" } else { "(none)" }
+            } else if has("rope_bridge") || has("chasm") {
+                "rope-bridge chasm"
+            } else if has("lava") {
+                "lava channel"
+            } else if has("water_deep") && has("stepping_stone") {
+                "pool island"
+            } else if isle {
+                "lake island"
+            } else if has("platform") || has("balcony") {
+                "ledges"
+            } else if has("cave_in") || sq("rubble") >= 5 {
+                "rubble field"
+            } else if count("rock_column") + count("basalt") >= 3 {
+                "rock columns"
+            } else {
+                "(none)"
+            };
+            *self.wild.entry(kind).or_default().entry(layout).or_default() += 1;
+            if std::env::var("BOSS").is_ok_and(|v| v == "list") {
+                println!("{} {theme}: {layout}, perils {perils:?}, side {side}", it.id);
+            }
+            if std::env::var("BOSS").is_ok_and(|v| v == "plan") {
+                println!("{} {theme}: {layout}", it.id);
+                plan(lv, ri, nx, &inside);
+            }
+            return;
+        }
         let layout = if has("chasm") {
             "chasm and bridge"
         } else if (has("water_deep") || has("lava")) && (has("stone_bridge") || has("stepping_stone")) {
@@ -319,34 +431,8 @@ impl Boss {
         }
         // (BOSS=plan: the chamber, its items by letter beside its floor heights in 5 ft.)
         if std::env::var("BOSS").is_ok_and(|v| v == "plan") {
-            let f = worldgen::interior::height::of_level(lv, nx);
-            let sq: Vec<usize> = (0..lv.cells.len()).filter(|&k| lv.cells[k] == ri as i16).collect();
-            let (x0, x1) = (sq.iter().map(|k| k % nx).min().unwrap_or(0), sq.iter().map(|k| k % nx).max().unwrap_or(0));
-            let (y0, y1) = (sq.iter().map(|k| k / nx).min().unwrap_or(0), sq.iter().map(|k| k / nx).max().unwrap_or(0));
             println!("{} {theme}: {layout}, {centre}", it.id);
-            for y in y0..=y1 {
-                let mut a = String::new();
-                let mut b = String::new();
-                for x in x0..=x1 {
-                    let k = y * nx + x;
-                    if lv.cells[k] != ri as i16 {
-                        a.push(' ');
-                        b.push(' ');
-                        continue;
-                    }
-                    let top = inside.iter().rev().find(|i| x as u16 >= i.x && (x as u16) < i.x + i.w && y as u16 >= i.y && (y as u16) < i.y + i.h && !matches!(i.kind, "platform" | "balcony"));
-                    a.push(top.map_or('.', |i| match i.kind {
-                        "pillar" => 'P', "statue" => 'S', "wall_stub" => 'W', "collapsed_wall" => 'w', "fallen_column" => 'c', "rubble" => 'r', "boulder" => 'B',
-                        "pit" => 'O', "chasm" => '#', "stone_bridge" => '=', "water_deep" | "lava" => '~', "stepping_stone" => ':', "steps" => '/', "climb_ladder" => 'H',
-                        "dais" => 'd', "throne" => 'T', "altar" => 'A', "glyph" => 'g', "sarcophagus" => 'X', "hoard" => '$', "chest" => 'C', "brazier" => 'b',
-                        "banner" => 'f', "candles" => 'i', "forge" => 'F', "anvil" => 'n', "cage" => 'G', "desk" => 'D', "chains" => 'h', "arcane_workbench" => 'K',
-                        "arcane_focus" => 'o', "bookshelf" => 'L', "totem" => 't', "bone_mound" => 'M', "nest" => 'N', "bones" => 'z', "chair_of_office" => 'Y', _ => '*',
-                    }));
-                    let ft = f.ft[k];
-                    b.push(if f.ramp[k] { '/' } else if ft == 0.0 { '.' } else { (b'0' + (ft / 2.5) as u8) as char });
-                }
-                println!("  {a}   {b}");
-            }
+            plan(lv, ri, nx, &inside);
         }
         // (BOSS=list: a line per chamber.)
         if std::env::var("BOSS").is_ok_and(|v| v == "list") {
@@ -385,6 +471,69 @@ impl Boss {
             println!("  size {size}: {} chambers, short side {} long side {} (min/median/max squares), no layout {none}", v.len(), mid(v.iter().map(|q| q.0).collect()), mid(v.iter().map(|q| q.1).collect()));
         }
         println!("boss: {} built boss chambers (worst site {:.0} ms); layouts {}", self.n, self.worst_ms, spread.join(", "));
+        for (kind, m) in &self.wild {
+            let n: usize = m.values().sum();
+            let spread: Vec<String> = m.iter().map(|(k, v)| format!("{k} {v} ({:.0}%)", 100.0 * *v as f64 / n.max(1) as f64)).collect();
+            println!("boss {kind}: {n} chambers; layouts {}", spread.join(", "));
+        }
+        let pct = |a: usize, b: usize| 100.0 * a as f64 / b.max(1) as f64;
+        let total: usize = self.perils.values().sum();
+        println!(
+            "boss hazards: {} of {} chambers ({:.0}%), {:.2} each where any; kinds {}",
+            self.perilous,
+            self.all,
+            pct(self.perilous, self.all),
+            total as f64 / self.perilous.max(1) as f64,
+            self.perils.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", ")
+        );
+        println!("boss ways round: {} of {} ({:.0}%), secret {} ({:.0}%), door/arch {}", self.sides, self.all, pct(self.sides, self.all), self.secret, pct(self.secret, self.sides), self.sides - self.secret);
+    }
+}
+
+/// BOSS=plan's picture of a boss chamber: its items by letter beside its floor heights (2.5 ft a digit, '/' a ramp).
+fn plan(lv: &interior::Level, ri: usize, nx: usize, inside: &[&interior::Item]) {
+    let f = worldgen::interior::height::of_level(lv, nx);
+    // (The chamber and a square round it, for the second way in.)
+    let sq: Vec<usize> = (0..lv.cells.len()).filter(|&k| lv.cells[k] == ri as i16).collect();
+    let (x0, x1) = (sq.iter().map(|k| k % nx).min().unwrap_or(0), sq.iter().map(|k| k % nx).max().unwrap_or(0));
+    let (y0, y1) = (sq.iter().map(|k| k / nx).min().unwrap_or(0), sq.iter().map(|k| k / nx).max().unwrap_or(0));
+    let door = |k: usize| lv.doors.iter().filter(|d| d.rooms.contains(&(ri as i16))).find(|d| {
+        // (The squares either side of its edge.)
+        let (x, y) = (d.a[0].min(d.b[0]) as usize, d.a[1].min(d.b[1]) as usize);
+        let (a, b) = if d.a[1] == d.b[1] { (y.saturating_sub(1) * nx + x, y * nx + x) } else { (y * nx + x.saturating_sub(1), y * nx + x) };
+        a == k || b == k
+    });
+    for y in y0..=y1 {
+        let mut a = String::new();
+        let mut b = String::new();
+        for x in x0..=x1 {
+            let k = y * nx + x;
+            if lv.cells[k] != ri as i16 {
+                a.push(if lv.cells[k] >= 0 { ',' } else { ' ' });
+                b.push(' ');
+                continue;
+            }
+            let top = inside.iter().rev().find(|i| x as u16 >= i.x && (x as u16) < i.x + i.w && y as u16 >= i.y && (y as u16) < i.y + i.h && !matches!(i.kind, "platform" | "balcony" | "scaffold"));
+            a.push(match (door(k), top) {
+                (Some(d), _) => if d.kind == "secret" { '?' } else { '+' },
+                (_, Some(i)) => match i.name {
+                    "steam vent" => 'v', "cracked floor" => 'x', "flooded pit" => 'u', "pressure plate" => '^',
+                    _ => match i.kind {
+                        "pillar" => 'P', "statue" => 'S', "wall_stub" => 'W', "collapsed_wall" => 'w', "fallen_column" => 'c', "rubble" => 'r', "boulder" => 'B',
+                        "pit" => 'O', "chasm" => '#', "stone_bridge" | "rope_bridge" => '=', "water_deep" | "lava" => '~', "water_shallow" => '-', "stepping_stone" => ':', "steps" => '/', "climb_ladder" => 'H',
+                        "dais" => 'd', "throne" => 'T', "altar" => 'A', "glyph" => 'g', "sarcophagus" => 'X', "hoard" => '$', "chest" => 'C', "brazier" => 'b',
+                        "banner" => 'f', "candles" => 'i', "forge" => 'F', "anvil" => 'n', "cage" => 'G', "desk" => 'D', "chains" => 'h', "arcane_workbench" => 'K',
+                        "arcane_focus" => 'o', "bookshelf" => 'L', "totem" => 't', "bone_mound" => 'M', "nest" => 'N', "bones" => 'z', "chair_of_office" => 'Y',
+                        "rock_column" | "basalt" => 'R', "rubble_slope" => '/', "cave_in" => 'k', "ore_vein" => 'V', "tools" => 'l', "rail" => '|', "ore_cart" => 'Q',
+                        "crystal" | "ice" => '*', "fungus" | "mushroom" => 'm', "stalagmite" => 's', _ => '&',
+                    },
+                },
+                _ => '.',
+            });
+            let ft = f.ft[k];
+            b.push(if f.ramp[k] { '/' } else if ft == 0.0 { '.' } else { (b'0' + (ft / 2.5) as u8) as char });
+        }
+        println!("  {a}   {b}");
     }
 }
 

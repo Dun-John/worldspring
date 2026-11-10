@@ -2,8 +2,9 @@
 //! grid, broken walls, a statue gallery, a rubble ring; obstacles: pits, a chasm with its bridge, a moat round an
 //! island; height: a raised platform, balconies, a sunken arena), then the theme's centrepiece (a throne only where a
 //! ruler fits, a ritual circle only in temples and cult sanctums) and dressing. Heights go through the floor model
-//! (`interior::height`: `platform`/`balcony` raise, `steps`/`climb_ladder` are ramps). Caves, lava tubes and mines
-//! keep `kit::boss_chamber`'s own set.
+//! (`interior::height`: `platform`/`balcony` raise, `steps`/`climb_ladder` are ramps). Caves and lava tubes get the
+//! natural set instead, mines a half-dug face with scaffolding (`wild`). Any of them may get hazards (`hazards`) and a
+//! second way in (`side_door`, picked before the level is furnished).
 
 use crate::core::rng::Pcg32;
 use crate::interior::Item;
@@ -35,19 +36,22 @@ struct Hall {
     ea: usize,
     /// Squares kept clear of the centrepiece: round the steps, ladders and bridges, so their landings stay open.
     clear: std::cell::RefCell<Vec<usize>>,
+    /// The second way in (`side_way`), if any: its doorway square and the square inside it, kept clear of everything.
+    door: Option<(usize, usize)>,
 }
 
 impl Hall {
     fn new(p: &Plan, nx: usize, ny: usize, ri: i16, squares: &[usize]) -> Hall {
         let dist = p.distances(p.up, ny, None);
-        let entry = squares.iter().copied().filter(|&k| dist[k] >= 0).min_by_key(|&k| (dist[k], k)).unwrap_or(squares[0]);
+        // (Its main way in, not the second one: `side_door`.)
+        let entry = p.side_door.filter(|s| p.cells[s.2] == ri).map(|s| s.2).unwrap_or_else(|| squares.iter().copied().filter(|&k| dist[k] >= 0).min_by_key(|&k| (dist[k], k)).unwrap_or(squares[0]));
         let (x0, y0) = (squares.iter().map(|k| k % nx).min().unwrap_or(0), squares.iter().map(|k| k / nx).min().unwrap_or(0));
         let (x1, y1) = (squares.iter().map(|k| k % nx).max().unwrap_or(0), squares.iter().map(|k| k / nx).max().unwrap_or(0));
         let (ex, ey) = (entry % nx, entry / nx);
         let gaps = [ey - y0, x1 - ex, y1 - ey, ex - x0];
         let side = (0..4).min_by_key(|&s| (gaps[s], s)).unwrap_or(0) as u8;
         let (l, w) = if side.is_multiple_of(2) { (y1 - y0 + 1, x1 - x0 + 1) } else { (x1 - x0 + 1, y1 - y0 + 1) };
-        let mut h = Hall { nx, ny, ri, x0, y0, x1, y1, side, l, w, entry, ed: 0, ea: 0, clear: Default::default() };
+        let mut h = Hall { nx, ny, ri, x0, y0, x1, y1, side, l, w, entry, ed: 0, ea: 0, clear: Default::default(), door: p.side_door.filter(|s| p.cells[s.0] == ri).map(|s| (s.0, s.1)) };
         (h.ed, h.ea) = h.frame(entry);
         h
     }
@@ -103,7 +107,24 @@ impl Hall {
 
     /// Every square of the rect on the room's floor and free.
     fn free(&self, p: &Plan, d: isize, a: isize, dl: usize, aw: usize) -> bool {
-        (0..dl as isize).all(|i| (0..aw as isize).all(|j| self.sq(p, d + i, a + j).is_some_and(|k| !p.taken[k])))
+        (0..dl as isize).all(|i| (0..aw as isize).all(|j| self.sq(p, d + i, a + j).is_some_and(|k| !p.taken[k] && !self.kept(k))))
+    }
+
+    /// One of the second way in's squares (`door`).
+    fn kept(&self, k: usize) -> bool {
+        self.door.is_some_and(|(a, b)| k == a || k == b)
+    }
+
+    /// The grid square at (d, a), in the box or not (None off the grid).
+    fn cell(&self, d: isize, a: isize) -> Option<usize> {
+        let (x0, y0, x1, y1) = (self.x0 as isize, self.y0 as isize, self.x1 as isize, self.y1 as isize);
+        let (x, y) = match self.side {
+            0 => (x0 + a, y0 + d),
+            2 => (x0 + a, y1 - d),
+            3 => (x0 + d, y0 + a),
+            _ => (x1 - d, y0 + a),
+        };
+        (x >= 0 && y >= 0 && (x as usize) < self.nx && (y as usize) < self.ny).then(|| y as usize * self.nx + x as usize)
     }
 
     fn far(&self) -> u8 {
@@ -163,7 +184,7 @@ fn set(p: &mut Plan, h: &Hall, it: Option<Item>, top: bool) -> bool {
     };
     let mut lifted = Vec::new();
     for &k in &squares {
-        if p.cells[k] != h.ri || h.clear.borrow().contains(&k) {
+        if p.cells[k] != h.ri || h.clear.borrow().contains(&k) || h.kept(k) {
             return false;
         }
         if p.taken[k] {
@@ -228,11 +249,19 @@ fn lay(p: &mut Plan, h: &Hall, items: Vec<Option<Item>>) -> bool {
     true
 }
 
-/// The room's squares reached from its way in without a climb (`interior::height`), round what blocks: all of them.
+/// The room's squares reached from its way in without a climb (`interior::height`), round what blocks and the hazards
+/// (`PERILS`, lava: never the only way across): all of them.
 fn reached(p: &Plan, h: &Hall) -> bool {
     let (nx, ny) = (h.nx, h.ny);
     let f = p.floor(ny);
-    let blocked = blocked_squares(&p.items, nx, ny);
+    let mut blocked = blocked_squares(&p.items, nx, ny);
+    for it in p.items.iter().filter(|it| it.kind == "lava" || PERILS.contains(&it.name)) {
+        for j in it.y as usize..(it.y + it.h) as usize {
+            for i in it.x as usize..(it.x + it.w) as usize {
+                blocked[j * nx + i] = true;
+            }
+        }
+    }
     if blocked[h.entry] {
         return false;
     }
@@ -257,7 +286,8 @@ fn far_stage(h: &Hall) -> Stage {
     Stage { d0: (h.l - dl) as isize, a0: ((h.w - aw) / 2) as isize, dl, aw, raised: false }
 }
 
-/// The boss chamber of a built site (not a mine): a layout, the theme's centrepiece and its dressing.
+/// The boss chamber of a built site (not a mine): maybe a second way in, a layout, the theme's centrepiece and its
+/// dressing, maybe hazards.
 pub(crate) fn built(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usize], rng: &mut Pcg32) {
     let h = Hall::new(p, nx, ny, ri, squares);
     let theme = p.theme;
@@ -269,16 +299,39 @@ pub(crate) fn built(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usiz
     if theme == "flooded_vault" && let Some(m) = order.iter().position(|&i| LAYOUTS[i] == "moat") {
         order[..=m].rotate_right(1);
     }
+    let fallback = far_stage(&h);
+    choose(p, &h, order, rng, &|p, h, i, rng| layout(p, h, LAYOUTS[i], theme, rng), &|p, h, s, rng| centrepiece(p, h, s, theme, rng), fallback);
+    let mut kinds = vec!["cracked floor", "pressure plate"];
+    match theme {
+        "dwarven_hall" => kinds.push("steam vent"),
+        "flooded_vault" | "sunken_temple" => kinds.push("flooded pit"),
+        _ => {}
+    }
+    hazards(p, &h, &kinds, rng);
+}
+
+/// The layouts in `order` tried in turn (`lay_out`, then `dress`), each kept if the chamber is all reached (`reached`),
+/// else undone; last the `fallback` stage, dressed.
+#[allow(clippy::type_complexity)]
+fn choose(
+    p: &mut Plan,
+    h: &Hall,
+    order: Vec<usize>,
+    rng: &mut Pcg32,
+    lay_out: &dyn Fn(&mut Plan, &Hall, usize, &mut Pcg32) -> Option<Stage>,
+    dress: &dyn Fn(&mut Plan, &Hall, Stage, &mut Pcg32),
+    fallback: Stage,
+) {
     for li in order.into_iter().map(Some).chain([None]) {
         let s = snap(p);
         h.clear.borrow_mut().clear();
         let stage = match li {
-            Some(i) => layout(p, &h, LAYOUTS[i], theme, rng),
-            None => Some(far_stage(&h)),
+            Some(i) => lay_out(p, h, i, rng),
+            None => Some(fallback),
         };
         if let Some(stage) = stage {
-            centrepiece(p, &h, stage, theme, rng);
-            if li.is_none() || reached(p, &h) {
+            dress(p, h, stage, rng);
+            if li.is_none() || reached(p, h) {
                 return;
             }
         }
@@ -437,7 +490,7 @@ fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut Pcg32) -> O
                         continue;
                     }
                     if molten && (d, a) != bridge && (mw < 2 || (d, a) != (bridge.0 + 1, bridge.1)) {
-                        items.push(h.rect(d, a, 1, 1).map(|(x, y, _, _)| lava(x, y)));
+                        items.push(h.rect(d, a, 1, 1).map(|(x, y, _, _)| super::kit::lava(x, y)));
                     } else if !molten {
                         items.push(h.item("water_deep", d, a, 1, 1, None));
                     }
@@ -505,11 +558,19 @@ fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut Pcg32) -> O
             let down = (ad0 - 1, side.clamp(aa0, aa1));
             let back = (ad1 + 1, mid.clamp(aa0, aa1));
             let arena = |d: isize, a: isize| d >= ad0 && d <= ad1 && a >= aa0 && a <= aa1;
+            // (A second way in stays down too, its own steps up inside it unless it opens on the arena.)
+            let side_steps = h.door.and_then(|(k, iw)| {
+                let (d, a) = h.frame(iw);
+                (!arena(d as isize, a as isize)).then_some((k, iw, (d as isize, a as isize)))
+            });
+            if side_steps.is_some_and(|(_, _, at)| [up, down, back].contains(&at)) {
+                return None;
+            }
             let mut raise = vec![false; h.l * h.w];
             for d in 0..l {
                 for a in 0..w {
                     let Some(k) = h.sq(p, d, a) else { continue };
-                    if arena(d, a) || k == h.entry || [up, down, back].contains(&(d, a)) {
+                    if arena(d, a) || k == h.entry || h.door.is_some_and(|(door, _)| door == k) || [up, down, back].contains(&(d, a)) || side_steps.is_some_and(|s| s.2 == (d, a)) {
                         continue;
                     }
                     if p.taken[k] {
@@ -521,6 +582,9 @@ fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut Pcg32) -> O
             let mut items = Vec::new();
             for (d, a) in [up, down, back] {
                 items.push(h.item("steps", d, a, 1, 1, Some(if (d, a) == up { h.far() } else { h.side })));
+            }
+            if let Some((k, iw, (d, a))) = side_steps {
+                items.push(h.item("steps", d, a, 1, 1, Some(toward(k, iw, h.nx))));
             }
             // (The raised floor as rects: a run along a row, as deep as it goes.)
             for d in 0..h.l {
@@ -693,4 +757,595 @@ fn edge(p: &mut Plan, h: &Hall, kind: &'static str, n: usize, rng: &mut Pcg32) {
             put += 1;
         }
     }
+}
+
+// Item 117 slice 2: caves', lava tubes' and mines' boss chambers, hazards, a second way in.
+
+/// The natural sets' layouts (caves: a pool round an island; lava tubes: a lava channel), as the `under` example names
+/// them.
+pub const NATURAL: [&str; 6] = ["rock columns", "ledges", "rope-bridge chasm", "rubble field", "pool island", "lava channel"];
+const NFIT: [(usize, usize); 6] = [(5, 5), (6, 5), (7, 4), (5, 5), (7, 5), (6, 4)];
+
+/// A mine's: the half-dug face with scaffolding up ladders (along one side wall, both, or across the face).
+pub const MINE: [&str; 3] = ["side walkway", "twin walkways", "face gallery"];
+const MFIT: [(usize, usize); 3] = [(6, 4), (6, 6), (5, 6)];
+
+/// The hazards a boss chamber may get (`hazards`), by item name; the hidden ones' rules start "hidden" (DM-only until
+/// found, as traps).
+pub const PERILS: [&str; 4] = ["steam vent", "cracked floor", "flooded pit", "pressure plate"];
+
+/// Grid steps by an item's `back` code: 0 north, 1 east, 2 south, 3 west.
+const DIRS: [(isize, isize); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+
+fn step(k: usize, dir: usize, nx: usize, ny: usize) -> Option<usize> {
+    let (x, y) = ((k % nx) as isize + DIRS[dir].0, (k / nx) as isize + DIRS[dir].1);
+    (x >= 0 && y >= 0 && (x as usize) < nx && (y as usize) < ny).then(|| y as usize * nx + x as usize)
+}
+
+/// The side square `b` lies on from its neighbour `a` (an item's `back`: steps' way up).
+fn toward(a: usize, b: usize, nx: usize) -> u8 {
+    if b + nx == a {
+        0
+    } else if b == a + 1 {
+        1
+    } else if b == a + nx {
+        2
+    } else {
+        3
+    }
+}
+
+fn peril(name: &str, x: usize, y: usize) -> Item {
+    let kind = match name {
+        "steam vent" => "vent",
+        "flooded pit" => "flooded_pit",
+        "pressure plate" => "trap",
+        _ => "cracked_floor",
+    };
+    item(kind, x, y, 1, 1)
+}
+
+/// About half the chambers: one or two of `kinds` (`PERILS`) on free floor, off the way in, the second way in and
+/// every landing (`Hall::clear`), each kept only if the chamber is still all reached round them.
+fn hazards(p: &mut Plan, h: &Hall, kinds: &[&'static str], rng: &mut Pcg32) {
+    if kinds.is_empty() || rng.below(2) != 0 {
+        return;
+    }
+    let want = 1 + rng.below(2) as usize;
+    let (nx, ny) = (h.nx, h.ny);
+    let (ex, ey) = (h.entry % nx, h.entry / nx);
+    let spots: Vec<usize> = (0..nx * ny)
+        .filter(|&k| p.cells[k] == h.ri && !p.taken[k] && !h.kept(k) && !h.clear.borrow().contains(&k) && (k % nx).abs_diff(ex).max((k / nx).abs_diff(ey)) >= 2)
+        .collect();
+    let mut put = 0;
+    for _ in 0..want * 8 {
+        if put >= want || spots.is_empty() {
+            break;
+        }
+        let k = spots[rng.below(spots.len() as u32) as usize];
+        let kind = kinds[rng.below(kinds.len() as u32) as usize];
+        if p.taken[k] {
+            continue;
+        }
+        let s = snap(p);
+        if p.place(peril(kind, k % nx, k / nx), Some(h.ri), ny) && reached(p, h) {
+            put += 1;
+        } else {
+            undo(p, s);
+        }
+    }
+}
+
+/// About half the chambers: a second way in from a nearby room on the level, two times in three a secret door, else a
+/// plain door (an open arch on a natural level). Through a wall the two rooms share, or a passage dug through a little
+/// rock (that room's floor, rock either side), from a square of that room as far from the main way in as the walk goes
+/// round, and (on a built level) one the same locks shut off as the square before the main door, so no key is skipped;
+/// a locked main door's lock goes on it too. Never into a raised room. Its doorway square and the square inside it:
+/// `Hall::door`.
+fn side_way(p: &mut Plan, h: &Hall, rng: &mut Pcg32) -> Option<(usize, usize)> {
+    let secret = rng.below(3) < 2;
+    let (nx, ny, ri) = (h.nx, h.ny, h.ri);
+    let n = nx * ny;
+    let built = !p.natural;
+    let boss: Vec<bool> = p.cells.iter().map(|&c| c == ri).collect();
+    let walk = p.distances(p.up, ny, Some(&boss));
+    let out = neighbours(h.entry, nx, ny).filter(|&m| p.cells[m] >= 0 && p.cells[m] != ri && p.passable(h.entry, m) && walk[m] >= 0).min_by_key(|&m| (walk[m], m))?;
+    let zone = built.then(|| super::kit::parts(p, ny, &|q| p.locks.contains_key(&q)).0);
+    let lock = p.locks.get(&(out.min(h.entry), out.max(h.entry))).copied();
+    let raise = p.rooms[ri as usize].raise;
+    let dig = if built { 5 } else { 8 };
+    let apart = |a: usize, b: usize| (a % nx).abs_diff(b % nx) + (a / nx).abs_diff(b / nx);
+    // (Rock dug, the boss's square, the way out, the far room's square.)
+    let mut cands: Vec<(usize, usize, usize, usize)> = Vec::new();
+    for k in 0..n {
+        if p.cells[k] != ri || p.taken[k] || apart(k, h.entry) < 4 {
+            continue;
+        }
+        for dir in 0..4 {
+            if step(k, (dir + 2) % 4, nx, ny).is_none_or(|iw| p.cells[iw] != ri || p.taken[iw]) {
+                continue;
+            }
+            let mut q = k;
+            for t in 0..=dig {
+                let Some(s) = step(q, dir, nx, ny) else { break };
+                q = s;
+                let c = p.cells[q];
+                if c < 0 {
+                    // (Rock either side of the passage.)
+                    if t == dig || [(dir + 1) % 4, (dir + 3) % 4].iter().any(|&sd| step(q, sd, nx, ny).is_none_or(|m| p.cells[m] >= 0)) {
+                        break;
+                    }
+                    continue;
+                }
+                let room = &p.rooms[c as usize];
+                let ok = c != ri
+                    && room.kind != BOSS
+                    && (built || t > 0)
+                    && !p.taken[q]
+                    && walk[q] >= 0
+                    && apart(q, out) >= 4
+                    && (room.raise - raise).abs() <= crate::interior::height::STEP_FT
+                    && (t == 0 || room.shape == 0)
+                    && !p.doors.contains(&(k.min(q), k.max(q)))
+                    && zone.as_ref().is_none_or(|z| z[q] == z[out]);
+                if ok {
+                    cands.push((t, k, dir, q));
+                }
+                break;
+            }
+        }
+    }
+    // (Into the chamber's far half where one can, through the least rock.)
+    if cands.iter().any(|c| h.frame(c.1).0 * 2 >= h.l) {
+        cands.retain(|c| h.frame(c.1).0 * 2 >= h.l);
+    }
+    let least = cands.iter().map(|c| c.0).min()?;
+    cands.retain(|c| c.0 <= least + 1);
+    let (t, k, dir, q) = cands[rng.below(cands.len() as u32) as usize];
+    let r = p.cells[q];
+    let mut s = k;
+    let mut first = q;
+    for i in 0..t {
+        s = step(s, dir, nx, ny)?;
+        if i == 0 {
+            first = s;
+        }
+        p.cells[s] = r;
+        p.taken[s] = true;
+    }
+    let e = (k.min(first), k.max(first));
+    p.door(k, first);
+    if secret {
+        p.secret.insert(e);
+    } else if !built {
+        p.gaps.insert(e);
+    }
+    if let Some(c) = lock.filter(|_| built) {
+        p.locks.insert(e, c);
+    }
+    p.taken[k] = true;
+    p.taken[q] = true;
+    Some((k, step(k, (dir + 2) % 4, nx, ny)?))
+}
+
+/// A boss chamber on an island in its own lake (`themes::cave`): deep water round it, in another room.
+fn islet(p: &Plan, nx: usize, ny: usize, ri: i16, squares: &[usize]) -> bool {
+    let deep = |m: usize| p.items.iter().any(|f| f.kind == "water_deep" && (f.x as usize..(f.x + f.w) as usize).contains(&(m % nx)) && (f.y as usize..(f.y + f.h) as usize).contains(&(m / nx)));
+    squares.iter().any(|&k| neighbours(k, nx, ny).any(|m| p.cells[m] >= 0 && p.cells[m] != ri && deep(m)))
+}
+
+/// The level's second way into its boss chamber (`side_way`; about half the chambers get one, none to an island), picked
+/// before the level's rooms are furnished so its doorway squares are still free: `Plan::side_door`.
+pub(crate) fn side_door(p: &mut Plan, nx: usize, ny: usize, rng: &mut Pcg32) {
+    let Some(ri) = p.rooms.iter().position(|r| r.kind == BOSS).map(|r| r as i16) else { return };
+    let squares: Vec<usize> = (0..nx * ny).filter(|&k| p.cells[k] == ri).collect();
+    // (Tried in four chambers of five: about three in five have room for one.)
+    if squares.is_empty() || rng.below(5) == 0 || islet(p, nx, ny, ri, &squares) {
+        return;
+    }
+    let h = Hall::new(p, nx, ny, ri, &squares);
+    let entry = h.entry;
+    p.side_door = side_way(p, &h, rng).map(|(k, iw)| (k, iw, entry));
+}
+
+/// The stage round the chamber's farthest square from its way in (walking its floor): its far row that square's.
+fn far_point(p: &Plan, h: &Hall) -> Stage {
+    let (nx, ny) = (h.nx, h.ny);
+    let mut dist = vec![-1i32; nx * ny];
+    dist[h.entry] = 0;
+    let mut q = std::collections::VecDeque::from([h.entry]);
+    let mut far = h.entry;
+    while let Some(k) = q.pop_front() {
+        if dist[k] > dist[far] || dist[k] == dist[far] && k < far {
+            far = k;
+        }
+        for m in neighbours(k, nx, ny) {
+            if dist[m] < 0 && p.cells[m] == h.ri {
+                dist[m] = dist[k] + 1;
+                q.push_back(m);
+            }
+        }
+    }
+    let (d, a) = h.frame(far);
+    Stage { d0: d as isize - 1, a0: a as isize - 2, dl: 2, aw: 5, raised: false }
+}
+
+/// A cave's, lava tube's or mine's boss chamber: maybe a second way in, a layout of its set (`NATURAL`, `MINE`) by fit,
+/// the theme's dressing and the hoard by the far end, maybe hazards. A cave boss on its own lake's island
+/// (`themes::cave`) is that layout already: dressed only, no second way.
+pub(crate) fn wild(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usize], kind: UnderKind, rng: &mut Pcg32) {
+    let h = Hall::new(p, nx, ny, ri, squares);
+    let theme = p.theme;
+    let isle = islet(p, nx, ny, ri, squares);
+    let mine = kind == UnderKind::Mine;
+    let lava = kind == UnderKind::LavaTube;
+    let (names, fit): (&[&str], &[(usize, usize)]) = if mine { (&MINE, &MFIT) } else { (&NATURAL, &NFIT) };
+    let mut order: Vec<usize> = (0..names.len())
+        .filter(|&i| !isle && h.l >= fit[i].0 && h.w >= fit[i].1 && (mine || names[i] != if lava { "pool island" } else { "lava channel" }))
+        .collect();
+    for i in (1..order.len()).rev() {
+        order.swap(i, rng.below(i as u32 + 1) as usize);
+    }
+    // (A flooded cave's boss on an island in a pool.)
+    if theme == "flooded" && let Some(m) = order.iter().position(|&i| names[i] == "pool island") {
+        order[..=m].rotate_right(1);
+    }
+    let fallback = far_point(p, &h);
+    if mine {
+        choose(p, &h, order, rng, &|p, h, i, rng| mine_layout(p, h, MINE[i], rng), &|p, h, s, rng| mine_dress(p, h, s, rng), fallback);
+    } else {
+        choose(p, &h, order, rng, &|p, h, i, rng| wild_layout(p, h, NATURAL[i], lava, rng), &|p, h, s, rng| wild_dress(p, h, s, theme, rng), fallback);
+    }
+    let kinds: &[&'static str] = match theme {
+        _ if lava => &["steam vent", "steam vent", "cracked floor"],
+        _ if mine => &["cracked floor", "flooded pit"],
+        "flooded" | "cave" | "fungal" => &["cracked floor", "flooded pit"],
+        _ => &["cracked floor"],
+    };
+    hazards(p, &h, kinds, rng);
+}
+
+/// The room's squares in frame coordinates.
+fn frame_squares(p: &Plan, h: &Hall) -> Vec<(isize, isize)> {
+    (0..h.l as isize).flat_map(|d| (0..h.w as isize).map(move |a| (d, a))).filter(|&(d, a)| h.sq(p, d, a).is_some()).collect()
+}
+
+fn wild_layout(p: &mut Plan, h: &Hall, name: &str, lava: bool, rng: &mut Pcg32) -> Option<Stage> {
+    let (l, w) = (h.l as isize, h.w as isize);
+    let stage = far_point(p, h);
+    let all = frame_squares(p, h);
+    let floor = |p: &Plan, d: isize, a: isize| h.sq(p, d, a).is_some_and(|k| !p.taken[k] && !h.kept(k));
+    let (dc, ac) = (all.iter().map(|s| s.0).sum::<isize>() / all.len().max(1) as isize, all.iter().map(|s| s.1).sum::<isize>() / all.len().max(1) as isize);
+    match name {
+        "rock columns" => {
+            // Columns standing clear of the walls, two or more apart, a stalagmite or two among them.
+            let kind = if lava { "basalt" } else { "rock_column" };
+            let inner: Vec<(isize, isize)> = all.iter().copied().filter(|&(d, a)| d >= 2 && (-1..=1).all(|i| (-1..=1).all(|j| h.sq(p, d + i, a + j).is_some()))).collect();
+            if inner.is_empty() {
+                return None;
+            }
+            let want = (all.len() / 14).clamp(3, 6);
+            let mut at: Vec<(isize, isize)> = Vec::new();
+            for _ in 0..want * 6 {
+                if at.len() >= want {
+                    break;
+                }
+                let (d, a) = inner[rng.below(inner.len() as u32) as usize];
+                if at.iter().all(|&(e, b)| (e - d).abs().max((b - a).abs()) >= 2) && set(p, h, h.item(kind, d, a, 1, 1, None), false) {
+                    at.push((d, a));
+                }
+            }
+            for _ in 0..1 + rng.below(2) {
+                let (d, a) = inner[rng.below(inner.len() as u32) as usize];
+                set(p, h, h.item(if lava { "obsidian" } else { "stalagmite" }, d, a, 1, 1, None), false);
+            }
+            (at.len() >= 3).then_some(stage)
+        }
+        "ledges" => {
+            // Raised shelves along the side walls (5 or 10 ft), up a rubble slope at one end or from the floor beside.
+            let kind = if rng.below(2) == 0 { "platform" } else { "balcony" };
+            let first = rng.below(2) as u8;
+            let two = h.w >= 9 && rng.below(5) < 2;
+            let mut items = Vec::new();
+            let mut tops = Vec::new();
+            for s in 0..1 + two as u8 {
+                let Some((rects, mut ups)) = shelf(p, h, (first + s) % 2, 3, (1, l - 1)) else {
+                    if s == 0 {
+                        return None;
+                    }
+                    break;
+                };
+                items.extend(rects.iter().map(|&(d, a, dl, aw)| h.item(kind, d, a, dl, aw, None)));
+                let turn = rng.below(ups.len().max(1) as u32) as usize;
+                ups.rotate_left(turn);
+                let &((ud, ua), _) = ups.first()?;
+                items.push(h.item("rubble_slope", ud, ua, 1, 1, None));
+                tops.push(rects[rects.len() - 1]);
+            }
+            if !lay(p, h, items) {
+                return None;
+            }
+            // (A cache up on the shelf's far end.)
+            for (d, a, _, _) in tops {
+                set(p, h, h.item("chest", d, a, 1, 1, None), true);
+            }
+            Some(stage)
+        }
+        "rope-bridge chasm" => {
+            // A chasm two rows wide across the chamber, a rope bridge over it in line with the middle.
+            let dm = (l / 2 - 1).clamp(2, l - 4);
+            if all.iter().filter(|s| s.0 > dm + 1).count() < 6 {
+                return None;
+            }
+            let mut cols: Vec<isize> = (0..w).collect();
+            cols.sort_by_key(|&a| ((a - ac).abs(), a));
+            let ba = cols.into_iter().find(|&a| (dm - 1..=dm + 2).all(|d| floor(p, d, a)))?;
+            let mut items = Vec::new();
+            for d in [dm, dm + 1] {
+                let mut a = 0;
+                while a < w {
+                    if h.sq(p, d, a).is_none() {
+                        a += 1;
+                        continue;
+                    }
+                    let mut b = a;
+                    while b + 1 < w && h.sq(p, d, b + 1).is_some() {
+                        b += 1;
+                    }
+                    items.push(h.item("chasm", d, a, 1, (b - a + 1) as usize, None));
+                    a = b + 1;
+                }
+            }
+            items.push(h.item("rope_bridge", dm, ba, 2, 1, None));
+            lay(p, h, items).then_some(stage)
+        }
+        "rubble field" => {
+            // A collapsed ceiling: rubble heaped round the middle, a boulder or two, the unstable roof over it.
+            let r = if all.len() >= 60 { 3 } else { 2 };
+            set(p, h, h.item("cave_in", dc, ac, 1, 1, None), false);
+            let mut n = 0;
+            for &(d, a) in &all {
+                let (dd, da) = (d - dc, a - ac);
+                if dd * dd + da * da > r * r + 1 || d < 2 || rng.below(20) >= 11 {
+                    continue;
+                }
+                n += set(p, h, h.item("rubble", d, a, 1, 1, None), false) as usize;
+            }
+            for _ in 0..1 + rng.below(2) {
+                let (d, a) = (dc - r + rng.below(2 * r as u32 + 1) as isize, ac - r + rng.below(2 * r as u32 + 1) as isize);
+                near(p, h, false, "boulder", d, a, 2, 2, None);
+            }
+            (n >= 5).then_some(stage)
+        }
+        "pool island" => {
+            // Deep water round an island (its far side may be the chamber's wall), stepping stones out to it from the
+            // near side, shallows here and there round the pool.
+            let il: isize = if all.len() >= 70 { 3 } else { 2 };
+            let (fd, _) = (stage.far(), stage.mid());
+            let (td, ta) = ((dc + fd) / 2, ac);
+            let mut spots: Vec<(isize, isize)> = (2..l - il + 1).flat_map(|d| (0..w - il + 1).map(move |a| (d, a))).collect();
+            spots.sort_by_key(|&(d, a)| ((d + il / 2 - td).abs() + (a + il / 2 - ta).abs(), d, a));
+            for (di, ai) in spots.into_iter().take(40) {
+                let isle = |d: isize, a: isize| d >= di && d < di + il && a >= ai && a < ai + il;
+                if !(di..di + il).all(|d| (ai..ai + il).all(|a| floor(p, d, a))) {
+                    continue;
+                }
+                let (cd, ca) = (di - 1, ai + il / 2);
+                if !floor(p, cd, ca) || !floor(p, cd - 1, ca) {
+                    continue;
+                }
+                let mut items = Vec::new();
+                let mut ok = true;
+                for d in di - 1..=di + il {
+                    for a in ai - 1..=ai + il {
+                        if isle(d, a) {
+                            continue;
+                        }
+                        match h.sq(p, d, a) {
+                            Some(_) if floor(p, d, a) => items.push(h.item("water_deep", d, a, 1, 1, None)),
+                            Some(_) => ok = false,
+                            // (Off the room: rock only, or the island is reached from there.)
+                            None => ok &= h.cell(d, a).is_none_or(|k| p.cells[k] < 0),
+                        }
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                items.push(h.item("stepping_stone", cd, ca, 1, 1, None));
+                for d in di - 2..=di + il + 1 {
+                    for a in ai - 2..=ai + il + 1 {
+                        let ring = d == di - 2 || d == di + il + 1 || a == ai - 2 || a == ai + il + 1;
+                        if ring && (d, a) != (cd - 1, ca) && floor(p, d, a) && h.sq(p, d, a) != Some(h.entry) && rng.below(2) == 0 {
+                            items.push(h.item("water_shallow", d, a, 1, 1, None));
+                        }
+                    }
+                }
+                let s = snap(p);
+                if lay(p, h, items) {
+                    return Some(Stage { d0: di, a0: ai, dl: il as usize, aw: il as usize, raised: false });
+                }
+                undo(p, s);
+                h.clear.borrow_mut().clear();
+            }
+            None
+        }
+        "lava channel" => {
+            // Lava across the chamber, a row or two wide, crossed by a rock bridge or basalt stepping stones.
+            let rows = if h.l >= 10 { 2 } else { 1 };
+            let dm = (l / 2 - 1).clamp(2, l - 2 - rows);
+            if all.iter().filter(|s| s.0 >= dm + rows).count() < 5 {
+                return None;
+            }
+            let mut cols: Vec<isize> = (0..w).collect();
+            cols.sort_by_key(|&a| ((a - ac).abs(), a));
+            let ba = cols.into_iter().find(|&a| (dm - 1..=dm + rows).all(|d| floor(p, d, a)))?;
+            let mut items = Vec::new();
+            for d in dm..dm + rows {
+                for a in 0..w {
+                    if a != ba && h.sq(p, d, a).is_some() {
+                        items.push(h.rect(d, a, 1, 1).map(|(x, y, _, _)| super::kit::lava(x, y)));
+                    }
+                }
+            }
+            let span = if rng.below(2) == 0 { "stone_bridge" } else { "stepping_stone" };
+            items.push(h.item(span, dm, ba, rows as usize, 1, None));
+            lay(p, h, items).then_some(stage)
+        }
+        _ => None,
+    }
+}
+
+/// The natural set's dressing by theme round the stage (a beast's nest and bone mounds, a fungus grove, a crystal
+/// cluster, ice columns, obsidian and sulfur in a lava tube), the hoard and a chest by it.
+fn wild_dress(p: &mut Plan, h: &Hall, s: Stage, theme: &str, rng: &mut Pcg32) {
+    let (f, m, top) = (s.far(), s.mid(), s.raised);
+    let put = |p: &mut Plan, kind: &'static str, d: isize, a: isize, dl: usize, aw: usize| near(p, h, top, kind, d, a, dl, aw, None);
+    let scatter = |p: &mut Plan, kind: &'static str, n: u32, rng: &mut Pcg32| {
+        for _ in 0..n {
+            let (d, a) = (f - 1 - rng.below(3) as isize, m - 3 + rng.below(7) as isize);
+            put(p, kind, d, a, 1, 1);
+        }
+    };
+    match theme {
+        "beast_den" => {
+            put(p, "nest", f - 1, m - 1, 2, 2);
+            put(p, "bone_mound", f - 2, m - 4, 2, 2);
+            if rng.below(2) == 0 {
+                put(p, "bone_mound", f - 2, m + 2, 2, 2);
+            }
+            scatter(p, "bones", 3, rng);
+        }
+        "fungal" => {
+            scatter(p, "mushroom", 3, rng);
+            scatter(p, "fungus", 3, rng);
+        }
+        "crystal" => scatter(p, "crystal", 5, rng),
+        "ice" => scatter(p, "ice", 4, rng),
+        "lava_tube" => {
+            scatter(p, "obsidian", 2, rng);
+            scatter(p, "sulfur", 2, rng);
+        }
+        _ => {
+            scatter(p, if theme == "flooded" { "bones" } else { "stalagmite" }, 3, rng);
+            put(p, "skeleton", f - 2, m + 2, 2, 1);
+        }
+    }
+    put(p, "hoard", f, m, 1, 1);
+    put(p, "chest", f, m + 1, 1, 1);
+}
+
+/// A raised strip along a wall (`wall`: 0 the side at a = 0, 1 the side at a = w - 1, 2 the far wall) over `span` of
+/// the rows along it (d for a side wall, a for the far wall): on each row, from the wall's square out to one straight
+/// inner line (at most `most` wide), all free floor clear of the way in, with floor beside it; the longest such run, of
+/// 4 rows or more. Its rects (d, a, dl, aw), and the free squares a way up may take with the shelf's square each climbs
+/// to (at the near end, the far end, beside its middle).
+#[allow(clippy::type_complexity)]
+fn shelf(p: &Plan, h: &Hall, wall: u8, most: isize, span: (isize, isize)) -> Option<(Vec<(isize, isize, usize, usize)>, Vec<((isize, isize), (isize, isize))>)> {
+    let (l, w) = (h.l as isize, h.w as isize);
+    let deep = if wall == 2 { l } else { w };
+    let to = |u: isize, v: isize| match wall {
+        0 => (u, v),
+        1 => (u, w - 1 - v),
+        _ => (l - 1 - v, u),
+    };
+    let (ex, ey) = (h.entry % h.nx, h.entry / h.nx);
+    let free = |(d, a): (isize, isize)| h.sq(p, d, a).is_some_and(|k| !p.taken[k] && !h.kept(k) && (k % h.nx).abs_diff(ex).max((k / h.nx).abs_diff(ey)) >= 2);
+    let outer = |u: isize| (0..deep).find(|&v| {
+        let (d, a) = to(u, v);
+        h.sq(p, d, a).is_some()
+    });
+    let row_ok = |u: isize, line: isize| {
+        outer(u).is_some_and(|o| o <= line && line - o < most && (o..=line).all(|v| free(to(u, v))) && {
+            let (d, a) = to(u, line + 1);
+            h.sq(p, d, a).is_some()
+        })
+    };
+    let mut best: Option<(isize, isize, isize)> = None;
+    for line in 0..=(deep / 3).min(most + 1) {
+        let mut u = span.0;
+        while u <= span.1 {
+            if !row_ok(u, line) {
+                u += 1;
+                continue;
+            }
+            let mut e = u;
+            while e < span.1 && row_ok(e + 1, line) {
+                e += 1;
+            }
+            if best.is_none_or(|b| e - u > b.2 - b.1) {
+                best = Some((line, u, e));
+            }
+            u = e + 1;
+        }
+    }
+    let (line, u0, u1) = best.filter(|b| b.2 - b.1 >= 3)?;
+    let rects = (u0..=u1)
+        .map(|u| {
+            let (a, b) = (to(u, outer(u).unwrap_or(line)), to(u, line));
+            (a.0.min(b.0), a.1.min(b.1), (a.0 - b.0).unsigned_abs() + 1, (a.1 - b.1).unsigned_abs() + 1)
+        })
+        .collect();
+    let mid = (u0 + u1) / 2;
+    let ups = [((u0 - 1, line), (u0, line)), ((u1 + 1, line), (u1, line)), ((mid, line + 1), (mid, line))].into_iter().map(|(a, b)| (to(a.0, a.1), to(b.0, b.1))).filter(|&(a, _)| free(a)).collect();
+    Some((rects, ups))
+}
+
+/// A mine's: scaffolding (a raised walkway, 10 ft, up a ladder) along a side wall, both, or across the dug half of the
+/// face; the face's other half an ore vein; rails from the way in to the face, an ore cart on them.
+fn mine_layout(p: &mut Plan, h: &Hall, name: &str, rng: &mut Pcg32) -> Option<Stage> {
+    let (l, w) = (h.l as isize, h.w as isize);
+    let vein_left = rng.below(2) == 0;
+    let mut items = Vec::new();
+    let walkway = |p: &Plan, wall: u8, span: (isize, isize), items: &mut Vec<Option<Item>>| {
+        let Some((rects, ups)) = shelf(p, h, wall, 2, span) else { return false };
+        let Some(&(foot, top)) = ups.first() else { return false };
+        items.extend(rects.iter().map(|&(d, a, dl, aw)| h.item("scaffold", d, a, dl, aw, None)));
+        let (Some(k), Some(m)) = (h.sq(p, foot.0, foot.1), h.sq(p, top.0, top.1)) else { return false };
+        items.push(h.item("climb_ladder", foot.0, foot.1, 1, 1, Some(toward(k, m, h.nx))));
+        true
+    };
+    let ok = match name {
+        "side walkway" => walkway(p, rng.below(2) as u8, (1, l - 2), &mut items),
+        "twin walkways" => walkway(p, 0, (1, l - 2), &mut items) && walkway(p, 1, (1, l - 2), &mut items),
+        // (Across the dug half of the face.)
+        "face gallery" => walkway(p, 2, if vein_left { (w / 2, w - 1) } else { (0, (w - 1) / 2) }, &mut items),
+        _ => false,
+    };
+    if !ok || !lay(p, h, items) {
+        return None;
+    }
+    // The face: the vein in its half of the far wall, rubble and tools where the other half is dug back.
+    let half = |a: isize| if vein_left { a < w / 2 } else { a >= w / 2 };
+    let mut face: Vec<(isize, isize)> = frame_squares(p, h)
+        .into_iter()
+        .filter(|&(d, a)| d >= l - 3 && half(a) && h.sq(p, d, a).is_some_and(|k| neighbours(k, h.nx, h.ny).count() < 4 || neighbours(k, h.nx, h.ny).any(|m| p.cells[m] < 0)))
+        .collect();
+    face.sort_by_key(|&(d, a)| (-d, a));
+    let mut veins = 0;
+    for (d, a) in face {
+        if veins < 4 {
+            veins += set(p, h, h.item("ore_vein", d, a, 1, 1, None), false) as usize;
+        }
+    }
+    let dug = if vein_left { w * 3 / 4 } else { w / 4 };
+    near(p, h, false, "rubble", l - 2, dug, 1, 1, None);
+    near(p, h, false, "tools", l - 2, if vein_left { w / 4 } else { w * 3 / 4 }, 1, 1, None);
+    let ar = (h.ea as isize).clamp(1, (w - 2).max(1));
+    near(p, h, false, "ore_cart", l - 3, ar, 1, 1, None);
+    let rails: Vec<Option<Item>> = (1..l - 1).filter(|&d| h.free(p, d, ar, 1, 1)).map(|d| h.item("rail", d, ar, 1, 1, None)).collect();
+    if rails.len() >= 3 {
+        lay(p, h, rails);
+    }
+    (veins >= 2).then(|| far_point(p, h))
+}
+
+/// A mine's dressing: tools and lanterns, the hoard and a chest by the face.
+fn mine_dress(p: &mut Plan, h: &Hall, s: Stage, rng: &mut Pcg32) {
+    let (f, m) = (s.far(), s.mid());
+    near(p, h, false, "hoard", f - 1, m, 1, 1, None);
+    near(p, h, false, "chest", f - 1, m + 1, 1, 1, None);
+    near(p, h, false, "tools", f - 2, m - 2, 1, 1, None);
+    edge(p, h, "lantern", 2, rng);
+    edge(p, h, "timber", 2, rng);
 }

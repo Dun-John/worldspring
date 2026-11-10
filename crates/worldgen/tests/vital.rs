@@ -1998,7 +1998,8 @@ fn check_interior(world: &World, t0: &worldgen::t0::T0, l: &worldgen::town::Layo
 /// M6: every underground site opens where its entrance is on the surface, has at least two
 /// levels joined by a way down and a way up on the same square, can be walked end to end
 /// (around blocking furniture), and ends in one boss chamber on its deepest level that is a
-/// dead end (nothing else on the level is reached through it). Sewers match the streets above:
+/// dead end (nothing else on the level is reached through it) apart from at most one side way in
+/// (a door, secret or not, or an arch on a natural level). Sewers match the streets above:
 /// their tunnels lie under paved streets, and the streets over dry ground have sewer beneath.
 /// Each site generates within 300 ms.
 #[test]
@@ -2133,7 +2134,7 @@ fn underground_guarantee() {
                 start = at(lv, "down")[0];
             }
         }
-        // One boss chamber, on the deepest level, a dead end.
+        // One boss chamber, on the deepest level, a dead end apart from one side way at most.
         let boss: Vec<(usize, usize)> = it.levels.iter().enumerate().flat_map(|(li2, lv)| lv.rooms.iter().enumerate().filter(|(_, r)| r.kind == worldgen::under::BOSS && r.squares > 0).map(move |(ri, _)| (li2, ri))).collect();
         assert_eq!(boss.len(), 1, "{tag}: {} boss chambers", boss.len());
         let (bl, br) = boss[0];
@@ -2144,6 +2145,9 @@ fn underground_guarantee() {
         let seen = flood(deep, nx, ny, up, &|q| deep.cells[q] == br as i16);
         let cut = (0..nx * ny).filter(|&q| deep.cells[q] >= 0 && deep.cells[q] != br as i16 && !seen[q]).count();
         assert_eq!(cut, 0, "{tag}: {cut} squares are reached only through the boss chamber");
+        // (Its doors: a built level's way in and one more; a natural level's way in is open floor, so one.)
+        let ways = deep.doors.iter().filter(|d| d.rooms.contains(&(br as i16))).count();
+        assert!(ways <= if deep.natural { 1 } else { 2 }, "{tag}: {ways} doors into the boss chamber");
         // Locked doors open in order: each key reached without its lock, every square in the end.
         let order = worldgen::under::design::key_order(it);
         assert!(order.is_empty(), "{tag}: keys out of order: {order:?}");

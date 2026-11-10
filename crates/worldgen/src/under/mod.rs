@@ -32,6 +32,7 @@ use serde::Serialize;
 pub mod design;
 pub mod surface;
 mod boss;
+pub use boss::PERILS;
 mod grow;
 mod kit;
 mod plan;
