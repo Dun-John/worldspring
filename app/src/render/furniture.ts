@@ -1168,20 +1168,44 @@ function statue(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: () =
   g.circle(cx + light[0] * 0.05, cy + light[1] * 0.05, 0.085).fill(t[2]);
 }
 
-/** Pillar: a round column from above — its square base showing at the corners, the capital a solid,
- * flat round top (matte, a thin lit rim), so it reads as a column, not a basin. */
+/** Pillar (a building's): a stone column from above in pale fine stone (`stoneColumn`). */
 function pillar(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
+  stoneColumn(g, f, light, MARBLE.map((c) => shade(c, 0.92)), rnd);
+}
+
+/** A stone column's three tones (shade, face, lit) from a site's stone (`UnderLook.stone`, 0-1). */
+export function columnTones(stone: readonly number[]): number[] {
+  const tone = (k: number) => stone.reduce((c, v) => (c << 8) | Math.min(255, Math.round(v * 255 * k)), 0);
+  return [tone(0.8), tone(1.04), tone(1.2)];
+}
+
+/** A stone column seen from straight above, in the same family as the rock column and the statue:
+ * its square plinth showing at the corners, a short shadow away from the light, the round capital
+ * inked at OUT with a crescent of shade on the side away from the light, and the capital's flat top
+ * inside its moulding ring, lit toward the light. `t`: shade, face, lit (`columnTones`). */
+export function stoneColumn(g: Graphics, f: InteriorItem, light: Light, t: readonly number[], rnd: () => number = rng(f.w * 131 + f.h * 17 + 7)) {
   const [cx, cy] = [f.x + f.w / 2, f.y + f.h / 2];
-  const r = Math.min(f.w, f.h) * 0.4;
-  board(g, [cx - r * 1.12, cy - r * 1.12, cx + r * 1.12, cy + r * 1.12], STONE, light, rnd, true, 0.04, 0);
-  const la = Math.atan2(light[1], light[0]);
-  g.poly(ring(cx, cy, r, rnd, 0.004, 32)).fill(MARBLE[1]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.moveTo(cx + Math.cos(la - 1.1) * r * 0.88, cy + Math.sin(la - 1.1) * r * 0.88)
-    .arc(cx, cy, r * 0.88, la - 1.1, la + 1.1)
-    .stroke({ width: 0.025, color: MARBLE[2] });
-  g.moveTo(cx + Math.cos(la + Math.PI - 1.1) * r * 0.88, cy + Math.sin(la + Math.PI - 1.1) * r * 0.88)
-    .arc(cx, cy, r * 0.88, la + Math.PI - 1.1, la + Math.PI + 1.1)
-    .stroke({ width: 0.025, color: MARBLE[0], alpha: 0.8 });
+  const [lx, ly] = light;
+  const r = Math.min(f.w, f.h) * 0.38;
+  const b = r * 1.16;
+  const base = [cx - b, cy - b, cx + b, cy + b];
+  castShadow(g, quad(base, rnd, 0), light, 0.32);
+  board(g, base, t.map((c) => shade(c, 0.84)), light, rnd, true, 0.04, 0);
+  // The capital: shade, its lit face shifted toward the light (a crescent of shade left away from it).
+  const out = ring(cx, cy, r, rnd, 0.006, 32);
+  g.poly(out).fill(t[0]);
+  g.poly(ring(cx + lx * 0.055, cy + ly * 0.055, r * 0.86, rnd, 0.004, 32)).fill(t[1]);
+  g.poly(out).stroke({ width: OUT, color: INK, join: 'round' });
+  // Its flat top inside the moulding ring, lit on the side toward the light.
+  const [tx, ty, tr] = [cx + lx * 0.015, cy + ly * 0.015, r * 0.6];
+  g.circle(tx, ty, tr).fill(t[1]).stroke({ width: 0.018, color: INK, alpha: 0.75 });
+  const la = Math.atan2(ly, lx);
+  g.moveTo(tx + Math.cos(la - 1.0) * tr * 0.72, ty + Math.sin(la - 1.0) * tr * 0.72)
+    .arc(tx, ty, tr * 0.72, la - 1.0, la + 1.0)
+    .stroke({ width: 0.04, color: t[2], cap: 'round', alpha: 0.9 });
+  g.moveTo(cx + Math.cos(la - 0.8) * r * 0.8, cy + Math.sin(la - 0.8) * r * 0.8)
+    .arc(cx, cy, r * 0.8, la - 0.8, la + 0.8)
+    .stroke({ width: 0.03, color: t[2], cap: 'round', alpha: 0.7 });
 }
 
 /** Throne against a wall: a tall back with a pointed gilt crest, carved arms, and a deep red cushion

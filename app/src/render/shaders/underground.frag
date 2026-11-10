@@ -86,6 +86,10 @@ float gRamp = 0.0;
 // A built site's raised floors: the dressed stone their faces are cut from, in one flat tone (the
 // floor's own flags would carry their joints and light and dark stones down the face).
 vec3 gFace = vec3(0.5);
+// How much of this pixel is a built ledge's face or its shadow (`ledgeEdge`): there the wall's shade
+// is lifted as on the gallery's top (else a gallery by the wall has its face in the wall's cast
+// shadow, near black, and the drop reads as a trough).
+float gLedge = 0.0;
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -430,10 +434,12 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         c = mix(c, vec3(0.50, 0.64, 0.78), seam(vnoise(p * 1.3 + 2.0), 0.02));
         c += vec3(0.15) * smoothstep(0.94, 0.99, vnoise(p * 8.0));
     } else if (mat == 12) {
-        // A fighting pit's packed sand (a boss chamber's sunken arena): one warm flat tone in a few
-        // broad soft patches, scuffed a little darker here and there.
-        c = vec3(0.53, 0.42, 0.29) * (0.95 + 0.07 * vnoise(p * 0.3 + 11.0));
-        c = mix(c, c * 0.9, smoothstep(0.6, 0.75, vnoise(p * 0.55 + 5.0)) * 0.6);
+        // A fighting pit's packed sand (a boss chamber's sunken arena): pale earthy tan, paler and
+        // yellower than the stone round it, in a few big soft shapes: raked paler here, trodden a
+        // little darker and browner there (three close flat tones, no grain).
+        c = vec3(0.63, 0.57, 0.46);
+        c = mix(c, vec3(0.56, 0.49, 0.39), smoothstep(0.5, 0.66, vnoise(p * 0.32 + 5.0)) * 0.9);
+        c = mix(c, vec3(0.69, 0.63, 0.52), smoothstep(0.6, 0.72, vnoise(p * 0.45 + 17.0)) * 0.7);
     } else {
         // Flagstones laid to the squares: one stone a square, or a square split in two along its
         // half line (which way and whether, by square). Boss chambers darker, crypts dusty.
@@ -633,25 +639,27 @@ vec3 cliffFace(vec3 base, vec2 q, vec2 n, float down, float faceW, float px, flo
     return mix(fc, INK, stroke * 0.7);
 }
 
-// A built site's ledge face (a gallery's, a stage's, a sunken arena's wall): dressed blocks in one
-// flat tone (`gFace`) by how it meets the light, a mid value between the lighter top above and the
-// darker shadow below, a touch darker toward its foot; the blocks' joints running down it every half
-// square, and an ink line along its foot, so top, face and shadow read as three bands. (Risers under
-// 0.15 square, a dais's or a step's: plain, the lip their only line.)
+// A built site's ledge face (a gallery's, a stage's, a sunken arena's wall): a dressed stone wall
+// seen from above, in one flat tone (`gFace`) about the floor's value, lighter where it faces the
+// light and a little darker where it looks away (never near the ink), so the lighter top, the lip,
+// the face and the soft shadow past it read as a walkway's edge dropping to the floor below, not a
+// trough. Its blocks in courses (two on a tall face) in running bond, the joints a darker stone
+// tone, not ink. (Risers under 0.15 square, a dais's or a step's: plain, the lip their only line.)
 vec3 builtFace(vec2 q, vec2 n, float down, float faceW, float px, float aa) {
     float toward = dot(n, normalize(uLight));
-    float lit = toward > 0.35 ? -0.08 : toward > -0.35 ? -0.05 : -0.02;
     float k = clamp(down / max(faceW, 1e-3), 0.0, 1.0);
-    vec3 fc = valueStep(gFace, lit - 0.06 * smoothstep(0.5, 1.0, k));
-    vec2 edge = q + n * down;
-    float u = (edge.x + edge.y) / 0.5;
-    float dj = abs(fract(u + 0.5) - 0.5) * 0.5;
-    float hw = max(0.009, 0.5 * px);
+    vec3 fc = valueStep(gFace, mix(0.06, -0.03, smoothstep(-0.6, 0.6, toward)) + 0.02 * (1.0 - k));
     float big = smoothstep(0.13, 0.17, faceW) * smoothstep(6.0, 9.0, faceW / max(px, 1e-5));
+    float courses = faceW > 0.3 ? 2.0 : 1.0;
+    float ck = k * courses;
+    vec2 edge = q + n * down;
+    float u = (edge.x + edge.y) / 0.5 + 0.5 * floor(ck);
+    float hw = max(0.009, 0.5 * px);
+    float dj = abs(fract(u + 0.5) - 0.5) * 0.5;
     float joint = (1.0 - smoothstep(hw - aa * 0.5, hw + aa * 0.5, dj)) * smoothstep(5.0, 8.0, 0.5 / max(px, 1e-5));
-    float fw = max(LINE_W * 0.8, 1.0 * px);
-    float foot = smoothstep(faceW - fw - aa * 0.5, faceW - fw + aa * 0.5, down);
-    return mix(fc, INK, max(joint * 0.55, foot * 0.75) * big);
+    float dc = abs(fract(ck + 0.5) - 0.5) * faceW / courses;
+    float course = courses > 1.5 ? 1.0 - smoothstep(hw - aa * 0.5, hw + aa * 0.5, dc) : 0.0;
+    return mix(fc, valueStep(fc, -0.16), max(joint, course) * 0.8 * big);
 }
 
 // How much lighter a raised floor's top is (a value step, `valueStep`), by its height (ft): 2.5 ft
@@ -702,16 +710,19 @@ vec3 ledgeEdge(vec3 col, vec4 l, vec2 q, vec2 p, float px, float hf) {
     float fac = smoothstep(-0.3, 0.7, dot(n, normalize(uLight)));
     float shLen = min(0.95, 0.15 + 0.05 * drop) * mix(0.6, 1.0, fac) * s;
     float shV = min(0.34, 0.12 + 0.015 * drop) * mix(0.55, 1.0, fac) * (1.0 + 0.4 * dk);
-    // (Built: a shorter, crisper shadow, darker than the face above it but never near the ink, so
-    // the face's foot line still parts them.)
-    if (uSquare > 0.5) {
-        shLen = min(0.7, 0.12 + 0.045 * drop) * mix(0.6, 1.0, fac) * s;
-        shV = min(0.17, 0.09 + 0.008 * drop) * mix(0.7, 1.0, fac) * (1.0 + 0.2 * dk);
-    }
     float sh = smoothstep(-aa, aa, down) * (1.0 - smoothstep(faceW + shLen * 0.55, faceW + shLen, down));
+    // (Built: a short soft shadow on the floor below only, strongest at the face's foot and fading
+    // out, slight where the face is lit; darker than the face but never near the ink.)
+    if (uSquare > 0.5) {
+        shLen = min(0.42, 0.1 + 0.032 * drop) * mix(0.5, 1.0, fac) * s;
+        shV = min(0.13, 0.06 + 0.007 * drop) * mix(0.25, 1.0, fac) * (1.0 + 0.2 * dk);
+        float st = clamp((down - faceW) / max(shLen, 1e-3), 0.0, 1.0);
+        sh = smoothstep(faceW - aa, faceW + aa, down) * (1.0 - st) * (1.0 - st);
+    }
     vec3 floorCol = col;
     col = mix(col, valueStep(col, -shV), sh * min(1.0, s * 2.0));
     float inFace = smoothstep(-aa * 0.5, aa * 0.5, down) * (1.0 - smoothstep(faceW - aa * 0.5, faceW + aa * 0.5, down));
+    if (uSquare > 0.5) gLedge = max(gLedge, max(inFace, sh) * smoothstep(0.12, 0.3, s));
     if (inFace > 0.0) col = mix(col, uSquare > 0.5 ? builtFace(q, n, -r0, faceW, px, aa) : cliffFace(floorCol, q, n, -r0, faceW, px, aa), inFace);
     // The lip, at full weight up to just short of a ramp, where it ends (bolder on built sites'
     // straight edges, which have no rough wall line to carry them).
@@ -991,7 +1002,7 @@ void main() {
         // Against the walls: ambient occlusion and the shadow cast from the NW.
         // (A built gallery's top, up by the wall's head, keeps only a thin band of it and none of the
         // wall's cast shadow: else a strip a square wide is all shade and its lighter top is lost.)
-        float up = uSquare > 0.5 ? smoothstep(2.0, 8.0, hf) : 0.0;
+        float up = uSquare > 0.5 ? max(smoothstep(2.0, 8.0, hf), gLedge) : 0.0;
         col *= mix(0.6 + 0.4 * smoothstep(0.0, 0.75, d), 0.9 + 0.1 * smoothstep(0.0, 0.2, d), up);
         col *= mix(mix(0.66, 1.0, smoothstep(0.35, 0.6, lit)), 1.0, up);
         // Liquid down the channel.

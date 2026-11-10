@@ -9,7 +9,7 @@ import { OPEN_BELOW, ROOF_SLOPE, TERRACE, type Interior, type InteriorItem, type
 import { locKey, type DoorState } from '../play/state';
 import { dmOnlyHazard } from '../play/vision';
 import { customTexture, onLoaded } from './customAtlas';
-import { drawFurniture, drawUnderProp, IN_RING, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED, type Fit } from './furniture';
+import { columnTones, drawFurniture, drawUnderProp, IN_RING, stoneColumn, nicheMouth, houseOf, looksOf, ORIENTED, PLATFORMS, railRuns, UNDER_DRAWN, VARIED, type Fit } from './furniture';
 import { ITEM_PX, ItemAtlas, type ItemFrame } from './itemAtlas';
 import { sheetFor, thumbSheet, type ThumbSheet, type ThumbTile } from './thumbs';
 import type { SquareInfo } from './BattlemapLayer';
@@ -1941,6 +1941,11 @@ export class InteriorLayer {
 
   /** Everything an item's look depends on: what it is and its size; underground also the light, the
    * wall it is set against and its scatter variant. */
+  /** A built site's columns' tones (`stoneColumn`), from its stone (`underLook`). */
+  private columnTones(): number[] {
+    return columnTones(underLook(this.interior.function, this.interior.theme).stone);
+  }
+
   private itemKey(f: InteriorItem): string {
     const base = `${f.kind}:${f.w}x${f.h}`;
     const light = this.light.map((v) => Math.round(v * 100)).join(',');
@@ -1950,7 +1955,8 @@ export class InteriorLayer {
       const back = ORIENTED.has(shared) ? this.backSide(g).join(',') : '';
       const fit = this.ringFit(f);
       const ring = fit ? `:y${[fit.c[0] - f.x, fit.c[1] - f.y, fit.r].map((v) => v.toFixed(2)).join(',')}` : '';
-      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}${ring}`;
+      const stone = this.underground && f.kind === 'pillar' ? `:s${this.columnTones().join(',')}` : '';
+      return `${this.underground ? 'u' : 'b'}:${base}:${light}:${VARIED.has(shared) ? this.lookOf(f) : 0}:${back}${ring}${stone}`;
     }
     const turned = this.wallAnchor(f);
     const wall = turned ? `t${turned.step}` : ON_WALL.has(f.kind) ? this.propWall(f).join(',') : BACKED.has(f.kind) ? this.backWall(f).join(',') : '';
@@ -2315,6 +2321,8 @@ export class InteriorLayer {
     if (kind === 'key') return keyGlyph(g, x + 0.5, y + 0.5, lockColor(this.lookOf(f)));
     const c = itemColor(kind);
     const inset = 0.08;
+    // A built site's columns, in its own stone.
+    if (this.underground && kind === 'pillar') return stoneColumn(g, f, this.light, this.columnTones());
     // Building furniture, and underground props that share its drawing.
     const shared = this.sharedKind(kind);
     if (shared) {

@@ -22,7 +22,7 @@ export interface UnderLook {
 const look = (style: Style, stone: UnderLook['stone'], coping: UnderLook['coping'], rock: UnderLook['rock']): UnderLook => ({ style, stone, coping, rock });
 
 const PLAIN = look(Style.Plain, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.28, 0.27, 0.25]);
-const DWARVEN = look(Style.Dwarven, [0.68, 0.54, 0.36], [0.64, 0.5, 0.32], [0.29, 0.26, 0.21]);
+const DWARVEN = look(Style.Dwarven, [0.64, 0.56, 0.45], [0.6, 0.52, 0.41], [0.29, 0.26, 0.22]);
 const FORTRESS = look(Style.Ashlar, [0.52, 0.54, 0.57], [0.5, 0.52, 0.55], [0.27, 0.28, 0.3]);
 const CULT = look(Style.Basalt, [0.4, 0.32, 0.34], [0.38, 0.27, 0.27], [0.27, 0.23, 0.24]);
 const TOMB = look(Style.Dusty, [0.68, 0.64, 0.56], [0.7, 0.66, 0.58], [0.42, 0.4, 0.36]);
