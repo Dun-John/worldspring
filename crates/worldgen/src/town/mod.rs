@@ -1790,7 +1790,11 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
             Some(_) => wards::plan(world, index, || plan_town(&site, s, r, &road_ends, &mut rng)),
             None => Rc::new(plan_town(&site, s, r, &road_ends, &mut rng)),
         };
-        let ch = edit.map(|e| wards::changes(&plan, e, center).0).unwrap_or_default();
+        let mut ch = edit.map(|e| wards::changes(&plan, e, center).0).unwrap_or_default();
+        // (R5 towns, M18: the ground of a gate taken out keeps off the wall as it was generated.)
+        if !ch.wall.remove.is_empty() {
+            wallgates::kept_off(&plan, &mut ch.wall, &generated_layout(world, t0, index), center);
+        }
         spacing = plan.spacing;
         let hand = build_town(&site, s, r, &plan, &ch, &mut l, survey);
         walls_off_river(&site, &mut l, &hand);
@@ -3227,6 +3231,9 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         }
     }
     let gate_pts: Vec<P> = gates.iter().map(|&g| mesh.pos[g]).collect();
+    // (R5 towns, M18: the stretches of road and street a gate taken out cut off, kept clear as
+    // they were with the gate, and their half widths and 3 ft, as `keep_clear` keeps roads.)
+    let mut freed: Vec<(P, P, f64)> = Vec::new();
     for path in &plan.paths {
         l.streets.push(path.iter().map(|&v| mesh.pos[v]).collect());
         let mut drawn: Vec<P> = Vec::new();
@@ -3241,9 +3248,31 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             drawn.push(mesh.pos[v]);
         }
         pieces.main_street(l.roads.len());
-        let drawn = if walled { wallgates::closed_street(&ch.wall, path, drawn) } else { drawn };
+        let drawn = if walled {
+            let (kept, cut) = wallgates::closed_street(&ch.wall, path, drawn);
+            freed.extend(cut.iter().flat_map(|c| c.windows(2).map(|s| (s[0], s[1], 0.5 * 18.0 + 3.0))));
+            kept
+        } else {
+            drawn
+        };
         l.roads.push((drawn, 4, 18.0));
     }
+    // (A road to a gate taken out ends where it can join another: the streets and network roads.)
+    let others: Vec<(P, P, f64)> = if walled && !ch.wall.remove.is_empty() {
+        let mut o: Vec<(P, P, f64)> = l.roads.iter().filter(|r| r.1 != 3).flat_map(|(pts, _, w)| pts.windows(2).map(move |s| (s[0], s[1], 0.5 * w))).collect();
+        let within = OUTSKIRTS * r * 1.1;
+        let c = site.center;
+        for (ri, k) in site.t0.roads.segments_near([c[0] - within, c[1] - within, c[0] + within, c[1] + within], 0.0) {
+            let rc = &site.t0.roads.roads[ri as usize];
+            let k = k as usize;
+            let m = ((rc.s[k + 1] - rc.s[k]) / 25.0).ceil().clamp(1.0, 400.0) as usize;
+            let pts: Vec<P> = (0..=m).map(|j| sub(rc.eval(k, j as f64 / m as f64, 5.0, site.t0.cell_ft).p, c)).collect();
+            o.extend(pts.windows(2).filter(|s| len(s[0]) < within).map(|s| (s[0], s[1], 0.5 * rc.class.width_ft())));
+        }
+        o
+    } else {
+        Vec::new()
+    };
     // Each road continues from where it ends to its gate (`approach_curve`).
     for (k, (e, class)) in plan.ends.iter().enumerate() {
         if let Some(Some(g)) = plan.gate_of.get(k) {
@@ -3251,8 +3280,17 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             let span = dist(*e, gp);
             if span > 1.0 {
                 let curve = approach_curve(*e, gp, plan.heading_of[k]);
-                let curve = if walled { wallgates::closed_road(&ch.wall, *g, curve) } else { curve };
                 let width = [24.0, 16.0, 10.0][(*class as usize).min(2)];
+                let curve = if walled {
+                    let (kept, cut) = wallgates::closed_road(&ch.wall, *g, curve, &wall_laid.0, &others);
+                    freed.extend(cut.windows(2).map(|s| (s[0], s[1], 0.5 * width + 3.0)));
+                    kept
+                } else {
+                    curve
+                };
+                if curve.len() < 2 || curve.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>() < 1.0 {
+                    continue;
+                }
                 // Where the approach crosses the river it goes straight over a bridge: the
                 // wet stretch of the curve becomes the deck's line, bank to bank.
                 let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
@@ -3551,6 +3589,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // Roads into the city and the ground before each gate stay open: the sprawl outside the
     // walls grows up to them, not over them.
     let mut keep_clear: Vec<(P, P, f64)> = l.roads.iter().filter(|r| r.1 != 3).flat_map(|(pts, _, w)| pts.windows(2).map(move |s| (s[0], s[1], 0.5 * w + 3.0))).collect();
+    keep_clear.extend(freed.iter().copied());
     let within = OUTSKIRTS * r * 1.1;
     let c = site.center;
     for (ri, k) in site.t0.roads.segments_near([c[0] - within, c[1] - within, c[0] + within, c[1] + within], 0.0) {
@@ -3575,7 +3614,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             }
         }
     }
-    let gates = l.gates.clone();
+    // (And the ground before a gate taken out, as it was with the gate: nothing built nearer.)
+    let gates: Vec<P> = l.gates.iter().copied().chain(ch.wall.remove.iter().filter(|_| walled).map(|&v| mesh.pos[v])).collect();
     let clear_of = |b: &Building| {
         if gates.iter().any(|g| b.poly.iter().any(|p| dist(*p, *g) < 40.0) || contains(&b.poly, *g)) {
             return false;
@@ -4009,7 +4049,13 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // Off the roads into the city and the ground before each gate (`clear_of`), a bent entrance's
     // gate block, and off a castle's way to its gate.
     let bent_blocks = if walled || plan.walled { gatehouse::bent_blocks(l, &wall_laid.0, &wall_laid.2) } else { Vec::new() };
-    l.buildings.retain(|b| clear_of(b) && outline::off_bastions(&wall_laid.3.placed, &b.poly) && (b.ward == Ward::Castle || !gatehouse::on_bent_block(&bent_blocks, &b.poly)) && (b.ward == Ward::Castle || castle_ways.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(&b.poly, s[0], s[1]) >= 5.0))));
+    // (R5 towns, M18: by a gate taken out, nothing nearer the wall than the town stood with it.)
+    let gone: Vec<(P, f64)> = if walled { ch.wall.keep_off.iter().map(|&(v, k)| (mesh.pos[v], k)).collect() } else { Vec::new() };
+    let off_gone = |b: &Building| {
+        b.ward == Ward::Castle
+            || gone.iter().all(|&(g, keep)| !b.poly.iter().any(|p| dist(*p, g) < wallgates::GATE_GROUND_FT) || wallgates::wall_off(&wall_laid.0, &b.poly) >= keep)
+    };
+    l.buildings.retain(|b| clear_of(b) && off_gone(b) && outline::off_bastions(&wall_laid.3.placed, &b.poly) && (b.ward == Ward::Castle || !gatehouse::on_bent_block(&bent_blocks, &b.poly)) && (b.ward == Ward::Castle || castle_ways.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(&b.poly, s[0], s[1]) >= 5.0))));
     for (i, patch) in &tower_houses {
         let mut prng = lots_of(*i, Ward::Castle, false).1;
         if let Some(mut k) = towerhouse::tower_house(site, patch, l, &town_segs, &town_towers, &gate_pts, &mut prng) {

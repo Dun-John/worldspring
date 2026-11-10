@@ -56,8 +56,9 @@ pub const WAY_WIDTH_FT: f64 = 12.0;
 /// after (its middle: the wall's and its own half widths and ~30 ft between).
 const LEAVE_FT: f64 = 70.0;
 const WALL_OFF_FT: f64 = 40.0;
-/// A road whose gate was taken out stops this short of the wall; a main street this far inside.
-const ROAD_BACK_FT: f64 = 30.0;
+/// A road whose gate was taken out ends this far at least off the wall's line (or at a junction
+/// with another road within as far again past that); a main street stops this far inside.
+const ROAD_OFF_FT: f64 = 60.0;
 const STREET_BACK_FT: f64 = 14.0;
 /// A tower this near where one stood without the wall edit keeps its number (towers stand 22 ft
 /// apart and more).
@@ -71,6 +72,9 @@ pub(super) struct WallChanges {
     /// (id, v, w, f)
     pub towers: Vec<(u32, usize, usize, f64)>,
     pub off: Vec<u32>,
+    /// Per gate taken out (its corner): the least its generated buildings near it kept from the
+    /// wall (`kept_off`), which those near it now keep too.
+    pub keep_off: Vec<(usize, f64)>,
 }
 
 impl WallChanges {
@@ -480,23 +484,96 @@ pub(super) fn trim_end(pts: &[P], by: f64) -> Vec<P> {
     out
 }
 
-/// A road to a gate taken out stops short of the wall; a main street ending (or starting) at one
-/// stops inside it.
-pub(super) fn closed_road(wc: &WallChanges, g: usize, curve: Vec<P>) -> Vec<P> {
-    if wc.remove.contains(&g) { trim_end(&curve, ROAD_BACK_FT) } else { curve }
+/// Buildings this near a gate taken out (ft, any corner) stand on its ground.
+pub(super) const GATE_GROUND_FT: f64 = 150.0;
+
+/// How near (ft) a building comes to a wall's line.
+pub(super) fn wall_off(walls: &[Vec<P>], poly: &[P]) -> f64 {
+    walls.iter().flat_map(|w| w.windows(2)).map(|s| super::poly_seg_dist(poly, s[0], s[1])).fold(f64::MAX, f64::min)
 }
 
-pub(super) fn closed_street(wc: &WallChanges, path: &[usize], drawn: Vec<P>) -> Vec<P> {
+/// What the generated town (`generated`, world ft; the town's centre `center`) kept off its wall
+/// round each gate taken out: the least of its buildings on the gate's ground (castles aside, by
+/// their own curtains). Its buildings there now keep as far off (`build_town`).
+pub(super) fn kept_off(plan: &TownPlan, wc: &mut WallChanges, generated: &Layout, center: P) {
+    for &v in &wc.remove {
+        let Some(&at) = plan.mesh.pos.get(v) else { continue };
+        let g = add(at, center);
+        let keep = generated
+            .buildings
+            .iter()
+            .filter(|b| b.ward != Ward::Castle && b.poly.iter().any(|p| dist(*p, g) < GATE_GROUND_FT))
+            .map(|b| wall_off(&generated.walls, &b.poly))
+            .fold(f64::MAX, f64::min);
+        if keep < f64::MAX {
+            wc.keep_off.push((v, keep));
+        }
+    }
+}
+
+/// A line's stretch from `a` ft to `b` ft along it.
+fn stretch(pts: &[P], a: f64, b: f64) -> Vec<P> {
+    let mut out: Vec<P> = Vec::new();
+    let mut run = 0.0;
+    for s in pts.windows(2) {
+        let d = dist(s[0], s[1]);
+        let (t0, t1) = ((a - run) / d.max(1e-9), (b - run) / d.max(1e-9));
+        if t1 >= 0.0 && t0 <= 1.0 {
+            if out.is_empty() {
+                out.push(lerp(s[0], s[1], t0.max(0.0)));
+            }
+            out.push(lerp(s[0], s[1], t1.min(1.0)));
+        }
+        run += d;
+    }
+    out.dedup_by(|x, y| dist(*x, *y) < 1e-9);
+    out
+}
+
+/// A road to a gate taken out (`curve`, from where it leaves the network to the gate): cut back
+/// till it ends `ROAD_OFF_FT` off the wall's line (`walls`), or further back at a junction with
+/// another road (`others`: segments and half widths) within as far again; never past its start,
+/// where it joins the network. The road kept, and the stretch cut off (empty if none).
+pub(super) fn closed_road(wc: &WallChanges, g: usize, curve: Vec<P>, walls: &[Vec<P>], others: &[(P, P, f64)]) -> (Vec<P>, Vec<P>) {
+    if !wc.remove.contains(&g) || curve.len() < 2 {
+        return (curve, Vec::new());
+    }
+    let total: f64 = curve.windows(2).map(|w| dist(w[0], w[1])).sum();
+    let off = |p: P| walls.iter().flat_map(|w| w.windows(2)).map(|s| seg_dist(p, s[0], s[1])).fold(f64::MAX, f64::min);
+    let at = |s: f64| super::point_along(&curve, s).0;
+    let steps = crate::core::ceil(total / 4.0).max(1.0) as usize;
+    let s_of = |j: usize| total * j as f64 / steps as f64;
+    // (From the gate back: the first point far enough off the wall.)
+    let mut cut = (0..=steps).rev().find(|&j| off(at(s_of(j))) >= ROAD_OFF_FT).unwrap_or(0);
+    let reach = (ROAD_OFF_FT / (total / steps as f64)) as usize;
+    if let Some(j) = (cut.saturating_sub(reach)..=cut).rev().find(|&j| {
+        let p = at(s_of(j));
+        others.iter().any(|&(a, b, h)| seg_dist(p, a, b) <= h)
+    }) {
+        cut = j;
+    }
+    let s = s_of(cut);
+    (stretch(&curve, 0.0, s), stretch(&curve, s, total))
+}
+
+/// A main street ending (or starting) at a gate taken out stops inside it: the street kept, and
+/// the stretches cut off.
+pub(super) fn closed_street(wc: &WallChanges, path: &[usize], drawn: Vec<P>) -> (Vec<P>, Vec<Vec<P>>) {
     let mut d = drawn;
+    let mut cut = Vec::new();
+    let len = |d: &[P]| d.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>();
     if path.last().is_some_and(|v| wc.remove.contains(v)) {
+        let t = len(&d);
+        cut.push(stretch(&d, t - STREET_BACK_FT, t));
         d = trim_end(&d, STREET_BACK_FT);
     }
     if path.first().is_some_and(|v| wc.remove.contains(v)) {
+        cut.push(stretch(&d, 0.0, STREET_BACK_FT));
         d.reverse();
         d = trim_end(&d, STREET_BACK_FT);
         d.reverse();
     }
-    d
+    (d, cut)
 }
 
 /// The town wall's pieces, towers and gate towers along its runs (local ft) with `gates`: as
