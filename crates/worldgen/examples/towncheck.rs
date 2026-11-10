@@ -65,6 +65,10 @@
 //!   town edited round it (its patch's lots made small, rerolled; the walls taken down, else a far
 //!   patch rerolled): no building on another's ground (`Layout::grounds`), as generated or after the
 //!   edit, and a front door on every building within 150 ft of it.
+//!   Then districts drawn by hand (`district_edits`; also `districts` alone): a patch into a
+//!   neighbour's district, a far one, two into a new named one, a small district emptied, walls
+//!   as generated and toggled; renames and notes kept, carried or reported when a patch is laid
+//!   out anew.
 //! - `inns`: inns and caravanserais of `hub::inn::LEAST` squares or more laid out by zones: floors
 //!   fallen back on, `check_interior` (the drinking rules: the bar and tables in the taproom, the front
 //!   door into it, the stairs in it; every room reached), the programme (taproom, snug, private dining
@@ -2941,6 +2945,8 @@ fn editor(ctx: &mut Ctx, r: &mut Report) {
         }
     }
     monastery_edits(base, t0, r);
+    // R5 towns
+    district_edits(base, t0, r);
 }
 
 /// `monastery_edits`' counts, in order.
@@ -5439,7 +5445,7 @@ fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 18] = ["walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 19] = ["districts", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -5489,6 +5495,7 @@ fn main() {
                 "walls" => walls(&mut ctx, &mut r),
                 "cemeteries" => cemeteries(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
+                "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }
@@ -5728,6 +5735,209 @@ fn check_cemetery(world: &World, t0: &T0, l: &Layout, li: usize, pk: &town::Park
             r.add(CEM_RULES[7], 1.0, format!("{here}: {id}"));
         } else if lv.is_some_and(|lv| lv.furniture.iter().any(|f| f.kind == "sarcophagus")) {
             r.tally(&format!("{}: tombs with a sarcophagus", groups[g]), 1);
+        }
+    }
+}
+
+// R5 towns
+/// `district_edits`' counts, in order.
+const DISTRICT_COUNTS: [&str; 15] = [
+    "district edits",
+    "district edits refused",
+    "patches in no district or two after a district edit",
+    "patches not in the district they were put in",
+    "district labels outside their district",
+    "districts emptied with a label left, or with patches and none",
+    "untouched districts with their id, name, kind or patches changed",
+    "district edits giving other districts with the walls off",
+    "new districts not named as asked",
+    "renamed buildings laid out anew",
+    "renames kept with their id",
+    "renames carried",
+    "renames carried to another function",
+    "renames reported lost",
+    "renames lost without a report",
+];
+
+/// Districts drawn by hand (`patches[].district`), in up to `PLACES` towns (default 8) of four
+/// districts or more: a patch into a neighbour's district, into a far one, two into a new named
+/// one, and every patch of a small district moved out; each with the walls as generated and the
+/// other way. A patch is in one district after, where it was put; the label of a changed one is on
+/// it, an emptied one has none; the others are as generated (id, name, kind, patches) and the walls
+/// change none. Then a renamed business's patch rerolled, the castle's keep renamed and its patch
+/// rerolled, and a noted home's patch made empty: each rename and note is kept with its id, carried
+/// (`renames_carried`, to the same function) or reported (`renames_lost`), never lost silently.
+fn district_edits(base: &World, t0: &T0, r: &mut Report) {
+    use serde_json::{Value, json};
+    r.counts(&DISTRICT_COUNTS);
+    let places: usize = std::env::var("PLACES").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let with = |w: &World, ci: usize, edit: Option<worldgen::world::TownEdit>| {
+        let mut file = w.file.clone();
+        if let Some(e) = edit {
+            file.edits.towns.insert(town::wards::key(ci), e);
+        }
+        World::new(file).unwrap()
+    };
+    let qi_of = |d: &Value| d["id"].as_str().and_then(|s| s.rsplit(':').next()).and_then(|q| q.parse::<usize>().ok());
+    let summary = |plan: &Value| -> Vec<(String, String, String, Vec<u64>)> {
+        plan["districts"].as_array().into_iter().flatten().map(|d| (d["id"].as_str().unwrap_or("").to_string(), d["name"].as_str().unwrap_or("").to_string(), d["kind"].as_str().unwrap_or("").to_string(), d["patches"].as_array().into_iter().flatten().filter_map(Value::as_u64).collect())).collect()
+    };
+    let mut done = 0;
+    for ci in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town) {
+        if done >= places {
+            break;
+        }
+        let Ok(plan) = town::wards::plan_json(base, t0, ci) else { continue };
+        let ds = summary(&plan);
+        if ds.len() < 4 {
+            continue;
+        }
+        done += 1;
+        let g = town::layout(base, t0, ci);
+        let n = ds.len();
+        let pats: Vec<&Value> = plan["patches"].as_array().unwrap().iter().collect();
+        let dq = |p: u64| pats.iter().find(|x| x["patch"].as_u64() == Some(p)).and_then(|x| qi_of(&x["district"]));
+        let nbs = |p: u64| pats.iter().find(|x| x["patch"].as_u64() == Some(p)).map(|x| x["neighbours"].as_array().unwrap().iter().filter_map(Value::as_u64).collect::<Vec<_>>()).unwrap_or_default();
+        let did = |q: usize| format!("d:{ci}:{q}");
+        // (name, request patches, where each should be after, a district to come out empty)
+        let mut cases: Vec<(&str, Vec<Value>, Vec<(u64, usize)>, Option<usize>)> = Vec::new();
+        let placed: Vec<(u64, usize)> = pats.iter().filter_map(|x| Some((x["patch"].as_u64()?, dq(x["patch"].as_u64()?)?))).filter(|(_, q)| ds[*q].3.len() >= 2).collect();
+        if let Some((p, b)) = placed.iter().find_map(|&(p, a)| nbs(p).into_iter().filter_map(dq).find(|&b| b != a).map(|b| (p, b))) {
+            cases.push(("into a neighbour's", vec![json!({ "patch": p, "district": did(b) })], vec![(p, b)], None));
+        }
+        if let Some((p, c)) = placed.iter().find_map(|&(p, a)| {
+            let near: Vec<usize> = nbs(p).into_iter().filter_map(dq).collect();
+            (0..n).rev().find(|&c| c != a && !near.contains(&c) && !ds[c].3.is_empty()).map(|c| (p, c))
+        }) {
+            cases.push(("into a far one", vec![json!({ "patch": p, "district": did(c) })], vec![(p, c)], None));
+        }
+        if let (Some(&(p1, a)), Some(&(p2, _))) = (placed.first(), placed.iter().rev().find(|x| x.1 != placed[0].1)) {
+            let _ = a;
+            cases.push(("two into a new one", vec![json!({ "patch": p1, "district": "Checked Ward" }), json!({ "patch": p2, "district": "checked ward" })], vec![(p1, n), (p2, n)], None));
+        }
+        if let Some(e) = (0..n).find(|&e| (1..=4).contains(&ds[e].3.len()) && ds[e].3.iter().all(|&m| nbs(m).into_iter().filter_map(dq).any(|q| q != e))) {
+            let to: Vec<(u64, usize)> = ds[e].3.iter().map(|&m| (m, nbs(m).into_iter().filter_map(dq).find(|&q| q != e).unwrap())).collect();
+            cases.push(("every patch moved out", to.iter().map(|&(m, q)| json!({ "patch": m, "district": did(q) })).collect(), to, Some(e)));
+        }
+        let walled = plan["walls"]["built"].as_bool().unwrap_or(false);
+        for (name, req, want, emptied) in cases {
+            let tag = format!("#{ci} {name}");
+            let mut outs: Vec<Vec<(String, String, String, Vec<u64>)>> = Vec::new();
+            for walls in [None, Some(!walled)] {
+                let mut rq = json!({ "patches": req });
+                if let Some(w) = walls {
+                    rq["walls"] = json!(w);
+                }
+                r.tally("district edits", 1);
+                let req: town::wards::TownRequest = serde_json::from_value(rq).unwrap();
+                let edit = match town::wards::change(base, t0, ci, &req) {
+                    Ok((Some(e), _)) => e,
+                    Ok((None, _)) => {
+                        r.add("district edits refused", 1.0, format!("{tag}: no edit"));
+                        continue;
+                    }
+                    Err(why) => {
+                        r.add("district edits refused", 1.0, format!("{tag}: {why}"));
+                        continue;
+                    }
+                };
+                let w = with(base, ci, Some(edit));
+                let (plan2, l) = (town::wards::plan_json(&w, t0, ci).unwrap(), town::layout(&w, t0, ci));
+                let d2 = summary(&plan2);
+                let tag = format!("{tag} walls {}", if walls.is_some() { "toggled" } else { "as generated" });
+                // One district each.
+                let mut count: BTreeMap<u64, usize> = BTreeMap::new();
+                for (_, _, _, m) in &d2 {
+                    for &p in m {
+                        *count.entry(p).or_default() += 1;
+                    }
+                }
+                for (p, _) in placed.iter().chain(&want) {
+                    let k = count.get(p).copied().unwrap_or(0);
+                    if k != 1 {
+                        r.add("patches in no district or two after a district edit", 1.0, format!("{tag}: patch {p} in {k}"));
+                    }
+                }
+                if count.values().any(|&k| k > 1) {
+                    r.add("patches in no district or two after a district edit", 1.0, format!("{tag}: a patch in two"));
+                }
+                for &(p, q) in &want {
+                    if !d2.get(q).is_some_and(|d| d.3.contains(&p)) {
+                        r.add("patches not in the district they were put in", 1.0, format!("{tag}: patch {p} not in d:{ci}:{q}"));
+                    }
+                }
+                if name == "two into a new one" && (d2.get(n).is_none_or(|d| d.1 != "Checked Ward") || l.quarters.get(n).is_none_or(|q| q.name != "Checked Ward") || d2.len() != n + 1) {
+                    r.add("new districts not named as asked", 1.0, format!("{tag}: {:?}", d2.get(n).map(|d| &d.1)));
+                }
+                // Labels: on a changed district, none on an emptied one.
+                for (qi, q) in l.quarters.iter().enumerate() {
+                    let changed = plan2["districts"][qi]["changed"] == true || plan2["districts"][qi]["by_hand"] == true;
+                    if q.patches.is_empty() != q.label.is_empty() || (Some(qi) == emptied && !q.patches.is_empty()) {
+                        r.add("districts emptied with a label left, or with patches and none", 1.0, format!("{tag}: d:{ci}:{qi} {} patches, {} label points", q.patches.len(), q.label.len()));
+                    }
+                    if changed && !q.label.is_empty() {
+                        let mid = q.label[q.label.len() / 2];
+                        let off = q.patches.iter().map(|poly| if contains(poly, mid) { 0.0 } else { poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| seg_dist(mid, *a, *b)).fold(f64::MAX, f64::min) }).fold(f64::MAX, f64::min);
+                        if off > 15.0 {
+                            r.add("district labels outside their district", off, format!("{tag}: d:{ci}:{qi} label {off:.0} ft out at {}", at(mid)));
+                        }
+                    }
+                    // The rest as generated (their labels too, with the walls as generated: one
+                    // over a park moves off its middle as the park is laid out).
+                    if qi < n && !changed && (d2[qi] != ds[qi] || g.quarters.get(qi).is_none_or(|o| o.name != q.name || o.kind != q.kind || (walls.is_none() && o.label != q.label))) {
+                        r.add("untouched districts with their id, name, kind or patches changed", 1.0, format!("{tag}: d:{ci}:{qi} {:?} -> {:?}", ds[qi], d2[qi]));
+                    }
+                }
+                outs.push(d2);
+            }
+            if outs.len() == 2 && outs[0] != outs[1] {
+                r.add("district edits giving other districts with the walls off", 1.0, format!("{tag}: districts differ"));
+            }
+        }
+        // Renames and notes kept when a patch is laid out anew.
+        let corner: BTreeMap<u64, P> = plan["corners"].as_array().unwrap().iter().map(|c| (c["corner"].as_u64().unwrap(), [c["at"][0].as_f64().unwrap(), c["at"][1].as_f64().unwrap()])).collect();
+        let patch_of = |p: P| pats.iter().find(|x| contains(&x["corners"].as_array().unwrap().iter().filter_map(|v| corner.get(&v.as_u64()?).copied()).collect::<Vec<_>>(), p)).and_then(|x| x["patch"].as_u64());
+        let castle = town::catalog::index_of("castle").map(|c| c as u16);
+        let business = g.buildings.iter().find(|b| b.func.is_some() && b.func != castle && b.keep.is_none() && patch_of(centroid(&b.poly)).is_some_and(|p| pats.iter().any(|x| x["patch"].as_u64() == Some(p) && x["in_town"] == true)));
+        let keep = g.buildings.iter().find(|b| b.keep.is_some());
+        let home = g.buildings.iter().find(|b| b.func.is_none() && b.structure == town::Structure::Roofed && patch_of(centroid(&b.poly)).is_some_and(|p| pats.iter().any(|x| x["patch"].as_u64() == Some(p) && x["in_town"] == true && x["ward"] == "common")));
+        let mut f2: Vec<(&str, &town::Building, Value, bool)> = Vec::new();
+        for (what, b, note) in [("a renamed business rerolled", business, false), ("the castle's keep renamed, rerolled", keep, false), ("a noted home's patch made empty", home, true)] {
+            let Some(b) = b else { continue };
+            let Some(p) = patch_of(centroid(&b.poly)) else { continue };
+            let req = if note { json!({ "patches": [{ "patch": p, "ward": "empty" }] }) } else { json!({ "patches": [{ "patch": p, "reroll": true }] }) };
+            f2.push((what, b, req, note));
+        }
+        for (what, b, req, note) in f2 {
+            let tag = format!("#{ci} {what}");
+            let key = format!("b:{ci}:{}", b.id);
+            let mut file = base.file.clone();
+            if note {
+                file.edits.notes.insert(key.clone(), worldgen::world::Note { text: "Checked note".into(), tags: Vec::new() });
+            } else {
+                file.edits.renames.insert(key.clone(), "Checked Name".into());
+            }
+            let w1 = World::new(file).unwrap();
+            let req: town::wards::TownRequest = serde_json::from_value(req).unwrap();
+            let Ok((edit, rep)) = town::wards::change(&w1, t0, ci, &req) else { continue };
+            let after = town::layout(&with(&w1, ci, edit), t0, ci);
+            r.tally("renamed buildings laid out anew", 1);
+            let listed = |k: &str, field: &str| rep[k].as_array().into_iter().flatten().find(|x| x[field] == key.as_str()).cloned();
+            if after.buildings.iter().any(|x| x.id == b.id) {
+                r.tally("renames kept with their id", 1);
+            } else if let Some(c) = listed("renames_carried", "from") {
+                r.tally("renames carried", 1);
+                let to: u32 = c["to"].as_str().and_then(|s| s.rsplit(':').next()).and_then(|s| s.parse().ok()).unwrap_or(u32::MAX);
+                let nb = after.buildings.iter().find(|x| x.id == to);
+                let ok = nb.is_some_and(|x| x.func == b.func || (b.keep.is_some() && x.keep.is_some()));
+                if !ok {
+                    r.add("renames carried to another function", 1.0, format!("{tag}: {key} -> {to}"));
+                }
+            } else if listed("renames_lost", "id").is_some() {
+                r.add("renames reported lost", 1.0, format!("{tag}: {key}"));
+            } else {
+                r.add("renames lost without a report", 1.0, format!("{tag}: {key} at {}", at(centroid(&b.poly))));
+            }
         }
     }
 }
