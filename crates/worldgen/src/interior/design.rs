@@ -373,7 +373,8 @@ pub fn check(it: &Interior, sh: &Shell, want: &[&str]) -> Vec<Problem> {
                     if let Some(w) = why
                         && bad.is_none()
                     {
-                        bad = Some(((i, j), format!("the {} at {i},{j} {w}", f.name)));
+                        let sq = if (i, j) == (f.x as usize, f.y as usize) { String::new() } else { format!(" (at its square {i},{j})") };
+                        bad = Some(((i, j), format!("the {} at {},{} {w}{sq}", f.name, f.x, f.y)));
                     }
                     if platform {
                         under[k] = true;

@@ -941,7 +941,11 @@ level 2: Level 2 · the deep
   in any order.
 - `+items:` and `-items:` change the list without replacing it (underground sites and building interiors alike): `+items:`
   adds the pieces given; `-items:` removes the piece of that kind whose top-left square is x,y (a size, if written, must
-  match as well). A `-items:` piece that matches nothing is an error naming it, with the nearest pieces of its kind.
+  match as well). The match is by kind and top-left square only: `back` and `variant` written in a `-items:` piece don't
+  count. A `-items:` piece that matches nothing is an error naming it, with the nearest pieces of its kind. An empty
+  `+items:`/`-items:` (or an empty piece between `;`) is refused. Underground, the way in (`exit`) and a way `up` under a
+  `down` can't be removed (they would be put back, so the edit is refused); the way in always stays at the entry, and a
+  way up follows the way down above it.
   Same entries as `items:`; several `+`/`-` lines (and an `items:`) in one block apply in the order written:
   `+items: well 3,0 2x2` / `-items: barrel 9,4; table 4,0`. `items:` alone still replaces the whole level's list.
 - Where a level's floor isn't flat, `get_site_design` adds under its `grid:` a `heights:` legend (`1=5 ft; 2=10 ft; /=ramp`)
@@ -956,7 +960,8 @@ level 2: Level 2 · the deep
   in the deepest ones. A missing `up` under a level's `down` and a missing `exit` at the entry are filled in.
 
 ### `get_site_design`
-`id`. Returns a summary (`designed`, kind, theme, grid size, entry, levels, `problems`) and the plan as text. A
+`id`. Returns a summary (`designed`, kind, theme, grid size, entry, levels, `problems`) as the first content block (JSON)
+and the plan as text in a second content block (a client that reads only the first sees no plan). A
 site's saved design made for a site that stood elsewhere (its way in is not under the design's grid: edits kept for
 another sketch or generator) is set aside: the generated site stands, and the reply says so (`set_aside`).
 
@@ -979,7 +984,8 @@ another sketch or generator) is set aside: the generated site stands, and the re
 there: `items_added`, `items_removed`, `squares_changed` (count and the rooms' letters), `rooms_changed` (a room's kind,
 raise or shape), `doors_added`, `doors_removed`, `heights_changed` (count and the first squares, `2,7: 0 -> 10 ft`),
 `renamed`, a building's `stairs`; `"no changes"` if none; and the check's `verdict` and `problems`. The same reply, brief,
-when saved; with `dry_run` nothing is saved. A refused plan is an error with the reasons.
+when saved. With `dry_run` nothing is saved and the same diff comes wrapped: `{"dry_run": true, "would_save": {"changes": {…},
+"verdict": …, "problems": […]}}` (a saved reply is the bare object). A refused plan is an error with the reasons.
 
 ### `reset_site_design`
 `id`: the site (or a building's interior) as generated again.
@@ -1222,6 +1228,9 @@ level -1: Cellar
 { "name": "set_site_design", "arguments": { "id": "b:23:70", "text": "level 0\ndoors: 4,2 e; 2,4 s front; 1,4 s back" } }
 ```
 > *"Give the house by the well a back door out of its main room."*
+
+A building's `a=room+5` raises have no `heights:` read-out and no climb check (those are underground only); the diff
+shows them only as `rooms_changed`.
 
 ## Towns laid out anew (the ward editor)
 

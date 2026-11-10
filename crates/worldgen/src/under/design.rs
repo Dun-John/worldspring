@@ -943,14 +943,14 @@ pub fn check(it: &Interior, entry: Option<[u16; 2]>) -> Vec<Problem> {
                         _ => 1 | 2 | 8,
                     };
                     if held[k] & bars != 0 {
-                        clash.get_or_insert((k, f.name));
+                        clash.get_or_insert((k, f.name, f.x, f.y));
                     }
                     held[k] |= bit;
                 }
             }
         }
-        if let Some((k, name)) = clash {
-            put(li, Some(k), format!("the {name} at {},{} stands on something else", k % nx, k / nx), true);
+        if let Some((k, name, fx, fy)) = clash {
+            put(li, Some(k), format!("the {name} at {fx},{fy} stands on something else (they overlap at {},{})", k % nx, k / nx), true);
         }
         // Everything reached from the way onto the level.
         let Some(start) = (if top { exit.first() } else { up.first() }).copied() else {
@@ -1478,7 +1478,8 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             } else {
                 let depth: usize = num.parse().map_err(|_| format!("line {}: 'level {num}': levels are numbered from 1 at the top", ln + 1))?;
                 if depth == 0 || depth > MAX_LEVELS as usize {
-                    return Err(format!("line {}: levels are 1 to {MAX_LEVELS}", ln + 1));
+                    let have = levels.unwrap_or(d.levels.len());
+                    return Err(format!("line {}: 'level {num}': this site has {have} levels (1 at the top, {have} the deepest); a site holds at most {MAX_LEVELS}", ln + 1));
                 }
                 depth
             };
@@ -1506,9 +1507,17 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             b.items.push(('=', v));
             in_grid = false;
         } else if let Some(v) = keyword("+items:") {
+            let body = v.strip_suffix(';').unwrap_or(v);
+            if body.trim().is_empty() || body.split(';').any(|e| e.trim().is_empty()) {
+                return Err(format!("line {}: +items: names no pieces (or has an empty piece between ;): write it as +items: kind x,y [wxh]; kind x,y", ln + 1));
+            }
             b.items.push(('+', v));
             in_grid = false;
         } else if let Some(v) = keyword("-items:") {
+            let body = v.strip_suffix(';').unwrap_or(v);
+            if body.trim().is_empty() || body.split(';').any(|e| e.trim().is_empty()) {
+                return Err(format!("line {}: -items: names no pieces (or has an empty piece between ;): write it as -items: kind x,y [wxh]; kind x,y", ln + 1));
+            }
             b.items.push(('-', v));
             in_grid = false;
         } else if keyword("heights:").is_some() {
@@ -1575,6 +1584,8 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
             return Err(format!("level {depth} is new: give its grid"));
         }
     }
+    // Ways taken off by `-items:` (level index, kind, the piece as written): checked before they are filled in again.
+    let mut ways_off: Vec<(usize, String, String)> = Vec::new();
     for b in &blocks {
         let li = count - b.depth;
         let lv = &mut d.levels[li];
@@ -1730,7 +1741,10 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
                             let hint = if near.is_empty() { format!("no {} on this level", item.kind) } else { format!("nearest {}: {}", item.kind, near.iter().take(3).map(|f| item_text(f)).collect::<Vec<_>>().join("; ")) };
                             return Err(format!("{tag}: -items: '{e}' matches nothing ({hint})"));
                         };
-                        lv.items.remove(at);
+                        let gone = lv.items.remove(at);
+                        if !building && WAYS.contains(&gone.kind.as_str()) {
+                            ways_off.push((li, gone.kind, format!("{tag}: -items: '{e}'")));
+                        }
                     }
                     _ => lv.items.push(item),
                 }
@@ -1738,6 +1752,18 @@ pub fn from_text(text: &str, base: &SiteDesign) -> Result<(SiteDesign, Vec<TextN
         }
     }
     if !building {
+        for (li, kind, what) in &ways_off {
+            if d.levels[*li].items.iter().any(|f| f.kind == *kind) {
+                continue;
+            }
+            let ups_above = d.levels.get(li + 1).map_or(0, |l| l.items.iter().filter(|f| f.kind == "down").count());
+            let why = match kind.as_str() {
+                "exit" if *li + 1 == d.levels.len() => "the way in stays at the entry and can't be removed (it would be put back)",
+                "up" if ups_above == 1 => "a way up always sits under the way down of the level above and can't be removed; remove or move that down instead",
+                _ => continue,
+            };
+            return Err(format!("{what}: {why}"));
+        }
         d.settle_ways();
     }
     for b in blocks.iter().filter(|b| b.doors.is_some_and(|l| l.trim() == "auto")) {
