@@ -1191,7 +1191,9 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     let center = [s.x, s.y];
     let local = |p: [f64; 2]| sub(p, center);
     let world_pt = |p: P| add(p, center);
-    let mut e = edit_of(world, t0, index).cloned().unwrap_or_default();
+    // (R5 towns: an edit kept for its emptied districts alone, changing nothing, still holds their ids.)
+    let kept = || world.file.edits.towns.get(&key(index)).filter(|e| !e.districts.is_empty() && dist(e.at, center) <= TownEdit::SAME_AT_FT);
+    let mut e = edit_of(world, t0, index).or_else(kept).cloned().unwrap_or_default();
     // Keep only what still applies (a stale part would be set aside anyway).
     let (ch, _) = changes(&plan, &e, center);
     let mut moves: BTreeMap<usize, P> = ch.moves.iter().copied().collect();
@@ -1453,11 +1455,8 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     }
     e.patches.retain(|pe| !pe.is_noop());
     e.patches.sort_by_key(|pe| pe.p);
-    // (R5 towns: a district made by hand that no patch is in any more goes, from the last: the
-    // others keep their ids.)
-    while e.districts.last().is_some_and(|d| !e.patches.iter().any(|pe| pe.district.as_ref() == Some(d))) {
-        e.districts.pop();
-    }
+    // (R5 towns: a district made by hand that no patch is in any more stays in the list, empty, so
+    // its id is never another's (its rename stays its own); the edit is kept for it alone.)
     let (ch, aside) = changes(&plan, &e, center);
     if let Some(why) = aside.first() {
         return Err(why.clone());
@@ -1539,7 +1538,7 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             report["renames_lost"] = json!(lost.iter().map(|(a, n)| json!({ "id": format!("b:{index}:{a}"), "name": n })).collect::<Vec<_>>());
         }
     }
-    Ok(((!e.is_noop()).then_some(e), report))
+    Ok(((!e.is_noop() || !e.districts.is_empty()).then_some(e), report))
 }
 
 /// `change` as JSON: `{edit, report}` or `{error}` (for the app's worker).
