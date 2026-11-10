@@ -62,6 +62,10 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     if let Some(s) = t0.settlements.iter().min_by(|a, b| near(a).total_cmp(&near(b))) {
         works.wall_style = super::wallstyle::WallStyle::with(s.culture % 5, false, false, s.seed);
     }
+    // (R5 towns, M18: a wall in or round a town as that town builds its own, rich or poor.)
+    if p.kind == PoiKind::Wall && let Some(s) = super::handwall::town_of_wall(t0, center) {
+        works.wall_style = super::wallstyle::WallStyle::of(s);
+    }
     let created = poi.checked_sub(t0.base_pois).and_then(|k| world.file.edits.created.get(k));
     // Uphill (unit, local): passages run into the hill.
     let uphill = |q: P| {
@@ -674,10 +678,15 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
     // Each crossing is a gate (a corner within 20 ft of it is made one instead), at least
     // 60 ft from the gate before it.
     let sides = if c.closed { n } else { n - 1 };
+    // (A ring: only lanes through it, not along it: `handwall::ring_cuts`.)
+    let ring_cuts = c.closed.then(|| super::handwall::ring_cuts(&corners.iter().map(|q| q.0).collect::<Vec<_>>(), &lanes));
     let mut line: Vec<(P, bool)> = Vec::new();
     for i in 0..sides {
         let (a, b) = (corners[i].0, corners[(i + 1) % n].0);
-        let mut cuts: Vec<f64> = lanes.iter().filter_map(|&(p, q)| crossing(a, b, p, q)).collect();
+        let mut cuts: Vec<f64> = match &ring_cuts {
+            Some(r) => r[i].clone(),
+            None => lanes.iter().filter_map(|&(p, q)| crossing(a, b, p, q)).collect(),
+        };
         cuts.sort_by(f64::total_cmp);
         line.push(corners[i]);
         let len_ab = dist(a, b);
@@ -729,4 +738,14 @@ fn crossing(a: P, b: P, p: P, q: P) -> Option<f64> {
     let ap = sub(p, a);
     let (t, u) = (cross(ap, s) / d, cross(ap, r) / d);
     ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
+}
+
+/// (R5 towns, M18) The gates a wall drawn by hand would be built with (world ft), its middle
+/// where `agent::works_spot` puts it.
+pub(super) fn wall_gates(world: &World, t0: &T0, c: &crate::world::Created) -> Vec<P> {
+    let (x0, y0, x1, y1) = c.pts.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |b, q| (b.0.min(q[0]), b.1.min(q[1]), b.2.max(q[0]), b.3.max(q[1])));
+    let center = [0.5 * (x0 + x1), 0.5 * (y0 + y1)];
+    let mut l = scratch(0);
+    wall_site(world, t0, c, center, &mut l);
+    super::handwall::gates_of(&l).into_iter().map(|g| add(g, center)).collect()
 }

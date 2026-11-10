@@ -31,6 +31,7 @@ pub mod outline;
 mod curtain;
 pub mod wallside;
 pub mod gatehouse;
+pub mod handwall;
 pub mod village;
 // v63 countryside
 pub mod fields;

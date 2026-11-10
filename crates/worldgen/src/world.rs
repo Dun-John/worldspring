@@ -843,7 +843,8 @@ pub struct Created {
     /// Buildings lining the inside of a castle's curtain (default true).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yard_buildings: Option<bool>,
-    /// A wall's line (world ft), 2–64 corners, at most `WALL_MAX_FT` long.
+    /// A wall's line (world ft), 2–64 corners, at most `WALL_MAX_FT` long (a ring: 3–256,
+    /// `WALL_RING_MAX_FT`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pts: Vec<[f64; 2]>,
     /// A wall's corners that are gates (indices into `pts`); more gates come where roads and
@@ -947,6 +948,13 @@ pub const CASTLE_MAX_FT: f64 = 600.0;
 pub const CASTLE_MIN_FT: f64 = 80.0;
 /// Longest a wall may be (ft).
 pub const WALL_MAX_FT: f64 = 3000.0;
+/// (R5 towns, M18) Longest a closed wall (a ring) may be (ft): round a city's old town or upper
+/// city (a metropolis' inner patches run to some 12,000 ft round).
+pub const WALL_RING_MAX_FT: f64 = 16000.0;
+/// Most corners of a wall's line, open and closed (a ring round patches takes their corners:
+/// `town::handwall::RING_MAX_CORNERS`).
+pub const WALL_MAX_CORNERS: usize = 64;
+pub const WALL_RING_MAX_CORNERS: usize = 256;
 /// How far a castle's or wall's layout reaches past its outline (towers stand astride it).
 pub const WORKS_MARGIN_FT: f64 = 40.0;
 
@@ -1148,8 +1156,9 @@ impl Created {
             return Err("poly, gate, keep, yard_buildings and structure are for castles: a wall has a line (pts) and gates".into());
         }
         let p = &self.pts;
-        if p.len() < 2 || p.len() > 64 || p.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) {
-            return Err("a wall's line needs 2–64 corners".into());
+        let (most, longest) = if self.closed { (WALL_RING_MAX_CORNERS, WALL_RING_MAX_FT) } else { (WALL_MAX_CORNERS, WALL_MAX_FT) };
+        if p.len() < 2 || p.len() > most || p.iter().any(|q| !q[0].is_finite() || !q[1].is_finite()) {
+            return Err(if self.closed { format!("a closed wall's line needs 3–{most} corners") } else { format!("a wall's line needs 2–{most} corners (a closed one up to {WALL_RING_MAX_CORNERS})") });
         }
         if self.closed && p.len() < 3 {
             return Err("a closed wall needs at least 3 corners".into());
@@ -1161,13 +1170,13 @@ impl Created {
             return Err("a wall's corners must be at least 10 ft apart".into());
         }
         let length: f64 = (0..sides).map(side).sum();
-        if length > WALL_MAX_FT {
-            return Err(format!("a wall is at most {WALL_MAX_FT} ft long (this is {length:.0})"));
+        if length > longest {
+            return Err(if self.closed { format!("a closed wall is at most {longest} ft round (this is {length:.0})") } else { format!("a wall is at most {longest} ft long (this is {length:.0}; a closed one up to {WALL_RING_MAX_FT})") });
         }
         if self.closed && !simple(p) {
             return Err("a closed wall must not cross itself".into());
         }
-        if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > WALL_MAX_FT) {
+        if p.iter().any(|q| (q[0] - self.x).hypot(q[1] - self.y) > longest.min(0.5 * WALL_RING_MAX_FT)) {
             return Err("a wall's corners must lie round its point".into());
         }
         if self.gates.iter().any(|g| *g as usize >= n) {
