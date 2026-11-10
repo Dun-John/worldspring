@@ -1056,8 +1056,8 @@ fn town_ring(ctx: &Ctx, l: &Layout, li: usize, tag: &str, r: &mut Report) {
         let (mut bare, mut run, mut first) = (0.0f64, 0.0, None);
         for (p, _) in samples(&[pa, pb], 5.0) {
             // (Behind a bastion: its gorge, the bastion's walls round it.)
-            // (A round wall's curtains drawn in by up to 13 ft or bowed out by 16, slice 2c: within 30 ft.)
-            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 30.0) || l.bastions.iter().any(|q| depth(q, p) > -8.0) {
+            // (A round wall's curtains bowed out by up to 45 ft (Steppe 70), slice 2e: within 75 ft.)
+            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 75.0) || l.bastions.iter().any(|q| depth(q, p) > -8.0) {
                 run = 0.0;
             } else {
                 run += 5.0;
@@ -4884,7 +4884,7 @@ fn under_terrain(mut it: interior::Interior, id: &str, r: &mut Report) {
 /// by a gate (`fx, fy` as `scripts/shot.mjs` views take them). Towers of the first listed place per
 /// group are checked on the battlemap (`WALLS_ALL=1`: every listed place's).
 /// The bow of each long curtain (slice 2c): per side of the town's ring 150 ft and longer, the town
-/// wall along it (5-ft steps within 40 ft of it, beside the side), its greatest distance off the chord
+/// wall along it (5-ft steps within 80 ft of it, beside the side), its greatest distance off the chord
 /// between its points nearest the side's two corners. Also the buildings centred in the town's patches
 /// that the wall leaves outside (a line to the town's middle crosses it an odd number of times), and
 /// how many it has inside.
@@ -4907,21 +4907,25 @@ fn curtain_bows(ctx: &Ctx, l: &Layout, li: usize) -> (Vec<(f64, String)>, Vec<St
     let shared: std::collections::HashSet<(u64, u64)> = sides.iter().copied().collect();
     let town: Vec<&Vec<P>> = l.walls.iter().filter(|w| w.len() >= 2 && !l.castles.iter().any(|(c, rad)| dist(*c, w[w.len() / 2]) <= rad + 10.0)).collect();
     let pts: Vec<P> = town.iter().flat_map(|w| samples(w, 5.0).into_iter().map(|s| s.0).chain(std::iter::once(w[w.len() - 1]))).collect();
-    for &(a, b) in sides.iter().filter(|(a, b)| !shared.contains(&(*b, *a))) {
-        let (Some(&pa), Some(&pb)) = (corners.get(&a), corners.get(&b)) else { continue };
+    // (Each wall point counts for the ring side nearest it, slice 2e: bows reach 80 ft out.)
+    let ring: Vec<(P, P)> = sides.iter().filter(|(a, b)| !shared.contains(&(*b, *a))).filter_map(|(a, b)| Some((*corners.get(a)?, *corners.get(b)?))).collect();
+    let side_of = |q: P| (0..ring.len()).min_by(|&x, &y| seg_dist(q, ring[x].0, ring[x].1).total_cmp(&seg_dist(q, ring[y].0, ring[y].1)));
+    let owner: Vec<Option<usize>> = pts.iter().map(|q| side_of(*q)).collect();
+    for (k, &(pa, pb)) in ring.iter().enumerate() {
         let d = dist(pa, pb);
         if d < 150.0 {
             continue;
         }
         let u = mul(sub(pb, pa), 1.0 / d);
-        let near: Vec<P> = pts.iter().copied().filter(|q| seg_dist(*q, pa, pb) < 40.0 && (0.0..=d).contains(&dot(sub(*q, pa), u))).collect();
+        let near: Vec<P> = pts.iter().zip(&owner).filter(|(q, o)| **o == Some(k) && seg_dist(**q, pa, pb) < 80.0 && (0.0..=d).contains(&dot(sub(**q, pa), u))).map(|x| *x.0).collect();
         let nearest = |c: P| near.iter().copied().min_by(|x, y| dist(*x, c).total_cmp(&dist(*y, c)));
         let (Some(q0), Some(q1)) = (nearest(pa), nearest(pb)) else { continue };
         if dist(q0, q1) < 100.0 {
             continue;
         }
         let bow = near.iter().map(|q| seg_dist(*q, q0, q1)).fold(0.0, f64::max);
-        out.0.push((bow, format!("L{li} side at {}", at(lerp(pa, pb, 0.5)))));
+        let m = lerp(pa, pb, 0.5);
+        out.0.push((bow, format!("L{li} side at {} fx {:.6} fy {:.6}", at(m), m[0] / world.geom.map_w_ft, m[1] / world.geom.map_h_ft)));
     }
     let segs: Vec<(P, P)> = town.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
     let crosses = |p: P, q: P, a: P, b: P| {

@@ -24,12 +24,16 @@
 //!     its drawbridge's deck, 20 a headstone, 22 a churchyard's wall,
 //!     23 a windmill's sails (a village's plots: the battlemap only); a park's raised features as
 //!     monuments; all of a park's in the tile holding its middle; a ruin's plan as 28 its floor,
-//!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4), 31 a town wall's
+//!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4), 32 a town wall's
 //!     bastion (`town::Layout::bastions`: flank, face, point, face, flank, the curtain's corner),
 //!     verts f32[n_verts * 2] (tile units).
 //!     A polygon belongs to
 //!     the tile containing its centroid.
-//!  .. site lines: the line layout, vertices (x, y, width ft, kind: 0 wall, 1 tower).
+//!  .. site lines: the line layout, vertices (x, y, width ft, kind: 0 wall, 1 tower, 2 steps, 3 square tower).
+//!  .. site looks (item 104): the line layout again, a line for each site line with its points
+//!     (x, y, a, b): a wall's a its `WallStyle::code` (group, stone, material), a tower's a its
+//!     `WallStyle::code` with its shape (round, square, D, octagon) and b the way a D faces (an
+//!     octagon's or a square's sides run), radians; 0, 0 for the rest (`town::wallside::plan_looks`).
 
 use crate::World;
 use crate::core::tile::{HALO, PADDED, TILE_N, TILE_SAMPLES, TileKey};
@@ -273,6 +277,7 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
     let mut attrs: Vec<u32> = Vec::new();
     let mut verts: Vec<f32> = Vec::new();
     let mut lines: Vec<Vec<[f64; 4]>> = Vec::new();
+    let mut looks: Vec<Vec<[f64; 4]>> = Vec::new();
     if key.level >= SITE_MIN_LEVEL {
         let owns = |p: [f64; 2]| p[0] >= ox && p[0] < ox + size && p[1] >= oy && p[1] < oy + size;
         // (A park's polygons all belong to the tile holding the park's middle, so they are drawn in
@@ -561,10 +566,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 crate::town::village::plan_ticks(&l, &mut push);
                 crate::town::rural::plan_ticks(&l, &mut push);
             }
-            // A town wall's bastions (item 104, `Layout::bastions`): each its ground inside its walls, as 31
+            // A town wall's bastions (item 104, `Layout::bastions`): each its ground inside its walls, as 32
             // (the walls round it are in `l.walls`).
             for q in &l.bastions {
-                push(q, 31);
+                push(q, 32);
             }
             // (Its width by what it is built of, item 104: stone 9 ft, a palisade 5, rammed earth 12.)
             let ww = match l.wall_style.material {
@@ -597,6 +602,8 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 let w = if gate { 30.0 } else { 22.0 };
                 lines.push(vec![[t[0], t[1], w, 1.0], [t[0] + 0.01, t[1], w, 1.0]]);
             }
+            // (Each wall's and tower's look, item 104: the lines' looks after them.)
+            crate::town::wallside::plan_looks(&l, &lines, &mut looks);
             // Flights of steps: hatched ink (style 2) along each axis, over the street's whole width.
             for ax in crate::town::stairs::axes(&l.stairs) {
                 lines.push(vec![[ax.a[0], ax.a[1], ax.width, 2.0], [ax.b[0], ax.b[1], ax.width, 2.0]]);
@@ -616,7 +623,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
     for v in &verts {
         out.extend_from_slice(&v.to_le_bytes());
     }
+    // (The looks: a line for each site line, at the same points, owned the same way.)
+    looks.extend(lines[looks.len()..].iter().map(|w| w.iter().map(|p| [p[0], p[1], 0.0, 0.0]).collect::<Vec<_>>()));
     out.extend_from_slice(&pack_lines(ox, oy, size, lines.into_iter()));
+    out.extend_from_slice(&pack_lines(ox, oy, size, looks.into_iter()));
     out
 }
 

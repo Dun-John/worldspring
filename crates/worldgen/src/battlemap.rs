@@ -492,8 +492,9 @@ pub struct VectorShape {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeKind {
-    /// Curtain wall segment, then `[flags, 0]` (`WALL_BARE_A`, `WALL_BARE_B`, `WALL_RUINED`), then
-    /// `[style, 0]` (`town::wallstyle::WallStyle::code`).
+    /// Curtain wall segment, then `[flags, side]` (`WALL_BARE_A`, `WALL_BARE_B`, `WALL_RUINED`; side 1
+    /// where the outside of the town, or of the castle, is left of a to b, -1 right, 0 unknown:
+    /// `town::wallside`), then `[style, 0]` (`town::wallstyle::WallStyle::code`).
     Wall = 0,
     /// Wall or gate tower: its centre, then `[flags, angle]` (`WALL_GATE`, `WALL_RUINED`, `WALL_SQUARE`;
     /// the way a square's or an octagon's sides run, the way a D faces out, radians), then `[style, form]`
@@ -555,6 +556,11 @@ pub enum ShapeKind {
     /// A dry ditch's bank, inked along its top: the two ends of a stretch of it, the way down into
     /// the ditch (a unit vector; `[0, 0]` none), then `[bank, 0]` (1: its outer bank behind it).
     DitchBank = 19,
+    // R5 towns
+    /// A star-angled wall's bastion (`Layout::bastions`): its outline, the flank's foot on the curtain,
+    /// the flank's tip, the point, the other flank's tip and foot, the corner it stands in place of;
+    /// then `[style, 0]` (`WallStyle::code`). `size` is its walls' width (squares).
+    Bastion = 20,
 }
 
 /// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands
@@ -1900,18 +1906,21 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         let bare = |p: [f64; 2], wi: usize| {
             !towers.iter().any(|t| near(p, t.0, t.1 + 1.0)) && !l.walls.iter().enumerate().any(|(k, w)| k != wi && (near(p, w[0], 1.0) || near(p, w[w.len() - 1], 1.0)))
         };
+        // (Which side of each wall is outside: `town::wallside`, on a wall's flags point.)
+        let outward = crate::town::wallside::outward(&l);
         for (wi, w) in l.walls.iter().enumerate() {
             let n = w.len();
             for (k, seg) in w.windows(2).enumerate() {
                 if owns([0.5 * (seg[0][0] + seg[1][0]), 0.5 * (seg[0][1] + seg[1][1])]) {
                     let ends = if k == 0 && bare(seg[0], wi) { WALL_BARE_A } else { 0 } | if k + 2 == n && bare(seg[1], wi) { WALL_BARE_B } else { 0 };
-                    let flags = [(ends | ruin_bit) as f32, 0.0];
+                    let flags = [(ends | ruin_bit) as f32, outward[wi]];
                     let ws = l.wall_style_at(crate::town::geom::lerp(seg[0], seg[1], 0.5));
                     let style = ws.code(crate::town::wallstyle::TowerShape::Round) as f32;
                     shapes.push(VectorShape { kind: ShapeKind::Wall, size: (ws.thickness() / SQUARE_FT) as f32, pts: vec![local(&seg[0]), local(&seg[1]), flags, [style, 0.0]] });
                 }
             }
         }
+        crate::town::wallside::bastions(&l, &owns, &local, &mut shapes);
         let houses = crate::town::gatehouse::houses(&l);
         for &(t, r, gate) in &towers {
             if owns(t) {

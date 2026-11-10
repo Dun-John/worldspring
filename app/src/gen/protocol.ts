@@ -862,7 +862,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 31;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -908,9 +908,9 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       // A park's water (a pond fanned from its middle, a stream; not outlined), gravel, parterres
       // (hedged beds), trees' crowns and flowerbeds.
       else if (kind === 11) rgb = [0.42, 0.6, 0.64];
-      // A town wall's bastion (`payload.rs` kind 31): a stone platform, outlined (its faces are the town
+      // A town wall's bastion (`payload.rs` kind 32): a stone platform, outlined (its faces are the town
       // wall's lines).
-      else if (kind === 31) rgb = [0.76, 0.73, 0.65];
+      else if (kind === 32) rgb = [0.76, 0.73, 0.65];
       else if (kind === 12) rgb = [0.85, 0.81, 0.69];
       else if (kind === 13) {
         rgb = [0.42, 0.55, 0.33];
@@ -1120,6 +1120,14 @@ export interface TerrainPayload {
   roads: TileRivers;
   sitePolys: TileSitePolys;
   siteLines: TileRivers;
+  /**
+   * Each site line's look (item 104; `payload.rs` "site looks"), in the same layout as `siteLines`, line
+   * for line and point for point: (x, y, a, b). A wall's a its style code (`town::wallstyle::WallStyle::code`:
+   * group, stone, material), a tower's a its style code with its shape (round, square, D, octagon) and b
+   * the way a D faces (an octagon's or a square's sides run), radians; 0, 0 for the rest. Absent from an
+   * older payload.
+   */
+  siteLooks?: TileRivers;
 }
 
 const TERRAIN_MAGIC = 0x5445_5252;
@@ -1154,7 +1162,8 @@ export function parseTerrain(buf: ArrayBuffer): TerrainPayload {
     attrs: new Uint32Array(buf, polyAttrs, nPolys),
     verts: new Float32Array(buf, polyVerts, nPolyVerts * 2),
   };
-  const [siteLines] = lines(polyVerts + nPolyVerts * 8);
+  const [siteLines, looksOffset] = lines(polyVerts + nPolyVerts * 8);
+  const siteLooks = looksOffset + 8 <= buf.byteLength ? lines(looksOffset)[0] : undefined;
   return {
     level: dv.getUint32(4, true),
     x: dv.getUint32(8, true),
@@ -1170,6 +1179,7 @@ export function parseTerrain(buf: ArrayBuffer): TerrainPayload {
     roads,
     sitePolys,
     siteLines,
+    siteLooks,
   };
 }
 

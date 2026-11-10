@@ -49,7 +49,11 @@ export interface Roof {
  * a tower and a gate carry their style after their flags (`town::wallstyle::WallStyle::code`: group,
  * tower shape, material, merlons, stone, outline, gatehouse; `render/walls.ts` `styleOf`); a gate and
  * its towers the gatehouse's form as built beside it, a gate then its side and a bent way's exit
- * (`town::gatehouse::House`; `render/walls.ts` `gateForm`).
+ * (`town::gatehouse::House`; `render/walls.ts` `gateForm`). A wall's flags point is `[flags, side]`: side 1
+ * where the outside (of the town, or of the castle) is left of its first point to its second, -1 right,
+ * 0 unknown (`town::wallside`). Kind 20 is a star wall's bastion (`battlemap::ShapeKind::Bastion`): its
+ * outline (flank's foot, flank's tip, point, tip, foot, the corner it replaced), then `[style, 0]`;
+ * `size` its walls' width.
  */
 export interface Shape {
   kind: number;

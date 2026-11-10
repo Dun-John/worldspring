@@ -28,6 +28,7 @@ pub mod wards;
 pub mod wallstyle;
 pub mod outline;
 mod curtain;
+pub mod wallside;
 pub mod gatehouse;
 pub mod village;
 // v63 countryside
@@ -3117,7 +3118,13 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let edge_v = |i: usize, e: usize| (mesh.faces[i][e], mesh.faces[i][(e + 1) % mesh.faces[i].len()]);
     l.gates = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
     // (Its outline by its style, item 104: `outline::lay`.)
-    let wall_laid = outline::lay(site, plan, &mesh, ward, &l.wall_style);
+    let mut wall_laid = outline::lay(site, plan, &mesh, ward, &l.wall_style);
+    // A round wall's curtains bowed out, before the outskirts step back from them (`curtain`).
+    let wall_bows = if walled || plan.walled {
+        curtain::bow(site, plan, &mesh, ward, &l.wall_style, &l.roads, &l.bridges, &mut wall_laid.0, &mut wall_laid.1, &wall_laid.2)
+    } else {
+        Default::default()
+    };
     if walled {
         l.walls.extend(wall_laid.0.iter().cloned());
         l.towers.extend(wall_laid.1.iter().copied());
@@ -3424,6 +3431,15 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 back[e]
             })
             .collect();
+        // (Outside the town, a side on its wall steps back from the curtain bowed out over it.)
+        if i >= n_inner {
+            for (e, de) in d.iter_mut().enumerate() {
+                let (va, vb) = edge_v(i, e);
+                if let Some(b) = wall_bows.get(&(va.min(vb), va.max(vb))) {
+                    *de = de.max(7.0 + b);
+                }
+            }
+        }
         // A castle's side on the town wall beside one standing back from nearly the same line: the
         // curtain would leave the wall at a slant, a second wall just inside it. It stands back too.
         while w == Ward::Castle {
@@ -3971,10 +3987,6 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             Quarter { name: q.name.clone(), kind: q.kind, patches, label }
         })
         .collect();
-    // Rounder curtains (item 104), bowed where they fit now the town is laid: `curtain`.
-    if walled {
-        curtain::curtains(site, plan, &mesh, ward, l, (&wall_laid.0, &wall_laid.1));
-    }
     hand_walls
 }
 

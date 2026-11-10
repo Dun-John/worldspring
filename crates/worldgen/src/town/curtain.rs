@@ -1,35 +1,36 @@
-//! Rounder curtains (item 104 slice 2c): a round-walled town's curtains (North, Dry, Steppe) bowed
-//! out between their corners, and their corners rounded with arcs of 40-80 ft (Steppe's larger, its
-//! corners drawn in further: a rough oval), once the town is laid, so each bow and each corner is cut
-//! back to what fits: nothing laid (a building, block, square, park, field, road, bridge or pier),
-//! no water, other wall, network road or the map's edge within `CLEAR` ft of the new line. What
-//! `outline::lay` holds stays (the gates and the 26 ft to their towers, the corners of a castle's
-//! patch, on the water or a river, and where a main street meets the wall); so does a stretch
-//! between two held corners. The towers move onto the new line, each at its share of its stretch;
-//! a run where nothing fits keeps the line `outline::round` laid.
+//! Rounder curtains (item 104 slices 2c, 2e): a round-walled town's curtains (North, Dry, Steppe)
+//! bowed out between their corners as the wall is laid, before the outskirts: each stretch a Hermite
+//! curve through its two corners, leaving a free corner along the corner's bisector (so the wall runs
+//! on round it, no kink) with a tangent of `PULL` times the stretch, Steppe's longer (a rough oval).
+//! Outward only: a concave corner, one that stays, a gate's end and a stretch the town is on neither
+//! side of all leave along the stretch. Each bow is cut back to what fits: no water, network road,
+//! road or street, bridge, castle patch, other piece of the wall or the map's edge within `CLEAR` ft,
+//! nor nearer the outskirts' other sides than the old line. What `outline::lay` holds stays (the
+//! gates and the 26 ft to their towers, the corners of a castle's patch, on the water or a river, and
+//! where a main street meets the wall). The towers move onto the new line; where a corner's two
+//! stretches both stay straight it keeps `outline::round`'s arc. The outskirts' blocks step back from
+//! each bow (`bow`'s map: the patches' insets on those sides, `build_town`), a strip of open ground
+//! between them and the wall where it bows least.
 
 use super::geom::*;
-use super::{Layout, Site, TownPlan, Ward};
+use super::{Site, TownPlan, Ward};
 use crate::core::hash::FastMap;
 
 /// The new line stands this far (ft) at least from anything laid, and a tower its reach and this much.
 const CLEAR: f64 = 8.0;
 const TOWER_CLEAR: f64 = 4.0;
-/// A curtain's sag (share of its stretch, at most `SAG_MOST` ft), tried in turn; Steppe's first.
-const SAG: [f64; 11] = [0.06, 0.05, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.005, 0.0];
-const SAG_STEPPE: [f64; 11] = [0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.025, 0.02, 0.01, 0.005, 0.0];
-const SAG_MOST: f64 = 16.0;
-/// A corner's arc and how far it is drawn in toward the turn (both by the level's share), tried in
-/// turn; the last is the arc `outline::round` laid.
-const LEVELS: [f64; 8] = [1.0, 0.85, 0.7, 0.55, 0.4, 0.25, 0.12, 0.0];
-const ARC: (f64, f64) = (40.0, 80.0);
-const ARC_STEPPE: (f64, f64) = (60.0, 120.0);
-const DRAW_IN: f64 = 12.0;
-/// How far in a corner may come, drawn in and cut by its arc (ft).
-const DEPTH: f64 = 13.0;
-const DRAW_IN_STEPPE: f64 = 20.0;
-/// Points along a bowed stretch (ft apart), and along the new line where it is tested.
-const BODY_STEP: f64 = 25.0;
+/// A stretch's tangent length at its free corners (share of the stretch), tried in turn; and how far
+/// it may bow at most (ft).
+const PULL: [f64; 10] = [2.4, 2.0, 1.6, 1.3, 1.0, 0.7, 0.45, 0.25, 0.1, 0.0];
+const PULL_STEPPE: [f64; 10] = [2.7, 2.3, 1.9, 1.5, 1.1, 0.75, 0.45, 0.25, 0.1, 0.0];
+/// And a bulge on top (share of the stretch, sin^2: level at both ends, so no kink at a corner), with
+/// each tangent.
+const SAG: [f64; 10] = [0.06, 0.055, 0.05, 0.04, 0.03, 0.02, 0.012, 0.006, 0.0, 0.0];
+const SAG_STEPPE: [f64; 10] = [0.09, 0.08, 0.07, 0.055, 0.04, 0.03, 0.02, 0.01, 0.0, 0.0];
+const BOW_MOST: f64 = 45.0;
+const BOW_MOST_STEPPE: f64 = 70.0;
+/// Points along a bowed stretch (ft apart, at least), and along the new line where it is tested.
+const BODY_STEP: f64 = 10.0;
 const TEST_STEP: f64 = 4.0;
 const CELL: f64 = 48.0;
 const PAD: f64 = 32.0;
@@ -55,6 +56,10 @@ struct Laid {
 }
 
 impl Laid {
+    fn new() -> Laid {
+        Laid { polys: Vec::new(), segs: Vec::new(), grid: FastMap::default() }
+    }
+
     fn cells(lo: P, hi: P) -> impl Iterator<Item = (i64, i64)> {
         let (x0, y0) = (crate::core::floor((lo[0] - PAD) / CELL) as i64, crate::core::floor((lo[1] - PAD) / CELL) as i64);
         let (x1, y1) = (crate::core::floor((hi[0] + PAD) / CELL) as i64, crate::core::floor((hi[1] + PAD) / CELL) as i64);
@@ -104,191 +109,26 @@ impl Laid {
         let (a, b) = (self.gap(p, cap), self.gap(q, cap));
         a[0] >= b[0].min(cap) - slack - 1e-6 && a[1] >= b[1].min(cap) - slack - 1e-6
     }
-
 }
 
-/// A run of a wall piece between two points that stay (its ends, `pts[0]` and the last), its free
-/// corners between them.
-struct Run {
-    pts: Vec<P>,
+/// The Hermite curve from `a` to `b` leaving along `ta` and arriving along `tb` (unit), its tangents
+/// `m` times the chord, at `t` (0 to 1).
+fn hermite(a: P, b: P, ta: P, tb: P, m: f64, t: f64) -> P {
+    let k = dist(a, b) * m;
+    let (t2, t3) = (t * t, t * t * t);
+    let (h00, h10, h01, h11) = (2.0 * t3 - 3.0 * t2 + 1.0, t3 - 2.0 * t2 + t, -2.0 * t3 + 3.0 * t2, t3 - t2);
+    [h00 * a[0] + h10 * k * ta[0] + h01 * b[0] + h11 * k * tb[0], h00 * a[1] + h10 * k * ta[1] + h01 * b[1] + h11 * k * tb[1]]
 }
 
-/// The new line of a run at the levels given, its segments' owners (`Ok` a stretch, `Err` a corner),
-/// each stretch's section (from the middle of the arc at its start, or the run's end, to that at its
-/// end) as points of the line, and each corner's arc middle.
-struct Line {
-    pts: Vec<P>,
-    owner: Vec<Result<usize, usize>>,
-    sections: Vec<(usize, usize)>,
-    mids: Vec<P>,
-}
-
-/// A stretch's sag profile over its length (`w` 0 to 1), with a level slope at an end that stays
-/// (`fixed`), and its slope (per `w`) at each end.
-fn profile(w: f64, fixed: (bool, bool)) -> f64 {
-    let pi = std::f64::consts::PI;
-    // (sin(pi w) sin(pi w / 2) peaks at 0.7698 at w = 0.6082.)
-    const HALF_PEAK: f64 = 0.769800;
-    match fixed {
-        (false, false) => libm::sin(pi * w),
-        (true, true) => {
-            let s = libm::sin(pi * w);
-            s * s
-        }
-        (true, false) => libm::sin(pi * w) * libm::sin(0.5 * pi * w) / HALF_PEAK,
-        (false, true) => libm::sin(pi * w) * libm::sin(0.5 * pi * (1.0 - w)) / HALF_PEAK,
-    }
-}
-
-fn end_slopes(fixed: (bool, bool)) -> (f64, f64) {
-    let pi = std::f64::consts::PI;
-    const HALF_PEAK: f64 = 0.769800;
-    match fixed {
-        (false, false) => (pi, -pi),
-        (true, true) => (0.0, 0.0),
-        (true, false) => (0.0, -pi / HALF_PEAK),
-        (false, true) => (pi / HALF_PEAK, 0.0),
-    }
-}
-
-/// The arc tangent to the lines in along `d1` and out along `d2` at `v`, of radius `rad`, as
-/// `outline::round` lays it (10-degree steps), and its middle; `None` where the line hardly turns.
-fn arc(v: P, d1: P, d2: P, rad: f64) -> Option<(Vec<P>, P)> {
-    let th = libm::acos(dot(d1, d2).clamp(-1.0, 1.0));
-    if th < 2f64.to_radians() || rad < 1.0 {
-        return None;
-    }
-    let side = cross(d1, d2);
-    let t = rad * libm::tan(0.5 * th);
-    let t1 = sub(v, mul(d1, t));
-    let toward = if side > 0.0 { [-d1[1], d1[0]] } else { [d1[1], -d1[0]] };
-    let c = add(t1, mul(toward, rad));
-    let a0 = libm::atan2(t1[1] - c[1], t1[0] - c[0]);
-    let m = crate::core::ceil(th / 10f64.to_radians()).max(2.0) as usize;
-    let sweep = if side > 0.0 { th } else { -th };
-    let pts: Vec<P> = (0..=m).map(|i| {
-        let a = a0 + sweep * i as f64 / m as f64;
-        [c[0] + rad * libm::cos(a), c[1] + rad * libm::sin(a)]
-    }).collect();
-    Some((pts, add(c, mul(unit(sub(v, c)), rad))))
-}
-
-/// The run's shape: per stretch its outward side (`None`: the town is on neither side or both),
-/// whether its ends stay, per corner its turn (radians), the 2a arc's radius there, the largest
-/// arc and draw-in it may take.
-struct Shape {
-    out: Vec<Option<P>>,
-    fixed: Vec<(bool, bool)>,
-    rad0: Vec<f64>,
-    arc_most: Vec<f64>,
-    draw_most: Vec<f64>,
-    sag_most: Vec<f64>,
-}
-
-fn build(run: &Run, sh: &Shape, sag: &[f64], lv: &[usize], levels: &[f64]) -> Line {
-    let n = run.pts.len();
-    // (Corners drawn in toward their turn: `lv` 0 the most.)
-    let mut at: Vec<P> = run.pts.clone();
-    for j in 1..n - 1 {
-        let (u1, u2) = (unit(sub(run.pts[j], run.pts[j - 1])), unit(sub(run.pts[j + 1], run.pts[j])));
-        let th = libm::acos(dot(u1, u2).clamp(-1.0, 1.0));
-        let k = levels[lv[j - 1]];
-        if th > 1f64.to_radians() && k > 0.0 {
-            // (Drawn in and cut by its arc by `DEPTH` at most, all told.)
-            let (sec, tn) = (1.0 / libm::cos(0.5 * th), libm::tan(0.5 * th));
-            let room = 0.42 * dist(run.pts[j - 1], run.pts[j]).min(dist(run.pts[j], run.pts[j + 1]));
-            let cut = (sh.arc_most[j - 1] * k).max(sh.rad0[j - 1]).min(room / tn.max(1e-9)) * (sec - 1.0);
-            let e = (sh.draw_most[j - 1] * k).min(((DEPTH - cut) / sec).max(0.0));
-            at[j] = add(run.pts[j], mul(unit(sub(u2, u1)), e * sec));
-        }
-    }
-    // (Each stretch: its chord, sag and end directions.)
-    let st: Vec<(P, P, f64, P, P)> = (0..n - 1)
-        .map(|i| {
-            let (a, b) = (at[i], at[i + 1]);
-            let l = dist(a, b).max(1e-6);
-            let u = unit(sub(b, a));
-            let s = sh.out[i].map_or(0.0, |_| (sag[i] * l).min(sh.sag_most[i]));
-            let o = sh.out[i].unwrap_or([0.0, 0.0]);
-            let (s0, s1) = end_slopes(sh.fixed[i]);
-            (u, o, s, unit(add(u, mul(o, s * s0 / l))), unit(add(u, mul(o, s * s1 / l))))
+/// The point of the line `pts` nearest `p`.
+fn nearest_on(pts: &[P], p: P) -> P {
+    pts.windows(2)
+        .map(|s| {
+            let d = sub(s[1], s[0]);
+            lerp(s[0], s[1], (dot(sub(p, s[0]), d) / dot(d, d).max(1e-9)).clamp(0.0, 1.0))
         })
-        .collect();
-    // (Each corner's arc, its tangent length at most 42% of the shorter stretch.)
-    let mut arcs: Vec<Option<(Vec<P>, P, f64)>> = Vec::new();
-    for j in 1..n - 1 {
-        let (d1, d2) = (st[j - 1].4, st[j].3);
-        let th = libm::acos(dot(d1, d2).clamp(-1.0, 1.0));
-        let k = levels[lv[j - 1]];
-        let tn = libm::tan(0.5 * th);
-        // (The least: the arc `outline::round` laid, as it laid it.)
-        let mut rad = if k > 0.0 { (sh.arc_most[j - 1] * k).max(sh.rad0[j - 1]) } else { sh.rad0[j - 1] };
-        let room = 0.42 * dist(at[j - 1], at[j]).min(dist(at[j], at[j + 1]));
-        if k > 0.0 && rad * tn > room {
-            rad = room / tn.max(1e-9);
-        }
-        // (Nor cutting in, or bulging out, by more than `DEPTH` where the bows turn it further.)
-        let sec = 1.0 / libm::cos(0.5 * th);
-        if k > 0.0 && rad * (sec - 1.0) > DEPTH {
-            rad = DEPTH / (sec - 1.0);
-        }
-        arcs.push(arc(at[j], d1, d2, rad).map(|(p, m)| (p, m, rad * tn)));
-    }
-    let mut line = Line { pts: vec![at[0]], owner: Vec::new(), sections: Vec::new(), mids: Vec::new() };
-    let push = |line: &mut Line, p: P, o: Result<usize, usize>| {
-        if !same(*line.pts.last().unwrap(), p) {
-            line.pts.push(p);
-            line.owner.push(o);
-        }
-    };
-    for i in 0..n - 1 {
-        let start = line.pts.len() - 1;
-        let (u, o, s, _, _) = st[i];
-        let l = dist(at[i], at[i + 1]);
-        // (The second half of the arc at its start.)
-        let t0 = if i > 0 {
-            match &arcs[i - 1] {
-                Some((pts, _, t)) => {
-                    for p in &pts[pts.len() / 2..] {
-                        push(&mut line, *p, Err(i - 1));
-                    }
-                    *t
-                }
-                None => 0.0,
-            }
-        } else {
-            0.0
-        };
-        let t1 = if i + 1 < n - 1 { arcs[i].as_ref().map_or(0.0, |a| a.2) } else { 0.0 };
-        if s > 0.0 {
-            let (w0, w1) = (t0 / l, 1.0 - t1 / l);
-            let m = crate::core::ceil((w1 - w0) * l / BODY_STEP).max(1.0) as usize;
-            for k in 1..m {
-                let w = w0 + (w1 - w0) * k as f64 / m as f64;
-                push(&mut line, add(add(at[i], mul(u, w * l)), mul(o, s * profile(w, sh.fixed[i]))), Ok(i));
-            }
-        }
-        // (The first half of the arc at its end, to its middle; else the stretch's end.)
-        match (i + 1 < n - 1).then(|| arcs[i].as_ref()).flatten() {
-            Some((pts, mid, _)) => {
-                for p in &pts[..pts.len() / 2] {
-                    push(&mut line, *p, Ok(i));
-                }
-                // (Its middle: a point of the line only where the arc's points don't have it.)
-                let on = pts.len() % 2 == 1;
-                push(&mut line, if on { pts[pts.len() / 2] } else { *mid }, Err(i));
-                line.mids.push(*mid);
-            }
-            None => {
-                push(&mut line, at[i + 1], Ok(i));
-                if i + 1 < n - 1 {
-                    line.mids.push(at[i + 1]);
-                }
-            }
-        }
-        line.sections.push((start, line.pts.len() - 1));
-    }
-    line
+        .min_by(|x, y| dist(*x, p).total_cmp(&dist(*y, p)))
+        .unwrap_or(p)
 }
 
 /// The point of `pts` nearest `q`, square to it (`None` where there is none but an end).
@@ -302,40 +142,44 @@ fn onto(pts: &[P], q: P) -> Option<P> {
         .min_by(|x, y| dist(*x, q).total_cmp(&dist(*y, q)))
 }
 
-/// The point at share `f` of the way along `pts[a..=b]`.
-fn along(pts: &[P], a: usize, b: usize, f: f64) -> P {
-    let total: f64 = (a..b).map(|k| dist(pts[k], pts[k + 1])).sum();
-    let mut want = f * total;
-    for k in a..b {
-        let d = dist(pts[k], pts[k + 1]);
-        if want <= d || k + 1 == b {
-            return lerp(pts[k], pts[k + 1], (want / d.max(1e-9)).clamp(0.0, 1.0));
-        }
-        want -= d;
-    }
-    pts[a]
-}
-
-/// Bows and rounds the town wall's curtains in `l` (round outlines only; `laid` the pieces and towers
-/// `outline::lay` gave). Called once the town is laid, in local ft.
-pub(super) fn curtains(site: &Site, plan: &TownPlan, mesh: &super::mesh::Mesh, ward: &[Option<Ward>], l: &mut Layout, laid: (&[Vec<P>], &[P])) {
-    use super::wallstyle::Outline;
-    let style = l.wall_style;
-    if style.outline != Outline::Round || laid.0.is_empty() || l.walls.len() < laid.0.len() || (0..laid.0.len()).any(|p| l.walls[p] != laid.0[p]) {
-        return;
+/// Bows the town wall's curtains out (round outlines only), in `pieces` and `towers` as `outline::lay`
+/// gave them (local ft), before the outskirts are laid; `roads` and `bridges` those laid so far. Returns
+/// how far each wall side (its mesh corners, the lower first) bows out at most, for the outskirts.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn bow(
+    site: &Site,
+    plan: &TownPlan,
+    mesh: &super::mesh::Mesh,
+    ward: &[Option<Ward>],
+    style: &super::wallstyle::WallStyle,
+    roads: &[(Vec<P>, u8, f64)],
+    bridges: &[Vec<P>],
+    pieces: &mut [Vec<P>],
+    towers: &mut [P],
+    gate_towers: &[P],
+) -> FastMap<(usize, usize), f64> {
+    let mut bows: FastMap<(usize, usize), f64> = FastMap::default();
+    if style.outline != super::wallstyle::Outline::Round || pieces.is_empty() {
+        return bows;
     }
     let steppe = style.group % 5 == 4;
+    let (pulls, sags, most) = if steppe { (&PULL_STEPPE, &SAG_STEPPE, BOW_MOST_STEPPE) } else { (&PULL, &SAG, BOW_MOST) };
+    let last = pulls.len() - 1;
     // (The pieces as `wall_pieces_spaced` lays them, before `outline::round`: the same in number and
-    // order, and so their towers.)
-    let (mut raw, mut raw_towers) = (Vec::new(), Vec::new());
+    // order, and so their towers; and the wall's sides, by their mesh corners.)
+    let (mut raw, mut raw_towers, mut sides) = (Vec::new(), Vec::new(), Vec::new());
     for (chain, closed, along) in &plan.wall_runs {
         let corners: Vec<(P, bool)> = chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect();
         let (p, t, _, _) = super::wall_pieces_spaced(&corners, *closed, Some(along), super::SET);
         raw.extend(p);
         raw_towers.extend(t);
+        let m = chain.len();
+        for k in 0..if *closed { m } else { m.saturating_sub(1) } {
+            sides.push((chain[k], chain[(k + 1) % m]));
+        }
     }
-    if raw.len() != laid.0.len() || raw_towers.len() != laid.1.len() {
-        return;
+    if raw.len() != pieces.len() || raw_towers.len() != towers.len() {
+        return bows;
     }
     // (What `outline::lay` holds.)
     let mut held: Vec<P> = (0..mesh.pos.len()).filter(|&v| plan.pinned[v]).map(|v| mesh.pos[v]).collect();
@@ -344,48 +188,54 @@ pub(super) fn curtains(site: &Site, plan: &TownPlan, mesh: &super::mesh::Mesh, w
             held.extend(f.iter().map(|&v| mesh.pos[v]));
         }
     }
+    let castled = held.len();
     for &(a, b) in &plan.main_edges {
         held.push(mesh.pos[a]);
         held.push(mesh.pos[b]);
     }
     let keep = |p: P| held.iter().any(|q| same(*q, p));
+    // (A castle's side stays straight: it is the castle's curtain.)
+    let castle_side = |a: P, b: P| [a, b].iter().all(|p| held[..castled].iter().any(|q| same(*q, *p)));
     let inner: Vec<Vec<P>> = (0..plan.n_inner).map(|i| mesh.face_pts(i)).collect();
     let in_town = |p: P| inner.iter().any(|f| contains(f, p));
-    // (What is laid, but for the town's wall: others' walls a wall's width off.)
-    let mut obst = Laid { polys: Vec::new(), segs: Vec::new(), grid: FastMap::default() };
-    // (A tower keeps clear of the buildings and the roads, as far as it did: `solid`.)
-    let mut solid = Laid { polys: Vec::new(), segs: Vec::new(), grid: FastMap::default() };
-    for p in l.buildings.iter().map(|b| &b.poly) {
-        obst.poly(p);
-        solid.poly(p);
+    // (What is there to keep clear of: castle patches, bridges, the roads and streets, and the
+    // outskirts' other sides, their blocks 7 ft off them.)
+    let mut obst = Laid::new();
+    for (i, f) in mesh.faces.iter().enumerate() {
+        if ward.get(i).copied().flatten() == Some(Ward::Castle) && f.len() >= 3 {
+            obst.poly(&mesh.face_pts(i));
+        }
     }
-    // (Outside the town, its patches' blocks; inside it, the buildings on them.)
-    for p in l.blocks.iter().filter(|b| b.len() >= 3 && !in_town(centroid(b))) {
-        obst.poly(p);
+    for b in bridges {
+        obst.poly(b);
     }
-    for p in l.plazas.iter().map(|q| &q.pts) { obst.poly(p); }
-    for p in l.parks.iter().map(|q| &q.pts).chain(l.crofts.iter().map(|c| &c.pts)) {
-        obst.poly(p);
-    }
-    for p in l.fields.iter() { obst.poly(p); }
-    for p in l.bridges.iter().chain(&l.piers).chain(l.grounds.iter().map(|g| &g.1)) {
-        obst.poly(p);
-    }
-    // (Not the paved strip a wall stands on, between it and the blocks inside or out.)
-    let on_wall = |p: P| laid.0.iter().any(|w| w.windows(2).any(|s| seg_dist(p, s[0], s[1]) < 27.0));
-    for (pts, c, w) in &l.roads {
+    for (pts, _, w) in roads {
         for s in pts.windows(2) {
-            if *c == 3 && on_wall(s[0]) && on_wall(s[1]) && on_wall(lerp(s[0], s[1], 0.5)) {
-                continue;
-            } else {
-                obst.seg(s[0], s[1], 0.5 * w);
-                solid.seg(s[0], s[1], 0.5 * w);
+            obst.seg(s[0], s[1], 0.5 * w);
+        }
+    }
+    for path in &plan.paths {
+        for s in path.windows(2) {
+            obst.seg(mesh.pos[s[0]], mesh.pos[s[1]], 9.0);
+        }
+    }
+    for (k, (e, class)) in plan.ends.iter().enumerate() {
+        if let Some(Some(g)) = plan.gate_of.get(k) {
+            let curve = super::approach_curve(*e, mesh.pos[*g], plan.heading_of.get(k).copied().flatten());
+            let half = 0.5 * [24.0, 16.0, 10.0][(*class as usize).min(2)];
+            for s in curve.windows(2) {
+                obst.seg(s[0], s[1], half);
             }
         }
     }
-    for w in l.walls.iter().skip(laid.0.len()) {
-        for s in w.windows(2) {
-            obst.seg(s[0], s[1], CLEAR);
+    // (Past the outskirts the wall's sides are on: those patches don't step back from the wall, and
+    // the wall's face keeps 3 ft off their blocks.)
+    let mut far = Laid::new();
+    let on_wall = |a: usize, b: usize| sides.iter().any(|&(p, q)| (p == a && q == b) || (p == b && q == a));
+    for (i, f) in mesh.faces.iter().enumerate().skip(plan.n_inner) {
+        let m = f.len();
+        if f.len() >= 3 && !plan.wet[i] && !(0..m).any(|e| on_wall(f[e], f[(e + 1) % m])) {
+            far.poly(&inset(&mesh.face_pts(i), &vec![7.0; m]));
         }
     }
     let half = 0.5 * style.thickness();
@@ -403,203 +253,326 @@ pub(super) fn curtains(site: &Site, plan: &TownPlan, mesh: &super::mesh::Mesh, w
             && len(p) < site.reach - 20.0
     };
     let reach = if style.has_square() { 15.6 } else { 11.0 } + TOWER_CLEAR;
-    let (arc_r, draw, sags) = if steppe { (ARC_STEPPE, DRAW_IN_STEPPE, &SAG_STEPPE) } else { (ARC, DRAW_IN, &SAG) };
-    // (Every tower that isn't the town's (gate towers, castles', those added by hand).)
-    let town_towers: Vec<P> = laid.1.to_vec();
-    let others: Vec<P> = l.towers.iter().copied().filter(|t| !town_towers.iter().any(|o| same(*o, *t))).chain(l.gate_towers.iter().copied()).chain(l.extra_towers.iter().map(|e| e.0)).collect();
-    let mut moved: Vec<(P, P)> = Vec::new();
-    let mut new_walls: Vec<(usize, Vec<P>)> = Vec::new();
+    let laid_towers: Vec<P> = towers.to_vec();
+    let laid_pieces: Vec<Vec<P>> = pieces.to_vec();
     'pieces: for (pi, rp) in raw.iter().enumerate() {
-        let lp = &laid.0[pi];
-        if rp.len() < 3 || !same(rp[0], lp[0]) || !same(rp[rp.len() - 1], lp[lp.len() - 1]) {
+        let lp = &laid_pieces[pi];
+        if rp.len() < 2 || !same(rp[0], lp[0]) || !same(rp[rp.len() - 1], lp[lp.len() - 1]) {
             continue;
         }
         // (Runs between the points that stay.)
-        let mut runs: Vec<Run> = Vec::new();
+        let mut runs: Vec<Vec<P>> = Vec::new();
         let mut cur = vec![rp[0]];
         for (k, &q) in rp.iter().enumerate().skip(1) {
             cur.push(q);
             if k + 1 == rp.len() || keep(q) {
-                runs.push(Run { pts: std::mem::take(&mut cur) });
+                runs.push(std::mem::take(&mut cur));
                 cur.push(q);
+            }
+        }
+        // (The wall's other pieces: the new line keeps a wall's clearance off them.)
+        let mut walls = Laid::new();
+        for w in laid_pieces.iter().enumerate().filter(|(pj, _)| *pj != pi).map(|x| x.1) {
+            for s in w.windows(2) {
+                walls.seg(s[0], s[1], CLEAR);
             }
         }
         let mut out_pts: Vec<P> = Vec::new();
         let mut any = false;
-        for run in &runs {
-            let n = run.pts.len();
+        let mut moved: Vec<(usize, P)> = Vec::new();
+        let mut piece_bows: Vec<((usize, usize), f64)> = Vec::new();
+        let mut at = 0usize;
+        for pts in &runs {
+            let n = pts.len();
+            // (The wall either side of the run, past a corner that stays: where it turns in there, the
+            // run leaves along the turn's bisector all the same.)
+            let (before, after) = (at.checked_sub(1).map(|k| rp[k]), rp.get(at + n).copied());
+            at += n - 1;
             // (The 2a line along this run: from its start to its end in the laid piece.)
-            let (a, b) = (lp.iter().position(|q| same(*q, run.pts[0])), lp.iter().rposition(|q| same(*q, run.pts[n - 1])));
-            let Some((a, b)) = a.zip(b).filter(|(a, b)| a < b) else { continue 'pieces };
+            let (a, b) = (lp.iter().position(|q| same(*q, pts[0])), lp.iter().rposition(|q| same(*q, pts[n - 1])));
+            let Some((a, b)) = a.zip(b).filter(|(a, b)| a < b) else {
+                continue 'pieces;
+            };
             let old: Vec<P> = lp[a..=b].to_vec();
-            let fixed_end = |k: usize| k == 0 || k == n - 1;
-            let ends_held = keep(run.pts[0]) && keep(run.pts[n - 1]);
-            if n == 2 && (ends_held || dist(run.pts[0], run.pts[1]) < 150.0) {
-                out_pts.extend(old.iter().skip(if out_pts.is_empty() { 0 } else { 1 }));
+            let keep_old = |out_pts: &mut Vec<P>| out_pts.extend(old.iter().skip(if out_pts.is_empty() { 0 } else { 1 }));
+            // (Each stretch's way and the side the town is on: 1 its left, -1 its right, 0 neither or both.)
+            let u: Vec<P> = (0..n - 1).map(|i| unit(sub(pts[i + 1], pts[i]))).collect();
+            let side: Vec<f64> = (0..n - 1)
+                .map(|i| {
+                    let mid = lerp(pts[i], pts[i + 1], 0.5);
+                    match (in_town(add(mid, mul(left(u[i]), 4.0))), in_town(add(mid, mul(left(u[i]), -4.0)))) {
+                        (true, false) => 1.0,
+                        (false, true) => -1.0,
+                        _ => 0.0,
+                    }
+                })
+                .collect();
+            if side.iter().all(|s| *s == 0.0) {
+                keep_old(&mut out_pts);
                 continue;
             }
-            let mut sh = Shape { out: Vec::new(), fixed: Vec::new(), rad0: Vec::new(), arc_most: Vec::new(), draw_most: Vec::new(), sag_most: Vec::new() };
-            for i in 0..n - 1 {
-                let (p, q) = (run.pts[i], run.pts[i + 1]);
-                let (u, mid) = (unit(sub(q, p)), lerp(p, q, 0.5));
-                let (l_in, r_in) = (in_town(add(mid, mul(left(u), 4.0))), in_town(add(mid, mul(left(u), -4.0))));
-                sh.out.push(match (l_in, r_in) {
-                    (true, false) => Some(mul(left(u), -1.0)),
-                    (false, true) => Some(left(u)),
-                    _ => None,
-                });
-                sh.fixed.push((fixed_end(i), fixed_end(i + 1)));
-                sh.sag_most.push(SAG_MOST);
-            }
-            for j in 1..n - 1 {
-                let (p, v, q) = (run.pts[j - 1], run.pts[j], run.pts[j + 1]);
-                let (u1, u2) = (unit(sub(v, p)), unit(sub(q, v)));
-                let th = libm::acos(dot(u1, u2).clamp(-1.0, 1.0));
-                // (The arc `outline::round` laid: from where it leaves the stretch before.)
-                let t1 = old.iter().copied().filter(|x| !same(*x, v) && seg_dist(*x, p, v) < 1e-6 && dist(*x, v) < 0.5 * dist(p, v) + 1e-6).map(|x| dist(x, v)).fold(f64::MAX, f64::min);
-                let on = old.iter().any(|x| same(*x, v));
-                sh.rad0.push(if on || t1 == f64::MAX || th < 2f64.to_radians() { 0.0 } else { t1 / libm::tan(0.5 * th) });
-                let short = dist(p, v).min(dist(v, q));
-                sh.arc_most.push((0.3 * short).clamp(arc_r.0, arc_r.1));
-                sh.draw_most.push(draw.min(0.05 * short));
-            }
-            let (ns, nc) = (n - 1, n - 2);
-            let (mut sl, mut cl) = (vec![0usize; ns], vec![0usize; nc]);
-            let last = (sags.len() - 1, LEVELS.len() - 1);
-            let off_old = |p: P| old.windows(2).all(|s| seg_dist(p, s[0], s[1]) > 0.5);
-            // (Clear of what is laid, or no nearer to it than the old line was.)
-            let nearest_old = |p: P| {
-                old.windows(2).map(|s| {
-                    let d = sub(s[1], s[0]);
-                    lerp(s[0], s[1], (dot(sub(p, s[0]), d) / dot(d, d).max(1e-9)).clamp(0.0, 1.0))
-                }).min_by(|x, y| dist(*x, p).total_cmp(&dist(*y, p))).unwrap_or(p)
+            // (Each corner where `outline::round` left it: its arc's middle; the run's ends as they are.)
+            let q: Vec<P> = (0..n).map(|j| if j == 0 || j + 1 == n { pts[j] } else { nearest_on(&old, pts[j]) }).collect();
+            let on_old = |p: P| old.windows(2).any(|s| seg_dist(p, s[0], s[1]) <= 0.5);
+            let nearest_old = |p: P| nearest_on(&old, p);
+            let fits = |p: P| {
+                let o = nearest_old(p);
+                on_old(p) || (open(p) && obst.no_nearer(p, o, clear, 0.3) && walls.no_nearer(p, o, clear, 0.3) && far.gap(p, clear)[0] >= half + 3.0)
             };
-            let fits = |p: P| !off_old(p) || (open(p) && obst.no_nearer(p, nearest_old(p), clear, 0.3));
-            // (The line at the levels given, its towers, and which bows and corners don't fit.)
-            let trial = |sl: &[usize], cl: &[usize]| {
-            let sag: Vec<f64> = sl.iter().map(|&k| sags[k]).collect();
-            let line = build(run, &sh, &sag, &cl, &LEVELS);
-            let (mut bad_s, mut bad_c) = (vec![false; ns], vec![false; nc]);
-            for (k, s) in line.pts.windows(2).enumerate() {
-                let m = crate::core::ceil(dist(s[0], s[1]) / TEST_STEP).max(1.0) as usize;
-                if (0..=m).map(|j| lerp(s[0], s[1], j as f64 / m as f64)).any(|p| !fits(p)) {
-                    match line.owner[k] {
-                        Ok(i) => bad_s[i] = true,
-                        Err(j) => bad_c[j] = true,
+            // (The corners the line passes outside of: a concave one, the town on the same side
+            // throughout, no deeper than the most.)
+            let mut gone = vec![false; n];
+            let mut kept_in = vec![false; n];
+            let bridge = |gone: &mut Vec<bool>| loop {
+                let mut changed = false;
+                for j in 1..n - 1 {
+                    if gone[j] {
+                        continue;
+                    }
+                    let a = (0..j).rev().find(|&k| !gone[k]).unwrap_or(0);
+                    let b = (j + 1..n).find(|&k| !gone[k]).unwrap_or(n - 1);
+                    let s = side[a];
+                    if s == 0.0 || side[a..b].iter().any(|x| *x != s) {
+                        continue;
+                    }
+                    let o = mul(left(unit(sub(pts[j], pts[a]))), -s);
+                    let deep = (a + 1..b).map(|k| seg_dist(pts[k], pts[a], pts[b])).fold(0.0, f64::max);
+                    if dot(unit(sub(pts[b], pts[j])), o) > 1e-3 && deep <= 0.8 * most {
+                        gone[j] = true;
+                        changed = true;
                     }
                 }
-            }
-            // (The towers along it: corner towers to their arc's middle, the rest at their share
-            // of their stretch's section.)
-            let mut tw: Vec<(usize, P)> = Vec::new();
-            for (ti, t) in raw_towers.iter().enumerate() {
-                let Some(i) = (0..ns).find(|&i| seg_dist(*t, run.pts[i], run.pts[i + 1]) < 1e-6) else { continue };
-                let f = dot(sub(*t, run.pts[i]), unit(sub(run.pts[i + 1], run.pts[i]))) / dist(run.pts[i], run.pts[i + 1]).max(1e-9);
-                let (i, f) = if f > 1.0 - 1e-6 && i + 1 < ns { (i + 1, 0.0) } else { (i, f) };
-                if (i == 0 && f < 1e-6) || (i + 1 == ns && f > 1.0 - 1e-6) {
-                    continue;
+                if !changed {
+                    break;
                 }
-                let (sa, sb) = line.sections[i];
-                let old_at = laid.1[ti];
-                // (On a stretch as `outline::round` left it, where that put it.)
-                let kept = sag[i] == 0.0 && (i == 0 || cl[i - 1] == last.1) && (i + 1 == ns || cl[i] == last.1);
-                let p = if kept { old_at } else if f < 1e-6 && i > 0 { line.mids[i - 1] } else { onto(&line.pts[sa..=sb], old_at).unwrap_or_else(|| along(&line.pts, sa, sb, f)) };
-                let own: Result<usize, usize> = if f < 1e-6 { Err(i - 1) } else { Ok(i) };
-                let ok = dist(p, old_at) < 0.5
-                    || (solid.no_nearer(p, old_at, reach, 1.0)
-                        && !super::Ground::near_water(site, p, 3.0)
-                        && others.iter().chain(town_towers.iter().filter(|o| !same(**o, old_at))).all(|o| dist(*o, p) >= dist(*o, old_at).min(40.0)));
-                if !ok {
-                    match own {
-                        Ok(i) => bad_s[i] = true,
-                        Err(j) => bad_c[j] = true,
+            };
+            bridge(&mut gone);
+            // (The line's stretches, from corner to kept corner: ends, chord, outward side, the tangent
+            // at each end, and whether it passes outside a corner.)
+            struct St {
+                a: usize,
+                b: usize,
+                u: P,
+                o: Option<P>,
+                ta: P,
+                tb: P,
+                bridged: bool,
+            }
+            let stretches = |gone: &[bool]| -> Vec<St> {
+                let ks: Vec<usize> = (0..n).filter(|&j| !gone[j]).collect();
+                let mut st: Vec<St> = ks
+                    .windows(2)
+                    .map(|w| {
+                        let uu = unit(sub(q[w[1]], q[w[0]]));
+                        let s = side[w[0]];
+                        let o = (s != 0.0 && side[w[0]..w[1]].iter().all(|x| *x == s)).then(|| mul(left(uu), -s));
+                        St { a: w[0], b: w[1], u: uu, o, ta: uu, tb: uu, bridged: w[1] > w[0] + 1 }
+                    })
+                    .collect();
+                // (The stretch from `x` to `y` past the run's end: its way, if the town is on side `s` of it.)
+                let past = |x: P, y: P, s: f64| {
+                    let v = unit(sub(y, x));
+                    let (mid, o) = (lerp(x, y, 0.5), mul(left(v), -s));
+                    (in_town(add(mid, mul(o, -4.0))) && !in_town(add(mid, mul(o, 4.0)))).then_some((v, o))
+                };
+                if let (Some(x), Some(o)) = (before, st[0].o) {
+                    if let Some((v, ov)) = past(x, pts[0], side[0]) {
+                        if dot(st[0].u, ov) < -1e-3 && dot(o, ov) > 0.0 {
+                            st[0].ta = unit(add(v, st[0].u));
+                        }
                     }
                 }
-                tw.push((ti, p));
-            }
-                (line, tw, bad_s, bad_c)
+                let k = st.len() - 1;
+                if let (Some(y), Some(o)) = (after, st[k].o) {
+                    if let Some((v, _)) = past(pts[n - 1], y, side[n - 2]) {
+                        if dot(v, o) < -1e-3 {
+                            st[k].tb = unit(add(st[k].u, v));
+                        }
+                    }
+                }
+                // (A corner turning in, the town on the same side: the way along its bisector.)
+                for k in 1..st.len() {
+                    if let (Some(o1), Some(o2)) = (st[k - 1].o, st[k].o) {
+                        if dot(o1, o2) > 0.0 && dot(st[k].u, o1) < -1e-3 {
+                            let t = unit(add(st[k - 1].u, st[k].u));
+                            st[k - 1].tb = t;
+                            st[k].ta = t;
+                        }
+                    }
+                }
+                st
             };
-            // (First the corners, the curtains straight: each that doesn't fit, or whose stretch
-            // doesn't, cut back a step; then each curtain's bow, the corners as they are.)
-            let mut done: Option<(Line, Vec<(usize, P)>)> = None;
-            sl.iter_mut().for_each(|k| *k = last.0);
-            for _ in 0..LEVELS.len() * 2 + 2 {
-                let (_, _, bad_s, bad_c) = trial(&sl, &cl);
+            let curve = |s: &St, k: usize| -> Vec<P> {
+                let Some(o) = s.o.filter(|_| k < last && !castle_side(pts[s.a], pts[s.b])) else { return Vec::new() };
+                if sags[k] == 0.0 && same(s.ta, s.u) && same(s.tb, s.u) {
+                    return Vec::new();
+                }
+                let l = dist(q[s.a], q[s.b]);
+                let m = crate::core::ceil(l * pulls[k].max(1.0) / BODY_STEP).max(2.0) as usize;
+                let pi = std::f64::consts::PI;
+                (1..m)
+                    .map(|t| {
+                        let t = t as f64 / m as f64;
+                        let w = libm::sin(pi * t);
+                        add(hermite(q[s.a], q[s.b], s.ta, s.tb, pulls[k], t), mul(o, sags[k] * l * w * w))
+                    })
+                    .collect()
+            };
+            let bow_of = |s: &St, c: &[P]| s.o.map_or(0.0, |o| c.iter().map(|p| dot(sub(*p, q[s.a]), o)).fold(0.0, f64::max));
+            // (The first tangent whose bow isn't past the most, by the stretch's first corner.)
+            let first = |s: &St| {
+                (0..last)
+                    .find(|&k| {
+                        let c = curve(s, k);
+                        !c.is_empty() && bow_of(s, &c) <= most
+                    })
+                    .unwrap_or(last)
+            };
+            let mut lv = vec![last; n];
+            for s in stretches(&gone) {
+                lv[s.a] = first(&s);
+            }
+            // (A corner between two straight stretches keeps the arc `outline::round` laid there.)
+            let arc_at = |j: usize| -> Vec<P> {
+                let short = dist(pts[j - 1], pts[j]).min(dist(pts[j], pts[j + 1]));
+                let arc: Vec<P> = old.iter().copied().filter(|x| !same(*x, pts[j - 1]) && !same(*x, pts[j + 1]) && dist(*x, pts[j]) <= 0.5 * short + 1e-6).collect();
+                if arc.is_empty() { vec![pts[j]] } else { arc }
+            };
+            let mut done: Option<(Vec<P>, Vec<(usize, P)>)> = None;
+            for _ in 0..pulls.len() + 2 * n + 4 {
+                let st = stretches(&gone);
+                let ns = st.len();
+                // (The line: each stretch's section, its corners at their arcs' middles or as the arcs.)
+                let straight = |k: usize| lv[st[k].a] == last && !st[k].bridged;
+                let arced: Vec<bool> = (0..=ns).map(|k| k > 0 && k < ns && straight(k - 1) && straight(k)).collect();
+                let mut line = vec![q[0]];
+                let mut secs: Vec<(usize, usize)> = Vec::new();
+                for (k, s) in st.iter().enumerate() {
+                    let start = line.len() - 1;
+                    line.extend(curve(s, lv[s.a]));
+                    if arced[k + 1] {
+                        line.extend(arc_at(s.b));
+                    } else {
+                        line.push(q[s.b]);
+                    }
+                    line.dedup_by(|x, y| same(*x, *y));
+                    secs.push((start, line.len() - 1));
+                }
+                let mut bad = vec![false; ns];
+                for (k, &(sa, sb)) in secs.iter().enumerate() {
+                    for w in line[sa..=sb].windows(2) {
+                        let m = crate::core::ceil(dist(w[0], w[1]) / TEST_STEP).max(1.0) as usize;
+                        if (0..=m).map(|j| lerp(w[0], w[1], j as f64 / m as f64)).any(|p| !fits(p)) {
+                            bad[k] = true;
+                            break;
+                        }
+                    }
+                }
+                // (The towers along it: on a kept corner, at the corner (or where `outline::round`
+                // put it, on its arc); along a stretch, square onto its section.)
+                let mut tw: Vec<(usize, P)> = Vec::new();
+                for (ti, t) in raw_towers.iter().enumerate() {
+                    let Some(i) = (0..n - 1).find(|&i| seg_dist(*t, pts[i], pts[i + 1]) < 1e-6) else { continue };
+                    let f = dot(sub(*t, pts[i]), u[i]) / dist(pts[i], pts[i + 1]).max(1e-9);
+                    let (i, f) = if f > 1.0 - 1e-6 && i + 2 < n { (i + 1, 0.0) } else { (i, f) };
+                    if (i == 0 && f < 1e-6) || (i + 2 == n && f > 1.0 - 1e-6) {
+                        continue;
+                    }
+                    let old_at = laid_towers[ti];
+                    let corner = f < 1e-6 && !gone[i];
+                    // (The stretch it is on: at a kept corner, the one leaving it.)
+                    let k = st.iter().position(|s| s.a <= i && i < s.b).unwrap_or(0);
+                    let (sa, sb) = secs[k];
+                    let p = if corner {
+                        if arced[k] { old_at } else { q[i] }
+                    } else if straight(k) {
+                        onto(&line[sa..=sb], old_at).unwrap_or(old_at)
+                    } else {
+                        onto(&line[sa..=sb], *t).unwrap_or(old_at)
+                    };
+                    let ok = dist(p, old_at) < 0.5
+                        || (obst.no_nearer(p, old_at, reach, 1.0)
+                            && !super::Ground::near_water(site, p, 3.0)
+                            && gate_towers.iter().chain(laid_towers.iter().filter(|o| !same(**o, old_at))).all(|o| dist(*o, p) >= dist(*o, old_at).min(40.0)));
+                    if !ok {
+                        bad[k] = true;
+                        if corner && k > 0 {
+                            bad[k - 1] = true;
+                        }
+                    }
+                    tw.push((ti, p));
+                }
+                if !bad.iter().any(|b| *b) {
+                    done = Some((line, tw));
+                    break;
+                }
+                // (Each that doesn't fit a step less bowed; straight, its corners back; else its
+                // neighbours' bows, which left its corner where it is.)
                 let mut stepped = false;
-                for j in 0..nc {
-                    if (bad_c[j] || bad_s[j] || bad_s[j + 1]) && cl[j] < last.1 {
-                        cl[j] += 1;
+                for k in (0..ns).filter(|&k| bad[k]) {
+                    let s = &st[k];
+                    if lv[s.a] < last {
+                        lv[s.a] += 1;
                         stepped = true;
+                    } else if s.bridged {
+                        for j in s.a..s.b {
+                            gone[j] = false;
+                            kept_in[j] = true;
+                        }
+                        stepped = true;
+                    } else {
+                        for j in [k.wrapping_sub(1), k + 1] {
+                            if j < ns && lv[st[j].a] < last {
+                                lv[st[j].a] += 1;
+                                stepped = true;
+                            }
+                        }
                     }
                 }
                 if !stepped {
                     break;
                 }
-            }
-            for i in 0..ns {
-                for k in 0..=last.0 {
-                    sl[i] = k;
-                    let (_, _, bad_s, bad_c) = trial(&sl, &cl);
-                    if !bad_s.iter().chain(&bad_c).any(|b| *b) {
-                        break;
+                // (Corners back: their new stretches start at their first tangent.)
+                for s in stretches(&gone) {
+                    if kept_in[s.a] {
+                        lv[s.a] = first(&s);
+                        kept_in[s.a] = false;
                     }
                 }
             }
-            let (line, tw, bad_s, bad_c) = trial(&sl, &cl);
-            if !bad_s.iter().any(|b| *b) && !bad_c.iter().any(|b| *b) {
-                done = Some((line, tw));
-            }
-            // (Nothing fits, or only `outline::round`'s line: that line, its towers where they are.)
-            match done.filter(|_| sl.iter().any(|&k| k < last.0) || cl.iter().any(|&k| k < last.1)) {
+            match done.filter(|_| lv.iter().any(|&k| k < last) || gone.iter().any(|g| *g)) {
                 Some((line, tw)) => {
                     any = true;
-                    out_pts.extend(line.pts.iter().skip(if out_pts.is_empty() { 0 } else { 1 }));
-                    for (ti, p) in tw {
-                        moved.push((laid.1[ti], p));
+                    // (How far each side bows out over its own stretch.)
+                    for i in 0..n - 1 {
+                        if side[i] == 0.0 {
+                            continue;
+                        }
+                        let (o, l) = (mul(left(u[i]), -side[i]), dist(pts[i], pts[i + 1]));
+                        let b = line.iter().filter(|p| (-30.0..=l + 30.0).contains(&dot(sub(**p, pts[i]), u[i]))).map(|p| dot(sub(*p, pts[i]), o)).fold(0.0, f64::max);
+                        let mid = lerp(pts[i], pts[i + 1], 0.5);
+                        if b > 0.5 {
+                            if let Some(&(va, vb)) = sides.iter().find(|&&(va, vb)| seg_dist(mid, mesh.pos[va], mesh.pos[vb]) < 1e-3) {
+                                piece_bows.push(((va.min(vb), va.max(vb)), b));
+                            }
+                        }
                     }
+                    out_pts.extend(line.iter().skip(if out_pts.is_empty() { 0 } else { 1 }));
+                    moved.extend(tw);
                 }
-                None => out_pts.extend(old.iter().skip(if out_pts.is_empty() { 0 } else { 1 })),
+                None => keep_old(&mut out_pts),
             }
         }
         if any {
-            new_walls.push((pi, out_pts));
-        }
-    }
-    for (pi, pts) in new_walls {
-        l.walls[pi] = pts;
-    }
-    // (The towers moved, with their shapes and the way they face.)
-    for (old, new) in moved {
-        if same(old, new) {
-            continue;
-        }
-        for t in l.towers.iter_mut().filter(|t| same(**t, old)) {
-            *t = new;
-        }
-        let along = l
-            .walls
-            .iter()
-            .flat_map(|w| w.windows(2))
-            .filter(|s| seg_dist(new, s[0], s[1]) < 1.0)
-            .max_by(|x, y| dist(x[0], x[1]).total_cmp(&dist(y[0], y[1])))
-            .map(|s| unit(sub(s[1], s[0])));
-        for f in l.tower_forms.iter_mut().filter(|f| same(f.0, old)) {
-            f.0 = new;
-            if let Some(u) = along {
-                // (A D faces out, the way it did; the rest run along the wall.)
-                f.2 = if f.1 & 15 == super::wallstyle::TowerShape::D as u8 {
-                    let n = left(u);
-                    if dot(n, f.2) < 0.0 { mul(n, -1.0) } else { n }
-                } else {
-                    u
-                };
+            pieces[pi] = out_pts;
+            for (ti, p) in moved {
+                towers[ti] = p;
             }
-        }
-        for s in l.square_towers.iter_mut().filter(|s| same(s.0, old)) {
-            s.0 = new;
-            if let Some(u) = along {
-                s.1 = u;
+            for (k, b) in piece_bows {
+                let e = bows.entry(k).or_insert(0.0);
+                *e = e.max(b);
             }
         }
     }
+    bows
 }
