@@ -10,7 +10,7 @@
 //! - `Log` (palisades): two square log towers (half side 12, sides along the wall), the gate between.
 //! - `Bent` (Dry): two square towers (half 12) and a gate block between them (`s` 12 to `len` - 12,
 //!   `c` -12 to 30) with the passage turning in it: 10 ft wide, in through the outer face, out through
-//!   the block's side behind one tower (`exit`). Needs `len` 44 ft and clear ground for the block and
+//!   the block's side behind one tower (`exit`). Needs `len` 40 ft and clear ground for the block and
 //!   the way out; else the square tower.
 
 use super::Layout;
@@ -27,6 +27,9 @@ pub const PASSAGE_FT: f64 = 12.0;
 pub const BENT_FT: f64 = 10.0;
 /// A bent gate block's reach into the town.
 pub const BENT_DEPTH: f64 = 30.0;
+/// The least gap between a bent entrance's towers: the way in (`s` 17 to 27) a foot clear of `b`'s
+/// tower, which walls it on that side.
+pub const BENT_MIN_LEN: f64 = 40.0;
 
 /// A gatehouse: its gate towers' centres, its form, the way into the town (unit, across the wall),
 /// a bent entrance's way out (1 out past `b`, -1 past `a`; 0 for the others), a castle's.
@@ -144,6 +147,36 @@ pub(super) fn bent_room(gate: P, inward: P, poly: &[P]) -> bool {
     [1.0, -1.0].into_iter().any(|e| !bent_on(&House { exit: e, ..h }, poly))
 }
 
+/// The gatehouse of gate towers `a` and `b` as its walls' style has it (a bent entrance not yet fitted),
+/// `centre` the town's middle (the origin while it is laid out).
+fn framed(l: &Layout, a: P, b: P, centre: P) -> House {
+    let m = lerp(a, b, 0.5);
+    let castle = l.castles.iter().find(|(c, rad)| dist(*c, a) < rad * 1.3);
+    let style = l.wall_style_at(a);
+    let inside = castle.map_or(centre, |c| c.0);
+    let u = sub(b, a);
+    let v = mul([-u[1], u[0]], 1.0 / len(u).max(1e-9));
+    let n = if dot(sub(inside, m), v) >= 0.0 { v } else { mul(v, -1.0) };
+    House { a, b, form: style.gatehouse, n, exit: 0.0, castle: castle.is_some() }
+}
+
+/// Whether `poly` stands on one of `blocks` (`bent_blocks`).
+pub(super) fn on_bent_block(blocks: &[Vec<P>], poly: &[P]) -> bool {
+    blocks.iter().any(|z| poly.iter().any(|p| contains(z, *p)) || z.iter().any(|p| contains(poly, *p)))
+}
+
+/// The gate blocks of `l`'s town gates built as bent entrances (none for another style), while it is
+/// laid out (about the origin), on its walls as laid (`walls`, `gate_towers`: standing or taken
+/// down, so the town is the same either way): the buildings on them give way, as on the ground
+/// before each gate.
+pub(super) fn bent_blocks(l: &Layout, walls: &[Vec<P>], gate_towers: &[P]) -> Vec<Vec<P>> {
+    if l.wall_style.gatehouse != Form::Bent {
+        return Vec::new();
+    }
+    let towers: Vec<(P, f64, bool)> = gate_towers.iter().map(|&t| (t, 15.0, true)).collect();
+    crate::battlemap::gateways_on(walls, &towers).into_iter().map(|(a, b)| framed(l, a, b, [0.0, 0.0])).filter(|h| !h.castle && h.form == Form::Bent && h.len() >= BENT_MIN_LEN).filter_map(|h| h.block()).collect()
+}
+
 /// The gatehouses of `l`, in the order `battlemap::gateways` pairs their towers: a pure function of the
 /// layout, so every chunk finds the same.
 pub fn houses(l: &Layout) -> Vec<House> {
@@ -151,17 +184,10 @@ pub fn houses(l: &Layout) -> Vec<House> {
     crate::battlemap::gateways(l, &towers)
         .into_iter()
         .map(|(a, b)| {
-            let m = lerp(a, b, 0.5);
-            let castle = l.castles.iter().find(|(c, rad)| dist(*c, a) < rad * 1.3);
-            let style = l.wall_style_at(a);
-            let inside = castle.map_or(l.center, |c| c.0);
-            let u = sub(b, a);
-            let v = mul([-u[1], u[0]], 1.0 / len(u).max(1e-9));
-            let n = if dot(sub(inside, m), v) >= 0.0 { v } else { mul(v, -1.0) };
-            let mut h = House { a, b, form: style.gatehouse, n, exit: 0.0, castle: castle.is_some() };
+            let mut h = framed(l, a, b, l.center);
             if h.form == Form::Bent {
                 // (Out behind `b`'s tower where the ground is clear, else `a`'s; else a square tower.)
-                let fit = [1.0, -1.0].into_iter().find(|&e| h.len() >= 44.0 && bent_fits(l, &House { exit: e, ..h }));
+                let fit = [1.0, -1.0].into_iter().find(|&e| h.len() >= BENT_MIN_LEN && bent_fits(l, &House { exit: e, ..h }));
                 match fit {
                     Some(e) => h.exit = e,
                     None => h.form = Form::SquareTower,

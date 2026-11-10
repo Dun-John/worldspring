@@ -3918,9 +3918,10 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             l.plazas.push(Plaza { pts, kind: cut.kind });
         }
     }
-    // Off the roads into the city and the ground before each gate (`clear_of`), and off a castle's
-    // way to its gate.
-    l.buildings.retain(|b| clear_of(b) && outline::off_bastions(&wall_laid.3.placed, &b.poly) && (b.ward == Ward::Castle || castle_ways.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(&b.poly, s[0], s[1]) >= 5.0))));
+    // Off the roads into the city and the ground before each gate (`clear_of`), a bent entrance's
+    // gate block, and off a castle's way to its gate.
+    let bent_blocks = if walled || plan.walled { gatehouse::bent_blocks(l, &wall_laid.0, &wall_laid.2) } else { Vec::new() };
+    l.buildings.retain(|b| clear_of(b) && outline::off_bastions(&wall_laid.3.placed, &b.poly) && (b.ward == Ward::Castle || !gatehouse::on_bent_block(&bent_blocks, &b.poly)) && (b.ward == Ward::Castle || castle_ways.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(&b.poly, s[0], s[1]) >= 5.0))));
     // Steps on steep streets, judged before the streets are cut at the water (wet ground is
     // level), so every piece is still as recorded.
     if s.tier >= stairs::STAIR_TIER || survey.is_some() {

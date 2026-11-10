@@ -612,13 +612,18 @@ fn part_code(kind: crate::town::PartKind) -> u8 {
 /// outer and inner gates are not one gatehouse). Paired in order, each with its nearest; a pure function of the
 /// layout, so every chunk finds the same.
 pub(crate) fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
+    gateways_on(&l.walls, towers)
+}
+
+/// `gateways` along `walls` (a town's as laid, standing or not).
+pub(crate) fn gateways_on(walls: &[Vec<[f64; 2]>], towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
     let gates: Vec<[f64; 2]> = towers.iter().filter(|t| t.2).map(|t| t.0).collect();
     // Which way the wall runs from each gate tower, where a stretch of it ends there.
     let away: Vec<Option<[f64; 2]>> = gates
         .iter()
         .map(|&g| {
             let at = |p: [f64; 2]| (p[0] - g[0]) * (p[0] - g[0]) + (p[1] - g[1]) * (p[1] - g[1]) < 0.25;
-            l.walls.iter().filter(|w| w.len() >= 2).find_map(|w| {
+            walls.iter().filter(|w| w.len() >= 2).find_map(|w| {
                 let n = w.len();
                 if at(w[0]) {
                     Some([w[1][0] - g[0], w[1][1] - g[1]])
