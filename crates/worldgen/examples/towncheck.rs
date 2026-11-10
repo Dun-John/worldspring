@@ -5457,7 +5457,7 @@ fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 19] = ["districts", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 20] = ["districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -5508,6 +5508,7 @@ fn main() {
                 "cemeteries" => cemeteries(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),
+                "places" => places(&ctx.ex.world, &ctx.ex.t0, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
             }
@@ -6066,6 +6067,116 @@ fn district_edits(base: &World, t0: &T0, r: &mut Report) {
             } else {
                 r.add("renames lost without a report", 1.0, format!("{tag}: {key} at {}", at(centroid(&b.poly))));
             }
+        }
+    }
+}
+
+// R5 towns (M16b): squares, parks and gates (`town::places`).
+
+const PLACE_COUNTS: [&str; 7] = [
+    "places sharing an id",
+    "places unnamed",
+    "place labels over a wall or building",
+    "place ids moved or gone after an unrelated patch edit",
+    "place ids moved or gone with the walls toggled",
+    "gates listed while the town is unwalled",
+    "unrelated patch edits refused",
+];
+
+/// `places`: per tier, the squares, parks and gates with ids and names; that no two share an id,
+/// every one is named, no label lies over a wall or building, an edit to a patch none of them
+/// stands on moves none of their ids, nor do the walls toggled (gates aside: only while walled).
+/// Towns and up, `PLACES` of them (default 12); a few towns' places printed per tier.
+fn places(base: &World, t0: &T0, r: &mut Report) {
+    use serde_json::json;
+    use worldgen::town::places::{Place, label_blocked, of};
+    r.counts(&PLACE_COUNTS);
+    let most: usize = std::env::var("PLACES").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+    let mut shown: HashMap<&str, usize> = HashMap::new();
+    let tiers = ["village", "town", "city", "metropolis"];
+    let mut done = 0;
+    for ci in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town) {
+        if done >= most {
+            break;
+        }
+        done += 1;
+        let tier = tiers[t0.settlements[ci].tier as usize];
+        let l = town::layout(base, t0, ci);
+        let ps = of(t0, &l);
+        for k in ["square", "park", "gate"] {
+            r.tally(&format!("{tier}: {k}s"), ps.iter().filter(|p| p.kind == k).count());
+        }
+        r.tally(&format!("{tier}: labels"), ps.iter().filter(|p| !p.label.is_empty()).count());
+        r.tally(&format!("{tier}: towns"), 1);
+        let n = shown.entry(tier).or_default();
+        if *n < 2 {
+            *n += 1;
+            let list: Vec<String> = ps.iter().map(|p| format!("{} {} ({})", p.id, p.name, p.sort)).collect();
+            say!("    {tier} {ci}: {}", list.join("; "));
+        }
+        let mut ids: Vec<&str> = ps.iter().map(|p| p.id.as_str()).collect();
+        ids.sort();
+        for w in ids.windows(2).filter(|w| w[0] == w[1]) {
+            r.add("places sharing an id", 1.0, format!("{ci}: {}", w[0]));
+        }
+        for p in &ps {
+            if p.name.trim().is_empty() {
+                r.add("places unnamed", 1.0, format!("{ci}: {}", p.id));
+            }
+            if label_blocked(&l, &p.label) {
+                r.add("place labels over a wall or building", 1.0, format!("{ci}: {} {}", p.id, p.name));
+            }
+        }
+        let gates_off = |l: &Layout, ps: &[Place]| l.walls.is_empty() && ps.iter().any(|p| p.kind == "gate");
+        if gates_off(&l, &ps) {
+            r.add("gates listed while the town is unwalled", 1.0, format!("{ci}"));
+        }
+        // Each of `ps` (but those `skip` keeps out) by its id in `now`, where it was.
+        let kept = |now: &[Place], skip: &dyn Fn(&Place) -> bool, label: &str, tag: &str, r: &mut Report| {
+            for p in ps.iter().filter(|p| !skip(p)) {
+                match now.iter().find(|q| q.id == p.id) {
+                    Some(q) if dist(q.at, p.at) <= 40.0 && q.kind == p.kind => {}
+                    Some(q) => r.add(label, dist(q.at, p.at), format!("{ci} {tag}: {} moved {:.0} ft", p.id, dist(q.at, p.at))),
+                    None => r.add(label, 1.0, format!("{ci} {tag}: {} {} gone", p.id, p.name)),
+                }
+            }
+        };
+        let Ok(plan) = town::wards::plan_json(base, t0, ci) else { continue };
+        // A patch built on lots none of them stands on, nor any square at its corners, farthest
+        // from the centre among the inner ones.
+        let corner_of = |p: &Place| p.id.rsplit(':').next().and_then(|s| s.parse::<u64>().ok());
+        let used_corners: Vec<u64> = ps.iter().filter(|p| p.kind == "square").filter_map(corner_of).collect();
+        let far = plan["patches"].as_array().into_iter().flatten().filter(|x| {
+            let p = x["patch"].as_u64().unwrap_or(0) as u32;
+            matches!(x["ward"].as_str(), Some("common" | "craft" | "merchant" | "noble" | "slum")) && x["in_town"] == true
+                && !ps.iter().any(|q| q.patch == Some(p))
+                && !x["corners"].as_array().into_iter().flatten().filter_map(|c| c.as_u64()).any(|c| used_corners.contains(&c))
+        }).max_by(|a, b| {
+            let c0 = [plan["center"][0].as_f64().unwrap_or(0.0), plan["center"][1].as_f64().unwrap_or(0.0)];
+            let d = |x: &serde_json::Value| dist([x["at"][0].as_f64().unwrap_or(0.0), x["at"][1].as_f64().unwrap_or(0.0)], c0);
+            d(a).total_cmp(&d(b))
+        }).and_then(|x| Some((x["patch"].as_u64()?, if x["ward"] == "noble" { "common" } else { "noble" })));
+        if let Some((p, to)) = far {
+            let req: town::wards::TownRequest = serde_json::from_value(json!({ "patches": [{ "patch": p, "ward": to }] })).unwrap();
+            match town::wards::change(base, t0, ci, &req) {
+                Ok((Some(e), _)) => {
+                    let l2 = town::wards::with_edit(base, t0, ci, &e);
+                    // (A road's cemetery may come or go as the town's commons change.)
+                    kept(&of(t0, &l2), &|q| q.id.contains(":r"), "place ids moved or gone after an unrelated patch edit", &format!("patch {p} to {to}"), r);
+                }
+                Ok((None, _)) => r.add("unrelated patch edits refused", 1.0, format!("{ci}: patch {p}: no change")),
+                Err(e) => r.add("unrelated patch edits refused", 1.0, format!("{ci}: patch {p}: {e}")),
+            }
+        }
+        let walled = plan["walls"]["built"].as_bool().unwrap_or(false);
+        let req: town::wards::TownRequest = serde_json::from_value(json!({ "walls": !walled })).unwrap();
+        if let Ok((Some(e), _)) = town::wards::change(base, t0, ci, &req) {
+            let l2 = town::wards::with_edit(base, t0, ci, &e);
+            let now = of(t0, &l2);
+            if gates_off(&l2, &now) {
+                r.add("gates listed while the town is unwalled", 1.0, format!("{ci} walls toggled"));
+            }
+            kept(&now, &|q| q.kind == "gate" || q.id.contains(":r"), "place ids moved or gone with the walls toggled", "walls toggled", r);
         }
     }
 }
