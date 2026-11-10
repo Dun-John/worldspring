@@ -529,26 +529,51 @@ trees. Buildings can be drawn in it. With
 `structure: "ruin"` the walls are broken, some towers fallen and every building a roofless shell.
 
 A **wall** is a line (`pts`, 2–64 corners, each side at least 10 ft, at most 3,000 ft in all; `closed: true` joins
-the last corner to the first): towers on its corners and along long runs, a gatehouse on each corner listed in
-`gates` (indices into `pts`) and wherever a road, a town's approach or its main street crosses it (side streets and
-alleys are closed by it). Where it would stand in water it is broken (a tower on each bank).
+the last corner to the first, and a closed wall may have 3–256 corners and run 16,000 ft round): towers on its
+corners and along long runs, a gatehouse on each corner listed in `gates` (indices into its line) and wherever a
+road, a town's approach or its main street crosses it (a closed wall: a lane through it, not one running along it).
+Side streets and alleys are closed by it, unless `street_gates: true` (a gate on every street crossing it, a new
+corner where none is within 20 ft); a closed wall that would have no gate gets one where its busiest side street
+crosses (the one nearest the town's middle), so every ring has a way in. In or round a town it is built as that town
+builds its own walls (stone, towers, gatehouses and merlons by its culture and wealth). Where it would stand in water
+it is broken (a tower on each bank); an open wall in the water is refused, a closed one is broken there.
 
-Both must stand on dry land, off river channels, and not cross another wall; a castle also stays off squares, roads
-and main streets. Buildings drawn by hand in the way refuse it; the world's own buildings in the way are named in the
+Or a ring round patches of a town's plan: `settlement` (the town's id) and `around_patches` (patch numbers from
+`get_town_plan`) in place of `pts`. Its line is the outer edge of those patches, which is the middle of the street
+round them: a lane inside the wall and one outside, the blocks untouched (where one district's lots run across a
+patch edge with no street, those buildings are in its way: `sides_without_street` in the refusal). Patches the set
+encloses are inside it (`enclosed_patches`). It is refused for patches in more than one piece (naming the pieces),
+patches meeting only at a corner, a side on the town's standing wall (take the walls down with `edit_town`, or leave
+out the patches on the edge), or more than 256 corners. Its gates: on every corner where a main street goes through;
+with `street_gates`, on every corner where a side street leaves it outward (patch corners are where three patches
+meet, so a street there ran on into the streets inside and round it); `gates` adds corners by hand. The line is
+taken from the plan as it stands and kept in the world file: corners moved later with `edit_town` leave it where it
+was, until `update_fortification` gets `around_patches` again.
+
+Both must stand on dry land, off river channels, and not cross another wall (the refusal names it: `that crosses
+wall c:4 at (x, y)` or `the town wall of city:…`); a castle also stays off squares, roads and main streets. Buildings drawn by hand in the way refuse it; the world's own buildings in the way are named in the
 refusal, or taken away with it (one change) when `remove_in_way: true`. Corners snap to the 5-ft grid (`snap: false`
 not). Their wall and gate towers have interiors (`t:<layout>:<k>`), and a building drawn on the wall is refused. The
-result also gives `towers`, `gates`, `buildings` and the castle's `keep` (its building id).
+result also gives `towers`, `gates`, `buildings` and the castle's `keep` (its building id); a wall's also `corners`,
+`length_ft`, `closed`, `gate_list` (each gate as built: `corner` when on one, and `x_ft`, `y_ft`) and
+`streets_closed` (crossings with no gate: `corner`, `x_ft`, `y_ft`, `street` main or side); a ring round patches
+`around` (`settlement`, `patches`, `plan_corners`: the plan's corner for each corner of its line).
 
 ```json
 { "name": "create_feature", "arguments": { "kind": "castle", "rect": { "x_ft": 4772760, "y_ft": 1498825, "width_ft": 300, "depth_ft": 200 }, "gate": 2, "name": "Highmoor Keep" } }
 { "name": "create_feature", "arguments": { "kind": "wall", "pts": [[4772500, 1499150], [4773050, 1499150], [4773200, 1498650]], "gates": [1] } }
 { "name": "create_feature", "arguments": { "kind": "wall", "pts": [[412000, 380000], [413200, 380000], [413200, 381000], [412000, 381000]], "closed": true, "remove_in_way": true } }
+{ "name": "create_feature", "arguments": { "kind": "wall", "settlement": "city:6c30c809", "around_patches": [0, 3, 1, 2, 40, 9, 6, 7, 5, 4], "name": "Upper City Wall" } }
 ```
+The last answers (cut short) `{"id": "c:0", "closed": true, "corners": 19, "length_ft": 6005, "gates": 1, "gate_list":
+[{"corner": 7, "x_ft": 2912602, "y_ft": 1052812}], "streets_closed": [{"corner": 2, "street": "side", ...}, ...],
+"towers": 42, "around": {"settlement": "city:6c30c809", "patches": [...], "plan_corners": [0, 10, 13, ...]}}`.
 > *"Build a castle on the hill west of Bulol with its gate toward the road."* · *"Wall off the north side of Agentholm."* · *"A ruined fort, keep only."*
 
 ### `update_fortification`
-`id` (a castle's or wall's `c:` id) and any of `create_feature`'s castle or wall fields: a new outline or line, its
-gate or gates, `keep`, `yard_buildings`, `structure`, `closed`, `name`. Fields left out stay; the result is checked
+`id` (a castle's or wall's `c:` id) and any of `create_feature`'s castle or wall fields: a new outline or line
+(`pts`, or `settlement` and `around_patches`: the ring laid anew on the plan as it stands, its gates with it), its
+gate or gates, `street_gates`, `keep`, `yard_buildings`, `structure`, `closed`, `name`. Fields left out stay; the result is checked
 like a new one (`remove_in_way` as there). `delete_feature` takes it away.
 
 ### `update_feature`
