@@ -4314,7 +4314,7 @@ function standingStone(g: Graphics, r: number, rnd: () => number, v: number) {
   const ink = { width: 2.2, color: INK, join: 'round' as const };
   for (const x of [-1.7, 1.6]) footGrass(g, x * S * FT, P(0, 0.2, 0)[1], 6, rnd);
   // Its top, seen from above behind the front face, then the face.
-  g.poly(face(-1.1)).fill(tones[2]).stroke(ink);
+  g.poly(face(-0.7)).fill(shade(tones[1], 1.05)).stroke(ink);
   g.poly(face(0)).fill(tones[1]).stroke(ink);
   // Lit down the left, in shade on the right.
   // (Points across the front as (x, fraction of the height), leaning with it.)
@@ -4333,7 +4333,6 @@ function standingStone(g: Graphics, r: number, rnd: () => number, v: number) {
     g.poly(oval(px, py, 3 + rnd() * 2.5, 2 + rnd() * 1.5, rnd(), 9)).fill({ color: i === 0 ? 0xc8c48a : 0xb4b88e, alpha: 0.85 });
   }
   if (v === 1) moss(g, P(-0.9, 0, 0.6)[0], P(-0.9, 0, 0.6)[1], 6, rnd);
-  stone(g, P(1.9, 0.5, 0)[0], P(1.9, 0.5, 0)[1], 4, tones, rnd, 6);
   footGrass(g, P(0.2, 0.2, 0)[0], P(0.2, 0.2, 0)[1] + 1, 4.5, rnd);
 }
 
@@ -4342,17 +4341,17 @@ function standingStone(g: Graphics, r: number, rnd: () => number, v: number) {
  * on some. */
 function yew(g: Graphics, r: number, rnd: () => number, v: number) {
   const tones = [
-    [0x13241a, 0x1b3322, 0x24432c, 0x33573a],
-    [0x152618, 0x1e3620, 0x284828, 0x385c34],
-    [0x122420, 0x1a3428, 0x234432, 0x325840],
-    [0x16281a, 0x203a22, 0x2c4c2c, 0x3e6238],
+    [0x2a4a30, 0x3a6040, 0x4c7a50, 0x6a9a62],
+    [0x2c4c2a, 0x3c6238, 0x4e7c46, 0x6c9c5a],
+    [0x284a38, 0x386048, 0x4a7a5a, 0x68986e],
+    [0x2e502c, 0x40683a, 0x528046, 0x729c5a],
   ][v];
   const layers: [number, number][] = [
     [1, 22],
     [0.76, 17],
     [0.53, 13],
     [0.3, 9],
-  ];
+  ].map(([k, n]) => [k * 0.82, n]) as [number, number][];
   // A tier's edge: small round lobes, bulging out between dips, a little uneven.
   const tier = (cx: number, cy: number, rr: number, n: number, depth: number, jit: number[]) => {
     const ph = jit[n] * Math.PI;
@@ -4370,13 +4369,15 @@ function yew(g: Graphics, r: number, rnd: () => number, v: number) {
   layers.forEach(([k, n], l) => {
     const off = -l * r * 0.07;
     const jit = Array.from({ length: n + 1 }, () => rnd());
-    tier(off, off, r * k, n, 0.09, jit);
+    tier(off, off, r * k, n, 0.05, jit);
     g.fill(tones[l]);
     if (l === 0) g.stroke({ width: OUT, color: INK, join: 'round' });
     else g.stroke({ width: 1.5, color: shade(tones[l - 1], 0.7), join: 'round' });
     const h = r * k * 0.07;
-    tier(off - h, off - h, r * k * 0.84, n, 0.09, jit);
-    g.fill({ color: shade(tones[l], 1.25), alpha: 0.45 });
+    tier(off - h, off - h, r * k * 0.84, n, 0.05, jit);
+    g.fill({ color: shade(tones[l], 1.3), alpha: 0.5 });
+    tier(off - h * 1.6, off - h * 1.6, r * k * 0.55, n, 0.05, jit);
+    g.fill({ color: tones[3], alpha: 0.28 });
   });
   if (v === 1 || v === 3) {
     for (let i = 0; i < 9; i++) {
@@ -4389,7 +4390,7 @@ function yew(g: Graphics, r: number, rnd: () => number, v: number) {
 
 /** Lychgate from above, its ridge along x and the way through it along y: a short gabled roof (the north
  * plane paler, rows of tiles or shingles, a dark ridge, barge boards at the gable ends), its four corner posts
- * showing past the gables, a step of flags under the eaves either side; a small cross on the ridge of some. */
+ * showing past the gables, a step of flags under the eaves either side; a dark opening and a pair of gate posts at each end where the way goes through. */
 function lychgate(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
   const roof = [
@@ -4420,9 +4421,10 @@ function lychgate(g: Graphics, r: number, rnd: () => number, v: number) {
   for (const sx of [-1, 1]) g.rect(sx * rx - (sx > 0 ? 0.35 * FT : 0), -ry, 0.35 * FT, ry * 2).fill(WOOD[0]);
   g.moveTo(-rx, 0).lineTo(rx, 0).stroke({ width: 3, color: shade(roof[0], 0.55), cap: 'round' });
   g.rect(-rx, -ry, rx * 2, ry * 2).stroke({ width: OUT, color: INK, join: 'round' });
-  if (v < 2) {
-    g.moveTo(-0.5 * FT, 0).lineTo(0.5 * FT, 0).moveTo(0, -0.7 * FT).lineTo(0, 0.5 * FT).stroke({ width: 4.5, color: INK, cap: 'round' });
-    g.moveTo(-0.5 * FT, 0).lineTo(0.5 * FT, 0).moveTo(0, -0.7 * FT).lineTo(0, 0.5 * FT).stroke({ width: 2.2, color: STONE[0][2], cap: 'round' });
+  // The way through: a dark opening under each eave, between two stout gate posts standing up over the roof's edge.
+  for (const sy of [-1, 1]) {
+    g.rect(-1.5 * FT, sy > 0 ? ry - 0.55 * FT : -ry, 3 * FT, 0.55 * FT).fill({ color: 0x20170f, alpha: 0.78 });
+    for (const sx of [-1, 1]) g.rect(sx * 1.5 * FT - 0.4 * FT, sy * ry - 0.4 * FT, 0.8 * FT, 0.8 * FT).fill(WOOD[2]).stroke({ width: LINE, color: INK });
   }
 }
 
@@ -4459,7 +4461,7 @@ function kurgan(g: Graphics, r: number, rnd: () => number, v: number) {
   const ph = rnd() * Math.PI * 2;
   for (let i = 0; i < n; i++) {
     const a = v === 3 ? ph + (i / n) * Math.PI * 2 : ph + rnd() * Math.PI * 2;
-    stone(g, Math.cos(a) * R * 0.97, Math.sin(a) * R * 0.97, v === 3 ? 7 : 6 + rnd() * 5, STONE[1], rnd, 7);
+    stone(g, Math.cos(a) * R * 0.97, Math.sin(a) * R * 0.97, v === 3 ? 11 : 9 + rnd() * 5, STONE[1], rnd, 7);
   }
   if (v === 1) {
     // A stone figure on its crown, from a high angle: a worn upright block with a face.
@@ -4484,12 +4486,12 @@ function tombSlab(g: Graphics, r: number, rnd: () => number, v: number) {
   footGrass(g, L + 1, -W + 3, 4, rnd);
   if (chest) {
     // Its sides, in shade below the lid on the south and east.
-    g.rect(-L + 3, -W + 4, L * 2, W * 2).fill(tones[0]).stroke({ width: OUT, color: INK, join: 'round' });
-    g.rect(-L - 2, -W - 2, L * 2 + 4, W * 2 + 2).fill(tones[2]).stroke({ width: OUT, color: INK, join: 'round' });
+    g.rect(-L + 3, -W + 4, L * 2, W * 2).fill(tones[0]).stroke({ width: 2, color: INK, join: 'round' });
+    g.rect(-L - 2, -W - 2, L * 2 + 4, W * 2 + 2).fill(tones[2]).stroke({ width: 2, color: INK, join: 'round' });
     g.rect(-L + 2, -W + 2, L * 2 - 4, W * 2 - 6).fill(tones[1]);
     g.rect(-L + 2, -W + 2, L * 2 - 4, 3).fill({ color: tones[3], alpha: 0.7 });
   } else {
-    g.rect(-L, -W, L * 2, W * 2).fill(tones[1]).stroke({ width: OUT, color: INK, join: 'round' });
+    g.rect(-L, -W, L * 2, W * 2).fill(tones[1]).stroke({ width: 2, color: INK, join: 'round' });
     // A chamfer: lit along the north and west, in shade along the south and east.
     g.poly([-L, -W, L, -W, L - 3, -W + 3, -L + 3, -W + 3]).fill(tones[2]);
     g.poly([-L, -W, -L + 3, -W + 3, -L + 3, W - 3, -L, W]).fill(tones[2]);

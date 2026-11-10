@@ -805,8 +805,8 @@ function cemeteries(app: Application, catalog: KindInfo[], root: Container, y0: 
       rows(10.2, 1.2, 17, 4.8, 1.1, 1.5, 39, taken, 30);
       rows(1.2, 7.4, 7.6, 11, 1.1, 1.6, 39, taken, 40);
       rows(10.2, 7.4, 17, 11, 1.1, 1.6, 39, taken, 50);
-      for (const [x, y, v] of [[12.6, 1.6, 0], [15.8, 2.2, 1], [13.8, 4.2, 2]] as const) put(101, v, x, y);
-      for (const [x, y, v] of [[1.4, 9.2, 0], [2.8, 10.6, 1], [1.6, 11, 2], [5.2, 2.2, 3]] as const) put(100, v, x, y);
+      for (const [x, y, v] of [[12.6, 1.6, 0], [15.8, 2.2, 1], [13.8, 4.2, 2], [2.4, 3.2, 3], [6.6, 1.6, 0], [11.2, 9.4, 1], [15.9, 9.6, 2]] as const) put(101, v, x, y);
+      for (const [x, y, v] of [[1.4, 9.2, 0], [2.8, 10.6, 1], [1.6, 11, 2], [5.2, 2.2, 3], [12.2, 3.4, 1], [16.2, 4.4, 0], [7.0, 8.6, 2], [16.0, 7.9, 3], [10.8, 1.4, 2]] as const) put(100, v, x, y);
       label('2 North: headstones, cairns, standing stones', 0, H);
     } else if (n === 3) {
       // West: headstones in rows off a gravel walk, yews along the wall, a lychgate where the walk comes in.
@@ -838,14 +838,14 @@ function cemeteries(app: Application, catalog: KindInfo[], root: Container, y0: 
       wall(0xc0aa80);
       for (const [x, y] of [[3, 2.4], [14.6, 2.6], [9, 9]] as const) dome(x, y, 2.4);
       const taken = (x: number, y: number) => Math.hypot(x - 3, y - 2.4) < 2.2 || Math.hypot(x - 14.6, y - 2.6) < 2.2 || Math.hypot(x - 9, y - 9) < 2.2;
-      rows(1.2, 1.3, 16.8, 4.8, 0.9, 1.7, 105, taken, 130, -Math.PI / 2);
-      rows(1.2, 7.4, 16.8, 10.6, 0.9, 1.7, 105, taken, 140, -Math.PI / 2);
+      rows(1.2, 1.3, 16.8, 4.8, 1.8, 2.3, 105, (x, y) => taken(x, y) || Math.sin(x * 12.9 + y * 7.3) > 0.5, 130, -Math.PI / 2);
+      rows(1.2, 7.4, 16.8, 10.6, 1.8, 2.3, 105, (x, y) => taken(x, y) || Math.sin(x * 9.1 + y * 11.7) > 0.5, 140, -Math.PI / 2);
       label('5 Dry: domed tombs (blocks), tomb slabs', 0, H);
     } else {
       // Steppe: kurgans on the open grass, the big one kerbed, a cairn and a few stones between.
-      put(104, 3, 5.0, 5.6, 0, 1.3);
-      put(104, 1, 13.5, 3.6, 0, 0.85);
-      put(104, 2, 14.0, 9.4, 0, 0.72);
+      put(104, 3, 5.0, 5.6, 0, 0.9);
+      put(104, 1, 13.5, 3.6, 0, 0.6);
+      put(104, 2, 14.0, 9.4, 0, 0.5);
       put(100, 2, 9.8, 10.8);
       put(101, 1, 10.2, 7.0);
       label('6 Steppe: kurgans 45, 30 and 25 ft across (scaled), a cairn, a stone', 0, H);

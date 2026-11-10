@@ -913,6 +913,44 @@ const PLAN_HEADSTONE = 20;
 /** Plan kind of a town graveyard's grave mark (not from the generator). */
 const GRAVE_KIND = 0xfd;
 
+/** Ear-clip triangulation of a simple polygon's `m` corners from `first` in `verts` (local corner indices;
+ * m - 2 triangles). A degenerate ring falls back to the fan. */
+function earClip(verts: Float32Array, first: number, m: number): number[][] {
+  const P = (i: number) => [verts[(first + i) * 2], verts[(first + i) * 2 + 1]];
+  let area = 0;
+  for (let i = 0; i < m; i++) {
+    const [a, b] = [P(i), P((i + 1) % m)];
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  const sgn = area >= 0 ? 1 : -1;
+  const cross = (a: number[], b: number[], c: number[]) => ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) * sgn;
+  const idx = Array.from({ length: m }, (_, i) => i);
+  const out: number[][] = [];
+  while (idx.length > 3) {
+    let cut = -1;
+    for (let k = 0; k < idx.length && cut < 0; k++) {
+      const [ia, ib, ic] = [idx[(k + idx.length - 1) % idx.length], idx[k], idx[(k + 1) % idx.length]];
+      const [a, b, c] = [P(ia), P(ib), P(ic)];
+      if (cross(a, b, c) <= 0) continue;
+      let ok = true;
+      for (const j of idx) {
+        if (j === ia || j === ib || j === ic) continue;
+        const p = P(j);
+        if (cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) cut = k;
+    }
+    if (cut < 0) cut = 0;
+    out.push([idx[(cut + idx.length - 1) % idx.length], idx[cut], idx[(cut + 1) % idx.length]]);
+    idx.splice(cut, 1);
+  }
+  out.push([idx[0], idx[1], idx[2]]);
+  return out;
+}
+
 /** Roadmap 5 cemeteries: rows of grave marks across each graveyard (plan kind 5) that has none of its own (a
  * village's churchyards and shrine yards get theirs from `town::village::plan_ticks`): pale ticks 3.4 by 1.5 ft
  * across the rows, side by side as graves lie (a little over life size, to read at near zoom; lost in the plot's
@@ -1137,7 +1175,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // the green's and churchyard's grass is the land's own, its crofts seen on the battlemap only).
       else if (kind === 20) rgb = [0.74, 0.73, 0.69];
       // A town graveyard's grave marks (`withGraveRows`): pale stone on its green.
-      else if (kind === GRAVE_KIND) rgb = [0.9, 0.89, 0.84];
+      else if (kind === GRAVE_KIND) rgb = [0.74, 0.78, 0.7];
       else if (kind === 22) rgb = [0.62, 0.6, 0.55];
       // A windmill's sails (`town::rural::plan_ticks`), over its roof.
       else if (kind === 23) rgb = [0.88, 0.84, 0.74];
@@ -1178,10 +1216,16 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       const inkEdge = (j: number) => ink && (j >= 8 || ((inks >> j) & 1) !== 0);
       // Fan triangles (0, k, k+1): the edge k..k+1 is always the polygon's; 0..1 only for the
       // first triangle, k+1..0 only for the last.
+      // A plot (kind 5) is often concave: ear-clipped, so no wedge crosses its notches (a fan would).
+      const ears = kind === 5 && m > 3 ? earClip(polys.verts, s0, m) : null;
       for (let k = 1; k + 1 < m; k++) {
-        const corners = [s0, s0 + k, s0 + k + 1];
+        const t = ears ? ears[k - 1] : [0, k, k + 1];
+        const corners = [s0 + t[0], s0 + t[1], s0 + t[2]];
         // Which edges are real, by the corner opposite each.
-        const real = [inkEdge(k), k + 1 === m - 1 && inkEdge(m - 1), k === 1 && inkEdge(0)];
+        const side = (x: number, y: number) => (Math.abs(x - y) === 1 ? inkEdge(Math.min(x, y)) : Math.abs(x - y) === m - 1 && inkEdge(m - 1));
+        const real = ears
+          ? [side(t[1], t[2]), side(t[2], t[0]), side(t[0], t[1])]
+          : [inkEdge(k), k + 1 === m - 1 && inkEdge(m - 1), k === 1 && inkEdge(0)];
         for (let c = 0; c < 3; c++) {
           pos[v * 2] = polys.verts[corners[c] * 2];
           pos[v * 2 + 1] = polys.verts[corners[c] * 2 + 1];
