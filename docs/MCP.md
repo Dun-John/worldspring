@@ -1116,7 +1116,7 @@ where a street is within 300 ft, on the grid when unturned, off squares.
 | `structure` | string | optional | `roofed` (default) or `ruin`. |
 | `near` | id, object or `[x_ft, y_ft]` | instead of a footprint | Find the nearest clear lot near this place (see above). |
 | `width_ft`, `depth_ft` | number | with `near` | The lot along the street and back from it, 10–400 ft. |
-| `clear` | boolean | optional | Default false. Take away the world's own (generated) buildings that overlap the footprint, in the same change (`remove_buildings` does the same by id; `restore_building` brings them back). Buildings drawn by hand in the way are still refused, naming them (`delete_feature` one first); streets, walls, squares, roads and water refuse as ever. With `near`: the nearest lot clear of everything but the world's own buildings, fronting a street as without it. |
+| `clear` | boolean | optional | Default false. Take away the world's own (generated) buildings that overlap the footprint, in the same change (`remove_buildings` does the same by id; `restore_building` brings them back, unless a building drawn by hand now stands over one: it is refused then, naming both). Buildings drawn by hand in the way are still refused, naming them (`delete_feature` one first); streets, walls, squares, roads and water refuse as ever. With `near`: the nearest lot clear of everything but the world's own buildings, fronting a street as without it. |
 
 Returns the site as `get_feature` does, plus `building` (its building id), `moved: {x_ft, y_ft, ft, why}` when
 the footprint snapped to the grid (or its point set where it fits) put it more than 5 ft from where it was asked
@@ -1153,19 +1153,23 @@ Read-only: whether a footprint (`poly`, `rect` or `circle`, with `snap`) is clea
 `create_building` checks it. `id` is the building being reshaped (it does not count against itself). `clear: true`
 counts the world's own buildings out, as `create_building clear` does. Returns
 `{ok, blockers, ...}`: with `ok: true` its point `x_ft`, `y_ft` and the `name` it would get for `func`; with `ok: false`
-a `reason` (the first blocker, worded as `create_building`'s refusal) and `nearest_clear`.
+a `reason` (the first blocker that stays, worded as `create_building`'s refusal) and `nearest_clear`; `would_remove` only beside `ok: true`.
 
 - `blockers`: `{items, found, truncated?}` (50 at most), each `{what, id?, name?, function?, settlement?: {id, name},
   at: [x, y], width_ft?, kind?}`. `what` is `building` (`id` `b:<layout>:<id>`, or `c:<n>` when drawn by hand, with
   `name` and `function`), `square` (`kind`: market, civic, quay, green, yard, ...), `street` (`width_ft`, `kind`:
   street, main street or approach road), `wall` (a hand-drawn one with its `c:` id), `road` (`id` `rd:`, `kind`:
-  the class, `width_ft`), `water` or `river`. `at` is a building's or square's middle, else the point of the street,
-  wall or road nearest the footprint, in whole feet. With `clear` the world's own buildings are not blockers.
+  the class, `width_ft`), `water` (`kind` sea or lake) or `river` (its `id` and `name` when it has them). `at` is a
+  building's middle, else the point of the square, street, wall or road nearest the footprint's middle, in whole
+  feet. With `clear` the world's own buildings are not blockers (a building a town edit added is: change the town
+  with `edit_town`). `truncated` is also true when more than 300 things were in the way and the scan stopped.
 - `nearest_clear` (not when `ok`): the same footprint, not turned, moved on 5-ft steps to the nearest spot that is
-  clear, up to 400 ft away: `{x_ft, y_ft, moved: {x_ft, y_ft, ft}, poly}` (`x_ft`, `y_ft` its new middle, `moved`
-  the shift and its length, `poly` the moved corners: pass them back as `poly` with `snap: false`), plus
-  `would_remove` with `clear`. It is `null` when there is none, with a `note`.
-- `would_remove` (with `clear`): `[{id, name, function}]`, the world's own buildings `create_building clear` would take away.
+  clear, up to 400 ft away: `{x_ft, y_ft, ft, poly}` (`x_ft`, `y_ft` its new middle, `ft` how far that is from the
+  middle asked about, `poly` the moved corners: pass them back as `poly` with `snap: false`), plus its own
+  `would_remove` with `clear`. A suggestion, not a move: nothing is changed. It is `null` when there is none (or the
+  footprint is in the sea), with a `note`.
+- `would_remove` (with `clear`, beside `ok: true`): `[{id, name, function}]`, the world's own buildings
+  `create_building clear` would take away. With `clear` over more than 300 buildings the check is refused.
 
 ```json
 { "name": "check_building_spot", "arguments": { "rect": { "x_ft": 412500, "y_ft": 380120, "width_ft": 50, "depth_ft": 30 }, "func": "inn" } }
@@ -1174,7 +1178,7 @@ a `reason` (the first blocker, worded as `create_building`'s refusal) and `neare
 
 ### `list_streets`
 Read-only: the streets, walls, squares and roads inside an area, as the map draws them (`create_building` and
-`check_building_spot` refuse a footprint on any of them). `within` (required): a box, polygon or circle, at most
+`check_building_spot` refuse a footprint on any of them). `within` (required): a box, polygon or circle whose bounding box is at most
 3,000 ft across (a larger one is refused). `what` (optional): `street`, `wall`, `square` or `road`. `limit` (default
 100, at most 1,000). Returns `{items, found, truncated?}`, settlement by settlement (streets, walls, squares), then the
 roads; points are whole feet.
@@ -1202,7 +1206,9 @@ build on; every other building keeps its id. Returns `removed` (the ids) and `co
 
 ### `restore_building`
 `id` or `ids` (`b:<layout>:<id>`; all or none): the buildings back as generated, whether taken away or changed (a
-rename stays). One id returns that building; several return `{ids, restored: [buildings]}`.
+rename stays). One id returns that building; several return `{ids, restored: [buildings]}`. Refused, nothing
+changing, when one would come back under a building drawn by hand (after `create_building clear`):
+`b:3:1186 would come back under c:21 (drawn by hand): delete_feature c:21 first`.
 
 ### Worlds with only drawn roads
 With the world parameter `generated_roads: false` (the app's World › Generate › People & places › Roads: Only

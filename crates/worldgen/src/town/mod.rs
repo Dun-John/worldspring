@@ -1237,6 +1237,8 @@ pub struct Shore<'a> {
     rect: [f64; 4],
     lattice_ft: f64,
     plan: std::cell::OnceCell<PlanGround<'a>>,
+    /// The rivers' curve samples, shared by every `in_river`.
+    rivers: crate::lod::rivers::ClearCache,
 }
 
 impl<'a> Shore<'a> {
@@ -1252,7 +1254,7 @@ impl<'a> Shore<'a> {
             })
             .collect();
         let lattice_ft = world.geom.spacing_ft(world.geom.first_refine_level.saturating_sub(1));
-        Shore { t0, pads, rect, lattice_ft, plan: std::cell::OnceCell::new() }
+        Shore { t0, pads, rect, lattice_ft, plan: std::cell::OnceCell::new(), rivers: Default::default() }
     }
 
     /// The drawn ground at `p` (world ft), without its fine detail.
@@ -1262,6 +1264,12 @@ impl<'a> Shore<'a> {
         let pad = self.pads.iter().fold(0.0f64, |m, &(x, y, r)| m.max(pad_weight(crate::core::sqrt((p[0] - x) * (p[0] - x) + (p[1] - y) * (p[1] - y)), r)));
         let g = plan.ground(p[0], p[1], true);
         if pad > 0.0 { g + plan.depth(p[0], p[1]) * pad } else { g }
+    }
+
+    /// Whether `p` is in a river channel or within 2 ft of its water.
+    pub fn in_river(&self, p: P) -> bool {
+        let q = crate::lod::rivers::clear_of_rivers_with(&self.t0.rivers, p[0], p[1], 2.0, self.t0.cell_ft, &self.rivers);
+        (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01
     }
 
     /// Standing water at `p` (world ft).

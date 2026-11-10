@@ -1925,7 +1925,7 @@
     const spot = await view.gen.buildingSpot(poly, opts.func, id);
     if (tool) tool.pending = null;
     if (!spot) return toast('The map could not answer: try again');
-    if ('error' in spot) return toast(spot.error.charAt(0).toUpperCase() + spot.error.slice(1));
+    if ('error' in spot) return toast((spot.short ?? spot.error).charAt(0).toUpperCase() + (spot.short ?? spot.error).slice(1));
     const name = build.name.trim();
     if (editing) {
       const c: Created = { id: editing.id, kind: 'building', x: spot.x, y: spot.y, name: name || editing.name, poly, ...opts };

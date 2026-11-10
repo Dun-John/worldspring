@@ -14,7 +14,7 @@ pub fn list() -> Vec<Value> {
     vec![json!({
         "name": "list_streets",
         "title": "Streets in an area",
-        "description": "Streets, walls, squares and world roads (rd:) in an area at most 3,000 ft across, per settlement, with width, kind and line (cut to the area). Returns {items, found}.",
+        "description": "Streets, walls, squares and world roads (rd:) in an area whose bounding box is at most 3,000 ft across, per settlement or site, with width, kind and line (cut to the area). Returns {items, found}.",
         "inputSchema": schema(json!({
             "within": area_light("Box [x0, y0, x1, y1], polygon [[x, y], ...] or circle {at, radius_ft}"),
             "what": { "type": "string", "enum": ["street", "wall", "square", "road"] },
@@ -36,7 +36,7 @@ async fn streets(app: &Shared, a: &Value) -> Result<Value, String> {
     let rect = o.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
     let across = (rect[2] - rect[0]).max(rect[3] - rect[1]);
     if across > MAX_ACROSS_FT {
-        return Err(format!("within: at most {MAX_ACROSS_FT} ft across, this one is {} ft; ask for a smaller box, polygon or circle", across.round()));
+        return Err(format!("within: its bounding box may be at most {MAX_ACROSS_FT} ft across, this one is {} ft; ask for a smaller box, polygon or circle", across.round()));
     }
     let what = a["what"].as_str().map(str::to_string);
     let items = app

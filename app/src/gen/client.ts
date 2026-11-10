@@ -129,7 +129,7 @@ export class GenClient {
 
   /** Whether a building drawn by hand can stand there (`id`: its created id), its point and a
    * name for it; null if the generator could not answer. */
-  buildingSpot(poly: [number, number][], func: string | undefined, id: string): Promise<{ x: number; y: number; name: string } | { error: string } | null> {
+  buildingSpot(poly: [number, number][], func: string | undefined, id: string): Promise<{ x: number; y: number; name: string } | { error: string; short?: string } | null> {
     return this.ask({ op: 'building', poly, func, id }).then((j) => JSON.parse(j));
   }
 
