@@ -10,6 +10,7 @@ import { ItemAtlas } from './itemAtlas';
 import { InteriorLayer, setUndergroundGrid, underProgram, warmUnderground, type InteriorStyle, type Move } from './InteriorLayer';
 import { precompile } from './precompile';
 import { Labels } from './Labels';
+import { BridgeMarks } from './BridgeMarks';
 import { ferryFade, laneFade, SeaLanes, seaLaneProgram } from './SeaLanes';
 import { MadeTracks } from './MadeTracks';
 import { SketchLayer } from './SketchLayer';
@@ -244,6 +245,7 @@ export class MapView {
   private lanes: SeaLanes | null = null;
   /** The ferries' water legs: their own layer, shown further in than the lanes. */
   private ferryLanes: SeaLanes | null = null;
+  private bridgeMarks: BridgeMarks | null = null;
   private placesRect: [number, number, number, number] | null = null;
   /** Bumped when buildings are changed by hand: an answer asked for before is dropped. */
   private placesEpoch = 0;
@@ -601,6 +603,12 @@ export class MapView {
     return { count: this.made.length, towns: this.towns.filter((t) => t.made).length, segments: this.madeTracks?.segments ?? 0, visible: !!this.madeTracks?.container.visible, made: this.made };
   }
 
+  /** The bridge marks as drawn last (for checks): how many, of how many crossings. */
+  get bridgeStats(): { drawn: number; total: number; visible: boolean } {
+    const b = this.bridgeMarks;
+    return { drawn: b?.drawn ?? 0, total: b?.total ?? 0, visible: !!b?.container.visible };
+  }
+
   /** The sea lanes as drawn last (for checks): segments, and the strength shown (0: hidden). */
   get laneStats(): { segments: number; alpha: number; visible: boolean; ferrySegments: number; ferryAlpha: number; ferryVisible: boolean } {
     const l = this.lanes;
@@ -923,6 +931,7 @@ export class MapView {
     this.labels?.destroy();
     this.lanes?.destroy();
     this.ferryLanes?.destroy();
+    this.bridgeMarks?.destroy();
     this.madeTracks?.destroy();
     this.exitBuilding();
     this.peek?.layer.destroy();
@@ -938,6 +947,7 @@ export class MapView {
     this.ferryLanes = new SeaLanes(overlay.sea_lanes ?? [], [geom.domain_ft / 2, geom.domain_ft / 2], true);
     this.ferryLanes.on = this.seaLanes;
     this.madeTracks = new MadeTracks(this.tiles.riverFrame);
+    this.bridgeMarks = new BridgeMarks(overlay.bridges ?? []);
     this.made = [];
     // The generators have the world's edits already; the labels take them now.
     this.edits = {};
@@ -956,6 +966,7 @@ export class MapView {
     const battle = this.makeBattle(geom, catalog);
     this.app.stage.addChild(this.tiles.container);
     this.app.stage.addChild(this.madeTracks.container);
+    this.app.stage.addChild(this.bridgeMarks.container);
     this.app.stage.addChild(this.lanes.container);
     this.app.stage.addChild(this.ferryLanes.container);
     this.app.stage.addChild(battle.container);
@@ -1384,6 +1395,7 @@ export class MapView {
       this.ferryLanes?.update(this.cam, this.interior ? 0 : ferryFade(level), level);
       // Tracks to the villages and towns added by hand: wherever the tiles' own roads show.
       this.madeTracks?.update(this.cam, this.tiles.container.visible && !this.interior);
+      this.bridgeMarks?.update(this.cam, this.tiles.container.visible && !this.interior);
       this.labels?.update(this.cam, now);
       this.sketchLayer?.update(this.cam);
       if (this.sewers) {

@@ -997,6 +997,51 @@ impl T0 {
         Preview { w, h, rgba, conflicts: s.conflicts }
     }
 
+    /// Where the roads as built cross a river, for region zoom's marks (overlay `bridges`): per
+    /// crossing x, y, the road's unit direction there, its class, kind (`CrossingKind`) and the
+    /// river's width (ft). Found as the battlemap finds them (`RiverNet::crossing_level`), narrowed
+    /// down along the stretch of road that meets the water.
+    pub fn bridge_marks(&self) -> Vec<[f64; 7]> {
+        let cache = crate::lod::rivers::CrossingCache::default();
+        let mut out = Vec::new();
+        for r in &self.roads.roads {
+            // The places along the road that meet the water, with the road's direction there.
+            let mut hits: Vec<([f64; 2], f64, [f64; 2])> = Vec::new();
+            for pair in r.pts.windows(2) {
+                let mut here = Vec::new();
+                self.narrow_crossing(pair[0], pair[1], &cache, &mut here);
+                let (dx, dy) = (pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]);
+                let l = crate::core::sqrt(dx * dx + dy * dy).max(1e-9);
+                hits.extend(here.into_iter().map(|(p, w)| (p, w, [dx / l, dy / l])));
+            }
+            // One mark a crossing: a run of hits close together is one, marked at its middle.
+            let mut k = 0;
+            while k < hits.len() {
+                let mut e = k + 1;
+                while e < hits.len() && (hits[e].0[0] - hits[e - 1].0[0]).abs() + (hits[e].0[1] - hits[e - 1].0[1]).abs() < 250.0 {
+                    e += 1;
+                }
+                let (p, _, d) = hits[(k + e - 1) / 2];
+                let w = hits[k..e].iter().fold(0.0f64, |a, h| a.max(h.1));
+                out.push([p[0], p[1], d[0], d[1], r.class as u8 as f64, roads::crossing_kind(r.class, w) as u8 as f64, w]);
+                k = e;
+            }
+        }
+        out
+    }
+
+    fn narrow_crossing(&self, a: [f64; 2], b: [f64; 2], cache: &crate::lod::rivers::CrossingCache, hits: &mut Vec<([f64; 2], f64)>) {
+        let Some((_, w)) = self.rivers.crossing_level(a, b, 0.0, self.cell_ft, cache) else { return };
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        if dx * dx + dy * dy < 40.0 * 40.0 {
+            hits.push(([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])], w));
+            return;
+        }
+        let m = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
+        self.narrow_crossing(a, m, cache, hits);
+        self.narrow_crossing(m, b, cache, hits);
+    }
+
     pub fn overlay_json(&self) -> String {
         let o = match &self.extra {
             Some(e) => serde_json::to_string(&e.overlay).expect("serializable"),
@@ -1007,7 +1052,8 @@ impl T0 {
                 // (The ferries' water legs are entries of their own, `c` 3.)
                 let (lanes, fer) = (sealanes::overlay_json(&self.sea_lanes), ferries::overlay_entries(self));
                 let lanes = if fer.is_empty() { lanes } else { format!("{}{}{fer}]", &lanes[..lanes.len() - 1], if lanes.len() > 2 { "," } else { "" }) };
-                format!("{head},\"sea_lanes\":{lanes}}}")
+                let bridges = self.bridge_marks().iter().map(|b| format!("[{:.0},{:.0},{:.2},{:.2},{},{},{:.0}]", b[0], b[1], b[2], b[3], b[4], b[5], b[6])).collect::<Vec<_>>().join(",");
+                format!("{head},\"sea_lanes\":{lanes},\"bridges\":[{bridges}]}}")
             }
             None => o,
         }

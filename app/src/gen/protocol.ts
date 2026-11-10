@@ -821,6 +821,8 @@ export interface Overlay {
   added?: [number, number][];
   /** Shipping between ports (`t0::SeaLane`), segments split at ports and where lanes meet. */
   sea_lanes?: SeaLane[];
+  /** Roads over rivers, for region zoom's bridge marks: `[x, y, dir x, dir y, road class, kind (0 bridge, 1 ford, 2 ferry), river width ft]`. */
+  bridges?: number[][];
 }
 
 /** A sea lane: `p` its line (world ft, x y pairs), `c` class (0 busy, 1 normal, 2 quiet), `f`
