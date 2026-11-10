@@ -39,6 +39,7 @@ pub mod fields;
 pub mod rural;
 // R5 towns
 pub mod cemetery;
+pub mod horses;
 // R5 towns: districts drawn by hand, and renames kept when a patch is laid out anew.
 mod districts;
 pub mod places;

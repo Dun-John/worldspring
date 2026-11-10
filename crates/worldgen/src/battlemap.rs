@@ -230,6 +230,9 @@ pub enum Kind {
     Lychgate = 103,
     Kurgan = 104,
     TombSlab = 105,
+    // R5 towns: a steppe town's horse pens and market (`town::horses`).
+    Horse = 106,
+    HitchingRail = 107,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -356,11 +359,12 @@ const KINDS: [Kind; 63] = [
 ];
 
 /// Kinds past `CATALOG`, with explicit ids (each lane's range, `docs/lane-common.md`).
-static MORE: [&[(Kind, KindInfo)]; 2] = [
+static MORE: [&[(Kind, KindInfo)]; 3] = [
     // v63 castles
     &kitchen::KINDS,
     // R5 towns
     &crate::town::cemetery::KINDS,
+    &crate::town::horses::KINDS,
 ];
 
 fn more() -> impl Iterator<Item = &'static (Kind, KindInfo)> {
