@@ -489,8 +489,10 @@ vec3 cave_look(vec3 col, vec2 p, float d, vec2 n) {
     if (uLook < 1.5) {
         col = mix(col, vec3(0.40, 0.50, 0.30), smoothstep(0.58, 0.62, vnoise(p * 0.2 + 31.0)) * 0.7);
     } else if (uLook < 2.5) {
-        float drift = vnoise(p * 0.17 + 7.0) + 0.3 * (1.0 - smoothstep(0.0, 1.6, d));
-        col = mix(col, vec3(0.82, 0.72, 0.52), smoothstep(0.66, 0.7, drift) * 0.75);
+        // (The noise turned off the squares and its lattice bent, so a drift's edge never runs straight.)
+        vec2 dq = mat2(0.8, 0.6, -0.6, 0.8) * p * 0.17 + 0.32 * vec2(sin(p.y * 0.61 + 1.3), sin(p.x * 0.53 + 4.1));
+        float drift = vnoise(dq + 7.0) + 0.3 * (1.0 - smoothstep(0.0, 1.6, d));
+        col = mix(col, vec3(0.82, 0.72, 0.52), smoothstep(0.655, 0.705, drift) * 0.72);
     } else {
         float frost = vnoise(p * 0.19 + 13.0) + 0.3 * (1.0 - smoothstep(0.0, 1.4, d));
         col = mix(col, vec3(0.8, 0.87, 0.92), smoothstep(0.64, 0.68, frost) * 0.7);
@@ -498,52 +500,72 @@ vec3 cave_look(vec3 col, vec2 p, float d, vec2 n) {
     return col;
 }
 
-// The green look's roots: a few bold ones a room, reaching out of the wall over the floor's edge, each a
-// flat brown shape in the sprites' ink outline, broad at the wall and tapering to a point as it bends,
-// most with one side root. One a cell (5 squares) at most, rooted where the wall passes near the cell's
-// point (so each is whole or not there at all); the cells round are looked at too, so none is cut off.
+// A tapered stroke from `a` (half width `ra`) to `b` (`rb`): signed distance, squares.
+float taperSeg(vec2 p, vec2 a, vec2 b, float ra, float rb) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h) - mix(ra, rb, h);
+}
+
+// The green look's roots: a few a room, crawling out of the wall and along the floor's edge as the sprites
+// draw them: a main root 1.8-2.8 squares long in three slightly crooked strokes, slanting off along the
+// wall and tapering to a point, one side root reaching out over the floor, one diving back into the rock
+// and a short one; flat mid brown inside a thin ink line (the sprites' `LINE_W`), a little wavy. One a cell
+// (5 squares) at most, rooted on the wall by the cell's point (so each is whole or not there at all); the
+// cells round are looked at too. Measured in the wall's frame here: `d` out from it (true only within
+// a square or so of a rough wall, where the field still slopes: so they keep to that band), along it
+// from the foot of the cell's point.
 vec3 caveRoots(vec3 col, vec2 p, float d, vec2 n, float px) {
     // (Only by a wall: away from one the field is flat, `n` none and `d` no longer a distance.)
-    if (d < 0.0 || d > 2.0 || gTrue < 0.01 || dot(n, n) < 0.5) return col;
+    if (d < 0.0 || d > 2.3 || gTrue < 0.01 || dot(n, n) < 0.5) return col;
     vec2 t = vec2(-n.y, n.x);
     float aa = max(px * 0.7, 1e-4);
-    // (The sprites' outline weight, `OUT_W` below.)
-    float lw = max(0.045, 1.2 * px);
+    float lw = max(0.025, 0.9 * px);
     float dist = 9.0;
     vec2 base = floor(p / 5.0);
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
             vec2 cc = base + vec2(float(i), float(j));
             float h = hash21(cc + 61.0);
-            if (h < 0.42) continue;
+            if (h < 0.45) continue;
             vec2 c = (cc + 0.2 + 0.6 * vec2(hash21(cc + 7.0), hash21(cc + 13.0))) * 5.0;
             vec2 r = p - c;
-            // (Where the wall's foot lies from the cell's point, along the normal: roots only on walls near it.)
-            if (abs(dot(r, n) - d) > 1.6) continue;
-            float len = 1.15 + 0.6 * hash21(cc + 19.0);
-            float bend = (hash21(cc + 23.0) - 0.5) * 0.9;
-            float k = d / len;
-            float s = dot(r, t) - bend * k * k - 0.08 * sin(d * 2.6 + h * 30.0);
-            float hw = mix(0.2, 0.024, clamp(k, 0.0, 1.0));
-            float dr = d > len ? length(vec2(s, d - len)) - 0.02 : abs(s) - hw;
-            // (A side root forking off halfway, to one side, thinner and shorter.)
-            float fork = 0.35 + 0.2 * hash21(cc + 29.0);
-            float side = hash21(cc + 31.0) < 0.5 ? -1.0 : 1.0;
-            float d1 = d - fork * len;
-            if (h > 0.55 && d1 > 0.0) {
-                float l1 = 0.5 * len;
-                float k1 = d1 / l1;
-                float s1 = s - side * 0.7 * d1;
-                float w1 = mix(0.1, 0.02, clamp(k1, 0.0, 1.0));
-                dr = min(dr, d1 > l1 ? length(vec2(s1, d1 - l1)) - 0.018 : abs(s1) - w1);
-            }
+            // (The cell's point near the wall here, else no root from it.)
+            if (abs(dot(r, n) - d) > 1.8) continue;
+            vec2 w = vec2(dot(r, t), d);
+            float len = 1.8 + 1.0 * hash21(cc + 19.0);
+            if (length(w) > len + 0.6) continue;
+            // (A little wavy, as drawn by hand.)
+            w += 0.045 * vec2(sin(w.y * 4.1 + h * 23.0), sin(w.x * 3.3 + h * 17.0));
+            float dir = hash21(cc + 31.0) < 0.5 ? -1.0 : 1.0;
+            float seg = len / 3.0;
+            float a0 = dir * (0.8 + 0.3 * hash21(cc + 23.0));
+            float a1 = clamp(a0 + dir * 0.15 + 0.4 * (hash21(cc + 29.0) - 0.5), -1.45, 1.45);
+            float a2 = clamp(a1 + dir * 0.15 + 0.4 * (hash21(cc + 37.0) - 0.5), -1.5, 1.5);
+            vec2 p0 = vec2(0.0, -0.15);
+            vec2 p1 = p0 + seg * vec2(sin(a0), cos(a0));
+            vec2 p2 = p1 + seg * vec2(sin(a1), cos(a1));
+            vec2 p3 = p2 + seg * vec2(sin(a2), cos(a2));
+            float dr = min(taperSeg(w, p0, p1, 0.2, 0.14), min(taperSeg(w, p1, p2, 0.14, 0.085), taperSeg(w, p2, p3, 0.085, 0.015)));
+            // Side roots: out over the floor from the first joint, back into the rock from the second, and
+            // a short one off the first stroke.
+            float s1 = a1 - dir * (0.95 + 0.3 * hash21(cc + 41.0));
+            float s2 = a2 + dir * (0.7 + 0.3 * hash21(cc + 43.0));
+            float s3 = a0 - dir * 0.7;
+            vec2 m0 = mix(p0, p1, 0.55);
+            dr = min(dr, taperSeg(w, p1, p1 + (0.5 + 0.2 * hash21(cc + 47.0)) * vec2(sin(s1), cos(s1)), 0.09, 0.012));
+            dr = min(dr, taperSeg(w, p2, p2 + (0.45 + 0.2 * hash21(cc + 53.0)) * vec2(sin(s2), cos(s2)), 0.07, 0.015));
+            dr = min(dr, taperSeg(w, m0, m0 + 0.34 * vec2(sin(s3), cos(s3)), 0.07, 0.012));
             dist = min(dist, dr);
         }
     }
-    float cover = (1.0 - smoothstep(-aa, aa, dist)) * gTrue;
-    float inner = (1.0 - smoothstep(-lw - aa, -lw + aa, dist)) * gTrue;
-    col = mix(col, INK, cover * 0.9);
-    return mix(col, vec3(0.47, 0.35, 0.23), inner);
+    // (Faded out only past where the field is flat: there `d` no longer grows.)
+    float keep = clamp(gTrue * 4.0, 0.0, 1.0);
+    float cover = (1.0 - smoothstep(-aa, aa, dist)) * keep;
+    float inner = (1.0 - smoothstep(-lw - aa, -lw + aa, dist)) * keep;
+    col = mix(col, INK, cover * 0.92);
+    return mix(col, vec3(0.56, 0.41, 0.25), inner);
 }
 
 // Slow ripples on water (0-1): light streaks wavering where two drifting noises cross, and now
@@ -1060,7 +1082,9 @@ void main() {
             // Natural floors: uneven rock lit from the NW, loose stones, rubble at the wall foot.
             float b0 = vnoise(p * 0.7);
             vec2 bg = vec2(vnoise(p * 0.7 + vec2(0.12, 0.0)) - b0, vnoise(p * 0.7 + vec2(0.0, 0.12)) - b0);
-            col *= 1.0 + clamp(dot(bg, uLight) * 3.2, -0.15, 0.15);
+            // (Softly: clamped hard, its lit and shaded sides met in straight-edged bands along the noise's lattice.)
+            float rl = dot(bg, uLight) / 0.06;
+            col *= 1.0 + 0.15 * rl / sqrt(1.0 + rl * rl);
             vec2 sc = q * 1.7;
             vec2 cid = floor(sc);
             vec2 off = vec2(hash21(cid), hash21(cid + 7.3)) * 0.6 + 0.2;
@@ -1092,8 +1116,8 @@ void main() {
         float up = uSquare > 0.5 ? max(smoothstep(2.0, 8.0, hf), gLedge) : 0.0;
         col *= mix(0.6 + 0.4 * smoothstep(0.0, 0.75, d), 0.9 + 0.1 * smoothstep(0.0, 0.2, d), up);
         col *= mix(mix(0.66, 1.0, smoothstep(0.35, 0.6, lit)), 1.0, up);
-        // (Roots over the wall's shade, so they keep their tone; not over water or a chasm.)
-        if (uLook > 0.5 && uLook < 1.5) col = mix(col, caveRoots(col, p, d, n, px), 1.0 - smoothstep(0.02, 0.3, gTerr));
+        // (Roots over the wall's shade, so they keep their tone; not over water, a chasm or a slope.)
+        if (uLook > 0.5 && uLook < 1.5) col = mix(col, caveRoots(col, p, d, n, px), (1.0 - smoothstep(0.02, 0.3, gTerr)) * (1.0 - gRamp));
         // Liquid down the channel.
         float l = here.g;
         if (uLiquid > 0.5) {
