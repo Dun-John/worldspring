@@ -215,6 +215,14 @@ impl Ground<'_, '_> {
         r <= 0.0 || (!contains(poly, c) && (0..m).all(|k| seg_dist(c, poly[k], poly[(k + 1) % m]) > r + margin) && !by_hull())
     }
 
+    /// Lane piece `a`-`b` off the green's grass: its centre line on or outside the ring's (a lane
+    /// may run on from the ring or up to it, its edge at the rim), the hull between the ring and
+    /// the roads (`off_green`'s) open to it.
+    fn lane_off_green(&self, a: P, b: P) -> bool {
+        let (c, r) = self.green;
+        r <= 0.0 || seg_dist(c, a, b) >= r + 0.5 * LANE_W - 1.0
+    }
+
     /// Clear of every lane and road by `margin` ft (their edges): its outline every 4 ft off the
     /// network roads as drawn, and off the lanes.
     fn off_lanes(&self, poly: &[P], margin: f64) -> bool {
@@ -423,6 +431,7 @@ pub(super) fn village(site: &Site, s: &Settlement, r: f64, rng: &mut Pcg32, l: &
         reach_out = ring(site, well, rr, &mut lanes, n_roads);
         let last = lanes.len();
         to_ring(site, well, rr, &mut lanes, n_roads, first..last);
+        lanes.retain(|(pts, _)| pts.len() >= 2);
     }
     if green > 0.0 {
         green_props(site, s.seed, well, green, &lanes[..n_roads], l);
@@ -689,6 +698,8 @@ const PROBE_FT: f64 = 5.0;
 const JOIN_NEAR_FT: f64 = 15.0;
 const JOIN_REACH_FT: f64 = 60.0;
 const JOIN_LATE_FT: f64 = 40.0;
+/// The longest stub past a crossroads cut there though a house stands by it, the house by a way still (ft).
+const CROSS_STUB_FT: f64 = 35.0;
 /// The hardest turn a lane takes to join a way (degrees), and the shallowest its T meets it at.
 const JOIN_TURN_DEG: f64 = 45.0;
 const T_DEG: f64 = 35.0;
@@ -1057,7 +1068,7 @@ fn settle_end(g: &mut Ground, l: &mut Layout, lanes: &mut [(Vec<P>, f64)], li: u
             let k = (dot(e, u) / len(e).max(1e-9)).abs();
             k > cos || k < sin
         });
-        square && !building_hit(l, &band, None) && !g.plot_hit(&band) && g.off_green(&band, 1.0)
+        square && !building_hit(l, &band, None) && !g.plot_hit(&band) && g.lane_off_green(a, b)
     };
     // (The farthest junction on it: it keeps to there at least.)
     let anchor = lanes.iter().enumerate().filter(|&(j, (q, _))| j != li && j >= n_roads && q.len() >= 2).flat_map(|(_, (q, _))| [q[0], q[q.len() - 1]]).filter(|&a| pts.windows(2).any(|s| seg_dist(a, s[0], s[1]) <= 1.0)).map(|a| (arc_at(&pts, a), a)).max_by(|x, y| x.0.total_cmp(&y.0));
@@ -1079,7 +1090,15 @@ fn settle_end(g: &mut Ground, l: &mut Layout, lanes: &mut [(Vec<P>, f64)], li: u
     let mut cross_at = None;
     for k in 1..pts.len() - 1 {
         acc += dist(pts[k - 1], pts[k]);
-        if total - acc <= JOIN_LATE_FT && acc >= floor - 0.5 && last.is_none_or(|s| s <= acc + 2.0) && on_way(lanes, li, pts[k]) {
+        // (Or its last house just past it, the stub on past the crossroads short: the house by it.)
+        let stub = total - acc <= CROSS_STUB_FT && {
+            // (Every house by the stub still by a way: the crossroads' or the lane short of it.)
+            let (kept, cut) = (&pts[..=k], &pts[k..]);
+            let by = |q: &[P], h: &[P], m: f64| q.windows(2).any(|s| poly_gap(h, s) < m);
+            let other = |h: &[P]| lanes.iter().enumerate().any(|(j, (q, w))| j != li && by(q, h, 0.5 * w + 10.0));
+            l.buildings.iter().filter(|b| by(cut, &b.poly, 0.5 * LANE_W + 12.0)).all(|b| by(kept, &b.poly, 0.5 * LANE_W + 10.0) || other(&b.poly))
+        };
+        if total - acc <= JOIN_LATE_FT && acc >= floor - 0.5 && (stub || last.is_none_or(|s| s <= acc + 2.0)) && on_way(lanes, li, pts[k]) {
             cross_at = Some(k);
             break;
         }
@@ -1110,6 +1129,18 @@ fn settle_end(g: &mut Ground, l: &mut Layout, lanes: &mut [(Vec<P>, f64)], li: u
     }
     if let Some((j, x)) = join_to(g.site, &pts, li, lanes, JOIN_LATE_FT, &|_, _| false, &clear) {
         let x = node(lanes, j, x);
+        lanes[li].0.push(x);
+        return true;
+    }
+    if let Some((j, m, x)) = bend_to(g.site, &pts, li, lanes, &clear) {
+        let x = node(lanes, j, x);
+        lanes[li].0.push(m);
+        lanes[li].0.push(x);
+        return true;
+    }
+    if let Some((j, on)) = ring_on(g, l, lanes, li, n_roads, &pts) {
+        let x = node(lanes, j, on[on.len() - 1]);
+        lanes[li].0.extend_from_slice(&on[..on.len() - 1]);
         lanes[li].0.push(x);
         return true;
     }
@@ -1223,6 +1254,13 @@ const RING_ROAD_FT: f64 = 8.0;
 const RING_N: usize = 24;
 /// The farthest the ring runs on to a road, or a lane on to the ring (ft).
 const RING_REACH_FT: f64 = 45.0;
+/// How far on round the circle a ring run's end left short of a road looks for one (`ring_on`, degrees).
+const RING_ON_DEG: f64 = 60.0;
+/// The shortest run of the ring kept that reaches no road at either end (ft).
+const RING_LONE_FT: f64 = 120.0;
+/// How far outside the ring a lane by the green that cannot meet it is cut back to (ft): no house
+/// laid by its end on the green's rim.
+const RING_OFF_FT: f64 = 32.0;
 
 /// Angle `a` round the green turned to the ring's nearest point (`ring`): a yard's front on the ring
 /// along its tangent there, square to the pieces either side by half their turn. As it was with no
@@ -1375,7 +1413,8 @@ fn ring(site: &Site, well: P, rr: f64, lanes: &mut Vec<(Vec<P>, f64)>, n_roads: 
             }
         }
         let pts: Vec<P> = head.iter().flat_map(|h| h.1.iter().rev().copied()).chain(run[lo..hi].iter().map(|&k| at(k).0)).chain(tail.iter().flat_map(|h| h.1.iter().copied())).collect();
-        if pts.len() < 2 || length(&pts) < 40.0 {
+        // (A run reaching no road at either end, short: none; it would be left joined to nothing.)
+        if pts.len() < 2 || length(&pts) < 40.0 || (head.is_none() && tail.is_none() && length(&pts) < RING_LONE_FT) {
             continue;
         }
         if let Some((j, _)) = head {
@@ -1415,12 +1454,205 @@ fn ring(site: &Site, well: P, rr: f64, lanes: &mut Vec<(Vec<P>, f64)>, n_roads: 
     reached
 }
 
+/// Where `join_to` finds no way straight on: a lane ending at the last of `own` (lane `me`) run on to
+/// a way within `JOIN_LATE_FT` in two pieces, a bend: the first turned from it by up to
+/// `JOIN_TURN_DEG`, 8-25 ft, the second turned from that by as much, meeting the way at `T_DEG` or
+/// squarer; each over dry ground, across no way, `clear` (the second short of the way). Not back onto
+/// the way it leaves near its start. The way, the bend's point and the point on the way.
+fn bend_to(site: &Site, own: &[P], me: usize, lanes: &[(Vec<P>, f64)], clear: &dyn Fn(P, P, f64) -> bool) -> Option<(usize, P, P)> {
+    let n = own.len();
+    if n < 2 {
+        return None;
+    }
+    let (p, p0) = (own[n - 1], own[0]);
+    let d = sub(p, own[n - 2]);
+    let d = mul(d, 1.0 / len(d).max(1e-9));
+    let (turn, t_min) = (libm::cos(JOIN_TURN_DEG.to_radians()), libm::sin(T_DEG.to_radians()));
+    let dry = |a: P, b: P| {
+        let m = (dist(a, b) / 4.0).ceil().max(1.0) as usize;
+        (1..=m).all(|k| {
+            let s = lerp(a, b, k as f64 / m as f64);
+            !site.wet(s) && !site.near_river(s, 6.0)
+        })
+    };
+    let crosses = |a: P, b: P| {
+        let vl = dist(a, b);
+        lanes.iter().enumerate().any(|(i, (q, _))| i != me && q.windows(2).any(|s| seg_cross(a, b, s[0], s[1]).is_some_and(|(t, _)| t * vl > 0.5 && t * vl < vl - 1.0)))
+            || own[..n - 1].windows(2).any(|s| seg_cross(a, b, s[0], s[1]).is_some_and(|(t, _)| t * vl > 0.5))
+    };
+    let mut cands: Vec<(f64, usize, P, P, f64)> = Vec::new();
+    for (j, (q, w)) in lanes.iter().enumerate() {
+        if j == me {
+            continue;
+        }
+        let parent = q.windows(2).any(|s| seg_dist(p0, s[0], s[1]) <= 1.0);
+        for s in q.windows(2) {
+            let (a, b) = (s[0], s[1]);
+            let el = dist(a, b);
+            if el < 1e-6 || seg_dist(p, a, b) > JOIN_LATE_FT {
+                continue;
+            }
+            let tu = mul(sub(b, a), 1.0 / el);
+            let k = (el / 5.0).ceil() as usize;
+            for x in std::iter::once(nearest_on(p, a, b)).chain((0..=k).map(|i| lerp(a, b, i as f64 / k as f64))) {
+                if dist(p, x) > JOIN_LATE_FT + 10.0 || (parent && dist(x, p0) < 45.0) {
+                    continue;
+                }
+                for deg in [15.0, 30.0, 45.0, -15.0, -30.0, -45.0] {
+                    let u = rotate(d, f64::to_radians(deg));
+                    for step in [8.0, 12.0, 18.0, 25.0] {
+                        let m = add(p, mul(u, step));
+                        let v = sub(x, m);
+                        let vl = len(v);
+                        if vl < 4.0 {
+                            continue;
+                        }
+                        let v = mul(v, 1.0 / vl);
+                        if dot(u, v) < turn || cross(v, tu).abs() < t_min {
+                            continue;
+                        }
+                        cands.push((step + vl, j, m, x, 0.5 * w));
+                    }
+                }
+            }
+        }
+    }
+    cands.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let ok = |m: P, x: P, hw: f64| dry(p, m) && dry(m, x) && !crosses(p, m) && !crosses(m, x) && clear(p, m, 0.0) && clear(m, x, hw);
+    cands.into_iter().take(60).find(|&(_, _, m, x, hw)| ok(m, x, hw)).map(|(_, j, m, x, _)| (j, m, x))
+}
+
+/// A run of the ring (lane `li`, its points `pts` toward the end) left short of a road once the village
+/// is laid out (`ring` gave way to a lane since cut back, or the run was cut back to its last house):
+/// on round the circle to where a road crosses it within `RING_ON_DEG`, else along its last piece to
+/// a road within `RING_REACH_FT` (at `RING_T_DEG` or squarer), as `ring`'s runs. Each piece over dry
+/// ground, across no way but its road at its end, its band clear of the buildings and plots; the last
+/// at `RING_T_LATE_DEG` or squarer to the road. The road and the points on, the last on it.
+fn ring_on(g: &Ground, l: &Layout, lanes: &[(Vec<P>, f64)], li: usize, n_roads: usize, pts: &[P]) -> Option<(usize, Vec<P>)> {
+    let (well, green) = g.green;
+    let n = pts.len();
+    if green <= 0.0 || n < 2 || !on_ring(pts, well, green + 0.5 * LANE_W) {
+        return None;
+    }
+    let rr = green + 0.5 * LANE_W;
+    let (e, prev) = (pts[n - 1], pts[n - 2]);
+    let r_e = sub(e, well);
+    let dir = if cross(r_e, sub(e, prev)) >= 0.0 { 1.0 } else { -1.0 };
+    let a0 = libm::atan2(r_e[1], r_e[0]);
+    let on = |b: f64| (dir * (b - a0)).rem_euclid(std::f64::consts::TAU);
+    // (A piece from `a` to `b`, the last onto road `j` (along `tg`) or none.)
+    let piece_ok = |a: P, b: P, last: Option<(usize, P)>| {
+        let v = sub(b, a);
+        let vl = len(v);
+        if vl < 1e-6 {
+            return false;
+        }
+        let u = mul(v, 1.0 / vl);
+        if let Some((_, tg)) = last
+            && cross(u, mul(tg, 1.0 / len(tg).max(1e-9))).abs() < libm::sin(RING_T_LATE_DEG.to_radians())
+        {
+            return false;
+        }
+        let m = (vl / 4.0).ceil().max(1.0) as usize;
+        // (Onto a road: up to its bridge's foot, the bank by the road.)
+        let bank = if last.is_some() { 1.0 } else { 6.0 };
+        let dry = (1..=m).all(|k| {
+            let s = lerp(a, b, k as f64 / m as f64);
+            !g.site.wet(s) && !g.site.near_river(s, bank)
+        });
+        let onto = |w: usize| last.is_some_and(|l| l.0 == w);
+        let past = |w: usize, s: &[P]| seg_cross(a, b, s[0], s[1]).is_none_or(|(t, _)| onto(w) || t * vl < 0.5 || t * vl > vl - 1.0);
+        let clear = lanes.iter().enumerate().all(|(w, (q, _))| w == li || q.windows(2).all(|s| past(w, s)));
+        let short = last.map_or(0.0, |(j, _)| 0.5 * lanes[j].1 + 2.0);
+        let band = if vl - short > 0.5 { quad(a, u, LANE_W, vl - short) } else { Vec::new() };
+        dry && clear && g.lane_off_green(a, b) && (band.is_empty() || (!building_hit(l, &band, None) && !g.plot_hit(&band)))
+    };
+    // (Where the roads cross the circle ahead within `RING_ON_DEG`, the nearest first.)
+    let mut rims: Vec<(f64, usize, P, P)> = Vec::new();
+    for j in 0..n_roads {
+        for s in lanes[j].0.windows(2) {
+            let (w, ev) = (sub(s[0], well), sub(s[1], s[0]));
+            let (qa, qb, qc) = (dot(ev, ev), dot(w, ev), dot(w, w) - rr * rr);
+            let disc = qb * qb - qa * qc;
+            if qa < 1e-9 || disc < 0.0 {
+                continue;
+            }
+            for t in [(-qb - crate::core::sqrt(disc)) / qa, (-qb + crate::core::sqrt(disc)) / qa] {
+                if (0.0..=1.0).contains(&t) {
+                    let x = add(s[0], mul(ev, t));
+                    let b = libm::atan2(x[1] - well[1], x[0] - well[0]);
+                    if on(b) > 1e-3 && on(b) <= RING_ON_DEG.to_radians() {
+                        rims.push((on(b), j, x, ev));
+                    }
+                }
+            }
+        }
+    }
+    rims.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let step = std::f64::consts::TAU / RING_N as f64;
+    // (The ring's own points on from `e` short of `upto` (radians on), on its lattice.)
+    let lattice = |upto: f64| -> Vec<P> {
+        let k0 = if dir > 0.0 { crate::core::floor(a0 / step) + 1.0 } else { crate::core::ceil(a0 / step) - 1.0 };
+        (0..RING_N as i64).map(|i| (k0 + dir * i as f64) * step).take_while(|&a| on(a) < upto - 0.02).filter(|&a| on(a) > 0.02).map(|a| add(well, polar_pt(rr, a))).collect()
+    };
+    // (A path on: every piece fine, the last onto road `j` along `tg`.)
+    let path_ok = |path: &[P], j: usize, tg: P| {
+        let mut from = e;
+        path.iter().enumerate().all(|(i, &q)| {
+            let ok = piece_ok(from, q, (i == path.len() - 1).then_some((j, tg)));
+            from = q;
+            ok
+        })
+    };
+    if let Some(&(b, j, x, tg)) = rims.first() {
+        let mut path = lattice(b);
+        path.push(x);
+        if path_ok(&path, j, tg) {
+            return Some((j, path));
+        }
+        // (Else off the ring short of it to the road's nearest point, turned by up to `JOIN_TURN_DEG`:
+        // a bridge's foot where the road crosses the river there.)
+        let ring_pts = &path[..path.len() - 1];
+        for k in (0..=ring_pts.len()).rev() {
+            let (q, back) = if k == 0 { (e, prev) } else { (ring_pts[k - 1], if k == 1 { e } else { ring_pts[k - 2] }) };
+            let Some((f, ftg)) = lanes[j].0.windows(2).map(|s| (nearest_on(q, s[0], s[1]), sub(s[1], s[0]))).min_by(|x, y| dist(q, x.0).total_cmp(&dist(q, y.0))) else { continue };
+            let (u, v) = (sub(q, back), sub(f, q));
+            if len(v) > RING_REACH_FT || len(v) < 1.0 || dot(u, v) < libm::cos(JOIN_TURN_DEG.to_radians()) * len(u) * len(v) {
+                continue;
+            }
+            let mut path: Vec<P> = ring_pts[..k].to_vec();
+            path.push(f);
+            if path_ok(&path, j, ftg) {
+                return Some((j, path));
+            }
+        }
+    }
+    // (Straight on along its last piece to the first road it meets.)
+    let d = mul(sub(e, prev), 1.0 / dist(e, prev).max(1e-9));
+    let far = add(e, mul(d, RING_REACH_FT));
+    let mut best: Option<(f64, usize, P, P)> = None;
+    for j in 0..n_roads {
+        for s in lanes[j].0.windows(2) {
+            if let Some((t, _)) = seg_cross(e, far, s[0], s[1])
+                && t * RING_REACH_FT > 0.5
+                && best.is_none_or(|b| t < b.0)
+            {
+                best = Some((t, j, lerp(e, far, t), sub(s[1], s[0])));
+            }
+        }
+    }
+    let (_, j, x, tg) = best?;
+    (cross(d, mul(tg, 1.0 / len(tg).max(1e-9))).abs() >= libm::sin(RING_T_DEG.to_radians()) && piece_ok(e, x, Some((j, tg)))).then(|| (j, vec![x]))
+}
+
 /// The lanes ending by the green (cut `RING_CLEAR_FT` outside the ring by `outside`, or left there)
 /// run on to it (`ring`, lanes `ring`): straight on, else turned toward the green's middle by up to
 /// 45°, to meet it at `RING_T_DEG` or squarer within `RING_REACH_FT`, over dry ground and across no
 /// way; else the same from up to 40 ft back along it (a lane running by the green, not at it); else
 /// all that at `RING_T_LATE_DEG`. A node
-/// of the ring's there. Else the end is left to `settle_ends`.
+/// of the ring's there. Else it is cut back to `RING_OFF_FT` outside the ring (`off_rim`: no house is
+/// laid by its end on the green's rim), or dropped where too little is left and no lane meets it;
+/// else left to `settle_ends`.
 fn to_ring(site: &Site, well: P, rr: f64, lanes: &mut [(Vec<P>, f64)], n_roads: usize, ring: std::ops::Range<usize>) {
     let rc = rr + RING_CLEAR_FT;
     for li in n_roads..ring.start {
@@ -1495,9 +1727,30 @@ fn to_ring(site: &Site, well: P, rr: f64, lanes: &mut [(Vec<P>, f64)], n_roads: 
                     cut.reverse();
                 }
                 lanes[li].0 = cut;
+            } else if let Some(mut cut) = off_rim(&pts, well, rr, junction) {
+                // (It cannot meet the ring: back out of the green's reach, no house laid by its rim.)
+                if !tail {
+                    cut.reverse();
+                }
+                lanes[li].0 = cut;
+            } else if junction <= 0.0 && dist(e, well) <= rr + RING_OFF_FT {
+                // (Too little of it off the green's rim, nothing on it: dropped.)
+                lanes[li].0.clear();
             }
         }
     }
+}
+
+/// A lane by the green (`pts` toward its end) that cannot meet the ring (centre line `rr` round `well`)
+/// cut back to where it is `RING_OFF_FT` outside it, but not short of its last junction (`junction` ft
+/// along) nor to under 25 ft: the lane then, if cut.
+fn off_rim(pts: &[P], well: P, rr: f64, junction: f64) -> Option<Vec<P>> {
+    let total = length(pts);
+    let mut at = total;
+    while at > 0.0 && dist(point_along(pts, at).0, well) <= rr + RING_OFF_FT {
+        at -= 2.0;
+    }
+    (at < total && at >= 25.0 && at >= junction + 1.0).then(|| cut_at(pts, at))
 }
 
 /// How far a plot's hedge or fence keeps off a building it does not hold (ft): a run nearer reads
@@ -2206,7 +2459,7 @@ pub(super) fn spare_ok(site: &Site, l: &Layout, poly: &[P]) -> bool {
         let (c, r) = (centroid(&g.pts), dist(centroid(&g.pts), g.pts[0]));
         !contains(poly, c) && edges().all(|e| seg_dist(c, e[0], e[1]) > r + 2.0)
     });
-    lanes_ok && roads_ok && green_ok && l.crofts.iter().all(|p| !overlaps_or_crosses(&p.pts, poly))
+    lanes_ok && roads_ok && green_ok && l.crofts.iter().all(|p| !overlaps_or_crosses(&p.pts, poly) && poly_gap(&p.pts, poly) >= CLEAR_FT)
 }
 
 /// The way the lane or road nearest `c` runs (within 80 ft) in a village: a house `assign_functions`
