@@ -64,6 +64,8 @@ const UNDER: [string, number, number][] = [
   ['iron_maiden', 1, 1], ['stocks', 2, 1], ['cage', 2, 2], ['rack', 1, 2], ['weapon_rack', 1, 1], ['chest', 1, 1], ['hoard', 1, 1],
   ['dais', 3, 2], ['fountain', 2, 2], ['statue', 1, 1], ['pillar', 1, 1], ['sacks', 1, 1], ['bookshelf', 1, 2], ['rug', 2, 3],
   ['table', 1, 2], ['crate', 1, 1], ['barrel', 1, 1], ['altar', 2, 1], ['glyph', 2, 2], ['collapsed_wall', 2, 1],
+  ['throne', 1, 1], ['chair_of_office', 1, 1], ['steps', 1, 1], ['climb_ladder', 1, 1], ['wall_stub', 3, 1], ['wall_stub', 2, 1], ['fallen_column', 3, 1],
+  ['arcane_workbench', 2, 1], ['arcane_focus', 1, 1], ['bone_mound', 2, 2], ['totem', 1, 1], ['scaffold', 3, 2], ['cracked_floor', 1, 1],
 ];
 
 const LABEL: TextStyleOptions = { fontFamily: 'Georgia, serif', fontSize: 13, fill: 0x2a2219 };

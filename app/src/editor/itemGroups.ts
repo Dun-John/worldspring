@@ -29,23 +29,23 @@ const BY_GROUP: Record<string, string[]> = {
   'Beds & seating': ['bed', 'cot', 'bedroll', 'yurt_pallet', 'floor_cushion', 'bench', 'pew', 'chair', 'couch', 'booth_seat', 'throne', 'dais', 'stage'],
   'Tables & counters': ['table', 'long_table', 'desk', 'booth_table', 'bar', 'counter', 'display', 'sideboard'],
   Storage: ['chest', 'painted_chest', 'wardrobe', 'shelf', 'bookcase', 'bookshelf', 'barrel', 'keg_rack', 'crate', 'sacks', 'weapon_rack', 'hoard', 'powder'],
-  'Kitchen & craft': ['hearth', 'yurt_hearth', 'oven', 'forge', 'anvil', 'workbench', 'cauldron', 'alchemy_bench', 'vat', 'bucket', 'bath', 'telescope'],
+  'Kitchen & craft': ['hearth', 'yurt_hearth', 'oven', 'forge', 'anvil', 'workbench', 'cauldron', 'alchemy_bench', 'vat', 'bucket', 'bath', 'telescope', 'arcane_workbench'],
   'Great hall': [
     'throne_dais', 'low_dais', 'chair_of_office', 'high_table', 'carpet_runner', 'tapestry', 'wall_banner', 'standing_banner', 'font', 'cloister_well',
     'dance_floor', 'harpsichord', 'musicians_corner', 'refreshment_table', 'garden_path',
   ],
   'Guild & civic': ['council_table', 'counting_desk', 'strongbox', 'job_board', 'guild_arms'],
   'Stables, yard & roof': ['stable_stall', 'water_jar', 'planter', 'washing_line', 'roof_dome'],
-  'Worship & tombs': ['altar', 'side_altar', 'god_statue', 'candle_stand', 'carved_screen', 'screen_gate', 'statue', 'sarcophagus', 'urn', 'coffin', 'effigy', 'niche', 'offering', 'glyph', 'bell', 'fountain'],
+  'Worship & tombs': ['altar', 'side_altar', 'god_statue', 'candle_stand', 'carved_screen', 'screen_gate', 'statue', 'sarcophagus', 'urn', 'coffin', 'effigy', 'niche', 'offering', 'glyph', 'bell', 'fountain', 'totem', 'arcane_focus'],
   'Light & fire': ['brazier', 'candles', 'sconce', 'lantern', 'campfire'],
   'Prison & grim': ['cage', 'chains', 'iron_maiden', 'stocks', 'rack'],
   'Cave & nature': ['stalagmite', 'rock_column', 'boulder', 'crystal', 'fungus', 'mushroom', 'web', 'guano', 'moss', 'pool', 'nest', 'ice', 'ice_sheet', 'basalt', 'obsidian', 'sulfur', 'glass_pool'],
   'Mine & works': ['timber', 'rail', 'ore_cart', 'ore_vein', 'tools', 'winch'],
-  'Remains & clutter': ['bones', 'skeleton', 'skulls', 'rubble', 'collapsed_wall', 'debris', 'cobweb', 'banner', 'rug', 'rat_nest', 'scorched'],
-  'Traps & hazards': ['trap', 'pit', 'cave_in', 'vent', 'lava'],
+  'Remains & clutter': ['bones', 'skeleton', 'skulls', 'rubble', 'collapsed_wall', 'debris', 'cobweb', 'banner', 'rug', 'rat_nest', 'scorched', 'wall_stub', 'fallen_column', 'bone_mound'],
+  'Traps & hazards': ['trap', 'pit', 'cave_in', 'vent', 'lava', 'cracked_floor'],
   'Locks & keys': ['key'],
   Terrain: ['water_shallow', 'water_deep', 'chasm', 'rubble_slope', 'rope_bridge', 'stone_bridge', 'stepping_stone'],
-  'Ways & fixtures': ['exit', 'up', 'down', 'tunnel', 'ladder', 'pipe', 'well', 'trapdoor', 'spiral_stair', 'link_down', 'pillar', 'barricade'],
+  'Ways & fixtures': ['exit', 'up', 'down', 'tunnel', 'ladder', 'pipe', 'well', 'trapdoor', 'spiral_stair', 'link_down', 'pillar', 'barricade', 'steps', 'climb_ladder', 'platform', 'balcony', 'scaffold'],
 };
 
 /** Kind (building furniture or underground prop) → its group in the pickers. */

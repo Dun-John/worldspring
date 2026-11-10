@@ -27,7 +27,10 @@ const SQUARE_FT = 5;
 /** Underground props drawn against the wall beside them (their look depends on its side). */
 export const ON_WALL = new Set(['tunnel', 'cobweb', 'ore_vein', 'niche', 'chains', 'sconce', 'banner', 'pipe', 'ladder']);
 /** Underground props with a back against a wall (a dais's throne; a collapsed wall, the wall it fell from). */
-export const BACKED = new Set(['dais', 'collapsed_wall']);
+export const BACKED = new Set(['dais', 'collapsed_wall', 'throne', 'steps', 'climb_ladder', 'arcane_workbench']);
+/** Underground props sharing a building furniture kind's name but drawn their own way below ground (a boss's stone
+ * throne); in a building, still the furniture. */
+const OWN_BELOW = new Set(['throne']);
 /** A prop on a curving wall: the wall's point (grid), the turn from north to its rock side, that turn
  * as one of 16 steps, and the light for its look drawn unturned. */
 interface WallAnchor {
@@ -71,12 +74,13 @@ const SHARED: Record<string, string> = {
   chest: 'chest', barrel: 'barrel', crate: 'crate', table: 'table', rug: 'rug', altar: 'altar', statue: 'statue', pillar: 'pillar',
   cage: 'cage', rack: 'rack', weapon_rack: 'weapon_rack', cot: 'cot', sarcophagus: 'sarcophagus', winch: 'winch', trapdoor: 'trapdoor',
   bookshelf: 'bookcase', desk: 'desk', long_table: 'long_table', vat: 'vat', anvil: 'anvil', forge: 'forge', hearth: 'hearth', keg_rack: 'keg_rack',
+  chair_of_office: 'chair_of_office',
 };
 /** The kind a building's furniture or an underground prop is drawn as with the furniture's drawing
  * (in a building: everything but the indoor props, drawn as underground); none for the rest. */
 export function sharedKind(kind: string, underground: boolean): string | undefined {
   if (underground) return SHARED[kind];
-  return VARIED.has(kind) || !UNDER_DRAWN.has(kind) ? kind : undefined;
+  return VARIED.has(kind) || !UNDER_DRAWN.has(kind) || OWN_BELOW.has(kind) ? kind : undefined;
 }
 /** Props scattered differently per placement: one of four variants, picked by position. */
 export const SCATTERED = new Set(['boulder', 'guano', 'moss', 'rubble', 'debris', 'sulfur', 'ore_vein', 'nest', 'rat_nest']);
