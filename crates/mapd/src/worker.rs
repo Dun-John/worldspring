@@ -3,6 +3,7 @@
 //! happens on this one thread; handlers send it closures and await their results. Between
 //! jobs it lays out every settlement ahead of time, so searching businesses is quick.
 
+use std::collections::HashMap;
 use std::sync::mpsc;
 
 use worldgen::pipeline::Executor;
@@ -72,17 +73,18 @@ impl Gen {
             .collect();
         let before = old.t0.settlements.len();
         let (mut t0, followed) = remap::remake(&old.world, &old.t0, &new, &gone);
-        let (mut kept, mut parked, mut gone_n, mut moved) = (0, 0, 0, 0);
+        let (mut kept, mut parked, mut gone_n, mut moved, mut vanished, mut aside) = (0, 0, 0, 0, Vec::new(), 0);
         let all_stayed = followed.is_none();
         if let Some(f) = followed {
-            (kept, parked, gone_n, moved) = (f.kept, f.parked, f.removed, f.moved.len());
+            (kept, parked, gone_n, moved, vanished, aside) = (f.kept, f.parked, f.removed, f.moved.len(), f.vanished, f.aside);
             new.file.edits = f.edits;
             // (The edits followed: T0 takes them as they are now.)
             t0.apply_edits(&new);
         }
         let after = t0.settlements.len();
+        let changed = Changed::of(&old.t0, &t0);
         swap(new.hash, &new.file);
-        let out = Remade { file: new.file.clone(), hash: new.hash, gone, kept, parked, removed: gone_n, moved, all_stayed, before, after, seconds: started.elapsed().as_secs_f64() };
+        let out = Remade { file: new.file.clone(), hash: new.hash, gone, kept, parked, removed: gone_n, moved, vanished, aside, changed, all_stayed, before, after, seconds: started.elapsed().as_secs_f64() };
         self.ex = Some(Executor::from_parts(new, t0));
         self.warm = 0;
         println!("mapd: world remade in {:.1} s", out.seconds);
@@ -112,11 +114,45 @@ pub struct Remade {
     pub parked: usize,
     pub removed: usize,
     pub moved: usize,
+    /// Features with changes on them gone with nothing in their place: their `aside` changes
+    /// kept under `gone:` ids.
+    pub vanished: Vec<remap::Vanished>,
+    pub aside: usize,
+    pub changed: Changed,
     /// No change had to follow its place: every one stayed on it as it was.
     pub all_stayed: bool,
     pub before: usize,
     pub after: usize,
     pub seconds: f64,
+}
+
+/// How much of the map a remake changed: named features (the overlay's, the hand-made `c:` left
+/// out) before and after, those with the same id in both, those of them named otherwise, and the
+/// world's own settlements standing where they stood (the same id: it is keyed by the spot).
+#[derive(serde::Serialize)]
+pub struct Changed {
+    pub features_before: usize,
+    pub features_after: usize,
+    pub features_same_id: usize,
+    pub features_renamed: usize,
+    pub settlements_in_place: usize,
+}
+
+impl Changed {
+    fn of(a: &worldgen::t0::T0, b: &worldgen::t0::T0) -> Changed {
+        let list = |t: &worldgen::t0::T0| -> HashMap<String, (&'static str, String)> {
+            t.extra.as_ref().map_or_else(HashMap::new, |e| e.overlay.features.iter().filter(|f| !f.id.starts_with("c:")).map(|f| (f.id.clone(), (f.kind, f.name.clone()))).collect())
+        };
+        let (fa, fb) = (list(a), list(b));
+        let same: Vec<(&(&str, String), &(&str, String))> = fa.iter().filter_map(|(id, x)| Some((x, fb.get(id)?))).collect();
+        Changed {
+            features_before: fa.len(),
+            features_after: fb.len(),
+            features_same_id: same.len(),
+            features_renamed: same.iter().filter(|(x, y)| x.1 != y.1).count(),
+            settlements_in_place: same.iter().filter(|(x, y)| x.0 == y.0 && matches!(x.0, "metropolis" | "city" | "town" | "village")).count(),
+        }
+    }
 }
 
 fn set_edits(ex: &mut Executor, edits: Edits) {

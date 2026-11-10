@@ -347,8 +347,9 @@ impl Ctx {
     /// Edits made on the world before following their places into this one, remade
     /// (`t0::remap::follow_into`). `input`: `{edits, before: {features, first_created,
     /// layout_ids}, was: [[layout, print]…] (remake_prints_json), gone: [{id, name, li}…], played:
-    /// [layout…]}`. Returns `{followed: null | {ops, kept, parked, removed, moved}, targets}`
-    /// (`ops`: what turns `edits` into those followed; `moved`: features' `[old, new]` ids;
+    /// [layout…]}`. Returns `{followed: null | {ops, kept, parked, removed, moved, vanished},
+    /// targets}` (`ops`: what turns `edits` into those followed; `moved`: features' `[old, new]`
+    /// ids; `parked` counts those of `vanished` features, set aside under `gone:` ids, too;
     /// `targets`: where each of `played` goes, or null), or `{error}`.
     pub fn follow_json(&self, input: &str) -> String {
         use worldgen::t0::remap;
@@ -369,7 +370,7 @@ impl Ctx {
             Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
         };
         let (followed, targets) = remap::follow_into(&self.world, t0, &a.edits, &a.before, &a.was, &a.gone, &a.played);
-        let followed = followed.map(|f| serde_json::json!({ "ops": a.edits.diff(&f.edits), "kept": f.kept, "parked": f.parked, "removed": f.removed, "moved": f.moved }));
+        let followed = followed.map(|f| serde_json::json!({ "ops": a.edits.diff(&f.edits), "kept": f.kept, "parked": f.parked + f.aside, "removed": f.removed, "moved": f.moved, "vanished": f.vanished }));
         serde_json::json!({ "followed": followed, "targets": targets }).to_string()
     }
 

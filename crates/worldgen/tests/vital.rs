@@ -4533,7 +4533,7 @@ fn a_pin_takes_only_the_changes_at_its_spot() {
     assert_eq!(e.renames.get(&now).map(String::as_str), Some("Keepsake"), "the rename stayed behind ({id} -> {now})");
     assert!(e.notes.contains_key(&now), "the notes stayed behind");
     // A new pin far from a vanished town, and one on the spot of a vanished village.
-    let place = |id: &str, kind: &str, x: f64, extent_mi: f64| Place { id: id.into(), kind: kind.into(), x, y: 0.0, extent_ft: extent_mi * 5280.0 };
+    let place = |id: &str, kind: &str, x: f64, extent_mi: f64| Place { id: id.into(), kind: kind.into(), x, y: 0.0, extent_ft: extent_mi * 5280.0, name: String::new() };
     let before = Places { features: vec![place("town:a", "town", 0.0, 12.0), place("village:b", "village", 400_000.0, 5.0)], ..Default::default() };
     let pinned = vec![Pinned { id: "town:n".into(), name: Some("Newhold".into()) }, Pinned { id: "town:m".into(), name: Some("Highmoor".into()) }];
     let after = Places { features: vec![place("town:n", "town", 132_000.0, 12.0), place("town:m", "town", 401_000.0, 12.0)], pinned, ..Default::default() };
@@ -4544,7 +4544,52 @@ fn a_pin_takes_only_the_changes_at_its_spot() {
     }
     let f = remap::follow(&edits, &before, &after, &|_, _| false, &[]).expect("the village's changes moved");
     assert!(!f.edits.renames.contains_key("town:n") && !f.edits.notes.contains_key("town:n"), "a pin 25 mi off took a vanished town's changes");
-    assert_eq!(f.edits.renames.get("town:a").map(String::as_str), Some("Keepsake"), "the vanished town's rename was lost");
+    let kept_as = |id: &str| f.vanished.iter().find(|v| v.id == id).map(|v| v.at.clone()).unwrap_or_default();
+    assert_eq!(f.edits.renames.get(&kept_as("town:a")).map(String::as_str), Some("Keepsake"), "the vanished town's rename was lost");
     assert!(f.edits.notes.contains_key("town:m"), "the pin on the village's spot didn't take its notes");
-    assert!(!f.edits.renames.contains_key("town:m") && f.edits.renames.get("village:b").map(String::as_str) == Some("Lowmere"), "a rename won over the pin's name");
+    assert!(!f.edits.renames.contains_key("town:m") && f.edits.renames.get(&kept_as("village:b")).map(String::as_str) == Some("Lowmere"), "a rename won over the pin's name");
+}
+
+/// A remade world never drops a change without saying so (M11): a change on a feature the remade
+/// world has no more, with nothing in its place, is set aside under a `gone:` id (listed with what
+/// was made on it, as a settlement taken away is), never left on an id that names nothing nor
+/// handed to a neighbour that stood there before; and
+/// when the feature comes back (the stroke taken back), its changes come back to it.
+#[test]
+fn a_remade_world_never_drops_a_change() {
+    use worldgen::t0::remap::{self, Place, Places};
+    use worldgen::world::{Note, NpcPlace};
+    let place = |id: &str, kind: &str, x: f64, name: &str| Place { id: id.into(), kind: kind.into(), x, y: 0.0, extent_ft: 6.0 * 5280.0, name: name.into() };
+    let before = Places { features: vec![place("town:a", "town", 0.0, "Ashford"), place("village:b", "village", 100_000.0, "Brindle"), place("range:c", "range", 300_000.0, "Grey Peaks"), place("town:y", "town", 30_000.0, "Yarrow")], ..Default::default() };
+    // (Everything vanished: the nearest new town of the remade world is 115 mi off; the town 6 mi
+    // off stood there before, a neighbour.)
+    let after = Places { features: vec![place("town:z", "town", 607_200.0, "Zell"), place("town:y", "town", 30_000.0, "Yarrow")], ..Default::default() };
+    let mut edits = worldgen::world::Edits::default();
+    edits.renames.insert("town:a".into(), "Keepsake".into());
+    edits.notes.insert("village:b".into(), Note { text: "the miller lies".into(), ..Default::default() });
+    edits.hidden.insert("range:c".into());
+    let mut npc: worldgen::world::Npc = serde_json::from_value(serde_json::json!({ "name": "Mara" })).unwrap();
+    npc.location = Some(NpcPlace { id: "village:b".into(), ..Default::default() });
+    edits.npcs.insert("n1".into(), npc);
+    let f = remap::follow(&edits, &before, &after, &|_, _| false, &[]).expect("changes on vanished places were left as they were");
+    let named = |e: &worldgen::world::Edits| {
+        let mut ids: Vec<String> = e.renames.keys().chain(e.notes.keys()).chain(e.hidden.iter()).cloned().collect();
+        ids.extend(e.npcs.values().filter_map(|n| n.location.as_ref().map(|l| l.id.clone())));
+        ids
+    };
+    for id in named(&f.edits) {
+        assert!(id.starts_with("gone:") || after.features.iter().any(|p| p.id == id), "{id}: a change left on a place that is gone, not set aside");
+    }
+    assert!(!f.edits.renames.contains_key("town:y"), "a neighbour that stood there before took a vanished town's name");
+    let what: Vec<(&str, &str, Vec<String>)> = f.vanished.iter().map(|v| (v.id.as_str(), v.name.as_str(), v.what.clone())).collect();
+    assert_eq!(what, vec![("range:c", "Grey Peaks", vec!["hidden".to_string()]), ("town:a", "Keepsake", vec!["renamed".to_string()]), ("village:b", "Brindle", vec!["note".to_string(), "1 NPC".to_string()])], "the vanished places were not all listed");
+    assert_eq!(f.aside, 4, "the changes set aside were miscounted");
+    let b = &f.vanished.iter().find(|v| v.id == "village:b").unwrap().at;
+    assert!(f.edits.notes.contains_key(b) && f.edits.renames.get(b).map(String::as_str) == Some("Brindle"), "the village's note lost what it was on");
+    // Taken back: each comes back to its place, the name kept to say what it was on gone.
+    let g = remap::follow(&f.edits, &after, &before, &|_, _| false, &[]).expect("nothing came back");
+    assert_eq!(g.edits.renames, edits.renames, "the names did not come back as they were");
+    assert_eq!((g.edits.notes.keys().collect::<Vec<_>>(), &g.edits.hidden), (edits.notes.keys().collect::<Vec<_>>(), &edits.hidden), "the notes or hidden marks did not come back");
+    assert_eq!(g.edits.npcs["n1"].location.as_ref().map(|l| l.id.as_str()), Some("village:b"), "the NPC did not come back");
+    assert!(g.vanished.is_empty() && g.kept == 4, "{} came back, {:?} set aside", g.kept, g.vanished);
 }

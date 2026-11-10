@@ -1,6 +1,7 @@
 //! A world remade from a changed sketch keeps its edits on their places. Generated features can
 //! move (a town placed a few miles away, a range redrawn) and so get new ids: edits on one that
-//! is gone move to the nearest feature of the same kind that took its place. The layout numbers
+//! is gone move to the nearest new feature of the same kind that took its place; with none, they
+//! are set aside at `gone:<n>:<id>` (listed), and come back if it does. The layout numbers
 //! of places shift (more or fewer settlements and sites before them): changes inside a place
 //! follow it when it comes out the same, the rest are set aside from `world::PARKED_LAYOUT` up.
 //! Settlements taken away on purpose (a pin removed) have theirs set aside at `gone:<n>:<id>`.
@@ -8,9 +9,10 @@
 //!
 //! One copy for the app (through `worldgen-wasm`'s `remake_prints_json` / `follow_json`) and
 //! for `mapd` (`remake`, with no app). It was `app/src/editor/reanchor.ts` (`reanchor`,
-//! `setAsideRemoved`, `remapLayouts`) and keeps its behaviour, but for two things: a field's
-//! entries are taken in sorted order (the app took them as its objects held them), and the
-//! villages and towns added by hand (`c:`) never count among the world's own places.
+//! `setAsideRemoved`, `remapLayouts`) and keeps its behaviour, but for these: a field's entries
+//! are taken in sorted order (the app took them as its objects held them), the villages and towns
+//! added by hand (`c:`) never count among the world's own places, a feature the world had before
+//! is no successor, and changes on a feature with none are set aside, not left on its dead id.
 
 use crate::World;
 use crate::core::hash::{FastMap, FastSet};
@@ -64,6 +66,9 @@ pub struct Place {
     pub y: f64,
     #[serde(default)]
     pub extent_ft: f64,
+    /// Its name as shown (generated, in the world `Places::of` reads).
+    #[serde(default)]
+    pub name: String,
 }
 
 /// A world's places as a remake reads them: its features, the layout number of the first created
@@ -93,7 +98,7 @@ impl Places {
     /// The places of a world as T0 made them (as the app's overlay has them, but for its created
     /// sites: they never count).
     pub fn of(t0: &T0) -> Places {
-        let features = t0.extra.as_ref().map_or_else(Vec::new, |e| e.overlay.features.iter().map(|f| Place { id: f.id.clone(), kind: f.kind.into(), x: f.x, y: f.y, extent_ft: f.extent_ft }).collect());
+        let features = t0.extra.as_ref().map_or_else(Vec::new, |e| e.overlay.features.iter().map(|f| Place { id: f.id.clone(), kind: f.kind.into(), x: f.x, y: f.y, extent_ft: f.extent_ft, name: f.name.clone() }).collect());
         let ids = (0..crate::town::layout_count(t0)).map(|li| fold(crate::town::layout_identity(t0, li))).collect();
         Places { features, first_created: Some(t0.settlements.len() + t0.base_pois), layout_ids: Some(ids), pinned: Vec::new() }
     }
@@ -120,9 +125,23 @@ pub struct Gone {
     pub li: usize,
 }
 
-/// The edits of a remade world, and how many entries followed their places (`kept`), were set
-/// aside (`parked`: their places came out differently) or were set aside with a place taken away
-/// on purpose (`removed`); `moved`: the features whose edits moved to another (old id, new).
+/// A feature with changes on it that the remade world has no more, and nothing took its place:
+/// its id, kind and name (as renamed, else generated), the `gone:<n>:<id>` its changes are kept
+/// under, and what they are ("renamed", "note", "hidden", "2 NPCs", "1 plot point").
+#[derive(Clone, Debug, Serialize)]
+pub struct Vanished {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub at: String,
+    pub what: Vec<String>,
+}
+
+/// The edits of a remade world, and how many entries followed their places (`kept`; those of a
+/// place that came back among them), were set aside (`parked`: their places came out differently)
+/// or were set aside with a place taken away on purpose (`removed`); `moved`: the features whose
+/// edits moved to another (old id, new); `vanished`: features gone with nothing in their place,
+/// their `aside` entries kept under `gone:` ids.
 #[derive(Clone, Debug)]
 pub struct Followed {
     pub edits: Edits,
@@ -130,6 +149,8 @@ pub struct Followed {
     pub parked: usize,
     pub removed: usize,
     pub moved: Vec<(String, String)>,
+    pub vanished: Vec<Vanished>,
+    pub aside: usize,
 }
 
 /// A 64-bit layout hash as the app holds it (32 bits).
@@ -256,9 +277,9 @@ fn spot_for(f: &Place) -> f64 {
     (0.25 * f.extent_ft).max(5280.0)
 }
 
-/// `edits` with ids of vanished features moved to their nearest same-kind successors (in `after`,
-/// by their positions in `before`): names, notes, hidden marks, where NPCs are and plot points'
-/// places. A settlement a pin made (`pinned`, new in `after`) is no successor but to the vanished
+/// `edits` with ids of vanished features moved to their nearest same-kind successors (new in
+/// `after`, by their positions in `before`; never a feature the world before had): names, notes,
+/// hidden marks, where NPCs are and plot points' places. A settlement a pin made (`pinned`, new in `after`) is no successor but to the vanished
 /// settlement nearest it, of any tier, within that one's `spot_for` (the pin was put on it to
 /// change it); a vanished place's edits are never moved onto one farther off. A name the pin
 /// gives wins over a rename it would take: that stays on the vanished id (set aside). The edits,
@@ -307,7 +328,8 @@ fn reanchor(edits: &Edits, before: &[Place], after: &[Place], pinned: &[Pinned])
         let Some(old) = was.get(id.as_str()) else { continue };
         let (mut best, mut best_d) = (None::<&Place>, reach_for(old));
         for f in after {
-            if f.kind != old.kind || taken.contains(f.id.as_str()) || pins.contains_key(f.id.as_str()) {
+            // (One that stood in the world before is a neighbour, not what took its place.)
+            if f.kind != old.kind || taken.contains(f.id.as_str()) || pins.contains_key(f.id.as_str()) || was.contains_key(f.id.as_str()) {
                 continue;
             }
             let (dx, dy) = (f.x - old.x, f.y - old.y);
@@ -365,12 +387,7 @@ fn set_aside_removed(edits: &Edits, removed: &[Gone], after: &[Place]) -> Option
     if gone.is_empty() {
         return None;
     }
-    let mut k = 1u64;
-    each_id(edits, |id| {
-        if let Some(n) = gone_number(id) {
-            k = k.max(n + 1);
-        }
-    });
+    let mut k = next_gone(edits);
     let mut to: FastMap<&str, String> = FastMap::default();
     for r in &gone {
         to.insert(&r.id, format!("gone:{k}:{}", r.id));
@@ -392,6 +409,107 @@ fn set_aside_removed(edits: &Edits, removed: &[Gone], after: &[Place]) -> Option
     }
     let hid = edits.hidden.iter().any(|h| to.contains_key(h.as_str()));
     (n > 0 || hid || gone.iter().any(|r| edits.renames.contains_key(&r.id))).then_some((out, n))
+}
+
+/// The first `n` past the `gone:<n>:…` ids `edits` hold.
+fn next_gone(edits: &Edits) -> u64 {
+    let mut k = 1u64;
+    each_id(edits, |id| {
+        if let Some(n) = gone_number(id) {
+            k = k.max(n + 1);
+        }
+    });
+    k
+}
+
+/// `edits` with the ids of features that vanished from the remade world (in `before`, not in
+/// `after`) and that nothing took the place of (`reanchor` left their ids as they were) set aside
+/// at `gone:<n>:<id>`, as a place taken away is, so that no change is kept on an id that names
+/// nothing without being listed: names, notes, hidden marks, NPCs' and plot points' places. Its
+/// name stays on the new id (as renamed, else as it was) to say what they were on. The edits,
+/// what vanished and how many entries were set aside; None if none were.
+fn set_aside_vanished(edits: &Edits, before: &[Place], after: &[Place]) -> Option<(Edits, Vec<Vanished>, usize)> {
+    let now: FastSet<&str> = after.iter().map(|f| f.id.as_str()).collect();
+    let was: FastMap<&str, &Place> = before.iter().map(|f| (f.id.as_str(), f)).collect();
+    let mut ids: std::collections::BTreeSet<String> = Default::default();
+    each_id(edits, |id| {
+        if !now.contains(id) && !is_local(id) && was.contains_key(id) {
+            ids.insert(id.to_string());
+        }
+    });
+    if ids.is_empty() {
+        return None;
+    }
+    let mut k = next_gone(edits);
+    let mut to: FastMap<&str, String> = FastMap::default();
+    for id in &ids {
+        to.insert(id, format!("gone:{k}:{id}"));
+        k += 1;
+    }
+    let (mut out, n) = renamed(edits, |id, bare| if bare { id.to_string() } else { to.get(id).cloned().unwrap_or_else(|| id.to_string()) });
+    let mut list = Vec::new();
+    for id in &ids {
+        let (g, f) = (&to[id.as_str()], was[id.as_str()]);
+        let npcs = out.npcs.values().filter(|x| x.location.as_ref().is_some_and(|l| &l.id == g)).count();
+        let plots = out.plots.values().filter(|p| p.anchors.contains(g)).count();
+        let renamed = out.renames.get(g).cloned();
+        let mut what: Vec<String> = Vec::new();
+        if renamed.is_some() {
+            what.push("renamed".into());
+        }
+        if out.notes.contains_key(g) {
+            what.push("note".into());
+        }
+        if out.hidden.contains(g) {
+            what.push("hidden".into());
+        }
+        if npcs > 0 {
+            what.push(format!("{npcs} {}", if npcs == 1 { "NPC" } else { "NPCs" }));
+        }
+        if plots > 0 {
+            what.push(format!("{plots} {}", if plots == 1 { "plot point" } else { "plot points" }));
+        }
+        if renamed.is_none() && !f.name.is_empty() {
+            out.renames.insert(g.clone(), f.name.clone());
+        }
+        list.push(Vanished { id: id.clone(), kind: f.kind.clone(), name: renamed.unwrap_or_else(|| f.name.clone()), at: g.clone(), what });
+    }
+    Some((out, list, n))
+}
+
+/// `edits` with the changes kept under `gone:<n>:<id>` back on `id` where the remade world has
+/// that feature again and the world before did not (a stroke taken back, a pin put back where it
+/// was), when nothing else is on it; the name kept to say what they were on goes when it is the
+/// feature's own. Created sites' (`c:`) never: their numbers are given again. The edits and how
+/// many entries came back; None if none did.
+fn restore_returned(edits: &Edits, before: &[Place], after: &[Place]) -> Option<(Edits, usize)> {
+    let was: FastSet<&str> = before.iter().map(|f| f.id.as_str()).collect();
+    let now: FastMap<&str, &Place> = after.iter().map(|f| (f.id.as_str(), f)).collect();
+    let mut used: FastSet<String> = FastSet::default();
+    each_id(edits, |id| {
+        used.insert(id.to_string());
+    });
+    let mut to: FastMap<String, String> = FastMap::default();
+    let mut ids: Vec<String> = used.iter().filter(|id| gone_number(id).is_some()).cloned().collect();
+    ids.sort();
+    for g in ids {
+        let Some((_, tail)) = g.strip_prefix("gone:").and_then(|r| r.split_once(':')) else { continue };
+        if tail.starts_with("c:") || was.contains(tail) || !now.contains_key(tail) || used.contains(tail) || to.values().any(|t| t == tail) {
+            continue;
+        }
+        to.insert(g.clone(), tail.to_string());
+    }
+    if to.is_empty() {
+        return None;
+    }
+    let (mut out, mut n) = renamed(edits, |id, bare| if bare { id.to_string() } else { to.get(id).cloned().unwrap_or_else(|| id.to_string()) });
+    for t in to.values() {
+        if out.renames.get(t).is_some_and(|r| *r == now[t.as_str()].name) {
+            out.renames.remove(t);
+            n -= 1;
+        }
+    }
+    Some((out, n))
 }
 
 /// A world's layouts as the app counts them: the settlements, then the world's own sites (their
@@ -502,25 +620,33 @@ fn remap_layouts(edits: &Edits, before: &Places, after: &Places, same: &dyn Fn(u
 }
 
 /// `edits` made on a world (`before`) following their places to the same world remade from a
-/// changed sketch (`after`): places taken away on purpose (`gone`) have theirs set aside first,
-/// so no neighbour takes them; then names, notes and the like on vanished features move to their
-/// successors; then layout-local ids follow their layouts (`same(old, new)`: the layout came out
-/// the same, its fingerprint as generated). None if nothing moved.
+/// changed sketch (`after`): changes set aside on places now back come back to them; places taken
+/// away on purpose (`gone`) have theirs set aside, so no neighbour takes them; then names, notes
+/// and the like on vanished features move to their successors, and those of features with none
+/// are set aside (`vanished`); then layout-local ids follow their layouts (`same(old, new)`: the
+/// layout came out the same, its fingerprint as generated). None if nothing moved.
 pub fn follow(edits: &Edits, before: &Places, after: &Places, same: &dyn Fn(usize, usize) -> bool, gone: &[Gone]) -> Option<Followed> {
-    let off = set_aside_removed(edits, gone, &after.features);
-    let named = reanchor(off.as_ref().map_or(edits, |o| &o.0), &before.features, &after.features, &after.pinned);
-    let base = named.as_ref().map(|n| &n.0).or(off.as_ref().map(|o| &o.0)).unwrap_or(edits);
+    let back = restore_returned(edits, &before.features, &after.features);
+    let start = back.as_ref().map_or(edits, |b| &b.0);
+    let off = set_aside_removed(start, gone, &after.features);
+    let named = reanchor(off.as_ref().map_or(start, |o| &o.0), &before.features, &after.features, &after.pinned);
+    let base = named.as_ref().map(|n| &n.0).or(off.as_ref().map(|o| &o.0)).unwrap_or(start);
+    let lost = set_aside_vanished(base, &before.features, &after.features);
+    let base = lost.as_ref().map_or(base, |l| &l.0);
     let lis: Vec<usize> = gone.iter().map(|g| g.li).collect();
     let placed = remap_layouts(base, before, after, same, &lis);
-    if off.is_none() && named.is_none() && placed.is_none() {
+    if back.is_none() && off.is_none() && named.is_none() && lost.is_none() && placed.is_none() {
         return None;
     }
     let (moved_n, parked, removed) = placed.as_ref().map_or((0, 0, 0), |p| (p.1, p.2, p.3));
+    let (vanished, aside) = lost.as_ref().map_or_else(|| (Vec::new(), 0), |l| (l.1.clone(), l.2));
     Some(Followed {
-        kept: named.as_ref().map_or(0, |n| n.2) + moved_n,
+        kept: back.as_ref().map_or(0, |b| b.1) + named.as_ref().map_or(0, |n| n.2) + moved_n,
         parked,
         removed: off.as_ref().map_or(0, |o| o.1) + removed,
         moved: named.as_ref().map_or_else(Vec::new, |n| n.1.clone()),
+        vanished,
+        aside,
         edits: placed.map_or_else(|| base.clone(), |p| p.0),
     })
 }

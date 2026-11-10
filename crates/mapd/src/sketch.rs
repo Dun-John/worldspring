@@ -607,6 +607,31 @@ fn pending_note(out: &mut Value, pending: bool) {
     out["note"] = json!(if pending { "Stored in the sketch: the world is remade with it by regenerate" } else { "The sketch is as the world was made: nothing to regenerate" });
 }
 
+/// A pin far out at sea in the world as it is (no land within 25 mi, as the generator looks for
+/// it): what `regenerate` would say, said now. None elsewhere, or for another tool.
+async fn sea_warning(app: &Shared, s: &Stroke, strokes: &[Stroke]) -> Option<String> {
+    if s.tool != SketchTool::Pin || s.pts.is_empty() {
+        return None;
+    }
+    let p = s.pts[0];
+    let far = app
+        .worker
+        .with(move |ex| {
+            let t = &ex.t0;
+            let (i, j) = (((p[0] / t.cell_ft) as usize).min(t.coast.w - 1), ((p[1] / t.cell_ft) as usize).min(t.coast.h - 1));
+            Ok(t.coast.data[j * t.coast.w + i] as f64 > 25.0 * MI)
+        })
+        .await
+        .ok()?;
+    let land = strokes.iter().any(|x| x.tool == SketchTool::Land);
+    far.then(|| {
+        format!(
+            "This pin is far out at sea (no land within 25 mi): regenerate would place no settlement here{}",
+            if land { ", unless land the sketch draws reaches it" } else { ". Move it onto land (at), or draw land under it" }
+        )
+    })
+}
+
 async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
     let _one = app.gate.lock().await;
     let (hash, file, mut p, _) = state(app)?;
@@ -657,6 +682,9 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
     app.store.log(hash, json!({ "time": now(), "author": "agent", "change": { "tool": "create_sketch_stroke", "id": id } }));
     let mut out = json!({ "id": id, "stroke": item(&s, p.strokes.len() - 1, true) });
     pending_note(&mut out, pending);
+    if let Some(w) = sea_warning(app, &s, &p.strokes).await {
+        out["warning"] = json!(w);
+    }
     Ok(out)
 }
 
@@ -682,6 +710,9 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
     app.store.log(hash, json!({ "time": now(), "author": "agent", "change": { "tool": "update_sketch_stroke", "id": a["id"], "now": id } }));
     let mut out = json!({ "id": id, "was": a["id"], "stroke": item(&s, i, true) });
     pending_note(&mut out, pending);
+    if let Some(w) = sea_warning(app, &s, &p.strokes).await {
+        out["warning"] = json!(w);
+    }
     Ok(out)
 }
 
@@ -729,6 +760,7 @@ pub(crate) async fn regenerate(app: &Shared) -> Result<Value, String> {
     }
     // (The open world's pins not kept: their settlements go on purpose.)
     let removed: Vec<usize> = (0..file.sketch.strokes.len()).filter(|i| file.sketch.strokes[*i].tool == SketchTool::Pin && !p.from.contains(&Some(*i))).collect();
+    let applied = file.sketch.strokes.clone();
     let remade = WorldFile { sketch: Sketch { strokes: p.strokes.clone() }, ..file };
     let apps = app.followers().len();
     let swap = app.clone();
@@ -739,14 +771,15 @@ pub(crate) async fn regenerate(app: &Shared) -> Result<Value, String> {
     let mark = RemadeFrom { from: hex(old), gone: r.gone.clone() };
     let _ = std::fs::write(app.store.world_path(r.hash, "remade_from.json"), serde_json::to_string(&mark).unwrap_or_default());
     let _ = std::fs::remove_file(app.store.world_path(old, "sketch.json"));
-    let change = json!({ "tool": "regenerate", "from": hex(old), "to": hex(r.hash), "kept": r.kept, "parked": r.parked, "removed": r.removed });
+    let change = json!({ "tool": "regenerate", "from": hex(old), "to": hex(r.hash), "kept": r.kept, "parked": r.parked + r.aside, "removed": r.removed });
     app.store.log(old, json!({ "time": now(), "author": "agent", "change": change }));
     app.store.log(r.hash, json!({ "time": now(), "author": "agent", "change": change }));
     // (To the apps showing the world it was remade from.)
-    app.send(json!({ "type": "remade", "world": hex(old), "file": r.file, "gone": r.gone, "kept": r.kept, "parked": r.parked, "removed": r.removed }));
+    app.send(json!({ "type": "remade", "world": hex(old), "file": r.file, "gone": r.gone, "kept": r.kept, "parked": r.parked + r.aside, "removed": r.removed }));
     // What the new pins made, and what the sketch can't follow.
     let strokes = p.strokes.clone();
-    let added: Vec<usize> = p.from.iter().enumerate().filter(|(i, f)| f.is_none() && strokes[*i].tool == SketchTool::Pin).map(|(i, _)| i).collect();
+    // (New pins, and pins changed: one put on a settlement to change it again makes it anew.)
+    let added: Vec<usize> = p.from.iter().enumerate().filter(|&(i, f)| strokes[i].tool == SketchTool::Pin && f.is_none_or(|j| applied.get(j) != Some(&strokes[i]))).map(|(i, _)| i).collect();
     let (made, conflicts) = app
         .worker
         .with(move |ex| {
@@ -771,8 +804,9 @@ pub(crate) async fn regenerate(app: &Shared) -> Result<Value, String> {
         "settlements": r.after,
         "settlements_before": r.before,
         "kept": r.kept,
-        "set_aside": r.parked + r.removed,
+        "set_aside": r.parked + r.removed + r.aside,
         "moved": r.moved,
+        "changed": r.changed,
         "gone": r.gone.iter().map(|g| json!({ "id": g.id, "name": g.name })).collect::<Vec<_>>(),
         "made": made,
         "pending": false,
@@ -781,11 +815,22 @@ pub(crate) async fn regenerate(app: &Shared) -> Result<Value, String> {
     if r.removed > 0 {
         out["removed"] = json!(r.removed);
     }
-    out["note"] = json!(if r.all_stayed {
+    if !r.vanished.is_empty() {
+        out["vanished"] = json!(r.vanished.iter().map(|v| json!({ "id": v.id, "kind": v.kind, "name": v.name, "kept_as": v.at, "what": v.what })).collect::<Vec<_>>());
+    }
+    let mut note = String::from(if r.all_stayed {
         "Every change stayed on its place: none had to move or be set aside"
     } else {
-        "kept: changes that followed their places to the remade world's numbers (the rest stayed as they were); set_aside: on places laid out differently, or taken away (removed), kept under ids that name nothing"
+        "kept: changes that followed their places to the remade world's numbers (the rest stayed as they were); set_aside: on places laid out differently, taken away (removed) or gone with nothing in their place (vanished), kept under ids that name nothing (world_overview's places_removed lists them)"
     });
+    let c = &r.changed;
+    if c.features_same_id < c.features_before || c.features_renamed > 0 {
+        note += &format!(
+            ". The remake redrew the map beyond the strokes: {} of {} named features kept their ids, {} of those are named otherwise; {} settlements stand where they stood ({} before, {} now). Any stroke can do this: the generator works the whole map at once",
+            c.features_same_id, c.features_before, c.features_renamed, c.settlements_in_place, r.before, r.after
+        );
+    }
+    out["note"] = json!(note);
     if !conflicts.is_empty() {
         out["conflicts"] = json!(conflicts);
     }

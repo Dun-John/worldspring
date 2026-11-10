@@ -681,7 +681,8 @@ new one (`update_sketch_stroke` returns it). `index` is its place in the sketch,
 The strokes (as the pending changes leave them), each with `id`, `index`, `tool` and its points (`path`, or `at` for a
 pin, volcano, site or region named at a point), and its options: `closed`, `radius_mi`, `strength`, `hard`, `biome`,
 `name`, a road's `kind`, a pin's `tier`, `lives_by`, `capital`, `wards`, `added`, `replaces` and `settlement` (the
-settlement it made, or for a pin not regenerated yet that replaces one, that one's id). A stroke changed or added since the
+settlement it made, or for a pin not regenerated yet that replaces one, that one's id; `replaces` is the tier the
+generator placed that one at, which can be above the tier it shows: a city placed that grew only to a town says `city`). A stroke changed or added since the
 world was made says so (`pending: "changed"` or `"added"`), and `changes` lists what changed (`added`, `changed`, and
 the ids `removed`). `tool` filters, `points: false` gives `point_count` and `bbox` instead of points, `limit`
 (default 100) cuts the list (`{items, found}`).
@@ -704,10 +705,11 @@ the ids `removed`). `tool` filters, `points: false` gives `point_count` and `bbo
 | `capital` | boolean | pins | The realm's capital. |
 | `wards` | `[string]` | pins | Its districts' names, the central one first (up to 24). |
 | `added` | boolean | pins | Beside the world's own settlements (default true, as Edit › Places adds them); false: in place of one of its tier. |
-| `replaces` | string | pins | In place of the world's own settlement at its spot (within 3 mi), changed: the tier it was placed at. Nothing else moves. `update_settlement` makes these pins. |
+| `replaces` | string | pins | In place of the world's own settlement at its spot (within 3 mi), changed: the tier the generator placed it at (`get_sketch`'s `replaces`; a city that grew only to a town is placed as a city). Nothing else moves. `update_settlement` makes these pins. |
 
 An option for another tool is refused (`tier: only for pin, got "town"`), as is a point off the map (the message gives
-the map's size). The same stroke again adds nothing and returns `existing: true`.
+the map's size). The same stroke again adds nothing and returns `existing: true`. A pin far out at sea (no land within
+25 mi in the world as it is) is stored with a `warning`: `regenerate` would place no settlement there.
 
 ### `update_sketch_stroke`
 `id` and any of the parameters above but `tool`; what is not given stays. Returns the new `id` (and `was`).
@@ -719,21 +721,30 @@ aside (`gone:...`, as when the app removes a settlement), never handed to a neig
 ### `regenerate`
 Remakes the world with the pending changes, natively in mapd (a few seconds), with or without the app open. The world's
 changes follow their places, as when the app remakes it: names and notes follow features that moved, changes inside
-settlements and sites follow those laid out the same, and the rest are set aside under ids that name nothing. A
+settlements and sites follow those laid out the same, and the rest are set aside under ids that name nothing. Names,
+notes, hidden marks, NPCs and plot points on a feature that is gone with nothing in its place are set aside under
+`gone:<n>:<id>` (as a settlement taken away is: `world_overview`'s `places_removed` lists them), and come back to it if a
+later remake brings that feature back (the stroke taken away again). A
 settlement a pin made takes the changes of a vanished one only at its own spot (a quarter of that one's label extent:
 about a mile for a village, 3 for a town), never of one farther off, and a name given in the pin wins over a rename. Tool
 calls made meanwhile wait, and see the world before or the world remade, never a mix. The remade world is saved under
 its new hash (`world`; `was` is the one before). An open map app loads it, asking first when it has work not saved
 (sketch strokes not generated, a site's design, a session being played); an app opened later is told to load it.
 
-Returns `kept` (changes that followed their places to new numbers; the others stayed as they were), `set_aside`
-(of them `removed`: on settlements taken away), `moved` (features whose changes moved to another), `settlements` and
-`settlements_before`, `gone` (settlements taken away), `made` (the settlement each new pin made: `{stroke, id, name}`,
-`id` null if none was placed), `conflicts` (what the sketch could not follow: `{stroke, message, x_ft, y_ft}`) and
-`seconds`. With nothing pending it does nothing (`regenerated: false`).
+Returns `kept` (changes that followed their places to new numbers, or came back to them; the others stayed as they
+were), `set_aside` (of them `removed`: on settlements taken away), `vanished` (features gone with nothing in their
+place that had changes: `{id, kind, name, kept_as, what}`, `what` e.g. `["renamed", "note", "1 NPC"]`), `moved`
+(features whose changes moved to another), `settlements` and `settlements_before`, `changed` (how much of the map came
+out otherwise: `features_before`, `features_after`, `features_same_id`, `features_renamed` of those, and
+`settlements_in_place`), `gone` (settlements taken away), `made` (the settlement each new or changed pin made:
+`{stroke, id, name}`, `id` null if none was placed), `conflicts` (what the sketch could not follow: `{stroke, message,
+x_ft, y_ft}`) and `seconds`. With nothing pending it does nothing (`regenerated: false`).
 
-A drawn range or coast moves many settlements (the world's own are placed over the whole map), so changes made on
-them are set aside; a pin far from them leaves them as they are.
+A stroke can change the map far from where it is drawn, as in the app: the generator works the whole map at once, so
+heights, rivers, coasts and climate everywhere can come out otherwise, and with them features' ids and names and the
+world's own settlements. The first range (or massif) drawn does most: drawn ranges become the main ones and the
+plates' own are kept at half their height, all over the map. Changes on the places that moved follow them or are set
+aside (`changed` and `vanished` say how much); a pin far from them leaves them as they are.
 
 ```json
 { "name": "create_sketch_stroke", "arguments": { "tool": "range", "path": [[4682158, 2536577], [4708558, 2642177], [4682158, 2747777]], "strength": 0.6, "name": "Greyspine" } }
