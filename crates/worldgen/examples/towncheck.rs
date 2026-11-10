@@ -4946,7 +4946,7 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
         // (its steps' shorter sides over their turning, weighted by turning).
         for w in l.walls.iter().filter(|w| w.len() >= 3 && !l.castles.iter().any(|(c, rad)| dist(*c, w[w.len() / 2]) <= rad + 10.0)) {
             let mut run = (0.0f64, 0.0f64, 0.0f64);
-            let mut flush = |run: &mut (f64, f64, f64), r: &mut Report| {
+            let flush = |run: &mut (f64, f64, f64), r: &mut Report| {
                 if run.1.abs() >= 15.0 {
                     r.tally(&format!("{}: rounded corners", GROUPS[g]), 1);
                     r.tally(&format!("{}: rounded corners' radius ft (sum)", GROUPS[g]), (run.2 / run.1.abs()).round() as usize);

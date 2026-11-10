@@ -908,6 +908,12 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       // A park's water (a pond fanned from its middle, a stream; not outlined), gravel, parterres
       // (hedged beds), trees' crowns and flowerbeds.
       else if (kind === 11) rgb = [0.42, 0.6, 0.64];
+      // A town wall's bastion (`payload.rs` kind 31): its ground, plain for now (its walls are the
+      // town wall's lines).
+      else if (kind === 31) {
+        rgb = [0.74, 0.71, 0.62];
+        a = 0.6;
+      }
       else if (kind === 12) rgb = [0.85, 0.81, 0.69];
       else if (kind === 13) {
         rgb = [0.42, 0.55, 0.33];

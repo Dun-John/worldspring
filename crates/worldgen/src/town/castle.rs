@@ -319,12 +319,11 @@ pub(super) fn castle<G: Ground>(
         cuts += 1;
     };
     let walled: Vec<bool> = (0..ring.len()).map(|e| along(ring[e], ring[(e + 1) % ring.len()])).collect();
-    // Its towers' shapes by the place's walls (item 104: `WallStyle::castle`), its keep's towers square
-    // where the curtain's are. (The roll that once made a share of castles square still drawn, so the
-    // rest of the castle keeps its rolls.)
-    let _ = prng.next_f64();
+    // Its curtain towers' shapes by the place's walls (item 104: `WallStyle::castle`). Its keep's corner
+    // turrets keep their own roll (a share square), as before the styles: the turrets' shape sets which
+    // `KEEP_FITS` size a T or L keep fits.
+    let square = prng.next_f64() < KEEP_SQUARE_SHARE;
     let style = l.wall_style.castle();
-    let square = style.tower == TowerShape::Square;
     let short = obb(&hull(ring.clone())).short;
     let want = area(&ring) >= BIG_AREA
         && short >= BIG_WIDTH
@@ -1680,6 +1679,8 @@ fn sq(v: f64, min: f64) -> f64 {
 const KEEP_GROW: f64 = 1.2;
 /// The scales a keep is tried at, the biggest first (`place_keep`): down to the sizes the kinds
 /// had before `KEEP_GROW`'s smallest, so a tight court still takes the kind it rolled.
+/// The share of keeps whose corner turrets are square.
+const KEEP_SQUARE_SHARE: f64 = 0.35;
 const KEEP_FITS: [f64; 7] = [1.0, 0.86, 0.74, 0.64, 0.55, 0.47, 0.4];
 
 /// The pieces of a keep of `kind` scaled by `f` (its rolls in `rolls`, 0..1 each): its frame.

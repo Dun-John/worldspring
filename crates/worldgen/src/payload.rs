@@ -24,7 +24,8 @@
 //!     its drawbridge's deck, 20 a headstone, 22 a churchyard's wall,
 //!     23 a windmill's sails (a village's plots: the battlemap only); a park's raised features as
 //!     monuments; all of a park's in the tile holding its middle; a ruin's plan as 28 its floor,
-//!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4),
+//!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4), 31 a town wall's
+//!     bastion (`town::Layout::bastions`: flank, face, point, face, flank, the curtain's corner),
 //!     verts f32[n_verts * 2] (tile units).
 //!     A polygon belongs to
 //!     the tile containing its centroid.
@@ -559,6 +560,11 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             if key.level >= BUILDING_MIN_LEVEL {
                 crate::town::village::plan_ticks(&l, &mut push);
                 crate::town::rural::plan_ticks(&l, &mut push);
+            }
+            // A town wall's bastions (item 104, `Layout::bastions`): each its ground inside its walls, as 31
+            // (the walls round it are in `l.walls`).
+            for q in &l.bastions {
+                push(q, 31);
             }
             // (Its width by what it is built of, item 104: stone 9 ft, a palisade 5, rammed earth 12.)
             let ww = match l.wall_style.material {
