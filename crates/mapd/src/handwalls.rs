@@ -135,6 +135,11 @@ pub async fn reply(app: &Shared, v: &mut Value, more: Map<String, Value>) {
         .collect();
     v["gates"] = json!(list.len());
     v["gate_list"] = json!(list);
+    // (The detail counts the gates as built too: two set under 60 ft apart are one, a main street
+    // crossing is one.)
+    if v["detail"].as_str().is_some_and(|d| d.starts_with("created wall")) {
+        v["detail"] = json!(agent::created_detail(&worldgen::world::Created { gates: vec![0; list.len()], ..c.clone() }));
+    }
     // (The streets crossing it with no gate as built: closed.)
     for (k, mut x) in more {
         if k == "streets_closed"

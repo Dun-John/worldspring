@@ -92,6 +92,10 @@ pub fn around_patches(world: &World, t0: &T0, index: usize, patches: &[usize], s
         pieces.push(piece);
     }
     if pieces.len() > 1 {
+        // (A patch outside the town on its own: it isn't one of the town's.)
+        if let Some(p) = pieces.iter().find(|q| q.iter().all(|&f| f >= plan.n_inner)).map(|q| q[0]) {
+            return Err(format!("patch {p} is not one of the town's patches: it lies outside the town (get_town_plan marks the town's in_town)"));
+        }
         let list: Vec<String> = pieces.iter().map(|p| format!("[{}]", p.iter().map(|q| q.to_string()).collect::<Vec<_>>().join(", "))).collect();
         return Err(format!("those patches are not one piece: {} (a ring goes round one piece: add the patches between them, or make a wall for each)", list.join(" and ")));
     }

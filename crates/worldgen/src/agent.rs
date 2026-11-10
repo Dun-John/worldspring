@@ -514,6 +514,8 @@ pub struct WorksSpot {
     /// The world's own buildings in its way, to be taken away with it: (building id, its middle
     /// as generated).
     pub in_way: Vec<(String, P)>,
+    /// Those of them with a name, by id (for the refusal: "b:5:8 (the Smithy)").
+    pub in_way_names: crate::core::hash::FastMap<String, String>,
 }
 
 /// Where a castle (its outline) or a wall (its line) may stand: on the map, on dry land out of
@@ -560,6 +562,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
     let crosses_line = |w: &[P]| w.windows(2).any(|s| segs.iter().any(|&(a, b)| segs_cross(a, b, s[0], s[1]) || geom::seg_dist(s[0], a, b) < 1.0));
     let generated = t0.settlements.len() + t0.base_pois;
     let mut in_way: Vec<(String, P)> = Vec::new();
+    let mut in_way_names: crate::core::hash::FastMap<String, String> = Default::default();
     for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
         let li = l.index as usize;
         if Some(li) == skip {
@@ -576,7 +579,11 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
             }
             let base = town::base_layout(world, t0, li);
             if let Some(g) = base.building(b.id as usize) {
-                in_way.push((format!("b:{li}:{}", b.id), geom::centroid(&g.poly)));
+                let id = format!("b:{li}:{}", b.id);
+                if let Some(n) = world.file.edits.renames.get(&id).cloned().or_else(|| b.name.clone()).filter(|n| !n.is_empty()) {
+                    in_way_names.insert(id.clone(), n);
+                }
+                in_way.push((id, geom::centroid(&g.poly)));
             }
         }
         if l.walls.iter().any(|w| crosses_line(w) || (castle && w.iter().any(|p| geom::contains(pts, *p)))) {
@@ -616,7 +623,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
         }
         word = namer.name(NameKind::Settlement, culture);
     }
-    Ok(WorksSpot { at, name: format!("{word} {}", if castle { "Castle" } else { "Wall" }), in_way })
+    Ok(WorksSpot { at, name: format!("{word} {}", if castle { "Castle" } else { "Wall" }), in_way, in_way_names })
 }
 
 /// `works_spot` as JSON: `{x, y, name, in_way: [{id, at}]}` or `{error}`. The castle or wall is

@@ -3159,10 +3159,30 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let mut wall_laid = outline::lay(site, plan, &mesh, ward, &l.wall_style, &gates, &ch.wall);
     // A round wall's curtains bowed out, before the outskirts step back from them (`curtain`).
     let wall_bows = if walled || plan.walled {
-        curtain::bow(site, plan, &mesh, ward, &l.wall_style, &l.roads, &l.bridges, &mut wall_laid.0, &mut wall_laid.1, &wall_laid.2, (&gates, &ch.wall))
+        // (A hand gate's track is laid after: the curtain keeps well off it, ~30 ft face to edge.)
+        let with_ways: Vec<(Vec<P>, u8, f64)>;
+        let roads = if gate_ways.is_empty() {
+            &l.roads
+        } else {
+            with_ways = l.roads.iter().cloned().chain(gate_ways.iter().map(|(_, pts)| (pts.clone(), 2, wallgates::WAY_WIDTH_FT + 52.0))).collect();
+            &with_ways
+        };
+        curtain::bow(site, plan, &mesh, ward, &l.wall_style, roads, &l.bridges, &mut wall_laid.0, &mut wall_laid.1, &wall_laid.2, (&gates, &ch.wall))
     } else {
         Default::default()
     };
+    // (A hand tower's tag where its curtain carried it: the towers laid are those along the
+    // straight runs, one for one.)
+    if !ch.wall.towers.is_empty() {
+        let (_, raw, _) = wallgates::pieces(plan, &mesh, &gates, &ch.wall);
+        if raw.len() == wall_laid.1.len() {
+            for t in &mut l.hand_wall.tags {
+                if let Some(i) = (0..raw.len()).find(|&i| geom::dist(raw[i], t.0) < 0.5) {
+                    t.0 = wall_laid.1[i];
+                }
+            }
+        }
+    }
     if walled {
         l.walls.extend(wall_laid.0.iter().cloned());
         l.towers.extend(wall_laid.1.iter().copied());

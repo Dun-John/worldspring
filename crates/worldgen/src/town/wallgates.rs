@@ -41,6 +41,8 @@ pub const OTHER_TOWER_ID: u32 = 4_000_000;
 
 /// Gate towers stand this far either side of the gate's corner (`wall_pieces_spaced`).
 const GATE_HALF: f64 = 26.0;
+/// The furthest a gate's towers stand from its corner on a bend (`gate_half`).
+const GATE_HALF_MOST: f64 = 60.0;
 const GATE_APART_FT: f64 = 80.0;
 /// A wall side at a gate this long at least: its gate tower (r 15, 26 ft out) clear of the
 /// corner tower at the far end (r 11).
@@ -50,6 +52,10 @@ const GATE_CLEAR_FT: f64 = 56.0;
 pub const TOWER_GAP_FT: f64 = 20.0;
 const WAY_MAX_FT: f64 = 2400.0;
 pub const WAY_WIDTH_FT: f64 = 12.0;
+/// A hand gate's track leaves it straight out this far, and keeps this far off the wall's line
+/// after (its middle: the wall's and its own half widths and ~30 ft between).
+const LEAVE_FT: f64 = 70.0;
+const WALL_OFF_FT: f64 = 40.0;
 /// A road whose gate was taken out stops this short of the wall; a main street this far inside.
 const ROAD_BACK_FT: f64 = 30.0;
 const STREET_BACK_FT: f64 = 14.0;
@@ -78,6 +84,8 @@ impl WallChanges {
 pub struct HandWall {
     /// Gates put in by hand and built: corner, where.
     pub gates: Vec<(u32, P)>,
+    /// How far either side of each its towers stand (`gate_half`): corner, ft.
+    pub halves: Vec<(u32, f64)>,
     /// Each one's way out: corner, its length (ft).
     pub ways: Vec<(u32, f64)>,
     /// Gates refused: corner, why.
@@ -86,6 +94,9 @@ pub struct HandWall {
     pub tags: Vec<(P, u32)>,
     /// Corners whose gate was taken out.
     pub closed: Vec<(u32, P)>,
+    /// The wall's runs as planned (their corners; whether closed): towers keep their ids by their
+    /// run and order along it (`finish`).
+    pub runs: Vec<(Vec<P>, bool)>,
 }
 
 /// Which wall run and place in it corner `v` is.
@@ -207,17 +218,58 @@ fn bits(d: f64) -> u64 {
     d.max(0.0).to_bits()
 }
 
-/// The way out through a gate at wall corner `v`: along the outskirts' patch edges (dry, off the
-/// river, not along the wall) to the nearest corner by a road (an approach or the network's) or
-/// on the plan's edge (the open country), joined onto the approach it reaches. World-free: local ft.
+/// The way out through a gate at wall corner `v`: straight out of the gate, square to it, for
+/// `LEAVE_FT`; then along the outskirts' patch edges (dry, off the river, `WALL_OFF_FT` off the
+/// wall) to the nearest corner by a road (an approach or the network's) or on the plan's edge (the
+/// open country), joined onto the approach it reaches. World-free: local ft.
 fn way_out(site: &Site, plan: &TownPlan, mesh: &Mesh, v: usize) -> Result<Vec<P>, String> {
     let nv = mesh.pos.len();
     let mut on_chain = vec![false; nv];
-    for (chain, _, _) in &plan.wall_runs {
+    let mut sides: Vec<(P, P)> = Vec::new();
+    for (chain, closed, _) in &plan.wall_runs {
+        let n = chain.len();
         for &u in chain {
             on_chain[u] = true;
         }
+        for k in 0..if *closed { n } else { n.saturating_sub(1) } {
+            sides.push((mesh.pos[chain[k]], mesh.pos[chain[(k + 1) % n]]));
+        }
     }
+    let wall_d = |p: P| sides.iter().map(|s| seg_dist(p, s.0, s.1)).fold(f64::MAX, f64::min);
+    let dry = |pa: P, pb: P| {
+        let steps = crate::core::ceil(dist(pa, pb) / 8.0).max(1.0) as usize;
+        !(0..=steps).any(|j| {
+            let p = lerp(pa, pb, j as f64 / steps as f64);
+            site.wet(p) || site.near_river(p, 4.0)
+        })
+    };
+    // (Off the wall all the way: `floor` ft at least, or `WALL_OFF_FT`.)
+    let off_wall = |pa: P, pb: P, floor: f64| {
+        let steps = crate::core::ceil(dist(pa, pb) / 8.0).max(1.0) as usize;
+        (0..=steps).all(|j| wall_d(lerp(pa, pb, j as f64 / steps as f64)) >= WALL_OFF_FT.min(floor))
+    };
+    // (Out of the gate: square to the line between its towers, away from the town.)
+    let Some((r, k)) = on_wall(plan, v) else {
+        return Err("that corner is not on the wall".into());
+    };
+    let (chain, _, _) = &plan.wall_runs[r];
+    let n = chain.len();
+    let p = mesh.pos[v];
+    let toward = |q: P| add(p, mul(sub(q, p), GATE_HALF / dist(p, q).max(1e-9)));
+    let (e1, e2) = (toward(mesh.pos[chain[(k + n - 1) % n]]), toward(mesh.pos[chain[(k + 1) % n]]));
+    let d = unit(sub(e2, e1));
+    let mut o = [-d[1], d[0]];
+    let in_town = |q: P| (0..plan.n_inner).any(|i| mesh.faces[i].len() >= 3 && contains(&mesh.face_pts(i), q));
+    if in_town(add(p, mul(o, 20.0))) && !in_town(add(p, mul(o, -20.0))) {
+        o = mul(o, -1.0);
+    }
+    let p1 = add(p, mul(o, LEAVE_FT));
+    if !dry(p, p1) {
+        return Err("the ground straight out of that corner is water or a river's bank".into());
+    }
+    let start_off = wall_d(p1);
+    let s = nv;
+    let pos = |u: usize| if u == s { p1 } else { mesh.pos[u] };
     let approaches: Vec<Vec<P>> = plan
         .ends
         .iter()
@@ -231,10 +283,11 @@ fn way_out(site: &Site, plan: &TownPlan, mesh: &Mesh, v: usize) -> Result<Vec<P>
                 .map(|g| super::approach_curve(*e, mesh.pos[g], plan.heading_of[k]))
         })
         .collect();
-    let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); nv];
-    let mut edge_v = vec![false; nv];
+    let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); nv + 1];
+    let mut edge_v = vec![false; nv + 1];
+    let mut start_in = false;
     for (f, face) in mesh.faces.iter().enumerate() {
-        if f < plan.n_inner || plan.wet[f] {
+        if f < plan.n_inner || plan.wet[f] || face.len() < 3 {
             continue;
         }
         let m = face.len();
@@ -250,45 +303,38 @@ fn way_out(site: &Site, plan: &TownPlan, mesh: &Mesh, v: usize) -> Result<Vec<P>
             if nb >= 0 && ((nb as usize) < plan.n_inner || plan.wet[nb as usize] || (nb as usize) < f) {
                 continue;
             }
-            if (on_chain[a] && a != v) || (on_chain[b] && b != v) {
+            if on_chain[a] || on_chain[b] {
                 continue;
             }
             let (pa, pb) = (mesh.pos[a], mesh.pos[b]);
-            let d = dist(pa, pb);
-            let steps = crate::core::ceil(d / 8.0).max(1.0) as usize;
-            if (0..=steps).any(|j| {
-                let p = lerp(pa, pb, j as f64 / steps as f64);
-                site.wet(p) || site.near_river(p, 4.0)
-            }) {
+            if !dry(pa, pb) || !off_wall(pa, pb, f64::MAX) {
                 continue;
             }
+            let d = dist(pa, pb);
             adj[a].push((b, d));
             adj[b].push((a, d));
         }
-    }
-    // (From the gate, straight across each patch outside it to its other corners: a corner of the
-    // wall whose third street runs inward has none going out. The track keeps the outskirts' lots
-    // and fields off its line, as a road does.)
-    for (f, face) in mesh.faces.iter().enumerate() {
-        if f < plan.n_inner || plan.wet[f] || !face.contains(&v) {
+        // (From the end of the way out of the gate, straight across the patch it stands in, or
+        // one at the gate, to its corners. The track keeps the outskirts' lots and fields off its
+        // line, as a road does.)
+        let here = contains(&mesh.face_pts(f), p1);
+        start_in |= here;
+        if !here && !face.contains(&v) {
             continue;
         }
         for &x in face {
-            if x == v || on_chain[x] || adj[v].iter().any(|e| e.0 == x) {
+            if on_chain[x] || adj[s].iter().any(|e| e.0 == x) {
                 continue;
             }
-            let (pa, pb) = (mesh.pos[v], mesh.pos[x]);
-            let d = dist(pa, pb);
-            let steps = crate::core::ceil(d / 8.0).max(1.0) as usize;
-            if (0..=steps).any(|j| {
-                let p = lerp(pa, pb, j as f64 / steps as f64);
-                site.wet(p) || site.near_river(p, 4.0)
-            }) {
-                continue;
+            let px = mesh.pos[x];
+            if dry(p1, px) && off_wall(p1, px, start_off) {
+                adj[s].push((x, dist(p1, px)));
+                adj[x].push((s, dist(p1, px)));
             }
-            adj[v].push((x, d));
         }
     }
+    // (Past the plan's patches: the open country.)
+    edge_v[s] = !start_in;
     let join = |p: P| -> Option<P> {
         approaches
             .iter()
@@ -301,11 +347,11 @@ fn way_out(site: &Site, plan: &TownPlan, mesh: &Mesh, v: usize) -> Result<Vec<P>
             .filter(|q| dist(*q, p) < 40.0)
             .min_by(|a, b| dist(*a, p).total_cmp(&dist(*b, p)))
     };
-    let mut best = vec![f64::MAX; nv];
-    let mut from = vec![usize::MAX; nv];
+    let mut best = vec![f64::MAX; nv + 1];
+    let mut from = vec![usize::MAX; nv + 1];
     let mut heap = BinaryHeap::new();
-    best[v] = 0.0;
-    heap.push(std::cmp::Reverse((bits(0.0), v)));
+    best[s] = LEAVE_FT;
+    heap.push(std::cmp::Reverse((bits(LEAVE_FT), s)));
     while let Some(std::cmp::Reverse((d, u))) = heap.pop() {
         let d = f64::from_bits(d);
         if d > best[u] {
@@ -314,24 +360,23 @@ fn way_out(site: &Site, plan: &TownPlan, mesh: &Mesh, v: usize) -> Result<Vec<P>
         if d > WAY_MAX_FT {
             break;
         }
-        if u != v {
-            let p = mesh.pos[u];
-            let joined = join(p);
-            if joined.is_some() || site.near_network_road(p, 20.0) || edge_v[u] {
-                let mut path = vec![u];
-                while let Some(&last) = path.last() {
-                    if last == v {
-                        break;
-                    }
-                    path.push(from[last]);
+        let at = pos(u);
+        let joined = join(at);
+        if joined.is_some() || site.near_network_road(at, 20.0) || edge_v[u] {
+            let mut path = vec![u];
+            while let Some(&last) = path.last() {
+                if last == s {
+                    break;
                 }
-                path.reverse();
-                let mut pts: Vec<P> = path.iter().map(|&k| mesh.pos[k]).collect();
-                if let Some(q) = joined.filter(|q| dist(*q, p) > 1.0) {
-                    pts.push(q);
-                }
-                return Ok(pts);
+                path.push(from[last]);
             }
+            path.reverse();
+            let mut pts: Vec<P> = vec![p];
+            pts.extend(path.iter().map(|&k| pos(k)));
+            if let Some(q) = joined.filter(|q| dist(*q, at) > 1.0) {
+                pts.push(q);
+            }
+            return Ok(pts);
         }
         for &(w, l) in &adj[u] {
             let nd = d + l;
@@ -363,6 +408,11 @@ pub(super) fn settle(site: &Site, plan: &TownPlan, mesh: &Mesh, ward: &[Option<W
             Ok(pts) => {
                 gates.push(v);
                 hw.gates.push((v as u32, mesh.pos[v]));
+                if let Some((r, k)) = on_wall(plan, v) {
+                    let (chain, _, _) = &plan.wall_runs[r];
+                    let n = chain.len();
+                    hw.halves.push((v as u32, gate_half(mesh.pos[chain[(k + n - 1) % n]], mesh.pos[v], mesh.pos[chain[(k + 1) % n]])));
+                }
                 hw.ways.push((v as u32, pts.windows(2).map(|s| dist(s[0], s[1])).sum()));
                 ways.push((v, pts));
             }
@@ -370,8 +420,46 @@ pub(super) fn settle(site: &Site, plan: &TownPlan, mesh: &Mesh, ward: &[Option<W
         }
     }
     hw.closed = wc.remove.iter().map(|&v| (v as u32, mesh.pos[v])).collect();
+    hw.runs = plan.wall_runs.iter().map(|(chain, closed, _)| (chain.iter().map(|&v| mesh.pos[v]).collect(), *closed)).collect();
     hw.tags = wc.towers.iter().map(|&(id, v, w, f)| (lerp(mesh.pos[v], mesh.pos[w], f), id)).collect();
     (gates, ways)
+}
+
+/// How far either side of a gate on a corner (`p`, its neighbours `a`, `b`) its towers stand: as a
+/// generated gate's on a straight wall, `GATE_HALF`, but on a bend far enough out along the sides
+/// that the towers stand as far apart as there (a passage as wide), the sides allowing.
+pub fn gate_half(a: P, p: P, b: P) -> f64 {
+    let (u, w) = (unit(sub(a, p)), unit(sub(b, p)));
+    // (sin of half the angle between the sides.)
+    let s = crate::core::sqrt(((1.0 - dot(u, w)) * 0.5).max(0.0));
+    let room = dist(a, p).min(dist(b, p)) - 30.0;
+    (GATE_HALF / s.max(0.05)).min(room).min(GATE_HALF_MOST).max(GATE_HALF)
+}
+
+/// A hand-drawn wall's gates on its bends spread to a generated gate's passage (`gate_half`):
+/// its pieces' ends and gate towers moved out along the sides, the towers they'd crowd taken off.
+pub(super) fn spread_gates(line: &[(P, bool)], closed: bool, pieces: &mut [Vec<P>], towers: &mut Vec<P>, gate_towers: &mut [P]) {
+    let n = line.len();
+    for k in 0..n {
+        if !line[k].1 || (!closed && (k == 0 || k + 1 == n)) {
+            continue;
+        }
+        let (a, p, b) = (line[(k + n - 1) % n].0, line[k].0, line[(k + 1) % n].0);
+        let g = gate_half(a, p, b);
+        if g <= GATE_HALF + 0.01 {
+            continue;
+        }
+        for q in [a, b] {
+            let toward = |by: f64| add(p, mul(sub(q, p), by / dist(p, q).max(1e-9)));
+            let (old, new) = (toward(GATE_HALF), toward(g));
+            for t in gate_towers.iter_mut().chain(pieces.iter_mut().flat_map(|w| w.iter_mut())) {
+                if dist(*t, old) < 1e-6 {
+                    *t = new;
+                }
+            }
+            towers.retain(|t| dist(*t, new) >= 30.0);
+        }
+    }
 }
 
 /// A line cut back by `by` ft at its end.
@@ -437,6 +525,8 @@ pub(super) fn pieces(plan: &TownPlan, mesh: &Mesh, gates: &[usize], wc: &WallCha
         let pos = |kk: usize| mesh.pos[chain[kk % n]];
         let pg = |kk: usize| plan.gates.contains(&chain[kk % n]);
         let ng = |kk: usize| gates.contains(&chain[kk % n]);
+        // (A gate put in by hand stands on its corner's bend as a generated one on a straight wall.)
+        let half = |kk: usize| if ng(kk) && !pg(kk) { gate_half(pos(kk + n - 1), pos(kk), pos(kk + 1)) } else { GATE_HALF };
         // (The towers along each side as planned: by the side ending at `kk`, as
         // `wall_pieces_spaced` counts them; `usize::MAX` where it fell back to the spacing.)
         let mut side_n: Vec<Option<usize>> = vec![None; m];
@@ -460,7 +550,7 @@ pub(super) fn pieces(plan: &TownPlan, mesh: &Mesh, gates: &[usize], wc: &WallCha
             if kk > 0 {
                 let q = pos(kk - 1);
                 let start_gen = if pg(kk - 1) { toward(q, p, GATE_HALF) } else { q };
-                let start_now = if ng(kk - 1) { toward(q, p, GATE_HALF) } else { q };
+                let start_now = if ng(kk - 1) { toward(q, p, half(kk - 1)) } else { q };
                 let mut on_side: Vec<(f64, P)> = Vec::new();
                 let (start, cnt) = match side_n[kk] {
                     Some(usize::MAX) => (start_gen, crate::core::floor(dist(start_gen, p) / super::SET) as usize),
@@ -469,7 +559,7 @@ pub(super) fn pieces(plan: &TownPlan, mesh: &Mesh, gates: &[usize], wc: &WallCha
                 };
                 for j in 1..=cnt {
                     let t = lerp(start, p, j as f64 / (cnt + 1) as f64);
-                    let near_gate = (ng(kk) && dist(t, p) < GATE_CLEAR_FT) || (ng(kk - 1) && !pg(kk - 1) && dist(t, q) < GATE_CLEAR_FT);
+                    let near_gate = (ng(kk) && dist(t, p) < GATE_CLEAR_FT + half(kk) - GATE_HALF) || (ng(kk - 1) && !pg(kk - 1) && dist(t, q) < GATE_CLEAR_FT + half(kk - 1) - GATE_HALF);
                     if !near_gate {
                         on_side.push((dist(q, t), t));
                     }
@@ -484,6 +574,11 @@ pub(super) fn pieces(plan: &TownPlan, mesh: &Mesh, gates: &[usize], wc: &WallCha
                         continue;
                     };
                     let t = lerp(q, p, f);
+                    // (Not over a tower the side has as planned: one a gate kept off it when the
+                    // tower went up, back since.)
+                    if on_side.iter().any(|x| dist(x.1, t) < 22.0) {
+                        continue;
+                    }
                     on_side.push((dist(q, t), t));
                 }
                 on_side.sort_by(|x, y| x.0.total_cmp(&y.0));
@@ -491,7 +586,7 @@ pub(super) fn pieces(plan: &TownPlan, mesh: &Mesh, gates: &[usize], wc: &WallCha
             }
             if ng(kk) {
                 if kk > 0 {
-                    let e = toward(p, pos(kk - 1), GATE_HALF);
+                    let e = toward(p, pos(kk - 1), half(kk));
                     cur.push(e);
                     gate_towers.push(e);
                 }
@@ -500,7 +595,7 @@ pub(super) fn pieces(plan: &TownPlan, mesh: &Mesh, gates: &[usize], wc: &WallCha
                 }
                 cur.clear();
                 if kk + 1 < m {
-                    let e = toward(p, pos(kk + 1), GATE_HALF);
+                    let e = toward(p, pos(kk + 1), half(kk));
                     cur.push(e);
                     gate_towers.push(e);
                 }
@@ -545,6 +640,134 @@ fn base_towers(world: &World, t0: &T0, index: usize, e: &TownEdit) -> Rc<Vec<(P,
     t
 }
 
+/// Towers of `all` with no id yet each matched to the unused one of `base` nearest it within `by`
+/// ft (gate flag equal), nearest pairs first.
+fn near_pairs(all: &[(P, f64, bool)], base: &[(P, bool)], ids: &mut [Option<u32>], used: &mut [bool], by: f64) {
+    let mut pairs: Vec<(u64, usize, usize)> = Vec::new();
+    for (k, &(p, _, gate)) in all.iter().enumerate() {
+        if ids[k].is_some() {
+            continue;
+        }
+        for (j, &(q, g)) in base.iter().enumerate() {
+            let d = dist(p, q);
+            if g == gate && !used[j] && d < by {
+                pairs.push((bits(d), k, j));
+            }
+        }
+    }
+    pairs.sort_unstable();
+    for (_, k, j) in pairs {
+        if ids[k].is_none() && !used[j] {
+            ids[k] = Some(j as u32);
+            used[j] = true;
+        }
+    }
+}
+
+/// How far a tower may stand off its wall run's line and still be on it (a curtain bowed out, a
+/// concave corner passed outside).
+const ON_RUN_FT: f64 = 160.0;
+/// What leaving a tower unmatched costs in `along_runs` (ft along the run).
+const SKIP_FT: f64 = 50.0;
+
+/// Where `p` stands along the wall's runs: run, ft along it from its first corner, and how far off.
+pub fn run_place(runs: &[(Vec<P>, bool)], p: P) -> Option<(usize, f64, f64)> {
+    let mut best: Option<(usize, f64, f64)> = None;
+    for (r, (pts, closed)) in runs.iter().enumerate() {
+        let n = pts.len();
+        let mut s0 = 0.0;
+        for k in 0..if *closed { n } else { n.saturating_sub(1) } {
+            let (a, b) = (pts[k], pts[(k + 1) % n]);
+            let d = sub(b, a);
+            let l = len(d);
+            let t = (dot(sub(p, a), d) / dot(d, d).max(1e-9)).clamp(0.0, 1.0);
+            let off = dist(p, add(a, mul(d, t)));
+            if best.is_none_or(|x| off < x.2 - 1e-9) {
+                best = Some((r, s0 + t * l, off));
+            }
+            s0 += l;
+        }
+    }
+    best.filter(|x| x.2 < ON_RUN_FT)
+}
+
+/// Length of a run (round a closed one).
+fn run_len(run: &(Vec<P>, bool)) -> f64 {
+    let n = run.0.len();
+    (0..if run.1 { n } else { n.saturating_sub(1) }).map(|k| dist(run.0[k], run.0[(k + 1) % n])).sum()
+}
+
+/// Towers with no id yet matched to unused ones of `base` on the same wall run (gate flag equal),
+/// keeping their order along it: the alignment that moves them least along the run, a tower left
+/// over costing `SKIP_FT`.
+fn along_runs(runs: &[(Vec<P>, bool)], all: &[(P, f64, bool)], base: &[(P, bool)], ids: &mut [Option<u32>], used: &mut [bool]) {
+    for (r, run) in runs.iter().enumerate() {
+        let total = run_len(run).max(1.0);
+        for gate in [false, true] {
+            let mut a: Vec<(f64, usize)> = (0..all.len())
+                .filter(|&k| ids[k].is_none() && all[k].2 == gate)
+                .filter_map(|k| run_place(runs, all[k].0).filter(|x| x.0 == r).map(|x| (x.1, k)))
+                .collect();
+            let mut b: Vec<(f64, usize)> = (0..base.len())
+                .filter(|&j| !used[j] && base[j].1 == gate)
+                .filter_map(|j| run_place(runs, base[j].0).filter(|x| x.0 == r).map(|x| (x.1, j)))
+                .collect();
+            if a.is_empty() || b.is_empty() {
+                continue;
+            }
+            // (A closed run counted from the middle of the widest gap between the towers it had.)
+            if run.1 {
+                b.sort_by(|x, y| x.0.total_cmp(&y.0));
+                let mut from = 0.0;
+                let mut gap = -1.0;
+                for i in 0..b.len() {
+                    let (s, t) = (b[i].0, if i + 1 < b.len() { b[i + 1].0 } else { b[0].0 + total });
+                    if t - s > gap {
+                        gap = t - s;
+                        from = s + 0.5 * (t - s);
+                    }
+                }
+                let wrap = |s: f64| {
+                    let x = s - from;
+                    x - total * crate::core::floor(x / total)
+                };
+                a.iter_mut().for_each(|x| x.0 = wrap(x.0));
+                b.iter_mut().for_each(|x| x.0 = wrap(x.0));
+            }
+            a.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+            b.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+            let (na, nb) = (a.len(), b.len());
+            let w = nb + 1;
+            let mut cost = vec![0.0f64; (na + 1) * w];
+            for i in 0..=na {
+                for j in 0..=nb {
+                    cost[i * w + j] = if i == 0 || j == 0 {
+                        (i + j) as f64 * SKIP_FT
+                    } else {
+                        let m = cost[(i - 1) * w + j - 1] + crate::core::fabs(a[i - 1].0 - b[j - 1].0);
+                        m.min(cost[(i - 1) * w + j] + SKIP_FT).min(cost[i * w + j - 1] + SKIP_FT)
+                    };
+                }
+            }
+            let (mut i, mut j) = (na, nb);
+            while i > 0 && j > 0 {
+                let c = cost[i * w + j];
+                let m = cost[(i - 1) * w + j - 1] + crate::core::fabs(a[i - 1].0 - b[j - 1].0);
+                if c == m {
+                    ids[a[i - 1].1] = Some(b[j - 1].1 as u32);
+                    used[b[j - 1].1] = true;
+                    i -= 1;
+                    j -= 1;
+                } else if c == cost[(i - 1) * w + j] + SKIP_FT {
+                    i -= 1;
+                } else {
+                    j -= 1;
+                }
+            }
+        }
+    }
+}
+
 /// Last of a town laid out with a wall edit: each tower's `t:` number (`Layout::tower_ids`), and
 /// the towers taken down gone.
 pub(super) fn finish(world: &World, t0: &T0, index: usize, e: &TownEdit, l: &mut Layout) {
@@ -559,6 +782,7 @@ pub(super) fn finish(world: &World, t0: &T0, index: usize, e: &TownEdit, l: &mut
         .map(|g| &mut g.1)
         .chain(l.hand_wall.tags.iter_mut().map(|t| &mut t.0))
         .chain(l.hand_wall.closed.iter_mut().map(|g| &mut g.1))
+        .chain(l.hand_wall.runs.iter_mut().flat_map(|r| r.0.iter_mut()))
     {
         *p = add(*p, c);
     }
@@ -570,13 +794,14 @@ pub(super) fn finish(world: &World, t0: &T0, index: usize, e: &TownEdit, l: &mut
     let mut ids: Vec<Option<u32>> = vec![None; all.len()];
     let mut tag_used = vec![false; l.hand_wall.tags.len()];
     let mut sides: FastMap<u32, u32> = FastMap::default();
+    let half_at = |v: u32| l.hand_wall.halves.iter().find(|h| h.0 == v).map_or(GATE_HALF, |h| h.1);
     for (k, &(p, _, gate)) in all.iter().enumerate() {
         if gate {
             if let Some(&(v, _)) = l
                 .hand_wall
                 .gates
                 .iter()
-                .filter(|g| dist(g.1, p) < GATE_HALF + 6.0)
+                .filter(|g| dist(g.1, p) < half_at(g.0) + 6.0)
                 .min_by(|a, b| dist(a.1, p).total_cmp(&dist(b.1, p)))
             {
                 let s = sides.entry(v).or_default();
@@ -584,33 +809,20 @@ pub(super) fn finish(world: &World, t0: &T0, index: usize, e: &TownEdit, l: &mut
                 ids[k] = Some(GATE_TOWER_ID + 2 * v + (*s - 1).min(1));
             }
         } else if let Some(t) = (0..l.hand_wall.tags.len())
-            .filter(|&t| !tag_used[t] && dist(l.hand_wall.tags[t].0, p) < 15.0)
+            .filter(|&t| !tag_used[t] && dist(l.hand_wall.tags[t].0, p) < 15.0 && !base.iter().any(|b| !b.1 && dist(b.0, p) < 1.0))
             .min_by(|&a, &b| dist(l.hand_wall.tags[a].0, p).total_cmp(&dist(l.hand_wall.tags[b].0, p)))
         {
             tag_used[t] = true;
             ids[k] = Some(l.hand_wall.tags[t].1);
         }
     }
-    let mut pairs: Vec<(u64, usize, usize)> = Vec::new();
-    for (k, &(p, _, gate)) in all.iter().enumerate() {
-        if ids[k].is_some() {
-            continue;
-        }
-        for (j, &(q, g)) in base.iter().enumerate() {
-            let d = dist(p, q);
-            if g == gate && d < MATCH_FT {
-                pairs.push((bits(d), k, j));
-            }
-        }
-    }
-    pairs.sort_unstable();
     let mut used = vec![false; base.len()];
-    for (_, k, j) in pairs {
-        if ids[k].is_none() && !used[j] {
-            ids[k] = Some(j as u32);
-            used[j] = true;
-        }
-    }
+    // (Those that stand where they stood.)
+    near_pairs(&all, &base, &mut ids, &mut used, 1.0);
+    // (Then by each wall run and their order along it, however far a curtain bowed anew carried them.)
+    along_runs(&l.hand_wall.runs, &all, &base, &mut ids, &mut used);
+    // (Then the rest, a castle's, nearest first.)
+    near_pairs(&all, &base, &mut ids, &mut used, MATCH_FT);
     let ids: Vec<u32> = (0..all.len())
         .map(|k| {
             if let Some(id) = ids[k] {
@@ -1006,7 +1218,9 @@ pub(super) fn plan_json(world: &World, t0: &T0, index: usize, e: Option<&TownEdi
         .iter()
         .map(|c| {
             let id = format!("gt:{index}:{}", c.v);
-            let mut x = json!({ "corner": c.v, "id": id, "name": names.get(&id) });
+            // (A name set by `rename_feature` over the one it was given.)
+            let name = world.file.edits.renames.get(&id).filter(|n| !n.is_empty()).or(names.get(&id));
+            let mut x = json!({ "corner": c.v, "id": id, "name": name });
             if let Some((_, why)) = l.hand_wall.refused.iter().find(|r| r.0 == c.v) {
                 x["refused"] = json!(why);
             }
@@ -1019,6 +1233,22 @@ pub(super) fn plan_json(world: &World, t0: &T0, index: usize, e: Option<&TownEdi
         "towers_added": e.wall.towers_add.iter().map(|h| json!({ "id": format!("t:{index}:{}", h.id), "corners": [h.v, h.w], "f": h.f })).collect::<Vec<_>>(),
         "towers_removed": e.wall.towers_remove.iter().map(|id| format!("t:{index}:{id}")).collect::<Vec<_>>(),
     }))
+}
+
+/// Whether the tower at wall corner `v` (at `at`, world ft) was taken down by hand: the one
+/// standing there without the wall edit, or the tower on a corner whose gate was taken out
+/// (`get_town_plan`'s corners: `tower_removed`).
+pub(super) fn tower_down(world: &World, t0: &T0, index: usize, e: Option<&TownEdit>, v: usize, at: P) -> bool {
+    let Some(e) = e.filter(|e| !e.wall.towers_remove.is_empty()) else { return false };
+    let off = &e.wall.towers_remove;
+    if off.contains(&(CORNER_TOWER_ID + v as u32)) {
+        return true;
+    }
+    let base = base_towers(world, t0, index, e);
+    (0..base.len())
+        .filter(|&i| !base[i].1 && dist(base[i].0, at) < 30.0)
+        .min_by(|&x, &y| dist(base[x].0, at).total_cmp(&dist(base[y].0, at)))
+        .is_some_and(|i| off.contains(&(i as u32)))
 }
 
 /// Whether a gate at corner `v` was put in by hand or taken out (`get_town_plan`'s corners).

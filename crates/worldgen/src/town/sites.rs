@@ -715,7 +715,9 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
             k += 1;
         }
     }
-    let (pieces, towers, gate_towers) = wall_pieces(&line, c.closed, l.wall_style.spacing);
+    let (mut pieces, mut towers, mut gate_towers) = wall_pieces(&line, c.closed, l.wall_style.spacing);
+    // (R5 towns, M18: a gate on a bend as wide as one on a straight wall.)
+    super::wallgates::spread_gates(&line, c.closed, &mut pieces, &mut towers, &mut gate_towers);
     l.walls = pieces;
     l.towers = towers;
     l.gate_towers = gate_towers;

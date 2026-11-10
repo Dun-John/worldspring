@@ -158,12 +158,12 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         .worker
         .with(move |ex| {
             let skip = agent::layout_of(&ex.world, &ex.t0, &probe.id).filter(|_| !creating);
-            agent::works_spot(&ex.world, &ex.t0, &probe, &probe.id, skip).map(|s| (s.at, s.name, s.in_way))
+            agent::works_spot(&ex.world, &ex.t0, &probe, &probe.id, skip).map(|s| (s.at, s.name, s.in_way, s.in_way_names))
         })
         .await?;
-    let (p, name, in_way) = spot;
+    let (p, name, in_way, names) = spot;
     if !in_way.is_empty() && !a["remove_in_way"].as_bool().unwrap_or(false) {
-        let ids: Vec<&str> = in_way.iter().map(|(id, _)| id.as_str()).take(20).collect();
+        let ids: Vec<String> = in_way.iter().map(|(id, _)| names.get(id).map_or_else(|| id.clone(), |n| format!("{id} ({n})"))).take(20).collect();
         // (A ring round patches: most stand where one district's lots run across a patch edge.)
         let bare = ring_report.get("sides_without_street").map(|s| format!(" (the ring's sides from corners {s} run where lots cross a patch edge with no street)")).unwrap_or_default();
         return Err(format!(

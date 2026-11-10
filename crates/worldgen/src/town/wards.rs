@@ -1079,6 +1079,9 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
             if let Some(nb) = wall[v] {
                 c["wall"] = json!(true);
                 c["wall_next"] = json!(nb);
+                if super::wallgates::tower_down(world, t0, index, e, v, world_pt(mesh.pos[v])) {
+                    c["tower_removed"] = json!(true);
+                }
             }
             if super::squares::junction(&plan, &ward, &group, v) {
                 if super::squares::at_close(&plan, v, &closes) {
