@@ -38,7 +38,7 @@ const CAVE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.29, 0
 const MINE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.3, 0.26, 0.22]);
 const LAVA = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.26, 0.225, 0.21]);
 // (Ice: white and pale blue rock, about the snow and ice ground above under the dim.)
-const ICE: UnderLook = { ...look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.55, 0.65, 0.76]), feel: 4 };
+const ICE: UnderLook = { ...look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.6, 0.7, 0.8]), feel: 4 };
 /** A cave's biome looks (`Interior::look` 1-3): the rock's tone and the floor's cast. */
 const BIOME_LOOKS: { rock: UnderLook['rock']; tint: UnderLook['tint'] }[] = [
   { rock: [0.25, 0.3, 0.215], tint: [0.9, 1.0, 0.86] },

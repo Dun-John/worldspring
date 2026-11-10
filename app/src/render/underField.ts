@@ -585,10 +585,11 @@ function liftField(it: Interior, level: number): Lift | null {
   const rubble = new Uint8Array(nx * ny);
   for (const g of lv.furniture) if (g.kind === 'rubble_slope') for (let y = g.y; y < Math.min(ny, g.y + g.h); y++) for (let x = g.x; x < Math.min(nx, g.x + g.w); x++) rubble[y * nx + x] = 1;
   const slope = (k: number) => f.ramp[k] && rubble[k] === 1;
-  // (i, j, 1 on the line x = i over row j / 0 on y = j over column i, rise: the east or south side's minus the other's.)
-  const segs: [number, number, number, number][] = [];
-  for (let j = 0; j < ny; j++) for (let i = 0; i <= nx; i++) if (v[j * (nx + 1) + i]) segs.push([i, j, 1, v[j * (nx + 1) + i]]);
-  for (let j = 0; j <= ny; j++) for (let i = 0; i < nx; i++) if (h[j * nx + i]) segs.push([i, j, 0, h[j * nx + i]]);
+  // (i, j, 1 on the line x = i over row j / 0 on y = j over column i, rise: the east or south side's minus the other's,
+  // the west or north side's height.)
+  const segs: [number, number, number, number, number][] = [];
+  for (let j = 0; j < ny; j++) for (let i = 0; i <= nx; i++) if (v[j * (nx + 1) + i]) segs.push([i, j, 1, v[j * (nx + 1) + i], f.ft[j * nx + i - 1]]);
+  for (let j = 0; j <= ny; j++) for (let i = 0; i < nx; i++) if (h[j * nx + i]) segs.push([i, j, 0, h[j * nx + i], f.ft[(j - 1) * nx + i]]);
   const square = SQUARE_SITES.has(it.function);
   const R = square ? 8 : 4;
   const [w, hh] = [nx * R, ny * R];
@@ -596,7 +597,7 @@ function liftField(it: Interior, level: number): Lift | null {
   const best = new Float32Array(w * hh).fill(Infinity);
   const dist = new Float32Array(w * hh);
   const rise = new Float32Array(w * hh);
-  for (const [i, j, vert, r] of segs) {
+  for (const [i, j, vert, r, ft0] of segs) {
     const [x0, y0] = [i - LIFT_REACH, j - LIFT_REACH];
     const [x1, y1] = vert ? [i + LIFT_REACH, j + 1 + LIFT_REACH] : [i + 1 + LIFT_REACH, j + LIFT_REACH];
     for (let ty = Math.max(0, Math.floor(y0 * R)); ty < Math.min(hh, Math.ceil(y1 * R)); ty++) {
@@ -610,7 +611,17 @@ function liftField(it: Interior, level: number): Lift | null {
         const k = ty * w + tx;
         if (d >= LIFT_REACH || key >= best[k]) continue;
         best[k] = key;
-        dist[k] = perp > 0 === r > 0 ? d : -d;
+        // (Its side: a floor texel's by its own square's height where that is the edge's high or low floor, so one
+        // past the edge's end, on a floor of the low side's height, is never taken for the high side; else by the line.
+        // Taken for the high side, it would carry that side over its whole floor (below), and where that met the low
+        // side, out of reach of any edge, a lip was drawn across the floor with no drop.)
+        const s = Math.min(ny - 1, Math.floor(py)) * nx + Math.min(nx - 1, Math.floor(px));
+        let high = perp > 0 === r > 0;
+        if (lv.cells[s] >= 0 && !f.ramp[s]) {
+          if (f.ft[s] >= Math.max(ft0, ft0 + r)) high = true;
+          else if (f.ft[s] <= Math.min(ft0, ft0 + r)) high = false;
+        }
+        dist[k] = high ? d : -d;
         rise[k] = Math.abs(r);
       }
     }
