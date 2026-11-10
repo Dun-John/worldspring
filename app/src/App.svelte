@@ -1677,7 +1677,22 @@
     if (r.edit) towns[key] = r.edit;
     else delete towns[key];
     view.hintTown(key, r.edit, r.report.rects);
-    applyEdits({ ...edits, towns }, { tool: 'edit_town', id: settlements[i]?.id, name: townName ?? undefined, what, ...townReport(r.report) }, 'user');
+    // A renamed or noted building handed on to its successor: name and note move in the same step.
+    let renames = edits.renames;
+    let notes = edits.notes;
+    for (const c of r.report.renames_carried ?? []) {
+      if (renames && c.from in renames) {
+        renames = { ...renames, [c.to]: renames[c.from] };
+        delete renames[c.from];
+      }
+      if (notes && c.from in notes) {
+        notes = { ...notes, [c.to]: notes[c.from] };
+        delete notes[c.from];
+      }
+    }
+    const lost = r.report.renames_lost ?? [];
+    if (lost.length) toast(`Kept on the old id: ${lost.map((l) => l.name).join(', ')}`);
+    applyEdits({ ...edits, towns, ...(renames ? { renames } : {}), ...(notes ? { notes } : {}) }, { tool: 'edit_town', id: settlements[i]?.id, name: townName ?? undefined, what, ...townReport(r.report) }, 'user');
   }
 
   /** What a change did, for its description (`describe`), as an agent's reply has it. */

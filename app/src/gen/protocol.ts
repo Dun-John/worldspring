@@ -281,7 +281,9 @@ export interface Plateau {
 export interface TownEdit {
   at: [number, number];
   corners?: { v: number; from: [number, number]; to: [number, number] }[];
-  patches?: { p: number; at: [number, number]; ward?: string; lots?: string; merge_with?: number; reroll?: number; close?: boolean; park?: string }[];
+  patches?: { p: number; at: [number, number]; ward?: string; lots?: string; merge_with?: number; reroll?: number; close?: boolean; park?: string; district?: string }[];
+  /** Districts made by hand, in the order made (a patch's `district` may name one). */
+  districts?: string[];
   walls?: boolean;
   squares?: { v: number; at: [number, number]; kind: string }[];
 }
@@ -351,6 +353,16 @@ export interface TownCorner {
   square_generated?: SquareKind | 'none';
 }
 
+/** A district in the plan (`get_town_plan`'s `districts`). */
+export interface TownDistrict {
+  id: string;
+  name: string;
+  kind: string;
+  patches: number[];
+  by_hand?: boolean;
+  changed?: boolean;
+}
+
 /** A town's plan for the ward editor (Ask op `townplan`). */
 export interface TownPlan {
   layout: number;
@@ -360,6 +372,8 @@ export interface TownPlan {
   walls: { built: boolean; generated: boolean };
   edited: boolean;
   patches: TownPatch[];
+  /** The town's districts (a hand-made one: `by_hand`; one changed by a patch moved in or out: `changed`). */
+  districts?: TownDistrict[];
   corners: TownCorner[];
   /** What of the town's edit no longer applies. */
   set_aside: string[];
@@ -370,7 +384,7 @@ export interface TownRequest {
   moves?: { corner: number; to?: [number, number]; by?: [number, number]; as_generated?: boolean }[];
   equalize?: number[];
   relax?: { at: [number, number]; radius_ft: number; amount?: number };
-  patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; close?: boolean | 'auto'; park?: ParkKind | 'auto'; as_generated?: boolean }[];
+  patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; close?: boolean | 'auto'; park?: ParkKind | 'auto'; district?: string; as_generated?: boolean }[];
   squares?: { corner: number; kind: SquareKind | 'none' | 'auto' }[];
   walls?: boolean | 'auto';
   reset?: 'all' | 'corners' | 'patches' | 'squares';
@@ -388,6 +402,12 @@ export interface TownReport {
   rects: Rect[];
   functions_lost?: string[];
   unmerged?: number[];
+  /** Patches that changed district (`from`/`to` are district ids). */
+  districts_changed?: { patch: number; from: string; to: string }[];
+  /** A renamed or noted building gone, handed to the new one that does its work (move the name and note). */
+  renames_carried?: { from: string; to: string; name: string }[];
+  /** A renamed building gone with no successor: its name stays on the old id. */
+  renames_lost?: { id: string; name: string }[];
 }
 
 /** A generated building changed by hand (`worldgen::world::BuildingEdit`): `at` is its middle
@@ -1107,7 +1127,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32 || kind === TOWER_KIND;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32 || kind === 33 || kind === TOWER_KIND;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -1154,6 +1174,11 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // A park's water (a pond fanned from its middle, a stream; not outlined), gravel, parterres
       // (hedged beds), trees' crowns and flowerbeds.
       else if (kind === 11) rgb = [0.42, 0.6, 0.64];
+      // A kurgan mound (kind 33): a low grassy barrow, a shade darker than a cemetery plot, lightly inked.
+      else if (kind === 33) {
+        rgb = [0.44, 0.52, 0.3];
+        a = 0.6;
+      }
       // A town wall's bastion (`payload.rs` kind 32): a stone platform, outlined (its faces are the town
       // wall's lines), in its wall's stone calmed toward grey: a broad fill reads louder than the curtain's
       // narrow core in the same tone.

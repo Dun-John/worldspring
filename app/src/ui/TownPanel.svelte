@@ -1,7 +1,7 @@
 <script lang="ts">
   // Edit › Streets: the town in view laid out anew by hand (the ward editor). Its patches are drawn
   // over the map; a corner dragged, or the brushes, move them (applied on release); a patch
-  // picked can be given another ward, lot size, joined to a neighbour's district or laid out
+  // picked can be given another ward, lot size, joined to a neighbour's district or put in another (or a new one by name) or laid out
   // again, a temple's kept as a close round it, a park's laid out as a formal garden or a common; a
   // corner where streets meet picked can be given a square; the town's walls put up or taken down.
   // Each change is one step to undo.
@@ -83,6 +83,33 @@
   const brush = $derived(mode !== 'select' && mode !== 'equalize');
   const generatedWard = $derived(selected ? (selected.ward_generated ?? selected.ward) : 'empty');
   const set = (req: TownRequest['patches'], what: string) => selected && onChange({ patches: req }, what);
+  let naming = $state(false);
+  let newName = $state('');
+  const districtList = $derived((plan?.districts ?? []).filter((d) => d.patches.length > 0 || d.id === selected?.district?.id));
+  function pickDistrict(e: Event) {
+    const el = e.currentTarget as HTMLSelectElement;
+    const v = el.value;
+    if (!selected) return;
+    if (v === '@new') {
+      naming = true;
+      el.value = selected.district?.id ?? '';
+      return;
+    }
+    naming = false;
+    set([{ patch: selected.patch, district: v === '@auto' ? 'auto' : v }], 'district');
+  }
+  function makeDistrict() {
+    const n = newName.trim().slice(0, 80);
+    if (!n || !selected) return;
+    set([{ patch: selected.patch, district: n }], 'district');
+    naming = false;
+    newName = '';
+  }
+  // (A different patch picked: the name box closes.)
+  $effect(() => {
+    selected?.patch;
+    naming = false;
+  });
   const generatedSquare = $derived(corner ? (corner.square_generated ?? corner.square ?? 'none') : 'none');
 </script>
 
@@ -132,6 +159,26 @@
             {/each}
           </select>
         </label>
+        {#if selected.in_town && plan.districts?.length}
+          <div class="ws-field">
+            <label for="town-district">District</label>
+            <select id="town-district" class="ws-input" value={selected.district?.id ?? ''} disabled={busy} onchange={pickDistrict}>
+              {#if !selected.district}<option value="" disabled>None</option>{/if}
+              {#each districtList as d (d.id)}
+                <option value={d.id}>{d.name || 'Unnamed'} ({d.kind}){d.by_hand ? ' · by hand' : ''}</option>
+              {/each}
+              <option value="@auto">As generated</option>
+              <option value="@new">New district…</option>
+            </select>
+            {#if naming}
+              <div class="row">
+                <input class="ws-input grow" type="text" minlength="1" maxlength="80" placeholder="Name (an existing name joins it)" bind:value={newName} disabled={busy} onkeydown={(e) => e.key === 'Enter' && makeDistrict()} />
+                <button class="ws-btn" disabled={busy || !newName.trim()} onclick={makeDistrict}>Make</button>
+                <button class="ws-btn" disabled={busy} onclick={() => (naming = false)}>Cancel</button>
+              </div>
+            {/if}
+          </div>
+        {/if}
         {#if selected.ward === 'park'}
           <div class="ws-field">
             Laid out as
