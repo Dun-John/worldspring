@@ -1179,6 +1179,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut dressing: Vec<([f64; 2], f32, Kind, u8)> = Vec::new();
     // Temples' churchyards in closes (their headstones are the close's dressing).
     let mut churchyards: Vec<Vec<[f64; 2]>> = Vec::new();
+    // (R5 towns: the squares of cemeteries' links from their roads, kept up a bank like their walks.)
+    let mut cem_links: Vec<usize> = Vec::new();
     // The capital's palace's court's squares (halo-indexed): a lawn, nothing added on it but what it
     // sets out.
     let mut court_h = vec![false; HS * HS];
@@ -1462,6 +1464,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                             let inside = crate::town::geom::contains(&pk.pts, center(i, j));
                             if ((urb_h[h] == URBAN_GRAVEYARD && inside) || (urb_h[h] == 0 && road_h[h] == 0 && !inside)) && crate::town::geom::seg_dist(center(i, j), a, e) < half {
                                 urb_h[h] = URBAN_PATH;
+                                if !inside {
+                                    cem_links.push(h);
+                                }
                             }
                         }
                     }
@@ -2617,7 +2622,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let cliff = |h: usize| [1, HS].iter().any(|&o| [h + o, h - o].iter().any(|&nh| (hh[nh] - hh[h]).abs() > 2.75 && !on_feature(nh)));
     // (R5 towns: a cemetery's walks stay whole: its ground is levelled to the bed later, its tombs
     // stand by its walks.)
-    let in_yard = |h: usize| churchyards.iter().any(|y| crate::town::geom::contains(y, center(h % HS, h / HS)));
+    let in_yard = |h: usize| churchyards.iter().any(|y| crate::town::geom::contains(y, center(h % HS, h / HS))) || cem_links.contains(&h);
     let urban: Vec<u8> = (0..n)
         .map(|k| {
             let h = (k / SQ + 1) * HS + k % SQ + 1;

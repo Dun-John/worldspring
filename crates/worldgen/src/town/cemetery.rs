@@ -157,8 +157,9 @@ fn wanted(s: &Settlement, plan: &TownPlan) -> usize {
 }
 
 /// How far a cemetery by a road stands off its road's edge (ft): its wall clear of the road's
-/// verge (the battlemap keeps walls a square and more off a road), a short path over to the gate.
-pub const VERGE: f64 = 10.0;
+/// verge (the battlemap keeps walls a square and more off a road) and of the road's line as the
+/// plan draws it (wider than the bed), a short path over to the gate.
+pub const VERGE: f64 = 20.0;
 
 /// How many cemeteries the town wants, and the generated common (if it has two or more, none
 /// set by hand, on a slope, the palace's or bigger than `INNER_MAX`) that is one of them.
@@ -366,13 +367,13 @@ fn clear_by_road(site: &Site, plan: &TownPlan, l: &Layout, poly: &[P], rk: usize
     // (Its own road a little nearer than `VERGE` where it bends; every other a good way off, its
     // wall clear of it.)
     for (ri, pts, w) in ways {
-        let need = 0.5 * w + if Some(*ri) == own { VERGE - 3.0 } else { 12.0 };
+        let need = 0.5 * w + if Some(*ri) == own { VERGE - 4.0 } else { VERGE };
         if pts.windows(2).any(|s| seg_gap(s[0], s[1]) < need) {
             return false;
         }
     }
     for (k, (pts, _, w)) in l.roads.iter().enumerate() {
-        let need = 0.5 * w + if k == rk { VERGE - 3.0 } else { 12.0 };
+        let need = 0.5 * w + if k == rk { VERGE - 4.0 } else { VERGE };
         if pts.windows(2).any(|s| seg_gap(s[0], s[1]) < need) {
             return false;
         }
