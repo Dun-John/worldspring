@@ -626,6 +626,79 @@ and resolve nowhere. The result's `set_aside` counts them.
 ```
 > *"Add a logging village up in those hills."* · *"Put a market town between Bornworth and the lake."*
 
+## The sketch and `regenerate`
+
+The sketch is the set of strokes that steer generation: land, sea, mountain ranges and massifs, rivers, lakes, painted
+biomes, volcanoes, settlement pins, sites, regions and roads (World › Sketch in the app). It is part of the world, so
+changing it makes another world. The sketch tools store their changes at once (in `<hash>/sketch.json` beside the
+world), but the world is not remade until `regenerate`; their results say `pending: true`, and `get_sketch` says
+whether changes wait. They can't go in a `batch`.
+
+A stroke's id is `sk:` and a hash of the stroke: it stays while other strokes come and go, and a changed stroke gets a
+new one (`update_sketch_stroke` returns it). `index` is its place in the sketch, for reading only.
+
+### `get_sketch`
+The strokes (as the pending changes leave them), each with `id`, `index`, `tool` and its points (`path`, or `at` for a
+pin, volcano, site or region named at a point), and its options: `closed`, `radius_mi`, `strength`, `hard`, `biome`,
+`name`, a road's `kind`, a pin's `tier`, `lives_by`, `capital`, `wards` and `added`. A stroke changed or added since the
+world was made says so (`pending: "changed"` or `"added"`), and `changes` lists what changed (`added`, `changed`, and
+the ids `removed`). `tool` filters, `points: false` gives `point_count` and `bbox` instead of points, `limit`
+(default 100) cuts the list (`{items, found}`).
+
+### `create_sketch_stroke`
+| Parameter | Type | | |
+|---|---|---|---|
+| `tool` | string | required | `land`, `sea` (cut out of land), `range`, `river` (from its first point down), `forest` (a temperate forest painted), `biome`, `road`, `pin` (a settlement). |
+| `path` | `[[x_ft, y_ft], ...]` | all but pins | 2 or more points, 3 or more for an outline; at most 5,000, all on the map. |
+| `at` | a place | pins | `{x_ft, y_ft}`, `[x_ft, y_ft]` or a feature's id. |
+| `closed` | boolean | land, sea, forest, biome | The path is an outline, filled (default true); false: a band brushed along it. |
+| `radius_mi` | number | not pins, roads | Brush half-width, 0.1 to 200 (defaults: land 15, sea 10, range 15, river 3, forest and biome 20). |
+| `strength` | number | range, river | 0 to 1 (default 0.7): a range's height (0.2 hills to 1 high peaks), a river's size. |
+| `hard` | boolean | land, sea, forest, biome | Edges exactly as drawn. |
+| `biome` | string | forest, biome | The biome painted (a biome stroke needs it). |
+| `name` | string | optional | What it makes is called this (up to 80 characters); a road's name (else it has none). |
+| `kind` | string | road | `kings_road`, `road` (default), `track`, or `none` (a line no planned road crosses; no name). |
+| `tier` | string | pins, required | `metropolis`, `city`, `town` or `village`. |
+| `lives_by` | string | pins | `port`, `river`, `mining`, `fortress`, `market`, `farming`, `fishing`, `lumber`, `herding`, `oasis`. Default: from its land. |
+| `capital` | boolean | pins | The realm's capital. |
+| `wards` | `[string]` | pins | Its districts' names, the central one first (up to 24). |
+| `added` | boolean | pins | Beside the world's own settlements (default true, as Edit › Places adds them); false: in place of one of its tier. |
+
+An option for another tool is refused (`tier: only for pin, got "town"`), as is a point off the map (the message gives
+the map's size). The same stroke again adds nothing and returns `existing: true`.
+
+### `update_sketch_stroke`
+`id` and any of the parameters above but `tool`; what is not given stays. Returns the new `id` (and `was`).
+
+### `delete_sketch_stroke`
+`ids` (or `id`): all or none. A pin taken away takes its settlement with it at `regenerate`: what was made on it is set
+aside (`gone:...`, as when the app removes a settlement), never handed to a neighbour.
+
+### `regenerate`
+Remakes the world with the pending changes, natively in mapd (a few seconds), with or without the app open. The world's
+changes follow their places, as when the app remakes it: names and notes follow features that moved, changes inside
+settlements and sites follow those laid out the same, and the rest are set aside under ids that name nothing. Tool
+calls made meanwhile wait, and see the world before or the world remade, never a mix. The remade world is saved under
+its new hash (`world`; `was` is the one before). An open map app loads it, asking first when it has work not saved
+(sketch strokes not generated, a site's design, a session being played); an app opened later is told to load it.
+
+Returns `kept` (changes that followed their places to new numbers; the others stayed as they were), `set_aside`
+(of them `removed`: on settlements taken away), `moved` (features whose changes moved to another), `settlements` and
+`settlements_before`, `gone` (settlements taken away), `made` (the settlement each new pin made: `{stroke, id, name}`,
+`id` null if none was placed), `conflicts` (what the sketch could not follow: `{stroke, message, x_ft, y_ft}`) and
+`seconds`. With nothing pending it does nothing (`regenerated: false`).
+
+A drawn range or coast moves many settlements (the world's own are placed over the whole map), so changes made on
+them are set aside; a pin far from them leaves them as they are.
+
+```json
+{ "name": "create_sketch_stroke", "arguments": { "tool": "range", "path": [[4682158, 2536577], [4708558, 2642177], [4682158, 2747777]], "strength": 0.6, "name": "Greyspine" } }
+{ "name": "create_sketch_stroke", "arguments": { "tool": "pin", "at": [4391758, 2694977], "tier": "city", "capital": true, "name": "Newhold" } }
+{ "name": "create_sketch_stroke", "arguments": { "tool": "road", "path": [[2300000, 1100000], [2500000, 1180000]], "kind": "kings_road", "name": "The High Road" } }
+{ "name": "regenerate", "arguments": {} }
+```
+> *"Make Newhold a city and the capital."* · *"Draw a mountain range along the east coast, then remake the world."*
+
 ## Notebook tools: NPCs and plot points
 
 The DM's notebook holds NPCs (`n:<id>`) and plot points (`p:<id>`). They are written by the user (the app's

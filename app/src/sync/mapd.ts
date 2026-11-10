@@ -17,7 +17,11 @@ export type FromMapd =
   | { type: 'follow'; following: boolean; refused?: EditOp[] }
   | { type: 'resync' }
   | { type: 'saved' }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'remade'; file: WorldFile; gone?: RemadeGone[] };
+
+/** A settlement an agent's sketch change took away on purpose (`t0::remap::Gone`). */
+export type RemadeGone = { id: string; name: string; li: number };
 
 /** mapd's socket: same origin when mapd serves the app, else the default port on this machine. */
 function socketUrl(): string | null {
@@ -43,6 +47,9 @@ export class MapdSync {
   /** A screenshot request: resolve with a PNG data URL. */
   onRender: (x: number, y: number, size: number) => Promise<string> = () => Promise.reject(new Error('no map'));
   onFocus: (x: number, y: number, size: number) => void = () => {};
+  /** mapd remade the world open here (an agent's `regenerate`): `file` is the world remade, with
+   * the edits as they followed their places; `gone`: the settlements its sketch took away. */
+  onRemade: (file: WorldFile, gone: RemadeGone[]) => void = () => {};
   onStatus: (connected: boolean) => void = () => {};
   /** Whether mapd follows this tab's world (another tab may have its own world open). */
   onFollow: (following: boolean) => void = () => {};
@@ -166,6 +173,7 @@ export class MapdSync {
     }
     else if (m.type === 'ops') this.onOps(m.ops ?? [], m.change ?? {}, m.author ?? 'agent');
     else if (m.type === 'focus') this.onFocus(m.x, m.y, m.size);
+    else if (m.type === 'remade') this.onRemade(m.file, m.gone ?? []);
     else if (m.type === 'follow') {
       this.following = m.following;
       // Changes sent just as mapd turned to another world come back: kept for later.
