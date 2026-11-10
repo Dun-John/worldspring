@@ -331,7 +331,7 @@ impl Ctx {
         let (kx0, ky0, kx1, ky1) = (k(r[0]), k(r[1]), k(r[2]), k(r[3]));
         let (cw, ch) = ((kx1 - kx0 + 1) as usize, (ky1 - ky0 + 1) as usize);
         let (nx, ny) = (cw * SQ, ch * SQ);
-        let mut w = Win { ox: kx0 as f64 * size, oy: ky0 as f64 * size, nx, ny, block: vec![false; nx * ny], street: vec![false; nx * ny], objects: Vec::new() };
+        let mut w = Win { ox: kx0 as f64 * size, oy: ky0 as f64 * size, nx, ny, block: vec![false; nx * ny], street: vec![false; nx * ny], objects: Vec::new(), gravel: vec![false; nx * ny], road: vec![false; nx * ny], runs: Vec::new() };
         for cj in 0..ch {
             for ci in 0..cw {
                 let c = self.chunk(kx0 + ci as u32, ky0 + cj as u32);
@@ -340,6 +340,14 @@ impl Ctx {
                     let a = idx(q % SQ, q / SQ);
                     w.block[a] |= c.building[q] != 0 || matches!(c.urban[q], URBAN_WALL | URBAN_TOWER);
                     w.street[a] = c.urban[q] == URBAN_STREET;
+                    w.gravel[a] = c.surface[q] == Surface::Gravel;
+                    w.road[a] = c.road_halo[(q / SQ + 1) * (SQ + 2) + q % SQ + 1] != 0 || c.urban[q] == URBAN_STREET;
+                }
+                // (R5 towns: dry-stone walls and hedges, world ft.)
+                let (cx, cy) = (w.ox + (ci * SQ) as f64 * SQUARE_FT, w.oy + (cj * SQ) as f64 * SQUARE_FT);
+                for s in c.structures.iter().filter(|s| matches!(s.kind, worldgen::battlemap::ShapeKind::DryWall | worldgen::battlemap::ShapeKind::Hedge) && s.pts.len() >= 2) {
+                    let f = |q: [f32; 2]| [cx + q[0] as f64 * SQUARE_FT, cy + q[1] as f64 * SQUARE_FT];
+                    w.runs.push((f(s.pts[0]), f(s.pts[1])));
                 }
                 let mut set = |i: i64, j: i64| {
                     if i >= 0 && j >= 0 && i < SQ as i64 && j < SQ as i64 {
@@ -393,6 +401,10 @@ struct Win {
     street: Vec<bool>,
     /// Every object (world ft) by name.
     objects: Vec<(P, String)>,
+    /// (R5 towns) gravel squares, road or street squares, dry-stone walls' and hedges' runs (world ft).
+    gravel: Vec<bool>,
+    road: Vec<bool>,
+    runs: Vec<(P, P)>,
 }
 
 impl Win {
@@ -5530,6 +5542,8 @@ fn cemeteries(ctx: &mut Ctx, r: &mut Report) {
     let mut shown = [0usize; 5];
     // (Up to 2 a group looked at on the battlemap: plot, props planned.)
     let mut look: Vec<(usize, Vec<P>, usize)> = Vec::new();
+    let mut ground: Vec<(usize, town::Park)> = Vec::new();
+    r.counts(&CEM_GROUND);
     for li in 0..town::layout_count(t0) {
         let l = town::layout(world, t0, li);
         if l.site || l.tier < worldgen::t0::settle::Tier::Town {
@@ -5543,6 +5557,7 @@ fn cemeteries(ctx: &mut Ctx, r: &mut Report) {
             let by_road = pk.cemetery.is_some_and(|c| c.by_road);
             r.tally(&format!("{}: cemeteries {}", GROUPS[g], if by_road { "by a road" } else { "in town" }), 1);
             check_cemetery(world, t0, &l, li, pk, &GROUPS, r);
+            ground.push((li, pk.clone()));
             if shown[g] < 2 {
                 shown[g] += 1;
                 look.push((g, pk.pts.clone(), town::cemetery::plan(pk).map_or(0, |pl| pl.props.len())));
@@ -5602,6 +5617,9 @@ fn cemeteries(ctx: &mut Ctx, r: &mut Report) {
         r.tally(&format!("{}: battlemap props planned (looked at)", GROUPS[g]), planned);
         r.tally(&format!("{}: battlemap props laid (looked at)", GROUPS[g]), laid);
     }
+    for (li, pk) in &ground {
+        cemetery_ground(ctx, *li, pk, &GROUPS, r);
+    }
     say!("  cemetery cameras:");
     for c in cams {
         say!("{c}");
@@ -5618,6 +5636,97 @@ const CEM_RULES: [&str; 8] = [
     "R tombs planned and not built",
     "R tombs with no tomb chamber",
 ];
+
+// R5 towns (M21 fixes): a cemetery as the battlemap lays it.
+const CEM_GROUND: [&str; 4] = ["R cemetery squares on a road", "R walk samples off the gravel", "R boundary samples with no wall or hedge", "R ways in not facing the road beside"];
+
+/// A cemetery's battlemap: no road square inside its boundary; its walks (and the link from the road)
+/// gravel all along (as the ground shader smooths the squares' gravel: a tent 1.5 squares round, at
+/// least half); its wall or hedge all round but for the gate; a way in by a road faces it.
+fn cemetery_ground(ctx: &mut Ctx, li: usize, pk: &town::Park, groups: &[&str; 5], r: &mut Report) {
+    let Some(pl) = town::cemetery::plan(pk) else { return };
+    let g = pk.cemetery.map_or(1, |c| c.group as usize % 5);
+    let here = format!("L{li} {} at {}", groups[g], at(town::geom::mean(&pk.pts)));
+    let b = pk.pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+    let w = ctx.window([b[0] - 60.0, b[1] - 60.0, b[2] + 60.0, b[3] + 60.0]);
+    let on_road = (0..w.nx * w.ny).filter(|&k| w.road[k] && contains(&pl.boundary, w.centre(k))).count();
+    if on_road > 0 {
+        r.add(CEM_GROUND[0], on_road as f64, format!("{here}: {on_road} squares"));
+    }
+    let cover = |p: P| -> f64 {
+        let gx = (p[0] - w.ox) / SQUARE_FT - 0.5;
+        let gy = (p[1] - w.oy) / SQUARE_FT - 0.5;
+        let (ix, iy) = (gx.floor() as i64, gy.floor() as i64);
+        let (mut sum, mut ws) = (0.0, 0.0);
+        for j in -1..=2i64 {
+            for i in -1..=2i64 {
+                let (dx, dy) = (gx - (ix + i) as f64, gy - (iy + j) as f64);
+                let wt = (1.5 - dx.abs()).max(0.0) * (1.5 - dy.abs()).max(0.0);
+                let (a, c) = (ix + i, iy + j);
+                let on = a >= 0 && c >= 0 && (a as usize) < w.nx && (c as usize) < w.ny && w.gravel[c as usize * w.nx + a as usize];
+                sum += wt * on as u8 as f64;
+                ws += wt;
+            }
+        }
+        sum / ws.max(1e-9)
+    };
+    let mut walks: Vec<(P, P)> = pl.walks.iter().map(|&(a, e, _)| (a, e)).collect();
+    walks.extend(pl.link);
+    let (mut bad, mut all) = (0, 0);
+    for (a, e) in walks {
+        let l = dist(a, e);
+        let n = (l / 2.5) as usize;
+        for k in 1..n {
+            let p = lerp(a, e, k as f64 * 2.5 / l);
+            // (Where the link meets the road, the road's.)
+            let by_road = (-1..=1).any(|j| (-1..=1).any(|i| w.index(add(p, [i as f64 * SQUARE_FT, j as f64 * SQUARE_FT])).is_some_and(|k| w.road[k])));
+            if by_road {
+                continue;
+            }
+            all += 1;
+            if cover(p) < 0.5 {
+                bad += 1;
+            }
+        }
+    }
+    r.tally(&format!("{}: walk samples", groups[g]), all);
+    if bad > 0 {
+        r.add(CEM_GROUND[1], bad as f64, format!("{here}: {bad}/{all}"));
+    }
+    if pl.bound != town::cemetery::Bound::None {
+        let m = pl.boundary.len();
+        let (mut miss, mut all) = (0, 0);
+        for e in 0..m {
+            let (a, c) = (pl.boundary[e], pl.boundary[(e + 1) % m]);
+            let n = (dist(a, c) / 5.0) as usize;
+            for k in 1..n {
+                let p = lerp(a, c, k as f64 / n as f64);
+                if dist(p, pl.gate) < 0.5 * pl.gap + 2.0 {
+                    continue;
+                }
+                all += 1;
+                if !w.runs.iter().any(|&(u, v)| seg_dist(p, u, v) < 1.5) {
+                    miss += 1;
+                }
+            }
+        }
+        r.tally(&format!("{}: boundary samples", groups[g]), all);
+        if miss > 0 {
+            r.add(CEM_GROUND[2], miss as f64, format!("{here}: {miss}/{all}"));
+        }
+    }
+    if pk.cemetery.is_some_and(|c| c.by_road) {
+        let near = |p: P| (0..w.nx * w.ny).filter(|&k| w.road[k]).map(|k| dist(w.centre(k), p)).fold(f64::MAX, f64::min);
+        let side = |p: P| (0..w.nx * w.ny).filter(|&k| w.road[k]).map(|k| w.centre(k)).map(|q| if contains(&pk.pts, q) { 0.0 } else { (0..pk.pts.len()).map(|e| seg_dist(q, pk.pts[e], pk.pts[(e + 1) % pk.pts.len()])).fold(f64::MAX, f64::min) }).fold(p[0] * 0.0 + f64::MAX, f64::min);
+        let (dg, dm) = (near(pl.gate), side(pl.gate));
+        if dm < 40.0 && dg > dm + BOUND_SLACK {
+            r.add(CEM_GROUND[3], 1.0, format!("{here}: gate {dg:.0} ft from a road, plot {dm:.0}"));
+        }
+    }
+}
+
+/// How much farther (ft) than the plot's nearest edge a way in by a road may be from it.
+const BOUND_SLACK: f64 = 20.0;
 
 fn check_cemetery(world: &World, t0: &T0, l: &Layout, li: usize, pk: &town::Park, groups: &[&str; 5], r: &mut Report) {
     let Some(pl) = town::cemetery::plan(pk) else {
@@ -5741,7 +5850,7 @@ fn check_cemetery(world: &World, t0: &T0, l: &Layout, li: usize, pk: &town::Park
 
 // R5 towns
 /// `district_edits`' counts, in order.
-const DISTRICT_COUNTS: [&str; 15] = [
+const DISTRICT_COUNTS: [&str; 16] = [
     "district edits",
     "district edits refused",
     "patches in no district or two after a district edit",
@@ -5757,6 +5866,7 @@ const DISTRICT_COUNTS: [&str; 15] = [
     "renames carried to another function",
     "renames reported lost",
     "renames lost without a report",
+    "district ids reused after one was emptied",
 ];
 
 /// Districts drawn by hand (`patches[].district`), in up to `PLACES` towns (default 8) of four
@@ -5818,6 +5928,24 @@ fn district_edits(base: &World, t0: &T0, r: &mut Report) {
         if let Some(e) = (0..n).find(|&e| (1..=4).contains(&ds[e].3.len()) && ds[e].3.iter().all(|&m| nbs(m).into_iter().filter_map(dq).any(|q| q != e))) {
             let to: Vec<(u64, usize)> = ds[e].3.iter().map(|&m| (m, nbs(m).into_iter().filter_map(dq).find(|&q| q != e).unwrap())).collect();
             cases.push(("every patch moved out", to.iter().map(|&(m, q)| json!({ "patch": m, "district": did(q) })).collect(), to, Some(e)));
+        }
+        // (R5 towns: a new district emptied, then another made: a new id, not the emptied one's.)
+        if let Some(&(p1, _)) = placed.first() {
+            let step = |w: &World, d: &str| -> Option<Option<worldgen::world::TownEdit>> {
+                let req: town::wards::TownRequest = serde_json::from_value(json!({ "patches": [{ "patch": p1, "district": d }] })).ok()?;
+                town::wards::change(w, t0, ci, &req).ok().map(|x| x.0)
+            };
+            let got = step(base, "Checked Ward").flatten().and_then(|e1| {
+                let w1 = with(base, ci, Some(e1));
+                let w2 = with(base, ci, step(&w1, "auto")?);
+                let w3 = with(base, ci, step(&w2, "Later Ward")??.into());
+                let plan3 = town::wards::plan_json(&w3, t0, ci).ok()?;
+                plan3["patches"].as_array()?.iter().find(|x| x["patch"].as_u64() == Some(p1)).and_then(|x| x["district"]["id"].as_str().map(str::to_string))
+            });
+            r.tally("district ids checked after one was emptied", 1);
+            if got.as_deref() != Some(did(n + 1).as_str()) {
+                r.add("district ids reused after one was emptied", 1.0, format!("#{ci}: patch {p1} in {got:?}, not {}", did(n + 1)));
+            }
         }
         let walled = plan["walls"]["built"].as_bool().unwrap_or(false);
         for (name, req, want, emptied) in cases {
