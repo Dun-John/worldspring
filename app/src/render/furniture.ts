@@ -7635,7 +7635,7 @@ function stoneSteps(g: Graphics, f: InteriorItem, light: Light, rnd: () => numbe
 }
 
 /** Ladder leaning up a ledge, toward `back` (the way up): two rails from a foot on the floor to the lip above, a
- * little wider at the top (nearer the eye), five rungs, the whole thrown as a shadow across the floor. */
+ * little wider at the top (nearer the eye), four rungs, the whole thrown as a shadow across the floor. */
 function climbLadder(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
   const { at } = frame(f, back);
   const [lx, ly] = light;
@@ -7644,8 +7644,8 @@ function climbLadder(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
   // The shadow: the ladder's lines moved away from the light, farther toward the top.
   const sh = (p: [number, number], s: number): [number, number] => [p[0] - lx * lift(s), p[1] - ly * lift(s)];
   for (const side of [-1, 1]) g.moveTo(...sh(rail(side, 0.95), 0.95)).lineTo(...sh(rail(side, -0.02), -0.02));
-  for (let k = 0; k < 5; k++) {
-    const s = 0.08 + k * 0.19;
+  for (let k = 0; k < 4; k++) {
+    const s = 0.12 + k * 0.25;
     g.moveTo(...sh(rail(-1, s), s)).lineTo(...sh(rail(1, s), s));
   }
   g.stroke({ width: 0.05, color: 0x14100c, alpha: 0.22, cap: 'round' });
@@ -7654,16 +7654,15 @@ function climbLadder(g: Graphics, f: InteriorItem, light: Light, rnd: () => numb
     g.moveTo(a[0] + ox, a[1] + oy).lineTo(b[0] + ox, b[1] + oy).stroke({ width: w, color, cap: 'round' });
   for (const side of [-1, 1]) {
     const [a, b] = [rail(side, -0.04), rail(side, 0.95)];
-    line(a, b, 0.08, INK);
+    line(a, b, 0.1, INK);
     line(a, b, 0.05, WOOD[1]);
     line(a, b, 0.016, WOOD[2], lx * d, ly * d);
   }
-  for (let k = 0; k < 5; k++) {
-    const s = 0.08 + k * 0.19;
+  for (let k = 0; k < 4; k++) {
+    const s = 0.12 + k * 0.25;
     const [a, b] = [rail(-1, s), rail(1, s)];
-    line(a, b, 0.056, INK);
-    line(a, b, 0.032, WOOD[2]);
-    line(a, b, 0.012, WOOD[0], -lx * d, -ly * d);
+    line(a, b, 0.08, INK);
+    line(a, b, 0.04, WOOD[2]);
   }
   // Scuffs where the feet stand.
   for (const side of [-1, 1]) g.poly(oval(...rail(side, 0.95), 0.06, 0.04, rnd() * Math.PI, 8)).fill({ color: 0x14100c, alpha: 0.18 });
@@ -7808,11 +7807,11 @@ function arcaneWorkbench(g: Graphics, f: InteriorItem, light: Light, v: number, 
   castShadow(g, quad(top, rnd, 0), light, 0.35);
   board(g, top, DARK_WOOD, light, rnd, along, 0.05, 2);
   const [lx, ly] = light;
-  const liquids = [0x8a6aa8, 0x5a8a8a, 0x9a6a3a, 0x6a8a4a];
+  const liquids = [0x7a5e48, 0x6a5a40, 0x8a6a3a, 0x6a6048];
   // Bottles along the wall.
   for (const [u, k] of [[END_GAP + 0.16, 0], [END_GAP + 0.32, 1], [END_GAP + 0.46, 2]] as const) {
     const [x, y] = at(u, WALL_GAP + 0.12);
-    g.circle(x, y, 0.055).fill(0x6a7a6e).stroke({ width: LINE, color: INK });
+    g.circle(x, y, 0.055).fill(0x7a6e5a).stroke({ width: LINE, color: INK });
     g.circle(x + lx * 0.012, y + ly * 0.012, 0.035).fill(liquids[(v + k + 1) % liquids.length]);
     g.circle(x, y, 0.02).fill(0x9a7a52).stroke({ width: 0.012, color: INK });
   }
@@ -7820,18 +7819,18 @@ function arcaneWorkbench(g: Graphics, f: InteriorItem, light: Light, v: number, 
   const [px, py] = at(0.5, 0.62);
   const [rx, ry] = at(0.86, 0.76);
   g.moveTo(px, py).lineTo(rx, ry).stroke({ width: 0.05, color: INK, cap: 'round' });
-  g.moveTo(px, py).lineTo(rx, ry).stroke({ width: 0.026, color: 0xc8d4d0, cap: 'round' });
+  g.moveTo(px, py).lineTo(rx, ry).stroke({ width: 0.026, color: 0xcfc6b0, cap: 'round' });
   g.circle(px, py, 0.14).fill(BRONZE[0]).stroke({ width: LINE, color: INK });
   g.circle(px + lx * 0.02, py + ly * 0.02, 0.115).fill(BRONZE[1]);
   g.circle(px + lx * 0.05, py + ly * 0.05, 0.045).fill({ color: BRONZE[2], alpha: 0.8 });
-  g.circle(px, py, 0.07).fill({ color: 0xd8e4e0, alpha: 0.75 }).stroke({ width: 0.016, color: INK });
+  g.circle(px, py, 0.07).fill({ color: 0xcfc6b0, alpha: 0.75 }).stroke({ width: 0.016, color: INK });
   g.circle(px + lx * 0.025, py + ly * 0.025, 0.02).fill({ color: 0xffffff, alpha: 0.7 });
-  g.circle(rx, ry, 0.075).fill({ color: 0xd8e4e0, alpha: 0.6 }).stroke({ width: LINE, color: INK });
-  g.circle(rx - lx * 0.01, ry - ly * 0.01, 0.052).fill(liquids[v % liquids.length]);
+  g.circle(rx, ry, 0.075).fill({ color: 0xcfc6b0, alpha: 0.6 }).stroke({ width: LINE, color: INK });
+  g.circle(rx - lx * 0.01, ry - ly * 0.01, 0.052).fill(0x7a5e48);
   g.circle(rx + lx * 0.03, ry + ly * 0.03, 0.016).fill({ color: 0xffffff, alpha: 0.7 });
   // The tome, open.
   const um = len * 0.62;
-  g.poly(quad(rect(um - 0.25, 0.4, um + 0.25, 0.86), rnd, 0.006)).fill(0x5a2e24).stroke({ width: LINE, color: INK, join: 'round' });
+  g.poly(quad(rect(um - 0.25, 0.4, um + 0.25, 0.86), rnd, 0.006)).fill(0x4a3426).stroke({ width: LINE, color: INK, join: 'round' });
   for (const [a, b] of [[um - 0.22, um - 0.01], [um + 0.01, um + 0.22]]) {
     g.poly(quad(rect(a, 0.43, b, 0.83), rnd, 0.004)).fill(LINEN[1]).stroke({ width: 0.016, color: INK });
     for (let k = 0; k < 6; k++) {
@@ -7841,9 +7840,9 @@ function arcaneWorkbench(g: Graphics, f: InteriorItem, light: Light, v: number, 
     }
     g.stroke({ width: 0.014, color: 0x8a7e64, alpha: 0.8 });
   }
-  g.circle(...at(um + 0.12, 0.6), 0.045).stroke({ width: 0.014, color: 0x8a4a3a });
+  g.circle(...at(um + 0.12, 0.6), 0.045).stroke({ width: 0.014, color: 0x8a7e64 });
   g.moveTo(...at(um, 0.43)).lineTo(...at(um, 0.83)).stroke({ width: 0.018, color: INK });
-  g.moveTo(...at(um + 0.04, 0.83)).lineTo(...at(um + 0.06, 0.92)).stroke({ width: 0.02, color: 0x7a3a5a, cap: 'round' });
+  g.moveTo(...at(um + 0.04, 0.83)).lineTo(...at(um + 0.06, 0.92)).stroke({ width: 0.02, color: 0x5a4a3a, cap: 'round' });
   // The candle, alight.
   candle(g, ...at(len - END_GAP - 0.16, WALL_GAP + 0.14));
 }
@@ -7933,55 +7932,29 @@ function boneMound(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: (
   } else skullTop(g, tx, ty, dir, 0.095, light);
 }
 
-/** Totem, seen from a high angle (upright things foreshortened, their tops showing): a carved wooden pole standing
- * in a cairn of stones — stacked faces with dark eyes, the top one with carved wings, a band of red ochre — feathers
- * fanned from its top and two skulls lashed to it, its shadow across the floor. */
+/** Totem, seen from a high angle: a squat carved pole with spread wings, one bold silhouette on a small cairn —
+ * a red ochre band, big dark eyes and a mouth on its head, a lit side — its shadow thrown across the floor. */
 function totem(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const { pt, right, up } = screenAxes(light);
-  const P = (a: number, b: number) => pt(cx, cy, a * 1.25, b * 1.08);
-  const rot = Math.atan2(right[1], right[0]);
-  castShadow(g, ring(...P(0, -0.34), 0.12, rnd, 0, 8), light, 1.2);
-  // The cairn.
-  g.poly(patch(...P(0, -0.35), 0.24, 0.14, rnd, 0.12, 14)).fill({ color: 0x14100c, alpha: 0.22 });
-  for (let i = 0; i < 5; i++) {
-    const a = Math.PI * (0.1 + 0.8 * (i / 4));
-    rock(g, ...P(Math.cos(a) * 0.17, -0.35 - Math.sin(a) * 0.06 + 0.03), 0.07 + 0.02 * rnd(), CAVE_ROCK, light, rnd, 6);
-  }
-  // The pole.
-  inkLine(g, [P(0, -0.34), P(0, 0.3)], 0.14, WOOD[1]);
-  inkLine(g, [P(-0.03, -0.32), P(-0.03, 0.28)], 0.025, WOOD[2]);
-  // Carved faces, bottom up.
-  const face = (b: number, rx: number, ry: number, paint: boolean) => {
-    g.poly(oval(...P(0, b), rx * 1.25, ry * 1.1, rot, 16)).fill(WOOD[0]).stroke({ width: LINE, color: INK });
-    g.poly(oval(...P(-rx * 0.12, b + ry * 0.1), rx * 1.25 * 0.82, ry * 1.1 * 0.8, rot, 16)).fill(WOOD[1]);
-    if (paint) g.poly([...P(-rx * 0.8, b + ry * 0.35), ...P(rx * 0.8, b + ry * 0.35), ...P(rx * 0.75, b + ry * 0.62), ...P(-rx * 0.75, b + ry * 0.62)]).fill(0x9a4a32);
-    for (const k of [-1, 1]) g.circle(...P(k * rx * 0.38, b + ry * 0.1), 0.02).fill(0x1a1410);
-    g.moveTo(...P(-rx * 0.4, b - ry * 0.45)).lineTo(...P(rx * 0.4, b - ry * 0.45)).stroke({ width: 0.018, color: INK });
-  };
-  face(-0.2, 0.1, 0.08, false);
-  // Two skulls lashed on either side.
-  for (const k of [-1, 1]) {
-    g.moveTo(...P(k * 0.05, -0.03)).lineTo(...P(k * 0.13, -0.06)).stroke({ width: 0.016, color: 0x6a5238 });
-    skullTop(g, ...P(k * 0.16, -0.08), Math.atan2(up[1], up[0]), 0.06, light);
-  }
-  face(0.02, 0.095, 0.075, true);
-  // The wings and the top face.
-  for (const k of [-1, 1]) {
-    g.poly([...P(k * 0.06, 0.2), ...P(k * 0.3, 0.27), ...P(k * 0.28, 0.33), ...P(k * 0.06, 0.29)]).fill(WOOD[k < 0 ? 2 : 0]).stroke({ width: LINE, color: INK, join: 'round' });
-    g.moveTo(...P(k * 0.12, 0.25)).lineTo(...P(k * 0.25, 0.29)).stroke({ width: 0.014, color: WOOD[0] });
-  }
-  face(0.24, 0.1, 0.08, false);
-  // Feathers fanned from its top.
-  const tones = [0x5a4a3a, BONE[1], 0x6a5a48, 0x9a4a32, BONE[1]];
-  for (let i = 0; i < 5; i++) {
-    const a = Math.PI / 2 + (i - 2) * 0.32;
-    const [bx, by] = P(0, 0.32);
-    const [ex, ey] = P(Math.cos(a) * 0.16, 0.32 + Math.sin(a) * 0.14);
-    const fr = Math.atan2(ey - by, ex - bx);
-    g.poly(oval((bx + ex) / 2, (by + ey) / 2, Math.hypot(ex - bx, ey - by) * 0.55, 0.03, fr, 10)).fill(tones[i]).stroke({ width: 0.016, color: INK });
-    g.moveTo(bx, by).lineTo(ex, ey).stroke({ width: 0.014, color: shade(tones[i], 0.7) });
-  }
+  const P = (a: number, b: number) => pt(cx, cy, a, b);
+  const body = [[-0.17, -0.34], [0.17, -0.34], [0.19, -0.06], [0.4, 0.0], [0.42, 0.24], [0.2, 0.22], [0.16, 0.4], [-0.16, 0.4], [-0.2, 0.22], [-0.42, 0.24], [-0.4, 0.0], [-0.19, -0.06]];
+  const pts = body.flatMap(([a, b]) => P(a, b));
+  castShadow(g, pts, light, 0.8);
+  // The cairn it stands in.
+  g.poly(patch(...P(0, -0.34), 0.27, 0.15, rnd, 0.1, 14)).fill({ color: 0x14100c, alpha: 0.25 });
+  for (let i = 0; i < 4; i++) rock(g, ...P(-0.2 + i * 0.133, -0.38 + 0.04 * rnd()), 0.085, CAVE_ROCK, light, rnd, 6);
+  g.poly(pts).fill(WOOD[1]).stroke({ width: OUT, color: INK, join: 'round' });
+  // The side toward the light, the shaded side away.
+  const lit = right[0] * light[0] + right[1] * light[1] > 0 ? 1 : -1;
+  g.poly([...P(lit * 0.1, -0.3), ...P(lit * 0.15, -0.3), ...P(lit * 0.15, 0.36), ...P(lit * 0.1, 0.36)]).fill({ color: WOOD[2], alpha: 0.8 });
+  g.poly([...P(-lit * 0.1, -0.3), ...P(-lit * 0.15, -0.3), ...P(-lit * 0.15, 0.36), ...P(-lit * 0.1, 0.36)]).fill({ color: WOOD[0], alpha: 0.8 });
+  // The ochre band, then the face.
+  g.poly([...P(-0.15, -0.2), ...P(0.15, -0.2), ...P(0.15, -0.08), ...P(-0.15, -0.08)]).fill(0x9a4a32).stroke({ width: LINE, color: INK });
+  for (const k of [-1, 1]) g.circle(...P(k * 0.08, 0.27), 0.05).fill(0x1a1410).stroke({ width: LINE, color: INK });
+  g.moveTo(...P(-0.09, 0.12)).lineTo(...P(0.09, 0.12)).stroke({ width: 0.04, color: INK, cap: 'round' });
+  g.moveTo(...P(-0.33, 0.1)).lineTo(...P(-0.2, 0.1)).moveTo(...P(0.33, 0.1)).lineTo(...P(0.2, 0.1)).stroke({ width: 0.02, color: WOOD[0] });
+  void up;
 }
 
 /** Scaffolding: a raised timber walkway (its height and edge drawn by the floor heights, so nothing here inks its
@@ -8040,38 +8013,39 @@ function scaffold(g: Graphics, f: InteriorItem, light: Light, rnd: () => number)
 function crackedFloor(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const [lx, ly] = light;
-  g.poly(patch(cx, cy, 0.36, 0.33, rnd, 0.14, 16)).fill({ color: 0x14100c, alpha: 0.1 });
-  g.poly(patch(cx + lx * 0.07, cy + ly * 0.07, 0.3, 0.27, rnd, 0.14, 16)).fill({ color: 0x14100c, alpha: 0.12 });
-  g.poly(patch(cx - lx * 0.1, cy - ly * 0.1, 0.18, 0.15, rnd, 0.2, 12)).fill({ color: 0xf0e8d8, alpha: 0.07 });
+  g.poly(patch(cx, cy, 0.44, 0.4, rnd, 0.14, 16)).fill({ color: 0x14100c, alpha: 0.14 });
+  g.poly(patch(cx + lx * 0.06, cy + ly * 0.06, 0.34, 0.3, rnd, 0.14, 16)).fill({ color: 0x14100c, alpha: 0.2 });
+  g.poly(patch(cx - lx * 0.12, cy - ly * 0.12, 0.2, 0.17, rnd, 0.2, 12)).fill({ color: 0xf0e8d8, alpha: 0.12 });
   const crack = (x: number, y: number, a: number, l: number, w: number) => {
     const pts: [number, number][] = [[x, y]];
     for (let k = 1; k <= 4; k++) {
       a += (rnd() - 0.5) * 0.9;
       pts.push([pts[k - 1][0] + Math.cos(a) * (l / 4), pts[k - 1][1] + Math.sin(a) * (l / 4)]);
     }
-    g.moveTo(pts[0][0] - lx * 0.012, pts[0][1] - ly * 0.012);
-    for (const p of pts.slice(1)) g.lineTo(p[0] - lx * 0.012, p[1] - ly * 0.012);
-    g.stroke({ width: 0.014, color: 0xf0e8d8, alpha: 0.18, join: 'round' });
+    g.moveTo(pts[0][0] - lx * 0.016, pts[0][1] - ly * 0.016);
+    for (const p of pts.slice(1)) g.lineTo(p[0] - lx * 0.016, p[1] - ly * 0.016);
+    g.stroke({ width: 0.02, color: 0xf0e8d8, alpha: 0.3, join: 'round' });
     g.moveTo(...pts[0]);
     for (const p of pts.slice(1)) g.lineTo(...p);
-    g.stroke({ width: w, color: INK, alpha: 0.7, cap: 'round', join: 'round' });
+    g.stroke({ width: w, color: INK, alpha: 0.95, cap: 'round', join: 'round' });
     return pts;
   };
   const ph = rnd() * Math.PI * 2;
-  for (let i = 0; i < 5; i++) {
-    const pts = crack(cx, cy, ph + (i / 5) * Math.PI * 2 + (rnd() - 0.5) * 0.6, 0.26 + 0.16 * rnd(), 0.024);
-    if (rnd() < 0.6) crack(...pts[2], ph + (i / 5) * Math.PI * 2 + (rnd() < 0.5 ? 0.9 : -0.9), 0.1 + 0.06 * rnd(), 0.016);
+  for (let i = 0; i < 6; i++) {
+    const a = ph + (i / 6) * Math.PI * 2 + (rnd() - 0.5) * 0.5;
+    const pts = crack(cx, cy, a, 0.38 + 0.14 * rnd(), 0.032);
+    for (const j of [1, 2, 3]) if (rnd() < 0.6) crack(...pts[j], a + (rnd() < 0.5 ? 0.9 : -0.9), 0.12 + 0.08 * rnd(), 0.022);
   }
   // Part way round the rim.
   const a0 = rnd() * Math.PI * 2;
-  g.moveTo(cx + Math.cos(a0) * 0.3, cy + Math.sin(a0) * 0.27);
+  g.moveTo(cx + Math.cos(a0) * 0.32, cy + Math.sin(a0) * 0.29);
   for (let k = 1; k <= 8; k++) {
-    const a = a0 + (k / 8) * Math.PI * 1.1;
-    const r = 0.3 + (rnd() - 0.5) * 0.04;
+    const a = a0 + (k / 8) * Math.PI * 1.2;
+    const r = 0.32 + (rnd() - 0.5) * 0.04;
     g.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r * 0.9);
   }
-  g.stroke({ width: 0.018, color: INK, alpha: 0.55, join: 'round' });
-  for (let i = 0; i < 6; i++) g.circle(cx + (rnd() - 0.5) * 0.5, cy + (rnd() - 0.5) * 0.5, 0.012 + 0.01 * rnd()).fill({ color: 0x3a342a, alpha: 0.5 });
+  g.stroke({ width: 0.026, color: INK, alpha: 0.85, join: 'round' });
+  for (let i = 0; i < 6; i++) g.circle(cx + (rnd() - 0.5) * 0.7, cy + (rnd() - 0.5) * 0.7, 0.016 + 0.012 * rnd()).fill({ color: 0x3a342a, alpha: 0.7 });
 }
 
 /** Underground props drawn here (InteriorLayer: ways in and out, hazards): one of four looks by position;
