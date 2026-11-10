@@ -871,6 +871,13 @@ const WARD_RGB: [number, number, number][] = [
   [0.6, 0.62, 0.5], // park
 ];
 
+/** How much larger than built a wall tower's shape is drawn on the plan, so that a D, an octagon or a square
+ * reads beside the curtain from far out (a gate's towers, already wide, as built). */
+const PLAN_TOWER = 1.4;
+/** A D tower's flat back on the plan: this far (ft) behind its middle, past the curtain's inner face (a stone
+ * curtain's half is 4.5 ft), so its square corners show inside the wall and its round face outside. */
+const PLAN_D_BACK = 8;
+
 /** A wall tower's footprint on the plan (tile units): a D (flat back, round face out along `ang`), an octagon or a
  * square (sides along `ang`) of radius `r` (ft), as `wallstyle::footprint` lays it. */
 function towerPoly(x: number, y: number, r: number, ang: number, shape: number, ftTile: number): number[] {
@@ -878,12 +885,12 @@ function towerPoly(x: number, y: number, r: number, ang: number, shape: number, 
   const at = (a: number, b: number) => [x + (ux * a - uy * b) / ftTile, y + (uy * a + ux * b) / ftTile];
   const out: number[] = [];
   if (shape === 2) {
-    out.push(...at(-4, -r));
-    for (let k = 0; k <= 8; k++) {
-      const t = -Math.PI / 2 + (Math.PI * k) / 8;
+    out.push(...at(-PLAN_D_BACK, -r));
+    for (let k = 0; k <= 12; k++) {
+      const t = -Math.PI / 2 + (Math.PI * k) / 12;
       out.push(...at(r * Math.cos(t), r * Math.sin(t)));
     }
-    out.push(...at(-4, r));
+    out.push(...at(-PLAN_D_BACK, r));
   } else if (shape === 3) {
     const rc = r / Math.cos(Math.PI / 8);
     for (let k = 0; k < 8; k++) {
@@ -914,9 +921,12 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       if (lines.verts[v * 4 + 3] !== 1) continue;
       const code = looks!.verts[v * 4 + 2];
       const shape = codeShape(code);
-      if (!shape || codeMaterial(code) !== 0) continue;
+      // (A palisade's or an earth wall's square gate towers too: log towers, in their material's tone.)
+      const mat = codeMaterial(code);
+      if (!shape || (mat !== 0 && shape !== 1)) continue;
       const [x, y, w] = [lines.verts[v * 4], lines.verts[v * 4 + 1], lines.verts[v * 4 + 2]];
-      shapes.push({ starts: 0, verts: towerPoly(x, y, w / 2, looks!.verts[v * 4 + 3], shape, tileFt), stone: codeStone(code) });
+      const r = w < 25 ? (w / 2) * PLAN_TOWER : w / 2;
+      shapes.push({ starts: 0, verts: towerPoly(x, y, r, looks!.verts[v * 4 + 3], shape, tileFt), stone: mat === 1 ? 5 : mat === 2 ? 6 : codeStone(code) });
       skip.add(l);
     }
     // (A bastion takes the look of the wall line nearest it: its stone, in its ward byte + 1.)

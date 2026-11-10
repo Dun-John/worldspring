@@ -76,10 +76,11 @@ pub(crate) fn bastions(l: &Layout, owns: &dyn Fn(P) -> bool, local: &dyn Fn(&P) 
 
 /// The looks of the plan's site lines `lines` from `looks.len()` on (`payload::pack_sites`): for each,
 /// its points with `[x, y, a, b]`. A wall line (kind 0): a its style's code. A tower (kind 1 or 3, a
-/// tower of `l`'s at its middle): a its style's code with its shape, b the way it faces (radians).
-/// Anything else: 0, 0.
+/// tower of `l`'s at its middle): a its style's code with its shape, b the way it faces (radians); a
+/// gate tower its gatehouse's (`gatehouse::House::tower`: square, or a drum round). Anything else: 0, 0.
 pub(crate) fn plan_looks(l: &Layout, lines: &[Vec<[f64; 4]>], looks: &mut Vec<Vec<[f64; 4]>>) {
     use super::wallstyle::TowerShape;
+    let houses = if l.gate_towers.is_empty() && !l.extra_towers.iter().any(|e| e.1) { Vec::new() } else { super::gatehouse::houses(l) };
     for w in &lines[looks.len().min(lines.len())..] {
         let (a, b) = match (w.first(), w.last()) {
             (Some(p), Some(q)) => {
@@ -91,7 +92,8 @@ pub(crate) fn plan_looks(l: &Layout, lines: &[Vec<[f64; 4]>], looks: &mut Vec<Ve
                         let t = l.towers.iter().chain(&l.gate_towers).chain(l.extra_towers.iter().map(|e| &e.0)).find(|t| at(t)).copied();
                         match t {
                             Some(t) => {
-                                let (shape, u) = l.tower_form(t);
+                                let gate = super::gatehouse::of_tower(&houses, t).map(|(h, second)| h.tower(second));
+                                let (shape, u) = gate.map_or_else(|| l.tower_form(t), |g| (g.0, g.1));
                                 (l.wall_style_at(t).code(shape) as f64, libm::atan2(u[1], u[0]))
                             }
                             None => (0.0, 0.0),
