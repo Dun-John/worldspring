@@ -842,13 +842,16 @@ export interface SiteGeometry {
   ink: RiverGeometry | null;
 }
 
-/** A shaped tower's fill by its stone: the plan's ink (limestone) shifted toward each stone's tone. */
-const TOWER_INK: [number, number, number][] = [
-  [0.15, 0.17, 0.22],
-  [0.17, 0.14, 0.11],
-  [0.25, 0.17, 0.08],
-  [0.27, 0.15, 0.13],
-  [0.26, 0.16, 0.11],
+/** A wall's stone as the plan fills it (towers, bastions): granite, limestone, sandstone, rose brick, mud brick,
+ * then timber and rammed earth. The same tones as `tileink.frag`'s wall core. */
+const STONE_TONE: [number, number, number][] = [
+  [0.66, 0.71, 0.78],
+  [0.86, 0.8, 0.65],
+  [0.9, 0.72, 0.42],
+  [0.82, 0.52, 0.47],
+  [0.86, 0.64, 0.52],
+  [0.55, 0.39, 0.24],
+  [0.8, 0.72, 0.56],
 ];
 
 // Fill colours by ward (buildings), then plaza, field, block. Watabou-ish muted browns.
@@ -916,6 +919,33 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       shapes.push({ starts: 0, verts: towerPoly(x, y, w / 2, looks!.verts[v * 4 + 3], shape, tileFt), stone: codeStone(code) });
       skip.add(l);
     }
+    // (A bastion takes the look of the wall line nearest it: its stone, in its ward byte + 1.)
+    const wallLooks: [number, number, number][] = [];
+    for (let l = 0; l + 1 < lines.starts.length; l++) {
+      const v = lines.starts[l];
+      if (lines.verts[v * 4 + 3] !== 0) continue;
+      const code = looks!.verts[v * 4 + 2];
+      if (code > 0) for (let k = v; k < lines.starts[l + 1]; k++) wallLooks.push([lines.verts[k * 4], lines.verts[k * 4 + 1], code]);
+    }
+    let bastions: Uint32Array | null = null;
+    if (wallLooks.length) {
+      bastions = new Uint32Array(polys.attrs);
+      for (let i = 0; i < bastions.length; i++) {
+        if ((bastions[i] & 0xff) !== 32) continue;
+        let [cx, cy] = [0, 0];
+        const m = polys.starts[i + 1] - polys.starts[i];
+        for (let k = polys.starts[i]; k < polys.starts[i + 1]; k++) [cx, cy] = [cx + polys.verts[k * 2] / m, cy + polys.verts[k * 2 + 1] / m];
+        let best = Infinity;
+        let code = 0;
+        for (const w of wallLooks) {
+          const d = (w[0] - cx) ** 2 + (w[1] - cy) ** 2;
+          if (d < best) [best, code] = [d, w[2]];
+        }
+        const mat = codeMaterial(code);
+        bastions[i] |= ((mat === 1 ? 5 : mat === 2 ? 6 : codeStone(code)) + 1) << 8;
+      }
+    }
+    if (bastions) polys = { starts: polys.starts, attrs: bastions, verts: polys.verts };
     if (shapes.length) {
       const starts = Array.from(polys.starts);
       const attrs = Array.from(polys.attrs);
@@ -951,7 +981,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       const material = (attr >> 20) & 15;
       let rgb: [number, number, number];
       let a = 1;
-      if (kind === TOWER_KIND) rgb = TOWER_INK[Math.min(ward, TOWER_INK.length - 1)];
+      if (kind === TOWER_KIND) rgb = STONE_TONE[Math.min(ward, STONE_TONE.length - 1)];
       else if (kind === 1) rgb = [0.86, 0.82, 0.71];
       else if (kind === 2) {
         // Fields: alternate crop tints.
@@ -980,7 +1010,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       else if (kind === 11) rgb = [0.42, 0.6, 0.64];
       // A town wall's bastion (`payload.rs` kind 32): a stone platform, outlined (its faces are the town
       // wall's lines).
-      else if (kind === 32) rgb = [0.76, 0.73, 0.65];
+      else if (kind === 32) rgb = ward ? STONE_TONE[Math.min(ward - 1, STONE_TONE.length - 1)] : [0.76, 0.73, 0.65];
       else if (kind === 12) rgb = [0.85, 0.81, 0.69];
       else if (kind === 13) {
         rgb = [0.42, 0.55, 0.33];

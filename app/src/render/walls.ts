@@ -1380,13 +1380,20 @@ function drawGateBlock(g: Graphics, s: Shape, form: number) {
   if (!bent && !ruined) cornerHatch(g, solid, FT * 10);
   // The way under the top, seen through it: paved, its sides dashed.
   const wayPts = way.flatMap(([a, b]) => at(a, b));
-  g.poly(wayPts).fill({ color: mix(ST[0], 0xa39a8a, 0.45), alpha: 0.6 });
+  // (A bent way is drawn plain and walled: the turn must read, so it is paved clear of the block's top, its sides inked.)
+  g.poly(wayPts).fill(bent ? { color: mix(ST[0], 0xb8ae9a, 0.6), alpha: 0.96 } : { color: mix(ST[0], 0xa39a8a, 0.45), alpha: 0.6 });
   for (let i = 0; i < way.length; i++) {
     if (mouths.includes(i)) continue;
     const j = (i + 1) % way.length;
-    dashes(g, at(...way[i]), at(...way[j]), FT * 0.9, FT * 0.6);
+    if (bent) g.moveTo(...at(...way[i])).lineTo(...at(...way[j]));
+    else dashes(g, at(...way[i]), at(...way[j]), FT * 0.9, FT * 0.6);
   }
-  g.stroke({ width: 2.2, color: INK, alpha: 0.85 });
+  g.stroke(bent ? { width: 3.2, color: INK, alpha: 0.95, join: 'round', cap: 'round' } : { width: 2.2, color: INK, alpha: 0.85 });
+  if (bent) {
+    // A chevron along the way: in, across, out.
+    const mid = (p: [number, number], q: [number, number]) => at((p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
+    g.moveTo(...mid(way[0], way[1])).lineTo(...at(22, 20)).lineTo(...mid(way[3], way[4])).stroke({ width: 1.4, color: INK, alpha: 0.35 });
+  }
   // Over each mouth a lintel, or the South's arch (voussoirs, the keystone lit); a portcullis slot inside the outer.
   mouths.forEach((e, k) => {
     const [p, q] = [way[e], way[(e + 1) % way.length]];

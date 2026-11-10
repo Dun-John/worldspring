@@ -38,6 +38,13 @@ void main() {
     if (stone > 0.5 && vStyle < 4.9) {
         col = stone < 1.5 ? vec3(0.15, 0.17, 0.22) : (stone < 3.5 ? vec3(0.25, 0.17, 0.08) : (stone < 4.5 ? vec3(0.27, 0.15, 0.13) : vec3(0.26, 0.16, 0.11)));
     }
+    if (vStyle < 4.9 && (vStyle < 2.5 || vStyle > 3.5)) {
+        // A wall's or tower's stone (limestone buff when none): its light tone inside a thin ink edge, once wide
+        // enough (granite blue-grey, sandstone honey, rose brick rose, mud brick ochre-pink).
+        vec3 tone = stone < 0.5 ? vec3(0.86, 0.80, 0.65) : (stone < 1.5 ? vec3(0.66, 0.71, 0.78) : (stone < 3.5 ? vec3(0.90, 0.72, 0.42) : (stone < 4.5 ? vec3(0.82, 0.52, 0.47) : vec3(0.86, 0.64, 0.52))));
+        float rim = clamp(vHalf * 0.3, 0.7, 1.3);
+        col = mix(INK, tone, (1.0 - smoothstep(vHalf - rim - 0.5, vHalf - rim + 0.5, d)) * step(2.0, vHalf));
+    }
     if (vStyle > 4.5) {
         // A palisade (timber brown) or rammed earth (tan): its colour inside an ink edge, once wide enough.
         vec3 tone = vStyle > 5.5 ? vec3(0.80, 0.72, 0.56) : vec3(0.55, 0.39, 0.24);
