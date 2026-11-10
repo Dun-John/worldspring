@@ -115,6 +115,9 @@ export interface Created {
   size?: SiteSize;
   levels?: number;
   theme?: string;
+  /** A village or town added without a remake: its naming culture and what it lives by. */
+  culture?: number;
+  lives_by?: string;
   /** A building drawn by hand (`worldgen::world::Created`): its footprint (world ft), storeys,
    * what it is (a business key or a home), roof, roof colour and structure. */
   poly?: [number, number][];

@@ -1305,7 +1305,7 @@
   }
 
   // Screenshot and check scripts open panels and sessions through this.
-  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
+  if (import.meta.env.DEV) Object.assign(window, { __ui: { shell, go, toggle, scatter: () => scatter, startPlay, stopPlay, undo, redo, edits: () => edits, applyEdits, select: (s: Selection) => choose(s, true), openNotebook: (t: NotesTab, id: string | null, reveal?: boolean) => openNotebook(t, id, reveal), leaveSite: () => leaveSite(), buildMode: (m: BuildMode) => setBuildMode(m), editWorks: (id: string) => editWorks(id), town: () => ({ index: townIndex, plan: townPlan, patch: townPatch, corner: townCorner, busy: townBusy, note: townNote }), townCorner: (v: number | null) => ((townCorner = v), (townPatch = null), v !== null && showTownCorner(v)), townMode: (m: TownMode) => (townMode = m), townChange: (r: TownRequest) => townChange(r, 'test'), townPick: (x: number, y: number) => townPick(x, y), generate: (w: WorldFile, o?: GenerateOptions) => generate(w, o), world: () => $state.snapshot(world), overlay: () => overlay, answer: (c: 'keep' | 'drop' | 'commit' | 'save') => answer(c), addSettlement: (c: SiteChoice, x: number, y: number) => addSettlement(c, x, y), createSettlement: (c: SiteChoice, x: number, y: number) => createSettlement(c, x, y), deleteCreated: (id: string) => (createdActions(id) as { onDelete?: () => void }).onDelete?.(), takeBack: () => takeBack(), toasts: () => toasts.map((t) => t.text), state: () => ({ busy, playOn, sketchOn, designer: !!designer, tool: view.tool?.constructor?.name ?? (view.tool ? 'tool' : null) }), placer: () => placer(), design: () => designSettings, designer: () => designer, held: () => held, worldScreen: (x: number, y: number) => devScreen(x, y), gridScreen: (gx: number, gy: number) => (view.interior ? devScreen(...view.interior.toWorld(gx, gy)) : null) } });
   /** A world point in client px (the dev hook's, for scripts that click on the map). */
   function devScreen(x: number, y: number): [number, number] {
     const [sx, sy] = view.cam.worldToPage(x, y);
@@ -2297,6 +2297,46 @@
     applyEdits({ ...e, sprites, objects }, { tool: 'remove_sprite', id: `s:${asset}`, name }, 'user');
   }
 
+  /** Why the spot under the pointer won't do, while placing a village or town (null: it will). */
+  let placeNote = $state<string | null>(null);
+  let spotSeq = 0;
+  let spotAt = 0;
+
+  /** A village or town goes in at once, unless it is to be a realm's capital. */
+  const isInstant = (c: SiteChoice) => !!c.settlement && (c.settlement.tier === 'village' || c.settlement.tier === 'town') && !c.settlement.capital;
+
+  const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  /** Ask the generator whether a village or town can go under the pointer (at most one question
+   * in flight; the last answer wins). */
+  function checkSpot(c: SiteChoice, x: number, y: number) {
+    const now = performance.now();
+    if (now - spotAt < 120) return;
+    spotAt = now;
+    const seq = ++spotSeq;
+    void view.gen.settlementSpot(c.settlement!.tier, `c:${(edits.created ?? []).length}`, x, y).then((r) => {
+      if (seq === spotSeq && placeArmed) placeNote = r && 'error' in r ? sentence(r.error) : null;
+    });
+  }
+
+  /** Add a village or town at (x, y) as the generator allows, with no remake: a created
+   * settlement (undoable), named and cultured from where it stands. */
+  async function createSettlement(c: SiteChoice, x: number, y: number) {
+    const st = c.settlement!;
+    if (world.gen_version !== GEN_VERSION) return toast('This world was made with an older generator: open it upgraded to add settlements');
+    const id = `c:${(edits.created ?? []).length}`;
+    const spot = await view.gen.settlementSpot(st.tier, id, x, y);
+    if (!spot) return toast('The map could not answer: try again');
+    if ('error' in spot) return toast(sentence(spot.error));
+    const nid = `c:${(edits.created ?? []).length}`;
+    const lives_by = st.livesBy && st.livesBy !== 'port' && st.livesBy !== 'fishing' ? st.livesBy : spot.lives_by;
+    const site: Created = { id: nid, kind: st.tier, x: spot.x, y: spot.y, name: c.name ?? spot.name, culture: spot.culture, lives_by };
+    applyEdits({ ...edits, created: [...(edits.created ?? []), site] }, { tool: 'create_settlement', id: nid, kind: st.tier, name: site.name }, 'user');
+    const f = overlay?.features.find((g) => g.id === nid);
+    if (f) selection = { kind: 'feature', feature: f };
+    placeNote = null;
+  }
+
   /** The next click on the map puts `c` there. */
   function armPlace(c: SiteChoice, label = 'site') {
     placeLabel = label;
@@ -2308,16 +2348,20 @@
       const b = container.getBoundingClientRect();
       ring = { x: b.left + sx, y: b.top + sy, r: Math.max(6, reach * view.cam.ppf) };
     };
+    const instant = isInstant(c);
     const tool: PointerTool = {
       down: () => true,
       move: (x, y) => reach && showRing(x, y),
-      hover: (x, y) => reach && showRing(x, y),
-      leave: () => (ring = null),
+      hover: (x, y) => {
+        if (reach) showRing(x, y);
+        if (instant) checkSpot(c, x, y);
+      },
+      leave: () => ((ring = null), (placeNote = null)),
       hoverFollows: true,
       cancel: () => disarmPlace(),
       up: (x, y) => {
         disarmPlace();
-        void (c.settlement ? addSettlement(c, x, y) : createSite(c, x, y));
+        void (c.settlement ? (isInstant(c) ? createSettlement(c, x, y) : addSettlement(c, x, y)) : createSite(c, x, y));
       },
     };
     placeTool = tool;
@@ -2327,6 +2371,7 @@
   }
 
   function disarmPlace() {
+    placeNote = null;
     placeTool = null;
     placeArmed = false;
     ring = null;
@@ -2586,8 +2631,17 @@
       hidden: hiddenNow,
       onHide: (hide: boolean) => setHidden(id, hide),
       onDelete: () => {
-        const all = (edits.created ?? []).map((x) => (x.id === id ? { ...x, removed: true } : x));
-        applyEdits({ ...edits, created: all }, { tool: 'delete_feature', id }, 'user');
+        const old = edits.created ?? [];
+        const all = old.map((x) => (x.id === id ? { ...x, removed: true } : x));
+        const next = { ...edits, created: all };
+        // (A village or town takes its building, ward, name and note edits with it: set aside.)
+        if (c.kind === 'village' || c.kind === 'town') {
+          void view.gen.setAside($state.snapshot(old) as Created[], $state.snapshot(next) as Edits).then((r) => {
+            applyEdits(r && !('error' in r) ? r.edits : next, { tool: 'delete_feature', id }, 'user');
+          });
+          return;
+        }
+        applyEdits(next, { tool: 'delete_feature', id }, 'user');
       },
       onDown: under
         ? () => {
@@ -3525,6 +3579,7 @@
             onTowns={() => go('world', 'sketch')}
             playing={playOn}
             seconds={genSeconds}
+            note={placeNote}
             added={added ? (added.id ? `Added ${added.name}.` : 'The pin placed no settlement.') : null}
             onTakeBack={() => takeBack()}
           />
