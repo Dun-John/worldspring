@@ -15,6 +15,7 @@
 // water, deep water, a chasm and a rubble slope, a pool crossed by a rope bridge and stepping stones, and a chasm
 // bridged, in a dungeon's flagstones and again in a cave. `&items=dungeon4` (alone, default 48) shows the dungeon set as the DM
 // sees it in play: portcullises down and raised, locks shut and open, keys in three colours, collapsed walls.
+// `&items=cemetery` (alone; `&panels=`, `&sq=`) shows the cemetery props and a cemetery per culture group.
 import { Application, Container, Graphics, Sprite, Text, type TextStyleOptions } from 'pixi.js';
 import init, { battlemap_catalog_json, under_catalog_json } from '../gen/pkg/worldgen_wasm.js';
 import type { Shape } from '../gen/battlePrep';
@@ -430,6 +431,12 @@ export async function runGallery(target: HTMLElement) {
     y = townWalls(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 16, query.has('ruins'), query.get('panels'));
   }
 
+  // Cemeteries: their props and one laid out per culture group (`&items=cemetery` alone).
+  if (!only && pick?.includes('cemetery')) {
+    head('Cemeteries: their props on graveyard grass, then one per culture group (battlemap)');
+    y = cemeteries(app, catalog, root, y, width, query.has('nolabels'), Number(query.get('sq')) || 0, query.get('panels'));
+  }
+
   // The countryside's bounds and sails (`&items=countryside`, or with the fruit tree or water wheel kinds).
   if (pick?.includes('countryside') || only?.includes(62) || only?.includes(63)) {
     head('Countryside: hedgerow, dry-stone wall, fence (two chunks side by side, cut at the line between), windmill sails');
@@ -682,6 +689,176 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
     place(g, bx, by, BW, BH, '9 West rich: a star bastion at a corner (its faces wall, its platform paved)', starSq);
   }
   return y;
+}
+
+/** Roadmap 5 cemetery props (`battlemap::Kind` 100-105) as the gallery shows them until the generator's
+ * catalog has them (its entries win once it does). */
+const CEMETERY_KINDS: KindInfo[] = (
+  [
+    [100, 'cairn', 0.4, 4],
+    [101, 'standing stone', 0.3, 8],
+    [102, 'yew', 1.6, 20],
+    [103, 'lychgate', 1.0, 10],
+    [104, 'kurgan', 3.5, 12],
+    [105, 'tomb slab', 0.5, 2],
+  ] as const
+).map(([id, name, radius, height_ft]) => ({ id, name, radius, blocks_move: true, blocks_sight: false, cover: 1, difficult: false, height_ft, hazard: null, feature: true }));
+
+/** Cemeteries (`&items=cemetery` alone): each cemetery prop on the graveyard's grass, every look (yews and
+ * lychgates two), then a cemetery laid out by hand per culture group (rows of headstones, paths, the group's
+ * tombs and trees): North cairns and standing stones, West yews and a lychgate, South tomb slabs between tomb
+ * houses (plain blocks here), Dry tomb slabs round small domed tombs, Steppe kurgans. Three panels a row at
+ * `sq` px a square (default to fit the width); `&panels=2,4` or `1-3` picks them. Returns the y below it. */
+function cemeteries(app: Application, catalog: KindInfo[], root: Container, y0: number, width: number, nolabels: boolean, sqArg: number, picks: string | null): number {
+  const kinds = [catalog.find((k) => k.id === 39)!, ...CEMETERY_KINDS.map((k) => catalog.find((c) => c.id === k.id) ?? k)];
+  const info = new Map(kinds.map((k) => [k.id, k]));
+  const atlas = buildAtlas(app.renderer, kinds);
+  const [W, H] = [18, 12];
+  const per = 3;
+  const sq = sqArg || Math.floor((width - 16 * (per + 1)) / per / W);
+  const [pw, ph] = [W * sq, H * sq];
+  const shown = new Set<number>();
+  for (const part of (picks ?? '1-6').split(',')) {
+    const [a, b] = part.split('-').map(Number);
+    for (let k = a; k <= (b || a); k++) shown.add(k);
+  }
+  const slots = [...shown].filter((k) => k >= 1 && k <= 6).sort((a, b) => a - b);
+  const GROUND = [0x62843e, 0x62843e, 0x62843e, 0x6e8a44, 0xb8a676, 0x8c9a56];
+  const GRAVEL = 0xb4a888;
+  // (A hash for the layouts: the same picture every load.)
+  const h = (a: number, b: number) => {
+    let t = (Math.imul(a, 73856093) ^ Math.imul(b, 19349663)) >>> 0;
+    t = Math.imul(t ^ (t >>> 13), 0x5bd1e995) >>> 0;
+    return ((t ^ (t >>> 15)) >>> 0) / 4294967296;
+  };
+  slots.forEach((n, i) => {
+    const [ox, oy] = [16 + (i % per) * (pw + 16), y0 + Math.floor(i / per) * (ph + 34)];
+    const panel = new Container();
+    const g = new Graphics();
+    const props = new Container();
+    const k = sq / PX;
+    const scale = n === 1 ? Math.min(pw / (13 * PX), ph / (9.2 * PX)) : k;
+    g.rect(0, 0, pw / scale, ph / scale).fill(GROUND[n - 1]);
+    const put = (id: number, v: number, x: number, y: number, rot = 0, s = 1) => {
+      const inf = info.get(id)!;
+      const [cx, cy] = [x * PX, y * PX];
+      if (inf.height_ft >= 1.5 && !OWN_SHADOW.has(inf.name)) {
+        const sh = dropShadow(atlas, inf, cx, cy, s);
+        sh.rotation = rot;
+        props.addChild(sh);
+      }
+      const sp = new Sprite(atlas.frames[id][v % looks(id)]);
+      sp.anchor.set(0.5);
+      sp.position.set(cx, cy);
+      sp.rotation = rot;
+      sp.scale.set(s);
+      props.addChild(sp);
+    };
+    const labels: Text[] = [];
+    const label = (s: string, x: number, y: number) => {
+      if (nolabels) return;
+      const t = new Text({ text: s, style: { ...LABEL, fontSize: 11 } });
+      t.position.set(ox + x * PX * scale, oy + y * PX * scale);
+      labels.push(t);
+    };
+    // (In squares: a path, a boundary wall, rows of headstones skipping what `skip` says is taken.)
+    const path = (x0: number, y0p: number, x1: number, y1: number) => g.rect(x0 * PX, y0p * PX, (x1 - x0) * PX, (y1 - y0p) * PX).fill({ color: GRAVEL, alpha: 0.9 });
+    const wall = (color = 0x8c867a) => g.rect(0.25 * PX, 0.25 * PX, (W - 0.5) * PX, (H - 0.5) * PX).stroke({ width: 0.7 * (PX / 5) * 2, color, alpha: 0.95 });
+    const rows = (x0: number, y0r: number, x1: number, y1: number, dx: number, dy: number, id: number, skip: (x: number, y: number) => boolean, salt: number, rot = 0) => {
+      for (let y = y0r, r = 0; y <= y1; y += dy, r++) {
+        for (let x = x0, c = 0; x <= x1; x += dx, c++) {
+          if (skip(x, y) || h(salt + r, c) < 0.12) continue;
+          put(id, Math.floor(h(c, salt + r) * 4), x + (h(r, c + 7) - 0.5) * 0.15, y, rot);
+        }
+      }
+    };
+    const block = (x: number, y: number, w: number, d: number, fill: number, lit: number) => {
+      g.rect((x + 0.15) * PX, (y + 0.2) * PX, w * PX, d * PX).fill({ color: 0x1d1a14, alpha: 0.25 });
+      g.rect(x * PX, y * PX, w * PX, d * PX).fill(fill).stroke({ width: 0.045 * PX, color: 0x1d1a14 });
+      g.rect(x * PX, y * PX, w * PX, (d / 2) * PX).fill(lit).stroke({ width: 0.045 * PX, color: 0x1d1a14 });
+    };
+    const dome = (x: number, y: number, s: number) => {
+      g.rect((x - s / 2 + 0.15) * PX, (y - s / 2 + 0.2) * PX, s * PX, s * PX).fill({ color: 0x1d1a14, alpha: 0.25 });
+      g.rect((x - s / 2) * PX, (y - s / 2) * PX, s * PX, s * PX).fill(0xd8c8a4).stroke({ width: 0.045 * PX, color: 0x1d1a14 });
+      g.circle(x * PX, y * PX, s * 0.4 * PX).fill(0xe8dcc0).stroke({ width: 0.045 * PX, color: 0x1d1a14 });
+      g.circle((x - s * 0.1) * PX, (y - s * 0.1) * PX, s * 0.2 * PX).fill({ color: 0xf6eedc, alpha: 0.9 });
+    };
+    if (n === 1) {
+      // Each prop, every look: headstones and cairns, standing stones and tomb slabs, yews and lychgates.
+      const line = (id: number, x0: number, y: number, step: number, count = 4, rot = 0) => {
+        for (let v = 0; v < count; v++) put(id, v, x0 + v * step, y, rot);
+        label(info.get(id)!.name, x0 - 0.5, y + (id === 102 || id === 103 ? 1.75 : id === 105 ? 0.55 : 0.75));
+      };
+      line(39, 0.9, 1.0, 1.2);
+      line(100, 7.3, 1.0, 1.2);
+      line(101, 0.9, 3.4, 1.2);
+      line(105, 6.9, 3.4, 1.6);
+      line(102, 1.8, 6.6, 3.3, 2);
+      line(103, 8.2, 6.6, 2.8, 2);
+    } else if (n === 2) {
+      // North: a granite yard of headstones, a cairn by each family, a short row of standing stones.
+      path(8.4, 0, 9.4, H);
+      path(0.5, 5.6, W - 0.5, 6.4);
+      wall(0x7e7c74);
+      const taken = (x: number, y: number) => (x > 11.5 && y < 5.2) || (x < 4 && y > 8) || Math.hypot(x - 5.2, y - 2.2) < 0.9;
+      rows(1.2, 1.2, 7.6, 4.8, 1.1, 1.5, 39, taken, 20);
+      rows(10.2, 1.2, 17, 4.8, 1.1, 1.5, 39, taken, 30);
+      rows(1.2, 7.4, 7.6, 11, 1.1, 1.6, 39, taken, 40);
+      rows(10.2, 7.4, 17, 11, 1.1, 1.6, 39, taken, 50);
+      for (const [x, y, v] of [[12.6, 1.6, 0], [15.8, 2.2, 1], [13.8, 4.2, 2]] as const) put(101, v, x, y);
+      for (const [x, y, v] of [[1.4, 9.2, 0], [2.8, 10.6, 1], [1.6, 11, 2], [5.2, 2.2, 3]] as const) put(100, v, x, y);
+      label('2 North: headstones, cairns, standing stones', 0, H);
+    } else if (n === 3) {
+      // West: headstones in rows off a gravel walk, yews along the wall, a lychgate where the walk comes in.
+      path(8.4, 0.6, 9.4, H);
+      path(0.5, 5.6, W - 0.5, 6.4);
+      wall(0x9a9488);
+      const taken = (x: number, y: number) => (x < 3 && y < 3.2) || (x > 15 && y < 3.2) || (x < 3 && y > 9) || (x > 15 && y > 9);
+      rows(1.2, 1.4, 7.6, 4.8, 1.1, 1.4, 39, taken, 60);
+      rows(10.2, 1.4, 17, 4.8, 1.1, 1.4, 39, taken, 70);
+      rows(1.2, 7.4, 7.6, 10.4, 1.1, 1.5, 39, taken, 80);
+      rows(10.2, 7.4, 17, 10.4, 1.1, 1.5, 39, taken, 90);
+      for (const [x, y, v] of [[1.7, 1.7, 0], [16.3, 1.7, 1], [1.7, 10.4, 2], [16.3, 10.4, 3]] as const) put(102, v, x, y);
+      put(103, 2, 8.9, H - 1.1);
+      label('3 West: headstones, yews, a lychgate', 0, H);
+    } else if (n === 4) {
+      // South: family tomb houses in two rows off the walk, tomb slabs in the rows between them.
+      path(8.3, 0, 9.5, H);
+      wall(0xb09c7c);
+      for (const y of [0.8, 7.8]) {
+        for (const x of [0.9, 4.6]) block(x, y, 2.6, 2.4, 0xa8603e, 0xc8805a);
+        for (const x of [10.4, 14.1]) block(x, y, 2.6, 2.4, 0xa8603e, 0xc8805a);
+      }
+      const taken = (x: number, y: number) => Math.abs(x - 8.9) < 1;
+      rows(1.2, 4.6, 16.8, 6.4, 0.9, 1.7, 105, taken, 100, -Math.PI / 2);
+      label('4 South: tomb houses (blocks), tomb slabs', 0, H);
+    } else if (n === 5) {
+      // Dry: small domed tombs among rows of tomb slabs on bare ground.
+      path(0.4, 5.5, W - 0.4, 6.5);
+      wall(0xc0aa80);
+      for (const [x, y] of [[3, 2.4], [14.6, 2.6], [9, 9]] as const) dome(x, y, 2.4);
+      const taken = (x: number, y: number) => Math.hypot(x - 3, y - 2.4) < 2.2 || Math.hypot(x - 14.6, y - 2.6) < 2.2 || Math.hypot(x - 9, y - 9) < 2.2;
+      rows(1.2, 1.3, 16.8, 4.8, 0.9, 1.7, 105, taken, 130, -Math.PI / 2);
+      rows(1.2, 7.4, 16.8, 10.6, 0.9, 1.7, 105, taken, 140, -Math.PI / 2);
+      label('5 Dry: domed tombs (blocks), tomb slabs', 0, H);
+    } else {
+      // Steppe: kurgans on the open grass, the big one kerbed, a cairn and a few stones between.
+      put(104, 3, 5.0, 5.6, 0, 1.3);
+      put(104, 1, 13.5, 3.6, 0, 0.85);
+      put(104, 2, 14.0, 9.4, 0, 0.72);
+      put(100, 2, 9.8, 10.8);
+      put(101, 1, 10.2, 7.0);
+      label('6 Steppe: kurgans 45, 30 and 25 ft across (scaled), a cairn, a stone', 0, H);
+    }
+    panel.addChild(g, props);
+    const clip = new Graphics().rect(0, 0, pw / scale, ph / scale).fill(0xffffff);
+    panel.addChild(clip);
+    panel.mask = clip;
+    panel.scale.set(scale);
+    panel.position.set(ox, oy);
+    root.addChild(panel, ...labels);
+  });
+  return y0 + Math.ceil(slots.length / per) * (ph + 34) + 10;
 }
 
 /** An object's drop shadow as the battlemap casts it (`BattlemapLayer`): a soft blob to the SE (from the foot of
