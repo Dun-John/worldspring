@@ -2806,11 +2806,44 @@ fn palace_rules(world: &World, t0: &T0, l: &Layout, li: usize, b: &town::Buildin
 
 // ---- The street editor. ----
 
+/// A hand castle laid as a tower house (no bailey, its one building a small tower keep, on a patch
+/// too small for a curtain): off the streets, walls and towers, on no building. False if not one.
+fn tower_house(l: &Layout, tag: &str, r: &mut Report) -> bool {
+    let keeps: Vec<&town::Building> = l.buildings.iter().filter(|b| b.ward == Ward::Castle).collect();
+    if l.plazas.iter().any(|p| p.kind == PlazaKind::Bailey) || keeps.len() != 1 || keeps[0].keep != Some(town::KeepKind::Plain) {
+        return false;
+    }
+    let b = keeps[0];
+    let name = format!("{tag}: b:{}:{} at {}", l.index, b.id, at(centroid(&b.poly)));
+    r.tally("placements as a tower house (a patch too small for a curtain)", 1);
+    let wd = l.walls.iter().flat_map(|w| w.windows(2)).map(|s| if contains(&b.poly, s[0]) { -1.0 } else { seg_poly(s[0], s[1], &b.poly) }).fold(f64::MAX, f64::min);
+    if wd < 4.0 {
+        r.add("tower houses within 4 ft of a wall, on a tower or a building, or on a street", 1.0, format!("{name}: {wd:.1} ft from a wall"));
+    }
+    let towers = l.towers.iter().chain(&l.gate_towers).chain(l.extra_towers.iter().map(|t| &t.0));
+    if let Some(t) = towers.filter(|t| -depth(&b.poly, **t) < 12.0).next() {
+        r.add("tower houses within 4 ft of a wall, on a tower or a building, or on a street", 1.0, format!("{name}: a tower at {} within 12 ft", at(*t)));
+    }
+    if let Some(o) = l.buildings.iter().find(|o| o.ward != Ward::Castle && poly_overlap(&shrink(&b.poly, 0.5), &shrink(&o.poly, 0.5))) {
+        r.add("tower houses within 4 ft of a wall, on a tower or a building, or on a street", 1.0, format!("{name}: overlaps b:{}:{}", l.index, o.id));
+    }
+    let ways = l.roads.iter().map(|x| (&x.0, x.2)).chain(l.streets.iter().map(|s| (s, 18.0)));
+    for (pts, w) in ways {
+        let d = pts.windows(2).map(|s| if contains(&b.poly, s[0]) { 0.0 } else { seg_poly(s[0], s[1], &b.poly) }).fold(f64::MAX, f64::min);
+        if d < 0.5 * w - 1.0 {
+            r.add("tower houses within 4 ft of a wall, on a tower or a building, or on a street", 1.0, format!("{name}: {d:.1} ft from a way {w:.0} ft wide"));
+        }
+    }
+    true
+}
+
 /// Castles set in the street editor at the town wall, walls on and off.
 fn editor(ctx: &mut Ctx, r: &mut Report) {
     r.counts(&[
         "placements",
         "placements with no castle",
+        "placements as a tower house (a patch too small for a curtain)",
+        "tower houses within 4 ft of a wall, on a tower or a building, or on a street",
         "placements with any non-castle building changed",
         "non-castle buildings changed or gone, walls off against on",
         "new non-castle ids with the walls off",
@@ -2874,6 +2907,7 @@ fn editor(ctx: &mut Ctx, r: &mut Report) {
                 let tag = format!("#{ci} p{} walls {}", patch["patch"], if walls.is_empty() { "on" } else { "off" });
                 if l.castles.is_empty() {
                     r.add("placements with no castle", 1.0, format!("{tag}: no castle"));
+                } else if tower_house(&l, &tag, r) {
                 } else {
                     castle_checks(&world, t0, &l, &tag, false, r);
                     // Its keep and barracks as the castle's laid out by zones, and their halls.

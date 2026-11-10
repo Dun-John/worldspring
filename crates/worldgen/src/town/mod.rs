@@ -14,6 +14,7 @@
 
 pub mod belfry;
 mod castle;
+mod towerhouse;
 pub mod catalog;
 pub mod geom;
 pub mod mesh;
@@ -3572,6 +3573,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // Blocks → alleys → lots → buildings.
     // Castles' ways from their gates to the streets (nothing built on them by a later patch).
     let mut castle_ways: Vec<Vec<P>> = Vec::new();
+    // Hand castles on patches too small for a curtain: (patch, its outline), laid as tower houses.
+    let mut tower_houses: Vec<(usize, Vec<P>)> = Vec::new();
     // v63 countryside: the farmland belt's plain radius each way (`plan_town`'s `farmed`), which
     // its fields fray past or fall short of (`fields::reach`), and the roads they run on along.
     let (a1, a2, f1, f2) = (plan.roll(0, 30) * 0.15 + 0.1, plan.roll(0, 31) * 0.1 + 0.05, plan.roll(0, 32) * std::f64::consts::TAU, plan.roll(0, 33) * std::f64::consts::TAU);
@@ -3843,9 +3846,15 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                         if let Some(b) = l.blocks.last_mut() {
                             *b = block.clone();
                         }
-                        let mut streets = street_lines(i, &d);
-                        let (dp, mut prng) = lots_of(i, Ward::Noble, false);
-                        build_block(site, &block, &mut streets, Ward::Noble, &dp, &mut prng, l, None);
+                        // (Set by hand: the castle's after all, a tower house, `towerhouse`; its
+                        // block left open.)
+                        if plan.ward[i] == Some(Ward::Castle) {
+                            let mut streets = street_lines(i, &d);
+                            let (dp, mut prng) = lots_of(i, Ward::Noble, false);
+                            build_block(site, &block, &mut streets, Ward::Noble, &dp, &mut prng, l, None);
+                        } else {
+                            tower_houses.push((i, c.pts.clone()));
+                        }
                     }
                 }
             }
@@ -3922,6 +3931,16 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // gate block, and off a castle's way to its gate.
     let bent_blocks = if walled || plan.walled { gatehouse::bent_blocks(l, &wall_laid.0, &wall_laid.2) } else { Vec::new() };
     l.buildings.retain(|b| clear_of(b) && outline::off_bastions(&wall_laid.3.placed, &b.poly) && (b.ward == Ward::Castle || !gatehouse::on_bent_block(&bent_blocks, &b.poly)) && (b.ward == Ward::Castle || castle_ways.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(&b.poly, s[0], s[1]) >= 5.0))));
+    for (i, patch) in &tower_houses {
+        let mut prng = lots_of(*i, Ward::Castle, false).1;
+        if let Some(mut k) = towerhouse::tower_house(site, patch, l, &town_segs, &town_towers, &gate_pts, &mut prng) {
+            l.buildings.retain(|b| b.ward == Ward::Castle || !towerhouse::under(&k.poly, &b.poly));
+            let c = centroid(&k.poly);
+            l.castles.push((c, k.poly.iter().map(|p| dist(*p, c)).fold(0.0, f64::max)));
+            k.id = *i as u32;
+            l.buildings.push(k);
+        }
+    }
     // Steps on steep streets, judged before the streets are cut at the water (wet ground is
     // level), so every piece is still as recorded.
     if s.tier >= stairs::STAIR_TIER || survey.is_some() {

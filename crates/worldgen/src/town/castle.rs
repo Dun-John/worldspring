@@ -1690,7 +1690,7 @@ const KEEP_GROW: f64 = 1.2;
 /// had before `KEEP_GROW`'s smallest, so a tight court still takes the kind it rolled.
 /// The share of keeps whose corner turrets are square.
 const KEEP_SQUARE_SHARE: f64 = 0.35;
-const KEEP_FITS: [f64; 7] = [1.0, 0.86, 0.74, 0.64, 0.55, 0.47, 0.4];
+pub(super) const KEEP_FITS: [f64; 7] = [1.0, 0.86, 0.74, 0.64, 0.55, 0.47, 0.4];
 
 /// The pieces of a keep of `kind` scaled by `f` (its rolls in `rolls`, 0..1 each): its frame.
 fn keep_frame(kind: KeepKind, f: f64, rolls: &[f64; 6], round: bool) -> Frame {
@@ -1777,6 +1777,12 @@ fn keep_frame(kind: KeepKind, f: f64, rolls: &[f64; 6], round: bool) -> Frame {
         }
     }
     fr
+}
+
+/// A small tower keep's body (`KeepKind::Plain`, local ft round its middle) scaled by `f`: a tower
+/// house's (`towerhouse`).
+pub(super) fn plain_body(f: f64, rolls: &[f64; 6]) -> Vec<P> {
+    keep_frame(KeepKind::Plain, f, rolls, true).parts.swap_remove(0).0
 }
 
 /// A keep's flat top this big (sq ft) or more is roofed.
