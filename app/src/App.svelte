@@ -8,7 +8,7 @@
   import ShortcutsHelp from './ui/shell/ShortcutsHelp.svelte';
   import { buildKeymap } from './ui/shell/keymap';
   import { createKeyHandler, focusKind } from './ui/shell/shortcuts';
-  import { layoutAt, layoutsIn, layoutTargets, madeCount, madeOn, matchLayouts, reanchor, remapLayouts, restorePinned, setAsideRemoved, upgradeEdits, type MadeOn } from './editor/reanchor';
+  import { layoutAt, madeCount, madeOn, restorePinned, upgradeEdits, type MadeOn } from './editor/reanchor';
   import { getImage, loadSession, putImage } from './play/session';
   import { hasSession, parseLoc } from './play/state';
   import type { PreviewReply, PreviewRequest } from './editor/preview.worker';
@@ -812,7 +812,7 @@
 
   /** A remade world's edits with their keys moved to the places they were made on, and how many
    * moved with them, were set aside, or were set aside with a place taken away on purpose
-   * (`setAsideRemoved`, `reanchor`, `remapLayouts`). */
+   * (`t0::remap::follow`). */
   type Followed = { edits: Edits; kept: number; parked: number; removed: number };
 
   /** A settlement taken away on purpose by a remake: its feature id, its name and its layout
@@ -933,22 +933,18 @@
     let carried: Carried | null = null;
     // The world's own places changes (or play) are made on, as generated here (their
     // fingerprints), so that only those laid out the same in the remade world keep them.
-    const keyed = following ? [...new Set([...layoutsIn(kept), ...played])].filter((li) => li < (before!.first_created ?? 0)).sort((a, b) => a - b) : [];
-    const printed = keyed.length ? await view.gen.prints(keyed) : null;
-    const was = new Map(keyed.map((li, i) => [li, printed?.[i] ?? 0]));
-    const follow = async (o: Overlay): Promise<Edits | null> => {
-      const pairs = [...matchLayouts(keyed, before!, o)];
-      const now = pairs.length ? await view.gen.prints(pairs.map(([, to]) => to)) : [];
-      const same = new Map(pairs.map(([li, to], i) => [`${li}>${to}`, !!now?.[i] && now[i] === was.get(li)]));
-      if (carry) carried = carrySession(carry, layoutTargets(played, before!, o, kept.created?.length ?? 0, (li, to) => same.get(`${li}>${to}`) ?? false));
-      // (Places taken away on purpose first: what was made on them is set aside, so no
-      // neighbour takes it.)
-      const off = setAsideRemoved(kept, gone, o.features);
-      const named = reanchor(off?.edits ?? kept, before!.features, o.features);
-      const base = named?.edits ?? off?.edits ?? kept;
-      const placed = remapLayouts(base, before!, o, (li, to) => same.get(`${li}>${to}`) ?? false, gone.map((g) => g.li));
-      if (!off && !named && !placed) return null;
-      moved = { edits: placed?.edits ?? base, kept: (named?.n ?? 0) + (placed?.moved ?? 0), parked: placed?.parked ?? 0, removed: (off?.n ?? 0) + (placed?.removed ?? 0) };
+    const was = following ? ((await view.gen.remakePrints(kept, played)) ?? []) : [];
+    // (`t0::remap`, in the generator remaking the world: what it has of the world before is its
+    // places as shown, `before`, and `was`.)
+    const follow = async (): Promise<Edits | null> => {
+      const { features, first_created, layout_ids } = before!;
+      const r = await view.gen.follow({ edits: kept, before: { features, first_created, layout_ids }, was, gone, played });
+      if (!r || 'error' in r) console.error('[remake] the changes could not follow their places:', r);
+      const remade = r && !('error' in r) ? r : null;
+      if (carry) carried = carrySession(carry, (li) => remade?.targets[played.indexOf(li)] ?? null);
+      const f = remade?.followed;
+      if (!f) return null;
+      moved = { edits: applyOps(kept, f.ops).edits, kept: f.kept, parked: f.parked, removed: f.removed };
       return moved.edits;
     };
     // Upgraded across a generator that makes towns and sites anew: those drawn in the sketch take

@@ -1,7 +1,7 @@
 // A play session carried into the world remade (a settlement added or taken back, a sketch
 // redrawn): sessions are kept by world hash, the sketch in it, so the remade world would open
-// with none. Its places move to their numbers there as the world's changes do (`layoutTargets`);
-// tokens in places that came out differently wait outside them. The world as it was keeps its own
+// with none. Its places move to their numbers there as the world's changes do
+// (`t0::remap::layout_targets`); tokens in places that came out differently wait outside them. The world as it was keeps its own
 // session as it was.
 import { layoutOfId, withLayout } from '../editor/reanchor';
 import { PARKED_LAYOUT } from '../sync/ops';

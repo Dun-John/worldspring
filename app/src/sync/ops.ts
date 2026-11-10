@@ -34,8 +34,9 @@ export const PARKED_LAYOUT = 1_000_000;
 /** Where the edits fields hold layout-local ids (`b:<layout>:…`, `d:`, `t:`, `u:`, `k:`, `w:`, a
  * level's or room's `l:`/`r:` round one, a town's bare layout number): in their `keys`, in their
  * `values` (a set's ids), or inside each value (`npcs` where they are, `plots` their anchors).
- * A remade world moves them with their places (`remapLayouts`): a new field that holds such ids
- * must join this list, or its ids would point at other places. */
+ * It mirrors `LAYOUT_ID_FIELDS` in `crates/worldgen/src/t0/remap.rs`, the list a remade world
+ * moves with their places (there, in the generator); here for an upgrade (`upgradeEdits`,
+ * `restorePinned`). A new field that holds such ids joins both lists. */
 export const LAYOUT_ID_FIELDS: Record<string, 'keys' | 'values' | 'npcs' | 'plots' | 'towns'> = {
   renames: 'keys',
   notes: 'keys',

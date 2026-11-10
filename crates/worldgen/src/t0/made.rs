@@ -555,7 +555,7 @@ fn relaid(id: &str, from: usize, to: usize) -> Option<String> {
 /// moved): its buildings' edits, its town laid out anew (`Edits.towns`), and the names, notes,
 /// hidden marks, site designs, NPCs' places and plot points in its layout, all moved to the
 /// first free layout number from `world::PARKED_LAYOUT` up, as the app sets aside a place that
-/// is gone when the world is remade (`remapLayouts` in `app/src/editor/reanchor.ts`). They stay
+/// is gone when the world is remade (`t0::remap`). They stay
 /// in the file and resolve nowhere. What is kept under its own `c:` id stays. Walls drawn by
 /// hand are not keyed to it (they read the towns they reach afresh). How many entries moved.
 pub fn set_aside(edits: &mut crate::world::Edits, li: usize) -> usize {

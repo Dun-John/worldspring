@@ -2,6 +2,7 @@
 // plus the terrain payload layout (mirrors crates/worldgen/src/payload.rs).
 import { ruinPlanFill } from './ruinPlan';
 import type { PreparedChunk } from './battlePrep';
+import type { EditOp } from '../sync/ops';
 
 export type Wind = 'belts' | 'from_west' | 'from_east';
 
@@ -547,8 +548,6 @@ export type Ask =
   | { op: 'names'; scope: string }
   /** The sites standing in settlements (`agent::parents_json`). */
   | { op: 'parents' }
-  /** Fingerprints of layouts as generated (`town::layout_print`), by layout index. */
-  | { op: 'prints'; layouts: number[] }
   /** Where a site can be created near (x, y), and a name for it (`agent::creation_spot`). */
   | { op: 'spot'; kind: string; under?: string; id: string; x: number; y: number }
   /** Whether a building drawn by hand can stand there, its point and a name
@@ -576,7 +575,33 @@ export type Ask =
   | { op: 'madespot'; kind: string; id: string; x: number; y: number }
   /** Edits with those of the villages and towns added by hand that they remove, move or lay out
    * anew set aside (`t0::made::set_aside_changed`; `old`: the created sites before, JSON). */
-  | { op: 'setaside'; old: string; edits: string };
+  | { op: 'setaside'; old: string; edits: string }
+  /** The fingerprints a remake of this world needs (`t0::remap::prints_before`; `edits` JSON). */
+  | { op: 'remakeprints'; edits: string; played: number[] }
+  /** Edits made on the world before following their places into this one, remade
+   * (`t0::remap::follow_into`; `input` JSON: `RemakeInput`). */
+  | { op: 'follow'; input: string };
+
+/** What a world remade from a changed sketch needs to move the edits made on the world before
+ * (`follow_json`): the edits, that world's places as its overlay has them, its layouts'
+ * fingerprints (`remakePrints`), the settlements taken away on purpose and a play session's
+ * layouts (`played`). */
+export interface RemakeInput {
+  edits: Edits;
+  before: { features: Feature[]; first_created?: number; layout_ids?: number[] };
+  was: [number, number][];
+  gone: { id: string; name: string; li: number }[];
+  played: number[];
+}
+
+/** The edits followed into the world remade (`followed`: null if nothing moved; `ops` turn the
+ * edits given into them; `kept`, `parked`, `removed`: how many entries followed their places,
+ * were set aside, or were set aside with a place taken away), and where each of the play
+ * session's layouts goes (`targets`, null: it came out differently or is gone). */
+export interface Remade {
+  followed: { ops: EditOp[]; kept: number; parked: number; removed: number; moved: [string, string][] } | null;
+  targets: (number | null)[];
+}
 
 /** A village or town added by hand, as the generator has it (`made_json`): its layout index,
  * `reach` (its layout's), `built` (built-up radius), `rect` (all its battlemaps change over: the

@@ -4460,3 +4460,41 @@ fn created_settlements_move_nothing_else() {
         assert_eq!(laid(&ea, first + k), laid(&eb, fb + k), "c:{k}: laid out anew when the world was remade");
     }
 }
+
+/// A world remade from a changed sketch (a capital town pinned) keeps what was made in each of
+/// its places only where that place came out the same (`t0::remap::remake`): a change keyed in a
+/// layout lands in the new layout with the same fingerprint and identity, or is set aside at
+/// `PARKED_LAYOUT` and up, each layout at a number of its own; none is lost or lands on another.
+#[test]
+fn a_remade_world_keeps_changes_on_their_places() {
+    use worldgen::t0::{T0, remap};
+    use worldgen::town::{layout_identity, layout_print};
+    use worldgen::world::{Note, PARKED_LAYOUT, layout_in_id};
+    let mut file: WorldFile = serde_json::from_str(&world_json(2)).unwrap();
+    let old = World::new(file.clone()).unwrap();
+    let t0 = T0::generate(&old);
+    let first = t0.settlements.len() + t0.base_pois;
+    let what = |w: &World, t0: &T0, li: usize| format!("{}:{}", layout_print(w, t0, li), layout_identity(t0, li));
+    for li in 0..first {
+        file.edits.notes.insert(format!("b:{li}:0"), Note { text: what(&old, &t0, li), ..Default::default() });
+    }
+    let town = t0.settlements.iter().find(|s| s.tier.name() == "town").expect("a town");
+    let mut b = file.clone();
+    b.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "pin", "tier": "town", "capital": true, "pts": [[town.x + 21_120.0, town.y + 15_840.0]] })).unwrap());
+    let (old, new) = (World::new(file).unwrap(), World::new(b).unwrap());
+    let (t1, followed) = remap::remake(&old, &t0, &new, &[]);
+    let f = followed.expect("the remake moved changes");
+    let (mut kept, mut parked) = (0, std::collections::BTreeSet::new());
+    for (k, note) in &f.edits.notes {
+        let li = layout_in_id(k).expect("a layout-local key");
+        if li >= PARKED_LAYOUT {
+            assert!(parked.insert(li), "{k}: two layouts set aside at one number");
+        } else {
+            assert_eq!(what(&new, &t1, li), note.text, "{k}: a change landed on a place that came out otherwise");
+            kept += 1;
+        }
+    }
+    assert_eq!(kept + parked.len(), first, "changes were lost");
+    assert_eq!(f.parked, parked.len(), "the changes set aside were miscounted");
+    assert!(kept > first / 2, "only {kept} of {first} places kept their changes");
+}

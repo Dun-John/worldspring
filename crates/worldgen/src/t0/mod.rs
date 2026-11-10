@@ -16,6 +16,7 @@ pub mod islands;
 pub mod made;
 pub mod names;
 pub mod plates;
+pub mod remap;
 pub mod roads;
 pub mod sealanes;
 pub mod settle;

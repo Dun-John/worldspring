@@ -179,13 +179,6 @@ impl Ctx {
         }
     }
 
-    /// Fingerprints of layouts as generated (`town::layout_print`, folded to 32 bits), by layout
-    /// index; 0 for one past the last, or before T0.
-    pub fn layout_prints(&self, layouts: Vec<u32>) -> Vec<u32> {
-        let Some(t0) = &self.t0 else { return vec![0; layouts.len()] };
-        layouts.iter().map(|&li| worldgen::town::layout_print(&self.world, t0, li as usize)).map(|h| (h ^ h >> 32) as u32).collect()
-    }
-
     /// The sites standing in settlements (`agent::parents_json`): `{n, base, pairs: [[site layout,
     /// settlement]…]}`, or `null` before T0.
     pub fn parents_json(&self) -> String {
@@ -339,6 +332,45 @@ impl Ctx {
         };
         let moved = worldgen::t0::made::set_aside_changed(&old, &mut edits, t0.settlements.len() + t0.base_pois);
         serde_json::json!({ "edits": edits, "moved": moved }).to_string()
+    }
+
+    /// The fingerprints a remake of this world needs (`t0::remap::prints_before`): of the layouts
+    /// `edits` (JSON) name and `played` (a play session's), below the first created one, as
+    /// `[[layout, print]…]`; `null` before T0 or for edits that don't read.
+    pub fn remake_prints_json(&self, edits: &str, played: Vec<u32>) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let Ok(edits) = serde_json::from_str::<worldgen::world::Edits>(edits) else { return "null".into() };
+        let also: Vec<usize> = played.iter().map(|&li| li as usize).collect();
+        serde_json::to_string(&worldgen::t0::remap::prints_before(&self.world, t0, &edits, &also)).expect("serializable")
+    }
+
+    /// Edits made on the world before following their places into this one, remade
+    /// (`t0::remap::follow_into`). `input`: `{edits, before: {features, first_created,
+    /// layout_ids}, was: [[layout, print]…] (remake_prints_json), gone: [{id, name, li}…], played:
+    /// [layout…]}`. Returns `{followed: null | {ops, kept, parked, removed, moved}, targets}`
+    /// (`ops`: what turns `edits` into those followed; `moved`: features' `[old, new]` ids;
+    /// `targets`: where each of `played` goes, or null), or `{error}`.
+    pub fn follow_json(&self, input: &str) -> String {
+        use worldgen::t0::remap;
+        #[derive(serde::Deserialize)]
+        struct Input {
+            edits: worldgen::world::Edits,
+            before: remap::Places,
+            #[serde(default)]
+            was: Vec<(usize, u32)>,
+            #[serde(default)]
+            gone: Vec<remap::Gone>,
+            #[serde(default)]
+            played: Vec<usize>,
+        }
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let a: Input = match serde_json::from_str(input) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+        };
+        let (followed, targets) = remap::follow_into(&self.world, t0, &a.edits, &a.before, &a.was, &a.gone, &a.played);
+        let followed = followed.map(|f| serde_json::json!({ "ops": a.edits.diff(&f.edits), "kept": f.kept, "parked": f.parked, "removed": f.removed, "moved": f.moved }));
+        serde_json::json!({ "followed": followed, "targets": targets }).to_string()
     }
 
     /// Generate one terrain tile. `parent` is the parent's padded heights for refined levels.

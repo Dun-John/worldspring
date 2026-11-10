@@ -4,7 +4,7 @@ import { EDIT_FIELDS } from '../sync/ops';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, Remade, RemakeInput, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -109,12 +109,6 @@ export class GenClient {
     return this.ask({ op: 'names', scope: String(scope) }).then((j) => JSON.parse(j) as NameEntry[] | null);
   }
 
-  /** Fingerprints of layouts as generated (`town::layout_print`), in the order asked; null if the
-   * generator could not answer. */
-  prints(layouts: number[]): Promise<number[] | null> {
-    return this.ask({ op: 'prints', layouts }).then((j) => JSON.parse(j) as number[] | null);
-  }
-
   /** The sites standing in settlements, as layout indices; null if the generator could not answer. */
   parents(): Promise<Parents | null> {
     return this.ask({ op: 'parents' }).then((j) => JSON.parse(j) as Parents | null);
@@ -203,6 +197,19 @@ export class GenClient {
    * lay out anew (from `old`, the created sites before) set aside, as the generator would. */
   setAside(old: Created[], edits: Edits): Promise<{ edits: Edits; moved: number } | { error: string } | null> {
     return this.ask({ op: 'setaside', old: JSON.stringify(old), edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
+  }
+
+  /** The fingerprints of the world's own layouts a remake must find alike to keep what is made on
+   * them (those `edits` name and `played`), as `[layout, print]`; null if the generator could
+   * not answer. */
+  remakePrints(edits: Edits, played: number[]): Promise<[number, number][] | null> {
+    return this.ask({ op: 'remakeprints', edits: JSON.stringify(edits), played }).then((j) => JSON.parse(j));
+  }
+
+  /** The edits made on the world before following their places into this one, remade from a
+   * changed sketch (`t0::remap::follow_into`); null if the generator could not answer. */
+  follow(input: RemakeInput): Promise<Remade | { error: string } | null> {
+    return this.ask({ op: 'follow', input: JSON.stringify(input) }).then((j) => JSON.parse(j));
   }
 
   private ask(ask: Ask): Promise<string> {

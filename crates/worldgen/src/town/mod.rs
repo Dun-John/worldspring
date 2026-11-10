@@ -1058,7 +1058,7 @@ pub fn layout_print(world: &World, t0: &T0, index: usize) -> u64 {
 /// seed) with its tier, kind, size and waters; never its number. Two worlds whose
 /// layouts at an index (each) hash the same lay them out the same, and everything in them, given
 /// the same ground and roads round them: the app keeps changes on a place across a remade world
-/// only then (`remapLayouts`); 0 past the last layout.
+/// only then (`t0::remap`); 0 past the last layout.
 pub fn layout_identity(t0: &T0, index: usize) -> u64 {
     let n = t0.settlements.len();
     if let Some(s) = settlement(t0, index) {
