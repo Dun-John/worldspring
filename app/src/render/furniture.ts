@@ -7932,29 +7932,31 @@ function boneMound(g: Graphics, f: InteriorItem, light: Light, v: number, rnd: (
   } else skullTop(g, tx, ty, dir, 0.095, light);
 }
 
-/** Totem, seen from a high angle: a squat carved pole with spread wings, one bold silhouette on a small cairn —
- * a red ochre band, big dark eyes and a mouth on its head, a lit side — its shadow thrown across the floor. */
+/** Totem, seen from straight above: the top of a carved pole in plan — a round cap painted with ochre rings and a
+ * skull on it, broad wings spread to both sides, two horns curling out over the top — its shadow thrown across the floor. */
 function totem(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
-  const { pt, right, up } = screenAxes(light);
-  const P = (a: number, b: number) => pt(cx, cy, a, b);
-  const body = [[-0.17, -0.34], [0.17, -0.34], [0.19, -0.06], [0.4, 0.0], [0.42, 0.24], [0.2, 0.22], [0.16, 0.4], [-0.16, 0.4], [-0.2, 0.22], [-0.42, 0.24], [-0.4, 0.0], [-0.19, -0.06]];
-  const pts = body.flatMap(([a, b]) => P(a, b));
-  castShadow(g, pts, light, 0.8);
-  // The cairn it stands in.
-  g.poly(patch(...P(0, -0.34), 0.27, 0.15, rnd, 0.1, 14)).fill({ color: 0x14100c, alpha: 0.25 });
-  for (let i = 0; i < 4; i++) rock(g, ...P(-0.2 + i * 0.133, -0.38 + 0.04 * rnd()), 0.085, CAVE_ROCK, light, rnd, 6);
-  g.poly(pts).fill(WOOD[1]).stroke({ width: OUT, color: INK, join: 'round' });
-  // The side toward the light, the shaded side away.
-  const lit = right[0] * light[0] + right[1] * light[1] > 0 ? 1 : -1;
-  g.poly([...P(lit * 0.1, -0.3), ...P(lit * 0.15, -0.3), ...P(lit * 0.15, 0.36), ...P(lit * 0.1, 0.36)]).fill({ color: WOOD[2], alpha: 0.8 });
-  g.poly([...P(-lit * 0.1, -0.3), ...P(-lit * 0.15, -0.3), ...P(-lit * 0.15, 0.36), ...P(-lit * 0.1, 0.36)]).fill({ color: WOOD[0], alpha: 0.8 });
-  // The ochre band, then the face.
-  g.poly([...P(-0.15, -0.2), ...P(0.15, -0.2), ...P(0.15, -0.08), ...P(-0.15, -0.08)]).fill(0x9a4a32).stroke({ width: LINE, color: INK });
-  for (const k of [-1, 1]) g.circle(...P(k * 0.08, 0.27), 0.05).fill(0x1a1410).stroke({ width: LINE, color: INK });
-  g.moveTo(...P(-0.09, 0.12)).lineTo(...P(0.09, 0.12)).stroke({ width: 0.04, color: INK, cap: 'round' });
-  g.moveTo(...P(-0.33, 0.1)).lineTo(...P(-0.2, 0.1)).moveTo(...P(0.33, 0.1)).lineTo(...P(0.2, 0.1)).stroke({ width: 0.02, color: WOOD[0] });
-  void up;
+  const [lx, ly] = light;
+  const wing = (sgn: number) => [[sgn * 0.14, -0.1], [sgn * 0.46, -0.13], [sgn * 0.48, 0.1], [sgn * 0.4, 0.15], [sgn * 0.14, 0.11]].flatMap(([a, b]) => [cx + a, cy + b]);
+  const horn = (sgn: number) => [[sgn * 0.1, -0.2], [sgn * 0.22, -0.44], [sgn * 0.36, -0.47], [sgn * 0.3, -0.38], [sgn * 0.27, -0.3], [sgn * 0.2, -0.2]].flatMap(([a, b]) => [cx + a, cy + b]);
+  for (const sgn of [-1, 1]) {
+    castShadow(g, wing(sgn), light, 0.5);
+    castShadow(g, horn(sgn), light, 0.5);
+  }
+  g.circle(cx + lx * 0.05, cy + ly * 0.05, 0.27).fill({ color: 0x14100c, alpha: 0.25 });
+  for (const sgn of [-1, 1]) {
+    g.poly(wing(sgn)).fill(WOOD[1]).stroke({ width: OUT, color: INK, join: 'round' });
+    g.poly([cx + sgn * 0.18, cy - 0.07, cx + sgn * 0.44, cy - 0.09, cx + sgn * 0.44, cy - 0.05, cx + sgn * 0.18, cy - 0.03]).fill({ color: WOOD[2], alpha: 0.8 });
+    g.circle(cx + sgn * 0.33, cy + 0.01, 0.04).fill(0x9a4a32).stroke({ width: LINE, color: INK });
+    g.poly(horn(sgn)).fill(BONE[1]).stroke({ width: LINE, color: INK, join: 'round' });
+    g.moveTo(cx + sgn * 0.14, cy - 0.22).lineTo(cx + sgn * 0.26, cy - 0.41).stroke({ width: 0.02, color: BONE[2], cap: 'round' });
+  }
+  // The round cap with its painted rings.
+  g.circle(cx, cy, 0.26).fill(WOOD[1]).stroke({ width: OUT, color: INK });
+  g.circle(cx, cy, 0.2).fill(0x9a4a32).stroke({ width: 0.018, color: INK });
+  g.circle(cx - lx * 0.01, cy - ly * 0.01, 0.15).fill(WOOD[2]);
+  skullTop(g, cx, cy + 0.01, -Math.PI / 2, 0.13, light);
+  void rnd;
 }
 
 /** Scaffolding: a raised timber walkway (its height and edge drawn by the floor heights, so nothing here inks its
@@ -8013,8 +8015,8 @@ function scaffold(g: Graphics, f: InteriorItem, light: Light, rnd: () => number)
 function crackedFloor(g: Graphics, f: InteriorItem, light: Light, rnd: () => number) {
   const [cx, cy] = [f.x + 0.5, f.y + 0.5];
   const [lx, ly] = light;
-  g.poly(patch(cx, cy, 0.44, 0.4, rnd, 0.14, 16)).fill({ color: 0x14100c, alpha: 0.14 });
-  g.poly(patch(cx + lx * 0.06, cy + ly * 0.06, 0.34, 0.3, rnd, 0.14, 16)).fill({ color: 0x14100c, alpha: 0.2 });
+  g.poly(patch(cx, cy, 0.5, 0.47, rnd, 0.1, 16)).fill({ color: 0x14100c, alpha: 0.14 });
+  g.poly(patch(cx + lx * 0.06, cy + ly * 0.06, 0.42, 0.38, rnd, 0.12, 16)).fill({ color: 0x14100c, alpha: 0.2 });
   g.poly(patch(cx - lx * 0.12, cy - ly * 0.12, 0.2, 0.17, rnd, 0.2, 12)).fill({ color: 0xf0e8d8, alpha: 0.12 });
   const crack = (x: number, y: number, a: number, l: number, w: number) => {
     const pts: [number, number][] = [[x, y]];
@@ -8033,19 +8035,19 @@ function crackedFloor(g: Graphics, f: InteriorItem, light: Light, rnd: () => num
   const ph = rnd() * Math.PI * 2;
   for (let i = 0; i < 6; i++) {
     const a = ph + (i / 6) * Math.PI * 2 + (rnd() - 0.5) * 0.5;
-    const pts = crack(cx, cy, a, 0.38 + 0.14 * rnd(), 0.032);
+    const pts = crack(cx, cy, a, 0.56 + 0.14 * rnd(), 0.034);
     for (const j of [1, 2, 3]) if (rnd() < 0.6) crack(...pts[j], a + (rnd() < 0.5 ? 0.9 : -0.9), 0.12 + 0.08 * rnd(), 0.022);
   }
   // Part way round the rim.
   const a0 = rnd() * Math.PI * 2;
-  g.moveTo(cx + Math.cos(a0) * 0.32, cy + Math.sin(a0) * 0.29);
+  g.moveTo(cx + Math.cos(a0) * 0.4, cy + Math.sin(a0) * 0.37);
   for (let k = 1; k <= 8; k++) {
     const a = a0 + (k / 8) * Math.PI * 1.2;
-    const r = 0.32 + (rnd() - 0.5) * 0.04;
+    const r = 0.4 + (rnd() - 0.5) * 0.04;
     g.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r * 0.9);
   }
   g.stroke({ width: 0.026, color: INK, alpha: 0.85, join: 'round' });
-  for (let i = 0; i < 6; i++) g.circle(cx + (rnd() - 0.5) * 0.7, cy + (rnd() - 0.5) * 0.7, 0.016 + 0.012 * rnd()).fill({ color: 0x3a342a, alpha: 0.7 });
+  for (let i = 0; i < 6; i++) g.circle(cx + (rnd() - 0.5) * 0.88, cy + (rnd() - 0.5) * 0.88, 0.016 + 0.012 * rnd()).fill({ color: 0x3a342a, alpha: 0.7 });
 }
 
 /** Underground props drawn here (InteriorLayer: ways in and out, hazards): one of four looks by position;
