@@ -294,7 +294,7 @@ fn made(t0: &T0, l: &Layout, fixed: &FastMap<String, String>) -> Vec<Place> {
         } };
         let o = obb(&p.pts);
         let sort = if p.kind.is_market() { "market" } else { p.kind.name() };
-        let label = if rank < 2 { clear_line(l, &p.pts, rank == 0) } else { Vec::new() };
+        let label = if rank < 2 { clear_line(l, &p.pts, (rank == 0).then(|| name_box(t0, li as usize))) } else { Vec::new() };
         let patch = if let Spot::Patch(i) = p.spot { Some(i) } else { None };
         out.push(Place { id, kind: "square", sort, main: rank == 0, name, at, size_ft: o.long, patch, district: district(at), label });
     }
@@ -363,7 +363,7 @@ fn made(t0: &T0, l: &Layout, fixed: &FastMap<String, String>) -> Vec<Place> {
             Spot::Patch(i) => Some(i),
             _ => p.cemetery.map(|c| c.patch),
         };
-        out.push(Place { id, kind: "park", sort: p.kind.name(), main: false, name, at, size_ft: obb(&p.pts).long, patch, district: district(at), label: clear_line(l, &p.pts, false) });
+        out.push(Place { id, kind: "park", sort: p.kind.name(), main: false, name, at, size_ft: obb(&p.pts).long, patch, district: district(at), label: clear_line(l, &p.pts, None) });
     }
     // Gates in the town wall, by their corner.
     if l.gate_spots.len() == l.gates.len() {
@@ -388,7 +388,7 @@ fn made(t0: &T0, l: &Layout, fixed: &FastMap<String, String>) -> Vec<Place> {
             let name = fixed.get(&format!("gt:{li}:{v}")).cloned().unwrap_or_else(|| take(c, &mut nm, "Gate"));
             let inward = mul(sub(l.center, g), 1.0 / dist(l.center, g).max(1e-9));
             let box_ = super::rect(add(g, mul(inward, 50.0)), [-inward[1], inward[0]], 140.0, 36.0);
-            out.push(Place { id: format!("gt:{li}:{v}"), kind: "gate", sort: "gate", main: false, name, at: g, size_ft: 30.0, patch: None, district: district(add(g, mul(inward, 30.0))), label: clear_line(l, &box_, false) });
+            out.push(Place { id: format!("gt:{li}:{v}"), kind: "gate", sort: "gate", main: false, name, at: g, size_ft: 30.0, patch: None, district: district(add(g, mul(inward, 30.0))), label: clear_line(l, &box_, None) });
         }
     }
     out
@@ -410,11 +410,22 @@ fn clear_at(l: &Layout, near: &[usize], walls: &[(P, P)], p: P) -> bool {
         && l.towers.iter().chain(&l.gate_towers).chain(&l.gates).all(|t| dist(*t, p) >= TOWER_CLEAR_FT)
 }
 
+/// Where the map draws the town's name (ft, x0 y0 x1 y1): from its point rightward, its letters
+/// about 20 ft apart (the label's width at zoom -0.5), a little over its height.
+fn name_box(t0: &T0, li: usize) -> [f64; 4] {
+    let s = &t0.settlements[li];
+    let fs = t0.extra.as_ref().map(|x| &x.overlay.features);
+    let n = fs.and_then(|fs| fs.iter().filter(|f| matches!(f.kind, "metropolis" | "city" | "town" | "village")).nth(li)).map_or(10, |f| f.name.chars().count());
+    [s.x - 25.0, s.y - 18.0, s.x + 20.0 * n as f64 + 30.0, s.y + 18.0]
+}
+
 /// A straight label baseline inside `poly` along its long axis (left to right), the longest run
 /// clear of buildings, walls and towers on a few lines across it; empty when none is long enough.
-/// `main`: the town's main square, whose middle the settlement's own label takes: off its middle,
-/// below it first.
-fn clear_line(l: &Layout, poly: &[P], main: bool) -> Vec<P> {
+/// `name`: the town's main square, whose middle the settlement's own label takes: off its middle,
+/// below it first, and clear of the name's box (`name_box`).
+fn clear_line(l: &Layout, poly: &[P], name: Option<[f64; 4]>) -> Vec<P> {
+    let main = name.is_some();
+    let off_name = |p: P| name.is_none_or(|b| p[0] < b[0] || p[0] > b[2] || p[1] < b[1] || p[1] > b[3]);
     if poly.len() < 3 {
         return Vec::new();
     }
@@ -444,7 +455,7 @@ fn clear_line(l: &Layout, poly: &[P], main: bool) -> Vec<P> {
             let mut s = t0 - tc;
             while s <= t1 - tc + step {
                 let p = add(base, mul(u, s));
-                let ok = s <= t1 - tc && edge_ok(p) && clear_at(l, &near, &walls, p);
+                let ok = s <= t1 - tc && edge_ok(p) && off_name(p) && clear_at(l, &near, &walls, p);
                 match (ok, run0) {
                     (true, None) => run0 = Some(s),
                     (false, Some(a)) => {

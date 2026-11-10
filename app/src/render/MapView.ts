@@ -492,13 +492,15 @@ export class MapView {
     this.townHints.set(key, { edit: JSON.stringify(edit), rects });
   }
 
-  /** At town zoom, ask once for the districts of each town in view. */
+  /** At town zoom, ask once for the districts of each town in view (or its cemeteries by the roads
+   * out: up to 1,100 ft past its gates, `town::cemetery`). */
   private askDistricts() {
     if (!this.labels || this.cam.ppf < 1 / 16) return;
     const [x0, y0, x1, y1] = this.cam.viewRect();
     const labels = this.labels;
     for (const t of this.towns) {
-      if (this.districtsAsked.has(t.index) || t.x + t.r < x0 || t.x - t.r > x1 || t.y + t.r < y0 || t.y - t.r > y1) continue;
+      const r = t.r + 1200;
+      if (this.districtsAsked.has(t.index) || t.x + r < x0 || t.x - r > x1 || t.y + r < y0 || t.y - r > y1) continue;
       this.districtsAsked.add(t.index);
       void this.gen.districts(t.index).then((list) => {
         if (this.labels === labels) labels.addDistricts(list, this.renames);

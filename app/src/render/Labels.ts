@@ -102,9 +102,12 @@ const STYLES: Record<string, KindStyle> = {
 const TOWN_PLACE: Record<string, KindStyle> = {
   square: { size: 11, fill: '#6b3f2a', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 24 },
   park: { size: 11, fill: '#3f5a2a', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 23 },
-  cemetery: { size: 11, fill: '#4f4a44', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 23 },
+  cemetery: { size: 11, fill: '#3f5a2a', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 23 },
   gate: { size: 11, fill: '#5a4330', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 22, renamed: true },
 };
+
+/** A curved label's halo (px), round each letter. */
+const STROKE_W = 3;
 
 const FONT = ['Palatino Linotype', 'Book Antiqua', 'Palatino', 'Georgia', 'serif'];
 
@@ -474,15 +477,23 @@ export class Labels {
     if (show && it.glyphs) {
       const glyphs = it.glyphs.children as Text[];
       const widths = it.glyphW!;
-      const total = widths.reduce((a, b) => a + b, 0) + style.spacing * (glyphs.length - 1);
+      let total = widths.reduce((a, b) => a + b, 0) + style.spacing * (glyphs.length - 1);
       const lenPx = (it.pathLen ??= pathLength(path)) * cam.ppf;
+      // (A name a little long for its line set tight: letters closer by their halo, no spacing.)
+      let tight = 0;
+      let spacing = style.spacing;
+      if (total > lenPx * 1.1) {
+        tight = STROKE_W;
+        spacing = 0;
+        total -= glyphs.length * tight + style.spacing * (glyphs.length - 1);
+      }
       if (total > lenPx * 1.1) show = false;
       else {
         let s = (lenPx - total) / 2;
         const at: [number, number, number][] = [];
         const box: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
         glyphs.forEach((g, k) => {
-          const [wx, wy, a] = along(path, (s + widths[k] / 2) / cam.ppf);
+          const [wx, wy, a] = along(path, (s + (widths[k] - tight) / 2) / cam.ppf);
           at.push([wx, wy, a]);
           const [gx, gy] = cam.worldToScreen(wx, wy);
           const r = style.size * 0.6 + pad;
@@ -490,7 +501,7 @@ export class Labels {
           box[1] = Math.min(box[1], gy - r);
           box[2] = Math.max(box[2], gx + r);
           box[3] = Math.max(box[3], gy + r);
-          s += widths[k] + style.spacing;
+          s += widths[k] - tight + spacing;
         });
         show = !boxes.hits(box);
         if (show) {
@@ -518,7 +529,7 @@ export class Labels {
       fill: style.fill,
       fontStyle: style.italic ? 'italic' : 'normal',
       fontWeight: style.bold ? 'bold' : 'normal',
-      stroke: { color: '#efe6cf', width: 3, join: 'round' },
+      stroke: { color: '#efe6cf', width: STROKE_W, join: 'round' },
     });
     for (const ch of label) box.addChild(new Text({ text: ch, style: textStyle, anchor: 0.5, resolution: 2 }));
     this.container.addChild(box);
