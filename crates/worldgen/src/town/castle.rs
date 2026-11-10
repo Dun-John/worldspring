@@ -28,6 +28,8 @@ const DROPS: [f64; 6] = [6.0, 9.0, 12.0, 16.0, 22.0, 30.0];
 const WATER_BACK: f64 = 16.0;
 /// The least distance from the high point to the curtain (ft): room for a keep and a yard.
 const R_MIN: f64 = 48.0;
+/// The least ground inside a castle's curtain (sq ft): a keep and a yard round it.
+const MIN_BOUND_SQFT: f64 = 2500.0;
 /// A curtain enclosing this much (sq ft) and this wide (ft) may get an inner curtain round the
 /// keep: a capital's; else a town's as its patch was sized for one (`Setting::inner`), or enclosing
 /// `TOWN_INNER` where it has the whole patch, one drawn by hand `HAND_INNER` and 200 ft across.
@@ -262,7 +264,9 @@ pub(super) fn castle<G: Ground>(
             outer = cut;
         }
     }
-    if outer.len() < 3 {
+    // (Nor on a sliver of ground, as a patch squeezed between the town wall and a street leaves:
+    // no room for a keep and a yard, only a gate.)
+    if outer.len() < 3 || area(&outer).abs() < MIN_BOUND_SQFT {
         return None;
     }
     // (A square tower reaches further across its corners.)
