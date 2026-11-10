@@ -147,6 +147,8 @@ export interface Created {
 export const CASTLE_MAX_FT = 600;
 export const CASTLE_MIN_FT = 80;
 export const WALL_MAX_FT = 3000;
+/** Longest a closed wall (a ring) may be, ft round (`worldgen::world::WALL_RING_MAX_FT`). */
+export const WALL_RING_MAX_FT = 24000;
 export const WORKS_MARGIN_FT = 40;
 
 export type RoofStyle = 'hip' | 'battlements' | 'cone';
