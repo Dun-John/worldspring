@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 use worldgen::agent;
-use worldgen::world::{CASTLE_MAX_FT, CASTLE_MIN_FT, Created, STRUCTURES, WALL_MAX_FT};
+use worldgen::world::{CASTLE_MAX_FT, CASTLE_MIN_FT, Created, STRUCTURES, WALL_MAX_FT, WALL_RING_MAX_FT};
 
 use crate::Shared;
 use crate::tools::{found, schema, text};
@@ -20,8 +20,11 @@ pub fn props() -> Value {
         "keep": { "type": "boolean", "default": true, "description": "A castle's keep (the castle itself, named as the site) in the yard" },
         "yard_buildings": { "type": "boolean", "default": true, "description": "Buildings along the inside of a castle's walls (barracks, stables, a smithy...)" },
         "structure": { "type": "string", "enum": STRUCTURES, "description": "A castle roofed (default) or in ruins (broken walls, fallen towers, roofless buildings)" },
-        "pts": { "type": "array", "items": pt, "description": format!("A wall's line: corners [x_ft, y_ft] in order (2-64), each side at least 10 ft, at most {WALL_MAX_FT} ft in all. Towers stand on its corners and along long runs") },
-        "gates": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "A wall's corners (indices into pts) that are gates; roads and streets crossing it get gates of their own" },
+        "pts": { "type": "array", "items": pt, "description": format!("A wall's line: corners [x_ft, y_ft] in order (2-64), each side at least 10 ft, at most {WALL_MAX_FT} ft in all (closed: 3-256 corners, {WALL_RING_MAX_FT} ft round). Towers stand on its corners and along long runs") },
+        "settlement": { "type": "string", "description": "With around_patches: the town (its id) whose patches the wall goes round" },
+        "around_patches": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "Instead of pts: a closed wall round these patches of the settlement's plan (get_town_plan), one piece, on their outer edge (the middle of the street round them). Its line is taken from the plan as it stands and kept; give around_patches again to lay it anew after moving corners" },
+        "street_gates": { "type": "boolean", "default": false, "description": "A gate on every street crossing the wall (else side streets are closed: gates come only where a road, an approach or a main street crosses, and a ring with none gets one at its busiest street)" },
+        "gates": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "A wall's corners (indices into its line) that are gates; roads, approaches and main streets crossing it get gates of their own" },
         "closed": { "type": "boolean", "default": false, "description": "A wall's last corner joins its first (a ring)" },
         "snap": { "type": "boolean", "default": true, "description": "Snap corners to the 5-ft grid" },
         "remove_in_way": { "type": "boolean", "default": false, "description": "Take away the world's own buildings in its way (else it is refused, naming them)" },
@@ -91,6 +94,7 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         }
     };
     let castle = c.kind == "castle";
+    let mut ring_report = serde_json::Map::new();
     if castle {
         if let Some(p) = corners(a, "poly")?.or(rect(a)?) {
             if c.gate.is_some_and(|g| g as usize >= p.len()) {
@@ -111,17 +115,29 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
             c.structure = Some(s.to_string()).filter(|s| s != "roofed");
         }
     } else {
-        if let Some(p) = corners(a, "pts")? {
+        let (before, was_closed) = (c.pts.clone(), c.closed);
+        if let Some(b) = a["closed"].as_bool() {
+            c.closed = b;
+        }
+        let ringed = match crate::handwalls::line(app, a, &mut c).await? {
+            Some(r) => {
+                ring_report = r;
+                true
+            }
+            None => false,
+        };
+        if !ringed && let Some(p) = corners(a, "pts")? {
             c.pts = p;
             c.gates.retain(|g| (*g as usize) < c.pts.len());
         }
         if let Some(g) = a["gates"].as_array() {
-            c.gates = g.iter().map(|v| v.as_u64().filter(|k| *k < 1000).map(|k| k as u32)).collect::<Option<Vec<_>>>().ok_or("gates: corner indices")?;
+            let hand = g.iter().map(|v| v.as_u64().filter(|k| *k < 1000).map(|k| k as u32)).collect::<Option<Vec<_>>>().ok_or("gates: corner indices")?;
+            if ringed { c.gates.extend(hand) } else { c.gates = hand }
             c.gates.sort_unstable();
             c.gates.dedup();
         }
-        if let Some(b) = a["closed"].as_bool() {
-            c.closed = b;
+        if !ringed && (creating || c.pts != before || c.closed != was_closed || a["street_gates"].is_boolean()) {
+            ring_report = crate::handwalls::street_gates(app, a, &mut c).await?;
         }
     }
     let pts = if castle { &c.poly } else { &c.pts };
@@ -148,8 +164,10 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
     let (p, name, in_way) = spot;
     if !in_way.is_empty() && !a["remove_in_way"].as_bool().unwrap_or(false) {
         let ids: Vec<&str> = in_way.iter().map(|(id, _)| id.as_str()).take(20).collect();
+        // (A ring round patches: most stand where one district's lots run across a patch edge.)
+        let bare = ring_report.get("sides_without_street").map(|s| format!(" (the ring's sides from corners {s} run where lots cross a patch edge with no street)")).unwrap_or_default();
         return Err(format!(
-            "{} of the world's own buildings stand in the way ({}{}): pass remove_in_way: true to take them away with it",
+            "{} of the world's own buildings stand in the way ({}{}){bare}: pass remove_in_way: true to take them away with it",
             in_way.len(),
             ids.join(", "),
             if in_way.len() > ids.len() { ", ..." } else { "" }
@@ -210,6 +228,9 @@ pub async fn place(app: &Shared, a: &Value, id: Option<String>, kind: Option<&st
         })
         .await?;
     v["tool"] = json!(tool);
+    if !castle {
+        crate::handwalls::reply(app, &mut v, ring_report).await;
+    }
     if !removed.is_empty() {
         v["removed"] = json!(removed);
     }

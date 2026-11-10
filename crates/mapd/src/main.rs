@@ -10,6 +10,7 @@ mod build;
 mod crossings;
 mod design;
 mod ground;
+mod handwalls;
 mod mcp;
 mod notebook;
 mod scatter;
