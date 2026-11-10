@@ -16,8 +16,19 @@ use crate::core::{ceil, round, sqrt};
 /// Within this of land (miles) a mile at sea costs more, up to `1 + SHORE_PENALTY` at the shore.
 const OFFSHORE_MI: f64 = 3.0;
 const SHORE_PENALTY: f64 = 3.0;
+/// Out at sea, away from the ports, a lane keeps a wider berth: within this of land (miles) a
+/// mile costs up to `BERTH_PENALTY` more again (so a long run keeps well off the coast and cuts
+/// across bays), waived within `BERTH_WAIVED_MI` of a port (full again `BERTH_EASE_MI` further
+/// out) so lanes still come in. A cost, not a rule: a narrow strait stays passable.
+const BERTH_MI: f64 = 9.0;
+const BERTH_PENALTY: f64 = 1.5;
+const BERTH_WAIVED_MI: f64 = 10.0;
+const BERTH_EASE_MI: f64 = 4.0;
 /// A cell already on a lane costs this much of what it would.
 const SHARED: f64 = 0.7;
+/// And in a port's way out to open water (`Router::access`): lanes into one port share their
+/// approach, joining it at a wide angle instead of running in beside it.
+const APPROACH_SHARED: f64 = 0.5;
 /// The way out of a port to open water is found over the cells within this many of it.
 const ACCESS: i64 = 6;
 /// A port's water: sea cells within this many cells of it (as `economy::run` finds its sea).
@@ -149,7 +160,7 @@ struct Level {
 }
 
 impl Level {
-    fn new(fw: usize, fh: usize, s: usize, land: &[bool], mi: f64) -> Level {
+    fn new(fw: usize, fh: usize, s: usize, land: &[bool], mi: f64, ports: &[usize]) -> Level {
         let (w, h) = (fw.div_ceil(s), fh.div_ceil(s));
         let n = w * h;
         let cells = |k: usize| {
@@ -162,16 +173,18 @@ impl Level {
         let full: Vec<bool> = (0..n).map(|k| !dry[k] && cells(k).count() == s * s).collect();
         let d = shore_distance(w, h, &dry);
         let node_mi = mi * s as f64;
+        let berth = berth(w, h, s, fw, node_mi, &d, ports);
         // (From the shore, half a node short of the land's.)
         let factor = d
             .iter()
             .zip(&wet)
-            .map(|(&d, &wet)| {
+            .zip(&berth)
+            .map(|((&d, &wet), &berth)| {
                 if !wet {
                     0.0
                 } else {
                     let t = (1.0 - (d - 0.5) * node_mi / OFFSHORE_MI).max(0.0);
-                    1.0 + SHORE_PENALTY * t * t
+                    1.0 + SHORE_PENALTY * t * t + berth
                 }
             })
             .collect();
@@ -362,6 +375,25 @@ impl Level {
     }
 }
 
+/// Per node of a grid `w` x `h` of `s`-cell nodes (`node_mi` miles; `d` each node's distance to
+/// land in nodes): the wider berth's extra cost (`BERTH_MI`), eased out to nothing near the ports
+/// (cells in a grid `fw` wide).
+fn berth(w: usize, h: usize, s: usize, fw: usize, node_mi: f64, d: &[f64], ports: &[usize]) -> Vec<f64> {
+    let mut at = vec![false; w * h];
+    for &c in ports {
+        at[(c / fw / s) * w + c % fw / s] = true;
+    }
+    let from_port = shore_distance(w, h, &at);
+    d.iter()
+        .zip(&from_port)
+        .map(|(&d, &p)| {
+            let t = (1.0 - (d - 0.5) * node_mi / BERTH_MI).max(0.0);
+            let away = ((p * node_mi - BERTH_WAIVED_MI) / BERTH_EASE_MI).clamp(0.0, 1.0);
+            BERTH_PENALTY * t * t * away * away * (3.0 - 2.0 * away)
+        })
+        .collect()
+}
+
 /// Routes sea links over one world's sea, in the order given (each sees the lanes before it):
 /// over 2x2 blocks, or the cells themselves where the blocks find no way (narrow water).
 pub struct Router<'a> {
@@ -371,12 +403,20 @@ pub struct Router<'a> {
     land: &'a [bool],
     coarse: Level,
     fine: Option<Level>,
+    /// The port cells (the berth is waived near them).
+    ports: Vec<usize>,
+    /// Per cell: on a lane routed so far (a port's way out costs `SHARED` there, so lanes into one
+    /// port share their approach instead of running in side by side).
+    on_lane: Vec<bool>,
 }
 
 impl<'a> Router<'a> {
-    pub fn new(w: usize, h: usize, cell_ft: f64, land: &'a [bool]) -> Router<'a> {
+    pub fn new(w: usize, h: usize, cell_ft: f64, land: &'a [bool], ports: &[usize]) -> Router<'a> {
         let mi = cell_ft / 5280.0;
-        Router { w, h, mi, land, coarse: Level::new(w, h, 2, land, mi), fine: None }
+        let mut ports = ports.to_vec();
+        ports.sort_unstable();
+        ports.dedup();
+        Router { w, h, mi, land, coarse: Level::new(w, h, 2, land, mi, &ports), fine: None, ports, on_lane: vec![false; w * h] }
     }
 
     /// The sea cells within `r` (`port_sea`) of port cell `k` whose sea is `sea[..] == label`:
@@ -481,7 +521,9 @@ impl<'a> Router<'a> {
         let dist = |p: usize, q: usize| { let (p, q) = (at(p), at(q)); sqrt((p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1])) * self.mi };
         let mut best: BTreeMap<u32, (f64, u32)> = BTreeMap::new();
         let mut heap = BinaryHeap::new();
-        for &c in from {
+        // (A port a lane already leaves is left the same way: one approach, not a braid.)
+        let lane_from: Vec<u32> = from.iter().copied().filter(|&c| self.on_lane[c as usize]).collect();
+        for &c in if lane_from.is_empty() { from } else { &lane_from } {
             let d = dist(k, c as usize);
             if best.get(&c).is_none_or(|v| d < v.0) {
                 best.insert(c, (d, k as u32));
@@ -499,7 +541,7 @@ impl<'a> Router<'a> {
                     continue;
                 }
                 let u = (ny * w + nx) as u32;
-                let nd = d + step * self.mi;
+                let nd = d + step * self.mi * if self.on_lane[u as usize] { APPROACH_SHARED } else { 1.0 };
                 if !self.land[u as usize] && best.get(&u).is_none_or(|v| nd < v.0) {
                     best.insert(u, (nd, c));
                     heap.push(Node(nd, u));
@@ -524,7 +566,8 @@ impl<'a> Router<'a> {
         let mut found = if cf.is_empty() || ci.is_empty() { None } else { self.coarse.search(self.land, mi, a, &cf, b, &ci).map(|p| (p, true)) };
         if found.is_none() {
             let (land, h) = (self.land, self.h);
-            let fine = self.fine.get_or_insert_with(|| Level::new(w, h, 1, land, mi));
+            let ports = &self.ports;
+            let fine = self.fine.get_or_insert_with(|| Level::new(w, h, 1, land, mi, ports));
             let (ff, fi) = (ends(fine, &out), ends(fine, &inn));
             found = fine.search(land, mi, a, &ff, b, &fi).map(|p| (p, false));
         }
@@ -552,6 +595,9 @@ impl<'a> Router<'a> {
         cells.extend_from_slice(&tail[1..]);
         let at = |c: u32| [(c as usize % w) as f64, (c as usize / w) as f64];
         let len = cells.windows(2).map(|p| { let (p, q) = (at(p[0]), at(p[1])); sqrt((p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1])) }).sum::<f64>() * mi;
+        for &c in &cells {
+            self.on_lane[c as usize] = true;
+        }
         Some((cells, len))
     }
 }
@@ -573,10 +619,11 @@ pub fn lanes_with(links: &[Link], settlements: &[Settlement], land: &[bool], w: 
     // The steps every link takes, with the goods over each.
     let mut step: FastMap<(u32, u32), f64> = Default::default();
     let mut port_of: BTreeMap<u32, u32> = BTreeMap::new();
-    for l in links.iter().filter(|l| l.cells.len() >= 2) {
+    let paths = unbraid(links, w, h);
+    for (l, cells) in links.iter().zip(&paths).filter(|(l, _)| l.cells.len() >= 2) {
         port_of.insert(l.cells[0], l.ports[0]);
         port_of.insert(*l.cells.last().expect("routed"), l.ports[1]);
-        for p in l.cells.windows(2) {
+        for p in cells.windows(2) {
             *step.entry((p[0].min(p[1]), p[0].max(p[1]))).or_default() += l.flow;
         }
     }
@@ -816,6 +863,88 @@ fn smooth(pts: &[[f64; 2]], port: [bool; 2], cell_ft: f64, sea_at: &dyn Fn([f64;
         p = out;
     }
     thin(&p, cell_ft / 20.0)
+}
+
+/// The most cells a link may run off the lanes before it (in `links` order) and still be pulled
+/// back onto them (`unbraid`), and how much longer (steps) the way along them may be.
+const BRAID_CELLS: usize = 3;
+const BRAID_SLACK: usize = 2;
+
+/// The links' cell paths with the braids taken out: where a link leaves the lanes routed before
+/// it for at most `BRAID_CELLS` cells, every one beside them (within a cell of their cells or
+/// steps), and rejoins them, or steps straight between two of their cells, it runs along them
+/// instead (if they join the two places within `BRAID_SLACK` more steps). Two lanes into one port
+/// a cell apart would otherwise run in side by side as two strands.
+fn unbraid(links: &[Link], w: usize, h: usize) -> Vec<Vec<u32>> {
+    let mut adj: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    let mut near: crate::core::hash::FastSet<u32> = Default::default();
+    let mut out = Vec::with_capacity(links.len());
+    let xy = |c: u32| ((c as usize % w) as i64, (c as usize / w) as i64);
+    for l in links {
+        let cells = &l.cells;
+        let mut path: Vec<u32> = Vec::with_capacity(cells.len());
+        let mut i = 0;
+        while i < cells.len() {
+            path.push(cells[i]);
+            if i + 1 < cells.len() && adj.contains_key(&cells[i]) && !adj[&cells[i]].contains(&cells[i + 1]) {
+                // (The next cell back on the lanes, and the cells off them before it.)
+                let j = (i + 1..cells.len()).find(|&j| adj.contains_key(&cells[j])).filter(|&j| j - i - 1 <= BRAID_CELLS && cells[i + 1..j].iter().all(|c| near.contains(c)));
+                if let Some(way) = j.and_then(|j| along(&adj, cells[i], cells[j], j - i + BRAID_SLACK)) {
+                    path.extend_from_slice(&way[1..way.len() - 1]);
+                    i = j.expect("found");
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        for p in path.windows(2) {
+            adj.entry(p[0]).or_default().push(p[1]);
+            adj.entry(p[1]).or_default().push(p[0]);
+            // (Beside a step: within a cell of its ends and the cells it passes.)
+            let ((ax, ay), (bx, by)) = (xy(p[0]), xy(p[1]));
+            let n = (ax - bx).abs().max((ay - by).abs()).max(1);
+            for k in 0..=n {
+                let (x, y) = (ax + (bx - ax) * k / n, ay + (by - ay) * k / n);
+                for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))) {
+                    let (x, y) = (x + dx, y + dy);
+                    if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h {
+                        near.insert((y as usize * w + x as usize) as u32);
+                    }
+                }
+            }
+        }
+        out.push(path);
+    }
+    out
+}
+
+/// The fewest-steps way from `a` to `b` over the lanes' steps `adj`, in at most `max` steps
+/// (breadth first, neighbours in the order they were laid).
+fn along(adj: &BTreeMap<u32, Vec<u32>>, a: u32, b: u32, max: usize) -> Option<Vec<u32>> {
+    let mut prev: BTreeMap<u32, u32> = BTreeMap::new();
+    prev.insert(a, a);
+    let mut front = vec![a];
+    for _ in 0..max {
+        let mut next = Vec::new();
+        for &c in &front {
+            for &u in adj.get(&c).map(|v| &v[..]).unwrap_or(&[]) {
+                if !prev.contains_key(&u) {
+                    prev.insert(u, c);
+                    next.push(u);
+                }
+            }
+        }
+        if prev.contains_key(&b) {
+            let mut way = vec![b];
+            while *way.last().expect("a cell") != a {
+                way.push(prev[way.last().expect("a cell")]);
+            }
+            way.reverse();
+            return Some(way);
+        }
+        front = next;
+    }
+    None
 }
 
 /// The lanes as compact JSON for the app (`T0::overlay_json`'s `sea_lanes`): per lane `c` its

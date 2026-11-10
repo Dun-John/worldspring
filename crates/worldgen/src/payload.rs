@@ -150,7 +150,7 @@ pub fn pack_terrain(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) ->
         oy,
         size,
         tile.roads.iter().map(|r| decimate(r.pts.iter().map(|c| [c.p[0], c.p[1], r.class.width_ft(), class_at(r, c.p)]).collect(), cell)).chain(town_roads)
-            // (Ferries over the sea: their lines at every level, `t0::ferries`.)
+            // (Ferries over the sea: their lines from `FERRY_MIN_LEVEL`, `t0::ferries`.)
             .chain(crate::t0::ferries::tile_lines(world, t0, [ox, oy, ox + size, oy + size], size / 16.0, key.level >= FERRY_MIN_LEVEL)),
     );
 

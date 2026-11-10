@@ -32,6 +32,10 @@ use volcano::Activity;
 const MAGIC: u32 = 0x5430_4736; // "T0G6"
 /// Height of the bank at the dry edge of a shore cell above the water (ft).
 const SHORE_BANK_FT: f64 = 6.0;
+/// At the sea (a water level at most this, ft: the default sea level), the shore bank's floor
+/// drops away only under this mask (the far side of a cell with a wet corner).
+const SHORE_FLOOR_SEA_FT: f64 = 0.5;
+const SHORE_FLOOR_MASK: f64 = 0.05;
 /// The eroded land's 99.5th percentile on default maps (model units, unit ruggedness): mapped
 /// to 85% of max elevation on every map.
 const Z_REF: f64 = 15.6;
@@ -869,7 +873,13 @@ impl T0 {
         }
         // A floor (so applying it at every level changes nothing twice) that drops away
         // steeply toward mask 0, where a cell edge with no wet corner has no floor at all.
-        let floor = level as f64 + 0.5 + SHORE_BANK_FT * (0.5 - mask) * 2.0 - 3_000.0 * (1.0 - smoothstep(0.0, 0.3, mask));
+        // At the sea, short of that drop it stays at least just above the water: the ground
+        // between a land cell and a deep sea cell would otherwise dip below the sea on the dry
+        // side of the contour (a dry trench, and a track's bed down in it). (Lakes keep the old
+        // floor: their towns' banks and steps were laid on it.)
+        let sea = level as f64 <= SHORE_FLOOR_SEA_FT;
+        let (lift, drop) = if sea { (smoothstep(0.2, 0.3, mask), smoothstep(0.0, SHORE_FLOOR_MASK, mask)) } else { (1.0, smoothstep(0.0, 0.3, mask)) };
+        let floor = level as f64 + 0.5 + SHORE_BANK_FT * (0.5 - mask) * 2.0 * lift - 3_000.0 * (1.0 - drop);
         h.max(floor)
     }
 
@@ -973,7 +983,12 @@ impl T0 {
             None => "{\"features\":[]}".into(),
         };
         match o.strip_suffix('}') {
-            Some(head) => format!("{head},\"sea_lanes\":{}}}", sealanes::overlay_json(&self.sea_lanes)),
+            Some(head) => {
+                // (The ferries' water legs are entries of their own, `c` 3.)
+                let (lanes, fer) = (sealanes::overlay_json(&self.sea_lanes), ferries::overlay_entries(self));
+                let lanes = if fer.is_empty() { lanes } else { format!("{}{}{fer}]", &lanes[..lanes.len() - 1], if lanes.len() > 2 { "," } else { "" }) };
+                format!("{head},\"sea_lanes\":{lanes}}}")
+            }
             None => o,
         }
     }

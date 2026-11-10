@@ -270,7 +270,10 @@ pub fn run(inp: &settle::Inputs, settlements: &mut [Settlement], routes: Option<
                 .collect();
             // Each port's nearest by sea; each pair once, routed shortest first (a lane sees
             // those before it), unless the lanes so far already join it by a way not much longer.
-            let mut router = (!ports.is_empty()).then(|| sealanes::Router::new(w, h, cell, inp.land));
+            let mut router = (!ports.is_empty()).then(|| {
+                let cells: Vec<usize> = ports.iter().map(|p| p.0 as usize).collect();
+                sealanes::Router::new(w, h, cell, inp.land, &cells)
+            });
             let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
             if let Some(r) = router.as_mut() {
                 let list: Vec<(usize, Vec<u32>, u32)> = ports.iter().map(|&(a, sa, _, reach)| (a as usize, r.water(a as usize, &sea, sa, reach), sa)).collect();

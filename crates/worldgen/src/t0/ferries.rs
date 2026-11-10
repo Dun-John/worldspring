@@ -15,14 +15,21 @@ use super::roads::{Inputs, Routed};
 use super::settle::Settlement;
 use crate::core::sqrt;
 
-/// The most water a ferry crosses, shore to shore (miles), and the least.
-pub const WATER_MAX_MI: f64 = 4.0;
+/// The most water a ferry crosses, shore to shore (miles), and the least ("about 4 miles": the
+/// contour-to-contour crossings of islands four cells off run 4.2-4.7).
+pub const WATER_MAX_MI: f64 = 4.75;
+/// A crossing up to this long is taken before any longer one.
+const WATER_SHORT_MI: f64 = 4.0;
 const WATER_MIN_MI: f64 = 0.1;
 /// A mile over the water counts this many of new road in choosing a crossing.
 const WATER_WEIGHT: f64 = 2.0;
-/// The most a land leg may cost (miles, weighted by the ground as roads are): a ferry needs a
-/// road near both shores.
-const LEG_MAX_MI: f64 = 30.0;
+/// The longest a land leg may run (miles): where no road comes near a landing, its track runs on
+/// to the nearest settlement (routed as roads are, by the ground's cost), up to this far.
+const LEG_MAX_MI: f64 = 40.0;
+/// A landing needs low ground behind it: within `LANDING_BACK_FT` and four times that inland
+/// the ground stands at most this high over the sea (ft), not a cliff top over the water.
+const LANDING_MAX_FT: f64 = 40.0;
+const LANDING_BACK_FT: f64 = 150.0;
 /// Where a land leg ends, back from its landing (ft): the road stops on dry ground at the shore.
 pub const INLAND_FT: f64 = 12.0;
 /// The water's contour is found along the line in steps of this (ft), then halved down.
@@ -177,6 +184,8 @@ pub fn plan(inp: &Inputs, settlements: &[Settlement], paths: &[Routed]) -> Vec<P
     let cell_mi = cell / 5280.0;
     let cap = LEG_MAX_MI / cell_mi;
     let mut cost = vec![f64::INFINITY; n];
+    // (Each cell's way's own length, cells: the cap is on that, not on the weighted cost.)
+    let mut plain = vec![0.0f64; n];
     let mut parent = vec![u32::MAX; n];
     let mut heap = BinaryHeap::new();
     for (k, &on) in net.iter().enumerate() {
@@ -195,8 +204,9 @@ pub fn plan(inp: &Inputs, settlements: &[Settlement], paths: &[Routed]) -> Vec<P
                 continue;
             }
             let nc = c + d * super::roads::step_cost(inp, k, nb, d);
-            if nc <= cap && nc < cost[nb] {
+            if plain[k] + d <= cap && nc < cost[nb] {
                 cost[nb] = nc;
+                plain[nb] = plain[k] + d;
                 parent[nb] = k as u32;
                 heap.push(Node(nc, nb as u32));
             }
@@ -239,6 +249,12 @@ pub fn plan(inp: &Inputs, settlements: &[Settlement], paths: &[Routed]) -> Vec<P
         };
         Some((edge(i0 - 1, i0), edge(i1 + 1, i1)))
     };
+    // (A landing on a cliff top: the ground just inland of it stands over `LANDING_MAX_FT`.)
+    let sea = inp.world.params().sea_level_ft;
+    let cliff = |p: [f64; 2], q: [f64; 2]| {
+        let l = dist(p, q).max(1e-9);
+        [LANDING_BACK_FT, 4.0 * LANDING_BACK_FT].iter().any(|&t| (inp.ground)(p[0] - (q[0] - p[0]) / l * t, p[1] - (q[1] - p[1]) / l * t) > sea + LANDING_MAX_FT)
+    };
     let reach = crate::core::ceil(WATER_MAX_MI / cell_mi) as i64 + 2;
     // Each settled island's shore cells, by island.
     let mut by_island: Vec<Vec<usize>> = vec![Vec::new(); masses.parts.len()];
@@ -276,19 +292,25 @@ pub fn plan(inp: &Inputs, settlements: &[Settlement], paths: &[Routed]) -> Vec<P
             }
         }
         cand.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+        // (A crossing within `WATER_SHORT_MI` if there is one, else the longer ones too.)
         let mut best: Option<(f64, usize, usize, [f64; 2], [f64; 2])> = None;
-        for &(bound, a, b) in &cand {
-            if best.as_ref().is_some_and(|v| bound >= v.0) {
+        for most in [WATER_SHORT_MI, WATER_MAX_MI] {
+            for &(bound, a, b) in &cand {
+                if best.as_ref().is_some_and(|v| bound >= v.0) {
+                    break;
+                }
+                let Some((la, lb)) = crossing(a, b) else { continue };
+                let water = dist(la, lb) / 5280.0;
+                if !(WATER_MIN_MI..=most).contains(&water) || cliff(la, lb) || cliff(lb, la) {
+                    continue;
+                }
+                let score = WATER_WEIGHT * water + (cost[a] + cost[b]) * cell_mi;
+                if best.as_ref().is_none_or(|v| score < v.0) {
+                    best = Some((score, a, b, la, lb));
+                }
+            }
+            if best.is_some() {
                 break;
-            }
-            let Some((la, lb)) = crossing(a, b) else { continue };
-            let water = dist(la, lb) / 5280.0;
-            if !(WATER_MIN_MI..=WATER_MAX_MI).contains(&water) {
-                continue;
-            }
-            let score = WATER_WEIGHT * water + (cost[a] + cost[b]) * cell_mi;
-            if best.as_ref().is_none_or(|v| score < v.0) {
-                best = Some((score, a, b, la, lb));
             }
         }
         let Some((_, a, b, la, lb)) = best else { continue };
@@ -323,10 +345,14 @@ pub fn plan(inp: &Inputs, settlements: &[Settlement], paths: &[Routed]) -> Vec<P
 
 /// The ferries' lines over the sea near a rectangle (world ft), as the tile payload's road lines
 /// (x, y, width, class 5: a ferry's dashed line): points every `step` ft along each from its
-/// island's end, so every tile of a level cuts them alike. With `fine` (levels that show a
-/// shelf), each line runs between the stages where the water begins (`SeaFerry::shores`), and
-/// each land leg's track (class 2) runs on over the shelf to its stage; else landing to landing.
+/// island's end, so every tile of a level cuts them alike. Only at `fine` levels (from the
+/// payload's `FERRY_MIN_LEVEL`, L10, as river ferries): each line runs between the stages where
+/// the water begins (`SeaFerry::shores`), and each land leg's track (class 2) runs on over the
+/// shelf to its stage. Coarser levels show the overlay's line instead (`overlay_entries`).
 pub fn tile_lines(world: &crate::world::World, t0: &super::T0, rect: [f64; 4], step: f64, fine: bool) -> Vec<Vec<[f64; 4]>> {
+    if !fine {
+        return Vec::new();
+    }
     let width = super::roads::RoadClass::Track.width_ft();
     let pad = step + if fine { SHORE_REACH_FT } else { 0.0 };
     let mut out = Vec::new();
@@ -352,6 +378,55 @@ pub fn tile_lines(world: &crate::world::World, t0: &super::T0, rect: [f64; 4], s
                 }
             }
         }
+    }
+    out
+}
+
+/// The ferries for the overlay's `sea_lanes` (`T0::overlay_json`), as lanes' entries joined by
+/// commas: `c` 3 (a ferry), `f` 0, `e` the settlement each end serves (the nearest on its own land
+/// within `LEG_MAX_MI` of its landing, -1 if none), `p` the water leg, landing to landing (whole ft;
+/// the stages stand at most `SHORE_REACH_FT` further out, which the tiles show from L10).
+pub fn overlay_entries(t0: &super::T0) -> String {
+    use std::fmt::Write;
+    if t0.ferries.is_empty() {
+        return String::new();
+    }
+    use super::biome::Biome;
+    let (w, h, cell) = (t0.biome.w, t0.biome.h, t0.cell_ft);
+    let b = |k: usize| Biome::from_u8((t0.biome.data[k] & 0xff) as u8);
+    let land: Vec<bool> = (0..w * h).map(|k| b(k) != Biome::Ocean).collect();
+    let lake: Vec<u32> = (0..w * h).map(|k| if b(k) == Biome::Lake { 0 } else { super::hydro::NO_LAKE }).collect();
+    let isl = super::islands::label(w, h, cell, &land, &lake, &t0.biome.data);
+    // (A landing's land: the land cell nearest it, half a cell back from the water.)
+    let serves = |p: [f64; 2], q: [f64; 2]| -> i64 {
+        let l = dist(p, q).max(1e-9);
+        let back = [p[0] - (q[0] - p[0]) / l * 0.5 * cell, p[1] - (q[1] - p[1]) / l * 0.5 * cell];
+        let (cx, cy) = (crate::core::round(back[0] / cell) as i64, crate::core::round(back[1] / cell) as i64);
+        let mut best: Option<(f64, usize)> = None;
+        for dy in -2..=2i64 {
+            for dx in -2..=2i64 {
+                let (x, y) = (cx + dx, cy + dy);
+                if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && isl.of[y as usize * w + x as usize] != super::islands::NONE {
+                    let d = dist([x as f64 * cell, y as f64 * cell], back);
+                    let k = y as usize * w + x as usize;
+                    if best.is_none_or(|v| d < v.0) {
+                        best = Some((d, k));
+                    }
+                }
+            }
+        }
+        let Some((_, k)) = best else { return -1 };
+        let mass = isl.of[k];
+        t0.settlements
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.isolated && isl.of[s.cell] == mass && dist([s.x, s.y], p) <= LEG_MAX_MI * 5280.0)
+            .min_by(|x, y| dist([x.1.x, x.1.y], p).total_cmp(&dist([y.1.x, y.1.y], p)).then(x.0.cmp(&y.0)))
+            .map_or(-1, |(i, _)| i as i64)
+    };
+    let mut out = String::new();
+    for (i, f) in t0.ferries.iter().enumerate() {
+        let _ = write!(out, "{}{{\"c\":3,\"f\":0,\"e\":[{},{}],\"p\":[{},{},{},{}]}}", if i > 0 { "," } else { "" }, serves(f.a, f.b), serves(f.b, f.a), crate::core::round(f.a[0]) as i64, crate::core::round(f.a[1]) as i64, crate::core::round(f.b[0]) as i64, crate::core::round(f.b[1]) as i64);
     }
     out
 }
