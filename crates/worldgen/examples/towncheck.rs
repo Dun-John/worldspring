@@ -1056,8 +1056,11 @@ fn town_ring(ctx: &Ctx, l: &Layout, li: usize, tag: &str, r: &mut Report) {
         let (mut bare, mut run, mut first) = (0.0f64, 0.0, None);
         for (p, _) in samples(&[pa, pb], 5.0) {
             // (Behind a bastion: its gorge, the bastion's walls round it.)
-            // (A round wall's curtains bowed out by up to 45 ft (Steppe 70), slice 2e: within 75 ft.)
-            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 75.0) || l.bastions.iter().any(|q| depth(q, p) > -8.0) {
+            // (A round wall's curtains bowed out by up to 45 ft (Steppe 70), slice 2e: within 75 ft; or,
+            // where a notch of the ring was bridged and bowed, the wall met out along the side's outward
+            // normal within 200 ft.)
+            let beyond = add(p, mul(out, 200.0));
+            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 75.0 || crosses(p, beyond, q, s)) || l.bastions.iter().any(|q| depth(q, p) > -8.0) {
                 run = 0.0;
             } else {
                 run += 5.0;
