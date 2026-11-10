@@ -1448,7 +1448,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             if pk.kind == crate::town::ParkKind::Cemetery {
                 stamp(&pk.pts, URBAN_GRAVEYARD, &mut urb_h);
                 churchyards.push(pk.pts.clone());
-                for (a, e, half) in lay.paths.iter().flat_map(|(pts, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w + 0.6))) {
+                // (A foot and a half wider than drawn: a slanting walk stays a ribbon once the ground
+                // smooths its squares.)
+                for (a, e, half) in lay.paths.iter().flat_map(|(pts, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w + 1.5))) {
                     let (i0, j0, i1, j1) = range((a[0].min(e[0]) - half, a[1].min(e[1]) - half, a[0].max(e[0]) + half, a[1].max(e[1]) + half));
                     if i1 < 0.0 || j1 < 0.0 {
                         continue;
@@ -1456,7 +1458,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                     for j in j0..=j1 as usize {
                         for i in i0..=i1 as usize {
                             let h = j * HS + i;
-                            if urb_h[h] == URBAN_GRAVEYARD && crate::town::geom::contains(&pk.pts, center(i, j)) && crate::town::geom::seg_dist(center(i, j), a, e) < half {
+                            // (Its link from the road over open ground outside, `cemetery::Plan::link`.)
+                            let inside = crate::town::geom::contains(&pk.pts, center(i, j));
+                            if ((urb_h[h] == URBAN_GRAVEYARD && inside) || (urb_h[h] == 0 && road_h[h] == 0 && !inside)) && crate::town::geom::seg_dist(center(i, j), a, e) < half {
                                 urb_h[h] = URBAN_PATH;
                             }
                         }
@@ -2611,12 +2615,15 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // to a square beside it: it stops at the edge, but where the step is a raised feature's.)
     let on_feature = |h: usize| features.iter().any(|f| crate::town::geom::dist(center(h % HS, h / HS), f.0) <= f.1);
     let cliff = |h: usize| [1, HS].iter().any(|&o| [h + o, h - o].iter().any(|&nh| (hh[nh] - hh[h]).abs() > 2.75 && !on_feature(nh)));
+    // (R5 towns: a cemetery's walks stay whole: its ground is levelled to the bed later, its tombs
+    // stand by its walks.)
+    let in_yard = |h: usize| churchyards.iter().any(|y| crate::town::geom::contains(y, center(h % HS, h / HS)));
     let urban: Vec<u8> = (0..n)
         .map(|k| {
             let h = (k / SQ + 1) * HS + k % SQ + 1;
             match urb_h[h] {
                 _ if ent_h[h] => URBAN_ENTRANCE,
-                URBAN_PATH if hw[h] > hh[h] || cliff(h) => URBAN_PARK,
+                URBAN_PATH if hw[h] > hh[h] || (cliff(h) && !in_yard(h)) => URBAN_PARK,
                 u => u,
             }
         })
@@ -3144,7 +3151,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             raised.iter().any(|&(c, r2)| (x - c[0]) * (x - c[0]) + (y - c[1]) * (y - c[1]) <= r2)
         };
         let cut: Vec<usize> = (0..n)
-            .filter(|&k| chunk.urban[k] == URBAN_PATH)
+            .filter(|&k| chunk.urban[k] == URBAN_PATH && !churchyard.get(k).is_some_and(|&y| y))
             .filter(|&k| {
                 let (x, y) = (k % SQ, k / SQ);
                 [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| {

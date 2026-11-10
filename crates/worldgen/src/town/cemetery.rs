@@ -73,6 +73,8 @@ pub struct Plan {
     pub gap: f64,
     /// Walks: centre line ends and width (ft); the main walk first, from the plot's edge.
     pub walks: Vec<(P, P, f64)>,
+    /// By a road: the path from the road's edge to the plot's edge at the gate (the main walk's width).
+    pub link: Option<(P, P)>,
     /// The tomb buildings' footprints (their first side, corners 0 to 1, is the door's, toward a walk).
     pub tombs: Vec<Vec<P>>,
     /// What is set out: where, turn (rad: a lychgate's and a slab's long side along it), kind, look, size.
@@ -88,6 +90,10 @@ impl Plan {
         for w in &mut self.walks {
             mv(&mut w.0);
             mv(&mut w.1);
+        }
+        if let Some(k) = &mut self.link {
+            mv(&mut k.0);
+            mv(&mut k.1);
         }
         self.tombs.iter_mut().flatten().for_each(mv);
         for p in &mut self.props {
@@ -510,6 +516,7 @@ pub fn plan(pk: &Park) -> Option<Plan> {
         along: t,
         gap: wm + 2.0,
         walks: Vec::new(),
+        link: st.by_road.then(|| (sub(mid, mul(n, VERGE + 2.0)), mid)),
         tombs: Vec::new(),
         props: Vec::new(),
     };
@@ -718,9 +725,10 @@ pub fn plan(pk: &Park) -> Option<Plan> {
 /// kept clear, what it sets out.
 pub fn park_layout(pk: &Park) -> ParkLayout {
     let Some(pl) = plan(pk) else { return ParkLayout::default() };
+    let lw = pl.walks.first().map_or(6.0, |w| w.2);
     ParkLayout {
-        paths: pl.walks.iter().map(|&(a, b, w)| (vec![a, b], w)).collect(),
-        keep: pl.walks.iter().map(|&(a, b, w)| (a, b, 0.5 * w)).collect(),
+        paths: pl.walks.iter().map(|&(a, b, w)| (vec![a, b], w)).chain(pl.link.map(|(a, b)| (vec![a, b], lw))).collect(),
+        keep: pl.walks.iter().map(|&(a, b, w)| (a, b, 0.5 * w)).chain(pl.link.map(|(a, b)| (a, b, 0.5 * lw))).collect(),
         props: pl.props,
         ..ParkLayout::default()
     }
