@@ -347,6 +347,9 @@ pub async fn area(app: &Shared, field: &str, v: &Value) -> Result<Area, String> 
         }
         Value::Object(o) => {
             let r = o.get("radius_ft").and_then(Value::as_f64).ok_or_else(|| format!("{field}.radius_ft: required"))?;
+            if !(r > 0.0 && r.is_finite()) {
+                return Err(bad(&format!("{field}.radius_ft"), "more than 0", &o["radius_ft"]));
+            }
             let c = match (o.get("at"), o.get("x_ft"), o.get("y_ft")) {
                 (Some(_), Some(_), _) | (Some(_), _, Some(_)) => return Err(format!("{field}: at and x_ft/y_ft: give one middle")),
                 (Some(at), None, None) => point(app, &format!("{field}.at"), at).await?,

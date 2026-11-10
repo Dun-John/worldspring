@@ -237,7 +237,7 @@ you mean" and the kinds there are. A district, building or tower says its `settl
 | `kind` | string | none | Only this kind: `city`, `ruin`, `river`, `building`, `district`, `tower`, … |
 | `tag` | string | none | Only features whose notes carry this tag (any case): the DM's `hook`, `secret`… |
 | `in_notes` | boolean | false | The query also matches the words of a feature's notes (not only its name); needs a `query`. |
-| `within` | box, polygon or circle | none | Only features with a point inside the area (`inside: "point"`) or an extent overlapping it (`inside: "extent"`: a river or road that runs through it, a region that covers part of it; area extents are tested at up to 400 sample points, so a sliver narrower than a map cell can be missed). A box is `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]`, a circle `{at, radius_ft}` (as `list_objects`). Combines with `query`, `kind` and `tag`; districts and businesses still need a query of three letters. |
+| `within` | box, polygon or circle | none | Only features with a point inside the area (`inside: "point"`) or an extent overlapping it (`inside: "extent"`: a river or road that runs through it, a region that covers part of it; area extents are tested at up to 400 sample points, so a sliver narrower than a map cell can be missed). A box is `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]`, a circle `{at, radius_ft}` (as `list_objects`). Combines with `query`, `kind` and `tag`; districts and businesses still need a query of three letters (an empty `kind: building` or `district` search without one says so in `note`). A circle's `radius_ft` must be more than 0. |
 | `limit` | integer | 25 | 1 to 200 |
 | `include_hidden` | boolean | false | Also return hidden features. |
 
@@ -328,15 +328,15 @@ and created sites.
 
 ### `describe_location`
 What is at a point:
-- elevation (the world's coarse ground, before shaping by hand: `ground_heights` has the battlemap's) and biome;
+- `elevation_ft` and `under_water`: the 5-ft square at the point as the battlemap draws it (shaped by hand included; `ground_heights` has the squares round it), and the biome;
 - `in`: the areas it lies in, largest first (continent or island, sea, range, forest, lake…);
 - the building, district or site there (a building's `district` is its name as renamed, `district_id` its id; a
   building of a site standing in a settlement, such as one drawn by hand, has the settlement's district there);
 - `nearby`: named features within a tenth of their size (2 to 10 miles), nearest first, measured to their nearest
   edge or course, with `distance_mi` and `direction`;
-- `slope_deg`: the ground's slope over about one map cell (`nearest` says how coarse that is: about 1.2 miles on a 1,200-mile map);
-- `water`: a river within 1,000 ft (`{kind: "river", id, name, width_ft, banks: [[x, y], [x, y]] (the bank on the point's side first), distance_ft (to the water's edge; 0 in it), in_water}`), or a lake or the sea (`{kind: "lake" | "sea", id?, name? (the smallest named body there), in_water, distance_ft, shore? ({x_ft, y_ft}; in the water, `shore_ft` is how far it is)}`), whichever is nearer; null where there is none;
-- `coast`: the nearest coast of the sea within 5 miles (`{distance_ft, x_ft, y_ft, shore: "cliff" | "beach", rise_ft, in_sea}`; `nearest` says how a cliff is told from a beach); null where there is none;
+- `slope_deg`: the slope on the battlemap's squares over 40 ft (20 ft either side);
+- `water`: a river within 1,000 ft (`{kind: "river", id, name, width_ft, banks: [[x, y], [x, y]] (the bank on the point's side first), distance_ft (to the water's edge; 0 in it), in_water}`), or a lake or the sea (`{kind: "lake" | "sea", id?, name? (the smallest named body there), in_water, distance_ft, shore? ({x_ft, y_ft}; in the water, `shore_ft` is how far it is)}`), whichever is nearer; null where there is none. `in_water` is the battlemap's square at the point (a bank point from `nearest river` or `banks` is on the water's edge, wet or dry by a foot or two); a lake's or the sea's edge is found on samples 20 ft apart and placed on the 5-ft squares;
+- `coast`: the nearest coast of the sea within 5 miles, found on the battlemap's ground as `nearest` `coast` (`{distance_ft, x_ft, y_ft, shore: "cliff" | "beach", rise_ft, inland_ft, in_sea}`); null where there is none;
 - the nearest settlements.
 
 | Parameter | Type | | |
@@ -372,6 +372,7 @@ The distance between two places:
   order (`{id, class, length_mi, name?}`: `rd:` ids, a name where one was given or the stretch is a drawn road's) and
   `follows`: the named roads followed, runs of stretches of one name joined (`{name, length_mi}`); a long way lists its
   first 50 `stretches` with `stretches_found` and `truncated: true` (`follows` stays whole);
+  a road way over 1.5 times the straight line has a `note` saying how many times;
 - `straight_mi`: the distance as the crow flies, and its `direction`;
 - `travel`: D&D 5e travel days at normal (24 mi/day), fast (30) and slow (18) pace.
 
@@ -387,23 +388,34 @@ The distance between two places:
 > *"How many days does it take to ride from Agentholm to Geirgai at a fast pace?"* · *"What's the route from Gatewatch to the capital, and which towns does it pass?"*
 
 ### `nearest`
-The nearest coast, cliff, river, road or flat ground to a place, within `within_mi` miles (default 5, at most 25): one
-bounded search over the map's coarse ground and the rivers' and roads' indexes (a few milliseconds), never a scan of the
-whole map. Returns `{what, found, x_ft, y_ft, distance_ft, distance_mi, direction}` and, by what, one more; `found: false`
-(not an error) where there is none within the distance. The ground is read from the world's coarse grid (one cell is
-about 1.2 miles on a 1,200-mile map), so a cliff or a beach narrower than a cell is gentler here than on a battlemap.
-Thresholds (defined once, `worldgen/src/geoquery.rs`):
-- `coast`: the sea's shore, nearest the point (a point at sea gets the nearest land's edge, `in_sea: true`). `shore` is
-  `cliff` where the land rises 300 ft or more within one cell inland of the shore, else `beach`; `rise_ft` is that rise.
-  Lakes are not coasts (`describe_location`'s `water` has them).
-- `cliff`: the nearest dry ground steeper than 8 degrees over a cell (on this scale the steepest few percent of land):
-  `slope_deg` there and `drop_ft`, the height range across the cell.
+The nearest coast, cliff, river, road or flat ground to a place, within `within_mi` miles (default 5, at most 25): a
+bounded search, never a scan of the whole map. Returns `{what, found, x_ft, y_ft, distance_ft, distance_mi, direction}`
+and, by what, one more; `found: false` (not an error) where there is none within the distance. Coast, cliff and flat
+are answered on the battlemap's own ground (the refined terrain tiles; 5-ft squares as `ground_heights` reads them,
+shaped by hand included): the world's coarse grid (one cell is about 1.2 miles on a 1,200-mile map) only says where to
+look. A first call in a new area takes up to about 0.3 s (the tiles are made), a second one there a few ms. Rivers and
+roads are found on their own lines. Definitions (defined once, `worldgen/src/geoquery.rs`):
+- `coast`: the sea's shore nearest the point (a point at sea gets the nearest land's edge, `in_sea: true`): searched on
+  samples 80 ft apart about the point and about the coarse coast (out to 3 cells from it, as far as the coarse coast can
+  be off on a steep coast), then placed on the squares. The point is the last dry square, with the sea's squares beside
+  it. `shore` is `cliff` where the land stands 15 ft or more above the water within 20 ft of it, else `beach`; `rise_ft`
+  is that height, `inland_ft` the highest within 100 ft. Lakes are not coasts (`describe_location`'s `water` has them).
+- `cliff`: a drop of 15 ft or more within 20 ft on the squares (about 37 degrees or steeper; the top dry, the foot at its
+  ground or at the water over it). Looked for in the coarse cells steeper than 12 degrees within reach (the two nearest
+  and the two steepest, scanned on samples 40 ft apart) and along hand-made plateaus (`set_plateau`), then measured on
+  the squares at the steepest few spots: so the nearest of those, not every cliff. Returns the top (`x_ft`, `y_ft`,
+  `top_ft` its height above the sea), `foot`, `drop_ft`, `run_ft` and `slope_deg`. Where none is found, `note` says so
+  and `steepest` gives the steepest ground measured (`{x_ft, y_ft, rise_ft, distance_mi}`, rise within 20 ft). Natural
+  cliffs are rare (mountain faces); for a sheer one, make it with `set_plateau` (`edge_ft: 0`) or `shape_ground`.
 - `river`: the nearest river's water: `id`, `name`, `width_ft`, `banks` (the one on the point's side first), the point
   (`x_ft`, `y_ft`) on that bank (the point itself when it is in the water, `in_water`), `distance_ft` to the water.
 - `road`: the nearest point of any road: the stretch `id` (`rd:`), `name` if it has one, `class`, `heading_deg`
   (clockwise from north, as in `road_point`).
-- `flat`: the nearest dry ground gentler than 5 degrees over a patch big enough for a site: the cell and the four beside
-  it (`patch_ft`, about three cells across), the point in it, `slope_deg`, `elevation_ft`. Distance 0 where the point is on one.
+- `flat`: a 200-ft square patch (`patch_ft`) of dry squares whose heights differ by 10 ft or less (`range_ft`), its
+  middle the point. Candidates are the gentle points (under 5 degrees on the coarse grid) in and round the nearest coarse
+  cells gentle with their four neighbours, nearest first; at most 6 are measured on the squares. `slope_deg` is the
+  patch's mean slope, `elevation_ft` its middle's. Distance 0 where the point is on one; where the candidates measured
+  are all rougher, `found: false` with a `note` saying how rough.
 
 | Parameter | Type | Default | |
 |---|---|---|---|
@@ -425,7 +437,9 @@ the start) or `fraction` (0 to 1), one of the two. With `road`, the start is the
 `from` (a place near one end; a name works as in `route`, and is echoed as `from_place`). Returns `x_ft`, `y_ft`,
 `heading_deg` (the way it runs there, clockwise from north: 90 is east), `at_mi`, `fraction`, `stretch` (`{id, class, name?,
 from, to, length_mi}`: the stretch there with its ends, as `list_roads`) and `road` (`{name?, length_mi, stretches, from,
-to}`). Lengths are the stretches' own (`list_roads`' `length_mi`); the point is on the road as the map draws it. A point
+to}`). Lengths are the stretches' own (`list_roads`' `length_mi`, chord lengths: a long stretch's line drifts some way
+off the drawn road); the point is then moved onto the road as the battlemap carves it, within 60 ft
+(`moved_onto_road_ft` says how far), or carries a `note` where no carved road is that near. A point
 past the road's length is refused, saying the length. A name for several separate roads is refused, listing a stretch of
 each; no road by that name is refused with a did-you-mean; a `route` with no road between its places is refused
 (its `by_road` is null). Several roads share a name only if you named them so.

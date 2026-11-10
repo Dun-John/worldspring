@@ -267,6 +267,8 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
                 return Err("in_notes: needs a query".into());
             }
             let limit = a["limit"].as_u64().unwrap_or(25) as usize;
+            // Buildings and districts are matched by name only (3 letters or more), within an area too.
+            let by_name_only = !a["within"].is_null() && q.trim().chars().count() < 3 && matches!(kind.as_deref(), Some("building" | "district"));
             let opts = agent::SearchOpts { query: q, kind, tag, in_notes: a["in_notes"].as_bool().unwrap_or(false), hidden: a["include_hidden"].as_bool().unwrap_or(false), within: within.map(|w| w.region()) };
             // (All the matches are found, so `found` can say how many there were.)
             let all = app
@@ -287,7 +289,11 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
                     Ok(v)
                 })
                 .await?;
-            Ok(text(listed(all["results"].clone(), limit, json!({}))))
+            let mut v = listed(all["results"].clone(), limit, json!({}));
+            if by_name_only && v["found"] == 0 {
+                v["note"] = json!("buildings and districts are found by a query of 3 or more letters of their name (within narrows those)");
+            }
+            Ok(text(v))
         }
         "get_feature" => {
             let id = arg_str(&a, "id")?;
@@ -354,7 +360,7 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         }
         "describe_location" => {
             let p = place(app, &a).await?;
-            app.worker.with(move |ex| Ok(agent::describe(&ex.world, &ex.t0, p[0], p[1]))).await.map(text)
+            app.worker.with_mut(move |ex| Ok(worldgen::geoquery::describe(ex, p))).await.map(text)
         }
         "features_near" => {
             let p = place(app, &a).await?;

@@ -1,15 +1,24 @@
 //! Geometry queries for agents (`mapd`'s `nearest`, `road_point`, `search_features within` and
-//! `describe_location`'s `water`, `coast` and `slope_deg`): areas, the nearest coast, cliff, river,
-//! road or flat ground to a point, and points along a road.
+//! `describe_location`): areas, the nearest coast, cliff, river, road or flat ground to a point, the
+//! ground and water at a point, and points along a road.
 //!
-//! Terrain is read from the T0 grids (one cell is `t0.cell_ft`, about 1,500 ft on a 1,200-mile map),
-//! so a cliff or beach narrower than a cell reads gentler than it stands on a battlemap. Searches
-//! walk rings of cells out from the point and stop once nothing nearer can exist: never the whole map.
+//! Terrain answers are judged and placed on the battlemap's own ground (refined tiles, 5-ft squares);
+//! the T0 grids (one cell is `t0.cell_ft`, about 1.2 miles on a 1,200-mile map) only find candidates.
+//! Searches walk rings out from the point and stop once nothing nearer can exist: never the whole map.
 //! Thresholds are defined once, here (and in docs/MCP.md "nearest").
 
 use serde_json::{Value, json};
 
+use std::rc::Rc;
+
 use crate::World;
+use crate::battlemap::{SQ, SQUARE_FT};
+use crate::core::hash::FastMap;
+use crate::core::tile::{HALO, PADDED, TILE_N, TileKey};
+use crate::ground::Shaper;
+use crate::lod::terrain_refine::TerrainOut;
+use crate::pipeline::Executor;
+use crate::world::Edits;
 use crate::lod::roads::RoadCurve;
 use crate::t0::T0;
 use crate::t0::features::Shape;
@@ -26,12 +35,8 @@ pub const COAST_NEAR_FT: f64 = 5.0 * MI;
 /// `nearest`: the default and the largest `within_mi`.
 pub const NEAREST_DEFAULT_MI: f64 = 5.0;
 pub const NEAREST_MAX_MI: f64 = 25.0;
-/// A cliff: ground steeper than this (degrees, over one T0 cell, which is coarse: on a 1,200-mile map 8 degrees is the steepest few percent of land).
-pub const CLIFF_DEG: f64 = 8.0;
-/// Flat ground: gentler than this (degrees) over the cell and the four beside it.
+/// Flat ground's candidates: gentler than this (degrees, on T0) over the cell and the four beside it.
 pub const FLAT_DEG: f64 = 5.0;
-/// A cliff coast: the land rises this much (ft) within one T0 cell of the shore; less is a beach.
-pub const COAST_CLIFF_RISE_FT: f64 = 300.0;
 
 // ---------------------------------------------------------------------------------------
 // Areas.
@@ -61,6 +66,13 @@ fn seg_dist(p: P, a: P, b: P) -> f64 {
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
     geom::dist(p, [a[0] + t * dx, a[1] + t * dy])
+}
+
+fn closest_on_seg(p: P, a: P, b: P) -> P {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let l = d[0] * d[0] + d[1] * d[1];
+    let t = if l > 0.0 { (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l).clamp(0.0, 1.0) } else { 0.0 };
+    [a[0] + t * d[0], a[1] + t * d[1]]
 }
 
 fn orient(a: P, b: P, c: P) -> f64 {
@@ -174,7 +186,7 @@ fn cell(t0: &T0) -> f64 {
 }
 
 fn cell_of(t0: &T0, p: P) -> (i64, i64) {
-    (((p[0] / cell(t0)).round() as i64).clamp(0, t0.height.w as i64 - 1), ((p[1] / cell(t0)).round() as i64).clamp(0, t0.height.h as i64 - 1))
+    ((r1(p[0] / cell(t0)) as i64).clamp(0, t0.height.w as i64 - 1), (r1(p[1] / cell(t0)) as i64).clamp(0, t0.height.h as i64 - 1))
 }
 
 fn center(t0: &T0, i: i64, j: i64) -> P {
@@ -292,32 +304,6 @@ fn nearest_flip(t0: &T0, p: P, max_ft: f64, state: &dyn Fn(P) -> bool) -> Option
     best
 }
 
-/// The nearest cell (within `max_ft`) satisfying `hit` and, refined, the nearest point of it satisfying `at_point`.
-fn nearest_spot(t0: &T0, p: P, max_ft: f64, hit: &dyn Fn(i64, i64) -> bool, at_point: &dyn Fn(P) -> bool) -> Option<(f64, P)> {
-    let c = cell(t0);
-    if hit(cell_of(t0, p).0, cell_of(t0, p).1) && at_point(p) {
-        return Some((0.0, p));
-    }
-    let mut best: Option<(f64, P)> = None;
-    for (_, i, j) in nearest_cells(t0, p, max_ft, hit).into_iter().take(4) {
-        let m = center(t0, i, j);
-        let mut here = (geom::dist(m, p), m);
-        for a in -2..=2 {
-            for b in -2..=2 {
-                let q = [m[0] + a as f64 * 0.25 * c, m[1] + b as f64 * 0.25 * c];
-                let d = geom::dist(q, p);
-                if d < here.0 && at_point(q) {
-                    here = (d, q);
-                }
-            }
-        }
-        if here.0 <= max_ft && best.is_none_or(|b| here.0 < b.0) {
-            best = Some(here);
-        }
-    }
-    best
-}
-
 fn r1(v: f64) -> f64 {
     crate::core::round(v)
 }
@@ -327,7 +313,7 @@ fn pt(p: P) -> Value {
 }
 
 fn base(what: &str, p: P, at: P, d: f64) -> Value {
-    let mut v = json!({ "what": what, "found": true, "x_ft": r1(at[0]), "y_ft": r1(at[1]), "distance_ft": r1(d), "distance_mi": ((d / MI) * 100.0).round() / 100.0 });
+    let mut v = json!({ "what": what, "found": true, "x_ft": r1(at[0]), "y_ft": r1(at[1]), "distance_ft": r1(d), "distance_mi": r1((d / MI) * 100.0) / 100.0 });
     if d > 1.0 {
         v["direction"] = json!(compass(p, at));
     }
@@ -342,66 +328,597 @@ fn compass(from: P, to: P) -> &'static str {
 // ---------------------------------------------------------------------------------------
 // Coast, water, cliffs, flat ground.
 
-/// The sea's coast nearest `p` within `max_ft`: `{distance_ft, x_ft, y_ft, shore: cliff | beach, rise_ft, in_sea}`.
-/// The shore is a cliff when the land rises `COAST_CLIFF_RISE_FT` or more within one T0 cell of it.
-pub fn coast(t0: &T0, p: P, max_ft: f64) -> Option<Value> {
-    let state = |q: P| ocean(t0, q);
-    let (d, f, dir) = nearest_flip(t0, p, max_ft, &state)?;
-    let in_sea = state(p);
-    // Inland from the shore: back toward p when p is on land, on through the shore when p is at sea.
-    let land = if in_sea { dir } else { [-dir[0], -dir[1]] };
-    let c = cell(t0);
-    let rise = [0.5, 1.0].iter().map(|k| t0.sample(f[0] + land[0] * k * c, f[1] + land[1] * k * c, c) - t0.sample(f[0], f[1], c)).fold(f64::MIN, f64::max).max(0.0);
-    Some(json!({ "distance_ft": r1(d), "x_ft": r1(f[0]), "y_ft": r1(f[1]), "shore": if rise >= COAST_CLIFF_RISE_FT { "cliff" } else { "beach" }, "rise_ft": r1(rise), "in_sea": in_sea }))
+fn flat_cell(t0: &T0, i: i64, j: i64) -> bool {
+    [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)].iter().all(|&(a, b)| dry_cell(t0, i + a, j + b) && h_at(t0, i + a, j + b) > -1e5 && slope_cell(t0, i + a, j + b) < FLAT_DEG)
 }
 
-/// Water at or beside a point within `WATER_NEAR_FT`: a river (id, name, width, both banks, distance
-/// to its water) or a lake or the sea (name if it has one, distance to its water, a shore point),
-/// whichever is nearer; None where there is none. `named` gives the name and id of a water body at a point.
-pub fn water(world: &World, t0: &T0, p: P, named: &dyn Fn(P) -> Option<(String, String)>) -> Option<Value> {
-    let river = crate::agent::river_at(world, t0, p, WATER_NEAR_FT).map(|r| {
-        let d = (r.dist_ft - 0.5 * r.width_ft).max(0.0);
-        let mut v = r.json(Some(p));
-        v["kind"] = json!("river");
-        v["in_water"] = json!(r.in_water());
-        v["distance_ft"] = json!(r1(d));
-        (d, v)
-    });
-    let state = |q: P| wet(t0, q);
-    // (Distance to the water or, in it, to its shore if that is near; the shore point if there is one.)
-    let lake = nearest_flip(t0, p, WATER_NEAR_FT, &state).map(|(d, f, _)| (d, Some(f))).or_else(|| state(p).then_some((0.0, None)));
-    let lake = lake.map(|(d, f)| {
-        let in_water = state(p);
-        // The water's own point: p when in it, else the shore found.
-        let w = if in_water { p } else { f.unwrap_or(p) };
-        let sea = ocean(t0, w);
-        let mut v = json!({ "kind": if sea { "sea" } else { "lake" }, "in_water": in_water, "distance_ft": if in_water { 0.0 } else { r1(d) } });
-        if let Some(f) = f {
-            v["shore"] = pt(f);
-            if in_water {
-                v["shore_ft"] = json!(r1(d));
+// ---------------------------------------------------------------------------------------
+// The battlemap's own ground: refined terrain read through the tile pipeline (the executor
+// caches tiles, so a second call nearby is cheap). T0 cells only find candidates; every
+// terrain answer is judged and placed on these samples. Each sample is read at its global
+// lattice index, so answers are the same whatever was read before.
+
+/// The ground as generated over a box of 5-ft squares (global indices, inclusive), with the water
+/// over each: read as a battlemap reads them (square centres are odd samples of the finest tiles).
+pub struct Squares {
+    pub gx0: i64,
+    pub gy0: i64,
+    pub w: i64,
+    pub h: i64,
+    /// The ground (ft, the generator's datum).
+    pub g: Vec<f32>,
+    /// The water's surface: standing water or a river, the higher (`hydro::DRY` where none).
+    pub hw: Vec<f32>,
+    /// Standing water's surface alone (sea or lake).
+    pub still: Vec<f32>,
+}
+
+impl Squares {
+    pub fn read(ex: &mut Executor, gx0: i64, gy0: i64, gx1: i64, gy1: i64) -> Squares {
+        let lvl = ex.world.geom.max_level;
+        let sq = SQ as i64;
+        let (w, h) = (gx1 - gx0 + 1, gy1 - gy0 + 1);
+        let n = (w * h) as usize;
+        let (mut g, mut hw, mut still) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
+        for ty in gy0.div_euclid(sq)..=gy1.div_euclid(sq) {
+            for tx in gx0.div_euclid(sq)..=gx1.div_euclid(sq) {
+                let tile = ex.terrain(TileKey::surface(lvl, tx as u32, ty as u32));
+                for gy in (ty * sq).max(gy0)..=((ty + 1) * sq - 1).min(gy1) {
+                    for gx in (tx * sq).max(gx0)..=((tx + 1) * sq - 1).min(gx1) {
+                        let (i, j) = ((gx - tx * sq) as usize, (gy - ty * sq) as usize);
+                        let c = (2 * j + 1 + HALO) * PADDED + 2 * i + 1 + HALO;
+                        let (x, y) = ((gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT);
+                        let k = ((gy - gy0) * w + gx - gx0) as usize;
+                        g[k] = tile.padded[c];
+                        still[k] = ex.t0.sample_water(x, y);
+                        hw[k] = still[k].max(tile.river_water[c]);
+                    }
+                }
             }
         }
-        if let Some((id, name)) = named(w) {
-            v["id"] = json!(id);
-            v["name"] = json!(name);
+        Squares { gx0, gy0, w, h, g, hw, still }
+    }
+
+    /// The squares round a box of world ft (and `pad` squares more), clamped to the map.
+    pub fn round(ex: &mut Executor, b: [f64; 4], pad: i64) -> Squares {
+        let geom = &ex.world.geom;
+        let (mx, my) = ((geom.map_w_ft / SQUARE_FT).ceil() as i64, (geom.map_h_ft / SQUARE_FT).ceil() as i64);
+        let sq = |v: f64| crate::core::floor(v / SQUARE_FT) as i64;
+        let (gx0, gy0) = ((sq(b[0]) - pad).clamp(0, mx - 1), (sq(b[1]) - pad).clamp(0, my - 1));
+        let (gx1, gy1) = ((sq(b[2]) + pad).clamp(gx0, mx - 1), (sq(b[3]) + pad).clamp(gy0, my - 1));
+        Squares::read(ex, gx0, gy0, gx1, gy1)
+    }
+
+    pub fn at(&self, gx: i64, gy: i64) -> Option<usize> {
+        let (i, j) = (gx - self.gx0, gy - self.gy0);
+        (i >= 0 && j >= 0 && i < self.w && j < self.h).then_some((j * self.w + i) as usize)
+    }
+
+    pub fn rect(&self) -> [f64; 4] {
+        [self.gx0 as f64 * SQUARE_FT, self.gy0 as f64 * SQUARE_FT, (self.gx0 + self.w) as f64 * SQUARE_FT, (self.gy0 + self.h) as f64 * SQUARE_FT]
+    }
+
+    /// Each square's ground shaped by `edits`.
+    pub fn shaped(&self, edits: &Edits) -> Vec<f32> {
+        match Shaper::new(edits, self.rect(), SQUARE_FT) {
+            None => self.g.clone(),
+            Some(s) => (0..self.g.len()).map(|k| s.at_square(self.gx0 + k as i64 % self.w, self.gy0 + k as i64 / self.w, self.g[k], self.hw[k]).0).collect(),
         }
-        (if in_water { 0.0 } else { d }, v)
-    });
-    match (river, lake) {
-        (Some(a), Some(b)) => Some(if a.0 <= b.0 { a.1 } else { b.1 }),
-        (Some(a), None) => Some(a.1),
-        (None, Some(b)) => Some(b.1),
-        (None, None) => None,
     }
 }
 
-fn cliff_cell(t0: &T0, i: i64, j: i64) -> bool {
-    dry_cell(t0, i, j) && slope_cell(t0, i, j) >= CLIFF_DEG
+/// Squares with the ground as shaped by hand: what the battlemap draws.
+struct Patch {
+    s: Squares,
+    h: Vec<f32>,
 }
 
-fn flat_cell(t0: &T0, i: i64, j: i64) -> bool {
-    [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)].iter().all(|&(a, b)| dry_cell(t0, i + a, j + b) && h_at(t0, i + a, j + b) > -1e5 && slope_cell(t0, i + a, j + b) < FLAT_DEG)
+impl Patch {
+    /// The squares within `half_ft` of `c` each way.
+    fn read(ex: &mut Executor, c: P, half_ft: f64) -> Patch {
+        let s = Squares::round(ex, [c[0] - half_ft, c[1] - half_ft, c[0] + half_ft, c[1] + half_ft], 0);
+        let h = s.shaped(&ex.world.file.edits);
+        Patch { s, h }
+    }
+
+    fn gxy(&self, k: usize) -> (i64, i64) {
+        (self.s.gx0 + k as i64 % self.s.w, self.s.gy0 + k as i64 / self.s.w)
+    }
+
+    fn centre(&self, k: usize) -> P {
+        let (x, y) = self.gxy(k);
+        [(x as f64 + 0.5) * SQUARE_FT, (y as f64 + 0.5) * SQUARE_FT]
+    }
+
+    /// The square holding `p` (the nearest in the patch).
+    fn k_of(&self, p: P) -> usize {
+        let sq = |v: f64| crate::core::floor(v / SQUARE_FT) as i64;
+        let (gx, gy) = (sq(p[0]).clamp(self.s.gx0, self.s.gx0 + self.s.w - 1), sq(p[1]).clamp(self.s.gy0, self.s.gy0 + self.s.h - 1));
+        ((gy - self.s.gy0) * self.s.w + gx - self.s.gx0) as usize
+    }
+
+    fn off(&self, k: usize, dx: i64, dy: i64) -> Option<usize> {
+        let (x, y) = self.gxy(k);
+        self.s.at(x + dx, y + dy)
+    }
+
+    fn wet(&self, k: usize) -> bool {
+        self.s.hw[k] > self.h[k]
+    }
+
+    /// Under a river's water (not only standing water).
+    fn river(&self, k: usize) -> bool {
+        self.wet(k) && self.s.hw[k] > self.s.still[k]
+    }
+
+    /// The slope (degrees) at `k` over `n` squares either side (one side at the patch's edge).
+    fn slope(&self, k: usize, n: i64) -> f64 {
+        let axis = |dx: i64, dy: i64| {
+            let (a, ra) = self.off(k, dx * n, dy * n).map_or((self.h[k], 0), |j| (self.h[j], n));
+            let (b, rb) = self.off(k, -dx * n, -dy * n).map_or((self.h[k], 0), |j| (self.h[j], n));
+            if ra + rb == 0 { 0.0 } else { (a - b) as f64 / ((ra + rb) as f64 * SQUARE_FT) }
+        };
+        slope_of(axis(1, 0), axis(0, 1))
+    }
+
+    /// The slope (degrees) of the plane fitted to the whole patch.
+    fn plane_slope(&self) -> f64 {
+        let n = self.h.len() as f64;
+        let (mx, my) = (0.5 * (self.s.w - 1) as f64, 0.5 * (self.s.h - 1) as f64);
+        let mh = self.h.iter().map(|&v| v as f64).sum::<f64>() / n;
+        let (mut sx, mut sy, mut xx, mut yy) = (0.0, 0.0, 0.0, 0.0);
+        for k in 0..self.h.len() {
+            let (x, y) = ((k as i64 % self.s.w) as f64 - mx, (k as i64 / self.s.w) as f64 - my);
+            let d = self.h[k] as f64 - mh;
+            (sx, sy, xx, yy) = (sx + x * d, sy + y * d, xx + x * x, yy + y * y);
+        }
+        slope_of(if xx > 0.0 { sx / xx / SQUARE_FT } else { 0.0 }, if yy > 0.0 { sy / yy / SQUARE_FT } else { 0.0 })
+    }
+
+    /// The square nearest `p` for which `state` (t0, square's middle, its ground) differs from `here`.
+    fn nearest_not(&self, t0: &T0, p: P, here: bool, state: State) -> Option<(f64, usize)> {
+        (0..self.h.len()).filter(|&k| state(t0, self.centre(k), self.h[k]) != here).map(|k| (geom::dist(self.centre(k), p), k)).min_by(|a, b| a.0.total_cmp(&b.0))
+    }
+}
+
+/// A state of the refined ground at a point: (t0, the point, its ground in ft) to true or false.
+type State<'a> = &'a dyn Fn(&T0, P, f32) -> bool;
+
+/// Whether a point lies on the sea's side of the T0 coast grid (the sea, as against a lake).
+fn sea_side(t0: &T0, p: P) -> bool {
+    let (i, j) = cell_of(t0, p);
+    t0.coast.get(i as usize, j as usize) > 0.0
+}
+
+/// In the sea, on refined ground: the sea's surface above the ground.
+fn sea_at(t0: &T0, q: P, g: f32) -> bool {
+    sea_side(t0, q) && t0.sample_water(q[0], q[1]) > g
+}
+
+/// Under standing water (sea or lake), on refined ground.
+fn still_at(t0: &T0, q: P, g: f32) -> bool {
+    t0.sample_water(q[0], q[1]) > g
+}
+
+/// The samples of one tile level (`step` ft apart, at global lattice indices), read lazily.
+struct Lattice {
+    level: u8,
+    step: f64,
+    last: (i64, i64),
+    tiles: FastMap<(i64, i64), Rc<TerrainOut>>,
+}
+
+impl Lattice {
+    /// The coarsest refined level whose samples are at most `step_ft` apart.
+    fn new(ex: &Executor, step_ft: f64) -> Lattice {
+        let g = &ex.world.geom;
+        let level = (g.first_refine_level..=g.max_level).find(|&l| g.spacing_ft(l) <= step_ft + 1e-6).unwrap_or(g.max_level);
+        let step = g.spacing_ft(level);
+        Lattice { level, step, last: ((g.map_w_ft / step) as i64, (g.map_h_ft / step) as i64), tiles: FastMap::default() }
+    }
+
+    fn index(&self, p: P) -> (i64, i64) {
+        ((crate::core::round(p[0] / self.step) as i64).clamp(0, self.last.0), (crate::core::round(p[1] / self.step) as i64).clamp(0, self.last.1))
+    }
+
+    fn pos(&self, i: i64, j: i64) -> P {
+        [i as f64 * self.step, j as f64 * self.step]
+    }
+
+    fn inside(&self, i: i64, j: i64) -> bool {
+        i >= 0 && j >= 0 && i <= self.last.0 && j <= self.last.1
+    }
+
+    /// The tile and the padded index holding sample (i, j) (clamped to the map).
+    fn sample(&mut self, ex: &mut Executor, i: i64, j: i64) -> (&TerrainOut, usize) {
+        let (i, j) = (i.clamp(0, self.last.0), j.clamp(0, self.last.1));
+        let n = TILE_N as i64;
+        let (nx, ny) = ex.world.geom.tiles_across(self.level);
+        let (tx, ty) = (i.div_euclid(n).min(nx as i64 - 1), j.div_euclid(n).min(ny as i64 - 1));
+        let level = self.level;
+        let tile = self.tiles.entry((tx, ty)).or_insert_with(|| ex.terrain(TileKey::surface(level, tx as u32, ty as u32)));
+        let c = (j - ty * n) as usize;
+        let r = (i - tx * n) as usize;
+        (tile, (c + HALO) * PADDED + r + HALO)
+    }
+
+    /// The ground (ft) at sample (i, j).
+    fn ground(&mut self, ex: &mut Executor, i: i64, j: i64) -> f32 {
+        let (t, c) = self.sample(ex, i, j);
+        t.padded[c]
+    }
+
+    /// Whether a road is carved at sample (i, j) (None: this tile carries no road mask).
+    fn road(&mut self, ex: &mut Executor, i: i64, j: i64) -> Option<bool> {
+        let (t, c) = self.sample(ex, i, j);
+        t.road_mask.get(c).map(|&m| m != 0)
+    }
+}
+
+/// The nearest sample to `p` (within `max_ft`) for which `hit` holds, walking rings of samples
+/// out from `p`'s and stopping at the first ring past the best.
+fn ring(ex: &mut Executor, lat: &mut Lattice, p: P, max_ft: f64, hit: &mut dyn FnMut(&mut Executor, &mut Lattice, i64, i64) -> bool) -> Option<(f64, P)> {
+    let (ci, cj) = lat.index(p);
+    let rmax = crate::core::ceil(max_ft / lat.step) as i64 + 1;
+    let mut best: Option<(f64, P)> = None;
+    for r in 0..=rmax {
+        if best.is_some_and(|b| (r as f64 - 1.0) * lat.step > b.0) {
+            break;
+        }
+        let mut visit = |ex: &mut Executor, lat: &mut Lattice, i: i64, j: i64| {
+            if !lat.inside(i, j) {
+                return;
+            }
+            let q = lat.pos(i, j);
+            let d = geom::dist(q, p);
+            if d <= max_ft && best.is_none_or(|b| d < b.0) && hit(ex, lat, i, j) {
+                best = Some((d, q));
+            }
+        };
+        if r == 0 {
+            visit(ex, lat, ci, cj);
+            continue;
+        }
+        for k in -r..=r {
+            visit(ex, lat, ci + k, cj - r);
+            visit(ex, lat, ci + k, cj + r);
+        }
+        for k in (-r + 1)..r {
+            visit(ex, lat, ci - r, cj + k);
+            visit(ex, lat, ci + r, cj + k);
+        }
+    }
+    best
+}
+
+/// The nearest sample to `p` (within `max_ft`) in the box `b` for which `hit` holds.
+fn in_box(ex: &mut Executor, lat: &mut Lattice, p: P, max_ft: f64, b: [f64; 4], hit: &mut dyn FnMut(&mut Executor, &mut Lattice, i64, i64) -> bool) -> Option<(f64, P)> {
+    let (i0, j0) = lat.index([b[0], b[1]]);
+    let (i1, j1) = lat.index([b[2], b[3]]);
+    let mut best: Option<(f64, P)> = None;
+    for j in j0..=j1 {
+        for i in i0..=i1 {
+            let q = lat.pos(i, j);
+            let d = geom::dist(q, p);
+            if d <= max_ft && best.is_none_or(|b| d < b.0) && hit(ex, lat, i, j) {
+                best = Some((d, q));
+            }
+        }
+    }
+    best
+}
+
+/// The nearest point to `p` (within `max_ft`, on samples `step` ft apart, then on 5-ft squares about
+/// the sample found) where `state` is not `here`: the square found and the patch round it.
+fn flip(ex: &mut Executor, p: P, max_ft: f64, step: f64, here: bool, state: State, window: Option<[f64; 4]>) -> Option<(f64, usize, Patch)> {
+    let mut lat = Lattice::new(ex, step);
+    let mut hit = |ex: &mut Executor, lat: &mut Lattice, i: i64, j: i64| {
+        let g = lat.ground(ex, i, j);
+        state(&ex.t0, lat.pos(i, j), g) != here
+    };
+    let (_, q) = match window {
+        None => ring(ex, &mut lat, p, max_ft, &mut hit),
+        Some(b) => in_box(ex, &mut lat, p, max_ft, b, &mut hit),
+    }?;
+    let pa = Patch::read(ex, q, 1.5 * lat.step + 10.0);
+    let (d, k) = pa.nearest_not(&ex.t0, p, here, state).filter(|f| f.0 <= max_ft)?;
+    Some((d, k, pa))
+}
+
+/// The ground under `p` as the battlemap draws it: the square there and 4 squares (20 ft) round it.
+fn here(ex: &mut Executor, p: P) -> (Patch, usize) {
+    let pa = Patch::read(ex, p, 4.0 * SQUARE_FT);
+    let k = pa.k_of(p);
+    (pa, k)
+}
+
+/// How far the refined coast is searched for about the point, and about the T0 coast beyond (ft, in T0 cells):
+/// the T0 coast is up to about 2.3 mi from the battlemap's on steep coasts.
+const COAST_MARGIN_CELLS: f64 = 3.0;
+/// The coast is searched on samples this far apart (ft), then placed on 5-ft squares.
+const COAST_STEP_FT: f64 = 80.0;
+/// Standing water near a point is searched on samples this far apart (ft).
+const WATER_STEP_FT: f64 = 20.0;
+/// A cliff: the ground drops at least `CLIFF_RISE_FT` within `CLIFF_RUN_FT`, on 5-ft squares (a cliff coast the same at the water).
+pub const CLIFF_RISE_FT: f64 = 15.0;
+pub const CLIFF_RUN_FT: f64 = 20.0;
+/// Cliffs are looked for in T0 cells steeper than this (degrees over the cell): the nearest two and the steepest two
+/// within reach, scanned on samples `CLIFF_STEP_FT` apart; the steepest few spots then measured on squares.
+const CLIFF_CELL_DEG: f64 = 12.0;
+const CLIFF_STEP_FT: f64 = 40.0;
+const CLIFF_SCAN_FT: f32 = 10.0;
+/// Flat ground: a `FLAT_PATCH_FT` square patch of dry squares whose heights differ by at most `FLAT_RANGE_FT`.
+pub const FLAT_PATCH_FT: f64 = 200.0;
+pub const FLAT_RANGE_FT: f32 = 10.0;
+/// How many coarse candidates are measured on squares at most.
+const FLAT_TRIES: usize = 6;
+
+/// The sea's coast nearest `p` within `max_ft`, on the battlemap's ground: `{distance_ft, x_ft, y_ft (the last dry
+/// square), shore: cliff | beach, rise_ft (the land's height within CLIFF_RUN_FT of the water), inland_ft (within
+/// 100 ft), in_sea}`. The T0 coast only says whether there is one in reach and where to look beyond the point's own surroundings.
+pub fn coast(ex: &mut Executor, p: P, max_ft: f64) -> Option<Value> {
+    let margin = COAST_MARGIN_CELLS * cell(&ex.t0);
+    let (cd, cf, _) = {
+        let t0 = &ex.t0;
+        nearest_flip(t0, p, max_ft + margin, &|q| ocean(t0, q))?
+    };
+    let (pa, k) = here(ex, p);
+    let in_sea = sea_at(&ex.t0, pa.centre(k), pa.h[k]);
+    let near = margin.min(max_ft);
+    let found = flip(ex, p, near, COAST_STEP_FT, in_sea, &sea_at, None).or_else(|| (cd + margin > near).then(|| flip(ex, p, max_ft, COAST_STEP_FT, in_sea, &sea_at, Some([cf[0] - margin, cf[1] - margin, cf[0] + margin, cf[1] + margin]))).flatten());
+    let (_, x, pa) = found?;
+    // The last dry square: the one found when coming from the sea, else the dry square nearest the water found.
+    let t0 = &ex.t0;
+    let e = if in_sea { x } else { pa.nearest_not(t0, pa.centre(x), true, &sea_at).map_or(x, |f| f.1) };
+    let e = pa.centre(e);
+    let pb = Patch::read(ex, e, 100.0);
+    let water = ex.world.params().sea_level_ft as f32;
+    let height = |reach: f64| (0..pb.h.len()).filter(|&j| !pb.wet(j) && geom::dist(pb.centre(j), e) <= reach).map(|j| pb.h[j] - water).fold(0f32, f32::max) as f64;
+    let (rise, inland) = (height(CLIFF_RUN_FT), height(100.0));
+    Some(json!({ "distance_ft": r1(geom::dist(p, e)), "x_ft": r1(e[0]), "y_ft": r1(e[1]), "shore": if rise >= CLIFF_RISE_FT { "cliff" } else { "beach" }, "rise_ft": r1(rise), "inland_ft": r1(inland), "in_sea": in_sea }))
+}
+
+/// Water at or beside a point within `WATER_NEAR_FT`, on the battlemap's ground: a river (id, name, width, both
+/// banks, distance to its water) or a lake or the sea (name if it has one, distance to its water, a shore point),
+/// whichever is nearer; None where there is none. `in_water` is the square at the point.
+fn water(ex: &mut Executor, p: P, pa: &Patch, k: usize) -> Option<Value> {
+    let river = crate::agent::river_at(&ex.world, &ex.t0, p, WATER_NEAR_FT).map(|r| {
+        let wet = pa.river(k);
+        let d = if wet { 0.0 } else { (r.dist_ft - 0.5 * r.width_ft).max(0.0) };
+        let mut v = r.json(Some(p));
+        v["kind"] = json!("river");
+        v["in_water"] = json!(wet);
+        v["distance_ft"] = json!(r1(d));
+        (d, v)
+    });
+    let in_still = still_at(&ex.t0, pa.centre(k), pa.h[k]);
+    let edge = flip(ex, p, WATER_NEAR_FT, WATER_STEP_FT, in_still, &still_at, None).map(|(d, j, pb)| (d, pb.centre(j)));
+    let lake = match (in_still, edge) {
+        (true, e) => Some((0.0, p, e)),
+        (false, Some((d, f))) => Some((d, f, Some((d, f)))),
+        (false, None) => None,
+    };
+    let lake = lake.map(|(d, w, e)| {
+        let mut v = json!({ "kind": if sea_side(&ex.t0, w) { "sea" } else { "lake" }, "in_water": in_still, "distance_ft": r1(d) });
+        if let Some((sd, f)) = e {
+            v["shore"] = pt(f);
+            if in_still {
+                v["shore_ft"] = json!(r1(sd));
+            }
+        }
+        if let Some((id, name)) = crate::agent::water_body_at(&ex.world, &ex.t0, w) {
+            v["id"] = json!(id);
+            v["name"] = json!(name);
+        }
+        (d, v)
+    });
+    match (river, lake) {
+        (Some(a), Some(b)) => Some(if a.0 <= b.0 { a.1 } else { b.1 }),
+        (a, b) => a.or(b).map(|x| x.1),
+    }
+}
+
+/// `describe_location`: what is at a point, with the ground there as the battlemap draws it (elevation, under_water,
+/// slope over 40 ft, the water near and the coast found on refined terrain).
+pub fn describe(ex: &mut Executor, p: P) -> Value {
+    let mut v = crate::agent::describe(&ex.world, &ex.t0, p[0], p[1]);
+    let sea = ex.world.params().sea_level_ft as f32;
+    let (pa, k) = here(ex, p);
+    v["elevation_ft"] = json!(r1((pa.h[k] - sea) as f64));
+    v["under_water"] = json!(pa.wet(k));
+    v["slope_deg"] = json!(r1(pa.slope(k, 4) * 10.0) / 10.0);
+    v["water"] = water(ex, p, &pa, k).unwrap_or(Value::Null);
+    v["coast"] = coast(ex, p, COAST_NEAR_FT).unwrap_or(Value::Null);
+    v
+}
+
+/// The steepest drops in a patch within `CLIFF_RUN_FT` (dry top; the foot at its ground or the water over it):
+/// (the nearest to `p` of `CLIFF_RISE_FT` or more, the steepest), each (rise, top, foot).
+fn drops(pa: &Patch, p: P) -> (Option<(f64, f32, usize, usize)>, Option<(f32, usize, usize)>) {
+    let (mut near, mut steep): (Option<(f64, f32, usize, usize)>, Option<(f32, usize, usize)>) = (None, None);
+    for k in 0..pa.h.len() {
+        for (dx, dy) in [(4, 0), (0, 4), (3, 2), (2, 3), (3, -2), (2, -3)] {
+            let Some(j) = pa.off(k, dx, dy) else { continue };
+            let (top, foot) = if pa.h[k] >= pa.h[j] { (k, j) } else { (j, k) };
+            if pa.wet(top) {
+                continue;
+            }
+            let rise = pa.h[top] - pa.h[foot].max(pa.s.hw[foot]);
+            if steep.is_none_or(|s| rise > s.0) {
+                steep = Some((rise, top, foot));
+            }
+            let d = geom::dist(pa.centre(top), p);
+            if rise as f64 >= CLIFF_RISE_FT && near.is_none_or(|n| d < n.0) {
+                near = Some((d, rise, top, foot));
+            }
+        }
+    }
+    (near, steep)
+}
+
+fn cliff(ex: &mut Executor, p: P, max_ft: f64, none: Value) -> Value {
+    let (c, sea) = (cell(&ex.t0), ex.world.params().sea_level_ft as f32);
+    // Spots to measure: hand-made plateaus' outlines nearest the point, then the steepest samples in T0 cells steep enough.
+    let mut spots: Vec<P> = Vec::new();
+    for pl in ex.world.file.edits.plateaus.values() {
+        let n = pl.pts.len();
+        if let Some(q) = (0..n).map(|i| closest_on_seg(p, pl.pts[i], pl.pts[(i + 1) % n])).min_by(|a, b| geom::dist(*a, p).total_cmp(&geom::dist(*b, p)))
+            && geom::dist(q, p) <= max_ft
+        {
+            spots.push(q);
+        }
+    }
+    spots.sort_by(|a, b| geom::dist(*a, p).total_cmp(&geom::dist(*b, p)));
+    spots.truncate(2);
+    let cells: Vec<(f64, f64, i64, i64)> = {
+        let t0 = &ex.t0;
+        let (ci, cj) = cell_of(t0, p);
+        let rr = crate::core::ceil(max_ft / c) as i64 + 1;
+        let mut v = Vec::new();
+        for j in (cj - rr).max(0)..=(cj + rr).min(t0.height.h as i64 - 1) {
+            for i in (ci - rr).max(0)..=(ci + rr).min(t0.height.w as i64 - 1) {
+                let d = geom::dist(center(t0, i, j), p);
+                if d <= max_ft + 0.7 * c && dry_cell(t0, i, j) && slope_cell(t0, i, j) >= CLIFF_CELL_DEG {
+                    v.push((d, slope_cell(t0, i, j), i, j));
+                }
+            }
+        }
+        v
+    };
+    let mut pick: Vec<(i64, i64)> = Vec::new();
+    let mut by = cells.clone();
+    by.sort_by(|a, b| a.0.total_cmp(&b.0));
+    pick.extend(by.iter().take(2).map(|x| (x.2, x.3)));
+    by.sort_by(|a, b| b.1.total_cmp(&a.1));
+    pick.extend(by.iter().filter(|x| !pick.contains(&(x.2, x.3))).take(2).map(|x| (x.2, x.3)).collect::<Vec<_>>());
+    let mut lat = Lattice::new(ex, CLIFF_STEP_FT);
+    let mut scanned: Vec<(f64, P)> = Vec::new();
+    for (ci, cj) in pick {
+        let m = center(&ex.t0, ci, cj);
+        let (i0, j0) = lat.index([m[0] - 0.5 * c, m[1] - 0.5 * c]);
+        let (i1, j1) = lat.index([m[0] + 0.5 * c, m[1] + 0.5 * c]);
+        let (mut nearest, mut steepest): (Option<(f64, P)>, Option<(f32, P)>) = (None, None);
+        for j in j0..j1.min(lat.last.1) {
+            for i in i0..i1.min(lat.last.0) {
+                let q = lat.pos(i, j);
+                let d = geom::dist(q, p);
+                if d > max_ft {
+                    continue;
+                }
+                let h = lat.ground(ex, i, j);
+                let rise = (h - lat.ground(ex, i + 1, j)).abs().max((h - lat.ground(ex, i, j + 1)).abs());
+                if steepest.is_none_or(|s| rise > s.0) {
+                    steepest = Some((rise, q));
+                }
+                if rise >= CLIFF_SCAN_FT && nearest.is_none_or(|n| d < n.0) {
+                    nearest = Some((d, q));
+                }
+            }
+        }
+        scanned.extend(nearest);
+        scanned.extend(steepest.filter(|s| nearest.is_none_or(|n| n.1 != s.1)).map(|s| (geom::dist(s.1, p), s.1)));
+    }
+    scanned.sort_by(|a, b| a.0.total_cmp(&b.0));
+    spots.extend(scanned.into_iter().map(|s| s.1).take(6));
+    // Measured on squares: the nearest cliff found, else the steepest ground.
+    let (mut best, mut steep): (Option<(f64, f32, P, P, f32)>, Option<(f32, P)>) = (None, None);
+    for q in spots {
+        let pa = Patch::read(ex, q, 2.0 * CLIFF_STEP_FT);
+        let (near, st) = drops(&pa, p);
+        if let Some((d, rise, top, foot)) = near.filter(|n| n.0 <= max_ft)
+            && best.is_none_or(|b| d < b.0)
+        {
+            best = Some((d, rise, pa.centre(top), pa.centre(foot), pa.h[top] - sea));
+        }
+        if let Some((rise, top, _)) = st
+            && steep.is_none_or(|s| rise > s.0)
+        {
+            steep = Some((rise, pa.centre(top)));
+        }
+    }
+    match best {
+        Some((d, rise, top, foot, h)) => {
+            let mut v = base("cliff", p, top, d);
+            let run = geom::dist(top, foot);
+            v["drop_ft"] = json!(r1(rise as f64 * 10.0) / 10.0);
+            v["run_ft"] = json!(r1(run));
+            v["slope_deg"] = json!(r1(libm::atan2(rise as f64, run).to_degrees()));
+            v["top_ft"] = json!(r1(h as f64));
+            v["foot"] = pt(foot);
+            v
+        }
+        None => {
+            let mut v = none;
+            let within = max_ft / MI;
+            v["note"] = json!(match steep {
+                Some((rise, at)) => {
+                    v["steepest"] = json!({ "x_ft": r1(at[0]), "y_ft": r1(at[1]), "rise_ft": r1(rise as f64 * 10.0) / 10.0, "distance_mi": r1((geom::dist(at, p) / MI) * 100.0) / 100.0 });
+                    format!("no cliff ({CLIFF_RISE_FT} ft within {CLIFF_RUN_FT} ft) within {within} mi; the steepest ground found is {:.1} ft in {CLIFF_RUN_FT} ft at ({}, {})", rise, r1(at[0]), r1(at[1]))
+                }
+                None => format!("no cliff ({CLIFF_RISE_FT} ft within {CLIFF_RUN_FT} ft) within {within} mi: no ground there is steeper than {CLIFF_CELL_DEG} degrees over a mile"),
+            });
+            v
+        }
+    }
+}
+
+fn flat(ex: &mut Executor, p: P, max_ft: f64, none: Value) -> Value {
+    let sea = ex.world.params().sea_level_ft as f32;
+    // Candidates on T0: gentle points in and round the nearest flat cells (their patch reaches a cell and a half from each).
+    let spots: Vec<(f64, P)> = {
+        let t0 = &ex.t0;
+        let c = cell(t0);
+        let gentle = |q: P| slope_deg(t0, q) < FLAT_DEG && !wet(t0, q);
+        let mut v: Vec<(f64, P)> = Vec::new();
+        if flat_cell(t0, cell_of(t0, p).0, cell_of(t0, p).1) && gentle(p) {
+            v.push((0.0, p));
+        }
+        for (_, i, j) in nearest_cells(t0, p, max_ft, &|i, j| flat_cell(t0, i, j)).into_iter().take(4) {
+            let m = center(t0, i, j);
+            for a in -6..=6 {
+                for b in -6..=6 {
+                    let q = [m[0] + a as f64 * 0.25 * c, m[1] + b as f64 * 0.25 * c];
+                    let d = geom::dist(q, p);
+                    if d <= max_ft && d > 0.0 && gentle(q) {
+                        v.push((d, q));
+                    }
+                }
+            }
+        }
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v.dedup_by(|a, b| geom::dist(a.1, b.1) < 1.0);
+        v
+    };
+    let mut roughest: Option<f32> = None;
+    for &(d, q) in spots.iter().take(FLAT_TRIES) {
+        let pa = Patch::read(ex, q, 0.5 * FLAT_PATCH_FT);
+        if (0..pa.h.len()).any(|k| pa.wet(k)) {
+            continue;
+        }
+        let (lo, hi) = pa.h.iter().fold((f32::MAX, f32::MIN), |m, &h| (m.0.min(h), m.1.max(h)));
+        if hi - lo > FLAT_RANGE_FT {
+            roughest = Some(roughest.map_or(hi - lo, |r: f32| r.min(hi - lo)));
+            continue;
+        }
+        let mut v = base("flat", p, q, d);
+        v["slope_deg"] = json!(r1(pa.plane_slope() * 10.0) / 10.0);
+        v["elevation_ft"] = json!(r1((pa.h[pa.k_of(q)] - sea) as f64));
+        v["range_ft"] = json!(r1((hi - lo) as f64 * 10.0) / 10.0);
+        v["patch_ft"] = json!(FLAT_PATCH_FT);
+        return v;
+    }
+    let mut v = none;
+    if let Some(r) = roughest {
+        v["note"] = json!(format!("the nearest gentle ground (by the coarse map) is rougher on the battlemap: at best {:.1} ft over {FLAT_PATCH_FT} ft (flat is at most {FLAT_RANGE_FT})", r));
+    }
+    v
+}
+
+/// The nearest point of a road's drawn surface (the finest tiles' carved road) within `reach_ft` of `p`, with its
+/// distance; None where none is, or the tiles there carry no road mask.
+pub fn road_surface(ex: &mut Executor, p: P, reach_ft: f64) -> Option<(f64, P)> {
+    let mut lat = Lattice::new(ex, 0.0);
+    ring(ex, &mut lat, p, reach_ft, &mut |ex, lat, i, j| lat.road(ex, i, j) == Some(true))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -453,41 +970,27 @@ fn heading(a: P, b: P) -> f64 {
 
 /// The nearest `what` (coast | cliff | river | road | flat) to `p` within `max_ft`: `{what, found, x_ft, y_ft,
 /// distance_ft, ...}`; `found: false` where none. See `docs/MCP.md` "nearest" for what each reports.
-pub fn nearest(world: &World, t0: &T0, p: P, what: &str, max_ft: f64) -> Result<Value, String> {
+pub fn nearest(ex: &mut Executor, p: P, what: &str, max_ft: f64) -> Result<Value, String> {
     let none = || json!({ "what": what, "found": false, "within_mi": max_ft / MI });
+    let (world, t0) = match what {
+        "coast" => {
+            return Ok(match coast(ex, p, max_ft) {
+                Some(c) => {
+                    let at = [c["x_ft"].as_f64().unwrap_or(0.0), c["y_ft"].as_f64().unwrap_or(0.0)];
+                    let mut v = base("coast", p, at, c["distance_ft"].as_f64().unwrap_or(0.0));
+                    for k in ["shore", "rise_ft", "inland_ft", "in_sea"] {
+                        v[k] = c[k].clone();
+                    }
+                    v
+                }
+                None => none(),
+            });
+        }
+        "cliff" => return Ok(cliff(ex, p, max_ft, none())),
+        "flat" => return Ok(flat(ex, p, max_ft, none())),
+        _ => (&ex.world, &ex.t0),
+    };
     Ok(match what {
-        "coast" => match coast(t0, p, max_ft) {
-            Some(c) => {
-                let at = [c["x_ft"].as_f64().unwrap_or(0.0), c["y_ft"].as_f64().unwrap_or(0.0)];
-                let mut v = base("coast", p, at, c["distance_ft"].as_f64().unwrap_or(0.0));
-                v["shore"] = c["shore"].clone();
-                v["rise_ft"] = c["rise_ft"].clone();
-                v["in_sea"] = c["in_sea"].clone();
-                v
-            }
-            None => none(),
-        },
-        "cliff" => match nearest_spot(t0, p, max_ft, &|i, j| cliff_cell(t0, i, j), &|q| slope_deg(t0, q) >= CLIFF_DEG && !wet(t0, q)) {
-            Some((d, q)) => {
-                let c = cell(t0);
-                let (hi, lo) = [(c, 0.0), (-c, 0.0), (0.0, c), (0.0, -c)].iter().map(|&(a, b)| t0.sample(q[0] + a, q[1] + b, c)).fold((f64::MIN, f64::MAX), |m, h| (m.0.max(h), m.1.min(h)));
-                let mut v = base("cliff", p, q, d);
-                v["slope_deg"] = json!(r1(slope_deg(t0, q)));
-                v["drop_ft"] = json!(r1(hi - lo));
-                v
-            }
-            None => none(),
-        },
-        "flat" => match nearest_spot(t0, p, max_ft, &|i, j| flat_cell(t0, i, j), &|q| slope_deg(t0, q) < FLAT_DEG && !wet(t0, q)) {
-            Some((d, q)) => {
-                let mut v = base("flat", p, q, d);
-                v["slope_deg"] = json!(r1(slope_deg(t0, q) * 10.0) / 10.0);
-                v["elevation_ft"] = json!(r1(t0.sample(q[0], q[1], cell(t0)) - world.params().sea_level_ft));
-                v["patch_ft"] = json!(r1(3.0 * cell(t0)));
-                v
-            }
-            None => none(),
-        },
         "river" => match crate::agent::river_at(world, t0, p, max_ft) {
             Some(r) => {
                 let d = (r.dist_ft - 0.5 * r.width_ft).max(0.0);
@@ -563,6 +1066,9 @@ impl Way {
 pub fn road_way(world: &World, t0: &T0, spec: &str) -> Result<Way, String> {
     if spec.starts_with("rd:") {
         let ri = crate::roadids::road_index(t0, spec).ok_or_else(|| format!("no road stretch {spec} (list_roads gives the ids)"))?;
+        if t0.roads.roads[ri].pts.len() < 2 {
+            return Err(format!("road: the stretch {spec} has no length"));
+        }
         let name = crate::roadids::stretch_name(world, t0, &crate::agent::features(world, t0), spec, &t0.roads.roads[ri]);
         return Ok(Way { name, pieces: vec![(ri, true)] });
     }
@@ -591,7 +1097,29 @@ pub fn road_way(world: &World, t0: &T0, spec: &str) -> Result<Way, String> {
 
 fn suggest<'a>(word: &str, names: &'a [String]) -> Option<&'a str> {
     let w = word.to_lowercase();
-    names.iter().find(|n| n.to_lowercase().starts_with(&w) || w.starts_with(&n.to_lowercase())).map(String::as_str)
+    // A name it starts (or that starts it), else one at most 2 letters different.
+    let near = |n: &String| {
+        let n = n.to_lowercase();
+        let prefix = w.len() >= 3 && (n.starts_with(&w) || (n.len() >= 3 && w.starts_with(&n)));
+        if prefix { Some(0) } else { Some(edits(&w, &n)).filter(|&d| d <= 2) }
+    };
+    names.iter().filter_map(|n| near(n).map(|d| (d, n))).min_by_key(|x| x.0).map(|x| x.1.as_str())
+}
+
+/// Letters added, taken away or changed between `a` and `b`.
+fn edits(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cur = row[j + 1];
+            row[j + 1] = (prev + usize::from(ca != cb)).min(row[j] + 1).min(cur + 1);
+            prev = cur;
+        }
+    }
+    row[b.len()]
 }
 
 /// The way a route between two points takes along roads (None where it goes overland).
@@ -627,7 +1155,7 @@ pub fn point_along(world: &World, t0: &T0, way: &Way, d: f64) -> Option<Value> {
         let hd = if fwd { hd } else { (hd + 180.0) % 360.0 };
         let ids = crate::roadids::road_ids(t0);
         let fs = crate::agent::features(world, t0);
-        let mut st = json!({ "id": ids[ri], "class": crate::roadids::class_name(r.class), "from": crate::roadids::end_json(world, t0, r.pts[0]), "to": crate::roadids::end_json(world, t0, *r.pts.last().unwrap()), "length_mi": ((len / MI) * 100.0).round() / 100.0 });
+        let mut st = json!({ "id": ids[ri], "class": crate::roadids::class_name(r.class), "from": crate::roadids::end_json(world, t0, r.pts[0]), "to": crate::roadids::end_json(world, t0, *r.pts.last().unwrap()), "length_mi": r1((len / MI) * 100.0) / 100.0 });
         if let Some(nm) = crate::roadids::stretch_name(world, t0, &fs, &ids[ri], r) {
             st["name"] = json!(nm);
         }

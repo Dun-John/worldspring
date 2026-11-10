@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
 use worldgen::battlemap::{SQ, SQUARE_FT};
-use worldgen::core::tile::{HALO, PADDED, TileKey};
-use worldgen::ground::{self, Brush, Plateau, Shaper, Stroke};
+use worldgen::core::tile::TileKey;
+use worldgen::geoquery::Squares;
+use worldgen::ground::{self, Brush, Plateau, Stroke};
 use worldgen::pipeline::Executor;
 use worldgen::town::geom;
 use worldgen::world::Edits;
@@ -57,70 +58,6 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
         "ground_heights" => heights(app, a).await.map(text),
         _ => return None,
     })
-}
-
-/// The ground as generated over a box of squares (global indices, inclusive), with the water
-/// over each: read as a battlemap reads them (square centres are odd samples of the finest tiles).
-struct Squares {
-    gx0: i64,
-    gy0: i64,
-    w: i64,
-    h: i64,
-    g: Vec<f32>,
-    hw: Vec<f32>,
-}
-
-impl Squares {
-    fn read(ex: &mut Executor, gx0: i64, gy0: i64, gx1: i64, gy1: i64) -> Squares {
-        let geom = ex.world.geom.clone();
-        let lvl = geom.max_level;
-        let sq = SQ as i64;
-        let (w, h) = (gx1 - gx0 + 1, gy1 - gy0 + 1);
-        let (mut g, mut hw) = (vec![0f32; (w * h) as usize], vec![0f32; (w * h) as usize]);
-        for ty in gy0.div_euclid(sq)..=gy1.div_euclid(sq) {
-            for tx in gx0.div_euclid(sq)..=gx1.div_euclid(sq) {
-                let tile = ex.terrain(TileKey::surface(lvl, tx as u32, ty as u32));
-                for gy in (ty * sq).max(gy0)..=((ty + 1) * sq - 1).min(gy1) {
-                    for gx in (tx * sq).max(gx0)..=((tx + 1) * sq - 1).min(gx1) {
-                        let (i, j) = ((gx - tx * sq) as usize, (gy - ty * sq) as usize);
-                        let c = (2 * j + 1 + HALO) * PADDED + 2 * i + 1 + HALO;
-                        let (x, y) = ((gx as f64 + 0.5) * SQUARE_FT, (gy as f64 + 0.5) * SQUARE_FT);
-                        let k = ((gy - gy0) * w + gx - gx0) as usize;
-                        g[k] = tile.padded[c];
-                        hw[k] = ex.t0.sample_water(x, y).max(tile.river_water[c]);
-                    }
-                }
-            }
-        }
-        Squares { gx0, gy0, w, h, g, hw }
-    }
-
-    /// The squares round a box of world ft (and `pad` squares more), clamped to the map.
-    fn round(ex: &mut Executor, b: [f64; 4], pad: i64) -> Squares {
-        let geom = &ex.world.geom;
-        let (mx, my) = ((geom.map_w_ft / SQUARE_FT).ceil() as i64, (geom.map_h_ft / SQUARE_FT).ceil() as i64);
-        let sq = |v: f64| (v / SQUARE_FT).floor() as i64;
-        let (gx0, gy0) = ((sq(b[0]) - pad).clamp(0, mx - 1), (sq(b[1]) - pad).clamp(0, my - 1));
-        let (gx1, gy1) = ((sq(b[2]) + pad).clamp(gx0, mx - 1), (sq(b[3]) + pad).clamp(gy0, my - 1));
-        Squares::read(ex, gx0, gy0, gx1, gy1)
-    }
-
-    fn at(&self, gx: i64, gy: i64) -> Option<usize> {
-        let (i, j) = (gx - self.gx0, gy - self.gy0);
-        (i >= 0 && j >= 0 && i < self.w && j < self.h).then_some((j * self.w + i) as usize)
-    }
-
-    fn rect(&self) -> [f64; 4] {
-        [self.gx0 as f64 * SQUARE_FT, self.gy0 as f64 * SQUARE_FT, (self.gx0 + self.w) as f64 * SQUARE_FT, (self.gy0 + self.h) as f64 * SQUARE_FT]
-    }
-
-    /// Each square's ground shaped by `edits`.
-    fn shaped(&self, edits: &Edits) -> Vec<f32> {
-        match Shaper::new(edits, self.rect(), SQUARE_FT) {
-            None => self.g.clone(),
-            Some(s) => (0..self.g.len()).map(|k| s.at_square(self.gx0 + k as i64 % self.w, self.gy0 + k as i64 / self.w, self.g[k], self.hw[k]).0).collect(),
-        }
-    }
 }
 
 /// An optional number: absent (or null) is `None`, anything else must be a finite number.

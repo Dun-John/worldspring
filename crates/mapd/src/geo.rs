@@ -9,6 +9,8 @@ use crate::args::{at_props, bad, place, point_named, point_schema};
 use crate::tools::{schema, text};
 
 const MI: f64 = 5280.0;
+/// How far `road_point` looks for the drawn road about the listed line (ft).
+const SNAP_FT: f64 = 60.0;
 
 pub fn list() -> Vec<Value> {
     vec![
@@ -42,7 +44,7 @@ async fn nearest(app: &Shared, a: &Value) -> Result<Value, String> {
     if !(0.1..=NEAREST_MAX_MI).contains(&mi) {
         return Err(bad("within_mi", &format!("0.1 to {NEAREST_MAX_MI} miles"), &a["within_mi"]));
     }
-    let mut v = app.worker.with(move |ex| geoquery::nearest(&ex.world, &ex.t0, p, &what, mi * MI)).await?;
+    let mut v = app.worker.with_mut(move |ex| geoquery::nearest(ex, p, &what, mi * MI)).await?;
     v["from"] = json!({ "x_ft": p[0].round(), "y_ft": p[1].round() });
     v["within_mi"] = json!(mi);
     Ok(v)
@@ -81,7 +83,7 @@ async fn road_point(app: &Shared, a: &Value) -> Result<Value, String> {
     };
     let mut v = app
         .worker
-        .with(move |ex| {
+        .with_mut(move |ex| {
             let (w, t0) = (&ex.world, &ex.t0);
             let mut way = match (&road, from, to) {
                 (Some(r), _, _) => geoquery::road_way(w, t0, r)?,
@@ -106,7 +108,19 @@ async fn road_point(app: &Shared, a: &Value) -> Result<Value, String> {
             if let Some(n) = &way.name {
                 r["name"] = json!(n);
             }
-            Ok(json!({ "road": r, "at_mi": (d / MI * 100.0).round() / 100.0, "fraction": ((d / len.max(1.0)) * 1000.0).round() / 1000.0, "x_ft": pt["x_ft"], "y_ft": pt["y_ft"], "heading_deg": pt["heading_deg"], "stretch": pt["stretch"] }))
+            let mut v = json!({ "road": r, "at_mi": (d / MI * 100.0).round() / 100.0, "fraction": ((d / len.max(1.0)) * 1000.0).round() / 1000.0, "x_ft": pt["x_ft"], "y_ft": pt["y_ft"], "heading_deg": pt["heading_deg"], "stretch": pt["stretch"] });
+            // Onto the road as the battlemap draws it (the listed line drifts from it on long stretches).
+            let at = [pt["x_ft"].as_f64().unwrap_or(0.0), pt["y_ft"].as_f64().unwrap_or(0.0)];
+            match geoquery::road_surface(ex, at, SNAP_FT) {
+                Some((off, q)) if off > 2.5 => {
+                    v["x_ft"] = json!(q[0].round());
+                    v["y_ft"] = json!(q[1].round());
+                    v["moved_onto_road_ft"] = json!(off.round());
+                }
+                Some(_) => {}
+                None => v["note"] = json!(format!("no drawn road within {SNAP_FT} ft of this point: it is on the road's listed line, which can be some way off the road on a long stretch")),
+            }
+            Ok(v)
         })
         .await?;
     for (k, e) in echo {

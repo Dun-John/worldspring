@@ -128,4 +128,13 @@ impl GenHandle {
         })
         .await
     }
+
+    /// As `with`, with the executor mutable (to read terrain tiles, which it caches).
+    pub async fn with_mut<R: Send + 'static>(&self, f: impl FnOnce(&mut Executor) -> Result<R, String> + Send + 'static) -> Result<R, String> {
+        self.run(move |g| match g.ex.as_mut() {
+            Some(ex) => f(ex),
+            None => Err("no world is open: open the map app (it connects to mapd and shares its world)".into()),
+        })
+        .await
+    }
 }

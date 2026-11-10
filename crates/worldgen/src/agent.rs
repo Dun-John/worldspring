@@ -1708,8 +1708,20 @@ pub fn children(world: &World, t0: &T0, id: &str) -> Option<Value> {
     Some(json!({ "places": inside }))
 }
 
-/// What is at a point: the ground, the regions, the nearest settlements, the building or
-/// district or site there, and named features nearby (a tenth of their size away, 2 to 10 mi).
+/// The water of a lake or sea at a point: the smallest named body there (id, name).
+pub(crate) fn water_body_at(world: &World, t0: &T0, q: P) -> Option<(String, String)> {
+    let fs = features(world, t0);
+    let shapes = shapes(world, t0);
+    fs.iter()
+        .zip(&shapes)
+        .filter(|(f, s)| matches!(f.kind, "lake" | "salt_lake" | "sea" | "ocean" | "bay") && { let b = s.bbox(); q[0] >= b[0] && q[0] <= b[2] && q[1] >= b[1] && q[1] <= b[3] } && s.distance(q).0 == 0.0)
+        .min_by(|a, b| a.1.area_sq_ft().total_cmp(&b.1.area_sq_ft()))
+        .map(|(f, _)| (f.id.clone(), f.name.clone()))
+}
+
+/// What is at a point (on T0 ground; `geoquery::describe` adds the battlemap's): the regions, the
+/// nearest settlements, the building or district or site there, and named features nearby (a tenth
+/// of their size away, 2 to 10 mi).
 pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
     let fs = features(world, t0);
     let shapes = shapes(world, t0);
@@ -1743,22 +1755,11 @@ pub fn describe(world: &World, t0: &T0, x: f64, y: f64) -> Value {
         ids.extend(h["settlement"].as_u64().and_then(|li| feature_of_layout(world, t0, li as usize)));
     }
     let (npcs, plots) = authored_at(world, t0, &ids);
-    // The water of a lake or sea at a point: the smallest named body there.
-    let named = |q: P| {
-        fs.iter()
-            .zip(&shapes)
-            .filter(|(f, s)| matches!(f.kind, "lake" | "salt_lake" | "sea" | "ocean" | "bay") && { let b = s.bbox(); q[0] >= b[0] && q[0] <= b[2] && q[1] >= b[1] && q[1] <= b[3] } && s.distance(q).0 == 0.0)
-            .min_by(|a, b| a.1.area_sq_ft().total_cmp(&b.1.area_sq_ft()))
-            .map(|(f, _)| (f.id.clone(), f.name.clone()))
-    };
     json!({
         "x_ft": x.round(),
         "y_ft": y.round(),
         "elevation_ft": (ground - sea).round(),
         "under_water": water > ground,
-        "slope_deg": (crate::geoquery::slope_deg(t0, p) * 10.0).round() / 10.0,
-        "water": crate::geoquery::water(world, t0, p, &named),
-        "coast": crate::geoquery::coast(t0, p, crate::geoquery::COAST_NEAR_FT),
         "npcs": npcs,
         "plots": plots,
         "biome": biome,
@@ -2173,6 +2174,9 @@ pub fn route(world: &World, t0: &T0, from: P, to: P) -> Value {
                 if found > 50 {
                     r["stretches_found"] = json!(found);
                     r["truncated"] = json!(true);
+                }
+                if total > 1.5 * straight && straight > 0.0 {
+                    r["note"] = json!(format!("the road way is {:.1} times the straight line ({} mi): a long detour", total / straight, mi(straight)));
                 }
                 road = Some(r);
             }
