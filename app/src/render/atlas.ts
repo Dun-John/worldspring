@@ -4447,9 +4447,10 @@ function lychgate(g: Graphics, r: number, rnd: () => number, v: number) {
 }
 
 /** Kurgan: a broad burial mound under grass, drawn at its catalog size (bigger or smaller by its scale): a
- * soft rounded rise, in shade on its south-east side and lit toward the north-west, its crown paler, tufts
- * of grass, a few stones at its foot; a stone figure on the top of one, a worn path up another, a kerb of
- * stones right round the last. */
+ * soft rounded rise on its own shadow, a darker band of turf round its foot, in shade on its south-east side
+ * and lit toward the north-west, its crown paler, tufts of grass, a few stones at its foot; on its top a
+ * standing stone (a slab laid flat on one, a stone figure on another), a worn path up one, a kerb of stones
+ * right round the last. */
 function kurgan(g: Graphics, r: number, rnd: () => number, v: number) {
   const grass = [
     [0x4a6a2e, 0x668a40, 0x82a452, 0xa0bc6a],
@@ -4459,11 +4460,14 @@ function kurgan(g: Graphics, r: number, rnd: () => number, v: number) {
   ][v];
   const R = r * 0.9;
   const rim = blob(0, 0, R, 28, 0.06, rnd);
-  // The shaded side: the body drawn again a little smaller and toward the light, over the dark rim.
-  g.poly(rim).fill(grass[0]).stroke({ width: 2.4, color: shade(grass[0], 0.7), join: 'round' });
-  g.poly(rim.map((p) => p * 0.9 - R * 0.07)).fill(grass[1]);
-  g.poly(rim.map((p) => p * 0.72 - R * 0.12)).fill(grass[2]);
-  g.poly(rim.map((p) => p * 0.42 - R * 0.17)).fill({ color: grass[3], alpha: 0.8 });
+  // Its shadow, then the darker turf at its foot, then the shaded side: the body drawn again a little
+  // smaller and toward the light.
+  g.poly(rim.map((p, i) => p * 0.98 + R * (i % 2 ? 0.07 : 0.08))).fill({ color: 0x1c1a14, alpha: 0.28 });
+  g.poly(rim).fill(shade(grass[0], 0.5)).stroke({ width: 3, color: shade(grass[0], 0.36), join: 'round' });
+  g.poly(rim.map((p) => p * 0.88 - R * 0.02)).fill(grass[0]);
+  g.poly(rim.map((p) => p * 0.8 - R * 0.07)).fill(grass[1]);
+  g.poly(rim.map((p) => p * 0.66 - R * 0.12)).fill(grass[2]);
+  g.poly(rim.map((p) => p * 0.4 - R * 0.17)).fill({ color: grass[3], alpha: 0.8 });
   // Tufts of grass on its flanks.
   for (let i = 0; i < 10; i++) {
     const a = rnd() * Math.PI * 2;
@@ -4481,14 +4485,31 @@ function kurgan(g: Graphics, r: number, rnd: () => number, v: number) {
     const a = v === 3 ? ph + (i / n) * Math.PI * 2 : ph + rnd() * Math.PI * 2;
     stone(g, Math.cos(a) * R * 0.97, Math.sin(a) * R * 0.97, v === 3 ? 11 : 9 + rnd() * 5, STONE[1], rnd, 7);
   }
+  const [x, y] = [-R * 0.16, -R * 0.14];
+  // (What stands on top, about a sixth of the mound across: `k` px a unit below, about its crown.)
+  const k = R / 80;
+  const at = (pts: number[]) => pts.map((d, i) => (i % 2 ? y : x) + d * k);
+  if (v === 2) {
+    // A slab laid flat on its crown, where the path ends: cracked, lit on its upper edge.
+    g.ellipse(x + 4 * k, y + 5 * k, 17 * k, 10 * k).fill({ color: 0x1d2a12, alpha: 0.3 });
+    g.roundRect(x - 14 * k, y - 8 * k, 28 * k, 16 * k, 3 * k).fill(STONE[1][1]).stroke({ width: 2 * k, color: INK });
+    g.roundRect(x - 12 * k, y - 7 * k, 24 * k, 4 * k, 2 * k).fill(STONE[1][2]);
+    g.poly(at([-3, -8, 1, -1, -1, 8]), false).stroke({ width: 1.4 * k, color: STONE[1][0], cap: 'round' });
+  } else if (v !== 1) {
+    // A standing stone on its crown, from a high angle: a rough upright, its top showing, its shadow behind.
+    const t = STONE[v === 3 ? 3 : 0];
+    g.ellipse(x + 8 * k, y + 3 * k, 15 * k, 6 * k).fill({ color: 0x1d2a12, alpha: 0.32 });
+    g.poly(at([-6, 2, -7, -20, -2, -26, 5, -24, 7, 2])).fill(t[1]).stroke({ width: 2 * k, color: INK, join: 'round' });
+    g.poly(at([-7, -20, -2, -26, 5, -24, 1, -19])).fill(t[2]).stroke({ width: 1.4 * k, color: INK, join: 'round' });
+    g.poly(at([-4, -14, -4, -2]), false).stroke({ width: 1.6 * k, color: t[2], alpha: 0.7, cap: 'round' });
+  }
   if (v === 1) {
     // A stone figure on its crown, from a high angle: a worn upright block with a face.
-    const [x, y] = [-R * 0.16, -R * 0.14];
-    g.ellipse(x + 6, y + 4, 16, 7).fill({ color: 0x1d2a12, alpha: 0.3 });
-    g.roundRect(x - 8, y - 28, 16, 30, 6).fill(STONE[2][1]).stroke({ width: 2, color: INK });
-    g.roundRect(x - 8, y - 32, 16, 9, 4).fill(STONE[2][2]).stroke({ width: 1.6, color: INK });
-    g.moveTo(x - 4, y - 17).lineTo(x - 1.5, y - 17).moveTo(x + 1.5, y - 17).lineTo(x + 4, y - 17).moveTo(x - 4, y - 6).lineTo(x + 4, y - 6);
-    g.stroke({ width: 1.6, color: STONE[2][0], cap: 'round' });
+    g.ellipse(x + 6 * k, y + 4 * k, 16 * k, 7 * k).fill({ color: 0x1d2a12, alpha: 0.3 });
+    g.roundRect(x - 8 * k, y - 28 * k, 16 * k, 30 * k, 6 * k).fill(STONE[2][1]).stroke({ width: 2 * k, color: INK });
+    g.roundRect(x - 8 * k, y - 32 * k, 16 * k, 9 * k, 4 * k).fill(STONE[2][2]).stroke({ width: 1.6 * k, color: INK });
+    for (const [a, b, c] of [[-4, -1.5, -17], [1.5, 4, -17], [-4, 4, -6]]) g.moveTo(x + a * k, y + c * k).lineTo(x + b * k, y + c * k);
+    g.stroke({ width: 1.6 * k, color: STONE[2][0], cap: 'round' });
   }
 }
 
