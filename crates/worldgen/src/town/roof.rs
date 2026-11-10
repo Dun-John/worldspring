@@ -259,6 +259,9 @@ pub fn look(l: &Layout, b: &Building) -> Look {
             }
         }
     };
+    // R5 towns: a cemetery's tomb outside the dry lands in quiet stone, lead or weathered pale tile.
+    let tomb = key == "tomb" && culture != 3;
+    let material = if tomb { pick(h(12), &[(Slate, 4), (Lead, 3), (ClayTile, 3)]) } else { material };
     // A tower mill: its battered walls rising to the cap, seen from above as a cone (the cap drawn
     // over it with the sails): lime-washed in the south and the dry lands, else tarred boards,
     // stone or weatherboard.
@@ -293,6 +296,9 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     if grand {
         wear -= 30.0;
     }
+    if tomb {
+        wear += 60.0;
+    }
     if l.site || b.structure == Structure::Ruin {
         wear += 70.0;
     }
@@ -301,6 +307,12 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     let shade = match b.shade {
         Some(s) => s.min(4),
         None if b.tint.is_some() => 2,
+        // (A tomb's the material's quiet ones: moss or warm grey slate, warm or light lead, brown tile.)
+        None if tomb => match material {
+            Slate => pick(h(13), &[(1u8, 1), (3, 1)]),
+            Lead => pick(h(13), &[(3u8, 1), (4, 1)]),
+            _ => 3,
+        },
         None => pick(h(11), &[(0u8, 1), (1, 3), (2, 8), (3, 3), (4, 1)]),
     };
     Look { material, shape, wear: wear.clamp(0.0, 255.0) as u8, smoke, shade }
