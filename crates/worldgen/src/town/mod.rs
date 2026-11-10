@@ -44,6 +44,8 @@ mod districts;
 pub mod places;
 mod carry;
 pub mod wallgates;
+// R5 towns: a hand castle's keep and yard buildings changed by hand (`Created::pieces`).
+pub mod pieces;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};

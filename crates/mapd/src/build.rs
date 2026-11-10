@@ -48,7 +48,7 @@ pub fn list() -> Vec<Value> {
     let poly = json!({ "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } });
     vec![
         json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle), or near a place with width_ft and depth_ft (the nearest clear lot on a street), on dry land clear of other buildings, roads, streets, walls and squares, with what it is, storeys, roof, roof colour, material, shape and shade. It gets an interior (enter_building / get_interior on its building id), a roof and walls on the battlemap. Returns its id (c:<n>, for update_building, delete_feature, notes and NPCs) and its building id (b:<layout>:0).", "inputSchema": schema(create, &[]) }),
-        json!({ "name": "update_building", "title": "Change a building", "description": "Change a building: one drawn by hand (c:<n>) or one of the world's own (b:<layout>:<id>, as get_feature and list_children give them): a new footprint (poly, rect or circle; checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; for the world's own, auto (or an empty func) goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
+        json!({ "name": "update_building", "title": "Change a building", "description": "Change a building: one drawn by hand (c:<n>) or one of the world's own (b:<layout>:<id>, as get_feature and list_children give them), or a piece of a castle made by hand (its keep or a yard building, b:<layout>:<id>; not its footprint): a new footprint (poly, rect or circle; checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; for the world's own, auto (or an empty func) goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
         json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not (water, river, another building, street, road, wall, square).", "inputSchema": schema(check, &[]), "annotations": { "readOnlyHint": true } }),
         json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away buildings of the world's own (not drawn by hand: delete_feature does those): by ids (b:<layout>:<id>), or every one whose middle lies inside a polygon (within, [[x_ft, y_ft], ...]) such as a ward to clear for buildings of your own. Every other building keeps its id. restore_building brings one back.", "inputSchema": schema(json!({ "ids": { "type": "array", "items": { "type": "string" } }, "within": poly }), &[]) }),
         json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and any update_building change (its name stays as renamed).", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]) }),
@@ -110,6 +110,10 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
     };
     let change = agent::BuildingChange { func: opt("func"), floors, poly: footprint(a)?, roof: opt("roof"), tint: opt("tint"), material: opt("material"), shape: opt("shape"), shade: shade_arg(a)?, structure: opt("structure") };
     let name = opt("name");
+    // (R5 towns: a castle made by hand keeps its pieces' edits itself.)
+    if let Some(v) = crate::works::update_piece(app, &id, &change, name.as_deref()).await? {
+        return Ok(v);
+    }
     let id2 = id.clone();
     // Its inside designed by hand: new storeys follow (in the same change); a new footprint or a
     // ruin sets the design aside.
@@ -175,10 +179,12 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
             }
             ids.sort();
             ids.dedup();
-            ids.into_iter().map(|id| agent::building_removal(&ex.world, &ex.t0, &id).map(|e| (id, e))).collect::<Result<Vec<_>, String>>()
+            let pieces = crate::works::piece_removals(ex, &mut ids)?;
+            Ok((ids.into_iter().map(|id| agent::building_removal(&ex.world, &ex.t0, &id).map(|e| (id, e))).collect::<Result<Vec<_>, String>>()?, pieces))
         })
         .await?;
-    let removed: Vec<String> = edits.iter().map(|(id, _)| id.clone()).collect();
+    let (edits, pieces) = edits;
+    let removed: Vec<String> = edits.iter().map(|(id, _)| id.clone()).chain(pieces.iter().map(|p| p.0.clone())).collect();
     if removed.is_empty() {
         return Ok(json!({ "tool": "remove_buildings", "removed": [], "note": "no building of the world's own has its middle there" }));
     }
@@ -187,6 +193,10 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
         for (id, b) in edits {
             e.buildings.insert(id, b);
         }
+        for (_, castle, key, p) in pieces {
+            let c = e.created.iter_mut().find(|c| c.id == castle && !c.removed).ok_or_else(|| format!("{castle} was deleted meanwhile"))?;
+            c.pieces.insert(key, p);
+        }
         Ok(reply)
     })
     .await
@@ -194,6 +204,9 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
 
 /// One of the world's own buildings back as generated.
 async fn restore(app: &Shared, id: String) -> Result<Value, String> {
+    if let Some(v) = crate::works::restore_piece(app, &id).await? {
+        return Ok(v);
+    }
     let id2 = id.clone();
     app.edit("agent", 0, move |e| match e.buildings.remove(&id2) {
         Some(_) => Ok(json!({ "tool": "restore_building", "id": id2 })),

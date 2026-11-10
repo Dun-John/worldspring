@@ -425,7 +425,7 @@ pub struct BuildingChange {
 /// Generated building `id`'s edit with `change` made: checked (a new footprint as a drawn
 /// building's, skipping itself). `None` when it is then as generated.
 pub fn building_edit(world: &World, t0: &T0, id: &str, change: &BuildingChange) -> Result<Option<crate::world::BuildingEdit>, String> {
-    let (li, bi) = generated_building(t0, id).ok_or_else(|| format!("{id} is not a generated building (b:<layout>:<id>; buildings drawn by hand go by their c: id)"))?;
+    let (li, bi) = generated_building(t0, id).ok_or_else(|| town::pieces::not_generated(world, t0, id))?;
     let base = town::base_layout(world, t0, li);
     let g = base.building(bi as usize).ok_or_else(|| format!("no such building: {id}"))?;
     let at = geom::centroid(&g.poly);
@@ -649,7 +649,7 @@ pub fn generated_buildings_in_json(world: &World, t0: &T0, poly: &[P]) -> String
 
 /// The edit that takes generated building `id` away.
 pub fn building_removal(world: &World, t0: &T0, id: &str) -> Result<crate::world::BuildingEdit, String> {
-    let (li, bi) = generated_building(t0, id).ok_or_else(|| format!("{id} is not a generated building (buildings drawn by hand are deleted with delete_feature)"))?;
+    let (li, bi) = generated_building(t0, id).ok_or_else(|| town::pieces::not_generated(world, t0, id))?;
     let base = town::base_layout(world, t0, li);
     let g = base.building(bi as usize).ok_or_else(|| format!("no such building: {id}"))?;
     Ok(crate::world::BuildingEdit { at: geom::centroid(&g.poly), removed: true, ..Default::default() })

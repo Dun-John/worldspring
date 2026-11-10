@@ -350,6 +350,10 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     if p.kind != PoiKind::Building {
         super::round_off(&mut l, None);
     }
+    // (R5 towns: a hand castle's pieces as changed by hand.)
+    if let Some(c) = created.filter(|c| c.kind == "castle") {
+        super::pieces::apply(world, t0, c, &mut l);
+    }
     l
 }
 

@@ -528,6 +528,22 @@ by the keep (flowerbeds, topiary at its corners, benches, a short hedge, now and
 trees. Buildings can be drawn in it. With
 `structure: "ruin"` the walls are broken, some towers fallen and every building a roofless shell.
 
+The keep and the yard's buildings are the castle's pieces (`b:<layout>:<id>`, as `get_feature`, `search_features`
+and `get_battlemap` give them): `update_building` changes one as it changes a town's building (`func`, `name`,
+`floors`, `roof`, `tint`, `material`, `shape`, `shade`, `structure`; not its footprint, which is the castle's),
+`remove_buildings` takes a yard building away and `restore_building` puts a piece back as built. `keep_func` and
+`keep_name` on `create_feature` or `update_fortification` are the short form for the keep (`auto` and `""` put them
+back: the castle itself, named as the site). The changes are kept with the castle (by its `c:` id), so they stay on it
+when another site is deleted or the castle is redrawn; a yard building's change holds while a building stands where it
+was changed (a redrawn castle lays out its yard anew), the keep's follows the keep. A ruined piece (the castle in
+ruins, or the piece made `structure: "ruin"`) takes a function, a name and looks but no storeys; the keep is taken
+away only with `keep: false`.
+
+```json
+{ "name": "create_feature", "arguments": { "kind": "castle", "rect": { "x_ft": 770000, "y_ft": 2330000, "width_ft": 400, "depth_ft": 300 }, "name": "Candlekeep", "keep_func": "library" } }
+{ "name": "update_building", "arguments": { "id": "b:322:18", "func": "library", "name": "The Great Library", "floors": 5 } }
+```
+
 A **wall** is a line (`pts`, 2–64 corners, each side at least 10 ft, at most 3,000 ft in all; `closed: true` joins
 the last corner to the first, and a closed wall may have 3–256 corners and run 24,000 ft round): towers on its
 corners and along long runs, a gatehouse on each corner listed in `gates` (indices into its line) and wherever a
@@ -870,6 +886,11 @@ The world's own buildings take the same changes (`edits.buildings`): what it is 
 generated. A new trade with no name of its own is named as a drawn building's would be. Every other building
 keeps its id and footprint. If the world is generated again from a changed sketch and the town is laid out anew,
 a change whose building no longer stands at its id is set aside (not applied to another building).
+
+A castle's keep and yard buildings (a castle made with `create_feature`) take the same changes but a footprint;
+they are kept with the castle (see "Castles and walls") and the reply names it (`castle: {id, name}`, `piece`). An id
+that is neither says what it is: a building drawn by hand (it goes by its `c:` id), a building of another site made
+by hand, a castle's building that isn't there, or no such place.
 
 ```json
 { "name": "update_building", "arguments": { "id": "c:4", "floors": 3, "roof": "battlements" } }
