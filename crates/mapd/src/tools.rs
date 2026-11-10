@@ -59,13 +59,15 @@ pub fn list() -> Value {
         { "name": "focus_view", "title": "Show the user", "description": "Move the open map app's view to a place (the user sees it).", "inputSchema": schema(merge(place_props(), json!({ "size_ft": { "type": "number", "minimum": 50, "maximum": 5000000, "default": 3000 } })), &[]) },
         { "name": "rename_feature", "title": "Rename", "description": "Rename anything named: a feature, building, district, tower, site, or a site's level (l:<site>:<level>) or room (r:<site>:<level>:<room>), a road stretch (rd:, from list_roads) or crossing (v:); ids as list_names gives them. An empty name restores the original.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"]) },
         { "name": "annotate_feature", "title": "Add notes", "description": "Set (or append to) a feature's notes: lore, hooks, secrets for the DM, with tags. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } }, "remove_tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to take off (one not there is fine); notes may be left out when tags or remove_tags is given" }, "append": { "type": "boolean", "default": false } }), &["id"]) },
-        { "name": "create_feature", "title": "Create a site", "description": "Add a site on dry land, generated like the world's own: ruin (over a dungeon, crypt or catacombs), tower, camp, waystation, cave, mine, lava_tube, or entrance (a bare way underground); something underground takes size, levels and theme (left out: chosen as for the world's own). Or a castle (poly/rect) or a wall (pts), drawn instead of a place; the world's own buildings in the way are named, or taken away with remove_in_way. Returns its id and its underground ways (a castle: keep, towers, gates).", "inputSchema": schema(merge(merge(place_props(), crate::works::props()), json!({
+        { "name": "create_feature", "title": "Create a site", "description": "Add a site on dry land, generated as the world's own: ruin (over a dungeon, crypt or catacombs), tower, camp, waystation, cave, mine, lava_tube, or entrance (a way down); something underground takes size, levels and theme (else as the world's own). Or a castle (poly/rect) or a wall (pts), drawn not placed; the world's own buildings in the way are named, or taken away with remove_in_way. Returns its id and underground ways (a castle: keep, towers, gates).", "inputSchema": schema(merge(merge(place_props(), crate::works::props()), json!({
             "kind": { "type": "string", "enum": CREATABLE.iter().filter(|k| **k != "building").collect::<Vec<_>>() },
             "name": { "type": "string" },
             "under": { "type": "string", "enum": UnderKind::CREATABLE.map(|k| k.key()), "description": "What lies beneath a ruin (dungeon, crypt, catacombs) or an entrance (any)" },
             "size": { "type": "string", "enum": SiteSize::NAMES, "description": "The site underground" },
             "levels": { "type": "integer", "minimum": 1, "maximum": MAX_LEVELS },
-            "theme": { "type": "string", "enum": THEMES.iter().map(|t| t.key).collect::<Vec<_>>(), "description": "Which themes fit which kind of site: MCP.md" },
+            "theme": { "type": "string", "enum": THEMES.iter().map(|t| t.key).collect::<Vec<_>>(), "description": "Themes by kind: MCP.md" },
+            "in_building": { "type": "string", "description": "Entrance in this building's cellar" },
+            "way": { "type": "string", "enum": ["stairs", "trapdoor"] },
         })), &["kind"]) },
         { "name": "update_feature", "title": "Update", "description": "Change a feature's name and/or notes in one go. A building drawn by hand is one place: either of its ids.", "inputSchema": schema(json!({ "id": { "type": "string" }, "name": { "type": "string" }, "notes": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } }), &["id"]) },
         { "name": "hide_feature", "title": "Hide", "description": "Hide a feature from the map's labels and search (or show it again). It is still there. A building drawn by hand is one place: either of its ids (its business pin is hidden too).", "inputSchema": schema(json!({ "id": { "type": "string" }, "hidden": { "type": "boolean", "default": true } }), &["id"]) },
@@ -682,6 +684,9 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
     if kind == "castle" || kind == "wall" {
         return crate::works::place(app, &a, None, Some(&kind)).await;
     }
+    if !a["in_building"].is_null() || !a["way"].is_null() {
+        return create_in_building(app, a, kind).await;
+    }
     let opt = |k: &str| a[k].as_str().map(str::to_string);
     let levels = match &a["levels"] {
         Value::Null => None,
@@ -701,7 +706,7 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
     (c.x, c.y) = (p[0], p[1]);
     let existing = app.with_edits(|e| e.existing_site(&c, at).map(|o| o.id.clone())).flatten();
     if let Some(id) = existing {
-        return found(app, id).await;
+        return found_spot(app, id, &c, at).await;
     }
     let (kind2, asked_at) = (kind.clone(), p);
     let (p, name, river) = app
@@ -727,6 +732,7 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
         json!({ "x_ft": p[0].round(), "y_ft": p[1].round(), "ft": ft.round(), "why": why })
     });
     (c.x, c.y, c.name) = (p[0], p[1], asked.unwrap_or(name));
+    let c2 = c.clone();
     let change = app
         .edit("agent", 0, move |e| {
             if let Some(o) = e.existing_site(&c, at) {
@@ -740,7 +746,7 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
         })
         .await?;
     if let Some(id) = change["existing"].as_str() {
-        return found(app, id.to_string()).await;
+        return found_spot(app, id.to_string(), &c2, at).await;
     }
     let id = change["id"].as_str().unwrap_or_default().to_string();
     let mut v = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())).await?;
@@ -748,6 +754,119 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
         v["moved"] = m;
     }
     Ok(v)
+}
+
+/// `found` for a point site: which one it is, how far from the point asked, and the rule that made it the same.
+async fn found_spot(app: &Shared, id: String, asked: &Created, at: [f64; 2]) -> Result<Value, String> {
+    let mut v = found(app, id.clone()).await?;
+    let (ox, oy) = (v["x_ft"].as_f64().unwrap_or(at[0]), v["y_ft"].as_f64().unwrap_or(at[1]));
+    let ft = (ox - at[0]).hypot(oy - at[1]).round();
+    let beneath = asked.under_kind().map(|k| format!(" over a {}", k.name())).unwrap_or_default();
+    let what = v["name"].as_str().map(|n| format!("{id} ({n})")).unwrap_or_else(|| id.clone());
+    let why = if let Some(b) = &asked.in_building {
+        format!("{what} is already an entrance{beneath} in {b}: one building has one entrance of each kind beneath; use another building or another `under`, or change that one")
+    } else {
+        format!(
+            "{what} is a {} with the same beneath, {ft} ft from the point asked: a {}{beneath} within {} ft of another is the same site; \
+             put it farther away, or in another building (names do not count for these)",
+            asked.kind,
+            asked.kind,
+            Created::SAME_SPOT_FT
+        )
+    };
+    v["existing_distance_ft"] = json!(ft);
+    v["note"] = json!(format!("nothing was added: {why}"));
+    Ok(v)
+}
+
+/// `create_feature` for an entrance in a building's cellar (`in_building`, `way`): its point is the building's middle.
+async fn create_in_building(app: &Shared, a: Value, kind: String) -> Result<Value, String> {
+    if kind != "entrance" {
+        return Err(format!("in_building and way are for entrances (the kind is {kind}): only an entrance goes down from a cellar"));
+    }
+    let Some(raw) = a["in_building"].as_str().map(str::to_string) else {
+        return Err("way: needs in_building (a building's id: b:<layout>:<n>, or c:<n> of one drawn by hand)".into());
+    };
+    let (rawq, mut asked_at) = (raw.clone(), None);
+    let at_given = !a["at"].is_null() || !a["x_ft"].is_null();
+    let at_same = a["at"].as_str().is_some_and(|s| s == raw);
+    if at_given && !at_same {
+        asked_at = Some(place(app, &a).await?);
+    }
+    let (bid, bname, mid, poly) = app
+        .worker
+        .with(move |ex| {
+            let (w, t0) = (&ex.world, &ex.t0);
+            let id = if rawq.starts_with("c:") {
+                match agent::drawn_pair(w, t0, &rawq) {
+                    Some((k, _, b)) if !w.file.edits.created[k].removed => b,
+                    Some(_) => return Err(format!("{rawq} was deleted (restore_building brings it back)")),
+                    None => return Err(format!("{rawq}: no building drawn by hand has that id (in_building takes a building's id, b:<layout>:<n>)")),
+                }
+            } else {
+                rawq.clone()
+            };
+            if let Some(n) = agent::deleted_note(w, t0, &id) {
+                return Err(n);
+            }
+            let Some((li, bi)) = worldgen::sitelinks::parse_building(&id).filter(|(li, _)| *li < worldgen::town::layout_count(t0)) else {
+                return Err(format!("in_building: {rawq} is no building id (b:<layout>:<n>; list_children of a settlement lists them)"));
+            };
+            let l = worldgen::town::layout(w, t0, li);
+            let Some(b) = l.building(bi) else {
+                let taken = w.file.edits.buildings.get(&id).is_some_and(|e| e.removed);
+                return Err(if taken { format!("{id} was taken away (restore_building brings it back)") } else { format!("in_building: no building {id}") });
+            };
+            let name = agent::name_of(w, t0, &id).unwrap_or_else(|| b.label().to_string());
+            match b.structure {
+                worldgen::town::Structure::Ruin => return Err(format!("{id} ({name}) is a ruin: no cellar to put a way down in")),
+                worldgen::town::Structure::Open => return Err(format!("{id} ({name}) is an open structure (a yard or ring), not a roofed building: no cellar")),
+                worldgen::town::Structure::Roofed => {}
+            }
+            if !worldgen::interior::has_cellar(b) {
+                return Err(format!("{id} ({name}) is a yurt (a round one-room home): no cellar"));
+            }
+            Ok((id, name, worldgen::town::geom::centroid(&b.poly), b.poly.clone()))
+        })
+        .await?;
+    if let Some(p) = asked_at
+        && !worldgen::town::geom::contains(&poly, p)
+    {
+        return Err(format!("at: that point is not inside {bid} ({bname}); leave `at` out (the way down goes at the building's middle) or name a point inside it"));
+    }
+    let opt = |k: &str| a[k].as_str().map(str::to_string);
+    let levels = match &a["levels"] {
+        Value::Null => None,
+        v => Some(v.as_u64().filter(|l| *l <= 255).ok_or("levels: a whole number")? as u8),
+    };
+    let mut c = Created { kind, under: opt("under"), size: opt("size"), levels, theme: opt("theme"), in_building: Some(bid.clone()), way: opt("way"), x: mid[0], y: mid[1], ..Default::default() };
+    c.check()?;
+    let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
+    c.id = format!("c:{n}");
+    if let Some(id) = app.with_edits(|e| e.existing_site(&c, mid).map(|o| o.id.clone())).flatten() {
+        return found_spot(app, id, &c, mid).await;
+    }
+    let asked = a["name"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let (cid, under) = (c.id.clone(), c.under.clone());
+    let generated = app.worker.with(move |ex| Ok::<_, String>(agent::creation_spot(&ex.world, &ex.t0, "entrance", under.as_deref(), &cid, mid).map(|r| r.1).ok())).await?;
+    c.name = asked.or(generated).unwrap_or_else(|| format!("Beneath {bname}"));
+    let c2 = c.clone();
+    let change = app
+        .edit("agent", 0, move |e| {
+            if let Some(o) = e.existing_site(&c, mid) {
+                return Ok(json!({ "existing": o.id }));
+            }
+            c.id = format!("c:{}", e.created.len());
+            let reply = json!({ "tool": "create_feature", "id": c.id, "kind": c.kind, "name": c.name, "x_ft": mid[0].round(), "y_ft": mid[1].round() });
+            e.created.push(c);
+            Ok(reply)
+        })
+        .await?;
+    if let Some(id) = change["existing"].as_str() {
+        return found_spot(app, id.to_string(), &c2, mid).await;
+    }
+    let id = change["id"].as_str().unwrap_or_default().to_string();
+    app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())).await
 }
 
 /// A site asked to be created that was already there (`Created::same_site`), as `get_feature`

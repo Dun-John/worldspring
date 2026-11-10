@@ -1397,6 +1397,22 @@ fn place_name(t0: &T0, id: &str) -> Option<String> {
     PLACES.with(|p| p.borrow().iter().find(|f| f.0 == id).map(|f| f.2.clone()))
 }
 
+/// A created entrance's building as `{id, name}`, and whether it still has the way down (a building gone, ruined or
+/// without a cellar leaves a plain surface opening).
+fn in_building_json(world: &World, t0: &T0, c: &crate::world::Created) -> Value {
+    let id = c.in_building.clone().unwrap_or_default();
+    let name = crate::sitelinks::parse_building(&id).filter(|(li, _)| *li < town::layout_count(t0)).and_then(|(li, bi)| {
+        let l = town::layout(world, t0, li);
+        l.building(bi).map(|b| building_name(world, &l, b))
+    });
+    let mut v = json!({ "id": id, "name": name });
+    if crate::sitelinks::host_of(world, t0, c).is_none() {
+        v["standing"] = json!(false);
+        v["note"] = json!("that building is gone, or has no cellar now: the entrance shows as an opening on the surface");
+    }
+    v
+}
+
 /// A building's display name (renamed, its own, or its trade).
 fn building_name(world: &World, l: &town::Layout, b: &town::Building) -> String {
     let id = format!("b:{}:{}", l.index, b.id);
@@ -1568,7 +1584,8 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
         (Some("t"), [li, k]) if *li < town::layout_count(t0) => {
             crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| format!("{} {}", if t.2 { "Gate tower" } else { "Wall tower" }, k + 1))
         }
-        (Some("u"), [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| cap(e.kind.name())),
+        (Some("u"), [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k)
+            .map(|e| crate::sitelinks::dungeon_name(world, t0, *li).unwrap_or_else(|| cap(e.kind.name()))),
         (Some("k"), [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).filter(|b| crate::interior::has_deep_dungeon(b)).map(|_| "Deep dungeons".into()),
         (Some("w"), [li, ..]) if *li < town::layout_count(t0) => crate::interior::generate_id(world, t0, id).map(|it| it.name.unwrap_or_else(|| it.function.to_string())),
         _ => match world.file.edits.created.iter().find(|c| c.id == id) {
@@ -2077,6 +2094,12 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
             v["sites"] = json!(sites_json(world, t0, li, false));
         } else {
             v["settlement"] = whereabouts(world, t0, li).0;
+            // (A created site's ways underground, as its settlement's sites list has them; an entrance in a building says which.)
+            v["underground"] = json!(l.entrances.iter().filter(|e| e.kind != crate::under::UnderKind::Sewer).map(|e| format!("u:{li}:{}", e.id)).collect::<Vec<_>>());
+            if let Some(c) = crate::sitelinks::created_of(world, t0, li).filter(|c| c.in_building.is_some()) {
+                v["in_building"] = in_building_json(world, t0, c);
+                v["way"] = json!(if crate::sitelinks::trapdoor(c) { "trapdoor" } else { "stairs" });
+            }
         }
     } else if head == "b" && nums.len() == 2 && nums[0] < town::layout_count(t0) {
         let l = town::layout(world, t0, nums[0]);
@@ -2131,6 +2154,11 @@ pub fn get(world: &World, t0: &T0, id: &str) -> Option<Value> {
                     json!({ "kind": kind, "poly": p.poly.iter().map(|q| [r1(q[0]), r1(q[1])]).collect::<Vec<_>>() })
                 })
                 .collect();
+        }
+        // The ways down from its cellar: the sites of the entrances made in it (`create_feature in_building`).
+        let down = crate::sitelinks::entrances_in(world, t0, nums[0], nums[1]);
+        if !down.is_empty() {
+            v["underground"] = json!(down.iter().map(|(el, _)| format!("u:{el}:0")).collect::<Vec<_>>());
         }
         v["structure"] = json!(match b.structure {
             town::Structure::Roofed => "roofed",
@@ -2461,7 +2489,8 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
         out.push(name_entry(world, format!("t:{li}:{k}"), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
     }
     for e in l.entrances.iter().filter(|e| e.kind != crate::under::UnderKind::Sewer) {
-        out.push(name_entry(world, format!("u:{li}:{}", e.id), "underground", cap(e.kind.name()), Some(e.at), true));
+        let name = crate::sitelinks::dungeon_name(world, t0, li).unwrap_or_else(|| cap(e.kind.name()));
+        out.push(name_entry(world, format!("u:{li}:{}", e.id), "underground", name, Some(e.at), true));
     }
     for b in l.buildings.iter().filter(|b| crate::interior::has_deep_dungeon(b)) {
         out.push(name_entry(world, format!("k:{li}:{}", b.id), "underground", "Deep dungeons".into(), Some(geom::centroid(&b.poly)), true));

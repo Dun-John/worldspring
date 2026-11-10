@@ -845,6 +845,13 @@ pub struct Created {
     /// A wall's last corner joins its first (a ring).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
+    /// An entrance's building: the way down is in that building's cellar (`b:<layout>:<id>`,
+    /// stored canonical, or a drawn building's `c:` id on the way in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_building: Option<String>,
+    /// The way down in that cellar: `stairs` (default) or `trapdoor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub way: Option<String>,
     /// Deleted (kept in the list so later sites keep their place).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
@@ -977,6 +984,9 @@ impl Created {
             "wall" => return named && other.closed == self.closed && same(&other.pts, &self.pts),
             _ => {}
         }
+        if self.in_building.is_some() || other.in_building.is_some() {
+            return self.in_building == other.in_building && other.under_kind() == self.under_kind();
+        }
         let near = |p: [f64; 2]| (other.x - p[0]).hypot(other.y - p[1]) <= Self::SAME_SPOT_FT;
         other.under_kind() == self.under_kind() && (near([self.x, self.y]) || near(asked))
     }
@@ -1021,6 +1031,17 @@ impl Created {
                 ("ruin", _) => return Err("under a ruin: dungeon, crypt or catacombs".into()),
                 ("entrance", _) => return Err(format!("under an entrance: {}", UnderKind::CREATABLE.map(|k| k.key()).join(", "))),
                 _ => return Err("'under' is for ruins and entrances".into()),
+            }
+        }
+        if self.in_building.is_some() || self.way.is_some() {
+            if self.kind != "entrance" {
+                return Err("'in_building' and 'way' are for entrances".into());
+            }
+            if self.in_building.is_none() {
+                return Err("'way' needs 'in_building'".into());
+            }
+            if self.way.as_deref().is_some_and(|w| w != "stairs" && w != "trapdoor") {
+                return Err("way: stairs or trapdoor".into());
             }
         }
         let site = self.under_kind();

@@ -344,7 +344,7 @@ pub fn search_underground(world: &World, t0: &T0, query: &str, o: &UnderOpts) ->
         let generated = match kind {
             UnderKind::Sewer => format!("Sewers of {}", settlement["name"].as_str().unwrap_or("the city")),
             UnderKind::KeepDungeon => "Deep dungeons".to_string(),
-            k => cap(k.name()),
+            k => crate::sitelinks::dungeon_name(world, t0, s.layout).unwrap_or_else(|| cap(k.name())),
         };
         let own = edits.renames.get(&s.id);
         let name = own.cloned().unwrap_or_else(|| generated.clone());

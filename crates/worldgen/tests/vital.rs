@@ -2195,7 +2195,8 @@ fn underground_guarantee() {
                 let d = design::SiteDesign::from_interior(&it);
                 let problems = design::check(&it, Some(d.entry));
                 assert!(problems.is_empty(), "{tag}: the designer finds {problems:?}");
-                let again = d.build(&it.id, it.settlement, it.building, &Default::default());
+                let mut again = d.build(&it.id, it.settlement, it.building, &Default::default());
+                worldgen::sitelinks::dress(&world, &t0, li, &mut again);
                 assert_eq!(serde_json::to_string(&again).unwrap(), serde_json::to_string(&it).unwrap(), "{tag}: its design builds something else");
                 let text = design::to_text(&d, &|_, _| None).unwrap_or_else(|e| panic!("{tag}: {e}"));
                 // (Over the same site emptied: the text says it all.)
@@ -4343,4 +4344,53 @@ fn underground_index_matches_sites() {
             }
         }
     }
+}
+
+/// An entrance made in a building's cellar (`Created::in_building`): the cellar has the way down
+/// to the site and the site the way up to the building (both resolve and lead back), the
+/// battlemap draws no opening on the surface for it, and the site takes its entrance's name.
+#[test]
+fn entrance_in_a_cellar_links_both_ways() {
+    use worldgen::battlemap::ShapeKind;
+    use worldgen::world::Created;
+    use worldgen::{interior, sitelinks, town};
+    let file: WorldFile = serde_json::from_str(&world_json(1)).unwrap();
+    // (The towns are the same with or without the entrance: pick the building in a world that has the entrance far off.)
+    let (bid, bi, li, mid, el) = {
+        let ex = Executor::new(World::new(file.clone()).unwrap());
+        let t0 = &ex.t0;
+        let li = (0..t0.settlements.len()).max_by_key(|&i| (t0.settlements[i].tier as u8, t0.settlements[i].population)).unwrap();
+        let l = town::layout(&ex.world, t0, li);
+        let b = l.buildings.iter().find(|b| b.structure == town::Structure::Roofed && interior::has_cellar(b)).expect("a building with a cellar");
+        (format!("b:{li}:{}", b.id), b.id as usize, li, town::geom::centroid(&b.poly), t0.settlements.len() + t0.base_pois)
+    };
+    let made = |in_building: Option<String>| {
+        let mut f = file.clone();
+        let name = "Undermountain".to_string();
+        f.edits.created.push(Created { id: "c:0".into(), kind: "entrance".into(), x: mid[0], y: mid[1], name, in_building, way: Some("stairs".into()), ..Default::default() });
+        Executor::new(World::new(f).unwrap())
+    };
+    let (mut ex, mut plain) = (made(Some(bid.clone())), made(None));
+    assert!(ex.world.file.edits.created[0].check().is_ok());
+    assert_eq!(sitelinks::building_of(&ex.world, &ex.t0, el), Some((li, bi)), "the entrance is not found in its building");
+    let (cellar, site) = (interior::generate_id(&ex.world, &ex.t0, &bid).expect("the building"), interior::generate_id(&ex.world, &ex.t0, &format!("u:{el}:0")).expect("the site"));
+    let to = format!("u:{el}:0");
+    assert!(cellar.levels.iter().any(|lv| lv.z < 0 && lv.links.iter().any(|k| k.to == to)), "the cellar has no way down to {to}");
+    assert!(site.levels.iter().any(|lv| lv.links.iter().any(|k| k.to == bid)), "{to} has no way up to {bid}");
+    let up = site.levels.iter().flat_map(|lv| lv.furniture.iter()).any(|f| f.kind == "exit" && f.name == "stairs up to the cellar");
+    assert!(up, "the way in is not the stairs up to the cellar");
+    assert_eq!(site.name.as_deref(), Some("Undermountain"), "the site does not take its entrance's name");
+    // Both ways resolve and lead back.
+    for it in [&cellar, &site] {
+        for k in it.levels.iter().flat_map(|lv| lv.links.iter()).filter(|k| k.to == bid || k.to == to) {
+            let there = interior::generate_id(&ex.world, &ex.t0, &k.to).unwrap_or_else(|| panic!("a way to {} that doesn't exist", k.to));
+            assert!(there.levels.iter().any(|lv| lv.links.iter().any(|b| b.to == it.id)), "{} has no way back", k.to);
+        }
+    }
+    // The chunk holding the point draws no opening for it (the same entrance in no building does).
+    let (level, size) = (ex.world.geom.max_level, ex.world.geom.tile_size_ft(ex.world.geom.max_level));
+    let key = TileKey::surface(level, (mid[0] / size) as u32, (mid[1] / size) as u32);
+    let openings = |ex: &mut Executor| ex.battlemap(key).structures.iter().filter(|s| s.kind == ShapeKind::Entrance).count();
+    let (a, p) = (openings(&mut ex), openings(&mut plain));
+    assert_eq!(a + 1, p, "the chunk draws {a} openings with the entrance in the building, {p} without");
 }

@@ -693,6 +693,10 @@ battlemap chunk). When that moves it more than 5 ft the result says so: `moved: 
 | `size` | string | optional | The site underground: `small`, `medium`, `large`, `huge`. |
 | `levels` | integer | optional | Levels underground, 1 to 6. |
 | `theme` | string | optional | The site's theme, one of its kind's (below). |
+| `in_building` | string | optional | An `entrance` only: a building's id (`b:<layout>:<n>`, or the `c:` id of a drawn one). The way down is in that building's cellar and `at` is not needed. |
+| `way` | string | optional | With `in_building`: `stairs` (default) or `trapdoor`. |
+
+An entrance with `in_building` goes down from the cellar of a roofed building that has one (not a ruin, an open structure or a yurt): the cellar gets the stairs or trapdoor, the dungeon below them the way back up, and the surface shows no opening. The dungeon takes the entrance's name. One building has one entrance of each kind beneath.
 
 A `camp` is tents round a campfire in a levelled clearing (bedrolls, firewood, a cart with its stores), anywhere;
 a `waystation` is an inn with stables set back from the nearest road. A camp is nudged up to 70 ft so its clearing

@@ -640,7 +640,9 @@ pub fn generate(world: &World, t0: &T0, layout: usize, k: usize) -> Option<Inter
     let frame = Frame { origin, axis, across, nx, ny };
     let surface = t0.sample(e.at[0], e.at[1], 20.0) as f32;
     let caves = (age, hash3(world.stream("under"), town::rng_key(t0, layout), k as i64, 0xb4ea));
-    site(t0, &l, e.kind, format!("u:{layout}:{k}"), (layout as u32, k as u32), frame, depth, Some(entry.1 * nx + entry.0), surface, (theme, s * s), caves, &mut rng)
+    let mut it = site(t0, &l, e.kind, format!("u:{layout}:{k}"), (layout as u32, k as u32), frame, depth, Some(entry.1 * nx + entry.0), surface, (theme, s * s), caves, &mut rng)?;
+    crate::sitelinks::dress(world, t0, layout, &mut it);
+    Some(it)
 }
 
 /// The sewers under section (`sx`, `sy`) of the world (`SEWER_SECTION_FT` squares), id

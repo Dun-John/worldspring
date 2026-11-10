@@ -1476,6 +1476,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // mausoleum headhouse, 4-6 a wild site's by theme: `under::surface`).
         for e in &l.entrances {
             use crate::town::geom::{add, mul};
+            if crate::sitelinks::building_of(world, t0, l.index as usize).is_some() {
+                continue;
+            }
             let in_yard = l.buildings.iter().any(|b| b.structure == crate::town::Structure::Open && crate::town::geom::contains(&b.poly, e.at));
             let style = match e.kind {
                 crate::under::UnderKind::Dungeon | crate::under::UnderKind::Crypt => 1u8,

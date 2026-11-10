@@ -127,7 +127,7 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
                 return Some(Hit::Building {
                     id,
                     settlement: l.index,
-                    name: None,
+                    name: if e.kind == crate::under::UnderKind::Sewer { None } else { crate::sitelinks::dungeon_name(world, t0, l.index as usize) },
                     function: e.kind.entrance_name(),
                     category: Some("underground"),
                     ward: "underground",

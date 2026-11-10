@@ -241,7 +241,7 @@ pub fn deepest_cellar(d: &SiteDesign) -> Option<usize> {
 
 /// The interior a design builds for building `b` of layout `l` (its grid `sh`; uploaded
 /// pictures' rules `metas`), with the ways to other sites its deepest cellar should have.
-pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::Building, sh: &Shell, metas: &std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> (Interior, Vec<&'static str>) {
+pub fn build(world: &World, d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::Building, sh: &Shell, metas: &std::collections::BTreeMap<String, crate::world::SpriteMeta>) -> (Interior, Vec<&'static str>) {
     let stairs = stairs_of(d);
     let deepest = deepest_cellar(d);
     let mut want = Vec::new();
@@ -251,13 +251,13 @@ pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::B
             let mut lvl = level_of(d, li, Some(&sh.inside), &mut sprites);
             lvl.elevation_ft = b.pad_ft + STOREY_FT * lvl.z as f32;
             if Some(li) == deepest {
-                want = cellar_links(Some(&mut lvl), t0, l, b, sh, stairs);
+                want = cellar_links(Some(&mut lvl), world, t0, l, b, sh, stairs);
             }
             lvl
         })
         .collect();
     if deepest.is_none() {
-        want = cellar_links(None, t0, l, b, sh, stairs);
+        want = cellar_links(None, world, t0, l, b, sh, stairs);
     }
     let it = Interior {
         id: format!("b:{}:{}", l.index, b.id),
@@ -485,7 +485,7 @@ pub fn designed(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     if d.kind != BUILDING || d.fingerprint != fingerprint(&sh, b) || d.nx as usize != sh.nx || d.ny as usize != sh.ny {
         return None;
     }
-    let (it, want) = build(d, t0, l, settlement, b, &sh, &world.file.edits.sprites);
+    let (it, want) = build(world, d, t0, l, settlement, b, &sh, &world.file.edits.sprites);
     check(&it, &sh, &want).iter().all(|p| !p.blocking).then_some(it)
 }
 
@@ -525,7 +525,7 @@ pub fn problems_as(world: &World, t0: &T0, id: &str, d: &SiteDesign, floors: Opt
     if d.nx as usize != sh.nx || d.ny as usize != sh.ny || d.fingerprint != fingerprint(&sh, b) {
         out.push(Problem { level: 0, at: None, text: "the design was made for the building as it was: its footprint or storeys have changed since".into(), blocking: true });
     }
-    let (it, want) = build(d, t0, &l, li, b, &sh, &world.file.edits.sprites);
+    let (it, want) = build(world, d, t0, &l, li, b, &sh, &world.file.edits.sprites);
     out.extend(check(&it, &sh, &want));
     out.extend(d.unfitted(&it));
     Ok((it, out))
@@ -744,7 +744,7 @@ pub fn set_aside(world: &World, t0: &T0) -> Vec<(String, String)> {
                 if d.fingerprint != fingerprint(&sh, b) {
                     Some("made for the building as it was: its footprint or storeys have changed since".into())
                 } else {
-                    let (it, want) = build(d, t0, &l, li, b, &sh, &world.file.edits.sprites);
+                    let (it, want) = build(world, d, t0, &l, li, b, &sh, &world.file.edits.sprites);
                     check(&it, &sh, &want).into_iter().find(|p| p.blocking).map(|p| format!("it breaks a rule now: {}", p.text))
                 }
             }

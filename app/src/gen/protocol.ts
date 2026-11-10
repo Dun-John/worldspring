@@ -138,6 +138,9 @@ export interface Created {
   pts?: [number, number][];
   gates?: number[];
   closed?: boolean;
+  /** An entrance in a building's cellar (`b:<layout>:<id>`) and the way down there (`stairs` or `trapdoor`). */
+  in_building?: string;
+  way?: string;
   removed?: boolean;
 }
 
