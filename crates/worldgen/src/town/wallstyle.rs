@@ -414,12 +414,14 @@ fn depth(poly: &[P], p: P) -> f64 {
 /// 1.5 ft of it (as walls and towers were raised before), its wall the ring of those with a square
 /// beside them (corners too) off it, the rest its floor (where none is so, as in a D, those with all
 /// four squares beside them on it); the door the ring's square on the floor's side and open ground's
-/// (`open` at its middle) furthest toward `inward` (a unit vector). Squares are on the global lattice
+/// (`open` at its middle; ground that leads away first; toward `inward` through up to two squares
+/// of a wall behind it, `walled`) furthest toward `inward` (a unit vector). Squares are on the global lattice
 /// (`floor(x / sq)`), so every chunk finds the same.
-pub fn raster(poly: &[P], inward: P, sq: f64, open: &dyn Fn(P) -> bool, free: &dyn Fn(P) -> bool) -> Raster {
+pub fn raster(poly: &[P], inward: P, sq: f64, open: &dyn Fn(P) -> bool, free: &dyn Fn(P) -> bool, walled: &dyn Fn(P) -> bool) -> Raster {
     let bb = poly.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
-    let (i0, j0) = (crate::core::floor((bb[0] - 2.0) / sq) as i64 - 1, crate::core::floor((bb[1] - 2.0) / sq) as i64 - 1);
-    let (i1, j1) = (crate::core::floor((bb[2] + 2.0) / sq) as i64 + 1, crate::core::floor((bb[3] + 2.0) / sq) as i64 + 1);
+    // (Room past the ring for a door through the wall behind it, below.)
+    let (i0, j0) = (crate::core::floor((bb[0] - 2.0) / sq) as i64 - 3, crate::core::floor((bb[1] - 2.0) / sq) as i64 - 3);
+    let (i1, j1) = (crate::core::floor((bb[2] + 2.0) / sq) as i64 + 3, crate::core::floor((bb[3] + 2.0) / sq) as i64 + 3);
     let (nx, ny) = ((i1 - i0 + 1) as usize, (j1 - j0 + 1) as usize);
     let mid = |i: i64, j: i64| [((i0 + i) as f64 + 0.5) * sq, ((j0 + j) as f64 + 0.5) * sq];
     let on: Vec<bool> = (0..nx * ny).map(|k| depth(poly, mid((k % nx) as i64, (k / nx) as i64)) >= -1.5).collect();
@@ -457,6 +459,18 @@ pub fn raster(poly: &[P], inward: P, sq: f64, open: &dyn Fn(P) -> bool, free: &d
             if way.is_empty() || way.len() > 2 || at(i + k * dx, j + k * dy) != 0 {
                 continue;
             }
+            // (On toward the town through a wall standing across the way out behind the tower, as a
+            // D's flat back has it: up to two squares of it, where open ground lies past them.)
+            let rings = way.len();
+            if dot([dx as f64, dy as f64], inward) > 0.5 {
+                while way.len() < rings + 2 && walled(mid(i + k * dx, j + k * dy)) {
+                    way.push((i + k * dx, j + k * dy));
+                    k += 1;
+                }
+                if way.len() > rings && !open(mid(i + k * dx, j + k * dy)) {
+                    continue;
+                }
+            }
             let (ox, oy) = (i + k * dx, j + k * dy);
             let level = if !way.iter().all(|&(a, b)| free(mid(a, b))) {
                 1
@@ -467,6 +481,8 @@ pub fn raster(poly: &[P], inward: P, sq: f64, open: &dyn Fn(P) -> bool, free: &d
             } else {
                 4
             };
+            // (Onto ground that leads away, not a pocket between the wall and the houses by it.)
+            let level = if level >= 3 && leads_out(poly, sq, &mid, &|i, j| at(i, j) == 0 && open(mid(i, j)), (ox, oy)) { level + 2 } else { level };
             let toward = dot(sub(mid(way[0].0, way[0].1), c), inward);
             let score = (level, -(way.len() as i64), toward);
             let better = best.as_ref().is_none_or(|(b, _)| score.0.cmp(&b.0).then(score.1.cmp(&b.1)).then(score.2.total_cmp(&b.2)).is_gt());
@@ -481,6 +497,35 @@ pub fn raster(poly: &[P], inward: P, sq: f64, open: &dyn Fn(P) -> bool, free: &d
         }
     }
     Raster { i0, j0, nx, ny, cells }
+}
+
+/// Whether the ground off a tower's door at square `from` (`mid` gives a square's middle; `open`
+/// whether one can be walked) leads 30 ft past the tower's outline `poly`, square to square, as one
+/// leaves it on the battlemap.
+fn leads_out(poly: &[P], sq: f64, mid: &dyn Fn(i64, i64) -> P, open: &dyn Fn(i64, i64) -> bool, from: (i64, i64)) -> bool {
+    let c = centroid(poly);
+    let far = poly.iter().map(|p| dist(*p, c)).fold(0.0, f64::max) + 30.0;
+    let k = crate::core::ceil(far / sq) as i64 + 2;
+    let (ci, cj) = (from.0, from.1);
+    let side = (2 * k + 1) as usize;
+    let mut seen = vec![false; side * side];
+    let idx = |i: i64, j: i64| ((j - cj + k) as usize) * side + (i - ci + k) as usize;
+    let mut queue = std::collections::VecDeque::from([from]);
+    seen[idx(ci, cj)] = true;
+    while let Some((i, j)) = queue.pop_front() {
+        if dist(mid(i, j), c) > far {
+            return true;
+        }
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (a, b) = (i + dx, j + dy);
+            if (a - ci).abs() > k || (b - cj).abs() > k || seen[idx(a, b)] || !open(a, b) {
+                continue;
+            }
+            seen[idx(a, b)] = true;
+            queue.push_back((a, b));
+        }
+    }
+    false
 }
 
 /// A tower of `l` (`interior::towers`: centre, radius, gate tower) on the battlemap (`raster`): its
@@ -503,7 +548,14 @@ pub fn tower_raster(l: &Layout, t: P, r: f64, gate: bool, sq: f64) -> (TowerShap
             && !others.iter().any(|&(o, ro)| dist(p, o) <= ro + 1.5)
             && !blocks.iter().any(|b| contains(b, p) || (0..b.len()).any(|k| seg_dist(p, b[k], b[(k + 1) % b.len()]) <= 1.5))
     };
-    (shape, raster(&poly, inward, sq, &open, &free))
+    // (A wall's band, clear of houses, towers and gate blocks: a door may pass through it.)
+    let walled = |p: P| {
+        free(p)
+            && walls.iter().any(|&(a, b)| seg_dist(p, a, b) <= reach)
+            && !others.iter().any(|&(o, ro)| dist(p, o) <= ro + 1.5)
+            && !blocks.iter().any(|b| contains(b, p) || (0..b.len()).any(|k| seg_dist(p, b[k], b[(k + 1) % b.len()]) <= 1.5))
+    };
+    (shape, raster(&poly, inward, sq, &open, &free, &walled))
 }
 
 /// A tower of `l` (`interior::towers`: centre, radius, gate tower) as it is built: its shape, the way it
