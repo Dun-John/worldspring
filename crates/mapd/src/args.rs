@@ -525,7 +525,8 @@ fn walk(s: &Value, v: &mut Value, path: &str, errs: &mut Vec<String>, extra: &[&
         Value::Object(obj) => {
             let Some(props) = s["properties"].as_object() else { return };
             let required: Vec<&str> = s["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-            obj.retain(|k, x| !x.is_null() || required.contains(&k.as_str()));
+            // (A null is as good as left out, except where the schema allows null: `in_building: null` means out.)
+            obj.retain(|k, x| !x.is_null() || required.contains(&k.as_str()) || props.get(k).is_some_and(|p| p["type"].as_array().is_some_and(|t| t.iter().any(|t| t == "null"))));
             let unknown: Vec<String> = obj.keys().filter(|k| !props.contains_key(*k) && !extra.contains(&k.as_str())).cloned().collect();
             for k in unknown {
                 let hint = suggest(&k, props.keys().map(String::as_str).filter(|p| !obj.contains_key(*p)))

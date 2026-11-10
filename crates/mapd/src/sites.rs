@@ -68,11 +68,33 @@ async fn resolve(app: &Shared, ids: Vec<String>, single: bool) -> Result<Vec<Sit
         .await
 }
 
+/// The entrances (created ones) that stand in these buildings (`b:<layout>:<n>`, or a drawn building's `c:` id), as they stand now:
+/// `[{id, name, now}]`, for the reply of a change that takes the building away or leaves it without a cellar.
+pub async fn entrances_standing_in(app: &Shared, ids: Vec<String>) -> Vec<Value> {
+    app.worker
+        .with(move |ex| {
+            let (w, t0) = (&ex.world, &ex.t0);
+            let mut out: Vec<Value> = Vec::new();
+            for id in &ids {
+                let id = if id.starts_with("c:") { agent::drawn_pair(w, t0, id).map(|p| p.2).unwrap_or_default() } else { id.clone() };
+                let Some((li, bi)) = worldgen::sitelinks::parse_building(&id) else { continue };
+                for (_, c) in worldgen::sitelinks::entrances_in(w, t0, li, bi) {
+                    let name = agent::name_of(w, t0, &c.id).unwrap_or_else(|| c.name.clone());
+                    out.push(json!({ "id": c.id, "name": name, "now": format!("opens on the ground at ({}, {})", c.x.round(), c.y.round()) }));
+                }
+            }
+            Ok::<_, String>(out)
+        })
+        .await
+        .unwrap_or_default()
+}
+
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = crate::args::ids(a)?;
     let sites = resolve(app, ids.clone(), a["ids"].is_null()).await?;
     let mut seen = std::collections::HashSet::new();
     let sites: Vec<Site> = sites.into_iter().filter(|s| seen.insert(s.cid.clone())).collect();
+    let entrances_out = entrances_standing_in(app, sites.iter().filter_map(|s| s.bid.clone()).collect()).await;
     app.edit("agent", 0, move |e| {
         for s in &sites {
             if e.created.iter().any(|c| c.id == s.cid && c.removed) {
@@ -123,6 +145,9 @@ async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
         if any {
             reply["note"] = json!("what still points at a deleted site is kept as it is, for restore_feature");
         }
+        if !entrances_out.is_empty() {
+            reply["entrances_out"] = json!(entrances_out);
+        }
         Ok(reply)
     })
     .await
@@ -155,6 +180,8 @@ async fn restore(app: &Shared, a: &Value) -> Result<Value, String> {
                     "castle" | "wall" => agent::works_spot(w, t0, c, &c.id, Some(*li)).and_then(|s| {
                         if s.in_way.is_empty() { Ok(()) } else { Err(format!("the world's own buildings are in the way: {}", s.in_way.iter().map(|b| b.0.as_str()).collect::<Vec<_>>().join(", "))) }
                     }),
+                    // (An entrance in a building stands where the building does: no check of its own.)
+                    _ if c.in_building.is_some() => Ok(()),
                     _ => agent::creation_spot(w, t0, &c.kind, c.under.as_deref(), &c.id, [c.x, c.y]).map(|_| ()),
                 };
                 r.map_err(|e| format!("{given} can't be restored, its place is taken: {e}"))?;

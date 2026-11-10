@@ -2404,7 +2404,7 @@
     const near = (overlay?.features ?? []).find((f) => SETTLEMENT_KINDS.includes(f.kind) && Math.hypot(f.x - x, f.y - y) < 3 * MI);
     if (near) return toast(`Too close to ${near.name}: keep settlements 3 miles apart`);
     if (strokes.some((s) => s.tool === 'pin' && Math.hypot(s.pts[0][0] - x, s.pts[0][1] - y) < 3 * MI)) return toast('Too close to a settlement placed by hand: keep them 3 miles apart');
-    const spot = await view.gen.spot('ruin', undefined, 'c:0', x, y);
+    const spot = await view.gen.spot('entrance', undefined, 'c:0', x, y);
     if (!spot) return toast('The map could not answer: try again');
     if ('error' in spot) return toast(spot.error.charAt(0).toUpperCase() + spot.error.slice(1));
     const pin = pinStroke([x, y], { tier: st.tier, kind: st.livesBy, capital: st.capital, wards: st.wards, name: c.name, added: true });

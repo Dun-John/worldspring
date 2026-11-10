@@ -60,7 +60,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   indentation), and `render_view` sends a JPEG of 1,024 px unless asked for more.
 - **Safe to repeat:** a create that is asked for again with the same arguments adds nothing and returns what is already
   there, with `"existing": true` and a `note` that says so (never "created"). Which tools, and what counts as the same:
-  `create_feature` (the same kind of site within 300 ft), `create_building` (the same footprint; with `near`, an
+  `create_feature` (the same kind of site within 300 ft; an entrance in a building: the same building and beneath), `create_building` (the same footprint; with `near`, an
   identical call: mapd remembers this session's `near` calls, last 500, until it restarts, and returns the building of
   an identical earlier call while it stands. Change anything, e.g. the name, to make a second), `create_npc` (the same
   name and place), `create_plot` (the same title), `place_objects` (new objects: the same kind within 0.5 ft with the
@@ -77,7 +77,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   back, and what pointed at it is as it was. Every tool says in its `annotations` whether it is read-only, destructive,
   idempotent; none reaches outside the world (`openWorldHint: false`).
 - **Moves are reported:** a tool that puts something elsewhere than asked (a site pushed off a river onto dry land, a
-  footprint snapped to the grid) says so when it is more than 5 ft: `moved: {x_ft, y_ft, ft, why}`.
+  footprint snapped to the grid, an entrance moved into or out of a building) says so when it is more than 5 ft: `moved: {x_ft, y_ft, ft, why}`.
 
 | What | Name | Also accepted | Tools |
 |---|---|---|---|
@@ -681,6 +681,12 @@ Creating the same site again adds nothing: if a live site of the same `kind` (an
 `"existing": true` (and `note` says it was already there, not created). A script that creates sites can be run again
 safely; for a second one on purpose, ask for it somewhere else.
 
+A site does not go on top of what stands: each kind keeps a disc round its point clear of buildings (the world's, a castle's, drawn ones, other sites'), walls
+and, but for an `entrance`, streets and squares (a bare `entrance` may sit in a street or a square; one `in_building` skips the check). The disc is
+65 ft for a `tower`, 55 for a `camp` and a `mine`, 120 for a `waystation`, 115 for a `ruin`, 12 for a `cave` and a `lava_tube`, 10 for an `entrance`.
+The refusal names what is in the way and where, and the nearest clear spot: `that overlaps Dragonspear Castle (c:5), at (x, y); the nearest clear spot
+is (x, y), 140 ft away`. The same-site rule above comes first: asking again for a site that stands is that site, not a refusal.
+
 A site asked for in a river or within 150 ft of one is put on the bank (a camp's clearing is also kept inside its
 battlemap chunk). When that moves it more than 5 ft the result says so: `moved: {x_ft, y_ft, ft, why}`.
 
@@ -696,7 +702,12 @@ battlemap chunk). When that moves it more than 5 ft the result says so: `moved: 
 | `in_building` | string | optional | An `entrance` only: a building's id (`b:<layout>:<n>`, or the `c:` id of a drawn one). The way down is in that building's cellar and `at` is not needed. |
 | `way` | string | optional | With `in_building`: `stairs` (default) or `trapdoor`. |
 
-An entrance with `in_building` goes down from the cellar of a roofed building that has one (not a ruin, an open structure or a yurt): the cellar gets the stairs or trapdoor, the dungeon below them the way back up, and the surface shows no opening. The dungeon takes the entrance's name. One building has one entrance of each kind beneath.
+An entrance with `in_building` goes down from the cellar of a roofed building that has one (not a ruin, an open structure or a yurt): the cellar gets the stairs or trapdoor, the dungeon below them the way back up, and the surface shows no opening. The dungeon takes the entrance's name. One building has one entrance of each kind beneath. Asking again for the same building and kind is that entrance (`existing: true`). `update_feature` moves an
+entrance into a building, or out, keeping its ids.
+`get_feature` of a created site lists its `underground` ids; of an entrance in a building, `in_building` (`{id, name}`, with `standing: false` and a note
+when the building is gone, ruined or has no cellar: the entrance then opens on the ground) and `way`; of a building, its `underground` ids. A change that
+takes a building away or leaves it without a cellar (`remove_buildings`, `delete_feature` of a drawn one, `update_building` with `structure: ruin`) lists
+the entrances that stood in it as `entrances_out: [{id, name, now}]`; restoring the building brings the way down back.
 
 A `camp` is tents round a campfire in a levelled clearing (bedrolls, firewood, a cart with its stores), anywhere;
 a `waystation` is an inn with stables set back from the nearest road. A camp is nudged up to 70 ft so its clearing
@@ -791,8 +802,13 @@ building drawn by hand takes either id, as in `rename_feature` and `annotate_fea
 | `name` | string | optional | |
 | `notes` | string | optional | Replaces the notes text. (`text` is accepted too.) |
 | `tags` | string[] | optional | Replaces the tags; `[]` clears them. |
+| `in_building` | string or null | optional | An entrance made with `create_feature` only: a building's id (`b:<layout>:<n>`, or the `c:` id of a drawn one) moves it into that building's cellar, its point the building's middle, by the checks and refusals of `create_feature` `in_building`. `null` takes it back out, to `at` if given, else the nearest clear spot just outside the building. Its ids (`c:<n>`, `u:<layout>:0`) stay, so NPCs, plots, notes and renames still point at it. |
+| `way` | string | optional | `stairs` or `trapdoor`: with `in_building`, or alone for an entrance already in a building. |
+| `at` | id, `{x_ft, y_ft}` or `[x_ft, y_ft]` | optional | Only with `in_building: null`: where outside (checked as a bare entrance is). |
 
-Give at least one of `name`, `notes` and `tags`; with none the call is refused.
+Give at least one of the others; with none the call is refused. A move says where it went (`moved: {x_ft, y_ft, ft, why}`) and gives `in_building` and `way`.
+`in_building` on anything but an entrance is refused (`in_building is for entrances`); no other feature moves, and `at` or `x_ft`/`y_ft` without `in_building`
+are refused. A design drawn by hand for the site underground (`set_site_design`) is set aside when the entrance has moved away from it (a `note` says so).
 
 ```json
 { "name": "update_feature", "arguments": { "id": "c:2", "name": "Bastion of the Drowned", "notes": "Flooded at high tide.", "tags": ["dungeon", "undead"] } }
@@ -1842,7 +1858,8 @@ Asked for any of these, say so rather than looking for a tool:
 - **Make or remove settlements.** Cities, towns and villages are generated; an agent can rename, annotate and hide
   them, lay a town out anew (`edit_town`), add and take away buildings, but not found a new city or delete one.
 - **Move a feature.** Names, notes, tags and hiding change; a site's, a river's or a settlement's place does not
-  (delete and create a site again to put it elsewhere; a building: `update_building`).
+  (delete and create a site again to put it elsewhere; a building: `update_building`). The one move is an entrance
+  into a building's cellar and out again (`update_feature` `in_building`).
 - **See what the user sees without the app.** `render_view` and `focus_view` need the map app open and connected.
 
 ---

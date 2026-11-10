@@ -189,6 +189,7 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
     // Its inside designed by hand: new storeys follow (in the same change); a new footprint or a
     // ruin sets the design aside.
     let reshaped = change.poly.is_some() || change.structure.as_deref() == Some("ruin");
+    let out = if change.structure.as_deref() == Some("ruin") { crate::sites::entrances_standing_in(app, vec![id.clone()]).await } else { Vec::new() };
     let (edit, design, aside) = app
         .worker
         .with(move |ex| {
@@ -226,6 +227,9 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
     .await?;
     let mut v = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "changed, but it could not be read back".to_string())).await?;
     v["tool"] = json!("update_building");
+    if !out.is_empty() {
+        v["entrances_out"] = json!(out);
+    }
     if aside {
         v["note"] = json!("its inside was designed by hand for the building as it was: that design is set aside (the generated interior stands) until the footprint and storeys are as they were; set_site_design makes a new one");
     }
@@ -255,7 +259,11 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
     if removed.is_empty() {
         return Ok(json!({ "tool": "remove_buildings", "removed": [], "note": "no building of the world's own has its middle there" }));
     }
-    let reply = json!({ "tool": "remove_buildings", "count": removed.len(), "removed": removed });
+    let mut reply = json!({ "tool": "remove_buildings", "count": removed.len(), "removed": removed });
+    let out = crate::sites::entrances_standing_in(app, removed.clone()).await;
+    if !out.is_empty() {
+        reply["entrances_out"] = json!(out);
+    }
     app.edit("agent", 0, move |e| {
         for (id, b) in edits {
             e.buildings.insert(id, b);
@@ -373,6 +381,7 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
         }
     };
     let creating = id.is_none();
+    let out = if !creating && a["structure"].as_str() == Some("ruin") { crate::sites::entrances_standing_in(app, vec![c.id.clone()]).await } else { Vec::new() };
     let near_key = if creating && poly.is_none() && !a["near"].is_null() { near_key(app, a) } else { None };
     let (was_floors, was_ruin) = (c.floors, c.structure.as_deref() == Some("ruin"));
     // `clear` (a new building only): the world's own buildings in the way are taken away with it.
@@ -546,6 +555,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             }
             if let Some(m) = moved {
                 v["moved"] = m;
+            }
+            if !out.is_empty() {
+                v["entrances_out"] = json!(out);
             }
             if removed_json.as_array().is_some_and(|r| !r.is_empty()) {
                 v["removed"] = removed_json;

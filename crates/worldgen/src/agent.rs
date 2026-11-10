@@ -211,6 +211,57 @@ pub fn created_detail(c: &crate::world::Created) -> String {
 /// inside the map, stepped out of river channels (as generated sites are); with a name for it
 /// (the nearest settlement's naming culture's), seeded by its id. The app and mapd both place sites through this.
 pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2]) -> Result<([f64; 2], String), String> {
+    creation_spot_with(world, t0, kind, under, id, p, Overlap::Refuse)
+}
+
+/// What `creation_spot_with` does about what stands where the site would.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Overlap {
+    /// Refuse, naming the blocker with its id and where it is, and the nearest clear spot.
+    Refuse,
+    /// Refuse in a person's words: no ids, no points in world ft (the app).
+    RefuseShort,
+    /// No check (an entrance in a building).
+    Skip,
+}
+
+/// How far a point site of `kind` reaches from its point (ft): the largest extent of what `town::sites::generate` lays out
+/// (tower and its annex, camp ring and cart, the inn, stables and yard of a waystation, a ruin's shells, a mine's shed and yard).
+pub fn site_reach(kind: &str) -> f64 {
+    match kind {
+        "tower" => 65.0,
+        "camp" => 55.0,
+        "waystation" => 120.0,
+        "ruin" => 115.0,
+        "mine" => 55.0,
+        "cave" | "lava_tube" => 12.0,
+        _ => 10.0,
+    }
+}
+
+/// What a site of `kind` at `p` stands on that it must not: buildings, castles and walls, and (all but a bare entrance, which may sit in a
+/// street or a square) streets and squares; the one nearest `p`, with the nearest clear spot's move.
+fn site_overlap(world: &World, t0: &T0, kind: &str, p: P) -> Option<(Blocker, Option<P>)> {
+    let disc = geom::circle(p, site_reach(kind), 16);
+    let free = kind == "entrance";
+    let (found, _) = spot_blockers(world, t0, &disc, None, false).ok()?;
+    let b = found.into_iter().filter(|b| matches!(b.what, "building" | "wall") || (!free && matches!(b.what, "street" | "square"))).min_by(|a, b| geom::dist(a.at, p).total_cmp(&geom::dist(b.at, p)))?;
+    Some((b, nearest_clear(world, t0, &disc, None, "", None, false).map(|r| r.1)))
+}
+
+/// Where an entrance taken out of its building may stand: the spot nearest `from` (the building's middle) that a free-standing entrance
+/// may take (`creation_spot`: dry, clear of buildings, castles and walls; a street or a square is fine), on 5-ft steps to 100 ft.
+pub fn entrance_out_spot(world: &World, t0: &T0, from: P) -> Option<P> {
+    let mut offsets: Vec<(i32, i32)> = (-20..=20).flat_map(|i| (-20..=20).map(move |j| (i, j))).filter(|&(i, j)| i * i + j * j <= 400).collect();
+    offsets.sort_by_key(|&(i, j)| (i * i + j * j, i, j));
+    offsets.into_iter().find_map(|(i, j)| {
+        let q = [from[0] + 5.0 * i as f64, from[1] + 5.0 * j as f64];
+        creation_spot_with(world, t0, "entrance", None, "", q, Overlap::Refuse).ok().filter(|(r, _)| geom::dist(*r, q) < 1.0).map(|(r, _)| r)
+    })
+}
+
+/// `creation_spot`, with `overlap` saying what to do about what stands there.
+pub fn creation_spot_with(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2], overlap: Overlap) -> Result<([f64; 2], String), String> {
     use crate::t0::names::{NameKind, Namer};
     use crate::under::UnderKind;
     if p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft {
@@ -227,6 +278,18 @@ pub fn creation_spot(world: &World, t0: &T0, kind: &str, under: Option<&str>, id
     // Sea or lake as the map draws the shore (`town::Shore`, as the site is then built).
     if town::Shore::new(world, t0, [p[0] - 1.0, p[1] - 1.0, p[0] + 1.0, p[1] + 1.0]).wet(p) {
         return Err("that place is under water: pick dry land".to_string());
+    }
+    if overlap != Overlap::Skip {
+        if let Some((b, near)) = site_overlap(world, t0, kind, p) {
+            let short = overlap == Overlap::RefuseShort;
+            let what = if short { b.short() } else { b.message(false) };
+            let ft = |d: P| crate::core::round(geom::len(d));
+            return Err(match near {
+                Some(d) if short => format!("{what}; the nearest clear spot is {} ft away", ft(d)),
+                Some(d) => format!("{what}; the nearest clear spot is ({}, {}), {} ft away", crate::core::round(p[0] + d[0]), crate::core::round(p[1] + d[1]), ft(d)),
+                None => format!("{what}; there is no clear spot within 400 ft"),
+            });
+        }
     }
     let culture = t0.settlements.iter().min_by(|a, b| (a.x - p[0]).hypot(a.y - p[1]).total_cmp(&(b.x - p[0]).hypot(b.y - p[1]))).map(|s| s.culture as usize).unwrap_or(0);
     let nk = match (kind, under.and_then(UnderKind::parse)) {
@@ -1329,7 +1392,7 @@ fn poly_seg_dist(poly: &[P], a: P, b: P) -> f64 {
 
 /// `creation_spot` as JSON: `{x, y, name}` or `{error}`.
 pub fn creation_spot_json(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2]) -> String {
-    match creation_spot(world, t0, kind, under, id, p) {
+    match creation_spot_with(world, t0, kind, under, id, p, Overlap::RefuseShort) {
         Ok((q, name)) => json!({ "x": q[0], "y": q[1], "name": name }),
         Err(e) => json!({ "error": e }),
     }
