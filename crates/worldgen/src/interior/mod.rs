@@ -18,6 +18,7 @@ pub mod design;
 pub mod hall;
 pub mod hub;
 pub mod shape;
+mod towerplan;
 
 use crate::World;
 use crate::core::rng::{Pcg32, hash3};
@@ -5261,7 +5262,9 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
     }
     // (A square tower's grid along its sides.)
     let square = if gate { None } else { l.square_tower(at) };
-    let u = square.or_else(|| dirs.first().copied()).unwrap_or([1.0, 0.0]);
+    // (A D or an octagon's inside its own outline, its grid the way it faces: `towerplan`.)
+    let shaped = if square.is_some() { None } else { towerplan::outline(&l, at, r, gate) };
+    let u = square.or(shaped.as_ref().map(|s| s.0)).or_else(|| dirs.first().copied()).unwrap_or([1.0, 0.0]);
     let v = [-u[1], u[0]];
     // A square grid centred on the tower (its centre in the middle of a square), reaching three
     // squares of wall walk beyond the tower each side.
@@ -5272,6 +5275,9 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
     let in_tower: Vec<bool> = (0..n * n)
         .map(|q| {
             let d = sub(centre(q % n, q / n), at);
+            if let Some((_, poly)) = &shaped {
+                return towerplan::covers(poly, centre(q % n, q / n));
+            }
             if square.is_some() { dot(d, u).abs() <= r && dot(d, v).abs() <= r } else { geom::dist(centre(q % n, q / n), at) <= r + 1.5 }
         })
         .collect();
