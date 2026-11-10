@@ -39,6 +39,8 @@ pub struct Site {
     pub at: [f64; 2],
     /// Sewers: the 480-ft sections with a street grate (else 0).
     pub sections: u32,
+    /// Sewers: every street grate (a sewer is in an area or near a point by any of them).
+    pub grates: Vec<[f64; 2]>,
 }
 
 struct Entry {
@@ -138,13 +140,13 @@ fn layout_sites(world: &World, t0: &T0, l: &town::Layout, li: usize, spec: Optio
         let (size, depth, theme) = under::resolve(e.kind, sp, ruin, cold, &mut rng);
         let share = unit(hash3(world.stream("under"), key, k, 0x5e4c)) < 0.25;
         let theme = if sp.theme.is_none() && theme.key == "temple" && (share || under::wet_ground(t0, e.at)) { under::SUNKEN_TEMPLE } else { theme.key };
-        out.push(Site { id: format!("u:{li}:{}", e.id), kind: e.kind, theme, levels: depth as u8, size: size.name(), layout: li, at: e.at, sections: 0 });
+        out.push(Site { id: format!("u:{li}:{}", e.id), kind: e.kind, theme, levels: depth as u8, size: size.name(), layout: li, at: e.at, sections: 0, grates: Vec::new() });
     }
     for b in l.buildings.iter().filter(|b| crate::interior::has_deep_dungeon(b)) {
         let sh = crate::interior::Shell::of(l, b);
         let depth = if (sh.nx + 28) * (sh.ny + 28) > 6000 { 3 } else { 2 };
         let size = if depth >= 3 { "large" } else { "medium" };
-        out.push(Site { id: format!("k:{li}:{}", b.id), kind: UnderKind::KeepDungeon, theme: "keep_dungeon", levels: depth, size, layout: li, at: geom::centroid(&b.poly), sections: 0 });
+        out.push(Site { id: format!("k:{li}:{}", b.id), kind: UnderKind::KeepDungeon, theme: "keep_dungeon", levels: depth, size, layout: li, at: geom::centroid(&b.poly), sections: 0, grates: Vec::new() });
     }
     let grates: Vec<[f64; 2]> = l.entrances.iter().filter(|e| e.kind == UnderKind::Sewer).map(|e| e.at).collect();
     if !grates.is_empty() {
@@ -159,7 +161,7 @@ fn layout_sites(world: &World, t0: &T0, l: &town::Layout, li: usize, spec: Optio
             40..120 => "large",
             _ => "huge",
         };
-        out.push(Site { id: format!("w:{li}"), kind: UnderKind::Sewer, theme: "sewer", levels: 2, size, layout: li, at, sections: secs.len() as u32 });
+        out.push(Site { id: format!("w:{li}"), kind: UnderKind::Sewer, theme: "sewer", levels: 2, size, layout: li, at, sections: secs.len() as u32, grates });
     }
     out
 }
@@ -315,7 +317,9 @@ pub fn search_underground(world: &World, t0: &T0, query: &str, o: &UnderOpts) ->
             continue;
         }
         let (settlement, site) = crate::agent::whereabouts(world, t0, s.layout);
-        if !o.hidden && (edits.hidden.contains(&s.id) || site.as_ref().and_then(|v| v["id"].as_str()).is_some_and(|id| edits.hidden.contains(id))) {
+        // (Hidden with the site or the settlement it is under: a hidden city's sewers and sites too.)
+        let hides = |v: &Value| v["id"].as_str().is_some_and(|id| edits.hidden.contains(id));
+        if !o.hidden && (edits.hidden.contains(&s.id) || site.as_ref().is_some_and(hides) || hides(&settlement)) {
             continue;
         }
         // A designed site: its levels and theme as drawn.
@@ -328,10 +332,12 @@ pub fn search_underground(world: &World, t0: &T0, query: &str, o: &UnderOpts) ->
         if (!o.kinds.is_empty() && !o.kinds.contains(&kind)) || o.levels_min.is_some_and(|m| levels < m) || o.levels_max.is_some_and(|m| levels > m) || (!o.sizes.is_empty() && !o.sizes.iter().any(|z| z == s.size)) {
             continue;
         }
-        if o.within.as_ref().is_some_and(|r| !r.contains(s.at)) {
+        // A sewer is where any of its grates is.
+        let spots: &[[f64; 2]] = if s.grates.is_empty() { std::slice::from_ref(&s.at) } else { &s.grates };
+        if o.within.as_ref().is_some_and(|r| !spots.iter().any(|p| r.contains(*p))) {
             continue;
         }
-        let dist = o.near.map_or(0.0, |p| geom::dist(p, s.at));
+        let dist = o.near.map_or(0.0, |p| spots.iter().map(|q| geom::dist(p, *q)).fold(f64::INFINITY, f64::min));
         if o.near.is_some() && o.radius_ft.is_some_and(|r| dist > r) {
             continue;
         }
@@ -350,13 +356,15 @@ pub fn search_underground(world: &World, t0: &T0, query: &str, o: &UnderOpts) ->
         if !q.is_empty() {
             // Its own name (renamed, or a city's sewers), and the site it lies under.
             let site_name = site.as_ref().and_then(|v| v["name"].as_str()).map(str::to_string);
-            for (nm, id) in [(own.cloned().or_else(|| (kind == UnderKind::Sewer).then(|| name.clone())), s.id.clone()), (site_name, site.as_ref().and_then(|v| v["id"].as_str()).unwrap_or("").to_string())] {
+            for (nm, id) in [(own.cloned().or_else(|| (kind == UnderKind::Sewer && q.len() >= 3).then(|| name.clone())), s.id.clone()), (site_name, site.as_ref().and_then(|v| v["id"].as_str()).unwrap_or("").to_string())] {
                 if let Some(nm) = nm.filter(|nm| q.len() >= 2 && nm.to_lowercase().contains(&q)) {
                     exact |= nm.to_lowercase() == q;
                     m.push((0, "name", id, nm));
                 }
             }
-            for (id, nm) in levels_renamed.iter().filter(|(_, nm)| q.len() >= 2 && nm.to_lowercase().contains(&q)) {
+            // (A level a design has cut is no longer there.)
+            let cut = |id: &str| crate::agent::split_room_id(id).is_some_and(|(_, lv, _)| lv >= levels);
+            for (id, nm) in levels_renamed.iter().filter(|(id, nm)| q.len() >= 2 && nm.to_lowercase().contains(&q) && !cut(id)) {
                 exact |= nm.to_lowercase() == q;
                 m.push((if id.starts_with("l:") { 1 } else { 2 }, if id.starts_with("l:") { "level" } else { "room" }, id.clone(), nm.clone()));
             }

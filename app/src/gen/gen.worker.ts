@@ -44,6 +44,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
     } else if (m.type === 'edits') {
       if (m.json) ctx?.set_edit_fields(m.json);
       if (m.patch) ctx?.patch_edits(m.patch);
+    } else if (m.type === 'places') {
+      ctx?.set_place_names(m.json);
     } else if (m.type === 'ask') {
       if (!ctx) throw new Error('worker not initialized');
       const [a, c] = [m.ask, ctx];

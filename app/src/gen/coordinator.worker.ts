@@ -65,6 +65,8 @@ const keepSamples = new Set<string>();
 /** The latest edits (by field, patches applied) and their epoch: results sent after them carry
  * it. Workers started later get them whole. */
 let editFields: Record<string, unknown> = {};
+/** The overlay's settlements and sites, for the workers that load T0 without the overlay. */
+let placesJson = '[]';
 let epoch = 0;
 /** Cached tiles at levels below this don't draw site layouts (`payload::SITE_MIN_LEVEL`). */
 const SITE_MIN_LEVEL = 9;
@@ -105,6 +107,7 @@ async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
   retex.clear();
   keepSamples.clear();
   editFields = {};
+  placesJson = '[]';
   wanted = new Map();
 
   await init();
@@ -131,6 +134,8 @@ async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
   // as each is done (a few hundred ms in a worker that has only just compiled the WASM).
   join(first);
   const t0 = firstReply.t0;
+  const feats = (JSON.parse(firstReply.overlay ?? '{"features":[]}') as { features: { id: string; kind: string; name: string }[] }).features;
+  placesJson = JSON.stringify(feats.map((f) => ({ id: f.id, kind: f.kind, name: f.name })));
   rest.forEach((gw, k) => {
     const bytes = k === rest.length - 1 ? t0 : t0.slice(0);
     void request(gw, { type: 'init', worldJson, t0: bytes }, [bytes]).then((m) => {
@@ -150,6 +155,7 @@ async function initSession(msg: Extract<ToCoordinator, { type: 'init' }>) {
 function join(gw: GenWorker) {
   joining = joining.filter((j) => j !== gw);
   gw.w.onmessage = (e: MessageEvent<FromGen>) => onGenMessage(gw, e.data);
+  gw.w.postMessage({ type: 'places', json: placesJson } satisfies ToGen);
   if (Object.keys(editFields).length) gw.w.postMessage({ type: 'edits', json: JSON.stringify(editFields), patch: null } satisfies ToGen);
   workers.push(gw);
   pump();

@@ -25,6 +25,36 @@ const MI: f64 = 5280.0;
 const SETTLEMENT_KINDS: [&str; 4] = ["metropolis", "city", "town", "village"];
 const SITE_KINDS: [&str; 11] = ["ruin", "tower", "camp", "waystation", "cave", "mine", "lava_tube", "entrance", "building", "castle", "wall"];
 
+thread_local! {
+    /// The settlements and sites of the overlay as `(id, kind, name)` in its order, for a T0 read
+    /// without the overlay (the browser's workers): `set_place_names`.
+    static PLACES: std::cell::RefCell<Vec<(String, &'static str, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Gives a T0 that has no overlay (`t0.extra` None) the names and ids of the settlements and
+/// sites, as JSON `[{id, kind, name}]` in the overlay's order (other kinds are ignored). With
+/// the overlay at hand these are not used.
+pub fn set_place_names(json: &str) {
+    let v: Vec<Value> = serde_json::from_str(json).unwrap_or_default();
+    let list = v
+        .iter()
+        .filter_map(|f| {
+            let k = f["kind"].as_str()?;
+            let kind = SETTLEMENT_KINDS.iter().chain(SITE_KINDS.iter()).copied().find(|x| *x == k)?;
+            Some((f["id"].as_str()?.to_string(), kind, f["name"].as_str()?.to_string()))
+        })
+        .collect();
+    PLACES.with(|p| *p.borrow_mut() = list);
+}
+
+/// The overlay's settlements and sites as `(id, kind)`: its own, or `set_place_names`'s.
+fn place_ids(t0: &T0) -> Vec<(String, &'static str)> {
+    match &t0.extra {
+        Some(e) => e.overlay.features.iter().filter(|f| SETTLEMENT_KINDS.contains(&f.kind) || SITE_KINDS.contains(&f.kind)).map(|f| (f.id.clone(), f.kind)).collect(),
+        None => PLACES.with(|p| p.borrow().iter().map(|(i, k, _)| (i.clone(), *k)).collect()),
+    }
+}
+
 fn mi(ft: f64) -> f64 {
     (ft / MI * 10.0).round() / 10.0
 }
@@ -746,12 +776,12 @@ pub fn layout_of(world: &World, t0: &T0, id: &str) -> Option<usize> {
     if let Some(k) = world.file.edits.created.iter().position(|c| c.id == id) {
         return Some(t0.settlements.len() + t0.base_pois + k);
     }
-    let fs = &t0.extra.as_ref()?.overlay.features;
-    let f = fs.iter().find(|f| f.id == id)?;
-    if SETTLEMENT_KINDS.contains(&f.kind) {
-        fs.iter().filter(|g| SETTLEMENT_KINDS.contains(&g.kind)).position(|g| g.id == id)
-    } else if SITE_KINDS.contains(&f.kind) {
-        fs.iter().filter(|g| SITE_KINDS.contains(&g.kind)).position(|g| g.id == id).map(|k| t0.settlements.len() + k)
+    let fs = place_ids(t0);
+    let f = fs.iter().find(|f| f.0 == id)?;
+    if SETTLEMENT_KINDS.contains(&f.1) {
+        fs.iter().filter(|g| SETTLEMENT_KINDS.contains(&g.1)).position(|g| g.0 == id)
+    } else if SITE_KINDS.contains(&f.1) {
+        fs.iter().filter(|g| SITE_KINDS.contains(&g.1)).position(|g| g.0 == id).map(|k| t0.settlements.len() + k)
     } else {
         None
     }
@@ -763,11 +793,11 @@ pub fn feature_of_layout(world: &World, t0: &T0, li: usize) -> Option<String> {
     if li >= n + t0.base_pois {
         return world.file.edits.created.get(li - n - t0.base_pois).map(|c| c.id.clone());
     }
-    let fs = &t0.extra.as_ref()?.overlay.features;
+    let fs = place_ids(t0);
     if li < n {
-        fs.iter().filter(|g| SETTLEMENT_KINDS.contains(&g.kind)).nth(li).map(|f| f.id.clone())
+        fs.into_iter().filter(|g| SETTLEMENT_KINDS.contains(&g.1)).nth(li).map(|f| f.0)
     } else {
-        fs.iter().filter(|g| SITE_KINDS.contains(&g.kind)).nth(li - n).map(|f| f.id.clone())
+        fs.into_iter().filter(|g| SITE_KINDS.contains(&g.1)).nth(li - n).map(|f| f.0)
     }
 }
 
@@ -775,7 +805,15 @@ pub fn name_of(world: &World, t0: &T0, id: &str) -> Option<String> {
     if let Some(n) = world.file.edits.renames.get(id) {
         return Some(n.clone());
     }
-    features(world, t0).into_iter().find(|f| f.id == id).map(|f| f.name)
+    features(world, t0).into_iter().find(|f| f.id == id).map(|f| f.name).or_else(|| place_name(t0, id))
+}
+
+/// A settlement's or site's generated name from `set_place_names`, when T0 has no overlay.
+fn place_name(t0: &T0, id: &str) -> Option<String> {
+    if t0.extra.is_some() {
+        return None;
+    }
+    PLACES.with(|p| p.borrow().iter().find(|f| f.0 == id).map(|f| f.2.clone()))
 }
 
 /// A building's display name (renamed, its own, or its trade).
@@ -954,7 +992,10 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
         (Some("w"), [li, ..]) if *li < town::layout_count(t0) => crate::interior::generate_id(world, t0, id).map(|it| it.name.unwrap_or_else(|| it.function.to_string())),
         _ => match world.file.edits.created.iter().find(|c| c.id == id) {
             Some(c) => Some(c.name.clone()),
-            None => t0.extra.as_ref()?.overlay.features.iter().find(|f| f.id == id).map(|f| f.name.clone()),
+            None => match &t0.extra {
+                Some(e) => e.overlay.features.iter().find(|f| f.id == id).map(|f| f.name.clone()),
+                None => place_name(t0, id),
+            },
         },
     }
 }

@@ -4299,18 +4299,36 @@ fn dwarven_crag_seams() {
 
 // R5 mcp
 
-/// The underground search index (`undersearch::sites`, built without laying a site out) says
+/// The underground search index (`undersearch::sites`, built without laying any site out) says
 /// what the sites are when laid out: each `u:` site's levels, theme and size, and each keep's
-/// deep dungeons' levels (seeds 1 and 2, up to 30 sites each, spread over the list).
+/// deep dungeons' levels. A sample over seed 1 (T0 and the index cost seconds a seed) that takes the first temple (the sunken
+/// rule's path) and keep dungeon, the first of each kind of `u:` site, and a spread.
 #[test]
 fn underground_index_matches_sites() {
-    for seed in [1, 2] {
+    for (seed, spread, all_kinds) in [(1, 2, true)] {
         let world = World::from_json(&world_json(seed)).unwrap();
         let t0 = worldgen::t0::T0::generate(&world);
         let sites = worldgen::undersearch::sites(&world, &t0);
         assert!(sites.iter().any(|s| s.id.starts_with("u:")), "seed {seed}: no site underground in the index");
-        let step = (sites.len() / 30).max(1);
-        for s in sites.iter().step_by(step) {
+        if seed == 1 {
+            assert!(sites.iter().any(|s| s.id.starts_with("w:") && !s.grates.is_empty()), "seed {seed}: no sewers in the index");
+        }
+        let mut pick: Vec<usize> = Vec::new();
+        let mut kinds: Vec<String> = Vec::new();
+        for (i, s) in sites.iter().enumerate() {
+            let first_kind = all_kinds && s.id.starts_with("u:") && !kinds.contains(&format!("{:?}", s.kind));
+            if first_kind {
+                kinds.push(format!("{:?}", s.kind));
+            }
+            let rare = (s.theme.ends_with("temple") || s.id.starts_with("k:")) && !pick.iter().any(|&j| sites[j].theme == s.theme);
+            if first_kind || rare {
+                pick.push(i);
+            }
+        }
+        pick.extend((0..spread).map(|k| k * sites.len() / spread));
+        pick.sort_unstable();
+        pick.dedup();
+        for s in pick.iter().map(|&i| &sites[i]) {
             let n: Vec<usize> = s.id.split(':').skip(1).filter_map(|x| x.parse().ok()).collect();
             let it = match s.id.as_bytes()[0] {
                 b'u' => worldgen::under::generate(&world, &t0, n[0], n[1]),

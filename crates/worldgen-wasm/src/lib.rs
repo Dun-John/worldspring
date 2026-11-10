@@ -64,6 +64,13 @@ impl Ctx {
         }
     }
 
+    /// The overlay's settlements and sites (`[{id, kind, name}]`, overlay order) for a worker that
+    /// loaded T0 without the overlay, so its answers name places as the native ones do
+    /// (`agent::set_place_names`). Renames come with the edits.
+    pub fn set_place_names(&mut self, json: &str) {
+        worldgen::agent::set_place_names(json);
+    }
+
     /// The layout index of the first created site (`Edits.created[0]`): the settlements, then the
     /// world's own sites (the sketch's among them), then the created ones.
     pub fn first_created(&self) -> u32 {

@@ -6,7 +6,7 @@
   // here" keep to the view or round its middle; while underground sites are listed, kind and
   // depth chips narrow them. ↑/↓ move through the results, Enter opens one; Tab reaches the chips.
   import type { Npc, Overlay, PlaceInfo, Plot } from '../gen/protocol';
-  import { hitName, kindIcon, SETTLEMENT_KINDS, kindLabel, listedName, removedKind, searchFeatures, UNDER_DEPTHS, UNDER_KINDS, underIcon, underTarget, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection, type UnderAttached, type UnderHit, type UnderResult } from './gazetteer';
+  import { hitName, kindIcon, kindLabel, listedName, removedKind, searchFeatures, UNDER_DEPTHS, UNDER_KINDS, underIcon, underTarget, unnamed, type BuildingHit, type DistrictHit, type Rect, type Selection, type UnderAttached, type UnderHit, type UnderResult } from './gazetteer';
   import { roleOf, parseLoc, type Token } from '../play/state';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
@@ -56,11 +56,9 @@
     /** Open an underground site at a place of it (`underTarget`: the site, a level or a room). */
     onUnder?: (id: string) => void;
     /** A settlement's or site's layout index by its feature id (-1 if none). */
-    layoutOf?: (id: string) => number;
     /** A layout's settlement (its own, or the one its site stands in) and site, as `{id, name}`. */
-    layoutWhere?: (li: number) => { settlement: { id: string; name: string } | null; site: { id: string; name: string } | null };
   }
-  let { overlay, renames, searchBuildings, viewRect, whereName, inTown, drawnOf, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote, tokens, onToken, levelNames, searchUnder, onUnder, layoutOf, layoutWhere }: Props = $props();
+  let { overlay, renames, searchBuildings, viewRect, whereName, inTown, drawnOf, onSelect, npcs, plots, notes, resolve, onNpc, onPlot, onNote, tokens, onToken, levelNames, searchUnder, onUnder }: Props = $props();
 
   let q = $state('');
   let open = $state(false);
@@ -70,6 +68,9 @@
   let under = $state<UnderHit[]>([]);
   let place = $state<Place>(readPlace());
   let rect = $state<Rect | null>(null);
+  /** Near here: the middle of the view (a circle of NEAR_FT, as the underground search takes it; `rect` is its square). */
+  let nearMid = $state<[number, number] | null>(null);
+  const inNear = (x: number, y: number) => !nearMid || Math.hypot(x - nearMid[0], y - nearMid[1]) <= NEAR_FT;
   /** Kind chips on (the index's kind names) and the depth chip (an `UNDER_DEPTHS` index). */
   let kinds = $state<string[]>([]);
   let depth = $state<number | null>(null);
@@ -175,7 +176,7 @@
       .slice(0, 5);
     for (const [id, n] of noteRows) out.push({ key: `note:${id}`, group: 'Notes', icon: 'note', name: placeName(id), sub: snippet(n.text, t) || (n.tags ?? []).join(', '), pick: () => onNote(id) });
     const places = new Set<string>();
-    for (const f of searchFeatures(overlay, q, 12, rect ?? undefined)) {
+    for (const f of searchFeatures(overlay, q, nearMid ? 60 : 12, rect ?? undefined).filter((g) => inNear(g.x, g.y)).slice(0, 12)) {
       const town = inTown(f.id);
       places.add(f.id);
       out.push({ key: f.id, group: 'Places', icon: /^(rd|v):/.test(f.id) ? kindIcon(f.kind) : 'pin', name: renames[f.id] ?? f.name, sub: `${kindLabel(f.kind)}${town ? ` · in ${town}` : ''}`, pick: () => onSelect({ kind: 'feature', feature: f }) });
@@ -184,7 +185,7 @@
       out.push({ key: `under:${h.id}`, group: 'Underground', icon: underIcon(h.site_kind), name: h.name, sub: underSub(h), pick: () => onUnder?.(underTarget(h)) });
       for (const a of h.attached.slice(0, ATTACHED_MAX)) out.push(attachedRow(h, a));
     }
-    for (const b of buildings) {
+    for (const b of buildings.filter((g) => inNear(g.x, g.y))) {
       // A building drawn by hand is its site: listed once, under Places, and hidden with it.
       const site = b.kind === 'building' ? drawnOf(b.id) : null;
       if (site && (places.has(site) || !overlay.features.some((f) => f.id === site))) continue;
@@ -262,47 +263,12 @@
     run(300);
   }
 
-  /** An underground site's layout index (`u:<layout>:<n>`, `k:<layout>:<b>`, `w:<layout>`). */
-  const layoutOfHit = (id: string) => Number(id.split(':')[1]);
-
-  /** The generator's workers have no place names (their T0 is read without the overlay): the
-   * settlement and site of a hit from its layout, a city's sewers named after it, and the sites
-   * hidden with the place over them left out (not in the overlay searched). */
-  function placed(h: UnderHit): UnderHit | null {
-    if (h.settlement || h.site || !layoutWhere) return h;
-    const { settlement, site } = layoutWhere(layoutOfHit(h.id));
-    if (site && !overlay.features.some((f) => f.id === site.id)) return null;
-    const generated = h.site_kind === 'sewer' && settlement ? `Sewers of ${settlement.name}` : h.generated;
-    return { ...h, settlement, ...(site ? { site } : {}), generated, name: renames[h.id] ?? generated };
-  }
-
-  /** Underground hits for a query: the index's, and (as `undersearch` does with names) those
-   * under a site, or a city's sewers, whose place's name matches, after the hits by name. */
-  async function underFor(query: string, filters: object): Promise<UnderHit[]> {
-    const lo = layoutOf;
-    if (!searchUnder) return [];
-    const res = await searchUnder(query, filters);
-    let items = res.items.map(placed).filter((h): h is UnderHit => !!h);
-    const named = res.items.some((h) => h.settlement || h.site) || !lo ? [] : searchFeatures(overlay, query, 12).filter((f) => lo(f.id) >= 0);
-    if (!named.length) return items;
-    const have = new Set(items.map((h) => h.id));
-    const extra: UnderHit[] = [];
-    for (const h of (await searchUnder('', filters)).items) {
-      const f = named.find((g) => lo!(g.id) === layoutOfHit(h.id));
-      if (!f || have.has(h.id) || (SETTLEMENT_KINDS.includes(f.kind) && h.site_kind !== 'sewer')) continue;
-      const p = placed(h);
-      if (p) extra.push({ ...p, match: { what: 'name', id: h.site_kind === 'sewer' ? h.id : f.id, text: p.site_kind === 'sewer' ? p.name : (renames[f.id] ?? f.name) } });
-    }
-    const at = items.findIndex((h) => h.match?.what !== 'name');
-    items = at < 0 ? [...items, ...extra] : [...items.slice(0, at), ...extra, ...items.slice(at)];
-    return items;
-  }
-
   /** Ask for buildings and underground sites (after `delay` ms; a stale answer is dropped). */
   function run(delay: number) {
     const v = viewRect();
     const mid: [number, number] = [(v[0] + v[2]) / 2, (v[1] + v[3]) / 2];
     // A plain copy: reactive state can't be posted to a worker.
+    nearMid = place === 'near' ? mid : null;
     rect = place === 'view' ? [v[0], v[1], v[2], v[3]] : place === 'near' ? [mid[0] - NEAR_FT, mid[1] - NEAR_FT, mid[0] + NEAR_FT, mid[1] + NEAR_FT] : null;
     clearTimeout(timer);
     const mine = ++token;
@@ -324,8 +290,8 @@
         done();
       });
       if (searchUnder)
-        void underFor(query, filters).then((res) => {
-          if (mine === token) under = res;
+        void searchUnder(query, filters).then((res) => {
+          if (mine === token) under = res.items;
           done();
         });
     }, delay);

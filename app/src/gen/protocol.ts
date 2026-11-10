@@ -1109,7 +1109,9 @@ export type ToGen =
   | { type: 'ask'; id: number; ask: Ask }
   /** Some of the edits' fields, each whole (a JSON object): `Ctx::set_edit_fields`; then
    * entries of others (`{field: EditsPatch}`): `Ctx::patch_edits`. */
-  | { type: 'edits'; json: string | null; patch: string | null };
+  | { type: 'edits'; json: string | null; patch: string | null }
+  /** The overlay's settlements and sites (`[{id, kind, name}]`) for a T0 loaded without it: `Ctx::set_place_names`. */
+  | { type: 'places'; json: string };
 
 export type FromGen =
   | { type: 'inited'; t0: ArrayBuffer | null; overlay: string | null; ms: number }

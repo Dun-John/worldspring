@@ -3407,8 +3407,6 @@
           levelNames={(id) => view.gen.interior(id).then((it) => it?.levels.map((l) => l.name) ?? null)}
           searchUnder={(q, f) => view.gen.searchUnder(q, f)}
           onUnder={(id) => void goUnder(id)}
-          layoutOf={layoutIndexOf}
-          layoutWhere={(li) => ({ settlement: layoutRef(townOf(li)), site: li >= settlements.length ? layoutRef(li) : null })}
         />
       {/if}
     {/snippet}
