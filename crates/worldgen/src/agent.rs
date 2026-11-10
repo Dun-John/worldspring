@@ -265,25 +265,186 @@ fn bbox(pts: &[P]) -> [f64; 4] {
     pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
 }
 
-/// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
-/// clear of other buildings (sharing a wall is fine), roads, streets, town walls and squares
-/// (market squares, quays, greens, yards). `skip`: the building being reshaped: (its layout,
-/// and in a settlement its id; a drawn building's own layout is all of it). With its point
-/// (the footprint's middle) and a name for it: its trade's in the nearest settlement's
-/// culture, seeded by its id (else what it is: "House").
-pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
-    building_spot_on(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, func, id, skip)
+/// One thing in the way of a footprint (`spot_blockers`).
+#[derive(Clone, Debug)]
+pub struct Blocker {
+    /// `building`, `square`, `street`, `wall`, `road`, `water` or `river`.
+    pub what: &'static str,
+    /// A building's (`b:<layout>:<id>`, or `c:<n>` when drawn by hand), a hand-drawn wall's `c:` id, a road's `rd:` id.
+    pub id: Option<String>,
+    pub name: Option<String>,
+    /// A building's trade or home.
+    pub function: Option<String>,
+    /// `{id, name}` of the settlement it lies in, or null.
+    pub settlement: Value,
+    /// The name of the layout it lies in (a settlement or a site), for the messages.
+    pub place: Option<String>,
+    /// Where it is: for a building or square its middle, for a line the point nearest the footprint.
+    pub at: P,
+    /// A street's, wall's or road's width, ft.
+    pub width: Option<f64>,
+    /// A square's, street's or road's kind.
+    pub kind: Option<&'static str>,
+    /// One of the world's own buildings (`clear` takes it away): where its edit's `at` is.
+    pub removable: Option<P>,
 }
 
-/// `building_spot` with the shore over an area that holds `poly`.
-fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
-    use crate::core::rng::Pcg32;
-    if poly.len() < 3 {
-        return Err("a building needs at least 3 corners".to_string());
+impl Blocker {
+    fn plain(what: &'static str, at: P) -> Blocker {
+        Blocker { what, id: None, name: None, function: None, settlement: Value::Null, place: None, at, width: None, kind: None, removable: None }
     }
-    if poly.iter().any(|p| p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft) {
-        return Err("that place is off the map".to_string());
+
+    /// The refusal for it. With `clear`: what a building that stays is told.
+    pub fn message(&self, clear: bool) -> String {
+        let at = format!("({}, {})", crate::core::round(self.at[0]), crate::core::round(self.at[1]));
+        let of = self.place.as_deref().map(|p| format!(" of {p}")).unwrap_or_default();
+        let id = self.id.as_deref().unwrap_or_default();
+        match self.what {
+            "water" => "that is in the water: draw it on dry land".to_string(),
+            "river" => "that is in a river: draw it on the bank".to_string(),
+            "building" => {
+                let inn = self.place.as_deref().map(|p| format!(" in {p}")).unwrap_or_default();
+                let mut m = format!("that overlaps {} ({id}){inn}, at {at}", self.name.as_deref().unwrap_or("a building"));
+                if clear && self.removable.is_none() {
+                    m += &if id.starts_with("c:") { format!("; it is drawn by hand: delete_feature {id} first") } else { "; clear takes away only the world's own buildings".to_string() };
+                }
+                m
+            }
+            "square" if self.kind == Some("yard") => format!("that is on the yard{of} at {at}"),
+            "square" => format!("that is on a square ({}){of} at {at}", self.kind.unwrap_or("square")),
+            "street" => {
+                let k = self.kind.unwrap_or("street");
+                format!("that is on {} {k} ({} ft wide){of} at {at}", if k.starts_with('a') { "an" } else { "a" }, crate::core::round(self.width.unwrap_or(0.0)))
+            }
+            "wall" if self.id.is_some() => format!("that is on the wall {} ({id}) at {at}", self.name.as_deref().unwrap_or("")),
+            "wall" => format!("that is on {}wall{} at {at}", self.place.as_deref().map(|p| format!("{p}'s ")).unwrap_or_else(|| "a ".to_string()), if self.place.is_some() { "" } else { " of a settlement" }),
+            _ => {
+                let k = self.kind.unwrap_or("road");
+                let k = if k.starts_with("king") { "King's road" } else { k };
+                format!("that is on the {k}{} at {at}", if id.is_empty() { String::new() } else { format!(" {id}") })
+            }
+        }
     }
+
+    /// `{what, id?, name?, function?, settlement?, at: [x, y], width_ft?, kind?}`, points in whole ft.
+    pub fn to_json(&self) -> Value {
+        let mut v = json!({ "what": self.what, "at": [crate::core::round(self.at[0]), crate::core::round(self.at[1])] });
+        for (k, o) in [("id", &self.id), ("name", &self.name), ("function", &self.function)] {
+            if let Some(s) = o {
+                v[k] = json!(s);
+            }
+        }
+        if !self.settlement.is_null() {
+            v["settlement"] = self.settlement.clone();
+        }
+        if let Some(w) = self.width {
+            v["width_ft"] = json!(crate::core::round(w));
+        }
+        if let Some(k) = self.kind {
+            v["kind"] = json!(k);
+        }
+        v
+    }
+}
+
+/// One of the world's own buildings taken away by `clear` (as `remove_buildings` does): its id, name, trade and where its edit is.
+#[derive(Clone, Debug)]
+pub struct Removal {
+    pub id: String,
+    pub name: String,
+    pub function: String,
+    pub at: P,
+}
+
+impl Removal {
+    /// `{id, name, function}`.
+    pub fn to_json(&self) -> Value {
+        json!({ "id": self.id, "name": self.name, "function": self.function })
+    }
+}
+
+fn removals(found: &[Blocker]) -> Vec<Removal> {
+    found
+        .iter()
+        .filter_map(|b| Some(Removal { id: b.id.clone()?, name: b.name.clone().unwrap_or_default(), function: b.function.clone().unwrap_or_default(), at: b.removable? }))
+        .collect()
+}
+
+/// The layout `li`'s settlement (`{id, name}` or null) and its own name for a message (a building drawn by hand is named by its settlement).
+fn place_of(world: &World, t0: &T0, li: usize) -> (Value, Option<String>) {
+    let (s, site) = whereabouts(world, t0, li);
+    let generated = t0.settlements.len() + t0.base_pois;
+    let drawn = li >= generated && world.file.edits.created.get(li - generated).is_some_and(|c| c.kind == "building");
+    let own = if li < t0.settlements.len() || drawn { s.clone() } else { site.unwrap_or(Value::Null) };
+    let name = own["name"].as_str().or_else(|| s["name"].as_str()).map(str::to_string);
+    (s, name)
+}
+
+fn building_blocker(world: &World, t0: &T0, l: &town::Layout, b: &town::Building, full: bool, clear: bool) -> Blocker {
+    let li = l.index as usize;
+    let generated = t0.settlements.len() + t0.base_pois;
+    let at = geom::centroid(&b.poly);
+    let drawn = if li >= generated { world.file.edits.created.get(li - generated).filter(|c| c.kind == "building").map(|c| c.id.clone()) } else { None };
+    let removable = if li < generated && (full || clear) { town::base_layout(world, t0, li).building(b.id as usize).map(|g| geom::centroid(&g.poly)) } else { None };
+    let (settlement, place) = if full { place_of(world, t0, li) } else { (Value::Null, None) };
+    Blocker { id: Some(drawn.unwrap_or_else(|| format!("b:{li}:{}", b.id))), name: Some(building_name(world, l, b)), function: Some(b.label().to_string()), settlement, place, removable, ..Blocker::plain("building", at) }
+}
+
+/// The point on the segments nearest `c`.
+fn near_on(segs: &[(P, P)], c: P) -> P {
+    let mut best = (f64::MAX, c);
+    for &(a, b) in segs {
+        let u = geom::sub(b, a);
+        let t = (geom::dot(geom::sub(c, a), u) / geom::dot(u, u).max(1e-9)).clamp(0.0, 1.0);
+        let p = geom::add(a, geom::mul(u, t));
+        let d = geom::dist(p, c);
+        if d < best.0 {
+            best = (d, p);
+        }
+    }
+    best.1
+}
+
+fn plaza_kind(k: town::PlazaKind) -> &'static str {
+    use town::PlazaKind as K;
+    match k {
+        K::Market | K::MarketSparse | K::MarketDay => "market",
+        K::Civic => "civic",
+        K::Quay => "quay",
+        K::Green => "green",
+        K::Yard => "yard",
+        K::TempleClose => "temple close",
+        K::WellSquare => "well",
+        K::FountainSquare => "fountain",
+        K::Crossroads => "crossroads",
+        K::Bailey => "bailey",
+    }
+}
+
+fn street_kind(class: u8) -> &'static str {
+    match class {
+        0..=2 => "approach road",
+        3 => "street",
+        _ => "main street",
+    }
+}
+
+/// A footprint shrunk a foot toward its middle, so walls may touch.
+fn inner_of(poly: &[P]) -> Vec<P> {
+    let c = geom::centroid(poly);
+    poly.iter().map(|p| geom::lerp(*p, c, 1.0 / geom::dist(*p, c).max(1.0))).collect()
+}
+
+/// Whether the scan may stop: not collecting, and the last thing found is one that stays in the way.
+fn enough(all: bool, clear: bool, out: &[Blocker]) -> bool {
+    out.len() >= 300 || (!all && out.last().is_some_and(|b| !(clear && b.removable.is_some())))
+}
+
+/// What is in the way of `poly` (a footprint, world ft, 3 corners or more, on the map). `all`: every blocker (up to 300), else the first
+/// one (with `clear`, the world's own buildings before it are listed too). `full`: ids, names of places and settlements (slower; the
+/// hunt for a spot leaves them out).
+fn scan_spot(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Option<(usize, Option<u32>)>, all: bool, clear: bool, full: bool) -> Vec<Blocker> {
+    let mut out: Vec<Blocker> = Vec::new();
     let c = geom::centroid(poly);
     // Corners, the middle and every 10 ft along the walls must be dry: sea or lake as the map
     // draws the shore (`town::Shore`; not the ground under sea level: a beach just inside the
@@ -294,45 +455,150 @@ fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], fun
         let n = (geom::dist(a, b) / 10.0).ceil().max(1.0) as usize;
         probes.extend((0..n).map(|s| geom::lerp(a, b, s as f64 / n as f64)));
     }
+    let (mut wet, mut river) = (false, false);
     for p in &probes {
-        if shore.wet(*p) {
-            return Err("that is in the water: draw it on dry land".to_string());
+        if !wet && shore.wet(*p) {
+            wet = true;
+            out.push(Blocker::plain("water", *p));
+            if !all {
+                return out;
+            }
         }
-        let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 2.0, t0.cell_ft);
-        if (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01 {
-            return Err("that is in a river: draw it on the bank".to_string());
-        }
-    }
-    let (x0, y0) = poly.iter().fold((f64::MAX, f64::MAX), |a, p| (a.0.min(p[0]), a.1.min(p[1])));
-    let (x1, y1) = poly.iter().fold((f64::MIN, f64::MIN), |a, p| (a.0.max(p[0]), a.1.max(p[1])));
-    // A foot in from every side, so walls may touch.
-    let inner: Vec<P> = poly.iter().map(|p| geom::lerp(*p, c, 1.0 / geom::dist(*p, c).max(1.0))).collect();
-    for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
-        let own = skip.filter(|s| s.0 == l.index as usize).map(|s| s.1);
-        if own == Some(None) {
-            continue;
-        }
-        if let Some(b) = l.buildings.iter().find(|b| Some(Some(b.id)) != own && polys_overlap(&inner, &b.poly)) {
-            return Err(format!("that overlaps {}", building_name(world, &l, b)));
-        }
-        // (A castle's bailey may be built on.)
-        if l.plazas.iter().any(|p| p.kind != town::PlazaKind::Bailey && polys_overlap(&inner, &p.pts)) {
-            return Err(format!("that is on {}", if l.site { "the yard" } else { "a square (a market, quay or green)" }));
-        }
-        let streets = l.roads.iter().map(|(pts, _, w)| (pts, 0.5 * w)).chain(l.walls.iter().map(|w| (w, 4.5)));
-        for (pts, half) in streets {
-            if pts.windows(2).any(|s| poly_seg_dist(&inner, s[0], s[1]) < half) {
-                return Err("that is on a street or a wall".to_string());
+        if !river {
+            let q = crate::lod::rivers::clear_of_rivers(&t0.rivers, p[0], p[1], 2.0, t0.cell_ft);
+            if (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01 {
+                river = true;
+                out.push(Blocker::plain("river", *p));
+                if !all {
+                    return out;
+                }
             }
         }
     }
+    let [x0, y0, x1, y1] = bbox(poly);
+    let inner = inner_of(poly);
+    for l in town::layouts_near(world, t0, [x0, y0, x1, y1]) {
+        let li = l.index as usize;
+        let own = skip.filter(|s| s.0 == li).map(|s| s.1);
+        if own == Some(None) {
+            continue;
+        }
+        let place = |world: &World| if full { place_of(world, t0, li) } else { (Value::Null, None) };
+        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && polys_overlap(&inner, &b.poly)) {
+            out.push(building_blocker(world, t0, &l, b, full, clear));
+            if enough(all, clear, &out) {
+                return out;
+            }
+        }
+        // (A castle's bailey may be built on.)
+        for pl in l.plazas.iter().filter(|p| p.kind != town::PlazaKind::Bailey && polys_overlap(&inner, &p.pts)) {
+            let (settlement, place) = place(world);
+            out.push(Blocker { settlement, place, kind: Some(plaza_kind(pl.kind)), ..Blocker::plain("square", geom::centroid(&pl.pts)) });
+            if enough(all, clear, &out) {
+                return out;
+            }
+        }
+        let streets = l.roads.iter().map(|(pts, class, w)| (pts, 0.5 * w, Some(*class))).chain(l.walls.iter().map(|w| (w, 4.5, None)));
+        for (pts, half, class) in streets {
+            if !pts.windows(2).any(|s| poly_seg_dist(&inner, s[0], s[1]) < half) {
+                continue;
+            }
+            let hit: Vec<(P, P)> = pts.windows(2).filter(|s| poly_seg_dist(&inner, s[0], s[1]) < half).map(|s| (s[0], s[1])).collect();
+            let (settlement, place) = place(world);
+            let at = near_on(&hit, c);
+            let created = if class.is_none() && li >= t0.settlements.len() + t0.base_pois { world.file.edits.created.get(li - t0.settlements.len() - t0.base_pois) } else { None };
+            out.push(match class {
+                Some(k) => Blocker { settlement, place, width: Some(2.0 * half), kind: Some(street_kind(k)), ..Blocker::plain("street", at) },
+                None => Blocker { settlement, place, width: Some(2.0 * half), id: created.map(|c| c.id.clone()), name: created.map(|c| c.name.clone()), ..Blocker::plain("wall", at) },
+            });
+            if enough(all, clear, &out) {
+                return out;
+            }
+        }
+    }
+    let mut roads: Vec<(u32, f64, P)> = Vec::new();
     for (ri, k) in t0.roads.segments_near([x0, y0, x1, y1], 40.0) {
         let rc = &t0.roads.roads[ri as usize];
         let half = 0.5 * rc.class.width_ft();
         let pts: Vec<P> = (0..=16).map(|j| rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p).collect();
-        if pts.windows(2).any(|s| poly_seg_dist(&inner, s[0], s[1]) < half) {
-            return Err("that is on a road".to_string());
+        let hit: Vec<(P, P)> = pts.windows(2).filter(|s| poly_seg_dist(&inner, s[0], s[1]) < half).map(|s| (s[0], s[1])).collect();
+        if hit.is_empty() {
+            continue;
         }
+        let at = near_on(&hit, c);
+        let d = geom::dist(at, c);
+        match roads.iter_mut().find(|r| r.0 == ri) {
+            Some(r) if r.1 <= d => {}
+            Some(r) => (r.1, r.2) = (d, at),
+            None => roads.push((ri, d, at)),
+        }
+        if !all {
+            break;
+        }
+    }
+    if !roads.is_empty() {
+        let ids = if full { road_ids_of(t0) } else { Vec::new() };
+        for (ri, _, at) in roads {
+            let rc = &t0.roads.roads[ri as usize];
+            let id = ids.get(ri as usize).cloned();
+            out.push(Blocker { id, kind: Some(crate::roadids::class_name(rc.class)), width: Some(rc.class.width_ft()), ..Blocker::plain("road", at) });
+            if enough(all, clear, &out) {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+fn road_ids_of(t0: &T0) -> Vec<String> {
+    crate::roadids::road_ids(t0)
+}
+
+fn spot_precheck(world: &World, poly: &[P]) -> Result<(), String> {
+    if poly.len() < 3 {
+        return Err("a building needs at least 3 corners".to_string());
+    }
+    if poly.iter().any(|p| p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft) {
+        return Err("that place is off the map".to_string());
+    }
+    Ok(())
+}
+
+/// Everything in the way of a footprint: water, rivers, buildings, squares, streets, walls and the world's roads, each with what it is,
+/// its id, name and trade (a building's), its settlement and where it is (`Blocker`), in the order `building_spot` finds them (the
+/// first one is its refusal). `skip`: as for `building_spot`. `clear`: the world's own buildings (`removable` set) are listed too, to be
+/// left out by the caller. At most 300; `Err` for a footprint with fewer than 3 corners or off the map. Public so that other tools
+/// (sites) can name what stands where they are asked to go.
+pub fn spot_blockers(world: &World, t0: &T0, poly: &[P], skip: Option<(usize, Option<u32>)>, clear: bool) -> Result<Vec<Blocker>, String> {
+    spot_precheck(world, poly)?;
+    Ok(scan_spot(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, skip, true, clear, true))
+}
+
+/// Where a building drawn by hand may stand: on the map, on dry land out of river channels,
+/// clear of other buildings (sharing a wall is fine), roads, streets, town walls and squares
+/// (market squares, quays, greens, yards). `skip`: the building being reshaped: (its layout,
+/// and in a settlement its id; a drawn building's own layout is all of it). With its point
+/// (the footprint's middle) and a name for it: its trade's in the nearest settlement's
+/// culture, seeded by its id (else what it is: "House"). A refusal names what is in the way,
+/// where (`spot_blockers` lists them all).
+pub fn building_spot(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String), String> {
+    spot_check(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, func, id, skip, false, true).map(|s| (s.0, s.1))
+}
+
+/// `building_spot` with the world's own buildings in the way taken to be taken away (`create_building clear`): also the ones that are.
+pub fn building_spot_clearing(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>) -> Result<(P, String, Vec<Removal>), String> {
+    spot_check(world, t0, &town::Shore::new(world, t0, bbox(poly)), poly, func, id, skip, true, true)
+}
+
+/// `building_spot` with the shore over an area that holds `poly`; `clear`: the world's own buildings do not block (they are returned);
+/// `full`: refusals with ids and places (the hunt for a spot leaves them out).
+fn spot_check(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>, clear: bool, full: bool) -> Result<(P, String, Vec<Removal>), String> {
+    use crate::core::rng::Pcg32;
+    spot_precheck(world, poly)?;
+    let c = geom::centroid(poly);
+    let found = scan_spot(world, t0, shore, poly, skip, false, clear, full);
+    if let Some(b) = found.iter().find(|b| !(clear && b.removable.is_some())) {
+        return Err(b.message(clear));
     }
     let name = match func.and_then(town::catalog::index_of) {
         Some(fi) => {
@@ -349,7 +615,82 @@ fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], fun
     };
     let mut cs = name.chars();
     let name = cs.next().map(|f| f.to_uppercase().chain(cs).collect()).unwrap_or(name);
-    Ok((c, name))
+    Ok((c, name, removals(&found)))
+}
+
+/// The footprint `poly` moved (not turned) to the nearest clear spot: tried on 5-ft steps outward by distance to 400 ft. Returns the moved
+/// corners, the move `[dx, dy]` and (with `clear`) the world's own buildings it then stands on; `None` when there is none.
+pub fn nearest_clear(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>, clear: bool) -> Option<(Vec<P>, P, Vec<Removal>)> {
+    const REACH: f64 = 400.0;
+    spot_precheck(world, poly).ok()?;
+    enum Obst {
+        Area([f64; 4], Vec<P>),
+        Line([f64; 4], P, P, f64),
+    }
+    let bb = bbox(poly);
+    let region = [bb[0] - REACH - 2.0, bb[1] - REACH - 2.0, bb[2] + REACH + 2.0, bb[3] + REACH + 2.0];
+    let generated = t0.settlements.len() + t0.base_pois;
+    let mut obst: Vec<Obst> = Vec::new();
+    let near = |b: [f64; 4]| b[2] >= region[0] && b[0] <= region[2] && b[3] >= region[1] && b[1] <= region[3];
+    let pad = |b: [f64; 4], h: f64| [b[0] - h, b[1] - h, b[2] + h, b[3] + h];
+    for l in town::layouts_near(world, t0, region) {
+        let li = l.index as usize;
+        let own = skip.filter(|s| s.0 == li).map(|s| s.1);
+        if own == Some(None) {
+            continue;
+        }
+        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(clear && li < generated)) {
+            let bb = bbox(&b.poly);
+            if near(bb) {
+                obst.push(Obst::Area(bb, b.poly.clone()));
+            }
+        }
+        for p in l.plazas.iter().filter(|p| p.kind != town::PlazaKind::Bailey) {
+            let bb = bbox(&p.pts);
+            if near(bb) {
+                obst.push(Obst::Area(bb, p.pts.clone()));
+            }
+        }
+        let lines = l.roads.iter().map(|(pts, _, w)| (pts, 0.5 * w)).chain(l.walls.iter().map(|w| (w, 4.5)));
+        for (pts, half) in lines {
+            for s in pts.windows(2) {
+                let bb = pad(bbox(s), half);
+                if near(bb) {
+                    obst.push(Obst::Line(bb, s[0], s[1], half));
+                }
+            }
+        }
+    }
+    for (ri, k) in t0.roads.segments_near(region, 40.0) {
+        let rc = &t0.roads.roads[ri as usize];
+        let half = 0.5 * rc.class.width_ft();
+        let pts: Vec<P> = (0..=16).map(|j| rc.eval(k as usize, j as f64 / 16.0, 5.0, t0.cell_ft).p).collect();
+        for s in pts.windows(2) {
+            obst.push(Obst::Line(pad(bbox(s), half), s[0], s[1], half));
+        }
+    }
+    let inner = inner_of(poly);
+    let steps = (REACH / 5.0) as i32;
+    let mut offsets: Vec<(i32, i32)> = (-steps..=steps).flat_map(|i| (-steps..=steps).map(move |j| (i, j))).filter(|&(i, j)| (i, j) != (0, 0) && i * i + j * j <= steps * steps).collect();
+    offsets.sort_by_key(|&(i, j)| (i * i + j * j, i, j));
+    let shore = town::Shore::new(world, t0, region);
+    for (i, j) in offsets {
+        let d = [i as f64 * 5.0, j as f64 * 5.0];
+        let shifted: Vec<P> = inner.iter().map(|p| geom::add(*p, d)).collect();
+        let sb = bbox(&shifted);
+        let hit = obst.iter().any(|o| match o {
+            Obst::Area(b, q) => b[2] >= sb[0] && b[0] <= sb[2] && b[3] >= sb[1] && b[1] <= sb[3] && polys_overlap(&shifted, q),
+            Obst::Line(b, p, q, half) => b[2] >= sb[0] && b[0] <= sb[2] && b[3] >= sb[1] && b[1] <= sb[3] && poly_seg_dist(&shifted, *p, *q) < *half,
+        });
+        if hit {
+            continue;
+        }
+        let moved: Vec<P> = poly.iter().map(|p| geom::add(*p, d)).collect();
+        if let Ok((_, _, gone)) = spot_check(world, t0, &shore, &moved, func, id, skip, clear, false) {
+            return Some((moved, d, gone));
+        }
+    }
+    None
 }
 
 /// The nearest clear spot for a `width` × `depth` ft building near `near` (world ft): turned
@@ -357,6 +698,11 @@ fn building_spot_on(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], fun
 /// one within 300 ft, on the 5-ft grid when unturned; tried outward ring by ring to 400 ft.
 /// Returns the footprint, its point and its name (`building_spot`).
 pub fn find_spot(world: &World, t0: &T0, near: P, width: f64, depth: f64, func: Option<&str>, id: &str) -> Result<(Vec<P>, P, String), String> {
+    find_spot_clearing(world, t0, near, width, depth, func, id, false).map(|s| (s.0, s.1, s.2))
+}
+
+/// `find_spot`; with `clear`, the world's own buildings do not block (the ones it stands on are returned: take them away with it).
+pub fn find_spot_clearing(world: &World, t0: &T0, near: P, width: f64, depth: f64, func: Option<&str>, id: &str, clear: bool) -> Result<(Vec<P>, P, String, Vec<Removal>), String> {
     if !(10.0..=400.0).contains(&width) || !(10.0..=400.0).contains(&depth) {
         return Err("width_ft and depth_ft: 10 to 400".into());
     }
@@ -405,12 +751,123 @@ pub fn find_spot(world: &World, t0: &T0, near: P, width: f64, depth: f64, func: 
             }
             let poly = town::rect(c, dir, width, depth);
             tried += 1;
-            if let Ok((p, name)) = building_spot_on(world, t0, &shore, &poly, func, id, None) {
-                return Ok((poly, p, name));
+            if let Ok((p, name, gone)) = spot_check(world, t0, &shore, &poly, func, id, None, clear, false) {
+                return Ok((poly, p, name, gone));
             }
         }
     }
     Err(format!("no clear spot for a {width} × {depth} ft building within 400 ft of that place ({tried} tried)"))
+}
+
+/// The runs of `pts` that lie inside the area (`inside`), cut where the line crosses its edge (found by bisection), whole ft.
+fn clip_runs(pts: &[P], inside: &dyn Fn(P) -> bool) -> Vec<Vec<P>> {
+    let rnd = |p: P| [crate::core::round(p[0]), crate::core::round(p[1])];
+    let mut runs: Vec<Vec<P>> = Vec::new();
+    let mut cur: Vec<P> = Vec::new();
+    let Some(&first) = pts.first() else { return runs };
+    let mut last = (first, inside(first));
+    if last.1 {
+        cur.push(rnd(first));
+    }
+    for &p in &pts[1..] {
+        let n = (geom::dist(last.0, p) / 20.0).ceil().max(1.0) as usize;
+        let from = last.0;
+        for s in 1..=n {
+            let m = if s == n { p } else { geom::lerp(from, p, s as f64 / n as f64) };
+            let mi = inside(m);
+            if mi != last.1 {
+                let (mut a, mut b) = (last.0, m);
+                for _ in 0..12 {
+                    let mid = geom::lerp(a, b, 0.5);
+                    if inside(mid) == last.1 {
+                        a = mid;
+                    } else {
+                        b = mid;
+                    }
+                }
+                if last.1 {
+                    cur.push(rnd(a));
+                    runs.push(std::mem::take(&mut cur));
+                } else {
+                    cur.push(rnd(b));
+                }
+            }
+            if mi && s == n {
+                cur.push(rnd(p));
+            }
+            last = (m, mi);
+        }
+    }
+    runs.push(cur);
+    runs.retain(|r| r.len() >= 2);
+    for r in &mut runs {
+        r.dedup();
+    }
+    runs.retain(|r| r.len() >= 2);
+    runs
+}
+
+/// The streets, walls, squares and world roads in an area (`list_streets`): each layout (settlement or site) in `rect` gives its streets
+/// (`{what: street, settlement, width_ft, kind, pts}`), town and castle walls (`wall`; a hand-drawn one with its `c:` id and name) and
+/// squares (`square`, whole: `kind`, `pts`), then the world's roads (`road`: `id` rd:, `class`, `pts`); lines are cut to the area
+/// (`inside` tells which points are in it), points in whole ft.
+pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> bool) -> Vec<Value> {
+    let mut out = Vec::new();
+    let generated = t0.settlements.len() + t0.base_pois;
+    let pts_json = |r: &Vec<P>| json!(r.iter().map(|p| json!([p[0], p[1]])).collect::<Vec<_>>());
+    for l in town::layouts_near(world, t0, rect) {
+        let li = l.index as usize;
+        let (s, site) = whereabouts(world, t0, li);
+        let mut head = json!({ "settlement": s });
+        if li >= t0.settlements.len() && li < generated + world.file.edits.created.len() && site.as_ref().is_some_and(|v| !v.is_null()) && place_of(world, t0, li).1 != s["name"].as_str().map(str::to_string) {
+            head["site"] = site.unwrap_or(Value::Null);
+        }
+        let with = |what: &str, extra: Value| {
+            let mut v = head.clone();
+            v["what"] = json!(what);
+            for (k, x) in extra.as_object().cloned().unwrap_or_default() {
+                v[k] = x;
+            }
+            v
+        };
+        for (pts, class, w) in &l.roads {
+            for r in clip_runs(pts, inside) {
+                out.push(with("street", json!({ "width_ft": crate::core::round(*w), "kind": street_kind(*class), "pts": pts_json(&r) })));
+            }
+        }
+        let created = if li >= generated { world.file.edits.created.get(li - generated) } else { None };
+        for w in &l.walls {
+            for r in clip_runs(w, inside) {
+                let mut x = json!({ "width_ft": 9, "pts": pts_json(&r) });
+                if let Some(c) = created {
+                    x["id"] = json!(c.id);
+                    x["name"] = json!(c.name);
+                }
+                out.push(with("wall", x));
+            }
+        }
+        for p in l.plazas.iter().filter(|p| p.kind != town::PlazaKind::Bailey) {
+            if p.pts.iter().any(|q| inside(*q)) || inside(geom::centroid(&p.pts)) {
+                out.push(with("square", json!({ "kind": plaza_kind(p.kind), "pts": pts_json(&p.pts.iter().map(|q| [crate::core::round(q[0]), crate::core::round(q[1])]).collect()) })));
+            }
+        }
+    }
+    let ids = crate::roadids::road_ids(t0);
+    let mut seen: Vec<u32> = Vec::new();
+    for (ri, _) in t0.roads.segments_near(rect, 0.0) {
+        if seen.contains(&ri) {
+            continue;
+        }
+        seen.push(ri);
+    }
+    seen.sort_unstable();
+    for ri in seen {
+        let rc = &t0.roads.roads[ri as usize];
+        for r in clip_runs(&crate::roadids::line(rc), inside) {
+            out.push(json!({ "what": "road", "id": ids[ri as usize], "class": crate::roadids::class_name(rc.class), "width_ft": rc.class.width_ft(), "pts": pts_json(&r) }));
+        }
+    }
+    out
 }
 
 /// Generated buildings (not drawn by hand) whose middle lies inside `poly` (world ft), as they

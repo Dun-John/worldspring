@@ -18,6 +18,7 @@ mod reads;
 mod scatter;
 mod sites;
 mod store;
+mod streets;
 mod tools;
 mod towns;
 mod worker;

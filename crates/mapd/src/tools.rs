@@ -81,6 +81,7 @@ pub fn list() -> Value {
         a.extend(crate::ground::list());
         a.extend(crate::design::list());
         a.extend(crate::reads::list());
+        a.extend(crate::streets::list());
         a.extend(crate::geo::list());
         a.extend(crate::towns::list());
         a.extend(crate::batch::list());
@@ -104,7 +105,7 @@ pub fn list() -> Value {
 /// Tools that only read (or look): `readOnlyHint`.
 const READS: &[&str] = &[
     "world_overview", "search_features", "get_feature", "list_children", "list_names", "describe_location", "features_near", "route", "list_roads", "get_battlemap", "render_view",
-    "list_crossings", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_sprites", "check_building_spot", "get_town_plan",
+    "list_crossings", "list_objects", "list_plateaus", "list_designs", "nearest", "road_point", "get_site_design", "ground_heights", "list_npcs", "get_npc", "list_plots", "get_plot", "list_sprites", "check_building_spot", "get_town_plan", "list_streets",
 ];
 /// Writes that delete, replace or reset work (`destructiveHint`); every other write only adds or adjusts.
 const DESTRUCTIVE: &[&str] = &[
@@ -246,6 +247,9 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         return r;
     }
     if let Some(r) = crate::reads::call(app, name, &a).await {
+        return r;
+    }
+    if let Some(r) = crate::streets::call(app, name, &a).await {
         return r;
     }
     if let Some(r) = crate::geo::call(app, name, &a).await {

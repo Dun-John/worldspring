@@ -55,7 +55,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 - **Lists** come back as `{items, found}`: `found` is how many there were before any `limit`, and `truncated: true`
   says a limit cut the list; a tool's other fields stay beside them (`named` in `list_roads`). Every list tool has a
   `limit` (defaults: `list_names`, `list_children`, `list_sprites`, `list_crossings` and `list_objects` 200, `list_npcs`,
-  `list_plots`, `list_plateaus` and `list_designs` 100, `search_features` 25, `features_near` and `list_roads` 50; `list_children` cuts each of its lists
+  `list_plots`, `list_plateaus`, `list_designs` and `list_streets` 100, `search_features` 25, `features_near` and `list_roads` 50; `list_children` cuts each of its lists
   and gives the full counts in `found`). A `limit` out of range is refused. Results are compact JSON (no
   indentation), and `render_view` sends a JPEG of 1,024 px unless asked for more.
 - **Safe to repeat:** a create that is asked for again with the same arguments adds nothing and returns what is already
@@ -85,7 +85,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | Other points | `near` (`create_building`), `from`/`to` (`route`, `place_crossing`): the same three forms | | |
 | Generated objects to take away | `points` `[{kind, x_ft, y_ft}, ...]` | `at` (a list here only) | `remove_objects` |
 | An NPC's place | `location` (an id) and/or a point | `at` (an id is the `location`, a point is `x_ft`/`y_ft`) | `create_npc`, `place_npc` |
-| An area | `within`: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` (3+ points) or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`) | `area` | `remove_buildings`, `remove_objects`, `restore_objects` (`get_town_plan`: a box) |
+| An area | `within`: a box `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]` (3+ points) or a circle `{at, radius_ft}` (or `{x_ft, y_ft, radius_ft}`) | `area` | `remove_buildings`, `remove_objects`, `restore_objects`, `list_streets` (`get_town_plan`: a box) |
 | Inside a building or site | `inside`: its id | `within` given as an id | `list_names` |
 | A footprint | `poly` `[[x, y], ...]`, `rect {x_ft, y_ft, width_ft, depth_ft, angle_deg}`, `circle {x_ft, y_ft, radius_ft}` | `outline` for `poly` | `create_building`, `update_building`, `check_building_spot` (all three forms); `create_feature` and `update_fortification` (castles: `poly` or `rect`); `set_plateau` (`poly` only, or `around`) |
 | A line | `path` `[[x, y], ...]` | walls keep `pts` and also take `path` | `shape_ground`, `create_feature` (wall), `update_fortification` |
@@ -94,7 +94,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | A sprite's rules | `blocks_movement`, `blocks_sight`, `cover` as a word (`none`, `half`, `three-quarters`, `full`), `size_squares` | `blocks_move`, `cover` 0 to 3, `size` | `upload_sprite` |
 | Units | `_ft` feet, `_mi` miles, `_squares` squares, `_deg` degrees, in every name that carries one | | |
 | Dry runs | `dry_run`, only where a tool lists it; elsewhere it is an unknown argument | | `set_site_design`, `edit_town` |
-| Lists returned | `{items, found}` (+ `truncated`) | | `search_features`, `features_near`, `list_names`, `list_roads`, `list_npcs`, `list_plots`, `list_sprites` (each item says `uploaded`), `list_crossings`, `list_objects`, `list_plateaus`, `list_designs` |
+| Lists returned | `{items, found}` (+ `truncated`) | | `search_features`, `features_near`, `list_names`, `list_roads`, `list_npcs`, `list_plots`, `list_sprites` (each item says `uploaded`), `list_crossings`, `list_objects`, `list_plateaus`, `list_designs`, `list_streets` |
 | Moves reported | `moved: {x_ft, y_ft, ft, why}` | | `create_feature`, `create_building` (a crossing's ends are never moved) |
 
 - **Names** in results already include renames, and search matches them. Hidden features are left out of search
@@ -1065,9 +1065,12 @@ the town; see Conventions). Like the other edits, buildings are saved, logged, s
 alone.
 
 - **Where:** on dry land, out of rivers, clear of other buildings (walls may touch), roads, streets, town
-  walls and squares (market squares, quays, village greens, a site's yard). Anything else is refused with the
-  reason (`that overlaps The Gilded Goose`, `that is on a road`, `that is on a square (a market, quay or
-  green)`). `check_building_spot` asks without building.
+  walls and squares (market squares, quays, village greens, a site's yard). Anything else is refused, saying what
+  is in the way and where (`that overlaps Noble estate (b:12:345) in Waterdeep, at (412530, 380140)`, `that is on a
+  street (20 ft wide) of Waterdeep at (412510, 380130)`, `that is on Waterdeep's wall at (…)`, `that is on a square
+  (market) of Waterdeep at (…)`, `that is on the King's road rd:1a2b3c4d at (…)`; points in whole feet).
+  `check_building_spot` asks without building and lists every blocker; `clear: true` takes the world's own
+  buildings away with the new one; `list_streets` shows the streets, walls and squares of an area.
 - **Footprint:** any simple shape of 3–64 corners, at least 10 ft across, every corner within 200 ft of its
   middle. L-shapes and other concave plans are fine (their roofs are drawn as several hips).
 - **What it is (`func`):** a business by its catalog key (`inn`, `tavern`, `blacksmith`, `temple`, `castle`,
@@ -1113,10 +1116,13 @@ where a street is within 300 ft, on the grid when unturned, off squares.
 | `structure` | string | optional | `roofed` (default) or `ruin`. |
 | `near` | id, object or `[x_ft, y_ft]` | instead of a footprint | Find the nearest clear lot near this place (see above). |
 | `width_ft`, `depth_ft` | number | with `near` | The lot along the street and back from it, 10–400 ft. |
+| `clear` | boolean | optional | Default false. Take away the world's own (generated) buildings that overlap the footprint, in the same change (`remove_buildings` does the same by id; `restore_building` brings them back). Buildings drawn by hand in the way are still refused, naming them (`delete_feature` one first); streets, walls, squares, roads and water refuse as ever. With `near`: the nearest lot clear of everything but the world's own buildings, fronting a street as without it. |
 
-Returns the site as `get_feature` does, plus `building` (its building id), and `moved: {x_ft, y_ft, ft, why}` when
+Returns the site as `get_feature` does, plus `building` (its building id), `moved: {x_ft, y_ft, ft, why}` when
 the footprint snapped to the grid (or its point set where it fits) put it more than 5 ft from where it was asked
-(not with `near`, which picks a lot by design).
+(not with `near`, which picks a lot by design), and with `clear` `removed: [{id, name, function}]` (the buildings
+taken away, with their names and trades; absent when none stood there). The same call again returns the
+building and removes nothing.
 
 ```json
 { "name": "create_building", "arguments": { "rect": { "x_ft": 412500, "y_ft": 380120, "width_ft": 50, "depth_ft": 30 }, "func": "inn", "floors": 2, "tint": "thatch" } }
@@ -1144,18 +1150,51 @@ a change whose building no longer stands at its id is set aside (not applied to 
 
 ### `check_building_spot`
 Read-only: whether a footprint (`poly`, `rect` or `circle`, with `snap`) is clear for a building, as
-`create_building` checks it. `id` is the building being reshaped (it does not count against itself). Returns
-`{ok: true, x_ft, y_ft, name}` (its point and the name it would get for `func`) or `{ok: false, reason}`.
+`create_building` checks it. `id` is the building being reshaped (it does not count against itself). `clear: true`
+counts the world's own buildings out, as `create_building clear` does. Returns
+`{ok, blockers, ...}`: with `ok: true` its point `x_ft`, `y_ft` and the `name` it would get for `func`; with `ok: false`
+a `reason` (the first blocker, worded as `create_building`'s refusal) and `nearest_clear`.
+
+- `blockers`: `{items, found, truncated?}` (50 at most), each `{what, id?, name?, function?, settlement?: {id, name},
+  at: [x, y], width_ft?, kind?}`. `what` is `building` (`id` `b:<layout>:<id>`, or `c:<n>` when drawn by hand, with
+  `name` and `function`), `square` (`kind`: market, civic, quay, green, yard, ...), `street` (`width_ft`, `kind`:
+  street, main street or approach road), `wall` (a hand-drawn one with its `c:` id), `road` (`id` `rd:`, `kind`:
+  the class, `width_ft`), `water` or `river`. `at` is a building's or square's middle, else the point of the street,
+  wall or road nearest the footprint, in whole feet. With `clear` the world's own buildings are not blockers.
+- `nearest_clear` (not when `ok`): the same footprint, not turned, moved on 5-ft steps to the nearest spot that is
+  clear, up to 400 ft away: `{x_ft, y_ft, moved: {x_ft, y_ft, ft}, poly}` (`x_ft`, `y_ft` its new middle, `moved`
+  the shift and its length, `poly` the moved corners: pass them back as `poly` with `snap: false`), plus
+  `would_remove` with `clear`. It is `null` when there is none, with a `note`.
+- `would_remove` (with `clear`): `[{id, name, function}]`, the world's own buildings `create_building clear` would take away.
 
 ```json
 { "name": "check_building_spot", "arguments": { "rect": { "x_ft": 412500, "y_ft": 380120, "width_ft": 50, "depth_ft": 30 }, "func": "inn" } }
+{ "name": "check_building_spot", "arguments": { "rect": { "x_ft": 412500, "y_ft": 380120, "width_ft": 170, "depth_ft": 130 }, "clear": true } }
+```
+
+### `list_streets`
+Read-only: the streets, walls, squares and roads inside an area, as the map draws them (`create_building` and
+`check_building_spot` refuse a footprint on any of them). `within` (required): a box, polygon or circle, at most
+3,000 ft across (a larger one is refused). `what` (optional): `street`, `wall`, `square` or `road`. `limit` (default
+100, at most 1,000). Returns `{items, found, truncated?}`, settlement by settlement (streets, walls, squares), then the
+roads; points are whole feet.
+
+- `street`: `{settlement: {id, name}, site?, width_ft, kind, pts}`, `kind` street, main street or approach road
+  (a road from a gate in); a street running through the area is cut to it, one item for each stretch inside.
+- `wall`: `{settlement, width_ft: 9, pts, id?, name?}`, town and castle walls; one drawn by hand has its `c:` id and name.
+- `square`: `{settlement, kind, pts}`, the whole outline of each square, quay, green or yard that touches the area.
+- `road`: `{id: "rd:...", class, width_ft, pts}`, the world's roads outside and between the settlements, cut to the area.
+
+```json
+{ "name": "list_streets", "arguments": { "within": { "at": [412500, 380120], "radius_ft": 300 }, "what": "street" } }
 ```
 
 ### `remove_buildings`
 Take away buildings of the world's own (drawn ones go with `delete_feature`; a drawn building's id is refused, saying so): `id` or `ids` (`b:<layout>:<id>`),
 and/or every one whose middle lies inside `within`: a polygon `[[x_ft, y_ft], …]`, a box `[x0, y0, x1, y1]` or a
 circle `{at, radius_ft}` (also `area`), such as a ward to clear for buildings of your own. Their ground is free to
-build on; every other building keeps its id. Returns `removed` (the ids) and `count`.
+build on; every other building keeps its id. Returns `removed` (the ids) and `count`. (`create_building` with
+`clear: true` does it for the buildings under a new one, and lists them with names and trades.)
 
 ```json
 { "name": "remove_buildings", "arguments": { "within": [[412400, 380000], [412800, 380000], [412800, 380300], [412400, 380300]] } }

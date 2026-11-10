@@ -39,20 +39,22 @@ pub fn list() -> Vec<Value> {
         m.insert("near".into(), crate::args::point_schema("Instead of a footprint: the nearest clear spot for width_ft x depth_ft, fronting a street"));
         m.insert("width_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400, "description": "With near: along the street" }));
         m.insert("depth_ft".into(), json!({ "type": "number", "minimum": 10, "maximum": 400 }));
+        m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Take away the world's own buildings in the way (removed lists them)" }));
     }
     let mut check = props();
     if let Some(m) = check.as_object_mut() {
         m.retain(|k, _| ["poly", "rect", "circle", "snap", "func"].contains(&k.as_str()));
         m.insert("id".into(), json!({ "type": "string", "description": "A building being reshaped" }));
+        m.insert("clear".into(), json!({ "type": "boolean", "default": false, "description": "Count the world's own buildings out (would_remove)" }));
     }
     let mut remove = crate::args::ids_props("building id (b:<layout>:<id>)");
     if let Some(m) = remove.as_object_mut() {
         m.insert("within".into(), crate::args::area_schema("Buildings whose middle lies inside: [x0, y0, x1, y1], [[x, y], ...] or {at, radius_ft}", 1.0e6));
     }
     vec![
-        json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle) or near a place with width_ft and depth_ft, on dry land clear of buildings, roads, streets, walls and squares. It gets an interior, roof and walls. Returns its id (c:<n>) and building id (b:<layout>:0). check_building_spot tests a spot first.", "inputSchema": schema(create, &[]) }),
+        json!({ "name": "create_building", "title": "Build", "description": "Put a building on the map, drawn by hand: a footprint (poly, rect or circle) or near a place with width_ft and depth_ft, on dry land clear of buildings, roads, streets, walls and squares. It gets an interior, roof and walls. Returns its id (c:<n>) and building id (b:<layout>:0). Refusals name what is in the way; clear: true takes away the world's own buildings there. check_building_spot tests a spot first.", "inputSchema": schema(create, &[]) }),
         json!({ "name": "update_building", "title": "Change a building", "description": "Change a building drawn by hand (c:<n>) or one of the world's own (b:<layout>:<id>): footprint (checked like a new one), name, func, floors, roof, tint, material, shape, shade or structure. Fields left out stay; auto goes back to as generated.", "inputSchema": schema(update, &["id"]) }),
-        json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not (water, river, another building, street, road, wall, square).", "inputSchema": schema(check, &[]), "annotations": { "readOnlyHint": true } }),
+        json!({ "name": "check_building_spot", "title": "Check a building spot", "description": "Whether a footprint (poly, rect or circle) is clear for a building, without building it: its point and the name it would get, or why not: blockers (what, id, where) and nearest_clear, the footprint moved to the nearest clear spot.", "inputSchema": schema(check, &[]), "annotations": { "readOnlyHint": true } }),
         json!({ "name": "remove_buildings", "title": "Remove buildings", "description": "Take away the world's own buildings (delete_feature does drawn ones): by id or ids (b:<layout>:<id>) or every one whose middle lies inside within. Others keep their ids. restore_building brings them back.", "inputSchema": schema(remove, &[]) }),
         json!({ "name": "restore_building", "title": "Restore a building", "description": "Put one of the world's own buildings back as generated: undoes remove_buildings and any update_building change (its name stays as renamed).", "inputSchema": schema(crate::args::ids_props("building id"), &[]) }),
     ]
@@ -76,21 +78,70 @@ pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Valu
     })
 }
 
-/// A footprint checked without building it.
+/// A footprint checked without building it: what is in the way and the nearest clear spot (`clear`: the world's own buildings do
+/// not count, `would_remove` lists them).
 async fn check_spot(app: &Shared, a: &Value) -> Result<Value, String> {
     let poly = footprint(a)?.ok_or("give the footprint: poly, rect or circle")?;
     let func = a["func"].as_str().map(str::to_string);
     if let Some(f) = &func {
         known_func(f)?;
     }
+    let clear = a["clear"].as_bool().unwrap_or(false);
     let id = a["id"].as_str().unwrap_or("c:new").to_string();
     app.worker
         .with(move |ex| {
             let skip = agent::spot_skip(&ex.world, &ex.t0, &id);
-            Ok(match agent::building_spot(&ex.world, &ex.t0, &poly, func.as_deref(), &id, skip) {
-                Ok((p, name)) => json!({ "ok": true, "x_ft": p[0].round(), "y_ft": p[1].round(), "name": name }),
-                Err(e) => json!({ "ok": false, "reason": e }),
-            })
+            let all = match agent::spot_blockers(&ex.world, &ex.t0, &poly, skip, clear) {
+                Ok(v) => v,
+                Err(e) => return Ok(json!({ "ok": false, "reason": e, "blockers": { "items": [], "found": 0 } })),
+            };
+            let (gone, stays): (Vec<_>, Vec<_>) = all.into_iter().partition(|b| clear && b.removable.is_some());
+            let mut v = json!({ "ok": stays.is_empty() });
+            let spot = if stays.is_empty() {
+                agent::building_spot_clearing(&ex.world, &ex.t0, &poly, func.as_deref(), &id, skip).map(|s| (s.0, s.1, s.2))
+            } else {
+                Err(stays[0].message(clear))
+            };
+            match &spot {
+                Ok((p, name, removed)) => {
+                    v["x_ft"] = json!(p[0].round());
+                    v["y_ft"] = json!(p[1].round());
+                    v["name"] = json!(name);
+                    if clear {
+                        v["would_remove"] = json!(removed.iter().map(|r| r.to_json()).collect::<Vec<_>>());
+                    }
+                }
+                Err(e) => {
+                    v["ok"] = json!(false);
+                    v["reason"] = json!(e);
+                    if clear {
+                        v["would_remove"] = json!(gone.iter().filter_map(|b| Some(json!({ "id": b.id, "name": b.name, "function": b.function }))).collect::<Vec<_>>());
+                    }
+                }
+            }
+            let items = Value::Array(stays.iter().map(|b| b.to_json()).collect());
+            v["blockers"] = crate::tools::listed(items, 50, json!({}));
+            if spot.is_err() {
+                v["nearest_clear"] = match agent::nearest_clear(&ex.world, &ex.t0, &poly, func.as_deref(), &id, skip, clear) {
+                    Some((moved, d, removed)) => {
+                        let (c0, c1) = (worldgen::town::geom::centroid(&poly), worldgen::town::geom::centroid(&moved));
+                        let mut n = json!({
+                            "x_ft": c1[0].round(), "y_ft": c1[1].round(),
+                            "moved": { "x_ft": d[0], "y_ft": d[1], "ft": (c1[0] - c0[0]).hypot(c1[1] - c0[1]).round() },
+                            "poly": moved.iter().map(|p| json!([(p[0] * 100.0).round() / 100.0, (p[1] * 100.0).round() / 100.0])).collect::<Vec<_>>(),
+                        });
+                        if clear {
+                            n["would_remove"] = json!(removed.iter().map(|r| r.to_json()).collect::<Vec<_>>());
+                        }
+                        n
+                    }
+                    None => Value::Null,
+                };
+                if v["nearest_clear"].is_null() && v["blockers"]["found"].as_u64().unwrap_or(0) > 0 {
+                    v["note"] = json!("no clear spot within 400 ft (the footprint moved on 5-ft steps, not turned): try create_building near with width_ft and depth_ft");
+                }
+            }
+            Ok(v)
         })
         .await
 }
@@ -312,6 +363,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     let creating = id.is_none();
     let near_key = if creating && poly.is_none() && !a["near"].is_null() { near_key(app, a) } else { None };
     let (was_floors, was_ruin) = (c.floors, c.structure.as_deref() == Some("ruin"));
+    // `clear` (a new building only): the world's own buildings in the way are taken away with it.
+    let clear = creating && a["clear"].as_bool().unwrap_or(false);
+    let mut removed: Vec<agent::Removal> = Vec::new();
     let poly = match poly {
         None if creating && !a["near"].is_null() => {
             // The nearest clear lot near a place.
@@ -324,12 +378,11 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
                 return found(app, id).await;
             }
             let (func, cid) = (a["func"].as_str().map(str::to_string), c.id.clone());
-            let found = app
+            let (found, gone) = app
                 .worker
-                .with(move |ex| {
-                    agent::find_spot(&ex.world, &ex.t0, near, w, d, func.as_deref(), &cid).map(|s| s.0)
-                })
+                .with(move |ex| agent::find_spot_clearing(&ex.world, &ex.t0, near, w, d, func.as_deref(), &cid, clear).map(|s| (s.0, s.3)))
                 .await?;
+            removed = gone;
             Some(found)
         }
         p => p,
@@ -406,13 +459,19 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     // On dry land, clear of buildings, roads and walls; its point is the footprint's middle.
     if reshaped || creating {
         let (cid, poly, func) = (c.id.clone(), c.poly.clone(), c.func.clone());
-        let (p, name) = app
+        let (p, name, gone) = app
             .worker
             .with(move |ex| {
                 let skip = agent::spot_skip(&ex.world, &ex.t0, &cid);
-                agent::building_spot(&ex.world, &ex.t0, &poly, func.as_deref(), &cid, skip)
+                if clear {
+                    return agent::building_spot_clearing(&ex.world, &ex.t0, &poly, func.as_deref(), &cid, skip);
+                }
+                agent::building_spot(&ex.world, &ex.t0, &poly, func.as_deref(), &cid, skip).map(|s| (s.0, s.1, Vec::new()))
             })
             .await?;
+        if clear {
+            removed = gone;
+        }
         (c.x, c.y) = (p[0], p[1]);
         if creating {
             c.name = name;
@@ -429,6 +488,7 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     let reply = json!({ "tool": tool, "id": c.id, "kind": "building", "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
     let cid = c.id.clone();
     let mut reply = reply;
+    let removed_json = json!(removed.iter().map(|r| r.to_json()).collect::<Vec<_>>());
     let app2 = app.clone();
     let change = app.edit("agent", 0, move |e| {
         if creating {
@@ -446,6 +506,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
                 }
             }
             e.created.push(c);
+            for r in removed {
+                e.buildings.insert(r.id, worldgen::world::BuildingEdit { at: r.at, removed: true, ..Default::default() });
+            }
         } else {
             let slot = e.created.iter_mut().find(|x| x.id == c.id && !x.removed).ok_or_else(|| format!("{} was deleted meanwhile", c.id))?;
             *slot = c;
@@ -471,6 +534,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             }
             if let Some(m) = moved {
                 v["moved"] = m;
+            }
+            if removed_json.as_array().is_some_and(|r| !r.is_empty()) {
+                v["removed"] = removed_json;
             }
             Ok(v)
         })
