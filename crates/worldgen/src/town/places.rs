@@ -363,7 +363,9 @@ fn made(t0: &T0, l: &Layout, fixed: &FastMap<String, String>) -> Vec<Place> {
             Spot::Patch(i) => Some(i),
             _ => p.cemetery.map(|c| c.patch),
         };
-        out.push(Place { id, kind: "park", sort: p.kind.name(), main: false, name, at, size_ft: obb(&p.pts).long, patch, district: district(at), label: clear_line(l, &p.pts, None) });
+        let label = if p.kind == ParkKind::Cemetery { cemetery_line(l, p) } else { Vec::new() };
+        let label = if label.is_empty() { clear_line(l, &p.pts, None) } else { label };
+        out.push(Place { id, kind: "park", sort: p.kind.name(), main: false, name, at, size_ft: obb(&p.pts).long, patch, district: district(at), label });
     }
     // Gates in the town wall, by their corner.
     if l.gate_spots.len() == l.gates.len() {
@@ -481,6 +483,98 @@ fn clear_line(l: &Layout, poly: &[P], name: Option<[f64; 4]>) -> Vec<P> {
         }
     }
     pick.map(|p| p.1).unwrap_or_default()
+}
+
+/// A cemetery's label baseline (`cemetery::plan`): on its lawn beside the main walk, along the walks
+/// one way or the other, off the walks, its tombs and buildings, its yews, kurgans and lychgate and its
+/// boundary; the longest such run near the main walk, kept wider of them all where one is long enough
+/// (empty: none).
+fn cemetery_line(l: &Layout, pk: &super::Park) -> Vec<P> {
+    use crate::battlemap::Kind;
+    use super::cemetery::{KURGAN_R, YEW_R};
+    let Some(pl) = super::cemetery::plan(pk) else { return Vec::new() };
+    if pl.walks.is_empty() || pl.boundary.len() < 3 {
+        return Vec::new();
+    }
+    let bd = &pl.boundary;
+    let m = bd.len();
+    let mw = pl.walks[0];
+    let big: Vec<(P, f64)> = pl
+        .props
+        .iter()
+        .filter_map(|p| match p.2 {
+            Kind::Kurgan => Some((p.0, KURGAN_R * p.4 as f64)),
+            Kind::Yew => Some((p.0, YEW_R * p.4 as f64)),
+            Kind::Lychgate => Some((p.0, 7.0)),
+            _ => None,
+        })
+        .collect();
+    let (x0, y0, x1, y1) = bd.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    let near: Vec<usize> = (0..l.buildings.len()).filter(|&k| l.buildings[k].poly.iter().any(|p| p[0] >= x0 - 30.0 && p[0] <= x1 + 30.0 && p[1] >= y0 - 30.0 && p[1] <= y1 + 30.0)).collect();
+    let c = centroid(bd);
+    let walls: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).filter(|s| seg_dist(c, s.0, s.1) < 400.0).collect();
+    // (How much room a point has past the least: -1 where it may not stand.)
+    let room = |p: P| -> f64 {
+        if !contains(bd, p) || !clear_at(l, &near, &walls, p) {
+            return -1.0;
+        }
+        let mut r = (0..m).map(|e| seg_dist(p, bd[e], bd[(e + 1) % m]) - 5.0).fold(f64::MAX, f64::min);
+        for &(a, b, w) in &pl.walks {
+            r = r.min(seg_dist(p, a, b) - 0.5 * w - 3.0);
+        }
+        for t in &pl.tombs {
+            if contains(t, p) {
+                return -1.0;
+            }
+            r = r.min((0..t.len()).map(|e| seg_dist(p, t[e], t[(e + 1) % t.len()]) - 3.0).fold(f64::MAX, f64::min));
+        }
+        for &(q, rr) in &big {
+            r = r.min(dist(p, q) - rr - 3.5);
+        }
+        r
+    };
+    // (Along the cross walks or along the main walk, a line every 2 ft across; a wider margin
+    // worth some length.)
+    let mut pick: Option<(f64, P, P)> = None;
+    for ax in [pl.along, pl.inward] {
+        let u = if ax[0] < 0.0 || (ax[0] == 0.0 && ax[1] < 0.0) { mul(ax, -1.0) } else { ax };
+        let v = [-u[1], u[0]];
+        let (t0, t1) = extent(bd, u);
+        let (n0, n1) = extent(bd, v);
+        // (Level rather than steep; one steeper than 45 degrees only where nothing else fits.)
+        let level = if u[1].abs() > 0.72 { 0.25 } else { 1.0 - 0.6 * u[1].abs() };
+        let mut o = n0 + 1.0;
+        while o < n1 {
+            let at = |s: f64| add(mul(u, s), mul(v, o));
+            let n = ((t1 - t0) / 2.0) as usize + 1;
+            let slack: Vec<f64> = (0..n).map(|k| room(at(t0 + 2.0 * k as f64))).collect();
+            for extra in [0.0, 2.0, 4.0] {
+                let mut run0: Option<usize> = None;
+                for k in 0..=n {
+                    match (k < n && slack[k] >= extra, run0) {
+                        (true, None) => run0 = Some(k),
+                        (false, Some(a)) => {
+                            let len = 2.0 * (k - 1 - a) as f64;
+                            // (Beside the main walk: a line whose middle is more than 10 ft off its edge
+                            // loses for it.)
+                            let (pa, pb) = (at(t0 + 2.0 * a as f64), at(t0 + 2.0 * (k - 1) as f64));
+                            let off = seg_dist(lerp(pa, pb, 0.5), mw.0, mw.1) - 0.5 * mw.2;
+                            // (And one too short to hold a name at the battlemap's zoom only where
+                            // nothing longer fits.)
+                            let score = len * level + 2.0 * extra - 1.5 * (off - 10.0).max(0.0) - if len < 36.0 { 30.0 } else { 0.0 };
+                            if len >= 24.0 && pick.as_ref().is_none_or(|b| score > b.0 + 1e-9) {
+                                pick = Some((score, pa, pb));
+                            }
+                            run0 = None;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            o += 2.0;
+        }
+    }
+    pick.map(|(_, a, b)| vec![a, lerp(a, b, 0.5), b]).unwrap_or_default()
 }
 
 /// Whether a label baseline crosses a building, wall or tower of the layout (towncheck).
