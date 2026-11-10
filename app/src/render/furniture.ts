@@ -7634,38 +7634,35 @@ function stoneSteps(g: Graphics, f: InteriorItem, light: Light, rnd: () => numbe
   }
 }
 
-/** Ladder leaning up a ledge, toward `back` (the way up): two rails from a foot on the floor to the lip above, a
- * little wider at the top (nearer the eye), four rungs, the whole thrown as a shadow across the floor. */
+/** Ladder seen from straight above, lying toward `back` (the way up): two parallel rails the same width end to end,
+ * four evenly spaced rungs, the rail tops running past the last rung to the lip, a short shadow beside it. */
 function climbLadder(g: Graphics, f: InteriorItem, light: Light, rnd: () => number, back: [number, number]) {
   const { at } = frame(f, back);
   const [lx, ly] = light;
-  const rail = (side: number, s: number): [number, number] => at(0.5 + side * (0.17 + (0.95 - s) * 0.04), s);
-  const lift = (s: number) => (0.95 - s) * 0.32;
-  // The shadow: the ladder's lines moved away from the light, farther toward the top.
-  const sh = (p: [number, number], s: number): [number, number] => [p[0] - lx * lift(s), p[1] - ly * lift(s)];
-  for (const side of [-1, 1]) g.moveTo(...sh(rail(side, 0.95), 0.95)).lineTo(...sh(rail(side, -0.02), -0.02));
-  for (let k = 0; k < 4; k++) {
-    const s = 0.12 + k * 0.25;
-    g.moveTo(...sh(rail(-1, s), s)).lineTo(...sh(rail(1, s), s));
-  }
+  const rail = (side: number, s: number): [number, number] => at(0.5 + side * 0.17, s);
+  const [s0, s1] = [-0.04, 0.95];
+  const rungs = [0.12, 0.37, 0.62, 0.87];
+  // The shadow: the same lines moved a little away from the light.
+  const sh = (p: [number, number]): [number, number] => [p[0] - lx * 0.07, p[1] - ly * 0.07];
+  for (const side of [-1, 1]) g.moveTo(...sh(rail(side, s1))).lineTo(...sh(rail(side, s0)));
+  for (const s of rungs) g.moveTo(...sh(rail(-1, s))).lineTo(...sh(rail(1, s)));
   g.stroke({ width: 0.05, color: 0x14100c, alpha: 0.22, cap: 'round' });
   const d = 0.014;
   const line = (a: [number, number], b: [number, number], w: number, color: number, ox = 0, oy = 0) =>
     g.moveTo(a[0] + ox, a[1] + oy).lineTo(b[0] + ox, b[1] + oy).stroke({ width: w, color, cap: 'round' });
   for (const side of [-1, 1]) {
-    const [a, b] = [rail(side, -0.04), rail(side, 0.95)];
+    const [a, b] = [rail(side, s0), rail(side, s1)];
     line(a, b, 0.1, INK);
     line(a, b, 0.05, WOOD[1]);
     line(a, b, 0.016, WOOD[2], lx * d, ly * d);
   }
-  for (let k = 0; k < 4; k++) {
-    const s = 0.12 + k * 0.25;
+  for (const s of rungs) {
     const [a, b] = [rail(-1, s), rail(1, s)];
     line(a, b, 0.08, INK);
     line(a, b, 0.04, WOOD[2]);
   }
   // Scuffs where the feet stand.
-  for (const side of [-1, 1]) g.poly(oval(...rail(side, 0.95), 0.06, 0.04, rnd() * Math.PI, 8)).fill({ color: 0x14100c, alpha: 0.18 });
+  for (const side of [-1, 1]) g.poly(oval(...rail(side, s0), 0.06, 0.04, rnd() * Math.PI, 8)).fill({ color: 0x14100c, alpha: 0.18 });
 }
 
 /** Broken wall: a stretch of dressed masonry along the long side, its top broken down to a few heights (the highest
