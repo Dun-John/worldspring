@@ -21,17 +21,24 @@ void main() {
     float h = clamp(t, 0.0, 1.0);
     float d = length(pa - ba * h);
     float cover = 1.0 - smoothstep(vHalf - 0.5, vHalf + 0.5, d);
-    if (vStyle > 3.5) {
+    if (vStyle > 3.5 && vStyle < 4.5) {
         // A square tower: square ends.
         if (t < 0.0 || t > 1.0) discard;
-    } else if (vStyle > 2.5) {
+    } else if (vStyle > 2.5 && vStyle < 3.5) {
         // Steps: square ends, a hatch across the line every 2.5 ft (or 3 px), fading in as
         // the treads open up.
         if (t < 0.0 || t > 1.0) discard;
         float along = dot(pa, normalize(ba + vec2(1e-6, 0.0)));
         cover *= step(0.7, fract(along / max(2.5 * vPpf, 3.0))) * 0.5 * smoothstep(0.4, 1.0, vPpf * 2.5);
     }
+    vec3 col = INK;
+    if (vStyle > 4.5) {
+        // A palisade (timber brown) or rammed earth (tan): its colour inside an ink edge, once wide enough.
+        vec3 tone = vStyle > 5.5 ? vec3(0.80, 0.72, 0.56) : vec3(0.55, 0.39, 0.24);
+        float rim = clamp(vHalf * 0.35, 0.6, 1.2);
+        col = mix(INK, tone, (1.0 - smoothstep(vHalf - rim - 0.5, vHalf - rim + 0.5, d)) * step(1.6, vHalf));
+    }
     float a = cover * vFade * uAlpha;
     if (a <= 0.001) discard;
-    finalColor = vec4(INK * a, a);
+    finalColor = vec4(col * a, a);
 }

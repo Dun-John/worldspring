@@ -1243,7 +1243,7 @@ function drawStructures(shapes: Shape[], ox = 0, oy = 0): Graphics {
   if (bounds.length) drawBounds(g, bounds, ox, oy);
   for (const s of shapes) if (s.kind === SAILS) drawSails(g, s);
   const walls = shapes.filter((s) => s.kind === 0);
-  if (walls.length) drawWalls(g, walls);
+  if (walls.length) drawWalls(g, walls, shapes.filter((s) => s.kind === 9));
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
   for (const s of shapes) if (s.kind === 1) drawWallTower(g, s);
   for (const s of shapes) if (s.kind === 4) drawEntrance(g, s);

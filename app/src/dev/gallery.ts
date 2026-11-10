@@ -7,7 +7,8 @@
 // things look turned by hand instead: battlemap props that may turn (`TURNABLE`, and the other candidates) at four
 // turns on grass with their shadows, and furniture and props with a back at each of their four sides. Last, a
 // palace's forecourt as the battlemap draws it (garden wall, gate piers, open gates, gravel walks; `&items=forecourt`
-// alone, at `&sq=` px a square, default 64); the countryside's hedgerows, dry-stone walls, fences and windmill sails
+// alone, at `&sq=` px a square, default 64); town walls by culture group (`&items=townwalls` alone, default 16, `&ruins=1`
+// every panel ruined); the countryside's hedgerows, dry-stone walls, fences and windmill sails
 // (`&items=countryside`, or with `&kinds=62` or `63`, at `&sq=`, default 32); and a temple's pieces in each god's look (`&items=temple` alone,
 // default 56). `&items=civic` shows the guild and civic pieces and the stable stall. `&items=terrain` (alone, at
 // `&sq=` px a square, default 34) shows underground terrain as the floor shader paints it: a room each of shallow
@@ -23,7 +24,7 @@ import type { DoorState } from '../play/state';
 import { BATTLE_GROUPS, ITEM_GROUPS, looks as insideLooks } from '../editor/itemGroups';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, VARIANTS } from '../render/atlas';
 import { drawnTurned, LONG_SHADOW, OWN_SHADOW, SPARSE, TURNABLE } from '../render/BattlemapLayer';
-import { drawForecourtGate, drawGardenWalls, drawGatePier, drawGravelWalk } from '../render/walls';
+import { drawBastion, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawWalls, drawWallTower } from '../render/walls';
 import { drawBounds, drawSails, DRY_WALL, FENCE, HEDGE, SAILS } from '../render/countryside';
 import { GOD_NAMES, ORIENTED } from '../render/furniture';
 import { BACKED, InteriorLayer, ON_WALL } from '../render/InteriorLayer';
@@ -423,6 +424,12 @@ export async function runGallery(target: HTMLElement) {
     y = forecourt(root, y, width, query.has('nolabels'), Number(query.get('sq')) || PX);
   }
 
+  // Town walls by culture group (`&items=townwalls` alone; `&ruins=1` all ruined).
+  if (!only && (!pick || pick.includes('townwalls'))) {
+    head('Town walls by culture group: curtain, corner and wall towers, gatehouse; a ruin; a star bastion (battlemap)');
+    y = townWalls(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 16, query.has('ruins'));
+  }
+
   // The countryside's bounds and sails (`&items=countryside`, or with the fruit tree or water wheel kinds).
   if (pick?.includes('countryside') || only?.includes(62) || only?.includes(63)) {
     head('Countryside: hedgerow, dry-stone wall, fence (two chunks side by side, cut at the line between), windmill sails');
@@ -563,6 +570,101 @@ function forecourt(root: Container, y0: number, width: number, nolabels: boolean
     root.addChild(t);
   });
   return y0 + Math.ceil(panels.length / per) * (ph + 30) + 30;
+}
+
+/** A town wall's style code (`town::wallstyle::WallStyle::code`): group, tower shape, material, merlons, stone,
+ * outline, gatehouse. */
+const wallStyle = (group: number, shape: number, material: number, merlons: number, stone: number, gatehouse: number) =>
+  group | (shape << 3) | (material << 5) | (merlons << 7) | (stone << 10) | (gatehouse << 15);
+
+/** Town walls by culture group (item 104), as `walls.ts` draws them from shapes as `battlePrep` gives them (px),
+ * at `sq` px a square: per look a stretch of curtain turning at a corner tower, a wall tower along it and the
+ * gatehouse (the town to the south, open country to the north); a ruined run; a star bastion. `ruins` draws
+ * every panel ruined. Returns the y below it. */
+function townWalls(root: Container, y0: number, width: number, nolabels: boolean, sq: number, ruins: boolean): number {
+  // (Tower shapes: round, square, D, octagon; materials: stone, palisade, earth; merlons: broad, square,
+  // swallowtail, stepped, stakes, rounded; stones: granite, limestone, sandstone, rose brick, mud brick, timber,
+  // earth; gatehouses: square tower, twin drums, arched, bent, log.)
+  type Panel = { label: string; group: number; mat: number; mer: number; stone: number; house: number; along: number; corner: number; ruined?: boolean; close?: boolean };
+  const panels: Panel[] = [
+    { label: '1 North: granite, squat round towers, broad merlons, a square gate tower', group: 0, mat: 0, mer: 0, stone: 0, house: 0, along: 0, corner: 0 },
+    { label: '2 West: limestone, D towers, round corner, square crenels, twin drums', group: 1, mat: 0, mer: 1, stone: 1, house: 1, along: 2, corner: 0 },
+    { label: '3 South: sandstone, square towers, octagon corner, swallowtails, arched gate', group: 2, mat: 0, mer: 2, stone: 2, house: 2, along: 1, corner: 3 },
+    { label: '4 South: rose brick, the same', group: 2, mat: 0, mer: 2, stone: 3, house: 2, along: 1, corner: 3 },
+    { label: '5 Dry: mud brick, square towers set close, stepped merlons, bent entrance', group: 3, mat: 0, mer: 3, stone: 4, house: 3, along: 1, corner: 1, close: true },
+    { label: '6 Steppe (and poor North/West): palisade, log blockhouses, log gate', group: 4, mat: 1, mer: 4, stone: 5, house: 4, along: 1, corner: 1 },
+    { label: '7 Steppe rich: rammed earth, tapering round towers, rounded merlons, twin drums', group: 4, mat: 2, mer: 5, stone: 6, house: 1, along: 0, corner: 0 },
+    { label: '8 West, ruined', group: 1, mat: 0, mer: 1, stone: 1, house: 1, along: 2, corner: 0, ruined: true },
+  ];
+  const [W, H, wy] = [34, 15, 6];
+  const [pw, ph] = [W * sq, H * sq];
+  const per = Math.max(1, Math.floor((width - 8) / (pw + 24)));
+  const shape = (kind: number, size: number, pts: number[]): Shape => ({ kind, size, pts });
+  const P = (x: number, y: number) => [x * PX, y * PX];
+  const place = (g: Graphics, ox: number, oy: number, w: number, h: number, label: string) => {
+    const panel = new Container();
+    const clip = new Graphics().rect(0, 0, w * PX, h * PX).fill(0xffffff);
+    panel.addChild(g, clip);
+    g.mask = clip;
+    panel.scale.set(sq / PX);
+    panel.position.set(ox, oy);
+    root.addChild(panel);
+    if (nolabels) return;
+    const t = new Text({ text: label, style: LABEL });
+    t.position.set(ox, oy + h * sq + 4);
+    root.addChild(t);
+  };
+  panels.forEach((p, k) => {
+    const [ox, oy] = [16 + (k % per) * (pw + 24), y0 + Math.floor(k / per) * (ph + 30)];
+    const ruined = ruins || !!p.ruined;
+    const g = new Graphics();
+    g.rect(0, 0, W * PX, H * PX).fill(GRASS);
+    g.rect(3 * PX, wy * PX, (W - 3) * PX, (H - wy) * PX).fill(PAVING);
+    const code = (sh: number) => wallStyle(p.group, sh, p.mat, p.mer, p.stone, p.house) * PX;
+    const form = (1 + p.house) * PX;
+    const wallFt = p.mat === 1 ? 3 : p.mat === 2 ? 11 : 8;
+    // Its towers: the corner at (3, wy), along the curtain at 11 (and 7, 15 set close), the gate's two 52 ft apart.
+    const [ga, gb] = [19, 19 + 52 / 5];
+    const along = p.close ? [8, 13.5] : [11];
+    const wall = (x0: number, y0w: number, x1: number, y1: number) => shape(0, wallFt * (PX / 5), [...P(x0, y0w), ...P(x1, y1), (ruined ? 4 : 0) * PX, 0, code(0), 0]);
+    const stops = [3, ...along, ga];
+    const walls = [wall(3, H + 1, 3, wy), ...stops.slice(0, -1).map((x, i) => wall(x, wy, stops[i + 1], wy)), wall(gb, wy, W + 1, wy)];
+    const rf = ruined ? 4 : 0;
+    // (A tower: its centre, flags and angle, style and gate form; a square's or octagon's sides along the wall, a D facing out, north.)
+    const tower = (x: number, sh: number, r: number, flags: number, f = 0) => shape(1, r * (PX / 5), [...P(x, wy), (flags | rf | (sh === 1 ? 8 : 0)) * PX, (sh === 2 ? -Math.PI / 2 : 0) * PX, code(sh), f]);
+    const towers = [tower(3, p.corner, 11, 0), ...along.map((x) => tower(x, p.along, 11, 0))];
+    if (p.house === 3 || p.house === 4) towers.push(tower(ga, 1, 12, 1, form), tower(gb, 1, 12, 1, form));
+    else if (p.house === 1) towers.push(tower(ga, 0, 15, 1, form), tower(gb, 0, 15, 1, form));
+    const gate = shape(9, ruined ? PX : 0, [...P(ga, wy), ...P(gb, wy), code(0), form, PX, PX]);
+    drawWalls(g, walls, [gate]);
+    drawGate(g, gate);
+    for (const t of towers) drawWallTower(g, t);
+    place(g, ox, oy, W, H, p.label);
+  });
+  let y = y0 + Math.ceil(panels.length / per) * (ph + 30) + 10;
+  // A star bastion (West, limestone) at a corner of the town (to the south-east): f1, g1, tip, g2, f2, the corner.
+  {
+    const [BW, BH] = [34, 22];
+    const g = new Graphics();
+    g.rect(0, 0, BW * PX, BH * PX).fill(GRASS);
+    g.rect(14 * PX, 11 * PX, (BW - 14) * PX, (BH - 11) * PX).fill(PAVING);
+    const code = wallStyle(1, 0, 0, 1, 1, 1) * PX;
+    const ring: [number, number][] = [
+      [BW + 1, 11],
+      [21.2, 11],
+      [21.2, 6.6],
+      [4.27, 1.27],
+      [9.6, 18.2],
+      [14, 18.2],
+      [14, BH + 1],
+    ];
+    const poly = [ring[1], ring[2], ring[3], ring[4], ring[5], [14, 11]].flatMap(([x, yy]) => P(x, yy));
+    drawBastion(g, shape(31, 0, [...poly, code, 0]));
+    drawWalls(g, ring.slice(0, -1).map(([x, yy], i) => shape(0, 8 * (PX / 5), [...P(x, yy), ...P(...ring[i + 1]), (ruins ? 4 : 0) * PX, 0, code, 0])));
+    place(g, 16, y, BW, BH, '9 West rich: a star bastion at a corner (its faces wall, its platform paved)');
+    y += BH * sq + 40;
+  }
+  return y;
 }
 
 /** An object's drop shadow as the battlemap casts it (`BattlemapLayer`): a soft blob to the SE (from the foot of

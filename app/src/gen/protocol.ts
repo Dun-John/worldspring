@@ -862,7 +862,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 31;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -908,12 +908,9 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       // A park's water (a pond fanned from its middle, a stream; not outlined), gravel, parterres
       // (hedged beds), trees' crowns and flowerbeds.
       else if (kind === 11) rgb = [0.42, 0.6, 0.64];
-      // A town wall's bastion (`payload.rs` kind 31): its ground, plain for now (its walls are the
-      // town wall's lines).
-      else if (kind === 31) {
-        rgb = [0.74, 0.71, 0.62];
-        a = 0.6;
-      }
+      // A town wall's bastion (`payload.rs` kind 31): a stone platform, outlined (its faces are the town
+      // wall's lines).
+      else if (kind === 31) rgb = [0.76, 0.73, 0.65];
       else if (kind === 12) rgb = [0.85, 0.81, 0.69];
       else if (kind === 13) {
         rgb = [0.42, 0.55, 0.33];
@@ -986,15 +983,22 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
     }
     fill = { pos, color, edge, index };
   }
-  // Ink: walls and towers from the line section (building outlines are inked by the fill).
+  // Ink: walls and towers from the line section (building outlines are inked by the fill). A town wall
+  // by its width (`payload.rs`, item 104): a palisade's (5 ft) timber brown, rammed earth's (12) tan, both
+  // inked along their sides (tileink styles 5, 6); stone's ink.
   const lineVerts = lines.verts.length / 4;
+  const styleOf = (v: number) => {
+    const kind = lines.verts[v * 4 + 3];
+    const w = lines.verts[v * 4 + 2];
+    return kind === 0 && w === 5 ? 5 : kind === 0 && w === 12 ? 6 : kind + 1;
+  };
   const starts: number[] = [];
   const out = new Float32Array(lineVerts * 4);
   let o = 0;
   for (let l = 0; l + 1 < lines.starts.length; l++) {
     starts.push(o / 4);
     for (let v = lines.starts[l]; v < lines.starts[l + 1]; v++) {
-      out.set([lines.verts[v * 4], lines.verts[v * 4 + 1], lines.verts[v * 4 + 2], lines.verts[v * 4 + 3] + 1], o);
+      out.set([lines.verts[v * 4], lines.verts[v * 4 + 1], lines.verts[v * 4 + 2], styleOf(v)], o);
       o += 4;
     }
   }
