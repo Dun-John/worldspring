@@ -43,6 +43,8 @@ function inPixels(g: Graphics, k: number): Graphics {
         let a = args;
         if (name in LENGTHS) a = args.map((x, i) => (i < LENGTHS[name] && typeof x === 'number' ? x * k : x));
         else if (name === 'poly') a = [(args[0] as number[]).map((x) => x * k), ...args.slice(1)];
+        // (A transform's shift is a length; its scale is not: `InteriorLayer.drawWay`.)
+        else if (name === 'setTransform' && typeof args[0] === 'number') a = args.map((x, i) => (i >= 4 && typeof x === 'number' ? x * k : x));
         else if (name === 'stroke' && args[0] && typeof args[0] === 'object') {
           const st = args[0] as { width?: number };
           a = [{ ...st, width: (st.width ?? 1) * k }, ...args.slice(1)];

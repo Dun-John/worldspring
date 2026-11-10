@@ -305,6 +305,16 @@ export class Labels {
     }
   }
 
+  /** Labels kept from view while inside a building or site (entrances in a building: `MapView.inBuilding`). */
+  private inside: Set<string> | null = null;
+
+  /** Inside a building or site: the labels in `ids` are hidden (null: none, outside). */
+  setInside(ids: Set<string> | null) {
+    if (ids === this.inside) return;
+    this.inside = ids;
+    this.lastZoom = NaN;
+  }
+
   /** Show or hide the business pins. */
   setPlaces(on: boolean) {
     if (on === this.placesOn) return;
@@ -373,7 +383,7 @@ export class Labels {
     const dotAt: [number, number][] = [];
     for (const it of band) {
       const { f, style } = it;
-      if (!style.keep || this.hidden.has(f.id) || this.conceal?.(f)) continue;
+      if (!style.keep || this.hidden.has(f.id) || this.conceal?.(f) || this.inside?.has(f.id)) continue;
       const px = f.extent_ft * ppf;
       if (px < style.minPx || px > style.maxPx) continue;
       const [sx, sy] = cam.worldToScreen(f.x, f.y);
@@ -388,7 +398,7 @@ export class Labels {
     }
     for (const it of band) {
       const { f, style } = it;
-      if ((style.badge && !this.placesOn) || this.hidden.has(f.id) || this.conceal?.(f)) continue;
+      if ((style.badge && !this.placesOn) || this.hidden.has(f.id) || this.conceal?.(f) || this.inside?.has(f.id)) continue;
       if (style.keep) {
         // The name right of the symbol, or else left, below or above it, or none.
         let placed = false;

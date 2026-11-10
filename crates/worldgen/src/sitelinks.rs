@@ -2,9 +2,9 @@
 //! created entrance is in (when that building still stands with a cellar), which entrances lead
 //! down from a building, the dungeon's name (its entrance's) and the way up in the dungeon
 //! that leads back to the cellar. The hooks are one call each in `under::generate`,
-//! `interior::cellar_links` and the battlemap's entrance loop.
+//! `interior::cellar_links` (`place_way`) and the battlemap's entrance loop.
 
-use crate::interior::{Interior, Link};
+use crate::interior::{Interior, Item, Level, Link};
 use crate::t0::T0;
 use crate::town::{self, Structure};
 use crate::under::UnderKind;
@@ -119,4 +119,105 @@ pub fn dress(world: &World, t0: &T0, layout: usize, it: &mut Interior) {
             return;
         }
     }
+}
+
+/// Put the way down to a site (item `kind`, `name`, linked `to`) on cellar level `lvl` so it reads at a glance:
+/// on a free floor square whose eight neighbours are free floor of its room (the app draws it bigger than its
+/// square), the nearest to grid point `at`; else the square of the largest room with the most free neighbours,
+/// nearest its middle; else any free square nearest `at`; with none free, the nearest furniture that may move
+/// (no way, no picture) gives way. Off the stairs `st` and doorways. False only on a level with no floor.
+pub fn place_way(lvl: &mut Level, nx: usize, ny: usize, st: [usize; 4], at: [f64; 2], kind: &'static str, name: &'static str, to: String) -> bool {
+    let mut taken = vec![false; nx * ny];
+    let mut stair = vec![false; nx * ny];
+    for f in &lvl.furniture {
+        for j in f.y as usize..(f.y + f.h) as usize {
+            for i in f.x as usize..(f.x + f.w) as usize {
+                if i < nx && j < ny {
+                    taken[j * nx + i] = true;
+                }
+            }
+        }
+    }
+    for j in st[1]..(st[1] + st[3]).min(ny) {
+        for i in st[0]..(st[0] + st[2]).min(nx) {
+            taken[j * nx + i] = true;
+            stair[j * nx + i] = true;
+        }
+    }
+    let mut door = vec![false; nx * ny];
+    for d in &lvl.doors {
+        let (x, y) = (d.a[0].min(d.b[0]), d.a[1].min(d.b[1]));
+        let back = (x - if d.a[0] == d.b[0] { 1.0 } else { 0.0 }, y - if d.a[1] == d.b[1] { 1.0 } else { 0.0 });
+        for (x, y) in [(x, y), back] {
+            if x >= 0.0 && y >= 0.0 && (x as usize) < nx && (y as usize) < ny {
+                door[y as usize * nx + x as usize] = true;
+            }
+        }
+    }
+    let floor = |k: usize| lvl.cells[k] >= 0;
+    let free = |taken: &[bool], k: usize| floor(k) && !taken[k] && !door[k];
+    // Free neighbours of square k in its own room (of eight).
+    let room_round = |taken: &[bool], k: usize| -> usize {
+        let (i, j) = ((k % nx) as i64, (k / nx) as i64);
+        let mut n = 0;
+        for (di, dj) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+            let (a, b) = (i + di, j + dj);
+            if a >= 0 && b >= 0 && (a as usize) < nx && (b as usize) < ny {
+                let q = b as usize * nx + a as usize;
+                if free(taken, q) && lvl.cells[q] == lvl.cells[k] {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    let dist = |k: usize, p: [f64; 2]| {
+        let (dx, dy) = ((k % nx) as f64 + 0.5 - p[0], (k / nx) as f64 + 0.5 - p[1]);
+        dx * dx + dy * dy
+    };
+    let nearest = |ks: &mut dyn Iterator<Item = usize>, p: [f64; 2]| ks.min_by(|&a, &b| dist(a, p).total_cmp(&dist(b, p)).then(a.cmp(&b)));
+    let mut best = nearest(&mut (0..nx * ny).filter(|&k| free(&taken, k) && room_round(&taken, k) == 8), at);
+    if best.is_none() {
+        // The largest room's middle, as clear as it gets.
+        let big = lvl.rooms.iter().enumerate().max_by(|a, b| a.1.squares.cmp(&b.1.squares).then(b.0.cmp(&a.0)));
+        if let Some((ri, r)) = big {
+            let mid = [r.center[0] as f64, r.center[1] as f64];
+            let most = (0..nx * ny).filter(|&k| free(&taken, k) && lvl.cells[k] == ri as i16).map(|k| room_round(&taken, k)).max();
+            if let Some(m) = most {
+                best = nearest(&mut (0..nx * ny).filter(|&k| free(&taken, k) && lvl.cells[k] == ri as i16 && room_round(&taken, k) == m), mid);
+            }
+        }
+    }
+    if best.is_none() {
+        best = nearest(&mut (0..nx * ny).filter(|&k| free(&taken, k)), at);
+    }
+    if best.is_none() {
+        // No free floor: the nearest furniture that may move gives way, the way on one of its squares.
+        let linked = |f: &Item| lvl.links.iter().any(|l| l.x >= f.x && l.x < f.x + f.w && l.y >= f.y && l.y < f.y + f.h);
+        let mut order: Vec<usize> = (0..lvl.furniture.len()).filter(|&n| lvl.furniture[n].kind != "sprite" && !linked(&lvl.furniture[n])).collect();
+        let mid = |f: &Item| [f.x as f64 + f.w as f64 * 0.5 - 0.5, f.y as f64 + f.h as f64 * 0.5 - 0.5];
+        order.sort_by(|&a, &b| {
+            let (pa, pb) = (mid(&lvl.furniture[a]), mid(&lvl.furniture[b]));
+            let d = |p: [f64; 2]| (p[0] - at[0] + 0.5) * (p[0] - at[0] + 0.5) + (p[1] - at[1] + 0.5) * (p[1] - at[1] + 0.5);
+            d(pa).total_cmp(&d(pb)).then(a.cmp(&b))
+        });
+        for n in order {
+            let f = &lvl.furniture[n];
+            let squares: Vec<usize> = (f.y as usize..(f.y + f.h) as usize).flat_map(|j| (f.x as usize..(f.x + f.w) as usize).map(move |i| j * nx + i)).collect();
+            if let Some(k) = nearest(&mut squares.into_iter().filter(|&k| k < nx * ny && floor(k) && !stair[k] && !door[k]), at) {
+                lvl.furniture.remove(n);
+                best = Some(k);
+                break;
+            }
+        }
+    }
+    // (Last: any floor off the stairs, a doorway's square if it must.)
+    if best.is_none() {
+        best = nearest(&mut (0..nx * ny).filter(|&k| floor(k) && !stair[k]), at).or_else(|| nearest(&mut (0..nx * ny).filter(|&k| floor(k)), at));
+    }
+    let Some(k) = best else { return false };
+    let (x, y) = ((k % nx) as u16, (k / nx) as u16);
+    lvl.furniture.push(Item { kind, name, x, y, w: 1, h: 1, cover: 0, blocks_move: false, height_ft: 0.0, hazard: None, sprite: 0, back: None, variant: None });
+    lvl.links.push(Link { x, y, to });
+    true
 }

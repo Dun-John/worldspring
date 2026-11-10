@@ -1353,7 +1353,7 @@ fn cellar_links(mut lvl: Option<&mut Level>, world: &World, t0: &T0, l: &Layout,
         let (item, name, wanted) = crate::sitelinks::way_down(c.under_kind().unwrap_or(crate::under::UnderKind::Dungeon), crate::sitelinks::trapdoor(c));
         want.push(wanted);
         if let Some(lvl) = lvl.as_deref_mut() {
-            place_link(lvl, nx, ny, stairs, grid([c.x, c.y]), item, name, format!("u:{el}:0"));
+            crate::sitelinks::place_way(lvl, nx, ny, stairs, grid([c.x, c.y]), item, name, format!("u:{el}:0"));
         }
     }
     want

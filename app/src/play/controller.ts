@@ -11,6 +11,7 @@ import { SECTION_N, type Sewers } from '../render/Sewers';
 import { PlayChannel, type CameraMsg, type Msg, type Role, type Ruler, type Scene, type Vision } from './channel';
 import { PIN, PlayLayer } from './PlayLayer';
 import { settle, type Carried, type Carry } from './carry';
+import { forgetRehosted } from './rehosted';
 import { hasImage, loadSession, putImage, saveSession } from './session';
 import { apply, emptyState, followed, hasSession, isUnderground, locKey, newId, normalize, parseLoc, revealed, revealsNew, settingsOf, type DoorState, type GridSettings, type LocSettings, type Op, type PlayState, type Shape, type ShapeKind, roleOf, type Token, type TokenKind, type TokenRole } from './state';
 import { BLOCKS, bitAt, computeVision, showNiches, gridDistance, interiorGrid, measure, OPAQUE, rulerLabel, SIGHT, SOLID, UNKNOWN, type Eye, type TacticalGrid } from './vision';
@@ -650,6 +651,7 @@ export class PlayController implements PointerTool {
 
   /** Sites designed anew since the last edits: their walls and levels are fetched again. */
   private forgetRedesigned(world: WorldFile) {
+    if (forgetRehosted(this, world, this.interiors, this.entrances, this.places)) [this.placeCache, this.visionDirty] = [null, true];
     const now = world.edits?.designs ?? {};
     for (const id of new Set([...Object.keys(this.designsSeen), ...Object.keys(now)])) {
       // (The same design object is the same design; one received anew is compared as JSON.)

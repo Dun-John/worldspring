@@ -19,7 +19,7 @@ import { RIVER_Q, TileLayer, type LayerStats } from './TileLayer';
 export interface InteriorState {
   id: string;
   name: string;
-  levels: { name: string; z: number }[];
+  levels: { name: string; z: number; way?: string }[];
   level: number;
 }
 
@@ -609,6 +609,7 @@ export class MapView {
   async enterBuilding(id: string, keep?: { level: number }, from?: string): Promise<boolean> {
     this.unmarkUnless(id);
     const it = await this.gen.interior(id);
+    if (it) await this.nameWays(it);
     if (!it || !this.geom) {
       // (Nothing opened: a room picked in it is not marked.)
       if (InteriorLayer.picked?.startsWith(`r:${id}:`)) this.markRoom(null);
@@ -780,6 +781,7 @@ export class MapView {
     }
     this.interior = null;
     this.labels?.setPlaces(this.places);
+    this.labels?.setInside(null);
     this.onInterior(null);
   }
 
@@ -802,6 +804,50 @@ export class MapView {
     if (!it) return;
     this.markNpcs();
     this.onInterior({ id: it.interior.id, name: this.renames[it.interior.id] ?? it.interior.name ?? it.interior.function, levels: it.levelInfo(), level: it.currentLevel });
+    this.labels?.setInside(this.inBuilding);
+  }
+
+  /** The created entrances in a building (`in_building`): their map labels stand on the building, so inside
+   * a building or site they would sit on its rooms' (the way down there has its own label). */
+  private inBuilding = new Set<string>();
+
+  /** A created change: the dungeons' names for the ways to them (`InteriorLayer.ways`, `u:<layout>:0`), and
+   * the interiors peeked at forgotten (an entrance moved into, out of or between buildings changes them). */
+  private createdWays(list: Created[]) {
+    this.peekCache.clear();
+    const first = this.baseOverlay?.first_created ?? this.overlay?.first_created;
+    // (The buildings' names are asked again as needed: a drawn building may have changed.)
+    const ways: Record<string, string> = {};
+    this.inBuilding = new Set();
+    list.forEach((c, k) => {
+      if (c.kind !== 'entrance' || c.removed) return;
+      if (c.in_building) this.inBuilding.add(c.id);
+      if (first !== undefined && c.name?.trim()) ways[`u:${first + k}:0`] = c.name.trim();
+    });
+    InteriorLayer.ways = ways;
+  }
+
+  /** The names of the buildings a site's ways lead back up to (`b:` links), for its labels: a business pin's,
+   * else the building's own (its interior, as peeked). */
+  private async nameWays(it: Interior) {
+    if (!/^u:/.test(it.id)) return;
+    for (const lv of it.levels) {
+      for (const k of lv.links ?? []) {
+        if (!k.to.startsWith('b:') || InteriorLayer.siteName(k.to)) continue;
+        const hit = this.labels?.placeHit(k.to);
+        let name = hit ? (hit.name ?? `the ${hit.function}`) : undefined;
+        if (!name) {
+          let host = this.peekCache.get(k.to);
+          if (host === undefined) {
+            host = await this.gen.interior(k.to);
+            this.peekCache.set(k.to, host);
+            if (this.peekCache.size > 64) this.peekCache.delete(this.peekCache.keys().next().value!);
+          }
+          name = host ? (host.name ?? `the ${host.function}`) : undefined;
+        }
+        if (name) InteriorLayer.ways = { ...InteriorLayer.ways, [k.to]: name };
+      }
+    }
   }
 
   /** The created id of a building drawn by hand, from its building id (else null). */
@@ -938,6 +984,7 @@ export class MapView {
       }
     }
     const createdChanged = JSON.stringify(before) !== JSON.stringify(after);
+    if (createdChanged) this.createdWays(after);
     if (createdChanged && this.baseOverlay) {
       const created = after.filter((c) => !c.removed).map(createdFeature);
       this.overlay = { ...this.baseOverlay, features: [...this.baseOverlay.features, ...created] };
