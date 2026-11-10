@@ -1,10 +1,13 @@
 //! MCP tools for villages and towns added without remaking the world (`Created` kind `village`
-//! or `town`; laid out by `worldgen::t0::made`).
+//! or `town`; laid out by `worldgen::t0::made`), and for changing a settlement's tier, what it
+//! lives by, whether it is the capital and its name (`update_settlement`): a made one at once, one
+//! of the world's own through a sketch pin in its place (`Stroke::replaces`) and `regenerate`.
 
 use serde_json::{Value, json};
 use worldgen::agent;
 use worldgen::t0::made;
-use worldgen::world::{CREATED_SETTLEMENTS, Created, PIN_KINDS};
+use worldgen::t0::settle::SettleKind;
+use worldgen::world::{CREATED_SETTLEMENTS, Created, PIN_KINDS, PIN_TIERS};
 
 use crate::Shared;
 use crate::tools::{schema, text};
@@ -23,7 +26,16 @@ pub fn list() -> Vec<Value> {
         "name": { "type": "string", "description": "If left out, named in its culture's style" },
         "culture": { "type": "integer", "minimum": 0, "maximum": 4, "description": "Naming culture: 0 cold north, 1 temperate west, 2 warm south, 3 dry lands, 4 open steppe (default: the nearest settlement's)" },
         "lives_by": { "type": "string", "enum": lives_by_kinds(), "description": "What it lives by (default: from its ground)" },
-    }), &["tier"]) })]
+    }), &["tier"]) }),
+    json!({ "name": "update_settlement", "title": "Change a settlement", "description": "Change a settlement's tier, what it lives by, whether it is the realm's capital, or its name (Neverwinter a 2,000-person town, Luskan a fishing village). A village or town added by hand (c:...) changes at once, as a village or town that lives inland (a city, a capital, a port or a fishing village needs the world remade: refused, saying how). One of the world's own changes through a settlement pin in its place in the sketch (replaces: its tier; get_sketch shows it with the settlement's id): stored at once, pending: true, and the world is remade by regenerate (or regenerate: true here). It stays the same place: its layout number, and its names, notes, NPCs and plot points follow it; it is laid out anew, so changes inside it (buildings, streets) are set aside, and its population is drawn in its tier's range. A port or fishing village only on a sea or lake shore (fishing also on a river). Nothing else moves but what its new size changes round it (its roads, its trade).", "inputSchema": schema(json!({
+        "id": { "type": "string", "description": "The settlement (a metropolis, city, town or village; c:... for one added by hand)" },
+        "tier": { "type": "string", "enum": PIN_TIERS, "description": "Its new size (default: as it is)" },
+        "lives_by": { "type": "string", "enum": PIN_KINDS, "description": "What it lives by (default: as it is if its tier stays, else from its land)" },
+        "capital": { "type": "boolean", "description": "true: the realm's capital (the world's own settlements only)" },
+        "name": { "type": "string", "description": "Its new name (default: as it is named now)" },
+        "regenerate": { "type": "boolean", "default": false, "description": "One of the world's own: remake the world at once (as regenerate), with the sketch's other pending changes" },
+    }), &["id"]), "annotations": { "openWorldHint": false, "idempotentHint": true } }),
+    ]
 }
 
 /// Run a settlement tool (None: not one of these). `delete_feature` on a created village or town
@@ -31,6 +43,7 @@ pub fn list() -> Vec<Value> {
 pub async fn call(app: &Shared, name: &str, a: &Value) -> Option<Result<Vec<Value>, String>> {
     Some(match name {
         "create_settlement" => create(app, a).await.map(text),
+        "update_settlement" => update(app, a).await.map(text),
         "delete_feature" => {
             let id = a["id"].as_str()?.to_string();
             let k = app.with_edits(|e| e.created.iter().position(|c| c.id == id && !c.removed && c.is_settlement())).flatten()?;
@@ -128,4 +141,179 @@ async fn delete(app: &Shared, id: String, k: usize) -> Result<Value, String> {
         Ok(json!({ "tool": "delete_feature", "id": id, "set_aside": n }))
     })
     .await
+}
+
+/// What an `update_settlement` asks: tier, lives_by, capital and name, each if given.
+struct Asked {
+    tier: Option<String>,
+    lives_by: Option<String>,
+    capital: Option<bool>,
+    name: Option<String>,
+}
+
+fn asked(a: &Value) -> Result<Asked, String> {
+    for k in a.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() {
+        if !["id", "tier", "lives_by", "capital", "name", "regenerate"].contains(&k.as_str()) {
+            return Err(format!("{k}: unknown argument (update_settlement takes id, tier, lives_by, capital, name, regenerate)"));
+        }
+    }
+    let word = |k: &str, of: &[&str]| match &a[k] {
+        Value::Null => Ok(None),
+        Value::String(w) if of.contains(&w.as_str()) => Ok(Some(w.clone())),
+        v => Err(format!("{k}: one of {}, got {v}", of.join(", "))),
+    };
+    let flag = |k: &str| match &a[k] {
+        Value::Null => Ok(None),
+        Value::Bool(b) => Ok(Some(*b)),
+        v => Err(format!("{k}: true or false, got {v}")),
+    };
+    let name = match &a["name"] {
+        Value::Null => None,
+        Value::String(n) if !n.trim().is_empty() && n.trim().chars().count() <= worldgen::world::NAME_MAX => Some(n.trim().to_string()),
+        v => return Err(format!("name: a name of 1 to {} characters, got {v}", worldgen::world::NAME_MAX)),
+    };
+    flag("regenerate")?;
+    Ok(Asked { tier: word("tier", &PIN_TIERS)?, lives_by: word("lives_by", &PIN_KINDS)?, capital: flag("capital")?, name })
+}
+
+async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
+    let id = crate::tools::arg_str(a, "id")?;
+    let ask = asked(a)?;
+    if ask.tier.is_none() && ask.lives_by.is_none() && ask.capital.is_none() && ask.name.is_none() {
+        return Err("give what changes: tier, lives_by, capital or name".into());
+    }
+    if let Some(k) = app.with_edits(|e| e.created.iter().position(|c| c.id == id && !c.removed && c.is_settlement())).flatten() {
+        return update_made(app, id, k, ask).await;
+    }
+    if crate::batch::active() {
+        return Err("update_settlement can't change one of the world's own settlements in a batch: the sketch is changed (and the world remade) on its own".into());
+    }
+    let wid = id.clone();
+    let lives = ask.lives_by.clone();
+    // The settlement: its layout, pin, tier as placed, kind, name, cell centre, and a shore check.
+    let (li, pin, tier, planned, kind, name, spot, capital, shore) = app
+        .worker
+        .with(move |ex| {
+            let (w, t0) = (&ex.world, &ex.t0);
+            let li = agent::layout_of(w, t0, &wid).filter(|&li| li < t0.settlements.len()).ok_or_else(|| format!("id: a settlement (a metropolis, city, town or village; search_features finds them), got {wid:?}"))?;
+            let s = &t0.settlements[li];
+            let name = w.file.edits.renames.get(&wid).cloned().or_else(|| t0.extra.as_ref()?.overlay.features.iter().find(|f| f.id == wid).map(|f| f.name.clone())).unwrap_or_default();
+            let gw = t0.height.w;
+            let spot = [(s.cell % gw) as f64 * t0.cell_ft, (s.cell / gw) as f64 * t0.cell_ft];
+            // (A port or fishing village needs sea or lake within reach of its spot, as a pin does.)
+            let shore = match lives.as_deref() {
+                Some(k @ ("port" | "fishing")) => {
+                    let wet = (1..=4).any(|r| (0..24).any(|q| {
+                        let ang = std::f64::consts::TAU * q as f64 / 24.0;
+                        let d = 0.4 * r as f64 * t0.cell_ft;
+                        t0.sample_lake(spot[0] + d * ang.cos(), spot[1] + d * ang.sin()).1 >= 0.5
+                    }));
+                    wet || s.coastal || matches!(s.kind, SettleKind::Port | SettleKind::Fishing) || (k == "fishing" && s.river)
+                }
+                _ => true,
+            };
+            Ok((li, s.pin, s.tier.name().to_string(), s.planned.name().to_string(), PIN_KINDS[s.kind as usize].to_string(), name, spot, s.capital, shore))
+        })
+        .await?;
+    if !shore {
+        return Err(format!("lives_by: a port or fishing village stands on a sea or lake shore (fishing also on a river): {name} is inland. Leave lives_by out, or give another (river, mining, fortress, market, farming, lumber, herding, oasis)"));
+    }
+    let new_tier = ask.tier.clone().unwrap_or_else(|| tier.clone());
+    // (What it lives by stays with its tier, unless asked: a new tier's is from its land.)
+    let new_kind = ask.lives_by.clone().or_else(|| (new_tier == tier).then(|| kind.clone()));
+    let fresh = crate::sketch::pin_stroke(spot, &new_tier);
+    let (asked_name, asked_capital) = (ask.name.clone(), ask.capital);
+    let given_tier = ask.tier.is_some();
+    let (lives_given, asked_kind) = (ask.lives_by.is_some(), ask.lives_by.clone());
+    let made_new = pin.is_none();
+    let r = crate::sketch::put_pin(app, pin.map(|k| k as usize), spot, fresh, move |s| {
+        if made_new && s.replaces.is_none() {
+            // (In place of the world's own: as it was placed, and as it is named now.)
+            s.replaces = Some(planned);
+            s.name = Some(name);
+            s.kind = new_kind;
+            s.capital = capital;
+        }
+        if given_tier {
+            s.tier = Some(new_tier);
+        }
+        if lives_given {
+            s.kind = asked_kind;
+        }
+        if let Some(c) = asked_capital {
+            s.capital = c;
+        }
+        if let Some(n) = asked_name {
+            s.name = Some(n);
+        }
+    })
+    .await?;
+    let mut out = json!({ "id": id, "layout": li, "pin": r["stroke"]["id"], "stroke": r["stroke"], "pending": r["pending"] });
+    if r["unchanged"] == json!(true) {
+        out["unchanged"] = json!(true);
+    }
+    if a["regenerate"] == json!(true) {
+        let g = crate::sketch::regenerate(app).await?;
+        let now = app.worker.with(move |ex| Ok(agent::feature_of_layout(&ex.world, &ex.t0, li))).await?;
+        out["pending"] = json!(false);
+        out["now"] = json!(now);
+        out["regenerate"] = g;
+        out["note"] = json!("The world was remade: the settlement is now `now` (same layout number), with its names, notes, NPCs and plot points; changes inside it were set aside (regenerate's set_aside)");
+    } else {
+        out["note"] = json!("Stored as a pin in its place in the sketch (pin): regenerate remakes the world with it. The settlement keeps its place and layout number, and its names, notes, NPCs and plot points follow it; it is laid out anew, so changes inside it are set aside");
+    }
+    Ok(out)
+}
+
+/// `update_settlement` on a village or town added by hand (at `k` in `created`): changed at once
+/// (laid out anew when its tier or kind changes: the edits in it set aside).
+async fn update_made(app: &Shared, id: String, k: usize, ask: Asked) -> Result<Value, String> {
+    let how = "delete_feature it and put a settlement pin there (create_sketch_stroke {tool: pin, at, tier, lives_by, capital, name}), then regenerate";
+    if let Some(t) = ask.tier.as_deref().filter(|t| !CREATED_SETTLEMENTS.contains(t)) {
+        return Err(format!("tier: a village or town added by hand stays a village or town ({t} needs the world remade: {how})"));
+    }
+    if ask.capital == Some(true) {
+        return Err(format!("capital: a village or town added by hand can't be the capital (that needs the world remade: {how})"));
+    }
+    if let Some(l) = ask.lives_by.as_deref().filter(|l| !lives_by_kinds().contains(l)) {
+        return Err(format!("lives_by: a village or town added by hand stands inland, so not {l} (a port or fishing village needs the world remade: {how})"));
+    }
+    let first = first_created(app).await?;
+    let wid = id.clone();
+    let change = app
+        .edit("agent", 0, move |e| {
+            let old = e.created.clone();
+            let c = e.created.get_mut(k).filter(|c| c.id == wid && !c.removed).ok_or_else(|| format!("{wid} was deleted meanwhile"))?;
+            let was = (c.kind.clone(), c.lives_by.clone(), c.name.clone());
+            if let Some(t) = ask.tier {
+                c.kind = t;
+            }
+            if let Some(l) = ask.lives_by {
+                c.lives_by = Some(l);
+            }
+            if let Some(n) = &ask.name {
+                c.name = n.clone();
+            }
+            let now = (c.kind.clone(), c.lives_by.clone(), c.name.clone());
+            c.check()?;
+            // (A name given wins over a rename made before.)
+            let renamed = ask.name.is_some() && e.renames.remove(&wid).is_some();
+            if now == was && !renamed {
+                return Ok(json!({ "unchanged": true }));
+            }
+            let n = made::set_aside_changed(&old, e, first);
+            Ok(json!({ "tool": "update_settlement", "id": wid, "kind": now.0, "lives_by": now.1, "name": now.2, "set_aside": n }))
+        })
+        .await?;
+    let set_aside = change["set_aside"].clone();
+    let rid = id.clone();
+    let mut v = app.worker.with(move |ex| read_back(ex, &rid).ok_or_else(|| "changed, but it could not be read back".to_string())).await?;
+    if change["unchanged"] == json!(true) {
+        v["unchanged"] = json!(true);
+    } else {
+        v["set_aside"] = set_aside;
+        v["pending"] = json!(false);
+        v["note"] = json!("Changed at once (no remake): laid out anew if its tier or what it lives by changed, the changes made inside it set aside (set_aside counts them); its name, notes, NPCs and plot points stay on it");
+    }
+    Ok(v)
 }

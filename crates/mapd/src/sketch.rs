@@ -80,6 +80,7 @@ fn stroke_props(with_tool: bool) -> Value {
         "capital": { "type": "boolean", "description": "pin: the realm's capital" },
         "wards": { "type": "array", "items": { "type": "string" }, "maxItems": WARDS_MAX, "description": "pin: names for its districts, the central one first" },
         "added": { "type": "boolean", "description": "pin: beside the world's own settlements (default true), as Edit › Places adds them; false: in place of one of its tier (a sketch pin)" },
+        "replaces": { "type": "string", "enum": PIN_TIERS, "description": "pin: in place of the world's own settlement at its spot (within 3 mi), changed: the tier that one was placed at. Nothing else moves; update_settlement makes such pins" },
     });
     if with_tool {
         p["tool"] = json!({ "type": "string", "enum": TOOLS, "description": "What the stroke makes: land, sea (cut out of land), range (mountains along the line), river (from its first point down), forest, biome (a painted biome), road, pin (a settlement)" });
@@ -252,6 +253,7 @@ fn item(s: &Stroke, index: usize, points: bool) -> Value {
         opt(&mut v, "lives_by", &s.kind);
         v["capital"] = json!(s.capital);
         v["added"] = json!(s.added);
+        opt(&mut v, "replaces", &s.replaces);
         if !s.wards.is_empty() {
             v["wards"] = json!(s.wards);
         }
@@ -307,6 +309,8 @@ async fn get(app: &Shared, a: &Value) -> Result<Value, String> {
             v
         })
         .collect();
+    let mut all = all;
+    settlements_of_pins(app, &p, &mut all).await;
     let found = all.len();
     let mut out = json!({ "items": all.into_iter().take(limit).collect::<Vec<_>>(), "found": found, "pending": pending });
     if found > limit {
@@ -317,6 +321,105 @@ async fn get(app: &Shared, a: &Value) -> Result<Value, String> {
         out["note"] = json!("The sketch has changes not regenerated yet: regenerate remakes the world with them");
     }
     Ok(out)
+}
+
+/// Each pin's `settlement`: the one its stroke made in the open world, or for a pin not
+/// regenerated yet that replaces one (`update_settlement`), the settlement at its spot.
+async fn settlements_of_pins(app: &Shared, p: &Pending, items: &mut [Value]) {
+    let asks: Vec<(usize, Option<usize>, Option<[f64; 2]>)> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(k, v)| {
+            let i = v["index"].as_u64()? as usize;
+            let s = p.strokes.get(i).filter(|s| s.tool == SketchTool::Pin)?;
+            Some((k, p.from[i], s.replaces.is_some().then(|| s.pts[0])))
+        })
+        .collect();
+    if asks.is_empty() {
+        return;
+    }
+    let ids = app
+        .worker
+        .with(move |ex| {
+            let t0 = &ex.t0;
+            let near = |at: [f64; 2]| t0.settlements.iter().enumerate().filter(|(_, s)| s.pin.is_none()).map(|(li, s)| (li, (s.x - at[0]).hypot(s.y - at[1]))).filter(|(_, d)| *d < 3.0 * MI).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(li, _)| li);
+            Ok(asks
+                .iter()
+                .map(|&(k, from, spot)| {
+                    // (Its own settlement, the stroke made already; else the one it is to replace.)
+                    let li = from.and_then(|i| t0.settlements.iter().position(|s| s.pin == Some(i as u32))).or_else(|| spot.and_then(near));
+                    (k, li.and_then(|li| worldgen::agent::feature_of_layout(&ex.world, t0, li)))
+                })
+                .collect::<Vec<_>>())
+        })
+        .await
+        .unwrap_or_default();
+    for (k, id) in ids {
+        if let Some(id) = id {
+            items[k]["settlement"] = json!(id);
+        }
+    }
+}
+
+/// Put a pin for a settlement of the open world in the pending sketch (`update_settlement`): the
+/// applied pin it came from (`from`, its index) as it is pending, else a pending pin replacing the
+/// one at `spot` (within 3 mi), else `fresh`; changed by `change`. The stroke, its id, and whether
+/// it was the same already.
+pub(crate) async fn put_pin(app: &Shared, from: Option<usize>, spot: [f64; 2], fresh: Stroke, change: impl FnOnce(&mut Stroke)) -> Result<Value, String> {
+    let _one = app.gate.lock().await;
+    let (hash, file, mut p, _) = state(app)?;
+    let at = match from {
+        Some(k) => Some(p.from.iter().position(|f| *f == Some(k)).ok_or("its pin is taken out of the sketch by changes not regenerated yet (get_sketch lists them): put it back, or regenerate first")?),
+        None => p.strokes.iter().zip(&p.from).position(|(s, f)| f.is_none() && s.tool == SketchTool::Pin && s.replaces.is_some() && (s.pts[0][0] - spot[0]).hypot(s.pts[0][1] - spot[1]) < 3.0 * MI),
+    };
+    let mut s = at.map_or(fresh, |i| p.strokes[i].clone());
+    change(&mut s);
+    let i = match at {
+        Some(i) if p.strokes[i] == s => {
+            let mut out = json!({ "stroke": item(&s, i, true), "unchanged": true });
+            out["pending"] = json!(load_pending(app, hash).is_some());
+            return Ok(out);
+        }
+        Some(i) => {
+            p.strokes[i] = s.clone();
+            i
+        }
+        None => {
+            p.strokes.push(s.clone());
+            p.from.push(None);
+            p.strokes.len() - 1
+        }
+    };
+    check(&file, &p.strokes)?;
+    let pending = save_pending(app, hash, &file, &p)?;
+    app.store.log(hash, json!({ "time": now(), "author": "agent", "change": { "tool": "update_settlement", "stroke": stroke_id(&s) } }));
+    Ok(json!({ "stroke": item(&s, i, true), "pending": pending }))
+}
+
+/// A pin stroke at `at` (as `create_sketch_stroke` makes one).
+pub(crate) fn pin_stroke(at: [f64; 2], tier: &str) -> Stroke {
+    Stroke {
+        tool: SketchTool::Pin,
+        pts: vec![[at[0].round(), at[1].round()]],
+        closed: false,
+        radius_ft: default_radius_mi("pin") * MI,
+        strength: 0.7,
+        hard: false,
+        biome: None,
+        tier: Some(tier.to_string()),
+        name: None,
+        trend: None,
+        delta_ft: None,
+        level_ft: None,
+        salt: false,
+        kind: None,
+        activity: None,
+        capital: false,
+        wards: vec![],
+        added: false,
+        under: None,
+        replaces: None,
+    }
 }
 
 /// The map's size (ft).
@@ -391,7 +494,7 @@ async fn shape(app: &Shared, s: &mut Stroke, tool: &str, a: &Value, wh: [f64; 2]
     only("hard", &["land", "sea", "forest", "biome"])?;
     only("biome", &["forest", "biome"])?;
     only("kind", &["road"])?;
-    for k in ["tier", "lives_by", "capital", "wards", "added", "at"] {
+    for k in ["tier", "lives_by", "capital", "wards", "added", "replaces", "at"] {
         only(k, &["pin"])?;
     }
     if tool == "other" {
@@ -466,6 +569,13 @@ async fn shape(app: &Shared, s: &mut Stroke, tool: &str, a: &Value, wh: [f64; 2]
             *f = a[k].as_bool().ok_or_else(|| bad(k, "true or false", &a[k]))?;
         }
     }
+    if let Some(t) = word("replaces", &PIN_TIERS)? {
+        s.replaces = Some(t);
+        // (In place of one, so not beside them, unless asked: then refused.)
+        if a["added"].is_null() {
+            s.added = false;
+        }
+    }
     if !a["wards"].is_null() {
         let w = a["wards"].as_array().filter(|w| w.len() <= WARDS_MAX).ok_or_else(|| bad("wards", &format!("a list of up to {WARDS_MAX} names"), &a["wards"]))?;
         s.wards = w.iter().enumerate().map(|(i, n)| n.as_str().map(|n| n.trim().to_string()).filter(|n| !n.is_empty() && n.chars().count() <= NAME_MAX).ok_or_else(|| bad(&format!("wards[{i}]"), &format!("a name of 1 to {NAME_MAX} characters"), n))).collect::<Result<_, _>>()?;
@@ -531,6 +641,7 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
         wards: vec![],
         added: tool == "pin",
         under: None,
+        replaces: None,
     };
     shape(app, &mut s, tool, a, size(&file), true).await?;
     let id = stroke_id(&s);
@@ -610,7 +721,7 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-async fn regenerate(app: &Shared) -> Result<Value, String> {
+pub(crate) async fn regenerate(app: &Shared) -> Result<Value, String> {
     let _one = app.gate.lock().await;
     let (old, file, p, pending) = state(app)?;
     if !pending {
