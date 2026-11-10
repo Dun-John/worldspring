@@ -101,7 +101,10 @@
 //!   portcullises and the water squares generators laid. THEME=temple,sunken_temple keeps only sites of those themes (`keep`, `undercroft`: keep dungeons, sewer sections). TERRAIN=1 also lays the terrain tools
 //!   (`under::chasm`, `under::water`) on a copy of each site and counts what they laid and what they left unreached.
 //!
-//! Usage: cargo run --release -p worldgen --example towncheck -- [castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
+//! - `castlepieces` (not in `all`): a castle drawn by hand, its keep and yard buildings changed (`Created::pieces`),
+//!   an earlier site deleted and taken out of the list, the castle in ruins; keeps of generated castles changed.
+//!
+//! Usage: cargo run --release -p worldgen --example towncheck -- [castlepieces|castles|reach|interiors|hub|halls|palaces|temples|editor|under|hash|all]... [seed|world.json...] [--keeps]
 //! Default: `all` (every mode but `hash`), seeds 1 2 3: 30 to 50 s a seed under `--profile fast`, half of
 //! it `interiors` (`--keeps` takes a second).
 mod common;
@@ -5457,7 +5460,7 @@ fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 22] = ["wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 23] = ["castlepieces", "wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -5508,6 +5511,7 @@ fn main() {
                 "cemeteries" => cemeteries(&mut ctx, &mut r),
                 "handwalls" => handwalls(&mut ctx, &mut r),
                 "wallgates" => wallgates(&mut ctx, &mut r),
+                "castlepieces" => castle_pieces(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),
                 "places" => places(&ctx.ex.world, &ctx.ex.t0, &mut r),
@@ -6815,4 +6819,188 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
             }
         }
     }
+}
+
+// R5 towns
+/// Castle pieces (M6): a castle drawn by hand (`create_feature castle`, 400 x 300 ft) beside a
+/// site drawn before it; its keep made a library and renamed, a yard building given a new trade,
+/// one taken away, one given storeys; then the earlier site deleted, then taken out of the list
+/// (the castle's layout number moves): the edits stay on the same castle. The same castle in
+/// ruins: the keep's function and name set, storeys refused. A castle's keep in a generated town
+/// takes `update_building` as before. The rules (each should be 0) are the edits not standing.
+fn castle_pieces(ctx: &mut Ctx, r: &mut Report) {
+    use worldgen::agent::{self, BuildingChange};
+    use worldgen::town::pieces;
+    use worldgen::world::{Created, WorldFile};
+    const RULES: [&str; 8] = [
+        "piece edit refused",
+        "keep's function or name not as edited",
+        "yard building's edit not standing",
+        "other pieces changed by the edits",
+        "edits not on the same castle after an earlier site went",
+        "ruined keep took storeys or lost its function or name",
+        "generated castle's keep refused or not changed",
+        "id not told apart (wrong refusal)",
+    ];
+    r.counts(&RULES);
+    let (base, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let n = t0.settlements.len();
+    let first = n + t0.base_pois;
+    let key = |b: &town::Building| b.func.map_or("-", |f| town::catalog::CATALOG[f as usize].key);
+    // A spot for the castle: off a town, clear of buildings, roads and water.
+    let mut spot: Option<Created> = None;
+    'find: for s in t0.settlements.iter().take(40) {
+        for j in 0..8 {
+            let a = j as f64 * std::f64::consts::FRAC_PI_4;
+            let at = [s.x + 2600.0 * a.cos(), s.y + 2600.0 * a.sin()];
+            let poly = vec![[at[0] - 200.0, at[1] - 150.0], [at[0] + 200.0, at[1] - 150.0], [at[0] + 200.0, at[1] + 150.0], [at[0] - 200.0, at[1] + 150.0]];
+            let c = Created { id: "c:1".into(), kind: "castle".into(), x: at[0], y: at[1], name: "Candlekeep".into(), poly, ..Default::default() };
+            if c.check().is_ok() && agent::works_spot(base, t0, &c, "c:1", None).is_ok_and(|w| w.in_way.is_empty()) {
+                spot = Some(c);
+                break 'find;
+            }
+        }
+    }
+    let Some(castle) = spot else {
+        r.add("piece edit refused", 0.0, "no spot for a castle".into());
+        return;
+    };
+    let tower = Created { id: "c:0".into(), kind: "tower".into(), x: castle.x + 3000.0, y: castle.y, name: "Earlier Tower".into(), ..Default::default() };
+    let world_of = |created: Vec<Created>| {
+        let mut e = base.file.edits.clone();
+        e.created = created;
+        let w = World::new(WorldFile { edits: e, ..base.file.clone() }).unwrap();
+        let mut t = T0::from_bytes(&t0.to_bytes()).unwrap();
+        t.apply_edits(&w);
+        town::forget_from(first);
+        (w, t)
+    };
+    for ruin in [false, true] {
+        let label = if ruin { "ruined castle" } else { "castle" };
+        let mut c = castle.clone();
+        c.structure = ruin.then(|| "ruin".to_string());
+        let (w1, t1) = world_of(vec![tower.clone(), c.clone()]);
+        let li = first + 1;
+        let l1 = town::layout(&w1, &t1, li);
+        let Some(ki) = pieces::keep_index(&l1) else {
+            r.add("piece edit refused", 0.0, format!("{label}: no keep"));
+            continue;
+        };
+        let yard: Vec<u32> = l1.buildings.iter().enumerate().filter(|(i, _)| *i != ki).map(|(_, b)| b.id).collect();
+        r.tally(&format!("{label}s: buildings"), l1.buildings.len());
+        let kid = format!("b:{li}:{}", l1.buildings[ki].id);
+        let change = |func: Option<&str>, floors: Option<u8>| BuildingChange { func: func.map(str::to_string), floors, ..Default::default() };
+        // (keep: a library, renamed; yard 0: a temple; yard 1: taken away; yard 2: 3 storeys.)
+        let mut asks: Vec<(String, BuildingChange, Option<&str>, bool)> = vec![(kid.clone(), change(Some("library"), None), Some("The Great Library"), false)];
+        if let Some(&y) = yard.first() {
+            asks.push((format!("b:{li}:{y}"), change(Some("temple"), None), None, false));
+        }
+        if let Some(&y) = yard.get(1) {
+            asks.push((format!("b:{li}:{y}"), BuildingChange::default(), None, true));
+        }
+        if let Some(&y) = yard.get(2).filter(|_| !ruin) {
+            asks.push((format!("b:{li}:{y}"), change(None, Some(3)), None, false));
+        }
+        for (id, ch, name, remove) in &asks {
+            let Some(p) = pieces::piece_of(&w1, &t1, id) else {
+                r.add("piece edit refused", 0.0, format!("{label} {id}: not a piece ({})", pieces::not_generated(&w1, &t1, id)));
+                continue;
+            };
+            let e = if *remove { pieces::piece_removal(&p).map(Some) } else { pieces::piece_edit(&w1, &p, ch, *name) };
+            match e {
+                Ok(Some(e)) => drop(c.pieces.insert(p.key.clone(), e)),
+                Ok(None) => r.add("piece edit refused", 0.0, format!("{label} {id}: no change")),
+                Err(e) => r.add("piece edit refused", 0.0, format!("{label} {id}: {e}")),
+            }
+        }
+        // (A ruin's keep takes no storeys; the keep can't be taken away.)
+        if let Some(p) = pieces::piece_of(&w1, &t1, &kid) {
+            if ruin != pieces::piece_edit(&w1, &p, &change(None, Some(4)), None).is_err() {
+                r.add("ruined keep took storeys or lost its function or name", 0.0, format!("{label}: storeys on the keep {}", if ruin { "taken" } else { "refused" }));
+            }
+            if pieces::piece_removal(&p).is_ok() {
+                r.add("piece edit refused", 0.0, format!("{label}: the keep was taken away"));
+            }
+        }
+        let names: Vec<String> = l1.buildings.iter().map(|b| format!("{:?}", (b.id, &b.poly, b.func, &b.name, b.floors, b.structure))).collect();
+        let edited = |l: &Layout, li: usize, when: &str, r: &mut Report| {
+            let rule = if when.is_empty() { "" } else { "edits not on the same castle after an earlier site went" };
+            let k = pieces::keep_index(l).map(|i| &l.buildings[i]);
+            if !k.is_some_and(|b| key(b) == "library" && b.name.as_deref() == Some("The Great Library") && (b.structure == town::Structure::Ruin) == ruin) {
+                r.add(if rule.is_empty() { "keep's function or name not as edited" } else { rule }, 0.0, format!("{label}{when}: keep {:?}", k.map(|b| (key(b), &b.name, b.structure))));
+            }
+            if ruin && k.is_some_and(|b| b.floors != l1.buildings[ki].floors) {
+                r.add("ruined keep took storeys or lost its function or name", 0.0, format!("{label}{when}: keep storeys {:?}", k.map(|b| b.floors)));
+            }
+            let b = |y: Option<&u32>| y.and_then(|&y| l.building_index(y as usize)).map(|i| &l.buildings[i]);
+            let bad_yard = (yard.first().is_some() && !b(yard.first()).is_some_and(|b| key(b) == "temple"))
+                || (yard.get(1).is_some() && b(yard.get(1)).is_some())
+                || (!ruin && yard.get(2).is_some() && !b(yard.get(2)).is_some_and(|b| b.floors == 3));
+            if bad_yard {
+                r.add(if rule.is_empty() { "yard building's edit not standing" } else { rule }, 0.0, format!("{label}{when} (L{li})"));
+            }
+            for (o, was) in l1.buildings.iter().zip(&names) {
+                if o.id as usize == ki || yard.iter().take(3).any(|y| *y == o.id) {
+                    continue;
+                }
+                let now = l.building_index(o.id as usize).map(|i| &l.buildings[i]);
+                if now.is_none_or(|b| format!("{:?}", (b.id, &b.poly, b.func, &b.name, b.floors, b.structure)) != *was) {
+                    r.add("other pieces changed by the edits", 0.0, format!("{label}{when}: b:{li}:{}", o.id));
+                }
+            }
+            r.tally(&format!("{label}s: pieces checked"), 1);
+        };
+        let (w2, t2) = world_of(vec![tower.clone(), c.clone()]);
+        edited(&town::layout(&w2, &t2, li), li, "", r);
+        let gone = Created { removed: true, ..tower.clone() };
+        let (w3, t3) = world_of(vec![gone, c.clone()]);
+        edited(&town::layout(&w3, &t3, li), li, " (tower deleted)", r);
+        // (The earlier site out of the list: the castle is laid out one place earlier.)
+        let (w4, t4) = world_of(vec![c.clone()]);
+        let l4 = town::layout(&w4, &t4, first);
+        edited(&l4, first, " (tower out of the list)", r);
+        let k4 = format!("b:{first}:{}", l1.buildings[ki].id);
+        if !pieces::piece_of(&w4, &t4, &k4).is_some_and(|p| p.keep() && p.castle == "c:1") {
+            r.add("edits not on the same castle after an earlier site went", 0.0, format!("{label}: {k4} not the keep of c:1"));
+        }
+    }
+    // Ids told apart: the tower's, a hand castle's missing building, no such place.
+    let (w, t) = world_of(vec![tower.clone(), castle.clone()]);
+    for (id, want) in [(format!("b:{first}:0"), "a tower made by hand"), (format!("b:{}:999", first + 1), "has no building 999"), (format!("b:{}:0", town::layout_count(&t) + 5), "there is no place"), ("c:1".to_string(), "a site made by hand")] {
+        let got = agent::building_edit(&w, &t, &id, &BuildingChange::default()).err().unwrap_or_default();
+        if !got.contains(want) {
+            r.add("id not told apart (wrong refusal)", 0.0, format!("{id}: {got}"));
+        }
+    }
+    town::forget_from(first);
+    // A generated castle's keep (in a town, else a village or a site) takes update_building.
+    let mut tried = 0;
+    let mut per: HashMap<&str, usize> = HashMap::new();
+    for li in 0..first {
+        let tier = if li < n { t0.settlements[li].tier.name() } else { "site" };
+        let l = town::layout(base, t0, li);
+        let Some(ki) = pieces::keep_index(&l) else { continue };
+        *per.entry(tier).or_default() += 1;
+        if per[tier] > 2 {
+            continue;
+        }
+        let id = format!("b:{li}:{}", l.buildings[ki].id);
+        tried += 1;
+        let ok = agent::building_edit(base, t0, &id, &BuildingChange { func: Some("library".into()), ..Default::default() }).and_then(|e| {
+            let mut ed = base.file.edits.clone();
+            ed.buildings.insert(id.clone(), e.ok_or("no change")?);
+            let w = World::new(WorldFile { edits: ed, ..base.file.clone() }).unwrap();
+            let l = town::layout(&w, t0, li);
+            let now = l.building_index(l.buildings[ki].id as usize).map(|i| key(&l.buildings[i]));
+            if now == Some("library") { Ok(()) } else { Err(format!("now {now:?}")) }
+        });
+        if let Err(e) = ok {
+            r.add("generated castle's keep refused or not changed", 0.0, format!("{id} ({}): {e}", if li < n { t0.settlements[li].tier.name() } else { "site" }));
+        }
+    }
+    r.tally("generated castles' keeps changed", tried);
+    for (tier, k) in per {
+        r.tally(&format!("generated keeps: in a {tier}"), k);
+    }
+    town::forget_from(0);
 }
