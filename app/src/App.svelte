@@ -1550,6 +1550,12 @@
   let townPatch = $state<number | null>(null);
   /** The corner picked (a square where streets meet), if any: picked instead of a patch. */
   let townCorner = $state<number | null>(null);
+  /** Why the last gate or tower asked for was refused. */
+  let townWallWhy = $state('');
+  $effect(() => {
+    void townCorner;
+    townWallWhy = '';
+  });
   let townMerging = $state(false);
   let townBusy = $state(false);
   /** What the plan shown was read for: the town and its edit. */
@@ -1660,6 +1666,7 @@
   /** A change asked of the town in view: made (one step to undo), or why not. */
   async function townChange(request: TownRequest, what: string) {
     const i = townIndex;
+    townWallWhy = '';
     if (i < 0 || townBusy) return void townTool?.settled();
     townBusy = true;
     const r = await view.gen.townChange(i, request).finally(() => (townBusy = false));
@@ -1669,9 +1676,10 @@
       return void toast(r.error.charAt(0).toUpperCase() + r.error.slice(1));
     }
     const key = String(i);
+    townWallWhy = (r.report.wall?.refused ?? []).map((x) => x.why).join('; ');
     if (JSON.stringify(edits.towns?.[key] ?? null) === JSON.stringify(r.edit)) {
       townTool?.settled();
-      return void toast(what === 'corners' ? 'Nothing moved: the patches round those corners must stay convex' : 'Nothing changed');
+      return void toast(what === 'corners' ? 'Nothing moved: the patches round those corners must stay convex' : townWallWhy ? townWallWhy.charAt(0).toUpperCase() + townWallWhy.slice(1) : 'Nothing changed');
     }
     const towns = { ...(edits.towns ?? {}) };
     if (r.edit) towns[key] = r.edit;
@@ -3554,6 +3562,7 @@
             merging={townMerging}
             busy={townBusy}
             near={townNear}
+            wallWhy={townWallWhy}
             {peek}
             onMode={(m) => ((townMode = m), (townMerging = false), townTool?.reset())}
             onChange={(req, what) => void townChange(req, what)}

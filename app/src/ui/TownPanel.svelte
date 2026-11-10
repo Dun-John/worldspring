@@ -5,7 +5,7 @@
   // again, a temple's kept as a close round it, a park's laid out as a formal garden or a common; a
   // corner where streets meet picked can be given a square; the town's walls put up or taken down.
   // Each change is one step to undo.
-  import { LOT_SIZES, PARK_KINDS, SQUARE_KINDS, TOWN_WARDS, type LotSize, type ParkKind, type SquareKind, type TownCorner, type TownPatch, type TownPlan, type TownRequest, type TownWard } from '../gen/protocol';
+  import { LOT_SIZES, PARK_KINDS, SQUARE_KINDS, TOWN_WARDS, type LotSize, type ParkKind, type SquareKind, type TownCorner, type TownPatch, type TownPlan, type TownRequest, type TownWallsRequest, type TownWard } from '../gen/protocol';
   import { SQUARE_COLOURS, WARD_COLOURS, type TownMode } from '../editor/town';
   import Icon from './Icon.svelte';
   import type { IconName } from './icons';
@@ -28,6 +28,8 @@
     busy: boolean;
     /** Close enough to see the patches. */
     near: boolean;
+    /** Why the last gate or tower asked for was refused. */
+    wallWhy?: string;
     peek?: boolean;
     onMode: (m: TownMode) => void;
     onChange: (req: TownRequest, what: string) => void;
@@ -35,7 +37,7 @@
     onZoomIn: () => void;
   }
 
-  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, peek = false, onMode, onChange, onMerge, onZoomIn }: Props = $props();
+  let { plan, name, note, mode, size = $bindable(), selected, corner, merging, busy, near, wallWhy = '', peek = false, onMode, onChange, onMerge, onZoomIn }: Props = $props();
 
   const MODES: { key: TownMode; label: string; icon: IconName; kbd: string; hint: string }[] = [
     { key: 'select', label: 'Choose', icon: 'pointer', kbd: 'V', hint: 'Click a patch to set its ward, a ringed corner for a square where streets meet; drag a corner to move it.' },
@@ -76,6 +78,19 @@
     green: 'Small green',
     none: 'No square',
   };
+  // The wall at the picked corner (R5 towns, M18c): a gate, towers, and the hand towers touching it.
+  const byHand = $derived(plan?.walls.by_hand);
+  const onWall = $derived(!!corner?.wall && !!plan?.walls.built);
+  const sides = $derived.by(() => {
+    if (!plan || !corner?.wall_next) return [];
+    return corner.wall_next.flatMap((w) => {
+      const o = w === null ? undefined : plan.corners.find((c) => c.corner === w);
+      return o ? [{ corner: o.corner, ft: Math.hypot(o.at[0] - corner.at[0], o.at[1] - corner.at[1]) }] : [];
+    });
+  });
+  const handTowers = $derived(byHand && corner ? byHand.towers_added.filter((t) => t.corners.includes(corner.corner)) : []);
+  const gateRefused = $derived(byHand?.gates_added.find((g) => corner && g.corner === corner.corner)?.refused);
+  const walls = (w: TownWallsRequest, what: string) => onChange({ walls: w }, what);
   const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
   const ft = (v: number) => `${Math.round(v).toLocaleString('en')} ft`;
 
@@ -242,6 +257,37 @@
           {/if}
         {:else}
           <div class="ws-hint">No square opens here: {corner.square_refused ?? 'it needs three streets or more meeting between built-up patches, inside the walls and off the water'}.</div>
+        {/if}
+        {#if onWall}
+          <div class="ws-hint"><b>Wall here</b>{corner.gate_by_hand ? ' · a gate put in by hand' : corner.gate_removed ? ' · its gate taken out' : corner.gate ? ' · a gate' : ''}</div>
+          <div class="row">
+            {#if corner.gate}
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ gates_remove: [corner.corner] }, 'gate')}>Remove gate</button>
+            {:else}
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ gates_add: [corner.corner] }, 'gate')}>Gate here</button>
+            {/if}
+            <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_remove: [corner.corner] }, 'tower')}>Remove tower</button>
+            {#if byHand?.towers_removed.some((t) => Number(t.split(':')[2]) < 1000000 || Number(t.split(':')[2]) >= 3000000)}
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_add: [corner.corner] }, 'tower')}>Tower back</button>
+            {/if}
+          </div>
+          <div class="row">
+            {#each sides as s (s.corner)}
+              <button class="ws-btn" disabled={busy} title="A tower midway along the wall to corner {s.corner}" onclick={() => walls({ towers_add: [[corner.corner, s.corner, 0.5]] }, 'tower')}>Tower toward {s.corner} ({ft(s.ft)})</button>
+            {/each}
+          </div>
+          {#each handTowers as t (t.id)}
+            <div class="row">
+              <span class="grow ws-muted">Hand tower {t.id.split(':')[2]} on {t.corners.join('–')}</span>
+              <button class="ws-btn" disabled={busy} onclick={() => walls({ towers_remove: [t.id] }, 'tower')}>Remove</button>
+            </div>
+          {/each}
+          {#if gateRefused}
+            <div class="ws-hint">The gate set here isn't built: {gateRefused}.</div>
+          {/if}
+          {#if wallWhy}
+            <div class="ws-hint">{wallWhy}</div>
+          {/if}
         {/if}
       </section>
     {/if}

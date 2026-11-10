@@ -1313,7 +1313,7 @@ lots, `close` for a temple's with a close as built, `close_generated` when set b
 can't be set there, or why the one set isn't built, `park` for a park's patch: `formal` or `common` as laid out,
 `park_by_hand` when set by hand, `park_refused`: why the patch can't be made a park, `ward_planned` for a park's
 patch built on as a common ward's, too small once its streets were cut), `corners` (`corner`, `at`,
-`planned` when moved, `pinned`, `gate`, `wall`, `junction` where a square can open, `square_refused` where streets
+`planned` when moved, `pinned`, `gate`, `wall` (with `wall_next`: its neighbours along the wall `[prev, next]`, null at an open wall's end), `junction` where a square can open, `square_refused` where streets
 meet but none can (a close's corner), `square` and `square_ft` (how far out from the corner its chords are cut,
 on average) for the one there, `square_generated` when set by hand: a kind or `none`), `districts` (`id`, `name`,
 `kind`, `patches`; `by_hand` for one made by hand, `changed` when its patches or their wards were changed by hand),

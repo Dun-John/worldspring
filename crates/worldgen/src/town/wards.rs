@@ -1045,11 +1045,15 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
         let (put, out) = super::wallgates::corner_marks(e, v);
         (plan.gates.contains(&v) && !out) || put
     };
-    let wall: Vec<bool> = {
-        let mut w = vec![false; mesh.pos.len()];
-        for (chain, _, _) in &plan.wall_runs {
-            for &v in chain {
-                w[v] = true;
+    // (R5 towns, M18c: each wall corner's neighbours along the wall, null at an open run's end.)
+    let wall: Vec<Option<[Option<usize>; 2]>> = {
+        let mut w = vec![None; mesh.pos.len()];
+        for (chain, closed, _) in &plan.wall_runs {
+            let n = chain.len();
+            for (i, &v) in chain.iter().enumerate() {
+                let prev = if i > 0 { Some(chain[i - 1]) } else if *closed && n > 2 { Some(chain[n - 1]) } else { None };
+                let next = if i + 1 < n { Some(chain[i + 1]) } else if *closed && n > 2 { Some(chain[0]) } else { None };
+                w[v] = Some([prev, next]);
             }
         }
         w
@@ -1072,8 +1076,9 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
                 (_, true) => c["gate_removed"] = json!(true),
                 _ => {}
             }
-            if wall[v] {
+            if let Some(nb) = wall[v] {
                 c["wall"] = json!(true);
+                c["wall_next"] = json!(nb);
             }
             if super::squares::junction(&plan, &ward, &group, v) {
                 if super::squares::at_close(&plan, v, &closes) {

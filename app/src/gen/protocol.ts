@@ -343,7 +343,12 @@ export interface TownCorner {
   /** On the water or a river: it never moves. */
   pinned?: boolean;
   gate?: boolean;
+  /** A gate put in here by hand, or a generated one taken out. */
+  gate_by_hand?: boolean;
+  gate_removed?: boolean;
+  /** On the town's wall, and its neighbours along it (null at an open wall's end). */
   wall?: boolean;
+  wall_next?: [number | null, number | null];
   /** Streets meet here: a square can open. */
   junction?: boolean;
   /** Streets meet here but no square can open, and why. */
@@ -365,13 +370,21 @@ export interface TownDistrict {
   changed?: boolean;
 }
 
+/** The gates and towers of a town's wall set by hand (`walls.by_hand` of the plan). */
+export interface TownWallsByHand {
+  gates_added: { corner: number; id: string; name?: string | null; refused?: string }[];
+  gates_removed: number[];
+  towers_added: { id: string; corners: [number, number]; f: number }[];
+  towers_removed: string[];
+}
+
 /** A town's plan for the ward editor (Ask op `townplan`). */
 export interface TownPlan {
   layout: number;
   center: [number, number];
   /** How far a corner may go from where it was planned. */
   max_move_ft: number;
-  walls: { built: boolean; generated: boolean };
+  walls: { built: boolean; generated: boolean; by_hand?: TownWallsByHand };
   edited: boolean;
   patches: TownPatch[];
   /** The town's districts (a hand-made one: `by_hand`; one changed by a patch moved in or out: `changed`). */
@@ -381,6 +394,15 @@ export interface TownPlan {
   set_aside: string[];
 }
 
+/** Gates and towers by corner (`wallgates::request`): a tower by two corners and where between (f), or one corner. */
+export interface TownWallsRequest {
+  built?: boolean;
+  gates_add?: number[];
+  gates_remove?: number[];
+  towers_add?: (number | [number, number] | [number, number, number])[];
+  towers_remove?: (number | string)[];
+}
+
 /** A change asked of a town (`town::wards::TownRequest`). */
 export interface TownRequest {
   moves?: { corner: number; to?: [number, number]; by?: [number, number]; as_generated?: boolean }[];
@@ -388,7 +410,7 @@ export interface TownRequest {
   relax?: { at: [number, number]; radius_ft: number; amount?: number };
   patches?: { patch: number; ward?: TownWard | 'auto'; lots?: LotSize | 'auto'; merge_with?: number | 'none'; reroll?: boolean; close?: boolean | 'auto'; park?: ParkKind | 'auto'; district?: string; as_generated?: boolean }[];
   squares?: { corner: number; kind: SquareKind | 'none' | 'auto' }[];
-  walls?: boolean | 'auto';
+  walls?: boolean | 'auto' | TownWallsRequest;
   reset?: 'all' | 'corners' | 'patches' | 'squares';
 }
 
@@ -397,6 +419,14 @@ export interface TownReport {
   corners: { asked: number; moved: number; part_way: number; stayed: number };
   buildings: { before: number; after: number; added: number; taken_away: number };
   walls: { built: boolean; towers: number; gates: number };
+  /** What a gate or tower asked for came to (only when one was asked). */
+  wall?: {
+    gates_added?: { corner: number; id: string; name?: string; towers?: string[]; way_out_ft?: number; built?: boolean }[];
+    gates_removed?: { corner: number; id: string; name?: string }[];
+    towers_added?: { id: string; x_ft: number; y_ft: number }[];
+    towers_removed?: string[];
+    refused?: { gate_add?: number; gate_remove?: number; tower_add?: unknown; tower_remove?: unknown; why: string }[];
+  };
   /** Its open spaces' kinds (quays aside), and its parks'. */
   squares: string[];
   parks: ParkKind[];
