@@ -81,6 +81,10 @@
 //!   their wall, castle and corner towers by shape; square towers where the style has none; towers whose
 //!   battlemap squares don't follow their shape (ring blocked, floor open, door reached); up to 3 places
 //!   a group listed with cameras (`fx, fy, zoom`) on the whole wall and on a tower by a gate.
+//! - `cemeteries` (not in `all`; R5 towns): cemeteries per tier and culture group, what they hold,
+//!   the rules (props or tombs on a walk, over the boundary or outside the plot, tomb doors not
+//!   reached from the way in, kurgans overlapping, a lychgate off the way in) and cameras; a park set
+//!   to a cemetery by hand, walls on and off.
 //! - `hash` (not in `all`): a hash per settlement layout (`L:`), per building of it (`B:`, with what it
 //!   is) and per building or tower interior (`b:`/`t:`), marked `C` in a settlement with a castle, one
 //!   per line on stdout (everything else goes to stderr): run it on two trees and diff to see what
@@ -1404,7 +1408,9 @@ fn check_interior(world: &World, t0: &T0, l: &Layout, si: usize, id: &str, it: &
             }
         }
     }
-    must!(it.levels.len() >= 2 || world.file.edits.designs.contains_key(id), "only {} level", it.levels.len());
+    // (R5 towns: a cemetery's tomb is one chamber on one storey, `town::cemetery`.)
+    let tomb = l.building(id.rsplit(':').next().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX)).is_some_and(|b| b.func == town::catalog::index_of("tomb").map(|f| f as u16));
+    must!(it.levels.len() >= 2 || tomb || world.file.edits.designs.contains_key(id), "only {} level", it.levels.len());
     if id.starts_with("b:") {
         match interior::design::design_of(world, t0, id, false) {
             Ok((d, _)) => match interior::design::problems(world, t0, id, &d) {
@@ -5433,7 +5439,7 @@ fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 17] = ["walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "all"];
+    const MODES: [&str; 18] = ["walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -5481,6 +5487,7 @@ fn main() {
                 "yurts" => yurts(&mut ctx, &mut r),
                 "villages" => villages(&mut ctx, &mut r),
                 "walls" => walls(&mut ctx, &mut r),
+                "cemeteries" => cemeteries(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),
@@ -5497,6 +5504,230 @@ fn main() {
                 say!("  {mode}");
                 all.get_mut(mode).unwrap().print();
             }
+        }
+    }
+}
+
+// R5 towns
+/// Cemeteries (M21): per tier and culture group, how many and what they hold; the rules (each
+/// should be 0): props or tombs on a walk, over the boundary or outside the plot, tomb doors not
+/// reached from the way in, kurgans overlapping, a North or West lychgate off the way in, a tomb
+/// planned and not built. Then the editor: a park patch set to a cemetery by hand, walls on and off.
+fn cemeteries(ctx: &mut Ctx, r: &mut Report) {
+    const GROUPS: [&str; 5] = ["North", "West", "South", "Dry", "Steppe"];
+    r.counts(&CEM_RULES);
+    r.counts(&["hand cemeteries refused", "hand cemeteries not laid"]);
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let mut cams: Vec<String> = Vec::new();
+    let mut shown = [0usize; 5];
+    // (Up to 2 a group looked at on the battlemap: plot, props planned.)
+    let mut look: Vec<(usize, Vec<P>, usize)> = Vec::new();
+    for li in 0..town::layout_count(t0) {
+        let l = town::layout(world, t0, li);
+        if l.site || l.tier < worldgen::t0::settle::Tier::Town {
+            continue;
+        }
+        let g = (l.culture % 5) as usize;
+        let n = l.parks.iter().filter(|p| p.kind == town::ParkKind::Cemetery).count();
+        r.tally(&format!("{} {}: places", l.tier.name(), GROUPS[g]), 1);
+        r.tally(&format!("{} {}: cemeteries", l.tier.name(), GROUPS[g]), n);
+        for pk in l.parks.iter().filter(|p| p.kind == town::ParkKind::Cemetery) {
+            let by_road = pk.cemetery.is_some_and(|c| c.by_road);
+            r.tally(&format!("{}: cemeteries {}", GROUPS[g], if by_road { "by a road" } else { "in town" }), 1);
+            check_cemetery(world, t0, &l, li, pk, &GROUPS, r);
+            if shown[g] < 2 {
+                shown[g] += 1;
+                look.push((g, pk.pts.clone(), town::cemetery::plan(pk).map_or(0, |pl| pl.props.len())));
+                let c = centroid(&pk.pts);
+                let span = pk.pts.iter().map(|q| dist(*q, c)).fold(0.0, f64::max) * 2.0;
+                cams.push(format!("    {} L{li} {}{}: fx {:.6} fy {:.6} zoom {:.1} (battlemap zoom 1.5)", GROUPS[g], l.tier.name(), if by_road { " by a road" } else { " in town" }, c[0] / mw, c[1] / mh, libm::log2(1100.0 / span.max(100.0))));
+            }
+        }
+    }
+    // The editor: up to 3 towns' first park-able patch set to a cemetery by hand, as walled and not.
+    let with = |ci: usize, edit: worldgen::world::TownEdit| {
+        let mut file = world.file.clone();
+        file.edits.towns.insert(town::wards::key(ci), edit);
+        World::new(file).unwrap()
+    };
+    let mut tried = 0;
+    for ci in (0..t0.settlements.len()).filter(|&i| t0.settlements[i].tier >= worldgen::t0::settle::Tier::Town) {
+        if tried >= 3 {
+            break;
+        }
+        let Ok(plan) = town::wards::plan_json(world, t0, ci) else { continue };
+        let pick = plan["patches"].as_array().unwrap().iter().find(|p| p["in_town"] == true && p.get("park_refused").is_none() && !matches!(p["ward"].as_str(), Some("plaza" | "castle" | "temple"))).and_then(|p| p["patch"].as_u64());
+        let Some(p) = pick else { continue };
+        tried += 1;
+        let walled = !town::layout(world, t0, ci).walls.is_empty();
+        for walls in [walled, !walled] {
+            let json = format!(r#"{{"patches":[{{"patch":{p},"ward":"park","park":"cemetery"}}],"walls":{walls}}}"#);
+            let Ok((Some(edit), _)) = town::wards::change(world, t0, ci, &serde_json::from_str(&json).unwrap()) else {
+                r.add("hand cemeteries refused", 1.0, format!("#{ci} patch {p} walls {walls}"));
+                continue;
+            };
+            let w2 = with(ci, edit);
+            let l = town::layout(&w2, t0, ci);
+            let at = plan["patches"].as_array().unwrap().iter().find(|q| q["patch"].as_u64() == Some(p)).map(|q| [q["at"][0].as_f64().unwrap(), q["at"][1].as_f64().unwrap()]).unwrap();
+            let hand = l.parks.iter().find(|pk| pk.kind == town::ParkKind::Cemetery && !pk.cemetery.is_some_and(|c| c.by_road) && dist(centroid(&pk.pts), at) < 200.0);
+            r.tally(&format!("hand cemeteries (walls {})", if walls { "on" } else { "off" }), 1);
+            match hand {
+                Some(pk) => {
+                    check_cemetery(&w2, t0, &l, ci, pk, &GROUPS, r);
+                    let fi = town::catalog::index_of("tomb").map(|f| f as u16);
+                    let tombs = l.buildings.iter().filter(|b| b.func == fi && contains(&pk.pts, centroid(&b.poly))).count();
+                    r.tally("hand cemeteries' tombs", tombs);
+                    if shown.iter().sum::<usize>() < 12 {
+                        let c = centroid(&pk.pts);
+                        cams.push(format!("    by hand #{ci} patch {p} walls {walls}: fx {:.6} fy {:.6} zoom 1.5", c[0] / mw, c[1] / mh));
+                    }
+                }
+                None => r.add("hand cemeteries not laid", 1.0, format!("#{ci} patch {p} walls {walls}")),
+            }
+        }
+    }
+    for (g, pts, planned) in look {
+        let b = pts.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |a, p| [a[0].min(p[0]), a[1].min(p[1]), a[2].max(p[0]), a[3].max(p[1])]);
+        let w = ctx.window(b);
+        const NAMES: [&str; 7] = ["headstone", "cairn", "standing stone", "yew", "lychgate", "kurgan", "tomb slab"];
+        let laid = w.objects.iter().filter(|(p, n)| contains(&pts, *p) && NAMES.contains(&n.as_str())).count();
+        r.tally(&format!("{}: battlemap props planned (looked at)", GROUPS[g]), planned);
+        r.tally(&format!("{}: battlemap props laid (looked at)", GROUPS[g]), laid);
+    }
+    say!("  cemetery cameras:");
+    for c in cams {
+        say!("{c}");
+    }
+}
+
+const CEM_RULES: [&str; 8] = [
+    "R props or tombs on a walk",
+    "R props or tombs over the boundary",
+    "R props or tombs outside the plot",
+    "R tomb doors not reached from the way in",
+    "R kurgans overlapping",
+    "R lychgates not on the way in (North, West)",
+    "R tombs planned and not built",
+    "R tombs with no tomb chamber",
+];
+
+fn check_cemetery(world: &World, t0: &T0, l: &Layout, li: usize, pk: &town::Park, groups: &[&str; 5], r: &mut Report) {
+    let Some(pl) = town::cemetery::plan(pk) else {
+        r.add("cemeteries too small to lay out", 1.0, format!("L{li} at {}", at(town::geom::mean(&pk.pts))));
+        return;
+    };
+    let g = pk.cemetery.map_or(1, |c| c.group as usize % 5);
+    let here = format!("L{li} {} at {}", groups[g], at(town::geom::mean(&pk.pts)));
+    for (k, name) in [(Kind::Headstone, "headstones"), (Kind::Cairn, "cairns"), (Kind::StandingStone, "standing stones"), (Kind::Yew, "yews"), (Kind::Lychgate, "lychgates"), (Kind::Kurgan, "kurgans"), (Kind::TombSlab, "tomb slabs")] {
+        let c = pl.props.iter().filter(|p| p.2 == k).count();
+        if c > 0 {
+            r.tally(&format!("{}: {name}", groups[g]), c);
+        }
+    }
+    r.tally(&format!("{}: tomb buildings", groups[g]), pl.tombs.len());
+    let depth = |poly: &[P], p: P| if contains(poly, p) { (0..poly.len()).map(|e| seg_dist(p, poly[e], poly[(e + 1) % poly.len()])).fold(f64::MAX, f64::min) } else { 0.0 };
+    let foot = |k: Kind, s: f32| match k {
+        Kind::Yew => 2.0,
+        Kind::Kurgan => town::cemetery::KURGAN_R * s as f64,
+        Kind::TombSlab => 1.5,
+        Kind::Cairn => 2.0,
+        Kind::StandingStone => 1.2,
+        _ => 1.0,
+    };
+    for &(p, _, k, _, s) in &pl.props {
+        if k != Kind::Lychgate && pl.walks.iter().any(|&(a, b, w)| seg_dist(p, a, b) < 0.5 * w + 1.0) {
+            r.add(CEM_RULES[0], 1.0, format!("{here}: {:?} at {}", k, at(p)));
+        }
+        if k != Kind::Lychgate && depth(&pl.boundary, p) < foot(k, s) {
+            r.add(CEM_RULES[1], 1.0, format!("{here}: {:?} at {}", k, at(p)));
+        }
+        if !contains(&pk.pts, p) {
+            r.add(CEM_RULES[2], 1.0, format!("{here}: {:?} at {}", k, at(p)));
+        }
+    }
+    let seg_poly = |t: &[P], a: P, b: P| town::geom::poly_gap(t, &[a, b]);
+    for t in &pl.tombs {
+        if pl.walks.iter().any(|&(a, b, w)| seg_poly(t, a, b) < 0.5 * w + 1.0 || contains(t, a) || contains(t, b)) {
+            r.add(CEM_RULES[0], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+        if t.iter().any(|&q| depth(&pl.boundary, q) <= 0.0) {
+            r.add(CEM_RULES[1], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+        if t.iter().any(|&q| !contains(&pk.pts, q)) {
+            r.add(CEM_RULES[2], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+    }
+    // Doors reached: a 2.5-ft grid inside the boundary (and the gate's gap), off the tombs and what
+    // blocks the way, from just inside the gate.
+    let (x0, y0, x1, y1) = pl.boundary.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
+    const C: f64 = 2.5;
+    let (nx, ny) = (((x1 - x0) / C) as usize + 3, ((y1 - y0) / C) as usize + 3);
+    let cell = |p: P| -> Option<usize> {
+        let (i, j) = (((p[0] - x0) / C).floor() as i64 + 1, ((p[1] - y0) / C).floor() as i64 + 1);
+        (i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny).then(|| j as usize * nx + i as usize)
+    };
+    let mid = |k: usize| [x0 + ((k % nx) as f64 - 0.5) * C, y0 + ((k / nx) as f64 - 0.5) * C];
+    let blockers: Vec<(P, f64)> = pl.props.iter().filter(|p| worldgen::battlemap::info(p.2 as u16).blocks_move).map(|p| (p.0, foot(p.2, p.4))).collect();
+    let open: Vec<bool> = (0..nx * ny)
+        .map(|k| {
+            let p = mid(k);
+            (contains(&pl.boundary, p) || dist(p, pl.gate) < 0.5 * pl.gap)
+                && !pl.tombs.iter().any(|t| contains(t, p) || depth(t, p) > 0.0)
+                && !blockers.iter().any(|&(q, rr)| dist(p, q) < rr)
+        })
+        .collect();
+    let mut seen = vec![false; nx * ny];
+    if let Some(s0) = cell(add(pl.gate, mul(pl.inward, 1.5))).filter(|&k| open[k]) {
+        let mut q = VecDeque::from([s0]);
+        seen[s0] = true;
+        while let Some(k) = q.pop_front() {
+            let (x, y) = ((k % nx) as i64, (k / nx) as i64);
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (a, b) = (x + dx, y + dy);
+                if a < 0 || b < 0 || a >= nx as i64 || b >= ny as i64 {
+                    continue;
+                }
+                let n = b as usize * nx + a as usize;
+                if !seen[n] && open[n] {
+                    seen[n] = true;
+                    q.push_back(n);
+                }
+            }
+        }
+    }
+    for t in &pl.tombs {
+        let door = lerp(t[0], t[1], 0.5);
+        let out = sub(door, town::geom::mean(t));
+        let front = add(door, mul(out, 2.0 / len(out).max(1e-9)));
+        if !cell(front).is_some_and(|k| seen[k]) {
+            r.add(CEM_RULES[3], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+        }
+    }
+    let ks: Vec<(P, f64)> = pl.props.iter().filter(|p| p.2 == Kind::Kurgan).map(|p| (p.0, town::cemetery::KURGAN_R * p.4 as f64)).collect();
+    for a in 0..ks.len() {
+        for b in a + 1..ks.len() {
+            if dist(ks[a].0, ks[b].0) < ks[a].1 + ks[b].1 {
+                r.add(CEM_RULES[4], 1.0, format!("{here}: at {}", at(ks[a].0)));
+            }
+        }
+    }
+    if g <= 1 && !pl.walks.is_empty() && !pl.props.iter().any(|p| p.2 == Kind::Lychgate && dist(p.0, pl.gate) < 2.0) {
+        r.add(CEM_RULES[5], 1.0, here.clone());
+    }
+    let fi = town::catalog::index_of("tomb").map(|f| f as u16);
+    for t in &pl.tombs {
+        let Some(b) = l.buildings.iter().find(|b| b.func == fi && b.poly.len() == t.len() && b.poly.iter().zip(t).all(|(p, q)| dist(*p, *q) < 0.01)) else {
+            r.add(CEM_RULES[6], 1.0, format!("{here}: tomb at {}", at(town::geom::mean(t))));
+            continue;
+        };
+        let id = format!("b:{li}:{}", b.id);
+        let lv = interior::generate_id(world, t0, &id).and_then(|it| it.levels.get(it.entry_level).cloned());
+        let chamber = lv.as_ref().is_some_and(|lv| lv.rooms.iter().any(|q| q.kind == "tomb chamber"));
+        if !chamber {
+            r.add(CEM_RULES[7], 1.0, format!("{here}: {id}"));
+        } else if lv.is_some_and(|lv| lv.furniture.iter().any(|f| f.kind == "sarcophagus")) {
+            r.tally(&format!("{}: tombs with a sarcophagus", groups[g]), 1);
         }
     }
 }
