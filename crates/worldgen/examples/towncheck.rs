@@ -5457,7 +5457,7 @@ fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
 }
 
 fn main() {
-    const MODES: [&str; 21] = ["handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
+    const MODES: [&str; 22] = ["wallgates", "handwalls", "districts", "places", "walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "cemeteries", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -5507,6 +5507,7 @@ fn main() {
                 "walls" => walls(&mut ctx, &mut r),
                 "cemeteries" => cemeteries(&mut ctx, &mut r),
                 "handwalls" => handwalls(&mut ctx, &mut r),
+                "wallgates" => wallgates(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "districts" => district_edits(&ctx.ex.world, &ctx.ex.t0, &mut r),
                 "places" => places(&ctx.ex.world, &ctx.ex.t0, &mut r),
@@ -6472,4 +6473,225 @@ fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
     let (d1, d2) = (cross(sub(b, a), sub(c, a)), cross(sub(b, a), sub(d, a)));
     let (d3, d4) = (cross(sub(d, c), sub(a, c)), cross(sub(d, c), sub(b, c)));
     d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+
+/// Gates and towers put in a town's own wall by hand (M18b, `edit_town walls: {…}`): per tier, up
+/// to 3 walled towns each get 2 gates and 3 towers, then lose one generated gate and one tower;
+/// one generated gate renamed first. Rules (each 0): a hand gate with no way through (no track
+/// from it, or one over a building), a hand gate not in the group's gatehouse form (a bent one may
+/// fall back to a square tower, tallied), a hand tower over a building, street or another tower,
+/// other `t:`/`gt:` ids moved or renames lost, walls off then on losing them.
+fn wallgates(ctx: &mut Ctx, r: &mut Report) {
+    use worldgen::t0::settle::Tier;
+    use worldgen::town::gatehouse;
+    use worldgen::town::wallgates::{GATE_TOWER_ID, HAND_TOWER_ID, OTHER_TOWER_ID};
+    const RULES: [&str; 6] = [
+        "hand gate with no way through",
+        "hand gate not in the group's form",
+        "hand tower over a building, street or tower",
+        "other ids moved",
+        "renames lost",
+        "walls off/on losing them",
+    ];
+    const FORMS: [&str; 5] = ["square tower", "twin drums", "arched", "bent", "log"];
+    r.counts(&RULES);
+    let (base, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let n = t0.settlements.len();
+    let ask = |w: &World, ci: usize, j: &str| town::wards::change(w, t0, ci, &serde_json::from_str(j).unwrap());
+    let with = |w: &World, ci: usize, e: Option<worldgen::world::TownEdit>| {
+        let mut f = w.file.clone();
+        match e {
+            Some(e) => f.edits.towns.insert(town::wards::key(ci), e),
+            None => f.edits.towns.remove(&town::wards::key(ci)),
+        };
+        World::new(f).unwrap()
+    };
+    let towers_of = |l: &town::Layout| -> Vec<(usize, P, bool)> { worldgen::interior::towers(l).into_iter().enumerate().map(|(k, t)| (l.tower_id(k), t.0, t.2)).collect() };
+    let gates_of = |w: &World, l: &town::Layout| -> Vec<(String, P, String)> { town::places::of(w, t0, l).into_iter().filter(|p| p.kind == "gate").map(|p| (p.id, p.at, p.name)).collect() };
+    for tier in [Tier::Town, Tier::City, Tier::Metropolis] {
+        let towns: Vec<usize> = (0..n).filter(|&i| t0.settlements[i].tier == tier && town::wards::plan_json(base, t0, i).is_ok_and(|p| p["walls"]["built"] == true)).take(3).collect();
+        let tn = format!("{tier:?}");
+        for ci in towns {
+            let plan = town::wards::plan_json(base, t0, ci).unwrap();
+            let corners = plan["corners"].as_array().unwrap();
+            let wall: Vec<(usize, P, bool)> = corners.iter().filter(|c| c["wall"] == true).map(|c| (c["corner"].as_u64().unwrap() as usize, [c["at"][0].as_f64().unwrap(), c["at"][1].as_f64().unwrap()], c["gate"] == true)).collect();
+            let gen_gates: Vec<usize> = wall.iter().filter(|c| c.2).map(|c| c.0).collect();
+            if gen_gates.len() < 2 {
+                r.tally(&format!("{tn}: towns with under 2 gates (skipped)"), 1);
+                continue;
+            }
+            // A generated gate renamed (kept through everything).
+            let mut f = base.file.clone();
+            let kept = gen_gates[1];
+            f.edits.renames.insert(format!("gt:{ci}:{kept}"), "Basilisk Gate".into());
+            let mut w = World::new(f).unwrap();
+            let l0 = town::layout(&w, t0, ci);
+            let (t_before, g_before) = (towers_of(&l0), gates_of(&w, &l0));
+            // Two gates in, tried corner by corner, spread round the wall.
+            let mut added: Vec<usize> = Vec::new();
+            let step = (wall.len() / 10).max(1);
+            for k in (0..wall.len()).step_by(step).chain(0..wall.len()) {
+                if added.len() >= 2 {
+                    break;
+                }
+                let v = wall[k].0;
+                if wall[k].2 || added.contains(&v) {
+                    continue;
+                }
+                let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"gates_add":[{v}]}}}}"#)) else { continue };
+                for x in rep["wall"]["refused"].as_array().into_iter().flatten() {
+                    let why = x["why"].as_str().unwrap_or("");
+                    r.tally(&format!("gates refused: {}", why.split(" (").next().unwrap_or(why).split(" corner ").next().unwrap_or(why)), 1);
+                }
+                if rep["wall"]["gates_added"].as_array().is_some_and(|a| !a.is_empty()) {
+                    added.push(v);
+                    w = with(&w, ci, e);
+                }
+            }
+            r.tally(&format!("{tn}: hand gates added"), added.len());
+            // Three towers along the longest sides that take one.
+            let mut sides: Vec<(f64, usize, usize)> = Vec::new();
+            for (chain_k, c) in wall.iter().enumerate() {
+                let next = &wall[(chain_k + 1) % wall.len()];
+                let d = dist(c.1, next.1);
+                sides.push((d, c.0, next.0));
+            }
+            sides.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let mut towers_added = 0;
+            for &(_, a, b) in &sides {
+                if towers_added >= 3 {
+                    break;
+                }
+                let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"towers_add":[[{a},{b},0.5]]}}}}"#)) else { continue };
+                for x in rep["wall"]["refused"].as_array().into_iter().flatten() {
+                    let why = x["why"].as_str().unwrap_or("");
+                    r.tally(&format!("towers refused: {}", why.split(" t:").next().unwrap_or(why).split(" b:").next().unwrap_or(why).split(" gt:").next().unwrap_or(why)), 1);
+                }
+                if rep["wall"]["towers_added"].as_array().is_some_and(|a| !a.is_empty()) {
+                    towers_added += 1;
+                    w = with(&w, ci, e);
+                }
+            }
+            r.tally(&format!("{tn}: hand towers added"), towers_added);
+            // One generated gate out, one generated tower down.
+            let gone_gate = gen_gates[0];
+            if let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"gates_remove":[{gone_gate}]}}}}"#)) {
+                if rep["wall"]["gates_removed"].as_array().is_some_and(|a| !a.is_empty()) {
+                    w = with(&w, ci, e);
+                }
+            }
+            let gone_tower = t_before.iter().find(|t| !t.2 && t.0 < HAND_TOWER_ID as usize && t_before.iter().all(|g| !g.2 || dist(g.1, t.1) > 80.0)).map(|t| t.0);
+            if let Some(id) = gone_tower
+                && let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"towers_remove":["t:{ci}:{id}"]}}}}"#))
+                && rep["wall"]["towers_removed"].as_array().is_some_and(|a| !a.is_empty())
+            {
+                w = with(&w, ci, e);
+            }
+            let l = town::layout(&w, t0, ci);
+            let (t_after, g_after) = (towers_of(&l), gates_of(&w, &l));
+            let label = |what: &str| format!("{tn} #{ci} {what}");
+            // Hand gates: a way through, the group's form.
+            let houses = gatehouse::houses(&l);
+            for &v in &added {
+                let Some((_, gp, _)) = g_after.iter().find(|g| g.0 == format!("gt:{ci}:{v}")) else {
+                    r.add("hand gate with no way through", 1.0, label(&format!("gate {v} not built")));
+                    continue;
+                };
+                let way = l.roads.iter().find(|x| x.1 == 2 && x.0.first().is_some_and(|p| dist(*p, *gp) < 2.0));
+                match way {
+                    None => r.add("hand gate with no way through", 1.0, label(&format!("gate {v}: no track out"))),
+                    Some((pts, _, wd)) => {
+                        r.measure("way out (ft), longest", false, pts.windows(2).map(|s| dist(s[0], s[1])).sum(), label(&format!("gate {v}")));
+                        let over = l.buildings.iter().find(|b| {
+                            let m = b.poly.len();
+                            pts.windows(2).skip(1).any(|s| b.poly.iter().any(|q| seg_dist(*q, s[0], s[1]) < 0.5 * wd - 1.0) || (0..m).any(|i| seg_dist(lerp(s[0], s[1], 0.5), b.poly[i], b.poly[(i + 1) % m]) < 0.5 * wd - 1.0))
+                        });
+                        if let Some(b) = over {
+                            r.add("hand gate with no way through", 1.0, label(&format!("gate {v}: track over b:{ci}:{}", b.id)));
+                        }
+                    }
+                }
+                match houses.iter().find(|h| dist(lerp(h.a, h.b, 0.5), *gp) < 20.0) {
+                    None => r.add("hand gate not in the group's form", 1.0, label(&format!("gate {v}: no gatehouse"))),
+                    Some(h) => {
+                        r.tally(&format!("{tn}: hand gatehouses {}", FORMS[h.form as usize]), 1);
+                        let want = l.wall_style.gatehouse;
+                        if h.form != want {
+                            if FORMS[want as usize] == "bent" && FORMS[h.form as usize] == "square tower" {
+                                r.tally("bent hand gates fallen back to a square tower", 1);
+                            } else {
+                                r.add("hand gate not in the group's form", 1.0, label(&format!("gate {v}: {} not {}", FORMS[h.form as usize], FORMS[want as usize])));
+                            }
+                        }
+                    }
+                }
+            }
+            // Hand towers: clear of buildings, streets crossing the wall and other towers.
+            let all = worldgen::interior::towers(&l);
+            for (k, &(id, p, _)) in t_after.iter().enumerate() {
+                if !(HAND_TOWER_ID as usize..GATE_TOWER_ID as usize).contains(&id) {
+                    continue;
+                }
+                let r0 = all[k].1;
+                let over_b = l.buildings.iter().find(|b| {
+                    let m = b.poly.len();
+                    (0..m).any(|i| seg_dist(p, b.poly[i], b.poly[(i + 1) % m]) < r0 - 1.0)
+                });
+                let over_t = t_after.iter().enumerate().find(|(j, t)| *j != k && dist(t.1, p) < r0 + all[*j].1);
+                let over_s = l.roads.iter().filter(|x| x.1 != 3).find(|x| x.0.windows(2).any(|s| seg_dist(p, s[0], s[1]) < r0 + 0.5 * x.2 - 2.0));
+                if let Some(b) = over_b {
+                    r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over b:{ci}:{}", b.id)));
+                } else if let Some((_, t)) = over_t {
+                    r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over t:{ci}:{}", t.0)));
+                } else if over_s.is_some() {
+                    r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over a road class {}", over_s.unwrap().1)));
+                }
+            }
+            // Ids: every tower but those the edits took, where it stood; every gate but the one taken out.
+            let added_at: Vec<P> = added.iter().filter_map(|v| wall.iter().find(|c| c.0 == *v).map(|c| c.1)).collect();
+            let gone_at = wall.iter().find(|c| c.0 == gone_gate).map(|c| c.1).unwrap_or([0.0; 2]);
+            for &(id, p, gate) in &t_before {
+                let meant = Some(id) == gone_tower || added_at.iter().any(|a| dist(*a, p) < 60.0) || (gate && dist(gone_at, p) < 40.0);
+                match t_after.iter().find(|t| t.0 == id) {
+                    Some(t) if dist(t.1, p) > 40.0 => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} moved {:.0} ft", dist(t.1, p)))),
+                    Some(t) if dist(t.1, p) > 1.0 => r.tally("towers shifted 1-40 ft (their curtain bowed anew)", 1),
+                    None if !meant => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} gone (gate tower {gate}, {:.0} ft from the gate out)", dist(gone_at, p)))),
+                    _ => {}
+                }
+            }
+            for (id, p, _) in &g_before {
+                if *id == format!("gt:{ci}:{gone_gate}") {
+                    continue;
+                }
+                match g_after.iter().find(|g| g.0 == *id) {
+                    Some(g) if dist(g.1, *p) > 1.0 => r.add("other ids moved", 1.0, label(&format!("{id} moved"))),
+                    None => r.add("other ids moved", 1.0, label(&format!("{id} gone"))),
+                    _ => {}
+                }
+            }
+            if t_after.iter().any(|t| t.0 >= OTHER_TOWER_ID as usize) {
+                r.add("other ids moved", 1.0, label(&format!("{} towers matched none", t_after.iter().filter(|t| t.0 >= OTHER_TOWER_ID as usize).count())));
+            }
+            if !g_after.iter().any(|g| g.0 == format!("gt:{ci}:{kept}")) || w.file.edits.renames.get(&format!("gt:{ci}:{kept}")).is_none_or(|n| n != "Basilisk Gate") {
+                r.add("renames lost", 1.0, label(&format!("gt:{ci}:{kept}")));
+            }
+            r.tally(&format!("{tn}: towers before"), t_before.len());
+            r.tally(&format!("{tn}: towers after"), t_after.len());
+            // Walls off, then on: the same towers and gates.
+            let w2 = ask(&w, ci, r#"{"walls":false}"#).map(|(e, _)| with(&w, ci, e)).ok();
+            let w3 = w2.and_then(|w2| ask(&w2, ci, r#"{"walls":true}"#).map(|(e, _)| with(&w2, ci, e)).ok());
+            match w3 {
+                None => r.add("walls off/on losing them", 1.0, label("toggle refused")),
+                Some(w3) => {
+                    let l3 = town::layout(&w3, t0, ci);
+                    let (t3, g3) = (towers_of(&l3), gates_of(&w3, &l3));
+                    let ids = |t: &[(usize, P, bool)]| t.iter().map(|x| x.0).collect::<Vec<_>>();
+                    let gids = |g: &[(String, P, String)]| g.iter().map(|x| (x.0.clone(), x.2.clone())).collect::<Vec<_>>();
+                    if ids(&t3) != ids(&t_after) || gids(&g3) != gids(&g_after) {
+                        r.add("walls off/on losing them", 1.0, label(&format!("towers {} -> {}, gates {} -> {}", t_after.len(), t3.len(), g_after.len(), g3.len())));
+                    }
+                }
+            }
+        }
+    }
 }
