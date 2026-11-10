@@ -191,10 +191,15 @@
       .slice(0, 5);
     for (const [id, n] of noteRows) out.push({ key: `note:${id}`, group: 'Notes', icon: 'note', name: noteTitle(id, n.text), sub: snippet(n.text, t) || (n.tags ?? []).join(', '), pick: () => onNote(id) });
     const places = new Set<string>();
-    for (const f of searchFeatures(overlay, q, nearMid ? 60 : 12, rect ?? undefined).filter((g) => inNear(g.x, g.y)).slice(0, 12)) {
+    const placeHits = searchFeatures(overlay, q, nearMid ? 60 : 12, rect ?? undefined).filter((g) => inNear(g.x, g.y)).slice(0, 12);
+    for (const f of placeHits) {
       const town = inTown(f.id);
       places.add(f.id);
-      out.push({ key: f.id, group: 'Places', icon: /^(rd|v):/.test(f.id) ? kindIcon(f.kind) : 'pin', name: renames[f.id] ?? f.name, sub: `${kindLabel(f.kind)}${town ? ` · in ${town}` : ''}`, pick: () => onSelect({ kind: 'feature', feature: f }) });
+      // (Two places with one name are told apart by where: the building an entrance is in, else the nearest named place.)
+      const same = placeHits.some((g) => g.id !== f.id && (renames[g.id] ?? g.name) === (renames[f.id] ?? f.name));
+      const apart = !same ? '' : (underShown.find((h) => h.site?.id === f.id)?.in_building?.name ?? nearOf(f.x, f.y));
+      const sub = [`${kindLabel(f.kind)}${town ? ` · in ${town}` : ''}`, apart && (apart.startsWith('near ') ? apart : `in ${apart}`)].filter(Boolean).join(' · ');
+      out.push({ key: f.id, group: 'Places', icon: /^(rd|v):/.test(f.id) ? kindIcon(f.kind) : 'pin', name: renames[f.id] ?? f.name, sub, pick: () => onSelect({ kind: 'feature', feature: f }) });
     }
     const dupSub = subDuplicates(underShown.slice(0, UNDER_MAX));
     for (const h of underShown.slice(0, UNDER_MAX)) {
@@ -222,10 +227,13 @@
   /** Where an underground site is: the site it lies under, else its settlement, else the named
    * place nearest. */
   function underPlace(h: UnderHit): string {
+    // (Under an entrance in a building: "under The Lucky Shield, Waterdeep"; under a free-standing entrance of its own name, no "under ..": the title says it.)
+    if (h.in_building?.name) return `under ${renames[h.in_building.id] ?? h.in_building.name}${h.settlement ? `, ${renames[h.settlement.id] ?? h.settlement.name}` : ''}`;
+    if (h.site && h.site.name === h.name) return '';
     return h.site ? `under ${renames[h.site.id] ?? h.site.name}` : h.settlement ? `in ${renames[h.settlement.id] ?? h.settlement.name}` : nearOf(h.x_ft, h.y_ft);
   }
   /** A site with no name of its own ("Crypt") is titled by its place: "Crypt under The Lost Halls". */
-  const ownName = (h: UnderHit) => h.name !== h.generated || h.site_kind === 'sewer';
+  const ownName = (h: UnderHit) => h.name !== h.generated || h.site_kind === 'sewer' || !!h.in_building || h.site?.name === h.name;
   const underTitle = (h: UnderHit) => (ownName(h) ? h.name : [h.name, underPlace(h)].filter(Boolean).join(' '));
 
   /** The parts of an underground site's sub line, what is different first: what matched (a level,

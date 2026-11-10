@@ -185,6 +185,8 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
     };
     let change = agent::BuildingChange { func: opt("func"), floors, poly: footprint(a)?, roof: opt("roof"), tint: opt("tint"), material: opt("material"), shape: opt("shape"), shade: shade_arg(a)?, structure: opt("structure") };
     let name = opt("name");
+    // (A new footprint: the entrances made in the building follow its middle.)
+    let newmid = change.poly.as_ref().filter(|p| p.len() >= 3).map(|p| worldgen::town::geom::centroid(p));
     let id2 = id.clone();
     // Its inside designed by hand: new storeys follow (in the same change); a new footprint or a
     // ruin sets the design aside.
@@ -205,7 +207,7 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
         })
         .await?;
     let id3 = id.clone();
-    app.edit("agent", 0, move |e| {
+    let done = app.edit("agent", 0, move |e| {
         match edit {
             Some(b) => e.buildings.insert(id3.clone(), b),
             None => e.buildings.remove(&id3),
@@ -222,11 +224,15 @@ async fn update_generated(app: &Shared, a: &Value, id: String) -> Result<Value, 
             }
             None => {}
         }
-        Ok(json!({ "tool": "update_building", "id": id3 }))
+        let followed = newmid.map(|m| crate::sites::follow_middle(e, &id3, m)).unwrap_or_default();
+        Ok(json!({ "tool": "update_building", "id": id3, "entrances_moved": followed }))
     })
     .await?;
     let mut v = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "changed, but it could not be read back".to_string())).await?;
     v["tool"] = json!("update_building");
+    if done["entrances_moved"].as_array().is_some_and(|m| !m.is_empty()) {
+        v["entrances_moved"] = done["entrances_moved"].clone();
+    }
     if !out.is_empty() {
         v["entrances_out"] = json!(out);
     }
@@ -508,6 +514,8 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
     let tool = if creating { "create_building" } else { "update_building" };
     let reply = json!({ "tool": tool, "id": c.id, "kind": "building", "name": c.name, "x_ft": c.x.round(), "y_ft": c.y.round() });
     let cid = c.id.clone();
+    // (A new footprint of a building drawn by hand: the entrances made in it follow its middle; `b:<layout>:0` is its building id.)
+    let host = if reshaped && !creating { app.worker.with({ let cid = cid.clone(); move |ex| Ok(agent::layout_of(&ex.world, &ex.t0, &cid).map(|li| format!("b:{li}:0"))) }).await? } else { None };
     let mut reply = reply;
     let removed_json = json!(removed.iter().map(|r| r.to_json()).collect::<Vec<_>>());
     let app2 = app.clone();
@@ -532,7 +540,11 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             }
         } else {
             let slot = e.created.iter_mut().find(|x| x.id == c.id && !x.removed).ok_or_else(|| format!("{} was deleted meanwhile", c.id))?;
+            let mid = [c.x, c.y];
             *slot = c;
+            if let Some(h) = &host {
+                reply["entrances_moved"] = json!(crate::sites::follow_middle(e, h, mid));
+            }
             if let Some((bid, d)) = design {
                 e.designs.insert(bid, d);
             }
@@ -558,6 +570,9 @@ async fn build(app: &Shared, a: &Value, id: Option<String>) -> Result<Value, Str
             }
             if !out.is_empty() {
                 v["entrances_out"] = json!(out);
+            }
+            if change["entrances_moved"].as_array().is_some_and(|m| !m.is_empty()) {
+                v["entrances_moved"] = change["entrances_moved"].clone();
             }
             if removed_json.as_array().is_some_and(|r| !r.is_empty()) {
                 v["removed"] = removed_json;

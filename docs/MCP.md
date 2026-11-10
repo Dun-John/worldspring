@@ -39,7 +39,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
   call is refused (`blocks_move and blocks_movement disagree: give one`); the same value twice is fine.
 - **Arguments are checked before anything runs**, for every tool and every `batch` step, against the tool's own
   schema: unknown arguments, types (an integer is a whole number; `"10"` is not a number), `enum` values,
-  `minimum`/`maximum`, list sizes and required fields. `null` for an optional argument counts as not given. A
+  `minimum`/`maximum`, list sizes and required fields. `null` for an optional argument counts as not given (one exception: `update_feature` `in_building: null` takes an entrance out of its building; `create_feature` `in_building: null` is not given). A
   refusal says which field and what was wrong, up to five at once, with the item's index in lists, and suggests a
   near name when there is one:
   `radius_squares: 1 to 64, got 200` · `hidden: true or false, got "yes"` ·
@@ -685,7 +685,7 @@ A site does not go on top of what stands: each kind keeps a disc round its point
 and, but for an `entrance`, streets and squares (a bare `entrance` may sit in a street or a square; one `in_building` skips the check). The disc is
 65 ft for a `tower`, 55 for a `camp` and a `mine`, 120 for a `waystation`, 115 for a `ruin`, 12 for a `cave` and a `lava_tube`, 10 for an `entrance`.
 The refusal names what is in the way and where, and the nearest clear spot: `that overlaps Dragonspear Castle (c:5), at (x, y); the nearest clear spot
-is (x, y), 140 ft away`. The same-site rule above comes first: asking again for a site that stands is that site, not a refusal.
+is (x, y), 140 ft away`. In a built-up area with none within 400 ft, mapd looks on to 1,500 ft (a few seconds) and says where the nearest is, or that there is none (put it outside the built-up area); for a `tower` it adds that `create_building` with `func: wizard_tower` and `clear: true` makes one there. The same-site rule above comes first: asking again for a site that stands is that site, not a refusal.
 
 A site asked for in a river or within 150 ft of one is put on the bank (a camp's clearing is also kept inside its
 battlemap chunk). When that moves it more than 5 ft the result says so: `moved: {x_ft, y_ft, ft, why}`.
@@ -702,9 +702,9 @@ battlemap chunk). When that moves it more than 5 ft the result says so: `moved: 
 | `in_building` | string | optional | An `entrance` only: a building's id (`b:<layout>:<n>`, or the `c:` id of a drawn one). The way down is in that building's cellar and `at` is not needed. |
 | `way` | string | optional | With `in_building`: `stairs` (default) or `trapdoor`. |
 
-An entrance with `in_building` goes down from the cellar of a roofed building that has one (not a ruin, an open structure or a yurt): the cellar gets the stairs or trapdoor, the dungeon below them the way back up, and the surface shows no opening. The dungeon takes the entrance's name. One building has one entrance of each kind beneath. Asking again for the same building and kind is that entrance (`existing: true`). `update_feature` moves an
+An entrance with `in_building` goes down from the cellar of a roofed building that has one (not a ruin, an open structure or a yurt): the cellar gets the stairs or trapdoor, the dungeon below them the way back up, and the surface shows no opening. The dungeon takes the entrance's name. One building has one entrance of each kind beneath. A building with a hand-drawn design that has no cellar level or no free square on it is refused (`set_site_design`: add a cellar or free a square), nothing changed. The reply's `in_building` has `cellar_level` (the id of the level with the stairs), and `moved` when `at` was given and is not the building's middle. A name another feature already has is made anyway, with a `note` (`another "X" exists: c:14`). Asking again for the same building and kind is that entrance (`existing: true`). `update_feature` moves an
 entrance into a building, or out, keeping its ids.
-`get_feature` of a created site lists its `underground` ids; of an entrance in a building, `in_building` (`{id, name}`, with `standing: false` and a note
+`get_feature` of a created site lists its `underground` ids; of an entrance in a building, `in_building` (`{id, name}` (the name as `get_feature` gives the building, kept after it is taken away), with `standing: false` and a note
 when the building is gone, ruined or has no cellar: the entrance then opens on the ground) and `way`; of a building, its `underground` ids. A change that
 takes a building away or leaves it without a cellar (`remove_buildings`, `delete_feature` of a drawn one, `update_building` with `structure: ruin`) lists
 the entrances that stood in it as `entrances_out: [{id, name, now}]`; restoring the building brings the way down back.
@@ -1155,7 +1155,7 @@ building and removes nothing.
 ### `update_building`
 `id` (a drawn building's `c:` id, or one of the world's own: `b:<layout>:<id>`) and any of the parameters of
 `create_building`; those left out stay. A new footprint (`poly`, `rect` or `circle`) moves or reshapes it and is
-checked like a new one (it never collides with itself).
+checked like a new one (it never collides with itself). The entrances made in the building follow its new middle in the same change, listed as `entrances_moved: [{id, name, ft}]` (`edit_town` does not move them).
 
 The world's own buildings take the same changes (`edits.buildings`): what it is (`func`), `floors`, `roof`,
 `tint`, `material`, `shape`, `shade`, `structure`, a new footprint (`snap` as in `create_building`), and `name` (a rename). `auto` (or an empty `func`) puts one option back as

@@ -176,6 +176,8 @@ export interface UnderHit {
   y_ft: number;
   settlement: { id: string; name: string } | null;
   site?: { id: string; name: string };
+  /** Under an entrance made in this building's cellar. */
+  in_building?: { id: string; name: string | null };
   sections?: number;
   hidden?: boolean;
   distance_ft?: number;

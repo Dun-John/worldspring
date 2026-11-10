@@ -489,6 +489,29 @@ pub fn designed(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     check(&it, &sh, &want).iter().all(|p| !p.blocking).then_some(it)
 }
 
+/// Whether building `id`'s hand design (if it has one that builds now) has room for one more way down: a cellar level with a free square.
+/// The error says what is lacking (a design that is set aside already needs nothing).
+pub fn room_for_way_down(world: &World, t0: &T0, id: &str) -> Result<(), String> {
+    let Some(d) = world.file.edits.designs.get(id) else { return Ok(()) };
+    let Ok((li, l, bi)) = building_of(world, t0, id) else { return Ok(()) };
+    let b = l.building(bi as usize).expect("checked");
+    let sh = Shell::of(&l, b);
+    if d.kind != BUILDING || d.fingerprint != fingerprint(&sh, b) || d.nx as usize != sh.nx || d.ny as usize != sh.ny {
+        return Ok(());
+    }
+    let (mut it, want) = build(world, d, t0, &l, li, b, &sh, &world.file.edits.sprites);
+    if check(&it, &sh, &want).iter().any(|p| p.blocking) {
+        return Ok(());
+    }
+    let Some(deep) = deepest_cellar(d) else { return Err("it has no cellar level".into()) };
+    let st = stairs_of(d);
+    if super::place_link(&mut it.levels[deep], sh.nx, sh.ny, st, [0.0, 0.0], "link_down", "", String::new()) {
+        Ok(())
+    } else {
+        Err("it has no free square on the cellar level for it".into())
+    }
+}
+
 /// Building `id`'s design: the one saved (if it still fits), else (or with `original`) a copy
 /// of the generated interior. Whether the saved one was set aside (no longer fits).
 pub fn design_of(world: &World, t0: &T0, id: &str, original: bool) -> Result<(SiteDesign, bool), String> {

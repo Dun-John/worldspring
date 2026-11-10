@@ -759,7 +759,15 @@ async fn create(app: &Shared, a: Value) -> Result<Value, String> {
         return found_spot(app, id.to_string(), &c2, at).await;
     }
     let id = change["id"].as_str().unwrap_or_default().to_string();
-    let mut v = app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())).await?;
+    let name = c2.name.clone();
+    let mut v = app
+        .worker
+        .with(move |ex| {
+            let mut v = agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())?;
+            same_name_note(&mut v, agent::same_named(&ex.world, &ex.t0, &name, &id), &name);
+            Ok(v)
+        })
+        .await?;
     if let Some(m) = moved {
         v["moved"] = m;
     }
@@ -774,6 +782,9 @@ async fn found_spot(app: &Shared, id: String, asked: &Created, at: [f64; 2]) -> 
     let beneath = asked.under_kind().map(|k| format!(" over a {}", k.name())).unwrap_or_default();
     let what = v["name"].as_str().map(|n| format!("{id} ({n})")).unwrap_or_else(|| id.clone());
     let why = if let Some(b) = &asked.in_building {
+        let b2 = b.clone();
+        let named = app.worker.with(move |ex| Ok(agent::building_label(&ex.world, &ex.t0, &b2))).await.ok().flatten();
+        let b = named.map(|n| format!("{b} ({n})")).unwrap_or_else(|| b.clone());
         format!("{what} is already an entrance{beneath} in {b}: one building has one entrance of each kind beneath; use another building or another `under`, or change that one")
     } else {
         format!(
@@ -815,7 +826,7 @@ async fn host_building(app: &Shared, rawq: String) -> Result<(String, String, [f
                 let taken = w.file.edits.buildings.get(&id).is_some_and(|e| e.removed);
                 return Err(if taken { format!("{id} was taken away (restore_building brings it back)") } else { format!("in_building: no building {id}") });
             };
-            let name = agent::name_of(w, t0, &id).unwrap_or_else(|| b.label().to_string());
+            let name = agent::building_label(w, t0, &id).unwrap_or_else(|| b.label().to_string());
             match b.structure {
                 worldgen::town::Structure::Ruin => return Err(format!("{id} ({name}) is a ruin: no cellar to put a way down in")),
                 worldgen::town::Structure::Open => return Err(format!("{id} ({name}) is an open structure (a yard or ring), not a roofed building: no cellar")),
@@ -829,9 +840,35 @@ async fn host_building(app: &Shared, rawq: String) -> Result<(String, String, [f
         .await
 }
 
+/// An edit with the gate already held by the caller (inside a batch the batch stages it).
+async fn edit_held(app: &Shared, f: impl FnOnce(&mut Edits) -> Result<Value, String>) -> Result<Value, String> {
+    if crate::batch::active() { app.edit("agent", 0, f).await } else { app.edit_now("agent", 0, f).await }
+}
+
+/// A way down into building `bid` ({bname}) must not set aside the design drawn by hand for it: refused when that design has no room for it.
+async fn design_room(app: &Shared, bid: &str, bname: &str) -> Result<(), String> {
+    let b2 = bid.to_string();
+    app.worker
+        .with(move |ex| Ok(worldgen::interior::design::room_for_way_down(&ex.world, &ex.t0, &b2)))
+        .await?
+        .map_err(|why| format!("{bid} ({bname}) has a design drawn by hand and {why}: a way down would set it aside. set_site_design: add a cellar or free a square, then try again; nothing was changed"))
+}
+
+/// Add to `v`'s note that another feature has the name `name`, if one does (`other` its id).
+fn same_name_note(v: &mut Value, other: Option<String>, name: &str) {
+    let Some(o) = other else { return };
+    let n = format!("another \"{name}\" exists: {o}");
+    v["note"] = json!(match v["note"].as_str() {
+        Some(t) => format!("{t}; {n}"),
+        None => n,
+    });
+}
+
 /// `update_feature` with `in_building` (and `way`, `at`) on an entrance: into a building's cellar (its point becomes the building's middle),
 /// or, with null, back out (to `at`, else the nearest spot outside). Ids stay. Returns `{tool, id, in_building, way, moved, note?}`.
 async fn move_entrance(app: &Shared, a: &Value, id: &str) -> Result<Value, String> {
+    // The checks and the write happen under one hold of the gate (as `restore_feature`): nothing can be placed in between.
+    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
     let into = a.get("in_building").cloned();
     let way = a["way"].as_str().map(str::to_string);
     let (idc, kind) = (id.to_string(), app.with_edits(|e| e.created.iter().find(|c| c.id == id && !c.removed).map(|c| c.kind.clone())).flatten());
@@ -855,6 +892,9 @@ async fn move_entrance(app: &Shared, a: &Value, id: &str) -> Result<Value, Strin
             }
             if let Some(o) = app.with_edits(|e| e.created.iter().find(|o| o.id != idc && !o.removed && o.kind == "entrance" && o.in_building.as_deref() == Some(bid.as_str()) && o.under_kind() == cur.under_kind()).map(|o| o.id.clone())).flatten() {
                 return Err(format!("{bid} ({bname}) already has an entrance of that kind beneath it ({o}): one per kind in a building"));
+            }
+            if cur.in_building.as_deref() != Some(bid.as_str()) {
+                design_room(app, &bid, &bname).await?;
             }
             c.way = way.or(if cur.in_building.is_some() { cur.way.clone() } else { None });
             c.in_building = Some(bid.clone());
@@ -893,14 +933,14 @@ async fn move_entrance(app: &Shared, a: &Value, id: &str) -> Result<Value, Strin
             let Some(b) = cur.in_building.clone() else { return Err("way: needs in_building (the entrance is not in a building)".into()) };
             c.way = way;
             (c.x, c.y) = was;
-            let bname = app.worker.with(move |ex| Ok::<_, String>(agent::name_of(&ex.world, &ex.t0, &b).unwrap_or_default())).await?;
+            let bname = app.worker.with(move |ex| Ok::<_, String>(agent::building_label(&ex.world, &ex.t0, &b).unwrap_or_default())).await?;
             why = "the way down changed".to_string();
             host = cur.in_building.clone().map(|b| (b, bname));
         }
     }
     c.check()?;
     let (cc, ft) = (c.clone(), (c.x - was.0).hypot(c.y - was.1));
-    app.edit("agent", 0, move |e| {
+    edit_held(app, move |e| {
         let slot = e.created.iter_mut().find(|o| o.id == cc.id && !o.removed).ok_or_else(|| format!("{} was deleted meanwhile", cc.id))?;
         (slot.x, slot.y, slot.in_building, slot.way) = (cc.x, cc.y, cc.in_building, cc.way);
         Ok(json!({}))
@@ -930,7 +970,7 @@ async fn move_entrance(app: &Shared, a: &Value, id: &str) -> Result<Value, Strin
     if let Some((u, drop)) = aside {
         if drop {
             let u2 = u.clone();
-            app.edit("agent", 0, move |e| {
+            edit_held(app, move |e| {
                 e.designs.remove(&u2);
                 Ok(json!({}))
             })
@@ -955,6 +995,8 @@ async fn create_in_building(app: &Shared, a: Value, kind: String) -> Result<Valu
     if at_given && !at_same {
         asked_at = Some(place(app, &a).await?);
     }
+    // Everything is checked before anything is stored, and the checks and the write happen under one hold of the gate (as `restore_feature`).
+    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
     let (bid, bname, mid, poly) = host_building(app, rawq).await?;
     if let Some(p) = asked_at
         && !worldgen::town::geom::contains(&poly, p)
@@ -971,29 +1013,53 @@ async fn create_in_building(app: &Shared, a: Value, kind: String) -> Result<Valu
     let n = app.with_edits(|e| e.created.len()).unwrap_or(0);
     c.id = format!("c:{n}");
     if let Some(id) = app.with_edits(|e| e.existing_site(&c, mid).map(|o| o.id.clone())).flatten() {
+        drop(_hold);
         return found_spot(app, id, &c, mid).await;
     }
+    design_room(app, &bid, &bname).await?;
     let asked = a["name"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let (cid, under) = (c.id.clone(), c.under.clone());
     let generated = app.worker.with(move |ex| Ok::<_, String>(agent::creation_spot_with(&ex.world, &ex.t0, "entrance", under.as_deref(), &cid, mid, agent::Overlap::Skip).map(|r| r.1).ok())).await?;
     c.name = asked.or(generated).unwrap_or_else(|| format!("Beneath {bname}"));
     let c2 = c.clone();
-    let change = app
-        .edit("agent", 0, move |e| {
-            if let Some(o) = e.existing_site(&c, mid) {
-                return Ok(json!({ "existing": o.id }));
-            }
-            c.id = format!("c:{}", e.created.len());
-            let reply = json!({ "tool": "create_feature", "id": c.id, "kind": c.kind, "name": c.name, "x_ft": mid[0].round(), "y_ft": mid[1].round() });
-            e.created.push(c);
-            Ok(reply)
-        })
-        .await?;
+    let change = edit_held(app, move |e| {
+        if let Some(o) = e.existing_site(&c, mid) {
+            return Ok(json!({ "existing": o.id }));
+        }
+        c.id = format!("c:{}", e.created.len());
+        let reply = json!({ "tool": "create_feature", "id": c.id, "kind": c.kind, "name": c.name, "x_ft": mid[0].round(), "y_ft": mid[1].round() });
+        e.created.push(c);
+        Ok(reply)
+    })
+    .await?;
+    drop(_hold);
     if let Some(id) = change["existing"].as_str() {
         return found_spot(app, id.to_string(), &c2, mid).await;
     }
     let id = change["id"].as_str().unwrap_or_default().to_string();
-    app.worker.with(move |ex| agent::get(&ex.world, &ex.t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())).await
+    // (The cellar level that holds the stairs, and a point asked for that the middle replaced.)
+    let (host, name) = (bid.clone(), c2.name.clone());
+    let mut v = app
+        .worker
+        .with(move |ex| {
+            let (w, t0) = (&ex.world, &ex.t0);
+            let mut v = agent::get(w, t0, &id).ok_or_else(|| "created, but it could not be read back".to_string())?;
+            if let Some(el) = agent::layout_of(w, t0, &id)
+                && let Some(l) = agent::way_down_level(w, t0, &host, el)
+            {
+                v["in_building"]["cellar_level"] = json!(l);
+            }
+            same_name_note(&mut v, agent::same_named(w, t0, &name, &id), &name);
+            Ok(v)
+        })
+        .await?;
+    if let Some(p) = asked_at {
+        let ft = (p[0] - mid[0]).hypot(p[1] - mid[1]);
+        if ft > 5.0 {
+            v["moved"] = json!({ "x_ft": mid[0].round(), "y_ft": mid[1].round(), "ft": ft.round(), "why": format!("the way down goes at the middle of {bid} ({bname}), not at the point asked") });
+        }
+    }
+    Ok(v)
 }
 
 /// A site asked to be created that was already there (`Created::same_site`), as `get_feature`

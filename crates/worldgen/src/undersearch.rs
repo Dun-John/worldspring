@@ -402,6 +402,11 @@ pub fn search_underground(world: &World, t0: &T0, query: &str, o: &UnderOpts) ->
         if let Some(site) = site {
             v["site"] = site;
         }
+        // Under an entrance made in a building's cellar: that building (the title and sub line say "under The Lucky Shield").
+        if let Some((li, bi)) = crate::sitelinks::building_of(world, t0, s.layout) {
+            let id = format!("b:{li}:{bi}");
+            v["in_building"] = json!({ "name": crate::agent::building_label(world, t0, &id), "id": id });
+        }
         if kind == UnderKind::Sewer {
             v["sections"] = json!(s.sections);
         }

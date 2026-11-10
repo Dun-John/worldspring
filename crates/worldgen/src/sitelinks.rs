@@ -50,6 +50,7 @@ pub fn building_of(world: &World, t0: &T0, layout: usize) -> Option<(usize, usiz
 /// The entrances that lead down from building `bi` of layout `li` (the layout, the entrance), in
 /// the order they were made.
 pub fn entrances_in<'a>(world: &'a World, t0: &T0, li: usize, bi: usize) -> Vec<(usize, &'a Created)> {
+    // (Filtered by the `in_building` string first: `host_of` lays out a town, so it runs only for the few entrances that name this building.)
     let mine = format!("b:{li}:{bi}");
     let first = first_layout(t0);
     world

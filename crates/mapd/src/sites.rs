@@ -89,6 +89,19 @@ pub async fn entrances_standing_in(app: &Shared, ids: Vec<String>) -> Vec<Value>
         .unwrap_or_default()
 }
 
+/// A building reshaped: the entrances made in it (`in_building` = `bid`) follow its new middle `mid`, in `e`. Returns `[{id, name, ft}]` for those that moved.
+pub fn follow_middle(e: &mut worldgen::world::Edits, bid: &str, mid: [f64; 2]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for c in e.created.iter_mut().filter(|c| c.kind == "entrance" && !c.removed && c.in_building.as_deref() == Some(bid)) {
+        let ft = (c.x - mid[0]).hypot(c.y - mid[1]);
+        if ft > 0.5 {
+            (c.x, c.y) = (mid[0], mid[1]);
+            out.push(json!({ "id": c.id, "name": c.name, "ft": ft.round() }));
+        }
+    }
+    out
+}
+
 async fn delete(app: &Shared, a: &Value) -> Result<Value, String> {
     let ids = crate::args::ids(a)?;
     let sites = resolve(app, ids.clone(), a["ids"].is_null()).await?;

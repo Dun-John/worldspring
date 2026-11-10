@@ -90,6 +90,12 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
     out
 }
 
+/// A feature other than `id` that has the name `name` (as renamed), if any: its id.
+pub fn same_named(world: &World, t0: &T0, name: &str, id: &str) -> Option<String> {
+    let n = name.trim();
+    (!n.is_empty()).then(|| features(world, t0).into_iter().find(|f| f.id != id && f.name.trim().eq_ignore_ascii_case(n)).map(|f| f.id)).flatten()
+}
+
 /// Each feature's shape, in `features` order: the overlay's own; a created site is a point (a
 /// building reaches to its footprint's farthest corner).
 pub(crate) fn shapes<'a>(world: &World, t0: &'a T0) -> Vec<Cow<'a, Shape>> {
@@ -262,6 +268,31 @@ pub fn entrance_out_spot(world: &World, t0: &T0, from: P) -> Option<P> {
 
 /// `creation_spot`, with `overlap` saying what to do about what stands there.
 pub fn creation_spot_with(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2], overlap: Overlap) -> Result<([f64; 2], String), String> {
+    creation_spot_inner(world, t0, kind, under, id, p, overlap, true)
+}
+
+/// The nearest spot beyond the 400 ft `nearest_clear` covers where a site of `kind` may stand (rings 150 ft apart out to 1,500 ft, points 150 ft apart round
+/// each): the move from `p`.
+fn farther_clear(world: &World, t0: &T0, kind: &str, p: P) -> Option<P> {
+    let mut r = 450.0;
+    while r <= 1500.0 {
+        let n = ((std::f64::consts::TAU * r / 150.0) as usize).max(12);
+        for k in 0..n {
+            let a = std::f64::consts::TAU * k as f64 / n as f64;
+            let q = [crate::core::round(p[0] + r * libm::cos(a)), crate::core::round(p[1] + r * libm::sin(a))];
+            if let Ok((s, _)) = creation_spot_inner(world, t0, kind, None, "", q, Overlap::Refuse, false)
+                && geom::dist(s, q) < 1.0
+            {
+                return Some([q[0] - p[0], q[1] - p[1]]);
+            }
+        }
+        r += 150.0;
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn creation_spot_inner(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2], overlap: Overlap, farther: bool) -> Result<([f64; 2], String), String> {
     use crate::t0::names::{NameKind, Namer};
     use crate::under::UnderKind;
     if p[0] < 0.0 || p[1] < 0.0 || p[0] > world.geom.map_w_ft || p[1] > world.geom.map_h_ft {
@@ -287,7 +318,17 @@ pub fn creation_spot_with(world: &World, t0: &T0, kind: &str, under: Option<&str
             return Err(match near {
                 Some(d) if short => format!("{what}; the nearest clear spot is {} ft away", ft(d)),
                 Some(d) => format!("{what}; the nearest clear spot is ({}, {}), {} ft away", crate::core::round(p[0] + d[0]), crate::core::round(p[1] + d[1]), ft(d)),
-                None => format!("{what}; there is no clear spot within 400 ft"),
+                None => {
+                    // Built over: a tower can be a building (its ground cleared), anything else goes outside the built-up area.
+                    let far = if farther && !short { farther_clear(world, t0, kind, p) } else { None };
+                    let tower = if kind == "tower" { "; for a tower here, create_building with func wizard_tower and clear: true takes away what is in the way" } else { "" };
+                    match far {
+                        Some(d) if short => format!("{what}; no clear spot within 400 ft, the nearest is {} ft away{tower}", ft(d)),
+                        Some(d) => format!("{what}; no clear spot within 400 ft, the nearest is ({}, {}), {} ft away{tower}", crate::core::round(p[0] + d[0]), crate::core::round(p[1] + d[1]), ft(d)),
+                        None if farther && !short => format!("{what}; no clear spot within 1,500 ft (the area is built up): put it outside the built-up area{tower}"),
+                        None => format!("{what}; no clear spot within 400 ft"),
+                    }
+                }
             });
         }
     }
@@ -1390,9 +1431,10 @@ fn poly_seg_dist(poly: &[P], a: P, b: P) -> f64 {
     poly.iter().map(|p| geom::seg_dist(*p, a, b)).chain(to_edges).fold(f64::MAX, f64::min)
 }
 
-/// `creation_spot` as JSON: `{x, y, name}` or `{error}`.
+/// `creation_spot` as JSON: `{x, y, name}` or `{error}`. The kind `settlement` (the app's land check for a settlement put down by hand) has no overlap check.
 pub fn creation_spot_json(world: &World, t0: &T0, kind: &str, under: Option<&str>, id: &str, p: [f64; 2]) -> String {
-    match creation_spot_with(world, t0, kind, under, id, p, Overlap::RefuseShort) {
+    let overlap = if kind == "settlement" { Overlap::Skip } else { Overlap::RefuseShort };
+    match creation_spot_with(world, t0, kind, under, id, p, overlap) {
         Ok((q, name)) => json!({ "x": q[0], "y": q[1], "name": name }),
         Err(e) => json!({ "error": e }),
     }
@@ -1464,16 +1506,32 @@ fn place_name(t0: &T0, id: &str) -> Option<String> {
 /// without a cellar leaves a plain surface opening).
 fn in_building_json(world: &World, t0: &T0, c: &crate::world::Created) -> Value {
     let id = c.in_building.clone().unwrap_or_default();
-    let name = crate::sitelinks::parse_building(&id).filter(|(li, _)| *li < town::layout_count(t0)).and_then(|(li, bi)| {
-        let l = town::layout(world, t0, li);
-        l.building(bi).map(|b| building_name(world, &l, b))
-    });
+    let name = building_label(world, t0, &id);
     let mut v = json!({ "id": id, "name": name });
     if crate::sitelinks::host_of(world, t0, c).is_none() {
         v["standing"] = json!(false);
         v["note"] = json!("that building is gone, or has no cellar now: the entrance shows as an opening on the surface");
     }
     v
+}
+
+/// Building `id`'s (`b:<layout>:<n>`) name as `get_feature` gives it: renamed, its own, else its trade. A building taken away keeps the name it
+/// had as generated.
+pub fn building_label(world: &World, t0: &T0, id: &str) -> Option<String> {
+    let (li, bi) = crate::sitelinks::parse_building(id).filter(|(li, _)| *li < town::layout_count(t0))?;
+    let l = town::layout(world, t0, li);
+    if let Some(b) = l.building(bi) {
+        return Some(building_name(world, &l, b));
+    }
+    let l = town::base_layout(world, t0, li);
+    l.building(bi).map(|b| building_name(world, &l, b))
+}
+
+/// The id of the level of building `host` whose way down leads to the site of layout `el` (`u:<el>:0`), if it has one.
+pub fn way_down_level(world: &World, t0: &T0, host: &str, el: usize) -> Option<String> {
+    let it = crate::interior::generate_id(world, t0, host)?;
+    let to = format!("u:{el}:0");
+    it.levels.iter().position(|lv| lv.links.iter().any(|k| k.to == to)).map(|li| format!("l:{}:{li}", it.id))
 }
 
 /// A building's display name (renamed, its own, or its trade).
