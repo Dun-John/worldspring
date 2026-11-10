@@ -1,8 +1,8 @@
 //! R5 towns (M21): cemeteries, a park kind (`ParkKind::Cemetery`) laid out by the culture group
 //! (`culture % 5`, as `roof::look` and `wallstyle` read it: 0 North, 1 West, 2 South, 3 Dry, 4 Steppe).
 //!
-//! Where (`inner_pick`, `by_roads`): a city one or two, a metropolis two, a town now and then one
-//! (villages keep their churchyards). One of a town's generated commons when it has two or more,
+//! Where (`inner_pick`, `by_roads`): one at most, in a town now and then (a tenth), a city a
+//! quarter, a metropolis half (villages keep their churchyards). One of a town's generated commons when it has two or more,
 //! the rest on open ground beside a road out of town (outside its walls and patches), as close to
 //! the town as the ground allows; a park set to a cemetery by hand is one whatever the counts.
 //!
@@ -137,17 +137,22 @@ pub(crate) const KINDS: [(Kind, KindInfo); 6] = [
 /// A kurgan's radius (ft) at size 1.
 pub const KURGAN_R: f64 = 17.5;
 
-/// How many cemeteries a town of this tier has (by its plan's roll): a city one or two, a
-/// metropolis two, a town now and then one.
+/// How many cemeteries a town of this tier has (by its plan's roll): one at most, a town's one
+/// time in ten, a city's one in four, a metropolis's one in two.
 fn wanted(s: &Settlement, plan: &TownPlan) -> usize {
     let r = plan.roll(0, 0xce1);
-    match s.tier {
-        Tier::Town => (r < 0.6) as usize,
-        Tier::City => 1 + (r < 0.5) as usize,
-        Tier::Metropolis => 2,
-        Tier::Village => 0,
-    }
+    let p = match s.tier {
+        Tier::Town => 0.1,
+        Tier::City => 0.25,
+        Tier::Metropolis => 0.5,
+        Tier::Village => 0.0,
+    };
+    (r < p) as usize
 }
+
+/// How far a cemetery by a road stands off its road's edge (ft): its wall clear of the road's
+/// verge (the battlemap keeps walls a square and more off a road), a short path over to the gate.
+pub const VERGE: f64 = 10.0;
 
 /// How many cemeteries the town wants, and the generated common (if it has two or more, none
 /// set by hand, on a slope, the palace's or bigger than `INNER_MAX`) that is one of them.
@@ -170,7 +175,7 @@ pub(super) fn inner_pick(s: &Settlement, plan: &TownPlan, ward: &[Option<Ward>],
 
 /// Lays `want` cemeteries on open ground beside the roads out of town (local ft, once the fields
 /// are picked: those under one go): each a rectangle along the road (its approach, then the world's
-/// road it came in by), 2 ft off its edge, from 70 ft out from the gate to 1,100 ft, wholly outside
+/// road it came in by), `VERGE` ft off its edge, from 70 ft out from the gate to 1,100 ft, wholly outside
 /// the town's patches and `WALL_OFF` off its walls' planned line, dry, on gentle
 /// ground, clear of every building, road, square, park and bastion; the roads taken in an order
 /// rolled from the plan, one each.
@@ -250,7 +255,7 @@ pub(super) fn by_roads(site: &Site, s: &Settlement, plan: &TownPlan, l: &mut Lay
             let t = mul(sub(b, a), 1.0 / dist(a, b).max(1e-9));
             for side in [1.0, -1.0] {
                 let nrm = mul([-t[1], t[0]], side);
-                let c = add(p, mul(nrm, 0.5 * w + 2.0 + 0.5 * deep));
+                let c = add(p, mul(nrm, 0.5 * w + VERGE + 0.5 * deep));
                 let poly = super::rect(c, t, along, deep);
                 if clear_by_road(site, plan, l, &poly, rk, &ways, own) {
                     // (The side facing the road: corners 0-1 lie at -v, `rect`.)
@@ -351,17 +356,22 @@ fn clear_by_road(site: &Site, plan: &TownPlan, l: &Layout, poly: &[P], rk: usize
     if l.buildings.iter().any(|b| near(&b.poly, 10.0)) {
         return false;
     }
+    // (Its own road a little nearer than `VERGE` where it bends; every other a good way off, its
+    // wall clear of it.)
     for (ri, pts, w) in ways {
-        let need = 0.5 * w + if Some(*ri) == own { 1.5 } else { 6.0 };
+        let need = 0.5 * w + if Some(*ri) == own { VERGE - 3.0 } else { 12.0 };
         if pts.windows(2).any(|s| seg_gap(s[0], s[1]) < need) {
             return false;
         }
     }
     for (k, (pts, _, w)) in l.roads.iter().enumerate() {
-        let need = 0.5 * w + if k == rk { 1.5 } else { 6.0 };
+        let need = 0.5 * w + if k == rk { VERGE - 3.0 } else { 12.0 };
         if pts.windows(2).any(|s| seg_gap(s[0], s[1]) < need) {
             return false;
         }
+    }
+    if l.streets.iter().any(|q| q.windows(2).any(|s| seg_gap(s[0], s[1]) < 15.0)) {
+        return false;
     }
     let polys = l
         .plazas
