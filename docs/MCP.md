@@ -95,7 +95,7 @@ mapd only listens on 127.0.0.1. Keep it off the reverse proxy.
 | Units | `_ft` feet, `_mi` miles, `_squares` squares, `_deg` degrees, in every name that carries one | | |
 | Dry runs | `dry_run`, only where a tool lists it; elsewhere it is an unknown argument | | `set_site_design`, `edit_town` |
 | Lists returned | `{items, found}` (+ `truncated`) | | `search_features`, `features_near`, `list_names`, `list_roads`, `list_npcs`, `list_plots`, `list_sprites` (each item says `uploaded`), `list_crossings`, `list_objects`, `list_plateaus`, `list_designs`, `list_streets` |
-| Moves reported | `moved: {x_ft, y_ft, ft, why}` | | `create_feature`, `create_building` (a crossing's ends are never moved) |
+| Moves reported | `moved: {x_ft, y_ft, ft, why}` | | `create_feature`, `create_building` (a crossing's ends are never moved; `check_building_spot`'s `nearest_clear` is a suggestion, flat `{x_ft, y_ft, ft, poly}`, not a `moved`) |
 
 - **Names** in results already include renames, and search matches them. Hidden features are left out of search
   unless you ask for them.
@@ -1161,8 +1161,8 @@ a `reason` (the first blocker that stays, worded as `create_building`'s refusal)
   street, main street or approach road), `wall` (a hand-drawn one with its `c:` id), `road` (`id` `rd:`, `kind`:
   the class, `width_ft`), `water` (`kind` sea or lake) or `river` (its `id` and `name` when it has them). `at` is a
   building's middle, else the point of the square, street, wall or road nearest the footprint's middle, in whole
-  feet. With `clear` the world's own buildings are not blockers (a building a town edit added is: change the town
-  with `edit_town`). `truncated` is also true when more than 300 things were in the way and the scan stopped.
+  feet. With `clear` the world's own buildings are not blockers (a building the ward editor added is taken away too, as
+  by `remove_buildings`). `truncated` is also true when more than 300 things were in the way and the scan stopped.
 - `nearest_clear` (not when `ok`): the same footprint, not turned, moved on 5-ft steps to the nearest spot that is
   clear, up to 400 ft away: `{x_ft, y_ft, ft, poly}` (`x_ft`, `y_ft` its new middle, `ft` how far that is from the
   middle asked about, `poly` the moved corners: pass them back as `poly` with `snap: false`), plus its own

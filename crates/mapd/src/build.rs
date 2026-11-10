@@ -137,7 +137,11 @@ async fn check_spot(app: &Shared, a: &Value) -> Result<Value, String> {
                     None => Value::Null,
                 };
                 if v["nearest_clear"].is_null() && v["blockers"]["found"].as_u64().unwrap_or(0) > 0 {
-                    v["note"] = json!("no clear spot within 400 ft (the footprint moved on 5-ft steps, not turned): try create_building near with width_ft and depth_ft");
+                    v["note"] = if v["blockers"]["items"].as_array().is_some_and(|i| i.iter().any(|b| matches!(b["what"].as_str(), Some("water")))) {
+                        json!("the footprint is in the water: pick dry land (no clear spot within 400 ft, moved on 5-ft steps, not turned)")
+                    } else {
+                        json!("no clear spot within 400 ft (the footprint moved on 5-ft steps, not turned): try create_building near with width_ft and depth_ft")
+                    };
                 }
             }
             Ok(v)
@@ -263,10 +267,12 @@ async fn remove(app: &Shared, a: &Value) -> Result<Value, String> {
 
 /// Some of the world's own buildings back as generated (all or none).
 async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, String> {
+    // The check and the restore happen under one hold of the gate, so nothing can be placed in between.
+    let _hold = if crate::batch::active() { None } else { Some(app.gate.lock().await) };
     let ids2 = ids.clone();
     app.worker.with(move |ex| agent::restore_clash(&ex.world, &ex.t0, &ids2)).await?;
     let ids2 = ids.clone();
-    app.edit("agent", 0, move |e| {
+    let change = move |e: &mut worldgen::world::Edits| {
         if let Some((i, id)) = ids2.iter().enumerate().find(|(_, id)| !e.buildings.contains_key(*id)) {
             return Err(format!("{}: {id} is as generated already", crate::args::item(single, i)));
         }
@@ -274,8 +280,13 @@ async fn restore(app: &Shared, ids: Vec<String>, single: bool) -> Result<Value, 
             e.buildings.remove(id);
         }
         Ok(json!({ "tool": "restore_building", "ids": ids2 }))
-    })
-    .await?;
+    };
+    if crate::batch::active() {
+        app.edit("agent", 0, change).await?;
+    } else {
+        app.edit_now("agent", 0, change).await?;
+    }
+    drop(_hold);
     let ids2 = ids.clone();
     let mut got = app
         .worker

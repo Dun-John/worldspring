@@ -325,11 +325,7 @@ impl Blocker {
                 let inn = self.place.as_deref().map(|p| format!(" in {p}")).unwrap_or_default();
                 let mut m = format!("that overlaps {}{with_id}{inn}{}", self.name.as_deref().unwrap_or("a building"), at.replacen(" at", ", at", 1));
                 if clear && !self.removable {
-                    m += &if id.starts_with("c:") {
-                        format!("; it is drawn by hand: delete_feature {id} first")
-                    } else {
-                        "; a town edit added it, so clear does not take it away: change the town with edit_town (Edit > Streets in the app)".to_string()
-                    };
+                    m += &format!("; it is drawn by hand: delete_feature {id} first");
                 }
                 m
             }
@@ -346,7 +342,11 @@ impl Blocker {
                 format!("that is on {what} ({w} ft wide){of}{at}")
             }
             "wall" if self.id.is_some() => format!("that is on the wall {}{with_id}{at}", self.name.as_deref().unwrap_or("")),
-            "wall" => format!("that is on {}wall{}{at}", self.place.as_deref().map(|p| format!("{p}'s ")).unwrap_or_else(|| "a ".to_string()), if self.place.is_some() { "" } else { " of a settlement" }),
+            "wall" => format!(
+                "that is on {}wall{}{at}",
+                self.place.as_deref().map(|p| format!("{p}'s ")).unwrap_or_else(|| "a ".to_string()),
+                if self.place.is_some() { "" } else { " of a settlement" }
+            ),
             _ => {
                 let k = self.kind.unwrap_or("road");
                 let k = if k.starts_with("king") { "King's road" } else { k };
@@ -422,10 +422,11 @@ fn building_blocker(world: &World, t0: &T0, l: &town::Layout, b: &town::Building
     let generated = t0.settlements.len() + t0.base_pois;
     let at = geom::centroid(&b.poly);
     let drawn = if li >= generated { world.file.edits.created.get(li - generated).filter(|c| c.kind == "building").map(|c| c.id.clone()) } else { None };
-    // (A building a town edit added has an id from `NEW_ID` up: not one of the world's own, `remove_buildings` cannot name it.)
-    let removable = li < generated && b.id < town::wards::NEW_ID;
+    // (A building a town edit added, id from `NEW_ID` up, is taken away like the others: `remove_buildings` names it too.)
+    let removable = li < generated;
     let (settlement, place) = if full { place_of(world, t0, li) } else { (Value::Null, None) };
-    Blocker { id: Some(drawn.unwrap_or_else(|| format!("b:{li}:{}", b.id))), name: Some(building_name(world, l, b)), function: Some(b.label().to_string()), settlement, place, removable, ..Blocker::plain("building", at) }
+    let id = Some(drawn.unwrap_or_else(|| format!("b:{li}:{}", b.id)));
+    Blocker { id, name: Some(building_name(world, l, b)), function: Some(b.label().to_string()), settlement, place, removable, ..Blocker::plain("building", at) }
 }
 
 /// The point on the segments nearest `c`.
@@ -560,7 +561,10 @@ fn scan_raw(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], skip: Optio
             let created = if class.is_none() && li >= t0.settlements.len() + t0.base_pois { world.file.edits.created.get(li - t0.settlements.len() - t0.base_pois) } else { None };
             out.push(match class {
                 Some(k) => Blocker { settlement, place, width: Some(2.0 * half), kind: Some(street_kind(k)), ..Blocker::plain("street", at) },
-                None => Blocker { settlement, place, width: Some(2.0 * half), id: created.map(|c| c.id.clone()), name: created.map(|c| c.name.clone()), ..Blocker::plain("wall", at) },
+                None => {
+                    let (id, name) = (created.map(|c| c.id.clone()), created.map(|c| c.name.clone()));
+                    Blocker { settlement, place, width: Some(2.0 * half), id, name, ..Blocker::plain("wall", at) }
+                }
             });
             if enough(all, clear, &out) {
                 return out;
@@ -639,7 +643,9 @@ pub fn building_spot_clearing(world: &World, t0: &T0, poly: &[P], func: Option<&
 
 /// `building_spot` with the shore over an area that holds `poly`; `clear`: the world's own buildings do not block (they are returned);
 /// `full`: refusals with ids and places (the hunt for a spot leaves them out).
-fn spot_check(world: &World, t0: &T0, shore: &town::Shore, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>, clear: bool, full: bool) -> Result<(P, String, Vec<Removal>), String> {
+fn spot_check(
+    world: &World, t0: &T0, shore: &town::Shore, poly: &[P], func: Option<&str>, id: &str, skip: Option<(usize, Option<u32>)>, clear: bool, full: bool,
+) -> Result<(P, String, Vec<Removal>), String> {
     spot_precheck(world, poly)?;
     let (found, more) = scan_spot(world, t0, shore, poly, skip, false, clear, full);
     if let Some(b) = found.iter().find(|b| !(clear && b.removable)) {
@@ -698,7 +704,7 @@ pub fn nearest_clear(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id:
         if own == Some(None) {
             continue;
         }
-        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(clear && li < generated && b.id < town::wards::NEW_ID)) {
+        for b in l.buildings.iter().filter(|b| Some(Some(b.id)) != own && !(clear && li < generated)) {
             let bb = bbox(&b.poly);
             if near(bb) {
                 obst.push(Obst::Area(bb, b.poly.clone()));
@@ -730,7 +736,10 @@ pub fn nearest_clear(world: &World, t0: &T0, poly: &[P], func: Option<&str>, id:
     }
     let inner = inner_of(poly);
     let steps = (REACH / 5.0) as i32;
-    let mut offsets: Vec<(i32, i32)> = (-steps..=steps).flat_map(|i| (-steps..=steps).map(move |j| (i, j))).filter(|&(i, j)| (i, j) != (0, 0) && i * i + j * j <= steps * steps).collect();
+    let mut offsets: Vec<(i32, i32)> = (-steps..=steps)
+        .flat_map(|i| (-steps..=steps).map(move |j| (i, j)))
+        .filter(|&(i, j)| (i, j) != (0, 0) && i * i + j * j <= steps * steps)
+        .collect();
     offsets.sort_by_key(|&(i, j)| (i * i + j * j, i, j));
     let shore = town::Shore::new(world, t0, region);
     let mid = geom::centroid(&inner);
@@ -881,7 +890,11 @@ pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> 
         let li = l.index as usize;
         let (s, site) = whereabouts(world, t0, li);
         let mut head = json!({ "settlement": s });
-        if li >= t0.settlements.len() && li < generated + world.file.edits.created.len() && site.as_ref().is_some_and(|v| !v.is_null()) && place_of(world, t0, li).1 != s["name"].as_str().map(str::to_string) {
+        if li >= t0.settlements.len()
+            && li < generated + world.file.edits.created.len()
+            && site.as_ref().is_some_and(|v| !v.is_null())
+            && place_of(world, t0, li).1 != s["name"].as_str().map(str::to_string)
+        {
             head["site"] = site.unwrap_or(Value::Null);
         }
         let with = |what: &str, extra: Value| {
@@ -913,7 +926,8 @@ pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> 
             let outline: Vec<P> = p.pts.iter().chain(p.pts.first()).copied().collect();
             let mid = [0.5 * (rect[0] + rect[2]), 0.5 * (rect[1] + rect[3])];
             if p.pts.iter().any(|q| inside(*q)) || inside(geom::centroid(&p.pts)) || !clip_runs(&outline, inside).is_empty() || (inside(mid) && geom::contains(&p.pts, mid)) {
-                out.push(with("square", json!({ "kind": plaza_kind(p.kind), "pts": pts_json(&p.pts.iter().map(|q| [crate::core::round(q[0]), crate::core::round(q[1])]).collect()) })));
+                let pts: Vec<P> = p.pts.iter().map(|q| [crate::core::round(q[0]), crate::core::round(q[1])]).collect();
+                out.push(with("square", json!({ "kind": plaza_kind(p.kind), "pts": pts_json(&pts) })));
             }
         }
     }
@@ -949,7 +963,8 @@ pub fn streets_in(world: &World, t0: &T0, rect: [f64; 4], inside: &dyn Fn(P) -> 
 }
 
 fn road_json(ids: &[String], ri: u32, rc: &crate::lod::roads::RoadCurve, r: &[P]) -> Value {
-    json!({ "what": "road", "id": ids[ri as usize], "class": crate::roadids::class_name(rc.class), "width_ft": rc.class.width_ft(), "pts": r.iter().map(|p| json!([p[0], p[1]])).collect::<Vec<_>>() })
+    let pts = r.iter().map(|p| json!([p[0], p[1]])).collect::<Vec<_>>();
+    json!({ "what": "road", "id": ids[ri as usize], "class": crate::roadids::class_name(rc.class), "width_ft": rc.class.width_ft(), "pts": pts })
 }
 
 /// Generated buildings (not drawn by hand) whose middle lies inside `poly` (world ft), as they
@@ -1267,13 +1282,14 @@ pub fn building_spot_json(world: &World, t0: &T0, poly: &[P], func: Option<&str>
     .to_string()
 }
 
-/// Whether the world's own buildings `ids` (taken away by edits) may come back: none may lie under a building drawn by hand.
+/// Whether the world's own buildings `ids` (taken away or changed by edits) may come back: none may lie under a building drawn by hand.
 /// `Err` names the first that would, and the drawn building to delete first.
 pub fn restore_clash(world: &World, t0: &T0, ids: &[String]) -> Result<(), String> {
     let generated = t0.settlements.len() + t0.base_pois;
     for id in ids {
         let Some((li, bi)) = generated_building(t0, id) else { continue };
-        if !world.file.edits.buildings.get(id).is_some_and(|b| b.removed) {
+        // (Taken away or changed by `update_building`: the generated footprint is what comes back.)
+        if !world.file.edits.buildings.contains_key(id) {
             continue;
         }
         let Some(poly) = town::base_layout(world, t0, li).building(bi as usize).map(|g| g.poly.clone()) else { continue };
