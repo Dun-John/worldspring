@@ -27,6 +27,7 @@ pub mod temple;
 pub mod wards;
 pub mod wallstyle;
 pub mod outline;
+mod curtain;
 pub mod gatehouse;
 pub mod village;
 // v63 countryside
@@ -3970,6 +3971,10 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             Quarter { name: q.name.clone(), kind: q.kind, patches, label }
         })
         .collect();
+    // Rounder curtains (item 104), bowed where they fit now the town is laid: `curtain`.
+    if walled {
+        curtain::curtains(site, plan, &mesh, ward, l, (&wall_laid.0, &wall_laid.1));
+    }
     hand_walls
 }
 

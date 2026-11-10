@@ -201,6 +201,10 @@ impl Report {
                     v.sort_by(|a, b| a.0.total_cmp(&b.0));
                     let (lo, mid, hi) = (&v[0], &v[v.len() / 2], &v[v.len() - 1]);
                     say!("    {label}: least {:.1} ({}), median {:.1}, greatest {:.1} ({}), of {}", lo.0, lo.1, mid.0, hi.0, hi.1, v.len());
+                    // (A curtain's bow, slice 2c: its 90th percentile too.)
+                    if label.contains("curtain bow") {
+                        say!("      90th percentile {:.1}", v[(v.len() * 9 / 10).min(v.len() - 1)].0);
+                    }
                 }
             }
         }
@@ -1052,7 +1056,8 @@ fn town_ring(ctx: &Ctx, l: &Layout, li: usize, tag: &str, r: &mut Report) {
         let (mut bare, mut run, mut first) = (0.0f64, 0.0, None);
         for (p, _) in samples(&[pa, pb], 5.0) {
             // (Behind a bastion: its gorge, the bastion's walls round it.)
-            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 8.0) || l.bastions.iter().any(|q| depth(q, p) > -8.0) {
+            // (A round wall's curtains drawn in by up to 13 ft or bowed out by 16, slice 2c: within 30 ft.)
+            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 30.0) || l.bastions.iter().any(|q| depth(q, p) > -8.0) {
                 run = 0.0;
             } else {
                 run += 5.0;
@@ -4878,6 +4883,63 @@ fn under_terrain(mut it: interior::Interior, id: &str, r: &mut Report) {
 /// and up to 3 walled settlements per group listed with a camera on the whole wall and one on a tower
 /// by a gate (`fx, fy` as `scripts/shot.mjs` views take them). Towers of the first listed place per
 /// group are checked on the battlemap (`WALLS_ALL=1`: every listed place's).
+/// The bow of each long curtain (slice 2c): per side of the town's ring 150 ft and longer, the town
+/// wall along it (5-ft steps within 40 ft of it, beside the side), its greatest distance off the chord
+/// between its points nearest the side's two corners. Also the buildings centred in the town's patches
+/// that the wall leaves outside (a line to the town's middle crosses it an odd number of times), and
+/// how many it has inside.
+fn curtain_bows(ctx: &Ctx, l: &Layout, li: usize) -> (Vec<(f64, String)>, Vec<String>, usize) {
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let mut out = (Vec::new(), Vec::new(), 0);
+    let Ok(plan) = town::wards::plan_json(world, t0, li) else { return out };
+    if plan["walls"]["built"] != true {
+        return out;
+    }
+    let pt = |v: &serde_json::Value| -> P { [v[0].as_f64().unwrap_or(0.0), v[1].as_f64().unwrap_or(0.0)] };
+    let corners: HashMap<u64, P> = plan["corners"].as_array().into_iter().flatten().filter_map(|c| Some((c["corner"].as_u64()?, pt(&c["at"])))).collect();
+    let mut sides: Vec<(u64, u64)> = Vec::new();
+    let mut patches: Vec<Vec<P>> = Vec::new();
+    for p in plan["patches"].as_array().into_iter().flatten().filter(|p| p["in_town"] == true) {
+        let cs: Vec<u64> = p["corners"].as_array().into_iter().flatten().filter_map(|c| c.as_u64()).collect();
+        patches.push(cs.iter().filter_map(|c| corners.get(c).copied()).collect());
+        sides.extend((0..cs.len()).map(|k| (cs[k], cs[(k + 1) % cs.len()])));
+    }
+    let shared: std::collections::HashSet<(u64, u64)> = sides.iter().copied().collect();
+    let town: Vec<&Vec<P>> = l.walls.iter().filter(|w| w.len() >= 2 && !l.castles.iter().any(|(c, rad)| dist(*c, w[w.len() / 2]) <= rad + 10.0)).collect();
+    let pts: Vec<P> = town.iter().flat_map(|w| samples(w, 5.0).into_iter().map(|s| s.0).chain(std::iter::once(w[w.len() - 1]))).collect();
+    for &(a, b) in sides.iter().filter(|(a, b)| !shared.contains(&(*b, *a))) {
+        let (Some(&pa), Some(&pb)) = (corners.get(&a), corners.get(&b)) else { continue };
+        let d = dist(pa, pb);
+        if d < 150.0 {
+            continue;
+        }
+        let u = mul(sub(pb, pa), 1.0 / d);
+        let near: Vec<P> = pts.iter().copied().filter(|q| seg_dist(*q, pa, pb) < 40.0 && (0.0..=d).contains(&dot(sub(*q, pa), u))).collect();
+        let nearest = |c: P| near.iter().copied().min_by(|x, y| dist(*x, c).total_cmp(&dist(*y, c)));
+        let (Some(q0), Some(q1)) = (nearest(pa), nearest(pb)) else { continue };
+        if dist(q0, q1) < 100.0 {
+            continue;
+        }
+        let bow = near.iter().map(|q| seg_dist(*q, q0, q1)).fold(0.0, f64::max);
+        out.0.push((bow, format!("L{li} side at {}", at(lerp(pa, pb, 0.5)))));
+    }
+    let segs: Vec<(P, P)> = town.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
+    let crosses = |p: P, q: P, a: P, b: P| {
+        let (o1, o2) = (cross(sub(q, p), sub(a, p)), cross(sub(q, p), sub(b, p)));
+        let (o3, o4) = (cross(sub(b, a), sub(p, a)), cross(sub(b, a), sub(q, a)));
+        o1 * o2 < 0.0 && o3 * o4 < 0.0
+    };
+    for bd in l.buildings.iter().filter(|bd| bd.poly.len() >= 3 && patches.iter().any(|f| contains(f, centroid(&bd.poly)))) {
+        let c = centroid(&bd.poly);
+        if segs.iter().filter(|&&(a, b)| crosses(c, l.center, a, b)).count() % 2 == 1 {
+            out.1.push(format!("L{li} b:{li}:{} at {}", bd.id, at(c)));
+        } else {
+            out.2 += 1;
+        }
+    }
+    out
+}
+
 fn walls(ctx: &mut Ctx, r: &mut Report) {
     use worldgen::battlemap::URBAN_TOWER_FLOOR;
     use worldgen::town::wallstyle::{self, TowerShape};
@@ -4898,6 +4960,7 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
         "gate passages not walkable end to end on the battlemap",
         "gatehouses over a road, a building or the water",
         "castle gates not of their group's form",
+        "buildings in the town's patches the wall leaves outside",
         "places listed",
     ]);
     const OUTLINES: [&str; 3] = ["straight", "star", "round"];
@@ -4967,6 +5030,15 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
                 }
             }
             flush(&mut run, r);
+        }
+        // How far the long curtains bow (slice 2c), and the town's buildings the wall leaves outside.
+        let (bows, outside, inside) = curtain_bows(ctx, &l, li);
+        for b in bows {
+            r.value(&format!("{}: curtain bow ft (runs 150 ft and longer)", GROUPS[g]), b.0, b.1);
+        }
+        r.tally("buildings in the town's patches inside its wall", inside);
+        for w in outside {
+            r.add("buildings in the town's patches the wall leaves outside", 1.0, w);
         }
         let st = l.wall_style;
         r.tally(&format!("{}: outline {}", GROUPS[g], OUTLINES[st.outline as usize]), 1);
