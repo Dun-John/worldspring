@@ -565,7 +565,7 @@ function wallSeg(s: Shape) {
   const endA = flags & BARE_A ? broken(0, 1) : [at(0, -half), at(0, half)];
   const endB = flags & BARE_B ? broken(l, -1) : [at(l, -half), at(l, half)];
   const outline = [...endA, ...endB.reverse()].flat();
-  return { x0, y0, x1, y1, l, ux, uy, half, at, outline, rnd, bareA: !!(flags & BARE_A), bareB: !!(flags & BARE_B), ruined: !!(flags & RUINED) };
+  return { x0, y0, x1, y1, l, ux, uy, side: Math.sign(Math.round((s.pts[5] ?? 0) / PX)), half, at, outline, rnd, bareA: !!(flags & BARE_A), bareB: !!(flags & BARE_B), ruined: !!(flags & RUINED) };
 }
 type Seg = ReturnType<typeof wallSeg>;
 
@@ -648,6 +648,8 @@ function outsides(segs: Seg[], gates: Shape[] = []): number[] {
   const turn = new Array(n).fill(0);
   for (const [i, j] of links) turn[find(i)] += segs[i].ux * segs[j].uy - segs[i].uy * segs[j].ux;
   return segs.map((s, i) => {
+    // (The generator's own word where it has one: `[flags, side]`, side +1 its +n.)
+    if (s.side) return s.side;
     const t = turn[find(i)];
     if (Math.abs(t) > 1e-3 || !gates.length) return t > 1e-3 ? -1 : 1;
     // (The nearest gate's way in: its side of the line between its towers.)

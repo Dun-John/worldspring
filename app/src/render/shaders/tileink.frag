@@ -32,6 +32,12 @@ void main() {
         cover *= step(0.7, fract(along / max(2.5 * vPpf, 3.0))) * 0.5 * smoothstep(0.4, 1.0, vPpf * 2.5);
     }
     vec3 col = INK;
+    // A stone wall's or tower's stone + 1, in sixteenths after its style (a town wall's group, from the plan's
+    // looks): the ink shifted toward granite's cool grey, sandstone's honey, rose brick's rose, mud brick's ochre.
+    float stone = floor(fract(vStyle) * 16.0 + 0.5);
+    if (stone > 0.5 && vStyle < 4.9) {
+        col = stone < 1.5 ? vec3(0.15, 0.17, 0.22) : (stone < 3.5 ? vec3(0.25, 0.17, 0.08) : (stone < 4.5 ? vec3(0.27, 0.15, 0.13) : vec3(0.26, 0.16, 0.11)));
+    }
     if (vStyle > 4.5) {
         // A palisade (timber brown) or rammed earth (tan): its colour inside an ink edge, once wide enough.
         vec3 tone = vStyle > 5.5 ? vec3(0.80, 0.72, 0.56) : vec3(0.55, 0.39, 0.24);

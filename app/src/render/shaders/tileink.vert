@@ -3,7 +3,7 @@
 // aQ.x = style: 0 outline, 1 wall, 2 tower (a zero-length capsule = a round tower), 3 a flight of
 // steps (hatched across its line, square ends; aW its full width), 4 a square tower (square ends,
 // aW its side, its line its side's length), 5 a palisade and 6 a rammed earth wall (a wall in its
-// material's colour, inked along its sides).
+// material's colour, inked along its sides); a stone wall's or tower's style may carry its stone + 1 in sixteenths after it.
 
 in vec2 aA;
 in vec2 aB;

@@ -676,7 +676,7 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
       [14, BH + 1],
     ];
     const poly = [ring[1], ring[2], ring[3], ring[4], ring[5], [14, 11]].flatMap(([x, yy]) => P(x, yy));
-    drawBastion(g, shape(31, 0, [...poly, code, 0]));
+    drawBastion(g, shape(20, 0, [...poly, code, 0]));
     drawWalls(g, ring.slice(0, -1).map(([x, yy], i) => shape(0, 12 * (PX / 5), [...P(x, yy), ...P(...ring[i + 1]), (ruins ? 4 : 0) * PX, 0, code, 0])));
     const [bx, by] = where(9);
     place(g, bx, by, BW, BH, '9 West rich: a star bastion at a corner (its faces wall, its platform paved)', starSq);

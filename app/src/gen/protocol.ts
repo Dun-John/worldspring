@@ -2,6 +2,7 @@
 // plus the terrain payload layout (mirrors crates/worldgen/src/payload.rs).
 import { ruinPlanFill } from './ruinPlan';
 import type { PreparedChunk } from './battlePrep';
+import { codeMaterial, codeShape, codeStone } from './wallcode';
 
 export type Wind = 'belts' | 'from_west' | 'from_east';
 
@@ -841,6 +842,15 @@ export interface SiteGeometry {
   ink: RiverGeometry | null;
 }
 
+/** A shaped tower's fill by its stone: the plan's ink (limestone) shifted toward each stone's tone. */
+const TOWER_INK: [number, number, number][] = [
+  [0.15, 0.17, 0.22],
+  [0.17, 0.14, 0.11],
+  [0.25, 0.17, 0.08],
+  [0.27, 0.15, 0.13],
+  [0.26, 0.16, 0.11],
+];
+
 // Fill colours by ward (buildings), then plaza, field, block. Watabou-ish muted browns.
 const WARD_RGB: [number, number, number][] = [
   [0.62, 0.56, 0.5], // plaza (unused for buildings)
@@ -858,11 +868,70 @@ const WARD_RGB: [number, number, number][] = [
   [0.6, 0.62, 0.5], // park
 ];
 
-export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): SiteGeometry | null {
+/** A wall tower's footprint on the plan (tile units): a D (flat back, round face out along `ang`), an octagon or a
+ * square (sides along `ang`) of radius `r` (ft), as `wallstyle::footprint` lays it. */
+function towerPoly(x: number, y: number, r: number, ang: number, shape: number, ftTile: number): number[] {
+  const [ux, uy] = [Math.cos(ang), Math.sin(ang)];
+  const at = (a: number, b: number) => [x + (ux * a - uy * b) / ftTile, y + (uy * a + ux * b) / ftTile];
+  const out: number[] = [];
+  if (shape === 2) {
+    out.push(...at(-4, -r));
+    for (let k = 0; k <= 8; k++) {
+      const t = -Math.PI / 2 + (Math.PI * k) / 8;
+      out.push(...at(r * Math.cos(t), r * Math.sin(t)));
+    }
+    out.push(...at(-4, r));
+  } else if (shape === 3) {
+    const rc = r / Math.cos(Math.PI / 8);
+    for (let k = 0; k < 8; k++) {
+      const t = Math.PI / 8 + (Math.PI * 2 * k) / 8;
+      out.push(...at(rc * Math.cos(t), rc * Math.sin(t)));
+    }
+  } else out.push(...at(-r, -r), ...at(r, -r), ...at(r, r), ...at(-r, r));
+  return out;
+}
+
+/** Plan kind of a D, octagonal or square wall tower's footprint (not from the generator; the stone in its ward byte). */
+const TOWER_KIND = 0xfe;
+
+/**
+ * Settlement fills and ink for one tile. `looks` (`TerrainPayload.siteLooks`) and `tileFt` (the tile's side in ft)
+ * give the plan the walls' look by culture group: a stone wall's ink tinted by its stone, a palisade or rammed
+ * earth wall by its material (else guessed from its width), D, octagonal and square towers as their shapes
+ * (round ones stay dots). Without them (an older payload) the old drawing.
+ */
+export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks?: TileRivers, tileFt = 0): SiteGeometry | null {
+  const useLooks = !!looks && tileFt > 0 && looks.verts.length === lines.verts.length;
+  // (Each tower line in a shape of its own is a polygon instead of a dot: its centre, radius, facing, shape, stone.)
+  const shapes: { starts: number; verts: number[]; stone: number }[] = [];
+  const skip = new Set<number>();
+  if (useLooks) {
+    for (let l = 0; l + 1 < lines.starts.length; l++) {
+      const v = lines.starts[l];
+      if (lines.verts[v * 4 + 3] !== 1) continue;
+      const code = looks!.verts[v * 4 + 2];
+      const shape = codeShape(code);
+      if (!shape || codeMaterial(code) !== 0) continue;
+      const [x, y, w] = [lines.verts[v * 4], lines.verts[v * 4 + 1], lines.verts[v * 4 + 2]];
+      shapes.push({ starts: 0, verts: towerPoly(x, y, w / 2, looks!.verts[v * 4 + 3], shape, tileFt), stone: codeStone(code) });
+      skip.add(l);
+    }
+    if (shapes.length) {
+      const starts = Array.from(polys.starts);
+      const attrs = Array.from(polys.attrs);
+      const verts = Array.from(polys.verts);
+      for (const sh of shapes) {
+        attrs.push(TOWER_KIND | (sh.stone << 8));
+        verts.push(...sh.verts);
+        starts.push(starts[starts.length - 1] + sh.verts.length / 2);
+      }
+      polys = { starts: new Uint32Array(starts), attrs: new Uint32Array(attrs), verts: new Float32Array(verts) };
+    }
+  }
   const n = polys.attrs.length;
   let tris = 0;
   for (let i = 0; i < n; i++) tris += Math.max(0, polys.starts[i + 1] - polys.starts[i] - 2);
-  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32;
+  const outlined = (kind: number) => kind === 0 || kind === 3 || kind === 4 || kind === 5 || kind === 6 || kind === 7 || kind === 9 || kind === 13 || kind === 14 || kind === 15 || kind === 23 || kind === 24 || kind === 25 || kind === 26 || kind === 29 || kind === 32 || kind === TOWER_KIND;
   let fill: SiteGeometry['fill'] = null;
   if (n) {
     // Unshared corners (3 per triangle), so each carries its triangle's edge coordinates.
@@ -882,7 +951,8 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
       const material = (attr >> 20) & 15;
       let rgb: [number, number, number];
       let a = 1;
-      if (kind === 1) rgb = [0.86, 0.82, 0.71];
+      if (kind === TOWER_KIND) rgb = TOWER_INK[Math.min(ward, TOWER_INK.length - 1)];
+      else if (kind === 1) rgb = [0.86, 0.82, 0.71];
       else if (kind === 2) {
         // Fields: alternate crop tints.
         const k = i % 3;
@@ -987,15 +1057,27 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers): Site
   // by its width (`payload.rs`, item 104): a palisade's (5 ft) timber brown, rammed earth's (12) tan, both
   // inked along their sides (tileink styles 5, 6); stone's ink.
   const lineVerts = lines.verts.length / 4;
+  // With the looks, the material and stone come from the style code: a stone's style carries its stone + 1 in
+  // sixteenths after its number (none for limestone, today's ink), a palisade is 5 and rammed earth 6.
   const styleOf = (v: number) => {
     const kind = lines.verts[v * 4 + 3];
     const w = lines.verts[v * 4 + 2];
+    if (useLooks && (kind === 0 || kind === 1 || kind === 3)) {
+      const code = looks!.verts[v * 4 + 2];
+      if (kind === 0 && code > 0) {
+        if (codeMaterial(code) === 1) return 5;
+        if (codeMaterial(code) === 2) return 6;
+      }
+      const stone = codeMaterial(code) === 0 && code > 0 ? codeStone(code) : 1;
+      return kind + 1 + (stone === 1 || stone > 4 ? 0 : (stone + 1) / 16);
+    }
     return kind === 0 && w === 5 ? 5 : kind === 0 && w === 12 ? 6 : kind + 1;
   };
   const starts: number[] = [];
   const out = new Float32Array(lineVerts * 4);
   let o = 0;
   for (let l = 0; l + 1 < lines.starts.length; l++) {
+    if (skip.has(l)) continue;
     starts.push(o / 4);
     for (let v = lines.starts[l]; v < lines.starts[l + 1]; v++) {
       out.set([lines.verts[v * 4], lines.verts[v * 4 + 1], lines.verts[v * 4 + 2], styleOf(v)], o);

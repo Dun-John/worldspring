@@ -25,7 +25,7 @@ import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
 import { boundAt, drawBounds, drawSails, isBound, SAILS } from './countryside';
-import { banner, cornerHatch, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawRaisedDrawbridge, drawWalls, drawWallTower, flagFloor, GATE_DEPTH, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
+import { banner, cornerHatch, drawBastion, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawRaisedDrawbridge, drawWalls, drawWallTower, flagFloor, GATE_DEPTH, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { drawCaveMouth, drawThemedEntrance } from './entrances';
 import { noiseSource } from './noise';
@@ -952,7 +952,7 @@ export class BattlemapLayer {
     // its deck and grid, and the stub shown when play raises it, each on their own (shown by door
     // state). Chunks without one draw their structures in one piece.
     const drawbridges = c.shapes.filter((s) => s.kind === 18);
-    const lowKind = (k: number) => k === 0 || isBound(k);
+    const lowKind = (k: number) => k === 0 || k === 20 || isBound(k);
     const highKind = (k: number) => k === 4 || k === 9 || (k >= 10 && k <= 12);
     const structG = drawStructures(c.shapes.filter((s) => lowKind(s.kind) || (!drawbridges.length && highKind(s.kind))), cx * SQ * PX, cy * SQ * PX);
     const structHigh = drawbridges.length ? drawStructures(c.shapes.filter((s) => highKind(s.kind))) : null;
@@ -1242,6 +1242,8 @@ function drawStructures(shapes: Shape[], ox = 0, oy = 0): Graphics {
   const bounds = shapes.filter((s) => isBound(s.kind));
   if (bounds.length) drawBounds(g, bounds, ox, oy);
   for (const s of shapes) if (s.kind === SAILS) drawSails(g, s);
+  // (A star bastion's platform under its curtain, which is drawn over its edge.)
+  for (const s of shapes) if (s.kind === 20) drawBastion(g, s);
   const walls = shapes.filter((s) => s.kind === 0);
   if (walls.length) drawWalls(g, walls, shapes.filter((s) => s.kind === 9));
   for (const s of shapes) if (s.kind === 9) drawGate(g, s);
