@@ -140,6 +140,96 @@ export function searchFeatures(overlay: Overlay, q: string, limit = 12, rect?: R
   return scored.slice(0, limit).map(([, f]) => f);
 }
 
+/** Something attached to an underground site, its levels or rooms (`undersearch` `attached`). */
+export interface UnderAttached {
+  what: 'note' | 'npc' | 'plot';
+  /** The note's place, the NPC's or plot's id. */
+  id: string;
+  /** Where on the site: the site, `l:<site>:<level>` or `r:<site>:<level>:<room>`. */
+  at: string;
+  text?: string;
+  name?: string;
+}
+
+/** What made an underground site match (`undersearch` `match`). */
+export interface UnderMatch {
+  what: 'name' | 'level' | 'room' | 'npc' | 'plot' | 'note' | 'kind' | 'theme';
+  /** The place to open at (`l:`/`r:`, the site), or the NPC's/plot's id. */
+  id: string;
+  text: string;
+  /** Sewers: the middle of the matched section. */
+  x_ft?: number;
+  y_ft?: number;
+}
+
+/** An underground site found by `GenClient.searchUnder` (`worldgen::undersearch`). */
+export interface UnderHit {
+  id: string;
+  site_kind: string;
+  theme: string;
+  theme_name: string;
+  name: string;
+  generated: string;
+  levels: number;
+  size: string;
+  x_ft: number;
+  y_ft: number;
+  settlement: { id: string; name: string } | null;
+  site?: { id: string; name: string };
+  sections?: number;
+  hidden?: boolean;
+  distance_ft?: number;
+  match: UnderMatch | null;
+  matches?: UnderMatch[];
+  attached: UnderAttached[];
+}
+
+export interface UnderResult {
+  items: UnderHit[];
+  found: number;
+  truncated: boolean;
+}
+
+/** The underground kinds, as chips (label, the index's kind name, icon). */
+export const UNDER_KINDS: [string, string, IconName][] = [
+  ['Dungeon', 'dungeon', 'stairs'],
+  ['Crypt', 'crypt', 'tomb'],
+  ['Catacombs', 'catacombs', 'skull'],
+  ['Cave', 'cave', 'cave'],
+  ['Mine', 'mine', 'pick'],
+  ['Lava tube', 'lava tube', 'flame'],
+  ['Sewer', 'sewer', 'grate'],
+  ['Keep dungeon', 'keep dungeon', 'castle'],
+];
+
+/** Depth chips: a band of levels (min, max). By depth, not size: levels are what the floor
+ * picker shows, the same for every kind, where a size is a grid for a site, fixed for a keep's
+ * and counted in grates for sewers. Sites run 1-6 levels, few past 4. */
+export const UNDER_DEPTHS: [string, number, number | undefined][] = [
+  ['1 level', 1, 1],
+  ['2 levels', 2, 2],
+  ['3 levels', 3, 3],
+  ['4+ levels', 4, undefined],
+];
+
+export const underIcon = (kind: string): IconName => UNDER_KINDS.find((k) => k[1] === kind)?.[2] ?? 'cave';
+
+/** Where picking an underground hit opens: the matched level or room (an NPC's or plot's
+ * through what it is attached to), else the site itself; a city's sewers (`w:<layout>`) at the
+ * matched section, else at the section of their entrance. */
+export function underTarget(h: UnderHit): string {
+  const m = h.match;
+  let at = h.id;
+  if (m && (m.what === 'level' || m.what === 'room' || m.what === 'note')) at = m.id;
+  else if (m && (m.what === 'npc' || m.what === 'plot')) at = h.attached.find((x) => x.what === m.what && x.id === m.id)?.at ?? h.id;
+  if (!/^[lr]:/.test(at) && !/^w:\d+:-?\d+:-?\d+$/.test(at)) at = h.id;
+  if (/^w:\d+$/.test(at)) at = `${at}:${Math.floor(h.x_ft / SEWER_SECTION_FT)}:${Math.floor(h.y_ft / SEWER_SECTION_FT)}`;
+  return at;
+}
+
+/** A sewer section's side, ft (`under::SEWER_SECTION_FT`, `render/Sewers.ts` `SECTION_FT`). */
+const SEWER_SECTION_FT = 480;
+
 /** The settlement feature at a settlement's position. */
 export function settlementAt(overlay: Overlay, x: number, y: number): Feature | null {
   let best: Feature | null = null;

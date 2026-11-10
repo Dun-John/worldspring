@@ -1,6 +1,7 @@
 // Main-thread handle to the coordinator worker.
 import type { PreparedChunk } from './battlePrep';
 import { EDIT_FIELDS } from '../sync/ops';
+import type { UnderResult } from '../ui/gazetteer';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
@@ -190,6 +191,15 @@ export class GenClient {
   /** The roads someone named and the crossings put down by hand (labels, search, gazetteer). */
   named(): Promise<NamedPlaces> {
     return this.ask({ op: 'named' }).then((j) => (JSON.parse(j) as NamedPlaces | null) ?? { labels: [], roads: [], crossings: [] });
+  }
+
+  /** Underground sites matching a search (`filters`: kinds, levels_min/max, rect, near, radius_ft, limit). */
+  searchUnder(q: string, filters: object): Promise<UnderResult> {
+    // (None while the world is being made again; an error, `{error}`, as none.)
+    return this.ask({ op: 'under', q, filters: JSON.stringify(filters) }).then((j) => {
+      const r = JSON.parse(j) as Partial<UnderResult> | null;
+      return { items: r?.items ?? [], found: r?.found ?? 0, truncated: !!r?.truncated };
+    });
   }
 
   private ask(ask: Ask): Promise<string> {

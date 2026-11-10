@@ -2962,6 +2962,13 @@
     await goTo(id);
   }
 
+  /** A search pick under ground (`underTarget`): into the site on its level, a room outlined. */
+  async function goUnder(id: string) {
+    view.markRoom(id.startsWith('r:') ? id : null);
+    await goName(id);
+    view.markRoom(id.startsWith('r:') ? id : null);
+  }
+
   /** The named place nearest a point (within 3 mi; not seas or land masses). */
   function nearestNamed(x: number, y: number): string | null {
     let best: string | null = null;
@@ -3079,6 +3086,7 @@
 
   async function pick(x: number, y: number, sx: number, sy: number) {
     if (townOn && townTool) return townPick(x, y);
+    view.markRoom(null);
     const seq = ++selectSeq;
     const f = view.labels?.hit(sx, sy);
     const shop = f?.kind === 'place' ? view.labels?.placeHit(f.id) : null;
@@ -3397,6 +3405,10 @@
           tokens={() => play.state.tokens}
           onToken={(id) => void showToken(id)}
           levelNames={(id) => view.gen.interior(id).then((it) => it?.levels.map((l) => l.name) ?? null)}
+          searchUnder={(q, f) => view.gen.searchUnder(q, f)}
+          onUnder={(id) => void goUnder(id)}
+          layoutOf={layoutIndexOf}
+          layoutWhere={(li) => ({ settlement: layoutRef(townOf(li)), site: li >= settlements.length ? layoutRef(li) : null })}
         />
       {/if}
     {/snippet}

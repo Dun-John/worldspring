@@ -537,6 +537,8 @@ export type Ask =
   | { op: 'districts'; settlement: number }
   /** The roads someone named and the crossings put down by hand (`roadids::named_json`). */
   | { op: 'named' }
+  /** Underground sites by name, kind, theme and what is attached (`undersearch::search_json`; `filters` JSON). */
+  | { op: 'under'; q: string; filters: string }
   | { op: 'inview'; rect: [number, number, number, number] }
   /** `b:<settlement>:<building>` or `t:<settlement>:<tower>`. */
   | { op: 'interior'; id: string }

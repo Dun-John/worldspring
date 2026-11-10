@@ -727,6 +727,12 @@ export class MapView {
     else await this.enterBuilding(m.to, undefined, m.from);
   }
 
+  /** Outline a room picked from the search (`r:` id; null: none), on whichever layer shows it. */
+  markRoom(id: string | null) {
+    InteriorLayer.picked = id;
+    this.interior?.drawPicked();
+  }
+
   setInteriorLevel(i: number) {
     const layer = this.interior;
     if (!layer) return;

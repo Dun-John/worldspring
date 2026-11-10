@@ -733,7 +733,11 @@ export class InteriorLayer {
   /** The renderer furniture and props are drawn into the item atlas with (`MapView`, the gallery);
    * without one they are drawn as vector paths. */
   static renderer: Renderer | null = null;
+  /** The room picked from the search (`r:<site>:<level>:<room>`), outlined for the DM; set by `MapView.markRoom`. */
+  static picked: string | null = null;
   readonly container = new Container();
+  /** The picked room's outline (grid units, like the plan). */
+  private readonly pickedRoom = new Graphics();
   private readonly dim = new Sprite(Texture.WHITE);
   private readonly plan = new Container();
   /** What is in the hand (`setGhost`), over the plan (which every draw rebuilds). */
@@ -784,7 +788,7 @@ export class InteriorLayer {
     this.dim.visible = !peek && !ghost && !tile;
     this.labels.visible = !peek && !ghost;
     this.marks.visible = !peek && !ghost && !style.player;
-    this.container.addChild(this.dim, this.plan, this.ghostLayer, this.labels, this.marks);
+    this.container.addChild(this.dim, this.plan, this.pickedRoom, this.ghostLayer, this.labels, this.marks);
     this.level = Math.max(0, Math.min(interior.levels.length - 1, start ?? interior.entry_level));
     // Light from the NW of the screen, in grid axes, rounded to 45 degrees so items lit alike share
     // one look in the item atlas.
@@ -947,7 +951,7 @@ export class InteriorLayer {
     const it = this.interior;
     const [sx, sy] = cam.worldToScreen(it.origin[0], it.origin[1]);
     const s = SQUARE_FT * cam.ppf;
-    for (const c of [this.plan, this.ghostLayer]) {
+    for (const c of [this.plan, this.pickedRoom, this.ghostLayer]) {
       c.position.set(sx, sy);
       c.rotation = Math.atan2(it.axis[1], it.axis[0]);
       c.scale.set(s);
@@ -1027,6 +1031,28 @@ export class InteriorLayer {
       this.marks.addChild(node);
       this.markSpots.push({ node, x: gx + n * 1.2, y: gy });
     }
+  }
+
+  /** Outline the picked room (`InteriorLayer.picked`) if it is on this level: its squares' edges
+   * that border another room or none. */
+  drawPicked() {
+    const g = this.pickedRoom.clear();
+    const m = /^r:(.+):(\d+):(\d+)$/.exec(InteriorLayer.picked ?? '');
+    if (!m || m[1] !== this.interior.id || Number(m[2]) !== this.level || this.peek || this.ghost || this.style.player) return;
+    const ri = Number(m[3]);
+    const { nx, ny } = this.interior;
+    const cells = this.interior.levels[this.level]?.cells;
+    if (!cells) return;
+    const at = (i: number, j: number) => i >= 0 && j >= 0 && i < nx && j < ny && cells[j * nx + i] === ri;
+    for (let j = 0; j < ny; j++)
+      for (let i = 0; i < nx; i++) {
+        if (!at(i, j)) continue;
+        if (!at(i, j - 1)) g.moveTo(i, j).lineTo(i + 1, j);
+        if (!at(i, j + 1)) g.moveTo(i, j + 1).lineTo(i + 1, j + 1);
+        if (!at(i - 1, j)) g.moveTo(i, j).lineTo(i, j + 1);
+        if (!at(i + 1, j)) g.moveTo(i + 1, j).lineTo(i + 1, j + 1);
+      }
+    g.stroke({ width: 0.4, color: 0x2a1f14, alpha: 0.7, cap: 'square' }).stroke({ width: 0.2, color: 0xfbbf24, cap: 'square' });
   }
 
   /** World ft of a grid point. */
@@ -1152,6 +1178,7 @@ export class InteriorLayer {
     this.labels.removeChildren().forEach((c) => c.destroy());
     this.labelSpots = [];
     this.drawMarks();
+    this.drawPicked();
     if (this.underground && !keep) this.drawUnderground(lv);
     if (this.ghost) return;
     let g = new Graphics();

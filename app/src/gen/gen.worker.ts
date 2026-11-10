@@ -87,6 +87,8 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                   ? c.town_change_json(a.layout, a.request)
                                   : a.op === 'named'
                                     ? c.named_json()
+                                    : a.op === 'under'
+                                    ? c.under_search_json(a.q, a.filters)
                                     : c.districts_json(a.settlement);
       let json = 'null';
       try {
