@@ -566,7 +566,30 @@ export type Ask =
   /** A town's plan for the ward editor (`town::wards::plan_json`). */
   | { op: 'townplan'; layout: number }
   /** A town changed as asked, without changing the edits (`town::wards::change_json`). */
-  | { op: 'townchange'; layout: number; request: string };
+  | { op: 'townchange'; layout: number; request: string }
+  /** The villages and towns added by hand (`MadeSettlement`s). */
+  | { op: 'made' }
+  /** Whether a village or town can be added there (`t0::made::spot`), with what it would be. */
+  | { op: 'madespot'; kind: string; id: string; x: number; y: number }
+  /** Edits with those of the villages and towns added by hand that they remove, move or lay out
+   * anew set aside (`t0::made::set_aside_changed`; `old`: the created sites before, JSON). */
+  | { op: 'setaside'; old: string; edits: string };
+
+/** A village or town added by hand, as the generator has it (`made_json`): its layout index,
+ * `reach` (its layout's), `built` (built-up radius), `rect` (all its battlemaps change over: the
+ * pad and the track) and its track's points (ft) from its edge to the road. */
+export interface MadeSettlement {
+  id: string;
+  layout: number;
+  tier: string;
+  population: number;
+  x: number;
+  y: number;
+  reach: number;
+  built: number;
+  rect: Rect;
+  track: [number, number][];
+}
 
 /** A name to rename (`worldgen::agent::name_entry`): `generated` is the name before renames. */
 export interface NameEntry {

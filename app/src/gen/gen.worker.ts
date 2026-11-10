@@ -85,7 +85,13 @@ self.onmessage = async (e: MessageEvent<ToGen>) => {
                                 ? c.town_plan_json(a.layout)
                                 : a.op === 'townchange'
                                   ? c.town_change_json(a.layout, a.request)
-                                  : c.districts_json(a.settlement);
+                                  : a.op === 'made'
+                                    ? c.made_json()
+                                    : a.op === 'madespot'
+                                      ? c.settlement_spot_json(a.kind, a.id, a.x, a.y)
+                                      : a.op === 'setaside'
+                                        ? c.set_aside_changed_json(a.old, a.edits)
+                                        : c.districts_json(a.settlement);
       let json = 'null';
       try {
         json = answer();

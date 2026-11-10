@@ -44,6 +44,7 @@ pub fn features(world: &World, t0: &T0) -> Vec<Feature> {
             extent_ft: match c.kind.as_str() {
                 "building" => 0.5 * MI,
                 "castle" | "wall" => (2.0 * c.reach()).max(0.5 * MI),
+                "village" | "town" => if c.kind == "town" { 12.0 * MI } else { 5.0 * MI },
                 _ => 2.0 * MI,
             },
             elev_ft: Some(t0.sample(c.x, c.y, t0.cell_ft).round()),

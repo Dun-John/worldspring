@@ -277,6 +277,69 @@ impl Ctx {
         }
     }
 
+    /// The villages and towns added by hand (`T0.made`), as JSON: `[{id, layout, tier,
+    /// population, x, y, reach, built, rect, track}]`, where `reach` is the layout's
+    /// (`town::reach`), `built` the built-up radius, `rect` (x0, y0, x1, y1 ft) all its battlemaps
+    /// change over (the pad, `town::pad_extent`, and the track's bounds + 15 ft) and `track` its
+    /// points `[x, y]` from the settlement's edge to the road (empty with none).
+    pub fn made_json(&self) -> String {
+        let Some(t0) = &self.t0 else { return "[]".into() };
+        let edits = &self.world.file.edits.created;
+        let list: Vec<serde_json::Value> = t0
+            .made
+            .iter()
+            .filter_map(|m| {
+                let c = edits.get(m.poi - t0.base_pois)?;
+                let (s, reach) = (&m.s, worldgen::town::reach(&m.s));
+                let pad = worldgen::town::pad_extent(reach);
+                let mut r = [s.x - pad, s.y - pad, s.x + pad, s.y + pad];
+                for p in &m.track {
+                    r = [r[0].min(p[0] - 15.0), r[1].min(p[1] - 15.0), r[2].max(p[0] + 15.0), r[3].max(p[1] + 15.0)];
+                }
+                let track: Vec<[f64; 2]> = m.track.iter().map(|p| [p[0].round(), p[1].round()]).collect();
+                Some(serde_json::json!({
+                    "id": c.id, "layout": t0.settlements.len() + m.poi, "tier": s.tier.name(), "population": s.population,
+                    "x": s.x, "y": s.y, "reach": reach.ceil(), "built": worldgen::town::urban_radius(s.tier, s.population).round(),
+                    "rect": r.map(|v| v.round()), "track": track,
+                }))
+            })
+            .collect();
+        serde_json::Value::Array(list).to_string()
+    }
+
+    /// Whether a village or town (`kind`; `id` its `c:<n>`) can be added at (x, y) without
+    /// remaking the world (`t0::made::spot`): `{x, y, name, culture, lives_by}` as
+    /// `create_settlement` makes it (from the ground), or `{error}`.
+    pub fn settlement_spot_json(&self, kind: &str, id: &str, x: f64, y: f64) -> String {
+        use worldgen::t0::made;
+        let Some(t0) = &self.t0 else { return "null".into() };
+        match made::spot(&self.world, t0, kind, id, [x, y]) {
+            Ok(()) => {
+                let culture = made::culture_at(t0, x, y);
+                let lives_by = worldgen::world::PIN_KINDS[made::kind_at(&self.world, t0, x, y, made::tier_of(kind)) as usize];
+                serde_json::json!({ "x": x, "y": y, "name": made::name(&self.world, t0, id, culture), "culture": culture, "lives_by": lives_by }).to_string()
+            }
+            Err(e) => serde_json::json!({ "error": e }).to_string(),
+        }
+    }
+
+    /// `edits` (JSON) with the edits of every village or town added by hand that `old_created`
+    /// (JSON, the created sites before) had and `edits` removes, moves or lays out anew set aside
+    /// (`t0::made::set_aside_changed`): `{edits, moved}`, or `{error}`.
+    pub fn set_aside_changed_json(&self, old_created: &str, edits: &str) -> String {
+        let Some(t0) = &self.t0 else { return "null".into() };
+        let old: Vec<worldgen::world::Created> = match serde_json::from_str(old_created) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+        };
+        let mut edits: worldgen::world::Edits = match serde_json::from_str(edits) {
+            Ok(v) => v,
+            Err(e) => return serde_json::json!({ "error": e.to_string() }).to_string(),
+        };
+        let moved = worldgen::t0::made::set_aside_changed(&old, &mut edits, t0.settlements.len() + t0.base_pois);
+        serde_json::json!({ "edits": edits, "moved": moved }).to_string()
+    }
+
     /// Generate one terrain tile. `parent` is the parent's padded heights for refined levels.
     pub fn gen_terrain(&self, level: u8, x: u32, y: u32, parent: Option<Vec<f32>>) -> Result<Vec<u8>, JsError> {
         let t0 = self.t0.as_ref().ok_or_else(|| JsError::new("T0 not loaded"))?;

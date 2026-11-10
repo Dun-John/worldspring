@@ -4,7 +4,7 @@ import { EDIT_FIELDS } from '../sync/ops';
 
 /** Most entries of a field sent as a patch; beyond, the whole field. */
 const PATCH_MAX = 2000;
-import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
+import type { Ask, BuildingEdit, BuildingFuncs, Created, DesignReply, EditsPatch, DistrictLabel, Edits, Interior, MadeSettlement, SiteDesign, UnderCatalog, FromCoordinator, NameEntry, Parents, GenStats, Geom, Hit, Overlay, PlaceInfo, Rect, TileMsg, ToCoordinator, TownEdit, TownPlan, TownReport, TownRequest, WantTile, WorldFile } from './protocol';
 
 export interface Ready {
   geom: Geom;
@@ -185,6 +185,24 @@ export class GenClient {
   /** A settlement's named districts, for labels. */
   districts(settlement: number): Promise<DistrictLabel[]> {
     return this.ask({ op: 'districts', settlement }).then((j) => (JSON.parse(j) as DistrictLabel[] | null) ?? []);
+  }
+
+  /** The villages and towns added by hand, as the generator has them now (after every edit
+   * sent before); null if it could not answer. */
+  made(): Promise<MadeSettlement[] | null> {
+    return this.ask({ op: 'made' }).then((j) => JSON.parse(j) as MadeSettlement[] | null);
+  }
+
+  /** Whether a village or town (`kind`; `id`: its created id) can be added at (x, y), with the
+   * name, culture and living it would have; null if the generator could not answer. */
+  settlementSpot(kind: string, id: string, x: number, y: number): Promise<{ x: number; y: number; name: string; culture: number; lives_by: string } | { error: string } | null> {
+    return this.ask({ op: 'madespot', kind, id, x, y }).then((j) => JSON.parse(j));
+  }
+
+  /** `edits` with the edits made in each village or town added by hand that they remove, move or
+   * lay out anew (from `old`, the created sites before) set aside, as the generator would. */
+  setAside(old: Created[], edits: Edits): Promise<{ edits: Edits; moved: number } | { error: string } | null> {
+    return this.ask({ op: 'setaside', old: JSON.stringify(old), edits: JSON.stringify(edits) }).then((j) => JSON.parse(j));
   }
 
   private ask(ask: Ask): Promise<string> {
