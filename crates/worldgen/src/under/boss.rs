@@ -189,7 +189,7 @@ fn set(p: &mut Plan, h: &Hall, it: Option<Item>, top: bool) -> bool {
         }
         if p.taken[k] {
             let mut on = p.items.iter().filter(|f| covers(f, k));
-            let raised = on.clone().count() > 0 && on.all(|f| f.kind == "dais" || top && matches!(f.kind, "platform" | "balcony"));
+            let raised = on.clone().count() > 0 && on.all(|f| f.kind == "dais" && ON_DAIS.contains(&it.kind) || top && matches!(f.kind, "platform" | "balcony"));
             if !raised || RAISING.contains(&it.kind) {
                 return false;
             }
@@ -213,10 +213,19 @@ fn set(p: &mut Plan, h: &Hall, it: Option<Item>, top: bool) -> bool {
     false
 }
 
+/// What stands on a dais (a bier): the throne or the sarcophagus, nothing else.
+const ON_DAIS: [&str; 2] = ["throne", "sarcophagus"];
+
 /// `set` at (d, a) or the nearest spot round it (up to 3 squares off): where it went.
 #[allow(clippy::too_many_arguments)]
 fn near(p: &mut Plan, h: &Hall, top: bool, kind: &'static str, d: isize, a: isize, dl: usize, aw: usize, back: Option<u8>) -> Option<(isize, isize)> {
-    let mut offs: Vec<(isize, isize)> = (-3..=3isize).flat_map(|i| (-3..=3isize).map(move |j| (i, j))).collect();
+    near_in(p, h, top, kind, d, a, dl, aw, back, 3)
+}
+
+/// `near` up to `r` squares off.
+#[allow(clippy::too_many_arguments)]
+fn near_in(p: &mut Plan, h: &Hall, top: bool, kind: &'static str, d: isize, a: isize, dl: usize, aw: usize, back: Option<u8>, r: isize) -> Option<(isize, isize)> {
+    let mut offs: Vec<(isize, isize)> = (-r..=r).flat_map(|i| (-r..=r).map(move |j| (i, j))).collect();
     offs.sort_by_key(|&(i, j)| (i.abs() + j.abs(), i.abs(), -i, j.abs(), j));
     offs.into_iter().map(|(i, j)| (d + i, a + j)).find(|&(d, a)| set(p, h, h.item(kind, d, a, dl, aw, back), top))
 }
@@ -300,18 +309,19 @@ pub(crate) fn built(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usiz
         order[..=m].rotate_right(1);
     }
     let fallback = far_stage(&h);
-    choose(p, &h, order, rng, &|p, h, i, rng| layout(p, h, LAYOUTS[i], theme, rng), &|p, h, s, rng| centrepiece(p, h, s, theme, rng), fallback);
+    let (stage, dressed) = choose(p, &h, order, rng, &|p, h, i, rng| layout(p, h, LAYOUTS[i], theme, rng), &|p, h, s, rng| centrepiece(p, h, s, theme, rng), fallback);
+    spread(p, &h, stage, cover_kinds(theme, false), rng);
     let mut kinds = vec!["cracked floor", "pressure plate"];
     match theme {
         "dwarven_hall" => kinds.push("steam vent"),
         "flooded_vault" | "sunken_temple" => kinds.push("flooded pit"),
         _ => {}
     }
-    hazards(p, &h, &kinds, rng);
+    hazards(p, &h, &kinds, stage, dressed, rng);
 }
 
 /// The layouts in `order` tried in turn (`lay_out`, then `dress`), each kept if the chamber is all reached (`reached`),
-/// else undone; last the `fallback` stage, dressed.
+/// else undone; last the `fallback` stage, dressed. The stage used and the index of the dressing's first item.
 #[allow(clippy::type_complexity)]
 fn choose(
     p: &mut Plan,
@@ -321,7 +331,7 @@ fn choose(
     lay_out: &dyn Fn(&mut Plan, &Hall, usize, &mut Pcg32) -> Option<Stage>,
     dress: &dyn Fn(&mut Plan, &Hall, Stage, &mut Pcg32),
     fallback: Stage,
-) {
+) -> (Stage, usize) {
     for li in order.into_iter().map(Some).chain([None]) {
         let s = snap(p);
         h.clear.borrow_mut().clear();
@@ -330,13 +340,15 @@ fn choose(
             None => Some(fallback),
         };
         if let Some(stage) = stage {
+            let first = p.items.len();
             dress(p, h, stage, rng);
             if li.is_none() || reached(p, h) {
-                return;
+                return (stage, first);
             }
         }
         undo(p, s);
     }
+    (fallback, p.items.len())
 }
 
 fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut Pcg32) -> Option<Stage> {
@@ -433,7 +445,8 @@ fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut Pcg32) -> O
             // Two or three across the approach, staggered, a way between them.
             let ps = if h.l >= 9 && h.w >= 7 { 2 } else { 1 };
             let at: &[isize] = if h.w >= 9 { &[-4, -1, 2] } else if ps == 2 { &[-3, 1] } else { &[-2, 0, 2] };
-            let band = (front - ps as isize).max(1);
+            // (Two rows short of the stage at least, so none opens beside the centrepiece.)
+            let band = (front - ps as isize - 1).max(1);
             let mut n = 0;
             for (i, &a) in at.iter().enumerate() {
                 let d = 1 + (band / 2 + if i % 2 == 1 { 1 } else { 0 } + rng.below(2) as isize - 1).clamp(0, band - 1);
@@ -641,7 +654,31 @@ fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut Pcg32) -> O
                     a = b + 1;
                 }
             }
-            lay(p, h, items).then_some(Stage { raised: true, ..stage })
+            if !lay(p, h, items) {
+                return None;
+            }
+            // Cover down in the pit, one to three pieces (by its size) standing apart, off its edge and its steps.
+            let size = (ad1 - ad0 + 1) * (aa1 - aa0 + 1);
+            let want = 1 + (size >= 20) as usize + (size >= 40) as usize;
+            let mut spots: Vec<(isize, isize)> = (ad0 + 1..ad1).flat_map(|d| (aa0 + 1..aa1).map(move |a| (d, a))).collect();
+            let mut put = 0;
+            for _ in 0..want * 6 {
+                if put >= want || spots.is_empty() {
+                    break;
+                }
+                let i = rng.below(spots.len() as u32) as usize;
+                let (d, a) = spots[i];
+                let kind = ["pillar", "rubble", "weapon_rack", "boulder"][rng.below(4) as usize];
+                let s = snap(p);
+                if set(p, h, h.item(kind, d, a, 1, 1, None), false) && reached(p, h) {
+                    put += 1;
+                    spots.retain(|&(d2, a2)| (d2 - d).abs().max((a2 - a).abs()) >= 3);
+                } else {
+                    undo(p, s);
+                    spots.swap_remove(i);
+                }
+            }
+            Some(Stage { raised: true, ..stage })
         }
         _ => None,
     }
@@ -649,30 +686,44 @@ fn layout(p: &mut Plan, h: &Hall, name: &str, theme: &str, rng: &mut Pcg32) -> O
 
 /// The theme's centrepiece on the stage, the hoard and chest by it, braziers and banners where they fit.
 fn centrepiece(p: &mut Plan, h: &Hall, s: Stage, theme: &str, rng: &mut Pcg32) {
-    let (f, m, back, top) = (s.far(), s.mid(), Some(h.far()), s.raised);
+    let (f, back, top) = (s.far(), Some(h.far()), s.raised);
+    // (The middle of the far row's floor where the room narrows there (an apse, a round room), else the stage's.)
+    let row: Vec<isize> = (s.a0..s.a0 + s.aw as isize).filter(|&a| h.sq(p, f, a).is_some()).collect();
+    let m = match (row.first(), row.last()) {
+        (Some(&a), Some(&b)) if b - a + 1 < s.aw as isize => (a + b) / 2,
+        _ => s.mid(),
+    };
     let (wa, wb) = h.walls();
     let wl = h.w as isize - 1;
     let put = |p: &mut Plan, kind: &'static str, d: isize, a: isize, dl: usize, aw: usize, back: Option<u8>| near(p, h, top, kind, d, a, dl, aw, back);
+    // (What goes round it, braziers, candles, the loot: by its spot or a square off, else left out, so a small stage
+    // or an island is not heaped.)
+    let extra = |p: &mut Plan, kind: &'static str, d: isize, a: isize, back: Option<u8>| near_in(p, h, top, kind, d, a, 1, 1, back, 1);
     // (On a level stage: a dais (a bier) first, what it bears on it.)
     let dais = |p: &mut Plan| if top { Some((f - 1, m - 1)) } else { near(p, h, false, "dais", f - 1, m - 1, 2, 3, back) };
     let mut loot = true;
     match theme {
-        // A throne on its dais; a dwarven hall's forge-throne with its forge and anvil beside.
+        // A throne on its dais; a dwarven hall's forge-throne with its forge and anvil off to one side, two squares
+        // clear of the dais, the hoard on the other (no chest or braziers: the forge is the fire).
         "keep" | "dungeon" | "dwarven_hall" => {
             let (dd, da) = dais(p).unwrap_or((f - 1, m - 1));
             near(p, h, true, "throne", dd + 1, da + 1, 1, 1, back);
             if theme == "dwarven_hall" {
-                let side = if rng.below(2) == 0 { -2 } else { 4 };
-                put(p, "forge", dd + 1, da + side, 1, 1, back);
-                put(p, "anvil", dd, da + side, 1, 1, None);
+                let west = rng.below(2) == 0;
+                let side = if west { (da - 3).max(0) } else { (da + 5).min(wl) };
+                put(p, "forge", dd + 1, side, 1, 1, back);
+                put(p, "anvil", dd, side, 1, 1, None);
+                put(p, "hoard", dd + 1, if west { da + 4 } else { da - 2 }, 1, 1, None);
+                loot = false;
             }
         }
         // An altar, and the ritual circle before it.
         "temple" | "sunken_temple" | "cult_sanctum" => {
             put(p, "altar", f, m - 1, 1, 2, back);
-            put(p, "glyph", f - 3, m - 1, 2, 2, None);
+            // (Before the altar: on a raised stage 3 deep, on it.)
+            put(p, "glyph", if top && s.dl >= 3 { f - 2 } else { f - 3 }, m - 1, 2, 2, None);
             for a in [m - 2, m + 2] {
-                put(p, "candles", f, a, 1, 1, None);
+                extra(p, "candles", f, a, None);
             }
         }
         // An arcane workshop: the workbench, bookshelves on the side walls, a focus before them (no circle).
@@ -685,14 +736,26 @@ fn centrepiece(p: &mut Plan, h: &Hall, s: Stage, theme: &str, rng: &mut Pcg32) {
                 put(p, "bookshelf", f, m + 3, 1, 1, back);
             }
             put(p, "arcane_focus", f - 2, m, 1, 1, None);
-            put(p, "candles", f, m + 2, 1, 1, None);
+            extra(p, "candles", f, m + 2, None);
         }
         // A cell block: cages along the far wall, shackles on the walls, the warden's desk.
         "prison" => {
+            let first = p.items.len();
             put(p, "cage", f - 1, 0, 2, 2, None);
             put(p, "cage", f - 1, wl - 1, 2, 2, None);
             if h.l >= 9 {
                 put(p, "cage", h.l as isize / 2, 0, 2, 2, None);
+            }
+            // (A cage's door is on its right as drawn, its top its back: turned a quarter past the wall it stands
+            // against, the far wall if none, the door faces the room.)
+            let cages: Vec<usize> = (first..p.items.len()).filter(|&i| p.items[i].kind == "cage").collect();
+            for i in cages {
+                let it = p.items[i];
+                let (x0, y0, x1, y1) = (it.x as isize, it.y as isize, (it.x + it.w) as isize, (it.y + it.h) as isize);
+                let out = |x: isize, y: isize| x < 0 || y < 0 || x >= h.nx as isize || y >= h.ny as isize || p.cells[y as usize * h.nx + x as usize] != h.ri;
+                let sides = [(x0..x1).filter(|&x| out(x, y0 - 1)).count(), (y0..y1).filter(|&y| out(x1, y)).count(), (x0..x1).filter(|&x| out(x, y1)).count(), (y0..y1).filter(|&y| out(x0 - 1, y)).count()];
+                let wall = (0..4u8).filter(|&d| sides[d as usize] > 0).max_by_key(|&d| (sides[d as usize], d == h.far())).unwrap_or(h.far());
+                p.items[i].back = Some((wall + 1) % 4);
             }
             edge(p, h, "chains", 3, rng);
             put(p, "desk", f - 3, m - 1, 1, 2, None);
@@ -702,7 +765,7 @@ fn centrepiece(p: &mut Plan, h: &Hall, s: Stage, theme: &str, rng: &mut Pcg32) {
             let (dd, da) = dais(p).unwrap_or((f - 1, m - 1));
             near(p, h, true, "sarcophagus", dd, da + 1, 2, 1, back);
             for a in [da - 1, da + 3] {
-                put(p, "candles", dd, a, 1, 1, None);
+                extra(p, "candles", dd, a, None);
             }
             if theme == "ossuary" {
                 edge(p, h, "skulls", 4, rng);
@@ -745,25 +808,29 @@ fn centrepiece(p: &mut Plan, h: &Hall, s: Stage, theme: &str, rng: &mut Pcg32) {
         FORTRESS => {
             put(p, "long_table", f - 2, m - 1, 1, 3, None);
             if !set(p, h, h.item("weapon_rack", f - 1, 0, 1, 1, Some(wa)), top) {
-                put(p, "weapon_rack", f, m - 3, 1, 1, back);
+                extra(p, "weapon_rack", f, m - 3, back);
             }
             if !set(p, h, h.item("weapon_rack", f - 1, wl, 1, 1, Some(wb)), top) {
-                put(p, "weapon_rack", f, m + 3, 1, 1, back);
+                extra(p, "weapon_rack", f, m + 3, back);
             }
         }
         _ => {}
     }
     if loot {
-        put(p, "hoard", f, m + 2, 1, 1, None);
-        put(p, "chest", f, m - 2, 1, 1, back);
+        // (The hoard somewhere: beside the centrepiece, else wherever near.)
+        if extra(p, "hoard", f, m + 2, None).is_none() {
+            put(p, "hoard", f, m + 2, 1, 1, None);
+        }
+        extra(p, "chest", f, m - 2, back);
     }
-    if matches!(theme, "keep" | "dungeon" | "dwarven_hall" | "temple" | "sunken_temple" | "cult_sanctum" | FORTRESS) {
+    if matches!(theme, "keep" | "dungeon" | "temple" | "sunken_temple" | "cult_sanctum" | FORTRESS) {
         for a in [m - 3, m + 3] {
-            put(p, "brazier", f - 1, a, 1, 1, None);
+            extra(p, "brazier", f - 1, a, None);
         }
     }
     match theme {
-        "keep" | "dungeon" | "dwarven_hall" | "cult_sanctum" | "temple" | FORTRESS => edge(p, h, "banner", 2 + rng.below(2) as usize, rng),
+        "dwarven_hall" => edge(p, h, "banner", 2, rng),
+        "keep" | "dungeon" | "cult_sanctum" | "temple" | FORTRESS => edge(p, h, "banner", 2 + rng.below(2) as usize, rng),
         "prison" => edge(p, h, "sconce", 2, rng),
         "bandit_hideout" => edge(p, h, "lantern", 1, rng),
         _ => {}
@@ -834,17 +901,19 @@ fn peril(name: &str, x: usize, y: usize) -> Item {
     item(kind, x, y, 1, 1)
 }
 
-/// About half the chambers: one or two of `kinds` (`PERILS`) on free floor, off the way in, the second way in and
-/// every landing (`Hall::clear`), each kept only if the chamber is still all reached round them.
-fn hazards(p: &mut Plan, h: &Hall, kinds: &[&'static str], rng: &mut Pcg32) {
+/// About half the chambers: one or two of `kinds` (`PERILS`) on free floor in the approach: off the way in, the second
+/// way in, every landing (`Hall::clear`), the stage and the centrepiece's squares and round them (the items from
+/// `dressed` on), each kept only if the chamber is still all reached round them.
+fn hazards(p: &mut Plan, h: &Hall, kinds: &[&'static str], stage: Stage, dressed: usize, rng: &mut Pcg32) {
     if kinds.is_empty() || rng.below(2) != 0 {
         return;
     }
     let want = 1 + rng.below(2) as usize;
     let (nx, ny) = (h.nx, h.ny);
     let (ex, ey) = (h.entry % nx, h.entry / nx);
+    let held = held(p, h, stage, dressed);
     let spots: Vec<usize> = (0..nx * ny)
-        .filter(|&k| p.cells[k] == h.ri && !p.taken[k] && !h.kept(k) && !h.clear.borrow().contains(&k) && (k % nx).abs_diff(ex).max((k / nx).abs_diff(ey)) >= 2)
+        .filter(|&k| p.cells[k] == h.ri && !p.taken[k] && !h.kept(k) && !held[k] && !h.clear.borrow().contains(&k) && (k % nx).abs_diff(ex).max((k / nx).abs_diff(ey)) >= 2)
         .collect();
     let mut put = 0;
     for _ in 0..want * 8 {
@@ -1020,18 +1089,19 @@ pub(crate) fn wild(p: &mut Plan, nx: usize, ny: usize, ri: i16, squares: &[usize
         order[..=m].rotate_right(1);
     }
     let fallback = far_point(p, &h);
-    if mine {
-        choose(p, &h, order, rng, &|p, h, i, rng| mine_layout(p, h, MINE[i], rng), &|p, h, s, rng| mine_dress(p, h, s, rng), fallback);
+    let (stage, dressed) = if mine {
+        choose(p, &h, order, rng, &|p, h, i, rng| mine_layout(p, h, MINE[i], rng), &|p, h, s, rng| mine_dress(p, h, s, rng), fallback)
     } else {
-        choose(p, &h, order, rng, &|p, h, i, rng| wild_layout(p, h, NATURAL[i], lava, rng), &|p, h, s, rng| wild_dress(p, h, s, theme, rng), fallback);
-    }
+        choose(p, &h, order, rng, &|p, h, i, rng| wild_layout(p, h, NATURAL[i], lava, rng), &|p, h, s, rng| wild_dress(p, h, s, theme, rng), fallback)
+    };
+    spread(p, &h, stage, cover_kinds(if mine { "mine" } else if lava { "lava_tube" } else { theme }, true), rng);
     let kinds: &[&'static str] = match theme {
         _ if lava => &["steam vent", "steam vent", "cracked floor"],
         _ if mine => &["cracked floor", "flooded pit"],
         "flooded" | "cave" | "fungal" => &["cracked floor", "flooded pit"],
         _ => &["cracked floor"],
     };
-    hazards(p, &h, kinds, rng);
+    hazards(p, &h, kinds, stage, dressed, rng);
 }
 
 /// The room's squares in frame coordinates.
@@ -1334,9 +1404,12 @@ fn mine_layout(p: &mut Plan, h: &Hall, name: &str, rng: &mut Pcg32) -> Option<St
         items.push(h.item("climb_ladder", foot.0, foot.1, 1, 1, Some(toward(k, m, h.nx))));
         true
     };
+    // (Along the side walls toward the face only, about half their length: the rest of the walls stay bare.)
+    let run = (l / 2).max(4);
+    let near_face = ((l - 1 - run).max(1), l - 2);
     let ok = match name {
-        "side walkway" => walkway(p, rng.below(2) as u8, (1, l - 2), &mut items),
-        "twin walkways" => walkway(p, 0, (1, l - 2), &mut items) && walkway(p, 1, (1, l - 2), &mut items),
+        "side walkway" => walkway(p, rng.below(2) as u8, near_face, &mut items),
+        "twin walkways" => walkway(p, 0, near_face, &mut items) && walkway(p, 1, near_face, &mut items),
         // (Across the dug half of the face.)
         "face gallery" => walkway(p, 2, if vein_left { (w / 2, w - 1) } else { (0, (w - 1) / 2) }, &mut items),
         _ => false,
@@ -1376,5 +1449,171 @@ fn mine_dress(p: &mut Plan, h: &Hall, s: Stage, rng: &mut Pcg32) {
     near(p, h, false, "chest", f - 1, m + 1, 1, 1, None);
     near(p, h, false, "tools", f - 2, m - 2, 1, 1, None);
     edge(p, h, "lantern", 2, rng);
-    edge(p, h, "timber", 2, rng);
+    // (One prop against a wall; the rest of the dressing, crates, barrels, a cart, a short stack, goes round the
+    // chamber by `spread`.)
+    edge(p, h, "timber", 1, rng);
+}
+
+// Item 117 fix round 2: dressing through the whole chamber, hazards kept off the centrepiece, the room's label spot.
+
+/// The theme's freestanding cover, 1x1 (the kinds `spread` puts down): none that tells a layout apart in the `under`
+/// example's metrics (statues, pillars, broken walls, rubble, rock columns).
+fn cover_kinds(theme: &str, natural: bool) -> &'static [&'static str] {
+    match theme {
+        "keep" | "dungeon" | FORTRESS => &["weapon_rack", "barrel", "crate"],
+        "dwarven_hall" => &["barrel", "anvil", "keg_rack"],
+        "temple" | "sunken_temple" | "cult_sanctum" => &["urn", "effigy"],
+        "wizard_lair" => &["bookshelf", "crate", "table"],
+        "prison" => &["rack", "stocks", "iron_maiden"],
+        "crypt" | "tomb" | "catacombs" => &["coffin", "urn", "effigy"],
+        "ossuary" => &["skulls", "urn", "coffin"],
+        "bandit_hideout" => &["crate", "barrel", "sacks"],
+        "goblin_warren" => &["sacks", "crate", "skulls"],
+        "flooded_vault" => &["crate", "barrel", "urn"],
+        "labyrinth" => &["skulls", "boulder", "urn"],
+        "mine" => &["crate", "barrel", "timber", "ore_cart"],
+        "lava_tube" => &["boulder"],
+        "fungal" => &["mushroom", "boulder"],
+        "crystal" => &["crystal", "boulder"],
+        "ice" => &["ice", "boulder"],
+        _ if natural => &["stalagmite", "boulder"],
+        _ => &["crate", "barrel"],
+    }
+}
+
+/// Kinds that stand against a wall, their back to it.
+const WALLED: [&str; 4] = ["bookshelf", "weapon_rack", "keg_rack", "rack"];
+
+/// The squares kept for the centrepiece: the stage and a square round it, and round what the dressing put down (the
+/// items from `dressed` on, but what hangs on the walls).
+fn held(p: &Plan, h: &Hall, s: Stage, dressed: usize) -> Vec<bool> {
+    let (nx, ny) = (h.nx, h.ny);
+    let mut out = vec![false; nx * ny];
+    for d in s.d0 - 1..=s.far() + 1 {
+        for a in s.a0 - 1..s.a0 + s.aw as isize + 1 {
+            if let Some(k) = h.cell(d, a) {
+                out[k] = true;
+            }
+        }
+    }
+    for it in p.items.iter().skip(dressed).filter(|it| !matches!(it.kind, "banner" | "chains" | "sconce" | "lantern")) {
+        for j in (it.y as usize).saturating_sub(1)..((it.y + it.h) as usize + 1).min(ny) {
+            for i in (it.x as usize).saturating_sub(1)..((it.x + it.w) as usize + 1).min(nx) {
+                out[j * nx + i] = true;
+            }
+        }
+    }
+    out
+}
+
+/// Cover and dressing in every quarter of the chamber (near and far, either side of its middle) that has room and none:
+/// one or two of `kinds` each, standing apart, off the main lane (a square either side of the line from the way in to
+/// the stage), the landings, the second way in and the stage; each kept only if the chamber is still all reached.
+fn spread(p: &mut Plan, h: &Hall, s: Stage, kinds: &[&'static str], rng: &mut Pcg32) {
+    let (l, w) = (h.l as isize, h.w as isize);
+    let (nx, ny) = (h.nx, h.ny);
+    let (ed, ea) = (h.ed as isize, h.ea as isize);
+    let (td, ta) = (s.d0.max(ed + 1), s.mid());
+    // (|a - the lane's a at d| <= 1, in whole numbers.)
+    let lane = |d: isize, a: isize| d <= td && (a * (td - ed) - ea * (td - ed) - (ta - ea) * (d - ed).max(0)).abs() <= td - ed;
+    let (ex, ey) = (h.entry % nx, h.entry / nx);
+    let held = held(p, h, s, p.items.len());
+    let quarter = |d: isize, a: isize| (d * 2 >= l) as usize * 2 + (a * 2 >= w) as usize;
+    let cover = |it: &Item| PROPS.iter().any(|q| q.0 == it.kind && q.2 >= 1) && !TERRAIN.contains(&it.kind) && !SPANS.contains(&it.kind);
+    let mut has = [false; 4];
+    for it in p.items.iter().filter(|it| cover(it)) {
+        let k = it.y as usize * nx + it.x as usize;
+        if p.cells[k] == h.ri {
+            let (d, a) = h.frame(k);
+            has[quarter(d as isize, a as isize)] = true;
+        }
+    }
+    for q in 0..4 {
+        let squares = frame_squares(p, h).into_iter().filter(|&(d, a)| quarter(d, a) == q).count();
+        if has[q] || squares < 4 {
+            continue;
+        }
+        let cells = &p.cells;
+        let wall = |k: usize| (0..4u8).find(|&dir| step(k, dir as usize, nx, ny).is_none_or(|m| cells[m] != h.ri));
+        // (Standing alone where it can, else beside something.)
+        let find = |alone: bool| -> Vec<(isize, isize, usize, Option<u8>)> {
+            frame_squares(p, h)
+                .into_iter()
+                .filter(|&(d, a)| quarter(d, a) == q && !lane(d, a))
+                .filter_map(|(d, a)| h.sq(p, d, a).map(|k| (d, a, k)))
+                .filter(|&(_, _, k)| {
+                    !p.taken[k] && !held[k] && !h.kept(k) && !h.clear.borrow().contains(&k) && (k % nx).abs_diff(ex).max((k / nx).abs_diff(ey)) >= 2 && (!alone || neighbours(k, nx, ny).all(|m| !p.taken[m] || cells[m] != h.ri))
+                })
+                .map(|(d, a, k)| (d, a, k, wall(k)))
+                .collect()
+        };
+        let mut spots = find(true);
+        if spots.is_empty() {
+            spots = find(false);
+        }
+        let want = 1 + (spots.len() >= 16) as usize;
+        let mut put = 0;
+        for _ in 0..want * 6 {
+            if put >= want || spots.is_empty() {
+                break;
+            }
+            let kind = kinds[rng.below(kinds.len() as u32) as usize];
+            let walled = WALLED.contains(&kind);
+            let fit: Vec<usize> = (0..spots.len()).filter(|&i| spots[i].3.is_some() == walled).collect();
+            if fit.is_empty() {
+                continue;
+            }
+            let (d, a, k, back) = spots[fit[rng.below(fit.len() as u32) as usize]];
+            let snap = snap(p);
+            if set(p, h, h.item(kind, d, a, 1, 1, back), false) && reached(p, h) {
+                put += 1;
+                spots.retain(|&(d2, a2, _, _)| (d2 - d).abs().max((a2 - a).abs()) >= 3);
+            } else {
+                undo(p, snap);
+                spots.retain(|&(_, _, m, _)| m != k);
+            }
+        }
+    }
+}
+
+/// Where a boss chamber's name goes (`Room::center`): on open floor, away from its props, bridges, steps and doors: a
+/// square of the room with no item on or round it (else the most open squares round it, five at least), the most open
+/// floor along its row (the name runs across), nearest the room's middle; else the middle as before (None).
+pub(crate) fn label(cells: &[i16], items: &[Item], doors: &crate::core::hash::FastSet<(usize, usize)>, nx: usize, ny: usize, ri: i16, middle: [f32; 2]) -> Option<usize> {
+    let n = nx * ny;
+    let mut busy = vec![false; n];
+    for it in items {
+        // (A raised floor is floor: its edge is what the name should keep off.)
+        let edge_only = RAISING.contains(&it.kind);
+        for j in it.y as usize..(it.y + it.h) as usize {
+            for i in it.x as usize..(it.x + it.w) as usize {
+                let inner = i > it.x as usize && j > it.y as usize && i + 1 < (it.x + it.w) as usize && j + 1 < (it.y + it.h) as usize;
+                if !edge_only || !inner {
+                    busy[j * nx + i] = true;
+                }
+            }
+        }
+    }
+    for &(a, b) in doors {
+        busy[a] = true;
+        busy[b] = true;
+    }
+    let open = |k: usize| cells[k] == ri && !busy[k];
+    // (Open squares round it, of the eight.)
+    let clear = |k: usize| {
+        let (x, y) = (k % nx, k / nx);
+        if x == 0 || y == 0 || x + 1 >= nx || y + 1 >= ny {
+            return 0;
+        }
+        (y - 1..=y + 1).flat_map(|j| (x - 1..=x + 1).map(move |i| j * nx + i)).filter(|&m| m != k && open(m)).count()
+    };
+    let run = |k: usize| {
+        let (x, y) = (k % nx, k / nx);
+        (x.saturating_sub(2)..=(x + 2).min(nx - 1)).filter(|&i| open(y * nx + i)).count()
+    };
+    let dist = |k: usize| {
+        let (dx, dy) = ((k % nx) as f32 + 0.5 - middle[0], (k / nx) as f32 + 0.5 - middle[1]);
+        dx * dx + dy * dy
+    };
+    (0..n).filter(|&k| open(k) && clear(k) >= 5).max_by(|&a, &b| (clear(a) == 8).cmp(&(clear(b) == 8)).then(run(a).cmp(&run(b))).then(clear(a).cmp(&clear(b))).then(dist(b).total_cmp(&dist(a))).then(b.cmp(&a)))
 }

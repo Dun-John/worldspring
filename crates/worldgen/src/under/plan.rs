@@ -333,9 +333,13 @@ impl Plan {
                 sum[r as usize][1] += (k / nx) as f64 + 0.5;
             }
         }
-        for (r, s) in rooms.iter_mut().zip(&sum) {
+        for (ri, (r, s)) in rooms.iter_mut().zip(&sum).enumerate() {
             if r.squares > 0 {
                 r.center = [(s[0] / r.squares as f64) as f32, (s[1] / r.squares as f64) as f32];
+                // (A boss chamber's name on open floor, off its props: `boss::label`.)
+                if r.kind == BOSS && let Some(k) = super::boss::label(&self.cells, &self.items, &self.doors, nx, ny, ri as i16, r.center) {
+                    r.center = [(k % nx) as f32 + 0.5, (k / nx) as f32 + 0.5];
+                }
             }
         }
         // Walls on square edges: rock against floor (exterior), and between rooms where no

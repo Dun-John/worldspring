@@ -24,7 +24,7 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
     let cw = theme.corridor;
     let target = ((((theme.rooms.0 + rng.below(theme.rooms.1) as usize) as f64 * fill(area)).round() as usize).max(nx * ny / 140)).clamp(4, ROOMS_GROWING - 6);
     p.secrets = 2 + (area >= 1.3) as usize;
-    let chasm = depth % 2 == 1;
+    let mut chasm = depth % 2 == 1;
     let dir = if arrive % nx < nx / 2 { Side::E } else { Side::W };
     // The gate hall with its back to the way in; below, a landing round the way down from above.
     let first = if depth == 0 {
@@ -44,8 +44,13 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
     let span = if dir == Side::E { nx.saturating_sub(f.x + f.w + 1) } else { f.x.saturating_sub(1) };
     let across = odd(pick(5, sc(7).max(5), rng));
     let (end_a, end_d) = (odd(pick(9, sc(13).max(9), rng)), pick(9, sc(11).max(9), rng));
-    let chasm_d = if chasm { across + 2 + pick(0, 2, rng) } else { 0 };
-    let room_left = span.saturating_sub(end_d + chasm_d + 2);
+    let mut chasm_d = if chasm { across + 2 + pick(0, 2, rng) } else { 0 };
+    let mut room_left = span.saturating_sub(end_d + chasm_d + 2);
+    // (The deepest level keeps the room for the boss's hall: no chasm hall where both won't fit.)
+    if last && chasm && room_left < 6 {
+        (chasm, chasm_d) = (false, 0);
+        room_left = span.saturating_sub(end_d + 2);
+    }
     let least = if area > 1.0 { room_left / 2 } else { 0 };
     let len = pick(sc(10), sc(18), rng).max(least).min(room_left).max(6);
     let mut pillared: Vec<(i16, usize)> = Vec::new();
@@ -117,7 +122,10 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
     let end_kind = if last { BOSS } else if depth == 0 || depth % 2 == 0 { "great hall" } else { "ancestor hall" };
     let t = if rng.next_f64() < 0.3 { Template::Octagon } else { Template::Rect };
     let mut boss = None;
-    for (t, a, d) in [(t, end_a, end_d), (Template::Rect, 9, 9), (Template::Rect, 7, 7), (Template::Rect, 5, 5)] {
+    // (The boss chamber no smaller than 9 x 9 here; else a big one off the farthest open piece now, `boss_room`, before
+    // the other rooms take the space.)
+    let ends: &[(Template, usize, usize)] = if last { &[(t, end_a, end_d), (Template::Rect, 9, 9)] } else { &[(t, end_a, end_d), (Template::Rect, 9, 9), (Template::Rect, 7, 7), (Template::Rect, 5, 5)] };
+    for &(t, a, d) in ends {
         if let Some(&e) = g.deck(&mut p, at, dir, end_kind, t, a, d, 0, true).first() {
             let room = g.pieces[e].room;
             if last {
@@ -131,6 +139,10 @@ pub(crate) fn dwarven(nx: usize, ny: usize, arrive: usize, depth: usize, last: b
             }
             break;
         }
+    }
+    if last && boss.is_none() {
+        g.boss = Some((end_a, end_d.max(10)));
+        boss = boss_room(&mut p, &mut g, ny, area, rng);
     }
     // Then more rooms: some in mirrored pairs, the rest spreading over the grid.
     let specs = specs(&kinds, cw, area);

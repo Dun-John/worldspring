@@ -260,6 +260,8 @@ struct Boss {
     perils: std::collections::BTreeMap<&'static str, usize>,
     sides: usize,
     secret: usize,
+    /// Chambers with cover (an item giving cover, not terrain) in each half of their box, north, south, west and east.
+    halves: usize,
 }
 
 impl Boss {
@@ -277,6 +279,19 @@ impl Boss {
         let has = |k: &str| inside.iter().any(|f| f.kind == k);
         // (Hazards and the second way in, every chamber.)
         self.all += 1;
+        {
+            let sq: Vec<usize> = (0..lv.cells.len()).filter(|&k| lv.cells[k] == ri as i16).collect();
+            let (x0, x1) = (sq.iter().map(|k| k % nx).min().unwrap_or(0), sq.iter().map(|k| k % nx).max().unwrap_or(0));
+            let (y0, y1) = (sq.iter().map(|k| k / nx).min().unwrap_or(0), sq.iter().map(|k| k / nx).max().unwrap_or(0));
+            let cover: Vec<&&interior::Item> = inside.iter().filter(|f| f.cover >= 1 && !worldgen::under::TERRAIN.contains(&f.kind) && !matches!(f.kind, "stone_bridge" | "rope_bridge" | "stepping_stone")).collect();
+            let (mx, my) = ((x0 + x1) as f64 / 2.0, (y0 + y1) as f64 / 2.0);
+            let c = |f: &&&interior::Item| (f.x as f64 + f.w as f64 / 2.0 - 0.5, f.y as f64 + f.h as f64 / 2.0 - 0.5);
+            let all = [cover.iter().any(|f| c(f).0 < mx), cover.iter().any(|f| c(f).0 > mx), cover.iter().any(|f| c(f).1 < my), cover.iter().any(|f| c(f).1 > my)];
+            self.halves += all.iter().all(|&b| b) as usize;
+            if std::env::var("BOSS").is_ok_and(|v| v == "list") && !all.iter().all(|&b| b) {
+                println!("{} {theme}: no cover in a half (w e n s {all:?}), {}x{}", it.id, x1 - x0 + 1, y1 - y0 + 1);
+            }
+        }
         let perils: Vec<&'static str> = inside.iter().map(|f| f.name).filter(|n| worldgen::under::PERILS.contains(n)).collect();
         self.perilous += !perils.is_empty() as usize;
         for p in &perils {
@@ -302,8 +317,8 @@ impl Boss {
             });
             let count = |k: &str| inside.iter().filter(|f| f.kind == k).count();
             let layout = if kind == "mine" {
-                // (Walkways: the scaffolding's pieces, joined side by side; across the face if all of one lies in the
-                // far half from the way in.)
+                // (Walkways: the scaffolding's pieces, joined side by side; across the face if its long side runs
+                // across the line from the way in.)
                 let on: Vec<usize> = inside.iter().filter(|f| f.kind == "scaffold").flat_map(|f| (f.y..f.y + f.h).flat_map(move |j| (f.x..f.x + f.w).map(move |i| j as usize * nx + i as usize))).collect();
                 let n = lv.cells.len();
                 let step = |k: usize| [(k % nx > 0).then(|| k - 1), (k % nx + 1 < nx).then_some(k + 1), (k >= nx).then(|| k - nx), (k + nx < n).then_some(k + nx)].into_iter().flatten();
@@ -326,8 +341,6 @@ impl Boss {
                 let start: Vec<usize> = lv.furniture.iter().filter(|f| matches!(f.kind, "up" | "exit")).map(|f| f.y as usize * nx + f.x as usize).collect();
                 let from = walk(&start, false);
                 let entry = (0..n).filter(|&k| lv.cells[k] == ri as i16).min_by_key(|&k| (from[k], k)).unwrap_or(0);
-                let din = walk(&[entry], true);
-                let far = (0..n).filter(|&k| lv.cells[k] == ri as i16 && din[k] != usize::MAX).map(|k| din[k]).max().unwrap_or(0);
                 let mut seen = std::collections::BTreeSet::new();
                 let (mut walks, mut across) = (0, false);
                 for &s in &on {
@@ -336,16 +349,21 @@ impl Boss {
                     }
                     walks += 1;
                     let mut todo = vec![s];
-                    let mut near_face = true;
+                    let mut comp = Vec::new();
                     while let Some(k) = todo.pop() {
-                        near_face &= din[k] * 2 >= far;
+                        comp.push(k);
                         for m in [k.wrapping_sub(1), k + 1, k.wrapping_sub(nx), k + nx] {
                             if on.contains(&m) && seen.insert(m) {
                                 todo.push(m);
                             }
                         }
                     }
-                    across |= near_face;
+                    // (Its long side across the line from the way in to it.)
+                    let (xs, ys) = (comp.iter().map(|k| k % nx), comp.iter().map(|k| k / nx));
+                    let (w, h) = (xs.clone().max().unwrap_or(0) - xs.clone().min().unwrap_or(0), ys.clone().max().unwrap_or(0) - ys.clone().min().unwrap_or(0));
+                    let (cx, cy) = (xs.sum::<usize>() as f64 / comp.len() as f64, ys.sum::<usize>() as f64 / comp.len() as f64);
+                    let (dx, dy) = ((cx - (entry % nx) as f64).abs(), (cy - (entry / nx) as f64).abs());
+                    across |= if w > h { dy > dx } else { dx > dy };
                 }
                 if walks == 1 && across { "face gallery" } else if walks >= 2 { "twin walkways" } else if walks == 1 { "side walkway" } else { "(none)" }
             } else if has("rope_bridge") || has("chasm") {
@@ -487,10 +505,12 @@ impl Boss {
             self.perils.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", ")
         );
         println!("boss ways round: {} of {} ({:.0}%), secret {} ({:.0}%), door/arch {}", self.sides, self.all, pct(self.sides, self.all), self.secret, pct(self.secret, self.sides), self.sides - self.secret);
+        println!("boss cover: in every half (north, south, west, east) of {} of {} chambers ({:.0}%)", self.halves, self.all, pct(self.halves, self.all));
     }
 }
 
-/// BOSS=plan's picture of a boss chamber: its items by letter beside its floor heights (2.5 ft a digit, '/' a ramp).
+/// BOSS=plan's picture of a boss chamber: its items by letter beside its floor heights (2.5 ft a digit, '/' a ramp),
+/// '@' where its name goes.
 fn plan(lv: &interior::Level, ri: usize, nx: usize, inside: &[&interior::Item]) {
     let f = worldgen::interior::height::of_level(lv, nx);
     // (The chamber and a square round it, for the second way in.)
@@ -528,6 +548,8 @@ fn plan(lv: &interior::Level, ri: usize, nx: usize, inside: &[&interior::Item]) 
                         "crystal" | "ice" => '*', "fungus" | "mushroom" => 'm', "stalagmite" => 's', _ => '&',
                     },
                 },
+                // (The room's name: `Room::center`.)
+                _ if lv.rooms[ri].center == [x as f32 + 0.5, y as f32 + 0.5] => '@',
                 _ => '.',
             });
             let ft = f.ft[k];
