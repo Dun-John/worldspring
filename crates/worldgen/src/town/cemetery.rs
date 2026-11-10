@@ -134,7 +134,7 @@ pub(crate) const KINDS: [(Kind, KindInfo); 6] = [
     (Kind::Cairn, k(Kind::Cairn, "cairn", 0.4, true, false, 1, false, 4.0)),
     (Kind::StandingStone, k(Kind::StandingStone, "standing stone", 0.3, true, false, 2, false, 8.0)),
     (Kind::Yew, k(Kind::Yew, "yew", 1.6, true, true, 2, false, 20.0)),
-    (Kind::Lychgate, k(Kind::Lychgate, "lychgate", 1.0, false, false, 1, false, 10.0)),
+    (Kind::Lychgate, k(Kind::Lychgate, "lychgate", 1.2, false, false, 1, false, 10.0)),
     // (25-50 ft across by its size: 35 ft at 1.)
     (Kind::Kurgan, k(Kind::Kurgan, "kurgan", 3.5, false, true, 3, true, 12.0)),
     (Kind::TombSlab, k(Kind::TombSlab, "tomb slab", 0.5, false, false, 1, true, 2.0)),

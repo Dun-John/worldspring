@@ -4406,11 +4406,12 @@ function lychgate(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
   const roof = [
     [0x6e3424, 0x9a5038, 0xbe6e4c],
-    [0x3e444c, 0x5e666e, 0x7e868e],
+    [0x7a4020, 0xa85e30, 0xcc8048],
     [0x5a3e26, 0x84603a, 0xa8804e],
-    [0x4a4a30, 0x6a6a42, 0x8a8a5a],
+    [0x5c2e22, 0x84442e, 0xa65e40],
   ][v];
-  const [rx, ry, px, py] = [4.3 * FT, 3.2 * FT, 4.75 * FT, 2.4 * FT];
+  // (12 by 7 ft over the gap: a roof, not a post, at the battlemap's middle zoom.)
+  const [rx, ry, px, py] = [6 * FT, 3.5 * FT, 6.45 * FT, 2.6 * FT];
   // Flagstones under the eaves where the way goes through.
   for (const s of [-1, 1]) {
     g.rect(-1.6 * FT, s > 0 ? ry - 2 : -ry - 1.3 * FT + 2, 3.2 * FT, 1.3 * FT).fill(STONE[1][2]).stroke({ width: LINE, color: INK });
@@ -4643,7 +4644,7 @@ const DRAW: Record<number, Draw> = {
 };
 
 /** Room in the frame beyond the footprint (squares, by kind id) for tall things drawn from a high angle. */
-const ROOM: Record<number, number> = { 100: 1.9, 101: 6.2, 103: 1.12, 105: 0.84, 48: 0.6, 62: 1.16, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
+const ROOM: Record<number, number> = { 100: 1.9, 101: 6.2, 103: 1.45, 105: 0.84, 48: 0.6, 62: 1.16, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
 
 export function frameRadiusPx(info: KindInfo): number {
   // Radius in atlas px at scale 1 plus room for outlines.

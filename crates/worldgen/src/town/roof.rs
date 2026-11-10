@@ -259,9 +259,14 @@ pub fn look(l: &Layout, b: &Building) -> Look {
             }
         }
     };
-    // R5 towns: a cemetery's tomb outside the dry lands in quiet stone, lead or weathered pale tile.
-    let tomb = key == "tomb" && culture != 3;
-    let material = if tomb { pick(h(12), &[(Slate, 4), (Lead, 3), (ClayTile, 3)]) } else { material };
+    // R5 towns: a cemetery's tomb in quiet stone, lead or weathered pale tile; in the dry lands its
+    // dome whitewashed, ochre plaster or weathered stone (no glaze).
+    let tomb = key == "tomb";
+    let material = match (tomb, culture) {
+        (false, _) => material,
+        (true, 3) => pick(h(12), &[(Whitewash, 5), (FlatClay, 3), (Slate, 2)]),
+        _ => pick(h(12), &[(Slate, 4), (Lead, 3), (ClayTile, 3)]),
+    };
     // A tower mill: its battered walls rising to the cap, seen from above as a cone (the cap drawn
     // over it with the sails): lime-washed in the south and the dry lands, else tarred boards,
     // stone or weatherboard.
@@ -307,10 +312,13 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     let shade = match b.shade {
         Some(s) => s.min(4),
         None if b.tint.is_some() => 2,
-        // (A tomb's the material's quiet ones: moss or warm grey slate, warm or light lead, brown tile.)
+        // (A tomb's the material's quiet ones: moss or warm grey slate, warm or light lead, brown
+        // tile; cream or sand whitewash, sand or warm clay plaster.)
         None if tomb => match material {
             Slate => pick(h(13), &[(1u8, 1), (3, 1)]),
             Lead => pick(h(13), &[(3u8, 1), (4, 1)]),
+            Whitewash => pick(h(13), &[(1u8, 1), (4, 1)]),
+            FlatClay => pick(h(13), &[(2u8, 1), (3, 1)]),
             _ => 3,
         },
         None => pick(h(11), &[(0u8, 1), (1, 3), (2, 8), (3, 3), (4, 1)]),
