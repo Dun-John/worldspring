@@ -504,6 +504,49 @@ pub struct TownEdit {
     /// `d:<layout>:<generated count + k>` (`town::districts`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub districts: Vec<String>,
+    /// (R5 towns, M18b) Gates and towers put in or taken out of the town's own wall
+    /// (`town::wallgates`).
+    #[serde(default, skip_serializing_if = "WallEdit::is_empty")]
+    pub wall: WallEdit,
+}
+
+/// Gates and towers of a town's own wall set by hand, by the plan's corners: gates put in at a
+/// wall corner or taken out (`at`: where the corner was planned), towers put up (each with its
+/// `t:` number) and taken down (by `t:` number).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct WallEdit {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates_add: Vec<WallCorner>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates_remove: Vec<WallCorner>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub towers_add: Vec<HandTower>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub towers_remove: Vec<u32>,
+}
+
+impl WallEdit {
+    pub fn is_empty(&self) -> bool {
+        self.gates_add.is_empty() && self.gates_remove.is_empty() && self.towers_add.is_empty() && self.towers_remove.is_empty()
+    }
+}
+
+/// A corner of a town's wall (`v`, the plan's vertex; `at` where it was planned, world ft).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct WallCorner {
+    pub v: u32,
+    pub at: [f64; 2],
+}
+
+/// A tower put up by hand on a town's wall, `t:<layout>:<id>`: `f` of the way from wall corner
+/// `v` (planned at `at`) to its neighbour on the wall `w`.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HandTower {
+    pub id: u32,
+    pub v: u32,
+    pub w: u32,
+    pub f: f64,
+    pub at: [f64; 2],
 }
 
 /// A square set by hand at a corner where streets meet (`v`, the plan's vertex; `at` where it was
@@ -572,7 +615,7 @@ impl TownEdit {
 
     /// Whether it changes nothing.
     pub fn is_noop(&self) -> bool {
-        self.corners.is_empty() && self.patches.iter().all(PatchEdit::is_noop) && self.walls.is_none() && self.squares.is_empty()
+        self.corners.is_empty() && self.patches.iter().all(PatchEdit::is_noop) && self.walls.is_none() && self.squares.is_empty() && self.wall.is_empty()
     }
 }
 
@@ -949,8 +992,8 @@ pub const CASTLE_MIN_FT: f64 = 80.0;
 /// Longest a wall may be (ft).
 pub const WALL_MAX_FT: f64 = 3000.0;
 /// (R5 towns, M18) Longest a closed wall (a ring) may be (ft): round a city's old town or upper
-/// city (a metropolis' inner patches run to some 12,000 ft round).
-pub const WALL_RING_MAX_FT: f64 = 16000.0;
+/// city, or a metropolis' whole old town (17,500-19,900 ft round).
+pub const WALL_RING_MAX_FT: f64 = 24000.0;
 /// Most corners of a wall's line, open and closed (a ring round patches takes their corners:
 /// `town::handwall::RING_MAX_CORNERS`).
 pub const WALL_MAX_CORNERS: usize = 64;

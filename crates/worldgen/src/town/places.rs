@@ -370,7 +370,8 @@ fn made(t0: &T0, l: &Layout, fixed: &FastMap<String, String>) -> Vec<Place> {
     // Gates in the town wall, by their corner.
     if l.gate_spots.len() == l.gates.len() {
         let mut gates: Vec<(u32, P)> = l.gate_spots.iter().copied().zip(l.gates.iter().copied()).collect();
-        gates.sort_by_key(|g| g.0);
+        // (Gates put in by hand after the rest: R5 towns M18b.)
+        gates.sort_by_key(|g| (l.hand_wall.gates.iter().any(|h| h.0 == g.0), g.0));
         let towns: Vec<Option<String>> = gates.iter().map(|g| destination(t0, l, g.1)).collect();
         for ((v, g), to) in gates.into_iter().zip(towns) {
             let t = roll(6, v as i64, 1);

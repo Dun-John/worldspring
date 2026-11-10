@@ -154,7 +154,7 @@ pub fn query(world: &World, t0: &T0, x: f64, y: f64) -> Option<Hit> {
             if geom::dist(at, [x, y]) <= r {
                 let (district_id, district) = district_at(t0, &layouts, l, at).unzip();
                 return Some(Hit::Building {
-                    id: format!("t:{}:{}", l.index, k),
+                    id: format!("t:{}:{}", l.index, l.tower_id(k)),
                     settlement: l.index,
                     name: None,
                     function: if gate { "Gate tower" } else { "Wall tower" },

@@ -240,16 +240,19 @@ pub fn round(pieces: &mut [Vec<P>], towers: &mut [P], keep: &dyn Fn(P) -> bool, 
 /// The town wall as `build_town` lays it along its runs (`wall_pieces_spaced`), shaped by `style`'s
 /// outline: its pieces, towers, gate towers, and the bastions (a star-angled wall's). The corners of a
 /// castle's patch and those on the water or a river stay as they are.
-pub(super) fn lay(site: &super::Site, plan: &super::TownPlan, mesh: &super::mesh::Mesh, ward: &[Option<super::Ward>], style: &super::wallstyle::WallStyle) -> (Vec<Vec<P>>, Vec<P>, Vec<P>, Bastions) {
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lay(
+    site: &super::Site,
+    plan: &super::TownPlan,
+    mesh: &super::mesh::Mesh,
+    ward: &[Option<super::Ward>],
+    style: &super::wallstyle::WallStyle,
+    gate_vs: &[usize],
+    hand: &super::wallgates::WallChanges,
+) -> (Vec<Vec<P>>, Vec<P>, Vec<P>, Bastions) {
     use super::wallstyle::Outline;
-    let (mut pieces, mut towers, mut gate_towers) = (Vec::new(), Vec::new(), Vec::new());
-    for (chain, closed, along) in &plan.wall_runs {
-        let corners: Vec<(P, bool)> = chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect();
-        let (p, t, g, _) = super::wall_pieces_spaced(&corners, *closed, Some(along), super::SET);
-        pieces.extend(p);
-        towers.extend(t);
-        gate_towers.extend(g);
-    }
+    // (With the gates put in or taken out by hand: `wallgates`.)
+    let (mut pieces, mut towers, gate_towers) = super::wallgates::pieces(plan, mesh, gate_vs, hand);
     let mut held: Vec<P> = (0..mesh.pos.len()).filter(|&v| plan.pinned[v]).map(|v| mesh.pos[v]).collect();
     for (i, f) in mesh.faces.iter().enumerate() {
         if ward.get(i).copied().flatten() == Some(super::Ward::Castle) {
@@ -269,7 +272,7 @@ pub(super) fn lay(site: &super::Site, plan: &super::TownPlan, mesh: &super::mesh
         Outline::Straight => {}
         Outline::Round => round(&mut pieces, &mut towers, &keep, &|p| !super::Ground::near_water(site, p, 3.0), &|p| !out_of_town(p)),
         Outline::Star => {
-            let gates: Vec<P> = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
+            let gates: Vec<P> = gate_vs.iter().map(|&g| mesh.pos[g]).collect();
             // (The ways in: from where each road arrives to its gate.)
             let ways: Vec<(P, P)> = plan.ends.iter().zip(&plan.gate_of).filter_map(|(e, g)| g.map(|g| (e.0, mesh.pos[g]))).collect();
             let t0 = site.t0;

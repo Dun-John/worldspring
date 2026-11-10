@@ -793,7 +793,10 @@ pub fn position(world: &World, t0: &T0, id: &str) -> Option<P> {
     match (head, nums.as_slice()) {
         ("b", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
         ("d", [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).and_then(|q| q.label.get(q.label.len() / 2).copied()),
-        ("t", [li, k]) if *li < town::layout_count(t0) => crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| t.0),
+        ("t", [li, k]) if *li < town::layout_count(t0) => {
+            let l = town::layout(world, t0, *li);
+            l.tower_index(*k).and_then(|i| crate::interior::towers(&l).get(i).map(|t| t.0))
+        }
         ("u", [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| e.at),
         ("k", [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).map(|b| geom::centroid(&b.poly)),
         ("w", [li, sx, sy]) if *li < t0.settlements.len() => Some([(*sx as f64 + 0.5) * crate::under::SEWER_SECTION_FT, (*sy as f64 + 0.5) * crate::under::SEWER_SECTION_FT]),
@@ -903,7 +906,8 @@ fn generated_name(world: &World, t0: &T0, id: &str) -> Option<String> {
         (Some("d"), [li, qi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).quarters.get(*qi).map(|q| q.name.clone()),
         // Towers and ways underground as `layout_names` lists them; a sewer section as its site.
         (Some("t"), [li, k]) if *li < town::layout_count(t0) => {
-            crate::interior::towers(&town::layout(world, t0, *li)).get(*k).map(|t| format!("{} {}", if t.2 { "Gate tower" } else { "Wall tower" }, k + 1))
+            let l = town::layout(world, t0, *li);
+            l.tower_index(*k).and_then(|i| crate::interior::towers(&l).get(i).map(|t| format!("{} {}", if t.2 { "Gate tower" } else { "Wall tower" }, i + 1)))
         }
         (Some("u"), [li, k]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).entrance(*k).map(|e| cap(e.kind.name())),
         (Some("k"), [li, bi]) if *li < town::layout_count(t0) => town::layout(world, t0, *li).building(*bi).filter(|b| crate::interior::has_deep_dungeon(b)).map(|_| "Deep dungeons".into()),
@@ -1599,7 +1603,7 @@ pub fn layout_names(world: &World, t0: &T0, li: usize) -> Vec<Value> {
         out.push(name_entry(world, format!("b:{li}:{}", b.id), "building", generated, Some(geom::centroid(&b.poly)), true));
     }
     for (k, (at, _, gate)) in crate::interior::towers(&l).into_iter().enumerate() {
-        out.push(name_entry(world, format!("t:{li}:{k}"), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
+        out.push(name_entry(world, format!("t:{li}:{}", l.tower_id(k)), "tower", format!("{} {}", if gate { "Gate tower" } else { "Wall tower" }, k + 1), Some(at), true));
     }
     for p in town::places::of(world, t0, &l) {
         out.push(name_entry(world, p.id, p.kind, p.name, Some(p.at), false));

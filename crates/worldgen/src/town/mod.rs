@@ -43,6 +43,7 @@ pub mod cemetery;
 mod districts;
 pub mod places;
 mod carry;
+pub mod wallgates;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -217,6 +218,10 @@ pub struct Layout {
     /// R5 towns: each of `gates`' corner on the plan when the town is walled (else none): its
     /// `gt:` id (`places`).
     pub gate_spots: Vec<u32>,
+    /// R5 towns (M18b): each of `interior::towers`' `t:` number where the town's wall was edited
+    /// by hand (else none: its place in the list), and what the hand edit came to.
+    pub tower_ids: Vec<u32>,
+    pub hand_wall: wallgates::HandWall,
     /// Main streets from the gates to the plaza.
     pub streets: Vec<Vec<P>>,
     /// Streets drawn as roads (world ft): approaches from each road's end to its gate (road
@@ -588,6 +593,8 @@ impl Layout {
             towers: Vec::new(),
             gates: Vec::new(),
             gate_spots: Vec::new(),
+            tower_ids: Vec::new(),
+            hand_wall: Default::default(),
             streets: Vec::new(),
             roads: Vec::new(),
             plazas: Vec::new(),
@@ -1918,6 +1925,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         Some(_) => wards::inherit_entrances(&generated_layout(world, t0, index), &mut l),
         None => l.number_entrances(),
     }
+    if let Some(e) = edit {
+        wallgates::finish(world, t0, index, e, &mut l);
+    }
     l
 }
 
@@ -3141,13 +3151,15 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     // Materialise: patches, walls, gates and streets as points.
     let cells: Vec<Labeled> = (0..total).map(|i| Labeled { pts: mesh.face_pts(i), labels: mesh.labels[i].clone() }).collect();
     let edge_v = |i: usize, e: usize| (mesh.faces[i][e], mesh.faces[i][(e + 1) % mesh.faces[i].len()]);
-    l.gates = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
-    l.gate_spots = if walled { plan.gates.iter().map(|&g| g as u32).collect() } else { Vec::new() };
+    // (R5 towns, M18b: less the gates taken out by hand, and those put in: `wallgates`.)
+    let (gates, gate_ways) = wallgates::settle(site, plan, &mesh, ward, &ch.wall, &mut l.hand_wall);
+    l.gates = gates.iter().map(|&g| mesh.pos[g]).collect();
+    l.gate_spots = if walled { gates.iter().map(|&g| g as u32).collect() } else { Vec::new() };
     // (Its outline by its style, item 104: `outline::lay`.)
-    let mut wall_laid = outline::lay(site, plan, &mesh, ward, &l.wall_style);
+    let mut wall_laid = outline::lay(site, plan, &mesh, ward, &l.wall_style, &gates, &ch.wall);
     // A round wall's curtains bowed out, before the outskirts step back from them (`curtain`).
     let wall_bows = if walled || plan.walled {
-        curtain::bow(site, plan, &mesh, ward, &l.wall_style, &l.roads, &l.bridges, &mut wall_laid.0, &mut wall_laid.1, &wall_laid.2)
+        curtain::bow(site, plan, &mesh, ward, &l.wall_style, &l.roads, &l.bridges, &mut wall_laid.0, &mut wall_laid.1, &wall_laid.2, (&gates, &ch.wall))
     } else {
         Default::default()
     };
@@ -3194,7 +3206,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             }
         }
     }
-    let gate_pts: Vec<P> = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
+    let gate_pts: Vec<P> = gates.iter().map(|&g| mesh.pos[g]).collect();
     for path in &plan.paths {
         l.streets.push(path.iter().map(|&v| mesh.pos[v]).collect());
         let mut drawn: Vec<P> = Vec::new();
@@ -3209,6 +3221,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             drawn.push(mesh.pos[v]);
         }
         pieces.main_street(l.roads.len());
+        let drawn = if walled { wallgates::closed_street(&ch.wall, path, drawn) } else { drawn };
         l.roads.push((drawn, 4, 18.0));
     }
     // Each road continues from where it ends to its gate (`approach_curve`).
@@ -3218,6 +3231,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
             let span = dist(*e, gp);
             if span > 1.0 {
                 let curve = approach_curve(*e, gp, plan.heading_of[k]);
+                let curve = if walled { wallgates::closed_road(&ch.wall, *g, curve) } else { curve };
                 let width = [24.0, 16.0, 10.0][(*class as usize).min(2)];
                 // Where the approach crosses the river it goes straight over a bridge: the
                 // wet stretch of the curve becomes the deck's line, bank to bank.
@@ -3278,6 +3292,13 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                     _ => l.roads.push((curve, *class, width)),
                 }
             }
+        }
+    }
+
+    // R5 towns (M18b): a gate put in by hand, its way out to a road or the open country.
+    if walled {
+        for (_, pts) in gate_ways {
+            l.roads.push((pts, 2, wallgates::WAY_WIDTH_FT));
         }
     }
 

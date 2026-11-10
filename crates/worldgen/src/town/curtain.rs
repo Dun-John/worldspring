@@ -157,6 +157,7 @@ pub(super) fn bow(
     pieces: &mut [Vec<P>],
     towers: &mut [P],
     gate_towers: &[P],
+    (gate_vs, hand): (&[usize], &super::wallgates::WallChanges),
 ) -> FastMap<(usize, usize), f64> {
     let mut bows: FastMap<(usize, usize), f64> = FastMap::default();
     if style.outline != super::wallstyle::Outline::Round || pieces.is_empty() {
@@ -168,11 +169,12 @@ pub(super) fn bow(
     // (The pieces as `wall_pieces_spaced` lays them, before `outline::round`: the same in number and
     // order, and so their towers; and the wall's sides, by their mesh corners.)
     let (mut raw, mut raw_towers, mut sides) = (Vec::new(), Vec::new(), Vec::new());
-    for (chain, closed, along) in &plan.wall_runs {
-        let corners: Vec<(P, bool)> = chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect();
-        let (p, t, _, _) = super::wall_pieces_spaced(&corners, *closed, Some(along), super::SET);
+    {
+        let (p, t, _) = super::wallgates::pieces(plan, mesh, gate_vs, hand);
         raw.extend(p);
         raw_towers.extend(t);
+    }
+    for (chain, closed, _) in &plan.wall_runs {
         let m = chain.len();
         for k in 0..if *closed { m } else { m.saturating_sub(1) } {
             sides.push((chain[k], chain[(k + 1) % m]));

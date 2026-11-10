@@ -65,6 +65,8 @@ pub(super) struct Changes {
     /// the order made: `districts`).
     pub district: BTreeMap<usize, super::districts::Target>,
     pub districts: Vec<String>,
+    /// (R5 towns, M18b) Gates and towers of the town's wall set by hand (`wallgates`).
+    pub wall: super::wallgates::WallChanges,
 }
 
 impl Changes {
@@ -263,6 +265,7 @@ fn merge_ok(plan: &TownPlan, ward: &[Option<Ward>], p: usize, q: usize) -> Resul
 pub(super) fn changes(plan: &TownPlan, e: &TownEdit, center: P) -> (Changes, Vec<String>) {
     let mut ch = Changes { walls: e.walls, districts: e.districts.clone(), ..Default::default() };
     let mut aside = Vec::new();
+    ch.wall = super::wallgates::resolve(plan, &e.wall, center, &mut aside);
     let local = |p: [f64; 2]| sub(p, center);
     for c in &e.corners {
         match corner_ok(plan, c.v as usize, local(c.from), local(c.to)) {
@@ -418,7 +421,7 @@ pub fn edit_of<'a>(world: &'a World, t0: &T0, index: usize) -> Option<&'a TownEd
 }
 
 /// A hash of the world and a town edit.
-fn hash_edit(world: &World, e: &TownEdit) -> u64 {
+pub(super) fn hash_edit(world: &World, e: &TownEdit) -> u64 {
     let mut h = Fnv64::default();
     h.write(&world.hash.to_le_bytes());
     for c in &e.corners {
@@ -463,6 +466,8 @@ fn hash_edit(world: &World, e: &TownEdit) -> u64 {
         h.write(q.kind.as_bytes());
         h.write(&[0xff]);
     }
+    // (R5 towns, M18b: only when set.)
+    super::wallgates::hash(&mut h, &e.wall);
     h.finish()
 }
 
@@ -1035,7 +1040,11 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
         }
         patches.push(v);
     }
-    let gate = |v: usize| plan.gates.contains(&v);
+    // (R5 towns, M18b: gates put in or taken out by hand.)
+    let gate = |v: usize| {
+        let (put, out) = super::wallgates::corner_marks(e, v);
+        (plan.gates.contains(&v) && !out) || put
+    };
     let wall: Vec<bool> = {
         let mut w = vec![false; mesh.pos.len()];
         for (chain, _, _) in &plan.wall_runs {
@@ -1057,6 +1066,11 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
             }
             if gate(v) {
                 c["gate"] = json!(true);
+            }
+            match super::wallgates::corner_marks(e, v) {
+                (true, _) => c["gate_by_hand"] = json!(true),
+                (_, true) => c["gate_removed"] = json!(true),
+                _ => {}
             }
             if wall[v] {
                 c["wall"] = json!(true);
@@ -1080,11 +1094,15 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
             c
         })
         .collect();
+    let mut walls_json = json!({ "built": ch.walls.unwrap_or(plan.walled), "generated": plan.walled });
+    if let Some(h) = super::wallgates::plan_json(world, t0, index, e) {
+        walls_json["by_hand"] = h;
+    }
     Ok(json!({
         "layout": index,
         "center": round1(center),
         "max_move_ft": crate::core::round(plan.spacing),
-        "walls": { "built": ch.walls.unwrap_or(plan.walled), "generated": plan.walled },
+        "walls": walls_json,
         "edited": e.is_some(),
         "patches": patches,
         "corners": corners,
@@ -1209,6 +1227,7 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     let (districts_before, moves_before) = (super::districts::of(&plan, &ch), ch.moves.clone());
     e.patches.retain(|pe| patch_here(&plan, pe.p as usize, local(pe.at)).is_ok());
     e.squares.retain(|se| square_here(&plan, se.v as usize, local(se.at)).is_ok() && parse_square(&se.kind).is_ok());
+    super::wallgates::keep_live(&plan, center, &mut e.wall);
     match req.reset.as_deref() {
         None => {}
         Some("all") => {
@@ -1216,11 +1235,16 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
             e.patches.clear();
             e.walls = None;
             e.squares.clear();
+            e.wall = Default::default();
         }
         Some("corners") => moves.clear(),
         Some("patches") => e.patches.clear(),
         Some("squares") => e.squares.clear(),
-        Some(r) => return Err(format!("reset: all, corners, patches or squares, not {r}")),
+        Some("walls") => {
+            e.walls = None;
+            e.wall = Default::default();
+        }
+        Some(r) => return Err(format!("reset: all, corners, patches, squares or walls, not {r}")),
     }
     let mut asked: Vec<usize> = Vec::new();
     // Corners one by one.
@@ -1431,11 +1455,17 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
         e.squares.push(SquareEdit { v: sr.corner, at: q64(world_pt(plan.mesh.pos[v])), kind: sr.kind.clone() });
     }
     e.squares.sort_by_key(|se| se.v);
+    let mut wall_asked = None;
     match &req.walls {
         None => {}
         Some(Value::Bool(b)) => e.walls = (*b != plan.walled).then_some(*b),
         Some(Value::String(a)) if a == "auto" => e.walls = None,
-        Some(_) => return Err("walls: true, false or \"auto\"".into()),
+        // (R5 towns, M18b: gates and towers by hand.)
+        Some(v @ Value::Object(_)) => {
+            e.corners = moves.iter().filter(|(v, to)| dist(plan.mesh.pos[**v], **to) > 0.05).map(|(&v, &to)| CornerMove { v: v as u32, from: q64(world_pt(plan.mesh.pos[v])), to: q64(world_pt(to)) }).collect();
+            wall_asked = Some(super::wallgates::request(world, t0, index, &plan, center, &mut e, v)?);
+        }
+        Some(_) => return Err("walls: true, false, \"auto\" or {built, gates_add, gates_remove, towers_add, towers_remove}".into()),
     }
     // The edit as it now stands; merges checked once every ward is set.
     e.at = q64(center);
@@ -1528,6 +1558,9 @@ pub fn change(world: &World, t0: &T0, index: usize, req: &TownRequest) -> Result
     }
     if !unmerged.is_empty() {
         report["unmerged"] = json!(unmerged);
+    }
+    if let Some(a) = wall_asked {
+        report["wall"] = super::wallgates::report(world, t0, index, &before, &after, &mut e, a);
     }
     // (R5 towns) Patches put in another district, and renames and notes carried or lost.
     {

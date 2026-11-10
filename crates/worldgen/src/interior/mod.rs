@@ -5257,7 +5257,8 @@ pub fn tower(world: &World, t0: &T0, settlement: usize, k: usize) -> Option<Inte
         return None;
     }
     let l = town::layout(world, t0, settlement);
-    let (at, r, gate) = *towers(&l).get(k)?;
+    // (`k` is its `t:` number: its place in the list unless the wall was edited by hand.)
+    let (at, r, gate) = *towers(&l).get(l.tower_index(k)?)?;
     let mut rng = Pcg32::new(hash3(world.stream("interior.tower"), town::rng_key(t0, settlement), k as i64, 0x70), 73);
     // The ways the wall runs from here.
     let mut dirs: Vec<P> = Vec::new();
