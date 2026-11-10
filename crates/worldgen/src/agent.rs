@@ -544,7 +544,8 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
         probes.extend((0..=k).map(|s| geom::lerp(a, b, s as f64 / k as f64)));
     }
     let shore = town::Shore::new(world, t0, [x0, y0, x1, y1]);
-    for p in &probes {
+    // (R5 towns: a closed wall is broken where it meets the water, as a town's: `sites::wall_site`.)
+    for p in probes.iter().filter(|_| !(c.closed && c.kind == "wall")) {
         if shore.wet(*p) {
             return Err(format!("that is in the water: {}", if castle { "draw it on dry land" } else { "end the wall at the shore" }));
         }
@@ -570,7 +571,8 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
                 continue;
             }
             if li >= generated {
-                return Err(format!("that crosses {}", building_name(world, &l, b)));
+                let c = geom::centroid(&b.poly);
+                return Err(format!("that crosses b:{li}:{} ({}) at ({:.0}, {:.0})", b.id, building_name(world, &l, b), c[0], c[1]));
             }
             let base = town::base_layout(world, t0, li);
             if let Some(g) = base.building(b.id as usize) {
@@ -578,7 +580,7 @@ pub fn works_spot(world: &World, t0: &T0, c: &crate::world::Created, id: &str, s
             }
         }
         if l.walls.iter().any(|w| crosses_line(w) || (castle && w.iter().any(|p| geom::contains(pts, *p)))) {
-            return Err("that crosses a wall".to_string());
+            return Err(town::handwall::wall_crossed(world, t0, &l, &segs));
         }
         if castle {
             if l.plazas.iter().any(|p| polys_overlap(pts, &p.pts)) {
