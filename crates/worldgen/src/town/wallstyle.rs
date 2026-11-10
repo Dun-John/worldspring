@@ -495,8 +495,13 @@ pub fn tower_raster(l: &Layout, t: P, r: f64, gate: bool, sq: f64) -> (TowerShap
     let free = |p: P| !houses.iter().any(|h| contains(h, p));
     // (A wall's squares: within half its thickness and 1.5 ft, as `battlemap` raises it.)
     let reach = (0.5 * l.wall_style_at(t).thickness()).max(2.1) + 1.5;
+    // (A bent entrance's gate block beside a gate tower: closed ground.)
+    let blocks: Vec<Vec<P>> = if gate { super::gatehouse::houses(l).iter().filter_map(|h| h.block()).filter(|b| b.iter().any(|q| dist(*q, t) < r + 60.0)).collect() } else { Vec::new() };
     let open = |p: P| {
-        free(p) && !walls.iter().any(|&(a, b)| seg_dist(p, a, b) <= reach) && !others.iter().any(|&(o, ro)| dist(p, o) <= ro + 1.5)
+        free(p)
+            && !walls.iter().any(|&(a, b)| seg_dist(p, a, b) <= reach)
+            && !others.iter().any(|&(o, ro)| dist(p, o) <= ro + 1.5)
+            && !blocks.iter().any(|b| contains(b, p) || (0..b.len()).any(|k| seg_dist(p, b[k], b[(k + 1) % b.len()]) <= 1.5))
     };
     (shape, raster(&poly, inward, sq, &open, &free))
 }
@@ -505,9 +510,14 @@ pub fn tower_raster(l: &Layout, t: P, r: f64, gate: bool, sq: f64) -> (TowerShap
 /// is set (`footprint`), its outline, and the way in to its door (the castle yard for a castle's tower,
 /// else the town's middle, as its interior's guardroom door faces).
 pub fn tower_outline(l: &Layout, t: P, r: f64, gate: bool) -> (TowerShape, P, Vec<P>, P) {
-    let (shape, dir) = if gate { (TowerShape::Round, [1.0, 0.0]) } else { l.tower_form(t) };
     let inside = l.castles.iter().find(|(c, rad)| dist(*c, t) < rad * 1.3).map_or(l.center, |c| c.0);
     let d = sub(inside, t);
     let inward = if len(d) < 1e-6 { [0.0, 1.0] } else { mul(d, 1.0 / len(d)) };
+    // (A gate tower is its gatehouse's: `gatehouse::House::tower`.)
+    if gate && let Some((h, second)) = super::gatehouse::of_tower(&super::gatehouse::houses(l), t) {
+        let (shape, dir, _, poly) = h.tower(second);
+        return (shape, dir, poly, inward);
+    }
+    let (shape, dir) = if gate { (TowerShape::Round, [1.0, 0.0]) } else { l.tower_form(t) };
     (shape, dir, footprint(shape, t, r, dir), inward)
 }

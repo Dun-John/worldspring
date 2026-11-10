@@ -496,8 +496,9 @@ pub enum ShapeKind {
     /// `[style, 0]` (`town::wallstyle::WallStyle::code`).
     Wall = 0,
     /// Wall or gate tower: its centre, then `[flags, angle]` (`WALL_GATE`, `WALL_RUINED`, `WALL_SQUARE`;
-    /// the way a square's or an octagon's sides run, the way a D faces out, radians), then `[style, 0]`
-    /// (`WallStyle::code` with its shape: round, square, D, octagon).
+    /// the way a square's or an octagon's sides run, the way a D faces out, radians), then `[style, form]`
+    /// (`WallStyle::code` with its shape: round, square, D, octagon; a gate tower's gatehouse form as
+    /// on its `Gate`, 0 for the rest). A square or arched gate tower's half is drawn by its `Gate`.
     Tower = 1,
     /// Bridge or pier deck outline, its first edge along the span; size is the style (0 pier,
     /// 1 timber bridge, 2 stone bridge, 3 old stone bridge).
@@ -520,8 +521,12 @@ pub enum ShapeKind {
     /// the depth of a tread); size is the width it covers (squares). Every chunk it crosses has
     /// it: the ground draws the treads square across it.
     Stairs = 8,
-    /// A gatehouse over the passage between two gate towers: their centres, then `[style, 0]`
-    /// (`WallStyle::code`); size is 0 standing, 1 a ruin's.
+    /// A gatehouse over the passage between two gate towers: their centres, then `[style, form]`
+    /// (`WallStyle::code`; `gatehouse::House::code`, 1 + `Gatehouse`, 0 none), then `[side, exit]` (1
+    /// where the town lies on the side of +y when the first tower's way to the second is +x, i.e.
+    /// cross(second - first, inward) > 0, else -1; a bent
+    /// entrance's way out: 1 past the second tower, -1 past the first, 0 none); size is 0 standing, 1
+    /// a ruin's.
     Gate = 9,
     /// A palace forecourt's low garden wall: a straight stretch of it; size is its thickness.
     GardenWall = 10,
@@ -600,7 +605,7 @@ fn part_code(kind: crate::town::PartKind) -> u8 {
 /// each other along one stretch) and the walls running on from them opposite ways (a castle's
 /// outer and inner gates are not one gatehouse). Paired in order, each with its nearest; a pure function of the
 /// layout, so every chunk finds the same.
-fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
+pub(crate) fn gateways(l: &crate::town::Layout, towers: &[([f64; 2], f64, bool)]) -> Vec<([f64; 2], [f64; 2])> {
     let gates: Vec<[f64; 2]> = towers.iter().filter(|t| t.2).map(|t| t.0).collect();
     // Which way the wall runs from each gate tower, where a stretch of it ends there.
     let away: Vec<Option<[f64; 2]>> = gates
@@ -1846,6 +1851,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 overlaps((t[0] - reach, t[1] - reach, t[0] + reach, t[1] + reach))
             })
             .map(|&(t, r, gate)| crate::town::wallstyle::tower_raster(&l, t, r, gate, SQUARE_FT).1)
+            .chain(crate::town::gatehouse::rasters(&crate::town::gatehouse::houses(&l), SQUARE_FT))
             .collect();
         for ring in [true, false] {
             for ras in &rasters {
@@ -1906,18 +1912,31 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         }
+        let houses = crate::town::gatehouse::houses(&l);
         for &(t, r, gate) in &towers {
             if owns(t) {
                 // (A square tower: its flag, and the way its sides run as an angle; a D's the way it faces,
                 // an octagon's the way its sides run. Then its style: `WallStyle::code` with its shape.)
                 use crate::town::wallstyle::TowerShape;
-                let (shape, u) = if gate { (TowerShape::Round, [1.0, 0.0]) } else { l.tower_form(t) };
+                // (A gate tower: its gatehouse's form after the style, `gatehouse::House::code`.)
+                let house = if gate { crate::town::gatehouse::of_tower(&houses, t) } else { None };
+                let (shape, u, r) = match house {
+                    Some((h, second)) => {
+                        let (s, u, r, _) = h.tower(second);
+                        (s, u, r)
+                    }
+                    None if gate => (TowerShape::Round, [1.0, 0.0], r),
+                    None => {
+                        let (s, u) = l.tower_form(t);
+                        (s, u, r)
+                    }
+                };
                 let flags = match shape {
-                    TowerShape::Square => [(WALL_SQUARE | ruin_bit) as f32, libm::atan2(u[1], u[0]) as f32],
+                    TowerShape::Square => [(WALL_SQUARE | if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, libm::atan2(u[1], u[0]) as f32],
                     TowerShape::Round => [(if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, 0.0],
                     _ => [ruin_bit as f32, libm::atan2(u[1], u[0]) as f32],
                 };
-                let style = [l.wall_style_at(t).code(shape) as f32, 0.0];
+                let style = [l.wall_style_at(t).code(shape) as f32, house.map_or(0.0, |h| h.0.code())];
                 shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(&t), flags, style] });
             }
         }
@@ -1947,7 +1966,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             gates.push((g, h));
             if owns([0.5 * (g[0] + h[0]), 0.5 * (g[1] + h[1])]) {
                 let style = l.wall_style_at(g).code(crate::town::wallstyle::TowerShape::Round) as f32;
-                shapes.push(VectorShape { kind: ShapeKind::Gate, size: ruined as u8 as f32, pts: vec![local(&g), local(&h), [style, 0.0]] });
+                // (Its form, the side the town is on and a bent entrance's way out: `gatehouse::House`.)
+                let (form, side, exit) = crate::town::gatehouse::of_tower(&houses, g)
+                    .map_or((0.0, 0.0, 0.0), |(o, _)| (o.code(), if crate::town::geom::cross(crate::town::geom::sub(h, g), o.n) >= 0.0 { 1.0 } else { -1.0 }, o.exit as f32));
+                shapes.push(VectorShape { kind: ShapeKind::Gate, size: ruined as u8 as f32, pts: vec![local(&g), local(&h), [style, form], [side, exit]] });
             }
         }
         // Deck style: 0 pier, 1 a village or town's timber bridge, 2 a city's stone bridge, 3 an

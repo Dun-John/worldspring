@@ -47,7 +47,9 @@ export interface Roof {
 /**
  * A structure drawn as a vector (`battlemap::VectorShape`): points flattened and scaled by `PX`. A wall,
  * a tower and a gate carry their style after their flags (`town::wallstyle::WallStyle::code`: group,
- * tower shape, material, merlons, stone, outline, gatehouse; `render/walls.ts` `styleOf`).
+ * tower shape, material, merlons, stone, outline, gatehouse; `render/walls.ts` `styleOf`); a gate and
+ * its towers the gatehouse's form as built beside it, a gate then its side and a bent way's exit
+ * (`town::gatehouse::House`; `render/walls.ts` `gateForm`).
  */
 export interface Shape {
   kind: number;

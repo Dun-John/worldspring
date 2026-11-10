@@ -4895,6 +4895,9 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
         "town walls on the water (5-ft steps)",
         "gate passages blocked on the battlemap",
         "bastions over a road, a building or the water",
+        "gate passages not walkable end to end on the battlemap",
+        "gatehouses over a road, a building or the water",
+        "castle gates not of their group's form",
         "places listed",
     ]);
     const OUTLINES: [&str; 3] = ["straight", "star", "round"];
@@ -4906,6 +4909,7 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
     let ns = t0.settlements.len();
     let mut listed = [0usize; 5];
     let mut to_check: Vec<(usize, Rc<Layout>)> = Vec::new();
+    let mut to_walk: Vec<(usize, Rc<Layout>)> = Vec::new();
     let mut lines: Vec<String> = Vec::new();
     let mut order: Vec<usize> = (0..town::layout_count(t0)).collect();
     // (The biggest places first: a group's cities before its towns.)
@@ -4936,6 +4940,34 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
             }
         }
         wall_rules(&l, li, lattice, t0, r);
+        gate_rules(&l, li, lattice, t0, r);
+        // How round the curtains run (castles' apart): the turning at each corner; runs of gentle steps
+        // (12 degrees or less, one way) turning 15 degrees or more are rounded corners, each with its radius
+        // (its steps' shorter sides over their turning, weighted by turning).
+        for w in l.walls.iter().filter(|w| w.len() >= 3 && !l.castles.iter().any(|(c, rad)| dist(*c, w[w.len() / 2]) <= rad + 10.0)) {
+            let mut run = (0.0f64, 0.0f64, 0.0f64);
+            let mut flush = |run: &mut (f64, f64, f64), r: &mut Report| {
+                if run.1.abs() >= 15.0 {
+                    r.tally(&format!("{}: rounded corners", GROUPS[g]), 1);
+                    r.tally(&format!("{}: rounded corners' radius ft (sum)", GROUPS[g]), (run.2 / run.1.abs()).round() as usize);
+                    r.tally(&format!("{}: curtain turning deg in rounded corners", GROUPS[g]), run.1.abs().round() as usize);
+                }
+                *run = (0.0, 0.0, 0.0);
+            };
+            for k in 1..w.len() - 1 {
+                let (u, v) = (sub(w[k], w[k - 1]), sub(w[k + 1], w[k]));
+                let turn = libm::atan2(cross(u, v), dot(u, v)).to_degrees();
+                r.tally(&format!("{}: curtain turning deg", GROUPS[g]), turn.abs().round() as usize);
+                if turn.abs() > 12.0 || turn.abs() < 0.5 || run.0 * turn < 0.0 {
+                    flush(&mut run, r);
+                }
+                if turn.abs() <= 12.0 && turn.abs() >= 0.5 {
+                    let rad = len(u).min(len(v)) / turn.abs().to_radians();
+                    run = (turn.signum(), run.1 + turn, run.2 + rad * turn.abs());
+                }
+            }
+            flush(&mut run, r);
+        }
         let st = l.wall_style;
         r.tally(&format!("{}: outline {}", GROUPS[g], OUTLINES[st.outline as usize]), 1);
         r.tally(&format!("{}: material {}", GROUPS[g], MATERIALS[st.material as usize]), 1);
@@ -4976,13 +5008,20 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
         if all || listed[g] == 1 {
             to_check.push((li, l.clone()));
         }
+        to_walk.push((li, l.clone()));
+    }
+    // Every gate of the places listed walked through on the battlemap.
+    for (li, l) in to_walk {
+        gate_walks(ctx, &l, li, r);
     }
     // The battlemap round each tower of the places checked.
     for (li, l) in to_check {
         // (Each town gate's way through: open squares from 15 ft out to 15 ft in.)
+        let houses = town::gatehouse::houses(&l);
         for g in l.gates.iter().copied() {
             let pair: Vec<P> = l.gate_towers.iter().copied().filter(|t| dist(*t, g) < 32.0).collect();
-            if pair.len() < 2 {
+            // (A bent entrance's way turns: walked through below.)
+            if pair.len() < 2 || town::gatehouse::of_tower(&houses, pair[0]).is_some_and(|h| h.0.form == wallstyle::Gatehouse::Bent) {
                 continue;
             }
             let u = sub(pair[1], pair[0]);
@@ -5166,6 +5205,93 @@ fn wall_rules(l: &Layout, li: usize, lattice: f64, t0: &T0, r: &mut Report) {
         if on_b.is_some() || on_r.is_some() || on_w {
             let what = on_b.map(|b| format!("b:{li}:{} {:?}", b.id, b.ward)).or(on_r.map(|s| format!("road {}", s.1))).unwrap_or("water".into());
             r.add("bastions over a road, a building or the water", 1.0, format!("L{li} at {}: {what}", at(q[2])));
+        }
+    }
+}
+
+const FORMS: [&str; 5] = ["square tower", "twin drums", "arched", "bent", "log"];
+
+/// The gatehouses' rules (item 104) on one layout: their forms counted, none over a road (but its own
+/// way through), a building or the water, a castle's gate of its group's form.
+fn gate_rules(l: &Layout, li: usize, lattice: f64, t0: &T0, r: &mut Report) {
+    use worldgen::town::gatehouse;
+    const GROUPS: [&str; 5] = ["North", "West", "South", "Dry", "Steppe"];
+    let g = GROUPS[(l.wall_style.group % 5) as usize];
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    let segx = |p: P, q: P, a: P, b: P| {
+        let c = |o: P, x: P, y: P| cross(sub(x, o), sub(y, o));
+        c(p, q, a) * c(p, q, b) < 0.0 && c(a, b, p) * c(a, b, q) < 0.0
+    };
+    let cuts = |poly: &[P], a: P, b: P| contains(poly, a) || contains(poly, b) || (0..poly.len()).any(|k| segx(poly[k], poly[(k + 1) % poly.len()], a, b));
+    for h in gatehouse::houses(l) {
+        r.tally(&format!("{g}: {}gatehouses {}", if h.castle { "castle " } else { "" }, FORMS[h.form as usize]), 1);
+        if h.castle && h.form != l.wall_style.castle().gatehouse {
+            r.add("castle gates not of their group's form", 1.0, format!("L{li} {} at {}", FORMS[h.form as usize], at(h.a)));
+        }
+        let solids = h.solids();
+        let way = h.passage();
+        let near = |p: &P| dist(*p, h.a) < 140.0;
+        let on_b = l.buildings.iter().filter(|b| b.poly.iter().any(near)).find(|b| solids.iter().any(|q| b.poly.iter().any(|p| contains(q, *p)) || q.iter().any(|p| contains(&b.poly, *p))));
+        // (A road's line more than 3 ft into a tower or the block: not the gate's own way, through it.)
+        let into = |p: P| solids.iter().any(|z| contains(z, p) && (0..z.len()).all(|k| seg_dist(p, z[k], z[(k + 1) % z.len()]) > 3.0));
+        let on_r = l.streets.iter().map(|s| (s, 9)).chain(l.roads.iter().filter(|r| r.1 != 3).map(|r| (&r.0, r.1))).find(|(pts, _)| {
+            !pts.windows(2).any(|q| way.iter().any(|w| cuts(w, q[0], q[1]))) && pts.windows(2).any(|q| {
+                let n = (dist(q[0], q[1]) / 2.5).ceil().max(1.0) as usize;
+                (near(&q[0]) || near(&q[1])) && solids.iter().any(|z| cuts(z, q[0], q[1])) && (0..=n).any(|j| into(lerp(q[0], q[1], j as f64 / n as f64)))
+            })
+        });
+        let on_w = solids.iter().any(|q| wet(centroid(q)) || q.iter().any(|p| wet(*p)));
+        if on_b.is_some() || on_r.is_some() || on_w {
+            let hit = on_r.and_then(|(pts, _)| pts.windows(2).flat_map(|q| (0..=8).map(move |j| lerp(q[0], q[1], j as f64 / 8.0))).find(|p| into(*p)));
+            let fr = hit.map(|p| { let u = mul(sub(h.b, h.a), 1.0 / h.len()); let d = sub(p, h.a); format!(" s {:.1} c {:.1} len {:.1}", dot(d, u), dot(d, h.n), h.len()) }).unwrap_or_default();
+            let what = on_b.map(|b| format!("b:{li}:{} {:?}", b.id, b.ward)).or(on_r.map(|s| format!("road {}{fr}", s.1))).unwrap_or("water".into());
+            r.add("gatehouses over a road, a building or the water", 1.0, format!("L{li} {} at {}: {what}", FORMS[h.form as usize], at(h.a)));
+        }
+    }
+}
+
+/// Each gate of `l` walked through on the battlemap: square to square (not corner to corner) from 8 ft
+/// out past its outer mouth to 8 ft past its inner one, within 40 ft of it.
+fn gate_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
+    for h in town::gatehouse::houses(l) {
+        let (o, i) = h.ends();
+        let m = lerp(h.a, h.b, 0.5);
+        let w = ctx.window([m[0] - 70.0, m[1] - 70.0, m[0] + 70.0, m[1] + 70.0]);
+        let ix = |p: P| {
+            let (i, j) = (((p[0] - w.ox) / SQUARE_FT).floor() as i64, ((p[1] - w.oy) / SQUARE_FT).floor() as i64);
+            (i >= 0 && j >= 0 && (i as usize) < w.nx && (j as usize) < w.ny).then(|| j as usize * w.nx + i as usize)
+        };
+        // (From any open square within 5 ft of each end: the ground past a mouth may be built on.)
+        let open_near = |p: P| (0..w.nx * w.ny).filter(|&k| !w.block[k]).find(|&k| dist(p, [w.ox + ((k % w.nx) as f64 + 0.5) * SQUARE_FT, w.oy + ((k / w.nx) as f64 + 0.5) * SQUARE_FT]) <= 5.0);
+        let (Some(_), Some(_)) = (ix(o), ix(i)) else { continue };
+        let (a, b) = (open_near(o), open_near(i));
+        let why = if a.is_none() || b.is_none() {
+            Some(if a.is_none() { "its way in shut" } else { "its way out shut" })
+        } else {
+            let (a, b) = (a.unwrap(), b.unwrap());
+            let mut seen = vec![false; w.nx * w.ny];
+            let mut q = VecDeque::from([a]);
+            seen[a] = true;
+            while let Some(k) = q.pop_front() {
+                let (x, y) = ((k % w.nx) as i64, (k / w.nx) as i64);
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= w.nx as i64 || ny >= w.ny as i64 {
+                        continue;
+                    }
+                    let n = ny as usize * w.nx + nx as usize;
+                    let p = [w.ox + (nx as f64 + 0.5) * SQUARE_FT, w.oy + (ny as f64 + 0.5) * SQUARE_FT];
+                    if !seen[n] && !w.block[n] && dist(p, m) <= h.len() + 40.0 {
+                        seen[n] = true;
+                        q.push_back(n);
+                    }
+                }
+            }
+            (!seen[b]).then_some("no way through")
+        };
+        r.tally("gates walked through on the battlemap", 1);
+        if let Some(why) = why {
+            r.add("gate passages not walkable end to end on the battlemap", 1.0, format!("L{li} {} at {}: {why}", FORMS[h.form as usize], at(m)));
         }
     }
 }

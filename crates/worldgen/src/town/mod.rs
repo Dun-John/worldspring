@@ -27,6 +27,7 @@ pub mod temple;
 pub mod wards;
 pub mod wallstyle;
 pub mod outline;
+pub mod gatehouse;
 pub mod village;
 // v63 countryside
 pub mod fields;

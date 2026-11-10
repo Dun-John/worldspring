@@ -40,6 +40,13 @@ const D_BACK = 4;
 export const styleOf = (s: Shape, at: number) => flagsOf(s, at);
 /** A tower's shape by its style. */
 export const towerShape = (s: Shape) => (styleOf(s, 4) >> 3) & 3;
+/** A gatehouse's form as built (`town::gatehouse::House::code`), on a gate and its towers after the
+ * style: 0 none, then square tower, twin drums, arched, bent, log. */
+export const GATE_SQUARE = 1;
+export const GATE_ARCHED = 3;
+export const GATE_BENT = 4;
+export const GATE_LOG = 5;
+export const gateForm = (s: Shape) => flagsOf(s, 5);
 /** How much a direction faces the light, -1 .. 1. */
 const lit = (x: number, y: number) => (x * LX + y * LY) / (Math.hypot(x, y) || 1);
 
@@ -523,6 +530,8 @@ export function drawWallTower(g: Graphics, s: Shape) {
   const [x, y, r] = [s.pts[0], s.pts[1], s.size];
   const flags = flagsOf(s, 2);
   const shape = towerShape(s);
+  // (A square or arched gate tower is half its gatehouse: `drawGate` draws it whole.)
+  if (flags & GATE && (gateForm(s) === GATE_SQUARE || gateForm(s) === GATE_ARCHED)) return;
   if (flags & SQUARE || shape === SHAPE_SQUARE) return drawSquareTower(g, s);
   if (shape === SHAPE_D || shape === SHAPE_OCTAGON) return drawShapedTower(g, s, shape);
   const [gate, ruined] = [!!(flags & GATE), !!(flags & RUINED)];
@@ -680,6 +689,33 @@ function drawSquareTower(g: Graphics, s: Shape) {
   blocks(g, fallen, stoneTone(rnd));
 }
 
+/**
+ * A square or arched gate tower, or a bent entrance (plain for now): as `town::gatehouse` lays them in
+ * the gate's frame (`a` along from the first tower to the second, `b` across into the town, a bent
+ * entrance's mirrored to turn toward the second tower), the stone block and its way through paved;
+ * a bent entrance's square towers are its `Tower`s.
+ */
+function drawGateBlock(g: Graphics, s: Shape, form: number) {
+  const [x0, y0, x1, y1] = s.pts;
+  const L = Math.hypot(x1 - x0, y1 - y0) || 1;
+  const [ux, uy] = [(x1 - x0) / L, (y1 - y0) / L];
+  const side = flagsOf(s, 6) < 0 ? -1 : 1;
+  const mirror = form === GATE_BENT && flagsOf(s, 7) < 0;
+  const at = (a: number, b: number): [number, number] => {
+    const [p, q] = [mirror ? L - a * FT : a * FT, b * FT * side];
+    return [x0 + ux * p - uy * q, y0 + uy * p + ux * q];
+  };
+  const quad = (a0: number, a1: number, b0: number, b1: number) => [...at(a0, b0), ...at(a1, b0), ...at(a1, b1), ...at(a0, b1)];
+  const l = L / FT;
+  const [solid, way]: [number[][], number[][]] =
+    form === GATE_BENT
+      ? [[quad(12, l - 12, -12, 30)], [quad(17, 27, -12, 25), quad(17, l - 12, 15, 25)]]
+      : [[quad(-4, l + 4, -16, 16)], [quad(l / 2 - 6, l / 2 + 6, -16, 16)]];
+  for (const q of solid) g.poly(q.map((v) => v + FT)).fill({ color: 0x000000, alpha: 0.28 });
+  for (const q of solid) g.poly(q).fill(STONE[1]).stroke({ width: 2.2, color: INK, join: 'round' });
+  for (const q of way) g.poly(q).fill(0xa39a8a);
+}
+
 /** How far a gatehouse reaches out each side of its curtain's line (ft): where a drawbridge's leaf hangs
  * when play raises it. */
 export const GATE_DEPTH = 11;
@@ -692,6 +728,8 @@ export const GATE_DEPTH = 11;
  * portcullis on some. A ruin's has no doors, walk or portcullis, and one arch broken.
  */
 export function drawGate(g: Graphics, s: Shape) {
+  const form = gateForm(s);
+  if (form === GATE_SQUARE || form === GATE_ARCHED || form === GATE_BENT) return drawGateBlock(g, s, form);
   const [x0, y0, x1, y1] = s.pts;
   const L = Math.hypot(x1 - x0, y1 - y0) || 1;
   const [ux, uy] = [(x1 - x0) / L, (y1 - y0) / L];
@@ -699,7 +737,7 @@ export function drawGate(g: Graphics, s: Shape) {
   const quad = (a0: number, a1: number, b0: number, b1: number) => [...at(a0, b0), ...at(a1, b0), ...at(a1, b1), ...at(a0, b1)];
   const ruined = Math.round(s.size / PX) === 1;
   const rnd = rngAt(x0 + x1, y0 + y1);
-  const R = FT * 15;
+  const R = FT * (form === GATE_LOG ? 12 : 15);
   const D = FT * GATE_DEPTH;
   const ab = FT * 2.5;
   const [p0, p1] = [R, L - R];
