@@ -28,6 +28,8 @@ interface KindStyle {
   /** Cities and up: the symbol always shows (other labels keep off it), the name beside it,
    * right or left, where it fits. */
   keep?: boolean;
+  /** Shown only once renamed by hand (a town's gates). */
+  renamed?: boolean;
 }
 
 type BuildingHit = Extract<Hit, { kind: 'building' }>;
@@ -94,6 +96,14 @@ const STYLES: Record<string, KindStyle> = {
   ashlands: { ...REGION, fill: '#4f4c48' },
   region: { ...REGION, fill: '#4e4038' },
   district: { size: 12, fill: '#6b3f2a', spacing: 3, upper: true, minPx: 160, maxPx: 3200, prio: 25 },
+};
+
+/** A town's squares, parks, cemeteries and gates (`town::places`): as districts, smaller, nearer. */
+const TOWN_PLACE: Record<string, KindStyle> = {
+  square: { size: 11, fill: '#6b3f2a', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 24 },
+  park: { size: 11, fill: '#3f5a2a', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 23 },
+  cemetery: { size: 11, fill: '#4f4a44', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 23 },
+  gate: { size: 11, fill: '#5a4330', spacing: 1, italic: true, minPx: 110, maxPx: 2400, prio: 22, renamed: true },
 };
 
 const FONT = ['Palatino Linotype', 'Book Antiqua', 'Palatino', 'Georgia', 'serif'];
@@ -229,8 +239,10 @@ export class Labels {
     for (const d of list) {
       if (this.items.some((it) => it.f.id === d.id) || d.path.length < 2) continue;
       const mid = d.path[Math.floor(d.path.length / 2)];
-      const f: Feature = { id: d.id, kind: 'district', name: renames[d.id] ?? d.name, x: mid[0], y: mid[1], angle: 0, extent_ft: pathLength(d.path) / 0.7, detail: `${d.kind} district` };
-      this.items.push({ f, orig: d.name, style: STYLES.district, text: null, path: d.path, glyphs: null });
+      const place = TOWN_PLACE[d.kind];
+      const kind = place ? 'town_place' : 'district';
+      const f: Feature = { id: d.id, kind, name: renames[d.id] ?? d.name, x: mid[0], y: mid[1], angle: 0, extent_ft: pathLength(d.path) / 0.7, detail: place ? d.kind : `${d.kind} district` };
+      this.items.push({ f, orig: d.name, style: place ?? STYLES.district, text: null, path: d.path, glyphs: null });
     }
     this.sort();
     this.lastZoom = NaN;
@@ -452,7 +464,7 @@ export class Labels {
     const [sx, sy] = cam.worldToScreen(f.x, f.y);
     const reach = px;
     const near = sx > -reach - margin && sy > -reach - margin && sx < cam.width + reach + margin && sy < cam.height + reach + margin;
-    let show = near && px >= style.minPx && px <= style.maxPx && (!!it.glyphs || mayCreate);
+    let show = near && px >= style.minPx && px <= style.maxPx && (!!it.glyphs || mayCreate) && !(style.renamed && f.name === it.orig);
     let created = false;
     if (show && !it.glyphs) {
       it.glyphs = this.createGlyphs(it);
@@ -618,11 +630,11 @@ export class Labels {
 
   /** Drop a town's district labels and business pins (it was laid out anew: asked for again). */
   forgetTown(layout: number) {
-    const mine = (id: string) => id.startsWith(`d:${layout}:`) || id.startsWith(`b:${layout}:`);
+    const mine = (id: string) => [`d:${layout}:`, `b:${layout}:`, `sq:${layout}:`, `gt:${layout}:`].some((p) => id.startsWith(p));
     let n = 0;
     for (let k = this.items.length - 1; k >= 0; k--) {
       const it = this.items[k];
-      if (!mine(it.f.id) || (it.f.kind !== 'district' && !this.placeHits.has(it.f.id))) continue;
+      if (!mine(it.f.id) || (it.f.kind !== 'district' && it.f.kind !== 'town_place' && !this.placeHits.has(it.f.id))) continue;
       this.unletter(it);
       this.items.splice(k, 1);
       n++;

@@ -278,7 +278,7 @@ pub fn of(t0: &T0, l: &Layout) -> Vec<Place> {
         };
         let o = obb(&p.pts);
         let sort = if p.kind.is_market() { "market" } else { p.kind.name() };
-        let label = if rank < 2 { clear_line(l, &p.pts) } else { Vec::new() };
+        let label = if rank < 2 { clear_line(l, &p.pts, rank == 0) } else { Vec::new() };
         let patch = if let Spot::Patch(i) = p.spot { Some(i) } else { None };
         let id = if rank < 2 { format!("sq:{li}:p{n}") } else { format!("sq:{li}:{n}") };
         out.push(Place { id, kind: "square", sort, main: rank == 0, name, at, size_ft: o.long, patch, district: district(at), label });
@@ -348,7 +348,7 @@ pub fn of(t0: &T0, l: &Layout) -> Vec<Place> {
             Spot::Garden(b) => format!("sq:{li}:g{b}"),
             _ => format!("sq:{li}:r{n}"),
         };
-        out.push(Place { id, kind: "park", sort: p.kind.name(), main: false, name, at, size_ft: obb(&p.pts).long, patch, district: district(at), label: clear_line(l, &p.pts) });
+        out.push(Place { id, kind: "park", sort: p.kind.name(), main: false, name, at, size_ft: obb(&p.pts).long, patch, district: district(at), label: clear_line(l, &p.pts, false) });
     }
     // Gates in the town wall, by their corner.
     if l.gate_spots.len() == l.gates.len() {
@@ -373,7 +373,7 @@ pub fn of(t0: &T0, l: &Layout) -> Vec<Place> {
             let name = take(c, &mut nm, "Gate");
             let inward = mul(sub(l.center, g), 1.0 / dist(l.center, g).max(1e-9));
             let box_ = super::rect(add(g, mul(inward, 50.0)), [-inward[1], inward[0]], 140.0, 36.0);
-            out.push(Place { id: format!("gt:{li}:{v}"), kind: "gate", sort: "gate", main: false, name, at: g, size_ft: 30.0, patch: None, district: district(add(g, mul(inward, 30.0))), label: clear_line(l, &box_) });
+            out.push(Place { id: format!("gt:{li}:{v}"), kind: "gate", sort: "gate", main: false, name, at: g, size_ft: 30.0, patch: None, district: district(add(g, mul(inward, 30.0))), label: clear_line(l, &box_, false) });
         }
     }
     out
@@ -397,16 +397,13 @@ fn clear_at(l: &Layout, near: &[usize], walls: &[(P, P)], p: P) -> bool {
 
 /// A straight label baseline inside `poly` along its long axis (left to right), the longest run
 /// clear of buildings, walls and towers on a few lines across it; empty when none is long enough.
-fn clear_line(l: &Layout, poly: &[P]) -> Vec<P> {
+/// `main`: the town's main square, whose middle the settlement's own label takes: off its middle,
+/// below it first.
+fn clear_line(l: &Layout, poly: &[P], main: bool) -> Vec<P> {
     if poly.len() < 3 {
         return Vec::new();
     }
     let o = obb(poly);
-    let mut u = o.axis;
-    if u[0] < 0.0 || (u[0] == 0.0 && u[1] < 0.0) {
-        u = mul(u, -1.0);
-    }
-    let n = [-u[1], u[0]];
     let c = centroid(poly);
     let (x0, y0, x1, y1) = poly.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |a, p| (a.0.min(p[0]), a.1.min(p[1]), a.2.max(p[0]), a.3.max(p[1])));
     let pad = 30.0;
@@ -414,45 +411,50 @@ fn clear_line(l: &Layout, poly: &[P]) -> Vec<P> {
     let near: Vec<usize> = (0..l.buildings.len()).filter(|&k| inb(&l.buildings[k].poly)).collect();
     let walls: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).filter(|s| inb(&[s.0, s.1]) || seg_dist(c, s.0, s.1) < o.long).collect();
     let edge_ok = |p: P| contains(poly, p) && (0..poly.len()).all(|e| seg_dist(p, poly[e], poly[(e + 1) % poly.len()]) >= CLEAR_FT);
-    let (t0, t1) = extent(poly, u);
-    let tc = dot(c, u);
-    let mut best: Option<(f64, P, P)> = None;
-    for f in [0.0, 0.15, -0.15, 0.3, -0.3] {
-        let base = add(c, mul(n, f * o.short));
-        let step = 3.0;
-        let (mut run0, mut run_len): (Option<f64>, f64) = (None, 0.0);
-        let mut s = t0 - tc;
-        while s <= t1 - tc + step {
-            let p = add(base, mul(u, s));
-            let ok = s <= t1 - tc && edge_ok(p) && clear_at(l, &near, &walls, p);
-            match (ok, run0) {
-                (true, None) => run0 = Some(s),
-                (false, Some(a)) => {
-                    let len = s - step - a;
-                    if len > run_len {
-                        run_len = len;
-                        let (pa, pb) = (add(base, mul(u, a)), add(base, mul(u, s - step)));
+    // (Along the long axis or across it, whichever reads better: long, and level rather than steep.)
+    let mut pick: Option<(f64, Vec<P>)> = None;
+    for ax in [o.axis, [-o.axis[1], o.axis[0]]] {
+        let u = if ax[0] < 0.0 || (ax[0] == 0.0 && ax[1] < 0.0) { mul(ax, -1.0) } else { ax };
+        let n = [-u[1], u[0]];
+        let (t0, t1) = extent(poly, u);
+        let (n0, n1) = extent(poly, n);
+        let tc = dot(c, u);
+        let mut best: Option<(f64, P, P)> = None;
+        let offs: &[f64] = if main { &[0.3, -0.3, 0.38, -0.38] } else { &[0.0, 0.15, -0.15, 0.3, -0.3] };
+        let below = if n[1] >= 0.0 { 1.0 } else { -1.0 };
+        for &f in offs {
+            let base = add(c, mul(n, below * f * (n1 - n0)));
+            let step = 3.0;
+            let mut run0: Option<f64> = None;
+            let mut s = t0 - tc;
+            while s <= t1 - tc + step {
+                let p = add(base, mul(u, s));
+                let ok = s <= t1 - tc && edge_ok(p) && clear_at(l, &near, &walls, p);
+                match (ok, run0) {
+                    (true, None) => run0 = Some(s),
+                    (false, Some(a)) => {
+                        let len = s - step - a;
                         if best.as_ref().is_none_or(|b| len > b.0 + 1e-9) {
-                            best = Some((len, pa, pb));
+                            best = Some((len, add(base, mul(u, a)), add(base, mul(u, s - step))));
                         }
+                        run0 = None;
                     }
-                    run0 = None;
+                    _ => {}
                 }
-                _ => {}
+                s += step;
             }
-            s += step;
         }
-    }
-    match best {
-        Some((len, a, b)) if len >= LABEL_MIN_FT => {
-            // (No longer than nine tenths of the place: the name sits in it, not along its edge.)
-            let keep = len.min(0.9 * o.long);
+        let Some((len, a, b)) = best.filter(|b| b.0 >= LABEL_MIN_FT) else { continue };
+        // (No longer than nine tenths of the place: the name sits in it, not along its edge.)
+        let keep = len.min(0.9 * (t1 - t0));
+        let score = keep * (1.0 - 0.6 * u[1].abs());
+        if pick.as_ref().is_none_or(|p| score > p.0 + 1e-9) {
             let m = lerp(a, b, 0.5);
             let h = mul(u, 0.5 * keep);
-            vec![sub(m, h), m, add(m, h)]
+            pick = Some((score, vec![sub(m, h), m, add(m, h)]));
         }
-        _ => Vec::new(),
     }
+    pick.map(|p| p.1).unwrap_or_default()
 }
 
 /// Whether a label baseline crosses a building, wall or tower of the layout (towncheck).
