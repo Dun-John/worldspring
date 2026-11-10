@@ -26,6 +26,7 @@
 //!     monuments; all of a park's in the tile holding its middle; a ruin's plan as 28 its floor,
 //!     29 a standing wall, 30 rubble (`battlemap::ruin_plan`) instead of kind 4), 32 a town wall's
 //!     bastion (`town::Layout::bastions`: flank, face, point, face, flank, the curtain's corner),
+//!     33 a cemetery's kurgan (R5 towns: a circle of its diameter, 12 points, `town::cemetery`),
 //!     verts f32[n_verts * 2] (tile units).
 //!     A polygon belongs to
 //!     the tile containing its centroid.
@@ -350,6 +351,10 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                     for &(at, _, _, _, scale) in lay.props.iter().filter(|p| p.2 == crate::battlemap::Kind::Yew) {
                         let r = crate::battlemap::info(crate::battlemap::Kind::Yew as u16).radius as f64 * crate::battlemap::SQUARE_FT * scale as f64;
                         push(&crate::town::geom::circle(at, 0.85 * r, 8), 14);
+                    }
+                    // R5 towns: its kurgans, round mounds the plan draws (kind 33).
+                    for &(at, _, _, _, scale) in lay.props.iter().filter(|p| p.2 == crate::battlemap::Kind::Kurgan) {
+                        push(&crate::town::geom::circle(at, crate::town::cemetery::KURGAN_R * scale as f64, 12), 33);
                     }
                     whole.set(None);
                     continue;
