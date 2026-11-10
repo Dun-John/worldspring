@@ -105,7 +105,7 @@ fn role(b: &Building) -> Role {
     let Some(f) = b.func else { return Role::Home };
     let f = &CATALOG[f as usize];
     match f.key {
-        "temple" | "shrine" | "monastery" | "mausoleum" | "catacombs" => Role::Sacred,
+        "temple" | "shrine" | "monastery" | "mausoleum" | "catacombs" | "tomb" => Role::Sacred,
         "library" | "arcane_academy" | "observatory" | "bank" | "auction_house" | "merchant_guild" | "craft_guild" | "mages_guild" | "theater" | "bards_college" | "arena" | "bathhouse" => Role::Civic,
         "blacksmith" | "armorer" | "weaponsmith" | "glassblower" | "potter" | "brewery" | "winery" | "distillery" | "leatherworker" | "mill" | "windmill" | "stables" | "warehouse" | "shipwright" | "carpenter" | "mason" | "cooper" | "cartwright" | "weaver" => Role::Working,
         _ if f.category == "civic & military" => Role::Civic,
@@ -161,7 +161,8 @@ pub fn look(l: &Layout, b: &Building) -> Look {
     // (A village's manor is a big house, not a grand one: `town::village`.)
     let grand = matches!(role, Role::Civic | Role::Sacred) || (rich == 2 && area > 1600.0 && l.tier != crate::t0::settle::Tier::Village);
     let key = b.func.map(|f| CATALOG[f as usize].key).unwrap_or("");
-    let temple = matches!(key, "temple" | "monastery" | "mausoleum");
+    // (R5 towns: a cemetery's tombs in the dry lands domed, `cemetery`.)
+    let temple = matches!(key, "temple" | "monastery" | "mausoleum") || (key == "tomb" && culture == 3);
     let (u0, u1, u2) = (h(1), h(2), h(3));
     let (material, shape) = match culture {
         // North: steep shake and turf, dark slate on the rich; stave-like shingle on the sacred.

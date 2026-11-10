@@ -36,6 +36,8 @@ pub mod village;
 pub mod fields;
 // v63 countryside: hedgerows, orchards, copses, windmills, water wheels.
 pub mod rural;
+// R5 towns
+pub mod cemetery;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BinaryHeap};
@@ -386,6 +388,8 @@ pub enum ParkKind {
     Formal,
     /// A common: winding gravel paths to a hub, a pond on the low ground, clumps of trees.
     Common,
+    /// R5 towns: a cemetery (`cemetery`): a low boundary, walks, rows of graves by the culture group.
+    Cemetery,
 }
 
 impl ParkKind {
@@ -394,11 +398,12 @@ impl ParkKind {
         match self {
             ParkKind::Formal => "formal",
             ParkKind::Common => "common",
+            ParkKind::Cemetery => "cemetery",
         }
     }
 
     pub fn parse(name: &str) -> Option<ParkKind> {
-        [ParkKind::Formal, ParkKind::Common].into_iter().find(|k| k.name() == name)
+        [ParkKind::Formal, ParkKind::Common, ParkKind::Cemetery].into_iter().find(|k| k.name() == name)
     }
 }
 
@@ -413,6 +418,8 @@ pub struct Park {
     pub fronts: Vec<bool>,
     pub ground: ParkGround,
     pub key: u64,
+    /// R5 towns: a cemetery's look (its culture group, wealth) and patch (`cemetery`).
+    pub cemetery: Option<cemetery::Style>,
 }
 
 /// The points of a 20-ft grid about the town's centre inside a polygon (local ft).
@@ -1878,6 +1885,8 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
             }
         }
     }
+    // R5 towns: the cemeteries' tombs, after every other building (`cemetery::raise`).
+    cemetery::raise(&site, &mut l, edit.map(|_| generated_layout(world, t0, index)).as_deref());
     // Sewers and catacombs under cities.
     if s.tier >= Tier::City {
         l.entrances = crate::under::city_entrances(&l, t0, s.seed);
@@ -3585,6 +3594,9 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let far_roads: Vec<(Vec<P>, u8, f64)> = l.roads.iter().filter(|x| x.1 < 3).cloned().collect();
     // Farmland plots (`farm`): those of the planned farm patches, then those of the open ground past them.
     let mut plots: Vec<(Vec<P>, u8)> = Vec::new();
+    // R5 towns: the cemeteries the town wants, and the common that is one (`cemetery`).
+    let (cem_want, cem_inner) = cemetery::inner_pick(s, plan, ward, ch);
+    let mut cem_laid = 0;
     for i in 0..total {
         let Some(w) = ward[i] else {
             // Open ground past the farmland: fields where the belt frays out over it.
@@ -3711,6 +3723,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 let level = hi - lo <= 6.0;
                 let formal = level && (plan.palace == Some(i) || (!plan.steep[i] && s.tier >= Tier::City && (by(Ward::Castle) || (by(Ward::Noble) && t < 0.6) || (rich && t < 0.35))));
                 let kind = ch.park.get(&i).copied().unwrap_or(if formal { ParkKind::Formal } else { ParkKind::Common });
+                // (R5 towns: the common picked for a cemetery, `cemetery::inner_pick`.)
+                let kind = if kind == ParkKind::Common && !ch.park.contains_key(&i) && cem_inner == Some(i) { ParkKind::Cemetery } else { kind };
                 let lines: Vec<(P, f64)> = street_lines(i, &d)
                     .into_iter()
                     .filter(|&(n, off)| {
@@ -3723,7 +3737,12 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
                 let nb = block.len();
                 let fronts = (0..nb).map(|e| lines.iter().any(|&(n, off)| (dot(lerp(block[e], block[(e + 1) % nb], 0.5), n) - off).abs() < 1.0)).collect();
                 let key = hash3(plan.pseed, i as i64, ch.reroll.get(&i).copied().unwrap_or(0) as i64, 0x9a4c);
-                l.parks.push(park(site, &block, kind, fronts, key));
+                let mut pk = park(site, &block, kind, fronts, key);
+                if kind == ParkKind::Cemetery {
+                    pk.cemetery = Some(cemetery::Style::of(s, i, false));
+                    cem_laid += (!ch.park.contains_key(&i)) as usize;
+                }
+                l.parks.push(pk);
             }
             // The gate faces the centre (the plaza, if the citadel backs onto it).
             Ward::Castle => {
@@ -3915,6 +3934,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
         len(c) / (b * fields::reach(site, plan.pseed, c, &far_roads, b))
     });
     l.fields.extend(picked);
+    // R5 towns: the rest of the town's cemeteries beside its roads out (`cemetery::by_roads`).
+    cemetery::by_roads(site, s, plan, l, cem_want.saturating_sub(cem_laid));
     // The squares the chords enclose; a green's lanes stop at its edge (a lawn, not paving), where
     // a path runs before the houses fronting it (laid once the lanes are cut).
     let (mut greens, mut green_paths): (Vec<Vec<P>>, Vec<(Vec<P>, f64)>) = (Vec::new(), Vec::new());
@@ -4788,7 +4809,7 @@ fn park(site: &Site, block: &[P], kind: ParkKind, fronts: Vec<bool>, key: u64) -
         wet: pts.iter().map(|&p| site.wet(p) || site.near_river(p, 80.0)).collect(),
         water: pts.iter().map(|&p| site.wet(p)).collect(),
     };
-    Park { pts: block.to_vec(), kind, fronts, ground, key }
+    Park { pts: block.to_vec(), kind, fronts, ground, key, cemetery: None }
 }
 
 fn split_field(poly: &[P], max_area: f64, rng: &mut Pcg32, out: &mut Vec<Vec<P>>, depth: u32) {

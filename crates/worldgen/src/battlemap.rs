@@ -223,6 +223,13 @@ pub enum Kind {
     WattleFence = 76,
     Beehive = 77,
     Anvil = 78,
+    // R5 towns: a cemetery's (`town::cemetery`).
+    Cairn = 100,
+    StandingStone = 101,
+    Yew = 102,
+    Lychgate = 103,
+    Kurgan = 104,
+    TombSlab = 105,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -349,9 +356,11 @@ const KINDS: [Kind; 63] = [
 ];
 
 /// Kinds past `CATALOG`, with explicit ids (each lane's range, `docs/lane-common.md`).
-static MORE: [&[(Kind, KindInfo)]; 1] = [
+static MORE: [&[(Kind, KindInfo)]; 2] = [
     // v63 castles
     &kitchen::KINDS,
+    // R5 towns
+    &crate::town::cemetery::KINDS,
 ];
 
 fn more() -> impl Iterator<Item = &'static (Kind, KindInfo)> {
@@ -1434,6 +1443,29 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
             let pb = land_biome(t0, crate::town::geom::centroid(&pk.pts));
             let lay = park_layout(pk, pb, l.tier >= crate::t0::settle::Tier::City, seed);
+            // R5 towns: a cemetery's ground is a churchyard's (its rows its own, nothing added), its
+            // walks gravel, what it sets out on it (`town::cemetery`).
+            if pk.kind == crate::town::ParkKind::Cemetery {
+                stamp(&pk.pts, URBAN_GRAVEYARD, &mut urb_h);
+                churchyards.push(pk.pts.clone());
+                for (a, e, half) in lay.paths.iter().flat_map(|(pts, w)| pts.windows(2).map(move |q| (q[0], q[1], 0.5 * w + 0.6))) {
+                    let (i0, j0, i1, j1) = range((a[0].min(e[0]) - half, a[1].min(e[1]) - half, a[0].max(e[0]) + half, a[1].max(e[1]) + half));
+                    if i1 < 0.0 || j1 < 0.0 {
+                        continue;
+                    }
+                    for j in j0..=j1 as usize {
+                        for i in i0..=i1 as usize {
+                            let h = j * HS + i;
+                            if urb_h[h] == URBAN_GRAVEYARD && crate::town::geom::contains(&pk.pts, center(i, j)) && crate::town::geom::seg_dist(center(i, j), a, e) < half {
+                                urb_h[h] = URBAN_PATH;
+                            }
+                        }
+                    }
+                }
+                park_keep.extend(lay.keep.iter().copied());
+                park_props.extend(lay.props.iter().copied());
+                continue;
+            }
             stamp(&pk.pts, URBAN_PARK, &mut urb_h);
             park_biomes.push(pb);
             let (i0, j0, i1, j1) = range(b);
@@ -2912,8 +2944,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         }
         let k = y as usize * SQ + x as usize;
         let wet_ok = matches!(kind, Kind::Reeds | Kind::Footbridge);
-        let gravel_ok = matches!(kind, Kind::Fountain | Kind::GardenStatue | Kind::Footbridge);
-        if chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || (!wet_ok && chunk.water_level[k] > chunk.height[k]) || !(chunk.urban[k] == URBAN_PARK || (gravel_ok && chunk.urban[k] == URBAN_PATH)) {
+        let gravel_ok = matches!(kind, Kind::Fountain | Kind::GardenStatue | Kind::Footbridge | Kind::Lychgate);
+        // (R5 towns: a cemetery's on its graveyard ground.)
+        let lawn = chunk.urban[k] == URBAN_PARK || chunk.urban[k] == URBAN_GRAVEYARD;
+        if chunk.road_halo[(k / SQ + 1) * HS + k % SQ + 1] != 0 || (!wet_ok && chunk.water_level[k] > chunk.height[k]) || !(lawn || (gravel_ok && chunk.urban[k] == URBAN_PATH)) {
             continue;
         }
         let o = Object { kind, variant, x: x as f32, y: y as f32, rot, scale, sprite: 0, turned: false };

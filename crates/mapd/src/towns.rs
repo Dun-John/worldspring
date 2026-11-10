@@ -38,7 +38,7 @@ pub fn list() -> Vec<Value> {
                     "merge_with": { "description": "A neighbouring patch whose district (ward and lots) it joins, with no street between; or \"none\"" },
                     "reroll": { "type": "boolean" },
                     "close": { "description": "A temple's patch: true opens a close round its temple (open ground with the temple, a cross before it and a hedged churchyard behind it, the houses round it kept), false builds it up; or \"auto\". Only where the town has its temple on that patch and no square opens at its corners" },
-                    "park": { "type": "string", "enum": ([PARK_KINDS.as_slice(), &["auto"]].concat()), "description": "A park's patch (ward park): a formal garden (cross walks, a fountain in the middle, hedged parterres, statues, topiary, benches) or a common (winding gravel paths to a hub, a pond, clumps of trees, a gazebo or bandstand on a rise); auto: formal by the castle and the nobles, a common elsewhere" },
+                    "park": { "type": "string", "enum": ([PARK_KINDS.as_slice(), &["auto"]].concat()), "description": "A park's patch (ward park): a formal garden (cross walks, a fountain in the middle, hedged parterres, statues, topiary, benches) or a common (winding gravel paths to a hub, a pond, clumps of trees, a gazebo or bandstand on a rise) or a cemetery (a low wall or hedge, walks, rows of graves by the culture: headstones, cairns, yews and a lychgate, tomb-houses, domed tombs or kurgans); auto: formal by the castle and the nobles, a common elsewhere" },
                     "as_generated": { "type": "boolean" },
                 }, "required": ["patch"] } },
                 "squares": { "type": "array", "items": { "type": "object", "properties": {

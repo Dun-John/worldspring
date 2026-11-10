@@ -397,6 +397,8 @@ pub fn layout(p: &Park, biome: Biome, city: bool, seed: u64) -> ParkLayout {
     let mut out = match p.kind {
         ParkKind::Formal => formal(p, biome, city, &mut rng),
         ParkKind::Common => common(p, biome, city, key, &mut rng),
+        // R5 towns: laid out by its culture group (`town::cemetery`), whole.
+        ParkKind::Cemetery => return crate::town::cemetery::park_layout(p),
     };
     // No gravel by the water: paths cut back to the dry, rounds there dropped.
     let wet = |q: P| p.ground.water_near(q, 8.0);

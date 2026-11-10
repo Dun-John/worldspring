@@ -556,7 +556,7 @@ pub(super) fn inherit(world: &World, t0: &T0, edit: &TownEdit, generated: &Layou
         .buildings
         .iter()
         .zip(&used)
-        .filter(|(b, u)| !**u && !super::rural::windmill(b))
+        .filter(|(b, u)| !**u && !super::rural::windmill(b) && !super::cemetery::is_tomb(b))
         .filter_map(|(b, _)| b.func.map(|f| (f as usize, centroid(&b.poly), b.id, b.name.clone(), b.ward == Ward::Castle)))
         .collect();
     // (Nearest pairs first, so each takes its own patch's before a neighbour's.)
@@ -980,6 +980,10 @@ pub fn plan_json(world: &World, t0: &T0, index: usize) -> Result<Value, String> 
         }
         if ward[p] == Some(Ward::Park) && ch.park.contains_key(&p) {
             v["park_by_hand"] = json!(true);
+        }
+        // (R5 towns: a cemetery the town lays beside a road out on an outskirts' patch.)
+        if ward[p] != Some(Ward::Park) && parks.get(&p) == Some(&ParkKind::Cemetery) {
+            v["cemetery_by_road"] = json!(true);
         }
         if ward[p] != Some(Ward::Park)
             && plan.ward[p] != Some(Ward::Park)

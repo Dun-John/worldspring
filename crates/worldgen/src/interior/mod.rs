@@ -299,7 +299,7 @@ fn arch_of(b: &town::Building) -> Arch {
         // A tower mill: round floors up a round tower, its own on each (`program`), under a cap.
         Some("windmill") if round_ish(b) => Arch::Tower,
         Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "windmill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
-        Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs") => Arch::Temple,
+        Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs" | "tomb") => Arch::Temple,
         Some("prison") => Arch::Prison,
         Some("castle" | "barracks" | "gatehouse") => Arch::Keep,
         Some("palace") => Arch::Mansion,
@@ -423,6 +423,8 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
         (Warehouse, _) if trade => p("Living quarters", &[("living room", 1.5), ("bedroom", 1.5)], Some("bedroom"), false),
         (Warehouse, _) => p("Loft", &[("loft storage", 4.0), ("office", 1.0)], Some("loft storage"), false),
         (Temple, 0) if key == Some("shrine") => p("Shrine", &[("shrine", 1.0)], None, false),
+        // R5 towns: a cemetery's tomb (`town::cemetery`), one chamber.
+        (Temple, 0) if key == Some("tomb") => p("Tomb", &[("tomb chamber", 1.0)], None, false),
         (Temple, 0) => p("Sanctuary", &[("nave", 5.0), ("sanctuary", 2.0), ("vestry", 1.0)], None, false),
         (Temple, _) => p("Bell loft", &[("bell loft", 2.0), ("monk's cell", 1.0)], Some("monk's cell"), true),
         (Hall, 0) => {
@@ -836,6 +838,7 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         "oratory" => &[("altar", Wall(2, 1), 1, 0), ("statue", Wall(1, 1), 1, 0)],
         "vestry" => &[("wardrobe", Wall(2, 1), 1, 0), ("chest", Wall(1, 1), 1, 0), ("table", Center(1, 1), 1, 0)],
         "crypt" | "ossuary" => &[("sarcophagus", Center(1, 2), 1, 8), ("statue", Wall(1, 1), 1, 0)],
+        "tomb chamber" => &[("sarcophagus", Center(1, 2), 1, 0)],
         "bell loft" => &[("bell", Center(2, 2), 1, 0)],
         "monk's cell" | "cell" | "holding cell" => &[("cot", Wall(1, 2), 1, 0), ("bucket", Wall(1, 1), 1, 0)],
         "great hall" | "mess hall" => &[("long_table", Center(4, 1), 1, 18), ("hearth", Wall(2, 1), 1, 0), ("throne", Wall(1, 1), 1, 0), ("pillar", Wall(1, 1), 0, 16)],
@@ -952,6 +955,8 @@ pub const ROOM_KINDS: &[&str] = &[
     "masterpiece gallery", "job-board room", "trophy hall", "bunk room", "warded vault", "belfry stair", "belfry",
     "stables", "tack room", "snug", "private dining room", "scullery", "best chamber", "innkeeper's quarters",
     "inn yard", "yard gallery", "yurt", "meal floor", "stone floor", "bin floor", "dust floor",
+    // R5 towns
+    "tomb chamber",
 ];
 
 /// A kind of room in a building, by name.
@@ -1859,6 +1864,15 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             score(x).total_cmp(&score(y))
         })
         .unwrap_or(0);
+    // R5 towns: a cemetery's tomb, one chamber on one storey, its door on its footprint's first side
+    // (toward its walk: `town::cemetery`).
+    let tomb = key == Some("tomb");
+    let front = if tomb && b.poly.len() >= 2 {
+        let door = geom::lerp(b.poly[0], b.poly[1], 0.5);
+        (0..4).min_by(|&x, &y| geom::dist(world_at(sides[x][0], sides[x][1]), door).total_cmp(&geom::dist(world_at(sides[y][0], sides[y][1]), door))).unwrap_or(front)
+    } else {
+        front
+    };
 
     // A home on a round footprint (under a round roof: `town::round_off`): a yurt, one round room
     // on one storey (no cellar, no stairs).
@@ -1903,10 +1917,10 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     if arch == Arch::Keep && (t > 0 || towers.as_ref().is_some_and(|t| !t.is_empty())) && open_roof && !plan.as_ref().is_some_and(|p| p.pieces) {
         zs.push(TOWER_TOP);
     }
-    if yurt {
+    if yurt || tomb {
         zs = vec![0];
     }
-    let entry_level = if yurt { 0 } else { 1 };
+    let entry_level = if yurt || tomb { 0 } else { 1 };
 
     // The stair block: at the back of the building, in the middle of the short side (towers:
     // near the centre), on inside squares. Inns and taverns lay out the ground floor first
@@ -1988,6 +2002,10 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
     if yurt {
         stairs = [0, 0, 0, 0];
     }
+    // (A tomb's none: the block a design gives a building without stairs, `design::stairs_of`.)
+    if tomb {
+        stairs = [0, 0, 1, 1];
+    }
 
     // (Furniture stands clear of the outer wall as drawn: in a building laid out by zones (a keep's
     // round tower rooms), off any square its middle line cuts more than a tenth of a square into;
@@ -2049,7 +2067,7 @@ fn build_noting(world: &World, t0: &T0, l: &Layout, settlement: usize, b: &town:
             _ => z,
         };
         lvl.z = zf;
-        lvl.has_stairs &= !yurt;
+        lvl.has_stairs &= !yurt && !tomb;
         lvl.name = if z == TOWER_TOP { "Tower tops".to_string() } else { prog.name.to_string() };
         lvl.elevation_ft = b.pad_ft + STOREY_FT * zf as f32;
         if let Some((name, roof, items)) = &hubbed {

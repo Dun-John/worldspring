@@ -16,7 +16,7 @@
 //!  .. site polygons (levels >= SITE_MIN_LEVEL): n u32, n_verts u32, starts u32[n + 1],
 //!     attrs u32[n] (kind | ward << 8 | floors (to 15) << 16 | roof material (`town::roof`, to 15)
 //!     << 20 | has-function << 24 | (a plain building) roof colour variant 0-4 << 29; kind 0 building,
-//!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard, 6 deck: bridge or pier, 7 monument,
+//!     1 plaza, 2 field, 3 block, 4 ruin, 5 graveyard (a cemetery's plot too), 6 deck: bridge or pier, 7 monument,
 //!     8 a camp's clearing, 9 a tent (or a park's gazebo), 11 a park's water (its pond as a fan
 //!     from its middle, its stream's pieces), 12 its gravel (a path's piece or a round), 13 a
 //!     parterre, 14 a tree's (or topiary's) crown, 15 a flowerbed, 24 a castle's wet moat, 25 its
@@ -344,6 +344,16 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 }
                 whole.set(Some(true));
                 let lay = crate::battlemap::park_layout(pk, crate::battlemap::land_biome(t0, pc), l.tier >= crate::t0::settle::Tier::City, world.stream("battlemap"));
+                // R5 towns: a cemetery's plot as a graveyard (its grave marks the tiles' own), its yews' crowns.
+                if pk.kind == crate::town::ParkKind::Cemetery {
+                    push(&pk.pts, 5);
+                    for &(at, _, _, _, scale) in lay.props.iter().filter(|p| p.2 == crate::battlemap::Kind::Yew) {
+                        let r = crate::battlemap::info(crate::battlemap::Kind::Yew as u16).radius as f64 * crate::battlemap::SQUARE_FT * scale as f64;
+                        push(&crate::town::geom::circle(at, 0.85 * r, 8), 14);
+                    }
+                    whole.set(None);
+                    continue;
+                }
                 for (pts, w) in &lay.paths {
                     for q in pts.windows(2) {
                         let d = crate::town::geom::sub(q[1], q[0]);
