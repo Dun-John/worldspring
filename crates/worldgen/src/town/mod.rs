@@ -26,6 +26,7 @@ pub mod stairs;
 pub mod temple;
 pub mod wards;
 pub mod wallstyle;
+pub mod outline;
 pub mod village;
 // v63 countryside
 pub mod fields;
@@ -246,6 +247,10 @@ pub struct Layout {
     pub tower_forms: Vec<(P, u8, P)>,
     /// The place's walls by its culture group, tier and wealth (`wallstyle::WallStyle::of`).
     pub wall_style: wallstyle::WallStyle,
+    /// A star-angled wall's bastions (`outline::bastions`: each outline from a flank's foot round its
+    /// point to the other's, then the corner it stands at), and how many corners it dropped.
+    pub bastions: Vec<Vec<P>>,
+    pub bastions_dropped: u32,
     /// Mounds raised under shell keeps.
     pub mottes: Vec<Motte>,
     /// The town's castle patch and its market square's (the patch the main streets lead to), as
@@ -578,6 +583,8 @@ impl Layout {
             square_towers: Vec::new(),
             tower_forms: Vec::new(),
             wall_style: wallstyle::WallStyle::default(),
+            bastions: Vec::new(),
+            bastions_dropped: 0,
             mottes: Vec::new(),
             castle_patch: None,
             plaza_patch: None,
@@ -1792,7 +1799,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     for st in &mut l.stairs {
         st.pts.iter_mut().for_each(tw);
     }
-    for poly in l.walls.iter_mut().chain(&mut l.streets).chain(l.plazas.iter_mut().map(|p| &mut p.pts)).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.bridges).chain(&mut l.piers) {
+    for poly in l.walls.iter_mut().chain(&mut l.bastions).chain(&mut l.streets).chain(l.plazas.iter_mut().map(|p| &mut p.pts)).chain(&mut l.fields).chain(&mut l.districts).chain(&mut l.blocks).chain(&mut l.bridges).chain(&mut l.piers) {
         poly.iter_mut().for_each(tw);
     }
     l.towers.iter_mut().chain(&mut l.gates).chain(&mut l.gate_towers).for_each(tw);
@@ -3107,11 +3114,13 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let cells: Vec<Labeled> = (0..total).map(|i| Labeled { pts: mesh.face_pts(i), labels: mesh.labels[i].clone() }).collect();
     let edge_v = |i: usize, e: usize| (mesh.faces[i][e], mesh.faces[i][(e + 1) % mesh.faces[i].len()]);
     l.gates = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
-    for (chain, closed, along) in plan.wall_runs.iter().filter(|_| walled) {
-        let (pieces, towers, gate_towers, _) = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect::<Vec<_>>(), *closed, Some(along), SET);
-        l.walls.extend(pieces);
-        l.towers.extend(towers);
-        l.gate_towers.extend(gate_towers);
+    // (Its outline by its style, item 104: `outline::lay`.)
+    let wall_laid = outline::lay(site, plan, &mesh, ward, &l.wall_style);
+    if walled {
+        l.walls.extend(wall_laid.0.iter().cloned());
+        l.towers.extend(wall_laid.1.iter().copied());
+        l.gate_towers.extend(wall_laid.2.iter().copied());
+        (l.bastions, l.bastions_dropped) = (wall_laid.3.placed.clone(), wall_laid.3.dropped);
     }
     // Each tower's shape by the town's walls (item 104): a D faces out from the middle.
     let (style, laid) = (l.wall_style, l.towers.clone());
@@ -3122,8 +3131,8 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let mut town_segs: Vec<(P, P)> = Vec::new();
     let mut town_towers: Vec<(P, f64)> = Vec::new();
     if walled || plan.walled {
-        for (chain, closed, along) in &plan.wall_runs {
-            let (pieces, towers, gate_towers, _) = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect::<Vec<_>>(), *closed, Some(along), SET);
+        {
+            let (pieces, towers, gate_towers) = (&wall_laid.0, &wall_laid.1, &wall_laid.2);
             // (A square tower reaches further across its corners.)
             let reach = if l.wall_style.has_square() { 15.6 } else { 11.0 };
             town_towers.extend(towers.iter().map(|t| (*t, reach)).chain(gate_towers.iter().map(|t| (*t, 15.0))));
@@ -3893,7 +3902,7 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     }
     // Off the roads into the city and the ground before each gate (`clear_of`), and off a castle's
     // way to its gate.
-    l.buildings.retain(|b| clear_of(b) && (b.ward == Ward::Castle || castle_ways.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(&b.poly, s[0], s[1]) >= 5.0))));
+    l.buildings.retain(|b| clear_of(b) && outline::off_bastions(&wall_laid.3.placed, &b.poly) && (b.ward == Ward::Castle || castle_ways.iter().all(|w| w.windows(2).all(|s| poly_seg_dist(&b.poly, s[0], s[1]) >= 5.0))));
     // Steps on steep streets, judged before the streets are cut at the water (wet ground is
     // level), so every piece is still as recorded.
     if s.tier >= stairs::STAIR_TIER || survey.is_some() {

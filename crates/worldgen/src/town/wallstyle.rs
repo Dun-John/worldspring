@@ -99,6 +99,10 @@ pub const SPACING_DRY: f64 = 110.0;
 /// A D tower's flat back stands this far in from the curtain's line (its inner face: the wall is 8 ft
 /// thick on the battlemap).
 pub const D_BACK: f64 = 4.0;
+/// A wall's thickness by what it is built of (ft): `WallStyle::thickness`.
+pub const STONE_FT: f64 = 8.0;
+pub const PALISADE_FT: f64 = 3.0;
+pub const EARTH_FT: f64 = 11.0;
 /// A wall turning more than this (degrees) at a tower makes it a corner tower.
 const CORNER_DEG: f64 = 20.0;
 
@@ -227,6 +231,16 @@ impl WallStyle {
     /// The shape of a tower along a curtain, or at a corner.
     pub fn shape(&self, corner: bool) -> TowerShape {
         if corner { self.corner } else { self.tower }
+    }
+
+    /// The wall's thickness (ft): stone `STONE_FT`, a palisade's timber `PALISADE_FT`, rammed earth
+    /// `EARTH_FT`.
+    pub fn thickness(&self) -> f64 {
+        match self.material {
+            Material::Stone => STONE_FT,
+            Material::Palisade => PALISADE_FT,
+            Material::Earth => EARTH_FT,
+        }
     }
 
     /// Whether any of its towers is square.
@@ -479,8 +493,10 @@ pub fn tower_raster(l: &Layout, t: P, r: f64, gate: bool, sq: f64) -> (TowerShap
     let others: Vec<(P, f64)> =
         crate::interior::towers(l).into_iter().filter(|o| dist(o.0, t) > 1e-6 && dist(o.0, t) < r + 60.0).map(|o| (o.0, o.1 * std::f64::consts::SQRT_2)).collect();
     let free = |p: P| !houses.iter().any(|h| contains(h, p));
+    // (A wall's squares: within half its thickness and 1.5 ft, as `battlemap` raises it.)
+    let reach = (0.5 * l.wall_style_at(t).thickness()).max(2.1) + 1.5;
     let open = |p: P| {
-        free(p) && !walls.iter().any(|&(a, b)| seg_dist(p, a, b) <= 5.5) && !others.iter().any(|&(o, ro)| dist(p, o) <= ro + 1.5)
+        free(p) && !walls.iter().any(|&(a, b)| seg_dist(p, a, b) <= reach) && !others.iter().any(|&(o, ro)| dist(p, o) <= ro + 1.5)
     };
     (shape, raster(&poly, inward, sq, &open, &free))
 }

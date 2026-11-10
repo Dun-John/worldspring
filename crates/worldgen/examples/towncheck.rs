@@ -1051,7 +1051,8 @@ fn town_ring(ctx: &Ctx, l: &Layout, li: usize, tag: &str, r: &mut Report) {
         }
         let (mut bare, mut run, mut first) = (0.0f64, 0.0, None);
         for (p, _) in samples(&[pa, pb], 5.0) {
-            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 8.0) {
+            // (Behind a bastion: its gorge, the bastion's walls round it.)
+            if by_gate(p) || by_water(p) || walls.iter().any(|&(q, s)| seg_dist(p, q, s) <= 8.0) || l.bastions.iter().any(|q| depth(q, p) > -8.0) {
                 run = 0.0;
             } else {
                 run += 5.0;
@@ -4888,8 +4889,17 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
         "towers checked on the battlemap",
         "towers whose battlemap squares don't follow their shape",
         "towers by the water with their door in it (not counted above)",
+        "buildings under or within 4 ft of a town wall",
+        "town walls crossing a road or street off a gate",
+        "town walls crossing themselves",
+        "town walls on the water (5-ft steps)",
+        "gate passages blocked on the battlemap",
+        "bastions over a road, a building or the water",
         "places listed",
     ]);
+    const OUTLINES: [&str; 3] = ["straight", "star", "round"];
+    const MATERIALS: [&str; 3] = ["stone", "palisade", "rammed earth"];
+    let lattice = ctx.ex.world.geom.spacing_ft(ctx.ex.world.geom.first_refine_level - 1);
     let all = std::env::var("WALLS_ALL").is_ok_and(|v| v == "1");
     let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
     let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
@@ -4925,6 +4935,12 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
                 r.add("towers not of their style's shapes", 1.0, format!("L{li} {} {}", SHAPES[shape as usize], at(t)));
             }
         }
+        wall_rules(&l, li, lattice, t0, r);
+        let st = l.wall_style;
+        r.tally(&format!("{}: outline {}", GROUPS[g], OUTLINES[st.outline as usize]), 1);
+        r.tally(&format!("{}: material {}", GROUPS[g], MATERIALS[st.material as usize]), 1);
+        r.tally(&format!("{}: bastions placed", GROUPS[g]), l.bastions.len());
+        r.tally(&format!("{}: bastions dropped", GROUPS[g]), l.bastions_dropped as usize);
         // Listed: settlements, up to 3 a group.
         if li >= ns || listed[g] >= 3 {
             continue;
@@ -4954,12 +4970,32 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
             l.towers.len() + l.gate_towers.len(),
             if l.castles.is_empty() { "no" } else { "a" },
         ));
+        if let Some(q) = l.bastions.first() {
+            lines.push(format!("      bastion fx {:.6} fy {:.6} zoom 0.5", q[5][0] / mw, q[5][1] / mh));
+        }
         if all || listed[g] == 1 {
             to_check.push((li, l.clone()));
         }
     }
     // The battlemap round each tower of the places checked.
     for (li, l) in to_check {
+        // (Each town gate's way through: open squares from 15 ft out to 15 ft in.)
+        for g in l.gates.iter().copied() {
+            let pair: Vec<P> = l.gate_towers.iter().copied().filter(|t| dist(*t, g) < 32.0).collect();
+            if pair.len() < 2 {
+                continue;
+            }
+            let u = sub(pair[1], pair[0]);
+            let n = mul([-u[1], u[0]], 1.0 / len(u).max(1e-9));
+            let w = ctx.window([g[0] - 30.0, g[1] - 30.0, g[0] + 30.0, g[1] + 30.0]);
+            let shut = (-3..=3).map(|k| add(g, mul(n, 5.0 * k as f64))).filter(|p| {
+                let (i, j) = (((p[0] - w.ox) / SQUARE_FT).floor() as i64, ((p[1] - w.oy) / SQUARE_FT).floor() as i64);
+                i >= 0 && j >= 0 && (i as usize) < w.nx && (j as usize) < w.ny && w.block[j as usize * w.nx + i as usize]
+            }).count();
+            if shut > 0 {
+                r.add("gate passages blocked on the battlemap", shut as f64, format!("L{li} gate {} ({shut} squares)", at(g)));
+            }
+        }
         for (k, &(t, rad, gate)) in interior::towers(&l).iter().enumerate() {
             let (shape, ras) = wallstyle::tower_raster(&l, t, rad, gate, SQUARE_FT);
             let x0 = ras.i0 as f64 * SQUARE_FT - 40.0;
@@ -5054,6 +5090,83 @@ fn walls(ctx: &mut Ctx, r: &mut Report) {
     }
     for line in lines {
         say!("{line}");
+    }
+}
+
+/// The town wall's rules (item 104) on one layout: buildings off it, roads and streets through it only
+/// at a gate, never crossing itself or standing on the water, its bastions clear.
+fn wall_rules(l: &Layout, li: usize, lattice: f64, t0: &T0, r: &mut Report) {
+    let wet = |p: P| t0.sample_water(p[0], p[1]) as f64 > t0.ground_at(p[0], p[1], lattice);
+    let half = 0.5 * l.wall_style.thickness();
+    let segs: Vec<(P, P)> = l.walls.iter().flat_map(|w| w.windows(2).map(|s| (s[0], s[1]))).collect();
+    let segx = |p: P, q: P, a: P, b: P| {
+        let c = |o: P, x: P, y: P| cross(sub(x, o), sub(y, o));
+        c(p, q, a) * c(p, q, b) < 0.0 && c(a, b, p) * c(a, b, q) < 0.0
+    };
+    let poly_seg = |poly: &[P], a: P, b: P| {
+        let n = poly.len();
+        let d = (0..n).map(|k| seg_dist(poly[k], a, b).min(seg_dist(a, poly[k], poly[(k + 1) % n])).min(seg_dist(b, poly[k], poly[(k + 1) % n]))).fold(f64::MAX, f64::min);
+        if contains(poly, a) || (0..n).any(|k| segx(poly[k], poly[(k + 1) % n], a, b)) { 0.0 } else { d }
+    };
+    let bb = bbox(&l.walls.iter().flatten().copied().collect::<Vec<_>>());
+    for b in l.buildings.iter().filter(|b| b.poly.iter().any(|p| p[0] > bb[0] - 30.0 && p[0] < bb[2] + 30.0 && p[1] > bb[1] - 30.0 && p[1] < bb[3] + 30.0)) {
+        // (Castles' own curtains have their rule.)
+        if l.castles.iter().any(|(c, rad)| dist(*c, centroid(&b.poly)) <= rad + 20.0) {
+            continue;
+        }
+        let d = segs.iter().map(|&(a, q)| poly_seg(&b.poly, a, q)).fold(f64::MAX, f64::min) - half;
+        // (The sprawl outside stands 7 ft off the wall's line, as its patches are laid: counted apart.)
+        if d < 4.0 && d > -half && matches!(b.ward, Ward::Slum | Ward::Farm) {
+            r.add("sprawl outside within 4 ft of a town wall's face (not under it)", 4.0 - d, format!("L{li} b:{li}:{} {:.1} ft", b.id, d));
+        } else if d < 4.0 {
+            r.add("buildings under or within 4 ft of a town wall", 4.0 - d, format!("L{li} b:{li}:{} {:?} {:?} {:.1} ft at {}", b.id, b.ward, b.structure, d, at(centroid(&b.poly))));
+        }
+    }
+    let gate_near = |p: P| l.gates.iter().chain(&l.gate_towers).any(|g| dist(*g, p) < 32.0) || l.castles.iter().any(|(c, rad)| dist(*c, p) <= rad + 30.0);
+    for (pts, what) in l.streets.iter().map(|s| (s, 9)).chain(l.roads.iter().filter(|r| r.1 != 3).map(|r| (&r.0, r.1))) {
+        for q in pts.windows(2) {
+            for &(a, b) in &segs {
+                if segx(q[0], q[1], a, b) {
+                    let m = lerp(a, b, 0.5);
+                    if !gate_near(q[0]) && !gate_near(q[1]) && !gate_near(m) {
+                        r.add("town walls crossing a road or street off a gate", 1.0, format!("L{li} {} at {}", if what == 9 { "street".to_string() } else { format!("road {what}") }, at(q[0])));
+                    }
+                }
+            }
+        }
+    }
+    for (i, &(a, b)) in segs.iter().enumerate() {
+        for &(c, d) in &segs[i + 1..] {
+            if segx(a, b, c, d) && !l.castles.iter().any(|(o, rad)| dist(*o, a) <= rad + 40.0) {
+                r.add("town walls crossing themselves", 1.0, format!("L{li} at {} and {}", at(a), at(c)));
+            }
+        }
+        let n = (dist(a, b) / 5.0).ceil().max(1.0) as usize;
+        let k = (0..n).filter(|&j| wet(lerp(a, b, (j as f64 + 0.5) / n as f64))).count();
+        if k > 0 && !l.castles.iter().any(|(c, rad)| dist(*c, a) <= rad + 10.0) {
+            r.add("town walls on the water (5-ft steps)", k as f64, format!("L{li} at {}", at(a)));
+        }
+    }
+    for q in &l.bastions {
+        let on_b = l.buildings.iter().find(|b| b.poly.iter().any(|p| contains(q, *p)) || q.iter().any(|p| contains(&b.poly, *p)));
+        // (A road's line more than 3 ft into it, or its paving more than 6 ft: the town's paved strips
+        // run along the wall's line, and those ending at the corner spread their paving into the gorge.)
+        let paved = |pts: &[P], w: f64| {
+            pts.windows(2).any(|s| {
+                let (u, n) = (sub(s[1], s[0]), (dist(s[0], s[1]) / 2.5).ceil().max(1.0) as usize);
+                let nrm = mul([-u[1], u[0]], 1.0 / len(u).max(1e-9));
+                (0..=n).any(|j| [-0.5 * w + 1.0, 0.0, 0.5 * w - 1.0].iter().any(|o| {
+                    let p = add(lerp(s[0], s[1], j as f64 / n as f64), mul(nrm, *o));
+                    contains(q, p) && depth(q, p) > if *o == 0.0 { 3.0 } else { 6.0 }
+                }))
+            })
+        };
+        let on_r = l.streets.iter().map(|s| (s.as_slice(), 9, 4.0)).chain(l.roads.iter().map(|r| (r.0.as_slice(), r.1, r.2))).find(|s| paved(s.0, s.2));
+        let on_w = wet(centroid(q)) || q.iter().any(|p| wet(*p));
+        if on_b.is_some() || on_r.is_some() || on_w {
+            let what = on_b.map(|b| format!("b:{li}:{} {:?}", b.id, b.ward)).or(on_r.map(|s| format!("road {}", s.1))).unwrap_or("water".into());
+            r.add("bastions over a road, a building or the water", 1.0, format!("L{li} at {}: {what}", at(q[2])));
+        }
     }
 }
 

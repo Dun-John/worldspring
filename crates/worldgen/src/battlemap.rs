@@ -1868,9 +1868,12 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         }
+        // (Each as thick as it is built (item 104: a palisade thinner, rammed earth thicker), and never
+        // so thin that a square's corner lets a diagonal through.)
         for w in &l.walls {
             for seg in w.windows(2) {
-                raise(seg[0], seg[1], 4.0, URBAN_WALL, WALL_FT, None, &mut urb_h, &mut hh, &mut lift);
+                let half = (0.5 * l.wall_style_at(crate::town::geom::lerp(seg[0], seg[1], 0.5)).thickness()).max(2.1);
+                raise(seg[0], seg[1], half, URBAN_WALL, WALL_FT, None, &mut urb_h, &mut hh, &mut lift);
             }
         }
         // A palace's forecourt: its low garden wall, the gate's piers (`interior::FORE_WALL_FT`,
@@ -1897,8 +1900,9 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 if owns([0.5 * (seg[0][0] + seg[1][0]), 0.5 * (seg[0][1] + seg[1][1])]) {
                     let ends = if k == 0 && bare(seg[0], wi) { WALL_BARE_A } else { 0 } | if k + 2 == n && bare(seg[1], wi) { WALL_BARE_B } else { 0 };
                     let flags = [(ends | ruin_bit) as f32, 0.0];
-                    let style = l.wall_style_at(crate::town::geom::lerp(seg[0], seg[1], 0.5)).code(crate::town::wallstyle::TowerShape::Round) as f32;
-                    shapes.push(VectorShape { kind: ShapeKind::Wall, size: (8.0 / SQUARE_FT) as f32, pts: vec![local(&seg[0]), local(&seg[1]), flags, [style, 0.0]] });
+                    let ws = l.wall_style_at(crate::town::geom::lerp(seg[0], seg[1], 0.5));
+                    let style = ws.code(crate::town::wallstyle::TowerShape::Round) as f32;
+                    shapes.push(VectorShape { kind: ShapeKind::Wall, size: (ws.thickness() / SQUARE_FT) as f32, pts: vec![local(&seg[0]), local(&seg[1]), flags, [style, 0.0]] });
                 }
             }
         }

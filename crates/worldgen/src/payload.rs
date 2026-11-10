@@ -560,8 +560,15 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
                 crate::town::village::plan_ticks(&l, &mut push);
                 crate::town::rural::plan_ticks(&l, &mut push);
             }
+            // (Its width by what it is built of, item 104: stone 9 ft, a palisade 5, rammed earth 12.)
+            let ww = match l.wall_style.material {
+                crate::town::wallstyle::Material::Stone => 9.0,
+                crate::town::wallstyle::Material::Palisade => 5.0,
+                crate::town::wallstyle::Material::Earth => 12.0,
+            };
             for w in &l.walls {
-                lines.push(w.iter().map(|p| [p[0], p[1], 9.0, 0.0]).collect());
+                let ww = if l.wall_style_at(w[w.len() / 2]).material == l.wall_style.material { ww } else { 9.0 };
+                lines.push(w.iter().map(|p| [p[0], p[1], ww, 0.0]).collect());
             }
             for t in &l.towers {
                 // (A square tower: a stroke as wide as it, along its sides.)
