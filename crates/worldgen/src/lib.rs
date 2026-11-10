@@ -19,6 +19,7 @@ pub mod roadids;
 pub mod town;
 pub mod t0;
 pub mod under;
+pub mod undersearch;
 pub mod world;
 
 pub use world::{World, WorldFile, WorldParams};

@@ -231,6 +231,22 @@ you mean" and the kinds there are. A district, building or tower says its `settl
 `site`, in a site's layout), as `get_feature` does. A building drawn by hand shows the ward of its own little layout
 (`village`), not the one it stands in. Returns `{items, found}` (`truncated: true` when `limit` cut the list); each item has its `extent`.
 
+**Sites underground** (kind `underground`, after the places): ways down in towns and ruins and under created sites (`u:`),
+keeps' deep dungeons (`k:`) and each city's sewers as one site (`w:<layout>`, named "Sewers of …"; its sections
+`w:<layout>:<sx>:<sy>` are not listed apart). Found by their own name (a rename, a city's sewers' name, or the name of the
+place above them), by a **renamed** level or room (generated room names are not searched), by a kind word (`crypt`,
+`crypts`, `mine`, `sewer`, `lava tube`, `keep dungeon`…: every site of that kind) or a theme word (`ice cave`, `temple`,
+`wizard lair`, `tomb`…), and by the names of the NPCs and plots and the words of the notes on them, their levels or rooms.
+Each hit gives `site_kind`, `theme` (key) and `theme_name`, `levels`, `size`, the entrance as `x_ft`/`y_ft`, `settlement`
+and `site` (`{id, name}`), `match: {what, id, text}` (`what`: name, level, room, npc, plot, note, kind or theme; `id`
+the `l:`/`r:` to open at; in the sewers also the section's middle `x_ft`/`y_ft`), `matches` when more than one did, and
+`attached` (every note, NPC and plot on the site: `{what, id, at, name|text}`). Order: an exact name first, then by what
+matched (as listed), then nearest `at`. `levels` is the site's depth as generated (a designed site's as drawn; a keep's deep
+dungeons from the keep's footprint, a designed keep's may differ; sewers 2). `size`: a site's grid size (small to huge,
+as generated); deep dungeons medium (2 levels) or large (3); sewers by the 480-ft sections with a street grate (under 10
+small, under 40 medium, under 120 large). The first such search lays out every settlement (a few seconds on a large world;
+later searches reuse the index).
+
 | Parameter | Type | Default | |
 |---|---|---|---|
 | `query` | string | `""` | Part of a name. Empty, together with `kind` or `tag`, lists every feature of that kind or tag. |
@@ -238,10 +254,17 @@ you mean" and the kinds there are. A district, building or tower says its `settl
 | `tag` | string | none | Only features whose notes carry this tag (any case): the DM's `hook`, `secret`… |
 | `in_notes` | boolean | false | The query also matches the words of a feature's notes (not only its name); needs a `query`. |
 | `within` | box, polygon or circle | none | Only features with a point inside the area (`inside: "point"`) or an extent overlapping it (`inside: "extent"`: a river or road that runs through it, a region that covers part of it; area extents are tested at up to 400 sample points, so a sliver narrower than a map cell can be missed). A box is `[x0, y0, x1, y1]`, a polygon `[[x, y], ...]`, a circle `{at, radius_ft}` (as `list_objects`). Hits come nearest the area's middle first. Combines with `query`, `kind` and `tag`; districts and businesses still need a query of three letters (an empty `kind: building` or `district` search without one says so in `note`). A circle's `radius_ft` must be more than 0. |
+| `at` | place | none | Only features within `radius_ft` of this place (an id, `{x_ft, y_ft}` or `[x, y]`), nearest first: a circle `within`. Not with `within`. |
+| `radius_ft` | number | 26400 | With `at` (5 mi); more than 0. |
+| `underground_kinds` | array of strings | none | Only sites underground of these kinds: `dungeon`, `crypt`, `catacombs`, `cave`, `mine`, `lava tube`, `sewer`, `keep dungeon` (keys with `_` too). Lists only sites underground. |
+| `levels_min` | integer | none | Only sites underground at least this many levels deep (lists only sites underground). |
+| `levels_max` | integer | none | At most this many levels; not less than `levels_min`. |
 | `limit` | integer | 25 | 1 to 200 |
 | `include_hidden` | boolean | false | Also return hidden features. |
 
 ```json
+{ "name": "search_features", "arguments": { "query": "crypts", "at": "city:bab44567", "radius_ft": 100000 } }
+{ "name": "search_features", "arguments": { "underground_kinds": ["cave", "mine"], "levels_min": 3 } }
 { "name": "search_features", "arguments": { "query": "gate" } }
 { "name": "search_features", "arguments": { "query": "", "kind": "volcano" } }
 { "name": "search_features", "arguments": { "query": "Prancing", "kind": "building" } }

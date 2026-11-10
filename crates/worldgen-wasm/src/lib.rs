@@ -145,6 +145,13 @@ impl Ctx {
         }
     }
 
+    /// Underground sites matching a query (`undersearch::search_json`): `filters` is JSON
+    /// `{kinds, levels_min, levels_max, sizes, rect, near, radius_ft, hidden, limit}` (any left
+    /// out); `{items, found, truncated}`, `{error}` for a bad filter, `null` before T0.
+    pub fn under_search_json(&self, q: &str, filters: &str) -> String {
+        self.t0.as_ref().map_or_else(|| "null".into(), |t0| worldgen::undersearch::search_json(&self.world, t0, q, filters))
+    }
+
     /// An interior by id (`b:<settlement>:<building>` or `t:<settlement>:<tower>`), JSON or
     /// `null` for what can't be entered.
     pub fn interior_json(&self, id: &str) -> String {

@@ -386,7 +386,7 @@ pub fn cold_of(biome: u32, height_ft: f32, sea_ft: f64) -> Cold {
 /// Choose what `spec` leaves open (size, levels, theme) for a site of `kind`: a generated
 /// site keeps its kind's usual theme half the time. Ice only over cold ground (`cold`) unless `spec` asks for it:
 /// off it, a drawn ice is drawn again among the others; in the Ice biome a cave is always ice.
-fn resolve(kind: UnderKind, spec: SiteSpec, ruin: bool, cold: Cold, rng: &mut Pcg32) -> (SiteSize, usize, &'static Theme) {
+pub fn resolve(kind: UnderKind, spec: SiteSpec, ruin: bool, cold: Cold, rng: &mut Pcg32) -> (SiteSize, usize, &'static Theme) {
     let (_, (s0, s1), (l0, l1)) = ranges(kind);
     let size = spec.size.unwrap_or_else(|| SiteSize::ALL[s0 as usize + rng.below((s1 as usize - s0 as usize + 1) as u32) as usize]);
     let levels = spec.levels.map(|l| l.clamp(1, MAX_LEVELS)).unwrap_or_else(|| l0 + rng.below((l1 - l0 + 1) as u32) as u8) as usize;

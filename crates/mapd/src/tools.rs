@@ -46,7 +46,7 @@ pub(crate) fn merge(a: Value, b: Value) -> Value {
 pub fn list() -> Value {
     let mut v = json!([
         { "name": "world_overview", "title": "World overview", "description": "The world's size, land masses, counts of named features and its largest settlements.", "inputSchema": schema(json!({}), &[]), "annotations": { "readOnlyHint": true } },
-        { "name": "search_features", "title": "Search", "description": "Named features matching a query (towns, ranges, rivers, ruins...; from three letters also districts and businesses). Give a query, a kind, a tag or within. Returns {items, found}; each hit in an area says inside: point or extent. limit cuts it and sets truncated.", "inputSchema": schema(json!({ "query": { "type": "string", "default": "" }, "kind": { "type": "string", "description": "Only this kind (city, ruin, river, building...)" }, "tag": { "type": "string", "description": "Only features whose notes carry this tag" }, "in_notes": { "type": "boolean", "default": false, "description": "The query also matches notes" }, "within": crate::args::area_light("Only features with a point inside, or an extent overlapping: a box [x0, y0, x1, y1], a polygon [[x, y], ...] or a circle {at, radius_ft}"), "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &[]), "annotations": { "readOnlyHint": true } },
+        { "name": "search_features", "title": "Search", "description": "Named features matching a query (towns, ranges, rivers, ruins...; from three letters also districts and businesses; sites underground by name, renamed level or room, kind or theme: crypt, ice cave, sewer). Give a query, kind, tag, within or at. Returns {items, found}; each hit in an area says inside: point or extent. limit cuts it and sets truncated.", "inputSchema": schema(json!({ "query": { "type": "string", "default": "" }, "kind": { "type": "string", "description": "Only this kind (city, ruin, river, building, underground...)" }, "tag": { "type": "string", "description": "Only features whose notes carry this tag" }, "in_notes": { "type": "boolean", "default": false, "description": "The query also matches notes" }, "within": crate::args::area_light("Only features with a point inside, or an extent overlapping: a box [x0, y0, x1, y1], a polygon [[x, y], ...] or a circle {at, radius_ft}"), "at": { "type": ["string", "array", "object"], "description": "Only within radius_ft of this place, nearest first" }, "radius_ft": { "type": "number", "default": 26400 }, "underground_kinds": { "type": "array", "items": { "type": "string" }, "description": "dungeon, crypt, catacombs, cave, mine, lava tube, sewer, keep dungeon" }, "levels_min": { "type": "integer" }, "levels_max": { "type": "integer" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 25 }, "include_hidden": { "type": "boolean", "default": false } }), &[]), "annotations": { "readOnlyHint": true } },
         { "name": "get_feature", "title": "Feature details", "description": "A feature's details and relations: where and what it is, extent, notes, regions, nearest settlements, roads, districts, notable buildings, ways underground, sites in it, levels and rooms; for anything in a layout, its settlement and site. NPCs and plots there.", "inputSchema": schema(json!({ "id": { "type": "string" } }), &["id"]), "annotations": { "readOnlyHint": true } },
         { "name": "list_children", "title": "Children", "description": "What a feature contains: a settlement's districts, businesses and sites, a building's or site's levels and rooms, a region's settlements and sites. Each list is cut to limit (default 200, max 2000); then found gives the full counts and truncated is true.", "inputSchema": schema(json!({ "id": { "type": "string" }, "limit": limit_prop(200, 2000) }), &["id"]), "annotations": { "readOnlyHint": true } },
         { "name": "list_names", "title": "Names", "description": "Everything that can be renamed, with id, kind, current and generated name; with settlement its districts, businesses, towers and sites; with inside (a building or site) its levels and rooms. Returns {items, found}; limit (default 200, max 2000) cuts it and sets truncated. A kind nothing has is refused with the kinds there are.", "inputSchema": schema(json!({ "kind": { "type": "string", "description": "Only this kind (river, city, building, site, room...)" }, "settlement": { "type": "string" }, "inside": { "type": "string" }, "function": { "type": "string", "description": "Only businesses of this function (inn, blacksmith...), in a settlement or site" }, "limit": limit_prop(200, 2000) }), &[]), "annotations": { "readOnlyHint": true } },
@@ -259,17 +259,41 @@ async fn dispatch(app: &Shared, name: &str, a: Value) -> Result<Vec<Value>, Stri
         }
         "search_features" => {
             let (q, kind, tag) = (a["query"].as_str().unwrap_or("").to_string(), a["kind"].as_str().map(str::to_string), a["tag"].as_str().map(|t| t.trim().to_string()));
-            if q.trim().is_empty() && kind.is_none() && tag.is_none() && a["within"].is_null() {
-                return Err(crate::args::bad("query, kind, tag, within", "give at least one (world_overview lists the largest places; list_names everything renameable)", &json!({})));
+            let narrows = !a["underground_kinds"].is_null() || !a["levels_min"].is_null() || !a["levels_max"].is_null();
+            if q.trim().is_empty() && kind.is_none() && tag.is_none() && a["within"].is_null() && a["at"].is_null() && !narrows {
+                return Err(crate::args::bad("query, kind, tag, within, at", "give at least one (world_overview lists the largest places; list_names everything renameable)", &json!({})));
+            }
+            if !a["within"].is_null() && !a["at"].is_null() {
+                return Err("within, at: give one (within takes a circle {at, radius_ft} too)".into());
+            }
+            if !a["radius_ft"].is_null() && a["at"].is_null() {
+                return Err("radius_ft: needs at".into());
             }
             let within = if a["within"].is_null() { None } else { Some(crate::args::area(app, "within", &a["within"]).await?) };
+            let near = if a["at"].is_null() { None } else { Some(crate::args::point(app, "at", &a["at"]).await?) };
+            let radius = a["radius_ft"].as_f64().unwrap_or(5.0 * 5280.0);
+            if !(radius > 0.0) {
+                return Err(crate::args::bad("radius_ft", "more than 0", &a["radius_ft"]));
+            }
+            // Underground filters: only sites below ground can meet them.
+            let mut under = worldgen::undersearch::UnderOpts::from_json(&json!({ "kinds": a["underground_kinds"], "levels_min": a["levels_min"], "levels_max": a["levels_max"] })).map_err(|e| format!("underground_{e}"))?;
+            if let (Some(lo), Some(hi)) = (under.levels_min, under.levels_max)
+                && lo > hi
+            {
+                return Err(format!("levels_min: {lo} is more than levels_max {hi}"));
+            }
+            under.near = near;
+            if narrows && kind.as_deref().is_some_and(|k| k != "underground") {
+                return Err(format!("underground_kinds, levels_min, levels_max: only for sites underground (kind \"underground\" or none), not kind \"{}\"", kind.as_deref().unwrap_or("")));
+            }
+            let kind = if narrows { Some("underground".to_string()) } else { kind };
             if a["in_notes"].as_bool() == Some(true) && q.trim().is_empty() {
                 return Err("in_notes: needs a query".into());
             }
             let limit = a["limit"].as_u64().unwrap_or(25) as usize;
             // Buildings and districts are matched by name only (3 letters or more), within an area too.
             let by_name_only = !a["within"].is_null() && q.trim().chars().count() < 3 && matches!(kind.as_deref(), Some("building" | "district"));
-            let opts = agent::SearchOpts { query: q, kind, tag, in_notes: a["in_notes"].as_bool().unwrap_or(false), hidden: a["include_hidden"].as_bool().unwrap_or(false), within: within.map(|w| w.region()) };
+            let opts = agent::SearchOpts { query: q, kind, tag, in_notes: a["in_notes"].as_bool().unwrap_or(false), hidden: a["include_hidden"].as_bool().unwrap_or(false), within: within.map(|w| w.region()).or(near.map(|p| worldgen::geoquery::Region::Circle(p, radius))), under: Some(under) };
             // (All the matches are found, so `found` can say how many there were.)
             let all = app
                 .worker

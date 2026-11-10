@@ -4296,3 +4296,33 @@ fn dwarven_crag_seams() {
     }
     assert!(found > 0, "no dwarven hall gate with a crag in seeds 1 and 3");
 }
+
+// R5 mcp
+
+/// The underground search index (`undersearch::sites`, built without laying a site out) says
+/// what the sites are when laid out: each `u:` site's levels, theme and size, and each keep's
+/// deep dungeons' levels (seeds 1 and 2, up to 30 sites each, spread over the list).
+#[test]
+fn underground_index_matches_sites() {
+    for seed in [1, 2] {
+        let world = World::from_json(&world_json(seed)).unwrap();
+        let t0 = worldgen::t0::T0::generate(&world);
+        let sites = worldgen::undersearch::sites(&world, &t0);
+        assert!(sites.iter().any(|s| s.id.starts_with("u:")), "seed {seed}: no site underground in the index");
+        let step = (sites.len() / 30).max(1);
+        for s in sites.iter().step_by(step) {
+            let n: Vec<usize> = s.id.split(':').skip(1).filter_map(|x| x.parse().ok()).collect();
+            let it = match s.id.as_bytes()[0] {
+                b'u' => worldgen::under::generate(&world, &t0, n[0], n[1]),
+                b'k' => worldgen::under::keep_dungeon(&world, &t0, n[0], n[1]),
+                _ => continue,
+            };
+            let it = it.unwrap_or_else(|| panic!("seed {seed}: {} in the index but not generated", s.id));
+            assert_eq!(it.levels.len(), s.levels as usize, "seed {seed}: {} levels", s.id);
+            if s.id.starts_with("u:") {
+                assert_eq!(it.theme, Some(s.theme), "seed {seed}: {} theme", s.id);
+                assert_eq!(worldgen::under::site_size(&it).map(|z| z.name()), Some(s.size), "seed {seed}: {} size", s.id);
+            }
+        }
+    }
+}

@@ -1017,7 +1017,7 @@ fn layout_ref(world: &World, t0: &T0, li: usize) -> Value {
 
 /// Where something in layout `li` is: the settlement (the layout's own, or the one its site
 /// stands in; `{id, name}` or null), and for a site's layout the site (`{id, name}`).
-fn whereabouts(world: &World, t0: &T0, li: usize) -> (Value, Option<Value>) {
+pub(crate) fn whereabouts(world: &World, t0: &T0, li: usize) -> (Value, Option<Value>) {
     if li < t0.settlements.len() {
         return (layout_ref(world, t0, li), None);
     }
@@ -1190,7 +1190,7 @@ fn places_removed(world: &World) -> Vec<Value> {
 /// Named features (and, from three letters, districts and businesses) matching a query, by
 /// their current names, each with its extent.
 pub fn search(world: &World, t0: &T0, q: &str, kind: Option<&str>, limit: usize, include_hidden: bool) -> Value {
-    search_with(world, t0, &SearchOpts { query: q.to_string(), kind: kind.map(str::to_string), tag: None, in_notes: false, hidden: include_hidden, within: None }, limit)
+    search_with(world, t0, &SearchOpts { query: q.to_string(), kind: kind.map(str::to_string), tag: None, in_notes: false, hidden: include_hidden, within: None, under: None }, limit)
 }
 
 /// What `search_with` looks for: `query` in names (and notes with `in_notes`), `kind`, and only features
@@ -1204,6 +1204,8 @@ pub struct SearchOpts {
     pub hidden: bool,
     /// Only features with a point inside, or an extent overlapping (each hit says which: `inside`).
     pub within: Option<crate::geoquery::Region>,
+    /// Underground sites too (`undersearch`), kept by these filters (None: not searched).
+    pub under: Option<crate::undersearch::UnderOpts>,
 }
 
 pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Value {
@@ -1239,6 +1241,19 @@ pub fn search_with(world: &World, t0: &T0, o: &SearchOpts, limit: usize) -> Valu
         // Road stretches renamed and crossings named (only those given a name).
         if (!ql.is_empty() || matches!(kind, Some("road" | "crossing"))) && out.len() < limit {
             out.extend(crate::roadids::search_hits(world, t0, &ql, kind, include_hidden, limit - out.len()));
+        }
+        // Sites below ground: by name, renamed levels and rooms, kind and theme words, what is on them.
+        if let Some(u) = &o.under
+            && kind.is_none_or(|k| k == "underground")
+            && (!ql.is_empty() || kind.is_some() || u.narrows())
+            && out.len() < limit
+        {
+            let mut u = u.clone();
+            u.hidden = include_hidden;
+            if u.within.is_none() {
+                u.within = o.within.clone();
+            }
+            out.extend(crate::undersearch::search_underground(world, t0, &ql, &u).into_iter().take(limit - out.len()));
         }
     }
     // Notes: their tags, and with `in_notes` their words.
