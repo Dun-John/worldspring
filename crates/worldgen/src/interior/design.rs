@@ -139,6 +139,7 @@ pub fn from_interior(it: &Interior, fingerprint: String) -> SiteDesign {
     SiteDesign {
         kind: BUILDING.into(),
         theme: None,
+        look: 0,
         origin: it.origin,
         axis: it.axis,
         nx: it.nx as u16,
@@ -269,6 +270,7 @@ pub fn build(d: &SiteDesign, t0: &T0, l: &Layout, settlement: usize, b: &town::B
         function: b.label(),
         theme: None,
         stone: 0,
+        look: 0,
         origin: sh.origin,
         axis: sh.u,
         across: sh.v,

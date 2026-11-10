@@ -76,6 +76,9 @@ uniform float uTheme;
 uniform vec3 uStone;
 uniform vec3 uCoping;
 uniform vec3 uRock;
+// A cave's look (`underTheme.ts`): 0 none, 1 green, 2 dry, 3 cold, 4 ice; and its cast on the floors.
+uniform float uLook;
+uniform vec3 uTint;
 
 const vec3 INK = vec3(0.10, 0.085, 0.07);
 
@@ -143,7 +146,8 @@ const float DIST_MAX = 8.0;
 vec3 hatchedRock(vec2 p, float depth, float px, out float cut, out float ra) {
     cut = 0.0;
     vec3 c = uRock * (0.92 + 0.16 * vnoise(p * 0.55));
-    vec3 inkc = mix(INK, uRock, 0.18);
+    // (Ice rock is inked in a deep blue-grey, not black.)
+    vec3 inkc = uLook > 3.5 ? vec3(0.36, 0.48, 0.6) : mix(INK, uRock, 0.18);
     // (The flat tone only close to the wall, ragged per cluster, so the rock is never paler than the ground.)
     float toneA = 0.55;
     float inkA = 0.0;
@@ -468,6 +472,31 @@ vec3 floorColor(int mat, vec2 q, vec2 p, float var) {
         c = mix(c, INK * 1.6, mortar * 0.35);
     }
     return c;
+}
+
+// A cave's biome on its floor: a few big flat patches (moss, drifted sand, frost) and, in the green look,
+// root strokes running in from the walls. `d`: squares from the wall, `n`: the wall's normal.
+vec3 cave_look(vec3 col, vec2 p, float d, vec2 n) {
+    if (uLook < 1.5) {
+        col = mix(col, vec3(0.40, 0.50, 0.30), smoothstep(0.58, 0.62, vnoise(p * 0.2 + 31.0)) * 0.7);
+        // Roots: one, here and there, curving in from the wall and thinning out.
+        vec2 cc = floor(p / 4.0);
+        float h = hash21(cc + 61.0);
+        if (h > 0.55 && d < 2.2) {
+            vec2 t = vec2(-n.y, n.x);
+            float s = dot(p - (cc + 0.5) * 4.0, t) + 0.25 * sin(d * 3.0 + h * 40.0) + 1.6 * (hash21(cc + 7.0) - 0.5);
+            float w = 0.07 * (1.0 - smoothstep(0.3, 2.2, d));
+            float root = (1.0 - smoothstep(w * 0.6, w + 0.03, abs(s))) * (1.0 - smoothstep(1.2, 2.2, d)) * step(-0.05, d);
+            col = mix(col, vec3(0.34, 0.25, 0.16), root * 0.85);
+        }
+    } else if (uLook < 2.5) {
+        float drift = vnoise(p * 0.17 + 7.0) + 0.3 * (1.0 - smoothstep(0.0, 1.6, d));
+        col = mix(col, vec3(0.82, 0.72, 0.52), smoothstep(0.66, 0.7, drift) * 0.75);
+    } else {
+        float frost = vnoise(p * 0.19 + 13.0) + 0.3 * (1.0 - smoothstep(0.0, 1.4, d));
+        col = mix(col, vec3(0.8, 0.87, 0.92), smoothstep(0.64, 0.68, frost) * 0.7);
+    }
+    return col;
 }
 
 // Slow ripples on water (0-1): light streaks wavering where two drifting noises cross, and now
@@ -885,6 +914,8 @@ void main() {
         float face = clamp(0.55 + 0.6 * dot(n, uLight), 0.25, 1.15);
         // (Natural rock's lip in the site's own rock: caves as they were.)
         vec3 lip = rockMass(p * 1.3, 0.0) * 1.55 * face * (uRock / vec3(0.29, 0.27, 0.245));
+        // (Ice: a flat pale-blue edge, shaded by the light, in place of the dark rock's.)
+        if (uLook > 3.5) lip = mix(uRock * 1.2, vec3(0.88, 0.94, 0.98), 0.55) * (0.8 + 0.3 * face);
         float edge = rim;
         if (rough < 0.2) {
             // Dressed stone coping on built walls, by the site's style.
@@ -969,6 +1000,7 @@ void main() {
             // The cult's floor, a dark red stain spreading here and there.
             col = mix(col, col * vec3(0.86, 0.7, 0.68), smoothstep(0.55, 0.8, vnoise(p * 0.4 + 23.0)) * 0.5 * step(3.5, float(mat)));
         }
+        if (uLook > 0.5 && uLook < 3.5) col = cave_look(col * uTint, p, d, n);
         if (mat <= 2) {
             // Natural floors: uneven rock lit from the NW, loose stones, rubble at the wall foot.
             float b0 = vnoise(p * 0.7);

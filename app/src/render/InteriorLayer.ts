@@ -1122,12 +1122,14 @@ export class InteriorLayer {
     // Light from the NW of the screen, in grid axes.
     const [lx, ly] = [-Math.SQRT1_2, -Math.SQRT1_2];
     // The site's stone: wall style and palette by its theme (sewers: wet brick).
-    const look = underLook(it.function, it.theme);
+    const look = underLook(it.function, it.theme, it.look);
     const uniforms = new UniformGroup({
       uTheme: { value: look.style, type: 'f32' },
       uStone: { value: new Float32Array(look.stone), type: 'vec3<f32>' },
       uCoping: { value: new Float32Array(look.coping), type: 'vec3<f32>' },
       uRock: { value: new Float32Array(look.rock), type: 'vec3<f32>' },
+      uLook: { value: look.feel, type: 'f32' },
+      uTint: { value: new Float32Array(look.tint), type: 'vec3<f32>' },
       uGrow: { value: grow, type: 'f32' },
       uN: { value: new Float32Array([nx, ny]), type: 'vec2<f32>' },
       uPad: { value: pad, type: 'f32' },

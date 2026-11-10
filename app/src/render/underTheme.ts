@@ -17,9 +17,13 @@ export interface UnderLook {
   /** The hatched rock beside the walls (drawn at 0.7 over the dimmed map): about a mid surface
    * under the dim, a touch darker, so the site neither glows nor punches a hole. */
   rock: [number, number, number];
+  /** The painted extras in `underground.frag` (`uLook`): 0 none, 1 green (moss, roots), 2 dry (sand drifts), 3 cold (frost), 4 ice. */
+  feel: number;
+  /** A multiplier on floors (`uTint`): the biome's cast over the theme's own floor. */
+  tint: [number, number, number];
 }
 
-const look = (style: Style, stone: UnderLook['stone'], coping: UnderLook['coping'], rock: UnderLook['rock']): UnderLook => ({ style, stone, coping, rock });
+const look = (style: Style, stone: UnderLook['stone'], coping: UnderLook['coping'], rock: UnderLook['rock']): UnderLook => ({ style, stone, coping, rock, feel: 0, tint: [1, 1, 1] });
 
 const PLAIN = look(Style.Plain, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.28, 0.27, 0.25]);
 const DWARVEN = look(Style.Dwarven, [0.64, 0.56, 0.45], [0.6, 0.52, 0.41], [0.29, 0.26, 0.22]);
@@ -33,10 +37,25 @@ const EARTH = look(Style.Earth, [0.52, 0.45, 0.36], [0.5, 0.41, 0.31], [0.45, 0.
 const CAVE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.29, 0.27, 0.245]);
 const MINE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.3, 0.26, 0.22]);
 const LAVA = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.26, 0.225, 0.21]);
-const ICE = look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.27, 0.29, 0.31]);
+// (Ice: white and pale blue rock, about the snow and ice ground above under the dim.)
+const ICE: UnderLook = { ...look(Style.Natural, [0.58, 0.55, 0.5], [0.56, 0.53, 0.48], [0.55, 0.65, 0.76]), feel: 4 };
+/** A cave's biome looks (`Interior::look` 1-3): the rock's tone and the floor's cast. */
+const BIOME_LOOKS: { rock: UnderLook['rock']; tint: UnderLook['tint'] }[] = [
+  { rock: [0.25, 0.3, 0.215], tint: [0.9, 1.0, 0.86] },
+  { rock: [0.36, 0.3, 0.215], tint: [1.1, 0.99, 0.8] },
+  { rock: [0.3, 0.325, 0.36], tint: [0.92, 0.99, 1.07] },
+];
 
 /** A site's look from its kind (`Interior.function`) and theme (`Interior.theme`, `under::THEMES`). */
-export function underLook(site: string, theme?: string): UnderLook {
+export function underLook(site: string, theme?: string, biome = 0): UnderLook {
+  const base = themeLook(site, theme);
+  // (Caves only, and an ice cave keeps its ice whatever the biome.)
+  if (site !== 'cave' || biome < 1 || biome > 3 || base.feel === 4) return base;
+  const b = BIOME_LOOKS[biome - 1];
+  return { ...base, rock: b.rock, tint: b.tint, feel: biome };
+}
+
+function themeLook(site: string, theme?: string): UnderLook {
   if (site === 'sewer') return SEWER;
   switch (theme) {
     case 'dwarven_hall':

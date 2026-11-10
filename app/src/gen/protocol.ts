@@ -611,6 +611,8 @@ export interface Interior {
   /** A city's sewers: the walkway's stonework (`under::sewer_stone`: bits 0-1 brick, dressed flags,
    * rubble; bit 2 warm stone). */
   stone?: number;
+  /** A cave's look from the biome at its mouth (`under::look_of`): 1 green, 2 dry, 3 cold; absent for rock. */
+  look?: number;
   /** World ft of grid corner (0, 0); grid x runs along `axis`, y along `across`. */
   origin: [number, number];
   axis: [number, number];

@@ -71,6 +71,9 @@ fn main() {
     let ledges_only = std::env::var("LEDGES").is_ok();
     let mut ledges = Ledges::default();
     let boss_only = std::env::var("BOSS").is_ok();
+    // BIOME=1: caves of this seed by look (green/dry/cold/rock, or ice whatever the biome), as one line.
+    let biome_only = std::env::var("BIOME").is_ok();
+    let mut looks: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     let mut boss = Boss::default();
     for li in first..town::layout_count(&t0) {
         if !made.is_empty() && t0.created_site(li - first).is_none() {
@@ -96,6 +99,12 @@ fn main() {
             let t = std::time::Instant::now();
             let Some(mut it) = interior::generate_id(&world, &t0, &id) else { continue };
             let ms = t.elapsed().as_secs_f64() * 1e3;
+            if biome_only {
+                if kind == "cave" {
+                    *looks.entry(if it.theme == Some("ice") { "ice" } else { ["rock", "green", "dry", "cold"][it.look as usize] }).or_default() += 1;
+                }
+                continue;
+            }
             // (By theme: each theme asked for; MAKE: every site made.)
             let key = if by_theme && !matches!(kind.as_str(), "keep" | "undercroft") { it.theme.unwrap_or("-").to_string() } else { kind.clone() };
             if by_theme && !wanted.contains(&key) {
@@ -233,6 +242,9 @@ fn main() {
                 }
             }
         }
+    }
+    if biome_only {
+        println!("seed {seed}: caves {} {looks:?}", looks.values().sum::<usize>());
     }
     if ledges_only {
         ledges.print();

@@ -30,6 +30,9 @@ pub struct SiteDesign {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// A cave's look from its mouth's biome (`Interior::look`), kept when the site is copied.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub look: u8,
     /// World ft of grid corner (0, 0) and the grid's x axis (as `Interior`).
     pub origin: [f64; 2],
     pub axis: [f64; 2],
@@ -316,6 +319,7 @@ impl SiteDesign {
         SiteDesign {
             kind: kind.key().into(),
             theme: it.theme.map(str::to_string),
+            look: it.look,
             origin: it.origin,
             axis: it.axis,
             nx: it.nx as u16,
@@ -406,6 +410,7 @@ impl SiteDesign {
             function: kind.name(),
             theme: self.theme.as_deref().and_then(|t| THEMES.iter().find(|x| x.key == t)).map(|t| t.key),
             stone: 0,
+            look: self.look,
             origin: self.origin,
             axis: self.axis,
             across: [-self.axis[1], self.axis[0]],
