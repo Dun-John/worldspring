@@ -427,7 +427,7 @@ export async function runGallery(target: HTMLElement) {
   // Town walls by culture group (`&items=townwalls` alone; `&ruins=1` all ruined).
   if (!only && (!pick || pick.includes('townwalls'))) {
     head('Town walls by culture group: curtain, corner and wall towers, gatehouse; a ruin; a star bastion (battlemap)');
-    y = townWalls(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 16, query.has('ruins'));
+    y = townWalls(root, y, width, query.has('nolabels'), Number(query.get('sq')) || 16, query.has('ruins'), query.get('panels'));
   }
 
   // The countryside's bounds and sails (`&items=countryside`, or with the fruit tree or water wheel kinds).
@@ -581,7 +581,7 @@ const wallStyle = (group: number, shape: number, material: number, merlons: numb
  * at `sq` px a square: per look a stretch of curtain turning at a corner tower, a wall tower along it and the
  * gatehouse (the town to the south, open country to the north); a ruined run; a star bastion. `ruins` draws
  * every panel ruined. Returns the y below it. */
-function townWalls(root: Container, y0: number, width: number, nolabels: boolean, sq: number, ruins: boolean): number {
+function townWalls(root: Container, y0: number, width: number, nolabels: boolean, sq: number, ruins: boolean, picks: string | null): number {
   // (Tower shapes: round, square, D, octagon; materials: stone, palisade, earth; merlons: broad, square,
   // swallowtail, stepped, stakes, rounded; stones: granite, limestone, sandstone, rose brick, mud brick, timber,
   // earth; gatehouses: square tower, twin drums, arched, bent, log.)
@@ -593,29 +593,45 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
     { label: '4 South: rose brick, the same', group: 2, mat: 0, mer: 2, stone: 3, house: 2, along: 1, corner: 3 },
     { label: '5 Dry: mud brick, square towers set close, stepped merlons, bent entrance', group: 3, mat: 0, mer: 3, stone: 4, house: 3, along: 1, corner: 1, close: true },
     { label: '6 Steppe (and poor North/West): palisade, log blockhouses, log gate', group: 4, mat: 1, mer: 4, stone: 5, house: 4, along: 1, corner: 1 },
-    { label: '7 Steppe rich: rammed earth, tapering round towers, rounded merlons, twin drums', group: 4, mat: 2, mer: 5, stone: 6, house: 1, along: 0, corner: 0 },
+    { label: '7 Steppe rich: rammed earth, round towers, rounded merlons', group: 4, mat: 2, mer: 5, stone: 6, house: 1, along: 0, corner: 0 },
     { label: '8 West, ruined', group: 1, mat: 0, mer: 1, stone: 1, house: 1, along: 2, corner: 0, ruined: true },
   ];
-  const [W, H, wy] = [34, 15, 6];
+  const [W, H, wy] = [31, 12, 5];
   const [pw, ph] = [W * sq, H * sq];
-  const per = Math.max(1, Math.floor((width - 8) / (pw + 24)));
+  const per = Math.max(1, Math.floor((width - 16) / (pw + 16)));
+  // (`&panels=7-9` or `&panels=2,8` shows only those, numbered as the labels; three to a row, the star bastion the ninth.)
+  const shown = new Set<number>();
+  for (const part of (picks ?? '1-9').split(',')) {
+    const [a, b] = part.split('-').map(Number);
+    for (let k = a; k <= (b || a); k++) shown.add(k);
+  }
+  const slots = [...shown].filter((k) => k >= 1 && k <= 9).sort((a, b) => a - b);
+  const BH = 20;
+  const starSq = shown.size < 9 ? sq : sq * 0.8;
+  const rowH = (r: number) => Math.max(...slots.slice(r * per, r * per + per).map((k) => (k === 9 ? BH * starSq : ph) + 30));
+  const rowY = (r: number) => Array.from({ length: r }, (_, i) => rowH(i)).reduce((a, b) => a + b, y0);
   const shape = (kind: number, size: number, pts: number[]): Shape => ({ kind, size, pts });
   const P = (x: number, y: number) => [x * PX, y * PX];
-  const place = (g: Graphics, ox: number, oy: number, w: number, h: number, label: string) => {
+  const place = (g: Graphics, ox: number, oy: number, w: number, h: number, label: string, sc = sq) => {
     const panel = new Container();
     const clip = new Graphics().rect(0, 0, w * PX, h * PX).fill(0xffffff);
     panel.addChild(g, clip);
     g.mask = clip;
-    panel.scale.set(sq / PX);
+    panel.scale.set(sc / PX);
     panel.position.set(ox, oy);
     root.addChild(panel);
     if (nolabels) return;
     const t = new Text({ text: label, style: LABEL });
-    t.position.set(ox, oy + h * sq + 4);
+    t.position.set(ox, oy + h * sc + 4);
     root.addChild(t);
   };
+  const where = (n: number): [number, number] => {
+    const i = slots.indexOf(n);
+    return [16 + (i % per) * (pw + 16), rowY(Math.floor(i / per))];
+  };
   panels.forEach((p, k) => {
-    const [ox, oy] = [16 + (k % per) * (pw + 24), y0 + Math.floor(k / per) * (ph + 30)];
+    if (!shown.has(k + 1)) return;
+    const [ox, oy] = where(k + 1);
     const ruined = ruins || !!p.ruined;
     const g = new Graphics();
     g.rect(0, 0, W * PX, H * PX).fill(GRASS);
@@ -624,8 +640,8 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
     const form = (1 + p.house) * PX;
     const wallFt = p.mat === 1 ? 3 : p.mat === 2 ? 11 : 8;
     // Its towers: the corner at (3, wy), along the curtain at 11 (and 7, 15 set close), the gate's two 52 ft apart.
-    const [ga, gb] = [19, 19 + 52 / 5];
-    const along = p.close ? [8, 13.5] : [11];
+    const [ga, gb] = [16, 16 + 52 / 5];
+    const along = p.close ? [7, 11] : p.ruined || ruins ? [11] : [10];
     const wall = (x0: number, y0w: number, x1: number, y1: number) => shape(0, wallFt * (PX / 5), [...P(x0, y0w), ...P(x1, y1), (ruined ? 4 : 0) * PX, 0, code(0), 0]);
     const stops = [3, ...along, ga];
     const walls = [wall(3, H + 1, 3, wy), ...stops.slice(0, -1).map((x, i) => wall(x, wy, stops[i + 1], wy)), wall(gb, wy, W + 1, wy)];
@@ -641,10 +657,11 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
     for (const t of towers) drawWallTower(g, t);
     place(g, ox, oy, W, H, p.label);
   });
-  let y = y0 + Math.ceil(panels.length / per) * (ph + 30) + 10;
+  const rows = Math.ceil(slots.length / per);
+  const y = rowY(rows) + 10;
   // A star bastion (West, limestone) at a corner of the town (to the south-east): f1, g1, tip, g2, f2, the corner.
-  {
-    const [BW, BH] = [34, 22];
+  if (shown.has(9)) {
+    const BW = 31;
     const g = new Graphics();
     g.rect(0, 0, BW * PX, BH * PX).fill(GRASS);
     g.rect(14 * PX, 11 * PX, (BW - 14) * PX, (BH - 11) * PX).fill(PAVING);
@@ -660,9 +677,9 @@ function townWalls(root: Container, y0: number, width: number, nolabels: boolean
     ];
     const poly = [ring[1], ring[2], ring[3], ring[4], ring[5], [14, 11]].flatMap(([x, yy]) => P(x, yy));
     drawBastion(g, shape(31, 0, [...poly, code, 0]));
-    drawWalls(g, ring.slice(0, -1).map(([x, yy], i) => shape(0, 8 * (PX / 5), [...P(x, yy), ...P(...ring[i + 1]), (ruins ? 4 : 0) * PX, 0, code, 0])));
-    place(g, 16, y, BW, BH, '9 West rich: a star bastion at a corner (its faces wall, its platform paved)');
-    y += BH * sq + 40;
+    drawWalls(g, ring.slice(0, -1).map(([x, yy], i) => shape(0, 12 * (PX / 5), [...P(x, yy), ...P(...ring[i + 1]), (ruins ? 4 : 0) * PX, 0, code, 0])));
+    const [bx, by] = where(9);
+    place(g, bx, by, BW, BH, '9 West rich: a star bastion at a corner (its faces wall, its platform paved)', starSq);
   }
   return y;
 }

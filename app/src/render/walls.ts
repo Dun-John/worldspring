@@ -70,11 +70,11 @@ function blocks(g: Graphics, quads: number[][], tone: () => number, shadow = FT 
 }
 
 /** Loose rubble round (x, y): `n` blocks of mixed sizes within `spread` px. */
-function rubble(x: number, y: number, n: number, spread: number, rnd: () => number): number[][] {
+function rubble(x: number, y: number, n: number, spread: number, rnd: () => number, big = 1): number[][] {
   const out: number[][] = [];
   for (let k = 0; k < n; k++) {
     const [cx, cy] = [x + (rnd() - 0.5) * 2 * spread, y + (rnd() - 0.5) * 2 * spread];
-    const r = FT * (0.55 + rnd() * 0.75);
+    const r = FT * (0.55 + rnd() * 0.75) * big;
     const t = rnd() * Math.PI;
     const pts: number[] = [];
     for (let m = 0; m < 5; m++) {
@@ -86,6 +86,25 @@ function rubble(x: number, y: number, n: number, spread: number, rnd: () => numb
   }
   return out;
 }
+
+/** A collapse in a ruin's ring: a slope of tumbled stone over the ring where it fell (angle `ang` from (x, y),
+ * `r` out to the face, `w` ft across), its outline jagged and inked, a few big blocks heaped on it. */
+function breach(g: Graphics, x: number, y: number, r: number, ang: number, w: number, rnd: () => number, fallen: number[][]) {
+  const half = (w * FT) / 2;
+  const [ux, uy] = [Math.cos(ang), Math.sin(ang)];
+  const at = (a: number, b: number): [number, number] => [x + ux * a - uy * b, y + uy * a + ux * b];
+  const pts: number[] = [...at(r - PARAPET * 2.2, -half * 0.8)];
+  for (let k = 0; k <= 4; k++) pts.push(...at(r + FT * (0.4 + rnd() * 1.6), -half + (k / 4) * half * 2));
+  pts.push(...at(r - PARAPET * 2.2, half * 0.8));
+  g.poly(pts).fill(mix(ST[0], ST[1], 0.5)).stroke({ width: LINE, color: INK, join: 'round' });
+  fallen.push(...rubble(...at(r + FT * 0.2, 0), 3, half * 0.6, rnd, 2.1));
+  fallen.push(...rubble(...at(r - FT * 1.6, (rnd() - 0.5) * half), 2, half * 0.3, rnd, 1.7));
+}
+
+/** The tone of a crenel's notch: the stone's dark lifted toward its mid, so no merlon reads near ink. */
+const notchTone = () => mix(ST[0], ST[1], 0.5);
+/** Whether the stone being drawn is rose brick (it takes coursing lines and a crisper edge). */
+const brick = () => ST === TONES[3];
 
 const stoneTone = (rnd: () => number) => () => (rnd() < 0.35 ? ST[2] : ST[1]);
 
@@ -152,9 +171,9 @@ function use(l: Look | null) {
 const RHYTHM: [number, number, number, number][] = [
   [3.8, 0.6, 2.3, 0.4],
   [2.4, 0.6, 1.4, 0.3],
-  [2.8, 0.4, 1.3, 0.2],
-  [2.0, 0.4, 1.0, 0.2],
-  [2.4, 0.6, 1.4, 0.3],
+  [4.0, 0.4, 2.2, 0.3],
+  [3.4, 0.4, 1.8, 0.2],
+  [3.0, 0.5, 2.0, 0.3],
   [2.6, 0.4, 1.6, 0.2],
 ];
 const rhythm = () => RHYTHM[MER] ?? RHYTHM[M_SQUARE];
@@ -175,10 +194,10 @@ function merlonMark(at: At, m0: number, m1: number, d0: number, d1: number) {
   const mid = (m0 + m1) / 2;
   if (MER === M_SWALLOWTAIL) {
     // (The fork: a V cut down the merlon's middle, wide at the face, narrow at the walk.)
-    const [w0, w1] = [FT * 0.22, FT * 0.5];
+    const [w0, w1] = [FT * 0.3, FT * 0.85];
     FORKS.push([...at(mid - w0, i0), ...at(mid + w0, i0), ...at(mid + w1, i1), ...at(mid - w1, i1)]);
   } else if (MER === M_STEPPED) {
-    const [e, k] = [FT * 0.5, FT * 0.4];
+    const [e, k] = [FT * 0.7, FT * 0.45];
     STEPS.push([...at(m0 + e, i0 + side * k), ...at(m1 - e, i0 + side * k), ...at(m1 - e, i1 - side * k), ...at(m0 + e, i1 - side * k)]);
   } else if (MER === M_ROUNDED) {
     const d = (d0 + d1) / 2;
@@ -195,9 +214,9 @@ function crenelRun(at: At, a0: number, a1: number, d0: number, d1: number, rnd: 
   let last = a0;
   for (let a = a0 + FT * (m * 0.5 + rnd() * m * 0.5); a < a1 - FT * 1.6; ) {
     let c = FT * (c0 + rnd() * cr);
-    if (ruined && rnd() < 0.35) {
-      c += FT * (2.5 + rnd() * 2);
-      if (rnd() < 0.5) fallen.push(...rubble(...at(a + c / 2, d1 + side * FT * 1.4), 1, FT * 0.8, rnd));
+    if (ruined && rnd() < 0.4) {
+      c += FT * (rnd() < 0.5 ? 9 + rnd() * 9 : 2.5 + rnd() * 2);
+      if (rnd() < 0.5) fallen.push(...rubble(...at(a + c / 2, d1 + side * FT * 1.4), 1, FT * 0.8, rnd, 1.8));
     }
     const b = Math.min(a + c, a1 - FT * 0.4);
     crenels.push([...at(a, d0 + side * 1.5), ...at(b, d0 + side * 1.5), ...at(b, d1 - side * 1.5), ...at(a, d1 - side * 1.5)]);
@@ -211,16 +230,16 @@ function crenelRun(at: At, a0: number, a1: number, d0: number, d1: number, rnd: 
 /** Crenels: dark notches through the coping, inked; then the merlons' marks (`merlonMark`). */
 function crenelFill(g: Graphics, crenels: number[][]) {
   for (const q of crenels) g.poly(q);
-  if (crenels.length) g.fill(mix(ST[0], PLUM, 0.3)).stroke({ width: 1.2, color: INK, alpha: 0.8, join: 'round' });
+  if (crenels.length) g.fill(notchTone()).stroke({ width: LINE * 0.8, color: INK, alpha: 0.9, join: 'round' });
   marksFill(g);
 }
 
 /** The merlons' marks pushed since last time (`merlonMark`). */
 function marksFill(g: Graphics) {
   for (const q of FORKS) g.poly(q);
-  if (FORKS.length) g.fill(mix(ST[1], PLUM, 0.2)).stroke({ width: LINE * 0.7, color: INK, alpha: 0.75, join: 'round' });
+  if (FORKS.length) g.fill(mix(ST[1], PLUM, 0.2)).stroke({ width: LINE * 0.8, color: INK, alpha: 0.9, join: 'round' });
   for (const q of STEPS) g.poly(q);
-  if (STEPS.length) g.fill(ST[3]).stroke({ width: 1.1, color: ST[0], alpha: 0.6, join: 'round' });
+  if (STEPS.length) g.fill(ST[3]).stroke({ width: LINE * 0.8, color: INK, alpha: 0.85, join: 'round' });
   for (const q of CROWNS) g.moveTo(q[0], q[1]).lineTo(q[2], q[3]);
   if (CROWNS.length) g.stroke({ width: FT * 0.45, color: ST[3], alpha: 0.85, cap: 'round' });
   FORKS.length = STEPS.length = CROWNS.length = 0;
@@ -327,7 +346,8 @@ export function flagFloor(g: Graphics, pts: number[], rnd: () => number) {
       if (reach > 0) g.moveTo(qx, qy).lineTo(qx + vx * reach, qy + vy * reach);
     }
   }
-  g.stroke({ width: 1.2, color: ST[0], alpha: 0.4 });
+  if (brick()) g.stroke({ width: LINE * 0.8, color: ST[3], alpha: 0.85 });
+  else g.stroke({ width: 1.2, color: ST[0], alpha: 0.4 });
 }
 
 /**
@@ -494,12 +514,12 @@ export function roundParapet(g: Graphics, x: number, y: number, r: number, turn:
   };
   for (let k = 0; k < m; k++) {
     const t0 = k * step + turn;
-    const gone = ruined && (Math.abs(Math.atan2(Math.sin(t0 - lost), Math.cos(t0 - lost))) < 0.6 || rnd() < 0.25);
+    const gone = ruined && (Math.abs(Math.atan2(Math.sin(t0 - lost), Math.cos(t0 - lost))) < 0.8 || rnd() < 0.25);
     if (gone && rnd() < 0.5) fallen.push(...rubble(x + Math.cos(t0) * (rf - FT), y + Math.sin(t0) * (rf - FT), 1, FT * 0.6, rnd));
     notch(gone ? t0 - step * 0.3 : t0 + step * (0.95 - share), t0 + step * 0.95);
     if (!gone) merlonMark(at, (t0 - step * 0.05) * rm, (t0 + step * (0.95 - share)) * rm, rf, r);
   }
-  g.fill(mix(ST[0], PLUM, 0.3)).stroke({ width: 1.2, color: INK, alpha: 0.8, join: 'round' });
+  g.fill(notchTone()).stroke({ width: LINE * 0.8, color: INK, alpha: 0.9, join: 'round' });
   marksFill(g);
   g.circle(x, y, rf).stroke({ width: 1.8, color: INK });
   // The ring's lit and shaded faces.
@@ -509,6 +529,7 @@ export function roundParapet(g: Graphics, x: number, y: number, r: number, turn:
   g.moveTo(x + Math.cos(-Math.PI * 0.1) * (r - 2), y + Math.sin(-Math.PI * 0.1) * (r - 2));
   g.arc(x, y, r - 2, -Math.PI * 0.1, Math.PI * 0.6);
   g.stroke({ width: 3, color: PLUM, alpha: 0.3 });
+  if (ruined) breach(g, x, y, r, lost, Math.min(14, (r / FT) * 1.3), rnd, fallen);
   return lost;
 }
 
@@ -566,12 +587,46 @@ export function drawWalls(g: Graphics, walls: Shape[], gates: Shape[] = []) {
   for (const set of sets.values()) {
     const l = lookOf(set[0], 6);
     use(l);
-    const segs = set.map(wallSeg);
+    const segs = (l.material === MAT_STONE || l.material === MAT_EARTH ? set.flatMap(breaks) : set).map(wallSeg);
     if (l.material === MAT_PALISADE) palisades(g, segs, gates);
     else if (l.material === MAT_EARTH) earthWalls(g, segs);
     else stoneWalls(g, segs);
   }
   use(null);
+}
+
+/** A ruined curtain cut into stretches with gaps between (the walk open to the ground), each stretch's cut ends
+ * bare (broken, rubble heaped); other walls whole. */
+function breaks(s: Shape): Shape[] {
+  if (!(flagsOf(s, 4) & RUINED)) return [s];
+  const [x0, y0, x1, y1] = s.pts;
+  const l = Math.hypot(x1 - x0, y1 - y0);
+  if (l < FT * 16) return [s];
+  const rnd = rngAt(x0 * 0.7 + x1, y0 * 0.7 + y1);
+  rnd();
+  const n = l > FT * 46 ? 2 : 1;
+  const cuts: [number, number][] = [];
+  for (let k = 0; k < n; k++) {
+    const c = (l * (k + 0.3 + rnd() * 0.4)) / n;
+    const w = FT * (7 + rnd() * 6);
+    cuts.push([Math.max(FT * 4, c - w / 2), Math.min(l - FT * 4, c + w / 2)]);
+  }
+  const out: Shape[] = [];
+  const flags = flagsOf(s, 4);
+  let a = 0;
+  const piece = (from: number, to: number, fl: number) => {
+    if (to - from < FT * 3) return;
+    const [ux, uy] = [(x1 - x0) / l, (y1 - y0) / l];
+    const pts = s.pts.slice();
+    [pts[0], pts[1], pts[2], pts[3], pts[4]] = [x0 + ux * from, y0 + uy * from, x0 + ux * to, y0 + uy * to, fl * PX];
+    out.push({ ...s, pts });
+  };
+  cuts.forEach(([c0, c1], k) => {
+    piece(a, c0, flags | BARE_B | (k ? BARE_A : 0));
+    a = c1;
+  });
+  piece(a, l, flags | BARE_A);
+  return out.length ? out : [s];
 }
 
 /** Which side of each segment faces out of the town (+1 its +n, -1 its -n): a run of segments end to end turns
@@ -657,6 +712,16 @@ function stoneWalls(g: Graphics, segs: Seg[]) {
     }
   }
   g.stroke({ width: 1.3, color: ST[0], alpha: 0.6 });
+  if (brick()) {
+    // Rose brick: a few bold light courses along the walk, their joints staggered.
+    for (const s of segs) {
+      const w = s.half - PARAPET;
+      const [a0, a1] = [s.bareA ? FT * 2.8 : 0, s.bareB ? s.l - FT * 2.8 : s.l];
+      for (const d of [-w * 0.5, w * 0.5]) g.moveTo(...s.at(a0, d)).lineTo(...s.at(a1, d));
+      for (let a = a0 + FT * 1.5, j = 0; a < a1; a += FT * 4.5, j++) g.moveTo(...s.at(a, j % 2 ? 0 : -w)).lineTo(...s.at(a, j % 2 ? w : 0));
+    }
+    g.stroke({ width: LINE * 0.8, color: ST[3], alpha: 0.85 });
+  }
   for (const s of segs) {
     const w = s.half - PARAPET;
     // The parapet on the side the light comes from shades the walk beside it.
@@ -681,18 +746,18 @@ function stoneWalls(g: Graphics, segs: Seg[]) {
       g.moveTo(...s.at(a0, d0)).lineTo(...s.at(a1, d0));
     }
   }
-  g.stroke({ width: 1.8, color: INK });
+  g.stroke({ width: brick() ? 2.6 : 1.8, color: INK, join: 'miter' });
   crenelFill(g, crenels);
   // Moss on the stone and the odd crack; a ruin's more of both.
   for (const s of segs) {
-    const n = Math.floor((s.l / (FT * 24)) * (s.ruined ? 3 : 1) + s.rnd());
+    const n = Math.floor((s.l / (FT * 24)) * (s.ruined ? 1.5 : 1) + s.rnd());
     for (let k = 0; k < n; k++) {
       const [mx, my] = s.at(s.rnd() * s.l, (s.rnd() < 0.5 ? -1 : 1) * (s.half - PARAPET * 0.5));
       const r = FT * (0.3 + s.rnd() * 0.25);
       g.ellipse(mx, my, r * 1.3, r).fill({ color: MOSS[0], alpha: 0.85 });
       g.ellipse(mx - r * 0.3, my - r * 0.25, r * 0.6, r * 0.45).fill({ color: MOSS[1], alpha: 0.85 });
     }
-    for (let k = 0; k < (s.ruined ? 3 : 1); k++) {
+    for (let k = 0; k < (s.ruined ? 2 : 1); k++) {
       if (s.rnd() < 0.5) continue;
       const a = s.rnd() * s.l;
       const d = (s.rnd() - 0.5) * s.half;
@@ -702,15 +767,15 @@ function stoneWalls(g: Graphics, segs: Seg[]) {
   g.stroke({ width: 1.4, color: ST[0], alpha: 0.9, join: 'round' });
   // Rubble spilled where a stretch broke off, and below a ruin's walls.
   for (const s of segs) {
-    if (s.bareA) fallen.push(...rubble(...s.at(-FT * 1.5, 0), 8, s.half * 1.2, s.rnd));
-    if (s.bareB) fallen.push(...rubble(...s.at(s.l + FT * 1.5, 0), 8, s.half * 1.2, s.rnd));
-    if (s.ruined) for (let a = s.rnd() * FT * 20; a < s.l; a += FT * (14 + s.rnd() * 16)) fallen.push(...rubble(...s.at(a, (s.rnd() < 0.5 ? -1 : 1) * (s.half + FT * 1.5)), 2, FT * 1.2, s.rnd));
+    if (s.bareA) fallen.push(...rubble(...s.at(-FT * 2, 0), 3, s.half * 0.7, s.rnd, 2));
+    if (s.bareB) fallen.push(...rubble(...s.at(s.l + FT * 2, 0), 3, s.half * 0.7, s.rnd, 2));
+    if (s.ruined) for (let a = s.rnd() * FT * 20; a < s.l; a += FT * (22 + s.rnd() * 16)) fallen.push(...rubble(...s.at(a, (s.rnd() < 0.5 ? -1 : 1) * (s.half + FT * 1.5)), 1, FT * 1.2, s.rnd, 1.8));
   }
   blocks(g, fallen, stoneTone(segs[0]?.rnd ?? Math.random));
 }
 
 /** Stake tops' radius on a palisade (px). */
-const STAKE = FT * 0.55;
+const STAKE = FT * 0.85;
 
 /**
  * A timber palisade (3 ft): a row of stakes along its outer face seen from above, each sharpened to a point
@@ -725,7 +790,7 @@ function palisades(g: Graphics, segs: Seg[], gates: Shape[]) {
   segs.forEach((s, i) => {
     const d = out[i] * (s.half - STAKE);
     const [a0, a1] = [s.bareA ? FT * 2 : 0, s.bareB ? s.l - FT * 2 : s.l];
-    for (let a = a0 + STAKE * 0.6; a < a1; a += STAKE * 1.9) {
+    for (let a = a0 + STAKE * 0.6; a < a1; a += STAKE * 2.05) {
       if (s.ruined && s.rnd() < 0.3) {
         if (s.rnd() < 0.3) fallen.push([s, a, -out[i]]);
         continue;
@@ -837,40 +902,60 @@ function earthWalls(g: Graphics, segs: Seg[]) {
   g.stroke({ width: 1.2, color: ST[0], alpha: 0.7 });
   crenelFill(g, crenels);
   for (const s of segs) {
-    if (s.bareA) fallen.push(...rubble(...s.at(-FT * 1.5, 0), 6, half, s.rnd));
-    if (s.bareB) fallen.push(...rubble(...s.at(s.l + FT * 1.5, 0), 6, half, s.rnd));
-    if (s.ruined) for (let a = s.rnd() * FT * 20; a < s.l; a += FT * (16 + s.rnd() * 16)) fallen.push(...rubble(...s.at(a, (s.rnd() < 0.5 ? -1 : 1) * (half + FT * 1.5)), 2, FT * 1.4, s.rnd));
+    if (s.bareA) fallen.push(...rubble(...s.at(-FT * 2, 0), 3, half * 0.7, s.rnd, 2));
+    if (s.bareB) fallen.push(...rubble(...s.at(s.l + FT * 2, 0), 3, half * 0.7, s.rnd, 2));
+    if (s.ruined) for (let a = s.rnd() * FT * 20; a < s.l; a += FT * (24 + s.rnd() * 16)) fallen.push(...rubble(...s.at(a, (s.rnd() < 0.5 ? -1 : 1) * (half + FT * 1.5)), 1, FT * 1.4, s.rnd, 1.8));
   }
   blocks(g, fallen, stoneTone(segs[0].rnd));
 }
 
 /**
- * A star bastion's platform (`Layout::bastions`: f1, g1, tip, g2, f2, the corner, px, then its style): the
- * ground inside its walls filled to the walk in the stone's packed tone, the shade of its lit faces' parapets
- * on it. Its faces are wall segments, drawn over it by `drawWalls`.
+ * A star bastion's platform (`Layout::bastions`: f1, g1, tip, g2, f2, the corner, px, then its style): a work of
+ * stone, a tone apart from the ground. Inside its curtain (drawn over its edge by `drawWalls`) the walk steps down
+ * a sloping bank, lit on the faces toward the light and shaded away from it, to the flat terreplein inside, whose
+ * edge is inked and coped; a few big joints of paving square to the tip.
  */
 export function drawBastion(g: Graphics, s: Shape) {
   const pts = s.pts.slice(0, 12);
   use(lookOf(s, 12));
-  g.poly(pts).fill(mix(WK, ST[1], 0.35));
+  const hull = pts.slice(0, 10);
   const n = pts.length / 2;
   let [cx, cy] = [0, 0];
   for (let i = 0; i < n; i++) [cx, cy] = [cx + pts[i * 2] / n, cy + pts[i * 2 + 1] / n];
-  for (let i = 0; i < 4; i++) {
-    const j = i + 1;
-    const [mx, my] = [(pts[i * 2] + pts[j * 2]) / 2, (pts[i * 2 + 1] + pts[j * 2 + 1]) / 2];
-    if (lit(mx - cx, my - cy) > 0.1) g.moveTo(pts[i * 2], pts[i * 2 + 1]).lineTo(pts[j * 2], pts[j * 2 + 1]);
-  }
-  g.stroke({ width: FT * 3, color: PLUM, alpha: 0.12 });
-  // (A few long joints of its paving, square to the face at the tip.)
   const [tx, ty] = [pts[4], pts[5]];
   const [vx, vy] = [cx - tx, cy - ty];
   const lv = Math.hypot(vx, vy) || 1;
-  for (let k = 1; k < 4; k++) {
-    const [px, py] = [tx + vx * 0.28 * k, ty + vy * 0.28 * k];
-    g.moveTo(px - (vy / lv) * lv * 0.35, py + (vx / lv) * lv * 0.35).lineTo(px + (vy / lv) * lv * 0.35, py - (vx / lv) * lv * 0.35);
+  // (How far the bank runs in from the curtain, held to a share of the work's depth.)
+  const edge = Math.min(FT * 6, lv * 0.12);
+  const bank = Math.min(FT * 4.5, lv * 0.14);
+  const out = inset(hull, edge);
+  const inner = inset(hull, edge + bank);
+  g.poly(pts).fill(ST[1]);
+  g.poly(inner).fill(mix(ST[1], ST[2], 0.75));
+  const quad = (i: number) => {
+    const j = (i + 1) % 5;
+    return [out[i * 2], out[i * 2 + 1], out[j * 2], out[j * 2 + 1], inner[j * 2], inner[j * 2 + 1], inner[i * 2], inner[i * 2 + 1]];
+  };
+  const faces: number[][][] = [[], []];
+  for (let i = 0; i < 4; i++) {
+    const [mx, my] = [(hull[i * 2] + hull[(i + 1) * 2]) / 2, (hull[i * 2 + 1] + hull[(i + 1) * 2 + 1]) / 2];
+    faces[lit(mx - cx, my - cy) > 0.05 ? 0 : 1].push(quad(i));
   }
-  g.stroke({ width: 1.2, color: ST[0], alpha: 0.3 });
+  for (const q of faces[0]) g.poly(q);
+  g.fill(ST[2]);
+  for (const q of faces[1]) g.poly(q);
+  g.fill(mix(ST[1], PLUM, 0.3));
+  // The terreplein's edge: a coping line, inked, lit where it faces the light.
+  for (let i = 0; i < 4; i++) g.moveTo(inner[i * 2], inner[i * 2 + 1]).lineTo(inner[(i + 1) * 2], inner[(i + 1) * 2 + 1]);
+  g.stroke({ width: OUT * 0.9, color: INK, cap: 'round', join: 'round' });
+  for (const q of faces[0]) g.moveTo(q[6], q[7]).lineTo(q[4], q[5]);
+  g.stroke({ width: FT * 0.5, color: ST[3], alpha: 0.9, cap: 'round' });
+  // A few big joints of its paving, square to the face at the tip.
+  for (let k = 1; k < 4; k++) {
+    const [px, py] = [tx + vx * 0.3 * k, ty + vy * 0.3 * k];
+    g.moveTo(px - (vy / lv) * lv * 0.3, py + (vx / lv) * lv * 0.3).lineTo(px + (vy / lv) * lv * 0.3, py - (vx / lv) * lv * 0.3);
+  }
+  g.stroke({ width: LINE, color: ST[0], alpha: 0.7 });
   use(null);
 }
 
@@ -929,7 +1014,7 @@ function towerBody(g: Graphics, s: Shape, look: Look) {
   const fallen: number[][] = [];
   const { ex, ey, rf, lost } = roundTop(g, x, y, r, rnd, ruined, fallen, earth);
   if (ruined) {
-    fallen.push(...rubble(x + Math.cos(lost) * rf * 0.5, y + Math.sin(lost) * rf * 0.5, 5, rf * 0.3, rnd));
+    fallen.push(...rubble(x + Math.cos(lost) * rf * 0.5, y + Math.sin(lost) * rf * 0.5, 2, rf * 0.3, rnd, 1.6));
     for (let k = 0; k < 4; k++) {
       const [mx, my] = [x + (rnd() - 0.5) * rf * 1.4, y + (rnd() - 0.5) * rf * 1.4];
       g.ellipse(mx, my, FT * 0.6, FT * 0.45).fill({ color: MOSS[1], alpha: 0.8 });
@@ -1064,7 +1149,8 @@ function drawShapedTower(g: Graphics, s: Shape, shape: number) {
   const fallen: number[][] = [];
   ringParapet(g, outer, inner, rnd, ruined, fallen);
   if (ruined) {
-    fallen.push(...rubble(cx + (rnd() - 0.5) * r * 0.6, cy + (rnd() - 0.5) * r * 0.6, 5, r * 0.25, rnd));
+    breach(g, x, y, r * 0.95, Math.atan2(uy, ux) + (rnd() - 0.5) * 2.4, Math.min(12, (r / FT) * 1.2), rnd, fallen);
+    fallen.push(...rubble(cx + (rnd() - 0.5) * r * 0.6, cy + (rnd() - 0.5) * r * 0.6, 2, r * 0.25, rnd, 1.5));
     for (let k = 0; k < 4; k++) g.ellipse(cx + (rnd() - 0.5) * r * 1.1, cy + (rnd() - 0.5) * r * 1.1, FT * 0.6, FT * 0.45).fill({ color: MOSS[1], alpha: 0.8 });
   }
   blocks(g, fallen, stoneTone(rnd));
@@ -1218,7 +1304,8 @@ function drawSquareTower(g: Graphics, s: Shape) {
   const fallen: number[][] = [];
   ringParapet(g, quad(-h, h, -h, h), quad(-f, f, -f, f), rnd, ruined, fallen);
   if (ruined) {
-    fallen.push(...rubble(x, y, 5, f * 0.4, rnd));
+    breach(g, x, y, h, Math.atan2(uy, ux) + Math.floor(rnd() * 4) * (Math.PI / 2), Math.min(12, (h / FT) * 1.2), rnd, fallen);
+    fallen.push(...rubble(x, y, 2, f * 0.4, rnd, 1.5));
     for (let k = 0; k < 4; k++) {
       const [mx, my] = at((rnd() - 0.5) * f * 1.4, (rnd() - 0.5) * f * 1.4);
       g.ellipse(mx, my, FT * 0.6, FT * 0.45).fill({ color: MOSS[1], alpha: 0.8 });
@@ -1350,8 +1437,10 @@ function stakeTops(g: Graphics, stakes: [number, number][], r: number) {
     g.closePath();
   }
   g.fill(ST[2]);
+  for (const [x, y] of stakes) g.circle(x + LX * r * 0.3, y + LY * r * 0.3, r * 0.3);
+  g.fill(ST[3]);
   for (const [x, y] of stakes) g.circle(x, y, r);
-  g.stroke({ width: LINE, color: INK });
+  g.stroke({ width: OUT * 0.8, color: INK });
   for (const [x, y] of stakes) g.moveTo(x - LX * r * 0.15, y - LY * r * 0.15).lineTo(x + LX * r * 0.7, y + LY * r * 0.7);
   g.stroke({ width: 1, color: ST[0], alpha: 0.6 });
 }
