@@ -6401,6 +6401,14 @@ fn handwalls(ctx: &mut Ctx, r: &mut Report) {
         r.tally(&format!("{kind}: walls"), 1);
         r.tally(&format!("{kind}: gates"), gates.len());
         r.value(&format!("{kind}: gates each"), gates.len() as f64, label.clone());
+        // (A gate's two towers as far apart as a generated gate's on a straight wall: 52 ft.)
+        let gt = &l.gate_towers;
+        for k in 1..gt.len() {
+            let d = dist(gt[k - 1], gt[k]);
+            if d < 60.0 {
+                r.measure(&format!("{kind}: gate towers apart (ft), least"), true, d, format!("{label} at ({:.0}, {:.0})", gt[k][0], gt[k][1]));
+            }
+        }
         let mut crossings = handwall::road_crossings(&w3, &t3, &c.pts, c.closed);
         crossings.extend(main.iter().copied());
         r.tally(&format!("{kind}: road/approach/main crossings"), crossings.len());
@@ -6428,7 +6436,10 @@ fn handwalls(ctx: &mut Ctx, r: &mut Report) {
                     let p = lerp(a, b, (j as f64 + 0.5) / k as f64);
                     let q = worldgen::lod::rivers::clear_of_rivers(&t3.rivers, p[0], p[1], 6.0, t3.cell_ft);
                     let wet = shore.wet(p) || (q.0 - p[0]).abs() + (q.1 - p[1]).abs() > 0.01;
-                    let laid = l.walls.iter().any(|w| w.windows(2).any(|s| seg_dist(p, s[0], s[1]) < 6.0)) || gates.iter().any(|g| dist(*g, p) < 32.0);
+                    // (In a gate: between its towers, round the bend where one stands on a corner.)
+                    let gt = &l.gate_towers;
+                    let in_gate = (1..gt.len()).any(|k| dist(gt[k - 1], gt[k]) < 60.0 && dist(p, gt[k - 1]) + dist(p, gt[k]) < 128.0);
+                    let laid = l.walls.iter().any(|w| w.windows(2).any(|s| seg_dist(p, s[0], s[1]) < 6.0)) || gates.iter().any(|g| dist(*g, p) < 32.0) || in_gate;
                     if !wet && !laid {
                         short += dist(a, b) / k as f64;
                     }
@@ -6476,6 +6487,30 @@ fn segs_cross(a: P, b: P, c: P, d: P) -> bool {
 }
 
 /// Gates and towers put in a town's own wall by hand (M18b, `edit_town walls: {…}`): per tier, up
+
+/// A refusal's reason whole, for a tally: its ids and corner numbers as `…`/`N`, what it says in
+/// brackets left out.
+fn reason(why: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut depth = 0i32;
+    for w in why.split_whitespace() {
+        let open = w.starts_with('(');
+        if open {
+            depth += 1;
+        }
+        let shut = w.ends_with(')') || w.ends_with("),") || w.ends_with(").");
+        if depth == 0 {
+            let bare = w.trim_end_matches([',', '.', ':', ';']);
+            let id = bare.split(':').count() == 3 && bare.split(':').skip(1).all(|x| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit()));
+            let after_corner = out.last().is_some_and(|p| matches!(p.as_str(), "corner" | "corners" | "and")) && bare.bytes().all(|c| c.is_ascii_digit());
+            out.push(if id { format!("{}:…", bare.split(':').next().unwrap()) } else if after_corner { "N".into() } else { w.to_string() });
+        }
+        if shut && depth > 0 {
+            depth -= 1;
+        }
+    }
+    out.join(" ").trim_end_matches([':', ',']).to_string()
+}
 /// to 3 walled towns each get 2 gates and 3 towers, then lose one generated gate and one tower;
 /// one generated gate renamed first. Rules (each 0): a hand gate with no way through (no track
 /// from it, or one over a building), a hand gate not in the group's gatehouse form (a bent one may
@@ -6485,8 +6520,9 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
     use worldgen::t0::settle::Tier;
     use worldgen::town::gatehouse;
     use worldgen::town::wallgates::{GATE_TOWER_ID, HAND_TOWER_ID, OTHER_TOWER_ID};
-    const RULES: [&str; 6] = [
+    const RULES: [&str; 7] = [
         "hand gate with no way through",
+        "hand gate's track along the wall",
         "hand gate not in the group's form",
         "hand tower over a building, street or tower",
         "other ids moved",
@@ -6506,6 +6542,8 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
         };
         World::new(f).unwrap()
     };
+    let label_of = |tn: &str, ci: usize, v: u64| format!("{tn} #{ci} gate {v}");
+    let added_pts = |g: &[(String, P, String)], added: &[usize]| -> Vec<P> { g.iter().filter(|x| added.iter().any(|v| x.0.ends_with(&format!(":{v}")))).map(|x| x.1).collect() };
     let towers_of = |l: &town::Layout| -> Vec<(usize, P, bool)> { worldgen::interior::towers(l).into_iter().enumerate().map(|(k, t)| (l.tower_id(k), t.0, t.2)).collect() };
     let gates_of = |w: &World, l: &town::Layout| -> Vec<(String, P, String)> { town::places::of(w, t0, l).into_iter().filter(|p| p.kind == "gate").map(|p| (p.id, p.at, p.name)).collect() };
     for tier in [Tier::Town, Tier::City, Tier::Metropolis] {
@@ -6541,7 +6579,7 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
                 let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"gates_add":[{v}]}}}}"#)) else { continue };
                 for x in rep["wall"]["refused"].as_array().into_iter().flatten() {
                     let why = x["why"].as_str().unwrap_or("");
-                    r.tally(&format!("gates refused: {}", why.split(" (").next().unwrap_or(why).split(" corner ").next().unwrap_or(why)), 1);
+                    r.tally(&format!("gates refused: {}", reason(why)), 1);
                 }
                 if rep["wall"]["gates_added"].as_array().is_some_and(|a| !a.is_empty()) {
                     added.push(v);
@@ -6549,6 +6587,26 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
                 }
             }
             r.tally(&format!("{tn}: hand gates added"), added.len());
+            // (How far the wall bends at each gate: generated and by hand.)
+            let at_of = |v: u64| corners.iter().find(|c| c["corner"].as_u64() == Some(v)).map(|c| [c["at"][0].as_f64().unwrap(), c["at"][1].as_f64().unwrap()]);
+            for c in corners.iter().filter(|c| c["wall"] == true) {
+                let v = c["corner"].as_u64().unwrap();
+                let hand = added.contains(&(v as usize));
+                if !(hand || c["gate"] == true) {
+                    continue;
+                }
+                let nb = &c["wall_next"];
+                let (Some(a), Some(p), Some(b)) = (nb[0].as_u64().and_then(at_of), at_of(v), nb[1].as_u64().and_then(at_of)) else { continue };
+                let (u, w) = (sub(a, p), sub(b, p));
+                let cos = (u[0] * w[0] + u[1] * w[1]) / (dist(a, p) * dist(b, p)).max(1e-9);
+                let bend = 180.0 - cos.clamp(-1.0, 1.0).acos().to_degrees();
+                let who = if hand { "hand" } else { "generated" };
+                r.measure(&format!("{tn}: wall's bend at a {who} gate (deg), most"), false, bend, label_of(&tn, ci, v));
+                if bend > 20.0 {
+                    r.tally(&format!("{tn}: {who} gates on a bend over 20 deg"), 1);
+                }
+                r.tally(&format!("{tn}: {who} gates looked at for bends"), 1);
+            }
             // Three towers along the longest sides that take one.
             let mut sides: Vec<(f64, usize, usize)> = Vec::new();
             for (chain_k, c) in wall.iter().enumerate() {
@@ -6565,7 +6623,7 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
                 let Ok((e, rep)) = ask(&w, ci, &format!(r#"{{"walls":{{"towers_add":[[{a},{b},0.5]]}}}}"#)) else { continue };
                 for x in rep["wall"]["refused"].as_array().into_iter().flatten() {
                     let why = x["why"].as_str().unwrap_or("");
-                    r.tally(&format!("towers refused: {}", why.split(" t:").next().unwrap_or(why).split(" b:").next().unwrap_or(why).split(" gt:").next().unwrap_or(why)), 1);
+                    r.tally(&format!("towers refused: {}", reason(why)), 1);
                 }
                 if rep["wall"]["towers_added"].as_array().is_some_and(|a| !a.is_empty()) {
                     towers_added += 1;
@@ -6609,11 +6667,37 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
                         if let Some(b) = over {
                             r.add("hand gate with no way through", 1.0, label(&format!("gate {v}: track over b:{ci}:{}", b.id)));
                         }
+                        // (Past its first 70 ft straight out: its edge 25 ft or more off the wall's
+                        // outer face, but where it joins a road already there.)
+                        let half_wall = 0.5 * l.wall_style.thickness();
+                        let mut run = 0.0;
+                        let mut worst: Option<(f64, P)> = None;
+                        for sg in pts.windows(2) {
+                            let d = dist(sg[0], sg[1]);
+                            let steps = (d / 4.0).ceil().max(1.0) as usize;
+                            for j in 0..steps {
+                                let q = lerp(sg[0], sg[1], j as f64 / steps as f64);
+                                let at = run + d * j as f64 / steps as f64;
+                                if at < 72.0 {
+                                    continue;
+                                }
+                                let by_road = l.roads.iter().filter(|x| !std::ptr::eq(&x.0, pts)).any(|x| x.0.windows(2).any(|t| seg_dist(q, t[0], t[1]) < 0.5 * x.2 + 0.5 * wd + 4.0));
+                                let gap = l.walls.iter().flat_map(|w| w.windows(2)).map(|t| seg_dist(q, t[0], t[1])).fold(f64::MAX, f64::min) - half_wall - 0.5 * wd;
+                                if !by_road && gap < 25.0 && worst.is_none_or(|w| gap < w.0) {
+                                    worst = Some((gap, q));
+                                }
+                            }
+                            run += d;
+                        }
+                        if let Some((gap, q)) = worst {
+                            r.add("hand gate's track along the wall", 1.0, label(&format!("gate {v}: {gap:.0} ft off the wall at ({:.0}, {:.0})", q[0], q[1])));
+                        }
                     }
                 }
                 match houses.iter().find(|h| dist(lerp(h.a, h.b, 0.5), *gp) < 20.0) {
                     None => r.add("hand gate not in the group's form", 1.0, label(&format!("gate {v}: no gatehouse"))),
                     Some(h) => {
+                        r.measure("hand gate towers apart (ft), least", true, dist(h.a, h.b), label(&format!("gate {v}")));
                         r.tally(&format!("{tn}: hand gatehouses {}", FORMS[h.form as usize]), 1);
                         let want = l.wall_style.gatehouse;
                         if h.form != want {
@@ -6625,6 +6709,9 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
                         }
                     }
                 }
+            }
+            for h in houses.iter().filter(|h| !added_pts(&g_after, &added).iter().any(|p| dist(lerp(h.a, h.b, 0.5), *p) < 20.0)) {
+                r.measure("generated gate towers apart (ft), least", true, dist(h.a, h.b), label("generated gate"));
             }
             // Hand towers: clear of buildings, streets crossing the wall and other towers.
             let all = worldgen::interior::towers(&l);
@@ -6642,7 +6729,7 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
                 if let Some(b) = over_b {
                     r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over b:{ci}:{}", b.id)));
                 } else if let Some((_, t)) = over_t {
-                    r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over t:{ci}:{}", t.0)));
+                    r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over t:{ci}:{} ({:.0} ft apart; it stood {:.0} ft off before)", t.0, dist(t.1, p), t_before.iter().find(|b| b.0 == t.0).map_or(-1.0, |b| dist(b.1, t.1)))));
                 } else if over_s.is_some() {
                     r.add("hand tower over a building, street or tower", 1.0, label(&format!("t:{ci}:{id} over a road class {}", over_s.unwrap().1)));
                 }
@@ -6650,11 +6737,20 @@ fn wallgates(ctx: &mut Ctx, r: &mut Report) {
             // Ids: every tower but those the edits took, where it stood; every gate but the one taken out.
             let added_at: Vec<P> = added.iter().filter_map(|v| wall.iter().find(|c| c.0 == *v).map(|c| c.1)).collect();
             let gone_at = wall.iter().find(|c| c.0 == gone_gate).map(|c| c.1).unwrap_or([0.0; 2]);
+            // (Moved: along the wall's run; a curtain bowed anew may carry a tower out from it.)
+            let runs = &l.hand_wall.runs;
+            let along = |a: P, b: P| match (town::wallgates::run_place(runs, a), town::wallgates::run_place(runs, b)) {
+                (Some(x), Some(y)) if x.0 == y.0 => (x.1 - y.1).abs(),
+                _ => dist(a, b),
+            };
             for &(id, p, gate) in &t_before {
                 let meant = Some(id) == gone_tower || added_at.iter().any(|a| dist(*a, p) < 90.0) || (gate && dist(gone_at, p) < 40.0);
                 match t_after.iter().find(|t| t.0 == id) {
-                    Some(t) if dist(t.1, p) > 60.0 => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} moved {:.0} ft", dist(t.1, p)))),
-                    Some(t) if dist(t.1, p) > 1.0 => r.tally("towers shifted 1-60 ft (their curtain bowed anew)", 1),
+                    Some(t) if along(t.1, p) > 60.0 => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} moved {:.0} ft along the wall", along(t.1, p)))),
+                    Some(t) if dist(t.1, p) > 1.0 => {
+                        r.tally("towers shifted (their curtain bowed anew)", 1);
+                        r.measure("tower shifted by a curtain bowed anew (ft), most", false, dist(t.1, p), label(&format!("t:{ci}:{id}")));
+                    }
                     None if !meant => r.add("other ids moved", 1.0, label(&format!("t:{ci}:{id} gone (gate tower {gate}, {:.0} ft from the gate out; nearest now {:?})", dist(gone_at, p), t_after.iter().map(|t| (t.0, dist(t.1, p).round(), t.2)).min_by(|a, b| a.1.total_cmp(&b.1))))),
                     _ => {}
                 }
