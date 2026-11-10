@@ -2069,7 +2069,7 @@ function quad4(a: [number, number], b: [number, number], c: [number, number], d:
 
 /** Where an upright thing drawn from a high angle stands in its frame: its foot, px below the centre, by kind
  * id (its drop shadow falls from there: `BattlemapLayer`). Things seen from straight above stand at the centre. */
-export const UPRIGHT_FOOT: Record<number, number> = { 47: 1.7 * FT, 48: 1.85 * FT, 49: 1.1 * FT, 50: 2.15 * FT, 57: 1.3 * FT, 60: 2.3 * FT, 101: 1.3 * FT };
+export const UPRIGHT_FOOT: Record<number, number> = { 47: 1.7 * FT, 48: 1.85 * FT, 49: 1.1 * FT, 50: 2.15 * FT, 57: 1.3 * FT, 60: 2.3 * FT, 101: 2.2 * FT };
 
 /** The high-angle view of upright things (as the headstone; the style guide's `hk` 0.5, `dk` 0.87): a ground
  * point `x` across and `d` deep (toward the viewer) and `h` up, in feet, to frame pixels, the foot at (0, `foot`). */
@@ -4277,8 +4277,12 @@ function anvil(g: Graphics, r: number, rnd: () => number, v: number) {
 
 /** Cairn: a heap of rounded field stones about 4 ft across, the big ones round its foot, smaller ones piled
  * on them toward the middle and a capstone on top; moss on one, a lighter heap of fresh stones on another. */
-function cairn(g: Graphics, r: number, rnd: () => number, v: number) {
-  const tones = STONE[v];
+function cairn(g: Graphics, r0: number, rnd: () => number, v: number) {
+  // (Drawn a third over its catalog size, a darker heap on a dark ring and a shadow, so it stands out among headstones.)
+  const r = r0 * 1.35;
+  const tones = STONE[v].map((c) => shade(c, 0.82));
+  g.ellipse(r * 0.22, r * 0.3, r * 1.12, r * 0.95).fill({ color: 0x1c1a14, alpha: 0.3 });
+  g.circle(0, 0, r * 0.98).fill(tones[0]).stroke({ width: OUT, color: INK });
   const ring = (n: number, d: number, s: number, off: number) => {
     const ph = rnd() * Math.PI * 2;
     for (let i = 0; i < n; i++) {
@@ -4297,9 +4301,10 @@ function cairn(g: Graphics, r: number, rnd: () => number, v: number) {
  * right, a crack or two and pale lichen; grass and a fallen chip at its foot; one leaning. */
 function standingStone(g: Graphics, r: number, rnd: () => number, v: number) {
   void r;
-  const tones = [STONE[1], STONE[3], STONE[0], STONE[2]][v];
-  // (Drawn a third over life size, as the headstones are, so it stands taller than they do.)
-  const S = 1.35;
+  // (A cooler, darker grey than the headstones' stone.)
+  const tones = [STONE[1], STONE[3], STONE[0], STONE[2]][v].map((c) => shade(c, 0.78));
+  // (Drawn well over life size, so it stands taller than the headstones do.)
+  const S = 1.6;
   const P0 = upright(UPRIGHT_FOOT[101]);
   const P = (x: number, d: number, h: number) => P0(x * S, d * S, h * S);
   const H = [8, 9.2, 7, 6.4][v];
@@ -4312,6 +4317,12 @@ function standingStone(g: Graphics, r: number, rnd: () => number, v: number) {
   ];
   const face = (d: number) => out.flatMap(([x, h]) => P(x + lean * h, d, h));
   const ink = { width: 2.2, color: INK, join: 'round' as const };
+  // Its shadow cast to the lower right across the grass.
+  {
+    const [b0, b1] = [P(-1.5, 0.4, 0), P(1.45, 0.4, 0)];
+    const [dx, dy] = [H * S * FT * 0.3, H * S * FT * 0.12];
+    g.poly([b0[0], b0[1], b1[0], b1[1], b1[0] + dx, b1[1] + dy, b0[0] + dx * 0.9 + 6, b0[1] + dy + 4]).fill({ color: 0x1c1a14, alpha: 0.36 });
+  }
   for (const x of [-1.7, 1.6]) footGrass(g, x * S * FT, P(0, 0.2, 0)[1], 6, rnd);
   // Its top, seen from above behind the front face, then the face.
   g.poly(face(-0.7)).fill(shade(tones[1], 1.05)).stroke(ink);
@@ -4407,24 +4418,30 @@ function lychgate(g: Graphics, r: number, rnd: () => number, v: number) {
   }
   // The posts, past the gable ends.
   for (const sx of [-1, 1]) for (const sy of [-1, 1]) g.rect(sx * px - 0.45 * FT, sy * py - 0.45 * FT, 0.9 * FT, 0.9 * FT).fill(WOOD[1]).stroke({ width: LINE, color: INK });
-  // The roof: the south plane in shade, the north lit, tile rows along the ridge.
-  g.rect(-rx, -ry, rx * 2, ry * 2).fill(roof[0]).stroke({ width: OUT, color: INK, join: 'round' });
-  g.rect(-rx, -ry, rx * 2, ry).fill(roof[2]);
-  g.rect(-rx, 0, rx * 2, ry).fill(roof[1]);
+  // The roof: an eave overhang with its shadow, the south plane in shade, the north lit, tile rows along the ridge.
+  const ov = 0.5 * FT;
+  g.rect(-rx - ov + 3, -ry - ov + 4, rx * 2 + ov * 2, ry * 2 + ov * 2).fill({ color: 0x1c1a14, alpha: 0.32 });
+  g.rect(-rx - ov, -ry - ov, rx * 2 + ov * 2, ry * 2 + ov * 2).fill(shade(roof[0], 0.8)).stroke({ width: OUT, color: INK, join: 'round' });
+  g.rect(-rx, -ry, rx * 2, ry).fill(shade(roof[2], 1.12));
+  g.rect(-rx, 0, rx * 2, ry).fill(shade(roof[0], 0.9));
   for (let k = 1; k < 4; k++) {
     const y = (ry * k) / 4;
-    g.moveTo(-rx + 2, -y).lineTo(rx - 2, -y).moveTo(-rx + 2, y).lineTo(rx - 2, y);
+    g.moveTo(-rx + 2, -y).lineTo(rx - 2, -y);
+    g.moveTo(-rx + 2, y).lineTo(rx - 2, y);
   }
-  g.stroke({ width: 1.2, color: shade(roof[0], 0.75), alpha: 0.8 });
+  g.stroke({ width: 1.4, color: shade(roof[0], 0.6), alpha: 0.85 });
   if (v === 3) for (let i = 0; i < 3; i++) moss(g, -rx * 0.6 + rnd() * rx * 1.2, -ry * 0.6 + rnd() * ry * 1.4, 5, rnd);
-  // Barge boards and the ridge.
+  // Barge boards, the eave edges and a heavy ridge: a dark line, a pale cap on its lit side.
   for (const sx of [-1, 1]) g.rect(sx * rx - (sx > 0 ? 0.35 * FT : 0), -ry, 0.35 * FT, ry * 2).fill(WOOD[0]);
-  g.moveTo(-rx, 0).lineTo(rx, 0).stroke({ width: 3, color: shade(roof[0], 0.55), cap: 'round' });
+  g.moveTo(-rx, -ry).lineTo(rx, -ry).moveTo(-rx, ry).lineTo(rx, ry).stroke({ width: 2.4, color: shade(roof[0], 0.45) });
+  g.moveTo(-rx, 0).lineTo(rx, 0).stroke({ width: 6, color: shade(roof[0], 0.5), cap: 'round' });
+  g.moveTo(-rx + 2, -2).lineTo(rx - 2, -2).stroke({ width: 3, color: shade(roof[2], 1.3), cap: 'round' });
   g.rect(-rx, -ry, rx * 2, ry * 2).stroke({ width: OUT, color: INK, join: 'round' });
-  // The way through: a dark opening under each eave, between two stout gate posts standing up over the roof's edge.
+  // The way through: a dark threshold cut in each eave, flags worn pale before it, between two stout gate posts.
   for (const sy of [-1, 1]) {
-    g.rect(-1.5 * FT, sy > 0 ? ry - 0.55 * FT : -ry, 3 * FT, 0.55 * FT).fill({ color: 0x20170f, alpha: 0.78 });
-    for (const sx of [-1, 1]) g.rect(sx * 1.5 * FT - 0.4 * FT, sy * ry - 0.4 * FT, 0.8 * FT, 0.8 * FT).fill(WOOD[2]).stroke({ width: LINE, color: INK });
+    const y0 = sy > 0 ? ry - 0.9 * FT : -ry - ov;
+    g.rect(-1.5 * FT, y0, 3 * FT, 0.9 * FT + ov).fill({ color: 0x120c07, alpha: 0.9 }).stroke({ width: LINE, color: INK });
+    for (const sx of [-1, 1]) g.rect(sx * 1.5 * FT - 0.4 * FT, sy * ry - 0.4 * FT + sy * ov * 0.6, 0.8 * FT, 0.8 * FT).fill(WOOD[2]).stroke({ width: LINE, color: INK });
   }
 }
 
@@ -4626,7 +4643,7 @@ const DRAW: Record<number, Draw> = {
 };
 
 /** Room in the frame beyond the footprint (squares, by kind id) for tall things drawn from a high angle. */
-const ROOM: Record<number, number> = { 101: 1.25, 103: 1.12, 105: 0.84, 48: 0.6, 62: 1.16, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
+const ROOM: Record<number, number> = { 100: 1.9, 101: 6.2, 103: 1.12, 105: 0.84, 48: 0.6, 62: 1.16, 50: 0.62, 51: 1.16, 56: 0.68, 57: 0.62, 60: 1.12 };
 
 export function frameRadiusPx(info: KindInfo): number {
   // Radius in atlas px at scale 1 plus room for outlines.

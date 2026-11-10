@@ -1019,7 +1019,7 @@ function withGraveRows(polys: TileSitePolys, tileFt: number): TileSitePolys {
         const p: [number, number] = [o0 + u * ux - w * uy, o1 + u * uy + w * ux];
         if (!inside(p, q) || edgeDist(p, q) < 3.5) continue;
         if (inPlot.some((b) => inside(p, b) || edgeDist(p, b) < 3)) continue;
-        const [hx, hy, nx, ny] = [ux * 0.75, uy * 0.75, -uy * 1.7, ux * 1.7];
+        const [hx, hy, nx, ny] = [ux * 1.0, uy * 1.0, -uy * 2.0, ux * 2.0];
         marks.push([p[0] - hx - nx, p[1] - hy - ny, p[0] + hx - nx, p[1] + hy - ny, p[0] + hx + nx, p[1] + hy + ny, p[0] - hx + nx, p[1] - hy + ny].map((v) => v / tileFt));
       }
     }
@@ -1175,7 +1175,7 @@ export function buildSiteGeometry(polys: TileSitePolys, lines: TileRivers, looks
       // the green's and churchyard's grass is the land's own, its crofts seen on the battlemap only).
       else if (kind === 20) rgb = [0.74, 0.73, 0.69];
       // A town graveyard's grave marks (`withGraveRows`): pale stone on its green.
-      else if (kind === GRAVE_KIND) rgb = [0.74, 0.78, 0.7];
+      else if (kind === GRAVE_KIND) rgb = [0.9, 0.9, 0.82];
       else if (kind === 22) rgb = [0.62, 0.6, 0.55];
       // A windmill's sails (`town::rural::plan_ticks`), over its roof.
       else if (kind === 23) rgb = [0.88, 0.84, 0.74];

@@ -241,6 +241,8 @@ export class Labels {
     let added = 0;
     for (const h of hits) {
       if (this.placeHits.has(h.id) || !h.category) continue;
+      // (A cemetery's tombs are seen as roofs, not pinned: a pin and a name would hide them.)
+      if (/^tomb\b/i.test(h.function ?? '')) continue;
       const [color, glyph, minPx, prio] = PLACE[h.category] ?? ['#57534e', '●', 14, 20];
       this.placeHits.set(h.id, h);
       const f: Feature = { id: h.id, kind: 'place', name: buildingName(h, renames), x: h.x, y: h.y, angle: 0, extent_ft: PLACE_EXTENT_FT, detail: h.function };
