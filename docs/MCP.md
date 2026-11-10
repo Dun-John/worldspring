@@ -605,7 +605,7 @@ town.
 Villages and towns are added inland. The call is refused, with the reason, on the edge of the map, in water or a
 river, on or near a shore (ports and fishing villages need the world remade), too near another settlement (half a
 mile of open ground between them) or site, with a road running through it, on steep ground, more than 10 miles
-from a road, or where water keeps its link from reaching one. Asking again for the
+from a road (the refusal says how far the nearest is, which way, and where), or where water keeps its link from reaching one. Asking again for the
 same settlement at the same place returns that one, with `"existing": true`.
 
 `delete_feature` takes it away. The changes made in it (its buildings' edits, its town laid out anew, names, notes,
@@ -654,7 +654,7 @@ Changes a settlement's tier, what it lives by, whether it is the realm's capital
 |---|---|---|---|
 | `id` | string | required | The settlement. |
 | `tier` | string | optional | `metropolis`, `city`, `town` or `village` (added by hand: `village` or `town`). |
-| `lives_by` | string | optional | As a pin's. Default: as it is when its tier stays, else from its land. |
+| `lives_by` | string | optional | As a pin's. Default: as it is when its tier stays or still fits the new one (a port is no village's, a fishing village no town's), else from its land; `economy` in the result says which. |
 | `capital` | boolean | optional | `true`: the realm's capital (the world's own only). |
 | `name` | string | optional | Its new name. |
 | `regenerate` | boolean | optional | The world's own: remake the world at once (default false). |
@@ -709,7 +709,9 @@ the ids `removed`). `tool` filters, `points: false` gives `point_count` and `bbo
 
 An option for another tool is refused (`tier: only for pin, got "town"`), as is a point off the map (the message gives
 the map's size). The same stroke again adds nothing and returns `existing: true`. A pin far out at sea (no land within
-25 mi in the world as it is) is stored with a `warning`: `regenerate` would place no settlement there.
+25 mi in the world as it is) is stored with a `warning`: `regenerate` would place no settlement there. So is the
+world's first `range` or massif: drawn ranges replace the generated mountains across the whole world, so the remake
+changes features, names and settlements far from it.
 
 ### `update_sketch_stroke`
 `id` and any of the parameters above but `tool`; what is not given stays. Returns the new `id` (and `was`).
@@ -724,7 +726,9 @@ changes follow their places, as when the app remakes it: names and notes follow 
 settlements and sites follow those laid out the same, and the rest are set aside under ids that name nothing. Names,
 notes, hidden marks, NPCs and plot points on a feature that is gone with nothing in its place are set aside under
 `gone:<n>:<id>` (as a settlement taken away is: `world_overview`'s `places_removed` lists them), and come back to it if a
-later remake brings that feature back (the stroke taken away again). A
+later remake brings that feature back (the stroke taken away again). Set-aside changes can be read later in the app
+(Notes › Gazetteer, Set aside) and counted by `places_removed` (name, whether it has a note, NPCs, plot points); no MCP
+tool reads their text, so `vanished` is the place to copy it from. A
 settlement a pin made takes the changes of a vanished one only at its own spot (a quarter of that one's label extent:
 about a mile for a village, 3 for a town), never of one farther off, and a name given in the pin wins over a rename. Tool
 calls made meanwhile wait, and see the world before or the world remade, never a mix. The remade world is saved under
@@ -733,7 +737,8 @@ its new hash (`world`; `was` is the one before). An open map app loads it, askin
 
 Returns `kept` (changes that followed their places to new numbers, or came back to them; the others stayed as they
 were), `set_aside` (of them `removed`: on settlements taken away), `vanished` (features gone with nothing in their
-place that had changes: `{id, kind, name, kept_as, what}`, `what` e.g. `["renamed", "note", "1 NPC"]`), `moved`
+place that had changes: `{id, kind, name, kept_as, what}`, `what` e.g. `["renamed", "note", "1 NPC"]`, with the changes
+themselves: `renamed_to`, `note` (its text), `hidden`, `other` such as `a building edit`), `moved`
 (features whose changes moved to another), `settlements` and `settlements_before`, `changed` (how much of the map came
 out otherwise: `features_before`, `features_after`, `features_same_id`, `features_renamed` of those, and
 `settlements_in_place`), `gone` (settlements taken away), `made` (the settlement each new or changed pin made:

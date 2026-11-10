@@ -135,6 +135,14 @@ pub struct Vanished {
     pub name: String,
     pub at: String,
     pub what: Vec<String>,
+    /// The changes themselves: its new name, the note's text, whether it was hidden, and the
+    /// rest as counts ("building edits", "a site design").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub renamed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub hidden: bool,
+    pub other: Vec<String>,
 }
 
 /// The edits of a remade world, and how many entries followed their places (`kept`; those of a
@@ -472,7 +480,15 @@ fn set_aside_vanished(edits: &Edits, before: &[Place], after: &[Place]) -> Optio
         if renamed.is_none() && !f.name.is_empty() {
             out.renames.insert(g.clone(), f.name.clone());
         }
-        list.push(Vanished { id: id.clone(), kind: f.kind.clone(), name: renamed.unwrap_or_else(|| f.name.clone()), at: g.clone(), what });
+        let mut other = Vec::new();
+        if out.buildings.contains_key(g) {
+            other.push("a building edit".to_string());
+        }
+        if out.designs.contains_key(g) {
+            other.push("a site design".to_string());
+        }
+        let note = out.notes.get(g).map(|n| n.text.clone());
+        list.push(Vanished { id: id.clone(), kind: f.kind.clone(), name: renamed.clone().unwrap_or_else(|| f.name.clone()), at: g.clone(), what, renamed, note, hidden: out.hidden.contains(g), other });
     }
     Some((out, list, n))
 }

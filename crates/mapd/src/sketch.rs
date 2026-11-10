@@ -105,7 +105,7 @@ pub fn list() -> Vec<Value> {
             "ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
             "id": { "type": "string" },
         }), &[]), "annotations": { "destructiveHint": true, "openWorldHint": false } }),
-        json!({ "name": "regenerate", "title": "Remake the world", "description": "Remake the world with the sketch's pending changes (a few seconds). Its edits follow their places: names, notes and changes on places that come out the same stay on them; changes on places laid out differently, and on settlements whose pins were taken away, are set aside (kept under ids that name nothing). The world gets a new hash. An open map app loads the remade world (asking first if it has work not saved). Returns how many changes were kept, set aside and moved, the settlements before and after, those the new pins made, what the sketch could not follow, and how long it took.", "inputSchema": schema(json!({}), &[]), "annotations": { "destructiveHint": true, "openWorldHint": false } }),
+        json!({ "name": "regenerate", "title": "Remake the world", "description": "Remake the world with the sketch's pending changes (a few seconds). Its edits follow their places: names, notes and changes on places that come out the same stay on them; changes on places laid out differently, and on settlements whose pins were taken away, are set aside (kept under ids that name nothing; `vanished` shows what they say, and world_overview's places_removed lists them later; get_feature does not read them). The world gets a new hash. An open map app loads the remade world (asking first if it has work not saved). Returns how many changes were kept, set aside and moved, the settlements before and after, those the new pins made, what the sketch could not follow, and how long it took.", "inputSchema": schema(json!({}), &[]), "annotations": { "destructiveHint": true, "openWorldHint": false } }),
     ]
 }
 
@@ -632,6 +632,20 @@ async fn sea_warning(app: &Shared, s: &Stroke, strokes: &[Stroke]) -> Option<Str
     })
 }
 
+/// The first range or massif stored: it lowers the generated mountains map-wide.
+fn range_warning(s: &Stroke, strokes: &[Stroke]) -> Option<&'static str> {
+    let big = |x: &Stroke| matches!(x.tool, SketchTool::Range | SketchTool::Massif);
+    (big(s) && !strokes.iter().any(|x| big(x) && x != s)).then_some("This is the world's first range or massif: drawn ranges replace the generated mountains across the whole world, so the remake changes features, names and settlements far from it. Changes on places that vanish are set aside, and regenerate lists them")
+}
+
+/// The warnings a stored stroke earns, in `out["warning"]`.
+async fn warn(app: &Shared, out: &mut Value, s: &Stroke, strokes: &[Stroke]) {
+    let w: Vec<String> = sea_warning(app, s, strokes).await.into_iter().chain(range_warning(s, strokes).map(String::from)).collect();
+    if !w.is_empty() {
+        out["warning"] = json!(w.join(". "));
+    }
+}
+
 async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
     let _one = app.gate.lock().await;
     let (hash, file, mut p, _) = state(app)?;
@@ -682,9 +696,7 @@ async fn create(app: &Shared, a: &Value) -> Result<Value, String> {
     app.store.log(hash, json!({ "time": now(), "author": "agent", "change": { "tool": "create_sketch_stroke", "id": id } }));
     let mut out = json!({ "id": id, "stroke": item(&s, p.strokes.len() - 1, true) });
     pending_note(&mut out, pending);
-    if let Some(w) = sea_warning(app, &s, &p.strokes).await {
-        out["warning"] = json!(w);
-    }
+    warn(app, &mut out, &s, &p.strokes).await;
     Ok(out)
 }
 
@@ -710,9 +722,7 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
     app.store.log(hash, json!({ "time": now(), "author": "agent", "change": { "tool": "update_sketch_stroke", "id": a["id"], "now": id } }));
     let mut out = json!({ "id": id, "was": a["id"], "stroke": item(&s, i, true) });
     pending_note(&mut out, pending);
-    if let Some(w) = sea_warning(app, &s, &p.strokes).await {
-        out["warning"] = json!(w);
-    }
+    warn(app, &mut out, &s, &p.strokes).await;
     Ok(out)
 }
 
@@ -816,20 +826,36 @@ pub(crate) async fn regenerate(app: &Shared) -> Result<Value, String> {
         out["removed"] = json!(r.removed);
     }
     if !r.vanished.is_empty() {
-        out["vanished"] = json!(r.vanished.iter().map(|v| json!({ "id": v.id, "kind": v.kind, "name": v.name, "kept_as": v.at, "what": v.what })).collect::<Vec<_>>());
+        out["vanished"] = json!(r.vanished.iter().map(|v| {
+            let mut e = json!({ "id": v.id, "kind": v.kind, "name": v.name, "kept_as": v.at, "what": v.what });
+            if let Some(n) = &v.renamed {
+                e["renamed_to"] = json!(n);
+            }
+            if let Some(n) = &v.note {
+                e["note"] = json!(n);
+            }
+            if v.hidden {
+                e["hidden"] = json!(true);
+            }
+            if !v.other.is_empty() {
+                e["other"] = json!(v.other);
+            }
+            e
+        }).collect::<Vec<_>>());
     }
-    let mut note = String::from(if r.all_stayed {
-        "Every change stayed on its place: none had to move or be set aside"
-    } else {
-        "kept: changes that followed their places to the remade world's numbers (the rest stayed as they were); set_aside: on places laid out differently, taken away (removed) or gone with nothing in their place (vanished), kept under ids that name nothing (world_overview's places_removed lists them)"
-    });
     let c = &r.changed;
-    if c.features_same_id < c.features_before || c.features_renamed > 0 {
-        note += &format!(
-            ". The remake redrew the map beyond the strokes: {} of {} named features kept their ids, {} of those are named otherwise; {} settlements stand where they stood ({} before, {} now). Any stroke can do this: the generator works the whole map at once",
-            c.features_same_id, c.features_before, c.features_renamed, c.settlements_in_place, r.before, r.after
-        );
-    }
+    let mut note = if r.all_stayed {
+        String::from("Your changes: all stayed on their places, none had to move or be set aside")
+    } else {
+        format!(
+            "Your changes: {} stayed on their places or followed them to the remade world's numbers (kept), {} moved with a place to its successor, {} set aside under ids that name nothing (set_aside: places laid out differently, taken away, or gone; the vanished list shows what they say, and world_overview's places_removed lists them later)",
+            r.kept, r.moved, r.parked + r.removed + r.aside
+        )
+    };
+    note += &format!(
+        ". The world: {} settlements before, {} now; {} of the old ones stand where they stood, {} named features are named otherwise ({} of {} kept their ids). Any stroke can redraw the map: the generator works it whole",
+        r.before, r.after, c.settlements_in_place, c.features_renamed, c.features_same_id, c.features_before
+    );
     out["note"] = json!(note);
     if !conflicts.is_empty() {
         out["conflicts"] = json!(conflicts);

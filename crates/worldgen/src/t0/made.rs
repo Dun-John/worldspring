@@ -505,7 +505,16 @@ pub fn spot(world: &World, t0: &T0, kind: &str, id: &str, at: P) -> Result<(), S
     }
     // Joined to the network: a road within `TRACK_CAP_FT`, and a way there for its link.
     if nearest_road(t0, at, TRACK_CAP_FT).is_none() {
-        return Err("there is no road within 10 miles: put it nearer a road (a track will join them)".to_string());
+        let far = match nearest_road(t0, at, 150.0 * 5280.0) {
+            Some((q, _)) => {
+                let (dx, dy) = (q[0] - at[0], q[1] - at[1]);
+                // (Compass points from the angle; y runs south.)
+                let dir = ["east", "south-east", "south", "south-west", "west", "north-west", "north", "north-east"][((libm::atan2(dy, dx) / std::f64::consts::FRAC_PI_4).round() as i64).rem_euclid(8) as usize];
+                format!("; the nearest road is {} mi to the {dir}, at x_ft {}, y_ft {}", crate::core::round(dist(q, at) / 5280.0), crate::core::round(q[0]), crate::core::round(q[1]))
+            }
+            None => String::new(),
+        };
+        return Err(format!("there is no road within 10 miles{far}: put it nearer a road (a track will join them)"));
     }
     if track(world, t0, &s).0.is_empty() {
         return Err("no track can reach a road from there (water is in the way): put it elsewhere".to_string());

@@ -219,8 +219,13 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
         return Err(format!("lives_by: a port or fishing village stands on a sea or lake shore (fishing also on a river): {name} is inland. Leave lives_by out, or give another (river, mining, fortress, market, farming, lumber, herding, oasis)"));
     }
     let new_tier = ask.tier.clone().unwrap_or_else(|| tier.clone());
-    // (What it lives by stays with its tier, unless asked: a new tier's is from its land.)
-    let new_kind = ask.lives_by.clone().or_else(|| (new_tier == tier).then(|| kind.clone()));
+    // (What it lives by stays as it is, unless asked, while the new tier allows it: a port is no
+    // village's, a fishing village no town's; else it is from its land.)
+    let fits = new_tier == tier || !((kind == "port" && new_tier == "village") || (kind == "fishing" && new_tier != "village"));
+    let new_kind = ask.lives_by.clone().or_else(|| fits.then(|| kind.clone()));
+    let economy = (ask.tier.is_some() && new_tier != tier && ask.lives_by.is_none()).then(|| {
+        if fits { format!("It keeps what it lives by ({kind}), which a {new_tier} can") } else { format!("What it lives by ({kind}) does not fit a {new_tier}: it is taken from its land") }
+    });
     let fresh = crate::sketch::pin_stroke(spot, &new_tier);
     let (asked_name, asked_capital) = (ask.name.clone(), ask.capital);
     let given_tier = ask.tier.is_some();
@@ -231,11 +236,14 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
             // (In place of the world's own: as it was placed, and as it is named now.)
             s.replaces = Some(planned);
             s.name = Some(name);
-            s.kind = new_kind;
+            s.kind = new_kind.clone();
             s.capital = capital;
         }
         if given_tier {
             s.tier = Some(new_tier);
+            if s.kind.is_none() {
+                s.kind = new_kind.clone();
+            }
         }
         if lives_given {
             s.kind = asked_kind;
@@ -251,6 +259,9 @@ async fn update(app: &Shared, a: &Value) -> Result<Value, String> {
     let mut out = json!({ "id": id, "layout": li, "pin": r["stroke"]["id"], "stroke": r["stroke"], "pending": r["pending"] });
     if r["unchanged"] == json!(true) {
         out["unchanged"] = json!(true);
+    }
+    if let Some(e) = economy {
+        out["economy"] = json!(e);
     }
     if a["regenerate"] == json!(true) {
         let g = crate::sketch::regenerate(app).await?;
