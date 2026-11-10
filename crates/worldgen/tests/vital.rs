@@ -4498,3 +4498,53 @@ fn a_remade_world_keeps_changes_on_their_places() {
     assert_eq!(f.parked, parked.len(), "the changes set aside were miscounted");
     assert!(kept > first / 2, "only {kept} of {first} places kept their changes");
 }
+
+/// A settlement a sketch pin makes takes the changes of a place only at its own spot (M11, M10):
+/// a pin put on a town to change it (`Stroke::replaces`: a fishing village now) takes the town's
+/// place, its layout number and its rename and notes, and moves no other settlement; a new pin far
+/// from a town that vanished takes nothing of it, and the name a pin gives wins over a rename.
+#[test]
+fn a_pin_takes_only_the_changes_at_its_spot() {
+    use worldgen::t0::remap::{self, Place, Places, Pinned};
+    use worldgen::t0::{T0, settle::SettleKind};
+    use worldgen::world::Note;
+    // A pin on a town: the same place, a fishing village now.
+    let mut file: WorldFile = serde_json::from_str(&world_json(2)).unwrap();
+    let old = World::new(file.clone()).unwrap();
+    let t0 = T0::generate(&old);
+    let li = t0.settlements.iter().position(|s| s.tier.name() == "town" && s.planned.name() == "town" && s.coastal && s.pin.is_none()).expect("a town by the sea");
+    let s = &t0.settlements[li];
+    let id = worldgen::agent::feature_of_layout(&old, &t0, li).unwrap();
+    file.edits.renames.insert(id.clone(), "Keepsake".into());
+    file.edits.notes.insert(id.clone(), Note { text: "the harbour master owes".into(), ..Default::default() });
+    let cell = [(s.cell % t0.height.w) as f64 * t0.cell_ft, (s.cell / t0.height.w) as f64 * t0.cell_ft];
+    let mut b = file.clone();
+    b.sketch.strokes.push(serde_json::from_value(serde_json::json!({ "tool": "pin", "tier": "village", "kind": "fishing", "replaces": "town", "pts": [cell] })).unwrap());
+    let (old, new) = (World::new(file).unwrap(), World::new(b).unwrap());
+    let (t1, followed) = remap::remake(&old, &t0, &new, &[]);
+    assert_eq!(t1.settlements.len(), t0.settlements.len(), "a pin in place of a town changed the number of settlements");
+    let v = &t1.settlements[li];
+    assert!(v.pin == Some(0) && v.tier.name() == "village" && v.kind == SettleKind::Fishing, "the pin's village did not take the town's place");
+    let far = |a: &worldgen::t0::settle::Settlement, b: &worldgen::t0::settle::Settlement| ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();
+    assert!(far(v, s) < 3.0 * 5280.0, "the pin's village stands {:.0} ft from the town", far(v, s));
+    assert!(t1.settlements.iter().all(|o| o.pin.is_some() || far(o, s) > 3.0 * 5280.0), "a settlement still stands where the town was");
+    let now = worldgen::agent::feature_of_layout(&new, &t1, li).unwrap();
+    let e = followed.expect("the town's changes followed it").edits;
+    assert_eq!(e.renames.get(&now).map(String::as_str), Some("Keepsake"), "the rename stayed behind ({id} -> {now})");
+    assert!(e.notes.contains_key(&now), "the notes stayed behind");
+    // A new pin far from a vanished town, and one on the spot of a vanished village.
+    let place = |id: &str, kind: &str, x: f64, extent_mi: f64| Place { id: id.into(), kind: kind.into(), x, y: 0.0, extent_ft: extent_mi * 5280.0 };
+    let before = Places { features: vec![place("town:a", "town", 0.0, 12.0), place("village:b", "village", 400_000.0, 5.0)], ..Default::default() };
+    let pinned = vec![Pinned { id: "town:n".into(), name: Some("Newhold".into()) }, Pinned { id: "town:m".into(), name: Some("Highmoor".into()) }];
+    let after = Places { features: vec![place("town:n", "town", 132_000.0, 12.0), place("town:m", "town", 401_000.0, 12.0)], pinned, ..Default::default() };
+    let mut edits = worldgen::world::Edits::default();
+    for (k, n) in [("town:a", "Keepsake"), ("village:b", "Lowmere")] {
+        edits.renames.insert(k.into(), n.into());
+        edits.notes.insert(k.into(), Note { text: n.into(), ..Default::default() });
+    }
+    let f = remap::follow(&edits, &before, &after, &|_, _| false, &[]).expect("the village's changes moved");
+    assert!(!f.edits.renames.contains_key("town:n") && !f.edits.notes.contains_key("town:n"), "a pin 25 mi off took a vanished town's changes");
+    assert_eq!(f.edits.renames.get("town:a").map(String::as_str), Some("Keepsake"), "the vanished town's rename was lost");
+    assert!(f.edits.notes.contains_key("town:m"), "the pin on the village's spot didn't take its notes");
+    assert!(!f.edits.renames.contains_key("town:m") && f.edits.renames.get("village:b").map(String::as_str) == Some("Lowmere"), "a rename won over the pin's name");
+}

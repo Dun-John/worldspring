@@ -88,6 +88,9 @@ export interface Stroke {
    * tier (it doesn't count toward their number or keep them away; smaller ones keep 10 mi off,
    * and none is placed within 3 mi of a settlement). */
   added?: boolean;
+  /** Pins: in place of the world's own settlement at its spot (within 3 mi), changed: the tier it
+   * was placed at (mapd's `update_settlement` makes these; nothing else moves). */
+  replaces?: 'metropolis' | 'city' | 'town' | 'village';
   /** Sites: beneath a ruin (dungeon, crypt, catacombs) or an entrance (any site). */
   under?: string;
 }

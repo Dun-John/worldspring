@@ -280,6 +280,12 @@ pub struct Stroke {
     /// (smaller ones keep the least room, 10 mi); none is placed within 3 mi of a settlement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub added: bool,
+    /// Pins: in place of the world's own settlement at its spot (within 3 mi), changed: the tier
+    /// that settlement was placed at (`PIN_TIERS`; its `Settlement::planned`). The tier is placed
+    /// as it would be without the pin, then the pin's settlement takes that one's place (and its
+    /// number among them), so no other moves; with none there it stands beside them (as `added`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
     /// Sites: what lies beneath a ruin (dungeon, crypt, catacombs) or an entrance (any site).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub under: Option<String>,
@@ -316,6 +322,7 @@ impl Sketch {
                     return Err("a biome stroke needs a biome name".into());
                 }
                 SketchTool::Pin if !s.tier.as_deref().is_some_and(|t| PIN_TIERS.contains(&t)) => return Err("a pin needs a tier: metropolis, city, town or village".into()),
+                SketchTool::Pin if !s.replaces.as_deref().is_none_or(|t| PIN_TIERS.contains(&t)) => return Err("a pin's replaces is a tier: metropolis, city, town or village".into()),
                 SketchTool::Massif | SketchTool::Elevation | SketchTool::Lake if !s.closed || s.pts.len() < 3 => {
                     return Err("massif, elevation and lake strokes are closed outlines of 3 or more points".into());
                 }
@@ -340,8 +347,11 @@ impl Sketch {
                     _ => return Err("'under' is for ruin sites (dungeon, crypt, catacombs) and entrances (any site)".into()),
                 }
             }
-            if (s.capital || s.added || !s.wards.is_empty()) && s.tool != SketchTool::Pin {
-                return Err("capital, added and wards are for pins".into());
+            if (s.capital || s.added || !s.wards.is_empty() || s.replaces.is_some()) && s.tool != SketchTool::Pin {
+                return Err("capital, added, wards and replaces are for pins".into());
+            }
+            if s.added && s.replaces.is_some() {
+                return Err("a pin is added beside the world's settlements or replaces one of them, not both".into());
             }
             if s.wards.len() > WARDS_MAX || s.name.iter().chain(&s.wards).any(|n| n.chars().count() > NAME_MAX) {
                 return Err(format!("names are at most {NAME_MAX} characters, and a pin names at most {WARDS_MAX} wards"));

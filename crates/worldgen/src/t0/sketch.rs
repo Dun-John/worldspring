@@ -52,6 +52,8 @@ pub struct Pin {
     pub capital: bool,
     /// Beside the world's own settlements, not in place of one (`Stroke::added`).
     pub added: bool,
+    /// In place of the world's own settlement at its spot, placed at this tier (`Stroke::replaces`).
+    pub replaces: Option<Tier>,
 }
 
 /// A site the sketch places (`SketchTool::Site`).
@@ -1142,12 +1144,14 @@ pub fn paint_biomes(world: &World, g: Raster, land: &[bool], lake_of: &[u32], bi
 pub fn pins(world: &World, g: Raster, land: &[bool], conflicts: &mut Vec<Conflict>) -> Vec<Pin> {
     let mut out: Vec<Pin> = Vec::new();
     for (si, s) in strokes(world, SketchTool::Pin) {
-        let tier = match s.tier.as_deref() {
+        let tier_of = |t: Option<&str>| match t {
             Some("metropolis") => Tier::Metropolis,
             Some("city") => Tier::City,
             Some("town") => Tier::Town,
             _ => Tier::Village,
         };
+        let tier = tier_of(s.tier.as_deref());
+        let replaces = s.replaces.as_deref().map(|t| tier_of(Some(t)));
         let p = s.pts[0];
         let mut k = g.cell_of(p);
         let (mut x, mut y) = (p[0].clamp(0.0, (g.w - 1) as f64 * g.cell), p[1].clamp(0.0, (g.h - 1) as f64 * g.cell));
@@ -1183,7 +1187,7 @@ pub fn pins(world: &World, g: Raster, land: &[bool], conflicts: &mut Vec<Conflic
             conflicts.push(Conflict { stroke: si, message: "This pin is within 3 miles of another: no settlement placed".into(), x, y });
             continue;
         }
-        out.push(Pin { stroke: si, tier, x, y, cell: k, kind: s.kind.as_deref().and_then(SettleKind::parse), capital: s.capital, added: s.added });
+        out.push(Pin { stroke: si, tier, x, y, cell: k, kind: s.kind.as_deref().and_then(SettleKind::parse), capital: s.capital, added: s.added && replaces.is_none(), replaces });
     }
     out
 }

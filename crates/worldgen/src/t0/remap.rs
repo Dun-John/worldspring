@@ -4,6 +4,7 @@
 //! of places shift (more or fewer settlements and sites before them): changes inside a place
 //! follow it when it comes out the same, the rest are set aside from `world::PARKED_LAYOUT` up.
 //! Settlements taken away on purpose (a pin removed) have theirs set aside at `gone:<n>:<id>`.
+//! A settlement a pin made follows only the one that stood at its spot (`reanchor`).
 //!
 //! One copy for the app (through `worldgen-wasm`'s `remake_prints_json` / `follow_json`) and
 //! for `mapd` (`remake`, with no app). It was `app/src/editor/reanchor.ts` (`reanchor`,
@@ -74,6 +75,18 @@ pub struct Places {
     pub first_created: Option<usize>,
     #[serde(default)]
     pub layout_ids: Option<Vec<u32>>,
+    /// The settlements sketch pins made (only the remade world's are read: `Places::pins`).
+    #[serde(default)]
+    pub pinned: Vec<Pinned>,
+}
+
+/// A settlement a sketch pin made (`Settlement::pin`): its feature id, and the name the pin gives
+/// it (None: generated).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Pinned {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 impl Places {
@@ -82,7 +95,19 @@ impl Places {
     pub fn of(t0: &T0) -> Places {
         let features = t0.extra.as_ref().map_or_else(Vec::new, |e| e.overlay.features.iter().map(|f| Place { id: f.id.clone(), kind: f.kind.into(), x: f.x, y: f.y, extent_ft: f.extent_ft }).collect());
         let ids = (0..crate::town::layout_count(t0)).map(|li| fold(crate::town::layout_identity(t0, li))).collect();
-        Places { features, first_created: Some(t0.settlements.len() + t0.base_pois), layout_ids: Some(ids) }
+        Places { features, first_created: Some(t0.settlements.len() + t0.base_pois), layout_ids: Some(ids), pinned: Vec::new() }
+    }
+
+    /// `of`, with the settlements `world`'s sketch pins made (`pinned`).
+    pub fn pins(world: &World, t0: &T0) -> Places {
+        let pinned = (0..t0.settlements.len())
+            .filter_map(|li| {
+                let k = t0.settlements[li].pin? as usize;
+                let name = world.file.sketch.strokes.get(k).and_then(|s| s.name.as_deref()).map(str::trim).filter(|n| !n.is_empty()).map(String::from);
+                Some(Pinned { id: crate::agent::feature_of_layout(world, t0, li)?, name })
+            })
+            .collect();
+        Places { pinned, ..Places::of(t0) }
     }
 }
 
@@ -224,15 +249,27 @@ fn reach_for(f: &Place) -> f64 {
     (40.0 * 5280.0f64).max(0.6 * f.extent_ft)
 }
 
+/// How near a pin a settlement stood for the pin's settlement to be the same place (ft): a
+/// quarter of its label's extent (1.25 mi for a village, 3 for a town, 7.5 for a city, 15 for a
+/// metropolis), a mile at least.
+fn spot_for(f: &Place) -> f64 {
+    (0.25 * f.extent_ft).max(5280.0)
+}
+
 /// `edits` with ids of vanished features moved to their nearest same-kind successors (in `after`,
 /// by their positions in `before`): names, notes, hidden marks, where NPCs are and plot points'
-/// places. The edits, what moved (features) and how many entries; None if nothing did.
-fn reanchor(edits: &Edits, before: &[Place], after: &[Place]) -> Option<(Edits, Vec<(String, String)>, usize)> {
+/// places. A settlement a pin made (`pinned`, new in `after`) is no successor but to the vanished
+/// settlement nearest it, of any tier, within that one's `spot_for` (the pin was put on it to
+/// change it); a vanished place's edits are never moved onto one farther off. A name the pin
+/// gives wins over a rename it would take: that stays on the vanished id (set aside). The edits,
+/// what moved (features) and how many entries; None if nothing did.
+fn reanchor(edits: &Edits, before: &[Place], after: &[Place], pinned: &[Pinned]) -> Option<(Edits, Vec<(String, String)>, usize)> {
     let now: FastSet<&str> = after.iter().map(|f| f.id.as_str()).collect();
     let mut was: FastMap<&str, &Place> = FastMap::default();
     for f in before {
         was.insert(&f.id, f);
     }
+    let pins: FastMap<&str, Option<&str>> = pinned.iter().map(|p| (p.id.as_str(), p.name.as_deref())).collect();
     let mut keyed: Vec<String> = Vec::new();
     let mut seen: FastSet<String> = FastSet::default();
     each_id(edits, |id| {
@@ -242,14 +279,35 @@ fn reanchor(edits: &Edits, before: &[Place], after: &[Place]) -> Option<(Edits, 
     });
     let mut taken: FastSet<&str> = keyed.iter().map(String::as_str).filter(|id| now.contains(id)).collect();
     let mut moved: Vec<(String, String)> = Vec::new();
+    // The pins' settlements first: each the vanished one at its spot (claimed, edits or not).
+    let edited: FastSet<&str> = keyed.iter().map(String::as_str).collect();
+    let mut claimed: FastSet<&str> = FastSet::default();
+    let dist = |a: &Place, b: &Place| crate::core::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+    for p in pinned {
+        let Some(f) = after.iter().find(|f| f.id == p.id) else { continue };
+        if was.contains_key(f.id.as_str()) || taken.contains(f.id.as_str()) {
+            continue;
+        }
+        let at = before
+            .iter()
+            .filter(|o| SETTLEMENT_KINDS.contains(&o.kind.as_str()) && !o.id.starts_with("c:") && !now.contains(o.id.as_str()) && !claimed.contains(o.id.as_str()) && dist(o, f) < spot_for(o))
+            .min_by(|a, b| dist(a, f).total_cmp(&dist(b, f)).then(a.id.cmp(&b.id)));
+        if let Some(o) = at {
+            claimed.insert(&o.id);
+            if edited.contains(o.id.as_str()) {
+                taken.insert(&f.id);
+                moved.push((o.id.clone(), f.id.clone()));
+            }
+        }
+    }
     for id in &keyed {
-        if now.contains(id.as_str()) || is_local(id) {
+        if now.contains(id.as_str()) || is_local(id) || claimed.contains(id.as_str()) {
             continue;
         }
         let Some(old) = was.get(id.as_str()) else { continue };
         let (mut best, mut best_d) = (None::<&Place>, reach_for(old));
         for f in after {
-            if f.kind != old.kind || taken.contains(f.id.as_str()) {
+            if f.kind != old.kind || taken.contains(f.id.as_str()) || pins.contains_key(f.id.as_str()) {
                 continue;
             }
             let (dx, dy) = (f.x - old.x, f.y - old.y);
@@ -268,7 +326,15 @@ fn reanchor(edits: &Edits, before: &[Place], after: &[Place]) -> Option<(Edits, 
     }
     let to: FastMap<&str, &str> = moved.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
     // (A town's bare layout number is no feature id.)
-    let (out, n) = renamed(edits, |id, bare| if bare { id.to_string() } else { to.get(id).map_or_else(|| id.to_string(), |t| t.to_string()) });
+    let (mut out, mut n) = renamed(edits, |id, bare| if bare { id.to_string() } else { to.get(id).map_or_else(|| id.to_string(), |t| t.to_string()) });
+    for (old, new) in &moved {
+        let Some(Some(name)) = pins.get(new.as_str()) else { continue };
+        if let Some(r) = out.renames.get(new).filter(|r| r.as_str() != *name).cloned() {
+            out.renames.remove(new);
+            out.renames.insert(old.clone(), r);
+            n -= 1;
+        }
+    }
     Some((out, moved, n))
 }
 
@@ -442,7 +508,7 @@ fn remap_layouts(edits: &Edits, before: &Places, after: &Places, same: &dyn Fn(u
 /// the same, its fingerprint as generated). None if nothing moved.
 pub fn follow(edits: &Edits, before: &Places, after: &Places, same: &dyn Fn(usize, usize) -> bool, gone: &[Gone]) -> Option<Followed> {
     let off = set_aside_removed(edits, gone, &after.features);
-    let named = reanchor(off.as_ref().map_or(edits, |o| &o.0), &before.features, &after.features);
+    let named = reanchor(off.as_ref().map_or(edits, |o| &o.0), &before.features, &after.features, &after.pinned);
     let base = named.as_ref().map(|n| &n.0).or(off.as_ref().map(|o| &o.0)).unwrap_or(edits);
     let lis: Vec<usize> = gone.iter().map(|g| g.li).collect();
     let placed = remap_layouts(base, before, after, same, &lis);
@@ -474,7 +540,7 @@ pub fn prints_before(world: &World, t0: &T0, edits: &Edits, also: &[usize]) -> V
 /// the places and prints of the world before (`before`, `was`: `prints_before`); and where the
 /// layouts `played` go (`layout_targets`).
 pub fn follow_into(world: &World, t0: &T0, edits: &Edits, before: &Places, was: &[(usize, u32)], gone: &[Gone], played: &[usize]) -> (Option<Followed>, Vec<Option<usize>>) {
-    let after = Places::of(t0);
+    let after = Places::pins(world, t0);
     let lis: Vec<usize> = was.iter().map(|&(li, _)| li).collect();
     let prints: FastMap<usize, u32> = was.iter().copied().collect();
     let same: FastMap<(usize, usize), bool> = match_layouts(&lis, before, &after)

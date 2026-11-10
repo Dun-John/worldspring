@@ -837,7 +837,8 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         }
         let spacing = spacing_mi * 5280.0 / cell;
         // A settlement of this tier at cell `k`, standing at (x, y) ft, drawn from `seed`.
-        let make = |k: usize, seed: u64, mut x: f64, mut y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
+        // (Of the loop's tier, but for a pin in place of one of another tier: `Pin::replaces`.)
+        let make = |tier: Tier, k: usize, seed: u64, mut x: f64, mut y: f64, capital: bool, pin: Option<&super::sketch::Pin>, conflicts: &mut Vec<super::sketch::Conflict>| {
             let (cx, cy) = ((k % w) as f64, (k / w) as f64);
             let (lo, hi) = pop_range(tier);
             let population = (lo * libm::pow(hi / lo, unit(hash3(seed, 0x706f_70, 0, 0)))) as u32;
@@ -952,13 +953,13 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
         // drawn (as the sketch's sites are), so taking another stroke away changes none. Those
         // added beside the world's own come after them (`Pin::added`).
         let pinned = |pin: &super::sketch::Pin, out: &[Settlement], conflicts: &mut Vec<super::sketch::Conflict>| {
-            let seed = hash3(world.stream("t0.pin"), (pin.x / 10.0) as i64, (pin.y / 10.0) as i64, tier as i64);
-            let capital = if pinned_capital { pin.capital } else { tier == Tier::Metropolis } && !out.iter().any(|s| s.capital);
-            make(pin.cell, seed, pin.x, pin.y, capital, Some(pin), conflicts)
+            let seed = hash3(world.stream("t0.pin"), (pin.x / 10.0) as i64, (pin.y / 10.0) as i64, pin.tier as i64);
+            let capital = if pinned_capital { pin.capital } else { pin.tier == Tier::Metropolis } && !out.iter().any(|s| s.capital);
+            make(pin.tier, pin.cell, seed, pin.x, pin.y, capital, Some(pin), conflicts)
         };
         let start = out.len();
         let mut placed = 0;
-        for pin in inp.pins.iter().filter(|p| p.tier == tier && !p.added) {
+        for pin in inp.pins.iter().filter(|p| p.tier == tier && !p.added && p.replaces.is_none()) {
             let s = pinned(pin, &out, conflicts);
             out.push(s);
             placed += 1;
@@ -984,7 +985,7 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 let (cx, cy) = ((k % w) as f64, (k / w) as f64);
                 let ok = fits(out, k);
                 if ok {
-                    out.push(make(k, hash3(world.stream("t0.settle.seed"), k as i64, tier as i64, 0), cx * cell, cy * cell, false, None, conflicts));
+                    out.push(make(tier, k, hash3(world.stream("t0.settle.seed"), k as i64, tier as i64, 0), cx * cell, cy * cell, false, None, conflicts));
                 }
                 ok
             };
@@ -999,12 +1000,37 @@ pub fn place(inp: &Inputs, existing: Vec<Settlement>, tiers: &[Tier], roads: Opt
                 continue;
             }
             let capital = tier == Tier::Metropolis && !pinned_capital && !out.iter().any(|s| s.capital);
-            out.push(make(k, hash3(world.stream("t0.settle.seed"), k as i64, tier as i64, 0), cx * cell, cy * cell, capital, None, conflicts));
+            out.push(make(tier, k, hash3(world.stream("t0.settle.seed"), k as i64, tier as i64, 0), cx * cell, cy * cell, capital, None, conflicts));
             placed += 1;
         }
-        for pin in inp.pins.iter().filter(|p| p.tier == tier && p.added) {
+        for pin in inp.pins.iter().filter(|p| p.tier == tier && p.added && p.replaces.is_none()) {
             // (Not on another settlement: drawn on one, it would be laid out over it.)
             if let Some(o) = out.iter().find(|s| crate::core::sqrt((s.x - pin.x) * (s.x - pin.x) + (s.y - pin.y) * (s.y - pin.y)) < 3.0 * 5280.0) {
+                let message = format!("This settlement is within 3 miles of a {}: no settlement placed", o.tier.name());
+                conflicts.push(super::sketch::Conflict { stroke: pin.stroke, message, x: pin.x, y: pin.y });
+                continue;
+            }
+            let s = pinned(pin, &out, conflicts);
+            out.push(s);
+        }
+        // A pin in place of one of the world's own settlements (`Pin::replaces`, this tier: the
+        // tier it was placed at) takes its place once the tier is placed as it would be without it,
+        // so no other of the tier moves: the nearest one within 3 mi that no pin made, else (the
+        // world changed round it) it stands beside the others as an added one would.
+        for pin in inp.pins.iter().filter(|p| p.replaces == Some(tier)) {
+            let d = |s: &Settlement| crate::core::sqrt((s.x - pin.x) * (s.x - pin.x) + (s.y - pin.y) * (s.y - pin.y));
+            let at = (start..out.len()).filter(|&i| out[i].pin.is_none() && out[i].tier == tier && d(&out[i]) < 3.0 * 5280.0).min_by(|&a, &b| d(&out[a]).total_cmp(&d(&out[b])));
+            if let Some(i) = at {
+                let was = out.remove(i);
+                let mut s = pinned(pin, &out, conflicts);
+                s.capital = if pinned_capital { pin.capital } else { was.capital } && !out.iter().any(|s| s.capital);
+                // (Routed as the one it stands for, as a town the economy grows or shrinks is: the
+                // roads, and the smaller places by them, stay where they were.)
+                (s.planned, s.planned_pop) = (was.planned, was.planned_pop);
+                out.insert(i, s);
+                continue;
+            }
+            if let Some(o) = out.iter().find(|s| d(s) < 3.0 * 5280.0) {
                 let message = format!("This settlement is within 3 miles of a {}: no settlement placed", o.tier.name());
                 conflicts.push(super::sketch::Conflict { stroke: pin.stroke, message, x: pin.x, y: pin.y });
                 continue;
@@ -1247,7 +1273,7 @@ pub fn place_realms(inp: &Inputs, existing: Vec<Settlement>, kings: Option<&supe
         kings_at(k) >= REALM_KINGS_MI * mi
             && out.iter().all(|s| d_cells(s.cell, k) >= if s.isolated { REALM_CITY_MI + 11.0 } else { REALM_CITY_MI } * mi)
             && banned.iter().all(|&b| d_cells(b, k) >= REALM_BANNED_MI * mi)
-            && inp.pins.iter().all(|q| q.added || crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) >= 25.0 * 5280.0)
+            && inp.pins.iter().all(|q| q.added || q.replaces.is_some() || crate::core::sqrt((q.x - x) * (q.x - x) + (q.y - y) * (q.y - y)) >= 25.0 * 5280.0)
     };
     // The strongest reason at a site (as `place` weighs it for the tier).
     let reason_at = |k: usize, tier: Tier| {
