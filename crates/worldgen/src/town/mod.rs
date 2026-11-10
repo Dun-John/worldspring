@@ -25,6 +25,7 @@ pub mod squares;
 pub mod stairs;
 pub mod temple;
 pub mod wards;
+pub mod wallstyle;
 pub mod village;
 // v63 countryside
 pub mod fields;
@@ -239,6 +240,12 @@ pub struct Layout {
     /// Towers of `towers` built square (a castle's): their centre and the way their sides run
     /// (unit); every other tower is round.
     pub square_towers: Vec<(P, P)>,
+    /// Every wall tower's shape by its walls' style (item 104, `wallstyle::shape_towers`): its centre,
+    /// shape (`wallstyle::TowerShape`, a castle's tower `| 16`) and the way its sides run (a D: the way
+    /// it faces out). Gate towers are round.
+    pub tower_forms: Vec<(P, u8, P)>,
+    /// The place's walls by its culture group, tier and wealth (`wallstyle::WallStyle::of`).
+    pub wall_style: wallstyle::WallStyle,
     /// Mounds raised under shell keeps.
     pub mottes: Vec<Motte>,
     /// The town's castle patch and its market square's (the patch the main streets lead to), as
@@ -516,6 +523,23 @@ impl Layout {
         self.square_towers.iter().find(|s| (s.0[0] - t[0]).abs() + (s.0[1] - t[1]).abs() < 1e-6).map(|s| s.1)
     }
 
+    /// The shape of the wall tower at `t` and the way its sides run (a D: the way it faces); round
+    /// where it has none (`tower_forms`).
+    pub fn tower_form(&self, t: P) -> (wallstyle::TowerShape, P) {
+        let found = self.tower_forms.iter().find(|s| (s.0[0] - t[0]).abs() + (s.0[1] - t[1]).abs() < 1e-6);
+        found.map_or((wallstyle::TowerShape::Round, [1.0, 0.0]), |s| (wallstyle::TowerShape::from_u8(s.1 & 15), s.2))
+    }
+
+    /// The walls' style a tower or a stretch of wall at `p` is built in: a castle's (`WallStyle::castle`)
+    /// for a castle's tower, or within a castle's curtain, else the place's.
+    pub fn wall_style_at(&self, p: P) -> wallstyle::WallStyle {
+        let castle = match self.tower_forms.iter().find(|s| (s.0[0] - p[0]).abs() + (s.0[1] - p[1]).abs() < 1e-6) {
+            Some(f) => f.1 & 16 != 0,
+            None => self.castles.iter().any(|(c, r)| dist(*c, p) <= r + 1.0),
+        };
+        if castle { self.wall_style.castle() } else { self.wall_style }
+    }
+
     /// A layout with nothing laid out yet.
     /// Its roofs' culture, seed and age (`roof::look`): the age by the place's own hash, a site's
     /// older.
@@ -552,6 +576,8 @@ impl Layout {
             quarters: Vec::new(),
             castles: Vec::new(),
             square_towers: Vec::new(),
+            tower_forms: Vec::new(),
+            wall_style: wallstyle::WallStyle::default(),
             mottes: Vec::new(),
             castle_patch: None,
             plaza_patch: None,
@@ -1716,6 +1742,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
     let (site, road_ends, mut rng) = prepare(world, t0, index);
     let mut l = Layout::empty(index as u32, center, r, s.tier);
     l.set_roofs(world, t0, s.culture);
+    l.wall_style = wallstyle::WallStyle::of(s);
     // (How far apart the plan's patches are: how far a function the edit lost may move.)
     let mut spacing = 0.0;
     if s.tier == Tier::Village {
@@ -1741,6 +1768,8 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         }
     }
     drop_walled_in(&mut l);
+    // (Towers added since the walls were laid, as at a river's banks, shaped too.)
+    wallstyle::shape_rest(&mut l, [0.0, 0.0]);
     let on_water = s.coastal || s.river || !site.river.is_empty();
     l.on_water = on_water;
     if edit.is_none() {
@@ -1780,6 +1809,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
         tw(&mut t.0);
     }
     for t in &mut l.square_towers {
+        tw(&mut t.0);
+    }
+    for t in &mut l.tower_forms {
         tw(&mut t.0);
     }
     for m in &mut l.mottes {
@@ -2700,7 +2732,8 @@ fn plan_town(site: &Site, s: &Settlement, r: f64, road_ends: &[(P, u8)], rng: &m
         if *closed && let Some(k) = chain.iter().position(|v| !gates.contains(v)) {
             chain.rotate_left(k);
         }
-        let along = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], gates.contains(&v))).collect::<Vec<_>>(), *closed, None).3;
+        let corners: Vec<(P, bool)> = chain.iter().map(|&v| (mesh.pos[v], gates.contains(&v))).collect();
+        let along = wall_pieces_spaced(&corners, *closed, None, wallstyle::WallStyle::of(s).spacing).3;
         wall_runs.push((chain, *closed, along));
     }
 
@@ -3075,11 +3108,14 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let edge_v = |i: usize, e: usize| (mesh.faces[i][e], mesh.faces[i][(e + 1) % mesh.faces[i].len()]);
     l.gates = plan.gates.iter().map(|&g| mesh.pos[g]).collect();
     for (chain, closed, along) in plan.wall_runs.iter().filter(|_| walled) {
-        let (pieces, towers, gate_towers, _) = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect::<Vec<_>>(), *closed, Some(along));
+        let (pieces, towers, gate_towers, _) = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect::<Vec<_>>(), *closed, Some(along), SET);
         l.walls.extend(pieces);
         l.towers.extend(towers);
         l.gate_towers.extend(gate_towers);
     }
+    // Each tower's shape by the town's walls (item 104): a D faces out from the middle.
+    let (style, laid) = (l.wall_style, l.towers.clone());
+    wallstyle::shape_towers(l, &style, &laid, [0.0, 0.0], false);
     // The town wall as it is laid along its runs (whether it stands or has been taken down), less
     // the stretches `walls_off_river` cuts at the river: a castle's side along it is that wall
     // (`castle`, `castle_wall_edge`); and its towers, which a castle's gate and way keep clear of.
@@ -3087,8 +3123,10 @@ fn build_town(site: &Site, s: &Settlement, r: f64, plan: &TownPlan, ch: &wards::
     let mut town_towers: Vec<(P, f64)> = Vec::new();
     if walled || plan.walled {
         for (chain, closed, along) in &plan.wall_runs {
-            let (pieces, towers, gate_towers, _) = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect::<Vec<_>>(), *closed, Some(along));
-            town_towers.extend(towers.iter().map(|t| (*t, 11.0)).chain(gate_towers.iter().map(|t| (*t, 15.0))));
+            let (pieces, towers, gate_towers, _) = wall_pieces_spaced(&chain.iter().map(|&v| (mesh.pos[v], plan.gates.contains(&v))).collect::<Vec<_>>(), *closed, Some(along), SET);
+            // (A square tower reaches further across its corners.)
+            let reach = if l.wall_style.has_square() { 15.6 } else { 11.0 };
+            town_towers.extend(towers.iter().map(|t| (*t, reach)).chain(gate_towers.iter().map(|t| (*t, 15.0))));
             for w in pieces {
                 for s in w.windows(2) {
                     let n = crate::core::ceil(dist(s[0], s[1]) / 5.0).max(1.0) as usize;
@@ -4297,16 +4335,18 @@ impl Ground for Site<'_> {
 /// Split a wall line at its gates: a 22 ft passage through the wall at each gate corner
 /// between two gate towers, towers on every other corner, and more towers along long runs.
 /// Input: corners with a gate flag; `closed` joins the last corner back to the first.
-fn wall_pieces(corners: &[(P, bool)], closed: bool) -> (Vec<Vec<P>>, Vec<P>, Vec<P>) {
-    let (pieces, towers, gate_towers, _) = wall_pieces_spaced(corners, closed, None);
+/// (The spacing where each stretch's towers are given.)
+const SET: f64 = wallstyle::SPACING;
+
+fn wall_pieces(corners: &[(P, bool)], closed: bool, spacing: f64) -> (Vec<Vec<P>>, Vec<P>, Vec<P>) {
+    let (pieces, towers, gate_towers, _) = wall_pieces_spaced(corners, closed, None, spacing);
     (pieces, towers, gate_towers)
 }
 
 /// `wall_pieces`, with how many towers stand along each stretch between corners given (in
-/// order; else from its length, one per 160 ft), so a town whose corners moved keeps its towers
-/// (and their `t:` ids). Also returns the counts used.
-fn wall_pieces_spaced(corners: &[(P, bool)], closed: bool, along: Option<&[usize]>) -> (Vec<Vec<P>>, Vec<P>, Vec<P>, Vec<usize>) {
-    const TOWER_SPACING: f64 = 160.0;
+/// order; else from its length, one per `spacing` ft: `WallStyle::spacing`), so a town whose corners
+/// moved keeps its towers (and their `t:` ids). Also returns the counts used.
+fn wall_pieces_spaced(corners: &[(P, bool)], closed: bool, along: Option<&[usize]>, spacing: f64) -> (Vec<Vec<P>>, Vec<P>, Vec<P>, Vec<usize>) {
     let mut used: Vec<usize> = Vec::new();
     // Gate towers (15 ft radius) stand 26 ft either side of the gate: a 22 ft passage.
     const GATE_HALF: f64 = 26.0;
@@ -4340,7 +4380,7 @@ fn wall_pieces_spaced(corners: &[(P, bool)], closed: bool, along: Option<&[usize
         // Towers along a long run since the last corner.
         if let Some(&last) = cur.last() {
             let d = dist(last, p);
-            let extra = along.and_then(|a| a.get(used.len()).copied()).unwrap_or((d / TOWER_SPACING).floor() as usize);
+            let extra = along.and_then(|a| a.get(used.len()).copied()).unwrap_or((d / spacing).floor() as usize);
             used.push(extra);
             for j in 1..=extra {
                 towers.push(lerp(last, p, j as f64 / (extra + 1) as f64));
@@ -5006,6 +5046,7 @@ fn clip_walls(l: &mut Layout, wet: impl Fn(P) -> bool, tower_wet: impl Fn(P) -> 
     // (A square tower gone with the rest.)
     let (towers, extra) = (&l.towers, &l.extra_towers);
     l.square_towers.retain(|s| towers.iter().chain(extra.iter().map(|e| &e.0)).any(|t| (t[0] - s.0[0]).abs() + (t[1] - s.0[1]).abs() < 1e-6));
+    l.tower_forms.retain(|s| towers.iter().chain(extra.iter().map(|e| &e.0)).any(|t| (t[0] - s.0[0]).abs() + (t[1] - s.0[1]).abs() < 1e-6));
 }
 
 /// Point and unit direction `at` ft along a polyline.

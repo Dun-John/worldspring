@@ -57,6 +57,11 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     let mut props: Vec<super::Prop> = Vec::new();
     // A castle's or wall's works (local): built on a layout of their own, then taken from it.
     let mut works = scratch(index);
+    // (Its walls as the nearest settlement builds them, neither rich nor poor: item 104.)
+    let near = |s: &&crate::t0::settle::Settlement| (s.x - center[0]) * (s.x - center[0]) + (s.y - center[1]) * (s.y - center[1]);
+    if let Some(s) = t0.settlements.iter().min_by(|a, b| near(a).total_cmp(&near(b))) {
+        works.wall_style = super::wallstyle::WallStyle::with(s.culture % 5, false, false, s.seed);
+    }
     let created = poi.checked_sub(t0.base_pois).and_then(|k| world.file.edits.created.get(k));
     // Uphill (unit, local): passages run into the hill.
     let uphill = |q: P| {
@@ -266,7 +271,8 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
             plazas.push(rect(at(20.0, 88.0), dir, 70.0, 40.0));
         }
     }
-    let super::Layout { mut walls, mut towers, mut gate_towers, mut castles, mut square_towers, mut mottes, mut moats, .. } = works;
+    super::wallstyle::shape_rest(&mut works, [0.0, 0.0]);
+    let super::Layout { mut walls, mut towers, mut gate_towers, mut castles, mut square_towers, mut tower_forms, wall_style, mut mottes, mut moats, .. } = works;
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
     let reach = |q: &P, r: f64| [[q[0] - r, q[1] - r], [q[0] + r, q[1] + r]];
     let tower_reach = towers.iter().flat_map(|t| reach(t, 11.0)).chain(gate_towers.iter().flat_map(|t| reach(t, 15.0)));
@@ -297,6 +303,9 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
     for t in &mut square_towers {
         t.0 = add(t.0, center);
     }
+    for t in &mut tower_forms {
+        t.0 = add(t.0, center);
+    }
     for m in &mut mottes {
         m.at = add(m.at, center);
     }
@@ -318,6 +327,8 @@ pub fn generate(world: &World, t0: &T0, poi: usize, index: u32) -> Layout {
         gate_towers,
         castles,
         square_towers,
+        tower_forms,
+        wall_style,
         mottes,
         moats,
         bbox: if bb[0] <= bb[2] { bb } else { [center[0] - 40.0, center[1] - 40.0, center[0] + 40.0, center[1] + 40.0] },
@@ -695,7 +706,7 @@ fn wall_site(world: &World, t0: &T0, c: &crate::world::Created, center: P, l: &m
             k += 1;
         }
     }
-    let (pieces, towers, gate_towers) = wall_pieces(&line, c.closed);
+    let (pieces, towers, gate_towers) = wall_pieces(&line, c.closed, l.wall_style.spacing);
     l.walls = pieces;
     l.towers = towers;
     l.gate_towers = gate_towers;

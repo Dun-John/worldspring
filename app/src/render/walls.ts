@@ -28,6 +28,18 @@ const RUINED = 4;
 const SQUARE = 8;
 
 const flagsOf = (s: Shape, at: number) => (s.pts.length > at ? Math.round(s.pts[at] / PX) : 0);
+
+/** Tower shapes in a tower's style code (`town::wallstyle::TowerShape`, bits 3-4 of `WallStyle::code`). */
+const SHAPE_SQUARE = 1;
+const SHAPE_D = 2;
+const SHAPE_OCTAGON = 3;
+/** A D tower's flat back stands this far in from its curtain's line (ft; `wallstyle::D_BACK`). */
+const D_BACK = 4;
+/** A wall's, tower's or gate's style (`WallStyle::code`: group, tower shape, material, merlons, stone,
+ * outline, gatehouse), on the point after its flags; 0 (the West's round, today's look) where none. */
+export const styleOf = (s: Shape, at: number) => flagsOf(s, at);
+/** A tower's shape by its style. */
+export const towerShape = (s: Shape) => (styleOf(s, 4) >> 3) & 3;
 /** How much a direction faces the light, -1 .. 1. */
 const lit = (x: number, y: number) => (x * LX + y * LY) / (Math.hypot(x, y) || 1);
 
@@ -510,7 +522,9 @@ export function drawWalls(g: Graphics, walls: Shape[]) {
 export function drawWallTower(g: Graphics, s: Shape) {
   const [x, y, r] = [s.pts[0], s.pts[1], s.size];
   const flags = flagsOf(s, 2);
-  if (flags & SQUARE) return drawSquareTower(g, s);
+  const shape = towerShape(s);
+  if (flags & SQUARE || shape === SHAPE_SQUARE) return drawSquareTower(g, s);
+  if (shape === SHAPE_D || shape === SHAPE_OCTAGON) return drawShapedTower(g, s, shape);
   const [gate, ruined] = [!!(flags & GATE), !!(flags & RUINED)];
   const rnd = rngAt(x * 1.3 + y * 0.31, y * 0.7 - x * 0.17);
   rnd();
@@ -539,6 +553,43 @@ export function drawWallTower(g: Graphics, s: Shape) {
   blocks(g, fallen, stoneTone(rnd));
   // A gate tower flies the banner.
   if (gate && !ruined) banner(g, x - ex * rf * 0.4, y - ey * rf * 0.4);
+}
+
+/** A D's or an octagon's outline (px), as `wallstyle::footprint` lays it: `r` its radius, (`ux`, `uy`)
+ * the way a D faces out or an octagon's sides run. */
+function shapedOutline(x: number, y: number, r: number, ux: number, uy: number, shape: number): number[] {
+  const at = (a: number, b: number) => [x + ux * a - uy * b, y + uy * a + ux * b];
+  const out: number[] = [];
+  if (shape === SHAPE_D) {
+    out.push(...at(-D_BACK * FT, -r));
+    for (let k = 0; k <= 8; k++) {
+      const t = -Math.PI / 2 + (Math.PI * k) / 8;
+      out.push(...at(r * Math.cos(t), r * Math.sin(t)));
+    }
+    out.push(...at(-D_BACK * FT, r));
+  } else {
+    const rc = r / Math.cos(Math.PI / 8);
+    for (let k = 0; k < 8; k++) {
+      const t = Math.PI / 8 + (Math.PI * 2 * k) / 8;
+      out.push(...at(rc * Math.cos(t), rc * Math.sin(t)));
+    }
+  }
+  return out;
+}
+
+/** A D or an octagonal tower, plainly (item 104's first slice): its shadow, the stone outline, the flagged
+ * top inside its parapet. */
+function drawShapedTower(g: Graphics, s: Shape, shape: number) {
+  const t = s.pts.length > 3 ? s.pts[3] / PX : 0;
+  const [x, y, r, ux, uy] = [s.pts[0], s.pts[1], s.size, Math.cos(t), Math.sin(t)];
+  const outer = shapedOutline(x, y, r, ux, uy, shape);
+  const D = PX * 1.1;
+  g.poly(outer.map((v) => v + D)).fill({ color: 0x000000, alpha: 0.28 });
+  g.poly(outer).fill(STONE[1]).stroke({ width: 3, color: INK, join: 'round' });
+  // (The top: the outline drawn in by the parapet, toward its middle.)
+  const [cx, cy] = shape === SHAPE_D ? [x + ux * ((r - D_BACK * FT) / 2), y + uy * ((r - D_BACK * FT) / 2)] : [x, y];
+  const k = Math.max(0.3, 1 - PARAPET / Math.max(r * 0.6, 1));
+  g.poly(outer.map((v, i) => (i % 2 ? cy + (v - cy) * k : cx + (v - cx) * k))).fill(WALK).stroke({ width: 1.8, color: INK, join: 'round' });
 }
 
 /** A square tower's frame: its middle, half side and the way its sides run (`SQUARE`). */
@@ -1329,7 +1380,9 @@ export function topGrid(g: Graphics, s: Shape) {
     g.stroke({ width: 1, color: INK, alpha: 0.28, pixelLine: true });
     return;
   }
-  if (s.kind === 1 && flagsOf(s, 2) & SQUARE) {
+  // (A D tower's top has no grid yet: slice 3 draws its looks.)
+  if (s.kind === 1 && towerShape(s) === SHAPE_D) return;
+  if (s.kind === 1 && (flagsOf(s, 2) & SQUARE || towerShape(s) === SHAPE_SQUARE)) {
     // A square tower's top: its square's lines, clipped to it.
     const { x, y, h, ux, uy } = squareFrame(s);
     const f = h - PARAPET;

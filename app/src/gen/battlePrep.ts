@@ -44,6 +44,11 @@ export interface Roof {
   parts: { kind: number; top: number; pts: number[] }[];
 }
 
+/**
+ * A structure drawn as a vector (`battlemap::VectorShape`): points flattened and scaled by `PX`. A wall,
+ * a tower and a gate carry their style after their flags (`town::wallstyle::WallStyle::code`: group,
+ * tower shape, material, merlons, stone, outline, gatehouse; `render/walls.ts` `styleOf`).
+ */
 export interface Shape {
   kind: number;
   size: number;

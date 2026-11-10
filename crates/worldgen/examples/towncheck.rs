@@ -77,6 +77,10 @@
 //!   corridor, no other building on their ground, the front door and the arch within 20 ft of a
 //!   street; those not round a yard, and every yard listed with where it is (`editor` edits each
 //!   one's patch as a monastery's: still round a yard after).
+//! - `walls` (not in `all`): walls by culture group (item 104, `town::wallstyle`): walled places and
+//!   their wall, castle and corner towers by shape; square towers where the style has none; towers whose
+//!   battlemap squares don't follow their shape (ring blocked, floor open, door reached); up to 3 places
+//!   a group listed with cameras (`fx, fy, zoom`) on the whole wall and on a tower by a gate.
 //! - `hash` (not in `all`): a hash per settlement layout (`L:`), per building of it (`B:`, with what it
 //!   is) and per building or tower interior (`b:`/`t:`), marked `C` in a settlement with a castle, one
 //!   per line on stdout (everything else goes to stderr): run it on two trees and diff to see what
@@ -4865,8 +4869,196 @@ fn under_terrain(mut it: interior::Interior, id: &str, r: &mut Report) {
     }
 }
 
+// ---- Walls by culture group (item 104). ----
+
+/// `walls`: per culture group (`l.culture % 5`), walled places and their towers by shape (wall towers,
+/// castle towers, corner towers); square towers where the style has none; towers whose battlemap squares
+/// don't follow their shape (the ring of wall blocking, the floor open, the door reached from outside);
+/// and up to 3 walled settlements per group listed with a camera on the whole wall and one on a tower
+/// by a gate (`fx, fy` as `scripts/shot.mjs` views take them). Towers of the first listed place per
+/// group are checked on the battlemap (`WALLS_ALL=1`: every listed place's).
+fn walls(ctx: &mut Ctx, r: &mut Report) {
+    use worldgen::battlemap::URBAN_TOWER_FLOOR;
+    use worldgen::town::wallstyle::{self, TowerShape};
+    const GROUPS: [&str; 5] = ["North", "West", "South", "Dry", "Steppe"];
+    const SHAPES: [&str; 4] = ["round", "square", "D", "octagon"];
+    r.counts(&[
+        "square towers where the style has none",
+        "towers not of their style's shapes",
+        "towers checked on the battlemap",
+        "towers whose battlemap squares don't follow their shape",
+        "towers by the water with their door in it (not counted above)",
+        "places listed",
+    ]);
+    let all = std::env::var("WALLS_ALL").is_ok_and(|v| v == "1");
+    let (world, t0) = (&ctx.ex.world, &ctx.ex.t0);
+    let (mw, mh) = (world.geom.map_w_ft, world.geom.map_h_ft);
+    let ns = t0.settlements.len();
+    let mut listed = [0usize; 5];
+    let mut to_check: Vec<(usize, Rc<Layout>)> = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    let mut order: Vec<usize> = (0..town::layout_count(t0)).collect();
+    // (The biggest places first: a group's cities before its towns.)
+    order.sort_by_key(|&li| (std::cmp::Reverse(t0.settlements.get(li).map_or(0, |s| s.population)), li));
+    for li in order {
+        let l = town::layout(world, t0, li);
+        let g = (l.wall_style.group % 5) as usize;
+        if li < ns && t0.settlements[li].tier >= worldgen::t0::settle::Tier::Town {
+            r.tally(&format!("{}: towns and up", GROUPS[g]), 1);
+        }
+        if l.walls.is_empty() {
+            continue;
+        }
+        r.tally(&format!("{}: walled places", GROUPS[g]), 1);
+        for t in l.towers.iter().copied().chain(l.extra_towers.iter().filter(|e| !e.1).map(|e| e.0)) {
+            let (shape, _) = l.tower_form(t);
+            let castle = l.tower_forms.iter().any(|f| (f.0[0] - t[0]).abs() + (f.0[1] - t[1]).abs() < 1e-6 && f.1 & 16 != 0);
+            let style = l.wall_style_at(t);
+            r.tally(&format!("{}: {} towers {}", GROUPS[g], if castle { "castle" } else { "wall" }, SHAPES[shape as usize]), 1);
+            if wallstyle::is_corner(&l.walls, t) {
+                r.tally(&format!("{}: corner towers {}", GROUPS[g], SHAPES[shape as usize]), 1);
+            }
+            if shape == TowerShape::Square && !style.has_square() {
+                r.add("square towers where the style has none", 1.0, format!("L{li} {}", at(t)));
+            }
+            if shape != style.tower && shape != style.corner {
+                r.add("towers not of their style's shapes", 1.0, format!("L{li} {} {}", SHAPES[shape as usize], at(t)));
+            }
+        }
+        // Listed: settlements, up to 3 a group.
+        if li >= ns || listed[g] >= 3 {
+            continue;
+        }
+        listed[g] += 1;
+        r.tally("places listed", 1);
+        let s = &t0.settlements[li];
+        let bb = bbox(&l.walls.iter().flatten().copied().collect::<Vec<_>>());
+        let (cx, cy) = (0.5 * (bb[0] + bb[2]), 0.5 * (bb[1] + bb[3]));
+        let span = (bb[2] - bb[0]).max(bb[3] - bb[1]).max(100.0);
+        let whole = libm::log2(1100.0 / span);
+        // (A gate tower of the town's, not a castle's: the first in order.)
+        let town_gate = l.gate_towers.iter().find(|p| !l.castles.iter().any(|(c, rad)| dist(*c, **p) <= rad + 1.0));
+        let gate = town_gate.or(l.gate_towers.first()).copied().unwrap_or(l.towers.first().copied().unwrap_or([cx, cy]));
+        let st = l.wall_style;
+        lines.push(format!(
+            "    {} L{li} {} wealth {:.2}{}{}: wall fx {:.6} fy {:.6} zoom {whole:.1}; gate tower fx {:.6} fy {:.6} zoom 1.5 ({} towers, {} castle)",
+            GROUPS[g],
+            s.tier.name(),
+            wallstyle::wealth(s),
+            if st.rich { " rich" } else { "" },
+            if st.poor { " poor" } else { "" },
+            cx / mw,
+            cy / mh,
+            gate[0] / mw,
+            gate[1] / mh,
+            l.towers.len() + l.gate_towers.len(),
+            if l.castles.is_empty() { "no" } else { "a" },
+        ));
+        if all || listed[g] == 1 {
+            to_check.push((li, l.clone()));
+        }
+    }
+    // The battlemap round each tower of the places checked.
+    for (li, l) in to_check {
+        for (k, &(t, rad, gate)) in interior::towers(&l).iter().enumerate() {
+            let (shape, ras) = wallstyle::tower_raster(&l, t, rad, gate, SQUARE_FT);
+            let x0 = ras.i0 as f64 * SQUARE_FT - 40.0;
+            let y0 = ras.j0 as f64 * SQUARE_FT - 40.0;
+            let w = ctx.window([x0, y0, x0 + ras.nx as f64 * SQUARE_FT + 80.0, y0 + ras.ny as f64 * SQUARE_FT + 80.0]);
+            r.tally("towers checked on the battlemap", 1);
+            let wi = |gi: i64, gj: i64| -> Option<usize> {
+                let (i, j) = (gi - (w.ox / SQUARE_FT).round() as i64, gj - (w.oy / SQUARE_FT).round() as i64);
+                (i >= 0 && j >= 0 && (i as usize) < w.nx && (j as usize) < w.ny).then(|| j as usize * w.nx + i as usize)
+            };
+            let mut bad: Vec<String> = Vec::new();
+            let mut door: Option<usize> = None;
+            let mut floors = 0;
+            let mut wet = false;
+            for q in 0..ras.nx * ras.ny {
+                let v = ras.cells[q];
+                if v == 0 {
+                    continue;
+                }
+                let (gi, gj) = (ras.i0 + (q % ras.nx) as i64, ras.j0 + (q / ras.nx) as i64);
+                let Some(a) = wi(gi, gj) else { continue };
+                let (kx, ky) = (gi.div_euclid(SQ as i64), gj.div_euclid(SQ as i64));
+                let c = ctx.chunk(kx as u32, ky as u32);
+                let k = (gj - ky * SQ as i64) as usize * SQ + (gi - kx * SQ as i64) as usize;
+                let (b, u) = (c.building[k], c.urban[k]);
+                // (A building on it, the water, a deck: theirs.)
+                // (A way underground at its foot: its.)
+                if b != 0 || c.water_level[k] > c.height[k] || matches!(u, worldgen::battlemap::URBAN_DECK | worldgen::battlemap::URBAN_ENTRANCE) {
+                    if v == wallstyle::DOOR && b != 0 {
+                        bad.push("door under a building".into());
+                    }
+                    wet |= v == wallstyle::DOOR && c.water_level[k] > c.height[k];
+                    continue;
+                }
+                match v {
+                    wallstyle::RING if u != URBAN_TOWER => bad.push(format!("ring square open ({u})")),
+                    wallstyle::FLOOR | wallstyle::DOOR if u != URBAN_TOWER_FLOOR && u != URBAN_TOWER => bad.push(format!("floor square {u}")),
+                    _ => {}
+                }
+                if v != wallstyle::RING && u == URBAN_TOWER_FLOOR {
+                    floors += 1;
+                }
+                if v == wallstyle::DOOR {
+                    door = Some(a);
+                }
+            }
+            if floors == 0 {
+                bad.push("no open floor".into());
+            }
+            // The door reached from the ground 30 ft out (square to square past what blocks).
+            match door {
+                None if !ras.cells.contains(&wallstyle::DOOR) => bad.push("no door".into()),
+                None => {}
+                Some(d) => {
+                    let mut seen = vec![false; w.nx * w.ny];
+                    let mut q = VecDeque::from([d]);
+                    seen[d] = true;
+                    let mut out = false;
+                    while let Some(a) = q.pop_front() {
+                        let p = [w.ox + ((a % w.nx) as f64 + 0.5) * SQUARE_FT, w.oy + ((a / w.nx) as f64 + 0.5) * SQUARE_FT];
+                        if dist(p, t) > rad + 30.0 {
+                            out = true;
+                            break;
+                        }
+                        let (x, y) = ((a % w.nx) as i64, (a / w.nx) as i64);
+                        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                            let (nx, ny) = (x + dx, y + dy);
+                            if nx < 0 || ny < 0 || nx >= w.nx as i64 || ny >= w.ny as i64 {
+                                continue;
+                            }
+                            let n = ny as usize * w.nx + nx as usize;
+                            if !seen[n] && !w.block[n] {
+                                seen[n] = true;
+                                q.push_back(n);
+                            }
+                        }
+                    }
+                    if !out {
+                        bad.push("door not reached from outside".into());
+                    }
+                }
+            }
+            if wet {
+                r.add("towers by the water with their door in it (not counted above)", 1.0, format!("t:{li}:{k} {} {}", SHAPES[shape as usize], at(t)));
+                continue;
+            }
+            if !bad.is_empty() {
+                bad.dedup();
+                r.add("towers whose battlemap squares don't follow their shape", bad.len() as f64, format!("t:{li}:{k} {} {}: {}", SHAPES[shape as usize], at(t), bad.join(", ")));
+            }
+        }
+    }
+    for line in lines {
+        say!("{line}");
+    }
+}
+
 fn main() {
-    const MODES: [&str; 16] = ["yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "all"];
+    const MODES: [&str; 17] = ["walls", "yurts", "villages", "castles", "reach", "interiors", "hub", "halls", "palaces", "temples", "civic", "inns", "editor", "under", "hash", "piers", "all"];
     let args = common::args();
     let keeps = args.pos.iter().any(|a| a == "--keeps");
     let mut modes: Vec<&str> = args.pos.iter().filter_map(|a| MODES.iter().find(|m| **m == a.as_str()).copied()).collect();
@@ -4913,6 +5105,7 @@ fn main() {
                 "piers" => piers(&mut ctx, &mut r),
                 "yurts" => yurts(&mut ctx, &mut r),
                 "villages" => villages(&mut ctx, &mut r),
+                "walls" => walls(&mut ctx, &mut r),
                 "editor" => editor(&mut ctx, &mut r),
                 "under" => under(&mut ctx, &mut r, &label.replace(' ', "")),
                 _ => hashes(&mut ctx, &label.replace(' ', ""), &mut r),

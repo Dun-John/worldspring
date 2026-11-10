@@ -117,6 +117,9 @@ pub const URBAN_PATH: u8 = 12;
 /// A village's toft and croft, a manor's or a shrine's yard (`town::village`): the ground's own,
 /// grass for forest floor, no wild scatter.
 pub const URBAN_CROFT: u8 = 13;
+/// A tower's open floor inside its ring of wall, and its door (item 104, `town::wallstyle::raster`):
+/// stone underfoot, open to the sky on the battlemap.
+pub const URBAN_TOWER_FLOOR: u8 = 14;
 /// Wall-walk and tower-top heights above the ground (ft).
 const WALL_FT: f32 = 20.0;
 const TOWER_FT: f32 = 30.0;
@@ -489,9 +492,12 @@ pub struct VectorShape {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeKind {
-    /// Curtain wall segment, then `[flags, 0]` (`WALL_BARE_A`, `WALL_BARE_B`, `WALL_RUINED`).
+    /// Curtain wall segment, then `[flags, 0]` (`WALL_BARE_A`, `WALL_BARE_B`, `WALL_RUINED`), then
+    /// `[style, 0]` (`town::wallstyle::WallStyle::code`).
     Wall = 0,
-    /// Wall or gate tower: its centre, then `[flags, 0]` (`WALL_GATE`, `WALL_RUINED`).
+    /// Wall or gate tower: its centre, then `[flags, angle]` (`WALL_GATE`, `WALL_RUINED`, `WALL_SQUARE`;
+    /// the way a square's or an octagon's sides run, the way a D faces out, radians), then `[style, 0]`
+    /// (`WallStyle::code` with its shape: round, square, D, octagon).
     Tower = 1,
     /// Bridge or pier deck outline, its first edge along the span; size is the style (0 pier,
     /// 1 timber bridge, 2 stone bridge, 3 old stone bridge).
@@ -514,8 +520,8 @@ pub enum ShapeKind {
     /// the depth of a tread); size is the width it covers (squares). Every chunk it crosses has
     /// it: the ground draws the treads square across it.
     Stairs = 8,
-    /// A gatehouse over the passage between two gate towers: their centres; size is the style
-    /// (0 standing, 1 a ruin's).
+    /// A gatehouse over the passage between two gate towers: their centres, then `[style, 0]`
+    /// (`WallStyle::code`); size is 0 standing, 1 a ruin's.
     Gate = 9,
     /// A palace forecourt's low garden wall: a straight stretch of it; size is its thickness.
     GardenWall = 10,
@@ -1810,7 +1816,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             for j in j0..=j1 as usize {
                 for i in i0..=i1 as usize {
                     let h = j * HS + i;
-                    if bld_h[h] != 0 || hw[h] > hh[h] || urb_h[h] == URBAN_TOWER {
+                    if bld_h[h] != 0 || hw[h] > hh[h] || urb_h[h] == URBAN_TOWER || urb_h[h] == URBAN_TOWER_FLOOR {
                         continue;
                     }
                     // Every square the drawn wall or tower touches stands on it.
@@ -1829,14 +1835,38 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
             }
         };
-        for t in &l.towers {
-            raise(*t, *t, 11.0, URBAN_TOWER, TOWER_FT, l.square_tower(*t), &mut urb_h, &mut hh, &mut lift);
-        }
-        for t in &l.gate_towers {
-            raise(*t, *t, 15.0, URBAN_TOWER, TOWER_FT, None, &mut urb_h, &mut hh, &mut lift);
-        }
-        for &(t, gate) in &l.extra_towers {
-            raise(t, t, if gate { 15.0 } else { 11.0 }, URBAN_TOWER, TOWER_FT, if gate { None } else { l.square_tower(t) }, &mut urb_h, &mut hh, &mut lift);
+        // Towers (item 104): each a ring of wall in its shape round an open floor, a door through it on
+        // the town side (`wallstyle::raster`, on the global lattice: every chunk lays the same).
+        // (Every tower's ring first: one standing into another's floor walls it there.)
+        let (gx0, gy0) = (crate::core::round(hx0 / SQUARE_FT) as i64, crate::core::round(hy0 / SQUARE_FT) as i64);
+        let rasters: Vec<crate::town::wallstyle::Raster> = crate::interior::towers(&l)
+            .iter()
+            .filter(|&&(t, r, _)| {
+                let reach = r * std::f64::consts::SQRT_2 + 2.0;
+                overlaps((t[0] - reach, t[1] - reach, t[0] + reach, t[1] + reach))
+            })
+            .map(|&(t, r, gate)| crate::town::wallstyle::tower_raster(&l, t, r, gate, SQUARE_FT).1)
+            .collect();
+        for ring in [true, false] {
+            for ras in &rasters {
+                for (q, &v) in ras.cells.iter().enumerate().filter(|c| *c.1 != 0 && (*c.1 == crate::town::wallstyle::RING) == ring) {
+                    let (i, j) = (ras.i0 + (q % ras.nx) as i64 - gx0, ras.j0 + (q / ras.nx) as i64 - gy0);
+                    if i < 0 || j < 0 || i >= HS as i64 || j >= HS as i64 {
+                        continue;
+                    }
+                    let h = j as usize * HS + i as usize;
+                    if bld_h[h] != 0 || hw[h] > hh[h] || urb_h[h] == URBAN_TOWER || urb_h[h] == URBAN_TOWER_FLOOR {
+                        continue;
+                    }
+                    if v == crate::town::wallstyle::RING {
+                        urb_h[h] = URBAN_TOWER;
+                        hh[h] = ground_h[h] + TOWER_FT;
+                        lift[h] = hh[h] - ground_h[h];
+                    } else {
+                        urb_h[h] = URBAN_TOWER_FLOOR;
+                    }
+                }
+            }
         }
         for w in &l.walls {
             for seg in w.windows(2) {
@@ -1867,19 +1897,24 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 if owns([0.5 * (seg[0][0] + seg[1][0]), 0.5 * (seg[0][1] + seg[1][1])]) {
                     let ends = if k == 0 && bare(seg[0], wi) { WALL_BARE_A } else { 0 } | if k + 2 == n && bare(seg[1], wi) { WALL_BARE_B } else { 0 };
                     let flags = [(ends | ruin_bit) as f32, 0.0];
-                    shapes.push(VectorShape { kind: ShapeKind::Wall, size: (8.0 / SQUARE_FT) as f32, pts: vec![local(&seg[0]), local(&seg[1]), flags] });
+                    let style = l.wall_style_at(crate::town::geom::lerp(seg[0], seg[1], 0.5)).code(crate::town::wallstyle::TowerShape::Round) as f32;
+                    shapes.push(VectorShape { kind: ShapeKind::Wall, size: (8.0 / SQUARE_FT) as f32, pts: vec![local(&seg[0]), local(&seg[1]), flags, [style, 0.0]] });
                 }
             }
         }
         for &(t, r, gate) in &towers {
             if owns(t) {
-                // (A square tower: its flag, and the way its sides run as an angle.)
-                let square = if gate { None } else { l.square_tower(t) };
-                let flags = match square {
-                    Some(u) => [(WALL_SQUARE | ruin_bit) as f32, libm::atan2(u[1], u[0]) as f32],
-                    None => [(if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, 0.0],
+                // (A square tower: its flag, and the way its sides run as an angle; a D's the way it faces,
+                // an octagon's the way its sides run. Then its style: `WallStyle::code` with its shape.)
+                use crate::town::wallstyle::TowerShape;
+                let (shape, u) = if gate { (TowerShape::Round, [1.0, 0.0]) } else { l.tower_form(t) };
+                let flags = match shape {
+                    TowerShape::Square => [(WALL_SQUARE | ruin_bit) as f32, libm::atan2(u[1], u[0]) as f32],
+                    TowerShape::Round => [(if gate { WALL_GATE } else { 0 } | ruin_bit) as f32, 0.0],
+                    _ => [ruin_bit as f32, libm::atan2(u[1], u[0]) as f32],
                 };
-                shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(&t), flags] });
+                let style = [l.wall_style_at(t).code(shape) as f32, 0.0];
+                shapes.push(VectorShape { kind: ShapeKind::Tower, size: (r / SQUARE_FT) as f32, pts: vec![local(&t), flags, style] });
             }
         }
         for &(a, b) in &fore_walls {
@@ -1907,7 +1942,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         for (g, h) in gateways(&l, &towers) {
             gates.push((g, h));
             if owns([0.5 * (g[0] + h[0]), 0.5 * (g[1] + h[1])]) {
-                shapes.push(VectorShape { kind: ShapeKind::Gate, size: ruined as u8 as f32, pts: vec![local(&g), local(&h)] });
+                let style = l.wall_style_at(g).code(crate::town::wallstyle::TowerShape::Round) as f32;
+                shapes.push(VectorShape { kind: ShapeKind::Gate, size: ruined as u8 as f32, pts: vec![local(&g), local(&h), [style, 0.0]] });
             }
         }
         // Deck style: 0 pier, 1 a village or town's timber bridge, 2 a city's stone bridge, 3 an
@@ -2215,7 +2251,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Micro-relief never lifts or digs a road bed, a building, a street, a field or the ground
     // at a way underground.
     let protected: Vec<bool> =
-        (0..HS * HS).map(|h| road_h[h] != 0 || bld_h[h] != 0 || in_town[h] || ent_h[h] || matches!(urb_h[h], URBAN_STREET | URBAN_PLAZA | URBAN_WALL | URBAN_TOWER | URBAN_FIELD | URBAN_YARD)).collect();
+        (0..HS * HS).map(|h| road_h[h] != 0 || bld_h[h] != 0 || in_town[h] || ent_h[h] || matches!(urb_h[h], URBAN_STREET | URBAN_PLAZA | URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR | URBAN_FIELD | URBAN_YARD)).collect();
     for h in 0..HS * HS {
         if protected[h] {
             hh[h] = road_bed[h];
@@ -2599,7 +2635,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
                 URBAN_DECK => chunk.surface[k] = if paved { Surface::Cobble } else { Surface::Road },
                 URBAN_RUIN | URBAN_YARD => chunk.surface[k] = Surface::Dirt,
-                URBAN_WALL | URBAN_TOWER => chunk.surface[k] = Surface::Rock,
+                URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR => chunk.surface[k] = Surface::Rock,
                 URBAN_PATH => chunk.surface[k] = Surface::Gravel,
                 // (A formal garden's lawn is mown grass, whatever grows round the town; a common's is
                 // the ground of the land round its middle, whatever the shore beside it.)
@@ -2652,7 +2688,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 chunk.urban[k] == URBAN_PLAZA
                     && bailey_kind[h(0, 0)] & 3 != 0
                     && bailey_kind[h(0, 0)] & 4 == 0
-                    && (-1..=1).all(|dy| (-1..=1).all(|dx| !matches!(urb_h[h(dx, dy)], URBAN_WALL | URBAN_TOWER) && bailey_kind[h(dx, dy)] & 4 == 0))
+                    && (-1..=1).all(|dy| (-1..=1).all(|dx| !matches!(urb_h[h(dx, dy)], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR) && bailey_kind[h(dx, dy)] & 4 == 0))
             })
             .collect()
     };
@@ -2905,7 +2941,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let keep_off: Vec<bool> = (0..n)
         .map(|k| {
             let (x, y) = ((k % SQ) as i64, (k / SQ) as i64);
-            let wall = |x: i64, y: i64| x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && matches!(chunk.urban[y as usize * SQ + x as usize], URBAN_WALL | URBAN_TOWER);
+            let wall = |x: i64, y: i64| x >= 0 && y >= 0 && x < SQ as i64 && y < SQ as i64 && matches!(chunk.urban[y as usize * SQ + x as usize], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR);
             let p = [ox + (x as f64 + 0.5) * SQUARE_FT, oy + (y as f64 + 0.5) * SQUARE_FT];
             (-1..=1).any(|dy| (-1..=1).any(|dx| wall(x + dx, y + dy)))
                 || in_gate(p, 2.5)
@@ -3158,7 +3194,7 @@ fn touches_square(o: &Object, hit: impl Fn(usize) -> bool) -> bool {
 
 /// Whether an object's footprint touches a wall or tower square (it would be drawn over them).
 fn on_wall(urban: &[u8], o: &Object) -> bool {
-    touches_square(o, |k| matches!(urban[k], URBAN_WALL | URBAN_TOWER))
+    touches_square(o, |k| matches!(urban[k], URBAN_WALL | URBAN_TOWER | URBAN_TOWER_FLOOR))
 }
 
 /// Objects put down and taken away by hand (`Edits::objects`, `Edits::cleared`): generated
