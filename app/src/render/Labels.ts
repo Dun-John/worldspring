@@ -311,9 +311,9 @@ export class Labels {
       const [color, glyph, minPx, prio] = PLACE[h.category] ?? ['#57534e', '●', 14, 20];
       this.placeHits.set(h.id, h);
       // (A lone round tower, an islet's watchtower or a breakwater's lighthouse, is about a pin across at
-      // street zoom: its pin stands at the east foot of its plan mark (drawn 1.2 times its size,
-      // `payload.rs`), on its islet or breakwater head, so the pin doesn't hide it.)
-      const beside = /^(watchtower|lighthouse)$/i.test(h.function ?? '') ? h.size_ft * 0.6 + 4 : 0;
+      // street zoom: a watchtower's pin stands at the east foot of its plan mark (drawn 1.2 times its size,
+      // `payload.rs`), on its islet; a lighthouse's hit is already shifted out past its breakwater head, `gazetteer.rs`.)
+      const beside = /^watchtower$/i.test(h.function ?? '') ? h.size_ft * 0.6 + 10 : 0;
       const f: Feature = { id: h.id, kind: 'place', name: buildingName(h, renames), x: h.x + beside, y: h.y, angle: 0, extent_ft: PLACE_EXTENT_FT, detail: h.function };
       // Bigger buildings win ties within a category.
       const style: KindStyle = { size: 11, fill: color, spacing: 0, minPx, maxPx: 1e9, prio: prio + Math.min(0.9, h.size_ft / 400), pin: true, badge: { color, glyph } };

@@ -1416,6 +1416,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let (mut steppe_any, mut steppe_all) = (false, true);
     // (R5 M20: town bridges' decks over an islet and their flat level; lined bridges' spans.)
     let mut islet_decks: Vec<(Vec<[f64; 2]>, f32)> = Vec::new();
+    let mut lined_decks: Vec<Vec<[f64; 2]>> = Vec::new();
     for (li, l) in crate::town::layouts_near(world, t0, [hx0, hy0, hx0 + span, hy0 + span]).into_iter().enumerate() {
         if l.culture % 5 == 4 {
             steppe_any = true;
@@ -1474,6 +1475,7 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         // (R5 M20: a lined bridge's span, flat at its level, `Layout::lined`.)
         if let Some((d, top)) = l.lined.as_ref().filter(|(d, _)| overlaps(bbox(d))) {
             islet_decks.push((d.clone(), *top));
+            lined_decks.push(d.clone());
         }
         for y in &l.yards {
             stamp(&y.0, URBAN_YARD, &mut urb_h);
@@ -2491,7 +2493,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
             }
             continue;
         }
-        if !owns(x.at) || c.dropped {
+        // (A lined bridge carries the road on: the road's own plank deck, which ran past the banks, is not drawn.)
+        if !owns(x.at) || c.dropped || (c.kind == ShapeKind::RoadBridge && lined_decks.iter().any(|d| crate::town::geom::contains(d, x.at))) {
             continue;
         }
         let mut pts = vec![local(&c.a), local(&c.b)];

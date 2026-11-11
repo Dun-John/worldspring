@@ -2127,7 +2127,7 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
 const LINED_WIDTH_FT: f64 = 56.0;
 const LINED_ROW_FT: f64 = 16.0;
 const LINED_MIN_WATER_FT: f64 = 120.0;
-const LINED_BANK_FT: f64 = 1.0;
+const LINED_BANK_FT: f64 = 0.0;
 
 /// R5 M20: a metropolis's lined bridge. In 1 of 2 metropolises with a main street's bridge over
 /// at least `LINED_MIN_WATER_FT` of water, the longest such gets a second deck over the water
@@ -2170,6 +2170,8 @@ fn lined_bridge(site: &Site, s: &Settlement, over: &[(f64, P, P, f64, f64)], l: 
         return;
     }
     let level = crate::battlemap::deck_top(a, b, site.t0);
+    // (The street's own plain deck over the span, which ran 5 ft past each bank, goes: the lined deck carries the street on, ending at the banks.)
+    l.bridges.retain(|d| !geom::contains(&deck, geom::centroid(d)));
     l.bridges.push(deck.clone());
     l.lined = Some((deck, level));
 }

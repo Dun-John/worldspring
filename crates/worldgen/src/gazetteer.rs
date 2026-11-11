@@ -58,6 +58,18 @@ fn building_hit(t0: &T0, layouts: &[Rc<town::Layout>], l: &town::Layout, b: &tow
     // (The capital's palace's on its front range, over its entrance hall: not on its court's
     // fountain.)
     let c = l.forecourts.iter().find(|f| f.palace == b.id).map_or(c, |f| geom::sub(geom::mul(geom::add(f.front[0], f.front[1]), 0.5), geom::mul(f.out, 17.5)));
+    // (A lighthouse's pin 20 ft out past its breakwater's head, on the head's rim, so the tower's mark shows and its name runs out over the water.)
+    let c = if town::harbour::is_lighthouse(b) {
+        l.moles
+            .iter()
+            .find(|m| m.pts.last().is_some_and(|t| geom::dist(*t, c) < 2.0) && m.pts.len() > 1)
+            .map_or(c, |m| {
+                let (t, q) = (m.pts[m.pts.len() - 1], m.pts[m.pts.len() - 2]);
+                geom::add(t, geom::mul(geom::sub(t, q), 20.0 / geom::dist(q, t).max(1e-9)))
+            })
+    } else {
+        c
+    };
     let (district_id, district) = district_at(t0, layouts, l, c).unzip();
     Hit::Building {
         id: format!("b:{}:{}", l.index, b.id),
