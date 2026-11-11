@@ -32,6 +32,7 @@ mod curtain;
 pub mod wallside;
 pub mod gatehouse;
 pub mod handwall;
+pub mod harbour;
 pub mod village;
 // v63 countryside
 pub mod fields;
@@ -329,6 +330,11 @@ pub struct Layout {
     /// R5 M20: a metropolis's lined bridge (`lined_bridge`): its widened span over the water (a
     /// deck, also in `bridges`) and the one flat level (ft) it and the houses on it stand at.
     pub lined: Option<(Vec<P>, f32)>,
+    /// R5 M20: a big port's breakwaters (`harbour`), the boats moored by its piers (any place's),
+    /// and whether it is a big port: `None` not one, `Some("")` with a breakwater, else why not.
+    pub moles: Vec<harbour::Mole>,
+    pub moored: Vec<harbour::Moored>,
+    pub port: Option<&'static str>,
 }
 
 /// One street piece of a flight of steps (world ft): its centreline from the bottom up, its
@@ -658,6 +664,9 @@ impl Layout {
             crofts: Vec::new(),
             wheels: Vec::new(),
             lined: None,
+            moles: Vec::new(),
+            moored: Vec::new(),
+            port: None,
         }
     }
 
@@ -2088,6 +2097,9 @@ fn generate_with(world: &World, t0: &T0, index: usize, edit: Option<&crate::worl
             }
         }
     }
+    // R5 M20: a port's breakwater and its lighthouse (after every other building), its boats, its
+    // harbour master's office.
+    harbour::harbour(&site, s, index, &mut l, edit.map(|_| generated_layout(world, t0, index)).as_deref());
     let mut bb = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
     for p in l.buildings.iter().flat_map(|b| b.poly.iter()).chain(l.fields.iter().flatten()).chain(l.walls.iter().flatten()).chain(l.plazas.iter().flat_map(|p| p.pts.iter())).chain(l.parks.iter().flat_map(|p| p.pts.iter())).chain(l.crofts.iter().flat_map(|c| c.pts.iter())) {
         bb = [bb[0].min(p[0]), bb[1].min(p[1]), bb[2].max(p[0]), bb[3].max(p[1])];

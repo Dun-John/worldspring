@@ -25,6 +25,7 @@ import { Edited } from './TileLayer';
 import { buildAtlas, looks, PX, UPRIGHT_FOOT, type Atlas } from './atlas';
 import { deckGrid, drawDeck, drawFerry, drawFord, drawRoadBridge, rngAt } from './bridges';
 import { boundAt, drawBounds, drawSails, isBound, SAILS } from './countryside';
+import { drawBreakwaterArmour, drawCog, drawLantern } from './harbourShapes';
 import { banner, cornerHatch, drawBastion, drawDitchBank, drawDrawbridge, drawDrawbridgeSill, drawForecourtGate, drawGardenWalls, drawGate, drawGatePier, drawGravelWalk, drawRaisedDrawbridge, drawWalls, drawWallTower, flagFloor, GATE_DEPTH, PARAPET, parapetRing, roundParapet, roundTop, roundWalk, topGrid, WALK } from './walls';
 import { customTexture, onLoaded } from './customAtlas';
 import { drawCaveMouth, drawThemedEntrance } from './entrances';
@@ -926,9 +927,13 @@ export class BattlemapLayer {
     for (const s of c.shapes) {
       if (s.kind === 5) drawDais(daisG, s);
       else if (s.kind === 13) drawGravelWalk(daisG, s);
+      // R5 M20: a breakwater's armour, on the ground and the water by it.
+      else if (s.kind === BREAKWATER) drawArmour(daisG, s);
     }
     const battleG = new Graphics();
     for (const r of c.battlements) drawBattlements(battleG, r);
+    // R5 M20: a lighthouse's lamp gallery over its roof (shown with the roofs).
+    for (const s of c.shapes) if (s.kind === LANTERN) drawLantern(battleG, s.pts[0], s.pts[1], (s.size / PX) * 5, PX, true);
     battleG.visible = this.roofsOn;
     // Bridges and piers, the grid over their decks (shown with the ground's), then walls with
     // their shadows; towers stand above every chunk's walls.
@@ -937,6 +942,11 @@ export class BattlemapLayer {
     for (const s of c.shapes) {
       if (s.kind === 2) drawDeck(bridgeG, s);
       else if (s.kind === 3) drawRoadBridge(bridgeG, s);
+      else if (s.kind === SHIP) {
+        // R5 M20: a cog moored by a pier, on the water with the decks.
+        drawCog(bridgeG, s.pts[0], s.pts[1], Math.atan2(s.pts[3] - s.pts[1], s.pts[2] - s.pts[0]), (s.size / PX) * 5, PX, Math.round((s.pts[4] ?? 0) / PX));
+        continue;
+      }
       else if (s.kind === 6) {
         drawFord(bridgeG, s);
         continue;
@@ -1142,7 +1152,7 @@ function parkEdge(raised: Uint8Array | null): boolean {
 
 /** Props always drawn turned to their `rot` (by catalog name; also fallen logs, old bones and ruined
  * walls, by id). */
-const TURNED = new Set(['ballista', 'market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel', 'lychgate', 'tomb slab', 'horse', 'hitching rail']);
+const TURNED = new Set(['rowboat', 'fishing boat', 'dock crane', 'net rack', 'ballista', 'market stall', 'cart', 'tent', 'campfire', 'firewood stack', 'bedroll', 'water trough', 'bench', 'flowerbed', 'hedge', 'footbridge', 'vegetable row', 'wattle fence', 'anvil', 'water wheel', 'lychgate', 'tomb slab', 'horse', 'hitching rail']);
 /** Turned props that look the same after a half turn, by the start of the half turn (degrees) they are
  * drawn within: the turns that keep the side drawn lit within a quarter turn of the light in the NW. A hedge is
  * lit along its north side: -135° to 45°; a flowerbed on its north and west edges: -90° to 90°; a
@@ -1203,7 +1213,19 @@ export const LONG_SHADOW = new Map([
   ['hitching rail', [2.0, 0.3, 0.6]],
 ]);
 /** Props that draw their own shadow into their picture, so get no drop shadow. */
-export const OWN_SHADOW = new Set(['market cross', 'water wheel', 'kurgan']);
+export const OWN_SHADOW = new Set(['market cross', 'water wheel', 'kurgan', 'rowboat', 'fishing boat', 'dock crane', 'net rack']);
+
+/** R5 M20 shapes (`battlemap::ShapeKind`): a breakwater's armour, a moored cog, a lighthouse's lantern. */
+const BREAKWATER = 32;
+const SHIP = 33;
+const LANTERN = 34;
+
+/** A breakwater's armour along its line (px), the band `size` squares across. */
+function drawArmour(g: Graphics, s: Shape) {
+  const pts: [number, number][] = [];
+  for (let i = 0; i + 1 < s.pts.length; i += 2) pts.push([s.pts[i], s.pts[i + 1]]);
+  drawBreakwaterArmour(g, pts, PX, (s.size / PX) * 5, Math.floor(Math.abs(s.pts[0] * 7 + s.pts[1] * 13)) % 997);
+}
 
 const STONE = 0x9c968b;
 const STONE_TOP = 0xb3ada2;

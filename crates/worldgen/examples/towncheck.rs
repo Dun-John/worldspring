@@ -5758,6 +5758,201 @@ fn bastion_walks(ctx: &mut Ctx, l: &Layout, li: usize, r: &mut Report) {
     }
 }
 
+/// R5 M20: big ports (`town::harbour`): their breakwaters (dry and paved, armoured), the
+/// lighthouse on each (its front door reached from the bank over the breakwater, on the
+/// battlemap: dry open squares, steps of at most 2.5 ft), their harbour masters; every place's
+/// moored boats (on open water, never on a deck or dry ground).
+fn ports(ctx: &mut Ctx, r: &mut Report) {
+    use worldgen::town::harbour::{self, Afloat};
+    r.counts(&[
+        "big ports",
+        "breakwaters",
+        "big ports without a breakwater",
+        "breakwater squares wet",
+        "breakwater squares unpaved",
+        "breakwater armour pieces",
+        "lighthouses",
+        "breakwaters without a lighthouse",
+        "lighthouse doors not reached from the bank",
+        "harbour masters in big ports",
+        "big ports without a harbour master",
+        "moored boats",
+        "village rowboats",
+        "cogs",
+        "buoys",
+        "boats on the battlemap",
+        "boats on a dry or deck square",
+        "boats left off the battlemap",
+        "quay cranes",
+        "bollards",
+        "net racks",
+    ]);
+    let size = ctx.ex.world.geom.tile_size_ft(ctx.ex.world.geom.max_level);
+    let hm = town::catalog::index_of("harbor_master").map(|f| f as u16);
+    let chunks_round = |ctx: &mut Ctx, b: [f64; 4]| -> Vec<(f64, f64, Rc<Chunk>)> {
+        let k = |v: f64| (v / size).floor().max(0.0) as u32;
+        let mut out = Vec::new();
+        for ky in k(b[1])..=k(b[3]) {
+            for kx in k(b[0])..=k(b[2]) {
+                out.push((kx as f64 * size, ky as f64 * size, ctx.chunk(kx, ky)));
+            }
+        }
+        out
+    };
+    for si in 0..ctx.ex.t0.settlements.len() {
+        let l = town::layout(&ctx.ex.world, &ctx.ex.t0, si);
+        if l.piers.is_empty() {
+            continue;
+        }
+        // Boats: their squares on the battlemap.
+        let tag0 = format!("L{si} {:?}", l.tier);
+        r.tally("moored boats", l.moored.iter().filter(|m| matches!(m.kind, Afloat::Rowboat | Afloat::FishingBoat | Afloat::Cog)).count());
+        r.tally("cogs", l.moored.iter().filter(|m| m.kind == Afloat::Cog).count());
+        r.tally("buoys", l.moored.iter().filter(|m| m.kind == Afloat::Buoy).count());
+        if l.tier == worldgen::t0::settle::Tier::Village {
+            for m in l.moored.iter().filter(|m| m.kind == Afloat::Rowboat) {
+                r.add("village rowboats", 1.0, format!("{tag0} at {}", at(m.at)));
+            }
+        }
+        for m in &l.moored {
+            let c = ctx.chunk((m.at[0] / size) as u32, (m.at[1] / size) as u32);
+            let q = (((m.at[1] / size).fract() * SQ as f64) as usize) * SQ + ((m.at[0] / size).fract() * SQ as f64) as usize;
+            if c.water_level[q] <= c.height[q] || c.urban[q] == worldgen::battlemap::URBAN_DECK {
+                r.add("boats on a dry or deck square", 1.0, format!("{tag0} {:?} at {}", m.kind, at(m.at)));
+            }
+            if m.kind == Afloat::Cog {
+                continue;
+            }
+            let kind = match m.kind {
+                Afloat::Rowboat => Kind::Rowboat,
+                Afloat::FishingBoat => Kind::FishingBoat,
+                _ => Kind::Buoy,
+            };
+            let (ox, oy) = ((m.at[0] / size).floor() * size, (m.at[1] / size).floor() * size);
+            let found = c.objects.iter().any(|o| o.kind == kind && dist([ox + o.x as f64 * SQUARE_FT, oy + o.y as f64 * SQUARE_FT], m.at) < 1.0);
+            if found {
+                r.tally("boats on the battlemap", 1);
+            } else {
+                r.add("boats left off the battlemap", 1.0, format!("{tag0} {:?} at {}", m.kind, at(m.at)));
+            }
+        }
+        let Some(why) = l.port else { continue };
+        r.tally("big ports", 1);
+        let tag = format!("L{si} {:?} {} piers at {}", l.tier, l.piers.len(), at(l.center));
+        if l.buildings.iter().any(|b| b.func.is_some() && b.func == hm) {
+            r.tally("harbour masters in big ports", 1);
+        } else {
+            r.add("big ports without a harbour master", 1.0, tag.clone());
+        }
+        if l.moles.is_empty() {
+            r.add("big ports without a breakwater", 1.0, format!("{tag}: {why}"));
+            say!("  big port {tag}: no breakwater ({why})");
+            continue;
+        }
+        for m in &l.moles {
+            r.tally("breakwaters", 1);
+            let length: f64 = m.pts.windows(2).map(|w| dist(w[0], w[1])).sum();
+            let polys = m.polys();
+            let bb = m.bbox();
+            let chunks = chunks_round(ctx, [bb[0] - 60.0, bb[1] - 60.0, bb[2] + 60.0, bb[3] + 60.0]);
+            let (mut wet, mut unpaved, mut n) = (0, 0, 0);
+            let mut armour = 0;
+            for (cx, cy, c) in &chunks {
+                for q in 0..SQ * SQ {
+                    let p = [cx + ((q % SQ) as f64 + 0.5) * SQUARE_FT, cy + ((q / SQ) as f64 + 0.5) * SQUARE_FT];
+                    // (Squares well inside its made ground, under no building.)
+                    let inside = polys.iter().any(|pl| contains(pl, p) && town::geom::poly_gap(pl, &[p]) >= 2.5);
+                    // (Its root on a bank above its level is the bank's.)
+                    if !inside || c.building[q] != 0 || c.height[q] > m.level + 0.5 {
+                        continue;
+                    }
+                    n += 1;
+                    if c.water_level[q] >= c.height[q] {
+                        wet += 1;
+                    } else if c.urban[q] != worldgen::battlemap::URBAN_PLAZA {
+                        unpaved += 1;
+                    }
+                }
+                armour += c.structures.iter().filter(|s| s.kind == worldgen::battlemap::ShapeKind::Breakwater && s.pts.iter().any(|q| polys.iter().any(|pl| town::geom::poly_gap(pl, &[[cx + q[0] as f64 * SQUARE_FT, cy + q[1] as f64 * SQUARE_FT]]) < 2.0))).count();
+            }
+            let mtag = format!("{tag}: breakwater {length:.0} ft, level {:.1}, at {}", m.level, at(*m.pts.last().unwrap()));
+            if wet > 0 {
+                r.add("breakwater squares wet", wet as f64, format!("{mtag}: {wet} of {n}"));
+            }
+            if unpaved > 0 {
+                r.add("breakwater squares unpaved", unpaved as f64, format!("{mtag}: {unpaved} of {n}"));
+            }
+            r.tally("breakwater armour pieces", armour);
+            // Its lighthouse and the way to its door.
+            let tip = *m.pts.last().unwrap();
+            let Some(lh) = l.buildings.iter().find(|b| harbour::is_lighthouse(b) && dist(mean(&b.poly), tip) < 2.0) else {
+                r.add("breakwaters without a lighthouse", 1.0, mtag.clone());
+                continue;
+            };
+            r.tally("lighthouses", 1);
+            let reached = interior::generate(&ctx.ex.world, &ctx.ex.t0, si, lh.id as usize).and_then(|it| {
+                let lv = it.levels.get(it.entry_level)?;
+                let d = lv.doors.iter().find(|d| d.kind == "front")?;
+                let (x0, y0, x1) = (d.a[0].min(d.b[0]) as isize, d.a[1].min(d.b[1]) as isize, d.a[0].max(d.b[0]) as isize);
+                let sq: [(isize, isize); 2] = if x0 == x1 { [(x0 - 1, y0), (x0, y0)] } else { [(x0, y0 - 1), (x0, y0)] };
+                let out = sq.into_iter().find(|&(i, j)| i < 0 || j < 0 || i >= it.nx as isize || j >= it.ny as isize || lv.cells[j as usize * it.nx + i as usize] < 0)?;
+                Some(interior::to_world(&it, out.0 as f64 + 0.5, out.1 as f64 + 0.5))
+            });
+            let ok = reached.is_some_and(|door| {
+                let win = ctx.window([bb[0] - 60.0, bb[1] - 60.0, bb[2] + 60.0, bb[3] + 60.0]);
+                let (nx, ny) = (win.nx, win.ny);
+                let mut h = vec![f32::NAN; nx * ny];
+                for (cx, cy, c) in &chunks_round(ctx, [bb[0] - 60.0, bb[1] - 60.0, bb[2] + 60.0, bb[3] + 60.0]) {
+                    let (ci, cj) = (((cx - win.ox) / SQUARE_FT).round() as usize, ((cy - win.oy) / SQUARE_FT).round() as usize);
+                    for q in 0..SQ * SQ {
+                        let a = (cj + q / SQ) * nx + ci + q % SQ;
+                        if a < nx * ny && c.height[q] > c.water_level[q] && !win.block[a] {
+                            h[a] = c.height[q];
+                        }
+                    }
+                }
+                let idx = |p: P| {
+                    let (i, j) = (((p[0] - win.ox) / SQUARE_FT).floor(), ((p[1] - win.oy) / SQUARE_FT).floor());
+                    (i >= 0.0 && j >= 0.0 && (i as usize) < nx && (j as usize) < ny).then(|| j as usize * nx + i as usize)
+                };
+                let Some(start) = idx(door).filter(|&a| !h[a].is_nan()) else { return false };
+                let mut seen = vec![false; nx * ny];
+                let mut queue = VecDeque::from([start]);
+                seen[start] = true;
+                while let Some(a) = queue.pop_front() {
+                    let p = [win.ox + ((a % nx) as f64 + 0.5) * SQUARE_FT, win.oy + ((a / nx) as f64 + 0.5) * SQUARE_FT];
+                    if polys.iter().all(|pl| town::geom::poly_gap(pl, &[p]) > 15.0) {
+                        return true;
+                    }
+                    let (i, j) = (a % nx, a / nx);
+                    for (di, dj) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+                        let (ni, nj) = (i as i64 + di, j as i64 + dj);
+                        if ni < 0 || nj < 0 || ni >= nx as i64 || nj >= ny as i64 {
+                            continue;
+                        }
+                        let b = nj as usize * nx + ni as usize;
+                        if !seen[b] && !h[b].is_nan() && (h[b] - h[a]).abs() <= 2.5 {
+                            seen[b] = true;
+                            queue.push_back(b);
+                        }
+                    }
+                }
+                false
+            });
+            if !ok {
+                r.add("lighthouse doors not reached from the bank", 1.0, format!("{mtag} b:{si}:{}{}", lh.id, if reached.is_none() { " (no front door)" } else { "" }));
+            }
+            say!("  {mtag}: {n} squares, {wet} wet, {unpaved} unpaved, {armour} armour pieces, lighthouse b:{si}:{} {} storeys{}", lh.id, lh.floors, if ok { "" } else { ", door not reached" });
+        }
+    }
+    // Cranes, bollards and net racks set out on the battlemaps looked at.
+    for c in ctx.chunks.values() {
+        r.tally("quay cranes", c.objects.iter().filter(|o| o.kind == Kind::DockCrane).count());
+        r.tally("bollards", c.objects.iter().filter(|o| o.kind == Kind::Bollard).count());
+        r.tally("net racks", c.objects.iter().filter(|o| o.kind == Kind::NetRack).count());
+    }
+}
+
 /// R5 M20: the world's islets by its cities (`t0::islets`): how many, their battlemaps dry, piers
 /// kept off them, bridges over them flat and dry, watchtowers built on them.
 fn harbours(ctx: &mut Ctx, r: &mut Report) {
@@ -5938,6 +6133,7 @@ fn harbours(ctx: &mut Ctx, r: &mut Report) {
         }
         say!("  lined bridge {tag}: {} houses, level {level:.1}, worst |pad - deck| {worst:.2}, lane step {step:.2}", houses.len());
     }
+    ports(ctx, r);
 }
 
 fn main() {

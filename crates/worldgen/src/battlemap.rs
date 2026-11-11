@@ -236,6 +236,13 @@ pub enum Kind {
     // R5 towns: a star wall's bastion (`town::wallside::bastion_props`).
     Ballista = 108,
     ShotStones = 109,
+    // R5 M20: a harbour's (`town::harbour`).
+    Rowboat = 140,
+    FishingBoat = 141,
+    Bollard = 142,
+    DockCrane = 143,
+    NetRack = 144,
+    Buoy = 145,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -362,13 +369,15 @@ const KINDS: [Kind; 63] = [
 ];
 
 /// Kinds past `CATALOG`, with explicit ids (each lane's range, `docs/lane-common.md`).
-static MORE: [&[(Kind, KindInfo)]; 4] = [
+static MORE: [&[(Kind, KindInfo)]; 5] = [
     // v63 castles
     &kitchen::KINDS,
     // R5 towns
     &crate::town::cemetery::KINDS,
     &crate::town::horses::KINDS,
     &crate::town::wallside::KINDS,
+    // R5 M20
+    &crate::town::harbour::KINDS,
 ];
 
 fn more() -> impl Iterator<Item = &'static (Kind, KindInfo)> {
@@ -578,6 +587,15 @@ pub enum ShapeKind {
     /// the flank's tip, the point, the other flank's tip and foot, the corner it stands in place of;
     /// then `[style, 0]` (`WallStyle::code`). `size` is its walls' width (squares).
     Bastion = 20,
+    // R5 M20
+    /// A breakwater's armour, big rubble along made ground's water edge: its line, `size` the band's
+    /// width (squares).
+    Breakwater = 32,
+    /// A moored cog: its middle, then a point toward its bow, then `[look, 0]`; `size` its length
+    /// (squares).
+    Ship = 33,
+    /// A lighthouse's lamp gallery over its roof: its middle; `size` its radius (squares).
+    Lantern = 34,
 }
 
 /// Flags on a wall's or tower's last point (`[flags, 0]`): the wall's first or last end stands
@@ -1205,7 +1223,10 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     // Ground shaped by hand, applied as heights are read (so whatever stands on the ground
     // follows it); `plat_w` is the plateaus' weight per halo square (they are kept flat), `moved`
     // where the shaping changed the ground (the slope is measured on the shaped ground there).
-    let shaper = crate::ground::Shaper::new(&world.file.edits, t0, [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT], SQUARE_FT);
+    // (R5 M20: and big ports' breakwaters, `town::harbour`.)
+    let shape_rect = [ox - SQUARE_FT, oy - SQUARE_FT, ox + (SQ + 1) as f64 * SQUARE_FT, oy + (SQ + 1) as f64 * SQUARE_FT];
+    let moles = crate::town::harbour::raised_near(world, t0, shape_rect);
+    let shaper = crate::ground::Shaper::with_extra(&world.file.edits, t0, &moles, shape_rect, SQUARE_FT);
     let (mut plat_w, mut moved) = if shaper.is_some() { (vec![0f32; HS * HS], vec![false; HS * HS]) } else { (Vec::new(), Vec::new()) };
     // R5 M20: what the shaping makes of each halo square (an islet's rock, a quay's made ground;
     // empty when nothing here is either).
@@ -1273,6 +1294,8 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
     let mut wells: Vec<[f64; 2]> = Vec::new();
     // Market stalls in blocks on town plazas (world ft, rotation, kind).
     let mut stalls: Vec<([f64; 2], f32, Kind)> = Vec::new();
+    // R5 M20: a harbour's things (`dock_works`): world ft, rotation, kind, look, afloat.
+    let mut dock: Vec<([f64; 2], f32, Kind, u8, bool)> = Vec::new();
     // Props set out on squares by what they are for (world ft, rotation, kind, variant).
     let mut dressing: Vec<([f64; 2], f32, Kind, u8)> = Vec::new();
     // Temples' churchyards in closes (their headstones are the close's dressing).
@@ -1519,10 +1542,11 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 }
                 continue;
             }
-            // A quay takes cargo, no well or market.
+            // A quay takes cargo, no well or market (R5 M20: bollards along its edge, a city's cranes).
             if pl.kind == K::Quay {
                 if overlaps(bbox(p)) {
                     quay_cargo(p, seed, &mut stalls);
+                    quay_works(p, seed, &l.piers, l.tier >= crate::t0::settle::Tier::City, &mut dock);
                 }
                 continue;
             }
@@ -2232,6 +2256,35 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 shapes.push(VectorShape { kind: ShapeKind::Deck, size, pts: d.iter().map(local).collect() });
             }
         }
+        // R5 M20: a port's breakwater armoured where water meets it, its lighthouse's lantern, the
+        // boats moored by its piers, bollards along them.
+        for m in &l.moles {
+            armour(&m.pts, &m.edges(crate::town::harbour::MOLE_HEAD_FT), &hh, &hw, hx0, hy0, &owns, &local, &mut shapes);
+        }
+        for b in l.buildings.iter().filter(|b| crate::town::harbour::is_lighthouse(b)) {
+            let c = crate::town::geom::mean(&b.poly);
+            if owns(c) {
+                shapes.push(VectorShape { kind: ShapeKind::Lantern, size: (6.0 / SQUARE_FT) as f32, pts: vec![local(&c)] });
+            }
+        }
+        for m in &l.moored {
+            use crate::town::harbour::Afloat;
+            let look = (hash2(seed ^ 0xb0a7, crate::core::round(m.at[0]) as i64, crate::core::round(m.at[1]) as i64) >> 20) as u8 & 3;
+            match m.kind {
+                Afloat::Cog => {
+                    if owns(m.at) {
+                        let bow = [m.at[0] + libm::cos(m.rot as f64) * SQUARE_FT, m.at[1] + libm::sin(m.rot as f64) * SQUARE_FT];
+                        shapes.push(VectorShape { kind: ShapeKind::Ship, size: m.length / SQUARE_FT as f32, pts: vec![local(&m.at), local(&bow), [(look & 1) as f32, 0.0]] });
+                    }
+                }
+                Afloat::Rowboat => dock.push((m.at, m.rot, Kind::Rowboat, look, true)),
+                Afloat::FishingBoat => dock.push((m.at, m.rot, Kind::FishingBoat, look, true)),
+                Afloat::Buoy => dock.push((m.at, 0.0, Kind::Buoy, look, true)),
+            }
+        }
+        for d in l.piers.iter().filter(|d| overlaps(bbox(d))) {
+            pier_bollards(d, seed, &mut dock);
+        }
         props.extend(l.props.iter().copied());
         for q in l.bastions.iter().filter(|q| overlaps(bbox(q))) {
             props.extend(crate::town::wallside::bastion_props(q, l.wall_style_at(crate::town::geom::centroid(q)).thickness()));
@@ -2267,13 +2320,20 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
                 if owns(crate::town::geom::centroid(&d)) {
                     shapes.push(VectorShape { kind: ShapeKind::Deck, size: if stone { 3.0 } else { 0.0 }, pts: d.iter().map(local).collect() });
                 }
+                if d.len() == 4 {
+                    pier_bollards(&d, seed, &mut dock);
+                }
             }
             continue;
         }
         if w.kind == WharfKind::Quay {
             for strip in crate::wharf::strips(w, t0).iter().filter(|p| p.len() == 4 && overlaps(bbox(p))) {
                 quay_cargo(strip, seed, &mut stalls);
+                quay_works(strip, seed, &[], true, &mut dock);
             }
+        } else {
+            // (A breakwater's armour where the water meets it, its far end rounded.)
+            armour(&w.pts, &crate::town::harbour::Mole { pts: w.pts.clone(), width: w.width, level: 0.0 }.edges(0.5 * w.width), &hh, &hw, hx0, hy0, &owns, &local, &mut shapes);
         }
     }
     for h in (0..look_h.len()).filter(|&h| look_h[h] == crate::ground::Look::Made) {
@@ -3203,6 +3263,37 @@ pub fn generate(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Chu
         if !near_building {
             chunk.objects.push(o);
         }
+    }
+    // R5 M20: a harbour's things, each in the chunk holding it: boats and buoys on open water (never
+    // on a deck), bollards and cranes on dry ground clear of roofs and of what stands there already
+    // (a crane on a quay's paving only).
+    for (p, rot, kind, variant, afloat) in dock {
+        let (x, y) = ((p[0] - ox) / SQUARE_FT, (p[1] - oy) / SQUARE_FT);
+        if x < 0.0 || y < 0.0 || x >= SQ as f64 || y >= SQ as f64 {
+            continue;
+        }
+        let k = y as usize * SQ + x as usize;
+        let wet = chunk.water_level[k] > chunk.height[k];
+        if chunk.building[k] != 0 || wet != afloat || (afloat && chunk.urban[k] == URBAN_DECK) || (kind == Kind::DockCrane && chunk.urban[k] != URBAN_PLAZA) {
+            continue;
+        }
+        let r = info(kind as u16).radius;
+        let clash = |o: &Object| {
+            // (A crane's sills, not its jib's reach.)
+            let own = if kind == Kind::DockCrane { 0.4 * r } else { r };
+            let (dx, dy, rr) = (o.x - x as f32, o.y - y as f32, 0.8 * (own + chunk.info(o).radius * o.scale));
+            dx * dx + dy * dy < rr * rr
+        };
+        if !afloat && chunk.objects.iter().any(clash) {
+            continue;
+        }
+        if kind == Kind::DockCrane && (-1i32..=1).any(|dy| (-1i32..=1).any(|dx| {
+            let (i, j) = (x as i32 + dx, y as i32 + dy);
+            i >= 0 && j >= 0 && (i as usize) < SQ && (j as usize) < SQ && chunk.building[j as usize * SQ + i as usize] != 0
+        })) {
+            continue;
+        }
+        chunk.objects.push(Object { kind, variant, x: x as f32, y: y as f32, rot, scale: 1.0, sprite: 0, turned: false });
     }
     // What a square is dressed with: each in the chunk holding it, on open ground (paving, a lawn,
     // a street through the square), never on a roof, a road or the water (its layout keeps clear
@@ -4898,6 +4989,132 @@ fn quay_cargo(poly: &[[f64; 2]], seed: u64, out: &mut Vec<([f64; 2], f32, Kind)>
             }
         }
         u += rng.range(22.0, 45.0);
+    }
+}
+
+/// R5 M20: a quay's bollards every 20-30 ft along its water edge (side 0-1, as the town's quays
+/// and those built by hand are laid), 2 ft in; and on a city's quay, a crane at a quarter of the
+/// way along each 50 ft or more of it, clear of the piers' roots, its jib out over the water.
+fn quay_works(poly: &[[f64; 2]], seed: u64, piers: &[Vec<[f64; 2]>], cranes: bool, out: &mut Vec<([f64; 2], f32, Kind, u8, bool)>) {
+    use crate::town::geom::{add, dist, lerp, mul, sub};
+    if poly.len() < 4 {
+        return;
+    }
+    let (a, b) = (poly[0], poly[1]);
+    let el = dist(a, b);
+    if el < 10.0 {
+        return;
+    }
+    let u = mul(sub(b, a), 1.0 / el);
+    // (Inward: toward the far side of the strip.)
+    let mut v = [-u[1], u[0]];
+    if crate::town::geom::dot(v, sub(lerp(poly[2], poly[3], 0.5), a)) < 0.0 {
+        v = mul(v, -1.0);
+    }
+    let roots: Vec<[f64; 2]> = piers.iter().filter_map(|p| crate::town::harbour::pier_ends(p)).map(|e| e.0).collect();
+    let h = hash3(seed ^ 0xb011, crate::core::round(a[0]) as i64, crate::core::round(a[1]) as i64, crate::core::round(b[1]) as i64);
+    let mut t = 6.0 + 8.0 * unit(h);
+    let mut k = 0i64;
+    while t < el - 4.0 {
+        let p = add(add(a, mul(u, t)), mul(v, 2.0));
+        if roots.iter().all(|r| dist(*r, p) > 7.0) {
+            out.push((p, 0.0, Kind::Bollard, (hash2(h, k, 1) >> 20) as u8 & 3, false));
+        }
+        k += 1;
+        t += 20.0 + 10.0 * unit(hash2(h, k, 2));
+    }
+    if cranes && el >= 50.0 {
+        let at = if unit(h ^ 9) < 0.5 { 0.25 } else { 0.75 };
+        let p = add(add(a, mul(u, at * el)), mul(v, 3.0));
+        if roots.iter().all(|r| dist(*r, p) > 18.0) {
+            out.push((p, libm::atan2(-v[1], -v[0]) as f32, Kind::DockCrane, (h >> 24) as u8 & 3, false));
+        }
+    }
+}
+
+/// R5 M20: bollards along both sides of a pier's deck (`rect`: corners 0 and 3 at its root), every
+/// 20 ft or so, staggered, 1.5 ft in from its edges.
+fn pier_bollards(d: &[[f64; 2]], seed: u64, out: &mut Vec<([f64; 2], f32, Kind, u8, bool)>) {
+    use crate::town::geom::{add, dist, mul, sub};
+    let Some((r, t)) = crate::town::harbour::pier_ends(d) else { return };
+    let len = dist(r, t);
+    let half = 0.5 * dist(d[0], d[3]);
+    if len < 15.0 || half < 3.0 {
+        return;
+    }
+    let u = mul(sub(t, r), 1.0 / len);
+    let v = [-u[1], u[0]];
+    let h = hash2(seed ^ 0xb0a1, crate::core::round(r[0]) as i64, crate::core::round(r[1]) as i64);
+    let mut at = 8.0;
+    let mut k = 0i64;
+    while at < len - 2.0 {
+        let side = if k % 2 == 0 { 1.0 } else { -1.0 };
+        out.push((add(add(r, mul(u, at)), mul(v, side * (half - 1.5))), 0.0, Kind::Bollard, (hash2(h, k, 0) >> 20) as u8 & 3, false));
+        k += 1;
+        at += 15.0;
+    }
+}
+
+/// R5 M20: a breakwater's armour (`ShapeKind::Breakwater`): its edges in pieces about 30 ft long,
+/// each in the chunk holding its middle, where the square 7 ft out from it (away from the line)
+/// is under water.
+#[allow(clippy::too_many_arguments)]
+fn armour(line: &[[f64; 2]], edges: &[Vec<[f64; 2]>], hh: &[f32], hw: &[f32], hx0: f64, hy0: f64, owns: &dyn Fn([f64; 2]) -> bool, local: &dyn Fn(&[f64; 2]) -> [f32; 2], shapes: &mut Vec<VectorShape>) {
+    use crate::town::geom::{add, dist, lerp, mul, sub};
+    let nearest = |p: [f64; 2]| {
+        let mut best = (f64::MAX, line[0]);
+        for w in line.windows(2) {
+            let ab = sub(w[1], w[0]);
+            let t = (crate::town::geom::dot(sub(p, w[0]), ab) / crate::town::geom::dot(ab, ab).max(1e-12)).clamp(0.0, 1.0);
+            let q = add(w[0], mul(ab, t));
+            let d = dist(p, q);
+            if d < best.0 {
+                best = (d, q);
+            }
+        }
+        best.1
+    };
+    for e in edges {
+        let total: f64 = e.windows(2).map(|w| dist(w[0], w[1])).sum();
+        if total < 1.0 {
+            continue;
+        }
+        let n = crate::core::ceil(total / 30.0).max(1.0) as usize;
+        let at = |s: f64| {
+            let mut s = s;
+            for w in e.windows(2) {
+                let l = dist(w[0], w[1]);
+                if s <= l {
+                    return lerp(w[0], w[1], s / l.max(1e-9));
+                }
+                s -= l;
+            }
+            *e.last().unwrap()
+        };
+        for k in 0..n {
+            let (s0, s1) = (total * k as f64 / n as f64, total * (k + 1) as f64 / n as f64);
+            let mid = at(0.5 * (s0 + s1));
+            if !owns(mid) {
+                continue;
+            }
+            let q = nearest(mid);
+            let out = mul(sub(mid, q), 1.0 / dist(mid, q).max(1e-9));
+            // (Past the made ground's eased edge.)
+            // (Nearer by the chunk's edge, inside its halo.)
+            let sq = |t: [f64; 2]| (((t[0] - hx0) / SQUARE_FT).floor(), ((t[1] - hy0) / SQUARE_FT).floor());
+            let inside = |(i, j): (f64, f64)| i >= 0.0 && j >= 0.0 && i < HS as f64 && j < HS as f64;
+            let (i, j) = Some(sq(add(mid, mul(out, 7.0)))).filter(|&q| inside(q)).unwrap_or_else(|| sq(add(mid, mul(out, 4.0))));
+            if !inside((i, j)) {
+                continue;
+            }
+            let h = j as usize * HS + i as usize;
+            if hw[h] <= hh[h] {
+                continue;
+            }
+            let m = 1 + crate::core::ceil((s1 - s0) / 6.0) as usize;
+            let pts: Vec<[f32; 2]> = (0..=m).map(|j| local(&at(s0 + (s1 - s0) * j as f64 / m as f64))).collect();
+            shapes.push(VectorShape { kind: ShapeKind::Breakwater, size: (9.0 / SQUARE_FT) as f32, pts });
+        }
     }
 }
 

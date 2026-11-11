@@ -195,7 +195,10 @@ pub fn shaped_heights(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) 
     let s = world.geom.spacing_ft(key.level);
     let (gx0, gy0) = (key.x as i64 * TILE_N as i64, key.y as i64 * TILE_N as i64);
     let (lo, hi) = (|g: i64| (g - 1) as f64 * s, |g: i64| (g + TILE_SAMPLES as i64) as f64 * s);
-    let sh = crate::ground::Shaper::new(&world.file.edits, t0, [lo(gx0), lo(gy0), hi(gx0), hi(gy0)], s.max(crate::battlemap::SQUARE_FT))?;
+    let rect = [lo(gx0), lo(gy0), hi(gx0), hi(gy0)];
+    // (R5 M20: and big ports' breakwaters, as the battlemap shapes them.)
+    let moles = crate::town::harbour::raised_near(world, t0, rect);
+    let sh = crate::ground::Shaper::with_extra(&world.file.edits, t0, &moles, rect, s.max(crate::battlemap::SQUARE_FT))?;
     let r = sh.reach();
     // The samples (-1 to TILE_SAMPLES, tile-local) inside the reach.
     let span = |a: f64, b: f64, g0: i64| ((crate::core::ceil(a / s) as i64 - g0).max(-1), (crate::core::floor(b / s) as i64 - g0).min(TILE_SAMPLES as i64));
@@ -450,6 +453,12 @@ fn pack_sites(world: &World, t0: &T0, key: &TileKey, tile: &TerrainOut) -> Vec<u
             }
             for d in l.bridges.iter().chain(&l.piers) {
                 push(d, 6);
+            }
+            // R5 M20: a big port's breakwater, made ground (45).
+            for m in &l.moles {
+                for p in m.polys() {
+                    push(&p, 45);
+                }
             }
             for m in &l.monuments {
                 push(m, 7);

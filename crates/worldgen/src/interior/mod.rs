@@ -317,6 +317,8 @@ fn arch_of(b: &town::Building) -> Arch {
         Some("windmill") if round_ish(b) => Arch::Tower,
         // R5 M20: an islet's watchtower: a stair up a round tower to its top room.
         Some("watchtower") => Arch::Tower,
+        // R5 M20: a breakwater's lighthouse: the keeper below, the stair up to the lamp room.
+        Some("lighthouse") => Arch::Tower,
         Some("warehouse" | "stables" | "shipwright" | "cartwright" | "mill" | "windmill" | "customs_house" | "carpenter" | "mason" | "cooper" | "black_market") => Arch::Warehouse,
         Some("temple" | "shrine" | "monastery" | "mausoleum" | "undertaker" | "catacombs" | "tomb") => Arch::Temple,
         Some("prison") => Arch::Prison,
@@ -411,6 +413,10 @@ fn program(arch: Arch, z: i8, top: bool, key: Option<&str>) -> LevelProgram {
         (Tower, 0) if key == Some("watchtower") => p("Guardroom", &[("guardroom", 1.0)], None, false),
         (Tower, _) if key == Some("watchtower") && top => p("Lookout", &[("guardroom", 1.0)], None, false),
         (Tower, _) if key == Some("watchtower") => p("Store", &[("storeroom", 1.0)], None, false),
+        // R5 M20: a lighthouse: the keeper's room, stores of oil and wicks, the lamp at the top.
+        (Tower, 0) if key == Some("lighthouse") => p("Keeper's room", &[("bedchamber", 1.0)], None, false),
+        (Tower, _) if key == Some("lighthouse") && top => p("Lamp room", &[("lamp room", 1.0)], None, false),
+        (Tower, _) if key == Some("lighthouse") => p("Oil store", &[("storeroom", 1.0)], None, false),
         (Tower, 0) => p("Entry", &[("entry hall", 1.0)], None, false),
         (Tower, _) => {
             let rooms = ["library", "laboratory", "study", "bedchamber"];
@@ -864,6 +870,8 @@ fn furnishing(kind: &str) -> &'static [(&'static str, Place, u8, u16)] {
         "library" | "reading room" => &[("bookcase", Wall(2, 1), 2, 6), ("table", Center(2, 1), 1, 16)],
         "laboratory" => &[("alchemy_bench", Wall(2, 1), 2, 0), ("cauldron", Center(1, 1), 1, 0), ("shelf", Wall(2, 1), 1, 0)],
         "observatory" => &[("telescope", Center(2, 2), 1, 0), ("desk", Wall(2, 1), 1, 0), ("bookcase", Wall(1, 1), 1, 0)],
+        // R5 M20: a lighthouse's lamp (its great oil basin), the oil beside it.
+        "lamp room" => &[("cauldron", Center(1, 1), 1, 0), ("barrel", Wall(1, 1), 1, 0)],
         "entry hall" | "foyer" => &[("rug", Center(2, 2), 1, 0), ("statue", Wall(1, 1), 1, 0)],
         "nave" => &[("pew", Center(3, 1), 2, 6), ("pillar", Wall(1, 1), 2, 0)],
         "sanctuary" | "chapel" => &[("altar", Wall(2, 1), 1, 0), ("statue", Wall(1, 1), 1, 0), ("pew", Center(2, 1), 0, 10)],
@@ -1363,7 +1371,7 @@ pub fn has_deep_dungeon(b: &town::Building) -> bool {
 /// deck over the water).
 pub fn has_cellar(b: &town::Building) -> bool {
     // (An islet's watchtower stands on rock in the water; R5 M20: a shop on a deck over it.)
-    !(arch_of(b) == Arch::House && b.parts.is_empty() && round_ish(b)) && !b.func.is_some_and(|f| town::catalog::CATALOG[f as usize].key == "watchtower") && b.deck.is_none()
+    !(arch_of(b) == Arch::House && b.parts.is_empty() && round_ish(b)) && !b.func.is_some_and(|f| matches!(town::catalog::CATALOG[f as usize].key, "watchtower" | "lighthouse")) && b.deck.is_none()
 }
 
 /// The ways from a cellar to other sites: a trapdoor down into the sewers (on the street side),

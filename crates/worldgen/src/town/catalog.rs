@@ -197,6 +197,9 @@ pub const CATALOG: &[Func] = &[
     // R5 M20: a round watchtower on an islet by a city (`t0::islets`), set only by the layout
     // (`islet_towers`): never on a lot.
     f("watchtower", "Watchtower", CIVIC, Metropolis, None, [0, 0, 0, 0], &[Docks], Institution, true, false, "Watchtower"),
+    // R5 M20: a big port's lighthouse on its breakwater's head (`harbour`), set only by the layout:
+    // never on a lot.
+    f("lighthouse", "Lighthouse", CIVIC, Metropolis, None, [0, 0, 0, 0], &[Docks], Institution, true, false, "Lighthouse"),
 ];
 
 /// Residential building kinds by ward (index into `RESIDENTIAL`).
@@ -217,7 +220,7 @@ pub fn residential_for(ward: Ward, big: bool) -> usize {
 
 /// Copies of `func` this settlement is guaranteed.
 pub fn required_count(func: &Func, tier: Tier, on_water: bool) -> usize {
-    if matches!(func.key, "windmill" | "tomb" | "watchtower") {
+    if matches!(func.key, "windmill" | "tomb" | "watchtower" | "lighthouse") {
         return 0;
     }
     if func.water && !on_water {
